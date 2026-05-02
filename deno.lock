@@ -1,7 +1,13 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@takos/takosumi-contract@1": "1.0.0",
     "npm:hono@^4.12.4": "4.12.15"
+  },
+  "jsr": {
+    "@takos/takosumi-contract@1.0.0": {
+      "integrity": "405b1ff6a9e394090b6d5ece6750159fdf7cbc177e7639d877a67f5da7517374"
+    }
   },
   "npm": {
     "hono@4.12.15": {
@@ -10,6 +16,7 @@
   },
   "workspace": {
     "dependencies": [
+      "jsr:@takos/takosumi-contract@1",
       "npm:hono@^4.12.4"
     ]
   }
