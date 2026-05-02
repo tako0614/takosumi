@@ -166,7 +166,7 @@ Deno.test("core conformance: resolved graph emits the six canonical projection f
   const types = new Set(
     resolved.resolution.resolved_graph.projections.map((p) => p.projectionType),
   );
-  // The sample manifest emits 5 of 6 families (no publication-declaration).
+  // The sample manifest emits 5 of 6 families (no output-declaration).
   for (
     const required of [
       "runtime-claim",

@@ -19,7 +19,14 @@ export const destroyCommand = new Command()
   .arguments("<manifest:string>")
   .option("--remote <url:string>", "Remote kernel URL")
   .option("--token <token:string>", "Auth token")
-  .action(async ({ remote, token }, manifestPath) => {
+  .option(
+    "--force",
+    "Force destroy by resource name even when no prior apply record exists. " +
+      "Safe for self-hosted resources (filesystem, docker, systemd); cloud " +
+      "resources whose handle differs from the resource name will likely " +
+      "fail to delete.",
+  )
+  .action(async ({ remote, token, force }, manifestPath) => {
     const manifest = await loadManifest(manifestPath);
     const target = resolveMode({ remote, token }, loadConfig());
     if (target.mode === "remote") {
@@ -27,7 +34,11 @@ export const destroyCommand = new Command()
         url: target.url,
         token: target.token,
         path: "/v1/deployments",
-        body: { mode: "destroy", manifest: manifest.value },
+        body: {
+          mode: "destroy",
+          manifest: manifest.value,
+          ...(force ? { force: true } : {}),
+        },
       });
       if (status >= 400) {
         console.error(`kernel returned ${status}:`, body);

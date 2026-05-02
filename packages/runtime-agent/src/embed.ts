@@ -12,7 +12,10 @@
  * explicitly — `startEmbeddedAgent` is bypassed.
  */
 
-import { LIFECYCLE_AGENT_TOKEN_ENV, LIFECYCLE_AGENT_URL_ENV } from "takosumi-contract";
+import {
+  LIFECYCLE_AGENT_TOKEN_ENV,
+  LIFECYCLE_AGENT_URL_ENV,
+} from "takosumi-contract";
 import { buildConnectorRegistry } from "./connectors/factory.ts";
 import { type ServeHandle, serveRuntimeAgent } from "./server.ts";
 
@@ -67,15 +70,15 @@ function detectFromEnv(
       sessionToken: env.AWS_SESSION_TOKEN,
     }
     : undefined;
-  const gcp =
-    env.GOOGLE_CLOUD_PROJECT && (env.GOOGLE_APPLICATION_CREDENTIALS || env.GCP_BEARER_TOKEN)
-      ? {
-        project: env.GOOGLE_CLOUD_PROJECT,
-        region: env.GOOGLE_CLOUD_REGION ?? "us-central1",
-        credentialsPath: env.GOOGLE_APPLICATION_CREDENTIALS,
-        bearerToken: env.GCP_BEARER_TOKEN,
-      }
-      : undefined;
+  const gcp = env.GOOGLE_CLOUD_PROJECT &&
+      (env.GOOGLE_APPLICATION_CREDENTIALS || env.GCP_BEARER_TOKEN)
+    ? {
+      project: env.GOOGLE_CLOUD_PROJECT,
+      region: env.GOOGLE_CLOUD_REGION ?? "us-central1",
+      credentialsPath: env.GOOGLE_APPLICATION_CREDENTIALS,
+      bearerToken: env.GCP_BEARER_TOKEN,
+    }
+    : undefined;
   const cloudflare = env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ACCOUNT_ID
     ? {
       accountId: env.CLOUDFLARE_ACCOUNT_ID,
@@ -92,14 +95,14 @@ function detectFromEnv(
       region: env.AZURE_LOCATION ?? "eastus",
     }
     : undefined;
-  const kubernetes =
-    env.TAKOSUMI_KUBERNETES_API_SERVER_URL && env.TAKOSUMI_KUBERNETES_BEARER_TOKEN
-      ? {
-        apiServerUrl: env.TAKOSUMI_KUBERNETES_API_SERVER_URL,
-        bearerToken: env.TAKOSUMI_KUBERNETES_BEARER_TOKEN,
-        namespace: env.TAKOSUMI_KUBERNETES_NAMESPACE ?? "takosumi",
-      }
-      : undefined;
+  const kubernetes = env.TAKOSUMI_KUBERNETES_API_SERVER_URL &&
+      env.TAKOSUMI_KUBERNETES_BEARER_TOKEN
+    ? {
+      apiServerUrl: env.TAKOSUMI_KUBERNETES_API_SERVER_URL,
+      bearerToken: env.TAKOSUMI_KUBERNETES_BEARER_TOKEN,
+      namespace: env.TAKOSUMI_KUBERNETES_NAMESPACE ?? "takosumi",
+    }
+    : undefined;
   const selfhost = {
     filesystemRoot: env.TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT,
     dockerSocket: env.TAKOSUMI_SELFHOSTED_DOCKER_SOCKET,

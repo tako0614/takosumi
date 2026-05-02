@@ -6,7 +6,7 @@
   "domain": "authoring",
   "lifecycleDomain": "shape-derivation",
   "changeEffect": "shape-derivation",
-  "description": "Authoring expansion that replaces a composite.* compute reference with its canonical runtime + resource (+ optional publication + route) contract instances before plan finalises.",
+  "description": "Authoring expansion that replaces a composite.* compute reference with its canonical runtime + resource (+ optional output + route) contract instances before plan finalises.",
   "expandsTo": [
     "takos.dev/v1 App",
     "takos.dev/v1 Environment"

@@ -227,17 +227,35 @@ export function registerDeployPublicRoutes(
 
     if (mode.value === "destroy") {
       // Look up persisted handles from the prior apply. Without this,
-      // `destroyV2` falls back to `resource.name` as the handle which only
-      // works for in-memory / filesystem providers; cloud providers that
-      // returned an ARN / object id from `apply` would receive the wrong
-      // value and fail to delete the real underlying resource.
+      // `destroyV2` would fall back to `resource.name` as the handle which
+      // only works for selfhost providers (filesystem, docker-compose,
+      // systemd-unit, etc.); cloud providers that returned an ARN / object
+      // id from `apply` would receive the wrong value and silently fail to
+      // delete the real underlying resource. We REJECT destroys with no
+      // record by default; operator opts in via `force: true` in the
+      // request body to fall back to resource-name destroy.
       const prior = await recordStore.get(tenantId, deploymentName);
+      const force = body.value.force === true;
+      if (!prior && !force) {
+        return c.json(
+          apiError(
+            "failed_precondition",
+            `destroy refused: no prior deploy record for tenant=${tenantId} ` +
+              `name=${deploymentName}. The kernel cannot resolve cloud ` +
+              `resource handles (e.g. AWS ARNs) without persisted state. ` +
+              `If the resources are self-hosted (filesystem / docker / ` +
+              `systemd) and you want to destroy by resource name, retry ` +
+              `with \`force: true\` in the request body.`,
+          ),
+          409,
+        );
+      }
       const handleFor = prior ? buildHandleForFromRecord(prior) : undefined;
       if (!prior) {
         console.warn(
-          `[takosumi-deploy] destroy received no prior apply record for ` +
-            `tenant=${tenantId} name=${deploymentName}; falling back to ` +
-            `resource.name as handle.`,
+          `[takosumi-deploy] destroy --force: no record for tenant=${tenantId} ` +
+            `name=${deploymentName}; using resource.name as handle. ` +
+            `Cloud handles may not match.`,
         );
       }
       try {

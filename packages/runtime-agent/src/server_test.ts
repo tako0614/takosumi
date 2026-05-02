@@ -106,6 +106,41 @@ Deno.test("apply dispatches to registered connector", async () => {
   assert.deepEqual(body.outputs, { bucket: "x" });
 });
 
+Deno.test("GET /v1/connectors lists registered connectors with auth", async () => {
+  const registry = new ConnectorRegistry();
+  registry.register({
+    provider: "memory",
+    shape: "object-store@v1",
+    apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+    destroy: () => Promise.resolve({ ok: true }),
+    describe: () => Promise.resolve({ status: "running" as const }),
+  });
+  registry.register({
+    provider: "alt",
+    shape: "web-service@v1",
+    apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+    destroy: () => Promise.resolve({ ok: true }),
+    describe: () => Promise.resolve({ status: "running" as const }),
+  });
+  const app = createRuntimeAgentApp({ registry, token: "tok" });
+
+  const unauthorized = await app.request("/v1/connectors");
+  assert.equal(unauthorized.status, 401);
+
+  const ok = await app.request("/v1/connectors", {
+    headers: { authorization: "Bearer tok" },
+  });
+  assert.equal(ok.status, 200);
+  const body = await ok.json();
+  assert.equal(body.connectors.length, 2);
+  assert.deepEqual(
+    body.connectors.map((c: { shape: string; provider: string }) =>
+      `${c.shape}/${c.provider}`
+    ).sort(),
+    ["object-store@v1/memory", "web-service@v1/alt"],
+  );
+});
+
 Deno.test("destroy dispatches to registered connector", async () => {
   const registry = new ConnectorRegistry();
   let destroyed: string | undefined;

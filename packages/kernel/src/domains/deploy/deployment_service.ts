@@ -1284,7 +1284,7 @@ function buildDeploymentArtifacts(input: {
   });
   // Phase 10A — Authoring expansion already happened inside
   // `compileManifestToAppSpec`. The expansion descriptor digest plus every
-  // referenced runtime/artifact/interface/resource/publication descriptor
+  // referenced runtime/artifact/interface/resource/output descriptor
   // (and their JSON-LD context dependencies) is pinned by the descriptor
   // closure builder. Apply consumes this closure verbatim and MUST NOT
   // re-fetch descriptor URLs at execution time (Core spec § 6).

@@ -1,8 +1,7 @@
 import { Command } from "@cliffy/command";
 
-export const runtimeAgentCommand = new Command()
-  .description("Run a standalone Takosumi runtime-agent")
-  .command("serve", "Start the runtime-agent HTTP server")
+const serveCmd = new Command()
+  .description("Start the runtime-agent HTTP server")
   .option("--port <port:number>", "Port to listen on", { default: 8789 })
   .option(
     "--hostname <hostname:string>",
@@ -39,6 +38,61 @@ export const runtimeAgentCommand = new Command()
     await handle.shutdown();
   });
 
+const listCmd = new Command()
+  .description("List connectors registered on a runtime-agent")
+  .option(
+    "--url <url:string>",
+    "Agent URL (defaults to TAKOSUMI_AGENT_URL env)",
+  )
+  .option(
+    "--token <token:string>",
+    "Bearer token (defaults to TAKOSUMI_AGENT_TOKEN env)",
+  )
+  .action(async ({ url, token }) => {
+    const agentUrl = url ?? Deno.env.get("TAKOSUMI_AGENT_URL");
+    const agentToken = token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
+    if (!agentUrl || !agentToken) {
+      console.error(
+        "Set --url + --token (or TAKOSUMI_AGENT_URL + TAKOSUMI_AGENT_TOKEN env)",
+      );
+      Deno.exit(1);
+    }
+    const res = await fetch(`${agentUrl}/v1/connectors`, {
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    if (!res.ok) {
+      console.error(`agent ${agentUrl}/v1/connectors returned ${res.status}`);
+      console.error(await res.text());
+      Deno.exit(1);
+    }
+    const body = await res.json() as {
+      connectors: Array<{ shape: string; provider: string }>;
+    };
+    if (body.connectors.length === 0) {
+      console.log(
+        "no connectors registered (operator likely missing cloud env vars)",
+      );
+      return;
+    }
+    const grouped = new Map<string, string[]>();
+    for (const c of body.connectors) {
+      const list = grouped.get(c.shape) ?? [];
+      list.push(c.provider);
+      grouped.set(c.shape, list);
+    }
+    for (const [shape, providers] of grouped) {
+      console.log(`${shape}:`);
+      for (const provider of providers.sort()) {
+        console.log(`  - ${provider}`);
+      }
+    }
+  });
+
+export const runtimeAgentCommand = new Command()
+  .description("Operate the Takosumi runtime-agent")
+  .command("serve", serveCmd)
+  .command("list", listCmd);
+
 async function loadEnvFile(path: string): Promise<void> {
   const text = await Deno.readTextFile(path);
   for (const rawLine of text.split("\n")) {
@@ -49,7 +103,7 @@ async function loadEnvFile(path: string): Promise<void> {
     const key = line.slice(0, eq).trim();
     let value = line.slice(eq + 1).trim();
     if (
-      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith('"') && value.endsWith('"')) ||
       (value.startsWith("'") && value.endsWith("'"))
     ) {
       value = value.slice(1, -1);

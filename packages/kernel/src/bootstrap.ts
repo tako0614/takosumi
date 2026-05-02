@@ -113,7 +113,9 @@ export function registerBundledShapesAndProviders(
 ): void {
   if (!bundledShapesRegistered) {
     for (const shape of TAKOSUMI_BUNDLED_SHAPES) registerShape(shape);
-    for (const template of TAKOSUMI_BUNDLED_TEMPLATES) registerTemplate(template);
+    for (const template of TAKOSUMI_BUNDLED_TEMPLATES) {
+      registerTemplate(template);
+    }
     bundledShapesRegistered = true;
   }
   const agent = detectRuntimeAgent(runtimeEnv);

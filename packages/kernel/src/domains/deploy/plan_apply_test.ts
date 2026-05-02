@@ -82,7 +82,7 @@ Deno.test("deploy: resolve produces an immutable resolved Deployment", async () 
   // Phase 10B — six canonical projection families. Sample manifest emits:
   //   runtime-claim:web, resource-claim:db, exposure-target:web/publicHttp,
   //   binding-request:web/DATABASE_URL, access-path-request:db/web.
-  // No publication entries → publication-declaration count is 0.
+  // No output entries → output-declaration count is 0.
   assert.equal(resolved.resolution.resolved_graph.projections.length, 5);
   const projectionTypes = new Set(
     resolved.resolution.resolved_graph.projections.map((p) => p.projectionType),

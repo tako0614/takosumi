@@ -44,6 +44,23 @@ export function createRuntimeAgentApp(options: RuntimeAgentServerOptions) {
     });
   });
 
+  // Authenticated registry inspection: which (shape, provider) tuples
+  // were wired at boot, given the operator-supplied credentials? Operators
+  // should hit this after starting the agent to verify their env vars
+  // produced the expected connector set BEFORE running an apply that fails
+  // with `connector_not_found`.
+  app.get("/v1/connectors", (c) => {
+    const auth = c.req.header("authorization");
+    if (!auth || auth !== expectedAuth) {
+      return c.json(errorBody("unauthorized"), 401);
+    }
+    const connectors = options.registry.list().map((connector) => ({
+      shape: connector.shape,
+      provider: connector.provider,
+    }));
+    return c.json({ connectors }, 200);
+  });
+
   app.use("/v1/lifecycle/*", async (c, next) => {
     const auth = c.req.header("authorization");
     if (!auth || auth !== expectedAuth) {

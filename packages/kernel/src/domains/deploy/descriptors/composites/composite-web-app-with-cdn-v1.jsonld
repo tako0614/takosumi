@@ -6,7 +6,7 @@
   "domain": "composite",
   "lifecycleDomain": "revisioned-runtime",
   "changeEffect": "app-release",
-  "description": "Web app fronted by a CDN with an asset object-store bucket. Expands into a runtime.js-worker@v1 component plus a resource.object-store.s3@v1 (binding env ASSETS_BUCKET) plus a publication.http-endpoint@v1 + interface.http@v1 route. The CDN edge tier (publication.http-endpoint@v1 + interface.http@v1) is marked optional so a CDN-tier provider outage degrades — never escalates to outage — while the origin runtime + asset bucket stay critical-path.",
+  "description": "Web app fronted by a CDN with an asset object-store bucket. Expands into a runtime.js-worker@v1 component plus a resource.object-store.s3@v1 (binding env ASSETS_BUCKET) plus a output.http-endpoint@v1 + interface.http@v1 route. The CDN edge tier (output.http-endpoint@v1 + interface.http@v1) is marked optional so a CDN-tier provider outage degrades — never escalates to outage — while the origin runtime + asset bucket stay critical-path.",
   "expandsTo": [
     {
       "ref": "runtime.js-worker@v1",
@@ -17,7 +17,7 @@
       "optional": false
     },
     {
-      "ref": "publication.http-endpoint@v1",
+      "ref": "output.http-endpoint@v1",
       "optional": true
     },
     {

@@ -258,7 +258,7 @@ function isPackageKind(value: unknown): value is PackageKind {
   return value === "provider-package" ||
     value === "resource-contract-package" ||
     value === "data-contract-package" ||
-    value === "publication-contract-package" ||
+    value === "output-contract-package" ||
     value === "native-schema" ||
     value === "capability-profile";
 }

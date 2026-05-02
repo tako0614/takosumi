@@ -84,16 +84,16 @@ const DOC_DESCRIPTOR_SOURCES: readonly { alias: string; path: string }[] = [
     path: "descriptors/contracts/interface-event-v1.jsonld",
   },
   {
-    alias: "publication.http-endpoint@v1",
-    path: "descriptors/contracts/publication-http-endpoint-v1.jsonld",
+    alias: "output.http-endpoint@v1",
+    path: "descriptors/contracts/output-http-endpoint-v1.jsonld",
   },
   {
-    alias: "publication.mcp-server@v1",
-    path: "descriptors/contracts/publication-mcp-server-v1.jsonld",
+    alias: "output.mcp-server@v1",
+    path: "descriptors/contracts/output-mcp-server-v1.jsonld",
   },
   {
-    alias: "publication.topic@v1",
-    path: "descriptors/contracts/publication-topic-v1.jsonld",
+    alias: "output.topic@v1",
+    path: "descriptors/contracts/output-topic-v1.jsonld",
   },
   {
     alias: "resource.object-store.s3@v1",

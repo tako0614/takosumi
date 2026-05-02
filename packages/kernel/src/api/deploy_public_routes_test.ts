@@ -459,6 +459,7 @@ Deno.test("deploy public route runs destroy mode against destroyV2", async () =>
     },
     body: JSON.stringify({
       mode: "destroy",
+      force: true,
       manifest: { resources: [SAMPLE_RESOURCE] },
     }),
   });
@@ -499,6 +500,7 @@ Deno.test("deploy public route surfaces destroy partial outcome with 200 + error
     },
     body: JSON.stringify({
       mode: "destroy",
+      force: true,
       manifest: { resources: [SAMPLE_RESOURCE] },
     }),
   });
@@ -531,6 +533,7 @@ Deno.test("deploy public route surfaces destroy validation failures as 400", asy
     },
     body: JSON.stringify({
       mode: "destroy",
+      force: true,
       manifest: { resources: [SAMPLE_RESOURCE] },
     }),
   });
@@ -724,7 +727,53 @@ Deno.test("destroy feeds persisted handles into destroyV2 via handleFor", async 
 });
 
 Deno.test(
-  "destroy without prior record falls back to resource.name as handle",
+  "destroy without prior record refuses with 409 by default",
+  async () => {
+    const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+    let destroyCalled = false;
+    const app = createApp({
+      token: VALID_TOKEN,
+      recordStore,
+      destroyResources: () => {
+        destroyCalled = true;
+        return Promise.resolve(
+          {
+            destroyed: [],
+            errors: [],
+            issues: [],
+            status: "succeeded",
+          } satisfies DestroyV2Outcome,
+        );
+      },
+    });
+    const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${VALID_TOKEN}`,
+      },
+      body: JSON.stringify({
+        mode: "destroy",
+        manifest: {
+          metadata: { name: "ghost" },
+          resources: [SAMPLE_RESOURCE],
+        },
+      }),
+    });
+    assert.equal(response.status, 409);
+    const body = await response.json();
+    assert.equal(body.error.code, "failed_precondition");
+    assert.match(body.error.message, /no prior deploy record/);
+    assert.equal(
+      destroyCalled,
+      false,
+      "destroyV2 must not be invoked without state",
+    );
+  },
+);
+
+Deno.test(
+  "destroy without prior record falls back to resource.name when force=true",
   async () => {
     const recordStore = new InMemoryTakosumiDeploymentRecordStore();
     let observedHandleFor: unknown = "untouched";
@@ -755,6 +804,7 @@ Deno.test(
       },
       body: JSON.stringify({
         mode: "destroy",
+        force: true,
         manifest: {
           metadata: { name: "ghost" },
           resources: [SAMPLE_RESOURCE],
@@ -765,7 +815,7 @@ Deno.test(
     assert.equal(
       observedHandleFor,
       undefined,
-      "no record means no handleFor (destroyV2 falls back to resource.name)",
+      "force: no record means no handleFor (destroyV2 falls back to resource.name)",
     );
   },
 );

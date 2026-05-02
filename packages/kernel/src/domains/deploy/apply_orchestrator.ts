@@ -12,7 +12,7 @@
 //     `operationKind + objectAddress + desiredDigest`.
 //   - operation kinds are stable strings such as `descriptor.resolve`,
 //     `component.project`, `resource.bind`, `runtime.deploy`, `router.prepare`,
-//     `publication.resolve`, `access-path.materialize`, `activation.commit`,
+//     `output.resolve`, `access-path.materialize`, `activation.commit`,
 //     `provider.materialize`.
 //   - operation-level state lives in `Deployment.conditions[]` with
 //     `scope.kind="operation"`.
@@ -44,7 +44,7 @@ export type PlannedOperationKind =
   | "resource.bind"
   | "runtime.deploy"
   | "router.prepare"
-  | "publication.resolve"
+  | "output.resolve"
   | "access-path.materialize"
   | "activation.commit";
 
@@ -116,7 +116,7 @@ export interface DeploymentProviderAdapter {
  *    2. component.project      — project component contracts onto runtime
  *    3. resource.bind          — declare resources before bindings
  *    4. access-path.materialize— materialise resource access paths
- *    5. publication.resolve    — resolve publication declarations
+ *    5. output.resolve         — resolve output declarations
  *    6. runtime.deploy         — deploy component runtimes
  *    7. router.prepare         — prepare exposure routers
  *    8. activation.commit      — final commit (single op per deployment)
@@ -132,7 +132,7 @@ export function planProviderOperations(
     "component.project": [],
     "resource.bind": [],
     "access-path.materialize": [],
-    "publication.resolve": [],
+    "output.resolve": [],
     "runtime.deploy": [],
     "router.prepare": [],
     "activation.commit": [],
@@ -182,7 +182,7 @@ export function planProviderOperations(
     "component.project",
     "resource.bind",
     "access-path.materialize",
-    "publication.resolve",
+    "output.resolve",
     "runtime.deploy",
     "router.prepare",
     "activation.commit",
@@ -200,8 +200,8 @@ function projectionToOperationKind(
       return "resource.bind";
     case "exposure-target":
       return "router.prepare";
-    case "publication-declaration":
-      return "publication.resolve";
+    case "output-declaration":
+      return "output.resolve";
     case "binding-request":
       return "component.project";
     case "access-path-request":

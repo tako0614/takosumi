@@ -205,7 +205,7 @@ Deno.test("C1: provider failure after partial success reverts committed operatio
   const reverted: PlannedOperation[] = [];
   // Adapter succeeds for everything except runtime.deploy. The orchestrator
   // executes descriptor.resolve / component.project / resource.bind /
-  // access-path.materialize / publication.resolve before runtime.deploy in
+  // access-path.materialize / output.resolve before runtime.deploy in
   // canonical order, so several operations will already be committed when
   // runtime.deploy fails.
   const adapter: DeploymentProviderAdapter = {
@@ -442,7 +442,7 @@ Deno.test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a differ
   // Compile the same authoring manifest twice and then synthesise a
   // post-profile-merge AppSpec by stamping `effectiveRuntimeCapabilities`
   // onto the second spec. The descriptor seeds (components / resources /
-  // routes / publications) are otherwise byte-identical, so any digest
+  // routes / outputs) are otherwise byte-identical, so any digest
   // delta must come from the C2 fold-in.
   const manifest: PublicDeployManifest = {
     name: "demo-app",
