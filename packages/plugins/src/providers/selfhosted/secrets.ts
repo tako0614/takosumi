@@ -161,7 +161,7 @@ export class SelfHostedLocalAesGcmKmsClient implements SelfHostedKmsClient {
       ),
     );
     return freezeClone({
-      version: "takos.kms.envelope.v1",
+      version: "takosumi.kms.envelope.v1",
       algorithm: "AES-256-GCM",
       keyRef: input.keyRef ?? this.#keyRef,
       iv: encodeBase64Url(iv),

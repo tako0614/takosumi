@@ -1,13 +1,13 @@
 import type {
   AppSpec,
-  AppSpecPublication,
+  AppSpecOutput,
   AppSpecRoute,
   DeploySourceRef,
+  PublicComponentBindingSpec,
   PublicComputeRequirements,
   PublicComputeSpec,
-  PublicConsumeSpec,
   PublicDeployManifest,
-  PublicPublishSpec,
+  PublicOutputSpec,
   PublicResourceSpec,
   PublicRouteSpec,
 } from "./types.ts";
@@ -38,9 +38,7 @@ const TOP_LEVEL_FIELDS = new Set([
   "compute",
   "resources",
   "routes",
-  // Canonical Output declaration map. Legacy alias is `publications`.
   "outputs",
-  "publications",
   "env",
   "overrides",
 ]);
@@ -55,7 +53,7 @@ const COMPUTE_FIELDS = new Set([
   "args",
   "env",
   "depends",
-  "consume",
+  "bindings",
   "requirements",
   "icon",
   "readiness",
@@ -74,7 +72,7 @@ const ATTACHED_CONTAINER_FIELDS = new Set([
   "healthCheck",
   "volumes",
   "scaling",
-  "consume",
+  "bindings",
   "depends",
   "dockerfile",
   "cloudflare",
@@ -130,7 +128,7 @@ const ROUTE_FIELDS = new Set([
   "timeoutMs",
 ]);
 
-const PUBLICATION_FIELDS = new Set([
+const OUTPUT_FIELDS = new Set([
   "name",
   "type",
   "from",
@@ -140,17 +138,15 @@ const PUBLICATION_FIELDS = new Set([
   "spec",
 ]);
 
-const CONSUME_FIELDS = new Set([
-  // Canonical authoring keyword for selecting an Output as a binding source.
-  "output",
-  // Legacy alias of `output`; folded into `output` during expansion.
-  "publication",
-  "as",
-  "request",
-  "inject",
+const BINDING_FIELDS = new Set(["from", "inject"]);
+const BINDING_FROM_FIELDS = new Set([
   "resource",
+  "output",
   "secret",
+  "providerOutput",
+  "field",
   "access",
+  "request",
   "optional",
 ]);
 
@@ -159,7 +155,6 @@ const ENV_OVERRIDE_FIELDS = new Set([
   "resources",
   "routes",
   "outputs",
-  "publications",
   "env",
 ]);
 
@@ -169,7 +164,7 @@ const INTERNAL_OVERRIDE_FIELDS = new Set([
   "runtimeNetworkPolicy",
   "accessPathPreferences",
   "approvals",
-  "takos.directDeploy",
+  "takosumi.directDeploy",
 ]);
 
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -184,12 +179,12 @@ export function compileManifestToAppSpec(
   const expandedManifest = preparePublicDeployManifest(manifest, options);
   validateManifestShape(expandedManifest, options);
   const computeNames = new Set(Object.keys(expandedManifest.compute ?? {}));
-  const resourceBindingConsumes = resourceBindingConsumesFor(
+  const resourceBindingsByCompute = resourceBindingsByComputeFor(
     expandedManifest.resources ?? {},
     computeNames,
     expansionDescriptors,
   );
-  const publications = publicPublicationCollection(expandedManifest);
+  const outputs = publicOutputCollection(expandedManifest);
   for (
     const [name, compute] of Object.entries(expandedManifest.compute ?? {})
   ) {
@@ -215,6 +210,10 @@ export function compileManifestToAppSpec(
       if (runtimeContractRef !== compute.type) {
         expansionDescriptors.add(PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR);
       }
+      const bindings: Record<string, PublicComponentBindingSpec> = {
+        ...structuredClone(compute.bindings ?? {}),
+        ...structuredClone(resourceBindingsByCompute.get(name) ?? {}),
+      };
       return {
         name,
         type: runtimeContractRef,
@@ -225,10 +224,7 @@ export function compileManifestToAppSpec(
         args: compute.args,
         env: { ...(compute.env ?? {}) },
         depends: [...(compute.depends ?? [])],
-        consume: [
-          ...structuredClone(compute.consume ?? []),
-          ...structuredClone(resourceBindingConsumes.get(name) ?? []),
-        ],
+        bindings,
         requirements: computeRequirementsFor(compute),
         raw: structuredClone(compute),
         runtimeContractRef,
@@ -255,9 +251,9 @@ export function compileManifestToAppSpec(
       expansionDescriptors,
       expandedManifest.compute ?? {},
     ),
-    publications: normalizeNamedCollection(
-      publications,
-      "publication",
+    outputs: normalizeNamedCollection(
+      outputs,
+      "output",
       expansionDescriptors,
     ),
     env: { ...(expandedManifest.env ?? {}) },
@@ -405,24 +401,25 @@ function validateManifestShape(
   validateComputeCollection(manifest.compute ?? {});
   validateResources(manifest.resources ?? {}, computeNames);
   const routeEntries = validateRoutes(manifest.routes ?? {}, compute);
-  validatePublications(publicPublicationCollection(manifest), routeEntries);
-  const resourceBindingConsumes = resourceBindingConsumesFor(
+  validateOutputs(publicOutputCollection(manifest), routeEntries);
+  const resourceBindingsByCompute = resourceBindingsByComputeFor(
     manifest.resources ?? {},
     computeNames,
     new Set(),
   );
   for (const [name, compute] of Object.entries(manifest.compute ?? {})) {
-    validateConsumes(
+    const merged: Record<string, PublicComponentBindingSpec> = {
+      ...(compute.bindings ?? {}),
+      ...(resourceBindingsByCompute.get(name) ?? {}),
+    };
+    validateBindings(
       `compute.${name}`,
-      [
-        ...(compute.consume ?? []),
-        ...(resourceBindingConsumes.get(name) ?? []),
-      ],
+      merged,
       compute.env ?? {},
       inheritedEnv,
       options,
     );
-    validateAttachedContainerConsumes(name, compute, inheritedEnv, options);
+    validateAttachedContainerBindings(name, compute, inheritedEnv, options);
   }
 }
 
@@ -465,38 +462,23 @@ function mergeEnvironmentOverride(
       override.routes as PublicDeployManifest["routes"],
     );
   }
-  const overridePublications = override.publications;
-  if (overridePublications !== undefined) {
-    output.publications = mergePublicationsByName(
-      publicPublicationCollection(output),
-      overridePublications as
-        | Record<string, PublicPublishSpec>
-        | PublicPublishSpec[],
+  const overrideOutputs = override.outputs;
+  if (overrideOutputs !== undefined) {
+    output.outputs = mergeOutputsByName(
+      publicOutputCollection(output),
+      overrideOutputs as
+        | Record<string, PublicOutputSpec>
+        | PublicOutputSpec[],
       envName,
     );
   }
   return output;
 }
 
-function publicPublicationCollection(
+function publicOutputCollection(
   manifest: PublicDeployManifest,
-): Record<string, PublicPublishSpec> | PublicPublishSpec[] {
-  // Canonical key is `outputs`. The legacy `publications` key remains
-  // accepted; if both are present, `outputs` wins and `publications` entries
-  // are merged in for any name not already declared under `outputs`.
-  const outputs = manifest.outputs;
-  const publications = manifest.publications;
-  if (outputs && !publications) return outputs;
-  if (!outputs && publications) return publications;
-  if (!outputs && !publications) return {};
-  const merged = new Map<string, PublicPublishSpec>();
-  for (const [name, spec] of namedCollectionEntries(publications!, "output")) {
-    merged.set(name, { name, ...structuredClone(spec) });
-  }
-  for (const [name, spec] of namedCollectionEntries(outputs!, "output")) {
-    merged.set(name, { name, ...structuredClone(spec) });
-  }
-  return [...merged.values()];
+): Record<string, PublicOutputSpec> | PublicOutputSpec[] {
+  return manifest.outputs ?? {};
 }
 
 function mergeRecordByName<T>(
@@ -516,26 +498,19 @@ function mergeRecordByName<T>(
   return output;
 }
 
-function mergePublicationsByName(
-  base: Record<string, PublicPublishSpec> | PublicPublishSpec[],
-  override: Record<string, PublicPublishSpec> | PublicPublishSpec[],
+function mergeOutputsByName(
+  base: Record<string, PublicOutputSpec> | PublicOutputSpec[],
+  override: Record<string, PublicOutputSpec> | PublicOutputSpec[],
   envName: string,
-): PublicPublishSpec[] {
-  const byName = new Map<string, PublicPublishSpec>();
-  for (
-    const [name, publication] of namedCollectionEntries(base, "publication")
-  ) {
-    byName.set(name, { name, ...structuredClone(publication) });
+): PublicOutputSpec[] {
+  const byName = new Map<string, PublicOutputSpec>();
+  for (const [name, output] of namedCollectionEntries(base, "output")) {
+    byName.set(name, { name, ...structuredClone(output) });
   }
-  for (
-    const [name, publication] of namedCollectionEntries(
-      override,
-      "publication",
-    )
-  ) {
-    if (!publication.name && Array.isArray(override)) {
+  for (const [name, output] of namedCollectionEntries(override, "output")) {
+    if (!output.name && Array.isArray(override)) {
       throw new TypeError(
-        `overrides.${envName}.publications entry requires name`,
+        `overrides.${envName}.outputs entry requires name`,
       );
     }
     const previous = byName.get(name) ?? { name };
@@ -543,8 +518,8 @@ function mergePublicationsByName(
       name,
       deepMergeRecord(
         previous,
-        publication,
-      ) as PublicPublishSpec,
+        output,
+      ) as PublicOutputSpec,
     );
   }
   return [...byName.values()];
@@ -565,7 +540,7 @@ function deepMergeRecord(
 
 function namedCollectionEntries<T extends { id?: string; name?: string }>(
   value: Record<string, T> | T[],
-  kind: "route" | "publication" | "output",
+  kind: "route" | "output",
 ): [string, T][] {
   return Array.isArray(value)
     ? value.map((item, index) => [arrayEntryName(item, kind, index), item])
@@ -579,20 +554,20 @@ function normalizeNamedCollection(
   compute?: Record<string, PublicComputeSpec>,
 ): AppSpecRoute[];
 function normalizeNamedCollection(
-  value: Record<string, PublicPublishSpec> | PublicPublishSpec[],
-  kind: "publication",
+  value: Record<string, PublicOutputSpec> | PublicOutputSpec[],
+  kind: "output",
   expansionDescriptors: Set<string>,
-): AppSpecPublication[];
+): AppSpecOutput[];
 function normalizeNamedCollection(
   value:
     | Record<string, PublicRouteSpec>
     | PublicRouteSpec[]
-    | Record<string, PublicPublishSpec>
-    | PublicPublishSpec[],
-  kind: "route" | "publication",
+    | Record<string, PublicOutputSpec>
+    | PublicOutputSpec[],
+  kind: "route" | "output",
   expansionDescriptors: Set<string>,
   compute: Record<string, PublicComputeSpec> = {},
-): AppSpecRoute[] | AppSpecPublication[] {
+): AppSpecRoute[] | AppSpecOutput[] {
   if (kind === "route") {
     const entries = namedCollectionEntries(
       value as Record<string, PublicRouteSpec> | PublicRouteSpec[],
@@ -629,35 +604,35 @@ function normalizeNamedCollection(
   }
 
   const entries = namedCollectionEntries(
-    value as Record<string, PublicPublishSpec> | PublicPublishSpec[],
-    "publication",
+    value as Record<string, PublicOutputSpec> | PublicOutputSpec[],
+    "output",
   );
   return entries.map(([name, raw]) => {
-    const publication = raw as PublicPublishSpec;
-    const publicationContractRef = publicationContractRefFor(publication.type);
-    if (publicationContractRef !== publication.type) {
+    const output = raw as PublicOutputSpec;
+    const outputContractRef = outputContractRefFor(output.type);
+    if (outputContractRef !== output.type) {
       expansionDescriptors.add(PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR);
     }
     return {
       name,
-      type: publicationContractRef,
-      from: publication.from,
-      outputs: { ...(publication.outputs ?? {}) },
-      spec: { ...(publication.spec ?? {}) },
-      raw: structuredClone(publication),
-      publicationContractRef,
-    } as AppSpecPublication;
+      type: outputContractRef,
+      from: output.from,
+      outputs: { ...(output.outputs ?? {}) },
+      spec: { ...(output.spec ?? {}) },
+      raw: structuredClone(output),
+      outputContractRef,
+    } as AppSpecOutput;
   });
 }
 
 function arrayEntryName(
-  item: PublicRouteSpec | PublicPublishSpec,
-  kind: "route" | "publication" | "output",
+  item: PublicRouteSpec | PublicOutputSpec,
+  kind: "route" | "output",
   index: number,
 ): string {
   const explicitName = kind === "route"
     ? (item as PublicRouteSpec).id
-    : (item as PublicPublishSpec).name;
+    : (item as PublicOutputSpec).name;
   return typeof explicitName === "string" && explicitName.length > 0
     ? explicitName
     : `${kind}-${index + 1}`;
@@ -697,15 +672,47 @@ function validateComputeCollection(
       }
       validateTriggers(name, spec.triggers);
     }
-    for (const [index, consume] of (spec.consume ?? []).entries()) {
-      if (!isRecord(consume)) {
-        throw new TypeError(`compute.${name}.consume[${index}] must be object`);
-      }
-      assertKnownFields(
-        consume,
-        CONSUME_FIELDS,
-        `compute.${name}.consume[${index}]`,
+    if (spec.bindings !== undefined) {
+      validateBindingShape(`compute.${name}.bindings`, spec.bindings);
+    }
+  }
+}
+
+function validateBindingShape(
+  pathPrefix: string,
+  value: unknown,
+): void {
+  if (!isRecord(value)) {
+    throw new TypeError(`${pathPrefix} must be object`);
+  }
+  for (const [name, spec] of Object.entries(value)) {
+    const path = `${pathPrefix}.${name}`;
+    if (!isRecord(spec)) {
+      throw new TypeError(`${path} must be object`);
+    }
+    assertKnownFields(spec, BINDING_FIELDS, path);
+    if (!isRecord(spec.from)) {
+      throw new TypeError(`${path}.from must be object`);
+    }
+    assertKnownFields(spec.from, BINDING_FROM_FIELDS, `${path}.from`);
+    const sourceKeys = ["resource", "output", "secret", "providerOutput"]
+      .filter(
+        (key) =>
+          typeof (spec.from as Record<string, unknown>)[key] === "string",
       );
+    if (sourceKeys.length !== 1) {
+      throw new TypeError(
+        `${path}.from must declare exactly one of resource | output | secret | providerOutput`,
+      );
+    }
+    if (!isRecord(spec.inject)) {
+      throw new TypeError(`${path}.inject must be object`);
+    }
+    if (
+      typeof (spec.inject as Record<string, unknown>).mode !== "string" ||
+      typeof (spec.inject as Record<string, unknown>).target !== "string"
+    ) {
+      throw new TypeError(`${path}.inject requires mode and target strings`);
     }
   }
 }
@@ -734,16 +741,8 @@ function validateAttachedContainers(
     if (container.depends !== undefined && !isStringArray(container.depends)) {
       throw new TypeError(`${path}.depends must be string array`);
     }
-    if (container.consume !== undefined && !Array.isArray(container.consume)) {
-      throw new TypeError(`${path}.consume must be array`);
-    }
-    if (Array.isArray(container.consume)) {
-      for (const [index, consume] of container.consume.entries()) {
-        if (!isRecord(consume)) {
-          throw new TypeError(`${path}.consume[${index}] must be object`);
-        }
-        assertKnownFields(consume, CONSUME_FIELDS, `${path}.consume[${index}]`);
-      }
+    if (container.bindings !== undefined) {
+      validateBindingShape(`${path}.bindings`, container.bindings);
     }
     validateAttachedContainerImage(path, container);
   }
@@ -1128,50 +1127,45 @@ function routeMethodsOverlap(
   return left.some((method) => rightSet.has(method));
 }
 
-function validatePublications(
-  publications: Record<string, PublicPublishSpec> | PublicPublishSpec[],
+function validateOutputs(
+  outputs: Record<string, PublicOutputSpec> | PublicOutputSpec[],
   routes: Map<string, PublicRouteSpec>,
 ): void {
-  for (
-    const [name, publication] of namedCollectionEntries(
-      publications,
-      "publication",
-    )
-  ) {
-    if (!isRecord(publication)) {
-      throw new TypeError(`publication.${name} must be object`);
+  for (const [name, output] of namedCollectionEntries(outputs, "output")) {
+    if (!isRecord(output)) {
+      throw new TypeError(`output.${name} must be object`);
     }
-    assertKnownFields(publication, PUBLICATION_FIELDS, `publication.${name}`);
-    if (Array.isArray(publications) && !publication.name) {
-      throw new TypeError(`publication.${name}.name is required`);
+    assertKnownFields(output, OUTPUT_FIELDS, `output.${name}`);
+    if (Array.isArray(outputs) && !output.name) {
+      throw new TypeError(`output.${name}.name is required`);
     }
-    if (typeof publication.type !== "string" || publication.type.length === 0) {
-      throw new TypeError(`publication.${name}.type must be string`);
+    if (typeof output.type !== "string" || output.type.length === 0) {
+      throw new TypeError(`output.${name}.type must be string`);
     }
-    publicationContractRefFor(publication.type);
-    const routeRefs = publicationRouteRefs(publication);
+    outputContractRefFor(output.type);
+    const routeRefs = outputRouteRefs(output);
     if (routeRefs.length === 0) {
       throw new TypeError(
-        `publication.${name} requires outputs.*.routeRef`,
+        `output.${name} requires outputs.*.routeRef`,
       );
     }
     for (const routeRef of routeRefs) {
       const route = routes.get(routeRef);
       if (!route) {
         throw new TypeError(
-          `publication.${name} references unknown route '${routeRef}'`,
+          `output.${name} references unknown route '${routeRef}'`,
         );
       }
     }
   }
 }
 
-function publicationRouteRefs(publication: PublicPublishSpec): string[] {
+function outputRouteRefs(output: PublicOutputSpec): string[] {
   const refs: string[] = [];
-  if (isRecord(publication.outputs)) {
-    for (const output of Object.values(publication.outputs)) {
-      if (!isRecord(output)) continue;
-      const routeRef = output.routeRef;
+  if (isRecord(output.outputs)) {
+    for (const item of Object.values(output.outputs)) {
+      if (!isRecord(item)) continue;
+      const routeRef = item.routeRef;
       if (typeof routeRef === "string" && routeRef.length > 0) {
         refs.push(routeRef);
       }
@@ -1180,9 +1174,9 @@ function publicationRouteRefs(publication: PublicPublishSpec): string[] {
   return refs;
 }
 
-function validateConsumes(
+function validateBindings(
   pathPrefix: string,
-  consumes: readonly PublicConsumeSpec[],
+  bindings: Record<string, PublicComponentBindingSpec>,
   localEnv: Record<string, string>,
   inheritedEnv: Set<string>,
   options: Pick<
@@ -1190,7 +1184,6 @@ function validateConsumes(
     "autoHostnameAvailable" | "localDevelopment"
   >,
 ): void {
-  const names = new Set<string>();
   const injectedEnvNames = new Set(inheritedEnv);
   for (const name of normalizedEnvNameSet(localEnv, `${pathPrefix}.env`)) {
     if (injectedEnvNames.has(name)) {
@@ -1198,40 +1191,18 @@ function validateConsumes(
     }
     injectedEnvNames.add(name);
   }
-  for (const [index, consume] of consumes.entries()) {
-    const path = `${pathPrefix}.consume[${index}]`;
-    if (!isRecord(consume)) throw new TypeError(`${path} must be object`);
-    // Canonical authoring keyword is `output`; legacy alias is `publication`.
-    // Both MUST NOT be set at the same time on a single consume entry.
-    if (
-      typeof consume.output === "string" &&
-      typeof consume.publication === "string" &&
-      consume.output !== consume.publication
-    ) {
-      throw new TypeError(
-        `${path} declares both 'output' and 'publication' with conflicting values`,
+  for (const [bindingName, spec] of Object.entries(bindings)) {
+    const path = `${pathPrefix}.bindings.${bindingName}`;
+    validateBuiltinOutputRequest(path, spec, options);
+    const inject = spec.inject;
+    if (inject.mode === "env") {
+      const normalized = normalizeEnvName(
+        inject.target,
+        `${path}.inject.target`,
       );
-    }
-    if (typeof consume.output === "string" && !consume.publication) {
-      // Mutate in place so the rest of the pipeline (which reads
-      // `consume.publication`) sees the canonical Output address.
-      (consume as { publication?: string }).publication = consume.output;
-    }
-    const localName = consume.as ?? consume.publication ?? consume.output ??
-      `consume.${index + 1}`;
-    if (typeof localName !== "string" || localName.length === 0) {
-      throw new TypeError(`${path}.as must be string`);
-    }
-    if (names.has(localName)) {
-      throw new TypeError(`${path} duplicates consume name '${localName}'`);
-    }
-    names.add(localName);
-    validateBuiltinPublicationRequest(path, consume, options);
-    for (const envName of consumeInjectionEnvNames(path, consume, localName)) {
-      const normalized = normalizeEnvName(envName, `${path}.inject.env`);
       if (injectedEnvNames.has(normalized)) {
         throw new TypeError(
-          `${path}.inject.env collides with env '${normalized}'`,
+          `${path}.inject collides with env '${normalized}'`,
         );
       }
       injectedEnvNames.add(normalized);
@@ -1239,7 +1210,7 @@ function validateConsumes(
   }
 }
 
-function validateAttachedContainerConsumes(
+function validateAttachedContainerBindings(
   computeName: string,
   compute: PublicComputeSpec,
   inheritedEnv: Set<string>,
@@ -1251,12 +1222,12 @@ function validateAttachedContainerConsumes(
   if (!isRecord(compute.containers)) return;
   for (const [containerName, container] of Object.entries(compute.containers)) {
     if (!isRecord(container)) continue;
-    const consumes = Array.isArray(container.consume)
-      ? container.consume as PublicConsumeSpec[]
-      : [];
-    validateConsumes(
+    const bindings = isRecord(container.bindings)
+      ? container.bindings as Record<string, PublicComponentBindingSpec>
+      : {};
+    validateBindings(
       `compute.${computeName}.containers.${containerName}`,
-      consumes,
+      bindings,
       isRecord(container.env) ? container.env as Record<string, string> : {},
       inheritedEnv,
       options,
@@ -1264,86 +1235,63 @@ function validateAttachedContainerConsumes(
   }
 }
 
-function validateBuiltinPublicationRequest(
+function validateBuiltinOutputRequest(
   path: string,
-  consume: PublicConsumeSpec,
+  spec: PublicComponentBindingSpec,
   options: Pick<
     CompileManifestOptions,
     "autoHostnameAvailable" | "localDevelopment"
   >,
 ): void {
-  if (consume.publication === "takos.api-key") {
-    if (!isRecord(consume.request)) {
-      throw new TypeError(`${path}.request is required`);
-    }
-    assertKnownFields(consume.request, new Set(["scopes"]), `${path}.request`);
-    if (!isStringArray(consume.request.scopes)) {
-      throw new TypeError(`${path}.request.scopes must be string array`);
-    }
-  }
-  if (consume.publication === "takos.oauth-client") {
-    if (!isRecord(consume.request)) {
-      throw new TypeError(`${path}.request is required`);
+  const from = spec.from as { output?: string; request?: unknown };
+  if (from.output === "takosumi.api-key") {
+    if (!isRecord(from.request)) {
+      throw new TypeError(`${path}.from.request is required`);
     }
     assertKnownFields(
-      consume.request,
-      new Set(["redirectUris", "scopes", "clientName", "metadata"]),
-      `${path}.request`,
+      from.request,
+      new Set(["scopes"]),
+      `${path}.from.request`,
     );
-    if (!isStringArray(consume.request.redirectUris)) {
-      throw new TypeError(`${path}.request.redirectUris must be string array`);
+    if (!isStringArray(from.request.scopes)) {
+      throw new TypeError(`${path}.from.request.scopes must be string array`);
     }
-    for (const [index, redirectUri] of consume.request.redirectUris.entries()) {
+  }
+  if (from.output === "takosumi.oauth-client") {
+    if (!isRecord(from.request)) {
+      throw new TypeError(`${path}.from.request is required`);
+    }
+    assertKnownFields(
+      from.request,
+      new Set(["redirectUris", "scopes", "clientName", "metadata"]),
+      `${path}.from.request`,
+    );
+    if (!isStringArray(from.request.redirectUris)) {
+      throw new TypeError(
+        `${path}.from.request.redirectUris must be string array`,
+      );
+    }
+    for (const [index, redirectUri] of from.request.redirectUris.entries()) {
       validateOAuthRedirectUri(
-        `${path}.request.redirectUris[${index}]`,
+        `${path}.from.request.redirectUris[${index}]`,
         redirectUri,
         options,
       );
     }
-    if (!isStringArray(consume.request.scopes)) {
-      throw new TypeError(`${path}.request.scopes must be string array`);
+    if (!isStringArray(from.request.scopes)) {
+      throw new TypeError(`${path}.from.request.scopes must be string array`);
     }
-    if (consume.request.metadata !== undefined) {
-      if (!isRecord(consume.request.metadata)) {
-        throw new TypeError(`${path}.request.metadata must be object`);
+    if (from.request.metadata !== undefined) {
+      if (!isRecord(from.request.metadata)) {
+        throw new TypeError(`${path}.from.request.metadata must be object`);
       }
       assertKnownFields(
-        consume.request.metadata,
+        from.request.metadata,
         new Set(["logoUri", "tosUri", "policyUri"]),
-        `${path}.request.metadata`,
+        `${path}.from.request.metadata`,
       );
     }
   }
-}
-
-function consumeInjectionEnvNames(
-  path: string,
-  consume: PublicConsumeSpec,
-  localName: string,
-): string[] {
-  const inject = consume.inject;
-  if (inject !== undefined && !isRecord(inject)) {
-    throw new TypeError(`${path}.inject must be object`);
-  }
-  if (isRecord(inject)) {
-    assertKnownFields(inject, new Set(["env", "defaults"]), `${path}.inject`);
-    if (inject.defaults !== undefined && typeof inject.defaults !== "boolean") {
-      throw new TypeError(`${path}.inject.defaults must be boolean`);
-    }
-  }
-  const explicit = isRecord(inject?.env)
-    ? inject.env as Record<string, unknown>
-    : undefined;
-  validateStringRecord(explicit, `${path}.inject.env`);
-  const names = explicit ? Object.values(explicit) : [];
-  if (inject?.defaults === true) {
-    names.push(
-      ...defaultOutputNamesFor(consume.publication).map((outputName) =>
-        defaultPublicationEnvName(localName, outputName)
-      ),
-    );
-  }
-  return names;
 }
 
 function normalizedEnvNameSet(
@@ -1359,30 +1307,6 @@ function normalizedEnvNameSet(
     names.add(normalized);
   }
   return names;
-}
-
-function defaultOutputNamesFor(publication: string | undefined): string[] {
-  if (publication === "takos.api-key") return ["endpoint"];
-  if (publication === "takos.oauth-client") {
-    return ["clientId", "issuer"];
-  }
-  return [];
-}
-
-function defaultPublicationEnvName(
-  localName: string,
-  outputName: string,
-): string {
-  return `PUBLICATION_${envNameSegment(localName)}_${
-    envNameSegment(outputName)
-  }`;
-}
-
-function envNameSegment(value: string): string {
-  return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/[^A-Za-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toUpperCase();
 }
 
 function validateOAuthRedirectUri(
@@ -1571,12 +1495,15 @@ function resourceDefaultAccessModeFor(resourceContractRef: string): string {
   return contract.defaultAccessMode;
 }
 
-function resourceBindingConsumesFor(
+function resourceBindingsByComputeFor(
   resources: NonNullable<PublicDeployManifest["resources"]>,
   computeNames: Set<string>,
   expansionDescriptors: Set<string>,
-): Map<string, PublicConsumeSpec[]> {
-  const byCompute = new Map<string, PublicConsumeSpec[]>();
+): Map<string, Record<string, PublicComponentBindingSpec>> {
+  const byCompute = new Map<
+    string,
+    Record<string, PublicComponentBindingSpec>
+  >();
   for (const [resourceName, resource] of Object.entries(resources)) {
     const resourceContractRef = resourceContractRefFor(resource.type);
     const accessMode = resourceDefaultAccessModeFor(resourceContractRef);
@@ -1590,20 +1517,15 @@ function resourceBindingConsumesFor(
           `resource.${resourceName}.bindings references unknown compute '${binding.compute}'`,
         );
       }
-      const consumes = byCompute.get(binding.compute) ?? [];
-      consumes.push({
-        resource: `resource.${resourceName}`,
-        access: {
-          contract: resourceContractRef,
-          mode: accessMode,
+      const map = byCompute.get(binding.compute) ?? {};
+      map[binding.envName] = {
+        from: {
+          resource: `resource.${resourceName}`,
+          access: { contract: resourceContractRef, mode: accessMode },
         },
-        inject: {
-          env: {
-            binding: binding.envName,
-          },
-        },
-      });
-      byCompute.set(binding.compute, consumes);
+        inject: { mode: "env", target: binding.envName },
+      };
+      byCompute.set(binding.compute, map);
     }
   }
   return byCompute;
@@ -1765,25 +1687,25 @@ function interfaceContractRefFor(protocol: string | undefined): string {
   throw new TypeError(`RouterProtocolUnsupported: ${normalized}`);
 }
 
-function publicationContractRefFor(type: string): string {
+function outputContractRefFor(type: string): string {
   const normalized = type.toLowerCase();
   if (
-    normalized === "publication.http-endpoint@v1" ||
-    normalized === "https://takos.dev/contracts/publication/http-endpoint/v1"
+    normalized === "output.http-endpoint@v1" ||
+    normalized === "https://takosumi.dev/contracts/output/http-endpoint/v1"
   ) {
-    return "publication.http-endpoint@v1";
+    return "output.http-endpoint@v1";
   }
   if (
-    normalized === "publication.mcp-server@v1" ||
-    normalized === "https://takos.dev/contracts/publication/mcp-server/v1"
+    normalized === "output.mcp-server@v1" ||
+    normalized === "https://takosumi.dev/contracts/output/mcp-server/v1"
   ) {
-    return "publication.mcp-server@v1";
+    return "output.mcp-server@v1";
   }
   if (
-    normalized === "publication.topic@v1" ||
-    normalized === "https://takos.dev/contracts/publication/topic/v1"
+    normalized === "output.topic@v1" ||
+    normalized === "https://takosumi.dev/contracts/output/topic/v1"
   ) {
-    return "publication.topic@v1";
+    return "output.topic@v1";
   }
-  throw new TypeError(`DescriptorAliasAmbiguous: publication type ${type}`);
+  throw new TypeError(`DescriptorAliasAmbiguous: output type ${type}`);
 }

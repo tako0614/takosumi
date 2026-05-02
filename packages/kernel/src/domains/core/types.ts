@@ -1,6 +1,6 @@
 import type {
   InternalSpaceSummary,
-  TakosActorContext,
+  TakosumiActorContext,
 } from "takosumi-contract";
 import type { IsoTimestamp } from "../../shared/time.ts";
 
@@ -50,14 +50,14 @@ export interface EntitlementDecision {
 }
 
 export interface CreateSpaceCommand {
-  readonly actor: TakosActorContext;
+  readonly actor: TakosumiActorContext;
   readonly spaceId?: SpaceId;
   readonly name?: string;
   readonly metadata?: Record<string, unknown>;
 }
 
 export interface CreateGroupCommand {
-  readonly actor: TakosActorContext;
+  readonly actor: TakosumiActorContext;
   readonly spaceId: SpaceId;
   readonly groupId?: GroupId;
   readonly slug: GroupSlug;
@@ -66,7 +66,7 @@ export interface CreateGroupCommand {
 }
 
 export interface UpsertSpaceMembershipCommand {
-  readonly actor: TakosActorContext;
+  readonly actor: TakosumiActorContext;
   readonly spaceId: SpaceId;
   readonly accountId: AccountId;
   readonly roles?: readonly CoreRole[];
@@ -74,17 +74,17 @@ export interface UpsertSpaceMembershipCommand {
 }
 
 export interface CheckEntitlementQuery {
-  readonly actor: TakosActorContext;
+  readonly actor: TakosumiActorContext;
   readonly spaceId: SpaceId;
   readonly key: EntitlementKey;
 }
 
 export interface ListSpacesQuery {
-  readonly actor: TakosActorContext;
+  readonly actor: TakosumiActorContext;
 }
 
 export interface ListGroupsQuery {
-  readonly actor: TakosActorContext;
+  readonly actor: TakosumiActorContext;
   readonly spaceId: SpaceId;
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   CORE_CONDITION_REASONS,
-  TAKOS_PAAS_INTERNAL_PATHS,
+  TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
 import { createPaaSOpenApiDocument } from "./openapi.ts";
 import { TAKOS_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
@@ -74,14 +74,14 @@ Deno.test("createPaaSOpenApiDocument emits all internal route skeleton paths", (
   assert.equal(doc.paths["/internal/deploy/applies"], undefined);
   assert.equal(doc.paths["/api/internal/v1/deploy/plans"], undefined);
   assert.equal(doc.paths["/api/internal/v1/deploy/applies"], undefined);
-  assert.ok(doc.paths[TAKOS_PAAS_INTERNAL_PATHS.spaces]?.get);
-  assert.ok(doc.paths[TAKOS_PAAS_INTERNAL_PATHS.spaces]?.post);
-  assert.ok(doc.paths[TAKOS_PAAS_INTERNAL_PATHS.groups]?.get);
-  assert.ok(doc.paths[TAKOS_PAAS_INTERNAL_PATHS.groups]?.post);
-  assert.ok(doc.paths[TAKOS_PAAS_INTERNAL_PATHS.deployments]?.post);
-  assert.ok(doc.paths[TAKOS_PAAS_INTERNAL_PATHS.deploymentApply]?.post);
+  assert.ok(doc.paths[TAKOSUMI_INTERNAL_PATHS.spaces]?.get);
+  assert.ok(doc.paths[TAKOSUMI_INTERNAL_PATHS.spaces]?.post);
+  assert.ok(doc.paths[TAKOSUMI_INTERNAL_PATHS.groups]?.get);
+  assert.ok(doc.paths[TAKOSUMI_INTERNAL_PATHS.groups]?.post);
+  assert.ok(doc.paths[TAKOSUMI_INTERNAL_PATHS.deployments]?.post);
+  assert.ok(doc.paths[TAKOSUMI_INTERNAL_PATHS.deploymentApply]?.post);
 
-  for (const path of Object.values(TAKOS_PAAS_INTERNAL_PATHS)) {
+  for (const path of Object.values(TAKOSUMI_INTERNAL_PATHS)) {
     const methods = doc.paths[path];
     assert.ok(methods, `missing ${path}`);
     for (const operation of Object.values(methods)) {
@@ -113,12 +113,12 @@ Deno.test("createPaaSOpenApiDocument covers current route inventory", () => {
     ["get", TAKOS_PAAS_PUBLIC_PATHS.deploymentObservations],
     ["get", TAKOS_PAAS_PUBLIC_PATHS.groupHead],
     ["post", TAKOS_PAAS_PUBLIC_PATHS.groupRollback],
-    ["get", TAKOS_PAAS_INTERNAL_PATHS.spaces],
-    ["post", TAKOS_PAAS_INTERNAL_PATHS.spaces],
-    ["get", TAKOS_PAAS_INTERNAL_PATHS.groups],
-    ["post", TAKOS_PAAS_INTERNAL_PATHS.groups],
-    ["post", TAKOS_PAAS_INTERNAL_PATHS.deployments],
-    ["post", TAKOS_PAAS_INTERNAL_PATHS.deploymentApply],
+    ["get", TAKOSUMI_INTERNAL_PATHS.spaces],
+    ["post", TAKOSUMI_INTERNAL_PATHS.spaces],
+    ["get", TAKOSUMI_INTERNAL_PATHS.groups],
+    ["post", TAKOSUMI_INTERNAL_PATHS.groups],
+    ["post", TAKOSUMI_INTERNAL_PATHS.deployments],
+    ["post", TAKOSUMI_INTERNAL_PATHS.deploymentApply],
     ["post", TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll],
     ["post", TAKOS_PAAS_RUNTIME_AGENT_PATHS.heartbeat],
     ["post", TAKOS_PAAS_RUNTIME_AGENT_PATHS.lease],
@@ -145,7 +145,7 @@ Deno.test("createPaaSOpenApiDocument only emits mounted route families", () => {
 
   assert.ok(doc.paths["/health"]?.get);
   assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.spaces]?.get);
-  assert.equal(doc.paths[TAKOS_PAAS_INTERNAL_PATHS.spaces], undefined);
+  assert.equal(doc.paths[TAKOSUMI_INTERNAL_PATHS.spaces], undefined);
   assert.equal(doc.paths[TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll], undefined);
   assert.equal(doc.paths[TAKOS_PAAS_READINESS_PATHS.ready], undefined);
 });

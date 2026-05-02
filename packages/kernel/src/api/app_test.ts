@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import {
   type Deployment,
-  TAKOS_PAAS_INTERNAL_PATHS,
-  type TakosActorContext,
+  TAKOSUMI_INTERNAL_PATHS,
+  type TakosumiActorContext,
 } from "takosumi-contract";
-import { signTakosInternalRequest } from "takosumi-contract/internal-rpc";
+import { signTakosumiInternalRequest } from "takosumi-contract/internal-rpc";
 import {
   type DeploymentService,
   TAKOS_PAAS_PUBLIC_PATHS,
@@ -152,12 +152,12 @@ Deno.test("createApiApp mounts signed internal routes and leaves old aliases unm
     name: "Internal V1",
   });
 
-  const created = await app.request(TAKOS_PAAS_INTERNAL_PATHS.spaces, {
+  const created = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces, {
     method: "POST",
     headers: await signedHeaders({
       secret,
       method: "POST",
-      path: TAKOS_PAAS_INTERNAL_PATHS.spaces,
+      path: TAKOSUMI_INTERNAL_PATHS.spaces,
       body,
       actor: {
         actorAccountId: "acct_owner",
@@ -193,13 +193,13 @@ Deno.test("createApiApp mounts signed internal routes and leaves old aliases unm
   assert.equal(removedInternalSpaces.status, 404);
 
   const internalDeployments = await app.request(
-    TAKOS_PAAS_INTERNAL_PATHS.deployments,
+    TAKOSUMI_INTERNAL_PATHS.deployments,
     { method: "POST" },
   );
   assert.equal(internalDeployments.status, 401);
 
   const internalDeploymentApply = await app.request(
-    TAKOS_PAAS_INTERNAL_PATHS.deploymentApply.replace(
+    TAKOSUMI_INTERNAL_PATHS.deploymentApply.replace(
       ":deploymentId",
       "dep_route",
     ),
@@ -223,7 +223,7 @@ Deno.test("createApiApp mounts signed internal routes and leaves old aliases unm
 Deno.test("createApiApp does not mount internal routes for non-api roles by default", async () => {
   const app = await createApiApp({ role: "takosumi-worker" });
 
-  const internal = await app.request(TAKOS_PAAS_INTERNAL_PATHS.spaces);
+  const internal = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces);
   assert.equal(internal.status, 404);
 
   const capabilities = await app.request("/capabilities");
@@ -231,7 +231,7 @@ Deno.test("createApiApp does not mount internal routes for non-api roles by defa
   assert.equal(
     body.endpoints.some((
       endpoint: { path: string },
-    ) => endpoint.path === TAKOS_PAAS_INTERNAL_PATHS.spaces),
+    ) => endpoint.path === TAKOSUMI_INTERNAL_PATHS.spaces),
     false,
   );
 });
@@ -288,12 +288,12 @@ Deno.test("internal deploy routes enforce workload service grants when security 
     manifest: { name: "app" },
   });
 
-  const response = await app.request(TAKOS_PAAS_INTERNAL_PATHS.deployments, {
+  const response = await app.request(TAKOSUMI_INTERNAL_PATHS.deployments, {
     method: "POST",
     headers: await signedHeaders({
       secret,
       method: "POST",
-      path: TAKOS_PAAS_INTERNAL_PATHS.deployments,
+      path: TAKOSUMI_INTERNAL_PATHS.deployments,
       body,
       actor: {
         actorAccountId: "acct_owner",
@@ -346,7 +346,7 @@ Deno.test("internal list routes enforce workload read grants when security is wi
       }),
     },
   });
-  const actor: TakosActorContext = {
+  const actor: TakosumiActorContext = {
     actorAccountId: "acct_owner",
     roles: ["owner"],
     requestId: "req_list_spaces_denied",
@@ -355,12 +355,12 @@ Deno.test("internal list routes enforce workload read grants when security is wi
     spaceId: "space_route",
   };
 
-  const spaces = await app.request(TAKOS_PAAS_INTERNAL_PATHS.spaces, {
+  const spaces = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces, {
     method: "GET",
     headers: await signedHeaders({
       secret,
       method: "GET",
-      path: TAKOS_PAAS_INTERNAL_PATHS.spaces,
+      path: TAKOSUMI_INTERNAL_PATHS.spaces,
       body: "",
       actor,
     }),
@@ -371,13 +371,13 @@ Deno.test("internal list routes enforce workload read grants when security is wi
     "Service grant is required",
   );
 
-  const groupsPath = `${TAKOS_PAAS_INTERNAL_PATHS.groups}?spaceId=space_route`;
+  const groupsPath = `${TAKOSUMI_INTERNAL_PATHS.groups}?spaceId=space_route`;
   const groups = await app.request(groupsPath, {
     method: "GET",
     headers: await signedHeaders({
       secret,
       method: "GET",
-      path: TAKOS_PAAS_INTERNAL_PATHS.groups,
+      path: TAKOSUMI_INTERNAL_PATHS.groups,
       query: "?spaceId=space_route",
       body: "",
       actor: { ...actor, requestId: "req_list_groups_denied" },
@@ -428,7 +428,7 @@ Deno.test("internal deploy routes enforce entitlement mutation boundaries when w
     manifest: { name: "app" },
   });
 
-  const applyPath = TAKOS_PAAS_INTERNAL_PATHS.deploymentApply.replace(
+  const applyPath = TAKOSUMI_INTERNAL_PATHS.deploymentApply.replace(
     ":deploymentId",
     "dep_apply",
   );
@@ -472,7 +472,7 @@ Deno.test("API routes return common envelopes for malformed JSON", async () => {
     getInternalServiceSecret: () => secret,
   });
   const malformedBody = "{";
-  const actor: TakosActorContext = {
+  const actor: TakosumiActorContext = {
     actorAccountId: "acct_owner",
     roles: ["owner"],
     requestId: "req_malformed",
@@ -492,12 +492,12 @@ Deno.test("API routes return common envelopes for malformed JSON", async () => {
     },
   });
 
-  const internalResponse = await app.request(TAKOS_PAAS_INTERNAL_PATHS.spaces, {
+  const internalResponse = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces, {
     method: "POST",
     headers: await signedHeaders({
       secret,
       method: "POST",
-      path: TAKOS_PAAS_INTERNAL_PATHS.spaces,
+      path: TAKOSUMI_INTERNAL_PATHS.spaces,
       body: malformedBody,
       actor,
     }),
@@ -616,13 +616,13 @@ Deno.test("API routes return common envelopes for uncaught public and internal e
     manifest: { name: "app" },
   });
   const internalResponse = await app.request(
-    TAKOS_PAAS_INTERNAL_PATHS.deployments,
+    TAKOSUMI_INTERNAL_PATHS.deployments,
     {
       method: "POST",
       headers: await signedHeaders({
         secret,
         method: "POST",
-        path: TAKOS_PAAS_INTERNAL_PATHS.deployments,
+        path: TAKOSUMI_INTERNAL_PATHS.deployments,
         body,
         actor: {
           actorAccountId: "acct_owner",
@@ -736,9 +736,9 @@ async function signedHeaders(input: {
   readonly path: string;
   readonly query?: string;
   readonly body: string;
-  readonly actor: TakosActorContext;
+  readonly actor: TakosumiActorContext;
 }): Promise<Headers> {
-  const signed = await signTakosInternalRequest({
+  const signed = await signTakosumiInternalRequest({
     ...input,
     timestamp: new Date().toISOString(),
     caller: input.actor.serviceId ?? input.actor.agentId ?? "takos-test",

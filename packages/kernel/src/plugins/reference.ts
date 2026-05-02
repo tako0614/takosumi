@@ -1,6 +1,6 @@
 import {
-  TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
-  type TakosPaaSKernelPluginManifest,
+  TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
+  type TakosumiKernelPluginManifest,
 } from "takosumi-contract";
 import { LocalActorAdapter } from "../adapters/auth/mod.ts";
 import { MemoryCoordinationAdapter } from "../adapters/coordination/mod.ts";
@@ -18,11 +18,11 @@ import { InMemoryRuntimeAgentRegistry } from "../agents/mod.ts";
 import { InMemoryObservabilitySink } from "../services/observability/mod.ts";
 import type { TakosPaaSKernelPlugin } from "./types.ts";
 
-export const referenceKernelPluginManifest: TakosPaaSKernelPluginManifest = {
+export const referenceKernelPluginManifest: TakosumiKernelPluginManifest = {
   id: "takos.kernel.reference",
   name: "Takos Kernel Reference Adapters",
   version: "1.0.0",
-  kernelApiVersion: TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+  kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
   capabilities: [
     {
       port: "auth",

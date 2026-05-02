@@ -9,7 +9,7 @@ Deno.test("BootstrapMigrationService treats storage migrations as plugin-owned",
     operatorConfig: new LocalOperatorConfig({
       clock: fixedClock,
       values: {
-        TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+        TAKOSUMI_DEV_MODE: "1",
         TAKOS_STORAGE_PLUGIN: "takos.storage.test",
       },
     }),

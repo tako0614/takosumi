@@ -57,6 +57,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20260430000019_replay_protection_log.sql",
     migrationId: "internal_auth.replay_protection_log.create",
   },
+  {
+    fileName: "20260430000020_takosumi_deployments.sql",
+    migrationId: "deploy.takosumi_deployments.create",
+  },
 ];
 
 Deno.test("deploy statement catalog references deployment tables only", () => {

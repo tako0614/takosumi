@@ -1,6 +1,6 @@
 {
   "name": "@takos/takosumi-plugins",
-  "version": "0.2.0",
+  "version": "0.7.0",
   "license": "MIT",
   "exports": {
     ".": "./src/mod.ts",
@@ -16,6 +16,9 @@
     "./providers/aws": "./src/providers/aws/mod.ts",
     "./providers/gcp": "./src/providers/gcp/mod.ts",
     "./runtime-agent": "./src/runtime-agent/mod.ts"
+  },
+  "imports": {
+    "takosumi-contract": "jsr:@takos/takosumi-contract@^2.1.0"
   },
   "tasks": {
     "check": "deno check src/mod.ts src/**/*.ts tests/**/*.ts",

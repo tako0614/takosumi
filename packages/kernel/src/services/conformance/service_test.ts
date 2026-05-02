@@ -15,7 +15,7 @@ Deno.test("package conformance accepts trusted provider with required support", 
     requirements: {
       resourceContracts: ["resource.sql.postgres@v1"],
       dataContracts: ["data.json@v1"],
-      publicationContracts: ["publication.route@v1"],
+      outputContracts: ["output.route@v1"],
       minimumTier: "tested",
     },
   });

@@ -3,7 +3,7 @@
 // Direct deploy (image / source / bundle workload inputs without a
 // repo-managed manifest) is implemented as a thin shell over
 // `DeploymentService.resolveDeployment` + `applyDeployment`. It generates
-// a synthetic `.takos/app.yml` manifest, marks it with a `takos.directDeploy`
+// a synthetic `.takosumi/app.yml` manifest, marks it with a `takosumi.directDeploy`
 // override so manifest-managed groups can refuse silent mutation, and feeds
 // it through the canonical Deployment lifecycle.
 
@@ -13,7 +13,7 @@ import type {
   DeploySourceRef,
   PublicComputeSpec,
   PublicDeployManifest,
-  PublicPublishSpec,
+  PublicOutputSpec,
   PublicResourceSpec,
   PublicRouteSpec,
 } from "../../domains/deploy/types.ts";
@@ -38,9 +38,9 @@ export interface DirectWorkloadBaseInput {
   readonly routes?:
     | Record<string, PublicRouteSpec>
     | readonly PublicRouteSpec[];
-  readonly publications?:
-    | Record<string, PublicPublishSpec>
-    | readonly PublicPublishSpec[];
+  readonly outputs?:
+    | Record<string, PublicOutputSpec>
+    | readonly PublicOutputSpec[];
   readonly overrides?: Record<string, unknown>;
   /**
    * Direct deploys are generated manifests. If an existing group is currently
@@ -256,12 +256,10 @@ export function buildDirectWorkloadManifest(
     compute: { [componentName]: stripUndefined(compute) as PublicComputeSpec },
     resources: input.resources ? structuredClone(input.resources) : undefined,
     routes: input.routes ? cloneManifestCollection(input.routes) : undefined,
-    publications: input.publications
-      ? cloneManifestCollection(input.publications)
-      : undefined,
+    outputs: input.outputs ? cloneManifestCollection(input.outputs) : undefined,
     overrides: {
       ...(input.overrides ?? {}),
-      "takos.directDeploy": {
+      "takosumi.directDeploy": {
         generated: true,
         inputKind: input.kind,
       },
@@ -295,13 +293,13 @@ export function buildDirectWorkloadSource(
 export function isDirectDeployGeneratedManifest(
   manifest: PublicDeployManifest,
 ): boolean {
-  const marker = manifest.overrides?.["takos.directDeploy"];
+  const marker = manifest.overrides?.["takosumi.directDeploy"];
   return !!marker && typeof marker === "object" &&
     (marker as { generated?: unknown }).generated === true;
 }
 
 /**
- * Detects the `takos.directDeploy.generated: true` marker on the serialized
+ * Detects the `takosumi.directDeploy.generated: true` marker on the serialized
  * manifest snapshot stored in `Deployment.input.manifest_snapshot`. We accept
  * either a JSON-encoded string snapshot or a YAML one that contains the
  * marker text, since the snapshot encoding is not part of this contract.
@@ -316,7 +314,7 @@ export function isDirectDeployGeneratedManifestSnapshot(
       overrides?: Record<string, unknown>;
     };
     if (parsed && typeof parsed === "object") {
-      const marker = parsed.overrides?.["takos.directDeploy"];
+      const marker = parsed.overrides?.["takosumi.directDeploy"];
       if (
         marker && typeof marker === "object" &&
         (marker as { generated?: unknown }).generated === true

@@ -48,7 +48,7 @@ import type {
   AppSpecResource,
   AppSpecRoute,
   DeployBlocker,
-  PublicConsumeSpec,
+  PublicComponentBindingSpec,
   PublicDeployManifest,
 } from "./types.ts";
 import type { DeploymentPolicyDecision } from "takosumi-contract";
@@ -1371,11 +1371,9 @@ function validateNativeBindingApproval(input: {
 }): readonly DeploymentPolicyDecision[] {
   const decisions: DeploymentPolicyDecision[] = [];
   for (const component of input.appSpec.components) {
-    for (const [index, consume] of component.consume.entries()) {
-      if (!requestsRawNativeBinding(consume)) continue;
-      const sourceName = consume.resource ?? consume.publication ??
-        consume.secret ?? consume.as ?? `consume.${index + 1}`;
-      const bindingName = bindingNameForApproval(consume, sourceName, index);
+    for (const [bindingName, spec] of Object.entries(component.bindings)) {
+      if (!requestsRawNativeBinding(spec)) continue;
+      const sourceName = bindingSourceNameFor(spec);
       const subjectAddress = objectAddress(
         "app.binding",
         `${component.name}/${bindingName}`,
@@ -1401,11 +1399,20 @@ function validateNativeBindingApproval(input: {
   return decisions.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function requestsRawNativeBinding(consume: PublicConsumeSpec): boolean {
-  const access = consume.access;
+function requestsRawNativeBinding(spec: PublicComponentBindingSpec): boolean {
+  const from = spec.from as { access?: unknown };
+  const access = from.access;
   if (!isRecord(access)) return false;
   const nativeBinding = access.nativeBinding ?? access.native;
   return nativeBinding === "raw";
+}
+
+function bindingSourceNameFor(spec: PublicComponentBindingSpec): string {
+  const from = spec.from;
+  if ("resource" in from) return from.resource;
+  if ("output" in from) return from.output;
+  if ("secret" in from) return from.secret;
+  return from.providerOutput;
 }
 
 function validateRequiredProviderFeatures(input: {
@@ -1579,21 +1586,6 @@ function validateCanarySafetyPolicies(input: {
   return decisions.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function bindingNameForApproval(
-  consume: PublicConsumeSpec,
-  sourceName: string,
-  index: number,
-): string {
-  const inject = consume.inject;
-  if (
-    isRecord(inject) && isRecord(inject.env) &&
-    typeof inject.env.binding === "string"
-  ) {
-    return inject.env.binding;
-  }
-  return consume.as ?? sourceName.split(".").at(-1) ?? `BINDING_${index + 1}`;
-}
-
 function routeRecordsFor(appSpec: AppSpec): readonly DeploymentRoute[] {
   return appSpec.routes.map((route) => ({
     id: route.name,
@@ -1694,7 +1686,7 @@ function activationEnvelopeFor(
             ? "http-only-canary"
             : "first-component",
         },
-        publications: {
+        outputs: {
           componentAddress: assignments[0].componentAddress,
           reason: rolloutOverride.kind === "canary"
             ? "http-only-canary"
@@ -1988,7 +1980,7 @@ function hasShadowRollout(rollout: Record<string, unknown>): boolean {
 }
 
 function hasSideEffectSurface(appSpec: AppSpec): boolean {
-  if (appSpec.publications.length > 0) return true;
+  if (appSpec.outputs.length > 0) return true;
   if (
     appSpec.routes.some((route) =>
       ["queue", "schedule", "event"].includes(route.protocol.toLowerCase())

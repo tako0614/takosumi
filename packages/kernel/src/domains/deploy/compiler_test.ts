@@ -17,7 +17,7 @@ function workerBuild() {
   };
 }
 
-Deno.test("public manifest compiler accepts default-app style routes and publications", () => {
+Deno.test("public manifest compiler accepts default-app style routes and outputs", () => {
   const manifest: PublicDeployManifest = {
     name: "takos-docs",
     version: "1.0.0",
@@ -49,9 +49,9 @@ Deno.test("public manifest compiler accepts default-app style routes and publica
       path: "/files/:id",
       methods: ["GET"],
     }],
-    publications: [{
+    outputs: [{
       name: "docs-ui",
-      type: "publication.http-endpoint@v1",
+      type: "output.http-endpoint@v1",
       outputs: {
         url: {
           kind: "url",
@@ -70,7 +70,7 @@ Deno.test("public manifest compiler accepts default-app style routes and publica
       },
     }, {
       name: "docs-mcp",
-      type: "publication.mcp-server@v1",
+      type: "output.mcp-server@v1",
       outputs: {
         url: {
           kind: "url",
@@ -82,7 +82,7 @@ Deno.test("public manifest compiler accepts default-app style routes and publica
       },
     }, {
       name: "docs-file",
-      type: "publication.http-endpoint@v1",
+      type: "output.http-endpoint@v1",
       outputs: {
         url: {
           kind: "url",
@@ -108,39 +108,39 @@ Deno.test("public manifest compiler accepts default-app style routes and publica
     ],
   );
   assert.deepEqual(
-    appSpec.publications.map((publication) => [
-      publication.name,
-      publication.type,
+    appSpec.outputs.map((output) => [
+      output.name,
+      output.type,
     ]),
     [
-      ["docs-ui", "publication.http-endpoint@v1"],
-      ["docs-mcp", "publication.mcp-server@v1"],
-      ["docs-file", "publication.http-endpoint@v1"],
+      ["docs-ui", "output.http-endpoint@v1"],
+      ["docs-mcp", "output.mcp-server@v1"],
+      ["docs-file", "output.http-endpoint@v1"],
     ],
   );
-  assert.deepEqual(appSpec.publications[0].outputs, {
+  assert.deepEqual(appSpec.outputs[0].outputs, {
     url: {
       kind: "url",
       routeRef: "web",
     },
   });
-  assert.deepEqual(appSpec.publications[0].raw.display, {
+  assert.deepEqual(appSpec.outputs[0].raw.display, {
     title: "Takos Docs",
     icon: "/icons/docs.png",
   });
-  assert.deepEqual(appSpec.publications[0].raw.auth, {
+  assert.deepEqual(appSpec.outputs[0].raw.auth, {
     required: false,
   });
-  assert.deepEqual(appSpec.publications[0].spec, {
+  assert.deepEqual(appSpec.outputs[0].spec, {
     launcher: true,
   });
-  assert.deepEqual(appSpec.publications[0].raw.spec, {
+  assert.deepEqual(appSpec.outputs[0].raw.spec, {
     launcher: true,
   });
-  assert.equal(appSpec.publications[1].raw.type, "publication.mcp-server@v1");
+  assert.equal(appSpec.outputs[1].raw.type, "output.mcp-server@v1");
   assert.equal(
-    appSpec.publications[2].raw.type,
-    "publication.http-endpoint@v1",
+    appSpec.outputs[2].raw.type,
+    "output.http-endpoint@v1",
   );
 });
 
@@ -245,9 +245,9 @@ Deno.test("public manifest compiler validates worker triggers", () => {
   );
 });
 
-Deno.test("public manifest compiler keeps route and publications map", () => {
+Deno.test("public manifest compiler keeps route and outputs map", () => {
   const appSpec = compileManifestToAppSpec({
-    name: "publication-app",
+    name: "outputs-app",
     compute: {
       web: {
         type: "container",
@@ -261,9 +261,9 @@ Deno.test("public manifest compiler keeps route and publications map", () => {
         path: "/",
       },
     },
-    publications: {
+    outputs: {
       web: {
-        type: "publication.http-endpoint@v1",
+        type: "output.http-endpoint@v1",
         outputs: { url: { routeRef: "web" } },
       },
     },
@@ -273,11 +273,11 @@ Deno.test("public manifest compiler keeps route and publications map", () => {
     ["web", "web"],
   ]);
   assert.deepEqual(
-    appSpec.publications.map((publication) => [
-      publication.name,
-      publication.type,
+    appSpec.outputs.map((output) => [
+      output.name,
+      output.type,
     ]),
-    [["web", "publication.http-endpoint@v1"]],
+    [["web", "output.http-endpoint@v1"]],
   );
 });
 
@@ -344,42 +344,43 @@ Deno.test("public manifest compiler expands documented resource bindings", () =>
       ["session", "resource.secret@v1"],
     ],
   );
+  const webBindings =
+    appSpec.components.find((component) => component.name === "web")
+      ?.bindings ?? {};
   assert.deepEqual(
-    appSpec.components.find((component) => component.name === "web")?.consume
-      .map((consume) => [
-        consume.resource,
-        (consume.inject as Record<string, Record<string, string>> | undefined)
-          ?.env?.binding,
-        consume.access,
-      ]),
+    Object.entries(webBindings).map(([name, spec]) => [
+      name,
+      (spec.from as { resource: string }).resource,
+      (spec.from as { access: { contract: string; mode: string } }).access,
+    ]),
     [
       [
-        "resource.db",
         "DB",
+        "resource.db",
         {
           contract: "resource.sql.sqlite-serverless@v1",
           mode: "sql-runtime-binding",
         },
       ],
       [
-        "resource.media",
         "MEDIA",
+        "resource.media",
         {
           contract: "resource.object-store.s3@v1",
           mode: "object-runtime-binding",
         },
       ],
       [
-        "resource.cache",
         "KV",
+        "resource.cache",
         {
           contract: "resource.key-value@v1",
           mode: "kv-runtime-binding",
         },
       ],
       [
-        "resource.session",
         "APP_SESSION_SECRET",
+        "resource.session",
         {
           contract: "resource.secret@v1",
           mode: "secret-env-binding",
@@ -387,17 +388,18 @@ Deno.test("public manifest compiler expands documented resource bindings", () =>
       ],
     ],
   );
+  const workerBindings =
+    appSpec.components.find((component) => component.name === "worker")
+      ?.bindings ?? {};
   assert.deepEqual(
-    appSpec.components.find((component) => component.name === "worker")?.consume
-      .map((consume) => [
-        consume.resource,
-        (consume.inject as Record<string, Record<string, string>> | undefined)
-          ?.env?.binding,
-        consume.access,
-      ]),
+    Object.entries(workerBindings).map(([name, spec]) => [
+      name,
+      (spec.from as { resource: string }).resource,
+      (spec.from as { access: { contract: string; mode: string } }).access,
+    ]),
     [[
-      "resource.jobs",
       "JOBS",
+      "resource.jobs",
       {
         contract: "resource.queue.at-least-once@v1",
         mode: "queue-runtime-binding",
@@ -466,9 +468,9 @@ Deno.test("public manifest compiler applies selected environment overrides", () 
       path: "/",
       methods: ["GET"],
     }],
-    publications: [{
+    outputs: [{
       name: "web-ui",
-      type: "publication.http-endpoint@v1",
+      type: "output.http-endpoint@v1",
       outputs: { url: { routeRef: "web" } },
       spec: { launcher: false },
     }],
@@ -485,7 +487,7 @@ Deno.test("public manifest compiler applies selected environment overrides", () 
           path: "/app",
           methods: ["GET", "POST"],
         }],
-        publications: [{
+        outputs: [{
           name: "web-ui",
           spec: { launcher: true },
         }],
@@ -503,7 +505,7 @@ Deno.test("public manifest compiler applies selected environment overrides", () 
     ]),
     [["web", "/app", ["GET", "POST"]]],
   );
-  assert.deepEqual(appSpec.publications[0].spec, { launcher: true });
+  assert.deepEqual(appSpec.outputs[0].spec, { launcher: true });
   assert.deepEqual(appSpec.overrides, {
     providerTarget: "provider.cloudflare.containers@v1",
   });
@@ -601,7 +603,7 @@ Deno.test("public manifest compiler rejects invalid documented manifest fields",
   );
 });
 
-Deno.test("public manifest compiler validates route and publication references", () => {
+Deno.test("public manifest compiler validates route and output references", () => {
   const base: PublicDeployManifest = {
     name: "route-app",
     compute: {
@@ -656,25 +658,25 @@ Deno.test("public manifest compiler validates route and publication references",
       compileManifestToAppSpec({
         ...base,
         routes: [{ id: "web", target: "web", path: "/" }],
-        publications: [{
+        outputs: [{
           name: "ui",
-          type: "publication.http-endpoint@v1",
+          type: "output.http-endpoint@v1",
           outputs: { url: { routeRef: "missing" } },
         }],
       }),
-    /publication\.ui references unknown route 'missing'/,
+    /output\.ui references unknown route 'missing'/,
   );
   assert.throws(
     () =>
       compileManifestToAppSpec({
         ...base,
         routes: [{ id: "web", target: "web", path: "/" }],
-        publications: [{
+        outputs: [{
           name: "ui",
-          type: "publication.http-endpoint@v1",
+          type: "output.http-endpoint@v1",
         } as never],
       }),
-    /publication\.ui requires outputs/,
+    /output\.ui requires outputs/,
   );
   assert.throws(
     () =>
@@ -807,29 +809,25 @@ Deno.test("public manifest compiler normalizes non-HTTP route protocols", () => 
   );
 });
 
-// Phase 10 Wave 4: enabled — exercises compiler-level consume request/inject
-// validation; the projection now lives on Deployment.resolution and is
-// covered by deployment_service tests.
 Deno.test(
-  "public manifest compiler supports consume as request and inject forms",
+  "public manifest compiler validates bindings request/inject shape",
   () => {
     assert.throws(
       () =>
         compileManifestToAppSpec({
-          name: "bad-consume",
+          name: "bad-binding-request",
           compute: {
             web: {
-              build: {
-                fromWorkflow: {
-                  path: ".takos/workflows/build.yml",
-                  job: "build",
-                  artifact: "bundle",
+              build: workerBuild(),
+              bindings: {
+                TAKOSUMI_API_KEY: {
+                  from: {
+                    output: "takosumi.api-key",
+                    request: { scopes: ["files:read"], unexpected: true },
+                  },
+                  inject: { mode: "env", target: "TAKOSUMI_API_KEY" },
                 },
               },
-              consume: [{
-                publication: "takos.api-key",
-                request: { scopes: ["files:read"], unexpected: true },
-              }],
             },
           },
         }),
@@ -856,48 +854,27 @@ Deno.test("public manifest compiler rejects env collisions after uppercase norma
   assert.throws(
     () =>
       compileManifestToAppSpec({
-        name: "bad-consume-env",
+        name: "bad-binding-env",
         compute: {
           web: {
             build: workerBuild(),
             env: { OAUTH_CLIENT_ID: "existing" },
-            consume: [{
-              publication: "takos.oauth-client",
-              as: "app-oauth",
-              request: {
-                redirectUris: ["https://example.test/api/auth/callback"],
-                scopes: ["openid"],
+            bindings: {
+              OAUTH_CLIENT_ID: {
+                from: {
+                  output: "takosumi.oauth-client",
+                  request: {
+                    redirectUris: ["https://example.test/api/auth/callback"],
+                    scopes: ["openid"],
+                  },
+                },
+                inject: { mode: "env", target: "OAUTH_CLIENT_ID" },
               },
-              inject: {
-                env: { clientId: "oauth_client_id" },
-              },
-            }],
+            },
           },
         },
       }),
-    /consume\[0\]\.inject\.env collides with env 'OAUTH_CLIENT_ID'/,
-  );
-  assert.throws(
-    () =>
-      compileManifestToAppSpec({
-        name: "bad-default-env",
-        compute: {
-          web: {
-            build: workerBuild(),
-            env: { PUBLICATION_APP_OAUTH_ISSUER: "existing" },
-            consume: [{
-              publication: "takos.oauth-client",
-              as: "app-oauth",
-              request: {
-                redirectUris: ["https://example.test/api/auth/callback"],
-                scopes: ["openid"],
-              },
-              inject: { defaults: true },
-            }],
-          },
-        },
-      }),
-    /consume\[0\]\.inject\.env collides with env 'PUBLICATION_APP_OAUTH_ISSUER'/,
+    /bindings\.OAUTH_CLIENT_ID\.inject collides with env 'OAUTH_CLIENT_ID'/,
   );
   assert.throws(
     () =>
@@ -913,26 +890,28 @@ Deno.test("public manifest compiler rejects env collisions after uppercase norma
           db: { type: "postgres", bindings: { web: "database_url" } },
         },
       }),
-    /consume\[0\]\.inject\.env collides with env 'DATABASE_URL'/,
+    /bindings\.DATABASE_URL\.inject collides with env 'DATABASE_URL'/,
   );
 });
 
 Deno.test("public manifest compiler validates OAuth redirect URI schemes", () => {
-  // Smoke: a relative redirectUri compiled with the auto-hostname context is
-  // accepted (PlanService used to thread this context; here we exercise the
-  // compiler directly until the Deployment service rebuilds plan-time context).
   compileManifestToAppSpec({
     name: "oauth-relative",
     compute: {
       web: {
         build: workerBuild(),
-        consume: [{
-          publication: "takos.oauth-client",
-          request: {
-            redirectUris: ["/api/auth/callback"],
-            scopes: ["openid"],
+        bindings: {
+          OAUTH_CLIENT_ID: {
+            from: {
+              output: "takosumi.oauth-client",
+              request: {
+                redirectUris: ["/api/auth/callback"],
+                scopes: ["openid"],
+              },
+            },
+            inject: { mode: "env", target: "OAUTH_CLIENT_ID" },
           },
-        }],
+        },
       },
     },
   }, { autoHostnameAvailable: true });
@@ -944,13 +923,18 @@ Deno.test("public manifest compiler validates OAuth redirect URI schemes", () =>
         compute: {
           web: {
             build: workerBuild(),
-            consume: [{
-              publication: "takos.oauth-client",
-              request: {
-                redirectUris: ["/api/auth/callback"],
-                scopes: ["openid"],
+            bindings: {
+              OAUTH_CLIENT_ID: {
+                from: {
+                  output: "takosumi.oauth-client",
+                  request: {
+                    redirectUris: ["/api/auth/callback"],
+                    scopes: ["openid"],
+                  },
+                },
+                inject: { mode: "env", target: "OAUTH_CLIENT_ID" },
               },
-            }],
+            },
           },
         },
       }),
@@ -963,13 +947,18 @@ Deno.test("public manifest compiler validates OAuth redirect URI schemes", () =>
         compute: {
           web: {
             build: workerBuild(),
-            consume: [{
-              publication: "takos.oauth-client",
-              request: {
-                redirectUris: ["http://example.test/callback"],
-                scopes: ["openid"],
+            bindings: {
+              OAUTH_CLIENT_ID: {
+                from: {
+                  output: "takosumi.oauth-client",
+                  request: {
+                    redirectUris: ["http://example.test/callback"],
+                    scopes: ["openid"],
+                  },
+                },
+                inject: { mode: "env", target: "OAUTH_CLIENT_ID" },
               },
-            }],
+            },
           },
         },
       }),
@@ -981,13 +970,18 @@ Deno.test("public manifest compiler validates OAuth redirect URI schemes", () =>
     compute: {
       web: {
         build: workerBuild(),
-        consume: [{
-          publication: "takos.oauth-client",
-          request: {
-            redirectUris: ["http://localhost:8787/api/auth/callback"],
-            scopes: ["openid"],
+        bindings: {
+          OAUTH_CLIENT_ID: {
+            from: {
+              output: "takosumi.oauth-client",
+              request: {
+                redirectUris: ["http://localhost:8787/api/auth/callback"],
+                scopes: ["openid"],
+              },
+            },
+            inject: { mode: "env", target: "OAUTH_CLIENT_ID" },
           },
-        }],
+        },
       },
     },
   }, { localDevelopment: true });
@@ -995,7 +989,7 @@ Deno.test("public manifest compiler validates OAuth redirect URI schemes", () =>
   assert.equal(appSpec.name, "oauth-localhost");
 });
 
-Deno.test("public manifest compiler accepts the canonical 'outputs' authoring key alongside 'publications'", () => {
+Deno.test("public manifest compiler accepts the canonical 'outputs' authoring key", () => {
   const manifest: PublicDeployManifest = {
     name: "outputs-canonical",
     version: "1.0.0",
@@ -1005,61 +999,46 @@ Deno.test("public manifest compiler accepts the canonical 'outputs' authoring ke
     routes: [{ id: "web", target: "api", path: "/", methods: ["GET"] }],
     outputs: [{
       name: "search",
-      type: "publication.http-endpoint@v1",
+      type: "output.http-endpoint@v1",
       outputs: { url: { kind: "url", routeRef: "web" } },
     }],
   };
   const appSpec = compileManifestToAppSpec(manifest);
-  const searchOutput = appSpec.publications?.find((spec) =>
-    spec.name === "search"
-  );
+  const searchOutput = appSpec.outputs?.find((spec) => spec.name === "search");
   assert.ok(
     searchOutput,
-    "outputs[].search should fold into appSpec.publications",
+    "outputs[].search should resolve into appSpec.outputs",
   );
-  assert.equal(searchOutput?.type, "publication.http-endpoint@v1");
+  assert.equal(searchOutput?.type, "output.http-endpoint@v1");
 });
 
-Deno.test("public manifest compiler accepts consume.output as canonical authoring keyword", () => {
+Deno.test("public manifest compiler accepts component bindings authoring", () => {
   const manifest: PublicDeployManifest = {
     name: "binding-canonical",
     version: "1.0.0",
     compute: {
       web: {
         build: workerBuild(),
-        consume: [{
-          output: "takos.api-key",
-          request: { scopes: ["read"] },
-          inject: { env: { binding: "TAKOS_API_KEY" } },
-        }],
+        bindings: {
+          TAKOSUMI_API_KEY: {
+            from: {
+              output: "takosumi.api-key",
+              request: { scopes: ["read"] },
+            },
+            inject: { mode: "env", target: "TAKOSUMI_API_KEY" },
+          },
+        },
       },
     },
   };
   const appSpec = compileManifestToAppSpec(manifest);
   const web = appSpec.components.find((component) => component.name === "web");
   assert.ok(web, "web component must exist after expansion");
-  assert.equal(web?.consume[0].output, "takos.api-key");
-  // The compiler MUST mirror `output` into `publication` so the legacy
-  // pipeline (binding resolver, publication planner) keeps working.
-  assert.equal(web?.consume[0].publication, "takos.api-key");
-});
-
-Deno.test("public manifest compiler rejects conflicting consume.output and consume.publication", () => {
-  const manifest = {
-    name: "binding-conflict",
-    version: "1.0.0",
-    compute: {
-      web: {
-        build: workerBuild(),
-        consume: [{
-          output: "takos.api-key",
-          publication: "takos.oauth-client",
-        }],
-      },
-    },
-  } as unknown as PublicDeployManifest;
-  assert.throws(
-    () => compileManifestToAppSpec(manifest),
-    /declares both 'output' and 'publication' with conflicting values/,
+  const binding = web?.bindings.TAKOSUMI_API_KEY;
+  assert.ok(binding);
+  assert.equal(
+    (binding!.from as { output: string }).output,
+    "takosumi.api-key",
   );
+  assert.equal(binding!.inject.target, "TAKOSUMI_API_KEY");
 });

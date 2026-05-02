@@ -192,11 +192,7 @@ export async function loadRuntimeConfig(
   );
   const processRole = await selectProcessRole(reader, diagnostics);
   const allowUnsafeProductionDefaults = parseBoolean(
-    await reader.firstPlain([
-      "TAKOS_ALLOW_UNSAFE_PRODUCTION_DEFAULTS",
-      "TAKOS_ALLOW_UNSAFE_DEFAULTS",
-      "TAKOS_BOOTSTRAP_ALLOW_UNSAFE_DEFAULTS",
-    ]),
+    await reader.firstPlain(["TAKOSUMI_DEV_MODE"]),
     false,
   );
 

@@ -628,9 +628,9 @@ function sampleManifest(): PublicDeployManifest {
       },
       events: { target: "web", protocol: "event" },
     },
-    publications: {
+    outputs: {
       updates: {
-        type: "publication.topic@v1",
+        type: "output.topic@v1",
         from: "web",
         outputs: { event: { routeRef: "events" } },
       },

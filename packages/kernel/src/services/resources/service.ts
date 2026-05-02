@@ -628,7 +628,7 @@ export class ResourceOperationService {
       deploymentId: input.deploymentId,
       resourceBindingIds: [...input.resourceBindingIds],
       secretBindings: [...(input.secretBindings ?? [])],
-      publicationBindings: [],
+      outputConsumerBindings: [],
       createdAt: input.now,
     });
   }

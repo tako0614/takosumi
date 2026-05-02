@@ -1,0 +1,18 @@
+{
+  "@context": "https://takosumi.dev/contexts/deploy.jsonld",
+  "@id": "https://takosumi.dev/contracts/output/topic/v1",
+  "@type": "OutputContractDescriptor",
+  "shortRef": "output.topic@v1",
+  "domain": "output",
+  "lifecycleDomain": "declaration-output",
+  "changeEffect": "output-binding",
+  "deliveryModel": "topic",
+  "outputs": [
+    "message-payload",
+    "consumer-binding"
+  ],
+  "requires": [
+    "explicit-consumer-grant",
+    "explicit-output-injection"
+  ]
+}

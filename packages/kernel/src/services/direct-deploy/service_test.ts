@@ -1,6 +1,6 @@
 // Direct deploy service tests — Deployment-centric.
 //
-// Direct deploy generates a `.takos/app.yml` manifest from raw image / source
+// Direct deploy generates a `.takosumi/app.yml` manifest from raw image / source
 // / bundle inputs, then runs it through `DeploymentService.resolveDeployment`
 // + `applyDeployment`. These tests validate the manifest and source synthesis
 // helpers as well as the full DirectDeployService flow against a stub
@@ -23,7 +23,7 @@ import type { Deployment, GroupHead } from "takosumi-contract";
 const IMAGE_API =
   "registry.example.com/demo/api@sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
-Deno.test("buildDirectWorkloadManifest emits the takos.directDeploy override", () => {
+Deno.test("buildDirectWorkloadManifest emits the takosumi.directDeploy override", () => {
   const manifest = buildDirectWorkloadManifest({
     kind: "image",
     spaceId: "space-a",
@@ -33,7 +33,7 @@ Deno.test("buildDirectWorkloadManifest emits the takos.directDeploy override", (
   });
   assert.equal(manifest.name, "demo-app");
   assert.equal(manifest.compute?.api.image, IMAGE_API);
-  assert.deepEqual(manifest.overrides?.["takos.directDeploy"], {
+  assert.deepEqual(manifest.overrides?.["takosumi.directDeploy"], {
     generated: true,
     inputKind: "image",
   });
@@ -88,7 +88,7 @@ Deno.test("isDirectDeployGeneratedManifestSnapshot detects the marker in JSON sn
   const snapshot = JSON.stringify({
     name: "demo-app",
     overrides: {
-      "takos.directDeploy": { generated: true, inputKind: "image" },
+      "takosumi.directDeploy": { generated: true, inputKind: "image" },
     },
   });
   assert.equal(isDirectDeployGeneratedManifestSnapshot(snapshot), true);
@@ -275,7 +275,7 @@ function makeDeployment(
       manifest_snapshot: JSON.stringify({
         name: groupId,
         overrides: {
-          "takos.directDeploy": { generated: true, inputKind: "image" },
+          "takosumi.directDeploy": { generated: true, inputKind: "image" },
         },
       }),
       source_kind: "inline",

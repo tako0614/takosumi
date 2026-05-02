@@ -1,4 +1,4 @@
-import type { JsonObject, TakosActorContext } from "takosumi-contract";
+import type { JsonObject, TakosumiActorContext } from "takosumi-contract";
 import type { IsoTimestamp } from "../../shared/time.ts";
 
 export type ControlPlaneUpgradePlanId = string;
@@ -16,7 +16,7 @@ export interface ControlPlaneUpgradeOperationDto {
   readonly operatorOnly: true;
   readonly requestedAt: IsoTimestamp;
   readonly requestedBy: Pick<
-    TakosActorContext,
+    TakosumiActorContext,
     "actorAccountId" | "roles" | "requestId" | "principalKind" | "serviceId"
   >;
   readonly currentVersion?: string;

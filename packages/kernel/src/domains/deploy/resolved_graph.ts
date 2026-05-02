@@ -12,9 +12,9 @@
 //   3. exposure-target        — component contracts that opt-in via descriptor
 //                               (e.g. `interface.http@v1` whose
 //                               `exposureEligible=true`)
-//   4. publication-declaration — every entry in manifest.publications[]
-//   5. binding-request        — every component consume[] edge (resource /
-//                               publication / secret / provider-output)
+//   4. output-declaration     — every entry in manifest.outputs[]
+//   5. binding-request        — every component bindings declaration
+//                               (resource / output / secret / provider-output)
 //   6. access-path-request    — network boundary request per resource binding
 //                               (Core spec § 12: ResourceAccessPath)
 //
@@ -39,10 +39,10 @@ import type {
 import type {
   AppSpec,
   AppSpecComponent,
-  AppSpecPublication,
+  AppSpecOutput,
   AppSpecResource,
   AppSpecRoute,
-  PublicConsumeSpec,
+  PublicComponentBindingSpec,
 } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -84,9 +84,9 @@ export function buildResolvedGraph(
   for (const resource of input.appSpec.resources) {
     projections.push(buildResourceClaim(resource, closureIndex));
   }
-  for (const publication of input.appSpec.publications) {
+  for (const output of input.appSpec.outputs) {
     projections.push(
-      buildPublicationDeclaration(input.appSpec, publication, closureIndex),
+      buildOutputDeclaration(input.appSpec, output, closureIndex),
     );
   }
   for (const access of buildAccessPathRequests(input.appSpec, closureIndex)) {
@@ -368,39 +368,36 @@ function exposureNameFor(component: string, instance: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Projection 4: publication declaration
+// Projection 4: output declaration
 // ---------------------------------------------------------------------------
 
-function buildPublicationDeclaration(
+function buildOutputDeclaration(
   appSpec: AppSpec,
-  publication: AppSpecPublication,
+  output: AppSpecOutput,
   closure: ClosureIndex,
 ): CoreProjectionRecord {
-  const descriptorId = descriptorIdFor(publication.type, closure);
-  const owner = publication.from ?? appSpec.components[0]?.name ?? "group";
-  const publicationName = publicationFullName(
-    appSpec.groupId,
-    publication.name,
-  );
+  const descriptorId = descriptorIdFor(output.type, closure);
+  const owner = output.from ?? appSpec.components[0]?.name ?? "group";
+  const outputName = outputFullName(appSpec.groupId, output.name);
   return {
-    projectionType: "publication-declaration",
-    objectAddress: objectAddress("publication", publicationName),
+    projectionType: "output-declaration",
+    objectAddress: objectAddress("output", outputName),
     sourceComponentAddress: componentAddress(owner),
     sourceContractInstance: "runtime",
     descriptorResolutionId: descriptorId,
     digest: digestOf({
-      kind: "publication-declaration",
+      kind: "output-declaration",
       group: appSpec.groupId,
-      name: publication.name,
-      from: publication.from ?? null,
+      name: output.name,
+      from: output.from ?? null,
       descriptor: descriptorId,
-      outputs: publication.outputs,
-      spec: publication.spec,
+      outputs: output.outputs,
+      spec: output.spec,
     }),
   };
 }
 
-function publicationFullName(group: string, name: string): string {
+function outputFullName(group: string, name: string): string {
   return `${group}/${name}`;
 }
 
@@ -413,14 +410,12 @@ function buildBindingRequests(
   closure: ClosureIndex,
 ): readonly CoreProjectionRecord[] {
   const records: CoreProjectionRecord[] = [];
-  for (const [index, consume] of component.consume.entries()) {
-    const sourceKind = bindingSourceFor(consume);
-    const sourceName = bindingSourceName(consume, index);
-    const envName = envBindingName(consume) ?? consume.as ??
-      sourceName.split(".").at(-1) ?? `BINDING_${index + 1}`;
-    const descriptorRef = bindingDescriptorRef(sourceKind, consume);
+  for (const [bindingName, spec] of Object.entries(component.bindings)) {
+    const sourceKind = bindingSourceFor(spec);
+    const sourceName = bindingSourceName(spec);
+    const descriptorRef = bindingDescriptorRef(sourceKind, spec);
     const descriptorId = descriptorIdFor(descriptorRef, closure);
-    const bindingFullName = `${component.name}/${envName}`;
+    const bindingFullName = `${component.name}/${bindingName}`;
     records.push({
       projectionType: "binding-request",
       objectAddress: objectAddress("app.binding", bindingFullName),
@@ -430,11 +425,11 @@ function buildBindingRequests(
       digest: digestOf({
         kind: "binding-request",
         component: component.name,
-        envBinding: envName,
+        envBinding: bindingName,
         sourceKind,
         sourceName,
-        access: accessFor(consume),
-        injection: injectionFor(consume, envName),
+        access: accessFor(spec),
+        injection: spec.inject as unknown as JsonObject,
         descriptor: descriptorId,
       }),
     });
@@ -442,28 +437,30 @@ function buildBindingRequests(
   return records;
 }
 
-function bindingSourceFor(consume: PublicConsumeSpec): BindingSource {
-  if (typeof consume.resource === "string") return "resource";
-  if (typeof consume.publication === "string") return "publication";
-  if (typeof consume.secret === "string") return "secret";
+function bindingSourceFor(spec: PublicComponentBindingSpec): BindingSource {
+  const from = spec.from;
+  if ("resource" in from) return "resource";
+  if ("output" in from) return "output";
+  if ("secret" in from) return "secret";
   return "provider-output";
 }
 
-type BindingSource = "resource" | "publication" | "secret" | "provider-output";
+type BindingSource = "resource" | "output" | "secret" | "provider-output";
 
-function bindingSourceName(consume: PublicConsumeSpec, index: number): string {
-  return consume.resource ?? consume.publication ?? consume.secret ??
-    consume.as ?? `consume.${index + 1}`;
+function bindingSourceName(spec: PublicComponentBindingSpec): string {
+  const from = spec.from;
+  if ("resource" in from) return from.resource;
+  if ("output" in from) return from.output;
+  if ("secret" in from) return from.secret;
+  return from.providerOutput;
 }
 
 function bindingDescriptorRef(
   source: BindingSource,
-  consume: PublicConsumeSpec,
+  spec: PublicComponentBindingSpec,
 ): string {
-  // Access mode contract — when consume.access.contract is declared we use it
-  // verbatim; otherwise we fall back to a synthetic per-source-kind alias so
-  // every binding-request projection still references *some* descriptor.
-  const access = consume.access;
+  const from = spec.from as { access?: unknown };
+  const access = from.access;
   if (typeof access === "object" && access !== null && !Array.isArray(access)) {
     const contract = (access as Record<string, unknown>).contract;
     if (typeof contract === "string" && contract.length > 0) return contract;
@@ -471,8 +468,9 @@ function bindingDescriptorRef(
   return `binding.${source}@v1`;
 }
 
-function accessFor(consume: PublicConsumeSpec): JsonObject | null {
-  const access = consume.access;
+function accessFor(spec: PublicComponentBindingSpec): JsonObject | null {
+  const from = spec.from as { access?: unknown };
+  const access = from.access;
   if (
     typeof access === "object" && access !== null && !Array.isArray(access)
   ) {
@@ -480,28 +478,6 @@ function accessFor(consume: PublicConsumeSpec): JsonObject | null {
   }
   if (typeof access === "string") return { mode: access };
   return null;
-}
-
-function injectionFor(
-  consume: PublicConsumeSpec,
-  envName: string,
-): JsonObject {
-  const inject = consume.inject;
-  if (
-    typeof inject === "object" && inject !== null && !Array.isArray(inject)
-  ) {
-    return inject as JsonObject;
-  }
-  return { mode: "env", target: envName };
-}
-
-function envBindingName(consume: PublicConsumeSpec): string | undefined {
-  const inject = consume.inject;
-  if (isRecord(inject) && isRecord(inject.env)) {
-    const binding = inject.env.binding;
-    if (typeof binding === "string") return binding;
-  }
-  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -547,18 +523,18 @@ function buildAccessPathRequests(
 ): readonly CoreProjectionRecord[] {
   const records: CoreProjectionRecord[] = [];
   for (const component of appSpec.components) {
-    for (const [index, consume] of component.consume.entries()) {
-      const source = bindingSourceFor(consume);
-      // Only resource / publication consumes need a network-boundary access
-      // path; secrets and provider-outputs are control-plane delivered.
-      if (source !== "resource" && source !== "publication") continue;
-      const sourceName = bindingSourceName(consume, index);
+    for (const [_bindingName, spec] of Object.entries(component.bindings)) {
+      const source = bindingSourceFor(spec);
+      // Only resource / output bindings need a network-boundary access path;
+      // secrets and provider-outputs are control-plane delivered.
+      if (source !== "resource" && source !== "output") continue;
+      const sourceName = bindingSourceName(spec);
       const target = source === "resource"
         ? sourceName
         : sourceName.split("/").at(-1) ?? sourceName;
-      const accessRef = bindingDescriptorRef(source, consume);
+      const accessRef = bindingDescriptorRef(source, spec);
       const descriptorId = descriptorIdFor(accessRef, closure);
-      const networkBoundary: "internal" | "external" = source === "publication"
+      const networkBoundary: "internal" | "external" = source === "output"
         ? "external"
         : "internal";
       const fullName = `${target}/${component.name}`;
@@ -574,7 +550,7 @@ function buildAccessPathRequests(
           target,
           source,
           networkBoundary,
-          access: accessFor(consume),
+          access: accessFor(spec),
           descriptor: descriptorId,
         }),
       });
@@ -655,7 +631,7 @@ export const RESOLVED_GRAPH_PROJECTION_TYPES = [
   "runtime-claim",
   "resource-claim",
   "exposure-target",
-  "publication-declaration",
+  "output-declaration",
   "binding-request",
   "access-path-request",
 ] as const;

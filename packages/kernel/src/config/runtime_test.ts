@@ -193,7 +193,7 @@ Deno.test("runtime config loader rejects production missing ports even when unsa
       loadRuntimeConfigFromEnv({
         env: {
           TAKOS_ENVIRONMENT: "production",
-          TAKOS_ALLOW_UNSAFE_PRODUCTION_DEFAULTS: "1",
+          TAKOSUMI_DEV_MODE: "1",
         },
       }),
     (error) => {
@@ -261,7 +261,7 @@ Deno.test("runtime config loader rejects reference plugins in staging even when 
       loadRuntimeConfigFromEnv({
         env: {
           TAKOS_ENVIRONMENT: "staging",
-          TAKOS_ALLOW_UNSAFE_PRODUCTION_DEFAULTS: "1",
+          TAKOSUMI_DEV_MODE: "1",
           ...Object.fromEntries(
             requiredPorts.map((port) => [
               envKeyForPort(port),

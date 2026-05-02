@@ -1,17 +1,17 @@
-import type { TakosActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract";
 import type { ActorAdapter, AuthPort, AuthResult } from "./types.ts";
 
 export interface LocalActorAuthAdapterOptions {
-  readonly actor?: TakosActorContext;
+  readonly actor?: TakosumiActorContext;
   readonly actorFactory?: (
     request: Request,
-  ) => TakosActorContext | Promise<TakosActorContext>;
+  ) => TakosumiActorContext | Promise<TakosumiActorContext>;
 }
 
 export class LocalActorAdapter implements ActorAdapter, AuthPort {
   readonly #actorFactory: (
     request: Request,
-  ) => TakosActorContext | Promise<TakosActorContext>;
+  ) => TakosumiActorContext | Promise<TakosumiActorContext>;
 
   constructor(options: LocalActorAuthAdapterOptions = {}) {
     this.#actorFactory = options.actorFactory ?? (() =>
@@ -22,7 +22,7 @@ export class LocalActorAdapter implements ActorAdapter, AuthPort {
       });
   }
 
-  async actorForRequest(request: Request): Promise<TakosActorContext> {
+  async actorForRequest(request: Request): Promise<TakosumiActorContext> {
     return freezeClone(await this.#actorFactory(request));
   }
 

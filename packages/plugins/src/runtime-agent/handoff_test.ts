@@ -10,7 +10,7 @@ import {
   RuntimeAgentGatewayManifestIssuer,
 } from "takosumi-contract";
 import { registerRuntimeAgentRoutes } from "takosumi-contract";
-import type { TakosActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract";
 import { RuntimeAgentHttpClient } from "./client.ts";
 import { createProviderHandoff, shouldHandoff } from "./handoff.ts";
 import {
@@ -19,7 +19,7 @@ import {
   RuntimeAgentLoop,
 } from "./loop.ts";
 
-const ACTOR: TakosActorContext = {
+const ACTOR: TakosumiActorContext = {
   actorAccountId: "acct_handoff_e2e",
   roles: ["service"],
   requestId: "req_handoff_e2e",

@@ -6,9 +6,9 @@
 
 import assert from "node:assert/strict";
 import {
-  TAKOS_INTERNAL_ACTOR_HEADER,
-  TAKOS_PAAS_INTERNAL_PATHS,
-  type TakosActorContext,
+  TAKOSUMI_INTERNAL_ACTOR_HEADER,
+  TAKOSUMI_INTERNAL_PATHS,
+  type TakosumiActorContext,
 } from "takosumi-contract";
 import { encodeActorContext } from "takosumi-contract/internal-rpc";
 import { createApiApp } from "../api/app.ts";
@@ -157,7 +157,7 @@ Deno.test("acceptance P1: revoked registry trust reports blocked security", asyn
       routes: [],
     },
     resourceConditions: [{ type: "ResourcesReady", status: "true" }],
-    publicationConditions: [{ type: "PublicationsReady", status: "true" }],
+    outputConditions: [{ type: "OutputsReady", status: "true" }],
     securityConditions: [securityCondition],
   });
 
@@ -230,11 +230,11 @@ Deno.test("acceptance P2: app factory rejects unsigned internal routes", async (
   });
   const actor = actorContext("acct_acceptance", "req_unsigned");
 
-  const response = await app.request(TAKOS_PAAS_INTERNAL_PATHS.spaces, {
+  const response = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      [TAKOS_INTERNAL_ACTOR_HEADER]: encodeActorContext(actor),
+      [TAKOSUMI_INTERNAL_ACTOR_HEADER]: encodeActorContext(actor),
     },
     body: JSON.stringify({ spaceId: "space_unsigned", name: "Unsigned" }),
   });
@@ -271,7 +271,7 @@ function trustCondition(record: TrustRecord | undefined): StatusConditionDto {
 function actorContext(
   actorAccountId: string,
   requestId: string,
-): TakosActorContext {
+): TakosumiActorContext {
   return {
     actorAccountId,
     requestId,

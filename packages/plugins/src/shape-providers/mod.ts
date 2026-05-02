@@ -1,155 +1,102 @@
+/**
+ * Shape-provider package entry point.
+ *
+ * The production-grade plugin set is built by
+ * `createTakosumiProductionProviders` — every plugin posts lifecycle
+ * envelopes to a runtime-agent (see `_runtime_agent_lifecycle.ts`). The
+ * in-memory variant lives here too for templates and end-to-end tests
+ * that want a self-contained workflow without spinning up an agent.
+ */
+
 import { registerProvider } from "takosumi-contract";
 import type { ProviderPlugin } from "takosumi-contract";
 import {
-  type AwsS3ObjectStoreProviderOptions,
   createAwsS3ObjectStoreProvider,
   InMemoryAwsS3Lifecycle,
 } from "./object-store/aws-s3.ts";
 import {
-  type CloudflareR2ObjectStoreProviderOptions,
   createCloudflareR2ObjectStoreProvider,
   InMemoryCloudflareR2Lifecycle,
 } from "./object-store/cloudflare-r2.ts";
 import {
   createFilesystemObjectStoreProvider,
-  type FilesystemObjectStoreProviderOptions,
   InMemoryFilesystemLifecycle,
 } from "./object-store/filesystem.ts";
 import {
   createGcsObjectStoreProvider,
-  type GcsProviderOptions,
   InMemoryGcsLifecycle,
 } from "./object-store/gcp-gcs.ts";
 import {
   createMinioObjectStoreProvider,
   InMemoryMinioLifecycle,
-  type MinioProviderOptions,
 } from "./object-store/minio.ts";
 import {
   createDockerComposeWebServiceProvider,
-  type DockerComposeWebServiceProviderOptions,
   InMemoryDockerComposeLifecycle,
 } from "./web-service/docker-compose.ts";
 import {
-  type AwsFargateWebServiceProviderOptions,
   createAwsFargateWebServiceProvider,
   InMemoryAwsFargateLifecycle,
 } from "./web-service/aws-fargate.ts";
 import {
-  type CloudRunWebServiceProviderOptions,
   createCloudRunWebServiceProvider,
   InMemoryCloudRunLifecycle,
 } from "./web-service/cloud-run.ts";
 import {
-  type CloudflareContainerProviderOptions,
   createCloudflareContainerWebServiceProvider,
   InMemoryCloudflareContainerLifecycle,
 } from "./web-service/cloudflare-container.ts";
 import {
   createK3sDeploymentWebServiceProvider,
   InMemoryK3sDeploymentLifecycle,
-  type K3sDeploymentProviderOptions,
 } from "./web-service/k3s-deployment.ts";
 import {
   createSystemdUnitWebServiceProvider,
   InMemorySystemdUnitLifecycle,
-  type SystemdUnitProviderOptions,
 } from "./web-service/systemd-unit.ts";
 import {
   createLocalDockerPostgresProvider,
   InMemoryLocalDockerPostgresLifecycle,
-  type LocalDockerPostgresProviderOptions,
 } from "./database-postgres/local-docker.ts";
 import {
-  type AwsRdsProviderOptions,
   createAwsRdsProvider,
   InMemoryAwsRdsLifecycle,
 } from "./database-postgres/aws-rds.ts";
 import {
-  type CloudSqlProviderOptions,
   createCloudSqlProvider,
   InMemoryCloudSqlLifecycle,
 } from "./database-postgres/cloud-sql.ts";
 import {
-  type CloudflareDnsProviderOptions,
   createCloudflareDnsProvider,
   InMemoryCloudflareDnsLifecycle,
 } from "./custom-domain/cloudflare-dns.ts";
 import {
   createRoute53Provider,
   InMemoryRoute53Lifecycle,
-  type Route53ProviderOptions,
 } from "./custom-domain/route53.ts";
 import {
-  type CloudDnsProviderOptions,
   createCloudDnsProvider,
   InMemoryCloudDnsLifecycle,
 } from "./custom-domain/cloud-dns.ts";
 import {
-  type CoreDnsLocalProviderOptions,
   createCoreDnsLocalProvider,
   InMemoryCoreDnsLifecycle,
 } from "./custom-domain/coredns-local.ts";
 
 export {
-  createAwsFargateWebServiceProvider,
-  createAwsRdsProvider,
-  createAwsS3ObjectStoreProvider,
-  createCloudDnsProvider,
-  createCloudflareContainerWebServiceProvider,
-  createCloudflareDnsProvider,
-  createCloudflareR2ObjectStoreProvider,
-  createCloudRunWebServiceProvider,
-  createCloudSqlProvider,
-  createCoreDnsLocalProvider,
-  createDockerComposeWebServiceProvider,
-  createFilesystemObjectStoreProvider,
-  createGcsObjectStoreProvider,
-  createK3sDeploymentWebServiceProvider,
-  createLocalDockerPostgresProvider,
-  createMinioObjectStoreProvider,
-  createRoute53Provider,
-  createSystemdUnitWebServiceProvider,
-  InMemoryAwsFargateLifecycle,
-  InMemoryAwsRdsLifecycle,
-  InMemoryAwsS3Lifecycle,
-  InMemoryCloudDnsLifecycle,
-  InMemoryCloudflareContainerLifecycle,
-  InMemoryCloudflareDnsLifecycle,
-  InMemoryCloudflareR2Lifecycle,
-  InMemoryCloudRunLifecycle,
-  InMemoryCloudSqlLifecycle,
-  InMemoryCoreDnsLifecycle,
-  InMemoryDockerComposeLifecycle,
-  InMemoryFilesystemLifecycle,
-  InMemoryGcsLifecycle,
-  InMemoryK3sDeploymentLifecycle,
-  InMemoryLocalDockerPostgresLifecycle,
-  InMemoryMinioLifecycle,
-  InMemoryRoute53Lifecycle,
-  InMemorySystemdUnitLifecycle,
-};
+  createTakosumiProductionProviders,
+  RuntimeAgentLifecycle,
+} from "./factories.ts";
 export type {
-  AwsFargateWebServiceProviderOptions,
-  AwsRdsProviderOptions,
-  AwsS3ObjectStoreProviderOptions,
-  CloudDnsProviderOptions,
-  CloudflareContainerProviderOptions,
-  CloudflareDnsProviderOptions,
-  CloudflareR2ObjectStoreProviderOptions,
-  CloudRunWebServiceProviderOptions,
-  CloudSqlProviderOptions,
-  CoreDnsLocalProviderOptions,
-  DockerComposeWebServiceProviderOptions,
-  FilesystemObjectStoreProviderOptions,
-  GcsProviderOptions,
-  K3sDeploymentProviderOptions,
-  LocalDockerPostgresProviderOptions,
-  MinioProviderOptions,
-  Route53ProviderOptions,
-  SystemdUnitProviderOptions,
-};
+  RuntimeAgentClientOptions,
+  TakosumiProductionProviderOptions,
+} from "./factories.ts";
 
+/**
+ * Build the full set of in-memory shape-provider plugins. Used by tests and
+ * by the CLI's local-runner mode where deploys execute in-process without
+ * cloud credentials.
+ */
 export function createInMemoryTakosumiProviders(): readonly ProviderPlugin[] {
   return [
     createAwsS3ObjectStoreProvider({

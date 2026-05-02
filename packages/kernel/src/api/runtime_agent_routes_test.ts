@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import { Hono, type Hono as HonoApp } from "hono";
 import {
   type GatewayManifest,
-  TAKOS_GATEWAY_IDENTITY_NONCE_HEADER,
-  TAKOS_GATEWAY_IDENTITY_REQUEST_ID_HEADER,
-  TAKOS_GATEWAY_IDENTITY_SIGNATURE_HEADER,
-  TAKOS_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
-  TAKOS_INTERNAL_REQUEST_ID_HEADER,
-  type TakosActorContext,
+  TAKOSUMI_GATEWAY_IDENTITY_NONCE_HEADER,
+  TAKOSUMI_GATEWAY_IDENTITY_REQUEST_ID_HEADER,
+  TAKOSUMI_GATEWAY_IDENTITY_SIGNATURE_HEADER,
+  TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
+  TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
+  type TakosumiActorContext,
   verifyGatewayResponseSignature,
 } from "takosumi-contract";
-import { signTakosInternalRequest } from "takosumi-contract/internal-rpc";
+import { signTakosumiInternalRequest } from "takosumi-contract/internal-rpc";
 import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";
 import type { RuntimeAgentRegistry } from "../agents/types.ts";
 import {
@@ -387,20 +387,20 @@ Deno.test("runtime agent routes bind gateway response signatures to request id a
 
   const response = await app.request(agentPath("heartbeat", "agent_1"), {
     method: "POST",
-    headers: { [TAKOS_INTERNAL_REQUEST_ID_HEADER]: "req_gateway_response" },
+    headers: { [TAKOSUMI_INTERNAL_REQUEST_ID_HEADER]: "req_gateway_response" },
     body: JSON.stringify({}),
   });
   const body = await response.clone().text();
   const signature = response.headers.get(
-    TAKOS_GATEWAY_IDENTITY_SIGNATURE_HEADER,
+    TAKOSUMI_GATEWAY_IDENTITY_SIGNATURE_HEADER,
   );
   const timestamp = response.headers.get(
-    TAKOS_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
+    TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
   );
   const requestId = response.headers.get(
-    TAKOS_GATEWAY_IDENTITY_REQUEST_ID_HEADER,
+    TAKOSUMI_GATEWAY_IDENTITY_REQUEST_ID_HEADER,
   );
-  const nonce = response.headers.get(TAKOS_GATEWAY_IDENTITY_NONCE_HEADER);
+  const nonce = response.headers.get(TAKOSUMI_GATEWAY_IDENTITY_NONCE_HEADER);
 
   assert.equal(response.status, 200);
   assert.equal(requestId, "req_gateway_response");
@@ -544,9 +544,9 @@ async function signedHeaders(input: {
   readonly method: string;
   readonly path: string;
   readonly body: string;
-  readonly actor: TakosActorContext;
+  readonly actor: TakosumiActorContext;
 }): Promise<Headers> {
-  const signed = await signTakosInternalRequest({
+  const signed = await signTakosumiInternalRequest({
     ...input,
     timestamp: new Date().toISOString(),
     caller: input.actor.serviceId ?? input.actor.agentId ?? "takos-test",

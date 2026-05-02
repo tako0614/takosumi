@@ -17,9 +17,11 @@
  *     `sqlite://...?key=...`)
  *
  * Local / dev environments may opt into unencrypted DBs by setting
- * `TAKOS_ALLOW_UNENCRYPTED_DB=1`. Production / staging always fail-closed
+ * `TAKOSUMI_DEV_MODE=1`. Production / staging always fail-closed
  * regardless of the override.
  */
+
+import { isDevMode } from "../../config/dev_mode.ts";
 
 export class DatabaseEncryptionConfigurationError extends Error {
   constructor(message: string) {
@@ -106,7 +108,7 @@ export function inspectDatabaseEncryption(
   }
 
   // No evidence of encryption - check override.
-  const override = parseBoolean(env.TAKOS_ALLOW_UNENCRYPTED_DB);
+  const override = isDevMode(env);
   if (override && !productionLike) {
     return {
       required: false,
@@ -146,7 +148,7 @@ export function assertDatabaseEncryptionAtRest(
         : `no DATABASE_URL set; `) +
       `expected sslmode=require / ssl=true / encrypted=true on Postgres, ` +
       `a managed-encrypted backend (D1, sqlcipher, encrypted SQLite), ` +
-      `or the local override TAKOS_ALLOW_UNENCRYPTED_DB=1 (non-production only). ` +
+      `or the local override TAKOSUMI_DEV_MODE=1 (non-production only). ` +
       `Refusing to boot with plaintext at-rest storage.`,
   );
 }
@@ -219,10 +221,4 @@ function redactDatabaseUrl(url: string): string {
 
 function normalizeEnvironment(raw: string | undefined): string {
   return (raw ?? "local").trim().toLowerCase() || "local";
-}
-
-function parseBoolean(raw: string | undefined): boolean {
-  if (raw === undefined) return false;
-  const normalized = raw.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
 }

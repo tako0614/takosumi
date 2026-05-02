@@ -475,7 +475,7 @@ export function buildHttpWeightedAssignmentModel(input: {
         defaultAppReleaseId: input.primaryAppReleaseId,
         reason: "http-only-canary" as const,
       }),
-      publications: Object.freeze({
+      outputs: Object.freeze({
         defaultAppReleaseId: input.primaryAppReleaseId,
         reason: "http-only-canary" as const,
       }),
@@ -492,7 +492,7 @@ export function buildSideEffectPolicyReport(): SideEffectPolicyReport {
       Object.freeze({
         id: "non_http_side_effects",
         status: "passed" as const,
-        message: "events and publications are pinned to primaryAppReleaseId",
+        message: "events and outputs are pinned to primaryAppReleaseId",
         enforcementPoint: "rollout.assignment.nonHttpDefaults",
       }),
     ]),

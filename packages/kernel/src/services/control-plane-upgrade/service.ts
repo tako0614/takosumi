@@ -1,4 +1,4 @@
-import type { JsonObject, TakosActorContext } from "takosumi-contract";
+import type { JsonObject, TakosumiActorContext } from "takosumi-contract";
 import { invalidArgument, permissionDenied } from "../../shared/errors.ts";
 import type {
   ControlPlaneMigration,
@@ -9,7 +9,7 @@ import type {
 } from "./types.ts";
 
 export interface PlanControlPlaneUpgradeInput {
-  readonly actor: TakosActorContext;
+  readonly actor: TakosumiActorContext;
   readonly currentVersion?: string;
   readonly targetVersion: string;
   readonly dryRun?: boolean;
@@ -179,7 +179,7 @@ function buildPreflightChecks(input: {
   ];
 }
 
-function assertOperator(actor: TakosActorContext): void {
+function assertOperator(actor: TakosumiActorContext): void {
   if (!actor.roles.includes("operator") && !actor.roles.includes("owner")) {
     throw permissionDenied("Control-plane upgrades require an operator actor", {
       actorAccountId: actor.actorAccountId,

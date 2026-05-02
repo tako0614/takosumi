@@ -14,7 +14,7 @@ Deno.test("bundled registry seed adapter resolves built-in packages by kind and 
     ["provider-package", "provider.noop@v1"],
     ["provider-package", "provider.local-docker@v1"],
     ["data-contract-package", "data.json@v1"],
-    ["publication-contract-package", "publication.route@v1"],
+    ["output-contract-package", "output.route@v1"],
   ] as const;
 
   for (const [kind, ref] of expected) {
@@ -102,7 +102,7 @@ Deno.test("bundled registry seed adapter reports provider support", async () => 
     ]);
     assert.deepEqual(report.capabilityProfiles, [
       "data.json@v1",
-      "publication.route@v1",
+      "output.route@v1",
     ]);
   }
 });

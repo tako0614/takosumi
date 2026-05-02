@@ -3,18 +3,13 @@ import {
   type PaaSProcessRole,
   type PaaSProcessRoleDescription,
 } from "../process/mod.ts";
-import { TAKOS_PAAS_INTERNAL_PATHS } from "takosumi-contract";
-import {
-  TAKOS_AGENT_CONTROL_INTERNAL_ENDPOINTS,
-  TAKOS_AGENT_CONTROL_INTERNAL_PREFIX,
-} from "takosumi-contract";
+import { TAKOSUMI_INTERNAL_PATHS } from "takosumi-contract";
 import { TAKOS_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
 import { TAKOS_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { TAKOS_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 export interface CreateApiCapabilitiesDescriptionOptions {
   readonly internalRoutesMounted?: boolean;
-  readonly agentControlRoutesMounted?: boolean;
   readonly publicRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
   readonly openApiRouteMounted?: boolean;
@@ -63,9 +58,6 @@ export function createApiCapabilitiesDescription(
     });
   }
   if (options.internalRoutesMounted) endpoints.push(...internalEndpoints());
-  if (options.agentControlRoutesMounted) {
-    endpoints.push(...agentControlEndpoints());
-  }
   if (options.publicRoutesMounted) endpoints.push(...publicEndpoints());
   if (options.runtimeAgentRoutesMounted) {
     endpoints.push(...runtimeAgentEndpoints());
@@ -85,52 +77,42 @@ function internalEndpoints(): ApiEndpointDescription[] {
   return [
     {
       method: "GET",
-      path: TAKOS_PAAS_INTERNAL_PATHS.spaces,
+      path: TAKOSUMI_INTERNAL_PATHS.spaces,
       summary: "Lists internal space summaries visible to the actor.",
       auth: "internal-service",
     },
     {
       method: "POST",
-      path: TAKOS_PAAS_INTERNAL_PATHS.spaces,
+      path: TAKOSUMI_INTERNAL_PATHS.spaces,
       summary: "Creates a space through the internal service API.",
       auth: "internal-service",
     },
     {
       method: "GET",
-      path: TAKOS_PAAS_INTERNAL_PATHS.groups,
+      path: TAKOSUMI_INTERNAL_PATHS.groups,
       summary: "Lists groups for a space through the internal service API.",
       auth: "internal-service",
     },
     {
       method: "POST",
-      path: TAKOS_PAAS_INTERNAL_PATHS.groups,
+      path: TAKOSUMI_INTERNAL_PATHS.groups,
       summary: "Creates a group through the internal service API.",
       auth: "internal-service",
     },
     {
       method: "POST",
-      path: TAKOS_PAAS_INTERNAL_PATHS.deployments,
+      path: TAKOSUMI_INTERNAL_PATHS.deployments,
       summary: "Resolves a Deployment through the internal service API.",
       auth: "internal-service",
     },
     {
       method: "POST",
-      path: TAKOS_PAAS_INTERNAL_PATHS.deploymentApply,
+      path: TAKOSUMI_INTERNAL_PATHS.deploymentApply,
       summary:
         "Applies a resolved Deployment through the internal service API.",
       auth: "internal-service",
     },
   ];
-}
-
-function agentControlEndpoints(): ApiEndpointDescription[] {
-  return TAKOS_AGENT_CONTROL_INTERNAL_ENDPOINTS.map((endpoint) => ({
-    method: "POST",
-    path: `${TAKOS_AGENT_CONTROL_INTERNAL_PREFIX}/${endpoint}`,
-    summary:
-      "Proxies agent execution control RPC through the PaaS-owned internal API.",
-    auth: "internal-service",
-  }));
 }
 
 function publicEndpoints(): ApiEndpointDescription[] {

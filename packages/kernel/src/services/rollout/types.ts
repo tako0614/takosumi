@@ -155,7 +155,7 @@ export interface AppReleaseWeightDto {
 
 export interface NonHttpAssignmentDefaultsDto {
   readonly events: NonHttpDefaultAssignmentDto;
-  readonly publications: NonHttpDefaultAssignmentDto;
+  readonly outputs: NonHttpDefaultAssignmentDto;
 }
 
 export interface NonHttpDefaultAssignmentDto {

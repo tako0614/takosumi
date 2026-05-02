@@ -14,7 +14,7 @@ export type ConformancePackageFamily =
   | "provider"
   | "resource"
   | "data"
-  | "publication";
+  | "output";
 
 export interface PackageConformanceIssue {
   readonly code: string;
@@ -47,7 +47,7 @@ export interface ProviderConformanceRequirements {
   readonly interfaceContracts?: readonly string[];
   readonly routeProtocols?: readonly string[];
   readonly dataContracts?: readonly string[];
-  readonly publicationContracts?: readonly string[];
+  readonly outputContracts?: readonly string[];
   readonly capabilityProfiles?: readonly string[];
   readonly minimumTier?: ConformanceTier;
 }
@@ -87,14 +87,14 @@ const PACKAGE_FAMILY: Partial<Record<PackageKind, ConformancePackageFamily>> = {
   "provider-package": "provider",
   "resource-contract-package": "resource",
   "data-contract-package": "data",
-  "publication-contract-package": "publication",
+  "output-contract-package": "output",
 };
 
 const PACKAGE_TYPE_BY_KIND: Partial<Record<PackageKind, string>> = {
   "provider-package": "provider",
   "resource-contract-package": "resource-contract",
   "data-contract-package": "data-contract",
-  "publication-contract-package": "publication-contract",
+  "output-contract-package": "output-contract",
 };
 
 export class PackageConformanceService {
@@ -371,25 +371,25 @@ export class PackageConformanceService {
           descriptor.ref,
         );
         break;
-      case "publication-contract-package":
+      case "output-contract-package":
         recordCheck(
           checks,
           issues,
-          "publication.kinds",
-          nonEmptyStringArray(body.publicationKinds),
+          "output.kinds",
+          nonEmptyStringArray(body.outputKinds),
           "blocked",
-          "Publication contract declares publication kinds",
-          "publication-kinds-missing",
+          "Output contract declares output kinds",
+          "output-kinds-missing",
           descriptor.ref,
         );
         recordCheck(
           checks,
           issues,
-          "publication.protocols",
+          "output.protocols",
           nonEmptyStringArray(body.protocols),
           "blocked",
-          "Publication contract declares protocols",
-          "publication-protocols-missing",
+          "Output contract declares protocols",
+          "output-protocols-missing",
           descriptor.ref,
         );
         break;
@@ -585,7 +585,7 @@ function validateRequiredFeatures(
   const declaredInterfaces = new Set(declaredSupport.interfaceContracts);
   const declaredProtocols = new Set(declaredSupport.routeProtocols);
   const declaredData = new Set(declaredSupport.dataContracts);
-  const declaredPublications = new Set(declaredSupport.publicationContracts);
+  const declaredOutputs = new Set(declaredSupport.outputContracts);
   const declaredProfiles = new Set(declaredSupport.capabilityProfiles);
 
   requireAll(
@@ -621,10 +621,10 @@ function validateRequiredFeatures(
     issues,
   );
   requireAll(
-    requirements.publicationContracts,
-    declaredPublications,
+    requirements.outputContracts,
+    declaredOutputs,
     reportedProfiles,
-    "publication contract",
+    "output contract",
     providerRef,
     issues,
   );
@@ -685,7 +685,7 @@ interface ProviderFeatureSets {
   readonly interfaceContracts: readonly string[];
   readonly routeProtocols: readonly string[];
   readonly dataContracts: readonly string[];
-  readonly publicationContracts: readonly string[];
+  readonly outputContracts: readonly string[];
   readonly capabilityProfiles: readonly string[];
 }
 
@@ -695,7 +695,7 @@ function supportFromDescriptor(
   const supports = (descriptor.body as Record<string, unknown>).supports;
   const support = isObject(supports) ? supports : {};
   const dataContracts = stringArray(support.dataContracts);
-  const publicationContracts = stringArray(support.publicationContracts);
+  const outputContracts = stringArray(support.outputContracts);
   const interfaceContracts = interfaceContractsFromProviderDescriptor(
     descriptor.body,
     support,
@@ -706,13 +706,13 @@ function supportFromDescriptor(
     interfaceContracts,
     routeProtocols,
     dataContracts,
-    publicationContracts,
+    outputContracts,
     capabilityProfiles: [
       ...stringArray(support.capabilityProfiles),
       ...interfaceContracts,
       ...routeProtocols.map((protocol) => `route.${protocol}`),
       ...dataContracts,
-      ...publicationContracts,
+      ...outputContracts,
     ],
   };
 }

@@ -1,6 +1,6 @@
 export type ChangeSetChangeKind =
   | "group"
-  | "publication"
+  | "output"
   | "event"
   | "resource";
 

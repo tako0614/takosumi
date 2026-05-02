@@ -12,7 +12,7 @@ export type StatusConditionStatus = ConditionStatus;
  * Plain condition DTO accepted by the status projection service.
  *
  * This intentionally mirrors the public Condition shape without importing
- * domain-owned resource/publication/security implementations. Callers pass the
+ * domain-owned resource/output/security implementations. Callers pass the
  * already-computed condition facts and the projector derives the group summary.
  */
 export interface StatusConditionDto {
@@ -163,7 +163,7 @@ export interface GroupSummaryStatusProjectionInput {
   readonly activation?: ActivationStatusDto | null;
   readonly runtimeMaterialization?: RuntimeMaterializationStatusInputDto | null;
   readonly runtimeObserved?: RuntimeObservedStateInputDto | null;
-  readonly publicationConditions?: readonly StatusConditionDto[];
+  readonly outputConditions?: readonly StatusConditionDto[];
   readonly resourceConditions?: readonly StatusConditionDto[];
   readonly securityConditions?: readonly StatusConditionDto[];
   readonly suspended?: boolean;

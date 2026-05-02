@@ -8,7 +8,7 @@ import {
   type InternalGroupSummary,
   type InternalSpaceRequest,
   type JsonObject,
-  TAKOS_PAAS_INTERNAL_PATHS,
+  TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
 import type { createCoreDomainServices } from "../domains/core/mod.ts";
 import type { MutationBoundaryOperation } from "../services/entitlements/mod.ts";
@@ -87,7 +87,7 @@ export function registerInternalRoutes(
   const getInternalServiceSecret = options.getInternalServiceSecret ??
     (() => Deno.env.get("TAKOS_INTERNAL_SERVICE_SECRET"));
 
-  app.get(TAKOS_PAAS_INTERNAL_PATHS.spaces, async (c) => {
+  app.get(TAKOSUMI_INTERNAL_PATHS.spaces, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {
       secret: getInternalServiceSecret(),
     });
@@ -110,7 +110,7 @@ export function registerInternalRoutes(
     return c.json({ spaces });
   });
 
-  app.post(TAKOS_PAAS_INTERNAL_PATHS.spaces, async (c) => {
+  app.post(TAKOSUMI_INTERNAL_PATHS.spaces, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {
       secret: getInternalServiceSecret(),
     });
@@ -146,7 +146,7 @@ export function registerInternalRoutes(
     return c.json({ space: toInternalSpaceSummary(result.value) }, 201);
   });
 
-  app.get(TAKOS_PAAS_INTERNAL_PATHS.groups, async (c) => {
+  app.get(TAKOSUMI_INTERNAL_PATHS.groups, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {
       secret: getInternalServiceSecret(),
     });
@@ -176,7 +176,7 @@ export function registerInternalRoutes(
     return c.json({ groups: summaries });
   });
 
-  app.post(TAKOS_PAAS_INTERNAL_PATHS.groups, async (c) => {
+  app.post(TAKOSUMI_INTERNAL_PATHS.groups, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {
       secret: getInternalServiceSecret(),
     });
@@ -217,7 +217,7 @@ export function registerInternalRoutes(
     return c.json({ group: summary }, 201);
   });
 
-  app.post(TAKOS_PAAS_INTERNAL_PATHS.deployments, async (c) => {
+  app.post(TAKOSUMI_INTERNAL_PATHS.deployments, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {
       secret: getInternalServiceSecret(),
     });
@@ -260,7 +260,7 @@ export function registerInternalRoutes(
     return c.json(toMutationResponse(result), 201);
   });
 
-  app.post(TAKOS_PAAS_INTERNAL_PATHS.deploymentApply, async (c) => {
+  app.post(TAKOSUMI_INTERNAL_PATHS.deploymentApply, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {
       secret: getInternalServiceSecret(),
     });

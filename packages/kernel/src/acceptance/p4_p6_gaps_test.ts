@@ -1,7 +1,7 @@
 // Phase 4 (core simplification) acceptance tests for P4/P5/P6.
 //
 // RolloutCanaryService drives a chain of Deployment records via
-// DeploymentService. The registry (P4), publication (P5), and rollout (P6)
+// DeploymentService. The registry (P4), output (P5), and rollout (P6)
 // acceptance assertions remain self-contained and continue
 // to run.
 
@@ -16,13 +16,13 @@ import {
   type TrustRecord,
 } from "../domains/registry/mod.ts";
 import {
-  InMemoryPublicationConsumerBindingStore,
-  InMemoryPublicationProjectionStore,
-  InMemoryPublicationStore,
-  type Publication,
-  type PublicationConsumerBinding,
-} from "../domains/publications/mod.ts";
-import { PublicationDependencyPlanner } from "../services/publication-planner/mod.ts";
+  InMemoryOutputConsumerBindingStore,
+  InMemoryOutputProjectionStore,
+  InMemoryOutputStore,
+  type Output,
+  type OutputConsumerBinding,
+} from "../domains/outputs/mod.ts";
+import { OutputDependencyPlanner } from "../services/output-planner/mod.ts";
 import { DomainError } from "../shared/errors.ts";
 
 Deno.test("acceptance P4: registry resolution carries active trust for selected package digest", async () => {
@@ -125,9 +125,9 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
   );
 });
 
-Deno.test("acceptance P5: publication bindings do not auto-inject outputs and secrets require explicit target", async () => {
-  const { planner, stores } = publicationHarness();
-  await stores.publications.put(publication({
+Deno.test("acceptance P5: output bindings do not auto-inject outputs and secrets require explicit target", async () => {
+  const { planner, stores } = outputHarness();
+  await stores.outputs.put(output({
     outputs: [
       {
         name: "URL",
@@ -259,7 +259,7 @@ Deno.test("acceptance P5: publication bindings do not auto-inject outputs and se
               valueType: "secret-ref",
               explicit: false,
             },
-          } as unknown as PublicationConsumerBinding["outputs"],
+          } as unknown as OutputConsumerBinding["outputs"],
         }),
       }),
     (error) => isDomainError(error, "invalid_argument", "must be explicit"),
@@ -365,7 +365,7 @@ Deno.test("acceptance P6: canary rollout creates one deployment per step and kee
     "release_v1",
   );
   assert.equal(
-    run.assignmentModel.nonHttpDefaults.publications.defaultAppReleaseId,
+    run.assignmentModel.nonHttpDefaults.outputs.defaultAppReleaseId,
     "release_v1",
   );
   assert.equal(
@@ -398,22 +398,22 @@ function providerDescriptor(
   };
 }
 
-function publicationHarness(): {
-  readonly planner: PublicationDependencyPlanner;
+function outputHarness(): {
+  readonly planner: OutputDependencyPlanner;
   readonly stores: {
-    readonly publications: InMemoryPublicationStore;
-    readonly bindings: InMemoryPublicationConsumerBindingStore;
-    readonly projections: InMemoryPublicationProjectionStore;
+    readonly outputs: InMemoryOutputStore;
+    readonly bindings: InMemoryOutputConsumerBindingStore;
+    readonly projections: InMemoryOutputProjectionStore;
   };
 } {
   const stores = {
-    publications: new InMemoryPublicationStore(),
-    bindings: new InMemoryPublicationConsumerBindingStore(),
-    projections: new InMemoryPublicationProjectionStore(),
+    outputs: new InMemoryOutputStore(),
+    bindings: new InMemoryOutputConsumerBindingStore(),
+    projections: new InMemoryOutputProjectionStore(),
   };
   return {
     stores,
-    planner: new PublicationDependencyPlanner({
+    planner: new OutputDependencyPlanner({
       stores,
       idFactory: () => "generated_projection",
       clock: () => new Date("2026-04-27T00:00:00.000Z"),
@@ -421,9 +421,9 @@ function publicationHarness(): {
   };
 }
 
-function publication(overrides: Partial<Publication> = {}): Publication {
+function output(overrides: Partial<Output> = {}): Output {
   return {
-    id: "publication_docs",
+    id: "output_docs",
     spaceId: "space_acceptance",
     producerGroupId: "docs",
     activationId: "activation_docs",
@@ -443,13 +443,13 @@ function publication(overrides: Partial<Publication> = {}): Publication {
 }
 
 function binding(
-  overrides: Partial<PublicationConsumerBinding> = {},
-): PublicationConsumerBinding {
+  overrides: Partial<OutputConsumerBinding> = {},
+): OutputConsumerBinding {
   return {
     id: "binding_docs",
     spaceId: "space_acceptance",
     consumerGroupId: "web",
-    publicationAddress: "docs/site",
+    outputAddress: "docs/site",
     contract: "web.site.v1",
     outputs: {},
     grantRef: "grant_docs_site",

@@ -1,0 +1,27 @@
+{
+  "@context": {
+    "takosumi": "https://takosumi.dev/vocab/deploy#",
+    "id": "@id",
+    "type": "@type",
+    "shortRef": "takosumi:shortRef",
+    "domain": "takosumi:domain",
+    "lifecycleDomain": "takosumi:lifecycleDomain",
+    "changeEffect": "takosumi:changeEffect",
+    "configSchema": "takosumi:configSchema",
+    "contracts": "takosumi:contracts",
+    "materializationProfiles": "takosumi:materializationProfiles",
+    "resourceAccessPaths": "takosumi:resourceAccessPaths",
+    "limitations": "takosumi:limitations",
+    "providerNativeSchemas": "takosumi:providerNativeSchemas",
+    "supports": "takosumi:supports",
+    "requires": "takosumi:requires",
+    "runtime": "takosumi:runtime",
+    "artifact": "takosumi:artifact",
+    "interfaces": "takosumi:interfaces",
+    "resources": "takosumi:resources",
+    "accessModes": "takosumi:accessModes",
+    "injectionModes": "takosumi:injectionModes",
+    "pathStages": "takosumi:pathStages",
+    "enforcement": "takosumi:enforcement"
+  }
+}

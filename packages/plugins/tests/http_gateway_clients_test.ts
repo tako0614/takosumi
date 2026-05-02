@@ -80,7 +80,7 @@ Deno.test("GCP HTTP gateway client decodes binary JSON responses", async () => {
 
   const result = await client.decryptEnvelope({
     envelope: {
-      version: "takos.kms.envelope.v1",
+      version: "takosumi.kms.envelope.v1",
       algorithm: "PROVIDER-KMS",
       keyRef: { provider: "gcp-kms", keyId: "key", keyVersion: "1" },
       iv: "iv",
@@ -160,7 +160,7 @@ Deno.test("GCP HTTP gateway handler returns encoded binary results", async () =>
 
   const result = await client.decryptEnvelope({
     envelope: {
-      version: "takos.kms.envelope.v1",
+      version: "takosumi.kms.envelope.v1",
       algorithm: "PROVIDER-KMS",
       keyRef: { provider: "gcp-kms", keyId: "key", keyVersion: "1" },
       iv: "iv",

@@ -3,6 +3,17 @@ import { loadManifest } from "../manifest_loader.ts";
 import { loadConfig, resolveMode } from "../config.ts";
 import { callKernel } from "../remote_client.ts";
 
+/**
+ * `takosumi destroy <manifest>` — tear down a previously-applied manifest.
+ *
+ * Remote mode posts the manifest back to `POST /v1/deployments` with
+ * `mode: "destroy"`. Matching the deploy command's URL is intentional: the
+ * kernel handles all three lifecycle modes (apply / plan / destroy) on the
+ * same path, distinguished by the body's `mode` field. The kernel uses the
+ * persisted state from the prior apply to look up the real per-resource
+ * handles (ARN / object id / …) so providers see the same handle they
+ * returned at deploy time.
+ */
 export const destroyCommand = new Command()
   .description("Destroy resources declared in a Takosumi manifest")
   .arguments("<manifest:string>")
@@ -15,8 +26,8 @@ export const destroyCommand = new Command()
       const { status, body } = await callKernel({
         url: target.url,
         token: target.token,
-        path: "/v1/deployments/destroy",
-        body: { manifest: manifest.value },
+        path: "/v1/deployments",
+        body: { mode: "destroy", manifest: manifest.value },
       });
       if (status >= 400) {
         console.error(`kernel returned ${status}:`, body);

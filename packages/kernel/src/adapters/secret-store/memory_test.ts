@@ -64,13 +64,13 @@ Deno.test("selectSecretBoundaryCrypto fails closed in staging without key", () =
 });
 
 Deno.test("selectSecretBoundaryCrypto rejects production opt-in attempts", () => {
-  // TAKOS_ALLOW_PLAINTEXT_SECRETS must NOT bypass production fail-closed.
+  // TAKOSUMI_DEV_MODE must NOT bypass production fail-closed.
   assert.throws(
     () =>
       selectSecretBoundaryCrypto({
         env: {
           TAKOS_ENVIRONMENT: "production",
-          TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+          TAKOSUMI_DEV_MODE: "1",
         },
       }),
     SecretEncryptionConfigurationError,
@@ -95,7 +95,7 @@ Deno.test("selectSecretBoundaryCrypto allows local opt-in to placeholder", () =>
   const crypto = selectSecretBoundaryCrypto({
     env: {
       TAKOS_ENVIRONMENT: "local",
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
     },
   });
   assert.ok(crypto instanceof PlaceholderSecretBoundaryCrypto);
@@ -110,7 +110,7 @@ Deno.test("selectSecretBoundaryCrypto requires local plaintext opt-in", () => {
     (error: unknown) => {
       assert.ok(error instanceof SecretEncryptionConfigurationError);
       const message = (error as Error).message;
-      assert.match(message, /TAKOS_ALLOW_PLAINTEXT_SECRETS=1/);
+      assert.match(message, /TAKOSUMI_DEV_MODE=1/);
       return true;
     },
   );

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { TakosActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract";
 import {
   createCoreDomainServices,
   createInMemoryCoreDomainDependencies,
@@ -113,7 +113,7 @@ Deno.test("core denies group creation and entitlement for non-admin members", as
 function actorContext(
   actorAccountId: string,
   requestId: string,
-): TakosActorContext {
+): TakosumiActorContext {
   return {
     actorAccountId,
     roles: ["owner"],

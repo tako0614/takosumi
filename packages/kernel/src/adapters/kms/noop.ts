@@ -36,7 +36,7 @@ export class NoopTestKms implements KmsPort {
   encrypt(input: KmsEncryptInput): Promise<KmsEnvelopeDto> {
     const keyRef = input.keyRef ?? this.#activeKeyRef;
     return Promise.resolve(Object.freeze({
-      version: "takos.kms.envelope.v1",
+      version: "takosumi.kms.envelope.v1",
       algorithm: "TEST-NOOP",
       keyRef: Object.freeze(structuredClone(keyRef)),
       iv: "",
@@ -47,7 +47,7 @@ export class NoopTestKms implements KmsPort {
   }
 
   decrypt(input: KmsDecryptInput): Promise<Uint8Array> {
-    if (input.envelope.version !== "takos.kms.envelope.v1") {
+    if (input.envelope.version !== "takosumi.kms.envelope.v1") {
       throw new Error(
         `unsupported KMS envelope version: ${input.envelope.version}`,
       );

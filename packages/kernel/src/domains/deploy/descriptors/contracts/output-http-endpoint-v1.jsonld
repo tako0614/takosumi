@@ -1,0 +1,20 @@
+{
+  "@context": "https://takosumi.dev/contexts/deploy.jsonld",
+  "@id": "https://takosumi.dev/contracts/output/http-endpoint/v1",
+  "@type": "OutputContractDescriptor",
+  "shortRef": "output.http-endpoint@v1",
+  "domain": "output",
+  "lifecycleDomain": "declaration-output",
+  "changeEffect": "output-binding",
+  "outputs": {
+    "url": {
+      "valueType": "url",
+      "sensitivity": "public",
+      "allowedInjections": [
+        "env",
+        "service-binding"
+      ],
+      "defaultInjectable": false
+    }
+  }
+}

@@ -10,7 +10,7 @@ Deno.test("no-op test KMS preserves the KmsPort envelope contract", async () => 
   });
   const envelope = await kms.encrypt({ plaintext: "test secret" });
 
-  assert.equal(envelope.version, "takos.kms.envelope.v1");
+  assert.equal(envelope.version, "takosumi.kms.envelope.v1");
   assert.equal(envelope.algorithm, "TEST-NOOP");
   assert.equal(envelope.keyRef.provider, "test-noop");
   assert.equal(

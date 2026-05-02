@@ -13,9 +13,9 @@ import {
 } from "takosumi-contract";
 import {
   registerRuntimeAgentRoutes,
-  TAKOS_PAAS_RUNTIME_AGENT_PATHS,
+  TAKOSUMI_RUNTIME_AGENT_PATHS,
 } from "takosumi-contract";
-import type { TakosActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract";
 import {
   GatewayManifestVerificationError,
   GatewayResponseSignatureError,
@@ -30,7 +30,7 @@ import {
 } from "./loop.ts";
 
 const SECRET = "agent-test-secret";
-const ACTOR: TakosActorContext = {
+const ACTOR: TakosumiActorContext = {
   actorAccountId: "acct_runtime_agent",
   roles: ["service"],
   requestId: "req_test",
@@ -754,4 +754,4 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 
 // Ensure the routes constant is reachable so this test file remains tied to
 // the kernel surface — silence unused-import lint without import flags.
-void TAKOS_PAAS_RUNTIME_AGENT_PATHS;
+void TAKOSUMI_RUNTIME_AGENT_PATHS;

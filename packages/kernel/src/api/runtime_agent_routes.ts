@@ -1,12 +1,12 @@
 import type { Context, Hono as HonoApp } from "hono";
 import {
   signGatewayResponse,
-  TAKOS_GATEWAY_IDENTITY_NONCE_HEADER,
-  TAKOS_GATEWAY_IDENTITY_REQUEST_ID_HEADER,
-  TAKOS_GATEWAY_IDENTITY_SIGNATURE_HEADER,
-  TAKOS_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
-  TAKOS_INTERNAL_REQUEST_ID_HEADER,
-  type TakosActorContext,
+  TAKOSUMI_GATEWAY_IDENTITY_NONCE_HEADER,
+  TAKOSUMI_GATEWAY_IDENTITY_REQUEST_ID_HEADER,
+  TAKOSUMI_GATEWAY_IDENTITY_SIGNATURE_HEADER,
+  TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
+  TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
+  type TakosumiActorContext,
 } from "takosumi-contract";
 import type {
   GatewayManifestIssuer,
@@ -36,7 +36,7 @@ export type RuntimeAgentAuthResult =
     readonly actor?: {
       readonly actorAccountId: string;
       readonly spaceId?: string;
-    } & Partial<TakosActorContext>;
+    } & Partial<TakosumiActorContext>;
     readonly workloadIdentityId?: string;
   }
   | { readonly ok: false; readonly status?: 401 | 403; readonly error: string };
@@ -98,7 +98,7 @@ export function registerRuntimeAgentRoutes(
       const body = await cloned.text();
       const timestamp = clock().toISOString();
       const path = new URL(c.req.url).pathname;
-      const requestId = c.req.header(TAKOS_INTERNAL_REQUEST_ID_HEADER) ??
+      const requestId = c.req.header(TAKOSUMI_INTERNAL_REQUEST_ID_HEADER) ??
         crypto.randomUUID();
       const nonce = crypto.randomUUID();
       const sig = await signGatewayResponse({
@@ -111,10 +111,10 @@ export function registerRuntimeAgentRoutes(
         nonce,
       });
       const headers = new Headers(res.headers);
-      headers.set(TAKOS_GATEWAY_IDENTITY_SIGNATURE_HEADER, sig);
-      headers.set(TAKOS_GATEWAY_IDENTITY_TIMESTAMP_HEADER, timestamp);
-      headers.set(TAKOS_GATEWAY_IDENTITY_REQUEST_ID_HEADER, requestId);
-      headers.set(TAKOS_GATEWAY_IDENTITY_NONCE_HEADER, nonce);
+      headers.set(TAKOSUMI_GATEWAY_IDENTITY_SIGNATURE_HEADER, sig);
+      headers.set(TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER, timestamp);
+      headers.set(TAKOSUMI_GATEWAY_IDENTITY_REQUEST_ID_HEADER, requestId);
+      headers.set(TAKOSUMI_GATEWAY_IDENTITY_NONCE_HEADER, nonce);
       c.res = new Response(body, {
         status: res.status,
         statusText: res.statusText,

@@ -952,16 +952,19 @@ Deno.test("core conformance: native raw binding requires policy approval before 
         type: "container",
         image: DEMO_IMAGE,
         port: 8080,
-        consume: [{
-          resource: "sqlite",
-          as: "DB",
-          access: {
-            contract: "resource.sql.sqlite-serverless@v1",
-            mode: "sql-query-api",
-            nativeBinding: "raw",
+        bindings: {
+          DB: {
+            from: {
+              resource: "sqlite",
+              access: {
+                contract: "resource.sql.sqlite-serverless@v1",
+                mode: "sql-query-api",
+                nativeBinding: "raw",
+              } as unknown as { contract: string; mode: string },
+            },
+            inject: { mode: "env", target: "DB" },
           },
-          inject: { env: { binding: "DB" } },
-        }],
+        },
       },
     },
     resources: {
@@ -1285,16 +1288,20 @@ Deno.test("core conformance: advisory external access path records audit allow w
           type: "container",
           image: DEMO_IMAGE,
           port: 8080,
-          consume: [{
-            resource: "bucket",
-            as: "BUCKET",
-            access: {
-              contract: "resource.object-store.s3@v1",
-              mode: "s3-api",
-              networkBoundary: "external",
-              enforcement: "advisory",
+          bindings: {
+            BUCKET: {
+              from: {
+                resource: "bucket",
+                access: {
+                  contract: "resource.object-store.s3@v1",
+                  mode: "s3-api",
+                  networkBoundary: "external",
+                  enforcement: "advisory",
+                } as unknown as { contract: string; mode: string },
+              },
+              inject: { mode: "env", target: "BUCKET" },
             },
-          }],
+          },
         },
       },
       resources: {
@@ -1326,16 +1333,20 @@ Deno.test("core conformance: advisory external access path records audit allow w
           type: "container",
           image: DEMO_IMAGE,
           port: 8080,
-          consume: [{
-            resource: "bucket",
-            as: "BUCKET",
-            access: {
-              contract: "resource.object-store.s3@v1",
-              mode: "s3-api",
-              networkBoundary: "external",
-              enforcement: "enforced",
+          bindings: {
+            BUCKET: {
+              from: {
+                resource: "bucket",
+                access: {
+                  contract: "resource.object-store.s3@v1",
+                  mode: "s3-api",
+                  networkBoundary: "external",
+                  enforcement: "enforced",
+                } as unknown as { contract: string; mode: string },
+              },
+              inject: { mode: "env", target: "BUCKET" },
             },
-          }],
+          },
         },
       },
       resources: {

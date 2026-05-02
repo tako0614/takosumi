@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   type KernelPluginPortKind,
-  TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+  TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
 } from "takosumi-contract";
 import type { ProviderMaterializer } from "../adapters/provider/mod.ts";
 import {
@@ -150,7 +150,7 @@ Deno.test("selected plugin must return every selected adapter", async () => {
       id: "external.incomplete",
       name: "Incomplete External Plugin",
       version: "1.0.0",
-      kernelApiVersion: TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
       capabilities: [
         {
           port: "provider",
@@ -188,7 +188,7 @@ Deno.test("selected plugin must not return adapters for unselected ports", () =>
       id: "external.overbroad",
       name: "Overbroad External Plugin",
       version: "1.0.0",
-      kernelApiVersion: TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
       capabilities: [
         {
           port: "provider",
@@ -227,7 +227,7 @@ Deno.test("selected plugins cannot claim duplicate adapter ownership", () => {
       id: "external.provider.owner",
       name: "Provider Owner",
       version: "1.0.0",
-      kernelApiVersion: TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
       capabilities: [{
         port: "provider",
         kind: "external-test",
@@ -243,7 +243,7 @@ Deno.test("selected plugins cannot claim duplicate adapter ownership", () => {
       id: "external.storage.owner",
       name: "Storage Owner",
       version: "1.0.0",
-      kernelApiVersion: TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
       capabilities: [{
         port: "storage",
         kind: "external-test",
@@ -297,7 +297,7 @@ Deno.test("external plugin can resolve operator-injected clients", async () => {
       id: "external.client-registry",
       name: "External Client Registry Plugin",
       version: "1.0.0",
-      kernelApiVersion: TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
       capabilities: [
         {
           port: "provider",
@@ -383,7 +383,7 @@ function createExternalReferenceBackedPlugin(
       id,
       name: "External Reference Backed Test Plugin",
       version: "1.0.0",
-      kernelApiVersion: TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
       capabilities: ports.map((port) => ({
         port,
         kind: "external-test",
@@ -446,7 +446,7 @@ function createPluginContext(
   >,
 ): Parameters<typeof createPluginAdapterOverrides>[0]["context"] {
   return {
-    kernelApiVersion: TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+    kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
     environment: "local",
     processRole: "takosumi-api",
     selectedPluginIds: {},

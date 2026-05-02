@@ -488,6 +488,23 @@ export const postgresStorageTableDefinitions:
       primaryKey: ["namespace", "request_id"],
       indexes: [["expires_at_ms"]],
     },
+    {
+      name: "takosumi_deployments",
+      domain: "deploy",
+      columns: [
+        "id",
+        "tenant_id",
+        "name",
+        "manifest_json",
+        "applied_resources_json",
+        "status",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["tenant_id", "name"]],
+      indexes: [["tenant_id"], ["status"]],
+    },
   ]);
 
 export const postgresStorageMigrationStatements:
@@ -541,7 +558,7 @@ drop table if exists deploy_plans;`,
       sql:
         `create table if not exists resource_instances (id text primary key, space_id text not null, group_id text, contract text not null, origin text not null, sharing_mode text not null, provider text, provider_resource_id text, provider_materialization_id text, lifecycle_json jsonb not null, schema_owner_json jsonb, properties_json jsonb, created_at timestamptz not null, updated_at timestamptz not null);
 create table if not exists resource_bindings (id text primary key, space_id text not null, group_id text not null, claim_address text not null, instance_id text not null references resource_instances(id), role text not null, created_at timestamptz not null, updated_at timestamptz not null);
-create table if not exists resource_binding_set_revisions (id text primary key, space_id text not null, group_id text not null, component_address text, structure_digest text, inputs_json jsonb not null default '[]'::jsonb, binding_value_resolutions_json jsonb not null default '[]'::jsonb, conditions_json jsonb not null default '[]'::jsonb, activation_record_id text, resource_binding_ids_json jsonb not null, secret_bindings_json jsonb not null, publication_bindings_json jsonb not null, created_at timestamptz not null);
+create table if not exists resource_binding_set_revisions (id text primary key, space_id text not null, group_id text not null, component_address text, structure_digest text, inputs_json jsonb not null default '[]'::jsonb, binding_value_resolutions_json jsonb not null default '[]'::jsonb, conditions_json jsonb not null default '[]'::jsonb, activation_record_id text, resource_binding_ids_json jsonb not null, secret_bindings_json jsonb not null, output_bindings_json jsonb not null, created_at timestamptz not null);
 create table if not exists resource_migration_ledger (id text primary key, space_id text not null, resource_instance_id text not null references resource_instances(id), migration_ref text not null, from_version text, to_version text, status text not null, checkpoints_json jsonb not null, started_at timestamptz not null, completed_at timestamptz, metadata_json jsonb);`,
       down: `drop table if exists resource_migration_ledger;
 drop table if exists resource_binding_set_revisions;
@@ -721,7 +738,7 @@ alter table resource_binding_set_revisions
   drop column if exists activation_record_id,
   drop column if exists resource_binding_ids_json,
   drop column if exists secret_bindings_json,
-  drop column if exists publication_bindings_json,
+  drop column if exists output_bindings_json,
   drop column if exists component_address,
   drop column if exists structure_digest,
   drop column if exists inputs_json,
@@ -1033,5 +1050,31 @@ create index if not exists internal_request_replay_log_expires_idx
   on internal_request_replay_log (expires_at_ms);`,
       down: `drop index if exists internal_request_replay_log_expires_idx;
 drop table if exists internal_request_replay_log;`,
+    },
+    {
+      id: "deploy.takosumi_deployments.create",
+      version: 20,
+      domain: "deploy",
+      description:
+        "Persist takosumi public deploy state so destroy/status can read prior apply handles end-to-end (Task 1).",
+      sql: `create table if not exists takosumi_deployments (
+  id                     text        primary key,
+  tenant_id              text        not null,
+  name                   text        not null,
+  manifest_json          jsonb       not null,
+  applied_resources_json jsonb       not null default '[]'::jsonb,
+  status                 text        not null
+    check (status in ('applied','destroyed','failed')),
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now(),
+  unique (tenant_id, name)
+);
+create index if not exists takosumi_deployments_tenant_idx
+  on takosumi_deployments (tenant_id);
+create index if not exists takosumi_deployments_status_idx
+  on takosumi_deployments (status);`,
+      down: `drop index if exists takosumi_deployments_status_idx;
+drop index if exists takosumi_deployments_tenant_idx;
+drop table if exists takosumi_deployments;`,
     },
   ]);

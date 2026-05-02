@@ -30,6 +30,7 @@ import {
   SqlObservabilitySink,
 } from "../observability/mod.ts";
 import type { SqlClient } from "../../adapters/storage/sql.ts";
+import { isDevMode } from "../../config/dev_mode.ts";
 import type {
   BootstrapAdapterFamily,
   BootstrapAdapterSelection,
@@ -109,12 +110,8 @@ export class StandaloneBootstrapService {
     const environment = normalizeEnvironment(
       await this.#plainValue(["TAKOS_ENVIRONMENT", "NODE_ENV", "ENVIRONMENT"]),
     );
-    const allowUnsafeDefaults = parseBoolean(
-      await this.#plainValue([
-        "TAKOS_BOOTSTRAP_ALLOW_UNSAFE_DEFAULTS",
-        "TAKOS_ALLOW_UNSAFE_DEFAULTS",
-      ]),
-    );
+    const devModeFlag = await this.#plainValue(["TAKOSUMI_DEV_MODE"]);
+    const allowUnsafeDefaults = isDevMode({ TAKOSUMI_DEV_MODE: devModeFlag });
     await this.#rejectStaleSelectors(errors);
 
     const selectedAdapters: BootstrapAdapterSelection[] = [];
@@ -525,7 +522,7 @@ function bootstrapCryptoEnv(
     "TAKOS_SECRET_STORE_KEY",
     "TAKOS_SECRET_ENCRYPTION_KEY",
     "ENCRYPTION_KEY",
-    "TAKOS_ALLOW_PLAINTEXT_SECRETS",
+    "TAKOSUMI_DEV_MODE",
   ] as const;
   const env: Record<string, string | undefined> = {};
   for (const key of keys) env[key] = snapshotPlainValue(snapshot, key);
@@ -570,11 +567,6 @@ function environmentDefault(
 
 function normalizeAdapterKind(raw: string): string {
   return raw.trim().toLowerCase().replaceAll("_", "-");
-}
-
-function parseBoolean(raw: string | undefined): boolean {
-  return raw === "1" || raw?.toLowerCase() === "true" ||
-    raw?.toLowerCase() === "yes";
 }
 
 function redactConfig(

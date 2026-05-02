@@ -6,6 +6,7 @@ import type {
   SecretVersionRef,
 } from "./types.ts";
 import { CLOUD_PARTITIONS } from "./types.ts";
+import { isDevMode } from "../../config/dev_mode.ts";
 
 export interface MemoryEncryptedSecretStoreOptions {
   readonly clock?: () => Date;
@@ -109,7 +110,7 @@ export interface SelectSecretBoundaryCryptoOptions {
  *  - Production / staging without a global key throw
  *    {@link SecretEncryptionConfigurationError}.
  *  - Local / dev / test require explicit opt-in via
- *    `TAKOS_ALLOW_PLAINTEXT_SECRETS=1` before using
+ *    `TAKOSUMI_DEV_MODE=1` before using
  *    {@link PlaceholderSecretBoundaryCrypto}.
  */
 export function selectSecretBoundaryCrypto(
@@ -132,12 +133,12 @@ export function selectSecretBoundaryCrypto(
         `Refusing to fall back to plaintext (base64) secret storage.`,
     );
   }
-  if (!parseBoolean(env.TAKOS_ALLOW_PLAINTEXT_SECRETS)) {
+  if (!isDevMode(env)) {
     throw new SecretEncryptionConfigurationError(
       `secret-store encryption key missing in ${environment}: ` +
         `set one of ${SECRET_STORE_KEY_ENV_KEYS.join(", ")} ` +
-        `or explicitly opt in to plaintext secrets with ` +
-        `TAKOS_ALLOW_PLAINTEXT_SECRETS=1 (local/dev only).`,
+        `or explicitly opt in to dev mode with ` +
+        `TAKOSUMI_DEV_MODE=1 (local/dev only).`,
     );
   }
   return new PlaceholderSecretBoundaryCrypto();
@@ -156,12 +157,6 @@ function firstNonEmpty(
 
 function normalizeEnvironment(raw: string | undefined): string {
   return (raw ?? "local").trim().toLowerCase() || "local";
-}
-
-function parseBoolean(raw: string | undefined): boolean {
-  if (raw === undefined) return false;
-  const normalized = raw.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 interface StoredSecret extends SecretRecord {

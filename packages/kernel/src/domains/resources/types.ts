@@ -89,24 +89,24 @@ export interface SecretBindingRef {
   readonly rollbackPolicy: SecretRollbackPolicy;
 }
 
-export type PublicationOutputValueType =
+export type OutputInjectionValueType =
   | "string"
   | "url"
   | "json"
   | "secret-ref"
   | "service";
 
-export interface PublicationOutputInjection {
+export interface OutputInjection {
   readonly env?: string;
   readonly binding?: string;
-  readonly valueType: PublicationOutputValueType;
+  readonly valueType: OutputInjectionValueType;
   readonly explicit: true;
 }
 
-export interface PublicationConsumerBinding {
-  readonly publicationAddress: string;
+export interface OutputConsumerBinding {
+  readonly outputAddress: string;
   readonly contract: string;
-  readonly outputs: Readonly<Record<string, PublicationOutputInjection>>;
+  readonly outputs: Readonly<Record<string, OutputInjection>>;
   readonly grantRef: string;
   readonly resolution: SecretResolutionPolicy;
 }
@@ -123,7 +123,7 @@ export interface BindingSetRevision {
   readonly deploymentId?: string;
   readonly resourceBindingIds: readonly ResourceBindingId[];
   readonly secretBindings: readonly SecretBindingRef[];
-  readonly publicationBindings: readonly PublicationConsumerBinding[];
+  readonly outputConsumerBindings: readonly OutputConsumerBinding[];
   readonly createdAt: IsoTimestamp;
 }
 

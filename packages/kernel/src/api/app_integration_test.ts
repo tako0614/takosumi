@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import type { TakosActorContext } from "takosumi-contract";
-import { signTakosInternalRequest } from "takosumi-contract/internal-rpc";
+import type { TakosumiActorContext } from "takosumi-contract";
+import { signTakosumiInternalRequest } from "takosumi-contract/internal-rpc";
 import { InMemoryRuntimeAgentRegistry } from "../agents/mod.ts";
 import { createInMemoryAppContext } from "../app_context.ts";
 import { createApiApp } from "./app.ts";
@@ -113,9 +113,9 @@ async function signedHeaders(input: {
   readonly method: string;
   readonly path: string;
   readonly body: string;
-  readonly actor: TakosActorContext;
+  readonly actor: TakosumiActorContext;
 }): Promise<Headers> {
-  const signed = await signTakosInternalRequest({
+  const signed = await signTakosumiInternalRequest({
     ...input,
     timestamp: new Date().toISOString(),
     caller: input.actor.serviceId ?? input.actor.agentId ?? "takos-test",

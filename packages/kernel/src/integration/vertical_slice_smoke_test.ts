@@ -11,7 +11,7 @@
 // `runtime-vertical-slice/service_test.ts`; this smoke stays focused on the
 // deployment lifecycle and GroupHead commit path.
 import assert from "node:assert/strict";
-import type { TakosActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract";
 import {
   createCoreDomainServices,
   createInMemoryCoreDomainDependencies,
@@ -161,7 +161,7 @@ function simpleManifest(): PublicDeployManifest {
 function actorContext(
   actorAccountId: string,
   requestId: string,
-): TakosActorContext {
+): TakosumiActorContext {
   return {
     actorAccountId,
     roles: ["owner"],

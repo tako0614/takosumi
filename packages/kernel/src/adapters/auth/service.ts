@@ -1,11 +1,11 @@
 import {
-  TAKOS_INTERNAL_ACTOR_HEADER,
-  type TakosActorContext,
+  TAKOSUMI_INTERNAL_ACTOR_HEADER,
+  type TakosumiActorContext,
 } from "takosumi-contract";
 import {
   decodeActorContext,
-  signTakosInternalRequest,
-  verifyTakosInternalRequestFromHeaders,
+  signTakosumiInternalRequest,
+  verifyTakosumiInternalRequestFromHeaders,
 } from "takosumi-contract/internal-rpc";
 import type { ActorAdapter, AuthPort, AuthResult } from "./types.ts";
 
@@ -29,17 +29,17 @@ export class ServiceActorAuthAdapter implements ActorAdapter, AuthPort {
     this.#clock = options.clock ?? (() => new Date());
   }
 
-  async actorForRequest(request: Request): Promise<TakosActorContext> {
+  async actorForRequest(request: Request): Promise<TakosumiActorContext> {
     const result = await this.authenticate(request);
     if (!result.ok) throw new Error(result.error);
     return result.actor;
   }
 
   async authenticate(request: Request): Promise<AuthResult> {
-    const actorHeader = request.headers.get(TAKOS_INTERNAL_ACTOR_HEADER);
+    const actorHeader = request.headers.get(TAKOSUMI_INTERNAL_ACTOR_HEADER);
     if (!actorHeader) return unauthorized("missing actor context");
 
-    let actor: TakosActorContext;
+    let actor: TakosumiActorContext;
     try {
       actor = decodeActorContext(actorHeader);
     } catch {
@@ -48,7 +48,7 @@ export class ServiceActorAuthAdapter implements ActorAdapter, AuthPort {
 
     const body = await request.clone().text();
     const url = new URL(request.url);
-    const verified = await verifyTakosInternalRequestFromHeaders({
+    const verified = await verifyTakosumiInternalRequestFromHeaders({
       method: request.method,
       path: url.pathname,
       query: url.search,
@@ -68,10 +68,10 @@ export class ServiceActorAuthAdapter implements ActorAdapter, AuthPort {
     readonly path: string;
     readonly query?: string;
     readonly body?: string;
-    readonly actor: TakosActorContext;
+    readonly actor: TakosumiActorContext;
   }): Promise<Headers> {
     const path = splitPathAndQuery(input.path, input.query);
-    const signed = await signTakosInternalRequest({
+    const signed = await signTakosumiInternalRequest({
       method: input.method,
       path: path.pathname,
       query: path.query,

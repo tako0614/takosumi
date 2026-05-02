@@ -1,8 +1,8 @@
 import {
   type KernelPluginIoBoundary,
   type KernelPluginPortKind,
-  TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
-  type TakosPaaSKernelPluginManifest,
+  TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
+  type TakosumiKernelPluginManifest,
 } from "takosumi-contract";
 import { stableStringify, toArrayBuffer } from "../adapters/source/digest.ts";
 import {
@@ -18,7 +18,7 @@ export const TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM =
   "ECDSA-P256-SHA256" as const;
 
 export interface TrustedKernelPluginManifestEnvelope {
-  readonly manifest: TakosPaaSKernelPluginManifest;
+  readonly manifest: TakosumiKernelPluginManifest;
   readonly signature: TrustedKernelPluginManifestSignature;
 }
 
@@ -125,7 +125,7 @@ export async function installTrustedKernelPlugins(
 }
 
 export function canonicalTrustedKernelPluginManifest(
-  manifest: TakosPaaSKernelPluginManifest,
+  manifest: TakosumiKernelPluginManifest,
 ): string {
   return [
     "takos-kernel-plugin-manifest-v1",
@@ -163,13 +163,13 @@ async function assertManifestSignature(
 }
 
 function assertPluginKernelApiCompatible(
-  manifest: TakosPaaSKernelPluginManifest,
+  manifest: TakosumiKernelPluginManifest,
 ): void {
-  if (manifest.kernelApiVersion === TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION) {
+  if (manifest.kernelApiVersion === TAKOSUMI_KERNEL_PLUGIN_API_VERSION) {
     return;
   }
   throw new Error(
-    `trusted kernel plugin ${manifest.id} targets unsupported kernel API ${manifest.kernelApiVersion}; expected ${TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION}`,
+    `trusted kernel plugin ${manifest.id} targets unsupported kernel API ${manifest.kernelApiVersion}; expected ${TAKOSUMI_KERNEL_PLUGIN_API_VERSION}`,
   );
 }
 
@@ -254,7 +254,7 @@ function assertImplementationProvenance(
 }
 
 function implementationProvenanceFromManifest(
-  manifest: TakosPaaSKernelPluginManifest,
+  manifest: TakosumiKernelPluginManifest,
 ): TrustedKernelPluginImplementationProvenance | undefined {
   const metadata = manifest.metadata;
   if (!metadata) return undefined;

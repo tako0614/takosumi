@@ -1,10 +1,10 @@
 // Binding resolver + access-path policy validator (Phase 10C / Wave 3).
 //
-// The resolver expands every component-level `consume` edge from the AppSpec
-// into a canonical `DeploymentBinding` with:
-//   - explicit `source` (resource | publication | secret | provider-output)
+// The resolver expands every component-level `bindings` declaration from the
+// AppSpec into a canonical `DeploymentBinding` with:
+//   - explicit `source` (resource | output | secret | provider-output)
 //   - canonical `sourceAddress` (matches the access-path request projection)
-//   - access mode + injection target derived from compiler output / fallback
+//   - access mode + injection target derived from the binding spec
 //   - sensitivity / enforcement / resolutionPolicy assigned from the source
 //   - per-binding `CoreResourceAccessPath` (Core spec § 12) with stage chain
 //     and `networkBoundary` decided by the source kind
@@ -38,7 +38,11 @@ import type {
   IsoTimestamp,
   ObjectAddress,
 } from "takosumi-contract";
-import type { AppSpec, AppSpecComponent, PublicConsumeSpec } from "./types.ts";
+import type {
+  AppSpec,
+  AppSpecComponent,
+  PublicComponentBindingSpec,
+} from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -51,19 +55,19 @@ export interface ResolveBindingsInput {
   readonly resolvedAt: IsoTimestamp;
 }
 
-/** Resolve every component consume edge in the AppSpec into a canonical
- *  `DeploymentBinding`. Output is deterministic and sorted by component then
- *  binding name so apply consumes a stable shape. */
+/** Resolve every component binding declaration in the AppSpec into a
+ *  canonical `DeploymentBinding`. Output is deterministic and sorted by
+ *  component then binding name so apply consumes a stable shape. */
 export function resolveBindings(
   input: ResolveBindingsInput,
 ): readonly DeploymentBinding[] {
   const bindings: DeploymentBinding[] = [];
   for (const component of input.appSpec.components) {
-    for (const [index, consume] of component.consume.entries()) {
+    for (const [name, spec] of Object.entries(component.bindings)) {
       bindings.push(buildBinding({
         component,
-        consume,
-        index,
+        bindingName: name,
+        spec,
         appSpec: input.appSpec,
         resolvedAt: input.resolvedAt,
       }));
@@ -166,34 +170,32 @@ export function validateAccessPaths(
 
 interface BuildBindingInput {
   readonly component: AppSpecComponent;
-  readonly consume: PublicConsumeSpec;
-  readonly index: number;
+  readonly bindingName: string;
+  readonly spec: PublicComponentBindingSpec;
   readonly appSpec: AppSpec;
   readonly resolvedAt: IsoTimestamp;
 }
 
 function buildBinding(input: BuildBindingInput): DeploymentBinding {
-  const source = bindingSourceFor(input.consume);
-  const sourceName = bindingSourceName(input.consume, input.index);
-  const bindingName = bindingNameFor(input.consume, sourceName, input.index);
-  const access = accessFor(input.consume);
-  const injection = injectionFor(input.consume, bindingName);
+  const source = bindingSourceFor(input.spec);
+  const sourceName = bindingSourceName(input.spec);
+  const access = accessFor(input.spec, source);
+  const injection = input.spec.inject;
   const sensitivity = sensitivityFor(source);
-  const enforcement = enforcementFor(input.consume);
-  const resolutionPolicy = resolutionPolicyFor(input.consume, source);
+  const enforcement = enforcementFor(input.spec);
+  const resolutionPolicy = resolutionPolicyFor(source);
   const sourceAddress = sourceAddressFor(source, sourceName);
   const componentAddr = componentAddress(input.component.name);
   const accessPath = buildAccessPath({
     componentAddress: componentAddr,
-    bindingName,
+    bindingName: input.bindingName,
     source,
-    sourceName,
     access,
     injection,
     enforcement,
     sensitivity,
     appSpec: input.appSpec,
-    consume: input.consume,
+    spec: input.spec,
   });
   const resolvedVersion = stableHashLike({
     source,
@@ -202,7 +204,7 @@ function buildBinding(input: BuildBindingInput): DeploymentBinding {
     injection,
   });
   return {
-    bindingName,
+    bindingName: input.bindingName,
     componentAddress: componentAddr,
     source,
     sourceAddress,
@@ -217,43 +219,46 @@ function buildBinding(input: BuildBindingInput): DeploymentBinding {
   };
 }
 
-function bindingSourceFor(consume: PublicConsumeSpec): DeploymentBindingSource {
-  if (typeof consume.resource === "string") return "resource";
-  if (typeof consume.publication === "string") return "publication";
-  if (typeof consume.secret === "string") return "secret";
-  return "provider-output";
+function bindingSourceFor(
+  spec: PublicComponentBindingSpec,
+): DeploymentBindingSource {
+  const from = spec.from;
+  if ("resource" in from) return "resource";
+  if ("output" in from) return "output";
+  if ("secret" in from) return "secret";
+  if ("providerOutput" in from) return "provider-output";
+  throw new TypeError("binding.from must declare a source");
 }
 
-function bindingSourceName(consume: PublicConsumeSpec, index: number): string {
-  return consume.resource ?? consume.publication ?? consume.secret ??
-    consume.as ?? `consume.${index + 1}`;
-}
-
-function bindingNameFor(
-  consume: PublicConsumeSpec,
-  sourceName: string,
-  index: number,
-): string {
-  return envBindingName(consume) ?? consume.as ??
-    sourceName.split(".").at(-1) ??
-    `BINDING_${index + 1}`;
+function bindingSourceName(spec: PublicComponentBindingSpec): string {
+  const from = spec.from;
+  if ("resource" in from) return from.resource;
+  if ("output" in from) return from.output;
+  if ("secret" in from) return from.secret;
+  return from.providerOutput;
 }
 
 function sourceAddressFor(
   source: DeploymentBindingSource,
   sourceName: string,
 ): ObjectAddress {
-  const name = sourceName.replace(/^(resource|publication|secret)\./, "");
+  const name = sourceName.replace(
+    /^(resource|output|secret|provider-output)\./,
+    "",
+  );
   if (source === "resource") return objectAddress("resource", name);
-  if (source === "publication") return objectAddress("publication", name);
+  if (source === "output") return objectAddress("output", name);
   if (source === "secret") return objectAddress("secret", name);
   return objectAddress("provider-output", name);
 }
 
 function accessFor(
-  consume: PublicConsumeSpec,
+  spec: PublicComponentBindingSpec,
+  source: DeploymentBindingSource,
 ): CoreAccessModeRef | undefined {
-  const access = consume.access;
+  if (source !== "resource") return undefined;
+  const from = spec.from as { resource: string; access: unknown };
+  const access = from.access;
   if (
     isRecord(access) && typeof access.contract === "string" &&
     typeof access.mode === "string"
@@ -263,10 +268,10 @@ function accessFor(
   return undefined;
 }
 
-function enforcementFor(consume: PublicConsumeSpec): CoreEnforcement {
-  const access = consume.access;
-  if (isRecord(access)) {
-    const enforcement = access.enforcement;
+function enforcementFor(spec: PublicComponentBindingSpec): CoreEnforcement {
+  const from = spec.from as { access?: unknown };
+  if (isRecord(from.access)) {
+    const enforcement = from.access.enforcement;
     if (
       enforcement === "enforced" || enforcement === "advisory" ||
       enforcement === "unsupported"
@@ -277,27 +282,6 @@ function enforcementFor(consume: PublicConsumeSpec): CoreEnforcement {
   return "enforced";
 }
 
-function injectionFor(
-  consume: PublicConsumeSpec,
-  bindingName: string,
-): CoreInjectionTarget {
-  if (
-    isRecord(consume.inject) && typeof consume.inject.mode === "string" &&
-    typeof consume.inject.target === "string"
-  ) {
-    return { mode: consume.inject.mode, target: consume.inject.target };
-  }
-  return { mode: "env", target: envBindingName(consume) ?? bindingName };
-}
-
-function envBindingName(consume: PublicConsumeSpec): string | undefined {
-  return isRecord(consume.inject) &&
-      isRecord(consume.inject.env) &&
-      typeof consume.inject.env.binding === "string"
-    ? consume.inject.env.binding
-    : undefined;
-}
-
 function sensitivityFor(source: DeploymentBindingSource): CoreSensitivity {
   switch (source) {
     case "secret":
@@ -305,7 +289,6 @@ function sensitivityFor(source: DeploymentBindingSource): CoreSensitivity {
     case "provider-output":
       return "credential";
     case "output":
-    case "publication":
       return "internal";
     case "resource":
       return "internal";
@@ -313,28 +296,9 @@ function sensitivityFor(source: DeploymentBindingSource): CoreSensitivity {
 }
 
 function resolutionPolicyFor(
-  consume: PublicConsumeSpec,
-  source: DeploymentBindingSource,
+  _source: DeploymentBindingSource,
 ): DeploymentBindingResolutionPolicy {
-  const explicit = isRecord(consume.resolution)
-    ? consume.resolution.policy
-    : typeof consume.resolution === "string"
-    ? consume.resolution
-    : undefined;
-  if (
-    explicit === "latest-at-activation" ||
-    explicit === "pinned-version" ||
-    explicit === "latest-at-invocation"
-  ) {
-    return explicit;
-  }
-  // Defaults per Core spec § 11: latest-at-activation is universally allowed,
-  // and we use it for every source kind unless the manifest pins explicitly.
-  // provider-output bindings (credentials minted by the provider) follow the
-  // same default — they are re-resolved at activation time.
-  return source === "secret" || source === "provider-output"
-    ? "latest-at-activation"
-    : "latest-at-activation";
+  return "latest-at-activation";
 }
 
 // ---------------------------------------------------------------------------
@@ -345,13 +309,12 @@ interface BuildAccessPathInput {
   readonly componentAddress: ObjectAddress;
   readonly bindingName: string;
   readonly source: DeploymentBindingSource;
-  readonly sourceName: string;
   readonly access?: CoreAccessModeRef;
   readonly injection: CoreInjectionTarget;
   readonly enforcement: CoreEnforcement;
   readonly sensitivity: CoreSensitivity;
   readonly appSpec: AppSpec;
-  readonly consume: PublicConsumeSpec;
+  readonly spec: PublicComponentBindingSpec;
 }
 
 function buildAccessPath(
@@ -359,7 +322,7 @@ function buildAccessPath(
 ): CoreResourceAccessPath {
   const access = input.access ?? syntheticAccess(input.source);
   const stages = buildStages(input);
-  const networkBoundary = networkBoundaryFor(input.source, input.consume);
+  const networkBoundary = networkBoundaryFor(input.source, input.spec);
   return {
     id: `access:${
       addressLocalName(input.componentAddress)
@@ -387,19 +350,17 @@ function buildStages(
   const baseStage: CoreAccessPathStage = {
     kind: input.source,
     role: stageRole(input.source),
-    owner: "takos",
+    owner: "takosumi",
     lifecycle: stageLifecycle(input.source),
     readiness: "required",
     credentialBoundary: credentialBoundaryFor(input.source),
     credentialVisibility: credentialVisibilityFor(input.source),
   };
-  // Resource bindings flow through one mediator stage in front of the resource
-  // host; publications + provider-outputs are consumer→producer single-hop.
   if (input.source === "resource") {
     return [{
       kind: "access-mediator",
       role: "access-mediator",
-      owner: "takos",
+      owner: "takosumi",
       lifecycle: "per-component",
       readiness: "required",
       credentialBoundary: "none",
@@ -415,7 +376,7 @@ function stageRole(
   switch (source) {
     case "resource":
       return "resource-host";
-    case "publication":
+    case "output":
       return "resource-host";
     case "secret":
       return "credential-source";
@@ -430,7 +391,7 @@ function stageLifecycle(
   switch (source) {
     case "resource":
       return "per-resource";
-    case "publication":
+    case "output":
       return "shared";
     case "secret":
       return "per-resource";
@@ -450,7 +411,6 @@ function credentialBoundaryFor(
     case "resource":
       return "resource-credential";
     case "output":
-    case "publication":
       return "none";
   }
 }
@@ -466,16 +426,16 @@ function credentialVisibilityFor(
     case "resource":
       return "mediator-only";
     case "output":
-    case "publication":
       return "consumer-runtime";
   }
 }
 
 function networkBoundaryFor(
   source: DeploymentBindingSource,
-  consume: PublicConsumeSpec,
+  spec: PublicComponentBindingSpec,
 ): CoreNetworkBoundary {
-  const access = consume.access;
+  const from = spec.from as { access?: unknown };
+  const access = from.access;
   const explicit = isRecord(access) ? access.networkBoundary : undefined;
   if (
     explicit === "internal" || explicit === "provider-internal" ||
@@ -483,13 +443,8 @@ function networkBoundaryFor(
   ) {
     return explicit;
   }
-  // Publications cross app boundaries — they are external by default. Secrets
-  // and provider-output bindings flow through the control plane (internal).
-  // Resource bindings are provider-internal: they reach the provider plane
-  // (e.g. RDS / D1) but never traverse the public internet.
   switch (source) {
     case "output":
-    case "publication":
       return "external";
     case "resource":
       return "provider-internal";
@@ -508,8 +463,6 @@ function isExternalEgressAllowed(
   binding: DeploymentBinding,
   policy: DeploymentRuntimeNetworkPolicy,
 ): boolean {
-  // `defaultEgress: "allow"` allow-lists everything by default. Otherwise we
-  // require an explicit `effect: "allow"` rule that targets the binding source.
   if (policy.defaultEgress === "allow") return true;
   const rules = policy.egressRules ?? [];
   for (const rule of rules) {
@@ -524,7 +477,6 @@ function matchesBinding(
   binding: DeploymentBinding,
 ): boolean {
   if (!to || to.length === 0) {
-    // A rule with no `to[]` matches everything (broad allow).
     return true;
   }
   for (const target of to) {
@@ -574,9 +526,6 @@ function componentAddress(name: string): ObjectAddress {
 }
 
 function addressLocalName(address: ObjectAddress): string {
-  // ObjectAddress shape: "<kind>:<name>". When the address comes via
-  // `objectAddress(...)` we always have a colon; defend defensively for the
-  // (impossible) un-prefixed case so the helper never throws on input data.
   const idx = address.indexOf(":");
   return idx >= 0 ? address.slice(idx + 1) : address;
 }

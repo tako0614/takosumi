@@ -15,7 +15,7 @@ export interface KmsRotationMetadataDto {
 }
 
 export interface KmsEnvelopeDto {
-  readonly version: "takos.kms.envelope.v1";
+  readonly version: "takosumi.kms.envelope.v1";
   readonly algorithm: "AES-256-GCM" | "PROVIDER-KMS" | "TEST-NOOP";
   readonly keyRef: KmsKeyRefDto;
   readonly iv: string;

@@ -46,12 +46,12 @@ import {
   type RuntimeAgentReport,
   type RuntimeAgentReportResponse,
   type SignedGatewayManifest,
-  signTakosInternalRequest,
-  TAKOS_GATEWAY_IDENTITY_NONCE_HEADER,
-  TAKOS_GATEWAY_IDENTITY_REQUEST_ID_HEADER,
-  TAKOS_GATEWAY_IDENTITY_SIGNATURE_HEADER,
-  TAKOS_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
-  type TakosActorContext,
+  signTakosumiInternalRequest,
+  TAKOSUMI_GATEWAY_IDENTITY_NONCE_HEADER,
+  TAKOSUMI_GATEWAY_IDENTITY_REQUEST_ID_HEADER,
+  TAKOSUMI_GATEWAY_IDENTITY_SIGNATURE_HEADER,
+  TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
+  type TakosumiActorContext,
   verifyGatewayManifest,
   verifyGatewayResponseSignature,
 } from "takosumi-contract";
@@ -62,8 +62,8 @@ const TAKOS_PAAS_AUDIENCE = "takos-paas";
 export interface RuntimeAgentHttpClientOptions {
   readonly baseUrl: string;
   readonly internalServiceSecret: string;
-  /** Used in {@link TakosActorContext} on every request. */
-  readonly actor: TakosActorContext;
+  /** Used in {@link TakosumiActorContext} on every request. */
+  readonly actor: TakosumiActorContext;
   /**
    * Base64-encoded Ed25519 public key the agent trusts to sign gateway
    * manifests. Operator-bootstrap installs this on the agent process (env
@@ -128,13 +128,13 @@ export class GatewayResponseSignatureError extends Error {
 
 /**
  * Minimal HTTP wrapper. Each call signs the request with the kernel's shared
- * internal-service secret using the canonical `signTakosInternalRequest` helper,
+ * internal-service secret using the canonical `signTakosumiInternalRequest` helper,
  * and verifies the kernel's Ed25519 identity signature on the response.
  */
 export class RuntimeAgentHttpClient {
   readonly #baseUrl: string;
   readonly #secret: string;
-  readonly #actor: TakosActorContext;
+  readonly #actor: TakosumiActorContext;
   readonly #fetch: typeof fetch;
   readonly #clock: () => Date;
   readonly #trustedManifestPubkey: string;
@@ -180,7 +180,7 @@ export class RuntimeAgentHttpClient {
     // Sign as a regular internal POST so the kernel can authorise the
     // bootstrap itself.
     const timestamp = this.#clock().toISOString();
-    const signed = await signTakosInternalRequest({
+    const signed = await signTakosumiInternalRequest({
       method: "POST",
       path: basePath,
       body,
@@ -297,7 +297,7 @@ export class RuntimeAgentHttpClient {
   ): Promise<TResponse> {
     const body = JSON.stringify(payload);
     const timestamp = this.#clock().toISOString();
-    const signed = await signTakosInternalRequest({
+    const signed = await signTakosumiInternalRequest({
       method: "POST",
       path,
       body,
@@ -345,16 +345,16 @@ export class RuntimeAgentHttpClient {
       throw new GatewayResponseSignatureError(input.path);
     }
     const signature = input.response.headers.get(
-      TAKOS_GATEWAY_IDENTITY_SIGNATURE_HEADER,
+      TAKOSUMI_GATEWAY_IDENTITY_SIGNATURE_HEADER,
     );
     const timestamp = input.response.headers.get(
-      TAKOS_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
+      TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
     );
     const requestId = input.response.headers.get(
-      TAKOS_GATEWAY_IDENTITY_REQUEST_ID_HEADER,
+      TAKOSUMI_GATEWAY_IDENTITY_REQUEST_ID_HEADER,
     );
     const nonce = input.response.headers.get(
-      TAKOS_GATEWAY_IDENTITY_NONCE_HEADER,
+      TAKOSUMI_GATEWAY_IDENTITY_NONCE_HEADER,
     );
     if (!signature || !timestamp || !requestId || !nonce) {
       throw new GatewayResponseSignatureError(input.path);

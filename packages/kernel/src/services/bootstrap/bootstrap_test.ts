@@ -18,7 +18,7 @@ Deno.test("standalone bootstrap selects explicit local adapters and redacts conf
       TAKOS_BOOTSTRAP_SOURCE_ADAPTER: "manifest",
       TAKOS_BOOTSTRAP_SECRET_ADAPTER: "memory",
       TAKOS_BOOTSTRAP_PROVIDER_ADAPTER: "noop",
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
       TAKOS_INTERNAL_SERVICE_SECRET: "super-secret",
       DATABASE_SECRET_REF: { name: "DATABASE_URL", version: "v1" },
     },
@@ -147,9 +147,9 @@ Deno.test("standalone bootstrap does not downgrade production unsafe adapters wi
       clock: fixedClock,
       env: {
         TAKOS_ENVIRONMENT: "production",
-        TAKOS_BOOTSTRAP_ALLOW_UNSAFE_DEFAULTS: "1",
+        TAKOSUMI_DEV_MODE: "1",
       },
-      include: ["TAKOS_ENVIRONMENT", "TAKOS_BOOTSTRAP_ALLOW_UNSAFE_DEFAULTS"],
+      include: ["TAKOS_ENVIRONMENT", "TAKOSUMI_DEV_MODE"],
     }),
     clock: fixedClock,
   }).bootstrap();

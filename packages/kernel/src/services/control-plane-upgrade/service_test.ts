@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { TakosActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract";
 import { DomainError } from "../../shared/errors.ts";
 import { ControlPlaneUpgradePlanner } from "./mod.ts";
 
@@ -76,7 +76,7 @@ Deno.test("ControlPlaneUpgradePlanner reports preflight results and migration sk
   assert.deepEqual(migration.steps, plan.migrationSteps);
 });
 
-function actor(roles: string[]): TakosActorContext {
+function actor(roles: string[]): TakosumiActorContext {
   return {
     actorAccountId: roles.includes("operator") ? "acct_operator" : "acct_user",
     roles,

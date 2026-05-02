@@ -303,7 +303,7 @@ export function projectDependencyLayer(
 ): StatusLayerProjection<DependencyLayerStatus> {
   const conditions = [
     ...(input.resourceConditions ?? []),
-    ...(input.publicationConditions ?? []),
+    ...(input.outputConditions ?? []),
   ].map((condition) =>
     withCatalogReason(condition, "ResourceCompatibilityFailed")
   );
@@ -878,7 +878,7 @@ function servingDegradedReason(input: {
 }): CoreConditionReason {
   if (input.degradedWorkload) return "RuntimeNotReady";
   if (input.degradedResource) return "ResourceCompatibilityFailed";
-  if (input.unreadyRoute) return "PublicationRouteUnavailable";
+  if (input.unreadyRoute) return "OutputRouteUnavailable";
   return input.diagnostics.length > 0
     ? "RuntimeReadinessUnknown"
     : "ServingDegraded";

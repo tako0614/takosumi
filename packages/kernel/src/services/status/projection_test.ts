@@ -71,7 +71,7 @@ const baseInput: GroupSummaryStatusProjectionInput = {
     routes: [{ routeId: "route_web", ready: true }],
   },
   resourceConditions: [{ type: "ResourcesReady", status: "true" }],
-  publicationConditions: [{ type: "PublicationsReady", status: "true" }],
+  outputConditions: [{ type: "OutputsReady", status: "true" }],
   securityConditions: [{ type: "SecurityPolicySatisfied", status: "true" }],
 };
 

@@ -1,7 +1,7 @@
-import { TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION } from "takosumi-contract";
+import { TAKOSUMI_KERNEL_PLUGIN_API_VERSION } from "takosumi-contract";
 import type {
   KernelPluginPortKind,
-  TakosPaaSKernelPluginManifest,
+  TakosumiKernelPluginManifest,
 } from "takosumi-contract";
 import type {
   KernelPluginAdapterOverrides,
@@ -107,7 +107,7 @@ export function assertPluginTrustedForEnvironment(
 }
 
 export function assertPluginAllowedForEnvironment(
-  manifest: TakosPaaSKernelPluginManifest,
+  manifest: TakosumiKernelPluginManifest,
   ports: readonly KernelPluginPortKind[],
   environment: string,
 ): void {
@@ -141,7 +141,7 @@ export function assertPluginAllowedForEnvironment(
 }
 
 export function assertValidPluginManifest(
-  manifest: TakosPaaSKernelPluginManifest,
+  manifest: TakosumiKernelPluginManifest,
 ): void {
   if (!manifest.id.trim()) throw new Error("kernel plugin id is required");
   if (!manifest.version.trim()) {
@@ -152,9 +152,9 @@ export function assertValidPluginManifest(
       `kernel plugin kernelApiVersion is required: ${manifest.id}`,
     );
   }
-  if (manifest.kernelApiVersion !== TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION) {
+  if (manifest.kernelApiVersion !== TAKOSUMI_KERNEL_PLUGIN_API_VERSION) {
     throw new Error(
-      `kernel plugin ${manifest.id} targets unsupported kernel API ${manifest.kernelApiVersion}; expected ${TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION}`,
+      `kernel plugin ${manifest.id} targets unsupported kernel API ${manifest.kernelApiVersion}; expected ${TAKOSUMI_KERNEL_PLUGIN_API_VERSION}`,
     );
   }
 }
@@ -172,7 +172,7 @@ function selectedPortsByPluginId(
 }
 
 function assertPluginSupportsSelectedPorts(
-  manifest: TakosPaaSKernelPluginManifest,
+  manifest: TakosumiKernelPluginManifest,
   ports: readonly KernelPluginPortKind[],
 ): void {
   const supportedPorts = new Set(
@@ -187,7 +187,7 @@ function assertPluginSupportsSelectedPorts(
 }
 
 function assertPluginProvidesSelectedAdapters(
-  manifest: TakosPaaSKernelPluginManifest,
+  manifest: TakosumiKernelPluginManifest,
   overrides: KernelPluginAdapterOverrides,
   ports: readonly KernelPluginPortKind[],
 ): void {
@@ -202,7 +202,7 @@ function assertPluginProvidesSelectedAdapters(
 }
 
 function selectedAdapterOverrides(
-  manifest: TakosPaaSKernelPluginManifest,
+  manifest: TakosumiKernelPluginManifest,
   overrides: KernelPluginAdapterOverrides,
   ports: readonly KernelPluginPortKind[],
   existing: KernelPluginAdapterOverrides,
@@ -241,7 +241,7 @@ function selectedAdapterOverrides(
 }
 
 function assertPluginDoesNotOverrideExistingAdapters(
-  manifest: TakosPaaSKernelPluginManifest,
+  manifest: TakosumiKernelPluginManifest,
   existing: KernelPluginAdapterOverrides,
   overrides: KernelPluginAdapterOverrides,
 ): void {

@@ -109,7 +109,7 @@ import {
   type JsonObject,
   type KernelPluginClientRegistry,
   type KernelPluginPortKind,
-  TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+  TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
 } from "takosumi-contract";
 import {
   InMemoryRuntimeAgentRegistry,
@@ -817,7 +817,7 @@ function createConfiguredPluginAdapters(
     registry,
     selectedPluginIds,
     context: {
-      kernelApiVersion: TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
       environment: options.runtimeConfig?.environment ?? "local",
       processRole: options.runtimeConfig?.processRole ?? "takosumi-api",
       selectedPluginIds,

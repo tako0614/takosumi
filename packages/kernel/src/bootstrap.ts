@@ -1,4 +1,12 @@
 import type { Hono as HonoApp } from "hono";
+import {
+  registerProvider,
+  registerShape,
+  registerTemplate,
+} from "takosumi-contract";
+import { TAKOSUMI_BUNDLED_SHAPES } from "@takos/takosumi-plugins/shapes";
+import { TAKOSUMI_BUNDLED_TEMPLATES } from "@takos/takosumi-plugins/templates";
+import { createTakosumiProductionProviders } from "@takos/takosumi-plugins/shape-providers/factories";
 import { createApiApp } from "./api/mod.ts";
 import type { ReadinessRouteProbes } from "./api/readiness_routes.ts";
 import {
@@ -7,6 +15,7 @@ import {
   type AppRuntimeConfig,
   createAppContext,
 } from "./app_context.ts";
+import { detectRuntimeAgent } from "./bootstrap/agent_detection.ts";
 import { loadRuntimeConfigFromEnv } from "./config/mod.ts";
 import { loadKernelPluginsFromEnv } from "./plugins/mod.ts";
 import { isPaaSProcessRole, type PaaSProcessRole } from "./process/mod.ts";
@@ -43,6 +52,7 @@ export async function createPaaSApp(
   const runtimeConfig = options.runtimeConfig ??
     await loadRuntimeConfigFromEnv({ env: runtimeEnv });
   const role = options.role ?? processRoleFromRuntimeConfig(runtimeConfig);
+  registerBundledShapesAndProviders(runtimeEnv);
   const context = options.context ?? await createAppContext({
     ...options,
     runtimeEnv,
@@ -84,6 +94,44 @@ function processRoleFromRuntimeConfig(
 ): PaaSProcessRole {
   const role = runtimeConfig.processRole;
   return role && isPaaSProcessRole(role) ? role : "takosumi-api";
+}
+
+let bundledShapesRegistered = false;
+
+/**
+ * Idempotently registers all bundled shapes, templates, and runtime-agent-
+ * backed providers into the global contract registry. Called once per
+ * `createPaaSApp` invocation; safe to call repeatedly.
+ *
+ * Provider registration only fires when `TAKOSUMI_AGENT_URL` and
+ * `TAKOSUMI_AGENT_TOKEN` are set — otherwise the kernel boots without
+ * providers (apply requests will fail with `provider not registered` until
+ * an agent is configured).
+ */
+export function registerBundledShapesAndProviders(
+  runtimeEnv: Record<string, string | undefined> = Deno.env.toObject(),
+): void {
+  if (!bundledShapesRegistered) {
+    for (const shape of TAKOSUMI_BUNDLED_SHAPES) registerShape(shape);
+    for (const template of TAKOSUMI_BUNDLED_TEMPLATES) registerTemplate(template);
+    bundledShapesRegistered = true;
+  }
+  const agent = detectRuntimeAgent(runtimeEnv);
+  if (!agent) {
+    console.warn(
+      "[takosumi-bootstrap] TAKOSUMI_AGENT_URL / TAKOSUMI_AGENT_TOKEN not set; " +
+        "no providers registered (apply requests will return provider_not_registered).",
+    );
+    return;
+  }
+  const providers = createTakosumiProductionProviders({
+    agentUrl: agent.agentUrl,
+    token: agent.token,
+  });
+  for (const provider of providers) registerProvider(provider);
+  console.log(
+    `[takosumi-bootstrap] registered ${providers.length} providers via agent at ${agent.agentUrl}`,
+  );
 }
 
 interface RoleWorkerDaemonOptions {

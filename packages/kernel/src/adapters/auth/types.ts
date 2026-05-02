@@ -1,7 +1,7 @@
-import type { TakosActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract";
 
 export type AuthResult =
-  | { readonly ok: true; readonly actor: TakosActorContext }
+  | { readonly ok: true; readonly actor: TakosumiActorContext }
   | { readonly ok: false; readonly error: string; readonly status: 401 | 403 };
 
 export interface AuthPort {
@@ -9,5 +9,5 @@ export interface AuthPort {
 }
 
 export interface ActorAdapter {
-  actorForRequest(request: Request): Promise<TakosActorContext>;
+  actorForRequest(request: Request): Promise<TakosumiActorContext>;
 }

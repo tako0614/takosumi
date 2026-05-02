@@ -1,14 +1,14 @@
 import {
   signInternalResponse as signInternalResponseContract,
-  TAKOS_INTERNAL_REQUEST_ID_HEADER,
-  TAKOS_INTERNAL_SIGNATURE_HEADER,
-  TAKOS_INTERNAL_SIGNATURE_MAX_SKEW_MS,
-  TAKOS_INTERNAL_TIMESTAMP_HEADER,
-  type TakosActorContext,
+  TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
+  TAKOSUMI_INTERNAL_SIGNATURE_HEADER,
+  TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS,
+  TAKOSUMI_INTERNAL_TIMESTAMP_HEADER,
+  type TakosumiActorContext,
   verifySignedInternalResponseFromHeaders,
 } from "takosumi-contract";
 import {
-  verifyTakosInternalRequestFromHeaders,
+  verifyTakosumiInternalRequestFromHeaders,
 } from "takosumi-contract/internal-rpc";
 import {
   InMemoryReplayProtectionStore,
@@ -39,7 +39,7 @@ export interface InternalAuthOptions {
 export type InternalAuthResult =
   | {
     readonly ok: true;
-    readonly actor: TakosActorContext;
+    readonly actor: TakosumiActorContext;
     readonly caller?: string;
     readonly audience?: string;
     readonly capabilities?: readonly string[];
@@ -64,7 +64,7 @@ export async function readInternalAuth(
 
   const body = await request.clone().text();
   const url = new URL(request.url);
-  const verified = await verifyTakosInternalRequestFromHeaders({
+  const verified = await verifyTakosumiInternalRequestFromHeaders({
     method: request.method,
     path: url.pathname,
     query: url.search,
@@ -101,7 +101,7 @@ function unauthorized(error: string): InternalAuthResult {
 }
 
 function readSignedWorkloadIdentityId(
-  actor: TakosActorContext,
+  actor: TakosumiActorContext,
   headers: Headers,
 ): string | false | undefined {
   const signedIdentityId = actor.serviceId ?? actor.agentId;
@@ -122,13 +122,13 @@ async function rememberRequestId(
   headers: Headers,
   options: InternalAuthOptions,
 ): Promise<boolean> {
-  const requestId = headers.get(TAKOS_INTERNAL_REQUEST_ID_HEADER);
-  const timestamp = headers.get(TAKOS_INTERNAL_TIMESTAMP_HEADER);
+  const requestId = headers.get(TAKOSUMI_INTERNAL_REQUEST_ID_HEADER);
+  const timestamp = headers.get(TAKOSUMI_INTERNAL_TIMESTAMP_HEADER);
   if (!requestId || !timestamp) return false;
   const issuedAt = Date.parse(timestamp);
   if (!Number.isFinite(issuedAt)) return false;
   const now = options.clock?.().getTime() ?? Date.now();
-  const ttl = options.maxClockSkewMs ?? TAKOS_INTERNAL_SIGNATURE_MAX_SKEW_MS;
+  const ttl = options.maxClockSkewMs ?? TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS;
   const expiresAt = expiryFrom(issuedAt, ttl);
   return await claimReplayNonce({
     namespace: "internal-request",
@@ -222,9 +222,9 @@ export async function verifyInternalResponse(
     throw new SignatureVerificationError("internal service secret missing");
   }
   const headers = response.headers;
-  const signature = headers.get(TAKOS_INTERNAL_SIGNATURE_HEADER);
-  const timestamp = headers.get(TAKOS_INTERNAL_TIMESTAMP_HEADER);
-  const requestId = headers.get(TAKOS_INTERNAL_REQUEST_ID_HEADER);
+  const signature = headers.get(TAKOSUMI_INTERNAL_SIGNATURE_HEADER);
+  const timestamp = headers.get(TAKOSUMI_INTERNAL_TIMESTAMP_HEADER);
+  const requestId = headers.get(TAKOSUMI_INTERNAL_REQUEST_ID_HEADER);
   if (!signature) {
     throw new SignatureVerificationError("missing signature header");
   }
@@ -239,7 +239,8 @@ export async function verifyInternalResponse(
   if (!Number.isFinite(issuedAt)) {
     throw new SignatureVerificationError("invalid timestamp");
   }
-  const skew = options.maxClockSkewMs ?? TAKOS_INTERNAL_SIGNATURE_MAX_SKEW_MS;
+  const skew = options.maxClockSkewMs ??
+    TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS;
   const now = (options.clock?.() ?? new Date()).getTime();
   if (Number.isFinite(skew) && Math.abs(now - issuedAt) > skew) {
     throw new SignatureVerificationError("expired timestamp");

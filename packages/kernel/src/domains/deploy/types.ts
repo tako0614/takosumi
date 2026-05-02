@@ -53,24 +53,20 @@ export interface PublicComputeSpec extends Record<string, unknown> {
   port?: number;
   env?: Record<string, string>;
   depends?: string[];
-  consume?: Array<JsonObject>;
+  bindings?: Record<string, PublicComponentBindingSpec>;
   requirements?: { runtimeCapabilities?: string[]; minInstances?: number };
 }
 
-export type PublicConsumeSpec = JsonObject & {
-  /**
-   * Legacy authoring alias. New manifests SHOULD use `output` (and may
-   * additionally express the binding under component-level `bindings:`).
-   */
-  publication?: string;
-  /** Canonical authoring keyword for selecting an Output as a binding source. */
-  output?: string;
-  resource?: string;
-  secret?: string;
-  inject?: JsonObject;
-  access?: JsonObject | string;
-  as?: string;
-};
+export type PublicComponentBindingSource =
+  | { resource: string; access: { contract: string; mode: string } | string }
+  | { output: string; field?: string; request?: JsonObject }
+  | { secret: string }
+  | { providerOutput: string; field: string };
+
+export interface PublicComponentBindingSpec {
+  from: PublicComponentBindingSource;
+  inject: { mode: string; target: string };
+}
 
 export interface PublicComputeRequirements {
   runtimeCapabilities?: string[];
@@ -95,7 +91,7 @@ export interface PublicRouteSpec extends Record<string, unknown> {
   source?: string;
 }
 
-export interface PublicPublishSpec extends Record<string, unknown> {
+export interface PublicOutputSpec extends Record<string, unknown> {
   name?: string;
   type: string;
   from?: string;
@@ -109,13 +105,8 @@ export interface PublicDeployManifest extends Record<string, unknown> {
   compute?: Record<string, PublicComputeSpec>;
   resources?: Record<string, PublicResourceSpec>;
   routes?: Record<string, PublicRouteSpec> | PublicRouteSpec[];
-  /**
-   * App-level Output declarations. New manifests SHOULD prefer `outputs`;
-   * `publications` is retained as a legacy alias and is folded into the
-   * canonical `outputs` map during expansion.
-   */
-  outputs?: Record<string, PublicPublishSpec> | PublicPublishSpec[];
-  publications?: Record<string, PublicPublishSpec> | PublicPublishSpec[];
+  /** App-level Output declarations. */
+  outputs?: Record<string, PublicOutputSpec> | PublicOutputSpec[];
   env?: Record<string, string>;
   overrides?: JsonObject;
 }
@@ -130,7 +121,7 @@ export interface AppSpecComponent {
   args?: string[];
   env: Record<string, string>;
   depends: string[];
-  consume: PublicConsumeSpec[];
+  bindings: Record<string, PublicComponentBindingSpec>;
   requirements?: PublicComputeRequirements;
   raw: PublicComputeSpec;
 }
@@ -158,13 +149,13 @@ export interface AppSpecRoute {
   raw: PublicRouteSpec;
 }
 
-export interface AppSpecPublication {
+export interface AppSpecOutput {
   name: string;
   type: string;
   from?: string;
   outputs: JsonObject;
   spec: JsonObject;
-  raw: PublicPublishSpec;
+  raw: PublicOutputSpec;
 }
 
 export interface AppSpec {
@@ -175,7 +166,7 @@ export interface AppSpec {
   components: AppSpecComponent[];
   resources: AppSpecResource[];
   routes: AppSpecRoute[];
-  publications: AppSpecPublication[];
+  outputs: AppSpecOutput[];
   env: Record<string, string>;
   overrides: JsonObject;
   /**

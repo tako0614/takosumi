@@ -1,0 +1,94 @@
+/**
+ * `MinioConnector` — selfhost object-store talking to a MinIO HTTP endpoint
+ * via the S3-compatible REST API (PUT/HEAD/DELETE bucket).
+ */
+
+import type {
+  JsonObject,
+  LifecycleApplyRequest,
+  LifecycleApplyResponse,
+  LifecycleDescribeRequest,
+  LifecycleDescribeResponse,
+  LifecycleDestroyRequest,
+  LifecycleDestroyResponse,
+} from "takosumi-contract";
+import type { Connector } from "../connector.ts";
+
+export interface MinioConnectorOptions {
+  readonly endpoint: string;
+  readonly region?: string;
+  readonly secretRefBase?: string;
+  readonly fetch?: typeof fetch;
+}
+
+export class MinioConnector implements Connector {
+  readonly provider = "minio";
+  readonly shape = "object-store@v1";
+  readonly #endpoint: string;
+  readonly #region: string;
+  readonly #secretBase: string;
+  readonly #fetch: typeof fetch;
+
+  constructor(opts: MinioConnectorOptions) {
+    this.#endpoint = opts.endpoint.replace(/\/$/, "");
+    this.#region = opts.region ?? "local";
+    this.#secretBase = opts.secretRefBase ?? "secret://selfhosted/minio";
+    this.#fetch = opts.fetch ?? fetch;
+  }
+
+  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+    const spec = req.spec as unknown as { name: string };
+    const response = await this.#fetch(`${this.#endpoint}/${spec.name}`, {
+      method: "PUT",
+    });
+    if (!response.ok && response.status !== 409 /* BucketAlreadyOwnedByYou */) {
+      throw new Error(
+        `minio create bucket failed: HTTP ${response.status} ${response.statusText}`,
+      );
+    }
+    return {
+      handle: spec.name,
+      outputs: this.#outputsFor(spec.name),
+    };
+  }
+
+  async destroy(
+    req: LifecycleDestroyRequest,
+  ): Promise<LifecycleDestroyResponse> {
+    const response = await this.#fetch(`${this.#endpoint}/${req.handle}`, {
+      method: "DELETE",
+    });
+    if (response.ok || response.status === 404) {
+      return { ok: true };
+    }
+    throw new Error(
+      `minio delete bucket failed: HTTP ${response.status} ${response.statusText}`,
+    );
+  }
+
+  async describe(
+    req: LifecycleDescribeRequest,
+  ): Promise<LifecycleDescribeResponse> {
+    const response = await this.#fetch(`${this.#endpoint}/${req.handle}`, {
+      method: "HEAD",
+    });
+    if (response.status === 404) return { status: "missing" };
+    if (!response.ok) {
+      throw new Error(`minio describe bucket failed: HTTP ${response.status}`);
+    }
+    return {
+      status: "running",
+      outputs: this.#outputsFor(req.handle),
+    };
+  }
+
+  #outputsFor(bucket: string): JsonObject {
+    return {
+      bucket,
+      endpoint: `${this.#endpoint}/${bucket}`,
+      region: this.#region,
+      accessKeyRef: `${this.#secretBase}/access-key`,
+      secretKeyRef: `${this.#secretBase}/secret-key`,
+    };
+  }
+}

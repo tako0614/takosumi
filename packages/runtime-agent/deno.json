@@ -1,0 +1,21 @@
+{
+  "name": "@takos/takosumi-runtime-agent",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/server.ts",
+    "./server": "./src/server.ts",
+    "./embed": "./src/embed.ts",
+    "./connectors": "./src/connectors/mod.ts",
+    "./dispatcher": "./src/lifecycle_dispatcher.ts"
+  },
+  "imports": {
+    "takosumi-contract": "jsr:@takos/takosumi-contract@^2.1.0",
+    "hono": "npm:hono@^4.12.4"
+  },
+  "tasks": {
+    "check": "bash -lc 'find src -name \"*.ts\" ! -name \"*_test.ts\" -print0 | xargs -0 deno check'",
+    "test": "deno test --allow-all",
+    "start": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/server.ts"
+  }
+}

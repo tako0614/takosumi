@@ -1,0 +1,25 @@
+{
+  "name": "@takos/takosumi-contract",
+  "version": "2.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts",
+    "./core-v1": "./src/core-v1.ts",
+    "./error-category": "./src/error-category.ts",
+    "./internal-api": "./src/internal-api.ts",
+    "./internal-rpc": "./src/internal-rpc.ts",
+    "./manifest-resource": "./src/manifest-resource.ts",
+    "./plugin": "./src/plugin.ts",
+    "./plugin-sdk": "./src/plugin-sdk.ts",
+    "./provider-plugin": "./src/provider-plugin.ts",
+    "./runtime-agent": "./src/runtime-agent.ts",
+    "./runtime-agent-lifecycle": "./src/runtime-agent-lifecycle.ts",
+    "./shape": "./src/shape.ts",
+    "./template": "./src/template.ts",
+    "./types": "./src/types.ts"
+  },
+  "tasks": {
+    "check": "bash -lc 'find src -name \"*.ts\" ! -name \"*_test.ts\" -print0 | xargs -0 deno check'",
+    "test": "deno test --allow-all"
+  }
+}

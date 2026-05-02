@@ -1,0 +1,251 @@
+# Quickstart — git clone から first deploy まで
+
+このドキュメントは Takosumi で **manifest を 1 本書いて、selfhosted / AWS / GCP
+/ Cloudflare / Azure / Kubernetes に deploy する** までの最短経路を示します。
+
+Takosumi は 2 つのコンポーネントで構成されます:
+
+- **kernel**: HTTP API、apply pipeline、state DB を管理。manifest を受けて
+  resource lifecycle を orchestrate するが、cloud SDK は **直接呼ばない**
+- **runtime-agent**: cloud REST API (SigV4 / OAuth) や local OS (`docker`,
+  `systemd`, filesystem) と実際に通信する executor。**credential はここに
+  だけ存在する**
+
+dev では `takosumi server` 1 コマンドが両方を 1 process で立ち上げます。
+production では別ホストでも同居でも OK。
+
+---
+
+## 1. CLI install
+
+```bash
+deno install -gA -n takosumi jsr:@takos/takosumi-cli
+takosumi version
+```
+
+---
+
+## 2. Local dev (zero-config)
+
+embedded agent が自動起動するので env 設定は最小限:
+
+```bash
+export TAKOSUMI_DEV_MODE=1
+takosumi server --port 8788 &
+# stdout: "embedded runtime-agent listening at http://127.0.0.1:8789"
+takosumi init my-app.yml --template selfhosted-single-vm
+takosumi deploy my-app.yml
+```
+
+`TAKOSUMI_DEV_MODE=1` は dev 用の単一 opt-out flag。plaintext secret /
+unencrypted DB / unsafe defaults を許可。production / staging では fail-closed。
+
+local dev では agent と kernel が同 process なので、env に置いた cloud
+credential はそのまま agent connector に届きます。
+
+---
+
+## 3. Self-hosted deploy (single VM、Docker / systemd)
+
+template `selfhosted-single-vm@v1` は VM 上に systemd / docker / filesystem /
+local Postgres / coredns で 1 台完結デプロイを構築します。
+
+`my-app.yml`:
+
+```yaml
+apiVersion: takosumi.dev/hosting/v1
+kind: TakosumiManifest
+metadata:
+  name: my-app
+template:
+  ref: selfhosted-single-vm@v1
+  inputs:
+    serviceName: api
+    image: ghcr.io/me/api:v1.0.0
+    port: 8080
+    domain: api.example.com
+```
+
+operator side (VM 上):
+
+```bash
+export TAKOSUMI_DATABASE_URL=postgresql://localhost/takosumi
+export TAKOSUMI_ENCRYPTION_KEY=$(openssl rand -base64 32)
+export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+
+# selfhosted connector の置き場 (任意、defaults あり)
+export TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT=/var/lib/takosumi/objects
+export TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR=/etc/systemd/system
+
+takosumi server --port 8788 &
+takosumi deploy my-app.yml \
+  --remote http://localhost:8788 \
+  --token $TAKOSUMI_DEPLOY_TOKEN
+```
+
+deploy 完了後 (embedded agent が selfhost connector で実行):
+
+- web service が systemd unit `takosumi-api.service` として常駐
+- Postgres は `docker run postgres` で立ち上がる (local-docker connector)
+- assets bucket は `/var/lib/takosumi/objects/assets/` に作成
+- domain は coredns local zone に登録
+
+---
+
+## 4. Cloud deploy (AWS / GCP / Cloudflare / Azure / Kubernetes)
+
+cloud credential を **agent host の env** に置きます。dev では同 process なので
+そのまま `takosumi server` を起動した shell に export するだけ:
+
+### AWS
+
+```bash
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_REGION=ap-northeast-1
+# optional: export AWS_SESSION_TOKEN=...
+# optional Fargate / RDS / Route53 knobs:
+# export TAKOSUMI_AWS_FARGATE_CLUSTER=my-cluster
+# export TAKOSUMI_AWS_FARGATE_SUBNET_IDS=subnet-aaa,subnet-bbb
+```
+
+connector: `aws-fargate` / `aws-rds` / `aws-s3` / `route53`
+
+### GCP
+
+```bash
+export GOOGLE_CLOUD_PROJECT=my-project
+export GOOGLE_CLOUD_REGION=asia-northeast1
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+```
+
+connector: `cloud-run` / `cloud-sql` / `gcp-gcs` / `cloud-dns`
+
+### Cloudflare
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID=...
+export CLOUDFLARE_API_TOKEN=...
+export CLOUDFLARE_ZONE_ID=...   # custom-domain 使う場合
+```
+
+connector: `cloudflare-container` / `cloudflare-r2` / `cloudflare-dns`
+
+### Azure
+
+```bash
+export AZURE_SUBSCRIPTION_ID=...
+export AZURE_RESOURCE_GROUP=my-rg
+export AZURE_LOCATION=eastus
+export AZURE_BEARER_TOKEN=$(az account get-access-token --query accessToken -o tsv)
+```
+
+connector: `azure-container-apps`
+
+### Kubernetes (k3s 等)
+
+```bash
+export TAKOSUMI_KUBERNETES_API_SERVER_URL=https://k8s.example/
+export TAKOSUMI_KUBERNETES_BEARER_TOKEN=$(cat /var/run/secrets/.../token)
+export TAKOSUMI_KUBERNETES_NAMESPACE=takosumi
+```
+
+connector: `k3s-deployment`
+
+---
+
+## 5. Production: kernel と agent を分離
+
+multi-host setup や credential 隔離が必要な場合、agent を別 host で立てて
+kernel から HTTP で叩きます:
+
+### Agent host (cloud credential を持つ host)
+
+```bash
+# AWS / GCP / Cloudflare / Azure / k8s の env を set
+export AWS_ACCESS_KEY_ID=... AWS_REGION=...
+
+takosumi runtime-agent serve --port 8789 --token mytoken
+# stdout:
+#   takosumi runtime-agent listening at http://127.0.0.1:8789
+#     TAKOSUMI_AGENT_URL=http://127.0.0.1:8789
+#     TAKOSUMI_AGENT_TOKEN=mytoken
+```
+
+`--env-file ./agent.env` で dotenv ファイルから env を流し込むこともできます。
+
+### Kernel host (credential を持たない)
+
+```bash
+export TAKOSUMI_ENVIRONMENT=production
+export TAKOSUMI_DATABASE_URL=postgresql://prod-db.internal/takosumi
+export TAKOSUMI_ENCRYPTION_KEY=$(openssl rand -base64 32)
+export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+
+# agent への接続情報
+export TAKOSUMI_AGENT_URL=https://agent.internal:8789
+export TAKOSUMI_AGENT_TOKEN=mytoken
+
+# 監査の external replication sink
+export TAKOSUMI_AUDIT_REPLICATION_KIND=s3
+export TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET=my-audit-logs
+export TAKOSUMI_AUDIT_RETENTION_DAYS=365
+
+takosumi migrate
+takosumi server --no-agent --port 8788 &
+```
+
+`--no-agent` で kernel の embedded agent spawn を抑止 (production では agent
+を別途立てるので不要)。
+
+### credential 境界
+
+- kernel は `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN` のみ持つ
+- AWS / GCP / etc の credential は **agent host にのみ存在**
+- kernel が compromised しても cloud credential は漏れない
+- multi-tenant では cloud account ごとに agent を分離可能
+
+---
+
+## 6. CLI コマンドリファレンス
+
+```
+takosumi deploy <manifest>            # apply (local mode in-process / remote mode HTTP)
+takosumi destroy <manifest>           # 逆順 destroy
+takosumi status [<name>]              # 現在の resource state
+takosumi plan <manifest>              # dry-run
+takosumi server [--port 8788]         # kernel + embedded agent 起動
+                [--no-agent]          # embedded agent 抑止 (production)
+                [--agent-port 8789]   # embedded agent の port 指定
+takosumi runtime-agent serve          # standalone agent 起動 (multi-host)
+                [--port 8789]
+                [--token <token>]
+                [--env-file <path>]
+takosumi migrate                      # DB migrations
+takosumi init [--template ...]        # manifest scaffold
+takosumi version
+```
+
+---
+
+## 7. troubleshooting
+
+| 症状 | 原因 |
+|---|---|
+| `Refusing to start takosumi with plaintext secret storage` | production mode で `TAKOSUMI_ENCRYPTION_KEY` 未設定 |
+| `Refusing to start takosumi against an unencrypted database` | production mode で DB at-rest encryption 未確認 (dev は `TAKOSUMI_DEV_MODE=1` で opt-out 可) |
+| `manifest.resources[] is required` | `template:` 指定なしで `resources:[]` も空 |
+| 401 from `/v1/deployments` | `TAKOSUMI_DEPLOY_TOKEN` 未設定 or token mismatch |
+| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set` | `takosumi server --no-agent` を使ったが external agent の URL を export してない、または embedded agent の起動に失敗 |
+| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found` | agent host に該当 cloud の credential が無い → connector が register されてない |
+| `runtime-agent /v1/lifecycle/apply failed: 401` | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない |
+
+---
+
+## 関連 docs
+
+- [Manifest spec](./manifest.md)
+- [Shape catalog](./shape-catalog.md)
+- [Provider plugins](./provider-plugins.md)
+- [Templates](./templates.md)
+- [Operator bootstrap](./operator-bootstrap.md) (kernel ↔ agent 連携の詳細)

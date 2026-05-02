@@ -9,14 +9,14 @@
 // What we pin in the closure:
 //   1. Authoring-expansion descriptor (`authoring.public-manifest-expansion@v1`)
 //      whenever the manifest used a sugar form that the compiler expanded into
-//      a canonical `runtime.*` / `resource.*` / `interface.*` / `publication.*`
+//      a canonical `runtime.*` / `resource.*` / `interface.*` / `output.*`
 //      contract instance shape. (Core spec § 5.)
 //   2. Runtime contract descriptors for every component (`runtime.js-worker@v1`,
 //      `runtime.oci-container@v1`, etc.) plus the `artifact.oci-image@v1`
 //      descriptor when the component pulls from a registry image.
 //   3. Resource contract descriptors for every declared resource.
 //   4. Interface contract descriptors for every route protocol.
-//   5. Publication contract descriptors for every publications entry.
+//   5. Output contract descriptors for every outputs entry.
 //   6. The shared JSON-LD context (`https://takos.dev/contexts/deploy.jsonld`)
 //      that all of the above use, recorded as a `jsonld-context` dependency.
 //
@@ -339,8 +339,8 @@ function collectSeeds(
     seeds.push({ ref: routeInterfaceRef(route) });
   }
   // Publication contracts.
-  for (const publication of appSpec.publications) {
-    seeds.push({ ref: publication.type });
+  for (const output of appSpec.outputs) {
+    seeds.push({ ref: output.type });
   }
   // Caller-provided extras (e.g. composite descriptor children, provider
   // selections decided upstream of the closure builder).
@@ -512,7 +512,7 @@ export function verifyClosureVersionCompatibility(
   const mismatches: ClosureVersionMismatch[] = [];
   for (const resolution of closure.resolutions) {
     const alias = resolution.alias ?? resolution.id;
-    // Only verify provider / runtime / resource / publication / interface
+    // Only verify provider / runtime / resource / output / interface
     // descriptors the live plugin set is expected to know about. The shared
     // JSON-LD context, authoring expansion descriptors, and synthetic
     // unknown descriptors are not provider-supplied and thus not checked.
@@ -646,8 +646,8 @@ function isPluginOwnedDescriptorAlias(alias: string): boolean {
   if (alias.startsWith("authoring.")) return false;
   if (alias.startsWith("https://takos.dev/contexts/")) return false;
   if (alias.startsWith("https://takos.dev/descriptors/unknown/")) return false;
-  // runtime / resource / interface / publication / provider aliases are
+  // runtime / resource / interface / output / provider aliases are
   // plugin-owned. URIs that resolve to a registry entry are also covered.
-  return /^(runtime|resource|interface|publication|provider|artifact)\./
+  return /^(runtime|resource|interface|output|provider|artifact)\./
     .test(alias) || /^https?:\/\//.test(alias);
 }

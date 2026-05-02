@@ -5,7 +5,7 @@ export type PackageKind =
   | "provider-package"
   | "resource-contract-package"
   | "data-contract-package"
-  | "publication-contract-package"
+  | "output-contract-package"
   | "native-schema"
   | "capability-profile";
 export type TrustLevel = "official" | "verified" | "local" | "untrusted";

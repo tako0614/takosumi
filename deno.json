@@ -1,12 +1,28 @@
 {
   "workspace": [
+    "./packages/contract",
+    "./packages/runtime-agent",
     "./packages/plugins",
     "./packages/kernel",
     "./packages/cli",
-    "./packages/all"
+    "./packages/all",
+    "./deploy/cloudflare"
   ],
   "imports": {
-    "takosumi-contract": "jsr:@takos/takosumi-contract@^1.0.0",
+    "takosumi-contract": "./packages/contract/mod.ts",
+    "takosumi-contract/core-v1": "./packages/contract/src/core-v1.ts",
+    "takosumi-contract/error-category": "./packages/contract/src/error-category.ts",
+    "takosumi-contract/internal-api": "./packages/contract/src/internal-api.ts",
+    "takosumi-contract/internal-rpc": "./packages/contract/src/internal-rpc.ts",
+    "takosumi-contract/manifest-resource": "./packages/contract/src/manifest-resource.ts",
+    "takosumi-contract/plugin": "./packages/contract/src/plugin.ts",
+    "takosumi-contract/plugin-sdk": "./packages/contract/src/plugin-sdk.ts",
+    "takosumi-contract/provider-plugin": "./packages/contract/src/provider-plugin.ts",
+    "takosumi-contract/runtime-agent": "./packages/contract/src/runtime-agent.ts",
+    "takosumi-contract/runtime-agent-lifecycle": "./packages/contract/src/runtime-agent-lifecycle.ts",
+    "takosumi-contract/shape": "./packages/contract/src/shape.ts",
+    "takosumi-contract/template": "./packages/contract/src/template.ts",
+    "takosumi-contract/types": "./packages/contract/src/types.ts",
     "hono": "npm:hono@^4.12.4"
   },
   "compilerOptions": {

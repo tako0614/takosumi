@@ -1,7 +1,11 @@
 import { createPaaSApp } from "./bootstrap.ts";
 import type { Hono as HonoApp } from "hono";
 import type { PaaSProcessRole } from "./process/mod.ts";
-import { loadRuntimeConfigFromEnv, RuntimeConfigError } from "./config/mod.ts";
+import {
+  loadRuntimeConfigFromEnv,
+  RuntimeConfigError,
+  warnIfDevMode,
+} from "./config/mod.ts";
 import { StorageMigrationRunner } from "./adapters/storage/migration-runner/mod.ts";
 import {
   SecretEncryptionConfigurationError,
@@ -28,6 +32,7 @@ import type {
 } from "./adapters/storage/sql.ts";
 
 const runtimeEnv: Record<string, string> = Deno.env.toObject();
+warnIfDevMode(runtimeEnv);
 const runtimeConfig = await loadRuntimeConfigFromEnv({ env: runtimeEnv })
   .catch((error) => fatalStartupError(error));
 assertSecretEncryptionConfigured(runtimeEnv);
@@ -374,7 +379,7 @@ function dirname(path: string): string {
  * Phase 18 boot guard: refuse to start with plaintext (base64-only) secret
  * storage. Production / staging always require an encryption key. Local /
  * development environments require either a key or an explicit opt-in via
- * `TAKOS_ALLOW_PLAINTEXT_SECRETS=1` to acknowledge the insecure default.
+ * `TAKOSUMI_DEV_MODE=1` to acknowledge the insecure default.
  *
  * Tests / harnesses that drive `createPaaSApp` directly can inject an
  * explicit test crypto adapter; this boot entrypoint always validates runtime
@@ -402,7 +407,7 @@ function assertSecretEncryptionConfigured(
 /**
  * Phase 18.3 M7 boot guard: refuse to start when the configured database
  * lacks at-rest encryption in production / staging. Local / dev opt-in via
- * `TAKOS_ALLOW_UNENCRYPTED_DB=1`.
+ * `TAKOSUMI_DEV_MODE=1`.
  */
 function assertDatabaseEncryptionConfigured(
   env: Record<string, string | undefined>,
@@ -413,7 +418,7 @@ function assertDatabaseEncryptionConfigured(
       console.log(
         `[paas-init] db at-rest encryption: ${assertion.evidence}` +
           (assertion.overrideAccepted
-            ? " (TAKOS_ALLOW_UNENCRYPTED_DB override accepted)"
+            ? " (TAKOSUMI_DEV_MODE override accepted)"
             : ""),
       );
     }

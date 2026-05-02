@@ -6,7 +6,7 @@ import {
 } from "./app_context.ts";
 import {
   type KernelPluginPortKind,
-  TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+  TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
 } from "takosumi-contract";
 import { NoopProviderMaterializer } from "./adapters/provider/mod.ts";
 import { ImmutableManifestSourceAdapter } from "./adapters/source/mod.ts";
@@ -69,7 +69,7 @@ Deno.test("createInMemoryAppContext backs default runtime-agent registry with st
 Deno.test("createConfiguredAppContext wires selected reference plugin adapters from runtime config env", async () => {
   const context = await createConfiguredAppContext({
     runtimeEnv: {
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
       TAKOS_PROVIDER_PLUGIN: "takos.kernel.reference",
       TAKOS_SOURCE_PLUGIN: "takos.kernel.reference",
     },
@@ -84,7 +84,7 @@ Deno.test("createConfiguredAppContext wires selected kernel plugin adapters", as
   const context = await createConfiguredAppContext({
     plugins: [createReferenceKernelPlugin()],
     runtimeEnv: {
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
       TAKOS_STORAGE_PLUGIN: "takos.kernel.reference",
       TAKOS_PROVIDER_PLUGIN: "takos.kernel.reference",
       TAKOS_SOURCE_PLUGIN: "takos.kernel.reference",
@@ -102,7 +102,7 @@ Deno.test("createConfiguredAppContext uses selected storage plugin for canonical
   const context = await createConfiguredAppContext({
     plugins: [createReferenceKernelPlugin()],
     runtimeEnv: {
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
       TAKOS_STORAGE_PLUGIN: "takos.kernel.reference",
       TAKOS_PROVIDER_PLUGIN: "takos.kernel.reference",
     },
@@ -127,7 +127,7 @@ Deno.test("createConfiguredAppContext storage deploy store exposes only implemen
   const context = await createConfiguredAppContext({
     plugins: [createReferenceKernelPlugin()],
     runtimeEnv: {
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
       TAKOS_STORAGE_PLUGIN: "takos.kernel.reference",
       TAKOS_PROVIDER_PLUGIN: "takos.kernel.reference",
     },
@@ -145,7 +145,7 @@ Deno.test("createConfiguredAppContext storage plugin backs runtime usage and ser
   const context = await createConfiguredAppContext({
     plugins: [createReferenceKernelPlugin()],
     runtimeEnv: {
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
       TAKOS_STORAGE_PLUGIN: "takos.kernel.reference",
       TAKOS_PROVIDER_PLUGIN: "takos.kernel.reference",
     },
@@ -327,7 +327,7 @@ Deno.test("createConfiguredAppContext wires explicitly injected external plugin"
   const context = await createConfiguredAppContext({
     plugins: [plugin],
     runtimeEnv: {
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
       TAKOS_PROVIDER_PLUGIN: plugin.manifest.id,
       TAKOS_STORAGE_PLUGIN: plugin.manifest.id,
       TAKOS_OBJECT_STORAGE_PLUGIN: plugin.manifest.id,
@@ -390,7 +390,7 @@ function createExternalReferenceBackedKernelPlugin(
       id,
       name: "External Reference Backed Test Plugin",
       version: "1.0.0",
-      kernelApiVersion: TAKOS_PAAS_KERNEL_PLUGIN_API_VERSION,
+      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
       capabilities: productionRequiredPorts.map((port) => ({
         port,
         kind: "external-test",

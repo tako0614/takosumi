@@ -1,8 +1,6 @@
 import {
   CORE_CONDITION_REASONS,
-  TAKOS_AGENT_CONTROL_INTERNAL_ENDPOINTS,
-  TAKOS_AGENT_CONTROL_INTERNAL_PREFIX,
-  TAKOS_PAAS_INTERNAL_PATHS,
+  TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
 import { TAKOS_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
 import { TAKOS_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
@@ -43,7 +41,6 @@ export interface OpenApiOperation {
 export interface CreatePaaSOpenApiDocumentOptions {
   readonly publicRoutesMounted?: boolean;
   readonly internalRoutesMounted?: boolean;
-  readonly agentControlRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
   readonly readinessRoutesMounted?: boolean;
 }
@@ -228,7 +225,7 @@ export function createPaaSOpenApiDocument(
           mountedPath: TAKOS_PAAS_PUBLIC_PATHS.groupRollback,
         }),
       },
-      [TAKOS_PAAS_INTERNAL_PATHS.spaces]: {
+      [TAKOSUMI_INTERNAL_PATHS.spaces]: {
         get: operation({
           operationId: "listInternalSpaces",
           summary: "Lists internal space summaries visible to the actor.",
@@ -246,7 +243,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "SpaceResponse",
         }),
       },
-      [TAKOS_PAAS_INTERNAL_PATHS.groups]: {
+      [TAKOSUMI_INTERNAL_PATHS.groups]: {
         get: operation({
           operationId: "listInternalGroups",
           summary: "Lists groups for a space through the internal service API.",
@@ -265,7 +262,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "GroupResponse",
         }),
       },
-      [TAKOS_PAAS_INTERNAL_PATHS.deployments]: {
+      [TAKOSUMI_INTERNAL_PATHS.deployments]: {
         post: operation({
           operationId: "resolveInternalDeployment",
           summary:
@@ -276,7 +273,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "DeploymentMutationResponse",
         }),
       },
-      [TAKOS_PAAS_INTERNAL_PATHS.deploymentApply]: {
+      [TAKOSUMI_INTERNAL_PATHS.deploymentApply]: {
         post: operation({
           operationId: "applyInternalDeployment",
           summary:
@@ -289,7 +286,6 @@ export function createPaaSOpenApiDocument(
           okSchema: "DeploymentMutationResponse",
         }),
       },
-      ...agentControlPathItems(),
       [TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll]: {
         post: operation({
           operationId: "enrollRuntimeAgent",
@@ -412,7 +408,6 @@ function filterMountedRouteFamilies(
     "process",
     ...(options.publicRoutesMounted ? ["public"] : []),
     ...(options.internalRoutesMounted ? ["internal"] : []),
-    ...(options.agentControlRoutesMounted ? ["agent-control"] : []),
     ...(options.runtimeAgentRoutesMounted ? ["runtime-agent"] : []),
     ...(options.readinessRoutesMounted ? ["readiness", "status"] : []),
   ]);
@@ -435,34 +430,6 @@ function filterMountedRouteFamilies(
   };
 }
 
-function agentControlPathItems(): Record<string, OpenApiPathItem> {
-  return Object.fromEntries(
-    TAKOS_AGENT_CONTROL_INTERNAL_ENDPOINTS.map((endpoint) => [
-      `${TAKOS_AGENT_CONTROL_INTERNAL_PREFIX}/${endpoint}`,
-      {
-        post: operation({
-          operationId: `agentControl${toPascalCase(endpoint)}`,
-          summary:
-            "Proxies agent execution control RPC through the PaaS-owned internal API.",
-          tag: "agent-control",
-          auth: "internal-service",
-          requestSchema: "AgentControlRequest",
-          okSchema: "AgentControlResponse",
-        }),
-      },
-    ]),
-  );
-}
-
-function toPascalCase(value: string): string {
-  return value
-    .split("-")
-    .map((part) =>
-      part.length === 0 ? "" : `${part[0].toUpperCase()}${part.slice(1)}`
-    )
-    .join("");
-}
-
 function operation(input: {
   readonly operationId: string;
   readonly summary: string;
@@ -470,7 +437,6 @@ function operation(input: {
     | "process"
     | "public"
     | "internal"
-    | "agent-control"
     | "runtime-agent"
     | "readiness"
     | "status";
@@ -824,8 +790,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    AgentControlRequest: jsonObject,
-    AgentControlResponse: jsonObject,
     DeploymentMutationResponse: {
       type: "object",
       required: ["deployment_id", "status", "conditions"],

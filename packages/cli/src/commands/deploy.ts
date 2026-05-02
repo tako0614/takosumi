@@ -46,11 +46,15 @@ export const deployCommand = new Command()
       Deno.exit(1);
     }
 
-    console.log(`local mode: applying ${resources.length} resource(s) in-process`);
+    console.log(
+      `local mode: applying ${resources.length} resource(s) in-process`,
+    );
     const outcome = await applyLocal(resources);
     if (outcome.status !== "succeeded") {
       console.error(`apply ${outcome.status}:`);
-      for (const issue of outcome.issues) console.error(`  - ${issue.path}: ${issue.message}`);
+      for (const issue of outcome.issues) {
+        console.error(`  - ${issue.path}: ${issue.message}`);
+      }
       Deno.exit(1);
     }
     for (const applied of outcome.applied) {

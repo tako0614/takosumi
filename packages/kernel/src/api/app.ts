@@ -9,10 +9,6 @@ import { createCoreDomainServices } from "../domains/core/mod.ts";
 import type { PublicDeployManifest } from "../domains/deploy/mod.ts";
 import { assertRoleCapability, type PaaSProcessRole } from "../process/mod.ts";
 import { createApiCapabilitiesDescription } from "./capabilities.ts";
-import {
-  registerAgentControlRoutes,
-  type RegisterAgentControlRoutesOptions,
-} from "./agent_control_routes.ts";
 import { registerApiErrorHandler } from "./errors.ts";
 import { createPaaSOpenApiDocument, type OpenApiDocument } from "./openapi.ts";
 import {
@@ -50,8 +46,6 @@ export interface CreateApiAppOptions {
   readonly publicRouteServices?: PublicRouteServices;
   readonly getInternalServiceSecret?: () => string | undefined;
   readonly registerInternalRoutes?: boolean;
-  readonly registerAgentControlRoutes?: boolean;
-  readonly agentControlRouteOptions?: RegisterAgentControlRoutesOptions;
   readonly registerPublicRoutes?: boolean;
   readonly registerOpenApiRoute?: boolean;
   readonly registerReadinessRoutes?: boolean;
@@ -93,8 +87,6 @@ export async function createApiApp(
 
   const internalRoutesMounted = options.registerInternalRoutes ??
     role === "takosumi-api";
-  const agentControlRoutesMounted = options.registerAgentControlRoutes ??
-    internalRoutesMounted;
   const publicRoutesMounted = options.registerPublicRoutes ?? false;
   const runtimeAgentRoutesMounted = options.registerRuntimeAgentRoutes ??
     role === "takosumi-runtime-agent";
@@ -103,9 +95,6 @@ export async function createApiApp(
   const readinessRoutesMounted = options.registerReadinessRoutes ?? false;
 
   if (internalRoutesMounted) assertRoleCapability(role, "api.internal.host");
-  if (agentControlRoutesMounted) {
-    assertRoleCapability(role, "api.internal.host");
-  }
   if (publicRoutesMounted) assertRoleCapability(role, "api.public.host");
   if (runtimeAgentRoutesMounted) {
     assertRoleCapability(role, "runtime.agent.lease");
@@ -115,7 +104,6 @@ export async function createApiApp(
   app.get("/capabilities", (c) => {
     return c.json(createApiCapabilitiesDescription(role, {
       internalRoutesMounted,
-      agentControlRoutesMounted,
       publicRoutesMounted,
       runtimeAgentRoutesMounted,
       openApiRouteMounted,
@@ -128,13 +116,6 @@ export async function createApiApp(
       services: options.internalRouteServices ??
         (await defaultRouteServices).internal,
       getInternalServiceSecret: options.getInternalServiceSecret,
-    });
-  }
-
-  if (agentControlRoutesMounted) {
-    registerAgentControlRoutes(app, {
-      getInternalServiceSecret: options.getInternalServiceSecret,
-      ...options.agentControlRouteOptions,
     });
   }
 
@@ -160,7 +141,6 @@ export async function createApiApp(
       (() =>
         createPaaSOpenApiDocument({
           internalRoutesMounted,
-          agentControlRoutesMounted,
           publicRoutesMounted,
           runtimeAgentRoutesMounted,
           readinessRoutesMounted,

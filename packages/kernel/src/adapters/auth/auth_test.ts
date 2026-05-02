@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { TakosActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract";
 import { LocalActorAdapter, ServiceActorAuthAdapter } from "./mod.ts";
 
 Deno.test("local actor adapter returns configured actor", async () => {
@@ -81,6 +81,6 @@ Deno.test("service actor adapter binds signed requests to the query string", asy
 function actorContext(
   actorAccountId: string,
   requestId: string,
-): TakosActorContext {
+): TakosumiActorContext {
   return { actorAccountId, requestId, roles: ["owner"] };
 }

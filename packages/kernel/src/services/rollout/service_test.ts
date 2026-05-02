@@ -38,11 +38,11 @@ Deno.test("buildHttpWeightedAssignmentModel splits primary/canary weights for HT
     "release_primary",
   );
   assert.equal(
-    model.nonHttpDefaults.publications.defaultAppReleaseId,
+    model.nonHttpDefaults.outputs.defaultAppReleaseId,
     "release_primary",
   );
   assert.equal(model.nonHttpDefaults.events.reason, "http-only-canary");
-  assert.equal(model.nonHttpDefaults.publications.reason, "http-only-canary");
+  assert.equal(model.nonHttpDefaults.outputs.reason, "http-only-canary");
 });
 
 Deno.test("buildHttpWeightedAssignmentModel rejects out-of-range canary weights", () => {
@@ -267,9 +267,9 @@ function sampleManifest(): PublicDeployManifest {
       },
       events: { target: "web", protocol: "event" },
     },
-    publications: {
+    outputs: {
       updates: {
-        type: "publication.topic@v1",
+        type: "output.topic@v1",
         from: "web",
         outputs: { event: { routeRef: "events" } },
       },

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import {
-  TAKOS_INTERNAL_SIGNATURE_HEADER,
-  TAKOS_INTERNAL_TIMESTAMP_HEADER,
-  type TakosActorContext,
+  TAKOSUMI_INTERNAL_SIGNATURE_HEADER,
+  TAKOSUMI_INTERNAL_TIMESTAMP_HEADER,
+  type TakosumiActorContext,
 } from "takosumi-contract";
-import { signTakosInternalRequest } from "takosumi-contract/internal-rpc";
+import { signTakosumiInternalRequest } from "takosumi-contract/internal-rpc";
 import {
   readInternalAuth,
   SignatureVerificationError,
@@ -21,7 +21,7 @@ import type {
   SqlQueryResult,
 } from "../adapters/storage/sql.ts";
 
-const actor: TakosActorContext = {
+const actor: TakosumiActorContext = {
   actorAccountId: "acct_internal",
   principalKind: "service",
   roles: ["owner"],
@@ -138,7 +138,7 @@ Deno.test("verifyInternalResponse rejects responses missing the signature header
     timestamp: "2026-04-30T00:00:00.000Z",
   });
   const headers = new Headers(signed.headers);
-  headers.delete(TAKOS_INTERNAL_SIGNATURE_HEADER);
+  headers.delete(TAKOSUMI_INTERNAL_SIGNATURE_HEADER);
   const stripped = new Response(body, { status: signed.status, headers });
   await assert.rejects(
     () =>
@@ -232,7 +232,7 @@ Deno.test("signInternalResponse + verifyInternalResponse fail-closed on missing 
     timestamp: "2026-04-30T00:00:00.000Z",
   });
   const headers = new Headers(signed.headers);
-  headers.delete(TAKOS_INTERNAL_TIMESTAMP_HEADER);
+  headers.delete(TAKOSUMI_INTERNAL_TIMESTAMP_HEADER);
   const stripped = new Response(body, { status: signed.status, headers });
   await assert.rejects(
     () =>
@@ -274,7 +274,7 @@ async function signedRequest(input: {
 }): Promise<Request> {
   const body = JSON.stringify({ ok: true });
   const path = "/api/internal/v1/test";
-  const signed = await signTakosInternalRequest({
+  const signed = await signTakosumiInternalRequest({
     method: "POST",
     path,
     query: input.query,

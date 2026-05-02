@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { TAKOS_PAAS_INTERNAL_PATHS } from "takosumi-contract";
+import { TAKOSUMI_INTERNAL_PATHS } from "takosumi-contract";
 import { TAKOS_PAAS_READINESS_PATHS } from "./api/readiness_routes.ts";
 import { createPaaSApp } from "./bootstrap.ts";
 
 Deno.test("createPaaSApp uses validated runtime config role and keeps worker internal API unmounted", async () => {
   const created = await createPaaSApp({
     runtimeEnv: {
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
       TAKOS_PAAS_PROCESS_ROLE: "takosumi-worker",
     },
     startWorkerDaemon: false,
@@ -15,14 +15,14 @@ Deno.test("createPaaSApp uses validated runtime config role and keeps worker int
   assert.equal(created.role, "takosumi-worker");
   assert.equal(created.workerDaemon, undefined);
 
-  const internal = await created.app.request(TAKOS_PAAS_INTERNAL_PATHS.spaces);
+  const internal = await created.app.request(TAKOSUMI_INTERNAL_PATHS.spaces);
   assert.equal(internal.status, 404);
 });
 
 Deno.test("createPaaSApp readiness fails closed when API internal secret is missing", async () => {
   const created = await createPaaSApp({
     runtimeEnv: {
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
       TAKOS_PAAS_PROCESS_ROLE: "takosumi-api",
     },
   });
@@ -35,7 +35,7 @@ Deno.test("createPaaSApp readiness fails closed when API internal secret is miss
 Deno.test("createPaaSApp readiness fails closed when worker daemon is disabled", async () => {
   const created = await createPaaSApp({
     runtimeEnv: {
-      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOSUMI_DEV_MODE: "1",
       TAKOS_PAAS_PROCESS_ROLE: "takosumi-worker",
     },
     startWorkerDaemon: false,

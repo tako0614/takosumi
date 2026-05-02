@@ -127,14 +127,14 @@ Deno.test("assertDatabaseEncryptionAtRest rejects plain sqlite in production", (
   );
 });
 
-Deno.test("assertDatabaseEncryptionAtRest production ignores TAKOS_ALLOW_UNENCRYPTED_DB override", () => {
+Deno.test("assertDatabaseEncryptionAtRest production ignores TAKOSUMI_DEV_MODE override", () => {
   assert.throws(
     () =>
       assertDatabaseEncryptionAtRest({
         env: {
           TAKOS_ENVIRONMENT: "production",
           DATABASE_URL: "postgres://user:pass@db.example.com:5432/takos",
-          TAKOS_ALLOW_UNENCRYPTED_DB: "1",
+          TAKOSUMI_DEV_MODE: "1",
         },
       }),
     DatabaseEncryptionConfigurationError,
@@ -153,12 +153,12 @@ Deno.test("assertDatabaseEncryptionAtRest local without override still allows bo
   assert.equal(result.required, false);
 });
 
-Deno.test("assertDatabaseEncryptionAtRest local with TAKOS_ALLOW_UNENCRYPTED_DB sets overrideAccepted", () => {
+Deno.test("assertDatabaseEncryptionAtRest local with TAKOSUMI_DEV_MODE sets overrideAccepted", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOS_ENVIRONMENT: "local",
       DATABASE_URL: "postgres://user:pass@localhost:5432/takos",
-      TAKOS_ALLOW_UNENCRYPTED_DB: "1",
+      TAKOSUMI_DEV_MODE: "1",
     },
   });
   assert.equal(result.satisfied, true);

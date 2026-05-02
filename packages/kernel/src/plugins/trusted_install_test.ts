@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { TakosPaaSKernelPluginManifest } from "takosumi-contract";
+import type { TakosumiKernelPluginManifest } from "takosumi-contract";
 import {
   canonicalTrustedKernelPluginManifest,
   installTrustedKernelPlugins,
@@ -210,7 +210,7 @@ Deno.test("trusted kernel plugin install rejects mismatched implementation prove
 });
 
 async function signedFixture(
-  overrides: Partial<TakosPaaSKernelPluginManifest> = {},
+  overrides: Partial<TakosumiKernelPluginManifest> = {},
 ) {
   const keyPair = await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
@@ -221,7 +221,7 @@ async function signedFixture(
     "jwk",
     keyPair.publicKey,
   );
-  const manifest: TakosPaaSKernelPluginManifest = {
+  const manifest: TakosumiKernelPluginManifest = {
     id: "takos.provider.trusted",
     name: "Trusted Provider",
     version: "1.0.0",
@@ -257,7 +257,7 @@ async function signedFixture(
 }
 
 function plugin(
-  manifest: TakosPaaSKernelPluginManifest,
+  manifest: TakosumiKernelPluginManifest,
 ): TakosPaaSKernelPlugin {
   return {
     manifest,

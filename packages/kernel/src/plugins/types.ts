@@ -1,6 +1,6 @@
 import type {
   KernelPluginInitContext,
-  TakosPaaSKernelPluginManifest,
+  TakosumiKernelPluginManifest,
 } from "takosumi-contract";
 import type { AppAdapters } from "../app_context.ts";
 
@@ -13,7 +13,7 @@ export interface KernelPluginCreateAdaptersContext
 }
 
 export interface TakosPaaSKernelPlugin {
-  readonly manifest: TakosPaaSKernelPluginManifest;
+  readonly manifest: TakosumiKernelPluginManifest;
   readonly trustedInstall?: TrustedKernelPluginSelectionMetadata;
   createAdapters(
     context: KernelPluginCreateAdaptersContext,

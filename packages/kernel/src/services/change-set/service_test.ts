@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { DomainError } from "../../shared/errors.ts";
 import { buildChangeSetPartialSuccessResult, ChangeSetPlanner } from "./mod.ts";
 
-Deno.test("change-set planner orders groups before publication/event/resource changes", () => {
+Deno.test("change-set planner orders groups before output/event/resource changes", () => {
   const plan = new ChangeSetPlanner().plan({
     id: "plan-ordering",
     changes: [
@@ -12,16 +12,16 @@ Deno.test("change-set planner orders groups before publication/event/resource ch
         id: "resource-db",
         kind: "resource",
         groupId: "api",
-        dependsOn: ["publication-api"],
+        dependsOn: ["output-api"],
       }),
-      change({ id: "publication-api", kind: "publication", groupId: "api" }),
+      change({ id: "output-api", kind: "output", groupId: "api" }),
     ],
   });
 
   assert.deepEqual(plan.topologicalOrder, [
     "group-api",
     "event-consumer",
-    "publication-api",
+    "output-api",
     "resource-db",
   ]);
   assert.equal(plan.executionSemantics.distributedTransaction, false);
@@ -32,7 +32,7 @@ Deno.test("change-set planner orders groups before publication/event/resource ch
   );
   assert.deepEqual(
     plan.nodes.find((node) => node.change.id === "resource-db")?.dependencies,
-    ["group-api", "publication-api"],
+    ["group-api", "output-api"],
   );
 });
 
@@ -42,14 +42,14 @@ Deno.test("change-set planner blocks dependency cycles", () => {
       new ChangeSetPlanner().plan({
         changes: [
           change({
-            id: "publication-api",
-            kind: "publication",
+            id: "output-api",
+            kind: "output",
             dependsOn: ["event-api"],
           }),
           change({
             id: "event-api",
             kind: "event",
-            dependsOn: ["publication-api"],
+            dependsOn: ["output-api"],
           }),
         ],
       }),
@@ -63,12 +63,12 @@ Deno.test("change-set partial success result keeps succeeded changes and skips d
     id: "plan-partial",
     changes: [
       change({ id: "group-api", kind: "group", groupId: "api" }),
-      change({ id: "publication-api", kind: "publication", groupId: "api" }),
+      change({ id: "output-api", kind: "output", groupId: "api" }),
       change({
         id: "event-api",
         kind: "event",
         groupId: "api",
-        dependsOn: ["publication-api"],
+        dependsOn: ["output-api"],
       }),
       change({ id: "resource-cache", kind: "resource" }),
     ],
@@ -77,7 +77,7 @@ Deno.test("change-set partial success result keeps succeeded changes and skips d
   const result = buildChangeSetPartialSuccessResult(plan, [
     { changeId: "group-api", status: "succeeded" },
     {
-      changeId: "publication-api",
+      changeId: "output-api",
       status: "failed",
       message: "contract rejected",
     },
@@ -98,8 +98,8 @@ Deno.test("change-set partial success result keeps succeeded changes and skips d
     ) => [entry.changeId, entry.status, entry.blockedBy]),
     [
       ["group-api", "succeeded", []],
-      ["publication-api", "failed", []],
-      ["event-api", "skipped", ["publication-api"]],
+      ["output-api", "failed", []],
+      ["event-api", "skipped", ["output-api"]],
       ["resource-cache", "succeeded", []],
     ],
   );
@@ -108,7 +108,7 @@ Deno.test("change-set partial success result keeps succeeded changes and skips d
 function change(
   overrides: {
     readonly id: string;
-    readonly kind: "group" | "publication" | "event" | "resource";
+    readonly kind: "group" | "output" | "event" | "resource";
     readonly groupId?: string;
     readonly dependsOn?: readonly string[];
   },
