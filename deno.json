@@ -1,22 +1,10 @@
 {
-  "name": "@takos/takosumi",
-  "version": "0.1.0",
-  "license": "MIT",
-  "exports": {
-    ".": "./src/mod.ts",
-    "./gateway": "./src/gateway/mod.ts",
-    "./shapes": "./src/shapes/mod.ts",
-    "./shape-providers": "./src/shape-providers/mod.ts",
-    "./shape-providers/factories": "./src/shape-providers/factories.ts",
-    "./templates": "./src/templates/mod.ts",
-    "./providers/selfhosted": "./src/providers/selfhosted/mod.ts",
-    "./providers/cloudflare": "./src/providers/cloudflare/mod.ts",
-    "./providers/k8s": "./src/providers/k8s/mod.ts",
-    "./providers/kubernetes": "./src/providers/kubernetes/mod.ts",
-    "./providers/aws": "./src/providers/aws/mod.ts",
-    "./providers/gcp": "./src/providers/gcp/mod.ts",
-    "./runtime-agent": "./src/runtime-agent/mod.ts"
-  },
+  "workspace": [
+    "./packages/plugins",
+    "./packages/kernel",
+    "./packages/cli",
+    "./packages/all"
+  ],
   "imports": {
     "takosumi-contract": "jsr:@takos/takosumi-contract@^1.0.0",
     "hono": "npm:hono@^4.12.4"
@@ -36,7 +24,8 @@
     }
   },
   "tasks": {
-    "check": "deno check src/mod.ts src/**/*.ts tests/**/*.ts && deno check --config deploy/cloudflare/deno.json deploy/cloudflare/src/worker.ts",
+    "check": "deno check packages/plugins/src/mod.ts packages/kernel/src/index.ts",
+    "check:cloudflare": "deno check --config deploy/cloudflare/deno.json deploy/cloudflare/src/worker.ts",
     "test": "deno test --allow-all",
     "fmt": "deno fmt",
     "fmt:check": "deno fmt --check",

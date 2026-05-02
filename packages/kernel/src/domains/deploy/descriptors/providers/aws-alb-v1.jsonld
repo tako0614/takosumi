@@ -1,0 +1,38 @@
+{
+  "@context": "https://takos.dev/contexts/deploy.jsonld",
+  "@id": "https://takos.dev/providers/aws/alb/v1",
+  "@type": "ProviderCapabilityDescriptor",
+  "shortRef": "provider.aws.alb@v1",
+  "materializationProfiles": [
+    {
+      "ref": "materialize.alb-listener-rule@v1",
+      "contracts": {
+        "runtime": "runtime.oci-container@v1",
+        "interfaces": [
+          "interface.http@v1"
+        ]
+      },
+      "roles": [
+        "router"
+      ],
+      "runtimeCapabilities": [
+        "external-tenant-routing"
+      ],
+      "limitations": [
+        "host-header-or-path-pattern-rules",
+        "target-group-needed-for-tenant-component",
+        "regional-load-balancer-boundary"
+      ]
+    }
+  ],
+  "providerNativeSchemas": [
+    "aws.elb.load-balancer@v1",
+    "aws.elb.listener@v1",
+    "aws.elb.listener-rule@v1",
+    "aws.elb.target-group@v1"
+  ],
+  "sourceDocs": [
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html",
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-listeners.html"
+  ]
+}

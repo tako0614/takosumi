@@ -1,0 +1,22 @@
+{
+  "@context": "https://takos.dev/contexts/deploy.jsonld",
+  "@id": "https://takos.dev/contracts/composite/cf-control-gcp-tenant/v1",
+  "@type": "CompositeContractDescriptor",
+  "shortRef": "composite.cf-control-gcp-tenant@v1",
+  "domain": "composite",
+  "lifecycleDomain": "revisioned-runtime",
+  "changeEffect": "app-release",
+  "description": "Hybrid control + tenant routing topology: Cloudflare hosts the kernel control plane (Workers + custom domain) while GCP materializes tenant runtime (Cloud Run) and tenant routing (HTTP(S) load balancer + URL map). Expansion fixes the runtime + router shape; provider-selection picks the materializers downstream.",
+  "expandsTo": [
+    "runtime.oci-container@v1",
+    "provider.gcp.load-balancer@v1",
+    "provider.gcp.url-map@v1",
+    "provider.cloudflare.custom-domain@v1"
+  ],
+  "invariants": [
+    "expansion-before-plan",
+    "descriptor-digest-pinned",
+    "no-provider-semantics",
+    "control-plane-and-tenant-data-plane-routing-distinct"
+  ]
+}

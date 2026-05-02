@@ -1,0 +1,42 @@
+{
+  "@context": "https://takos.dev/contexts/deploy.jsonld",
+  "@id": "https://takos.dev/providers/gcp/load-balancer/v1",
+  "@type": "ProviderCapabilityDescriptor",
+  "shortRef": "provider.gcp.load-balancer@v1",
+  "materializationProfiles": [
+    {
+      "ref": "materialize.gcp-https-load-balancer@v1",
+      "contracts": {
+        "runtime": "runtime.oci-container@v1",
+        "interfaces": [
+          "interface.http@v1"
+        ]
+      },
+      "roles": [
+        "router"
+      ],
+      "runtimeCapabilities": [
+        "external-tenant-routing",
+        "global-anycast-vip"
+      ],
+      "limitations": [
+        "url-map-required-for-host-path-routing",
+        "managed-ssl-cert-needs-dns-pointing-at-vip",
+        "global-or-regional-scheme-boundary"
+      ]
+    }
+  ],
+  "providerNativeSchemas": [
+    "google.compute.forwarding-rule@v1",
+    "google.compute.target-https-proxy@v1",
+    "google.compute.url-map@v1",
+    "google.compute.backend-service@v1",
+    "google.compute.health-check@v1",
+    "google.compute.ssl-certificate@v1"
+  ],
+  "sourceDocs": [
+    "https://cloud.google.com/load-balancing/docs/https",
+    "https://cloud.google.com/load-balancing/docs/url-map-concepts",
+    "https://cloud.google.com/load-balancing/docs/backend-service"
+  ]
+}

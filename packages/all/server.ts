@@ -1,0 +1,1 @@
+import "@takos/takosumi-kernel";

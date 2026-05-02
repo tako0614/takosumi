@@ -1,0 +1,25 @@
+{
+  "name": "@takos/takosumi-kernel",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapters": "./src/adapters/mod.ts",
+    "./agents": "./src/agents/mod.ts",
+    "./api": "./src/api/mod.ts",
+    "./app_context": "./src/app_context.ts",
+    "./bootstrap": "./src/bootstrap.ts",
+    "./plugins": "./src/plugins/mod.ts",
+    "./server": "./src/index.ts"
+  },
+  "imports": {},
+  "tasks": {
+    "check": "bash -lc 'find src -name \"*.ts\" ! -name \"*_test.ts\" -print0 | xargs -0 deno check'",
+    "start": "deno run --allow-net --allow-env --allow-read --allow-write src/index.ts",
+    "test": "deno test --allow-all",
+    "db:migrate": "deno run --allow-env --allow-read --allow-net scripts/db-migrate.ts",
+    "db:migrate:dry-run": "deno run --allow-env --allow-read scripts/db-migrate.ts --dry-run",
+    "db:migrate:down": "deno run --allow-env --allow-read --allow-net scripts/db-migrate-down.ts",
+    "bootstrap:initial": "deno run --allow-env --allow-read --allow-net --allow-write scripts/bootstrap-initial.ts"
+  }
+}

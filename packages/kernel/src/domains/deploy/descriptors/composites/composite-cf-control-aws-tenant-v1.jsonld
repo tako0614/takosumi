@@ -1,0 +1,22 @@
+{
+  "@context": "https://takos.dev/contexts/deploy.jsonld",
+  "@id": "https://takos.dev/contracts/composite/cf-control-aws-tenant/v1",
+  "@type": "CompositeContractDescriptor",
+  "shortRef": "composite.cf-control-aws-tenant@v1",
+  "domain": "composite",
+  "lifecycleDomain": "revisioned-runtime",
+  "changeEffect": "app-release",
+  "description": "Hybrid control + tenant routing topology: Cloudflare hosts the kernel control plane (Workers + custom domain) while AWS materializes tenant runtime (ECS Fargate) and tenant routing (ALB + target group). Expansion fixes the runtime + router shape; provider-selection picks the materializers downstream.",
+  "expandsTo": [
+    "runtime.oci-container@v1",
+    "provider.aws.alb@v1",
+    "provider.aws.target-group@v1",
+    "provider.cloudflare.custom-domain@v1"
+  ],
+  "invariants": [
+    "expansion-before-plan",
+    "descriptor-digest-pinned",
+    "no-provider-semantics",
+    "control-plane-and-tenant-data-plane-routing-distinct"
+  ]
+}

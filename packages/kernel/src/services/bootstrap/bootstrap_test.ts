@@ -1,0 +1,236 @@
+import assert from "node:assert/strict";
+import {
+  EnvOperatorConfig,
+  LocalOperatorConfig,
+} from "../../adapters/operator-config/mod.ts";
+import { LocalActorAdapter } from "../../adapters/auth/mod.ts";
+import { NoopProviderMaterializer } from "../../adapters/provider/mod.ts";
+import { StandaloneBootstrapService } from "./mod.ts";
+
+const fixedClock = () => new Date("2026-04-27T00:00:00.000Z");
+
+Deno.test("standalone bootstrap selects explicit local adapters and redacts config", async () => {
+  const config = new LocalOperatorConfig({
+    clock: fixedClock,
+    values: {
+      TAKOS_ENVIRONMENT: "local",
+      TAKOS_BOOTSTRAP_AUTH_ADAPTER: "local",
+      TAKOS_BOOTSTRAP_SOURCE_ADAPTER: "manifest",
+      TAKOS_BOOTSTRAP_SECRET_ADAPTER: "memory",
+      TAKOS_BOOTSTRAP_PROVIDER_ADAPTER: "noop",
+      TAKOS_ALLOW_PLAINTEXT_SECRETS: "1",
+      TAKOS_INTERNAL_SERVICE_SECRET: "super-secret",
+      DATABASE_SECRET_REF: { name: "DATABASE_URL", version: "v1" },
+    },
+  });
+
+  const report = await new StandaloneBootstrapService({
+    operatorConfig: config,
+    clock: fixedClock,
+  }).bootstrap();
+
+  assert.equal(report.ok, true);
+  assert.deepEqual(
+    report.selectedAdapters.map(({ family, kind, defaulted }) => ({
+      family,
+      kind,
+      defaulted,
+    })),
+    [
+      { family: "auth", kind: "local", defaulted: false },
+      { family: "source", kind: "manifest", defaulted: false },
+      { family: "secret", kind: "memory", defaulted: false },
+      { family: "provider", kind: "noop", defaulted: false },
+      { family: "observability", kind: "memory", defaulted: true },
+    ],
+  );
+  assert.ok(report.adapters.auth instanceof LocalActorAdapter);
+  assert.ok(report.adapters.provider instanceof NoopProviderMaterializer);
+  assert.equal(
+    report.config.values.find((value) =>
+      value.key === "TAKOS_INTERNAL_SERVICE_SECRET"
+    )?.value,
+    "[REDACTED]",
+  );
+  const serviceSecretSnapshotValue = report.operatorConfigSnapshot.values.find((
+    value,
+  ) => value.key === "TAKOS_INTERNAL_SERVICE_SECRET");
+  assert.equal(serviceSecretSnapshotValue?.kind, "plain");
+  assert.equal(
+    serviceSecretSnapshotValue.kind === "plain"
+      ? serviceSecretSnapshotValue.value
+      : undefined,
+    "[REDACTED]",
+  );
+  const environmentSnapshotValue = report.operatorConfigSnapshot.values.find((
+    value,
+  ) => value.key === "TAKOS_ENVIRONMENT");
+  assert.equal(environmentSnapshotValue?.kind, "plain");
+  assert.equal(
+    environmentSnapshotValue.kind === "plain"
+      ? environmentSnapshotValue.value
+      : undefined,
+    "local",
+  );
+  assert.deepEqual(
+    report.config.values.find((value) => value.key === "DATABASE_SECRET_REF"),
+    {
+      key: "DATABASE_SECRET_REF",
+      source: "local",
+      kind: "secret-ref",
+      ref: { name: "DATABASE_URL", version: "v1" },
+      redacted: true,
+    },
+  );
+});
+
+Deno.test("standalone bootstrap reports unsafe default adapters in production", async () => {
+  const config = new EnvOperatorConfig({
+    clock: fixedClock,
+    env: {
+      TAKOS_ENVIRONMENT: "production",
+      TAKOS_INTERNAL_SERVICE_SECRET: "replace-me",
+    },
+    include: ["TAKOS_ENVIRONMENT", "TAKOS_INTERNAL_SERVICE_SECRET"],
+  });
+
+  const report = await new StandaloneBootstrapService({
+    operatorConfig: config,
+    clock: fixedClock,
+  }).bootstrap();
+
+  assert.equal(report.ok, false);
+  assert.ok(
+    report.warnings.some((warning) =>
+      warning.code === "adapter_selector_defaulted"
+    ),
+  );
+  assert.ok(
+    report.errors.some((error) =>
+      error.code === "production_provider_bootstrap_forbidden" &&
+      error.message.includes("noop")
+    ),
+  );
+  assert.ok(
+    report.errors.some((error) =>
+      error.code === "unsafe_secret_value" &&
+      error.key === "TAKOS_INTERNAL_SERVICE_SECRET"
+    ),
+  );
+});
+
+Deno.test("standalone bootstrap rejects production local Docker provider", async () => {
+  const report = await new StandaloneBootstrapService({
+    operatorConfig: new EnvOperatorConfig({
+      clock: fixedClock,
+      env: {
+        TAKOS_ENVIRONMENT: "production",
+        TAKOS_BOOTSTRAP_PROVIDER_ADAPTER: "local-docker",
+      },
+      include: ["TAKOS_ENVIRONMENT", "TAKOS_BOOTSTRAP_PROVIDER_ADAPTER"],
+    }),
+    clock: fixedClock,
+  }).bootstrap();
+
+  assert.equal(report.ok, false);
+  assert.ok(
+    report.errors.some((error) =>
+      error.code === "unsupported_adapter" &&
+      error.message.includes("local-docker")
+    ),
+  );
+});
+
+Deno.test("standalone bootstrap does not downgrade production unsafe adapters with unsafe flag", async () => {
+  const report = await new StandaloneBootstrapService({
+    operatorConfig: new EnvOperatorConfig({
+      clock: fixedClock,
+      env: {
+        TAKOS_ENVIRONMENT: "production",
+        TAKOS_BOOTSTRAP_ALLOW_UNSAFE_DEFAULTS: "1",
+      },
+      include: ["TAKOS_ENVIRONMENT", "TAKOS_BOOTSTRAP_ALLOW_UNSAFE_DEFAULTS"],
+    }),
+    clock: fixedClock,
+  }).bootstrap();
+
+  assert.equal(report.ok, false);
+  assert.ok(
+    report.errors.some((error) => error.code === "unsafe_adapter_selected"),
+  );
+});
+
+Deno.test("standalone bootstrap rejects production memory secret store without encryption key", async () => {
+  const config = new EnvOperatorConfig({
+    clock: fixedClock,
+    env: {
+      TAKOS_ENVIRONMENT: "production",
+      TAKOS_BOOTSTRAP_SECRET_ADAPTER: "memory",
+    },
+    include: ["TAKOS_ENVIRONMENT", "TAKOS_BOOTSTRAP_SECRET_ADAPTER"],
+  });
+
+  const report = await new StandaloneBootstrapService({
+    operatorConfig: config,
+    clock: fixedClock,
+  }).bootstrap();
+
+  assert.equal(report.ok, false);
+  assert.ok(
+    report.errors.some((error) =>
+      error.code === "secret_store_encryption_key_missing" &&
+      /production/.test(error.message) &&
+      /TAKOS_SECRET_STORE_PASSPHRASE/.test(error.message)
+    ),
+  );
+});
+
+Deno.test("standalone bootstrap accepts memory secret store when production key supplied", async () => {
+  const config = new LocalOperatorConfig({
+    clock: fixedClock,
+    values: {
+      TAKOS_ENVIRONMENT: "production",
+      TAKOS_BOOTSTRAP_AUTH_ADAPTER: "service",
+      TAKOS_BOOTSTRAP_SECRET_ADAPTER: "memory",
+      TAKOS_BOOTSTRAP_SOURCE_ADAPTER: "manifest",
+      TAKOS_INTERNAL_SERVICE_SECRET: "production-service-secret-value",
+      TAKOS_SECRET_STORE_PASSPHRASE: "production-secret-passphrase-32-byte",
+    },
+  });
+
+  const report = await new StandaloneBootstrapService({
+    operatorConfig: config,
+    clock: fixedClock,
+  }).bootstrap();
+
+  assert.ok(
+    !report.errors.some((error) =>
+      error.code === "secret_store_encryption_key_missing"
+    ),
+    `unexpected secret_store_encryption_key_missing: ${
+      JSON.stringify(report.errors)
+    }`,
+  );
+});
+
+Deno.test("standalone bootstrap rejects removed adapter selectors", async () => {
+  const report = await new StandaloneBootstrapService({
+    operatorConfig: new EnvOperatorConfig({
+      clock: fixedClock,
+      env: {
+        TAKOS_ENVIRONMENT: "staging",
+        TAKOS_PROVIDER_ADAPTER: "local-docker",
+      },
+      include: ["TAKOS_ENVIRONMENT", "TAKOS_PROVIDER_ADAPTER"],
+    }),
+    clock: fixedClock,
+  }).bootstrap();
+
+  assert.equal(report.ok, false);
+  assert.ok(
+    report.errors.some((error) =>
+      error.code === "stale_bootstrap_selector" &&
+      error.key === "TAKOS_PROVIDER_ADAPTER"
+    ),
+  );
+});

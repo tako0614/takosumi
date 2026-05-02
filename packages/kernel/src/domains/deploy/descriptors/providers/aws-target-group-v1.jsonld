@@ -1,0 +1,35 @@
+{
+  "@context": "https://takos.dev/contexts/deploy.jsonld",
+  "@id": "https://takos.dev/providers/aws/target-group/v1",
+  "@type": "ProviderCapabilityDescriptor",
+  "shortRef": "provider.aws.target-group@v1",
+  "materializationProfiles": [
+    {
+      "ref": "materialize.alb-target-group@v1",
+      "contracts": {
+        "runtime": "runtime.oci-container@v1",
+        "interfaces": [
+          "interface.http@v1"
+        ]
+      },
+      "roles": [
+        "router"
+      ],
+      "runtimeCapabilities": [
+        "health-check-aware-routing"
+      ],
+      "limitations": [
+        "deregistration-delay-budget",
+        "ip-or-instance-target-type-only"
+      ]
+    }
+  ],
+  "providerNativeSchemas": [
+    "aws.elb.target-group@v1",
+    "aws.elb.target-group-attribute@v1"
+  ],
+  "sourceDocs": [
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html",
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html"
+  ]
+}
