@@ -1,6 +1,7 @@
 {
-  "name": "@takos/paas-plugins",
+  "name": "@takosumi/plugins",
   "version": "0.1.0",
+  "license": "MIT",
   "exports": {
     ".": "./src/mod.ts",
     "./gateway": "./src/gateway/mod.ts",
