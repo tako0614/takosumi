@@ -1,0 +1,59 @@
+{
+  "apiVersion": "takos.dev/hosting/v1",
+  "kind": "TakosDistribution",
+  "metadata": {
+    "name": "takos-gcp-live-smoke",
+    "spaceId": "space_live_smoke",
+    "groupId": "group_live_smoke",
+    "activationId": "activation_gcp_live_smoke",
+    "runId": "gcp-live-provisioning-smoke",
+    "materializedAt": "2026-04-30T00:00:00.000Z"
+  },
+  "resources": [
+    {
+      "shape": "object-store@v1",
+      "name": "bucket",
+      "provider": "gcp-gcs",
+      "spec": {
+        "name": "takos-gcp-live-smoke-assets",
+        "region": "us-central1",
+        "versioning": true,
+        "public": false
+      }
+    },
+    {
+      "shape": "database-postgres@v1",
+      "name": "db",
+      "provider": "cloud-sql",
+      "spec": {
+        "version": "16",
+        "size": "small",
+        "highAvailability": false
+      }
+    },
+    {
+      "shape": "web-service@v1",
+      "name": "web",
+      "provider": "cloud-run",
+      "spec": {
+        "image": "ghcr.io/takos/live-smoke:latest",
+        "port": 8080,
+        "scale": { "min": 0, "max": 5 },
+        "bindings": {
+          "DATABASE_URL": "${ref:db.connectionString}",
+          "ASSETS_BUCKET": "${ref:bucket.bucket}"
+        }
+      }
+    },
+    {
+      "shape": "custom-domain@v1",
+      "name": "primary",
+      "provider": "cloud-dns",
+      "spec": {
+        "name": "gcp-live-smoke.example.test",
+        "target": "${ref:web.url}",
+        "certificate": { "kind": "managed" }
+      }
+    }
+  ]
+}

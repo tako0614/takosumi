@@ -1,0 +1,61 @@
+{
+  "apiVersion": "takos.dev/hosting/v1",
+  "kind": "TakosDistribution",
+  "metadata": {
+    "name": "takos-aws-live-smoke",
+    "spaceId": "space_live_smoke",
+    "groupId": "group_live_smoke",
+    "activationId": "activation_aws_live_smoke",
+    "runId": "aws-live-provisioning-smoke",
+    "materializedAt": "2026-04-30T00:00:00.000Z"
+  },
+  "resources": [
+    {
+      "shape": "object-store@v1",
+      "name": "artifacts",
+      "provider": "aws-s3",
+      "spec": {
+        "name": "takos-aws-live-smoke-artifacts",
+        "region": "us-east-1",
+        "versioning": true,
+        "public": false
+      }
+    },
+    {
+      "shape": "database-postgres@v1",
+      "name": "db",
+      "provider": "aws-rds",
+      "spec": {
+        "version": "16",
+        "size": "small",
+        "highAvailability": false,
+        "storage": { "sizeGiB": 20, "type": "ssd" },
+        "backups": { "enabled": true, "retentionDays": 7 }
+      }
+    },
+    {
+      "shape": "web-service@v1",
+      "name": "web",
+      "provider": "aws-fargate",
+      "spec": {
+        "image": "ghcr.io/takos/live-smoke:latest",
+        "port": 8080,
+        "scale": { "min": 1, "max": 3 },
+        "bindings": {
+          "DATABASE_URL": "${ref:db.connectionString}",
+          "ARTIFACTS_BUCKET": "${ref:artifacts.bucket}"
+        }
+      }
+    },
+    {
+      "shape": "custom-domain@v1",
+      "name": "primary",
+      "provider": "route53",
+      "spec": {
+        "name": "aws-live-smoke.example.test",
+        "target": "${ref:web.url}",
+        "certificate": { "kind": "auto" }
+      }
+    }
+  ]
+}

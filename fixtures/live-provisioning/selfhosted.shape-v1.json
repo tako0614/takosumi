@@ -1,0 +1,54 @@
+{
+  "apiVersion": "takos.dev/hosting/v1",
+  "kind": "TakosDistribution",
+  "metadata": {
+    "name": "takos-selfhosted-live-smoke",
+    "spaceId": "space_live_smoke",
+    "groupId": "group_live_smoke",
+    "activationId": "activation_selfhosted_live_smoke",
+    "runId": "selfhosted-live-provisioning-smoke",
+    "materializedAt": "2026-04-30T00:00:00.000Z"
+  },
+  "resources": [
+    {
+      "shape": "object-store@v1",
+      "name": "data",
+      "provider": "filesystem",
+      "spec": {
+        "name": "takos-live-smoke-data"
+      }
+    },
+    {
+      "shape": "database-postgres@v1",
+      "name": "db",
+      "provider": "local-docker",
+      "spec": {
+        "version": "16",
+        "size": "small"
+      }
+    },
+    {
+      "shape": "web-service@v1",
+      "name": "web",
+      "provider": "docker-compose",
+      "spec": {
+        "image": "ghcr.io/takos/live-smoke:latest",
+        "port": 8080,
+        "scale": { "min": 1, "max": 1 },
+        "bindings": {
+          "DATABASE_URL": "${ref:db.connectionString}",
+          "DATA_BUCKET": "${ref:data.bucket}"
+        }
+      }
+    },
+    {
+      "shape": "custom-domain@v1",
+      "name": "primary",
+      "provider": "coredns-local",
+      "spec": {
+        "name": "selfhosted-live-smoke.example.test",
+        "target": "${ref:web.url}"
+      }
+    }
+  ]
+}

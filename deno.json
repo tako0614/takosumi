@@ -1,0 +1,44 @@
+{
+  "name": "@takos/paas-plugins",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/mod.ts",
+    "./gateway": "./src/gateway/mod.ts",
+    "./shapes": "./src/shapes/mod.ts",
+    "./shape-providers": "./src/shape-providers/mod.ts",
+    "./shape-providers/factories": "./src/shape-providers/factories.ts",
+    "./templates": "./src/templates/mod.ts",
+    "./providers/selfhosted": "./src/providers/selfhosted/mod.ts",
+    "./providers/cloudflare": "./src/providers/cloudflare/mod.ts",
+    "./providers/k8s": "./src/providers/k8s/mod.ts",
+    "./providers/kubernetes": "./src/providers/kubernetes/mod.ts",
+    "./providers/aws": "./src/providers/aws/mod.ts",
+    "./providers/gcp": "./src/providers/gcp/mod.ts",
+    "./runtime-agent": "./src/runtime-agent/mod.ts"
+  },
+  "imports": {
+    "takosumi-contract": "../takos/paas/packages/paas-contract/mod.ts",
+    "hono": "npm:hono@^4.12.4"
+  },
+  "compilerOptions": {
+    "strict": true,
+    "lib": ["deno.window", "dom", "dom.iterable"],
+    "types": ["node"]
+  },
+  "lint": {
+    "rules": {
+      "exclude": [
+        "no-import-prefix",
+        "no-process-global",
+        "no-unversioned-import"
+      ]
+    }
+  },
+  "tasks": {
+    "check": "deno check src/mod.ts src/**/*.ts tests/**/*.ts && deno check --config deploy/cloudflare/deno.json deploy/cloudflare/src/worker.ts",
+    "test": "deno test --allow-all",
+    "fmt": "deno fmt",
+    "fmt:check": "deno fmt --check",
+    "lint": "deno lint"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "imports": {
+    "@cloudflare/containers": "./src/cloudflare_containers.d.ts"
+  },
+  "compilerOptions": {
+    "strict": true,
+    "lib": ["deno.window", "dom", "dom.iterable"]
+  }
+}

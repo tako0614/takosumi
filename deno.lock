@@ -1,0 +1,16 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:hono@^4.12.4": "4.12.15"
+  },
+  "npm": {
+    "hono@4.12.15": {
+      "integrity": "sha512-qM0jDhFEaCBb4TxoW7f53Qrpv9RBiayUHo0S52JudprkhvpjIrGoU1mnnr29Fvd1U335ZFPZQY1wlkqgfGXyLg=="
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "npm:hono@^4.12.4"
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+# Takos Cloudflare provider scaffold.
+# Replace placeholder resource identifiers from operator-managed config before deploy.
+
+name = "takos-paas-cloudflare-provider"
+main = "src/worker.ts"
+compatibility_date = "2026-04-15"
+workers_dev = false
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "TAKOS_D1"
+database_name = "takos-paas"
+database_id = "<cloudflare-d1-database-id>"
+
+[[r2_buckets]]
+binding = "TAKOS_ARTIFACTS"
+bucket_name = "takos-artifacts"
+
+[[queues.producers]]
+binding = "TAKOS_QUEUE"
+queue = "takos-paas-control-plane"
+
+[[queues.consumers]]
+queue = "takos-paas-control-plane"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "takos-paas-control-plane-dlq"
+
+[[durable_objects.bindings]]
+name = "TAKOS_COORDINATION"
+class_name = "TakosCoordinationObject"
+
+[[durable_objects.bindings]]
+name = "TAKOS_WORKLOAD_CONTAINER"
+class_name = "TakosWorkloadContainer"
+
+[[containers]]
+class_name = "TakosWorkloadContainer"
+image = "./Dockerfile"
+max_instances = 10
+instance_type = "basic"
+
+  [containers.image_vars]
+  TAKOS_RUNTIME_MODE = "cloudflare-container"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TakosCoordinationObject", "TakosWorkloadContainer"]
