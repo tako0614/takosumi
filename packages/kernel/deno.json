@@ -10,7 +10,8 @@
     "./app_context": "./src/app_context.ts",
     "./bootstrap": "./src/bootstrap.ts",
     "./plugins": "./src/plugins/mod.ts",
-    "./server": "./src/index.ts"
+    "./server": "./src/index.ts",
+    "./apply": "./src/domains/deploy/apply_v2.ts"
   },
   "imports": {},
   "tasks": {
