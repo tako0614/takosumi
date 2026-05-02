@@ -8,7 +8,7 @@
     "activationId": "activation_azure_live_smoke",
     "runId": "azure-live-provisioning-smoke",
     "materializedAt": "2026-05-02T00:00:00.000Z",
-    "comment": "Azure shape-providers are not yet curated; this fixture documents the intent. Operators should pick a runtime/edge equivalent (e.g. cloud-run + cloudflare-dns or aws-fargate + route53) until takos-paas-plugins ships an Azure shape-provider set."
+    "comment": "Azure shape-providers are not yet curated; this fixture documents the intent. Operators should pick a runtime/edge equivalent (e.g. cloud-run + cloudflare-dns or aws-fargate + route53) until takosumi ships an Azure shape-provider set."
   },
   "resources": [
     {

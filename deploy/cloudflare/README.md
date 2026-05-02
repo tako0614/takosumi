@@ -12,7 +12,7 @@ the typed interfaces exported by `@takos/paas-plugins/providers/cloudflare`.
 - `src/worker.ts`: Worker entrypoint with health routes and routing to the
   coordination Durable Object and workload Container.
 - `Dockerfile`: Deno PaaS container template. Build it from a context that
-  includes both `takos/paas` and `takos-paas-plugins`.
+  includes both `takos/paas` and `takosumi`.
 
 The scaffold proves the binding and routing shape. The included Dockerfile runs
 the PaaS API entrypoint; production operators still need to inject real
