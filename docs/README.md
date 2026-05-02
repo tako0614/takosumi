@@ -2,7 +2,7 @@
 
 Takosumi の portable resource model (Shape + Provider + Template) と production
 wiring に関する docs。canonical contract の repo (`takosumi-contract`) と本 repo
-(`@takosumi/plugins`) の境界もここで説明する。
+(`@takos/takosumi`) の境界もここで説明する。
 
 ## ページ一覧
 

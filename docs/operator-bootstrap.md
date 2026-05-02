@@ -12,7 +12,7 @@ source: [`src/shape-providers/factories.ts`](https://github.com/takos-jp/takosum
 ## API シグネチャ
 
 ```ts
-import { createTakosumiProductionProviders } from "@takosumi/plugins/shape-providers";
+import { createTakosumiProductionProviders } from "@takos/takosumi/shape-providers";
 
 const providers = createTakosumiProductionProviders({
   aws:        { region: "ap-northeast-1", gatewayUrl: "https://gateway.takos.example/aws", bearerToken: "..." },
@@ -137,7 +137,7 @@ operator は kernel 起動時に provider registry へ inject します:
 
 ```ts
 import { registerProvider } from "takosumi-contract";
-import { createTakosumiProductionProviders } from "@takosumi/plugins/shape-providers";
+import { createTakosumiProductionProviders } from "@takos/takosumi/shape-providers";
 
 const providers = createTakosumiProductionProviders({ aws, cloudflare });
 for (const plugin of providers) {

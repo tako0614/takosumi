@@ -10,7 +10,7 @@
  * Operators that run Takos opt in by:
  *
  *   1. Importing `createTakosGitSourceExtension` from
- *      `@takosumi/plugins/extensions/takos-git`.
+ *      `@takos/takosumi/extensions/takos-git`.
  *   2. Constructing the extension with their `TakosInternalClient` and
  *      registering the returned `sourcePort` with the kernel under a profile
  *      that selects it for the `source` port.

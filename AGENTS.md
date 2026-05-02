@@ -2,7 +2,7 @@
 
 This repository is **Takosumi**, a shape / shape-provider / template bundle for
 the Takosumi shape model (canonical contract:
-[`takosumi-contract`](https://jsr.io/@takosumi/contract)).
+[`takosumi-contract`](https://jsr.io/@takos/takosumi-contract)).
 
 Takosumi is the **plugin host face** of the upstream PaaS work: it curates the
 portable shape catalog, the per-cloud `ProviderPlugin` implementations, the
@@ -16,7 +16,7 @@ documented in `CONVENTIONS.md` and implemented under `src/shapes/`,
 
 ## 基本方針
 
-- 公開名: `@takosumi/plugins` (JSR)
+- 公開名: `@takos/takosumi` (JSR)
 - Shape catalog ownership は Takos ecosystem。新 shape は RFC が必要
   (`CONVENTIONS.md` §6 参照)。
 - 第三者は新 shape を増やすのではなく、既存 shape の `ProviderPlugin` を
