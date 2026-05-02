@@ -247,7 +247,6 @@ Deno.test("createApiApp rejects internal route mounting for non-api roles", asyn
   );
 });
 
-
 Deno.test("internal deploy routes enforce workload service grants when security is wired", async () => {
   const secret = "route-secret";
   const dependencies = createInMemoryCoreDomainDependencies();

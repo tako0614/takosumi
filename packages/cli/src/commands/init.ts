@@ -29,8 +29,8 @@ export const initCommand = new Command()
   )
   .arguments("[output:string]")
   .action(async ({ template }, output) => {
-    const content =
-      TEMPLATES[template as keyof typeof TEMPLATES] ?? TEMPLATES.empty;
+    const content = TEMPLATES[template as keyof typeof TEMPLATES] ??
+      TEMPLATES.empty;
     if (output) {
       await Deno.writeTextFile(output, content);
       console.log(`wrote ${output}`);

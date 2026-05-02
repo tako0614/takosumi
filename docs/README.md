@@ -6,21 +6,21 @@ wiring に関する docs。canonical contract の repo (`takosumi-contract`) と
 
 ## ページ一覧
 
-- [Shape Catalog](./shape-catalog.md) — 4 つの curated Shape
-  (`object-store@v1` / `web-service@v1` / `database-postgres@v1` /
-  `custom-domain@v1`) と spec / capabilities / outputs 契約。
+- [Shape Catalog](./shape-catalog.md) — 4 つの curated Shape (`object-store@v1`
+  / `web-service@v1` / `database-postgres@v1` / `custom-domain@v1`) と spec /
+  capabilities / outputs 契約。
 - [Provider Plugins](./provider-plugins.md) — bundled 18 provider を Shape
   別にグルーピング、各 provider の capability set と lifecycle adapter の出処。
 - [Templates](./templates.md) — `selfhosted-single-vm@v1` /
   `web-app-on-cloudflare@v1` の inputs / expansion / use case。
-- [Manifest (Shape Model)](./manifest.md) — manifest envelope
-  (`resources[]` / `template:`) と `${ref:...}` / `${secret-ref:...}` syntax、
-  capability `requires` semantics、DAG / rollback。
+- [Manifest (Shape Model)](./manifest.md) — manifest envelope (`resources[]` /
+  `template:`) と `${ref:...}` / `${secret-ref:...}` syntax、 capability
+  `requires` semantics、DAG / rollback。
 - [Operator Bootstrap](./operator-bootstrap.md) —
-  `createTakosumiProductionProviders(opts)` の per-cloud option types、
-  gateway URL pattern、kernel apply pipeline への wire 例。
-- [Extending](./extending.md) — 新 provider 追加 / 新 Shape RFC / 新
-  template 追加の手順。
+  `createTakosumiProductionProviders(opts)` の per-cloud option types、 gateway
+  URL pattern、kernel apply pipeline への wire 例。
+- [Extending](./extending.md) — 新 provider 追加 / 新 Shape RFC / 新 template
+  追加の手順。
 
 ## 関連
 

@@ -1,58 +1,109 @@
-# Takosumi External Plugins
+# Takosumi
 
-This package is the external plugin root for the Takosumi shape model. It is
-kept outside `takos/paas` so shape providers and templates can evolve without
-adding provider implementations to the core control-plane repository.
+Self-hostable PaaS toolkit. **Manifest を投げてあらゆる cloud / docker /
+self-hosted 環境にデプロイできる、完全独立の PaaS**。
 
-The legacy 14-port `KernelPlugin` profile factories (aws / gcp / cloudflare /
-kubernetes / selfhosted / hybrids) have been retired. The current model is
-shape + provider + template; see `CONVENTIONS.md` for the full RFC.
+```bash
+deno install -gA -n takosumi jsr:@takos/takosumi-cli
+takosumi init my-app.yml --template selfhosted-single-vm
+takosumi server &                # kernel HTTP server を起動
+takosumi deploy my-app.yml       # apply
+```
 
-## Exports
+## Workspace layout
 
-- `@takos/paas-plugins`: aggregate re-export.
-- `@takos/paas-plugins/shapes`: portable resource shapes (`object-store`,
-  `web-service`, `database-postgres`, `custom-domain`).
-- `@takos/paas-plugins/shape-providers`: per-cloud `ProviderPlugin`
-  implementations for each shape.
-- `@takos/paas-plugins/shape-providers/factories`: production wiring that
-  injects real lifecycle clients into each shape provider.
-- `@takos/paas-plugins/templates`: opinionated multi-shape bundles
-  (`web-app-on-cloudflare`, `selfhosted-single-vm`).
-- `@takos/paas-plugins/providers/<cloud>`: low-level HTTP gateway clients and
-  service-specific descriptors used by `factories.ts`.
-- `@takos/paas-plugins/runtime-agent`: handoff/loop adapters used by the
-  runtime-agent integration.
+```
+takosumi/
+├── packages/
+│   ├── kernel/    @takos/takosumi-kernel  — HTTP server + apply pipeline + storage + workers
+│   ├── plugins/   @takos/takosumi-plugins — shapes / providers / templates / factories
+│   ├── cli/       @takos/takosumi-cli     — `takosumi deploy` 等のコマンド
+│   └── all/       @takos/takosumi         — umbrella (上記 3 つを再公開)
+├── docs/, deploy/, fixtures/
+└── AGENTS.md, CONVENTIONS.md, CHANGELOG.md
+```
 
-The package imports Takosumi contracts (`Shape`, `ProviderPlugin`, `Template`)
-from `../takos/paas/packages/paas-contract/mod.ts`.
+Canonical contract:
+[`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (別 repo,
+型のみ)。
 
-## How it fits together
+## JSR packages
 
-1. A `Shape<TSpec, TOutputs, TCapability>` declares a portable resource contract
-   (e.g. `object-store@v1`).
-2. A `ProviderPlugin<TSpec, TOutputs>` materializes one shape on one
-   cloud/runtime (e.g. `aws-s3`, `cloudflare-r2`, `filesystem`).
-3. A `Template` bundles several shape instances into a single opinionated
-   manifest invocation.
-4. `shape-providers/factories.ts` wires production lifecycle clients (HTTP
-   gateways, file IO, container runners) into each provider.
+| Package                                                                   | 用途                                                                  |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                   | turnkey: kernel + plugins + cli を一括取得                            |
+| [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)     | kernel only (`deno run -A jsr:@takos/takosumi-kernel` で server 起動) |
+| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)   | shape catalog + provider + template + factories                       |
+| [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)           | `takosumi` コマンド                                                   |
+| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) | 型契約 (上流)                                                         |
 
-See `CONVENTIONS.md` for naming, output schema, capability, and secret reference
-conventions, plus the procedure for adding a new provider for an existing shape.
+## 設計の核
 
-## Live provisioning fixtures
+### Image-first model
 
-`fixtures/live-provisioning/<provider>.shape-v1.json` contains the live
-provisioning fixtures consumed by the shape-model conformance harness.
+manifest spec の `image` / `bundle` / `unit` は単なる URI 文字列。artifact
+取得は **provider 側の責務**。Kubernetes が image pull するのと同じ方針。
+
+```yaml
+resources:
+  - shape: web-service@v1
+    name: api
+    provider: aws-fargate
+    spec:
+      image: ghcr.io/me/api:v1.2.3 # provider が pull
+      port: 8080
+      scale: { min: 2, max: 10 }
+```
+
+### Shape × Provider × Template
+
+- **Shape** (4 つ curated): `web-service@v1` / `object-store@v1` /
+  `database-postgres@v1` / `custom-domain@v1`
+- **Provider** (18 bundled): aws-fargate / cloud-run / cloudflare-container /
+  docker-compose / k3s-deployment / systemd-unit (web-service) + aws-s3 /
+  cloudflare-r2 / gcp-gcs / minio / filesystem (object-store) + ...
+- **Template** (2 bundled): `selfhosted-single-vm@v1` /
+  `web-app-on-cloudflare@v1`
+
+provider 差し替えで manifest portable (S3 ↔ R2、ECS ↔ docker-compose 等)。
+
+詳細は [`CONVENTIONS.md`](./CONVENTIONS.md) と [`docs/`](./docs/) 参照。
+
+## CLI コマンド
+
+```
+takosumi deploy <manifest>      # apply (local mode in-process / remote mode HTTP)
+takosumi destroy <manifest>     # 逆順 destroy
+takosumi status [<name>]        # 現在の resource state
+takosumi plan <manifest>        # dry-run
+takosumi server [--port 8080]   # kernel HTTP server 起動
+takosumi migrate                # DB migrations
+takosumi init [--template ...]  # manifest scaffold
+takosumi version
+```
+
+remote mode:
+
+```
+takosumi deploy ./manifest.yml \
+  --remote https://kernel.example.com \
+  --token $TAKOSUMI_TOKEN
+```
+
+env (`TAKOSUMI_KERNEL_URL`, `TAKOSUMI_TOKEN`) でも設定可能。
 
 ## Development
 
-Run from this package root:
-
-```sh
-deno task check
-deno task test
-deno task lint
+```bash
+deno test --allow-all           # workspace 全 test
+deno task check                 # 全 package type-check
 deno task fmt:check
+deno task lint
+```
+
+per-package:
+
+```bash
+cd packages/cli && deno task test
+cd packages/kernel && deno task db:migrate:dry-run
 ```

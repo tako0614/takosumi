@@ -8,5 +8,8 @@ export const migrateCommand = new Command()
     if (dryRun) args.push("scripts/db-migrate.ts", "--dry-run");
     else args.push("scripts/db-migrate.ts");
     console.log("delegating to kernel scripts/db-migrate.ts");
-    console.log("hint: cd packages/kernel && deno task " + (dryRun ? "db:migrate:dry-run" : "db:migrate"));
+    console.log(
+      "hint: cd packages/kernel && deno task " +
+        (dryRun ? "db:migrate:dry-run" : "db:migrate"),
+    );
   });

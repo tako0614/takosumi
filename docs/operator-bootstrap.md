@@ -1,13 +1,15 @@
 # Operator Bootstrap
 
-operator が **18 個の bundled provider plugin** を一括で wire するための
-factory `createTakosumiProductionProviders(opts)` の使い方をまとめます。
+operator が **18 個の bundled provider plugin** を一括で wire するための factory
+`createTakosumiProductionProviders(opts)` の使い方をまとめます。
 
-source: [`src/shape-providers/factories.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shape-providers/factories.ts)
+source:
+[`src/shape-providers/factories.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shape-providers/factories.ts)
 
-> 重要: factory 経由で wire された provider は **operator gateway** または
-> local Deno API adapter を通って upstream cloud API を呼びます。kernel
-> 側に credential が直接届くことはありません ([Provider Plugins § Real client](./provider-plugins.md#real-client--lifecycle-adapter))。
+> 重要: factory 経由で wire された provider は **operator gateway** または local
+> Deno API adapter を通って upstream cloud API を呼びます。kernel 側に
+> credential が直接届くことはありません
+> ([Provider Plugins § Real client](./provider-plugins.md#real-client--lifecycle-adapter))。
 
 ## API シグネチャ
 
@@ -15,23 +17,41 @@ source: [`src/shape-providers/factories.ts`](https://github.com/takos-jp/takosum
 import { createTakosumiProductionProviders } from "@takos/takosumi/shape-providers";
 
 const providers = createTakosumiProductionProviders({
-  aws:        { region: "ap-northeast-1", gatewayUrl: "https://gateway.takos.example/aws", bearerToken: "..." },
-  gcp:        { project: "my-project", region: "asia-northeast1", gatewayUrl: "https://gateway.takos.example/gcp" },
-  cloudflare: { accountId: "abcd...", zoneId: "TAKOS_ZONE", gatewayUrl: "https://gateway.takos.example/cloudflare" },
-  kubernetes: { namespace: "takos-prod", gatewayUrl: "https://gateway.takos.example/kubernetes" },
-  selfhosted: { rootDir: "/var/lib/takos/object-store", systemdUnitDir: "/etc/systemd/system" },
+  aws: {
+    region: "ap-northeast-1",
+    gatewayUrl: "https://gateway.takos.example/aws",
+    bearerToken: "...",
+  },
+  gcp: {
+    project: "my-project",
+    region: "asia-northeast1",
+    gatewayUrl: "https://gateway.takos.example/gcp",
+  },
+  cloudflare: {
+    accountId: "abcd...",
+    zoneId: "TAKOS_ZONE",
+    gatewayUrl: "https://gateway.takos.example/cloudflare",
+  },
+  kubernetes: {
+    namespace: "takos-prod",
+    gatewayUrl: "https://gateway.takos.example/kubernetes",
+  },
+  selfhosted: {
+    rootDir: "/var/lib/takos/object-store",
+    systemdUnitDir: "/etc/systemd/system",
+  },
 });
 ```
 
-`opts` の各 cloud 設定は **任意** で、指定された cloud の provider のみが
-wire されます。空の `opts: {}` を渡すと 0 個の provider が返ります。
+`opts` の各 cloud 設定は **任意** で、指定された cloud の provider のみが wire
+されます。空の `opts: {}` を渡すと 0 個の provider が返ります。
 
 ## `TakosumiProductionProviderOptions`
 
 ```ts
 interface TakosumiProductionProviderOptions {
-  readonly aws?:        TakosumiAwsCredentials;
-  readonly gcp?:        TakosumiGcpCredentials;
+  readonly aws?: TakosumiAwsCredentials;
+  readonly gcp?: TakosumiGcpCredentials;
   readonly cloudflare?: TakosumiCloudflareCredentials;
   readonly kubernetes?: TakosumiKubernetesCredentials;
   readonly selfhosted?: TakosumiSelfhostedCredentials;
@@ -44,12 +64,12 @@ interface TakosumiProductionProviderOptions {
 
 ```ts
 interface TakosumiAwsCredentials {
-  readonly region: string;                // e.g. "ap-northeast-1"
-  readonly accessKeyId?: string;          // 直接 AWS API を叩く構成のみ使う
+  readonly region: string; // e.g. "ap-northeast-1"
+  readonly accessKeyId?: string; // 直接 AWS API を叩く構成のみ使う
   readonly secretAccessKey?: string;
   readonly sessionToken?: string;
-  readonly gatewayUrl?: string | URL;     // 推奨: operator gateway URL
-  readonly bearerToken?: string;          // gateway 認証
+  readonly gatewayUrl?: string | URL; // 推奨: operator gateway URL
+  readonly bearerToken?: string; // gateway 認証
   readonly fetch?: typeof fetch;
 }
 ```
@@ -77,13 +97,14 @@ wire される provider: `gcp-gcs` / `cloud-run` / `cloud-sql` / `cloud-dns`。
 interface TakosumiCloudflareCredentials {
   readonly accountId: string;
   readonly apiToken?: string;
-  readonly zoneId?: string;        // 既定 "TAKOS_ZONE"
+  readonly zoneId?: string; // 既定 "TAKOS_ZONE"
   readonly gatewayUrl?: string | URL;
   readonly fetch?: typeof fetch;
 }
 ```
 
-wire される provider: `cloudflare-r2` / `cloudflare-container` / `cloudflare-dns`。
+wire される provider: `cloudflare-r2` / `cloudflare-container` /
+`cloudflare-dns`。
 
 ### Kubernetes (`TakosumiKubernetesCredentials`)
 
@@ -103,11 +124,11 @@ wire される provider: `k3s-deployment`。
 
 ```ts
 interface TakosumiSelfhostedCredentials {
-  readonly rootDir?: string;                // 既定 "/var/lib/takos/object-store"
-  readonly postgresHostBinding?: string;    // 既定 "localhost"
-  readonly objectStoreEndpoint?: string;    // 既定 "http://minio.local:9000"
-  readonly systemdUnitDir?: string;         // 既定 "/etc/systemd/system"
-  readonly coreDnsZoneFile?: string;        // 既定 "/etc/coredns/Corefile"
+  readonly rootDir?: string; // 既定 "/var/lib/takos/object-store"
+  readonly postgresHostBinding?: string; // 既定 "localhost"
+  readonly objectStoreEndpoint?: string; // 既定 "http://minio.local:9000"
+  readonly systemdUnitDir?: string; // 既定 "/etc/systemd/system"
+  readonly coreDnsZoneFile?: string; // 既定 "/etc/coredns/Corefile"
   readonly fetch?: typeof fetch;
 }
 ```
@@ -117,15 +138,15 @@ wire される provider: `filesystem` / `docker-compose` / `systemd-unit` /
 
 ## Gateway URL pattern
 
-operator gateway は `JsonGateway` の base URL を root として、各 cloud で
-固定の path 体系を持ちます (cf. `factories.ts` の Gateway*Lifecycle 群):
+operator gateway は `JsonGateway` の base URL を root として、各 cloud で 固定の
+path 体系を持ちます (cf. `factories.ts` の Gateway*Lifecycle 群):
 
-| cloud      | path 例                                                     |
-| ---------- | ----------------------------------------------------------- |
+| cloud      | path 例                                                      |
+| ---------- | ------------------------------------------------------------ |
 | AWS        | `aws/s3/create-bucket`, `aws/fargate/create-service`, ...    |
 | GCP        | `gcp/gcs/create-bucket`, `gcp/cloud-run/create-service`, ... |
 | Cloudflare | `cloudflare/r2/create-bucket`, `cloudflare/containers/...`   |
-| Kubernetes | `kubernetes/k3s/create-deployment`, ...                     |
+| Kubernetes | `kubernetes/k3s/create-deployment`, ...                      |
 
 `gatewayUrl` は **末尾に `/` を付けても付けなくても** どちらでも OK
 (`JsonGateway` 側で正規化されます)。`bearerToken` を付けると
@@ -145,9 +166,9 @@ for (const plugin of providers) {
 }
 ```
 
-manifest の `resources[].provider` field は registry から `getProvider(id)`
-で lookup され、`.implements` が `resources[].shape` と一致し、`requires`
-の subset に `capabilities` を持つ場合に selection されます (cf.
+manifest の `resources[].provider` field は registry から `getProvider(id)` で
+lookup され、`.implements` が `resources[].shape` と一致し、`requires` の subset
+に `capabilities` を持つ場合に selection されます (cf.
 [Manifest § Capability requires](./manifest.md#capability-requires))。
 
 ## Selfhosted-only な最小構成

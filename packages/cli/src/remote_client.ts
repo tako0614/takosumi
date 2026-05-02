@@ -13,11 +13,16 @@ export async function callKernel(
     "content-type": "application/json",
   };
   if (options.token) headers["authorization"] = `Bearer ${options.token}`;
-  const response = await fetch(`${options.url.replace(/\/$/, "")}${options.path}`, {
-    method: options.method ?? "POST",
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
+  const response = await fetch(
+    `${options.url.replace(/\/$/, "")}${options.path}`,
+    {
+      method: options.method ?? "POST",
+      headers,
+      body: options.body !== undefined
+        ? JSON.stringify(options.body)
+        : undefined,
+    },
+  );
   let body: unknown = undefined;
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {

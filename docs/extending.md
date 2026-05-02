@@ -7,19 +7,19 @@
 
 ## 拡張の選び方
 
-| 目的                                                       | やること                                          | RFC 必要 |
-| ---------------------------------------------------------- | ------------------------------------------------- | -------- |
-| 既存 Shape を別 cloud / runtime で動かしたい               | [§ provider を追加する](#新-provider-の追加)       | 不要     |
-| 既存 Shape の組み合わせで定型構成を作りたい                | [§ template を追加する](#新-template-の追加)       | 不要     |
-| 既存 Shape では足りない new portable resource type を作る  | [§ Shape を RFC する](#新しい-shape-を-rfc-する)   | 必要     |
+| 目的                                                      | やること                                         | RFC 必要 |
+| --------------------------------------------------------- | ------------------------------------------------ | -------- |
+| 既存 Shape を別 cloud / runtime で動かしたい              | [§ provider を追加する](#新-provider-の追加)     | 不要     |
+| 既存 Shape の組み合わせで定型構成を作りたい               | [§ template を追加する](#新-template-の追加)     | 不要     |
+| 既存 Shape では足りない new portable resource type を作る | [§ Shape を RFC する](#新しい-shape-を-rfc-する) | 必要     |
 
 > **大原則**: Takos は Shape catalog を curate する。第三者は **provider** か
 > **template** を増やす。Shape を増やす場合は ecosystem RFC が必要。
 
 ## 新 provider の追加
 
-新しいクラウド / ランタイムで既存 Shape を動かす場合のフロー
-(`CONVENTIONS.md` §4 と同期)。
+新しいクラウド / ランタイムで既存 Shape を動かす場合のフロー (`CONVENTIONS.md`
+§4 と同期)。
 
 ### 1. ファイルを作る
 
@@ -32,8 +32,10 @@ src/shape-providers/<shape-id>/<provider-id>.ts
 
 ### 2. ProviderPlugin factory を export する
 
-既存の [`object-store/aws-s3.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shape-providers/object-store/aws-s3.ts)
-や [`web-service/cloud-run.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shape-providers/web-service/cloud-run.ts)
+既存の
+[`object-store/aws-s3.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shape-providers/object-store/aws-s3.ts)
+や
+[`web-service/cloud-run.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shape-providers/web-service/cloud-run.ts)
 をテンプレに `ProviderPlugin<TSpec, TOutputs>` を返す factory を書きます。
 
 ```ts
@@ -63,18 +65,19 @@ export function createHetznerCloudWebServiceProvider(
 ### 3. Lifecycle client interface を同居させる
 
 provider は **credential を直接持ちません**。同じファイル内で
-`<Provider>LifecycleClient` interface を declare し、`InMemory<Provider>Lifecycle`
-クラスをテスト用に export します。production の lifecycle 配線は
-[§ factories.ts](#factories-ts-に-production-配線を追加) で行います。
+`<Provider>LifecycleClient` interface を declare
+し、`InMemory<Provider>Lifecycle` クラスをテスト用に export します。production
+の lifecycle 配線は [§ factories.ts](#factories-ts-に-production-配線を追加)
+で行います。
 
 ### 4. Naming convention
 
-| 対象             | rule                                                   |
-| ---------------- | ------------------------------------------------------ |
+| 対象             | rule                                                         |
+| ---------------- | ------------------------------------------------------------ |
 | Provider id      | kebab-case、cloud / runtime を最初の token (`hetzner-cloud`) |
-| Provider version | semver (`1.0.0`)。id にバージョンを含めない               |
-| Capability       | lowercase kebab-case、namespace prefix なし            |
-| Output field     | shape の `outputFields` と完全一致                     |
+| Provider version | semver (`1.0.0`)。id にバージョンを含めない                  |
+| Capability       | lowercase kebab-case、namespace prefix なし                  |
+| Output field     | shape の `outputFields` と完全一致                           |
 
 ### 5. mod.ts と deno.json を更新
 
@@ -90,8 +93,7 @@ export {
 // deno.json
 {
   "exports": {
-    "./shape-providers/web-service/hetzner-cloud":
-      "./src/shape-providers/web-service/hetzner-cloud.ts"
+    "./shape-providers/web-service/hetzner-cloud": "./src/shape-providers/web-service/hetzner-cloud.ts"
   }
 }
 ```
@@ -124,7 +126,8 @@ if (opts.hetzner) {
 `GatewayHetznerCloudLifecycle` は `JsonGateway` を使う thin HTTP adapter で、
 operator gateway 経由で Hetzner Cloud API を呼びます。
 
-cf. [Operator Bootstrap § Gateway URL pattern](./operator-bootstrap.md#gateway-url-pattern)
+cf.
+[Operator Bootstrap § Gateway URL pattern](./operator-bootstrap.md#gateway-url-pattern)
 
 ## 新 template の追加
 
@@ -197,41 +200,42 @@ bundled template として `mod.ts` 一括 register に追加します。
 
 1. **Issue を立てる** — github issue で motivating use case と既存 Shape では
    足りない理由を提示。
-2. **Spec / Outputs / Capability 型を書く** —
-   `src/shapes/<shape-id>.ts` に `Shape<Spec, Outputs, Capability>` 実装
-   (`validateSpec` / `validateOutputs` 含む)。
+2. **Spec / Outputs / Capability 型を書く** — `src/shapes/<shape-id>.ts` に
+   `Shape<Spec, Outputs, Capability>` 実装 (`validateSpec` / `validateOutputs`
+   含む)。
 3. **TAKOSUMI_BUNDLED_SHAPES に追加** — `src/shapes/mod.ts` に登録。
-4. **≥ 2 provider を実装** — portability 不変式: 1 shape = 最低 2 provider。
-   1 つの cloud に縛られた Shape は portable とは呼ばないため reject されます。
+4. **≥ 2 provider を実装** — portability 不変式: 1 shape = 最低 2 provider。 1
+   つの cloud に縛られた Shape は portable とは呼ばないため reject されます。
 5. **テスト** — `tests/shape_<shape-id>_test.ts` (validateSpec の境界ケース) と
    `tests/shape_provider_<provider>_test.ts` を整備。
 6. **CONVENTIONS.md §1 表を更新**。
-7. **docs を更新** — [Shape Catalog](./shape-catalog.md) に解説 section を追加し、
-   [Provider Plugins](./provider-plugins.md) に 2 つ以上の provider を追記。
-8. **upstream contract 影響範囲を PR description に記載** —
-   `takosumi-contract` 側 API 変更が必要な場合は coordination を明示。
+7. **docs を更新** — [Shape Catalog](./shape-catalog.md) に解説 section
+   を追加し、 [Provider Plugins](./provider-plugins.md) に 2 つ以上の provider
+   を追記。
+8. **upstream contract 影響範囲を PR description に記載** — `takosumi-contract`
+   側 API 変更が必要な場合は coordination を明示。
 
 ### Naming convention
 
-| 対象                | rule                                                     |
-| ------------------- | -------------------------------------------------------- |
-| Shape id            | kebab-case + `@vN` (`object-store@v1`)                   |
-| breaking change     | 整数 increment (`@v2`)                                   |
-| capability 追加     | 同じ `@vN` のまま (capability list は open enum)          |
+| 対象            | rule                                             |
+| --------------- | ------------------------------------------------ |
+| Shape id        | kebab-case + `@vN` (`object-store@v1`)           |
+| breaking change | 整数 increment (`@v2`)                           |
+| capability 追加 | 同じ `@vN` のまま (capability list は open enum) |
 
 ### Output schema convention
 
 複数 provider が同じ output shape を返すために、field 名と型は shape 全体で
 揃えます (`CONVENTIONS.md` §3 表):
 
-| Suffix / form          | 用途                                                       |
-| ---------------------- | ---------------------------------------------------------- |
-| `*Ref` (string)        | secret reference URI (`secret://...`)                      |
-| `connectionString`     | scheme 付き接続文字列 (`postgresql://...`)                  |
-| `endpoint`, `url`      | scheme 付き URL                                            |
-| `internalHost`         | private DNS name (no scheme)                               |
-| `internalPort`         | numeric port                                               |
-| `bucket`, `database`   | non-secret identifier                                      |
+| Suffix / form        | 用途                                       |
+| -------------------- | ------------------------------------------ |
+| `*Ref` (string)      | secret reference URI (`secret://...`)      |
+| `connectionString`   | scheme 付き接続文字列 (`postgresql://...`) |
+| `endpoint`, `url`    | scheme 付き URL                            |
+| `internalHost`       | private DNS name (no scheme)               |
+| `internalPort`       | numeric port                               |
+| `bucket`, `database` | non-secret identifier                      |
 
 secret の raw value は **絶対に返しません**。`*Ref` field に
 `secret://<provider>/<scope>/<key>` を入れ、kernel 側 secret-store adapter が
@@ -244,4 +248,5 @@ secret の raw value は **絶対に返しません**。`*Ref` field に
 - [Templates](./templates.md)
 - [Manifest](./manifest.md)
 - [Operator Bootstrap](./operator-bootstrap.md)
-- [`CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md) (canonical)
+- [`CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md)
+  (canonical)

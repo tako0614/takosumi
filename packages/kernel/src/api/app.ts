@@ -3,10 +3,7 @@ import type { ActorContext, Deployment } from "takosumi-contract";
 import type { AppContext } from "../app_context.ts";
 import type { AuthPort } from "../adapters/auth/mod.ts";
 import { LocalActorAdapter } from "../adapters/auth/local.ts";
-import type {
-  SourcePort,
-  SourceSnapshot,
-} from "../adapters/source/mod.ts";
+import type { SourcePort, SourceSnapshot } from "../adapters/source/mod.ts";
 import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";
 import { createCoreDomainServices } from "../domains/core/mod.ts";
 import type { PublicDeployManifest } from "../domains/deploy/mod.ts";

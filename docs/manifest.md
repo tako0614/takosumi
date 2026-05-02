@@ -1,23 +1,23 @@
 # Manifest (Shape Model)
 
-このページは新しい **Shape + Provider + Template** model における
-manifest envelope の書き方をまとめます。`resources[]` で portable な
+このページは新しい **Shape + Provider + Template** model における manifest
+envelope の書き方をまとめます。`resources[]` で portable な
 [Shape](./shape-catalog.md) resource を declarative に並べ、`template:` で
-[Template](./templates.md) を呼び、`${ref:...}` syntax で resource 間の
-output を配線します。
+[Template](./templates.md) を呼び、`${ref:...}` syntax で resource 間の output
+を配線します。
 
-> 旧 `target` + `services[]` (legacy profile model) を使う環境向けの
-> reference は [Manifest Spec (legacy)](/reference/manifest-spec) を参照
-> してください。新 model はそれを段階的に置き換えます。
+> 旧 `target` + `services[]` (legacy profile model) を使う環境向けの reference
+> は [Manifest Spec (legacy)](/reference/manifest-spec) を参照 してください。新
+> model はそれを段階的に置き換えます。
 
 ## Envelope 概観
 
 ```yaml
-name: my-app                        # logical app name
-template:                           # optional: Template invocation
+name: my-app # logical app name
+template: # optional: Template invocation
   ref: web-app-on-cloudflare@v1
   inputs: { ... }
-resources:                          # optional: portable Shape resources
+resources: # optional: portable Shape resources
   - shape: object-store@v1
     name: assets
     provider: cloudflare-r2
@@ -26,7 +26,8 @@ resources:                          # optional: portable Shape resources
 ```
 
 `template` と `resources[]` は併用できます。`template` の expansion 結果に
-`resources[]` を **append** する semantics です ([§ template と resources の併用](#template-と-resources-の併用))。
+`resources[]` を **append** する semantics です
+([§ template と resources の併用](#template-と-resources-の併用))。
 
 ## `resources[]` field
 
@@ -34,11 +35,11 @@ resources:                          # optional: portable Shape resources
 
 ```ts
 interface ManifestResource {
-  readonly shape: string;        // "object-store@v1" 等
-  readonly name: string;         // resource 論理名 (manifest scope)
-  readonly provider: string;     // provider id e.g. "aws-s3"
-  readonly spec: JsonValue;      // shape の Spec 型に validate される
-  readonly requires?: readonly string[];  // capability requirement
+  readonly shape: string; // "object-store@v1" 等
+  readonly name: string; // resource 論理名 (manifest scope)
+  readonly provider: string; // provider id e.g. "aws-s3"
+  readonly spec: JsonValue; // shape の Spec 型に validate される
+  readonly requires?: readonly string[]; // capability requirement
   readonly metadata?: JsonObject;
 }
 ```
@@ -50,8 +51,8 @@ interface ManifestResource {
 
 ## `${ref:...}` / `${secret-ref:...}` syntax {#ref-syntax}
 
-resource 間の配線は **string interpolation** で行います。kernel が DAG
-解決後に `RefResolver` で展開します。
+resource 間の配線は **string interpolation** で行います。kernel が DAG 解決後に
+`RefResolver` で展開します。
 
 ```yaml
 resources:
@@ -69,17 +70,17 @@ resources:
       scale: { min: 1, max: 3 }
       bindings:
         DATABASE_URL: ${ref:db.connectionString}
-        DB_PASSWORD:  ${secret-ref:db.passwordSecretRef}
+        DB_PASSWORD: ${secret-ref:db.passwordSecretRef}
 ```
 
 Syntax 仕様 (cf.
-[`manifest-resource.ts`](https://github.com/takos-jp/takosumi/blob/main/src/sdk/manifest.ts) /
-contract `parseRef` / `extractRefs`):
+[`manifest-resource.ts`](https://github.com/takos-jp/takosumi/blob/main/src/sdk/manifest.ts)
+/ contract `parseRef` / `extractRefs`):
 
-| 記法                                  | 意味                                                              |
-| ------------------------------------- | ----------------------------------------------------------------- |
-| `${ref:<name>.<field>}`               | 別 resource の **non-secret** output field を埋め込む             |
-| `${secret-ref:<name>.<field>}`        | secret reference URI (`secret://...`) を埋め込む                  |
+| 記法                           | 意味                                                  |
+| ------------------------------ | ----------------------------------------------------- |
+| `${ref:<name>.<field>}`        | 別 resource の **non-secret** output field を埋め込む |
+| `${secret-ref:<name>.<field>}` | secret reference URI (`secret://...`) を埋め込む      |
 
 - `<name>` / `<field>` は `[A-Za-z_][\w-]*` パターン。
 - `<field>` が当該 Shape の `outputFields` に含まれていなければ reject。
@@ -96,13 +97,15 @@ resources:
   - shape: object-store@v1
     name: assets
     provider: cloudflare-r2
-    requires: [presigned-urls, multipart-upload]   # 通る
+    requires: [presigned-urls, multipart-upload] # 通る
     spec: { name: app-assets }
 
   - shape: object-store@v1
     name: archive
     provider: cloudflare-r2
-    requires: [versioning]   # cloudflare-r2 は versioning を declare していない → reject
+    requires: [
+      versioning,
+    ] # cloudflare-r2 は versioning を declare していない → reject
     spec: { name: app-archive }
 ```
 
@@ -112,17 +115,17 @@ resources:
 
 ## DAG / topological apply order
 
-`${ref:...}` は **依存 edge** を作ります。kernel は manifest を topological
-sort して以下の順で adapter を呼びます:
+`${ref:...}` は **依存 edge** を作ります。kernel は manifest を topological sort
+して以下の順で adapter を呼びます:
 
 1. **DAG build** — `extractRefsFromValue(spec)` で各 resource の参照先を抽出。
 2. **Cycle detection** — 自己ループ / 相互参照を検出した場合は reject。
-3. **Apply phase (topological order)** — 各 resource の `provider.apply(spec, ctx)` を順に実行。
-   `ctx.refResolver.resolve(...)` は既に apply 済み resource の outputs を
-   返します。
+3. **Apply phase (topological order)** — 各 resource の
+   `provider.apply(spec, ctx)` を順に実行。 `ctx.refResolver.resolve(...)`
+   は既に apply 済み resource の outputs を 返します。
 4. **Status phase** — apply 後に各 resource の `status(handle, ctx)` で確認。
-5. **Rollback on failure** — apply phase で失敗した時点までに作られた
-   resource は **逆順** に `destroy(handle, ctx)` されます (best effort)。
+5. **Rollback on failure** — apply phase で失敗した時点までに作られた resource
+   は **逆順** に `destroy(handle, ctx)` されます (best effort)。
 
 ## Template と resources の併用
 
@@ -146,8 +149,8 @@ resources:
 
 template が `app` / `db` / `assets` / `domain` を expand した上に、追加で
 `backups` resource が aws-s3 で apply されます。`${ref:app.url}` のような
-template 内部の参照は template 側で既に解決されており、外側 `resources[]`
-からも `${ref:app.url}` で参照できます。
+template 内部の参照は template 側で既に解決されており、外側 `resources[]` からも
+`${ref:app.url}` で参照できます。
 
 ## Side-by-side: legacy profile vs new shape model
 
@@ -198,15 +201,19 @@ resources:
 
 新 model の良い点:
 
-- **portable** — `provider:` を `aws-fargate` / `k3s-deployment` 等に差し替えるだけで cloud 切替。
-- **explicit** — `${ref:db.connectionString}` で配線が manifest に書かれており、ブラックボックスがない。
+- **portable** — `provider:` を `aws-fargate` / `k3s-deployment`
+  等に差し替えるだけで cloud 切替。
+- **explicit** — `${ref:db.connectionString}` で配線が manifest
+  に書かれており、ブラックボックスがない。
 - **DAG** — 依存解析が contract 側で portable に行われる。
 
 ## 関連ページ
 
-- [Shape Catalog](./shape-catalog.md) — 各 Shape の spec / outputs / capabilities
+- [Shape Catalog](./shape-catalog.md) — 各 Shape の spec / outputs /
+  capabilities
 - [Provider Plugins](./provider-plugins.md) — provider id と実装
 - [Templates](./templates.md) — `template:` で展開する bundled template
 - [Operator Bootstrap](./operator-bootstrap.md) — operator 側 wire 手順
 - [Extending](./extending.md) — provider / shape / template 拡張
-- [Manifest Spec (legacy)](/reference/manifest-spec) — `target+services` 形式の legacy reference
+- [Manifest Spec (legacy)](/reference/manifest-spec) — `target+services` 形式の
+  legacy reference
