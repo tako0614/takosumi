@@ -17,7 +17,7 @@
     "./runtime-agent": "./src/runtime-agent/mod.ts"
   },
   "imports": {
-    "takosumi-contract": "../takos/paas/packages/paas-contract/mod.ts",
+    "takosumi-contract": "../takosumi-contract/mod.ts",
     "hono": "npm:hono@^4.12.4"
   },
   "compilerOptions": {
