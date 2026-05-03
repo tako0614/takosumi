@@ -77,7 +77,7 @@ Deno.test("deploy public route returns 404 when token env unset", async () => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       mode: "apply",
-      manifest: { resources: [SAMPLE_RESOURCE] },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, resources: [SAMPLE_RESOURCE] },
     }),
   });
   assert.equal(response.status, 404);
@@ -92,7 +92,7 @@ Deno.test("deploy public route rejects request without authorization header", as
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       mode: "apply",
-      manifest: { resources: [SAMPLE_RESOURCE] },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, resources: [SAMPLE_RESOURCE] },
     }),
   });
   assert.equal(response.status, 401);
@@ -111,7 +111,7 @@ Deno.test("deploy public route rejects wrong bearer token", async () => {
     },
     body: JSON.stringify({
       mode: "apply",
-      manifest: { resources: [SAMPLE_RESOURCE] },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, resources: [SAMPLE_RESOURCE] },
     }),
   });
   assert.equal(response.status, 401);
@@ -154,7 +154,7 @@ Deno.test("deploy public route applies manifest with valid token", async () => {
     },
     body: JSON.stringify({
       mode: "apply",
-      manifest: { resources: [SAMPLE_RESOURCE] },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, resources: [SAMPLE_RESOURCE] },
     }),
   });
   assert.equal(response.status, 200);
@@ -184,7 +184,7 @@ Deno.test("deploy public route surfaces apply validation failures as 400", async
     },
     body: JSON.stringify({
       mode: "apply",
-      manifest: { resources: [SAMPLE_RESOURCE] },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, resources: [SAMPLE_RESOURCE] },
     }),
   });
   assert.equal(response.status, 400);
@@ -203,7 +203,7 @@ Deno.test("deploy public route rejects manifest without resources[]", async () =
     },
     body: JSON.stringify({
       mode: "apply",
-      manifest: { name: "no-resources" },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, name: "no-resources" },
     }),
   });
   assert.equal(response.status, 400);
@@ -222,7 +222,7 @@ Deno.test("deploy public route rejects unknown mode value", async () => {
     },
     body: JSON.stringify({
       mode: "rollout",
-      manifest: { resources: [SAMPLE_RESOURCE] },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, resources: [SAMPLE_RESOURCE] },
     }),
   });
   assert.equal(response.status, 400);
@@ -252,7 +252,7 @@ Deno.test("deploy public route plan mode short-circuits without invoking apply",
     },
     body: JSON.stringify({
       mode: "plan",
-      manifest: { resources: [SAMPLE_RESOURCE] },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, resources: [SAMPLE_RESOURCE] },
     }),
   });
   assert.equal(response.status, 200);
@@ -336,6 +336,8 @@ Deno.test("deploy public route expands template with valid inputs", async () => 
       body: JSON.stringify({
         mode: "apply",
         manifest: {
+          apiVersion: "1.0" as const,
+          kind: "Manifest" as const,
           template: {
             ref: TEST_TEMPLATE_REF,
             inputs: { serviceName: "logs" },
@@ -369,6 +371,8 @@ Deno.test("deploy public route surfaces template input validation as 400", async
       body: JSON.stringify({
         mode: "apply",
         manifest: {
+          apiVersion: "1.0" as const,
+          kind: "Manifest" as const,
           template: { ref: TEST_TEMPLATE_REF, inputs: {} },
         },
       }),
@@ -396,6 +400,8 @@ Deno.test("deploy public route rejects manifest carrying both template and resou
       body: JSON.stringify({
         mode: "apply",
         manifest: {
+          apiVersion: "1.0" as const,
+          kind: "Manifest" as const,
           template: {
             ref: TEST_TEMPLATE_REF,
             inputs: { serviceName: "logs" },
@@ -424,6 +430,8 @@ Deno.test("deploy public route rejects unknown template ref", async () => {
     body: JSON.stringify({
       mode: "apply",
       manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
         template: { ref: "nonexistent-template@v999", inputs: {} },
       },
     }),
@@ -465,7 +473,7 @@ Deno.test("deploy public route runs destroy mode against destroyV2", async () =>
     body: JSON.stringify({
       mode: "destroy",
       force: true,
-      manifest: { resources: [SAMPLE_RESOURCE] },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, resources: [SAMPLE_RESOURCE] },
     }),
   });
   assert.equal(response.status, 200);
@@ -506,7 +514,7 @@ Deno.test("deploy public route surfaces destroy partial outcome with 200 + error
     body: JSON.stringify({
       mode: "destroy",
       force: true,
-      manifest: { resources: [SAMPLE_RESOURCE] },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, resources: [SAMPLE_RESOURCE] },
     }),
   });
   assert.equal(response.status, 200);
@@ -539,7 +547,7 @@ Deno.test("deploy public route surfaces destroy validation failures as 400", asy
     body: JSON.stringify({
       mode: "destroy",
       force: true,
-      manifest: { resources: [SAMPLE_RESOURCE] },
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const, resources: [SAMPLE_RESOURCE] },
     }),
   });
   assert.equal(response.status, 400);
@@ -580,6 +588,8 @@ Deno.test("apply persists handles + manifest to recordStore", async () => {
     body: JSON.stringify({
       mode: "apply",
       manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
         metadata: { name: "my-app" },
         resources: [SAMPLE_RESOURCE],
       },
@@ -625,6 +635,8 @@ Deno.test("apply persists `failed` status when applyV2 returns failed-apply", as
     body: JSON.stringify({
       mode: "apply",
       manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
         metadata: { name: "broken-app" },
         resources: [SAMPLE_RESOURCE],
       },
@@ -657,6 +669,8 @@ Deno.test("apply does not persist on validation failure", async () => {
     body: JSON.stringify({
       mode: "apply",
       manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
         metadata: { name: "invalid-app" },
         resources: [SAMPLE_RESOURCE],
       },
@@ -676,7 +690,7 @@ Deno.test("destroy feeds persisted handles into destroyV2 via handleFor", async 
   await recordStore.upsert({
     tenantId: "takosumi-deploy",
     name: "my-app",
-    manifest: {},
+    manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const },
     appliedResources: [{
       resourceName: "logs",
       shape: "object-store@v1",
@@ -719,6 +733,8 @@ Deno.test("destroy feeds persisted handles into destroyV2 via handleFor", async 
     body: JSON.stringify({
       mode: "destroy",
       manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
         metadata: { name: "my-app" },
         resources: [SAMPLE_RESOURCE],
       },
@@ -764,6 +780,8 @@ Deno.test(
       body: JSON.stringify({
         mode: "destroy",
         manifest: {
+          apiVersion: "1.0" as const,
+          kind: "Manifest" as const,
           metadata: { name: "ghost" },
           resources: [SAMPLE_RESOURCE],
         },
@@ -815,6 +833,8 @@ Deno.test(
         mode: "destroy",
         force: true,
         manifest: {
+          apiVersion: "1.0" as const,
+          kind: "Manifest" as const,
           metadata: { name: "ghost" },
           resources: [SAMPLE_RESOURCE],
         },
@@ -836,7 +856,7 @@ Deno.test("GET /v1/deployments returns the deployment list", async () => {
   await recordStore.upsert({
     tenantId: "takosumi-deploy",
     name: "app-1",
-    manifest: {},
+    manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const },
     appliedResources: [{
       resourceName: "bucket",
       shape: "object-store@v1",
@@ -851,7 +871,7 @@ Deno.test("GET /v1/deployments returns the deployment list", async () => {
   await recordStore.upsert({
     tenantId: "takosumi-deploy",
     name: "app-2",
-    manifest: {},
+    manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const },
     appliedResources: [],
     status: "destroyed",
     now: "2026-05-01T00:00:00.000Z",
@@ -888,7 +908,7 @@ Deno.test(
     await recordStore.upsert({
       tenantId: "takosumi-deploy",
       name: "single",
-      manifest: {},
+      manifest: { apiVersion: "1.0" as const, kind: "Manifest" as const },
       appliedResources: [{
         resourceName: "bucket",
         shape: "object-store@v1",
@@ -998,6 +1018,8 @@ Deno.test(
     const body = JSON.stringify({
       mode: "apply",
       manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
         metadata: { name: "idempotent-app" },
         resources: [SAMPLE_RESOURCE],
       },
@@ -1111,6 +1133,8 @@ Deno.test(
       body: JSON.stringify({
         mode: "apply",
         manifest: {
+          apiVersion: "1.0" as const,
+          kind: "Manifest" as const,
           metadata: { name: "edited-app" },
           resources: [{
             ...SAMPLE_RESOURCE,
@@ -1132,6 +1156,8 @@ Deno.test(
       body: JSON.stringify({
         mode: "apply",
         manifest: {
+          apiVersion: "1.0" as const,
+          kind: "Manifest" as const,
           metadata: { name: "edited-app" },
           resources: [{
             ...SAMPLE_RESOURCE,
@@ -1183,6 +1209,8 @@ Deno.test(
     const body = JSON.stringify({
       mode: "apply",
       manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
         metadata: { name: "concurrent-app" },
         resources: [SAMPLE_RESOURCE],
       },
@@ -1251,6 +1279,8 @@ Deno.test(
         body: JSON.stringify({
           mode: "apply",
           manifest: {
+            apiVersion: "1.0" as const,
+            kind: "Manifest" as const,
             metadata: { name: "deploy-a" },
             resources: [SAMPLE_RESOURCE],
           },
@@ -1262,6 +1292,8 @@ Deno.test(
         body: JSON.stringify({
           mode: "apply",
           manifest: {
+            apiVersion: "1.0" as const,
+            kind: "Manifest" as const,
             metadata: { name: "deploy-b" },
             resources: [SAMPLE_RESOURCE],
           },

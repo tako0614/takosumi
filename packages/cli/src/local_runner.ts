@@ -1,6 +1,7 @@
 import {
   formatTemplateRef,
   type JsonObject,
+  type ManifestEnvelopeIssue,
   type ManifestResource,
   parseTemplateRef,
   type PlatformContext,
@@ -8,6 +9,7 @@ import {
   registerShape,
   type Template,
   type TemplateValidationIssue,
+  validateManifestEnvelope,
 } from "takosumi-contract";
 import {
   applyV2,
@@ -64,6 +66,14 @@ export function expandManifestLocal(
 ): readonly ManifestResource[] {
   if (typeof manifest !== "object" || manifest === null) {
     throw new Error(describeMissingShapeError());
+  }
+  const envelopeIssues: ManifestEnvelopeIssue[] = [];
+  validateManifestEnvelope(manifest, envelopeIssues);
+  if (envelopeIssues.length > 0) {
+    const formatted = envelopeIssues
+      .map((issue) => `${issue.path}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`manifest envelope rejected: ${formatted}`);
   }
   const m = manifest as Record<string, unknown>;
   if (Array.isArray(m.resources)) {

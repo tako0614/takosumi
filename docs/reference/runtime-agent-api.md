@@ -61,7 +61,7 @@ request body (`LifecycleApplyRequest`):
 ```ts
 interface LifecycleApplyRequest {
   readonly shape: string;          // 例: "object-store@v1"
-  readonly provider: string;       // 例: "aws-s3"
+  readonly provider: string;       // 例: "@takos/aws-s3"
   readonly resourceName: string;   // ManifestResource.name
   readonly spec: JsonValue;        // shape spec (zod 等の validate 済み)
   readonly tenantId?: string;

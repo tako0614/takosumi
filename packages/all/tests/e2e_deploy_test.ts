@@ -243,6 +243,8 @@ function bearer(token: string): Record<string, string> {
 
 function manifestForS3() {
   return {
+    apiVersion: "1.0" as const,
+    kind: "Manifest" as const,
     metadata: { name: "e2e-app" },
     resources: [{
       shape: SHAPE_ID,
@@ -471,6 +473,8 @@ Deno.test("e2e: artifact upload + worker apply via @takos/cloudflare-workers", a
       body: JSON.stringify({
         mode: "apply",
         manifest: {
+          apiVersion: "1.0" as const,
+          kind: "Manifest" as const,
           metadata: { name: "e2e-worker" },
           resources: [{
             shape: WORKER_SHAPE_ID,

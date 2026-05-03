@@ -15,7 +15,11 @@ Deno.test(
         spec: { name: "logs" },
       },
     ];
-    const expanded = expandManifestLocal({ resources });
+    const expanded = expandManifestLocal({
+      apiVersion: "1.0",
+      kind: "Manifest",
+      resources,
+    });
     assert.equal(expanded.length, 1);
     assert.equal(expanded[0].name, "logs");
     assert.equal(expanded[0].provider, "@takos/selfhost-filesystem");
@@ -26,6 +30,8 @@ Deno.test(
   "expandManifestLocal expands kernel-style template invocation (template.template = 'id@version')",
   () => {
     const resources = expandManifestLocal({
+      apiVersion: "1.0",
+      kind: "Manifest",
       template: {
         template: "selfhosted-single-vm@v1",
         inputs: {
@@ -47,6 +53,8 @@ Deno.test(
   "expandManifestLocal expands friendlier template form (template.name = 'id')",
   () => {
     const resources = expandManifestLocal({
+      apiVersion: "1.0",
+      kind: "Manifest",
       template: {
         name: "selfhosted-single-vm",
         inputs: {
@@ -65,7 +73,7 @@ Deno.test(
   () => {
     let caught: Error | undefined;
     try {
-      expandManifestLocal({ apiVersion: "v1" });
+      expandManifestLocal({ apiVersion: "1.0", kind: "Manifest" });
     } catch (err) {
       caught = err as Error;
     }
@@ -84,6 +92,8 @@ Deno.test(
     let caught: Error | undefined;
     try {
       expandManifestLocal({
+        apiVersion: "1.0",
+        kind: "Manifest",
         template: { template: "no-such-template@v1", inputs: {} },
       });
     } catch (err) {
@@ -101,6 +111,8 @@ Deno.test(
     let caught: Error | undefined;
     try {
       expandManifestLocal({
+        apiVersion: "1.0",
+        kind: "Manifest",
         template: { template: "selfhosted-single-vm@v1", inputs: {} },
       });
     } catch (err) {

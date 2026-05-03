@@ -58,8 +58,8 @@ using systemd / docker / filesystem / a local Postgres / coredns.
 `my-app.yml`:
 
 ```yaml
-apiVersion: takosumi.com/hosting/v1
-kind: TakosumiManifest
+apiVersion: "1.0"
+kind: Manifest
 metadata:
   name: my-app
 template:

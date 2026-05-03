@@ -125,7 +125,10 @@ manifest envelope は次の 3 つの組み合わせを取りえます:
 ::: code-group
 
 ```yaml [resources[] のみ]
-name: my-app
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: my-app
 resources:
   - shape: web-service@v1
     name: api
@@ -134,9 +137,12 @@ resources:
 ```
 
 ```yaml [template のみ]
-name: my-app
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: my-app
 template:
-  ref: selfhosted-single-vm@v1
+  template: selfhosted-single-vm@v1
   inputs:
     serviceName: api
     image: ghcr.io/me/api:v1
@@ -145,9 +151,12 @@ template:
 ```
 
 ```yaml [併用 (template の expansion + 追加 resources)]
-name: my-app
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: my-app
 template:
-  ref: web-app-on-cloudflare@v1
+  template: web-app-on-cloudflare@v1
   inputs: { serviceName: app, image: ..., port: 8080, domain: app.example.com }
 resources:
   - shape: object-store@v1

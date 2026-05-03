@@ -1,19 +1,19 @@
 import { Command } from "@cliffy/command";
 
 const TEMPLATES = {
-  "selfhosted-single-vm": `apiVersion: takosumi.com/hosting/v1
-kind: TakosDistribution
+  "selfhosted-single-vm": `apiVersion: "1.0"
+kind: Manifest
 metadata:
   name: my-app
 template:
-  template: takosumi.com/template/selfhosted-single-vm@v1
+  template: selfhosted-single-vm@v1
   inputs:
     serviceName: api
     image: oci://ghcr.io/me/api:latest
     port: 8080
 `,
-  empty: `apiVersion: takosumi.com/hosting/v1
-kind: TakosDistribution
+  empty: `apiVersion: "1.0"
+kind: Manifest
 metadata:
   name: my-app
 resources: []

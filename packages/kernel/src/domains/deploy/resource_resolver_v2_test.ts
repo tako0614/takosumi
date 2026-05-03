@@ -194,7 +194,7 @@ Deno.test("resolveResourcesV2 detects duplicate resource names", () => {
 });
 
 Deno.test(
-  "resolveResourcesV2 accepts legacy bare provider id and warns once",
+  "resolveResourcesV2 rejects legacy bare provider id with a namespaced suggestion",
   () => {
     registerShape(fakeShape("object-store"));
     registerProvider(
@@ -204,11 +204,6 @@ Deno.test(
         ["c1", "c2"],
       ),
     );
-    const originalWarn = console.warn;
-    const warnings: string[] = [];
-    console.warn = (...args: unknown[]) => {
-      warnings.push(args.map((a) => String(a)).join(" "));
-    };
     try {
       const result = resolveResourcesV2([{
         shape: "object-store@v1",
@@ -216,27 +211,18 @@ Deno.test(
         provider: "aws-s3",
         spec: { foo: "bar" },
       }]);
-      assert.equal(result.issues.length, 0);
-      assert.equal(result.resolved.length, 1);
-      assert.equal(result.resolved[0].provider.id, "@takos/aws-s3");
+      assert.equal(result.resolved.length, 0);
+      assert.equal(result.issues.length, 1);
+      const issue = result.issues[0];
+      assert.equal(issue.path, "$.resources[0].provider");
       assert.ok(
-        warnings.some((w) =>
-          w.includes("aws-s3") && w.includes("@takos/aws-s3") &&
-          w.includes("deprecated")
-        ),
-        `expected deprecation warning, got ${JSON.stringify(warnings)}`,
+        issue.message.includes("aws-s3") &&
+          issue.message.includes("@takos/aws-s3") &&
+          issue.message.includes("0.12"),
+        `expected rejection message naming both the legacy id and the ` +
+          `namespaced replacement, got: ${issue.message}`,
       );
-      // Second resolution with same legacy id should not duplicate the warning.
-      const before = warnings.length;
-      resolveResourcesV2([{
-        shape: "object-store@v1",
-        name: "bucket2",
-        provider: "aws-s3",
-        spec: { foo: "bar" },
-      }]);
-      assert.equal(warnings.length, before, "warning fired more than once");
     } finally {
-      console.warn = originalWarn;
       unregisterShape("object-store", "v1");
       unregisterProvider("@takos/aws-s3");
     }

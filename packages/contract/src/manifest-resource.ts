@@ -1,5 +1,71 @@
 import type { JsonObject, JsonValue } from "./types.ts";
 
+/**
+ * Pinned envelope identifier for every Takosumi manifest. The `apiVersion`
+ * and `kind` fields are required from 0.13 onward — operators that omit
+ * them are rejected at the deploy public route. The version is bumped when
+ * a future manifest schema breaks compatibility (additive shape /
+ * provider / template changes do NOT bump it).
+ */
+export const MANIFEST_API_VERSION = "1.0" as const;
+export const MANIFEST_KIND = "Manifest" as const;
+
+export interface ManifestMetadata {
+  readonly name?: string;
+  readonly labels?: { readonly [key: string]: string };
+}
+
+/**
+ * Top-level shape of a Takosumi manifest. The wire representation is YAML
+ * or JSON; the envelope must pin `apiVersion` and `kind` so the kernel can
+ * route future schema versions to compatible validators.
+ */
+export interface Manifest {
+  readonly apiVersion: typeof MANIFEST_API_VERSION;
+  readonly kind: typeof MANIFEST_KIND;
+  readonly metadata?: ManifestMetadata;
+  readonly template?: ManifestTemplateInvocation;
+  readonly resources?: readonly ManifestResource[];
+}
+
+export interface ManifestEnvelopeIssue {
+  readonly path: string;
+  readonly message: string;
+}
+
+/**
+ * Validate the top-level apiVersion / kind of a manifest body. Returns
+ * issues (empty == valid). Designed to run BEFORE template expansion or
+ * resource resolution so misversioned manifests fail fast with an actionable
+ * error.
+ */
+export function validateManifestEnvelope(
+  body: unknown,
+  issues: ManifestEnvelopeIssue[],
+): void {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    issues.push({ path: "$", message: "manifest must be a JSON object" });
+    return;
+  }
+  const m = body as Record<string, unknown>;
+  if (m.apiVersion !== MANIFEST_API_VERSION) {
+    issues.push({
+      path: "$.apiVersion",
+      message:
+        `apiVersion must be "${MANIFEST_API_VERSION}" ` +
+        `(got: ${JSON.stringify(m.apiVersion)})`,
+    });
+  }
+  if (m.kind !== MANIFEST_KIND) {
+    issues.push({
+      path: "$.kind",
+      message:
+        `kind must be "${MANIFEST_KIND}" ` +
+        `(got: ${JSON.stringify(m.kind)})`,
+    });
+  }
+}
+
 export interface ManifestResource {
   readonly shape: string;
   readonly name: string;

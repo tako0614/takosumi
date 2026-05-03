@@ -25,13 +25,14 @@ export interface ResourceResolutionResult {
 }
 
 /**
- * Bare provider id → namespaced provider id.
+ * Bare provider id → namespaced provider id (used for error-message hints
+ * only).
  *
  * Manifests generated before Takosumi 0.10 used bare ids (e.g. `aws-fargate`).
  * Two operator plugins could both register the same bare id, last-write-wins.
- * From 0.10 every shipped provider is namespaced under `@takos/`. The kernel
- * still accepts bare ids for one minor cycle, emitting a deprecation warning;
- * 0.12 will remove this fallback.
+ * From 0.12 onward bare ids are rejected at resolve time; this map only
+ * lets the resolver point operators at the namespaced replacement in the
+ * resolution issue message.
  */
 const LEGACY_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   "aws-s3": "@takos/aws-s3",
@@ -58,29 +59,18 @@ const LEGACY_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Resolve a provider id, transparently accepting legacy bare ids and emitting
- * a one-shot deprecation warning per (rawId, newId) pair so noisy manifests
- * don't drown the operator's logs.
+ * Look up a provider by id. If the operator wrote a known legacy bare id,
+ * return `{ provider: undefined, suggested: "@takos/<name>" }` so the caller
+ * can emit a helpful resolution issue pointing at the namespaced replacement.
  */
-const warnedAliases = new Set<string>();
-function resolveProviderWithAlias(
+function lookupProvider(
   rawId: string,
-): ProviderPlugin | undefined {
+): { provider?: ProviderPlugin; suggested?: string } {
   const direct = getProvider(rawId);
-  if (direct) return direct;
-  if (rawId.startsWith("@")) return undefined;
-  const aliased = LEGACY_PROVIDER_ALIASES[rawId];
-  if (!aliased) return undefined;
-  const provider = getProvider(aliased);
-  if (!provider) return undefined;
-  const key = `${rawId}->${aliased}`;
-  if (!warnedAliases.has(key)) {
-    warnedAliases.add(key);
-    console.warn(
-      `[takosumi-resolver] provider id "${rawId}" is deprecated; use "${aliased}" — bare ids will be rejected in 0.12.`,
-    );
-  }
-  return provider;
+  if (direct) return { provider: direct };
+  if (rawId.startsWith("@")) return {};
+  const suggested = LEGACY_PROVIDER_ALIASES[rawId];
+  return suggested ? { suggested } : {};
 }
 
 export function resolveResourcesV2(
@@ -120,11 +110,15 @@ export function resolveResourcesV2(
       continue;
     }
 
-    const provider = resolveProviderWithAlias(resource.provider);
+    const lookup = lookupProvider(resource.provider);
+    const provider = lookup.provider;
     if (!provider) {
       issues.push({
         path: `${path}.provider`,
-        message: `provider not registered: ${resource.provider}`,
+        message: lookup.suggested
+          ? `provider id "${resource.provider}" is the legacy bare form ` +
+            `removed in Takosumi 0.12; rewrite as "${lookup.suggested}"`
+          : `provider not registered: ${resource.provider}`,
       });
       continue;
     }

@@ -9,9 +9,12 @@ envelope の書き方をまとめます。`resources[]` で portable な
 ## Envelope 概観
 
 ```yaml
-name: my-app # logical app name
+apiVersion: "1.0" # required (kernel が validate する固定値)
+kind: Manifest # required (上記同様、固定値)
+metadata:
+  name: my-app # 論理 app 名 (deployment record の name に使われる)
 template: # optional: Template invocation
-  ref: web-app-on-cloudflare@v1
+  template: web-app-on-cloudflare@v1
   inputs: { ... }
 resources: # optional: portable Shape resources
   - shape: object-store@v1
@@ -20,6 +23,13 @@ resources: # optional: portable Shape resources
     requires: [presigned-urls]
     spec: { name: app-assets }
 ```
+
+`apiVersion` と `kind` は **required** で、 値もそれぞれ `"1.0"` /
+`Manifest` 固定。 これら 2 field を欠いた manifest は kernel
+(`POST /v1/deployments`) と CLI local mode の両方で **400 / envelope
+rejected** される。 `1.0` は将来の breaking schema 変更で `"2.0"`
+に bump され、 互換性のない manifest が混在しても kernel が version
+ごとに routing できるようにする番号。
 
 `template` と `resources[]` は併用できます。`template` の expansion 結果に
 `resources[]` を **append** する semantics です
@@ -126,9 +136,12 @@ resources:
 ## Template と resources の併用
 
 ```yaml
-name: my-app
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: my-app
 template:
-  ref: web-app-on-cloudflare@v1
+  template: web-app-on-cloudflare@v1
   inputs:
     serviceName: app
     image: ghcr.io/example/app@sha256:abcd...
@@ -168,7 +181,10 @@ domains:
 ```
 
 ```yaml [new (resources[] + ${ref:...})]
-name: my-app
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: my-app
 resources:
   - shape: database-postgres@v1
     name: db

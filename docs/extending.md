@@ -160,8 +160,8 @@ export const SelfhostedK3sClusterTemplate: Template<SelfhostedK3sClusterInputs> 
   validateInputs(value, issues) { /* ... */ },
   expand(inputs) {
     return [
-      { shape: "database-postgres@v1", name: "db",  provider: "local-docker", spec: { ... } },
-      { shape: "web-service@v1",       name: inputs.serviceName, provider: "k3s-deployment",
+      { shape: "database-postgres@v1", name: "db",  provider: "@takos/selfhost-postgres", spec: { ... } },
+      { shape: "web-service@v1",       name: inputs.serviceName, provider: "@takos/kubernetes-deployment",
         spec: { /* ${ref:db.connectionString} bindings */ } },
     ];
   },

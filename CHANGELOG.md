@@ -10,6 +10,17 @@ package crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes
 
 ## takosumi-cli
 
+### 0.13.0 — 2026-05-03
+
+- **Breaking**: `expandManifestLocal()` / `takosumi deploy` / `takosumi
+  destroy` now run `validateManifestEnvelope()` (from contract 2.4.0)
+  before template expansion. Manifests missing
+  `apiVersion: "1.0"` / `kind: Manifest` are rejected with
+  `manifest envelope rejected: ...`.
+- `takosumi init` scaffolded manifests now emit `apiVersion: "1.0"` /
+  `kind: Manifest` (was `apiVersion: takosumi.com/hosting/v1` /
+  `kind: TakosDistribution`).
+
 ### 0.12.0 — 2026-05-03
 
 - `takosumi destroy <manifest>` now works in **local mode** (in-process
@@ -66,6 +77,18 @@ package crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes
 
 ## takosumi-kernel
 
+### 0.13.0 — 2026-05-03
+
+- **Breaking**: `POST /v1/deployments` (deploy public route) now invokes
+  `validateManifestEnvelope()` from contract 2.4.0 — manifests missing
+  `apiVersion: "1.0"` / `kind: Manifest` are rejected with HTTP 400 and
+  a path-prefixed error.
+- **Breaking**: bare provider ids (`aws-fargate`, `cloud-run`,
+  `local-docker`, etc.) are now **rejected** at the resource resolver
+  with a namespaced-replacement suggestion. Earlier the resolver fell
+  back transparently to namespaced ids with a deprecation warning.
+  Migration: rewrite every `provider:` field to `@takos/<cloud>-<service>`.
+
 ### 0.12.0 — 2026-05-02
 
 - Deployment record store backend logged at boot
@@ -95,6 +118,14 @@ package crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes
 
 ## takosumi-contract
 
+### 2.4.0 — 2026-05-03
+
+- **Breaking**: new `Manifest` envelope type with required
+  `apiVersion: "1.0"` and `kind: "Manifest"` fields. Exports
+  `MANIFEST_API_VERSION`, `MANIFEST_KIND`, `validateManifestEnvelope()`,
+  `ManifestEnvelopeIssue`, `ManifestMetadata`. Operators must prepend
+  these two fields to every manifest YAML / JSON.
+
 ### 2.3.0 — 2026-05-02
 
 - Artifact-kind registry exports
@@ -102,6 +133,13 @@ package crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes
 - `registerProvider` collision warning + `allowOverride` opt-out.
 
 ## takosumi (umbrella)
+
+### 0.14.0 — 2026-05-03
+
+- Re-export bump tracking `takosumi-contract@2.4.0`,
+  `takosumi-kernel@0.13.0`, `takosumi-cli@0.13.0`. Manifest envelope
+  (`apiVersion: "1.0"` / `kind: Manifest`) is now required across the
+  board.
 
 ### 0.13.0 — 2026-05-03
 

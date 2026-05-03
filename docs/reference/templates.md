@@ -57,9 +57,12 @@ interface SelfhostedSingleVmInputs {
 ### Manifest 例
 
 ```yaml
-name: my-selfhost-app
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: my-selfhost-app
 template:
-  ref: selfhosted-single-vm@v1
+  template: selfhosted-single-vm@v1
   inputs:
     serviceName: api
     image: ghcr.io/example/api@sha256:0123...
@@ -107,15 +110,18 @@ interface WebAppOnCloudflareInputs {
 ### Manifest 例
 
 ```yaml
-name: my-edge-app
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: my-edge-app
 template:
-  ref: web-app-on-cloudflare@v1
+  template: web-app-on-cloudflare@v1
   inputs:
     serviceName: app
     image: ghcr.io/example/app@sha256:0123...
     port: 8080
     domain: app.example.com
-    databaseProvider: aws-rds
+    databaseProvider: "@takos/aws-rds"
 ```
 
 ### Expansion 結果

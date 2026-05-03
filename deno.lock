@@ -160,25 +160,25 @@
           "jsr:@cliffy/command@^1.0.0-rc.7",
           "jsr:@std/path@1",
           "jsr:@std/yaml@1",
-          "jsr:@takos/takosumi-contract@^2.3.0",
-          "jsr:@takos/takosumi-kernel@0.12",
+          "jsr:@takos/takosumi-contract@^2.4.0",
+          "jsr:@takos/takosumi-kernel@0.13",
           "jsr:@takos/takosumi-runtime-agent@0.7"
         ]
       },
       "packages/kernel": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.3.0",
+          "jsr:@takos/takosumi-contract@^2.4.0",
           "jsr:@takos/takosumi-plugins@0.10"
         ]
       },
       "packages/plugins": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.3.0"
+          "jsr:@takos/takosumi-contract@^2.4.0"
         ]
       },
       "packages/runtime-agent": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.3.0",
+          "jsr:@takos/takosumi-contract@^2.4.0",
           "npm:hono@^4.12.4"
         ]
       }

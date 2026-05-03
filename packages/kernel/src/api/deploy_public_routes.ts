@@ -1,13 +1,14 @@
 import type { Hono as HonoApp } from "hono";
 import type {
   JsonObject,
+  ManifestEnvelopeIssue,
   ManifestResource,
   PlatformContext,
   RefResolver,
   ResourceHandle,
   TemplateValidationIssue,
 } from "takosumi-contract";
-import { getTemplateByRef } from "takosumi-contract";
+import { getTemplateByRef, validateManifestEnvelope } from "takosumi-contract";
 import type { AppContext } from "../app_context.ts";
 import {
   applyV2,
@@ -623,6 +624,16 @@ function readManifestResources(
   | { ok: false; error: string } {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     return { ok: false, error: "manifest must be a JSON object" };
+  }
+  const envelopeIssues: ManifestEnvelopeIssue[] = [];
+  validateManifestEnvelope(manifest, envelopeIssues);
+  if (envelopeIssues.length > 0) {
+    return {
+      ok: false,
+      error: envelopeIssues
+        .map((issue) => `${issue.path}: ${issue.message}`)
+        .join("; "),
+    };
   }
   const manifestRecord = manifest as Record<string, unknown>;
   const hasResources = manifestRecord.resources !== undefined;
