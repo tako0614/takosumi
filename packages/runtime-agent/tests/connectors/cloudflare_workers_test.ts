@@ -43,7 +43,10 @@ function recordingFetch(
   return { fetch: fetchImpl, calls };
 }
 
-function fakeFetcher(bytes: Uint8Array, requestedHashes: string[]): ArtifactFetcher {
+function fakeFetcher(
+  bytes: Uint8Array,
+  requestedHashes: string[],
+): ArtifactFetcher {
   return {
     async fetch(hash: string) {
       requestedHashes.push(hash);
@@ -69,7 +72,9 @@ function okEnvelope(): Response {
 Deno.test(
   "CloudflareWorkersConnector.apply fetches js-bundle, PUTs multipart upload, returns descriptor",
   async () => {
-    const bundleBytes = new TextEncoder().encode("export default { fetch() {} }");
+    const bundleBytes = new TextEncoder().encode(
+      "export default { fetch() {} }",
+    );
     const requestedHashes: string[] = [];
     const fetcher = fakeFetcher(bundleBytes, requestedHashes);
     const { fetch: mockFetch, calls } = recordingFetch(() => okEnvelope());

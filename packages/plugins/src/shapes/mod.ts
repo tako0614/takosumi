@@ -42,11 +42,7 @@ export type {
   WebServiceScale,
   WebServiceSpec,
 } from "./web-service.ts";
-export type {
-  WorkerCapability,
-  WorkerOutputs,
-  WorkerSpec,
-} from "./worker.ts";
+export type { WorkerCapability, WorkerOutputs, WorkerSpec } from "./worker.ts";
 
 export const TAKOSUMI_BUNDLED_SHAPES: readonly Shape[] = [
   WebServiceShape as Shape,

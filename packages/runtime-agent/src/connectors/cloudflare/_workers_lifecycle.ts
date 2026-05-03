@@ -147,15 +147,22 @@ function buildScriptForm(input: CloudflareWorkersCreateInput): FormData {
     "metadata.json",
   );
   // Wrap the bundle in a Blob with the module content-type so Cloudflare
-  // recognises it as an ES module entrypoint.
-  const blob = new Blob([input.bundle], { type: MODULE_CONTENT_TYPE });
+  // recognises it as an ES module entrypoint. Copy through a fresh ArrayBuffer
+  // so the BlobPart typing doesn't reject SharedArrayBuffer-backed inputs.
+  const buffer = new ArrayBuffer(input.bundle.byteLength);
+  new Uint8Array(buffer).set(input.bundle);
+  const blob = new Blob([buffer], { type: MODULE_CONTENT_TYPE });
   form.append(input.mainModule, blob, input.mainModule);
   return form;
 }
 
 function envBindings(
   env: Readonly<Record<string, string>> | undefined,
-): { readonly type: "plain_text"; readonly name: string; readonly text: string }[] {
+): {
+  readonly type: "plain_text";
+  readonly name: string;
+  readonly text: string;
+}[] {
   if (!env) return [];
   return Object.entries(env).map(([name, text]) => ({
     type: "plain_text" as const,
