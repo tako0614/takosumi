@@ -14,7 +14,12 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import { verifyResultFromError } from "../_verify_helpers.ts";
 
 export interface FilesystemConnectorOptions {
   readonly rootDir: string;
@@ -78,6 +83,32 @@ export class FilesystemConnector implements Connector {
         return { status: "missing" };
       }
       throw error;
+    }
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const stat = await Deno.stat(this.#rootDir);
+      if (!stat.isDirectory) {
+        return {
+          ok: false,
+          code: "permission_denied",
+          note: `filesystem:Deno.stat ${this.#rootDir}: not a directory`,
+        };
+      }
+      return { ok: true, note: `rootDir exists: ${this.#rootDir}` };
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) {
+        return {
+          ok: false,
+          code: "network_error",
+          note: `filesystem:Deno.stat ${this.#rootDir}: directory not found`,
+        };
+      }
+      return verifyResultFromError(
+        error,
+        `filesystem:Deno.stat ${this.#rootDir}`,
+      );
     }
   }
 

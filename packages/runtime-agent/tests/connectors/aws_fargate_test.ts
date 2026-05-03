@@ -7,6 +7,42 @@ const credentials = {
   secretAccessKey: "s",
 };
 
+Deno.test("AwsFargateConnector.verify hits DescribeClusters and reports ok on 200", async () => {
+  const { fetch: mockFetch, calls } = recordingFetch(() =>
+    new Response(JSON.stringify({ clusters: [] }), { status: 200 })
+  );
+  const connector = new AwsFargateConnector({
+    region: "us-east-1",
+    credentials,
+    clusterName: "takos",
+    subnetIds: ["subnet-1"],
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, true);
+  assert.equal(res.note, "credentials valid");
+  assert.equal(
+    calls[0].headers.get("x-amz-target"),
+    "AmazonEC2ContainerServiceV20141113.DescribeClusters",
+  );
+});
+
+Deno.test("AwsFargateConnector.verify reports auth_failed on 401", async () => {
+  const { fetch: mockFetch } = recordingFetch(() =>
+    new Response("{}", { status: 401 })
+  );
+  const connector = new AwsFargateConnector({
+    region: "us-east-1",
+    credentials,
+    clusterName: "takos",
+    subnetIds: ["subnet-1"],
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, false);
+  assert.equal(res.code, "auth_failed");
+});
+
 Deno.test("AwsFargateConnector.apply registers task def and creates service", async () => {
   // The lifecycle calls RegisterTaskDefinition then CreateService — both 200.
   const responses = [

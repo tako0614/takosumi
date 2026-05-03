@@ -4,6 +4,39 @@ import { recordingFetch } from "./_fetch_mock.ts";
 
 const credentials = { accessKeyId: "AKIA", secretAccessKey: "s" };
 
+Deno.test("Route53Connector.verify hits hostedzonecount and reports ok on 200", async () => {
+  const { fetch: mockFetch, calls } = recordingFetch(() =>
+    new Response(
+      "<GetHostedZoneCountResponse><HostedZoneCount>3</HostedZoneCount></GetHostedZoneCountResponse>",
+      { status: 200 },
+    )
+  );
+  const connector = new Route53Connector({
+    credentials,
+    hostedZoneId: "ZONE-1",
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, true);
+  assert.equal(res.note, "credentials valid");
+  assert.equal(calls[0].method, "GET");
+  assert.match(calls[0].url, /\/2013-04-01\/hostedzonecount$/);
+});
+
+Deno.test("Route53Connector.verify reports auth_failed on 401", async () => {
+  const { fetch: mockFetch } = recordingFetch(() =>
+    new Response("<Error/>", { status: 401 })
+  );
+  const connector = new Route53Connector({
+    credentials,
+    hostedZoneId: "ZONE-1",
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, false);
+  assert.equal(res.code, "auth_failed");
+});
+
 Deno.test("Route53Connector.apply UPSERTs CNAME via ChangeResourceRecordSets", async () => {
   const { fetch: mockFetch, calls } = recordingFetch(() =>
     new Response("<ok/>", { status: 200 })

@@ -40,6 +40,10 @@ import {
   registerArtifactRoutes,
   type RegisterArtifactRoutesOptions,
 } from "./artifact_routes.ts";
+import {
+  registerDeployPublicRoutes,
+  type RegisterDeployPublicRoutesOptions,
+} from "./deploy_public_routes.ts";
 import { DefaultGroupSummaryStatusProjector } from "../services/status/mod.ts";
 import { permissionDenied } from "../shared/errors.ts";
 
@@ -61,6 +65,14 @@ export interface CreateApiAppOptions {
   readonly runtimeAgentRouteOptions?: RegisterRuntimeAgentRoutesOptions;
   readonly registerArtifactRoutes?: boolean;
   readonly artifactRouteOptions?: RegisterArtifactRoutesOptions;
+  /**
+   * When set, mounts the public `POST /v1/deployments` route used by the
+   * Takosumi CLI. Bootstrap fills these in when `TAKOSUMI_DEPLOY_TOKEN`
+   * is configured; tests can pass their own options to override the
+   * platform context or the record store.
+   */
+  readonly registerDeployPublicRoutes?: boolean;
+  readonly deployPublicRouteOptions?: RegisterDeployPublicRoutesOptions;
   readonly sourceAdapters?: PublicDeploySourceAdapters;
   /** Optional extension point for mounting current/future route modules. */
   readonly configure?: (app: HonoApp) => void | Promise<void>;
@@ -101,6 +113,9 @@ export async function createApiApp(
   const readinessRoutesMounted = options.registerReadinessRoutes ?? false;
   const artifactRoutesMounted = options.registerArtifactRoutes ??
     (role === "takosumi-api" && options.artifactRouteOptions !== undefined);
+  const deployPublicRoutesMounted = options.registerDeployPublicRoutes ??
+    (role === "takosumi-api" &&
+      options.deployPublicRouteOptions !== undefined);
 
   if (internalRoutesMounted) assertRoleCapability(role, "api.internal.host");
   if (publicRoutesMounted) assertRoleCapability(role, "api.public.host");
@@ -146,6 +161,10 @@ export async function createApiApp(
       );
     }
     registerArtifactRoutes(app, options.artifactRouteOptions);
+  }
+
+  if (deployPublicRoutesMounted) {
+    registerDeployPublicRoutes(app, options.deployPublicRouteOptions ?? {});
   }
 
   if (readinessRoutesMounted) {

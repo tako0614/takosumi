@@ -144,6 +144,166 @@ Deno.test("GET /v1/connectors lists registered connectors with auth", async () =
   );
 });
 
+Deno.test("/v1/lifecycle/verify rejects missing auth", async () => {
+  const registry = new ConnectorRegistry();
+  const app = createRuntimeAgentApp({ registry, token: "tok" });
+  const res = await app.request("/v1/lifecycle/verify", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(res.status, 401);
+});
+
+Deno.test(
+  "/v1/lifecycle/verify reports `no verify hook` for connectors without verify",
+  async () => {
+    const registry = new ConnectorRegistry();
+    registry.register({
+      provider: "memory",
+      shape: "object-store@v1",
+      acceptedArtifactKinds: [],
+      apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+      destroy: () => Promise.resolve({ ok: true }),
+      describe: () => Promise.resolve({ status: "running" as const }),
+    });
+    const app = createRuntimeAgentApp({ registry, token: "tok" });
+    const res = await app.request("/v1/lifecycle/verify", {
+      method: "POST",
+      headers: authHeaders("tok"),
+      body: "{}",
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json() as {
+      results: Array<
+        { shape: string; provider: string; ok: boolean; note?: string }
+      >;
+    };
+    assert.equal(body.results.length, 1);
+    assert.equal(body.results[0].ok, true);
+    assert.equal(body.results[0].note, "no verify hook");
+  },
+);
+
+Deno.test("/v1/lifecycle/verify aggregates ok + fail connectors", async () => {
+  const registry = new ConnectorRegistry();
+  registry.register({
+    provider: "good",
+    shape: "object-store@v1",
+    acceptedArtifactKinds: [],
+    apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+    destroy: () => Promise.resolve({ ok: true }),
+    describe: () => Promise.resolve({ status: "running" as const }),
+    verify: () => Promise.resolve({ ok: true, note: "credentials valid" }),
+  });
+  registry.register({
+    provider: "bad",
+    shape: "web-service@v1",
+    acceptedArtifactKinds: ["oci-image"],
+    apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+    destroy: () => Promise.resolve({ ok: true }),
+    describe: () => Promise.resolve({ status: "running" as const }),
+    verify: () =>
+      Promise.resolve({
+        ok: false,
+        code: "auth_failed",
+        note: "401 Unauthorized",
+      }),
+  });
+  const app = createRuntimeAgentApp({ registry, token: "tok" });
+  const res = await app.request("/v1/lifecycle/verify", {
+    method: "POST",
+    headers: authHeaders("tok"),
+    body: "{}",
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json() as {
+    results: Array<{
+      shape: string;
+      provider: string;
+      ok: boolean;
+      note?: string;
+      code?: string;
+    }>;
+  };
+  assert.equal(body.results.length, 2);
+  const byProvider = Object.fromEntries(
+    body.results.map((r) => [r.provider, r]),
+  );
+  assert.equal(byProvider.good.ok, true);
+  assert.equal(byProvider.good.note, "credentials valid");
+  assert.equal(byProvider.bad.ok, false);
+  assert.equal(byProvider.bad.code, "auth_failed");
+});
+
+Deno.test(
+  "/v1/lifecycle/verify catches thrown errors as network_error",
+  async () => {
+    const registry = new ConnectorRegistry();
+    registry.register({
+      provider: "throws",
+      shape: "object-store@v1",
+      acceptedArtifactKinds: [],
+      apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+      destroy: () => Promise.resolve({ ok: true }),
+      describe: () => Promise.resolve({ status: "running" as const }),
+      verify: () => Promise.reject(new Error("connection refused")),
+    });
+    const app = createRuntimeAgentApp({ registry, token: "tok" });
+    const res = await app.request("/v1/lifecycle/verify", {
+      method: "POST",
+      headers: authHeaders("tok"),
+      body: "{}",
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json() as {
+      results: Array<
+        { ok: boolean; code?: string; note?: string }
+      >;
+    };
+    assert.equal(body.results[0].ok, false);
+    assert.equal(body.results[0].code, "network_error");
+    assert.match(`${body.results[0].note}`, /connection refused/);
+  },
+);
+
+Deno.test(
+  "/v1/lifecycle/verify filters by shape + provider when supplied",
+  async () => {
+    const registry = new ConnectorRegistry();
+    registry.register({
+      provider: "memory",
+      shape: "object-store@v1",
+      acceptedArtifactKinds: [],
+      apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+      destroy: () => Promise.resolve({ ok: true }),
+      describe: () => Promise.resolve({ status: "running" as const }),
+      verify: () => Promise.resolve({ ok: true }),
+    });
+    registry.register({
+      provider: "alt",
+      shape: "web-service@v1",
+      acceptedArtifactKinds: ["oci-image"],
+      apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+      destroy: () => Promise.resolve({ ok: true }),
+      describe: () => Promise.resolve({ status: "running" as const }),
+      verify: () => Promise.resolve({ ok: true }),
+    });
+    const app = createRuntimeAgentApp({ registry, token: "tok" });
+    const res = await app.request("/v1/lifecycle/verify", {
+      method: "POST",
+      headers: authHeaders("tok"),
+      body: JSON.stringify({ provider: "alt" }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json() as {
+      results: Array<{ provider: string }>;
+    };
+    assert.equal(body.results.length, 1);
+    assert.equal(body.results[0].provider, "alt");
+  },
+);
+
 Deno.test("destroy dispatches to registered connector", async () => {
   const registry = new ConnectorRegistry();
   let destroyed: string | undefined;

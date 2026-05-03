@@ -11,7 +11,15 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import {
+  verifyResultFromError,
+  verifyResultFromStatus,
+} from "../_verify_helpers.ts";
 import {
   DirectRoute53Lifecycle,
   type Route53RecordDescriptor,
@@ -75,6 +83,20 @@ export class Route53Connector implements Connector {
     });
     if (!desc) return { status: "missing" };
     return { status: "running", outputs: outputsFor(desc) };
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const response = await this.#lifecycle.hostedZoneCountResponse();
+      const text = response.ok ? "" : await response.text().catch(() => "");
+      return verifyResultFromStatus(response.status, {
+        okStatuses: [200],
+        responseText: text,
+        context: "route53:GetHostedZoneCount",
+      });
+    } catch (error) {
+      return verifyResultFromError(error, "route53:GetHostedZoneCount");
+    }
   }
 }
 

@@ -12,7 +12,15 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import {
+  verifyResultFromError,
+  verifyResultFromStatus,
+} from "../_verify_helpers.ts";
 import {
   DirectK3sDeploymentLifecycle,
   type K3sDeploymentDescriptor,
@@ -100,6 +108,20 @@ export class K3sDeploymentConnector implements Connector {
     });
     if (!desc) return { status: "missing" };
     return { status: "running", outputs: this.#outputsFor(desc) };
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const response = await this.#lifecycle.listNamespacesResponse();
+      const text = response.ok ? "" : await response.text().catch(() => "");
+      return verifyResultFromStatus(response.status, {
+        okStatuses: [200],
+        responseText: text,
+        context: "k8s:ListNamespaces",
+      });
+    } catch (error) {
+      return verifyResultFromError(error, "k8s:ListNamespaces");
+    }
   }
 
   #outputsFor(desc: K3sDeploymentDescriptor): JsonObject {

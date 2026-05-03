@@ -114,6 +114,23 @@ export class DirectAwsS3Lifecycle {
     };
   }
 
+  /**
+   * Cheapest read-only call: `GET /` against the regional endpoint, which
+   * returns the caller's bucket list. Returns the raw `Response` so the
+   * connector can interpret the status as a verify result.
+   */
+  listBucketsResponse(): Promise<Response> {
+    return sigv4Fetch(
+      {
+        method: "GET",
+        url: `https://s3.${this.#region}.amazonaws.com/`,
+        service: "s3",
+        region: this.#region,
+      },
+      { credentials: this.#credentials, fetch: this.#fetch },
+    );
+  }
+
   async deleteBucket(input: AwsS3BucketDeleteInput): Promise<boolean> {
     const url = bucketUrl(input.bucketName, this.#region);
     if (input.emptyBeforeDelete) {

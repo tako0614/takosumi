@@ -36,6 +36,27 @@ Deno.test("FilesystemConnector.describe returns missing for non-existent dir", a
   }
 });
 
+Deno.test("FilesystemConnector.verify returns ok when rootDir exists", async () => {
+  const root = await Deno.makeTempDir({ prefix: "fs-connector-verify-" });
+  try {
+    const connector = new FilesystemConnector({ rootDir: root });
+    const res = await connector.verify({});
+    assert.equal(res.ok, true);
+    assert.match(`${res.note}`, /rootDir exists/);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("FilesystemConnector.verify returns ok=false when rootDir missing", async () => {
+  const root = await Deno.makeTempDir({ prefix: "fs-connector-verify-" });
+  await Deno.remove(root, { recursive: true });
+  const connector = new FilesystemConnector({ rootDir: root });
+  const res = await connector.verify({});
+  assert.equal(res.ok, false);
+  assert.equal(res.code, "network_error");
+});
+
 Deno.test("FilesystemConnector.destroy removes the directory", async () => {
   const root = await Deno.makeTempDir({ prefix: "fs-connector-" });
   try {

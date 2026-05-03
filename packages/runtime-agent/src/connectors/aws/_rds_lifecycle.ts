@@ -142,9 +142,28 @@ export class DirectAwsRdsLifecycle {
     }
   }
 
+  /**
+   * Verify-only helper: issues `DescribeDBInstances` (no filters) against
+   * the configured region. Returns the raw `Response` so the connector can
+   * report a verify result without throwing on auth / network failures.
+   */
+  describeInstancesResponse(): Promise<Response> {
+    return this.#sendRds({
+      "Action": "DescribeDBInstances",
+      "Version": "2014-10-31",
+      "MaxRecords": "20",
+    });
+  }
+
   async #callRds(params: Record<string, string>): Promise<string> {
+    const response = await this.#sendRds(params);
+    await ensureAwsResponseOk(response, `rds:${params.Action}`);
+    return await response.text();
+  }
+
+  #sendRds(params: Record<string, string>): Promise<Response> {
     const body = new URLSearchParams(params).toString();
-    const response = await sigv4Fetch(
+    return sigv4Fetch(
       {
         method: "POST",
         url: `https://rds.${this.#opts.region}.amazonaws.com/`,
@@ -160,8 +179,6 @@ export class DirectAwsRdsLifecycle {
         fetch: this.#opts.fetch,
       },
     );
-    await ensureAwsResponseOk(response, `rds:${params.Action}`);
-    return await response.text();
   }
 }
 

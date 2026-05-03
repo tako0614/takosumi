@@ -18,7 +18,15 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import {
+  verifyResultFromError,
+  verifyResultFromStatus,
+} from "../_verify_helpers.ts";
 import {
   type CloudflareWorkersDescriptor,
   DirectCloudflareWorkersLifecycle,
@@ -104,6 +112,21 @@ export class CloudflareWorkersConnector implements Connector {
     });
     if (!desc) return { status: "missing" };
     return { status: "running", outputs: outputsFor(desc) };
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const response = await this.#lifecycle.fetchSubdomainResponse();
+      const text = response.ok ? "" : await response.text().catch(() => "");
+      // 404 = subdomain not configured but credentials still proven valid.
+      return verifyResultFromStatus(response.status, {
+        okStatuses: [200, 404],
+        responseText: text,
+        context: "cf-workers:GetSubdomain",
+      });
+    } catch (error) {
+      return verifyResultFromError(error, "cf-workers:GetSubdomain");
+    }
   }
 }
 

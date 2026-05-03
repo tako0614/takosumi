@@ -13,7 +13,12 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import { verifyResultFromError } from "../_verify_helpers.ts";
 
 export interface CorednsLocalConnectorOptions {
   readonly zoneFile: string;
@@ -90,6 +95,32 @@ export class CorednsLocalConnector implements Connector {
       status: "running",
       outputs: outputsFor(desc),
     });
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const stat = await Deno.stat(this.#zoneFile);
+      if (!stat.isFile) {
+        return {
+          ok: false,
+          code: "permission_denied",
+          note: `coredns:Deno.stat ${this.#zoneFile}: not a file`,
+        };
+      }
+      return { ok: true, note: `Corefile present: ${this.#zoneFile}` };
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) {
+        return {
+          ok: false,
+          code: "network_error",
+          note: `coredns:Deno.stat ${this.#zoneFile}: file not found`,
+        };
+      }
+      return verifyResultFromError(
+        error,
+        `coredns:Deno.stat ${this.#zoneFile}`,
+      );
+    }
   }
 }
 

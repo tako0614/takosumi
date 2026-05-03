@@ -168,6 +168,26 @@ export class DirectCloudRunLifecycle {
     };
   }
 
+  /**
+   * Verify-only: list Cloud Run services in the configured region. Returns
+   * raw status / text so the connector can produce a `ConnectorVerifyResult`
+   * without throwing.
+   */
+  listServicesResult(): Promise<
+    { status: number; ok: boolean; text: string }
+  > {
+    return gcpJsonFetch(this.#tokens, {
+      method: "GET",
+      url:
+        `https://run.googleapis.com/v2/projects/${this.#project}/locations/${this.#region}/services?pageSize=1`,
+      fetch: this.#fetch,
+    }).then((result) => ({
+      status: result.status,
+      ok: result.ok,
+      text: result.text,
+    }));
+  }
+
   async deleteService(
     input: { readonly serviceName: string },
   ): Promise<boolean> {

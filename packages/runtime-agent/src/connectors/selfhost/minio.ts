@@ -12,7 +12,15 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import {
+  verifyResultFromError,
+  verifyResultFromStatus,
+} from "../_verify_helpers.ts";
 
 export interface MinioConnectorOptions {
   readonly endpoint: string;
@@ -86,6 +94,26 @@ export class MinioConnector implements Connector {
       status: "running",
       outputs: this.#outputsFor(req.handle),
     };
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const probeUrl = `${this.#endpoint}/minio/health/live`;
+      const response = await this.#fetch(probeUrl, { method: "GET" });
+      // 200 = live; 404 = endpoint reachable but no health probe (older
+      // builds) — still indicates connectivity, so accept it.
+      const text = response.ok ? "" : await response.text().catch(() => "");
+      return verifyResultFromStatus(response.status, {
+        okStatuses: [200, 204, 404],
+        responseText: text,
+        context: `minio:HealthLive ${this.#endpoint}`,
+      });
+    } catch (error) {
+      return verifyResultFromError(
+        error,
+        `minio:HealthLive ${this.#endpoint}`,
+      );
+    }
   }
 
   #outputsFor(bucket: string): JsonObject {

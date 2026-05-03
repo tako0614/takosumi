@@ -160,6 +160,17 @@ export class DirectK3sDeploymentLifecycle {
     return depDeleted;
   }
 
+  /**
+   * Verify-only: GET `/api/v1/namespaces`. Returns the raw `Response` so
+   * the connector can produce a verify result without throwing.
+   */
+  listNamespacesResponse(): Promise<Response> {
+    return this.#fetch(`${this.#base}/api/v1/namespaces?limit=1`, {
+      method: "GET",
+      headers: this.#authHeaders(),
+    });
+  }
+
   async #getJson<T>(path: string): Promise<T | undefined> {
     const response = await this.#fetch(`${this.#base}${path}`, {
       method: "GET",

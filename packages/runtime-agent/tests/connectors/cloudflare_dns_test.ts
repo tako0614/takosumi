@@ -2,6 +2,42 @@ import assert from "node:assert/strict";
 import { CloudflareDnsConnector } from "../../src/connectors/cloudflare/dns.ts";
 import { recordingFetch } from "./_fetch_mock.ts";
 
+Deno.test("CloudflareDnsConnector.verify GETs zone metadata and reports ok on 200", async () => {
+  const { fetch: mockFetch, calls } = recordingFetch(() =>
+    new Response(
+      JSON.stringify({ success: true, result: { id: "zone-1" } }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )
+  );
+  const connector = new CloudflareDnsConnector({
+    zoneId: "zone-1",
+    apiToken: "cf-token",
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, true);
+  assert.equal(res.note, "credentials valid");
+  assert.equal(calls[0].method, "GET");
+  assert.match(calls[0].url, /\/zones\/zone-1$/);
+});
+
+Deno.test("CloudflareDnsConnector.verify reports auth_failed on 401", async () => {
+  const { fetch: mockFetch } = recordingFetch(() =>
+    new Response(JSON.stringify({ success: false, errors: [] }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    })
+  );
+  const connector = new CloudflareDnsConnector({
+    zoneId: "zone-1",
+    apiToken: "cf-token",
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, false);
+  assert.equal(res.code, "auth_failed");
+});
+
 Deno.test("CloudflareDnsConnector.apply creates record and returns id handle", async () => {
   const { fetch: mockFetch, calls } = recordingFetch(() =>
     new Response(

@@ -12,7 +12,15 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import {
+  verifyResultFromError,
+  verifyResultFromStatus,
+} from "../_verify_helpers.ts";
 import {
   type CloudflareR2BucketDescriptor,
   DirectCloudflareR2Lifecycle,
@@ -85,6 +93,19 @@ export class CloudflareR2Connector implements Connector {
     });
     if (!desc) return { status: "missing" };
     return { status: "running", outputs: this.#outputsFor(desc) };
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const result = await this.#lifecycle.listBucketsResult();
+      return verifyResultFromStatus(result.status, {
+        okStatuses: [200],
+        responseText: result.ok ? "" : result.text,
+        context: "cf-r2:ListBuckets",
+      });
+    } catch (error) {
+      return verifyResultFromError(error, "cf-r2:ListBuckets");
+    }
   }
 
   #outputsFor(desc: CloudflareR2BucketDescriptor): JsonObject {

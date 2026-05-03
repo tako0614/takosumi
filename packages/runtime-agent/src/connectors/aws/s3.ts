@@ -12,7 +12,15 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import {
+  verifyResultFromError,
+  verifyResultFromStatus,
+} from "../_verify_helpers.ts";
 import {
   type AwsS3BucketDescriptor,
   DirectAwsS3Lifecycle,
@@ -91,6 +99,20 @@ export class AwsS3Connector implements Connector {
     const desc = await this.#lifecycle.describeBucket({ bucketName: bucket });
     if (!desc) return { status: "missing" };
     return { status: "running", outputs: this.#outputsFor(desc) };
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const response = await this.#lifecycle.listBucketsResponse();
+      const text = response.ok ? "" : await response.text().catch(() => "");
+      return verifyResultFromStatus(response.status, {
+        okStatuses: [200],
+        responseText: text,
+        context: "s3:ListBuckets",
+      });
+    } catch (error) {
+      return verifyResultFromError(error, "s3:ListBuckets");
+    }
   }
 
   #outputsFor(desc: AwsS3BucketDescriptor): JsonObject {

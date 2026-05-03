@@ -133,6 +133,26 @@ export class DirectCloudSqlLifecycle {
     );
   }
 
+  /**
+   * Verify-only: list Cloud SQL instances in the project. Returns the raw
+   * status / response body so the connector can produce a verify result
+   * without throwing.
+   */
+  listInstancesResult(): Promise<
+    { status: number; ok: boolean; text: string }
+  > {
+    return gcpJsonFetch(this.#tokens, {
+      method: "GET",
+      url:
+        `https://sqladmin.googleapis.com/v1/projects/${this.#project}/instances?maxResults=1`,
+      fetch: this.#fetch,
+    }).then((result) => ({
+      status: result.status,
+      ok: result.ok,
+      text: result.text,
+    }));
+  }
+
   async deleteInstance(
     input: { readonly instanceName: string },
   ): Promise<boolean> {

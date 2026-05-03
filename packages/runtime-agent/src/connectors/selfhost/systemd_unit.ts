@@ -14,7 +14,12 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import { verifyResultFromError } from "../_verify_helpers.ts";
 
 export interface SystemdUnitConnectorOptions {
   readonly unitDir?: string;
@@ -117,6 +122,27 @@ export class SystemdUnitConnector implements Connector {
       status: "running",
       outputs: this.#outputsFor(desc),
     });
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const cmd = new this.#command("systemctl", {
+        args: ["--version"],
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const { code, stderr } = await cmd.output();
+      if (code === 0) return { ok: true, note: "systemctl reachable" };
+      const message = new TextDecoder().decode(stderr).trim() ||
+        `systemctl --version exited with code ${code}`;
+      return {
+        ok: false,
+        code: "network_error",
+        note: `systemctl:version: ${message}`,
+      };
+    } catch (error) {
+      return verifyResultFromError(error, "systemctl:version");
+    }
   }
 
   #outputsFor(desc: UnitDescriptor): JsonObject {

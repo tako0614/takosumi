@@ -4,6 +4,7 @@ import { MemoryObjectStorage } from "../adapters/object-storage/memory.ts";
 import { InMemoryTakosumiDeploymentRecordStore } from "../domains/deploy/takosumi_deployment_record_store.ts";
 import {
   registerArtifactRoutes,
+  TAKOSUMI_ARTIFACT_MAX_BYTES_DEFAULT,
   TAKOSUMI_ARTIFACTS_BUCKET,
   TAKOSUMI_ARTIFACTS_PATH,
 } from "./artifact_routes.ts";
@@ -17,6 +18,7 @@ function createApp(opts: {
   storage?: MemoryObjectStorage;
   recordStore?: InMemoryTakosumiDeploymentRecordStore;
   now?: () => string;
+  maxBytes?: number;
 } = {}): {
   app: HonoApp;
   storage: MemoryObjectStorage;
@@ -32,6 +34,7 @@ function createApp(opts: {
     objectStorage: storage,
     ...(opts.recordStore ? { recordStore: opts.recordStore } : {}),
     ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.maxBytes !== undefined ? { maxBytes: opts.maxBytes } : {}),
   });
   return {
     app,
@@ -559,3 +562,93 @@ Deno.test("artifact GET still works with the deploy token", async () => {
   });
   assert.equal(res.status, 200);
 });
+
+// --- Task 4: maxBytes / 413 resource_exhausted -------------------------------
+
+Deno.test("artifact upload below maxBytes succeeds", async () => {
+  const { app } = createApp({ token: VALID_TOKEN, maxBytes: 1024 });
+  const bytes = new TextEncoder().encode("under-cap");
+  const res = await uploadArtifact(app, VALID_TOKEN, bytes, "js-bundle");
+  assert.equal(res.status, 200);
+});
+
+Deno.test(
+  "artifact upload above custom maxBytes returns 413 resource_exhausted",
+  async () => {
+    const { app } = createApp({ token: VALID_TOKEN, maxBytes: 8 });
+    const bytes = new Uint8Array(64); // 64 bytes > 8 bytes cap
+    const res = await uploadArtifact(app, VALID_TOKEN, bytes, "js-bundle");
+    assert.equal(res.status, 413);
+    const body = await res.json();
+    assert.equal(body.error.code, "resource_exhausted");
+    assert.match(body.error.message, /artifact bytes exceed maxBytes/);
+    // operator hints surfaced in the error message
+    assert.match(body.error.message, /TAKOSUMI_ARTIFACT_MAX_BYTES/);
+    assert.match(body.error.message, /R2 \/ S3 \/ GCS/);
+  },
+);
+
+Deno.test(
+  "artifact upload with Content-Length above cap returns 413 without buffering",
+  async () => {
+    const { app } = createApp({ token: VALID_TOKEN, maxBytes: 1024 });
+    // Body itself is small, but the declared Content-Length lies. The
+    // pre-check fires before the multipart body is parsed.
+    const res = await app.request(TAKOSUMI_ARTIFACTS_PATH, {
+      method: "POST",
+      headers: {
+        ...authHeaders(VALID_TOKEN),
+        "content-type": "multipart/form-data; boundary=fake",
+        "content-length": "1048576", // 1 MiB declared
+      },
+      body: "fake",
+    });
+    assert.equal(res.status, 413);
+    const body = await res.json();
+    assert.equal(body.error.code, "resource_exhausted");
+    assert.match(body.error.message, /content-length exceed maxBytes/);
+    assert.match(body.error.message, /1048576 > 1024/);
+  },
+);
+
+Deno.test(
+  "artifact upload with Content-Length below cap reaches multipart parse",
+  async () => {
+    // Sanity: cap should ONLY fire when declared length is over. A
+    // small declared value passes the gate; we then expect the normal
+    // multipart-parse error path (since the body isn't valid multipart).
+    const { app } = createApp({ token: VALID_TOKEN, maxBytes: 1024 });
+    const res = await app.request(TAKOSUMI_ARTIFACTS_PATH, {
+      method: "POST",
+      headers: {
+        ...authHeaders(VALID_TOKEN),
+        "content-type": "multipart/form-data; boundary=fake",
+        "content-length": "16",
+      },
+      body: "not-real-multipart",
+    });
+    // The Content-Length pre-check did not 413; instead we either get
+    // 400 invalid_argument (multipart parse failed) or 200 if Hono is
+    // lenient. Either way we must NOT see 413 here.
+    assert.notEqual(res.status, 413);
+  },
+);
+
+Deno.test(
+  "artifact maxBytes default is 50 MiB and exposed as a constant",
+  () => {
+    assert.equal(TAKOSUMI_ARTIFACT_MAX_BYTES_DEFAULT, 52_428_800);
+  },
+);
+
+Deno.test(
+  "artifact upload uses default 50 MiB cap when option omitted",
+  async () => {
+    // Operator omits maxBytes entirely. A 1 KiB payload must fly under
+    // the implicit 50 MiB default.
+    const { app } = createApp({ token: VALID_TOKEN });
+    const bytes = new Uint8Array(1024);
+    const res = await uploadArtifact(app, VALID_TOKEN, bytes, "js-bundle");
+    assert.equal(res.status, 200);
+  },
+);

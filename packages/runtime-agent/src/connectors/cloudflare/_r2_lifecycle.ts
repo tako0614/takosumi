@@ -79,6 +79,28 @@ export class DirectCloudflareR2Lifecycle {
     };
   }
 
+  /**
+   * Verify-only: list R2 buckets for the configured account. Returns raw
+   * status / text so the connector can produce a verify result without
+   * throwing.
+   */
+  listBucketsResult(): Promise<
+    { status: number; ok: boolean; text: string }
+  > {
+    return cfFetch(
+      {
+        method: "GET",
+        path: `/accounts/${this.#accountId}/r2/buckets`,
+      },
+      { apiToken: this.#apiToken, fetch: this.#fetch },
+    ).then((result) => ({
+      status: result.status,
+      ok: result.envelope?.success === true && result.status >= 200 &&
+        result.status < 300,
+      text: result.text,
+    }));
+  }
+
   async deleteBucket(
     input: { readonly bucketName: string },
   ): Promise<boolean> {

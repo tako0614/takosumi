@@ -49,6 +49,43 @@ Deno.test("AwsS3Connector.describe returns missing on 404", async () => {
   assert.equal(res.status, "missing");
 });
 
+Deno.test("AwsS3Connector.verify returns ok on 200 ListBuckets", async () => {
+  const { fetch: mockFetch, calls } = recordingFetch(() =>
+    new Response(
+      "<ListAllMyBucketsResult><Buckets/></ListAllMyBucketsResult>",
+      { status: 200 },
+    )
+  );
+  const connector = new AwsS3Connector({
+    region: "us-east-1",
+    credentials,
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, true);
+  assert.equal(res.note, "credentials valid");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "GET");
+  assert.match(calls[0].url, /^https:\/\/s3\.us-east-1\.amazonaws\.com\/$/);
+});
+
+Deno.test("AwsS3Connector.verify reports auth_failed on 401", async () => {
+  const { fetch: mockFetch } = recordingFetch(() =>
+    new Response("<Error><Code>InvalidAccessKeyId</Code></Error>", {
+      status: 401,
+    })
+  );
+  const connector = new AwsS3Connector({
+    region: "us-east-1",
+    credentials,
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, false);
+  assert.equal(res.code, "auth_failed");
+  assert.match(`${res.note}`, /s3:ListBuckets/);
+});
+
 Deno.test("AwsS3Connector.destroy parses bucket from ARN", async () => {
   const { fetch: mockFetch, calls } = recordingFetch(() =>
     new Response("", { status: 200 })

@@ -69,6 +69,45 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 Deno.test(
+  "DenoDeployWorkersConnector.verify lists projects and reports ok on 200",
+  async () => {
+    const { fetch: mockFetch, calls } = recordingFetch(() =>
+      jsonResponse([], 200)
+    );
+    const connector = new DenoDeployWorkersConnector({
+      accessToken: "tok",
+      organizationId: "org-1",
+      fetch: mockFetch,
+    });
+    const res = await connector.verify({});
+    assert.equal(res.ok, true);
+    assert.equal(res.note, "credentials valid");
+    assert.equal(calls[0].method, "GET");
+    assert.match(calls[0].url, /\/organizations\/org-1\/projects\?limit=1$/);
+  },
+);
+
+Deno.test(
+  "DenoDeployWorkersConnector.verify reports auth_failed on 401",
+  async () => {
+    const { fetch: mockFetch } = recordingFetch(() =>
+      new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      })
+    );
+    const connector = new DenoDeployWorkersConnector({
+      accessToken: "bad",
+      organizationId: "org-1",
+      fetch: mockFetch,
+    });
+    const res = await connector.verify({});
+    assert.equal(res.ok, false);
+    assert.equal(res.code, "auth_failed");
+  },
+);
+
+Deno.test(
   "DenoDeployWorkersConnector.apply lists project, creates it when missing, then uploads bundle",
   async () => {
     const bundleBytes = new TextEncoder().encode(

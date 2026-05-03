@@ -42,11 +42,14 @@ await maybeApplyDatabaseMigrations(runtimeEnv);
 await maybeApplyAuditRetention(runtimeEnv);
 await maybeApplyObservationRetention(runtimeEnv);
 await maybeVerifyAuditReplicationChain(runtimeEnv, auditReplicationSink);
-const created = await createPaaSApp({ runtimeEnv, runtimeConfig }).catch(
-  (error) => {
-    fatalStartupError(error);
-  },
-);
+const sharedSqlClientHandle = await createSharedSqlClient(runtimeEnv);
+const created = await createPaaSApp({
+  runtimeEnv,
+  runtimeConfig,
+  ...(sharedSqlClientHandle ? { sqlClient: sharedSqlClientHandle.client } : {}),
+}).catch((error) => {
+  fatalStartupError(error);
+});
 const app: HonoApp = created.app;
 const role: PaaSProcessRole = created.role;
 startHeartbeatIfConfigured();
@@ -320,6 +323,31 @@ function parsePositiveIntEnv(value: string | undefined): number | undefined {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
   return Math.floor(parsed);
+}
+
+/**
+ * Build a long-lived SqlClient that the kernel passes into
+ * `createPaaSApp` so SQL-backed records (notably the public deploy
+ * lifecycle behind `POST /v1/deployments`) survive process restart.
+ *
+ * Returns `undefined` when no `DATABASE_URL` is configured or the pg
+ * driver is unavailable; the kernel then boots with the in-memory
+ * record store, which is acceptable for tests and dev but loses
+ * deploy state on restart.
+ *
+ * The returned handle is intentionally NOT closed by the kernel: the
+ * underlying pg pool is reused for the lifetime of the process. The
+ * shared instance is fine because `SqlTakosumiDeploymentRecordStore`
+ * uses `pg_advisory_lock` (session-scoped — pg pool gives each query
+ * its own connection on demand) which works against a pool.
+ */
+async function createSharedSqlClient(
+  env: Record<string, string | undefined>,
+): Promise<{ client: SqlClient; close: () => Promise<void> } | undefined> {
+  const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
+    env.TAKOSUMI_PRODUCTION_DATABASE_URL ?? env.TAKOSUMI_STAGING_DATABASE_URL;
+  if (!databaseUrl) return undefined;
+  return await tryCreatePostgresClient(databaseUrl);
 }
 
 async function tryCreatePostgresClient(

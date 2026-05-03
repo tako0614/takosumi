@@ -144,6 +144,20 @@ export class DirectDenoDeployWorkersLifecycle
     return created;
   }
 
+  /**
+   * Verify-only: list projects in the configured organization with a hard
+   * limit. Returns the raw `Response` so the connector can render a verify
+   * result without throwing.
+   */
+  listProjectsResponse(): Promise<Response> {
+    const url =
+      `${BASE_URL}/organizations/${this.#organizationId}/projects?limit=1`;
+    return this.#fetch(url, {
+      method: "GET",
+      headers: { authorization: `Bearer ${this.#accessToken}` },
+    });
+  }
+
   async #lookupProject(scriptName: string): Promise<string | undefined> {
     const url =
       `${BASE_URL}/organizations/${this.#organizationId}/projects?name=${

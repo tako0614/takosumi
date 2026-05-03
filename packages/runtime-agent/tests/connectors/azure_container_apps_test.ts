@@ -2,6 +2,58 @@ import assert from "node:assert/strict";
 import { AzureContainerAppsConnector } from "../../src/connectors/azure/container_apps.ts";
 import { recordingFetch } from "./_fetch_mock.ts";
 
+Deno.test("AzureContainerAppsConnector.verify GETs resource group and reports ok on 200", async () => {
+  const { fetch: mockFetch, calls } = recordingFetch(() =>
+    new Response(
+      JSON.stringify({ id: "/subscriptions/sub-1/resourceGroups/rg-1" }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    )
+  );
+  const connector = new AzureContainerAppsConnector({
+    subscriptionId: "sub-1",
+    resourceGroup: "rg-1",
+    region: "eastus",
+    environmentName: "takosumi",
+    environmentResourceId:
+      "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.App/managedEnvironments/takosumi",
+    bearerToken: "az-token",
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, true);
+  assert.equal(res.note, "credentials valid");
+  assert.equal(calls[0].method, "GET");
+  assert.match(
+    calls[0].url,
+    /\/subscriptions\/sub-1\/resourceGroups\/rg-1\?api-version=/,
+  );
+});
+
+Deno.test("AzureContainerAppsConnector.verify reports auth_failed on 401", async () => {
+  const { fetch: mockFetch } = recordingFetch(() =>
+    new Response("{}", {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    })
+  );
+  const connector = new AzureContainerAppsConnector({
+    subscriptionId: "sub-1",
+    resourceGroup: "rg-1",
+    region: "eastus",
+    environmentName: "takosumi",
+    environmentResourceId:
+      "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.App/managedEnvironments/takosumi",
+    bearerToken: "bad-token",
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, false);
+  assert.equal(res.code, "auth_failed");
+});
+
 Deno.test("AzureContainerAppsConnector.apply PUTs Container App and reads FQDN from describe", async () => {
   // PUT response empty 200; subsequent GET returns FQDN
   const responses = [

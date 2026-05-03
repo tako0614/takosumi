@@ -12,7 +12,15 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import {
+  verifyResultFromError,
+  verifyResultFromStatus,
+} from "../_verify_helpers.ts";
 import {
   type AwsRdsInstanceDescriptor,
   DirectAwsRdsLifecycle,
@@ -109,6 +117,20 @@ export class AwsRdsConnector implements Connector {
     });
     if (!desc) return { status: "missing" };
     return { status: "running", outputs: this.#outputsFor(desc) };
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const response = await this.#lifecycle.describeInstancesResponse();
+      const text = response.ok ? "" : await response.text().catch(() => "");
+      return verifyResultFromStatus(response.status, {
+        okStatuses: [200],
+        responseText: text,
+        context: "rds:DescribeDBInstances",
+      });
+    } catch (error) {
+      return verifyResultFromError(error, "rds:DescribeDBInstances");
+    }
   }
 
   #outputsFor(desc: AwsRdsInstanceDescriptor): JsonObject {

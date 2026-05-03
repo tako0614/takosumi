@@ -84,6 +84,25 @@ export class DirectCloudDnsLifecycle {
     });
   }
 
+  /**
+   * Verify-only: list managed zones in the project. Returns raw status /
+   * text so the connector can render a verify result without throwing.
+   */
+  listManagedZonesResult(): Promise<
+    { status: number; ok: boolean; text: string }
+  > {
+    return gcpJsonFetch(this.#tokens, {
+      method: "GET",
+      url:
+        `https://dns.googleapis.com/dns/v1/projects/${this.#project}/managedZones?maxResults=1`,
+      fetch: this.#fetch,
+    }).then((result) => ({
+      status: result.status,
+      ok: result.ok,
+      text: result.text,
+    }));
+  }
+
   async deleteRecord(
     input: { readonly recordName: string },
   ): Promise<boolean> {

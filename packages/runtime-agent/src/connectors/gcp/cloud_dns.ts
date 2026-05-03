@@ -11,7 +11,15 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import {
+  verifyResultFromError,
+  verifyResultFromStatus,
+} from "../_verify_helpers.ts";
 import {
   type CloudDnsRecordDescriptor,
   DirectCloudDnsLifecycle,
@@ -74,6 +82,19 @@ export class CloudDnsConnector implements Connector {
     });
     if (!desc) return { status: "missing" };
     return { status: "running", outputs: outputsFor(desc) };
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const result = await this.#lifecycle.listManagedZonesResult();
+      return verifyResultFromStatus(result.status, {
+        okStatuses: [200],
+        responseText: result.ok ? "" : result.text,
+        context: "clouddns:ManagedZones.list",
+      });
+    } catch (error) {
+      return verifyResultFromError(error, "clouddns:ManagedZones.list");
+    }
   }
 }
 

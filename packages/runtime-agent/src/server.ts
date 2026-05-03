@@ -107,7 +107,78 @@ export function createRuntimeAgentApp(options: RuntimeAgentServerOptions) {
     }
   });
 
+  // Smoke-test every registered connector by calling its read-only `verify`
+  // hook. Operators run this before doing an actual `apply` to catch
+  // missing creds / wrong region / firewall errors. Body is optional and
+  // may carry `{ shape?, provider? }` to filter; both fall through to all
+  // connectors when absent. Connectors without a `verify` hook are
+  // reported as `{ ok: true, note: "no verify hook" }` so the table shows
+  // them as "credentials cannot be checked" but not failed.
+  app.post("/v1/lifecycle/verify", async (c) => {
+    let filter: { shape?: string; provider?: string } = {};
+    if (c.req.header("content-length") !== "0") {
+      try {
+        const body = await c.req.json().catch(() => ({}));
+        if (body && typeof body === "object") {
+          const { shape, provider } = body as Record<string, unknown>;
+          filter = {
+            shape: typeof shape === "string" ? shape : undefined,
+            provider: typeof provider === "string" ? provider : undefined,
+          };
+        }
+      } catch {
+        // empty body is allowed; ignore parse errors
+      }
+    }
+    const results: Array<
+      {
+        shape: string;
+        provider: string;
+        ok: boolean;
+        note?: string;
+        code?: string;
+      }
+    > = [];
+    for (const connector of options.registry.list()) {
+      if (filter.shape && filter.shape !== connector.shape) continue;
+      if (filter.provider && filter.provider !== connector.provider) continue;
+      const verifyResult = connector.verify
+        ? await safeVerify(connector)
+        : { ok: true, note: "no verify hook" };
+      results.push({
+        shape: connector.shape,
+        provider: connector.provider,
+        ok: verifyResult.ok,
+        ...(verifyResult.note !== undefined ? { note: verifyResult.note } : {}),
+        ...(verifyResult.code !== undefined ? { code: verifyResult.code } : {}),
+      });
+    }
+    return c.json({ results }, 200);
+  });
+
   return app;
+}
+
+async function safeVerify(
+  connector: { verify?: (ctx: ConnectorContext) => Promise<unknown> },
+): Promise<{ ok: boolean; note?: string; code?: string }> {
+  if (!connector.verify) return { ok: true, note: "no verify hook" };
+  try {
+    const out = await connector.verify({}) as
+      | { ok?: boolean; note?: string; code?: string }
+      | undefined;
+    if (!out || typeof out.ok !== "boolean") {
+      return {
+        ok: false,
+        code: "network_error",
+        note: "verify returned malformed result",
+      };
+    }
+    return { ok: out.ok, note: out.note, code: out.code };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, code: "network_error", note: message };
+  }
 }
 
 function buildContext(

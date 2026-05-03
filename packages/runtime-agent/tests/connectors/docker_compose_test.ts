@@ -34,6 +34,26 @@ function makeMockCommand(
   return { command, calls };
 }
 
+Deno.test("DockerComposeConnector.verify reports ok when `docker version` exits 0", async () => {
+  const { command, calls } = makeMockCommand([{ code: 0 }]);
+  const connector = new DockerComposeConnector({ command });
+  const res = await connector.verify({});
+  assert.equal(res.ok, true);
+  assert.match(`${res.note}`, /docker daemon reachable/);
+  assert.equal(calls[0].cmd, "docker");
+  assert.equal(calls[0].args[0], "version");
+});
+
+Deno.test("DockerComposeConnector.verify reports network_error when docker exits non-zero", async () => {
+  const { command } = makeMockCommand([
+    { code: 1, stderr: "Cannot connect to the Docker daemon" },
+  ]);
+  const connector = new DockerComposeConnector({ command });
+  const res = await connector.verify({});
+  assert.equal(res.ok, false);
+  assert.equal(res.code, "network_error");
+});
+
 Deno.test("DockerComposeConnector.apply runs `docker run` with image + port mapping", async () => {
   const { command, calls } = makeMockCommand([{ code: 0 }]);
   const connector = new DockerComposeConnector({ command });

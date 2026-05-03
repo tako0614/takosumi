@@ -12,7 +12,12 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import { verifyResultFromError } from "../_verify_helpers.ts";
 
 export interface LocalDockerPostgresConnectorOptions {
   readonly hostBinding?: string;
@@ -133,6 +138,27 @@ export class LocalDockerPostgresConnector implements Connector {
       status: "running",
       outputs: this.#outputsFor(desc),
     });
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const cmd = new this.#command("docker", {
+        args: ["version", "--format", "{{.Server.Version}}"],
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const { code, stderr } = await cmd.output();
+      if (code === 0) return { ok: true, note: "docker daemon reachable" };
+      const message = new TextDecoder().decode(stderr).trim() ||
+        `docker version exited with code ${code}`;
+      return {
+        ok: false,
+        code: "network_error",
+        note: `docker:version: ${message}`,
+      };
+    } catch (error) {
+      return verifyResultFromError(error, "docker:version");
+    }
   }
 
   #outputsFor(desc: InstanceDescriptor): JsonObject {

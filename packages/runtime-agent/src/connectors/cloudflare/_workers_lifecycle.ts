@@ -143,6 +143,19 @@ export class DirectCloudflareWorkersLifecycle
     };
   }
 
+  /**
+   * Verify-only: GET `/accounts/{id}/workers/subdomain`. 200 / 404 both mean
+   * the credentials are valid; non-2xx / non-404 are treated as errors. Used
+   * by `CloudflareWorkersConnector.verify`.
+   */
+  async fetchSubdomainResponse(): Promise<Response> {
+    const url = `${BASE_URL}/accounts/${this.#accountId}/workers/subdomain`;
+    return await this.#fetch(url, {
+      method: "GET",
+      headers: { authorization: `Bearer ${this.#apiToken}` },
+    });
+  }
+
   async #fetchSubdomainOnce(): Promise<string | undefined> {
     const url = `${BASE_URL}/accounts/${this.#accountId}/workers/subdomain`;
     const response = await this.#fetch(url, {

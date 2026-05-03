@@ -12,7 +12,15 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import {
+  verifyResultFromError,
+  verifyResultFromStatus,
+} from "../_verify_helpers.ts";
 import {
   type AwsFargateServiceDescriptor,
   DirectAwsFargateLifecycle,
@@ -92,6 +100,20 @@ export class AwsFargateConnector implements Connector {
     });
     if (!desc) return { status: "missing" };
     return { status: "running", outputs: outputsFor(desc) };
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const response = await this.#lifecycle.describeClustersResponse();
+      const text = response.ok ? "" : await response.text().catch(() => "");
+      return verifyResultFromStatus(response.status, {
+        okStatuses: [200],
+        responseText: text,
+        context: "ecs:DescribeClusters",
+      });
+    } catch (error) {
+      return verifyResultFromError(error, "ecs:DescribeClusters");
+    }
   }
 }
 

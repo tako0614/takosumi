@@ -21,6 +21,35 @@ const CREATE_RESPONSE = `<?xml version="1.0"?>
   </CreateDBInstanceResult>
 </CreateDBInstanceResponse>`;
 
+Deno.test("AwsRdsConnector.verify hits DescribeDBInstances and reports ok on 200", async () => {
+  const { fetch: mockFetch, calls } = recordingFetch(() =>
+    new Response("<DescribeDBInstancesResponse/>", { status: 200 })
+  );
+  const connector = new AwsRdsConnector({
+    region: "us-east-1",
+    credentials,
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, true);
+  assert.equal(res.note, "credentials valid");
+  assert.match(`${calls[0].body}`, /Action=DescribeDBInstances/);
+});
+
+Deno.test("AwsRdsConnector.verify reports auth_failed on 401", async () => {
+  const { fetch: mockFetch } = recordingFetch(() =>
+    new Response("<Error/>", { status: 401 })
+  );
+  const connector = new AwsRdsConnector({
+    region: "us-east-1",
+    credentials,
+    fetch: mockFetch,
+  });
+  const res = await connector.verify({});
+  assert.equal(res.ok, false);
+  assert.equal(res.code, "auth_failed");
+});
+
 Deno.test("AwsRdsConnector.apply parses RDS Query API XML and returns connection string", async () => {
   const { fetch: mockFetch, calls } = recordingFetch(() =>
     new Response(CREATE_RESPONSE, {

@@ -88,10 +88,103 @@ const listCmd = new Command()
     }
   });
 
+const verifyCmd = new Command()
+  .description(
+    "Smoke-test connector credentials & connectivity (read-only API call per connector)",
+  )
+  .option(
+    "--url <url:string>",
+    "Agent URL (defaults to TAKOSUMI_AGENT_URL env)",
+  )
+  .option(
+    "--token <token:string>",
+    "Bearer token (defaults to TAKOSUMI_AGENT_TOKEN env)",
+  )
+  .option(
+    "--shape <shape:string>",
+    "Restrict to connectors implementing this shape",
+  )
+  .option(
+    "--provider <provider:string>",
+    "Restrict to a single provider id",
+  )
+  .action(async ({ url, token, shape, provider }) => {
+    const agentUrl = url ?? Deno.env.get("TAKOSUMI_AGENT_URL");
+    const agentToken = token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
+    if (!agentUrl || !agentToken) {
+      console.error(
+        "Set --url + --token (or TAKOSUMI_AGENT_URL + TAKOSUMI_AGENT_TOKEN env)",
+      );
+      Deno.exit(1);
+    }
+    const filter: Record<string, string> = {};
+    if (shape) filter.shape = shape;
+    if (provider) filter.provider = provider;
+    const res = await fetch(`${agentUrl}/v1/lifecycle/verify`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${agentToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(filter),
+    });
+    if (!res.ok) {
+      console.error(
+        `agent ${agentUrl}/v1/lifecycle/verify returned ${res.status}`,
+      );
+      console.error(await res.text());
+      Deno.exit(1);
+    }
+    const body = await res.json() as {
+      results: Array<{
+        shape: string;
+        provider: string;
+        ok: boolean;
+        note?: string;
+        code?: string;
+      }>;
+    };
+    if (body.results.length === 0) {
+      console.log(
+        "no connectors registered (operator likely missing cloud env vars)",
+      );
+      return;
+    }
+    renderVerifyTable(body.results);
+    const anyFailed = body.results.some((r) => !r.ok);
+    if (anyFailed) Deno.exit(2);
+  });
+
+function renderVerifyTable(
+  results: ReadonlyArray<{
+    shape: string;
+    provider: string;
+    ok: boolean;
+    note?: string;
+    code?: string;
+  }>,
+): void {
+  const rows = results.map((r) => ({
+    name: `${r.shape}/${r.provider}`,
+    mark: r.ok ? "ok" : "FAIL",
+    detail: r.code ? `[${r.code}] ${r.note ?? ""}` : (r.note ?? ""),
+  }));
+  const nameWidth = Math.max(4, ...rows.map((r) => r.name.length));
+  const markWidth = Math.max(4, ...rows.map((r) => r.mark.length));
+  for (const row of rows) {
+    console.log(
+      `${row.name.padEnd(nameWidth)}  ${
+        row.mark.padEnd(markWidth)
+      }  ${row.detail}`,
+    );
+  }
+}
+
 export const runtimeAgentCommand = new Command()
   .description("Operate the Takosumi runtime-agent")
   .command("serve", serveCmd)
-  .command("list", listCmd);
+  .command("list", listCmd)
+  .command("verify", verifyCmd);
 
 async function loadEnvFile(path: string): Promise<void> {
   const text = await Deno.readTextFile(path);

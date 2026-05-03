@@ -30,6 +30,31 @@ import { apiError } from "./errors.ts";
  * Storage is content-addressed under `<bucket>/artifacts/<sha256-hex>` via
  * the kernel's `objectStorage` adapter; digest is computed and verified
  * server-side, regardless of any client-side `expectedDigest`.
+ *
+ * # Memory model — buffered upload, capped at `maxBytes`
+ *
+ * The current POST handler buffers the entire request body into memory
+ * (Hono's `c.req.formData()` reads the whole multipart payload before
+ * yielding `File` parts, and `ObjectStoragePort.putObject` requires a
+ * fully-materialized `Uint8Array | string` body). To bound RAM use we
+ * enforce a hard cap on a single artifact's body, configurable via:
+ *
+ *   - `TAKOSUMI_ARTIFACT_MAX_BYTES` env var (default 50 MiB = 52428800)
+ *   - `RegisterArtifactRoutesOptions.maxBytes`
+ *
+ * Both `Content-Length` (cheap, pre-buffer) and the post-buffer
+ * `bytes.length` are checked; oversize requests get a 413 envelope with
+ * the `resource_exhausted` code instead of OOM-ing the kernel.
+ *
+ * For larger artifacts (>50 MiB JS bundles, big lambda zips, OCI layers)
+ * operators should run an external object-storage backend (Cloudflare R2,
+ * AWS S3, GCS) and configure the kernel's `objectStorage` adapter to
+ * point at it. The {@link ObjectStoragePort} interface stays the same;
+ * only the adapter changes. From there a future `putObjectStream(...)`
+ * extension can stream multipart parts directly into the backend without
+ * buffering through kernel RAM. Until that lands, raise
+ * `TAKOSUMI_ARTIFACT_MAX_BYTES` deliberately and provision RAM
+ * accordingly, or move to presigned-URL uploads at the storage backend.
  */
 export const TAKOSUMI_ARTIFACTS_PATH = ARTIFACTS_BASE_PATH;
 export const TAKOSUMI_ARTIFACTS_BUCKET = "takosumi-artifacts" as const;
@@ -38,6 +63,13 @@ const KEY_PREFIX = "artifacts/" as const;
 const ARTIFACT_LIST_MAX_LIMIT = 1000;
 /** Default `?limit=` when the client omits it. */
 const ARTIFACT_LIST_DEFAULT_LIMIT = 100;
+/**
+ * Default upload-body cap (50 MiB). Operators bump this via
+ * `TAKOSUMI_ARTIFACT_MAX_BYTES` or the `maxBytes` option. Chosen to
+ * comfortably cover Cloudflare Workers bundles and small Lambda zips
+ * without letting a single multipart request OOM the kernel process.
+ */
+export const TAKOSUMI_ARTIFACT_MAX_BYTES_DEFAULT = 52_428_800;
 
 const META_HEADER_KIND = "x-takosumi-artifact-kind";
 const META_HEADER_SIZE = "x-takosumi-artifact-size";
@@ -68,6 +100,15 @@ export interface RegisterArtifactRoutesOptions {
   readonly recordStore?: TakosumiDeploymentRecordStore;
   readonly bucket?: string;
   readonly now?: () => string;
+  /**
+   * Max bytes accepted for a single multipart upload body. Defaults to
+   * {@link TAKOSUMI_ARTIFACT_MAX_BYTES_DEFAULT} (50 MiB). Operators
+   * typically wire this from `TAKOSUMI_ARTIFACT_MAX_BYTES`. Both the
+   * declared `Content-Length` header and the actual buffered size are
+   * compared against this value; either exceeding it returns a 413
+   * `resource_exhausted` envelope.
+   */
+  readonly maxBytes?: number;
 }
 
 export function registerArtifactRoutes(
@@ -80,6 +121,7 @@ export function registerArtifactRoutes(
   const now = options.now ?? (() => new Date().toISOString());
   const storage = options.objectStorage;
   const recordStore = options.recordStore;
+  const maxBytes = resolveMaxBytes(options.maxBytes);
 
   const initialToken = getToken();
   if (!initialToken) {
@@ -92,6 +134,24 @@ export function registerArtifactRoutes(
   app.post(TAKOSUMI_ARTIFACTS_PATH, async (c) => {
     const auth = checkAuth(c, getToken);
     if (auth.kind === "fail") return auth.response;
+
+    // Cheap pre-check: reject hostile / oversize uploads before we
+    // buffer anything. The wire framing carries the multipart envelope
+    // overhead too, so a Content-Length over `maxBytes` is already
+    // grounds for refusal — the body cannot fit even with zero overhead.
+    const contentLengthHeader = c.req.header("content-length");
+    if (contentLengthHeader) {
+      const declared = Number.parseInt(contentLengthHeader, 10);
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        return c.json(
+          apiError(
+            "resource_exhausted",
+            tooLargeMessage(declared, maxBytes, "content-length"),
+          ),
+          413,
+        );
+      }
+    }
 
     let form: FormData;
     try {
@@ -123,6 +183,15 @@ export function registerArtifactRoutes(
       );
     }
     const bytes = new Uint8Array(await fileValue.arrayBuffer());
+    if (bytes.length > maxBytes) {
+      return c.json(
+        apiError(
+          "resource_exhausted",
+          tooLargeMessage(bytes.length, maxBytes, "artifact bytes"),
+        ),
+        413,
+      );
+    }
 
     let userMetadata: JsonObject | undefined;
     const metaValue = form.get("metadata");
@@ -433,6 +502,36 @@ function isTruthyQuery(value: string | undefined): boolean {
   if (!value) return false;
   const v = value.toLowerCase();
   return v === "1" || v === "true" || v === "yes";
+}
+
+function resolveMaxBytes(option: number | undefined): number {
+  if (
+    typeof option === "number" && Number.isInteger(option) && option > 0
+  ) {
+    return option;
+  }
+  return TAKOSUMI_ARTIFACT_MAX_BYTES_DEFAULT;
+}
+
+/**
+ * Build a 413 message with the actual / max sizes plus operator
+ * remediation hints. Same shape regardless of whether the cap fires on
+ * the declared `Content-Length` (cheap reject) or the buffered body
+ * length (post-form-parse reject).
+ */
+function tooLargeMessage(
+  actual: number,
+  max: number,
+  source: "content-length" | "artifact bytes",
+): string {
+  return (
+    `${source} exceed maxBytes (${actual} > ${max}); ` +
+    `raise TAKOSUMI_ARTIFACT_MAX_BYTES (current default is ` +
+    `${TAKOSUMI_ARTIFACT_MAX_BYTES_DEFAULT}) or configure an external ` +
+    `object-storage backend (R2 / S3 / GCS) that supports presigned ` +
+    `uploads — the kernel buffers the whole multipart body before ` +
+    `handing it to ObjectStoragePort.putObject`
+  );
 }
 
 // deno-lint-ignore no-explicit-any

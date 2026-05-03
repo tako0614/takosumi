@@ -91,6 +91,26 @@ export class DirectRoute53Lifecycle {
     }
   }
 
+  /**
+   * Verify-only helper: GET `/2013-04-01/hostedzonecount`. Cheap, returns
+   * 200 with `<HostedZoneCount>n</HostedZoneCount>` when the credentials
+   * have any Route 53 read access.
+   */
+  hostedZoneCountResponse(): Promise<Response> {
+    return sigv4Fetch(
+      {
+        method: "GET",
+        url: `https://route53.amazonaws.com/2013-04-01/hostedzonecount`,
+        service: "route53",
+        region: ROUTE53_REGION,
+      },
+      {
+        credentials: this.#opts.credentials,
+        fetch: this.#opts.fetch,
+      },
+    );
+  }
+
   async #changeRecordSet(
     fqdn: string,
     type: string,

@@ -9,6 +9,7 @@ import { TAKOSUMI_BUNDLED_TEMPLATES } from "@takos/takosumi-plugins/templates";
 import { createTakosumiProductionProviders } from "@takos/takosumi-plugins/shape-providers/factories";
 import { createApiApp } from "./api/mod.ts";
 import type { ReadinessRouteProbes } from "./api/readiness_routes.ts";
+import type { RegisterDeployPublicRoutesOptions } from "./api/deploy_public_routes.ts";
 import {
   type AppContext,
   type AppContextOptions,
@@ -30,12 +31,36 @@ import {
   type WorkerDaemonTask,
   type WorkerDaemonTickResult,
 } from "./workers/daemon.ts";
+import type { SqlClient } from "./adapters/storage/sql.ts";
+import {
+  InMemoryTakosumiDeploymentRecordStore,
+  type TakosumiDeploymentRecordStore,
+} from "./domains/deploy/takosumi_deployment_record_store.ts";
+import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store_sql.ts";
 
 export interface CreatePaaSAppOptions extends AppContextOptions {
   readonly role?: PaaSProcessRole;
   readonly runtimeEnv?: Record<string, string | undefined>;
   readonly context?: AppContext;
   readonly startWorkerDaemon?: boolean;
+  /**
+   * Optional SQL client used to back persistence-sensitive records. When
+   * supplied, bootstrap instantiates `SqlTakosumiDeploymentRecordStore`
+   * so the public deploy lifecycle (`POST /v1/deployments` plus the
+   * artifact GC mark-and-sweep) survives kernel restarts. When absent,
+   * bootstrap falls back to the in-memory store; that loses deploy
+   * state on any restart and should only be used in tests / dev.
+   *
+   * The `index.ts` boot path constructs this from `TAKOSUMI_DATABASE_URL`
+   * via `tryCreatePostgresClient` and threads it in. Tests that drive
+   * `createPaaSApp` directly typically leave it unset.
+   */
+  readonly sqlClient?: SqlClient;
+  /**
+   * Pre-built record store override. Wins over `sqlClient` so tests can
+   * inject a hand-rolled fake without standing up a SqlClient.
+   */
+  readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
 }
 
 export interface CreatedPaaSApp {
@@ -70,6 +95,22 @@ export async function createPaaSApp(
     : undefined;
   const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
   const fetchToken = runtimeEnv.TAKOSUMI_ARTIFACT_FETCH_TOKEN;
+  const artifactMaxBytes = parsePositiveIntegerEnv(
+    runtimeEnv.TAKOSUMI_ARTIFACT_MAX_BYTES,
+  );
+  // Build the takosumi deploy record store. SqlClient wins so
+  // production restarts no longer wipe `(tenantId, name) → applied[]`
+  // mappings; without it the kernel falls back to the in-memory store
+  // which is fine for tests / single-process dev but loses every
+  // applied / destroyed record on process exit.
+  const recordStore = resolveTakosumiDeploymentRecordStore(options);
+  const deployPublicRouteOptions = role === "takosumi-api" && deployToken
+    ? buildDeployPublicRouteOptions({
+      context,
+      deployToken,
+      recordStore,
+    })
+    : undefined;
   const app = await createApiApp({
     role,
     context,
@@ -86,9 +127,15 @@ export async function createPaaSApp(
       ? {
         getDeployToken: () => deployToken,
         objectStorage: context.adapters.objectStorage,
+        recordStore,
         ...(fetchToken ? { getArtifactFetchToken: () => fetchToken } : {}),
+        ...(artifactMaxBytes !== undefined
+          ? { maxBytes: artifactMaxBytes }
+          : {}),
       }
       : undefined,
+    registerDeployPublicRoutes: deployPublicRouteOptions !== undefined,
+    deployPublicRouteOptions,
     readinessRouteProbes: createRoleReadinessProbes({
       role,
       context,
@@ -480,6 +527,66 @@ function positiveInteger(
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/**
+ * Parse a positive-integer env var, returning `undefined` when unset or
+ * unparseable so callers can fall back to a downstream default. Used for
+ * `TAKOSUMI_ARTIFACT_MAX_BYTES` where the kernel-level default lives in
+ * the artifact-routes module.
+ */
+function parsePositiveIntegerEnv(
+  value: string | undefined,
+): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Resolve the takosumi deploy record store the artifact + public deploy
+ * routes share. Preference order:
+ *   1. Caller-supplied `takosumiDeploymentRecordStore` — wins so tests
+ *      can inject a fake without standing up SQL.
+ *   2. `sqlClient` — when present, instantiate a SQL-backed store so the
+ *      `(tenantId, name) → applied[]` mapping survives kernel restarts
+ *      and the artifact GC reads from the live table.
+ *   3. In-memory fallback — fine for single-process dev and the test
+ *      suite, but loses every record on process exit.
+ *
+ * The same store instance is passed to both artifact routes and deploy
+ * public routes so the artifact GC's "what is still referenced?" query
+ * always agrees with the route that just persisted the record.
+ */
+function resolveTakosumiDeploymentRecordStore(
+  options: CreatePaaSAppOptions,
+): TakosumiDeploymentRecordStore {
+  if (options.takosumiDeploymentRecordStore) {
+    return options.takosumiDeploymentRecordStore;
+  }
+  if (options.sqlClient) {
+    return new SqlTakosumiDeploymentRecordStore({ client: options.sqlClient });
+  }
+  return new InMemoryTakosumiDeploymentRecordStore();
+}
+
+/**
+ * Materialise the public deploy route options that bootstrap forwards to
+ * `createApiApp` so the kernel mounts `POST /v1/deployments`. The route
+ * needs (a) the deploy token, (b) an `appContext` to derive its
+ * `PlatformContext` from, and (c) the shared record store. Returning
+ * `undefined` from the caller's branch disables the mount entirely.
+ */
+function buildDeployPublicRouteOptions(input: {
+  readonly context: AppContext;
+  readonly deployToken: string;
+  readonly recordStore: TakosumiDeploymentRecordStore;
+}): RegisterDeployPublicRoutesOptions {
+  return {
+    appContext: input.context,
+    getDeployToken: () => input.deployToken,
+    recordStore: input.recordStore,
+  };
 }

@@ -257,6 +257,31 @@ GC は kernel 側で persistent な `takosumi_deployments` record を mark+sweep
 参照されていない blob だけを削除します。 Idempotent なので何度 call しても
 害はありません。
 
+### Artifact upload size cap
+
+`POST /v1/artifacts` は現状 multipart body 全体を kernel プロセス memory に
+buffer してから object storage に書き込むため、 50MB+ の JS bundle や Lambda zip
+を素直に upload すると kernel の RAM 圧迫の原因になります。 これを
+ガードするため、 1 アップロードの body size に hard cap がかかっています:
+
+| Env / Option                             | Default             | 説明                                               |
+| ---------------------------------------- | ------------------- | -------------------------------------------------- |
+| `TAKOSUMI_ARTIFACT_MAX_BYTES`            | `52428800` (50 MiB) | kernel boot 時に env から読まれる upload byte 上限 |
+| `RegisterArtifactRoutesOptions.maxBytes` | (env と同じ既定)    | embedded host で programmatic に override 可能     |
+
+cap を超えた場合は `413 Payload Too Large` (`error.code:
+"resource_exhausted"`)
+で拒否されます。 `Content-Length` header が cap より大きい場合は body
+を読まずに即時 413 を返すので、 hostile client が任意の body を送りつけて kernel
+を OOM させる経路を塞ぎます。
+
+> 50 MiB を超える artifact (大きい bundle / zip / OCI layer) を流したい場合、
+> `TAKOSUMI_ARTIFACT_MAX_BYTES` を引き上げて RAM を確保するか、 R2 / S3 / GCS
+> 等の external object-storage backend を kernel の `objectStorage` adapter に
+> 配線して presigned upload で直接 backend に書き込むのが推奨です。
+> `ObjectStoragePort` interface は同じなので adapter を切り替えるだけで済み
+> ます。 完全な streaming-multipart parser の導入は future work です。
+
 ### Read-only artifact fetch token (agent ↔ kernel scope separation)
 
 production deploy で `kernel <-> runtime-agent` を別 host に分離している場合、

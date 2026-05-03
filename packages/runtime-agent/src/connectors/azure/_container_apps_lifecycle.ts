@@ -186,6 +186,18 @@ export class DirectAzureContainerAppsLifecycle {
     return true;
   }
 
+  /**
+   * Verify-only: GET the configured resource group. 200 means the bearer
+   * token is valid and has access. Returns the raw `Response` so the
+   * connector can render a verify result without throwing.
+   */
+  describeResourceGroupResponse(): Promise<Response> {
+    const url = `${ARM_BASE}/subscriptions/${this.#opts.subscriptionId}` +
+      `/resourceGroups/${this.#opts.resourceGroup}` +
+      `?api-version=2021-04-01`;
+    return this.#armFetch("GET", url);
+  }
+
   async #fetchFqdn(serviceName: string): Promise<string | undefined> {
     try {
       const desc = await this.describeService({ serviceName });

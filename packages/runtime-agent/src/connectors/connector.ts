@@ -25,6 +25,20 @@ export interface ConnectorContext {
   readonly fetcher?: ArtifactFetcher;
 }
 
+/**
+ * Result of a `Connector.verify(...)` smoke test against the provider's API.
+ * Operators run this through `POST /v1/lifecycle/verify` (see
+ * `packages/runtime-agent/src/server.ts`) before doing a real `apply`, to
+ * catch missing credentials / wrong region / firewall errors early.
+ */
+export interface ConnectorVerifyResult {
+  readonly ok: boolean;
+  /** Short message — "credentials valid" / "permission denied: s3:ListBucket" */
+  readonly note?: string;
+  /** When ok=false, optional structured error code for tooling. */
+  readonly code?: string;
+}
+
 export interface Connector {
   /** Provider id this connector implements (e.g. `aws-s3`, `filesystem`). */
   readonly provider: string;
@@ -52,6 +66,21 @@ export interface Connector {
     req: LifecycleDescribeRequest,
     ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse>;
+  /**
+   * Optional: read-only no-op API call to verify credentials & connectivity.
+   *
+   * Connectors should implement the cheapest read-only call available
+   * (ListBuckets, DescribeClusters, GET /api/v1/namespaces, etc.). Return
+   * `{ ok: true, note: "credentials valid" }` on success and wrap thrown
+   * errors as `{ ok: false, code: "auth_failed" | "network_error" |
+   * "permission_denied", note: "..." }` so the dispatcher can render a
+   * consistent table.
+   *
+   * When unimplemented the dispatcher reports
+   * `{ ok: true, note: "no verify hook" }` so the connector is treated as
+   * "credentials cannot be checked" but not failed.
+   */
+  verify?(ctx: ConnectorContext): Promise<ConnectorVerifyResult>;
 }
 
 /**

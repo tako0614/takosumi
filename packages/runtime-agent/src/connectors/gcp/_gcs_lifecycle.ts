@@ -106,6 +106,27 @@ export class DirectGcsLifecycle {
     };
   }
 
+  /**
+   * Verify-only: list buckets in the configured project. Returns the raw
+   * status / response body so the connector can render a `verify` result
+   * without throwing.
+   */
+  listBucketsResult(): Promise<
+    { status: number; ok: boolean; text: string }
+  > {
+    return gcpJsonFetch(this.#tokens, {
+      method: "GET",
+      url: `https://storage.googleapis.com/storage/v1/b?project=${
+        encodeURIComponent(this.#project)
+      }&maxResults=1`,
+      fetch: this.#fetch,
+    }).then((result) => ({
+      status: result.status,
+      ok: result.ok,
+      text: result.text,
+    }));
+  }
+
   async deleteBucket(
     input: { readonly bucketName: string },
   ): Promise<boolean> {

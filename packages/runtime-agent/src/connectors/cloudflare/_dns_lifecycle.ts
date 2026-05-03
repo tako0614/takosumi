@@ -103,6 +103,28 @@ export class DirectCloudflareDnsLifecycle {
     };
   }
 
+  /**
+   * Verify-only: GET the zone metadata for the configured zone id. Returns
+   * raw status / text so the connector can render a verify result without
+   * throwing.
+   */
+  describeZoneResult(): Promise<
+    { status: number; ok: boolean; text: string }
+  > {
+    return cfFetch(
+      {
+        method: "GET",
+        path: `/zones/${this.#zoneId}`,
+      },
+      { apiToken: this.#apiToken, fetch: this.#fetch },
+    ).then((result) => ({
+      status: result.status,
+      ok: result.envelope?.success === true && result.status >= 200 &&
+        result.status < 300,
+      text: result.text,
+    }));
+  }
+
   async deleteRecord(
     input: { readonly recordId: string },
   ): Promise<boolean> {

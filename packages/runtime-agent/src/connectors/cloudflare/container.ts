@@ -12,7 +12,15 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector, ConnectorContext } from "../connector.ts";
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorVerifyResult,
+} from "../connector.ts";
+import {
+  verifyResultFromError,
+  verifyResultFromStatus,
+} from "../_verify_helpers.ts";
 import {
   type CloudflareContainerDescriptor,
   DirectCloudflareContainerLifecycle,
@@ -87,6 +95,20 @@ export class CloudflareContainerConnector implements Connector {
     });
     if (!desc) return { status: "missing" };
     return { status: "running", outputs: outputsFor(desc) };
+  }
+
+  async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
+    try {
+      const result = await this.#lifecycle.listApplicationsResult();
+      // 404 = beta API not yet enabled for the account but token is valid.
+      return verifyResultFromStatus(result.status, {
+        okStatuses: [200, 404],
+        responseText: result.ok ? "" : result.text,
+        context: "cf-containers:ListApplications",
+      });
+    } catch (error) {
+      return verifyResultFromError(error, "cf-containers:ListApplications");
+    }
   }
 }
 

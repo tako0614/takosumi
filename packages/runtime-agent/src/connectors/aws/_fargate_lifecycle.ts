@@ -147,6 +147,17 @@ export class DirectAwsFargateLifecycle {
     return true;
   }
 
+  /**
+   * Verify-only helper: issues `DescribeClusters` against the configured
+   * cluster, returning the raw `Response` so the connector can map status
+   * codes onto a `ConnectorVerifyResult` without throwing.
+   */
+  describeClustersResponse(): Promise<Response> {
+    return this.#sendEcs("DescribeClusters", {
+      clusters: [this.#opts.clusterName],
+    });
+  }
+
   async #registerTaskDefinition(
     input: AwsFargateServiceCreateInput,
   ): Promise<string> {

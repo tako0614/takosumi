@@ -118,6 +118,28 @@ export class DirectCloudflareContainerLifecycle {
     };
   }
 
+  /**
+   * Verify-only: list container applications for the account. 200 / 404
+   * both indicate the credentials are accepted (404 = beta API not
+   * enabled / no applications yet). Returns raw status / text.
+   */
+  listApplicationsResult(): Promise<
+    { status: number; ok: boolean; text: string }
+  > {
+    return cfFetch(
+      {
+        method: "GET",
+        path: `/accounts/${this.#accountId}/containers/applications`,
+      },
+      { apiToken: this.#apiToken, fetch: this.#fetch },
+    ).then((result) => ({
+      status: result.status,
+      ok: result.envelope?.success === true && result.status >= 200 &&
+        result.status < 300,
+      text: result.text,
+    }));
+  }
+
   async deleteService(
     input: { readonly serviceName: string },
   ): Promise<boolean> {

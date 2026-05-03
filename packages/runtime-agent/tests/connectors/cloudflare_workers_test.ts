@@ -385,6 +385,61 @@ Deno.test(
 );
 
 Deno.test(
+  "CloudflareWorkersConnector.verify reports ok on 200 subdomain",
+  async () => {
+    const { fetch: mockFetch, calls } = recordingFetch((call) => {
+      if (call.method === "GET" && call.url.endsWith("/workers/subdomain")) {
+        return subdomainEnvelope("teams");
+      }
+      return okEnvelope();
+    });
+    const connector = new CloudflareWorkersConnector({
+      accountId: "acct-1",
+      apiToken: "cf-token",
+      fetch: mockFetch,
+    });
+    const res = await connector.verify({});
+    assert.equal(res.ok, true);
+    assert.equal(res.note, "credentials valid");
+    assert.equal(calls[0].method, "GET");
+    assert.match(calls[0].url, /\/accounts\/acct-1\/workers\/subdomain$/);
+  },
+);
+
+Deno.test(
+  "CloudflareWorkersConnector.verify treats 404 subdomain as ok (creds valid)",
+  async () => {
+    const { fetch: mockFetch } = recordingFetch(() =>
+      new Response("", { status: 404 })
+    );
+    const connector = new CloudflareWorkersConnector({
+      accountId: "acct-no-sub",
+      apiToken: "cf-token",
+      fetch: mockFetch,
+    });
+    const res = await connector.verify({});
+    assert.equal(res.ok, true);
+  },
+);
+
+Deno.test(
+  "CloudflareWorkersConnector.verify reports auth_failed on 401",
+  async () => {
+    const { fetch: mockFetch } = recordingFetch(() =>
+      new Response("{}", { status: 401 })
+    );
+    const connector = new CloudflareWorkersConnector({
+      accountId: "acct",
+      apiToken: "bad-token",
+      fetch: mockFetch,
+    });
+    const res = await connector.verify({});
+    assert.equal(res.ok, false);
+    assert.equal(res.code, "auth_failed");
+  },
+);
+
+Deno.test(
   "CloudflareWorkersConnector caches the subdomain across calls",
   async () => {
     const fetcher = fakeFetcher(new Uint8Array([1]), []);
