@@ -39,7 +39,7 @@ interface InstanceDescriptor {
 }
 
 export class LocalDockerPostgresConnector implements Connector {
-  readonly provider = "local-docker";
+  readonly provider = "@takos/selfhost-postgres";
   readonly shape = "database-postgres@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #hostBinding: string;

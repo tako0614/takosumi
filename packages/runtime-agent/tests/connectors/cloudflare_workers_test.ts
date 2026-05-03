@@ -108,7 +108,7 @@ Deno.test(
 
     const result = await connector.apply({
       shape: "worker@v1",
-      provider: "cloudflare-workers",
+      provider: "@takos/cloudflare-workers",
       resourceName: "my-script",
       spec: {
         artifact: { kind: "js-bundle", hash: "sha256:abc" },
@@ -175,7 +175,7 @@ Deno.test(
     });
     await connector.apply({
       shape: "worker@v1",
-      provider: "cloudflare-workers",
+      provider: "@takos/cloudflare-workers",
       resourceName: "fn",
       spec: {
         artifact: {
@@ -209,7 +209,7 @@ Deno.test(
     try {
       await connector.apply({
         shape: "worker@v1",
-        provider: "cloudflare-workers",
+        provider: "@takos/cloudflare-workers",
         resourceName: "fn",
         spec: {
           artifact: { kind: "js-bundle", hash: "sha256:abc" },
@@ -238,7 +238,7 @@ Deno.test(
     try {
       await connector.apply({
         shape: "worker@v1",
-        provider: "cloudflare-workers",
+        provider: "@takos/cloudflare-workers",
         resourceName: "fn",
         spec: {
           artifact: { kind: "js-bundle" },
@@ -275,7 +275,7 @@ Deno.test(
 
     const ok = await connector.destroy({
       shape: "worker@v1",
-      provider: "cloudflare-workers",
+      provider: "@takos/cloudflare-workers",
       handle: "acct-1/my-script",
     }, {});
     assert.equal(ok.ok, true);
@@ -289,7 +289,7 @@ Deno.test(
     nextStatus = 404;
     const missing = await connector.destroy({
       shape: "worker@v1",
-      provider: "cloudflare-workers",
+      provider: "@takos/cloudflare-workers",
       handle: "acct-1/my-script",
     }, {});
     assert.equal(missing.ok, true);
@@ -323,7 +323,7 @@ Deno.test(
 
     const running = await connector.describe({
       shape: "worker@v1",
-      provider: "cloudflare-workers",
+      provider: "@takos/cloudflare-workers",
       handle: "acct-1/my-script",
     }, {});
     assert.equal(running.status, "running");
@@ -335,7 +335,7 @@ Deno.test(
     nextScriptStatus = 404;
     const missing = await connector.describe({
       shape: "worker@v1",
-      provider: "cloudflare-workers",
+      provider: "@takos/cloudflare-workers",
       handle: "acct-1/my-script",
     }, {});
     assert.equal(missing.status, "missing");
@@ -366,7 +366,7 @@ Deno.test(
       });
       result = await connector.apply({
         shape: "worker@v1",
-        provider: "cloudflare-workers",
+        provider: "@takos/cloudflare-workers",
         resourceName: "fn",
         spec: {
           artifact: { kind: "js-bundle", hash: "sha256:abc" },
@@ -459,7 +459,7 @@ Deno.test(
 
     await connector.apply({
       shape: "worker@v1",
-      provider: "cloudflare-workers",
+      provider: "@takos/cloudflare-workers",
       resourceName: "fn",
       spec: {
         artifact: { kind: "js-bundle", hash: "sha256:abc" },
@@ -468,7 +468,7 @@ Deno.test(
     }, { fetcher });
     await connector.apply({
       shape: "worker@v1",
-      provider: "cloudflare-workers",
+      provider: "@takos/cloudflare-workers",
       resourceName: "fn2",
       spec: {
         artifact: { kind: "js-bundle", hash: "sha256:def" },

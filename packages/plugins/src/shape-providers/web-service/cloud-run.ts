@@ -54,7 +54,7 @@ export function createCloudRunWebServiceProvider(
   const lifecycle = options.lifecycle;
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "cloud-run",
+    id: "@takos/gcp-cloud-run",
     version: "1.0.0",
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

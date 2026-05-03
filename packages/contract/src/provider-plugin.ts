@@ -78,12 +78,42 @@ export interface ProviderPlugin<
 
 const PROVIDER_REGISTRY = new Map<string, ProviderPlugin>();
 
+/**
+ * Options for {@link registerProvider}. Pass `allowOverride: true` to
+ * suppress the collision warning when re-registering a provider with a
+ * different value (e.g. tests that intentionally swap implementations).
+ */
+export interface RegisterProviderOptions {
+  readonly allowOverride?: boolean;
+}
+
 export function registerProvider(
   provider: ProviderPlugin,
+  options?: RegisterProviderOptions,
 ): ProviderPlugin | undefined {
   const previous = PROVIDER_REGISTRY.get(provider.id);
+  // Same-value re-registration (idempotent boot) is silent — only warn
+  // when the new entry differs from the prior. Reference equality is the
+  // cheapest comparison and good enough: the bundled-shapes path passes
+  // the same `Shape` / `ProviderPlugin` instance every time.
+  if (
+    previous !== undefined &&
+    previous !== provider &&
+    options?.allowOverride !== true
+  ) {
+    console.warn(
+      `[takosumi-registry] provider "${provider.id}" overwritten ` +
+        `(was ${describeProvider(previous)}, now ${
+          describeProvider(provider)
+        })`,
+    );
+  }
   PROVIDER_REGISTRY.set(provider.id, provider);
   return previous;
+}
+
+function describeProvider(provider: ProviderPlugin): string {
+  return `${provider.id}@${provider.version}`;
 }
 
 export function unregisterProvider(id: string): boolean {

@@ -695,6 +695,7 @@ export function createDefaultAppAdapters(
     uuidFactory,
   });
   assertNoStrictRuntimeAdapterFallbacks(options);
+  warnAboutDevAdapterFallbacks(options);
   const localActor = new LocalActorAdapter();
   const actor = options.adapters?.actor ?? pluginAdapters.actor ?? localActor;
   const storage = options.adapters?.storage ??
@@ -878,6 +879,43 @@ function assertNoStrictRuntimeAdapterFallbacks(
       } fallback`,
     );
   }
+}
+
+/**
+ * Dev / local fallback warning. In non-strict environments the kernel will
+ * silently activate in-memory implementations for any adapter port the
+ * operator did not configure. That makes "git clone && takosumi server" Just
+ * Work, but it also means an operator who forgot to wire Postgres won't
+ * notice their state is volatile until first restart wipes the deployment
+ * record store.
+ *
+ * Logs a single boot-time warning listing the strict-runtime ports that fell
+ * back to in-memory, with `TAKOSUMI_LOG_LEVEL=warn` (or `error`) to suppress
+ * if the operator deliberately wants the in-memory mode.
+ */
+function warnAboutDevAdapterFallbacks(options: AppContextOptions): void {
+  const environment = options.runtimeConfig?.environment;
+  if (environment === "production" || environment === "staging") return;
+  const logLevel = options.runtimeEnv?.TAKOSUMI_LOG_LEVEL ?? "info";
+  if (logLevel === "error" || logLevel === "warn") return;
+  const selectedPluginIds = selectedKernelPluginIds(options.runtimeConfig);
+  const fallbacks: string[] = [];
+  for (const port of STRICT_RUNTIME_KERNEL_PORTS) {
+    const adapterKey = STRICT_RUNTIME_PORT_ADAPTERS[port];
+    if (options.adapters?.[adapterKey] || selectedPluginIds[port]) continue;
+    if (
+      port === "runtime-agent" &&
+      (options.adapters?.storage || selectedPluginIds.storage)
+    ) continue;
+    fallbacks.push(port);
+  }
+  if (fallbacks.length === 0) return;
+  console.warn(
+    `[takosumi-bootstrap] dev mode is using in-memory fallbacks for: ` +
+      `${fallbacks.join(", ")} — set TAKOSUMI_* env adapters or pass ` +
+      `\`adapters\` explicitly to persist state across restarts. ` +
+      `Set TAKOSUMI_LOG_LEVEL=warn to suppress this notice.`,
+  );
 }
 
 export function createServiceContainer(

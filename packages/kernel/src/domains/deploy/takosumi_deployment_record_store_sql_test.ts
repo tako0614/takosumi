@@ -340,7 +340,7 @@ Deno.test(
         resources: [{
           shape: "worker@v1",
           name: "api",
-          provider: "cloudflare-workers",
+          provider: "@takos/cloudflare-workers",
           spec: { artifact: { kind: "js-bundle", hash: HASH_A } },
         }],
       },

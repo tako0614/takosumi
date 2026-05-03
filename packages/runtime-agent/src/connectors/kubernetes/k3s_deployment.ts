@@ -35,7 +35,7 @@ export interface K3sDeploymentConnectorOptions {
 }
 
 export class K3sDeploymentConnector implements Connector {
-  readonly provider = "k3s-deployment";
+  readonly provider = "@takos/kubernetes-deployment";
   readonly shape = "web-service@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #lifecycle: DirectK3sDeploymentLifecycle;

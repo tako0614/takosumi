@@ -55,7 +55,7 @@ Deno.test("CloudflareDnsConnector.apply creates record and returns id handle", a
   });
   const res = await connector.apply({
     shape: "custom-domain@v1",
-    provider: "cloudflare-dns",
+    provider: "@takos/cloudflare-dns",
     resourceName: "rs",
     spec: { name: "app.example.com", target: "lb.example.com" },
   }, {});

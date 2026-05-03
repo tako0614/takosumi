@@ -111,6 +111,81 @@ const rmCmd = new Command()
     Deno.exit(1);
   });
 
+const kindsCmd = new Command()
+  .description(
+    "List the artifact kinds the deployed kernel understands " +
+      "(GET /v1/artifacts/kinds)",
+  )
+  .option("--remote <url:string>", "Kernel base URL")
+  .option("--token <token:string>", "Bearer token")
+  .option("--table", "Format output as a plain-text table instead of JSON")
+  .action(async ({ remote, token, table }) => {
+    const target = requireRemote(remote, token);
+    const response = await fetch(`${target.url}${ARTIFACTS_BASE_PATH}/kinds`, {
+      headers: { authorization: `Bearer ${target.token}` },
+    });
+    const body = await readBody(response) as
+      | { readonly kinds?: readonly RegisteredArtifactKindRow[] }
+      | undefined;
+    if (!response.ok) {
+      console.error(`kernel ${response.status}:`, body);
+      Deno.exit(1);
+    }
+    const kinds = body?.kinds ?? [];
+    if (table) {
+      printKindsTable(kinds);
+      return;
+    }
+    console.log(JSON.stringify({ kinds }, null, 2));
+  });
+
+interface RegisteredArtifactKindRow {
+  readonly kind: string;
+  readonly description: string;
+  readonly contentTypeHint?: string;
+  readonly maxSize?: number;
+}
+
+function printKindsTable(rows: readonly RegisteredArtifactKindRow[]): void {
+  if (rows.length === 0) {
+    console.log("(no artifact kinds registered)");
+    return;
+  }
+  const widths = {
+    kind: Math.max(4, ...rows.map((r) => r.kind.length)),
+    contentType: Math.max(
+      12,
+      ...rows.map((r) => (r.contentTypeHint ?? "-").length),
+    ),
+    maxSize: Math.max(
+      8,
+      ...rows.map((r) =>
+        (r.maxSize !== undefined ? String(r.maxSize) : "-")
+          .length
+      ),
+    ),
+  };
+  const pad = (value: string, width: number) =>
+    value + " ".repeat(Math.max(0, width - value.length));
+  const header = `${pad("kind", widths.kind)}  ${
+    pad("content-type", widths.contentType)
+  }  ${pad("max-size", widths.maxSize)}  description`;
+  console.log(header);
+  console.log("-".repeat(header.length));
+  for (const row of rows) {
+    console.log(
+      `${pad(row.kind, widths.kind)}  ${
+        pad(row.contentTypeHint ?? "-", widths.contentType)
+      }  ${
+        pad(
+          row.maxSize !== undefined ? String(row.maxSize) : "-",
+          widths.maxSize,
+        )
+      }  ${row.description}`,
+    );
+  }
+}
+
 const gcCmd = new Command()
   .description(
     "Garbage-collect artifacts not referenced by any persisted deployment",
@@ -139,12 +214,13 @@ const gcCmd = new Command()
 
 export const artifactCommand = new Command()
   .description(
-    "Manage Takosumi-kernel artifact uploads (push / list / rm / gc)",
+    "Manage Takosumi-kernel artifact uploads (push / list / rm / gc / kinds)",
   )
   .command("push", pushCmd)
   .command("list", listCmd)
   .command("rm", rmCmd)
-  .command("gc", gcCmd);
+  .command("gc", gcCmd)
+  .command("kinds", kindsCmd);
 
 interface RemoteTarget {
   readonly url: string;

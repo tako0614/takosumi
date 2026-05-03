@@ -70,7 +70,7 @@ Deno.test(
             {
               name: "bucket",
               shape: "object-store@v1",
-              provider: "aws-s3",
+              provider: "@takos/aws-s3",
               status: "applied",
               outputs: { region: "us-east-1" },
             },
@@ -105,7 +105,7 @@ Deno.test(
         {
           name: "bucket",
           shape: "object-store@v1",
-          provider: "aws-s3",
+          provider: "@takos/aws-s3",
           status: "applied",
           outputs: {},
         },

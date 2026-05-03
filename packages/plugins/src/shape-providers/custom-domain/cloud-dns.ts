@@ -45,7 +45,7 @@ export function createCloudDnsProvider(
   const lifecycle = options.lifecycle;
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "cloud-dns",
+    id: "@takos/gcp-cloud-dns",
     version: "1.0.0",
     implements: { id: "custom-domain", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

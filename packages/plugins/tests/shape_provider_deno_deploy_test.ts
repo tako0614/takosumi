@@ -25,7 +25,7 @@ const validSpec = () => ({
 
 Deno.test("deno-deploy provider declares worker@v1", () => {
   const { provider } = newProvider();
-  assert.equal(provider.id, "deno-deploy");
+  assert.equal(provider.id, "@takos/deno-deploy");
   assert.deepEqual(provider.implements, { id: "worker", version: "v1" });
   assert.ok(provider.capabilities.includes("scale-to-zero"));
 });

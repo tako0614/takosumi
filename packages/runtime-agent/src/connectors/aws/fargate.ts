@@ -43,7 +43,7 @@ export interface AwsFargateConnectorOptions {
 }
 
 export class AwsFargateConnector implements Connector {
-  readonly provider = "aws-fargate";
+  readonly provider = "@takos/aws-fargate";
   readonly shape = "web-service@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #lifecycle: DirectAwsFargateLifecycle;

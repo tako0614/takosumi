@@ -54,7 +54,7 @@ interface WorkerSpecLike {
 }
 
 export class DenoDeployWorkersConnector implements Connector {
-  readonly provider = "deno-deploy";
+  readonly provider = "@takos/deno-deploy";
   readonly shape = "worker@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["js-bundle"];
   readonly #lifecycle: DirectDenoDeployWorkersLifecycle;

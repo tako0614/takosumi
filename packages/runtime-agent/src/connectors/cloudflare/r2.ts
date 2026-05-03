@@ -36,7 +36,7 @@ export interface CloudflareR2ConnectorOptions {
 const HANDLE_PREFIX = "cloudflare:r2:";
 
 export class CloudflareR2Connector implements Connector {
-  readonly provider = "cloudflare-r2";
+  readonly provider = "@takos/cloudflare-r2";
   readonly shape = "object-store@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudflareR2Lifecycle;

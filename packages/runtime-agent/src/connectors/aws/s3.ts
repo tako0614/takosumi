@@ -40,7 +40,7 @@ export interface AwsS3ConnectorOptions {
 const ARN_PREFIX = "arn:aws:s3:::";
 
 export class AwsS3Connector implements Connector {
-  readonly provider = "aws-s3";
+  readonly provider = "@takos/aws-s3";
   readonly shape = "object-store@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectAwsS3Lifecycle;

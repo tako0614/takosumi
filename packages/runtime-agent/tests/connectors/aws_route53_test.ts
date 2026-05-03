@@ -48,7 +48,7 @@ Deno.test("Route53Connector.apply UPSERTs CNAME via ChangeResourceRecordSets", a
   });
   const res = await connector.apply({
     shape: "custom-domain@v1",
-    provider: "route53",
+    provider: "@takos/aws-route53",
     resourceName: "rs",
     spec: { name: "app.example.com", target: "lb.example.com" },
   }, {});

@@ -140,21 +140,21 @@ Deno.test("recordsFromAppliedResources copies shape from manifest", () => {
   const records = recordsFromAppliedResources(
     [{
       name: "logs",
-      providerId: "filesystem",
+      providerId: "@takos/selfhost-filesystem",
       handle: "h_1",
       outputs: { ok: true },
     }],
     [{
       shape: "object-store@v1",
       name: "logs",
-      provider: "filesystem",
+      provider: "@takos/selfhost-filesystem",
       spec: {},
     }],
     NOW_1,
   );
   assert.equal(records.length, 1);
   assert.equal(records[0].shape, "object-store@v1");
-  assert.equal(records[0].providerId, "filesystem");
+  assert.equal(records[0].providerId, "@takos/selfhost-filesystem");
   assert.equal(records[0].handle, "h_1");
   assert.equal(records[0].appliedAt, NOW_1);
 });
@@ -181,7 +181,7 @@ Deno.test(
         resources: [{
           shape: "worker@v1",
           name: "api",
-          provider: "cloudflare-workers",
+          provider: "@takos/cloudflare-workers",
           spec: { artifact: { kind: "js-bundle", hash: HASH_A } },
         }],
       },

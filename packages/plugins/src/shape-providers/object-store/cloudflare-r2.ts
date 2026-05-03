@@ -53,7 +53,7 @@ export function createCloudflareR2ObjectStoreProvider(
   const clock = options.clock ?? (() => new Date());
 
   return {
-    id: "cloudflare-r2",
+    id: "@takos/cloudflare-r2",
     version: "1.0.0",
     implements: { id: "object-store", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

@@ -46,7 +46,7 @@ const SIZE_TO_TIER: Readonly<Record<string, string>> = {
 };
 
 export class CloudSqlConnector implements Connector {
-  readonly provider = "cloud-sql";
+  readonly provider = "@takos/gcp-cloud-sql";
   readonly shape = "database-postgres@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudSqlLifecycle;

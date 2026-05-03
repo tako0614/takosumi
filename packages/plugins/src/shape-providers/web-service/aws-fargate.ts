@@ -60,7 +60,7 @@ export function createAwsFargateWebServiceProvider(
   const lifecycle = options.lifecycle;
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "aws-fargate",
+    id: "@takos/aws-fargate",
     version: "1.0.0",
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

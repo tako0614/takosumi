@@ -46,7 +46,7 @@ export function createRoute53Provider(
   const lifecycle = options.lifecycle;
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "route53",
+    id: "@takos/aws-route53",
     version: "1.0.0",
     implements: { id: "custom-domain", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

@@ -65,7 +65,7 @@ Deno.test("registerProvider returns previous on replace", () => {
   });
   try {
     registerProvider(first);
-    assert.equal(registerProvider(second), first);
+    assert.equal(registerProvider(second, { allowOverride: true }), first);
     assert.equal(getProvider("test-provider-replace"), second);
   } finally {
     unregisterProvider("test-provider-replace");
@@ -124,6 +124,69 @@ Deno.test("capabilitySubsetIssues lists each missing capability", () => {
   assert.ok(issues.some((i) => i.message.includes("websocket")));
   assert.ok(issues.some((i) => i.message.includes("encryption")));
   assert.equal(issues[0].path, "$.requires");
+});
+
+Deno.test("registerProvider warns on differing-value collision", () => {
+  const first = fakeProvider("test-provider-warn", {
+    id: "x",
+    version: "v1",
+  });
+  const second = fakeProvider("test-provider-warn", {
+    id: "x",
+    version: "v1",
+  });
+  const captured: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => captured.push(args.join(" "));
+  try {
+    registerProvider(first);
+    registerProvider(second); // different reference -> must warn
+    assert.equal(captured.length, 1);
+    assert.match(captured[0], /provider "test-provider-warn" overwritten/);
+  } finally {
+    console.warn = original;
+    unregisterProvider("test-provider-warn");
+  }
+});
+
+Deno.test("registerProvider stays silent for idempotent re-registration", () => {
+  const provider = fakeProvider("test-provider-idempotent", {
+    id: "x",
+    version: "v1",
+  });
+  const captured: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => captured.push(args.join(" "));
+  try {
+    registerProvider(provider);
+    registerProvider(provider); // same reference -> no warning
+    assert.equal(captured.length, 0);
+  } finally {
+    console.warn = original;
+    unregisterProvider("test-provider-idempotent");
+  }
+});
+
+Deno.test("registerProvider with allowOverride suppresses the warning", () => {
+  const first = fakeProvider("test-provider-allow", {
+    id: "x",
+    version: "v1",
+  });
+  const second = fakeProvider("test-provider-allow", {
+    id: "x",
+    version: "v1",
+  });
+  const captured: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => captured.push(args.join(" "));
+  try {
+    registerProvider(first);
+    registerProvider(second, { allowOverride: true });
+    assert.equal(captured.length, 0);
+  } finally {
+    console.warn = original;
+    unregisterProvider("test-provider-allow");
+  }
 });
 
 Deno.test("ProviderPlugin apply returns ApplyResult shape", async () => {

@@ -50,7 +50,7 @@ const SIZE_TO_CLASS: Readonly<Record<string, string>> = {
 };
 
 export class AwsRdsConnector implements Connector {
-  readonly provider = "aws-rds";
+  readonly provider = "@takos/aws-rds";
   readonly shape = "database-postgres@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectAwsRdsLifecycle;

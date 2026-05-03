@@ -61,7 +61,7 @@ Deno.test("LocalDockerPostgresConnector.apply runs `docker run postgres:<version
   });
   const res = await connector.apply({
     shape: "database-postgres@v1",
-    provider: "local-docker",
+    provider: "@takos/selfhost-postgres",
     resourceName: "rs",
     spec: { version: "16" },
   }, {});

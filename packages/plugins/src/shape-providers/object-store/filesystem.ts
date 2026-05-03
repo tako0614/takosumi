@@ -44,7 +44,7 @@ export function createFilesystemObjectStoreProvider(
   const clock = options.clock ?? (() => new Date());
 
   return {
-    id: "filesystem",
+    id: "@takos/selfhost-filesystem",
     version: "1.0.0",
     implements: { id: "object-store", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

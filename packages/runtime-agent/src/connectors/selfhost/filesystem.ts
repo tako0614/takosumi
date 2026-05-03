@@ -27,7 +27,7 @@ export interface FilesystemConnectorOptions {
 }
 
 export class FilesystemConnector implements Connector {
-  readonly provider = "filesystem";
+  readonly provider = "@takos/selfhost-filesystem";
   readonly shape = "object-store@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #rootDir: string;

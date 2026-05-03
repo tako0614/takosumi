@@ -59,7 +59,7 @@ Deno.test("DockerComposeConnector.apply runs `docker run` with image + port mapp
   const connector = new DockerComposeConnector({ command });
   const res = await connector.apply({
     shape: "web-service@v1",
-    provider: "docker-compose",
+    provider: "@takos/selfhost-docker-compose",
     resourceName: "rs",
     spec: {
       image: "registry/app:1",
@@ -83,13 +83,13 @@ Deno.test("DockerComposeConnector.destroy runs `docker rm -f`", async () => {
   const connector = new DockerComposeConnector({ command });
   await connector.apply({
     shape: "web-service@v1",
-    provider: "docker-compose",
+    provider: "@takos/selfhost-docker-compose",
     resourceName: "rs",
     spec: { image: "registry/app:1", port: 8080 },
   }, {});
   const res = await connector.destroy({
     shape: "web-service@v1",
-    provider: "docker-compose",
+    provider: "@takos/selfhost-docker-compose",
     handle: "app",
   }, {});
   assert.equal(res.ok, true);

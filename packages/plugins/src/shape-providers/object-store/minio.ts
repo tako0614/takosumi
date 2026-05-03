@@ -61,7 +61,7 @@ export function createMinioObjectStoreProvider(
   }
 
   return {
-    id: "minio",
+    id: "@takos/selfhost-minio",
     version: "1.0.0",
     implements: { id: "object-store", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

@@ -96,7 +96,7 @@ const WORKER: ShapeRef = { id: "worker", version: "v1" };
 
 const AWS_PROVIDERS: readonly ProviderEntry[] = [
   {
-    id: "aws-s3",
+    id: "@takos/aws-s3",
     shape: OBJECT_STORE,
     capabilities: [
       "versioning",
@@ -109,7 +109,7 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
     ],
   },
   {
-    id: "aws-fargate",
+    id: "@takos/aws-fargate",
     shape: WEB_SERVICE,
     capabilities: [
       "always-on",
@@ -120,7 +120,7 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
     ],
   },
   {
-    id: "aws-rds",
+    id: "@takos/aws-rds",
     shape: DATABASE_POSTGRES,
     capabilities: [
       "pitr",
@@ -132,7 +132,7 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
     ],
   },
   {
-    id: "route53",
+    id: "@takos/aws-route53",
     shape: CUSTOM_DOMAIN,
     capabilities: ["wildcard", "auto-tls", "sni", "alpn-acme"],
   },
@@ -140,7 +140,7 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
 
 const GCP_PROVIDERS: readonly ProviderEntry[] = [
   {
-    id: "gcp-gcs",
+    id: "@takos/gcp-gcs",
     shape: OBJECT_STORE,
     capabilities: [
       "versioning",
@@ -153,12 +153,12 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
     ],
   },
   {
-    id: "cloud-run",
+    id: "@takos/gcp-cloud-run",
     shape: WEB_SERVICE,
     capabilities: ["always-on", "scale-to-zero", "websocket", "long-request"],
   },
   {
-    id: "cloud-sql",
+    id: "@takos/gcp-cloud-sql",
     shape: DATABASE_POSTGRES,
     capabilities: [
       "pitr",
@@ -170,7 +170,7 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
     ],
   },
   {
-    id: "cloud-dns",
+    id: "@takos/gcp-cloud-dns",
     shape: CUSTOM_DOMAIN,
     capabilities: ["wildcard", "auto-tls", "sni"],
   },
@@ -178,17 +178,17 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
 
 const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
   {
-    id: "cloudflare-r2",
+    id: "@takos/cloudflare-r2",
     shape: OBJECT_STORE,
     capabilities: ["presigned-urls", "public-access", "multipart-upload"],
   },
   {
-    id: "cloudflare-container",
+    id: "@takos/cloudflare-container",
     shape: WEB_SERVICE,
     capabilities: ["scale-to-zero", "geo-routing"],
   },
   {
-    id: "cloudflare-workers",
+    id: "@takos/cloudflare-workers",
     shape: WORKER,
     capabilities: [
       "scale-to-zero",
@@ -199,7 +199,7 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
     ],
   },
   {
-    id: "cloudflare-dns",
+    id: "@takos/cloudflare-dns",
     shape: CUSTOM_DOMAIN,
     capabilities: ["wildcard", "auto-tls", "sni", "http3"],
   },
@@ -207,7 +207,7 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
 
 const AZURE_PROVIDERS: readonly ProviderEntry[] = [
   {
-    id: "azure-container-apps",
+    id: "@takos/azure-container-apps",
     shape: WEB_SERVICE,
     capabilities: ["always-on", "scale-to-zero", "websocket", "long-request"],
   },
@@ -215,7 +215,7 @@ const AZURE_PROVIDERS: readonly ProviderEntry[] = [
 
 const KUBERNETES_PROVIDERS: readonly ProviderEntry[] = [
   {
-    id: "k3s-deployment",
+    id: "@takos/kubernetes-deployment",
     shape: WEB_SERVICE,
     capabilities: [
       "always-on",
@@ -228,7 +228,7 @@ const KUBERNETES_PROVIDERS: readonly ProviderEntry[] = [
 
 const DENO_DEPLOY_PROVIDERS: readonly ProviderEntry[] = [
   {
-    id: "deno-deploy",
+    id: "@takos/deno-deploy",
     shape: WORKER,
     capabilities: ["scale-to-zero", "long-request", "geo-routing"],
   },
@@ -236,12 +236,12 @@ const DENO_DEPLOY_PROVIDERS: readonly ProviderEntry[] = [
 
 const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
   {
-    id: "filesystem",
+    id: "@takos/selfhost-filesystem",
     shape: OBJECT_STORE,
     capabilities: ["presigned-urls"],
   },
   {
-    id: "minio",
+    id: "@takos/selfhost-minio",
     shape: OBJECT_STORE,
     capabilities: [
       "versioning",
@@ -253,22 +253,22 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
     ],
   },
   {
-    id: "docker-compose",
+    id: "@takos/selfhost-docker-compose",
     shape: WEB_SERVICE,
     capabilities: ["always-on", "websocket", "long-request", "sticky-session"],
   },
   {
-    id: "systemd-unit",
+    id: "@takos/selfhost-systemd",
     shape: WEB_SERVICE,
     capabilities: ["always-on", "long-request"],
   },
   {
-    id: "local-docker",
+    id: "@takos/selfhost-postgres",
     shape: DATABASE_POSTGRES,
     capabilities: ["ssl-required", "extensions"],
   },
   {
-    id: "coredns-local",
+    id: "@takos/selfhost-coredns",
     shape: CUSTOM_DOMAIN,
     capabilities: ["wildcard"],
   },

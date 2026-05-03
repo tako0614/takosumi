@@ -35,7 +35,7 @@ export interface CloudflareDnsConnectorOptions {
 }
 
 export class CloudflareDnsConnector implements Connector {
-  readonly provider = "cloudflare-dns";
+  readonly provider = "@takos/cloudflare-dns";
   readonly shape = "custom-domain@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudflareDnsLifecycle;

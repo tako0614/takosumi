@@ -94,7 +94,7 @@ Deno.test(
       results: [
         {
           shape: "object-store@v1",
-          provider: "aws-s3",
+          provider: "@takos/aws-s3",
           ok: true,
           note: "credentials valid",
         },
@@ -115,7 +115,7 @@ Deno.test(
     assert.equal(request.authorization, "Bearer tk");
     assert.equal(request.body, "{}");
     const dump = output.join("\n");
-    assert.match(dump, /object-store@v1\/aws-s3/);
+    assert.match(dump, /object-store@v1\/@takos\/aws-s3/);
     assert.match(dump, /ok/);
     assert.match(dump, /credentials valid/);
     assert.equal(exitCode, undefined);
@@ -129,13 +129,13 @@ Deno.test(
       results: [
         {
           shape: "object-store@v1",
-          provider: "aws-s3",
+          provider: "@takos/aws-s3",
           ok: true,
           note: "credentials valid",
         },
         {
           shape: "web-service@v1",
-          provider: "cloud-run",
+          provider: "@takos/gcp-cloud-run",
           ok: false,
           code: "auth_failed",
           note: "401 Unauthorized",
@@ -153,8 +153,8 @@ Deno.test(
       fakeResponse,
     );
     const dump = output.join("\n");
-    assert.match(dump, /aws-s3/);
-    assert.match(dump, /cloud-run/);
+    assert.match(dump, /@takos\/aws-s3/);
+    assert.match(dump, /@takos\/gcp-cloud-run/);
     assert.match(dump, /FAIL/);
     assert.match(dump, /\[auth_failed\]/);
     assert.equal(exitCode, 2);
@@ -175,13 +175,16 @@ Deno.test(
         "--shape",
         "web-service@v1",
         "--provider",
-        "cloud-run",
+        "@takos/gcp-cloud-run",
       ],
       fakeResponse,
     );
     assert.equal(
       request.body,
-      JSON.stringify({ shape: "web-service@v1", provider: "cloud-run" }),
+      JSON.stringify({
+        shape: "web-service@v1",
+        provider: "@takos/gcp-cloud-run",
+      }),
     );
   },
 );

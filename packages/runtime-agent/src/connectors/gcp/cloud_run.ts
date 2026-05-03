@@ -34,7 +34,7 @@ export interface CloudRunConnectorOptions {
 }
 
 export class CloudRunConnector implements Connector {
-  readonly provider = "cloud-run";
+  readonly provider = "@takos/gcp-cloud-run";
   readonly shape = "web-service@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #lifecycle: DirectCloudRunLifecycle;

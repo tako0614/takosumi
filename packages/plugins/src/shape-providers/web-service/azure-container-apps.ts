@@ -63,7 +63,7 @@ export function createAzureContainerAppsWebServiceProvider(
   const lifecycle = options.lifecycle;
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "azure-container-apps",
+    id: "@takos/azure-container-apps",
     version: "1.0.0",
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

@@ -69,7 +69,7 @@ export function createAwsRdsProvider(
   const generatePassword = options.passwordGenerator ?? randomPassword;
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "aws-rds",
+    id: "@takos/aws-rds",
     version: "1.0.0",
     implements: { id: "database-postgres", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

@@ -139,7 +139,7 @@ Deno.test(
 
     const result = await connector.apply({
       shape: "worker@v1",
-      provider: "deno-deploy",
+      provider: "@takos/deno-deploy",
       resourceName: "fn",
       spec: {
         artifact: { kind: "js-bundle", hash: "sha256:abc" },
@@ -198,7 +198,7 @@ Deno.test(
     });
     await connector.apply({
       shape: "worker@v1",
-      provider: "deno-deploy",
+      provider: "@takos/deno-deploy",
       resourceName: "fn",
       spec: {
         artifact: { kind: "js-bundle", hash: "sha256:abc" },
@@ -227,7 +227,7 @@ Deno.test(
     try {
       await connector.apply({
         shape: "worker@v1",
-        provider: "deno-deploy",
+        provider: "@takos/deno-deploy",
         resourceName: "fn",
         spec: {
           artifact: { kind: "js-bundle", hash: "sha256:abc" },
@@ -265,7 +265,7 @@ Deno.test(
     });
     const ok = await connector.destroy({
       shape: "worker@v1",
-      provider: "deno-deploy",
+      provider: "@takos/deno-deploy",
       handle: "org/fn",
     }, {});
     assert.equal(ok.ok, true);
@@ -275,7 +275,7 @@ Deno.test(
 
     const missing = await connector.destroy({
       shape: "worker@v1",
-      provider: "deno-deploy",
+      provider: "@takos/deno-deploy",
       handle: "org/fn",
     }, {});
     assert.equal(missing.ok, true);
@@ -302,7 +302,7 @@ Deno.test(
     });
     const running = await connector.describe({
       shape: "worker@v1",
-      provider: "deno-deploy",
+      provider: "@takos/deno-deploy",
       handle: "org/fn",
     }, {});
     assert.equal(running.status, "running");
@@ -314,7 +314,7 @@ Deno.test(
     projectsExist = false;
     const missing = await connector.describe({
       shape: "worker@v1",
-      provider: "deno-deploy",
+      provider: "@takos/deno-deploy",
       handle: "org/fn",
     }, {});
     assert.equal(missing.status, "missing");

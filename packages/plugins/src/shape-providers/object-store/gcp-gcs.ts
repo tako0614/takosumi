@@ -53,7 +53,7 @@ export function createGcsObjectStoreProvider(
   const secretBase = options.secretRefBase ?? "secret://gcp/gcs";
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "gcp-gcs",
+    id: "@takos/gcp-gcs",
     version: "1.0.0",
     implements: { id: "object-store", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

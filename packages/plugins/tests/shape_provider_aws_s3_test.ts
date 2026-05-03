@@ -20,7 +20,7 @@ function newProvider() {
 
 Deno.test("aws-s3 provider declares object-store@v1", () => {
   const { provider } = newProvider();
-  assert.equal(provider.id, "aws-s3");
+  assert.equal(provider.id, "@takos/aws-s3");
   assert.deepEqual(provider.implements, { id: "object-store", version: "v1" });
 });
 

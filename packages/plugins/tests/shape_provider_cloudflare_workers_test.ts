@@ -25,7 +25,7 @@ const validSpec = () => ({
 
 Deno.test("cloudflare-workers provider declares worker@v1", () => {
   const { provider } = newProvider();
-  assert.equal(provider.id, "cloudflare-workers");
+  assert.equal(provider.id, "@takos/cloudflare-workers");
   assert.deepEqual(provider.implements, { id: "worker", version: "v1" });
   assert.ok(provider.capabilities.includes("scale-to-zero"));
 });

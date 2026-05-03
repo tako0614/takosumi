@@ -21,7 +21,7 @@ function newProvider() {
 
 Deno.test("docker-compose provider declares web-service@v1", () => {
   const { provider } = newProvider();
-  assert.equal(provider.id, "docker-compose");
+  assert.equal(provider.id, "@takos/selfhost-docker-compose");
   assert.deepEqual(provider.implements, { id: "web-service", version: "v1" });
 });
 

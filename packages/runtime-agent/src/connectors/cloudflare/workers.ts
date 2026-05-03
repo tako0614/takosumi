@@ -49,7 +49,7 @@ interface WorkerSpecLike {
 }
 
 export class CloudflareWorkersConnector implements Connector {
-  readonly provider = "cloudflare-workers";
+  readonly provider = "@takos/cloudflare-workers";
   readonly shape = "worker@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["js-bundle"];
   readonly #lifecycle: DirectCloudflareWorkersLifecycle;

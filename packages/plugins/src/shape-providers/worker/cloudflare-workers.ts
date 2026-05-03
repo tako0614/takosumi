@@ -56,7 +56,7 @@ export function createCloudflareWorkersProvider(
   void options.accountId;
 
   return {
-    id: "cloudflare-workers",
+    id: "@takos/cloudflare-workers",
     version: "1.0.0",
     implements: { id: "worker", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

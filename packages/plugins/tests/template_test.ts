@@ -100,11 +100,11 @@ Deno.test("WebAppOnCloudflare expands to 4 resources with cloudflare bindings", 
     });
   assert.equal(resources.length, 4);
   const apiResource = resources.find((r) => r.name === "api")!;
-  assert.equal(apiResource.provider, "cloudflare-container");
+  assert.equal(apiResource.provider, "@takos/cloudflare-container");
   const assetsResource = resources.find((r) => r.name === "assets")!;
-  assert.equal(assetsResource.provider, "cloudflare-r2");
+  assert.equal(assetsResource.provider, "@takos/cloudflare-r2");
   const dbResource = resources.find((r) => r.name === "db")!;
-  assert.equal(dbResource.provider, "aws-rds");
+  assert.equal(dbResource.provider, "@takos/aws-rds");
   const domainResource = resources.find((r) => r.name === "domain")!;
-  assert.equal(domainResource.provider, "cloudflare-dns");
+  assert.equal(domainResource.provider, "@takos/cloudflare-dns");
 });

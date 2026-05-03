@@ -73,19 +73,19 @@ export const SelfhostedSingleVmTemplate: Template<SelfhostedSingleVmInputs> = {
       {
         shape: "database-postgres@v1",
         name: "db",
-        provider: "local-docker",
+        provider: "@takos/selfhost-postgres",
         spec: { version: dbVersion, size: "small" },
       },
       {
         shape: "object-store@v1",
         name: "assets",
-        provider: "filesystem",
+        provider: "@takos/selfhost-filesystem",
         spec: { name: assetsName },
       },
       {
         shape: "web-service@v1",
         name: inputs.serviceName,
-        provider: "docker-compose",
+        provider: "@takos/selfhost-docker-compose",
         spec: {
           image: inputs.image,
           port: inputs.port,
@@ -101,7 +101,7 @@ export const SelfhostedSingleVmTemplate: Template<SelfhostedSingleVmInputs> = {
       resources.push({
         shape: "custom-domain@v1",
         name: "domain",
-        provider: "coredns-local",
+        provider: "@takos/selfhost-coredns",
         spec: {
           name: inputs.domain,
           target: `\${ref:${inputs.serviceName}.url}`,

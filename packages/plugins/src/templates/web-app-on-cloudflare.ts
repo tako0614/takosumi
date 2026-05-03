@@ -6,7 +6,10 @@ export interface WebAppOnCloudflareInputs {
   readonly port: number;
   readonly domain: string;
   readonly assetsBucketName?: string;
-  readonly databaseProvider?: "aws-rds" | "cloud-sql" | "local-docker";
+  readonly databaseProvider?:
+    | "@takos/aws-rds"
+    | "@takos/gcp-cloud-sql"
+    | "@takos/selfhost-postgres";
   readonly databaseVersion?: string;
 }
 
@@ -22,7 +25,11 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
-const VALID_DB_PROVIDERS = new Set(["aws-rds", "cloud-sql", "local-docker"]);
+const VALID_DB_PROVIDERS = new Set([
+  "@takos/aws-rds",
+  "@takos/gcp-cloud-sql",
+  "@takos/selfhost-postgres",
+]);
 
 export const WebAppOnCloudflareTemplate: Template<WebAppOnCloudflareInputs> = {
   id: "web-app-on-cloudflare",
@@ -79,7 +86,7 @@ export const WebAppOnCloudflareTemplate: Template<WebAppOnCloudflareInputs> = {
     }
   },
   expand(inputs) {
-    const dbProvider = inputs.databaseProvider ?? "aws-rds";
+    const dbProvider = inputs.databaseProvider ?? "@takos/aws-rds";
     const dbVersion = inputs.databaseVersion ?? "16";
     const assetsName = inputs.assetsBucketName ??
       `${inputs.serviceName}-assets`;
@@ -93,13 +100,13 @@ export const WebAppOnCloudflareTemplate: Template<WebAppOnCloudflareInputs> = {
       {
         shape: "object-store@v1",
         name: "assets",
-        provider: "cloudflare-r2",
+        provider: "@takos/cloudflare-r2",
         spec: { name: assetsName, public: false },
       },
       {
         shape: "web-service@v1",
         name: inputs.serviceName,
-        provider: "cloudflare-container",
+        provider: "@takos/cloudflare-container",
         spec: {
           image: inputs.image,
           port: inputs.port,
@@ -114,7 +121,7 @@ export const WebAppOnCloudflareTemplate: Template<WebAppOnCloudflareInputs> = {
       {
         shape: "custom-domain@v1",
         name: "domain",
-        provider: "cloudflare-dns",
+        provider: "@takos/cloudflare-dns",
         spec: {
           name: inputs.domain,
           target: `\${ref:${inputs.serviceName}.url}`,

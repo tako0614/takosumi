@@ -59,7 +59,7 @@ export function createDockerComposeWebServiceProvider(
   const clock = options.clock ?? (() => new Date());
 
   return {
-    id: "docker-compose",
+    id: "@takos/selfhost-docker-compose",
     version: "1.0.0",
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

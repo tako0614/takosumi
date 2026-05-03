@@ -20,7 +20,7 @@ function newProvider() {
 
 Deno.test("cloudflare-r2 provider declares object-store@v1", () => {
   const { provider } = newProvider();
-  assert.equal(provider.id, "cloudflare-r2");
+  assert.equal(provider.id, "@takos/cloudflare-r2");
   assert.deepEqual(provider.implements, { id: "object-store", version: "v1" });
 });
 

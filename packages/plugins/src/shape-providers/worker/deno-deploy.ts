@@ -69,7 +69,7 @@ export function createDenoDeployProvider(
   void options.organizationId;
 
   return {
-    id: "deno-deploy",
+    id: "@takos/deno-deploy",
     version: "1.0.0",
     implements: { id: "worker", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

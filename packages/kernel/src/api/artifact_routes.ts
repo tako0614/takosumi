@@ -3,6 +3,7 @@ import {
   ARTIFACTS_BASE_PATH,
   type ArtifactStored,
   type JsonObject,
+  listArtifactKinds,
 } from "takosumi-contract";
 import type {
   ObjectStorageDigest,
@@ -336,6 +337,22 @@ export function registerArtifactRoutes(
       deleted.push(head.digest);
     }
     return c.json({ deleted, retained, dryRun }, 200);
+  });
+
+  /**
+   * Discovery endpoint: list every {@link RegisteredArtifactKind} the
+   * deployed kernel knows about. CLIs use this to surface valid `--kind`
+   * values to operators and to introspect per-kind metadata such as the
+   * default content-type hint and any per-kind size override. Bearer auth
+   * uses the same deploy token as the rest of the artifact endpoints.
+   *
+   * Mounted before `/:hash` so Hono does not match `kinds` against the
+   * dynamic `:hash` segment.
+   */
+  app.get(`${TAKOSUMI_ARTIFACTS_PATH}/kinds`, (c) => {
+    const auth = checkAuth(c, getToken);
+    if (auth.kind === "fail") return auth.response;
+    return c.json({ kinds: listArtifactKinds() }, 200);
   });
 
   app.get(`${TAKOSUMI_ARTIFACTS_PATH}/:hash`, async (c) => {

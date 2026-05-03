@@ -60,7 +60,7 @@ Deno.test("SystemdUnitConnector.apply writes unit file and enables it via system
     const connector = new SystemdUnitConnector({ unitDir: dir, command });
     const res = await connector.apply({
       shape: "web-service@v1",
-      provider: "systemd-unit",
+      provider: "@takos/selfhost-systemd",
       resourceName: "rs",
       spec: {
         image: "registry/app:1",

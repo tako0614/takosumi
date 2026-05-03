@@ -37,7 +37,7 @@ export interface Route53ConnectorOptions {
 }
 
 export class Route53Connector implements Connector {
-  readonly provider = "route53";
+  readonly provider = "@takos/aws-route53";
   readonly shape = "custom-domain@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectRoute53Lifecycle;

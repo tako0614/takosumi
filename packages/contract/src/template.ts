@@ -35,11 +35,33 @@ function templateKey(id: string, version: string): string {
   return formatTemplateRef(id, version);
 }
 
+/**
+ * Options for {@link registerTemplate}. Pass `allowOverride: true` to
+ * suppress the collision warning when re-registering a template with a
+ * different value.
+ */
+export interface RegisterTemplateOptions {
+  readonly allowOverride?: boolean;
+}
+
 export function registerTemplate(
   template: Template,
+  options?: RegisterTemplateOptions,
 ): Template | undefined {
   const key = templateKey(template.id, template.version);
   const previous = TEMPLATE_REGISTRY.get(key);
+  // Same-value re-registration (idempotent boot) is silent.
+  if (
+    previous !== undefined &&
+    previous !== template &&
+    options?.allowOverride !== true
+  ) {
+    console.warn(
+      `[takosumi-registry] template "${key}" overwritten (was ${
+        formatTemplateRef(previous.id, previous.version)
+      }, now ${formatTemplateRef(template.id, template.version)})`,
+    );
+  }
   TEMPLATE_REGISTRY.set(key, template);
   return previous;
 }

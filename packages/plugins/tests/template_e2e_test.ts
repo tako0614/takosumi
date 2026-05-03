@@ -178,14 +178,14 @@ Deno.test("e2e: SelfhostedSingleVm template expands and applies end-to-end", asy
 Deno.test("e2e: capability subset is enforced when manifest requires unsupported caps", () => {
   const providers = setUp();
   try {
-    const fargate = providers.find((p) => p.id === "aws-fargate")!;
+    const fargate = providers.find((p) => p.id === "@takos/aws-fargate")!;
     const issues = capabilitySubsetIssues(
       ["scale-to-zero"],
       fargate.capabilities,
       "$.requires",
     );
     assert.ok(issues.length > 0, "fargate does not support scale-to-zero");
-    const cloudRun = providers.find((p) => p.id === "cloud-run")!;
+    const cloudRun = providers.find((p) => p.id === "@takos/gcp-cloud-run")!;
     const cloudRunIssues = capabilitySubsetIssues(
       ["scale-to-zero"],
       cloudRun.capabilities,

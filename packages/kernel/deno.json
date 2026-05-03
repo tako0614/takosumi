@@ -1,6 +1,6 @@
 {
   "name": "@takos/takosumi-kernel",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts",
@@ -14,10 +14,11 @@
     "./apply": "./src/domains/deploy/apply_v2.ts"
   },
   "imports": {
-    "takosumi-contract": "jsr:@takos/takosumi-contract@^2.1.0",
-    "@takos/takosumi-plugins/shapes": "jsr:@takos/takosumi-plugins@^0.8.0/shapes",
-    "@takos/takosumi-plugins/shape-providers/factories": "jsr:@takos/takosumi-plugins@^0.8.0/shape-providers/factories",
-    "@takos/takosumi-plugins/templates": "jsr:@takos/takosumi-plugins@^0.8.0/templates"
+    "takosumi-contract": "jsr:@takos/takosumi-contract@^2.3.0",
+    "@takos/takosumi-plugins/shapes": "jsr:@takos/takosumi-plugins@^0.10.0/shapes",
+    "@takos/takosumi-plugins/shape-providers": "jsr:@takos/takosumi-plugins@^0.10.0/shape-providers",
+    "@takos/takosumi-plugins/shape-providers/factories": "jsr:@takos/takosumi-plugins@^0.10.0/shape-providers/factories",
+    "@takos/takosumi-plugins/templates": "jsr:@takos/takosumi-plugins@^0.10.0/templates"
   },
   "tasks": {
     "check": "bash -lc 'find src -name \"*.ts\" ! -name \"*_test.ts\" -print0 | xargs -0 deno check'",

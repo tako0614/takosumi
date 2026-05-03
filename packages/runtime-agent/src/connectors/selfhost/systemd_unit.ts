@@ -35,7 +35,7 @@ interface UnitDescriptor {
 }
 
 export class SystemdUnitConnector implements Connector {
-  readonly provider = "systemd-unit";
+  readonly provider = "@takos/selfhost-systemd";
   readonly shape = "web-service@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #unitDir: string;

@@ -25,7 +25,7 @@ const VALID_TOKEN = "test-token-abc";
 const SAMPLE_RESOURCE: ManifestResource = {
   shape: "object-store@v1",
   name: "logs",
-  provider: "filesystem",
+  provider: "@takos/selfhost-filesystem",
   spec: { name: "logs", region: "local" },
 };
 
@@ -294,7 +294,7 @@ const testTemplate: Template = {
       {
         shape: "object-store@v1",
         name: serviceName,
-        provider: "filesystem",
+        provider: "@takos/selfhost-filesystem",
         spec: { name: serviceName, region: "local" },
       },
     ];
@@ -598,7 +598,10 @@ Deno.test("apply persists handles + manifest to recordStore", async () => {
     "persisted handle must be the apply-time ARN, not the resource name",
   );
   assert.equal(persisted!.appliedResources[0].shape, "object-store@v1");
-  assert.equal(persisted!.appliedResources[0].providerId, "filesystem");
+  assert.equal(
+    persisted!.appliedResources[0].providerId,
+    "@takos/selfhost-filesystem",
+  );
 });
 
 Deno.test("apply persists `failed` status when applyV2 returns failed-apply", async () => {

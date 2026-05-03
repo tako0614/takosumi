@@ -21,7 +21,7 @@ function newProvider() {
 
 Deno.test("filesystem provider declares object-store@v1", () => {
   const { provider } = newProvider();
-  assert.equal(provider.id, "filesystem");
+  assert.equal(provider.id, "@takos/selfhost-filesystem");
   assert.deepEqual(provider.implements, { id: "object-store", version: "v1" });
 });
 

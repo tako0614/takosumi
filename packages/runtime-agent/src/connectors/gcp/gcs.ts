@@ -35,7 +35,7 @@ export interface GcpGcsConnectorOptions {
 }
 
 export class GcpGcsConnector implements Connector {
-  readonly provider = "gcp-gcs";
+  readonly provider = "@takos/gcp-gcs";
   readonly shape = "object-store@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectGcsLifecycle;

@@ -83,7 +83,7 @@ Deno.test("AzureContainerAppsConnector.apply PUTs Container App and reads FQDN f
   });
   const res = await connector.apply({
     shape: "web-service@v1",
-    provider: "azure-container-apps",
+    provider: "@takos/azure-container-apps",
     resourceName: "rs",
     spec: {
       image: "registry/app:1",

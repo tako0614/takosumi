@@ -30,7 +30,7 @@ function fakeTemplate(id: string, version = "v1"): Template {
         {
           shape: "web-service@v1",
           name: "api",
-          provider: "docker-compose",
+          provider: "@takos/selfhost-docker-compose",
           spec: {
             image: "oci://example/api:latest",
             domain,
@@ -75,10 +75,43 @@ Deno.test("registerTemplate replaces previous on collision", () => {
   const second = fakeTemplate("test-template-replace");
   try {
     registerTemplate(first);
-    assert.equal(registerTemplate(second), first);
+    assert.equal(registerTemplate(second, { allowOverride: true }), first);
     assert.equal(getTemplate("test-template-replace", "v1"), second);
   } finally {
     unregisterTemplate("test-template-replace", "v1");
+  }
+});
+
+Deno.test("registerTemplate warns on differing-value collision", () => {
+  const first = fakeTemplate("test-template-warn");
+  const second = fakeTemplate("test-template-warn");
+  const captured: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => captured.push(args.join(" "));
+  try {
+    registerTemplate(first);
+    registerTemplate(second); // different reference -> must warn
+    assert.equal(captured.length, 1);
+    assert.match(captured[0], /template "test-template-warn@v1" overwritten/);
+  } finally {
+    console.warn = original;
+    unregisterTemplate("test-template-warn", "v1");
+  }
+});
+
+Deno.test("registerTemplate with allowOverride suppresses the warning", () => {
+  const first = fakeTemplate("test-template-allow");
+  const second = fakeTemplate("test-template-allow");
+  const captured: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => captured.push(args.join(" "));
+  try {
+    registerTemplate(first);
+    registerTemplate(second, { allowOverride: true });
+    assert.equal(captured.length, 0);
+  } finally {
+    console.warn = original;
+    unregisterTemplate("test-template-allow", "v1");
   }
 });
 

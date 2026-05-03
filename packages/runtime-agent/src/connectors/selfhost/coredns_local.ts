@@ -31,7 +31,7 @@ interface RecordDescriptor {
 }
 
 export class CorednsLocalConnector implements Connector {
-  readonly provider = "coredns-local";
+  readonly provider = "@takos/selfhost-coredns";
   readonly shape = "custom-domain@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #zoneFile: string;

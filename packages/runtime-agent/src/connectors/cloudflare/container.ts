@@ -33,7 +33,7 @@ export interface CloudflareContainerConnectorOptions {
 }
 
 export class CloudflareContainerConnector implements Connector {
-  readonly provider = "cloudflare-container";
+  readonly provider = "@takos/cloudflare-container";
   readonly shape = "web-service@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #lifecycle: DirectCloudflareContainerLifecycle;

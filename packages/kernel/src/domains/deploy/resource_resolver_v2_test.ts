@@ -193,4 +193,54 @@ Deno.test("resolveResourcesV2 detects duplicate resource names", () => {
   }
 });
 
+Deno.test(
+  "resolveResourcesV2 accepts legacy bare provider id and warns once",
+  () => {
+    registerShape(fakeShape("object-store"));
+    registerProvider(
+      fakeProvider(
+        "@takos/aws-s3",
+        { id: "object-store", version: "v1" },
+        ["c1", "c2"],
+      ),
+    );
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map((a) => String(a)).join(" "));
+    };
+    try {
+      const result = resolveResourcesV2([{
+        shape: "object-store@v1",
+        name: "bucket",
+        provider: "aws-s3",
+        spec: { foo: "bar" },
+      }]);
+      assert.equal(result.issues.length, 0);
+      assert.equal(result.resolved.length, 1);
+      assert.equal(result.resolved[0].provider.id, "@takos/aws-s3");
+      assert.ok(
+        warnings.some((w) =>
+          w.includes("aws-s3") && w.includes("@takos/aws-s3") &&
+          w.includes("deprecated")
+        ),
+        `expected deprecation warning, got ${JSON.stringify(warnings)}`,
+      );
+      // Second resolution with same legacy id should not duplicate the warning.
+      const before = warnings.length;
+      resolveResourcesV2([{
+        shape: "object-store@v1",
+        name: "bucket2",
+        provider: "aws-s3",
+        spec: { foo: "bar" },
+      }]);
+      assert.equal(warnings.length, before, "warning fired more than once");
+    } finally {
+      console.warn = originalWarn;
+      unregisterShape("object-store", "v1");
+      unregisterProvider("@takos/aws-s3");
+    }
+  },
+);
+
 void ({} as ShapeValidationIssue);

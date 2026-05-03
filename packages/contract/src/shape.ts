@@ -40,9 +40,33 @@ function shapeKey(id: string, version: string): string {
   return formatShapeRef(id, version);
 }
 
-export function registerShape(shape: Shape): Shape | undefined {
+/**
+ * Options for {@link registerShape}. Pass `allowOverride: true` to
+ * suppress the collision warning when re-registering a shape with a
+ * different value.
+ */
+export interface RegisterShapeOptions {
+  readonly allowOverride?: boolean;
+}
+
+export function registerShape(
+  shape: Shape,
+  options?: RegisterShapeOptions,
+): Shape | undefined {
   const key = shapeKey(shape.id, shape.version);
   const previous = SHAPE_REGISTRY.get(key);
+  // Same-value re-registration (idempotent boot) is silent.
+  if (
+    previous !== undefined &&
+    previous !== shape &&
+    options?.allowOverride !== true
+  ) {
+    console.warn(
+      `[takosumi-registry] shape "${key}" overwritten (was ${
+        formatShapeRef(previous.id, previous.version)
+      }, now ${formatShapeRef(shape.id, shape.version)})`,
+    );
+  }
   SHAPE_REGISTRY.set(key, shape);
   return previous;
 }

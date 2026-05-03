@@ -36,7 +36,7 @@ Deno.test("CorednsLocalConnector.apply appends record to zone file", async () =>
     const connector = new CorednsLocalConnector({ zoneFile });
     const res = await connector.apply({
       shape: "custom-domain@v1",
-      provider: "coredns-local",
+      provider: "@takos/selfhost-coredns",
       resourceName: "rs",
       spec: { name: "app.example.com", target: "10.0.0.5" },
     }, {});

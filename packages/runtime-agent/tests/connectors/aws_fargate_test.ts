@@ -69,7 +69,7 @@ Deno.test("AwsFargateConnector.apply registers task def and creates service", as
   });
   const res = await connector.apply({
     shape: "web-service@v1",
-    provider: "aws-fargate",
+    provider: "@takos/aws-fargate",
     resourceName: "rs",
     spec: {
       image: "registry/app:1",

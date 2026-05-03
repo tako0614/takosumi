@@ -37,7 +37,7 @@ export interface AzureContainerAppsConnectorOptions {
 }
 
 export class AzureContainerAppsConnector implements Connector {
-  readonly provider = "azure-container-apps";
+  readonly provider = "@takos/azure-container-apps";
   readonly shape = "web-service@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #lifecycle: DirectAzureContainerAppsLifecycle;

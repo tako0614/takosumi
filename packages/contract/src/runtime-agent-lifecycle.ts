@@ -134,3 +134,93 @@ export const ARTIFACTS_BASE_PATH = "/v1/artifacts" as const;
 export const LIFECYCLE_AUTH_HEADER = "authorization" as const;
 export const LIFECYCLE_AGENT_TOKEN_ENV = "TAKOSUMI_AGENT_TOKEN" as const;
 export const LIFECYCLE_AGENT_URL_ENV = "TAKOSUMI_AGENT_URL" as const;
+
+/**
+ * Central registry for {@link Artifact.kind} values. The kernel exposes
+ * the resulting set on `GET /v1/artifacts/kinds` so CLIs and operators
+ * can discover which kinds the deployed kernel understands.
+ *
+ * `kind` is intentionally an open string at the protocol level; this
+ * registry is purely a discovery / documentation layer. Connectors do
+ * not have to consult it before producing or consuming an artifact —
+ * but registering a kind makes it visible to operators and lets the
+ * kernel apply per-kind size overrides.
+ */
+export interface RegisteredArtifactKind {
+  readonly kind: string;
+  readonly description: string;
+  readonly contentTypeHint?: string;
+  /** Override the kernel's TAKOSUMI_ARTIFACT_MAX_BYTES on a per-kind basis. */
+  readonly maxSize?: number;
+}
+
+const ARTIFACT_KINDS = new Map<string, RegisteredArtifactKind>();
+
+/**
+ * Options for {@link registerArtifactKind}. Pass `allowOverride: true`
+ * to suppress the collision warning when re-registering an existing
+ * kind with different metadata.
+ */
+export interface RegisterArtifactKindOptions {
+  readonly allowOverride?: boolean;
+}
+
+export function registerArtifactKind(
+  kind: RegisteredArtifactKind,
+  options?: RegisterArtifactKindOptions,
+): RegisteredArtifactKind | undefined {
+  const previous = ARTIFACT_KINDS.get(kind.kind);
+  // Same-instance re-registration is silent. We also treat
+  // structurally-identical metadata as silent because
+  // `registerBundledArtifactKinds` rebuilds its objects on every
+  // call; unlike the bundled `Shape` / `ProviderPlugin` set, the
+  // kind list is short and shape-cheap to deep-compare.
+  if (
+    previous !== undefined &&
+    previous !== kind &&
+    !areArtifactKindsEqual(previous, kind) &&
+    options?.allowOverride !== true
+  ) {
+    console.warn(
+      `[takosumi-registry] artifact kind "${kind.kind}" overwritten ` +
+        `(was ${describeArtifactKind(previous)}, now ${
+          describeArtifactKind(kind)
+        })`,
+    );
+  }
+  ARTIFACT_KINDS.set(kind.kind, kind);
+  return previous;
+}
+
+export function listArtifactKinds(): readonly RegisteredArtifactKind[] {
+  return Array.from(ARTIFACT_KINDS.values());
+}
+
+export function getArtifactKind(
+  kind: string,
+): RegisteredArtifactKind | undefined {
+  return ARTIFACT_KINDS.get(kind);
+}
+
+export function unregisterArtifactKind(kind: string): boolean {
+  return ARTIFACT_KINDS.delete(kind);
+}
+
+export function isArtifactKindRegistered(kind: string): boolean {
+  return ARTIFACT_KINDS.has(kind);
+}
+
+function areArtifactKindsEqual(
+  a: RegisteredArtifactKind,
+  b: RegisteredArtifactKind,
+): boolean {
+  return a.kind === b.kind &&
+    a.description === b.description &&
+    a.contentTypeHint === b.contentTypeHint &&
+    a.maxSize === b.maxSize;
+}
+
+function describeArtifactKind(kind: RegisteredArtifactKind): string {
+  const hint = kind.contentTypeHint ? ` (${kind.contentTypeHint})` : "";
+  return `${kind.kind}${hint}`;
+}

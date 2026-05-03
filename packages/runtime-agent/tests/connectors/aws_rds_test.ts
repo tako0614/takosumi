@@ -65,7 +65,7 @@ Deno.test("AwsRdsConnector.apply parses RDS Query API XML and returns connection
   });
   const res = await connector.apply({
     shape: "database-postgres@v1",
-    provider: "aws-rds",
+    provider: "@takos/aws-rds",
     resourceName: "rs",
     spec: {
       version: "16",

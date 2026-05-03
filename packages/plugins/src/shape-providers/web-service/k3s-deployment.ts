@@ -59,7 +59,7 @@ export function createK3sDeploymentWebServiceProvider(
   const clusterDomain = options.clusterDomain ?? "cluster.local";
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "k3s-deployment",
+    id: "@takos/kubernetes-deployment",
     version: "1.0.0",
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

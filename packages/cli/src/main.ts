@@ -13,7 +13,7 @@ import { artifactCommand } from "./commands/artifact.ts";
 export const takosumi = new Command()
   .name("takosumi")
   .description("Takosumi: self-hostable PaaS toolkit")
-  .version("0.9.0")
+  .version("0.10.0")
   .command("deploy", deployCommand)
   .command("destroy", destroyCommand)
   .command("status", statusCommand)

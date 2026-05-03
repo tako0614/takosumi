@@ -53,26 +53,26 @@ function recordingFetch(
 }
 
 const ALL_PROVIDER_IDS = [
-  "aws-fargate",
-  "aws-rds",
-  "aws-s3",
-  "azure-container-apps",
-  "cloud-dns",
-  "cloud-run",
-  "cloud-sql",
-  "cloudflare-container",
-  "cloudflare-dns",
-  "cloudflare-r2",
-  "cloudflare-workers",
-  "coredns-local",
-  "docker-compose",
-  "filesystem",
-  "gcp-gcs",
-  "k3s-deployment",
-  "local-docker",
-  "minio",
-  "route53",
-  "systemd-unit",
+  "@takos/aws-fargate",
+  "@takos/aws-rds",
+  "@takos/aws-route53",
+  "@takos/aws-s3",
+  "@takos/azure-container-apps",
+  "@takos/cloudflare-container",
+  "@takos/cloudflare-dns",
+  "@takos/cloudflare-r2",
+  "@takos/cloudflare-workers",
+  "@takos/gcp-cloud-dns",
+  "@takos/gcp-cloud-run",
+  "@takos/gcp-cloud-sql",
+  "@takos/gcp-gcs",
+  "@takos/kubernetes-deployment",
+  "@takos/selfhost-coredns",
+  "@takos/selfhost-docker-compose",
+  "@takos/selfhost-filesystem",
+  "@takos/selfhost-minio",
+  "@takos/selfhost-postgres",
+  "@takos/selfhost-systemd",
 ];
 
 Deno.test("default opts returns the full curated set of providers", () => {
@@ -96,12 +96,12 @@ Deno.test("disabling a cloud strips its providers from the registry", () => {
   });
   const ids = providers.map((p) => p.id).sort();
   assert.deepEqual(ids, [
-    "coredns-local",
-    "docker-compose",
-    "filesystem",
-    "local-docker",
-    "minio",
-    "systemd-unit",
+    "@takos/selfhost-coredns",
+    "@takos/selfhost-docker-compose",
+    "@takos/selfhost-filesystem",
+    "@takos/selfhost-minio",
+    "@takos/selfhost-postgres",
+    "@takos/selfhost-systemd",
   ]);
 });
 
@@ -114,12 +114,12 @@ Deno.test("disabling selfhost leaves only cloud providers", () => {
   const ids = new Set(providers.map((p) => p.id));
   for (
     const sh of [
-      "filesystem",
-      "minio",
-      "docker-compose",
-      "systemd-unit",
-      "local-docker",
-      "coredns-local",
+      "@takos/selfhost-filesystem",
+      "@takos/selfhost-minio",
+      "@takos/selfhost-docker-compose",
+      "@takos/selfhost-systemd",
+      "@takos/selfhost-postgres",
+      "@takos/selfhost-coredns",
     ]
   ) {
     assert.ok(!ids.has(sh), `${sh} should be disabled`);
@@ -170,8 +170,8 @@ Deno.test("apply posts a lifecycle envelope to the runtime-agent", async () => {
     token: "secret-token",
     fetch: fetchImpl,
   });
-  const s3 = providers.find((p) => p.id === "aws-s3") as ProviderPlugin;
-  assert.ok(s3, "aws-s3 provider missing");
+  const s3 = providers.find((p) => p.id === "@takos/aws-s3") as ProviderPlugin;
+  assert.ok(s3, "@takos/aws-s3 provider missing");
   const result = await s3.apply(
     { name: "tenant-artifacts", region: "us-west-2" },
     ctx,
@@ -187,7 +187,7 @@ Deno.test("apply posts a lifecycle envelope to the runtime-agent", async () => {
   assert.equal(call.authorization, "Bearer secret-token");
   const body = call.body as Record<string, unknown>;
   assert.equal(body.shape, "object-store@v1");
-  assert.equal(body.provider, "aws-s3");
+  assert.equal(body.provider, "@takos/aws-s3");
   assert.equal(body.resourceName, "tenant-artifacts");
   assert.deepEqual(
     body.spec,
@@ -202,7 +202,7 @@ Deno.test("destroy posts to the destroy path with the resource handle", async ()
     token: "t",
     fetch: fetchImpl,
   });
-  const fargate = providers.find((p) => p.id === "aws-fargate")!;
+  const fargate = providers.find((p) => p.id === "@takos/aws-fargate")!;
   await fargate.destroy(
     "arn:aws:ecs:us-east-1:000000000000:service/takos/api",
     ctx,
@@ -212,7 +212,7 @@ Deno.test("destroy posts to the destroy path with the resource handle", async ()
   assert.equal(call.path, LIFECYCLE_DESTROY_PATH);
   const body = call.body as Record<string, unknown>;
   assert.equal(body.shape, "web-service@v1");
-  assert.equal(body.provider, "aws-fargate");
+  assert.equal(body.provider, "@takos/aws-fargate");
   assert.equal(
     body.handle,
     "arn:aws:ecs:us-east-1:000000000000:service/takos/api",
@@ -234,7 +234,7 @@ Deno.test("status posts to the describe path and maps statuses to ResourceStatus
     token: "t",
     fetch: fetchImpl,
   });
-  const dns = providers.find((p) => p.id === "cloudflare-dns")!;
+  const dns = providers.find((p) => p.id === "@takos/cloudflare-dns")!;
   const status = await dns.status("rec_123", ctx);
   assert.equal(status.kind, "ready");
   assert.deepEqual(status.outputs, { fqdn: "api.example.com" });
@@ -247,7 +247,7 @@ Deno.test("status maps missing -> deleted", async () => {
     token: "t",
     fetch: fetchImpl,
   });
-  const fs = providers.find((p) => p.id === "filesystem")!;
+  const fs = providers.find((p) => p.id === "@takos/selfhost-filesystem")!;
   const status = await fs.status("bucket-1", ctx);
   assert.equal(status.kind, "deleted");
 });
@@ -262,7 +262,7 @@ Deno.test("status maps error -> failed and forwards note", async () => {
     token: "t",
     fetch: fetchImpl,
   });
-  const rds = providers.find((p) => p.id === "aws-rds")!;
+  const rds = providers.find((p) => p.id === "@takos/aws-rds")!;
   const status = await rds.status("db-1", ctx);
   assert.equal(status.kind, "failed");
   assert.equal(status.reason, "rds aborted");
@@ -285,7 +285,7 @@ Deno.test("RuntimeAgentLifecycle propagates HTTP error bodies", async () => {
   try {
     await lifecycle.apply({
       shape: "object-store@v1",
-      provider: "aws-s3",
+      provider: "@takos/aws-s3",
       resourceName: "x",
       spec: { name: "x" },
     });

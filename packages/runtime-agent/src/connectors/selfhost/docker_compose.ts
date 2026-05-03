@@ -38,7 +38,7 @@ interface ServiceDescriptor {
 }
 
 export class DockerComposeConnector implements Connector {
-  readonly provider = "docker-compose";
+  readonly provider = "@takos/selfhost-docker-compose";
   readonly shape = "web-service@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #hostBinding: string;

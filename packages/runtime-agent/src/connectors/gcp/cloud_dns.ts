@@ -35,7 +35,7 @@ export interface CloudDnsConnectorOptions {
 }
 
 export class CloudDnsConnector implements Connector {
-  readonly provider = "cloud-dns";
+  readonly provider = "@takos/gcp-cloud-dns";
   readonly shape = "custom-domain@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudDnsLifecycle;

@@ -68,7 +68,7 @@ Deno.test(
           {
             shape: "object-store@v1",
             name: "logs",
-            provider: "filesystem",
+            provider: "@takos/selfhost-filesystem",
             spec: {},
           },
         ],

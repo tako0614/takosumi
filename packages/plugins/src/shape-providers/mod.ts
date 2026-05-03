@@ -99,6 +99,10 @@ export type {
   RuntimeAgentClientOptions,
   TakosumiProductionProviderOptions,
 } from "./factories.ts";
+export {
+  registerBundledArtifactKinds,
+  TAKOSUMI_BUNDLED_ARTIFACT_KINDS,
+} from "./_artifact_kinds_bundled.ts";
 
 /**
  * Build the full set of in-memory shape-provider plugins. Used by tests and

@@ -39,7 +39,7 @@ export function createAwsS3ObjectStoreProvider(
   const clock = options.clock ?? (() => new Date());
 
   return {
-    id: "aws-s3",
+    id: "@takos/aws-s3",
     version: "1.0.0",
     implements: { id: "object-store", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

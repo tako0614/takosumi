@@ -66,7 +66,7 @@ export function createLocalDockerPostgresProvider(
   const clock = options.clock ?? (() => new Date());
 
   return {
-    id: "local-docker",
+    id: "@takos/selfhost-postgres",
     version: "1.0.0",
     implements: { id: "database-postgres", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

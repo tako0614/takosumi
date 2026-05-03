@@ -73,7 +73,7 @@ Deno.test("registerShape returns previous on replace", () => {
   const second = fakeShape("test-shape-replace");
   try {
     registerShape(first);
-    assert.equal(registerShape(second), first);
+    assert.equal(registerShape(second, { allowOverride: true }), first);
     assert.equal(getShape("test-shape-replace", "v1"), second);
   } finally {
     unregisterShape("test-shape-replace", "v1");
@@ -99,6 +99,39 @@ Deno.test("shape versions are independent registry entries", () => {
   } finally {
     unregisterShape("test-shape-versions", "v1");
     unregisterShape("test-shape-versions", "v2");
+  }
+});
+
+Deno.test("registerShape warns on differing-value collision", () => {
+  const first = fakeShape("test-shape-warn");
+  const second = fakeShape("test-shape-warn");
+  const captured: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => captured.push(args.join(" "));
+  try {
+    registerShape(first);
+    registerShape(second); // different reference -> must warn
+    assert.equal(captured.length, 1);
+    assert.match(captured[0], /shape "test-shape-warn@v1" overwritten/);
+  } finally {
+    console.warn = original;
+    unregisterShape("test-shape-warn", "v1");
+  }
+});
+
+Deno.test("registerShape with allowOverride suppresses the warning", () => {
+  const first = fakeShape("test-shape-allow");
+  const second = fakeShape("test-shape-allow");
+  const captured: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => captured.push(args.join(" "));
+  try {
+    registerShape(first);
+    registerShape(second, { allowOverride: true });
+    assert.equal(captured.length, 0);
+  } finally {
+    console.warn = original;
+    unregisterShape("test-shape-allow", "v1");
   }
 });
 

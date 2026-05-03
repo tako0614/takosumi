@@ -55,7 +55,7 @@ Deno.test("CloudRunConnector.apply creates service and uses returned uri", async
   });
   const res = await connector.apply({
     shape: "web-service@v1",
-    provider: "cloud-run",
+    provider: "@takos/gcp-cloud-run",
     resourceName: "rs",
     spec: {
       image: "us-docker.pkg.dev/proj/app:1",

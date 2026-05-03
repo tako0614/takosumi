@@ -48,7 +48,7 @@ export function createCloudflareContainerWebServiceProvider(
   const lifecycle = options.lifecycle;
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "cloudflare-container",
+    id: "@takos/cloudflare-container",
     version: "1.0.0",
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

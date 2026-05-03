@@ -30,7 +30,7 @@ export interface MinioConnectorOptions {
 }
 
 export class MinioConnector implements Connector {
-  readonly provider = "minio";
+  readonly provider = "@takos/selfhost-minio";
   readonly shape = "object-store@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #endpoint: string;

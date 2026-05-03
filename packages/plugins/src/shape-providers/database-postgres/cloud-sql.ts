@@ -73,7 +73,7 @@ export function createCloudSqlProvider(
   const generate = options.passwordGenerator ?? randomPassword;
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "cloud-sql",
+    id: "@takos/gcp-cloud-sql",
     version: "1.0.0",
     implements: { id: "database-postgres", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

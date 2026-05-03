@@ -52,7 +52,7 @@ Deno.test("CloudDnsConnector.apply POSTs CNAME RRSet to managed zone", async () 
   });
   const res = await connector.apply({
     shape: "custom-domain@v1",
-    provider: "cloud-dns",
+    provider: "@takos/gcp-cloud-dns",
     resourceName: "rs",
     spec: { name: "app.example.com", target: "lb.example.com" },
   }, {});
