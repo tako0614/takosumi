@@ -59,14 +59,26 @@ export interface PlatformContext {
   readonly resolvedOutputs: ReadonlyMap<string, JsonObject>;
 }
 
+/**
+ * A provider plugin implements one shape (`implements`) with a chosen
+ * cloud / runtime backend. Operators register plugins via
+ * {@link registerProvider} and reference them from manifest `provider:`
+ * fields by `id`.
+ *
+ * The `Capability` type parameter pins the capability vocabulary to the
+ * shape's published union (e.g. `WebServiceCapability`). Plugins that
+ * type-parameterize this generic catch capability typos at compile time;
+ * untyped plugins fall back to `string` for back-compat.
+ */
 export interface ProviderPlugin<
   Spec = JsonObject,
   Outputs = JsonObject,
+  Capability extends string = string,
 > {
   readonly id: string;
   readonly version: string;
   readonly implements: ShapeRef;
-  readonly capabilities: readonly string[];
+  readonly capabilities: readonly Capability[];
   validate?(spec: Spec, issues: ProviderValidationIssue[]): void;
   apply(spec: Spec, ctx: PlatformContext): Promise<ApplyResult<Outputs>>;
   destroy(handle: ResourceHandle, ctx: PlatformContext): Promise<void>;

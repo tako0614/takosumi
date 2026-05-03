@@ -21,6 +21,13 @@ import type {
   ResourceStatus,
   ShapeRef,
 } from "takosumi-contract";
+import type {
+  CustomDomainCapability,
+  DatabasePostgresCapability,
+  ObjectStoreCapability,
+  WebServiceCapability,
+  WorkerCapability,
+} from "../shapes/mod.ts";
 
 import { RuntimeAgentLifecycle } from "./_runtime_agent_lifecycle.ts";
 
@@ -106,7 +113,7 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
       "event-notifications",
       "lifecycle-rules",
       "multipart-upload",
-    ],
+    ] satisfies readonly ObjectStoreCapability[],
   },
   {
     id: "@takos/aws-fargate",
@@ -117,7 +124,7 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
       "long-request",
       "sticky-session",
       "private-networking",
-    ],
+    ] satisfies readonly WebServiceCapability[],
   },
   {
     id: "@takos/aws-rds",
@@ -129,12 +136,12 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
       "backups",
       "ssl-required",
       "extensions",
-    ],
+    ] satisfies readonly DatabasePostgresCapability[],
   },
   {
     id: "@takos/aws-route53",
     shape: CUSTOM_DOMAIN,
-    capabilities: ["wildcard", "auto-tls", "sni", "alpn-acme"],
+    capabilities: ["wildcard", "auto-tls", "sni", "alpn-acme"] satisfies readonly CustomDomainCapability[],
   },
 ];
 
@@ -150,12 +157,12 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
       "event-notifications",
       "lifecycle-rules",
       "multipart-upload",
-    ],
+    ] satisfies readonly ObjectStoreCapability[],
   },
   {
     id: "@takos/gcp-cloud-run",
     shape: WEB_SERVICE,
-    capabilities: ["always-on", "scale-to-zero", "websocket", "long-request"],
+    capabilities: ["always-on", "scale-to-zero", "websocket", "long-request"] satisfies readonly WebServiceCapability[],
   },
   {
     id: "@takos/gcp-cloud-sql",
@@ -167,12 +174,12 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
       "backups",
       "ssl-required",
       "extensions",
-    ],
+    ] satisfies readonly DatabasePostgresCapability[],
   },
   {
     id: "@takos/gcp-cloud-dns",
     shape: CUSTOM_DOMAIN,
-    capabilities: ["wildcard", "auto-tls", "sni"],
+    capabilities: ["wildcard", "auto-tls", "sni"] satisfies readonly CustomDomainCapability[],
   },
 ];
 
@@ -180,12 +187,12 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/cloudflare-r2",
     shape: OBJECT_STORE,
-    capabilities: ["presigned-urls", "public-access", "multipart-upload"],
+    capabilities: ["presigned-urls", "public-access", "multipart-upload"] satisfies readonly ObjectStoreCapability[],
   },
   {
     id: "@takos/cloudflare-container",
     shape: WEB_SERVICE,
-    capabilities: ["scale-to-zero", "geo-routing"],
+    capabilities: ["scale-to-zero", "geo-routing"] satisfies readonly WebServiceCapability[],
   },
   {
     id: "@takos/cloudflare-workers",
@@ -196,12 +203,12 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
       "long-request",
       "geo-routing",
       "crons",
-    ],
+    ] satisfies readonly WorkerCapability[],
   },
   {
     id: "@takos/cloudflare-dns",
     shape: CUSTOM_DOMAIN,
-    capabilities: ["wildcard", "auto-tls", "sni", "http3"],
+    capabilities: ["wildcard", "auto-tls", "sni", "http3"] satisfies readonly CustomDomainCapability[],
   },
 ];
 
@@ -209,7 +216,7 @@ const AZURE_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/azure-container-apps",
     shape: WEB_SERVICE,
-    capabilities: ["always-on", "scale-to-zero", "websocket", "long-request"],
+    capabilities: ["always-on", "scale-to-zero", "websocket", "long-request"] satisfies readonly WebServiceCapability[],
   },
 ];
 
@@ -222,7 +229,7 @@ const KUBERNETES_PROVIDERS: readonly ProviderEntry[] = [
       "websocket",
       "long-request",
       "private-networking",
-    ],
+    ] satisfies readonly WebServiceCapability[],
   },
 ];
 
@@ -230,7 +237,7 @@ const DENO_DEPLOY_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/deno-deploy",
     shape: WORKER,
-    capabilities: ["scale-to-zero", "long-request", "geo-routing"],
+    capabilities: ["scale-to-zero", "long-request", "geo-routing"] satisfies readonly WorkerCapability[],
   },
 ];
 
@@ -238,7 +245,7 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/selfhost-filesystem",
     shape: OBJECT_STORE,
-    capabilities: ["presigned-urls"],
+    capabilities: ["presigned-urls"] satisfies readonly ObjectStoreCapability[],
   },
   {
     id: "@takos/selfhost-minio",
@@ -250,27 +257,27 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
       "public-access",
       "lifecycle-rules",
       "multipart-upload",
-    ],
+    ] satisfies readonly ObjectStoreCapability[],
   },
   {
     id: "@takos/selfhost-docker-compose",
     shape: WEB_SERVICE,
-    capabilities: ["always-on", "websocket", "long-request", "sticky-session"],
+    capabilities: ["always-on", "websocket", "long-request", "sticky-session"] satisfies readonly WebServiceCapability[],
   },
   {
     id: "@takos/selfhost-systemd",
     shape: WEB_SERVICE,
-    capabilities: ["always-on", "long-request"],
+    capabilities: ["always-on", "long-request"] satisfies readonly WebServiceCapability[],
   },
   {
     id: "@takos/selfhost-postgres",
     shape: DATABASE_POSTGRES,
-    capabilities: ["ssl-required", "extensions"],
+    capabilities: ["ssl-required", "extensions"] satisfies readonly DatabasePostgresCapability[],
   },
   {
     id: "@takos/selfhost-coredns",
     shape: CUSTOM_DOMAIN,
-    capabilities: ["wildcard"],
+    capabilities: ["wildcard"] satisfies readonly CustomDomainCapability[],
   },
 ];
 

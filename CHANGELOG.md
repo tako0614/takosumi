@@ -108,6 +108,14 @@ package crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes
 
 ## takosumi-plugins
 
+### 0.11.0 — 2026-05-03
+
+- Bundled provider catalog (`shape-providers/factories.ts`) now uses
+  `satisfies readonly XxxCapability[]` on each entry's `capabilities`
+  array. Capability typos in the catalog are caught at compile time
+  (TypeScript `TS2820` "Did you mean ..." suggestion). The runtime shape
+  remains a `readonly string[]` for compatibility.
+
 ### 0.10.0 — 2026-05-02
 
 - 21 production providers under `@takos/<cloud>-<service>` namespacing
@@ -117,6 +125,14 @@ package crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes
   kinds; CLI `takosumi artifact kinds` queries it.
 
 ## takosumi-contract
+
+### 2.5.0 — 2026-05-03
+
+- `ProviderPlugin` gains an optional `Capability extends string = string`
+  type parameter so plugins can pin `capabilities: readonly Capability[]`
+  to their shape's published capability union (e.g.
+  `WebServiceCapability`). Untyped plugins keep working — `Capability`
+  defaults to `string`.
 
 ### 2.4.0 — 2026-05-03
 
@@ -133,6 +149,12 @@ package crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes
 - `registerProvider` collision warning + `allowOverride` opt-out.
 
 ## takosumi (umbrella)
+
+### 0.15.0 — 2026-05-03
+
+- Re-export bump tracking `takosumi-contract@2.5.0` and
+  `takosumi-plugins@0.11.0`. Capability typos in bundled providers are
+  caught at compile time.
 
 ### 0.14.0 — 2026-05-03
 
