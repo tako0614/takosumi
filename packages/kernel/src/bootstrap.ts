@@ -136,14 +136,47 @@ export function registerBundledShapesAndProviders(
     );
     return;
   }
+  const artifactStore = detectArtifactStore(runtimeEnv);
   const providers = createTakosumiProductionProviders({
     agentUrl: agent.agentUrl,
     token: agent.token,
+    ...(artifactStore ? { artifactStore } : {}),
   });
   for (const provider of providers) registerProvider(provider);
   console.log(
-    `[takosumi-bootstrap] registered ${providers.length} providers via agent at ${agent.agentUrl}`,
+    `[takosumi-bootstrap] registered ${providers.length} providers via agent at ${agent.agentUrl}` +
+      (artifactStore
+        ? ` (artifact store: ${artifactStore.baseUrl})`
+        : " (no artifact store: TAKOSUMI_PUBLIC_BASE_URL unset)"),
   );
+}
+
+/**
+ * Resolves the URL the runtime-agent's connectors should use to fetch
+ * uploaded artifacts (e.g. JS bundles for cloudflare-workers). The kernel
+ * exposes `POST/GET /v1/artifacts` itself, so the agent simply needs the
+ * kernel's externally-reachable base URL plus the same deploy token.
+ *
+ * Returns `undefined` when either env var is missing — connectors that don't
+ * need uploaded artifacts (the OCI-image set) keep working; connectors that
+ * do (cloudflare-workers, future lambda-zip / static-bundle) will fail their
+ * apply with a clear error that surfaces back to the operator.
+ */
+function detectArtifactStore(
+  runtimeEnv: Record<string, string | undefined>,
+):
+  | { readonly baseUrl: string; readonly token: string }
+  | undefined {
+  const publicBaseUrl = runtimeEnv.TAKOSUMI_PUBLIC_BASE_URL;
+  const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
+  if (!publicBaseUrl || !deployToken) return undefined;
+  const trimmed = publicBaseUrl.endsWith("/")
+    ? publicBaseUrl.slice(0, -1)
+    : publicBaseUrl;
+  return {
+    baseUrl: `${trimmed}/v1/artifacts`,
+    token: deployToken,
+  };
 }
 
 interface RoleWorkerDaemonOptions {

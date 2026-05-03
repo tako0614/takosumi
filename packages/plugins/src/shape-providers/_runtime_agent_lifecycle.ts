@@ -11,6 +11,7 @@
  */
 
 import {
+  type ArtifactStoreLocator,
   LIFECYCLE_APPLY_PATH,
   LIFECYCLE_DESCRIBE_PATH,
   LIFECYCLE_DESTROY_PATH,
@@ -29,6 +30,9 @@ export interface RuntimeAgentClientOptions {
   readonly token: string;
   /** Optional fetch override for testing. */
   readonly fetch?: typeof fetch;
+  /** When set, every apply request carries an `artifactStore` field so
+   *  connectors that need to fetch uploaded bundles by hash can do so. */
+  readonly artifactStore?: ArtifactStoreLocator;
 }
 
 /**
@@ -40,15 +44,20 @@ export class RuntimeAgentLifecycle {
   readonly #agentUrl: string;
   readonly #token: string;
   readonly #fetch: typeof fetch;
+  readonly #artifactStore?: ArtifactStoreLocator;
 
   constructor(options: RuntimeAgentClientOptions) {
     this.#agentUrl = trimTrailingSlash(options.agentUrl);
     this.#token = options.token;
     this.#fetch = options.fetch ?? fetch;
+    this.#artifactStore = options.artifactStore;
   }
 
   apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
-    return this.#post<LifecycleApplyResponse>(LIFECYCLE_APPLY_PATH, req);
+    const enriched = this.#artifactStore && req.artifactStore === undefined
+      ? { ...req, artifactStore: this.#artifactStore }
+      : req;
+    return this.#post<LifecycleApplyResponse>(LIFECYCLE_APPLY_PATH, enriched);
   }
 
   destroy(req: LifecycleDestroyRequest): Promise<LifecycleDestroyResponse> {

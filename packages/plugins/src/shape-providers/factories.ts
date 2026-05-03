@@ -14,6 +14,7 @@
 
 import type {
   ApplyResult,
+  ArtifactStoreLocator,
   JsonObject,
   ProviderPlugin,
   ResourceHandle,
@@ -58,6 +59,15 @@ export interface TakosumiProductionProviderOptions {
   readonly enableSelfhost?: boolean;
   /** Optional clock for status timestamps. */
   readonly clock?: () => Date;
+  /**
+   * When set, every apply request the kernel sends to the agent carries this
+   * `artifactStore` field so connectors with `acceptedArtifactKinds` other than
+   * `oci-image` (e.g. `js-bundle` for cloudflare-workers) can fetch the
+   * uploaded bytes by hash. Operator-side `TAKOSUMI_PUBLIC_BASE_URL` should
+   * resolve to the kernel's externally-reachable base URL (typically
+   * `http://kernel.internal:8788/v1/artifacts`).
+   */
+  readonly artifactStore?: ArtifactStoreLocator;
 }
 
 interface ProviderEntry {
@@ -265,6 +275,7 @@ export function createTakosumiProductionProviders(
     agentUrl: opts.agentUrl,
     token: opts.token,
     fetch: opts.fetch,
+    ...(opts.artifactStore ? { artifactStore: opts.artifactStore } : {}),
   });
   const clock = opts.clock ?? (() => new Date());
 
