@@ -1,9 +1,8 @@
 import { Command } from "@cliffy/command";
-import type { ManifestResource } from "takosumi-contract";
 import { loadManifest } from "../manifest_loader.ts";
 import { loadConfig, resolveMode } from "../config.ts";
 import { callKernel } from "../remote_client.ts";
-import { applyLocal } from "../local_runner.ts";
+import { applyLocal, expandManifestLocal } from "../local_runner.ts";
 
 export const deployCommand = new Command()
   .description("Apply a Takosumi manifest")
@@ -38,10 +37,17 @@ export const deployCommand = new Command()
       return;
     }
 
-    const resources = extractResources(manifest.value);
+    let resources;
+    try {
+      resources = expandManifestLocal(manifest.value);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`error: ${message}`);
+      Deno.exit(1);
+    }
     if (resources.length === 0) {
       console.error(
-        "manifest has no resources[] (template expansion is not yet wired in local mode)",
+        "manifest expanded to zero resources; nothing to apply",
       );
       Deno.exit(1);
     }
@@ -63,9 +69,3 @@ export const deployCommand = new Command()
       );
     }
   });
-
-function extractResources(value: unknown): readonly ManifestResource[] {
-  if (typeof value !== "object" || value === null) return [];
-  const v = value as { resources?: readonly ManifestResource[] };
-  return v.resources ?? [];
-}

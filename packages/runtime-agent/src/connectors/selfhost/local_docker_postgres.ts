@@ -1,6 +1,10 @@
 /**
  * `LocalDockerPostgresConnector` — selfhost `database-postgres@v1` backed by
  * a local docker-managed Postgres container.
+ *
+ * `describe()` queries the docker daemon via `docker inspect` so the connector
+ * can recover state across runtime-agent restarts. The in-memory descriptor
+ * map is only a write-through cache used by `apply()` to compute outputs.
  */
 
 import type {
@@ -38,6 +42,8 @@ interface InstanceDescriptor {
   readonly version: string;
 }
 
+const PORT_RETRY_LIMIT = 50;
+
 export class LocalDockerPostgresConnector implements Connector {
   readonly provider = "@takos/selfhost-postgres";
   readonly shape = "database-postgres@v1";
@@ -68,48 +74,58 @@ export class LocalDockerPostgresConnector implements Connector {
   ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as { version: string };
     const containerName = `pg-${this.#dbName}-${randomId()}`;
-    const hostPort = this.#portAlloc();
     const password = this.#generatePassword();
-    const cmd = new this.#command("docker", {
-      args: [
-        "run",
-        "-d",
-        "--restart",
-        "unless-stopped",
-        "--name",
-        containerName,
-        "-p",
-        `${hostPort}:5432`,
-        "-e",
-        `POSTGRES_DB=${this.#dbName}`,
-        "-e",
-        `POSTGRES_USER=${this.#user}`,
-        "-e",
-        `POSTGRES_PASSWORD=${password}`,
-        `postgres:${spec.version}`,
-      ],
-      stdout: "null",
-      stderr: "piped",
-    });
-    const { code, stderr } = await cmd.output();
-    if (code !== 0) {
-      throw new Error(
-        `docker run postgres failed: ${new TextDecoder().decode(stderr)}`,
-      );
+
+    let lastErr = "";
+    let hostPort = 0;
+    for (let attempt = 0; attempt < PORT_RETRY_LIMIT; attempt++) {
+      hostPort = this.#portAlloc();
+      const cmd = new this.#command("docker", {
+        args: [
+          "run",
+          "-d",
+          "--restart",
+          "unless-stopped",
+          "--name",
+          containerName,
+          "-p",
+          `${hostPort}:5432`,
+          "-e",
+          `POSTGRES_DB=${this.#dbName}`,
+          "-e",
+          `POSTGRES_USER=${this.#user}`,
+          "-e",
+          `POSTGRES_PASSWORD=${password}`,
+          `postgres:${spec.version}`,
+        ],
+        stdout: "null",
+        stderr: "piped",
+      });
+      const { code, stderr } = await cmd.output();
+      if (code === 0) {
+        const desc: InstanceDescriptor = {
+          containerName,
+          host: this.#hostBinding,
+          port: hostPort,
+          database: this.#dbName,
+          username: this.#user,
+          version: spec.version,
+        };
+        this.#instances.set(containerName, desc);
+        return {
+          handle: containerName,
+          outputs: this.#outputsFor(desc),
+        };
+      }
+      lastErr = new TextDecoder().decode(stderr);
+      if (!isPortAllocationError(lastErr)) {
+        throw new Error(`docker run postgres failed: ${lastErr}`);
+      }
+      // port collision — try the next port
     }
-    const desc: InstanceDescriptor = {
-      containerName,
-      host: this.#hostBinding,
-      port: hostPort,
-      database: this.#dbName,
-      username: this.#user,
-      version: spec.version,
-    };
-    this.#instances.set(containerName, desc);
-    return {
-      handle: containerName,
-      outputs: this.#outputsFor(desc),
-    };
+    throw new Error(
+      `docker run postgres failed after ${PORT_RETRY_LIMIT} port retries: ${lastErr}`,
+    );
   }
 
   async destroy(
@@ -128,16 +144,31 @@ export class LocalDockerPostgresConnector implements Connector {
       : { ok: true, note: "container not found" };
   }
 
-  describe(
+  async describe(
     req: LifecycleDescribeRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
-    const desc = this.#instances.get(req.handle);
-    if (!desc) return Promise.resolve({ status: "missing" });
-    return Promise.resolve({
-      status: "running",
-      outputs: this.#outputsFor(desc),
+    const cmd = new this.#command("docker", {
+      args: ["inspect", req.handle, "--format", "{{json .}}"],
+      stdout: "piped",
+      stderr: "piped",
     });
+    const { code, stdout } = await cmd.output();
+    if (code !== 0) return { status: "missing" };
+    const text = new TextDecoder().decode(stdout).trim();
+    if (!text) return { status: "missing" };
+    let parsed: DockerInspect;
+    try {
+      parsed = JSON.parse(text) as DockerInspect;
+    } catch {
+      return { status: "missing" };
+    }
+    const status = parsed.State?.Status;
+    if (status !== "running") return { status: "missing" };
+    const outputs = this.#outputsFromInspect(req.handle, parsed);
+    return outputs
+      ? { status: "running", outputs }
+      : { status: "running" };
   }
 
   async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
@@ -172,6 +203,60 @@ export class LocalDockerPostgresConnector implements Connector {
         `postgresql://${desc.username}@${desc.host}:${desc.port}/${desc.database}`,
     };
   }
+
+  #outputsFromInspect(
+    handle: string,
+    inspect: DockerInspect,
+  ): JsonObject | undefined {
+    const portMap = inspect.NetworkSettings?.Ports ?? {};
+    const bindings = portMap["5432/tcp"];
+    const hostPort = bindings && bindings.length > 0
+      ? Number(bindings[0]?.HostPort)
+      : NaN;
+    if (!Number.isFinite(hostPort) || hostPort <= 0) return undefined;
+
+    const env = parseEnv(inspect.Config?.Env ?? []);
+    const database = env["POSTGRES_DB"] ?? this.#dbName;
+    const username = env["POSTGRES_USER"] ?? this.#user;
+    const host = this.#hostBinding;
+    return {
+      host,
+      port: hostPort,
+      database,
+      username,
+      passwordSecretRef: `${this.#secretBase}/${handle}/password`,
+      connectionString:
+        `postgresql://${username}@${host}:${hostPort}/${database}`,
+    };
+  }
+}
+
+interface DockerInspect {
+  State?: { Status?: string };
+  NetworkSettings?: {
+    Ports?: Record<string, { HostIp?: string; HostPort?: string }[] | null>;
+  };
+  Config?: { Env?: string[] };
+}
+
+function isPortAllocationError(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return lower.includes("port is already allocated") ||
+    lower.includes("address already in use") ||
+    lower.includes("bind: address already in use") ||
+    lower.includes("port already in use");
+}
+
+function parseEnv(entries: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const entry of entries) {
+    const eq = entry.indexOf("=");
+    if (eq <= 0) continue;
+    const key = entry.slice(0, eq);
+    const value = entry.slice(eq + 1);
+    out[key] = value;
+  }
+  return out;
 }
 
 function createPortAllocator(start: number): () => number {

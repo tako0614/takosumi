@@ -3,7 +3,9 @@
  *
  * Currently uses `Deno.Command` to invoke the Docker CLI directly. Operators
  * are expected to have docker installed and accessible on PATH. The connector
- * keeps an in-memory descriptor map for describe() lookups.
+ * keeps an in-memory descriptor map only as a write-through cache for `apply()`
+ * outputs; `describe()` queries the actual docker daemon via `docker inspect`
+ * so it survives runtime-agent restarts.
  */
 
 import type {
@@ -37,6 +39,8 @@ interface ServiceDescriptor {
   readonly env?: Readonly<Record<string, string>>;
 }
 
+const PORT_RETRY_LIMIT = 50;
+
 export class DockerComposeConnector implements Connector {
   readonly provider = "@takos/selfhost-docker-compose";
   readonly shape = "web-service@v1";
@@ -69,45 +73,53 @@ export class DockerComposeConnector implements Connector {
       throw new Error("web-service spec requires `image` or `artifact.uri`");
     }
     const serviceName = serviceNameFromImage(image);
-    const hostPort = this.#portAlloc();
     const env = { ...(spec.env ?? {}), ...(spec.bindings ?? {}) };
-    const cmd = new this.#command("docker", {
-      args: [
-        "run",
-        "-d",
-        "--restart",
-        "unless-stopped",
-        "--name",
-        serviceName,
-        "-p",
-        `${hostPort}:${spec.port}`,
-        ...envFlags(env),
-        image,
-        ...(spec.command ?? []),
-      ],
-      stdout: "piped",
-      stderr: "piped",
-    });
-    const { code, stderr } = await cmd.output();
-    if (code !== 0) {
-      throw new Error(
-        `docker run failed for ${serviceName}: ${
-          new TextDecoder().decode(stderr)
-        }`,
-      );
+
+    let lastErr = "";
+    let hostPort = 0;
+    for (let attempt = 0; attempt < PORT_RETRY_LIMIT; attempt++) {
+      hostPort = this.#portAlloc();
+      const cmd = new this.#command("docker", {
+        args: [
+          "run",
+          "-d",
+          "--restart",
+          "unless-stopped",
+          "--name",
+          serviceName,
+          "-p",
+          `${hostPort}:${spec.port}`,
+          ...envFlags(env),
+          image,
+          ...(spec.command ?? []),
+        ],
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const { code, stderr } = await cmd.output();
+      if (code === 0) {
+        const desc: ServiceDescriptor = {
+          serviceName,
+          image,
+          hostPort,
+          internalPort: spec.port,
+          env,
+        };
+        this.#services.set(serviceName, desc);
+        return {
+          handle: serviceName,
+          outputs: this.#outputsFor(desc),
+        };
+      }
+      lastErr = new TextDecoder().decode(stderr);
+      if (!isPortAllocationError(lastErr)) {
+        throw new Error(`docker run failed for ${serviceName}: ${lastErr}`);
+      }
+      // port collision — try the next port
     }
-    const desc: ServiceDescriptor = {
-      serviceName,
-      image,
-      hostPort,
-      internalPort: spec.port,
-      env,
-    };
-    this.#services.set(serviceName, desc);
-    return {
-      handle: serviceName,
-      outputs: this.#outputsFor(desc),
-    };
+    throw new Error(
+      `docker run failed for ${serviceName} after ${PORT_RETRY_LIMIT} port retries: ${lastErr}`,
+    );
   }
 
   async destroy(
@@ -126,16 +138,31 @@ export class DockerComposeConnector implements Connector {
       : { ok: true, note: "container not found" };
   }
 
-  describe(
+  async describe(
     req: LifecycleDescribeRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
-    const desc = this.#services.get(req.handle);
-    if (!desc) return Promise.resolve({ status: "missing" });
-    return Promise.resolve({
-      status: "running",
-      outputs: this.#outputsFor(desc),
+    const cmd = new this.#command("docker", {
+      args: ["inspect", req.handle, "--format", "{{json .}}"],
+      stdout: "piped",
+      stderr: "piped",
     });
+    const { code, stdout } = await cmd.output();
+    if (code !== 0) return { status: "missing" };
+    const text = new TextDecoder().decode(stdout).trim();
+    if (!text) return { status: "missing" };
+    let parsed: DockerInspect;
+    try {
+      parsed = JSON.parse(text) as DockerInspect;
+    } catch {
+      return { status: "missing" };
+    }
+    const status = parsed.State?.Status;
+    if (status !== "running") return { status: "missing" };
+    const outputs = this.#outputsFromInspect(req.handle, parsed);
+    return outputs
+      ? { status: "running", outputs }
+      : { status: "running" };
   }
 
   async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
@@ -166,6 +193,43 @@ export class DockerComposeConnector implements Connector {
       internalPort: desc.internalPort,
     };
   }
+
+  #outputsFromInspect(
+    handle: string,
+    inspect: DockerInspect,
+  ): JsonObject | undefined {
+    const portMap = inspect.NetworkSettings?.Ports ?? {};
+    const portKey = Object.keys(portMap)[0];
+    if (!portKey) return undefined;
+    const bindings = portMap[portKey];
+    const hostPort = bindings && bindings.length > 0
+      ? Number(bindings[0]?.HostPort)
+      : NaN;
+    if (!Number.isFinite(hostPort) || hostPort <= 0) return undefined;
+    const internalPort = Number(portKey.split("/")[0]);
+    if (!Number.isFinite(internalPort) || internalPort <= 0) return undefined;
+    return {
+      url: `http://${this.#hostBinding}:${hostPort}`,
+      internalHost: handle,
+      internalPort,
+    };
+  }
+}
+
+interface DockerInspect {
+  State?: { Status?: string };
+  NetworkSettings?: {
+    Ports?: Record<string, { HostIp?: string; HostPort?: string }[] | null>;
+  };
+  Config?: { ExposedPorts?: Record<string, unknown>; Env?: string[] };
+}
+
+function isPortAllocationError(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return lower.includes("port is already allocated") ||
+    lower.includes("address already in use") ||
+    lower.includes("bind: address already in use") ||
+    lower.includes("port already in use");
 }
 
 function envFlags(env: Readonly<Record<string, string>> | undefined): string[] {

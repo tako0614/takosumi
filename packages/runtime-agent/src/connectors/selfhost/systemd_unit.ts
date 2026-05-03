@@ -2,7 +2,9 @@
  * `SystemdUnitConnector` — selfhost web-service backed by a systemd unit file.
  *
  * Writes a unit file to `unitDir` and runs `systemctl enable --now`. The
- * connector keeps a small in-memory map for describe lookups.
+ * connector keeps a small in-memory map only as a write-through cache; the
+ * authoritative state for `describe()` is the on-disk unit file plus
+ * `systemctl is-active`, so describe() survives runtime-agent restarts.
  */
 
 import type {
@@ -33,6 +35,9 @@ interface UnitDescriptor {
   readonly hostPort: number;
   readonly internalPort: number;
 }
+
+const HOST_PORT_MARKER = "X-Takos-HostPort";
+const INTERNAL_PORT_MARKER = "X-Takos-InternalPort";
 
 export class SystemdUnitConnector implements Connector {
   readonly provider = "@takos/selfhost-systemd";
@@ -76,6 +81,8 @@ export class SystemdUnitConnector implements Connector {
       image,
       env,
       command: spec.command,
+      hostPort,
+      internalPort: spec.port,
     });
     await Deno.writeTextFile(unitFile, body);
     await this.#runOrThrow("systemctl", ["daemon-reload"]);
@@ -112,16 +119,35 @@ export class SystemdUnitConnector implements Connector {
     return { ok: true };
   }
 
-  describe(
+  async describe(
     req: LifecycleDescribeRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
-    const desc = this.#units.get(req.handle);
-    if (!desc) return Promise.resolve({ status: "missing" });
-    return Promise.resolve({
-      status: "running",
-      outputs: this.#outputsFor(desc),
+    const unitFile = `${this.#unitDir}/${req.handle}`;
+    let body: string;
+    try {
+      body = await Deno.readTextFile(unitFile);
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) return { status: "missing" };
+      throw error;
+    }
+    const cmd = new this.#command("systemctl", {
+      args: ["is-active", req.handle],
+      stdout: "piped",
+      stderr: "piped",
     });
+    const { code } = await cmd.output();
+    if (code !== 0) return { status: "missing" };
+    const ports = parsePortMarkers(body);
+    if (!ports) return { status: "running" };
+    return {
+      status: "running",
+      outputs: this.#outputsFor({
+        unitName: req.handle,
+        hostPort: ports.hostPort,
+        internalPort: ports.internalPort,
+      }),
+    };
   }
 
   async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {
@@ -175,6 +201,8 @@ function renderSystemdUnit(input: {
   image: string;
   env?: Record<string, string>;
   command?: readonly string[];
+  hostPort: number;
+  internalPort: number;
 }): string {
   const env = input.env
     ? Object.entries(input.env)
@@ -185,6 +213,8 @@ function renderSystemdUnit(input: {
     ? input.command.join(" ")
     : input.image;
   return [
+    `# ${HOST_PORT_MARKER}=${input.hostPort}`,
+    `# ${INTERNAL_PORT_MARKER}=${input.internalPort}`,
     "[Unit]",
     `Description=Takos Web Service ${input.unitName}`,
     "After=network.target",
@@ -199,6 +229,27 @@ function renderSystemdUnit(input: {
     "WantedBy=multi-user.target",
     "",
   ].filter(Boolean).join("\n");
+}
+
+function parsePortMarkers(
+  body: string,
+): { hostPort: number; internalPort: number } | undefined {
+  const hostMatch = body.match(
+    new RegExp(`^#\\s*${HOST_PORT_MARKER}=(\\d+)\\s*$`, "m"),
+  );
+  const internalMatch = body.match(
+    new RegExp(`^#\\s*${INTERNAL_PORT_MARKER}=(\\d+)\\s*$`, "m"),
+  );
+  if (!hostMatch || !internalMatch) return undefined;
+  const hostPort = Number(hostMatch[1]);
+  const internalPort = Number(internalMatch[1]);
+  if (
+    !Number.isFinite(hostPort) || hostPort <= 0 ||
+    !Number.isFinite(internalPort) || internalPort <= 0
+  ) {
+    return undefined;
+  }
+  return { hostPort, internalPort };
 }
 
 function nameOf(image: string): string {

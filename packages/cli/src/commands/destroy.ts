@@ -2,6 +2,7 @@ import { Command } from "@cliffy/command";
 import { loadManifest } from "../manifest_loader.ts";
 import { loadConfig, resolveMode } from "../config.ts";
 import { callKernel } from "../remote_client.ts";
+import { destroyLocal, expandManifestLocal } from "../local_runner.ts";
 
 /**
  * `takosumi destroy <manifest>` — tear down a previously-applied manifest.
@@ -47,5 +48,42 @@ export const destroyCommand = new Command()
       console.log("destroy accepted:", body);
       return;
     }
-    console.log("local mode: in-process destroy (not yet wired)");
+
+    let resources;
+    try {
+      resources = expandManifestLocal(manifest.value);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`error: ${message}`);
+      Deno.exit(1);
+    }
+    if (resources.length === 0) {
+      console.log("local mode: manifest expanded to zero resources; nothing to destroy");
+      return;
+    }
+
+    console.log(
+      `local mode: destroying ${resources.length} resource(s) in-process`,
+    );
+    const outcome = await destroyLocal(resources);
+    if (outcome.status === "failed-validation") {
+      console.error("destroy failed-validation:");
+      for (const issue of outcome.issues) {
+        console.error(`  - ${issue.path}: ${issue.message}`);
+      }
+      Deno.exit(1);
+    }
+    for (const entry of outcome.destroyed) {
+      console.log(
+        `  ✓ ${entry.name} (${entry.providerId}) → ${entry.handle}`,
+      );
+    }
+    for (const error of outcome.errors) {
+      console.error(
+        `  ✗ ${error.name} (${error.providerId}) → ${error.handle}: ${error.message}`,
+      );
+    }
+    if (outcome.status === "partial") {
+      Deno.exit(1);
+    }
   });
