@@ -21,7 +21,7 @@ import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
 import { readInternalAuth } from "./internal_auth.ts";
 import type { MutationBoundaryEntitlementService } from "./internal_routes.ts";
 
-export const TAKOS_PAAS_RUNTIME_AGENT_PATHS = {
+export const TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS = {
   enroll: "/api/internal/v1/runtime/agents/enroll",
   heartbeat: "/api/internal/v1/runtime/agents/:agentId/heartbeat",
   lease: "/api/internal/v1/runtime/agents/:agentId/leases",
@@ -121,12 +121,12 @@ export function registerRuntimeAgentRoutes(
         headers,
       });
     };
-    for (const path of Object.values(TAKOS_PAAS_RUNTIME_AGENT_PATHS)) {
+    for (const path of Object.values(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS)) {
       app.use(path, wrap);
     }
   }
 
-  app.post(TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll, async (c) => {
+  app.post(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, async (c) => {
     const auth = await authenticate(c.req.raw);
     if (!auth.ok) return runtimeAgentAuthError(c, auth);
     const request = await readJsonObject(c.req.raw);
@@ -160,7 +160,7 @@ export function registerRuntimeAgentRoutes(
     });
   });
 
-  app.post(TAKOS_PAAS_RUNTIME_AGENT_PATHS.heartbeat, async (c) => {
+  app.post(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.heartbeat, async (c) => {
     const auth = await authenticate(c.req.raw);
     if (!auth.ok) return runtimeAgentAuthError(c, auth);
     const request = await readJsonObject(c.req.raw);
@@ -190,7 +190,7 @@ export function registerRuntimeAgentRoutes(
     });
   });
 
-  app.post(TAKOS_PAAS_RUNTIME_AGENT_PATHS.lease, async (c) => {
+  app.post(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.lease, async (c) => {
     const auth = await authenticate(c.req.raw);
     if (!auth.ok) return runtimeAgentAuthError(c, auth);
     const request = await readJsonObject(c.req.raw);
@@ -218,7 +218,7 @@ export function registerRuntimeAgentRoutes(
     });
   });
 
-  app.post(TAKOS_PAAS_RUNTIME_AGENT_PATHS.report, async (c) => {
+  app.post(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.report, async (c) => {
     const auth = await authenticate(c.req.raw);
     if (!auth.ok) return runtimeAgentAuthError(c, auth);
     const request = await readJsonObject(c.req.raw);
@@ -281,7 +281,7 @@ export function registerRuntimeAgentRoutes(
     });
   });
 
-  app.post(TAKOS_PAAS_RUNTIME_AGENT_PATHS.drain, async (c) => {
+  app.post(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.drain, async (c) => {
     const auth = await authenticate(c.req.raw);
     if (!auth.ok) return runtimeAgentAuthError(c, auth);
     const request = await readJsonObject(c.req.raw);
@@ -311,7 +311,7 @@ export function registerRuntimeAgentRoutes(
     });
   });
 
-  app.post(TAKOS_PAAS_RUNTIME_AGENT_PATHS.gatewayManifest, async (c) => {
+  app.post(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.gatewayManifest, async (c) => {
     const auth = await authenticate(c.req.raw);
     if (!auth.ok) return runtimeAgentAuthError(c, auth);
     const issuer = options.gatewayManifestIssuer;

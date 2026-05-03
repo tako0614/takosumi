@@ -3,7 +3,7 @@ import { loadKernelPluginsFromEnv } from "./loader.ts";
 
 Deno.test("kernel plugin loader ignores module env unless reference loader is enabled", async () => {
   const plugins = await loadKernelPluginsFromEnv({
-    TAKOS_KERNEL_PLUGIN_MODULES: "file:///tmp/not-loaded.ts",
+    TAKOSUMI_KERNEL_PLUGIN_MODULES: "file:///tmp/not-loaded.ts",
   });
 
   assert.deepEqual(plugins, []);
@@ -31,8 +31,8 @@ Deno.test("kernel plugin loader imports operator-provided modules when reference
   );
 
   const plugins = await loadKernelPluginsFromEnv({
-    TAKOS_KERNEL_PLUGIN_MODULES: new URL(`file://${modulePath}`).href,
-    TAKOS_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES: "1",
+    TAKOSUMI_KERNEL_PLUGIN_MODULES: new URL(`file://${modulePath}`).href,
+    TAKOSUMI_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES: "1",
   });
 
   assert.deepEqual(
@@ -45,9 +45,9 @@ Deno.test("kernel plugin loader rejects dynamic module loading in staging", asyn
   await assert.rejects(
     () =>
       loadKernelPluginsFromEnv({
-        TAKOS_ENVIRONMENT: "staging",
-        TAKOS_KERNEL_PLUGIN_MODULES: "file:///tmp/not-loaded.ts",
-        TAKOS_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES: "1",
+        TAKOSUMI_ENVIRONMENT: "staging",
+        TAKOSUMI_KERNEL_PLUGIN_MODULES: "file:///tmp/not-loaded.ts",
+        TAKOSUMI_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES: "1",
       }),
     /staging cannot use reference dynamic kernel plugin module loading/,
   );
@@ -57,9 +57,9 @@ Deno.test("kernel plugin loader rejects dynamic module loading in production", a
   await assert.rejects(
     () =>
       loadKernelPluginsFromEnv({
-        TAKOS_ENVIRONMENT: "production",
-        TAKOS_KERNEL_PLUGIN_MODULES: "file:///tmp/not-loaded.ts",
-        TAKOS_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES: "1",
+        TAKOSUMI_ENVIRONMENT: "production",
+        TAKOSUMI_KERNEL_PLUGIN_MODULES: "file:///tmp/not-loaded.ts",
+        TAKOSUMI_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES: "1",
       }),
     /production cannot use reference dynamic kernel plugin module loading/,
   );
@@ -69,18 +69,18 @@ Deno.test("kernel plugin loader treats prod and stage aliases as strict environm
   await assert.rejects(
     () =>
       loadKernelPluginsFromEnv({
-        TAKOS_ENVIRONMENT: "prod",
-        TAKOS_KERNEL_PLUGIN_MODULES: "file:///tmp/not-loaded.ts",
-        TAKOS_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES: "1",
+        TAKOSUMI_ENVIRONMENT: "prod",
+        TAKOSUMI_KERNEL_PLUGIN_MODULES: "file:///tmp/not-loaded.ts",
+        TAKOSUMI_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES: "1",
       }),
     /production cannot use reference dynamic kernel plugin module loading/,
   );
   await assert.rejects(
     () =>
       loadKernelPluginsFromEnv({
-        TAKOS_ENVIRONMENT: "stage",
-        TAKOS_KERNEL_PLUGIN_MODULES: "file:///tmp/not-loaded.ts",
-        TAKOS_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES: "1",
+        TAKOSUMI_ENVIRONMENT: "stage",
+        TAKOSUMI_KERNEL_PLUGIN_MODULES: "file:///tmp/not-loaded.ts",
+        TAKOSUMI_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES: "1",
       }),
     /staging cannot use reference dynamic kernel plugin module loading/,
   );

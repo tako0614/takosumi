@@ -1,5 +1,5 @@
 {
-  "apiVersion": "takos.dev/hosting/v1",
+  "apiVersion": "takosumi.com/hosting/v1",
   "kind": "TakosDistribution",
   "metadata": {
     "name": "takos-cloudflare-live-smoke",

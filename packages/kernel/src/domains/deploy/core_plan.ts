@@ -8,12 +8,12 @@
 import { createHash } from "node:crypto";
 import type { JsonObject } from "takosumi-contract";
 
-const TAKOS_CONTEXT_ID = "https://takos.dev/contexts/deploy.jsonld";
+const TAKOSUMI_CONTEXT_ID = "https://takosumi.com/contexts/deploy.jsonld";
 const PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR =
   "authoring.public-manifest-expansion@v1";
 const PACKAGED_DESCRIPTOR_ROOT_URL = new URL("./", import.meta.url);
 const DOCS_DESCRIPTOR_ROOT_URL = new URL(
-  "../../../../../../docs/takos-paas/",
+  "../../../../../../docs/takosumi/",
   import.meta.url,
 );
 
@@ -209,8 +209,8 @@ function loadContextDescriptor(): OfficialDescriptor {
   const documentPath = "descriptors/contexts/takos-deploy-context.jsonld";
   const body = readDescriptorJson(documentPath);
   return {
-    id: TAKOS_CONTEXT_ID,
-    alias: TAKOS_CONTEXT_ID,
+    id: TAKOSUMI_CONTEXT_ID,
+    alias: TAKOSUMI_CONTEXT_ID,
     documentPath,
     lifecycleDomain: "shape-derivation",
     changeEffects: [{ path: "", effect: "shape-derivation" }],

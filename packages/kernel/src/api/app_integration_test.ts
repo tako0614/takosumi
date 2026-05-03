@@ -4,7 +4,7 @@ import { signTakosumiInternalRequest } from "takosumi-contract/internal-rpc";
 import { InMemoryRuntimeAgentRegistry } from "../agents/mod.ts";
 import { createInMemoryAppContext } from "../app_context.ts";
 import { createApiApp } from "./app.ts";
-import { TAKOS_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
+import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 Deno.test("createApiApp exposes /openapi.json when enabled", async () => {
   const app = await createApiApp({
@@ -28,7 +28,7 @@ Deno.test("createApiApp mounts runtime-agent routes fail-closed when enabled", a
     role: "takosumi-runtime-agent",
   });
 
-  const response = await app.request(TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     body: JSON.stringify({ agentId: "agent_1", provider: "local" }),
   });
@@ -47,12 +47,12 @@ Deno.test("createApiApp accepts signed v1 runtime-agent routes when enabled", as
   });
   const body = JSON.stringify({ agentId: "agent_1", provider: "local" });
 
-  const response = await app.request(TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     headers: await signedHeaders({
       secret,
       method: "POST",
-      path: TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll,
+      path: TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
       body,
       actor: {
         actorAccountId: "acct_runtime",
@@ -86,12 +86,12 @@ Deno.test("createApiApp uses context runtime-agent registry for mounted routes",
   });
   const body = JSON.stringify({ agentId: "agent_context", provider: "local" });
 
-  const response = await app.request(TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     headers: await signedHeaders({
       secret,
       method: "POST",
-      path: TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll,
+      path: TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
       body,
       actor: {
         actorAccountId: "acct_runtime",

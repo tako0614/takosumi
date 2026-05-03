@@ -235,7 +235,7 @@ export class K8sDeploymentMaterializer {
     const labels = {
       "app.kubernetes.io/name": name,
       "app.kubernetes.io/instance": `${desiredState.activationId}-${name}`,
-      "app.kubernetes.io/managed-by": "takos-paas",
+      "app.kubernetes.io/managed-by": "takosumi",
       "takos.jp/component": workload.componentName,
     };
 

@@ -3,7 +3,7 @@ import type { GroupSummaryStatusProjection } from "../services/status/mod.ts";
 import { findNonCatalogConditionReasons } from "./condition_reasons.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
 
-export const TAKOS_PAAS_READINESS_PATHS = {
+export const TAKOSUMI_PAAS_READINESS_PATHS = {
   ready: "/readyz",
   live: "/livez",
   statusSummary: "/status/summary",
@@ -36,15 +36,15 @@ export function registerReadinessRoutes(
   options: RegisterReadinessRoutesOptions,
 ): void {
   registerApiErrorHandler(app);
-  app.get(TAKOS_PAAS_READINESS_PATHS.ready, async (c) => {
+  app.get(TAKOSUMI_PAAS_READINESS_PATHS.ready, async (c) => {
     return await healthResponse(c, options.probes.ready);
   });
 
-  app.get(TAKOS_PAAS_READINESS_PATHS.live, async (c) => {
+  app.get(TAKOSUMI_PAAS_READINESS_PATHS.live, async (c) => {
     return await healthResponse(c, options.probes.live);
   });
 
-  app.get(TAKOS_PAAS_READINESS_PATHS.statusSummary, async (c) => {
+  app.get(TAKOSUMI_PAAS_READINESS_PATHS.statusSummary, async (c) => {
     try {
       const summary = await options.probes.statusSummary();
       assertCatalogConditionReasons(summary, "status summary");

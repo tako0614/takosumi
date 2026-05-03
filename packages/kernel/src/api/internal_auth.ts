@@ -21,7 +21,8 @@ import {
  * identity from the signed actor context alone. Route-level authorization only
  * trusts it when it matches a signed actor `serviceId`/`agentId`.
  */
-export const TAKOS_WORKLOAD_IDENTITY_ID_HEADER = "x-takos-workload-identity-id";
+export const TAKOSUMI_WORKLOAD_IDENTITY_ID_HEADER =
+  "x-takos-workload-identity-id";
 
 export interface InternalAuthOptions {
   /** Shared internal service secret. Inject from the process env at the host edge. */
@@ -105,7 +106,7 @@ function readSignedWorkloadIdentityId(
   headers: Headers,
 ): string | false | undefined {
   const signedIdentityId = actor.serviceId ?? actor.agentId;
-  const hintedIdentityId = headers.get(TAKOS_WORKLOAD_IDENTITY_ID_HEADER) ??
+  const hintedIdentityId = headers.get(TAKOSUMI_WORKLOAD_IDENTITY_ID_HEADER) ??
     undefined;
   if (
     hintedIdentityId && signedIdentityId &&
@@ -167,7 +168,7 @@ export interface SignInternalResponseOptions {
 /**
  * Sign an internal RPC response so the caller (typically the kernel) can
  * verify the response did not get tampered with by an intermediate worker
- * surface. Uses the same operator-managed `TAKOS_INTERNAL_API_SECRET`
+ * surface. Uses the same operator-managed `TAKOSUMI_INTERNAL_API_SECRET`
  * HMAC-SHA256 secret as internal request signing.
  */
 export async function signInternalResponse(

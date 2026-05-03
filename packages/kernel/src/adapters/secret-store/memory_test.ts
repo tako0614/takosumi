@@ -38,7 +38,7 @@ Deno.test("selectSecretBoundaryCrypto fails closed in production without key", (
   assert.throws(
     () =>
       selectSecretBoundaryCrypto({
-        env: { TAKOS_ENVIRONMENT: "production" },
+        env: { TAKOSUMI_ENVIRONMENT: "production" },
       }),
     (error: unknown) => {
       assert.ok(error instanceof SecretEncryptionConfigurationError);
@@ -57,7 +57,7 @@ Deno.test("selectSecretBoundaryCrypto fails closed in staging without key", () =
   assert.throws(
     () =>
       selectSecretBoundaryCrypto({
-        env: { TAKOS_ENVIRONMENT: "staging" },
+        env: { TAKOSUMI_ENVIRONMENT: "staging" },
       }),
     SecretEncryptionConfigurationError,
   );
@@ -69,7 +69,7 @@ Deno.test("selectSecretBoundaryCrypto rejects production opt-in attempts", () =>
     () =>
       selectSecretBoundaryCrypto({
         env: {
-          TAKOS_ENVIRONMENT: "production",
+          TAKOSUMI_ENVIRONMENT: "production",
           TAKOSUMI_DEV_MODE: "1",
         },
       }),
@@ -80,8 +80,9 @@ Deno.test("selectSecretBoundaryCrypto rejects production opt-in attempts", () =>
 Deno.test("selectSecretBoundaryCrypto returns multi-cloud AES-GCM crypto when global key supplied", async () => {
   const crypto = selectSecretBoundaryCrypto({
     env: {
-      TAKOS_ENVIRONMENT: "production",
-      TAKOS_SECRET_STORE_PASSPHRASE: "test-passphrase-with-enough-entropy-32",
+      TAKOSUMI_ENVIRONMENT: "production",
+      TAKOSUMI_SECRET_STORE_PASSPHRASE:
+        "test-passphrase-with-enough-entropy-32",
     },
   });
   assert.ok(crypto instanceof MultiCloudSecretBoundaryCrypto);
@@ -94,7 +95,7 @@ Deno.test("selectSecretBoundaryCrypto returns multi-cloud AES-GCM crypto when gl
 Deno.test("selectSecretBoundaryCrypto allows local opt-in to placeholder", () => {
   const crypto = selectSecretBoundaryCrypto({
     env: {
-      TAKOS_ENVIRONMENT: "local",
+      TAKOSUMI_ENVIRONMENT: "local",
       TAKOSUMI_DEV_MODE: "1",
     },
   });
@@ -105,7 +106,7 @@ Deno.test("selectSecretBoundaryCrypto requires local plaintext opt-in", () => {
   assert.throws(
     () =>
       selectSecretBoundaryCrypto({
-        env: { TAKOS_ENVIRONMENT: "local" },
+        env: { TAKOSUMI_ENVIRONMENT: "local" },
       }),
     (error: unknown) => {
       assert.ok(error instanceof SecretEncryptionConfigurationError);
@@ -120,7 +121,7 @@ Deno.test("MemoryEncryptedSecretStore env option drives fail-closed", () => {
   assert.throws(
     () =>
       new MemoryEncryptedSecretStore({
-        env: { TAKOS_ENVIRONMENT: "production" },
+        env: { TAKOSUMI_ENVIRONMENT: "production" },
       }),
     SecretEncryptionConfigurationError,
   );
@@ -131,7 +132,7 @@ Deno.test("MemoryEncryptedSecretStore env option uses AES-GCM with key", async (
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: () => "v1",
     env: {
-      TAKOS_ENVIRONMENT: "production",
+      TAKOSUMI_ENVIRONMENT: "production",
       ENCRYPTION_KEY: "production-secret-passphrase-32-byte",
     },
   });
@@ -149,9 +150,9 @@ Deno.test("MemoryEncryptedSecretStore env option uses AES-GCM with key", async (
 Deno.test("cloudPartitionEnvKeys derives per-cloud env names", () => {
   assert.deepEqual(cloudPartitionEnvKeys("global"), SECRET_STORE_KEY_ENV_KEYS);
   assert.deepEqual(cloudPartitionEnvKeys("aws"), [
-    "TAKOS_SECRET_STORE_PASSPHRASE_AWS",
-    "TAKOS_SECRET_STORE_KEY_AWS",
-    "TAKOS_SECRET_ENCRYPTION_KEY_AWS",
+    "TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS",
+    "TAKOSUMI_SECRET_STORE_KEY_AWS",
+    "TAKOSUMI_SECRET_ENCRYPTION_KEY_AWS",
     "ENCRYPTION_KEY_AWS",
   ]);
 });
@@ -240,12 +241,12 @@ Deno.test("MemoryEncryptedSecretStore stores per-cloud partition and rejects cro
 
 Deno.test("MultiCloudSecretBoundaryCrypto.fromEnv picks per-cloud overrides", async () => {
   const env = {
-    TAKOS_SECRET_STORE_PASSPHRASE: "global-passphrase-".padEnd(40, "g"),
-    TAKOS_SECRET_STORE_PASSPHRASE_AWS: "aws-only-".padEnd(40, "a"),
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: "global-passphrase-".padEnd(40, "g"),
+    TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS: "aws-only-".padEnd(40, "a"),
   };
   const crypto = MultiCloudSecretBoundaryCrypto.fromEnv(
     env,
-    env.TAKOS_SECRET_STORE_PASSPHRASE,
+    env.TAKOSUMI_SECRET_STORE_PASSPHRASE,
   );
   // Sanity: roundtrip works.
   const sealed = await crypto.seal("ok", "aws");

@@ -1,6 +1,6 @@
 {
   "@context": {
-    "takosumi": "https://takosumi.dev/vocab/deploy#",
+    "takosumi": "https://takosumi.com/vocab/deploy#",
     "id": "@id",
     "type": "@type",
     "shortRef": "takosumi:shortRef",

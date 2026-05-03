@@ -308,10 +308,10 @@ Deno.test("SqlObservabilitySink delete-after-archive only triggers when policy e
   const fixedNow = new Date("2026-05-01T00:00:00.000Z");
   const policy = resolveAuditRetention({
     env: {
-      TAKOS_AUDIT_RETENTION_REGIME: "regulated",
-      TAKOS_AUDIT_RETENTION_DAYS: "7",
-      TAKOS_AUDIT_DELETE_AFTER_ARCHIVE: "true",
-      TAKOS_AUDIT_ARCHIVE_GRACE_DAYS: "10",
+      TAKOSUMI_AUDIT_RETENTION_REGIME: "regulated",
+      TAKOSUMI_AUDIT_RETENTION_DAYS: "7",
+      TAKOSUMI_AUDIT_DELETE_AFTER_ARCHIVE: "true",
+      TAKOSUMI_AUDIT_ARCHIVE_GRACE_DAYS: "10",
     },
   });
   const sink = new SqlObservabilitySink({
@@ -340,10 +340,10 @@ Deno.test("StandaloneBootstrapService rejects memory observability sink in produ
   const config = new LocalOperatorConfig({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     values: {
-      TAKOS_ENVIRONMENT: "production",
-      TAKOS_BOOTSTRAP_AUTH_ADAPTER: "service",
-      TAKOS_INTERNAL_SERVICE_SECRET: "production-secret-7d3f1a8b9e2c",
-      TAKOS_BOOTSTRAP_OBSERVABILITY_ADAPTER: "memory",
+      TAKOSUMI_ENVIRONMENT: "production",
+      TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
+      TAKOSUMI_INTERNAL_SERVICE_SECRET: "production-secret-7d3f1a8b9e2c",
+      TAKOSUMI_BOOTSTRAP_OBSERVABILITY_ADAPTER: "memory",
     },
   });
 
@@ -367,10 +367,10 @@ Deno.test("StandaloneBootstrapService selects sql observability when sqlClient a
   const config = new LocalOperatorConfig({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     values: {
-      TAKOS_ENVIRONMENT: "production",
-      TAKOS_BOOTSTRAP_AUTH_ADAPTER: "service",
-      TAKOS_INTERNAL_SERVICE_SECRET: "production-secret-7d3f1a8b9e2c",
-      TAKOS_BOOTSTRAP_OBSERVABILITY_ADAPTER: "sql",
+      TAKOSUMI_ENVIRONMENT: "production",
+      TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
+      TAKOSUMI_INTERNAL_SERVICE_SECRET: "production-secret-7d3f1a8b9e2c",
+      TAKOSUMI_BOOTSTRAP_OBSERVABILITY_ADAPTER: "sql",
     },
   });
   const sqlClient = new FakeAuditSqlClient();

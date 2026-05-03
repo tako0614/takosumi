@@ -53,7 +53,7 @@ local Postgres / coredns で 1 台完結デプロイを構築します。
 `my-app.yml`:
 
 ```yaml
-apiVersion: takosumi.dev/hosting/v1
+apiVersion: takosumi.com/hosting/v1
 kind: TakosumiManifest
 metadata:
   name: my-app

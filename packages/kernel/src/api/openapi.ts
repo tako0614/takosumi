@@ -2,9 +2,9 @@ import {
   CORE_CONDITION_REASONS,
   TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
-import { TAKOS_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
-import { TAKOS_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
-import { TAKOS_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
+import { TAKOSUMI_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
+import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
+import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 export type OpenApiHttpMethod = "delete" | "get" | "post";
 
@@ -77,24 +77,24 @@ export function createPaaSOpenApiDocument(
           okSchema: "CapabilitiesResponse",
         }),
       },
-      [TAKOS_PAAS_PUBLIC_PATHS.capabilities]: {
+      [TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities]: {
         get: operation({
           operationId: "getPublicCapabilities",
           summary: "Returns public API route capabilities.",
           tag: "public",
           auth: "actor",
           okSchema: "PublicCapabilitiesResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.capabilities,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities,
         }),
       },
-      [TAKOS_PAAS_PUBLIC_PATHS.spaces]: {
+      [TAKOSUMI_PAAS_PUBLIC_PATHS.spaces]: {
         get: operation({
           operationId: "listSpaces",
           summary: "Lists spaces visible to the authenticated actor.",
           tag: "public",
           auth: "actor",
           okSchema: "SpacesResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.spaces,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.spaces,
         }),
         post: operation({
           operationId: "createSpace",
@@ -104,10 +104,10 @@ export function createPaaSOpenApiDocument(
           requestSchema: "PublicSpaceCreateRequest",
           okStatus: "201",
           okSchema: "SpaceResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.spaces,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.spaces,
         }),
       },
-      [TAKOS_PAAS_PUBLIC_PATHS.groups]: {
+      [TAKOSUMI_PAAS_PUBLIC_PATHS.groups]: {
         get: operation({
           operationId: "listGroups",
           summary:
@@ -116,7 +116,7 @@ export function createPaaSOpenApiDocument(
           auth: "actor",
           okSchema: "GroupsResponse",
           query: ["spaceId"],
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.groups,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.groups,
         }),
         post: operation({
           operationId: "createGroup",
@@ -126,10 +126,10 @@ export function createPaaSOpenApiDocument(
           requestSchema: "PublicGroupCreateRequest",
           okStatus: "201",
           okSchema: "GroupResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.groups,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.groups,
         }),
       },
-      [TAKOS_PAAS_PUBLIC_PATHS.deployments]: {
+      [TAKOSUMI_PAAS_PUBLIC_PATHS.deployments]: {
         post: operation({
           operationId: "createDeployment",
           summary:
@@ -139,7 +139,7 @@ export function createPaaSOpenApiDocument(
           requestSchema: "DeploymentCreateRequest",
           okStatus: "201",
           okSchema: "DeploymentMutationResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.deployments,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
         }),
         get: operation({
           operationId: "listDeployments",
@@ -149,10 +149,10 @@ export function createPaaSOpenApiDocument(
           auth: "actor",
           okSchema: "DeploymentsResponse",
           query: ["group", "status", "space"],
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.deployments,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
         }),
       },
-      [TAKOS_PAAS_PUBLIC_PATHS.deployment]: {
+      [TAKOSUMI_PAAS_PUBLIC_PATHS.deployment]: {
         get: operation({
           operationId: "getDeployment",
           summary: "Returns a Deployment by id.",
@@ -160,10 +160,10 @@ export function createPaaSOpenApiDocument(
           auth: "actor",
           pathParams: ["deploymentId"],
           okSchema: "DeploymentResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.deployment,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deployment,
         }),
       },
-      [TAKOS_PAAS_PUBLIC_PATHS.deploymentApply]: {
+      [TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply]: {
         post: operation({
           operationId: "applyDeployment",
           summary: "Transitions a resolved Deployment to applying / applied.",
@@ -172,10 +172,10 @@ export function createPaaSOpenApiDocument(
           pathParams: ["deploymentId"],
           okStatus: "201",
           okSchema: "DeploymentMutationResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.deploymentApply,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply,
         }),
       },
-      [TAKOS_PAAS_PUBLIC_PATHS.deploymentApprove]: {
+      [TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove]: {
         post: operation({
           operationId: "approveDeployment",
           summary: "Attaches an approval record to a Deployment.",
@@ -184,10 +184,10 @@ export function createPaaSOpenApiDocument(
           pathParams: ["deploymentId"],
           requestSchema: "DeploymentApproveRequest",
           okSchema: "DeploymentMutationResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.deploymentApprove,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove,
         }),
       },
-      [TAKOS_PAAS_PUBLIC_PATHS.deploymentObservations]: {
+      [TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations]: {
         get: operation({
           operationId: "listDeploymentObservations",
           summary: "Streams provider observations for a Deployment.",
@@ -195,10 +195,10 @@ export function createPaaSOpenApiDocument(
           auth: "actor",
           pathParams: ["deploymentId"],
           okSchema: "ProviderObservationsResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.deploymentObservations,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations,
         }),
       },
-      [TAKOS_PAAS_PUBLIC_PATHS.groupHead]: {
+      [TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead]: {
         get: operation({
           operationId: "getGroupHead",
           summary: "Returns the GroupHead pointer for a group.",
@@ -207,10 +207,10 @@ export function createPaaSOpenApiDocument(
           pathParams: ["groupId"],
           query: ["spaceId"],
           okSchema: "GroupHeadResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.groupHead,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead,
         }),
       },
-      [TAKOS_PAAS_PUBLIC_PATHS.groupRollback]: {
+      [TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback]: {
         post: operation({
           operationId: "rollbackGroup",
           summary:
@@ -222,7 +222,7 @@ export function createPaaSOpenApiDocument(
           requestSchema: "GroupRollbackRequest",
           okStatus: "201",
           okSchema: "DeploymentMutationResponse",
-          mountedPath: TAKOS_PAAS_PUBLIC_PATHS.groupRollback,
+          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback,
         }),
       },
       [TAKOSUMI_INTERNAL_PATHS.spaces]: {
@@ -286,7 +286,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "DeploymentMutationResponse",
         }),
       },
-      [TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll]: {
+      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll]: {
         post: operation({
           operationId: "enrollRuntimeAgent",
           summary: "Enrolls a runtime agent for provider work leasing.",
@@ -297,7 +297,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "RuntimeAgentResponse",
         }),
       },
-      [TAKOS_PAAS_RUNTIME_AGENT_PATHS.heartbeat]: {
+      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.heartbeat]: {
         post: operation({
           operationId: "heartbeatRuntimeAgent",
           summary: "Records a runtime agent heartbeat.",
@@ -308,7 +308,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "RuntimeAgentResponse",
         }),
       },
-      [TAKOS_PAAS_RUNTIME_AGENT_PATHS.lease]: {
+      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.lease]: {
         post: operation({
           operationId: "leaseRuntimeAgentWork",
           summary: "Leases work to a runtime agent.",
@@ -319,7 +319,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "RuntimeAgentLeaseResponse",
         }),
       },
-      [TAKOS_PAAS_RUNTIME_AGENT_PATHS.report]: {
+      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.report]: {
         post: operation({
           operationId: "reportRuntimeAgentWork",
           summary: "Reports runtime-agent work completion or failure.",
@@ -330,7 +330,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "RuntimeAgentWorkResponse",
         }),
       },
-      [TAKOS_PAAS_RUNTIME_AGENT_PATHS.drain]: {
+      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.drain]: {
         post: operation({
           operationId: "drainRuntimeAgent",
           summary: "Requests runtime-agent drain.",
@@ -341,7 +341,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "RuntimeAgentResponse",
         }),
       },
-      [TAKOS_PAAS_RUNTIME_AGENT_PATHS.gatewayManifest]: {
+      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.gatewayManifest]: {
         post: operation({
           operationId: "issueGatewayManifest",
           summary:
@@ -352,7 +352,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "GatewayManifestResponse",
         }),
       },
-      [TAKOS_PAAS_READINESS_PATHS.ready]: {
+      [TAKOSUMI_PAAS_READINESS_PATHS.ready]: {
         get: operation({
           operationId: "getReadyz",
           summary: "Readiness probe for the current PaaS role.",
@@ -361,7 +361,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "HealthProbeResponse",
         }),
       },
-      [TAKOS_PAAS_READINESS_PATHS.live]: {
+      [TAKOSUMI_PAAS_READINESS_PATHS.live]: {
         get: operation({
           operationId: "getLivez",
           summary: "Liveness probe for the current PaaS role.",
@@ -370,7 +370,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "HealthProbeResponse",
         }),
       },
-      [TAKOS_PAAS_READINESS_PATHS.statusSummary]: {
+      [TAKOSUMI_PAAS_READINESS_PATHS.statusSummary]: {
         get: operation({
           operationId: "getStatusSummary",
           summary: "Returns the current group summary status projection.",

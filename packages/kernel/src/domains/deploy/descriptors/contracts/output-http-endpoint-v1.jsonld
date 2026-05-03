@@ -1,6 +1,6 @@
 {
-  "@context": "https://takosumi.dev/contexts/deploy.jsonld",
-  "@id": "https://takosumi.dev/contracts/output/http-endpoint/v1",
+  "@context": "https://takosumi.com/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/contracts/output/http-endpoint/v1",
   "@type": "OutputContractDescriptor",
   "shortRef": "output.http-endpoint@v1",
   "domain": "output",

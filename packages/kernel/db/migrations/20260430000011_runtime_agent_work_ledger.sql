@@ -13,7 +13,7 @@
 --            for that agent — so a forged operator can never strand work in
 --            `leased` state.
 --
--- Spec:      /docs/takos-paas/core/01-core-contract-v1.0.md  (§ 13-15, § 18)
+-- Spec:      /docs/takosumi/core/01-core-contract-v1.0.md  (§ 13-15, § 18)
 -- Phase:     18 (C4 host-key impersonation guard + C5 lease resumability)
 -- Domain:    runtime
 

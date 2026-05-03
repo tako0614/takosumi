@@ -73,7 +73,7 @@ function fatalStartupError(error: unknown): never {
   if (error instanceof SecretEncryptionConfigurationError) {
     console.error(
       `[paas-init] fatal: ${error.message}\n` +
-        `Refusing to start takos-paas with plaintext secret storage. ` +
+        `Refusing to start takosumi with plaintext secret storage. ` +
         `See docs/hosting/cloudflare.md and docs/hosting/self-hosted.md ` +
         `for required encryption-key configuration.`,
     );
@@ -82,7 +82,7 @@ function fatalStartupError(error: unknown): never {
   if (error instanceof DatabaseEncryptionConfigurationError) {
     console.error(
       `[paas-init] fatal: ${error.message}\n` +
-        `Refusing to start takos-paas against an unencrypted database. ` +
+        `Refusing to start takosumi against an unencrypted database. ` +
         `See docs/hosting/cloudflare.md and docs/hosting/multi-cloud.md ` +
         `for at-rest encryption configuration per backend.`,
     );
@@ -91,7 +91,7 @@ function fatalStartupError(error: unknown): never {
   if (error instanceof AuditReplicationConfigurationError) {
     console.error(
       `[paas-init] fatal: ${error.message}\n` +
-        `Refusing to start takos-paas without an external audit-replication ` +
+        `Refusing to start takosumi without an external audit-replication ` +
         `sink. See docs/hosting/cloudflare.md and docs/hosting/multi-cloud.md ` +
         `for the AuditExternalReplicationSink configuration.`,
     );
@@ -104,11 +104,11 @@ function fatalStartupError(error: unknown): never {
  * Phase 11A init hook: optionally apply DB migrations at boot.
  *
  * Default behavior:
- *   - production / staging: auto-apply (TAKOS_DB_AUTO_MIGRATE defaults to true)
- *   - local / development:  skip (TAKOS_DB_AUTO_MIGRATE defaults to false)
+ *   - production / staging: auto-apply (TAKOSUMI_DB_AUTO_MIGRATE defaults to true)
+ *   - local / development:  skip (TAKOSUMI_DB_AUTO_MIGRATE defaults to false)
  *
- * Opt-out: TAKOS_DB_AUTO_MIGRATE=false (any env)
- * Opt-in:  TAKOS_DB_AUTO_MIGRATE=true  (local)
+ * Opt-out: TAKOSUMI_DB_AUTO_MIGRATE=false (any env)
+ * Opt-in:  TAKOSUMI_DB_AUTO_MIGRATE=true  (local)
  *
  * Failures are logged but do not crash boot, so a misconfigured DATABASE_URL
  * does not stop the API from starting up in degraded mode (deploys gated by
@@ -117,10 +117,10 @@ function fatalStartupError(error: unknown): never {
 async function maybeApplyDatabaseMigrations(
   env: Record<string, string | undefined>,
 ): Promise<void> {
-  const environment = (env.TAKOS_ENVIRONMENT ?? env.NODE_ENV ?? "local")
+  const environment = (env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? "local")
     .toLowerCase();
   const isManaged = environment === "production" || environment === "staging";
-  const explicit = env.TAKOS_DB_AUTO_MIGRATE?.toLowerCase();
+  const explicit = env.TAKOSUMI_DB_AUTO_MIGRATE?.toLowerCase();
   const shouldRun = explicit === "true"
     ? true
     : explicit === "false"
@@ -128,14 +128,14 @@ async function maybeApplyDatabaseMigrations(
     : isManaged;
   if (!shouldRun) return;
 
-  const databaseUrl = env.TAKOS_DATABASE_URL ?? env.DATABASE_URL ??
+  const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
     (environment === "production"
-      ? env.TAKOS_PRODUCTION_DATABASE_URL
+      ? env.TAKOSUMI_PRODUCTION_DATABASE_URL
       : undefined) ??
-    (environment === "staging" ? env.TAKOS_STAGING_DATABASE_URL : undefined);
+    (environment === "staging" ? env.TAKOSUMI_STAGING_DATABASE_URL : undefined);
   if (!databaseUrl) {
     console.warn(
-      `[paas-init] TAKOS_DB_AUTO_MIGRATE requested but no DATABASE_URL is set; skipping migrations.`,
+      `[paas-init] TAKOSUMI_DB_AUTO_MIGRATE requested but no DATABASE_URL is set; skipping migrations.`,
     );
     return;
   }
@@ -170,7 +170,7 @@ async function maybeApplyDatabaseMigrations(
 
 /**
  * Phase 18 / C9 init hook: apply audit retention policy at boot when
- * `TAKOS_AUDIT_RETENTION_DAYS` is set and a SQL audit backend is reachable.
+ * `TAKOSUMI_AUDIT_RETENTION_DAYS` is set and a SQL audit backend is reachable.
  *
  * The audit_events table is append-only for tamper evidence: we never delete
  * rows. Instead, events older than the retention cutoff are flagged as
@@ -180,13 +180,13 @@ async function maybeApplyDatabaseMigrations(
 async function maybeApplyAuditRetention(
   env: Record<string, string | undefined>,
 ): Promise<void> {
-  const retentionRaw = env.TAKOS_AUDIT_RETENTION_DAYS;
-  const regimeRaw = env.TAKOS_AUDIT_RETENTION_REGIME;
+  const retentionRaw = env.TAKOSUMI_AUDIT_RETENTION_DAYS;
+  const regimeRaw = env.TAKOSUMI_AUDIT_RETENTION_REGIME;
   if (!retentionRaw && !regimeRaw) return;
   const policy = resolveAuditRetention({ env });
 
-  const databaseUrl = env.TAKOS_DATABASE_URL ?? env.DATABASE_URL ??
-    env.TAKOS_PRODUCTION_DATABASE_URL ?? env.TAKOS_STAGING_DATABASE_URL;
+  const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
+    env.TAKOSUMI_PRODUCTION_DATABASE_URL ?? env.TAKOSUMI_STAGING_DATABASE_URL;
   if (!databaseUrl) {
     console.warn(
       `[paas-init] audit retention requested but no DATABASE_URL configured; skipping.`,
@@ -224,25 +224,25 @@ async function maybeApplyAuditRetention(
  * archived rows older than `archiveCapDays` (default 90d). Observations
  * pointing at the current group head are exempt.
  *
- * Opt-out: `TAKOS_OBSERVATION_RETENTION_DISABLE=true`. Tunables:
- * `TAKOS_OBSERVATION_RETENTION_RECENT_DAYS`,
- * `TAKOS_OBSERVATION_RETENTION_ARCHIVE_CAP_DAYS`.
+ * Opt-out: `TAKOSUMI_OBSERVATION_RETENTION_DISABLE=true`. Tunables:
+ * `TAKOSUMI_OBSERVATION_RETENTION_RECENT_DAYS`,
+ * `TAKOSUMI_OBSERVATION_RETENTION_ARCHIVE_CAP_DAYS`.
  */
 async function maybeApplyObservationRetention(
   env: Record<string, string | undefined>,
 ): Promise<void> {
-  if (env.TAKOS_OBSERVATION_RETENTION_DISABLE?.toLowerCase() === "true") {
+  if (env.TAKOSUMI_OBSERVATION_RETENTION_DISABLE?.toLowerCase() === "true") {
     return;
   }
-  const databaseUrl = env.TAKOS_DATABASE_URL ?? env.DATABASE_URL ??
-    env.TAKOS_PRODUCTION_DATABASE_URL ?? env.TAKOS_STAGING_DATABASE_URL;
+  const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
+    env.TAKOSUMI_PRODUCTION_DATABASE_URL ?? env.TAKOSUMI_STAGING_DATABASE_URL;
   if (!databaseUrl) return; // silent: most local dev runs without DB
 
   const recentDays = parsePositiveIntEnv(
-    env.TAKOS_OBSERVATION_RETENTION_RECENT_DAYS,
+    env.TAKOSUMI_OBSERVATION_RETENTION_RECENT_DAYS,
   );
   const archiveCapDays = parsePositiveIntEnv(
-    env.TAKOS_OBSERVATION_RETENTION_ARCHIVE_CAP_DAYS,
+    env.TAKOSUMI_OBSERVATION_RETENTION_ARCHIVE_CAP_DAYS,
   );
   const client = await tryCreatePostgresClient(databaseUrl);
   if (!client) return;
@@ -349,10 +349,10 @@ function renderNamedParams(
 }
 
 function startHeartbeatIfConfigured(): void {
-  const heartbeatFile = Deno.env.get("TAKOS_PAAS_WORKER_HEARTBEAT_FILE");
+  const heartbeatFile = Deno.env.get("TAKOSUMI_PAAS_WORKER_HEARTBEAT_FILE");
   if (!heartbeatFile) return;
   const intervalMs = Number(
-    Deno.env.get("TAKOS_PAAS_WORKER_POLL_INTERVAL_MS") ?? "250",
+    Deno.env.get("TAKOSUMI_PAAS_WORKER_POLL_INTERVAL_MS") ?? "250",
   );
   const write = async () => {
     const now = new Date().toISOString();
@@ -394,7 +394,7 @@ function assertSecretEncryptionConfigured(
     if (error instanceof SecretEncryptionConfigurationError) {
       console.error(
         `[paas-init] fatal: ${error.message}\n` +
-          `Refusing to start takos-paas with plaintext secret storage. ` +
+          `Refusing to start takosumi with plaintext secret storage. ` +
           `See docs/hosting/cloudflare.md and docs/hosting/self-hosted.md ` +
           `for required encryption-key configuration.`,
       );
@@ -426,7 +426,7 @@ function assertDatabaseEncryptionConfigured(
     if (error instanceof DatabaseEncryptionConfigurationError) {
       console.error(
         `[paas-init] fatal: ${error.message}\n` +
-          `Refusing to start takos-paas against an unencrypted database. ` +
+          `Refusing to start takosumi against an unencrypted database. ` +
           `See docs/hosting/cloudflare.md and docs/hosting/multi-cloud.md ` +
           `for at-rest encryption configuration per backend.`,
       );
@@ -456,7 +456,7 @@ function assertAuditReplicationConfigured(
     if (error instanceof AuditReplicationConfigurationError) {
       console.error(
         `[paas-init] fatal: ${error.message}\n` +
-          `Refusing to start takos-paas without an external audit-replication ` +
+          `Refusing to start takosumi without an external audit-replication ` +
           `sink. See docs/hosting/cloudflare.md and docs/hosting/multi-cloud.md ` +
           `for the AuditExternalReplicationSink configuration.`,
       );
@@ -483,8 +483,8 @@ async function maybeVerifyAuditReplicationChain(
   sink: AuditExternalReplicationSink | undefined,
 ): Promise<void> {
   if (!sink) return;
-  const databaseUrl = env.TAKOS_DATABASE_URL ?? env.DATABASE_URL ??
-    env.TAKOS_PRODUCTION_DATABASE_URL ?? env.TAKOS_STAGING_DATABASE_URL;
+  const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
+    env.TAKOSUMI_PRODUCTION_DATABASE_URL ?? env.TAKOSUMI_STAGING_DATABASE_URL;
   if (!databaseUrl) return;
 
   const client = await tryCreatePostgresClient(databaseUrl);
@@ -501,7 +501,7 @@ async function maybeVerifyAuditReplicationChain(
       );
       return;
     }
-    const environment = (env.TAKOS_ENVIRONMENT ?? env.NODE_ENV ?? "local")
+    const environment = (env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? "local")
       .toLowerCase();
     const productionLike = environment === "production" ||
       environment === "staging";

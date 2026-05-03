@@ -13,7 +13,7 @@
 --            CONFLICT DO NOTHING` to claim the (namespace, request_id)
 --            tuple atomically.
 --
--- Spec:      /docs/takos-paas/core/01-core-contract-v1.0.md (signed internal RPC)
+-- Spec:      /docs/takosumi/core/01-core-contract-v1.0.md (signed internal RPC)
 -- Phase:     18.3 (M4 distributed replay protection)
 -- Domain:    internal-auth / replay-protection
 

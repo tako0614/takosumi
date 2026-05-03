@@ -66,17 +66,17 @@ export class SecretEncryptionConfigurationError extends Error {
  * passphrases are derived from {@link cloudPartitionEnvKeys}.
  */
 export const SECRET_STORE_KEY_ENV_KEYS: readonly string[] = [
-  "TAKOS_SECRET_STORE_PASSPHRASE",
-  "TAKOS_SECRET_STORE_KEY",
-  "TAKOS_SECRET_ENCRYPTION_KEY",
+  "TAKOSUMI_SECRET_STORE_PASSPHRASE",
+  "TAKOSUMI_SECRET_STORE_KEY",
+  "TAKOSUMI_SECRET_ENCRYPTION_KEY",
   "ENCRYPTION_KEY",
 ];
 
 /**
  * Returns the env keys searched for a per-cloud partition passphrase.
  *
- * For partition `aws` the keys are `TAKOS_SECRET_STORE_PASSPHRASE_AWS`,
- * `TAKOS_SECRET_STORE_KEY_AWS`, etc. The plain `TAKOS_SECRET_STORE_PASSPHRASE`
+ * For partition `aws` the keys are `TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS`,
+ * `TAKOSUMI_SECRET_STORE_KEY_AWS`, etc. The plain `TAKOSUMI_SECRET_STORE_PASSPHRASE`
  * (without suffix) is treated as the `global` partition's key, which also
  * acts as a fallback for partitions that do not have a dedicated key.
  */
@@ -122,7 +122,7 @@ export function selectSecretBoundaryCrypto(
     return MultiCloudSecretBoundaryCrypto.fromEnv(env, globalPassphrase);
   }
   const environment = normalizeEnvironment(
-    env.TAKOS_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
+    env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
   );
   if (PRODUCTION_LIKE_ENVIRONMENTS.has(environment)) {
     throw new SecretEncryptionConfigurationError(

@@ -15,10 +15,10 @@
  *     [--dry-run]
  *
  * Inputs (env):
- *   TAKOS_DEFAULT_APP_DISTRIBUTION_JSON  JSON array of default app descriptors
+ *   TAKOSUMI_DEFAULT_APP_DISTRIBUTION_JSON  JSON array of default app descriptors
  *                                        seeded into the registry. Each entry:
  *                                        { ref, version, digest, publisher? }
- *   TAKOS_REGISTRY_TRUST_ROOTS_JSON      JSON array of registry trust roots:
+ *   TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON      JSON array of registry trust roots:
  *                                        { id, packageRef, packageDigest,
  *                                          packageKind?, trustLevel?,
  *                                          conformanceTier?, verifiedBy? }
@@ -155,7 +155,7 @@ function loadDefaultApps(env: Record<string, string | undefined>): {
   readonly entries: readonly DefaultAppEntry[];
   readonly diagnostic?: string;
 } {
-  const raw = env.TAKOS_DEFAULT_APP_DISTRIBUTION_JSON;
+  const raw = env.TAKOSUMI_DEFAULT_APP_DISTRIBUTION_JSON;
   if (!raw || !raw.trim()) return { entries: [] };
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -163,7 +163,7 @@ function loadDefaultApps(env: Record<string, string | undefined>): {
       return {
         entries: [],
         diagnostic:
-          "TAKOS_DEFAULT_APP_DISTRIBUTION_JSON must be a JSON array; ignored",
+          "TAKOSUMI_DEFAULT_APP_DISTRIBUTION_JSON must be a JSON array; ignored",
       };
     }
     const entries: DefaultAppEntry[] = [];
@@ -191,7 +191,7 @@ function loadDefaultApps(env: Record<string, string | undefined>): {
   } catch (err) {
     return {
       entries: [],
-      diagnostic: `TAKOS_DEFAULT_APP_DISTRIBUTION_JSON is not valid JSON (${
+      diagnostic: `TAKOSUMI_DEFAULT_APP_DISTRIBUTION_JSON is not valid JSON (${
         (err as Error).message
       }); ignored`,
     };
@@ -202,7 +202,7 @@ function loadTrustRoots(env: Record<string, string | undefined>): {
   readonly entries: readonly TrustRootEntry[];
   readonly diagnostic?: string;
 } {
-  const raw = env.TAKOS_REGISTRY_TRUST_ROOTS_JSON;
+  const raw = env.TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON;
   if (!raw || !raw.trim()) return { entries: [] };
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -210,7 +210,7 @@ function loadTrustRoots(env: Record<string, string | undefined>): {
       return {
         entries: [],
         diagnostic:
-          "TAKOS_REGISTRY_TRUST_ROOTS_JSON must be a JSON array; ignored",
+          "TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON must be a JSON array; ignored",
       };
     }
     const entries: TrustRootEntry[] = [];
@@ -247,7 +247,7 @@ function loadTrustRoots(env: Record<string, string | undefined>): {
   } catch (err) {
     return {
       entries: [],
-      diagnostic: `TAKOS_REGISTRY_TRUST_ROOTS_JSON is not valid JSON (${
+      diagnostic: `TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON is not valid JSON (${
         (err as Error).message
       }); ignored`,
     };

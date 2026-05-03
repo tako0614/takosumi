@@ -132,7 +132,7 @@ export class K8sSecretMaterializer {
         namespace,
         labels: {
           "takos.jp/activation": desiredState.activationId,
-          "takos.jp/managed-by": "takos-paas",
+          "takos.jp/managed-by": "takosumi",
         },
       },
       type: "Opaque",

@@ -59,36 +59,36 @@ type SelectorSpec = {
 const SELECTORS: readonly SelectorSpec[] = [
   {
     family: "auth",
-    key: "TAKOS_BOOTSTRAP_AUTH_ADAPTER",
+    key: "TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER",
     defaultKind: "local",
   },
   {
     family: "source",
-    key: "TAKOS_BOOTSTRAP_SOURCE_ADAPTER",
+    key: "TAKOSUMI_BOOTSTRAP_SOURCE_ADAPTER",
     defaultKind: "manifest",
   },
   {
     family: "secret",
-    key: "TAKOS_BOOTSTRAP_SECRET_ADAPTER",
+    key: "TAKOSUMI_BOOTSTRAP_SECRET_ADAPTER",
     defaultKind: "memory",
   },
   {
     family: "provider",
-    key: "TAKOS_BOOTSTRAP_PROVIDER_ADAPTER",
+    key: "TAKOSUMI_BOOTSTRAP_PROVIDER_ADAPTER",
     defaultKind: "noop",
   },
   {
     family: "observability",
-    key: "TAKOS_BOOTSTRAP_OBSERVABILITY_ADAPTER",
+    key: "TAKOSUMI_BOOTSTRAP_OBSERVABILITY_ADAPTER",
     defaultKind: "memory",
   },
 ];
 
 const STALE_BOOTSTRAP_SELECTOR_KEYS = [
-  "TAKOS_AUTH_ADAPTER",
-  "TAKOS_SOURCE_ADAPTER",
-  "TAKOS_SECRET_STORE_ADAPTER",
-  "TAKOS_PROVIDER_ADAPTER",
+  "TAKOSUMI_AUTH_ADAPTER",
+  "TAKOSUMI_SOURCE_ADAPTER",
+  "TAKOSUMI_SECRET_STORE_ADAPTER",
+  "TAKOSUMI_PROVIDER_ADAPTER",
 ] as const;
 
 export class StandaloneBootstrapService {
@@ -108,7 +108,11 @@ export class StandaloneBootstrapService {
     const warnings: BootstrapDiagnostic[] = [];
     const errors: BootstrapDiagnostic[] = [];
     const environment = normalizeEnvironment(
-      await this.#plainValue(["TAKOS_ENVIRONMENT", "NODE_ENV", "ENVIRONMENT"]),
+      await this.#plainValue([
+        "TAKOSUMI_ENVIRONMENT",
+        "NODE_ENV",
+        "ENVIRONMENT",
+      ]),
     );
     const devModeFlag = await this.#plainValue(["TAKOSUMI_DEV_MODE"]);
     const allowUnsafeDefaults = isDevMode({ TAKOSUMI_DEV_MODE: devModeFlag });
@@ -247,9 +251,9 @@ export class StandaloneBootstrapService {
         errors.push({
           severity: "error",
           code: "observability_memory_forbidden_in_production",
-          key: "TAKOS_BOOTSTRAP_OBSERVABILITY_ADAPTER",
+          key: "TAKOSUMI_BOOTSTRAP_OBSERVABILITY_ADAPTER",
           message:
-            `${environment} requires sql-backed audit sink for compliance (SOX/HIPAA); set TAKOS_BOOTSTRAP_OBSERVABILITY_ADAPTER=sql`,
+            `${environment} requires sql-backed audit sink for compliance (SOX/HIPAA); set TAKOSUMI_BOOTSTRAP_OBSERVABILITY_ADAPTER=sql`,
         });
       }
       return new InMemoryObservabilitySink();
@@ -259,7 +263,7 @@ export class StandaloneBootstrapService {
         errors.push({
           severity: "error",
           code: "observability_sql_client_missing",
-          key: "TAKOS_BOOTSTRAP_OBSERVABILITY_ADAPTER",
+          key: "TAKOSUMI_BOOTSTRAP_OBSERVABILITY_ADAPTER",
           message:
             "sql observability adapter requires a SqlClient to be supplied via StandaloneBootstrapService options",
         });
@@ -267,7 +271,7 @@ export class StandaloneBootstrapService {
       }
       const retentionRaw = snapshotPlainValue(
         snapshot,
-        "TAKOS_AUDIT_RETENTION_DAYS",
+        "TAKOSUMI_AUDIT_RETENTION_DAYS",
       );
       const retentionDays = retentionRaw ? Number(retentionRaw) : undefined;
       return new SqlObservabilitySink({
@@ -291,14 +295,14 @@ export class StandaloneBootstrapService {
     if (kind === "service") {
       const secret = snapshotPlainValue(
         snapshot,
-        "TAKOS_INTERNAL_SERVICE_SECRET",
+        "TAKOSUMI_INTERNAL_SERVICE_SECRET",
       );
       if (!secret) {
         errors.push({
           severity: "error",
           code: "auth_service_secret_missing",
-          key: "TAKOS_INTERNAL_SERVICE_SECRET",
-          message: "service auth requires TAKOS_INTERNAL_SERVICE_SECRET",
+          key: "TAKOSUMI_INTERNAL_SERVICE_SECRET",
+          message: "service auth requires TAKOSUMI_INTERNAL_SERVICE_SECRET",
         });
         return new LocalActorAdapter();
       }
@@ -346,7 +350,7 @@ export class StandaloneBootstrapService {
         errors.push({
           severity: "error",
           code: "secret_store_encryption_key_missing",
-          key: "TAKOS_SECRET_STORE_PASSPHRASE",
+          key: "TAKOSUMI_SECRET_STORE_PASSPHRASE",
           message: error.message,
         });
         return new FailingSecretStore(error.message);
@@ -417,8 +421,8 @@ export class StandaloneBootstrapService {
 
     for (
       const key of [
-        "TAKOS_INTERNAL_SERVICE_SECRET",
-        "TAKOS_SECRET_STORE_PASSPHRASE",
+        "TAKOSUMI_INTERNAL_SERVICE_SECRET",
+        "TAKOSUMI_SECRET_STORE_PASSPHRASE",
         "EXECUTOR_PROXY_SECRET",
       ]
     ) {
@@ -453,7 +457,7 @@ export class StandaloneBootstrapService {
         code: "stale_bootstrap_selector",
         key,
         message:
-          `${key} is a stale standalone bootstrap selector; select a kernel plugin port with TAKOS_*_PLUGIN instead`,
+          `${key} is a stale standalone bootstrap selector; select a kernel plugin port with TAKOSUMI_*_PLUGIN instead`,
       });
     }
   }
@@ -515,12 +519,12 @@ function bootstrapCryptoEnv(
   snapshot: OperatorConfigSnapshot,
 ): Readonly<Record<string, string | undefined>> {
   const keys = [
-    "TAKOS_ENVIRONMENT",
+    "TAKOSUMI_ENVIRONMENT",
     "NODE_ENV",
     "ENVIRONMENT",
-    "TAKOS_SECRET_STORE_PASSPHRASE",
-    "TAKOS_SECRET_STORE_KEY",
-    "TAKOS_SECRET_ENCRYPTION_KEY",
+    "TAKOSUMI_SECRET_STORE_PASSPHRASE",
+    "TAKOSUMI_SECRET_STORE_KEY",
+    "TAKOSUMI_SECRET_ENCRYPTION_KEY",
     "ENCRYPTION_KEY",
     "TAKOSUMI_DEV_MODE",
   ] as const;

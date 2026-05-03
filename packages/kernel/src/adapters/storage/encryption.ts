@@ -58,15 +58,17 @@ export function resolveBootDatabaseUrl(
   env: Readonly<Record<string, string | undefined>>,
 ): string | undefined {
   const environment = normalizeEnvironment(
-    env.TAKOS_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
+    env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
   );
-  return env.TAKOS_DATABASE_URL ?? env.DATABASE_URL ??
+  return env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
     (environment === "production"
-      ? env.TAKOS_PRODUCTION_DATABASE_URL
+      ? env.TAKOSUMI_PRODUCTION_DATABASE_URL
       : undefined) ??
-    (environment === "staging" ? env.TAKOS_STAGING_DATABASE_URL : undefined) ??
-    env.TAKOS_PRODUCTION_DATABASE_URL ??
-    env.TAKOS_STAGING_DATABASE_URL;
+    (environment === "staging"
+      ? env.TAKOSUMI_STAGING_DATABASE_URL
+      : undefined) ??
+    env.TAKOSUMI_PRODUCTION_DATABASE_URL ??
+    env.TAKOSUMI_STAGING_DATABASE_URL;
 }
 
 /**
@@ -78,7 +80,7 @@ export function inspectDatabaseEncryption(
 ): DatabaseEncryptionAssertion {
   const env = options.env;
   const environment = normalizeEnvironment(
-    env.TAKOS_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
+    env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
   );
   const productionLike = PRODUCTION_LIKE_ENVIRONMENTS.has(environment);
   const databaseUrl = resolveBootDatabaseUrl(env);

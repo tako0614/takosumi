@@ -1,7 +1,7 @@
 # Takos Cloudflare provider scaffold.
 # Replace placeholder resource identifiers from operator-managed config before deploy.
 
-name = "takos-paas-cloudflare-provider"
+name = "takosumi-cloudflare-provider"
 main = "src/worker.ts"
 compatibility_date = "2026-04-15"
 workers_dev = false
@@ -12,7 +12,7 @@ enabled = true
 
 [[d1_databases]]
 binding = "TAKOS_D1"
-database_name = "takos-paas"
+database_name = "takosumi"
 database_id = "<cloudflare-d1-database-id>"
 
 [[r2_buckets]]
@@ -21,14 +21,14 @@ bucket_name = "takos-artifacts"
 
 [[queues.producers]]
 binding = "TAKOS_QUEUE"
-queue = "takos-paas-control-plane"
+queue = "takosumi-control-plane"
 
 [[queues.consumers]]
-queue = "takos-paas-control-plane"
+queue = "takosumi-control-plane"
 max_batch_size = 10
 max_batch_timeout = 5
 max_retries = 3
-dead_letter_queue = "takos-paas-control-plane-dlq"
+dead_letter_queue = "takosumi-control-plane-dlq"
 
 [[durable_objects.bindings]]
 name = "TAKOS_COORDINATION"

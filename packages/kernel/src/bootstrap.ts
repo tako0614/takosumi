@@ -168,14 +168,14 @@ function createWorkerTasks(
   options: RoleWorkerDaemonOptions,
 ): readonly WorkerDaemonTask[] {
   if (options.role !== "takosumi-worker") return [];
-  const applyQueue = options.runtimeEnv.TAKOS_APPLY_QUEUE ??
+  const applyQueue = options.runtimeEnv.TAKOSUMI_APPLY_QUEUE ??
     "takos.deploy.apply";
   const intervalMs = positiveInteger(
-    options.runtimeEnv.TAKOS_WORKER_POLL_INTERVAL_MS,
+    options.runtimeEnv.TAKOSUMI_WORKER_POLL_INTERVAL_MS,
     1_000,
   );
   const visibilityTimeoutMs = positiveInteger(
-    options.runtimeEnv.TAKOS_WORKER_VISIBILITY_TIMEOUT_MS,
+    options.runtimeEnv.TAKOSUMI_WORKER_VISIBILITY_TIMEOUT_MS,
     30_000,
   );
   const applyWorker = new ApplyWorker({
@@ -227,7 +227,7 @@ function createWorkerTasks(
       tick: () =>
         outboxDispatcher.dispatchPending({
           limit: positiveInteger(
-            options.runtimeEnv.TAKOS_OUTBOX_DISPATCH_LIMIT,
+            options.runtimeEnv.TAKOSUMI_OUTBOX_DISPATCH_LIMIT,
             100,
           ),
         }),
@@ -295,8 +295,8 @@ function createRoleReadinessProbes(
       });
       if (requiresInternalServiceSecret(options.role)) {
         await recordCheck(checks, failures, "internalServiceSecret", () => {
-          if (!options.runtimeEnv.TAKOS_INTERNAL_SERVICE_SECRET) {
-            throw new Error("TAKOS_INTERNAL_SERVICE_SECRET is required");
+          if (!options.runtimeEnv.TAKOSUMI_INTERNAL_SERVICE_SECRET) {
+            throw new Error("TAKOSUMI_INTERNAL_SERVICE_SECRET is required");
           }
           return "configured";
         });

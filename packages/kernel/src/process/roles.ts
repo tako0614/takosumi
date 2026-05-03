@@ -1,7 +1,7 @@
 /**
  * Takosumi process roles.
  *
- * These roles are deployment/runtime entrypoints for the same takos-paas
+ * These roles are deployment/runtime entrypoints for the same takosumi
  * product root. They are not semantic microservice boundaries.
  */
 export const PAAS_PROCESS_ROLES = [

@@ -31,12 +31,12 @@ export async function loadKernelPluginsFromEnv(
   } = {},
 ): Promise<readonly TakosPaaSKernelPlugin[]> {
   const trustedPlugins = await loadTrustedKernelPluginsFromEnv(env, options);
-  const raw = env.TAKOS_KERNEL_PLUGIN_MODULES ??
-    env.TAKOS_PAAS_PLUGIN_MODULES;
+  const raw = env.TAKOSUMI_KERNEL_PLUGIN_MODULES ??
+    env.TAKOSUMI_PAAS_PLUGIN_MODULES;
   if (!raw) return trustedPlugins;
   if (!dynamicPluginModuleLoadingEnabled(env)) return trustedPlugins;
   const environment = normalizeEnvironment(
-    env.TAKOS_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
+    env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
   );
   if (environment === "production" || environment === "staging") {
     throw new Error(
@@ -55,25 +55,25 @@ async function loadTrustedKernelPluginsFromEnv(
     readonly availableTrustedPlugins?: readonly TakosPaaSKernelPlugin[];
   },
 ): Promise<readonly TakosPaaSKernelPlugin[]> {
-  const rawManifests = env.TAKOS_TRUSTED_KERNEL_PLUGIN_MANIFESTS ??
-    env.TAKOS_KERNEL_PLUGIN_REGISTRY_MANIFESTS;
+  const rawManifests = env.TAKOSUMI_TRUSTED_KERNEL_PLUGIN_MANIFESTS ??
+    env.TAKOSUMI_KERNEL_PLUGIN_REGISTRY_MANIFESTS;
   if (!rawManifests) return Object.freeze([]);
   const environment = normalizeEnvironment(
-    env.TAKOS_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
+    env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
   );
   return await installTrustedKernelPlugins({
     envelopes: parseJsonEnv<readonly TrustedKernelPluginManifestEnvelope[]>(
       rawManifests,
-      "TAKOS_TRUSTED_KERNEL_PLUGIN_MANIFESTS",
+      "TAKOSUMI_TRUSTED_KERNEL_PLUGIN_MANIFESTS",
     ),
     availablePlugins: options.availableTrustedPlugins ?? [],
     trustedKeys: parseJsonEnv<readonly TrustedKernelPluginPublisherKey[]>(
-      env.TAKOS_KERNEL_PLUGIN_TRUST_KEYS,
-      "TAKOS_KERNEL_PLUGIN_TRUST_KEYS",
+      env.TAKOSUMI_KERNEL_PLUGIN_TRUST_KEYS,
+      "TAKOSUMI_KERNEL_PLUGIN_TRUST_KEYS",
     ),
     policy: parseJsonEnv<TrustedKernelPluginInstallPolicy>(
-      env.TAKOS_KERNEL_PLUGIN_INSTALL_POLICY,
-      "TAKOS_KERNEL_PLUGIN_INSTALL_POLICY",
+      env.TAKOSUMI_KERNEL_PLUGIN_INSTALL_POLICY,
+      "TAKOSUMI_KERNEL_PLUGIN_INSTALL_POLICY",
     ),
     environment,
   });
@@ -89,8 +89,8 @@ function parseJsonEnv<T>(value: string | undefined, key: string): T {
 function dynamicPluginModuleLoadingEnabled(
   env: Record<string, string | undefined>,
 ): boolean {
-  return parseBoolean(env.TAKOS_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES) ||
-    parseBoolean(env.TAKOS_ENABLE_REFERENCE_KERNEL_PLUGIN_LOADER);
+  return parseBoolean(env.TAKOSUMI_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES) ||
+    parseBoolean(env.TAKOSUMI_ENABLE_REFERENCE_KERNEL_PLUGIN_LOADER);
 }
 
 function parseBoolean(value: string | undefined): boolean {

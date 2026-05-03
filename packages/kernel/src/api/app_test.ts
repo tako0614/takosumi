@@ -7,9 +7,9 @@ import {
 import { signTakosumiInternalRequest } from "takosumi-contract/internal-rpc";
 import {
   type DeploymentService,
-  TAKOS_PAAS_PUBLIC_PATHS,
+  TAKOSUMI_PAAS_PUBLIC_PATHS,
 } from "./public_routes.ts";
-import { TAKOS_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
+import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { createApiApp } from "./app.ts";
 import {
   createCoreDomainServices,
@@ -32,7 +32,7 @@ Deno.test("createApiApp exposes base capabilities without public routes by defau
   assert.equal(body.service, "takosumi");
 
   const publicCapabilities = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.capabilities,
+    TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities,
   );
   assert.equal(publicCapabilities.status, 404);
 });
@@ -44,7 +44,7 @@ Deno.test("createApiApp mounts readiness routes and reports them in route invent
     registerOpenApiRoute: true,
   });
 
-  const ready = await app.request(TAKOS_PAAS_READINESS_PATHS.ready);
+  const ready = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.ready);
   assert.equal(ready.status, 200);
   assert.equal((await ready.json()).ok, true);
 
@@ -55,13 +55,13 @@ Deno.test("createApiApp mounts readiness routes and reports them in route invent
       endpoint: { path: string; method: string },
     ) =>
       endpoint.method === "GET" &&
-      endpoint.path === TAKOS_PAAS_READINESS_PATHS.ready
+      endpoint.path === TAKOSUMI_PAAS_READINESS_PATHS.ready
     ),
   );
 
   const openapi = await app.request("/openapi.json");
   const openapiBody = await openapi.json();
-  assert.ok(openapiBody.paths[TAKOS_PAAS_READINESS_PATHS.ready]?.get);
+  assert.ok(openapiBody.paths[TAKOSUMI_PAAS_READINESS_PATHS.ready]?.get);
 });
 
 Deno.test("createApiApp optionally mounts public routes with standalone defaults", async () => {
@@ -70,12 +70,14 @@ Deno.test("createApiApp optionally mounts public routes with standalone defaults
     registerPublicRoutes: true,
   });
 
-  const capabilities = await app.request(TAKOS_PAAS_PUBLIC_PATHS.capabilities);
+  const capabilities = await app.request(
+    TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities,
+  );
   assert.equal(capabilities.status, 200);
   const capabilitiesBody = await capabilities.json();
   assert.equal(capabilitiesBody.capabilities.audience, "public-api");
 
-  const createSpace = await app.request(TAKOS_PAAS_PUBLIC_PATHS.spaces, {
+  const createSpace = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.spaces, {
     method: "POST",
     body: JSON.stringify({ slug: "space_dev", name: "Standalone Dev" }),
   });
@@ -83,7 +85,7 @@ Deno.test("createApiApp optionally mounts public routes with standalone defaults
   const createSpaceBody = await createSpace.json();
   assert.equal(createSpaceBody.space.id, "space_dev");
 
-  const listSpaces = await app.request(TAKOS_PAAS_PUBLIC_PATHS.spaces);
+  const listSpaces = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.spaces);
   assert.equal(listSpaces.status, 200);
   const listSpacesBody = await listSpaces.json();
   assert.ok(
@@ -110,14 +112,14 @@ Deno.test("createApiApp standalone public approve persists Deployment.approval",
     },
   };
 
-  const resolve = await app.request(TAKOS_PAAS_PUBLIC_PATHS.deployments, {
+  const resolve = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.deployments, {
     method: "POST",
     body: JSON.stringify({ mode: "resolve", manifest }),
   });
   assert.equal(resolve.status, 201);
   const resolvedBody = await resolve.json();
 
-  const approvePath = TAKOS_PAAS_PUBLIC_PATHS.deploymentApprove.replace(
+  const approvePath = TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove.replace(
     ":deploymentId",
     resolvedBody.deployment_id,
   );
@@ -128,7 +130,7 @@ Deno.test("createApiApp standalone public approve persists Deployment.approval",
   assert.equal(approve.status, 200);
 
   const get = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.deployment.replace(
+    TAKOSUMI_PAAS_PUBLIC_PATHS.deployment.replace(
       ":deploymentId",
       resolvedBody.deployment_id,
     ),
@@ -480,7 +482,7 @@ Deno.test("API routes return common envelopes for malformed JSON", async () => {
     serviceId: "svc_internal",
   };
 
-  const publicResponse = await app.request(TAKOS_PAAS_PUBLIC_PATHS.spaces, {
+  const publicResponse = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.spaces, {
     method: "POST",
     body: malformedBody,
   });
@@ -602,7 +604,7 @@ Deno.test("API routes return common envelopes for uncaught public and internal e
     },
   });
 
-  const publicResponse = await app.request(TAKOS_PAAS_PUBLIC_PATHS.spaces);
+  const publicResponse = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.spaces);
   assert.equal(publicResponse.status, 500);
   assert.deepEqual(await publicResponse.json(), {
     error: {

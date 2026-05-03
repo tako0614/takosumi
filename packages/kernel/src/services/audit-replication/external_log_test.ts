@@ -218,14 +218,14 @@ Deno.test("selectAuditExternalReplicationSink fails closed in production without
   assert.throws(
     () =>
       selectAuditExternalReplicationSink({
-        env: { TAKOS_ENVIRONMENT: "production" },
+        env: { TAKOSUMI_ENVIRONMENT: "production" },
       }),
     AuditReplicationConfigurationError,
   );
   assert.throws(
     () =>
       selectAuditExternalReplicationSink({
-        env: { TAKOS_ENVIRONMENT: "staging" },
+        env: { TAKOSUMI_ENVIRONMENT: "staging" },
       }),
     AuditReplicationConfigurationError,
   );
@@ -233,7 +233,7 @@ Deno.test("selectAuditExternalReplicationSink fails closed in production without
 
 Deno.test("selectAuditExternalReplicationSink returns undefined locally without config", () => {
   const sink = selectAuditExternalReplicationSink({
-    env: { TAKOS_ENVIRONMENT: "local" },
+    env: { TAKOSUMI_ENVIRONMENT: "local" },
   });
   assert.equal(sink, undefined);
 });
@@ -241,8 +241,8 @@ Deno.test("selectAuditExternalReplicationSink returns undefined locally without 
 Deno.test("selectAuditExternalReplicationSink builds stdout sink from env", () => {
   const sink = selectAuditExternalReplicationSink({
     env: {
-      TAKOS_ENVIRONMENT: "production",
-      TAKOS_AUDIT_REPLICATION_KIND: "stdout",
+      TAKOSUMI_ENVIRONMENT: "production",
+      TAKOSUMI_AUDIT_REPLICATION_KIND: "stdout",
     },
   });
   assert.ok(sink instanceof StdoutReplicationSink);
@@ -252,12 +252,12 @@ Deno.test("selectAuditExternalReplicationSink builds s3 sink with bucket + port"
   const port = new FakeS3Port();
   const sink = selectAuditExternalReplicationSink({
     env: {
-      TAKOS_ENVIRONMENT: "production",
-      TAKOS_AUDIT_REPLICATION_KIND: "s3",
-      TAKOS_AUDIT_REPLICATION_S3_BUCKET: "audit-bucket",
-      TAKOS_AUDIT_REPLICATION_S3_PREFIX: "chain",
-      TAKOS_AUDIT_REPLICATION_S3_RETENTION_MODE: "compliance",
-      TAKOS_AUDIT_REPLICATION_S3_RETENTION_DAYS: "365",
+      TAKOSUMI_ENVIRONMENT: "production",
+      TAKOSUMI_AUDIT_REPLICATION_KIND: "s3",
+      TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET: "audit-bucket",
+      TAKOSUMI_AUDIT_REPLICATION_S3_PREFIX: "chain",
+      TAKOSUMI_AUDIT_REPLICATION_S3_RETENTION_MODE: "compliance",
+      TAKOSUMI_AUDIT_REPLICATION_S3_RETENTION_DAYS: "365",
     },
     s3Port: port,
   });
@@ -269,8 +269,8 @@ Deno.test("selectAuditExternalReplicationSink rejects s3 without bucket or port"
     () =>
       selectAuditExternalReplicationSink({
         env: {
-          TAKOS_ENVIRONMENT: "production",
-          TAKOS_AUDIT_REPLICATION_KIND: "s3",
+          TAKOSUMI_ENVIRONMENT: "production",
+          TAKOSUMI_AUDIT_REPLICATION_KIND: "s3",
         },
       }),
     AuditReplicationConfigurationError,
@@ -279,9 +279,9 @@ Deno.test("selectAuditExternalReplicationSink rejects s3 without bucket or port"
     () =>
       selectAuditExternalReplicationSink({
         env: {
-          TAKOS_ENVIRONMENT: "production",
-          TAKOS_AUDIT_REPLICATION_KIND: "s3",
-          TAKOS_AUDIT_REPLICATION_S3_BUCKET: "audit-bucket",
+          TAKOSUMI_ENVIRONMENT: "production",
+          TAKOSUMI_AUDIT_REPLICATION_KIND: "s3",
+          TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET: "audit-bucket",
         },
       }),
     AuditReplicationConfigurationError,

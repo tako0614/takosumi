@@ -123,7 +123,7 @@ Deno.test("resolveAuditRetention defaults to 365d when no env supplied", () => {
 
 Deno.test("resolveAuditRetention applies regulated 7y band for HIPAA", () => {
   const resolved = resolveAuditRetention({
-    env: { TAKOS_AUDIT_RETENTION_REGIME: "hipaa" },
+    env: { TAKOSUMI_AUDIT_RETENTION_REGIME: "hipaa" },
   });
   assert.equal(resolved.regime, "hipaa");
   assert.equal(resolved.retentionDays, 2555);
@@ -132,10 +132,10 @@ Deno.test("resolveAuditRetention applies regulated 7y band for HIPAA", () => {
 Deno.test("resolveAuditRetention honors explicit override env", () => {
   const resolved = resolveAuditRetention({
     env: {
-      TAKOS_AUDIT_RETENTION_REGIME: "sox",
-      TAKOS_AUDIT_RETENTION_DAYS: "180",
-      TAKOS_AUDIT_DELETE_AFTER_ARCHIVE: "true",
-      TAKOS_AUDIT_ARCHIVE_GRACE_DAYS: "45",
+      TAKOSUMI_AUDIT_RETENTION_REGIME: "sox",
+      TAKOSUMI_AUDIT_RETENTION_DAYS: "180",
+      TAKOSUMI_AUDIT_DELETE_AFTER_ARCHIVE: "true",
+      TAKOSUMI_AUDIT_ARCHIVE_GRACE_DAYS: "45",
     },
   });
   assert.equal(resolved.regime, "sox");
@@ -146,7 +146,7 @@ Deno.test("resolveAuditRetention honors explicit override env", () => {
 
 Deno.test("resolveAuditRetention falls back to default for unknown regime", () => {
   const resolved = resolveAuditRetention({
-    env: { TAKOS_AUDIT_RETENTION_REGIME: "made-up" },
+    env: { TAKOSUMI_AUDIT_RETENTION_REGIME: "made-up" },
   });
   assert.equal(resolved.regime, "default");
   assert.equal(resolved.retentionDays, 365);
@@ -155,8 +155,8 @@ Deno.test("resolveAuditRetention falls back to default for unknown regime", () =
 Deno.test("resolveAuditRetention rejects non-positive override and falls back to band", () => {
   const resolved = resolveAuditRetention({
     env: {
-      TAKOS_AUDIT_RETENTION_REGIME: "regulated",
-      TAKOS_AUDIT_RETENTION_DAYS: "-1",
+      TAKOSUMI_AUDIT_RETENTION_REGIME: "regulated",
+      TAKOSUMI_AUDIT_RETENTION_DAYS: "-1",
     },
   });
   assert.equal(resolved.retentionDays, 2555);

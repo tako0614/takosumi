@@ -10,8 +10,8 @@ COPY packages/paas-contract packages/paas-contract
 COPY apps/paas apps/paas
 
 RUN test -f apps/paas/src/domains/deploy/descriptors/contracts/runtime-oci-container-v1.jsonld \
-  && mkdir -p /workspace/apps/paas/docs/takos-paas/descriptors \
-  && cp -R apps/paas/src/domains/deploy/descriptors/. /workspace/apps/paas/docs/takos-paas/descriptors/
+  && mkdir -p /workspace/apps/paas/docs/takosumi/descriptors \
+  && cp -R apps/paas/src/domains/deploy/descriptors/. /workspace/apps/paas/docs/takosumi/descriptors/
 
 RUN deno cache --config apps/paas/deno.json apps/paas/src/index.ts
 

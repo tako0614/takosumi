@@ -25,7 +25,7 @@ import {
 import {
   registerRuntimeAgentRoutes,
   type RuntimeAgentAuthResult,
-  TAKOS_PAAS_RUNTIME_AGENT_PATHS,
+  TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS,
 } from "./runtime_agent_routes.ts";
 
 Deno.test("runtime agent routes enroll, heartbeat, lease, complete, and drain", async () => {
@@ -42,7 +42,7 @@ Deno.test("runtime agent routes enroll, heartbeat, lease, complete, and drain", 
   });
   const app = createApp(registry);
 
-  const enroll = await app.request(TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const enroll = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     body: JSON.stringify({
       agentId: "agent_1",
@@ -137,7 +137,7 @@ Deno.test("runtime agent routes return auth and registry errors", async () => {
     error: "forbidden",
   }));
   const deniedResponse = await denied.request(
-    TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll,
+    TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
     {
       method: "POST",
       body: JSON.stringify({ provider: "local" }),
@@ -153,7 +153,7 @@ Deno.test("runtime agent routes return auth and registry errors", async () => {
 
   const app = createApp(new InMemoryRuntimeAgentRegistry());
   const invalidEnroll = await app.request(
-    TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll,
+    TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
     {
       method: "POST",
       body: JSON.stringify({}),
@@ -181,7 +181,7 @@ Deno.test("runtime agent routes fail closed without signed auth or explicit auth
     registry: new InMemoryRuntimeAgentRegistry(),
   });
 
-  const response = await app.request(TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     body: JSON.stringify({ provider: "local" }),
   });
@@ -322,7 +322,7 @@ Deno.test("runtime agent routes reject reports with unknown status", async () =>
 
 Deno.test("runtime agent routes return renewAfterMs on enroll", async () => {
   const app = createApp(new InMemoryRuntimeAgentRegistry());
-  const response = await app.request(TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     body: JSON.stringify({ provider: "aws" }),
   });
@@ -340,7 +340,7 @@ Deno.test("runtime agent routes return common envelope for uncaught errors", asy
   }
   const app = createApp(new ThrowingRegistry());
 
-  const response = await app.request(TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     body: JSON.stringify({ provider: "local" }),
   });
@@ -455,12 +455,12 @@ Deno.test("runtime agent routes require signed workload identity service grants 
     groupId: "runtime",
   });
 
-  const response = await app.request(TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     headers: await signedHeaders({
       secret,
       method: "POST",
-      path: TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll,
+      path: TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
       body,
       actor: {
         actorAccountId: "acct_runtime",
@@ -514,7 +514,7 @@ function agentPath(
   kind: "heartbeat" | "lease" | "report" | "drain",
   agentId: string,
 ): string {
-  return TAKOS_PAAS_RUNTIME_AGENT_PATHS[kind].replace(":agentId", agentId);
+  return TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS[kind].replace(":agentId", agentId);
 }
 
 function sequence(...values: string[]): () => string {

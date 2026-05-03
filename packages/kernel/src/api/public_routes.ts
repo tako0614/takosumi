@@ -10,7 +10,7 @@ import type {
 import { findNonCatalogConditionReasons } from "./condition_reasons.ts";
 import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
 
-export const TAKOS_PAAS_PUBLIC_PATHS = {
+export const TAKOSUMI_PAAS_PUBLIC_PATHS = {
   capabilities: "/api/public/v1/capabilities",
   spaces: "/api/public/v1/spaces",
   groups: "/api/public/v1/groups",
@@ -25,7 +25,7 @@ export const TAKOS_PAAS_PUBLIC_PATHS = {
 } as const;
 
 export type TakosPaaSPublicPath =
-  (typeof TAKOS_PAAS_PUBLIC_PATHS)[keyof typeof TAKOS_PAAS_PUBLIC_PATHS];
+  (typeof TAKOSUMI_PAAS_PUBLIC_PATHS)[keyof typeof TAKOSUMI_PAAS_PUBLIC_PATHS];
 
 export type DeploymentMode = "preview" | "resolve" | "apply" | "rollback";
 
@@ -188,7 +188,7 @@ export function registerPublicRoutes(
   registerApiErrorHandler(app);
   const { services } = options;
 
-  app.get(TAKOS_PAAS_PUBLIC_PATHS.capabilities, async (c) => {
+  app.get(TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     if (services.capabilities) {
@@ -200,14 +200,14 @@ export function registerPublicRoutes(
     return c.json({ capabilities: createPublicCapabilitiesReference() });
   });
 
-  app.get(TAKOS_PAAS_PUBLIC_PATHS.spaces, async (c) => {
+  app.get(TAKOSUMI_PAAS_PUBLIC_PATHS.spaces, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const spaces = await services.spaces.list({ actor: auth.actor });
     return c.json({ spaces });
   });
 
-  app.post(TAKOS_PAAS_PUBLIC_PATHS.spaces, async (c) => {
+  app.post(TAKOSUMI_PAAS_PUBLIC_PATHS.spaces, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const request = await readJsonObject(c.req.raw);
@@ -227,7 +227,7 @@ export function registerPublicRoutes(
     return c.json({ space }, 201);
   });
 
-  app.get(TAKOS_PAAS_PUBLIC_PATHS.groups, async (c) => {
+  app.get(TAKOSUMI_PAAS_PUBLIC_PATHS.groups, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const requestedSpaceId = querySpaceId(c);
@@ -245,7 +245,7 @@ export function registerPublicRoutes(
     return c.json({ groups });
   });
 
-  app.post(TAKOS_PAAS_PUBLIC_PATHS.groups, async (c) => {
+  app.post(TAKOSUMI_PAAS_PUBLIC_PATHS.groups, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const request = await readJsonObject(c.req.raw);
@@ -266,7 +266,7 @@ export function registerPublicRoutes(
     return c.json({ group }, 201);
   });
 
-  app.post(TAKOS_PAAS_PUBLIC_PATHS.deployments, async (c) => {
+  app.post(TAKOSUMI_PAAS_PUBLIC_PATHS.deployments, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const request = await readJsonObject(c.req.raw);
@@ -339,7 +339,7 @@ export function registerPublicRoutes(
     return c.json(toMutationResponse(result), 201);
   });
 
-  app.get(TAKOS_PAAS_PUBLIC_PATHS.deployments, async (c) => {
+  app.get(TAKOSUMI_PAAS_PUBLIC_PATHS.deployments, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const status = c.req.query("status");
@@ -360,7 +360,7 @@ export function registerPublicRoutes(
     return c.json({ deployments });
   });
 
-  app.get(TAKOS_PAAS_PUBLIC_PATHS.deployment, async (c) => {
+  app.get(TAKOSUMI_PAAS_PUBLIC_PATHS.deployment, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const requestedSpaceId = querySpaceId(c);
@@ -384,7 +384,7 @@ export function registerPublicRoutes(
     return c.json({ deployment });
   });
 
-  app.post(TAKOS_PAAS_PUBLIC_PATHS.deploymentApply, async (c) => {
+  app.post(TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const requestedSpaceId = querySpaceId(c);
@@ -412,7 +412,7 @@ export function registerPublicRoutes(
     return c.json(toMutationResponse(result), 201);
   });
 
-  app.post(TAKOS_PAAS_PUBLIC_PATHS.deploymentApprove, async (c) => {
+  app.post(TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const request = await readJsonObject(c.req.raw);
@@ -443,7 +443,7 @@ export function registerPublicRoutes(
     return c.json(toMutationResponse(result));
   });
 
-  app.get(TAKOS_PAAS_PUBLIC_PATHS.deploymentObservations, async (c) => {
+  app.get(TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const requestedSpaceId = querySpaceId(c);
@@ -470,7 +470,7 @@ export function registerPublicRoutes(
     return c.json({ observations });
   });
 
-  app.get(TAKOS_PAAS_PUBLIC_PATHS.groupHead, async (c) => {
+  app.get(TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const requestedSpaceId = querySpaceId(c) ?? auth.actor.spaceId;
@@ -494,7 +494,7 @@ export function registerPublicRoutes(
     return c.json({ head });
   });
 
-  app.post(TAKOS_PAAS_PUBLIC_PATHS.groupRollback, async (c) => {
+  app.post(TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback, async (c) => {
     const auth = await services.authenticate(c.req.raw);
     if (!auth.ok) return publicAuthError(c, auth);
     const request = await readJsonObject(c.req.raw).catch(() =>
@@ -597,68 +597,68 @@ export function createPublicCapabilitiesReference(): PublicCapabilitiesReference
     endpoints: [
       {
         method: "GET",
-        path: TAKOS_PAAS_PUBLIC_PATHS.capabilities,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities,
         summary: "Returns public API route capabilities.",
       },
       {
         method: "GET",
-        path: TAKOS_PAAS_PUBLIC_PATHS.spaces,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.spaces,
         summary: "Lists spaces visible to the authenticated actor.",
       },
       {
         method: "POST",
-        path: TAKOS_PAAS_PUBLIC_PATHS.spaces,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.spaces,
         summary: "Creates a space for the authenticated actor.",
       },
       {
         method: "GET",
-        path: TAKOS_PAAS_PUBLIC_PATHS.groups,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.groups,
         summary: "Lists groups for a space visible to the authenticated actor.",
       },
       {
         method: "POST",
-        path: TAKOS_PAAS_PUBLIC_PATHS.groups,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.groups,
         summary: "Creates a group in a space.",
       },
       {
         method: "POST",
-        path: TAKOS_PAAS_PUBLIC_PATHS.deployments,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
         summary:
           "Creates a Deployment with mode=preview|resolve|apply|rollback.",
       },
       {
         method: "GET",
-        path: TAKOS_PAAS_PUBLIC_PATHS.deployments,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
         summary: "Lists Deployments for a group / status filter.",
       },
       {
         method: "GET",
-        path: TAKOS_PAAS_PUBLIC_PATHS.deployment,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.deployment,
         summary: "Returns a Deployment by id.",
       },
       {
         method: "POST",
-        path: TAKOS_PAAS_PUBLIC_PATHS.deploymentApply,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply,
         summary: "Applies a resolved Deployment.",
       },
       {
         method: "POST",
-        path: TAKOS_PAAS_PUBLIC_PATHS.deploymentApprove,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove,
         summary: "Attaches an approval to a Deployment.",
       },
       {
         method: "GET",
-        path: TAKOS_PAAS_PUBLIC_PATHS.deploymentObservations,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations,
         summary: "Streams provider observations for a Deployment.",
       },
       {
         method: "GET",
-        path: TAKOS_PAAS_PUBLIC_PATHS.groupHead,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead,
         summary: "Returns the GroupHead pointer for a group.",
       },
       {
         method: "POST",
-        path: TAKOS_PAAS_PUBLIC_PATHS.groupRollback,
+        path: TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback,
         summary: "Rolls a GroupHead back to its previous Deployment.",
       },
     ],

@@ -56,8 +56,8 @@ import {
   verifyGatewayResponseSignature,
 } from "takosumi-contract";
 
-const TAKOS_RUNTIME_AGENT_CALLER = "takos-runtime-agent";
-const TAKOS_PAAS_AUDIENCE = "takos-paas";
+const TAKOSUMI_RUNTIME_AGENT_CALLER = "takos-runtime-agent";
+const TAKOSUMI_PAAS_AUDIENCE = "takosumi";
 
 export interface RuntimeAgentHttpClientOptions {
   readonly baseUrl: string;
@@ -187,8 +187,8 @@ export class RuntimeAgentHttpClient {
       timestamp,
       actor: this.#actor,
       secret: this.#secret,
-      caller: TAKOS_RUNTIME_AGENT_CALLER,
-      audience: TAKOS_PAAS_AUDIENCE,
+      caller: TAKOSUMI_RUNTIME_AGENT_CALLER,
+      audience: TAKOSUMI_PAAS_AUDIENCE,
     });
     const response = await this.#fetch(url, {
       method: "POST",
@@ -304,8 +304,8 @@ export class RuntimeAgentHttpClient {
       timestamp,
       actor: this.#actor,
       secret: this.#secret,
-      caller: TAKOS_RUNTIME_AGENT_CALLER,
-      audience: TAKOS_PAAS_AUDIENCE,
+      caller: TAKOSUMI_RUNTIME_AGENT_CALLER,
+      audience: TAKOSUMI_PAAS_AUDIENCE,
     });
     const url = `${this.#baseUrl}${path}`;
     const response = await this.#fetch(url, {

@@ -70,8 +70,8 @@ Deno.test("createConfiguredAppContext wires selected reference plugin adapters f
   const context = await createConfiguredAppContext({
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOS_PROVIDER_PLUGIN: "takos.kernel.reference",
-      TAKOS_SOURCE_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_PROVIDER_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_SOURCE_PLUGIN: "takos.kernel.reference",
     },
   });
 
@@ -85,11 +85,11 @@ Deno.test("createConfiguredAppContext wires selected kernel plugin adapters", as
     plugins: [createReferenceKernelPlugin()],
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOS_STORAGE_PLUGIN: "takos.kernel.reference",
-      TAKOS_PROVIDER_PLUGIN: "takos.kernel.reference",
-      TAKOS_SOURCE_PLUGIN: "takos.kernel.reference",
-      TAKOS_KMS_PLUGIN: "takos.kernel.reference",
-      TAKOS_SECRET_STORE_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_STORAGE_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_PROVIDER_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_SOURCE_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_KMS_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_SECRET_STORE_PLUGIN: "takos.kernel.reference",
     },
   });
 
@@ -103,8 +103,8 @@ Deno.test("createConfiguredAppContext uses selected storage plugin for canonical
     plugins: [createReferenceKernelPlugin()],
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOS_STORAGE_PLUGIN: "takos.kernel.reference",
-      TAKOS_PROVIDER_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_STORAGE_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_PROVIDER_PLUGIN: "takos.kernel.reference",
     },
   });
 
@@ -128,8 +128,8 @@ Deno.test("createConfiguredAppContext storage deploy store exposes only implemen
     plugins: [createReferenceKernelPlugin()],
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOS_STORAGE_PLUGIN: "takos.kernel.reference",
-      TAKOS_PROVIDER_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_STORAGE_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_PROVIDER_PLUGIN: "takos.kernel.reference",
     },
   });
 
@@ -146,8 +146,8 @@ Deno.test("createConfiguredAppContext storage plugin backs runtime usage and ser
     plugins: [createReferenceKernelPlugin()],
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOS_STORAGE_PLUGIN: "takos.kernel.reference",
-      TAKOS_PROVIDER_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_STORAGE_PLUGIN: "takos.kernel.reference",
+      TAKOSUMI_PROVIDER_PLUGIN: "takos.kernel.reference",
     },
   });
 
@@ -219,7 +219,7 @@ Deno.test("createConfiguredAppContext rejects missing selected kernel plugin", a
     () =>
       createConfiguredAppContext({
         runtimeEnv: {
-          TAKOS_PROVIDER_PLUGIN: "takos.provider.missing",
+          TAKOSUMI_PROVIDER_PLUGIN: "takos.provider.missing",
         },
       }),
     /kernel plugin is not registered: takos.provider.missing/,
@@ -328,9 +328,9 @@ Deno.test("createConfiguredAppContext wires explicitly injected external plugin"
     plugins: [plugin],
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOS_PROVIDER_PLUGIN: plugin.manifest.id,
-      TAKOS_STORAGE_PLUGIN: plugin.manifest.id,
-      TAKOS_OBJECT_STORAGE_PLUGIN: plugin.manifest.id,
+      TAKOSUMI_PROVIDER_PLUGIN: plugin.manifest.id,
+      TAKOSUMI_STORAGE_PLUGIN: plugin.manifest.id,
+      TAKOSUMI_OBJECT_STORAGE_PLUGIN: plugin.manifest.id,
     },
   });
 
@@ -346,8 +346,8 @@ Deno.test("createConfiguredAppContext allows production external plugin selectio
   const context = await createConfiguredAppContext({
     plugins: [trusted],
     runtimeEnv: {
-      TAKOS_ENVIRONMENT: "production",
-      TAKOS_KERNEL_PLUGIN_SELECTIONS: JSON.stringify(
+      TAKOSUMI_ENVIRONMENT: "production",
+      TAKOSUMI_KERNEL_PLUGIN_SELECTIONS: JSON.stringify(
         Object.fromEntries(
           productionRequiredPorts.map((port) => [port, trusted.manifest.id]),
         ),
@@ -374,7 +374,7 @@ Deno.test("createConfiguredAppContext does not auto-register official cloud plug
     () =>
       createConfiguredAppContext({
         runtimeEnv: {
-          TAKOS_PROVIDER_PLUGIN: "operator.takosumi.cloudflare",
+          TAKOSUMI_PROVIDER_PLUGIN: "operator.takosumi.cloudflare",
         },
       }),
     /kernel plugin is not registered: operator\.takosumi\.cloudflare/,

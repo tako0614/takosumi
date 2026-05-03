@@ -1,6 +1,6 @@
 {
-  "@context": "https://takos.dev/contexts/deploy.jsonld",
-  "@id": "https://takos.dev/providers/gcp/url-map/v1",
+  "@context": "https://takosumi.com/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/providers/gcp/url-map/v1",
   "@type": "ProviderCapabilityDescriptor",
   "shortRef": "provider.gcp.url-map@v1",
   "materializationProfiles": [

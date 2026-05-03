@@ -82,7 +82,7 @@ Deno.test("registry resolves resource contract packages through PackageResolutio
     version: "1.0.0",
     body: {
       shortRef: "resource.sql.postgres@v1",
-      contract: "https://takos.dev/contracts/resource/sql/postgres/v1",
+      contract: "https://takosumi.com/contracts/resource/sql/postgres/v1",
     },
     publishedAt: "2026-04-27T00:00:00.000Z",
   };

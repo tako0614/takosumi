@@ -13,7 +13,7 @@ import {
   type DeploymentService,
   type PublicRouteServices,
   registerPublicRoutes,
-  TAKOS_PAAS_PUBLIC_PATHS,
+  TAKOSUMI_PAAS_PUBLIC_PATHS,
 } from "./public_routes.ts";
 
 Deno.test("public routes list and create spaces through injected services", async () => {
@@ -36,13 +36,13 @@ Deno.test("public routes list and create spaces through injected services", asyn
     },
   });
 
-  const list = await app.request(TAKOS_PAAS_PUBLIC_PATHS.spaces);
+  const list = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.spaces);
   assert.equal(list.status, 200);
   assert.deepEqual(await list.json(), {
     spaces: [{ id: "space_1", name: "Demo" }],
   });
 
-  const create = await app.request(TAKOS_PAAS_PUBLIC_PATHS.spaces, {
+  const create = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.spaces, {
     method: "POST",
     body: JSON.stringify({
       name: "Created",
@@ -86,14 +86,14 @@ Deno.test("public routes list and create groups with space fallback", async () =
   });
 
   const list = await app.request(
-    `${TAKOS_PAAS_PUBLIC_PATHS.groups}?spaceId=space_public`,
+    `${TAKOSUMI_PAAS_PUBLIC_PATHS.groups}?spaceId=space_public`,
   );
   assert.equal(list.status, 200);
   assert.deepEqual(await list.json(), {
     groups: [{ id: "group_1", spaceId: "space_public", name: "Prod" }],
   });
 
-  const create = await app.request(TAKOS_PAAS_PUBLIC_PATHS.groups, {
+  const create = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.groups, {
     method: "POST",
     body: JSON.stringify({ name: "Preview", envName: "preview" }),
   });
@@ -116,7 +116,7 @@ Deno.test("public routes reject group requests outside the actor space", async (
   const app = createApp();
 
   const list = await app.request(
-    `${TAKOS_PAAS_PUBLIC_PATHS.groups}?spaceId=space_other`,
+    `${TAKOSUMI_PAAS_PUBLIC_PATHS.groups}?spaceId=space_other`,
   );
   assert.equal(list.status, 403);
   assert.deepEqual(await list.json(), {
@@ -126,7 +126,7 @@ Deno.test("public routes reject group requests outside the actor space", async (
     },
   });
 
-  const create = await app.request(TAKOS_PAAS_PUBLIC_PATHS.groups, {
+  const create = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.groups, {
     method: "POST",
     body: JSON.stringify({ spaceId: "space_other", name: "Other" }),
   });
@@ -155,7 +155,7 @@ Deno.test("public routes resolve and apply Deployment via mode dispatch", async 
     }),
   });
 
-  const resolve = await app.request(TAKOS_PAAS_PUBLIC_PATHS.deployments, {
+  const resolve = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.deployments, {
     method: "POST",
     body: JSON.stringify({
       mode: "resolve",
@@ -168,7 +168,7 @@ Deno.test("public routes resolve and apply Deployment via mode dispatch", async 
   assert.equal(resolveBody.deployment_id, "dep_resolved");
   assert.equal(resolveBody.status, "resolved");
 
-  const apply = await app.request(TAKOS_PAAS_PUBLIC_PATHS.deployments, {
+  const apply = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.deployments, {
     method: "POST",
     body: JSON.stringify({
       mode: "apply",
@@ -190,7 +190,7 @@ Deno.test("public routes resolve and apply Deployment via mode dispatch", async 
 Deno.test("public deployments reject create requests outside the actor space", async () => {
   const app = createApp();
 
-  const response = await app.request(TAKOS_PAAS_PUBLIC_PATHS.deployments, {
+  const response = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.deployments, {
     method: "POST",
     body: JSON.stringify({
       mode: "resolve",
@@ -221,7 +221,7 @@ Deno.test("public deployments accept preview mode without persistence", async ()
     }),
   });
 
-  const preview = await app.request(TAKOS_PAAS_PUBLIC_PATHS.deployments, {
+  const preview = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.deployments, {
     method: "POST",
     body: JSON.stringify({
       mode: "preview",
@@ -248,7 +248,7 @@ Deno.test("public deployments mode=rollback flips GroupHead", async () => {
     }),
   });
 
-  const rollback = await app.request(TAKOS_PAAS_PUBLIC_PATHS.deployments, {
+  const rollback = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.deployments, {
     method: "POST",
     body: JSON.stringify({
       mode: "rollback",
@@ -280,7 +280,10 @@ Deno.test("public deployment apply / approve endpoints transition status", async
   });
 
   const applyById = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.deploymentApply.replace(":deploymentId", "dep_1"),
+    TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply.replace(
+      ":deploymentId",
+      "dep_1",
+    ),
     { method: "POST" },
   );
   assert.equal(applyById.status, 201);
@@ -289,7 +292,10 @@ Deno.test("public deployment apply / approve endpoints transition status", async
   assert.equal(applyBody.status, "applied");
 
   const approve = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.deploymentApprove.replace(":deploymentId", "dep_1"),
+    TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove.replace(
+      ":deploymentId",
+      "dep_1",
+    ),
     { method: "POST", body: JSON.stringify({ policy_decision_id: "pd_1" }) },
   );
   assert.equal(approve.status, 200);
@@ -320,13 +326,13 @@ Deno.test("public group head and rollback endpoints expose GroupHead semantics",
   });
 
   const headResponse = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.groupHead.replace(":groupId", "demo"),
+    TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead.replace(":groupId", "demo"),
   );
   assert.equal(headResponse.status, 200);
   assert.deepEqual(await headResponse.json(), { head });
 
   const rollback = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.groupRollback.replace(":groupId", "demo"),
+    TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback.replace(":groupId", "demo"),
     { method: "POST", body: JSON.stringify({}) },
   );
   assert.equal(rollback.status, 201);
@@ -357,18 +363,18 @@ Deno.test("public group head and rollback endpoints enforce space boundaries", a
 
   const queryDenied = await app.request(
     `${
-      TAKOS_PAAS_PUBLIC_PATHS.groupHead.replace(":groupId", "demo")
+      TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead.replace(":groupId", "demo")
     }?spaceId=space_other`,
   );
   assert.equal(queryDenied.status, 403);
 
   const hiddenHead = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.groupHead.replace(":groupId", "demo"),
+    TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead.replace(":groupId", "demo"),
   );
   assert.equal(hiddenHead.status, 404);
 
   const rollbackDenied = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.groupRollback.replace(":groupId", "demo"),
+    TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback.replace(":groupId", "demo"),
     { method: "POST", body: JSON.stringify({ space_id: "space_other" }) },
   );
   assert.equal(rollbackDenied.status, 403);
@@ -399,19 +405,19 @@ Deno.test("public deployment list / get / observations endpoints", async () => {
   });
 
   const get = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.deployment.replace(":deploymentId", "dep_1"),
+    TAKOSUMI_PAAS_PUBLIC_PATHS.deployment.replace(":deploymentId", "dep_1"),
   );
   assert.equal(get.status, 200);
   const getBody = await get.json();
   assert.equal(getBody.deployment.id, "dep_1");
 
-  const list = await app.request(TAKOS_PAAS_PUBLIC_PATHS.deployments);
+  const list = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.deployments);
   assert.equal(list.status, 200);
   const listBody = await list.json();
   assert.equal(listBody.deployments.length, 1);
 
   const obs = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.deploymentObservations.replace(
+    TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations.replace(
       ":deploymentId",
       "dep_1",
     ),
@@ -443,12 +449,12 @@ Deno.test("public deployment id endpoints hide cross-space deployments", async (
   });
 
   const get = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.deployment.replace(":deploymentId", "dep_other"),
+    TAKOSUMI_PAAS_PUBLIC_PATHS.deployment.replace(":deploymentId", "dep_other"),
   );
   assert.equal(get.status, 404);
 
   const apply = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.deploymentApply.replace(
+    TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply.replace(
       ":deploymentId",
       "dep_other",
     ),
@@ -457,7 +463,7 @@ Deno.test("public deployment id endpoints hide cross-space deployments", async (
   assert.equal(apply.status, 404);
 
   const approve = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.deploymentApprove.replace(
+    TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove.replace(
       ":deploymentId",
       "dep_other",
     ),
@@ -466,7 +472,7 @@ Deno.test("public deployment id endpoints hide cross-space deployments", async (
   assert.equal(approve.status, 404);
 
   const obs = await app.request(
-    TAKOS_PAAS_PUBLIC_PATHS.deploymentObservations.replace(
+    TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations.replace(
       ":deploymentId",
       "dep_other",
     ),
@@ -497,13 +503,13 @@ Deno.test("public group routes reject non-catalog condition reasons", async () =
     },
   });
 
-  const list = await app.request(TAKOS_PAAS_PUBLIC_PATHS.groups);
+  const list = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.groups);
   assert.equal(list.status, 500);
   assert.deepEqual(await list.json(), {
     error: { code: "internal_error", message: "Internal server error" },
   });
 
-  const create = await app.request(TAKOS_PAAS_PUBLIC_PATHS.groups, {
+  const create = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.groups, {
     method: "POST",
     body: JSON.stringify({ name: "Preview" }),
   });
@@ -518,7 +524,7 @@ Deno.test("public routes expose capabilities reference and auth failures", async
     authenticate: () => ({ ok: false, status: 403, error: "forbidden" }),
   });
 
-  const denied = await app.request(TAKOS_PAAS_PUBLIC_PATHS.capabilities);
+  const denied = await app.request(TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities);
   assert.equal(denied.status, 403);
   assert.deepEqual(await denied.json(), {
     error: {
@@ -528,14 +534,16 @@ Deno.test("public routes expose capabilities reference and auth failures", async
   });
 
   const allowed = createApp();
-  const response = await allowed.request(TAKOS_PAAS_PUBLIC_PATHS.capabilities);
+  const response = await allowed.request(
+    TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities,
+  );
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.capabilities.service, "takosumi");
   assert.equal(body.capabilities.audience, "public-api");
   assert.ok(
     body.capabilities.endpoints.some((endpoint: { path: string }) =>
-      endpoint.path === TAKOS_PAAS_PUBLIC_PATHS.deployments
+      endpoint.path === TAKOSUMI_PAAS_PUBLIC_PATHS.deployments
     ),
   );
 });

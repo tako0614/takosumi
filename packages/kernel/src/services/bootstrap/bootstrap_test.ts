@@ -13,13 +13,13 @@ Deno.test("standalone bootstrap selects explicit local adapters and redacts conf
   const config = new LocalOperatorConfig({
     clock: fixedClock,
     values: {
-      TAKOS_ENVIRONMENT: "local",
-      TAKOS_BOOTSTRAP_AUTH_ADAPTER: "local",
-      TAKOS_BOOTSTRAP_SOURCE_ADAPTER: "manifest",
-      TAKOS_BOOTSTRAP_SECRET_ADAPTER: "memory",
-      TAKOS_BOOTSTRAP_PROVIDER_ADAPTER: "noop",
+      TAKOSUMI_ENVIRONMENT: "local",
+      TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "local",
+      TAKOSUMI_BOOTSTRAP_SOURCE_ADAPTER: "manifest",
+      TAKOSUMI_BOOTSTRAP_SECRET_ADAPTER: "memory",
+      TAKOSUMI_BOOTSTRAP_PROVIDER_ADAPTER: "noop",
       TAKOSUMI_DEV_MODE: "1",
-      TAKOS_INTERNAL_SERVICE_SECRET: "super-secret",
+      TAKOSUMI_INTERNAL_SERVICE_SECRET: "super-secret",
       DATABASE_SECRET_REF: { name: "DATABASE_URL", version: "v1" },
     },
   });
@@ -48,13 +48,13 @@ Deno.test("standalone bootstrap selects explicit local adapters and redacts conf
   assert.ok(report.adapters.provider instanceof NoopProviderMaterializer);
   assert.equal(
     report.config.values.find((value) =>
-      value.key === "TAKOS_INTERNAL_SERVICE_SECRET"
+      value.key === "TAKOSUMI_INTERNAL_SERVICE_SECRET"
     )?.value,
     "[REDACTED]",
   );
   const serviceSecretSnapshotValue = report.operatorConfigSnapshot.values.find((
     value,
-  ) => value.key === "TAKOS_INTERNAL_SERVICE_SECRET");
+  ) => value.key === "TAKOSUMI_INTERNAL_SERVICE_SECRET");
   assert.equal(serviceSecretSnapshotValue?.kind, "plain");
   assert.equal(
     serviceSecretSnapshotValue.kind === "plain"
@@ -64,7 +64,7 @@ Deno.test("standalone bootstrap selects explicit local adapters and redacts conf
   );
   const environmentSnapshotValue = report.operatorConfigSnapshot.values.find((
     value,
-  ) => value.key === "TAKOS_ENVIRONMENT");
+  ) => value.key === "TAKOSUMI_ENVIRONMENT");
   assert.equal(environmentSnapshotValue?.kind, "plain");
   assert.equal(
     environmentSnapshotValue.kind === "plain"
@@ -88,10 +88,10 @@ Deno.test("standalone bootstrap reports unsafe default adapters in production", 
   const config = new EnvOperatorConfig({
     clock: fixedClock,
     env: {
-      TAKOS_ENVIRONMENT: "production",
-      TAKOS_INTERNAL_SERVICE_SECRET: "replace-me",
+      TAKOSUMI_ENVIRONMENT: "production",
+      TAKOSUMI_INTERNAL_SERVICE_SECRET: "replace-me",
     },
-    include: ["TAKOS_ENVIRONMENT", "TAKOS_INTERNAL_SERVICE_SECRET"],
+    include: ["TAKOSUMI_ENVIRONMENT", "TAKOSUMI_INTERNAL_SERVICE_SECRET"],
   });
 
   const report = await new StandaloneBootstrapService({
@@ -114,7 +114,7 @@ Deno.test("standalone bootstrap reports unsafe default adapters in production", 
   assert.ok(
     report.errors.some((error) =>
       error.code === "unsafe_secret_value" &&
-      error.key === "TAKOS_INTERNAL_SERVICE_SECRET"
+      error.key === "TAKOSUMI_INTERNAL_SERVICE_SECRET"
     ),
   );
 });
@@ -124,10 +124,10 @@ Deno.test("standalone bootstrap rejects production local Docker provider", async
     operatorConfig: new EnvOperatorConfig({
       clock: fixedClock,
       env: {
-        TAKOS_ENVIRONMENT: "production",
-        TAKOS_BOOTSTRAP_PROVIDER_ADAPTER: "local-docker",
+        TAKOSUMI_ENVIRONMENT: "production",
+        TAKOSUMI_BOOTSTRAP_PROVIDER_ADAPTER: "local-docker",
       },
-      include: ["TAKOS_ENVIRONMENT", "TAKOS_BOOTSTRAP_PROVIDER_ADAPTER"],
+      include: ["TAKOSUMI_ENVIRONMENT", "TAKOSUMI_BOOTSTRAP_PROVIDER_ADAPTER"],
     }),
     clock: fixedClock,
   }).bootstrap();
@@ -146,10 +146,10 @@ Deno.test("standalone bootstrap does not downgrade production unsafe adapters wi
     operatorConfig: new EnvOperatorConfig({
       clock: fixedClock,
       env: {
-        TAKOS_ENVIRONMENT: "production",
+        TAKOSUMI_ENVIRONMENT: "production",
         TAKOSUMI_DEV_MODE: "1",
       },
-      include: ["TAKOS_ENVIRONMENT", "TAKOSUMI_DEV_MODE"],
+      include: ["TAKOSUMI_ENVIRONMENT", "TAKOSUMI_DEV_MODE"],
     }),
     clock: fixedClock,
   }).bootstrap();
@@ -164,10 +164,10 @@ Deno.test("standalone bootstrap rejects production memory secret store without e
   const config = new EnvOperatorConfig({
     clock: fixedClock,
     env: {
-      TAKOS_ENVIRONMENT: "production",
-      TAKOS_BOOTSTRAP_SECRET_ADAPTER: "memory",
+      TAKOSUMI_ENVIRONMENT: "production",
+      TAKOSUMI_BOOTSTRAP_SECRET_ADAPTER: "memory",
     },
-    include: ["TAKOS_ENVIRONMENT", "TAKOS_BOOTSTRAP_SECRET_ADAPTER"],
+    include: ["TAKOSUMI_ENVIRONMENT", "TAKOSUMI_BOOTSTRAP_SECRET_ADAPTER"],
   });
 
   const report = await new StandaloneBootstrapService({
@@ -180,7 +180,7 @@ Deno.test("standalone bootstrap rejects production memory secret store without e
     report.errors.some((error) =>
       error.code === "secret_store_encryption_key_missing" &&
       /production/.test(error.message) &&
-      /TAKOS_SECRET_STORE_PASSPHRASE/.test(error.message)
+      /TAKOSUMI_SECRET_STORE_PASSPHRASE/.test(error.message)
     ),
   );
 });
@@ -189,12 +189,12 @@ Deno.test("standalone bootstrap accepts memory secret store when production key 
   const config = new LocalOperatorConfig({
     clock: fixedClock,
     values: {
-      TAKOS_ENVIRONMENT: "production",
-      TAKOS_BOOTSTRAP_AUTH_ADAPTER: "service",
-      TAKOS_BOOTSTRAP_SECRET_ADAPTER: "memory",
-      TAKOS_BOOTSTRAP_SOURCE_ADAPTER: "manifest",
-      TAKOS_INTERNAL_SERVICE_SECRET: "production-service-secret-value",
-      TAKOS_SECRET_STORE_PASSPHRASE: "production-secret-passphrase-32-byte",
+      TAKOSUMI_ENVIRONMENT: "production",
+      TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
+      TAKOSUMI_BOOTSTRAP_SECRET_ADAPTER: "memory",
+      TAKOSUMI_BOOTSTRAP_SOURCE_ADAPTER: "manifest",
+      TAKOSUMI_INTERNAL_SERVICE_SECRET: "production-service-secret-value",
+      TAKOSUMI_SECRET_STORE_PASSPHRASE: "production-secret-passphrase-32-byte",
     },
   });
 
@@ -218,10 +218,10 @@ Deno.test("standalone bootstrap rejects removed adapter selectors", async () => 
     operatorConfig: new EnvOperatorConfig({
       clock: fixedClock,
       env: {
-        TAKOS_ENVIRONMENT: "staging",
-        TAKOS_PROVIDER_ADAPTER: "local-docker",
+        TAKOSUMI_ENVIRONMENT: "staging",
+        TAKOSUMI_PROVIDER_ADAPTER: "local-docker",
       },
-      include: ["TAKOS_ENVIRONMENT", "TAKOS_PROVIDER_ADAPTER"],
+      include: ["TAKOSUMI_ENVIRONMENT", "TAKOSUMI_PROVIDER_ADAPTER"],
     }),
     clock: fixedClock,
   }).bootstrap();
@@ -230,7 +230,7 @@ Deno.test("standalone bootstrap rejects removed adapter selectors", async () => 
   assert.ok(
     report.errors.some((error) =>
       error.code === "stale_bootstrap_selector" &&
-      error.key === "TAKOS_PROVIDER_ADAPTER"
+      error.key === "TAKOSUMI_PROVIDER_ADAPTER"
     ),
   );
 });

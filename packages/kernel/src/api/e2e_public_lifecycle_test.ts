@@ -16,7 +16,7 @@ import {
   type PublicDeploymentListInput,
   type PublicGroupRefInput,
   type PublicGroupRollbackInput,
-  TAKOS_PAAS_PUBLIC_PATHS,
+  TAKOSUMI_PAAS_PUBLIC_PATHS,
 } from "./public_routes.ts";
 import { createApiApp } from "./app.ts";
 
@@ -30,23 +30,23 @@ Deno.test("public API fetch-level lifecycle creates space/group then drives Depl
     });
 
     const capabilitiesResponse = await customApp.request(
-      TAKOS_PAAS_PUBLIC_PATHS.capabilities,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities,
     );
     assert.equal(capabilitiesResponse.status, 200);
     const capabilitiesBody = await capabilitiesResponse.json();
     assert.equal(capabilitiesBody.capabilities.service, "takosumi");
     assert.equal(capabilitiesBody.capabilities.audience, "public-api");
-    assertEndpoint(capabilitiesBody, "POST", TAKOS_PAAS_PUBLIC_PATHS.spaces);
-    assertEndpoint(capabilitiesBody, "POST", TAKOS_PAAS_PUBLIC_PATHS.groups);
+    assertEndpoint(capabilitiesBody, "POST", TAKOSUMI_PAAS_PUBLIC_PATHS.spaces);
+    assertEndpoint(capabilitiesBody, "POST", TAKOSUMI_PAAS_PUBLIC_PATHS.groups);
     assertEndpoint(
       capabilitiesBody,
       "POST",
-      TAKOS_PAAS_PUBLIC_PATHS.deployments,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
     );
     assertEndpoint(
       capabilitiesBody,
       "POST",
-      TAKOS_PAAS_PUBLIC_PATHS.groupRollback,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback,
     );
 
     const manifest = {
@@ -65,7 +65,7 @@ Deno.test("public API fetch-level lifecycle creates space/group then drives Depl
     };
 
     const resolveResponse = await customApp.request(
-      TAKOS_PAAS_PUBLIC_PATHS.deployments,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
       {
         method: "POST",
         body: JSON.stringify({
@@ -82,7 +82,7 @@ Deno.test("public API fetch-level lifecycle creates space/group then drives Depl
     const deploymentId: string = resolveBody.deployment_id;
 
     const applyResponse = await customApp.request(
-      TAKOS_PAAS_PUBLIC_PATHS.deploymentApply.replace(
+      TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply.replace(
         ":deploymentId",
         deploymentId,
       ),
@@ -94,14 +94,17 @@ Deno.test("public API fetch-level lifecycle creates space/group then drives Depl
     assert.equal(applyBody.deployment_id, deploymentId);
 
     const headResponse = await customApp.request(
-      TAKOS_PAAS_PUBLIC_PATHS.groupHead.replace(":groupId", "e2e-public-app"),
+      TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead.replace(
+        ":groupId",
+        "e2e-public-app",
+      ),
     );
     assert.equal(headResponse.status, 200);
     const headBody = await headResponse.json();
     assert.equal(headBody.head.current_deployment_id, deploymentId);
 
     const listResponse = await customApp.request(
-      `${TAKOS_PAAS_PUBLIC_PATHS.deployments}?group=e2e-public-app`,
+      `${TAKOSUMI_PAAS_PUBLIC_PATHS.deployments}?group=e2e-public-app`,
     );
     assert.equal(listResponse.status, 200);
     const listBody = await listResponse.json();

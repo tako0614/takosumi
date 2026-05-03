@@ -1,6 +1,6 @@
 {
-  "@context": "https://takos.dev/contexts/deploy.jsonld",
-  "@id": "https://takos.dev/contracts/interface/queue/v1",
+  "@context": "https://takosumi.com/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/contracts/interface/queue/v1",
   "@type": "InterfaceContractDescriptor",
   "shortRef": "interface.queue@v1",
   "domain": "interface",

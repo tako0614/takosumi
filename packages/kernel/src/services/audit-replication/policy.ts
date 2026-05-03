@@ -74,10 +74,10 @@ const REGULATED_REGIMES: ReadonlySet<AuditRetentionRegime> = new Set([
 /**
  * Resolve the active retention policy from an env snapshot. The lookup
  * order is:
- *   1. `TAKOS_AUDIT_RETENTION_REGIME` (default | pci-dss | hipaa | sox | regulated)
- *   2. `TAKOS_AUDIT_RETENTION_DAYS` overrides default/regulated band
- *   3. `TAKOS_AUDIT_DELETE_AFTER_ARCHIVE` opts into delete-after-replicate
- *   4. `TAKOS_AUDIT_ARCHIVE_GRACE_DAYS` overrides default 30d grace
+ *   1. `TAKOSUMI_AUDIT_RETENTION_REGIME` (default | pci-dss | hipaa | sox | regulated)
+ *   2. `TAKOSUMI_AUDIT_RETENTION_DAYS` overrides default/regulated band
+ *   3. `TAKOSUMI_AUDIT_DELETE_AFTER_ARCHIVE` opts into delete-after-replicate
+ *   4. `TAKOSUMI_AUDIT_ARCHIVE_GRACE_DAYS` overrides default 30d grace
  */
 export function resolveAuditRetention(
   input: ResolveAuditRetentionInput = {},
@@ -87,7 +87,7 @@ export function resolveAuditRetention(
     ...input.policy,
   };
   const env = input.env ?? {};
-  const regimeRaw = (env.TAKOS_AUDIT_RETENTION_REGIME ?? "default")
+  const regimeRaw = (env.TAKOSUMI_AUDIT_RETENTION_REGIME ?? "default")
     .toLowerCase();
   const regime: AuditRetentionRegime =
     regimeRaw === "pci-dss" || regimeRaw === "hipaa" ||
@@ -95,15 +95,16 @@ export function resolveAuditRetention(
       ? regimeRaw
       : "default";
 
-  const overrideDays = parsePositiveInt(env.TAKOS_AUDIT_RETENTION_DAYS);
+  const overrideDays = parsePositiveInt(env.TAKOSUMI_AUDIT_RETENTION_DAYS);
   const baseDays = REGULATED_REGIMES.has(regime)
     ? policy.regulatedDays
     : policy.defaultDays;
   const retentionDays = overrideDays ?? baseDays;
 
-  const deleteAfterArchive = parseBool(env.TAKOS_AUDIT_DELETE_AFTER_ARCHIVE) ??
-    policy.deleteAfterArchive;
-  const graceDays = parsePositiveInt(env.TAKOS_AUDIT_ARCHIVE_GRACE_DAYS) ??
+  const deleteAfterArchive =
+    parseBool(env.TAKOSUMI_AUDIT_DELETE_AFTER_ARCHIVE) ??
+      policy.deleteAfterArchive;
+  const graceDays = parsePositiveInt(env.TAKOSUMI_AUDIT_ARCHIVE_GRACE_DAYS) ??
     policy.archiveGracePeriodDays;
 
   return {

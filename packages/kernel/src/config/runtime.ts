@@ -65,8 +65,8 @@ export class RuntimeConfigError extends Error {
 const DEFAULT_ENVIRONMENT = "local" satisfies RuntimeEnvironment;
 const DEFAULT_PROCESS_ROLE = "takosumi-api" satisfies PaaSProcessRole;
 export const PROCESS_ROLE_ENV_KEYS = [
-  "TAKOS_PAAS_PROCESS_ROLE",
-  "TAKOS_PROCESS_ROLE",
+  "TAKOSUMI_PAAS_PROCESS_ROLE",
+  "TAKOSUMI_PROCESS_ROLE",
 ] as const;
 
 const KERNEL_IO_PORTS = [
@@ -98,78 +98,84 @@ const PORT_ENV_KEYS: Record<
   (typeof SELECTABLE_KERNEL_IO_PORTS)[number],
   readonly string[]
 > = {
-  auth: ["TAKOS_AUTH_PLUGIN", "TAKOS_AUTH_PLUGIN_ID"],
-  coordination: ["TAKOS_COORDINATION_PLUGIN", "TAKOS_COORDINATION_PLUGIN_ID"],
-  notification: ["TAKOS_NOTIFICATION_PLUGIN", "TAKOS_NOTIFICATION_PLUGIN_ID"],
+  auth: ["TAKOSUMI_AUTH_PLUGIN", "TAKOSUMI_AUTH_PLUGIN_ID"],
+  coordination: [
+    "TAKOSUMI_COORDINATION_PLUGIN",
+    "TAKOSUMI_COORDINATION_PLUGIN_ID",
+  ],
+  notification: [
+    "TAKOSUMI_NOTIFICATION_PLUGIN",
+    "TAKOSUMI_NOTIFICATION_PLUGIN_ID",
+  ],
   "operator-config": [
-    "TAKOS_OPERATOR_CONFIG_PLUGIN",
-    "TAKOS_OPERATOR_CONFIG_PLUGIN_ID",
+    "TAKOSUMI_OPERATOR_CONFIG_PLUGIN",
+    "TAKOSUMI_OPERATOR_CONFIG_PLUGIN_ID",
   ],
-  storage: ["TAKOS_STORAGE_PLUGIN", "TAKOS_STORAGE_PLUGIN_ID"],
-  source: ["TAKOS_SOURCE_PLUGIN", "TAKOS_SOURCE_PLUGIN_ID"],
-  provider: ["TAKOS_PROVIDER_PLUGIN", "TAKOS_PROVIDER_PLUGIN_ID"],
-  queue: ["TAKOS_QUEUE_PLUGIN", "TAKOS_QUEUE_PLUGIN_ID"],
+  storage: ["TAKOSUMI_STORAGE_PLUGIN", "TAKOSUMI_STORAGE_PLUGIN_ID"],
+  source: ["TAKOSUMI_SOURCE_PLUGIN", "TAKOSUMI_SOURCE_PLUGIN_ID"],
+  provider: ["TAKOSUMI_PROVIDER_PLUGIN", "TAKOSUMI_PROVIDER_PLUGIN_ID"],
+  queue: ["TAKOSUMI_QUEUE_PLUGIN", "TAKOSUMI_QUEUE_PLUGIN_ID"],
   "object-storage": [
-    "TAKOS_OBJECT_STORAGE_PLUGIN",
-    "TAKOS_OBJECT_STORAGE_PLUGIN_ID",
+    "TAKOSUMI_OBJECT_STORAGE_PLUGIN",
+    "TAKOSUMI_OBJECT_STORAGE_PLUGIN_ID",
   ],
-  kms: ["TAKOS_KMS_PLUGIN", "TAKOS_KMS_PLUGIN_ID"],
+  kms: ["TAKOSUMI_KMS_PLUGIN", "TAKOSUMI_KMS_PLUGIN_ID"],
   "secret-store": [
-    "TAKOS_SECRET_STORE_PLUGIN",
-    "TAKOS_SECRET_STORE_PLUGIN_ID",
+    "TAKOSUMI_SECRET_STORE_PLUGIN",
+    "TAKOSUMI_SECRET_STORE_PLUGIN_ID",
   ],
   "router-config": [
-    "TAKOS_ROUTER_CONFIG_PLUGIN",
-    "TAKOS_ROUTER_CONFIG_PLUGIN_ID",
+    "TAKOSUMI_ROUTER_CONFIG_PLUGIN",
+    "TAKOSUMI_ROUTER_CONFIG_PLUGIN_ID",
   ],
   observability: [
-    "TAKOS_OBSERVABILITY_PLUGIN",
-    "TAKOS_OBSERVABILITY_PLUGIN_ID",
+    "TAKOSUMI_OBSERVABILITY_PLUGIN",
+    "TAKOSUMI_OBSERVABILITY_PLUGIN_ID",
   ],
   "runtime-agent": [
-    "TAKOS_RUNTIME_AGENT_PLUGIN",
-    "TAKOS_RUNTIME_AGENT_PLUGIN_ID",
+    "TAKOSUMI_RUNTIME_AGENT_PLUGIN",
+    "TAKOSUMI_RUNTIME_AGENT_PLUGIN_ID",
   ],
 };
 
 const STALE_SELECTOR_KEYS = [
-  "TAKOS_STORAGE_BACKEND",
-  "TAKOS_STORAGE_ADAPTER",
-  "TAKOS_PROVIDER",
-  "TAKOS_PROVIDER_ADAPTER",
-  "TAKOS_QUEUE_BACKEND",
-  "TAKOS_QUEUE_ADAPTER",
-  "TAKOS_OBJECT_STORAGE_BACKEND",
-  "TAKOS_OBJECT_STORAGE_ADAPTER",
-  "TAKOS_SOURCE",
-  "TAKOS_SOURCE_ADAPTER",
-  "TAKOS_KMS_BACKEND",
-  "TAKOS_KMS_ADAPTER",
-  "TAKOS_SECRET_STORE_BACKEND",
-  "TAKOS_SECRET_STORE_ADAPTER",
-  "TAKOS_DATABASE_URL",
+  "TAKOSUMI_STORAGE_BACKEND",
+  "TAKOSUMI_STORAGE_ADAPTER",
+  "TAKOSUMI_PROVIDER",
+  "TAKOSUMI_PROVIDER_ADAPTER",
+  "TAKOSUMI_QUEUE_BACKEND",
+  "TAKOSUMI_QUEUE_ADAPTER",
+  "TAKOSUMI_OBJECT_STORAGE_BACKEND",
+  "TAKOSUMI_OBJECT_STORAGE_ADAPTER",
+  "TAKOSUMI_SOURCE",
+  "TAKOSUMI_SOURCE_ADAPTER",
+  "TAKOSUMI_KMS_BACKEND",
+  "TAKOSUMI_KMS_ADAPTER",
+  "TAKOSUMI_SECRET_STORE_BACKEND",
+  "TAKOSUMI_SECRET_STORE_ADAPTER",
+  "TAKOSUMI_DATABASE_URL",
   "DATABASE_URL",
   "DATABASE_SECRET_REF",
-  "TAKOS_REDIS_URL",
+  "TAKOSUMI_REDIS_URL",
   "REDIS_URL",
-  "TAKOS_S3_ENDPOINT",
+  "TAKOSUMI_S3_ENDPOINT",
   "S3_ENDPOINT",
   "AWS_S3_ENDPOINT",
-  "TAKOS_S3_BUCKET",
+  "TAKOSUMI_S3_BUCKET",
   "S3_BUCKET",
   "AWS_S3_BUCKET",
-  "TAKOS_OBJECT_STORAGE_URL",
-  "TAKOS_LOCAL_DOCKER_NETWORK",
+  "TAKOSUMI_OBJECT_STORAGE_URL",
+  "TAKOSUMI_LOCAL_DOCKER_NETWORK",
   "TAKOS_GIT_BASE_URL",
-  "TAKOS_KMS_PROVIDER",
-  "TAKOS_KMS_KEY_ID",
-  "TAKOS_KMS_KEY_VERSION",
-  "TAKOS_SECRET_STORE_PROVIDER",
-  "TAKOS_SECRET_STORE_NAMESPACE",
-  "TAKOS_BOOTSTRAP_AUTH_ADAPTER",
-  "TAKOS_BOOTSTRAP_SOURCE_ADAPTER",
-  "TAKOS_BOOTSTRAP_SECRET_ADAPTER",
-  "TAKOS_BOOTSTRAP_PROVIDER_ADAPTER",
+  "TAKOSUMI_KMS_PROVIDER",
+  "TAKOSUMI_KMS_KEY_ID",
+  "TAKOSUMI_KMS_KEY_VERSION",
+  "TAKOSUMI_SECRET_STORE_PROVIDER",
+  "TAKOSUMI_SECRET_STORE_NAMESPACE",
+  "TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER",
+  "TAKOSUMI_BOOTSTRAP_SOURCE_ADAPTER",
+  "TAKOSUMI_BOOTSTRAP_SECRET_ADAPTER",
+  "TAKOSUMI_BOOTSTRAP_PROVIDER_ADAPTER",
 ] as const;
 
 export async function loadRuntimeConfigFromEnv(
@@ -187,7 +193,11 @@ export async function loadRuntimeConfig(
   const diagnostics: RuntimeConfigDiagnostic[] = [];
 
   const environment = selectEnvironment(
-    await reader.firstPlain(["TAKOS_ENVIRONMENT", "NODE_ENV", "ENVIRONMENT"]),
+    await reader.firstPlain([
+      "TAKOSUMI_ENVIRONMENT",
+      "NODE_ENV",
+      "ENVIRONMENT",
+    ]),
     diagnostics,
   );
   const processRole = await selectProcessRole(reader, diagnostics);
@@ -208,7 +218,7 @@ export async function loadRuntimeConfig(
     pluginConfig,
     routes: {
       publicRoutesEnabled: parseBoolean(
-        await reader.firstPlain(["TAKOS_PUBLIC_ROUTES_ENABLED"]),
+        await reader.firstPlain(["TAKOSUMI_PUBLIC_ROUTES_ENABLED"]),
         false,
       ),
     },
@@ -234,7 +244,7 @@ async function rejectStaleSelectors(
       code: "stale_runtime_selector",
       key,
       message:
-        `${key} is no longer accepted by the PaaS kernel; select a kernel plugin port with TAKOS_*_PLUGIN instead`,
+        `${key} is no longer accepted by the PaaS kernel; select a kernel plugin port with TAKOSUMI_*_PLUGIN instead`,
     });
   }
 }
@@ -245,8 +255,8 @@ async function loadPluginSelection(
 ): Promise<RuntimePluginSelection> {
   const plugins: RuntimePluginSelection = {};
   const jsonSelection = await reader.firstPlain([
-    "TAKOS_KERNEL_PLUGIN_SELECTIONS",
-    "TAKOS_KERNEL_PLUGIN_MAP",
+    "TAKOSUMI_KERNEL_PLUGIN_SELECTIONS",
+    "TAKOSUMI_KERNEL_PLUGIN_MAP",
   ]);
   if (jsonSelection) {
     Object.assign(
@@ -271,8 +281,8 @@ async function loadPluginConfig(
   diagnostics: RuntimeConfigDiagnostic[],
 ): Promise<JsonObject> {
   const raw = await reader.firstPlain([
-    "TAKOS_KERNEL_PLUGIN_CONFIG",
-    "TAKOS_KERNEL_PLUGIN_CONFIG_JSON",
+    "TAKOSUMI_KERNEL_PLUGIN_CONFIG",
+    "TAKOSUMI_KERNEL_PLUGIN_CONFIG_JSON",
   ]);
   if (!raw) return {};
   try {

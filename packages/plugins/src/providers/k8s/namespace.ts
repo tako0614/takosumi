@@ -168,7 +168,7 @@ export class K8sNamespaceMaterializer {
       "takos.jp/space": desiredState.spaceId,
       "takos.jp/group": desiredState.groupId,
       "takos.jp/activation": desiredState.activationId,
-      "takos.jp/managed-by": "takos-paas",
+      "takos.jp/managed-by": "takosumi",
     };
   }
 

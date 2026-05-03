@@ -13,7 +13,7 @@ import { conflict, invalidArgument, notFound } from "../../shared/errors.ts";
  * The routing-token service issues a short-lived HS256 JWT scoped to a
  * `(tenantId, groupId, deploymentId)` triple and rotates it on a fixed
  * cadence (default 1h). The kernel injects the active token as the
- * `TAKOS_ROUTING_TOKEN` env binding when materializing the desired state.
+ * `TAKOSUMI_ROUTING_TOKEN` env binding when materializing the desired state.
  * Tenant edges (CF dispatch, ALB, GCP LB, k8s Ingress) carry the token in the
  * `X-Takos-Routing-Token` request header so the tenant Worker / app can call
  * back into the kernel (or verify locally with the public secret) before
@@ -27,7 +27,7 @@ import { conflict, invalidArgument, notFound } from "../../shared/errors.ts";
  * window do not race against a freshly-rotated key.
  */
 
-export const TAKOS_ROUTING_TOKEN_HEADER = "x-takos-routing-token";
+export const TAKOSUMI_ROUTING_TOKEN_HEADER = "x-takos-routing-token";
 
 /** Default rotation period: 1 hour. */
 export const DEFAULT_ROUTING_TOKEN_ROTATION_MS = 60 * 60 * 1000;
@@ -91,7 +91,7 @@ export interface RoutingTokenServiceOptions {
   readonly maxClockSkewMs?: number;
   /**
    * Identifier embedded in the JWT `iss` claim. Defaults to
-   * `takos-paas-routing`.
+   * `takosumi-routing`.
    */
   readonly issuer?: string;
 }

@@ -31,15 +31,15 @@ function buildClosure(
 ): DeploymentDescriptorClosure {
   return {
     resolutions: resolutions.map((entry) => ({
-      id: entry.id ?? `https://takos.dev/contracts/${entry.alias}`,
+      id: entry.id ?? `https://takosumi.com/contracts/${entry.alias}`,
       alias: entry.alias,
-      documentUrl: entry.id ?? `https://takos.dev/contracts/${entry.alias}`,
+      documentUrl: entry.id ?? `https://takosumi.com/contracts/${entry.alias}`,
       mediaType: "application/ld+json",
       rawDigest: entry.rawDigest,
       expandedDigest: `sha256:expanded-${entry.alias}`,
       canonicalization: {
         algorithm: "json-stable-stringify",
-        version: "takos-paas-v1",
+        version: "takosumi-v1",
       },
       resolvedAt: RESOLVED_AT,
     })),

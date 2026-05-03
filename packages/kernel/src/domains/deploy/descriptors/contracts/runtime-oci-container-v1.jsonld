@@ -1,6 +1,6 @@
 {
-  "@context": "https://takos.dev/contexts/deploy.jsonld",
-  "@id": "https://takos.dev/contracts/runtime/oci-container/v1",
+  "@context": "https://takosumi.com/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/contracts/runtime/oci-container/v1",
   "@type": "RuntimeContractDescriptor",
   "shortRef": "runtime.oci-container@v1",
   "domain": "runtime",

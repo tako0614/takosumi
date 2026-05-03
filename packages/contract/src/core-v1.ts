@@ -159,7 +159,7 @@ export function isCoreConditionReason(
 // ---------------------------------------------------------------------------
 
 export interface CoreAppSpec {
-  apiVersion: "takosumi.dev/v1";
+  apiVersion: "takosumi.com/v1";
   kind: "App";
   name: string;
   components: Record<string, CoreComponentSpec>;
@@ -170,7 +170,7 @@ export interface CoreAppSpec {
 }
 
 export interface CoreEnvSpec {
-  apiVersion: "takosumi.dev/v1";
+  apiVersion: "takosumi.com/v1";
   kind: "Environment";
   providerTargets?: Record<string, CoreProviderTargetSpec>;
   router?: JsonObject;
@@ -179,7 +179,7 @@ export interface CoreEnvSpec {
 }
 
 export interface CorePolicySpec {
-  apiVersion: "takosumi.dev/v1";
+  apiVersion: "takosumi.com/v1";
   kind: "Policy";
   descriptorPolicy?: JsonObject;
   bindingPolicy?: JsonObject;

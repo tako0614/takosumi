@@ -11,7 +11,7 @@ Deno.test("assertDatabaseEncryptionAtRest fails closed in production with plain 
     () =>
       assertDatabaseEncryptionAtRest({
         env: {
-          TAKOS_ENVIRONMENT: "production",
+          TAKOSUMI_ENVIRONMENT: "production",
           DATABASE_URL: "postgres://user:pass@db.example.com:5432/takos",
         },
       }),
@@ -24,7 +24,7 @@ Deno.test("assertDatabaseEncryptionAtRest fails closed in staging with plain pos
     () =>
       assertDatabaseEncryptionAtRest({
         env: {
-          TAKOS_ENVIRONMENT: "staging",
+          TAKOSUMI_ENVIRONMENT: "staging",
           DATABASE_URL: "postgres://user:pass@db.example.com:5432/takos",
         },
       }),
@@ -35,7 +35,7 @@ Deno.test("assertDatabaseEncryptionAtRest fails closed in staging with plain pos
 Deno.test("assertDatabaseEncryptionAtRest accepts sslmode=require in production", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
-      TAKOS_ENVIRONMENT: "production",
+      TAKOSUMI_ENVIRONMENT: "production",
       DATABASE_URL:
         "postgres://user:pass@db.example.com:5432/takos?sslmode=require",
     },
@@ -47,7 +47,7 @@ Deno.test("assertDatabaseEncryptionAtRest accepts sslmode=require in production"
 Deno.test("assertDatabaseEncryptionAtRest accepts sslmode=verify-full in production", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
-      TAKOS_ENVIRONMENT: "production",
+      TAKOSUMI_ENVIRONMENT: "production",
       DATABASE_URL:
         "postgres://user:pass@db.example.com:5432/takos?sslmode=verify-full",
     },
@@ -61,7 +61,7 @@ Deno.test("assertDatabaseEncryptionAtRest rejects sslmode=disable in production"
     () =>
       assertDatabaseEncryptionAtRest({
         env: {
-          TAKOS_ENVIRONMENT: "production",
+          TAKOSUMI_ENVIRONMENT: "production",
           DATABASE_URL:
             "postgres://user:pass@db.example.com:5432/takos?sslmode=disable",
         },
@@ -73,7 +73,7 @@ Deno.test("assertDatabaseEncryptionAtRest rejects sslmode=disable in production"
 Deno.test("assertDatabaseEncryptionAtRest accepts encrypted=true generic flag", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
-      TAKOS_ENVIRONMENT: "production",
+      TAKOSUMI_ENVIRONMENT: "production",
       DATABASE_URL: "mysql://user:pass@db.example.com/takos?encrypted=true",
     },
   });
@@ -84,7 +84,7 @@ Deno.test("assertDatabaseEncryptionAtRest accepts encrypted=true generic flag", 
 Deno.test("assertDatabaseEncryptionAtRest accepts D1 (managed encrypted)", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
-      TAKOS_ENVIRONMENT: "production",
+      TAKOSUMI_ENVIRONMENT: "production",
       DATABASE_URL: "d1://takos-prod-d1-binding",
     },
   });
@@ -95,7 +95,7 @@ Deno.test("assertDatabaseEncryptionAtRest accepts D1 (managed encrypted)", () =>
 Deno.test("assertDatabaseEncryptionAtRest accepts sqlcipher in production", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
-      TAKOS_ENVIRONMENT: "production",
+      TAKOSUMI_ENVIRONMENT: "production",
       DATABASE_URL: "sqlcipher:///var/lib/takos/audit.db?key=...",
     },
   });
@@ -106,7 +106,7 @@ Deno.test("assertDatabaseEncryptionAtRest accepts sqlcipher in production", () =
 Deno.test("assertDatabaseEncryptionAtRest accepts sqlite with key=", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
-      TAKOS_ENVIRONMENT: "production",
+      TAKOSUMI_ENVIRONMENT: "production",
       DATABASE_URL: "sqlite:///var/lib/takos/audit.db?key=secret",
     },
   });
@@ -119,7 +119,7 @@ Deno.test("assertDatabaseEncryptionAtRest rejects plain sqlite in production", (
     () =>
       assertDatabaseEncryptionAtRest({
         env: {
-          TAKOS_ENVIRONMENT: "production",
+          TAKOSUMI_ENVIRONMENT: "production",
           DATABASE_URL: "sqlite:///var/lib/takos/audit.db",
         },
       }),
@@ -132,7 +132,7 @@ Deno.test("assertDatabaseEncryptionAtRest production ignores TAKOSUMI_DEV_MODE o
     () =>
       assertDatabaseEncryptionAtRest({
         env: {
-          TAKOS_ENVIRONMENT: "production",
+          TAKOSUMI_ENVIRONMENT: "production",
           DATABASE_URL: "postgres://user:pass@db.example.com:5432/takos",
           TAKOSUMI_DEV_MODE: "1",
         },
@@ -144,7 +144,7 @@ Deno.test("assertDatabaseEncryptionAtRest production ignores TAKOSUMI_DEV_MODE o
 Deno.test("assertDatabaseEncryptionAtRest local without override still allows boot (silent satisfy)", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
-      TAKOS_ENVIRONMENT: "local",
+      TAKOSUMI_ENVIRONMENT: "local",
       DATABASE_URL: "postgres://user:pass@localhost:5432/takos",
     },
   });
@@ -156,7 +156,7 @@ Deno.test("assertDatabaseEncryptionAtRest local without override still allows bo
 Deno.test("assertDatabaseEncryptionAtRest local with TAKOSUMI_DEV_MODE sets overrideAccepted", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
-      TAKOS_ENVIRONMENT: "local",
+      TAKOSUMI_ENVIRONMENT: "local",
       DATABASE_URL: "postgres://user:pass@localhost:5432/takos",
       TAKOSUMI_DEV_MODE: "1",
     },
@@ -170,7 +170,7 @@ Deno.test("assertDatabaseEncryptionAtRest production with no DB url is fail-clos
   assert.throws(
     () =>
       assertDatabaseEncryptionAtRest({
-        env: { TAKOS_ENVIRONMENT: "production" },
+        env: { TAKOSUMI_ENVIRONMENT: "production" },
       }),
     DatabaseEncryptionConfigurationError,
   );
@@ -179,7 +179,7 @@ Deno.test("assertDatabaseEncryptionAtRest production with no DB url is fail-clos
 Deno.test("inspectDatabaseEncryption preserves info without throwing", () => {
   const inspection = inspectDatabaseEncryption({
     env: {
-      TAKOS_ENVIRONMENT: "production",
+      TAKOSUMI_ENVIRONMENT: "production",
       DATABASE_URL: "postgres://u:p@db/t?sslmode=require",
     },
   });
@@ -187,10 +187,10 @@ Deno.test("inspectDatabaseEncryption preserves info without throwing", () => {
   assert.equal(inspection.evidence, "sslmode=require");
 });
 
-Deno.test("resolveBootDatabaseUrl prefers TAKOS_DATABASE_URL over DATABASE_URL", () => {
+Deno.test("resolveBootDatabaseUrl prefers TAKOSUMI_DATABASE_URL over DATABASE_URL", () => {
   assert.equal(
     resolveBootDatabaseUrl({
-      TAKOS_DATABASE_URL: "postgres://primary",
+      TAKOSUMI_DATABASE_URL: "postgres://primary",
       DATABASE_URL: "postgres://fallback",
     }),
     "postgres://primary",
@@ -200,8 +200,8 @@ Deno.test("resolveBootDatabaseUrl prefers TAKOS_DATABASE_URL over DATABASE_URL",
 Deno.test("resolveBootDatabaseUrl falls back to staging url in staging env", () => {
   assert.equal(
     resolveBootDatabaseUrl({
-      TAKOS_ENVIRONMENT: "staging",
-      TAKOS_STAGING_DATABASE_URL: "postgres://staging?sslmode=require",
+      TAKOSUMI_ENVIRONMENT: "staging",
+      TAKOSUMI_STAGING_DATABASE_URL: "postgres://staging?sslmode=require",
     }),
     "postgres://staging?sslmode=require",
   );

@@ -7,7 +7,7 @@
 --              - provider_observations
 --              - group_heads
 --
--- Spec:      /docs/takos-paas/core/01-core-contract-v1.0.md
+-- Spec:      /docs/takosumi/core/01-core-contract-v1.0.md
 -- Phase:     deployment schema rewrite
 -- Domain:    deploy
 

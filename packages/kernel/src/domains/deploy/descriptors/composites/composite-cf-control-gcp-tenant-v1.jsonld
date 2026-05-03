@@ -1,6 +1,6 @@
 {
-  "@context": "https://takos.dev/contexts/deploy.jsonld",
-  "@id": "https://takos.dev/contracts/composite/cf-control-gcp-tenant/v1",
+  "@context": "https://takosumi.com/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/contracts/composite/cf-control-gcp-tenant/v1",
   "@type": "CompositeContractDescriptor",
   "shortRef": "composite.cf-control-gcp-tenant@v1",
   "domain": "composite",

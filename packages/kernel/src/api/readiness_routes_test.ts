@@ -3,7 +3,7 @@ import { Hono, type Hono as HonoApp } from "hono";
 import type { GroupSummaryStatusProjection } from "../services/status/mod.ts";
 import {
   registerReadinessRoutes,
-  TAKOS_PAAS_READINESS_PATHS,
+  TAKOSUMI_PAAS_READINESS_PATHS,
 } from "./readiness_routes.ts";
 
 Deno.test("readiness routes expose injected liveness and readiness probes", async () => {
@@ -17,7 +17,7 @@ Deno.test("readiness routes expose injected liveness and readiness probes", asyn
     statusSummary: () => activeStatusSummary,
   });
 
-  const ready = await app.request(TAKOS_PAAS_READINESS_PATHS.ready);
+  const ready = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.ready);
   assert.equal(ready.status, 200);
   assert.deepEqual(await ready.json(), {
     ok: true,
@@ -25,7 +25,7 @@ Deno.test("readiness routes expose injected liveness and readiness probes", asyn
     checks: { database: "ok", router: "ok" },
   });
 
-  const live = await app.request(TAKOS_PAAS_READINESS_PATHS.live);
+  const live = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.live);
   assert.equal(live.status, 200);
   assert.deepEqual(await live.json(), { ok: true, pid: 1234 });
 });
@@ -43,7 +43,7 @@ Deno.test("readiness route returns service unavailable for failed probes", async
     statusSummary: () => activeStatusSummary,
   });
 
-  const ready = await app.request(TAKOS_PAAS_READINESS_PATHS.ready);
+  const ready = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.ready);
   assert.equal(ready.status, 503);
   assert.deepEqual(await ready.json(), {
     error: {
@@ -57,7 +57,7 @@ Deno.test("readiness route returns service unavailable for failed probes", async
     },
   });
 
-  const live = await app.request(TAKOS_PAAS_READINESS_PATHS.live);
+  const live = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.live);
   assert.equal(live.status, 503);
   assert.deepEqual(await live.json(), {
     error: {
@@ -74,7 +74,9 @@ Deno.test("status summary route returns existing projection DTO", async () => {
     statusSummary: async () => activeStatusSummary,
   });
 
-  const response = await app.request(TAKOS_PAAS_READINESS_PATHS.statusSummary);
+  const response = await app.request(
+    TAKOSUMI_PAAS_READINESS_PATHS.statusSummary,
+  );
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), activeStatusSummary);
@@ -89,7 +91,9 @@ Deno.test("status summary route reports probe failures", async () => {
     },
   });
 
-  const response = await app.request(TAKOS_PAAS_READINESS_PATHS.statusSummary);
+  const response = await app.request(
+    TAKOSUMI_PAAS_READINESS_PATHS.statusSummary,
+  );
 
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), {
@@ -114,7 +118,9 @@ Deno.test("status summary route rejects non-catalog condition reasons", async ()
     } as unknown as GroupSummaryStatusProjection),
   });
 
-  const response = await app.request(TAKOS_PAAS_READINESS_PATHS.statusSummary);
+  const response = await app.request(
+    TAKOSUMI_PAAS_READINESS_PATHS.statusSummary,
+  );
 
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), {

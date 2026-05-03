@@ -4,9 +4,9 @@ import {
   type PaaSProcessRoleDescription,
 } from "../process/mod.ts";
 import { TAKOSUMI_INTERNAL_PATHS } from "takosumi-contract";
-import { TAKOS_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
-import { TAKOS_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
-import { TAKOS_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
+import { TAKOSUMI_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
+import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
+import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 export interface CreateApiCapabilitiesDescriptionOptions {
   readonly internalRoutesMounted?: boolean;
@@ -119,63 +119,63 @@ function publicEndpoints(): ApiEndpointDescription[] {
   return [
     [
       "GET",
-      TAKOS_PAAS_PUBLIC_PATHS.capabilities,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities,
       "Returns public API route capabilities.",
     ],
     [
       "GET",
-      TAKOS_PAAS_PUBLIC_PATHS.spaces,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.spaces,
       "Lists spaces visible to the authenticated actor.",
     ],
     [
       "POST",
-      TAKOS_PAAS_PUBLIC_PATHS.spaces,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.spaces,
       "Creates a space for the authenticated actor.",
     ],
     [
       "GET",
-      TAKOS_PAAS_PUBLIC_PATHS.groups,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.groups,
       "Lists groups for a space visible to the authenticated actor.",
     ],
-    ["POST", TAKOS_PAAS_PUBLIC_PATHS.groups, "Creates a group in a space."],
+    ["POST", TAKOSUMI_PAAS_PUBLIC_PATHS.groups, "Creates a group in a space."],
     [
       "POST",
-      TAKOS_PAAS_PUBLIC_PATHS.deployments,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
       "Creates a Deployment with mode=preview|resolve|apply|rollback.",
     ],
     [
       "GET",
-      TAKOS_PAAS_PUBLIC_PATHS.deployments,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
       "Lists Deployments for a group / status filter.",
     ],
     [
       "GET",
-      TAKOS_PAAS_PUBLIC_PATHS.deployment,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.deployment,
       "Returns a Deployment by id.",
     ],
     [
       "POST",
-      TAKOS_PAAS_PUBLIC_PATHS.deploymentApply,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply,
       "Applies a resolved Deployment.",
     ],
     [
       "POST",
-      TAKOS_PAAS_PUBLIC_PATHS.deploymentApprove,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove,
       "Attaches an approval to a Deployment.",
     ],
     [
       "GET",
-      TAKOS_PAAS_PUBLIC_PATHS.deploymentObservations,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations,
       "Streams provider observations for a Deployment.",
     ],
     [
       "GET",
-      TAKOS_PAAS_PUBLIC_PATHS.groupHead,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead,
       "Returns the GroupHead pointer for a group.",
     ],
     [
       "POST",
-      TAKOS_PAAS_PUBLIC_PATHS.groupRollback,
+      TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback,
       "Rolls a GroupHead back to its previous Deployment.",
     ],
   ].map(([method, path, summary]) => ({
@@ -188,21 +188,25 @@ function publicEndpoints(): ApiEndpointDescription[] {
 
 function runtimeAgentEndpoints(): ApiEndpointDescription[] {
   return [
-    ["POST", TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll, "Enrolls a runtime agent."],
     [
       "POST",
-      TAKOS_PAAS_RUNTIME_AGENT_PATHS.heartbeat,
+      TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
+      "Enrolls a runtime agent.",
+    ],
+    [
+      "POST",
+      TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.heartbeat,
       "Records a runtime agent heartbeat.",
     ],
-    ["POST", TAKOS_PAAS_RUNTIME_AGENT_PATHS.lease, "Leases runtime work."],
+    ["POST", TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.lease, "Leases runtime work."],
     [
       "POST",
-      TAKOS_PAAS_RUNTIME_AGENT_PATHS.report,
+      TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.report,
       "Reports runtime work completion.",
     ],
     [
       "POST",
-      TAKOS_PAAS_RUNTIME_AGENT_PATHS.drain,
+      TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.drain,
       "Requests runtime-agent drain.",
     ],
   ].map(([method, path, summary]) => ({
@@ -217,19 +221,19 @@ function readinessEndpoints(): ApiEndpointDescription[] {
   return [
     {
       method: "GET",
-      path: TAKOS_PAAS_READINESS_PATHS.ready,
+      path: TAKOSUMI_PAAS_READINESS_PATHS.ready,
       summary: "Readiness probe for the current PaaS role.",
       auth: "none",
     },
     {
       method: "GET",
-      path: TAKOS_PAAS_READINESS_PATHS.live,
+      path: TAKOSUMI_PAAS_READINESS_PATHS.live,
       summary: "Liveness probe for the current PaaS role.",
       auth: "none",
     },
     {
       method: "GET",
-      path: TAKOS_PAAS_READINESS_PATHS.statusSummary,
+      path: TAKOSUMI_PAAS_READINESS_PATHS.statusSummary,
       summary: "Returns the current group summary status projection.",
       auth: "none",
     },

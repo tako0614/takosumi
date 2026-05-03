@@ -5,7 +5,7 @@ Deno.test("local operator config returns redacted secret refs", async () => {
   const config = new LocalOperatorConfig({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     values: {
-      TAKOS_REGION: "local",
+      TAKOSUMI_REGION: "local",
       DATABASE_URL: { name: "DATABASE_URL", version: "v1" },
     },
   });
@@ -22,7 +22,7 @@ Deno.test("local operator config returns redacted secret refs", async () => {
     values: [
       {
         kind: "plain",
-        key: "TAKOS_REGION",
+        key: "TAKOSUMI_REGION",
         source: "local",
         value: "local",
       },
@@ -41,10 +41,10 @@ Deno.test("env operator config parses secret ref keys without exposing raw value
   const config = new EnvOperatorConfig({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     env: {
-      TAKOS_REGION: "local",
+      TAKOSUMI_REGION: "local",
       DATABASE_SECRET_REF: "DATABASE_URL@v2",
     },
-    include: ["DATABASE_SECRET_REF", "TAKOS_REGION"],
+    include: ["DATABASE_SECRET_REF", "TAKOSUMI_REGION"],
   });
 
   assert.deepEqual(await config.require("DATABASE_SECRET_REF"), {

@@ -1,6 +1,6 @@
 {
-  "@context": "https://takos.dev/contexts/deploy.jsonld",
-  "@id": "https://takos.dev/descriptors/authoring/public-manifest-expansion/v1",
+  "@context": "https://takosumi.com/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/descriptors/authoring/public-manifest-expansion/v1",
   "@type": "takos:AuthoringExpansionDescriptor",
   "shortRef": "authoring.public-manifest-expansion@v1",
   "domain": "authoring",
@@ -8,9 +8,9 @@
   "changeEffect": "shape-derivation",
   "description": "Public deploy manifest authoring expansion into canonical Core AppSpec, EnvSpec, and PolicySpec records before Plan.",
   "expandsTo": [
-    "takos.dev/v1 App",
-    "takos.dev/v1 Environment",
-    "takos.dev/v1 Policy"
+    "takosumi.com/v1 App",
+    "takosumi.com/v1 Environment",
+    "takosumi.com/v1 Policy"
   ],
   "invariants": [
     "expansion-before-plan",

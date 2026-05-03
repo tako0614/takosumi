@@ -14,7 +14,7 @@
  * Safety:
  *   - The default `--env` is `local` (in-memory SqlClient — no I/O against any
  *     real database). This makes it safe to invoke during tests.
- *   - `--env=staging` requires `$TAKOS_STAGING_DATABASE_URL` (or
+ *   - `--env=staging` requires `$TAKOSUMI_STAGING_DATABASE_URL` (or
  *     `$DATABASE_URL`), same as forward migration.
  *   - `--env=production` is **gated**: the CLI exits non-zero unless the
  *     operator passes `--allow-production-rollback`. Running interactively
@@ -120,7 +120,7 @@ export function parseDownArgs(argv: readonly string[]): DownCliOptions {
 function printHelp(): void {
   console.log(
     [
-      "takos-paas db migrate-down runner",
+      "takosumi db migrate-down runner",
       "",
       "Usage:",
       "  deno task db:migrate:down [--env=local|staging|production] [--target=<v>|--steps=<n>] [--dry-run]",
@@ -135,8 +135,8 @@ function printHelp(): void {
       "  --confirm=ROLLBACK           non-interactive confirmation phrase (production only)",
       "",
       "Env vars (read by --env):",
-      "  --env=production   $TAKOS_PRODUCTION_DATABASE_URL or $DATABASE_URL",
-      "  --env=staging      $TAKOS_STAGING_DATABASE_URL or $DATABASE_URL",
+      "  --env=production   $TAKOSUMI_PRODUCTION_DATABASE_URL or $DATABASE_URL",
+      "  --env=staging      $TAKOSUMI_STAGING_DATABASE_URL or $DATABASE_URL",
       "  --env=local        in-memory SqlClient (no network)",
     ].join("\n"),
   );
@@ -347,8 +347,8 @@ async function resolveTarget(env: EnvName): Promise<ResolvedTarget> {
     };
   }
   const candidates = env === "production"
-    ? ["TAKOS_PRODUCTION_DATABASE_URL", "DATABASE_URL"]
-    : ["TAKOS_STAGING_DATABASE_URL", "DATABASE_URL"];
+    ? ["TAKOSUMI_PRODUCTION_DATABASE_URL", "DATABASE_URL"]
+    : ["TAKOSUMI_STAGING_DATABASE_URL", "DATABASE_URL"];
   let url: string | undefined;
   for (const key of candidates) {
     const value = Deno.env.get(key);

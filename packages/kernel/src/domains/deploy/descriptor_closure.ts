@@ -17,11 +17,11 @@
 //   3. Resource contract descriptors for every declared resource.
 //   4. Interface contract descriptors for every route protocol.
 //   5. Output contract descriptors for every outputs entry.
-//   6. The shared JSON-LD context (`https://takos.dev/contexts/deploy.jsonld`)
+//   6. The shared JSON-LD context (`https://takosumi.com/contexts/deploy.jsonld`)
 //      that all of the above use, recorded as a `jsonld-context` dependency.
 //
 // Each `CoreDescriptorResolution` carries:
-//   - `id`        — canonical URI (e.g. `https://takos.dev/contracts/runtime/oci-container/v1`)
+//   - `id`        — canonical URI (e.g. `https://takosumi.com/contracts/runtime/oci-container/v1`)
 //   - `alias`     — short-form ref (e.g. `runtime.oci-container@v1`)
 //   - `mediaType` — `application/ld+json`
 //   - `rawDigest` — sha256 over the raw JSON-LD document bytes (canonicalized)
@@ -58,7 +58,7 @@ import {
 import type { AppSpec, AppSpecRoute } from "./types.ts";
 
 /** Canonical JSON-LD context URI shared by every official descriptor. */
-const TAKOS_CONTEXT_ID = "https://takos.dev/contexts/deploy.jsonld";
+const TAKOSUMI_CONTEXT_ID = "https://takosumi.com/contexts/deploy.jsonld";
 
 /** MIME type used by every JSON-LD descriptor in the official set. */
 const DESCRIPTOR_MEDIA_TYPE = "application/ld+json";
@@ -66,7 +66,7 @@ const DESCRIPTOR_MEDIA_TYPE = "application/ld+json";
 /** Canonicalization algorithm + version stamped onto each resolution. */
 const CANONICALIZATION = {
   algorithm: "json-stable-stringify",
-  version: "takos-paas-v1",
+  version: "takosumi-v1",
 } as const;
 
 /** Authoring-expansion descriptor (always pinned when expansion fired). */
@@ -124,9 +124,9 @@ function ensureRegistryLoaded(): void {
   }
   // Synthesise a registry entry for the shared JSON-LD context so it can be
   // emitted as a `jsonld-context` dependency without bespoke handling.
-  if (!REGISTRY_BY_URI.has(TAKOS_CONTEXT_ID)) {
+  if (!REGISTRY_BY_URI.has(TAKOSUMI_CONTEXT_ID)) {
     const contextRecord = OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS.find(
-      (record) => record.id === TAKOS_CONTEXT_ID,
+      (record) => record.id === TAKOSUMI_CONTEXT_ID,
     );
     if (contextRecord) {
       const entry: RegistryEntry = {
@@ -162,7 +162,7 @@ function resolveRef(ref: string): RegistryEntry | undefined {
 }
 
 /** Canonical URI for an alias-or-URI. Falls back to a synthetic descriptor
- *  URI under `https://takos.dev/descriptors/unknown/<sanitised-alias>` when no
+ *  URI under `https://takosumi.com/descriptors/unknown/<sanitised-alias>` when no
  *  registry entry matches; the alias is preserved on the resolution so callers
  *  can inspect the original short form. */
 function canonicalUriFor(ref: string): { id: string; alias: string } {
@@ -177,7 +177,7 @@ function canonicalUriFor(ref: string): { id: string; alias: string } {
   // observability and policy gates.
   const sanitised = ref.replace(/[^A-Za-z0-9.@_-]/g, "-").toLowerCase();
   return {
-    id: `https://takos.dev/descriptors/unknown/${sanitised}`,
+    id: `https://takosumi.com/descriptors/unknown/${sanitised}`,
     alias: ref,
   };
 }
@@ -211,7 +211,7 @@ export function buildDescriptorClosure(
   // Add the shared JSON-LD context as a transitive dependency from every
   // descriptor body that referenced it (Core spec § 6 — JSON-LD context is a
   // descriptor dependency, not a free-floating import).
-  const contextEntry = resolveRef(TAKOS_CONTEXT_ID);
+  const contextEntry = resolveRef(TAKOSUMI_CONTEXT_ID);
   if (contextEntry && !seenUris.has(contextEntry.id)) {
     seenUris.add(contextEntry.id);
     resolutions.push(buildResolution({
@@ -222,13 +222,13 @@ export function buildDescriptorClosure(
     }));
   }
   for (const resolution of resolutions) {
-    if (resolution.id === TAKOS_CONTEXT_ID) continue;
+    if (resolution.id === TAKOSUMI_CONTEXT_ID) continue;
     const entry = REGISTRY_BY_URI.get(resolution.id);
     if (!entry) continue;
-    if (entry.contextIds.includes(TAKOS_CONTEXT_ID)) {
+    if (entry.contextIds.includes(TAKOSUMI_CONTEXT_ID)) {
       dependencies.push({
         fromDescriptorId: resolution.id,
-        toDescriptorId: TAKOS_CONTEXT_ID,
+        toDescriptorId: TAKOSUMI_CONTEXT_ID,
         reason: "jsonld-context",
       });
     }
@@ -244,7 +244,7 @@ export function buildDescriptorClosure(
     const expansionUri = expansionEntry?.id ?? PUBLIC_MANIFEST_EXPANSION_ALIAS;
     for (const resolution of resolutions) {
       if (resolution.id === expansionUri) continue;
-      if (resolution.id === TAKOS_CONTEXT_ID) continue;
+      if (resolution.id === TAKOSUMI_CONTEXT_ID) continue;
       dependencies.push({
         fromDescriptorId: expansionUri,
         toDescriptorId: resolution.id,
@@ -642,10 +642,12 @@ export function verifyDescriptorClosureCompatibility(
  * shared JSON-LD context are kernel-owned, not plugin-owned.
  */
 function isPluginOwnedDescriptorAlias(alias: string): boolean {
-  if (alias === TAKOS_CONTEXT_ID) return false;
+  if (alias === TAKOSUMI_CONTEXT_ID) return false;
   if (alias.startsWith("authoring.")) return false;
-  if (alias.startsWith("https://takos.dev/contexts/")) return false;
-  if (alias.startsWith("https://takos.dev/descriptors/unknown/")) return false;
+  if (alias.startsWith("https://takosumi.com/contexts/")) return false;
+  if (alias.startsWith("https://takosumi.com/descriptors/unknown/")) {
+    return false;
+  }
   // runtime / resource / interface / output / provider aliases are
   // plugin-owned. URIs that resolve to a registry entry are also covered.
   return /^(runtime|resource|interface|output|provider|artifact)\./

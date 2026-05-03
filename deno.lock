@@ -155,8 +155,8 @@
           "jsr:@std/path@1",
           "jsr:@std/yaml@1",
           "jsr:@takos/takosumi-contract@^2.1.0",
-          "jsr:@takos/takosumi-kernel@0.6",
-          "jsr:@takos/takosumi-runtime-agent@0.1"
+          "jsr:@takos/takosumi-kernel@0.7",
+          "jsr:@takos/takosumi-runtime-agent@0.2"
         ]
       },
       "packages/kernel": {

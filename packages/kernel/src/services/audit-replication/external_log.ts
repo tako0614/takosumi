@@ -390,7 +390,7 @@ export interface SelectAuditExternalReplicationSinkOptions {
   readonly env: Readonly<Record<string, string | undefined>>;
   /**
    * Optional override S3 port (e.g. injected fake during tests). When
-   * omitted and `TAKOS_AUDIT_REPLICATION_KIND=s3`, the function throws
+   * omitted and `TAKOSUMI_AUDIT_REPLICATION_KIND=s3`, the function throws
    * because the kernel build does not bundle the AWS SDK.
    */
   readonly s3Port?: S3ImmutableLogPort;
@@ -401,12 +401,12 @@ export interface SelectAuditExternalReplicationSinkOptions {
 /**
  * Select an {@link AuditExternalReplicationSink} based on env vars.
  *
- *   - `TAKOS_AUDIT_REPLICATION_KIND=stdout` -> {@link StdoutReplicationSink}
- *   - `TAKOS_AUDIT_REPLICATION_KIND=s3`     -> {@link S3ImmutableLogReplicationSink}
- *     (requires `TAKOS_AUDIT_REPLICATION_S3_BUCKET` plus optional
- *      `TAKOS_AUDIT_REPLICATION_S3_PREFIX`,
- *      `TAKOS_AUDIT_REPLICATION_S3_RETENTION_MODE`,
- *      `TAKOS_AUDIT_REPLICATION_S3_RETENTION_DAYS`).
+ *   - `TAKOSUMI_AUDIT_REPLICATION_KIND=stdout` -> {@link StdoutReplicationSink}
+ *   - `TAKOSUMI_AUDIT_REPLICATION_KIND=s3`     -> {@link S3ImmutableLogReplicationSink}
+ *     (requires `TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET` plus optional
+ *      `TAKOSUMI_AUDIT_REPLICATION_S3_PREFIX`,
+ *      `TAKOSUMI_AUDIT_REPLICATION_S3_RETENTION_MODE`,
+ *      `TAKOSUMI_AUDIT_REPLICATION_S3_RETENTION_DAYS`).
  *
  * Production / staging without any configuration throws
  * {@link AuditReplicationConfigurationError}. Local / dev returns
@@ -417,17 +417,17 @@ export function selectAuditExternalReplicationSink(
 ): AuditExternalReplicationSink | undefined {
   const env = options.env;
   const environment = normalizeEnvironment(
-    env.TAKOS_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
+    env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
   );
   const productionLike = PRODUCTION_LIKE_ENVIRONMENTS.has(environment);
-  const kind = (env.TAKOS_AUDIT_REPLICATION_KIND ?? "").trim().toLowerCase();
+  const kind = (env.TAKOSUMI_AUDIT_REPLICATION_KIND ?? "").trim().toLowerCase();
 
   if (!kind) {
     if (productionLike) {
       throw new AuditReplicationConfigurationError(
         `audit-replication sink missing in ${environment}: ` +
-          `set TAKOS_AUDIT_REPLICATION_KIND=s3 (with TAKOS_AUDIT_REPLICATION_S3_BUCKET) ` +
-          `or TAKOS_AUDIT_REPLICATION_KIND=stdout. ` +
+          `set TAKOSUMI_AUDIT_REPLICATION_KIND=s3 (with TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET) ` +
+          `or TAKOSUMI_AUDIT_REPLICATION_KIND=stdout. ` +
           `Refusing to start without an external immutable log; ` +
           `tamper-evident audit history requires off-DB replication.`,
       );
@@ -437,34 +437,34 @@ export function selectAuditExternalReplicationSink(
 
   if (kind === "stdout") return new StdoutReplicationSink();
   if (kind === "s3") {
-    const bucket = env.TAKOS_AUDIT_REPLICATION_S3_BUCKET;
+    const bucket = env.TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET;
     if (!bucket) {
       throw new AuditReplicationConfigurationError(
-        "TAKOS_AUDIT_REPLICATION_KIND=s3 requires TAKOS_AUDIT_REPLICATION_S3_BUCKET",
+        "TAKOSUMI_AUDIT_REPLICATION_KIND=s3 requires TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET",
       );
     }
     if (!options.s3Port) {
       throw new AuditReplicationConfigurationError(
-        "TAKOS_AUDIT_REPLICATION_KIND=s3 requires an S3 port to be wired " +
+        "TAKOSUMI_AUDIT_REPLICATION_KIND=s3 requires an S3 port to be wired " +
           "into selectAuditExternalReplicationSink (the kernel does not " +
           "bundle the AWS SDK)",
       );
     }
     const retentionMode =
-      (env.TAKOS_AUDIT_REPLICATION_S3_RETENTION_MODE ?? "COMPLIANCE")
+      (env.TAKOSUMI_AUDIT_REPLICATION_S3_RETENTION_MODE ?? "COMPLIANCE")
           .trim()
           .toUpperCase() === "GOVERNANCE"
         ? "GOVERNANCE"
         : "COMPLIANCE";
-    const retentionDaysRaw = env.TAKOS_AUDIT_REPLICATION_S3_RETENTION_DAYS;
+    const retentionDaysRaw = env.TAKOSUMI_AUDIT_REPLICATION_S3_RETENTION_DAYS;
     const retentionDays = retentionDaysRaw
       ? Number(retentionDaysRaw)
       : undefined;
     return new S3ImmutableLogReplicationSink({
       port: options.s3Port,
       bucket,
-      ...(env.TAKOS_AUDIT_REPLICATION_S3_PREFIX
-        ? { prefix: env.TAKOS_AUDIT_REPLICATION_S3_PREFIX }
+      ...(env.TAKOSUMI_AUDIT_REPLICATION_S3_PREFIX
+        ? { prefix: env.TAKOSUMI_AUDIT_REPLICATION_S3_PREFIX }
         : {}),
       retentionMode,
       ...(retentionDays && Number.isFinite(retentionDays) && retentionDays > 0
@@ -474,7 +474,7 @@ export function selectAuditExternalReplicationSink(
     });
   }
   throw new AuditReplicationConfigurationError(
-    `unsupported TAKOS_AUDIT_REPLICATION_KIND=${kind}; ` +
+    `unsupported TAKOSUMI_AUDIT_REPLICATION_KIND=${kind}; ` +
       `supported: stdout, s3`,
   );
 }

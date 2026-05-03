@@ -4,9 +4,9 @@ import {
   TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
 import { createPaaSOpenApiDocument } from "./openapi.ts";
-import { TAKOS_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
-import { TAKOS_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
-import { TAKOS_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
+import { TAKOSUMI_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
+import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
+import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 Deno.test("createPaaSOpenApiDocument emits process and Deployment-centric public API paths", () => {
   const doc = allRoutesDoc();
@@ -16,27 +16,27 @@ Deno.test("createPaaSOpenApiDocument emits process and Deployment-centric public
   assert.equal(doc.paths["/health"]?.get?.["x-takos-auth"], "none");
   assert.ok(doc.paths["/capabilities"]?.get);
 
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.capabilities]?.get);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.spaces]?.get);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.spaces]?.post);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.groups]?.get);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.groups]?.post);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.deployments]?.post);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.deployments]?.get);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.deployment]?.get);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.deploymentApply]?.post);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.deploymentApprove]?.post);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.deploymentObservations]?.get);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.groupHead]?.get);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.groupRollback]?.post);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities]?.get);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.spaces]?.get);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.spaces]?.post);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.groups]?.get);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.groups]?.post);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.deployments]?.post);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.deployments]?.get);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.deployment]?.get);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply]?.post);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove]?.post);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations]?.get);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead]?.get);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback]?.post);
 
   assert.equal(
-    doc.paths[TAKOS_PAAS_PUBLIC_PATHS.spaces]?.get?.security?.[0]
+    doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.spaces]?.get?.security?.[0]
       .actorBearer.length,
     0,
   );
   assert.equal(
-    doc.paths[TAKOS_PAAS_PUBLIC_PATHS.deployments]?.post?.responses["201"]
+    doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.deployments]?.post?.responses["201"]
       ?.description,
     "JSON response",
   );
@@ -100,34 +100,34 @@ Deno.test("createPaaSOpenApiDocument covers current route inventory", () => {
   const expected: Array<readonly ["delete" | "get" | "post", string]> = [
     ["get", "/health"],
     ["get", "/capabilities"],
-    ["get", TAKOS_PAAS_PUBLIC_PATHS.capabilities],
-    ["get", TAKOS_PAAS_PUBLIC_PATHS.spaces],
-    ["post", TAKOS_PAAS_PUBLIC_PATHS.spaces],
-    ["get", TAKOS_PAAS_PUBLIC_PATHS.groups],
-    ["post", TAKOS_PAAS_PUBLIC_PATHS.groups],
-    ["post", TAKOS_PAAS_PUBLIC_PATHS.deployments],
-    ["get", TAKOS_PAAS_PUBLIC_PATHS.deployments],
-    ["get", TAKOS_PAAS_PUBLIC_PATHS.deployment],
-    ["post", TAKOS_PAAS_PUBLIC_PATHS.deploymentApply],
-    ["post", TAKOS_PAAS_PUBLIC_PATHS.deploymentApprove],
-    ["get", TAKOS_PAAS_PUBLIC_PATHS.deploymentObservations],
-    ["get", TAKOS_PAAS_PUBLIC_PATHS.groupHead],
-    ["post", TAKOS_PAAS_PUBLIC_PATHS.groupRollback],
+    ["get", TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities],
+    ["get", TAKOSUMI_PAAS_PUBLIC_PATHS.spaces],
+    ["post", TAKOSUMI_PAAS_PUBLIC_PATHS.spaces],
+    ["get", TAKOSUMI_PAAS_PUBLIC_PATHS.groups],
+    ["post", TAKOSUMI_PAAS_PUBLIC_PATHS.groups],
+    ["post", TAKOSUMI_PAAS_PUBLIC_PATHS.deployments],
+    ["get", TAKOSUMI_PAAS_PUBLIC_PATHS.deployments],
+    ["get", TAKOSUMI_PAAS_PUBLIC_PATHS.deployment],
+    ["post", TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply],
+    ["post", TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove],
+    ["get", TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations],
+    ["get", TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead],
+    ["post", TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback],
     ["get", TAKOSUMI_INTERNAL_PATHS.spaces],
     ["post", TAKOSUMI_INTERNAL_PATHS.spaces],
     ["get", TAKOSUMI_INTERNAL_PATHS.groups],
     ["post", TAKOSUMI_INTERNAL_PATHS.groups],
     ["post", TAKOSUMI_INTERNAL_PATHS.deployments],
     ["post", TAKOSUMI_INTERNAL_PATHS.deploymentApply],
-    ["post", TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll],
-    ["post", TAKOS_PAAS_RUNTIME_AGENT_PATHS.heartbeat],
-    ["post", TAKOS_PAAS_RUNTIME_AGENT_PATHS.lease],
-    ["post", TAKOS_PAAS_RUNTIME_AGENT_PATHS.report],
-    ["post", TAKOS_PAAS_RUNTIME_AGENT_PATHS.drain],
-    ["post", TAKOS_PAAS_RUNTIME_AGENT_PATHS.gatewayManifest],
-    ["get", TAKOS_PAAS_READINESS_PATHS.ready],
-    ["get", TAKOS_PAAS_READINESS_PATHS.live],
-    ["get", TAKOS_PAAS_READINESS_PATHS.statusSummary],
+    ["post", TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll],
+    ["post", TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.heartbeat],
+    ["post", TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.lease],
+    ["post", TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.report],
+    ["post", TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.drain],
+    ["post", TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.gatewayManifest],
+    ["get", TAKOSUMI_PAAS_READINESS_PATHS.ready],
+    ["get", TAKOSUMI_PAAS_READINESS_PATHS.live],
+    ["get", TAKOSUMI_PAAS_READINESS_PATHS.statusSummary],
   ];
 
   for (const [method, path] of expected) {
@@ -144,20 +144,20 @@ Deno.test("createPaaSOpenApiDocument only emits mounted route families", () => {
   });
 
   assert.ok(doc.paths["/health"]?.get);
-  assert.ok(doc.paths[TAKOS_PAAS_PUBLIC_PATHS.spaces]?.get);
+  assert.ok(doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.spaces]?.get);
   assert.equal(doc.paths[TAKOSUMI_INTERNAL_PATHS.spaces], undefined);
-  assert.equal(doc.paths[TAKOS_PAAS_RUNTIME_AGENT_PATHS.enroll], undefined);
-  assert.equal(doc.paths[TAKOS_PAAS_READINESS_PATHS.ready], undefined);
+  assert.equal(doc.paths[TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll], undefined);
+  assert.equal(doc.paths[TAKOSUMI_PAAS_READINESS_PATHS.ready], undefined);
 });
 
 Deno.test("createPaaSOpenApiDocument describes runtime-agent and readiness auth", () => {
   const doc = allRoutesDoc();
 
-  for (const path of Object.values(TAKOS_PAAS_RUNTIME_AGENT_PATHS)) {
+  for (const path of Object.values(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS)) {
     assert.equal(doc.paths[path]?.post?.["x-takos-auth"], "internal-service");
   }
   assert.deepEqual(
-    doc.paths[TAKOS_PAAS_RUNTIME_AGENT_PATHS.heartbeat]?.post?.parameters,
+    doc.paths[TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.heartbeat]?.post?.parameters,
     [{
       name: "agentId",
       in: "path",
@@ -165,7 +165,7 @@ Deno.test("createPaaSOpenApiDocument describes runtime-agent and readiness auth"
       schema: { type: "string" },
     }],
   );
-  for (const path of Object.values(TAKOS_PAAS_READINESS_PATHS)) {
+  for (const path of Object.values(TAKOSUMI_PAAS_READINESS_PATHS)) {
     assert.equal(doc.paths[path]?.get?.["x-takos-auth"], "none");
   }
 });
@@ -174,7 +174,7 @@ Deno.test("createPaaSOpenApiDocument documents space-scoped group head and rollb
   const doc = allRoutesDoc();
 
   assert.deepEqual(
-    doc.paths[TAKOS_PAAS_PUBLIC_PATHS.groupHead]?.get?.parameters,
+    doc.paths[TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead]?.get?.parameters,
     [
       {
         name: "groupId",

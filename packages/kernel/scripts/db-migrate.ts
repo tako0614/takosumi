@@ -6,8 +6,8 @@
  * so operators can apply the canonical postgresStorageMigrationStatements catalog from a CLI:
  *
  *   deno task db:migrate                      # apply pending against $DATABASE_URL
- *   deno task db:migrate --env=staging        # apply pending against $TAKOS_STAGING_DATABASE_URL
- *   deno task db:migrate --env=production     # apply pending against $TAKOS_PRODUCTION_DATABASE_URL
+ *   deno task db:migrate --env=staging        # apply pending against $TAKOSUMI_STAGING_DATABASE_URL
+ *   deno task db:migrate --env=production     # apply pending against $TAKOSUMI_PRODUCTION_DATABASE_URL
  *   deno task db:migrate --env=local          # apply pending against an in-memory SqlClient
  *   deno task db:migrate:dry-run              # print SQL preview only, do not apply
  *
@@ -70,15 +70,15 @@ function parseArgs(argv: readonly string[]): CliOptions {
 function printHelp(): void {
   console.log(
     [
-      "takos-paas db migrate runner",
+      "takosumi db migrate runner",
       "",
       "Usage:",
       "  deno task db:migrate [--env=local|staging|production] [--dry-run]",
       "  deno task db:migrate:dry-run",
       "",
       "Env vars (read by --env):",
-      "  --env=production   $TAKOS_PRODUCTION_DATABASE_URL or $DATABASE_URL",
-      "  --env=staging      $TAKOS_STAGING_DATABASE_URL or $DATABASE_URL",
+      "  --env=production   $TAKOSUMI_PRODUCTION_DATABASE_URL or $DATABASE_URL",
+      "  --env=staging      $TAKOSUMI_STAGING_DATABASE_URL or $DATABASE_URL",
       "  --env=local        in-memory SqlClient (no network)",
     ].join("\n"),
   );
@@ -289,8 +289,8 @@ async function resolveTarget(env: EnvName): Promise<ResolvedTarget> {
     };
   }
   const candidates = env === "production"
-    ? ["TAKOS_PRODUCTION_DATABASE_URL", "DATABASE_URL"]
-    : ["TAKOS_STAGING_DATABASE_URL", "DATABASE_URL"];
+    ? ["TAKOSUMI_PRODUCTION_DATABASE_URL", "DATABASE_URL"]
+    : ["TAKOSUMI_STAGING_DATABASE_URL", "DATABASE_URL"];
   let url: string | undefined;
   for (const key of candidates) {
     const value = Deno.env.get(key);
