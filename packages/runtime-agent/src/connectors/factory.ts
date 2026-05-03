@@ -21,6 +21,7 @@ import { CloudflareContainerConnector } from "./cloudflare/container.ts";
 import { CloudflareDnsConnector } from "./cloudflare/dns.ts";
 import { CloudflareR2Connector } from "./cloudflare/r2.ts";
 import { CloudflareWorkersConnector } from "./cloudflare/workers.ts";
+import { DenoDeployWorkersConnector } from "./deno_deploy/workers.ts";
 import { AzureContainerAppsConnector } from "./azure/container_apps.ts";
 import { K3sDeploymentConnector } from "./kubernetes/k3s_deployment.ts";
 import { CorednsLocalConnector } from "./selfhost/coredns_local.ts";
@@ -57,6 +58,10 @@ export interface ConnectorBootOptions {
     readonly accountId: string;
     readonly apiToken: string;
     readonly zoneId?: string;
+  };
+  readonly denoDeploy?: {
+    readonly accessToken: string;
+    readonly organizationId?: string;
   };
   readonly azure?: {
     readonly subscriptionId: string;
@@ -190,6 +195,15 @@ export function buildConnectorRegistry(
         }),
       );
     }
+  }
+
+  if (opts.denoDeploy) {
+    reg.register(
+      new DenoDeployWorkersConnector({
+        accessToken: opts.denoDeploy.accessToken,
+        organizationId: opts.denoDeploy.organizationId,
+      }),
+    );
   }
 
   if (opts.azure) {

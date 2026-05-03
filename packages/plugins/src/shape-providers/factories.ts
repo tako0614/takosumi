@@ -57,6 +57,12 @@ export interface TakosumiProductionProviderOptions {
    * local-docker, coredns-local). Default: true.
    */
   readonly enableSelfhost?: boolean;
+  /**
+   * Enable Deno Deploy provider (deno-deploy → worker@v1). Default: false —
+   * the runtime-agent must have a Deno Deploy connector registered via
+   * `connectorBootOptions.denoDeploy` for this provider to do anything.
+   */
+  readonly enableDenoDeploy?: boolean;
   /** Optional clock for status timestamps. */
   readonly clock?: () => Date;
   /**
@@ -220,6 +226,14 @@ const KUBERNETES_PROVIDERS: readonly ProviderEntry[] = [
   },
 ];
 
+const DENO_DEPLOY_PROVIDERS: readonly ProviderEntry[] = [
+  {
+    id: "deno-deploy",
+    shape: WORKER,
+    capabilities: ["scale-to-zero", "long-request", "geo-routing"],
+  },
+];
+
 const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "filesystem",
@@ -292,6 +306,7 @@ export function createTakosumiProductionProviders(
   if (opts.enableAzure !== false) push(AZURE_PROVIDERS);
   if (opts.enableKubernetes !== false) push(KUBERNETES_PROVIDERS);
   if (opts.enableSelfhost !== false) push(SELFHOST_PROVIDERS);
+  if (opts.enableDenoDeploy === true) push(DENO_DEPLOY_PROVIDERS);
 
   return out;
 }

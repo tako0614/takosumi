@@ -53,17 +53,39 @@ const listCmd = new Command()
   .description("List artifacts stored in the kernel")
   .option("--remote <url:string>", "Kernel base URL")
   .option("--token <token:string>", "Bearer token")
-  .action(async ({ remote, token }) => {
+  .option(
+    "--limit <n:number>",
+    "Per-page limit; CLI follows pagination automatically",
+  )
+  .action(async ({ remote, token, limit }) => {
     const target = requireRemote(remote, token);
-    const response = await fetch(`${target.url}${ARTIFACTS_BASE_PATH}`, {
-      headers: { authorization: `Bearer ${target.token}` },
-    });
-    const body = await readBody(response);
-    if (!response.ok) {
-      console.error(`kernel ${response.status}:`, body);
-      Deno.exit(1);
+    interface ListPage {
+      readonly artifacts?: readonly unknown[];
+      readonly nextCursor?: string;
     }
-    console.log(JSON.stringify(body, null, 2));
+    const allArtifacts: unknown[] = [];
+    let cursor: string | undefined;
+    const pageLimit = typeof limit === "number" && limit > 0 ? limit : 100;
+    // The kernel endpoint enforces 1..1000; we just walk pages until
+    // nextCursor disappears or we exceed a sane upper bound.
+    for (let pages = 0; pages < 10_000; pages++) {
+      const url = new URL(`${target.url}${ARTIFACTS_BASE_PATH}`);
+      url.searchParams.set("limit", String(pageLimit));
+      if (cursor) url.searchParams.set("cursor", cursor);
+      const response = await fetch(url, {
+        headers: { authorization: `Bearer ${target.token}` },
+      });
+      const body = await readBody(response) as ListPage;
+      if (!response.ok) {
+        console.error(`kernel ${response.status}:`, body);
+        Deno.exit(1);
+      }
+      const page = Array.isArray(body?.artifacts) ? body.artifacts : [];
+      for (const a of page) allArtifacts.push(a);
+      if (!body?.nextCursor) break;
+      cursor = body.nextCursor;
+    }
+    console.log(JSON.stringify({ artifacts: allArtifacts }, null, 2));
   });
 
 const rmCmd = new Command()
@@ -89,11 +111,40 @@ const rmCmd = new Command()
     Deno.exit(1);
   });
 
+const gcCmd = new Command()
+  .description(
+    "Garbage-collect artifacts not referenced by any persisted deployment",
+  )
+  .option("--remote <url:string>", "Kernel base URL")
+  .option("--token <token:string>", "Bearer token")
+  .option(
+    "--dry-run",
+    "Report what would be deleted without actually deleting",
+  )
+  .action(async ({ remote, token, dryRun }) => {
+    const target = requireRemote(remote, token);
+    const url = new URL(`${target.url}${ARTIFACTS_BASE_PATH}/gc`);
+    if (dryRun) url.searchParams.set("dryRun", "1");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${target.token}` },
+    });
+    const body = await readBody(response);
+    if (!response.ok) {
+      console.error(`kernel ${response.status}:`, body);
+      Deno.exit(1);
+    }
+    console.log(JSON.stringify(body, null, 2));
+  });
+
 export const artifactCommand = new Command()
-  .description("Manage Takosumi-kernel artifact uploads (push / list / rm)")
+  .description(
+    "Manage Takosumi-kernel artifact uploads (push / list / rm / gc)",
+  )
   .command("push", pushCmd)
   .command("list", listCmd)
-  .command("rm", rmCmd);
+  .command("rm", rmCmd)
+  .command("gc", gcCmd);
 
 interface RemoteTarget {
   readonly url: string;

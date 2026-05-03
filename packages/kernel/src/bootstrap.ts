@@ -69,6 +69,7 @@ export async function createPaaSApp(
     }).start()
     : undefined;
   const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
+  const fetchToken = runtimeEnv.TAKOSUMI_ARTIFACT_FETCH_TOKEN;
   const app = await createApiApp({
     role,
     context,
@@ -85,6 +86,7 @@ export async function createPaaSApp(
       ? {
         getDeployToken: () => deployToken,
         objectStorage: context.adapters.objectStorage,
+        ...(fetchToken ? { getArtifactFetchToken: () => fetchToken } : {}),
       }
       : undefined,
     readinessRouteProbes: createRoleReadinessProbes({
@@ -155,12 +157,20 @@ export function registerBundledShapesAndProviders(
  * Resolves the URL the runtime-agent's connectors should use to fetch
  * uploaded artifacts (e.g. JS bundles for cloudflare-workers). The kernel
  * exposes `POST/GET /v1/artifacts` itself, so the agent simply needs the
- * kernel's externally-reachable base URL plus the same deploy token.
+ * kernel's externally-reachable base URL plus a token that the artifact
+ * routes will accept on GET / HEAD.
  *
- * Returns `undefined` when either env var is missing — connectors that don't
- * need uploaded artifacts (the OCI-image set) keep working; connectors that
- * do (cloudflare-workers, future lambda-zip / static-bundle) will fail their
- * apply with a clear error that surfaces back to the operator.
+ * Token preference: when `TAKOSUMI_ARTIFACT_FETCH_TOKEN` is set we hand
+ * the agent the read-only fetch token instead of the deploy token. The
+ * artifact routes accept either on read paths but only the deploy token
+ * on POST / DELETE / GC, so a compromised agent host gets read-only
+ * artifact access rather than full upload / delete / GC power.
+ *
+ * Returns `undefined` when either the public URL or both tokens are
+ * missing — connectors that don't need uploaded artifacts (the OCI-image
+ * set) keep working; connectors that do (cloudflare-workers, future
+ * lambda-zip / static-bundle) will fail their apply with a clear error
+ * that surfaces back to the operator.
  */
 function detectArtifactStore(
   runtimeEnv: Record<string, string | undefined>,
@@ -169,13 +179,19 @@ function detectArtifactStore(
   | undefined {
   const publicBaseUrl = runtimeEnv.TAKOSUMI_PUBLIC_BASE_URL;
   const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
-  if (!publicBaseUrl || !deployToken) return undefined;
+  const fetchToken = runtimeEnv.TAKOSUMI_ARTIFACT_FETCH_TOKEN;
+  // The artifact-store locator must point at a token the routes accept
+  // on GET. Both the deploy token and the read-only fetch token work; we
+  // prefer the read-only one so the agent host never holds upload /
+  // delete / GC power.
+  const token = fetchToken ?? deployToken;
+  if (!publicBaseUrl || !token) return undefined;
   const trimmed = publicBaseUrl.endsWith("/")
     ? publicBaseUrl.slice(0, -1)
     : publicBaseUrl;
   return {
     baseUrl: `${trimmed}/v1/artifacts`,
-    token: deployToken,
+    token,
   };
 }
 

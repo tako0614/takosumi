@@ -86,6 +86,12 @@ function detectFromEnv(
       zoneId: env.CLOUDFLARE_ZONE_ID,
     }
     : undefined;
+  const denoDeploy = env.DENO_DEPLOY_ACCESS_TOKEN
+    ? {
+      accessToken: env.DENO_DEPLOY_ACCESS_TOKEN,
+      organizationId: env.DENO_DEPLOY_ORGANIZATION_ID,
+    }
+    : undefined;
   const azure = env.AZURE_SUBSCRIPTION_ID && env.AZURE_RESOURCE_GROUP &&
       env.AZURE_BEARER_TOKEN
     ? {
@@ -111,5 +117,5 @@ function detectFromEnv(
     corednsFile: env.TAKOSUMI_SELFHOSTED_COREDNS_FILE,
     postgresHost: env.TAKOSUMI_SELFHOSTED_POSTGRES_HOST,
   };
-  return { aws, gcp, cloudflare, azure, kubernetes, selfhost };
+  return { aws, gcp, cloudflare, denoDeploy, azure, kubernetes, selfhost };
 }

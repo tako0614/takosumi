@@ -62,22 +62,44 @@ function fakeFetcher(
   };
 }
 
-function okEnvelope(): Response {
+function okEnvelope(extra: Record<string, unknown> = {}): Response {
   return new Response(
-    JSON.stringify({ success: true, result: {} }),
+    JSON.stringify({ success: true, result: extra }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
 }
 
+function subdomainEnvelope(subdomain: string): Response {
+  return new Response(
+    JSON.stringify({ success: true, result: { subdomain } }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+/**
+ * Build a recording fetch that returns sequential responses by URL pattern:
+ * GET subdomain → returns subdomainEnvelope, anything else → okEnvelope.
+ */
+function recordingFetchWithSubdomain(
+  subdomain: string,
+): { fetch: typeof fetch; calls: CapturedCall[] } {
+  return recordingFetch((call) => {
+    if (call.method === "GET" && call.url.endsWith("/workers/subdomain")) {
+      return subdomainEnvelope(subdomain);
+    }
+    return okEnvelope();
+  });
+}
+
 Deno.test(
-  "CloudflareWorkersConnector.apply fetches js-bundle, PUTs multipart upload, returns descriptor",
+  "CloudflareWorkersConnector.apply fetches subdomain, then PUTs multipart upload",
   async () => {
     const bundleBytes = new TextEncoder().encode(
       "export default { fetch() {} }",
     );
     const requestedHashes: string[] = [];
     const fetcher = fakeFetcher(bundleBytes, requestedHashes);
-    const { fetch: mockFetch, calls } = recordingFetch(() => okEnvelope());
+    const { fetch: mockFetch, calls } = recordingFetchWithSubdomain("my-team");
     const connector = new CloudflareWorkersConnector({
       accountId: "acct-1",
       apiToken: "cf-token",
@@ -100,19 +122,24 @@ Deno.test(
     assert.equal(result.handle, "acct-1/my-script");
     assert.equal(
       result.outputs.url,
-      "https://my-script.acct-1.workers.dev",
+      "https://my-script.my-team.workers.dev",
     );
     assert.equal(result.outputs.scriptName, "my-script");
-    assert.equal(calls.length, 1);
-    const [call] = calls;
-    assert.equal(call.method, "PUT");
-    assert.equal(call.authorization, "Bearer cf-token");
+    assert.equal(calls.length, 2);
+    const [subdomainCall, putCall] = calls;
+    assert.equal(subdomainCall.method, "GET");
     assert.match(
-      call.url,
+      subdomainCall.url,
+      /\/accounts\/acct-1\/workers\/subdomain$/,
+    );
+    assert.equal(putCall.method, "PUT");
+    assert.equal(putCall.authorization, "Bearer cf-token");
+    assert.match(
+      putCall.url,
       /\/accounts\/acct-1\/workers\/scripts\/my-script$/,
     );
-    assert.ok(call.body, "expected FormData body");
-    const metadataPart = call.body!.get("metadata");
+    assert.ok(putCall.body, "expected FormData body");
+    const metadataPart = putCall.body!.get("metadata");
     assert.ok(metadataPart instanceof Blob);
     const metadataJson = JSON.parse(await (metadataPart as Blob).text()) as {
       main_module: string;
@@ -127,7 +154,7 @@ Deno.test(
     assert.deepEqual(metadataJson.bindings, [
       { type: "plain_text", name: "LOG_LEVEL", text: "info" },
     ]);
-    const modulePart = call.body!.get("worker.js");
+    const modulePart = putCall.body!.get("worker.js");
     assert.ok(modulePart instanceof Blob);
     const moduleBytes = new Uint8Array(
       await (modulePart as Blob).arrayBuffer(),
@@ -140,7 +167,7 @@ Deno.test(
   "CloudflareWorkersConnector.apply uses artifact.metadata.entrypoint when present",
   async () => {
     const fetcher = fakeFetcher(new Uint8Array([1, 2, 3]), []);
-    const { fetch: mockFetch, calls } = recordingFetch(() => okEnvelope());
+    const { fetch: mockFetch, calls } = recordingFetchWithSubdomain("teams");
     const connector = new CloudflareWorkersConnector({
       accountId: "acct",
       apiToken: "tok",
@@ -160,17 +187,19 @@ Deno.test(
       },
     }, { fetcher });
 
-    const metadataBlob = calls[0].body!.get("metadata") as Blob;
+    // [0]=GET subdomain, [1]=PUT script
+    const putCall = calls[1];
+    const metadataBlob = putCall.body!.get("metadata") as Blob;
     const metadata = JSON.parse(await metadataBlob.text());
     assert.equal(metadata.main_module, "main.mjs");
-    assert.ok(calls[0].body!.get("main.mjs") instanceof Blob);
+    assert.ok(putCall.body!.get("main.mjs") instanceof Blob);
   },
 );
 
 Deno.test(
   "CloudflareWorkersConnector.apply rejects when ctx.fetcher is undefined",
   async () => {
-    const { fetch: mockFetch } = recordingFetch(() => okEnvelope());
+    const { fetch: mockFetch } = recordingFetchWithSubdomain("teams");
     const connector = new CloudflareWorkersConnector({
       accountId: "acct",
       apiToken: "tok",
@@ -199,7 +228,7 @@ Deno.test(
   "CloudflareWorkersConnector.apply rejects when artifact.hash is missing",
   async () => {
     const fetcher = fakeFetcher(new Uint8Array(), []);
-    const { fetch: mockFetch } = recordingFetch(() => okEnvelope());
+    const { fetch: mockFetch } = recordingFetchWithSubdomain("teams");
     const connector = new CloudflareWorkersConnector({
       accountId: "acct",
       apiToken: "tok",
@@ -269,18 +298,23 @@ Deno.test(
 );
 
 Deno.test(
-  "CloudflareWorkersConnector.describe returns running on 200, missing on 404",
+  "CloudflareWorkersConnector.describe returns running on 200 with subdomain url, missing on 404",
   async () => {
-    let nextStatus = 200;
-    const { fetch: mockFetch } = recordingFetch(() =>
-      new Response(
-        nextStatus === 404 ? "" : JSON.stringify({ success: true, result: {} }),
+    let nextScriptStatus = 200;
+    const { fetch: mockFetch } = recordingFetch((call) => {
+      if (call.method === "GET" && call.url.endsWith("/workers/subdomain")) {
+        return subdomainEnvelope("teams");
+      }
+      // describe path: GET /workers/scripts/<name>
+      const status = nextScriptStatus;
+      return new Response(
+        status === 404 ? "" : JSON.stringify({ success: true, result: {} }),
         {
-          status: nextStatus,
+          status,
           headers: { "content-type": "application/json" },
         },
-      )
-    );
+      );
+    });
     const connector = new CloudflareWorkersConnector({
       accountId: "acct-1",
       apiToken: "cf-token",
@@ -295,15 +329,98 @@ Deno.test(
     assert.equal(running.status, "running");
     assert.equal(
       (running.outputs as { url?: string } | undefined)?.url,
-      "https://my-script.acct-1.workers.dev",
+      "https://my-script.teams.workers.dev",
     );
 
-    nextStatus = 404;
+    nextScriptStatus = 404;
     const missing = await connector.describe({
       shape: "worker@v1",
       provider: "cloudflare-workers",
       handle: "acct-1/my-script",
     }, {});
     assert.equal(missing.status, "missing");
+  },
+);
+
+Deno.test(
+  "CloudflareWorkersConnector.apply falls back to accountId.workers.dev when subdomain returns 404",
+  async () => {
+    const fetcher = fakeFetcher(new Uint8Array([42]), []);
+    const { fetch: mockFetch } = recordingFetch((call) => {
+      if (call.method === "GET" && call.url.endsWith("/workers/subdomain")) {
+        return new Response("", { status: 404 });
+      }
+      return okEnvelope();
+    });
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    let result;
+    try {
+      const connector = new CloudflareWorkersConnector({
+        accountId: "acct-no-sub",
+        apiToken: "tok",
+        fetch: mockFetch,
+      });
+      result = await connector.apply({
+        shape: "worker@v1",
+        provider: "cloudflare-workers",
+        resourceName: "fn",
+        spec: {
+          artifact: { kind: "js-bundle", hash: "sha256:abc" },
+          compatibilityDate: "2025-01-01",
+        },
+      }, { fetcher });
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.equal(result.outputs.url, "https://fn.acct-no-sub.workers.dev");
+    assert.ok(
+      warnings.some((w) => w.includes("acct-no-sub")),
+      "expected console.warn about missing subdomain",
+    );
+  },
+);
+
+Deno.test(
+  "CloudflareWorkersConnector caches the subdomain across calls",
+  async () => {
+    const fetcher = fakeFetcher(new Uint8Array([1]), []);
+    let subdomainHits = 0;
+    const { fetch: mockFetch } = recordingFetch((call) => {
+      if (call.method === "GET" && call.url.endsWith("/workers/subdomain")) {
+        subdomainHits += 1;
+        return subdomainEnvelope("cache-team");
+      }
+      return okEnvelope();
+    });
+    const connector = new CloudflareWorkersConnector({
+      accountId: "acct",
+      apiToken: "tok",
+      fetch: mockFetch,
+    });
+
+    await connector.apply({
+      shape: "worker@v1",
+      provider: "cloudflare-workers",
+      resourceName: "fn",
+      spec: {
+        artifact: { kind: "js-bundle", hash: "sha256:abc" },
+        compatibilityDate: "2025-01-01",
+      },
+    }, { fetcher });
+    await connector.apply({
+      shape: "worker@v1",
+      provider: "cloudflare-workers",
+      resourceName: "fn2",
+      spec: {
+        artifact: { kind: "js-bundle", hash: "sha256:def" },
+        compatibilityDate: "2025-01-01",
+      },
+    }, { fetcher });
+
+    assert.equal(subdomainHits, 1);
   },
 );

@@ -82,6 +82,14 @@ import {
   createCoreDnsLocalProvider,
   InMemoryCoreDnsLifecycle,
 } from "./custom-domain/coredns-local.ts";
+import {
+  createCloudflareWorkersProvider,
+  InMemoryCloudflareWorkersLifecycle,
+} from "./worker/cloudflare-workers.ts";
+import {
+  createDenoDeployProvider,
+  InMemoryDenoDeployLifecycle,
+} from "./worker/deno-deploy.ts";
 
 export {
   createTakosumiProductionProviders,
@@ -173,6 +181,14 @@ export function createInMemoryTakosumiProviders(): readonly ProviderPlugin[] {
     createCoreDnsLocalProvider({
       lifecycle: new InMemoryCoreDnsLifecycle("/etc/coredns/Corefile"),
       zoneFile: "/etc/coredns/Corefile",
+    }) as unknown as ProviderPlugin,
+    createCloudflareWorkersProvider({
+      lifecycle: new InMemoryCloudflareWorkersLifecycle("test-account"),
+      accountId: "test-account",
+    }) as unknown as ProviderPlugin,
+    createDenoDeployProvider({
+      lifecycle: new InMemoryDenoDeployLifecycle("test-org"),
+      organizationId: "test-org",
     }) as unknown as ProviderPlugin,
   ];
 }

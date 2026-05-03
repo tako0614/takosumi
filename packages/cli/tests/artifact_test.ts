@@ -78,8 +78,112 @@ Deno.test("artifact list GETs /v1/artifacts with bearer token", async () => {
     );
     await artifactCommand.parse(["list"]);
     assert.equal(observed.method, "GET");
-    assert.equal(observed.url, "http://example.test/v1/artifacts");
+    // CLI now appends `limit=...` for pagination; assert the path + query.
+    const url = new URL(observed.url);
+    assert.equal(url.origin + url.pathname, "http://example.test/v1/artifacts");
+    assert.ok(url.searchParams.has("limit"));
     assert.equal(observed.auth, "Bearer T");
+  } finally {
+    restore();
+    Deno.env.delete("TAKOSUMI_KERNEL_URL");
+    Deno.env.delete("TAKOSUMI_TOKEN");
+  }
+});
+
+Deno.test("artifact list follows pagination cursor automatically", async () => {
+  // Two-page response: first page has nextCursor, second is final.
+  const calls: Array<{ url: string }> = [];
+  const restore = mockFetch((req) => {
+    calls.push({ url: req.url });
+    const url = new URL(req.url);
+    if (url.searchParams.get("cursor") === "page-2") {
+      return new Response(
+        JSON.stringify({
+          artifacts: [{ hash: "sha256:b" }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        artifacts: [{ hash: "sha256:a" }],
+        nextCursor: "page-2",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+  try {
+    Deno.env.set("TAKOSUMI_KERNEL_URL", "http://example.test");
+    Deno.env.set("TAKOSUMI_TOKEN", "T");
+    const { artifactCommand } = await import(
+      `../src/commands/artifact.ts?${crypto.randomUUID()}`
+    );
+    await artifactCommand.parse(["list"]);
+    assert.equal(
+      calls.length,
+      2,
+      "CLI must follow the cursor through both pages",
+    );
+    assert.ok(!calls[0].url.includes("cursor="), "first call has no cursor");
+    assert.ok(calls[1].url.includes("cursor=page-2"));
+  } finally {
+    restore();
+    Deno.env.delete("TAKOSUMI_KERNEL_URL");
+    Deno.env.delete("TAKOSUMI_TOKEN");
+  }
+});
+
+Deno.test("artifact gc POSTs /v1/artifacts/gc", async () => {
+  let observed: { url: string; method: string; auth?: string };
+  observed = { url: "", method: "" };
+  const restore = mockFetch((req) => {
+    observed = {
+      url: req.url,
+      method: req.method,
+      auth: req.headers.get("authorization") ?? undefined,
+    };
+    return new Response(
+      JSON.stringify({ deleted: [], retained: 0, dryRun: false }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+  try {
+    Deno.env.set("TAKOSUMI_KERNEL_URL", "http://example.test");
+    Deno.env.set("TAKOSUMI_TOKEN", "T");
+    const { artifactCommand } = await import(
+      `../src/commands/artifact.ts?${crypto.randomUUID()}`
+    );
+    await artifactCommand.parse(["gc"]);
+    assert.equal(observed.method, "POST");
+    assert.equal(observed.url, "http://example.test/v1/artifacts/gc");
+    assert.equal(observed.auth, "Bearer T");
+  } finally {
+    restore();
+    Deno.env.delete("TAKOSUMI_KERNEL_URL");
+    Deno.env.delete("TAKOSUMI_TOKEN");
+  }
+});
+
+Deno.test("artifact gc --dry-run sets dryRun query param", async () => {
+  let observed: { url: string };
+  observed = { url: "" };
+  const restore = mockFetch((req) => {
+    observed = { url: req.url };
+    return new Response(
+      JSON.stringify({ deleted: [], retained: 0, dryRun: true }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+  try {
+    Deno.env.set("TAKOSUMI_KERNEL_URL", "http://example.test");
+    Deno.env.set("TAKOSUMI_TOKEN", "T");
+    const { artifactCommand } = await import(
+      `../src/commands/artifact.ts?${crypto.randomUUID()}`
+    );
+    await artifactCommand.parse(["gc", "--dry-run"]);
+    const url = new URL(observed.url);
+    assert.equal(url.pathname, "/v1/artifacts/gc");
+    assert.equal(url.searchParams.get("dryRun"), "1");
   } finally {
     restore();
     Deno.env.delete("TAKOSUMI_KERNEL_URL");

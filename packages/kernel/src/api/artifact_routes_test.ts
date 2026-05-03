@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { Hono, type Hono as HonoApp } from "hono";
 import { MemoryObjectStorage } from "../adapters/object-storage/memory.ts";
+import { InMemoryTakosumiDeploymentRecordStore } from "../domains/deploy/takosumi_deployment_record_store.ts";
 import {
   registerArtifactRoutes,
   TAKOSUMI_ARTIFACTS_BUCKET,
@@ -8,20 +9,35 @@ import {
 } from "./artifact_routes.ts";
 
 const VALID_TOKEN = "test-token-abc";
+const FETCH_TOKEN = "fetch-token-readonly";
 
 function createApp(opts: {
   token?: string | undefined;
+  fetchToken?: string | undefined;
   storage?: MemoryObjectStorage;
+  recordStore?: InMemoryTakosumiDeploymentRecordStore;
   now?: () => string;
-} = {}): { app: HonoApp; storage: MemoryObjectStorage } {
+} = {}): {
+  app: HonoApp;
+  storage: MemoryObjectStorage;
+  recordStore?: InMemoryTakosumiDeploymentRecordStore;
+} {
   const app: HonoApp = new Hono();
   const storage = opts.storage ?? new MemoryObjectStorage();
   registerArtifactRoutes(app, {
     getDeployToken: () => opts.token,
+    ...(opts.fetchToken !== undefined
+      ? { getArtifactFetchToken: () => opts.fetchToken }
+      : {}),
     objectStorage: storage,
-    now: opts.now,
+    ...(opts.recordStore ? { recordStore: opts.recordStore } : {}),
+    ...(opts.now ? { now: opts.now } : {}),
   });
-  return { app, storage };
+  return {
+    app,
+    storage,
+    ...(opts.recordStore ? { recordStore: opts.recordStore } : {}),
+  };
 }
 
 function authHeaders(token: string): Record<string, string> {
@@ -216,4 +232,330 @@ Deno.test("artifact DELETE removes the blob", async () => {
     headers: authHeaders(VALID_TOKEN),
   });
   assert.equal(after.status, 404);
+});
+
+// --- Task 2: pagination ------------------------------------------------------
+
+Deno.test("artifact list with limit=1 returns 1 + nextCursor", async () => {
+  const { app } = createApp({ token: VALID_TOKEN });
+  await uploadArtifact(app, VALID_TOKEN, new Uint8Array([1]), "js-bundle");
+  await uploadArtifact(app, VALID_TOKEN, new Uint8Array([2]), "lambda-zip");
+  const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}?limit=1`, {
+    headers: authHeaders(VALID_TOKEN),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.artifacts.length, 1);
+  assert.ok(body.nextCursor, "nextCursor must be present when more pages");
+});
+
+Deno.test(
+  "artifact list following cursor surfaces every artifact exactly once",
+  async () => {
+    const { app } = createApp({ token: VALID_TOKEN });
+    await uploadArtifact(app, VALID_TOKEN, new Uint8Array([1]), "k1");
+    await uploadArtifact(app, VALID_TOKEN, new Uint8Array([2]), "k2");
+    await uploadArtifact(app, VALID_TOKEN, new Uint8Array([3]), "k3");
+    const first = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}?limit=1`, {
+      headers: authHeaders(VALID_TOKEN),
+    });
+    const firstBody = await first.json();
+    assert.equal(firstBody.artifacts.length, 1);
+    assert.ok(firstBody.nextCursor);
+    const seenHashes = new Set<string>([firstBody.artifacts[0].hash]);
+    let cursor: string | undefined = firstBody.nextCursor;
+    let pages = 0;
+    while (cursor && pages < 10) {
+      const next: Response = await app.request(
+        `${TAKOSUMI_ARTIFACTS_PATH}?limit=1&cursor=${
+          encodeURIComponent(cursor)
+        }`,
+        { headers: authHeaders(VALID_TOKEN) },
+      );
+      const body = await next.json();
+      for (const a of body.artifacts) {
+        assert.ok(!seenHashes.has(a.hash), "duplicate hash across pages");
+        seenHashes.add(a.hash);
+      }
+      cursor = body.nextCursor;
+      pages++;
+    }
+    assert.equal(seenHashes.size, 3, "pagination must surface every artifact");
+  },
+);
+
+Deno.test("artifact list rejects non-positive limit", async () => {
+  const { app } = createApp({ token: VALID_TOKEN });
+  const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}?limit=0`, {
+    headers: authHeaders(VALID_TOKEN),
+  });
+  assert.equal(res.status, 400);
+});
+
+// --- Task 1: GC --------------------------------------------------------------
+
+Deno.test(
+  "artifact gc removes unreferenced artifacts but keeps referenced ones",
+  async () => {
+    const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+    const { app, storage } = createApp({
+      token: VALID_TOKEN,
+      recordStore,
+    });
+    const keepUpload = await uploadArtifact(
+      app,
+      VALID_TOKEN,
+      new TextEncoder().encode("keep"),
+      "js-bundle",
+    );
+    const keepBody = await keepUpload.json();
+    const dropUpload = await uploadArtifact(
+      app,
+      VALID_TOKEN,
+      new TextEncoder().encode("drop"),
+      "js-bundle",
+    );
+    const dropBody = await dropUpload.json();
+    await recordStore.upsert({
+      tenantId: "takosumi-deploy",
+      name: "app",
+      manifest: {
+        resources: [{ spec: { artifact: { hash: keepBody.hash } } }],
+      },
+      appliedResources: [],
+      status: "applied",
+      now: "2026-05-02T00:00:00.000Z",
+    });
+    const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/gc`, {
+      method: "POST",
+      headers: authHeaders(VALID_TOKEN),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.deleted, [dropBody.hash]);
+    assert.equal(body.retained, 1);
+    const keepHead = await storage.headObject({
+      bucket: TAKOSUMI_ARTIFACTS_BUCKET,
+      key: `artifacts/${keepBody.hash}`,
+    });
+    const dropHead = await storage.headObject({
+      bucket: TAKOSUMI_ARTIFACTS_BUCKET,
+      key: `artifacts/${dropBody.hash}`,
+    });
+    assert.ok(keepHead);
+    assert.equal(dropHead, undefined);
+  },
+);
+
+Deno.test("artifact gc respects dry-run", async () => {
+  const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+  const { app, storage } = createApp({
+    token: VALID_TOKEN,
+    recordStore,
+  });
+  const upload = await uploadArtifact(
+    app,
+    VALID_TOKEN,
+    new TextEncoder().encode("orphan"),
+    "js-bundle",
+  );
+  const stored = await upload.json();
+  const res = await app.request(
+    `${TAKOSUMI_ARTIFACTS_PATH}/gc?dryRun=1`,
+    { method: "POST", headers: authHeaders(VALID_TOKEN) },
+  );
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.dryRun, true);
+  assert.deepEqual(body.deleted, [stored.hash]);
+  const head = await storage.headObject({
+    bucket: TAKOSUMI_ARTIFACTS_BUCKET,
+    key: `artifacts/${stored.hash}`,
+  });
+  assert.ok(head, "dry run must not actually delete the blob");
+});
+
+Deno.test(
+  "artifact gc keeps artifacts referenced by destroyed records",
+  async () => {
+    const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+    const { app, storage } = createApp({
+      token: VALID_TOKEN,
+      recordStore,
+    });
+    const upload = await uploadArtifact(
+      app,
+      VALID_TOKEN,
+      new TextEncoder().encode("still-pinned"),
+      "js-bundle",
+    );
+    const stored = await upload.json();
+    await recordStore.upsert({
+      tenantId: "takosumi-deploy",
+      name: "destroyed-app",
+      manifest: {
+        resources: [{ spec: { artifact: { hash: stored.hash } } }],
+      },
+      appliedResources: [],
+      status: "applied",
+      now: "2026-05-02T00:00:00.000Z",
+    });
+    await recordStore.markDestroyed(
+      "takosumi-deploy",
+      "destroyed-app",
+      "2026-05-02T01:00:00.000Z",
+    );
+    const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/gc`, {
+      method: "POST",
+      headers: authHeaders(VALID_TOKEN),
+    });
+    const body = await res.json();
+    assert.deepEqual(body.deleted, []);
+    assert.equal(body.retained, 1);
+    const head = await storage.headObject({
+      bucket: TAKOSUMI_ARTIFACTS_BUCKET,
+      key: `artifacts/${stored.hash}`,
+    });
+    assert.ok(head);
+  },
+);
+
+Deno.test("artifact gc is idempotent", async () => {
+  const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+  const { app } = createApp({ token: VALID_TOKEN, recordStore });
+  await uploadArtifact(
+    app,
+    VALID_TOKEN,
+    new TextEncoder().encode("orphan"),
+    "js-bundle",
+  );
+  const first = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/gc`, {
+    method: "POST",
+    headers: authHeaders(VALID_TOKEN),
+  });
+  const firstBody = await first.json();
+  assert.equal(firstBody.deleted.length, 1);
+  const second = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/gc`, {
+    method: "POST",
+    headers: authHeaders(VALID_TOKEN),
+  });
+  const secondBody = await second.json();
+  assert.equal(secondBody.deleted.length, 0);
+  assert.equal(secondBody.retained, 0);
+});
+
+Deno.test("artifact gc requires deploy token (not fetch token)", async () => {
+  const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+  const { app } = createApp({
+    token: VALID_TOKEN,
+    fetchToken: FETCH_TOKEN,
+    recordStore,
+  });
+  const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/gc`, {
+    method: "POST",
+    headers: authHeaders(FETCH_TOKEN),
+  });
+  assert.equal(res.status, 401);
+});
+
+// --- Task 3: read-only fetch token -------------------------------------------
+
+Deno.test("artifact GET accepts the read-only fetch token", async () => {
+  const { app } = createApp({
+    token: VALID_TOKEN,
+    fetchToken: FETCH_TOKEN,
+  });
+  const upload = await uploadArtifact(
+    app,
+    VALID_TOKEN,
+    new TextEncoder().encode("hello"),
+    "js-bundle",
+  );
+  const stored = await upload.json();
+  const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/${stored.hash}`, {
+    headers: authHeaders(FETCH_TOKEN),
+  });
+  assert.equal(res.status, 200);
+});
+
+Deno.test("artifact HEAD accepts the read-only fetch token", async () => {
+  const { app } = createApp({
+    token: VALID_TOKEN,
+    fetchToken: FETCH_TOKEN,
+  });
+  const upload = await uploadArtifact(
+    app,
+    VALID_TOKEN,
+    new TextEncoder().encode("hello"),
+    "js-bundle",
+  );
+  const stored = await upload.json();
+  const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/${stored.hash}`, {
+    method: "HEAD",
+    headers: authHeaders(FETCH_TOKEN),
+  });
+  assert.equal(res.status, 200);
+});
+
+Deno.test(
+  "artifact POST rejects the read-only fetch token with 401",
+  async () => {
+    const { app } = createApp({
+      token: VALID_TOKEN,
+      fetchToken: FETCH_TOKEN,
+    });
+    const form = new FormData();
+    form.set("kind", "js-bundle");
+    form.set("body", new Blob([new Uint8Array([1]) as BlobPart]), "f.bin");
+    const res = await app.request(TAKOSUMI_ARTIFACTS_PATH, {
+      method: "POST",
+      headers: authHeaders(FETCH_TOKEN),
+      body: form,
+    });
+    assert.equal(res.status, 401);
+  },
+);
+
+Deno.test(
+  "artifact DELETE rejects the read-only fetch token with 401",
+  async () => {
+    const { app } = createApp({
+      token: VALID_TOKEN,
+      fetchToken: FETCH_TOKEN,
+    });
+    const upload = await uploadArtifact(
+      app,
+      VALID_TOKEN,
+      new Uint8Array([1, 2]),
+      "js-bundle",
+    );
+    const stored = await upload.json();
+    const res = await app.request(
+      `${TAKOSUMI_ARTIFACTS_PATH}/${stored.hash}`,
+      {
+        method: "DELETE",
+        headers: authHeaders(FETCH_TOKEN),
+      },
+    );
+    assert.equal(res.status, 401);
+  },
+);
+
+Deno.test("artifact GET still works with the deploy token", async () => {
+  // Sanity: setting the fetch token must NOT lock out the deploy token.
+  const { app } = createApp({
+    token: VALID_TOKEN,
+    fetchToken: FETCH_TOKEN,
+  });
+  const upload = await uploadArtifact(
+    app,
+    VALID_TOKEN,
+    new TextEncoder().encode("hello"),
+    "js-bundle",
+  );
+  const stored = await upload.json();
+  const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/${stored.hash}`, {
+    headers: authHeaders(VALID_TOKEN),
+  });
+  assert.equal(res.status, 200);
 });

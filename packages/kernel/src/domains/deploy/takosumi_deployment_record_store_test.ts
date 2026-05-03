@@ -158,3 +158,132 @@ Deno.test("recordsFromAppliedResources copies shape from manifest", () => {
   assert.equal(records[0].handle, "h_1");
   assert.equal(records[0].appliedAt, NOW_1);
 });
+
+// --- listReferencedArtifactHashes (mark+sweep GC read side) ------------------
+
+const HASH_A =
+  "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+const HASH_B =
+  "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+const HASH_C =
+  "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+const HASH_D =
+  "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+
+Deno.test(
+  "listReferencedArtifactHashes finds artifact.hash in manifest tree",
+  async () => {
+    const store = new InMemoryTakosumiDeploymentRecordStore();
+    await store.upsert({
+      tenantId: TENANT,
+      name: "worker-app",
+      manifest: {
+        resources: [{
+          shape: "worker@v1",
+          name: "api",
+          provider: "cloudflare-workers",
+          spec: { artifact: { kind: "js-bundle", hash: HASH_A } },
+        }],
+      },
+      appliedResources: [],
+      status: "applied",
+      now: NOW_1,
+    });
+    const hashes = await store.listReferencedArtifactHashes();
+    assert.equal(hashes.size, 1);
+    assert.ok(hashes.has(HASH_A));
+  },
+);
+
+Deno.test(
+  "listReferencedArtifactHashes unions across many records",
+  async () => {
+    const store = new InMemoryTakosumiDeploymentRecordStore();
+    await store.upsert({
+      tenantId: TENANT,
+      name: "a",
+      manifest: { resources: [{ spec: { artifact: { hash: HASH_A } } }] },
+      appliedResources: [],
+      status: "applied",
+      now: NOW_1,
+    });
+    await store.upsert({
+      tenantId: TENANT,
+      name: "b",
+      manifest: { resources: [{ spec: { artifact: { hash: HASH_B } } }] },
+      appliedResources: [],
+      status: "applied",
+      now: NOW_1,
+    });
+    const hashes = await store.listReferencedArtifactHashes();
+    assert.equal(hashes.size, 2);
+  },
+);
+
+Deno.test(
+  "listReferencedArtifactHashes preserves hash on destroyed records",
+  async () => {
+    const store = new InMemoryTakosumiDeploymentRecordStore();
+    await store.upsert({
+      tenantId: TENANT,
+      name: "a",
+      manifest: { resources: [{ spec: { artifact: { hash: HASH_C } } }] },
+      appliedResources: [],
+      status: "applied",
+      now: NOW_1,
+    });
+    await store.markDestroyed(TENANT, "a", NOW_2);
+    const hashes = await store.listReferencedArtifactHashes();
+    assert.equal(
+      hashes.size,
+      1,
+      "destroyed records still pin their manifest's artifacts " +
+        "(audit + race-protection)",
+    );
+  },
+);
+
+Deno.test(
+  "listReferencedArtifactHashes ignores non-hash strings",
+  async () => {
+    const store = new InMemoryTakosumiDeploymentRecordStore();
+    await store.upsert({
+      tenantId: TENANT,
+      name: "a",
+      manifest: {
+        description: "uploaded with kind=sha256:foo",
+        resources: [{ spec: { uri: "ghcr.io/example/api:v1", md5: "abcdef" } }],
+      },
+      appliedResources: [],
+      status: "applied",
+      now: NOW_1,
+    });
+    const hashes = await store.listReferencedArtifactHashes();
+    assert.equal(hashes.size, 0);
+  },
+);
+
+Deno.test(
+  "listReferencedArtifactHashes scans applied resource outputs too",
+  async () => {
+    const store = new InMemoryTakosumiDeploymentRecordStore();
+    await store.upsert({
+      tenantId: TENANT,
+      name: "a",
+      manifest: { resources: [] },
+      appliedResources: [{
+        resourceName: "api",
+        shape: "worker@v1",
+        providerId: "cloudflare-workers",
+        handle: "h_1",
+        outputs: { deployedArtifact: HASH_D },
+        appliedAt: NOW_1,
+      }],
+      status: "applied",
+      now: NOW_1,
+    });
+    const hashes = await store.listReferencedArtifactHashes();
+    assert.equal(hashes.size, 1);
+    assert.ok(hashes.has(HASH_D));
+  },
+);

@@ -1,6 +1,6 @@
 {
   "name": "@takos/takosumi-runtime-agent",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "MIT",
   "exports": {
     ".": "./src/server.ts",

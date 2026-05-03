@@ -14,6 +14,7 @@ import {
   type ApplyV2Outcome,
   destroyV2,
   type DestroyV2Outcome,
+  type PriorAppliedSnapshot,
 } from "../domains/deploy/apply_v2.ts";
 import {
   InMemoryTakosumiDeploymentRecordStore,
@@ -70,9 +71,15 @@ export interface RegisterDeployPublicRoutesOptions {
    * why the CLI cannot reach the kernel).
    */
   readonly getDeployToken?: () => string | undefined;
-  /** Optional injection point for tests so apply runs against a fake. */
+  /**
+   * Optional injection point for tests so apply runs against a fake.
+   * The optional `priorApplied` argument lets tests assert that the
+   * route forwards the per-resource snapshot lookup so applyV2 can
+   * short-circuit `provider.apply` on idempotent re-submissions.
+   */
   readonly applyResources?: (
     resources: readonly ManifestResource[],
+    priorApplied?: ReadonlyMap<string, PriorAppliedSnapshot>,
   ) => Promise<ApplyV2Outcome>;
   /**
    * Optional injection point for tests so destroy runs against a fake.
@@ -163,10 +170,11 @@ export function registerDeployPublicRoutes(
   };
 
   const applyResources = options.applyResources ??
-    ((resources) =>
+    ((resources, priorApplied) =>
       applyV2({
         resources,
         context: buildPlatformContext(),
+        ...(priorApplied ? { priorApplied } : {}),
       }));
 
   const destroyResources = options.destroyResources ??
@@ -226,99 +234,137 @@ export function registerDeployPublicRoutes(
     }
 
     if (mode.value === "destroy") {
-      // Look up persisted handles from the prior apply. Without this,
-      // `destroyV2` would fall back to `resource.name` as the handle which
-      // only works for selfhost providers (filesystem, docker-compose,
-      // systemd-unit, etc.); cloud providers that returned an ARN / object
-      // id from `apply` would receive the wrong value and silently fail to
-      // delete the real underlying resource. We REJECT destroys with no
-      // record by default; operator opts in via `force: true` in the
-      // request body to fall back to resource-name destroy.
-      const prior = await recordStore.get(tenantId, deploymentName);
-      const force = body.value.force === true;
-      if (!prior && !force) {
-        return c.json(
-          apiError(
-            "failed_precondition",
-            `destroy refused: no prior deploy record for tenant=${tenantId} ` +
-              `name=${deploymentName}. The kernel cannot resolve cloud ` +
-              `resource handles (e.g. AWS ARNs) without persisted state. ` +
-              `If the resources are self-hosted (filesystem / docker / ` +
-              `systemd) and you want to destroy by resource name, retry ` +
-              `with \`force: true\` in the request body.`,
-          ),
-          409,
-        );
-      }
-      const handleFor = prior ? buildHandleForFromRecord(prior) : undefined;
-      if (!prior) {
-        console.warn(
-          `[takosumi-deploy] destroy --force: no record for tenant=${tenantId} ` +
-            `name=${deploymentName}; using resource.name as handle. ` +
-            `Cloud handles may not match.`,
-        );
-      }
+      // Serialise concurrent destroy / apply on the same deployment so
+      // two callers do not race the record store and `provider.destroy`.
+      // The lock is held for the duration of the destroy attempt and
+      // released in `finally`.
+      await recordStore.acquireLock(tenantId, deploymentName);
       try {
-        const outcome = await destroyResources(resources.value, handleFor);
-        if (outcome.status === "failed-validation") {
-          return c.json({ status: "error", outcome }, 400);
+        // Look up persisted handles from the prior apply. Without this,
+        // `destroyV2` would fall back to `resource.name` as the handle which
+        // only works for selfhost providers (filesystem, docker-compose,
+        // systemd-unit, etc.); cloud providers that returned an ARN / object
+        // id from `apply` would receive the wrong value and silently fail to
+        // delete the real underlying resource. We REJECT destroys with no
+        // record by default; operator opts in via `force: true` in the
+        // request body to fall back to resource-name destroy.
+        const prior = await recordStore.get(tenantId, deploymentName);
+        const force = body.value.force === true;
+        if (!prior && !force) {
+          return c.json(
+            apiError(
+              "failed_precondition",
+              `destroy refused: no prior deploy record for tenant=${tenantId} ` +
+                `name=${deploymentName}. The kernel cannot resolve cloud ` +
+                `resource handles (e.g. AWS ARNs) without persisted state. ` +
+                `If the resources are self-hosted (filesystem / docker / ` +
+                `systemd) and you want to destroy by resource name, retry ` +
+                `with \`force: true\` in the request body.`,
+            ),
+            409,
+          );
         }
-        if (prior) {
-          await recordStore.markDestroyed(tenantId, deploymentName, now());
+        const handleFor = prior ? buildHandleForFromRecord(prior) : undefined;
+        if (!prior) {
+          console.warn(
+            `[takosumi-deploy] destroy --force: no record for tenant=${tenantId} ` +
+              `name=${deploymentName}; using resource.name as handle. ` +
+              `Cloud handles may not match.`,
+          );
         }
-        // `partial` is still a 200: best-effort destroy completed and the
-        // caller inspects `outcome.errors` for per-resource failures.
-        const ok: DeployPublicDestroyResponse = { status: "ok", outcome };
-        return c.json(ok, 200);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return c.json(
-          apiError("internal_error", `destroy failed: ${message}`),
-          500,
-        );
+        try {
+          const outcome = await destroyResources(resources.value, handleFor);
+          if (outcome.status === "failed-validation") {
+            return c.json({ status: "error", outcome }, 400);
+          }
+          if (prior) {
+            await recordStore.markDestroyed(tenantId, deploymentName, now());
+          }
+          // `partial` is still a 200: best-effort destroy completed and the
+          // caller inspects `outcome.errors` for per-resource failures.
+          const ok: DeployPublicDestroyResponse = { status: "ok", outcome };
+          return c.json(ok, 200);
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+          return c.json(
+            apiError("internal_error", `destroy failed: ${message}`),
+            500,
+          );
+        }
+      } finally {
+        await recordStore.releaseLock(tenantId, deploymentName);
       }
     }
 
+    // apply branch — also serialised under the deployment lock so two
+    // simultaneous applies do not both call `provider.apply` for the
+    // same resource. The lock is released regardless of outcome.
+    await recordStore.acquireLock(tenantId, deploymentName);
     try {
-      const outcome = await applyResources(resources.value);
-      if (outcome.status === "failed-validation") {
-        return c.json({ status: "error", outcome }, 400);
-      }
-      if (outcome.status === "failed-apply") {
-        // Best-effort: persist a `failed` row so subsequent status queries
-        // can surface the failure rather than 404 the CLI.
+      // Build the per-resource prior snapshot map from any persisted
+      // record. Resources whose persisted fingerprint matches the freshly
+      // computed fingerprint will short-circuit `provider.apply`; resources
+      // missing from the prior record (or with mismatched fingerprint)
+      // still go through the provider.
+      const prior = await recordStore.get(tenantId, deploymentName);
+      const priorApplied = prior
+        ? buildPriorAppliedFromRecord(prior)
+        : undefined;
+      try {
+        const outcome = await applyResources(resources.value, priorApplied);
+        if (outcome.status === "failed-validation") {
+          return c.json({ status: "error", outcome }, 400);
+        }
+        if (outcome.status === "failed-apply") {
+          // Best-effort: persist a `failed` row so subsequent status queries
+          // can surface the failure rather than 404 the CLI.
+          await recordStore.upsert({
+            tenantId,
+            name: deploymentName,
+            manifest: manifestObject,
+            appliedResources: [],
+            status: "failed",
+            now: now(),
+          });
+          return c.json({ status: "error", outcome }, 500);
+        }
+        // Successful apply: persist handles + fingerprints so destroy /
+        // status / next-apply work.
+        if (
+          typeof outcome.reused === "number" && outcome.reused > 0
+        ) {
+          console.log(
+            `[takosumi-apply] reusing ${outcome.reused} resources from prior ` +
+              `apply (fingerprint match) for tenant=${tenantId} ` +
+              `name=${deploymentName}`,
+          );
+        }
+        const stamp = now();
         await recordStore.upsert({
           tenantId,
           name: deploymentName,
           manifest: manifestObject,
-          appliedResources: [],
-          status: "failed",
-          now: now(),
+          appliedResources: recordsFromAppliedResources(
+            outcome.applied,
+            resources.value,
+            stamp,
+          ),
+          status: "applied",
+          now: stamp,
         });
-        return c.json({ status: "error", outcome }, 500);
+        const ok: DeployPublicResponse = { status: "ok", outcome };
+        return c.json(ok, 200);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return c.json(
+          apiError("internal_error", `apply failed: ${message}`),
+          500,
+        );
       }
-      // Successful apply: persist handles so destroy / status work.
-      const stamp = now();
-      await recordStore.upsert({
-        tenantId,
-        name: deploymentName,
-        manifest: manifestObject,
-        appliedResources: recordsFromAppliedResources(
-          outcome.applied,
-          resources.value,
-          stamp,
-        ),
-        status: "applied",
-        now: stamp,
-      });
-      const ok: DeployPublicResponse = { status: "ok", outcome };
-      return c.json(ok, 200);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return c.json(
-        apiError("internal_error", `apply failed: ${message}`),
-        500,
-      );
+    } finally {
+      await recordStore.releaseLock(tenantId, deploymentName);
     }
   });
 
@@ -403,6 +449,29 @@ function buildHandleForFromRecord(
     handlesByName.set(entry.resourceName, entry.handle);
   }
   return (resource) => handlesByName.get(resource.name) ?? resource.name;
+}
+
+/**
+ * Build the `priorApplied` map that `applyV2` consults to short-circuit
+ * `provider.apply` when a resource's fingerprint is unchanged since its
+ * last apply. Only entries that carry a `specFingerprint` produce a
+ * snapshot — pre-0.9.0 records lack the field and force a re-apply,
+ * which is safe (provider.apply still runs) but not idempotent.
+ */
+function buildPriorAppliedFromRecord(
+  record: TakosumiDeploymentRecord,
+): ReadonlyMap<string, PriorAppliedSnapshot> {
+  const map = new Map<string, PriorAppliedSnapshot>();
+  for (const entry of record.appliedResources) {
+    if (!entry.specFingerprint) continue;
+    map.set(entry.resourceName, {
+      specFingerprint: entry.specFingerprint,
+      handle: entry.handle,
+      outputs: entry.outputs,
+      providerId: entry.providerId,
+    });
+  }
+  return map;
 }
 
 interface DeploymentResourceSummary {

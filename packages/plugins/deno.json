@@ -1,6 +1,6 @@
 {
   "name": "@takos/takosumi-plugins",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "license": "MIT",
   "exports": {
     ".": "./src/mod.ts",
@@ -8,6 +8,8 @@
     "./shapes": "./src/shapes/mod.ts",
     "./shape-providers": "./src/shape-providers/mod.ts",
     "./shape-providers/factories": "./src/shape-providers/factories.ts",
+    "./shape-providers/worker/cloudflare-workers": "./src/shape-providers/worker/cloudflare-workers.ts",
+    "./shape-providers/worker/deno-deploy": "./src/shape-providers/worker/deno-deploy.ts",
     "./templates": "./src/templates/mod.ts",
     "./providers/selfhosted": "./src/providers/selfhosted/mod.ts",
     "./providers/cloudflare": "./src/providers/cloudflare/mod.ts",

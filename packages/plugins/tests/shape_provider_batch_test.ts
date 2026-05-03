@@ -22,13 +22,17 @@ const SAMPLE_SPECS: Record<string, JsonObject> = {
     name: "api.example.com",
     target: "https://internal.example.com",
   },
+  "worker@v1": {
+    artifact: { kind: "js-bundle", hash: "sha256:abc" },
+    compatibilityDate: "2025-01-01",
+  },
 };
 
 Deno.test("all bundled providers apply with a sample spec for their shape", async () => {
   for (const shape of TAKOSUMI_BUNDLED_SHAPES) registerShape(shape);
   try {
     const providers = createInMemoryTakosumiProviders();
-    assert.equal(providers.length, 18);
+    assert.equal(providers.length, 20);
 
     for (const provider of providers) {
       const shapeRef =
@@ -68,12 +72,18 @@ Deno.test("all bundled providers apply with a sample spec for their shape", asyn
   }
 });
 
-Deno.test("bundled provider set covers all 4 shapes", () => {
+Deno.test("bundled provider set covers all 5 shapes", () => {
   const providers = createInMemoryTakosumiProviders();
   const shapeIds = new Set(providers.map((p) => p.implements.id));
   assert.deepEqual(
     Array.from(shapeIds).sort(),
-    ["custom-domain", "database-postgres", "object-store", "web-service"],
+    [
+      "custom-domain",
+      "database-postgres",
+      "object-store",
+      "web-service",
+      "worker",
+    ],
   );
 });
 

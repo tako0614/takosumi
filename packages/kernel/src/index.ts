@@ -53,10 +53,55 @@ startHeartbeatIfConfigured();
 
 if (import.meta.main) {
   const port = Number(Deno.env.get("PORT") ?? "8788");
-  Deno.serve({ port }, app.fetch);
+  const server = Deno.serve({ port }, app.fetch);
+  registerKernelShutdownHandlers(server);
 }
 
 export default app;
+
+/**
+ * Capture SIGINT / SIGTERM and drain in-flight requests via
+ * `Deno.HttpServer.shutdown()` before exiting. Without this, a SIGINT to
+ * the kernel terminates connections mid-request and the CLI / clients
+ * see truncated responses.
+ *
+ * The CLI command (`packages/cli/src/commands/server.ts`) registers its
+ * own SIGINT handler for the embedded runtime-agent. Both handlers fire
+ * concurrently when the kernel is launched in-process; each one runs to
+ * completion and `Deno.exit(0)` is called from this handler once the
+ * server has finished draining.
+ */
+function registerKernelShutdownHandlers(server: Deno.HttpServer): void {
+  let shuttingDown = false;
+  const handler = (signal: Deno.Signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(
+      `[takosumi-kernel] received ${signal}, draining HTTP server...`,
+    );
+    server.shutdown()
+      .catch((error) =>
+        console.error(`[takosumi-kernel] shutdown error:`, error)
+      )
+      .finally(() => {
+        console.log(`[takosumi-kernel] shutdown complete`);
+        Deno.exit(0);
+      });
+  };
+  try {
+    Deno.addSignalListener("SIGINT", () => handler("SIGINT"));
+    // SIGTERM is not supported on Windows; ignore the registration failure.
+    if (Deno.build.os !== "windows") {
+      Deno.addSignalListener("SIGTERM", () => handler("SIGTERM"));
+    }
+  } catch (error) {
+    console.warn(
+      `[takosumi-kernel] failed to register shutdown signal handlers: ${
+        (error as Error).message
+      }`,
+    );
+  }
+}
 
 function fatalStartupError(error: unknown): never {
   if (error instanceof RuntimeConfigError) {

@@ -84,3 +84,14 @@ Deno.test("buildConnectorRegistry with Kubernetes opts adds k3s-deployment", () 
   assert.equal(reg.size(), 7);
   assert.ok(reg.get("web-service@v1", "k3s-deployment"));
 });
+
+Deno.test("buildConnectorRegistry with denoDeploy opts adds deno-deploy worker connector", () => {
+  const reg = buildConnectorRegistry({
+    denoDeploy: {
+      accessToken: "deno-token",
+      organizationId: "org-1",
+    },
+  });
+  assert.equal(reg.size(), 7);
+  assert.ok(reg.get("worker@v1", "deno-deploy"));
+});

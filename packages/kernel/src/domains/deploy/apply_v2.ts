@@ -24,6 +24,13 @@ export interface ApplyV2Outcome {
    * Empty / undefined for non-dry-run runs.
    */
   readonly planned?: readonly PlannedResource[];
+  /**
+   * Number of resources that were skipped because their `(shape, providerId,
+   * name, spec)` fingerprint matched a prior apply record. Always 0 when
+   * `priorApplied` is not supplied. Used by the public deploy route to log
+   * idempotent reuse for operators.
+   */
+  readonly reused?: number;
 }
 
 export interface AppliedResource {
@@ -31,6 +38,26 @@ export interface AppliedResource {
   readonly providerId: string;
   readonly handle: ResourceHandle;
   readonly outputs: JsonObject;
+  /**
+   * Stable hash of `(shape, providerId, name, spec)` captured at apply time.
+   * Persisted alongside the handle so a subsequent apply submission can
+   * skip `provider.apply` when the fingerprint is unchanged.
+   */
+  readonly specFingerprint: string;
+}
+
+/**
+ * Per-resource snapshot the caller passes to `applyV2` to enable
+ * idempotency. Compared against the fingerprint computed for each resource
+ * at apply time; a match short-circuits `provider.apply` and reuses the
+ * stored handle / outputs (so dependent resources still see correct ref
+ * outputs through the resolver).
+ */
+export interface PriorAppliedSnapshot {
+  readonly specFingerprint: string;
+  readonly handle: ResourceHandle;
+  readonly outputs: JsonObject;
+  readonly providerId: string;
 }
 
 /**
@@ -56,6 +83,19 @@ export interface ApplyV2Options {
    * `takosumi plan` to produce a structured plan without side effects.
    */
   readonly dryRun?: boolean;
+  /**
+   * Optional map of `resource.name → PriorAppliedSnapshot` carrying the
+   * outputs / handle / fingerprint produced by a prior apply of the same
+   * deployment. When a resource's freshly-computed fingerprint matches the
+   * snapshot, `applyV2` skips `provider.apply` and reuses the prior handle
+   * + outputs (which still flow through the per-resource ref resolver so
+   * downstream resources see correct values).
+   *
+   * v0 policy: a fingerprint *mismatch* still goes through `provider.apply`
+   * (the prior handle is left in place rather than auto-destroyed). Future
+   * "delta replace" work will tear down stale handles before re-creating.
+   */
+  readonly priorApplied?: ReadonlyMap<string, PriorAppliedSnapshot>;
 }
 
 export interface DestroyV2Options {
@@ -95,7 +135,7 @@ export interface DestroyV2Outcome {
 export async function applyV2(
   options: ApplyV2Options,
 ): Promise<ApplyV2Outcome> {
-  const { resources, context, dryRun = false } = options;
+  const { resources, context, dryRun = false, priorApplied } = options;
 
   const resolution = resolveResourcesV2(resources);
   if (resolution.issues.length > 0) {
@@ -135,6 +175,7 @@ export async function applyV2(
 
   const outputsByName = new Map<string, JsonObject>();
   const applied: AppliedResource[] = [];
+  let reused = 0;
 
   for (const name of dag.order) {
     const item = resourceByName.get(name);
@@ -142,6 +183,34 @@ export async function applyV2(
     const resolvedSpec = resolveSpecRefs(item.resource.spec, {
       outputs: outputsByName,
     }) as JsonObject;
+    const fingerprint = computeSpecFingerprint(
+      item.resource,
+      item.provider.id,
+      resolvedSpec,
+    );
+
+    // Idempotent skip: a prior snapshot for this resource exists with the
+    // same fingerprint AND was applied by the same provider id. Reuse the
+    // handle and outputs without calling `provider.apply` again. Downstream
+    // resources still see the prior outputs through the ref resolver.
+    const snapshot = priorApplied?.get(name);
+    if (
+      snapshot &&
+      snapshot.specFingerprint === fingerprint &&
+      snapshot.providerId === item.provider.id
+    ) {
+      outputsByName.set(name, snapshot.outputs);
+      applied.push({
+        name,
+        providerId: item.provider.id,
+        handle: snapshot.handle,
+        outputs: snapshot.outputs,
+        specFingerprint: fingerprint,
+      });
+      reused += 1;
+      continue;
+    }
+
     try {
       const result = await item.provider.apply(resolvedSpec, context);
       outputsByName.set(name, result.outputs as JsonObject);
@@ -150,6 +219,7 @@ export async function applyV2(
         providerId: item.provider.id,
         handle: result.handle,
         outputs: result.outputs as JsonObject,
+        specFingerprint: fingerprint,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -165,7 +235,44 @@ export async function applyV2(
     }
   }
 
-  return { applied, issues: [], status: "succeeded" };
+  return {
+    applied,
+    issues: [],
+    status: "succeeded",
+    ...(reused > 0 ? { reused } : {}),
+  };
+}
+
+/**
+ * Stable hash of `(shape, providerId, name, JSON.stringify(spec))`. Used
+ * by the apply pipeline to decide whether a resource has changed since
+ * its prior apply. The hash is FNV-1a 32-bit over the canonicalised
+ * input string; the only stability requirement is that two equal
+ * `(shape, providerId, name, spec)` tuples produce the same fingerprint
+ * within a process. Cryptographic strength is not needed.
+ *
+ * `JSON.stringify` is intentionally not key-sorted: spec authors are
+ * expected to keep key order stable across submissions of the same
+ * manifest. Two functionally-identical specs that only reorder keys will
+ * therefore re-apply on the next run — operators that care can sort
+ * before re-submitting. The cost of false negatives here is one extra
+ * `provider.apply` call, never correctness.
+ */
+export function computeSpecFingerprint(
+  resource: ManifestResource,
+  providerId: string,
+  resolvedSpec: JsonObject,
+): string {
+  const seed = `${resource.shape}|${providerId}|${resource.name}|${
+    JSON.stringify(resolvedSpec)
+  }`;
+  // FNV-1a 32-bit
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i++) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 async function rollback(

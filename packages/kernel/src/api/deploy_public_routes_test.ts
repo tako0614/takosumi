@@ -13,6 +13,7 @@ import {
 import type {
   ApplyV2Outcome,
   DestroyV2Outcome,
+  PriorAppliedSnapshot,
 } from "../domains/deploy/apply_v2.ts";
 import {
   InMemoryTakosumiDeploymentRecordStore,
@@ -32,6 +33,7 @@ function createApp(opts: {
   token?: string | undefined;
   applyResources?: (
     resources: readonly ManifestResource[],
+    priorApplied?: ReadonlyMap<string, PriorAppliedSnapshot>,
   ) => Promise<ApplyV2Outcome>;
   destroyResources?: (
     resources: readonly ManifestResource[],
@@ -53,6 +55,7 @@ function createApp(opts: {
               "applied"
             ][number]["handle"],
             outputs: { ok: true },
+            specFingerprint: "fnv1a32:00000000",
           },
         ],
         issues: [],
@@ -135,6 +138,7 @@ Deno.test("deploy public route applies manifest with valid token", async () => {
               "applied"
             ][number]["handle"],
             outputs: { ok: true },
+            specFingerprint: "fnv1a32:00000000",
           },
         ],
         issues: [],
@@ -315,6 +319,7 @@ Deno.test("deploy public route expands template with valid inputs", async () => 
                 id: "applied",
               } as unknown as ApplyV2Outcome["applied"][number]["handle"],
               outputs: { ok: true },
+              specFingerprint: "fnv1a32:00000000",
             },
           ],
           issues: [],
@@ -558,6 +563,7 @@ Deno.test("apply persists handles + manifest to recordStore", async () => {
             providerId: SAMPLE_RESOURCE.provider,
             handle: "arn:aws:s3:::real-bucket",
             outputs: { url: "https://logs.example" },
+            specFingerprint: "fnv1a32:00000000",
           },
         ],
         issues: [],
@@ -934,3 +940,337 @@ Deno.test("GET /v1/deployments returns 404 when token env unset", async () => {
   });
   assert.equal(response.status, 404);
 });
+
+// --- Apply idempotency over the public route -------------------------------
+
+Deno.test(
+  "apply idempotency: identical re-submission skips provider.apply (matching fingerprint)",
+  async () => {
+    const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+    let applyCount = 0;
+    let lastPriorApplied: ReadonlyMap<string, PriorAppliedSnapshot> | undefined;
+    const app = createApp({
+      token: VALID_TOKEN,
+      recordStore,
+      applyResources: (resources, priorApplied) => {
+        lastPriorApplied = priorApplied;
+        // Simulate applyV2 fingerprint computation: deterministic per-spec.
+        const seed = JSON.stringify(resources[0].spec);
+        const fingerprint = `fnv1a32:${
+          seed.length.toString(16).padStart(8, "0")
+        }`;
+        const snapshot = priorApplied?.get(resources[0].name);
+        if (
+          snapshot && snapshot.specFingerprint === fingerprint &&
+          snapshot.providerId === resources[0].provider
+        ) {
+          // Reuse path: do not call provider.
+          return Promise.resolve({
+            applied: [{
+              name: resources[0].name,
+              providerId: resources[0].provider,
+              handle: snapshot.handle,
+              outputs: snapshot.outputs,
+              specFingerprint: fingerprint,
+            }],
+            issues: [],
+            status: "succeeded" as const,
+            reused: 1,
+          });
+        }
+        applyCount += 1;
+        return Promise.resolve({
+          applied: [{
+            name: resources[0].name,
+            providerId: resources[0].provider,
+            handle: `arn:test:${applyCount}`,
+            outputs: { url: `https://test/${applyCount}` },
+            specFingerprint: fingerprint,
+          }],
+          issues: [],
+          status: "succeeded" as const,
+        });
+      },
+    });
+    const body = JSON.stringify({
+      mode: "apply",
+      manifest: {
+        metadata: { name: "idempotent-app" },
+        resources: [SAMPLE_RESOURCE],
+      },
+    });
+    // First apply: provider runs.
+    const first = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${VALID_TOKEN}`,
+      },
+      body,
+    });
+    assert.equal(first.status, 200);
+    assert.equal(applyCount, 1);
+    assert.equal(
+      lastPriorApplied?.size ?? 0,
+      0,
+      "first apply has no prior snapshot",
+    );
+
+    // Second apply: same manifest → fingerprint matches, provider must NOT run.
+    const second = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${VALID_TOKEN}`,
+      },
+      body,
+    });
+    assert.equal(second.status, 200);
+    const secondBody = await second.json() as {
+      outcome: {
+        status: string;
+        applied: Array<{ handle: string }>;
+        reused?: number;
+      };
+    };
+    assert.equal(secondBody.outcome.status, "succeeded");
+    assert.equal(secondBody.outcome.reused, 1);
+    assert.equal(
+      applyCount,
+      1,
+      "provider.apply must be called only once for identical re-submissions",
+    );
+    assert.equal(
+      lastPriorApplied?.size,
+      1,
+      "second apply must receive the prior snapshot",
+    );
+    assert.equal(
+      secondBody.outcome.applied[0].handle,
+      "arn:test:1",
+      "reused entry surfaces the prior handle",
+    );
+  },
+);
+
+Deno.test(
+  "apply idempotency: edited spec triggers another provider.apply call",
+  async () => {
+    const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+    let applyCount = 0;
+    const app = createApp({
+      token: VALID_TOKEN,
+      recordStore,
+      applyResources: (resources, priorApplied) => {
+        const seed = JSON.stringify(resources[0].spec);
+        const fingerprint = `fnv1a32:${
+          seed.length.toString(16).padStart(8, "0")
+        }`;
+        const snapshot = priorApplied?.get(resources[0].name);
+        if (
+          snapshot && snapshot.specFingerprint === fingerprint &&
+          snapshot.providerId === resources[0].provider
+        ) {
+          return Promise.resolve({
+            applied: [{
+              name: resources[0].name,
+              providerId: resources[0].provider,
+              handle: snapshot.handle,
+              outputs: snapshot.outputs,
+              specFingerprint: fingerprint,
+            }],
+            issues: [],
+            status: "succeeded" as const,
+            reused: 1,
+          });
+        }
+        applyCount += 1;
+        return Promise.resolve({
+          applied: [{
+            name: resources[0].name,
+            providerId: resources[0].provider,
+            handle: `arn:test:${applyCount}`,
+            outputs: { url: `https://test/${applyCount}` },
+            specFingerprint: fingerprint,
+          }],
+          issues: [],
+          status: "succeeded" as const,
+        });
+      },
+    });
+    // First apply with one spec.
+    const first = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${VALID_TOKEN}`,
+      },
+      body: JSON.stringify({
+        mode: "apply",
+        manifest: {
+          metadata: { name: "edited-app" },
+          resources: [{
+            ...SAMPLE_RESOURCE,
+            spec: { name: "logs", region: "local" },
+          }],
+        },
+      }),
+    });
+    assert.equal(first.status, 200);
+    assert.equal(applyCount, 1);
+
+    // Second apply: spec edited → fingerprint changes → provider runs again.
+    const second = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${VALID_TOKEN}`,
+      },
+      body: JSON.stringify({
+        mode: "apply",
+        manifest: {
+          metadata: { name: "edited-app" },
+          resources: [{
+            ...SAMPLE_RESOURCE,
+            spec: { name: "logs", region: "us-east-1", upgraded: true },
+          }],
+        },
+      }),
+    });
+    assert.equal(second.status, 200);
+    assert.equal(
+      applyCount,
+      2,
+      "edited spec must call provider.apply again",
+    );
+  },
+);
+
+// --- Concurrency lock over the public route --------------------------------
+
+Deno.test(
+  "concurrent apply submissions for the same deployment serialise via recordStore lock",
+  async () => {
+    const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const app = createApp({
+      token: VALID_TOKEN,
+      recordStore,
+      applyResources: async (resources) => {
+        inFlight += 1;
+        if (inFlight > maxInFlight) maxInFlight = inFlight;
+        // Yield several times so the second apply has a chance to overlap
+        // if the lock was missing.
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        inFlight -= 1;
+        return {
+          applied: [{
+            name: resources[0].name,
+            providerId: resources[0].provider,
+            handle: "arn:test:concurrent",
+            outputs: { ok: true },
+            specFingerprint: "fnv1a32:00000000",
+          }],
+          issues: [],
+          status: "succeeded" as const,
+        };
+      },
+    });
+    const body = JSON.stringify({
+      mode: "apply",
+      manifest: {
+        metadata: { name: "concurrent-app" },
+        resources: [SAMPLE_RESOURCE],
+      },
+    });
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    };
+    const [r1, r2] = await Promise.all([
+      app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+        method: "POST",
+        headers,
+        body,
+      }),
+      app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+        method: "POST",
+        headers,
+        body,
+      }),
+    ]);
+    assert.equal(r1.status, 200);
+    assert.equal(r2.status, 200);
+    assert.equal(
+      maxInFlight,
+      1,
+      "lock must prevent both applies from overlapping inside applyResources",
+    );
+  },
+);
+
+Deno.test(
+  "concurrent applies on different deployments are not blocked by each other",
+  async () => {
+    const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const app = createApp({
+      token: VALID_TOKEN,
+      recordStore,
+      applyResources: async (resources) => {
+        inFlight += 1;
+        if (inFlight > maxInFlight) maxInFlight = inFlight;
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        inFlight -= 1;
+        return {
+          applied: [{
+            name: resources[0].name,
+            providerId: resources[0].provider,
+            handle: "arn:test:parallel",
+            outputs: { ok: true },
+            specFingerprint: "fnv1a32:00000000",
+          }],
+          issues: [],
+          status: "succeeded" as const,
+        };
+      },
+    });
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    };
+    const [r1, r2] = await Promise.all([
+      app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          mode: "apply",
+          manifest: {
+            metadata: { name: "deploy-a" },
+            resources: [SAMPLE_RESOURCE],
+          },
+        }),
+      }),
+      app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          mode: "apply",
+          manifest: {
+            metadata: { name: "deploy-b" },
+            resources: [SAMPLE_RESOURCE],
+          },
+        }),
+      }),
+    ]);
+    assert.equal(r1.status, 200);
+    assert.equal(r2.status, 200);
+    assert.equal(
+      maxInFlight,
+      2,
+      "different deployment names must not share the same lock",
+    );
+  },
+);

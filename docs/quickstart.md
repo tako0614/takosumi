@@ -240,6 +240,48 @@ takosumi version
 | `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found` | agent host に該当 cloud の credential が無い → connector が register されてない                                      |
 | `runtime-agent /v1/lifecycle/apply failed: 401`                     | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない                                                             |
 
+### Artifact storage hygiene
+
+`takosumi artifact push` でアップロードした blob は object storage
+にcontent-addressed (`sha256:...`) で残ります。 Operator が定期的に GC を回す
+ことで、destroy された deployment が pin していた artifact をまとめて回収
+できます:
+
+```bash
+takosumi artifact gc --dry-run    # delete 対象を確認
+takosumi artifact gc              # 実削除
+```
+
+GC は kernel 側で persistent な `takosumi_deployments` record を mark+sweep
+し、どの deployment record (status が `applied` でも `destroyed` でも) からも
+参照されていない blob だけを削除します。 Idempotent なので何度 call しても
+害はありません。
+
+### Read-only artifact fetch token (agent ↔ kernel scope separation)
+
+production deploy で `kernel <-> runtime-agent` を別 host に分離している場合、
+agent host が compromised しても artifact upload / delete / GC を許さない
+ように、 read-only な artifact fetch token を別途発行できます:
+
+```bash
+# kernel host (deploy token と read-only fetch token を両方発行)
+export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_ARTIFACT_FETCH_TOKEN=$(openssl rand -hex 32)
+```
+
+- `TAKOSUMI_DEPLOY_TOKEN` は CLI からの `takosumi deploy` /
+  `takosumi artifact push` / `takosumi artifact gc` 等の write 系を許可する
+  full-power token。
+- `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を agent host に渡すと、 agent の connector は
+  GET / HEAD `/v1/artifacts/:hash` で blob を fetch できますが、 POST (upload) /
+  DELETE / GC は kernel 側で 401 になります。
+- agent host は artifact 取得 URL に対して fetch token のみ持てば十分で、 deploy
+  token を保持する必要はありません。
+
+`TAKOSUMI_PUBLIC_BASE_URL` と組み合わせて kernel が runtime-agent に渡す
+artifact-store locator は、 fetch token が set されていればそちらを優先します
+(set されていなければ後方互換で deploy token を渡します)。
+
 ---
 
 ## 関連 docs
