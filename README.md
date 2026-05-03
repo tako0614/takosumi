@@ -3,7 +3,7 @@
 Self-hostable PaaS toolkit. **Manifest を投げてあらゆる cloud / docker /
 self-hosted 環境にデプロイできる、完全独立の PaaS**。
 
-📖 ドキュメント: <https://takosumi-docs.pages.dev/>
+📖 ドキュメント: <https://docs.takosumi.com/>
 
 ```bash
 deno install -gA -n takosumi jsr:@takos/takosumi-cli
@@ -144,6 +144,7 @@ deno task docs:build     # docs/.vitepress/dist へ build (CF Pages 公開対象
 ```
 
 publish: `master` への push で `.github/workflows/docs-deploy.yml` が
-Cloudflare Pages project `takosumi-docs` にデプロイ
-(`https://takosumi-docs.pages.dev/`)。CI には GitHub secrets
-`CLOUDFLARE_API_TOKEN` と `CLOUDFLARE_ACCOUNT_ID` が必要。
+Cloudflare Pages project `takosumi-docs` にデプロイ。custom domain は
+`docs.takosumi.com` (Cloudflare Pages dashboard の Custom domains
+設定で wire)。CI には GitHub secrets `CLOUDFLARE_API_TOKEN` と
+`CLOUDFLARE_ACCOUNT_ID` が必要。

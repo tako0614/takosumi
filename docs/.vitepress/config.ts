@@ -84,6 +84,9 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   ignoreDeadLinks: false,
+  sitemap: {
+    hostname: "https://docs.takosumi.com/",
+  },
   themeConfig: {
     socialLinks: [
       { icon: "github", link: "https://github.com/tako0614/takosumi" },

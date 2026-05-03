@@ -10,8 +10,10 @@
 #   - Cloudflare Pages project named `takosumi-docs` (created via dashboard or
 #     `wrangler pages project create takosumi-docs`)
 #
-# Custom domain wiring (e.g. takosumi.takos.jp) is deferred to a follow-up
-# round; for now the site publishes at https://takosumi-docs.pages.dev/.
+# Custom domain: `docs.takosumi.com` is wired via the Cloudflare Pages
+# dashboard (Custom domains → Set up a custom domain). Once active, the
+# site is reachable at https://docs.takosumi.com/. The default
+# `takosumi-docs.pages.dev` host stays available for preview deploys.
 name = "takosumi-docs"
 compatibility_date = "2026-05-03"
 pages_build_output_dir = "./.vitepress/dist"
