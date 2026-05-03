@@ -77,8 +77,10 @@ takosumi destroy <manifest>     # 逆順 destroy
 takosumi status [<name>]        # 現在の resource state
 takosumi plan <manifest>        # dry-run
 takosumi server [--port 8080]   # kernel HTTP server 起動
+takosumi server --detach        # systemd / docker 等 supervisor template を出力して exit
 takosumi migrate                # DB migrations
 takosumi init [--template ...]  # manifest scaffold
+takosumi completions <shell>    # bash / zsh / fish 用 shell completion 生成
 takosumi version
 ```
 
@@ -90,7 +92,23 @@ takosumi deploy ./manifest.yml \
   --token $TAKOSUMI_TOKEN
 ```
 
-env (`TAKOSUMI_KERNEL_URL`, `TAKOSUMI_TOKEN`) でも設定可能。
+設定の優先順位は **flag > env > `~/.takosumi/config.yml`** です。env は
+`TAKOSUMI_REMOTE_URL` / `TAKOSUMI_TOKEN`、deprecated alias は
+`TAKOSUMI_KERNEL_URL`。config file は次の YAML スキーマ:
+
+```yaml
+# ~/.takosumi/config.yml
+remote_url: https://kernel.example.com
+token: ${TAKOSUMI_DEPLOY_TOKEN}
+```
+
+shell completion install:
+
+```bash
+takosumi completions bash > ~/.bash_completion.d/takosumi
+takosumi completions zsh  > ~/.zfunc/_takosumi
+takosumi completions fish > ~/.config/fish/completions/takosumi.fish
+```
 
 ## Development
 

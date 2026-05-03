@@ -28,7 +28,7 @@ export const destroyCommand = new Command()
   )
   .action(async ({ remote, token, force }, manifestPath) => {
     const manifest = await loadManifest(manifestPath);
-    const target = resolveMode({ remote, token }, loadConfig());
+    const target = resolveMode({ remote, token }, await loadConfig());
     if (target.mode === "remote") {
       const { status, body } = await callKernel({
         url: target.url,

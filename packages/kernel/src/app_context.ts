@@ -898,6 +898,12 @@ function warnAboutDevAdapterFallbacks(options: AppContextOptions): void {
   if (environment === "production" || environment === "staging") return;
   const logLevel = options.runtimeEnv?.TAKOSUMI_LOG_LEVEL ?? "info";
   if (logLevel === "error" || logLevel === "warn") return;
+  // Skip when the caller did not pass any adapters at all. This is the
+  // signature of a unit test or exploratory boot, not a misconfigured
+  // operator — emitting here would just spam test output. Operators who
+  // explicitly inject some adapters (production-like setup) still see
+  // warnings for the ones they missed.
+  if (!options.adapters) return;
   const selectedPluginIds = selectedKernelPluginIds(options.runtimeConfig);
   const fallbacks: string[] = [];
   for (const port of STRICT_RUNTIME_KERNEL_PORTS) {

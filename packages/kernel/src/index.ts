@@ -43,6 +43,7 @@ await maybeApplyAuditRetention(runtimeEnv);
 await maybeApplyObservationRetention(runtimeEnv);
 await maybeVerifyAuditReplicationChain(runtimeEnv, auditReplicationSink);
 const sharedSqlClientHandle = await createSharedSqlClient(runtimeEnv);
+logDeploymentRecordStoreBackend(sharedSqlClientHandle !== undefined);
 const created = await createPaaSApp({
   runtimeEnv,
   runtimeConfig,
@@ -323,6 +324,27 @@ function parsePositiveIntEnv(value: string | undefined): number | undefined {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
   return Math.floor(parsed);
+}
+
+/**
+ * Surface the deployment-record-store backend selection at boot so
+ * operators can spot the in-memory fallback in their logs. Without this
+ * line, a missing `TAKOSUMI_DATABASE_URL` silently degrades durability
+ * (the `(tenantId, name) → applied[]` mapping is wiped on every restart)
+ * and the only way to detect it is a deploy round-trip.
+ */
+function logDeploymentRecordStoreBackend(sqlClientResolved: boolean): void {
+  if (sqlClientResolved) {
+    console.log(
+      "[takosumi-bootstrap] deployment record store: SQL " +
+        "(TAKOSUMI_DATABASE_URL)",
+    );
+    return;
+  }
+  console.log(
+    "[takosumi-bootstrap] deployment record store: in-memory " +
+      "(TAKOSUMI_DATABASE_URL unset; restarts will lose state)",
+  );
 }
 
 /**

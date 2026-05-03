@@ -1,7 +1,7 @@
 # @takos/takosumi-cli
 
-Operator CLI for the Takosumi self-host PaaS toolkit. Wraps the kernel
-HTTP API and the runtime-agent embed for a single-command dev experience.
+Operator CLI for the Takosumi self-host PaaS toolkit. Wraps the kernel HTTP API
+and the runtime-agent embed for a single-command dev experience.
 
 ## Install
 
@@ -28,22 +28,22 @@ takosumi destroy my-app.yml --remote http://localhost:8788 --token $TAKOSUMI_DEP
 
 ## Commands
 
-| Command | Purpose |
-|---|---|
-| `takosumi deploy <manifest>` | apply (apply/plan/destroy via flag) |
-| `takosumi destroy <manifest> [--force]` | tear down a previously-applied manifest |
-| `takosumi status [<name>]` | query kernel for current deployment state |
-| `takosumi plan <manifest>` | dry-run (validate + DAG, no provider.apply) |
-| `takosumi server [--port] [--no-agent]` | boot kernel + embedded agent |
-| `takosumi runtime-agent serve` | standalone agent (multi-host production) |
-| `takosumi runtime-agent list` | show registered connectors on an agent |
-| `takosumi runtime-agent verify` | smoke-test connectors (read-only API call per cloud) |
-| `takosumi artifact push <file> --kind <kind>` | content-addressed artifact upload |
-| `takosumi artifact list [--limit]` / `rm <hash>` / `gc [--dry-run]` | artifact store management |
-| `takosumi artifact kinds` | list registered artifact kinds |
-| `takosumi migrate [--dry-run]` | run kernel DB migrations |
-| `takosumi init [--template]` | manifest scaffold |
-| `takosumi version` | print version |
+| Command                                                             | Purpose                                              |
+| ------------------------------------------------------------------- | ---------------------------------------------------- |
+| `takosumi deploy <manifest>`                                        | apply (apply/plan/destroy via flag)                  |
+| `takosumi destroy <manifest> [--force]`                             | tear down a previously-applied manifest              |
+| `takosumi status [<name>]`                                          | query kernel for current deployment state            |
+| `takosumi plan <manifest>`                                          | dry-run (validate + DAG, no provider.apply)          |
+| `takosumi server [--port] [--no-agent]`                             | boot kernel + embedded agent                         |
+| `takosumi runtime-agent serve`                                      | standalone agent (multi-host production)             |
+| `takosumi runtime-agent list`                                       | show registered connectors on an agent               |
+| `takosumi runtime-agent verify`                                     | smoke-test connectors (read-only API call per cloud) |
+| `takosumi artifact push <file> --kind <kind>`                       | content-addressed artifact upload                    |
+| `takosumi artifact list [--limit]` / `rm <hash>` / `gc [--dry-run]` | artifact store management                            |
+| `takosumi artifact kinds`                                           | list registered artifact kinds                       |
+| `takosumi migrate [--dry-run]`                                      | run kernel DB migrations                             |
+| `takosumi init [--template]`                                        | manifest scaffold                                    |
+| `takosumi version`                                                  | print version                                        |
 
 ## Env vars
 
@@ -53,14 +53,14 @@ Priority (highest first):
 2. Command-specific env (`TAKOSUMI_DEPLOY_TOKEN`, `TAKOSUMI_AGENT_TOKEN`)
 3. Generic env (`TAKOSUMI_REMOTE_URL`, `TAKOSUMI_TOKEN`)
 
-| Env var | Used by |
-|---|---|
-| `TAKOSUMI_REMOTE_URL` | `takosumi {deploy,destroy,status,plan,artifact}` default kernel URL |
-| `TAKOSUMI_DEPLOY_TOKEN` | bearer token for kernel deploy/artifact endpoints |
-| `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target |
-| `TAKOSUMI_DEV_MODE=1` | dev opt-out: plaintext secrets / unencrypted DB / unsafe defaults |
-| `TAKOSUMI_LOG_LEVEL=warn` | suppress dev-mode in-memory fallback notices |
-| `TAKOSUMI_KERNEL_URL` / `TAKOSUMI_TOKEN` | **deprecated** aliases of the above |
+| Env var                                       | Used by                                                             |
+| --------------------------------------------- | ------------------------------------------------------------------- |
+| `TAKOSUMI_REMOTE_URL`                         | `takosumi {deploy,destroy,status,plan,artifact}` default kernel URL |
+| `TAKOSUMI_DEPLOY_TOKEN`                       | bearer token for kernel deploy/artifact endpoints                   |
+| `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target                       |
+| `TAKOSUMI_DEV_MODE=1`                         | dev opt-out: plaintext secrets / unencrypted DB / unsafe defaults   |
+| `TAKOSUMI_LOG_LEVEL=warn`                     | suppress dev-mode in-memory fallback notices                        |
+| `TAKOSUMI_KERNEL_URL` / `TAKOSUMI_TOKEN`      | **deprecated** aliases of the above                                 |
 
 See [`docs/quickstart.md`](../../docs/quickstart.md) for full multi-host
 production setup, cloud credential placement, and troubleshooting.

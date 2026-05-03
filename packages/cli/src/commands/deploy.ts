@@ -20,7 +20,7 @@ export const deployCommand = new Command()
       return;
     }
 
-    const target = resolveMode({ remote, token }, loadConfig());
+    const target = resolveMode({ remote, token }, await loadConfig());
 
     if (target.mode === "remote") {
       console.log(`submitting to remote kernel: ${target.url}`);

@@ -1,4 +1,5 @@
 import { Command } from "@cliffy/command";
+import { CompletionsCommand } from "@cliffy/command/completions";
 import { deployCommand } from "./commands/deploy.ts";
 import { destroyCommand } from "./commands/destroy.ts";
 import { statusCommand } from "./commands/status.ts";
@@ -13,7 +14,7 @@ import { artifactCommand } from "./commands/artifact.ts";
 export const takosumi = new Command()
   .name("takosumi")
   .description("Takosumi: self-hostable PaaS toolkit")
-  .version("0.10.0")
+  .version("0.11.0")
   .command("deploy", deployCommand)
   .command("destroy", destroyCommand)
   .command("status", statusCommand)
@@ -23,7 +24,11 @@ export const takosumi = new Command()
   .command("init", initCommand)
   .command("artifact", artifactCommand)
   .command("runtime-agent", runtimeAgentCommand)
-  .command("version", versionCommand);
+  .command("version", versionCommand)
+  // Cliffy ships shell completion generators for bash / zsh / fish; wiring
+  // the bundled subcommand here is the cleanest way to expose
+  // `takosumi completions <shell>` without re-implementing the generator.
+  .command("completions", new CompletionsCommand());
 
 if (import.meta.main) {
   await takosumi.parse(Deno.args);

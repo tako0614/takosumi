@@ -25,7 +25,7 @@ const pushCmd = new Command()
   .option("--remote <url:string>", "Kernel base URL")
   .option("--token <token:string>", "Bearer token")
   .action(async ({ kind, metadata, remote, token }, filePath: string) => {
-    const target = requireRemote(remote, token);
+    const target = await requireRemote(remote, token);
     const bytes = await Deno.readFile(filePath);
     const meta = parseMetadata(metadata);
     const form = new FormData();
@@ -58,7 +58,7 @@ const listCmd = new Command()
     "Per-page limit; CLI follows pagination automatically",
   )
   .action(async ({ remote, token, limit }) => {
-    const target = requireRemote(remote, token);
+    const target = await requireRemote(remote, token);
     interface ListPage {
       readonly artifacts?: readonly unknown[];
       readonly nextCursor?: string;
@@ -94,7 +94,7 @@ const rmCmd = new Command()
   .option("--remote <url:string>", "Kernel base URL")
   .option("--token <token:string>", "Bearer token")
   .action(async ({ remote, token }, hash: string) => {
-    const target = requireRemote(remote, token);
+    const target = await requireRemote(remote, token);
     const response = await fetch(
       `${target.url}${ARTIFACTS_BASE_PATH}/${encodeURIComponent(hash)}`,
       {
@@ -120,7 +120,7 @@ const kindsCmd = new Command()
   .option("--token <token:string>", "Bearer token")
   .option("--table", "Format output as a plain-text table instead of JSON")
   .action(async ({ remote, token, table }) => {
-    const target = requireRemote(remote, token);
+    const target = await requireRemote(remote, token);
     const response = await fetch(`${target.url}${ARTIFACTS_BASE_PATH}/kinds`, {
       headers: { authorization: `Bearer ${target.token}` },
     });
@@ -197,7 +197,7 @@ const gcCmd = new Command()
     "Report what would be deleted without actually deleting",
   )
   .action(async ({ remote, token, dryRun }) => {
-    const target = requireRemote(remote, token);
+    const target = await requireRemote(remote, token);
     const url = new URL(`${target.url}${ARTIFACTS_BASE_PATH}/gc`);
     if (dryRun) url.searchParams.set("dryRun", "1");
     const response = await fetch(url, {
@@ -227,8 +227,11 @@ interface RemoteTarget {
   readonly token: string;
 }
 
-function requireRemote(remote?: string, token?: string): RemoteTarget {
-  const target = resolveMode({ remote, token }, loadConfig());
+async function requireRemote(
+  remote?: string,
+  token?: string,
+): Promise<RemoteTarget> {
+  const target = resolveMode({ remote, token }, await loadConfig());
   if (target.mode !== "remote" || !target.url || !target.token) {
     console.error(
       "artifact commands require a remote kernel: pass --remote and --token, " +

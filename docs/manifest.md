@@ -20,7 +20,7 @@ template: # optional: Template invocation
 resources: # optional: portable Shape resources
   - shape: object-store@v1
     name: assets
-    provider: cloudflare-r2
+    provider: "@takos/cloudflare-r2"
     requires: [presigned-urls]
     spec: { name: app-assets }
 ```
@@ -37,7 +37,7 @@ resources: # optional: portable Shape resources
 interface ManifestResource {
   readonly shape: string; // "object-store@v1" 等
   readonly name: string; // resource 論理名 (manifest scope)
-  readonly provider: string; // provider id e.g. "aws-s3"
+  readonly provider: string; // namespaced provider id e.g. "@takos/aws-s3"
   readonly spec: JsonValue; // shape の Spec 型に validate される
   readonly requires?: readonly string[]; // capability requirement
   readonly metadata?: JsonObject;
@@ -58,12 +58,12 @@ resource 間の配線は **string interpolation** で行います。kernel が D
 resources:
   - shape: database-postgres@v1
     name: db
-    provider: aws-rds
+    provider: "@takos/aws-rds"
     spec: { version: "16", size: small }
 
   - shape: web-service@v1
     name: api
-    provider: aws-fargate
+    provider: "@takos/aws-fargate"
     spec:
       image: ghcr.io/example/api@sha256:0123...
       port: 8080
@@ -96,13 +96,13 @@ provider が declare している `capabilities` が `requires` を superset で
 resources:
   - shape: object-store@v1
     name: assets
-    provider: cloudflare-r2
+    provider: "@takos/cloudflare-r2"
     requires: [presigned-urls, multipart-upload] # 通る
     spec: { name: app-assets }
 
   - shape: object-store@v1
     name: archive
-    provider: cloudflare-r2
+    provider: "@takos/cloudflare-r2"
     requires: [
       versioning,
     ] # cloudflare-r2 は versioning を declare していない → reject
@@ -142,7 +142,7 @@ template:
 resources:
   - shape: object-store@v1
     name: backups
-    provider: aws-s3
+    provider: "@takos/aws-s3"
     requires: [versioning, server-side-encryption]
     spec: { name: app-backups, versioning: true }
 ```
@@ -176,12 +176,12 @@ name: my-app
 resources:
   - shape: database-postgres@v1
     name: db
-    provider: aws-rds
+    provider: "@takos/aws-rds"
     spec: { version: "16", size: small }
 
   - shape: web-service@v1
     name: app
-    provider: cloudflare-container
+    provider: "@takos/cloudflare-container"
     spec:
       image: ghcr.io/example/app@sha256:abcd...
       port: 8080
@@ -191,7 +191,7 @@ resources:
 
   - shape: custom-domain@v1
     name: domain
-    provider: cloudflare-dns
+    provider: "@takos/cloudflare-dns"
     spec:
       name: app.example.com
       target: ${ref:app.url}
@@ -201,8 +201,8 @@ resources:
 
 新 model の良い点:
 
-- **portable** — `provider:` を `aws-fargate` / `k3s-deployment`
-  等に差し替えるだけで cloud 切替。
+- **portable** — `provider:` を `@takos/aws-fargate` /
+  `@takos/kubernetes-deployment` 等に差し替えるだけで cloud 切替。
 - **explicit** — `${ref:db.connectionString}` で配線が manifest
   に書かれており、ブラックボックスがない。
 - **DAG** — 依存解析が contract 側で portable に行われる。

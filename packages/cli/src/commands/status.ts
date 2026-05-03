@@ -22,7 +22,7 @@ export const statusCommand = new Command()
   .option("--remote <url:string>", "Remote kernel URL")
   .option("--token <token:string>", "Auth token")
   .action(async ({ remote, token }, name) => {
-    const target = resolveMode({ remote, token }, loadConfig());
+    const target = resolveMode({ remote, token }, await loadConfig());
     if (target.mode !== "remote") {
       console.log(
         "local mode does not maintain deployment state — use --remote " +

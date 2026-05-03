@@ -109,7 +109,8 @@ export AWS_REGION=ap-northeast-1
 # export TAKOSUMI_AWS_FARGATE_SUBNET_IDS=subnet-aaa,subnet-bbb
 ```
 
-connector: `aws-fargate` / `aws-rds` / `aws-s3` / `route53`
+connector: `@takos/aws-fargate` / `@takos/aws-rds` / `@takos/aws-s3` /
+`@takos/aws-route53`
 
 ### GCP
 
@@ -119,7 +120,8 @@ export GOOGLE_CLOUD_REGION=asia-northeast1
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 ```
 
-connector: `cloud-run` / `cloud-sql` / `gcp-gcs` / `cloud-dns`
+connector: `@takos/gcp-cloud-run` / `@takos/gcp-cloud-sql` / `@takos/gcp-gcs` /
+`@takos/gcp-cloud-dns`
 
 ### Cloudflare
 
@@ -129,7 +131,8 @@ export CLOUDFLARE_API_TOKEN=...
 export CLOUDFLARE_ZONE_ID=...   # custom-domain 使う場合
 ```
 
-connector: `cloudflare-container` / `cloudflare-r2` / `cloudflare-dns`
+connector: `@takos/cloudflare-container` / `@takos/cloudflare-r2` /
+`@takos/cloudflare-dns`
 
 ### Azure
 
@@ -140,7 +143,7 @@ export AZURE_LOCATION=eastus
 export AZURE_BEARER_TOKEN=$(az account get-access-token --query accessToken -o tsv)
 ```
 
-connector: `azure-container-apps`
+connector: `@takos/azure-container-apps`
 
 ### Kubernetes (k3s 等)
 
@@ -150,7 +153,7 @@ export TAKOSUMI_KUBERNETES_BEARER_TOKEN=$(cat /var/run/secrets/.../token)
 export TAKOSUMI_KUBERNETES_NAMESPACE=takosumi
 ```
 
-connector: `k3s-deployment`
+connector: `@takos/kubernetes-deployment`
 
 ---
 
@@ -239,6 +242,47 @@ takosumi version
 | `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`               | `takosumi server --no-agent` を使ったが external agent の URL を export してない、または embedded agent の起動に失敗 |
 | `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found` | agent host に該当 cloud の credential が無い → connector が register されてない                                      |
 | `runtime-agent /v1/lifecycle/apply failed: 401`                     | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない                                                             |
+
+### Deprecated provider IDs
+
+0.10 から、Takosumi が ship する provider id はすべて `@takos/<cloud>-<service>`
+形式に namespace 化されました。 二つの operator plugin が同じ bare id を再
+register してしまう last-write-wins 衝突を避けるためです。
+
+| 旧 (deprecated)        | 新 (recommended)                 |
+| ---------------------- | -------------------------------- |
+| `aws-s3`               | `@takos/aws-s3`                  |
+| `aws-fargate`          | `@takos/aws-fargate`             |
+| `aws-rds`              | `@takos/aws-rds`                 |
+| `route53`              | `@takos/aws-route53`             |
+| `gcp-gcs`              | `@takos/gcp-gcs`                 |
+| `cloud-run`            | `@takos/gcp-cloud-run`           |
+| `cloud-sql`            | `@takos/gcp-cloud-sql`           |
+| `cloud-dns`            | `@takos/gcp-cloud-dns`           |
+| `cloudflare-r2`        | `@takos/cloudflare-r2`           |
+| `cloudflare-container` | `@takos/cloudflare-container`    |
+| `cloudflare-workers`   | `@takos/cloudflare-workers`      |
+| `cloudflare-dns`       | `@takos/cloudflare-dns`          |
+| `azure-container-apps` | `@takos/azure-container-apps`    |
+| `k3s-deployment`       | `@takos/kubernetes-deployment`   |
+| `deno-deploy`          | `@takos/deno-deploy`             |
+| `filesystem`           | `@takos/selfhost-filesystem`     |
+| `minio`                | `@takos/selfhost-minio`          |
+| `docker-compose`       | `@takos/selfhost-docker-compose` |
+| `systemd-unit`         | `@takos/selfhost-systemd`        |
+| `local-docker`         | `@takos/selfhost-postgres`       |
+| `coredns-local`        | `@takos/selfhost-coredns`        |
+
+旧 id は 0.10 / 0.11 では引き続き受け付けますが、次のような警告が kernel log に
+出ます:
+
+```
+[takosumi-resolver] provider id "aws-fargate" is deprecated;
+use "@takos/aws-fargate" — bare ids will be rejected in 0.12.
+```
+
+`@` で始まる id は変換されません。0.12 で旧 id 受け入れは削除されるので、
+manifest の `provider:` 値を新形式に書き換えてください。
 
 ### Artifact storage hygiene
 
