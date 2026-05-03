@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   DirectK3sDeploymentLifecycle,
   type K3sDeploymentDescriptor,
@@ -29,6 +29,7 @@ export interface K3sDeploymentConnectorOptions {
 export class K3sDeploymentConnector implements Connector {
   readonly provider = "k3s-deployment";
   readonly shape = "web-service@v1";
+  readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #lifecycle: DirectK3sDeploymentLifecycle;
   readonly #namespace: string;
   readonly #clusterDomain: string;
@@ -43,19 +44,27 @@ export class K3sDeploymentConnector implements Connector {
     this.#clusterDomain = opts.clusterDomain ?? "cluster.local";
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as {
-      image: string;
+      image?: string;
+      artifact?: { kind: string; uri?: string };
       port: number;
       scale: { min: number; max: number };
       resources?: { cpu?: string; memory?: string };
       env?: Record<string, string>;
       bindings?: Record<string, string>;
     };
+    const image = spec.image ?? spec.artifact?.uri;
+    if (!image) {
+      throw new Error("web-service spec requires `image` or `artifact.uri`");
+    }
     const desc = await this.#lifecycle.createDeployment({
       namespace: this.#namespace,
-      name: nameOf(spec.image),
-      image: spec.image,
+      name: nameOf(image),
+      image,
       replicas: spec.scale.min,
       port: spec.port,
       env: { ...(spec.env ?? {}), ...(spec.bindings ?? {}) },
@@ -70,6 +79,7 @@ export class K3sDeploymentConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const [ns, name] = req.handle.split("/", 2);
     const deleted = await this.#lifecycle.deleteDeployment({
@@ -81,6 +91,7 @@ export class K3sDeploymentConnector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const [ns, name] = req.handle.split("/", 2);
     const desc = await this.#lifecycle.describeDeployment({

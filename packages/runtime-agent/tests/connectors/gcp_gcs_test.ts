@@ -20,7 +20,7 @@ Deno.test("GcpGcsConnector.apply POSTs to storage.googleapis.com with project qu
     provider: "gcp-gcs",
     resourceName: "rs",
     spec: { name: "tenant-data" },
-  });
+  }, {});
   assert.equal(res.handle, "projects/my-proj/buckets/tenant-data");
   assert.equal(res.outputs.bucket, "tenant-data");
   assert.equal(res.outputs.region, "us-central1");

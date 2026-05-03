@@ -11,7 +11,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   type CloudDnsRecordDescriptor,
   DirectCloudDnsLifecycle,
@@ -29,6 +29,7 @@ export interface CloudDnsConnectorOptions {
 export class CloudDnsConnector implements Connector {
   readonly provider = "cloud-dns";
   readonly shape = "custom-domain@v1";
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudDnsLifecycle;
 
   constructor(opts: CloudDnsConnectorOptions) {
@@ -42,7 +43,10 @@ export class CloudDnsConnector implements Connector {
     });
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as { name: string; target: string };
     const desc = await this.#lifecycle.createRecord({
       fqdn: spec.name,
@@ -53,6 +57,7 @@ export class CloudDnsConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const deleted = await this.#lifecycle.deleteRecord({
       recordName: req.handle,
@@ -62,6 +67,7 @@ export class CloudDnsConnector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = await this.#lifecycle.describeRecord({
       recordName: req.handle,

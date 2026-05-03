@@ -17,7 +17,7 @@ Deno.test("CloudDnsConnector.apply POSTs CNAME RRSet to managed zone", async () 
     provider: "cloud-dns",
     resourceName: "rs",
     spec: { name: "app.example.com", target: "lb.example.com" },
-  });
+  }, {});
   assert.equal(res.handle, "tenant-zone|app.example.com|lb.example.com");
   assert.equal(res.outputs.fqdn, "app.example.com");
   assert.match(

@@ -70,7 +70,7 @@ takosumi deploy ./manifest.yml --remote https://kernel.example.com --token $T
 - **Upstream**: `@takos/takosumi-contract` (型契約のみ、独立 repo)
 - **Downstream consumers**: 任意の operator が JSR から install して self-host
 - **Takos ecosystem**: Takos product distribution は本 repo の上に Takos 固有
-  artifact (deploy/distributions/*.json 等) を被せる。これは `takos/paas/`
+  artifact (deploy/distributions/*.json 等) を被せる。これは `takos/`
   に残る別レイヤー。
 
 ## 作業ルール

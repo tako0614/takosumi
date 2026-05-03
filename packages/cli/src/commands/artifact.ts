@@ -1,0 +1,144 @@
+import { Command } from "@cliffy/command";
+import { ARTIFACTS_BASE_PATH } from "takosumi-contract";
+import { loadConfig, resolveMode } from "../config.ts";
+
+/**
+ * `takosumi artifact push <file> --kind <kind>` — upload a file to the
+ * kernel's content-addressed artifact store and print the resulting hash. The
+ * operator typically embeds the printed hash into a manifest under
+ * `artifact: { kind, hash }` and then runs `takosumi deploy`.
+ */
+
+const pushCmd = new Command()
+  .description("Upload a file as a content-addressed artifact")
+  .arguments("<file:string>")
+  .option(
+    "--kind <kind:string>",
+    "Artifact kind (e.g. js-bundle, lambda-zip, oci-image)",
+    { required: true },
+  )
+  .option(
+    "--metadata <kv:string>",
+    "Metadata as key=value (repeat for multiple)",
+    { collect: true },
+  )
+  .option("--remote <url:string>", "Kernel base URL")
+  .option("--token <token:string>", "Bearer token")
+  .action(async ({ kind, metadata, remote, token }, filePath: string) => {
+    const target = requireRemote(remote, token);
+    const bytes = await Deno.readFile(filePath);
+    const meta = parseMetadata(metadata);
+    const form = new FormData();
+    form.set("kind", kind);
+    if (meta) form.set("metadata", JSON.stringify(meta));
+    form.set(
+      "body",
+      new Blob([bytes as BlobPart], { type: "application/octet-stream" }),
+      baseName(filePath),
+    );
+    const response = await fetch(`${target.url}${ARTIFACTS_BASE_PATH}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${target.token}` },
+      body: form,
+    });
+    const body = await readBody(response);
+    if (!response.ok) {
+      console.error(`kernel ${response.status}:`, body);
+      Deno.exit(1);
+    }
+    console.log(JSON.stringify(body, null, 2));
+  });
+
+const listCmd = new Command()
+  .description("List artifacts stored in the kernel")
+  .option("--remote <url:string>", "Kernel base URL")
+  .option("--token <token:string>", "Bearer token")
+  .action(async ({ remote, token }) => {
+    const target = requireRemote(remote, token);
+    const response = await fetch(`${target.url}${ARTIFACTS_BASE_PATH}`, {
+      headers: { authorization: `Bearer ${target.token}` },
+    });
+    const body = await readBody(response);
+    if (!response.ok) {
+      console.error(`kernel ${response.status}:`, body);
+      Deno.exit(1);
+    }
+    console.log(JSON.stringify(body, null, 2));
+  });
+
+const rmCmd = new Command()
+  .description("Remove an artifact by hash")
+  .arguments("<hash:string>")
+  .option("--remote <url:string>", "Kernel base URL")
+  .option("--token <token:string>", "Bearer token")
+  .action(async ({ remote, token }, hash: string) => {
+    const target = requireRemote(remote, token);
+    const response = await fetch(
+      `${target.url}${ARTIFACTS_BASE_PATH}/${encodeURIComponent(hash)}`,
+      {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${target.token}` },
+      },
+    );
+    if (response.status === 204) {
+      console.log(`removed ${hash}`);
+      return;
+    }
+    const body = await readBody(response);
+    console.error(`kernel ${response.status}:`, body);
+    Deno.exit(1);
+  });
+
+export const artifactCommand = new Command()
+  .description("Manage Takosumi-kernel artifact uploads (push / list / rm)")
+  .command("push", pushCmd)
+  .command("list", listCmd)
+  .command("rm", rmCmd);
+
+interface RemoteTarget {
+  readonly url: string;
+  readonly token: string;
+}
+
+function requireRemote(remote?: string, token?: string): RemoteTarget {
+  const target = resolveMode({ remote, token }, loadConfig());
+  if (target.mode !== "remote" || !target.url || !target.token) {
+    console.error(
+      "artifact commands require a remote kernel: pass --remote and --token, " +
+        "or set TAKOSUMI_KERNEL_URL + TAKOSUMI_TOKEN",
+    );
+    Deno.exit(2);
+  }
+  return { url: target.url, token: target.token };
+}
+
+function parseMetadata(
+  values: string[] | undefined,
+): Record<string, string> | undefined {
+  if (!values || values.length === 0) return undefined;
+  const out: Record<string, string> = {};
+  for (const entry of values) {
+    const eq = entry.indexOf("=");
+    if (eq <= 0) {
+      console.error(`invalid --metadata entry "${entry}" (expected key=value)`);
+      Deno.exit(2);
+    }
+    out[entry.slice(0, eq)] = entry.slice(eq + 1);
+  }
+  return out;
+}
+
+function baseName(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(slash + 1) : path;
+}
+
+async function readBody(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}

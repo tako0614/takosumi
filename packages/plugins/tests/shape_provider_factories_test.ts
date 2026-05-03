@@ -63,6 +63,7 @@ const ALL_PROVIDER_IDS = [
   "cloudflare-container",
   "cloudflare-dns",
   "cloudflare-r2",
+  "cloudflare-workers",
   "coredns-local",
   "docker-compose",
   "filesystem",
@@ -125,7 +126,7 @@ Deno.test("disabling selfhost leaves only cloud providers", () => {
   }
 });
 
-Deno.test("each provider declares a 4-shape@v1 and at least one capability", () => {
+Deno.test("each provider declares a curated shape@v1 and at least one capability", () => {
   const providers = createTakosumiProductionProviders({
     agentUrl: "http://agent.test",
     token: "t",
@@ -135,6 +136,7 @@ Deno.test("each provider declares a 4-shape@v1 and at least one capability", () 
     "web-service",
     "database-postgres",
     "custom-domain",
+    "worker",
   ]);
   for (const provider of providers) {
     assert.ok(

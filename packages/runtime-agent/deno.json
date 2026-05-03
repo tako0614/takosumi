@@ -1,13 +1,14 @@
 {
   "name": "@takos/takosumi-runtime-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
   "exports": {
     ".": "./src/server.ts",
     "./server": "./src/server.ts",
     "./embed": "./src/embed.ts",
     "./connectors": "./src/connectors/mod.ts",
-    "./dispatcher": "./src/lifecycle_dispatcher.ts"
+    "./dispatcher": "./src/lifecycle_dispatcher.ts",
+    "./artifact-fetcher": "./src/artifact_fetcher.ts"
   },
   "imports": {
     "takosumi-contract": "jsr:@takos/takosumi-contract@^2.1.0",

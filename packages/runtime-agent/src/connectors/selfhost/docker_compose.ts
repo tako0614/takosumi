@@ -15,7 +15,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 
 export interface DockerComposeConnectorOptions {
   readonly hostBinding?: string;
@@ -35,6 +35,7 @@ interface ServiceDescriptor {
 export class DockerComposeConnector implements Connector {
   readonly provider = "docker-compose";
   readonly shape = "web-service@v1";
+  readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #hostBinding: string;
   readonly #portAlloc: () => number;
   readonly #command: typeof Deno.Command;
@@ -46,15 +47,23 @@ export class DockerComposeConnector implements Connector {
     this.#command = opts.command ?? Deno.Command;
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as {
-      image: string;
+      image?: string;
+      artifact?: { kind: string; uri?: string };
       port: number;
       env?: Record<string, string>;
       bindings?: Record<string, string>;
       command?: readonly string[];
     };
-    const serviceName = serviceNameFromImage(spec.image);
+    const image = spec.image ?? spec.artifact?.uri;
+    if (!image) {
+      throw new Error("web-service spec requires `image` or `artifact.uri`");
+    }
+    const serviceName = serviceNameFromImage(image);
     const hostPort = this.#portAlloc();
     const env = { ...(spec.env ?? {}), ...(spec.bindings ?? {}) };
     const cmd = new this.#command("docker", {
@@ -68,7 +77,7 @@ export class DockerComposeConnector implements Connector {
         "-p",
         `${hostPort}:${spec.port}`,
         ...envFlags(env),
-        spec.image,
+        image,
         ...(spec.command ?? []),
       ],
       stdout: "piped",
@@ -84,7 +93,7 @@ export class DockerComposeConnector implements Connector {
     }
     const desc: ServiceDescriptor = {
       serviceName,
-      image: spec.image,
+      image,
       hostPort,
       internalPort: spec.port,
       env,
@@ -98,6 +107,7 @@ export class DockerComposeConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const cmd = new this.#command("docker", {
       args: ["rm", "-f", req.handle],
@@ -113,6 +123,7 @@ export class DockerComposeConnector implements Connector {
 
   describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = this.#services.get(req.handle);
     if (!desc) return Promise.resolve({ status: "missing" });

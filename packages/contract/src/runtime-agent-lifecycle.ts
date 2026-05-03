@@ -17,6 +17,46 @@
 
 import type { JsonObject, JsonValue } from "./types.ts";
 
+/**
+ * Artifact descriptor — a discriminated union over `kind` (open string).
+ *
+ * - `kind: "oci-image"` typically uses `uri` (e.g. `ghcr.io/me/api:v1`)
+ * - `kind: "js-bundle"` / `"lambda-zip"` / `"tarball"` / etc. use `hash`
+ *   pointing at a `takosumi artifact push`-uploaded blob
+ *
+ * `kind` is intentionally open: 3rd-party connectors can introduce new kinds
+ * without changing the contract package.
+ */
+export interface Artifact {
+  readonly kind: string;
+  /** Content-addressed hash returned by `POST /v1/artifacts` (e.g. `sha256:abc…`). */
+  readonly hash?: string;
+  /** External pointer (OCI registry URI, https URL, etc). */
+  readonly uri?: string;
+  /** Kind-specific metadata (entrypoint / handler / mime / compatibility-date / …). */
+  readonly metadata?: JsonObject;
+}
+
+/** Response shape for `POST /v1/artifacts` and inspect endpoints. */
+export interface ArtifactStored {
+  readonly hash: string;
+  readonly kind: string;
+  readonly size: number;
+  readonly uploadedAt: string;
+  readonly metadata?: JsonObject;
+}
+
+/**
+ * Locator for the kernel-side artifact store. The kernel embeds this in every
+ * `LifecycleApplyRequest` so connectors can fetch uploaded bytes when their
+ * spec carries `artifact.hash`. Token is short-lived and scoped to read-only
+ * artifact access.
+ */
+export interface ArtifactStoreLocator {
+  readonly baseUrl: string;
+  readonly token: string;
+}
+
 export interface LifecycleApplyRequest {
   /** Shape ref (e.g. `object-store@v1`). */
   readonly shape: string;
@@ -27,6 +67,9 @@ export interface LifecycleApplyRequest {
   readonly tenantId?: string;
   /** Optional metadata forwarded by kernel (audit trail, request id). */
   readonly metadata?: JsonObject;
+  /** Where the connector can fetch artifact bytes by hash, when spec carries
+   *  `artifact.hash`. Absent for pure pointer-based deploys. */
+  readonly artifactStore?: ArtifactStoreLocator;
 }
 
 export interface LifecycleApplyResponse {
@@ -83,6 +126,9 @@ export const LIFECYCLE_APPLY_PATH = "/v1/lifecycle/apply" as const;
 export const LIFECYCLE_DESTROY_PATH = "/v1/lifecycle/destroy" as const;
 export const LIFECYCLE_DESCRIBE_PATH = "/v1/lifecycle/describe" as const;
 export const LIFECYCLE_HEALTH_PATH = "/v1/health" as const;
+
+/** Kernel-side artifact endpoints. */
+export const ARTIFACTS_BASE_PATH = "/v1/artifacts" as const;
 
 /** Auth header convention (Bearer <token>). Token is shared via TAKOSUMI_AGENT_TOKEN env. */
 export const LIFECYCLE_AUTH_HEADER = "authorization" as const;

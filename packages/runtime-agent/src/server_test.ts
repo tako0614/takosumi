@@ -83,6 +83,7 @@ Deno.test("apply dispatches to registered connector", async () => {
   registry.register({
     provider: "memory",
     shape: "object-store@v1",
+    acceptedArtifactKinds: [],
     apply: () =>
       Promise.resolve({ handle: "memory://x", outputs: { bucket: "x" } }),
     destroy: () => Promise.resolve({ ok: true }),
@@ -111,6 +112,7 @@ Deno.test("GET /v1/connectors lists registered connectors with auth", async () =
   registry.register({
     provider: "memory",
     shape: "object-store@v1",
+    acceptedArtifactKinds: [],
     apply: () => Promise.resolve({ handle: "h", outputs: {} }),
     destroy: () => Promise.resolve({ ok: true }),
     describe: () => Promise.resolve({ status: "running" as const }),
@@ -118,6 +120,7 @@ Deno.test("GET /v1/connectors lists registered connectors with auth", async () =
   registry.register({
     provider: "alt",
     shape: "web-service@v1",
+    acceptedArtifactKinds: ["oci-image"],
     apply: () => Promise.resolve({ handle: "h", outputs: {} }),
     destroy: () => Promise.resolve({ ok: true }),
     describe: () => Promise.resolve({ status: "running" as const }),
@@ -147,6 +150,7 @@ Deno.test("destroy dispatches to registered connector", async () => {
   registry.register({
     provider: "memory",
     shape: "object-store@v1",
+    acceptedArtifactKinds: [],
     apply: () => Promise.resolve({ handle: "h", outputs: {} }),
     destroy: (req) => {
       destroyed = req.handle;

@@ -4,6 +4,7 @@ import type {
   WebServiceOutputs,
   WebServiceSpec,
 } from "../../shapes/web-service.ts";
+import { resolveOciImage } from "./_artifact_image.ts";
 
 export interface AwsFargateServiceDescriptor {
   readonly serviceName: string;
@@ -66,9 +67,10 @@ export function createAwsFargateWebServiceProvider(
     async apply(spec, _ctx) {
       const cpu = parseCpu(spec.resources?.cpu);
       const memory = parseMemory(spec.resources?.memory);
+      const image = resolveOciImage(spec);
       const desc = await lifecycle.createService({
-        serviceName: serviceNameFromImage(spec.image),
-        image: spec.image,
+        serviceName: serviceNameFromImage(image),
+        image,
         cpu,
         memory,
         minTasks: spec.scale.min,

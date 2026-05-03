@@ -1,4 +1,4 @@
-import type { Shape, ShapeValidationIssue } from "takosumi-contract";
+import type { Artifact, Shape, ShapeValidationIssue } from "takosumi-contract";
 import {
   isNonEmptyString,
   isPositiveInteger,
@@ -39,7 +39,11 @@ export interface WebServiceResources {
 }
 
 export interface WebServiceSpec {
-  readonly image: string;
+  /** Backwards-compat alias: shorthand for `artifact: { kind: "oci-image", uri: image }`. */
+  readonly image?: string;
+  /** Preferred: full Artifact descriptor. `kind` typically `"oci-image"` for
+   *  this shape. New connectors may declare other accepted kinds. */
+  readonly artifact?: Artifact;
   readonly port: number;
   readonly scale: WebServiceScale;
   readonly env?: Readonly<Record<string, string>>;
@@ -86,7 +90,7 @@ export const WebServiceShape: Shape<
   outputFields: OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
-    requireNonEmptyString(value.image, "$.image", issues);
+    validateArtifactSource(value, issues);
     requirePositiveInteger(value.port, "$.port", issues);
     validateScale(value.scale, issues);
     optionalStringRecord(value.env, "$.env", issues);
@@ -123,6 +127,41 @@ export const WebServiceShape: Shape<
     requirePositiveInteger(value.internalPort, "$.internalPort", issues);
   },
 };
+
+/**
+ * `image: string` (legacy) and `artifact: { kind, uri | hash }` (new) both
+ * accepted. Either must be present and non-empty. If `artifact` is supplied
+ * its `kind` is required and either `uri` or `hash` must be set.
+ */
+function validateArtifactSource(
+  value: Record<string, unknown>,
+  issues: ShapeValidationIssue[],
+): void {
+  const hasImage = isNonEmptyString(value.image);
+  const hasArtifact = isRecord(value.artifact);
+  if (!hasImage && !hasArtifact) {
+    issues.push({
+      path: "$",
+      message: "either $.image or $.artifact must be set",
+    });
+    return;
+  }
+  if (hasImage) {
+    requireNonEmptyString(value.image, "$.image", issues);
+  }
+  if (hasArtifact) {
+    const artifact = value.artifact as Record<string, unknown>;
+    requireNonEmptyString(artifact.kind, "$.artifact.kind", issues);
+    const hasUri = isNonEmptyString(artifact.uri);
+    const hasHash = isNonEmptyString(artifact.hash);
+    if (!hasUri && !hasHash) {
+      issues.push({
+        path: "$.artifact",
+        message: "either $.artifact.uri or $.artifact.hash must be set",
+      });
+    }
+  }
+}
 
 function validateScale(value: unknown, issues: ShapeValidationIssue[]): void {
   if (!isRecord(value)) {

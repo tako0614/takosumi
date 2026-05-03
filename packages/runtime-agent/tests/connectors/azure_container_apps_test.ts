@@ -38,7 +38,7 @@ Deno.test("AzureContainerAppsConnector.apply PUTs Container App and reads FQDN f
       port: 8080,
       scale: { min: 1, max: 3 },
     },
-  });
+  }, {});
   assert.equal(
     res.handle,
     "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.App/containerApps/app",

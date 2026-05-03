@@ -15,7 +15,7 @@ Deno.test("MinioConnector.apply PUTs bucket against MinIO endpoint", async () =>
     provider: "minio",
     resourceName: "rs",
     spec: { name: "tenant-data" },
-  });
+  }, {});
   assert.equal(res.handle, "tenant-data");
   assert.equal(res.outputs.bucket, "tenant-data");
   assert.equal(res.outputs.endpoint, "http://minio.local:9000/tenant-data");
@@ -36,6 +36,6 @@ Deno.test("MinioConnector.describe returns missing on 404", async () => {
     shape: "object-store@v1",
     provider: "minio",
     handle: "ghost",
-  });
+  }, {});
   assert.equal(res.status, "missing");
 });

@@ -24,7 +24,7 @@ Deno.test("CloudRunConnector.apply creates service and uses returned uri", async
       port: 8080,
       scale: { min: 0, max: 5 },
     },
-  });
+  }, {});
   assert.equal(res.handle, "my-proj/us-central1/app");
   assert.equal(res.outputs.url, "https://app-xxxx-uc.a.run.app");
   assert.equal(res.outputs.internalPort, 8080);

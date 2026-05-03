@@ -4,6 +4,7 @@ import type {
   WebServiceOutputs,
   WebServiceSpec,
 } from "../../shapes/web-service.ts";
+import { resolveOciImage } from "./_artifact_image.ts";
 
 export interface K3sDeploymentDescriptor {
   readonly namespace: string;
@@ -63,10 +64,11 @@ export function createK3sDeploymentWebServiceProvider(
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
+      const image = resolveOciImage(spec);
       const desc = await lifecycle.createDeployment({
         namespace,
-        name: nameOf(spec.image),
-        image: spec.image,
+        name: nameOf(image),
+        image,
         replicas: spec.scale.min,
         port: spec.port,
         env: { ...(spec.env ?? {}), ...(spec.bindings ?? {}) },

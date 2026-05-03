@@ -14,7 +14,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 
 export interface SystemdUnitConnectorOptions {
   readonly unitDir?: string;
@@ -32,6 +32,7 @@ interface UnitDescriptor {
 export class SystemdUnitConnector implements Connector {
   readonly provider = "systemd-unit";
   readonly shape = "web-service@v1";
+  readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #unitDir: string;
   readonly #hostBinding: string;
   readonly #portAlloc: () => number;
@@ -45,21 +46,29 @@ export class SystemdUnitConnector implements Connector {
     this.#command = opts.command ?? Deno.Command;
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as {
-      image: string;
+      image?: string;
+      artifact?: { kind: string; uri?: string };
       port: number;
       env?: Record<string, string>;
       bindings?: Record<string, string>;
       command?: readonly string[];
     };
-    const unitName = `${nameOf(spec.image)}.service`;
+    const image = spec.image ?? spec.artifact?.uri;
+    if (!image) {
+      throw new Error("web-service spec requires `image` or `artifact.uri`");
+    }
+    const unitName = `${nameOf(image)}.service`;
     const hostPort = this.#portAlloc();
     const unitFile = `${this.#unitDir}/${unitName}`;
     const env = { ...(spec.env ?? {}), ...(spec.bindings ?? {}) };
     const body = renderSystemdUnit({
       unitName,
-      image: spec.image,
+      image,
       env,
       command: spec.command,
     });
@@ -80,6 +89,7 @@ export class SystemdUnitConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const unitFile = `${this.#unitDir}/${req.handle}`;
     try {
@@ -99,6 +109,7 @@ export class SystemdUnitConnector implements Connector {
 
   describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = this.#units.get(req.handle);
     if (!desc) return Promise.resolve({ status: "missing" });

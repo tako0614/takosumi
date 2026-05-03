@@ -44,9 +44,47 @@ Deno.test("WebService validateSpec accepts a minimal spec", () => {
   );
 });
 
-Deno.test("WebService validateSpec rejects missing image", () => {
+Deno.test("WebService validateSpec rejects missing image and artifact", () => {
   const issues = specIssues({ port: 8080, scale: { min: 1, max: 3 } });
-  assert.ok(issues.some((i) => i.path === "$.image"));
+  assert.ok(
+    issues.some((i) => i.message.includes("$.image or $.artifact must be set")),
+  );
+});
+
+Deno.test("WebService validateSpec accepts artifact: { kind, uri }", () => {
+  assert.deepEqual(
+    specIssues({
+      artifact: { kind: "oci-image", uri: "ghcr.io/me/api:v1" },
+      port: 8080,
+      scale: { min: 1, max: 3 },
+    }),
+    [],
+  );
+});
+
+Deno.test("WebService validateSpec accepts artifact: { kind, hash }", () => {
+  assert.deepEqual(
+    specIssues({
+      artifact: { kind: "js-bundle", hash: "sha256:abc" },
+      port: 8080,
+      scale: { min: 1, max: 3 },
+    }),
+    [],
+  );
+});
+
+Deno.test("WebService validateSpec rejects artifact missing both uri and hash", () => {
+  const issues = specIssues({
+    artifact: { kind: "oci-image" },
+    port: 8080,
+    scale: { min: 1, max: 3 },
+  });
+  assert.ok(
+    issues.some((i) =>
+      i.path === "$.artifact" &&
+      i.message.includes("$.artifact.uri or $.artifact.hash")
+    ),
+  );
 });
 
 Deno.test("WebService validateSpec rejects non-positive port", () => {

@@ -4,6 +4,7 @@ import type {
   WebServiceOutputs,
   WebServiceSpec,
 } from "../../shapes/web-service.ts";
+import { resolveOciImage } from "./_artifact_image.ts";
 
 export interface SystemdUnitDescriptor {
   readonly unitName: string;
@@ -54,11 +55,12 @@ export function createSystemdUnitWebServiceProvider(
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
-      const unitName = `${nameOf(spec.image)}.service`;
+      const image = resolveOciImage(spec);
+      const unitName = `${nameOf(image)}.service`;
       const hostPort = portAlloc();
       const desc = await lifecycle.createUnit({
         unitName,
-        image: spec.image,
+        image,
         hostPort,
         internalPort: spec.port,
         env: { ...(spec.env ?? {}), ...(spec.bindings ?? {}) },

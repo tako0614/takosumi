@@ -13,7 +13,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 
 export interface CorednsLocalConnectorOptions {
   readonly zoneFile: string;
@@ -28,6 +28,7 @@ interface RecordDescriptor {
 export class CorednsLocalConnector implements Connector {
   readonly provider = "coredns-local";
   readonly shape = "custom-domain@v1";
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #zoneFile: string;
   readonly #records = new Map<string, RecordDescriptor>();
   #counter = 0;
@@ -36,7 +37,10 @@ export class CorednsLocalConnector implements Connector {
     this.#zoneFile = opts.zoneFile;
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as { name: string; target: string };
     const recordName = `coredns-${++this.#counter}`;
     const desc: RecordDescriptor = {
@@ -55,6 +59,7 @@ export class CorednsLocalConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const desc = this.#records.get(req.handle);
     if (!desc) return { ok: true, note: "record not found" };
@@ -77,6 +82,7 @@ export class CorednsLocalConnector implements Connector {
 
   describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = this.#records.get(req.handle);
     if (!desc) return Promise.resolve({ status: "missing" });

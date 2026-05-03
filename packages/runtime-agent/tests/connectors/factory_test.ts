@@ -47,7 +47,7 @@ Deno.test("buildConnectorRegistry with GCP opts adds GCS / Cloud Run / Cloud SQL
   assert.ok(reg.get("database-postgres@v1", "cloud-sql"));
 });
 
-Deno.test("buildConnectorRegistry with Cloudflare opts adds R2 / containers / dns when zoneId set", () => {
+Deno.test("buildConnectorRegistry with Cloudflare opts adds R2 / containers / workers / dns when zoneId set", () => {
   const reg = buildConnectorRegistry({
     cloudflare: {
       accountId: "acct-1",
@@ -55,9 +55,10 @@ Deno.test("buildConnectorRegistry with Cloudflare opts adds R2 / containers / dn
       zoneId: "zone-1",
     },
   });
-  assert.equal(reg.size(), 6 + 3);
+  assert.equal(reg.size(), 6 + 4);
   assert.ok(reg.get("object-store@v1", "cloudflare-r2"));
   assert.ok(reg.get("web-service@v1", "cloudflare-container"));
+  assert.ok(reg.get("worker@v1", "cloudflare-workers"));
   assert.ok(reg.get("custom-domain@v1", "cloudflare-dns"));
 });
 

@@ -10,7 +10,7 @@ Deno.test("FilesystemConnector.apply creates a directory and returns its path as
       provider: "filesystem",
       resourceName: "rs",
       spec: { name: "tenant-data" },
-    });
+    }, {});
     assert.equal(res.handle, `${root}/tenant-data`);
     assert.equal(res.outputs.bucket, "tenant-data");
     assert.equal(res.outputs.endpoint, `file://${root}/tenant-data`);
@@ -29,7 +29,7 @@ Deno.test("FilesystemConnector.describe returns missing for non-existent dir", a
       shape: "object-store@v1",
       provider: "filesystem",
       handle: `${root}/missing`,
-    });
+    }, {});
     assert.equal(res.status, "missing");
   } finally {
     await Deno.remove(root, { recursive: true });
@@ -45,12 +45,12 @@ Deno.test("FilesystemConnector.destroy removes the directory", async () => {
       provider: "filesystem",
       resourceName: "rs",
       spec: { name: "x" },
-    });
+    }, {});
     const res = await connector.destroy({
       shape: "object-store@v1",
       provider: "filesystem",
       handle: apply.handle,
-    });
+    }, {});
     assert.equal(res.ok, true);
     await assert.rejects(() => Deno.stat(apply.handle));
   } finally {

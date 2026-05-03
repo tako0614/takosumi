@@ -3,7 +3,7 @@
 This directory is the deployment scaffold for the Takosumi Cloudflare profile.
 The plugin code under `src/providers/cloudflare/` intentionally has no direct
 Cloudflare SDK dependency; operators inject production clients that implement
-the typed interfaces exported by `@takos/paas-plugins/providers/cloudflare`.
+the typed interfaces exported by `@takos-plugins/providers/cloudflare`.
 
 ## Files
 
@@ -12,7 +12,7 @@ the typed interfaces exported by `@takos/paas-plugins/providers/cloudflare`.
 - `src/worker.ts`: Worker entrypoint with health routes and routing to the
   coordination Durable Object and workload Container.
 - `Dockerfile`: Deno PaaS container template. Build it from a context that
-  includes both `takos/paas` and `takosumi`.
+  includes both `takos` and `takosumi`.
 
 The scaffold proves the binding and routing shape. The included Dockerfile runs
 the PaaS API entrypoint; production operators still need to inject real
@@ -21,7 +21,7 @@ Cloudflare clients and plugin config before serving traffic.
 ## Binding Clients
 
 The package exports Worker binding helpers from
-`@takos/paas-plugins/providers/cloudflare`:
+`@takos-plugins/providers/cloudflare`:
 
 - R2 bindings can be converted to a Takos object-storage adapter.
 - Queue bindings support enqueue through the Worker `Queue.send` API. Lease,
@@ -42,7 +42,7 @@ The package exports Worker binding helpers from
    equivalent build context.
 4. Build a `KernelPluginClientRegistry` from real bindings and trusted operator
    clients, then create the app with `createCloudflarePaaSApp` from
-   `@takos/paas-plugins/bootstrap`.
+   `@takos-plugins/bootstrap`.
 5. Deploy from this directory with `wrangler deploy`.
 
 Wrangler supports the `containers` field and requires a matching Durable Object

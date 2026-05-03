@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   type AwsFargateServiceDescriptor,
   DirectAwsFargateLifecycle,
@@ -37,6 +37,7 @@ export interface AwsFargateConnectorOptions {
 export class AwsFargateConnector implements Connector {
   readonly provider = "aws-fargate";
   readonly shape = "web-service@v1";
+  readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #lifecycle: DirectAwsFargateLifecycle;
 
   constructor(opts: AwsFargateConnectorOptions) {
@@ -53,11 +54,15 @@ export class AwsFargateConnector implements Connector {
     });
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = specOf(req);
+    const image = imageOf(spec);
     const desc = await this.#lifecycle.createService({
-      serviceName: serviceNameFromImage(spec.image),
-      image: spec.image,
+      serviceName: serviceNameFromImage(image),
+      image,
       cpu: parseCpu(spec.resources?.cpu),
       memory: parseMemory(spec.resources?.memory),
       minTasks: spec.scale.min,
@@ -70,6 +75,7 @@ export class AwsFargateConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const deleted = await this.#lifecycle.deleteService({
       serviceName: serviceNameFromArn(req.handle),
@@ -79,6 +85,7 @@ export class AwsFargateConnector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = await this.#lifecycle.describeService({
       serviceName: serviceNameFromArn(req.handle),
@@ -89,7 +96,8 @@ export class AwsFargateConnector implements Connector {
 }
 
 interface WebServiceSpec {
-  readonly image: string;
+  readonly image?: string;
+  readonly artifact?: { readonly kind: string; readonly uri?: string };
   readonly port: number;
   readonly scale: { readonly min: number; readonly max: number };
   readonly resources?: { readonly cpu?: string; readonly memory?: string };
@@ -100,6 +108,14 @@ interface WebServiceSpec {
 
 function specOf(req: LifecycleApplyRequest): WebServiceSpec {
   return req.spec as unknown as WebServiceSpec;
+}
+
+function imageOf(spec: WebServiceSpec): string {
+  const image = spec.image ?? spec.artifact?.uri;
+  if (!image) {
+    throw new Error("web-service spec requires `image` or `artifact.uri`");
+  }
+  return image;
 }
 
 function outputsFor(desc: AwsFargateServiceDescriptor): JsonObject {

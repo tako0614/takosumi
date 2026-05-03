@@ -29,7 +29,7 @@ Deno.test("K3sDeploymentConnector.apply POSTs Deployment + Service to k8s API", 
       port: 8080,
       scale: { min: 2, max: 5 },
     },
-  });
+  }, {});
   assert.equal(res.handle, "takos/app");
   assert.equal(
     res.outputs.url,

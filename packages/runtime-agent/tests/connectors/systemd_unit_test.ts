@@ -43,7 +43,7 @@ Deno.test("SystemdUnitConnector.apply writes unit file and enables it via system
         port: 8080,
         env: { FOO: "bar" },
       },
-    });
+    }, {});
     assert.equal(res.handle, "app.service");
     assert.equal(res.outputs.internalPort, 8080);
     assert.match(`${res.outputs.url}`, /^http:\/\/127\.0\.0\.1:\d+$/);

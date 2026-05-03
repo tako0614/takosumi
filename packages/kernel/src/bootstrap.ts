@@ -68,6 +68,7 @@ export async function createPaaSApp(
       onTick: workerDaemonState.onTick,
     }).start()
     : undefined;
+  const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
   const app = await createApiApp({
     role,
     context,
@@ -77,6 +78,15 @@ export async function createPaaSApp(
     registerRuntimeAgentRoutes: role === "takosumi-runtime-agent",
     registerReadinessRoutes: true,
     registerOpenApiRoute: role === "takosumi-api",
+    registerArtifactRoutes: role === "takosumi-api" &&
+      Boolean(deployToken) &&
+      Boolean(context.adapters?.objectStorage),
+    artifactRouteOptions: deployToken && context.adapters?.objectStorage
+      ? {
+        getDeployToken: () => deployToken,
+        objectStorage: context.adapters.objectStorage,
+      }
+      : undefined,
     readinessRouteProbes: createRoleReadinessProbes({
       role,
       context,

@@ -22,7 +22,7 @@ Deno.test("CloudflareDnsConnector.apply creates record and returns id handle", a
     provider: "cloudflare-dns",
     resourceName: "rs",
     spec: { name: "app.example.com", target: "lb.example.com" },
-  });
+  }, {});
   assert.equal(res.handle, "rec-123");
   assert.equal(res.outputs.fqdn, "app.example.com");
   assert.match(calls[0].url, /\/zones\/zone-1\/dns_records$/);

@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 
 export interface LocalDockerPostgresConnectorOptions {
   readonly hostBinding?: string;
@@ -36,6 +36,7 @@ interface InstanceDescriptor {
 export class LocalDockerPostgresConnector implements Connector {
   readonly provider = "local-docker";
   readonly shape = "database-postgres@v1";
+  readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #hostBinding: string;
   readonly #portAlloc: () => number;
   readonly #dbName: string;
@@ -56,7 +57,10 @@ export class LocalDockerPostgresConnector implements Connector {
     this.#command = opts.command ?? Deno.Command;
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as { version: string };
     const containerName = `pg-${this.#dbName}-${randomId()}`;
     const hostPort = this.#portAlloc();
@@ -105,6 +109,7 @@ export class LocalDockerPostgresConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const cmd = new this.#command("docker", {
       args: ["rm", "-f", req.handle],
@@ -120,6 +125,7 @@ export class LocalDockerPostgresConnector implements Connector {
 
   describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = this.#instances.get(req.handle);
     if (!desc) return Promise.resolve({ status: "missing" });

@@ -14,7 +14,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 
 export interface FilesystemConnectorOptions {
   readonly rootDir: string;
@@ -24,6 +24,7 @@ export interface FilesystemConnectorOptions {
 export class FilesystemConnector implements Connector {
   readonly provider = "filesystem";
   readonly shape = "object-store@v1";
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #rootDir: string;
   readonly #secretBase: string;
 
@@ -32,7 +33,10 @@ export class FilesystemConnector implements Connector {
     this.#secretBase = opts.secretRefBase ?? `secret://selfhosted/object-store`;
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as { name: string };
     const path = `${this.#rootDir}/${spec.name}`;
     await Deno.mkdir(path, { recursive: true });
@@ -44,6 +48,7 @@ export class FilesystemConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     try {
       await Deno.remove(req.handle, { recursive: true });
@@ -58,6 +63,7 @@ export class FilesystemConnector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     try {
       const stat = await Deno.stat(req.handle);

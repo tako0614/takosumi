@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   type CloudflareContainerDescriptor,
   DirectCloudflareContainerLifecycle,
@@ -27,6 +27,7 @@ export interface CloudflareContainerConnectorOptions {
 export class CloudflareContainerConnector implements Connector {
   readonly provider = "cloudflare-container";
   readonly shape = "web-service@v1";
+  readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #lifecycle: DirectCloudflareContainerLifecycle;
 
   constructor(opts: CloudflareContainerConnectorOptions) {
@@ -37,17 +38,25 @@ export class CloudflareContainerConnector implements Connector {
     });
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as {
-      image: string;
+      image?: string;
+      artifact?: { kind: string; uri?: string };
       port: number;
       scale: { min: number; max: number };
       env?: Record<string, string>;
       bindings?: Record<string, string>;
     };
+    const image = spec.image ?? spec.artifact?.uri;
+    if (!image) {
+      throw new Error("web-service spec requires `image` or `artifact.uri`");
+    }
     const desc = await this.#lifecycle.createService({
-      serviceName: nameOf(spec.image),
-      image: spec.image,
+      serviceName: nameOf(image),
+      image,
       minInstances: spec.scale.min === 0 ? 0 : Math.max(0, spec.scale.min),
       maxInstances: spec.scale.max,
       port: spec.port,
@@ -61,6 +70,7 @@ export class CloudflareContainerConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const deleted = await this.#lifecycle.deleteService({
       serviceName: nameFromHandle(req.handle),
@@ -70,6 +80,7 @@ export class CloudflareContainerConnector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = await this.#lifecycle.describeService({
       serviceName: nameFromHandle(req.handle),

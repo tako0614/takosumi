@@ -40,7 +40,7 @@ Deno.test("LocalDockerPostgresConnector.apply runs `docker run postgres:<version
     provider: "local-docker",
     resourceName: "rs",
     spec: { version: "16" },
-  });
+  }, {});
   assert.match(res.handle, /^pg-app-/);
   assert.equal(res.outputs.host, "localhost");
   assert.equal(res.outputs.port, 15432);

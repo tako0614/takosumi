@@ -36,6 +36,10 @@ import {
   registerRuntimeAgentRoutes,
   type RegisterRuntimeAgentRoutesOptions,
 } from "./runtime_agent_routes.ts";
+import {
+  registerArtifactRoutes,
+  type RegisterArtifactRoutesOptions,
+} from "./artifact_routes.ts";
 import { DefaultGroupSummaryStatusProjector } from "../services/status/mod.ts";
 import { permissionDenied } from "../shared/errors.ts";
 
@@ -55,6 +59,8 @@ export interface CreateApiAppOptions {
     | Promise<OpenApiDocument>;
   readonly registerRuntimeAgentRoutes?: boolean;
   readonly runtimeAgentRouteOptions?: RegisterRuntimeAgentRoutesOptions;
+  readonly registerArtifactRoutes?: boolean;
+  readonly artifactRouteOptions?: RegisterArtifactRoutesOptions;
   readonly sourceAdapters?: PublicDeploySourceAdapters;
   /** Optional extension point for mounting current/future route modules. */
   readonly configure?: (app: HonoApp) => void | Promise<void>;
@@ -93,6 +99,8 @@ export async function createApiApp(
   const openApiRouteMounted = options.registerOpenApiRoute ??
     role === "takosumi-api";
   const readinessRoutesMounted = options.registerReadinessRoutes ?? false;
+  const artifactRoutesMounted = options.registerArtifactRoutes ??
+    (role === "takosumi-api" && options.artifactRouteOptions !== undefined);
 
   if (internalRoutesMounted) assertRoleCapability(role, "api.internal.host");
   if (publicRoutesMounted) assertRoleCapability(role, "api.public.host");
@@ -128,6 +136,16 @@ export async function createApiApp(
 
   if (runtimeAgentRoutesMounted) {
     registerRuntimeAgentRoutes(app, createRuntimeAgentRouteOptions(options));
+  }
+
+  if (artifactRoutesMounted) {
+    if (!options.artifactRouteOptions) {
+      throw new Error(
+        "registerArtifactRoutes was requested but artifactRouteOptions " +
+          "(with objectStorage) was not supplied",
+      );
+    }
+    registerArtifactRoutes(app, options.artifactRouteOptions);
   }
 
   if (readinessRoutesMounted) {

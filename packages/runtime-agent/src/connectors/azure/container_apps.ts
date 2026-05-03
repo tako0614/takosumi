@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   type AzureContainerAppDescriptor,
   DirectAzureContainerAppsLifecycle,
@@ -31,6 +31,7 @@ export interface AzureContainerAppsConnectorOptions {
 export class AzureContainerAppsConnector implements Connector {
   readonly provider = "azure-container-apps";
   readonly shape = "web-service@v1";
+  readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #lifecycle: DirectAzureContainerAppsLifecycle;
   readonly #subscriptionId: string;
   readonly #resourceGroup: string;
@@ -49,18 +50,26 @@ export class AzureContainerAppsConnector implements Connector {
     this.#resourceGroup = opts.resourceGroup;
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as {
-      image: string;
+      image?: string;
+      artifact?: { kind: string; uri?: string };
       port: number;
       scale: { min: number; max: number };
       resources?: { cpu?: string; memory?: string };
       env?: Record<string, string>;
       bindings?: Record<string, string>;
     };
+    const image = spec.image ?? spec.artifact?.uri;
+    if (!image) {
+      throw new Error("web-service spec requires `image` or `artifact.uri`");
+    }
     const desc = await this.#lifecycle.createService({
-      serviceName: serviceNameFromImage(spec.image),
-      image: spec.image,
+      serviceName: serviceNameFromImage(image),
+      image,
       cpu: parseCpu(spec.resources?.cpu),
       memoryGib: parseMemoryGib(spec.resources?.memory),
       minReplicas: spec.scale.min,
@@ -77,6 +86,7 @@ export class AzureContainerAppsConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const deleted = await this.#lifecycle.deleteService({
       serviceName: serviceNameFromHandle(req.handle),
@@ -86,6 +96,7 @@ export class AzureContainerAppsConnector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = await this.#lifecycle.describeService({
       serviceName: serviceNameFromHandle(req.handle),

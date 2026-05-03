@@ -21,7 +21,7 @@ Deno.test("AwsS3Connector.apply creates bucket and returns ARN handle", async ()
     provider: "aws-s3",
     resourceName: "rs",
     spec: { name: "tenant-data" },
-  });
+  }, {});
   assert.equal(res.handle, "arn:aws:s3:::tenant-data");
   assert.equal(res.outputs.bucket, "tenant-data");
   assert.equal(res.outputs.region, "us-east-1");
@@ -45,7 +45,7 @@ Deno.test("AwsS3Connector.describe returns missing on 404", async () => {
     shape: "object-store@v1",
     provider: "aws-s3",
     handle: "arn:aws:s3:::missing",
-  });
+  }, {});
   assert.equal(res.status, "missing");
 });
 
@@ -62,7 +62,7 @@ Deno.test("AwsS3Connector.destroy parses bucket from ARN", async () => {
     shape: "object-store@v1",
     provider: "aws-s3",
     handle: "arn:aws:s3:::my-bucket",
-  });
+  }, {});
   assert.equal(res.ok, true);
   assert.match(calls[0].url, /my-bucket\.s3\.amazonaws\.com/);
   assert.equal(calls[0].method, "DELETE");

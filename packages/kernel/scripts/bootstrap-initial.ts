@@ -8,7 +8,7 @@
  * existing PAT (when it can be located in the secret store).
  *
  * Usage:
- *   cd takos/paas && deno task bootstrap:initial \
+ *   cd takos && deno task bootstrap:initial \
  *     --admin-email=admin@example.com \
  *     [--tenant-name="Takos"] \
  *     [--env=staging|production|local] \

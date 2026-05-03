@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   type AwsRdsInstanceDescriptor,
   DirectAwsRdsLifecycle,
@@ -44,6 +44,7 @@ const SIZE_TO_CLASS: Readonly<Record<string, string>> = {
 export class AwsRdsConnector implements Connector {
   readonly provider = "aws-rds";
   readonly shape = "database-postgres@v1";
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectAwsRdsLifecycle;
   readonly #dbName: string;
   readonly #user: string;
@@ -64,7 +65,10 @@ export class AwsRdsConnector implements Connector {
     this.#generatePassword = opts.passwordGenerator ?? randomPassword;
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as {
       version: string;
       size: string;
@@ -88,6 +92,7 @@ export class AwsRdsConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const deleted = await this.#lifecycle.deleteInstance({
       instanceId: idFromArn(req.handle),
@@ -97,6 +102,7 @@ export class AwsRdsConnector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = await this.#lifecycle.describeInstance({
       instanceId: idFromArn(req.handle),

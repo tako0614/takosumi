@@ -28,7 +28,7 @@ Deno.test("CloudSqlConnector.apply creates instance and emits descriptor", async
       storage: { sizeGiB: 10 },
       highAvailability: false,
     },
-  });
+  }, {});
   assert.match(res.handle, /^projects\/my-proj\/instances\/pg-app-/);
   assert.equal(res.outputs.host, "10.0.0.5");
   assert.equal(res.outputs.port, 5432);

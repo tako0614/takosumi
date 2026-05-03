@@ -1,4 +1,8 @@
-export { type Connector, ConnectorRegistry } from "./connector.ts";
+export {
+  type Connector,
+  type ConnectorContext,
+  ConnectorRegistry,
+} from "./connector.ts";
 export {
   buildConnectorRegistry,
   type ConnectorBootOptions,
@@ -14,6 +18,7 @@ export { GcpGcsConnector } from "./gcp/gcs.ts";
 export { CloudflareContainerConnector } from "./cloudflare/container.ts";
 export { CloudflareDnsConnector } from "./cloudflare/dns.ts";
 export { CloudflareR2Connector } from "./cloudflare/r2.ts";
+export { CloudflareWorkersConnector } from "./cloudflare/workers.ts";
 export { AzureContainerAppsConnector } from "./azure/container_apps.ts";
 export { K3sDeploymentConnector } from "./kubernetes/k3s_deployment.ts";
 export { CorednsLocalConnector } from "./selfhost/coredns_local.ts";

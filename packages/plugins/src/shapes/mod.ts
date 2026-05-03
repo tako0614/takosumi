@@ -3,12 +3,14 @@ import { WebServiceShape } from "./web-service.ts";
 import { ObjectStoreShape } from "./object-store.ts";
 import { DatabasePostgresShape } from "./database-postgres.ts";
 import { CustomDomainShape } from "./custom-domain.ts";
+import { WorkerShape } from "./worker.ts";
 
 export {
   CustomDomainShape,
   DatabasePostgresShape,
   ObjectStoreShape,
   WebServiceShape,
+  WorkerShape,
 };
 export type {
   CustomDomainCapability,
@@ -40,12 +42,18 @@ export type {
   WebServiceScale,
   WebServiceSpec,
 } from "./web-service.ts";
+export type {
+  WorkerCapability,
+  WorkerOutputs,
+  WorkerSpec,
+} from "./worker.ts";
 
 export const TAKOSUMI_BUNDLED_SHAPES: readonly Shape[] = [
   WebServiceShape as Shape,
   ObjectStoreShape as Shape,
   DatabasePostgresShape as Shape,
   CustomDomainShape as Shape,
+  WorkerShape as Shape,
 ];
 
 export function registerTakosumiShapes(): void {

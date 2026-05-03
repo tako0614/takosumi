@@ -12,7 +12,7 @@ Deno.test("CorednsLocalConnector.apply appends record to zone file", async () =>
       provider: "coredns-local",
       resourceName: "rs",
       spec: { name: "app.example.com", target: "10.0.0.5" },
-    });
+    }, {});
     assert.match(res.handle, /^coredns-/);
     assert.equal(res.outputs.fqdn, "app.example.com");
     const text = await Deno.readTextFile(zoneFile);

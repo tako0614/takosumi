@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   type CloudflareR2BucketDescriptor,
   DirectCloudflareR2Lifecycle,
@@ -30,6 +30,7 @@ const HANDLE_PREFIX = "cloudflare:r2:";
 export class CloudflareR2Connector implements Connector {
   readonly provider = "cloudflare-r2";
   readonly shape = "object-store@v1";
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudflareR2Lifecycle;
   readonly #accountId: string;
   readonly #secretBase: string;
@@ -45,7 +46,10 @@ export class CloudflareR2Connector implements Connector {
       `secret://cloudflare/${opts.accountId}/r2`;
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as {
       name: string;
       region?: string;
@@ -64,6 +68,7 @@ export class CloudflareR2Connector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const deleted = await this.#lifecycle.deleteBucket({
       bucketName: bucketFromHandle(req.handle),
@@ -73,6 +78,7 @@ export class CloudflareR2Connector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = await this.#lifecycle.describeBucket({
       bucketName: bucketFromHandle(req.handle),

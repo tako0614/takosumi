@@ -11,7 +11,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   DirectRoute53Lifecycle,
   type Route53RecordDescriptor,
@@ -31,6 +31,7 @@ export interface Route53ConnectorOptions {
 export class Route53Connector implements Connector {
   readonly provider = "route53";
   readonly shape = "custom-domain@v1";
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectRoute53Lifecycle;
 
   constructor(opts: Route53ConnectorOptions) {
@@ -42,7 +43,10 @@ export class Route53Connector implements Connector {
     });
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as { name: string; target: string };
     const desc = await this.#lifecycle.createRecord({
       fqdn: spec.name,
@@ -54,6 +58,7 @@ export class Route53Connector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const deleted = await this.#lifecycle.deleteRecord({
       recordSetId: req.handle,
@@ -63,6 +68,7 @@ export class Route53Connector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = await this.#lifecycle.describeRecord({
       recordSetId: req.handle,

@@ -22,7 +22,7 @@ Deno.test("CloudflareR2Connector.apply POSTs to R2 buckets endpoint", async () =
     provider: "cloudflare-r2",
     resourceName: "rs",
     spec: { name: "tenant-data" },
-  });
+  }, {});
   assert.equal(res.handle, "cloudflare:r2:acct-1:tenant-data");
   assert.equal(res.outputs.bucket, "tenant-data");
   assert.equal(

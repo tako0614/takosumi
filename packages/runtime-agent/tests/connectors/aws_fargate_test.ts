@@ -41,7 +41,7 @@ Deno.test("AwsFargateConnector.apply registers task def and creates service", as
       scale: { min: 1, max: 3 },
       env: { FOO: "bar" },
     },
-  });
+  }, {});
   assert.equal(res.handle, "arn:aws:ecs:us-east-1:operator:service/takos/app");
   assert.equal(res.outputs.internalHost, "app.takos.local");
   assert.equal(res.outputs.internalPort, 8080);

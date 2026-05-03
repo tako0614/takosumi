@@ -76,6 +76,7 @@ const OBJECT_STORE: ShapeRef = { id: "object-store", version: "v1" };
 const WEB_SERVICE: ShapeRef = { id: "web-service", version: "v1" };
 const DATABASE_POSTGRES: ShapeRef = { id: "database-postgres", version: "v1" };
 const CUSTOM_DOMAIN: ShapeRef = { id: "custom-domain", version: "v1" };
+const WORKER: ShapeRef = { id: "worker", version: "v1" };
 
 const AWS_PROVIDERS: readonly ProviderEntry[] = [
   {
@@ -169,6 +170,17 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
     id: "cloudflare-container",
     shape: WEB_SERVICE,
     capabilities: ["scale-to-zero", "geo-routing"],
+  },
+  {
+    id: "cloudflare-workers",
+    shape: WORKER,
+    capabilities: [
+      "scale-to-zero",
+      "websocket",
+      "long-request",
+      "geo-routing",
+      "crons",
+    ],
   },
   {
     id: "cloudflare-dns",

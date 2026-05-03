@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 
 export interface MinioConnectorOptions {
   readonly endpoint: string;
@@ -24,6 +24,7 @@ export interface MinioConnectorOptions {
 export class MinioConnector implements Connector {
   readonly provider = "minio";
   readonly shape = "object-store@v1";
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #endpoint: string;
   readonly #region: string;
   readonly #secretBase: string;
@@ -36,7 +37,10 @@ export class MinioConnector implements Connector {
     this.#fetch = opts.fetch ?? fetch;
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as { name: string };
     const response = await this.#fetch(`${this.#endpoint}/${spec.name}`, {
       method: "PUT",
@@ -54,6 +58,7 @@ export class MinioConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const response = await this.#fetch(`${this.#endpoint}/${req.handle}`, {
       method: "DELETE",
@@ -68,6 +73,7 @@ export class MinioConnector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const response = await this.#fetch(`${this.#endpoint}/${req.handle}`, {
       method: "HEAD",

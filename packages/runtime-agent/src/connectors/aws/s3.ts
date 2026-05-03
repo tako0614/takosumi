@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   type AwsS3BucketDescriptor,
   DirectAwsS3Lifecycle,
@@ -34,6 +34,7 @@ const ARN_PREFIX = "arn:aws:s3:::";
 export class AwsS3Connector implements Connector {
   readonly provider = "aws-s3";
   readonly shape = "object-store@v1";
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectAwsS3Lifecycle;
   readonly #region: string;
   readonly #secretBase: string;
@@ -48,7 +49,10 @@ export class AwsS3Connector implements Connector {
     this.#secretBase = opts.secretRefBase ?? "secret://aws/credentials";
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as {
       name: string;
       region?: string;
@@ -69,6 +73,7 @@ export class AwsS3Connector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const bucket = bucketFromArn(req.handle);
     const deleted = await this.#lifecycle.deleteBucket({
@@ -80,6 +85,7 @@ export class AwsS3Connector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const bucket = bucketFromArn(req.handle);
     const desc = await this.#lifecycle.describeBucket({ bucketName: bucket });

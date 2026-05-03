@@ -156,8 +156,8 @@ connector: `k3s-deployment`
 
 ## 5. Production: kernel と agent を分離
 
-multi-host setup や credential 隔離が必要な場合、agent を別 host で立てて
-kernel から HTTP で叩きます:
+multi-host setup や credential 隔離が必要な場合、agent を別 host で立てて kernel
+から HTTP で叩きます:
 
 ### Agent host (cloud credential を持つ host)
 
@@ -230,15 +230,15 @@ takosumi version
 
 ## 7. troubleshooting
 
-| 症状 | 原因 |
-|---|---|
-| `Refusing to start takosumi with plaintext secret storage` | production mode で `TAKOSUMI_ENCRYPTION_KEY` 未設定 |
-| `Refusing to start takosumi against an unencrypted database` | production mode で DB at-rest encryption 未確認 (dev は `TAKOSUMI_DEV_MODE=1` で opt-out 可) |
-| `manifest.resources[] is required` | `template:` 指定なしで `resources:[]` も空 |
-| 401 from `/v1/deployments` | `TAKOSUMI_DEPLOY_TOKEN` 未設定 or token mismatch |
-| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set` | `takosumi server --no-agent` を使ったが external agent の URL を export してない、または embedded agent の起動に失敗 |
-| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found` | agent host に該当 cloud の credential が無い → connector が register されてない |
-| `runtime-agent /v1/lifecycle/apply failed: 401` | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない |
+| 症状                                                                | 原因                                                                                                                 |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `Refusing to start takosumi with plaintext secret storage`          | production mode で `TAKOSUMI_ENCRYPTION_KEY` 未設定                                                                  |
+| `Refusing to start takosumi against an unencrypted database`        | production mode で DB at-rest encryption 未確認 (dev は `TAKOSUMI_DEV_MODE=1` で opt-out 可)                         |
+| `manifest.resources[] is required`                                  | `template:` 指定なしで `resources:[]` も空                                                                           |
+| 401 from `/v1/deployments`                                          | `TAKOSUMI_DEPLOY_TOKEN` 未設定 or token mismatch                                                                     |
+| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`               | `takosumi server --no-agent` を使ったが external agent の URL を export してない、または embedded agent の起動に失敗 |
+| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found` | agent host に該当 cloud の credential が無い → connector が register されてない                                      |
+| `runtime-agent /v1/lifecycle/apply failed: 401`                     | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない                                                             |
 
 ---
 

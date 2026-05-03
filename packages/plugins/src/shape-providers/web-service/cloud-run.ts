@@ -4,6 +4,7 @@ import type {
   WebServiceOutputs,
   WebServiceSpec,
 } from "../../shapes/web-service.ts";
+import { resolveOciImage } from "./_artifact_image.ts";
 
 export interface CloudRunServiceDescriptor {
   readonly serviceName: string;
@@ -58,9 +59,10 @@ export function createCloudRunWebServiceProvider(
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
+      const image = resolveOciImage(spec);
       const desc = await lifecycle.createService({
-        serviceName: serviceNameOf(spec.image),
-        image: spec.image,
+        serviceName: serviceNameOf(image),
+        image,
         minInstances: spec.scale.min,
         maxInstances: spec.scale.max,
         cpu: spec.resources?.cpu,

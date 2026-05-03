@@ -37,5 +37,6 @@ Deno.test("TAKOSUMI_BUNDLED_SHAPES exposes the expected initial set", () => {
     "database-postgres@v1",
     "object-store@v1",
     "web-service@v1",
+    "worker@v1",
   ]);
 });

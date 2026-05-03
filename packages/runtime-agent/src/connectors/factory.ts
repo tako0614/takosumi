@@ -20,6 +20,7 @@ import { GcpGcsConnector } from "./gcp/gcs.ts";
 import { CloudflareContainerConnector } from "./cloudflare/container.ts";
 import { CloudflareDnsConnector } from "./cloudflare/dns.ts";
 import { CloudflareR2Connector } from "./cloudflare/r2.ts";
+import { CloudflareWorkersConnector } from "./cloudflare/workers.ts";
 import { AzureContainerAppsConnector } from "./azure/container_apps.ts";
 import { K3sDeploymentConnector } from "./kubernetes/k3s_deployment.ts";
 import { CorednsLocalConnector } from "./selfhost/coredns_local.ts";
@@ -171,6 +172,12 @@ export function buildConnectorRegistry(
     );
     reg.register(
       new CloudflareContainerConnector({
+        accountId: opts.cloudflare.accountId,
+        apiToken: opts.cloudflare.apiToken,
+      }),
+    );
+    reg.register(
+      new CloudflareWorkersConnector({
         accountId: opts.cloudflare.accountId,
         apiToken: opts.cloudflare.apiToken,
       }),

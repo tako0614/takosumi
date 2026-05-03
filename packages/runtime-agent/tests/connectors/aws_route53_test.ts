@@ -18,7 +18,7 @@ Deno.test("Route53Connector.apply UPSERTs CNAME via ChangeResourceRecordSets", a
     provider: "route53",
     resourceName: "rs",
     spec: { name: "app.example.com", target: "lb.example.com" },
-  });
+  }, {});
   assert.equal(
     res.handle,
     "ZONE-1|CNAME|app.example.com|lb.example.com",

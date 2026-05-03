@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   type CloudSqlInstanceDescriptor,
   DirectCloudSqlLifecycle,
@@ -40,6 +40,7 @@ const SIZE_TO_TIER: Readonly<Record<string, string>> = {
 export class CloudSqlConnector implements Connector {
   readonly provider = "cloud-sql";
   readonly shape = "database-postgres@v1";
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudSqlLifecycle;
   readonly #dbName: string;
   readonly #user: string;
@@ -60,7 +61,10 @@ export class CloudSqlConnector implements Connector {
     this.#generatePassword = opts.passwordGenerator ?? randomPassword;
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as {
       version: string;
       size: string;
@@ -84,6 +88,7 @@ export class CloudSqlConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const deleted = await this.#lifecycle.deleteInstance({
       instanceName: nameFromResource(req.handle),
@@ -93,6 +98,7 @@ export class CloudSqlConnector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = await this.#lifecycle.describeInstance({
       instanceName: nameFromResource(req.handle),

@@ -8,11 +8,12 @@ import { migrateCommand } from "./commands/migrate.ts";
 import { initCommand } from "./commands/init.ts";
 import { versionCommand } from "./commands/version.ts";
 import { runtimeAgentCommand } from "./commands/runtime_agent.ts";
+import { artifactCommand } from "./commands/artifact.ts";
 
 export const takosumi = new Command()
   .name("takosumi")
   .description("Takosumi: self-hostable PaaS toolkit")
-  .version("0.5.0")
+  .version("0.7.0")
   .command("deploy", deployCommand)
   .command("destroy", destroyCommand)
   .command("status", statusCommand)
@@ -20,6 +21,7 @@ export const takosumi = new Command()
   .command("server", serverCommand)
   .command("migrate", migrateCommand)
   .command("init", initCommand)
+  .command("artifact", artifactCommand)
   .command("runtime-agent", runtimeAgentCommand)
   .command("version", versionCommand);
 

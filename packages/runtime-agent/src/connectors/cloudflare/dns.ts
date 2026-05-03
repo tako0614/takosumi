@@ -12,7 +12,7 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract";
-import type { Connector } from "../connector.ts";
+import type { Connector, ConnectorContext } from "../connector.ts";
 import {
   type CloudflareDnsRecordDescriptor,
   DirectCloudflareDnsLifecycle,
@@ -29,6 +29,7 @@ export interface CloudflareDnsConnectorOptions {
 export class CloudflareDnsConnector implements Connector {
   readonly provider = "cloudflare-dns";
   readonly shape = "custom-domain@v1";
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudflareDnsLifecycle;
 
   constructor(opts: CloudflareDnsConnectorOptions) {
@@ -41,7 +42,10 @@ export class CloudflareDnsConnector implements Connector {
     });
   }
 
-  async apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
+  async apply(
+    req: LifecycleApplyRequest,
+    _ctx: ConnectorContext,
+  ): Promise<LifecycleApplyResponse> {
     const spec = req.spec as unknown as { name: string; target: string };
     const desc = await this.#lifecycle.createRecord({
       fqdn: spec.name,
@@ -53,6 +57,7 @@ export class CloudflareDnsConnector implements Connector {
 
   async destroy(
     req: LifecycleDestroyRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse> {
     const deleted = await this.#lifecycle.deleteRecord({
       recordId: req.handle,
@@ -62,6 +67,7 @@ export class CloudflareDnsConnector implements Connector {
 
   async describe(
     req: LifecycleDescribeRequest,
+    _ctx: ConnectorContext,
   ): Promise<LifecycleDescribeResponse> {
     const desc = await this.#lifecycle.describeRecord({
       recordId: req.handle,

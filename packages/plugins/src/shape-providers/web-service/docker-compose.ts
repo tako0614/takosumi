@@ -4,6 +4,7 @@ import type {
   WebServiceOutputs,
   WebServiceSpec,
 } from "../../shapes/web-service.ts";
+import { resolveOciImage } from "./_artifact_image.ts";
 
 export interface DockerComposeServiceDescriptor {
   readonly serviceName: string;
@@ -63,11 +64,12 @@ export function createDockerComposeWebServiceProvider(
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
-      const serviceName = serviceNameFromSpec(spec);
+      const image = resolveOciImage(spec);
+      const serviceName = serviceNameFromImage(image);
       const hostPort = portAllocator();
       const desc = await lifecycle.createService({
         serviceName,
-        image: spec.image,
+        image,
         hostPort,
         internalPort: spec.port,
         env: { ...(spec.env ?? {}), ...(spec.bindings ?? {}) },
@@ -96,8 +98,8 @@ export function createDockerComposeWebServiceProvider(
   };
 }
 
-function serviceNameFromSpec(spec: WebServiceSpec): string {
-  const fromImage = spec.image.split("/").at(-1)?.split(":")[0] ??
+function serviceNameFromImage(image: string): string {
+  const fromImage = image.split("/").at(-1)?.split(":")[0] ??
     "web-service";
   return fromImage.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
 }

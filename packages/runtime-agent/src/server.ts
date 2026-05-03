@@ -19,8 +19,11 @@ import {
   type LifecycleDestroyRequest,
   type LifecycleErrorBody,
 } from "takosumi-contract";
+import { HttpArtifactFetcher } from "./artifact_fetcher.ts";
+import type { ConnectorContext } from "./connectors/connector.ts";
 import type { ConnectorRegistry } from "./connectors/mod.ts";
 import {
+  ArtifactKindMismatchError,
   ConnectorNotFoundError,
   LifecycleDispatcher,
 } from "./lifecycle_dispatcher.ts";
@@ -57,6 +60,7 @@ export function createRuntimeAgentApp(options: RuntimeAgentServerOptions) {
     const connectors = options.registry.list().map((connector) => ({
       shape: connector.shape,
       provider: connector.provider,
+      acceptedArtifactKinds: connector.acceptedArtifactKinds,
     }));
     return c.json({ connectors }, 200);
   });
@@ -73,7 +77,8 @@ export function createRuntimeAgentApp(options: RuntimeAgentServerOptions) {
     const body = (await c.req.json()) as LifecycleApplyRequest;
     if (!validApply(body)) return c.json(errorBody("bad_request"), 400);
     try {
-      const result = await dispatcher.apply(body);
+      const ctx = buildContext(body.artifactStore);
+      const result = await dispatcher.apply(body, ctx);
       return c.json(result, 200);
     } catch (err) {
       return errorResponse(c, err);
@@ -84,7 +89,7 @@ export function createRuntimeAgentApp(options: RuntimeAgentServerOptions) {
     const body = (await c.req.json()) as LifecycleDestroyRequest;
     if (!validDestroy(body)) return c.json(errorBody("bad_request"), 400);
     try {
-      const result = await dispatcher.destroy(body);
+      const result = await dispatcher.destroy(body, {});
       return c.json(result, 200);
     } catch (err) {
       return errorResponse(c, err);
@@ -95,7 +100,7 @@ export function createRuntimeAgentApp(options: RuntimeAgentServerOptions) {
     const body = (await c.req.json()) as LifecycleDescribeRequest;
     if (!validDescribe(body)) return c.json(errorBody("bad_request"), 400);
     try {
-      const result = await dispatcher.describe(body);
+      const result = await dispatcher.describe(body, {});
       return c.json(result, 200);
     } catch (err) {
       return errorResponse(c, err);
@@ -103,6 +108,18 @@ export function createRuntimeAgentApp(options: RuntimeAgentServerOptions) {
   });
 
   return app;
+}
+
+function buildContext(
+  artifactStore: { baseUrl: string; token: string } | undefined,
+): ConnectorContext {
+  if (!artifactStore) return {};
+  return {
+    fetcher: new HttpArtifactFetcher({
+      baseUrl: artifactStore.baseUrl,
+      token: artifactStore.token,
+    }),
+  };
 }
 
 function validApply(body: unknown): body is LifecycleApplyRequest {
@@ -146,6 +163,21 @@ function errorResponse(c: any, err: unknown) {
       404,
     );
   }
+  if (err instanceof ArtifactKindMismatchError) {
+    return c.json(
+      {
+        error: err.message,
+        code: "artifact_kind_mismatch",
+        details: {
+          shape: err.shape,
+          provider: err.provider,
+          expected: [...err.expected],
+          got: err.got,
+        },
+      } satisfies LifecycleErrorBody,
+      400,
+    );
+  }
   const message = err instanceof Error ? err.message : String(err);
   return c.json({ error: message, code: "connector_failed" }, 500);
 }
@@ -185,7 +217,13 @@ export function serveRuntimeAgent(options: ServeOptions): ServeHandle {
 
 export { ConnectorRegistry } from "./connectors/mod.ts";
 export {
+  ArtifactKindMismatchError,
   ConnectorNotFoundError,
   LifecycleDispatcher,
 } from "./lifecycle_dispatcher.ts";
-export type { Connector } from "./connectors/mod.ts";
+export type { Connector, ConnectorContext } from "./connectors/connector.ts";
+export {
+  type ArtifactFetcher,
+  type FetchedArtifact,
+  HttpArtifactFetcher,
+} from "./artifact_fetcher.ts";

@@ -44,7 +44,7 @@ Deno.test("AwsRdsConnector.apply parses RDS Query API XML and returns connection
       storage: { sizeGiB: 20 },
       highAvailability: false,
     },
-  });
+  }, {});
   assert.match(res.handle, /^arn:aws:rds:us-east-1::db:pg-app-/);
   assert.equal(
     res.outputs.host,
