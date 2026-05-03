@@ -3,10 +3,10 @@
 Takos が公式に curate する **Shape** (portable resource shape) の一覧と spec /
 outputs / capabilities を定義します。Shape は manifest が宣言する **抽象
 resource 型** であり、provider plugin (cf.
-[Provider Plugins](./provider-plugins.md)) によって実装されます。
+[Provider Plugins](/reference/providers)) によって実装されます。
 
 > Shape は Takos ecosystem ownership。新規 Shape の追加には RFC が必要です
-> ([Extending](./extending.md#新しい-shape-を-rfc-する))。
+> ([Extending](/extending#新しい-shape-を-rfc-する))。
 
 ## 設計原則
 
@@ -18,9 +18,9 @@ resource 型** であり、provider plugin (cf.
   selection 対象から除外されます。
 - **Outputs はポータブル.** Shape ごとに output field 名が固定されており、 別
   resource から `${ref:<resource>.<field>}` で参照できます (cf.
-  [Manifest](./manifest.md#ref-syntax))。
+  [Manifest](/manifest#ref-syntax))。
 
-## 4 つの curated Shape
+## 5 つの curated Shape
 
 | Shape id            | version | description                                                 |
 | ------------------- | ------- | ----------------------------------------------------------- |
@@ -28,6 +28,7 @@ resource 型** であり、provider plugin (cf.
 | `web-service`       | `v1`    | long-running HTTP service backed by an OCI image equivalent |
 | `database-postgres` | `v1`    | managed PostgreSQL instance (wire-protocol portable)        |
 | `custom-domain`     | `v1`    | DNS + TLS-terminated public domain                          |
+| `worker`            | `v1`    | serverless JS function backed by a `js-bundle` artifact     |
 
 ## `object-store@v1`
 
@@ -71,7 +72,7 @@ interface ObjectStoreSpec {
 | `multipart-upload`       | マルチパートアップロード API |
 
 source:
-[`src/shapes/object-store.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shapes/object-store.ts)
+[`packages/plugins/src/shapes/object-store.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shapes/object-store.ts)
 
 ## `web-service@v1`
 
@@ -81,7 +82,8 @@ OCI image (相当) を always-on / scale-to-zero で動かす HTTP service。
 
 ```ts
 interface WebServiceSpec {
-  readonly image: string; // OCI image (digest pin 推奨)
+  readonly image?: string; // shorthand for { artifact: { kind: "oci-image", uri: image } }
+  readonly artifact?: Artifact; // 推奨: { kind, uri | hash }
   readonly port: number; // service が listen する port
   readonly scale: {
     readonly min: number; // 0 で scale-to-zero
@@ -101,8 +103,9 @@ interface WebServiceSpec {
 }
 ```
 
-`bindings` は他 resource の output (`${ref:db.connectionString}` など) を
-runtime env として注入する用途です。`env` は plain literal 用。
+`image` か `artifact` のどちらかが必須です。`bindings` は他 resource の output
+(`${ref:db.connectionString}` など) を runtime env として注入する用途です。`env`
+は plain literal 用。
 
 ### Outputs (`WebServiceOutputs`)
 
@@ -126,7 +129,7 @@ runtime env として注入する用途です。`env` は plain literal 用。
 | `private-networking` | private VPC / mesh 経由通信  |
 
 source:
-[`src/shapes/web-service.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shapes/web-service.ts)
+[`packages/plugins/src/shapes/web-service.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shapes/web-service.ts)
 
 ## `database-postgres@v1`
 
@@ -169,7 +172,7 @@ interface DatabasePostgresSpec {
 | `extensions`        | PostgreSQL extension のロード |
 
 source:
-[`src/shapes/database-postgres.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shapes/database-postgres.ts)
+[`packages/plugins/src/shapes/database-postgres.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shapes/database-postgres.ts)
 
 ## `custom-domain@v1`
 
@@ -214,11 +217,50 @@ interface CustomDomainSpec {
 | `redirects` | declarative redirect rule          |
 
 source:
-[`src/shapes/custom-domain.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shapes/custom-domain.ts)
+[`packages/plugins/src/shapes/custom-domain.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shapes/custom-domain.ts)
+
+## `worker@v1`
+
+アップロードされた `js-bundle` artifact を edge / serverless function として
+実行する shape。`web-service@v1` と異なり OCI image を扱わず、`artifact.kind` は
+必ず `js-bundle` で、`artifact.hash` (アップロード hash) が必須です。
+
+### Spec (`WorkerSpec`)
+
+```ts
+interface WorkerSpec {
+  readonly artifact: Artifact; // kind: "js-bundle", hash 必須
+  readonly compatibilityDate: string; // e.g. "2025-01-01"
+  readonly compatibilityFlags?: readonly string[]; // e.g. ["nodejs_compat"]
+  readonly env?: Readonly<Record<string, string>>;
+  readonly routes?: readonly string[]; // routes / triggers
+}
+```
+
+### Outputs (`WorkerOutputs`)
+
+| field        | semantics                                  |
+| ------------ | ------------------------------------------ |
+| `url`        | 外部公開 URL (`https://...`)               |
+| `scriptName` | provider 上の script 識別子                |
+| `version`    | 反映された版識別子 (provider scope, 任意)  |
+
+### Capabilities
+
+| capability      | semantics                    |
+| --------------- | ---------------------------- |
+| `scale-to-zero` | アイドル時 instance 0 を許す |
+| `websocket`     | WebSocket pass-through       |
+| `long-request`  | 30 秒以上のリクエストを許容  |
+| `geo-routing`   | edge-aware ルーティング      |
+| `crons`         | scheduled invocation         |
+
+source:
+[`packages/plugins/src/shapes/worker.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shapes/worker.ts)
 
 ## 関連ページ
 
-- [Provider Plugins](./provider-plugins.md) — 各 Shape を実装する 18 provider
-- [Manifest](./manifest.md) — `resources[]` と `${ref:...}` の書き方
-- [Templates](./templates.md) — bundled 2 template
-- [Extending](./extending.md) — provider 追加 / Shape RFC のフロー
+- [Provider Plugins](/reference/providers) — 各 Shape を実装する 21 provider
+- [Manifest](/manifest) — `resources[]` と `${ref:...}` の書き方
+- [Templates](/reference/templates) — bundled 2 template
+- [Extending](/extending) — provider 追加 / Shape RFC のフロー

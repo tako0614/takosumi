@@ -21,7 +21,7 @@
   など)を宣言する。 manifest が要求する capability を満たせない provider は
   selection から除外される。
 
-現状の curated shape は 4 つ:
+現状の curated shape は 5 つ:
 
 | Shape id            | version | description                                        |
 | ------------------- | ------- | -------------------------------------------------- |
@@ -29,6 +29,7 @@
 | `web-service`       | `v1`    | long-running HTTP service backed by an OCI image   |
 | `database-postgres` | `v1`    | managed PostgreSQL instance                        |
 | `custom-domain`     | `v1`    | DNS + TLS-terminated public domain                 |
+| `worker`            | `v1`    | serverless JS function backed by a `js-bundle`     |
 
 ## 2. Naming conventions
 

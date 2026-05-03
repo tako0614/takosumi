@@ -1,0 +1,17 @@
+# Cloudflare Pages project configuration for the Takosumi VitePress site.
+#
+# This file is consumed by the Pages CI deploy step and by `wrangler pages
+# deploy` for local pushes. The build command runs at the repo root via the
+# `docs:build` Deno task; the resulting `.vitepress/dist` directory is the
+# Pages build output.
+#
+# Operator-side prerequisites (not committed):
+#   - GitHub secrets: CLOUDFLARE_API_TOKEN (Pages write), CLOUDFLARE_ACCOUNT_ID
+#   - Cloudflare Pages project named `takosumi-docs` (created via dashboard or
+#     `wrangler pages project create takosumi-docs`)
+#
+# Custom domain wiring (e.g. takosumi.takos.jp) is deferred to a follow-up
+# round; for now the site publishes at https://takosumi-docs.pages.dev/.
+name = "takosumi-docs"
+compatibility_date = "2026-05-03"
+pages_build_output_dir = "./.vitepress/dist"

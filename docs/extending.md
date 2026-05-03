@@ -24,18 +24,18 @@
 ### 1. ファイルを作る
 
 ```
-src/shape-providers/<shape-id>/<provider-id>.ts
+packages/plugins/src/shape-providers/<shape-id>/<provider-id>.ts
 ```
 
 例: `web-service@v1` の Hetzner Cloud 実装なら
-`src/shape-providers/web-service/hetzner-cloud.ts`。
+`packages/plugins/src/shape-providers/web-service/hetzner-cloud.ts`。
 
 ### 2. ProviderPlugin factory を export する
 
 既存の
-[`object-store/aws-s3.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shape-providers/object-store/aws-s3.ts)
+[`object-store/aws-s3.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/object-store/aws-s3.ts)
 や
-[`web-service/cloud-run.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shape-providers/web-service/cloud-run.ts)
+[`web-service/gcp-cloud-run.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/web-service/gcp-cloud-run.ts)
 をテンプレに `ProviderPlugin<TSpec, TOutputs>` を返す factory を書きます。
 
 ```ts
@@ -82,7 +82,7 @@ provider は **credential を直接持ちません**。同じファイル内で
 ### 5. mod.ts と deno.json を更新
 
 ```ts
-// src/shape-providers/mod.ts
+// packages/plugins/src/shape-providers/mod.ts
 export {
   createHetznerCloudWebServiceProvider,
   type HetznerCloudWebServiceProviderOptions,
@@ -93,7 +93,7 @@ export {
 // deno.json
 {
   "exports": {
-    "./shape-providers/web-service/hetzner-cloud": "./src/shape-providers/web-service/hetzner-cloud.ts"
+    "./shape-providers/web-service/hetzner-cloud": "./packages/plugins/src/shape-providers/web-service/hetzner-cloud.ts"
   }
 }
 ```
@@ -111,7 +111,7 @@ export {
 ### 7. `factories.ts` に production 配線を追加 {#factories-ts-に-production-配線を追加}
 
 ```ts
-// src/shape-providers/factories.ts
+// packages/plugins/src/shape-providers/factories.ts
 if (opts.hetzner) {
   out.push(
     asPlugin<HetznerCloudWebServiceProviderOptions>(
@@ -127,7 +127,7 @@ if (opts.hetzner) {
 operator gateway 経由で Hetzner Cloud API を呼びます。
 
 cf.
-[Operator Bootstrap § Gateway URL pattern](./operator-bootstrap.md#gateway-url-pattern)
+[Operator Bootstrap § Gateway URL pattern](/operator/bootstrap#gateway-url-pattern)
 
 ## 新 template の追加
 
@@ -188,7 +188,7 @@ bundled template として `mod.ts` 一括 register に追加します。
 
 ### 6. 既存 docs を更新
 
-[Templates](./templates.md) ページの bundled list に新 template を
+[Templates](/reference/templates) ページの bundled list に新 template を
 追記してください。
 
 ## 新しい Shape を RFC する
@@ -209,8 +209,8 @@ bundled template として `mod.ts` 一括 register に追加します。
 5. **テスト** — `tests/shape_<shape-id>_test.ts` (validateSpec の境界ケース) と
    `tests/shape_provider_<provider>_test.ts` を整備。
 6. **CONVENTIONS.md §1 表を更新**。
-7. **docs を更新** — [Shape Catalog](./shape-catalog.md) に解説 section
-   を追加し、 [Provider Plugins](./provider-plugins.md) に 2 つ以上の provider
+7. **docs を更新** — [Shape Catalog](/reference/shapes) に解説 section
+   を追加し、 [Provider Plugins](/reference/providers) に 2 つ以上の provider
    を追記。
 8. **upstream contract 影響範囲を PR description に記載** — `takosumi-contract`
    側 API 変更が必要な場合は coordination を明示。
@@ -243,10 +243,10 @@ secret の raw value は **絶対に返しません**。`*Ref` field に
 
 ## 関連ページ
 
-- [Shape Catalog](./shape-catalog.md)
-- [Provider Plugins](./provider-plugins.md)
-- [Templates](./templates.md)
-- [Manifest](./manifest.md)
-- [Operator Bootstrap](./operator-bootstrap.md)
+- [Shape Catalog](/reference/shapes)
+- [Provider Plugins](/reference/providers)
+- [Templates](/reference/templates)
+- [Manifest](/manifest)
+- [Operator Bootstrap](/operator/bootstrap)
 - [`CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md)
   (canonical)

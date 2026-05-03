@@ -1,6 +1,6 @@
 # Templates
 
-**Template** は複数 [Shape](./shape-catalog.md) resource をまとめて expand する
+**Template** は複数 [Shape](/reference/shapes) resource をまとめて expand する
 authoring 短縮です。manifest の `template:` field に template id と inputs
 を書くと、kernel が `expand(inputs)` を呼んで `resources[]` を生成します。
 expansion 後の resource は通常の DAG / capability selection を通ります。
@@ -20,7 +20,7 @@ interface Template<Inputs> {
 template 自体に provider は含まれません。expansion 結果の `ManifestResource[]`
 が provider id を持ち、それを kernel が `requires` / `capabilities` 規則で
 selection します
-([Provider Plugins § Provider selection](./provider-plugins.md#provider-selection-と-requires))。
+([Provider Plugins § Provider selection](/reference/providers#provider-selection-と-requires))。
 
 ## Bundled templates
 
@@ -130,7 +130,7 @@ template:
 `bindings` には `DATABASE_URL`, `ASSETS_BUCKET`, `ASSETS_ENDPOINT` が
 `${ref:...}` 形式で自動注入されます。CF Container は `scale.min: 0` で
 scale-to-zero (cf.
-[`cloudflare-container` capabilities](./provider-plugins.md#webservice-6-providers))。
+[`cloudflare-container` capabilities](/reference/providers#webservice-6-providers))。
 
 source:
 [`templates/web-app-on-cloudflare.ts`](https://github.com/takos-jp/takosumi/blob/main/src/templates/web-app-on-cloudflare.ts)
@@ -140,20 +140,20 @@ source:
 template と `resources[]` は **排他ではありません**。template が expand した
 `ManifestResource[]` の上に、`resources[]` で追加 resource を足す合成も可能です
 (detail は
-[Manifest § template + resources](./manifest.md#template-と-resources-の併用)
+[Manifest § template + resources](/manifest#template-と-resources-の併用)
 を参照)。
 
 ## 新 template を追加する
 
 template は **既存 Shape / Provider の合成** だけで作れます。新 Shape を
 増やす必要はありません。手順は
-[Extending § 新 template の追加](./extending.md#新-template-の追加)
+[Extending § 新 template の追加](/extending#新-template-の追加)
 を参照してください。
 
 ## 関連ページ
 
-- [Shape Catalog](./shape-catalog.md) — 各 Shape の field 定義
-- [Provider Plugins](./provider-plugins.md) — template が expand 先で使う 18
+- [Shape Catalog](/reference/shapes) — 各 Shape の field 定義
+- [Provider Plugins](/reference/providers) — template が expand 先で使う 18
   provider
-- [Manifest](./manifest.md) — `template:` field と `resources[]` の syntax
-- [Extending](./extending.md) — template / provider / shape 拡張ガイド
+- [Manifest](/manifest) — `template:` field と `resources[]` の syntax
+- [Extending](/extending) — template / provider / shape 拡張ガイド

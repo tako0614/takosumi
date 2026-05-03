@@ -355,8 +355,8 @@ artifact-store locator は、 fetch token が set されていればそちらを
 
 ## 関連 docs
 
-- [Manifest spec](./manifest.md)
-- [Shape catalog](./shape-catalog.md)
-- [Provider plugins](./provider-plugins.md)
-- [Templates](./templates.md)
-- [Operator bootstrap](./operator-bootstrap.md) (kernel ↔ agent 連携の詳細)
+- [Manifest spec](/manifest)
+- [Shape catalog](/reference/shapes)
+- [Provider plugins](/reference/providers)
+- [Templates](/reference/templates)
+- [Operator bootstrap](/operator/bootstrap) (kernel ↔ agent 連携の詳細)

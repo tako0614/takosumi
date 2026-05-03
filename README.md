@@ -3,6 +3,8 @@
 Self-hostable PaaS toolkit. **Manifest を投げてあらゆる cloud / docker /
 self-hosted 環境にデプロイできる、完全独立の PaaS**。
 
+📖 ドキュメント: <https://takosumi-docs.pages.dev/>
+
 ```bash
 deno install -gA -n takosumi jsr:@takos/takosumi-cli
 takosumi init my-app.yml --template selfhosted-single-vm
@@ -15,11 +17,14 @@ takosumi deploy my-app.yml       # apply
 ```
 takosumi/
 ├── packages/
-│   ├── kernel/    @takos/takosumi-kernel  — HTTP server + apply pipeline + storage + workers
-│   ├── plugins/   @takos/takosumi-plugins — shapes / providers / templates / factories
-│   ├── cli/       @takos/takosumi-cli     — `takosumi deploy` 等のコマンド
-│   └── all/       @takos/takosumi         — umbrella (上記 3 つを再公開)
-├── docs/, deploy/, fixtures/
+│   ├── contract/        @takos/takosumi-contract       — Shape / Provider / Template の型契約
+│   ├── runtime-agent/   @takos/takosumi-runtime-agent  — cloud SDK / OS executor (data plane)
+│   ├── plugins/         @takos/takosumi-plugins        — shapes / providers / templates / factories
+│   ├── kernel/          @takos/takosumi-kernel         — HTTP server + apply pipeline + storage + workers
+│   ├── cli/             @takos/takosumi-cli            — `takosumi deploy` 等のコマンド
+│   └── all/             @takos/takosumi                — umbrella (上記 5 つを再公開)
+├── docs/                                                — VitePress site (`deno task docs:dev`)
+├── deploy/, fixtures/
 └── AGENTS.md, CONVENTIONS.md, CHANGELOG.md
 ```
 
@@ -34,6 +39,7 @@ Canonical contract:
 | [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                   | turnkey: kernel + plugins + cli を一括取得                            |
 | [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)     | kernel only (`deno run -A jsr:@takos/takosumi-kernel` で server 起動) |
 | [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)   | shape catalog + provider + template + factories                       |
+| [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | runtime-agent (data plane: cloud SDK / OS executor)                   |
 | [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)           | `takosumi` コマンド                                                   |
 | [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) | 型契約 (上流)                                                         |
 
@@ -48,7 +54,7 @@ manifest spec の `image` / `bundle` / `unit` は単なる URI 文字列。artif
 resources:
   - shape: web-service@v1
     name: api
-    provider: aws-fargate
+    provider: "@takos/aws-fargate"
     spec:
       image: ghcr.io/me/api:v1.2.3 # provider が pull
       port: 8080
@@ -57,11 +63,14 @@ resources:
 
 ### Shape × Provider × Template
 
-- **Shape** (4 つ curated): `web-service@v1` / `object-store@v1` /
-  `database-postgres@v1` / `custom-domain@v1`
-- **Provider** (18 bundled): aws-fargate / cloud-run / cloudflare-container /
-  docker-compose / k3s-deployment / systemd-unit (web-service) + aws-s3 /
-  cloudflare-r2 / gcp-gcs / minio / filesystem (object-store) + ...
+- **Shape** (5 つ curated): `web-service@v1` / `object-store@v1` /
+  `database-postgres@v1` / `custom-domain@v1` / `worker@v1`
+- **Provider** (21 bundled, default-on 20 + opt-in 1): `@takos/aws-fargate` /
+  `@takos/gcp-cloud-run` / `@takos/cloudflare-container` /
+  `@takos/selfhost-docker-compose` / `@takos/kubernetes-deployment` /
+  `@takos/selfhost-systemd` (web-service) + `@takos/aws-s3` /
+  `@takos/cloudflare-r2` / `@takos/gcp-gcs` / `@takos/selfhost-minio` /
+  `@takos/selfhost-filesystem` (object-store) + ...
 - **Template** (2 bundled): `selfhosted-single-vm@v1` /
   `web-app-on-cloudflare@v1`
 
@@ -125,3 +134,16 @@ per-package:
 cd packages/cli && deno task test
 cd packages/kernel && deno task db:migrate:dry-run
 ```
+
+### Docs site (VitePress)
+
+```bash
+deno task docs:install   # cd docs && npm install (vitepress を pin)
+deno task docs:dev       # http://localhost:5173 でプレビュー
+deno task docs:build     # docs/.vitepress/dist へ build (CF Pages 公開対象)
+```
+
+publish: `master` への push で `.github/workflows/docs-deploy.yml` が
+Cloudflare Pages project `takosumi-docs` にデプロイ
+(`https://takosumi-docs.pages.dev/`)。CI には GitHub secrets
+`CLOUDFLARE_API_TOKEN` と `CLOUDFLARE_ACCOUNT_ID` が必要。

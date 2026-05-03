@@ -45,6 +45,13 @@
     "test": "deno test --allow-all",
     "fmt": "deno fmt",
     "fmt:check": "deno fmt --check",
-    "lint": "deno lint"
+    "lint": "deno lint",
+    "docs:install": "cd docs && npm install",
+    "docs:dev": "cd docs && npx vitepress dev",
+    "docs:build": "cd docs && npx vitepress build",
+    "docs:preview": "cd docs && npx vitepress preview"
+  },
+  "fmt": {
+    "exclude": ["docs/.vitepress/cache", "docs/.vitepress/dist", "docs/node_modules"]
   }
 }

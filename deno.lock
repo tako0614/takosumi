@@ -162,7 +162,7 @@
           "jsr:@std/yaml@1",
           "jsr:@takos/takosumi-contract@^2.3.0",
           "jsr:@takos/takosumi-kernel@0.12",
-          "jsr:@takos/takosumi-runtime-agent@0.6"
+          "jsr:@takos/takosumi-runtime-agent@0.7"
         ]
       },
       "packages/kernel": {

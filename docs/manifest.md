@@ -2,13 +2,9 @@
 
 このページは新しい **Shape + Provider + Template** model における manifest
 envelope の書き方をまとめます。`resources[]` で portable な
-[Shape](./shape-catalog.md) resource を declarative に並べ、`template:` で
-[Template](./templates.md) を呼び、`${ref:...}` syntax で resource 間の output
+[Shape](/reference/shapes) resource を declarative に並べ、`template:` で
+[Template](/reference/templates) を呼び、`${ref:...}` syntax で resource 間の output
 を配線します。
-
-> 旧 `target` + `services[]` (legacy profile model) を使う環境向けの reference
-> は [Manifest Spec (legacy)](/reference/manifest-spec) を参照 してください。新
-> model はそれを段階的に置き換えます。
 
 ## Envelope 概観
 
@@ -209,11 +205,9 @@ resources:
 
 ## 関連ページ
 
-- [Shape Catalog](./shape-catalog.md) — 各 Shape の spec / outputs /
+- [Shape Catalog](/reference/shapes) — 各 Shape の spec / outputs /
   capabilities
-- [Provider Plugins](./provider-plugins.md) — provider id と実装
-- [Templates](./templates.md) — `template:` で展開する bundled template
-- [Operator Bootstrap](./operator-bootstrap.md) — operator 側 wire 手順
-- [Extending](./extending.md) — provider / shape / template 拡張
-- [Manifest Spec (legacy)](/reference/manifest-spec) — `target+services` 形式の
-  legacy reference
+- [Provider Plugins](/reference/providers) — provider id と実装
+- [Templates](/reference/templates) — `template:` で展開する bundled template
+- [Operator Bootstrap](/operator/bootstrap) — operator 側 wire 手順
+- [Extending](/extending) — provider / shape / template 拡張
