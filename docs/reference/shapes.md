@@ -1,47 +1,88 @@
 # Shape Catalog
 
-Takos が公式に curate する **Shape** (portable resource shape) の一覧と spec /
-outputs / capabilities を定義します。Shape は manifest が宣言する **抽象
-resource 型** であり、provider plugin (cf.
-[Provider Plugins](/reference/providers)) によって実装されます。
+> Stability: stable
+> Audience: integrator
+> See also: [Provider Plugins](/reference/providers), [Access Modes](/reference/access-modes), [Closed Enums](/reference/closed-enums)
 
-> Shape は Takos ecosystem ownership。新規 Shape の追加には RFC が必要です
-> ([Extending](/extending#新しい-shape-を-rfc-する))。
+A **Shape** is the v1 abstract resource type that a manifest declares and a
+[provider plugin](/reference/providers) materializes. Each shape pins three
+things: an input `Spec` schema, a fixed `outputFields` set, and a capability
+vocabulary the provider must advertise to be selectable.
 
-## 設計原則
+Shapes are owned by the Takosumi catalog. Adding a new shape is a breaking
+change to the ecosystem and requires a `CONVENTIONS.md` §6 RFC. New cloud
+support is delivered by adding **providers** for an existing shape, not by
+forking shapes.
 
-- **Takos curates the shape catalog.** 新しいクラウド対応は **provider**
-  を増やすことで行い、 Shape そのものを増やすのは breaking change
-  として扱います。
-- **Capabilities are advisory.** provider plugin が `capabilities` で optional
-  feature を宣言します。manifest 側 `requires:` を満たさない provider は
-  selection 対象から除外されます。
-- **Outputs はポータブル.** Shape ごとに output field 名が固定されており、 別
-  resource から `${ref:<resource>.<field>}` で参照できます (cf.
-  [Manifest](/manifest#ref-syntax))。
+Source: `packages/contract/src/shape.ts` (the contract and registry),
+`packages/plugins/src/shapes/<shape>.ts` (the bundled five).
 
-## 5 つの curated Shape
+## Capability extension guide
 
-| Shape id            | version | description                                                 |
-| ------------------- | ------- | ----------------------------------------------------------- |
-| `object-store`      | `v1`    | bucket-style object storage; S3-class API portable          |
-| `web-service`       | `v1`    | long-running HTTP service backed by an OCI image equivalent |
-| `database-postgres` | `v1`    | managed PostgreSQL instance (wire-protocol portable)        |
-| `custom-domain`     | `v1`    | DNS + TLS-terminated public domain                          |
-| `worker`            | `v1`    | serverless JS function backed by a `js-bundle` artifact     |
+Capabilities are **open strings**. The catalog does **not** lock the set
+into a closed enum; instead, the v1 rule is open string + reserved prefix:
+
+| Prefix       | Owner                                              |
+| ------------ | -------------------------------------------------- |
+| `takos.*`    | Takos product surface                              |
+| `system.*`   | Takosumi kernel / runtime-agent / observation tier |
+| `operator.*` | Operator-defined deployment-local capabilities     |
+
+A provider may declare any kebab-case identifier in `capabilities`. A
+manifest may reference any kebab-case identifier in `requires`. Selection
+verifies subset membership only. The closed `*Capability` union types
+exported alongside each bundled shape are convenience for compile-time
+checks, not a contract — the runtime treats `capabilities` as
+`readonly string[]`.
+
+Adding a new reserved prefix, or adding identifiers under `takos.*` /
+`system.*`, requires the §6 RFC. `operator.*` is free for the operator to
+use within a single deployment.
+
+## outputFields reserved names
+
+Five field names are **reserved** across the catalog so that consumer
+manifests can rely on stable semantics regardless of which provider runs:
+
+| reserved name | meaning                                                         |
+| ------------- | --------------------------------------------------------------- |
+| `url`         | scheme-bearing public URL (`https://...`)                       |
+| `endpoint`    | scheme-bearing service / API endpoint URL                       |
+| `status`      | reserved for shape-level health surfaces; not used by v1 shapes |
+| `id`          | provider-scope identifier                                       |
+| `version`     | provider-scope version / revision identifier                    |
+
+A new shape that exposes a field with one of these names must use the
+reserved meaning. Adding a new reserved name follows the §6 RFC.
+
+## Catalog
+
+| Shape id            | version | summary                                                       |
+| ------------------- | ------- | ------------------------------------------------------------- |
+| `object-store`      | `v1`    | Bucket-style object storage; provider-portable across S3-class APIs |
+| `web-service`       | `v1`    | Long-running HTTP service backed by an OCI image or equivalent     |
+| `database-postgres` | `v1`    | Managed PostgreSQL instance (wire-protocol portable)               |
+| `custom-domain`     | `v1`    | DNS + TLS-terminated public domain                                 |
+| `worker`            | `v1`    | Serverless JS function backed by a `js-bundle` artifact            |
+
+The notation in the lifecycle persistence column below uses the v1 object
+lifecycle classes: managed / generated / external / operator / imported.
+For the bundled shapes, every output field is **generated** — the provider
+writes the value during apply and the kernel persists it in the resolved
+output map for `${ref:...}` consumption.
 
 ## `object-store@v1`
 
-S3 互換の bucket-style object storage。
+S3-compatible bucket-style storage.
 
-### Spec (`ObjectStoreSpec`)
+### Spec summary
 
 ```ts
 interface ObjectStoreSpec {
-  readonly name: string; // bucket 物理名
-  readonly public?: boolean; // public-read を許すか
-  readonly versioning?: boolean; // object versioning を有効化
-  readonly region?: string; // region hint (provider 既定値あり)
+  readonly name: string;
+  readonly public?: boolean;
+  readonly versioning?: boolean;
+  readonly region?: string;
   readonly lifecycle?: {
     readonly expireAfterDays?: number;
     readonly archiveAfterDays?: number;
@@ -49,97 +90,72 @@ interface ObjectStoreSpec {
 }
 ```
 
-### Outputs (`ObjectStoreOutputs`)
+`name` is required and non-empty. All other fields are optional; provider
+defaults apply when unset.
 
-| field          | semantics                                  |
-| -------------- | ------------------------------------------ |
-| `bucket`       | provider 上の bucket 物理名                |
-| `endpoint`     | S3-compatible endpoint URL (`https://...`) |
-| `region`       | resolved region                            |
-| `accessKeyRef` | secret reference URI (`secret://...`)      |
-| `secretKeyRef` | secret reference URI (`secret://...`)      |
+### outputFields
 
-### Capabilities
+| field          | type   | nullable | lifecycle persistence |
+| -------------- | ------ | -------- | --------------------- |
+| `bucket`       | string | no       | generated             |
+| `endpoint`     | string | no       | generated             |
+| `region`       | string | no       | generated             |
+| `accessKeyRef` | string | no       | generated             |
+| `secretKeyRef` | string | no       | generated             |
 
-| capability               | semantics                    |
-| ------------------------ | ---------------------------- |
-| `versioning`             | object version 履歴の保持    |
-| `presigned-urls`         | 時限付き署名 URL 発行        |
-| `server-side-encryption` | bucket レベルでの SSE        |
-| `public-access`          | public-read object を許す    |
-| `event-notifications`    | object event の外部通知      |
-| `lifecycle-rules`        | TTL / archive lifecycle rule |
-| `multipart-upload`       | マルチパートアップロード API |
+### Declared capabilities (catalog vocabulary)
 
-source:
-[`packages/plugins/src/shapes/object-store.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shapes/object-store.ts)
+`versioning`, `presigned-urls`, `server-side-encryption`, `public-access`,
+`event-notifications`, `lifecycle-rules`, `multipart-upload`.
 
 ## `web-service@v1`
 
-OCI image (相当) を always-on / scale-to-zero で動かす HTTP service。
+Long-running HTTP service driven by an OCI image (or other artifact a
+provider accepts).
 
-### Spec (`WebServiceSpec`)
+### Spec summary
 
 ```ts
 interface WebServiceSpec {
-  readonly image?: string; // shorthand for { artifact: { kind: "oci-image", uri: image } }
-  readonly artifact?: Artifact; // 推奨: { kind, uri | hash }
-  readonly port: number; // service が listen する port
-  readonly scale: {
-    readonly min: number; // 0 で scale-to-zero
-    readonly max: number;
-    readonly idleSeconds?: number;
-  };
+  readonly image?: string;          // shorthand for { artifact: { kind: "oci-image", uri: image } }
+  readonly artifact?: Artifact;     // preferred; { kind, uri | hash }
+  readonly port: number;
+  readonly scale: { min: number; max: number; idleSeconds?: number };
   readonly env?: Readonly<Record<string, string>>;
   readonly bindings?: Readonly<Record<string, string>>;
-  readonly health?: {
-    path: string;
-    intervalSeconds?: number;
-    timeoutSeconds?: number;
-  };
+  readonly health?: { path: string; intervalSeconds?: number; timeoutSeconds?: number };
   readonly resources?: { cpu?: string; memory?: string };
   readonly command?: readonly string[];
   readonly domains?: readonly string[];
 }
 ```
 
-`image` か `artifact` のどちらかが必須です。`bindings` は他 resource の output
-(`${ref:db.connectionString}` など) を runtime env として注入する用途です。`env`
-は plain literal 用。
+Either `image` or `artifact` must be set. `bindings` accepts `${ref:...}`
+expressions resolved against other resources' outputs; `env` is plain
+literal.
 
-### Outputs (`WebServiceOutputs`)
+### outputFields
 
-| field          | semantics                      |
-| -------------- | ------------------------------ |
-| `url`          | 外部公開 URL (`https://...`)   |
-| `internalHost` | 内部 DNS name (provider scope) |
-| `internalPort` | 内部 listen port               |
+| field          | type   | nullable | lifecycle persistence |
+| -------------- | ------ | -------- | --------------------- |
+| `url`          | string | no       | generated             |
+| `internalHost` | string | no       | generated             |
+| `internalPort` | number | no       | generated             |
 
-### Capabilities
+### Declared capabilities
 
-| capability           | semantics                    |
-| -------------------- | ---------------------------- |
-| `always-on`          | `min ≥ 1` を維持             |
-| `scale-to-zero`      | アイドル時 instance 0 を許す |
-| `websocket`          | WebSocket pass-through       |
-| `long-request`       | 30 秒以上のリクエストを許容  |
-| `sticky-session`     | session affinity             |
-| `geo-routing`        | edge-aware ルーティング      |
-| `crons`              | scheduled invocation         |
-| `private-networking` | private VPC / mesh 経由通信  |
-
-source:
-[`packages/plugins/src/shapes/web-service.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shapes/web-service.ts)
+`always-on`, `scale-to-zero`, `websocket`, `long-request`, `sticky-session`,
+`geo-routing`, `crons`, `private-networking`.
 
 ## `database-postgres@v1`
 
-managed PostgreSQL。wire protocol 互換のため provider portable。
+Managed PostgreSQL with wire-protocol portability.
 
-### Spec (`DatabasePostgresSpec`)
+### Spec summary
 
 ```ts
 interface DatabasePostgresSpec {
-  readonly version: string; // "16" など
+  readonly version: string;
   readonly size: "small" | "medium" | "large" | "xlarge";
   readonly storage?: { sizeGiB: number; type?: "ssd" | "hdd" };
   readonly backups?: { enabled: boolean; retentionDays?: number };
@@ -148,119 +164,98 @@ interface DatabasePostgresSpec {
 }
 ```
 
-### Outputs (`DatabasePostgresOutputs`)
+### outputFields
 
-| field               | semantics                                   |
-| ------------------- | ------------------------------------------- |
-| `host`              | 接続先 host (private DNS / public hostname) |
-| `port`              | listen port                                 |
-| `database`          | 既定 database 名                            |
-| `username`          | application 用 role 名                      |
-| `passwordSecretRef` | secret reference URI                        |
-| `connectionString`  | scheme 付き接続文字列 `postgresql://...`    |
+| field               | type   | nullable | lifecycle persistence |
+| ------------------- | ------ | -------- | --------------------- |
+| `host`              | string | no       | generated             |
+| `port`              | number | no       | generated             |
+| `database`          | string | no       | generated             |
+| `username`          | string | no       | generated             |
+| `passwordSecretRef` | string | no       | generated             |
+| `connectionString`  | string | no       | generated             |
 
-### Capabilities
+### Declared capabilities
 
-| capability          | semantics                     |
-| ------------------- | ----------------------------- |
-| `pitr`              | point-in-time recovery        |
-| `read-replicas`     | read replica の追加           |
-| `high-availability` | multi-AZ / HA failover        |
-| `backups`           | 自動バックアップ              |
-| `ssl-required`      | SSL 接続強制                  |
-| `ipv6`              | IPv6 host                     |
-| `extensions`        | PostgreSQL extension のロード |
-
-source:
-[`packages/plugins/src/shapes/database-postgres.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shapes/database-postgres.ts)
+`pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`,
+`ipv6`, `extensions`.
 
 ## `custom-domain@v1`
 
-DNS record + TLS termination でつくる public domain。`web-service` の `url` を
-`${ref:web.url}` 形式で `target:` に渡すのが定番パターンです。
+DNS record plus TLS termination for a public domain. The common pattern is
+`target: "${ref:<webservice>.url}"` to pin the domain to a `web-service@v1`
+output.
 
-### Spec (`CustomDomainSpec`)
+### Spec summary
 
 ```ts
 interface CustomDomainSpec {
-  readonly name: string; // FQDN
-  readonly target: string; // 通常 ${ref:<webservice>.url}
-  readonly certificate?: {
-    kind: "auto" | "managed" | "provided";
-    secretRef?: string;
-  };
-  readonly redirects?: readonly {
-    from: string;
-    to: string;
-    code?: 301 | 302 | 307 | 308;
-  }[];
+  readonly name: string;            // FQDN
+  readonly target: string;          // typically ${ref:<webservice>.url}
+  readonly certificate?: { kind: "auto" | "managed" | "provided"; secretRef?: string };
+  readonly redirects?: readonly { from: string; to: string; code?: 301 | 302 | 307 | 308 }[];
 }
 ```
 
-### Outputs (`CustomDomainOutputs`)
+### outputFields
 
-| field            | semantics                                    |
-| ---------------- | -------------------------------------------- |
-| `fqdn`           | 解決後の FQDN                                |
-| `certificateArn` | TLS 証明書識別子 (provider scope, optional)  |
-| `nameservers`    | NS が必要な場合の delegation 一覧 (optional) |
+| field            | type     | nullable | lifecycle persistence |
+| ---------------- | -------- | -------- | --------------------- |
+| `fqdn`           | string   | no       | generated             |
+| `certificateArn` | string   | yes      | generated             |
+| `nameservers`    | string[] | yes      | generated             |
 
-### Capabilities
+### Declared capabilities
 
-| capability  | semantics                          |
-| ----------- | ---------------------------------- |
-| `wildcard`  | wildcard FQDN サポート             |
-| `auto-tls`  | 自動証明書発行 (ACME / ZeroSSL 等) |
-| `sni`       | Server Name Indication             |
-| `http3`     | HTTP/3                             |
-| `alpn-acme` | ALPN-based ACME challenge          |
-| `redirects` | declarative redirect rule          |
-
-source:
-[`packages/plugins/src/shapes/custom-domain.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shapes/custom-domain.ts)
+`wildcard`, `auto-tls`, `sni`, `http3`, `alpn-acme`, `redirects`.
 
 ## `worker@v1`
 
-アップロードされた `js-bundle` artifact を edge / serverless function として
-実行する shape。`web-service@v1` と異なり OCI image を扱わず、`artifact.kind` は
-必ず `js-bundle` で、`artifact.hash` (アップロード hash) が必須です。
+Serverless JS function backed by an uploaded `js-bundle` artifact. Unlike
+`web-service@v1`, `artifact.kind` must be exactly `js-bundle` and
+`artifact.hash` is required (no external `uri`).
 
-### Spec (`WorkerSpec`)
+### Spec summary
 
 ```ts
 interface WorkerSpec {
-  readonly artifact: Artifact; // kind: "js-bundle", hash 必須
-  readonly compatibilityDate: string; // e.g. "2025-01-01"
-  readonly compatibilityFlags?: readonly string[]; // e.g. ["nodejs_compat"]
+  readonly artifact: Artifact;                  // kind: "js-bundle", hash required
+  readonly compatibilityDate: string;           // e.g. "2025-01-01"
+  readonly compatibilityFlags?: readonly string[];
   readonly env?: Readonly<Record<string, string>>;
-  readonly routes?: readonly string[]; // routes / triggers
+  readonly routes?: readonly string[];
 }
 ```
 
-### Outputs (`WorkerOutputs`)
+### outputFields
 
-| field        | semantics                                  |
-| ------------ | ------------------------------------------ |
-| `url`        | 外部公開 URL (`https://...`)               |
-| `scriptName` | provider 上の script 識別子                |
-| `version`    | 反映された版識別子 (provider scope, 任意)  |
+| field        | type   | nullable | lifecycle persistence |
+| ------------ | ------ | -------- | --------------------- |
+| `url`        | string | no       | generated             |
+| `scriptName` | string | no       | generated             |
+| `version`    | string | yes      | generated             |
 
-### Capabilities
+### Declared capabilities
 
-| capability      | semantics                    |
-| --------------- | ---------------------------- |
-| `scale-to-zero` | アイドル時 instance 0 を許す |
-| `websocket`     | WebSocket pass-through       |
-| `long-request`  | 30 秒以上のリクエストを許容  |
-| `geo-routing`   | edge-aware ルーティング      |
-| `crons`         | scheduled invocation         |
+`scale-to-zero`, `websocket`, `long-request`, `geo-routing`, `crons`.
 
-source:
-[`packages/plugins/src/shapes/worker.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shapes/worker.ts)
+## Catalog extension
 
-## 関連ページ
+Adding a new shape, expanding the `outputFields` reserved-name set, or
+introducing a new reserved capability prefix all go through the same
+`CONVENTIONS.md` §6 RFC. Adding a new provider for an existing shape is the
+standard non-RFC path and is the right tool for new cloud support.
 
-- [Provider Plugins](/reference/providers) — 各 Shape を実装する 21 provider
-- [Manifest](/manifest) — `resources[]` と `${ref:...}` の書き方
-- [Templates](/reference/templates) — bundled 2 template
-- [Extending](/extending) — provider 追加 / Shape RFC のフロー
+## Cross-references
+
+- [Access Modes](/reference/access-modes) — closed v1 access mode enum
+  (`read` / `read-write` / `admin` / `invoke-only` / `observe-only`) for
+  shape outputs that expose targets to consumers, and the
+  `safeDefaultAccess` contract on grant-producing exports.
+- [Closed Enums](/reference/closed-enums) — full v1 closed enum index
+  (object lifecycle classes, mutation constraints, link mutations) that
+  shape outputs are constrained by.
+- [Connector Contract](/reference/connector-contract) — `connector:<id>`
+  identity と shape outputs が連携する artifact 受け渡し境界。
+- `CONVENTIONS.md` §6 RFC (at the takosumi repo root) — shape catalog,
+  reserved outputField, and reserved capability-prefix RFC process.

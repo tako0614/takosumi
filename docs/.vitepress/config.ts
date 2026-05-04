@@ -49,15 +49,127 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Reference",
       items: [
+        { text: "Index", link: "/reference/" },
+      ],
+    },
+    {
+      text: "Reference / API Surfaces",
+      items: [
+        { text: "Kernel HTTP API", link: "/reference/kernel-http-api" },
+        { text: "Runtime-Agent API", link: "/reference/runtime-agent-api" },
+        { text: "CLI", link: "/reference/cli" },
+        { text: "Lifecycle Protocol", link: "/reference/lifecycle" },
+        { text: "Provider / Implementation Contract", link: "/reference/provider-implementation-contract" },
+      ],
+    },
+    {
+      text: "Reference / Manifest & Wire Formats",
+      items: [
+        { text: "Manifest Validation", link: "/reference/manifest-validation" },
+        { text: "Manifest Expand Semantics", link: "/reference/manifest-expand-semantics" },
+        { text: "Plan Output Schema", link: "/reference/plan-output" },
+        { text: "Status Output Schema", link: "/reference/status-output" },
+        { text: "Resource IDs", link: "/reference/resource-ids" },
+        { text: "Digest Computation", link: "/reference/digest-computation" },
+        { text: "Time and Clock Model", link: "/reference/time-clock-model" },
+      ],
+    },
+    {
+      text: "Reference / Lifecycle & Execution",
+      items: [
+        { text: "Lifecycle Phases", link: "/reference/lifecycle-phases" },
+        { text: "WAL Stages", link: "/reference/wal-stages" },
+        { text: "GroupHead and Rollout", link: "/reference/group-head-rollout" },
+        { text: "Readiness Probes", link: "/reference/readiness-probes" },
+      ],
+    },
+    {
+      text: "Reference / Policy / Risk / Approval",
+      items: [
+        { text: "Closed Enums", link: "/reference/closed-enums" },
+        { text: "Access Modes", link: "/reference/access-modes" },
+        { text: "Approval Invalidation", link: "/reference/approval-invalidation" },
+        { text: "Risk Taxonomy", link: "/reference/risk-taxonomy" },
+        { text: "RevokeDebt Model", link: "/reference/revoke-debt" },
+      ],
+    },
+    {
+      text: "Reference / Storage & Observability",
+      items: [
+        { text: "Storage Schema", link: "/reference/storage-schema" },
+        { text: "Journal Compaction", link: "/reference/journal-compaction" },
+        { text: "Audit Events", link: "/reference/audit-events" },
+        { text: "Observation Retention", link: "/reference/observation-retention" },
+        { text: "Drift Detection", link: "/reference/drift-detection" },
+      ],
+    },
+    {
+      text: "Reference / Identity & Access",
+      items: [
+        { text: "Actor / Organization Model", link: "/reference/actor-organization-model" },
+        { text: "RBAC Policy", link: "/reference/rbac-policy" },
+        { text: "API Key Management", link: "/reference/api-key-management" },
+        { text: "Auth Providers", link: "/reference/auth-providers" },
+      ],
+    },
+    {
+      text: "Reference / Security & Trust",
+      items: [
+        { text: "Secret Partitions", link: "/reference/secret-partitions" },
+        { text: "Cross-Process Locks", link: "/reference/cross-process-locks" },
+        { text: "Catalog Release Trust", link: "/reference/catalog-release-trust" },
+        { text: "External Participants", link: "/reference/external-participants" },
+      ],
+    },
+    {
+      text: "Reference / Tenant Lifecycle",
+      items: [
+        { text: "Tenant Provisioning", link: "/reference/tenant-provisioning" },
+        { text: "Trial Spaces", link: "/reference/trial-spaces" },
+        { text: "Tenant Export and Deletion", link: "/reference/tenant-export-deletion" },
+      ],
+    },
+    {
+      text: "Reference / Operations",
+      items: [
+        { text: "Bootstrap Protocol", link: "/reference/bootstrap-protocol" },
+        { text: "Migration / Upgrade", link: "/reference/migration-upgrade" },
+        { text: "Backup and Restore", link: "/reference/backup-restore" },
+        { text: "Quota / Rate Limit", link: "/reference/quota-rate-limit" },
+        { text: "Compliance Retention", link: "/reference/compliance-retention" },
+        { text: "Telemetry and Metrics", link: "/reference/telemetry-metrics" },
+        { text: "Logging Conventions", link: "/reference/logging-conventions" },
+      ],
+    },
+    {
+      text: "Reference / PaaS Operations",
+      items: [
+        { text: "Quota Tiers", link: "/reference/quota-tiers" },
+        { text: "Cost Attribution", link: "/reference/cost-attribution" },
+        { text: "SLA Breach Detection", link: "/reference/sla-breach-detection" },
+        { text: "Zone Selection", link: "/reference/zone-selection" },
+        { text: "Incident Model", link: "/reference/incident-model" },
+        { text: "Support Impersonation", link: "/reference/support-impersonation" },
+        { text: "Notification Emission", link: "/reference/notification-emission" },
+      ],
+    },
+    {
+      text: "Reference / Catalog & Extension",
+      items: [
         { text: "Shape Catalog", link: "/reference/shapes" },
         { text: "Provider Plugins", link: "/reference/providers" },
         { text: "Templates", link: "/reference/templates" },
-        { text: "CLI", link: "/reference/cli" },
-        { text: "Kernel HTTP API", link: "/reference/kernel-http-api" },
-        { text: "Runtime-Agent API", link: "/reference/runtime-agent-api" },
-        { text: "Environment Variables", link: "/reference/env-vars" },
         { text: "Artifact Kinds", link: "/reference/artifact-kinds" },
-        { text: "Lifecycle Protocol", link: "/reference/lifecycle" },
+        { text: "Connector Contract", link: "/reference/connector-contract" },
+        { text: "DataAsset Policy", link: "/reference/data-asset-policy" },
+        { text: "Artifact GC", link: "/reference/artifact-gc" },
+        { text: "Space Export Share", link: "/reference/space-export-share" },
+      ],
+    },
+    {
+      text: "Reference / Configuration",
+      items: [
+        { text: "Environment Variables", link: "/reference/env-vars" },
       ],
     },
     {

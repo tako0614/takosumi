@@ -94,11 +94,16 @@ Takosumi v1 creates immutable snapshots before it acts. Every side effect is jou
 | [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md) | How is reality tracked without mutating desired state? |
 | [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md) | How are safety decisions represented? |
 | [Target Model](./target-model.md) | What is an object target? |
-| [Implementation Operation Envelope](./implementation-operation-envelope.md) | What must implementations accept and return? |
+| [Implementation and Runtime-Agent Boundary](./implementation-operation-envelope.md) | What must implementations accept and return, and where is the kernel ↔ runtime-agent line? |
 | [Execution Lifecycle](./execution-lifecycle.md) | How do preview, apply, activate, destroy, rollback, recovery, and observe proceed? |
+| [API Surface Design](./api-surface-design.md) | How is the kernel HTTP API split, authenticated, versioned, and signed? |
+| [CLI Surface Design](./cli-companion-design-note.md) | How does the CLI sit between client and kernel without becoming the semantic authority? |
 | [Operator Boundaries](./operator-boundaries.md) | What is operator-controlled? |
+| [PaaS Provider Design](./paas-provider-design.md) | How does Takosumi serve as a PaaS for multiple tenants? |
+| [Identity and Access Design](./identity-and-access-design.md) | How are actors, organizations, roles, and API keys modeled? |
+| [Tenant Lifecycle Design](./tenant-lifecycle-design.md) | How are tenants provisioned, trial-bound, exported, and deleted? |
+| [PaaS Operations Design](./paas-operations-design.md) | How are quota tiers, SLA, incidents, support, and notifications kernel-side? |
 | [Operational Hardening Checklist](./operational-hardening-checklist.md) | What must production enforce? |
-| [CLI Companion Design Note](./cli-companion-design-note.md) | How may a client prepare local inputs? |
 | [Update Summary](./update-summary.md) | What changed in this final abstract version? |
 
 ## Minimal example

@@ -1,198 +1,182 @@
-# Artifact Kinds
+# DataAsset Kinds
 
-Takosumi の **artifact store** は content-addressed (`sha256:<hex>`) で
-バイト列を保管し、manifest の `spec.artifact: { kind, hash }` から参照されます。
-`kind` は **open string** で、第三者 connector が新しい種類を増やせる構造になっています。
-このページは bundled kind / 拡張 API / upload 経路 / GC を整理します。
+> Stability: stable
+> Audience: operator, integrator
+> See also: [Connector Contract](/reference/connector-contract), [DataAsset Policy](/reference/data-asset-policy), [Closed Enums](/reference/closed-enums)
 
-## なぜ registry が必要か
+A Takosumi artifact is the content-addressed byte-or-pointer record that
+backs a DataAsset. Every `Artifact` referenced by a Manifest resource has
+two identifying fields: a `kind` (the closed v1 enum below) and either a
+`hash` (`sha256:<hex>`, returned by `POST /v1/artifacts`) or a `uri` (an
+external pointer such as an OCI registry URL). DataAsset visibility is
+Space-scoped per the [Connector Contract](/reference/connector-contract); an
+Artifact stored against the kernel artifact partition is not globally
+visible until operator artifact policy makes it so.
 
-`Artifact.kind` は protocol 上 `string` のため、kernel は POST 時点では
-任意の文字列を受け付けます。実際の "この connector はどの kind を
-処理できるか" の判断は **runtime-agent の dispatcher** が
-`Connector.acceptedArtifactKinds` と spec を突き合わせて行います
-([Runtime-Agent API](/reference/runtime-agent-api))。
+## Closed kind enum
 
-それでも registry を持つ理由は 3 つ:
+The v1 DataAsset kind enum is closed:
 
-1. **Discovery** — operator が `takosumi artifact kinds` を叩けば、
-   この kernel に register されている全 kind と description / content-type
-   hint を一覧できる。CLI の `--kind` 値の補助になる。
-2. **Per-kind size override** — `RegisteredArtifactKind.maxSize` で
-   kind 単位に upload 上限を上書きできる (kernel 全体の
-   `TAKOSUMI_ARTIFACT_MAX_BYTES` を越える bundle を許す等)。
-3. **3rd-party 拡張** — 新しい connector が新 kind を追加したい場合は
-   `registerArtifactKind(...)` を呼ぶだけで CLI / discovery endpoint に
-   反映される。contract package を fork する必要はない。
-
-::: tip
-kernel は POST `/v1/artifacts` で kind の妥当性を検証しません
-(unknown kind でもアップロードは成功する)。**実際の弾き先は
-runtime-agent dispatcher** で、spec の `artifact.kind` が connector の
-`acceptedArtifactKinds` に含まれていなければ `ArtifactKindMismatchError`
-を返します。
-:::
-
-## Bundled kinds
-
-`@takos/takosumi-plugins` が `registerBundledArtifactKinds()` で登録する 5
-種類です。Source:
-[`packages/plugins/src/shape-providers/_artifact_kinds_bundled.ts`](https://github.com/tako0614/takosumi/blob/master/packages/plugins/src/shape-providers/_artifact_kinds_bundled.ts)
-
-| kind            | description                                     | content-type hint          | accepted by (bundled)                                                                                                                       |
-| --------------- | ----------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `oci-image`     | OCI / Docker container image (URI 参照、upload 不要) | —                          | `aws-fargate` / `cloud-run` / `cloudflare-container` / `azure-container-apps` / `k3s-deployment` / `docker-compose` / `systemd-unit`        |
-| `js-bundle`     | ESM JS bundle for serverless runtimes           | `application/javascript`   | `cloudflare-workers` / `deno-deploy-workers`                                                                                                |
-| `lambda-zip`    | AWS Lambda deployment zip                       | `application/zip`          | (将来の Lambda connector 用に予約 — bundled connector はまだ無し)                                                                                       |
-| `static-bundle` | Static site tarball for Pages-style hosts       | `application/x-tar`        | (将来の Pages connector 用に予約)                                                                                                                  |
-| `wasm`          | WebAssembly module                              | `application/wasm`         | (将来の WASM runtime connector 用に予約)                                                                                                            |
-
-::: warning
-`oci-image` は **registry URI で参照する pointer kind** です。bytes は
-upload せず、`spec.artifact: { kind: "oci-image", uri: "ghcr.io/me/api:v1" }`
-のように `uri` で渡します。content-addressed store には乗りません。
-他の kind は基本的に `hash` (`sha256:...`) で参照される **byte kind** です。
-:::
-
-## API for extension
-
-新 kind を追加する 3rd-party connector は `registerArtifactKind` を呼びます。
-Source:
-[`packages/contract/src/runtime-agent-lifecycle.ts`](https://github.com/tako0614/takosumi/blob/master/packages/contract/src/runtime-agent-lifecycle.ts)
-
-```ts
-import { registerArtifactKind } from "takosumi-contract";
-
-registerArtifactKind({
-  kind: "deno-zip",
-  description: "Deno self-contained executable bundle",
-  contentTypeHint: "application/zip",
-  // Optional: per-kind override of TAKOSUMI_ARTIFACT_MAX_BYTES.
-  maxSize: 200 * 1024 * 1024,
-});
+```text
+oci-image | js-module | wasm-module | static-archive | source-archive
 ```
 
-API 一覧:
+Adding a new kind is governed by `CONVENTIONS.md` §6 RFC. No connector,
+plugin, or third-party package may extend the enum unilaterally.
+
+| Kind | Description | Required metadata | Size cap (kernel default) | Signature requirement | Cache policy |
+| --- | --- | --- | --- | --- | --- |
+| `oci-image` | OCI / Docker container image referenced by registry URI. Bytes are not stored in the artifact partition; the connector pulls from the registry at apply. | `metadata.uri` (registry URL); optional `metadata.digest` for pinning | not applicable (pointer kind) | required when operator artifact policy mandates registry signing (cosign / notation); plan rejects unsigned references when so configured | external; cache lives in the connector's image runtime, not in the kernel |
+| `js-module` | ESM JavaScript module bundle for serverless runtimes (Workers, Deno Deploy, etc.). | `metadata.entrypoint` (relative path inside the bundle); `metadata.runtime` recommended | 50 MiB; raise per-key with `artifactPolicy.perKey` | required when operator policy demands signed JS modules; plan rejects unsigned modules in regulated profiles | content-addressed; cached by the connector by hash |
+| `wasm-module` | A single `.wasm` module loaded by the connector's WebAssembly runtime. | `metadata.entrypoint` recommended; `metadata.compatibilityDate` for runtimes that require it | 50 MiB; per-key override allowed | required for any reserved-prefix Space (`takos`, `operator`, `system`) | content-addressed; runtime usually compiles once per host |
+| `static-archive` | A tarball or zip of static files served verbatim by a Pages / static-host connector. | `metadata.contentType` recommended (`application/x-tar`, `application/zip`) | 50 MiB; per-key override allowed | required when operator policy demands signed bundles | content-addressed; CDN cache lives at the host |
+| `source-archive` | An opaque source archive consumed by an operator-approved Transform. The digest is the digest of the archive bytes; canonical source-tree packaging is out of v1 scope. | none required by the kernel; the Transform validates its own inputs | 50 MiB; raise per-key for monorepo source bundles | required for any Transform that runs in `pre-commit`; the approval is bound to the source-archive digest | content-addressed; the resulting Transform output (a `js-module` or `static-archive`) is cached separately |
+
+`oci-image` is the only pointer kind in v1. Every other kind references
+bytes stored under `<bucket>/artifacts/<sha256-hex>` in the kernel object
+storage adapter; the digest is computed and verified server-side
+regardless of any client-side `expectedDigest` field.
+
+## Connector identity
+
+A Connector is operator-installed and addressed as `connector:<id>`. The
+identity is operator-controlled and never appears in user manifests; users
+select an Implementation, and the resolver picks the Connector bound to
+the Implementation's accepted-kind vector. Each Connector declares an
+`acceptedKinds` vector drawn from the kind enum above; `Plan` must reject
+a Link / DataAsset binding whose `kind` is not in that vector. See the
+[Connector Contract](/reference/connector-contract) for the
+canonical Connector record.
+
+## Registration API
+
+The contract package exposes a small process-global registry that backs
+the `GET /v1/artifacts/kinds` discovery endpoint and `takosumi artifact
+kinds` CLI subcommand.
 
 ```ts
-// Upsert (collision time に warn を出す；同一 payload は silent)。
-registerArtifactKind(kind, { allowOverride?: boolean }): RegisteredArtifactKind | undefined;
+import {
+  registerArtifactKind,
+  listArtifactKinds,
+  getArtifactKind,
+  isArtifactKindRegistered,
+  unregisterArtifactKind,
+} from "takosumi-contract";
 
-// Discovery: 全 kind の readonly snapshot
+registerArtifactKind(
+  {
+    kind: "js-module",
+    description: "ESM JavaScript module bundle for serverless runtimes",
+    contentTypeHint: "application/javascript",
+    maxSize: 50 * 1024 * 1024,
+  },
+  // optional second argument
+  // { allowOverride: false }
+);
+```
+
+Signatures:
+
+```ts
+registerArtifactKind(
+  kind: RegisteredArtifactKind,
+  options?: { allowOverride?: boolean },
+): RegisteredArtifactKind | undefined;
+
 listArtifactKinds(): readonly RegisteredArtifactKind[];
-
-// 単独 lookup
-getArtifactKind(kind): RegisteredArtifactKind | undefined;
-isArtifactKindRegistered(kind): boolean;
-
-// テスト / dynamic plugin teardown 用
-unregisterArtifactKind(kind): boolean;
+getArtifactKind(kind: string): RegisteredArtifactKind | undefined;
+isArtifactKindRegistered(kind: string): boolean;
+unregisterArtifactKind(kind: string): boolean;
 ```
 
-`registerArtifactKind` は process-global `Map` に対する upsert です。
-別 metadata で同じ `kind` を上書きすると `console.warn` を出します
-(`allowOverride: true` を渡すと抑制)。
+Collision behaviour:
 
-::: tip
-registry は **discovery layer** なので、connector が新 kind を実装するだけなら
-登録は必須ではありません — 登録していなくても upload も apply も通ります。
-ただし `takosumi artifact kinds` に出ないと operator が仕様を見つけられないので、
-public 提供する connector は登録しておくのが推奨です。
-:::
+- The first registration for a `kind` always succeeds and returns
+  `undefined`.
+- A second registration for the same `kind` with identical metadata is a
+  silent no-op.
+- A second registration with different metadata and `allowOverride: false`
+  (the default) prints a single `console.warn` and keeps the original
+  record.
+- A second registration with different metadata and `allowOverride: true`
+  replaces the record and returns the previous one. This path is reserved
+  for operator-only contexts (operator-installed plugin loaders, kernel
+  bootstrap factories); consumer plugins and connectors must not pass
+  `allowOverride: true`.
+
+Adding a new kind always requires the `CONVENTIONS.md` §6 RFC; the
+registry exists to surface the closed enum for discovery, not to widen it.
+
+## Per-key artifact policy
+
+Operators may raise size caps and tighten signature requirements per
+kind. The kernel reads the closed schema below from the operator
+configuration loaded at boot:
+
+```yaml
+artifactPolicy:
+  perKey:
+    <kind>:                           # one of the v1 kinds above
+      sizeCapBytes: <integer>         # overrides TAKOSUMI_ARTIFACT_MAX_BYTES for this kind only
+      signatureRequired: <boolean>    # when true, plan rejects unsigned references for this kind
+```
+
+Both fields are optional inside each per-key block; absent fields fall
+back to the global kernel defaults. The schema is closed: unknown keys
+under `perKey.<kind>` cause boot to fail.
 
 ## Upload flow
 
-```
-┌────────────┐   POST /v1/artifacts (multipart)   ┌─────────────────────┐
-│ takosumi   │ ────────────────────────────────▶ │  kernel             │
-│ artifact   │   form: kind, body, metadata?     │  - sha256 計算      │
-│ push <f>   │                                    │  - size cap 検査    │
-│ --kind k   │ ◀──────────────────────────────── │  - object storage   │
-└────────────┘   { hash: "sha256:...", size }    │    に key= artifacts│
-                                                  │    /<hex> で put    │
-                                                  └─────────────────────┘
+```text
+takosumi artifact push <file> --kind <kind>
+  POST /v1/artifacts (multipart: kind, body, metadata)
+    -> kernel validates kind against the closed enum and per-key policy
+    -> kernel computes sha256, enforces sizeCapBytes
+    -> kernel writes bucket/artifacts/<hex> via objectStorage
+    -> kernel returns { hash, kind, size, uploadedAt, metadata }
 
-manifest:
-  spec:
-    artifact:
-      kind: js-bundle
-      hash: sha256:abc123...
+manifest.spec.artifact:
+  kind: js-module
+  hash: sha256:abc123...
 
-┌─────────────────────┐  POST /v1/lifecycle/apply ┌────────────────────┐
-│ kernel apply 段階   │ ─────────────────────────▶│ runtime-agent      │
-│   artifactStore:    │   { spec, artifactStore } │ ┌──────────────┐  │
-│     baseUrl, token  │                            │ │ connector    │  │
-└─────────────────────┘                            │ │ acceptedKinds│  │
-                                                   │ └──────────────┘  │
-                                                   │   ↓               │
-                                                   │ ArtifactFetcher   │
-                                                   │   GET artifacts/  │
-                                                   │   <hash>          │
-                                                   └────────────────────┘
+kernel apply
+  -> POST /v1/lifecycle/apply { spec, artifactStore: { baseUrl, token } }
+  -> connector reads acceptedKinds, fetches bytes by hash via artifactStore
+  -> connector materializes the Implementation and returns a handle
 ```
 
-主な振る舞い:
+Auth boundaries:
 
-- **Auth** — write 系 (`POST` / `DELETE` / `gc`) は
-  `TAKOSUMI_DEPLOY_TOKEN` を要求。read 系 (`GET` / `HEAD` の `/:hash`) は
-  `TAKOSUMI_ARTIFACT_FETCH_TOKEN` も accept する (runtime-agent 側に scoped)。
-- **Hash** — server side で SHA-256 を再計算するため、client 側 `expectedDigest`
-  field との不一致は 400。
-- **Size cap** — `TAKOSUMI_ARTIFACT_MAX_BYTES` (default 50 MiB)。
-  `Content-Length` と buffer 後の長さの両方で 413 を返す。kernel は body を
-  全て memory に乗せるので、大きい bundle は外部 object storage backend
-  (R2 / S3 / GCS) に切り替えて kernel 経由を避けるのが本筋。
-- **Storage layout** — `<bucket>/artifacts/<sha256-hex>`。bucket 既定値は
-  `takosumi-artifacts`。
+- Write endpoints (`POST /v1/artifacts`, `DELETE /v1/artifacts/:hash`,
+  `POST /v1/artifacts/gc`) require the deploy bearer.
+- Read endpoints (`GET /v1/artifacts/:hash`, `HEAD /v1/artifacts/:hash`)
+  also accept `TAKOSUMI_ARTIFACT_FETCH_TOKEN` so the runtime-agent can
+  fetch bytes without holding the deploy bearer.
 
-manifest 側の参照は [Manifest § artifact](/manifest) を参照。
-
-## GC
+## Discovery and CLI
 
 ```bash
-# 何が消えるかだけ確認
-takosumi artifact gc --dry-run --remote $URL --token $TOKEN
-
-# 実際に削除
-takosumi artifact gc --remote $URL --token $TOKEN
+takosumi artifact push ./bundle.tar --kind static-archive --metadata contentType=application/x-tar
+takosumi artifact list
+takosumi artifact kinds --table
+takosumi artifact gc --dry-run
+takosumi artifact rm sha256:abc123...
 ```
 
-GC アルゴリズム (`POST /v1/artifacts/gc`):
+`takosumi artifact kinds` reflects the registry snapshot exposed by the
+kernel at the moment of the call; it does not extend the v1 enum.
 
-1. `recordStore.listReferencedArtifactHashes()` を呼び、persisted な
-   全 deployment record (destroyed 含む — race protection のため) から
-   hash 集合を作る。
-2. object storage を全 page walk して、その集合に **含まれない** blob を
-   削除する。
-3. response: `{ deleted: [...], retained: <count>, dryRun: <bool> }`。
+## Related
 
-::: warning
-`recordStore` が wire されていないと GC は **何も削除しません** — 安全側。
-in-memory record store では kernel restart で reference 情報が消えるため、
-production では SQL backed store
-(`SqlTakosumiDeploymentRecordStore`) を必ず inject してください
-([Operator Bootstrap](/operator/bootstrap))。
-:::
+- Reference: [Connector Contract](/reference/connector-contract),
+  [CLI](/reference/cli),
+  [Kernel HTTP API](/reference/kernel-http-api),
+  [Runtime-Agent API](/reference/runtime-agent-api),
+  [Manifest](/manifest)
 
-## CLI 概要
+## Related design notes
 
-```bash
-takosumi artifact push <file> --kind <kind> [--metadata k=v ...]   # upload
-takosumi artifact list                                             # paginate
-takosumi artifact rm <hash>                                        # delete
-takosumi artifact kinds [--table]                                  # discovery
-takosumi artifact gc [--dry-run]                                   # mark+sweep
-```
-
-全 subcommand が remote kernel 必須 (`--remote` か `TAKOSUMI_KERNEL_URL` を
-要求)。Source:
-[`packages/cli/src/commands/artifact.ts`](https://github.com/tako0614/takosumi/blob/master/packages/cli/src/commands/artifact.ts)
-
-## 関連ページ
-
-- [Manifest](/manifest) — `spec.artifact` の書き方
-- [Kernel HTTP API](/reference/kernel-http-api) — `/v1/artifacts/*` endpoint 詳細
-- [Runtime-Agent API](/reference/runtime-agent-api) — `acceptedArtifactKinds`
-  と `artifactStore` locator の伝搬
-- [Lifecycle Protocol](/reference/lifecycle) — apply 経路全体での artifact
-  fetch のタイミング
+- `design/data-asset-model` — DataAsset rationale and connector
+  contract derivation.
+- `design/operator-boundaries` — operator-installed artifact policy
+  and credential trust boundary.

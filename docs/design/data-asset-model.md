@@ -28,6 +28,34 @@ DataAsset:
 
 `source-archive` is opaque by default in v1. Its digest is the archive bytes. Canonical source-tree packaging can be added later without changing the root model.
 
+## Connector contract
+
+A connector is the operator-installed binding that brings DataAsset bytes
+into reach of an implementation. Connectors are not user-named in the
+public manifest; they are referenced by the implementation chosen during
+resolution.
+
+```yaml
+Connector:
+  id: connector:cloudflare-workers-bundle   # connector:<id>, operator-controlled
+  acceptedKinds: [js-module, static-archive]
+  spaceVisibility: operator-policy-driven   # which Spaces may use this connector
+  signingExpectations: optional             # signature / digest requirements
+```
+
+Identity rules:
+
+- Connectors are addressed as `connector:<id>`. The id is operator-controlled
+  and never selected by the user manifest.
+- Each connector declares an `acceptedKinds` vector drawn from the
+  DataAsset kinds enum above. Plan must reject a Link / DataAsset binding
+  whose kind is not in the connector's accepted vector.
+- Connector visibility is Space-scoped through operator policy. A
+  connector visible in one Space is not implicitly visible in another;
+  see [Operator Boundaries](./operator-boundaries.md).
+- Connectors are never installed, replaced, or revoked through the public
+  manifest path; they enter via operator surfaces only.
+
 ## Artifact resolution
 
 Local paths are unresolved authoring inputs. Before apply, they must become content-addressed DataAsset records.
@@ -50,6 +78,18 @@ source-archive -> static-archive
 ```
 
 Transform operations must not receive runtime secrets unless explicitly approved by policy.
+
+### Transform approval enforcement
+
+Transform approval is enforced in the `pre-commit` stage of the
+[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md).
+The pre-commit hook re-validates the approval that authorized the
+transform; any approval invalidation trigger from
+[Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md)
+fails the operation closed before any external transform call begins.
+
+The Risk surfaced when a transform reaches `pre-commit` without a valid
+approval is `transform-unapproved`.
 
 ## Accepted asset verification
 

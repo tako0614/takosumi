@@ -6,6 +6,14 @@ envelope の書き方をまとめます。`resources[]` で portable な
 [Template](/reference/templates) を呼び、`${ref:...}` syntax で resource 間の output
 を配線します。
 
+Takosumi v1 の manifest envelope は **closed shape** で、top-level は
+`apiVersion / kind / metadata / template / resources` の 5 field のみを
+受理します。`apiVersion: "1.0"` と `kind: Manifest` は固定値で、いずれも
+required。未知の top-level field を含む manifest は kernel の schema phase
+で reject されます ([Manifest Validation](/reference/manifest-validation))。
+本ページと [Manifest Validation](/reference/manifest-validation) が v1 envelope の
+canonical source です。
+
 ## Envelope 概観
 
 ```yaml
@@ -221,9 +229,13 @@ resources:
 
 ## 関連ページ
 
+- [Reference Index](/reference/) — 全 v1 仕様の索引
 - [Shape Catalog](/reference/shapes) — 各 Shape の spec / outputs /
   capabilities
 - [Provider Plugins](/reference/providers) — provider id と実装
 - [Templates](/reference/templates) — `template:` で展開する bundled template
+- [Access Modes](/reference/access-modes) — `uses` で指定する access mode
+- [Connector Contract](/reference/connector-contract) — `connector:<id>` 境界
+- [DataAsset Policy](/reference/data-asset-policy) — artifact policy / transform approval
 - [Operator Bootstrap](/operator/bootstrap) — operator 側 wire 手順
 - [Extending](/extending) — provider / shape / template 拡張

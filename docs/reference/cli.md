@@ -1,276 +1,302 @@
 # CLI Reference
 
-`takosumi` CLI は kernel と通信するための薄いフロントエンドです。 全
-subcommand は `packages/cli/src/commands/*.ts` の cliffy `Command` 定義から
-描き起こしています。
+> Stability: stable
+> Audience: operator
+> See also: [Kernel HTTP API](/reference/kernel-http-api), [Environment Variables](/reference/env-vars), [Migration & Upgrade](/reference/migration-upgrade)
 
-## Install
+`takosumi` is the command-line companion to the Takosumi PaaS kernel. It
+authors and submits Manifests, manages content-addressed DataAssets,
+operates the runtime-agent, and runs the kernel server itself. The CLI is
+not the semantic authority for any of these operations — every authoritative
+decision (resolution, planning, journaling, activation) is made by the
+kernel inside the Space resolved from the request's auth context.
+
+## Modes
+
+`takosumi` runs in two modes:
+
+| Mode | Trigger | State | Use cases |
+| --- | --- | --- | --- |
+| `local` | no remote URL is resolved | in-process kernel; ephemeral; lost on exit | authoring, single-host experiments, test fixtures |
+| `remote` | a remote URL is resolved (flag, env, or config) | persisted by the remote kernel | shared development, staging, production |
+
+Local mode does not maintain Space state; resolution happens against the
+bundled shape / provider registry inside the same process. Remote mode
+talks to a Takosumi kernel HTTP server, which performs Space-scoped
+resolution, planning, and journaling per the
+[WAL Stages](/reference/wal-stages) reference.
+
+## Installation
 
 ```bash
 deno install -gA -n takosumi jsr:@takos/takosumi-cli
 takosumi version
 ```
 
-CLI は kernel / runtime-agent と無関係に install できます — manifest を flag
-だけで完結させたい場合は `--remote` を毎回指定すれば、CLI host 側に環境変数
-を残す必要はありません。
+Deno 2.x is the supported runtime. The CLI has no kernel-side or
+runtime-agent-side install dependency: a CLI host can run without ever
+hosting a kernel.
 
-## Subcommand 一覧
+## Authentication
 
-| Command                        | 概要                                                                        |
-| ------------------------------ | --------------------------------------------------------------------------- |
-| `deploy <manifest>`            | Apply a Takosumi manifest                                                   |
-| `destroy <manifest>`           | Destroy resources declared in a Takosumi manifest                           |
-| `status [name]`                | Show current deployment status (remote kernel only)                         |
-| `plan <manifest>`              | Print the resolved plan without applying                                    |
-| `server`                       | Start the Takosumi kernel HTTP server                                       |
-| `migrate`                      | Run Takosumi DB migrations                                                  |
-| `init [output]`                | Scaffold a Takosumi manifest                                                |
-| `artifact <push\|list\|rm\|gc\|kinds>` | Manage Takosumi-kernel artifact uploads (push / list / rm / gc / kinds) |
-| `runtime-agent <serve\|list\|verify>`  | Operate the Takosumi runtime-agent                                  |
-| `completions <shell>`          | Cliffy 同梱 (bash / zsh / fish の completion script を出力)                |
-| `version`                      | Show takosumi CLI version                                                   |
+Remote-mode commands authenticate to the kernel with a bearer token. The
+token granted to the CLI is the operator-issued
+`TAKOSUMI_DEPLOY_TOKEN`, which scopes deploy and DataAsset endpoints.
+Runtime-Agent subcommands use a separate bearer
+(`TAKOSUMI_AGENT_TOKEN`) scoped to the runtime-agent service.
 
----
+A token is resolved from one of these sources, in this exact order:
+
+1. command flag (`--token`)
+2. `TAKOSUMI_DEPLOY_TOKEN` env (deploy / artifact paths) or
+   `TAKOSUMI_AGENT_TOKEN` env (runtime-agent paths)
+3. `TAKOSUMI_TOKEN` env (generic; warns once on first use)
+4. config file `token` field
+
+A remote URL is resolved from:
+
+1. `--remote` flag
+2. `TAKOSUMI_REMOTE_URL` env
+3. config file `remote_url` field
+
+Missing both flag and any source places the CLI in local mode. Endpoints
+that require remote (`status`, `artifact ...`) exit with code 2 in that
+case.
+
+## Config file
+
+The CLI reads `~/.takosumi/config.yml` once per process. The path may be
+overridden with `TAKOSUMI_CONFIG_FILE`. The schema is closed:
+
+```yaml
+remote_url: <string, optional>   # bare URL of the kernel HTTP server
+token: <string, optional>        # bearer token for the kernel
+```
+
+Behaviour:
+
+- `$HOME` (or `$USERPROFILE` on Windows) unset and no `TAKOSUMI_CONFIG_FILE`
+  override: the file is skipped silently.
+- File missing or empty: skipped silently.
+- File present but not a YAML mapping: a single stderr warning is printed
+  and the file is ignored.
+- Any other read error: a single stderr warning is printed and the file
+  is ignored.
+
+Process env always overrides the config file. Both are overridden by an
+explicit command flag.
+
+## Commands
+
+### `takosumi server`
+
+Start the kernel HTTP server.
+
+```text
+takosumi server [--port <n>] [--agent-port <n>] [--no-agent] [--detach]
+```
+
+| Flag | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `--port` | number | `8788` | kernel HTTP listen port |
+| `--agent-port` | number | `8789` | port for the embedded runtime-agent (only used when `TAKOSUMI_AGENT_URL` is unset) |
+| `--no-agent` | switch | off | skip the embedded runtime-agent; the operator must run one separately |
+| `--detach` | switch | off | print a recommended systemd / docker / nohup template and exit |
+
+`--detach` does not fork the process; Deno does not provide a portable
+detach primitive. The CLI prints supervisor templates so the operator can
+wire systemd, docker compose, or nohup themselves.
+
+Examples:
+
+```bash
+takosumi server
+takosumi server --port 9000 --agent-port 9001
+takosumi server --no-agent
+takosumi server --detach > takosumi-api.service
+```
+
+Exit codes: `0` on clean shutdown via SIGINT/SIGTERM, `1` on bind failure
+or kernel boot error.
+
+`takosumi server` の rolling upgrade / drain / kernel ↔ runtime-agent skew
+tolerance / schema migration window については
+[Migration / Upgrade](/reference/migration-upgrade) を参照してください。
 
 ### `takosumi deploy <manifest>`
 
-> Apply a Takosumi manifest
+Submit a Manifest for apply.
 
-| Flag                    | 説明                                                            |
-| ----------------------- | --------------------------------------------------------------- |
-| `--remote <url:string>` | Remote kernel URL                                               |
-| `--token <token:string>` | Auth token                                                     |
-| `--dry-run`             | Validate only, do not apply                                     |
+```text
+takosumi deploy <manifest> [--remote <url>] [--token <t>] [--dry-run]
+```
 
-`--remote` が無いときは in-process kernel を起動して local 適用 (state
-は process 終了で消えます)。
+| Flag | Type | Notes |
+| --- | --- | --- |
+| `--remote` | url | overrides resolved remote URL |
+| `--token` | string | overrides resolved token |
+| `--dry-run` | switch | validate and plan only; do not apply |
+
+Behaviour:
+
+- Remote: posts `POST /v1/deployments` with body
+  `{ mode: "apply" | "plan", manifest }`. The Space is selected by the
+  bearer token's auth context and recorded into the DesiredSnapshot.
+- Local: expands the manifest with the bundled registry and runs an
+  in-process apply (or plan, when `--dry-run` is set). State is discarded
+  on exit.
+
+Exit codes: `0` accepted, `1` validation or apply failure, `2` malformed
+flags.
+
+Examples:
 
 ```bash
 takosumi deploy ./manifest.yml
-takosumi deploy ./manifest.yml --remote https://kernel.example.com --token $TAKOSUMI_DEPLOY_TOKEN
 takosumi deploy ./manifest.yml --dry-run
-```
-
-### `takosumi destroy <manifest>`
-
-> Destroy resources declared in a Takosumi manifest
-
-| Flag                     | 説明                                                                                                                                           |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--remote <url:string>`  | Remote kernel URL                                                                                                                              |
-| `--token <token:string>` | Auth token                                                                                                                                     |
-| `--force`                | Force destroy by resource name even when no prior apply record exists. Safe for self-hosted resources (filesystem, docker, systemd); cloud resources whose handle differs from the resource name will likely fail to delete. |
-
-```bash
-takosumi destroy ./manifest.yml --remote https://kernel.example.com --token $TAKOSUMI_DEPLOY_TOKEN
-takosumi destroy ./manifest.yml --force      # local / selfhosted only
-```
-
-### `takosumi status [name]`
-
-> Show current deployment status (remote kernel only)
-
-| Flag                     | 説明              |
-| ------------------------ | ----------------- |
-| `--remote <url:string>`  | Remote kernel URL |
-| `--token <token:string>` | Auth token        |
-
-local mode では deployment state を持たないため、`--remote` 指定が必須です。
-`GET /v1/deployments` または `GET /v1/deployments/<name>` を叩いて結果を表で
-描画します。
-
-```bash
-takosumi status --remote https://kernel.example.com --token $T
-takosumi status my-app --remote https://kernel.example.com --token $T
+takosumi deploy ./manifest.yml --remote https://kernel.example.com --token $TAKOSUMI_DEPLOY_TOKEN
 ```
 
 ### `takosumi plan <manifest>`
 
-> Print the resolved plan without applying
+Validate and print the resolved plan without applying.
 
-flag は無し。`manifest_loader` が読んだ JSON / YAML を解決後の JSON として
-stdout に整形出力します。
-
-```bash
-takosumi plan ./manifest.yml
+```text
+takosumi plan <manifest> [--remote <url>] [--token <t>]
 ```
 
-### `takosumi server`
+| Flag | Type | Notes |
+| --- | --- | --- |
+| `--remote` | url | overrides resolved remote URL |
+| `--token` | string | overrides resolved token |
 
-> Start the Takosumi kernel HTTP server
+Remote-mode `plan` posts `POST /v1/deployments` with `mode: "plan"` and
+prints the kernel's response body verbatim. Local-mode `plan` runs the
+bundled validators in-process and prints `{ status, outcome }` as JSON
+on stdout.
 
-| Flag                       | 説明                                                                                                                                       | Default     |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
-| `--port <port:number>`     | Port to listen on                                                                                                                          | `8788`      |
-| `--agent-port <port:number>` | Port for the embedded runtime-agent (only used when `TAKOSUMI_AGENT_URL` is unset)                                                       | `8789`      |
-| `--no-agent`               | Skip starting the embedded runtime-agent (operator must run one separately)                                                                | (off)       |
-| `--detach`                 | Print a recommended systemd unit for production daemonization and exit immediately. Deno does not provide a portable detach primitive, so we surface the supervisor template instead of half-baked daemonising. | (off) |
+Exit codes: `0` plan succeeded, `1` plan failed.
 
-::: tip --detach は template print
-`--detach` は実際に detach せず、systemd unit / docker-compose snippet / nohup
-one-liner を stdout に出して終了します (Deno に portable な detach primitive
-が無いため supervisor 任せにします)。
-:::
+### `takosumi destroy <manifest>`
 
-```bash
-takosumi server                                # local: kernel + embedded agent
-takosumi server --port 9000 --agent-port 9001
-takosumi server --no-agent                     # external agent を別に起動済み
-takosumi server --detach > takosumi-api.service
+Tear down resources declared by a previously applied manifest.
+
+```text
+takosumi destroy <manifest> [--remote <url>] [--token <t>] [--force]
 ```
+
+| Flag | Type | Notes |
+| --- | --- | --- |
+| `--remote` | url | overrides resolved remote URL |
+| `--token` | string | overrides resolved token |
+| `--force` | switch | destroy by resource name when no prior apply record exists; safe only for self-hosted resources whose handle equals the resource name |
+
+Remote mode posts `POST /v1/deployments` with `mode: "destroy"` so the
+kernel can look up persisted handles and submit them through the
+runtime-agent. Local mode destroys in-process; without prior state the
+operation is best-effort.
+
+Exit codes: `0` all destroyed, `1` partial or validation failure.
+
+### `takosumi status [<name>]`
+
+Query the kernel for deployment state. Remote-only.
+
+```text
+takosumi status [<name>] [--remote <url>] [--token <t>]
+```
+
+Without `<name>`, lists every deployment by calling
+`GET /v1/deployments`. With `<name>`, fetches a single deployment via
+`GET /v1/deployments/:name`. Both endpoints return the
+[Status Output](/reference/status-output) document; the CLI renders a
+small text table whose columns are
+`deployment / resource / shape / provider / status`.
+
+Exit codes: `0` rendered, `1` kernel error or unsupported route, `2` if
+remote / token are missing.
 
 ### `takosumi migrate`
 
-> Run Takosumi DB migrations
+Run kernel database migrations.
 
-| Flag                  | 説明                                              | Default  |
-| --------------------- | ------------------------------------------------- | -------- |
-| `--dry-run`           | Show planned migrations without applying          | (off)    |
-| `--env <env:string>`  | Target environment (local, staging, production)  | `local`  |
-
-`--env` ごとに優先される DATABASE_URL keys は次の通りです:
-
-| Env         | 優先順                                                                       |
-| ----------- | ---------------------------------------------------------------------------- |
-| local       | `TAKOSUMI_DATABASE_URL` → `DATABASE_URL`                                     |
-| staging     | `TAKOSUMI_STAGING_DATABASE_URL` → `TAKOSUMI_DATABASE_URL` → `DATABASE_URL`   |
-| production  | `TAKOSUMI_PRODUCTION_DATABASE_URL` → `TAKOSUMI_DATABASE_URL` → `DATABASE_URL` |
-
-```bash
-takosumi migrate --env local --dry-run
-TAKOSUMI_DATABASE_URL=postgres://localhost/takosumi takosumi migrate --env local
-TAKOSUMI_PRODUCTION_DATABASE_URL=postgres://prod/takosumi takosumi migrate --env production
+```text
+takosumi migrate [--env <name>] [--dry-run]
 ```
 
-### `takosumi init [output]`
+| Flag | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `--env` | string | `local` | `local` / `staging` / `production`, or any operator-defined name |
+| `--dry-run` | switch | off | report planned migrations without applying |
 
-> Scaffold a Takosumi manifest
+The `--env` value selects which env-specific `*_DATABASE_URL` is preferred
+(see [Environment Variables](/reference/env-vars)). Dry-run does not
+require a URL even for staging or production.
 
-| Flag                       | 説明                                                  | Default                  |
-| -------------------------- | ----------------------------------------------------- | ------------------------ |
-| `--template <name:string>` | Template (`selfhosted-single-vm` \| `empty`)          | `selfhosted-single-vm`   |
+Exit codes: `0` migrated or dry-run printed, `1` migration error or kernel
+script missing, `2` required env unset for non-dry-run staging / production.
 
-`output` 引数を渡すとそのファイルに書き出し、省略すると stdout に出力します。
+### `takosumi init [<output>]`
 
-```bash
-takosumi init manifest.yml
-takosumi init --template empty manifest.yml
-takosumi init                              # stdout
+Scaffold a Manifest.
+
+```text
+takosumi init [<output>] [--template <name>]
 ```
 
-### `takosumi artifact ...`
+| Flag | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `--template` | string | `selfhosted-single-vm` | one of `selfhosted-single-vm`, `empty` |
 
-> Manage Takosumi-kernel artifact uploads (push / list / rm / gc / kinds)
+If `<output>` is given, the rendered Manifest is written to that path;
+otherwise it is printed to stdout. Templates render with
+`apiVersion: "1.0"` and `kind: Manifest` set, matching the contract
+envelope.
 
-artifact 系は **すべて remote 必須**: `--remote` + `--token` (または
-`TAKOSUMI_REMOTE_URL` + `TAKOSUMI_DEPLOY_TOKEN`) を解決できないと exit code 2
-で失敗します。
+### `takosumi artifact <push | list | rm | gc | kinds>`
 
-#### `artifact push <file>`
+Manage content-addressed DataAssets in the kernel artifact store. Every
+subcommand requires a remote URL and a deploy-scoped token; missing either
+exits with code 2.
 
-> Upload a file as a content-addressed artifact
-
-| Flag                       | 説明                                                          |
-| -------------------------- | ------------------------------------------------------------- |
-| `--kind <kind:string>` *(required)* | Artifact kind (e.g. `js-bundle`, `lambda-zip`, `oci-image`) |
-| `--metadata <kv:string>`   | Metadata as `key=value` (repeat for multiple)                 |
-| `--remote <url:string>`    | Kernel base URL                                               |
-| `--token <token:string>`   | Bearer token                                                  |
-
-#### `artifact list`
-
-> List artifacts stored in the kernel
-
-| Flag                     | 説明                                                          |
-| ------------------------ | ------------------------------------------------------------- |
-| `--remote <url:string>`  | Kernel base URL                                               |
-| `--token <token:string>` | Bearer token                                                  |
-| `--limit <n:number>`     | Per-page limit; CLI follows pagination automatically          |
-
-#### `artifact rm <hash>`
-
-> Remove an artifact by hash
-
-| Flag                     | 説明              |
-| ------------------------ | ----------------- |
-| `--remote <url:string>`  | Kernel base URL   |
-| `--token <token:string>` | Bearer token      |
-
-#### `artifact gc`
-
-> Garbage-collect artifacts not referenced by any persisted deployment
-
-| Flag                     | 説明                                                |
-| ------------------------ | --------------------------------------------------- |
-| `--remote <url:string>`  | Kernel base URL                                     |
-| `--token <token:string>` | Bearer token                                        |
-| `--dry-run`              | Report what would be deleted without actually deleting |
-
-#### `artifact kinds`
-
-> List the artifact kinds the deployed kernel understands (`GET /v1/artifacts/kinds`)
-
-| Flag                     | 説明                                                |
-| ------------------------ | --------------------------------------------------- |
-| `--remote <url:string>`  | Kernel base URL                                     |
-| `--token <token:string>` | Bearer token                                        |
-| `--table`                | Format output as a plain-text table instead of JSON |
-
-```bash
-takosumi artifact push ./bundle.zip --kind js-bundle --metadata commit=$GIT_SHA --remote $URL --token $T
-takosumi artifact list --remote $URL --token $T
-takosumi artifact kinds --table --remote $URL --token $T
-takosumi artifact gc --dry-run --remote $URL --token $T
-takosumi artifact rm sha256-... --remote $URL --token $T
+```text
+takosumi artifact push <file> --kind <kind> [--metadata k=v ...] [--remote <url>] [--token <t>]
+takosumi artifact list                       [--limit <n>] [--remote <url>] [--token <t>]
+takosumi artifact rm <hash>                  [--remote <url>] [--token <t>]
+takosumi artifact gc                         [--dry-run] [--remote <url>] [--token <t>]
+takosumi artifact kinds                      [--table] [--remote <url>] [--token <t>]
 ```
 
-### `takosumi runtime-agent ...`
+`push` uploads bytes via `POST /v1/artifacts` and prints the
+`{ hash, kind, size, uploadedAt }` envelope; the operator embeds the
+returned hash into the manifest. `list` walks paginated `GET /v1/artifacts`
+results. `rm` deletes a single hash. `gc` runs the kernel mark-and-sweep
+against the persisted DesiredSnapshot reference graph. `kinds` calls
+`GET /v1/artifacts/kinds` to list the kinds the kernel currently
+understands. See [DataAsset Kinds](/reference/artifact-kinds) for the
+registry semantics.
 
-> Operate the Takosumi runtime-agent
+### `takosumi runtime-agent <serve | list | verify>`
 
-#### `runtime-agent serve`
+Operate the Takosumi runtime-agent, which holds cloud credentials and
+performs lifecycle work on behalf of the kernel.
 
-> Start the runtime-agent HTTP server
-
-| Flag                            | 説明                                                                            | Default      |
-| ------------------------------- | ------------------------------------------------------------------------------- | ------------ |
-| `--port <port:number>`          | Port to listen on                                                               | `8789`       |
-| `--hostname <hostname:string>`  | Hostname to bind                                                                | `127.0.0.1`  |
-| `--token <token:string>`        | Bearer token (defaults to `TAKOSUMI_AGENT_TOKEN` env or random)                 | random       |
-| `--env-file <path:file>`        | Load extra env vars from a dotenv-style file before building connectors         | (none)       |
-
-#### `runtime-agent list`
-
-> List connectors registered on a runtime-agent
-
-| Flag                     | 説明                                                          |
-| ------------------------ | ------------------------------------------------------------- |
-| `--url <url:string>`     | Agent URL (defaults to `TAKOSUMI_AGENT_URL` env)              |
-| `--token <token:string>` | Bearer token (defaults to `TAKOSUMI_AGENT_TOKEN` env)         |
-
-#### `runtime-agent verify`
-
-> Smoke-test connector credentials & connectivity (read-only API call per connector)
-
-| Flag                          | 説明                                                          |
-| ----------------------------- | ------------------------------------------------------------- |
-| `--url <url:string>`          | Agent URL (defaults to `TAKOSUMI_AGENT_URL` env)              |
-| `--token <token:string>`      | Bearer token (defaults to `TAKOSUMI_AGENT_TOKEN` env)         |
-| `--shape <shape:string>`      | Restrict to connectors implementing this shape                |
-| `--provider <provider:string>` | Restrict to a single provider id                              |
-
-`verify` は失敗した connector があると exit code 2 で終了します。
-
-```bash
-takosumi runtime-agent serve --port 8789
-takosumi runtime-agent list   --url http://127.0.0.1:8789 --token $TAKOSUMI_AGENT_TOKEN
-takosumi runtime-agent verify --shape object-store@v1
+```text
+takosumi runtime-agent serve  [--port <n>] [--hostname <h>] [--token <t>] [--env-file <path>]
+takosumi runtime-agent list   [--url <url>] [--token <t>]
+takosumi runtime-agent verify [--url <url>] [--token <t>] [--shape <s>] [--provider <p>]
 ```
+
+`serve` starts the agent HTTP server (default `127.0.0.1:8789`); when
+`--token` and `TAKOSUMI_AGENT_TOKEN` are both unset, a random token is
+generated and printed. `list` queries `GET /v1/connectors`. `verify`
+posts `POST /v1/lifecycle/verify` and runs each connector's read-only
+smoke test; failed connectors cause exit code 2.
 
 ### `takosumi completions <shell>`
 
-cliffy 同梱の completion generator (`bash` / `zsh` / `fish`)。
+Print a completion script for `bash`, `zsh`, or `fish`. Generated by the
+bundled cliffy completions command.
 
 ```bash
 takosumi completions bash > /etc/bash_completion.d/takosumi
@@ -280,64 +306,45 @@ takosumi completions fish > ~/.config/fish/completions/takosumi.fish
 
 ### `takosumi version`
 
-> Show takosumi CLI version
+Print the CLI version. No flags.
 
-flag は無し。
+## Exit codes
 
-```bash
-takosumi version
-```
+The CLI uses a small reserved set:
 
----
+| Code | Meaning |
+| --- | --- |
+| `0` | command succeeded |
+| `1` | command-specific failure (kernel returned ≥ 400; plan or apply failed; partial destroy; migration failed) |
+| `2` | usage error or precondition failure (malformed flag value, missing required env, remote-only command without remote URL, `verify` reported failed connectors) |
 
-## Resolution order — `--remote` / `--token`
+Codes `70` and above are reserved for future signal-driven exits and are
+not currently emitted. The CLI does not mirror process signals into
+distinct exit codes.
 
-`packages/cli/src/config.ts` で実装されている解決順 (高優先 → 低優先):
+## Deprecation policy
 
-1. CLI flag (`--remote`, `--token`) — explicit wins
-2. Command-specific env (`TAKOSUMI_DEPLOY_TOKEN` for deploy / artifact;
-   `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` for runtime-agent)
-3. Generic env: `TAKOSUMI_REMOTE_URL` / `TAKOSUMI_TOKEN`
-4. `~/.takosumi/config.yml` (`remote_url`, `token`)
-5. Deprecated env aliases: `TAKOSUMI_KERNEL_URL` (warns once, then resolves
-   like `TAKOSUMI_REMOTE_URL`)
+The CLI prints a one-shot stderr warning when an operator relies on a
+selector that has been superseded but is still resolved for compatibility.
+Each warning is emitted at most once per process. Setting
+`TAKOSUMI_NO_DEPRECATION_WARN=1` suppresses every CLI deprecation
+warning at once. The grace window for any deprecated alias is one minor
+release of the CLI; the next minor release after a warning is introduced
+removes the alias.
 
-::: warning Deprecation warnings
-`TAKOSUMI_KERNEL_URL` を使うと `[takosumi] TAKOSUMI_KERNEL_URL is deprecated; use TAKOSUMI_REMOTE_URL`
-が一度だけ stderr に出ます。 `TAKOSUMI_TOKEN` を `TAKOSUMI_DEPLOY_TOKEN` 無しで
-使うと `prefer TAKOSUMI_DEPLOY_TOKEN for kernel deploy / artifact endpoints`
-の警告が一度だけ出ます。
-:::
+Currently warned aliases:
 
-## Config file — `~/.takosumi/config.yml`
+- `TAKOSUMI_KERNEL_URL` — replaced by `TAKOSUMI_REMOTE_URL`.
+- `TAKOSUMI_TOKEN` (used as a deploy / artifact token) — replaced by
+  `TAKOSUMI_DEPLOY_TOKEN`.
 
-YAML mapping。 現在のスキーマは 2 field のみ:
+## Related
 
-```yaml
-remote_url: https://kernel.example.com
-token: tk_deploy_xxxxxxxxxxxxxxxxxxxx
-```
+- Reference: [Manifest](/manifest), [Environment Variables](/reference/env-vars),
+  [DataAsset Kinds](/reference/artifact-kinds), [Migration / Upgrade](/reference/migration-upgrade)
 
-挙動:
+## Related design notes
 
-- `$HOME` が無い / ファイルが存在しない / 中身が空 → 無視 (env / flag は引き続き使える)
-- YAML mapping 以外 → stderr に warning を 1 回出して無視
-- ファイルパスは `TAKOSUMI_CONFIG_FILE` で上書き可能
+本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
 
-```bash
-mkdir -p ~/.takosumi
-cat > ~/.takosumi/config.yml <<'YAML'
-remote_url: https://kernel.example.com
-token: tk_deploy_xxxxxxxxxxxxxxxxxxxx
-YAML
-
-takosumi status                      # ↑ で remote_url / token を解決
-takosumi deploy ./manifest.yml       # 同上 (manifest path だけ書けばよい)
-TAKOSUMI_CONFIG_FILE=/etc/takosumi/admin.yml takosumi status
-```
-
-## 関連
-
-- [Quickstart](/getting-started/quickstart) — `takosumi server` から first deploy まで
-- [Manifest](/manifest) — `resources[]` / `template:` / `${ref:...}` syntax
-- [Environment Variables](/reference/env-vars) — kernel / runtime-agent / CLI 全 env の catalog
+- `docs/design/cli-companion-design-note.md` — CLI surface design rationale

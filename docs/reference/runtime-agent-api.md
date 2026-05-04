@@ -1,113 +1,85 @@
-# Runtime-Agent HTTP API
+# Runtime-Agent API
 
-Takosumi runtime-agent (`@takos/takosumi-plugins` + `@takos/takosumi-kernel` の
-runtime-agent server) が公開する HTTP endpoint の reference です。実装は
-[`packages/runtime-agent/src/server.ts`](https://github.com/tako0614/takosumi/blob/master/packages/runtime-agent/src/server.ts)、
-request / response 型は
-[`packages/contract/src/runtime-agent-lifecycle.ts`](https://github.com/tako0614/takosumi/blob/master/packages/contract/src/runtime-agent-lifecycle.ts)。
+> Stability: stable
+> Audience: integrator, kernel-implementer
+> See also: [Lifecycle Phases](/reference/lifecycle-phases), [Provider Implementation Contract](/reference/provider-implementation-contract), [Closed Enums](/reference/closed-enums)
 
-runtime-agent は **kernel から見て下流のサービス**で、operator が
-cloud credential (`AWS_ACCESS_KEY_ID` / `CLOUDFLARE_API_TOKEN` 等) や OS
-access (docker daemon / systemd) を保持するホストで起動します。kernel は
-crendential を持たず、`(shape, provider)` lifecycle envelope を本 API へ
-HTTP POST するだけ — credential boundary は agent host で閉じる、という
-分担です。kernel boot の env / token 配置は
-[Operator: Bootstrap](/operator/bootstrap) を、kernel 側 API は
-[Kernel HTTP API](/reference/kernel-http-api) を参照してください。
+Takosumi runtime-agent process が公開する HTTP RPC の v1 reference です。
+runtime-agent は **operator が cloud / OS credential を保持するホストで起動
+する process** で、kernel から見ると下流の execution surface に当たります。
+kernel は credential を持たず、(`shape`, `provider`) 単位の lifecycle
+envelope を本 API へ POST し、connector が backing する cloud SDK / OS API
+の呼び出しを delegate します。
 
-## Auth
+逆方向の制御 (kernel → runtime-agent への enroll / heartbeat / lease / drain
+/ gateway-manifest 署名) は kernel 側 internal control plane に実装され、
+[Kernel HTTP API — Runtime-Agent control RPC](/reference/kernel-http-api#runtime-agent-control-rpc)
+側で扱います。本ページは **runtime-agent process が公開する HTTP endpoint**
+に絞った仕様です。
 
-| Credential | Env var                | 適用範囲                              | 認証方式                       |
-| ---------- | ---------------------- | ------------------------------------- | ------------------------------ |
-| Agent token | `TAKOSUMI_AGENT_TOKEN` | `/v1/lifecycle/*`、`/v1/connectors`   | `Authorization: Bearer <token>` |
+## Authentication
 
-- token は **kernel と runtime-agent の間で共有する shared secret**で、
-  contract export
-  [`LIFECYCLE_AGENT_TOKEN_ENV`](https://github.com/tako0614/takosumi/blob/master/packages/contract/src/runtime-agent-lifecycle.ts)
-  に env 名が固定されています。
-- token を未設定で `serveRuntimeAgent(...)` を起動すると **すべての
-  lifecycle / connectors request が 401** を返します (`expectedAuth =
-  "Bearer " + options.token`)。
-- `/v1/health` のみ無認証 — orchestrator (Kubernetes / Nomad / docker
-  healthcheck) からの probe を想定。
-- token rotation は process restart で行います。runtime-agent server 自身は
-  token を再読込しません。
-- kernel は同じ token を `LifecycleApplyRequest.artifactStore.token` に乗せて
-  渡しますが、こちらは **artifact 取得用の read-only token** であり、
-  agent token とは別物です。実装では現状同じ kernel token を渡しても良い設計
-  ですが、本番では
-  [`TAKOSUMI_ARTIFACT_FETCH_TOKEN`](/reference/kernel-http-api#auth-model) に
-  分離して compromise 半径を下げてください。
+| Credential   | Env var                   | 適用範囲                                | 認証方式                            |
+| ------------ | ------------------------- | --------------------------------------- | ----------------------------------- |
+| Agent bearer | `TAKOSUMI_AGENT_TOKEN`    | `/v1/lifecycle/*`、`/v1/connectors`     | `Authorization: Bearer <token>`     |
+
+`TAKOSUMI_AGENT_TOKEN` は kernel と runtime-agent の間で共有する shared
+secret です。token を未設定で起動した runtime-agent は **すべての lifecycle
+/ connectors request に 401** を返します。`/v1/health` のみ無認証で、
+orchestrator (Kubernetes / Nomad / docker healthcheck) からの probe を想定
+します。
+
+connector が artifact bytes を取得する必要がある場合、kernel は
+`LifecycleApplyRequest.artifactStore` に `baseUrl` と
+`TAKOSUMI_ARTIFACT_FETCH_TOKEN` を載せて渡します。これは agent token
+と完全に別物で、scope は `GET /v1/artifacts/:hash` のみに限定されます
+([Kernel HTTP API — Authentication](/reference/kernel-http-api#authentication))。
 
 ## Endpoints
 
-| Method | Path                       | Auth        | Purpose                                              |
-| ------ | -------------------------- | ----------- | ---------------------------------------------------- |
-| GET    | `/v1/health`               | -           | `{ status: "ok", connectors: <count> }` を返す         |
+| Method | Path                       | Auth        | Purpose                                                            |
+| ------ | -------------------------- | ----------- | ------------------------------------------------------------------ |
+| GET    | `/v1/health`               | -           | `{ status: "ok", connectors: <count> }`                            |
 | GET    | `/v1/connectors`           | Agent token | 起動時に登録された `(shape, provider, acceptedArtifactKinds)` 一覧 |
-| POST   | `/v1/lifecycle/apply`      | Agent token | resource を作成 / 更新                               |
-| POST   | `/v1/lifecycle/destroy`    | Agent token | handle 指定で resource を削除                        |
-| POST   | `/v1/lifecycle/describe`   | Agent token | handle 指定で実体の状態を取得                        |
-| POST   | `/v1/lifecycle/verify`     | Agent token | 各 connector の `verify` hook を smoke test する     |
+| POST   | `/v1/lifecycle/apply`      | Agent token | resource を作成 / 更新                                             |
+| POST   | `/v1/lifecycle/destroy`    | Agent token | handle 指定で resource を削除                                      |
+| POST   | `/v1/lifecycle/describe`   | Agent token | handle 指定で実体の状態を取得                                      |
+| POST   | `/v1/lifecycle/verify`     | Agent token | connector ごとに `verify` hook を smoke test                        |
 
 ### `POST /v1/lifecycle/apply`
 
-resource を作成または更新します。kernel apply pipeline (`applyV2`) が
-[ManifestResource](/manifest) を `(shape, provider)` 単位に展開し、その
-それぞれを本 endpoint に POST します。
-
-request body (`LifecycleApplyRequest`):
+`LifecycleApplyRequest`:
 
 ```ts
 interface LifecycleApplyRequest {
   readonly shape: string;          // 例: "object-store@v1"
-  readonly provider: string;       // 例: "@takos/aws-s3"
-  readonly resourceName: string;   // ManifestResource.name
-  readonly spec: JsonValue;        // shape spec (zod 等の validate 済み)
+  readonly provider: string;       // 例: "aws-s3"
+  readonly resourceName: string;   // ManifestResource.name と同じ
+  readonly spec: JsonValue;        // shape spec (kernel 側で validate 済み)
   readonly tenantId?: string;
-  readonly metadata?: JsonObject;  // audit trail / request id
-  readonly artifactStore?: {       // spec が artifact.hash を持つ場合に必要
+  readonly metadata?: JsonObject;  // request id, audit trail 等
+  readonly artifactStore?: {
     readonly baseUrl: string;      // 例: "https://kernel.example.com"
-    readonly token: string;        // 通常 TAKOSUMI_ARTIFACT_FETCH_TOKEN
+    readonly token: string;        // TAKOSUMI_ARTIFACT_FETCH_TOKEN
   };
 }
 ```
 
-response (`LifecycleApplyResponse`):
+`LifecycleApplyResponse`:
 
 ```ts
 interface LifecycleApplyResponse {
-  readonly handle: string;        // 例: "arn:aws:s3:::blog-assets"
-  readonly outputs: JsonObject;   // shape が宣言した outputs
+  readonly handle: string;         // 例: "arn:aws:s3:::blog-assets"
+  readonly outputs: JsonObject;    // shape が宣言した outputs
 }
 ```
 
-呼び出し例 (kernel 視点):
-
-```bash
-curl -sS https://agent.example.internal/v1/lifecycle/apply \
-  -H "Authorization: Bearer $TAKOSUMI_AGENT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "shape": "object-store@v1",
-    "provider": "aws-s3",
-    "resourceName": "blog-assets",
-    "spec": { "bucket": "blog-assets", "region": "ap-northeast-1" }
-  }'
-```
-
-```json
-{
-  "handle": "arn:aws:s3:::blog-assets",
-  "outputs": { "bucketName": "blog-assets", "region": "ap-northeast-1" }
-}
-```
+`handle` は kernel 側 deployment record に persist され、以降の `destroy` /
+`describe` のキー材料になります。
 
 ### `POST /v1/lifecycle/destroy`
 
-`apply` が返した `handle` を渡して resource を削除します。
-
-request (`LifecycleDestroyRequest`):
+`LifecycleDestroyRequest`:
 
 ```ts
 interface LifecycleDestroyRequest {
@@ -119,25 +91,22 @@ interface LifecycleDestroyRequest {
 }
 ```
 
-response (`LifecycleDestroyResponse`):
+`LifecycleDestroyResponse`:
 
 ```ts
 interface LifecycleDestroyResponse {
   readonly ok: boolean;
-  readonly note?: string;        // soft-failure や "already gone" の理由
+  readonly note?: string; // soft-failure や "already gone" の理由
 }
 ```
 
-connector が partial failure を許容するかは provider 個別仕様。kernel 側は
-`ok=false` を error にせず、note を `outputs.note` 等にホップさせる実装が
-多いので、`status: 200` でも note を必ず読むのが安全です。
+connector は `destroy` を **delete-if-exists** な冪等動作として実装します。
+handle 不在で失敗した場合でも HTTP 200 + `ok: true` + `note` で返すのが推奨
+です (実体側がすでに消えている場合)。
 
 ### `POST /v1/lifecycle/describe`
 
-handle 指定で現在の状態を取得。kernel の status projector が
-`provider observation` として吸い上げます。
-
-request (`LifecycleDescribeRequest`):
+`LifecycleDescribeRequest`:
 
 ```ts
 interface LifecycleDescribeRequest {
@@ -148,155 +117,147 @@ interface LifecycleDescribeRequest {
 }
 ```
 
-response (`LifecycleDescribeResponse`):
+`LifecycleDescribeResponse`:
 
 ```ts
 interface LifecycleDescribeResponse {
-  readonly status: "running" | "stopped" | "missing" | "error" | "unknown";
+  readonly status: LifecycleStatus;
   readonly outputs?: JsonObject;
   readonly note?: string;
 }
 ```
 
-`status: "missing"` は handle に対応する実体が消えていることを示し、kernel
-は `GroupHead` 算出時に "drift" として扱います ([Lifecycle
-Protocol](/reference/lifecycle))。
+`describe` は connector の read-only API (`HeadBucket` / `DescribeService` /
+`docker inspect` / `systemctl is-active` 等) で実体を毎回問い合わせる方式で
+実装されます。kernel apply 時の outputs に依存しないので、runtime-agent を
+restart しても同じ結果を返せる必要があります。
 
-### `GET /v1/health`
+### `POST /v1/lifecycle/verify`
 
-orchestrator (Kubernetes liveness / Nomad health) から polling される
-無認証 probe。registered connector 数を返すので、`connectors=0` であれば
-operator が credentials を inject していない可能性が高いです。
+connector の `verify` hook を smoke test します。Request:
 
-```bash
-curl -sS http://127.0.0.1:8789/v1/health
-# {"status":"ok","connectors":12}
-```
-
-### `GET /v1/connectors`
-
-起動時に `buildConnectorRegistry` (factory) が wire した
-`(shape, provider, acceptedArtifactKinds)` 一覧を返します。operator は
-**apply の前にこれを叩いて env 設定が想定 connector 集合を作ったか**を
-確認するのが推奨フロー — `apply` で `connector_not_found` を踏む前に
-切り分けられます。
-
-```bash
-curl -sS http://127.0.0.1:8789/v1/connectors \
-  -H "Authorization: Bearer $TAKOSUMI_AGENT_TOKEN"
-```
-
-```json
-{
-  "connectors": [
-    { "shape": "object-store@v1", "provider": "aws-s3", "acceptedArtifactKinds": [] },
-    { "shape": "container@v1", "provider": "aws-fargate", "acceptedArtifactKinds": ["oci-image"] },
-    { "shape": "object-store@v1", "provider": "filesystem", "acceptedArtifactKinds": [] }
-  ]
+```ts
+interface LifecycleVerifyRequest {
+  readonly targets?: readonly {
+    readonly shape: string;
+    readonly provider: string;
+  }[];
+  readonly options?: JsonObject; // connector ごとに解釈
 }
 ```
 
-### `POST /v1/lifecycle/verify` (補助)
+`targets` を省略した場合は登録済 connector 全てを対象にします。Response:
 
-各 connector の `verify` hook (`Connector.verify(ctx)`) を呼んで cred /
-network を smoke test します。body は省略可で、`{ shape?, provider? }` で
-filter できます。
+```ts
+interface LifecycleVerifyResponse {
+  readonly results: readonly LifecycleVerifyResult[];
+}
 
-```bash
-curl -sS http://127.0.0.1:8789/v1/lifecycle/verify \
-  -H "Authorization: Bearer $TAKOSUMI_AGENT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
-
-```json
-{
-  "results": [
-    { "shape": "object-store@v1", "provider": "aws-s3", "ok": true, "note": "credentials valid" },
-    { "shape": "container@v1", "provider": "aws-fargate", "ok": false, "code": "permission_denied", "note": "ListClusters denied" }
-  ]
+interface LifecycleVerifyResult {
+  readonly shape: string;        // verify 対象の shape
+  readonly provider: string;     // verify 対象の provider id
+  readonly ok: boolean;          // smoke test 結果 (true = 健全)
+  readonly code?: string;        // ok=false 時に設定される LifecycleErrorCode
+  readonly note?: string;        // 詳細メッセージ (operator が読む)
+  readonly details?: JsonObject; // connector が返す追加情報 (latency, scope 等)
+  readonly latencyMs?: number;   // smoke test 所要時間
+  readonly checkedAt: string;    // ISO 8601 timestamp
 }
 ```
+
+`results[]` は順序保証されません。caller は `(shape, provider)` を key として
+集計してください。
+
+## Lifecycle status state machine
+
+`LifecycleStatus` は v1 で 5 値の closed enum です。
+
+```ts
+type LifecycleStatus =
+  | "running"
+  | "stopped"
+  | "missing"
+  | "error"
+  | "unknown";
+```
+
+各 RPC が観測 / 遷移させ得る状態は以下の通りです。
+
+```
+         apply ─────────────► running
+                              │
+                       describe (live)
+                              │
+              ┌───────────────┼────────────────┐
+              ▼               ▼                ▼
+           running         stopped           error
+              │               │                │
+              │               │                │
+           destroy         destroy           verify
+              │               │                │
+              ▼               ▼                ▼
+           missing         missing          running / error
+                              │                │
+                          describe          (verify は status を直接書き換えず、
+                              │           報告のみで `running` / `error` の
+                              ▼           materialization は describe に委ねる)
+                            unknown
+```
+
+- `apply` 成功は `running` に遷移させます。失敗時は `connector_failed` を
+  返し、kernel 側で `error` として projection されます。
+- `destroy` 成功は `missing` に遷移させ、`describe` でも `missing` を返す
+  状態になります。
+- `describe` は実体 API を毎回叩くので、`running / stopped / missing /
+  error / unknown` のいずれにも遷移し得ます。`unknown` は API が一時的に
+  応答できない (rate limit / transient error) 場合に予備として返します。
+- `verify` は status を materialize しません。connector の credential や
+  network reachability の health probe に専念し、結果は
+  `LifecycleVerifyResponse.results[].ok` に集約されます。
 
 ## Error envelope
 
-すべての failure は contract の `LifecycleErrorBody` を 4xx / 5xx で返します:
+すべての failure は `LifecycleErrorBody` を 4xx / 5xx で返します。
 
 ```ts
 interface LifecycleErrorBody {
-  readonly error: string;
-  readonly code?: string;
+  readonly error: string;           // 人間向け message
+  readonly code: LifecycleErrorCode; // closed enum + connector-extended:* 予約
   readonly retryable?: boolean;
   readonly details?: JsonObject;
 }
 ```
 
-主な `code`:
+`code` は v1 で以下の closed enum です。`connector-extended:` prefix は
+connector 拡張のために予約されており、kernel 側で透過的にハンドリングされ
+ます (kernel は prefix を見て、共通エラーロジックには載せず、connector が
+返した string をそのまま actor に伝えます)。
 
-| `code`                   | HTTP | 発生条件                                                                   |
-| ------------------------ | ---- | -------------------------------------------------------------------------- |
-| `unauthorized`           | 401  | bearer 不足 / mismatch                                                     |
-| `bad_request`            | 400  | `LifecycleApplyRequest` などの shape validation 失敗                       |
-| `connector_not_found`    | 404  | `(shape, provider)` に対応する connector が registry にいない              |
-| `artifact_kind_mismatch` | 400  | `spec.artifact.kind` が connector の `acceptedArtifactKinds` に無い        |
-| `connector_failed`       | 500  | connector が throw した想定外エラー                                         |
+| `code`                   | HTTP | 発生条件                                                                  |
+| ------------------------ | ---- | ------------------------------------------------------------------------- |
+| `unauthorized`           | 401  | bearer 不足 / mismatch                                                    |
+| `bad_request`            | 400  | request body の shape validation 失敗                                     |
+| `connector_not_found`    | 404  | `(shape, provider)` に対応する connector が registry にいない             |
+| `artifact_kind_mismatch` | 400  | `spec.artifact.kind` が connector の `acceptedArtifactKinds` に無い       |
+| `connector_failed`       | 500  | connector が throw した想定外エラー                                        |
+| `connector-extended:*`   | (任意) | connector 拡張用の予約 prefix                                            |
 
-## Lifecycle protocol
+`retryable: true` は kernel apply pipeline が rollback / re-attempt の判断
+に使うフラグで、network / rate limit / transient cloud failure 等を表します。
+kernel は WAL の `pre-commit` / `commit` stage における再試行可否を本値で
+分岐させます。
 
-kernel は 1 つの `ManifestResource` に対し、概ね **`apply` → 必要に応じて
-`describe` → tear-down 時に `destroy`** という順序で本 API を叩きます。
+## Cross-references
 
-- **`apply`**: kernel `applyV2` が prior record を fingerprint match した
-  場合は **agent 呼び出しをスキップ** する短絡があり、resource spec が
-  変わったときだけ `apply` が POST されます。返却された `handle` は
-  kernel の deployment record に persist され、以後の `destroy` /
-  `describe` のキー材料になります。
-- **`describe`**: kernel の status projector / public API
-  (`GET /api/public/v1/deployments/:id/observations`) が呼ぶ read-side。
-  agent は connector の read-only API (`HeadBucket` / `DescribeService` 等)
-  を叩いて status を返します。
-- **`destroy`**: tear-down フェーズ (`takosumi deploy --mode destroy` /
-  rollback / GC) で kernel が persisted handle を渡してきます。selfhost
-  系 connector は handle = `resource.name` で動きますが、cloud 系は
-  ARN / object id を返すため、destroy で record が無いと cloud handle が
-  失われます — kernel `POST /v1/deployments` が `destroy` を 409 に
-  落とすのはこのためです ([Kernel HTTP API](/reference/kernel-http-api))。
-
-詳細フロー (apply DAG / capability selection / outputs ref resolver) は
-[Lifecycle Protocol](/reference/lifecycle) を参照してください。
-
-## Connector resolution
-
-runtime-agent server は起動時に `buildConnectorRegistry(opts)` で
-**operator が指定した credential set に応じた `Connector` 集合**を
-in-memory `ConnectorRegistry` に登録します
-([`packages/runtime-agent/src/connectors/factory.ts`](https://github.com/tako0614/takosumi/blob/master/packages/runtime-agent/src/connectors/factory.ts))。
-
-- registry key は `${shape}::${provider}` で 1:1。複数 instance を持ちたい
-  場合は agent process を分けて起動するのが推奨。
-- `LifecycleDispatcher.apply / destroy / describe` は `registry.get(shape,
-  provider)` で connector を引き、無ければ `ConnectorNotFoundError`
-  (`code: connector_not_found`) を返します。
-- `apply` のみ追加で `Connector.acceptedArtifactKinds` チェックが走ります
-  — `spec.artifact.kind` (legacy `spec.image` は `oci-image` 扱い) が list に
-  含まれない場合 `ArtifactKindMismatchError` で 400。connector が
-  artifact を消費しない (managed service / DNS / 純粋な bucket) 場合は
-  `acceptedArtifactKinds: []` を宣言してください。
-- 同梱される selfhost connector (`filesystem` / `docker-compose` /
-  `systemd-unit` / `coredns-local` / `minio` / `local-docker-postgres`) は
-  常に登録されます。cloud 系 (AWS / GCP / Cloudflare / Azure / k3s /
-  Deno Deploy) は `opts.aws` / `opts.gcp` / `opts.cloudflare` / `opts.azure`
-  / `opts.kubernetes` / `opts.denoDeploy` のいずれかを供給したときだけ
-  registry に入ります。詳細は [Provider Plugins](/reference/providers)。
-
-## 参考リンク
-
-- [Kernel HTTP API](/reference/kernel-http-api) — kernel 側の deploy /
-  artifact endpoint
-- [Lifecycle Protocol](/reference/lifecycle) — apply DAG / outputs /
-  capability selection
-- [Provider Plugins](/reference/providers) — 各 connector が backing する
-  provider 一覧
-- [Operator: Bootstrap](/operator/bootstrap) — env / secret 配置と agent
-  process の起動
-- [Manifest (Shape Model)](/manifest) — `spec` に何を書けるか
+- [Lifecycle Phases](/reference/lifecycle-phases) — phase ごとの
+  input / output snapshot 対応と `LifecycleStatus` 5 値の trigger 別
+  遷移。runtime-agent describe が報告する条件はここに集約されている。
+- [Lifecycle Protocol](/reference/lifecycle) — cross-process lock と
+  recovery mode 選択を含む運用面。
+- [Closed Enums](/reference/closed-enums) — `LifecycleErrorBody`
+  codes / `LifecycleStatus` / DataAsset kinds 等の closed enum hub。
+- [Connector Contract](/reference/connector-contract) —
+  `connector:<id>` identity, accepted-kind vector, Space visibility,
+  signing expectations, envelope versioning that the runtime-agent
+  hosts.
+- [Kernel HTTP API](/reference/kernel-http-api)

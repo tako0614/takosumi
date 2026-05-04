@@ -39,7 +39,36 @@ composite target:
   declarative expansion into objects, links, exports, and exposures
 ```
 
-v1 abstract target selection is deterministic and profile-order-first. If the profile cannot select a single allowed candidate, resolution fails.
+### Target selection algorithm
+
+Resolution uses a deterministic, fail-closed pipeline. The first step that
+yields exactly one allowed candidate wins. Any step that yields zero or
+more-than-one candidate fails resolution.
+
+```text
+1. Catalog alias lookup
+   The public manifest value (e.g. `cloudflare-workers`) must resolve to
+   exactly one descriptor in the CatalogRelease adopted by the current
+   Space.
+
+2. Concrete match in Space
+   If the descriptor is concrete and the Space allows it, resolution
+   succeeds with that descriptor.
+
+3. Abstract fallback by profile
+   If the descriptor is abstract, the profile order is consulted. The
+   first concrete candidate that the Space policy allows wins.
+
+4. Composite expansion
+   If the descriptor is composite, it expands into a graph of objects,
+   links, exports, and exposures. Each child enters this same pipeline at
+   step 1.
+
+5. Fail-closed
+   If no step has produced a single allowed concrete descriptor,
+   resolution fails. v1 has no graph search, no operator override at
+   resolution time, and no catalog escape hatch.
+```
 
 ## Input schema
 
@@ -61,19 +90,46 @@ Implementation verify:
 
 ## Mutation constraints
 
-Targets declare supported object mutations.
+A target's mutation behavior is one of the closed v1 constraint kinds
+below. Each constraint declares which lifecycle classes from
+[Object Model](./object-model.md) may use it. New constraint kinds
+require an RFC (CONVENTIONS.md §6).
+
+| mutation-constraint | semantics | allowed lifecycle classes |
+| --- | --- | --- |
+| `immutable` | object cannot change after create; replace required for any mutation | managed, generated |
+| `replace-only` | every mutation creates a new object and revokes the previous one | managed, generated |
+| `in-place` | every mutation updates the same object identity | managed, generated, imported |
+| `append-only` | mutations may only add; existing fields cannot change or be removed | managed, generated, imported |
+| `ordered-replace` | replaces are serialized; no concurrent replaces in one Space | managed, generated |
+| `reroute-only` | object identity is fixed; mutations only re-point traffic / handles | external, operator, imported |
+
+`external` and `operator` lifecycle classes only ever take `reroute-only`
+mutations because their identity is owned outside Takosumi.
+
+Mutation constraints are descriptor metadata. The runtime operations that
+realize them are issued by the
+[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+and bounded by [Object Model — Revoke participation matrix](./object-model.md).
+
+## Access mode enum
+
+`access` on a Link declaration is one of the closed v1 modes below. This
+is the canonical home for the access vocabulary;
+[Link and Projection Model](./link-projection-model.md) and
+[Namespace Export Model](./namespace-export-model.md) reference it
+without redefining.
 
 ```text
-no-op
-update
-replace
-recreate
-retain
-orphan
-delete
+read         observation only; no grant material is generated
+read-write   read plus mutation rights on the export's resource
+admin        full management of the export's resource
+invoke-only  may call the resource but cannot read or mutate underlying state
+observe-only may only receive notifications / metrics; no resource access
 ```
 
-Immutable fields and default mutation behavior are target metadata.
+`safeDefaultAccess` on an export declaration may pick a default from this
+set. New access modes require an RFC (CONVENTIONS.md §6).
 
 ## Space-specific availability
 

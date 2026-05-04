@@ -123,6 +123,36 @@ SpaceExportShare:
 
 Resolution records the share in `ResolutionSnapshot`. Plan output must show cross-space usage as a risk.
 
+## SpaceExportShare lifecycle
+
+A SpaceExportShare progresses through a closed v1 state machine:
+
+```text
+draft → active → refresh-required → stale → revoked
+              ↘ revoked
+```
+
+| state | meaning |
+| --- | --- |
+| `draft` | operator created the share but has not activated it; consumers cannot resolve it |
+| `active` | the share is usable; consumer Spaces resolve and link normally |
+| `refresh-required` | the export snapshot or signing key is approaching its TTL; resolution still succeeds, plan output shows the warning |
+| `stale` | the TTL elapsed before refresh; resolution surfaces the `stale-export` Risk and then fails closed |
+| `revoked` | operator removed the share; new resolutions are denied and existing material enters cleanup |
+
+Refresh / TTL rules:
+
+- Each share carries an `expiresAt` and an operator-controlled refresh
+  policy. Approaching the TTL transitions `active → refresh-required`.
+- A successful refresh returns the share to `active`. A missed refresh
+  transitions to `stale`.
+- Both `stale` and `revoked` queue cleanup of dependent generated material
+  per the [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md);
+  unsuccessful cleanup produces RevokeDebt with
+  `reason: cross-space-share-expired`.
+- `stale-export` and `revoke-debt-created` are part of the closed Risk
+  enum in [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md).
+
 ## Space-owned data boundaries
 
 A Space owns or selects the following partitions:

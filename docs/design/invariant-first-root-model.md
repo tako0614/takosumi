@@ -63,6 +63,9 @@ imported:
   delete is denied unless explicitly operator-approved
 ```
 
+The revoke flow that enforces this invariant is detailed in
+[Object Model — Object revoke flow](./object-model.md).
+
 ### 5. Secret invariant
 
 Raw secret values are never stored in core canonical state. Core state may store secret references, handles, projection metadata, and audit events.

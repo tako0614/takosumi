@@ -1,60 +1,112 @@
 # Templates
 
-**Template** は複数 [Shape](/reference/shapes) resource をまとめて expand する
-authoring 短縮です。manifest の `template:` field に template id と inputs
-を書くと、kernel が `expand(inputs)` を呼んで `resources[]` を生成します。
-expansion 後の resource は通常の DAG / capability selection を通ります。
+> Stability: stable
+> Audience: integrator
+> See also: [Manifest Expand Semantics](/reference/manifest-expand-semantics), [Shape Catalog](/reference/shapes), [Provider Plugins](/reference/providers)
 
-## Template の構造
+A **template** is the v1 manifest authoring shorthand that expands into a
+concrete `resources[]` array at OperationPlan construction time. The
+manifest names a template (`template: <id>@<version>`) and supplies
+`inputs`. The kernel calls `expand(inputs)` on the registered template,
+splices the produced [Shape](/reference/shapes) resources into the manifest,
+and from that point onward the deployment runs through the standard
+DAG / capability selection / [provider plugin](/reference/providers)
+lifecycle.
+
+Source: `packages/contract/src/template.ts` (the contract and registry),
+`packages/plugins/src/templates/<template>.ts` (the bundled two).
+
+## Public API surface
+
+`registerTemplate` is the v1 entry point for any third party that wants to
+publish a template into the in-process registry.
 
 ```ts
-interface Template<Inputs> {
-  readonly id: string; // e.g. "web-app-on-cloudflare"
-  readonly version: string; // semver
+function registerTemplate(
+  template: Template,
+  options?: RegisterTemplateOptions,
+): Template | undefined;
+```
+
+The `Template` shape:
+
+```ts
+interface Template<Inputs = JsonObject> {
+  readonly id: string;            // e.g. "web-app-on-cloudflare"
+  readonly version: string;       // semver
   readonly description?: string;
   validateInputs(value: unknown, issues: TemplateValidationIssue[]): void;
   expand(inputs: Inputs): readonly ManifestResource[];
 }
 ```
 
-template 自体に provider は含まれません。expansion 結果の `ManifestResource[]`
-が provider id を持ち、それを kernel が `requires` / `capabilities` 規則で
-selection します
-([Provider Plugins § Provider selection](/reference/providers#provider-selection-と-requires))。
+Required fields: `id`, `version`, `validateInputs`, `expand`. `description`
+is optional. `registerTemplate` returns the prior registration when the
+same `(id, version)` is replaced; passing `{ allowOverride: true }`
+suppresses the collision warning. A template **must not** include providers
+or credentials in its definition — `expand` returns `ManifestResource[]`
+where each resource carries a `provider:` id, and the kernel runs the
+normal selection rules over the result.
+
+A template ships only Shape compositions. Adding a new template never
+requires a Shape RFC — the catalog of `ManifestResource` produced by
+`expand` is constrained to the existing shapes.
+
+## Expand result immutability
+
+Template expansion is **resolved once**, at OperationPlan construction:
+
+- The expanded `ManifestResource[]` is captured into the OperationPlan and
+  becomes immutable for the lifetime of that plan.
+- A subsequent **template revision** (registering a different
+  `Template` value at the same `id@version`, or publishing a new
+  `id@version`) does **not** re-expand any existing Deployment. The
+  Deployment continues to track the resources written into its plan.
+- A new expansion only occurs when the operator submits a new manifest
+  apply — the kernel re-resolves the template at that point and produces a
+  fresh OperationPlan from the latest registered template.
+
+This rule keeps drift detection, namespace export, and
+risk / approval invalidation deterministic against the captured plan
+rather than against a moving template definition.
 
 ## Bundled templates
 
-`takosumi` は 2 つの template を bundle しています。
+Takosumi bundles two templates.
 
-| template id             | version | summary                                                        |
-| ----------------------- | ------- | -------------------------------------------------------------- |
-| `selfhosted-single-vm`  | `v1`    | 1 ホスト selfhost — web + Postgres + filesystem + (任意で DNS) |
-| `web-app-on-cloudflare` | `v1`    | Cloudflare edge — CF Container + R2 + DNS + pluggable Postgres |
+| template id             | version | summary                                                                |
+| ----------------------- | ------- | ---------------------------------------------------------------------- |
+| `selfhosted-single-vm`  | `v1`    | Single-host selfhost: web service + Postgres + filesystem object store + optional CoreDNS |
+| `web-app-on-cloudflare` | `v1`    | Cloudflare-edge web app: CF container + R2 + DNS + pluggable Postgres   |
 
-source:
-[`src/templates/`](https://github.com/takos-jp/takosumi/tree/main/src/templates)
+## `selfhosted-single-vm@v1`
 
-## `selfhosted-single-vm@v1` {#selfhosted-single-vm-v1}
-
-### 用途
-
-開発機や 1 台 VPS で **「とりあえず Takosumi 全部入り」** を立ち上げる用途。
-shape selection は全て selfhosted な provider で固定されます。
+Brings up the full Takosumi stack on a single VM or developer host. Every
+resource is pinned to a selfhost provider.
 
 ### Inputs
 
 ```ts
 interface SelfhostedSingleVmInputs {
-  readonly serviceName: string; // web service の論理名
-  readonly image: string; // OCI image
-  readonly port: number; // 内部 listen port
-  readonly databaseVersion?: string; // 既定 "16"
-  readonly assetsBucketName?: string; // 既定 "<serviceName>-assets"
-  readonly domain?: string; // optional, custom-domain を作る
+  readonly serviceName: string;       // logical name of the web service
+  readonly image: string;             // OCI image reference
+  readonly port: number;              // internal listen port
+  readonly databaseVersion?: string;  // default "16"
+  readonly assetsBucketName?: string; // default "<serviceName>-assets"
+  readonly domain?: string;           // optional custom-domain FQDN
 }
 ```
 
-### Manifest 例
+### Expansion
+
+| resource name      | shape                  | provider                         | spec / link / exposure / data assets                                                                                                                       |
+| ------------------ | ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `db`               | `database-postgres@v1` | `@takos/selfhost-postgres`       | spec: `{ version: databaseVersion ?? "16", size: "small" }`. No data assets.                                                                               |
+| `assets`           | `object-store@v1`      | `@takos/selfhost-filesystem`     | spec: `{ name: assetsBucketName ?? "<serviceName>-assets" }`. No data assets.                                                                              |
+| `<serviceName>`    | `web-service@v1`       | `@takos/selfhost-docker-compose` | spec: `{ image, port, scale: { min: 1, max: 1 } }`. links: `bindings.DATABASE_URL = ${ref:db.connectionString}`, `bindings.ASSETS_BUCKET = ${ref:assets.bucket}`. data asset: the `image` is consumed as an `oci-image` DataAsset by the provider. |
+| `domain` *(opt-in)* | `custom-domain@v1`     | `@takos/selfhost-coredns`        | spec: `{ name: <domain>, target: ${ref:<serviceName>.url} }`. exposure: routes the FQDN to the web service's `url` output. Only emitted when `domain` is supplied. |
+
+### Manifest example
 
 ```yaml
 apiVersion: "1.0"
@@ -70,28 +122,11 @@ template:
     domain: api.lan
 ```
 
-### Expansion 結果
-
-| resource name | shape                  | provider         | spec の要点                                           |
-| ------------- | ---------------------- | ---------------- | ----------------------------------------------------- |
-| `db`          | `database-postgres@v1` | `local-docker`   | `version: "16"`, `size: "small"`                      |
-| `assets`      | `object-store@v1`      | `filesystem`     | `name: api-assets`                                    |
-| `api`         | `web-service@v1`       | `docker-compose` | `image`, `port`, `scale.min/max=1`, bindings 自動注入 |
-| `domain`      | `custom-domain@v1`     | `coredns-local`  | `name: api.lan`, `target: ${ref:api.url}` (任意)      |
-
-`bindings` には `DATABASE_URL=${ref:db.connectionString}`,
-`ASSETS_BUCKET=${ref:assets.bucket}` が自動注入されます。
-
-source:
-[`templates/selfhosted-single-vm.ts`](https://github.com/takos-jp/takosumi/blob/main/src/templates/selfhosted-single-vm.ts)
-
 ## `web-app-on-cloudflare@v1`
 
-### 用途
-
-Cloudflare edge を front に置いた典型的な web app 構成。Postgres は
-`databaseProvider` で AWS RDS / GCP Cloud SQL / local-docker
-のいずれかを選べます。
+Cloudflare-edge front end with a pluggable Postgres backend. The default
+Postgres provider is `@takos/aws-rds`; an operator may pick GCP Cloud SQL
+or selfhost Postgres via `databaseProvider`.
 
 ### Inputs
 
@@ -100,14 +135,26 @@ interface WebAppOnCloudflareInputs {
   readonly serviceName: string;
   readonly image: string;
   readonly port: number;
-  readonly domain: string; // 必須
-  readonly assetsBucketName?: string;
-  readonly databaseProvider?: "aws-rds" | "cloud-sql" | "local-docker"; // 既定 "aws-rds"
+  readonly domain: string;            // required FQDN
+  readonly assetsBucketName?: string; // default "<serviceName>-assets"
+  readonly databaseProvider?:
+    | "@takos/aws-rds"
+    | "@takos/gcp-cloud-sql"
+    | "@takos/selfhost-postgres"; // default "@takos/aws-rds"
   readonly databaseVersion?: string;
 }
 ```
 
-### Manifest 例
+### Expansion
+
+| resource name   | shape                  | provider                       | spec / link / exposure / data assets                                                                                                                                                                              |
+| --------------- | ---------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `db`            | `database-postgres@v1` | `databaseProvider ?? "@takos/aws-rds"` | spec: `{ version: databaseVersion ?? "16", size: "small" }`. No data assets.                                                                                                                                       |
+| `assets`        | `object-store@v1`      | `@takos/cloudflare-r2`         | spec: `{ name: assetsBucketName ?? "<serviceName>-assets", public: false }`. No data assets.                                                                                                                       |
+| `<serviceName>` | `web-service@v1`       | `@takos/cloudflare-container`  | spec: `{ image, port, scale: { min: 0, max: 10 } }`. links: `bindings.DATABASE_URL = ${ref:db.connectionString}`, `bindings.ASSETS_BUCKET = ${ref:assets.bucket}`, `bindings.ASSETS_ENDPOINT = ${ref:assets.endpoint}`. data asset: `image` is consumed as an `oci-image` DataAsset by the provider. |
+| `domain`        | `custom-domain@v1`     | `@takos/cloudflare-dns`        | spec: `{ name: <domain>, target: ${ref:<serviceName>.url} }`. exposure: routes the FQDN to the web service's `url`.                                                                                                |
+
+### Manifest example
 
 ```yaml
 apiVersion: "1.0"
@@ -124,42 +171,17 @@ template:
     databaseProvider: "@takos/aws-rds"
 ```
 
-### Expansion 結果
+## Cross-references
 
-| resource name | shape                  | provider               | spec の要点                                              |
-| ------------- | ---------------------- | ---------------------- | -------------------------------------------------------- |
-| `db`          | `database-postgres@v1` | (`databaseProvider`)   | `version: "16"`, `size: "small"`                         |
-| `assets`      | `object-store@v1`      | `cloudflare-r2`        | `name: app-assets`, `public: false`                      |
-| `app`         | `web-service@v1`       | `cloudflare-container` | `scale.min=0, max=10`, bindings に DB / R2 endpoint 注入 |
-| `domain`      | `custom-domain@v1`     | `cloudflare-dns`       | `name: app.example.com`, `target: ${ref:app.url}`        |
+- [Manifest](/manifest) — `template:` field の使い方、expanded resources と
+  operator-authored `resources[]` の関係。
+- [Shape catalog](/reference/shapes) — Spec / outputFields / capability
+  vocabulary used inside `expand`.
+- [Provider plugins](/reference/providers) — selection rules applied to
+  the `ManifestResource[]` produced by `expand`.
 
-`bindings` には `DATABASE_URL`, `ASSETS_BUCKET`, `ASSETS_ENDPOINT` が
-`${ref:...}` 形式で自動注入されます。CF Container は `scale.min: 0` で
-scale-to-zero (cf.
-[`cloudflare-container` capabilities](/reference/providers#webservice-6-providers))。
+## Related design notes
 
-source:
-[`templates/web-app-on-cloudflare.ts`](https://github.com/takos-jp/takosumi/blob/main/src/templates/web-app-on-cloudflare.ts)
+本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
 
-## Template と `resources[]` の関係
-
-template と `resources[]` は **排他ではありません**。template が expand した
-`ManifestResource[]` の上に、`resources[]` で追加 resource を足す合成も可能です
-(detail は
-[Manifest § template + resources](/manifest#template-と-resources-の併用)
-を参照)。
-
-## 新 template を追加する
-
-template は **既存 Shape / Provider の合成** だけで作れます。新 Shape を
-増やす必要はありません。手順は
-[Extending § 新 template の追加](/extending#新-template-の追加)
-を参照してください。
-
-## 関連ページ
-
-- [Shape Catalog](/reference/shapes) — 各 Shape の field 定義
-- [Provider Plugins](/reference/providers) — template が expand 先で使う 18
-  provider
-- [Manifest](/manifest) — `template:` field と `resources[]` の syntax
-- [Extending](/extending) — template / provider / shape 拡張ガイド
+- `docs/design/manifest-model.md` — template expansion semantics の rationale

@@ -70,6 +70,46 @@ ActivationSnapshot:
   assignments: []
   activatedAt: ...
   health: pending | healthy | degraded | failed
+  sourceObservationDigest: sha256:...   # latest observation feeding `health`
 ```
 
+`sourceObservationDigest` records the ObservationSet entry that produced
+the current `health` annotation; it is the only authoritative link from
+runtime reality back to the snapshot. ObservationSet entries do not
+mutate `assignments`.
+
 GroupHead moves only after apply-phase revalidation and activation policy pass.
+
+## Post-activate health state
+
+After activation, an exposure tracks runtime reality through a closed v1
+state machine. Transitions are driven only by entries appended to
+ObservationSet by the `observe` stage of the
+[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md).
+No transition mutates DesiredSnapshot.
+
+```text
+unknown → observing → healthy
+                 \ → degraded
+                 \ → unhealthy
+
+healthy   ↔ degraded ↔ unhealthy   (re-entry on observation change)
+```
+
+| state | meaning |
+| --- | --- |
+| `unknown` | no observation recorded yet (pre-first-probe) |
+| `observing` | a probe is in flight |
+| `healthy` | latest observation confirms the desired assignment |
+| `degraded` | partial signal; some checks pass, some fail |
+| `unhealthy` | latest observation contradicts the desired assignment |
+
+Effects of `unhealthy`:
+
+- `unhealthy` does not rewrite DesiredSnapshot. It only feeds DriftIndex
+  and an annotation on ActivationSnapshot.
+- `unhealthy` blocks new traffic shifts initiated by future activations
+  unless an approval explicitly overrides; existing GroupHead pointers
+  are not rolled back automatically (fail-safe-not-fail-closed).
+- See [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
+  for how drift entries are produced from this state.

@@ -1,303 +1,135 @@
 # Lifecycle Protocol
 
-Takosumi の deployment lifecycle (apply / destroy / describe) の挙動を、kernel
-側 apply pipeline と runtime-agent 側 connector dispatch の両方の観点から
-整理します。 source of truth は以下:
+> Stability: stable
+> Audience: operator, kernel-implementer
+> See also: [Lifecycle Phases](/reference/lifecycle-phases), [WAL Stages](/reference/wal-stages), [Cross-Process Locks](/reference/cross-process-locks), [Approval Invalidation](/reference/approval-invalidation)
 
-- [`packages/kernel/src/domains/deploy/apply_v2.ts`](https://github.com/tako0614/takosumi/blob/master/packages/kernel/src/domains/deploy/apply_v2.ts)
-  — DAG / fingerprint / rollback の本体。
-- [`packages/kernel/src/api/deploy_public_routes.ts`](https://github.com/tako0614/takosumi/blob/master/packages/kernel/src/api/deploy_public_routes.ts)
-  — `POST /v1/deployments` のエンドポイント、lock の acquire/release。
-- [`packages/kernel/src/domains/deploy/takosumi_deployment_record_store_sql.ts`](https://github.com/tako0614/takosumi/blob/master/packages/kernel/src/domains/deploy/takosumi_deployment_record_store_sql.ts)
-  — lock semantics の正本コメント。
-- [`packages/contract/src/runtime-agent-lifecycle.ts`](https://github.com/tako0614/takosumi/blob/master/packages/contract/src/runtime-agent-lifecycle.ts)
-  — kernel ↔ agent envelope。
+Takosumi の deployment lifecycle (`apply / activate / destroy / rollback /
+recovery / observe`) を、kernel apply pipeline と runtime-agent dispatch の
+両側から v1 確定形で整理する reference です。phase ごとの input /
+output snapshot・WAL stage 対応・失敗時挙動・`LifecycleStatus` 5 値の
+trigger 別遷移は
+[Lifecycle Phases](/reference/lifecycle-phases) を参照してください。
+WAL stage の意味論は
+[WAL Stages](/reference/wal-stages)、approval 失効規則は
+[Approval Invalidation Triggers](/reference/approval-invalidation) を
+参照してください。
 
-## High-level flow
+## Cross-process lock
 
-```
-┌────────┐   POST /v1/deployments              ┌──────────────────────┐
-│  CLI   │ ───────────────────────────────────▶│ kernel HTTP          │
-│ deploy │   { mode, manifest, force? }        │ ┌──────────────────┐ │
-└────────┘                                      │ │ acquireLock(     │ │
-                                                │ │   tenant, name)  │ │
-                                                │ └──────────────────┘ │
-                                                │   ↓                  │
-                                                │ ┌──────────────────┐ │
-                                                │ │ applyV2(...)     │ │
-                                                │ │  resolveResources│ │
-                                                │ │  buildRefDag     │ │
-                                                │ │  fingerprint /   │ │
-                                                │ │  prior snapshot  │ │
-                                                │ │  per-resource ↓  │ │
-                                                │ └──────────────────┘ │
-                                                │   ↓                  │
-                                                │ provider.apply(spec) │
-                                                │   = HTTP POST to     │
-                                                │     runtime-agent    │
-                                                └──────────────────────┘
-                                                            │
-                                  POST /v1/lifecycle/apply  │
-                                                            ▼
-                                              ┌──────────────────────┐
-                                              │ runtime-agent        │
-                                              │  dispatcher          │
-                                              │  → connector.apply   │
-                                              │     (cloud SDK / OS) │
-                                              └──────────────────────┘
-                                                            │
-                                          { handle, outputs}│
-                                                            ▼
-                                              ┌──────────────────────┐
-                                              │ kernel persists      │
-                                              │  AppliedResource +   │
-                                              │  fingerprint into    │
-                                              │  recordStore.upsert  │
-                                              │  releaseLock         │
-                                              └──────────────────────┘
-```
+**Production 配置では SQL-backed `OperationPlanLockStore` の使用が必須です。**
+in-memory store は dev / unit test 専用で、複数 kernel pod が走る環境では
+lock を保証できません。
 
-各 hop は **HTTP**:
+- 同一 OperationPlan に対する `apply / activate / destroy / rollback` は
+  `(spaceId, operationPlanDigest)` を key として **直列化** されます。
+- Lock holder が異常終了した場合、SQL-backed store は heartbeat の TTL で
+  自動失効します。失効した lock を取り直した kernel は WAL を `recovery`
+  phase 経由で復帰させます。
+- in-memory store は単一プロセス内の per-key Promise chain しか持たず、
+  cross-process では race を起こします。production 配置で in-memory store
+  を inject すると、kernel boot 時に warning を出すよう実装されています
+  が、**warning を見て operator が SQL-backed に差し替える運用が前提** です。
 
-1. CLI → kernel: bearer-auth な `POST /v1/deployments`
-   ([Kernel HTTP API](/reference/kernel-http-api))。
-2. kernel → runtime-agent: bearer-auth な
-   `POST /v1/lifecycle/{apply,destroy,describe}`
-   ([Runtime-Agent API](/reference/runtime-agent-api))。
-3. runtime-agent → cloud / OS: connector が SDK や `Deno.Command`
-   で実 API を叩く。
+`apply` / `destroy` は lock 取得 → 実行 → release を `try { ... } finally`
+で囲みます。lock contention 時は client 側 timeout で諦めるか、operator
+側で「single-writer apply tier」（deploy 系 traffic を 1 pod に固定する
+deployment topology）を取るかのどちらかを選択します。
 
-## Apply pipeline (`applyV2`)
+## Lifecycle phases
 
-### Phase 1 — Validation
+v1 では 6 phase を 1:1 に区別します。各 phase は対応する Snapshot を入力 /
+出力として動き、WAL は phase ごとに stage を進めます。
 
-`resolveResourcesV2(resources)` が manifest の各 resource を
-`(shape, provider, spec)` triple に解決します。失敗例:
+| Phase      | 入力 Snapshot                       | 出力 Snapshot / 副作用                                  | 触る WAL stage                                  |
+| ---------- | ----------------------------------- | ------------------------------------------------------- | ----------------------------------------------- |
+| `apply`    | DesiredSnapshot                     | OperationPlan + ResolutionSnapshot                      | `prepare` → `pre-commit` → `commit`             |
+| `activate` | ResolutionSnapshot                  | post-activate Exposure health (`unknown / observing`)   | `commit` → `post-commit`                        |
+| `destroy`  | ResolutionSnapshot                  | DesiredSnapshot 上で managed/generated を削除しきった状態 | `pre-commit` → `commit` → `finalize`           |
+| `rollback` | 直前 ResolutionSnapshot             | prior ResolutionSnapshot を再 materialize したスナップショット | `pre-commit` (compensate) → `commit` → `abort`   |
+| `recovery` | WAL 復元状態                        | recovery mode に応じた終端 (continue / compensate / inspect) | (resume from last stage)                       |
+| `observe`  | live runtime-agent describe results | Exposure health (`healthy / degraded / unhealthy`) と RevokeDebt 候補 | `observe` (long-lived)                |
 
-- `shape: object-store@v1` が registry に無い → `failed-validation`
-- `provider:` の id が shape に対する provider として未登録
-- `requires:` capability が provider の `capabilities` に含まれない
+- `apply` の `prepare` で OperationPlan が確定し、Idempotency key
+  `(spaceId, operationPlanDigest, journalEntryId)` が WAL の各 entry に
+  振られます。同じ key の retry は副作用を増やしません。
+- `activate` 直後の Exposure health は `unknown` から始まり、`observe`
+  phase が回るにつれて `observing → healthy / degraded / unhealthy` へ
+  遷移します。
+- `destroy` は `finalize` stage で managed / generated lifecycle class の
+  object を完全に消し、external / operator / imported は触りません。
+- `rollback` は WAL の `commit` 済み effect を逆再生するため `compensate`
+  hook を `pre-commit` で起動した上で `abort` 終端に進みます。
+- `recovery` は kernel restart 時に WAL を読み直して再開します。最後に
+  記録された stage の **次** から resume します。
+- `observe` phase の起動 / 維持は kernel readiness と連動します。kernel pod
+  の readiness DAG (storage / lock store / runtime-agent registry など) が
+  満たされていない間は observation worker が観測値を更新せず、`/readyz`
+  も 503 を返します。詳細は
+  [Readiness Probes](/reference/readiness-probes) を参照してください。
 
-validation issue が 1 件でもあれば applyV2 は **何も実行せず** に
-`status: "failed-validation"` を返します。
+WAL stage の意味論は
+[WAL Stages — Stage closed enum](/reference/wal-stages#stage-closed-enum-8-値)
+に対応します (`prepare → pre-commit → commit → post-commit → observe →
+finalize`、終端 `abort / skip`)。
 
-### Phase 2 — Ref DAG
+## Verify trigger
 
-`buildRefDag(resources)` が `${ref:other.field}` を辿って依存グラフを
-作り、トポロジカル順に並べます。cycle や undefined ref は
-`failed-validation` となり、apply には進みません。
+runtime-agent の `POST /v1/lifecycle/verify` は本 reference の lifecycle
+phase と以下のように対応します:
 
-### Phase 3 — Per-resource apply (DAG order)
+- `verify` は **どの phase にも含まれない補助 trigger** です。WAL stage を
+  進めず、Snapshot を materialize せず、connector ごとの credential /
+  network reachability を確認するためだけに動きます。
+- `apply` の前に operator が `verify` を投げて `connector_not_found` /
+  `connector-extended:*` を切り分けるのが推奨フローです。kernel apply
+  pipeline は `verify` の結果を直接消費しませんが、operator dashboard が
+  `verify` 結果を `pre-flight gate` として扱う運用が想定されています。
+- `verify` 中に connector が `connector_failed` を返した場合、kernel は
+  当該 connector に対する `apply` request を **送らず**、operator が
+  対処するまで OperationPlan を `prepare` から先に進めない選択を取れます。
 
-DAG 順にループ。各 resource について:
+`verify` request / response の field 仕様は
+[Runtime-Agent API — `POST /v1/lifecycle/verify`](/reference/runtime-agent-api#post-v1lifecycleverify)
+を参照してください。
 
-```ts
-const resolvedSpec = resolveSpecRefs(item.resource.spec, {
-  outputs: outputsByName,
-});
-const fingerprint = computeSpecFingerprint(
-  item.resource,    // shape, name
-  item.provider.id,
-  resolvedSpec,     // ref 解決済み spec
-);
-```
+## Recovery modes
 
-`fingerprint` は **FNV-1a 32-bit** を `sha`-ではなく短いタグ
-(`fnv1a32:<hex>`) として算出します。
-`shape | providerId | name | JSON.stringify(spec)` を seed にしているため、
-**JSON.stringify の key 順** が変われば値も変わります — 同一意味でも
-key を入れ替えると一回 re-apply が走ります。これは intentional な v0
-trade-off です (手元の docstring 抜粋):
+kernel restart や lock 失効後に `recovery` phase が走るとき、operator は
+4 つの mode を選択します。
 
-```
-The cost of false negatives here is one extra `provider.apply` call,
-never correctness.
-```
+| Mode         | 用途                                                                              | 終端                                                  |
+| ------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `normal`     | デフォルト。WAL を読み直して `commit` 後の `post-commit` から自動 resume          | 通常 phase 終端 (`apply` / `activate` / `destroy`)    |
+| `continue`   | `pre-commit` まで進んでいたが `commit` で落ちた entry を強制続行                  | `commit` → `post-commit` → 通常終端                   |
+| `compensate` | `commit` 済み effect を逆再生し、prior ResolutionSnapshot に戻す                  | `abort` (RevokeDebt が `activation-rollback` で発行)  |
+| `inspect`    | 何も実行せず、WAL と live state の差分だけを report                               | (副作用なし、operator 用 dump)                        |
 
-### Phase 4 — Idempotent skip
+選択ガイド:
 
-caller (`POST /v1/deployments`) が `priorApplied` map を渡している場合、
-fingerprint と provider id が一致すれば `provider.apply` を **呼ばずに**
-保存済みの handle / outputs を再利用します。downstream resource は ref
-resolver 経由でこれら outputs を見るので、グラフ全体の整合性は維持されます。
+- 直前 phase が `apply` で WAL が `pre-commit` まで進んでいる: `normal` を
+  選ぶ。`commit` の retry が冪等性を保つ。
+- 直前 phase が `commit` 半ばで落ち、外部 side effect (cloud API call) が
+  実行済みの可能性が高い: `continue` で `commit` を最後まで走らせる。
+- `commit` まで終わったが `post-commit` で外部依存が壊れ続けて回復見込みが
+  ない: `compensate` を選び、`activation-rollback` reason の RevokeDebt を
+  open する。`SpaceExportShare` が `active` だった場合は
+  `refresh-required` 状態に遷移します。
+- 状況不明 / 復旧前にまず差分を見たい: `inspect` を選び、WAL の
+  journalEntryId 単位で `actual-effects-overflow` の有無を確認する。
 
-::: tip
-v0 では fingerprint **不一致** でも自動的に旧 handle を destroy しません。
-古い resource は残ったまま `provider.apply` が呼ばれます。
-将来の "delta replace" でこの挙動は変わる予定なので、
-**implementation detail として扱ってください**。
-:::
+`inspect` 以外の mode は WAL の **idempotency key** に基づいて副作用を再現
+しないように動作するため、同じ mode を繰り返し起動しても重複 effect は
+発生しません。
 
-### Phase 5 — Failure → rollback
+## Cross-references
 
-`provider.apply` が throw すると:
-
-1. これまで apply 済みの resource を **逆 DAG 順に best-effort destroy**。
-2. destroy が失敗しても外には surface しない (silent catch)。
-3. outcome は `failed-apply` で返り、`issues[0]` に
-   `apply failed: <message>` を入れる。
-
-::: warning
-rollback は **kernel process がクラッシュすると走りません**。プロセス障害で
-applied resource list が宙に浮いた場合は、`recordStore` にまだ
-`upsert` していない可能性があるため `takosumi destroy` で消せず、
-operator が手動で cloud 側を掃除する必要があります。
-applied resources の partial state は failure mode の章を参照。
-:::
-
-### 永続化
-
-成功時は `outcome.applied[]` を `recordStore.upsert(...)` で保存。
-保存される情報は `(tenant, name)` をキーに、manifest + applied resources
-(handle / outputs / fingerprint) + status (`applied` | `failed` | `destroyed`)。
-SQL backend は migration `20260430000020_takosumi_deployments` の
-`takosumi_deployments` テーブル
-([SqlTakosumiDeploymentRecordStore](https://github.com/tako0614/takosumi/blob/master/packages/kernel/src/domains/deploy/takosumi_deployment_record_store_sql.ts))。
-
-## Destroy
-
-`POST /v1/deployments` mode `destroy`:
-
-1. lock acquire。
-2. `recordStore.get(tenant, name)` で prior record を取得。
-   record が無ければ **409 を返して拒否** する (`force: true` を渡すと
-   `resource.name` を handle として fallback、cloud handle が一致しない
-   ことを警告)。
-3. `destroyV2(...)` を呼ぶ:
-   - 同じ validation / DAG resolution を流す。
-   - **逆 DAG 順** に `provider.destroy(handle, ctx)` を呼ぶ
-     (依存先が後で消える)。
-   - 個別 failure は `errors[]` に積み、全体は continue する。
-4. 成功 / 部分成功なら `recordStore.markDestroyed(...)` で row を
-   `destroyed` 状態に遷移。
-5. lock release。
-
-destroy は **冪等**:
-
-- 既に `destroyed` な record を再 destroy → 再度 best-effort で
-  provider に投げる (provider 側の `destroy` も idempotent 前提)。
-- handle が cloud から消えていても `provider.destroy` は ok を返すべき。
-
-## Describe (status query)
-
-`POST /v1/deployments` の **describe は別経路** です。kernel 側は
-`GET /v1/deployments/:name` で persistent record を返すだけ。
-runtime レベルの状態確認は runtime-agent の
-`POST /v1/lifecycle/describe` で連鎖的にひかれます:
-
-| connector              | describe の実装                                                   |
-| ---------------------- | ----------------------------------------------------------------- |
-| AWS / GCP / Azure 系   | 各 SDK の Get / Describe API (例: `DescribeServices`, `Get` task) |
-| `cloudflare-container` | Cloudflare Containers API の status fetch                         |
-| `docker-compose`       | `docker inspect` を叩いて running / stopped を判定                |
-| `systemd-unit`         | `systemctl is-active <unit>` の戻り値で status を決定             |
-| `filesystem` 系        | 物理 file の存在確認                                              |
-
-返るのは `LifecycleStatus = "running" | "stopped" | "missing" | "error" | "unknown"`
-+ optional `outputs` / `note`。
-
-::: tip
-`describe()` が **runtime-agent restart 後でも正しく動く**
-理由は、connector が prior apply の outputs ではなく
-**実際の cloud / OS state** を毎回問い合わせるから。systemd 系の
-docstring にも "authoritative state for `describe()` is the on-disk unit
-file plus `systemctl is-active`" と明記されています。
-:::
-
-## Concurrency
-
-### In-process
-
-`SqlTakosumiDeploymentRecordStore.acquireLock(tenant, name)` は
-**per-key Promise chain** を `Map` で持っており、同じ key に対する
-acquire は前の holder が `releaseLock` を呼ぶまで `await` で待ちます。
-public deploy route は
-
-```
-acquireLock → applyV2 → recordStore.upsert → releaseLock
-```
-
-の bracket を `try { ... } finally` で囲っているため、
-**1 つの kernel process 内** では同じ deployment の apply / destroy が
-シリアライズされます。
-
-### Cross-process
-
-::: warning
-**Cross-process / multi-pod での lock は SqlTakosumiDeploymentRecordStore
-が保証しません。** Postgres `pg_advisory_lock` は session-scoped で、
-pooled な SqlClient だと acquire と release が異なる接続にルーティング
-されて lock が漏れるためです。
-
-operator が必要なら以下のいずれかを選びます:
-- **Single-writer apply tier**: deploy 系 traffic を 1 pod に固定。
-- **Custom SqlClient**: acquire〜release を同一 connection に pin した
-  実装を inject し、`SELECT … FOR UPDATE` などの row-level lock を使う。
-:::
-
-これは README / docstring レベルで明記された設計上の **既知の gap**
-です。 implementation detail ではなく、operator 側で対処する責務として
-扱ってください。
-
-## Idempotency
-
-| シナリオ                                         | 振る舞い                                            |
-| ------------------------------------------------ | --------------------------------------------------- |
-| 同じ manifest を 2 回 apply                      | 2 回目は fingerprint match で `provider.apply` skip |
-| spec の field を変更                             | fingerprint mismatch → `provider.apply` を再実行    |
-| spec は同じだが key 順を入れ替え                 | (v0) fingerprint mismatch → 再 apply 走る           |
-| destroyed → 再 apply                             | record が destroyed 状態でも fingerprint で判定     |
-| 別 provider id に切り替え                        | mismatch 扱い、`provider.apply` を再実行 (旧 handle は残る) |
-
-::: tip
-"exactly-once on success" は kernel が provider 側の冪等性に依存しています。
-connector 実装は `apply()` を resource の **upsert** として、`destroy()` を
-**delete-if-exists** として書く必要があります。
-([Extending](/extending) — connector 実装の章)
-:::
-
-## Failure modes
-
-### Apply 中に `provider.apply` が throw
-
-- すでに applied な resource は逆 DAG 順で **best-effort destroy**。
-- `outcome.status: "failed-apply"`, kernel 側は `recordStore.upsert(... status: "failed")`
-  で row を残す (status 取得が 404 にならないように)。
-- **kernel process が落ちると rollback は走らない** (上記 warning 参照)。
-
-### Runtime-agent unreachable
-
-- kernel は HTTP error を `provider.apply` の throw として認識し、上記
-  rollback パスに入ります。
-- 部分的に cloud リソースが残る可能性があります。
-  `takosumi destroy --force` か手動の cloud cleanup が必要。
-
-### DB unreachable
-
-- `recordStore.upsert` 失敗で apply 結果が persist されない。
-  cloud 側 resource は実体としては存在するが、kernel は
-  「prior record 無し」として扱うため、次の destroy は 409 を返します
-  (上記 destroy 章)。`force: true` で fallback するか record を手動
-  復元する必要があります。
-
-### Apply outcome `failed-validation`
-
-- `provider.apply` を **一度も呼ばない** で 400 を返します。
-- `applied[]` は空、`issues[]` に validation 詳細。
-
-### Lock contention
-
-- in-process acquire は単に `await` で待つだけ。
-- HTTP 側にタイムアウトを実装していないため、長時間 apply 中に
-  別 CLI が deploy を投げると後続は **キューに並んで待ちます**。
-  必要なら client 側で timeout を設定してください。
-
-## 関連ページ
-
-- [Manifest](/manifest) — `requires:` / `${ref:...}` / `spec.artifact` の書き方
-- [Kernel HTTP API](/reference/kernel-http-api) — `POST /v1/deployments` 等
-- [Runtime-Agent API](/reference/runtime-agent-api) — apply / destroy /
-  describe envelope と connector dispatch
-- [Artifact Kinds](/reference/artifact-kinds) — `spec.artifact` の kind 検証経路
-- [Operator Bootstrap](/operator/bootstrap) — `recordStore` / `objectStorage`
-  の wiring
+- [Lifecycle Phases](/reference/lifecycle-phases)
+- [WAL Stages](/reference/wal-stages)
+- [Approval Invalidation Triggers](/reference/approval-invalidation)
+- [RevokeDebt Model](/reference/revoke-debt)
+- [Closed Enums](/reference/closed-enums)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Runtime-Agent API](/reference/runtime-agent-api)
+- [Readiness Probes](/reference/readiness-probes)
+- [Cross-Process Locks](/reference/cross-process-locks)

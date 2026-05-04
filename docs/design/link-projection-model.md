@@ -51,7 +51,9 @@ Secret exports must not project to plain `env`.
 
 ## Access defaults
 
-Grant-producing exports require explicit `access` unless the export declares `safeDefaultAccess`.
+Grant-producing exports require explicit `access` unless the export
+declares `safeDefaultAccess`. The closed v1 access mode vocabulary lives
+in [Target Model — Access mode enum](./target-model.md).
 
 ```yaml
 uses:
@@ -62,12 +64,14 @@ uses:
 
 ## Link mutation
 
+The closed v1 set of Link mutations:
+
 ```text
 rematerialize:
   same source / access / projection, refresh material
 
 reproject:
-  projection changes
+  projection family or shape changes
 
 regrant:
   access mode or grant details change
@@ -76,26 +80,67 @@ rewire:
   source export changes
 
 revoke:
-  link removed
+  link removed; generated material revoked
 
 retain-generated:
-  generated material retained with approval
+  generated material retained with approval after a rewire / revoke
+
+no-op:
+  resolution determined no change is required for this link
+
+repair:
+  recovery-driven mutation that reconciles a link from `failed` or `debt`
+  back to a healthy state without changing source / access / projection
 ```
 
-## Link materialization states
+No new mutation kinds without RFC (CONVENTIONS.md §6).
 
-```text
-pending
-materializing
-materialized
-stale
-rematerializing
-revoking
-revoked
-failed
-debt
-```
+## Link mutation × state transition
+
+Rows are mutations, columns are the link's current state. Each cell records
+the next state when the mutation is applied. `—` means the mutation is
+illegal in that state (resolution / plan must reject). `debt!` means the
+mutation may queue a `RevokeDebt` record per
+[Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md).
+
+| mutation \\ state | pending | materializing | materialized | stale | rematerializing | revoking | revoked | failed | debt |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rematerialize | materializing | — | rematerializing | rematerializing | — | — | — | rematerializing | — |
+| reproject | materializing | — | rematerializing | rematerializing | — | — | — | rematerializing | — |
+| regrant | materializing | — | rematerializing | rematerializing | — | — | — | rematerializing | — |
+| rewire | materializing | — | rematerializing | rematerializing | — | — | — | rematerializing | — |
+| revoke | revoked | — | revoking | revoking | revoking | — | — | revoking · debt! | — |
+| retain-generated | — | — | materialized | materialized | — | — | — | materialized | — |
+| no-op | pending | materializing | materialized | stale | rematerializing | revoking | revoked | failed | debt |
+| repair | — | — | — | — | — | — | — | rematerializing | revoking · debt! |
+
+Notes:
+
+- A mutation that targets an in-flight state (`materializing`, `rematerializing`, `revoking`) is always illegal in v1; recovery proceeds via `repair` after the in-flight operation lands in `failed` or `debt`.
+- `revoke` from `failed` and `repair` from `debt` may queue a RevokeDebt when external cleanup cannot complete; see Object revoke flow in [Object Model](./object-model.md).
+- `retain-generated` is only legal when accompanied by an approval that satisfies all
+  [Approval invalidation triggers](./policy-risk-approval-error-model.md).
+- `no-op` always preserves state and emits no journal effects.
+- Generated child object lifecycle follows the [Object Model revoke participation matrix](./object-model.md).
 
 ## Collision rules
 
-If a Link projection would collide with a literal target input field, environment variable, runtime binding, mount path, or reserved target name, resolution fails unless a future explicit override mechanism is added. Public v1 has no override.
+When a Link projection would collide with another resolved binding, the
+kernel must apply the precedence list in resolution order. The first match
+wins; later inputs that would overwrite an earlier binding fail the
+resolution.
+
+```text
+1. literal target input field        (strongest)
+2. environment variable already set on the target
+3. runtime binding declared by the target descriptor
+4. mount path already declared by the target
+5. reserved target name in the target's vocabulary
+6. projection produced by this link  (weakest)
+```
+
+Detected collisions surface as the `collision-detected` Risk in
+[Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md)
+and fail-closed unless the resolution provides a deterministic precedence
+match. Public v1 has no manifest-level override mechanism. Operator-side
+overrides, if introduced later, must enter through a separate RFC.

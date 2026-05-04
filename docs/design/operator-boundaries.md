@@ -47,6 +47,13 @@ The manifest references catalog aliases and namespace paths visible in the activ
 
 Core canonical state stores references and handles, not raw secret values. External I/O and credentials stay inside implementation / connector / runtime boundary. Secret partitions are Space-scoped unless operator policy explicitly shares them.
 
+## Connector boundary
+
+Connectors are operator-installed and operator-controlled. They are
+addressed as `connector:<id>` per [DataAsset Model — Connector contract](./data-asset-model.md);
+the public manifest never names a connector. Connector visibility,
+acceptedKinds, and signing expectations are operator-governed and Space-scoped.
+
 ## Production mode
 
 Production must fail closed when required operator ports, trusted implementations, Space policies, or Space catalog assignments are missing. Dev fallback must not be silently accepted in production.

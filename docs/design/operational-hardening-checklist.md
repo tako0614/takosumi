@@ -52,8 +52,8 @@
 ## Policy and approval
 
 - [ ] Approvals bind to snapshot digest, operation plan digest, and effect details.
-- [ ] Approval invalidation is implemented.
-- [ ] Plan risks have stable risk ids.
+- [ ] Approval invalidation triggers are implemented per the closed v1 set in [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md).
+- [ ] Plan risks have stable risk ids and only emit kinds drawn from the closed v1 Risk enum.
 - [ ] Error hints are classified as safeFix, requiresPolicyReview, or operatorFix.
 
 ## Secrets
