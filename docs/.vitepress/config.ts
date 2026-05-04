@@ -1,4 +1,4 @@
-import { defineConfig, type DefaultTheme } from "vitepress";
+import { type DefaultTheme, defineConfig } from "vitepress";
 
 const jaSidebar: DefaultTheme.SidebarMulti = {
   "/": [
@@ -13,6 +13,37 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Manifest",
       items: [
         { text: "Manifest (Shape Model)", link: "/manifest" },
+        {
+          text: "Manifest Model (Design)",
+          link: "/design/manifest-model",
+        },
+      ],
+    },
+    {
+      text: "Design",
+      items: [
+        { text: "Overview", link: "/design/" },
+        { text: "Manifest Model", link: "/design/manifest-model" },
+        {
+          text: "Core Deployment Model",
+          link: "/design/core-deployment-model",
+        },
+        {
+          text: "Execution Lifecycle",
+          link: "/design/execution-lifecycle",
+        },
+        {
+          text: "Routing Model",
+          link: "/design/routing-model",
+        },
+        {
+          text: "Artifacts and Supply Chain",
+          link: "/design/artifacts-and-supply-chain",
+        },
+        {
+          text: "Operator Boundaries",
+          link: "/design/operator-boundaries",
+        },
       ],
     },
     {
@@ -68,6 +99,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
 const jaNav: DefaultTheme.NavItem[] = [
   { text: "Quickstart", link: "/getting-started/quickstart" },
   { text: "Manifest", link: "/manifest" },
+  { text: "Design", link: "/design/" },
   { text: "Reference", link: "/reference/shapes" },
   { text: "Operator", link: "/operator/bootstrap" },
 ];
@@ -93,8 +125,7 @@ export default defineConfig({
     ],
     search: { provider: "local" },
     editLink: {
-      pattern:
-        "https://github.com/tako0614/takosumi/edit/master/docs/:path",
+      pattern: "https://github.com/tako0614/takosumi/edit/master/docs/:path",
       text: "GitHub でこのページを編集",
     },
     footer: {

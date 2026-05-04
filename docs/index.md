@@ -44,22 +44,30 @@ features:
 
 Takosumi は **6 つの JSR package** で配布される:
 
-| Package                                                                                        | Role                                                                  |
-| ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)                           | Shape / Provider / Template の型契約                                  |
-| [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)                               | HTTP server + apply pipeline + state DB + worker daemon               |
-| [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)                             | shape catalog + provider plugins + templates + factories             |
-| [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)                 | cloud SDK / OS executor (data plane)                                  |
-| [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                                     | `takosumi deploy` / `takosumi server` 等の CLI                        |
-| [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                                             | umbrella: 上記 5 つを再公開                                           |
+| Package                                                                         | Role                                                     |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | Shape / Provider / Template の型契約                     |
+| [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | HTTP server + apply pipeline + state DB + worker daemon  |
+| [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | shape catalog + provider plugins + templates + factories |
+| [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | cloud SDK / OS executor (data plane)                     |
+| [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi deploy` / `takosumi server` 等の CLI           |
+| [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | umbrella: 上記 5 つを再公開                              |
 
 詳細は [Concepts](/getting-started/concepts) を参照。
 
 ## 関連 docs
 
-- [Quickstart](/getting-started/quickstart) — `takosumi server` 1 コマンドで dev → cloud deploy まで
-- [Manifest (Shape Model)](/manifest) — `resources[]` / `template:` / `${ref:...}` / `${secret-ref:...}` syntax
+- [Quickstart](/getting-started/quickstart) — `takosumi server` 1 コマンドで dev
+  → cloud deploy まで
+- [Manifest (Shape Model)](/manifest) — `resources[]` / `template:` /
+  `${ref:...}` / `${secret-ref:...}` syntax
+- [Design Overview](/design/) — manifest / deployment core / execution / routing
+  / artifact / operator boundary の設計 notes
+- [Manifest Model](/design/manifest-model) — 次期 `components[]` /
+  plugin-defined contract / provider / bundle model
 - [Shape Catalog](/reference/shapes) — 5 shapes の spec / outputs / capabilities
-- [Provider Plugins](/reference/providers) — 21 providers の cloud × shape matrix
+- [Provider Plugins](/reference/providers) — 21 providers の cloud × shape
+  matrix
 - [CLI Reference](/reference/cli) — 全 subcommand × flag × env
-- [Operator Bootstrap](/operator/bootstrap) — `createTakosumiProductionProviders` の wire-in 例
+- [Operator Bootstrap](/operator/bootstrap) —
+  `createTakosumiProductionProviders` の wire-in 例
