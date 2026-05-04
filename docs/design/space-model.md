@@ -1,0 +1,208 @@
+# Space Model
+
+`Space` is the top-level isolation boundary for Takosumi v1.
+
+A manifest does not declare a Space. The deploy / preview / apply request is executed in a Space chosen by actor auth, API path, operator context, or CLI profile. The same manifest may be resolved differently in different Spaces because each Space has its own namespace scope, policy, allowed catalog releases, secrets, artifacts, approvals, journals, observations, and GroupHeads.
+
+## Space root rule
+
+```text
+Space is the boundary of meaning, authority, and ownership.
+```
+
+Every `Deployment`, `ResolutionSnapshot`, `DesiredSnapshot`, `OperationJournal`, `ObservationSet`, `RevokeDebt`, `ActivationSnapshot`, approval, and `GroupHead` belongs to exactly one Space.
+
+```yaml
+Space:
+  id: space:acme-prod
+  displayName: Acme Production
+  defaultCatalogReleaseId: catalog-release-2026-05-04.1
+  allowedCatalogReleaseIds:
+    - catalog-release-2026-05-04.1
+  policyPack: prod/strict
+  namespaceRegistryDigest: sha256:...
+  secretPartition: space:acme-prod
+  artifactPartition: space:acme-prod
+```
+
+## Space vs namespace
+
+A namespace path is a name inside a Space-scoped namespace table.
+
+```text
+takos.oauth.token
+billing.default
+takos.database.primary
+```
+
+The same namespace path in two Spaces is not the same ExportDeclaration unless both Spaces explicitly import or share the same export snapshot.
+
+```text
+space:acme-prod / takos.database.primary
+space:acme-dev  / takos.database.primary
+```
+
+These are separate resolution subjects.
+
+## Address qualification
+
+Canonical records carry `spaceId` as part of identity. Text addresses may be rendered either as a tuple or as a qualified address.
+
+```text
+(space:acme-prod, object:api)
+space:acme-prod/object:api
+space:acme-prod/link:api.DATABASE_URL
+```
+
+The tuple form is preferred for storage. The qualified string is useful for logs, plan output, and audit events.
+
+## Namespace scope stack
+
+Resolution happens inside a Space. The resolver checks scopes in this order:
+
+```text
+1. deployment-local object namespace
+2. deployment-local generated namespace
+3. group namespace
+4. environment namespace, if the Space defines environments
+5. space namespace
+6. operator namespace granted to this Space
+7. external participant namespace registered into this Space
+8. explicitly shared namespace imports from another Space
+```
+
+If a namespace path exists in multiple scopes, the first matching scope wins only when shadowing policy allows it. Production policy should deny or require approval for meaningful shadowing.
+
+## Reserved prefixes
+
+Reserved prefixes are global names, but visibility is still Space-scoped.
+
+```text
+takos
+operator
+system
+```
+
+Only the operator may publish these prefixes. A reserved export such as `takos.oauth.token` must still be granted or made visible to the Space before resolution can use it.
+
+## External participant registration
+
+External participants register exports into a Space or into an operator namespace that is explicitly granted to Spaces.
+
+```yaml
+ExternalNamespaceRegistration:
+  spaceId: space:acme-prod
+  path: takos.database.primary
+  owner:
+    kind: external-participant
+    id: db-platform
+  exportSnapshotId: export-snapshot:...
+  freshness:
+    state: fresh
+```
+
+External participants must not publish into another Space unless operator policy authorizes that participant for that Space.
+
+## Cross-space links
+
+Cross-space links are denied by default.
+
+A Link may use an export from another Space only through an explicit `SpaceExportShare` or operator-approved namespace import.
+
+```yaml
+SpaceExportShare:
+  fromSpaceId: space:platform
+  toSpaceId: space:acme-prod
+  exportPath: takos.oauth.token
+  exportSnapshotId: export-snapshot:...
+  allowedAccess:
+    - read
+    - call
+  expiresAt: optional
+```
+
+Resolution records the share in `ResolutionSnapshot`. Plan output must show cross-space usage as a risk.
+
+## Space-owned data boundaries
+
+A Space owns or selects the following partitions:
+
+```text
+namespace registry visibility
+secret-store partition
+artifact visibility / retention policy
+operation journals
+observation sets
+audit event partition
+approvals and policy decisions
+group heads and activation history
+external participant registrations
+```
+
+Space isolation does not mean all data is physically stored in a separate database. It means every read, write, resolution, and operation is scoped by `spaceId` and policy.
+
+## Group inside Space
+
+A `Group` is a deployment stream inside a Space. `GroupHead` identity is:
+
+```text
+spaceId + groupId
+```
+
+Examples:
+
+```text
+space:acme-prod/group:web
+space:acme-prod/group:api
+space:acme-dev/group:web
+```
+
+GroupHead updates are serialized inside the owning Space. A Group cannot become current in another Space.
+
+## Space invariants
+
+```text
+Space containment invariant:
+  No Deployment may resolve, materialize, activate, observe, or destroy outside its Space unless an explicit SpaceExportShare or operator import permits it.
+
+Namespace isolation invariant:
+  Namespace paths are Space-scoped. Same path in different Spaces is not the same export by default.
+
+Secret isolation invariant:
+  Secret references created for a Space must not be projected into another Space unless an explicit share policy allows it.
+
+Artifact isolation invariant:
+  DataAsset visibility is Space-scoped unless operator artifact policy allows sharing.
+
+Journal isolation invariant:
+  OperationJournal entries belong to one Space and must not be used as recovery authority in another Space.
+
+Activation isolation invariant:
+  ActivationSnapshot and GroupHead updates are Space-local.
+```
+
+## Minimal example
+
+The manifest does not mention Space.
+
+```yaml
+components:
+  api:
+    target: docker-container
+    uses:
+      DATABASE_URL:
+        use: takos.database.primary
+        access: read-write
+```
+
+When applied in `space:acme-prod`, the path resolves against the production Space namespace table.
+
+```text
+space:acme-prod/takos.database.primary
+```
+
+When applied in `space:acme-dev`, the same manifest resolves against the development Space namespace table.
+
+```text
+space:acme-dev/takos.database.primary
+```
