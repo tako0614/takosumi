@@ -15,25 +15,28 @@ takosumi version
 ```bash
 export TAKOSUMI_DEV_MODE=1
 export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_REMOTE_URL=http://localhost:8788
 
 # Boot kernel + embedded runtime-agent on the same machine
 takosumi server --port 8788 &
 
 # Scaffold + deploy
-takosumi init my-app.yml --template selfhosted-single-vm
-takosumi deploy my-app.yml --remote http://localhost:8788 --token $TAKOSUMI_DEPLOY_TOKEN
-takosumi status --remote http://localhost:8788 --token $TAKOSUMI_DEPLOY_TOKEN
-takosumi destroy my-app.yml --remote http://localhost:8788 --token $TAKOSUMI_DEPLOY_TOKEN
+takosumi init --project --template selfhosted-single-vm
+takosumi doctor
+takosumi deploy
+takosumi status
+takosumi destroy
 ```
 
 ## Commands
 
 | Command                                                             | Purpose                                              |
 | ------------------------------------------------------------------- | ---------------------------------------------------- |
-| `takosumi deploy <manifest>`                                        | apply (apply/plan/destroy via flag)                  |
-| `takosumi destroy <manifest> [--force]`                             | tear down a previously-applied manifest              |
+| `takosumi deploy [manifest]`                                        | apply; defaults to `.takosumi/manifest.yml`          |
+| `takosumi destroy [manifest] [--force]`                             | tear down a previously-applied manifest              |
 | `takosumi status [<name>]`                                          | query kernel for current deployment state            |
-| `takosumi plan <manifest>`                                          | dry-run (validate + DAG, no provider.apply)          |
+| `takosumi plan [manifest]`                                          | dry-run (validate + DAG, no provider.apply)          |
+| `takosumi doctor`                                                   | show manifest / mode / token before deploy           |
 | `takosumi server [--port] [--no-agent]`                             | boot kernel + embedded agent                         |
 | `takosumi runtime-agent serve`                                      | standalone agent (multi-host production)             |
 | `takosumi runtime-agent list`                                       | show registered connectors on an agent               |
@@ -42,7 +45,7 @@ takosumi destroy my-app.yml --remote http://localhost:8788 --token $TAKOSUMI_DEP
 | `takosumi artifact list [--limit]` / `rm <hash>` / `gc [--dry-run]` | artifact store management                            |
 | `takosumi artifact kinds`                                           | list registered artifact kinds                       |
 | `takosumi migrate [--dry-run]`                                      | run kernel DB migrations                             |
-| `takosumi init [--template]`                                        | manifest scaffold                                    |
+| `takosumi init [--template] [--project]`                            | manifest scaffold                                    |
 | `takosumi version`                                                  | print version                                        |
 
 ## Env vars
@@ -62,8 +65,10 @@ Priority (highest first):
 | `TAKOSUMI_LOG_LEVEL=warn`                     | suppress dev-mode in-memory fallback notices                        |
 | `TAKOSUMI_KERNEL_URL` / `TAKOSUMI_TOKEN`      | **deprecated** aliases of the above                                 |
 
-See [`docs/quickstart.md`](../../docs/quickstart.md) for full multi-host
-production setup, cloud credential placement, and troubleshooting.
+See
+[`docs/getting-started/quickstart.md`](../../docs/getting-started/quickstart.md)
+for full multi-host production setup, cloud credential placement, and
+troubleshooting.
 
 ## See also
 

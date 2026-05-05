@@ -30,15 +30,28 @@ takosumi version
 
 ---
 
-## 2. Local dev (zero-config)
+## 2. Local authoring (zero-config)
 
-The embedded agent starts automatically, so the env setup stays minimal:
+Start with CLI local mode. It does not need a kernel server and its state is
+ephemeral, so it is best for authoring and smoke tests:
+
+```bash
+takosumi init --project --template selfhosted-single-vm
+takosumi doctor
+takosumi deploy
+```
+
+`doctor` prints the manifest path, local / remote mode, and token state.
+
+For a remote-kernel dev loop, make the URL/token explicit:
 
 ```bash
 export TAKOSUMI_DEV_MODE=1
+export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_REMOTE_URL=http://localhost:8788
 takosumi server --port 8788 &
 # stdout: "embedded runtime-agent listening at http://127.0.0.1:8789"
-takosumi init --project --template selfhosted-single-vm
+takosumi doctor
 takosumi deploy
 ```
 
@@ -46,8 +59,8 @@ takosumi deploy
 secrets, an unencrypted DB, and unsafe defaults. Production / staging stays
 fail-closed.
 
-In local dev, the agent and kernel share a process, so cloud credentials
-exported into the env reach the agent connectors directly.
+In this dev-server mode, the agent and kernel share a process, so cloud
+credentials exported into the env reach the agent connectors directly.
 
 ---
 
@@ -220,10 +233,11 @@ separate host in production, so the embedded one is unnecessary).
 ## 6. CLI command reference
 
 ```
-takosumi deploy <manifest>            # apply (local mode in-process / remote mode HTTP)
-takosumi destroy <manifest>           # destroy in reverse order
+takosumi deploy [manifest]            # apply (default: .takosumi/manifest.yml)
+takosumi destroy [manifest]           # destroy in reverse order
 takosumi status [<name>]              # current resource state
-takosumi plan <manifest>              # dry-run
+takosumi plan [manifest]              # dry-run
+takosumi doctor                       # show manifest / mode / token
 takosumi server [--port 8788]         # start kernel + embedded agent
                 [--no-agent]          # suppress embedded agent (production)
                 [--agent-port 8789]   # set embedded agent port
@@ -233,6 +247,7 @@ takosumi runtime-agent serve          # start standalone agent (multi-host)
                 [--env-file <path>]
 takosumi migrate                      # DB migrations
 takosumi init [--template ...]        # manifest scaffold
+                [--project]          # write .takosumi/manifest.yml
 takosumi version
 ```
 

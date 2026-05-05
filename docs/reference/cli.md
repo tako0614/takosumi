@@ -264,7 +264,20 @@ If `<output>` is given, the rendered Manifest is written to that path; otherwise
 it is printed to stdout. Templates render with `apiVersion: "1.0"` and
 `kind: Manifest` set, matching the contract envelope. When `--project` is set
 and `<output>` is omitted, the target is `.takosumi/manifest.yml`, matching the
-discovery order used by deploy / plan / destroy.
+discovery order used by deploy / plan / destroy / doctor.
+
+### `takosumi doctor`
+
+Show the manifest, target mode, and auth state that the CLI will use.
+
+```text
+takosumi doctor [--manifest <path>] [--remote <url>] [--token <t>]
+```
+
+`doctor` follows the same manifest discovery and local/remote resolution as
+`deploy`. It prints the selected manifest path, resolved resource count,
+deployment name when present, local vs remote mode, token presence, and the next
+command to run. It exits `1` when the manifest is missing or invalid.
 
 ### `takosumi artifact <push | list | rm | gc | kinds>`
 
@@ -334,7 +347,8 @@ deployed through the normal `takosumi deploy` path. The reserved trigger and
 
 ## Project Layout
 
-The CLI resolves the deployment manifest from the first match in this order:
+`deploy` / `plan` / `destroy` / `doctor` resolve the deployment manifest from
+the first match in this order:
 
 1. `<manifest>` argument or `--manifest <path>` flag
 2. `.takosumi/manifest.yml` (recommended layout)

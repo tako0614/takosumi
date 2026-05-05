@@ -6,9 +6,11 @@ import { applyLocal, expandManifestLocal, planLocal } from "../local_runner.ts";
 
 function createDeployCommand() {
   return new Command()
-    .description("Apply a Takosumi manifest")
+    .description(
+      "Apply a Takosumi manifest (defaults to .takosumi/manifest.yml)",
+    )
     .arguments("[manifest:string]")
-    .option("--manifest <path:string>", "Manifest path")
+    .option("--manifest <path:string>", "Manifest path, same as [manifest]")
     .option("--remote <url:string>", "Remote kernel URL")
     .option("--token <token:string>", "Auth token")
     .option("--dry-run", "Validate only, do not apply")

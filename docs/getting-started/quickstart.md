@@ -25,23 +25,36 @@ takosumi version
 
 ---
 
-## 2. Local dev (zero-config)
+## 2. Local authoring (zero-config)
 
-embedded agent が自動起動するので env 設定は最小限:
+まずは kernel server を起動せず、CLI の local mode で manifest を確認できます。
+状態は process 終了で消えるので、authoring と smoke test 向けです。
+
+```bash
+takosumi init --project --template selfhosted-single-vm
+takosumi doctor
+takosumi deploy
+```
+
+`doctor` は使う manifest、local / remote mode、token 有無を表示します。
+
+remote kernel に投げる dev loop は次のように URL/token を明示します。
 
 ```bash
 export TAKOSUMI_DEV_MODE=1
+export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_REMOTE_URL=http://localhost:8788
 takosumi server --port 8788 &
 # stdout: "embedded runtime-agent listening at http://127.0.0.1:8789"
-takosumi init my-app.yml --template selfhosted-single-vm
-takosumi deploy my-app.yml
+takosumi doctor
+takosumi deploy
 ```
 
 `TAKOSUMI_DEV_MODE=1` は dev 用の単一 opt-out flag。plaintext secret /
 unencrypted DB / unsafe defaults を許可。production / staging では fail-closed。
 
-local dev では agent と kernel が同 process なので、env に置いた cloud
-credential はそのまま agent connector に届きます。
+この dev server mode では agent と kernel が同 process なので、env に置いた
+cloud credential はそのまま agent connector に届きます。
 
 ---
 
@@ -214,10 +227,11 @@ takosumi server --no-agent --port 8788 &
 ## 6. CLI コマンドリファレンス
 
 ```
-takosumi deploy <manifest>            # apply (local mode in-process / remote mode HTTP)
-takosumi destroy <manifest>           # 逆順 destroy
+takosumi deploy [manifest]            # apply (default: .takosumi/manifest.yml)
+takosumi destroy [manifest]           # 逆順 destroy
 takosumi status [<name>]              # 現在の resource state
-takosumi plan <manifest>              # dry-run
+takosumi plan [manifest]              # dry-run
+takosumi doctor                       # manifest / mode / token を表示
 takosumi server [--port 8788]         # kernel + embedded agent 起動
                 [--no-agent]          # embedded agent 抑止 (production)
                 [--agent-port 8789]   # embedded agent の port 指定
@@ -227,6 +241,7 @@ takosumi runtime-agent serve          # standalone agent 起動 (multi-host)
                 [--env-file <path>]
 takosumi migrate                      # DB migrations
 takosumi init [--template ...]        # manifest scaffold
+                [--project]          # .takosumi/manifest.yml を作る
 takosumi version
 ```
 
