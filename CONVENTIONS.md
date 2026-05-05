@@ -57,13 +57,13 @@
 - namespace prefix を付けない (× `aws:scale-to-zero` ✕)。
 - capability semantics は **shape 側で型定義され、 contract がその source of
   truth**。 各 shape ファイル (`packages/plugins/src/shapes/<shape>.ts`) が
-  `WebServiceCapability` / `ObjectStoreCapability` 等の string union 型を
-  export する。 新 capability の追加はその union への追加 (内部) または shape
-  RFC (外部からの提案) を要する。
+  `WebServiceCapability` / `ObjectStoreCapability` 等の string union 型を export
+  する。 新 capability の追加はその union への追加 (内部) または shape RFC
+  (外部からの提案) を要する。
 - provider plugin は `ProviderPlugin<Spec, Outputs, Capability>` の Capability
   generic に shape の union を渡すか、 array literal 末尾に
-  `satisfies readonly XxxCapability[]` を付けることで **typo を compile-time
-  に reject** できる。 第三者の cloud 拡張 (実験的 capability) は別 union を
+  `satisfies readonly XxxCapability[]` を付けることで **typo を compile-time に
+  reject** できる。 第三者の cloud 拡張 (実験的 capability) は別 union を
   作って同じ `satisfies` で局所的に縛れる。
 
 ## 3. Output schema convention

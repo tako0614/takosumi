@@ -8,7 +8,7 @@
       "ref": "materialize.cloudflare-workers-dispatch-js-http@v1",
       "contracts": {
         "runtime": "runtime.js-worker@v1",
-        "artifact": "artifact.js-module@v1",
+        "artifact": "artifact.js-bundle@v1",
         "interfaces": [
           "interface.http@v1"
         ]

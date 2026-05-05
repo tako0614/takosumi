@@ -44,6 +44,10 @@ import {
   registerDeployPublicRoutes,
   type RegisterDeployPublicRoutesOptions,
 } from "./deploy_public_routes.ts";
+import {
+  registerMetricsRoutes,
+  type RegisterMetricsRoutesOptions,
+} from "./metrics_routes.ts";
 import { DefaultGroupSummaryStatusProjector } from "../services/status/mod.ts";
 import { permissionDenied } from "../shared/errors.ts";
 
@@ -73,6 +77,8 @@ export interface CreateApiAppOptions {
    */
   readonly registerDeployPublicRoutes?: boolean;
   readonly deployPublicRouteOptions?: RegisterDeployPublicRoutesOptions;
+  readonly registerMetricsRoutes?: boolean;
+  readonly metricsRouteOptions?: RegisterMetricsRoutesOptions;
   readonly sourceAdapters?: PublicDeploySourceAdapters;
   /** Optional extension point for mounting current/future route modules. */
   readonly configure?: (app: HonoApp) => void | Promise<void>;
@@ -116,6 +122,8 @@ export async function createApiApp(
   const deployPublicRoutesMounted = options.registerDeployPublicRoutes ??
     (role === "takosumi-api" &&
       options.deployPublicRouteOptions !== undefined);
+  const metricsRoutesMounted = options.registerMetricsRoutes ??
+    (role === "takosumi-api" && options.metricsRouteOptions !== undefined);
 
   if (internalRoutesMounted) assertRoleCapability(role, "api.internal.host");
   if (publicRoutesMounted) assertRoleCapability(role, "api.public.host");
@@ -128,9 +136,12 @@ export async function createApiApp(
     return c.json(createApiCapabilitiesDescription(role, {
       internalRoutesMounted,
       publicRoutesMounted,
+      deployPublicRoutesMounted,
+      artifactRoutesMounted,
       runtimeAgentRoutesMounted,
       openApiRouteMounted,
       readinessRoutesMounted,
+      metricsRoutesMounted,
     }));
   });
 
@@ -167,6 +178,16 @@ export async function createApiApp(
     registerDeployPublicRoutes(app, options.deployPublicRouteOptions ?? {});
   }
 
+  if (metricsRoutesMounted) {
+    if (!options.metricsRouteOptions) {
+      throw new Error(
+        "registerMetricsRoutes was requested but metricsRouteOptions " +
+          "(with observability) was not supplied",
+      );
+    }
+    registerMetricsRoutes(app, options.metricsRouteOptions);
+  }
+
   if (readinessRoutesMounted) {
     registerReadinessRoutes(app, {
       probes: options.readinessRouteProbes ?? createDefaultReadinessProbes(),
@@ -179,6 +200,8 @@ export async function createApiApp(
         createPaaSOpenApiDocument({
           internalRoutesMounted,
           publicRoutesMounted,
+          deployPublicRoutesMounted,
+          artifactRoutesMounted,
           runtimeAgentRoutesMounted,
           readinessRoutesMounted,
         }));
@@ -591,15 +614,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requiredString(value: unknown, field: string): string {
-  if (typeof value === "string" && value.length > 0) return value;
-  throw new Error(`source.${field} is required`);
-}
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 function createDefaultSourceAdapters(
   _options: CreateApiAppOptions,
 ): PublicDeploySourceAdapters {
@@ -625,7 +639,8 @@ function createRuntimeAgentRouteOptions(
 }
 
 function defaultInternalServiceSecret(): string | undefined {
-  return Deno.env.get("TAKOSUMI_INTERNAL_SERVICE_SECRET");
+  return Deno.env.get("TAKOSUMI_INTERNAL_API_SECRET") ??
+    Deno.env.get("TAKOSUMI_INTERNAL_SERVICE_SECRET");
 }
 
 function createDefaultReadinessProbes(): ReadinessRouteProbes {

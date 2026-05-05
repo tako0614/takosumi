@@ -3,16 +3,16 @@
 このページは新しい **Shape + Provider + Template** model における manifest
 envelope の書き方をまとめます。`resources[]` で portable な
 [Shape](/reference/shapes) resource を declarative に並べ、`template:` で
-[Template](/reference/templates) を呼び、`${ref:...}` syntax で resource 間の output
-を配線します。
+[Template](/reference/templates) を呼び、`${ref:...}` syntax で resource 間の
+output を配線します。
 
 Takosumi v1 の manifest envelope は **closed shape** で、top-level は
 `apiVersion / kind / metadata / template / resources` の 5 field のみを
 受理します。`apiVersion: "1.0"` と `kind: Manifest` は固定値で、いずれも
-required。未知の top-level field を含む manifest は kernel の schema phase
-で reject されます ([Manifest Validation](/reference/manifest-validation))。
-本ページと [Manifest Validation](/reference/manifest-validation) が v1 envelope の
-canonical source です。
+required。未知の top-level field を含む manifest は kernel の schema phase で
+reject されます ([Manifest Validation](/reference/manifest-validation))。
+本ページと [Manifest Validation](/reference/manifest-validation) が v1 envelope
+の canonical source です。
 
 ## Envelope 概観
 
@@ -21,6 +21,7 @@ apiVersion: "1.0" # required (kernel が validate する固定値)
 kind: Manifest # required (上記同様、固定値)
 metadata:
   name: my-app # 論理 app 名 (deployment record の name に使われる)
+  labels: { tier: demo } # optional string labels
 template: # optional: Template invocation
   template: web-app-on-cloudflare@v1
   inputs: { ... }
@@ -32,12 +33,11 @@ resources: # optional: portable Shape resources
     spec: { name: app-assets }
 ```
 
-`apiVersion` と `kind` は **required** で、 値もそれぞれ `"1.0"` /
-`Manifest` 固定。 これら 2 field を欠いた manifest は kernel
-(`POST /v1/deployments`) と CLI local mode の両方で **400 / envelope
-rejected** される。 `1.0` は将来の breaking schema 変更で `"2.0"`
-に bump され、 互換性のない manifest が混在しても kernel が version
-ごとに routing できるようにする番号。
+`apiVersion` と `kind` は **required** で、 値もそれぞれ `"1.0"` / `Manifest`
+固定。 これら 2 field を欠いた manifest は kernel (`POST /v1/deployments`) と
+CLI local mode の両方で **400 / envelope rejected** される。 `1.0` は将来の
+breaking schema 変更で `"2.0"` に bump され、 互換性のない manifest が混在しても
+kernel が version ごとに routing できるようにする番号。
 
 `template` と `resources[]` は併用できます。`template` の expansion 結果に
 `resources[]` を **append** する semantics です
@@ -169,11 +169,15 @@ template が `app` / `db` / `assets` / `domain` を expand した上に、追加
 template 内部の参照は template 側で既に解決されており、外側 `resources[]` からも
 `${ref:app.url}` で参照できます。
 
-## Side-by-side: legacy profile vs new shape model
+## Migration note: legacy target/services shape is rejected
+
+左側は historical form で、現行 kernel の public v1 manifest validation では
+受理されません。新しい manifest は右側の `apiVersion: "1.0"` / `kind: Manifest`
+/ `resources[]` shape model で書きます。
 
 ::: code-group
 
-```yaml [legacy (target + services)]
+```yaml [rejected legacy form]
 target: cloudflare
 services:
   app:
@@ -230,12 +234,12 @@ resources:
 ## 関連ページ
 
 - [Reference Index](/reference/) — 全 v1 仕様の索引
-- [Shape Catalog](/reference/shapes) — 各 Shape の spec / outputs /
-  capabilities
+- [Shape Catalog](/reference/shapes) — 各 Shape の spec / outputs / capabilities
 - [Provider Plugins](/reference/providers) — provider id と実装
 - [Templates](/reference/templates) — `template:` で展開する bundled template
-- [Access Modes](/reference/access-modes) — `uses` で指定する access mode
+- [Access Modes](/reference/access-modes) — link projection が使う access mode
 - [Connector Contract](/reference/connector-contract) — `connector:<id>` 境界
-- [DataAsset Policy](/reference/data-asset-policy) — artifact policy / transform approval
+- [DataAsset Policy](/reference/data-asset-policy) — artifact policy / transform
+  approval
 - [Operator Bootstrap](/operator/bootstrap) — operator 側 wire 手順
 - [Extending](/extending) — provider / shape / template 拡張

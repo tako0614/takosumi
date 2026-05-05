@@ -1,6 +1,8 @@
 # Catalog Release and Descriptor Model
 
-Takosumi uses distributed descriptors, but live descriptor web is not runtime authority. Runtime authority comes from a `CatalogRelease` adopted by the operator and allowed for the Space that is resolving the deployment.
+Takosumi uses distributed descriptors, but live descriptor web is not runtime
+authority. Runtime authority comes from a `CatalogRelease` adopted by the
+operator and allowed for the Space that is resolving the deployment.
 
 ## Descriptor source vs runtime authority
 
@@ -18,7 +20,8 @@ ResolutionSnapshot:
   deployment-specific fixed semantic snapshot inside one Space
 ```
 
-JSON-LD is an ingestion format, not the kernel runtime reasoning engine. Kernel runtime uses normalized descriptor records.
+JSON-LD is an ingestion format, not the kernel runtime reasoning engine. Kernel
+runtime uses normalized descriptor records.
 
 ## CatalogRelease
 
@@ -41,12 +44,22 @@ CatalogRelease:
   activatedAt: "2026-05-04T00:10:00Z"
 ```
 
-Resolution uses exactly one CatalogRelease allowed by the current Space. Apply uses the CatalogRelease recorded in `ResolutionSnapshot`. CatalogRelease activation and Space assignment are serialized operator operations.
-
+Resolution uses exactly one CatalogRelease allowed by the current Space. Apply
+uses the CatalogRelease recorded in `ResolutionSnapshot`. CatalogRelease
+activation and Space assignment are serialized operator operations. The registry
+domain now implements the primitive pieces for this boundary: publisher key
+enrollment/revocation, Ed25519 signature verification of the canonical
+descriptor payload, signed descriptor persistence, and append-only per-Space
+adoption records. Public OperationPlan WAL now invokes the adopted release as a
+pre/post-commit verification hook: pre-commit verification fails closed before
+provider side effects, and post-commit verification failure is journaled with
+RevokeDebt for committed effects. Rich catalog-declared executable hook packages
+are modeled as an extension point on top of this verification hook boundary.
 
 ## Space assignment
 
-A CatalogRelease is not automatically visible to every Space. Operator policy assigns releases to Spaces.
+A CatalogRelease is not automatically visible to every Space. Operator policy
+assigns releases to Spaces.
 
 ```yaml
 SpaceCatalogAssignment:
@@ -123,4 +136,6 @@ descriptor URL + normalized descriptor digest + normalized context digests
 
 ## Production rule
 
-Public v1 manifests reference catalog aliases. Direct descriptor URL usage may exist in self-host development or catalog ingestion, but not as default public v1 syntax.
+Public v1 manifests reference catalog aliases. Direct descriptor URL usage may
+exist in self-host development or catalog ingestion, but not as default public
+v1 syntax.

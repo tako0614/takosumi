@@ -264,7 +264,11 @@ interface CoordinationAlarmInput {
   readonly payload?: Record<string, unknown>;
 }
 
-export default {
+interface CloudflareWorkerHandler {
+  fetch(request: Request, env: Env): Promise<Response>;
+}
+
+const worker: CloudflareWorkerHandler = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/healthz") {
@@ -295,6 +299,8 @@ export default {
     return Response.json({ error: "not found" }, { status: 404 });
   },
 };
+
+export default worker;
 
 async function readJsonObject(
   request: Request,

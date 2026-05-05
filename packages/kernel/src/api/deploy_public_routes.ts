@@ -1,22 +1,37 @@
 import type { Hono as HonoApp } from "hono";
 import type {
   JsonObject,
-  ManifestEnvelopeIssue,
   ManifestResource,
   PlatformContext,
+  PlatformOperationRecoveryMode,
   RefResolver,
   ResourceHandle,
-  TemplateValidationIssue,
 } from "takosumi-contract";
-import { getTemplateByRef, validateManifestEnvelope } from "takosumi-contract";
 import type { AppContext } from "../app_context.ts";
 import {
   applyV2,
   type ApplyV2Outcome,
   destroyV2,
   type DestroyV2Outcome,
+  type OperationPlanPreview,
+  type PlannedResource,
   type PriorAppliedSnapshot,
 } from "../domains/deploy/apply_v2.ts";
+import {
+  readDeploymentNameV1,
+  resolveManifestResourcesV1,
+} from "../domains/deploy/manifest_v1.ts";
+import { buildOperationPlanPreview } from "../domains/deploy/operation_plan_preview.ts";
+import {
+  appendOperationPlanJournalStages,
+  InMemoryOperationJournalStore,
+  type OperationJournalEntry,
+  type OperationJournalPhase,
+  type OperationJournalStage,
+  type OperationJournalStatus,
+  type OperationJournalStore,
+} from "../domains/deploy/operation_journal.ts";
+import { buildRefDag } from "../domains/deploy/ref_resolver_v2.ts";
 import {
   InMemoryTakosumiDeploymentRecordStore,
   recordsFromAppliedResources,
@@ -25,13 +40,27 @@ import {
   type TakosumiDeploymentRecordStore,
 } from "../domains/deploy/takosumi_deployment_record_store.ts";
 import {
+  type DeployPublicIdempotencyStore,
+  InMemoryDeployPublicIdempotencyStore,
+} from "../domains/deploy/deploy_public_idempotency_store.ts";
+import {
+  InMemoryRevokeDebtStore,
+  type RevokeDebtRecord,
+  type RevokeDebtStore,
+  type RevokeDebtSummary,
+  summarizeRevokeDebt,
+} from "../domains/deploy/revoke_debt_store.ts";
+import type {
+  CatalogReleaseVerificationResult,
+} from "../domains/registry/mod.ts";
+import {
   apiError,
   MalformedJsonRequestError,
   registerApiErrorHandler,
 } from "./errors.ts";
 
 /**
- * v0 CLI deploy endpoint contract.
+ * v1 CLI deploy endpoint contract.
  *
  *   POST /v1/deployments
  *   Authorization: Bearer <TAKOSUMI_DEPLOY_TOKEN>
@@ -41,19 +70,22 @@ import {
  *
  * The endpoint runs the same `applyV2` pipeline that the CLI uses in local
  * mode, against whatever shapes / providers the operator has registered with
- * the global contract registry. It is intentionally simple: bearer-token
- * shared-secret auth, no multi-tenant routing, no policy gating. It exists
- * so that `takosumi deploy ./manifest.yml --remote ... --token $T` can talk
- * to a hosted kernel without going through the heavier internal control
- * plane (`/internal/v1/deployments`).
+ * the global contract registry. It is intentionally simple: one deploy bearer
+ * maps to one operator-configured public deploy scope (`tenantId` / `spaceId`,
+ * default `"takosumi-deploy"`). Full per-actor Space auth and control-plane
+ * policy gating belong to the internal route set.
  *
  * If `TAKOSUMI_DEPLOY_TOKEN` is unset the route is disabled and falls
  * through to the framework default 404 — operators must explicitly opt in
  * by setting the env var.
  */
 export const TAKOSUMI_DEPLOY_PUBLIC_PATH = "/v1/deployments" as const;
+export const TAKOSUMI_IDEMPOTENCY_KEY_HEADER = "x-idempotency-key" as const;
+export const TAKOSUMI_IDEMPOTENCY_REPLAYED_HEADER =
+  "x-idempotency-replayed" as const;
 
 export type DeployPublicMode = "apply" | "plan" | "destroy";
+export type DeployPublicRecoveryMode = "inspect" | "continue" | "compensate";
 
 export interface DeployPublicResponse {
   readonly status: "ok";
@@ -63,6 +95,28 @@ export interface DeployPublicResponse {
 export interface DeployPublicDestroyResponse {
   readonly status: "ok";
   readonly outcome: DestroyV2Outcome;
+}
+
+export interface DeployPublicRecoveryInspectResponse {
+  readonly status: "ok";
+  readonly outcome: {
+    readonly status: "recovery-inspect";
+    readonly tenantId: string;
+    readonly deploymentName: string;
+    readonly journal?: DeploymentJournalSummary;
+    readonly entries: readonly DeploymentJournalEntrySummary[];
+  };
+}
+
+export interface DeployPublicRecoveryCompensateResponse {
+  readonly status: "ok";
+  readonly outcome: {
+    readonly status: "recovery-compensate";
+    readonly tenantId: string;
+    readonly deploymentName: string;
+    readonly journal?: DeploymentJournalSummary;
+    readonly debts: readonly DeploymentRevokeDebtRecordSummary[];
+  };
 }
 
 export interface RegisterDeployPublicRoutesOptions {
@@ -77,10 +131,18 @@ export interface RegisterDeployPublicRoutesOptions {
    * The optional `priorApplied` argument lets tests assert that the
    * route forwards the per-resource snapshot lookup so applyV2 can
    * short-circuit `provider.apply` on idempotent re-submissions.
+   * The optional `dryRun` argument is true for `mode: "plan"`.
+   * The optional `operationPlanPreview` argument is present after the route
+   * has recorded WAL prepare / pre-commit / commit stages for a real apply.
+   * The optional `recoveryMode` argument is `"normal"` unless the caller is
+   * resuming a matching WAL with `recoveryMode: "continue"`.
    */
   readonly applyResources?: (
     resources: readonly ManifestResource[],
     priorApplied?: ReadonlyMap<string, PriorAppliedSnapshot>,
+    dryRun?: boolean,
+    operationPlanPreview?: OperationPlanPreview,
+    recoveryMode?: PlatformOperationRecoveryMode,
   ) => Promise<ApplyV2Outcome>;
   /**
    * Optional injection point for tests so destroy runs against a fake.
@@ -89,10 +151,16 @@ export interface RegisterDeployPublicRoutesOptions {
    * test override receives the resources and an optional `handleFor`
    * resolver so that fake destroyers can assert the kernel passed the
    * persisted handles back through.
+   * The optional `operationPlanPreview` argument is present after the route
+   * has recorded WAL prepare / pre-commit / commit stages for destroy.
+   * The optional `recoveryMode` argument is `"normal"` unless the caller is
+   * resuming a matching WAL with `recoveryMode: "continue"`.
    */
   readonly destroyResources?: (
     resources: readonly ManifestResource[],
     handleFor?: (resource: ManifestResource) => ResourceHandle,
+    operationPlanPreview?: OperationPlanPreview,
+    recoveryMode?: PlatformOperationRecoveryMode,
   ) => Promise<DestroyV2Outcome>;
   /**
    * Real `AppContext` from which the public deploy route derives the
@@ -108,8 +176,9 @@ export interface RegisterDeployPublicRoutesOptions {
    */
   readonly appContext?: AppContext;
   /**
-   * Tenant id surfaced into `PlatformContext.tenantId` when deriving the
-   * context from `appContext`. Defaults to `"takosumi-deploy"`.
+   * Tenant / Space id surfaced into `PlatformContext.tenantId` and
+   * `PlatformContext.spaceId` when deriving the context from `appContext`.
+   * Defaults to `"takosumi-deploy"`.
    */
   readonly tenantId?: string;
   /** Override the platform context that `applyV2` receives. */
@@ -131,11 +200,45 @@ export interface RegisterDeployPublicRoutesOptions {
    */
   readonly recordStore?: TakosumiDeploymentRecordStore;
   /**
+   * Stores the first JSON response for each `(tenantId, X-Idempotency-Key)`
+   * tuple. A retry with the same key and byte-identical body replays that
+   * response without re-entering apply / destroy. A retry with the same key
+   * and a different body fails with 409 so one operation intent cannot be
+   * accidentally rebound to another manifest.
+   */
+  readonly idempotencyStore?: DeployPublicIdempotencyStore;
+  /**
+   * WAL stage record store for the public deploy route. SQL-backed stores
+   * persist `(spaceId, operationPlanDigest, journalEntryId, stage)` entries
+   * before side-effecting provider calls so retries have an execution
+   * authority beyond the compatibility deployment record.
+   */
+  readonly operationJournalStore?: OperationJournalStore;
+  /**
+   * RevokeDebt store used by `recoveryMode: "compensate"` and future
+   * post-commit cleanup paths. SQL-backed stores keep compensation debt
+   * visible across restarts; in-memory is only for tests / dev.
+   */
+  readonly revokeDebtStore?: RevokeDebtStore;
+  /**
+   * Optional CatalogRelease trust hook. When supplied, the route re-verifies
+   * the Space's adopted CatalogRelease at WAL pre-commit and post-commit.
+   * Verification failures fail closed before commit; post-commit failures
+   * journal the hook failure and enqueue RevokeDebt for committed effects.
+   */
+  readonly catalogReleaseVerifier?: CatalogReleaseWalHookVerifier;
+  /**
    * Wall-clock factory used when stamping `created_at` / `updated_at` on
    * persisted records. Defaults to `() => new Date().toISOString()`. Tests
    * override this to assert deterministic timestamps.
    */
   readonly now?: () => string;
+}
+
+export interface CatalogReleaseWalHookVerifier {
+  verifyCurrentReleaseForSpace(
+    spaceId: string,
+  ): Promise<CatalogReleaseVerificationResult | undefined>;
 }
 
 export function registerDeployPublicRoutes(
@@ -156,6 +259,13 @@ export function registerDeployPublicRoutes(
   const tenantId = options.tenantId ?? "takosumi-deploy";
   const recordStore: TakosumiDeploymentRecordStore = options.recordStore ??
     new InMemoryTakosumiDeploymentRecordStore();
+  const idempotencyStore: DeployPublicIdempotencyStore =
+    options.idempotencyStore ?? new InMemoryDeployPublicIdempotencyStore();
+  const operationJournalStore: OperationJournalStore =
+    options.operationJournalStore ?? new InMemoryOperationJournalStore();
+  const revokeDebtStore: RevokeDebtStore = options.revokeDebtStore ??
+    new InMemoryRevokeDebtStore();
+  const catalogReleaseVerifier = options.catalogReleaseVerifier;
   const now = options.now ?? (() => new Date().toISOString());
 
   const buildPlatformContext = (): PlatformContext => {
@@ -171,89 +281,130 @@ export function registerDeployPublicRoutes(
   };
 
   const applyResources = options.applyResources ??
-    ((resources, priorApplied) =>
+    ((resources, priorApplied, dryRun, operationPlanPreview, recoveryMode) =>
       applyV2({
         resources,
         context: buildPlatformContext(),
         ...(priorApplied ? { priorApplied } : {}),
+        ...(dryRun ? { dryRun } : {}),
+        ...(operationPlanPreview ? { operationPlanPreview } : {}),
+        ...(recoveryMode ? { recoveryMode } : {}),
       }));
 
   const destroyResources = options.destroyResources ??
-    ((resources, handleFor) =>
+    ((resources, handleFor, operationPlanPreview, recoveryMode) =>
       destroyV2({
         resources,
         context: buildPlatformContext(),
         ...(handleFor ? { handleFor } : {}),
+        ...(operationPlanPreview ? { operationPlanPreview } : {}),
+        ...(recoveryMode ? { recoveryMode } : {}),
       }));
 
-  app.post(TAKOSUMI_DEPLOY_PUBLIC_PATH, async (c) => {
-    const expected = getToken();
-    if (!expected) {
-      return c.json(apiError("not_found", "deploy endpoint disabled"), 404);
-    }
-    const presented = readBearerToken(c.req.header("authorization"));
-    if (!presented) {
-      return c.json(
-        apiError("unauthenticated", "missing bearer token"),
-        401,
-      );
-    }
-    if (!constantTimeEquals(presented, expected)) {
-      return c.json(apiError("unauthenticated", "invalid token"), 401);
-    }
-
-    const body = await readJsonBody(c.req.raw);
-    if (!body.ok) {
-      return c.json(apiError("invalid_argument", body.error), 400);
-    }
-    const rawManifest = body.value.manifest;
-    const mode = readMode(body.value.mode);
+  const executeDeployPublicPost = async (
+    body: Record<string, unknown>,
+  ): Promise<DeployPublicHandledResponse> => {
+    const rawManifest = body.manifest;
+    const mode = readMode(body.mode);
     if (!mode.ok) {
-      return c.json(apiError("invalid_argument", mode.error), 400);
+      return {
+        status: 400,
+        body: apiError("invalid_argument", mode.error),
+      };
     }
-    const resources = readManifestResources(rawManifest);
+    const recoveryMode = readRecoveryMode(body.recoveryMode);
+    if (!recoveryMode.ok) {
+      return {
+        status: 400,
+        body: apiError("invalid_argument", recoveryMode.error),
+      };
+    }
+    const resources = resolveManifestResourcesV1(rawManifest);
     if (!resources.ok) {
-      return c.json(apiError("invalid_argument", resources.error), 400);
+      return {
+        status: 400,
+        body: apiError("invalid_argument", resources.error),
+      };
     }
     const manifestObject = (rawManifest && typeof rawManifest === "object" &&
         !Array.isArray(rawManifest))
       ? (rawManifest as JsonObject)
       : ({} as JsonObject);
-    const deploymentName = readDeploymentName(manifestObject, resources.value);
+    const deploymentName = readDeploymentNameV1(
+      manifestObject,
+      resources.value,
+    );
 
     if (mode.value === "plan") {
-      // v0: plan returns the validated resource list without applying.
-      // applyV2 itself runs validation as the first phase.
-      return c.json({
+      const outcome = await applyResources(resources.value, undefined, true);
+      if (outcome.status === "failed-validation") {
+        return { status: 400, body: { status: "error", outcome } };
+      }
+      const ok: DeployPublicResponse = {
         status: "ok",
-        outcome: {
-          applied: [],
-          issues: [],
-          status: "succeeded",
-        } satisfies ApplyV2Outcome,
-      });
+        outcome: withOperationPlanPreview({
+          outcome,
+          resources: resources.value,
+          tenantId,
+          deploymentName,
+        }),
+      };
+      return { status: 200, body: ok as unknown as JsonObject };
     }
 
     if (mode.value === "destroy") {
-      // Serialise concurrent destroy / apply on the same deployment so
-      // two callers do not race the record store and `provider.destroy`.
-      // The lock is held for the duration of the destroy attempt and
-      // released in `finally`.
       await recordStore.acquireLock(tenantId, deploymentName);
       try {
-        // Look up persisted handles from the prior apply. Without this,
-        // `destroyV2` would fall back to `resource.name` as the handle which
-        // only works for selfhost providers (filesystem, docker-compose,
-        // systemd-unit, etc.); cloud providers that returned an ARN / object
-        // id from `apply` would receive the wrong value and silently fail to
-        // delete the real underlying resource. We REJECT destroys with no
-        // record by default; operator opts in via `force: true` in the
-        // request body to fall back to resource-name destroy.
+        const operationPlan = buildPublicOperationPlanPreview({
+          resources: resources.value,
+          tenantId,
+          deploymentName,
+          op: "delete",
+        });
+        const recoveryResponse = await handleRecoveryPreflight({
+          store: operationJournalStore,
+          tenantId,
+          deploymentName,
+          requestedPhase: "destroy",
+          operationPlanDigest: operationPlan.operationPlanDigest,
+          recoveryMode: recoveryMode.value,
+        });
+        if (recoveryResponse) return recoveryResponse;
+        if (recoveryMode.value === "compensate") {
+          return await handleRecoveryCompensate({
+            journalStore: operationJournalStore,
+            revokeDebtStore,
+            preview: operationPlan,
+            phase: "destroy",
+            tenantId,
+            deploymentName,
+            createdAt: now(),
+          });
+        }
+        const journalStartedAt = now();
+        await appendOperationPlanJournalStages({
+          store: operationJournalStore,
+          preview: operationPlan,
+          phase: "destroy",
+          stages: ["prepare"],
+          status: "recorded",
+          createdAt: journalStartedAt,
+        });
         const prior = await recordStore.get(tenantId, deploymentName);
-        const force = body.value.force === true;
+        const force = body.force === true;
         if (!prior && !force) {
-          return c.json(
-            apiError(
+          await appendOperationPlanJournalStages({
+            store: operationJournalStore,
+            preview: operationPlan,
+            phase: "destroy",
+            stages: ["abort"],
+            status: "failed",
+            createdAt: now(),
+            detail: { reason: "missing-prior-deploy-record" },
+          });
+          return {
+            status: 409,
+            body: apiError(
               "failed_precondition",
               `destroy refused: no prior deploy record for tenant=${tenantId} ` +
                 `name=${deploymentName}. The kernel cannot resolve cloud ` +
@@ -262,8 +413,7 @@ export function registerDeployPublicRoutes(
                 `systemd) and you want to destroy by resource name, retry ` +
                 `with \`force: true\` in the request body.`,
             ),
-            409,
-          );
+          };
         }
         const handleFor = prior ? buildHandleForFromRecord(prior) : undefined;
         if (!prior) {
@@ -273,54 +423,234 @@ export function registerDeployPublicRoutes(
               `Cloud handles may not match.`,
           );
         }
+        if (
+          recoveryMode.value === "continue" && prior?.status === "destroyed"
+        ) {
+          const outcome: DestroyV2Outcome = {
+            destroyed: resources.value.map((resource) => ({
+              name: resource.name,
+              providerId: resource.provider,
+              handle: resource.name,
+            })),
+            errors: [],
+            issues: [],
+            status: "succeeded",
+          };
+          await appendOperationPlanJournalStages({
+            store: operationJournalStore,
+            preview: operationPlan,
+            phase: "destroy",
+            stages: ["post-commit", "observe", "finalize"],
+            status: "succeeded",
+            createdAt: now(),
+            detail: { outcomeStatus: outcome.status },
+          });
+          const ok: DeployPublicDestroyResponse = { status: "ok", outcome };
+          return { status: 200, body: ok as unknown as JsonObject };
+        }
+        const preCommitHook = await invokeCatalogReleaseWalHook({
+          verifier: catalogReleaseVerifier,
+          spaceId: tenantId,
+          stage: "pre-commit",
+        });
+        if (!preCommitHook.ok) {
+          return await handleCatalogReleasePreCommitFailure({
+            journalStore: operationJournalStore,
+            preview: operationPlan,
+            phase: "destroy",
+            createdAt: now(),
+            hook: preCommitHook,
+          });
+        }
+        await appendOperationPlanJournalStages({
+          store: operationJournalStore,
+          preview: operationPlan,
+          phase: "destroy",
+          stages: ["pre-commit"],
+          status: "recorded",
+          createdAt: now(),
+          detail: catalogReleaseWalHookDetail(preCommitHook),
+        });
+        await appendOperationPlanJournalStages({
+          store: operationJournalStore,
+          preview: operationPlan,
+          phase: "destroy",
+          stages: ["commit"],
+          status: "recorded",
+          createdAt: now(),
+        });
         try {
-          const outcome = await destroyResources(resources.value, handleFor);
+          const outcome = await destroyResources(
+            resources.value,
+            handleFor,
+            operationPlan,
+            platformRecoveryMode(recoveryMode.value),
+          );
           if (outcome.status === "failed-validation") {
-            return c.json({ status: "error", outcome }, 400);
+            await appendOperationPlanJournalStages({
+              store: operationJournalStore,
+              preview: operationPlan,
+              phase: "destroy",
+              stages: ["abort"],
+              status: "failed",
+              createdAt: now(),
+              detail: { outcomeStatus: outcome.status },
+            });
+            return { status: 400, body: { status: "error", outcome } };
           }
           if (prior) {
             await recordStore.markDestroyed(tenantId, deploymentName, now());
           }
-          // `partial` is still a 200: best-effort destroy completed and the
-          // caller inspects `outcome.errors` for per-resource failures.
+          const postCommitHook = await invokeCatalogReleaseWalHook({
+            verifier: catalogReleaseVerifier,
+            spaceId: tenantId,
+            stage: "post-commit",
+          });
+          if (!postCommitHook.ok) {
+            return await handleCatalogReleasePostCommitFailure({
+              journalStore: operationJournalStore,
+              revokeDebtStore,
+              preview: operationPlan,
+              phase: "destroy",
+              tenantId,
+              deploymentName,
+              createdAt: now(),
+              hook: postCommitHook,
+            });
+          }
+          await appendOperationPlanJournalStages({
+            store: operationJournalStore,
+            preview: operationPlan,
+            phase: "destroy",
+            stages: outcome.status === "succeeded"
+              ? ["post-commit", "observe", "finalize"]
+              : ["abort"],
+            status: outcome.status === "succeeded" ? "succeeded" : "failed",
+            createdAt: now(),
+            detail: {
+              outcomeStatus: outcome.status,
+              ...(outcome.status === "succeeded"
+                ? catalogReleaseHookDetailField(postCommitHook)
+                : {}),
+            },
+          });
           const ok: DeployPublicDestroyResponse = { status: "ok", outcome };
-          return c.json(ok, 200);
+          return { status: 200, body: ok as unknown as JsonObject };
         } catch (error) {
+          await appendOperationPlanJournalStages({
+            store: operationJournalStore,
+            preview: operationPlan,
+            phase: "destroy",
+            stages: ["abort"],
+            status: "failed",
+            createdAt: now(),
+            detail: { reason: "destroy-threw" },
+          });
           const message = error instanceof Error
             ? error.message
             : String(error);
-          return c.json(
-            apiError("internal_error", `destroy failed: ${message}`),
-            500,
-          );
+          return {
+            status: 500,
+            body: apiError("internal_error", `destroy failed: ${message}`),
+          };
         }
       } finally {
         await recordStore.releaseLock(tenantId, deploymentName);
       }
     }
 
-    // apply branch — also serialised under the deployment lock so two
-    // simultaneous applies do not both call `provider.apply` for the
-    // same resource. The lock is released regardless of outcome.
     await recordStore.acquireLock(tenantId, deploymentName);
     try {
-      // Build the per-resource prior snapshot map from any persisted
-      // record. Resources whose persisted fingerprint matches the freshly
-      // computed fingerprint will short-circuit `provider.apply`; resources
-      // missing from the prior record (or with mismatched fingerprint)
-      // still go through the provider.
+      const operationPlan = buildPublicOperationPlanPreview({
+        resources: resources.value,
+        tenantId,
+        deploymentName,
+        op: "create",
+      });
+      const recoveryResponse = await handleRecoveryPreflight({
+        store: operationJournalStore,
+        tenantId,
+        deploymentName,
+        requestedPhase: "apply",
+        operationPlanDigest: operationPlan.operationPlanDigest,
+        recoveryMode: recoveryMode.value,
+      });
+      if (recoveryResponse) return recoveryResponse;
+      if (recoveryMode.value === "compensate") {
+        return await handleRecoveryCompensate({
+          journalStore: operationJournalStore,
+          revokeDebtStore,
+          preview: operationPlan,
+          phase: "apply",
+          tenantId,
+          deploymentName,
+          createdAt: now(),
+        });
+      }
+      await appendOperationPlanJournalStages({
+        store: operationJournalStore,
+        preview: operationPlan,
+        phase: "apply",
+        stages: ["prepare"],
+        status: "recorded",
+        createdAt: now(),
+      });
+      const preCommitHook = await invokeCatalogReleaseWalHook({
+        verifier: catalogReleaseVerifier,
+        spaceId: tenantId,
+        stage: "pre-commit",
+      });
+      if (!preCommitHook.ok) {
+        return await handleCatalogReleasePreCommitFailure({
+          journalStore: operationJournalStore,
+          preview: operationPlan,
+          phase: "apply",
+          createdAt: now(),
+          hook: preCommitHook,
+        });
+      }
+      await appendOperationPlanJournalStages({
+        store: operationJournalStore,
+        preview: operationPlan,
+        phase: "apply",
+        stages: ["pre-commit"],
+        status: "recorded",
+        createdAt: now(),
+        detail: catalogReleaseWalHookDetail(preCommitHook),
+      });
+      await appendOperationPlanJournalStages({
+        store: operationJournalStore,
+        preview: operationPlan,
+        phase: "apply",
+        stages: ["commit"],
+        status: "recorded",
+        createdAt: now(),
+      });
       const prior = await recordStore.get(tenantId, deploymentName);
       const priorApplied = prior
         ? buildPriorAppliedFromRecord(prior)
         : undefined;
       try {
-        const outcome = await applyResources(resources.value, priorApplied);
+        const outcome = await applyResources(
+          resources.value,
+          priorApplied,
+          false,
+          operationPlan,
+          platformRecoveryMode(recoveryMode.value),
+        );
         if (outcome.status === "failed-validation") {
-          return c.json({ status: "error", outcome }, 400);
+          await appendOperationPlanJournalStages({
+            store: operationJournalStore,
+            preview: operationPlan,
+            phase: "apply",
+            stages: ["abort"],
+            status: "failed",
+            createdAt: now(),
+            detail: { outcomeStatus: outcome.status },
+          });
+          return { status: 400, body: { status: "error", outcome } };
         }
         if (outcome.status === "failed-apply") {
-          // Best-effort: persist a `failed` row so subsequent status queries
-          // can surface the failure rather than 404 the CLI.
           await recordStore.upsert({
             tenantId,
             name: deploymentName,
@@ -329,10 +659,17 @@ export function registerDeployPublicRoutes(
             status: "failed",
             now: now(),
           });
-          return c.json({ status: "error", outcome }, 500);
+          await appendOperationPlanJournalStages({
+            store: operationJournalStore,
+            preview: operationPlan,
+            phase: "apply",
+            stages: ["abort"],
+            status: "failed",
+            createdAt: now(),
+            detail: { outcomeStatus: outcome.status },
+          });
+          return { status: 500, body: { status: "error", outcome } };
         }
-        // Successful apply: persist handles + fingerprints so destroy /
-        // status / next-apply work.
         if (
           typeof outcome.reused === "number" && outcome.reused > 0
         ) {
@@ -355,17 +692,119 @@ export function registerDeployPublicRoutes(
           status: "applied",
           now: stamp,
         });
+        const postCommitHook = await invokeCatalogReleaseWalHook({
+          verifier: catalogReleaseVerifier,
+          spaceId: tenantId,
+          stage: "post-commit",
+        });
+        if (!postCommitHook.ok) {
+          return await handleCatalogReleasePostCommitFailure({
+            journalStore: operationJournalStore,
+            revokeDebtStore,
+            preview: operationPlan,
+            phase: "apply",
+            tenantId,
+            deploymentName,
+            createdAt: now(),
+            hook: postCommitHook,
+          });
+        }
+        await appendOperationPlanJournalStages({
+          store: operationJournalStore,
+          preview: operationPlan,
+          phase: "apply",
+          stages: ["post-commit", "observe", "finalize"],
+          status: "succeeded",
+          createdAt: now(),
+          detail: {
+            outcomeStatus: outcome.status,
+            ...catalogReleaseHookDetailField(postCommitHook),
+          },
+        });
         const ok: DeployPublicResponse = { status: "ok", outcome };
-        return c.json(ok, 200);
+        return { status: 200, body: ok as unknown as JsonObject };
       } catch (error) {
+        await appendOperationPlanJournalStages({
+          store: operationJournalStore,
+          preview: operationPlan,
+          phase: "apply",
+          stages: ["abort"],
+          status: "failed",
+          createdAt: now(),
+          detail: { reason: "apply-threw" },
+        });
         const message = error instanceof Error ? error.message : String(error);
-        return c.json(
-          apiError("internal_error", `apply failed: ${message}`),
-          500,
-        );
+        return {
+          status: 500,
+          body: apiError("internal_error", `apply failed: ${message}`),
+        };
       }
     } finally {
       await recordStore.releaseLock(tenantId, deploymentName);
+    }
+  };
+
+  app.post(TAKOSUMI_DEPLOY_PUBLIC_PATH, async (c) => {
+    const expected = getToken();
+    if (!expected) {
+      return c.json(apiError("not_found", "deploy endpoint disabled"), 404);
+    }
+    const presented = readBearerToken(c.req.header("authorization"));
+    if (!presented) {
+      return c.json(
+        apiError("unauthenticated", "missing bearer token"),
+        401,
+      );
+    }
+    if (!constantTimeEquals(presented, expected)) {
+      return c.json(apiError("unauthenticated", "invalid token"), 401);
+    }
+
+    const body = await readJsonBody(c.req.raw);
+    if (!body.ok) {
+      return c.json(apiError("invalid_argument", body.error), 400);
+    }
+    const idempotencyKey = readIdempotencyKey(
+      c.req.header(TAKOSUMI_IDEMPOTENCY_KEY_HEADER),
+    );
+    if (!idempotencyKey.ok) {
+      return c.json(
+        apiError("invalid_argument", idempotencyKey.error),
+        400,
+      );
+    }
+    const requestDigest = await sha256Hex(body.rawText);
+    await idempotencyStore.acquireLock(tenantId, idempotencyKey.value);
+    try {
+      const prior = await idempotencyStore.get(tenantId, idempotencyKey.value);
+      if (prior) {
+        if (prior.requestDigest !== requestDigest) {
+          return c.json(
+            apiError(
+              "failed_precondition",
+              "idempotency key already used with a different request body",
+            ),
+            409,
+          );
+        }
+        c.header(TAKOSUMI_IDEMPOTENCY_REPLAYED_HEADER, "true");
+        return c.json(
+          prior.responseBody,
+          prior.responseStatus as 200 | 400 | 409 | 500,
+        );
+      }
+      const response = await executeDeployPublicPost(body.value);
+      await idempotencyStore.save({
+        tenantId,
+        key: idempotencyKey.value,
+        requestDigest,
+        responseStatus: response.status,
+        responseBody: response.body,
+        now: now(),
+      });
+      return c.json(response.body, response.status);
+    } finally {
+      await idempotencyStore.releaseLock(tenantId, idempotencyKey.value);
     }
   });
 
@@ -374,7 +813,13 @@ export function registerDeployPublicRoutes(
     if (auth.status !== "ok") return c.json(auth.body, auth.code);
     const records = await recordStore.list(tenantId);
     return c.json(
-      { deployments: records.map(toDeploymentSummary) },
+      {
+        deployments: await Promise.all(
+          records.map((record) =>
+            toDeploymentSummary(record, operationJournalStore, revokeDebtStore)
+          ),
+        ),
+      },
       200,
     );
   });
@@ -390,7 +835,10 @@ export function registerDeployPublicRoutes(
     if (!record) {
       return c.json(apiError("not_found", `deployment ${name} not found`), 404);
     }
-    return c.json(toDeploymentSummary(record), 200);
+    return c.json(
+      await toDeploymentSummary(record, operationJournalStore, revokeDebtStore),
+      200,
+    );
   });
 }
 
@@ -401,6 +849,13 @@ interface BearerCheckFail {
   readonly status: "fail";
   readonly code: 401 | 404;
   readonly body: ReturnType<typeof apiError>;
+}
+
+type DeployPublicJsonStatus = 200 | 400 | 409 | 500;
+
+interface DeployPublicHandledResponse {
+  readonly status: DeployPublicJsonStatus;
+  readonly body: unknown;
 }
 
 function checkBearer(
@@ -475,6 +930,582 @@ function buildPriorAppliedFromRecord(
   return map;
 }
 
+function withOperationPlanPreview(input: {
+  readonly outcome: ApplyV2Outcome;
+  readonly resources: readonly ManifestResource[];
+  readonly tenantId: string;
+  readonly deploymentName: string;
+}): ApplyV2Outcome {
+  if (input.outcome.status !== "succeeded") return input.outcome;
+
+  const dag = buildRefDag(input.resources);
+  if (dag.issues.length > 0) return input.outcome;
+  const resourcesByName = new Map(
+    input.resources.map((resource) => [resource.name, resource]),
+  );
+  const planned = input.outcome.planned ?? dag.order.flatMap((name) => {
+    const resource = resourcesByName.get(name);
+    return resource
+      ? [{
+        name: resource.name,
+        shape: resource.shape,
+        providerId: resource.provider,
+        op: "create" as const,
+      }]
+      : [];
+  });
+
+  return {
+    ...input.outcome,
+    planned,
+    operationPlanPreview: buildOperationPlanPreview({
+      resources: input.resources,
+      planned,
+      edges: dag.edges,
+      spaceId: input.tenantId,
+      deploymentName: input.deploymentName,
+    }),
+  };
+}
+
+async function handleRecoveryPreflight(input: {
+  readonly store: OperationJournalStore;
+  readonly tenantId: string;
+  readonly deploymentName: string;
+  readonly requestedPhase: OperationJournalPhase;
+  readonly operationPlanDigest: `sha256:${string}`;
+  readonly recoveryMode?: DeployPublicRecoveryMode;
+}): Promise<DeployPublicHandledResponse | undefined> {
+  const entries = await input.store.listByDeployment(
+    input.tenantId,
+    input.deploymentName,
+  );
+  const journal = summarizeLatestJournal(entries);
+  if (input.recoveryMode === "inspect") {
+    const ok: DeployPublicRecoveryInspectResponse = {
+      status: "ok",
+      outcome: {
+        status: "recovery-inspect",
+        tenantId: input.tenantId,
+        deploymentName: input.deploymentName,
+        ...(journal ? { journal } : {}),
+        entries: entries.map(toJournalEntrySummary),
+      },
+    };
+    return { status: 200, body: ok as unknown as JsonObject };
+  }
+  if (input.recoveryMode === "continue") {
+    if (!journal || journal.terminal) {
+      return {
+        status: 409,
+        body: apiError(
+          "failed_precondition",
+          `deployment ${input.deploymentName} has no unfinished public WAL ` +
+            `to continue`,
+        ),
+      };
+    }
+    if (journal.status === "failed") {
+      return {
+        status: 409,
+        body: apiError(
+          "failed_precondition",
+          `deployment ${input.deploymentName} has failed public WAL ` +
+            `phase=${journal.phase} stage=${journal.latestStage}; inspect ` +
+            `before choosing compensate or a new apply/destroy`,
+        ),
+      };
+    }
+    if (journal.phase !== input.requestedPhase) {
+      return {
+        status: 409,
+        body: apiError(
+          "failed_precondition",
+          `recoveryMode continue refused: unfinished public WAL phase=` +
+            `${journal.phase} does not match requested phase=` +
+            `${input.requestedPhase}`,
+        ),
+      };
+    }
+    if (journal.operationPlanDigest !== input.operationPlanDigest) {
+      return {
+        status: 409,
+        body: apiError(
+          "failed_precondition",
+          `recoveryMode continue refused: request operationPlanDigest=` +
+            `${input.operationPlanDigest} does not match unfinished public ` +
+            `WAL operationPlanDigest=${journal.operationPlanDigest}`,
+        ),
+      };
+    }
+    if (!isContinuableRecoveryStage(journal.latestStage)) {
+      return {
+        status: 409,
+        body: apiError(
+          "failed_precondition",
+          `recoveryMode continue refused: public WAL stage=` +
+            `${journal.latestStage} is not continuable`,
+        ),
+      };
+    }
+    return undefined;
+  }
+  if (input.recoveryMode === "compensate") {
+    if (!journal || journal.terminal) {
+      return {
+        status: 409,
+        body: apiError(
+          "failed_precondition",
+          `deployment ${input.deploymentName} has no unfinished public WAL ` +
+            `to compensate`,
+        ),
+      };
+    }
+    if (journal.phase !== input.requestedPhase) {
+      return {
+        status: 409,
+        body: apiError(
+          "failed_precondition",
+          `recoveryMode compensate refused: unfinished public WAL phase=` +
+            `${journal.phase} does not match requested phase=` +
+            `${input.requestedPhase}`,
+        ),
+      };
+    }
+    if (journal.operationPlanDigest !== input.operationPlanDigest) {
+      return {
+        status: 409,
+        body: apiError(
+          "failed_precondition",
+          `recoveryMode compensate refused: request operationPlanDigest=` +
+            `${input.operationPlanDigest} does not match unfinished public ` +
+            `WAL operationPlanDigest=${journal.operationPlanDigest}`,
+        ),
+      };
+    }
+    if (!isCompensableRecoveryStage(journal.latestStage)) {
+      return {
+        status: 409,
+        body: apiError(
+          "failed_precondition",
+          `recoveryMode compensate refused: public WAL stage=` +
+            `${journal.latestStage} has no committed effect to compensate`,
+        ),
+      };
+    }
+    return undefined;
+  }
+  if (journal && !journal.terminal) {
+    return {
+      status: 409,
+      body: apiError(
+        "failed_precondition",
+        `deployment ${input.deploymentName} has unfinished public WAL ` +
+          `phase=${journal.phase} stage=${journal.latestStage} ` +
+          `status=${journal.status}; retry with recoveryMode: "inspect" ` +
+          `or continue the same OperationPlan with recoveryMode: ` +
+          `"continue", or compensate committed effects with recoveryMode: ` +
+          `"compensate" before starting another apply/destroy`,
+      ),
+    };
+  }
+  return undefined;
+}
+
+async function handleRecoveryCompensate(input: {
+  readonly journalStore: OperationJournalStore;
+  readonly revokeDebtStore: RevokeDebtStore;
+  readonly preview: OperationPlanPreview;
+  readonly phase: OperationJournalPhase;
+  readonly tenantId: string;
+  readonly deploymentName: string;
+  readonly createdAt: string;
+}): Promise<DeployPublicHandledResponse> {
+  const debts: RevokeDebtRecord[] = [];
+  for (const operation of input.preview.operations) {
+    debts.push(
+      await input.revokeDebtStore.enqueue({
+        generatedObjectId: generatedObjectIdForPublicOperation({
+          deploymentName: input.deploymentName,
+          resourceName: operation.resourceName,
+        }),
+        reason: "activation-rollback",
+        ownerSpaceId: input.tenantId,
+        deploymentName: input.deploymentName,
+        operationPlanDigest: input.preview.operationPlanDigest,
+        journalEntryId: operation.idempotencyKey.journalEntryId,
+        operationId: operation.operationId,
+        resourceName: operation.resourceName,
+        providerId: operation.providerId,
+        now: input.createdAt,
+        detail: {
+          kind: "takosumi.public-recovery-compensate@v1",
+          phase: input.phase,
+          operationKind: operation.op,
+          desiredSnapshotDigest: input.preview.desiredSnapshotDigest,
+          desiredDigest: operation.desiredDigest,
+          idempotencyKey: {
+            spaceId: operation.idempotencyKey.spaceId,
+            operationPlanDigest: operation.idempotencyKey.operationPlanDigest,
+            journalEntryId: operation.idempotencyKey.journalEntryId,
+          },
+        },
+      }),
+    );
+  }
+  await appendOperationPlanJournalStages({
+    store: input.journalStore,
+    preview: input.preview,
+    phase: input.phase,
+    stages: ["abort"],
+    status: "failed",
+    createdAt: input.createdAt,
+    detail: {
+      reason: "compensate-revoke-debt-enqueued",
+      revokeDebtIds: debts.map((debt) => debt.id),
+    },
+  });
+  const entries = await input.journalStore.listByDeployment(
+    input.tenantId,
+    input.deploymentName,
+  );
+  const journal = summarizeLatestJournal(entries);
+  const ok: DeployPublicRecoveryCompensateResponse = {
+    status: "ok",
+    outcome: {
+      status: "recovery-compensate",
+      tenantId: input.tenantId,
+      deploymentName: input.deploymentName,
+      ...(journal ? { journal } : {}),
+      debts: debts.map(toRevokeDebtRecordSummary),
+    },
+  };
+  return { status: 200, body: ok as unknown as JsonObject };
+}
+
+type CatalogReleaseWalHookStage = "pre-commit" | "post-commit";
+
+type CatalogReleaseWalHookResult =
+  | {
+    readonly ok: true;
+    readonly status: "skipped";
+    readonly stage: CatalogReleaseWalHookStage;
+  }
+  | {
+    readonly ok: true;
+    readonly status: "succeeded";
+    readonly stage: CatalogReleaseWalHookStage;
+    readonly descriptorDigest: string;
+    readonly publisherId: string;
+    readonly publisherKeyId: string;
+  }
+  | {
+    readonly ok: false;
+    readonly status: "failed";
+    readonly stage: CatalogReleaseWalHookStage;
+    readonly reason: string;
+    readonly message: string;
+    readonly descriptorDigest?: string;
+    readonly publisherKeyId?: string;
+  };
+
+async function invokeCatalogReleaseWalHook(input: {
+  readonly verifier?: CatalogReleaseWalHookVerifier;
+  readonly spaceId: string;
+  readonly stage: CatalogReleaseWalHookStage;
+}): Promise<CatalogReleaseWalHookResult> {
+  if (!input.verifier) {
+    return { ok: true, status: "skipped", stage: input.stage };
+  }
+  const verification = await input.verifier.verifyCurrentReleaseForSpace(
+    input.spaceId,
+  );
+  if (!verification) {
+    return { ok: true, status: "skipped", stage: input.stage };
+  }
+  if (!verification.ok) {
+    return {
+      ok: false,
+      status: "failed",
+      stage: input.stage,
+      reason: verification.reason,
+      message: verification.message,
+      ...(verification.descriptorDigest
+        ? { descriptorDigest: verification.descriptorDigest }
+        : {}),
+      ...(verification.publisherKeyId
+        ? { publisherKeyId: verification.publisherKeyId }
+        : {}),
+    };
+  }
+  return {
+    ok: true,
+    status: "succeeded",
+    stage: input.stage,
+    descriptorDigest: verification.descriptorDigest,
+    publisherId: verification.publisherId,
+    publisherKeyId: verification.publisherKeyId,
+  };
+}
+
+async function handleCatalogReleasePreCommitFailure(input: {
+  readonly journalStore: OperationJournalStore;
+  readonly preview: OperationPlanPreview;
+  readonly phase: OperationJournalPhase;
+  readonly createdAt: string;
+  readonly hook: CatalogReleaseWalHookResult & { readonly ok: false };
+}): Promise<DeployPublicHandledResponse> {
+  await appendOperationPlanJournalStages({
+    store: input.journalStore,
+    preview: input.preview,
+    phase: input.phase,
+    stages: ["abort"],
+    status: "failed",
+    createdAt: input.createdAt,
+    detail: {
+      reason: "catalog-release-pre-commit-hook-failed",
+      catalogReleaseHook: catalogReleaseWalHookDetailRequired(input.hook),
+    },
+  });
+  return {
+    status: 409,
+    body: apiError(
+      "failed_precondition",
+      `CatalogRelease pre-commit hook failed: ${input.hook.message}`,
+    ),
+  };
+}
+
+async function handleCatalogReleasePostCommitFailure(input: {
+  readonly journalStore: OperationJournalStore;
+  readonly revokeDebtStore: RevokeDebtStore;
+  readonly preview: OperationPlanPreview;
+  readonly phase: OperationJournalPhase;
+  readonly tenantId: string;
+  readonly deploymentName: string;
+  readonly createdAt: string;
+  readonly hook: CatalogReleaseWalHookResult & { readonly ok: false };
+}): Promise<DeployPublicHandledResponse> {
+  const debts = await enqueueCatalogReleaseHookFailureDebts({
+    revokeDebtStore: input.revokeDebtStore,
+    preview: input.preview,
+    phase: input.phase,
+    tenantId: input.tenantId,
+    deploymentName: input.deploymentName,
+    createdAt: input.createdAt,
+    hook: input.hook,
+  });
+  await appendOperationPlanJournalStages({
+    store: input.journalStore,
+    preview: input.preview,
+    phase: input.phase,
+    stages: ["post-commit"],
+    status: "failed",
+    createdAt: input.createdAt,
+    detail: {
+      reason: "catalog-release-post-commit-hook-failed",
+      catalogReleaseHook: catalogReleaseWalHookDetailRequired(input.hook),
+      revokeDebtIds: debts.map((debt) => debt.id),
+    },
+  });
+  await appendOperationPlanJournalStages({
+    store: input.journalStore,
+    preview: input.preview,
+    phase: input.phase,
+    stages: ["observe", "finalize"],
+    status: "succeeded",
+    createdAt: input.createdAt,
+    detail: {
+      reason: "catalog-release-post-commit-hook-failed-observed",
+      revokeDebtIds: debts.map((debt) => debt.id),
+    },
+  });
+  return {
+    status: 409,
+    body: apiError(
+      "failed_precondition",
+      `CatalogRelease post-commit hook failed after provider commit; ` +
+        `RevokeDebt enqueued: ${input.hook.message}`,
+    ),
+  };
+}
+
+async function enqueueCatalogReleaseHookFailureDebts(input: {
+  readonly revokeDebtStore: RevokeDebtStore;
+  readonly preview: OperationPlanPreview;
+  readonly phase: OperationJournalPhase;
+  readonly tenantId: string;
+  readonly deploymentName: string;
+  readonly createdAt: string;
+  readonly hook: CatalogReleaseWalHookResult & { readonly ok: false };
+}): Promise<readonly RevokeDebtRecord[]> {
+  const debts: RevokeDebtRecord[] = [];
+  for (const operation of input.preview.operations) {
+    debts.push(
+      await input.revokeDebtStore.enqueue({
+        generatedObjectId: generatedObjectIdForPublicOperation({
+          deploymentName: input.deploymentName,
+          resourceName: operation.resourceName,
+        }),
+        reason: "approval-invalidated",
+        ownerSpaceId: input.tenantId,
+        deploymentName: input.deploymentName,
+        operationPlanDigest: input.preview.operationPlanDigest,
+        journalEntryId: operation.idempotencyKey.journalEntryId,
+        operationId: operation.operationId,
+        resourceName: operation.resourceName,
+        providerId: operation.providerId,
+        now: input.createdAt,
+        detail: {
+          kind: "takosumi.catalog-release-hook-failure@v1",
+          phase: input.phase,
+          hookStage: input.hook.stage,
+          failureReason: input.hook.reason,
+          desiredSnapshotDigest: input.preview.desiredSnapshotDigest,
+          desiredDigest: operation.desiredDigest,
+          idempotencyKey: {
+            spaceId: operation.idempotencyKey.spaceId,
+            operationPlanDigest: operation.idempotencyKey.operationPlanDigest,
+            journalEntryId: operation.idempotencyKey.journalEntryId,
+          },
+        },
+      }),
+    );
+  }
+  return debts;
+}
+
+function catalogReleaseWalHookDetail(
+  hook: CatalogReleaseWalHookResult,
+): JsonObject | undefined {
+  if (hook.status === "skipped") return undefined;
+  if (!hook.ok) {
+    return {
+      kind: "takosumi.catalog-release-wal-hook@v1",
+      stage: hook.stage,
+      status: hook.status,
+      reason: hook.reason,
+      ...(hook.descriptorDigest
+        ? { descriptorDigest: hook.descriptorDigest }
+        : {}),
+      ...(hook.publisherKeyId ? { publisherKeyId: hook.publisherKeyId } : {}),
+    };
+  }
+  return {
+    kind: "takosumi.catalog-release-wal-hook@v1",
+    stage: hook.stage,
+    status: hook.status,
+    descriptorDigest: hook.descriptorDigest,
+    publisherId: hook.publisherId,
+    publisherKeyId: hook.publisherKeyId,
+  };
+}
+
+function catalogReleaseWalHookDetailRequired(
+  hook: CatalogReleaseWalHookResult,
+): JsonObject {
+  const detail = catalogReleaseWalHookDetail(hook);
+  if (!detail) {
+    throw new Error("CatalogRelease WAL hook detail is required");
+  }
+  return detail;
+}
+
+function catalogReleaseHookDetailField(
+  hook: CatalogReleaseWalHookResult,
+): JsonObject {
+  const detail = catalogReleaseWalHookDetail(hook);
+  return detail ? { catalogReleaseHook: detail } : {};
+}
+
+function generatedObjectIdForPublicOperation(input: {
+  readonly deploymentName: string;
+  readonly resourceName: string;
+}): string {
+  return `generated:takosumi-public-deploy/${
+    encodeURIComponent(input.deploymentName)
+  }/${encodeURIComponent(input.resourceName)}`;
+}
+
+function toRevokeDebtRecordSummary(
+  record: RevokeDebtRecord,
+): DeploymentRevokeDebtRecordSummary {
+  return {
+    id: record.id,
+    generatedObjectId: record.generatedObjectId,
+    reason: record.reason,
+    status: record.status,
+    ownerSpaceId: record.ownerSpaceId,
+    originatingSpaceId: record.originatingSpaceId,
+    ...(record.deploymentName ? { deploymentName: record.deploymentName } : {}),
+    ...(record.operationPlanDigest
+      ? { operationPlanDigest: record.operationPlanDigest }
+      : {}),
+    ...(record.journalEntryId ? { journalEntryId: record.journalEntryId } : {}),
+    ...(record.operationId ? { operationId: record.operationId } : {}),
+    ...(record.resourceName ? { resourceName: record.resourceName } : {}),
+    ...(record.providerId ? { providerId: record.providerId } : {}),
+    retryAttempts: record.retryAttempts,
+    createdAt: record.createdAt,
+    statusUpdatedAt: record.statusUpdatedAt,
+    ...(record.lastRetryAt ? { lastRetryAt: record.lastRetryAt } : {}),
+    ...(record.nextRetryAt ? { nextRetryAt: record.nextRetryAt } : {}),
+    ...(record.agedAt ? { agedAt: record.agedAt } : {}),
+    ...(record.clearedAt ? { clearedAt: record.clearedAt } : {}),
+  };
+}
+
+function buildPublicOperationPlanPreview(input: {
+  readonly resources: readonly ManifestResource[];
+  readonly tenantId: string;
+  readonly deploymentName: string;
+  readonly op: PlannedResource["op"];
+}) {
+  const dag = buildRefDag(input.resources);
+  if (dag.issues.length > 0) {
+    // The caller has already accepted `resolveManifestResourcesV1`; ref-DAG
+    // validation errors will be surfaced by applyV2/destroyV2. Build a stable
+    // fallback order so the journal still records the rejected intent.
+    const planned = input.resources.map((resource) => ({
+      name: resource.name,
+      shape: resource.shape,
+      providerId: resource.provider,
+      op: input.op,
+    }));
+    return buildOperationPlanPreview({
+      resources: input.resources,
+      planned,
+      edges: [],
+      spaceId: input.tenantId,
+      deploymentName: input.deploymentName,
+    });
+  }
+  const resourcesByName = new Map(
+    input.resources.map((resource) => [resource.name, resource]),
+  );
+  const orderedNames = input.op === "delete"
+    ? [...dag.order].reverse()
+    : dag.order;
+  const planned: PlannedResource[] = orderedNames.flatMap((name) => {
+    const resource = resourcesByName.get(name);
+    return resource
+      ? [{
+        name: resource.name,
+        shape: resource.shape,
+        providerId: resource.provider,
+        op: input.op,
+      }]
+      : [];
+  });
+  return buildOperationPlanPreview({
+    resources: input.resources,
+    planned,
+    edges: dag.edges,
+    spaceId: input.tenantId,
+    deploymentName: input.deploymentName,
+  });
+}
+
 interface DeploymentResourceSummary {
   readonly name: string;
   readonly shape: string;
@@ -490,20 +1521,179 @@ interface DeploymentSummary {
   readonly tenantId: string;
   readonly appliedAt: string;
   readonly updatedAt: string;
+  readonly journal?: DeploymentJournalSummary;
+  readonly revokeDebt?: RevokeDebtSummary;
   readonly resources: readonly DeploymentResourceSummary[];
 }
 
-function toDeploymentSummary(
+export interface DeploymentJournalSummary {
+  readonly operationPlanDigest: `sha256:${string}`;
+  readonly phase: OperationJournalPhase;
+  readonly latestStage: OperationJournalStage;
+  readonly status: OperationJournalStatus;
+  readonly entryCount: number;
+  readonly failedEntryCount: number;
+  readonly terminal: boolean;
+  readonly updatedAt: string;
+}
+
+export interface DeploymentJournalEntrySummary {
+  readonly operationPlanDigest: `sha256:${string}`;
+  readonly journalEntryId: string;
+  readonly operationId: string;
+  readonly phase: OperationJournalPhase;
+  readonly stage: OperationJournalStage;
+  readonly operationKind: string;
+  readonly resourceName?: string;
+  readonly providerId?: string;
+  readonly effectDigest: `sha256:${string}`;
+  readonly status: OperationJournalStatus;
+  readonly createdAt: string;
+}
+
+export interface DeploymentRevokeDebtRecordSummary {
+  readonly id: string;
+  readonly generatedObjectId: string;
+  readonly reason: RevokeDebtRecord["reason"];
+  readonly status: RevokeDebtRecord["status"];
+  readonly ownerSpaceId: string;
+  readonly originatingSpaceId: string;
+  readonly deploymentName?: string;
+  readonly operationPlanDigest?: `sha256:${string}`;
+  readonly journalEntryId?: string;
+  readonly operationId?: string;
+  readonly resourceName?: string;
+  readonly providerId?: string;
+  readonly retryAttempts: number;
+  readonly createdAt: string;
+  readonly statusUpdatedAt: string;
+  readonly lastRetryAt?: string;
+  readonly nextRetryAt?: string;
+  readonly agedAt?: string;
+  readonly clearedAt?: string;
+}
+
+async function toDeploymentSummary(
   record: TakosumiDeploymentRecord,
-): DeploymentSummary {
+  journalStore: OperationJournalStore,
+  revokeDebtStore: RevokeDebtStore,
+): Promise<DeploymentSummary> {
+  const journal = summarizeLatestJournal(
+    await journalStore.listByDeployment(record.tenantId, record.name),
+  );
+  const revokeDebts = await revokeDebtStore.listByDeployment(
+    record.tenantId,
+    record.name,
+  );
   return {
     name: record.name,
     status: record.status,
     tenantId: record.tenantId,
     appliedAt: record.createdAt,
     updatedAt: record.updatedAt,
+    ...(journal ? { journal } : {}),
+    ...(revokeDebts.length > 0
+      ? { revokeDebt: summarizeRevokeDebt(revokeDebts) }
+      : {}),
     resources: record.appliedResources.map(toResourceSummary),
   };
+}
+
+function summarizeLatestJournal(
+  entries: readonly OperationJournalEntry[],
+): DeploymentJournalSummary | undefined {
+  if (entries.length === 0) return undefined;
+  const sorted = [...entries].sort((left, right) =>
+    left.createdAt.localeCompare(right.createdAt) ||
+    left.operationPlanDigest.localeCompare(right.operationPlanDigest) ||
+    left.operationId.localeCompare(right.operationId)
+  );
+  const latest = sorted.at(-1);
+  if (!latest) return undefined;
+  const samePlan = entries.filter((entry) =>
+    entry.operationPlanDigest === latest.operationPlanDigest &&
+    entry.phase === latest.phase
+  );
+  const stageRanked = [...samePlan].sort((left, right) =>
+    journalStageRank(left.stage) - journalStageRank(right.stage) ||
+    left.createdAt.localeCompare(right.createdAt) ||
+    left.operationId.localeCompare(right.operationId)
+  );
+  const latestStageEntry = stageRanked.at(-1) ?? latest;
+  return {
+    operationPlanDigest: latest.operationPlanDigest,
+    phase: latest.phase,
+    latestStage: latestStageEntry.stage,
+    status: summarizeJournalStatus(samePlan),
+    entryCount: samePlan.length,
+    failedEntryCount: samePlan.filter((entry) => entry.status === "failed")
+      .length,
+    terminal: isTerminalJournalStage(latestStageEntry.stage),
+    updatedAt: latestStageEntry.createdAt,
+  };
+}
+
+function toJournalEntrySummary(
+  entry: OperationJournalEntry,
+): DeploymentJournalEntrySummary {
+  return {
+    operationPlanDigest: entry.operationPlanDigest,
+    journalEntryId: entry.journalEntryId,
+    operationId: entry.operationId,
+    phase: entry.phase,
+    stage: entry.stage,
+    operationKind: entry.operationKind,
+    ...(entry.resourceName ? { resourceName: entry.resourceName } : {}),
+    ...(entry.providerId ? { providerId: entry.providerId } : {}),
+    effectDigest: entry.effectDigest,
+    status: entry.status,
+    createdAt: entry.createdAt,
+  };
+}
+
+function summarizeJournalStatus(
+  entries: readonly OperationJournalEntry[],
+): OperationJournalStatus {
+  if (entries.some((entry) => entry.status === "failed")) return "failed";
+  if (entries.some((entry) => entry.status === "skipped")) return "skipped";
+  if (entries.some((entry) => entry.status === "succeeded")) {
+    return "succeeded";
+  }
+  return "recorded";
+}
+
+function isTerminalJournalStage(stage: OperationJournalStage): boolean {
+  return stage === "finalize" || stage === "abort" || stage === "skip";
+}
+
+function isContinuableRecoveryStage(stage: OperationJournalStage): boolean {
+  return stage === "prepare" || stage === "pre-commit" ||
+    stage === "commit" || stage === "post-commit" || stage === "observe";
+}
+
+function isCompensableRecoveryStage(stage: OperationJournalStage): boolean {
+  return stage === "commit" || stage === "post-commit" || stage === "observe";
+}
+
+function journalStageRank(stage: OperationJournalStage): number {
+  switch (stage) {
+    case "prepare":
+      return 0;
+    case "pre-commit":
+      return 1;
+    case "commit":
+      return 2;
+    case "post-commit":
+      return 3;
+    case "observe":
+      return 4;
+    case "finalize":
+      return 5;
+    case "abort":
+      return 6;
+    case "skip":
+      return 7;
+  }
 }
 
 function toResourceSummary(
@@ -517,48 +1707,6 @@ function toResourceSummary(
     outputs: entry.outputs,
     handle: entry.handle,
   };
-}
-
-/**
- * Pull a stable deployment name out of the manifest. Preference order:
- *   1. `manifest.metadata.name`   — explicit, what users usually set.
- *   2. `manifest.name`            — older / shorter form.
- *   3. fallback: a content hash of the resource list so distinct
- *      submissions get distinct natural keys, even if ill-defined.
- *
- * The fallback is deterministic for the same set of resources, which means
- * an unnamed manifest re-submitted unchanged still maps onto its prior
- * record (so destroy continues to work). It is a UX inconvenience — the
- * status table prints the hash — but never a correctness bug.
- */
-function readDeploymentName(
-  manifest: JsonObject,
-  resources: readonly ManifestResource[],
-): string {
-  const metadata = manifest.metadata;
-  if (
-    metadata && typeof metadata === "object" && !Array.isArray(metadata)
-  ) {
-    const meta = metadata as Record<string, unknown>;
-    if (typeof meta.name === "string" && meta.name.length > 0) return meta.name;
-  }
-  if (typeof manifest.name === "string" && manifest.name.length > 0) {
-    return manifest.name;
-  }
-  return `unnamed-${fallbackHash(resources)}`;
-}
-
-function fallbackHash(resources: readonly ManifestResource[]): string {
-  let hash = 5381;
-  const seed = resources
-    .map((resource) =>
-      `${resource.shape}|${resource.name}|${resource.provider}`
-    )
-    .join(";");
-  for (let i = 0; i < seed.length; i++) {
-    hash = ((hash << 5) + hash) ^ seed.charCodeAt(i);
-  }
-  return (hash >>> 0).toString(16);
 }
 
 function readBearerToken(header: string | undefined): string | undefined {
@@ -585,11 +1733,11 @@ function constantTimeEquals(a: string, b: string): boolean {
 async function readJsonBody(
   request: Request,
 ): Promise<
-  | { ok: true; value: Record<string, unknown> }
+  | { ok: true; value: Record<string, unknown>; rawText: string }
   | { ok: false; error: string }
 > {
   const text = await request.text();
-  if (text.trim() === "") return { ok: true, value: {} };
+  if (text.trim() === "") return { ok: true, value: {}, rawText: text };
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -599,7 +1747,33 @@ async function readJsonBody(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { ok: false, error: "request body must be a JSON object" };
   }
-  return { ok: true, value: value as Record<string, unknown> };
+  return { ok: true, value: value as Record<string, unknown>, rawText: text };
+}
+
+function readIdempotencyKey(
+  header: string | undefined,
+):
+  | { readonly ok: true; readonly value: string }
+  | { readonly ok: false; readonly error: string } {
+  const trimmed = header?.trim();
+  if (!trimmed) {
+    return { ok: true, value: `generated:${crypto.randomUUID()}` };
+  }
+  if (trimmed.length > 256) {
+    return {
+      ok: false,
+      error: "X-Idempotency-Key must be at most 256 characters",
+    };
+  }
+  return { ok: true, value: trimmed };
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return "sha256:" + Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function readMode(
@@ -617,141 +1791,28 @@ function readMode(
   };
 }
 
-function readManifestResources(
-  manifest: unknown,
+function readRecoveryMode(
+  value: unknown,
 ):
-  | { ok: true; value: readonly ManifestResource[] }
+  | { ok: true; value?: DeployPublicRecoveryMode }
   | { ok: false; error: string } {
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    return { ok: false, error: "manifest must be a JSON object" };
-  }
-  const envelopeIssues: ManifestEnvelopeIssue[] = [];
-  validateManifestEnvelope(manifest, envelopeIssues);
-  if (envelopeIssues.length > 0) {
-    return {
-      ok: false,
-      error: envelopeIssues
-        .map((issue) => `${issue.path}: ${issue.message}`)
-        .join("; "),
-    };
-  }
-  const manifestRecord = manifest as Record<string, unknown>;
-  const hasResources = manifestRecord.resources !== undefined;
-  const hasTemplate = manifestRecord.template !== undefined;
-
-  if (hasResources && hasTemplate) {
-    return {
-      ok: false,
-      error: "manifest must specify either resources[] or template, not both",
-    };
-  }
-  if (!hasResources && !hasTemplate) {
-    return {
-      ok: false,
-      error: "manifest.resources[] or manifest.template is required",
-    };
-  }
-  if (hasTemplate) {
-    return readTemplateExpansion(manifestRecord.template);
-  }
-  return readResourcesArray(manifestRecord.resources);
-}
-
-function readResourcesArray(
-  candidate: unknown,
-):
-  | { ok: true; value: readonly ManifestResource[] }
-  | { ok: false; error: string } {
-  if (!Array.isArray(candidate)) {
-    return { ok: false, error: "manifest.resources must be an array" };
-  }
-  for (const [index, entry] of candidate.entries()) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return {
-        ok: false,
-        error: `manifest.resources[${index}] must be an object`,
-      };
-    }
-    const resource = entry as Record<string, unknown>;
-    if (typeof resource.shape !== "string" || resource.shape.length === 0) {
-      return {
-        ok: false,
-        error: `manifest.resources[${index}].shape must be a non-empty string`,
-      };
-    }
-    if (typeof resource.name !== "string" || resource.name.length === 0) {
-      return {
-        ok: false,
-        error: `manifest.resources[${index}].name must be a non-empty string`,
-      };
-    }
-    if (
-      typeof resource.provider !== "string" || resource.provider.length === 0
-    ) {
-      return {
-        ok: false,
-        error:
-          `manifest.resources[${index}].provider must be a non-empty string`,
-      };
-    }
-  }
-  return { ok: true, value: candidate as readonly ManifestResource[] };
-}
-
-function readTemplateExpansion(
-  candidate: unknown,
-):
-  | { ok: true; value: readonly ManifestResource[] }
-  | { ok: false; error: string } {
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-    return { ok: false, error: "manifest.template must be a JSON object" };
-  }
-  const template = candidate as Record<string, unknown>;
-  if (typeof template.ref !== "string" || template.ref.length === 0) {
-    return {
-      ok: false,
-      error: "manifest.template.ref must be a non-empty string",
-    };
-  }
-  const ref = template.ref;
-  const inputs = template.inputs ?? {};
+  if (value === undefined || value === null) return { ok: true };
   if (
-    inputs === null || typeof inputs !== "object" || Array.isArray(inputs)
+    value === "inspect" || value === "continue" || value === "compensate"
   ) {
-    return {
-      ok: false,
-      error: "manifest.template.inputs must be a JSON object",
-    };
+    return { ok: true, value };
   }
-  const found = getTemplateByRef(ref);
-  if (!found) {
-    return {
-      ok: false,
-      error: `manifest.template.ref ${ref} is not registered`,
-    };
-  }
-  const issues: TemplateValidationIssue[] = [];
-  found.validateInputs(inputs, issues);
-  if (issues.length > 0) {
-    const formatted = issues
-      .map((issue) => `${issue.path}: ${issue.message}`)
-      .join("; ");
-    return {
-      ok: false,
-      error: `manifest.template.inputs invalid for ${ref}: ${formatted}`,
-    };
-  }
-  let expanded: readonly ManifestResource[];
-  try {
-    expanded = found.expand(inputs as JsonObject);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      ok: false,
-      error: `manifest.template ${ref} expansion failed: ${message}`,
-    };
-  }
-  return { ok: true, value: expanded };
+  return {
+    ok: false,
+    error:
+      "recoveryMode must be one of inspect|continue|compensate when provided",
+  };
+}
+
+function platformRecoveryMode(
+  value: DeployPublicRecoveryMode | undefined,
+): PlatformOperationRecoveryMode {
+  return value ?? "normal";
 }
 
 /**

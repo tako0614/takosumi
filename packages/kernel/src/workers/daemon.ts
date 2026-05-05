@@ -6,6 +6,10 @@ import type {
 import type { DispatchOutboxOptions } from "./outbox_dispatcher.ts";
 import type { RegistryPackageRef } from "./registry_sync_worker.ts";
 import type { RepairGroupInput } from "./repair_worker.ts";
+import type {
+  RevokeDebtCleanupOwnerInput,
+  RevokeDebtCleanupResult,
+} from "../domains/deploy/revoke_debt_cleanup_worker.ts";
 
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -275,6 +279,43 @@ export function createRuntimeAgentStaleDetectionTask(
         now: context.now().toISOString(),
       });
       await options.onDetection?.(detection);
+    },
+  };
+}
+
+export interface RevokeDebtCleanupWorkerLike {
+  processOwnerSpace(
+    input: RevokeDebtCleanupOwnerInput,
+  ): Promise<RevokeDebtCleanupResult>;
+}
+
+export interface RevokeDebtCleanupDaemonTaskOptions
+  extends WorkerDaemonTaskTiming {
+  readonly worker: RevokeDebtCleanupWorkerLike;
+  readonly ownerSpaces:
+    | readonly string[]
+    | (() => MaybePromise<readonly string[]>);
+  readonly limit?: number;
+  readonly name?: string;
+}
+
+export function createRevokeDebtCleanupWorkerTask(
+  options: RevokeDebtCleanupDaemonTaskOptions,
+): WorkerDaemonTask {
+  return {
+    ...taskTiming(options),
+    name: options.name ?? "revoke-debt-cleanup",
+    async tick(context) {
+      const ownerSpaces = typeof options.ownerSpaces === "function"
+        ? await options.ownerSpaces()
+        : options.ownerSpaces;
+      for (const ownerSpaceId of ownerSpaces) {
+        if (context.signal.aborted) return;
+        await options.worker.processOwnerSpace({
+          ownerSpaceId,
+          ...(options.limit !== undefined ? { limit: options.limit } : {}),
+        });
+      }
     },
   };
 }

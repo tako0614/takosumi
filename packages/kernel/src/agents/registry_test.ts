@@ -291,7 +291,7 @@ Deno.test("runtime agent detectStaleAgents skips already-revoked agents", async 
   assert.equal(detection.stale.length, 0);
 });
 
-Deno.test("runtime agent detectStaleAgents requires a positive ttl", async () => {
+Deno.test("runtime agent detectStaleAgents requires a positive ttl", () => {
   const registry = new InMemoryRuntimeAgentRegistry();
   assert.throws(
     () => registry.detectStaleAgents({ ttlMs: 0 }),
@@ -401,7 +401,7 @@ Deno.test("runtime agent register rejects host-key mismatch", async () => {
     hostKeyDigest: "digest-a",
   });
   await assert.rejects(
-    async () =>
+    () =>
       registry.register({
         agentId: "agent_a",
         provider: "aws",
@@ -544,7 +544,7 @@ Deno.test(
     const appliedBeforeMismatch = ledger.applied;
 
     await assert.rejects(
-      async () =>
+      () =>
         registry.register({
           agentId: "agent_a",
           provider: "aws",

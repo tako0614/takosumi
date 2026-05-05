@@ -140,7 +140,19 @@ Deno.test("runtime config loader rejects stale backend selectors", async () => {
   );
 });
 
-Deno.test("runtime config loader rejects generic backend URLs", async () => {
+Deno.test("runtime config loader accepts database URLs used by boot storage", async () => {
+  const config = await loadRuntimeConfigFromEnv({
+    env: {
+      TAKOSUMI_DATABASE_URL: "postgresql://takos:takos@postgres:5432/takos",
+      DATABASE_URL: "postgresql://fallback:fallback@postgres:5432/takos",
+    },
+  });
+
+  assert.equal(config.environment, "local");
+  assert.deepEqual(config.diagnostics, []);
+});
+
+Deno.test("runtime config loader rejects non-database generic backend URLs", async () => {
   await assert.rejects(
     () =>
       loadRuntimeConfigFromEnv({
@@ -158,7 +170,6 @@ Deno.test("runtime config loader rejects generic backend URLs", async () => {
       assert.deepEqual(
         error.diagnostics.map((diagnostic) => diagnostic.code),
         [
-          "stale_runtime_selector",
           "stale_runtime_selector",
           "stale_runtime_selector",
         ],

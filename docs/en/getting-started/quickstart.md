@@ -1,22 +1,23 @@
 # Quickstart — from git clone to first deploy
 
-::: info Translation status
-Reference, operator, and extending docs remain in Japanese. See the original [Quickstart (JA)](/getting-started/quickstart) for cross-reference.
-:::
+::: info Translation status Reference, operator, and extending docs remain in
+Japanese. See the original [Quickstart (JA)](/getting-started/quickstart) for
+cross-reference. :::
 
-This document shows the shortest path through Takosumi: **write one manifest and deploy it to selfhosted / AWS / GCP / Cloudflare / Azure / Kubernetes**.
+This document shows the shortest path through Takosumi: **write one manifest and
+deploy it to selfhosted / AWS / GCP / Cloudflare / Azure / Kubernetes**.
 
 Takosumi consists of two components:
 
-- **kernel**: manages the HTTP API, the apply pipeline, and the state DB.
-  Takes a manifest and orchestrates resource lifecycles, but **never calls
-  cloud SDKs directly**.
-- **runtime-agent**: the executor that actually talks to cloud REST APIs
-  (SigV4 / OAuth) and the local OS (`docker`, `systemd`, filesystem).
-  **Credentials live only here.**
+- **kernel**: manages the HTTP API, the apply pipeline, and the state DB. Takes
+  a manifest and orchestrates resource lifecycles, but **never calls cloud SDKs
+  directly**.
+- **runtime-agent**: the executor that actually talks to cloud REST APIs (SigV4
+  / OAuth) and the local OS (`docker`, `systemd`, filesystem). **Credentials
+  live only here.**
 
-In dev, a single `takosumi server` command brings both up in one process.
-In production, they can run on separate hosts or co-located.
+In dev, a single `takosumi server` command brings both up in one process. In
+production, they can run on separate hosts or co-located.
 
 ---
 
@@ -52,8 +53,8 @@ exported into the env reach the agent connectors directly.
 
 ## 3. Self-hosted deploy (single VM, Docker / systemd)
 
-The `selfhosted-single-vm@v1` template builds a one-box deployment on a VM
-using systemd / docker / filesystem / a local Postgres / coredns.
+The `selfhosted-single-vm@v1` template builds a one-box deployment on a VM using
+systemd / docker / filesystem / a local Postgres / coredns.
 
 `my-app.yml`:
 
@@ -90,8 +91,8 @@ takosumi deploy my-app.yml \
 
 After the deploy completes (the embedded agent runs the selfhost connectors):
 
-- The web service runs as systemd unit `takosumi-api.service`.
-- Postgres comes up via `docker run postgres` (local-docker connector).
+- The web service runs as a docker compose service.
+- Postgres comes up via `docker run postgres` (local-docker-postgres connector).
 - The assets bucket is created at `/var/lib/takosumi/objects/assets/`.
 - The domain is registered in the local coredns zone.
 
@@ -99,8 +100,8 @@ After the deploy completes (the embedded agent runs the selfhost connectors):
 
 ## 4. Cloud deploy (AWS / GCP / Cloudflare / Azure / Kubernetes)
 
-Place cloud credentials in **the env of the agent host**. In dev, the kernel
-and agent share a process, so simply export them in the shell that launches
+Place cloud credentials in **the env of the agent host**. In dev, the kernel and
+agent share a process, so simply export them in the shell that launches
 `takosumi server`:
 
 ### AWS
@@ -239,15 +240,15 @@ takosumi version
 
 ## 7. Troubleshooting
 
-| Symptom                                                             | Cause                                                                                                                |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `Refusing to start takosumi with plaintext secret storage`          | Production mode without `TAKOSUMI_ENCRYPTION_KEY` set                                                                |
-| `Refusing to start takosumi against an unencrypted database`        | Production mode could not confirm DB at-rest encryption (dev can opt out via `TAKOSUMI_DEV_MODE=1`)                  |
-| `manifest.resources[] is required`                                  | No `template:` and `resources:[]` is empty                                                                           |
-| 401 from `/v1/deployments`                                          | `TAKOSUMI_DEPLOY_TOKEN` unset or token mismatch                                                                      |
-| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`               | `takosumi server --no-agent` is in use but the external agent URL is not exported, or the embedded agent failed to start |
-| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found` | The agent host is missing credentials for that cloud, so the connector is not registered                             |
-| `runtime-agent /v1/lifecycle/apply failed: 401`                     | `TAKOSUMI_AGENT_TOKEN` does not match between agent and kernel                                                       |
+| Symptom                                                                                        | Cause                                                                                                                    |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `Refusing to start takosumi with plaintext secret storage`                                     | Production mode without `TAKOSUMI_ENCRYPTION_KEY` set                                                                    |
+| `Refusing to start takosumi against an unencrypted database`                                   | Production mode could not confirm DB at-rest encryption (dev can opt out via `TAKOSUMI_DEV_MODE=1`)                      |
+| `manifest.resources[] or manifest.template is required` / `manifest expands to zero resources` | No `template:`, or trying to apply only `resources: []`                                                                  |
+| 401 from `/v1/deployments`                                                                     | `TAKOSUMI_DEPLOY_TOKEN` unset or token mismatch                                                                          |
+| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`                                          | `takosumi server --no-agent` is in use but the external agent URL is not exported, or the embedded agent failed to start |
+| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`                            | The agent host is missing credentials for that cloud, so the connector is not registered                                 |
+| `runtime-agent /v1/lifecycle/apply failed: 401`                                                | `TAKOSUMI_AGENT_TOKEN` does not match between agent and kernel                                                           |
 
 ### Deprecated provider IDs
 
@@ -256,28 +257,28 @@ Starting in 0.10, every provider id Takosumi ships is namespaced as
 happens when two operator plugins re-register the same bare id.
 
 | Old (deprecated)        | New (recommended)                |
-| ---------------------- | -------------------------------- |
-| `aws-s3`               | `@takos/aws-s3`                  |
-| `aws-fargate`          | `@takos/aws-fargate`             |
-| `aws-rds`              | `@takos/aws-rds`                 |
-| `route53`              | `@takos/aws-route53`             |
-| `gcp-gcs`              | `@takos/gcp-gcs`                 |
-| `cloud-run`            | `@takos/gcp-cloud-run`           |
-| `cloud-sql`            | `@takos/gcp-cloud-sql`           |
-| `cloud-dns`            | `@takos/gcp-cloud-dns`           |
-| `cloudflare-r2`        | `@takos/cloudflare-r2`           |
-| `cloudflare-container` | `@takos/cloudflare-container`    |
-| `cloudflare-workers`   | `@takos/cloudflare-workers`      |
-| `cloudflare-dns`       | `@takos/cloudflare-dns`          |
-| `azure-container-apps` | `@takos/azure-container-apps`    |
-| `k3s-deployment`       | `@takos/kubernetes-deployment`   |
-| `deno-deploy`          | `@takos/deno-deploy`             |
-| `filesystem`           | `@takos/selfhost-filesystem`     |
-| `minio`                | `@takos/selfhost-minio`          |
-| `docker-compose`       | `@takos/selfhost-docker-compose` |
-| `systemd-unit`         | `@takos/selfhost-systemd`        |
-| `local-docker`         | `@takos/selfhost-postgres`       |
-| `coredns-local`        | `@takos/selfhost-coredns`        |
+| ----------------------- | -------------------------------- |
+| `aws-s3`                | `@takos/aws-s3`                  |
+| `aws-fargate`           | `@takos/aws-fargate`             |
+| `aws-rds`               | `@takos/aws-rds`                 |
+| `route53`               | `@takos/aws-route53`             |
+| `gcp-gcs`               | `@takos/gcp-gcs`                 |
+| `cloud-run`             | `@takos/gcp-cloud-run`           |
+| `cloud-sql`             | `@takos/gcp-cloud-sql`           |
+| `cloud-dns`             | `@takos/gcp-cloud-dns`           |
+| `cloudflare-r2`         | `@takos/cloudflare-r2`           |
+| `cloudflare-container`  | `@takos/cloudflare-container`    |
+| `cloudflare-workers`    | `@takos/cloudflare-workers`      |
+| `cloudflare-dns`        | `@takos/cloudflare-dns`          |
+| `azure-container-apps`  | `@takos/azure-container-apps`    |
+| `k3s-deployment`        | `@takos/kubernetes-deployment`   |
+| `deno-deploy`           | `@takos/deno-deploy`             |
+| `filesystem`            | `@takos/selfhost-filesystem`     |
+| `minio`                 | `@takos/selfhost-minio`          |
+| `docker-compose`        | `@takos/selfhost-docker-compose` |
+| `systemd-unit`          | `@takos/selfhost-systemd`        |
+| `local-docker-postgres` | `@takos/selfhost-postgres`       |
+| `coredns-local`         | `@takos/selfhost-coredns`        |
 
 The old ids are still accepted in 0.10 / 0.11, but the kernel logs a warning:
 
@@ -286,32 +287,31 @@ The old ids are still accepted in 0.10 / 0.11, but the kernel logs a warning:
 use "@takos/aws-fargate" — bare ids will be rejected in 0.12.
 ```
 
-Ids that already start with `@` are never rewritten. 0.12 drops the old-id
-path entirely, so rewrite the `provider:` values in your manifests to the new
-form.
+Ids that already start with `@` are never rewritten. 0.12 drops the old-id path
+entirely, so rewrite the `provider:` values in your manifests to the new form.
 
 ### Artifact storage hygiene
 
 Blobs uploaded via `takosumi artifact push` stay in object storage as
-content-addressed entries (`sha256:...`). Operators run a periodic GC to
-reclaim artifacts that destroyed deployments used to pin:
+content-addressed entries (`sha256:...`). Operators run a periodic GC to reclaim
+artifacts that destroyed deployments used to pin:
 
 ```bash
 takosumi artifact gc --dry-run    # show what would be deleted
 takosumi artifact gc              # actually delete
 ```
 
-The kernel runs a mark+sweep over the persistent `takosumi_deployments`
-records and only deletes blobs that no deployment record references (whether
-its status is `applied` or `destroyed`). The operation is idempotent, so
-running it repeatedly is harmless.
+The kernel runs a mark+sweep over the persistent `takosumi_deployments` records
+and only deletes blobs that no deployment record references (whether its status
+is `applied` or `destroyed`). The operation is idempotent, so running it
+repeatedly is harmless.
 
 ### Artifact upload size cap
 
 `POST /v1/artifacts` currently buffers the full multipart body in the kernel
 process memory before writing it to object storage, so uploading a 50MB+ JS
-bundle or Lambda zip naively can pressure kernel RAM. To guard against this,
-a hard cap applies to the body size of a single upload:
+bundle or Lambda zip naively can pressure kernel RAM. To guard against this, a
+hard cap applies to the body size of a single upload:
 
 | Env / Option                             | Default             | Description                                          |
 | ---------------------------------------- | ------------------- | ---------------------------------------------------- |
@@ -319,23 +319,23 @@ a hard cap applies to the body size of a single upload:
 | `RegisterArtifactRoutesOptions.maxBytes` | (same default)      | Programmatic override available for an embedded host |
 
 Requests over the cap are rejected with `413 Payload Too Large`
-(`error.code: "resource_exhausted"`). When `Content-Length` already exceeds
-the cap, the kernel returns 413 immediately without reading the body, closing
-the path that lets a hostile client OOM the kernel by sending an arbitrary
-body.
+(`error.code: "resource_exhausted"`). When `Content-Length` already exceeds the
+cap, the kernel returns 413 immediately without reading the body, closing the
+path that lets a hostile client OOM the kernel by sending an arbitrary body.
 
 > If you need to ship artifacts above 50 MiB (large bundles / zips / OCI
-> layers), either raise `TAKOSUMI_ARTIFACT_MAX_BYTES` and provision more RAM,
-> or wire an external object-storage backend (R2 / S3 / GCS, etc.) into the
-> kernel's `objectStorage` adapter and stream presigned uploads directly to
-> the backend. The `ObjectStoragePort` interface stays the same, so swapping
-> adapters is enough. A full streaming-multipart parser is future work.
+> layers), either raise `TAKOSUMI_ARTIFACT_MAX_BYTES` and provision more RAM, or
+> wire an external object-storage backend (R2 / S3 / GCS, etc.) into the
+> kernel's `objectStorage` adapter and stream presigned uploads directly to the
+> backend. The `ObjectStoragePort` interface stays the same, so swapping
+> adapters is enough. Kernel-routed multipart upload is the capped buffered
+> path; large artifacts should stream directly into the storage backend.
 
 ### Read-only artifact fetch token (agent ↔ kernel scope separation)
 
-For production deploys that split `kernel <-> runtime-agent` across hosts,
-issue a separate read-only artifact fetch token so a compromised agent host
-cannot upload, delete, or GC artifacts:
+For production deploys that split `kernel <-> runtime-agent` across hosts, issue
+a separate read-only artifact fetch token so a compromised agent host cannot
+upload, delete, or GC artifacts:
 
 ```bash
 # Kernel host (issue both the deploy token and a read-only fetch token)
@@ -349,13 +349,12 @@ export TAKOSUMI_ARTIFACT_FETCH_TOKEN=$(openssl rand -hex 32)
 - Hand `TAKOSUMI_ARTIFACT_FETCH_TOKEN` to the agent host and the agent's
   connectors can fetch blobs via GET / HEAD `/v1/artifacts/:hash`, but POST
   (upload) / DELETE / GC return 401 from the kernel.
-- The agent host only needs the fetch token for the artifact endpoint; it
-  does not need the deploy token.
+- The agent host only needs the fetch token for the artifact endpoint; it does
+  not need the deploy token.
 
-When the kernel passes an artifact-store locator to the runtime-agent
-(combined with `TAKOSUMI_PUBLIC_BASE_URL`), it prefers the fetch token if
-one is set (and falls back to the deploy token for backward compatibility
-when it is not).
+When the kernel passes an artifact-store locator to the runtime-agent (combined
+with `TAKOSUMI_PUBLIC_BASE_URL`), it prefers the fetch token if one is set (and
+falls back to the deploy token for backward compatibility when it is not).
 
 ---
 
@@ -365,4 +364,5 @@ when it is not).
 - [Shape catalog (JA)](/reference/shapes)
 - [Provider plugins (JA)](/reference/providers)
 - [Templates (JA)](/reference/templates)
-- [Operator bootstrap (JA)](/operator/bootstrap) (kernel ↔ agent integration details)
+- [Operator bootstrap (JA)](/operator/bootstrap) (kernel ↔ agent integration
+  details)

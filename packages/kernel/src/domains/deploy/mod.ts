@@ -25,3 +25,8 @@ export {
 } from "./group_head_history.ts";
 export * from "./plan_service.ts";
 export * from "./apply_service.ts";
+export * from "./manifest_v1.ts";
+export * from "./operation_plan_preview.ts";
+export * from "./operation_journal.ts";
+export * from "./revoke_debt_store.ts";
+export * from "./revoke_debt_cleanup_worker.ts";

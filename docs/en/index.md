@@ -40,30 +40,35 @@ features:
       Save remote / token in `~/.takosumi/config.yml`, generate shell completion via `takosumi completions <shell>`, and emit systemd / docker templates with `takosumi server --detach`.
 ---
 
-::: info Translation status
-Reference, operator, and extending docs remain in Japanese. The Quickstart and this landing page are translated; deeper docs link back to the JA versions.
-:::
+::: info Translation status Reference, operator, and extending docs remain in
+Japanese. The Quickstart and this landing page are translated; deeper docs link
+back to the JA versions. :::
 
 ## Architecture
 
 Takosumi is distributed as **6 JSR packages**:
 
-| Package                                                                                        | Role                                                                  |
-| ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)                           | Type contracts for Shape / Provider / Template                        |
-| [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)                               | HTTP server + apply pipeline + state DB + worker daemon               |
-| [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)                             | Shape catalog + provider plugins + templates + factories              |
-| [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)                 | Cloud SDK / OS executor (data plane)                                  |
-| [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                                     | CLI for `takosumi deploy` / `takosumi server` and friends             |
-| [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                                             | Umbrella that re-publishes the five packages above                    |
+| Package                                                                         | Role                                                      |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | Type contracts for Shape / Provider / Template            |
+| [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | HTTP server + apply pipeline + state DB + worker daemon   |
+| [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | Shape catalog + provider plugins + templates + factories  |
+| [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | Cloud SDK / OS executor (data plane)                      |
+| [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | CLI for `takosumi deploy` / `takosumi server` and friends |
+| [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | Umbrella that re-publishes the five packages above        |
 
 See [Concepts (JA)](/getting-started/concepts) for details.
 
 ## Related docs
 
-- [Quickstart](/en/getting-started/quickstart) — from `takosumi server` to a cloud deploy in one command
-- [Manifest (Shape Model) (JA)](/manifest) — `resources[]` / `template:` / `${ref:...}` / `${secret-ref:...}` syntax
-- [Shape Catalog (JA)](/reference/shapes) — spec / outputs / capabilities for all 5 shapes
-- [Provider Plugins (JA)](/reference/providers) — cloud × shape matrix for 21 providers
+- [Quickstart](/en/getting-started/quickstart) — from `takosumi server` to a
+  cloud deploy in one command
+- [Manifest (Shape Model) (JA)](/manifest) — `resources[]` / `template:` /
+  `${ref:...}` / `${secret-ref:...}` syntax
+- [Shape Catalog (JA)](/reference/shapes) — spec / outputs / capabilities for
+  all 5 shapes
+- [Provider Plugins (JA)](/reference/providers) — cloud × shape matrix for 20
+  default providers plus 1 opt-in provider
 - [CLI Reference (JA)](/reference/cli) — every subcommand, flag, and env
-- [Operator Bootstrap (JA)](/operator/bootstrap) — wire-in example for `createTakosumiProductionProviders`
+- [Operator Bootstrap (JA)](/operator/bootstrap) — wire-in example for
+  `createTakosumiProductionProviders`

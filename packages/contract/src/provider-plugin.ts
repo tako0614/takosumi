@@ -30,6 +30,13 @@ export interface ApplyResult<Outputs = JsonObject> {
   readonly diagnostics?: readonly ApplyDiagnostic[];
 }
 
+export interface CompensateResult {
+  readonly ok: boolean;
+  readonly note?: string;
+  readonly revokeDebtRequired?: boolean;
+  readonly detail?: JsonObject;
+}
+
 export type ResourceStatusKind =
   | "pending"
   | "ready"
@@ -48,6 +55,64 @@ export interface RefResolver {
   resolve(expression: string): JsonValue;
 }
 
+export interface PlatformOperationIdempotencyKey {
+  readonly spaceId: string;
+  readonly operationPlanDigest: `sha256:${string}`;
+  readonly journalEntryId: string;
+}
+
+export type PlatformOperationRecoveryMode =
+  | "normal"
+  | "continue"
+  | "compensate"
+  | "inspect";
+
+export type PlatformOperationWalStage =
+  | "prepare"
+  | "pre-commit"
+  | "commit"
+  | "post-commit"
+  | "observe"
+  | "finalize"
+  | "abort"
+  | "skip";
+
+export interface PlatformOperationRequest {
+  readonly spaceId: string;
+  readonly operationId: string;
+  readonly operationAttempt: number;
+  readonly journalCursor: string;
+  readonly idempotencyKey: string;
+  readonly desiredGeneration?: number;
+  readonly desiredSnapshotId: string;
+  readonly resolutionSnapshotId?: string;
+  readonly operationKind: string;
+  readonly inputRefs: readonly string[];
+  readonly preRecordedGeneratedObjectIds: readonly string[];
+  readonly expectedExternalIdempotencyKeys: readonly string[];
+  readonly approvedEffects: readonly JsonObject[];
+  readonly recoveryMode: PlatformOperationRecoveryMode;
+  readonly walStage: PlatformOperationWalStage;
+  readonly deadline?: string;
+}
+
+export interface PlatformOperationContext {
+  readonly phase: "apply" | "destroy" | "compensate";
+  readonly walStage: PlatformOperationWalStage;
+  readonly operationId: string;
+  readonly operationAttempt?: number;
+  readonly resourceName: string;
+  readonly providerId: string;
+  readonly op: "create" | "delete";
+  readonly desiredDigest: `sha256:${string}`;
+  readonly operationPlanDigest: `sha256:${string}`;
+  readonly idempotencyKey: PlatformOperationIdempotencyKey;
+  readonly idempotencyKeyString: string;
+  readonly recoveryMode?: PlatformOperationRecoveryMode;
+  readonly approvedEffects?: readonly JsonObject[];
+  readonly deadline?: string;
+}
+
 export interface PlatformContext {
   readonly tenantId: string;
   readonly spaceId: string;
@@ -57,6 +122,19 @@ export interface PlatformContext {
   readonly objectStorage: objectStorage.ObjectStoragePort;
   readonly refResolver: RefResolver;
   readonly resolvedOutputs: ReadonlyMap<string, JsonObject>;
+  /**
+   * Operation metadata attached by the kernel while executing a public WAL
+   * commit. Providers should forward `idempotencyKeyString` to external APIs
+   * that support request tokens and use the tuple to dedupe local side effects.
+   * Absent outside WAL-backed apply / destroy paths.
+   */
+  readonly operation?: PlatformOperationContext;
+}
+
+export function formatPlatformOperationIdempotencyKey(
+  key: PlatformOperationIdempotencyKey,
+): string {
+  return `${key.spaceId}:${key.operationPlanDigest}:${key.journalEntryId}`;
 }
 
 /**
@@ -82,6 +160,10 @@ export interface ProviderPlugin<
   validate?(spec: Spec, issues: ProviderValidationIssue[]): void;
   apply(spec: Spec, ctx: PlatformContext): Promise<ApplyResult<Outputs>>;
   destroy(handle: ResourceHandle, ctx: PlatformContext): Promise<void>;
+  compensate?(
+    handle: ResourceHandle,
+    ctx: PlatformContext,
+  ): Promise<CompensateResult>;
   status(
     handle: ResourceHandle,
     ctx: PlatformContext,

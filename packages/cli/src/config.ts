@@ -3,14 +3,11 @@
  *
  * Resolution order for `--remote` / `--token` (highest priority first):
  *   1. CLI flag (`--remote`, `--token`) — explicit wins.
- *   2. Command-specific env (e.g. `TAKOSUMI_DEPLOY_TOKEN` for deploy/destroy).
- *      The command-side reads these directly, not via this module.
- *   3. Generic env: `TAKOSUMI_REMOTE_URL` / `TAKOSUMI_TOKEN`.
+ *   2. Specific env: `TAKOSUMI_REMOTE_URL` / `TAKOSUMI_DEPLOY_TOKEN`.
+ *   3. Generic token env: `TAKOSUMI_TOKEN` (warns once).
  *   4. `~/.takosumi/config.yml` — operator-managed defaults so common
  *      flags (`remote_url`, `token`) need not be re-typed per command.
- *   5. Deprecated env aliases: `TAKOSUMI_KERNEL_URL` / `TAKOSUMI_TOKEN`. A
- *      one-shot warning fires the first time these are read so operators
- *      know to migrate.
+ *   5. Deprecated remote URL alias: `TAKOSUMI_KERNEL_URL` (warns once).
  *
  * The config file is parsed lazily on first `loadConfig()` call and cached
  * for the lifetime of the process — every CLI invocation already starts a
@@ -138,14 +135,14 @@ function resolveKernelUrl(
 function resolveToken(
   file: TakosumiConfigFile | undefined,
 ): string | undefined {
-  // Generic alias matches `TAKOSUMI_TOKEN`. The deploy / artifact commands
-  // separately fall back to `TAKOSUMI_DEPLOY_TOKEN` for stronger
-  // command-specific scoping; this generic alias only fires when the
-  // command didn't pass a token via flag and the more-specific env was
-  // also unset.
+  const deployToken = Deno.env.get("TAKOSUMI_DEPLOY_TOKEN");
+  if (deployToken) return deployToken;
+
+  // Generic alias matches `TAKOSUMI_TOKEN`. It only fires when the
+  // more-specific deploy endpoint token is unset.
   const token = Deno.env.get("TAKOSUMI_TOKEN");
   if (token) {
-    if (!warnedToken && !Deno.env.get("TAKOSUMI_DEPLOY_TOKEN")) {
+    if (!warnedToken) {
       console.warn(
         "[takosumi] TAKOSUMI_TOKEN is generic; prefer TAKOSUMI_DEPLOY_TOKEN " +
           "for kernel deploy / artifact endpoints",

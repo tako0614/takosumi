@@ -1,175 +1,94 @@
 # Operator Bootstrap
 
-operator が **18 個の bundled provider plugin** を一括で wire するための factory
-`createTakosumiProductionProviders(opts)` の使い方をまとめます。
+operator が **21 個の bundled provider plugin (default-on 20 + opt-in 1)** を
+kernel に wire するための factory `createTakosumiProductionProviders(opts)`
+の使い方をまとめます。
 
 source:
-[`src/shape-providers/factories.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shape-providers/factories.ts)
+[`packages/plugins/src/shape-providers/factories.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/factories.ts)
 
-> 重要: factory 経由で wire された provider は **operator gateway** または local
-> Deno API adapter を通って upstream cloud API を呼びます。kernel 側に
-> credential が直接届くことはありません
+> 重要: factory 経由で wire された provider は runtime-agent に lifecycle
+> envelope (apply / destroy / describe) を POST します。credential と SDK code
+> は runtime-agent 側に置き、kernel process には置きません
 > ([Provider Plugins § Real client](/reference/providers#real-client--lifecycle-adapter))。
 
 ## API シグネチャ
 
 ```ts
-import { createTakosumiProductionProviders } from "@takos/takosumi/shape-providers";
+import { registerProvider } from "takosumi-contract";
+import { createTakosumiProductionProviders } from "@takos/takosumi-plugins/shape-providers/factories";
 
 const providers = createTakosumiProductionProviders({
-  aws: {
-    region: "ap-northeast-1",
-    gatewayUrl: "https://gateway.takos.example/aws",
-    bearerToken: "...",
+  agentUrl: "http://127.0.0.1:8789",
+  token: Deno.env.get("TAKOSUMI_AGENT_TOKEN")!,
+  artifactStore: {
+    baseUrl: "https://kernel.example.com/v1/artifacts",
+    token: Deno.env.get("TAKOSUMI_ARTIFACT_FETCH_TOKEN"),
   },
-  gcp: {
-    project: "my-project",
-    region: "asia-northeast1",
-    gatewayUrl: "https://gateway.takos.example/gcp",
-  },
-  cloudflare: {
-    accountId: "abcd...",
-    zoneId: "TAKOS_ZONE",
-    gatewayUrl: "https://gateway.takos.example/cloudflare",
-  },
-  kubernetes: {
-    namespace: "takos-prod",
-    gatewayUrl: "https://gateway.takos.example/kubernetes",
-  },
-  selfhosted: {
-    rootDir: "/var/lib/takos/object-store",
-    systemdUnitDir: "/etc/systemd/system",
-  },
+  enableDenoDeploy: false,
 });
+
+for (const provider of providers) {
+  registerProvider(provider);
+}
 ```
 
-`opts` の各 cloud 設定は **任意** で、指定された cloud の provider のみが wire
-されます。空の `opts: {}` を渡すと 0 個の provider が返ります。
+`agentUrl` と `token` が必須です。AWS / GCP / Cloudflare / Azure / Kubernetes /
+Selfhost は既定で有効、Deno Deploy だけは `enableDenoDeploy: true`
+を渡したときに追加されます。 stock boot (`takosumi server` /
+`packages/kernel/src/index.ts`) では `TAKOSUMI_ENABLE_DENO_DEPLOY_PROVIDER=1`
+がこの opt-in に対応します。
 
 ## `TakosumiProductionProviderOptions`
 
 ```ts
 interface TakosumiProductionProviderOptions {
-  readonly aws?: TakosumiAwsCredentials;
-  readonly gcp?: TakosumiGcpCredentials;
-  readonly cloudflare?: TakosumiCloudflareCredentials;
-  readonly kubernetes?: TakosumiKubernetesCredentials;
-  readonly selfhosted?: TakosumiSelfhostedCredentials;
-}
-```
-
-各 cloud の field 構造:
-
-### AWS (`TakosumiAwsCredentials`)
-
-```ts
-interface TakosumiAwsCredentials {
-  readonly region: string; // e.g. "ap-northeast-1"
-  readonly accessKeyId?: string; // 直接 AWS API を叩く構成のみ使う
-  readonly secretAccessKey?: string;
-  readonly sessionToken?: string;
-  readonly gatewayUrl?: string | URL; // 推奨: operator gateway URL
-  readonly bearerToken?: string; // gateway 認証
+  readonly agentUrl: string;
+  readonly token: string;
   readonly fetch?: typeof fetch;
+  readonly enableAws?: boolean; // default true
+  readonly enableGcp?: boolean; // default true
+  readonly enableCloudflare?: boolean; // default true
+  readonly enableAzure?: boolean; // default true
+  readonly enableKubernetes?: boolean; // default true
+  readonly enableSelfhost?: boolean; // default true
+  readonly enableDenoDeploy?: boolean; // default false
+  readonly artifactStore?: ArtifactStoreLocator;
 }
 ```
 
-wire される provider: `aws-s3` / `aws-fargate` / `aws-rds` / `route53`。
+`enable*` は provider registry 側の公開範囲を絞るための switch です。
+runtime-agent 側に該当 connector がない cloud は無効化してください。
 
-### GCP (`TakosumiGcpCredentials`)
+## Provider 数
 
-```ts
-interface TakosumiGcpCredentials {
-  readonly project: string;
-  readonly region: string;
-  readonly credentialsJson?: string;
-  readonly gatewayUrl?: string | URL;
-  readonly bearerToken?: string;
-  readonly fetch?: typeof fetch;
-}
-```
+| group       | default | opt-in | provider ids                                                                                                                                                              |
+| ----------- | ------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AWS         | 4       | 0      | `@takos/aws-s3`, `@takos/aws-fargate`, `@takos/aws-rds`, `@takos/aws-route53`                                                                                             |
+| GCP         | 4       | 0      | `@takos/gcp-gcs`, `@takos/gcp-cloud-run`, `@takos/gcp-cloud-sql`, `@takos/gcp-cloud-dns`                                                                                  |
+| Cloudflare  | 4       | 0      | `@takos/cloudflare-r2`, `@takos/cloudflare-container`, `@takos/cloudflare-workers`, `@takos/cloudflare-dns`                                                               |
+| Azure       | 1       | 0      | `@takos/azure-container-apps`                                                                                                                                             |
+| Kubernetes  | 1       | 0      | `@takos/kubernetes-deployment`                                                                                                                                            |
+| Selfhost    | 6       | 0      | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres`, `@takos/selfhost-coredns` |
+| Deno Deploy | 0       | 1      | `@takos/deno-deploy`                                                                                                                                                      |
 
-wire される provider: `gcp-gcs` / `cloud-run` / `cloud-sql` / `cloud-dns`。
+## Runtime-agent との対応
 
-### Cloudflare (`TakosumiCloudflareCredentials`)
+provider id は manifest に書く安定した id です。runtime-agent の connector 名は
+実装詳細で、operator は agent boot 時に必要な connector credential / local path
+を設定します。
 
-```ts
-interface TakosumiCloudflareCredentials {
-  readonly accountId: string;
-  readonly apiToken?: string;
-  readonly zoneId?: string; // 既定 "TAKOS_ZONE"
-  readonly gatewayUrl?: string | URL;
-  readonly fetch?: typeof fetch;
-}
-```
+例:
 
-wire される provider: `cloudflare-r2` / `cloudflare-container` /
-`cloudflare-dns`。
-
-### Kubernetes (`TakosumiKubernetesCredentials`)
-
-```ts
-interface TakosumiKubernetesCredentials {
-  readonly namespace: string;
-  readonly kubeconfigPath?: string;
-  readonly gatewayUrl?: string | URL;
-  readonly bearerToken?: string;
-  readonly fetch?: typeof fetch;
-}
-```
-
-wire される provider: `k3s-deployment`。
-
-### Selfhosted (`TakosumiSelfhostedCredentials`)
-
-```ts
-interface TakosumiSelfhostedCredentials {
-  readonly rootDir?: string; // 既定 "/var/lib/takos/object-store"
-  readonly postgresHostBinding?: string; // 既定 "localhost"
-  readonly objectStoreEndpoint?: string; // 既定 "http://minio.local:9000"
-  readonly systemdUnitDir?: string; // 既定 "/etc/systemd/system"
-  readonly coreDnsZoneFile?: string; // 既定 "/etc/coredns/Corefile"
-  readonly fetch?: typeof fetch;
-}
-```
-
-wire される provider: `filesystem` / `docker-compose` / `systemd-unit` /
-`local-docker` / `minio` / `coredns-local`。
-
-## Gateway URL pattern
-
-operator gateway は `JsonGateway` の base URL を root として、各 cloud で 固定の
-path 体系を持ちます (cf. `factories.ts` の Gateway*Lifecycle 群):
-
-| cloud      | path 例                                                      |
-| ---------- | ------------------------------------------------------------ |
-| AWS        | `aws/s3/create-bucket`, `aws/fargate/create-service`, ...    |
-| GCP        | `gcp/gcs/create-bucket`, `gcp/cloud-run/create-service`, ... |
-| Cloudflare | `cloudflare/r2/create-bucket`, `cloudflare/containers/...`   |
-| Kubernetes | `kubernetes/k3s/create-deployment`, ...                      |
-
-`gatewayUrl` は **末尾に `/` を付けても付けなくても** どちらでも OK
-(`JsonGateway` 側で正規化されます)。`bearerToken` を付けると
-`Authorization: Bearer <token>` ヘッダで gateway 認証されます。
-
-## kernel apply pipeline への wire
-
-operator は kernel 起動時に provider registry へ inject します:
-
-```ts
-import { registerProvider } from "takosumi-contract";
-import { createTakosumiProductionProviders } from "@takos/takosumi/shape-providers";
-
-const providers = createTakosumiProductionProviders({ aws, cloudflare });
-for (const plugin of providers) {
-  registerProvider(plugin);
-}
-```
-
-manifest の `resources[].provider` field は registry から `getProvider(id)` で
-lookup され、`.implements` が `resources[].shape` と一致し、`requires` の subset
-に `capabilities` を持つ場合に selection されます (cf.
-[Manifest § Capability requires](/manifest#capability-requires))。
+| manifest provider id             | runtime-agent connector の例    |
+| -------------------------------- | ------------------------------- |
+| `@takos/aws-fargate`             | AWS ECS / Fargate connector     |
+| `@takos/gcp-cloud-run`           | GCP Cloud Run connector         |
+| `@takos/cloudflare-container`    | Cloudflare Container connector  |
+| `@takos/kubernetes-deployment`   | Kubernetes deployment connector |
+| `@takos/selfhost-docker-compose` | docker-compose connector        |
+| `@takos/selfhost-postgres`       | local Docker Postgres connector |
+| `@takos/deno-deploy`             | Deno Deploy connector           |
 
 ## Selfhosted-only な最小構成
 
@@ -177,29 +96,25 @@ lookup され、`.implements` が `resources[].shape` と一致し、`requires` 
 
 ```ts
 const providers = createTakosumiProductionProviders({
-  selfhosted: {
-    rootDir: "/tmp/takos-objects",
-    systemdUnitDir: "/etc/systemd/system",
-    coreDnsZoneFile: "/etc/coredns/Corefile",
-  },
+  agentUrl: "http://127.0.0.1:8789",
+  token: Deno.env.get("TAKOSUMI_AGENT_TOKEN")!,
+  enableAws: false,
+  enableGcp: false,
+  enableCloudflare: false,
+  enableAzure: false,
+  enableKubernetes: false,
 });
-// providers = filesystem / docker-compose / systemd-unit / local-docker / minio / coredns-local
+// providers = @takos/selfhost-* の 6 provider
 ```
 
 この構成と相性が良い template が
 [`selfhosted-single-vm@v1`](/reference/templates#selfhosted-single-vm-v1) です。
 
-## テスト時の差し替え
-
-production wire を bypass し、`InMemory<Provider>Lifecycle` を直接渡したい
-場合は factory を使わず、各 `create<Provider>(...)` を個別に呼んで
-`registerProvider` してください (cf.
-[`object-store/aws-s3.ts`](https://github.com/takos-jp/takosumi/blob/main/src/shape-providers/object-store/aws-s3.ts)
-の `InMemoryAwsS3Lifecycle`)。
-
 ## 関連ページ
 
-- [Provider Plugins](/reference/providers) — 21 provider の実装と capabilities
+- [Provider Plugins](/reference/providers) — 20 default + 1 opt-in provider の
+  実装と capabilities
+- [Runtime-agent API](/reference/runtime-agent-api) — agent lifecycle envelope
 - [Shape Catalog](/reference/shapes) — Shape ごとの outputs と capabilities
 - [Manifest](/manifest) — operator が apply する manifest の syntax
 - [Extending](/extending) — 新 provider 追加時の factory 配線

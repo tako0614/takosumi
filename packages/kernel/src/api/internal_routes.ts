@@ -85,7 +85,9 @@ export function registerInternalRoutes(
   registerApiErrorHandler(app);
   const { core, deployments } = options.services;
   const getInternalServiceSecret = options.getInternalServiceSecret ??
-    (() => Deno.env.get("TAKOSUMI_INTERNAL_SERVICE_SECRET"));
+    (() =>
+      Deno.env.get("TAKOSUMI_INTERNAL_API_SECRET") ??
+        Deno.env.get("TAKOSUMI_INTERNAL_SERVICE_SECRET"));
 
   app.get(TAKOSUMI_INTERNAL_PATHS.spaces, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {

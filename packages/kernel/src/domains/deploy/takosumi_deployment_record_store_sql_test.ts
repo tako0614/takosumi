@@ -28,8 +28,19 @@ interface TakosumiDeploymentFakeRow extends Record<string, unknown> {
   updated_at: string;
 }
 
+interface TakosumiDeployLockFakeRow {
+  tenant_id: string;
+  name: string;
+  owner_token: string;
+  locked_until_ms: number;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
 class FakeTakosumiSqlClient implements SqlClient {
   readonly rows: TakosumiDeploymentFakeRow[] = [];
+  readonly locks: TakosumiDeployLockFakeRow[] = [];
+  nowMs = Date.parse(NOW_1);
 
   query<Row extends Record<string, unknown> = Record<string, unknown>>(
     sql: string,
@@ -50,6 +61,15 @@ class FakeTakosumiSqlClient implements SqlClient {
     }
     if (trimmed.startsWith("delete from takosumi_deployments")) {
       return Promise.resolve(cast(this.#handleDelete(params)));
+    }
+    if (trimmed.startsWith("insert into takosumi_deploy_locks")) {
+      return Promise.resolve(cast(this.#handleLockAcquire(params)));
+    }
+    if (trimmed.startsWith("update takosumi_deploy_locks")) {
+      return Promise.resolve(cast(this.#handleLockRenew(params)));
+    }
+    if (trimmed.startsWith("delete from takosumi_deploy_locks")) {
+      return Promise.resolve(cast(this.#handleLockRelease(params)));
     }
     if (
       trimmed.startsWith(
@@ -167,6 +187,71 @@ class FakeTakosumiSqlClient implements SqlClient {
       rowCount: this.rows.length,
     };
   }
+
+  #handleLockAcquire(
+    params: readonly unknown[],
+  ): SqlQueryResult<{ owner_token: string }> {
+    const [tenantId, name, ownerToken, leaseMs] = params as [
+      string,
+      string,
+      string,
+      number,
+    ];
+    const existing = this.locks.find(
+      (row) => row.tenant_id === tenantId && row.name === name,
+    );
+    const lockedUntil = this.nowMs + leaseMs;
+    if (!existing) {
+      this.locks.push({
+        tenant_id: tenantId,
+        name,
+        owner_token: ownerToken,
+        locked_until_ms: lockedUntil,
+        created_at_ms: this.nowMs,
+        updated_at_ms: this.nowMs,
+      });
+      return { rows: [{ owner_token: ownerToken }], rowCount: 1 };
+    }
+    if (existing.locked_until_ms > this.nowMs) {
+      return { rows: [], rowCount: 0 };
+    }
+    existing.owner_token = ownerToken;
+    existing.locked_until_ms = lockedUntil;
+    existing.updated_at_ms = this.nowMs;
+    return { rows: [{ owner_token: ownerToken }], rowCount: 1 };
+  }
+
+  #handleLockRenew(params: readonly unknown[]): SqlQueryResult {
+    const [tenantId, name, ownerToken, leaseMs] = params as [
+      string,
+      string,
+      string,
+      number,
+    ];
+    const existing = this.locks.find(
+      (row) =>
+        row.tenant_id === tenantId &&
+        row.name === name &&
+        row.owner_token === ownerToken,
+    );
+    if (!existing) return { rows: [], rowCount: 0 };
+    existing.locked_until_ms = this.nowMs + leaseMs;
+    existing.updated_at_ms = this.nowMs;
+    return { rows: [], rowCount: 1 };
+  }
+
+  #handleLockRelease(params: readonly unknown[]): SqlQueryResult {
+    const [tenantId, name, ownerToken] = params as [string, string, string];
+    const index = this.locks.findIndex(
+      (row) =>
+        row.tenant_id === tenantId &&
+        row.name === name &&
+        row.owner_token === ownerToken,
+    );
+    if (index < 0) return { rows: [], rowCount: 0 };
+    this.locks.splice(index, 1);
+    return { rows: [], rowCount: 1 };
+  }
 }
 
 const TENANT = "takosumi-deploy";
@@ -186,7 +271,10 @@ function createStore(): {
   client: FakeTakosumiSqlClient;
 } {
   const client = new FakeTakosumiSqlClient();
-  const store = new SqlTakosumiDeploymentRecordStore({ client });
+  const store = new SqlTakosumiDeploymentRecordStore({
+    client,
+    lockPollMs: 1,
+  });
   return { store, client };
 }
 
@@ -450,6 +538,88 @@ Deno.test(
 );
 
 Deno.test(
+  "SqlStore.acquireLock serialises waiters across store instances",
+  async () => {
+    const client = new FakeTakosumiSqlClient();
+    const first = new SqlTakosumiDeploymentRecordStore({
+      client,
+      lockPollMs: 1,
+    });
+    const second = new SqlTakosumiDeploymentRecordStore({
+      client,
+      lockPollMs: 1,
+    });
+
+    await first.acquireLock(TENANT, "locked-app");
+    let secondAcquired = false;
+    const waiter = (async () => {
+      await second.acquireLock(TENANT, "locked-app");
+      secondAcquired = true;
+      await second.releaseLock(TENANT, "locked-app");
+    })();
+
+    await delay(5);
+    assert.equal(
+      secondAcquired,
+      false,
+      "second store must wait while first store owns the SQL lease",
+    );
+    assert.equal(client.locks.length, 1);
+
+    await first.releaseLock(TENANT, "locked-app");
+    await waiter;
+    assert.equal(secondAcquired, true);
+    assert.equal(client.locks.length, 0);
+  },
+);
+
+Deno.test(
+  "SqlStore.acquireLock can take over an expired cross-process lease",
+  async () => {
+    const client = new FakeTakosumiSqlClient();
+    const first = new SqlTakosumiDeploymentRecordStore({
+      client,
+      lockLeaseMs: 60_000,
+      lockPollMs: 1,
+    });
+    const second = new SqlTakosumiDeploymentRecordStore({
+      client,
+      lockLeaseMs: 60_000,
+      lockPollMs: 1,
+    });
+
+    await first.acquireLock(TENANT, "expired-app");
+    client.nowMs += 60_001;
+    await second.acquireLock(TENANT, "expired-app");
+
+    assert.equal(client.locks.length, 1);
+    await first.releaseLock(TENANT, "expired-app");
+    assert.equal(
+      client.locks.length,
+      1,
+      "stale holder must not delete the takeover owner's lease",
+    );
+    await second.releaseLock(TENANT, "expired-app");
+    assert.equal(client.locks.length, 0);
+  },
+);
+
+Deno.test("SqlStore.acquireLock applies configured SQL lease window", async () => {
+  const client = new FakeTakosumiSqlClient();
+  const store = new SqlTakosumiDeploymentRecordStore({
+    client,
+    lockLeaseMs: 42_000,
+    lockHeartbeatMs: 14_000,
+    lockPollMs: 1,
+  });
+
+  await store.acquireLock(TENANT, "custom-lease-app");
+  assert.equal(client.locks.length, 1);
+  assert.equal(client.locks[0].locked_until_ms, client.nowMs + 42_000);
+  await store.releaseLock(TENANT, "custom-lease-app");
+});
+
+Deno.test(
   "SqlStore.acquireLock does not block on different keys",
   async () => {
     const { store } = createStore();
@@ -514,6 +684,10 @@ Deno.test(
     assert.deepEqual(order.slice().sort(), [0, 1, 2, 3, 4]);
   },
 );
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // --- Round-trip CRUD --------------------------------------------------------
 

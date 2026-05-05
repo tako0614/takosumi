@@ -52,8 +52,8 @@ const DOC_DESCRIPTOR_SOURCES: readonly { alias: string; path: string }[] = [
     path: "descriptors/composites/composite-web-app-with-cdn-v1.jsonld",
   },
   {
-    alias: "artifact.js-module@v1",
-    path: "descriptors/contracts/artifact-js-module-v1.jsonld",
+    alias: "artifact.js-bundle@v1",
+    path: "descriptors/contracts/artifact-js-bundle-v1.jsonld",
   },
   {
     alias: "artifact.oci-image@v1",

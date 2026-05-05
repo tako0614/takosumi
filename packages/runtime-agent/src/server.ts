@@ -11,10 +11,12 @@
 import { Hono } from "hono";
 import {
   LIFECYCLE_APPLY_PATH,
+  LIFECYCLE_COMPENSATE_PATH,
   LIFECYCLE_DESCRIBE_PATH,
   LIFECYCLE_DESTROY_PATH,
   LIFECYCLE_HEALTH_PATH,
   type LifecycleApplyRequest,
+  type LifecycleCompensateRequest,
   type LifecycleDescribeRequest,
   type LifecycleDestroyRequest,
   type LifecycleErrorBody,
@@ -35,7 +37,9 @@ export interface RuntimeAgentServerOptions {
   readonly token: string;
 }
 
-export function createRuntimeAgentApp(options: RuntimeAgentServerOptions) {
+export function createRuntimeAgentApp(
+  options: RuntimeAgentServerOptions,
+): Hono {
   const dispatcher = new LifecycleDispatcher(options.registry);
   const expectedAuth = `Bearer ${options.token}`;
   const app = new Hono();
@@ -90,6 +94,17 @@ export function createRuntimeAgentApp(options: RuntimeAgentServerOptions) {
     if (!validDestroy(body)) return c.json(errorBody("bad_request"), 400);
     try {
       const result = await dispatcher.destroy(body, {});
+      return c.json(result, 200);
+    } catch (err) {
+      return errorResponse(c, err);
+    }
+  });
+
+  app.post(LIFECYCLE_COMPENSATE_PATH, async (c) => {
+    const body = (await c.req.json()) as LifecycleCompensateRequest;
+    if (!validCompensate(body)) return c.json(errorBody("bad_request"), 400);
+    try {
+      const result = await dispatcher.compensate(body, {});
       return c.json(result, 200);
     } catch (err) {
       return errorResponse(c, err);
@@ -199,6 +214,8 @@ function validApply(body: unknown): body is LifecycleApplyRequest {
   return typeof r.shape === "string" &&
     typeof r.provider === "string" &&
     typeof r.resourceName === "string" &&
+    (r.idempotencyKey === undefined ||
+      typeof r.idempotencyKey === "string") &&
     "spec" in r;
 }
 
@@ -207,7 +224,19 @@ function validDestroy(body: unknown): body is LifecycleDestroyRequest {
   const r = body as LifecycleDestroyRequest;
   return typeof r.shape === "string" &&
     typeof r.provider === "string" &&
-    typeof r.handle === "string";
+    typeof r.handle === "string" &&
+    (r.idempotencyKey === undefined ||
+      typeof r.idempotencyKey === "string");
+}
+
+function validCompensate(body: unknown): body is LifecycleCompensateRequest {
+  if (!body || typeof body !== "object") return false;
+  const r = body as LifecycleCompensateRequest;
+  return typeof r.shape === "string" &&
+    typeof r.provider === "string" &&
+    typeof r.handle === "string" &&
+    (r.idempotencyKey === undefined ||
+      typeof r.idempotencyKey === "string");
 }
 
 function validDescribe(body: unknown): body is LifecycleDescribeRequest {

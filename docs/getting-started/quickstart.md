@@ -85,8 +85,9 @@ takosumi deploy my-app.yml \
 
 deploy 完了後 (embedded agent が selfhost connector で実行):
 
-- web service が systemd unit `takosumi-api.service` として常駐
-- Postgres は `docker run postgres` で立ち上がる (local-docker connector)
+- web service が docker compose service として常駐
+- Postgres は `docker run postgres` で立ち上がる (local-docker-postgres
+  connector)
 - assets bucket は `/var/lib/takosumi/objects/assets/` に作成
 - domain は coredns local zone に登録
 
@@ -233,15 +234,15 @@ takosumi version
 
 ## 7. troubleshooting
 
-| 症状                                                                | 原因                                                                                                                 |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `Refusing to start takosumi with plaintext secret storage`          | production mode で `TAKOSUMI_ENCRYPTION_KEY` 未設定                                                                  |
-| `Refusing to start takosumi against an unencrypted database`        | production mode で DB at-rest encryption 未確認 (dev は `TAKOSUMI_DEV_MODE=1` で opt-out 可)                         |
-| `manifest.resources[] is required`                                  | `template:` 指定なしで `resources:[]` も空                                                                           |
-| 401 from `/v1/deployments`                                          | `TAKOSUMI_DEPLOY_TOKEN` 未設定 or token mismatch                                                                     |
-| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`               | `takosumi server --no-agent` を使ったが external agent の URL を export してない、または embedded agent の起動に失敗 |
-| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found` | agent host に該当 cloud の credential が無い → connector が register されてない                                      |
-| `runtime-agent /v1/lifecycle/apply failed: 401`                     | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない                                                             |
+| 症状                                                                                           | 原因                                                                                                                 |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `Refusing to start takosumi with plaintext secret storage`                                     | production mode で `TAKOSUMI_ENCRYPTION_KEY` 未設定                                                                  |
+| `Refusing to start takosumi against an unencrypted database`                                   | production mode で DB at-rest encryption 未確認 (dev は `TAKOSUMI_DEV_MODE=1` で opt-out 可)                         |
+| `manifest.resources[] or manifest.template is required` / `manifest expands to zero resources` | `template:` 指定なし、または `resources: []` だけで apply しようとしている                                           |
+| 401 from `/v1/deployments`                                                                     | `TAKOSUMI_DEPLOY_TOKEN` 未設定 or token mismatch                                                                     |
+| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`                                          | `takosumi server --no-agent` を使ったが external agent の URL を export してない、または embedded agent の起動に失敗 |
+| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`                            | agent host に該当 cloud の credential が無い → connector が register されてない                                      |
+| `runtime-agent /v1/lifecycle/apply failed: 401`                                                | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない                                                             |
 
 ### Deprecated provider IDs
 
@@ -249,29 +250,29 @@ takosumi version
 形式に namespace 化されました。 二つの operator plugin が同じ bare id を再
 register してしまう last-write-wins 衝突を避けるためです。
 
-| 旧 (deprecated)        | 新 (recommended)                 |
-| ---------------------- | -------------------------------- |
-| `aws-s3`               | `@takos/aws-s3`                  |
-| `aws-fargate`          | `@takos/aws-fargate`             |
-| `aws-rds`              | `@takos/aws-rds`                 |
-| `route53`              | `@takos/aws-route53`             |
-| `gcp-gcs`              | `@takos/gcp-gcs`                 |
-| `cloud-run`            | `@takos/gcp-cloud-run`           |
-| `cloud-sql`            | `@takos/gcp-cloud-sql`           |
-| `cloud-dns`            | `@takos/gcp-cloud-dns`           |
-| `cloudflare-r2`        | `@takos/cloudflare-r2`           |
-| `cloudflare-container` | `@takos/cloudflare-container`    |
-| `cloudflare-workers`   | `@takos/cloudflare-workers`      |
-| `cloudflare-dns`       | `@takos/cloudflare-dns`          |
-| `azure-container-apps` | `@takos/azure-container-apps`    |
-| `k3s-deployment`       | `@takos/kubernetes-deployment`   |
-| `deno-deploy`          | `@takos/deno-deploy`             |
-| `filesystem`           | `@takos/selfhost-filesystem`     |
-| `minio`                | `@takos/selfhost-minio`          |
-| `docker-compose`       | `@takos/selfhost-docker-compose` |
-| `systemd-unit`         | `@takos/selfhost-systemd`        |
-| `local-docker`         | `@takos/selfhost-postgres`       |
-| `coredns-local`        | `@takos/selfhost-coredns`        |
+| 旧 (deprecated)         | 新 (recommended)                 |
+| ----------------------- | -------------------------------- |
+| `aws-s3`                | `@takos/aws-s3`                  |
+| `aws-fargate`           | `@takos/aws-fargate`             |
+| `aws-rds`               | `@takos/aws-rds`                 |
+| `route53`               | `@takos/aws-route53`             |
+| `gcp-gcs`               | `@takos/gcp-gcs`                 |
+| `cloud-run`             | `@takos/gcp-cloud-run`           |
+| `cloud-sql`             | `@takos/gcp-cloud-sql`           |
+| `cloud-dns`             | `@takos/gcp-cloud-dns`           |
+| `cloudflare-r2`         | `@takos/cloudflare-r2`           |
+| `cloudflare-container`  | `@takos/cloudflare-container`    |
+| `cloudflare-workers`    | `@takos/cloudflare-workers`      |
+| `cloudflare-dns`        | `@takos/cloudflare-dns`          |
+| `azure-container-apps`  | `@takos/azure-container-apps`    |
+| `k3s-deployment`        | `@takos/kubernetes-deployment`   |
+| `deno-deploy`           | `@takos/deno-deploy`             |
+| `filesystem`            | `@takos/selfhost-filesystem`     |
+| `minio`                 | `@takos/selfhost-minio`          |
+| `docker-compose`        | `@takos/selfhost-docker-compose` |
+| `systemd-unit`          | `@takos/selfhost-systemd`        |
+| `local-docker-postgres` | `@takos/selfhost-postgres`       |
+| `coredns-local`         | `@takos/selfhost-coredns`        |
 
 旧 id は 0.10 / 0.11 では引き続き受け付けますが、次のような警告が kernel log に
 出ます:
@@ -324,7 +325,8 @@ cap を超えた場合は `413 Payload Too Large` (`error.code:
 > 等の external object-storage backend を kernel の `objectStorage` adapter に
 > 配線して presigned upload で直接 backend に書き込むのが推奨です。
 > `ObjectStoragePort` interface は同じなので adapter を切り替えるだけで済み
-> ます。 完全な streaming-multipart parser の導入は future work です。
+> ます。kernel 経由の multipart upload は cap 付き buffered path として扱い、
+> 大容量 artifact は storage backend へ直接流します。
 
 ### Read-only artifact fetch token (agent ↔ kernel scope separation)
 

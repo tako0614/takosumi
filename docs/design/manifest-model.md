@@ -1,149 +1,217 @@
 # Manifest Model
 
-The manifest is a closed authoring surface. It creates an `IntentGraph`; it is not canonical state. A manifest does not declare a Space. Space is supplied by deploy context, actor auth, API route, operator context, or client profile.
+The manifest is a closed authoring surface. It declares desired portable
+resources and template invocations; it is not canonical state. Space, tenant,
+actor, catalog release, policy, quota, credentials, approvals, journal state,
+observations, and GroupHead are supplied by deploy context, not by the manifest.
 
-## Allowed public fields
+Public v1 is the **Shape + Provider + Template** manifest model implemented by
+`POST /v1/deployments` and `takosumi deploy`. The old
+`schemaVersion/profile/components/expose` authoring shape is not a current
+public manifest schema.
+
+## Allowed Public Fields
 
 Root fields:
 
 ```text
-schemaVersion
-profile
-components
-expose
+apiVersion
+kind
+metadata
+template
+resources
 ```
 
-Component fields:
+`apiVersion` is required and fixed to `"1.0"`. `kind` is required and fixed to
+`Manifest`. Unknown top-level fields fail schema validation; they are not
+warnings.
+
+`metadata` fields:
 
 ```text
-target
-with
-uses
+name
+labels
 ```
 
-Data input fields inside `with`:
+`template` fields:
 
 ```text
-source
-artifact
+template
+inputs
 ```
 
-Object form fields inside `uses`:
+`template.template` is a pinned `id@version` template reference. During the v1
+compatibility window the resolver may accept legacy `template.ref`, and CLI
+local mode may accept `template.name`; new manifests and docs must use
+`template.template`.
+
+`resources[]` entry fields:
 
 ```text
-use
-access
+shape
+name
+provider
+spec
+requires
+metadata
 ```
 
-Exposure fields inside `expose` entries:
+`spec` is target-shape-specific and is validated by the selected Shape's
+`validateSpec`. Unknown envelope fields outside `spec` fail validation.
+
+## Space Context
+
+`Space` is outside the manifest. The same manifest can resolve differently in
+different Spaces. Namespace paths, catalog release selection, policy, secrets,
+artifacts, approvals, journals, observations, and GroupHead are Space-scoped.
 
 ```text
-from
-host
-path
-protocol
-port
-methods
+manifest + space:acme-prod -> production catalog / policy / quotas
+manifest + space:acme-dev  -> development catalog / policy / quotas
 ```
 
-`with` is target-specific and is validated by the selected ObjectTarget input schema. `source` and `artifact` are recognized data asset intents within `with`.
+A public manifest must not contain `space`, `tenant`, `org`, credential, or
+namespace registry configuration fields. Those are deployment context / operator
+configuration, not authoring intent.
 
-Any unknown public field outside target-specific `with` input fails validation.
+## Resources
 
-## Space context
-
-`Space` is outside the manifest. The same manifest can be resolved in different Spaces. Namespace paths, catalog release selection, policy, secrets, artifacts, approvals, journals, observations, and GroupHead are Space-scoped.
-
-```text
-manifest + space:acme-prod -> production namespace exports
-manifest + space:acme-dev  -> development namespace exports
-```
-
-A public manifest must not contain `space`, `tenant`, `org`, or namespace registry configuration fields. Those are deployment context / operator configuration, not authoring intent.
-
-## Target values
-
-Public v1 target values are catalog aliases.
+Each `resources[]` entry declares one portable Shape resource.
 
 ```yaml
-components:
-  api:
-    target: cloudflare-workers
-```
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: my-app
+resources:
+  - shape: database-postgres@v1
+    name: db
+    provider: "@takos/aws-rds"
+    requires: [automated-backups]
+    spec:
+      version: "16"
+      size: small
 
-Arbitrary descriptor URLs are not part of public v1. Descriptor URLs are adopted through operator catalog ingestion.
-
-## Uses
-
-`uses` creates Link intent.
-
-Short form:
-
-```yaml
-uses:
-  OAUTH_TOKEN: takos.oauth.token
-  BILLING: billing
-```
-
-Object form:
-
-```yaml
-uses:
-  DATABASE_URL:
-    use: takos.database.primary
-    access: read-write
+  - shape: web-service@v1
+    name: api
+    provider: "@takos/aws-fargate"
+    spec:
+      image: ghcr.io/example/api@sha256:...
+      port: 8080
+      bindings:
+        DATABASE_URL: ${ref:db.connectionString}
 ```
 
 Rules:
 
-- `billing` means `billing.default` only if `billing.default` exists.
-- `default` export must not imply admin access.
-- Grant-producing exports require explicit `access` unless the export declares a safe default access.
-- `read-write` and `admin` are always explicit.
-- If a namespace path cannot be resolved deterministically, validation fails.
-- If a local namespace shadows a group, environment, Space, operator, external, or imported namespace, policy decides whether it is allowed, approval-required, or denied. Production should deny meaningful shadowing by default.
+- `shape` names the portable contract (`web-service@v1`, `database-postgres@v1`,
+  `object-store@v1`, and so on).
+- `provider` names the selected implementation for that Shape, such as
+  `@takos/aws-fargate`, `@takos/cloudflare-workers`, or a self-hosted provider.
+- `name` is the manifest-local resource identity and the source namespace for
+  `${ref:<name>.<field>}`.
+- `requires` is a capability subset requirement. Provider capabilities must be a
+  superset or validation rejects the resource.
 
-## Expose
+## Templates
 
-`expose` creates Exposure intent. It does not create a Link.
-
-```yaml
-expose:
-  web:
-    from: api
-    host: app.example.com
-```
-
-`uses` is internal connection. `expose` is external ingress intent.
-
-## Data inputs
-
-`with.artifact` and `with.source` are authoring inputs that resolve into `DataAsset` references.
+Templates are authoring macros that expand into concrete `resources[]` before
+reference resolution and planning.
 
 ```yaml
-with:
-  artifact:
-    kind: oci-image
-    uri: ghcr.io/example/api@sha256:...
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: my-app
+template:
+  template: selfhosted-single-vm@v1
+  inputs:
+    serviceName: api
+    image: ghcr.io/example/api@sha256:...
+    port: 8080
 ```
 
-Local paths are unresolved authoring inputs. They must become content-addressed data asset records before apply.
+`template` and `resources[]` may be used together. Expansion runs first, then
+explicit `resources[]` are appended. The combined resource list is what enters
+reference resolution, plan construction, idempotency assignment, and apply /
+destroy. Current public deploy records idempotency in the public deploy replay
+store; `mode: "plan"` also returns the deterministic WAL tuple preview that the
+internal OperationPlan path will use as execution authority once the public
+route adopts it end to end.
 
-## Manifest to IntentGraph
+## References
+
+`spec` values may use reference tokens:
 
 ```text
-components.<name>:
-  Declared Object intent inside the current Space
-
-components.<name>.target:
-  ObjectTarget alias intent
-
-components.<name>.uses:
-  Link intent
-
-expose:
-  Exposure intent
-
-with.source / with.artifact:
-  DataAsset intent
+${ref:<resource>.<field>}
+${secret-ref:<resource>.<field>}
 ```
+
+References create dependency edges between resources. The kernel validates the
+grammar, builds a DAG, rejects cycles, and applies resources in topological
+order. `secret-ref` is for secret-reference outputs and must not be used for
+plain outputs.
+
+## Data Inputs
+
+Artifacts are not top-level manifest authority. They are Shape `spec` input
+values and are subject to the Shape/provider contract and artifact policy.
+
+```yaml
+resources:
+  - shape: worker@v1
+    name: worker
+    provider: "@takos/cloudflare-workers"
+    spec:
+      artifact:
+        kind: js-bundle
+        hash: sha256:...
+```
+
+Local paths are unresolved authoring inputs. They must become content-addressed
+artifact records before a remote kernel can apply them.
+
+## Manifest to Intent Graph
+
+```text
+metadata.name:
+  Deployment record name inside the deploy context's Space
+
+template:
+  Template invocation expanded into resources before planning
+
+resources[].shape:
+  Portable Shape contract intent
+
+resources[].provider:
+  Provider implementation selection intent
+
+resources[].spec:
+  Shape-specific desired input
+
+resources[].requires:
+  Capability constraint on provider selection
+
+${ref:...} / ${secret-ref:...}:
+  Link / dependency intent between resource outputs and inputs
+```
+
+The OperationPlan and write-ahead journal design is derived from this intent
+graph. On the current public deploy route, `mode: "plan"` exposes a
+deterministic OperationPlan preview (DesiredSnapshot digest, OperationPlan
+digest, planned operations, and WAL idempotency tuple preview) without writing
+the journal. `mode: "apply"` / `mode: "destroy"` now derive the same public
+OperationPlan shape internally and write public WAL stage records to
+`takosumi_operation_journal_entries`, while the persisted public deployment
+record still carries the compatibility status / handle state used by
+`takosumi status` and destroy handle resolution. Public recovery currently
+supports side-effect-free `inspect`, guarded same-digest `continue`, and
+`compensate` that opens `activation-rollback` RevokeDebt. Connector-native
+compensate is exposed in the runtime-agent protocol with destroy fallback, while
+CatalogRelease adoption / signature verification is implemented in the registry
+domain. Public apply / destroy WAL invokes the adopted release as a fail-closed
+pre/post-commit verification hook; richer catalog-declared executable hook
+packages are treated as an extension point. RevokeDebt retry attempt,
+policy-controlled aging, manual reopen, clearance, connector-backed cleanup, and
+worker daemon scheduling are implemented as lifecycle primitives.

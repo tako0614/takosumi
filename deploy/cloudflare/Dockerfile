@@ -9,7 +9,7 @@ COPY . ./takosumi
 WORKDIR /workspace/takosumi
 
 ENV TAKOSUMI_PROCESS_ROLE=takosumi-api
-ENV TAKOSUMI_PORT=8080
+ENV PORT=8080
 
 EXPOSE 8080
 

@@ -1095,16 +1095,17 @@ export class InMemoryDeploymentStore implements DeploymentStore {
       : matches.slice(0, Math.max(0, filter.limit));
   }
 
-  // deno-lint-ignore require-await
-  async getGroupHead(input: GroupHeadRef): Promise<GroupHead | undefined>;
-  async getGroupHead(groupId: string): Promise<GroupHead | undefined>;
-  async getGroupHead(
+  getGroupHead(input: GroupHeadRef): Promise<GroupHead | undefined>;
+  getGroupHead(groupId: string): Promise<GroupHead | undefined>;
+  getGroupHead(
     input: GroupHeadRef | string,
   ): Promise<GroupHead | undefined> {
     if (typeof input === "string") {
-      return findUniqueGroupHeadByGroupId(this.#heads, input);
+      return Promise.resolve(findUniqueGroupHeadByGroupId(this.#heads, input));
     }
-    return this.#heads.get(groupHeadKey(input.spaceId, input.groupId));
+    return Promise.resolve(
+      this.#heads.get(groupHeadKey(input.spaceId, input.groupId)),
+    );
   }
 
   async advanceGroupHead(

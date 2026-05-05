@@ -11,24 +11,28 @@ import { versionCommand } from "./commands/version.ts";
 import { runtimeAgentCommand } from "./commands/runtime_agent.ts";
 import { artifactCommand } from "./commands/artifact.ts";
 
-export const takosumi = new Command()
-  .name("takosumi")
-  .description("Takosumi: self-hostable PaaS toolkit")
-  .version("0.11.0")
-  .command("deploy", deployCommand)
-  .command("destroy", destroyCommand)
-  .command("status", statusCommand)
-  .command("plan", planCommand)
-  .command("server", serverCommand)
-  .command("migrate", migrateCommand)
-  .command("init", initCommand)
-  .command("artifact", artifactCommand)
-  .command("runtime-agent", runtimeAgentCommand)
-  .command("version", versionCommand)
-  // Cliffy ships shell completion generators for bash / zsh / fish; wiring
-  // the bundled subcommand here is the cleanest way to expose
-  // `takosumi completions <shell>` without re-implementing the generator.
-  .command("completions", new CompletionsCommand());
+function createTakosumi(): Command {
+  return (new Command()
+    .name("takosumi")
+    .description("Takosumi: self-hostable PaaS toolkit")
+    .version("0.11.0")
+    .command("deploy", deployCommand)
+    .command("destroy", destroyCommand)
+    .command("status", statusCommand)
+    .command("plan", planCommand)
+    .command("server", serverCommand)
+    .command("migrate", migrateCommand)
+    .command("init", initCommand)
+    .command("artifact", artifactCommand)
+    .command("runtime-agent", runtimeAgentCommand)
+    .command("version", versionCommand)
+    // Cliffy ships shell completion generators for bash / zsh / fish; wiring
+    // the bundled subcommand here is the cleanest way to expose
+    // `takosumi completions <shell>` without re-implementing the generator.
+    .command("completions", new CompletionsCommand())) as unknown as Command;
+}
+
+export const takosumi: Command = createTakosumi();
 
 if (import.meta.main) {
   await takosumi.parse(Deno.args);

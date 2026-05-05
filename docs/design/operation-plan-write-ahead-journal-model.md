@@ -1,10 +1,12 @@
 # Operation Plan and Write-ahead Journal Model
 
-OperationPlan is derived work inside one Space. WriteAheadOperationJournal is execution authority.
+OperationPlan is derived work inside one Space. WriteAheadOperationJournal is
+execution authority.
 
 ## OperationPlan
 
-An OperationPlan is derived from `DesiredSnapshot` and `ObservationSet` for the same Space.
+An OperationPlan is derived from `DesiredSnapshot` and `ObservationSet` for the
+same Space.
 
 It contains operations such as:
 
@@ -47,9 +49,9 @@ revoke-debt-created when needed
 
 ## Stage enumeration
 
-Each journal entry carries a `stage` drawn from a closed v1 enum. Stages
-run in the order below for a successful operation. `abort` and `skip` are
-terminal stages that may replace any forward stage.
+Each journal entry carries a `stage` drawn from a closed v1 enum. Stages run in
+the order below for a successful operation. `abort` and `skip` are terminal
+stages that may replace any forward stage.
 
 ```text
 prepare      → pre-commit → commit → post-commit → observe → finalize
@@ -58,23 +60,23 @@ prepare      → pre-commit → commit → post-commit → observe → finalize
                                         → skip      (no-op resolution)
 ```
 
-| stage | may write actual-effects | may queue RevokeDebt | may re-validate approval |
-| --- | --- | --- | --- |
-| prepare | no | no | yes |
-| pre-commit | no | no | yes |
-| commit | yes | no | no |
-| post-commit | yes | yes | no |
-| observe | no | yes | no |
-| finalize | no | no | no |
-| abort | no | yes | no |
-| skip | no | no | no |
+| stage       | may write actual-effects | may queue RevokeDebt | may re-validate approval |
+| ----------- | ------------------------ | -------------------- | ------------------------ |
+| prepare     | no                       | no                   | yes                      |
+| pre-commit  | no                       | no                   | yes                      |
+| commit      | yes                      | no                   | no                       |
+| post-commit | yes                      | yes                  | no                       |
+| observe     | no                       | yes                  | no                       |
+| finalize    | no                       | no                   | no                       |
+| abort       | no                       | yes                  | no                       |
+| skip        | no                       | no                   | no                       |
 
-`pre-commit` is the canonical enforcement point for transform approval
-gates (see [DataAsset Model](./data-asset-model.md)) and for collision
-risks raised by [Link and Projection Model](./link-projection-model.md).
-`post-commit` is the only stage that may mutate already-live objects;
-debt is queued from there or `observe` when external cleanup cannot
-complete. New stages require an RFC (CONVENTIONS.md §6).
+`pre-commit` is the canonical enforcement point for transform approval gates
+(see [DataAsset Model](./data-asset-model.md)) and for collision risks raised by
+[Link and Projection Model](./link-projection-model.md). `post-commit` is the
+only stage that may mutate already-live objects; debt is queued from there or
+`observe` when external cleanup cannot complete. New stages require an RFC
+(CONVENTIONS.md §6).
 
 ## Idempotency keys
 
@@ -85,16 +87,16 @@ idempotencyKey = (spaceId, operationPlanDigest, journalEntryId)
 ```
 
 The triple is unique within a Space's WAL. On replay, an identical triple
-deterministically re-applies the same operation. If a replay arrives with
-the same `(spaceId, operationPlanDigest, journalEntryId)` but a
-mismatching effect digest from the previously recorded entry, the kernel
-hard-fails the operation and refuses to advance the stage. Recovery in
-that case must mint a new `operationPlanDigest` (a fresh OperationPlan).
+deterministically re-applies the same operation. If a replay arrives with the
+same `(spaceId, operationPlanDigest, journalEntryId)` but a mismatching effect
+digest from the previously recorded entry, the kernel hard-fails the operation
+and refuses to advance the stage. Recovery in that case must mint a new
+`operationPlanDigest` (a fresh OperationPlan).
 
 ## Pre/post-commit hooks
 
-CatalogRelease may declare pre-commit and post-commit hooks bound to
-specific operation kinds. Hook lifecycle:
+CatalogRelease may declare pre-commit and post-commit hooks bound to specific
+operation kinds. Hook lifecycle:
 
 ```text
 1. discovery        — hooks adopted by the active CatalogRelease
@@ -104,8 +106,8 @@ specific operation kinds. Hook lifecycle:
                       no silent-pass, no retry without operator approval
 ```
 
-Hooks must not bypass policy or approval re-validation. They may emit
-RevokeDebt only from `post-commit` or `observe` stages.
+Hooks must not bypass policy or approval re-validation. They may emit RevokeDebt
+only from `post-commit` or `observe` stages.
 
 ## Journal entries
 
@@ -146,16 +148,20 @@ If `actualEffects` exceed `approvedEffects`:
 5. create debt if compensation cannot complete
 ```
 
-
 ## Space isolation
 
-An OperationPlan, OperationJournal, generated object id, compensation record, and RevokeDebt belong to exactly one Space. A journal entry from one Space must not be used as recovery authority in another Space.
+An OperationPlan, OperationJournal, generated object id, compensation record,
+and RevokeDebt belong to exactly one Space. A journal entry from one Space must
+not be used as recovery authority in another Space.
 
-Critical operations that mutate Space-global state are serialized per Space, and global ingress reservation may require additional operator-level serialization.
+Critical operations that mutate Space-global state are serialized per Space, and
+global ingress reservation may require additional operator-level serialization.
 
 ## OperationJournal retention
 
-OperationJournal retains side-effect and recovery history. Entries related to active generated objects, unresolved compensation, unresolved revoke debt, or current activation must not be compacted away.
+OperationJournal retains side-effect and recovery history. Entries related to
+active generated objects, unresolved compensation, unresolved revoke debt, or
+current activation must not be compacted away.
 
 Separate stores may hold:
 

@@ -7,6 +7,8 @@
 import type {
   LifecycleApplyRequest,
   LifecycleApplyResponse,
+  LifecycleCompensateRequest,
+  LifecycleCompensateResponse,
   LifecycleDescribeRequest,
   LifecycleDescribeResponse,
   LifecycleDestroyRequest,
@@ -77,6 +79,17 @@ export class LifecycleDispatcher {
     const connector = this.#registry.get(req.shape, req.provider);
     if (!connector) throw new ConnectorNotFoundError(req.shape, req.provider);
     return connector.destroy(req, ctx);
+  }
+
+  async compensate(
+    req: LifecycleCompensateRequest,
+    ctx: ConnectorContext = {},
+  ): Promise<LifecycleCompensateResponse> {
+    const connector = this.#registry.get(req.shape, req.provider);
+    if (!connector) throw new ConnectorNotFoundError(req.shape, req.provider);
+    if (connector.compensate) return await connector.compensate(req, ctx);
+    const result = await connector.destroy(req, ctx);
+    return { ok: result.ok, ...(result.note ? { note: result.note } : {}) };
   }
 
   describe(

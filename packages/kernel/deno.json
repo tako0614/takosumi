@@ -11,7 +11,8 @@
     "./bootstrap": "./src/bootstrap.ts",
     "./plugins": "./src/plugins/mod.ts",
     "./server": "./src/index.ts",
-    "./apply": "./src/domains/deploy/apply_v2.ts"
+    "./apply": "./src/domains/deploy/apply_v2.ts",
+    "./manifest-v1": "./src/domains/deploy/manifest_v1.ts"
   },
   "imports": {
     "takosumi-contract": "jsr:@takos/takosumi-contract@^2.4.0",

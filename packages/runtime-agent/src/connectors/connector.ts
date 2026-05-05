@@ -9,6 +9,8 @@
 import type {
   LifecycleApplyRequest,
   LifecycleApplyResponse,
+  LifecycleCompensateRequest,
+  LifecycleCompensateResponse,
   LifecycleDescribeRequest,
   LifecycleDescribeResponse,
   LifecycleDestroyRequest,
@@ -62,6 +64,15 @@ export interface Connector {
     req: LifecycleDestroyRequest,
     ctx: ConnectorContext,
   ): Promise<LifecycleDestroyResponse>;
+  /**
+   * Optional compensating hook for WAL recovery. When absent, the dispatcher
+   * falls back to `destroy` because most current connectors use handle-keyed
+   * deletion as their complete reverse operation.
+   */
+  compensate?(
+    req: LifecycleCompensateRequest,
+    ctx: ConnectorContext,
+  ): Promise<LifecycleCompensateResponse>;
   describe(
     req: LifecycleDescribeRequest,
     ctx: ConnectorContext,

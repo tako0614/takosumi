@@ -197,7 +197,7 @@ Deno.test("RoutingTokenService: tampered token (modified payload) fails verifica
   );
 });
 
-Deno.test("RoutingTokenService: rotation rejects re-using the current secret", async () => {
+Deno.test("RoutingTokenService: rotation rejects re-using the current secret", () => {
   const { service } = buildService({ secret: "kernel-routing-secret-v1" });
   assert.throws(
     () => service.rotate("kernel-routing-secret-v1"),

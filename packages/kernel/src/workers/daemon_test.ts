@@ -5,6 +5,7 @@ import {
   createOutboxDispatcherTask,
   createRegistrySyncWorkerTask,
   createRepairWorkerTask,
+  createRevokeDebtCleanupWorkerTask,
   createRuntimeAgentStaleDetectionTask,
   WorkerDaemon,
 } from "./daemon.ts";
@@ -136,9 +137,37 @@ Deno.test("worker task factories adapt apply, outbox, registry, and repair worke
       },
     },
   });
+  const revokeDebtTask = createRevokeDebtCleanupWorkerTask({
+    intervalMs: 1,
+    limit: 3,
+    ownerSpaces: () => ["space:one", "space:two"],
+    worker: {
+      processOwnerSpace: (input) => {
+        calls.push(`revoke-debt:${input.ownerSpaceId}:${input.limit}`);
+        return Promise.resolve({
+          ownerSpaceId: input.ownerSpaceId,
+          scanned: 0,
+          aged: 0,
+          attempted: 0,
+          cleared: 0,
+          retrying: 0,
+          operatorActionRequired: 0,
+          skipped: 0,
+          attempts: [],
+        });
+      },
+    },
+  });
 
   const results = await new WorkerDaemon({
-    tasks: [applyTask, outboxTask, registryTask, repairTask, runtimeAgentTask],
+    tasks: [
+      applyTask,
+      outboxTask,
+      registryTask,
+      repairTask,
+      runtimeAgentTask,
+      revokeDebtTask,
+    ],
     now: () => new Date("2026-04-30T00:00:00.000Z"),
   }).runOnce();
 
@@ -151,6 +180,8 @@ Deno.test("worker task factories adapt apply, outbox, registry, and repair worke
       "registry-support",
       "registry:1",
       "repair:space_1:group_1",
+      "revoke-debt:space:one:3",
+      "revoke-debt:space:two:3",
       "runtime-agent:60000:2026-04-30T00:00:00.000Z",
     ].sort(),
   );

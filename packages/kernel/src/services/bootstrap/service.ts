@@ -295,14 +295,17 @@ export class StandaloneBootstrapService {
     if (kind === "service") {
       const secret = snapshotPlainValue(
         snapshot,
+        "TAKOSUMI_INTERNAL_API_SECRET",
+      ) ?? snapshotPlainValue(
+        snapshot,
         "TAKOSUMI_INTERNAL_SERVICE_SECRET",
       );
       if (!secret) {
         errors.push({
           severity: "error",
           code: "auth_service_secret_missing",
-          key: "TAKOSUMI_INTERNAL_SERVICE_SECRET",
-          message: "service auth requires TAKOSUMI_INTERNAL_SERVICE_SECRET",
+          key: "TAKOSUMI_INTERNAL_API_SECRET",
+          message: "service auth requires TAKOSUMI_INTERNAL_API_SECRET",
         });
         return new LocalActorAdapter();
       }
@@ -421,6 +424,7 @@ export class StandaloneBootstrapService {
 
     for (
       const key of [
+        "TAKOSUMI_INTERNAL_API_SECRET",
         "TAKOSUMI_INTERNAL_SERVICE_SECRET",
         "TAKOSUMI_SECRET_STORE_PASSPHRASE",
         "EXECUTOR_PROXY_SECRET",

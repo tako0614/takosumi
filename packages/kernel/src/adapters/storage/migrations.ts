@@ -271,6 +271,60 @@ export const postgresStorageTableDefinitions:
       indexes: [["package_kind", "package_ref", "package_digest"]],
     },
     {
+      name: "registry_catalog_publisher_keys",
+      domain: "registry",
+      columns: [
+        "key_id",
+        "publisher_id",
+        "public_key_base64",
+        "status",
+        "enrolled_at",
+        "revoked_at",
+        "reason",
+      ],
+      primaryKey: ["key_id"],
+      indexes: [["publisher_id"], ["status"]],
+    },
+    {
+      name: "registry_catalog_releases",
+      domain: "registry",
+      columns: [
+        "release_id",
+        "publisher_id",
+        "descriptor_digest",
+        "descriptor_json",
+        "signature_algorithm",
+        "signature_key_id",
+        "signature_value",
+        "created_at",
+        "activated_at",
+      ],
+      primaryKey: ["release_id"],
+      indexes: [["publisher_id"], ["descriptor_digest"], ["created_at"]],
+    },
+    {
+      name: "registry_catalog_release_adoptions",
+      domain: "registry",
+      columns: [
+        "id",
+        "space_id",
+        "catalog_release_id",
+        "publisher_id",
+        "publisher_key_id",
+        "descriptor_digest",
+        "adopted_at",
+        "rotated_from_catalog_release_id",
+        "verification_json",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["space_id", "catalog_release_id"]],
+      indexes: [
+        ["space_id", "adopted_at"],
+        ["catalog_release_id"],
+        ["publisher_key_id"],
+      ],
+    },
+    {
       name: "runtime_desired_states",
       domain: "runtime",
       columns: [
@@ -504,6 +558,109 @@ export const postgresStorageTableDefinitions:
       primaryKey: ["id"],
       uniqueConstraints: [["tenant_id", "name"]],
       indexes: [["tenant_id"], ["status"]],
+    },
+    {
+      name: "takosumi_deploy_idempotency_keys",
+      domain: "deploy",
+      columns: [
+        "id",
+        "tenant_id",
+        "idempotency_key",
+        "request_digest",
+        "response_status",
+        "response_body_json",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["tenant_id", "idempotency_key"]],
+      indexes: [["tenant_id"], ["created_at"]],
+    },
+    {
+      name: "takosumi_deploy_locks",
+      domain: "deploy",
+      columns: [
+        "tenant_id",
+        "name",
+        "owner_token",
+        "locked_until",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["tenant_id", "name"],
+      indexes: [["locked_until"]],
+    },
+    {
+      name: "takosumi_operation_journal_entries",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "deployment_name",
+        "operation_plan_digest",
+        "journal_entry_id",
+        "operation_id",
+        "phase",
+        "stage",
+        "operation_kind",
+        "resource_name",
+        "provider_id",
+        "effect_digest",
+        "effect_json",
+        "status",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [[
+        "space_id",
+        "operation_plan_digest",
+        "journal_entry_id",
+        "stage",
+      ]],
+      indexes: [
+        ["space_id", "operation_plan_digest"],
+        ["space_id", "deployment_name"],
+        ["created_at"],
+      ],
+    },
+    {
+      name: "takosumi_revoke_debts",
+      domain: "deploy",
+      columns: [
+        "id",
+        "source_key",
+        "generated_object_id",
+        "source_export_snapshot_id",
+        "external_participant_id",
+        "reason",
+        "status",
+        "owner_space_id",
+        "originating_space_id",
+        "deployment_name",
+        "operation_plan_digest",
+        "journal_entry_id",
+        "operation_id",
+        "resource_name",
+        "provider_id",
+        "retry_policy_json",
+        "retry_attempts",
+        "last_retry_at",
+        "next_retry_at",
+        "last_retry_error_json",
+        "detail_json",
+        "created_at",
+        "status_updated_at",
+        "aged_at",
+        "cleared_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["source_key"]],
+      indexes: [
+        ["owner_space_id", "status"],
+        ["owner_space_id", "deployment_name"],
+        ["owner_space_id", "operation_plan_digest"],
+        ["owner_space_id", "status", "next_retry_at"],
+        ["created_at"],
+      ],
     },
   ]);
 
@@ -1076,5 +1233,210 @@ create index if not exists takosumi_deployments_status_idx
       down: `drop index if exists takosumi_deployments_status_idx;
 drop index if exists takosumi_deployments_tenant_idx;
 drop table if exists takosumi_deployments;`,
+    },
+    {
+      id: "deploy.takosumi_deploy_idempotency_keys.create",
+      version: 21,
+      domain: "deploy",
+      description:
+        "Persist public deploy idempotency responses so CLI retries replay the first outcome after kernel restarts.",
+      sql: `create table if not exists takosumi_deploy_idempotency_keys (
+  id                 text        primary key,
+  tenant_id          text        not null,
+  idempotency_key    text        not null,
+  request_digest     text        not null,
+  response_status    integer     not null,
+  response_body_json jsonb       not null,
+  created_at         timestamptz not null default now(),
+  unique (tenant_id, idempotency_key)
+);
+create index if not exists takosumi_deploy_idempotency_keys_tenant_idx
+  on takosumi_deploy_idempotency_keys (tenant_id);
+create index if not exists takosumi_deploy_idempotency_keys_created_at_idx
+  on takosumi_deploy_idempotency_keys (created_at);`,
+      down:
+        `drop index if exists takosumi_deploy_idempotency_keys_created_at_idx;
+drop index if exists takosumi_deploy_idempotency_keys_tenant_idx;
+drop table if exists takosumi_deploy_idempotency_keys;`,
+    },
+    {
+      id: "deploy.takosumi_deploy_locks.create",
+      version: 22,
+      domain: "deploy",
+      description:
+        "Persist public deploy lease locks so same deployment applies are fenced across kernel pods.",
+      sql: `create table if not exists takosumi_deploy_locks (
+  tenant_id    text        not null,
+  name         text        not null,
+  owner_token  text        not null,
+  locked_until timestamptz not null,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  primary key (tenant_id, name)
+);
+create index if not exists takosumi_deploy_locks_locked_until_idx
+  on takosumi_deploy_locks (locked_until);`,
+      down: `drop index if exists takosumi_deploy_locks_locked_until_idx;
+drop table if exists takosumi_deploy_locks;`,
+    },
+    {
+      id: "deploy.takosumi_operation_journal_entries.create",
+      version: 23,
+      domain: "deploy",
+      description:
+        "Persist public deploy OperationPlan WAL stage entries for recovery and replay checks.",
+      sql: `create table if not exists takosumi_operation_journal_entries (
+  id                    text        primary key,
+  space_id              text        not null,
+  deployment_name       text,
+  operation_plan_digest text        not null,
+  journal_entry_id      text        not null,
+  operation_id          text        not null,
+  phase                 text        not null
+    check (phase in ('apply','activate','destroy','rollback','recovery','observe')),
+  stage                 text        not null
+    check (stage in ('prepare','pre-commit','commit','post-commit','observe','finalize','abort','skip')),
+  operation_kind        text        not null,
+  resource_name         text,
+  provider_id           text,
+  effect_digest         text        not null,
+  effect_json           jsonb       not null,
+  status                text        not null
+    check (status in ('recorded','succeeded','failed','skipped')),
+  created_at            timestamptz not null default now(),
+  unique (space_id, operation_plan_digest, journal_entry_id, stage)
+);
+create index if not exists takosumi_operation_journal_entries_plan_idx
+  on takosumi_operation_journal_entries (space_id, operation_plan_digest);
+create index if not exists takosumi_operation_journal_entries_deployment_idx
+  on takosumi_operation_journal_entries (space_id, deployment_name);
+create index if not exists takosumi_operation_journal_entries_created_at_idx
+  on takosumi_operation_journal_entries (created_at);`,
+      down:
+        `drop index if exists takosumi_operation_journal_entries_created_at_idx;
+drop index if exists takosumi_operation_journal_entries_deployment_idx;
+drop index if exists takosumi_operation_journal_entries_plan_idx;
+drop table if exists takosumi_operation_journal_entries;`,
+    },
+    {
+      id: "deploy.takosumi_revoke_debts.create",
+      version: 24,
+      domain: "deploy",
+      description:
+        "Persist RevokeDebt records created by WAL compensation and post-commit cleanup paths.",
+      sql: `create table if not exists takosumi_revoke_debts (
+  id                        text        primary key,
+  source_key                text        not null unique,
+  generated_object_id       text        not null,
+  source_export_snapshot_id text,
+  external_participant_id   text,
+  reason                    text        not null
+    check (reason in ('external-revoke','link-revoke','activation-rollback','approval-invalidated','cross-space-share-expired')),
+  status                    text        not null
+    check (status in ('open','operator-action-required','cleared')),
+  owner_space_id            text        not null,
+  originating_space_id      text        not null,
+  deployment_name           text,
+  operation_plan_digest     text,
+  journal_entry_id          text,
+  operation_id              text,
+  resource_name             text,
+  provider_id               text,
+  retry_policy_json         jsonb       not null,
+  retry_attempts            integer     not null default 0,
+  last_retry_at             timestamptz,
+  next_retry_at             timestamptz,
+  last_retry_error_json     jsonb,
+  detail_json               jsonb,
+  created_at                timestamptz not null default now(),
+  status_updated_at         timestamptz not null default now(),
+  aged_at                   timestamptz,
+  cleared_at                timestamptz
+);
+create index if not exists takosumi_revoke_debts_owner_idx
+  on takosumi_revoke_debts (owner_space_id, status);
+create index if not exists takosumi_revoke_debts_deployment_idx
+  on takosumi_revoke_debts (owner_space_id, deployment_name);
+create index if not exists takosumi_revoke_debts_operation_plan_idx
+  on takosumi_revoke_debts (owner_space_id, operation_plan_digest);
+create index if not exists takosumi_revoke_debts_next_retry_idx
+  on takosumi_revoke_debts (owner_space_id, status, next_retry_at);
+create index if not exists takosumi_revoke_debts_created_at_idx
+  on takosumi_revoke_debts (created_at);`,
+      down: `drop index if exists takosumi_revoke_debts_created_at_idx;
+drop index if exists takosumi_revoke_debts_next_retry_idx;
+drop index if exists takosumi_revoke_debts_operation_plan_idx;
+drop index if exists takosumi_revoke_debts_deployment_idx;
+drop index if exists takosumi_revoke_debts_owner_idx;
+drop table if exists takosumi_revoke_debts;`,
+    },
+    {
+      id: "registry.catalog_releases.create",
+      version: 25,
+      domain: "registry",
+      description:
+        "Persist CatalogRelease publisher keys, signed descriptors, and per-Space adoption records.",
+      sql: `create table if not exists registry_catalog_publisher_keys (
+  key_id            text        primary key,
+  publisher_id      text        not null,
+  public_key_base64 text        not null,
+  status            text        not null
+    check (status in ('active','revoked')),
+  enrolled_at       timestamptz not null,
+  revoked_at        timestamptz,
+  reason            text
+);
+create index if not exists registry_catalog_publisher_keys_publisher_idx
+  on registry_catalog_publisher_keys (publisher_id);
+create index if not exists registry_catalog_publisher_keys_status_idx
+  on registry_catalog_publisher_keys (status);
+create table if not exists registry_catalog_releases (
+  release_id          text        primary key,
+  publisher_id        text        not null,
+  descriptor_digest   text        not null,
+  descriptor_json     jsonb       not null,
+  signature_algorithm text        not null,
+  signature_key_id    text        not null,
+  signature_value     text        not null,
+  created_at          timestamptz not null,
+  activated_at        timestamptz
+);
+create index if not exists registry_catalog_releases_publisher_idx
+  on registry_catalog_releases (publisher_id);
+create index if not exists registry_catalog_releases_digest_idx
+  on registry_catalog_releases (descriptor_digest);
+create index if not exists registry_catalog_releases_created_at_idx
+  on registry_catalog_releases (created_at);
+create table if not exists registry_catalog_release_adoptions (
+  id                               text        primary key,
+  space_id                         text        not null,
+  catalog_release_id               text        not null
+    references registry_catalog_releases(release_id),
+  publisher_id                     text        not null,
+  publisher_key_id                 text        not null
+    references registry_catalog_publisher_keys(key_id),
+  descriptor_digest                text        not null,
+  adopted_at                       timestamptz not null,
+  rotated_from_catalog_release_id  text,
+  verification_json                jsonb       not null,
+  unique (space_id, catalog_release_id)
+);
+create index if not exists registry_catalog_release_adoptions_space_idx
+  on registry_catalog_release_adoptions (space_id, adopted_at);
+create index if not exists registry_catalog_release_adoptions_release_idx
+  on registry_catalog_release_adoptions (catalog_release_id);
+create index if not exists registry_catalog_release_adoptions_key_idx
+  on registry_catalog_release_adoptions (publisher_key_id);`,
+      down: `drop index if exists registry_catalog_release_adoptions_key_idx;
+drop index if exists registry_catalog_release_adoptions_release_idx;
+drop index if exists registry_catalog_release_adoptions_space_idx;
+drop table if exists registry_catalog_release_adoptions;
+drop index if exists registry_catalog_releases_created_at_idx;
+drop index if exists registry_catalog_releases_digest_idx;
+drop index if exists registry_catalog_releases_publisher_idx;
+drop table if exists registry_catalog_releases;
+drop index if exists registry_catalog_publisher_keys_status_idx;
+drop index if exists registry_catalog_publisher_keys_publisher_idx;
+drop table if exists registry_catalog_publisher_keys;`,
     },
   ]);

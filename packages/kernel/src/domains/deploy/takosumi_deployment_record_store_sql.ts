@@ -17,35 +17,25 @@ import type {
  * public deploy lifecycle (`POST /v1/deployments` + `takosumi status`)
  * survives kernel restarts. Backs the
  * `takosumi_deployments` table created by migration
- * `20260430000020_takosumi_deployments`.
+ * `20260430000020_takosumi_deployments` and the
+ * `takosumi_deploy_locks` table created by migration
+ * `20260430000022_takosumi_deploy_locks`.
  *
  * Locking strategy:
  *  - In-process: a per-(tenant, name) Promise chain serialises concurrent
- *    `acquireLock` callers within ONE kernel process. This is the
- *    primary correctness guarantee: the public deploy route holds the
- *    lock around `provider.apply`, the upsert and the response so two
- *    in-flight CLI submissions for the same deployment cannot race
- *    against each other or against the record-store row.
- *  - Cross-process: NOT enforced by this store. Postgres
- *    `pg_advisory_lock` is session-scoped, and a pooled SqlClient
- *    routes successive `acquireLock` / `releaseLock` queries through
- *    different sessions, leaking the held lock on the original
- *    connection. Operators that need cross-pod fencing should either
- *    run a single-writer apply tier or supply a SqlClient that pins
- *    the same connection for an `acquireLock` ... `releaseLock`
- *    bracket and use a backend-appropriate locking primitive (e.g.
- *    `SELECT ... FOR UPDATE` inside a wrapping transaction).
- *
- * Operators on non-Postgres backends should subclass this and override
- * `acquireLock` / `releaseLock` to use their backend's row-level lock
- * primitive. The non-lock methods rely only on `INSERT ... ON CONFLICT
- * DO UPDATE`, which Postgres-compatible drivers (D1, CockroachDB,
- * Yugabyte) support.
+ *    `acquireLock` callers within ONE kernel process.
+ *  - Cross-process: a SQL lease row in `takosumi_deploy_locks` fences
+ *    same-key apply / destroy calls across kernel pods. The holder renews
+ *    `locked_until` until `releaseLock`; if the process dies, another pod
+ *    can take over after the lease expires.
  */
 export class SqlTakosumiDeploymentRecordStore
   implements TakosumiDeploymentRecordStore {
   readonly #client: SqlClient;
   readonly #idFactory: () => string;
+  readonly #lockLeaseMs: number;
+  readonly #lockHeartbeatMs: number;
+  readonly #lockPollMs: number;
   /**
    * Per-key in-process lock chain. While a holder owns the entry, its
    * `tail` Promise blocks any same-process acquirer until the holder
@@ -55,13 +45,25 @@ export class SqlTakosumiDeploymentRecordStore
    * against itself within one kernel process.
    */
   readonly #localLocks = new Map<string, LocalLockEntry>();
+  readonly #heldSqlLocks = new Map<string, HeldSqlLockEntry>();
 
   constructor(input: {
     readonly client: SqlClient;
     readonly idFactory?: () => string;
+    readonly lockLeaseMs?: number;
+    readonly lockHeartbeatMs?: number;
+    readonly lockPollMs?: number;
   }) {
     this.#client = input.client;
     this.#idFactory = input.idFactory ?? (() => crypto.randomUUID());
+    this.#lockLeaseMs = positiveInteger(input.lockLeaseMs) ?? 30_000;
+    const defaultHeartbeatMs = Math.max(1, Math.floor(this.#lockLeaseMs / 3));
+    const configuredHeartbeatMs = positiveInteger(input.lockHeartbeatMs);
+    this.#lockHeartbeatMs = configuredHeartbeatMs &&
+        configuredHeartbeatMs < this.#lockLeaseMs
+      ? configuredHeartbeatMs
+      : defaultHeartbeatMs;
+    this.#lockPollMs = positiveInteger(input.lockPollMs) ?? 100;
   }
 
   async upsert(
@@ -163,6 +165,41 @@ export class SqlTakosumiDeploymentRecordStore
 
   async acquireLock(tenantId: string, name: string): Promise<void> {
     const key = lockKey(tenantId, name);
+    await this.#acquireLocalLock(key);
+    const ownerToken = this.#idFactory();
+    try {
+      await this.#acquireSqlLease(tenantId, name, ownerToken);
+      this.#heldSqlLocks.set(key, {
+        ownerToken,
+        renewalTimer: this.#startLeaseRenewal(tenantId, name, ownerToken),
+      });
+    } catch (error) {
+      this.#releaseLocalLock(key);
+      throw error;
+    }
+  }
+
+  async releaseLock(tenantId: string, name: string): Promise<void> {
+    const key = lockKey(tenantId, name);
+    const held = this.#heldSqlLocks.get(key);
+    if (!held) {
+      this.#releaseLocalLock(key);
+      return;
+    }
+    clearInterval(held.renewalTimer);
+    this.#heldSqlLocks.delete(key);
+    try {
+      await this.#query(
+        "delete from takosumi_deploy_locks " +
+          "where tenant_id = $1 and name = $2 and owner_token = $3",
+        [tenantId, name, held.ownerToken],
+      );
+    } finally {
+      this.#releaseLocalLock(key);
+    }
+  }
+
+  async #acquireLocalLock(key: string): Promise<void> {
     // Wait for the previous holder (if any) to release before installing
     // our own entry. Mirrors the in-memory store's lock chain so two
     // same-process callers serialise.
@@ -178,13 +215,12 @@ export class SqlTakosumiDeploymentRecordStore
     this.#localLocks.set(key, { tail, release });
   }
 
-  releaseLock(tenantId: string, name: string): Promise<void> {
-    const key = lockKey(tenantId, name);
+  #releaseLocalLock(key: string): void {
     const entry = this.#localLocks.get(key);
     if (!entry) {
       // Idempotent: releasing an unheld lock is a no-op so callers can
       // always release in `finally` even when acquire failed.
-      return Promise.resolve();
+      return;
     }
     // Drop the entry BEFORE resolving so the next waiter's
     // `this.#localLocks.has(key)` re-check returns false and the waiter
@@ -192,7 +228,62 @@ export class SqlTakosumiDeploymentRecordStore
     // in-memory store's release semantics.
     this.#localLocks.delete(key);
     entry.release();
-    return Promise.resolve();
+  }
+
+  async #acquireSqlLease(
+    tenantId: string,
+    name: string,
+    ownerToken: string,
+  ): Promise<void> {
+    while (true) {
+      const result = await this.#query<{ owner_token: string }>(
+        "insert into takosumi_deploy_locks " +
+          "(tenant_id, name, owner_token, locked_until, created_at, updated_at) " +
+          "values ($1, $2, $3, now() + ($4::integer * interval '1 millisecond'), now(), now()) " +
+          "on conflict (tenant_id, name) do update set " +
+          "owner_token = excluded.owner_token, " +
+          "locked_until = excluded.locked_until, " +
+          "updated_at = now() " +
+          "where takosumi_deploy_locks.locked_until <= now() " +
+          "returning owner_token",
+        [tenantId, name, ownerToken, this.#lockLeaseMs],
+      );
+      if (result.rows[0]?.owner_token === ownerToken) return;
+      await delay(this.#lockPollMs);
+    }
+  }
+
+  #startLeaseRenewal(
+    tenantId: string,
+    name: string,
+    ownerToken: string,
+  ): ReturnType<typeof setInterval> {
+    return setInterval(() => {
+      this.#renewSqlLease(tenantId, name, ownerToken).catch((error) => {
+        console.error(
+          `[takosumi-deploy] failed to renew SQL deploy lock tenant=${tenantId} name=${name}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+    }, this.#lockHeartbeatMs);
+  }
+
+  async #renewSqlLease(
+    tenantId: string,
+    name: string,
+    ownerToken: string,
+  ): Promise<void> {
+    const result = await this.#query(
+      "update takosumi_deploy_locks set " +
+        "locked_until = now() + ($4::integer * interval '1 millisecond'), " +
+        "updated_at = now() " +
+        "where tenant_id = $1 and name = $2 and owner_token = $3",
+      [tenantId, name, ownerToken, this.#lockLeaseMs],
+    );
+    if (result.rowCount === 0) {
+      throw new Error("deploy lock lease is no longer held by this process");
+    }
   }
 
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(
@@ -208,6 +299,11 @@ interface LocalLockEntry {
   readonly tail: Promise<void>;
   /** Resolver for `tail`; called from `releaseLock`. */
   readonly release: () => void;
+}
+
+interface HeldSqlLockEntry {
+  readonly ownerToken: string;
+  readonly renewalTimer: ReturnType<typeof setInterval>;
 }
 
 interface TakosumiDeploymentRow extends Record<string, unknown> {
@@ -285,6 +381,16 @@ function requireRow(
 
 function lockKey(tenantId: string, name: string): string {
   return `${tenantId} ${name}`;
+}
+
+function positiveInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const ARTIFACT_HASH_REGEX = /^sha256:[0-9a-f]{64}$/;

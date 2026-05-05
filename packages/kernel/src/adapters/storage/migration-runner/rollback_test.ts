@@ -224,10 +224,21 @@ class FakeSqlClient implements SqlClient {
   readonly calls: SqlCall[] = [];
   readonly #applied = new Map<string, Record<string, unknown>>();
 
-  async query<Row extends Record<string, unknown> = Record<string, unknown>>(
+  query<Row extends Record<string, unknown> = Record<string, unknown>>(
     sql: string,
     parameters?: SqlParameters,
   ): Promise<SqlQueryResult<Row>> {
+    try {
+      return Promise.resolve(this.#query<Row>(sql, parameters));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  #query<Row extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    parameters?: SqlParameters,
+  ): SqlQueryResult<Row> {
     const normalized = normalizeSql(sql);
     this.calls.push({ sql: normalized, parameters });
 

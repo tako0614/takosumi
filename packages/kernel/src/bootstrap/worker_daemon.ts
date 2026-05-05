@@ -1,20 +1,33 @@
 import type { AppContext } from "../app_context.ts";
 import type { PaaSProcessRole } from "../process/mod.ts";
+import type { RevokeDebtStore } from "../domains/deploy/revoke_debt_store.ts";
+import { RevokeDebtCleanupWorker } from "../domains/deploy/revoke_debt_cleanup_worker.ts";
+import type {
+  TakosumiDeploymentRecordStore,
+} from "../domains/deploy/takosumi_deployment_record_store.ts";
 import { ApplyWorker, type ApplyWorkerJob } from "../workers/apply_worker.ts";
 import {
   NoopOutboxPublisher,
   OutboxDispatcher,
 } from "../workers/outbox_dispatcher.ts";
 import {
+  createRevokeDebtCleanupWorkerTask,
   WorkerDaemon,
   type WorkerDaemonTask,
   type WorkerDaemonTickResult,
 } from "../workers/daemon.ts";
+import type {
+  JsonObject,
+  PlatformContext,
+  RefResolver,
+} from "takosumi-contract";
 
 export interface RoleWorkerDaemonOptions {
   readonly role: PaaSProcessRole;
   readonly context: AppContext;
   readonly runtimeEnv: Record<string, string | undefined>;
+  readonly deploymentRecordStore?: TakosumiDeploymentRecordStore;
+  readonly revokeDebtStore?: RevokeDebtStore;
   readonly onTick: (result: WorkerDaemonTickResult) => void;
 }
 
@@ -73,6 +86,25 @@ function createWorkerTasks(
     options.context.services.core.outbox,
     new NoopOutboxPublisher(),
   );
+  const revokeDebtStore = options.revokeDebtStore;
+  const revokeDebtCleanupWorker = revokeDebtStore
+    ? new RevokeDebtCleanupWorker({
+      revokeDebtStore,
+      ...(options.deploymentRecordStore
+        ? { deploymentRecordStore: options.deploymentRecordStore }
+        : {}),
+      context: (ownerSpaceId) =>
+        platformContextFromAppContext(options.context, ownerSpaceId),
+    })
+    : undefined;
+  const revokeDebtCleanupIntervalMs = positiveInteger(
+    options.runtimeEnv.TAKOSUMI_REVOKE_DEBT_CLEANUP_INTERVAL_MS,
+    intervalMs,
+  );
+  const revokeDebtCleanupLimit = positiveInteger(
+    options.runtimeEnv.TAKOSUMI_REVOKE_DEBT_CLEANUP_LIMIT,
+    50,
+  );
 
   return [
     {
@@ -117,6 +149,16 @@ function createWorkerTasks(
           ),
         }),
     },
+    ...(revokeDebtCleanupWorker && revokeDebtStore
+      ? [
+        createRevokeDebtCleanupWorkerTask({
+          intervalMs: revokeDebtCleanupIntervalMs,
+          limit: revokeDebtCleanupLimit,
+          worker: revokeDebtCleanupWorker,
+          ownerSpaces: () => revokeDebtStore.listOpenOwnerSpaces(),
+        }),
+      ]
+      : []),
   ];
 }
 
@@ -143,3 +185,26 @@ function positiveInteger(
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+function platformContextFromAppContext(
+  appContext: AppContext,
+  ownerSpaceId: string,
+): PlatformContext {
+  const adapters = appContext.adapters;
+  return {
+    tenantId: ownerSpaceId,
+    spaceId: ownerSpaceId,
+    secrets: adapters.secrets as PlatformContext["secrets"],
+    observability: adapters.observability as PlatformContext["observability"],
+    kms: adapters.kms as PlatformContext["kms"],
+    objectStorage: adapters.objectStorage as PlatformContext["objectStorage"],
+    refResolver: WORKER_DAEMON_REF_RESOLVER,
+    resolvedOutputs: new Map<string, JsonObject>(),
+  };
+}
+
+const WORKER_DAEMON_REF_RESOLVER: RefResolver = {
+  resolve(_expression: string) {
+    return null;
+  },
+};

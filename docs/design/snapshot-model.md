@@ -4,17 +4,19 @@ Snapshots are immutable authority records scoped to a Space.
 
 ## IntentGraph
 
-IntentGraph is parsed authoring intent plus deploy context. It carries `spaceId`, but the manifest itself does not.
+IntentGraph is parsed authoring intent plus deploy context. It carries
+`spaceId`, but the manifest itself does not.
 
 It contains:
 
 ```text
-declared object intents
-target aliases
-link intents from uses
-exposure intents from expose
-data asset intents
-profile reference
+declared Shape resource intents
+provider ids
+template expansion provenance
+resource dependency refs
+link intents derived from Shape-defined bindings
+exposure intents derived from route-bearing resources
+data asset intents from resource specs
 space id from deploy context
 ```
 
@@ -76,11 +78,13 @@ DesiredSnapshot is immutable.
 
 ## OperationPlan
 
-OperationPlan is derived from DesiredSnapshot and current ObservationSet. It is not canonical desired state.
+OperationPlan is derived from DesiredSnapshot and current ObservationSet. It is
+not canonical desired state.
 
 ## OperationJournal
 
-OperationJournal records what was attempted, generated, failed, compensated, or left as debt.
+OperationJournal records what was attempted, generated, failed, compensated, or
+left as debt.
 
 ## ObservationSet
 
@@ -88,4 +92,6 @@ ObservationSet records current facts. It does not update snapshots.
 
 ## ActivationSnapshot
 
-ActivationSnapshot records active traffic, rollout state, and current assignment inside one Space. GroupHead points to the current activation/deployment state for `spaceId + groupId`.
+ActivationSnapshot records active traffic, rollout state, and current assignment
+inside one Space. GroupHead points to the current activation/deployment state
+for `spaceId + groupId`.

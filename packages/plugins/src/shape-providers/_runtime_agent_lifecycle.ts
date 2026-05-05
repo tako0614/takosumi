@@ -13,10 +13,13 @@
 import {
   type ArtifactStoreLocator,
   LIFECYCLE_APPLY_PATH,
+  LIFECYCLE_COMPENSATE_PATH,
   LIFECYCLE_DESCRIBE_PATH,
   LIFECYCLE_DESTROY_PATH,
   type LifecycleApplyRequest,
   type LifecycleApplyResponse,
+  type LifecycleCompensateRequest,
+  type LifecycleCompensateResponse,
   type LifecycleDescribeRequest,
   type LifecycleDescribeResponse,
   type LifecycleDestroyRequest,
@@ -62,6 +65,15 @@ export class RuntimeAgentLifecycle {
 
   destroy(req: LifecycleDestroyRequest): Promise<LifecycleDestroyResponse> {
     return this.#post<LifecycleDestroyResponse>(LIFECYCLE_DESTROY_PATH, req);
+  }
+
+  compensate(
+    req: LifecycleCompensateRequest,
+  ): Promise<LifecycleCompensateResponse> {
+    return this.#post<LifecycleCompensateResponse>(
+      LIFECYCLE_COMPENSATE_PATH,
+      req,
+    );
   }
 
   describe(req: LifecycleDescribeRequest): Promise<LifecycleDescribeResponse> {

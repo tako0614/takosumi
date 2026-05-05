@@ -420,10 +420,11 @@ export class PlaceholderSecretBoundaryCrypto implements SecretBoundaryCrypto {
  */
 export class WebCryptoAesGcmSecretBoundaryCrypto
   implements SecretBoundaryCrypto {
-  readonly #keyPromise: Promise<CryptoKey>;
+  readonly #passphrase: string;
+  #keyPromise: Promise<CryptoKey> | undefined;
 
   constructor(passphrase: string) {
-    this.#keyPromise = deriveAesKey(passphrase);
+    this.#passphrase = passphrase;
   }
 
   async seal(
@@ -434,7 +435,7 @@ export class WebCryptoAesGcmSecretBoundaryCrypto
     const encrypted = new Uint8Array(
       await crypto.subtle.encrypt(
         { name: "AES-GCM", iv },
-        await this.#keyPromise,
+        await this.#key(),
         toArrayBuffer(new TextEncoder().encode(plaintext)),
       ),
     );
@@ -452,10 +453,15 @@ export class WebCryptoAesGcmSecretBoundaryCrypto
     const payload = ciphertext.slice(12);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv },
-      await this.#keyPromise,
+      await this.#key(),
       toArrayBuffer(payload),
     );
     return new TextDecoder().decode(plaintext);
+  }
+
+  #key(): Promise<CryptoKey> {
+    this.#keyPromise ??= deriveAesKey(this.#passphrase);
+    return this.#keyPromise;
   }
 }
 
@@ -474,7 +480,8 @@ export class WebCryptoAesGcmSecretBoundaryCrypto
  * partition tag of a sealed payload causes `open` to fail.
  */
 export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
-  readonly #keys: Map<CloudPartition, Promise<CryptoKey>>;
+  readonly #passphrases: Map<CloudPartition, string>;
+  readonly #keyPromises = new Map<CloudPartition, Promise<CryptoKey>>();
   readonly #fallbackPassphrase: string;
 
   constructor(
@@ -489,13 +496,13 @@ export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
       );
     }
     this.#fallbackPassphrase = options.globalPassphrase;
-    this.#keys = new Map();
+    this.#passphrases = new Map();
     for (const partition of CLOUD_PARTITIONS) {
       const override = options.perCloudPassphrases?.[partition];
       const passphrase = (override && override.trim() !== "")
         ? override
         : this.#derivePartitionPassphrase(partition);
-      this.#keys.set(partition, deriveAesKey(passphrase));
+      this.#passphrases.set(partition, passphrase);
     }
   }
 
@@ -523,16 +530,12 @@ export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
     plaintext: string,
     cloudPartition: CloudPartition,
   ): Promise<Uint8Array> {
-    const key = this.#keys.get(cloudPartition);
-    if (!key) {
-      throw new Error(`unsupported cloud partition: ${cloudPartition}`);
-    }
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const aad = new TextEncoder().encode(`takos.cloud:${cloudPartition}`);
     const encrypted = new Uint8Array(
       await crypto.subtle.encrypt(
         { name: "AES-GCM", iv, additionalData: toArrayBuffer(aad) },
-        await key,
+        await this.#key(cloudPartition),
         toArrayBuffer(new TextEncoder().encode(plaintext)),
       ),
     );
@@ -546,19 +549,28 @@ export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
     ciphertext: Uint8Array,
     cloudPartition: CloudPartition,
   ): Promise<string> {
-    const key = this.#keys.get(cloudPartition);
-    if (!key) {
-      throw new Error(`unsupported cloud partition: ${cloudPartition}`);
-    }
     const iv = ciphertext.slice(0, 12);
     const payload = ciphertext.slice(12);
     const aad = new TextEncoder().encode(`takos.cloud:${cloudPartition}`);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv, additionalData: toArrayBuffer(aad) },
-      await key,
+      await this.#key(cloudPartition),
       toArrayBuffer(payload),
     );
     return new TextDecoder().decode(plaintext);
+  }
+
+  #key(partition: CloudPartition): Promise<CryptoKey> {
+    const passphrase = this.#passphrases.get(partition);
+    if (!passphrase) {
+      throw new Error(`unsupported cloud partition: ${partition}`);
+    }
+    let promise = this.#keyPromises.get(partition);
+    if (!promise) {
+      promise = deriveAesKey(passphrase);
+      this.#keyPromises.set(partition, promise);
+    }
+    return promise;
   }
 }
 

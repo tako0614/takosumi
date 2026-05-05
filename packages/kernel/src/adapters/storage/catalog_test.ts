@@ -61,6 +61,26 @@ const mirroredMigrationFiles: readonly {
     fileName: "20260430000020_takosumi_deployments.sql",
     migrationId: "deploy.takosumi_deployments.create",
   },
+  {
+    fileName: "20260430000021_takosumi_deploy_idempotency_keys.sql",
+    migrationId: "deploy.takosumi_deploy_idempotency_keys.create",
+  },
+  {
+    fileName: "20260430000022_takosumi_deploy_locks.sql",
+    migrationId: "deploy.takosumi_deploy_locks.create",
+  },
+  {
+    fileName: "20260430000023_takosumi_operation_journal_entries.sql",
+    migrationId: "deploy.takosumi_operation_journal_entries.create",
+  },
+  {
+    fileName: "20260430000024_takosumi_revoke_debts.sql",
+    migrationId: "deploy.takosumi_revoke_debts.create",
+  },
+  {
+    fileName: "20260430000025_catalog_releases.sql",
+    migrationId: "registry.catalog_releases.create",
+  },
 ];
 
 Deno.test("deploy statement catalog references deployment tables only", () => {

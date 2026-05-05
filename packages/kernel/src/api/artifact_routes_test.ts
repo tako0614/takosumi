@@ -594,6 +594,61 @@ Deno.test(
 );
 
 Deno.test(
+  "artifact upload honors registered per-kind maxSize",
+  async () => {
+    const kind = "test-only-small-artifact";
+    registerArtifactKind({
+      kind,
+      description: "Small test artifacts",
+      maxSize: 4,
+    });
+    try {
+      const { app } = createApp({ token: VALID_TOKEN, maxBytes: 1024 });
+      const res = await uploadArtifact(
+        app,
+        VALID_TOKEN,
+        new Uint8Array(8),
+        kind,
+      );
+      assert.equal(res.status, 413);
+      const body = await res.json();
+      assert.equal(body.error.code, "resource_exhausted");
+      assert.match(body.error.message, /artifact bytes exceed maxBytes/);
+      assert.match(body.error.message, /8 > 4/);
+    } finally {
+      unregisterArtifactKind(kind);
+    }
+  },
+);
+
+Deno.test(
+  "artifact upload allows registered maxSize above the route default",
+  async () => {
+    const kind = "test-only-large-artifact";
+    registerArtifactKind({
+      kind,
+      description: "Large test artifacts",
+      maxSize: 128,
+    });
+    try {
+      const { app } = createApp({ token: VALID_TOKEN, maxBytes: 8 });
+      const res = await uploadArtifact(
+        app,
+        VALID_TOKEN,
+        new Uint8Array(64),
+        kind,
+      );
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.kind, kind);
+      assert.equal(body.size, 64);
+    } finally {
+      unregisterArtifactKind(kind);
+    }
+  },
+);
+
+Deno.test(
   "artifact upload with Content-Length above cap returns 413 without buffering",
   async () => {
     const { app } = createApp({ token: VALID_TOKEN, maxBytes: 1024 });

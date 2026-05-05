@@ -160,9 +160,7 @@ export class DockerComposeConnector implements Connector {
     const status = parsed.State?.Status;
     if (status !== "running") return { status: "missing" };
     const outputs = this.#outputsFromInspect(req.handle, parsed);
-    return outputs
-      ? { status: "running", outputs }
-      : { status: "running" };
+    return outputs ? { status: "running", outputs } : { status: "running" };
   }
 
   async verify(_ctx: ConnectorContext): Promise<ConnectorVerifyResult> {

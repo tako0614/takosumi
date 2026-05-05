@@ -16,6 +16,8 @@ import type {
   ApplyResult,
   ArtifactStoreLocator,
   JsonObject,
+  PlatformOperationContext,
+  PlatformOperationRequest,
   ProviderPlugin,
   ResourceHandle,
   ResourceStatus,
@@ -141,7 +143,12 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/aws-route53",
     shape: CUSTOM_DOMAIN,
-    capabilities: ["wildcard", "auto-tls", "sni", "alpn-acme"] satisfies readonly CustomDomainCapability[],
+    capabilities: [
+      "wildcard",
+      "auto-tls",
+      "sni",
+      "alpn-acme",
+    ] satisfies readonly CustomDomainCapability[],
   },
 ];
 
@@ -162,7 +169,12 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/gcp-cloud-run",
     shape: WEB_SERVICE,
-    capabilities: ["always-on", "scale-to-zero", "websocket", "long-request"] satisfies readonly WebServiceCapability[],
+    capabilities: [
+      "always-on",
+      "scale-to-zero",
+      "websocket",
+      "long-request",
+    ] satisfies readonly WebServiceCapability[],
   },
   {
     id: "@takos/gcp-cloud-sql",
@@ -179,7 +191,11 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/gcp-cloud-dns",
     shape: CUSTOM_DOMAIN,
-    capabilities: ["wildcard", "auto-tls", "sni"] satisfies readonly CustomDomainCapability[],
+    capabilities: [
+      "wildcard",
+      "auto-tls",
+      "sni",
+    ] satisfies readonly CustomDomainCapability[],
   },
 ];
 
@@ -187,12 +203,19 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/cloudflare-r2",
     shape: OBJECT_STORE,
-    capabilities: ["presigned-urls", "public-access", "multipart-upload"] satisfies readonly ObjectStoreCapability[],
+    capabilities: [
+      "presigned-urls",
+      "public-access",
+      "multipart-upload",
+    ] satisfies readonly ObjectStoreCapability[],
   },
   {
     id: "@takos/cloudflare-container",
     shape: WEB_SERVICE,
-    capabilities: ["scale-to-zero", "geo-routing"] satisfies readonly WebServiceCapability[],
+    capabilities: [
+      "scale-to-zero",
+      "geo-routing",
+    ] satisfies readonly WebServiceCapability[],
   },
   {
     id: "@takos/cloudflare-workers",
@@ -208,7 +231,12 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/cloudflare-dns",
     shape: CUSTOM_DOMAIN,
-    capabilities: ["wildcard", "auto-tls", "sni", "http3"] satisfies readonly CustomDomainCapability[],
+    capabilities: [
+      "wildcard",
+      "auto-tls",
+      "sni",
+      "http3",
+    ] satisfies readonly CustomDomainCapability[],
   },
 ];
 
@@ -216,7 +244,12 @@ const AZURE_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/azure-container-apps",
     shape: WEB_SERVICE,
-    capabilities: ["always-on", "scale-to-zero", "websocket", "long-request"] satisfies readonly WebServiceCapability[],
+    capabilities: [
+      "always-on",
+      "scale-to-zero",
+      "websocket",
+      "long-request",
+    ] satisfies readonly WebServiceCapability[],
   },
 ];
 
@@ -237,7 +270,11 @@ const DENO_DEPLOY_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/deno-deploy",
     shape: WORKER,
-    capabilities: ["scale-to-zero", "long-request", "geo-routing"] satisfies readonly WorkerCapability[],
+    capabilities: [
+      "scale-to-zero",
+      "long-request",
+      "geo-routing",
+    ] satisfies readonly WorkerCapability[],
   },
 ];
 
@@ -262,17 +299,28 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/selfhost-docker-compose",
     shape: WEB_SERVICE,
-    capabilities: ["always-on", "websocket", "long-request", "sticky-session"] satisfies readonly WebServiceCapability[],
+    capabilities: [
+      "always-on",
+      "websocket",
+      "long-request",
+      "sticky-session",
+    ] satisfies readonly WebServiceCapability[],
   },
   {
     id: "@takos/selfhost-systemd",
     shape: WEB_SERVICE,
-    capabilities: ["always-on", "long-request"] satisfies readonly WebServiceCapability[],
+    capabilities: [
+      "always-on",
+      "long-request",
+    ] satisfies readonly WebServiceCapability[],
   },
   {
     id: "@takos/selfhost-postgres",
     shape: DATABASE_POSTGRES,
-    capabilities: ["ssl-required", "extensions"] satisfies readonly DatabasePostgresCapability[],
+    capabilities: [
+      "ssl-required",
+      "extensions",
+    ] satisfies readonly DatabasePostgresCapability[],
   },
   {
     id: "@takos/selfhost-coredns",
@@ -332,12 +380,19 @@ function buildProvider(
 
     async apply(spec, ctx): Promise<ApplyResult> {
       const resourceName = pickResourceName(spec);
+      const operationMetadata = lifecycleOperationMetadata(ctx.operation);
+      const operationRequest = lifecycleOperationRequest(ctx.operation);
       const result = await lifecycle.apply({
         shape: shapeRef,
         provider: entry.id,
         resourceName,
         spec: spec as JsonObject,
         ...tenantIdOf(ctx),
+        ...(ctx.operation
+          ? { idempotencyKey: ctx.operation.idempotencyKeyString }
+          : {}),
+        ...(operationRequest ? { operationRequest } : {}),
+        ...(operationMetadata ? { metadata: operationMetadata } : {}),
       });
       return {
         handle: result.handle,
@@ -346,11 +401,34 @@ function buildProvider(
     },
 
     async destroy(handle: ResourceHandle, ctx): Promise<void> {
+      const operationMetadata = lifecycleOperationMetadata(ctx.operation);
+      const operationRequest = lifecycleOperationRequest(ctx.operation);
       await lifecycle.destroy({
         shape: shapeRef,
         provider: entry.id,
         handle,
         ...tenantIdOf(ctx),
+        ...(ctx.operation
+          ? { idempotencyKey: ctx.operation.idempotencyKeyString }
+          : {}),
+        ...(operationRequest ? { operationRequest } : {}),
+        ...(operationMetadata ? { metadata: operationMetadata } : {}),
+      });
+    },
+
+    async compensate(handle: ResourceHandle, ctx) {
+      const operationMetadata = lifecycleOperationMetadata(ctx.operation);
+      const operationRequest = lifecycleOperationRequest(ctx.operation);
+      return await lifecycle.compensate({
+        shape: shapeRef,
+        provider: entry.id,
+        handle,
+        ...tenantIdOf(ctx),
+        ...(ctx.operation
+          ? { idempotencyKey: ctx.operation.idempotencyKeyString }
+          : {}),
+        ...(operationRequest ? { operationRequest } : {}),
+        ...(operationMetadata ? { metadata: operationMetadata } : {}),
       });
     },
 
@@ -428,6 +506,57 @@ function tenantIdOf(
     return { tenantId: ctx.tenantId };
   }
   return {};
+}
+
+function lifecycleOperationMetadata(
+  operation: PlatformOperationContext | undefined,
+): JsonObject | undefined {
+  if (!operation) return undefined;
+  return {
+    takosumiOperation: {
+      phase: operation.phase,
+      walStage: operation.walStage,
+      operationId: operation.operationId,
+      resourceName: operation.resourceName,
+      providerId: operation.providerId,
+      op: operation.op,
+      desiredDigest: operation.desiredDigest,
+      operationPlanDigest: operation.operationPlanDigest,
+      idempotencyKey: {
+        spaceId: operation.idempotencyKey.spaceId,
+        operationPlanDigest: operation.idempotencyKey.operationPlanDigest,
+        journalEntryId: operation.idempotencyKey.journalEntryId,
+      },
+      idempotencyKeyString: operation.idempotencyKeyString,
+    },
+  };
+}
+
+function lifecycleOperationRequest(
+  operation: PlatformOperationContext | undefined,
+): PlatformOperationRequest | undefined {
+  if (!operation) return undefined;
+  const recoveryMode = operation.recoveryMode ??
+    (operation.phase === "compensate" ? "compensate" : "normal");
+  return {
+    spaceId: operation.idempotencyKey.spaceId,
+    operationId: operation.operationId,
+    operationAttempt: operation.operationAttempt ?? 1,
+    journalCursor: operation.idempotencyKey.journalEntryId,
+    idempotencyKey: operation.idempotencyKeyString,
+    desiredSnapshotId: operation.desiredDigest,
+    resolutionSnapshotId: operation.operationPlanDigest,
+    operationKind: operation.phase === "apply"
+      ? "materialize-create"
+      : "materialize-delete",
+    inputRefs: [],
+    preRecordedGeneratedObjectIds: [],
+    expectedExternalIdempotencyKeys: [operation.idempotencyKeyString],
+    approvedEffects: [...(operation.approvedEffects ?? [])],
+    recoveryMode,
+    walStage: operation.walStage,
+    ...(operation.deadline ? { deadline: operation.deadline } : {}),
+  };
 }
 
 function imageToName(image: string): string {

@@ -137,17 +137,19 @@ export function registerArtifactRoutes(
     if (auth.kind === "fail") return auth.response;
 
     // Cheap pre-check: reject hostile / oversize uploads before we
-    // buffer anything. The wire framing carries the multipart envelope
-    // overhead too, so a Content-Length over `maxBytes` is already
-    // grounds for refusal — the body cannot fit even with zero overhead.
+    // buffer anything. The kind-specific cap is not known until the
+    // multipart fields are parsed, so this gate uses the largest known
+    // registered cap and the route default. The post-parse body check below
+    // enforces the exact cap for the submitted kind.
     const contentLengthHeader = c.req.header("content-length");
     if (contentLengthHeader) {
       const declared = Number.parseInt(contentLengthHeader, 10);
-      if (Number.isFinite(declared) && declared > maxBytes) {
+      const preflightMaxBytes = maxKnownUploadBytes(maxBytes);
+      if (Number.isFinite(declared) && declared > preflightMaxBytes) {
         return c.json(
           apiError(
             "resource_exhausted",
-            tooLargeMessage(declared, maxBytes, "content-length"),
+            tooLargeMessage(declared, preflightMaxBytes, "content-length"),
           ),
           413,
         );
@@ -175,6 +177,7 @@ export function registerArtifactRoutes(
       );
     }
     const kind = kindValue.trim();
+    const uploadMaxBytes = maxBytesForKind(kind, maxBytes);
 
     const fileValue = form.get("body");
     if (!(fileValue instanceof File)) {
@@ -184,11 +187,11 @@ export function registerArtifactRoutes(
       );
     }
     const bytes = new Uint8Array(await fileValue.arrayBuffer());
-    if (bytes.length > maxBytes) {
+    if (bytes.length > uploadMaxBytes) {
       return c.json(
         apiError(
           "resource_exhausted",
-          tooLargeMessage(bytes.length, maxBytes, "artifact bytes"),
+          tooLargeMessage(bytes.length, uploadMaxBytes, "artifact bytes"),
         ),
         413,
       );
@@ -530,6 +533,25 @@ function resolveMaxBytes(option: number | undefined): number {
   return TAKOSUMI_ARTIFACT_MAX_BYTES_DEFAULT;
 }
 
+function maxBytesForKind(kind: string, fallback: number): number {
+  const registered = listArtifactKinds().find((entry) => entry.kind === kind);
+  return validMaxSize(registered?.maxSize) ? registered.maxSize : fallback;
+}
+
+function maxKnownUploadBytes(fallback: number): number {
+  let max = fallback;
+  for (const kind of listArtifactKinds()) {
+    if (validMaxSize(kind.maxSize) && kind.maxSize > max) {
+      max = kind.maxSize;
+    }
+  }
+  return max;
+}
+
+function validMaxSize(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
 /**
  * Build a 413 message with the actual / max sizes plus operator
  * remediation hints. Same shape regardless of whether the cap fires on
@@ -551,7 +573,6 @@ function tooLargeMessage(
   );
 }
 
-// deno-lint-ignore no-explicit-any
 type AuthOk = { kind: "ok" };
 // deno-lint-ignore no-explicit-any
 type AuthFail = { kind: "fail"; response: any };

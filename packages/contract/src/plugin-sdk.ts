@@ -297,8 +297,8 @@ export namespace kms {
       return Promise.resolve(this.#keyRef);
     }
 
-    async encrypt(input: KmsEncryptInput): Promise<KmsEnvelopeDto> {
-      return {
+    encrypt(input: KmsEncryptInput): Promise<KmsEnvelopeDto> {
+      return Promise.resolve({
         version: "takosumi.kms.envelope.v1",
         algorithm: "TEST-NOOP",
         keyRef: input.keyRef ?? this.#keyRef,
@@ -306,7 +306,7 @@ export namespace kms {
         ciphertext: bytesToBase64(toBytes(input.plaintext)),
         createdAt: this.#clock().toISOString(),
         rotation: input.rotation,
-      };
+      });
     }
 
     decrypt(input: KmsDecryptInput): Promise<Uint8Array> {
@@ -502,19 +502,24 @@ export namespace objectStorage {
       return head(object);
     }
 
-    async getObject(
+    getObject(
       input: ObjectStorageGetInput,
     ): Promise<ObjectStorageObject | undefined> {
-      const object = this.#objects.get(key(input));
-      if (
-        object && input.expectedDigest && object.digest !== input.expectedDigest
-      ) {
-        throw new ObjectStorageDigestMismatchError(
-          input.expectedDigest,
-          object.digest,
-        );
+      try {
+        const object = this.#objects.get(key(input));
+        if (
+          object && input.expectedDigest &&
+          object.digest !== input.expectedDigest
+        ) {
+          throw new ObjectStorageDigestMismatchError(
+            input.expectedDigest,
+            object.digest,
+          );
+        }
+        return Promise.resolve(clone(object));
+      } catch (error) {
+        return Promise.reject(error);
       }
-      return clone(object);
     }
 
     async headObject(
@@ -2458,12 +2463,12 @@ export interface CreatedPaaSApp {
   readonly role: TakosumiProcessRole;
 }
 
-export async function createPaaSApp(
+export function createPaaSApp(
   options: CreatePaaSAppOptions = {},
 ): Promise<CreatedPaaSApp> {
   const role = options.role ?? processRoleFromEnv(options.runtimeEnv);
   if (options.context) {
-    return { app: undefined, context: options.context, role };
+    return Promise.resolve({ app: undefined, context: options.context, role });
   }
   const runtimeConfig = options.runtimeConfig ?? {};
   const clock = options.dateClock ?? (() => new Date());
@@ -2489,7 +2494,11 @@ export async function createPaaSApp(
     ...createDefaultAppAdapters({ clock, idGenerator }),
     ...overrides,
   };
-  return { app: undefined, context: { adapters, runtimeConfig }, role };
+  return Promise.resolve({
+    app: undefined,
+    context: { adapters, runtimeConfig },
+    role,
+  });
 }
 
 export type RuntimeAgentAuthResult =

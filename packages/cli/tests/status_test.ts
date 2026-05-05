@@ -66,6 +66,11 @@ Deno.test(
           name: "my-app",
           status: "applied",
           appliedAt: "2026-05-02T00:00:00.000Z",
+          journal: {
+            phase: "apply",
+            latestStage: "finalize",
+            status: "succeeded",
+          },
           resources: [
             {
               name: "bucket",
@@ -91,6 +96,7 @@ Deno.test(
     assert.match(dump, /object-store@v1/);
     assert.match(dump, /aws-s3/);
     assert.match(dump, /applied/);
+    assert.match(dump, /apply:finalize\/succeeded/);
   },
 );
 

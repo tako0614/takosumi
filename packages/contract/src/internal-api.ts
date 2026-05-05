@@ -121,7 +121,7 @@ export async function verifyInternalResponseSignature(
   return timingSafeEqualHex(expectedSignature, input.signature);
 }
 
-export async function verifySignedInternalResponseFromHeaders(
+export function verifySignedInternalResponseFromHeaders(
   input: {
     method: string;
     path: string;
@@ -146,10 +146,10 @@ export async function verifySignedInternalResponseFromHeaders(
     input.headers,
     TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
   );
-  if (!signature || !timestamp || !requestId) return false;
-  if (!timestampWithinSkew(timestamp, input)) return false;
+  if (!signature || !timestamp || !requestId) return Promise.resolve(false);
+  if (!timestampWithinSkew(timestamp, input)) return Promise.resolve(false);
   if (input.expectedRequestId && input.expectedRequestId !== requestId) {
-    return false;
+    return Promise.resolve(false);
   }
   return verifyInternalResponseSignature({
     method: input.method,

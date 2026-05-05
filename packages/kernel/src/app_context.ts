@@ -35,7 +35,14 @@ import {
 } from "./domains/resources/mod.ts";
 import {
   type BundledRegistry,
+  type CatalogReleaseAdoptionStore,
+  type CatalogReleaseDescriptorStore,
+  type CatalogReleasePublisherKeyStore,
+  CatalogReleaseService,
   InMemoryBundledRegistry,
+  InMemoryCatalogReleaseAdoptionStore,
+  InMemoryCatalogReleaseDescriptorStore,
+  InMemoryCatalogReleasePublisherKeyStore,
   InMemoryPackageDescriptorStore,
   InMemoryPackageResolutionStore,
   InMemoryTrustRecordStore,
@@ -119,6 +126,7 @@ import {
 import {
   InMemoryObservabilitySink,
   type ObservabilitySink,
+  wrapObservabilitySinkWithOtlpMetrics,
 } from "./services/observability/mod.ts";
 import { EntitlementPolicyService } from "./services/entitlements/mod.ts";
 import {
@@ -200,6 +208,9 @@ export interface RegistryStores {
   readonly resolutions: PackageResolutionStore;
   readonly trustRecords: TrustRecordStore;
   readonly bundledRegistry: BundledRegistry;
+  readonly catalogReleases: CatalogReleaseDescriptorStore;
+  readonly catalogPublisherKeys: CatalogReleasePublisherKeyStore;
+  readonly catalogReleaseAdoptions: CatalogReleaseAdoptionStore;
 }
 
 export interface AuditStores {
@@ -375,6 +386,10 @@ export interface ServiceEndpointServices {
   readonly registry: ServiceEndpointRegistry;
 }
 
+export interface RegistryServices {
+  readonly catalogReleases: CatalogReleaseService;
+}
+
 export interface EntitlementServices {
   readonly policy: EntitlementPolicyService;
 }
@@ -384,6 +399,7 @@ export interface ServiceContainer {
   readonly deploy: DeployServices;
   readonly runtime: RuntimeServices;
   readonly usage: UsageServices;
+  readonly registry: RegistryServices;
   readonly serviceEndpoints: ServiceEndpointServices;
   readonly entitlements: EntitlementServices;
 }
@@ -512,6 +528,13 @@ function createStorageBackedAppStores(
       storageBackedStore(driver, (tx) => tx.registry.trustRecords),
     bundledRegistry: options.stores?.registry?.bundledRegistry ??
       storageBackedStore(driver, (tx) => tx.registry.bundledRegistry),
+    catalogReleases: options.stores?.registry?.catalogReleases ??
+      new InMemoryCatalogReleaseDescriptorStore(),
+    catalogPublisherKeys: options.stores?.registry?.catalogPublisherKeys ??
+      new InMemoryCatalogReleasePublisherKeyStore(),
+    catalogReleaseAdoptions:
+      options.stores?.registry?.catalogReleaseAdoptions ??
+        new InMemoryCatalogReleaseAdoptionStore(),
   };
   return {
     core: createInMemoryCoreDomainDependencies({
@@ -701,6 +724,12 @@ export function createDefaultAppAdapters(
   const storage = options.adapters?.storage ??
     pluginAdapters.storage ??
     new MemoryStorageDriver();
+  const observability = wrapObservabilitySinkWithOtlpMetrics(
+    options.adapters?.observability ??
+      pluginAdapters.observability ??
+      new InMemoryObservabilitySink(),
+    options.runtimeEnv,
+  );
   const runtimeAgent = options.adapters?.runtimeAgent ??
     pluginAdapters.runtimeAgent ??
     new InMemoryRuntimeAgentRegistry({
@@ -755,9 +784,7 @@ export function createDefaultAppAdapters(
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
-    observability: options.adapters?.observability ??
-      pluginAdapters.observability ??
-      new InMemoryObservabilitySink(),
+    observability,
     routerConfig: options.adapters?.routerConfig ??
       pluginAdapters.routerConfig ??
       new InMemoryRouterConfigAdapter({ clock: dateClock }),
@@ -960,6 +987,18 @@ export function createServiceContainer(
         clock: dateClock,
       }),
     },
+    registry: {
+      catalogReleases: new CatalogReleaseService({
+        stores: {
+          releases: stores.registry.catalogReleases,
+          publisherKeys: stores.registry.catalogPublisherKeys,
+          adoptions: stores.registry.catalogReleaseAdoptions,
+          audit: stores.audit.events,
+        },
+        clock: dateClock,
+        idFactory: uuidFactory,
+      }),
+    },
     serviceEndpoints: {
       registry: new ServiceEndpointRegistry(stores.serviceEndpoints),
     },
@@ -995,5 +1034,11 @@ function createRegistryStores(
     trustRecords,
     bundledRegistry: overrides?.bundledRegistry ??
       new InMemoryBundledRegistry(descriptors, resolutions, trustRecords),
+    catalogReleases: overrides?.catalogReleases ??
+      new InMemoryCatalogReleaseDescriptorStore(),
+    catalogPublisherKeys: overrides?.catalogPublisherKeys ??
+      new InMemoryCatalogReleasePublisherKeyStore(),
+    catalogReleaseAdoptions: overrides?.catalogReleaseAdoptions ??
+      new InMemoryCatalogReleaseAdoptionStore(),
   };
 }

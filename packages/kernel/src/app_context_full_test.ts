@@ -7,7 +7,10 @@ import { ImmutableManifestSourceAdapter } from "./adapters/source/mod.ts";
 import { MemoryStorageDriver } from "./adapters/storage/mod.ts";
 import { MemoryQueueAdapter } from "./adapters/queue/mod.ts";
 import { MemoryObjectStorage } from "./adapters/object-storage/mod.ts";
-import { InMemoryObservabilitySink } from "./services/observability/mod.ts";
+import {
+  InMemoryObservabilitySink,
+  OtlpObservabilitySink,
+} from "./services/observability/mod.ts";
 import { UsageProjectionService } from "./services/usage/mod.ts";
 import { ServiceEndpointRegistry } from "./domains/service-endpoints/mod.ts";
 import { EntitlementPolicyService } from "./services/entitlements/mod.ts";
@@ -75,6 +78,17 @@ Deno.test("full AppContext wires queue and object storage default adapters", asy
     }))?.digest,
     head.digest,
   );
+});
+
+Deno.test("createInMemoryAppContext wraps observability with OTLP metrics exporter from env", () => {
+  const context = createInMemoryAppContext({
+    runtimeEnv: {
+      TAKOSUMI_OTLP_METRICS_ENDPOINT: "http://collector.local/v1/metrics",
+      TAKOSUMI_DEV_MODE: "1",
+    },
+  });
+
+  assert.ok(context.adapters.observability instanceof OtlpObservabilitySink);
 });
 
 Deno.test("full AppContext composition remains backed by in-memory stores", async () => {

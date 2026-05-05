@@ -1,8 +1,11 @@
-import type {
-  JsonObject,
-  ManifestResource,
-  PlatformContext,
-  ResourceHandle,
+import {
+  formatPlatformOperationIdempotencyKey,
+  type JsonObject,
+  type ManifestResource,
+  type PlatformContext,
+  type PlatformOperationContext,
+  type PlatformOperationRecoveryMode,
+  type ResourceHandle,
 } from "takosumi-contract";
 import {
   type ResolvedResourceV2,
@@ -14,6 +17,16 @@ import {
   type RefResolutionIssue,
   resolveSpecRefs,
 } from "./ref_resolver_v2.ts";
+import {
+  buildOperationPlanPreview,
+  type OperationPlanPreview,
+} from "./operation_plan_preview.ts";
+
+export type {
+  OperationPlanPreview,
+  OperationPlanPreviewOperation,
+  OperationPlanPreviewWalStage,
+} from "./operation_plan_preview.ts";
 
 export interface ApplyV2Outcome {
   readonly applied: readonly AppliedResource[];
@@ -24,6 +37,13 @@ export interface ApplyV2Outcome {
    * Empty / undefined for non-dry-run runs.
    */
   readonly planned?: readonly PlannedResource[];
+  /**
+   * Public OperationPlan preview for dry-runs. This exposes the deterministic
+   * DesiredSnapshot / OperationPlan digests and WAL idempotency tuple the
+   * full lifecycle design uses, but plan mode still writes no journal entry.
+   */
+  readonly operationPlanPreview?: OperationPlanPreview;
+  readonly recoveryMode?: PlatformOperationRecoveryMode;
   /**
    * Number of resources that were skipped because their `(shape, providerId,
    * name, spec)` fingerprint matched a prior apply record. Always 0 when
@@ -61,21 +81,29 @@ export interface PriorAppliedSnapshot {
 }
 
 /**
- * A resource that would be applied if the run were not dry. `op` is always
- * `"create"` for v0 (the apply pipeline does not yet do diffs vs. observed
- * state); future versions can expand to `"update"` / `"replace"` /
- * `"no-op"`.
+ * A resource operation in the public plan surface. `applyV2` dry-runs emit
+ * `"create"` for now (the apply pipeline does not yet do diffs vs. observed
+ * state); the public route also uses this type for destroy WAL previews, where
+ * operations are emitted as `"delete"` in reverse DAG order.
  */
 export interface PlannedResource {
   readonly name: string;
   readonly shape: string;
   readonly providerId: string;
-  readonly op: "create";
+  readonly op: "create" | "delete";
 }
 
 export interface ApplyV2Options {
   readonly resources: readonly ManifestResource[];
   readonly context: PlatformContext;
+  readonly deploymentName?: string;
+  /**
+   * WAL OperationPlan preview already recorded by the caller. When present,
+   * `applyV2` attaches the matching operation idempotency tuple to each
+   * provider call through `PlatformContext.operation`.
+   */
+  readonly operationPlanPreview?: OperationPlanPreview;
+  readonly recoveryMode?: PlatformOperationRecoveryMode;
   /**
    * When `true`, run validation + ref-DAG resolution but skip
    * `provider.apply` calls. The returned outcome's `planned` field lists the
@@ -101,6 +129,13 @@ export interface ApplyV2Options {
 export interface DestroyV2Options {
   readonly resources: readonly ManifestResource[];
   readonly context: PlatformContext;
+  /**
+   * WAL OperationPlan preview already recorded by the caller. When present,
+   * `destroyV2` attaches the matching operation idempotency tuple to each
+   * provider call through `PlatformContext.operation`.
+   */
+  readonly operationPlanPreview?: OperationPlanPreview;
+  readonly recoveryMode?: PlatformOperationRecoveryMode;
   /**
    * Optional handle resolver. When the caller has prior `applyV2` outputs
    * (e.g. persisted from a real deployment), this hook lets `destroyV2`
@@ -135,7 +170,15 @@ export interface DestroyV2Outcome {
 export async function applyV2(
   options: ApplyV2Options,
 ): Promise<ApplyV2Outcome> {
-  const { resources, context, dryRun = false, priorApplied } = options;
+  const {
+    resources,
+    context,
+    dryRun = false,
+    priorApplied,
+    deploymentName,
+    operationPlanPreview,
+    recoveryMode = "normal",
+  } = options;
 
   const resolution = resolveResourcesV2(resources);
   if (resolution.issues.length > 0) {
@@ -170,11 +213,28 @@ export async function applyV2(
         op: "create",
       });
     }
-    return { applied: [], issues: [], status: "succeeded", planned };
+    return {
+      applied: [],
+      issues: [],
+      status: "succeeded",
+      planned,
+      operationPlanPreview: buildOperationPlanPreview({
+        resources,
+        planned,
+        edges: dag.edges,
+        spaceId: planSpaceId(context),
+        ...(deploymentName ? { deploymentName } : {}),
+      }),
+    };
   }
 
   const outputsByName = new Map<string, JsonObject>();
   const applied: AppliedResource[] = [];
+  const operationContextByResourceName = buildOperationContextByResourceName(
+    operationPlanPreview,
+    "apply",
+    recoveryMode,
+  );
   let reused = 0;
 
   for (const name of dag.order) {
@@ -212,7 +272,13 @@ export async function applyV2(
     }
 
     try {
-      const result = await item.provider.apply(resolvedSpec, context);
+      const result = await item.provider.apply(
+        resolvedSpec,
+        withOperationContext(
+          context,
+          operationContextByResourceName.get(name),
+        ),
+      );
       outputsByName.set(name, result.outputs as JsonObject);
       applied.push({
         name,
@@ -239,8 +305,13 @@ export async function applyV2(
     applied,
     issues: [],
     status: "succeeded",
+    ...(operationPlanPreview ? { operationPlanPreview } : {}),
     ...(reused > 0 ? { reused } : {}),
   };
+}
+
+function planSpaceId(context: PlatformContext): string {
+  return context.spaceId ?? context.tenantId ?? "unknown";
 }
 
 /**
@@ -284,7 +355,11 @@ async function rollback(
     const item = resourceByName.get(entry.name);
     if (!item) continue;
     try {
-      await item.provider.destroy(entry.handle, context);
+      if (item.provider.compensate) {
+        await item.provider.compensate(entry.handle, context);
+      } else {
+        await item.provider.destroy(entry.handle, context);
+      }
     } catch {
       // best-effort rollback; surface no further error
     }
@@ -316,7 +391,13 @@ async function rollback(
 export async function destroyV2(
   options: DestroyV2Options,
 ): Promise<DestroyV2Outcome> {
-  const { resources, context, handleFor } = options;
+  const {
+    resources,
+    context,
+    handleFor,
+    operationPlanPreview,
+    recoveryMode = "normal",
+  } = options;
 
   const resolution = resolveResourcesV2(resources);
   if (resolution.issues.length > 0) {
@@ -344,6 +425,11 @@ export async function destroyV2(
   const reverseOrder = [...dag.order].reverse();
   const destroyed: ResourceDestroyResult[] = [];
   const errors: ResourceDestroyError[] = [];
+  const operationContextByResourceName = buildOperationContextByResourceName(
+    operationPlanPreview,
+    "destroy",
+    recoveryMode,
+  );
 
   for (const name of reverseOrder) {
     const item = resourceByName.get(name);
@@ -352,7 +438,13 @@ export async function destroyV2(
       ? handleFor(item.resource)
       : item.resource.name;
     try {
-      await item.provider.destroy(handle, context);
+      await item.provider.destroy(
+        handle,
+        withOperationContext(
+          context,
+          operationContextByResourceName.get(name),
+        ),
+      );
       destroyed.push({ name, providerId: item.provider.id, handle });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -366,4 +458,40 @@ export async function destroyV2(
     issues: [],
     status: errors.length === 0 ? "succeeded" : "partial",
   };
+}
+
+function buildOperationContextByResourceName(
+  preview: OperationPlanPreview | undefined,
+  phase: PlatformOperationContext["phase"],
+  recoveryMode: PlatformOperationRecoveryMode,
+): ReadonlyMap<string, PlatformOperationContext> {
+  const contexts = new Map<string, PlatformOperationContext>();
+  if (!preview) return contexts;
+  const expectedOp = phase === "apply" ? "create" : "delete";
+  for (const operation of preview.operations) {
+    if (operation.op !== expectedOp) continue;
+    contexts.set(operation.resourceName, {
+      phase,
+      walStage: "commit",
+      operationId: operation.operationId,
+      resourceName: operation.resourceName,
+      providerId: operation.providerId,
+      op: operation.op,
+      desiredDigest: operation.desiredDigest,
+      operationPlanDigest: preview.operationPlanDigest,
+      idempotencyKey: operation.idempotencyKey,
+      idempotencyKeyString: formatPlatformOperationIdempotencyKey(
+        operation.idempotencyKey,
+      ),
+      recoveryMode,
+    });
+  }
+  return contexts;
+}
+
+function withOperationContext(
+  context: PlatformContext,
+  operation: PlatformOperationContext | undefined,
+): PlatformContext {
+  return operation ? { ...context, operation } : context;
 }

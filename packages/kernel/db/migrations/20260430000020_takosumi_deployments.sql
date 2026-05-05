@@ -22,9 +22,10 @@ create table if not exists takosumi_deployments (
   -- Surrogate uuid key. The (tenant_id, name) tuple is the natural key but a
   -- separate id keeps re-applies cheap (existing row updated in place).
   id                 text        primary key,
-  -- Tenant scope. The public deploy route uses a single token so today the
-  -- value is constant ("takosumi-deploy") but the column is reserved for
-  -- multi-tenant routing if the route ever grows past shared-secret auth.
+  -- Tenant / Space scope. The public deploy route maps one deploy bearer to
+  -- one configured scope (TAKOSUMI_DEPLOY_SPACE_ID, default
+  -- "takosumi-deploy") and keeps the column ready for future per-actor
+  -- routing if the route grows past shared-secret auth.
   tenant_id          text        not null,
   -- Deployment name from `manifest.metadata.name` (or a fallback hash when
   -- the manifest does not carry one). Forms part of the natural key.

@@ -25,7 +25,7 @@ features:
       portable な shape (`web-service@v1` / `database-postgres@v1` / `object-store@v1` / `custom-domain@v1` / `worker@v1`) を YAML で宣言。kernel が DAG / 依存解決 / rollback を担当する。
   - title: Multi-cloud + selfhost
     details: |
-      21 個の bundled provider plugin で AWS / GCP / Cloudflare / Azure / Kubernetes / Deno Deploy / docker-compose / systemd / filesystem を同一 manifest spec で deploy。
+      20 個の default provider + 1 個の opt-in provider plugin で AWS / GCP / Cloudflare / Azure / Kubernetes / Deno Deploy / docker-compose / systemd / filesystem を同一 manifest spec で deploy。
   - title: Self-hostable, JSR-distributed
     details: |
       kernel と runtime-agent は JSR (`@takos/takosumi-kernel`, `@takos/takosumi-runtime-agent`) で配布。Deno 1 process で `takosumi server` を起動するだけで control plane + agent が立ち上がる。
@@ -63,11 +63,11 @@ Takosumi は **6 つの JSR package** で配布される:
   `${ref:...}` / `${secret-ref:...}` syntax
 - [Design Overview](/design/) — manifest / deployment core / execution / routing
   / artifact / operator boundary の設計 notes
-- [Manifest Model](/design/manifest-model) — 次期 `components[]` /
-  plugin-defined contract / provider / bundle model
+- [Manifest Model](/design/manifest-model) — Shape / Provider / Template の
+  closed manifest contract
 - [Shape Catalog](/reference/shapes) — 5 shapes の spec / outputs / capabilities
-- [Provider Plugins](/reference/providers) — 21 providers の cloud × shape
-  matrix
+- [Provider Plugins](/reference/providers) — 20 default providers + 1 opt-in
+  provider の cloud × shape matrix
 - [CLI Reference](/reference/cli) — 全 subcommand × flag × env
 - [Operator Bootstrap](/operator/bootstrap) —
   `createTakosumiProductionProviders` の wire-in 例

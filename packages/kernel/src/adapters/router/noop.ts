@@ -24,16 +24,20 @@ export class NoopRouterConfigAdapter implements RouterConfigPort {
     this.#clock = options.clock ?? (() => new Date());
   }
 
-  async apply(projection: RouteProjection): Promise<RouterConfigApplyResult> {
-    const before = activationSnapshot(projection);
-    const config = this.#renderer.render(projection);
-    validateRouterConfigActivation(projection, config);
-    validateProjectionActivationUnchanged(before, projection);
-    return freezeClone({
-      adapter: "noop",
-      config,
-      appliedAt: this.#clock().toISOString(),
-      noop: true,
-    });
+  apply(projection: RouteProjection): Promise<RouterConfigApplyResult> {
+    try {
+      const before = activationSnapshot(projection);
+      const config = this.#renderer.render(projection);
+      validateRouterConfigActivation(projection, config);
+      validateProjectionActivationUnchanged(before, projection);
+      return Promise.resolve(freezeClone({
+        adapter: "noop",
+        config,
+        appliedAt: this.#clock().toISOString(),
+        noop: true,
+      }));
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 }

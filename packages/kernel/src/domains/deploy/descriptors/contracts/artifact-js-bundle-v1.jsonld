@@ -1,15 +1,15 @@
 {
   "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/contracts/artifact/js-module/v1",
+  "@id": "https://takosumi.com/contracts/artifact/js-bundle/v1",
   "@type": "ArtifactContractDescriptor",
-  "shortRef": "artifact.js-module@v1",
+  "shortRef": "artifact.js-bundle@v1",
   "domain": "artifact",
   "lifecycleDomain": "revisioned-runtime",
   "changeEffect": "app-release",
   "configSchema": {
     "type": "object",
     "properties": {
-      "moduleFormat": {
+      "bundleFormat": {
         "enum": [
           "esm"
         ]

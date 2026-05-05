@@ -34,14 +34,14 @@ Canonical contract:
 
 ## JSR packages
 
-| Package                                                                   | 用途                                                                  |
-| ------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                   | turnkey: kernel + plugins + cli を一括取得                            |
-| [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)     | kernel only (`deno run -A jsr:@takos/takosumi-kernel` で server 起動) |
-| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)   | shape catalog + provider + template + factories                       |
+| Package                                                                             | 用途                                                                  |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | turnkey: kernel + plugins + cli を一括取得                            |
+| [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | kernel only (`deno run -A jsr:@takos/takosumi-kernel` で server 起動) |
+| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | shape catalog + provider + template + factories                       |
 | [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | runtime-agent (data plane: cloud SDK / OS executor)                   |
-| [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)           | `takosumi` コマンド                                                   |
-| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) | 型契約 (上流)                                                         |
+| [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                                   |
+| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | 型契約 (上流)                                                         |
 
 ## 設計の核
 
@@ -143,8 +143,7 @@ deno task docs:dev       # http://localhost:5173 でプレビュー
 deno task docs:build     # docs/.vitepress/dist へ build (CF Pages 公開対象)
 ```
 
-publish: `master` への push で `.github/workflows/docs-deploy.yml` が
-Cloudflare Pages project `takosumi-docs` にデプロイ。custom domain は
-`docs.takosumi.com` (Cloudflare Pages dashboard の Custom domains
-設定で wire)。CI には GitHub secrets `CLOUDFLARE_API_TOKEN` と
-`CLOUDFLARE_ACCOUNT_ID` が必要。
+publish: `master` への push で `.github/workflows/docs-deploy.yml` が Cloudflare
+Pages project `takosumi-docs` にデプロイ。custom domain は `docs.takosumi.com`
+(Cloudflare Pages dashboard の Custom domains 設定で wire)。CI には GitHub
+secrets `CLOUDFLARE_API_TOKEN` と `CLOUDFLARE_ACCOUNT_ID` が必要。

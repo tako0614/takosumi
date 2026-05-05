@@ -1,6 +1,8 @@
 # Namespace Export Model
 
-Exports are namespace-addressable usable surfaces. Namespace paths are resolved inside a Space. Producers publish export declarations; link materialization produces export material.
+Exports are namespace-addressable usable surfaces. Namespace paths are resolved
+inside a Space. Producers publish export declarations; link materialization
+produces export material.
 
 ## Namespace path grammar
 
@@ -16,7 +18,8 @@ Rules:
 - component names are single segments
 - empty segments are invalid
 - `default` is allowed only as an export leaf
-- reserved namespace prefixes are operator-controlled and Space-visible only when granted by operator policy
+- reserved namespace prefixes are operator-controlled and Space-visible only
+  when granted by operator policy
 
 Reserved prefixes:
 
@@ -73,7 +76,8 @@ ExportMaterial:
   sdkConfigRefs: []
 ```
 
-Resolution stores declarations. OperationJournal and observations track material.
+Resolution stores declarations. OperationJournal and observations track
+material.
 
 ## Default export
 
@@ -83,11 +87,14 @@ Bare namespace paths expand to `.default` only if the default export exists.
 billing -> billing.default
 ```
 
-Default exports must not imply admin access. Grant-producing defaults require `safeDefaultAccess` to be used without explicit access. `read-write` and `admin` are never implicit.
+Default exports must not imply admin access. Grant-producing defaults require
+`safeDefaultAccess` to be used without explicit access. `read-write` and `admin`
+are never implicit.
 
 ## Space-scoped namespace resolution
 
-Namespace resolution always happens inside a Space. The same path in another Space is a different subject unless explicitly shared.
+Namespace resolution always happens inside a Space. The same path in another
+Space is a different subject unless explicitly shared.
 
 ```text
 1. deployment-local object namespace
@@ -100,12 +107,14 @@ Namespace resolution always happens inside a Space. The same path in another Spa
 8. explicitly shared namespace imports from another Space
 ```
 
-Shadowing is policy-gated. Production should deny or require approval for meaningful shadowing, especially when a local namespace shadows a Space, operator, or external namespace.
-
+Shadowing is policy-gated. Production should deny or require approval for
+meaningful shadowing, especially when a local namespace shadows a Space,
+operator, or external namespace.
 
 ## Space export sharing
 
-Cross-space namespace use is denied by default. To use an export from another Space, the operator must create a Space export share or namespace import.
+Cross-space namespace use is denied by default. To use an export from another
+Space, the operator must create a Space export share or namespace import.
 
 ```yaml
 SpaceExportShare:
@@ -118,7 +127,8 @@ SpaceExportShare:
     - call
 ```
 
-ResolutionSnapshot records the share. Plan output must mark cross-space use as a risk.
+ResolutionSnapshot records the share. Plan output must mark cross-space use as a
+risk.
 
 ## Freshness
 

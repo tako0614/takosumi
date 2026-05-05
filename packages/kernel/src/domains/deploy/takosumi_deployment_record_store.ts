@@ -22,7 +22,7 @@ import type {
 export interface TakosumiDeploymentRecord {
   /** Surrogate uuid; (tenantId, name) is the natural key. */
   readonly id: string;
-  /** Tenant scope; today always `"takosumi-deploy"` (single-token route). */
+  /** Tenant / Space scope selected for the public deploy route. */
   readonly tenantId: string;
   /** Deployment name from `manifest.metadata.name` or fallback hash. */
   readonly name: string;
@@ -99,9 +99,9 @@ export interface TakosumiDeploymentRecordStore {
    * serialise concurrent `apply` / `destroy` submissions of the same
    * deployment so two callers do not race on `provider.apply` and the
    * record store. The in-memory implementation backs the lock with a
-   * `Map<key, Promise>` chain. SQL-backed implementations should use a
-   * row-scoped advisory lock or `SELECT ... FOR UPDATE` on the
-   * deployments row.
+   * `Map<key, Promise>` chain. SQL-backed implementations use an
+   * atomic lease row (or an equivalent strongly-consistent compare-and-set
+   * primitive) so separate kernel pods share the same fence.
    */
   acquireLock(tenantId: string, name: string): Promise<void>;
   /**

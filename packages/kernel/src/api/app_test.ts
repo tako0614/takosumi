@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import {
+  ARTIFACTS_BASE_PATH,
   type Deployment,
   TAKOSUMI_INTERNAL_PATHS,
   type TakosumiActorContext,
 } from "takosumi-contract";
 import { signTakosumiInternalRequest } from "takosumi-contract/internal-rpc";
+import { MemoryObjectStorage } from "../adapters/object-storage/memory.ts";
 import {
   type DeploymentService,
   TAKOSUMI_PAAS_PUBLIC_PATHS,
 } from "./public_routes.ts";
 import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { createApiApp } from "./app.ts";
+import { TAKOSUMI_DEPLOY_PUBLIC_PATH } from "./deploy_public_routes.ts";
 import {
   createCoreDomainServices,
   createInMemoryCoreDomainDependencies,
@@ -62,6 +65,43 @@ Deno.test("createApiApp mounts readiness routes and reports them in route invent
   const openapi = await app.request("/openapi.json");
   const openapiBody = await openapi.json();
   assert.ok(openapiBody.paths[TAKOSUMI_PAAS_READINESS_PATHS.ready]?.get);
+});
+
+Deno.test("createApiApp reports deploy public and artifact routes in capabilities", async () => {
+  const app = await createApiApp({
+    registerInternalRoutes: false,
+    registerDeployPublicRoutes: true,
+    deployPublicRouteOptions: {
+      getDeployToken: () => "deploy-token",
+    },
+    registerArtifactRoutes: true,
+    artifactRouteOptions: {
+      getDeployToken: () => "deploy-token",
+      getArtifactFetchToken: () => "artifact-token",
+      objectStorage: new MemoryObjectStorage(),
+    },
+  });
+
+  const capabilities = await app.request("/capabilities");
+  const body = await capabilities.json();
+  assert.ok(
+    body.endpoints.some((
+      endpoint: { auth: string; method: string; path: string },
+    ) =>
+      endpoint.method === "POST" &&
+      endpoint.path === TAKOSUMI_DEPLOY_PUBLIC_PATH &&
+      endpoint.auth === "deploy-token"
+    ),
+  );
+  assert.ok(
+    body.endpoints.some((
+      endpoint: { auth: string; method: string; path: string },
+    ) =>
+      endpoint.method === "HEAD" &&
+      endpoint.path === `${ARTIFACTS_BASE_PATH}/:hash` &&
+      endpoint.auth === "artifact-read"
+    ),
+  );
 });
 
 Deno.test("createApiApp optionally mounts public routes with standalone defaults", async () => {
@@ -220,6 +260,70 @@ Deno.test("createApiApp mounts signed internal routes and leaves old aliases unm
     { method: "POST" },
   );
   assert.equal(removedDeployApply.status, 404);
+});
+
+Deno.test("createApiApp reads TAKOSUMI_INTERNAL_API_SECRET before the legacy alias", async () => {
+  await withInternalSecretEnv(
+    { api: undefined, legacy: "legacy-route-secret" },
+    async () => {
+      const app = await createApiApp();
+      const body = JSON.stringify({
+        spaceId: "space_legacy_secret",
+        name: "Legacy Secret",
+      });
+
+      const created = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces, {
+        method: "POST",
+        headers: await signedHeaders({
+          secret: "legacy-route-secret",
+          method: "POST",
+          path: TAKOSUMI_INTERNAL_PATHS.spaces,
+          body,
+          actor: internalRouteActor("req_legacy_secret"),
+        }),
+        body,
+      });
+      assert.equal(created.status, 201);
+    },
+  );
+
+  await withInternalSecretEnv(
+    { api: "api-route-secret", legacy: "legacy-route-secret" },
+    async () => {
+      const app = await createApiApp();
+      const body = JSON.stringify({
+        spaceId: "space_api_secret",
+        name: "API Secret",
+      });
+
+      const created = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces, {
+        method: "POST",
+        headers: await signedHeaders({
+          secret: "api-route-secret",
+          method: "POST",
+          path: TAKOSUMI_INTERNAL_PATHS.spaces,
+          body,
+          actor: internalRouteActor("req_api_secret"),
+        }),
+        body,
+      });
+      assert.equal(created.status, 201);
+
+      const wrongSecretBody = JSON.stringify({ spaceId: "space_wrong_secret" });
+      const legacySigned = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces, {
+        method: "POST",
+        headers: await signedHeaders({
+          secret: "legacy-route-secret",
+          method: "POST",
+          path: TAKOSUMI_INTERNAL_PATHS.spaces,
+          body: wrongSecretBody,
+          actor: internalRouteActor("req_legacy_rejected"),
+        }),
+        body: wrongSecretBody,
+      });
+      assert.equal(legacySigned.status, 401);
+    },
+  );
 });
 
 Deno.test("createApiApp does not mount internal routes for non-api roles by default", async () => {
@@ -750,4 +854,38 @@ async function signedHeaders(input: {
     ...signed.headers,
     "content-type": "application/json",
   });
+}
+
+function internalRouteActor(requestId: string): TakosumiActorContext {
+  return {
+    actorAccountId: "acct_owner",
+    roles: ["owner"],
+    requestId,
+    principalKind: "service",
+    serviceId: "svc_internal",
+  };
+}
+
+async function withInternalSecretEnv(
+  values: { readonly api?: string; readonly legacy?: string },
+  fn: () => Promise<void>,
+): Promise<void> {
+  const previousApi = Deno.env.get("TAKOSUMI_INTERNAL_API_SECRET");
+  const previousLegacy = Deno.env.get("TAKOSUMI_INTERNAL_SERVICE_SECRET");
+  try {
+    setOrDeleteEnv("TAKOSUMI_INTERNAL_API_SECRET", values.api);
+    setOrDeleteEnv("TAKOSUMI_INTERNAL_SERVICE_SECRET", values.legacy);
+    await fn();
+  } finally {
+    setOrDeleteEnv("TAKOSUMI_INTERNAL_API_SECRET", previousApi);
+    setOrDeleteEnv("TAKOSUMI_INTERNAL_SERVICE_SECRET", previousLegacy);
+  }
+}
+
+function setOrDeleteEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    Deno.env.delete(key);
+    return;
+  }
+  Deno.env.set(key, value);
 }

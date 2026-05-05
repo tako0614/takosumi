@@ -367,10 +367,10 @@ export class AwsHttpGatewayClient
   }
 
   /**
-   * Calls an operator-implemented `provider/detect-drift` endpoint. Returns
-   * the array of drift fields. Operators that have not implemented this
-   * endpoint can fall back to client-side drift detection by providing the
-   * desired and observed snapshots themselves.
+   * Calls an operator-provided `provider/detect-drift` endpoint. Returns the
+   * array of drift fields. Operators without this endpoint can fall back to
+   * client-side drift detection by providing the desired and observed snapshots
+   * themselves.
    */
   async detectDrift(input: {
     readonly target: string;

@@ -263,7 +263,7 @@ export class AwsEcsFargateProviderMaterializer
           "--service",
           input.serviceName,
         ],
-        details: { reason: "client.deleteEcsService not implemented" },
+        details: { reason: "client.deleteEcsService unavailable" },
         startedAt,
         completedAt: startedAt,
         status: "failed",

@@ -4,6 +4,7 @@ export interface RemoteCallOptions {
   readonly path: string;
   readonly method?: string;
   readonly body?: unknown;
+  readonly idempotencyKey?: string;
 }
 
 export async function callKernel(
@@ -13,10 +14,15 @@ export async function callKernel(
     "content-type": "application/json",
   };
   if (options.token) headers["authorization"] = `Bearer ${options.token}`;
+  const method = options.method ?? "POST";
+  if (method !== "GET" && options.body !== undefined) {
+    headers["x-idempotency-key"] = options.idempotencyKey ??
+      crypto.randomUUID();
+  }
   const response = await fetch(
     `${options.url.replace(/\/$/, "")}${options.path}`,
     {
-      method: options.method ?? "POST",
+      method,
       headers,
       body: options.body !== undefined
         ? JSON.stringify(options.body)

@@ -306,7 +306,7 @@ export class ApplyService {
           "`objectStorage` adapters into `ApplyServiceOptions`.",
       );
     }
-    const resources = await resolveManifestResources(input.manifest);
+    const resources = resolveManifestResources(input.manifest);
     const createdAt = input.createdAt ?? this.#clock().toISOString();
     const context = createPlatformContext({
       tenantId: this.#tenantId ?? input.spaceId,
@@ -348,9 +348,9 @@ function manifestUsesShapeModel(manifest: PublicDeployManifest): boolean {
   return false;
 }
 
-async function resolveManifestResources(
+function resolveManifestResources(
   manifest: PublicDeployManifest,
-): Promise<readonly ManifestResource[]> {
+): readonly ManifestResource[] {
   const m = manifest as Record<string, unknown>;
   if (Array.isArray(m.resources)) {
     return m.resources as readonly ManifestResource[];

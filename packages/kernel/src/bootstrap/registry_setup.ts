@@ -41,12 +41,20 @@ export function registerBundledShapesAndProviders(
     return;
   }
   const artifactStore = detectArtifactStore(runtimeEnv);
+  const enableDenoDeploy = parseBoolean(
+    runtimeEnv.TAKOSUMI_ENABLE_DENO_DEPLOY_PROVIDER ??
+      runtimeEnv.TAKOSUMI_ENABLE_DENO_DEPLOY,
+    false,
+  );
   const providers = createTakosumiProductionProviders({
     agentUrl: agent.agentUrl,
     token: agent.token,
     ...(artifactStore ? { artifactStore } : {}),
+    ...(enableDenoDeploy ? { enableDenoDeploy } : {}),
   });
-  for (const provider of providers) registerProvider(provider);
+  for (const provider of providers) {
+    registerProvider(provider, { allowOverride: true });
+  }
   console.log(
     `[takosumi-bootstrap] registered ${providers.length} providers via agent at ${agent.agentUrl}` +
       (artifactStore
@@ -95,4 +103,16 @@ function detectArtifactStore(
     baseUrl: `${trimmed}/v1/artifacts`,
     token,
   };
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
 }

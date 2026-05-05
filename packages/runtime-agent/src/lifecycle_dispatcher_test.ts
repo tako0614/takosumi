@@ -154,3 +154,52 @@ Deno.test("dispatcher skips kind validation when spec has no artifact and no ima
   });
   assert.equal(res.handle, "h");
 });
+
+Deno.test("dispatcher routes compensate to connector hook when present", async () => {
+  const reg = new ConnectorRegistry();
+  let seenHandle = "";
+  reg.register({
+    provider: "compensating",
+    shape: "object-store@v1",
+    acceptedArtifactKinds: [],
+    apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+    destroy: () => Promise.resolve({ ok: true }),
+    compensate: (req) => {
+      seenHandle = req.handle;
+      return Promise.resolve({ ok: true, note: "compensated" });
+    },
+    describe: () => Promise.resolve({ status: "running" as const }),
+  });
+  const dispatcher = new LifecycleDispatcher(reg);
+  const res = await dispatcher.compensate({
+    shape: "object-store@v1",
+    provider: "compensating",
+    handle: "bucket-one",
+  });
+  assert.equal(seenHandle, "bucket-one");
+  assert.deepEqual(res, { ok: true, note: "compensated" });
+});
+
+Deno.test("dispatcher falls back to destroy when compensate hook is absent", async () => {
+  const reg = new ConnectorRegistry();
+  let destroyed = "";
+  reg.register({
+    provider: "destroy-fallback",
+    shape: "object-store@v1",
+    acceptedArtifactKinds: [],
+    apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+    destroy: (req) => {
+      destroyed = req.handle;
+      return Promise.resolve({ ok: true, note: "destroyed" });
+    },
+    describe: () => Promise.resolve({ status: "running" as const }),
+  });
+  const dispatcher = new LifecycleDispatcher(reg);
+  const res = await dispatcher.compensate({
+    shape: "object-store@v1",
+    provider: "destroy-fallback",
+    handle: "bucket-two",
+  });
+  assert.equal(destroyed, "bucket-two");
+  assert.deepEqual(res, { ok: true, note: "destroyed" });
+});

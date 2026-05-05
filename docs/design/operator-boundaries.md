@@ -1,6 +1,7 @@
 # Operator Boundaries
 
-Operator controls the adopted semantic world, implementation world, credentials, Space configuration, and production safety boundaries.
+Operator controls the adopted semantic world, implementation world, credentials,
+Space configuration, and production safety boundaries.
 
 ## Operator-controlled areas
 
@@ -41,27 +42,39 @@ The manifest does not create or configure Spaces.
 
 ## Public manifest does not install implementation code
 
-The manifest references catalog aliases and namespace paths visible in the active Space. It does not install implementation packages.
+The manifest references catalog aliases and namespace paths visible in the
+active Space. It does not install implementation packages.
 
 ## Credential boundary
 
-Core canonical state stores references and handles, not raw secret values. External I/O and credentials stay inside implementation / connector / runtime boundary. Secret partitions are Space-scoped unless operator policy explicitly shares them.
+Core canonical state stores references and handles, not raw secret values.
+External I/O and credentials stay inside implementation / connector / runtime
+boundary. Secret partitions are Space-scoped unless operator policy explicitly
+shares them.
 
 ## Connector boundary
 
-Connectors are operator-installed and operator-controlled. They are
-addressed as `connector:<id>` per [DataAsset Model — Connector contract](./data-asset-model.md);
-the public manifest never names a connector. Connector visibility,
-acceptedKinds, and signing expectations are operator-governed and Space-scoped.
+Connectors are operator-installed and operator-controlled. They are addressed as
+`connector:<id>` per
+[DataAsset Model — Connector contract](./data-asset-model.md); the public
+manifest never names a connector. Connector visibility, acceptedKinds, and
+signing expectations are operator-governed and Space-scoped.
 
 ## Production mode
 
-Production must fail closed when required operator ports, trusted implementations, Space policies, or Space catalog assignments are missing. Dev fallback must not be silently accepted in production.
+Production must fail closed when required operator ports, trusted
+implementations, Space policies, or Space catalog assignments are missing. Dev
+fallback must not be silently accepted in production.
 
 ## Catalog release activation
 
-CatalogRelease activation is a serialized operator operation. Assignment of a CatalogRelease to a Space is also serialized. Deployments resolve against a release id allowed for their Space.
+CatalogRelease activation is a serialized operator operation. Assignment of a
+CatalogRelease to a Space is also serialized. Deployments resolve against a
+release id allowed for their Space.
 
 ## Space export sharing
 
-Cross-space export sharing is an operator operation. It must record source Space, destination Space, export path, export snapshot id, allowed access, expiry if any, and policy decision references. Cross-space sharing is denied by default.
+Cross-space export sharing is an operator operation. It must record source
+Space, destination Space, export path, export snapshot id, allowed access,
+expiry if any, and policy decision references. Cross-space sharing is denied by
+default.

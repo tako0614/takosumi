@@ -1,12 +1,14 @@
 import {
+  ARTIFACTS_BASE_PATH,
   CORE_CONDITION_REASONS,
   TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
+import { TAKOSUMI_DEPLOY_PUBLIC_PATH } from "./deploy_public_routes.ts";
 import { TAKOSUMI_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
 import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
-export type OpenApiHttpMethod = "delete" | "get" | "post";
+export type OpenApiHttpMethod = "delete" | "get" | "head" | "post";
 
 export interface OpenApiDocument {
   readonly openapi: "3.1.0";
@@ -40,6 +42,8 @@ export interface OpenApiOperation {
 
 export interface CreatePaaSOpenApiDocumentOptions {
   readonly publicRoutesMounted?: boolean;
+  readonly deployPublicRoutesMounted?: boolean;
+  readonly artifactRoutesMounted?: boolean;
   readonly internalRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
   readonly readinessRoutesMounted?: boolean;
@@ -225,6 +229,110 @@ export function createPaaSOpenApiDocument(
           mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback,
         }),
       },
+      [TAKOSUMI_DEPLOY_PUBLIC_PATH]: {
+        post: operation({
+          operationId: "runDeployPublicDeployment",
+          summary:
+            "Runs the operator deploy entrypoint in apply, plan, or destroy mode.",
+          tag: "deploy-public",
+          auth: "deploy-token",
+          requestSchema: "DeployPublicRequest",
+          okSchema: "DeployPublicResponse",
+          mountedPath: TAKOSUMI_DEPLOY_PUBLIC_PATH,
+        }),
+        get: operation({
+          operationId: "listDeployPublicDeployments",
+          summary: "Lists deployment records from the operator deploy surface.",
+          tag: "deploy-public",
+          auth: "deploy-token",
+          okSchema: "DeployPublicListResponse",
+          query: ["cursor", "limit"],
+          mountedPath: TAKOSUMI_DEPLOY_PUBLIC_PATH,
+        }),
+      },
+      [`${TAKOSUMI_DEPLOY_PUBLIC_PATH}/:name`]: {
+        get: operation({
+          operationId: "getDeployPublicDeployment",
+          summary: "Returns one deployment record by manifest metadata.name.",
+          tag: "deploy-public",
+          auth: "deploy-token",
+          pathParams: ["name"],
+          okSchema: "DeployPublicRecordResponse",
+          mountedPath: `${TAKOSUMI_DEPLOY_PUBLIC_PATH}/:name`,
+        }),
+      },
+      [ARTIFACTS_BASE_PATH]: {
+        post: operation({
+          operationId: "uploadArtifact",
+          summary: "Uploads a content-addressed artifact for runtime agents.",
+          tag: "artifact",
+          auth: "deploy-token",
+          requestBody: multipartArtifactUploadRequestBody(),
+          okSchema: "ArtifactStored",
+          mountedPath: ARTIFACTS_BASE_PATH,
+        }),
+        get: operation({
+          operationId: "listArtifacts",
+          summary: "Lists uploaded artifacts with cursor pagination.",
+          tag: "artifact",
+          auth: "deploy-token",
+          query: ["cursor", "limit"],
+          okSchema: "ArtifactListResponse",
+          mountedPath: ARTIFACTS_BASE_PATH,
+        }),
+      },
+      [`${ARTIFACTS_BASE_PATH}/kinds`]: {
+        get: operation({
+          operationId: "listArtifactKinds",
+          summary: "Lists artifact kinds registered in the kernel.",
+          tag: "artifact",
+          auth: "deploy-token",
+          okSchema: "ArtifactKindsResponse",
+          mountedPath: `${ARTIFACTS_BASE_PATH}/kinds`,
+        }),
+      },
+      [`${ARTIFACTS_BASE_PATH}/:hash`]: {
+        head: operation({
+          operationId: "headArtifact",
+          summary: "Returns artifact metadata headers without a body.",
+          tag: "artifact",
+          auth: "artifact-read",
+          pathParams: ["hash"],
+          okStatus: "200",
+          okSchema: "EmptyResponse",
+          mountedPath: `${ARTIFACTS_BASE_PATH}/:hash`,
+        }),
+        get: operation({
+          operationId: "getArtifact",
+          summary: "Streams artifact bytes to a runtime agent or operator.",
+          tag: "artifact",
+          auth: "artifact-read",
+          pathParams: ["hash"],
+          okSchema: "BinaryResponse",
+          mountedPath: `${ARTIFACTS_BASE_PATH}/:hash`,
+        }),
+        delete: operation({
+          operationId: "deleteArtifact",
+          summary: "Deletes an artifact from object storage.",
+          tag: "artifact",
+          auth: "deploy-token",
+          pathParams: ["hash"],
+          okStatus: "204",
+          okSchema: "EmptyResponse",
+          mountedPath: `${ARTIFACTS_BASE_PATH}/:hash`,
+        }),
+      },
+      [`${ARTIFACTS_BASE_PATH}/gc`]: {
+        post: operation({
+          operationId: "gcArtifacts",
+          summary: "Runs mark-and-sweep artifact garbage collection.",
+          tag: "artifact",
+          auth: "deploy-token",
+          query: ["dryRun"],
+          okSchema: "ArtifactGcResponse",
+          mountedPath: `${ARTIFACTS_BASE_PATH}/gc`,
+        }),
+      },
       [TAKOSUMI_INTERNAL_PATHS.spaces]: {
         get: operation({
           operationId: "listInternalSpaces",
@@ -387,6 +495,18 @@ export function createPaaSOpenApiDocument(
           scheme: "bearer",
           description: "Actor authentication for public PaaS API routes.",
         },
+        deployBearer: {
+          type: "http",
+          scheme: "bearer",
+          description:
+            "Operator deploy bearer from TAKOSUMI_DEPLOY_TOKEN for /v1 deploy and artifact write routes.",
+        },
+        artifactFetchBearer: {
+          type: "http",
+          scheme: "bearer",
+          description:
+            "Read-only artifact bearer from TAKOSUMI_ARTIFACT_FETCH_TOKEN for runtime-agent artifact fetches.",
+        },
         internalService: {
           type: "apiKey",
           in: "header",
@@ -407,6 +527,8 @@ function filterMountedRouteFamilies(
   const mountedTags = new Set([
     "process",
     ...(options.publicRoutesMounted ? ["public"] : []),
+    ...(options.deployPublicRoutesMounted ? ["deploy-public"] : []),
+    ...(options.artifactRoutesMounted ? ["artifact"] : []),
     ...(options.internalRoutesMounted ? ["internal"] : []),
     ...(options.runtimeAgentRoutesMounted ? ["runtime-agent"] : []),
     ...(options.readinessRoutesMounted ? ["readiness", "status"] : []),
@@ -436,14 +558,22 @@ function operation(input: {
   readonly tag:
     | "process"
     | "public"
+    | "deploy-public"
+    | "artifact"
     | "internal"
     | "runtime-agent"
     | "readiness"
     | "status";
-  readonly auth: "none" | "actor" | "internal-service";
+  readonly auth:
+    | "none"
+    | "actor"
+    | "deploy-token"
+    | "artifact-read"
+    | "internal-service";
   readonly okSchema: string;
-  readonly okStatus?: "200" | "201";
+  readonly okStatus?: "200" | "201" | "204";
   readonly requestSchema?: string;
+  readonly requestBody?: Record<string, unknown>;
   readonly query?: readonly string[];
   readonly pathParams?: readonly string[];
   readonly mountedPath?: string;
@@ -452,16 +582,24 @@ function operation(input: {
     operationId: input.operationId,
     summary: input.summary,
     tags: [input.tag],
-    ...(input.auth === "none" ? {} : { security: [security(input.auth)] }),
+    ...(input.auth === "none"
+      ? {}
+      : { security: securityRequirements(input.auth) }),
     ...parameters(input),
-    ...(input.requestSchema
+    ...(input.requestBody
+      ? { requestBody: input.requestBody }
+      : input.requestSchema
       ? { requestBody: jsonRequestBody(input.requestSchema) }
       : {}),
     responses: {
-      [input.okStatus ?? "200"]: jsonResponse(input.okSchema),
+      [input.okStatus ?? "200"]: input.okStatus === "204"
+        ? { description: "No content" }
+        : jsonResponse(input.okSchema),
       ...(input.auth === "none" ? {} : { "401": errorResponse() }),
       ...(input.auth === "internal-service" ? { "403": errorResponse() } : {}),
-      ...(input.requestSchema ? { "400": errorResponse() } : {}),
+      ...(input.requestSchema || input.requestBody
+        ? { "400": errorResponse() }
+        : {}),
     },
     "x-takos-auth": input.auth,
     ...(input.mountedPath ? { "x-takos-mounted-path": input.mountedPath } : {}),
@@ -469,10 +607,15 @@ function operation(input: {
   return op;
 }
 
-function security(
-  auth: "actor" | "internal-service",
-): Record<string, readonly string[]> {
-  return auth === "actor" ? { actorBearer: [] } : { internalService: [] };
+function securityRequirements(
+  auth: "actor" | "deploy-token" | "artifact-read" | "internal-service",
+): readonly Record<string, readonly string[]>[] {
+  if (auth === "actor") return [{ actorBearer: [] }];
+  if (auth === "deploy-token") return [{ deployBearer: [] }];
+  if (auth === "artifact-read") {
+    return [{ deployBearer: [] }, { artifactFetchBearer: [] }];
+  }
+  return [{ internalService: [] }];
 }
 
 function parameters(input: {
@@ -515,6 +658,30 @@ function jsonRequestBody(schemaName: string): Record<string, unknown> {
   };
 }
 
+function multipartArtifactUploadRequestBody(): Record<string, unknown> {
+  return {
+    required: true,
+    content: {
+      "multipart/form-data": {
+        schema: {
+          type: "object",
+          required: ["kind", "body"],
+          properties: {
+            kind: { type: "string" },
+            body: { type: "string", format: "binary" },
+            metadata: {
+              type: "string",
+              description: "Optional JSON object encoded as a string.",
+            },
+            expectedDigest: { type: "string", pattern: "^sha256:" },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+}
+
 function jsonResponse(schemaName: string): Record<string, unknown> {
   return {
     description: "JSON response",
@@ -538,6 +705,13 @@ function createSchemas(): Record<string, Record<string, unknown>> {
   const jsonObject = {
     type: "object",
     additionalProperties: true,
+  };
+  const jsonValue = {
+    description: "Any JSON value.",
+  };
+  const stringMap = {
+    type: "object",
+    additionalProperties: { type: "string" },
   };
   const condition = {
     type: "object",
@@ -703,6 +877,446 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         conditions: { type: "array", items: ref("Condition") },
       },
       additionalProperties: true,
+    },
+    ManifestBody: {
+      type: "object",
+      required: ["apiVersion", "kind"],
+      properties: {
+        apiVersion: { const: "1.0" },
+        kind: { const: "Manifest" },
+        metadata: ref("ManifestMetadata"),
+        template: ref("ManifestTemplate"),
+        resources: {
+          type: "array",
+          items: ref("ManifestResource"),
+        },
+      },
+      additionalProperties: false,
+    },
+    ManifestMetadata: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        labels: stringMap,
+      },
+      additionalProperties: false,
+    },
+    ManifestTemplate: {
+      type: "object",
+      properties: {
+        template: { type: "string", pattern: "^[^@]+@[^@]+$" },
+        inputs: jsonObject,
+        ref: {
+          type: "string",
+          pattern: "^[^@]+@[^@]+$",
+          deprecated: true,
+          description:
+            "Deprecated compatibility alias for template; new manifests use template.",
+        },
+      },
+      additionalProperties: false,
+    },
+    ManifestResource: {
+      type: "object",
+      required: ["shape", "name", "provider", "spec"],
+      properties: {
+        shape: { type: "string", pattern: "^[^@]+@[^@]+$" },
+        name: { type: "string" },
+        provider: { type: "string" },
+        spec: jsonValue,
+        requires: {
+          type: "array",
+          items: { type: "string" },
+        },
+        metadata: jsonObject,
+      },
+      additionalProperties: false,
+    },
+    DeployPublicRequest: {
+      type: "object",
+      required: ["manifest"],
+      properties: {
+        mode: { enum: ["apply", "plan", "destroy"] },
+        manifest: ref("ManifestBody"),
+        force: { type: "boolean" },
+        recoveryMode: { enum: ["inspect", "continue", "compensate"] },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicResponse: {
+      type: "object",
+      required: ["status", "outcome"],
+      properties: {
+        status: { enum: ["ok"] },
+        outcome: {
+          oneOf: [
+            ref("DeployPublicOutcome"),
+            ref("DeployPublicRecoveryInspectOutcome"),
+            ref("DeployPublicRecoveryCompensateOutcome"),
+          ],
+        },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicRecoveryInspectOutcome: {
+      type: "object",
+      required: ["status", "tenantId", "deploymentName", "entries"],
+      properties: {
+        status: { enum: ["recovery-inspect"] },
+        tenantId: { type: "string" },
+        deploymentName: { type: "string" },
+        journal: ref("DeployPublicJournalSummary"),
+        entries: {
+          type: "array",
+          items: ref("DeployPublicJournalEntrySummary"),
+        },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicRecoveryCompensateOutcome: {
+      type: "object",
+      required: ["status", "tenantId", "deploymentName", "debts"],
+      properties: {
+        status: { enum: ["recovery-compensate"] },
+        tenantId: { type: "string" },
+        deploymentName: { type: "string" },
+        journal: ref("DeployPublicJournalSummary"),
+        debts: {
+          type: "array",
+          items: ref("DeployPublicRevokeDebtRecordSummary"),
+        },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicOutcome: {
+      type: "object",
+      required: ["applied", "issues", "status"],
+      properties: {
+        applied: { type: "array", items: jsonObject },
+        issues: { type: "array", items: jsonObject },
+        status: {
+          enum: [
+            "succeeded",
+            "failed-validation",
+            "failed-apply",
+            "partial",
+          ],
+        },
+        planned: { type: "array", items: ref("DeployPublicPlannedResource") },
+        operationPlanPreview: ref("OperationPlanPreview"),
+        reused: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicPlannedResource: {
+      type: "object",
+      required: ["name", "shape", "providerId", "op"],
+      properties: {
+        name: { type: "string" },
+        shape: { type: "string" },
+        providerId: { type: "string" },
+        op: { enum: ["create", "delete"] },
+      },
+      additionalProperties: false,
+    },
+    OperationPlanPreview: {
+      type: "object",
+      required: [
+        "planId",
+        "spaceId",
+        "desiredSnapshotDigest",
+        "operationPlanDigest",
+        "walStages",
+        "operations",
+      ],
+      properties: {
+        planId: { type: "string", pattern: "^plan:[0-9a-f]{64}$" },
+        spaceId: { type: "string" },
+        deploymentName: { type: "string" },
+        desiredSnapshotDigest: { type: "string", pattern: "^sha256:" },
+        operationPlanDigest: { type: "string", pattern: "^sha256:" },
+        walStages: {
+          type: "array",
+          items: {
+            enum: [
+              "prepare",
+              "pre-commit",
+              "commit",
+              "post-commit",
+              "observe",
+              "finalize",
+            ],
+          },
+        },
+        operations: {
+          type: "array",
+          items: ref("OperationPlanPreviewOperation"),
+        },
+      },
+      additionalProperties: false,
+    },
+    OperationPlanPreviewOperation: {
+      type: "object",
+      required: [
+        "operationId",
+        "resourceName",
+        "shape",
+        "providerId",
+        "op",
+        "dependsOn",
+        "desiredDigest",
+        "idempotencyKey",
+      ],
+      properties: {
+        operationId: { type: "string", pattern: "^operation:[0-9a-f]{64}$" },
+        resourceName: { type: "string" },
+        shape: { type: "string" },
+        providerId: { type: "string" },
+        op: { enum: ["create", "delete"] },
+        dependsOn: { type: "array", items: { type: "string" } },
+        desiredDigest: { type: "string", pattern: "^sha256:" },
+        idempotencyKey: ref("OperationPlanPreviewIdempotencyKey"),
+      },
+      additionalProperties: false,
+    },
+    OperationPlanPreviewIdempotencyKey: {
+      type: "object",
+      required: ["spaceId", "operationPlanDigest", "journalEntryId"],
+      properties: {
+        spaceId: { type: "string" },
+        operationPlanDigest: { type: "string", pattern: "^sha256:" },
+        journalEntryId: { type: "string", pattern: "^operation:[0-9a-f]{64}$" },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicListResponse: {
+      type: "object",
+      required: ["deployments"],
+      properties: {
+        deployments: {
+          type: "array",
+          items: ref("DeployPublicDeploymentSummary"),
+        },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicRecordResponse: ref("DeployPublicDeploymentSummary"),
+    DeployPublicDeploymentSummary: {
+      type: "object",
+      required: [
+        "name",
+        "status",
+        "tenantId",
+        "appliedAt",
+        "updatedAt",
+        "resources",
+      ],
+      properties: {
+        name: { type: "string" },
+        status: { enum: ["applied", "destroyed", "failed"] },
+        tenantId: { type: "string" },
+        appliedAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+        journal: ref("DeployPublicJournalSummary"),
+        revokeDebt: ref("DeployPublicRevokeDebtSummary"),
+        resources: {
+          type: "array",
+          items: ref("DeployPublicResourceSummary"),
+        },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicJournalSummary: {
+      type: "object",
+      required: [
+        "operationPlanDigest",
+        "phase",
+        "latestStage",
+        "status",
+        "entryCount",
+        "failedEntryCount",
+        "terminal",
+        "updatedAt",
+      ],
+      properties: {
+        operationPlanDigest: { type: "string", pattern: "^sha256:" },
+        phase: {
+          enum: [
+            "apply",
+            "activate",
+            "destroy",
+            "rollback",
+            "recovery",
+            "observe",
+          ],
+        },
+        latestStage: {
+          enum: [
+            "prepare",
+            "pre-commit",
+            "commit",
+            "post-commit",
+            "observe",
+            "finalize",
+            "abort",
+            "skip",
+          ],
+        },
+        status: { enum: ["recorded", "succeeded", "failed", "skipped"] },
+        entryCount: { type: "number" },
+        failedEntryCount: { type: "number" },
+        terminal: { type: "boolean" },
+        updatedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicJournalEntrySummary: {
+      type: "object",
+      required: [
+        "operationPlanDigest",
+        "journalEntryId",
+        "operationId",
+        "phase",
+        "stage",
+        "operationKind",
+        "effectDigest",
+        "status",
+        "createdAt",
+      ],
+      properties: {
+        operationPlanDigest: { type: "string", pattern: "^sha256:" },
+        journalEntryId: { type: "string" },
+        operationId: { type: "string" },
+        phase: {
+          enum: [
+            "apply",
+            "activate",
+            "destroy",
+            "rollback",
+            "recovery",
+            "observe",
+          ],
+        },
+        stage: {
+          enum: [
+            "prepare",
+            "pre-commit",
+            "commit",
+            "post-commit",
+            "observe",
+            "finalize",
+            "abort",
+            "skip",
+          ],
+        },
+        operationKind: { type: "string" },
+        resourceName: { type: "string" },
+        providerId: { type: "string" },
+        effectDigest: { type: "string", pattern: "^sha256:" },
+        status: { enum: ["recorded", "succeeded", "failed", "skipped"] },
+        createdAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicRevokeDebtSummary: {
+      type: "object",
+      required: ["total", "open", "operatorActionRequired", "cleared"],
+      properties: {
+        total: { type: "integer", minimum: 0 },
+        open: { type: "integer", minimum: 0 },
+        operatorActionRequired: { type: "integer", minimum: 0 },
+        cleared: { type: "integer", minimum: 0 },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicRevokeDebtRecordSummary: {
+      type: "object",
+      required: [
+        "id",
+        "generatedObjectId",
+        "reason",
+        "status",
+        "ownerSpaceId",
+        "originatingSpaceId",
+        "retryAttempts",
+        "createdAt",
+        "statusUpdatedAt",
+      ],
+      properties: {
+        id: { type: "string", pattern: "^revoke-debt:" },
+        generatedObjectId: { type: "string", pattern: "^generated:" },
+        reason: {
+          enum: [
+            "external-revoke",
+            "link-revoke",
+            "activation-rollback",
+            "approval-invalidated",
+            "cross-space-share-expired",
+          ],
+        },
+        status: {
+          enum: ["open", "operator-action-required", "cleared"],
+        },
+        ownerSpaceId: { type: "string" },
+        originatingSpaceId: { type: "string" },
+        deploymentName: { type: "string" },
+        operationPlanDigest: { type: "string", pattern: "^sha256:" },
+        journalEntryId: { type: "string" },
+        operationId: { type: "string" },
+        resourceName: { type: "string" },
+        providerId: { type: "string" },
+        retryAttempts: { type: "integer", minimum: 0 },
+        createdAt: { type: "string", format: "date-time" },
+        statusUpdatedAt: { type: "string", format: "date-time" },
+        lastRetryAt: { type: "string", format: "date-time" },
+        nextRetryAt: { type: "string", format: "date-time" },
+        agedAt: { type: "string", format: "date-time" },
+        clearedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicResourceSummary: {
+      type: "object",
+      required: ["name", "shape", "provider", "status", "outputs", "handle"],
+      properties: {
+        name: { type: "string" },
+        shape: { type: "string" },
+        provider: { type: "string" },
+        status: { enum: ["applied"] },
+        outputs: jsonObject,
+        handle: jsonValue,
+      },
+      additionalProperties: false,
+    },
+    ArtifactStored: {
+      type: "object",
+      required: ["hash", "kind", "size", "uploadedAt"],
+      properties: {
+        hash: { type: "string", pattern: "^sha256:" },
+        kind: { type: "string" },
+        size: { type: "number" },
+        uploadedAt: { type: "string", format: "date-time" },
+        metadata: jsonObject,
+      },
+      additionalProperties: false,
+    },
+    ArtifactListResponse: {
+      type: "object",
+      required: ["artifacts"],
+      properties: {
+        artifacts: { type: "array", items: ref("ArtifactStored") },
+        nextCursor: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    ArtifactKindsResponse: jsonObject,
+    ArtifactGcResponse: jsonObject,
+    BinaryResponse: {
+      type: "string",
+      format: "binary",
+    },
+    EmptyResponse: {
+      description: "No response body.",
     },
     PublicSpaceCreateRequest: {
       type: "object",

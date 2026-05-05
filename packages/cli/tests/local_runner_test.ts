@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   destroyLocal,
   expandManifestLocal,
+  planLocal,
 } from "../src/local_runner.ts";
 
 Deno.test(
@@ -69,6 +70,31 @@ Deno.test(
 );
 
 Deno.test(
+  "expandManifestLocal appends resources after template expansion",
+  () => {
+    const resources = expandManifestLocal({
+      apiVersion: "1.0",
+      kind: "Manifest",
+      template: {
+        template: "selfhosted-single-vm@v1",
+        inputs: {
+          serviceName: "api",
+          image: "oci://example/api:latest",
+          port: 8080,
+        },
+      },
+      resources: [{
+        shape: "object-store@v1",
+        name: "backups",
+        provider: "@takos/selfhost-filesystem",
+        spec: { name: "backups" },
+      }],
+    });
+    assert.equal(resources.at(-1)?.name, "backups");
+  },
+);
+
+Deno.test(
   "expandManifestLocal throws descriptive error listing templates when neither shape matches",
   () => {
     let caught: Error | undefined;
@@ -120,7 +146,7 @@ Deno.test(
     }
     assert.ok(caught instanceof Error);
     // serviceName / image / port are all required.
-    assert.match(caught.message, /input validation failed/);
+    assert.match(caught.message, /inputs invalid/);
   },
 );
 
@@ -167,3 +193,22 @@ Deno.test(
     assert.ok(outcome.issues.length > 0);
   },
 );
+
+Deno.test("planLocal includes the public OperationPlan preview", async () => {
+  const outcome = await planLocal([
+    {
+      shape: "object-store@v1",
+      name: "logs",
+      provider: "@takos/selfhost-filesystem",
+      spec: { name: "logs" },
+    },
+  ]);
+
+  assert.equal(outcome.status, "succeeded");
+  assert.ok(outcome.operationPlanPreview);
+  assert.equal(outcome.operationPlanPreview!.spaceId, "local");
+  assert.equal(
+    outcome.operationPlanPreview!.operations[0].resourceName,
+    "logs",
+  );
+});

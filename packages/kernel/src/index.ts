@@ -123,8 +123,9 @@ function fatalStartupError(error: unknown): never {
     console.error(
       `[paas-init] fatal: ${error.message}\n` +
         `Refusing to start takosumi with plaintext secret storage. ` +
-        `See docs/hosting/cloudflare.md and docs/hosting/self-hosted.md ` +
-        `for required encryption-key configuration.`,
+        `See docs/operator/self-host.md and ` +
+        `docs/reference/secret-partitions.md for required ` +
+        `encryption-key configuration.`,
     );
     Deno.exit(1);
   }
@@ -132,8 +133,8 @@ function fatalStartupError(error: unknown): never {
     console.error(
       `[paas-init] fatal: ${error.message}\n` +
         `Refusing to start takosumi against an unencrypted database. ` +
-        `See docs/hosting/cloudflare.md and docs/hosting/multi-cloud.md ` +
-        `for at-rest encryption configuration per backend.`,
+        `See docs/operator/self-host.md and docs/reference/env-vars.md ` +
+        `for database at-rest encryption configuration.`,
     );
     Deno.exit(1);
   }
@@ -141,8 +142,9 @@ function fatalStartupError(error: unknown): never {
     console.error(
       `[paas-init] fatal: ${error.message}\n` +
         `Refusing to start takosumi without an external audit-replication ` +
-        `sink. See docs/hosting/cloudflare.md and docs/hosting/multi-cloud.md ` +
-        `for the AuditExternalReplicationSink configuration.`,
+        `sink. See docs/reference/audit-events.md and ` +
+        `docs/reference/env-vars.md for AuditExternalReplicationSink ` +
+        `configuration.`,
     );
     Deno.exit(1);
   }
@@ -360,8 +362,9 @@ function logDeploymentRecordStoreBackend(sqlClientResolved: boolean): void {
  * The returned handle is intentionally NOT closed by the kernel: the
  * underlying pg pool is reused for the lifetime of the process. The
  * shared instance is fine because `SqlTakosumiDeploymentRecordStore`
- * uses `pg_advisory_lock` (session-scoped — pg pool gives each query
- * its own connection on demand) which works against a pool.
+ * uses `takosumi_deploy_locks` lease rows instead of session-scoped
+ * advisory locks, so successive acquire / release queries do not need
+ * connection pinning.
  */
 async function createSharedSqlClient(
   env: Record<string, string | undefined>,
@@ -490,8 +493,9 @@ function assertSecretEncryptionConfigured(
       console.error(
         `[paas-init] fatal: ${error.message}\n` +
           `Refusing to start takosumi with plaintext secret storage. ` +
-          `See docs/hosting/cloudflare.md and docs/hosting/self-hosted.md ` +
-          `for required encryption-key configuration.`,
+          `See docs/operator/self-host.md and ` +
+          `docs/reference/secret-partitions.md for required ` +
+          `encryption-key configuration.`,
       );
       Deno.exit(1);
     }
@@ -522,8 +526,8 @@ function assertDatabaseEncryptionConfigured(
       console.error(
         `[paas-init] fatal: ${error.message}\n` +
           `Refusing to start takosumi against an unencrypted database. ` +
-          `See docs/hosting/cloudflare.md and docs/hosting/multi-cloud.md ` +
-          `for at-rest encryption configuration per backend.`,
+          `See docs/operator/self-host.md and docs/reference/env-vars.md ` +
+          `for database at-rest encryption configuration.`,
       );
       Deno.exit(1);
     }
@@ -552,8 +556,9 @@ function assertAuditReplicationConfigured(
       console.error(
         `[paas-init] fatal: ${error.message}\n` +
           `Refusing to start takosumi without an external audit-replication ` +
-          `sink. See docs/hosting/cloudflare.md and docs/hosting/multi-cloud.md ` +
-          `for the AuditExternalReplicationSink configuration.`,
+          `sink. See docs/reference/audit-events.md and ` +
+          `docs/reference/env-vars.md for AuditExternalReplicationSink ` +
+          `configuration.`,
       );
       Deno.exit(1);
     }

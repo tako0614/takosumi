@@ -36,6 +36,7 @@ export function createRoleReadinessProbes(
     ready: async () => {
       const checks: Record<string, unknown> = {};
       const failures: string[] = [];
+      const booting: string[] = [];
       await recordCheck(checks, failures, "role", () => {
         if (
           options.runtimeConfig.processRole &&
@@ -61,10 +62,13 @@ export function createRoleReadinessProbes(
         }
         return { selected, strict };
       });
-      if (requiresInternalServiceSecret(options.role)) {
-        await recordCheck(checks, failures, "internalServiceSecret", () => {
-          if (!options.runtimeEnv.TAKOSUMI_INTERNAL_SERVICE_SECRET) {
-            throw new Error("TAKOSUMI_INTERNAL_SERVICE_SECRET is required");
+      if (requiresInternalApiSecret(options.role)) {
+        await recordCheck(checks, failures, "internalApiSecret", () => {
+          if (
+            !options.runtimeEnv.TAKOSUMI_INTERNAL_API_SECRET &&
+            !options.runtimeEnv.TAKOSUMI_INTERNAL_SERVICE_SECRET
+          ) {
+            throw new Error("TAKOSUMI_INTERNAL_API_SECRET is required");
           }
           return "configured";
         });
@@ -75,10 +79,17 @@ export function createRoleReadinessProbes(
           failures,
           "workerDaemon",
           () => workerDaemonReadiness(options),
+          booting,
         );
       }
+      const state = failures.length === 0
+        ? "ready"
+        : booting.length > 0 && booting.length === failures.length
+        ? "booting"
+        : "not-ready";
       return {
         ok: failures.length === 0,
+        state,
         service: "takosumi",
         role: options.role,
         checkedAt: new Date().toISOString(),
@@ -130,9 +141,16 @@ async function recordCheck(
   failures: string[],
   name: string,
   fn: () => unknown | Promise<unknown>,
+  booting: string[] = [],
 ): Promise<void> {
   try {
-    checks[name] = await fn();
+    const value = await fn();
+    checks[name] = value;
+    const checkFailure = checkFailureMessage(value);
+    if (checkFailure) {
+      failures.push(`${name}: ${checkFailure.message}`);
+      if (checkFailure.booting) booting.push(name);
+    }
   } catch (error) {
     const message = errorMessage(error);
     checks[name] = { ok: false, error: message };
@@ -140,7 +158,7 @@ async function recordCheck(
   }
 }
 
-function requiresInternalServiceSecret(role: PaaSProcessRole): boolean {
+function requiresInternalApiSecret(role: PaaSProcessRole): boolean {
   return role === "takosumi-api" || role === "takosumi-runtime-agent";
 }
 
@@ -155,7 +173,12 @@ function workerDaemonReadiness(
   }
   const tasks = [...options.workerDaemonState.lastTickByTask.values()];
   if (tasks.length === 0) {
-    throw new Error("worker daemon has not completed an initial tick");
+    return {
+      ok: false,
+      state: "booting",
+      startedAt: options.workerDaemonState.startedAt,
+      error: "worker daemon has not completed an initial tick",
+    };
   }
   const failed = tasks.filter((task) => !task.ok);
   if (failed.length > 0) {
@@ -178,6 +201,20 @@ function workerDaemonReadiness(
       ]),
     ),
   };
+}
+
+function checkFailureMessage(
+  value: unknown,
+): { readonly message: string; readonly booting: boolean } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.ok !== false) return undefined;
+  const message = typeof record.error === "string"
+    ? record.error
+    : typeof record.reason === "string"
+    ? record.reason
+    : "check failed";
+  return { message, booting: record.state === "booting" };
 }
 
 function errorMessage(error: unknown): string {

@@ -1,78 +1,78 @@
 # DataAsset Kinds
 
-> Stability: stable
-> Audience: operator, integrator
-> See also: [Connector Contract](/reference/connector-contract), [DataAsset Policy](/reference/data-asset-policy), [Closed Enums](/reference/closed-enums)
+> Stability: stable Audience: operator, integrator See also:
+> [Connector Contract](/reference/connector-contract),
+> [DataAsset Policy](/reference/data-asset-policy),
+> [Closed Enums](/reference/closed-enums)
 
-A Takosumi artifact is the content-addressed byte-or-pointer record that
-backs a DataAsset. Every `Artifact` referenced by a Manifest resource has
-two identifying fields: a `kind` (the closed v1 enum below) and either a
-`hash` (`sha256:<hex>`, returned by `POST /v1/artifacts`) or a `uri` (an
-external pointer such as an OCI registry URL). DataAsset visibility is
-Space-scoped per the [Connector Contract](/reference/connector-contract); an
-Artifact stored against the kernel artifact partition is not globally
-visible until operator artifact policy makes it so.
+A Takosumi artifact is the content-addressed byte-or-pointer record that backs a
+DataAsset. Every `Artifact` referenced by a Manifest resource has a `kind` and
+either a `hash` (`sha256:<hex>`, returned by `POST /v1/artifacts`) or a `uri`
+(an external pointer such as an OCI registry URL).
 
-## Closed kind enum
+`Artifact.kind` is an **open string at the protocol level**. The bundled kernel
+registers the kinds below so `GET /v1/artifacts/kinds` and
+`takosumi artifact kinds` can show operators what the deployed kernel and
+runtime-agent connector set understands. Third-party connectors may register
+additional kinds through `registerArtifactKind`; the registry is the discovery
+surface, not a hard-coded public enum.
 
-The v1 DataAsset kind enum is closed:
+## Bundled Kinds
+
+The bundled Takosumi plugins register these five kinds:
 
 ```text
-oci-image | js-module | wasm-module | static-archive | source-archive
+oci-image | js-bundle | lambda-zip | static-bundle | wasm
 ```
 
-Adding a new kind is governed by `CONVENTIONS.md` §6 RFC. No connector,
-plugin, or third-party package may extend the enum unilaterally.
+| Kind            | Description                                                                               | Typical reference                                         | Kernel storage                       |
+| --------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------ |
+| `oci-image`     | OCI / Docker container image referenced by registry URI.                                  | `artifact: { kind: "oci-image", uri: "ghcr.io/..." }`     | pointer only; bytes stay in registry |
+| `js-bundle`     | ESM JavaScript bundle for serverless runtimes such as Cloudflare Workers and Deno Deploy. | `artifact: { kind: "js-bundle", hash: "sha256:..." }`     | content-addressed upload             |
+| `lambda-zip`    | AWS Lambda deployment zip for connectors that consume zipped function packages.           | `artifact: { kind: "lambda-zip", hash: "sha256:..." }`    | content-addressed upload             |
+| `static-bundle` | Static site archive for Pages-style hosts.                                                | `artifact: { kind: "static-bundle", hash: "sha256:..." }` | content-addressed upload             |
+| `wasm`          | WebAssembly module bytes for connectors that execute or attach WASM artifacts.            | `artifact: { kind: "wasm", hash: "sha256:..." }`          | content-addressed upload             |
 
-| Kind | Description | Required metadata | Size cap (kernel default) | Signature requirement | Cache policy |
-| --- | --- | --- | --- | --- | --- |
-| `oci-image` | OCI / Docker container image referenced by registry URI. Bytes are not stored in the artifact partition; the connector pulls from the registry at apply. | `metadata.uri` (registry URL); optional `metadata.digest` for pinning | not applicable (pointer kind) | required when operator artifact policy mandates registry signing (cosign / notation); plan rejects unsigned references when so configured | external; cache lives in the connector's image runtime, not in the kernel |
-| `js-module` | ESM JavaScript module bundle for serverless runtimes (Workers, Deno Deploy, etc.). | `metadata.entrypoint` (relative path inside the bundle); `metadata.runtime` recommended | 50 MiB; raise per-key with `artifactPolicy.perKey` | required when operator policy demands signed JS modules; plan rejects unsigned modules in regulated profiles | content-addressed; cached by the connector by hash |
-| `wasm-module` | A single `.wasm` module loaded by the connector's WebAssembly runtime. | `metadata.entrypoint` recommended; `metadata.compatibilityDate` for runtimes that require it | 50 MiB; per-key override allowed | required for any reserved-prefix Space (`takos`, `operator`, `system`) | content-addressed; runtime usually compiles once per host |
-| `static-archive` | A tarball or zip of static files served verbatim by a Pages / static-host connector. | `metadata.contentType` recommended (`application/x-tar`, `application/zip`) | 50 MiB; per-key override allowed | required when operator policy demands signed bundles | content-addressed; CDN cache lives at the host |
-| `source-archive` | An opaque source archive consumed by an operator-approved Transform. The digest is the digest of the archive bytes; canonical source-tree packaging is out of v1 scope. | none required by the kernel; the Transform validates its own inputs | 50 MiB; raise per-key for monorepo source bundles | required for any Transform that runs in `pre-commit`; the approval is bound to the source-archive digest | content-addressed; the resulting Transform output (a `js-module` or `static-archive`) is cached separately |
+`worker@v1` is intentionally stricter than the protocol: its shape validation
+requires `artifact.kind: "js-bundle"` and a non-empty `hash`. `web-service@v1`
+accepts `image` as the backwards-compatible shorthand for
+`artifact: { kind: "oci-image", uri: image }`; other artifact kinds are valid
+only when the selected connector declares them in `acceptedArtifactKinds`.
 
-`oci-image` is the only pointer kind in v1. Every other kind references
-bytes stored under `<bucket>/artifacts/<sha256-hex>` in the kernel object
-storage adapter; the digest is computed and verified server-side
-regardless of any client-side `expectedDigest` field.
+## Connector Enforcement
 
-## Connector identity
+A runtime-agent connector declares an `acceptedArtifactKinds` vector. The
+runtime-agent lifecycle dispatcher rejects an apply request when the artifact
+kind in `spec.artifact.kind` is not in that vector. This keeps protocol
+extension open while still failing closed at the concrete connector boundary.
 
-A Connector is operator-installed and addressed as `connector:<id>`. The
-identity is operator-controlled and never appears in user manifests; users
-select an Implementation, and the resolver picks the Connector bound to
-the Implementation's accepted-kind vector. Each Connector declares an
-`acceptedKinds` vector drawn from the kind enum above; `Plan` must reject
-a Link / DataAsset binding whose `kind` is not in that vector. See the
-[Connector Contract](/reference/connector-contract) for the
-canonical Connector record.
+Examples:
+
+- Cloudflare Workers and Deno Deploy worker connectors accept `js-bundle`.
+- OCI-backed web-service connectors accept `oci-image`.
+- Future or operator-installed connectors can accept `lambda-zip`,
+  `static-bundle`, `wasm`, or a custom registered kind.
 
 ## Registration API
 
-The contract package exposes a small process-global registry that backs
-the `GET /v1/artifacts/kinds` discovery endpoint and `takosumi artifact
-kinds` CLI subcommand.
+The contract package exposes a process-global registry that backs
+`GET /v1/artifacts/kinds`.
 
 ```ts
 import {
-  registerArtifactKind,
-  listArtifactKinds,
   getArtifactKind,
   isArtifactKindRegistered,
+  listArtifactKinds,
+  registerArtifactKind,
   unregisterArtifactKind,
 } from "takosumi-contract";
 
-registerArtifactKind(
-  {
-    kind: "js-module",
-    description: "ESM JavaScript module bundle for serverless runtimes",
-    contentTypeHint: "application/javascript",
-    maxSize: 50 * 1024 * 1024,
-  },
-  // optional second argument
-  // { allowOverride: false }
-);
+registerArtifactKind({
+  kind: "js-bundle",
+  description: "ESM JavaScript bundle for serverless runtimes",
+  contentTypeHint: "application/javascript",
+  maxSize: 50 * 1024 * 1024,
+});
 ```
 
 Signatures:
@@ -91,92 +91,63 @@ unregisterArtifactKind(kind: string): boolean;
 
 Collision behaviour:
 
-- The first registration for a `kind` always succeeds and returns
-  `undefined`.
-- A second registration for the same `kind` with identical metadata is a
-  silent no-op.
+- The first registration for a `kind` succeeds and returns `undefined`.
+- A second registration with identical metadata is a silent no-op.
 - A second registration with different metadata and `allowOverride: false`
-  (the default) prints a single `console.warn` and keeps the original
-  record.
-- A second registration with different metadata and `allowOverride: true`
-  replaces the record and returns the previous one. This path is reserved
-  for operator-only contexts (operator-installed plugin loaders, kernel
-  bootstrap factories); consumer plugins and connectors must not pass
-  `allowOverride: true`.
+  prints a warning and keeps the original record.
+- A second registration with `allowOverride: true` replaces the record and
+  returns the previous one. This path is reserved for operator-controlled
+  bootstrap and plugin-loader contexts.
 
-Adding a new kind always requires the `CONVENTIONS.md` §6 RFC; the
-registry exists to surface the closed enum for discovery, not to widen it.
+## Size Limits
 
-## Per-key artifact policy
+The artifact route enforces `TAKOSUMI_ARTIFACT_MAX_BYTES` globally. If a
+registered kind carries `maxSize`, that per-kind value overrides the route
+default for uploads of that kind. Unknown or unregistered kinds fall back to the
+global cap.
 
-Operators may raise size caps and tighten signature requirements per
-kind. The kernel reads the closed schema below from the operator
-configuration loaded at boot:
+`oci-image` normally uses `uri`, so it does not need `takosumi artifact push`.
+Every uploaded kind is stored under `<bucket>/artifacts/<sha256-hex>` through
+the kernel object-storage adapter; the digest is computed and verified
+server-side regardless of any client-side `expectedDigest` field.
 
-```yaml
-artifactPolicy:
-  perKey:
-    <kind>:                           # one of the v1 kinds above
-      sizeCapBytes: <integer>         # overrides TAKOSUMI_ARTIFACT_MAX_BYTES for this kind only
-      signatureRequired: <boolean>    # when true, plan rejects unsigned references for this kind
-```
-
-Both fields are optional inside each per-key block; absent fields fall
-back to the global kernel defaults. The schema is closed: unknown keys
-under `perKey.<kind>` cause boot to fail.
-
-## Upload flow
+## Upload Flow
 
 ```text
 takosumi artifact push <file> --kind <kind>
-  POST /v1/artifacts (multipart: kind, body, metadata)
-    -> kernel validates kind against the closed enum and per-key policy
-    -> kernel computes sha256, enforces sizeCapBytes
-    -> kernel writes bucket/artifacts/<hex> via objectStorage
+  POST /v1/artifacts (multipart: kind, body, metadata, expectedDigest?)
+    -> kernel computes sha256 and enforces the global / registered size cap
+    -> kernel writes bucket/artifacts/<hex> via ObjectStoragePort
     -> kernel returns { hash, kind, size, uploadedAt, metadata }
 
 manifest.spec.artifact:
-  kind: js-module
+  kind: js-bundle
   hash: sha256:abc123...
 
 kernel apply
   -> POST /v1/lifecycle/apply { spec, artifactStore: { baseUrl, token } }
-  -> connector reads acceptedKinds, fetches bytes by hash via artifactStore
-  -> connector materializes the Implementation and returns a handle
+  -> connector verifies acceptedArtifactKinds
+  -> connector fetches bytes by hash via artifactStore
+  -> connector materializes the resource and returns a handle
 ```
 
 Auth boundaries:
 
 - Write endpoints (`POST /v1/artifacts`, `DELETE /v1/artifacts/:hash`,
   `POST /v1/artifacts/gc`) require the deploy bearer.
-- Read endpoints (`GET /v1/artifacts/:hash`, `HEAD /v1/artifacts/:hash`)
-  also accept `TAKOSUMI_ARTIFACT_FETCH_TOKEN` so the runtime-agent can
-  fetch bytes without holding the deploy bearer.
+- Read endpoints (`GET /v1/artifacts/:hash`, `HEAD /v1/artifacts/:hash`) also
+  accept `TAKOSUMI_ARTIFACT_FETCH_TOKEN` so the runtime-agent can fetch bytes
+  without holding the deploy bearer.
 
 ## Discovery and CLI
 
 ```bash
-takosumi artifact push ./bundle.tar --kind static-archive --metadata contentType=application/x-tar
+takosumi artifact push ./worker.js --kind js-bundle --metadata entrypoint=index.js
 takosumi artifact list
 takosumi artifact kinds --table
 takosumi artifact gc --dry-run
 takosumi artifact rm sha256:abc123...
 ```
 
-`takosumi artifact kinds` reflects the registry snapshot exposed by the
-kernel at the moment of the call; it does not extend the v1 enum.
-
-## Related
-
-- Reference: [Connector Contract](/reference/connector-contract),
-  [CLI](/reference/cli),
-  [Kernel HTTP API](/reference/kernel-http-api),
-  [Runtime-Agent API](/reference/runtime-agent-api),
-  [Manifest](/manifest)
-
-## Related design notes
-
-- `design/data-asset-model` — DataAsset rationale and connector
-  contract derivation.
-- `design/operator-boundaries` — operator-installed artifact policy
-  and credential trust boundary.
+`takosumi artifact kinds` reflects the registry snapshot exposed by the kernel
+at the moment of the call. It does not mutate the registry.

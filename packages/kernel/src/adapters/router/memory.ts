@@ -26,18 +26,22 @@ export class InMemoryRouterConfigAdapter implements RouterConfigPort {
     this.#clock = options.clock ?? (() => new Date());
   }
 
-  async apply(projection: RouteProjection): Promise<RouterConfigApplyResult> {
-    const before = activationSnapshot(projection);
-    const config = this.#renderer.render(projection);
-    validateRouterConfigActivation(projection, config);
-    validateProjectionActivationUnchanged(before, projection);
-    const stored = freezeClone(config);
-    this.#configs.set(stored.id, stored);
-    return freezeClone({
-      adapter: "memory",
-      config: stored,
-      appliedAt: this.#clock().toISOString(),
-    });
+  apply(projection: RouteProjection): Promise<RouterConfigApplyResult> {
+    try {
+      const before = activationSnapshot(projection);
+      const config = this.#renderer.render(projection);
+      validateRouterConfigActivation(projection, config);
+      validateProjectionActivationUnchanged(before, projection);
+      const stored = freezeClone(config);
+      this.#configs.set(stored.id, stored);
+      return Promise.resolve(freezeClone({
+        adapter: "memory",
+        config: stored,
+        appliedAt: this.#clock().toISOString(),
+      }));
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   get(id: string): Promise<RouterConfig | undefined> {

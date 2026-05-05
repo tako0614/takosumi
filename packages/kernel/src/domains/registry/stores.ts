@@ -1,5 +1,8 @@
 import type { Digest } from "takosumi-contract";
 import type {
+  CatalogReleaseAdoption,
+  CatalogReleaseDescriptor,
+  CatalogReleasePublisherKey,
   PackageDescriptor,
   PackageKind,
   PackageResolution,
@@ -41,6 +44,28 @@ export interface TrustRecordStore {
     ref: string,
     digest: Digest,
   ): Promise<TrustRecord | undefined>;
+}
+
+export interface CatalogReleaseDescriptorStore {
+  put(descriptor: CatalogReleaseDescriptor): Promise<CatalogReleaseDescriptor>;
+  get(releaseId: string): Promise<CatalogReleaseDescriptor | undefined>;
+  list(): Promise<readonly CatalogReleaseDescriptor[]>;
+}
+
+export interface CatalogReleasePublisherKeyStore {
+  put(key: CatalogReleasePublisherKey): Promise<CatalogReleasePublisherKey>;
+  get(keyId: string): Promise<CatalogReleasePublisherKey | undefined>;
+  listByPublisher(
+    publisherId: string,
+  ): Promise<readonly CatalogReleasePublisherKey[]>;
+}
+
+export interface CatalogReleaseAdoptionStore {
+  put(adoption: CatalogReleaseAdoption): Promise<CatalogReleaseAdoption>;
+  currentForSpace(
+    spaceId: string,
+  ): Promise<CatalogReleaseAdoption | undefined>;
+  listBySpace(spaceId: string): Promise<readonly CatalogReleaseAdoption[]>;
 }
 
 export interface BundledRegistry {
@@ -140,6 +165,89 @@ export class InMemoryTrustRecordStore implements TrustRecordStore {
   }
 }
 
+export class InMemoryCatalogReleaseDescriptorStore
+  implements CatalogReleaseDescriptorStore {
+  readonly #descriptors = new Map<string, CatalogReleaseDescriptor>();
+
+  put(
+    descriptor: CatalogReleaseDescriptor,
+  ): Promise<CatalogReleaseDescriptor> {
+    const frozen = deepFreeze(structuredClone(descriptor));
+    this.#descriptors.set(frozen.releaseId, frozen);
+    return Promise.resolve(frozen);
+  }
+
+  get(releaseId: string): Promise<CatalogReleaseDescriptor | undefined> {
+    return Promise.resolve(this.#descriptors.get(releaseId));
+  }
+
+  list(): Promise<readonly CatalogReleaseDescriptor[]> {
+    return Promise.resolve(
+      [...this.#descriptors.values()].sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.releaseId.localeCompare(right.releaseId)
+      ),
+    );
+  }
+}
+
+export class InMemoryCatalogReleasePublisherKeyStore
+  implements CatalogReleasePublisherKeyStore {
+  readonly #keys = new Map<string, CatalogReleasePublisherKey>();
+
+  put(key: CatalogReleasePublisherKey): Promise<CatalogReleasePublisherKey> {
+    const frozen = deepFreeze(structuredClone(key));
+    this.#keys.set(frozen.keyId, frozen);
+    return Promise.resolve(frozen);
+  }
+
+  get(keyId: string): Promise<CatalogReleasePublisherKey | undefined> {
+    return Promise.resolve(this.#keys.get(keyId));
+  }
+
+  listByPublisher(
+    publisherId: string,
+  ): Promise<readonly CatalogReleasePublisherKey[]> {
+    return Promise.resolve(
+      [...this.#keys.values()]
+        .filter((key) => key.publisherId === publisherId)
+        .sort((left, right) =>
+          left.enrolledAt.localeCompare(right.enrolledAt) ||
+          left.keyId.localeCompare(right.keyId)
+        ),
+    );
+  }
+}
+
+export class InMemoryCatalogReleaseAdoptionStore
+  implements CatalogReleaseAdoptionStore {
+  readonly #adoptions = new Map<string, CatalogReleaseAdoption>();
+
+  put(adoption: CatalogReleaseAdoption): Promise<CatalogReleaseAdoption> {
+    const frozen = deepFreeze(structuredClone(adoption));
+    this.#adoptions.set(frozen.id, frozen);
+    return Promise.resolve(frozen);
+  }
+
+  currentForSpace(
+    spaceId: string,
+  ): Promise<CatalogReleaseAdoption | undefined> {
+    const current = [...this.#adoptions.values()]
+      .filter((adoption) => adoption.spaceId === spaceId)
+      .sort(compareAdoptions)
+      .at(-1);
+    return Promise.resolve(current);
+  }
+
+  listBySpace(spaceId: string): Promise<readonly CatalogReleaseAdoption[]> {
+    return Promise.resolve(
+      [...this.#adoptions.values()]
+        .filter((adoption) => adoption.spaceId === spaceId)
+        .sort(compareAdoptions),
+    );
+  }
+}
+
 export class InMemoryBundledRegistry implements BundledRegistry {
   constructor(
     readonly descriptors: PackageDescriptorStore,
@@ -185,4 +293,23 @@ function descriptorKey(descriptor: PackageDescriptor): string {
 
 function resolutionKey(resolution: PackageResolution): string {
   return keyFor(resolution.kind, resolution.ref, resolution.digest);
+}
+
+function compareAdoptions(
+  left: CatalogReleaseAdoption,
+  right: CatalogReleaseAdoption,
+): number {
+  return left.adoptedAt.localeCompare(right.adoptedAt) ||
+    left.catalogReleaseId.localeCompare(right.catalogReleaseId) ||
+    left.id.localeCompare(right.id);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    Object.freeze(value);
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(nested);
+    }
+  }
+  return value;
 }

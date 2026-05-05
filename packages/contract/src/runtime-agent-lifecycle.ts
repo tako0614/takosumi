@@ -9,6 +9,7 @@
  * Endpoints (runtime-agent HTTP API):
  *   POST /v1/lifecycle/apply
  *   POST /v1/lifecycle/destroy
+ *   POST /v1/lifecycle/compensate
  *   POST /v1/lifecycle/describe
  *   GET  /v1/health
  *
@@ -16,6 +17,7 @@
  */
 
 import type { JsonObject, JsonValue } from "./types.ts";
+import type { PlatformOperationRequest } from "./provider-plugin.ts";
 
 /**
  * Artifact descriptor — a discriminated union over `kind` (open string).
@@ -65,6 +67,10 @@ export interface LifecycleApplyRequest {
   readonly resourceName: string;
   readonly spec: JsonValue;
   readonly tenantId?: string;
+  /** WAL-derived request token. Connectors forward it to external APIs when supported. */
+  readonly idempotencyKey?: string;
+  /** WAL / recovery envelope projected from the kernel OperationPlan. */
+  readonly operationRequest?: PlatformOperationRequest;
   /** Optional metadata forwarded by kernel (audit trail, request id). */
   readonly metadata?: JsonObject;
   /** Where the connector can fetch artifact bytes by hash, when spec carries
@@ -84,6 +90,10 @@ export interface LifecycleDestroyRequest {
   readonly provider: string;
   readonly handle: string;
   readonly tenantId?: string;
+  /** WAL-derived request token. Connectors forward it to external APIs when supported. */
+  readonly idempotencyKey?: string;
+  /** WAL / recovery envelope projected from the kernel OperationPlan. */
+  readonly operationRequest?: PlatformOperationRequest;
   readonly metadata?: JsonObject;
 }
 
@@ -91,6 +101,31 @@ export interface LifecycleDestroyResponse {
   readonly ok: boolean;
   /** Optional reason on partial / soft failures. */
   readonly note?: string;
+}
+
+export interface LifecycleCompensateRequest {
+  readonly shape: string;
+  readonly provider: string;
+  readonly handle: string;
+  readonly tenantId?: string;
+  /** WAL-derived request token for the compensating operation. */
+  readonly idempotencyKey?: string;
+  /** WAL / recovery envelope projected from the kernel OperationPlan. */
+  readonly operationRequest?: PlatformOperationRequest;
+  readonly metadata?: JsonObject;
+  /** Recorded effect detail from the WAL, when available. */
+  readonly effect?: JsonObject;
+}
+
+export interface LifecycleCompensateResponse {
+  readonly ok: boolean;
+  readonly note?: string;
+  /**
+   * True when the connector could not fully reverse the effect and the kernel
+   * must keep or open RevokeDebt for operator-visible cleanup.
+   */
+  readonly revokeDebtRequired?: boolean;
+  readonly detail?: JsonObject;
 }
 
 export interface LifecycleDescribeRequest {
@@ -124,6 +159,7 @@ export interface LifecycleErrorBody {
 /** HTTP path constants — single source of truth for kernel client + agent server. */
 export const LIFECYCLE_APPLY_PATH = "/v1/lifecycle/apply" as const;
 export const LIFECYCLE_DESTROY_PATH = "/v1/lifecycle/destroy" as const;
+export const LIFECYCLE_COMPENSATE_PATH = "/v1/lifecycle/compensate" as const;
 export const LIFECYCLE_DESCRIBE_PATH = "/v1/lifecycle/describe" as const;
 export const LIFECYCLE_HEALTH_PATH = "/v1/health" as const;
 

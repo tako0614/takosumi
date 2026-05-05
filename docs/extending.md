@@ -247,9 +247,12 @@ secret の raw value は **絶対に返しません**。`*Ref` field に
 - [Shape Catalog](/reference/shapes)
 - [Provider Plugins](/reference/providers)
 - [Templates](/reference/templates)
-- [External Participants](/reference/external-participants) — 3rd-party export / ExternalImplementation の登録
-- [Catalog Release Trust](/reference/catalog-release-trust) — publisher key / signature chain
-- [Connector Contract](/reference/connector-contract) — connector identity / acceptedKinds
+- [External Participants](/reference/external-participants) — 3rd-party export /
+  ExternalImplementation の登録
+- [Catalog Release Trust](/reference/catalog-release-trust) — publisher key /
+  signature chain
+- [Connector Contract](/reference/connector-contract) — connector identity /
+  acceptedKinds
 - [Manifest](/manifest)
 - [Operator Bootstrap](/operator/bootstrap)
 - [`CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md)

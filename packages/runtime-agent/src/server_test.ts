@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import {
   LIFECYCLE_APPLY_PATH,
+  LIFECYCLE_COMPENSATE_PATH,
   LIFECYCLE_DESTROY_PATH,
   LIFECYCLE_HEALTH_PATH,
   type LifecycleApplyRequest,
+  type LifecycleCompensateRequest,
   type LifecycleDestroyRequest,
 } from "takosumi-contract";
 import { ConnectorRegistry } from "./connectors/mod.ts";
@@ -331,4 +333,35 @@ Deno.test("destroy dispatches to registered connector", async () => {
   });
   assert.equal(res.status, 200);
   assert.equal(destroyed, "memory://x");
+});
+
+Deno.test("compensate dispatches to registered connector", async () => {
+  const registry = new ConnectorRegistry();
+  let compensated: string | undefined;
+  registry.register({
+    provider: "memory",
+    shape: "object-store@v1",
+    acceptedArtifactKinds: [],
+    apply: () => Promise.resolve({ handle: "h", outputs: {} }),
+    destroy: () => Promise.resolve({ ok: true }),
+    compensate: (req) => {
+      compensated = req.handle;
+      return Promise.resolve({ ok: true, note: "reversed" });
+    },
+    describe: () => Promise.resolve({ status: "running" as const }),
+  });
+  const app = createRuntimeAgentApp({ registry, token: "tok" });
+  const req: LifecycleCompensateRequest = {
+    shape: "object-store@v1",
+    provider: "memory",
+    handle: "memory://x",
+  };
+  const res = await app.request(LIFECYCLE_COMPENSATE_PATH, {
+    method: "POST",
+    headers: authHeaders("tok"),
+    body: JSON.stringify(req),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(compensated, "memory://x");
+  assert.deepEqual(await res.json(), { ok: true, note: "reversed" });
 });

@@ -1,8 +1,9 @@
 # Shape Catalog
 
-> Stability: stable
-> Audience: integrator
-> See also: [Provider Plugins](/reference/providers), [Access Modes](/reference/access-modes), [Closed Enums](/reference/closed-enums)
+> Stability: stable Audience: integrator See also:
+> [Provider Plugins](/reference/providers),
+> [Access Modes](/reference/access-modes),
+> [Closed Enums](/reference/closed-enums)
 
 A **Shape** is the v1 abstract resource type that a manifest declares and a
 [provider plugin](/reference/providers) materializes. Each shape pins three
@@ -19,8 +20,8 @@ Source: `packages/contract/src/shape.ts` (the contract and registry),
 
 ## Capability extension guide
 
-Capabilities are **open strings**. The catalog does **not** lock the set
-into a closed enum; instead, the v1 rule is open string + reserved prefix:
+Capabilities are **open strings**. The catalog does **not** lock the set into a
+closed enum; instead, the v1 rule is open string + reserved prefix:
 
 | Prefix       | Owner                                              |
 | ------------ | -------------------------------------------------- |
@@ -28,21 +29,20 @@ into a closed enum; instead, the v1 rule is open string + reserved prefix:
 | `system.*`   | Takosumi kernel / runtime-agent / observation tier |
 | `operator.*` | Operator-defined deployment-local capabilities     |
 
-A provider may declare any kebab-case identifier in `capabilities`. A
-manifest may reference any kebab-case identifier in `requires`. Selection
-verifies subset membership only. The closed `*Capability` union types
-exported alongside each bundled shape are convenience for compile-time
-checks, not a contract — the runtime treats `capabilities` as
-`readonly string[]`.
+A provider may declare any kebab-case identifier in `capabilities`. A manifest
+may reference any kebab-case identifier in `requires`. Selection verifies subset
+membership only. The closed `*Capability` union types exported alongside each
+bundled shape are convenience for compile-time checks, not a contract — the
+runtime treats `capabilities` as `readonly string[]`.
 
 Adding a new reserved prefix, or adding identifiers under `takos.*` /
-`system.*`, requires the §6 RFC. `operator.*` is free for the operator to
-use within a single deployment.
+`system.*`, requires the §6 RFC. `operator.*` is free for the operator to use
+within a single deployment.
 
 ## outputFields reserved names
 
-Five field names are **reserved** across the catalog so that consumer
-manifests can rely on stable semantics regardless of which provider runs:
+Five field names are **reserved** across the catalog so that consumer manifests
+can rely on stable semantics regardless of which provider runs:
 
 | reserved name | meaning                                                         |
 | ------------- | --------------------------------------------------------------- |
@@ -52,24 +52,24 @@ manifests can rely on stable semantics regardless of which provider runs:
 | `id`          | provider-scope identifier                                       |
 | `version`     | provider-scope version / revision identifier                    |
 
-A new shape that exposes a field with one of these names must use the
-reserved meaning. Adding a new reserved name follows the §6 RFC.
+A new shape that exposes a field with one of these names must use the reserved
+meaning. Adding a new reserved name follows the §6 RFC.
 
 ## Catalog
 
-| Shape id            | version | summary                                                       |
-| ------------------- | ------- | ------------------------------------------------------------- |
+| Shape id            | version | summary                                                             |
+| ------------------- | ------- | ------------------------------------------------------------------- |
 | `object-store`      | `v1`    | Bucket-style object storage; provider-portable across S3-class APIs |
-| `web-service`       | `v1`    | Long-running HTTP service backed by an OCI image or equivalent     |
-| `database-postgres` | `v1`    | Managed PostgreSQL instance (wire-protocol portable)               |
-| `custom-domain`     | `v1`    | DNS + TLS-terminated public domain                                 |
-| `worker`            | `v1`    | Serverless JS function backed by a `js-bundle` artifact            |
+| `web-service`       | `v1`    | Long-running HTTP service backed by an OCI image or equivalent      |
+| `database-postgres` | `v1`    | Managed PostgreSQL instance (wire-protocol portable)                |
+| `custom-domain`     | `v1`    | DNS + TLS-terminated public domain                                  |
+| `worker`            | `v1`    | Serverless JS function backed by a `js-bundle` artifact             |
 
 The notation in the lifecycle persistence column below uses the v1 object
-lifecycle classes: managed / generated / external / operator / imported.
-For the bundled shapes, every output field is **generated** — the provider
-writes the value during apply and the kernel persists it in the resolved
-output map for `${ref:...}` consumption.
+lifecycle classes: managed / generated / external / operator / imported. For the
+bundled shapes, every output field is **generated** — the provider writes the
+value during apply and the kernel persists it in the resolved output map for
+`${ref:...}` consumption.
 
 ## `object-store@v1`
 
@@ -110,20 +110,24 @@ defaults apply when unset.
 
 ## `web-service@v1`
 
-Long-running HTTP service driven by an OCI image (or other artifact a
-provider accepts).
+Long-running HTTP service driven by an OCI image (or other artifact a provider
+accepts).
 
 ### Spec summary
 
 ```ts
 interface WebServiceSpec {
-  readonly image?: string;          // shorthand for { artifact: { kind: "oci-image", uri: image } }
-  readonly artifact?: Artifact;     // preferred; { kind, uri | hash }
+  readonly image?: string; // shorthand for { artifact: { kind: "oci-image", uri: image } }
+  readonly artifact?: Artifact; // preferred; { kind, uri | hash }
   readonly port: number;
   readonly scale: { min: number; max: number; idleSeconds?: number };
   readonly env?: Readonly<Record<string, string>>;
   readonly bindings?: Readonly<Record<string, string>>;
-  readonly health?: { path: string; intervalSeconds?: number; timeoutSeconds?: number };
+  readonly health?: {
+    path: string;
+    intervalSeconds?: number;
+    timeoutSeconds?: number;
+  };
   readonly resources?: { cpu?: string; memory?: string };
   readonly command?: readonly string[];
   readonly domains?: readonly string[];
@@ -131,8 +135,7 @@ interface WebServiceSpec {
 ```
 
 Either `image` or `artifact` must be set. `bindings` accepts `${ref:...}`
-expressions resolved against other resources' outputs; `env` is plain
-literal.
+expressions resolved against other resources' outputs; `env` is plain literal.
 
 ### outputFields
 
@@ -177,8 +180,8 @@ interface DatabasePostgresSpec {
 
 ### Declared capabilities
 
-`pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`,
-`ipv6`, `extensions`.
+`pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`, `ipv6`,
+`extensions`.
 
 ## `custom-domain@v1`
 
@@ -190,10 +193,17 @@ output.
 
 ```ts
 interface CustomDomainSpec {
-  readonly name: string;            // FQDN
-  readonly target: string;          // typically ${ref:<webservice>.url}
-  readonly certificate?: { kind: "auto" | "managed" | "provided"; secretRef?: string };
-  readonly redirects?: readonly { from: string; to: string; code?: 301 | 302 | 307 | 308 }[];
+  readonly name: string; // FQDN
+  readonly target: string; // typically ${ref:<webservice>.url}
+  readonly certificate?: {
+    kind: "auto" | "managed" | "provided";
+    secretRef?: string;
+  };
+  readonly redirects?: readonly {
+    from: string;
+    to: string;
+    code?: 301 | 302 | 307 | 308;
+  }[];
 }
 ```
 
@@ -219,8 +229,8 @@ Serverless JS function backed by an uploaded `js-bundle` artifact. Unlike
 
 ```ts
 interface WorkerSpec {
-  readonly artifact: Artifact;                  // kind: "js-bundle", hash required
-  readonly compatibilityDate: string;           // e.g. "2025-01-01"
+  readonly artifact: Artifact; // kind: "js-bundle", hash required
+  readonly compatibilityDate: string; // e.g. "2025-01-01"
   readonly compatibilityFlags?: readonly string[];
   readonly env?: Readonly<Record<string, string>>;
   readonly routes?: readonly string[];
@@ -248,14 +258,14 @@ standard non-RFC path and is the right tool for new cloud support.
 
 ## Cross-references
 
-- [Access Modes](/reference/access-modes) — closed v1 access mode enum
-  (`read` / `read-write` / `admin` / `invoke-only` / `observe-only`) for
-  shape outputs that expose targets to consumers, and the
-  `safeDefaultAccess` contract on grant-producing exports.
-- [Closed Enums](/reference/closed-enums) — full v1 closed enum index
-  (object lifecycle classes, mutation constraints, link mutations) that
-  shape outputs are constrained by.
+- [Access Modes](/reference/access-modes) — closed v1 access mode enum (`read` /
+  `read-write` / `admin` / `invoke-only` / `observe-only`) for shape outputs
+  that expose targets to consumers, and the `safeDefaultAccess` contract on
+  grant-producing exports.
+- [Closed Enums](/reference/closed-enums) — full v1 closed enum index (object
+  lifecycle classes, mutation constraints, link mutations) that shape outputs
+  are constrained by.
 - [Connector Contract](/reference/connector-contract) — `connector:<id>`
   identity と shape outputs が連携する artifact 受け渡し境界。
-- `CONVENTIONS.md` §6 RFC (at the takosumi repo root) — shape catalog,
-  reserved outputField, and reserved capability-prefix RFC process.
+- `CONVENTIONS.md` §6 RFC (at the takosumi repo root) — shape catalog, reserved
+  outputField, and reserved capability-prefix RFC process.

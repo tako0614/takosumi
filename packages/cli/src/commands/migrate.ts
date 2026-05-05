@@ -126,27 +126,32 @@ export async function runMigrate(
   }
 }
 
-export const migrateCommand = new Command()
-  .description("Run Takosumi DB migrations")
-  .option("--dry-run", "Show planned migrations without applying")
-  .option(
-    "--env <env:string>",
-    "Target environment (local, staging, production)",
-    { default: "local" },
-  )
-  .action(async ({ dryRun, env }) => {
-    const result = await runMigrate({
-      env: env as MigrateEnv,
-      dryRun: dryRun === true,
-      readEnv: (key) => Deno.env.get(key),
-      resolveScript: defaultResolveScript,
-      spawn: async (cmd, args) => {
-        const out = await new Deno.Command(cmd, { args: [...args] }).output();
-        return { code: out.code };
-      },
-      write: (line) => console.log(line),
+function createMigrateCommand() {
+  return new Command()
+    .description("Run Takosumi DB migrations")
+    .option("--dry-run", "Show planned migrations without applying")
+    .option(
+      "--env <env:string>",
+      "Target environment (local, staging, production)",
+      { default: "local" },
+    )
+    .action(async ({ dryRun, env }) => {
+      const result = await runMigrate({
+        env: env as MigrateEnv,
+        dryRun: dryRun === true,
+        readEnv: (key) => Deno.env.get(key),
+        resolveScript: defaultResolveScript,
+        spawn: async (cmd, args) => {
+          const out = await new Deno.Command(cmd, { args: [...args] }).output();
+          return { code: out.code };
+        },
+        write: (line) => console.log(line),
+      });
+      if (result.exitCode !== 0) {
+        Deno.exit(result.exitCode);
+      }
     });
-    if (result.exitCode !== 0) {
-      Deno.exit(result.exitCode);
-    }
-  });
+}
+
+export const migrateCommand: ReturnType<typeof createMigrateCommand> =
+  createMigrateCommand();

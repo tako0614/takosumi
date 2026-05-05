@@ -118,6 +118,22 @@ Deno.test("core conformance: descriptor closure uses docs JSON-LD body digests",
   }
 });
 
+Deno.test("core conformance: artifact descriptors use current bundled kind names", () => {
+  const aliases = new Set(
+    OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS.map((record) => record.alias),
+  );
+  assert.equal(aliases.has("artifact.js-bundle@v1"), true);
+  assert.equal(aliases.has("artifact.js-module@v1"), false);
+
+  const workers = OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS.find((record) =>
+    record.alias === "provider.cloudflare.workers@v1"
+  );
+  assert.ok(workers);
+  const body = JSON.stringify(workers.body);
+  assert.match(body, /artifact\.js-bundle@v1/);
+  assert.doesNotMatch(body, /artifact\.js-module@v1/);
+});
+
 Deno.test("core conformance: public shorthand expansion is descriptor-traced", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({

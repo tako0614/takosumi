@@ -11,6 +11,7 @@ export const TAKOSUMI_PAAS_READINESS_PATHS = {
 
 export interface HealthProbeResult {
   readonly ok: boolean;
+  readonly state?: "ready" | "not-ready" | "booting";
   readonly status?: number;
   readonly [key: string]: unknown;
 }
@@ -96,6 +97,7 @@ function assertCatalogConditionReasons(value: unknown, surface: string): void {
 
 function statusCodeForProbe(result: HealthProbeResult): 200 | 503 {
   if (result.status === 200 || result.status === 503) return result.status;
+  if (result.state === "booting" || result.state === "not-ready") return 503;
   return result.ok ? 200 : 503;
 }
 

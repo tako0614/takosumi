@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import {
   type ApplyResult,
+  formatPlatformOperationIdempotencyKey,
   type JsonObject,
   type ManifestResource,
   type PlatformContext,
+  type PlatformOperationContext,
   type ProviderPlugin,
   registerProvider,
   registerShape,
@@ -12,12 +14,14 @@ import {
   unregisterShape,
 } from "takosumi-contract";
 import { destroyV2 } from "./apply_v2.ts";
+import { buildOperationPlanPreview } from "./operation_plan_preview.ts";
 
 const SHAPE = "test-destroy-shape";
 const PROV_OK = "test-destroy-provider-ok";
 const PROV_FAIL = "test-destroy-provider-fail";
 
 const destroyLog: string[] = [];
+const destroyOperations: Array<PlatformOperationContext | undefined> = [];
 
 function shape(): Shape {
   return {
@@ -47,11 +51,12 @@ function provider(id: string, behavior: "ok" | "fail"): ProviderPlugin {
         outputs: { url: `https://${handle}`, id: handle } as JsonObject,
       });
     },
-    destroy(handle, _ctx) {
+    destroy(handle, ctx) {
       if (behavior === "fail") {
         return Promise.reject(new Error(`destroy-failed:${handle}`));
       }
       destroyLog.push(`${id}:${handle}`);
+      destroyOperations.push(ctx.operation);
       return Promise.resolve();
     },
     status() {
@@ -65,6 +70,7 @@ function provider(id: string, behavior: "ok" | "fail"): ProviderPlugin {
 
 function setUp(): void {
   destroyLog.length = 0;
+  destroyOperations.length = 0;
   registerShape(shape());
   registerProvider(provider(PROV_OK, "ok"));
   registerProvider(provider(PROV_FAIL, "fail"));
@@ -185,6 +191,52 @@ Deno.test("destroyV2 returns failed-validation on cycle", async () => {
     const outcome = await destroyV2({ resources, context: ctx });
     assert.equal(outcome.status, "failed-validation");
     assert.equal(outcome.destroyed.length, 0);
+  } finally {
+    tearDown();
+  }
+});
+
+Deno.test("destroyV2 threads WAL idempotency context to provider.destroy", async () => {
+  setUp();
+  try {
+    const resources: ManifestResource[] = [
+      { shape: `${SHAPE}@v1`, name: "db", provider: PROV_OK, spec: {} },
+    ];
+    const operationPlanPreview = buildOperationPlanPreview({
+      resources,
+      planned: [{
+        name: "db",
+        shape: `${SHAPE}@v1`,
+        providerId: PROV_OK,
+        op: "delete",
+      }],
+      edges: [],
+      spaceId: "space:fenced",
+      deploymentName: "destroy-app",
+    });
+
+    const outcome = await destroyV2({
+      resources,
+      context: { ...ctx, spaceId: "space:fenced" },
+      operationPlanPreview,
+    });
+
+    assert.equal(outcome.status, "succeeded");
+    assert.equal(destroyOperations.length, 1);
+    const operation = destroyOperations[0];
+    assert.ok(operation);
+    const plannedOperation = operationPlanPreview.operations[0];
+    assert.ok(plannedOperation);
+    assert.equal(operation.phase, "destroy");
+    assert.equal(operation.walStage, "commit");
+    assert.equal(operation.resourceName, "db");
+    assert.equal(operation.providerId, PROV_OK);
+    assert.equal(operation.op, "delete");
+    assert.deepEqual(operation.idempotencyKey, plannedOperation.idempotencyKey);
+    assert.equal(
+      operation.idempotencyKeyString,
+      formatPlatformOperationIdempotencyKey(plannedOperation.idempotencyKey),
+    );
   } finally {
     tearDown();
   }

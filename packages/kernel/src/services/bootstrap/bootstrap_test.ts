@@ -19,7 +19,7 @@ Deno.test("standalone bootstrap selects explicit local adapters and redacts conf
       TAKOSUMI_BOOTSTRAP_SECRET_ADAPTER: "memory",
       TAKOSUMI_BOOTSTRAP_PROVIDER_ADAPTER: "noop",
       TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_INTERNAL_SERVICE_SECRET: "super-secret",
+      TAKOSUMI_INTERNAL_API_SECRET: "super-secret",
       DATABASE_SECRET_REF: { name: "DATABASE_URL", version: "v1" },
     },
   });
@@ -48,13 +48,13 @@ Deno.test("standalone bootstrap selects explicit local adapters and redacts conf
   assert.ok(report.adapters.provider instanceof NoopProviderMaterializer);
   assert.equal(
     report.config.values.find((value) =>
-      value.key === "TAKOSUMI_INTERNAL_SERVICE_SECRET"
+      value.key === "TAKOSUMI_INTERNAL_API_SECRET"
     )?.value,
     "[REDACTED]",
   );
   const serviceSecretSnapshotValue = report.operatorConfigSnapshot.values.find((
     value,
-  ) => value.key === "TAKOSUMI_INTERNAL_SERVICE_SECRET");
+  ) => value.key === "TAKOSUMI_INTERNAL_API_SECRET");
   assert.equal(serviceSecretSnapshotValue?.kind, "plain");
   assert.equal(
     serviceSecretSnapshotValue.kind === "plain"
@@ -89,9 +89,9 @@ Deno.test("standalone bootstrap reports unsafe default adapters in production", 
     clock: fixedClock,
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
-      TAKOSUMI_INTERNAL_SERVICE_SECRET: "replace-me",
+      TAKOSUMI_INTERNAL_API_SECRET: "replace-me",
     },
-    include: ["TAKOSUMI_ENVIRONMENT", "TAKOSUMI_INTERNAL_SERVICE_SECRET"],
+    include: ["TAKOSUMI_ENVIRONMENT", "TAKOSUMI_INTERNAL_API_SECRET"],
   });
 
   const report = await new StandaloneBootstrapService({
@@ -114,7 +114,52 @@ Deno.test("standalone bootstrap reports unsafe default adapters in production", 
   assert.ok(
     report.errors.some((error) =>
       error.code === "unsafe_secret_value" &&
-      error.key === "TAKOSUMI_INTERNAL_SERVICE_SECRET"
+      error.key === "TAKOSUMI_INTERNAL_API_SECRET"
+    ),
+  );
+});
+
+Deno.test("standalone bootstrap keeps legacy internal service secret alias for service auth", async () => {
+  const config = new LocalOperatorConfig({
+    clock: fixedClock,
+    values: {
+      TAKOSUMI_ENVIRONMENT: "production",
+      TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
+      TAKOSUMI_INTERNAL_SERVICE_SECRET: "legacy-service-secret-value",
+    },
+  });
+
+  const report = await new StandaloneBootstrapService({
+    operatorConfig: config,
+    clock: fixedClock,
+  }).bootstrap();
+
+  assert.ok(
+    !report.errors.some((error) =>
+      error.code === "auth_service_secret_missing"
+    ),
+    `unexpected auth_service_secret_missing: ${JSON.stringify(report.errors)}`,
+  );
+});
+
+Deno.test("standalone bootstrap reports the primary internal API secret name", async () => {
+  const config = new LocalOperatorConfig({
+    clock: fixedClock,
+    values: {
+      TAKOSUMI_ENVIRONMENT: "local",
+      TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
+    },
+  });
+
+  const report = await new StandaloneBootstrapService({
+    operatorConfig: config,
+    clock: fixedClock,
+  }).bootstrap();
+
+  assert.ok(
+    report.errors.some((error) =>
+      error.code === "auth_service_secret_missing" &&
+      error.key === "TAKOSUMI_INTERNAL_API_SECRET"
     ),
   );
 });
@@ -193,7 +238,7 @@ Deno.test("standalone bootstrap accepts memory secret store when production key 
       TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
       TAKOSUMI_BOOTSTRAP_SECRET_ADAPTER: "memory",
       TAKOSUMI_BOOTSTRAP_SOURCE_ADAPTER: "manifest",
-      TAKOSUMI_INTERNAL_SERVICE_SECRET: "production-service-secret-value",
+      TAKOSUMI_INTERNAL_API_SECRET: "production-service-secret-value",
       TAKOSUMI_SECRET_STORE_PASSPHRASE: "production-secret-passphrase-32-byte",
     },
   });

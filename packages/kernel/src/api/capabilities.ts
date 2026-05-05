@@ -3,7 +3,12 @@ import {
   type PaaSProcessRole,
   type PaaSProcessRoleDescription,
 } from "../process/mod.ts";
-import { TAKOSUMI_INTERNAL_PATHS } from "takosumi-contract";
+import {
+  ARTIFACTS_BASE_PATH,
+  TAKOSUMI_INTERNAL_PATHS,
+} from "takosumi-contract";
+import { TAKOSUMI_DEPLOY_PUBLIC_PATH } from "./deploy_public_routes.ts";
+import { TAKOSUMI_METRICS_PATH } from "./metrics_routes.ts";
 import { TAKOSUMI_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
 import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
@@ -11,9 +16,12 @@ import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 export interface CreateApiCapabilitiesDescriptionOptions {
   readonly internalRoutesMounted?: boolean;
   readonly publicRoutesMounted?: boolean;
+  readonly deployPublicRoutesMounted?: boolean;
+  readonly artifactRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
   readonly openApiRouteMounted?: boolean;
   readonly readinessRoutesMounted?: boolean;
+  readonly metricsRoutesMounted?: boolean;
 }
 
 export interface ApiCapabilitiesDescription {
@@ -24,10 +32,16 @@ export interface ApiCapabilitiesDescription {
 }
 
 export interface ApiEndpointDescription {
-  readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  readonly method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
   readonly path: string;
   readonly summary: string;
-  readonly auth: "none" | "internal-service" | "actor";
+  readonly auth:
+    | "none"
+    | "internal-service"
+    | "actor"
+    | "deploy-token"
+    | "artifact-read"
+    | "metrics-token";
 }
 
 export function createApiCapabilitiesDescription(
@@ -59,11 +73,23 @@ export function createApiCapabilitiesDescription(
   }
   if (options.internalRoutesMounted) endpoints.push(...internalEndpoints());
   if (options.publicRoutesMounted) endpoints.push(...publicEndpoints());
+  if (options.deployPublicRoutesMounted) {
+    endpoints.push(...deployPublicEndpoints());
+  }
+  if (options.artifactRoutesMounted) endpoints.push(...artifactEndpoints());
   if (options.runtimeAgentRoutesMounted) {
     endpoints.push(...runtimeAgentEndpoints());
   }
   if (options.readinessRoutesMounted) {
     endpoints.push(...readinessEndpoints());
+  }
+  if (options.metricsRoutesMounted) {
+    endpoints.push({
+      method: "GET",
+      path: TAKOSUMI_METRICS_PATH,
+      summary: "Returns Prometheus text exposition for recorded metrics.",
+      auth: "metrics-token",
+    });
   }
   return {
     service: "takosumi",
@@ -71,6 +97,83 @@ export function createApiCapabilitiesDescription(
     roleDescription: describePaaSProcessRole(role),
     endpoints,
   };
+}
+
+function deployPublicEndpoints(): ApiEndpointDescription[] {
+  return [
+    [
+      "POST",
+      TAKOSUMI_DEPLOY_PUBLIC_PATH,
+      "Runs the operator deploy entrypoint in apply, plan, or destroy mode.",
+    ],
+    [
+      "GET",
+      TAKOSUMI_DEPLOY_PUBLIC_PATH,
+      "Lists deployment records from the operator deploy surface.",
+    ],
+    [
+      "GET",
+      `${TAKOSUMI_DEPLOY_PUBLIC_PATH}/:name`,
+      "Returns one deployment record by manifest metadata.name.",
+    ],
+  ].map(([method, path, summary]) => ({
+    method: method as ApiEndpointDescription["method"],
+    path,
+    summary,
+    auth: "deploy-token" as const,
+  }));
+}
+
+function artifactEndpoints(): ApiEndpointDescription[] {
+  return [
+    [
+      "POST",
+      ARTIFACTS_BASE_PATH,
+      "Uploads a content-addressed artifact for runtime agents.",
+      "deploy-token",
+    ],
+    [
+      "GET",
+      ARTIFACTS_BASE_PATH,
+      "Lists uploaded artifacts with cursor pagination.",
+      "deploy-token",
+    ],
+    [
+      "GET",
+      `${ARTIFACTS_BASE_PATH}/kinds`,
+      "Lists artifact kinds registered in the kernel.",
+      "deploy-token",
+    ],
+    [
+      "HEAD",
+      `${ARTIFACTS_BASE_PATH}/:hash`,
+      "Returns artifact metadata headers without a body.",
+      "artifact-read",
+    ],
+    [
+      "GET",
+      `${ARTIFACTS_BASE_PATH}/:hash`,
+      "Streams artifact bytes to a runtime agent or operator.",
+      "artifact-read",
+    ],
+    [
+      "DELETE",
+      `${ARTIFACTS_BASE_PATH}/:hash`,
+      "Deletes an artifact from object storage.",
+      "deploy-token",
+    ],
+    [
+      "POST",
+      `${ARTIFACTS_BASE_PATH}/gc`,
+      "Runs mark-and-sweep artifact garbage collection.",
+      "deploy-token",
+    ],
+  ].map(([method, path, summary, auth]) => ({
+    method: method as ApiEndpointDescription["method"],
+    path,
+    summary,
+    auth: auth as ApiEndpointDescription["auth"],
+  }));
 }
 
 function internalEndpoints(): ApiEndpointDescription[] {

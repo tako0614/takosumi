@@ -202,9 +202,9 @@ Deno.test("TakosumiInternalClient signs routed service requests", async () => {
     baseUrl: "https://git.internal",
     secret: "test-secret",
     clock: () => new Date("2026-05-01T00:00:00.000Z"),
-    fetch: async (input, init) => {
+    fetch: (input, init) => {
       calls.push(new Request(input, init));
-      return Response.json({ ok: true });
+      return Promise.resolve(Response.json({ ok: true }));
     },
   });
 

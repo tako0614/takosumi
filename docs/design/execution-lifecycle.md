@@ -76,8 +76,8 @@ re-resolved recovery:
 ## Dry materialization & approval carry
 
 When resolution surfaces a `require-approval` Risk, the kernel produces a
-**dry-materialized prediction** that captures the effect digests an
-approver is asked to consent to:
+**dry-materialized prediction** that captures the effect digests an approver is
+asked to consent to:
 
 ```text
 predictedActualEffectsDigest:
@@ -102,16 +102,16 @@ Approval:
 ```
 
 The next apply must observe a matching prediction digest. If any of the
-[Approval invalidation triggers](./policy-risk-approval-error-model.md)
-fire between approval and apply, the prediction digest will not match
-and the approval is invalidated; apply fails closed at the
-`pre-commit` stage of the
+[Approval invalidation triggers](./policy-risk-approval-error-model.md) fire
+between approval and apply, the prediction digest will not match and the
+approval is invalidated; apply fails closed at the `pre-commit` stage of the
 [Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md).
 A new approval cycle must run with the new prediction.
 
 ## Production concurrency
 
-Production must serialize these operations within a Space, and global ingress reservation may also require operator-global serialization:
+Production must serialize these operations within a Space, and global ingress
+reservation may also require operator-global serialization:
 
 ```text
 GroupHead update

@@ -1,8 +1,9 @@
 # Risk Taxonomy
 
-> Stability: stable
-> Audience: kernel-implementer, operator
-> See also: [Approval Invalidation Triggers](/reference/approval-invalidation), [WAL Stages](/reference/wal-stages), [RevokeDebt Model](/reference/revoke-debt)
+> Stability: stable Audience: kernel-implementer, operator See also:
+> [Approval Invalidation Triggers](/reference/approval-invalidation),
+> [WAL Stages](/reference/wal-stages),
+> [RevokeDebt Model](/reference/revoke-debt)
 
 Takosumi v1 で plan / apply pipeline が発火しうる Risk の closed enum (19 値)
 を、stable id ベースで定義する reference です。各 Risk は plan 出力上の
@@ -13,10 +14,10 @@ Takosumi v1 で plan / apply pipeline が発火しうる Risk の closed enum (1
 
 両者は別の concept です。混同しないこと:
 
-- **Risk**: plan 出力時の判定点。`allow` / `deny` / `require-approval` の
-  3 値で resolve され、approve 可能。binding が approval record に乗る。
-- **Error**: operation result の失敗理由 (DomainErrorCode / LifecycleErrorBody)。
-  approve 対象ではなく、再 plan / 再 apply で解消する。
+- **Risk**: plan 出力時の判定点。`allow` / `deny` / `require-approval` の 3 値で
+  resolve され、approve 可能。binding が approval record に乗る。
+- **Error**: operation result の失敗理由 (DomainErrorCode /
+  LifecycleErrorBody)。 approve 対象ではなく、再 plan / 再 apply で解消する。
 
 Risk が stage 進行中に再評価されて approval が崩れる経路は
 [Approval Invalidation Triggers](/reference/approval-invalidation) に従う。
@@ -28,8 +29,8 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 - **stable id**: enum の wire 値。永続化される。
 - **発火 stage**: `prepare` / `pre-commit` / `commit` / `post-commit` /
   `observe` / `finalize` のうち、実際に Risk が emit されうる stage。
-- **severity**: `warning` / `error`。`error` severity は approval 無しでは
-  必ず `deny` になる。
+- **severity**: `warning` / `error`。`error` severity は approval 無しでは 必ず
+  `deny` になる。
 - **invalidation trigger**: 当該 Risk に関連する approval invalidation trigger
   番号 (1-6、詳細は [approval-invalidation](/reference/approval-invalidation))。
 - **fix kind**: `safeFix` / `requiresPolicyReview` / `operatorFix` のうち
@@ -37,9 +38,9 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 1. `secret-projection`
 
-- **意味**: managed secret が DesiredSnapshot から projection される際、
-  raw 値が manifest / output / log 上に露出する可能性を示す。projection を
-  approve しない限り secret は materialize されない。
+- **意味**: managed secret が DesiredSnapshot から projection される際、 raw
+  値が manifest / output / log 上に露出する可能性を示す。projection を approve
+  しない限り secret は materialize されない。
 - **発火 stage**: `prepare`
 - **severity**: `error`
 - **invalidation trigger**: 2
@@ -124,8 +125,8 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 11. `shadowed-namespace`
 
-- **意味**: namespace export 上で同名 export が複数 source から提供され、
-  どれを bind するか policy 解決が要る。
+- **意味**: namespace export 上で同名 export が複数 source から提供され、 どれを
+  bind するか policy 解決が要る。
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 4, 5
@@ -133,8 +134,8 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 12. `space-export-share`
 
-- **意味**: 新 SpaceExportShare を draft → active に遷移させる、または既存
-  share を更新する。
+- **意味**: 新 SpaceExportShare を draft → active に遷移させる、または既存 share
+  を更新する。
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 6
@@ -151,8 +152,8 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 14. `actual-effects-overflow`
 
-- **意味**: connector が `commit` / `post-commit` で報告した actual-effects
-  が `predictedActualEffectsDigest` を超過した。
+- **意味**: connector が `commit` / `post-commit` で報告した actual-effects が
+  `predictedActualEffectsDigest` を超過した。
 - **発火 stage**: `commit`, `post-commit`
 - **severity**: `error`
 - **invalidation trigger**: 2
@@ -195,8 +196,8 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 19. `transform-unapproved`
 
-- **意味**: DataAsset transform / artifactPolicy.perKey 上で未承認の transform
-  が実行されようとしている。
+- **意味**: design-reserved DataAsset transform が未承認のまま実行されようと
+  している。
 - **発火 stage**: `pre-commit`
 - **severity**: `error`
 - **invalidation trigger**: 2
@@ -206,15 +207,15 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 - `error` severity の Risk は approval grant が無いと plan が `deny` される。
   approve すれば `allow` に転じる。
-- `warning` severity の Risk は default policy 次第で `allow` / `require-approval`
-  のどちらにもなる。policy pack で fine-tune する。
+- `warning` severity の Risk は default policy 次第で `allow` /
+  `require-approval` のどちらにもなる。policy pack で fine-tune する。
 - 1 つの plan に複数 Risk が同時に発火することは普通にあり、approval record
   はそれらをまとめて `approvedEffects` set として保持する。
 
 ## Fix kind の意味
 
-- `safeFix`: kernel / CLI が automatically 提示できる修正案がある (例:
-  literal を managed secret に置き換える、traffic 配分を rollback 互換に直す)。
+- `safeFix`: kernel / CLI が automatically 提示できる修正案がある (例: literal
+  を managed secret に置き換える、traffic 配分を rollback 互換に直す)。
 - `requiresPolicyReview`: policy pack / approval flow を経由しないと進めない。
   operator 単独では解消しない。
 - `operatorFix`: operator の手動操作 (export refresh / catalog signature
@@ -223,17 +224,17 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 ## RFC 要件
 
 新 Risk kind の追加は plan / approval / WAL のすべてに影響するため、
-`CONVENTIONS.md` §6 の RFC を要する。stable id は付与後 rename しない。
-削除も同 RFC 経路で legacy id の wire 互換期間を確保した上で行う。
+`CONVENTIONS.md` §6 の RFC を要する。stable id は付与後 rename しない。 削除も同
+RFC 経路で legacy id の wire 互換期間を確保した上で行う。
 
 ## Related design notes
 
 本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
 
-- `docs/design/policy-risk-approval-error-model.md` — Risk vs Error の境界、
-  19 値 enum の選定理由、severity / fix kind の設計議論
+- `docs/design/policy-risk-approval-error-model.md` — Risk vs Error の境界、 19
+  値 enum の選定理由、severity / fix kind の設計議論
 - `docs/design/operation-plan-write-ahead-journal-model.md` —
   `actual-effects-overflow` / `rollback-revalidation-required` の WAL 上での
   位置付け
-- `docs/design/observation-drift-revokedebt-model.md` — `revoke-debt-created`
-  と observe / finalize stage の連動
+- `docs/design/observation-drift-revokedebt-model.md` — `revoke-debt-created` と
+  observe / finalize stage の連動

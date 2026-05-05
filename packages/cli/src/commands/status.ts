@@ -16,43 +16,45 @@ import { callKernel } from "../remote_client.ts";
  * route, the operator's kernel build does not expose status reporting yet —
  * we surface that explicitly rather than printing an empty table.
  */
-export const statusCommand = new Command()
-  .description("Show current deployment status (remote kernel only)")
-  .arguments("[name:string]")
-  .option("--remote <url:string>", "Remote kernel URL")
-  .option("--token <token:string>", "Auth token")
-  .action(async ({ remote, token }, name) => {
-    const target = resolveMode({ remote, token }, await loadConfig());
-    if (target.mode !== "remote") {
-      console.log(
-        "local mode does not maintain deployment state — use --remote " +
-          "<kernel-url> to query a running kernel.",
-      );
-      return;
-    }
-    const path = name
-      ? `/v1/deployments/${encodeURIComponent(name)}`
-      : "/v1/deployments";
-    const { status, body } = await callKernel({
-      url: target.url,
-      token: target.token,
-      path,
-      method: "GET",
+function createStatusCommand() {
+  return new Command()
+    .description("Show current deployment status (remote kernel only)")
+    .arguments("[name:string]")
+    .option("--remote <url:string>", "Remote kernel URL")
+    .option("--token <token:string>", "Auth token")
+    .action(async ({ remote, token }, name) => {
+      const target = resolveMode({ remote, token }, await loadConfig());
+      if (target.mode !== "remote") {
+        console.log(
+          "local mode does not maintain deployment state — use --remote " +
+            "<kernel-url> to query a running kernel.",
+        );
+        return;
+      }
+      const path = name
+        ? `/v1/deployments/${encodeURIComponent(name)}`
+        : "/v1/deployments";
+      const { status, body } = await callKernel({
+        url: target.url,
+        token: target.token,
+        path,
+        method: "GET",
+      });
+      if (status === 404) {
+        console.error(
+          `kernel at ${target.url} did not expose ${path} (HTTP 404). The ` +
+            `kernel build may not yet support status queries — upgrade the ` +
+            `kernel or use the internal control-plane API.`,
+        );
+        Deno.exit(1);
+      }
+      if (status >= 400) {
+        console.error(`kernel returned ${status}:`, body);
+        Deno.exit(1);
+      }
+      renderStatus(body);
     });
-    if (status === 404) {
-      console.error(
-        `kernel at ${target.url} did not expose ${path} (HTTP 404). The ` +
-          `kernel build may not yet support status queries — upgrade the ` +
-          `kernel or use the internal control-plane API.`,
-      );
-      Deno.exit(1);
-    }
-    if (status >= 400) {
-      console.error(`kernel returned ${status}:`, body);
-      Deno.exit(1);
-    }
-    renderStatus(body);
-  });
+}
 
 function renderStatus(body: unknown): void {
   const rows = extractRows(body);
@@ -66,6 +68,7 @@ function renderStatus(body: unknown): void {
     { key: "shape", label: "shape" },
     { key: "provider", label: "provider" },
     { key: "status", label: "status" },
+    { key: "journal", label: "journal" },
   ];
   const widths = columns.map(({ key, label }) =>
     Math.max(
@@ -140,6 +143,7 @@ function flattenDeployments(
         shape: "",
         provider: "",
         status: deploymentStatus,
+        journal: formatJournalSummary(deployment.journal),
       });
       continue;
     }
@@ -156,10 +160,26 @@ function flattenDeployments(
         // the per-resource `status` field).
         status: (resource as Record<string, unknown>).status ??
           deploymentStatus,
+        journal: formatJournalSummary(deployment.journal),
       });
     }
   }
   return rows;
+}
+
+function formatJournalSummary(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
+  const journal = value as Record<string, unknown>;
+  const phase = typeof journal.phase === "string" ? journal.phase : "";
+  const stage = typeof journal.latestStage === "string"
+    ? journal.latestStage
+    : "";
+  const status = typeof journal.status === "string" ? journal.status : "";
+  if (!phase && !stage && !status) return "";
+  const prefix = phase && stage ? `${phase}:${stage}` : phase || stage;
+  return status ? `${prefix}/${status}` : prefix;
 }
 
 function readField(
@@ -176,3 +196,6 @@ function readField(
   if (key === "status" && row.state !== undefined) return row.state;
   return undefined;
 }
+
+export const statusCommand: ReturnType<typeof createStatusCommand> =
+  createStatusCommand();

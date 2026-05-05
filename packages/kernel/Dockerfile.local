@@ -1,22 +1,14 @@
 FROM denoland/deno:2.7.10
 
-WORKDIR /workspace
+WORKDIR /workspace/takosumi
 
-COPY deno.json deno.lock ./
-COPY apps/paas/deno.json apps/paas/deno.json
-COPY packages/paas-contract/deno.json packages/paas-contract/deno.json
+# Build this Dockerfile from the takosumi repository root:
+#   docker build -f packages/kernel/Dockerfile.local .
+COPY . .
 
-COPY packages/paas-contract packages/paas-contract
-COPY apps/paas apps/paas
-
-RUN test -f apps/paas/src/domains/deploy/descriptors/contracts/runtime-oci-container-v1.jsonld \
-  && mkdir -p /workspace/apps/paas/docs/takosumi/descriptors \
-  && cp -R apps/paas/src/domains/deploy/descriptors/. /workspace/apps/paas/docs/takosumi/descriptors/
-
-RUN deno cache --config apps/paas/deno.json apps/paas/src/index.ts
-
-WORKDIR /workspace/apps/paas
-
+ENV TAKOSUMI_PROCESS_ROLE=takosumi-api
 ENV PORT=8788
 
-CMD ["deno", "task", "dev"]
+EXPOSE 8788
+
+CMD ["deno", "run", "--config", "deno.json", "--allow-all", "packages/kernel/src/index.ts"]

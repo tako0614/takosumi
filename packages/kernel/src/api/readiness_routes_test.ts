@@ -67,11 +67,38 @@ Deno.test("readiness route returns service unavailable for failed probes", async
   });
 });
 
+Deno.test("readiness route returns service unavailable for booting probes", async () => {
+  const app = createApp({
+    ready: () => ({
+      ok: false,
+      state: "booting",
+      reason: "worker daemon has not completed an initial tick",
+    }),
+    live: () => ({ ok: true }),
+    statusSummary: () => activeStatusSummary,
+  });
+
+  const ready = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.ready);
+
+  assert.equal(ready.status, 503);
+  assert.deepEqual(await ready.json(), {
+    error: {
+      code: "readiness_probe_failed",
+      message: "worker daemon has not completed an initial tick",
+      details: {
+        ok: false,
+        state: "booting",
+        reason: "worker daemon has not completed an initial tick",
+      },
+    },
+  });
+});
+
 Deno.test("status summary route returns existing projection DTO", async () => {
   const app = createApp({
     ready: () => ({ ok: true }),
     live: () => ({ ok: true }),
-    statusSummary: async () => activeStatusSummary,
+    statusSummary: () => activeStatusSummary,
   });
 
   const response = await app.request(

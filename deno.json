@@ -52,6 +52,10 @@
     "docs:preview": "cd docs && npx vitepress preview"
   },
   "fmt": {
-    "exclude": ["docs/.vitepress/cache", "docs/.vitepress/dist", "docs/node_modules"]
+    "exclude": [
+      "docs/.vitepress/cache",
+      "docs/.vitepress/dist",
+      "docs/node_modules"
+    ]
   }
 }

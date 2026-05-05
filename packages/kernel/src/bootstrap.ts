@@ -11,6 +11,9 @@ import { loadKernelPluginsFromEnv } from "./plugins/mod.ts";
 import { isPaaSProcessRole, type PaaSProcessRole } from "./process/mod.ts";
 import type { WorkerDaemonHandle } from "./workers/daemon.ts";
 import type { SqlClient } from "./adapters/storage/sql.ts";
+import type { DeployPublicIdempotencyStore } from "./domains/deploy/deploy_public_idempotency_store.ts";
+import type { OperationJournalStore } from "./domains/deploy/operation_journal.ts";
+import type { RevokeDebtStore } from "./domains/deploy/revoke_debt_store.ts";
 import type { TakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store.ts";
 import { registerBundledShapesAndProviders } from "./bootstrap/registry_setup.ts";
 import {
@@ -21,6 +24,9 @@ import {
 import { createRoleReadinessProbes } from "./bootstrap/readiness.ts";
 import {
   buildDeployPublicRouteOptions,
+  resolveDeployPublicIdempotencyStore,
+  resolveOperationJournalStore,
+  resolveRevokeDebtStore,
   resolveTakosumiDeploymentRecordStore,
 } from "./bootstrap/deploy_record_store.ts";
 
@@ -34,9 +40,12 @@ export interface CreatePaaSAppOptions extends AppContextOptions {
   /**
    * Optional SQL client used to back persistence-sensitive records. When
    * supplied, bootstrap instantiates `SqlTakosumiDeploymentRecordStore`
-   * so the public deploy lifecycle (`POST /v1/deployments` plus the
-   * artifact GC mark-and-sweep) survives kernel restarts. When absent,
-   * bootstrap falls back to the in-memory store; that loses deploy
+   * `SqlDeployPublicIdempotencyStore`, `SqlOperationJournalStore`, and
+   * `SqlRevokeDebtStore` so the public deploy lifecycle
+   * (`POST /v1/deployments` plus artifact GC, idempotency replay, WAL stage
+   * records, compensation debt, and the per-deployment apply / destroy lock)
+   * survives kernel restarts and is fenced across kernel pods.
+   * When absent, bootstrap falls back to in-memory stores; those lose deploy
    * state on any restart and should only be used in tests / dev.
    *
    * The `index.ts` boot path constructs this from `TAKOSUMI_DATABASE_URL`
@@ -49,6 +58,9 @@ export interface CreatePaaSAppOptions extends AppContextOptions {
    * inject a hand-rolled fake without standing up a SqlClient.
    */
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
+  readonly takosumiDeployIdempotencyStore?: DeployPublicIdempotencyStore;
+  readonly takosumiOperationJournalStore?: OperationJournalStore;
+  readonly takosumiRevokeDebtStore?: RevokeDebtStore;
 }
 
 export interface CreatedPaaSApp {
@@ -72,31 +84,54 @@ export async function createPaaSApp(
     runtimeConfig,
     plugins: options.plugins ?? await loadKernelPluginsFromEnv(runtimeEnv),
   });
+  const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
+  const deploySpaceId = nonEmptyEnv(runtimeEnv.TAKOSUMI_DEPLOY_SPACE_ID);
+  const fetchToken = runtimeEnv.TAKOSUMI_ARTIFACT_FETCH_TOKEN;
+  const metricsScrapeToken = runtimeEnv.TAKOSUMI_METRICS_SCRAPE_TOKEN;
+  const artifactMaxBytes = parsePositiveIntegerEnv(
+    runtimeEnv.TAKOSUMI_ARTIFACT_MAX_BYTES,
+  );
+  const deployLockLeaseMs = parsePositiveIntegerEnv(
+    runtimeEnv.TAKOSUMI_LOCK_LEASE_MS,
+  );
+  const deployLockHeartbeatMs = parsePositiveIntegerEnv(
+    runtimeEnv.TAKOSUMI_LOCK_HEARTBEAT_MS,
+  );
+  // Build the takosumi deploy record store. SqlClient wins so production
+  // restarts no longer wipe `(tenantId, name) → applied[]` mappings and
+  // multiple API pods share the same apply / destroy lease. Without SQL,
+  // the kernel falls back to the in-memory store, which is fine for tests
+  // / single-process dev but loses every applied / destroyed record on
+  // process exit.
+  const recordStore = resolveTakosumiDeploymentRecordStore({
+    takosumiDeploymentRecordStore: options.takosumiDeploymentRecordStore,
+    sqlClient: options.sqlClient,
+    ...(deployLockLeaseMs !== undefined ? { deployLockLeaseMs } : {}),
+    ...(deployLockHeartbeatMs !== undefined ? { deployLockHeartbeatMs } : {}),
+  });
+  const idempotencyStore = resolveDeployPublicIdempotencyStore(options);
+  const operationJournalStore = resolveOperationJournalStore(options);
+  const revokeDebtStore = resolveRevokeDebtStore(options);
   const workerDaemonState = createWorkerDaemonState();
   const workerDaemon = shouldStartWorkerDaemon(role, options)
     ? createRoleWorkerDaemon({
       role,
       context,
       runtimeEnv,
+      deploymentRecordStore: recordStore,
+      revokeDebtStore,
       onTick: workerDaemonState.onTick,
     }).start()
     : undefined;
-  const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
-  const fetchToken = runtimeEnv.TAKOSUMI_ARTIFACT_FETCH_TOKEN;
-  const artifactMaxBytes = parsePositiveIntegerEnv(
-    runtimeEnv.TAKOSUMI_ARTIFACT_MAX_BYTES,
-  );
-  // Build the takosumi deploy record store. SqlClient wins so
-  // production restarts no longer wipe `(tenantId, name) → applied[]`
-  // mappings; without it the kernel falls back to the in-memory store
-  // which is fine for tests / single-process dev but loses every
-  // applied / destroyed record on process exit.
-  const recordStore = resolveTakosumiDeploymentRecordStore(options);
   const deployPublicRouteOptions = role === "takosumi-api" && deployToken
     ? buildDeployPublicRouteOptions({
       context,
       deployToken,
+      deploySpaceId,
       recordStore,
+      idempotencyStore,
+      operationJournalStore,
+      revokeDebtStore,
     })
     : undefined;
   const app = await createApiApp({
@@ -111,6 +146,14 @@ export async function createPaaSApp(
     registerArtifactRoutes: role === "takosumi-api" &&
       Boolean(deployToken) &&
       Boolean(context.adapters?.objectStorage),
+    registerMetricsRoutes: role === "takosumi-api" &&
+      Boolean(metricsScrapeToken),
+    metricsRouteOptions: metricsScrapeToken
+      ? {
+        observability: context.adapters.observability,
+        getScrapeToken: () => metricsScrapeToken,
+      }
+      : undefined,
     artifactRouteOptions: deployToken && context.adapters?.objectStorage
       ? {
         getDeployToken: () => deployToken,
@@ -155,4 +198,9 @@ function parsePositiveIntegerEnv(
   if (!value) return undefined;
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function nonEmptyEnv(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }

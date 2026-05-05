@@ -24,11 +24,17 @@ class FakeAuditSqlClient implements SqlClient {
   readonly rows: AuditRow[] = [];
   failOnNextInsert = false;
 
-  async query<Row extends Record<string, unknown>>(
+  query<Row extends Record<string, unknown>>(
     sql: string,
     parameters?: SqlParameters,
   ): Promise<SqlQueryResult<Row>> {
-    return await this.#execute(sql, parameters) as SqlQueryResult<Row>;
+    try {
+      return Promise.resolve(
+        this.#execute(sql, parameters) as SqlQueryResult<Row>,
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   async transaction<T>(
@@ -47,10 +53,10 @@ class FakeAuditSqlClient implements SqlClient {
     }
   }
 
-  async #execute(
+  #execute(
     sql: string,
     parameters?: SqlParameters,
-  ): Promise<SqlQueryResult> {
+  ): SqlQueryResult {
     const normalized = sql.trim().toLowerCase();
     if (normalized.startsWith("insert into audit_events")) {
       if (this.failOnNextInsert) {

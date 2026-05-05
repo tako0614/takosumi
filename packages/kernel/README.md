@@ -29,18 +29,21 @@ Most operators run the kernel via the CLI:
 - `destroyV2` — reverse-order teardown with persisted handle resolution
 - `TakosumiDeploymentRecordStore` — persists `(manifest, applied[],
   status)`.
-  SQL backend via `TAKOSUMI_DATABASE_URL`, in-memory fallback.
+  SQL backend via `TAKOSUMI_DATABASE_URL` also persists the public deploy lease
+  lock and public OperationPlan WAL stage records; in-memory fallback is dev /
+  test only.
 
 ## Required env (production)
 
-| Env var                                         | Description                                          |
-| ----------------------------------------------- | ---------------------------------------------------- |
-| `TAKOSUMI_DATABASE_URL`                         | Postgres URL for state / record store                |
-| `TAKOSUMI_ENCRYPTION_KEY`                       | Symmetric key for at-rest secret encryption          |
-| `TAKOSUMI_DEPLOY_TOKEN`                         | Bearer for `POST /v1/deployments` and artifact write |
-| `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN`   | runtime-agent locator                                |
-| `TAKOSUMI_AUDIT_REPLICATION_KIND` + sink config | external audit replica                               |
-| `TAKOSUMI_ENVIRONMENT=production`               | gates strict-runtime adapter check                   |
+| Env var                                         | Description                                           |
+| ----------------------------------------------- | ----------------------------------------------------- |
+| `TAKOSUMI_DATABASE_URL`                         | Postgres URL for state / record store                 |
+| `TAKOSUMI_ENCRYPTION_KEY`                       | Symmetric key for at-rest secret encryption           |
+| `TAKOSUMI_DEPLOY_TOKEN`                         | Bearer for `POST /v1/deployments` and artifact write  |
+| `TAKOSUMI_DEPLOY_SPACE_ID`                      | Public deploy Space scope (default `takosumi-deploy`) |
+| `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN`   | runtime-agent locator                                 |
+| `TAKOSUMI_AUDIT_REPLICATION_KIND` + sink config | external audit replica                                |
+| `TAKOSUMI_ENVIRONMENT=production`               | gates strict-runtime adapter check                    |
 
 For dev:
 
