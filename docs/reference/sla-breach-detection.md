@@ -21,9 +21,9 @@ compute service credits, render status pages, or own the customer communication
 path.
 
 ::: info Current HTTP status The SLA threshold and query endpoints in this
-reference are a design / service contract. The current kernel HTTP router does
-not mount `/api/internal/v1/sla`; see
-[Kernel HTTP API — Design-Reserved Internal Surfaces](/reference/kernel-http-api#design-reserved-internal-surfaces).
+reference are a spec / service contract. The current kernel HTTP router does not
+mount `/api/internal/v1/sla`; see
+[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
 :::
 
 ## SLA dimensions (closed v1 set)
@@ -141,7 +141,7 @@ are independent per (dimension, scope, target).
 
 ## Reporting surface
 
-In the design-reserved internal HTTP surface, operators read SLA state through:
+In the spec-reserved internal HTTP surface, operators read SLA state through:
 
 `GET /api/internal/v1/sla`
 
@@ -223,11 +223,11 @@ exclusions, public status page rendering, customer-facing incident write-ups,
 and post-incident communication templates — lives in operator distributions such
 as `takos-private/`. The kernel ships detection and audit, and stops there.
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/operator-boundaries.md` — operator policy layer that acts on
-  breach signals.
-- `docs/design/operation-plan-write-ahead-journal-model.md` — apply pipeline
-  that produces apply-latency observations.
-- `docs/design/exposure-activation-model.md` — activation pipeline that produces
-  activation-latency observations.
+- `docs/reference/architecture/operator-boundaries.md` — operator policy layer
+  that acts on breach signals.
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
+  apply pipeline that produces apply-latency observations.
+- `docs/reference/architecture/exposure-activation-model.md` — activation
+  pipeline that produces activation-latency observations.

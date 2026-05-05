@@ -20,9 +20,9 @@ signals, and the audit primitives. The kernel emits signals; concrete email,
 Slack, SMS, in-app, and digest delivery live outside the kernel.
 
 ::: info Current HTTP status The notification pull endpoints in this reference
-are a design / service contract. The current kernel HTTP router does not mount
+are a spec / service contract. The current kernel HTTP router does not mount
 `/api/internal/v1/notifications`; see
-[Kernel HTTP API — Design-Reserved Internal Surfaces](/reference/kernel-http-api#design-reserved-internal-surfaces).
+[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
 :::
 
 ## Notification model
@@ -147,8 +147,8 @@ before a Membership transitions to `removed` carries the prior
 
 ## Pull-only delivery integration
 
-The kernel does not push to operator delivery systems. In the design-reserved
-HTTP surface, operators pull the signal queue:
+The kernel does not push to operator delivery systems. In the spec-reserved HTTP
+surface, operators pull the signal queue:
 
 - `GET /api/internal/v1/notifications` — list signals with cursor pagination.
   Filters on `category`, `spaceId`, `organizationId`, `severity`, and time
@@ -234,11 +234,12 @@ stack (for example, `takos-private/` or any other PaaS-provider front end). The
 kernel exposes the signal and audit primitives that those outer surfaces compose
 against.
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/operator-boundaries.md` — credential boundary that motivates the
-  pull-only delivery model.
-- `docs/design/policy-risk-approval-error-model.md` — approval and risk events
-  grounding the approval-related categories.
-- `docs/design/observation-drift-revokedebt-model.md` — RevokeDebt trigger
-  grounding the `revoke-debt-operator-action-required` category.
+- `docs/reference/architecture/operator-boundaries.md` — credential boundary
+  that motivates the pull-only delivery model.
+- `docs/reference/architecture/policy-risk-approval-error-model.md` — approval
+  and risk events grounding the approval-related categories.
+- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
+  RevokeDebt trigger grounding the `revoke-debt-operator-action-required`
+  category.

@@ -198,11 +198,12 @@ the bind site's declared input type. The kernel coerces under a closed rule set.
 A coercion failure is a static error in the resolution phase and surfaces with
 the bind site path in the error payload.
 
-## Related design notes
+## Related architecture notes
 
-- `design/snapshot-model` — derivation of the ResolutionSnapshot from the
-  resolved DAG.
-- `design/operation-plan-write-ahead-journal-model` — replay semantics when an
-  `unproduced output` resolution drives the consumer through a re-resolve.
-- `design/policy-risk-approval-error-model` — placement of the
+- `reference/architecture/snapshot-model` — derivation of the ResolutionSnapshot
+  from the resolved DAG.
+- `reference/architecture/operation-plan-write-ahead-journal-model` — replay
+  semantics when an `unproduced output` resolution drives the consumer through a
+  re-resolve.
+- `reference/architecture/policy-risk-approval-error-model` — placement of the
   `invalid_argument` code in the closed DomainErrorCode enum.

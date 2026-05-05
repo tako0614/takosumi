@@ -53,6 +53,12 @@ import {
 import type {
   CatalogReleaseVerificationResult,
 } from "../domains/registry/mod.ts";
+import type {
+  CatalogReleaseExecutableHookPackageResult,
+  CatalogReleaseExecutableHookRunner,
+  CatalogReleaseExecutableHookRunResult,
+  ExecutableCatalogHookInvocation,
+} from "../plugins/executable_hooks.ts";
 import {
   apiError,
   MalformedJsonRequestError,
@@ -239,6 +245,9 @@ export interface CatalogReleaseWalHookVerifier {
   verifyCurrentReleaseForSpace(
     spaceId: string,
   ): Promise<CatalogReleaseVerificationResult | undefined>;
+  runExecutableHooks?: CatalogReleaseExecutableHookRunner[
+    "runExecutableHooks"
+  ];
 }
 
 export function registerDeployPublicRoutes(
@@ -452,6 +461,7 @@ export function registerDeployPublicRoutes(
           verifier: catalogReleaseVerifier,
           spaceId: tenantId,
           stage: "pre-commit",
+          preview: operationPlan,
         });
         if (!preCommitHook.ok) {
           return await handleCatalogReleasePreCommitFailure({
@@ -505,6 +515,7 @@ export function registerDeployPublicRoutes(
             verifier: catalogReleaseVerifier,
             spaceId: tenantId,
             stage: "post-commit",
+            preview: operationPlan,
           });
           if (!postCommitHook.ok) {
             return await handleCatalogReleasePostCommitFailure({
@@ -599,6 +610,7 @@ export function registerDeployPublicRoutes(
         verifier: catalogReleaseVerifier,
         spaceId: tenantId,
         stage: "pre-commit",
+        preview: operationPlan,
       });
       if (!preCommitHook.ok) {
         return await handleCatalogReleasePreCommitFailure({
@@ -696,6 +708,7 @@ export function registerDeployPublicRoutes(
           verifier: catalogReleaseVerifier,
           spaceId: tenantId,
           stage: "post-commit",
+          preview: operationPlan,
         });
         if (!postCommitHook.ok) {
           return await handleCatalogReleasePostCommitFailure({
@@ -1195,9 +1208,10 @@ type CatalogReleaseWalHookResult =
     readonly ok: true;
     readonly status: "succeeded";
     readonly stage: CatalogReleaseWalHookStage;
-    readonly descriptorDigest: string;
-    readonly publisherId: string;
-    readonly publisherKeyId: string;
+    readonly descriptorDigest?: string;
+    readonly publisherId?: string;
+    readonly publisherKeyId?: string;
+    readonly executableHook?: CatalogReleaseExecutableHookRunResult;
   }
   | {
     readonly ok: false;
@@ -1207,12 +1221,16 @@ type CatalogReleaseWalHookResult =
     readonly message: string;
     readonly descriptorDigest?: string;
     readonly publisherKeyId?: string;
+    readonly executableHook?: CatalogReleaseExecutableHookRunResult & {
+      readonly ok: false;
+    };
   };
 
 async function invokeCatalogReleaseWalHook(input: {
   readonly verifier?: CatalogReleaseWalHookVerifier;
   readonly spaceId: string;
   readonly stage: CatalogReleaseWalHookStage;
+  readonly preview: OperationPlanPreview;
 }): Promise<CatalogReleaseWalHookResult> {
   if (!input.verifier) {
     return { ok: true, status: "skipped", stage: input.stage };
@@ -1238,6 +1256,30 @@ async function invokeCatalogReleaseWalHook(input: {
         : {}),
     };
   }
+  const executableHook = await input.verifier.runExecutableHooks?.(
+    executableHookInvocation({
+      spaceId: input.spaceId,
+      stage: input.stage,
+      preview: input.preview,
+      verification: verification.ok ? verification : undefined,
+    }),
+  );
+  if (executableHook && !executableHook.ok) {
+    return {
+      ok: false,
+      status: "failed",
+      stage: input.stage,
+      reason: executableHook.reason,
+      message: executableHook.message,
+      ...(verification.ok
+        ? {
+          descriptorDigest: verification.descriptorDigest,
+          publisherKeyId: verification.publisherKeyId,
+        }
+        : {}),
+      executableHook,
+    };
+  }
   return {
     ok: true,
     status: "succeeded",
@@ -1245,6 +1287,7 @@ async function invokeCatalogReleaseWalHook(input: {
     descriptorDigest: verification.descriptorDigest,
     publisherId: verification.publisherId,
     publisherKeyId: verification.publisherKeyId,
+    ...(executableHook ? { executableHook } : {}),
   };
 }
 
@@ -1389,16 +1432,110 @@ function catalogReleaseWalHookDetail(
         ? { descriptorDigest: hook.descriptorDigest }
         : {}),
       ...(hook.publisherKeyId ? { publisherKeyId: hook.publisherKeyId } : {}),
+      ...(hook.executableHook
+        ? { executableHook: executableHookDetail(hook.executableHook) }
+        : {}),
     };
   }
   return {
     kind: "takosumi.catalog-release-wal-hook@v1",
     stage: hook.stage,
     status: hook.status,
-    descriptorDigest: hook.descriptorDigest,
-    publisherId: hook.publisherId,
-    publisherKeyId: hook.publisherKeyId,
+    ...(hook.descriptorDigest
+      ? { descriptorDigest: hook.descriptorDigest }
+      : {}),
+    ...(hook.publisherId ? { publisherId: hook.publisherId } : {}),
+    ...(hook.publisherKeyId ? { publisherKeyId: hook.publisherKeyId } : {}),
+    ...(hook.executableHook
+      ? { executableHook: executableHookDetail(hook.executableHook) }
+      : {}),
   };
+}
+
+function executableHookInvocation(input: {
+  readonly spaceId: string;
+  readonly stage: CatalogReleaseWalHookStage;
+  readonly preview: OperationPlanPreview;
+  readonly verification?: CatalogReleaseVerificationResult & {
+    readonly ok: true;
+  };
+}): ExecutableCatalogHookInvocation {
+  return {
+    spaceId: input.spaceId,
+    stage: input.stage,
+    operationPlanDigest: input.preview.operationPlanDigest,
+    desiredSnapshotDigest: input.preview.desiredSnapshotDigest,
+    operations: input.preview.operations.map((operation) => ({
+      operationId: operation.operationId,
+      resourceName: operation.resourceName,
+      providerId: operation.providerId,
+      operationKind: operation.op === "create"
+        ? "materialize-create"
+        : "materialize-delete",
+      desiredDigest: operation.desiredDigest,
+      journalEntryId: operation.idempotencyKey.journalEntryId,
+      idempotencyKey: operation.idempotencyKey,
+    })),
+    ...(input.verification
+      ? {
+        catalogRelease: {
+          descriptorDigest: input.verification.descriptorDigest,
+          publisherId: input.verification.publisherId,
+          publisherKeyId: input.verification.publisherKeyId,
+        },
+      }
+      : {}),
+  };
+}
+
+function executableHookDetail(
+  hook: CatalogReleaseExecutableHookRunResult,
+): JsonObject {
+  if (hook.status === "skipped") {
+    return {
+      kind: "takosumi.catalog-release-executable-hook@v1",
+      stage: hook.stage,
+      status: hook.status,
+    };
+  }
+  if (!hook.ok) {
+    return {
+      kind: "takosumi.catalog-release-executable-hook@v1",
+      stage: hook.stage,
+      status: hook.status,
+      packageId: hook.packageId,
+      packageVersion: hook.packageVersion,
+      reason: hook.reason,
+      packages: executableHookPackageDetails(hook.packages),
+      ...(hook.metadata ? { metadata: hook.metadata } : {}),
+    };
+  }
+  return {
+    kind: "takosumi.catalog-release-executable-hook@v1",
+    stage: hook.stage,
+    status: hook.status,
+    packages: executableHookPackageDetails(hook.packages),
+  };
+}
+
+function executableHookPackageDetails(
+  packages: readonly CatalogReleaseExecutableHookPackageResult[],
+): JsonObject[] {
+  return packages.map((item) => {
+    const detail: JsonObject = {
+      packageId: item.packageId,
+      packageVersion: item.packageVersion,
+      status: item.status,
+    };
+    if (item.message) detail.message = item.message;
+    if (item.reason) detail.reason = item.reason;
+    if (isJsonObject(item.metadata)) detail.metadata = item.metadata;
+    return detail;
+  });
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function catalogReleaseWalHookDetailRequired(

@@ -5,6 +5,11 @@ import type {
   TrustedKernelPluginManifestEnvelope,
   TrustedKernelPluginPublisherKey,
 } from "./trusted_install.ts";
+import {
+  fetchKernelPluginMarketplaceIndex,
+  installKernelPluginMarketplacePackages,
+  type InstallKernelPluginMarketplacePackagesResult,
+} from "./marketplace.ts";
 
 export interface KernelPluginModule {
   readonly default?: TakosPaaSKernelPlugin | readonly TakosPaaSKernelPlugin[];
@@ -19,7 +24,7 @@ export async function loadKernelPluginsFromModules(
   for (const specifier of moduleSpecifiers) {
     if (!specifier.trim()) continue;
     const module = await import(specifier) as KernelPluginModule;
-    plugins.push(...pluginsFromModule(module, specifier));
+    plugins.push(...kernelPluginsFromModule(module, specifier));
   }
   return Object.freeze(plugins);
 }
@@ -47,6 +52,58 @@ export async function loadKernelPluginsFromEnv(
     raw.split(",").map((item) => item.trim()).filter(Boolean),
   );
   return Object.freeze([...trustedPlugins, ...dynamicPlugins]);
+}
+
+export async function loadKernelPluginMarketplacePackagesFromEnv(
+  env: Record<string, string | undefined> = Deno.env.toObject(),
+  options: {
+    readonly fetch?: typeof fetch;
+  } = {},
+): Promise<InstallKernelPluginMarketplacePackagesResult> {
+  const rawUrls = env.TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_URLS;
+  const rawPackages = env.TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_PACKAGES;
+  if (!rawUrls && !rawPackages) {
+    return {
+      packages: Object.freeze([]),
+      plugins: Object.freeze([]),
+      hookPackages: Object.freeze([]),
+    };
+  }
+  if (!rawUrls) {
+    throw new Error(
+      "TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_URLS is required for marketplace install",
+    );
+  }
+  if (!rawPackages) {
+    throw new Error(
+      "TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_PACKAGES is required for marketplace install",
+    );
+  }
+  const urls = commaList(rawUrls);
+  const packageRefs = commaList(rawPackages);
+  const fetchImpl = options.fetch ?? fetch;
+  const indexes = await Promise.all(
+    urls.map((url) =>
+      fetchKernelPluginMarketplaceIndex({ url, fetch: fetchImpl })
+    ),
+  );
+  const environment = normalizeEnvironment(
+    env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
+  );
+  return await installKernelPluginMarketplacePackages({
+    indexes,
+    packageRefs,
+    trustedKeys: parseJsonEnv<readonly TrustedKernelPluginPublisherKey[]>(
+      env.TAKOSUMI_KERNEL_PLUGIN_TRUST_KEYS,
+      "TAKOSUMI_KERNEL_PLUGIN_TRUST_KEYS",
+    ),
+    policy: parseJsonEnv<TrustedKernelPluginInstallPolicy>(
+      env.TAKOSUMI_KERNEL_PLUGIN_INSTALL_POLICY,
+      "TAKOSUMI_KERNEL_PLUGIN_INSTALL_POLICY",
+    ),
+    environment,
+    fetch: fetchImpl,
+  });
 }
 
 async function loadTrustedKernelPluginsFromEnv(
@@ -86,6 +143,12 @@ function parseJsonEnv<T>(value: string | undefined, key: string): T {
   return JSON.parse(value) as T;
 }
 
+function commaList(value: string): readonly string[] {
+  return Object.freeze(
+    value.split(",").map((item) => item.trim()).filter(Boolean),
+  );
+}
+
 function dynamicPluginModuleLoadingEnabled(
   env: Record<string, string | undefined>,
 ): boolean {
@@ -107,7 +170,7 @@ function normalizeEnvironment(value: string | undefined): string {
   return normalized;
 }
 
-function pluginsFromModule(
+export function kernelPluginsFromModule(
   module: KernelPluginModule,
   specifier: string,
 ): readonly TakosPaaSKernelPlugin[] {

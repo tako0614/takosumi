@@ -19,15 +19,15 @@ are current service contracts. The bootstrap path mounts `/metrics` on the API
 role when `TAKOSUMI_METRICS_SCRAPE_TOKEN` is set, and wraps the configured
 `ObservabilitySink` with native OTLP metric export when
 `TAKOSUMI_OTLP_METRICS_ENDPOINT` or standard `OTEL_EXPORTER_OTLP_*` endpoint env
-vars are set. OTLP traces remain a design target; the current native exporter
+vars are set. OTLP traces remain a target contract; the current native exporter
 emits metrics only. :::
 
 ## Export protocols
 
-The design target exports telemetry through two protocols at the same time.
+The target contract exports telemetry through two protocols at the same time.
 
 - **OpenTelemetry / OTLP (primary)** — push-based OTLP/HTTP JSON exporter for
-  metrics, plus the design target for traces and optional logs. The kernel
+  metrics, plus the target contract for traces and optional logs. The kernel
   exports metrics whenever `TAKOSUMI_OTLP_METRICS_ENDPOINT`,
   `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, or `OTEL_EXPORTER_OTLP_ENDPOINT` is
   set. OTLP is the protocol operators wire into a collector when they need
@@ -218,11 +218,11 @@ contractually safe across patch and minor versions.
   metrics keep working.
 - Removed metrics are not allowed within v1.
 
-## Related design notes
+## Related architecture notes
 
-- `design/observation-drift-revokedebt-model` — derivation of the drift, debt,
-  and observation gauges.
-- `design/operation-plan-write-ahead-journal-model` — WAL stage histogram label
-  rationale.
-- `design/operator-boundaries` — placement of the export surface inside the
-  kernel host trust boundary.
+- `reference/architecture/observation-drift-revokedebt-model` — derivation of
+  the drift, debt, and observation gauges.
+- `reference/architecture/operation-plan-write-ahead-journal-model` — WAL stage
+  histogram label rationale.
+- `reference/architecture/operator-boundaries` — placement of the export surface
+  inside the kernel host trust boundary.

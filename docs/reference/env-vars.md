@@ -7,16 +7,16 @@
 
 This page is the v1 catalog of `TAKOSUMI_*` environment variables. Each entry
 lists the consuming target, the type the value is parsed as, the default,
-whether the variable is required, and the design concept it relates to.
+whether the variable is required, and the spec concept it relates to.
 
 ::: info Current implementation scope This catalog includes both current boot
-variables and design-reserved variables for domain references whose HTTP routes
-or workers are not mounted yet. Current kernel boot code definitely parses the
-role / environment / public-route / deploy-token / internal-secret / database /
+variables and spec-reserved variables for domain references whose HTTP routes or
+workers are not mounted yet. Current kernel boot code definitely parses the role
+/ environment / public-route / deploy-token / internal-secret / database /
 artifact / plugin-selection / audit-retention / observation-retention /
 runtime-agent variables documented below. Domain-specific rows such as API key
 hashing, trial cleanup, SLA windows, support impersonation, auth-provider JSON,
-and quota-tier bootstrap are design contracts until their corresponding service
+and quota-tier bootstrap are spec contracts until their corresponding service
 routes or workers are wired. :::
 
 ## Precedence
@@ -45,7 +45,7 @@ across roles unless noted.
 
 ### Connectivity and identity
 
-| Variable                           | Type      | Default                        | Required                                | Consumer                                                                                       | Design concept          |
+| Variable                           | Type      | Default                        | Required                                | Consumer                                                                                       | Spec concept            |
 | ---------------------------------- | --------- | ------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------- |
 | `TAKOSUMI_PAAS_PROCESS_ROLE`       | enum      | `takosumi-api`                 | yes (production)                        | kernel boot, bootstrap                                                                         | role selection          |
 | `TAKOSUMI_PROCESS_ROLE`            | enum      | `takosumi-api`                 | no                                      | alias of `TAKOSUMI_PAAS_PROCESS_ROLE`; if both are set they must match                         | role selection          |
@@ -63,7 +63,7 @@ across roles unless noted.
 
 ### State and storage
 
-| Variable                           | Type            | Default                                        | Required                                   | Consumer                                                                                       | Design concept               |
+| Variable                           | Type            | Default                                        | Required                                   | Consumer                                                                                       | Spec concept                 |
 | ---------------------------------- | --------------- | ---------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------- | ---------------------------- |
 | `TAKOSUMI_DB_URL`                  | URL             | unset                                          | no                                         | shared alias for the active environment's database URL                                         | OperationJournal persistence |
 | `TAKOSUMI_DATABASE_URL`            | URL             | unset (in-memory fallback)                     | yes (production)                           | primary state DB; resolved when no env-specific override matches                               | OperationJournal persistence |
@@ -84,7 +84,7 @@ The kernel boot pipeline waits for each substrate to become ready before
 transitioning to `serving`. Each timeout below caps the wait window for one boot
 stage.
 
-| Variable                                           | Type              | Default | Required | Consumer                                        | Design concept     |
+| Variable                                           | Type              | Default | Required | Consumer                                        | Spec concept       |
 | -------------------------------------------------- | ----------------- | ------- | -------- | ----------------------------------------------- | ------------------ |
 | `TAKOSUMI_BOOT_TIMEOUT_STORAGE_SEC`                | integer (seconds) | `30`    | no       | kernel boot, storage substrate readiness        | Bootstrap protocol |
 | `TAKOSUMI_BOOT_TIMEOUT_LOCK_STORE_SEC`             | integer (seconds) | `30`    | no       | kernel boot, lock store readiness               | Bootstrap protocol |
@@ -95,7 +95,7 @@ stage.
 
 ### Audit replication and observation
 
-| Variable                                          | Type            | Default                 | Required              | Consumer                                                     | Design concept                  |
+| Variable                                          | Type            | Default                 | Required              | Consumer                                                     | Spec concept                    |
 | ------------------------------------------------- | --------------- | ----------------------- | --------------------- | ------------------------------------------------------------ | ------------------------------- |
 | `TAKOSUMI_AUDIT_RETENTION_REGIME`                 | enum            | `default`               | no                    | one of `default` / `pci-dss` / `hipaa` / `sox` / `regulated` | Operational Hardening Checklist |
 | `TAKOSUMI_AUDIT_RETENTION_DAYS`                   | integer (days)  | regime-derived          | no                    | per-deployment retention override                            | Operational Hardening Checklist |
@@ -118,7 +118,7 @@ stage.
 
 ### Worker daemon
 
-| Variable                                   | Type         | Default             | Required | Consumer                                       | Design concept             |
+| Variable                                   | Type         | Default             | Required | Consumer                                       | Spec concept               |
 | ------------------------------------------ | ------------ | ------------------- | -------- | ---------------------------------------------- | -------------------------- |
 | `TAKOSUMI_PAAS_WORKER_HEARTBEAT_FILE`      | path         | unset               | no       | path the worker daemon touches for liveness    | n/a                        |
 | `TAKOSUMI_PAAS_WORKER_POLL_INTERVAL_MS`    | integer (ms) | `250`               | no       | worker poll loop interval                      | WAL stages                 |
@@ -136,15 +136,17 @@ The kernel selects an Implementation per plugin port (`auth`, `coordination`,
 `object-storage`, `kms`, `secret-store`, `router-config`, `observability`,
 `runtime-agent`).
 
-| Variable                                                                                 | Type        | Default          | Required                            | Consumer                                                       | Design concept     |
+| Variable                                                                                 | Type        | Default          | Required                            | Consumer                                                       | Spec concept       |
 | ---------------------------------------------------------------------------------------- | ----------- | ---------------- | ----------------------------------- | -------------------------------------------------------------- | ------------------ |
 | `TAKOSUMI_<PORT>_PLUGIN` / `TAKOSUMI_<PORT>_PLUGIN_ID`                                   | string      | unset            | yes per port (production / staging) | plugin id selector for the named port                          | OperatorBoundaries |
 | `TAKOSUMI_KERNEL_PLUGIN_SELECTIONS` / `TAKOSUMI_KERNEL_PLUGIN_MAP`                       | JSON object | unset            | no                                  | bulk port-to-id map                                            | OperatorBoundaries |
 | `TAKOSUMI_KERNEL_PLUGIN_CONFIG` / `TAKOSUMI_KERNEL_PLUGIN_CONFIG_JSON`                   | JSON object | `{}`             | no                                  | merged plugin configuration                                    | OperatorBoundaries |
-| `TAKOSUMI_KERNEL_PLUGIN_MODULES`                                                         | JSON list   | unset            | no                                  | dynamic kernel plugin module list                              | OperatorBoundaries |
+| `TAKOSUMI_KERNEL_PLUGIN_MODULES`                                                         | CSV string  | unset            | no                                  | dynamic kernel plugin module specifiers (dev/reference only)   | OperatorBoundaries |
 | `TAKOSUMI_TRUSTED_KERNEL_PLUGIN_MANIFESTS` / `TAKOSUMI_KERNEL_PLUGIN_REGISTRY_MANIFESTS` | JSON list   | unset            | no                                  | trusted plugin manifest list                                   | OperatorBoundaries |
 | `TAKOSUMI_KERNEL_PLUGIN_TRUST_KEYS`                                                      | JSON list   | unset            | no                                  | trust public keys for plugin manifests                         | OperatorBoundaries |
-| `TAKOSUMI_KERNEL_PLUGIN_INSTALL_POLICY`                                                  | enum        | provider default | no                                  | plugin install policy (`require-signed`, etc.)                 | OperatorBoundaries |
+| `TAKOSUMI_KERNEL_PLUGIN_INSTALL_POLICY`                                                  | JSON object | unset            | no                                  | trusted install policy object                                  | OperatorBoundaries |
+| `TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_URLS`                                                | CSV string  | unset            | no                                  | remote plugin marketplace index URLs                           | OperatorBoundaries |
+| `TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_PACKAGES`                                            | CSV string  | unset            | no                                  | package refs to install from marketplace indexes               | OperatorBoundaries |
 | `TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON`                                                     | JSON object | provider default | no                                  | registry trust roots                                           | OperatorBoundaries |
 | `TAKOSUMI_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES`                                          | boolean     | `false`          | no                                  | enables the dynamic kernel plugin loader                       | OperatorBoundaries |
 | `TAKOSUMI_ENABLE_REFERENCE_KERNEL_PLUGIN_LOADER`                                         | boolean     | `false`          | no                                  | enables the reference plugin loader                            | OperatorBoundaries |
@@ -153,7 +155,7 @@ The kernel selects an Implementation per plugin port (`auth`, `coordination`,
 
 ### Identity and Access
 
-| Variable                             | Type          | Default       | Required | Consumer                                                      | Design concept     |
+| Variable                             | Type          | Default       | Required | Consumer                                                      | Spec concept       |
 | ------------------------------------ | ------------- | ------------- | -------- | ------------------------------------------------------------- | ------------------ |
 | `TAKOSUMI_AUTH_PROVIDERS_JSON`       | JSON list     | unset (empty) | no       | kernel server; declarative auth provider list applied at boot | Auth Providers     |
 | `TAKOSUMI_API_KEY_ARGON2_MEMORY_KIB` | integer (KiB) | `65536`       | no       | kernel server; argon2id memory cost for API key hashing       | API Key Management |
@@ -161,7 +163,7 @@ The kernel selects an Implementation per plugin port (`auth`, `coordination`,
 
 ### Tenant Lifecycle
 
-| Variable                                    | Type              | Default | Required | Consumer                                                                 | Design concept           |
+| Variable                                    | Type              | Default | Required | Consumer                                                                 | Spec concept             |
 | ------------------------------------------- | ----------------- | ------- | -------- | ------------------------------------------------------------------------ | ------------------------ |
 | `TAKOSUMI_TRIAL_EXPIRY_WARN_SECONDS`        | integer (seconds) | `86400` | no       | kernel server; window before trial expiry to emit warning notification   | Trial Spaces             |
 | `TAKOSUMI_TRIAL_FROZEN_GRACE_SECONDS`       | integer (seconds) | `86400` | no       | kernel server; grace window after trial freeze before automatic cleanup  | Trial Spaces             |
@@ -175,7 +177,7 @@ The kernel selects an Implementation per plugin port (`auth`, `coordination`,
 
 ### PaaS Operations
 
-| Variable                                   | Type              | Default | Required | Consumer                                                                         | Design concept        |
+| Variable                                   | Type              | Default | Required | Consumer                                                                         | Spec concept          |
 | ------------------------------------------ | ----------------- | ------- | -------- | -------------------------------------------------------------------------------- | --------------------- |
 | `TAKOSUMI_SLA_WINDOW_SECONDS`              | integer (seconds) | `300`   | no       | kernel server; rolling window granularity for SLA breach detection               | SLA Breach Detection  |
 | `TAKOSUMI_SUPPORT_SESSION_TTL_SECONDS`     | integer (seconds) | `3600`  | no       | kernel server; default TTL for accepted support impersonation sessions           | Support Impersonation |
@@ -184,7 +186,7 @@ The kernel selects an Implementation per plugin port (`auth`, `coordination`,
 
 ### Zone Configuration
 
-| Variable                          | Type              | Default              | Required | Consumer                                                                                         | Design concept |
+| Variable                          | Type              | Default              | Required | Consumer                                                                                         | Spec concept   |
 | --------------------------------- | ----------------- | -------------------- | -------- | ------------------------------------------------------------------------------------------------ | -------------- |
 | `TAKOSUMI_ZONES_AVAILABLE`        | string list (CSV) | unset (empty)        | no       | kernel server; closed list of zone ids selectable from manifests                                 | Zone Selection |
 | `TAKOSUMI_ZONE_DEFAULT`           | string            | unset                | no       | kernel server; zone applied when a Space provisioning request omits `zone`                       | Zone Selection |
@@ -196,7 +198,7 @@ The `takosumi` CLI reads its own variables and resolves a remote URL, token, and
 config-file path from them. See [CLI Reference](/reference/cli) for the full
 resolution order.
 
-| Variable                       | Type    | Default                  | Required                                | Consumer                                                                        | Design concept          |
+| Variable                       | Type    | Default                  | Required                                | Consumer                                                                        | Spec concept            |
 | ------------------------------ | ------- | ------------------------ | --------------------------------------- | ------------------------------------------------------------------------------- | ----------------------- |
 | `TAKOSUMI_REMOTE_URL`          | URL     | unset                    | yes for remote-only commands            | base URL of the kernel HTTP server                                              | n/a                     |
 | `TAKOSUMI_DEPLOY_TOKEN`        | secret  | unset                    | yes for deploy and artifact subcommands | bearer for `/v1/deployments` and `/v1/artifacts/*`                              | DataAsset Model         |
@@ -214,7 +216,7 @@ read from each SDK's standard variables (for example `AWS_*`,
 `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDFLARE_API_TOKEN`, `AZURE_*`); they are
 not part of the Takosumi catalog and must never live on the kernel host.
 
-| Variable                                    | Type   | Default           | Required                         | Consumer                                                                | Design concept          |
+| Variable                                    | Type   | Default           | Required                         | Consumer                                                                | Spec concept            |
 | ------------------------------------------- | ------ | ----------------- | -------------------------------- | ----------------------------------------------------------------------- | ----------------------- |
 | `TAKOSUMI_AGENT_TOKEN`                      | secret | random when unset | yes in remote topology           | bearer for the runtime-agent HTTP server                                | runtime-agent lifecycle |
 | `TAKOSUMI_KUBERNETES_API_SERVER_URL`        | URL    | unset             | yes for the Kubernetes connector | k8s API server URL                                                      | runtime-agent lifecycle |

@@ -393,10 +393,10 @@ space_id: string?
 The route hides cross-Space deployment ids as 404 and returns the same mutation
 response shape as resolve.
 
-### Design-Reserved Internal Surfaces
+### Spec-Reserved Internal Surfaces
 
 The following HTTP route families are documented in their domain references as
-design / service contracts, but they are **not current kernel HTTP routes** in
+spec / service contracts, but they are **not current kernel HTTP routes** in
 this repository:
 
 ```text

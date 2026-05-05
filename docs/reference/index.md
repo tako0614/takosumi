@@ -135,6 +135,8 @@ shape catalog / provider / template / artifact 拡張面。
 
 - [Shape Catalog](./shapes) — v1 shapes / outputFields / capability extension
 - [Provider Plugins](./providers) — v1 provider matrix / registerProvider
+- [Plugin Marketplace](./plugin-marketplace) — remote install / signed package
+  index / executable hook package
 - [Templates](./templates) — registerTemplate / expand immutability
 - [Artifact Kinds](./artifact-kinds) — DataAsset kind registry /
   registerArtifactKind

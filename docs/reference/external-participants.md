@@ -228,13 +228,14 @@ Internal API (see [Kernel HTTP API](/reference/kernel-http-api)):
 Every write requires the internal HMAC credential. Reads scope to participants
 whose `spaceVisibility` includes a Space the actor has `admin` or `read` on.
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/space-model.md` — ExternalParticipant identity origin and Space
-  visibility model.
-- `docs/design/namespace-export-model.md` — ExternalParticipant exports in the
-  namespace export tree and the shadowed-namespace resolution rule.
-- `docs/design/object-model.md` — `external` and `operator` lifecycle classes
-  and their relationship to ExternalParticipant ownership.
-- `docs/design/policy-risk-approval-error-model.md` — rationale for the
-  `implementation-unverified` Risk being non-approvable.
+- `docs/reference/architecture/space-model.md` — ExternalParticipant identity
+  origin and Space visibility model.
+- `docs/reference/architecture/namespace-export-model.md` — ExternalParticipant
+  exports in the namespace export tree and the shadowed-namespace resolution
+  rule.
+- `docs/reference/architecture/object-model.md` — `external` and `operator`
+  lifecycle classes and their relationship to ExternalParticipant ownership.
+- `docs/reference/architecture/policy-risk-approval-error-model.md` — rationale
+  for the `implementation-unverified` Risk being non-approvable.

@@ -18,11 +18,11 @@ types unilaterally. Adding a provider type, repurposing an existing type, or
 extending the verify contract requires the `CONVENTIONS.md` §6 RFC.
 
 ::: info Current HTTP status The auth-provider control-plane endpoints in this
-reference are a design / service contract. The current kernel HTTP router does
-not mount `/api/internal/v1/auth-providers`; see
-[Kernel HTTP API — Design-Reserved Internal Surfaces](/reference/kernel-http-api#design-reserved-internal-surfaces).
+reference are a spec / service contract. The current kernel HTTP router does not
+mount `/api/internal/v1/auth-providers`; see
+[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
 The `TAKOSUMI_AUTH_PROVIDERS_JSON` boot-time loader described below is also a
-design contract, not current boot code. :::
+spec contract, not current boot code. :::
 
 ## Closed provider type enum
 
@@ -168,17 +168,17 @@ an Actor's role set never spans provider boundaries.
 
 Two paths configure providers; operators pick one or use both.
 
-### Environment variable (design-reserved)
+### Environment variable (spec-reserved)
 
 ```text
 TAKOSUMI_AUTH_PROVIDERS_JSON
 ```
 
-A JSON array of `AuthProvider` records. The design target loads it at boot.
+A JSON array of `AuthProvider` records. The target contract loads it at boot.
 Useful for single-provider deployments and for bootstrap before the operator
 control plane is reachable.
 
-### Operator control plane (design-reserved)
+### Operator control plane (spec-reserved)
 
 ```text
 POST   /api/internal/v1/auth-providers
@@ -228,8 +228,8 @@ sign-in surface from outside (for example, in `takos-private/` or in a separate
 identity-provider stack). The kernel exposes the verify primitive that those
 outer surfaces compose against.
 
-## Related design notes
+## Related architecture notes
 
-- docs/design/policy-risk-approval-error-model.md
-- docs/design/snapshot-model.md
-- docs/design/space-model.md
+- docs/reference/architecture/policy-risk-approval-error-model.md
+- docs/reference/architecture/snapshot-model.md
+- docs/reference/architecture/space-model.md

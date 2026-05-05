@@ -14,9 +14,9 @@ rotate / revoke endpoints, the request and response shapes, the storage rule
 lifecycle.
 
 ::: info Current HTTP status The issue / rotate / revoke endpoints in this
-reference are a design / service contract. The current kernel HTTP router does
-not mount `/v1/api-keys` or `/api/internal/v1/api-keys`; see
-[Kernel HTTP API — Design-Reserved Internal Surfaces](/reference/kernel-http-api#design-reserved-internal-surfaces).
+reference are a spec / service contract. The current kernel HTTP router does not
+mount `/v1/api-keys` or `/api/internal/v1/api-keys`; see
+[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
 Current public deploy and artifact routes use `TAKOSUMI_DEPLOY_TOKEN` as the
 operator-provisioned bearer credential. :::
 
@@ -224,7 +224,7 @@ emitted unconditionally for every transition.
 
 ## Scope boundary
 
-The design surface includes the issue / rotate / revoke endpoints, the hash-only
+The spec surface includes the issue / rotate / revoke endpoints, the hash-only
 storage rule, the scope vocabulary, and the audit events listed above. The
 current kernel repository does not mount those HTTP routes. End-user-facing
 dashboards that list a customer's keys, copy-to-clipboard flows for the one-time
@@ -233,8 +233,8 @@ key-management page is **outside Takosumi's scope** and is implemented by the
 operator's outer stack (for example, `takos-private/`). The kernel exposes the
 storage and enforcement primitives that those outer surfaces compose against.
 
-## Related design notes
+## Related architecture notes
 
-- docs/design/policy-risk-approval-error-model.md
-- docs/design/snapshot-model.md
-- docs/design/space-model.md
+- docs/reference/architecture/policy-risk-approval-error-model.md
+- docs/reference/architecture/snapshot-model.md
+- docs/reference/architecture/space-model.md

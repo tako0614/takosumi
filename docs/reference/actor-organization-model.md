@@ -21,10 +21,10 @@ actor types, organization types, or membership states without a `CONVENTIONS.md`
 §6 RFC.
 
 ::: info Current HTTP status The organization and membership endpoints in this
-reference are a design / service contract. The current kernel HTTP router does
-not mount `/api/internal/v1/organizations` or public membership self-service
-routes; see [Kernel HTTP API](/reference/kernel-http-api) for current mounted
-routes. :::
+reference are a spec / service contract. The current kernel HTTP router does not
+mount `/api/internal/v1/organizations` or public membership self-service routes;
+see [Kernel HTTP API](/reference/kernel-http-api) for current mounted routes.
+:::
 
 ## Actor
 
@@ -228,7 +228,7 @@ may not drop the indexed columns above.
 
 ## Operator-only operations
 
-The following design-reserved operations are operator-only and run through the
+The following spec-reserved operations are operator-only and run through the
 internal control plane (`/api/internal/v1/*`), gated by HMAC:
 
 - `POST /api/internal/v1/organizations` — create.
@@ -252,8 +252,8 @@ by the operator's outer stack (for example, `takos-private/` or any other
 PaaS-provider front end). The kernel exposes the storage and enforcement
 primitives that those outer surfaces compose against.
 
-## Related design notes
+## Related architecture notes
 
-- docs/design/space-model.md
-- docs/design/policy-risk-approval-error-model.md
-- docs/design/snapshot-model.md
+- docs/reference/architecture/space-model.md
+- docs/reference/architecture/policy-risk-approval-error-model.md
+- docs/reference/architecture/snapshot-model.md

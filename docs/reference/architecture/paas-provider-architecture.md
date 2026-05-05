@@ -1,11 +1,13 @@
-# PaaS Provider Design
+# PaaS Provider Architecture
 
-This document defines the design-layer surface that Takosumi must expose when it
-is offered "as a PaaS". It records the deployment topology, the multi-tenant
-boundary, the trust chain, the operator-facing surface set, and the observable
-signals that allow an operator to run Takosumi as a tenant-bearing service.
+This document defines the architecture-layer surface that Takosumi must expose
+when it is offered "as a PaaS". It records the deployment topology, the
+multi-tenant boundary, the trust chain, the operator-facing surface set, and the
+observable signals that allow an operator to run Takosumi as a tenant-bearing
+service.
 
-This doc is design-layer only. Wire-level shape lives in the reference docs.
+This doc is architecture-layer only. Wire-level shape lives in the reference
+docs.
 
 ## PaaS deployment topology
 
@@ -19,8 +21,8 @@ federation            kernels exchange catalog releases or shares across operato
 
 Takosumi v1 targets **single-operator + multi-Space tenant model**.
 Multi-operator and federation are not supported by v1 contracts; they are
-intentionally left for future revisions and must not be assumed by v1 design
-decisions.
+intentionally left for future revisions and must not be assumed by v1
+architecture decisions.
 
 ## Multi-tenant boundary
 
@@ -63,11 +65,11 @@ an explicit `SpaceExportShare` or operator-approved namespace import. See
 
 ## Billing readiness surfaces
 
-Billing is external. The kernel does not implement billing logic. The kernel
-design must, however, expose measurement hooks so an external billing system can
-attach without scraping internal storage.
+Billing is external. The kernel does not implement billing logic. The
+architecture must, however, expose measurement hooks so an external billing
+system can attach without scraping internal storage.
 
-Three measurement surfaces are required at design level:
+Three measurement surfaces are required at architecture level:
 
 ```text
 ActivationSnapshot history       per-Space activation events drive "what is running" usage
@@ -75,7 +77,7 @@ OperationJournal retention       per-Space apply / activate / destroy volume dri
 ObservationSet cardinality       per-Space object / link / export count drives "footprint" usage
 ```
 
-Design rules:
+Architecture rules:
 
 - Each surface is queryable per `spaceId`.
 - Each surface emits monotonic event ids so an external collector can resume.
@@ -103,7 +105,7 @@ Trust rules:
 ## Operator UX surfaces
 
 Operator-facing surfaces are split across three channels. Every operator action
-belongs to exactly one of them at design level.
+belongs to exactly one of them at architecture level.
 
 ```text
 CLI                  takosumi-cli for human / scripted operator workflows
@@ -141,8 +143,8 @@ RevokeDebt aging             RevokeDebt createdAt to status terminal transition
 ```
 
 Each indicator is per-Space and time-bucketed. None of them are "alarm
-thresholds" at design level. They are the observable surface. Thresholding is
-operator policy.
+thresholds" at architecture level. They are the observable surface. Thresholding
+is operator policy.
 
 ## Disaster recovery boundary
 
@@ -176,37 +178,38 @@ observation after restore, not restored from backup as authority.
 The surfaces above (multi-tenant boundary, billing readiness, supply chain
 trust, operator UX, SLA observability, disaster recovery) describe what the
 kernel exposes for tenant-bearing service. The detailed rationale for the
-per-tenant primitives is split across three companion design docs, each scoped
-to one concern:
+per-tenant primitives is split across three companion architecture docs, each
+scoped to one concern:
 
-- [Identity and Access Design](./identity-and-access-design.md) — why Actor,
-  Organization, Membership, RBAC, API keys, and auth providers are kernel
-  primitives; why the role enum is closed and provider binding is immutable.
-- [Tenant Lifecycle Design](./tenant-lifecycle-design.md) — why provisioning is
-  a closed seven-stage idempotent sequence, why trial Spaces use a separate
-  lifecycle, and how export and two-phase deletion preserve audit chain
-  integrity.
-- [PaaS Operations Design](./paas-operations-design.md) — why quota tiers are
-  operator-named and kernel-enforced, why cost attribution is opaque metadata,
-  why SLA detection and incidents are kernel-side, why support impersonation is
-  a separate auth path, and why notifications are pull-only.
+- [Identity and Access Architecture](./identity-and-access-architecture.md) —
+  why Actor, Organization, Membership, RBAC, API keys, and auth providers are
+  kernel primitives; why the role enum is closed and provider binding is
+  immutable.
+- [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md) — why
+  provisioning is a closed seven-stage idempotent sequence, why trial Spaces use
+  a separate lifecycle, and how export and two-phase deletion preserve audit
+  chain integrity.
+- [PaaS Operations Architecture](./paas-operations-architecture.md) — why quota
+  tiers are operator-named and kernel-enforced, why cost attribution is opaque
+  metadata, why SLA detection and incidents are kernel-side, why support
+  impersonation is a separate auth path, and why notifications are pull-only.
 
-Together with the surfaces in this document, these three design docs define the
-kernel-side scope for v1 PaaS operation. Customer signup UIs, payment flows,
-status pages, branded notifications, ticket systems, SLA credit formulas, and
-admin escalation workflows compose on top of these primitives but live outside
-Takosumi (typically in `takos-private/` or another operator-owned distribution).
+Together with the surfaces in this document, these three architecture docs
+define the kernel-side scope for v1 PaaS operation. Customer signup UIs, payment
+flows, status pages, branded notifications, ticket systems, SLA credit formulas,
+and admin escalation workflows compose on top of these primitives but live
+outside Takosumi (typically in `takos-private/` or another operator-owned
+distribution).
 
 ## Cross-references
 
 - [Operator Boundaries](./operator-boundaries.md)
 - [Space Model](./space-model.md)
-- [Identity and Access Design](./identity-and-access-design.md)
-- [Tenant Lifecycle Design](./tenant-lifecycle-design.md)
-- [PaaS Operations Design](./paas-operations-design.md)
+- [Identity and Access Architecture](./identity-and-access-architecture.md)
+- [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md)
+- [PaaS Operations Architecture](./paas-operations-architecture.md)
 - [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
 - [Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
 - [Operational Hardening Checklist](./operational-hardening-checklist.md)
-- Reference: [CLI](../reference/cli.md),
-  [Kernel HTTP API](../reference/kernel-http-api.md),
-  [Lifecycle](../reference/lifecycle.md)
+- Reference: [CLI](../cli.md), [Kernel HTTP API](../kernel-http-api.md),
+  [Lifecycle](../lifecycle.md)

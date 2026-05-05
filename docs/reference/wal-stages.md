@@ -164,11 +164,12 @@ catalog-supplied hook は `pre-commit` / `post-commit` stage で kernel が
 
 Current public deploy implementation: when the route is wired from `AppContext`,
 the active CatalogRelease verification path is invoked as the pre/post-commit
-hook. `pre-commit` verification failure appends terminal `abort` before provider
-side effects. `post-commit` verification failure appends the hook failure,
-enqueues `approval-invalidated` RevokeDebt for committed operations, and records
-observe/finalize evidence. Catalog-declared executable hook packages are future
-work layered above this verification boundary.
+hook. Marketplace-installed executable hook packages run after that verification
+boundary. `pre-commit` verification or executable-hook failure appends terminal
+`abort` before provider side effects. `post-commit` verification or
+executable-hook failure appends the hook failure, enqueues
+`approval-invalidated` RevokeDebt for committed operations, and records
+observe/finalize evidence.
 
 ## Orphaned debt 経路
 
@@ -189,13 +190,14 @@ RevokeDebt の reason / status / aging window は
 を **enqueue する責務** だけを持ち、retry / aging の semantics は RevokeDebt
 subsystem に委ねる。
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/operation-plan-write-ahead-journal-model.md` — WAL stage 設計
-  の動機、idempotency tuple の derivation、catalog hook contract の議論
-- `docs/design/execution-lifecycle.md` — phase ↔ stage マッピングの設計
-  rationale と recovery mode の選定背景
-- `docs/design/observation-drift-revokedebt-model.md` — orphaned debt の
-  taxonomy と observe 経路の設計議論
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
+  WAL stage 設計 の動機、idempotency tuple の derivation、catalog hook contract
+  の議論
+- `docs/reference/architecture/execution-lifecycle.md` — phase ↔ stage
+  マッピングの設計 rationale と recovery mode の選定背景
+- `docs/reference/architecture/observation-drift-revokedebt-model.md` — orphaned
+  debt の taxonomy と observe 経路の設計議論

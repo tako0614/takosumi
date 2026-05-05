@@ -17,10 +17,10 @@ every state transition. The kernel ships the incident record, the state machine,
 and the audit primitives. Customer-facing status pages, incident timeline
 visualization, and notification rendering are out of scope for the kernel.
 
-::: info Current HTTP status The incident endpoints in this reference are a
-design / service contract. The current kernel HTTP router does not mount
+::: info Current HTTP status The incident endpoints in this reference are a spec
+/ service contract. The current kernel HTTP router does not mount
 `/api/internal/v1/incidents` or `/api/internal/v1/spaces/:id/incidents`; see
-[Kernel HTTP API — Design-Reserved Internal Surfaces](/reference/kernel-http-api#design-reserved-internal-surfaces).
+[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
 :::
 
 ## Incident definition
@@ -178,7 +178,7 @@ appends to the open incident; outside the window, a new incident is minted.
 
 ## Operator actions
 
-The design-reserved operator-only endpoints run through the internal control
+The spec-reserved operator-only endpoints run through the internal control
 plane, gated by HMAC (see [Kernel HTTP API](/reference/kernel-http-api)):
 
 - `POST /api/internal/v1/incidents` — declare an operator-declared incident.
@@ -245,7 +245,7 @@ keep the indexed columns above.
 
 ## Scope boundary
 
-The design surface includes the incident record, the state machine, the
+The spec surface includes the incident record, the state machine, the
 auto-detection triggers, the operator and customer-read endpoints listed above,
 and the audit chain. The current kernel repository does not mount those HTTP
 routes. Public-facing status page UI, customer notification template rendering,
@@ -255,11 +255,11 @@ implemented by the operator's outer stack (for example, `takos-private/` or any
 other PaaS-provider front end). The kernel exposes the storage and audit
 primitives that those outer surfaces compose against.
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/operator-boundaries.md` — operator vs. customer visibility rules
-  referenced by the customer-affecting query.
-- `docs/design/policy-risk-approval-error-model.md` — severity derivation and
-  trigger family mapping.
-- `docs/design/observation-drift-revokedebt-model.md` — RevokeDebt aging trigger
-  source.
+- `docs/reference/architecture/operator-boundaries.md` — operator vs. customer
+  visibility rules referenced by the customer-affecting query.
+- `docs/reference/architecture/policy-risk-approval-error-model.md` — severity
+  derivation and trigger family mapping.
+- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
+  RevokeDebt aging trigger source.

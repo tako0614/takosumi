@@ -447,12 +447,13 @@ See also: [Quota Tiers](/reference/quota-tiers),
 - [Notification Emission](/reference/notification-emission)
 - [Zone Selection](/reference/zone-selection)
 
-## Related design notes
+## Related architecture notes
 
-- `design/policy-risk-approval-error-model` — closed risk and approval enums
-  referenced by Approval events.
-- `design/operation-plan-write-ahead-journal-model` — WAL stage enum referenced
-  by Operation events.
-- `design/snapshot-model` — Snapshot semantics referenced by Activation events.
-- `design/operator-boundaries` — actor identity model and redaction trust
-  boundary.
+- `reference/architecture/policy-risk-approval-error-model` — closed risk and
+  approval enums referenced by Approval events.
+- `reference/architecture/operation-plan-write-ahead-journal-model` — WAL stage
+  enum referenced by Operation events.
+- `reference/architecture/snapshot-model` — Snapshot semantics referenced by
+  Activation events.
+- `reference/architecture/operator-boundaries` — actor identity model and
+  redaction trust boundary.

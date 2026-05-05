@@ -176,13 +176,13 @@ GroupHead 関連の audit event は以下を発行します
 - `rollback-revalidation-required` Risk は `rolling-back` への遷移で compensate
   path に乗るとき発火する。
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る。
+関連 architecture notes:��
 
-- `docs/design/exposure-activation-model.md` — GroupHead pointer と
-  ActivationSnapshot / Exposure の関係、canary / shadow split 規則の議論
-- `docs/design/execution-lifecycle.md` — rollout state machine の閉じ方と v1
-  範囲を blue-green に広げない判断
-- `docs/design/operation-plan-write-ahead-journal-model.md` — pointer 前進と WAL
-  stage の対応、シリアライズ要件の rationale
+- `docs/reference/architecture/exposure-activation-model.md` — GroupHead pointer
+  と ActivationSnapshot / Exposure の関係、canary / shadow split 規則の議論
+- `docs/reference/architecture/execution-lifecycle.md` — rollout state machine
+  の閉じ方と v1 範囲を blue-green に広げない判断
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
+  pointer 前進と WAL stage の対応、シリアライズ要件の rationale

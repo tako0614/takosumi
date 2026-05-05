@@ -201,13 +201,13 @@ lifecycle response of `apply` / `destroy`. It is required to:
 - Return `error` only when the connector reports an explicit fault, with the
   fault detail propagated through the describe envelope.
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/execution-lifecycle.md` — phase 数を 6 に絞った理由と observe /
-  recovery を独立 phase として残す decision
-- `docs/design/operation-plan-write-ahead-journal-model.md` — phase と WAL stage
-  の対応関係、idempotency tuple の設計
-- `docs/design/runtime-agent-lifecycle.md` — `LifecycleStatus` を 5
-  値に閉じる根拠と describe 報告 contract
+- `docs/reference/architecture/execution-lifecycle.md` — phase 数を 6
+  に絞った理由と observe / recovery を独立 phase として残す decision
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
+  phase と WAL stage の対応関係、idempotency tuple の設計
+- `docs/reference/architecture/implementation-operation-envelope.md` —
+  `LifecycleStatus` を 5 値に閉じる根拠と describe 報告 contract

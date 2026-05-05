@@ -358,6 +358,87 @@ Deno.test("deploy public route fails closed when CatalogRelease pre-commit hook 
   );
 });
 
+Deno.test("deploy public route fails closed when executable pre-commit hook fails", async () => {
+  const journal = new InMemoryOperationJournalStore();
+  const calls: string[] = [];
+  const app = createApp({
+    token: VALID_TOKEN,
+    tenantId: "space:executable-hook",
+    operationJournalStore: journal,
+    catalogReleaseVerifier: {
+      verifyCurrentReleaseForSpace: () =>
+        Promise.resolve({
+          ok: true,
+          descriptorDigest:
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          publisherId: "publisher:test",
+          publisherKeyId: "publisher-key:active",
+          verifiedAt: "2026-05-05T00:00:00.000Z",
+        }),
+      runExecutableHooks: (input) => {
+        assert.equal(input.stage, "pre-commit");
+        assert.equal(input.operations[0].resourceName, SAMPLE_RESOURCE.name);
+        return Promise.resolve({
+          ok: false,
+          status: "failed",
+          stage: input.stage,
+          packageId: "takos.hook.risk-gate",
+          packageVersion: "1.0.0",
+          reason: "policy-denied",
+          message: "risk gate denied deployment",
+          packages: [{
+            packageId: "takos.hook.risk-gate",
+            packageVersion: "1.0.0",
+            status: "failed",
+            reason: "policy-denied",
+            message: "risk gate denied deployment",
+          }],
+        });
+      },
+    },
+    applyResources: () => {
+      calls.push("applyResources");
+      return Promise.resolve({
+        applied: [],
+        issues: [],
+        status: "succeeded",
+      });
+    },
+  });
+
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
+        metadata: { name: "executable-hook-app" },
+        resources: [SAMPLE_RESOURCE],
+      },
+    }),
+  });
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(calls, []);
+  const body = await response.json();
+  assert.match(body.error.message, /risk gate denied deployment/);
+  const entries = await journal.listByDeployment(
+    "space:executable-hook",
+    "executable-hook-app",
+  );
+  assert.deepEqual(entries.map((entry) => entry.stage), ["prepare", "abort"]);
+  const detail = entries[1].effect.detail as JsonObject;
+  assert.equal(detail.reason, "catalog-release-pre-commit-hook-failed");
+  const hook = detail.catalogReleaseHook as JsonObject;
+  const executableHook = hook.executableHook as JsonObject;
+  assert.equal(executableHook.packageId, "takos.hook.risk-gate");
+});
+
 Deno.test("deploy public route enqueues RevokeDebt when CatalogRelease post-commit hook fails", async () => {
   const journal = new InMemoryOperationJournalStore();
   const revokeDebtStore = new InMemoryRevokeDebtStore({
@@ -452,6 +533,114 @@ Deno.test("deploy public route enqueues RevokeDebt when CatalogRelease post-comm
     entries.map((entry) => entry.status),
     ["recorded", "recorded", "recorded", "failed", "succeeded", "succeeded"],
   );
+});
+
+Deno.test("deploy public route records RevokeDebt when executable post-commit hook fails", async () => {
+  const journal = new InMemoryOperationJournalStore();
+  const revokeDebtStore = new InMemoryRevokeDebtStore({
+    idFactory: () => "revoke-debt:executable-hook",
+  });
+  const calls: string[] = [];
+  const app = createApp({
+    token: VALID_TOKEN,
+    tenantId: "space:executable-post-hook",
+    operationJournalStore: journal,
+    revokeDebtStore,
+    catalogReleaseVerifier: {
+      verifyCurrentReleaseForSpace: () =>
+        Promise.resolve({
+          ok: true,
+          descriptorDigest:
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          publisherId: "publisher:test",
+          publisherKeyId: "publisher-key:active",
+          verifiedAt: "2026-05-05T00:00:00.000Z",
+        }),
+      runExecutableHooks: (input) => {
+        if (input.stage === "pre-commit") {
+          return Promise.resolve({
+            ok: true,
+            status: "succeeded",
+            stage: input.stage,
+            packages: [{
+              packageId: "takos.hook.audit",
+              packageVersion: "1.0.0",
+              status: "succeeded",
+            }],
+          });
+        }
+        return Promise.resolve({
+          ok: false,
+          status: "failed",
+          stage: input.stage,
+          packageId: "takos.hook.audit",
+          packageVersion: "1.0.0",
+          reason: "audit-sink-unavailable",
+          message: "audit hook failed after commit",
+          packages: [{
+            packageId: "takos.hook.audit",
+            packageVersion: "1.0.0",
+            status: "failed",
+            reason: "audit-sink-unavailable",
+            message: "audit hook failed after commit",
+          }],
+        });
+      },
+    },
+    applyResources: (resources) => {
+      calls.push("applyResources");
+      return Promise.resolve({
+        applied: [{
+          name: resources[0].name,
+          providerId: resources[0].provider,
+          handle: "handle-executable-hook",
+          outputs: { ok: true },
+          specFingerprint: "fnv1a32:00000000",
+        }],
+        issues: [],
+        status: "succeeded",
+      });
+    },
+  });
+
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
+        metadata: { name: "executable-post-hook-app" },
+        resources: [SAMPLE_RESOURCE],
+      },
+    }),
+  });
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(calls, ["applyResources"]);
+  const debts = await revokeDebtStore.listByDeployment(
+    "space:executable-post-hook",
+    "executable-post-hook-app",
+  );
+  assert.equal(debts.length, 1);
+  assert.equal(debts[0].reason, "approval-invalidated");
+  const entries = await journal.listByDeployment(
+    "space:executable-post-hook",
+    "executable-post-hook-app",
+  );
+  assert.deepEqual(
+    entries.map((entry) => entry.stage),
+    ["prepare", "pre-commit", "commit", "post-commit", "observe", "finalize"],
+  );
+  assert.equal(entries[3].status, "failed");
+  const detail = entries[3].effect.detail as JsonObject;
+  const hook = detail.catalogReleaseHook as JsonObject;
+  const executableHook = hook.executableHook as JsonObject;
+  assert.equal(executableHook.packageId, "takos.hook.audit");
 });
 
 Deno.test("deploy public route forwards apply WAL operation plan to applyResources", async () => {

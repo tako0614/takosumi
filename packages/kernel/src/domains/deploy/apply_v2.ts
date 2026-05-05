@@ -40,7 +40,7 @@ export interface ApplyV2Outcome {
   /**
    * Public OperationPlan preview for dry-runs. This exposes the deterministic
    * DesiredSnapshot / OperationPlan digests and WAL idempotency tuple the
-   * full lifecycle design uses, but plan mode still writes no journal entry.
+   * full lifecycle architecture uses, but plan mode still writes no journal entry.
    */
   readonly operationPlanPreview?: OperationPlanPreview;
   readonly recoveryMode?: PlatformOperationRecoveryMode;

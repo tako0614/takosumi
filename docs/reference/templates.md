@@ -179,8 +179,9 @@ template:
 - [Provider plugins](/reference/providers) — selection rules applied to the
   `ManifestResource[]` produced by `expand`.
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/manifest-model.md` — template expansion semantics の rationale
+- `docs/reference/architecture/manifest-model.md` — template expansion semantics
+  の rationale

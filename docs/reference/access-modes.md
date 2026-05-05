@@ -137,13 +137,13 @@ The full set of approval invalidation triggers lives in
 the most common cause of `effect-detail change` in practice and is the reason
 `read-write` and `admin` always require an explicit declaration on the link.
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/target-model.md` — access mode enum closure rationale と
-  `safeDefaultAccess` の choice space
-- `docs/design/link-projection-model.md` — link projection が access mode を
-  `${ref:...}` resolver に通す経路と effect-detail への影響
-- `docs/design/namespace-export-model.md` — grant-producing default が `admin`
-  を取り得ない理由と export 側からの enforcement
+- `docs/reference/architecture/target-model.md` — access mode enum closure
+  rationale と `safeDefaultAccess` の choice space
+- `docs/reference/architecture/link-projection-model.md` — link projection が
+  access mode を `${ref:...}` resolver に通す経路と effect-detail への影響
+- `docs/reference/architecture/namespace-export-model.md` — grant-producing
+  default が `admin` を取り得ない理由と export 側からの enforcement

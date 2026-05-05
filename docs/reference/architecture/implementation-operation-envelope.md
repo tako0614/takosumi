@@ -3,9 +3,9 @@
 This document fixes the v1 boundary between the Takosumi kernel and the
 runtime-agent process, and the operation envelope they exchange. Wire-level
 field tables live in [Runtime-Agent API](/reference/runtime-agent-api) and
-[Lifecycle Protocol](/reference/lifecycle); this page records the design intent
-— what each side owns, where the trust chain breaks, and which invariants force
-the split.
+[Lifecycle Protocol](/reference/lifecycle); this page records the architecture
+intent — what each side owns, where the trust chain breaks, and which invariants
+force the split.
 
 ## Boundary statement
 
@@ -240,5 +240,5 @@ without that input is a contract break and is closed under the
 
 - [Runtime-Agent API](/reference/runtime-agent-api)
 - [Lifecycle Protocol](/reference/lifecycle)
-- [Execution Lifecycle](/design/execution-lifecycle)
-- [OperationPlan / Write-Ahead Journal Model](/design/operation-plan-write-ahead-journal-model)
+- [Execution Lifecycle](/reference/architecture/execution-lifecycle)
+- [OperationPlan / Write-Ahead Journal Model](/reference/architecture/operation-plan-write-ahead-journal-model)

@@ -15,10 +15,10 @@ kernel does not ship a price book, a free / pro / enterprise ladder, or any
 built-in commercial semantics.
 
 ::: info Current HTTP status The quota-tier registration and assignment
-endpoints in this reference are a design / service contract. The current kernel
+endpoints in this reference are a spec / service contract. The current kernel
 HTTP router does not mount `/api/internal/v1/quota-tiers` or
 `PATCH /api/internal/v1/spaces/:id`; see
-[Kernel HTTP API — Design-Reserved Internal Surfaces](/reference/kernel-http-api#design-reserved-internal-surfaces).
+[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
 :::
 
 ## Tier model
@@ -65,7 +65,7 @@ that dimension. A cap of `0` is rejected at registration time.
 
 ## Tier registration API
 
-The design-reserved tier registration API is operator-only and lives on the
+The spec-reserved tier registration API is operator-only and lives on the
 internal HTTP surface (see [Kernel HTTP API](/reference/kernel-http-api)).
 
 `POST /api/internal/v1/quota-tiers`
@@ -181,10 +181,11 @@ distributions such as `takos-private/` and in third-party billing systems
 consuming the kernel audit log. The kernel does not encode any of those
 concepts.
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/operator-boundaries.md` — operator policy layer that consumes
-  tier-resolved quota signals.
-- `docs/design/space-model.md` — Space identity that scopes tier assignment.
-- `docs/design/operation-plan-write-ahead-journal-model.md` — quota evaluation
-  point against tier-resolved caps.
+- `docs/reference/architecture/operator-boundaries.md` — operator policy layer
+  that consumes tier-resolved quota signals.
+- `docs/reference/architecture/space-model.md` — Space identity that scopes tier
+  assignment.
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
+  quota evaluation point against tier-resolved caps.

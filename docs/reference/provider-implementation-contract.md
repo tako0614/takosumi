@@ -292,10 +292,10 @@ OperationRequest / OperationResult envelope. As long as the envelope, the status
 enum, the effect bound, and the idempotency rule are satisfied, the
 Implementation is conformant.
 
-## Related design notes
+## Related architecture notes
 
-- docs/design/paas-provider-design.md
-- docs/design/implementation-operation-envelope.md
-- docs/design/operation-plan-write-ahead-journal-model.md
-- docs/design/policy-risk-approval-error-model.md
-- docs/design/data-asset-model.md
+- docs/reference/architecture/paas-provider-architecture.md
+- docs/reference/architecture/implementation-operation-envelope.md
+- docs/reference/architecture/operation-plan-write-ahead-journal-model.md
+- docs/reference/architecture/policy-risk-approval-error-model.md
+- docs/reference/architecture/data-asset-model.md

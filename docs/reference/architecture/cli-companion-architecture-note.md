@@ -1,9 +1,9 @@
-# CLI Surface Design
+# CLI Surface Architecture
 
-This document fixes the v1 surface of the `takosumi` CLI as a design artifact.
-The reference at [`/reference/cli`](/reference/cli) records exactly which
-commands and flags exist; this document records why the surface looks that way
-and which boundaries the CLI must not cross.
+This document fixes the v1 surface of the `takosumi` CLI as an architecture
+artifact. The reference at [`/reference/cli`](/reference/cli) records exactly
+which commands and flags exist; this document records why the surface looks that
+way and which boundaries the CLI must not cross.
 
 ## Authority boundary
 
@@ -20,7 +20,7 @@ a courier:
   Shape / Provider / Template references, builds a reference DAG, and then runs
   dry-run / apply / destroy through the kernel-owned deploy route. The richer
   `ResolutionSnapshot` → `DesiredSnapshot` → `OperationPlan` → WAL pipeline is
-  the internal design model and must not be faked by the CLI.
+  the internal architecture model and must not be faked by the CLI.
 - Connector ids of the form `connector:<id>` are operator-installed and resolved
   by the runtime-agent under kernel direction; the CLI does not interpret them.
 - The CLI does not classify an Object's lifecycle (`managed` / `generated` /
@@ -63,7 +63,7 @@ The verb set is small and chosen by lifecycle, not by resource:
 `server`, `deploy`, `plan`, `destroy`, `status`, `migrate`, `init`, `artifact`,
 `runtime-agent`, `completions`, `version`.
 
-Design rules:
+Architecture rules:
 
 - Every authoring verb (`deploy`, `plan`, `destroy`) takes a Manifest path as
   its single positional. The Manifest is the unit the kernel reasons about;
@@ -72,12 +72,12 @@ Design rules:
 - There is no top-level `apply` or `update`. `apply` is spelled `deploy`; the
   CLI always submits a whole Manifest to the kernel. Current public apply reuses
   prior resource outputs when the persisted public deploy record's fingerprint
-  matches; richer DesiredSnapshot diffing remains kernel-internal design work.
-  `--dry-run` selects the same `POST /v1/deployments` route with `mode: "plan"`,
-  which is also why `plan` is a thin alias rather than a separate pipeline. Plan
-  output includes the kernel-generated OperationPlan preview digests and WAL
-  idempotency tuple preview; the CLI renders that payload but does not compute
-  it.
+  matches; richer DesiredSnapshot diffing remains kernel-internal architecture
+  work. `--dry-run` selects the same `POST /v1/deployments` route with
+  `mode: "plan"`, which is also why `plan` is a thin alias rather than a
+  separate pipeline. Plan output includes the kernel-generated OperationPlan
+  preview digests and WAL idempotency tuple preview; the CLI renders that
+  payload but does not compute it.
 - `destroy --force` covers the narrow case where a self-hosted resource handle
   equals its declared name and no apply record exists. It does not bypass
   kernel-side authority; it permits handle inference in the absence of state.
@@ -147,7 +147,7 @@ The 70+ band is reserved to stay aligned with `sysexits.h` (`EX_OSERR
 its conventional "usage error" meaning and future host-class exits do not
 collide with the small set users routinely handle.
 
-## Deprecation policy design
+## Deprecation policy architecture
 
 The CLI prints at most one stderr warning per process per deprecated selector.
 Three rules carry this:
@@ -205,5 +205,5 @@ can ask the kernel which kinds are currently registered.
 - Reference: [CLI](/reference/cli),
   [DataAsset Kinds](/reference/artifact-kinds),
   [Environment Variables](/reference/env-vars), [Manifest](/manifest)
-- Design:
-  [Operation Plan and Write-ahead Journal Model](/design/operation-plan-write-ahead-journal-model)
+- Architecture:
+  [Operation Plan and Write-ahead Journal Model](/reference/architecture/operation-plan-write-ahead-journal-model)

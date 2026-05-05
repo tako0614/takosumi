@@ -199,13 +199,13 @@ cross-Space lock を取る operation は v1 で以下に限定される:
 それ以外の operation は **single Space 内で完結** するため、deadlock の
 心配はない。
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/operation-plan-write-ahead-journal-model.md` — lock と WAL stage
-  の interplay、idempotency tuple の derivation
-- `docs/design/execution-lifecycle.md` — lock 失効時の recovery mode 選定
-  rationale
-- `docs/design/operator-boundaries.md` — lock store の trust 境界、SQL backed
-  必須化の判断
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
+  lock と WAL stage の interplay、idempotency tuple の derivation
+- `docs/reference/architecture/execution-lifecycle.md` — lock 失効時の recovery
+  mode 選定 rationale
+- `docs/reference/architecture/operator-boundaries.md` — lock store の trust
+  境界、SQL backed 必須化の判断

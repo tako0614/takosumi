@@ -197,8 +197,8 @@ ${ref:...} / ${secret-ref:...}:
   Link / dependency intent between resource outputs and inputs
 ```
 
-The OperationPlan and write-ahead journal design is derived from this intent
-graph. On the current public deploy route, `mode: "plan"` exposes a
+The OperationPlan and write-ahead journal architecture is derived from this
+intent graph. On the current public deploy route, `mode: "plan"` exposes a
 deterministic OperationPlan preview (DesiredSnapshot digest, OperationPlan
 digest, planned operations, and WAL idempotency tuple preview) without writing
 the journal. `mode: "apply"` / `mode: "destroy"` now derive the same public

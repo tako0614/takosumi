@@ -323,8 +323,8 @@ surface for their end users compose the kernel matrix from outside (for example,
 in `takos-private/`) and surface their own labels above it. Custom-role support
 is reserved for a future RFC and is **not** present in v1.
 
-## Related design notes
+## Related architecture notes
 
-- docs/design/policy-risk-approval-error-model.md
-- docs/design/space-model.md
-- docs/design/operation-plan-write-ahead-journal-model.md
+- docs/reference/architecture/policy-risk-approval-error-model.md
+- docs/reference/architecture/space-model.md
+- docs/reference/architecture/operation-plan-write-ahead-journal-model.md

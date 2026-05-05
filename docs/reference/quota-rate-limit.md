@@ -13,7 +13,7 @@ signals; enforcement (block, throttle, alert) lives in the operator policy layer
 that consumes those signals.
 
 ::: info Current HTTP status Quota and rate-limit records are current service
-contracts, but the operator status route described below is design-reserved. The
+contracts, but the operator status route described below is spec-reserved. The
 current kernel HTTP router does not mount `/api/internal/v1/status`, and current
 `/readyz` does not emit quota near-limit rows; see
 [Readiness Probes](/reference/readiness-probes) for the current probe shape. :::
@@ -163,7 +163,7 @@ inflight work**:
   GroupHead pointer are not rolled back; already-flowing traffic continues.
 - Read paths (`GET /v1/deployments`, `GET /v1/artifacts/:hash`) are outside
   quota. They are rate-limited but never quota-rejected.
-- Audit events continue to write under `journal-volume` quota by design;
+- Audit events continue to write under `journal-volume` quota intentionally;
   rejecting audit writes would defeat the tamper-evidence contract.
 
 A quota rejection emits a `severity: warning` audit event linked to the
@@ -173,8 +173,8 @@ so operator alerting wires fire.
 
 ## Operator visibility
 
-In the design-reserved operator surface, operators read quota and rate-limit
-state through:
+In the spec-reserved operator surface, operators read quota and rate-limit state
+through:
 
 - The `/api/internal/v1/status` endpoint (see
   [Kernel HTTP API](/reference/kernel-http-api)). The response includes a
@@ -188,12 +188,14 @@ state through:
 - Per-Space quota drill-down belongs to operator internal tooling. The current
   public `takosumi` CLI does not expose quota subcommands.
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/operator-boundaries.md` — operator policy layer that consumes
-  quota signals.
-- `docs/design/operation-plan-write-ahead-journal-model.md` — journal volume
-  accounting and the journal-volume quota dimension.
-- `docs/design/space-model.md` — Space identity that scopes per-tenant metering.
-- `docs/design/exposure-activation-model.md` — fail-safe-not-fail- closed stance
-  applied to ActivationSnapshot creation under quota exhaustion.
+- `docs/reference/architecture/operator-boundaries.md` — operator policy layer
+  that consumes quota signals.
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
+  journal volume accounting and the journal-volume quota dimension.
+- `docs/reference/architecture/space-model.md` — Space identity that scopes
+  per-tenant metering.
+- `docs/reference/architecture/exposure-activation-model.md` —
+  fail-safe-not-fail- closed stance applied to ActivationSnapshot creation under
+  quota exhaustion.

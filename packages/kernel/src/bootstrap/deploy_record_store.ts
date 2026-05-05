@@ -2,6 +2,10 @@ import type { RegisterDeployPublicRoutesOptions } from "../api/deploy_public_rou
 import type { AppContext } from "../app_context.ts";
 import type { SqlClient } from "../adapters/storage/sql.ts";
 import {
+  createExecutableCatalogHookRunner,
+  type ExecutableCatalogHookPackage,
+} from "../plugins/executable_hooks.ts";
+import {
   type DeployPublicIdempotencyStore,
   InMemoryDeployPublicIdempotencyStore,
 } from "../domains/deploy/deploy_public_idempotency_store.ts";
@@ -134,7 +138,19 @@ export function buildDeployPublicRouteOptions(input: {
   readonly idempotencyStore: DeployPublicIdempotencyStore;
   readonly operationJournalStore: OperationJournalStore;
   readonly revokeDebtStore: RevokeDebtStore;
+  readonly catalogHookPackages?: readonly ExecutableCatalogHookPackage[];
 }): RegisterDeployPublicRoutesOptions {
+  const hookRunner = input.catalogHookPackages?.length
+    ? createExecutableCatalogHookRunner(input.catalogHookPackages)
+    : undefined;
+  const catalogReleaseVerifier = hookRunner
+    ? {
+      verifyCurrentReleaseForSpace: (spaceId: string) =>
+        input.context.services.registry.catalogReleases
+          .verifyCurrentReleaseForSpace(spaceId),
+      runExecutableHooks: hookRunner.runExecutableHooks,
+    }
+    : input.context.services.registry.catalogReleases;
   return {
     appContext: input.context,
     getDeployToken: () => input.deployToken,
@@ -143,6 +159,6 @@ export function buildDeployPublicRouteOptions(input: {
     idempotencyStore: input.idempotencyStore,
     operationJournalStore: input.operationJournalStore,
     revokeDebtStore: input.revokeDebtStore,
-    catalogReleaseVerifier: input.context.services.registry.catalogReleases,
+    catalogReleaseVerifier,
   };
 }

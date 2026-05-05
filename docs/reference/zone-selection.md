@@ -174,10 +174,11 @@ contract language that binds zone availability to commercial commitments — liv
 in operator distributions such as `takos-private/`. The kernel ships the
 attribute and the audit signal, and stops there.
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/operator-boundaries.md` — operator policy layer that acts on zone
-  signals.
-- `docs/design/exposure-activation-model.md` — ActivationSnapshot shape that
-  carries zone annotations.
-- `docs/design/space-model.md` — Space identity that owns `defaultZone`.
+- `docs/reference/architecture/operator-boundaries.md` — operator policy layer
+  that acts on zone signals.
+- `docs/reference/architecture/exposure-activation-model.md` —
+  ActivationSnapshot shape that carries zone annotations.
+- `docs/reference/architecture/space-model.md` — Space identity that owns
+  `defaultZone`.

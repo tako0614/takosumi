@@ -119,7 +119,7 @@ does not expose this enum yet.
 | `compensate`           | Recovery operation that undoes a partially-committed effect during `rollback` / `recovery`. |
 
 Per-kind input / output / WAL stage coverage lives in the internal OperationPlan
-design. Current public plan shape is in
+architecture. Current public plan shape is in
 [Plan Output Schema](/reference/plan-output); provider dispatch contract is in
 [Provider Implementation Contract](/reference/provider-implementation-contract).
 
@@ -473,20 +473,20 @@ Connector identity uses the closed prefix `connector:<id>`. Every connector is
 operator-installed and falls under the `operator` object lifecycle class above.
 The identity scheme is closed; no other prefix denotes a connector in v1.
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/target-model.md` — access mode / mutation constraint / object
-  lifecycle class の closed-enum design
-- `docs/design/execution-lifecycle.md` — phase enum の choice space と observe /
-  recovery を別 phase に切り出した理由
-- `docs/design/operation-plan-write-ahead-journal-model.md` — WAL stage と
-  idempotency tuple の rationale
-- `docs/design/policy-risk-approval-error-model.md` — Risk 19 entries / approval
-  invalidation triggers / DomainErrorCode の closure 理由
-- `docs/design/link-projection-model.md` — link mutation / link materialization
-  state の生成 algorithm
-- `docs/design/data-asset-model.md` — DataAsset kind 5 値と connector identity
-  scheme
-- `docs/design/space-export-share-model.md` — share lifecycle 5 値
+- `docs/reference/architecture/target-model.md` — access mode / mutation
+  constraint / object lifecycle class の closed-enum architecture
+- `docs/reference/architecture/execution-lifecycle.md` — phase enum の choice
+  space と observe / recovery を別 phase に切り出した理由
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
+  WAL stage と idempotency tuple の rationale
+- `docs/reference/architecture/policy-risk-approval-error-model.md` — Risk 19
+  entries / approval invalidation triggers / DomainErrorCode の closure 理由
+- `docs/reference/architecture/link-projection-model.md` — link mutation / link
+  materialization state の生成 algorithm
+- `docs/reference/architecture/data-asset-model.md` — DataAsset kind 5 値と
+  connector identity scheme
+- `docs/reference/architecture/namespace-export-model.md` — share lifecycle 5 値

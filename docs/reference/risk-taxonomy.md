@@ -196,7 +196,7 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 19. `transform-unapproved`
 
-- **意味**: design-reserved DataAsset transform が未承認のまま実行されようと
+- **意味**: spec-reserved DataAsset transform が未承認のまま実行されようと
   している。
 - **発火 stage**: `pre-commit`
 - **severity**: `error`
@@ -227,14 +227,14 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 `CONVENTIONS.md` §6 の RFC を要する。stable id は付与後 rename しない。 削除も同
 RFC 経路で legacy id の wire 互換期間を確保した上で行う。
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/policy-risk-approval-error-model.md` — Risk vs Error の境界、 19
-  値 enum の選定理由、severity / fix kind の設計議論
-- `docs/design/operation-plan-write-ahead-journal-model.md` —
+- `docs/reference/architecture/policy-risk-approval-error-model.md` — Risk vs
+  Error の境界、 19 値 enum の選定理由、severity / fix kind の設計議論
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
   `actual-effects-overflow` / `rollback-revalidation-required` の WAL 上での
   位置付け
-- `docs/design/observation-drift-revokedebt-model.md` — `revoke-debt-created` と
-  observe / finalize stage の連動
+- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
+  `revoke-debt-created` と observe / finalize stage の連動

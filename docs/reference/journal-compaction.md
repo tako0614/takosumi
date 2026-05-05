@@ -151,11 +151,11 @@ Operators inspect compaction state through the operator surface:
 
 Inspection commands require the operator bearer.
 
-## Related design notes
+## Related architecture notes
 
-- `design/operation-plan-write-ahead-journal-model` — WAL stage enum,
-  idempotency tuple, replay rules.
-- `design/snapshot-model` — base snapshot semantics and snapshot garbage
-  collection.
-- `design/observation-drift-revokedebt-model` — RevokeDebt status rules
-  referenced by retention.
+- `reference/architecture/operation-plan-write-ahead-journal-model` — WAL stage
+  enum, idempotency tuple, replay rules.
+- `reference/architecture/snapshot-model` — base snapshot semantics and snapshot
+  garbage collection.
+- `reference/architecture/observation-drift-revokedebt-model` — RevokeDebt
+  status rules referenced by retention.

@@ -133,7 +133,7 @@ migration). The kernel detects the most disruptive cases.
   un-expiry of already-expired approvals and shares.
 - A forward jump (clock moves into the future) is permitted but surfaces a
   `clock_forward_jump` audit event when the magnitude exceeds 5 minutes. Forward
-  jumps cause TTL fields to expire early; this is by design.
+  jumps cause TTL fields to expire early; this is intentionally.
 
 ## Timezone handling
 
@@ -191,11 +191,11 @@ The minimum operator obligations are:
 Meeting these obligations is sufficient for every clock-bound feature in the
 per-feature binding table to behave correctly.
 
-## Related design notes
+## Related architecture notes
 
-- `design/operator-boundaries` — placement of NTP responsibility and the
-  readiness contract.
-- `design/operation-plan-write-ahead-journal-model` — clock binding for WAL
-  stage retry and idempotency window.
-- `design/policy-risk-approval-error-model` — approval `expiresAt` derivation
-  and skew-related fail-closed rules.
+- `reference/architecture/operator-boundaries` — placement of NTP responsibility
+  and the readiness contract.
+- `reference/architecture/operation-plan-write-ahead-journal-model` — clock
+  binding for WAL stage retry and idempotency window.
+- `reference/architecture/policy-risk-approval-error-model` — approval
+  `expiresAt` derivation and skew-related fail-closed rules.

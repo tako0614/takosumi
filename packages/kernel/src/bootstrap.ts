@@ -7,7 +7,10 @@ import {
   createAppContext,
 } from "./app_context.ts";
 import { loadRuntimeConfigFromEnv } from "./config/mod.ts";
-import { loadKernelPluginsFromEnv } from "./plugins/mod.ts";
+import {
+  loadKernelPluginMarketplacePackagesFromEnv,
+  loadKernelPluginsFromEnv,
+} from "./plugins/mod.ts";
 import { isPaaSProcessRole, type PaaSProcessRole } from "./process/mod.ts";
 import type { WorkerDaemonHandle } from "./workers/daemon.ts";
 import type { SqlClient } from "./adapters/storage/sql.ts";
@@ -78,11 +81,18 @@ export async function createPaaSApp(
     await loadRuntimeConfigFromEnv({ env: runtimeEnv });
   const role = options.role ?? processRoleFromRuntimeConfig(runtimeConfig);
   registerBundledShapesAndProviders(runtimeEnv);
+  const marketplaceInstall = await loadKernelPluginMarketplacePackagesFromEnv(
+    runtimeEnv,
+  );
   const context = options.context ?? await createAppContext({
     ...options,
     runtimeEnv,
     runtimeConfig,
-    plugins: options.plugins ?? await loadKernelPluginsFromEnv(runtimeEnv),
+    plugins: options.plugins ??
+      [
+        ...marketplaceInstall.plugins,
+        ...await loadKernelPluginsFromEnv(runtimeEnv),
+      ],
   });
   const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
   const deploySpaceId = nonEmptyEnv(runtimeEnv.TAKOSUMI_DEPLOY_SPACE_ID);
@@ -132,6 +142,7 @@ export async function createPaaSApp(
       idempotencyStore,
       operationJournalStore,
       revokeDebtStore,
+      catalogHookPackages: marketplaceInstall.hookPackages,
     })
     : undefined;
   const app = await createApiApp({

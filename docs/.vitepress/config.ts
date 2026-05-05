@@ -14,35 +14,43 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Manifest (Shape Model)", link: "/manifest" },
         {
-          text: "Manifest Model (Design)",
-          link: "/design/manifest-model",
+          text: "Manifest Architecture",
+          link: "/reference/architecture/manifest-model",
         },
       ],
     },
     {
-      text: "Design",
+      text: "Reference / Architecture",
       items: [
-        { text: "Overview", link: "/design/" },
-        { text: "Manifest Model", link: "/design/manifest-model" },
+        { text: "Overview", link: "/reference/architecture/" },
         {
-          text: "Core Deployment Model",
-          link: "/design/core-deployment-model",
+          text: "API Surface",
+          link: "/reference/architecture/api-surface-architecture",
+        },
+        {
+          text: "Manifest Model",
+          link: "/reference/architecture/manifest-model",
         },
         {
           text: "Execution Lifecycle",
-          link: "/design/execution-lifecycle",
+          link: "/reference/architecture/execution-lifecycle",
         },
         {
-          text: "Routing Model",
-          link: "/design/routing-model",
-        },
-        {
-          text: "Artifacts and Supply Chain",
-          link: "/design/artifacts-and-supply-chain",
+          text: "OperationPlan / WAL",
+          link:
+            "/reference/architecture/operation-plan-write-ahead-journal-model",
         },
         {
           text: "Operator Boundaries",
-          link: "/design/operator-boundaries",
+          link: "/reference/architecture/operator-boundaries",
+        },
+        {
+          text: "Provider Architecture",
+          link: "/reference/architecture/paas-provider-architecture",
+        },
+        {
+          text: "Operational Hardening",
+          link: "/reference/architecture/operational-hardening-checklist",
         },
       ],
     },
@@ -197,6 +205,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Shape Catalog", link: "/reference/shapes" },
         { text: "Provider Plugins", link: "/reference/providers" },
+        { text: "Plugin Marketplace", link: "/reference/plugin-marketplace" },
         { text: "Templates", link: "/reference/templates" },
         { text: "Artifact Kinds", link: "/reference/artifact-kinds" },
         { text: "Connector Contract", link: "/reference/connector-contract" },
@@ -250,7 +259,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
 const jaNav: DefaultTheme.NavItem[] = [
   { text: "Quickstart", link: "/getting-started/quickstart" },
   { text: "Manifest", link: "/manifest" },
-  { text: "Design", link: "/design/" },
+  { text: "Architecture", link: "/reference/architecture/" },
   { text: "Reference", link: "/reference/shapes" },
   { text: "Operator", link: "/operator/bootstrap" },
 ];

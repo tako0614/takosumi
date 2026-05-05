@@ -18,10 +18,10 @@ field-level redaction、audit chain との 整合を固定する。本 reference
 wire-level API のみを定義し、顧客向け UI や承認 flow は扱わない。
 
 ::: info Current HTTP status The export, deletion, restore, deletion-confirm,
-and redaction endpoints in this reference are a design / service contract. The
+and redaction endpoints in this reference are a spec / service contract. The
 current kernel HTTP router does not mount `/api/internal/v1/spaces/:id/exports`
 or `DELETE /api/internal/v1/spaces/:id`; see
-[Kernel HTTP API — Design-Reserved Internal Surfaces](/reference/kernel-http-api#design-reserved-internal-surfaces).
+[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
 :::
 
 ## Data export API
@@ -247,11 +247,11 @@ escalation、サブスクリプション解約 flow、退会後の data portabil
 等の外側で実装する。kernel は idempotent な internal API、closed export
 mode、2-phase deletion、redaction primitive を提供する。
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/space-model.md` — Space deletion semantics と soft-delete
-  の復活窓に関する rationale
-- `docs/design/observation-drift-revokedebt-model.md` — Space 退役時の
-  RevokeDebt 残処理と export の関係
-- `docs/design/operator-boundaries.md` — kernel が公開する export / deletion
-  primitive と operator policy 層の責務分担
+- `docs/reference/architecture/space-model.md` — Space deletion semantics と
+  soft-delete の復活窓に関する rationale
+- `docs/reference/architecture/observation-drift-revokedebt-model.md` — Space
+  退役時の RevokeDebt 残処理と export の関係
+- `docs/reference/architecture/operator-boundaries.md` — kernel が公開する
+  export / deletion primitive と operator policy 層の責務分担

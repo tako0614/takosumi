@@ -17,7 +17,7 @@ public manifest vocabulary is closed and unchanged.
 
 ## v1 finalization additions
 
-### Design
+### Architecture
 
 - **Link mutation × state transition matrix.**
   [Link and Projection Model](./link-projection-model.md) closes the v1 mutation
@@ -97,18 +97,20 @@ public manifest vocabulary is closed and unchanged.
 - **cli.md** locks command surfaces, the closed config-file YAML schema, exit
   codes, and the deprecation policy.
 
-### Surface design layer
+### Surface architecture layer
 
-- **API Surface Design.** [API Surface Design](./api-surface-design.md) closes
-  the kernel HTTP boundary: the four-surface split (public deploy / internal
-  control / runtime-agent RPC / artifact upload), the four-credential
-  blast-radius model, the closed error envelope philosophy with mandatory
-  `requestId`, the `/v1/` versioning policy, the cursor-only pagination rule,
-  the OpenAPI export scope, and the Ed25519 gateway-manifest signing design.
-- **CLI Surface Design.** [CLI Surface Design](./cli-companion-design-note.md)
-  (formerly the CLI Companion Design Note) is now the v1 surface authority for
-  the CLI: the local vs remote authority split, command verb rationale, config
-  cascade, output formats (no streaming), the sysexits-aligned exit code regime,
+- **API Surface Architecture.**
+  [API Surface Architecture](./api-surface-architecture.md) closes the kernel
+  HTTP boundary: the four-surface split (public deploy / internal control /
+  runtime-agent RPC / artifact upload), the four-credential blast-radius model,
+  the closed error envelope philosophy with mandatory `requestId`, the `/v1/`
+  versioning policy, the cursor-only pagination rule, the OpenAPI export scope,
+  and the Ed25519 gateway-manifest signing architecture.
+- **CLI Surface Architecture.**
+  [CLI Surface Architecture](./cli-companion-architecture-note.md) (formerly the
+  CLI Companion Design Note) is now the v1 surface authority for the CLI: the
+  local vs remote authority split, command verb rationale, config cascade,
+  output formats (no streaming), the sysexits-aligned exit code regime,
   deprecation policy, security boundary, and the CLI ↔ kernel responsibility
   split.
 - **Implementation and Runtime-Agent Boundary.**
@@ -119,20 +121,21 @@ public manifest vocabulary is closed and unchanged.
   idempotency contract, the connector-vs-implementation split, verify semantics,
   the Ed25519 signature chain direction, and partial-failure / RevokeDebt
   failure modes.
-- **PaaS Provider Design.** [PaaS Provider Design](./paas-provider-design.md)
-  closes the multi-tenant operating concerns: deployment topology
-  (single-operator + multi-Space tenant model), tenant isolation invariants,
-  billing-readiness signals, the three-tier supply chain trust (CatalogRelease /
-  Connector / Implementation), the operator UX surface map, SLA observable
-  surfaces, and the disaster-recovery boundary.
-- **Approval flow design.**
+- **PaaS Provider Architecture.**
+  [PaaS Provider Architecture](./paas-provider-architecture.md) closes the
+  multi-tenant operating concerns: deployment topology (single-operator +
+  multi-Space tenant model), tenant isolation invariants, billing-readiness
+  signals, the three-tier supply chain trust (CatalogRelease / Connector /
+  Implementation), the operator UX surface map, SLA observable surfaces, and the
+  disaster-recovery boundary.
+- **Approval flow architecture.**
   [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md)
   now records the approver UX states, plan-level approval batching, invalidation
   propagation rules (digest-trigger short-circuit), and cross-Space approval
   ownership rules.
-- **Observability design.**
+- **Observability architecture.**
   [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
-  now records the four-layer audit retention design (ObservationSet /
+  now records the four-layer audit retention architecture (ObservationSet /
   ObservationHistory / OperationJournal / AuditLog), drift propagation along
   DriftIndex → ActivationSnapshot → status → approval invalidation, RevokeDebt
   aging rules, and the ObservationHistory opt-in policy.

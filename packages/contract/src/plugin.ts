@@ -4,6 +4,7 @@ export const TAKOSUMI_KERNEL_PLUGIN_API_VERSION = "2026-04-29";
 
 export type KernelPluginPortKind =
   | "auth"
+  | "catalog-hook"
   | "coordination"
   | "kms"
   | "notification"

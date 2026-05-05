@@ -1,8 +1,8 @@
-# API Surface Design
+# API Surface Architecture
 
 Takosumi kernel が外部に公開する HTTP / RPC surface は、caller の信頼境界と SLA
 期待値が異なる 4 つの surface に分割されます。本 doc は「なぜそう分けた
-か」「error envelope の哲学」「version 戦略」「OpenAPI の意味」を design
+か」「error envelope の哲学」「version 戦略」「OpenAPI の意味」を architecture
 レイヤで確定させるためのものです。endpoint カタログ自体は
 [Kernel HTTP API reference](/reference/kernel-http-api) を一次資料とし、
 ここでは設計判断のみを扱います。
@@ -102,8 +102,8 @@ interface ApiErrorEnvelope {
 - **internal surface** (`/api/internal/v1/*`): `v1` は同居していますが、
   operator が kernel と CLI / dashboard を一緒に rolling 更新するため
   rolling-compat を broken させない範囲で `v1` 内に shape 追加が許されます。
-  breaking change は `Cross-references` の design docs を更新し、kernel / CLI
-  を同時 release するのが規約です。
+  breaking change は `Cross-references` の architecture docs を更新し、kernel /
+  CLI を同時 release するのが規約です。
 - **artifact** は content-addressed なので URL semantic は不変。`hash` の digest
   algorithm を変えるときだけ新 surface を切ります。
 
@@ -154,7 +154,7 @@ surface のみ** を export します。
   から **derive** されます。route 定義側を正本とし、OpenAPI は read-only
   artifact として publish します。
 
-## Gateway-manifest signing design
+## Gateway-manifest signing architecture
 
 `POST /api/internal/v1/runtime/agents/:agentId/gateway-manifest` は kernel が
 gateway URL bundle を Ed25519 で署名して返します。
@@ -177,9 +177,9 @@ gateway URL bundle を Ed25519 で署名して返します。
 - Reference: [Kernel HTTP API](/reference/kernel-http-api)
 - Reference: [Runtime-Agent API](/reference/runtime-agent-api)
 - Reference: [Lifecycle Protocol](/reference/lifecycle)
-- Design:
+- Architecture:
   [Policy / Risk / Approval / Error Model](./policy-risk-approval-error-model.md)
-- Design:
+- Architecture:
   [OperationPlan / Write-Ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
-- Design: [Execution Lifecycle](./execution-lifecycle.md)
-- Design: [Operator Boundaries](./operator-boundaries.md)
+- Architecture: [Execution Lifecycle](./execution-lifecycle.md)
+- Architecture: [Operator Boundaries](./operator-boundaries.md)

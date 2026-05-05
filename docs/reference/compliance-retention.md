@@ -229,13 +229,13 @@ erasure 操作自体が audit event として記録される:
 | primary drop が delivery 未確認 entry を含む | `audit-primary-drop-blocked`       | delivery 完了を待つ                 |
 | regime 値が enum 外                          | `audit-retention-regime-unknown`   | enum 5 値のいずれかに修正           |
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/operator-boundaries.md` — operator-only な regime control の
-  trust 境界
-- `docs/design/policy-risk-approval-error-model.md` — audit と Risk / approval
-  の interplay
-- `docs/design/snapshot-model.md` — snapshot / journal / audit の retention
-  階層分離 rationale
+- `docs/reference/architecture/operator-boundaries.md` — operator-only な regime
+  control の trust 境界
+- `docs/reference/architecture/policy-risk-approval-error-model.md` — audit と
+  Risk / approval の interplay
+- `docs/reference/architecture/snapshot-model.md` — snapshot / journal / audit
+  の retention 階層分離 rationale

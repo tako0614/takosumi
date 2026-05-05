@@ -197,13 +197,13 @@ share lifecycle に関連する audit event
 - `refreshPolicy` は operator-controlled。kernel default なし。
 - share の lifecycle 遷移は approval invalidation trigger 4 / 6 を引く。
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る。
+関連 architecture notes:��
 
-- `docs/design/space-model.md` — Space 境界の denial-by-default rationale と
-  SpaceExportShare 設計議論
-- `docs/design/namespace-export-model.md` — exportPath / exportSnapshot の
-  semantics と share の関係
-- `docs/design/observation-drift-revokedebt-model.md` —
+- `docs/reference/architecture/space-model.md` — Space 境界の denial-by-default
+  rationale と SpaceExportShare 設計議論
+- `docs/reference/architecture/namespace-export-model.md` — exportPath /
+  exportSnapshot の semantics と share の関係
+- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
   cross-space-share-expired RevokeDebt の生成経路と aging window 議論

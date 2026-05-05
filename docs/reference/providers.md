@@ -17,7 +17,7 @@ clients; all credentials, cloud SDK code, and side effects live behind the
 **runtime-agent**, identified at the manifest layer as `connector:<id>`.
 Operators install and control connectors on the agent, so they own which
 provider is reachable from a given deployment (operator-installed /
-operator-controlled by design).
+operator-controlled intentionally).
 
 Source roots:
 

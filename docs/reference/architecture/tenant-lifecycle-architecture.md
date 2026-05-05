@@ -1,7 +1,7 @@
-# Tenant Lifecycle Design
+# Tenant Lifecycle Architecture
 
-This document records the design rationale for the v1 tenant lifecycle: how a
-Space is provisioned, how a trial Space differs from a paid Space, how a
+This document records the architecture rationale for the v1 tenant lifecycle:
+how a Space is provisioned, how a trial Space differs from a paid Space, how a
 customer's data is exported, and how a Space is deleted. Wire-level shapes
 (request bodies, status fields, audit event payloads) live in the reference
 layer; this document explains the invariants the kernel keeps and the surfaces
@@ -42,7 +42,7 @@ journaled:
 7. observation-set-init
 ```
 
-Design rationale:
+Architecture rationale:
 
 - **Each stage targets one already-existing kernel substrate.** Step 1 belongs
   to the storage schema, step 2 to the secret partition, step 3 to the quota
@@ -96,7 +96,7 @@ operator-driven extension path is explicit
 (`POST /api/internal/v1/spaces/:id/trial/extend`) so that "extend a trial" is a
 first-class action, not an ad-hoc field write.
 
-## Data export and deletion: design constraints
+## Data export and deletion: architecture constraints
 
 Customers can export their Space data and delete their Space. The kernel exposes
 the primitives that make these compliant with right-to-erasure regimes (GDPR,
@@ -138,7 +138,7 @@ A logical export format exists so that:
   database-level translation.
 
 The export is **not** a backup substitute. Backups are for kernel-side recovery
-and follow [Backup and Restore](../reference/backup-restore.md). Exports are the
+and follow [Backup and Restore](../backup-restore.md). Exports are the
 customer-facing portability surface and are independent of operator backup
 policy.
 
@@ -167,17 +167,17 @@ These compose on top of the kernel primitives but are operator concerns.
 
 ## Related reference docs
 
-- [Tenant Provisioning](../reference/tenant-provisioning.md)
-- [Trial Spaces](../reference/trial-spaces.md)
-- [Tenant Export and Deletion](../reference/tenant-export-deletion.md)
-- [Compliance Retention](../reference/compliance-retention.md)
-- [Storage Schema](../reference/storage-schema.md)
-- [Backup and Restore](../reference/backup-restore.md)
+- [Tenant Provisioning](../tenant-provisioning.md)
+- [Trial Spaces](../trial-spaces.md)
+- [Tenant Export and Deletion](../tenant-export-deletion.md)
+- [Compliance Retention](../compliance-retention.md)
+- [Storage Schema](../storage-schema.md)
+- [Backup and Restore](../backup-restore.md)
 
 ## Cross-references
 
 - [Space Model](./space-model.md)
 - [Operator Boundaries](./operator-boundaries.md)
-- [PaaS Provider Design](./paas-provider-design.md)
-- [Identity and Access Design](./identity-and-access-design.md)
-- [PaaS Operations Design](./paas-operations-design.md)
+- [PaaS Provider Architecture](./paas-provider-architecture.md)
+- [Identity and Access Architecture](./identity-and-access-architecture.md)
+- [PaaS Operations Architecture](./paas-operations-architecture.md)

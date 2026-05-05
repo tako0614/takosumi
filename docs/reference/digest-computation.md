@@ -209,10 +209,10 @@ If an input record is mutable (the kernel never persists mutable inputs to
 digest computation in v1), re-computation is not valid and implementations must
 use the persisted digest instead.
 
-## Related design notes
+## Related architecture notes
 
-- docs/design/snapshot-model.md
-- docs/design/operation-plan-write-ahead-journal-model.md
-- docs/design/policy-risk-approval-error-model.md
-- docs/design/catalog-release-descriptor-model.md
-- docs/design/data-asset-model.md
+- docs/reference/architecture/snapshot-model.md
+- docs/reference/architecture/operation-plan-write-ahead-journal-model.md
+- docs/reference/architecture/policy-risk-approval-error-model.md
+- docs/reference/architecture/catalog-release-descriptor-model.md
+- docs/reference/architecture/data-asset-model.md

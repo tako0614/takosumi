@@ -1046,13 +1046,13 @@ Implementations are not free to:
 - Persist secret values inline; secrets are referenced, never embedded (see
   [Audit Events](/reference/audit-events)).
 
-## Related design notes
+## Related architecture notes
 
-- `design/snapshot-model` — the immutable snapshot taxonomy.
-- `design/operation-plan-write-ahead-journal-model` — WAL stage enum and
-  idempotency tuple.
-- `design/observation-drift-revokedebt-model` — observation, drift, and
-  RevokeDebt semantics.
-- `design/policy-risk-approval-error-model` — Approval invalidation triggers and
-  risk enum.
-- `design/namespace-export-model` — SpaceExportShare lifecycle.
+- `reference/architecture/snapshot-model` — the immutable snapshot taxonomy.
+- `reference/architecture/operation-plan-write-ahead-journal-model` — WAL stage
+  enum and idempotency tuple.
+- `reference/architecture/observation-drift-revokedebt-model` — observation,
+  drift, and RevokeDebt semantics.
+- `reference/architecture/policy-risk-approval-error-model` — Approval
+  invalidation triggers and risk enum.
+- `reference/architecture/namespace-export-model` — SpaceExportShare lifecycle.

@@ -195,13 +195,13 @@ operator が手動で re-observe を要求する経路は internal control-plane
   closed。
 - 手動 re-observe は WAL stage を進めない。observe loop に乗るだけ。
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る。
+関連 architecture notes:��
 
-- `docs/design/observation-drift-revokedebt-model.md` — DriftIndex の compute
-  trigger / 比較方法 / RevokeDebt 連動の設計議論
-- `docs/design/snapshot-model.md` — DesiredSnapshot / ObservationSet /
-  ActivationSnapshot の関係と DriftIndex の位置付け
-- `docs/design/exposure-activation-model.md` — drift annotation が
-  ActivationSnapshot を経由して traffic shift gate に効く経路の議論
+- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
+  DriftIndex の compute trigger / 比較方法 / RevokeDebt 連動の設計議論
+- `docs/reference/architecture/snapshot-model.md` — DesiredSnapshot /
+  ObservationSet / ActivationSnapshot の関係と DriftIndex の位置付け
+- `docs/reference/architecture/exposure-activation-model.md` — drift annotation
+  が ActivationSnapshot を経由して traffic shift gate に効く経路の議論

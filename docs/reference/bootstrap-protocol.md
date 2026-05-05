@@ -247,10 +247,10 @@ Bootstrap は **new install 専用**。Schema migration の cross-version
 semantics、kernel ↔ runtime-agent skew、rollback gate は
 [Migration / Upgrade](/reference/migration-upgrade) で扱う。
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/operator-boundaries.md`
-- `docs/design/snapshot-model.md`
-- `docs/design/catalog-release-descriptor-model.md`
-- `docs/design/space-model.md`
-- `docs/design/operational-hardening-checklist.md`
+- `docs/reference/architecture/operator-boundaries.md`
+- `docs/reference/architecture/snapshot-model.md`
+- `docs/reference/architecture/catalog-release-descriptor-model.md`
+- `docs/reference/architecture/space-model.md`
+- `docs/reference/architecture/operational-hardening-checklist.md`

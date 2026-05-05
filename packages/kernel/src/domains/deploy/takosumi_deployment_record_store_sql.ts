@@ -398,7 +398,7 @@ const ARTIFACT_HASH_REGEX = /^sha256:[0-9a-f]{64}$/;
 /**
  * Mirror of `collectArtifactHashes` from the in-memory store: walk a JSON
  * tree and add every literal `sha256:<64-hex>` string to `into`. Liberal
- * by design — false positives only retain artifacts past their useful
+ * intentionally — false positives only retain artifacts past their useful
  * life (storage cost) while a false negative would race-delete a still-
  * pinned blob and silently break the next apply.
  */

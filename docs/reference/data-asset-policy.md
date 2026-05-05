@@ -22,9 +22,9 @@ Takosumi v1 enforces DataAsset policy in three places:
 
 The kernel does not run user build steps and does not execute transforms in the
 current public deploy path. Source transforms, artifact signing policy, cache
-policy, and approval-gated build pipelines are design-reserved surfaces; they
-must not be documented as active CLI or HTTP behavior until the matching
-operator APIs and tests exist.
+policy, and approval-gated build pipelines are spec-reserved surfaces; they must
+not be documented as active CLI or HTTP behavior until the matching operator
+APIs and tests exist.
 
 ## Size Policy
 

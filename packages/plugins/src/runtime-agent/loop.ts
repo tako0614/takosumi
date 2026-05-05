@@ -6,7 +6,7 @@
  * `RuntimeAgentWorkPayload.kind`). On lease, the loop dispatches to the
  * matching executor and reports the outcome.
  *
- * The loop is designed to be embedded in a Deno process inside the operator's
+ * The loop is built to be embedded in a Deno process inside the operator's
  * tenant cloud. The kernel never imports it.
  */
 import type {

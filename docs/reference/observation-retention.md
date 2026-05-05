@@ -190,13 +190,13 @@ compliance / approval invalidation の保証は崩れない。
 | history append 失敗 (enable 中) | warn log                 | history は best-effort、Journal は維持 |
 | freshness annotation 欠落       | 次 observe で補填        | 自動                                   |
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/snapshot-model.md` — snapshot 階層 (Resolution / Desired /
-  Observation) の rationale
-- `docs/design/policy-risk-approval-error-model.md` — freshness 由来の Risk と
-  approval invalidation の interplay
-- `docs/design/operator-boundaries.md` — observe phase の operator 可視性 と
-  authoritative source の trust 境界
+- `docs/reference/architecture/snapshot-model.md` — snapshot 階層 (Resolution /
+  Desired / Observation) の rationale
+- `docs/reference/architecture/policy-risk-approval-error-model.md` — freshness
+  由来の Risk と approval invalidation の interplay
+- `docs/reference/architecture/operator-boundaries.md` — observe phase の
+  operator 可視性 と authoritative source の trust 境界

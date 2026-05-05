@@ -177,11 +177,11 @@ prevent runaway debug output from drowning the sink. The limiter drops surplus
 `debug` lines silently and exposes the drop count via
 `takosumi_log_debug_dropped_count`.
 
-## Related design notes
+## Related architecture notes
 
-- `design/operator-boundaries` — placement of the log sink in the operator trust
-  model and the redaction trust boundary.
-- `design/observation-drift-revokedebt-model` — relationship between observation
-  logs and the RevokeDebt taxonomy.
-- `design/policy-risk-approval-error-model` — error / fatal mapping to the
-  closed DomainErrorCode enum.
+- `reference/architecture/operator-boundaries` — placement of the log sink in
+  the operator trust model and the redaction trust boundary.
+- `reference/architecture/observation-drift-revokedebt-model` — relationship
+  between observation logs and the RevokeDebt taxonomy.
+- `reference/architecture/policy-risk-approval-error-model` — error / fatal
+  mapping to the closed DomainErrorCode enum.

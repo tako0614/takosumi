@@ -14,8 +14,8 @@ operator-registered artifact kind discovery
 ```
 
 Public v1 does not support arbitrary user shell builds or automatic runtime
-secret injection into transforms. Source transforms are design-reserved until
-the matching operator APIs, approval flow, and tests exist.
+secret injection into transforms. Source transforms are spec-reserved until the
+matching operator APIs, approval flow, and tests exist.
 
 ## DataAsset kinds
 
@@ -73,7 +73,7 @@ resources[].spec.artifact.hash
   -> DataAsset digest visible to the selected Space
 ```
 
-## Transform (Design-Reserved)
+## Transform (Spec-Reserved)
 
 Transform is an operator-approved operation reserved for a future operator
 surface.

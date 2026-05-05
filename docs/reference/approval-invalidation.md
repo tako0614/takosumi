@@ -155,12 +155,13 @@ change として実装される。
 が崩れたら approval は `invalidated` に落ちる、という invariant が trigger 6
 値の根拠になる。
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/policy-risk-approval-error-model.md` — approval invalidation
-  trigger の taxonomy と短絡 / propagation 設計の議論
-- `docs/design/operation-plan-write-ahead-journal-model.md` — approval binding
-  が WAL stage と接続する境界の rationale
-- `docs/design/space-model.md` — Cross-Space approval ownership の設計議論
+- `docs/reference/architecture/policy-risk-approval-error-model.md` — approval
+  invalidation trigger の taxonomy と短絡 / propagation 設計の議論
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
+  approval binding が WAL stage と接続する境界の rationale
+- `docs/reference/architecture/space-model.md` — Cross-Space approval ownership
+  の設計議論

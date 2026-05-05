@@ -325,10 +325,10 @@ Strings outside this grammar are not valid IDs and are rejected by every kernel
 surface that ingests IDs (apply input, storage write, audit ingest, CLI flag
 parsing).
 
-## Related design notes
+## Related architecture notes
 
-- docs/design/object-model.md
-- docs/design/space-model.md
-- docs/design/snapshot-model.md
-- docs/design/link-projection-model.md
-- docs/design/data-asset-model.md
+- docs/reference/architecture/object-model.md
+- docs/reference/architecture/space-model.md
+- docs/reference/architecture/snapshot-model.md
+- docs/reference/architecture/link-projection-model.md
+- docs/reference/architecture/data-asset-model.md

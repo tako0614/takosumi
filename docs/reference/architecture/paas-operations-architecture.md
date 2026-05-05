@@ -1,10 +1,11 @@
-# PaaS Operations Design
+# PaaS Operations Architecture
 
-This document records the design rationale for the v1 operations primitives that
-Takosumi exposes when it is run as a PaaS: quota tiers, cost attribution, SLA
-breach detection, zone selection, the incident model, support impersonation, and
-notification emission. Wire-level shapes live in the reference layer; this
-document explains why each surface is kernel-side and where the line stops.
+This document records the architecture rationale for the v1 operations
+primitives that Takosumi exposes when it is run as a PaaS: quota tiers, cost
+attribution, SLA breach detection, zone selection, the incident model, support
+impersonation, and notification emission. Wire-level shapes live in the
+reference layer; this document explains why each surface is kernel-side and
+where the line stops.
 
 ## Quota tiers: operator-defined names, kernel-enforced caps
 
@@ -101,7 +102,7 @@ constraint:
 
 Cross-region semantics, when they land, will go through a `CONVENTIONS.md` §6
 RFC because they change the federation invariant in
-[PaaS Provider Design](./paas-provider-design.md).
+[PaaS Provider Architecture](./paas-provider-architecture.md).
 
 ## Incident model: kernel-side detection, kernel-side state, operator-side narrative
 
@@ -146,7 +147,7 @@ path:
   runtime-agent enrollments cannot mint a `support-staff` Actor. The minting
   path is internal-control-plane only, gated by HMAC.
 
-This design lets operators support customers without violating the Space
+This architecture lets operators support customers without violating the Space
 containment invariant. The kernel proves the access was scoped, time-bounded,
 and approved; it does not prove the support staff did the right thing once
 inside, which is an operator policy concern.
@@ -162,10 +163,10 @@ channels. The reasoning:
   them in the kernel would expand the kernel's blast radius for credentials it
   has no need to verify.
 - **Pull-only matches the existing webhook decision.** Takosumi does not push to
-  external listeners by design (see the v1 webhook scope decision in
-  [PaaS Provider Design](./paas-provider-design.md)). Notifications follow the
-  same boundary: the kernel emits a signal, an operator-controlled delivery
-  worker reads the queue.
+  external listeners intentionally (see the v1 webhook scope decision in
+  [PaaS Provider Architecture](./paas-provider-architecture.md)). Notifications
+  follow the same boundary: the kernel emits a signal, an operator-controlled
+  delivery worker reads the queue.
 - **Every customer-visible notification has an audit event.** The signal stream
   is a curated subset of audit events plus a small number of derived events
   (e.g., `approval-near-expiry`). The operator's outer stack cannot mint a
@@ -204,22 +205,22 @@ The kernel does not ship:
 
 ## Related reference docs
 
-- [Quota Tiers](../reference/quota-tiers.md)
-- [Quota and Rate Limit](../reference/quota-rate-limit.md)
-- [Cost Attribution](../reference/cost-attribution.md)
-- [SLA Breach Detection](../reference/sla-breach-detection.md)
-- [Zone Selection](../reference/zone-selection.md)
-- [Incident Model](../reference/incident-model.md)
-- [Support Impersonation](../reference/support-impersonation.md)
-- [Notification Emission](../reference/notification-emission.md)
-- [Audit Events](../reference/audit-events.md)
-- [Telemetry / Metrics](../reference/telemetry-metrics.md)
+- [Quota Tiers](../quota-tiers.md)
+- [Quota and Rate Limit](../quota-rate-limit.md)
+- [Cost Attribution](../cost-attribution.md)
+- [SLA Breach Detection](../sla-breach-detection.md)
+- [Zone Selection](../zone-selection.md)
+- [Incident Model](../incident-model.md)
+- [Support Impersonation](../support-impersonation.md)
+- [Notification Emission](../notification-emission.md)
+- [Audit Events](../audit-events.md)
+- [Telemetry / Metrics](../telemetry-metrics.md)
 
 ## Cross-references
 
 - [Space Model](./space-model.md)
 - [Operator Boundaries](./operator-boundaries.md)
-- [PaaS Provider Design](./paas-provider-design.md)
-- [Identity and Access Design](./identity-and-access-design.md)
-- [Tenant Lifecycle Design](./tenant-lifecycle-design.md)
+- [PaaS Provider Architecture](./paas-provider-architecture.md)
+- [Identity and Access Architecture](./identity-and-access-architecture.md)
+- [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md)
 - [Operational Hardening Checklist](./operational-hardening-checklist.md)

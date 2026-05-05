@@ -170,7 +170,7 @@ granularity consume the underlying audit events directly.
 
 ### Resume cursor
 
-The design-reserved activation-history export endpoint accepts an `afterEventId`
+The spec-reserved activation-history export endpoint accepts an `afterEventId`
 cursor and returns results strictly after that id. Pagination is forward-only
 and monotonic; clients persist the last-seen `eventId` and resume from there:
 
@@ -185,7 +185,7 @@ call.
 
 ### Filters
 
-The design-reserved endpoint accepts:
+The spec-reserved endpoint accepts:
 
 | Filter       | Notes                                                                                  |
 | ------------ | -------------------------------------------------------------------------------------- |
@@ -238,13 +238,14 @@ Both events ride the standard envelope and the per-Space hash chain. GC's
 `spaceId` is `null` (kernel-global) when the cycle covers all Spaces and the
 owning Space id when an operator scopes the cycle.
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/data-asset-model.md` — DataAsset reachability model and the
-  rationale for the conservative mark phase.
-- `docs/design/snapshot-model.md` — snapshot retention semantics that drive the
-  snapshot-reachable mark class.
-- `docs/design/exposure-activation-model.md` — ActivationSnapshot shape that
-  grounds the activation history projection.
-- `docs/design/observation-drift-revokedebt-model.md` — RevokeDebt rows as a GC
-  root, ensuring debt-pinned material is not swept while cleanup is in flight.
+- `docs/reference/architecture/data-asset-model.md` — DataAsset reachability
+  model and the rationale for the conservative mark phase.
+- `docs/reference/architecture/snapshot-model.md` — snapshot retention semantics
+  that drive the snapshot-reachable mark class.
+- `docs/reference/architecture/exposure-activation-model.md` —
+  ActivationSnapshot shape that grounds the activation history projection.
+- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
+  RevokeDebt rows as a GC root, ensuring debt-pinned material is not swept while
+  cleanup is in flight.

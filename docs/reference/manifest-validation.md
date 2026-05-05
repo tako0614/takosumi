@@ -260,10 +260,10 @@ ignore されることがない。
 完全一致する。これにより CI 上での dry-run と production kernel の plan
 入力検証が等価であることを担保する。
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/manifest-model.md`
-- `docs/design/policy-risk-approval-error-model.md`
-- `docs/design/catalog-release-descriptor-model.md`
-- `docs/design/space-model.md`
-- `docs/design/target-model.md`
+- `docs/reference/architecture/manifest-model.md`
+- `docs/reference/architecture/policy-risk-approval-error-model.md`
+- `docs/reference/architecture/catalog-release-descriptor-model.md`
+- `docs/reference/architecture/space-model.md`
+- `docs/reference/architecture/target-model.md`

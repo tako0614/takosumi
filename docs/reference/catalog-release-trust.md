@@ -102,6 +102,11 @@ Current kernel primitive:
   failure appends terminal `abort` before provider side effects. Post-commit
   failure appends the failed hook result, enqueues `approval-invalidated`
   RevokeDebt for committed operations, then records observe/finalize evidence.
+- Marketplace-installed executable hook packages are verified through the
+  trusted kernel plugin install path (`ECDSA-P256-SHA256` signed manifest +
+  SHA-256 module digest) and then run after CatalogRelease Ed25519
+  re-verification at the matching WAL stage. The Ed25519 CatalogRelease tier and
+  the ECDSA trusted plugin package tier are separate trust roots.
 
 ## Verify 失敗時の挙動
 
@@ -203,13 +208,13 @@ failure を他 tier が暗黙に補正することはない。
   を引く。
 - 1 Space に同時 adopt できる publisher は 1 つ。
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る。
+関連 architecture notes:��
 
-- `docs/design/catalog-release-descriptor-model.md` — 3-tier trust chain と
-  publisher key enroll / rotate / revoke の設計議論
-- `docs/design/paas-provider-design.md` — provider plugin author signing と
-  runtime-agent verification の境界 rationale
-- `docs/design/operator-boundaries.md` — operator が trusted entity を enroll
-  する surface と redaction trust boundary の議論
+- `docs/reference/architecture/catalog-release-descriptor-model.md` — 3-tier
+  trust chain と publisher key enroll / rotate / revoke の設計議論
+- `docs/reference/architecture/paas-provider-architecture.md` — provider plugin
+  author signing と runtime-agent verification の境界 rationale
+- `docs/reference/architecture/operator-boundaries.md` — operator が trusted
+  entity を enroll する surface と redaction trust boundary の議論

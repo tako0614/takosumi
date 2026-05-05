@@ -256,10 +256,10 @@ Each event carries the backup's chain head hash. Verifying a restore against its
 backup amounts to checking that the `restore-completed` event's chain head
 matches the `backup-completed` event's chain head.
 
-## Related design notes
+## Related architecture notes
 
-- docs/design/snapshot-model.md
-- docs/design/operation-plan-write-ahead-journal-model.md
-- docs/design/observation-drift-revokedebt-model.md
-- docs/design/operational-hardening-checklist.md
-- docs/design/operator-boundaries.md
+- docs/reference/architecture/snapshot-model.md
+- docs/reference/architecture/operation-plan-write-ahead-journal-model.md
+- docs/reference/architecture/observation-drift-revokedebt-model.md
+- docs/reference/architecture/operational-hardening-checklist.md
+- docs/reference/architecture/operator-boundaries.md

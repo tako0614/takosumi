@@ -184,13 +184,14 @@ production deployment では status 表示を必須とする:
   [Lifecycle Protocol — Recovery modes](/reference/lifecycle#recovery-modes)
 - `revoke-debt-created` Risk: [Risk Taxonomy](/reference/risk-taxonomy)
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/observation-drift-revokedebt-model.md` — RevokeDebt taxonomy、
-  reason / status の選定理由、aging window が policy-controlled である根拠
-- `docs/design/exposure-activation-model.md` — ActivationSnapshot propagation と
-  fail-safe-not-fail-closed スタンスの議論
-- `docs/design/space-model.md` — Multi-Space ownership と SpaceExportShare
-  経由の debt 受け渡しの設計議論
+- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
+  RevokeDebt taxonomy、 reason / status の選定理由、aging window が
+  policy-controlled である根拠
+- `docs/reference/architecture/exposure-activation-model.md` —
+  ActivationSnapshot propagation と fail-safe-not-fail-closed スタンスの議論
+- `docs/reference/architecture/space-model.md` — Multi-Space ownership と
+  SpaceExportShare 経由の debt 受け渡しの設計議論

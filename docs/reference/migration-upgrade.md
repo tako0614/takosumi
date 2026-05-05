@@ -210,13 +210,13 @@ audit event は migration の各 phase で emit され、operator dashboard が 
 | drain timeout 超過                        | `kernel_drain_timeout`         | `SIGKILL` 後 recovery、operator が原因調査                                                                                       |
 | cross-minor rollback で down が無い       | `down_migration_not_supported` | rollback 不可。forward-only で対処                                                                                               |
 
-## Related design notes
+## Related architecture notes
 
-本文を読むのに design/ への参照は不要だが、設計の rationale は以下に残る:
+関連 architecture notes:
 
-- `docs/design/operator-boundaries.md` — kernel と runtime-agent の trust
-  境界、skew tolerance の選定 rationale
-- `docs/design/execution-lifecycle.md` — migration window と recovery mode の
-  interplay
-- `docs/design/operational-hardening-checklist.md` — production rolling upgrade
-  の運用 checklist
+- `docs/reference/architecture/operator-boundaries.md` — kernel と runtime-agent
+  の trust 境界、skew tolerance の選定 rationale
+- `docs/reference/architecture/execution-lifecycle.md` — migration window と
+  recovery mode の interplay
+- `docs/reference/architecture/operational-hardening-checklist.md` — production
+  rolling upgrade の運用 checklist

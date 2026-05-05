@@ -132,7 +132,7 @@ artifacts it accepts:
 | `required` | Connector rejects unsigned artifacts at plan time.                                                              |
 
 Signing expectations are connector metadata in current v1. Artifact signature
-verification policy is design-reserved until the operator signing backend is
+verification policy is spec-reserved until the operator signing backend is
 implemented:
 
 - Signature verification itself is performed by the operator-installed signing
@@ -222,11 +222,11 @@ The runtime-agent hosts Connectors as in-process modules:
 See [Runtime-Agent API](/reference/runtime-agent-api) for the lifecycle envelope
 wire format and error code enum.
 
-## Related design notes
+## Related architecture notes
 
-- `design/data-asset-model` — the rationale for operator-installed Connectors,
-  accepted-kind vectors, and Space visibility.
-- `design/operator-boundaries` — the trust split that keeps Connector
-  credentials in the runtime-agent host.
-- `design/paas-provider-design` — provider plugin authoring patterns that
-  consume Connectors.
+- `reference/architecture/data-asset-model` — the rationale for
+  operator-installed Connectors, accepted-kind vectors, and Space visibility.
+- `reference/architecture/operator-boundaries` — the trust split that keeps
+  Connector credentials in the runtime-agent host.
+- `reference/architecture/paas-provider-architecture` — provider plugin
+  authoring patterns that consume Connectors.

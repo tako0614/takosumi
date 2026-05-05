@@ -240,7 +240,7 @@ external 観測が必要な場合の選択肢:
 - OTLP metrics を collector に push する
 - application logs を Deno stdout から拾う
 
-native trace exporter は design target です。 :::
+native trace exporter は target contract です。 :::
 
 ---
 

@@ -68,7 +68,7 @@ Values exceeding the caps are rejected at write time with HTTP
 
 ## Update API
 
-In the design-reserved internal HTTP surface, attribution metadata is mutated
+In the spec-reserved internal HTTP surface, attribution metadata is mutated
 through:
 
 ```text
@@ -146,7 +146,7 @@ removes the key from the promote list.
 
 ## Reporting query
 
-In the design-reserved internal API, operators read attribution through:
+In the spec-reserved internal API, operators read attribution through:
 
 - `GET /api/internal/v1/spaces?costCenter=cc:platform`
 - `GET /api/internal/v1/spaces?customerSegment=enterprise`
@@ -180,10 +180,11 @@ external accounting systems — lives in operator distributions such as
 `takos-private/` and in the billing pipeline an operator wires up. The kernel
 ships the metadata surface and stops there.
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/operator-boundaries.md` — operator policy layer that consumes
-  attribution-tagged signals.
-- `docs/design/space-model.md` — Space identity that owns attribution.
-- `docs/design/operation-plan-write-ahead-journal-model.md` — audit emission
-  point where attribution snapshots are captured.
+- `docs/reference/architecture/operator-boundaries.md` — operator policy layer
+  that consumes attribution-tagged signals.
+- `docs/reference/architecture/space-model.md` — Space identity that owns
+  attribution.
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
+  audit emission point where attribution snapshots are captured.

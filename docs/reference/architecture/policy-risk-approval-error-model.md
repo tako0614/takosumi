@@ -180,7 +180,7 @@ prod/strict
 enterprise/catalog-approved-only
 ```
 
-## Approval flow design
+## Approval flow architecture
 
 ### Approver UX states
 
@@ -247,11 +247,11 @@ model の Error fix-hint 分類 (safeFix / requiresPolicyReview / operatorFix)
 
 ## Cross-references
 
-- Design: [API Surface Design](./api-surface-design.md)
-- Design:
+- Architecture: [API Surface Architecture](./api-surface-architecture.md)
+- Architecture:
   [OperationPlan / Write-Ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
-- Design: [Space Model](./space-model.md)
-- Design:
+- Architecture: [Space Model](./space-model.md)
+- Architecture:
   [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
 - Reference: [Kernel HTTP API](/reference/kernel-http-api)
 - Reference: [Runtime-Agent API](/reference/runtime-agent-api)

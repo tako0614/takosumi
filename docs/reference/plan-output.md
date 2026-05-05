@@ -203,7 +203,7 @@ same `{ status, outcome }` envelope. There is no current global `--json`,
 
 The public `operationPlanPreview` is a deterministic preview, not execution
 authority. The following fields still belong to the internal OperationPlan / WAL
-design model and are **not** current public plan output:
+architecture model and are **not** current public plan output:
 
 ```text
 predictedActualEffectsDigest
@@ -217,10 +217,10 @@ journalCursor
 When these fields become public, this reference must be updated together with
 route tests, OpenAPI, CLI rendering tests, and migration notes.
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/operation-plan-write-ahead-journal-model.md`
-- `docs/design/policy-risk-approval-error-model.md`
-- `docs/design/snapshot-model.md`
-- `docs/design/execution-lifecycle.md`
-- `docs/design/manifest-model.md`
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md`
+- `docs/reference/architecture/policy-risk-approval-error-model.md`
+- `docs/reference/architecture/snapshot-model.md`
+- `docs/reference/architecture/execution-lifecycle.md`
+- `docs/reference/architecture/manifest-model.md`

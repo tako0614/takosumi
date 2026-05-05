@@ -1,6 +1,6 @@
-# Identity and Access Design
+# Identity and Access Architecture
 
-This document records the design rationale for the v1 identity and access
+This document records the architecture rationale for the v1 identity and access
 primitives that Takosumi persists when it is operated as a PaaS: Actor,
 Organization, Membership, role-based access control, API keys, and pluggable
 auth providers. Wire shape and field grammar live in the reference layer; this
@@ -19,8 +19,8 @@ own containment invariants. Each operator distribution would then re-implement
 those invariants on top of the kernel, and Space isolation would be a property
 of the outer stack instead of the kernel.
 
-The design rule is therefore: **the kernel ships the identity primitives that
-its own invariants reference, and nothing more.** Customer signup forms,
+The architecture rule is therefore: **the kernel ships the identity primitives
+that its own invariants reference, and nothing more.** Customer signup forms,
 branding, billing-contact validation, anti-abuse heuristics, end-user
 dashboards, and the admin escalation workflow live outside Takosumi.
 
@@ -34,7 +34,7 @@ Organization      the tenancy unit that owns one or more Spaces
 Membership        the bind between an Actor and an Organization
 ```
 
-Design choices and the reason each is fixed:
+Architecture choices and the reason each is fixed:
 
 - **Org-Space 1:N is the minimal expression of tenant hierarchy.** A customer
   that operates `prod`, `staging`, and `dev` as three Spaces still bills,
@@ -78,8 +78,8 @@ Custom roles are out of scope for v1. The reasoning is:
 - **`support-staff` is intentionally outside the customer role tree.** A
   support-staff Actor never appears in a Membership and never holds a Space role
   directly. Its authority is mediated by the impersonation primitive (see
-  [PaaS Operations Design](./paas-operations-design.md)) so that every
-  cross-tenant access has an audit-grade evidence trail.
+  [PaaS Operations Architecture](./paas-operations-architecture.md)) so that
+  every cross-tenant access has an audit-grade evidence trail.
 
 ## API key vs OIDC vs mTLS
 
@@ -93,7 +93,7 @@ mtls                      service-to-service, including operator-owned automatio
 runtime-agent-enrollment  bootstrap path for runtime-agent processes only
 ```
 
-Design rationale:
+Architecture rationale:
 
 - **Each provider matches the credential a real caller already has.** A CLI user
   holds a bearer token. A human in front of a browser holds an OIDC id_token. A
@@ -163,17 +163,17 @@ part of Takosumi.
 
 ## Related reference docs
 
-- [Actor / Organization Model](../reference/actor-organization-model.md)
-- [RBAC Policy](../reference/rbac-policy.md)
-- [API Key Management](../reference/api-key-management.md)
-- [Auth Providers](../reference/auth-providers.md)
-- [Audit Events](../reference/audit-events.md)
-- [Kernel HTTP API](../reference/kernel-http-api.md)
+- [Actor / Organization Model](../actor-organization-model.md)
+- [RBAC Policy](../rbac-policy.md)
+- [API Key Management](../api-key-management.md)
+- [Auth Providers](../auth-providers.md)
+- [Audit Events](../audit-events.md)
+- [Kernel HTTP API](../kernel-http-api.md)
 
 ## Cross-references
 
 - [Space Model](./space-model.md)
 - [Operator Boundaries](./operator-boundaries.md)
-- [PaaS Provider Design](./paas-provider-design.md)
-- [Tenant Lifecycle Design](./tenant-lifecycle-design.md)
-- [PaaS Operations Design](./paas-operations-design.md)
+- [PaaS Provider Architecture](./paas-provider-architecture.md)
+- [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md)
+- [PaaS Operations Architecture](./paas-operations-architecture.md)

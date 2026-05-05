@@ -61,10 +61,10 @@ Takosumi は **6 つの JSR package** で配布される:
   → cloud deploy まで
 - [Manifest (Shape Model)](/manifest) — `resources[]` / `template:` /
   `${ref:...}` / `${secret-ref:...}` syntax
-- [Design Overview](/design/) — manifest / deployment core / execution / routing
-  / artifact / operator boundary の設計 notes
-- [Manifest Model](/design/manifest-model) — Shape / Provider / Template の
-  closed manifest contract
+- [Architecture Overview](/reference/architecture/) — manifest / deployment core
+  / execution / routing / artifact / operator boundary の設計 notes
+- [Manifest Model](/reference/architecture/manifest-model) — Shape / Provider /
+  Template の closed manifest contract
 - [Shape Catalog](/reference/shapes) — 5 shapes の spec / outputs / capabilities
 - [Provider Plugins](/reference/providers) — 20 default providers + 1 opt-in
   provider の cloud × shape matrix

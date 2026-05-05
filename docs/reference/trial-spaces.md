@@ -18,9 +18,9 @@ extension、paid conversion を primitive として提供する。本 reference 
 kernel-side の enforcement のみを定義する。
 
 ::: info Current HTTP status The trial extension and conversion endpoints in
-this reference are a design / service contract. The current kernel HTTP router
+this reference are a spec / service contract. The current kernel HTTP router
 does not mount `/api/internal/v1/spaces/:id/trial/*`; see
-[Kernel HTTP API — Design-Reserved Internal Surfaces](/reference/kernel-http-api#design-reserved-internal-surfaces).
+[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
 :::
 
 ## Trial Space attribute
@@ -216,11 +216,11 @@ flow、free-tier テンプレートカタログ、conversion CTA、support escal
 等の外側で実装する。kernel は trial flag、TTL、frozen
 grace、auto-cleanup、conversion 経路を抽象として提供する。
 
-## Related design notes
+## Related architecture notes
 
-- `docs/design/space-model.md` — Space lifecycle と trial attribute の isolation
-  invariant 議論
-- `docs/design/operator-boundaries.md` — trial governance を operator policy
-  に置く理由と kernel が emit する primitive の境界
-- `docs/design/exposure-activation-model.md` — `frozen` 状態で write を 落とし
-  read を保つ fail-safe-not-fail-closed stance の整合
+- `docs/reference/architecture/space-model.md` — Space lifecycle と trial
+  attribute の isolation invariant 議論
+- `docs/reference/architecture/operator-boundaries.md` — trial governance を
+  operator policy に置く理由と kernel が emit する primitive の境界
+- `docs/reference/architecture/exposure-activation-model.md` — `frozen` 状態で
+  write を 落とし read を保つ fail-safe-not-fail-closed stance の整合

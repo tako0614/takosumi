@@ -41,11 +41,14 @@ export interface TrustedKernelPluginInstallPolicy {
   readonly allowedPorts?: readonly KernelPluginPortKind[];
   readonly allowedExternalIo?: readonly KernelPluginIoBoundary[];
   readonly requireImplementationProvenance?: boolean;
+  readonly requireRemoteModuleDigest?: boolean;
+  readonly allowedModuleSpecifierPrefixes?: readonly string[];
 }
 
 export interface TrustedKernelPluginImplementationProvenance {
   readonly artifactDigest?: string;
   readonly moduleSpecifier?: string;
+  readonly moduleDigest?: string;
   readonly provenanceRef?: string;
   readonly artifact?: Record<string, unknown>;
   readonly module?: Record<string, unknown>;
@@ -292,6 +295,7 @@ function assertImplementationProvenanceBindsArtifactOrModule(
 ): void {
   if (
     nonEmptyString(provenance.artifactDigest) ||
+    nonEmptyString(provenance.moduleDigest) ||
     nonEmptyString(provenance.moduleSpecifier) ||
     isRecord(provenance.artifact) ||
     isRecord(provenance.module)

@@ -114,11 +114,11 @@ ObservationSet stores latest reality. ObservationHistory is optional and
 policy-controlled. OperationJournal and RevokeDebt carry recovery-critical
 history.
 
-## Observability design
+## Observability architecture
 
-This section records the design-layer rules that govern how observation, drift,
-and debt become operator-visible signals. Wire shape lives in the reference
-docs.
+This section records the architecture-layer rules that govern how observation,
+drift, and debt become operator-visible signals. Wire shape lives in the
+reference docs.
 
 ### Audit retention policy
 
@@ -132,7 +132,7 @@ OperationJournal       recovery-critical; retained until journal compaction allo
 AuditLog               compliance-driven; retained per operator policy
 ```
 
-Design rules:
+Architecture rules:
 
 - TTL values are not fixed by the kernel. Each layer carries an
   operator-controlled retention policy.
@@ -168,11 +168,11 @@ automatically to `operator-action-required`.
 open --(aging window elapsed without retry success)--> operator-action-required
 ```
 
-Aging design rules:
+Aging architecture rules:
 
-- The aging window is policy-controlled, not a kernel constant. The kernel
-  design only requires that such a window exists and that the transition is
-  automatic, idempotent, and journaled.
+- The aging window is policy-controlled, not a kernel constant. The architecture
+  only requires that such a window exists and that the transition is automatic,
+  idempotent, and journaled.
 - Manual operator action can move `open` directly to `operator-action-required`
   regardless of the window.
 - `cleared` is terminal. Aged debt that becomes cleared records both the aging
@@ -187,7 +187,7 @@ opt-in    operator enables retention; ObservationSet entries are appended to his
 opt-out   default; only the latest ObservationSet is kept
 ```
 
-Design rules:
+Architecture rules:
 
 - ObservationHistory is never authoritative for resolution or planning. It is a
   query surface only.
@@ -202,4 +202,4 @@ Design rules:
 - [Operator Boundaries](./operator-boundaries.md)
 - [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md)
 - [Exposure and Activation Model](./exposure-activation-model.md)
-- [PaaS Provider Design](./paas-provider-design.md)
+- [PaaS Provider Architecture](./paas-provider-architecture.md)
