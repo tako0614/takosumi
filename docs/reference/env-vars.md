@@ -184,6 +184,19 @@ The kernel selects an Implementation per plugin port (`auth`, `coordination`,
 | `TAKOSUMI_SUPPORT_SESSION_MAX_TTL_SECONDS` | integer (seconds) | `86400` | no       | kernel server; upper bound on support session TTL accepted from operator request | Support Impersonation |
 | `TAKOSUMI_TELEMETRY_ATTRIBUTION_PROMOTE`   | string list (CSV) | unset   | no       | telemetry exporters; cost attribution labels promoted to first-class metric tags | Cost Attribution      |
 
+### Workflow & Trigger
+
+Reserved env names for future workflow-extension implementation. The current
+kernel does not read these variables.
+
+| Variable                                 | Type              | Default | Required | Consumer                     | Spec concept                                                         |
+| ---------------------------------------- | ----------------- | ------- | -------- | ---------------------------- | -------------------------------------------------------------------- |
+| `TAKOSUMI_TRIGGER_SCHEDULER_ENABLED`     | boolean           | `true`  | no       | kernel server                | Triggers (`schedule` kind kernel-side cron evaluator on/off)         |
+| `TAKOSUMI_TRIGGER_DEDUP_WINDOW_SECONDS`  | integer (seconds) | `300`   | no       | kernel server                | Triggers (`external-event` dedup window)                             |
+| `TAKOSUMI_STEP_DEFAULT_TIMEOUT_SECONDS`  | integer (seconds) | `1800`  | no       | kernel server, runtime-agent | Execute-Step Operation (default per-step timeout)                    |
+| `TAKOSUMI_STEP_CANCEL_GRACE_SECONDS`     | integer (seconds) | `30`    | no       | kernel server, runtime-agent | Execute-Step Operation (graceful cleanup window after cancel signal) |
+| `TAKOSUMI_STEP_MAX_CONCURRENT_PER_SPACE` | integer           | `4`     | no       | kernel server                | Execute-Step Operation (per-Space concurrent step quota)             |
+
 ### Zone Configuration
 
 | Variable                          | Type              | Default              | Required | Consumer                                                                                         | Spec concept   |
@@ -320,3 +333,6 @@ weakens the OperatorBoundaries trust model.
 - [Support Impersonation](/reference/support-impersonation)
 - [Notification Emission](/reference/notification-emission)
 - [Kernel HTTP API](/reference/kernel-http-api)
+- [Triggers](/reference/triggers)
+- [Execute-Step Operation](/reference/execute-step-operation)
+- [Declarable Hooks](/reference/declarable-hooks)

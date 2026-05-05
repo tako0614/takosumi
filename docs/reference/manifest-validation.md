@@ -22,8 +22,10 @@ Takosumi v1 の manifest envelope は `apiVersion: "1.0"` + `kind: Manifest`
 固定の closed envelope を採用する。これは Takosumi 実装が受理する正式な v1
 形式であり、本 reference 群 (`docs/manifest.md` および本ページ) が canonical
 source となる。envelope の closed top-level shape は
-`apiVersion / kind / metadata / template / resources` の 5 値で、未知 top-level
-field を含む manifest は schema phase で reject される。
+`@context / apiVersion / kind / metadata / template / resources` の 6 値で、
+未知 top-level field を含む manifest は schema phase で reject される。
+`@context` は optional な JSON-LD context で、推奨値は
+`https://takosumi.com/contexts/manifest-v1.jsonld`。
 
 ## Validation phase 順序
 
@@ -58,14 +60,17 @@ YAML / JSON parser layer。
 
 Manifest envelope は **closed vocabulary**。次に列挙する key 以外の top-level
 および nested key を含む manifest は reject される。具体的には、 top-level に
-`apiVersion / kind / metadata / template / resources` 以外の field
+`@context / apiVersion / kind / metadata / template / resources` 以外の field
 が現れた時点で `invalid_argument` で reject される (warning に 降格しない)。
 
 Top-level:
 
 ```text
-apiVersion | kind | metadata | template | resources
+@context | apiVersion | kind | metadata | template | resources
 ```
+
+`@context` の値は non-empty string、JSON-LD context object、またはそれらの
+non-empty array。空 array / null / number は schema phase で reject される。
 
 `metadata` の closed key:
 

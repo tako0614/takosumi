@@ -1009,6 +1009,87 @@ see [Zone Selection](/reference/zone-selection).
 
 See also: [Zone Selection](/reference/zone-selection).
 
+## Trigger
+
+Reserved workflow-extension record. The current kernel does not create or
+persist Trigger rows yet.
+
+Per-fire instance of a registered trigger.
+
+| Field                     | Type      | Required    | Notes                                                                |
+| ------------------------- | --------- | ----------- | -------------------------------------------------------------------- |
+| `id`                      | string    | yes         | `trigger:<ulid>` form.                                               |
+| `registrationId`          | string    | yes         | `trigger-registration:<ulid>` form.                                  |
+| `spaceId`                 | string    | yes         | Owning Space.                                                        |
+| `kind`                    | enum      | yes         | One of `manual`, `schedule`, `external-event`.                       |
+| `firedAt`                 | timestamp | yes         | Fire time.                                                           |
+| `payload`                 | object    | conditional | `external-event` only. Opaque JSON, redacted of secrets.             |
+| `causedOperationId`       | string    | conditional | Resulting OperationPlan id; present only when `status` is `fired`.   |
+| `status`                  | enum      | yes         | One of `fired`, `rejected`, `deduplicated`.                          |
+| `dedupReferenceTriggerId` | string    | conditional | Required when `status` is `deduplicated`; references the prior fire. |
+
+Persistence: kept until the audit retention window passes. Indexed by
+`(spaceId, firedAt)` and `(registrationId, firedAt)`.
+
+Immutability: append-only. Trigger records are never mutated after insert.
+
+See also: [Triggers](/reference/triggers).
+
+## TriggerRegistration
+
+Reserved workflow-extension record. The current kernel does not create or
+persist TriggerRegistration rows yet.
+
+Operator- or actor-registered trigger source.
+
+| Field              | Type      | Required    | Notes                                                                            |
+| ------------------ | --------- | ----------- | -------------------------------------------------------------------------------- |
+| `id`               | string    | yes         | `trigger-registration:<ulid>` form.                                              |
+| `spaceId`          | string    | yes         | Owning Space.                                                                    |
+| `resourceRef`      | string    | yes         | `object:<resource-name>` form; the manifest resource the trigger fires against.  |
+| `kind`             | enum      | yes         | One of `manual`, `schedule`, `external-event`.                                   |
+| `spec`             | object    | yes         | Kind-specific spec (cron expression / external event name / manual descriptor).  |
+| `secretHash`       | string    | conditional | `external-event` only. Argon2id hash of the HMAC secret; plaintext never stored. |
+| `missedFirePolicy` | enum      | conditional | `schedule` only. One of `skip`, `catchup-latest`.                                |
+| `createdAt`        | timestamp | yes         | Registration time.                                                               |
+| `revokedAt`        | timestamp | no          | Revocation instant; null while active.                                           |
+
+Persistence: kept while `revokedAt` is null. Indexed by `(spaceId, kind)` and
+`(resourceRef)`.
+
+Immutability: `revokedAt` is mutable in place; transitions emit audit events.
+The other fields are immutable.
+
+See also: [Triggers](/reference/triggers).
+
+## HookBinding
+
+Reserved declarable-hook record. Catalog-supplied executable WAL hooks are
+implemented separately and do not create HookBinding rows.
+
+Declared hook binding to a lifecycle phase boundary on a deployment.
+
+| Field                | Type      | Required | Notes                                                                                             |
+| -------------------- | --------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `id`                 | string    | yes      | `hook-binding:<ulid>` form.                                                                       |
+| `spaceId`            | string    | yes      | Owning Space.                                                                                     |
+| `resourceRef`        | string    | yes      | `object:<hook-resource-name>` form; the manifest hook resource.                                   |
+| `hookOrder`          | enum      | yes      | Cross product of lifecycle phase and hook order (e.g. `pre-apply`, `post-apply`, `side-observe`). |
+| `bindToDeploymentId` | string    | yes      | Deployment the hook binds against.                                                                |
+| `bundleRef`          | string    | yes      | `dataasset:sha256:...` form; DataAsset bundle the hook executes via runtime-agent.                |
+| `failurePolicy`      | enum      | yes      | One of `abort`, `warn`.                                                                           |
+| `timeout`            | duration  | yes      | Per-hook execution timeout.                                                                       |
+| `createdAt`          | timestamp | yes      | Binding creation time.                                                                            |
+| `revokedAt`          | timestamp | no       | Revocation instant; null while active.                                                            |
+
+Persistence: kept while `revokedAt` is null OR the last fire is still within the
+audit retention window. Indexed by `(spaceId, bindToDeploymentId, hookOrder)`.
+
+Immutability: `revokedAt` is mutable in place; transitions emit audit events.
+The other fields are immutable.
+
+See also: [Declarable Hooks](/reference/declarable-hooks).
+
 ## See also
 
 - [Actor / Organization Model](/reference/actor-organization-model)
@@ -1025,6 +1106,9 @@ See also: [Zone Selection](/reference/zone-selection).
 - [Support Impersonation](/reference/support-impersonation)
 - [Notification Emission](/reference/notification-emission)
 - [Zone Selection](/reference/zone-selection)
+- [Triggers](/reference/triggers)
+- [Execute-Step Operation](/reference/execute-step-operation)
+- [Declarable Hooks](/reference/declarable-hooks)
 
 ## Implementation freedom
 

@@ -40,6 +40,7 @@ CatalogRelease identity when one is adopted for the Space.
 
 ```json
 {
+  "@context": "https://takosumi.com/contexts/plugin-marketplace-v1.jsonld",
   "schemaVersion": "takosumi.plugin-marketplace.v1",
   "marketplaceId": "market:example",
   "generatedAt": "2026-05-05T00:00:00.000Z",
@@ -87,6 +88,10 @@ CatalogRelease identity when one is adopted for the Space.
 before import. In production policy, set `requireImplementationProvenance` and
 `requireRemoteModuleDigest` so the signed manifest binds the same
 `moduleSpecifier` and `moduleDigest` as the marketplace index.
+
+`@context` is optional and is ignored for install decisions. It gives external
+marketplaces, catalogs, and audit tooling a stable JSON-LD vocabulary without
+making user manifests install code.
 
 ## Kernel boot env
 

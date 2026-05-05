@@ -201,6 +201,49 @@ The addition kinds slot into the stability rules from the section below.
 The addition table does not introduce content-addressed kinds; SHA suffixes are
 reserved for the kinds enumerated in the original section.
 
+### Workflow extension primitive additions
+
+The kinds below extend the v1 closed kind list with the resources introduced by
+the workflow extension primitives that wire trigger fan-in and declarable hook
+fan-out into the kernel apply pipeline. The closure rule from the previous
+sections applies: each kind is bound to a fixed suffix grammar and a fixed
+source-of-suffix; new kinds beyond this list still require the `CONVENTIONS.md`
+§6 RFC.
+
+Implementation status: these kinds are reserved. Current kernel code does not
+mint `trigger:` / `trigger-registration:` / `hook-binding:` ids yet.
+
+| Kind                   | Suffix grammar | Source of suffix                      | Reference                                       |
+| ---------------------- | -------------- | ------------------------------------- | ----------------------------------------------- |
+| `trigger`              | ULID           | Kernel-generated per fire instance.   | [Triggers](/reference/triggers)                 |
+| `trigger-registration` | ULID           | Kernel-generated per registration.    | [Triggers](/reference/triggers)                 |
+| `hook-binding`         | ULID           | Kernel-generated per declarable hook. | [Declarable Hooks](/reference/declarable-hooks) |
+
+Plugin-domain identifiers introduced by the workflow plugin family (`workflow:`
+/ `workflow-run:` / `workflow-step-run:`) are **not** kernel-curated v1 kinds
+and are not added to the closed list. The kernel persists workflow plugin state
+through the existing `object:` / `operation:` kinds; plugin authors may carry
+their own naming conventions inside opaque plugin payloads without claiming a
+kernel kind prefix.
+
+#### Examples
+
+```text
+trigger:01HMA0K3NJDF8C9V4Q7Y2X5RTM
+trigger-registration:01HMA0K3NJDF8C9V4Q7Y2X5RTN
+hook-binding:01HMA0K3NJDF8C9V4Q7Y2X5RTP
+```
+
+#### Stability classification
+
+All three reserved kinds are intended to be kernel-minted ULIDs and follow the
+**Kernel-minted ULIDs (immutable once issued)** rule below once implemented:
+once the kernel issues a `trigger:` / `trigger-registration:` / `hook-binding:`
+id, it persists for the lifetime of the resource and is never reassigned to a
+different resource. Revoking a `trigger-registration:` or detaching a
+`hook-binding:` does not free its id for reuse; the audit chain keeps the id
+resolvable for historical lookups.
+
 ## Suffix grammars
 
 Each suffix grammar is closed in v1.
@@ -332,3 +375,9 @@ parsing).
 - docs/reference/architecture/snapshot-model.md
 - docs/reference/architecture/link-projection-model.md
 - docs/reference/architecture/data-asset-model.md
+
+## See also
+
+- [Triggers](/reference/triggers)
+- [Declarable Hooks](/reference/declarable-hooks)
+- [Kernel HTTP API](/reference/kernel-http-api)

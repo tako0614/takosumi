@@ -187,6 +187,54 @@ This pins the boundary recorded by
 rejected by the `api-key-issue (deploy-token)` row and may not mint deploy
 credentials.
 
+### v1 workflow extension primitive operation rows
+
+Reserved workflow-extension rows. The current kernel does not expose trigger
+registration/fire routes or declarable HookBinding routes yet; these rows pin
+the authorization vocabulary for the future route implementation.
+
+The following rows extend the matrix above with the operation kinds introduced
+by the workflow extension primitives (manual workflow trigger, external-event
+and schedule trigger registration, declarable hook binding). The closure rule
+from the previous sub-section is preserved: `deny` is a hard deny,
+`operator-only` rows are reachable only through the kernel internal HMAC surface
+(see
+[Kernel HTTP API — Authentication](/reference/kernel-http-api#authentication)),
+and the customer-facing role columns record `deny` for every operator-only row.
+
+| Operation kind            | org-owner | org-admin | org-billing | space-admin | space-deployer | space-viewer | support-staff | Operator-only |
+| ------------------------- | --------- | --------- | ----------- | ----------- | -------------- | ------------ | ------------- | ------------- |
+| workflow-trigger          | permit    | permit    | deny        | permit      | permit         | deny         | deny          | no            |
+| trigger-register-external | permit    | permit    | deny        | deny        | deny           | deny         | deny          | yes           |
+| trigger-register-schedule | permit    | permit    | deny        | deny        | deny           | deny         | deny          | yes           |
+| hook-declare              | permit    | permit    | deny        | permit      | permit         | deny         | deny          | no            |
+
+`workflow-trigger` is the actor-scope manual fire of a workflow resource. The
+permit set mirrors the deploy-axis (`deployment.apply`) for Space-axis roles:
+`space-admin` and `space-deployer` are `permit`, `space-viewer` and
+`org-billing` are `deny`. Manual fire is recorded in the audit log as a
+`trigger:<ulid>` cause and is gated by the same approval / policy bundle that
+gates the workflow resource itself.
+
+`trigger-register-external` and `trigger-register-schedule` are
+**operator-only** rows. The `Operator-only: yes` marker carries the actual
+decision and the customer-facing role columns are `deny` to keep the closed
+matrix honest. External-event registrations carry a per-registration HMAC secret
+that the kernel hashes at register time and never returns again; schedule
+registrations carry a cron expression and a `missedFirePolicy`. The operator
+surface returns the `trigger-registration:<ulid>` id once on acceptance.
+
+`hook-declare` is the actor-scope authority to declare a `hook-binding:` on a
+manifest resource. `space-admin` and `space-deployer` are `permit` (declaring a
+hook binding in a manifest is part of submit / apply); `space-viewer` and
+`org-billing` are `deny`. Hook bindings declared by a `permit` actor become
+visible to operator listing through the operator surface.
+
+The `support-staff` column is `deny` for all four rows: workflow trigger and
+hook declaration require Space-axis authority that `support-staff` Actors do not
+hold even inside an active impersonation session, and trigger registration is
+operator-only.
+
 #### Closed enum extension note
 
 The matrix expansion above does not relax the seven-value role enum. Adding a
@@ -328,3 +376,9 @@ is reserved for a future RFC and is **not** present in v1.
 - docs/reference/architecture/policy-risk-approval-error-model.md
 - docs/reference/architecture/space-model.md
 - docs/reference/architecture/operation-plan-write-ahead-journal-model.md
+
+## See also
+
+- [Triggers](/reference/triggers)
+- [Declarable Hooks](/reference/declarable-hooks)
+- [Kernel HTTP API](/reference/kernel-http-api)

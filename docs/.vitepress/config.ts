@@ -154,6 +154,17 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
+      text: "Reference / Triggers & Hooks",
+      items: [
+        { text: "Triggers", link: "/reference/triggers" },
+        {
+          text: "Execute-Step Operation",
+          link: "/reference/execute-step-operation",
+        },
+        { text: "Declarable Hooks", link: "/reference/declarable-hooks" },
+      ],
+    },
+    {
       text: "Reference / Tenant Lifecycle",
       items: [
         { text: "Tenant Provisioning", link: "/reference/tenant-provisioning" },

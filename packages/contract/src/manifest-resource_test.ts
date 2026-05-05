@@ -4,7 +4,37 @@ import {
   extractRefsFromValue,
   parseRef,
   type ResolvedRef,
+  TAKOSUMI_MANIFEST_JSONLD_CONTEXT,
+  validateManifestEnvelope,
 } from "./manifest-resource.ts";
+
+Deno.test("validateManifestEnvelope accepts JSON-LD @context", () => {
+  const issues: { path: string; message: string }[] = [];
+  validateManifestEnvelope({
+    "@context": TAKOSUMI_MANIFEST_JSONLD_CONTEXT,
+    apiVersion: "1.0",
+    kind: "Manifest",
+    resources: [{
+      shape: "object-store@v1",
+      name: "assets",
+      provider: "@takos/selfhost-filesystem",
+      spec: { name: "assets" },
+    }],
+  }, issues);
+  assert.deepEqual(issues, []);
+});
+
+Deno.test("validateManifestEnvelope rejects malformed JSON-LD @context", () => {
+  const issues: { path: string; message: string }[] = [];
+  validateManifestEnvelope({
+    "@context": [],
+    apiVersion: "1.0",
+    kind: "Manifest",
+    resources: [],
+  }, issues);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].path, '$["@context"]');
+});
 
 Deno.test("parseRef accepts ${ref:source.field}", () => {
   assert.deepEqual(parseRef("${ref:db.connection-string}"), {

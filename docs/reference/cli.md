@@ -126,19 +126,20 @@ kernel boot error.
 tolerance / schema migration window については
 [Migration / Upgrade](/reference/migration-upgrade) を参照してください。
 
-### `takosumi deploy <manifest>`
+### `takosumi deploy [<manifest>]`
 
 Submit a Manifest for apply.
 
 ```text
-takosumi deploy <manifest> [--remote <url>] [--token <t>] [--dry-run]
+takosumi deploy [<manifest>] [--manifest <path>] [--remote <url>] [--token <t>] [--dry-run]
 ```
 
-| Flag        | Type   | Notes                                |
-| ----------- | ------ | ------------------------------------ |
-| `--remote`  | url    | overrides resolved remote URL        |
-| `--token`   | string | overrides resolved token             |
-| `--dry-run` | switch | validate and plan only; do not apply |
+| Flag         | Type   | Notes                                              |
+| ------------ | ------ | -------------------------------------------------- |
+| `--manifest` | path   | explicit manifest path, equivalent to `<manifest>` |
+| `--remote`   | url    | overrides resolved remote URL                      |
+| `--token`    | string | overrides resolved token                           |
+| `--dry-run`  | switch | validate and plan only; do not apply               |
 
 Behaviour:
 
@@ -155,23 +156,25 @@ Exit codes: `0` accepted, `1` validation or apply failure, `2` malformed flags.
 Examples:
 
 ```bash
+takosumi deploy
 takosumi deploy ./manifest.yml
 takosumi deploy ./manifest.yml --dry-run
 takosumi deploy ./manifest.yml --remote https://kernel.example.com --token $TAKOSUMI_DEPLOY_TOKEN
 ```
 
-### `takosumi plan <manifest>`
+### `takosumi plan [<manifest>]`
 
 Validate and print the resolved plan without applying.
 
 ```text
-takosumi plan <manifest> [--remote <url>] [--token <t>]
+takosumi plan [<manifest>] [--manifest <path>] [--remote <url>] [--token <t>]
 ```
 
-| Flag       | Type   | Notes                         |
-| ---------- | ------ | ----------------------------- |
-| `--remote` | url    | overrides resolved remote URL |
-| `--token`  | string | overrides resolved token      |
+| Flag         | Type   | Notes                                              |
+| ------------ | ------ | -------------------------------------------------- |
+| `--manifest` | path   | explicit manifest path, equivalent to `<manifest>` |
+| `--remote`   | url    | overrides resolved remote URL                      |
+| `--token`    | string | overrides resolved token                           |
 
 Remote-mode `plan` posts `POST /v1/deployments` with `mode: "plan"` and prints
 the kernel's response body verbatim. The request carries a fresh
@@ -184,19 +187,20 @@ written by `plan`.
 
 Exit codes: `0` plan succeeded, `1` plan failed.
 
-### `takosumi destroy <manifest>`
+### `takosumi destroy [<manifest>]`
 
 Tear down resources declared by a previously applied manifest.
 
 ```text
-takosumi destroy <manifest> [--remote <url>] [--token <t>] [--force]
+takosumi destroy [<manifest>] [--manifest <path>] [--remote <url>] [--token <t>] [--force]
 ```
 
-| Flag       | Type   | Notes                                                                                                                                 |
-| ---------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `--remote` | url    | overrides resolved remote URL                                                                                                         |
-| `--token`  | string | overrides resolved token                                                                                                              |
-| `--force`  | switch | destroy by resource name when no prior apply record exists; safe only for self-hosted resources whose handle equals the resource name |
+| Flag         | Type   | Notes                                                                                                                                 |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `--manifest` | path   | explicit manifest path, equivalent to `<manifest>`                                                                                    |
+| `--remote`   | url    | overrides resolved remote URL                                                                                                         |
+| `--token`    | string | overrides resolved token                                                                                                              |
+| `--force`    | switch | destroy by resource name when no prior apply record exists; safe only for self-hosted resources whose handle equals the resource name |
 
 Remote mode posts `POST /v1/deployments` with `mode: "destroy"` so the kernel
 can look up persisted handles and submit them through the runtime-agent. The
@@ -248,16 +252,19 @@ script missing, `2` required env unset for non-dry-run staging / production.
 Scaffold a Manifest.
 
 ```text
-takosumi init [<output>] [--template <name>]
+takosumi init [<output>] [--template <name>] [--project]
 ```
 
-| Flag         | Type   | Default                | Notes                                  |
-| ------------ | ------ | ---------------------- | -------------------------------------- |
-| `--template` | string | `selfhosted-single-vm` | one of `selfhosted-single-vm`, `empty` |
+| Flag         | Type   | Default                | Notes                                                   |
+| ------------ | ------ | ---------------------- | ------------------------------------------------------- |
+| `--template` | string | `selfhosted-single-vm` | one of `selfhosted-single-vm`, `empty`                  |
+| `--project`  | switch | off                    | write `.takosumi/manifest.yml` and create the directory |
 
 If `<output>` is given, the rendered Manifest is written to that path; otherwise
 it is printed to stdout. Templates render with `apiVersion: "1.0"` and
-`kind: Manifest` set, matching the contract envelope.
+`kind: Manifest` set, matching the contract envelope. When `--project` is set
+and `<output>` is omitted, the target is `.takosumi/manifest.yml`, matching the
+discovery order used by deploy / plan / destroy.
 
 ### `takosumi artifact <push | list | rm | gc | kinds>`
 
@@ -316,6 +323,45 @@ same marketplace URLs and package refs from
 [Environment Variables](/reference/env-vars). See
 [Plugin Marketplace](/reference/plugin-marketplace).
 
+## Trigger / Step subcommands
+
+No trigger / step CLI subcommands are wired in the current release. Workflow /
+cron / hook surfaces are declared as plugin-provided manifest resources and
+deployed through the normal `takosumi deploy` path. The reserved trigger and
+`execute-step` contracts are documented in [Triggers](/reference/triggers),
+[Declarable Hooks](/reference/declarable-hooks), and
+[Execute-Step Operation](/reference/execute-step-operation).
+
+## Project Layout
+
+The CLI resolves the deployment manifest from the first match in this order:
+
+1. `<manifest>` argument or `--manifest <path>` flag
+2. `.takosumi/manifest.yml` (recommended layout)
+3. `.takosumi/manifest.yaml`
+4. `.takosumi/manifest.json`
+5. `manifest.yml` at the working tree root (compatibility path)
+6. `manifest.yaml`
+7. `manifest.json`
+
+The `.takosumi/` directory convention is:
+
+```
+.takosumi/
+  manifest.yml         (deployment manifest, required when deploying)
+  spaces/              (per-space overrides; reserved for future use)
+  policy.yml           (operator policy; reserved for future use)
+```
+
+Note: `.takosumi/workflows/*.yml` is **not** adopted in v1. Workflow / cron /
+hook surfaces are expressed as plugin shapes declared inside the manifest's
+`resources[]` (see [Triggers](/reference/triggers),
+[Declarable Hooks](/reference/declarable-hooks),
+[Execute-Step Operation](/reference/execute-step-operation)).
+
+A CLI helper that moves an existing top-level `manifest.yml` into
+`.takosumi/manifest.yml` is planned but is out of scope for v1.
+
 ### `takosumi completions <shell>`
 
 Print a completion script for `bash`, `zsh`, or `fish`. Generated by the bundled
@@ -365,7 +411,10 @@ Currently warned aliases:
 - Reference: [Manifest](/manifest),
   [Environment Variables](/reference/env-vars),
   [DataAsset Kinds](/reference/artifact-kinds),
-  [Migration / Upgrade](/reference/migration-upgrade)
+  [Migration / Upgrade](/reference/migration-upgrade),
+  [Triggers](/reference/triggers),
+  [Execute-Step Operation](/reference/execute-step-operation),
+  [Declarable Hooks](/reference/declarable-hooks)
 
 ## Related architecture notes
 

@@ -9,6 +9,13 @@ import type { JsonObject, JsonValue } from "./types.ts";
  */
 export const MANIFEST_API_VERSION = "1.0" as const;
 export const MANIFEST_KIND = "Manifest" as const;
+export const TAKOSUMI_MANIFEST_JSONLD_CONTEXT =
+  "https://takosumi.com/contexts/manifest-v1.jsonld" as const;
+
+export type ManifestJsonLdContext =
+  | string
+  | JsonObject
+  | readonly (string | JsonObject)[];
 
 export interface ManifestMetadata {
   readonly name?: string;
@@ -21,6 +28,7 @@ export interface ManifestMetadata {
  * route future schema versions to compatible validators.
  */
 export interface Manifest {
+  readonly "@context"?: ManifestJsonLdContext;
   readonly apiVersion: typeof MANIFEST_API_VERSION;
   readonly kind: typeof MANIFEST_KIND;
   readonly metadata?: ManifestMetadata;
@@ -64,12 +72,14 @@ export function validateManifestEnvelope(
   }
   const m = body as Record<string, unknown>;
   pushUnknownKeys("$", m, [
+    "@context",
     "apiVersion",
     "kind",
     "metadata",
     "template",
     "resources",
   ], issues);
+  validateManifestJsonLdContext(m["@context"], issues);
   if (m.apiVersion !== MANIFEST_API_VERSION) {
     issues.push({
       path: "$.apiVersion",
@@ -87,6 +97,32 @@ export function validateManifestEnvelope(
   validateManifestMetadata(m.metadata, issues);
   validateManifestTemplateInvocation(m.template, issues, options);
   validateManifestResources(m.resources, issues);
+}
+
+function validateManifestJsonLdContext(
+  context: unknown,
+  issues: ManifestEnvelopeIssue[],
+): void {
+  if (context === undefined) return;
+  if (isNonEmptyString(context)) return;
+  if (isRecord(context) && isJsonValue(context)) return;
+  if (Array.isArray(context) && context.length > 0) {
+    const invalidIndex = context.findIndex((entry) =>
+      !(isNonEmptyString(entry) || (isRecord(entry) && isJsonValue(entry)))
+    );
+    if (invalidIndex < 0) return;
+    issues.push({
+      path: `$["@context"][${invalidIndex}]`,
+      message:
+        "@context entries must be non-empty strings or JSON-LD context objects",
+    });
+    return;
+  }
+  issues.push({
+    path: `$["@context"]`,
+    message:
+      "@context must be a non-empty string, JSON-LD context object, or non-empty array of those values",
+  });
 }
 
 export interface ManifestResource {

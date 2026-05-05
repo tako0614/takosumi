@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import type { TakosumiKernelPluginManifest } from "takosumi-contract";
 import {
+  fetchKernelPluginMarketplaceIndex,
   installKernelPluginMarketplacePackages,
   type KernelPluginMarketplaceIndex,
+  TAKOSUMI_PLUGIN_MARKETPLACE_JSONLD_CONTEXT,
   TAKOSUMI_PLUGIN_MARKETPLACE_SCHEMA_VERSION,
 } from "./marketplace.ts";
 import {
@@ -11,6 +13,25 @@ import {
   TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM,
   type TrustedKernelPluginPublisherKey,
 } from "./trusted_install.ts";
+
+Deno.test("plugin marketplace fetch accepts JSON-LD @context", async () => {
+  const index = await fetchKernelPluginMarketplaceIndex({
+    url: "https://market.example/index.json",
+    fetch: (() =>
+      Promise.resolve(
+        Response.json({
+          "@context": TAKOSUMI_PLUGIN_MARKETPLACE_JSONLD_CONTEXT,
+          schemaVersion: TAKOSUMI_PLUGIN_MARKETPLACE_SCHEMA_VERSION,
+          marketplaceId: "market:test",
+          generatedAt: "2026-05-05T00:00:00.000Z",
+          packages: [],
+        }),
+      )) as typeof fetch,
+  });
+
+  assert.equal(index["@context"], TAKOSUMI_PLUGIN_MARKETPLACE_JSONLD_CONTEXT);
+  assert.equal(index.marketplaceId, "market:test");
+});
 
 Deno.test("plugin marketplace installs a digest-pinned signed remote kernel plugin", async () => {
   const moduleSpecifier = "https://market.example/plugins/provider.js";

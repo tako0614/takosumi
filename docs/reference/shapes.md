@@ -256,6 +256,23 @@ introducing a new reserved capability prefix all go through the same
 `CONVENTIONS.md` §6 RFC. Adding a new provider for an existing shape is the
 standard non-RFC path and is the right tool for new cloud support.
 
+## Catalog scope と plugin extension
+
+Kernel curated catalog は v1 で 5 shape (`object-store@v1` / `web-service@v1` /
+`database-postgres@v1` / `custom-domain@v1` / `worker@v1`) に閉じます。 新 shape
+の追加は `CONVENTIONS.md` §6 RFC で coordinate されます。
+
+Workflow / cron / lifecycle hook 等の shape は curated catalog に含めず、third
+party plugin が独自 shape として提供します — 例えば `cron-job@v1` /
+`workflow-job@v1` / `pre-apply-hook@v1` / `post-activate-hook@v1`。 これらは
+予約済み kernel-side primitive である [Triggers](/reference/triggers) /
+[Execute-Step Operation](/reference/execute-step-operation) /
+[Declarable Hooks](/reference/declarable-hooks) と vocabulary を揃えつつ、現行
+kernel では通常の plugin-provided `resources[]` shape として deploy されます。
+詳細な extension 手順は [Extending the Shape Model](/extending) と
+[Workflow Extension Design](/reference/architecture/workflow-extension-design)
+を参照。
+
 ## Cross-references
 
 - [Access Modes](/reference/access-modes) — closed v1 access mode enum (`read` /
@@ -269,3 +286,15 @@ standard non-RFC path and is the right tool for new cloud support.
   identity と shape outputs が連携する artifact 受け渡し境界。
 - `CONVENTIONS.md` §6 RFC (at the takosumi repo root) — shape catalog, reserved
   outputField, and reserved capability-prefix RFC process.
+- [Triggers](/reference/triggers) — schedule / external-event / manual fire の
+  予約済み registry vocabulary。
+- [Execute-Step Operation](/reference/execute-step-operation) — single-step
+  bundle execution の予約済み primitive。
+- [Declarable Hooks](/reference/declarable-hooks) — lifecycle hook bus that
+  `pre-apply-hook@v1` / `post-activate-hook@v1` shapes will attach to once the
+  route/store implementation lands.
+- [Workflow Extension Design](/reference/architecture/workflow-extension-design)
+  — plugin-first rationale for keeping workflow surfaces out of the curated
+  catalog.
+- [Extending the Shape Model](/extending) — provider / template / new-shape
+  extension flow.

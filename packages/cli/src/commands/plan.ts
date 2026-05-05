@@ -1,17 +1,21 @@
 import { Command } from "@cliffy/command";
 import { loadConfig, resolveMode } from "../config.ts";
 import { expandManifestLocal, planLocal } from "../local_runner.ts";
-import { loadManifest } from "../manifest_loader.ts";
+import { loadManifest, selectManifestPath } from "../manifest_loader.ts";
 import { callKernel } from "../remote_client.ts";
 
 function createPlanCommand() {
   return new Command()
     .description("Validate and print the resolved plan without applying")
-    .arguments("<manifest:string>")
+    .arguments("[manifest:string]")
+    .option("--manifest <path:string>", "Manifest path")
     .option("--remote <url:string>", "Remote kernel URL")
     .option("--token <token:string>", "Auth token")
-    .action(async ({ remote, token }, manifestPath) => {
-      const manifest = await loadManifest(manifestPath);
+    .action(async ({ manifest: manifestFlag, remote, token }, manifestPath) => {
+      const manifest = await loadManifest(selectManifestPath({
+        argument: manifestPath,
+        flag: manifestFlag,
+      }));
       console.log(`loaded manifest from ${manifest.path} (${manifest.format})`);
 
       const target = resolveMode({ remote, token }, await loadConfig());

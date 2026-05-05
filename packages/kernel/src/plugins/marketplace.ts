@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Digest, JsonObject } from "takosumi-contract";
+import type { Digest, JsonObject, JsonValue } from "takosumi-contract";
 import { stableStringify } from "../adapters/source/digest.ts";
 import {
   type ExecutableCatalogHookPackage,
@@ -15,12 +15,20 @@ import type { TakosPaaSKernelPlugin } from "./types.ts";
 
 export const TAKOSUMI_PLUGIN_MARKETPLACE_SCHEMA_VERSION =
   "takosumi.plugin-marketplace.v1" as const;
+export const TAKOSUMI_PLUGIN_MARKETPLACE_JSONLD_CONTEXT =
+  "https://takosumi.com/contexts/plugin-marketplace-v1.jsonld" as const;
+
+export type KernelPluginMarketplaceJsonLdContext =
+  | string
+  | JsonObject
+  | readonly (string | JsonObject)[];
 
 export type KernelPluginMarketplacePackageKind =
   | "kernel-plugin"
   | "executable-hook-package";
 
 export interface KernelPluginMarketplaceIndex {
+  readonly "@context"?: KernelPluginMarketplaceJsonLdContext;
   readonly schemaVersion: typeof TAKOSUMI_PLUGIN_MARKETPLACE_SCHEMA_VERSION;
   readonly marketplaceId: string;
   readonly generatedAt: string;
@@ -215,6 +223,7 @@ function assertKernelPluginMarketplaceIndex(
   if (!isRecord(value)) {
     throw new Error(`plugin marketplace index must be an object: ${source}`);
   }
+  assertMarketplaceJsonLdContext(value["@context"], source);
   if (value.schemaVersion !== TAKOSUMI_PLUGIN_MARKETPLACE_SCHEMA_VERSION) {
     throw new Error(
       `unsupported plugin marketplace schemaVersion: ${
@@ -232,6 +241,13 @@ function assertKernelPluginMarketplaceIndex(
     throw new Error(`plugin marketplace packages must be an array: ${source}`);
   }
   return {
+    ...(value["@context"] !== undefined
+      ? {
+        "@context": value[
+          "@context"
+        ] as KernelPluginMarketplaceJsonLdContext,
+      }
+      : {}),
     schemaVersion: TAKOSUMI_PLUGIN_MARKETPLACE_SCHEMA_VERSION,
     marketplaceId: value.marketplaceId,
     generatedAt: value.generatedAt,
@@ -244,6 +260,32 @@ function assertKernelPluginMarketplaceIndex(
       ? { metadata: value.metadata as JsonObject }
       : {}),
   };
+}
+
+function assertMarketplaceJsonLdContext(
+  context: unknown,
+  source: string,
+): void {
+  if (context === undefined) return;
+  if (typeof context === "string" && context.trim()) return;
+  if (isRecord(context) && isJsonValue(context)) return;
+  if (Array.isArray(context) && context.length > 0) {
+    const invalidIndex = context.findIndex((entry) =>
+      !(
+        (typeof entry === "string" && entry.trim()) ||
+        (isRecord(entry) && isJsonValue(entry))
+      )
+    );
+    if (invalidIndex < 0) return;
+    throw new Error(
+      `plugin marketplace @context entry is invalid: ` +
+        `${source}#@context[${invalidIndex}]`,
+    );
+  }
+  throw new Error(
+    `plugin marketplace @context must be a non-empty string, ` +
+      `JSON-LD context object, or non-empty array: ${source}`,
+  );
 }
 
 function assertMarketplacePackage(
@@ -467,6 +509,19 @@ function isSha256Digest(value: unknown): value is Digest {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null || typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (isRecord(value)) return Object.values(value).every(isJsonValue);
+  return false;
 }
 
 export function marketplacePackageDigest(

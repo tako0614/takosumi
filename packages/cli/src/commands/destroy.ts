@@ -1,5 +1,5 @@
 import { Command } from "@cliffy/command";
-import { loadManifest } from "../manifest_loader.ts";
+import { loadManifest, selectManifestPath } from "../manifest_loader.ts";
 import { loadConfig, resolveMode } from "../config.ts";
 import { callKernel } from "../remote_client.ts";
 import { destroyLocal, expandManifestLocal } from "../local_runner.ts";
@@ -18,7 +18,8 @@ import { destroyLocal, expandManifestLocal } from "../local_runner.ts";
 function createDestroyCommand() {
   return new Command()
     .description("Destroy resources declared in a Takosumi manifest")
-    .arguments("<manifest:string>")
+    .arguments("[manifest:string]")
+    .option("--manifest <path:string>", "Manifest path")
     .option("--remote <url:string>", "Remote kernel URL")
     .option("--token <token:string>", "Auth token")
     .option(
@@ -28,68 +29,78 @@ function createDestroyCommand() {
         "resources whose handle differs from the resource name will likely " +
         "fail to delete.",
     )
-    .action(async ({ remote, token, force }, manifestPath) => {
-      const manifest = await loadManifest(manifestPath);
-      const target = resolveMode({ remote, token }, await loadConfig());
-      if (target.mode === "remote") {
-        const { status, body } = await callKernel({
-          url: target.url,
-          token: target.token,
-          path: "/v1/deployments",
-          body: {
-            mode: "destroy",
-            manifest: manifest.value,
-            ...(force ? { force: true } : {}),
-          },
-        });
-        if (status >= 400) {
-          console.error(`kernel returned ${status}:`, body);
+    .action(
+      async (
+        { manifest: manifestFlag, remote, token, force },
+        manifestPath,
+      ) => {
+        const manifest = await loadManifest(selectManifestPath({
+          argument: manifestPath,
+          flag: manifestFlag,
+        }));
+        const target = resolveMode({ remote, token }, await loadConfig());
+        if (target.mode === "remote") {
+          const { status, body } = await callKernel({
+            url: target.url,
+            token: target.token,
+            path: "/v1/deployments",
+            body: {
+              mode: "destroy",
+              manifest: manifest.value,
+              ...(force ? { force: true } : {}),
+            },
+          });
+          if (status >= 400) {
+            console.error(`kernel returned ${status}:`, body);
+            Deno.exit(1);
+          }
+          console.log("destroy accepted:", body);
+          return;
+        }
+
+        let resources;
+        try {
+          resources = expandManifestLocal(manifest.value);
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+          console.error(`error: ${message}`);
           Deno.exit(1);
         }
-        console.log("destroy accepted:", body);
-        return;
-      }
-
-      let resources;
-      try {
-        resources = expandManifestLocal(manifest.value);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`error: ${message}`);
-        Deno.exit(1);
-      }
-      if (resources.length === 0) {
-        console.log(
-          "local mode: manifest expanded to zero resources; nothing to destroy",
-        );
-        return;
-      }
-
-      console.log(
-        `local mode: destroying ${resources.length} resource(s) in-process`,
-      );
-      const outcome = await destroyLocal(resources);
-      if (outcome.status === "failed-validation") {
-        console.error("destroy failed-validation:");
-        for (const issue of outcome.issues) {
-          console.error(`  - ${issue.path}: ${issue.message}`);
+        if (resources.length === 0) {
+          console.log(
+            "local mode: manifest expanded to zero resources; nothing to destroy",
+          );
+          return;
         }
-        Deno.exit(1);
-      }
-      for (const entry of outcome.destroyed) {
+
         console.log(
-          `  ✓ ${entry.name} (${entry.providerId}) → ${entry.handle}`,
+          `local mode: destroying ${resources.length} resource(s) in-process`,
         );
-      }
-      for (const error of outcome.errors) {
-        console.error(
-          `  ✗ ${error.name} (${error.providerId}) → ${error.handle}: ${error.message}`,
-        );
-      }
-      if (outcome.status === "partial") {
-        Deno.exit(1);
-      }
-    });
+        const outcome = await destroyLocal(resources);
+        if (outcome.status === "failed-validation") {
+          console.error("destroy failed-validation:");
+          for (const issue of outcome.issues) {
+            console.error(`  - ${issue.path}: ${issue.message}`);
+          }
+          Deno.exit(1);
+        }
+        for (const entry of outcome.destroyed) {
+          console.log(
+            `  ✓ ${entry.name} (${entry.providerId}) → ${entry.handle}`,
+          );
+        }
+        for (const error of outcome.errors) {
+          console.error(
+            `  ✗ ${error.name} (${error.providerId}) → ${error.handle}: ${error.message}`,
+          );
+        }
+        if (outcome.status === "partial") {
+          Deno.exit(1);
+        }
+      },
+    );
 }
 
 export const destroyCommand: ReturnType<typeof createDestroyCommand> =

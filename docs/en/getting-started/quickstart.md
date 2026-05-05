@@ -38,8 +38,8 @@ The embedded agent starts automatically, so the env setup stays minimal:
 export TAKOSUMI_DEV_MODE=1
 takosumi server --port 8788 &
 # stdout: "embedded runtime-agent listening at http://127.0.0.1:8789"
-takosumi init my-app.yml --template selfhosted-single-vm
-takosumi deploy my-app.yml
+takosumi init --project --template selfhosted-single-vm
+takosumi deploy
 ```
 
 `TAKOSUMI_DEV_MODE=1` is the single dev opt-out flag. It permits plaintext

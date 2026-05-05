@@ -50,10 +50,10 @@ time; the envelope is not extensible without an RFC.
 
 ## Closed event-type enum (v1)
 
-The v1 audit event taxonomy is closed and contains 80+ event types across the
-kernel, identity, tenant, and PaaS-operations domains. Adding a new event type
-goes through the `CONVENTIONS.md` §6 RFC and extends, never replaces, the closed
-enum below.
+The v1 audit event taxonomy is closed and contains 88+ event types across the
+kernel, identity, tenant, PaaS-operations, and workflow domains. Adding a new
+event type goes through the `CONVENTIONS.md` §6 RFC and extends, never replaces,
+the closed enum below.
 
 Deployment lifecycle:
 
@@ -204,6 +204,23 @@ Cost / quota:
 - `quota-tier-updated`
 - `quota-tier-removed`
 - `space-tier-changed`
+
+Trigger:
+
+- `trigger-fired`
+- `trigger-rejected`
+- `trigger-deduplicated`
+
+Hook:
+
+- `hook-fired`
+- `hook-completed`
+- `hook-failed`
+
+Step execution:
+
+- `step-execution-started`
+- `step-execution-completed`
 
 This list is the complete v1 enum. Any value outside the list is rejected at
 write time and surfaces as an audit-store integrity failure.
@@ -430,6 +447,45 @@ See also: [SLA Breach Detection](/reference/sla-breach-detection).
 See also: [Quota Tiers](/reference/quota-tiers),
 [Cost Attribution](/reference/cost-attribution).
 
+## Trigger events
+
+Reserved workflow-extension event vocabulary. The current kernel does not emit
+these events until trigger routes and stores are implemented.
+
+| Event                  | Severity | Description                                                                      | Payload fields                                                                                        |
+| ---------------------- | -------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `trigger-fired`        | info     | A registered trigger fired and produced a downstream OperationPlan.              | `triggerId`, `registrationId`, `kind`, `resourceRef`                                                  |
+| `trigger-rejected`     | warning  | A trigger fire attempt was rejected before it could produce a downstream effect. | `triggerId?`, `kind`, `reason` (`auth-failed` / `signature-invalid` / `rate-limit` / `unknown-event`) |
+| `trigger-deduplicated` | info     | A trigger fire collapsed into an earlier fire inside the dedup window.           | `triggerId`, `originalTriggerId`, `dedupWindowSeconds`                                                |
+
+See also: [Triggers](/reference/triggers).
+
+## Hook events
+
+Reserved declarable-hook event vocabulary. Catalog-supplied executable WAL hook
+evidence is currently recorded in the operation journal, not as these
+HookBinding audit events.
+
+| Event            | Severity | Description                                                                  | Payload fields                                              |
+| ---------------- | -------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `hook-fired`     | info     | A declared hook fired against a lifecycle phase boundary.                    | `hookBindingId`, `phase`, `hookOrder`, `bundleRef`          |
+| `hook-completed` | info     | A hook execution completed successfully.                                     | `hookBindingId`, `durationMs`, `outputCount`                |
+| `hook-failed`    | error    | A hook execution failed; the bound phase outcome depends on `failurePolicy`. | `hookBindingId`, `errorCode`, `durationMs`, `failurePolicy` |
+
+See also: [Declarable Hooks](/reference/declarable-hooks).
+
+## Step execution events
+
+Reserved `execute-step` event vocabulary. The current kernel does not emit these
+events until `execute-step` dispatch and StepResult storage are implemented.
+
+| Event                      | Severity | Description                                                  | Payload fields                                       |
+| -------------------------- | -------- | ------------------------------------------------------------ | ---------------------------------------------------- |
+| `step-execution-started`   | info     | An `execute-step` operation was dispatched to runtime-agent. | `operationId`, `bundleRef`, `attempt`                |
+| `step-execution-completed` | info     | An `execute-step` operation reached a terminal status.       | `operationId`, `status`, `durationMs`, `outputCount` |
+
+See also: [Execute-Step Operation](/reference/execute-step-operation).
+
 ## See also
 
 - [Actor / Organization Model](/reference/actor-organization-model)
@@ -446,6 +502,9 @@ See also: [Quota Tiers](/reference/quota-tiers),
 - [Support Impersonation](/reference/support-impersonation)
 - [Notification Emission](/reference/notification-emission)
 - [Zone Selection](/reference/zone-selection)
+- [Triggers](/reference/triggers)
+- [Execute-Step Operation](/reference/execute-step-operation)
+- [Declarable Hooks](/reference/declarable-hooks)
 
 ## Related architecture notes
 

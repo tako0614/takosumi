@@ -116,6 +116,7 @@ unless an explicit Space export share allows otherwise.
 | [Identity and Access Architecture](./identity-and-access-architecture.md)                     | How are actors, organizations, roles, and API keys modeled?                                |
 | [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md)                           | How are tenants provisioned, trial-bound, exported, and deleted?                           |
 | [PaaS Operations Architecture](./paas-operations-architecture.md)                             | How are quota tiers, SLA, incidents, support, and notifications kernel-side?               |
+| [Workflow Extension Design](./workflow-extension-design.md)                                   | How does plugin-first workflow / cron / hook extension fit on top of kernel primitives?    |
 | [Operational Hardening Checklist](./operational-hardening-checklist.md)                       | What must production enforce?                                                              |
 | [Update Summary](./update-summary.md)                                                         | What changed in this final abstract version?                                               |
 

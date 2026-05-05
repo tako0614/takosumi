@@ -140,9 +140,36 @@ public manifest vocabulary is closed and unchanged.
   DriftIndex → ActivationSnapshot → status → approval invalidation, RevokeDebt
   aging rules, and the ObservationHistory opt-in policy.
 
+## Round 4 finalization additions (Workflow extension)
+
+- **Plugin-first workflow extension.**
+  [Workflow Extension Design](./workflow-extension-design.md) records why
+  workflow / cron / hook 等の機能を kernel に built-in せず plugin が shape
+  として提供する方針を採用したか、そして最小 4 primitive (trigger / execute-step
+  / declarable-hook / trigger-resource binding) を予約済み contract
+  として固定した rationale。
+- **Trigger primitive (3 closed kind).** [Triggers](/reference/triggers) closes
+  `manual / schedule / external-event` enum。現行 kernel は trigger route /
+  store をまだ expose しない。
+- **`execute-step` operation kind 拡張.**
+  [Execute-Step Operation](/reference/execute-step-operation) は任意 DataAsset
+  bundle を runtime-agent 経由で execute する将来 wire contract を確定。 現行
+  public apply path はまだ `execute-step` を dispatch しない。
+- **Declarable hooks.** [Declarable Hooks](/reference/declarable-hooks) は既存
+  catalog-supplied pre/post-commit hook と併存する user-declarable hook
+  vocabulary を予約。現行実装済み surface は catalog-supplied executable WAL
+  hooks。
+- **CLI project layout.** `.takosumi/manifest.yml` を CLI default load path
+  に追加 ([CLI Reference](/reference/cli) Project Layout section)。
+- **Plugin shape examples.** workflow / cron-job / pre-apply-hook 等の shape は
+  kernel curated 5 種に含めず、3rd party plugin が CONVENTIONS.md §6 RFC で提供
+  ([Extending](/extending), [Shape Catalog](/reference/shapes))。
+
 ## Closure statement
 
-Public manifest vocabulary unchanged. No new shapes. Reference docs locked at
-v1. Contract / kernel / CLI realignment to bring the type and runtime layers
-into agreement with the v1-locked docs is tracked in a separate follow-up plan
-that consumes the docs in this directory as the single source of truth.
+Public manifest vocabulary unchanged. No new shapes in kernel curated catalog.
+Reference docs locked at v1. Workflow / cron / hook の具体 shape は plugin
+domain で 3rd party 提供。Contract / kernel / CLI realignment to bring the type
+and runtime layers into agreement with the v1-locked docs is tracked in a
+separate follow-up plan that consumes the docs in this directory as the single
+source of truth.

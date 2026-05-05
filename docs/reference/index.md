@@ -82,6 +82,17 @@ operator が production 運用するための trust 境界。
 - [External Participants](./external-participants) — registration / verification
   / external implementation
 
+## Triggers & Hooks
+
+Workflow extension primitives (予約済み kernel-side contract。現行実装では
+plugin shape を通常の `resources[]` として deploy する)。
+
+- [Triggers](./triggers) — manual / schedule / external-event の 3 closed kind
+- [Execute-Step Operation](./execute-step-operation) — `execute-step` operation
+  kind の wire-level contract
+- [Declarable Hooks](./declarable-hooks) — manifest で declare 可能な lifecycle
+  hook
+
 ## Tenant lifecycle
 
 Space provisioning / trial / export / deletion の正本 protocol。
