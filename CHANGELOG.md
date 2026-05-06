@@ -133,6 +133,10 @@ entry).
 - Kernel API responses now propagate `x-request-id` / `x-correlation-id`, emit
   JSON HTTP request logs in staging / production, and attach request correlation
   ids to public deploy metrics.
+- Kernel API request correlation now propagates W3C `traceparent`, records HTTP
+  server spans in the configured `ObservabilitySink`, exports spans through
+  native OTLP/HTTP JSON `/v1/traces`, and adds `trace_id` / `span_id` to JSON
+  request logs.
 - Added the Observability Stack ownership reference, including managed vs
   self-hosted responsibilities, default SLI / SLO targets, and alert policy
   ownership.

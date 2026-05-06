@@ -14,9 +14,10 @@ defines the SLI / SLO targets that bundled dashboards and alert policies use.
 ::: info Current implementation status The kernel currently exports readiness
 probes, audit events, JSON HTTP request logs, Prometheus metrics, native OTLP
 metric push, SLA breach events, and the bundled deploy Grafana dashboard. Native
-OTLP traces remain a target contract; operators can still correlate HTTP logs,
-metrics, audit events, and deploy records through `requestId`, `correlationId`,
-`spaceId`, `groupId`, and deployment identifiers. :::
+OTLP HTTP server spans are implemented; broader per-operation traces remain a
+target contract. Operators can correlate HTTP logs, traces, metrics, audit
+events, and deploy records through `requestId`, `correlationId`, `spaceId`,
+`groupId`, and deployment identifiers. :::
 
 ## Ownership Decision
 
@@ -26,6 +27,7 @@ Takosumi kernel owns the **shape and emission** of signals:
 | -------------------- | ------------------------------------------------------------------------------------- |
 | Readiness            | `/livez`, `/readyz`, `/status/summary` semantics and response shape                   |
 | Metrics              | v1 metric names, labels, units, `/metrics`, and OTLP metric export                    |
+| Traces               | HTTP server span emission, `traceparent` propagation, and OTLP trace export           |
 | Logs                 | HTTP request id propagation, JSON request log envelope, and redaction rules           |
 | Audit                | tamper-evident audit event chain, retention policy hooks, and replication primitives  |
 | SLA breach detection | threshold evaluation, state transitions, audit / outbox / notification signal publish |
@@ -43,6 +45,7 @@ The same signal contract is used in both operating modes.
 | ---------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
 | Prometheus scrape            | scrape target, token distribution, retention, label relabeling | platform Prometheus or compatible managed metrics backend            |
 | OTLP metrics                 | collector endpoint, auth headers, retry / queue policy         | collector fleet, tenant routing, remote write, exporter credentials  |
+| OTLP traces                  | collector endpoint, auth headers, sampling / retention policy  | collector fleet, tenant routing, trace backend, exporter credentials |
 | Logs                         | stdout / stderr collector, retention, search index             | log pipeline, retention regime, customer support access controls     |
 | Grafana dashboards           | import, datasource binding, folder / RBAC                      | dashboard provisioning, tenant foldering, release migration          |
 | Alerting                     | alert rules, paging integration, on-call schedule              | managed alert rules, paging provider, escalation and status workflow |
@@ -62,7 +65,7 @@ Self-hosted minimal topology:
 ```text
 takosumi-api /metrics  -> Prometheus -> Grafana
 takosumi stdout/stderr -> log collector -> log backend
-ObservabilitySink      -> OTLP collector -> metrics backend
+ObservabilitySink      -> OTLP collector -> metrics / traces backend
 audit_events           -> SQL + optional immutable external replication
 ```
 
@@ -119,8 +122,8 @@ Self-hosted operators should wire the following before production traffic:
 
 1. Set `TAKOSUMI_METRICS_SCRAPE_TOKEN` and scrape `/metrics` from a private
    Prometheus identity.
-2. Set `TAKOSUMI_OTLP_METRICS_ENDPOINT` or standard `OTEL_EXPORTER_OTLP_*`
-   variables when using an OTLP collector.
+2. Set `TAKOSUMI_OTLP_METRICS_ENDPOINT`, `TAKOSUMI_OTLP_TRACES_ENDPOINT`, or
+   standard `OTEL_EXPORTER_OTLP_*` variables when using an OTLP collector.
 3. Import `deploy/observability/grafana/takosumi-deploy-overview.json` and bind
    its `${DS_PROMETHEUS}` datasource.
 4. Enable JSON HTTP request logs in non-managed environments with

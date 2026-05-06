@@ -15,13 +15,14 @@ sampling, cardinality controls, authentication for the export surface, and the
 schema versioning rule.
 
 ::: info Current implementation status The metric schemas, observability sink
-records, Prometheus `/metrics` HTTP route, and OTLP/HTTP JSON metric exporter
-are current service contracts. The bootstrap path mounts `/metrics` on the API
-role when `TAKOSUMI_METRICS_SCRAPE_TOKEN` is set, and wraps the configured
-`ObservabilitySink` with native OTLP metric export when
-`TAKOSUMI_OTLP_METRICS_ENDPOINT` or standard `OTEL_EXPORTER_OTLP_*` endpoint env
-vars are set. OTLP traces remain a target contract; the current native exporter
-emits metrics only. The deploy overview Grafana dashboard is published at
+records, Prometheus `/metrics` HTTP route, OTLP/HTTP JSON metric exporter, and
+kernel HTTP server spans are current service contracts. The bootstrap path
+mounts `/metrics` on the API role when `TAKOSUMI_METRICS_SCRAPE_TOKEN` is set,
+and wraps the configured `ObservabilitySink` with native OTLP metric / trace
+export when `TAKOSUMI_OTLP_METRICS_ENDPOINT`, `TAKOSUMI_OTLP_TRACES_ENDPOINT`,
+or standard `OTEL_EXPORTER_OTLP_*` endpoint env vars are set. Full per-operation
+trace coverage across every kernel service remains the target contract. The
+deploy overview Grafana dashboard is published at
 `deploy/observability/grafana/takosumi-deploy-overview.json`. :::
 
 ## Export protocols
@@ -29,11 +30,14 @@ emits metrics only. The deploy overview Grafana dashboard is published at
 The target contract exports telemetry through two protocols at the same time.
 
 - **OpenTelemetry / OTLP (primary)** — push-based OTLP/HTTP JSON exporter for
-  metrics, plus the target contract for traces and optional logs. The kernel
-  exports metrics whenever `TAKOSUMI_OTLP_METRICS_ENDPOINT`,
-  `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, or `OTEL_EXPORTER_OTLP_ENDPOINT` is
-  set. OTLP is the protocol operators wire into a collector when they need
-  remote attribute enrichment or a vendor-neutral telemetry ingress.
+  metrics and kernel HTTP server spans, plus the target contract for broader
+  per-operation traces and optional logs. The kernel exports metrics whenever
+  `TAKOSUMI_OTLP_METRICS_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, or
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and exports HTTP server spans whenever
+  `TAKOSUMI_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, or
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set. OTLP is the protocol operators wire into
+  a collector when they need remote attribute enrichment or a vendor-neutral
+  telemetry ingress.
 - **Prometheus pull endpoint (secondary)** — `/metrics` endpoint on the kernel
   HTTP server, scraped by Prometheus or a Prometheus-compatible agent. The
   endpoint exposes recorded `ObservabilitySink` metric events in Prometheus text
@@ -41,16 +45,18 @@ The target contract exports telemetry through two protocols at the same time.
 
 OTLP and Prometheus are not alternatives. Operators can run both: `/metrics`
 serves pull-based local scraping, while the OTLP wrapper mirrors recorded metric
-events to the configured collector.
+and trace events to the configured collector.
 
-The OTLP metric exporter reads the following kernel environment:
+The OTLP exporter reads the following kernel environment:
 
 ```text
 TAKOSUMI_OTLP_METRICS_ENDPOINT        URL of the collector /v1/metrics endpoint
+TAKOSUMI_OTLP_TRACES_ENDPOINT         URL of the collector /v1/traces endpoint
 TAKOSUMI_OTLP_HEADERS_JSON            extra headers (JSON object)
 TAKOSUMI_OTLP_SERVICE_NAME            OTLP service.name (default takosumi-kernel)
-TAKOSUMI_OTLP_FAIL_CLOSED             fail metric recording when export fails
+TAKOSUMI_OTLP_FAIL_CLOSED             fail telemetry recording when export fails
 OTEL_EXPORTER_OTLP_METRICS_ENDPOINT   standard OTEL metrics endpoint fallback
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT    standard OTEL traces endpoint fallback
 OTEL_EXPORTER_OTLP_ENDPOINT           standard OTEL base endpoint fallback
 OTEL_EXPORTER_OTLP_HEADERS            standard comma-separated OTEL headers
 OTEL_SERVICE_NAME                     standard service.name fallback
@@ -128,8 +134,10 @@ Grafana dashboard uses these PromQL expressions:
 
 ## Trace export
 
-The kernel emits OTLP traces for every operation that crosses an external
-boundary. Every span carries the same attribute set:
+The target contract emits OTLP traces for every operation that crosses an
+external boundary. The current kernel implementation emits HTTP server spans for
+API requests and exports them through the native OTLP traces endpoint. Every
+per-operation span carries the same attribute set:
 
 ```text
 takosumi.space_id          spaceId

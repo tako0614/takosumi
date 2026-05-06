@@ -28,3 +28,43 @@ export interface MetricEventQuery {
   readonly since?: IsoTimestamp;
   readonly until?: IsoTimestamp;
 }
+
+export type TraceSpanId = string;
+export type TraceId = string;
+export type TraceSpanKind =
+  | "internal"
+  | "server"
+  | "client"
+  | "producer"
+  | "consumer";
+export type TraceSpanStatus = "unset" | "ok" | "error";
+
+export interface TraceSpanEvent {
+  readonly id: TraceSpanId;
+  readonly traceId: TraceId;
+  readonly spanId: string;
+  readonly parentSpanId?: string;
+  readonly name: string;
+  readonly kind: TraceSpanKind;
+  readonly status: TraceSpanStatus;
+  readonly statusMessage?: string;
+  readonly startTime: IsoTimestamp;
+  readonly endTime: IsoTimestamp;
+  readonly attributes?: Record<string, string | number | boolean>;
+  readonly spaceId?: string;
+  readonly groupId?: string;
+  readonly requestId?: string;
+  readonly correlationId?: string;
+}
+
+export interface TraceSpanQuery {
+  readonly traceId?: TraceId;
+  readonly spanId?: string;
+  readonly name?: string;
+  readonly kind?: TraceSpanKind;
+  readonly status?: TraceSpanStatus;
+  readonly spaceId?: string;
+  readonly groupId?: string;
+  readonly since?: IsoTimestamp;
+  readonly until?: IsoTimestamp;
+}

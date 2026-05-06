@@ -197,6 +197,7 @@ export async function createPaaSApp(
         ))
         : undefined,
       minLevel: parseApiLogLevel(runtimeEnv.TAKOSUMI_LOG_LEVEL),
+      traceSink: context.adapters.observability,
     },
   });
   return { app, context, role, workerDaemon };

@@ -1,10 +1,16 @@
 import type { AuditEvent } from "../../domains/audit/types.ts";
 import type { ChainedAuditEvent } from "./audit_chain.ts";
 import type { ObservabilitySink } from "./sink.ts";
-import type { MetricEvent, MetricEventQuery } from "./types.ts";
+import type {
+  MetricEvent,
+  MetricEventQuery,
+  TraceSpanEvent,
+  TraceSpanQuery,
+} from "./types.ts";
 
 export interface OtlpMetricsExporterOptions {
-  readonly endpoint: string;
+  readonly endpoint?: string;
+  readonly tracesEndpoint?: string;
   readonly serviceName?: string;
   readonly scopeName?: string;
   readonly headers?: Readonly<Record<string, string>>;
@@ -14,10 +20,12 @@ export interface OtlpMetricsExporterOptions {
 
 export interface OtlpMetricsEnv {
   readonly TAKOSUMI_OTLP_METRICS_ENDPOINT?: string;
+  readonly TAKOSUMI_OTLP_TRACES_ENDPOINT?: string;
   readonly TAKOSUMI_OTLP_HEADERS_JSON?: string;
   readonly TAKOSUMI_OTLP_SERVICE_NAME?: string;
   readonly TAKOSUMI_OTLP_FAIL_CLOSED?: string;
   readonly OTEL_EXPORTER_OTLP_METRICS_ENDPOINT?: string;
+  readonly OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?: string;
   readonly OTEL_EXPORTER_OTLP_ENDPOINT?: string;
   readonly OTEL_EXPORTER_OTLP_HEADERS?: string;
   readonly OTEL_SERVICE_NAME?: string;
@@ -25,12 +33,21 @@ export interface OtlpMetricsEnv {
 
 export class OtlpObservabilitySink implements ObservabilitySink {
   readonly #base: ObservabilitySink;
-  readonly #exporter: OtlpMetricsExporter;
+  readonly #metricsExporter?: OtlpMetricsExporter;
+  readonly #tracesExporter?: OtlpTracesExporter;
   readonly #failClosed: boolean;
 
   constructor(base: ObservabilitySink, options: OtlpMetricsExporterOptions) {
     this.#base = base;
-    this.#exporter = new OtlpMetricsExporter(options);
+    this.#metricsExporter = options.endpoint
+      ? new OtlpMetricsExporter({ ...options, endpoint: options.endpoint })
+      : undefined;
+    this.#tracesExporter = options.tracesEndpoint
+      ? new OtlpTracesExporter({
+        ...options,
+        endpoint: options.tracesEndpoint,
+      })
+      : undefined;
     this.#failClosed = options.failClosed === true;
   }
 
@@ -48,8 +65,9 @@ export class OtlpObservabilitySink implements ObservabilitySink {
 
   async recordMetric(event: MetricEvent): Promise<MetricEvent> {
     const recorded = await this.#base.recordMetric(event);
+    if (!this.#metricsExporter) return recorded;
     try {
-      await this.#exporter.exportMetric(recorded);
+      await this.#metricsExporter.exportMetric(recorded);
     } catch (error) {
       if (this.#failClosed) throw error;
     }
@@ -59,6 +77,25 @@ export class OtlpObservabilitySink implements ObservabilitySink {
   listMetrics(query?: MetricEventQuery): Promise<readonly MetricEvent[]> {
     return this.#base.listMetrics(query);
   }
+
+  async recordTrace(event: TraceSpanEvent): Promise<TraceSpanEvent> {
+    const recorded = await this.#base.recordTrace(event);
+    if (!this.#tracesExporter) return recorded;
+    try {
+      await this.#tracesExporter.exportTrace(recorded);
+    } catch (error) {
+      if (this.#failClosed) throw error;
+    }
+    return recorded;
+  }
+
+  listTraces(query?: TraceSpanQuery): Promise<readonly TraceSpanEvent[]> {
+    return this.#base.listTraces(query);
+  }
+}
+
+interface ResolvedOtlpExporterOptions extends OtlpMetricsExporterOptions {
+  readonly endpoint: string;
 }
 
 export class OtlpMetricsExporter {
@@ -68,7 +105,7 @@ export class OtlpMetricsExporter {
   readonly #headers: Readonly<Record<string, string>>;
   readonly #fetch: typeof fetch;
 
-  constructor(options: OtlpMetricsExporterOptions) {
+  constructor(options: ResolvedOtlpExporterOptions) {
     this.#endpoint = options.endpoint;
     this.#serviceName = options.serviceName ?? "takosumi-kernel";
     this.#scopeName = options.scopeName ?? "takosumi.kernel";
@@ -115,6 +152,60 @@ export class OtlpMetricsExporter {
   }
 }
 
+export class OtlpTracesExporter {
+  readonly #endpoint: string;
+  readonly #serviceName: string;
+  readonly #scopeName: string;
+  readonly #headers: Readonly<Record<string, string>>;
+  readonly #fetch: typeof fetch;
+
+  constructor(options: ResolvedOtlpExporterOptions) {
+    this.#endpoint = options.endpoint;
+    this.#serviceName = options.serviceName ?? "takosumi-kernel";
+    this.#scopeName = options.scopeName ?? "takosumi.kernel";
+    this.#headers = options.headers ?? {};
+    this.#fetch = options.fetch ?? fetch;
+  }
+
+  async exportTrace(event: TraceSpanEvent): Promise<void> {
+    const response = await this.#fetch(this.#endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...this.#headers,
+      },
+      body: JSON.stringify(this.#bodyFor(event)),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `OTLP traces export failed: HTTP ${response.status} ${text}`.trim(),
+      );
+    }
+  }
+
+  #bodyFor(event: TraceSpanEvent): OtlpTracesBody {
+    return {
+      resourceSpans: [
+        {
+          resource: {
+            attributes: [
+              attribute("service.name", this.#serviceName),
+              attribute("takosumi.component", "kernel"),
+            ],
+          },
+          scopeSpans: [
+            {
+              scope: { name: this.#scopeName },
+              spans: [spanForEvent(event)],
+            },
+          ],
+        },
+      ],
+    };
+  }
+}
+
 export function wrapObservabilitySinkWithOtlpMetrics(
   base: ObservabilitySink,
   env: OtlpMetricsEnv | undefined,
@@ -129,11 +220,17 @@ export function otlpOptionsFromEnv(
   const endpoint = firstNonEmpty(
     env?.TAKOSUMI_OTLP_METRICS_ENDPOINT,
     env?.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
-    endpointFromOtelBase(env?.OTEL_EXPORTER_OTLP_ENDPOINT),
+    endpointFromOtelBase(env?.OTEL_EXPORTER_OTLP_ENDPOINT, "metrics"),
   );
-  if (!endpoint) return undefined;
+  const tracesEndpoint = firstNonEmpty(
+    env?.TAKOSUMI_OTLP_TRACES_ENDPOINT,
+    env?.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+    endpointFromOtelBase(env?.OTEL_EXPORTER_OTLP_ENDPOINT, "traces"),
+  );
+  if (!endpoint && !tracesEndpoint) return undefined;
   return {
-    endpoint,
+    ...(endpoint ? { endpoint } : {}),
+    ...(tracesEndpoint ? { tracesEndpoint } : {}),
     serviceName: firstNonEmpty(
       env?.TAKOSUMI_OTLP_SERVICE_NAME,
       env?.OTEL_SERVICE_NAME,
@@ -147,6 +244,10 @@ interface OtlpMetricsBody {
   readonly resourceMetrics: readonly OtlpResourceMetrics[];
 }
 
+interface OtlpTracesBody {
+  readonly resourceSpans: readonly OtlpResourceSpans[];
+}
+
 interface OtlpResourceMetrics {
   readonly resource: {
     readonly attributes: readonly OtlpAttribute[];
@@ -154,9 +255,21 @@ interface OtlpResourceMetrics {
   readonly scopeMetrics: readonly OtlpScopeMetrics[];
 }
 
+interface OtlpResourceSpans {
+  readonly resource: {
+    readonly attributes: readonly OtlpAttribute[];
+  };
+  readonly scopeSpans: readonly OtlpScopeSpans[];
+}
+
 interface OtlpScopeMetrics {
   readonly scope: { readonly name: string };
   readonly metrics: readonly OtlpMetric[];
+}
+
+interface OtlpScopeSpans {
+  readonly scope: { readonly name: string };
+  readonly spans: readonly OtlpSpan[];
 }
 
 interface OtlpMetric {
@@ -171,6 +284,21 @@ interface OtlpMetric {
   readonly histogram?: {
     readonly aggregationTemporality: number;
     readonly dataPoints: readonly OtlpHistogramDataPoint[];
+  };
+}
+
+interface OtlpSpan {
+  readonly traceId: string;
+  readonly spanId: string;
+  readonly parentSpanId?: string;
+  readonly name: string;
+  readonly kind: number;
+  readonly startTimeUnixNano?: string;
+  readonly endTimeUnixNano?: string;
+  readonly attributes: readonly OtlpAttribute[];
+  readonly status: {
+    readonly code: number;
+    readonly message?: string;
   };
 }
 
@@ -274,7 +402,81 @@ function attributesForMetric(event: MetricEvent): readonly OtlpAttribute[] {
   return attrs;
 }
 
-function attribute(key: string, value: string): OtlpAttribute {
+function spanForEvent(event: TraceSpanEvent): OtlpSpan {
+  return {
+    traceId: event.traceId,
+    spanId: event.spanId,
+    ...(event.parentSpanId ? { parentSpanId: event.parentSpanId } : {}),
+    name: event.name,
+    kind: spanKindCode(event.kind),
+    ...(timeUnixNano(event.startTime)
+      ? { startTimeUnixNano: timeUnixNano(event.startTime) }
+      : {}),
+    ...(timeUnixNano(event.endTime)
+      ? { endTimeUnixNano: timeUnixNano(event.endTime) }
+      : {}),
+    attributes: attributesForTrace(event),
+    status: {
+      code: traceStatusCode(event.status),
+      ...(event.statusMessage ? { message: event.statusMessage } : {}),
+    },
+  };
+}
+
+function attributesForTrace(event: TraceSpanEvent): readonly OtlpAttribute[] {
+  const attrs: OtlpAttribute[] = [attribute("takosumi.span.id", event.id)];
+  if (event.spaceId) attrs.push(attribute("takosumi.space_id", event.spaceId));
+  if (event.groupId) attrs.push(attribute("takosumi.group_id", event.groupId));
+  if (event.requestId) {
+    attrs.push(attribute("takosumi.request_id", event.requestId));
+  }
+  if (event.correlationId) {
+    attrs.push(attribute("takosumi.correlation_id", event.correlationId));
+  }
+  for (const [key, value] of Object.entries(event.attributes ?? {}).sort()) {
+    attrs.push(attribute(key, value));
+  }
+  return attrs;
+}
+
+function spanKindCode(kind: TraceSpanEvent["kind"]): number {
+  switch (kind) {
+    case "server":
+      return 2;
+    case "client":
+      return 3;
+    case "producer":
+      return 4;
+    case "consumer":
+      return 5;
+    case "internal":
+    default:
+      return 1;
+  }
+}
+
+function traceStatusCode(status: TraceSpanEvent["status"]): number {
+  switch (status) {
+    case "ok":
+      return 1;
+    case "error":
+      return 2;
+    case "unset":
+    default:
+      return 0;
+  }
+}
+
+function attribute(
+  key: string,
+  value: string | number | boolean,
+): OtlpAttribute {
+  if (typeof value === "number") {
+    return Number.isInteger(value)
+      ? { key, value: { intValue: String(value) } }
+      : { key, value: { doubleValue: value } };
+  }
+  if (typeof value === "boolean") return { key, value: { boolValue: value } };
   return { key, value: { stringValue: value } };
 }
 
@@ -321,11 +523,14 @@ function parseOtelHeaderList(
   return headers;
 }
 
-function endpointFromOtelBase(value: string | undefined): string | undefined {
+function endpointFromOtelBase(
+  value: string | undefined,
+  signal: "metrics" | "traces",
+): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
-  if (trimmed.endsWith("/v1/metrics")) return trimmed;
-  return `${trimmed.replace(/\/+$/, "")}/v1/metrics`;
+  if (trimmed.endsWith(`/v1/${signal}`)) return trimmed;
+  return `${trimmed.replace(/\/+$/, "")}/v1/${signal}`;
 }
 
 function firstNonEmpty(

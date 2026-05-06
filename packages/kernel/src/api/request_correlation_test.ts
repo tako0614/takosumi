@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { Hono } from "hono";
+import { InMemoryObservabilitySink } from "../services/observability/mod.ts";
 import {
   type ApiRequestLogLine,
   createConsoleApiRequestLogger,
@@ -7,6 +8,7 @@ import {
   registerRequestCorrelation,
   TAKOSUMI_CORRELATION_ID_HEADER,
   TAKOSUMI_REQUEST_ID_HEADER,
+  TRACEPARENT_HEADER,
 } from "./request_correlation.ts";
 
 Deno.test("request correlation propagates inbound ids to response headers and logs", async () => {
@@ -20,6 +22,8 @@ Deno.test("request correlation propagates inbound ids to response headers and lo
       monotonic += 2.5;
       return monotonic;
     },
+    traceIdFactory: () => "4bf92f3577b34da6a3ce929d0e0e4736",
+    spanIdFactory: () => "00f067aa0ba902b7",
   });
   app.get("/items/:id", (c) => c.text("ok"));
 
@@ -32,6 +36,10 @@ Deno.test("request correlation propagates inbound ids to response headers and lo
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get(TAKOSUMI_REQUEST_ID_HEADER), "req_inbound");
+  assert.equal(
+    response.headers.get(TRACEPARENT_HEADER),
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  );
   assert.equal(
     response.headers.get(TAKOSUMI_CORRELATION_ID_HEADER),
     "corr_inbound",
@@ -46,8 +54,58 @@ Deno.test("request correlation propagates inbound ids to response headers and lo
     route: "/items/:id",
     status: 200,
     durationMs: 2.5,
+    trace_id: "4bf92f3577b34da6a3ce929d0e0e4736",
+    span_id: "00f067aa0ba902b7",
     requestId: "req_inbound",
     correlationId: "corr_inbound",
+  });
+});
+
+Deno.test("request correlation records HTTP server trace spans", async () => {
+  const observability = new InMemoryObservabilitySink();
+  const app = new Hono();
+  registerRequestCorrelation(app, {
+    traceSink: observability,
+    spanIdFactory: () => "2222222222222222",
+    now: (() => {
+      const values = [
+        new Date("2026-05-07T00:00:00.000Z"),
+        new Date("2026-05-07T00:00:01.000Z"),
+      ];
+      return () => values.shift() ?? new Date("2026-05-07T00:00:01.000Z");
+    })(),
+  });
+  app.get("/items/:id", (c) => c.text("ok"));
+
+  const response = await app.request("/items/one", {
+    headers: {
+      [TAKOSUMI_REQUEST_ID_HEADER]: "req_trace",
+      [TAKOSUMI_CORRELATION_ID_HEADER]: "corr_trace",
+      [TRACEPARENT_HEADER]:
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-1111111111111111-01",
+    },
+  });
+
+  assert.equal(response.status, 200);
+  const traces = await observability.listTraces();
+  assert.equal(traces.length, 1);
+  assert.deepEqual(traces[0], {
+    id: "span_2222222222222222",
+    traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+    spanId: "2222222222222222",
+    parentSpanId: "1111111111111111",
+    name: "GET /items/:id",
+    kind: "server",
+    status: "ok",
+    startTime: "2026-05-07T00:00:00.000Z",
+    endTime: "2026-05-07T00:00:01.000Z",
+    attributes: {
+      "http.request.method": "GET",
+      "http.route": "/items/:id",
+      "http.response.status_code": 200,
+    },
+    requestId: "req_trace",
+    correlationId: "corr_trace",
   });
 });
 

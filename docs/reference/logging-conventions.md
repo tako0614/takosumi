@@ -18,9 +18,9 @@ middleware is current: API responses echo `x-request-id` and `x-correlation-id`,
 or generate `req_<uuid>` when neither header is supplied. In staging and
 production, and in other environments when `TAKOSUMI_HTTP_REQUEST_LOGS=true`,
 the bootstrap path emits one JSON request log line with `requestId`,
-`correlationId`, route, status, and duration. Public deploy metrics also carry
-the inbound request and correlation ids. OTLP trace id / span id log enrichment
-remains a target contract until native trace export is implemented. :::
+`correlationId`, `trace_id`, `span_id`, route, status, and duration. Public
+deploy metrics also carry the inbound request and correlation ids. Trace id /
+span id enrichment for non-HTTP logs remains the broader target contract. :::
 
 ## Line format
 
@@ -130,15 +130,17 @@ pivot from logs to audit events via `operationId` or `eventId`.
 
 ## Trace correlation
 
-When OTLP is enabled, every log line emitted within an active span carries
-`trace_id` and `span_id` fields. The fields use the OTLP hex-string form so a
-sink can stitch logs to traces without further encoding.
+Every kernel HTTP request log emitted by the correlation middleware carries
+`trace_id` and `span_id` fields for the active request span. The fields use the
+OTLP hex-string form so a sink can stitch logs to traces without further
+encoding.
 
 ```text
 "trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"00f067aa0ba902b7"
 ```
 
-When OTLP is disabled the fields are omitted, not emitted as empty strings.
+Logs emitted outside an active span omit the fields instead of emitting empty
+strings.
 
 ## Operator configuration
 
