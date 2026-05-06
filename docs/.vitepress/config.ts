@@ -154,17 +154,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "Reference / Triggers & Hooks",
-      items: [
-        { text: "Triggers", link: "/reference/triggers" },
-        {
-          text: "Execute-Step Operation",
-          link: "/reference/execute-step-operation",
-        },
-        { text: "Declarable Hooks", link: "/reference/declarable-hooks" },
-      ],
-    },
-    {
       text: "Reference / Tenant Lifecycle",
       items: [
         { text: "Tenant Provisioning", link: "/reference/tenant-provisioning" },
@@ -286,7 +275,15 @@ export default defineConfig({
     "Self-hostable PaaS toolkit — manifest-driven multi-cloud deploys",
   cleanUrls: true,
   lastUpdated: true,
-  ignoreDeadLinks: false,
+  // The triggers / execute-step-operation / declarable-hooks pages were
+  // removed when the kernel-side workflow primitive reservation was
+  // withdrawn. Links from older docs are tolerated until each doc is
+  // cleaned up; see workflow-extension-design.md for the policy.
+  ignoreDeadLinks: [
+    /^\/reference\/triggers$/,
+    /^\/reference\/execute-step-operation$/,
+    /^\/reference\/declarable-hooks$/,
+  ],
   sitemap: {
     hostname: "https://docs.takosumi.com/",
   },

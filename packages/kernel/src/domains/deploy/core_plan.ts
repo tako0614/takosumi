@@ -128,10 +128,6 @@ const DOC_DESCRIPTOR_SOURCES: readonly { alias: string; path: string }[] = [
     path: "descriptors/contracts/resource-analytics-engine-v1.jsonld",
   },
   {
-    alias: "resource.workflow@v1",
-    path: "descriptors/contracts/resource-workflow-v1.jsonld",
-  },
-  {
     alias: "resource.durable-object@v1",
     path: "descriptors/contracts/resource-durable-object-v1.jsonld",
   },

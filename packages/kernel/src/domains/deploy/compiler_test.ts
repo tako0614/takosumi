@@ -7,15 +7,7 @@ const IMAGE_A =
 const IMAGE_B =
   "registry.example.test/app@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-function workerBuild() {
-  return {
-    fromWorkflow: {
-      path: ".takos/workflows/build.yml",
-      job: "build",
-      artifact: "bundle",
-    },
-  };
-}
+const WORKER_IMAGE = IMAGE_A;
 
 Deno.test("public manifest compiler accepts default-app style routes and outputs", () => {
   const manifest: PublicDeployManifest = {
@@ -23,13 +15,9 @@ Deno.test("public manifest compiler accepts default-app style routes and outputs
     version: "1.0.0",
     compute: {
       web: {
-        build: {
-          fromWorkflow: {
-            path: ".takos/workflows/build.yml",
-            job: "build",
-            artifact: "bundle",
-          },
-        },
+        type: "js-worker",
+        image: WORKER_IMAGE,
+        port: 8080,
         icon: "/icons/docs.png",
       },
     },
@@ -170,7 +158,9 @@ Deno.test(
           name: "bad-attached",
           compute: {
             web: {
-              build: workerBuild(),
+              type: "js-worker",
+              image: WORKER_IMAGE,
+              port: 8080,
               containers: {
                 host: {
                   image: "registry.example.test/host:latest",
@@ -188,7 +178,9 @@ Deno.test(
           name: "bad-attached-port",
           compute: {
             web: {
-              build: workerBuild(),
+              type: "js-worker",
+              image: WORKER_IMAGE,
+              port: 8080,
               containers: { host: { image: IMAGE_A } },
             },
           },
@@ -222,7 +214,9 @@ Deno.test("public manifest compiler validates worker triggers", () => {
         name: "bad-trigger-selector",
         compute: {
           jobs: {
-            build: workerBuild(),
+            type: "js-worker",
+            image: WORKER_IMAGE,
+            port: 8080,
             triggers: { queues: [{ binding: "JOBS", queue: "jobs" }] },
           },
         },
@@ -286,13 +280,8 @@ Deno.test("public manifest compiler expands documented resource bindings", () =>
     name: "resource-app",
     compute: {
       web: {
-        build: {
-          fromWorkflow: {
-            path: ".takos/workflows/build.yml",
-            job: "build",
-            artifact: "bundle",
-          },
-        },
+        image: WORKER_IMAGE,
+        port: 8080,
       },
       worker: {
         image: IMAGE_B,
@@ -419,7 +408,6 @@ Deno.test("public manifest compiler accepts every documented resource type", () 
       vectorIndex: { type: "vector-index" },
       secret: { type: "secret" },
       analyticsEngine: { type: "analytics-engine" },
-      workflow: { type: "workflow" },
       durableObject: { type: "durable-object" },
     },
   });
@@ -434,7 +422,6 @@ Deno.test("public manifest compiler accepts every documented resource type", () 
       "resource.vector-index@v1",
       "resource.secret@v1",
       "resource.analytics-engine@v1",
-      "resource.workflow@v1",
       "resource.durable-object@v1",
     ],
   );
@@ -543,39 +530,15 @@ Deno.test("public manifest compiler rejects invalid documented manifest fields",
   assert.throws(
     () =>
       compileManifestToAppSpec({
-        name: "bad-workflow",
+        name: "rejects-build-field",
         compute: {
           web: {
-            build: {
-              fromWorkflow: {
-                path: ".github/workflows/build.yml",
-                job: "build",
-                artifact: "bundle",
-              },
-            },
+            // deno-lint-ignore no-explicit-any
+            build: { foo: "bar" } as any,
           },
         },
       }),
-    /build\.fromWorkflow\.path must be under \.takos\/workflows\//,
-  );
-  assert.throws(
-    () =>
-      compileManifestToAppSpec({
-        name: "bad-artifact-path",
-        compute: {
-          web: {
-            build: {
-              fromWorkflow: {
-                path: ".takos/workflows/build.yml",
-                job: "build",
-                artifact: "bundle",
-                artifactPath: "../dist/worker.js",
-              },
-            },
-          },
-        },
-      }),
-    /artifactPath must be a repository relative path/,
+    /compute\.web must not include 'build'/,
   );
   assert.throws(
     () =>
@@ -583,13 +546,8 @@ Deno.test("public manifest compiler rejects invalid documented manifest fields",
         name: "bad-binding",
         compute: {
           web: {
-            build: {
-              fromWorkflow: {
-                path: ".takos/workflows/build.yml",
-                job: "build",
-                artifact: "bundle",
-              },
-            },
+            image: WORKER_IMAGE,
+            port: 8080,
           },
         },
         resources: {
@@ -608,13 +566,8 @@ Deno.test("public manifest compiler validates route and output references", () =
     name: "route-app",
     compute: {
       web: {
-        build: {
-          fromWorkflow: {
-            path: ".takos/workflows/build.yml",
-            job: "build",
-            artifact: "bundle",
-          },
-        },
+        image: WORKER_IMAGE,
+        port: 8080,
       },
     },
   };
@@ -697,7 +650,8 @@ Deno.test("public manifest compiler normalizes non-HTTP route protocols", () => 
     name: "multi-protocol-app",
     compute: {
       worker: {
-        build: workerBuild(),
+        image: WORKER_IMAGE,
+        port: 8080,
       },
     },
     routes: [{
@@ -749,18 +703,18 @@ Deno.test("public manifest compiler normalizes non-HTTP route protocols", () => 
         "interface.http@v1",
         "/",
         undefined,
-        undefined,
+        8080,
         undefined,
       ],
-      ["socket", "tcp", "interface.tcp@v1", undefined, 4433, 4433, undefined],
-      ["dns", "udp", "interface.udp@v1", undefined, 5353, 5353, undefined],
+      ["socket", "tcp", "interface.tcp@v1", undefined, 4433, 8080, undefined],
+      ["dns", "udp", "interface.udp@v1", undefined, 5353, 8080, undefined],
       [
         "jobs",
         "queue",
         "interface.queue@v1",
         undefined,
         undefined,
-        undefined,
+        8080,
         "jobs.incoming",
       ],
       [
@@ -769,7 +723,7 @@ Deno.test("public manifest compiler normalizes non-HTTP route protocols", () => 
         "interface.schedule@v1",
         undefined,
         undefined,
-        undefined,
+        8080,
         "daily",
       ],
       [
@@ -778,7 +732,7 @@ Deno.test("public manifest compiler normalizes non-HTTP route protocols", () => 
         "interface.event@v1",
         undefined,
         undefined,
-        undefined,
+        8080,
         "repo.push",
       ],
     ],
@@ -788,16 +742,16 @@ Deno.test("public manifest compiler normalizes non-HTTP route protocols", () => 
     () =>
       compileManifestToAppSpec({
         name: "bad-tcp",
-        compute: { worker: { build: workerBuild() } },
+        compute: { worker: { image: WORKER_IMAGE } },
         routes: [{ id: "socket", target: "worker", protocol: "tcp" }],
       }),
-    /route\.socket\.port or compute\.worker\.port is required/,
+    /compute\.worker\.image must be digest-pinned with sha256|compute\.worker\.port must be integer/,
   );
   assert.throws(
     () =>
       compileManifestToAppSpec({
         name: "bad-queue",
-        compute: { worker: { build: workerBuild() } },
+        compute: { worker: { image: WORKER_IMAGE, port: 8080 } },
         routes: [{
           id: "jobs",
           target: "worker",
@@ -818,7 +772,8 @@ Deno.test(
           name: "bad-binding-request",
           compute: {
             web: {
-              build: workerBuild(),
+              image: WORKER_IMAGE,
+              port: 8080,
               bindings: {
                 TAKOSUMI_API_KEY: {
                   from: {
@@ -844,7 +799,8 @@ Deno.test("public manifest compiler rejects env collisions after uppercase norma
         env: { log_level: "info" },
         compute: {
           web: {
-            build: workerBuild(),
+            image: WORKER_IMAGE,
+            port: 8080,
             env: { LOG_LEVEL: "debug" },
           },
         },
@@ -857,7 +813,8 @@ Deno.test("public manifest compiler rejects env collisions after uppercase norma
         name: "bad-binding-env",
         compute: {
           web: {
-            build: workerBuild(),
+            image: WORKER_IMAGE,
+            port: 8080,
             env: { OAUTH_CLIENT_ID: "existing" },
             bindings: {
               OAUTH_CLIENT_ID: {
@@ -882,7 +839,8 @@ Deno.test("public manifest compiler rejects env collisions after uppercase norma
         name: "bad-resource-binding-env",
         compute: {
           web: {
-            build: workerBuild(),
+            image: WORKER_IMAGE,
+            port: 8080,
             env: { DATABASE_URL: "existing" },
           },
         },
@@ -899,7 +857,8 @@ Deno.test("public manifest compiler validates OAuth redirect URI schemes", () =>
     name: "oauth-relative",
     compute: {
       web: {
-        build: workerBuild(),
+        image: WORKER_IMAGE,
+        port: 8080,
         bindings: {
           OAUTH_CLIENT_ID: {
             from: {
@@ -922,7 +881,8 @@ Deno.test("public manifest compiler validates OAuth redirect URI schemes", () =>
         name: "oauth-relative-no-context",
         compute: {
           web: {
-            build: workerBuild(),
+            image: WORKER_IMAGE,
+            port: 8080,
             bindings: {
               OAUTH_CLIENT_ID: {
                 from: {
@@ -946,7 +906,8 @@ Deno.test("public manifest compiler validates OAuth redirect URI schemes", () =>
         name: "oauth-http",
         compute: {
           web: {
-            build: workerBuild(),
+            image: WORKER_IMAGE,
+            port: 8080,
             bindings: {
               OAUTH_CLIENT_ID: {
                 from: {
@@ -969,7 +930,8 @@ Deno.test("public manifest compiler validates OAuth redirect URI schemes", () =>
     name: "oauth-localhost",
     compute: {
       web: {
-        build: workerBuild(),
+        image: WORKER_IMAGE,
+        port: 8080,
         bindings: {
           OAUTH_CLIENT_ID: {
             from: {
@@ -994,7 +956,7 @@ Deno.test("public manifest compiler accepts the canonical 'outputs' authoring ke
     name: "outputs-canonical",
     version: "1.0.0",
     compute: {
-      api: { build: workerBuild() },
+      api: { image: WORKER_IMAGE, port: 8080 },
     },
     routes: [{ id: "web", target: "api", path: "/", methods: ["GET"] }],
     outputs: [{
@@ -1018,7 +980,8 @@ Deno.test("public manifest compiler accepts component bindings authoring", () =>
     version: "1.0.0",
     compute: {
       web: {
-        build: workerBuild(),
+        image: WORKER_IMAGE,
+        port: 8080,
         bindings: {
           TAKOSUMI_API_KEY: {
             from: {

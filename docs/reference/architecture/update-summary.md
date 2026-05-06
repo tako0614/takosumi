@@ -151,13 +151,12 @@ public manifest vocabulary is closed and unchanged.
   webhook receiver / scheduler / artifact build / manifest generation として
   実装する。Earlier drafts that reserved 4 kernel primitives are explicitly
   withdrawn.
-- **Triggers / Execute-Step / Declarable Hooks docs deprecated.**
-  [Triggers](/reference/triggers),
-  [Execute-Step Operation](/reference/execute-step-operation), and
-  [Declarable Hooks](/reference/declarable-hooks) carry deprecation banners
-  pointing back to Workflow Placement Rationale. The kernel ships none of these
-  primitives; the docs are retained as historical design context and scheduled
-  for removal in a follow-up cleanup.
+- **Triggers / Execute-Step / Declarable Hooks docs removed.** The reference
+  pages that previously documented these reserved primitives have been deleted
+  along with the `validateWorkflowBuild` compiler validator, the
+  `compute.<name>.build` field, and the `resource.workflow@v1` kernel-known
+  shape. The kernel ships none of these primitives; equivalent concerns are
+  owned by `takosumi-git`.
 - **Operation kind enum unchanged at 11 values.** `transform-data-asset` remains
   the sole DataAsset-bundle dispatch operation. The previously proposed 12th
   value (`execute-step`) is not added.
@@ -168,7 +167,7 @@ public manifest vocabulary is closed and unchanged.
 - **Plugin shape examples.** workflow / cron-job / pre-apply-hook 等の shape は
   kernel curated 5 種に含めず、3rd party plugin が CONVENTIONS.md §6 RFC で提供
   ([Extending](/extending), [Shape Catalog](/reference/shapes))。kernel-known な
-  workflow shape (`resource-workflow-v1` 等) は提供しない方針に整理。
+  workflow shape (`resource.workflow@v1`) は提供しない方針で、登録は撤去済み。
 
 ## Closure statement
 

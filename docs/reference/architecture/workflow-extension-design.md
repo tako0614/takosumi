@@ -15,7 +15,8 @@ at `POST /v1/deployments`, resolves the resource DAG, and applies it.
 > all; everything workflow-shaped lives above the `POST /v1/deployments`
 > boundary in `takosumi-git`. The reference docs written for the reserved
 > primitives (`triggers.md`, `execute-step-operation.md`, `declarable-hooks.md`)
-> are now obsolete and slated for removal in a follow-up cleanup.
+> have been removed along with the `compute.<name>.build.fromWorkflow` validator
+> and the `resource.workflow@v1` kernel-known shape.
 
 The doc is design-layer only.
 

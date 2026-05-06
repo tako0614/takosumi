@@ -45,7 +45,6 @@ const TOP_LEVEL_FIELDS = new Set([
 
 const COMPUTE_FIELDS = new Set([
   "type",
-  "build",
   "image",
   "port",
   "entrypoint",
@@ -653,14 +652,6 @@ function validateComputeCollection(
     if (spec.image !== undefined) {
       validateServiceImage(name, spec);
     }
-    if (spec.build !== undefined) {
-      console.warn(
-        `compute.${name}.build.fromWorkflow is deprecated and will be ` +
-          `removed; resolve the artifact upstream (e.g. via takosumi-git) ` +
-          `and submit a manifest with a digest-pinned image URI instead.`,
-      );
-      validateWorkflowBuild(name, spec.build);
-    }
     if (spec.depends !== undefined && !isStringArray(spec.depends)) {
       throw new TypeError(`compute.${name}.depends must be string array`);
     }
@@ -892,57 +883,6 @@ function validateServiceImage(name: string, spec: PublicComputeSpec): void {
     port === undefined || !Number.isInteger(port) || port < 1 || port > 65535
   ) {
     throw new TypeError(`compute.${name}.port must be integer 1..65535`);
-  }
-}
-
-/**
- * @deprecated `compute.<name>.build.fromWorkflow` is being removed from the
- * manifest spec. Workflow / build pipeline concerns are owned by the
- * `takosumi-git` sibling product, which resolves the artifact and submits
- * a manifest carrying a digest-pinned URI directly. See
- * `docs/reference/architecture/workflow-extension-design.md` for the policy.
- * This validator will be deleted in a follow-up change.
- */
-function validateWorkflowBuild(name: string, build: unknown): void {
-  if (!isRecord(build) || !isRecord(build.fromWorkflow)) {
-    throw new TypeError(`compute.${name}.build.fromWorkflow is required`);
-  }
-  assertKnownFields(
-    build,
-    new Set(["fromWorkflow"]),
-    `compute.${name}.build`,
-  );
-  const workflow = build.fromWorkflow;
-  assertKnownFields(
-    workflow,
-    new Set(["path", "job", "artifact", "artifactPath"]),
-    `compute.${name}.build.fromWorkflow`,
-  );
-  for (const field of ["path", "job", "artifact"] as const) {
-    if (typeof workflow[field] !== "string" || workflow[field].length === 0) {
-      throw new TypeError(
-        `compute.${name}.build.fromWorkflow.${field} must be string`,
-      );
-    }
-  }
-  const path = workflow.path as string;
-  if (
-    !path.startsWith(".takos/workflows/") || path.includes("..") ||
-    path.endsWith("/")
-  ) {
-    throw new TypeError(
-      `compute.${name}.build.fromWorkflow.path must be under .takos/workflows/`,
-    );
-  }
-  if (workflow.artifactPath !== undefined) {
-    if (
-      typeof workflow.artifactPath !== "string" ||
-      !isSafeRepositoryRelativePath(workflow.artifactPath)
-    ) {
-      throw new TypeError(
-        `compute.${name}.build.fromWorkflow.artifactPath must be a repository relative path`,
-      );
-    }
   }
 }
 
@@ -1363,10 +1303,9 @@ function isLocalhostName(hostname: string): boolean {
 }
 
 function inferComputeType(name: string, compute: PublicComputeSpec): string {
-  if (compute.build !== undefined) return "js-worker";
   if (compute.image !== undefined) return "service";
   throw new TypeError(
-    `compute.${name} requires type or an inferable build/image field`,
+    `compute.${name} requires type or an image field`,
   );
 }
 
@@ -1481,12 +1420,6 @@ const RESOURCE_CONTRACTS = [
     uri: "https://takosumi.com/contracts/resource/analytics-engine/v1",
     aliases: ["analytics-engine"],
     defaultAccessMode: "analytics-runtime-binding",
-  },
-  {
-    ref: "resource.workflow@v1",
-    uri: "https://takosumi.com/contracts/resource/workflow/v1",
-    aliases: ["workflow"],
-    defaultAccessMode: "workflow-runtime-binding",
   },
   {
     ref: "resource.durable-object@v1",
