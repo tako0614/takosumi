@@ -1,18 +1,26 @@
 # Execute-Step Operation
 
-> Stability: design draft Audience: integrator, kernel-implementer See also:
-> [Closed Enums](/reference/closed-enums), [WAL Stages](/reference/wal-stages),
-> [Triggers](/reference/triggers),
-> [Provider / Implementation Contract](/reference/provider-implementation-contract),
-> [Storage Schema](/reference/storage-schema)
+> **DEPRECATED — policy reversed.** This document records the `execute-step`
+> operation kind that was previously reserved as a 12th value in the
+> `operationKind` closed enum for future workflow integration. The reservation
+> has been **withdrawn**: the kernel keeps the existing 11 operation kinds and
+> ships no `execute-step` primitive. Step execution and arbitrary DataAsset
+> bundle dispatch are not kernel concerns; they live entirely above the
+> `POST /v1/deployments` boundary in the `takosumi-git` sibling product. See
+> [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+> for the current policy. This page is retained as historical design context and
+> will be removed in a follow-up cleanup.
+
+> Stability: deprecated Audience: historical reference
 
 ## Overview
 
-Implementation status: `execute-step` is a reserved workflow-extension operation
-contract. Current public deploy/apply paths still dispatch provider operations
-through the existing resource apply pipeline and CatalogRelease WAL hooks; the
-kernel does not yet expose an `execute-step` route, cancel route, or StepResult
-store.
+The `execute-step` operation kind was originally proposed to generalize
+`transform-data-asset` into a canonical mechanism for dispatching arbitrary
+DataAsset bundles to a runtime-agent. With the policy reversal, the kernel does
+**not** introduce this generalization. `transform-data-asset` remains the only
+DataAsset-bundle dispatch operation kernel-side. Workflow-style multi-step
+execution is performed by `takosumi-git` outside the kernel.
 
 The `execute-step` operation kind generalizes `transform-data-asset` into the
 canonical mechanism by which the kernel dispatches an arbitrary DataAsset bundle

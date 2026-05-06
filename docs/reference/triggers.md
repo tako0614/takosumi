@@ -1,17 +1,21 @@
 # Triggers
 
-> Stability: design draft Audience: operator, integrator, kernel-implementer See
-> also: [Closed Enums](/reference/closed-enums),
-> [Execute-Step Operation](/reference/execute-step-operation),
-> [Audit Events](/reference/audit-events),
-> [Workflow Extension Design](/reference/architecture/workflow-extension-design)
+> **DEPRECATED — policy reversed.** This document records a kernel-side Trigger
+> primitive that was previously reserved for future workflow integration. The
+> reservation has been **withdrawn**: the kernel ships no Trigger primitive at
+> all. Workflow / cron / external-event handling lives entirely above the
+> `POST /v1/deployments` boundary in the `takosumi-git` sibling product. See
+> [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+> for the current policy. This page is retained as historical design context and
+> will be removed in a follow-up cleanup.
 
-Takosumi v1 における **Trigger primitive** の予約済み extension contract です。
-Trigger は workflow / job / hook 等の plugin shape を kick するための
-kernel-side 機構として設計されていますが、現行 kernel はまだ trigger HTTP routes
-/ scheduler / persistent TriggerRegistration store を expose しません。 本 doc
-は kind 定義 / HTTP surface / record schema / audit event / boundary の 将来互換
-vocabulary を定めます。
+> Stability: deprecated Audience: historical reference
+
+Takosumi v1 で以前 reserve されていた **Trigger primitive** extension contract
+の歴史的記録です。kernel は Trigger primitive を **持たない** 方針に変更された
+ため、本 doc の HTTP surface / record schema / audit vocabulary は今後 kernel
+には実装されません。同等の関心事は `takosumi-git` 側で webhook receiver /
+scheduler / external-event handler として実装されます。
 
 ## Overview
 

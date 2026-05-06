@@ -1,17 +1,25 @@
 # Declarable Hooks
 
-> Stability: design draft Audience: integrator, operator See also:
-> [WAL Stages](/reference/wal-stages),
-> [Lifecycle Phases](/reference/lifecycle-phases),
-> [Execute-Step Operation](/reference/execute-step-operation),
-> [Triggers](/reference/triggers), [Audit Events](/reference/audit-events)
+> **DEPRECATED — policy reversed.** This document records a kernel-side
+> Declarable Hook extension point that was previously reserved for
+> manifest-level hook bindings invoking workflow-style execution. The
+> reservation has been **withdrawn**: the kernel ships no declarable-hook
+> dispatch / store / route. Lifecycle hooks that operators want to attach to
+> deployments are implemented above the kernel by `takosumi-git`, which can
+> sequence build / notification / migration steps before or after a
+> `POST /v1/deployments` call. Catalog-supplied internal pre/post-commit hooks
+> at the WAL stage level remain unchanged. See
+> [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+> for the current policy. This page is retained as historical design context and
+> will be removed in a follow-up cleanup.
 
-Takosumi v1 の **Declarable Hooks** の予約済み extension contract です。
-Catalog-supplied executable WAL hooks は実装済みですが、user / plugin layer が
-manifest 上で declare する hook binding の persistent store / dispatch route は
-現行 kernel ではまだ expose されません。本 doc は declaration syntax / lifecycle
-binding / failure 挙動 / record schema / audit 発火 / 既存 catalog-supplied hook
-との関係を定めます。
+> Stability: deprecated Audience: historical reference
+
+Takosumi v1 で以前 reserve されていた user / plugin layer 向け **Declarable
+Hooks** extension contract の歴史的記録です。kernel は declarable hook の
+declaration syntax / persistent store / dispatch route を **持たない** 方針に
+変更されました。Catalog-supplied internal WAL hook は引き続き有効ですが、本 doc
+が定義する operator-declared hook binding は kernel に実装されません。
 
 ## Overview
 

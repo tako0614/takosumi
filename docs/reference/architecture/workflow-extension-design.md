@@ -1,20 +1,23 @@
-# Workflow Extension Design Rationale
+# Workflow Placement Rationale
 
-This document records the design rationale for how Takosumi exposes "workflow /
-cron / hook" style automation. Workflow surfaces such as scheduled jobs, build
-pipelines, deployment hooks, and external-event-driven runs are
-**plugin-supplied shapes**, not kernel-built-in features. The current kernel
-ships the manifest / plugin / CatalogRelease hook surface; trigger,
-declarable-hook, and `execute-step` route/store primitives are reserved
-contracts for future implementation. This keeps the v1 invariants stable:
-`Space` tenancy, the curated 5-shape catalog, the WAL stage 8-value enum, the
-closed Risk taxonomy (19 values), the closed Approval invalidation triggers (6),
-the closed RevokeDebt enums, the 5 DataAsset kinds, operator-installed
-`connector:<id>` identity, and the WAL idempotency tuple
-`(spaceId, operationPlanDigest, journalEntryId)`.
+This document records why **Takosumi has no workflow vocabulary in the kernel**
+and where workflow / cron / hook concerns live instead. Workflow-style
+automation — scheduled jobs, build pipelines, deployment hooks,
+external-event-driven runs — is owned by **`takosumi-git`**, a sibling product
+of `takosumi` that sits above the kernel and submits manifests to it. The kernel
+itself is a pure manifest deploy engine: it accepts a closed `Manifest` envelope
+at `POST /v1/deployments`, resolves the resource DAG, and applies it.
 
-The doc is design-layer only. Wire-level shape is delegated to the reference
-docs listed at the bottom.
+> **Policy change note.** Earlier drafts of this document reserved four kernel
+> primitives (trigger, `execute-step` operation kind, declarable hook extension
+> point, trigger ↔ resource binding) for future workflow integration. That
+> reservation has been **withdrawn**. The kernel ships no workflow primitive at
+> all; everything workflow-shaped lives above the `POST /v1/deployments`
+> boundary in `takosumi-git`. The reference docs written for the reserved
+> primitives (`triggers.md`, `execute-step-operation.md`, `declarable-hooks.md`)
+> are now obsolete and slated for removal in a follow-up cleanup.
+
+The doc is design-layer only.
 
 ## 1. Why kernel-side workflow primitive is not built-in
 
@@ -43,180 +46,101 @@ surfaces do not belong in this set. The reasoning:
   primitive would deploy-bind the lifecycle and make `OperationPlan` ordering
   impossible to reason about in isolation.
 
-The kernel therefore reserves primitives general enough that a plugin shape can
-later bind to kernel-managed workflow semantics, and refuses to ship workflow
-vocabulary itself.
+## 2. Workflow lives in `takosumi-git`
 
-## 2. Relation to existing primitives
+Workflow concerns are entirely outside the kernel. They are implemented by
+**`takosumi-git`**, a sibling product that:
 
-Workflow shapes do not need new kernel concepts. They reuse:
+1. Watches git (push / PR / tag) or receives webhook events.
+2. Runs the build pipeline (image build, artifact upload).
+3. Generates a `Manifest` with resolved artifact URIs.
+4. Submits the manifest to the kernel via `POST /v1/deployments`.
+5. Manages manifest version history — the git history of the manifest file is
+   the authoritative version history. The kernel does not store a parallel
+   "manifest version" concept.
 
-- **Connector / Implementation / runtime-agent.** Step execution reuses the
-  existing runner topology. A workflow step is an Implementation invocation
-  scoped to a `Space`, dispatched by the same runtime-agent path that today
-  drives apply / activate / destroy.
-- **DataAsset (5 closed kinds).** Step bundles are `oci-image` / `js-module` /
-  `wasm-module` / `source-archive` / `static-archive`. No new DataAsset kind is
-  required, and none is added.
-- **pre/post-commit hook (catalog-supplied).** The kernel already runs hooks
-  curated by the catalog at well-known apply phases. Section 3.c extends this
-  surface so that **operator manifests** can declare hooks too, without
-  introducing a separate "hook plugin" concept.
-- **Template engine and `${ref:...}`.** A multi-step workflow declaration is a
-  Template-shaped DAG over OperationPlan kicks. Reusing `${ref:...}` keeps
-  cross-step data flow consistent with the current resolution model.
-- **Approval invalidation triggers (6 closed values).** A workflow run that
-  changes a referenced artifact triggers the same invalidation rules as any
-  other apply.
-- **WAL stage enum (8 closed values).** `execute-step` traverses the same 8
-  stages. Operation kind disambiguates the context so stage semantics are not
-  overloaded.
+Project-local files used by `takosumi-git` (workflow definitions and similar
+inputs) live under `.takosumi/` alongside `manifest.yml`, but the kernel does
+not parse them. `.takosumi/manifest.yml` is the only file the kernel ever reads
+from a project repository, and even that read is performed by the CLI or
+`takosumi-git`, not by the kernel itself.
 
-## 3. Four minimal kernel primitives reserved
+The kernel therefore never observes git, never schedules anything, never runs
+workflow steps, and never holds workflow state.
 
-The reserved contract has exactly four primitives. Each is generic and has no
-workflow vocabulary baked in. Current code does not expose these as active
-routes/stores yet.
+## 3. Git decoupling invariants
 
-### 3.a. Trigger primitive (3 closed kinds)
+The kernel keeps git-agnostic invariants regardless of how `takosumi-git` (or
+any other client) drives it.
 
-```text
-trigger.kind ∈ { manual, schedule, external-event }
-```
-
-`manual` is operator-initiated, `schedule` is clock-driven (the kernel time
-clock model is the source of truth), and `external-event` is HMAC-SHA256
-authenticated payload delivery. The kind set is closed in v1.
-
-### 3.b. Operation kind expansion
-
-The operation kind enum grows from 11 to 12. The new value is `execute-step`,
-which generalizes the previous `transform-data-asset` shape into "run an
-Implementation step against a `Space`". `transform-data-asset` is a degenerate
-`execute-step` whose effect is a DataAsset materialization.
-
-```text
-kind ∈ { ..., execute-step }   # 12 values total
-```
-
-### 3.c. Declarable hook extension point
-
-A resource manifest may declare a hook on a known lifecycle phase. The kernel
-treats the declaration as a request to enqueue an `execute-step` operation at
-that phase, subject to the same Approval / Risk / RevokeDebt rules as any other
-`OperationPlan` kick.
-
-```yaml
-# illustrative; not normative
-hooks:
-  - phase: post-activate
-    runs: ${ref:steps.notify}
-```
-
-### 3.d. Trigger ↔ resource binding
-
-A resource declares which triggers can fan out into operations against it. The
-kernel watches the declared triggers and, when one fires, kicks an
-`OperationPlan` whose root operation is `execute-step`.
-
-```text
-trigger fires
-  → kernel resolves binding
-  → kernel constructs OperationPlan(kind=execute-step, ...)
-  → WAL stage 1 ... 8 (unchanged)
-```
-
-## 4. Plugin shapes built on these primitives
-
-The shapes below are illustrative. They are NOT part of the curated 5-shape
-catalog and NOT part of this spec; they are listed only to show that the four
-primitives suffice. Any third party may publish them via the `CONVENTIONS.md` §6
-RFC route.
-
-- `cron-job@v1` — `schedule` trigger plus a step bundle.
-- `workflow-job@v1` — single-step build / test / migrate.
-- `workflow-pipeline@v1` — multi-step DAG modelled as a Template.
-- `pre-apply-hook@v1` / `post-activate-hook@v1` — deployment lifecycle hooks.
-
-The curated 5 shapes (`object-store`, `web-service`, `database-postgres`,
-`custom-domain`, `worker`) are unchanged.
-
-## 5. Git decoupling invariants
-
-Workflow does not pull git into the kernel.
-
-- The kernel data model has no `commit`, `branch`, `ref`, or `repo` field. All
-  trigger primitives are git-agnostic.
-- `external-event` payloads are opaque to the kernel. The kernel verifies the
-  HMAC-SHA256 signature, attaches the payload as audit data, and refuses to
-  parse it.
+- The kernel data model has no `commit`, `branch`, `ref`, or `repo` field.
+- `external-event` payloads, when surfaced on the kernel API, are opaque to the
+  kernel. The kernel verifies the HMAC-SHA256 signature, attaches the payload as
+  audit data, and refuses to parse it.
 - HMAC-SHA256 verification is kernel-enforced, not optional. An unsigned
   external event is rejected before any `OperationPlan` is constructed.
 - The `source-archive` DataAsset kind continues to be git-agnostic. Its optional
   `metadata.gitCommit` field is audit annotation only and does not flow into any
   kernel decision.
 
-## 6. Structural alternatives considered
+## 4. No kernel-known "workflow" shape
 
-Three alternatives were evaluated and rejected.
+A kernel-aware workflow shape (e.g. `resource-workflow-v1`) is **not** provided.
+Operators who want to provision a vendor workflow service (Cloudflare Workflows,
+Temporal, Argo, etc.) do so through provider-local shapes whose IDs are owned by
+the plugin, not by the kernel catalog. This preserves:
 
-- **"Do not allow workflow shapes in `resources[]`."** Rejected because that
-  forces a manifest envelope change. The envelope is fixed at v1.
-- **"Introduce a separate manifest kind for workflows."** Rejected because the
-  primitives in §3 let plugin shapes ride inside the existing `resources[]`
-  envelope without a kind split.
-- **"Ship workflow as a built-in shape."** Rejected on curation neutrality
-  grounds (§1) and to preserve the 5-shape catalog invariant.
+- Curation neutrality — the curated 5-shape catalog stays focused on PaaS
+  primitives.
+- Image-first consistency — no `build` / `pipeline` vocabulary leaks into
+  kernel-known shapes.
+- Plugin freedom — each provider chooses its own surface for any
+  workflow-as-resource modelling.
 
-## 7. Workflow run lifecycle vs. apply pipeline
+## 5. Structural alternatives considered and rejected
 
-A workflow run is one specific use of an `OperationPlan`. It is not a parallel
-pipeline.
+- **Embed workflow as a built-in shape.** Rejected on curation neutrality and to
+  preserve kernel thinness (§1).
+- **Reserve kernel primitives for future workflow integration** (trigger /
+  `execute-step` / declarable hook / trigger ↔ resource binding). Initially
+  recorded as the "reserved contract" in earlier revisions of this doc;
+  subsequently rejected. Any such primitive forces the kernel to model a second
+  scheduler. `takosumi-git` owns that concern at the product layer instead.
+- **Introduce a separate manifest kind for workflows.** Rejected: `takosumi-git`
+  generates regular `kind: Manifest` documents; no envelope split is needed.
+- **Allow `compute.<name>.build.fromWorkflow` references inside manifest spec.**
+  Rejected as it forces the kernel to know about workflow file paths and build
+  artifacts. This concept is removed from the manifest spec; `takosumi-git`
+  resolves artifact URIs before submitting the manifest.
 
-- Same WAL stages (8 values), same idempotency tuple
-  `(spaceId, operationPlanDigest, journalEntryId)`.
-- Same Approval invalidation triggers (6 values), same Risk taxonomy (19
-  values), same RevokeDebt closed enums.
-- `DriftIndex` does not apply to workflow runs. A run is ephemeral; its result
-  is recorded as an observation entry rather than a drift entry.
-- `Connector` identity remains `connector:<id>` and is operator-installed.
-  External-event triggers do not create new identities.
-
-## 8. Boundary
+## 6. Boundary
 
 ```text
-reserved Takosumi kernel      Trigger primitive (3 kinds)
-contract                      execute-step operation kind (12th value)
-                              declarable hook extension point
-                              trigger ↔ resource binding
-                              HMAC-SHA256 enforcement on external-event
+inside Takosumi kernel       Manifest envelope (apiVersion / kind / metadata / template / resources)
+                             Resource DAG resolution and apply
+                             WAL idempotency, rollback, observation
+                             Curated 5-shape catalog
+                             Provider plugin host
+                             HMAC-SHA256 enforcement on external events (if any)
 
-provided by plugin shapes     cron-job, workflow-job, workflow-pipeline,
-                              pre-apply-hook, post-activate-hook, etc.
-                              (CONVENTIONS.md §6 RFC, third-party)
+inside takosumi-git          Git push / PR / tag watching
+                             Webhook receivers
+                             Workflow / build / pipeline execution
+                             Artifact build and URI resolution
+                             Manifest generation from workflow output
+                             POST /v1/deployments client
+                             Manifest version history (git-backed)
+                             Project-local files under .takosumi/
 
-outside Takosumi              UI for workflow authoring
-                              webhook receivers
-                              git push handlers
-                              matrix execution
-                              OIDC federation
-                              cross-run artifact sharing
+outside both                 UI for workflow authoring (downstream tools)
+                             Operator dashboards / audit consumers
+                             Cross-product orchestration
 ```
-
-The bottom group is operator-side concern (for example `takos-private`) and will
-be revisited in a future RFC if it ever enters the kernel.
 
 ## Related reference docs
 
-- [Trigger Resource Model](/reference/triggers.md)
-- [Execute-Step Operation](/reference/execute-step-operation.md)
-- [Declarable Hooks](/reference/declarable-hooks.md)
-- [WAL Stages](/reference/wal-stages.md)
-- [Approval Invalidation](/reference/approval-invalidation.md)
-- [Risk Taxonomy](/reference/risk-taxonomy.md)
-- [Time / Clock Model](/reference/time-clock-model.md)
-- [Artifact Kinds](/reference/artifact-kinds.md)
-- [Templates](/reference/templates.md)
-- [PaaS Provider Architecture](./paas-provider-architecture.md)
+- [Manifest Model](./manifest-model.md)
 - [Operation Plan / Write-Ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+- [PaaS Provider Architecture](./paas-provider-architecture.md)
 - [Data Asset Model](./data-asset-model.md)
+- [Templates](/reference/templates)

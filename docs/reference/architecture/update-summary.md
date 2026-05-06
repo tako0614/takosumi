@@ -142,34 +142,40 @@ public manifest vocabulary is closed and unchanged.
 
 ## Round 4 finalization additions (Workflow extension)
 
-- **Plugin-first workflow extension.**
-  [Workflow Extension Design](./workflow-extension-design.md) records why
-  workflow / cron / hook 等の機能を kernel に built-in せず plugin が shape
-  として提供する方針を採用したか、そして最小 4 primitive (trigger / execute-step
-  / declarable-hook / trigger-resource binding) を予約済み contract
-  として固定した rationale。
-- **Trigger primitive (3 closed kind).** [Triggers](/reference/triggers) closes
-  `manual / schedule / external-event` enum。現行 kernel は trigger route /
-  store をまだ expose しない。
-- **`execute-step` operation kind 拡張.**
-  [Execute-Step Operation](/reference/execute-step-operation) は任意 DataAsset
-  bundle を runtime-agent 経由で execute する将来 wire contract を確定。 現行
-  public apply path はまだ `execute-step` を dispatch しない。
-- **Declarable hooks.** [Declarable Hooks](/reference/declarable-hooks) は既存
-  catalog-supplied pre/post-commit hook と併存する user-declarable hook
-  vocabulary を予約。現行実装済み surface は catalog-supplied executable WAL
-  hooks。
+- **Workflow primitive reservation withdrawn.**
+  [Workflow Placement Rationale](./workflow-extension-design.md) (formerly
+  "Workflow Extension Design") records the policy reversal: the kernel **does
+  not** reserve trigger / `execute-step` / declarable-hook / trigger-resource
+  binding primitives. Workflow / cron / hook 等の機能は kernel に built-in
+  せず、`POST /v1/deployments` 境界の上位 sibling product `takosumi-git` が
+  webhook receiver / scheduler / artifact build / manifest generation として
+  実装する。Earlier drafts that reserved 4 kernel primitives are explicitly
+  withdrawn.
+- **Triggers / Execute-Step / Declarable Hooks docs deprecated.**
+  [Triggers](/reference/triggers),
+  [Execute-Step Operation](/reference/execute-step-operation), and
+  [Declarable Hooks](/reference/declarable-hooks) carry deprecation banners
+  pointing back to Workflow Placement Rationale. The kernel ships none of these
+  primitives; the docs are retained as historical design context and scheduled
+  for removal in a follow-up cleanup.
+- **Operation kind enum unchanged at 11 values.** `transform-data-asset` remains
+  the sole DataAsset-bundle dispatch operation. The previously proposed 12th
+  value (`execute-step`) is not added.
 - **CLI project layout.** `.takosumi/manifest.yml` を CLI default load path
-  に追加 ([CLI Reference](/reference/cli) Project Layout section)。
+  に追加 ([CLI Reference](/reference/cli) Project Layout section)。 `.takosumi/`
+  ディレクトリ配下の workflow definition 等は `takosumi-git` が parse /
+  実行する; kernel 側は manifest 以外を参照しない。
 - **Plugin shape examples.** workflow / cron-job / pre-apply-hook 等の shape は
   kernel curated 5 種に含めず、3rd party plugin が CONVENTIONS.md §6 RFC で提供
-  ([Extending](/extending), [Shape Catalog](/reference/shapes))。
+  ([Extending](/extending), [Shape Catalog](/reference/shapes))。kernel-known な
+  workflow shape (`resource-workflow-v1` 等) は提供しない方針に整理。
 
 ## Closure statement
 
 Public manifest vocabulary unchanged. No new shapes in kernel curated catalog.
-Reference docs locked at v1. Workflow / cron / hook の具体 shape は plugin
-domain で 3rd party 提供。Contract / kernel / CLI realignment to bring the type
-and runtime layers into agreement with the v1-locked docs is tracked in a
-separate follow-up plan that consumes the docs in this directory as the single
-source of truth.
+Reference docs locked at v1. Workflow / cron / hook 関連の機能は kernel から
+**完全に分離** され、`takosumi-git` (上位 sibling product) が
+`POST /v1/deployments` の client として実装する。Contract / kernel / CLI
+realignment to bring the type and runtime layers into agreement with the
+v1-locked docs is tracked in a separate follow-up plan that consumes the docs in
+this directory as the single source of truth.
