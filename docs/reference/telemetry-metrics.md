@@ -2,6 +2,7 @@
 
 > Stability: stable Audience: operator, kernel-implementer, integrator See also:
 > [Logging Conventions](/reference/logging-conventions),
+> [Observability Stack](/reference/observability-stack),
 > [Time / Clock Model](/reference/time-clock-model),
 > [Audit Events](/reference/audit-events),
 > [Quota / Rate Limit](/reference/quota-rate-limit),

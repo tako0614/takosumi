@@ -115,6 +115,9 @@ stage.
 | `TAKOSUMI_OTLP_HEADERS_JSON`                      | JSON object     | `{}`                    | no                    | extra headers sent to the OTLP collector                     | Telemetry / Metrics             |
 | `TAKOSUMI_OTLP_SERVICE_NAME`                      | string          | `takosumi-kernel`       | no                    | OTLP `service.name` resource attribute                       | Telemetry / Metrics             |
 | `TAKOSUMI_OTLP_FAIL_CLOSED`                       | boolean         | `false`                 | no                    | fail metric recording when collector export fails            | Telemetry / Metrics             |
+| `TAKOSUMI_LOG_LEVEL`                              | enum            | `info`                  | no                    | minimum structured log level                                 | Logging Conventions             |
+| `TAKOSUMI_LOG_FORMAT`                             | enum            | env-derived             | no                    | `json` / `text` log output policy                            | Logging Conventions             |
+| `TAKOSUMI_HTTP_REQUEST_LOGS`                      | boolean         | env-derived             | no                    | enables JSON HTTP request logs outside staging / production  | Observability Stack             |
 
 ### Worker daemon
 

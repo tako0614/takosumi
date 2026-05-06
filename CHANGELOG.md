@@ -133,6 +133,9 @@ entry).
 - Kernel API responses now propagate `x-request-id` / `x-correlation-id`, emit
   JSON HTTP request logs in staging / production, and attach request correlation
   ids to public deploy metrics.
+- Added the Observability Stack ownership reference, including managed vs
+  self-hosted responsibilities, default SLI / SLO targets, and alert policy
+  ownership.
 
 ### 0.14.0 — 2026-05-06
 

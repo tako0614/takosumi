@@ -112,6 +112,8 @@ Space provisioning / trial / export / deletion の正本 protocol。
   export 規約
 - [Logging Conventions](./logging-conventions) — structured log / level / PII
   redaction
+- [Observability Stack](./observability-stack) — managed vs self-hosted
+  ownership and SLI / SLO targets
 
 ## PaaS operations
 

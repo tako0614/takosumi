@@ -240,6 +240,8 @@ external 観測が必要な場合の選択肢:
 - OTLP metrics を collector に push する
 - `deploy/observability/grafana/takosumi-deploy-overview.json` を Grafana に
   import し、deploy success rate / apply latency / rollback rate を監視する
+- [Observability Stack](/reference/observability-stack) の SLI / SLO table を
+  alert rules と on-call routing の初期 contract として使う
 - application logs を Deno stdout から拾う
 
 native trace exporter は target contract です。 :::
