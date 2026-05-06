@@ -7,6 +7,13 @@ export {
   buildConnectorRegistry,
   type ConnectorBootOptions,
 } from "./factory.ts";
+export {
+  type ConnectorCredentialRefreshContext,
+  type ConnectorOperation,
+  type ConnectorResilienceOptions,
+  type ConnectorRetryContext,
+  withConnectorResilience,
+} from "./resilience.ts";
 export { AwsFargateConnector } from "./aws/fargate.ts";
 export { AwsRdsConnector } from "./aws/rds.ts";
 export { AwsS3Connector } from "./aws/s3.ts";

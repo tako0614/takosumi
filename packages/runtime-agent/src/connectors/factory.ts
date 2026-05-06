@@ -8,7 +8,7 @@
  * local-docker postgres).
  */
 
-import { ConnectorRegistry } from "./connector.ts";
+import { type Connector, ConnectorRegistry } from "./connector.ts";
 import { AwsFargateConnector } from "./aws/fargate.ts";
 import { AwsRdsConnector } from "./aws/rds.ts";
 import { AwsS3Connector } from "./aws/s3.ts";
@@ -30,6 +30,10 @@ import { FilesystemConnector } from "./selfhost/filesystem.ts";
 import { LocalDockerPostgresConnector } from "./selfhost/local_docker_postgres.ts";
 import { MinioConnector } from "./selfhost/minio.ts";
 import { SystemdUnitConnector } from "./selfhost/systemd_unit.ts";
+import {
+  type ConnectorResilienceOptions,
+  withConnectorResilience,
+} from "./resilience.ts";
 
 export interface ConnectorBootOptions {
   readonly aws?: {
@@ -85,6 +89,7 @@ export interface ConnectorBootOptions {
     readonly corednsZoneFile?: string;
     readonly postgresHostBinding?: string;
   };
+  readonly resilience?: false | ConnectorResilienceOptions;
 }
 
 export function buildConnectorRegistry(
@@ -98,10 +103,13 @@ export function buildConnectorRegistry(
       secretAccessKey: opts.aws.secretAccessKey,
       sessionToken: opts.aws.sessionToken,
     };
-    reg.register(
+    registerConnector(
+      reg,
       new AwsS3Connector({ region: opts.aws.region, credentials }),
+      opts.resilience,
     );
-    reg.register(
+    registerConnector(
+      reg,
       new AwsFargateConnector({
         region: opts.aws.region,
         credentials,
@@ -112,97 +120,120 @@ export function buildConnectorRegistry(
         taskRoleArn: opts.aws.fargateTaskRoleArn,
         assignPublicIp: opts.aws.fargateAssignPublicIp,
       }),
+      opts.resilience,
     );
-    reg.register(
+    registerConnector(
+      reg,
       new AwsRdsConnector({
         region: opts.aws.region,
         credentials,
         subnetGroupName: opts.aws.rdsSubnetGroupName,
         securityGroupIds: opts.aws.rdsSecurityGroupIds,
       }),
+      opts.resilience,
     );
     if (opts.aws.route53HostedZoneId) {
-      reg.register(
+      registerConnector(
+        reg,
         new Route53Connector({
           credentials,
           hostedZoneId: opts.aws.route53HostedZoneId,
         }),
+        opts.resilience,
       );
     }
   }
 
   if (opts.gcp) {
-    reg.register(
+    registerConnector(
+      reg,
       new GcpGcsConnector({
         project: opts.gcp.project,
         defaultLocation: opts.gcp.region,
         bearerToken: opts.gcp.bearerToken,
         serviceAccountKey: opts.gcp.serviceAccountKey,
       }),
+      opts.resilience,
     );
-    reg.register(
+    registerConnector(
+      reg,
       new CloudRunConnector({
         project: opts.gcp.project,
         region: opts.gcp.region,
         bearerToken: opts.gcp.bearerToken,
         serviceAccountKey: opts.gcp.serviceAccountKey,
       }),
+      opts.resilience,
     );
-    reg.register(
+    registerConnector(
+      reg,
       new CloudSqlConnector({
         project: opts.gcp.project,
         region: opts.gcp.region,
         bearerToken: opts.gcp.bearerToken,
         serviceAccountKey: opts.gcp.serviceAccountKey,
       }),
+      opts.resilience,
     );
     if (opts.gcp.cloudDnsZoneName) {
-      reg.register(
+      registerConnector(
+        reg,
         new CloudDnsConnector({
           project: opts.gcp.project,
           zoneName: opts.gcp.cloudDnsZoneName,
           bearerToken: opts.gcp.bearerToken,
           serviceAccountKey: opts.gcp.serviceAccountKey,
         }),
+        opts.resilience,
       );
     }
   }
 
   if (opts.cloudflare) {
-    reg.register(
+    registerConnector(
+      reg,
       new CloudflareR2Connector({
         accountId: opts.cloudflare.accountId,
         apiToken: opts.cloudflare.apiToken,
       }),
+      opts.resilience,
     );
-    reg.register(
+    registerConnector(
+      reg,
       new CloudflareContainerConnector({
         accountId: opts.cloudflare.accountId,
         apiToken: opts.cloudflare.apiToken,
       }),
+      opts.resilience,
     );
-    reg.register(
+    registerConnector(
+      reg,
       new CloudflareWorkersConnector({
         accountId: opts.cloudflare.accountId,
         apiToken: opts.cloudflare.apiToken,
       }),
+      opts.resilience,
     );
     if (opts.cloudflare.zoneId) {
-      reg.register(
+      registerConnector(
+        reg,
         new CloudflareDnsConnector({
           zoneId: opts.cloudflare.zoneId,
           apiToken: opts.cloudflare.apiToken,
         }),
+        opts.resilience,
       );
     }
   }
 
   if (opts.denoDeploy) {
-    reg.register(
+    registerConnector(
+      reg,
       new DenoDeployWorkersConnector({
         accessToken: opts.denoDeploy.accessToken,
         organizationId: opts.denoDeploy.organizationId,
       }),
+      opts.resilience,
     );
   }
 
@@ -211,7 +242,8 @@ export function buildConnectorRegistry(
     const environmentName = opts.azure.environmentName ?? "takosumi";
     const environmentResourceId = opts.azure.environmentResourceId ??
       `/subscriptions/${opts.azure.subscriptionId}/resourceGroups/${opts.azure.resourceGroup}/providers/Microsoft.App/managedEnvironments/${environmentName}`;
-    reg.register(
+    registerConnector(
+      reg,
       new AzureContainerAppsConnector({
         subscriptionId: opts.azure.subscriptionId,
         resourceGroup: opts.azure.resourceGroup,
@@ -220,51 +252,74 @@ export function buildConnectorRegistry(
         environmentResourceId,
         bearerToken: opts.azure.bearerToken,
       }),
+      opts.resilience,
     );
   }
 
   if (opts.kubernetes) {
-    reg.register(
+    registerConnector(
+      reg,
       new K3sDeploymentConnector({
         apiServerUrl: opts.kubernetes.apiServerUrl,
         bearerToken: opts.kubernetes.bearerToken,
         namespace: opts.kubernetes.namespace ?? "takos",
         clusterDomain: opts.kubernetes.clusterDomain,
       }),
+      opts.resilience,
     );
   }
 
   // Selfhost connectors are always registered with reasonable defaults.
-  reg.register(
+  registerConnector(
+    reg,
     new FilesystemConnector({
       rootDir: opts.selfhost?.filesystemRoot ?? "/var/lib/takosumi/objects",
     }),
+    opts.resilience,
   );
-  reg.register(
+  registerConnector(
+    reg,
     new DockerComposeConnector({
       hostBinding: opts.selfhost?.dockerHostBinding,
     }),
+    opts.resilience,
   );
-  reg.register(
+  registerConnector(
+    reg,
     new SystemdUnitConnector({
       unitDir: opts.selfhost?.systemdUnitDir,
     }),
+    opts.resilience,
   );
-  reg.register(
+  registerConnector(
+    reg,
     new MinioConnector({
       endpoint: opts.selfhost?.minioEndpoint ?? "http://minio.local:9000",
     }),
+    opts.resilience,
   );
-  reg.register(
+  registerConnector(
+    reg,
     new CorednsLocalConnector({
       zoneFile: opts.selfhost?.corednsZoneFile ?? "/etc/coredns/Corefile",
     }),
+    opts.resilience,
   );
-  reg.register(
+  registerConnector(
+    reg,
     new LocalDockerPostgresConnector({
       hostBinding: opts.selfhost?.postgresHostBinding,
     }),
+    opts.resilience,
   );
 
   return reg;
+}
+
+function registerConnector(
+  registry: ConnectorRegistry,
+  connector: Connector,
+  resilience: false | ConnectorResilienceOptions | undefined,
+): void {
+  registry.register(withConnectorResilience(connector, resilience));
 }

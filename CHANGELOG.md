@@ -98,6 +98,11 @@ entry).
   only.
 - Published package imports now pin `@takos/takosumi-contract@^2.5.0`, matching
   the current runtime-agent lifecycle contract.
+- Connector registration now wraps lifecycle hooks with bounded retry /
+  credential-refresh resilience. Transient HTTP/network errors retry with
+  exponential backoff, non-transient provider errors fail fast, and operators
+  can inject a credential refresh hook through
+  `ConnectorBootOptions.resilience`.
 
 ### 0.6.0 — 2026-05-02
 

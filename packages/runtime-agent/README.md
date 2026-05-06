@@ -87,6 +87,19 @@ A cloud's connectors are skipped (not registered) when its required env vars are
 missing — operator can `takosumi runtime-agent verify` to confirm which
 connectors are live.
 
+## Connector resilience
+
+`buildConnectorRegistry()` wraps registered connectors with bounded resilience
+by default. Transient HTTP statuses (`408`, `425`, `429`, `5xx` allowlist) and
+network errors are retried with exponential backoff. Provider rejections such as
+`400` / validation errors fail fast.
+
+Operators that can rotate or refresh credentials may pass
+`ConnectorBootOptions.resilience.refreshCredentials`; the wrapper invokes it
+before retrying one credential-looking failure such as `HTTP 401` or an expired
+token error. Pass `resilience: false` to keep raw connector behavior in tests or
+specialized deployments.
+
 ## Implementation note
 
 All cloud REST calls are made via `fetch()` + `crypto.subtle` (Web Crypto). No

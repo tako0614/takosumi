@@ -218,6 +218,28 @@ interface LifecycleVerifyResult {
 `results[]` は順序保証されません。caller は `(shape, provider)` を key として
 集計してください。
 
+## Connector retry / credential refresh
+
+runtime-agent の `buildConnectorRegistry()` は、登録する connector の lifecycle
+hook (`apply` / `destroy` / `compensate` / `describe` / `verify`) を共通の
+resilience wrapper で包みます。既定では以下だけを retry 対象にします。
+
+- `HTTP 408` / `425` / `429` / `500` / `502` / `503` / `504`
+- `TypeError` や `ECONNRESET` / `ETIMEDOUT` などの network failure
+- `retryable: true` を持つ connector error
+
+`HTTP 400` などの provider validation error、`retryable: false` を持つ error、
+permission denied などの恒久 failure は retry しません。retry は bounded
+exponential backoff で、同じ lifecycle envelope を再投入します。connector は
+`idempotencyKey` / provider-native client token / handle-keyed delete を使い、
+再投入で duplicate side effect が増えないように実装します。
+
+credential refresh は opt-in です。operator が
+`ConnectorBootOptions.resilience.refreshCredentials` を渡した場合のみ、wrapper
+は `HTTP 401` や expired token / credential に見える error を検出して refresh
+hook を 1 回呼び、その後同じ lifecycle hook を再試行します。refresh hook
+が無い場合、 credential error は通常の connector failure として返ります。
+
 ## Lifecycle status state machine
 
 `LifecycleStatus` は v1 で 5 値の closed enum です。
