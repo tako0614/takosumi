@@ -1,6 +1,10 @@
 import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
 import {
+  createConsoleApiRequestLogger,
+  parseApiLogLevel,
+} from "./api/request_correlation.ts";
+import {
   type AppContext,
   type AppContextOptions,
   type AppRuntimeConfig,
@@ -186,8 +190,26 @@ export async function createPaaSApp(
       workerDaemonState,
       workerDaemon,
     }),
+    requestCorrelation: {
+      logger: shouldEmitHttpRequestLogs(runtimeConfig.environment, runtimeEnv)
+        ? createConsoleApiRequestLogger(parseApiLogLevel(
+          runtimeEnv.TAKOSUMI_LOG_LEVEL,
+        ))
+        : undefined,
+      minLevel: parseApiLogLevel(runtimeEnv.TAKOSUMI_LOG_LEVEL),
+    },
   });
   return { app, context, role, workerDaemon };
+}
+
+function shouldEmitHttpRequestLogs(
+  environment: AppRuntimeConfig["environment"],
+  env: Record<string, string | undefined>,
+): boolean {
+  const configured = env.TAKOSUMI_HTTP_REQUEST_LOGS?.toLowerCase();
+  if (configured === "true") return true;
+  if (configured === "false") return false;
+  return environment === "production" || environment === "staging";
 }
 
 function processRoleFromRuntimeConfig(

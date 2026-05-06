@@ -15,6 +15,10 @@ import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { createApiApp } from "./app.ts";
 import { TAKOSUMI_DEPLOY_PUBLIC_PATH } from "./deploy_public_routes.ts";
 import {
+  TAKOSUMI_CORRELATION_ID_HEADER,
+  TAKOSUMI_REQUEST_ID_HEADER,
+} from "./request_correlation.ts";
+import {
   createCoreDomainServices,
   createInMemoryCoreDomainDependencies,
 } from "../domains/core/mod.ts";
@@ -38,6 +42,27 @@ Deno.test("createApiApp exposes base capabilities without public routes by defau
     TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities,
   );
   assert.equal(publicCapabilities.status, 404);
+});
+
+Deno.test("createApiApp propagates request and correlation id headers", async () => {
+  const app = await createApiApp({ registerInternalRoutes: false });
+
+  const response = await app.request("/health", {
+    headers: {
+      [TAKOSUMI_REQUEST_ID_HEADER]: "req_app_health",
+      [TAKOSUMI_CORRELATION_ID_HEADER]: "corr_app_health",
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    response.headers.get(TAKOSUMI_REQUEST_ID_HEADER),
+    "req_app_health",
+  );
+  assert.equal(
+    response.headers.get(TAKOSUMI_CORRELATION_ID_HEADER),
+    "corr_app_health",
+  );
 });
 
 Deno.test("createApiApp mounts readiness routes and reports them in route inventory", async () => {

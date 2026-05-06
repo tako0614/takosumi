@@ -6,3 +6,4 @@ export * from "./public_routes.ts";
 export * from "./openapi.ts";
 export * from "./runtime_agent_routes.ts";
 export * from "./metrics_routes.ts";
+export * from "./request_correlation.ts";

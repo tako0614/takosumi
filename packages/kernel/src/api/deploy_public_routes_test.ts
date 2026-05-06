@@ -243,6 +243,8 @@ Deno.test("deploy public route records deploy success and latency metrics", asyn
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${VALID_TOKEN}`,
+      "x-request-id": "req_deploy_metrics",
+      "x-correlation-id": "corr_deploy_metrics",
     },
     body: JSON.stringify({
       mode: "apply",
@@ -265,6 +267,8 @@ Deno.test("deploy public route records deploy success and latency metrics", asyn
   assert.equal(counter.value, 1);
   assert.equal(counter.spaceId, "space:metrics");
   assert.equal(counter.groupId, "metrics-demo");
+  assert.equal(counter.requestId, "req_deploy_metrics");
+  assert.equal(counter.correlationId, "corr_deploy_metrics");
   assert.deepEqual(counter.tags, {
     operationKind: "apply",
     status: "succeeded",

@@ -13,6 +13,15 @@ the required fields, the forbidden fields, the closed log-level enum and its
 semantic boundaries, the output sink, redaction rules, the relationship to the
 audit log, trace correlation, and the operator-facing configuration knobs.
 
+::: info Current implementation status The kernel HTTP request correlation
+middleware is current: API responses echo `x-request-id` and `x-correlation-id`,
+or generate `req_<uuid>` when neither header is supplied. In staging and
+production, and in other environments when `TAKOSUMI_HTTP_REQUEST_LOGS=true`,
+the bootstrap path emits one JSON request log line with `requestId`,
+`correlationId`, route, status, and duration. Public deploy metrics also carry
+the inbound request and correlation ids. OTLP trace id / span id log enrichment
+remains a target contract until native trace export is implemented. :::
+
 ## Line format
 
 Every log line is a single JSON object on a single line, terminated by `\n`. No
@@ -133,12 +142,13 @@ When OTLP is disabled the fields are omitted, not emitted as empty strings.
 
 ## Operator configuration
 
-The kernel reads two log-related environment variables.
+The kernel reads these log-related environment variables.
 
-| Variable              | Type | Default                              | Notes                                                                                          |
-| --------------------- | ---- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `TAKOSUMI_LOG_LEVEL`  | enum | `info`                               | Closed enum `debug` / `info` / `warn` / `error` / `fatal`. Lines below this level are dropped. |
-| `TAKOSUMI_LOG_FORMAT` | enum | `json` (production) / `text` (local) | Closed enum `json` / `text`. Production deployments require `json`.                            |
+| Variable                     | Type | Default                                  | Notes                                                                                          |
+| ---------------------------- | ---- | ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `TAKOSUMI_LOG_LEVEL`         | enum | `info`                                   | Closed enum `debug` / `info` / `warn` / `error` / `fatal`. Lines below this level are dropped. |
+| `TAKOSUMI_LOG_FORMAT`        | enum | `json` (production) / `text` (local)     | Closed enum `json` / `text`. Production deployments require `json`.                            |
+| `TAKOSUMI_HTTP_REQUEST_LOGS` | bool | `true` in staging/production, else false | Enables JSON kernel HTTP request logs outside managed environments when set to `true`.         |
 
 In `production` and `staging`, `TAKOSUMI_LOG_FORMAT=text` is rejected at boot.
 Text output is permitted only in `local` and `development`.

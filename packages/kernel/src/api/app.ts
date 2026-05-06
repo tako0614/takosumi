@@ -48,6 +48,10 @@ import {
   registerMetricsRoutes,
   type RegisterMetricsRoutesOptions,
 } from "./metrics_routes.ts";
+import {
+  registerRequestCorrelation,
+  type RegisterRequestCorrelationOptions,
+} from "./request_correlation.ts";
 import { DefaultGroupSummaryStatusProjector } from "../services/status/mod.ts";
 import { permissionDenied } from "../shared/errors.ts";
 
@@ -79,6 +83,12 @@ export interface CreateApiAppOptions {
   readonly deployPublicRouteOptions?: RegisterDeployPublicRoutesOptions;
   readonly registerMetricsRoutes?: boolean;
   readonly metricsRouteOptions?: RegisterMetricsRoutesOptions;
+  /**
+   * HTTP request/correlation id propagation is mounted by default. Pass
+   * `false` only for low-level route tests that need to exercise raw Hono
+   * behavior without kernel middleware.
+   */
+  readonly requestCorrelation?: RegisterRequestCorrelationOptions | false;
   readonly sourceAdapters?: PublicDeploySourceAdapters;
   /** Optional extension point for mounting current/future route modules. */
   readonly configure?: (app: HonoApp) => void | Promise<void>;
@@ -99,6 +109,9 @@ export async function createApiApp(
 
   const app: HonoApp = new Hono();
   registerApiErrorHandler(app);
+  if (options.requestCorrelation !== false) {
+    registerRequestCorrelation(app, options.requestCorrelation ?? {});
+  }
   const defaultRouteServices = createDefaultRouteServices(options);
 
   app.get("/health", (c) => {

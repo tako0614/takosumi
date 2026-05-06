@@ -47,6 +47,10 @@ import {
   startDeployMetricTimer,
 } from "../domains/deploy/deploy_metrics.ts";
 import {
+  readRequestCorrelation,
+  type RequestCorrelation,
+} from "./request_correlation.ts";
+import {
   type DeployPublicIdempotencyStore,
   InMemoryDeployPublicIdempotencyStore,
 } from "../domains/deploy/deploy_public_idempotency_store.ts";
@@ -332,6 +336,7 @@ export function registerDeployPublicRoutes(
 
   const executeDeployPublicPost = async (
     body: Record<string, unknown>,
+    requestCorrelation?: RequestCorrelation,
   ): Promise<DeployPublicHandledResponse> => {
     const rawManifest = body.manifest;
     const mode = readMode(body.mode);
@@ -378,6 +383,12 @@ export function registerDeployPublicRoutes(
         groupId: deploymentName,
         deploymentName,
         startedAtMs: metricTimer.startedAtMs,
+        ...(requestCorrelation
+          ? {
+            requestId: requestCorrelation.requestId,
+            correlationId: requestCorrelation.correlationId,
+          }
+          : {}),
       });
 
     if (mode.value === "plan") {
@@ -894,7 +905,10 @@ export function registerDeployPublicRoutes(
           prior.responseStatus as DeployPublicJsonStatus,
         );
       }
-      const response = await executeDeployPublicPost(body.value);
+      const response = await executeDeployPublicPost(
+        body.value,
+        readRequestCorrelation(c),
+      );
       await idempotencyStore.save({
         tenantId,
         key: idempotencyKey.value,

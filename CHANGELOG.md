@@ -130,6 +130,9 @@ entry).
   `takosumi_rollback_duration_seconds` metrics for Prometheus / OTLP export. A
   deploy overview Grafana dashboard is included under
   `deploy/observability/grafana/`.
+- Kernel API responses now propagate `x-request-id` / `x-correlation-id`, emit
+  JSON HTTP request logs in staging / production, and attach request correlation
+  ids to public deploy metrics.
 
 ### 0.14.0 — 2026-05-06
 
