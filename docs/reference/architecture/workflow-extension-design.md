@@ -6,7 +6,9 @@ automation — scheduled jobs, build pipelines, deployment hooks,
 external-event-driven runs — is owned by **`takosumi-git`**, a sibling product
 of `takosumi` that sits above the kernel and submits manifests to it. The kernel
 itself is a pure manifest deploy engine: it accepts a closed `Manifest` envelope
-at `POST /v1/deployments`, resolves the resource DAG, and applies it.
+at `POST /v1/deployments`, resolves the resource DAG, and applies it. Upstream
+clients may attach opaque deploy provenance for audit, but that provenance is
+not a workflow execution contract.
 
 > **Policy change note.** Earlier drafts of this document reserved four kernel
 > primitives (trigger, `execute-step` operation kind, declarable hook extension
@@ -66,17 +68,21 @@ project repository and are parsed by `takosumi-git`, never by the kernel. The
 kernel CLI does not auto-discover any of these paths either; `takosumi deploy`
 takes an explicit manifest path and posts the body to `POST /v1/deployments`.
 The kernel's only repository-level input is the `Manifest` body submitted over
-HTTP.
+HTTP, plus optional opaque provenance supplied by the caller for audit.
 
-The kernel therefore never observes git, never schedules anything, never runs
-workflow steps, and never holds workflow state.
+The kernel therefore never interprets git, never schedules anything, never runs
+workflow steps, and never holds workflow state. It can persist the caller's
+opaque provenance JSON in WAL entries so operators can trace an artifact back to
+the upstream workflow run without making the kernel own that workflow.
 
 ## 3. Git decoupling invariants
 
 The kernel keeps git-agnostic invariants regardless of how `takosumi-git` (or
 any other client) drives it.
 
-- The kernel data model has no `commit`, `branch`, `ref`, or `repo` field.
+- The kernel data model has no first-class `commit`, `branch`, `ref`, or `repo`
+  field. Such values may appear only inside opaque deploy provenance supplied by
+  an upstream client.
 - `external-event` payloads, when surfaced on the kernel API, are opaque to the
   kernel. The kernel verifies the HMAC-SHA256 signature, attaches the payload as
   audit data, and refuses to parse it.
@@ -120,6 +126,7 @@ the plugin, not by the kernel catalog. This preserves:
 
 ```text
 inside Takosumi kernel       Manifest envelope (apiVersion / kind / metadata / template / resources)
+                             Opaque deploy provenance persistence
                              Resource DAG resolution and apply
                              WAL idempotency, rollback, observation
                              Curated 5-shape catalog

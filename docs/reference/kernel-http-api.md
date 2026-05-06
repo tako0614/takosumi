@@ -103,6 +103,7 @@ Request body:
 interface DeployPublicRequest {
   readonly mode?: "apply" | "plan" | "destroy"; // default: "apply"
   readonly manifest: ManifestBody;
+  readonly provenance?: JsonObject;
   readonly force?: boolean; // destroy 時のみ意味を持つ
   readonly recoveryMode?: "inspect" | "continue" | "compensate";
 }
@@ -116,6 +117,14 @@ interface DeployPublicRequest {
 `requires` / `metadata`) です。`template` と `resources[]` は併用でき、template
 expansion の後に explicit resources が append されます。詳細は
 [Manifest](/manifest) と [Manifest Validation](/reference/manifest-validation)。
+
+`provenance` is an optional JSON object supplied by an upstream deploy client.
+The kernel treats it as opaque audit evidence. For example, `takosumi-git push`
+sends `kind: "takosumi-git.deployment-provenance@v1"` with workflow run id, git
+commit metadata, artifact URI, and step log digests. The kernel validates only
+that the value is a JSON object and that `kind`, when present, is a string; it
+does not execute workflows, read workflow files, parse build logs, or interpret
+git semantics.
 
 Current public deploy scope is single-token. `TAKOSUMI_DEPLOY_TOKEN` maps to one
 operator-configured public deploy Space / tenant scope. The scope defaults to
@@ -185,7 +194,14 @@ OperationPlan shape internally and writes `takosumi_operation_journal_entries`
 around provider side effects: `prepare` / `pre-commit` / `commit` before the
 provider call, then `post-commit` / `observe` / `finalize` on success or `abort`
 on failure. These entries are durable replay evidence for the public surface,
-and provider calls receive the WAL idempotency tuple as a fencing token.
+and provider calls receive the WAL idempotency tuple as a fencing token. When
+`provenance` is present, the route also attaches
+`metadata.takosumiDeployProvenance = { kind:
+"takosumi.deploy-provenance-digest@v1", digest }`
+to each resolved resource before deriving the OperationPlan digest, and stores
+the full provenance object in every public WAL effect detail. This keeps replay
+identity tied to the artifact provenance without making the kernel understand
+the upstream workflow.
 
 If the latest public WAL for the addressed deployment is not terminal
 (`finalize` / `abort` / `skip`), a new `apply` / `destroy` fails closed with 409
@@ -210,6 +226,11 @@ interface DeployPublicRecoveryInspectResponse {
   };
 }
 ```
+
+`DeploymentJournalEntrySummary` includes WAL coordinates, operation / resource
+fields, the `effectDigest`, status, timestamp, and optional `provenance`. The
+optional `provenance` value is the same opaque JSON object recorded in the WAL
+effect detail.
 
 ```ts
 interface DeployPublicRecoveryCompensateResponse {
@@ -275,8 +296,8 @@ interface DeploymentListResponse {
 
 `DeploymentSummary` の shape は [Status Output](/reference/status-output) に固定
 されます。current kernel は public WAL stage records から latest `journal`
-summary も付与します。status query は read-only で、journal を追加で
-書くことはありません。
+summary と latest `provenance` も付与します。status query は read-only
+で、journal を追加で 書くことはありません。
 
 ### `GET /v1/deployments/:name`
 

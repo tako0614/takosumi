@@ -27,6 +27,7 @@ import { buildOperationPlanPreview } from "../domains/deploy/operation_plan_prev
 import {
   appendOperationPlanJournalStages,
   InMemoryOperationJournalStore,
+  operationJournalEffectDigest,
   type OperationJournalEntry,
   type OperationJournalPhase,
   type OperationJournalStage,
@@ -107,6 +108,7 @@ export const TAKOSUMI_MANIFEST_ARTIFACT_SIZE_MAX_BYTES_DEFAULT = 52_428_800;
 
 export type DeployPublicMode = "apply" | "plan" | "destroy";
 export type DeployPublicRecoveryMode = "inspect" | "continue" | "compensate";
+export type DeployPublicProvenance = JsonObject;
 
 export interface DeployPublicResponse {
   readonly status: "ok";
@@ -377,6 +379,13 @@ export function registerDeployPublicRoutes(
         body: apiError("invalid_argument", resources.error),
       };
     }
+    const provenance = readDeployPublicProvenance(body.provenance);
+    if (!provenance.ok) {
+      return {
+        status: 400,
+        body: apiError("invalid_argument", provenance.error),
+      };
+    }
     const manifestObject = (rawManifest && typeof rawManifest === "object" &&
         !Array.isArray(rawManifest))
       ? (rawManifest as JsonObject)
@@ -384,6 +393,10 @@ export function registerDeployPublicRoutes(
     const deploymentName = readDeploymentNameV1(
       manifestObject,
       resources.value,
+    );
+    const deployResources = attachProvenanceToResources(
+      resources.value,
+      provenance.value,
     );
     const trace = deployTraceFromRequest(requestTrace, requestCorrelation);
     const metricTimer = startDeployMetricTimer();
@@ -411,7 +424,7 @@ export function registerDeployPublicRoutes(
 
     if (mode.value === "plan") {
       const quota = validateManifestArtifactSizeQuota(
-        resources.value,
+        deployResources,
         artifactMaxBytes,
       );
       if (!quota.ok) {
@@ -419,7 +432,7 @@ export function registerDeployPublicRoutes(
         return quota.response;
       }
       const outcome = await applyResources(
-        resources.value,
+        deployResources,
         undefined,
         true,
         undefined,
@@ -435,7 +448,7 @@ export function registerDeployPublicRoutes(
         status: "ok",
         outcome: withOperationPlanPreview({
           outcome,
-          resources: resources.value,
+          resources: deployResources,
           tenantId,
           deploymentName,
         }),
@@ -447,7 +460,7 @@ export function registerDeployPublicRoutes(
       await recordStore.acquireLock(tenantId, deploymentName);
       try {
         const operationPlan = buildPublicOperationPlanPreview({
-          resources: resources.value,
+          resources: deployResources,
           tenantId,
           deploymentName,
           op: "delete",
@@ -485,6 +498,7 @@ export function registerDeployPublicRoutes(
           stages: ["prepare"],
           status: "recorded",
           createdAt: journalStartedAt,
+          detail: journalDetail(undefined, provenance.value),
         });
         const prior = await recordStore.get(tenantId, deploymentName);
         const force = body.force === true;
@@ -496,7 +510,10 @@ export function registerDeployPublicRoutes(
             stages: ["abort"],
             status: "failed",
             createdAt: now(),
-            detail: { reason: "missing-prior-deploy-record" },
+            detail: journalDetail(
+              { reason: "missing-prior-deploy-record" },
+              provenance.value,
+            ),
           });
           await recordMetric("destroy", "failed");
           return {
@@ -524,7 +541,7 @@ export function registerDeployPublicRoutes(
           recoveryMode.value === "continue" && prior?.status === "destroyed"
         ) {
           const outcome: DestroyV2Outcome = {
-            destroyed: resources.value.map((resource) => ({
+            destroyed: deployResources.map((resource) => ({
               name: resource.name,
               providerId: resource.provider,
               handle: resource.name,
@@ -540,7 +557,10 @@ export function registerDeployPublicRoutes(
             stages: ["post-commit", "observe", "finalize"],
             status: "succeeded",
             createdAt: now(),
-            detail: { outcomeStatus: outcome.status },
+            detail: journalDetail(
+              { outcomeStatus: outcome.status },
+              provenance.value,
+            ),
           });
           const ok: DeployPublicDestroyResponse = { status: "ok", outcome };
           await recordMetric("destroy", "succeeded");
@@ -570,7 +590,10 @@ export function registerDeployPublicRoutes(
           stages: ["pre-commit"],
           status: "recorded",
           createdAt: now(),
-          detail: catalogReleaseWalHookDetail(preCommitHook),
+          detail: journalDetail(
+            catalogReleaseWalHookDetail(preCommitHook),
+            provenance.value,
+          ),
         });
         await appendOperationPlanJournalStages({
           store: operationJournalStore,
@@ -579,10 +602,11 @@ export function registerDeployPublicRoutes(
           stages: ["commit"],
           status: "recorded",
           createdAt: now(),
+          detail: journalDetail(undefined, provenance.value),
         });
         try {
           const outcome = await destroyResources(
-            resources.value,
+            deployResources,
             handleFor,
             operationPlan,
             platformRecoveryMode(recoveryMode.value),
@@ -596,7 +620,10 @@ export function registerDeployPublicRoutes(
               stages: ["abort"],
               status: "failed",
               createdAt: now(),
-              detail: { outcomeStatus: outcome.status },
+              detail: journalDetail(
+                { outcomeStatus: outcome.status },
+                provenance.value,
+              ),
             });
             await recordMetric("destroy", "failed-validation");
             return { status: 400, body: { status: "error", outcome } };
@@ -633,12 +660,12 @@ export function registerDeployPublicRoutes(
               : ["abort"],
             status: outcome.status === "succeeded" ? "succeeded" : "failed",
             createdAt: now(),
-            detail: {
+            detail: journalDetail({
               outcomeStatus: outcome.status,
               ...(outcome.status === "succeeded"
                 ? catalogReleaseHookDetailField(postCommitHook)
                 : {}),
-            },
+            }, provenance.value),
           });
           const ok: DeployPublicDestroyResponse = { status: "ok", outcome };
           await recordMetric(
@@ -654,7 +681,10 @@ export function registerDeployPublicRoutes(
             stages: ["abort"],
             status: "failed",
             createdAt: now(),
-            detail: { reason: "destroy-threw" },
+            detail: journalDetail(
+              { reason: "destroy-threw" },
+              provenance.value,
+            ),
           });
           const message = error instanceof Error
             ? error.message
@@ -673,7 +703,7 @@ export function registerDeployPublicRoutes(
     await recordStore.acquireLock(tenantId, deploymentName);
     try {
       const quota = validateManifestArtifactSizeQuota(
-        resources.value,
+        deployResources,
         artifactMaxBytes,
       );
       if (!quota.ok) {
@@ -681,7 +711,7 @@ export function registerDeployPublicRoutes(
         return quota.response;
       }
       const operationPlan = buildPublicOperationPlanPreview({
-        resources: resources.value,
+        resources: deployResources,
         tenantId,
         deploymentName,
         op: "create",
@@ -718,6 +748,7 @@ export function registerDeployPublicRoutes(
         stages: ["prepare"],
         status: "recorded",
         createdAt: now(),
+        detail: journalDetail(undefined, provenance.value),
       });
       const preCommitHook = await invokeCatalogReleaseWalHook({
         verifier: catalogReleaseVerifier,
@@ -743,7 +774,10 @@ export function registerDeployPublicRoutes(
         stages: ["pre-commit"],
         status: "recorded",
         createdAt: now(),
-        detail: catalogReleaseWalHookDetail(preCommitHook),
+        detail: journalDetail(
+          catalogReleaseWalHookDetail(preCommitHook),
+          provenance.value,
+        ),
       });
       await appendOperationPlanJournalStages({
         store: operationJournalStore,
@@ -752,6 +786,7 @@ export function registerDeployPublicRoutes(
         stages: ["commit"],
         status: "recorded",
         createdAt: now(),
+        detail: journalDetail(undefined, provenance.value),
       });
       const prior = await recordStore.get(tenantId, deploymentName);
       const priorApplied = prior
@@ -759,7 +794,7 @@ export function registerDeployPublicRoutes(
         : undefined;
       try {
         const outcome = await applyResources(
-          resources.value,
+          deployResources,
           priorApplied,
           false,
           operationPlan,
@@ -774,7 +809,10 @@ export function registerDeployPublicRoutes(
             stages: ["abort"],
             status: "failed",
             createdAt: now(),
-            detail: { outcomeStatus: outcome.status },
+            detail: journalDetail(
+              { outcomeStatus: outcome.status },
+              provenance.value,
+            ),
           });
           await recordMetric("apply", "failed-validation");
           return { status: 400, body: { status: "error", outcome } };
@@ -796,7 +834,10 @@ export function registerDeployPublicRoutes(
             stages: ["abort"],
             status: "failed",
             createdAt: now(),
-            detail: { outcomeStatus: outcome.status },
+            detail: journalDetail(
+              { outcomeStatus: outcome.status },
+              provenance.value,
+            ),
           });
           await recordMetric("apply", "failed");
           if (outcome.rollback) {
@@ -820,7 +861,7 @@ export function registerDeployPublicRoutes(
           manifest: manifestObject,
           appliedResources: recordsFromAppliedResources(
             outcome.applied,
-            resources.value,
+            deployResources,
             stamp,
           ),
           status: "applied",
@@ -853,10 +894,10 @@ export function registerDeployPublicRoutes(
           stages: ["post-commit", "observe", "finalize"],
           status: "succeeded",
           createdAt: now(),
-          detail: {
+          detail: journalDetail({
             outcomeStatus: outcome.status,
             ...catalogReleaseHookDetailField(postCommitHook),
-          },
+          }, provenance.value),
         });
         const ok: DeployPublicResponse = { status: "ok", outcome };
         await recordMetric("apply", "succeeded");
@@ -869,7 +910,7 @@ export function registerDeployPublicRoutes(
           stages: ["abort"],
           status: "failed",
           createdAt: now(),
-          detail: { reason: "apply-threw" },
+          detail: journalDetail({ reason: "apply-threw" }, provenance.value),
         });
         const message = error instanceof Error ? error.message : String(error);
         await recordMetric("apply", "failed");
@@ -1084,6 +1125,59 @@ function resolveManifestArtifactMaxBytes(value: unknown): number {
 
 function validPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function readDeployPublicProvenance(
+  value: unknown,
+):
+  | { readonly ok: true; readonly value?: DeployPublicProvenance }
+  | { readonly ok: false; readonly error: string } {
+  if (value === undefined || value === null) return { ok: true };
+  if (!isJsonObject(value)) {
+    return {
+      ok: false,
+      error: "provenance must be a JSON object when provided",
+    };
+  }
+  if (
+    value.kind !== undefined &&
+    typeof value.kind !== "string"
+  ) {
+    return {
+      ok: false,
+      error: "provenance.kind must be a string when provided",
+    };
+  }
+  return { ok: true, value };
+}
+
+function journalDetail(
+  detail: JsonObject | undefined,
+  provenance: DeployPublicProvenance | undefined,
+): JsonObject | undefined {
+  if (!provenance) return detail;
+  return {
+    ...(detail ?? {}),
+    provenance,
+  };
+}
+
+function attachProvenanceToResources(
+  resources: readonly ManifestResource[],
+  provenance: DeployPublicProvenance | undefined,
+): readonly ManifestResource[] {
+  if (!provenance) return resources;
+  const provenanceDigest = operationJournalEffectDigest(provenance);
+  return resources.map((resource) => ({
+    ...resource,
+    metadata: {
+      ...(resource.metadata ?? {}),
+      takosumiDeployProvenance: {
+        kind: "takosumi.deploy-provenance-digest@v1",
+        digest: provenanceDigest,
+      },
+    },
+  }));
 }
 
 function checkBearer(
@@ -1873,6 +1967,7 @@ interface DeploymentSummary {
   readonly tenantId: string;
   readonly appliedAt: string;
   readonly updatedAt: string;
+  readonly provenance?: DeployPublicProvenance;
   readonly journal?: DeploymentJournalSummary;
   readonly revokeDebt?: RevokeDebtSummary;
   readonly resources: readonly DeploymentResourceSummary[];
@@ -1901,6 +1996,7 @@ export interface DeploymentJournalEntrySummary {
   readonly effectDigest: `sha256:${string}`;
   readonly status: OperationJournalStatus;
   readonly createdAt: string;
+  readonly provenance?: DeployPublicProvenance;
 }
 
 export interface DeploymentRevokeDebtRecordSummary {
@@ -1930,9 +2026,12 @@ async function toDeploymentSummary(
   journalStore: OperationJournalStore,
   revokeDebtStore: RevokeDebtStore,
 ): Promise<DeploymentSummary> {
-  const journal = summarizeLatestJournal(
-    await journalStore.listByDeployment(record.tenantId, record.name),
+  const journalEntries = await journalStore.listByDeployment(
+    record.tenantId,
+    record.name,
   );
+  const journal = summarizeLatestJournal(journalEntries);
+  const provenance = latestJournalProvenance(journalEntries);
   const revokeDebts = await revokeDebtStore.listByDeployment(
     record.tenantId,
     record.name,
@@ -1943,6 +2042,7 @@ async function toDeploymentSummary(
     tenantId: record.tenantId,
     appliedAt: record.createdAt,
     updatedAt: record.updatedAt,
+    ...(provenance ? { provenance } : {}),
     ...(journal ? { journal } : {}),
     ...(revokeDebts.length > 0
       ? { revokeDebt: summarizeRevokeDebt(revokeDebts) }
@@ -2034,7 +2134,35 @@ function toJournalEntrySummary(
     effectDigest: entry.effectDigest,
     status: entry.status,
     createdAt: entry.createdAt,
+    ...(journalEntryProvenance(entry)
+      ? { provenance: journalEntryProvenance(entry) }
+      : {}),
   };
+}
+
+function latestJournalProvenance(
+  entries: readonly OperationJournalEntry[],
+): DeployPublicProvenance | undefined {
+  const withProvenance = entries
+    .map((entry) => ({ entry, provenance: journalEntryProvenance(entry) }))
+    .filter((item): item is {
+      readonly entry: OperationJournalEntry;
+      readonly provenance: DeployPublicProvenance;
+    } => Boolean(item.provenance));
+  withProvenance.sort((left, right) =>
+    compareJournalStageProgress(left.entry, right.entry)
+  );
+  return withProvenance.at(-1)?.provenance;
+}
+
+function journalEntryProvenance(
+  entry: OperationJournalEntry,
+): DeployPublicProvenance | undefined {
+  const detail = isJsonObject(entry.effect.detail)
+    ? entry.effect.detail
+    : undefined;
+  const provenance = detail?.provenance;
+  return isJsonObject(provenance) ? provenance : undefined;
 }
 
 function summarizeJournalStatus(

@@ -511,6 +511,100 @@ Deno.test("deploy public route records apply WAL stages around provider side eff
   assert.equal(entries[0].phase, "apply");
 });
 
+Deno.test("deploy public route records upstream provenance in WAL and status", async () => {
+  const journal = new InMemoryOperationJournalStore();
+  const app = createApp({
+    token: VALID_TOKEN,
+    tenantId: "space:provenance",
+    operationJournalStore: journal,
+    now: () => "2026-05-07T00:00:00.000Z",
+    applyResources: (resources) => {
+      const metadata = resources[0].metadata as JsonObject;
+      assert.equal(
+        (metadata.takosumiDeployProvenance as JsonObject).kind,
+        "takosumi.deploy-provenance-digest@v1",
+      );
+      return Promise.resolve({
+        applied: [{
+          name: resources[0].name,
+          providerId: resources[0].provider,
+          handle: "handle-provenance",
+          outputs: { ok: true },
+          specFingerprint: "fnv1a32:00000000",
+        }],
+        issues: [],
+        status: "succeeded",
+      });
+    },
+  });
+  const provenance = {
+    kind: "takosumi-git.deployment-provenance@v1",
+    workflowRunId: "takosumi-git:run:123",
+    generatedAt: "2026-05-07T00:00:00.000Z",
+    git: {
+      repositoryUrl: "https://github.com/acme/demo.git",
+      ref: "refs/heads/main",
+      commitSha: "0123456789abcdef0123456789abcdef01234567",
+    },
+    resourceArtifacts: [{
+      resourceName: "logs",
+      artifactName: "image",
+      artifactUri: "ghcr.io/acme/demo@sha256:abc",
+      workflow: { file: "build.yml", job: "build", artifact: "image" },
+      stepLogs: [{
+        stepName: "build",
+        exitCode: 0,
+        stdoutDigest:
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        stdoutBytes: 123,
+      }],
+    }],
+  };
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      provenance,
+      manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
+        metadata: { name: "provenance-app" },
+        resources: [SAMPLE_RESOURCE],
+      },
+    }),
+  });
+  assert.equal(response.status, 200);
+
+  const entries = await journal.listByDeployment(
+    "space:provenance",
+    "provenance-app",
+  );
+  assert.ok(entries.length > 0);
+  const prepare = entries.find((entry) => entry.stage === "prepare");
+  assert.ok(prepare);
+  const detail = prepare!.effect.detail as JsonObject;
+  const recorded = detail.provenance as JsonObject;
+  assert.equal(recorded.workflowRunId, "takosumi-git:run:123");
+  assert.equal(
+    (recorded.resourceArtifacts as JsonObject[])[0].artifactUri,
+    "ghcr.io/acme/demo@sha256:abc",
+  );
+
+  const statusResponse = await app.request(
+    `${TAKOSUMI_DEPLOY_PUBLIC_PATH}/provenance-app`,
+    { headers: { authorization: `Bearer ${VALID_TOKEN}` } },
+  );
+  assert.equal(statusResponse.status, 200);
+  const statusBody = await statusResponse.json() as {
+    provenance: { workflowRunId: string };
+  };
+  assert.equal(statusBody.provenance.workflowRunId, "takosumi-git:run:123");
+});
+
 Deno.test("deploy public route fails closed when CatalogRelease pre-commit hook fails", async () => {
   const journal = new InMemoryOperationJournalStore();
   const calls: string[] = [];

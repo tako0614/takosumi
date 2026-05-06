@@ -25,6 +25,10 @@ package surface.
 - The Takosumi kernel receives manifests by explicit path or HTTP body only. It
   does not discover `.takosumi/`, read workflow files, run builds, accept
   `workflowRef`, or expose workflow trigger routes.
+- Upstream clients may attach opaque deployment provenance to
+  `POST /v1/deployments`. The kernel records that JSON in public WAL entries and
+  status output, but the provenance does not create kernel-owned workflow or git
+  vocabulary.
 - `resources[i].workflowRef` is a `takosumi-git` private project convention. It
   must be stripped before the manifest is submitted to `POST /v1/deployments`.
 - Public JSR package checks must use the package `deno.json` files, not the root

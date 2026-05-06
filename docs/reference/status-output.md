@@ -35,12 +35,15 @@ tested.
 `GET /v1/deployments/:name` returns one `DeploymentSummary`:
 
 ```ts
+type JsonObject = Record<string, unknown>;
+
 interface DeploymentSummary {
   readonly name: string;
   readonly status: "applied" | "failed" | "destroyed";
   readonly tenantId: string;
   readonly appliedAt: string; // RFC3339 UTC, creation timestamp for the record
   readonly updatedAt: string; // RFC3339 UTC
+  readonly provenance?: JsonObject;
   readonly journal?: DeploymentJournalSummary;
   readonly resources: readonly DeploymentResourceSummary[];
 }
@@ -83,6 +86,12 @@ interface DeploymentResourceSummary {
 Destroyed records keep the deployment-level summary but return an empty
 `resources` array.
 
+`provenance`, when present, is the latest opaque JSON object recorded in public
+deploy WAL entries. Upstream clients such as `takosumi-git` use it to expose the
+workflow run id, git commit SHA, artifact URI, and step log digest chain that
+produced the deployed manifest. The status route returns it for audit consumers;
+the `takosumi status` table does not render the raw JSON.
+
 ## CLI Rendering
 
 `takosumi status` is remote-only. Without a name, it calls
@@ -121,6 +130,28 @@ column empty.
       "tenantId": "takosumi-deploy",
       "appliedAt": "2026-05-01T00:00:00.000Z",
       "updatedAt": "2026-05-01T00:00:00.000Z",
+      "provenance": {
+        "kind": "takosumi-git.deployment-provenance@v1",
+        "workflowRunId": "takosumi-git:run:01J00000000000000000000000",
+        "git": {
+          "commitSha": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "resourceArtifacts": [
+          {
+            "resourceName": "assets",
+            "artifactName": "image",
+            "artifactUri": "ghcr.io/example/demo@sha256:0123456789abcdef",
+            "stepLogs": [
+              {
+                "stepName": "build",
+                "exitCode": 0,
+                "stdoutDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "stdoutBytes": 128
+              }
+            ]
+          }
+        ]
+      },
       "journal": {
         "operationPlanDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "phase": "apply",

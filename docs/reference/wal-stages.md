@@ -147,6 +147,26 @@ Public deploy route の v1 `compensate` は、同じ digest / phase の unfinish
 enqueue する。`prepare` / `pre-commit` だけの WAL は actual effect が無いため
 compensate 対象ではなく `failed_precondition` になる。
 
+## Public deploy provenance
+
+`POST /v1/deployments` may receive top-level `provenance` from an upstream
+client. The kernel treats this value as opaque JSON. It does not execute
+workflows, parse build logs, or interpret git fields, but it does persist the
+chain as WAL evidence:
+
+- every public WAL effect detail carries the full `provenance` object
+- every resolved resource receives `metadata.takosumiDeployProvenance` with
+  `kind: "takosumi.deploy-provenance-digest@v1"` and the provenance digest
+- the resource metadata participates in the public OperationPlan digest, so a
+  same manifest body with a different artifact provenance is a different
+  operation intent
+- status and recovery inspect responses can surface the recorded provenance for
+  audit consumers
+
+This is how clients such as `takosumi-git` make artifact URI -> workflow run id
+-> git commit SHA -> step log digest traceability durable without moving
+workflow execution into the kernel.
+
 ## Pre/post-commit hook lifecycle
 
 catalog-supplied hook は `pre-commit` / `post-commit` stage で kernel が
