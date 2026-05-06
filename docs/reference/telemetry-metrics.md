@@ -20,7 +20,8 @@ role when `TAKOSUMI_METRICS_SCRAPE_TOKEN` is set, and wraps the configured
 `ObservabilitySink` with native OTLP metric export when
 `TAKOSUMI_OTLP_METRICS_ENDPOINT` or standard `OTEL_EXPORTER_OTLP_*` endpoint env
 vars are set. OTLP traces remain a target contract; the current native exporter
-emits metrics only. :::
+emits metrics only. The deploy overview Grafana dashboard is published at
+`deploy/observability/grafana/takosumi-deploy-overview.json`. :::
 
 ## Export protocols
 
@@ -83,22 +84,24 @@ beyond the unit.
 The v1 metric set is **closed**. Operators may rely on these names, labels, and
 types without coordination. New metrics go through the `CONVENTIONS.md` §6 RFC.
 
-| Metric                                           | Type      | Labels                     |
-| ------------------------------------------------ | --------- | -------------------------- |
-| `takosumi_apply_duration_seconds`                | histogram | `spaceId`, `operationKind` |
-| `takosumi_activate_duration_seconds`             | histogram | `spaceId`, `operationKind` |
-| `takosumi_wal_stage_duration_seconds`            | histogram | `stage`                    |
-| `takosumi_revoke_debt_count`                     | gauge     | `spaceId`, `status`        |
-| `takosumi_approval_pending_count`                | gauge     | `spaceId`                  |
-| `takosumi_drift_detected_count`                  | counter   | `spaceId`, `severity`      |
-| `takosumi_artifact_storage_bytes`                | gauge     | `spaceId`                  |
-| `takosumi_journal_compaction_duration_seconds`   | histogram | (none)                     |
-| `takosumi_lock_acquire_duration_seconds`         | histogram | `lockKind`                 |
-| `takosumi_runtime_agent_lease_count`             | gauge     | (none)                     |
-| `takosumi_http_request_duration_seconds`         | histogram | `route`, `status`          |
-| `takosumi_rate_limit_throttle_count`             | counter   | `route`                    |
-| `takosumi_quota_usage_ratio`                     | gauge     | `spaceId`, `dimension`     |
-| `takosumi_secret_partition_rotation_age_seconds` | gauge     | `partition`                |
+| Metric                                           | Type      | Labels                               |
+| ------------------------------------------------ | --------- | ------------------------------------ |
+| `takosumi_deploy_operation_count`                | counter   | `spaceId`, `operationKind`, `status` |
+| `takosumi_apply_duration_seconds`                | histogram | `spaceId`, `operationKind`, `status` |
+| `takosumi_rollback_duration_seconds`             | histogram | `spaceId`, `operationKind`, `status` |
+| `takosumi_activate_duration_seconds`             | histogram | `spaceId`, `operationKind`           |
+| `takosumi_wal_stage_duration_seconds`            | histogram | `stage`                              |
+| `takosumi_revoke_debt_count`                     | gauge     | `spaceId`, `status`                  |
+| `takosumi_approval_pending_count`                | gauge     | `spaceId`                            |
+| `takosumi_drift_detected_count`                  | counter   | `spaceId`, `severity`                |
+| `takosumi_artifact_storage_bytes`                | gauge     | `spaceId`                            |
+| `takosumi_journal_compaction_duration_seconds`   | histogram | (none)                               |
+| `takosumi_lock_acquire_duration_seconds`         | histogram | `lockKind`                           |
+| `takosumi_runtime_agent_lease_count`             | gauge     | (none)                               |
+| `takosumi_http_request_duration_seconds`         | histogram | `route`, `status`                    |
+| `takosumi_rate_limit_throttle_count`             | counter   | `route`                              |
+| `takosumi_quota_usage_ratio`                     | gauge     | `spaceId`, `dimension`               |
+| `takosumi_secret_partition_rotation_age_seconds` | gauge     | `partition`                          |
 
 The current OTLP metric exporter mirrors each recorded histogram event as one
 delta histogram datapoint. Prometheus exposition folds recorded histogram events
@@ -112,6 +115,15 @@ into explicit buckets
 
 `takosumi_revoke_debt_count` carries the closed RevokeDebt `status` enum, and
 `takosumi_quota_usage_ratio` carries the closed quota `dimension` enum.
+
+Deploy dashboard queries are part of the v1 operator surface. The bundled
+Grafana dashboard uses these PromQL expressions:
+
+| Panel               | PromQL                                                                                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Deploy success rate | `sum(rate(takosumi_deploy_operation_count{operationKind="apply",status="succeeded"}[5m])) / sum(rate(takosumi_deploy_operation_count{operationKind="apply"}[5m]))` |
+| Apply latency p95   | `histogram_quantile(0.95, sum(rate(takosumi_apply_duration_seconds_bucket{operationKind="apply"}[5m])) by (le))`                                                   |
+| Rollback rate       | `sum(rate(takosumi_deploy_operation_count{operationKind="rollback"}[5m]))`                                                                                         |
 
 ## Trace export
 

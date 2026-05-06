@@ -125,6 +125,11 @@ entry).
   persists hysteresis state, and publishes `sla-warning-raised` /
   `sla-breach-detected` / `sla-recovering` / `sla-recovered` events to audit,
   outbox, and the operator notification signal path.
+- Public deploy and deployment rollback paths now record
+  `takosumi_deploy_operation_count`, `takosumi_apply_duration_seconds`, and
+  `takosumi_rollback_duration_seconds` metrics for Prometheus / OTLP export. A
+  deploy overview Grafana dashboard is included under
+  `deploy/observability/grafana/`.
 
 ### 0.14.0 — 2026-05-06
 

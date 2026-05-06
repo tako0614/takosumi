@@ -238,6 +238,8 @@ external 観測が必要な場合の選択肢:
   Lock + retention 対応)
 - `/metrics` と `/readyz` を外部 monitoring から scrape
 - OTLP metrics を collector に push する
+- `deploy/observability/grafana/takosumi-deploy-overview.json` を Grafana に
+  import し、deploy success rate / apply latency / rollback rate を監視する
 - application logs を Deno stdout から拾う
 
 native trace exporter は target contract です。 :::

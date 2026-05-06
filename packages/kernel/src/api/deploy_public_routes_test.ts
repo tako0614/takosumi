@@ -31,9 +31,14 @@ import {
   type OperationJournalStore,
 } from "../domains/deploy/operation_journal.ts";
 import {
+  TAKOSUMI_APPLY_DURATION_SECONDS,
+  TAKOSUMI_DEPLOY_OPERATION_COUNT,
+} from "../domains/deploy/deploy_metrics.ts";
+import {
   InMemoryRevokeDebtStore,
   type RevokeDebtStore,
 } from "../domains/deploy/revoke_debt_store.ts";
+import { InMemoryObservabilitySink } from "../services/observability/mod.ts";
 import { buildOperationPlanPreview } from "../domains/deploy/operation_plan_preview.ts";
 import { buildRefDag } from "../domains/deploy/ref_resolver_v2.ts";
 
@@ -65,6 +70,7 @@ function createApp(opts: {
   revokeDebtStore?: RevokeDebtStore;
   catalogReleaseVerifier?: CatalogReleaseWalHookVerifier;
   artifactMaxBytes?: number;
+  observability?: InMemoryObservabilitySink;
   tenantId?: string;
   now?: () => string;
 } = {}): HonoApp {
@@ -104,6 +110,7 @@ function createApp(opts: {
     ...(opts.artifactMaxBytes
       ? { artifactMaxBytes: opts.artifactMaxBytes }
       : {}),
+    ...(opts.observability ? { observability: opts.observability } : {}),
     ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
     ...(opts.now ? { now: opts.now } : {}),
   });
@@ -220,6 +227,56 @@ Deno.test("deploy public route applies manifest with valid token", async () => {
   assert.equal(body.outcome.applied.length, 1);
   assert.equal(body.outcome.applied[0].name, SAMPLE_RESOURCE.name);
   assert.deepEqual(captured, [SAMPLE_RESOURCE]);
+});
+
+Deno.test("deploy public route records deploy success and latency metrics", async () => {
+  const observability = new InMemoryObservabilitySink();
+  const app = createApp({
+    token: VALID_TOKEN,
+    observability,
+    tenantId: "space:metrics",
+    now: () => "2026-05-07T00:00:00.000Z",
+  });
+
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
+        metadata: { name: "metrics-demo" },
+        resources: [SAMPLE_RESOURCE],
+      },
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const metrics = await observability.listMetrics();
+  const counter = metrics.find((metric) =>
+    metric.name === TAKOSUMI_DEPLOY_OPERATION_COUNT
+  );
+  assert.ok(counter);
+  assert.equal(counter.kind, "counter");
+  assert.equal(counter.value, 1);
+  assert.equal(counter.spaceId, "space:metrics");
+  assert.equal(counter.groupId, "metrics-demo");
+  assert.deepEqual(counter.tags, {
+    operationKind: "apply",
+    status: "succeeded",
+  });
+
+  const latency = metrics.find((metric) =>
+    metric.name === TAKOSUMI_APPLY_DURATION_SECONDS
+  );
+  assert.ok(latency);
+  assert.equal(latency.kind, "histogram");
+  assert.equal(latency.unit, "seconds");
+  assert.equal(latency.tags?.status, "succeeded");
 });
 
 Deno.test(

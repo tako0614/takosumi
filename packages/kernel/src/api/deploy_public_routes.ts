@@ -41,6 +41,12 @@ import {
   type TakosumiDeploymentRecordStore,
 } from "../domains/deploy/takosumi_deployment_record_store.ts";
 import {
+  type DeployMetricOperationKind,
+  type DeployMetricSink,
+  recordDeployOperationMetric,
+  startDeployMetricTimer,
+} from "../domains/deploy/deploy_metrics.ts";
+import {
   type DeployPublicIdempotencyStore,
   InMemoryDeployPublicIdempotencyStore,
 } from "../domains/deploy/deploy_public_idempotency_store.ts";
@@ -240,6 +246,8 @@ export interface RegisterDeployPublicRoutesOptions {
    * artifact-kind `maxSize` values override this per kind.
    */
   readonly artifactMaxBytes?: number;
+  /** Optional metric sink for deploy success / latency / rollback counters. */
+  readonly observability?: DeployMetricSink;
   /**
    * Wall-clock factory used when stamping `created_at` / `updated_at` on
    * persisted records. Defaults to `() => new Date().toISOString()`. Tests
@@ -285,6 +293,8 @@ export function registerDeployPublicRoutes(
   const artifactMaxBytes = resolveManifestArtifactMaxBytes(
     options.artifactMaxBytes,
   );
+  const observability = options.observability ??
+    options.appContext?.adapters.observability;
   const now = options.now ?? (() => new Date().toISOString());
 
   const buildPlatformContext = (): PlatformContext => {
@@ -353,17 +363,38 @@ export function registerDeployPublicRoutes(
       manifestObject,
       resources.value,
     );
+    const metricTimer = startDeployMetricTimer();
+    const recordMetric = (
+      operationKind: DeployMetricOperationKind,
+      status: "succeeded" | "failed" | "failed-validation" | "partial",
+    ) =>
+      recordDeployOperationMetric({
+        observability,
+        now,
+      }, {
+        operationKind,
+        status,
+        spaceId: tenantId,
+        groupId: deploymentName,
+        deploymentName,
+        startedAtMs: metricTimer.startedAtMs,
+      });
 
     if (mode.value === "plan") {
       const quota = validateManifestArtifactSizeQuota(
         resources.value,
         artifactMaxBytes,
       );
-      if (!quota.ok) return quota.response;
+      if (!quota.ok) {
+        await recordMetric("plan", "failed-validation");
+        return quota.response;
+      }
       const outcome = await applyResources(resources.value, undefined, true);
       if (outcome.status === "failed-validation") {
+        await recordMetric("plan", "failed-validation");
         return { status: 400, body: { status: "error", outcome } };
       }
+      await recordMetric("plan", "succeeded");
       const ok: DeployPublicResponse = {
         status: "ok",
         outcome: withOperationPlanPreview({
@@ -395,7 +426,7 @@ export function registerDeployPublicRoutes(
         });
         if (recoveryResponse) return recoveryResponse;
         if (recoveryMode.value === "compensate") {
-          return await handleRecoveryCompensate({
+          const response = await handleRecoveryCompensate({
             journalStore: operationJournalStore,
             revokeDebtStore,
             preview: operationPlan,
@@ -404,6 +435,11 @@ export function registerDeployPublicRoutes(
             deploymentName,
             createdAt: now(),
           });
+          await recordMetric(
+            "rollback",
+            response.status === 200 ? "succeeded" : "failed",
+          );
+          return response;
         }
         const journalStartedAt = now();
         await appendOperationPlanJournalStages({
@@ -426,6 +462,7 @@ export function registerDeployPublicRoutes(
             createdAt: now(),
             detail: { reason: "missing-prior-deploy-record" },
           });
+          await recordMetric("destroy", "failed");
           return {
             status: 409,
             body: apiError(
@@ -470,6 +507,7 @@ export function registerDeployPublicRoutes(
             detail: { outcomeStatus: outcome.status },
           });
           const ok: DeployPublicDestroyResponse = { status: "ok", outcome };
+          await recordMetric("destroy", "succeeded");
           return { status: 200, body: ok as unknown as JsonObject };
         }
         const preCommitHook = await invokeCatalogReleaseWalHook({
@@ -479,13 +517,15 @@ export function registerDeployPublicRoutes(
           preview: operationPlan,
         });
         if (!preCommitHook.ok) {
-          return await handleCatalogReleasePreCommitFailure({
+          const response = await handleCatalogReleasePreCommitFailure({
             journalStore: operationJournalStore,
             preview: operationPlan,
             phase: "destroy",
             createdAt: now(),
             hook: preCommitHook,
           });
+          await recordMetric("destroy", "failed");
+          return response;
         }
         await appendOperationPlanJournalStages({
           store: operationJournalStore,
@@ -521,6 +561,7 @@ export function registerDeployPublicRoutes(
               createdAt: now(),
               detail: { outcomeStatus: outcome.status },
             });
+            await recordMetric("destroy", "failed-validation");
             return { status: 400, body: { status: "error", outcome } };
           }
           if (prior) {
@@ -533,7 +574,7 @@ export function registerDeployPublicRoutes(
             preview: operationPlan,
           });
           if (!postCommitHook.ok) {
-            return await handleCatalogReleasePostCommitFailure({
+            const response = await handleCatalogReleasePostCommitFailure({
               journalStore: operationJournalStore,
               revokeDebtStore,
               preview: operationPlan,
@@ -543,6 +584,8 @@ export function registerDeployPublicRoutes(
               createdAt: now(),
               hook: postCommitHook,
             });
+            await recordMetric("destroy", "failed");
+            return response;
           }
           await appendOperationPlanJournalStages({
             store: operationJournalStore,
@@ -561,6 +604,10 @@ export function registerDeployPublicRoutes(
             },
           });
           const ok: DeployPublicDestroyResponse = { status: "ok", outcome };
+          await recordMetric(
+            "destroy",
+            outcome.status === "succeeded" ? "succeeded" : "partial",
+          );
           return { status: 200, body: ok as unknown as JsonObject };
         } catch (error) {
           await appendOperationPlanJournalStages({
@@ -575,6 +622,7 @@ export function registerDeployPublicRoutes(
           const message = error instanceof Error
             ? error.message
             : String(error);
+          await recordMetric("destroy", "failed");
           return {
             status: 500,
             body: apiError("internal_error", `destroy failed: ${message}`),
@@ -591,7 +639,10 @@ export function registerDeployPublicRoutes(
         resources.value,
         artifactMaxBytes,
       );
-      if (!quota.ok) return quota.response;
+      if (!quota.ok) {
+        await recordMetric("apply", "failed-validation");
+        return quota.response;
+      }
       const operationPlan = buildPublicOperationPlanPreview({
         resources: resources.value,
         tenantId,
@@ -608,7 +659,7 @@ export function registerDeployPublicRoutes(
       });
       if (recoveryResponse) return recoveryResponse;
       if (recoveryMode.value === "compensate") {
-        return await handleRecoveryCompensate({
+        const response = await handleRecoveryCompensate({
           journalStore: operationJournalStore,
           revokeDebtStore,
           preview: operationPlan,
@@ -617,6 +668,11 @@ export function registerDeployPublicRoutes(
           deploymentName,
           createdAt: now(),
         });
+        await recordMetric(
+          "rollback",
+          response.status === 200 ? "succeeded" : "failed",
+        );
+        return response;
       }
       await appendOperationPlanJournalStages({
         store: operationJournalStore,
@@ -633,13 +689,15 @@ export function registerDeployPublicRoutes(
         preview: operationPlan,
       });
       if (!preCommitHook.ok) {
-        return await handleCatalogReleasePreCommitFailure({
+        const response = await handleCatalogReleasePreCommitFailure({
           journalStore: operationJournalStore,
           preview: operationPlan,
           phase: "apply",
           createdAt: now(),
           hook: preCommitHook,
         });
+        await recordMetric("apply", "failed");
+        return response;
       }
       await appendOperationPlanJournalStages({
         store: operationJournalStore,
@@ -680,6 +738,7 @@ export function registerDeployPublicRoutes(
             createdAt: now(),
             detail: { outcomeStatus: outcome.status },
           });
+          await recordMetric("apply", "failed-validation");
           return { status: 400, body: { status: "error", outcome } };
         }
         if (outcome.status === "failed-apply") {
@@ -701,6 +760,10 @@ export function registerDeployPublicRoutes(
             createdAt: now(),
             detail: { outcomeStatus: outcome.status },
           });
+          await recordMetric("apply", "failed");
+          if (outcome.rollback) {
+            await recordMetric("rollback", outcome.rollback.status);
+          }
           return { status: 500, body: { status: "error", outcome } };
         }
         if (
@@ -732,7 +795,7 @@ export function registerDeployPublicRoutes(
           preview: operationPlan,
         });
         if (!postCommitHook.ok) {
-          return await handleCatalogReleasePostCommitFailure({
+          const response = await handleCatalogReleasePostCommitFailure({
             journalStore: operationJournalStore,
             revokeDebtStore,
             preview: operationPlan,
@@ -742,6 +805,8 @@ export function registerDeployPublicRoutes(
             createdAt: now(),
             hook: postCommitHook,
           });
+          await recordMetric("apply", "failed");
+          return response;
         }
         await appendOperationPlanJournalStages({
           store: operationJournalStore,
@@ -756,6 +821,7 @@ export function registerDeployPublicRoutes(
           },
         });
         const ok: DeployPublicResponse = { status: "ok", outcome };
+        await recordMetric("apply", "succeeded");
         return { status: 200, body: ok as unknown as JsonObject };
       } catch (error) {
         await appendOperationPlanJournalStages({
@@ -768,6 +834,7 @@ export function registerDeployPublicRoutes(
           detail: { reason: "apply-threw" },
         });
         const message = error instanceof Error ? error.message : String(error);
+        await recordMetric("apply", "failed");
         return {
           status: 500,
           body: apiError("internal_error", `apply failed: ${message}`),

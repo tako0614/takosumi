@@ -35,6 +35,13 @@ import {
 } from "./apply_orchestrator.ts";
 import { resolveBindings, validateAccessPaths } from "./binding_resolver.ts";
 import { compileManifestToAppSpec } from "./compiler.ts";
+import {
+  type DeployMetricOperationKind,
+  type DeployMetricSink,
+  type DeployMetricStatus,
+  recordDeployOperationMetric,
+  startDeployMetricTimer,
+} from "./deploy_metrics.ts";
 import { buildDescriptorClosure } from "./descriptor_closure.ts";
 import {
   type GroupHeadHistoryEntry,
@@ -314,6 +321,8 @@ export interface DeploymentServiceOptions {
    * applied without a real cloud round-trip.
    */
   readonly providerAdapter?: DeploymentProviderAdapter;
+  /** Optional metric sink for apply / rollback counters and latency histograms. */
+  readonly observability?: DeployMetricSink;
 }
 
 /**
@@ -325,6 +334,7 @@ export class DeploymentService {
   readonly #idFactory: () => string;
   readonly #clock: () => Date;
   readonly #providerAdapter: DeploymentProviderAdapter;
+  readonly #observability?: DeployMetricSink;
 
   constructor(options: DeploymentServiceOptions) {
     this.#store = options.store;
@@ -332,6 +342,7 @@ export class DeploymentService {
     this.#clock = options.clock ?? (() => new Date());
     this.#providerAdapter = options.providerAdapter ??
       SYNTHETIC_PROVIDER_ADAPTER;
+    this.#observability = options.observability;
   }
 
   /**
@@ -452,6 +463,28 @@ export class DeploymentService {
    * canonical Deployment record is immutable once it leaves `resolved`.
    */
   async applyDeployment(input: ApplyDeploymentInput): Promise<Deployment> {
+    const timer = startDeployMetricTimer();
+    try {
+      const deployment = await this.#applyDeployment(input);
+      await this.#recordDeployMetric({
+        operationKind: "apply",
+        status: deployment.status === "applied" ? "succeeded" : "failed",
+        deployment,
+        startedAtMs: timer.startedAtMs,
+      });
+      return deployment;
+    } catch (error) {
+      await this.#recordDeployMetric({
+        operationKind: "apply",
+        status: "failed",
+        deploymentId: input.deploymentId,
+        startedAtMs: timer.startedAtMs,
+      });
+      throw error;
+    }
+  }
+
+  async #applyDeployment(input: ApplyDeploymentInput): Promise<Deployment> {
     const current = await this.#store.getDeployment(input.deploymentId);
     if (!current) {
       throw new Error(`unknown deployment: ${input.deploymentId}`);
@@ -754,6 +787,32 @@ export class DeploymentService {
    * explicit `targetDeploymentId`.
    */
   async rollbackGroup(input: RollbackGroupInput): Promise<GroupHead> {
+    const timer = startDeployMetricTimer();
+    try {
+      const head = await this.#rollbackGroup(input);
+      await this.#recordDeployMetric({
+        operationKind: "rollback",
+        status: "succeeded",
+        spaceId: input.spaceId,
+        groupId: input.groupId,
+        deploymentName: input.targetDeploymentId ?? String(input.steps ?? ""),
+        startedAtMs: timer.startedAtMs,
+      });
+      return head;
+    } catch (error) {
+      await this.#recordDeployMetric({
+        operationKind: "rollback",
+        status: "failed",
+        spaceId: input.spaceId,
+        groupId: input.groupId,
+        deploymentName: input.targetDeploymentId ?? String(input.steps ?? ""),
+        startedAtMs: timer.startedAtMs,
+      });
+      throw error;
+    }
+  }
+
+  async #rollbackGroup(input: RollbackGroupInput): Promise<GroupHead> {
     // Phase 18.3 / M6 — resolve the rollback target. When a history store
     // is available the target may come from `--steps=N` or be validated
     // against the retained N-generation history; without one only
@@ -858,6 +917,36 @@ export class DeploymentService {
     }
 
     return head;
+  }
+
+  async #recordDeployMetric(input: {
+    readonly operationKind: DeployMetricOperationKind;
+    readonly status: DeployMetricStatus;
+    readonly deployment?: Deployment;
+    readonly deploymentId?: string;
+    readonly spaceId?: string;
+    readonly groupId?: string;
+    readonly deploymentName?: string;
+    readonly startedAtMs: number;
+  }): Promise<void> {
+    await recordDeployOperationMetric({
+      observability: this.#observability,
+      now: () => this.#clock().toISOString(),
+    }, {
+      operationKind: input.operationKind,
+      status: input.status,
+      spaceId: input.deployment?.space_id ?? input.spaceId,
+      groupId: input.deployment?.group_id ?? input.groupId,
+      deploymentName: input.deploymentName ?? input.deployment?.id ??
+        input.deploymentId,
+      startedAtMs: input.startedAtMs,
+      payload: input.deployment || input.deploymentId
+        ? {
+          deploymentId: input.deployment?.id ?? input.deploymentId ??
+            "unknown",
+        }
+        : undefined,
+    });
   }
 
   /**

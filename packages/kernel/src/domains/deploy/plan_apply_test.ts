@@ -6,6 +6,10 @@ import {
   DeploymentService,
   InMemoryDeploymentStore,
 } from "./deployment_service.ts";
+import {
+  TAKOSUMI_DEPLOY_OPERATION_COUNT,
+  TAKOSUMI_ROLLBACK_DURATION_SECONDS,
+} from "./deploy_metrics.ts";
 import type {
   DeploymentProviderAdapter,
   OperationOutcome,
@@ -13,6 +17,7 @@ import type {
 } from "./apply_orchestrator.ts";
 import type { Deployment, IsoTimestamp } from "takosumi-contract";
 import type { DeployBlocker, PublicDeployManifest } from "./types.ts";
+import { InMemoryObservabilitySink } from "../../services/observability/mod.ts";
 
 const DEMO_IMAGE_1 =
   "registry.example.test/demo@sha256:1111111111111111111111111111111111111111111111111111111111111111";
@@ -324,6 +329,58 @@ Deno.test("deploy: rollback advances GroupHead to a prior Deployment", async () 
   assert.equal(rolledBack.current_deployment_id, v1.id);
   assert.equal(rolledBack.previous_deployment_id, secondDeployment.id);
   assert.equal(rolledBack.generation, 3);
+});
+
+Deno.test("deploy: rollback records rollback rate and latency metrics", async () => {
+  const store = new InMemoryDeploymentStore();
+  const observability = new InMemoryObservabilitySink();
+  let counter = 0;
+  const service = new DeploymentService({
+    store,
+    observability,
+    idFactory: () => `deployment_metric_${++counter}`,
+    clock: fixedClock("2026-04-27T00:00:00.000Z"),
+  });
+
+  const v1 = await service.resolveDeployment({
+    spaceId: "space_deploy",
+    manifest: sampleManifest(),
+  });
+  await service.applyDeployment({
+    deploymentId: v1.id,
+    appliedAt: "2026-04-27T00:01:00.000Z",
+  });
+  const v2 = await service.resolveDeployment({
+    spaceId: "space_deploy",
+    manifest: { ...sampleManifest(), version: "2.0.0" },
+  });
+  await service.applyDeployment({
+    deploymentId: v2.id,
+    appliedAt: "2026-04-27T00:02:00.000Z",
+  });
+
+  await service.rollbackGroup({
+    spaceId: "space_deploy",
+    groupId: "demo-app",
+    targetDeploymentId: v1.id,
+    advancedAt: "2026-04-27T00:03:00.000Z",
+  });
+
+  const metrics = await observability.listMetrics();
+  const rollbackCounter = metrics.find((metric) =>
+    metric.name === TAKOSUMI_DEPLOY_OPERATION_COUNT &&
+    metric.tags?.operationKind === "rollback"
+  );
+  assert.ok(rollbackCounter);
+  assert.equal(rollbackCounter.value, 1);
+  assert.equal(rollbackCounter.tags?.status, "succeeded");
+
+  const rollbackLatency = metrics.find((metric) =>
+    metric.name === TAKOSUMI_ROLLBACK_DURATION_SECONDS
+  );
+  assert.ok(rollbackLatency);
+  assert.equal(rollbackLatency.kind, "histogram");
+  assert.equal(rollbackLatency.tags?.operationKind, "rollback");
 });
 
 Deno.test("deploy: rollback target must belong to the addressed group", async () => {
