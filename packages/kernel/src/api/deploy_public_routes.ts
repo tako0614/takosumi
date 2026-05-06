@@ -7,6 +7,7 @@ import type {
   RefResolver,
   ResourceHandle,
 } from "takosumi-contract";
+import { listArtifactKinds } from "takosumi-contract";
 import type { AppContext } from "../app_context.ts";
 import {
   applyV2,
@@ -89,6 +90,7 @@ export const TAKOSUMI_DEPLOY_PUBLIC_PATH = "/v1/deployments" as const;
 export const TAKOSUMI_IDEMPOTENCY_KEY_HEADER = "x-idempotency-key" as const;
 export const TAKOSUMI_IDEMPOTENCY_REPLAYED_HEADER =
   "x-idempotency-replayed" as const;
+export const TAKOSUMI_MANIFEST_ARTIFACT_SIZE_MAX_BYTES_DEFAULT = 52_428_800;
 
 export type DeployPublicMode = "apply" | "plan" | "destroy";
 export type DeployPublicRecoveryMode = "inspect" | "continue" | "compensate";
@@ -234,6 +236,11 @@ export interface RegisterDeployPublicRoutesOptions {
    */
   readonly catalogReleaseVerifier?: CatalogReleaseWalHookVerifier;
   /**
+   * Fallback max for manifest-declared `spec.artifact.size`. Registered
+   * artifact-kind `maxSize` values override this per kind.
+   */
+  readonly artifactMaxBytes?: number;
+  /**
    * Wall-clock factory used when stamping `created_at` / `updated_at` on
    * persisted records. Defaults to `() => new Date().toISOString()`. Tests
    * override this to assert deterministic timestamps.
@@ -275,6 +282,9 @@ export function registerDeployPublicRoutes(
   const revokeDebtStore: RevokeDebtStore = options.revokeDebtStore ??
     new InMemoryRevokeDebtStore();
   const catalogReleaseVerifier = options.catalogReleaseVerifier;
+  const artifactMaxBytes = resolveManifestArtifactMaxBytes(
+    options.artifactMaxBytes,
+  );
   const now = options.now ?? (() => new Date().toISOString());
 
   const buildPlatformContext = (): PlatformContext => {
@@ -345,6 +355,11 @@ export function registerDeployPublicRoutes(
     );
 
     if (mode.value === "plan") {
+      const quota = validateManifestArtifactSizeQuota(
+        resources.value,
+        artifactMaxBytes,
+      );
+      if (!quota.ok) return quota.response;
       const outcome = await applyResources(resources.value, undefined, true);
       if (outcome.status === "failed-validation") {
         return { status: 400, body: { status: "error", outcome } };
@@ -572,6 +587,11 @@ export function registerDeployPublicRoutes(
 
     await recordStore.acquireLock(tenantId, deploymentName);
     try {
+      const quota = validateManifestArtifactSizeQuota(
+        resources.value,
+        artifactMaxBytes,
+      );
+      if (!quota.ok) return quota.response;
       const operationPlan = buildPublicOperationPlanPreview({
         resources: resources.value,
         tenantId,
@@ -804,7 +824,7 @@ export function registerDeployPublicRoutes(
         c.header(TAKOSUMI_IDEMPOTENCY_REPLAYED_HEADER, "true");
         return c.json(
           prior.responseBody,
-          prior.responseStatus as 200 | 400 | 409 | 500,
+          prior.responseStatus as DeployPublicJsonStatus,
         );
       }
       const response = await executeDeployPublicPost(body.value);
@@ -865,11 +885,96 @@ interface BearerCheckFail {
   readonly body: ReturnType<typeof apiError>;
 }
 
-type DeployPublicJsonStatus = 200 | 400 | 409 | 500;
+type DeployPublicJsonStatus = 200 | 400 | 409 | 413 | 500;
 
 interface DeployPublicHandledResponse {
   readonly status: DeployPublicJsonStatus;
   readonly body: unknown;
+}
+
+type ArtifactSizeQuotaResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly response: DeployPublicHandledResponse };
+
+function validateManifestArtifactSizeQuota(
+  resources: readonly ManifestResource[],
+  fallbackMaxBytes: number,
+): ArtifactSizeQuotaResult {
+  for (const resource of resources) {
+    const artifact = readManifestArtifactSpec(resource);
+    if (!artifact) continue;
+    const rawSize = artifact.size;
+    if (rawSize === undefined) continue;
+    if (
+      typeof rawSize !== "number" || !Number.isInteger(rawSize) ||
+      rawSize < 0
+    ) {
+      return {
+        ok: false,
+        response: {
+          status: 400,
+          body: apiError(
+            "invalid_argument",
+            `resources.${resource.name}.spec.artifact.size must be a non-negative integer byte count`,
+            { resource: resource.name, value: rawSize },
+          ),
+        },
+      };
+    }
+    const size = rawSize;
+    const kind = typeof artifact.kind === "string" && artifact.kind.length > 0
+      ? artifact.kind
+      : undefined;
+    const maxBytes = manifestArtifactMaxBytesForKind(kind, fallbackMaxBytes);
+    if (size <= maxBytes) continue;
+    return {
+      ok: false,
+      response: {
+        status: 413,
+        body: apiError(
+          "resource_exhausted",
+          `resources.${resource.name}.spec.artifact.size exceeds the configured artifact quota`,
+          {
+            resource: resource.name,
+            kind: kind ?? null,
+            size,
+            maxBytes,
+            rule: "manifest-artifact-size",
+          },
+        ),
+      },
+    };
+  }
+  return { ok: true };
+}
+
+function readManifestArtifactSpec(
+  resource: ManifestResource,
+): JsonObject | undefined {
+  if (!isJsonObject(resource.spec)) return undefined;
+  const artifact = resource.spec.artifact;
+  return isJsonObject(artifact) ? artifact : undefined;
+}
+
+function manifestArtifactMaxBytesForKind(
+  kind: string | undefined,
+  fallback: number,
+): number {
+  if (!kind) return fallback;
+  const registered = listArtifactKinds().find((entry) => entry.kind === kind);
+  return validPositiveInteger(registered?.maxSize)
+    ? registered.maxSize
+    : fallback;
+}
+
+function resolveManifestArtifactMaxBytes(value: unknown): number {
+  return validPositiveInteger(value)
+    ? value
+    : TAKOSUMI_MANIFEST_ARTIFACT_SIZE_MAX_BYTES_DEFAULT;
+}
+
+function validPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 function checkBearer(

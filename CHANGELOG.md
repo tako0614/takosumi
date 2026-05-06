@@ -111,6 +111,14 @@ entry).
 
 ## takosumi-kernel
 
+### 0.15.0 — 2026-05-07
+
+- Public `POST /v1/deployments` now enforces manifest-declared
+  `spec.artifact.size` before plan / apply side effects. Sizes must be
+  non-negative integer byte counts and cannot exceed the registered
+  artifact-kind `maxSize` (falling back to the kernel artifact cap for unknown
+  kinds); oversized artifacts return 413 `resource_exhausted`.
+
 ### 0.14.0 — 2026-05-06
 
 - **Breaking**: kernel-side workflow primitive reservation withdrawn. The

@@ -106,6 +106,14 @@ registered kind carries `maxSize`, that per-kind value overrides the route
 default for uploads of that kind. Unknown or unregistered kinds fall back to the
 global cap.
 
+The deploy route also enforces manifest-declared artifact sizes before plan /
+apply side effects. When a resource contains `spec.artifact.size`, the value is
+interpreted as a byte count and must be a non-negative integer no larger than
+the registered kind's `maxSize` (or the global cap for unknown kinds). This is a
+pre-provider quota gate for external pointers such as OCI image URIs; content
+uploaded through `POST /v1/artifacts` is still checked again by the artifact
+upload route.
+
 `oci-image` normally uses `uri`, so it does not need `takosumi artifact push`.
 Every uploaded kind is stored under `<bucket>/artifacts/<sha256-hex>` through
 the kernel object-storage adapter; the digest is computed and verified

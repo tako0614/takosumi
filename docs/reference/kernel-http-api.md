@@ -173,6 +173,13 @@ interface OperationPlanPreview {
 and matches the public DesiredSnapshot / OperationPlan digest model, but the
 request remains side-effect free and writes no WAL entry.
 
+For `mode="plan"` and `mode="apply"`, any manifest resource that declares
+`spec.artifact.size` is checked before WAL writes or provider calls. The value
+must be a non-negative integer byte count and must not exceed the registered
+artifact-kind `maxSize`; unknown kinds fall back to
+`TAKOSUMI_ARTIFACT_MAX_BYTES` semantics (50 MiB by default). Oversized artifacts
+return 413 `resource_exhausted`.
+
 For `mode="apply"` and `mode="destroy"`, the route derives the same public
 OperationPlan shape internally and writes `takosumi_operation_journal_entries`
 around provider side effects: `prepare` / `pre-commit` / `commit` before the
@@ -244,6 +251,7 @@ Status codes:
 | 401    | `unauthenticated`     | bearer 不足                                                                                                                       |
 | 404    | `not_found`           | deploy token 未設定、deployment 不在                                                                                              |
 | 409    | `failed_precondition` | destroy 対象の prior record が無い、idempotency key conflict、unfinished WAL / recovery digest mismatch、compensate before commit |
+| 413    | `resource_exhausted`  | `spec.artifact.size` が configured artifact quota を超過                                                                          |
 | 500    | `internal_error`      | apply / destroy の未処理例外                                                                                                      |
 
 ### `GET /v1/deployments`

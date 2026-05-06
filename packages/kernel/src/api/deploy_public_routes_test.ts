@@ -64,6 +64,7 @@ function createApp(opts: {
   operationJournalStore?: OperationJournalStore;
   revokeDebtStore?: RevokeDebtStore;
   catalogReleaseVerifier?: CatalogReleaseWalHookVerifier;
+  artifactMaxBytes?: number;
   tenantId?: string;
   now?: () => string;
 } = {}): HonoApp {
@@ -99,6 +100,9 @@ function createApp(opts: {
     ...(opts.revokeDebtStore ? { revokeDebtStore: opts.revokeDebtStore } : {}),
     ...(opts.catalogReleaseVerifier
       ? { catalogReleaseVerifier: opts.catalogReleaseVerifier }
+      : {}),
+    ...(opts.artifactMaxBytes
+      ? { artifactMaxBytes: opts.artifactMaxBytes }
       : {}),
     ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
     ...(opts.now ? { now: opts.now } : {}),
@@ -216,6 +220,106 @@ Deno.test("deploy public route applies manifest with valid token", async () => {
   assert.equal(body.outcome.applied.length, 1);
   assert.equal(body.outcome.applied[0].name, SAMPLE_RESOURCE.name);
   assert.deepEqual(captured, [SAMPLE_RESOURCE]);
+});
+
+Deno.test(
+  "deploy public route rejects oversized manifest artifact before apply",
+  async () => {
+    let called = false;
+    const resource: ManifestResource = {
+      shape: "web-service@v1",
+      name: "web",
+      provider: "@takos/selfhost-docker",
+      spec: {
+        artifact: {
+          kind: "oci-image",
+          uri: "ghcr.io/takos/app@sha256:abc",
+          size: 11,
+        },
+        port: 8080,
+      },
+    };
+    const app = createApp({
+      token: VALID_TOKEN,
+      artifactMaxBytes: 10,
+      applyResources: () => {
+        called = true;
+        return Promise.resolve({
+          applied: [],
+          issues: [],
+          status: "succeeded",
+        });
+      },
+    });
+    const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${VALID_TOKEN}`,
+      },
+      body: JSON.stringify({
+        mode: "apply",
+        manifest: {
+          apiVersion: "1.0" as const,
+          kind: "Manifest" as const,
+          resources: [resource],
+        },
+      }),
+    });
+    assert.equal(response.status, 413);
+    assert.equal(called, false);
+    const body = await response.json();
+    assert.equal(body.error.code, "resource_exhausted");
+    assert.equal(body.error.details.resource, "web");
+    assert.equal(body.error.details.size, 11);
+    assert.equal(body.error.details.maxBytes, 10);
+  },
+);
+
+Deno.test("deploy public route checks manifest artifact size in plan mode", async () => {
+  let called = false;
+  const resource: ManifestResource = {
+    shape: "worker@v1",
+    name: "worker",
+    provider: "@takos/cloudflare-workers",
+    spec: {
+      artifact: {
+        kind: "js-bundle",
+        hash:
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        size: 11,
+      },
+    },
+  };
+  const app = createApp({
+    token: VALID_TOKEN,
+    artifactMaxBytes: 10,
+    applyResources: () => {
+      called = true;
+      return Promise.resolve({
+        applied: [],
+        issues: [],
+        status: "succeeded",
+      });
+    },
+  });
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "plan",
+      manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
+        resources: [resource],
+      },
+    }),
+  });
+  assert.equal(response.status, 413);
+  assert.equal(called, false);
 });
 
 Deno.test("deploy public route records apply WAL stages around provider side effects", async () => {
