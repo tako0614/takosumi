@@ -10,6 +10,12 @@ entry).
 
 ## takosumi-cli
 
+### 0.14.0 — 2026-05-06
+
+- Re-export bump tracking `takosumi-kernel@0.14.0` / `takosumi-plugins@0.12.0`.
+  CLI surface unchanged; downstream manifest validation rejects
+  `compute.<name>.build` and `resource.workflow@v1`.
+
 ### 0.13.0 — 2026-05-03
 
 - **Breaking**: `expandManifestLocal()` / `takosumi deploy` /
@@ -74,6 +80,23 @@ entry).
 
 ## takosumi-kernel
 
+### 0.14.0 — 2026-05-06
+
+- **Breaking**: kernel-side workflow primitive reservation withdrawn. The
+  reserved `triggers` / `execute-step-operation` / `declarable-hooks` reference
+  pages were removed; workflow / trigger / hook semantics are owned by
+  `takosumi-git` (upstream sibling product). See
+  [Workflow Placement Rationale](./docs/reference/architecture/workflow-extension-design.md).
+- **Breaking**: `compute.<name>.build` field removed from the manifest schema.
+  Manifests carrying `build` / `build.fromWorkflow` are now rejected with a
+  validation error. `compute` requires explicit `type` for non-container
+  runtimes plus an `image:` URI with a port.
+- **Breaking**: `resource.workflow@v1` shape registration removed from the
+  bundled shape catalog. Manifests that declare a `workflow@v1` resource are
+  rejected.
+- `inferComputeType` no longer derives a runtime from the (removed) `build`
+  field; explicit `type` is required.
+
 ### 0.13.0 — 2026-05-03
 
 - **Breaking**: `POST /v1/deployments` (deploy public route) now invokes
@@ -103,6 +126,12 @@ entry).
   persistence loss before going to prod.
 
 ## takosumi-plugins
+
+### 0.12.0 — 2026-05-06
+
+- **Breaking**: `resource.workflow@v1` shape registration removed from the
+  bundled shape catalog. Workflow / cron / hook resources are now plugin shapes
+  provided by upstream products such as `takosumi-git`.
 
 ### 0.11.0 — 2026-05-03
 
@@ -144,6 +173,18 @@ entry).
 - `registerProvider` collision warning + `allowOverride` opt-out.
 
 ## takosumi (umbrella)
+
+### 0.16.0 — 2026-05-06
+
+- Re-export bump tracking `takosumi-kernel@0.14.0`, `takosumi-plugins@0.12.0`,
+  and `takosumi-cli@0.14.0`.
+- **Breaking** (downstream): kernel workflow primitive reservation withdrawn,
+  `compute.<name>.build` removed from the manifest schema, and
+  `resource.workflow@v1` shape removed from the bundled catalog. The `triggers`
+  / `execute-step-operation` / `declarable-hooks` reference pages were deleted;
+  consult
+  [Workflow Placement Rationale](./docs/reference/architecture/workflow-extension-design.md)
+  for the new ownership boundary.
 
 ### 0.15.0 — 2026-05-03
 

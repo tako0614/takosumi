@@ -1,6 +1,6 @@
 {
   "name": "@takos/takosumi-cli",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "license": "MIT",
   "exports": {
     ".": "./src/main.ts"
@@ -10,8 +10,8 @@
     "@std/yaml": "jsr:@std/yaml@^1.0.0",
     "@std/path": "jsr:@std/path@^1.0.0",
     "takosumi-contract": "jsr:@takos/takosumi-contract@^2.4.0",
-    "@takos/takosumi-kernel": "jsr:@takos/takosumi-kernel@^0.13.0",
-    "@takos/takosumi-kernel/plugins": "jsr:@takos/takosumi-kernel@^0.13.0/plugins",
+    "@takos/takosumi-kernel": "jsr:@takos/takosumi-kernel@^0.14.0",
+    "@takos/takosumi-kernel/plugins": "jsr:@takos/takosumi-kernel@^0.14.0/plugins",
     "@takos/takosumi-runtime-agent/embed": "jsr:@takos/takosumi-runtime-agent@^0.7.0/embed"
   },
   "tasks": {
