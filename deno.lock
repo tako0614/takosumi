@@ -165,14 +165,14 @@
           "jsr:@cliffy/command@^1.0.0-rc.7",
           "jsr:@std/path@1",
           "jsr:@std/yaml@1",
-          "jsr:@takos/takosumi-contract@^2.4.0",
+          "jsr:@takos/takosumi-contract@^2.5.0",
           "jsr:@takos/takosumi-kernel@0.14",
           "jsr:@takos/takosumi-runtime-agent@0.7"
         ]
       },
       "packages/kernel": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.4.0",
+          "jsr:@takos/takosumi-contract@^2.5.0",
           "jsr:@takos/takosumi-plugins@0.12"
         ]
       },
@@ -183,7 +183,7 @@
       },
       "packages/runtime-agent": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.4.0",
+          "jsr:@takos/takosumi-contract@^2.5.0",
           "npm:hono@^4.12.4"
         ]
       }

@@ -31,6 +31,8 @@ entry).
   kernel via `POST /v1/deployments`. Operators that want the old "drop a
   `.takosumi/manifest.yml` and run `takosumi deploy`" UX should adopt
   `takosumi-git`.
+- Published package imports now pin `@takos/takosumi-contract@^2.5.0`, matching
+  the `TAKOSUMI_*` internal RPC naming policy.
 
 ### 0.14.0 — 2026-05-06
 
@@ -94,6 +96,8 @@ entry).
   and `# X-Takos-InternalPort=<n>` markers so `describe()` can reconstruct
   outputs from disk. Hand-written units without the markers describe with status
   only.
+- Published package imports now pin `@takos/takosumi-contract@^2.5.0`, matching
+  the current runtime-agent lifecycle contract.
 
 ### 0.6.0 — 2026-05-02
 
@@ -118,6 +122,8 @@ entry).
   rejected.
 - `inferComputeType` no longer derives a runtime from the (removed) `build`
   field; explicit `type` is required.
+- Published package imports now pin `@takos/takosumi-contract@^2.5.0`, matching
+  the `TAKOSUMI_INTERNAL_PATHS` / internal RPC exports used by the kernel.
 
 ### 0.13.0 — 2026-05-03
 
