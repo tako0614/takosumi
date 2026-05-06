@@ -19,6 +19,7 @@ import {
 
 const SHAPE = "test-idempotency-shape";
 const PROVIDER = "test-idempotency-provider";
+const FAIL_PROVIDER = "test-idempotency-provider-fail";
 
 function shape(): Shape {
   return {
@@ -38,11 +39,13 @@ function shape(): Shape {
 interface CountingProvider {
   readonly plugin: ProviderPlugin;
   applyCount(): number;
+  destroyedHandles(): readonly string[];
   resetCount(): void;
 }
 
 function counting(id: string): CountingProvider {
   let count = 0;
+  const destroyed: string[] = [];
   const plugin: ProviderPlugin = {
     id,
     version: "0.0.1",
@@ -59,7 +62,8 @@ function counting(id: string): CountingProvider {
         } as JsonObject,
       });
     },
-    destroy(_handle, _ctx) {
+    destroy(handle, _ctx) {
+      destroyed.push(String(handle));
       return Promise.resolve();
     },
     status() {
@@ -72,8 +76,31 @@ function counting(id: string): CountingProvider {
   return {
     plugin,
     applyCount: () => count,
+    destroyedHandles: () => destroyed.slice(),
     resetCount: () => {
       count = 0;
+      destroyed.length = 0;
+    },
+  };
+}
+
+function failingProvider(): ProviderPlugin {
+  return {
+    id: FAIL_PROVIDER,
+    version: "0.0.1",
+    implements: { id: SHAPE, version: "v1" },
+    capabilities: ["c"],
+    apply(_spec, _ctx): Promise<ApplyResult> {
+      return Promise.reject(new Error("planned-fail"));
+    },
+    destroy(_handle, _ctx) {
+      return Promise.resolve();
+    },
+    status() {
+      return Promise.resolve({
+        kind: "ready" as const,
+        observedAt: new Date(0).toISOString(),
+      });
     },
   };
 }
@@ -88,6 +115,7 @@ function setUp(): CountingProvider {
 function tearDown(): void {
   unregisterShape(SHAPE, "v1");
   unregisterProvider(PROVIDER);
+  unregisterProvider(FAIL_PROVIDER);
 }
 
 const ctx = {} as PlatformContext;
@@ -114,7 +142,7 @@ Deno.test(
       assert.equal(first.reused ?? 0, 0);
       const firstFingerprint = first.applied[0].specFingerprint;
       assert.ok(
-        firstFingerprint && firstFingerprint.startsWith("fnv1a32:"),
+        firstFingerprint && /^sha256:[0-9a-f]{64}$/.test(firstFingerprint),
         "first apply must stamp a fingerprint",
       );
       const firstHandle = first.applied[0].handle;
@@ -256,7 +284,67 @@ Deno.test(
 );
 
 Deno.test(
-  "computeSpecFingerprint is stable for identical inputs and changes when spec changes",
+  "applyV2 idempotency: rollback does not destroy reused prior resources",
+  async () => {
+    const provider = setUp();
+    registerProvider(failingProvider());
+    try {
+      const priorResources: ManifestResource[] = [
+        {
+          shape: `${SHAPE}@v1`,
+          name: "logs",
+          provider: PROVIDER,
+          spec: { region: "us-east-1" },
+        },
+      ];
+      const first = await applyV2({ resources: priorResources, context: ctx });
+      assert.equal(first.status, "succeeded");
+      assert.equal(first.applied.length, 1);
+      const priorApplied = new Map<string, PriorAppliedSnapshot>([
+        ["logs", {
+          specFingerprint: first.applied[0].specFingerprint,
+          handle: first.applied[0].handle,
+          outputs: first.applied[0].outputs,
+          providerId: PROVIDER,
+        }],
+      ]);
+      provider.resetCount();
+
+      const result = await applyV2({
+        resources: [
+          ...priorResources,
+          {
+            shape: `${SHAPE}@v1`,
+            name: "web",
+            provider: FAIL_PROVIDER,
+            spec: { upstream: "${ref:logs.url}" },
+          },
+        ],
+        context: ctx,
+        priorApplied,
+      });
+
+      assert.equal(result.status, "failed-apply");
+      assert.equal(
+        provider.applyCount(),
+        0,
+        "unchanged prior resource must still skip provider.apply",
+      );
+      assert.deepEqual(
+        provider.destroyedHandles(),
+        [],
+        "rollback must not destroy resources reused from a prior apply",
+      );
+      assert.equal(result.rollback?.status, "succeeded");
+      assert.deepEqual(result.rollback?.failures, []);
+    } finally {
+      tearDown();
+    }
+  },
+);
+
+Deno.test(
+  "computeSpecFingerprint is canonical, stable, and changes when tuple changes",
   () => {
     const resource: ManifestResource = {
       shape: "test-shape@v1",
@@ -264,12 +352,35 @@ Deno.test(
       provider: "test",
       spec: { a: 1, b: 2 },
     };
-    const f1 = computeSpecFingerprint(resource, "test", { a: 1, b: 2 });
-    const f2 = computeSpecFingerprint(resource, "test", { a: 1, b: 2 });
+    const f1 = computeSpecFingerprint(resource, "test", {
+      nested: { z: true, a: ["one", "two"] },
+      a: 1,
+      b: 2,
+    });
+    const f2 = computeSpecFingerprint(resource, "test", {
+      nested: { z: true, a: ["one", "two"] },
+      a: 1,
+      b: 2,
+    });
+    assert.match(f1, /^sha256:[0-9a-f]{64}$/);
     assert.equal(f1, f2);
-    const f3 = computeSpecFingerprint(resource, "test", { a: 1, b: 3 });
-    assert.notEqual(f1, f3);
-    const f4 = computeSpecFingerprint(resource, "different", { a: 1, b: 2 });
+    const f3 = computeSpecFingerprint(resource, "test", {
+      b: 2,
+      nested: { a: ["one", "two"], z: true },
+      a: 1,
+    });
+    assert.equal(f1, f3);
+    const f4 = computeSpecFingerprint(resource, "test", {
+      nested: { z: true, a: ["one", "two"] },
+      a: 1,
+      b: 3,
+    });
     assert.notEqual(f1, f4);
+    const f5 = computeSpecFingerprint(resource, "different", {
+      nested: { z: true, a: ["one", "two"] },
+      a: 1,
+      b: 2,
+    });
+    assert.notEqual(f1, f5);
   },
 );

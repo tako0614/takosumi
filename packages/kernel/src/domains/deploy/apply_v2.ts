@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   formatPlatformOperationIdempotencyKey,
   type JsonObject,
@@ -33,6 +34,13 @@ export interface ApplyV2Outcome {
   readonly issues: readonly (ResourceResolutionIssue | RefResolutionIssue)[];
   readonly status: "succeeded" | "failed-validation" | "failed-apply";
   /**
+   * Present when an apply failure triggered rollback of already-created
+   * resources. `status` remains `failed-apply` for backward-compatible
+   * callers, while this field exposes leaked-resource risk when compensation
+   * or destroy also fails.
+   */
+  readonly rollback?: ApplyV2RollbackOutcome;
+  /**
    * When `dryRun` was passed, this lists the planned operations in DAG order.
    * Empty / undefined for non-dry-run runs.
    */
@@ -51,6 +59,19 @@ export interface ApplyV2Outcome {
    * idempotent reuse for operators.
    */
   readonly reused?: number;
+}
+
+export interface ApplyV2RollbackOutcome {
+  readonly status: "succeeded" | "partial";
+  readonly failures: readonly ApplyV2RollbackFailure[];
+}
+
+export interface ApplyV2RollbackFailure {
+  readonly name: string;
+  readonly providerId: string;
+  readonly handle: ResourceHandle;
+  readonly action: "compensate" | "destroy";
+  readonly message: string;
 }
 
 export interface AppliedResource {
@@ -230,6 +251,7 @@ export async function applyV2(
 
   const outputsByName = new Map<string, JsonObject>();
   const applied: AppliedResource[] = [];
+  const appliedThisRun: AppliedResource[] = [];
   const operationContextByResourceName = buildOperationContextByResourceName(
     operationPlanPreview,
     "apply",
@@ -280,16 +302,22 @@ export async function applyV2(
         ),
       );
       outputsByName.set(name, result.outputs as JsonObject);
-      applied.push({
+      const appliedResource = {
         name,
         providerId: item.provider.id,
         handle: result.handle,
         outputs: result.outputs as JsonObject,
         specFingerprint: fingerprint,
-      });
+      };
+      applied.push(appliedResource);
+      appliedThisRun.push(appliedResource);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await rollback(applied, resourceByName, context);
+      const rollbackOutcome = await rollback(
+        appliedThisRun,
+        resourceByName,
+        context,
+      );
       return {
         applied: [],
         issues: [{
@@ -297,6 +325,7 @@ export async function applyV2(
           message: `apply failed: ${message}`,
         }],
         status: "failed-apply",
+        rollback: rollbackOutcome,
       };
     }
   }
@@ -315,55 +344,83 @@ function planSpaceId(context: PlatformContext): string {
 }
 
 /**
- * Stable hash of `(shape, providerId, name, JSON.stringify(spec))`. Used
- * by the apply pipeline to decide whether a resource has changed since
- * its prior apply. The hash is FNV-1a 32-bit over the canonicalised
- * input string; the only stability requirement is that two equal
- * `(shape, providerId, name, spec)` tuples produce the same fingerprint
- * within a process. Cryptographic strength is not needed.
- *
- * `JSON.stringify` is intentionally not key-sorted: spec authors are
- * expected to keep key order stable across submissions of the same
- * manifest. Two functionally-identical specs that only reorder keys will
- * therefore re-apply on the next run — operators that care can sort
- * before re-submitting. The cost of false negatives here is one extra
- * `provider.apply` call, never correctness.
+ * Stable SHA-256 hash of the canonical `(shape, providerId, name, spec)`
+ * tuple. Object keys are sorted recursively so logically identical specs do
+ * not re-apply just because their JSON property insertion order changed.
  */
 export function computeSpecFingerprint(
   resource: ManifestResource,
   providerId: string,
   resolvedSpec: JsonObject,
 ): string {
-  const seed = `${resource.shape}|${providerId}|${resource.name}|${
-    JSON.stringify(resolvedSpec)
+  return `sha256:${
+    createHash("sha256").update(canonicalJsonStringify({
+      shape: resource.shape,
+      providerId,
+      name: resource.name,
+      spec: resolvedSpec,
+    })).digest("hex")
   }`;
-  // FNV-1a 32-bit
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < seed.length; i++) {
-    hash ^= seed.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
+}
+
+function canonicalJsonStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
   }
-  return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJsonStringify(item)).join(",")}]`;
+  }
+
+  const object = value as Record<string, unknown>;
+  const entries = Object.keys(object)
+    .filter((key) => object[key] !== undefined)
+    .sort()
+    .map((key) =>
+      `${JSON.stringify(key)}:${canonicalJsonStringify(object[key])}`
+    );
+  return `{${entries.join(",")}}`;
 }
 
 async function rollback(
   applied: readonly AppliedResource[],
   resourceByName: ReadonlyMap<string, ResolvedResourceV2>,
   context: PlatformContext,
-): Promise<void> {
+): Promise<ApplyV2RollbackOutcome> {
+  const failures: ApplyV2RollbackFailure[] = [];
   for (const entry of [...applied].reverse()) {
     const item = resourceByName.get(entry.name);
     if (!item) continue;
+    const action = item.provider.compensate ? "compensate" : "destroy";
     try {
       if (item.provider.compensate) {
-        await item.provider.compensate(entry.handle, context);
+        const result = await item.provider.compensate(entry.handle, context);
+        if (!result.ok) {
+          failures.push({
+            name: entry.name,
+            providerId: entry.providerId,
+            handle: entry.handle,
+            action,
+            message: result.note ?? "provider compensation returned ok=false",
+          });
+        }
       } else {
         await item.provider.destroy(entry.handle, context);
       }
-    } catch {
-      // best-effort rollback; surface no further error
+    } catch (error) {
+      failures.push({
+        name: entry.name,
+        providerId: entry.providerId,
+        handle: entry.handle,
+        action,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
+  return {
+    status: failures.length === 0 ? "succeeded" : "partial",
+    failures,
+  };
 }
 
 /**

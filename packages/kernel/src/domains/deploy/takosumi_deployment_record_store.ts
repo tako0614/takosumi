@@ -323,5 +323,5 @@ export function recordsFromAppliedResources(
 }
 
 function naturalKey(tenantId: string, name: string): string {
-  return `${tenantId} ${name}`;
+  return JSON.stringify([tenantId, name]);
 }

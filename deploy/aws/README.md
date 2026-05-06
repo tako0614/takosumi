@@ -18,9 +18,9 @@ operator-owned HTTP gateway and use `AwsHttpGatewayClient`.
 ## Gateway Smoke
 
 ```sh
-TAKOS_PAAS_PLUGIN_LIVE_PROVIDER=aws \
-TAKOS_PAAS_PLUGIN_AWS_GATEWAY_URL=https://operator-gateway.example/aws \
-TAKOS_PAAS_PLUGIN_AWS_GATEWAY_BEARER_TOKEN=replace-me \
+TAKOSUMI_PLUGIN_LIVE_PROVIDER=aws \
+TAKOSUMI_PLUGIN_AWS_GATEWAY_URL=https://operator-gateway.example/aws \
+TAKOSUMI_PLUGIN_AWS_GATEWAY_BEARER_TOKEN=replace-me \
 deno task live-smoke
 ```
 

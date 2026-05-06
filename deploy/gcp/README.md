@@ -18,9 +18,9 @@ operator-owned HTTP gateway and use `GcpHttpGatewayClient`.
 ## Gateway Smoke
 
 ```sh
-TAKOS_PAAS_PLUGIN_LIVE_PROVIDER=gcp \
-TAKOS_PAAS_PLUGIN_GCP_GATEWAY_URL=https://operator-gateway.example/gcp \
-TAKOS_PAAS_PLUGIN_GCP_GATEWAY_BEARER_TOKEN=replace-me \
+TAKOSUMI_PLUGIN_LIVE_PROVIDER=gcp \
+TAKOSUMI_PLUGIN_GCP_GATEWAY_URL=https://operator-gateway.example/gcp \
+TAKOSUMI_PLUGIN_GCP_GATEWAY_BEARER_TOKEN=replace-me \
 deno task live-smoke
 ```
 

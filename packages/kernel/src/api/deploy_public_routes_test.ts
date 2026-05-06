@@ -1216,6 +1216,87 @@ Deno.test("deploy public route recoveryMode inspect returns journal without prov
   assert.equal(applyCount, 0);
 });
 
+Deno.test("deploy public route journal summary stays unfinished until every operation is terminal", async () => {
+  const journal = new InMemoryOperationJournalStore();
+  const metricsResource: ManifestResource = {
+    ...SAMPLE_RESOURCE,
+    name: "metrics",
+    spec: { name: "metrics", region: "local" },
+  };
+  const resources = [SAMPLE_RESOURCE, metricsResource];
+  const preview = buildOperationPlanPreview({
+    resources,
+    planned: resources.map((resource) => ({
+      name: resource.name,
+      shape: resource.shape,
+      providerId: resource.provider,
+      op: "create" as const,
+    })),
+    edges: buildRefDag(resources).edges,
+    spaceId: "space:partial-terminal",
+    deploymentName: "partial-terminal-app",
+  });
+  await appendOperationPlanJournalStages({
+    store: journal,
+    preview,
+    phase: "apply",
+    stages: ["prepare", "pre-commit", "commit"],
+    status: "recorded",
+    createdAt: "2026-05-02T00:00:00.000Z",
+  });
+  const finalizedOperation = preview.operations[0];
+  await journal.append({
+    spaceId: preview.spaceId,
+    deploymentName: preview.deploymentName,
+    operationPlanDigest: preview.operationPlanDigest,
+    journalEntryId: finalizedOperation.idempotencyKey.journalEntryId,
+    operationId: finalizedOperation.operationId,
+    phase: "apply",
+    stage: "finalize",
+    operationKind: finalizedOperation.op,
+    resourceName: finalizedOperation.resourceName,
+    providerId: finalizedOperation.providerId,
+    effect: {
+      kind: "takosumi.test.partial-terminal-finalize@v1",
+      operationId: finalizedOperation.operationId,
+    },
+    status: "succeeded",
+    createdAt: "2026-05-02T00:00:01.000Z",
+  });
+
+  const app = createApp({
+    token: VALID_TOKEN,
+    tenantId: "space:partial-terminal",
+    operationJournalStore: journal,
+  });
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      recoveryMode: "inspect",
+      manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
+        metadata: { name: "partial-terminal-app" },
+        resources,
+      },
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(
+    body.outcome.journal.operationPlanDigest,
+    preview.operationPlanDigest,
+  );
+  assert.equal(body.outcome.journal.latestStage, "finalize");
+  assert.equal(body.outcome.journal.terminal, false);
+});
+
 Deno.test("deploy public route surfaces apply validation failures as 400", async () => {
   const app = createApp({
     token: VALID_TOKEN,
@@ -2136,6 +2217,71 @@ Deno.test("apply persists `failed` status when applyV2 returns failed-apply", as
   const persisted = await recordStore.get("takosumi-deploy", "broken-app");
   assert.ok(persisted);
   assert.equal(persisted!.status, "failed");
+});
+
+Deno.test("failed update apply preserves prior applied resource handles", async () => {
+  const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+  const priorManifest = {
+    apiVersion: "1.0" as const,
+    kind: "Manifest" as const,
+    metadata: { name: "existing-app" },
+    resources: [SAMPLE_RESOURCE],
+  } as unknown as JsonObject;
+  await recordStore.upsert({
+    tenantId: "takosumi-deploy",
+    name: "existing-app",
+    manifest: priorManifest,
+    appliedResources: [{
+      resourceName: "logs",
+      shape: SAMPLE_RESOURCE.shape,
+      providerId: SAMPLE_RESOURCE.provider,
+      handle: "arn:test:existing",
+      outputs: { url: "https://existing.example" },
+      appliedAt: "2026-05-01T00:00:00.000Z",
+      specFingerprint: "sha256:existing",
+    }],
+    status: "applied",
+    now: "2026-05-01T00:00:00.000Z",
+  });
+  const app = createApp({
+    token: VALID_TOKEN,
+    recordStore,
+    applyResources: () =>
+      Promise.resolve({
+        applied: [],
+        issues: [{ path: "$.resources[web]", message: "boom" }],
+        status: "failed-apply",
+      }),
+    now: () => "2026-05-02T00:00:00.000Z",
+  });
+
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
+        metadata: { name: "existing-app" },
+        resources: [{
+          ...SAMPLE_RESOURCE,
+          spec: { name: "logs", region: "us-east-1", upgraded: true },
+        }],
+      },
+    }),
+  });
+
+  assert.equal(response.status, 500);
+  const persisted = await recordStore.get("takosumi-deploy", "existing-app");
+  assert.ok(persisted);
+  assert.equal(persisted.status, "failed");
+  assert.deepEqual(persisted.manifest, priorManifest);
+  assert.equal(persisted.appliedResources.length, 1);
+  assert.equal(persisted.appliedResources[0].handle, "arn:test:existing");
 });
 
 Deno.test("apply does not persist on validation failure", async () => {

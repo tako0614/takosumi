@@ -81,6 +81,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20260430000025_catalog_releases.sql",
     migrationId: "registry.catalog_releases.create",
   },
+  {
+    fileName: "20260430000026_takosumi_deploy_idempotency_locks.sql",
+    migrationId: "deploy.takosumi_deploy_idempotency_locks.create",
+  },
 ];
 
 Deno.test("deploy statement catalog references deployment tables only", () => {

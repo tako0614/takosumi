@@ -380,7 +380,7 @@ function requireRow(
 }
 
 function lockKey(tenantId: string, name: string): string {
-  return `${tenantId} ${name}`;
+  return JSON.stringify([tenantId, name]);
 }
 
 function positiveInteger(value: number | undefined): number | undefined {

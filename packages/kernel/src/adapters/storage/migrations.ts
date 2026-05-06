@@ -576,6 +576,20 @@ export const postgresStorageTableDefinitions:
       indexes: [["tenant_id"], ["created_at"]],
     },
     {
+      name: "takosumi_deploy_idempotency_locks",
+      domain: "deploy",
+      columns: [
+        "tenant_id",
+        "idempotency_key",
+        "owner_token",
+        "locked_until",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["tenant_id", "idempotency_key"],
+      indexes: [["locked_until"]],
+    },
+    {
       name: "takosumi_deploy_locks",
       domain: "deploy",
       columns: [
@@ -1438,5 +1452,26 @@ drop table if exists registry_catalog_releases;
 drop index if exists registry_catalog_publisher_keys_status_idx;
 drop index if exists registry_catalog_publisher_keys_publisher_idx;
 drop table if exists registry_catalog_publisher_keys;`,
+    },
+    {
+      id: "deploy.takosumi_deploy_idempotency_locks.create",
+      version: 26,
+      domain: "deploy",
+      description:
+        "Persist public deploy idempotency lease locks so same idempotency keys are fenced across kernel pods.",
+      sql: `create table if not exists takosumi_deploy_idempotency_locks (
+  tenant_id       text        not null,
+  idempotency_key text        not null,
+  owner_token     text        not null,
+  locked_until    timestamptz not null,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  primary key (tenant_id, idempotency_key)
+);
+create index if not exists takosumi_deploy_idempotency_locks_locked_until_idx
+  on takosumi_deploy_idempotency_locks (locked_until);`,
+      down:
+        `drop index if exists takosumi_deploy_idempotency_locks_locked_until_idx;
+drop table if exists takosumi_deploy_idempotency_locks;`,
     },
   ]);

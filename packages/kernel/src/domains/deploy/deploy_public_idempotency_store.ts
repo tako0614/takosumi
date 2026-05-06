@@ -99,5 +99,5 @@ export class InMemoryDeployPublicIdempotencyStore
 }
 
 function naturalKey(tenantId: string, key: string): string {
-  return `${tenantId} ${key}`;
+  return JSON.stringify([tenantId, key]);
 }

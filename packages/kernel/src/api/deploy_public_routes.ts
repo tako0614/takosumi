@@ -663,13 +663,14 @@ export function registerDeployPublicRoutes(
           return { status: 400, body: { status: "error", outcome } };
         }
         if (outcome.status === "failed-apply") {
+          const failedStamp = now();
           await recordStore.upsert({
             tenantId,
             name: deploymentName,
-            manifest: manifestObject,
-            appliedResources: [],
+            manifest: prior?.manifest ?? manifestObject,
+            appliedResources: prior?.appliedResources ?? [],
             status: "failed",
-            now: now(),
+            now: failedStamp,
           });
           await appendOperationPlanJournalStages({
             store: operationJournalStore,
@@ -1765,9 +1766,43 @@ function summarizeLatestJournal(
     entryCount: samePlan.length,
     failedEntryCount: samePlan.filter((entry) => entry.status === "failed")
       .length,
-    terminal: isTerminalJournalStage(latestStageEntry.stage),
+    terminal: summarizeJournalTerminal(samePlan),
     updatedAt: latestStageEntry.createdAt,
   };
+}
+
+function summarizeJournalTerminal(
+  entries: readonly OperationJournalEntry[],
+): boolean {
+  const latestByOperation = latestJournalEntriesByOperation(entries);
+  const first = latestByOperation[0];
+  if (!first || !isTerminalJournalStage(first.stage)) return false;
+  return latestByOperation.every((entry) => entry.stage === first.stage);
+}
+
+function latestJournalEntriesByOperation(
+  entries: readonly OperationJournalEntry[],
+): readonly OperationJournalEntry[] {
+  const byOperation = new Map<string, OperationJournalEntry>();
+  for (const entry of entries) {
+    const existing = byOperation.get(entry.operationId);
+    if (
+      !existing ||
+      compareJournalStageProgress(existing, entry) < 0
+    ) {
+      byOperation.set(entry.operationId, entry);
+    }
+  }
+  return [...byOperation.values()];
+}
+
+function compareJournalStageProgress(
+  left: OperationJournalEntry,
+  right: OperationJournalEntry,
+): number {
+  return journalStageRank(left.stage) - journalStageRank(right.stage) ||
+    left.createdAt.localeCompare(right.createdAt) ||
+    left.journalEntryId.localeCompare(right.journalEntryId);
 }
 
 function toJournalEntrySummary(

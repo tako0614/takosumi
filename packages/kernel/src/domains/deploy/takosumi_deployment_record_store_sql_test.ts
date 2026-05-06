@@ -633,6 +633,26 @@ Deno.test(
 );
 
 Deno.test(
+  "SqlStore.acquireLock keys tenant and deployment name as a tuple locally",
+  async () => {
+    const { store, client } = createStore();
+    await store.acquireLock("tenant a", "app");
+    const second = store.acquireLock("tenant", "a app");
+    const acquired = await resolvesWithin(second, 20);
+
+    assert.equal(
+      acquired,
+      true,
+      "tuple-distinct deployment locks must not collide locally",
+    );
+    assert.equal(client.locks.length, 2);
+    await store.releaseLock("tenant", "a app");
+    await store.releaseLock("tenant a", "app");
+    assert.equal(client.locks.length, 0);
+  },
+);
+
+Deno.test(
   "SqlStore.releaseLock without prior acquire is a no-op",
   async () => {
     const { store } = createStore();
@@ -687,6 +707,19 @@ Deno.test(
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolvesWithin(
+  promise: Promise<unknown>,
+  ms: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  return Promise.race([promise.then(() => true), timeout]).finally(() => {
+    clearTimeout(timer);
+  });
 }
 
 // --- Round-trip CRUD --------------------------------------------------------

@@ -58,6 +58,30 @@ Deno.test("upsert updates the same row when natural key matches", async () => {
   assert.equal(second.appliedResources[0].handle, "h_1");
 });
 
+Deno.test("upsert keys tenant and deployment name as a tuple", async () => {
+  const store = new InMemoryTakosumiDeploymentRecordStore();
+  const first = await store.upsert({
+    tenantId: "tenant a",
+    name: "app",
+    manifest: { name: "first" },
+    appliedResources: [],
+    status: "applied",
+    now: NOW_1,
+  });
+  const second = await store.upsert({
+    tenantId: "tenant",
+    name: "a app",
+    manifest: { name: "second" },
+    appliedResources: [],
+    status: "applied",
+    now: NOW_2,
+  });
+
+  assert.notEqual(second.id, first.id);
+  assert.equal((await store.get("tenant a", "app"))?.manifest.name, "first");
+  assert.equal((await store.get("tenant", "a app"))?.manifest.name, "second");
+});
+
 Deno.test("get returns undefined for missing rows", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   const missing = await store.get(TENANT, "nope");

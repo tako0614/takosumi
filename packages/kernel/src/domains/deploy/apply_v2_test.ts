@@ -19,6 +19,8 @@ const SHAPE = "test-apply-shape";
 const PROV_OK = "test-apply-provider-ok";
 const PROV_FAIL = "test-apply-provider-fail";
 const PROV_COMPENSATE = "test-apply-provider-compensate";
+const PROV_DESTROY_FAIL = "test-apply-provider-destroy-fail";
+const PROV_COMPENSATE_FAIL = "test-apply-provider-compensate-fail";
 
 interface AppliedRecord {
   readonly name: string;
@@ -80,12 +82,33 @@ function provider(id: string, behavior: "ok" | "fail"): ProviderPlugin {
   };
 }
 
+function destroyFailingProvider(): ProviderPlugin {
+  return {
+    ...provider(PROV_DESTROY_FAIL, "ok"),
+    destroy(_handle, _ctx) {
+      return Promise.reject(new Error("destroy-failed"));
+    },
+  };
+}
+
 function compensatingProvider(): ProviderPlugin {
   return {
     ...provider(PROV_COMPENSATE, "ok"),
     compensate(handle, _ctx) {
       compensateLog.push(handle);
       return Promise.resolve({ ok: true });
+    },
+  };
+}
+
+function compensateFailingProvider(): ProviderPlugin {
+  return {
+    ...provider(PROV_COMPENSATE_FAIL, "ok"),
+    compensate(_handle, _ctx) {
+      return Promise.resolve({
+        ok: false,
+        note: "compensate-failed",
+      });
     },
   };
 }
@@ -106,6 +129,8 @@ function tearDown() {
   unregisterProvider(PROV_OK);
   unregisterProvider(PROV_FAIL);
   unregisterProvider(PROV_COMPENSATE);
+  unregisterProvider(PROV_DESTROY_FAIL);
+  unregisterProvider(PROV_COMPENSATE_FAIL);
 }
 
 const ctx = {} as PlatformContext;
@@ -186,6 +211,36 @@ Deno.test("applyV2 rolls back applied resources on apply failure", async () => {
     const result = await applyV2({ resources, context: ctx });
     assert.equal(result.status, "failed-apply");
     assert.equal(destroyLog.length, 1, "rollback destroys first only");
+    assert.equal(result.rollback?.status, "succeeded");
+    assert.deepEqual(result.rollback?.failures, []);
+  } finally {
+    tearDown();
+  }
+});
+
+Deno.test("applyV2 surfaces rollback destroy failures after apply failure", async () => {
+  setUp("fail");
+  registerProvider(destroyFailingProvider(), { allowOverride: true });
+  try {
+    const resources: ManifestResource[] = [
+      {
+        shape: `${SHAPE}@v1`,
+        name: "first",
+        provider: PROV_DESTROY_FAIL,
+        spec: {},
+      },
+      { shape: `${SHAPE}@v1`, name: "second", provider: PROV_FAIL, spec: {} },
+    ];
+    const result = await applyV2({ resources, context: ctx });
+    assert.equal(result.status, "failed-apply");
+    assert.equal(result.rollback?.status, "partial");
+    assert.deepEqual(result.rollback?.failures, [{
+      name: "first",
+      providerId: PROV_DESTROY_FAIL,
+      handle: "h-test-apply-provider-destroy-fail-0",
+      action: "destroy",
+      message: "destroy-failed",
+    }]);
   } finally {
     tearDown();
   }
@@ -208,6 +263,34 @@ Deno.test("applyV2 uses provider compensate hook during rollback when available"
     assert.equal(result.status, "failed-apply");
     assert.equal(compensateLog.length, 1);
     assert.equal(destroyLog.length, 0);
+  } finally {
+    tearDown();
+  }
+});
+
+Deno.test("applyV2 surfaces compensation failures after apply failure", async () => {
+  setUp("fail");
+  registerProvider(compensateFailingProvider(), { allowOverride: true });
+  try {
+    const resources: ManifestResource[] = [
+      {
+        shape: `${SHAPE}@v1`,
+        name: "first",
+        provider: PROV_COMPENSATE_FAIL,
+        spec: {},
+      },
+      { shape: `${SHAPE}@v1`, name: "second", provider: PROV_FAIL, spec: {} },
+    ];
+    const result = await applyV2({ resources, context: ctx });
+    assert.equal(result.status, "failed-apply");
+    assert.equal(result.rollback?.status, "partial");
+    assert.deepEqual(result.rollback?.failures, [{
+      name: "first",
+      providerId: PROV_COMPENSATE_FAIL,
+      handle: "h-test-apply-provider-compensate-fail-0",
+      action: "compensate",
+      message: "compensate-failed",
+    }]);
   } finally {
     tearDown();
   }
