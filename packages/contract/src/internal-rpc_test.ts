@@ -4,6 +4,7 @@ import {
   encodeActorContext,
   EnvTakosumiServiceDirectory,
   signTakosumiInternalRequest,
+  TAKOSUMI_CORRELATION_ID_HEADER,
   TAKOSUMI_INTERNAL_AUDIENCE_HEADER,
   TAKOSUMI_INTERNAL_BODY_DIGEST_HEADER,
   TAKOSUMI_INTERNAL_CALLER_HEADER,
@@ -13,8 +14,11 @@ import {
   TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
   TAKOSUMI_INTERNAL_RPC_VERSION,
   TAKOSUMI_INTERNAL_SIGNATURE_HEADER,
+  TAKOSUMI_REQUEST_ID_HEADER,
+  TAKOSUMI_TRACEPARENT_HEADER,
   type TakosumiActorContext,
   TakosumiInternalClient,
+  type TakosumiInternalTraceSpanEvent,
   verifyTakosumiInternalRequestFromHeaders,
 } from "./internal-rpc.ts";
 
@@ -234,6 +238,62 @@ Deno.test("TakosumiInternalClient signs routed service requests", async () => {
     calls[0].headers.get(TAKOSUMI_INTERNAL_CAPABILITIES_HEADER),
     "ref.resolve",
   );
+});
+
+Deno.test("TakosumiInternalClient propagates trace context and records client spans", async () => {
+  const calls: Request[] = [];
+  const spans: TakosumiInternalTraceSpanEvent[] = [];
+  const client = new TakosumiInternalClient({
+    caller: "caller-app",
+    audience: "audience-git",
+    baseUrl: "https://git.internal",
+    secret: "test-secret",
+    clock: () => new Date("2026-05-01T00:00:00.000Z"),
+    spanIdFactory: () => "2222222222222222",
+    traceSink: {
+      recordTrace(event) {
+        spans.push(event);
+        return Promise.resolve(event);
+      },
+    },
+    fetch: (input, init) => {
+      calls.push(new Request(input, init));
+      return Promise.resolve(Response.json({ ok: true }));
+    },
+  });
+
+  await client.request({
+    method: "POST",
+    path: "/internal/source/resolve",
+    body: "{}",
+    actor,
+    trace: {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      parentSpanId: "1111111111111111",
+      correlationId: "corr_internal",
+    },
+  });
+
+  assert.equal(
+    calls[0].headers.get(TAKOSUMI_TRACEPARENT_HEADER),
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-2222222222222222-01",
+  );
+  assert.equal(
+    calls[0].headers.get(TAKOSUMI_REQUEST_ID_HEADER),
+    "req_internal",
+  );
+  assert.equal(
+    calls[0].headers.get(TAKOSUMI_CORRELATION_ID_HEADER),
+    "corr_internal",
+  );
+  assert.equal(spans.length, 1);
+  assert.equal(spans[0].name, "takosumi.internal_rpc.client");
+  assert.equal(spans[0].kind, "client");
+  assert.equal(spans[0].traceId, "4bf92f3577b34da6a3ce929d0e0e4736");
+  assert.equal(spans[0].parentSpanId, "1111111111111111");
+  assert.equal(spans[0].requestId, "req_internal");
+  assert.equal(spans[0].correlationId, "corr_internal");
+  assert.equal(spans[0].attributes?.["http.response.status_code"], 200);
 });
 
 Deno.test("EnvTakosumiServiceDirectory resolves operator-namespaced env URLs", () => {

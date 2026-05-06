@@ -10,6 +10,7 @@ import {
   InMemoryRuntimeAgentRegistry,
   RuntimeAgentGatewayManifestIssuer,
   type RuntimeAgentRegistry,
+  type TraceSpanEvent,
 } from "takosumi-contract";
 import {
   registerRuntimeAgentRoutes,
@@ -28,6 +29,10 @@ import {
   RuntimeAgentLoop,
   type RuntimeAgentLoopEvent,
 } from "./loop.ts";
+import type {
+  RuntimeAgentTraceContext,
+  RuntimeAgentTraceSink,
+} from "./tracing.ts";
 
 const SECRET = "agent-test-secret";
 const ACTOR: TakosumiActorContext = {
@@ -273,6 +278,123 @@ Deno.test("RuntimeAgentHttpClient throws RuntimeAgentRpcError on failure status"
       assert.equal(error.status, 401);
       return true;
     },
+  );
+});
+
+Deno.test("RuntimeAgentHttpClient propagates trace context and records RPC spans", async () => {
+  const spans: TraceSpanEvent[] = [];
+  const requests: Request[] = [];
+  const setup = await setupHarness({
+    providerKind: "aws",
+    agentId: "agent_trace_rpc",
+    trace: {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      parentSpanId: "1111111111111111",
+      correlationId: "corr_runtime_agent",
+    },
+    traceSink: {
+      recordTrace(event) {
+        spans.push(event);
+        return Promise.resolve(event);
+      },
+    },
+    spanIdFactory: sequence([
+      "2222222222222222",
+      "3333333333333333",
+    ]),
+    onRequest: (request) => requests.push(request),
+  });
+
+  await setup.client.loadGatewayManifest();
+  await setup.client.heartbeat({ agentId: "agent_trace_rpc" });
+
+  const manifestRequest = requests.find((request) =>
+    request.url.includes("gateway-manifest")
+  );
+  const heartbeatRequest = requests.find((request) =>
+    request.url.includes("heartbeat")
+  );
+  assert.equal(
+    manifestRequest?.headers.get("traceparent"),
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-2222222222222222-01",
+  );
+  assert.equal(
+    heartbeatRequest?.headers.get("traceparent"),
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-3333333333333333-01",
+  );
+  assert.equal(heartbeatRequest?.headers.get("x-request-id"), "req_test");
+  assert.equal(
+    heartbeatRequest?.headers.get("x-correlation-id"),
+    "corr_runtime_agent",
+  );
+
+  assert.deepEqual(spans.map((span) => span.name), [
+    "takosumi.runtime_agent.rpc.gateway_manifest",
+    "takosumi.runtime_agent.rpc.heartbeat",
+  ]);
+  assert.equal(spans[0].parentSpanId, "1111111111111111");
+  assert.equal(spans[1].attributes?.["http.response.status_code"], 200);
+  assert.equal(
+    spans[1].attributes?.["takosumi.runtime_agent.rpc"],
+    "heartbeat",
+  );
+});
+
+Deno.test("RuntimeAgentLoop records work execution trace spans", async () => {
+  const setup = await setupHarness({
+    providerKind: "aws",
+    agentId: "agent_trace_loop",
+  });
+  await setup.registry.enqueueWork({
+    workId: "work_trace_loop",
+    kind: "provider.aws.rds.create",
+    provider: "aws",
+    payload: {},
+  });
+  const spans: TraceSpanEvent[] = [];
+  const loop = new RuntimeAgentLoop({
+    client: setup.client,
+    agentId: "agent_trace_loop",
+    provider: "aws",
+    capabilities: { providers: ["aws"] },
+    executors: {
+      "provider.aws.rds.create": () =>
+        Promise.resolve({ status: "completed", result: { ok: true } }),
+    },
+    trace: {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      parentSpanId: "aaaaaaaaaaaaaaaa",
+      requestId: "req_loop",
+      correlationId: "corr_loop",
+    },
+    traceSink: {
+      recordTrace(event) {
+        spans.push(event);
+        return Promise.resolve(event);
+      },
+    },
+    spanIdFactory: sequence(["bbbbbbbbbbbbbbbb"]),
+  });
+
+  await loop.enroll();
+  await loop.runOnce();
+
+  assert.equal(spans.length, 1);
+  const span = spans[0];
+  assert.equal(span.name, "takosumi.runtime_agent.execute");
+  assert.equal(span.traceId, "4bf92f3577b34da6a3ce929d0e0e4736");
+  assert.equal(span.spanId, "bbbbbbbbbbbbbbbb");
+  assert.equal(span.parentSpanId, "aaaaaaaaaaaaaaaa");
+  assert.equal(span.requestId, "req_loop");
+  assert.equal(span.correlationId, "corr_loop");
+  assert.equal(span.status, "ok");
+  assert.equal(
+    span.attributes?.["takosumi.runtime_agent.work_id"],
+    "work_trace_loop",
+  );
+  assert.equal(
+    span.attributes?.["takosumi.runtime_agent.outcome"],
+    "completed",
   );
 });
 
@@ -642,6 +764,10 @@ interface SetupHarnessOptions {
   readonly tlsPubkeySha256?: string;
   readonly maxResponseClockSkewMs?: number;
   readonly allowedGatewayUrls?: readonly string[];
+  readonly trace?: RuntimeAgentTraceContext;
+  readonly traceSink?: RuntimeAgentTraceSink;
+  readonly spanIdFactory?: () => string;
+  readonly onRequest?: (request: Request) => void;
 }
 
 async function setupHarness(
@@ -705,6 +831,8 @@ async function setupHarness(
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
+    const request = new Request(input, init);
+    options.onRequest?.(request);
     const url = typeof input === "string"
       ? input
       : input instanceof URL
@@ -724,6 +852,9 @@ async function setupHarness(
     fetch,
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     maxResponseClockSkewMs: options.maxResponseClockSkewMs,
+    trace: options.trace,
+    traceSink: options.traceSink,
+    spanIdFactory: options.spanIdFactory,
   });
   return {
     registry,
@@ -750,6 +881,11 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function sequence(values: readonly string[]): () => string {
+  let index = 0;
+  return () => values[index++] ?? values.at(-1) ?? "0000000000000001";
 }
 
 // Ensure the routes constant is reachable so this test file remains tied to

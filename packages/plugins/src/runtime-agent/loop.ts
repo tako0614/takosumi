@@ -19,6 +19,12 @@ import type {
   RuntimeAgentWorkPayload,
 } from "takosumi-contract";
 import type { RuntimeAgentHttpClient } from "./client.ts";
+import {
+  createRuntimeAgentTraceContext,
+  type RuntimeAgentTraceContext,
+  type RuntimeAgentTraceSink,
+  withRuntimeAgentTraceSpan,
+} from "./tracing.ts";
 
 /**
  * Outcome of executing a leased work item. The loop translates this into the
@@ -35,6 +41,7 @@ export type RuntimeAgentExecutionOutcome =
 
 export interface RuntimeAgentExecutionContext {
   readonly lease: RuntimeAgentWorkLease;
+  readonly trace?: RuntimeAgentTraceContext;
   /** Sends a `progress` report and (optionally) extends the lease. */
   reportProgress(input: {
     readonly progress?: JsonObject;
@@ -68,6 +75,12 @@ export interface RuntimeAgentLoopOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   /** Telemetry sink. */
   readonly telemetry?: RuntimeAgentLoopTelemetry;
+  /** Trace context and sink for runtime-agent loop spans. */
+  readonly trace?: RuntimeAgentTraceContext;
+  readonly traceSink?: RuntimeAgentTraceSink;
+  readonly traceIdFactory?: () => string;
+  readonly spanIdFactory?: () => string;
+  readonly warn?: (message: string) => void;
 }
 
 export interface RuntimeAgentLoopTelemetry {
@@ -101,13 +114,25 @@ export class RuntimeAgentLoop {
     & Required<
       Omit<
         RuntimeAgentLoopOptions,
-        "telemetry" | "hostKeyDigest" | "defaultExecutor"
+        | "telemetry"
+        | "hostKeyDigest"
+        | "defaultExecutor"
+        | "trace"
+        | "traceSink"
+        | "traceIdFactory"
+        | "spanIdFactory"
+        | "warn"
       >
     >
     & {
       readonly hostKeyDigest?: string;
       readonly defaultExecutor: RuntimeAgentExecutor;
       readonly telemetry?: RuntimeAgentLoopTelemetry;
+      readonly trace: RuntimeAgentTraceContext;
+      readonly traceSink?: RuntimeAgentTraceSink;
+      readonly traceIdFactory?: () => string;
+      readonly spanIdFactory?: () => string;
+      readonly warn?: (message: string) => void;
     };
   #lastHeartbeat = 0;
 
@@ -127,6 +152,14 @@ export class RuntimeAgentLoop {
       sleep: options.sleep ??
         ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
       telemetry: options.telemetry,
+      trace: createRuntimeAgentTraceContext(
+        options.trace ?? options.client.traceContext,
+        { traceIdFactory: options.traceIdFactory },
+      ),
+      traceSink: options.traceSink,
+      traceIdFactory: options.traceIdFactory,
+      spanIdFactory: options.spanIdFactory,
+      warn: options.warn,
     };
   }
 
@@ -222,53 +255,105 @@ export class RuntimeAgentLoop {
     signal: AbortSignal,
   ): Promise<void> {
     this.#emit({ kind: "leased", lease });
-    const executor = this.#options.executors[lease.work.kind] ??
-      this.#options.defaultExecutor;
-    const reportProgress: RuntimeAgentExecutionContext["reportProgress"] =
-      async (input) => {
-        await this.#options.client.report({
-          agentId: this.#options.agentId,
-          leaseId: lease.id,
-          status: "progress",
-          progress: input.progress,
-          extendUntil: input.extendUntil,
-          reportedAt: this.#options.clock().toISOString(),
+    const trace = traceFromWorkMetadata(lease.work.metadata) ??
+      this.#options.trace;
+    await withRuntimeAgentTraceSpan<RuntimeAgentExecutionOutcome>(
+      this.#traceOptions(),
+      {
+        name: "takosumi.runtime_agent.execute",
+        kind: "internal",
+        trace,
+        attributes: {
+          "takosumi.runtime_agent.agent_id": this.#options.agentId,
+          "takosumi.runtime_agent.provider": this.#options.provider,
+          "takosumi.runtime_agent.lease_id": lease.id,
+          "takosumi.runtime_agent.work_id": lease.workId,
+          "takosumi.runtime_agent.work_kind": lease.work.kind,
+          "takosumi.runtime_agent.work_provider": lease.work.provider,
+          "takosumi.runtime_agent.work_attempts": lease.work.attempts,
+        },
+        statusForResult: (outcome) =>
+          outcome.status === "completed" ? "ok" : "error",
+        statusMessageForResult: (outcome) =>
+          outcome.status === "failed" ? outcome.reason : undefined,
+        resultAttributes: (outcome) => ({
+          "takosumi.runtime_agent.outcome": outcome.status,
+          "takosumi.runtime_agent.retry": outcome.status === "failed"
+            ? outcome.retry
+            : undefined,
+        }),
+      },
+      async (span) => {
+        const executor = this.#options.executors[lease.work.kind] ??
+          this.#options.defaultExecutor;
+        const childTrace = createRuntimeAgentTraceContext({
+          ...span.trace,
+          parentSpanId: span.spanId,
         });
-      };
-    let outcome: RuntimeAgentExecutionOutcome;
-    try {
-      outcome = await executor({ lease, reportProgress, signal });
-    } catch (error) {
-      outcome = {
-        status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
-        retry: false,
-      };
-    }
-    this.#emit({ kind: "executed", outcome });
-    if (outcome.status === "completed") {
-      await this.#options.client.report({
-        agentId: this.#options.agentId,
-        leaseId: lease.id,
-        status: "completed",
-        completedAt: this.#options.clock().toISOString(),
-        result: outcome.result,
-      });
-    } else {
-      await this.#options.client.report({
-        agentId: this.#options.agentId,
-        leaseId: lease.id,
-        status: "failed",
-        reason: outcome.reason,
-        retry: outcome.retry,
-        failedAt: this.#options.clock().toISOString(),
-        result: outcome.result,
-      });
-    }
+        const reportProgress: RuntimeAgentExecutionContext["reportProgress"] =
+          async (input) => {
+            await this.#options.client.report({
+              agentId: this.#options.agentId,
+              leaseId: lease.id,
+              status: "progress",
+              progress: input.progress,
+              extendUntil: input.extendUntil,
+              reportedAt: this.#options.clock().toISOString(),
+            });
+          };
+        let outcome: RuntimeAgentExecutionOutcome;
+        try {
+          outcome = await executor({
+            lease,
+            reportProgress,
+            signal,
+            trace: childTrace,
+          });
+        } catch (error) {
+          outcome = {
+            status: "failed",
+            reason: error instanceof Error ? error.message : String(error),
+            retry: false,
+          };
+        }
+        this.#emit({ kind: "executed", outcome });
+        if (outcome.status === "completed") {
+          await this.#options.client.report({
+            agentId: this.#options.agentId,
+            leaseId: lease.id,
+            status: "completed",
+            completedAt: this.#options.clock().toISOString(),
+            result: outcome.result,
+          });
+        } else {
+          await this.#options.client.report({
+            agentId: this.#options.agentId,
+            leaseId: lease.id,
+            status: "failed",
+            reason: outcome.reason,
+            retry: outcome.retry,
+            failedAt: this.#options.clock().toISOString(),
+            result: outcome.result,
+          });
+        }
+        return outcome;
+      },
+    );
   }
 
   #emit(event: RuntimeAgentLoopEvent): void {
     this.#options.telemetry?.onEvent?.(event);
+  }
+
+  #traceOptions() {
+    return {
+      trace: this.#options.trace,
+      traceSink: this.#options.traceSink,
+      now: () => this.#options.clock().toISOString(),
+      traceIdFactory: this.#options.traceIdFactory,
+      spanIdFactory: this.#options.spanIdFactory,
+      warn: this.#options.warn,
+    };
   }
 }
 
@@ -321,6 +406,31 @@ function shouldRetryError(error: unknown): boolean {
     (httpStatus === 429 || httpStatus === 503 || httpStatus === 504)
   ) return true;
   return false;
+}
+
+function traceFromWorkMetadata(
+  metadata: JsonObject,
+): RuntimeAgentTraceContext | undefined {
+  const traceId = stringMetadata(metadata, "takosumi.trace_id") ??
+    stringMetadata(metadata, "traceId");
+  if (!traceId) return undefined;
+  return createRuntimeAgentTraceContext({
+    traceId,
+    parentSpanId: stringMetadata(metadata, "takosumi.parent_span_id") ??
+      stringMetadata(metadata, "parentSpanId"),
+    requestId: stringMetadata(metadata, "takosumi.request_id") ??
+      stringMetadata(metadata, "requestId"),
+    correlationId: stringMetadata(metadata, "takosumi.correlation_id") ??
+      stringMetadata(metadata, "correlationId"),
+  });
+}
+
+function stringMetadata(
+  metadata: JsonObject,
+  key: string,
+): string | undefined {
+  const value = metadata[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 export type { RuntimeAgentLeaseResponse, RuntimeAgentWorkLease };

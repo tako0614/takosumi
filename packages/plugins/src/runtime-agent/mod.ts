@@ -9,3 +9,4 @@
 export * from "./client.ts";
 export * from "./loop.ts";
 export * from "./handoff.ts";
+export * from "./tracing.ts";

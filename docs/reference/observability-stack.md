@@ -14,25 +14,25 @@ defines the SLI / SLO targets that bundled dashboards and alert policies use.
 ::: info Current implementation status The kernel currently exports readiness
 probes, audit events, JSON HTTP request logs, Prometheus metrics, native OTLP
 metric push, SLA breach events, and the bundled deploy Grafana dashboard. Native
-OTLP HTTP server spans and WAL-backed provider operation spans are implemented;
-runtime-agent loop / internal RPC worker traces remain a target contract.
-Operators can correlate HTTP logs, traces, metrics, audit events, and deploy
-records through `requestId`, `correlationId`, `spaceId`, `groupId`, and
-deployment identifiers. :::
+OTLP HTTP server spans, WAL-backed provider operation spans, runtime-agent loop
+spans, and internal RPC client spans are implemented. Operators can correlate
+HTTP logs, traces, metrics, audit events, and deploy records through
+`requestId`, `correlationId`, `spaceId`, `groupId`, and deployment identifiers.
+:::
 
 ## Ownership Decision
 
 Takosumi kernel owns the **shape and emission** of signals:
 
-| Signal               | Kernel responsibility                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------- |
-| Readiness            | `/livez`, `/readyz`, `/status/summary` semantics and response shape                   |
-| Metrics              | v1 metric names, labels, units, `/metrics`, and OTLP metric export                    |
-| Traces               | HTTP server span emission, `traceparent` propagation, and OTLP trace export           |
-| Logs                 | HTTP request id propagation, JSON request log envelope, and redaction rules           |
-| Audit                | tamper-evident audit event chain, retention policy hooks, and replication primitives  |
-| SLA breach detection | threshold evaluation, state transitions, audit / outbox / notification signal publish |
-| Dashboard artifact   | versioned Grafana JSON under `deploy/observability/grafana/`                          |
+| Signal               | Kernel responsibility                                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Readiness            | `/livez`, `/readyz`, `/status/summary` semantics and response shape                                                   |
+| Metrics              | v1 metric names, labels, units, `/metrics`, and OTLP metric export                                                    |
+| Traces               | HTTP server / provider / runtime-agent / internal RPC span emission, `traceparent` propagation, and OTLP trace export |
+| Logs                 | HTTP request id propagation, JSON request log envelope, and redaction rules                                           |
+| Audit                | tamper-evident audit event chain, retention policy hooks, and replication primitives                                  |
+| SLA breach detection | threshold evaluation, state transitions, audit / outbox / notification signal publish                                 |
+| Dashboard artifact   | versioned Grafana JSON under `deploy/observability/grafana/`                                                          |
 
 Takosumi kernel does **not** own the operator's collector, long-term backend,
 paging provider, public status page, incident comms, or commercial SLA credit

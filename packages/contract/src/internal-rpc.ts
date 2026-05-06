@@ -16,6 +16,9 @@ export const TAKOSUMI_INTERNAL_CALLER_HEADER = "x-takosumi-caller";
 export const TAKOSUMI_INTERNAL_AUDIENCE_HEADER = "x-takosumi-audience";
 export const TAKOSUMI_INTERNAL_CAPABILITIES_HEADER = "x-takosumi-capabilities";
 export const TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS = 5 * 60 * 1000;
+export const TAKOSUMI_TRACEPARENT_HEADER = "traceparent";
+export const TAKOSUMI_REQUEST_ID_HEADER = "x-request-id";
+export const TAKOSUMI_CORRELATION_ID_HEADER = "x-correlation-id";
 
 export type TakosumiActorContext = ActorContext;
 
@@ -117,6 +120,44 @@ export interface TakosumiInternalClientOptions {
   readonly secret: string;
   readonly fetch?: typeof fetch;
   readonly clock?: () => Date;
+  readonly traceSink?: TakosumiInternalTraceSink;
+  readonly traceIdFactory?: () => string;
+  readonly spanIdFactory?: () => string;
+  readonly warn?: (message: string) => void;
+}
+
+export type TakosumiInternalTraceSpanKind =
+  | "internal"
+  | "server"
+  | "client"
+  | "producer"
+  | "consumer";
+export type TakosumiInternalTraceSpanStatus = "unset" | "ok" | "error";
+
+export interface TakosumiInternalTraceContext {
+  readonly traceId: string;
+  readonly parentSpanId?: string;
+  readonly correlationId?: string;
+}
+
+export interface TakosumiInternalTraceSpanEvent {
+  readonly id: string;
+  readonly traceId: string;
+  readonly spanId: string;
+  readonly parentSpanId?: string;
+  readonly name: string;
+  readonly kind: TakosumiInternalTraceSpanKind;
+  readonly status: TakosumiInternalTraceSpanStatus;
+  readonly statusMessage?: string;
+  readonly startTime: string;
+  readonly endTime: string;
+  readonly attributes?: Record<string, string | number | boolean>;
+  readonly requestId?: string;
+  readonly correlationId?: string;
+}
+
+export interface TakosumiInternalTraceSink {
+  recordTrace(event: TakosumiInternalTraceSpanEvent): Promise<unknown>;
 }
 
 export class TakosumiInternalClient {
@@ -126,6 +167,10 @@ export class TakosumiInternalClient {
   readonly #secret: string;
   readonly #fetch: typeof fetch;
   readonly #clock: () => Date;
+  readonly #traceSink?: TakosumiInternalTraceSink;
+  readonly #traceIdFactory?: () => string;
+  readonly #spanIdFactory?: () => string;
+  readonly #warn?: (message: string) => void;
 
   constructor(options: TakosumiInternalClientOptions) {
     this.#caller = options.caller;
@@ -134,6 +179,10 @@ export class TakosumiInternalClient {
     this.#secret = options.secret;
     this.#fetch = options.fetch ?? fetch;
     this.#clock = options.clock ?? (() => new Date());
+    this.#traceSink = options.traceSink;
+    this.#traceIdFactory = options.traceIdFactory;
+    this.#spanIdFactory = options.spanIdFactory;
+    this.#warn = options.warn;
   }
 
   async request(input: {
@@ -144,41 +193,238 @@ export class TakosumiInternalClient {
     readonly actor: TakosumiActorContext;
     readonly capabilities?: readonly string[];
     readonly headers?: HeadersInit;
+    readonly trace?: TakosumiInternalTraceContext;
   }): Promise<Response> {
     const body = input.body ?? "";
     const url = new URL(input.path, this.#baseUrl);
     if (input.search) url.search = input.search;
-    const signed = await signTakosumiInternalRequest({
-      method: input.method,
-      path: input.path,
-      query: url.search,
-      body,
-      actor: input.actor,
-      caller: this.#caller,
-      audience: this.#audience,
-      capabilities: input.capabilities,
-      timestamp: this.#clock().toISOString(),
-      secret: this.#secret,
-    });
-    const headers = new Headers(input.headers);
-    for (const [key, value] of Object.entries(signed.headers)) {
-      headers.set(key, value);
-    }
-    if (
-      typeof body === "string" && body.length > 0 &&
-      !headers.has("content-type")
-    ) {
-      headers.set("content-type", "application/json");
-    }
-    const fetchBody = typeof body === "string"
-      ? body
-      : bytesToArrayBuffer(body);
-    return await this.#fetch(url, {
-      method: input.method,
-      headers,
-      body: body.length > 0 ? fetchBody : undefined,
-    });
+    let httpStatus: number | undefined;
+    const trace = createTakosumiInternalTraceContext(
+      {
+        traceId: input.trace?.traceId ?? input.actor.traceId,
+        parentSpanId: input.trace?.parentSpanId,
+        correlationId: input.trace?.correlationId ?? input.actor.requestId,
+      },
+      { traceIdFactory: this.#traceIdFactory },
+    );
+    return await withTakosumiInternalTraceSpan(
+      {
+        trace,
+        requestId: input.actor.requestId,
+        traceSink: this.#traceSink,
+        now: () => this.#clock().toISOString(),
+        traceIdFactory: this.#traceIdFactory,
+        spanIdFactory: this.#spanIdFactory,
+        warn: this.#warn,
+      },
+      {
+        name: "takosumi.internal_rpc.client",
+        kind: "client",
+        attributes: {
+          "http.request.method": input.method.toUpperCase(),
+          "http.route": input.path,
+          "takosumi.internal_rpc.caller": this.#caller,
+          "takosumi.internal_rpc.audience": this.#audience,
+        },
+        statusForResult: (response) => response.status >= 400 ? "error" : "ok",
+        resultAttributes: () => ({
+          "http.response.status_code": httpStatus,
+        }),
+      },
+      async (span) => {
+        const signed = await signTakosumiInternalRequest({
+          method: input.method,
+          path: input.path,
+          query: url.search,
+          body,
+          actor: input.actor,
+          caller: this.#caller,
+          audience: this.#audience,
+          capabilities: input.capabilities,
+          timestamp: this.#clock().toISOString(),
+          secret: this.#secret,
+        });
+        const headers = new Headers(input.headers);
+        for (const [key, value] of Object.entries(signed.headers)) {
+          headers.set(key, value);
+        }
+        headers.set(
+          TAKOSUMI_TRACEPARENT_HEADER,
+          renderTakosumiTraceparent(span.trace.traceId, span.spanId),
+        );
+        headers.set(TAKOSUMI_REQUEST_ID_HEADER, input.actor.requestId);
+        if (span.trace.correlationId) {
+          headers.set(TAKOSUMI_CORRELATION_ID_HEADER, span.trace.correlationId);
+        }
+        if (
+          typeof body === "string" && body.length > 0 &&
+          !headers.has("content-type")
+        ) {
+          headers.set("content-type", "application/json");
+        }
+        const fetchBody = typeof body === "string"
+          ? body
+          : bytesToArrayBuffer(body);
+        const response = await this.#fetch(url, {
+          method: input.method,
+          headers,
+          body: body.length > 0 ? fetchBody : undefined,
+        });
+        httpStatus = response.status;
+        return response;
+      },
+    );
   }
+}
+
+interface TakosumiInternalTraceOptions {
+  readonly trace: TakosumiInternalTraceContext;
+  readonly requestId: string;
+  readonly traceSink?: TakosumiInternalTraceSink;
+  readonly now?: () => string;
+  readonly traceIdFactory?: () => string;
+  readonly spanIdFactory?: () => string;
+  readonly warn?: (message: string) => void;
+}
+
+interface StartedTakosumiInternalTraceSpan {
+  readonly trace: TakosumiInternalTraceContext;
+  readonly spanId: string;
+}
+
+interface TakosumiInternalTraceSpanInput<T> {
+  readonly name: string;
+  readonly kind?: TakosumiInternalTraceSpanKind;
+  readonly attributes?: Record<string, string | number | boolean | undefined>;
+  readonly resultAttributes?: (
+    result: T,
+  ) => Record<string, string | number | boolean | undefined>;
+  readonly statusForResult?: (result: T) => TakosumiInternalTraceSpanStatus;
+  readonly statusMessageForResult?: (result: T) => string | undefined;
+}
+
+function createTakosumiInternalTraceContext(
+  input: Partial<TakosumiInternalTraceContext>,
+  options: Pick<TakosumiInternalTraceOptions, "traceIdFactory"> = {},
+): TakosumiInternalTraceContext {
+  return {
+    traceId: input.traceId ?? (options.traceIdFactory ?? randomTraceId)(),
+    ...(input.parentSpanId ? { parentSpanId: input.parentSpanId } : {}),
+    ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+  };
+}
+
+async function withTakosumiInternalTraceSpan<T>(
+  options: TakosumiInternalTraceOptions,
+  input: TakosumiInternalTraceSpanInput<T>,
+  fn: (span: StartedTakosumiInternalTraceSpan) => Promise<T>,
+): Promise<T> {
+  const spanId = (options.spanIdFactory ?? randomSpanId)();
+  const startedAt = now(options);
+  try {
+    const result = await fn({ trace: options.trace, spanId });
+    await recordTakosumiInternalTraceSpan(options, {
+      ...input,
+      spanId,
+      status: input.statusForResult?.(result) ?? "ok",
+      statusMessage: input.statusMessageForResult?.(result),
+      startTime: startedAt,
+      endTime: now(options),
+      attributes: {
+        ...input.attributes,
+        ...input.resultAttributes?.(result),
+      },
+    });
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await recordTakosumiInternalTraceSpan(options, {
+      ...input,
+      spanId,
+      status: "error",
+      statusMessage: message,
+      startTime: startedAt,
+      endTime: now(options),
+    });
+    throw error;
+  }
+}
+
+async function recordTakosumiInternalTraceSpan(
+  options: TakosumiInternalTraceOptions,
+  input: {
+    readonly name: string;
+    readonly kind?: TakosumiInternalTraceSpanKind;
+    readonly spanId: string;
+    readonly attributes?: Record<string, string | number | boolean | undefined>;
+    readonly status: TakosumiInternalTraceSpanStatus;
+    readonly statusMessage?: string;
+    readonly startTime: string;
+    readonly endTime: string;
+  },
+): Promise<void> {
+  const sink = options.traceSink;
+  if (!sink) return;
+  const attributes = compactAttributes(input.attributes ?? {});
+  const span: TakosumiInternalTraceSpanEvent = {
+    id: `span_${input.spanId}`,
+    traceId: options.trace.traceId,
+    spanId: input.spanId,
+    ...(options.trace.parentSpanId
+      ? { parentSpanId: options.trace.parentSpanId }
+      : {}),
+    name: input.name,
+    kind: input.kind ?? "internal",
+    status: input.status,
+    ...(input.statusMessage ? { statusMessage: input.statusMessage } : {}),
+    startTime: input.startTime,
+    endTime: input.endTime,
+    ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
+    requestId: options.requestId,
+    ...(options.trace.correlationId
+      ? { correlationId: options.trace.correlationId }
+      : {}),
+  };
+  try {
+    await sink.recordTrace(span);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    (options.warn ?? console.warn)(
+      `[takosumi-internal-rpc-trace] failed to record ${span.name}: ${message}`,
+    );
+  }
+}
+
+function renderTakosumiTraceparent(traceId: string, spanId: string): string {
+  return `00-${traceId}-${spanId}-01`;
+}
+
+function compactAttributes(
+  input: Record<string, string | number | boolean | undefined>,
+): Record<string, string | number | boolean> {
+  const output: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined) output[key] = value;
+  }
+  return output;
+}
+
+function now(options: Pick<TakosumiInternalTraceOptions, "now">): string {
+  return (options.now ?? (() => new Date().toISOString()))();
+}
+
+function randomTraceId(): string {
+  return randomHex(16);
+}
+
+function randomSpanId(): string {
+  return randomHex(8);
+}
+
+function randomHex(byteLength: number): string {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function canonicalTakosumiInternalRequest(

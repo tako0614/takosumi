@@ -141,6 +141,10 @@ entry).
   `takosumi.provider.apply` / `takosumi.provider.destroy` spans with operation
   id, operation kind, WAL stage, idempotency key, provider id, resource name,
   request id, and correlation id attributes.
+- Runtime-agent RPC calls now propagate `traceparent` / request correlation
+  headers and record client spans, runtime-agent work execution records
+  `takosumi.runtime_agent.execute` spans, and the generic
+  `TakosumiInternalClient` records `takosumi.internal_rpc.client` spans.
 - Added the Observability Stack ownership reference, including managed vs
   self-hosted responsibilities, default SLI / SLO targets, and alert policy
   ownership.

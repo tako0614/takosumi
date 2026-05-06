@@ -55,6 +55,15 @@ import {
   verifyGatewayManifest,
   verifyGatewayResponseSignature,
 } from "takosumi-contract";
+import {
+  CORRELATION_ID_HEADER,
+  createRuntimeAgentTraceContext,
+  REQUEST_ID_HEADER,
+  type RuntimeAgentTraceContext,
+  type RuntimeAgentTraceSink,
+  TRACEPARENT_HEADER,
+  withRuntimeAgentTraceSpan,
+} from "./tracing.ts";
 
 const TAKOSUMI_RUNTIME_AGENT_CALLER = "takos-runtime-agent";
 const TAKOSUMI_PAAS_AUDIENCE = "takosumi";
@@ -89,6 +98,11 @@ export interface RuntimeAgentHttpClientOptions {
   }) => Promise<void> | void;
   readonly fetch?: typeof fetch;
   readonly clock?: () => Date;
+  readonly trace?: RuntimeAgentTraceContext;
+  readonly traceSink?: RuntimeAgentTraceSink;
+  readonly traceIdFactory?: () => string;
+  readonly spanIdFactory?: () => string;
+  readonly warn?: (message: string) => void;
   /**
    * Maximum permitted clock skew between the agent and the gateway when
    * verifying a per-response identity signature. Default 5 minutes.
@@ -137,6 +151,11 @@ export class RuntimeAgentHttpClient {
   readonly #actor: TakosumiActorContext;
   readonly #fetch: typeof fetch;
   readonly #clock: () => Date;
+  readonly #trace: RuntimeAgentTraceContext;
+  readonly #traceSink?: RuntimeAgentTraceSink;
+  readonly #traceIdFactory?: () => string;
+  readonly #spanIdFactory?: () => string;
+  readonly #warn?: (message: string) => void;
   readonly #trustedManifestPubkey: string;
   readonly #providerKind: string;
   readonly #agentId: string;
@@ -153,6 +172,20 @@ export class RuntimeAgentHttpClient {
     this.#actor = options.actor;
     this.#fetch = options.fetch ?? fetch;
     this.#clock = options.clock ?? (() => new Date());
+    this.#traceIdFactory = options.traceIdFactory;
+    this.#spanIdFactory = options.spanIdFactory;
+    this.#traceSink = options.traceSink;
+    this.#warn = options.warn;
+    this.#trace = createRuntimeAgentTraceContext(
+      {
+        ...options.trace,
+        traceId: options.trace?.traceId ?? options.actor.traceId,
+        requestId: options.actor.requestId,
+        correlationId: options.trace?.correlationId ??
+          options.actor.requestId,
+      },
+      { traceIdFactory: options.traceIdFactory },
+    );
     this.#trustedManifestPubkey = options.trustedManifestPubkey;
     this.#providerKind = options.providerKind;
     this.#agentId = options.agentId;
@@ -166,6 +199,10 @@ export class RuntimeAgentHttpClient {
     return this.#pinnedManifest;
   }
 
+  get traceContext(): RuntimeAgentTraceContext {
+    return this.#trace;
+  }
+
   /**
    * Fetch and verify the gateway manifest. Pins it on success. Throws
    * {@link GatewayManifestVerificationError} on any tampering / mismatch.
@@ -175,82 +212,110 @@ export class RuntimeAgentHttpClient {
       RUNTIME_AGENT_RPC_PATHS.gatewayManifest,
       this.#agentId,
     );
-    const url = `${this.#baseUrl}${basePath}`;
-    const body = JSON.stringify({ gatewayUrl: this.#baseUrl });
-    // Sign as a regular internal POST so the kernel can authorise the
-    // bootstrap itself.
-    const timestamp = this.#clock().toISOString();
-    const signed = await signTakosumiInternalRequest({
-      method: "POST",
-      path: basePath,
-      body,
-      timestamp,
-      actor: this.#actor,
-      secret: this.#secret,
-      caller: TAKOSUMI_RUNTIME_AGENT_CALLER,
-      audience: TAKOSUMI_PAAS_AUDIENCE,
-    });
-    const response = await this.#fetch(url, {
-      method: "POST",
-      headers: { ...signed.headers, "content-type": "application/json" },
-      body,
-    });
-    const text = await response.text();
-    let parsed: unknown = undefined;
-    if (text) {
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        parsed = text;
-      }
-    }
-    if (!response.ok) {
-      throw new RuntimeAgentRpcError(response.status, basePath, parsed);
-    }
-    const signedManifest = parsed as SignedGatewayManifest | undefined;
-    if (
-      !signedManifest || typeof signedManifest !== "object" ||
-      !signedManifest.manifest || !signedManifest.signature
-    ) {
-      throw new GatewayManifestVerificationError(
-        "missing signed manifest envelope",
-        this.#baseUrl,
-      );
-    }
-    const verification = await verifyGatewayManifest({
-      signed: signedManifest,
-      trustedPubkey: this.#trustedManifestPubkey,
-      expectedGatewayUrl: this.#baseUrl,
-      expectedAgentId: this.#agentId,
-      expectedProviderKind: this.#providerKind,
-      now: this.#clock,
-    });
-    if (!verification.ok) {
-      throw new GatewayManifestVerificationError(
-        verification.reason,
-        this.#baseUrl,
-      );
-    }
-    if (verification.manifest.tlsPubkeySha256 && this.#verifyConnectionPin) {
-      await this.#verifyConnectionPin({
-        tlsPubkeySha256: verification.manifest.tlsPubkeySha256,
-        gatewayUrl: this.#baseUrl,
-      });
-    }
-    this.#pinnedManifest = verification.manifest;
-    return verification.manifest;
+    let httpStatus: number | undefined;
+    return await withRuntimeAgentTraceSpan(
+      this.#traceOptions(),
+      {
+        name: "takosumi.runtime_agent.rpc.gateway_manifest",
+        kind: "client",
+        attributes: {
+          "http.request.method": "POST",
+          "http.route": basePath,
+          "takosumi.runtime_agent.agent_id": this.#agentId,
+          "takosumi.runtime_agent.provider_kind": this.#providerKind,
+        },
+        resultAttributes: () => ({
+          "http.response.status_code": httpStatus,
+        }),
+      },
+      async (span) => {
+        const url = `${this.#baseUrl}${basePath}`;
+        const body = JSON.stringify({ gatewayUrl: this.#baseUrl });
+        // Sign as a regular internal POST so the kernel can authorise the
+        // bootstrap itself.
+        const timestamp = this.#clock().toISOString();
+        const signed = await signTakosumiInternalRequest({
+          method: "POST",
+          path: basePath,
+          body,
+          timestamp,
+          actor: this.#actor,
+          secret: this.#secret,
+          caller: TAKOSUMI_RUNTIME_AGENT_CALLER,
+          audience: TAKOSUMI_PAAS_AUDIENCE,
+        });
+        const headers = new Headers({
+          ...signed.headers,
+          "content-type": "application/json",
+        });
+        this.#applyTraceHeaders(headers, span);
+        const response = await this.#fetch(url, {
+          method: "POST",
+          headers,
+          body,
+        });
+        httpStatus = response.status;
+        const text = await response.text();
+        let parsed: unknown = undefined;
+        if (text) {
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = text;
+          }
+        }
+        if (!response.ok) {
+          throw new RuntimeAgentRpcError(response.status, basePath, parsed);
+        }
+        const signedManifest = parsed as SignedGatewayManifest | undefined;
+        if (
+          !signedManifest || typeof signedManifest !== "object" ||
+          !signedManifest.manifest || !signedManifest.signature
+        ) {
+          throw new GatewayManifestVerificationError(
+            "missing signed manifest envelope",
+            this.#baseUrl,
+          );
+        }
+        const verification = await verifyGatewayManifest({
+          signed: signedManifest,
+          trustedPubkey: this.#trustedManifestPubkey,
+          expectedGatewayUrl: this.#baseUrl,
+          expectedAgentId: this.#agentId,
+          expectedProviderKind: this.#providerKind,
+          now: this.#clock,
+        });
+        if (!verification.ok) {
+          throw new GatewayManifestVerificationError(
+            verification.reason,
+            this.#baseUrl,
+          );
+        }
+        if (
+          verification.manifest.tlsPubkeySha256 && this.#verifyConnectionPin
+        ) {
+          await this.#verifyConnectionPin({
+            tlsPubkeySha256: verification.manifest.tlsPubkeySha256,
+            gatewayUrl: this.#baseUrl,
+          });
+        }
+        this.#pinnedManifest = verification.manifest;
+        return verification.manifest;
+      },
+    );
   }
 
   enroll(
     payload: RuntimeAgentRegistration,
   ): Promise<RuntimeAgentRegistrationResponse> {
-    return this.#postJson(RUNTIME_AGENT_RPC_PATHS.enroll, payload);
+    return this.#postJson("enroll", RUNTIME_AGENT_RPC_PATHS.enroll, payload);
   }
 
   heartbeat(
     payload: RuntimeAgentHeartbeat,
   ): Promise<RuntimeAgentHeartbeatResponse> {
     return this.#postJson(
+      "heartbeat",
       resolveRuntimeAgentRpcPath(
         RUNTIME_AGENT_RPC_PATHS.heartbeat,
         payload.agentId,
@@ -263,6 +328,7 @@ export class RuntimeAgentHttpClient {
     payload: RuntimeAgentLeaseRequest,
   ): Promise<RuntimeAgentLeaseResponse> {
     return this.#postJson(
+      "lease",
       resolveRuntimeAgentRpcPath(
         RUNTIME_AGENT_RPC_PATHS.lease,
         payload.agentId,
@@ -273,6 +339,7 @@ export class RuntimeAgentHttpClient {
 
   report(payload: RuntimeAgentReport): Promise<RuntimeAgentReportResponse> {
     return this.#postJson(
+      "report",
       resolveRuntimeAgentRpcPath(
         RUNTIME_AGENT_RPC_PATHS.report,
         payload.agentId,
@@ -283,6 +350,7 @@ export class RuntimeAgentHttpClient {
 
   drain(payload: RuntimeAgentDrainRequest): Promise<void> {
     return this.#postJson<void>(
+      "drain",
       resolveRuntimeAgentRpcPath(
         RUNTIME_AGENT_RPC_PATHS.drain,
         payload.agentId,
@@ -292,46 +360,100 @@ export class RuntimeAgentHttpClient {
   }
 
   async #postJson<TResponse>(
+    rpcName: string,
     path: string,
     payload: unknown,
   ): Promise<TResponse> {
-    const body = JSON.stringify(payload);
-    const timestamp = this.#clock().toISOString();
-    const signed = await signTakosumiInternalRequest({
-      method: "POST",
-      path,
-      body,
-      timestamp,
-      actor: this.#actor,
-      secret: this.#secret,
-      caller: TAKOSUMI_RUNTIME_AGENT_CALLER,
-      audience: TAKOSUMI_PAAS_AUDIENCE,
-    });
-    const url = `${this.#baseUrl}${path}`;
-    const response = await this.#fetch(url, {
-      method: "POST",
-      headers: { ...signed.headers, "content-type": "application/json" },
-      body,
-    });
-    const text = await response.text();
-    let parsed: unknown = undefined;
-    if (text) {
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        parsed = text;
-      }
+    let httpStatus: number | undefined;
+    return await withRuntimeAgentTraceSpan(
+      this.#traceOptions(),
+      {
+        name: `takosumi.runtime_agent.rpc.${rpcName}`,
+        kind: "client",
+        attributes: {
+          "http.request.method": "POST",
+          "http.route": path,
+          "takosumi.runtime_agent.agent_id": this.#agentId,
+          "takosumi.runtime_agent.provider_kind": this.#providerKind,
+          "takosumi.runtime_agent.rpc": rpcName,
+        },
+        resultAttributes: () => ({
+          "http.response.status_code": httpStatus,
+        }),
+      },
+      async (span) => {
+        const body = JSON.stringify(payload);
+        const timestamp = this.#clock().toISOString();
+        const signed = await signTakosumiInternalRequest({
+          method: "POST",
+          path,
+          body,
+          timestamp,
+          actor: this.#actor,
+          secret: this.#secret,
+          caller: TAKOSUMI_RUNTIME_AGENT_CALLER,
+          audience: TAKOSUMI_PAAS_AUDIENCE,
+        });
+        const url = `${this.#baseUrl}${path}`;
+        const headers = new Headers({
+          ...signed.headers,
+          "content-type": "application/json",
+        });
+        this.#applyTraceHeaders(headers, span);
+        const response = await this.#fetch(url, {
+          method: "POST",
+          headers,
+          body,
+        });
+        httpStatus = response.status;
+        const text = await response.text();
+        let parsed: unknown = undefined;
+        if (text) {
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = text;
+          }
+        }
+        if (!response.ok) {
+          throw new RuntimeAgentRpcError(response.status, path, parsed);
+        }
+        await this.#verifyResponseIdentity({
+          method: "POST",
+          path,
+          body: text,
+          response,
+        });
+        return parsed as TResponse;
+      },
+    );
+  }
+
+  #traceOptions() {
+    return {
+      trace: this.#trace,
+      traceSink: this.#traceSink,
+      now: () => this.#clock().toISOString(),
+      traceIdFactory: this.#traceIdFactory,
+      spanIdFactory: this.#spanIdFactory,
+      warn: this.#warn,
+    };
+  }
+
+  #applyTraceHeaders(
+    headers: Headers,
+    span: {
+      readonly trace: RuntimeAgentTraceContext;
+      readonly traceparent: string;
+    },
+  ): void {
+    headers.set(TRACEPARENT_HEADER, span.traceparent);
+    if (span.trace.requestId) {
+      headers.set(REQUEST_ID_HEADER, span.trace.requestId);
     }
-    if (!response.ok) {
-      throw new RuntimeAgentRpcError(response.status, path, parsed);
+    if (span.trace.correlationId) {
+      headers.set(CORRELATION_ID_HEADER, span.trace.correlationId);
     }
-    await this.#verifyResponseIdentity({
-      method: "POST",
-      path,
-      body: text,
-      response,
-    });
-    return parsed as TResponse;
   }
 
   async #verifyResponseIdentity(input: {
