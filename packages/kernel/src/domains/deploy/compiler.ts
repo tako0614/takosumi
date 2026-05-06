@@ -654,6 +654,11 @@ function validateComputeCollection(
       validateServiceImage(name, spec);
     }
     if (spec.build !== undefined) {
+      console.warn(
+        `compute.${name}.build.fromWorkflow is deprecated and will be ` +
+          `removed; resolve the artifact upstream (e.g. via takosumi-git) ` +
+          `and submit a manifest with a digest-pinned image URI instead.`,
+      );
       validateWorkflowBuild(name, spec.build);
     }
     if (spec.depends !== undefined && !isStringArray(spec.depends)) {
@@ -890,6 +895,14 @@ function validateServiceImage(name: string, spec: PublicComputeSpec): void {
   }
 }
 
+/**
+ * @deprecated `compute.<name>.build.fromWorkflow` is being removed from the
+ * manifest spec. Workflow / build pipeline concerns are owned by the
+ * `takosumi-git` sibling product, which resolves the artifact and submits
+ * a manifest carrying a digest-pinned URI directly. See
+ * `docs/reference/architecture/workflow-extension-design.md` for the policy.
+ * This validator will be deleted in a follow-up change.
+ */
 function validateWorkflowBuild(name: string, build: unknown): void {
   if (!isRecord(build) || !isRecord(build.fromWorkflow)) {
     throw new TypeError(`compute.${name}.build.fromWorkflow is required`);
