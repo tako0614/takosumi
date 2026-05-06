@@ -19,6 +19,8 @@ protocol を集約する。各 doc は self-contained で、実装者・operator
 - [Lifecycle Protocol](./lifecycle) — phase 連携と cross-process lock
 - [Provider / Implementation Contract](./provider-implementation-contract) —
   runtime-agent 側 Implementation の wire-level contract
+- [Public Spec Source Map](./public-spec-source-map) — public surface ごとの
+  source of truth / publish URL / drift check
 
 ## Lifecycle & execution
 

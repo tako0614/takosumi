@@ -71,6 +71,10 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           text: "Provider / Implementation Contract",
           link: "/reference/provider-implementation-contract",
         },
+        {
+          text: "Public Spec Source Map",
+          link: "/reference/public-spec-source-map",
+        },
       ],
     },
     {

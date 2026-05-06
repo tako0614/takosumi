@@ -124,6 +124,9 @@ entry).
   field; explicit `type` is required.
 - Published package imports now pin `@takos/takosumi-contract@^2.5.0`, matching
   the `TAKOSUMI_INTERNAL_PATHS` / internal RPC exports used by the kernel.
+- The Kernel HTTP API reference now separates implemented routes from
+  workflow-shaped concerns owned by `takosumi-git`, and the docs include a
+  public spec source map with drift tests.
 
 ### 0.13.0 — 2026-05-03
 

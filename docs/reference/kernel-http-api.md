@@ -440,201 +440,28 @@ POST /api/internal/v1/notifications/:id/ack
 Adding any of these routes requires matching route code, authorization tests,
 OpenAPI/capabilities updates when applicable, and updates to this reference.
 
-## Workflow & Trigger
+## Workflow / trigger / hook boundary
 
-**Reserved surface:** These endpoints are reserved for the workflow-extension
-contract and are not registered by the current kernel HTTP router. Adding them
-requires matching route code, authorization tests, storage migrations,
-OpenAPI/capability updates, and this reference to move from reserved to active.
+The current kernel exposes no workflow, trigger, schedule, or declarable hook
+HTTP route. Workflow-shaped automation belongs above the kernel in
+`takosumi-git`: it owns `.takosumi/manifest.yml`, `.takosumi/workflows/*.yml`,
+`resources[i].workflowRef`, build execution, webhook/cron integration, and
+artifact URI discovery. After that resolution step, `takosumi-git` strips its
+private `workflowRef` extension and submits a plain Takosumi v1 manifest to
+`POST /v1/deployments`.
 
-Workflow extension primitive endpoints. Manual workflow trigger would fire from
-the public actor surface; external-event triggers are signed by the
-per-registration HMAC secret minted at register time; schedule registrations and
-registration revocation run through the operator internal HMAC surface. The hook
-listing endpoint is operator-only and read-only. RBAC mapping for each endpoint
-is recorded in
-[RBAC Policy — workflow extension primitive operation rows](/reference/rbac-policy#v1-workflow-extension-primitive-operation-rows).
+The kernel therefore has no public or internal trigger-registration API in v1,
+and this reference intentionally does not reserve trigger endpoint schemas.
+Adding kernel-hosted workflow routes would require a new RFC that changes the
+ownership boundary recorded in
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design),
+plus route code, authorization tests, storage migrations, OpenAPI/capabilities
+updates, and an update to the
+[Public Spec Source Map](/reference/public-spec-source-map).
 
-| Method | Path                                         | Purpose                                  |
-| ------ | -------------------------------------------- | ---------------------------------------- |
-| POST   | `/v1/triggers/manual`                        | actor-scope manual workflow trigger      |
-| POST   | `/v1/triggers/external`                      | external-event trigger fire (signed)     |
-| POST   | `/api/internal/v1/triggers/external`         | operator register external-event trigger |
-| POST   | `/api/internal/v1/triggers/schedule`         | operator register schedule trigger       |
-| DELETE | `/api/internal/v1/triggers/:id`              | operator revoke trigger registration     |
-| POST   | `/api/internal/v1/operations/:id/cancel`     | operator cancel an in-flight operation   |
-| GET    | `/api/internal/v1/hook-bindings?spaceId=...` | operator list declarable hook bindings   |
-
-### `POST /v1/triggers/manual`
-
-Auth: actor token (`TAKOSUMI_DEPLOY_TOKEN` deploy-token, or a read-write actor
-token with `workflow-trigger` permit, mapped per
-[RBAC Policy](/reference/rbac-policy#v1-workflow-extension-primitive-operation-rows)).
-
-Required headers:
-
-| Header            | Notes                                                                                      |
-| ----------------- | ------------------------------------------------------------------------------------------ |
-| `Authorization`   | actor bearer (`Bearer <token>`)                                                            |
-| `Idempotency-Key` | per-fire idempotency key. Replay window 24 h; same key + same body replays the first fire. |
-
-Request body:
-
-```yaml
-resourceRef: object:<workflow-resource-id>
-inputs: object? # opaque-json forwarded to the workflow
-```
-
-Response body:
-
-```yaml
-triggerId: trigger:<ulid>
-causedOperationId: operation:<ulid>
-```
-
-Errors: `invalid_argument` (400, malformed `resourceRef` or non-workflow
-target), `permission_denied` (403, actor lacks `workflow-trigger`), `not_found`
-(404, workflow resource missing in the addressed Space), `failed_precondition`
-(409, idempotency key conflict).
-
-### `POST /v1/triggers/external`
-
-Auth: per-registration HMAC. The kernel verifies an
-`X-Takosumi-Trigger-Signature` header carrying an HMAC-SHA256 over the canonical
-`(method, path, body)` digest with the secret bound to the
-`trigger-registration:` id resolved from the body's `resourceRef` / `eventName`
-pair. The plaintext secret is **never** persisted; the kernel matches the digest
-against the hashed secret stored at register time.
-
-Request body:
-
-```yaml
-resourceRef: object:<workflow-resource-id>
-eventName: string
-payload: object # opaque-json forwarded to the workflow
-```
-
-Response body:
-
-```yaml
-triggerId: trigger:<ulid>
-status: fired | deduplicated
-causedOperationId: operation:<ulid>? # absent when status=deduplicated
-```
-
-Errors: `unauthenticated` (401, signature verification failed),
-`failed_precondition` (409, registration revoked or `eventName` not registered),
-`invalid_argument` (400, malformed body).
-
-### `POST /api/internal/v1/triggers/external`
-
-Auth: internal HMAC (operator-only; `trigger-register-external` row in
-[RBAC Policy](/reference/rbac-policy#v1-workflow-extension-primitive-operation-rows)).
-
-Request body:
-
-```yaml
-resourceRef: object:<workflow-resource-id>
-eventName: string
-secret: string # plaintext, returned once and immediately hashed
-```
-
-Response body:
-
-```yaml
-registrationId: trigger-registration:<ulid>
-```
-
-The plaintext `secret` is echoed only inside the response that returns the fresh
-`registrationId` and is never returned again. The kernel persists only its hash;
-rotation is performed by registering a new secret and revoking the old
-registration through `DELETE /api/internal/v1/triggers/:id`.
-
-Errors: `unauthenticated` (401, internal HMAC verification failed),
-`invalid_argument` (400), `not_found` (404, workflow resource missing).
-
-### `POST /api/internal/v1/triggers/schedule`
-
-Auth: internal HMAC (operator-only; `trigger-register-schedule` row in
-[RBAC Policy](/reference/rbac-policy#v1-workflow-extension-primitive-operation-rows)).
-
-Request body:
-
-```yaml
-resourceRef: object:<workflow-resource-id>
-cron: string
-missedFirePolicy: skip | catch-up
-```
-
-Response body:
-
-```yaml
-registrationId: trigger-registration:<ulid>
-```
-
-Errors: `unauthenticated` (401), `invalid_argument` (400, malformed cron or
-`missedFirePolicy` outside the closed enum), `not_found` (404).
-
-### `DELETE /api/internal/v1/triggers/:id`
-
-Auth: internal HMAC (operator-only). Revokes a `trigger-registration:` id;
-subsequent `POST /v1/triggers/external` calls bound to the revoked registration
-return `failed_precondition`.
-
-Response body:
-
-```yaml
-status: revoked | already-revoked
-```
-
-Errors: `unauthenticated` (401), `not_found` (404, unknown registration id).
-
-### `POST /api/internal/v1/operations/:id/cancel`
-
-Auth: internal HMAC (operator-only). Cancels an in-flight `operation:<ulid>`
-that is still inside the apply pipeline; terminal operations report
-`already-completed` and write no new journal entries.
-
-Request body:
-
-```yaml
-reason: string?
-```
-
-Response body:
-
-```yaml
-status: cancelling | already-completed
-```
-
-Errors: `unauthenticated` (401), `not_found` (404, unknown operation id),
-`failed_precondition` (409, operation in a stage that the kernel cannot cancel).
-
-### `GET /api/internal/v1/hook-bindings`
-
-Auth: internal HMAC (operator-only). Read-only listing of declarable hook
-bindings observed in a Space.
-
-Query parameters:
-
-| Name      | Required | Notes                                          |
-| --------- | -------- | ---------------------------------------------- |
-| `spaceId` | yes      | `space:<name>` whose hook bindings are listed. |
-
-Response body:
-
-```yaml
-bindings:
-  - id: hook-binding:<ulid>
-    spaceId: space:<name>
-    resourceRef: object:<id>
-    declaredByOperationId: operation:<ulid>
-    capability: string
-    createdAt: rfc3339
-```
-
-Errors: `unauthenticated` (401), `invalid_argument` (400, missing `spaceId`),
-`not_found` (404, Space missing or hidden cross-Space).
+Catalog release executable hooks are a separate operator plugin mechanism; they
+are documented in [Plugin Marketplace](/reference/plugin-marketplace) and are
+not workflow trigger routes.
 
 ## Runtime-Agent control RPC
 
