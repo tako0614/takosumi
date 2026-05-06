@@ -161,6 +161,10 @@ inflight work**:
   `active-object-count`. The corresponding Deployment surfaces a plan that fails
   closed with `errorCode: quota_exhausted`. Existing ActivationSnapshots and the
   GroupHead pointer are not rolled back; already-flowing traffic continues.
+- CPU, storage, and bandwidth usage counters are resolved through the Space's
+  quota tier by `UsageProjectionService`. Callers that must enforce before
+  recording use `requireWithinQuota()`; it rejects a projected over-limit event
+  without updating the aggregate or forwarding billing usage.
 - Read paths (`GET /v1/deployments`, `GET /v1/artifacts/:hash`) are outside
   quota. They are rate-limited but never quota-rejected.
 - Audit events continue to write under `journal-volume` quota intentionally;

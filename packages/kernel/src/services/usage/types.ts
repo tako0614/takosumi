@@ -8,7 +8,8 @@ export type DeployUsageMetric =
 export type RuntimeUsageMetric =
   | "runtime.worker_milliseconds"
   | "runtime.service_milliseconds"
-  | "runtime.cpu_milliseconds";
+  | "runtime.cpu_milliseconds"
+  | "runtime.bandwidth_bytes";
 export type ResourceUsageMetric =
   | "resource.instance_hours"
   | "resource.storage_bytes"
@@ -95,4 +96,26 @@ export interface UsageProjectionResult {
   readonly event: UsageEventDto;
   readonly aggregate: UsageAggregate;
   readonly billingForwarded: boolean;
+  readonly quotaDecision?: UsageQuotaDecision;
+}
+
+export type UsageQuotaKey =
+  | "cpuMilliseconds"
+  | "storageBytes"
+  | "bandwidthBytes";
+
+export type UsageQuotaLimits = Partial<Record<UsageQuotaKey, number>>;
+
+export interface UsageQuotaTierAssignment {
+  readonly tierId: string;
+  readonly limits: UsageQuotaLimits;
+}
+
+export interface UsageQuotaDecision {
+  readonly allowed: boolean;
+  readonly key: UsageQuotaKey;
+  readonly tierId: string;
+  readonly quantity: number;
+  readonly limit?: number;
+  readonly reason: string;
 }

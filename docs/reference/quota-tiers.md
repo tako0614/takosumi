@@ -55,10 +55,19 @@ A tier carries a cap for each dimension in the closed v1 quota set:
 | `journal-volume-bytes-per-bucket` | [Quota / Rate Limit](/reference/quota-rate-limit). |
 | `approval-pending-count`          | [Quota / Rate Limit](/reference/quota-rate-limit). |
 | `space-export-share-count`        | [Quota / Rate Limit](/reference/quota-rate-limit). |
+| `cpu-milliseconds`                | Usage projection: `runtime.*_milliseconds`.        |
+| `storage-bytes`                   | Usage projection: `resource.storage_bytes`.        |
+| `bandwidth-bytes`                 | Usage projection: `runtime.bandwidth_bytes`.       |
 
 A tier may additionally declare per-tier rate-limit overrides for the public and
 internal route classes. Rate-limit overrides are optional; when omitted, the
 Space resolves to the kernel-wide defaults from `TAKOSUMI_RATE_LIMIT_*`.
+
+The service-level `LocalUsageQuotaPolicy` used by embedded / self-hosted
+deployments resolves these three usage dimensions per Space before usage is
+recorded. `UsageProjectionService.requireWithinQuota()` rejects a projected
+counter that would exceed the tier cap, so CPU / storage / bandwidth gates can
+fail closed before downstream billing projection or provider scheduling.
 
 A cap value of the literal string `unlimited` means the tier removes the cap for
 that dimension. A cap of `0` is rejected at registration time.

@@ -118,6 +118,9 @@ entry).
   non-negative integer byte counts and cannot exceed the registered
   artifact-kind `maxSize` (falling back to the kernel artifact cap for unknown
   kinds); oversized artifacts return 413 `resource_exhausted`.
+- `UsageProjectionService` now supports per-Space CPU / storage / bandwidth
+  quota tiers through `LocalUsageQuotaPolicy`, including `requireWithinQuota()`
+  for fail-closed usage recording.
 
 ### 0.14.0 — 2026-05-06
 
