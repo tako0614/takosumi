@@ -50,6 +50,11 @@ Deno.test("public spec source map covers required public surfaces", async () => 
     assert.ok(source.includes(`\`${specKey}\``), `missing ${specKey}`);
   }
 
+  assert.equal(
+    source.includes("future `takosumi-git/docs/artifact-contract.md`"),
+    false,
+  );
+  assert.ok(source.includes("sibling repo `docs/artifact-contract_test.ts`"));
   assert.match(source, /Source of truth/);
   assert.match(source, /Published reference/);
   assert.match(source, /Drift check/);
