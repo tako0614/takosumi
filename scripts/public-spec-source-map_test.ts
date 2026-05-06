@@ -55,6 +55,9 @@ Deno.test("public spec source map covers required public surfaces", async () => 
     false,
   );
   assert.ok(source.includes("sibling repo `docs/artifact-contract_test.ts`"));
+  assert.ok(
+    source.includes("sibling repo `takosumi-git/docs/workflow-ref.md`"),
+  );
   assert.match(source, /Source of truth/);
   assert.match(source, /Published reference/);
   assert.match(source, /Drift check/);
