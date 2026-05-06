@@ -213,11 +213,11 @@ source-of-suffix; new kinds beyond this list still require the `CONVENTIONS.md`
 Implementation status: these kinds are reserved. Current kernel code does not
 mint `trigger:` / `trigger-registration:` / `hook-binding:` ids yet.
 
-| Kind                   | Suffix grammar | Source of suffix                      | Reference                                       |
-| ---------------------- | -------------- | ------------------------------------- | ----------------------------------------------- |
-| `trigger`              | ULID           | Kernel-generated per fire instance.   | [Triggers](/reference/triggers)                 |
-| `trigger-registration` | ULID           | Kernel-generated per registration.    | [Triggers](/reference/triggers)                 |
-| `hook-binding`         | ULID           | Kernel-generated per declarable hook. | [Declarable Hooks](/reference/declarable-hooks) |
+| Kind                   | Suffix grammar | Source of suffix                      | Reference                                                                         |
+| ---------------------- | -------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
+| `trigger`              | ULID           | Kernel-generated per fire instance.   | [Workflow Placement Rationale](/reference/architecture/workflow-extension-design) |
+| `trigger-registration` | ULID           | Kernel-generated per registration.    | [Workflow Placement Rationale](/reference/architecture/workflow-extension-design) |
+| `hook-binding`         | ULID           | Kernel-generated per declarable hook. | [Workflow Placement Rationale](/reference/architecture/workflow-extension-design) |
 
 Plugin-domain identifiers introduced by the workflow plugin family (`workflow:`
 / `workflow-run:` / `workflow-step-run:`) are **not** kernel-curated v1 kinds
@@ -378,6 +378,4 @@ parsing).
 
 ## See also
 
-- [Triggers](/reference/triggers)
-- [Declarable Hooks](/reference/declarable-hooks)
 - [Kernel HTTP API](/reference/kernel-http-api)

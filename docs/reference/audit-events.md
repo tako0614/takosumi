@@ -458,7 +458,8 @@ these events until trigger routes and stores are implemented.
 | `trigger-rejected`     | warning  | A trigger fire attempt was rejected before it could produce a downstream effect. | `triggerId?`, `kind`, `reason` (`auth-failed` / `signature-invalid` / `rate-limit` / `unknown-event`) |
 | `trigger-deduplicated` | info     | A trigger fire collapsed into an earlier fire inside the dedup window.           | `triggerId`, `originalTriggerId`, `dedupWindowSeconds`                                                |
 
-See also: [Triggers](/reference/triggers).
+See also:
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
 
 ## Hook events
 
@@ -472,7 +473,8 @@ HookBinding audit events.
 | `hook-completed` | info     | A hook execution completed successfully.                                     | `hookBindingId`, `durationMs`, `outputCount`                |
 | `hook-failed`    | error    | A hook execution failed; the bound phase outcome depends on `failurePolicy`. | `hookBindingId`, `errorCode`, `durationMs`, `failurePolicy` |
 
-See also: [Declarable Hooks](/reference/declarable-hooks).
+See also:
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
 
 ## Step execution events
 
@@ -484,7 +486,8 @@ events until `execute-step` dispatch and StepResult storage are implemented.
 | `step-execution-started`   | info     | An `execute-step` operation was dispatched to runtime-agent. | `operationId`, `bundleRef`, `attempt`                |
 | `step-execution-completed` | info     | An `execute-step` operation reached a terminal status.       | `operationId`, `status`, `durationMs`, `outputCount` |
 
-See also: [Execute-Step Operation](/reference/execute-step-operation).
+See also:
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
 
 ## See also
 
@@ -502,9 +505,6 @@ See also: [Execute-Step Operation](/reference/execute-step-operation).
 - [Support Impersonation](/reference/support-impersonation)
 - [Notification Emission](/reference/notification-emission)
 - [Zone Selection](/reference/zone-selection)
-- [Triggers](/reference/triggers)
-- [Execute-Step Operation](/reference/execute-step-operation)
-- [Declarable Hooks](/reference/declarable-hooks)
 
 ## Related architecture notes
 

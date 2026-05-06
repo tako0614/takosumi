@@ -730,6 +730,4 @@ interface ApiErrorEnvelope {
 - [Incident Model](/reference/incident-model)
 - [Support Impersonation](/reference/support-impersonation)
 - [Notification Emission](/reference/notification-emission)
-- [Triggers](/reference/triggers)
-- [Declarable Hooks](/reference/declarable-hooks)
 - [Resource IDs](/reference/resource-ids)

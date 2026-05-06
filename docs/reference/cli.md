@@ -338,12 +338,12 @@ same marketplace URLs and package refs from
 
 ## Trigger / Step subcommands
 
-No trigger / step CLI subcommands are wired in the current release. Workflow /
-cron / hook surfaces are declared as plugin-provided manifest resources and
-deployed through the normal `takosumi deploy` path. The reserved trigger and
-`execute-step` contracts are documented in [Triggers](/reference/triggers),
-[Declarable Hooks](/reference/declarable-hooks), and
-[Execute-Step Operation](/reference/execute-step-operation).
+No trigger / step CLI subcommands are wired. The kernel does not host trigger /
+hook / execute-step primitives — workflow / cron / hook surfaces are declared as
+plugin-provided manifest resources and deployed through the normal
+`takosumi deploy` path, with execution semantics owned by upstream products such
+as `takosumi-git`. See
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
 
 ## Project Layout
 
@@ -369,9 +369,8 @@ The `.takosumi/` directory convention is:
 
 Note: `.takosumi/workflows/*.yml` is **not** adopted in v1. Workflow / cron /
 hook surfaces are expressed as plugin shapes declared inside the manifest's
-`resources[]` (see [Triggers](/reference/triggers),
-[Declarable Hooks](/reference/declarable-hooks),
-[Execute-Step Operation](/reference/execute-step-operation)).
+`resources[]` (see
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design)).
 
 A CLI helper that moves an existing top-level `manifest.yml` into
 `.takosumi/manifest.yml` is planned but is out of scope for v1.
@@ -425,10 +424,7 @@ Currently warned aliases:
 - Reference: [Manifest](/manifest),
   [Environment Variables](/reference/env-vars),
   [DataAsset Kinds](/reference/artifact-kinds),
-  [Migration / Upgrade](/reference/migration-upgrade),
-  [Triggers](/reference/triggers),
-  [Execute-Step Operation](/reference/execute-step-operation),
-  [Declarable Hooks](/reference/declarable-hooks)
+  [Migration / Upgrade](/reference/migration-upgrade)
 
 ## Related architecture notes
 

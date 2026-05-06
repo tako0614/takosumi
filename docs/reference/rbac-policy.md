@@ -379,6 +379,4 @@ is reserved for a future RFC and is **not** present in v1.
 
 ## See also
 
-- [Triggers](/reference/triggers)
-- [Declarable Hooks](/reference/declarable-hooks)
 - [Kernel HTTP API](/reference/kernel-http-api)

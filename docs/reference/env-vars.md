@@ -333,6 +333,3 @@ weakens the OperatorBoundaries trust model.
 - [Support Impersonation](/reference/support-impersonation)
 - [Notification Emission](/reference/notification-emission)
 - [Kernel HTTP API](/reference/kernel-http-api)
-- [Triggers](/reference/triggers)
-- [Execute-Step Operation](/reference/execute-step-operation)
-- [Declarable Hooks](/reference/declarable-hooks)

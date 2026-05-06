@@ -1033,7 +1033,8 @@ Persistence: kept until the audit retention window passes. Indexed by
 
 Immutability: append-only. Trigger records are never mutated after insert.
 
-See also: [Triggers](/reference/triggers).
+See also:
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
 
 ## TriggerRegistration
 
@@ -1060,7 +1061,8 @@ Persistence: kept while `revokedAt` is null. Indexed by `(spaceId, kind)` and
 Immutability: `revokedAt` is mutable in place; transitions emit audit events.
 The other fields are immutable.
 
-See also: [Triggers](/reference/triggers).
+See also:
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
 
 ## HookBinding
 
@@ -1088,7 +1090,8 @@ audit retention window. Indexed by `(spaceId, bindToDeploymentId, hookOrder)`.
 Immutability: `revokedAt` is mutable in place; transitions emit audit events.
 The other fields are immutable.
 
-See also: [Declarable Hooks](/reference/declarable-hooks).
+See also:
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
 
 ## See also
 
@@ -1106,9 +1109,6 @@ See also: [Declarable Hooks](/reference/declarable-hooks).
 - [Support Impersonation](/reference/support-impersonation)
 - [Notification Emission](/reference/notification-emission)
 - [Zone Selection](/reference/zone-selection)
-- [Triggers](/reference/triggers)
-- [Execute-Step Operation](/reference/execute-step-operation)
-- [Declarable Hooks](/reference/declarable-hooks)
 
 ## Implementation freedom
 
