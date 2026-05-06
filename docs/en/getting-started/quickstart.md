@@ -36,9 +36,9 @@ Start with CLI local mode. It does not need a kernel server and its state is
 ephemeral, so it is best for authoring and smoke tests:
 
 ```bash
-takosumi init --project --template selfhosted-single-vm
-takosumi doctor
-takosumi deploy
+takosumi init ./manifest.yml --template selfhosted-single-vm
+takosumi doctor --manifest ./manifest.yml
+takosumi deploy ./manifest.yml
 ```
 
 `doctor` prints the manifest path, local / remote mode, and token state.
@@ -51,8 +51,8 @@ export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 takosumi server --port 8788 &
 # stdout: "embedded runtime-agent listening at http://127.0.0.1:8789"
-takosumi doctor
-takosumi deploy
+takosumi doctor --manifest ./manifest.yml
+takosumi deploy ./manifest.yml
 ```
 
 `TAKOSUMI_DEV_MODE=1` is the single dev opt-out flag. It permits plaintext
@@ -233,11 +233,11 @@ separate host in production, so the embedded one is unnecessary).
 ## 6. CLI command reference
 
 ```
-takosumi deploy [manifest]            # apply (default: .takosumi/manifest.yml)
-takosumi destroy [manifest]           # destroy in reverse order
+takosumi deploy <manifest>            # apply (manifest path is required)
+takosumi destroy <manifest>           # destroy in reverse order
 takosumi status [<name>]              # current resource state
-takosumi plan [manifest]              # dry-run
-takosumi doctor                       # show manifest / mode / token
+takosumi plan <manifest>              # dry-run
+takosumi doctor --manifest <path>     # show manifest / mode / token
 takosumi server [--port 8788]         # start kernel + embedded agent
                 [--no-agent]          # suppress embedded agent (production)
                 [--agent-port 8789]   # set embedded agent port
@@ -246,10 +246,15 @@ takosumi runtime-agent serve          # start standalone agent (multi-host)
                 [--token <token>]
                 [--env-file <path>]
 takosumi migrate                      # DB migrations
-takosumi init [--template ...]        # manifest scaffold
-                [--project]          # write .takosumi/manifest.yml
+takosumi init [<output>] [--template ...]  # manifest scaffold (stdout if no <output>)
 takosumi version
 ```
+
+For a `.takosumi/`-based project layout, git push hooks, and a workflow runner
+that builds artifacts and submits manifests, use the
+[`takosumi-git`](https://github.com/tako0614/takosumi-git) sibling product. This
+CLI stays a pure manifest deploy engine and always wants an explicit manifest
+path.
 
 ---
 

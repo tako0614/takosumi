@@ -156,7 +156,6 @@ Exit codes: `0` accepted, `1` validation or apply failure, `2` malformed flags.
 Examples:
 
 ```bash
-takosumi deploy
 takosumi deploy ./manifest.yml
 takosumi deploy ./manifest.yml --dry-run
 takosumi deploy ./manifest.yml --remote https://kernel.example.com --token $TAKOSUMI_DEPLOY_TOKEN
@@ -252,19 +251,18 @@ script missing, `2` required env unset for non-dry-run staging / production.
 Scaffold a Manifest.
 
 ```text
-takosumi init [<output>] [--template <name>] [--project]
+takosumi init [<output>] [--template <name>]
 ```
 
-| Flag         | Type   | Default                | Notes                                                   |
-| ------------ | ------ | ---------------------- | ------------------------------------------------------- |
-| `--template` | string | `selfhosted-single-vm` | one of `selfhosted-single-vm`, `empty`                  |
-| `--project`  | switch | off                    | write `.takosumi/manifest.yml` and create the directory |
+| Flag         | Type   | Default                | Notes                                  |
+| ------------ | ------ | ---------------------- | -------------------------------------- |
+| `--template` | string | `selfhosted-single-vm` | one of `selfhosted-single-vm`, `empty` |
 
 If `<output>` is given, the rendered Manifest is written to that path; otherwise
 it is printed to stdout. Templates render with `apiVersion: "1.0"` and
-`kind: Manifest` set, matching the contract envelope. When `--project` is set
-and `<output>` is omitted, the target is `.takosumi/manifest.yml`, matching the
-discovery order used by deploy / plan / destroy / doctor.
+`kind: Manifest` set, matching the contract envelope. The kernel CLI no longer
+auto-creates a `.takosumi/` project directory — that project-layout UX is owned
+by the `takosumi-git` sibling product.
 
 ### `takosumi doctor`
 
@@ -274,10 +272,11 @@ Show the manifest, target mode, and auth state that the CLI will use.
 takosumi doctor [--manifest <path>] [--remote <url>] [--token <t>]
 ```
 
-`doctor` follows the same manifest discovery and local/remote resolution as
-`deploy`. It prints the selected manifest path, resolved resource count,
-deployment name when present, local vs remote mode, token presence, and the next
-command to run. It exits `1` when the manifest is missing or invalid.
+`doctor` requires `--manifest <path>` (same explicit-path rule as `deploy` /
+`plan` / `destroy`) and shares the local/remote resolution. It prints the
+selected manifest path, resolved resource count, deployment name when present,
+local vs remote mode, token presence, and the next command to run. It exits `1`
+when the manifest is missing or invalid.
 
 ### `takosumi artifact <push | list | rm | gc | kinds>`
 
@@ -347,33 +346,19 @@ as `takosumi-git`. See
 
 ## Project Layout
 
-`deploy` / `plan` / `destroy` / `doctor` resolve the deployment manifest from
-the first match in this order:
+`deploy` / `plan` / `destroy` / `doctor` require an **explicit manifest path**:
+either as the positional `<manifest>` argument or as `--manifest <path>`. There
+is no built-in project-layout discovery — the kernel CLI is a pure manifest
+deploy engine and does not look for `.takosumi/manifest.yml` or `manifest.yml`
+at the working tree root.
 
-1. `<manifest>` argument or `--manifest <path>` flag
-2. `.takosumi/manifest.yml` (recommended layout)
-3. `.takosumi/manifest.yaml`
-4. `.takosumi/manifest.json`
-5. `manifest.yml` at the working tree root (compatibility path)
-6. `manifest.yaml`
-7. `manifest.json`
-
-The `.takosumi/` directory convention is:
-
-```
-.takosumi/
-  manifest.yml         (deployment manifest, required when deploying)
-  spaces/              (per-space overrides; reserved for future use)
-  policy.yml           (operator policy; reserved for future use)
-```
-
-Note: `.takosumi/workflows/*.yml` is **not** adopted in v1. Workflow / cron /
-hook surfaces are expressed as plugin shapes declared inside the manifest's
-`resources[]` (see
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design)).
-
-A CLI helper that moves an existing top-level `manifest.yml` into
-`.takosumi/manifest.yml` is planned but is out of scope for v1.
+Repository-level project conventions (the `.takosumi/` directory,
+`.takosumi/workflows/*.yml`, git push / webhook / build pipeline / cron / hook
+wiring) are owned by the **`takosumi-git`** sibling product. `takosumi-git`
+turns a project repository into a generated `Manifest` and posts it to the
+kernel's `POST /v1/deployments`. See
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+for the ownership boundary.
 
 ### `takosumi completions <shell>`
 

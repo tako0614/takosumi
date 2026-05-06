@@ -1,5 +1,4 @@
 import { Command } from "@cliffy/command";
-import { dirname } from "@std/path";
 
 const TEMPLATES = {
   "selfhosted-single-vm": `apiVersion: "1.0"
@@ -23,22 +22,23 @@ resources: []
 
 function createInitCommand() {
   return new Command()
-    .description("Scaffold a Takosumi manifest")
+    .description(
+      "Scaffold a Takosumi manifest. Writes to <output> when given, " +
+        "otherwise prints to stdout. Project-layout scaffolding " +
+        "(.takosumi/manifest.yml) is provided by takosumi-git.",
+    )
     .option(
       "--template <name:string>",
       "Template (selfhosted-single-vm | empty)",
       { default: "selfhosted-single-vm" },
     )
-    .option("--project", "Write the standard .takosumi/manifest.yml layout")
     .arguments("[output:string]")
-    .action(async ({ template, project }, output) => {
+    .action(async ({ template }, output) => {
       const content = TEMPLATES[template as keyof typeof TEMPLATES] ??
         TEMPLATES.empty;
-      const target = project ? output ?? ".takosumi/manifest.yml" : output;
-      if (target) {
-        if (project) await Deno.mkdir(dirname(target), { recursive: true });
-        await Deno.writeTextFile(target, content);
-        console.log(`wrote ${target}`);
+      if (output) {
+        await Deno.writeTextFile(output, content);
+        console.log(`wrote ${output}`);
       } else {
         console.log(content);
       }

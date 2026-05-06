@@ -7,10 +7,14 @@ import { callKernel } from "../remote_client.ts";
 function createPlanCommand() {
   return new Command()
     .description(
-      "Validate a Takosumi manifest without applying (defaults to .takosumi/manifest.yml)",
+      "Validate a Takosumi manifest without applying (path is required; " +
+        "project-layout discovery is provided by takosumi-git)",
     )
     .arguments("[manifest:string]")
-    .option("--manifest <path:string>", "Manifest path, same as [manifest]")
+    .option(
+      "--manifest <path:string>",
+      "Manifest path, same as [manifest] (required)",
+    )
     .option("--remote <url:string>", "Remote kernel URL")
     .option("--token <token:string>", "Auth token")
     .action(async ({ manifest: manifestFlag, remote, token }, manifestPath) => {

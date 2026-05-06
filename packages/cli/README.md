@@ -21,22 +21,26 @@ export TAKOSUMI_REMOTE_URL=http://localhost:8788
 takosumi server --port 8788 &
 
 # Scaffold + deploy
-takosumi init --project --template selfhosted-single-vm
-takosumi doctor
-takosumi deploy
+takosumi init ./manifest.yml --template selfhosted-single-vm
+takosumi doctor --manifest ./manifest.yml
+takosumi deploy ./manifest.yml
 takosumi status
-takosumi destroy
+takosumi destroy ./manifest.yml
 ```
+
+> Project-layout discovery (`.takosumi/manifest.yml` etc.) is **not** in this
+> CLI; it is owned by the `takosumi-git` sibling product. Pass the manifest path
+> explicitly to every `deploy` / `destroy` / `plan` / `doctor` call.
 
 ## Commands
 
 | Command                                                             | Purpose                                              |
 | ------------------------------------------------------------------- | ---------------------------------------------------- |
-| `takosumi deploy [manifest]`                                        | apply; defaults to `.takosumi/manifest.yml`          |
-| `takosumi destroy [manifest] [--force]`                             | tear down a previously-applied manifest              |
+| `takosumi deploy <manifest>`                                        | apply; manifest path is required                     |
+| `takosumi destroy <manifest> [--force]`                             | tear down a previously-applied manifest              |
 | `takosumi status [<name>]`                                          | query kernel for current deployment state            |
-| `takosumi plan [manifest]`                                          | dry-run (validate + DAG, no provider.apply)          |
-| `takosumi doctor`                                                   | show manifest / mode / token before deploy           |
+| `takosumi plan <manifest>`                                          | dry-run (validate + DAG, no provider.apply)          |
+| `takosumi doctor --manifest <path>`                                 | show manifest / mode / token before deploy           |
 | `takosumi server [--port] [--no-agent]`                             | boot kernel + embedded agent                         |
 | `takosumi runtime-agent serve`                                      | standalone agent (multi-host production)             |
 | `takosumi runtime-agent list`                                       | show registered connectors on an agent               |
@@ -45,7 +49,7 @@ takosumi destroy
 | `takosumi artifact list [--limit]` / `rm <hash>` / `gc [--dry-run]` | artifact store management                            |
 | `takosumi artifact kinds`                                           | list registered artifact kinds                       |
 | `takosumi migrate [--dry-run]`                                      | run kernel DB migrations                             |
-| `takosumi init [--template] [--project]`                            | manifest scaffold                                    |
+| `takosumi init [<output>] [--template]`                             | manifest scaffold (stdout if no `<output>`)          |
 | `takosumi version`                                                  | print version                                        |
 
 ## Env vars

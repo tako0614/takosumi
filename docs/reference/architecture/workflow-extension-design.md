@@ -60,11 +60,13 @@ Workflow concerns are entirely outside the kernel. They are implemented by
    the authoritative version history. The kernel does not store a parallel
    "manifest version" concept.
 
-Project-local files used by `takosumi-git` (workflow definitions and similar
-inputs) live under `.takosumi/` alongside `manifest.yml`, but the kernel does
-not parse them. `.takosumi/manifest.yml` is the only file the kernel ever reads
-from a project repository, and even that read is performed by the CLI or
-`takosumi-git`, not by the kernel itself.
+Project-local files used by `takosumi-git` (workflow definitions, the
+`.takosumi/` directory layout, `manifest.yml`, and similar inputs) live in the
+project repository and are parsed by `takosumi-git`, never by the kernel. The
+kernel CLI does not auto-discover any of these paths either; `takosumi deploy`
+takes an explicit manifest path and posts the body to `POST /v1/deployments`.
+The kernel's only repository-level input is the `Manifest` body submitted over
+HTTP.
 
 The kernel therefore never observes git, never schedules anything, never runs
 workflow steps, and never holds workflow state.

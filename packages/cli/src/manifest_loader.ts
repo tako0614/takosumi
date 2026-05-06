@@ -1,14 +1,5 @@
 import { parse as parseYaml } from "@std/yaml";
-import { extname, join } from "@std/path";
-
-export const DEFAULT_MANIFEST_CANDIDATES = [
-  ".takosumi/manifest.yml",
-  ".takosumi/manifest.yaml",
-  ".takosumi/manifest.json",
-  "manifest.yml",
-  "manifest.yaml",
-  "manifest.json",
-] as const;
+import { extname } from "@std/path";
 
 export interface LoadedManifest {
   readonly path: string;
@@ -20,6 +11,15 @@ export interface LoadManifestOptions {
   readonly cwd?: string;
 }
 
+/**
+ * Picks the manifest path from a positional argument and/or `--manifest` flag.
+ *
+ * Returns `undefined` when neither is set; callers must surface a clear "path
+ * required" error rather than auto-discovering one. Project-layout discovery
+ * (`.takosumi/manifest.yml` etc.) used to live here but has moved to the
+ * `takosumi-git` sibling product, so the kernel-side CLI now stays a pure
+ * manifest engine that only acts on an explicit path.
+ */
 export function selectManifestPath(input: {
   readonly argument?: string;
   readonly flag?: string;
@@ -32,26 +32,19 @@ export function selectManifestPath(input: {
   return input.flag ?? input.argument;
 }
 
-export async function resolveManifestPath(
+const MANIFEST_PATH_REQUIRED =
+  "manifest path is required; pass <manifest> or --manifest <path>. " +
+  "Project-layout discovery (.takosumi/manifest.yml) is provided by " +
+  "takosumi-git (sibling product), not this CLI.";
+
+export function resolveManifestPath(
   path?: string,
-  options: LoadManifestOptions = {},
+  _options: LoadManifestOptions = {},
 ): Promise<string> {
-  if (path) return path;
-  const cwd = options.cwd ?? Deno.cwd();
-  for (const candidate of DEFAULT_MANIFEST_CANDIDATES) {
-    const candidatePath = join(cwd, candidate);
-    try {
-      const stat = await Deno.stat(candidatePath);
-      if (stat.isFile) return candidatePath;
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) continue;
-      throw error;
-    }
+  if (!path) {
+    return Promise.reject(new Error(MANIFEST_PATH_REQUIRED));
   }
-  throw new Error(
-    "manifest path is required; pass <manifest>, --manifest <path>, or add " +
-      `${DEFAULT_MANIFEST_CANDIDATES[0]}`,
-  );
+  return Promise.resolve(path);
 }
 
 export async function loadManifest(

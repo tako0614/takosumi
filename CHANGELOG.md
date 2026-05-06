@@ -10,6 +10,28 @@ entry).
 
 ## takosumi-cli
 
+### 0.15.0 — 2026-05-06
+
+- **Breaking**: `.takosumi/manifest.yml` (and the `.takosumi/manifest.yaml` /
+  `.takosumi/manifest.json` / `manifest.yml` / `manifest.yaml` /
+  `manifest.json`) auto-discovery is removed. `takosumi deploy` / `plan` /
+  `destroy` / `doctor` now require an explicit manifest path passed as the
+  positional `<manifest>` argument or `--manifest <path>`. `loadManifest()` /
+  `resolveManifestPath()` reject when the path is missing with
+  `manifest path is required; pass <manifest> or --manifest <path>.` +
+  `Project-layout discovery (.takosumi/manifest.yml) is provided by` +
+  `takosumi-git (sibling product), not this CLI.`. The
+  `DEFAULT_MANIFEST_CANDIDATES` export is removed.
+- **Breaking**: `takosumi init --project` is removed. `init` now writes the
+  rendered manifest to the explicit `<output>` path (or stdout when omitted) and
+  never creates a `.takosumi/` directory.
+- The `.takosumi/` repository convention (project layout, workflow definitions,
+  git push / webhook / build pipeline, cron / hook wiring) has moved to the
+  `takosumi-git` sibling product, which posts generated manifests back to the
+  kernel via `POST /v1/deployments`. Operators that want the old "drop a
+  `.takosumi/manifest.yml` and run `takosumi deploy`" UX should adopt
+  `takosumi-git`.
+
 ### 0.14.0 — 2026-05-06
 
 - Re-export bump tracking `takosumi-kernel@0.14.0` / `takosumi-plugins@0.12.0`.
@@ -173,6 +195,15 @@ entry).
 - `registerProvider` collision warning + `allowOverride` opt-out.
 
 ## takosumi (umbrella)
+
+### 0.17.0 — 2026-05-06
+
+- Re-export bump tracking `takosumi-cli@0.15.0`.
+- **Breaking** (downstream): the bundled CLI no longer auto-discovers
+  `.takosumi/manifest.yml` / `manifest.yml`; pass the manifest path explicitly
+  to every `deploy` / `plan` / `destroy` / `doctor` invocation.
+  `takosumi init --project` is gone. The `.takosumi/` project-layout convention
+  has moved to the `takosumi-git` sibling product.
 
 ### 0.16.0 — 2026-05-06
 

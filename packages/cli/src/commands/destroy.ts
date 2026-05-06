@@ -18,10 +18,14 @@ import { destroyLocal, expandManifestLocal } from "../local_runner.ts";
 function createDestroyCommand() {
   return new Command()
     .description(
-      "Destroy resources declared in a Takosumi manifest (defaults to .takosumi/manifest.yml)",
+      "Destroy resources declared in a Takosumi manifest (path is " +
+        "required; project-layout discovery is provided by takosumi-git)",
     )
     .arguments("[manifest:string]")
-    .option("--manifest <path:string>", "Manifest path, same as [manifest]")
+    .option(
+      "--manifest <path:string>",
+      "Manifest path, same as [manifest] (required)",
+    )
     .option("--remote <url:string>", "Remote kernel URL")
     .option("--token <token:string>", "Auth token")
     .option(

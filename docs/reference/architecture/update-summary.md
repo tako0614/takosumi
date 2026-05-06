@@ -160,10 +160,12 @@ public manifest vocabulary is closed and unchanged.
 - **Operation kind enum unchanged at 11 values.** `transform-data-asset` remains
   the sole DataAsset-bundle dispatch operation. The previously proposed 12th
   value (`execute-step`) is not added.
-- **CLI project layout.** `.takosumi/manifest.yml` を CLI default load path
-  に追加 ([CLI Reference](/reference/cli) Project Layout section)。 `.takosumi/`
-  ディレクトリ配下の workflow definition 等は `takosumi-git` が parse /
-  実行する; kernel 側は manifest 以外を参照しない。
+- **CLI project layout.** `.takosumi/manifest.yml` の auto-discovery は kernel
+  CLI から削除済み。`takosumi deploy <manifest>` は path を必ず明示する pure
+  manifest engine となり、project layout / `.takosumi/` ディレクトリ convention
+  / workflow definition は upstream `takosumi-git` が provide する
+  ([CLI Reference](/reference/cli) Project Layout section)。 kernel 側は
+  manifest 以外を一切参照しない。
 - **Plugin shape examples.** workflow / cron-job / pre-apply-hook 等の shape は
   kernel curated 5 種に含めず、3rd party plugin が CONVENTIONS.md §6 RFC で提供
   ([Extending](/extending), [Shape Catalog](/reference/shapes))。kernel-known な

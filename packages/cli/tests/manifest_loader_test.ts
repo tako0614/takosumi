@@ -40,28 +40,46 @@ Deno.test("loadManifest falls back to YAML when extension is unknown", async () 
   }
 });
 
-Deno.test("resolveManifestPath discovers .takosumi manifest first", async () => {
-  const dir = await Deno.makeTempDir();
-  try {
-    await Deno.mkdir(`${dir}/.takosumi`);
-    await Deno.writeTextFile(`${dir}/manifest.yml`, "name: root\n");
-    await Deno.writeTextFile(
-      `${dir}/.takosumi/manifest.yml`,
-      "name: project\n",
-    );
+Deno.test("resolveManifestPath rejects when no path is supplied", async () => {
+  await assert.rejects(
+    () => resolveManifestPath(undefined),
+    /manifest path is required/,
+  );
+});
 
-    const resolved = await resolveManifestPath(undefined, { cwd: dir });
-    assert.equal(resolved, `${dir}/.takosumi/manifest.yml`);
-    const loaded = await loadManifest(undefined, { cwd: dir });
-    assert.deepEqual(loaded.value, { name: "project" });
-  } finally {
-    await Deno.remove(dir, { recursive: true });
-  }
+Deno.test("resolveManifestPath error mentions takosumi-git for project layout", async () => {
+  await assert.rejects(
+    () => resolveManifestPath(undefined),
+    /takosumi-git/,
+  );
+});
+
+Deno.test("loadManifest rejects when no path is supplied", async () => {
+  await assert.rejects(
+    () => loadManifest(undefined),
+    /manifest path is required/,
+  );
+});
+
+Deno.test("resolveManifestPath returns the supplied path verbatim", async () => {
+  const resolved = await resolveManifestPath("./some/manifest.yml");
+  assert.equal(resolved, "./some/manifest.yml");
 });
 
 Deno.test("selectManifestPath rejects conflicting argument and flag", () => {
   assert.throws(
     () => selectManifestPath({ argument: "a.yml", flag: "b.yml" }),
     /either as an argument or with --manifest/,
+  );
+});
+
+Deno.test("selectManifestPath returns undefined when neither is set", () => {
+  assert.equal(selectManifestPath({}), undefined);
+});
+
+Deno.test("selectManifestPath prefers the flag over the argument when equal", () => {
+  assert.equal(
+    selectManifestPath({ argument: "a.yml", flag: "a.yml" }),
+    "a.yml",
   );
 });

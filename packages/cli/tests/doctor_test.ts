@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { runDoctor } from "../src/commands/doctor.ts";
 import { __resetConfigFileCacheForTesting } from "../src/config.ts";
 
-Deno.test("doctor reports discovered project manifest and local target", async () => {
+Deno.test("doctor reports the explicit manifest path and local target", async () => {
   const dir = await makeProject();
   const env = snapshotEnv();
   try {
@@ -10,15 +10,18 @@ Deno.test("doctor reports discovered project manifest and local target", async (
     Deno.env.set("TAKOSUMI_CONFIG_FILE", `${dir}/missing-config.yml`);
     __resetConfigFileCacheForTesting();
 
-    const report = await runDoctor({ cwd: dir });
+    const report = await runDoctor({
+      cwd: dir,
+      manifest: `${dir}/manifest.yml`,
+    });
 
     assert.equal(report.ok, true);
     const text = report.lines.join("\n");
-    assert.match(text, /manifest: \.takosumi\/manifest\.yml \(yaml\)/);
+    assert.match(text, /manifest: manifest\.yml \(yaml\)/);
     assert.match(text, /resources: 1 resolved resource/);
     assert.match(text, /deployment: doctor-app/);
     assert.match(text, /mode: local/);
-    assert.match(text, /next: takosumi deploy/);
+    assert.match(text, /next: takosumi deploy manifest\.yml/);
   } finally {
     restoreEnv(env);
     __resetConfigFileCacheForTesting();
@@ -36,6 +39,7 @@ Deno.test("doctor warns when remote target has no token", async () => {
 
     const report = await runDoctor({
       cwd: dir,
+      manifest: `${dir}/manifest.yml`,
       remote: "https://kernel.example.com",
     });
 
@@ -50,7 +54,7 @@ Deno.test("doctor warns when remote target has no token", async () => {
   }
 });
 
-Deno.test("doctor fails clearly when manifest is missing", async () => {
+Deno.test("doctor fails clearly when manifest path is omitted", async () => {
   const dir = await Deno.makeTempDir();
   const env = snapshotEnv();
   try {
@@ -61,8 +65,10 @@ Deno.test("doctor fails clearly when manifest is missing", async () => {
     const report = await runDoctor({ cwd: dir });
 
     assert.equal(report.ok, false);
-    assert.match(report.lines.join("\n"), /manifest path is required/);
-    assert.match(report.lines.join("\n"), /next: takosumi init --project/);
+    const text = report.lines.join("\n");
+    assert.match(text, /manifest path is required/);
+    assert.match(text, /takosumi-git/);
+    assert.match(text, /next: takosumi init <output>/);
   } finally {
     restoreEnv(env);
     __resetConfigFileCacheForTesting();
@@ -72,9 +78,8 @@ Deno.test("doctor fails clearly when manifest is missing", async () => {
 
 async function makeProject(): Promise<string> {
   const dir = await Deno.makeTempDir();
-  await Deno.mkdir(`${dir}/.takosumi`);
   await Deno.writeTextFile(
-    `${dir}/.takosumi/manifest.yml`,
+    `${dir}/manifest.yml`,
     `apiVersion: "1.0"
 kind: Manifest
 metadata:

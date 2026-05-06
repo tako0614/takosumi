@@ -52,24 +52,18 @@ JSON-LD と同じく external tooling / marketplace indexing / catalog publishin
 `resources[]` を **append** する semantics です
 ([§ template と resources の併用](#template-と-resources-の併用))。
 
-## `.takosumi/` project convention
+## Project layout は `takosumi-git` の責務
 
-third-party software は repository root に `.takosumi/manifest.yml` を置けば、
-operator / customer は repository root で `takosumi deploy` を実行するだけで
-manifest を apply できます。CLI は明示 path が無い場合、次の順に manifest を
-探索します。
+Takosumi kernel / CLI は **manifest deploy engine 専念** の方針 (AGENTS.md)
+で、`takosumi deploy <path>` には manifest path を必ず明示します。
+`.takosumi/manifest.yml` のような repository-local project layout convention や
+`.takosumi/workflows/` 配下の workflow definition は、kernel ではなく上位
+sibling product [`takosumi-git`](https://github.com/tako0614/takosumi-git)
+が提供します。 `takosumi-git` が git push / webhook を受けて build pipeline
+を回し、生成した manifest を `POST /v1/deployments` (本 kernel) に投下します。
 
-1. `.takosumi/manifest.yml`
-2. `.takosumi/manifest.yaml`
-3. `.takosumi/manifest.json`
-4. `manifest.yml`
-5. `manifest.yaml`
-6. `manifest.json`
-
-これは Google Play 的な "manifest を読んで install" UX を、kernel 側には新しい
-application store primitive を増やさずに実現するための convention です。3rd
-party software が自前 UI を持つ場合は、同じ manifest body を直接
-`POST /v1/deployments` に送れます。
+3rd party software が独自 UI を持つ場合も同じで、最終的に manifest body を
+`POST /v1/deployments` に送ることで kernel と接続します。
 
 ## `resources[]` field
 

@@ -1,7 +1,10 @@
 {
   "name": "@takos/takosumi",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "license": "MIT",
+  "imports": {
+    "@takos/takosumi-cli": "jsr:@takos/takosumi-cli@^0.15.0"
+  },
   "exports": {
     ".": "./mod.ts",
     "./kernel": "./kernel.ts",

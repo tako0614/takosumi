@@ -22,7 +22,7 @@ hero:
 features:
   - title: Manifest-driven
     details: |
-      portable な shape (`web-service@v1` / `database-postgres@v1` / `object-store@v1` / `custom-domain@v1` / `worker@v1`) を YAML / JSON-LD 互換 manifest で宣言。third-party software は `.takosumi/manifest.yml` を置くだけで `takosumi deploy` の対象になる。
+      portable な shape (`web-service@v1` / `database-postgres@v1` / `object-store@v1` / `custom-domain@v1` / `worker@v1`) を YAML / JSON-LD 互換 manifest で宣言。`takosumi deploy ./manifest.yml` で apply。project layout / `.takosumi/` convention は `takosumi-git` (sibling product) が提供する。
   - title: Multi-cloud + selfhost
     details: |
       20 個の default provider + 1 個の opt-in provider plugin で AWS / GCP / Cloudflare / Azure / Kubernetes / Deno Deploy / docker-compose / systemd / filesystem を同一 manifest spec で deploy。

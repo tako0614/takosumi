@@ -22,7 +22,7 @@ hero:
 features:
   - title: Manifest-driven
     details: |
-      Declare portable shapes (`web-service@v1` / `database-postgres@v1` / `object-store@v1` / `custom-domain@v1` / `worker@v1`) in YAML / JSON-LD-compatible manifests. Third-party software can ship `.takosumi/manifest.yml`, and `takosumi deploy` will pick it up.
+      Declare portable shapes (`web-service@v1` / `database-postgres@v1` / `object-store@v1` / `custom-domain@v1` / `worker@v1`) in YAML / JSON-LD-compatible manifests. Apply with `takosumi deploy ./manifest.yml`. The project-layout convention (`.takosumi/`) lives in the `takosumi-git` sibling product, not in this kernel CLI.
   - title: Multi-cloud + selfhost
     details: |
       Deploy to AWS / GCP / Cloudflare / Azure / Kubernetes / Deno Deploy / docker-compose / systemd / filesystem from the same manifest spec, backed by 21 bundled provider plugins.

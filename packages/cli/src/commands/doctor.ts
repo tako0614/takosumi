@@ -63,8 +63,8 @@ export async function runDoctor(
 
   lines.push(
     manifestPath
-      ? "[info] next: takosumi deploy"
-      : "[info] next: takosumi init --project",
+      ? `[info] next: takosumi deploy ${displayPath(manifestPath, options.cwd)}`
+      : "[info] next: takosumi init <output> (or use takosumi-git for project layout)",
   );
 
   return { ok, lines };

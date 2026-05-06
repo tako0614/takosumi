@@ -155,6 +155,11 @@
       "npm:hono@^4.12.4"
     ],
     "members": {
+      "packages/all": {
+        "dependencies": [
+          "jsr:@takos/takosumi-cli@0.15"
+        ]
+      },
       "packages/cli": {
         "dependencies": [
           "jsr:@cliffy/command@^1.0.0-rc.7",
