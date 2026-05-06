@@ -64,6 +64,7 @@ function renderStatus(body: unknown): void {
   }
   const columns: readonly { key: string; label: string }[] = [
     { key: "deployment", label: "deployment" },
+    { key: "id", label: "id" },
     { key: "name", label: "resource" },
     { key: "shape", label: "shape" },
     { key: "provider", label: "provider" },
@@ -139,6 +140,7 @@ function flattenDeployments(
     if (resources.length === 0) {
       rows.push({
         deployment: deploymentName,
+        id: deployment.id,
         name: "",
         shape: "",
         provider: "",
@@ -155,6 +157,7 @@ function flattenDeployments(
       rows.push({
         ...resource as Record<string, unknown>,
         deployment: deploymentName,
+        id: deployment.id,
         // Default each row's status to the deployment-level status when the
         // resource itself does not override it (older kernel builds may omit
         // the per-resource `status` field).

@@ -1530,6 +1530,150 @@ Deno.test("deploy public route recoveryMode inspect returns journal without prov
   assert.equal(applyCount, 0);
 });
 
+Deno.test("GET /v1/deployments/:name/audit returns rollback cause chain", async () => {
+  const journal = new InMemoryOperationJournalStore();
+  const recordStore = new InMemoryTakosumiDeploymentRecordStore({
+    idFactory: () => "deployment:123",
+  });
+  const revokeDebtStore = new InMemoryRevokeDebtStore({
+    idFactory: () => "revoke-debt:1",
+  });
+  const preview = buildOperationPlanPreview({
+    resources: [SAMPLE_RESOURCE],
+    planned: [{
+      name: SAMPLE_RESOURCE.name,
+      shape: SAMPLE_RESOURCE.shape,
+      providerId: SAMPLE_RESOURCE.provider,
+      op: "create",
+    }],
+    edges: buildRefDag([SAMPLE_RESOURCE]).edges,
+    spaceId: "space:audit",
+    deploymentName: "audit-app",
+  });
+  const provenance = {
+    kind: "takosumi-git.deployment-provenance@v1",
+    workflowRunId: "takosumi-git:run:audit",
+    generatedAt: "2026-05-07T00:00:00.000Z",
+    git: {
+      repository: "acme/demo",
+      ref: "refs/heads/main",
+      commitSha: "0123456789abcdef0123456789abcdef01234567",
+    },
+    resourceArtifacts: [{
+      resourceName: "logs",
+      artifactName: "image",
+      artifactUri: "ghcr.io/acme/demo@sha256:abc",
+      workflow: { file: "build.yml", job: "image", artifact: "image" },
+      stepLogs: [{
+        stepName: "build",
+        exitCode: 0,
+        stdoutDigest:
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        stdoutBytes: 123,
+      }],
+    }],
+  };
+  await recordStore.upsert({
+    tenantId: "space:audit",
+    name: "audit-app",
+    manifest: {
+      apiVersion: "1.0",
+      kind: "Manifest",
+      metadata: { name: "audit-app" },
+      resources: [SAMPLE_RESOURCE as unknown as JsonObject],
+    },
+    appliedResources: [],
+    status: "failed",
+    now: "2026-05-07T00:00:00.000Z",
+  });
+  await appendOperationPlanJournalStages({
+    store: journal,
+    preview,
+    phase: "apply",
+    stages: ["commit"],
+    status: "recorded",
+    createdAt: "2026-05-07T00:00:01.000Z",
+    detail: { provenance },
+  });
+  await appendOperationPlanJournalStages({
+    store: journal,
+    preview,
+    phase: "apply",
+    stages: ["abort"],
+    status: "failed",
+    createdAt: "2026-05-07T00:00:02.000Z",
+    detail: {
+      reason: "compensate-revoke-debt-enqueued",
+      revokeDebtIds: ["revoke-debt:1"],
+      provenance,
+    },
+  });
+  await revokeDebtStore.enqueue({
+    generatedObjectId: "generated:audit-app/logs",
+    reason: "activation-rollback",
+    ownerSpaceId: "space:audit",
+    deploymentName: "audit-app",
+    operationPlanDigest: preview.operationPlanDigest,
+    journalEntryId: preview.operations[0].idempotencyKey.journalEntryId,
+    operationId: preview.operations[0].operationId,
+    resourceName: "logs",
+    providerId: SAMPLE_RESOURCE.provider,
+    now: "2026-05-07T00:00:02.000Z",
+  });
+  const app = createApp({
+    token: VALID_TOKEN,
+    tenantId: "space:audit",
+    recordStore,
+    operationJournalStore: journal,
+    revokeDebtStore,
+  });
+
+  const response = await app.request(
+    `${TAKOSUMI_DEPLOY_PUBLIC_PATH}/audit-app/audit`,
+    { headers: { authorization: `Bearer ${VALID_TOKEN}` } },
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json() as {
+    status: string;
+    audit: {
+      deployment: { id: string; name: string };
+      provenance: { workflowRunId: string };
+      causeChain: Array<{
+        stage: string;
+        reason?: string;
+        provenance?: { workflowRunId: string };
+      }>;
+      entries: Array<{ provenance?: { workflowRunId: string } }>;
+      revokeDebts: Array<{ id: string; reason: string }>;
+    };
+  };
+  assert.equal(body.status, "ok");
+  assert.equal(body.audit.deployment.id, "deployment:123");
+  assert.equal(body.audit.deployment.name, "audit-app");
+  assert.equal(
+    body.audit.provenance.workflowRunId,
+    "takosumi-git:run:audit",
+  );
+  assert.deepEqual(
+    body.audit.causeChain.map((cause) => cause.stage),
+    ["commit", "abort"],
+  );
+  assert.equal(
+    body.audit.causeChain[1].reason,
+    "compensate-revoke-debt-enqueued",
+  );
+  assert.equal(
+    body.audit.causeChain[1].provenance?.workflowRunId,
+    "takosumi-git:run:audit",
+  );
+  assert.equal(
+    body.audit.entries[0].provenance?.workflowRunId,
+    "takosumi-git:run:audit",
+  );
+  assert.equal(body.audit.revokeDebts[0].id, "revoke-debt:1");
+  assert.equal(body.audit.revokeDebts[0].reason, "activation-rollback");
+});
+
 Deno.test("deploy public route journal summary stays unfinished until every operation is terminal", async () => {
   const journal = new InMemoryOperationJournalStore();
   const metricsResource: ManifestResource = {
@@ -2903,6 +3047,7 @@ Deno.test(
     );
     assert.equal(response.status, 200);
     const body = await response.json() as {
+      id: string;
       name: string;
       status: string;
       journal: {
@@ -2914,6 +3059,7 @@ Deno.test(
       };
       resources: ReadonlyArray<{ outputs: Record<string, unknown> }>;
     };
+    assert.equal(body.id.length > 0, true);
     assert.equal(body.name, "single");
     assert.equal(body.status, "applied");
     assert.equal(body.journal.operationPlanDigest, preview.operationPlanDigest);

@@ -309,6 +309,52 @@ Response body は [Status Output](/reference/status-output) の
 `DeploymentSummary` です。`name` が当該 public deploy scope に存在しない場合は
 404 `not_found`、token 未設定の場合も同じく 404 `not_found` を返します。
 
+### `GET /v1/deployments/:name/audit`
+
+`takosumi audit show <deployment-id-or-name>` の backing endpoint。`name` は
+manifest の `metadata.name` に対応します。CLI が deployment id を受け取った場合
+は、先に `GET /v1/deployments` の `DeploymentSummary.id` から `name` に解決して
+この endpoint を呼びます。
+
+Response body:
+
+```ts
+interface DeployPublicAuditResponse {
+  readonly status: "ok";
+  readonly audit: {
+    readonly deployment: DeploymentSummary;
+    readonly journal?: DeploymentJournalSummary;
+    readonly provenance?: JsonObject;
+    readonly causeChain: readonly {
+      readonly operationPlanDigest: `sha256:${string}`;
+      readonly journalEntryId: string;
+      readonly operationId: string;
+      readonly phase: string;
+      readonly stage: string;
+      readonly operationKind: string;
+      readonly effectDigest: `sha256:${string}`;
+      readonly status: string;
+      readonly createdAt: string;
+      readonly resourceName?: string;
+      readonly providerId?: string;
+      readonly reason?: string;
+      readonly outcomeStatus?: string;
+      readonly revokeDebtIds?: readonly string[];
+      readonly detail?: JsonObject;
+      readonly provenance?: JsonObject;
+    }[];
+    readonly entries: readonly DeploymentJournalEntrySummary[];
+    readonly revokeDebts: readonly DeployPublicRevokeDebtRecordSummary[];
+  };
+}
+```
+
+`causeChain` is a read-only projection over public WAL entries. It extracts
+rollback / abort reasons, apply/destroy outcome status, RevokeDebt ids, and the
+opaque upstream provenance so an operator can trace a rollback from deployment
+id to git commit, workflow run, artifact URI, and step log digests without
+moving workflow execution into the kernel.
+
 ### `POST /v1/artifacts`
 
 `multipart/form-data` で `kind` / `body` / `metadata` (optional JSON string) /

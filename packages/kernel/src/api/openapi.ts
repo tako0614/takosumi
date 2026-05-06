@@ -261,6 +261,18 @@ export function createPaaSOpenApiDocument(
           mountedPath: `${TAKOSUMI_DEPLOY_PUBLIC_PATH}/:name`,
         }),
       },
+      [`${TAKOSUMI_DEPLOY_PUBLIC_PATH}/:name/audit`]: {
+        get: operation({
+          operationId: "getDeployPublicDeploymentAudit",
+          summary:
+            "Returns WAL, provenance, revoke-debt, and rollback cause chain for one public deployment.",
+          tag: "deploy-public",
+          auth: "deploy-token",
+          pathParams: ["name"],
+          okSchema: "DeployPublicAuditResponse",
+          mountedPath: `${TAKOSUMI_DEPLOY_PUBLIC_PATH}/:name/audit`,
+        }),
+      },
       [ARTIFACTS_BASE_PATH]: {
         post: operation({
           operationId: "uploadArtifact",
@@ -1101,9 +1113,94 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       additionalProperties: false,
     },
     DeployPublicRecordResponse: ref("DeployPublicDeploymentSummary"),
+    DeployPublicAuditResponse: {
+      type: "object",
+      required: ["status", "audit"],
+      properties: {
+        status: { enum: ["ok"] },
+        audit: ref("DeployPublicAuditSummary"),
+      },
+      additionalProperties: false,
+    },
+    DeployPublicAuditSummary: {
+      type: "object",
+      required: ["deployment", "causeChain", "entries", "revokeDebts"],
+      properties: {
+        deployment: ref("DeployPublicDeploymentSummary"),
+        journal: ref("DeployPublicJournalSummary"),
+        provenance: jsonObject,
+        causeChain: {
+          type: "array",
+          items: ref("DeployPublicAuditCauseSummary"),
+        },
+        entries: {
+          type: "array",
+          items: ref("DeployPublicJournalEntrySummary"),
+        },
+        revokeDebts: {
+          type: "array",
+          items: ref("DeployPublicRevokeDebtRecordSummary"),
+        },
+      },
+      additionalProperties: false,
+    },
+    DeployPublicAuditCauseSummary: {
+      type: "object",
+      required: [
+        "operationPlanDigest",
+        "journalEntryId",
+        "operationId",
+        "phase",
+        "stage",
+        "operationKind",
+        "effectDigest",
+        "status",
+        "createdAt",
+      ],
+      properties: {
+        operationPlanDigest: { type: "string", pattern: "^sha256:" },
+        journalEntryId: { type: "string" },
+        operationId: { type: "string" },
+        phase: {
+          enum: [
+            "apply",
+            "activate",
+            "destroy",
+            "rollback",
+            "recovery",
+            "observe",
+          ],
+        },
+        stage: {
+          enum: [
+            "prepare",
+            "pre-commit",
+            "commit",
+            "post-commit",
+            "observe",
+            "finalize",
+            "abort",
+            "skip",
+          ],
+        },
+        operationKind: { type: "string" },
+        resourceName: { type: "string" },
+        providerId: { type: "string" },
+        effectDigest: { type: "string", pattern: "^sha256:" },
+        status: { enum: ["recorded", "succeeded", "failed", "skipped"] },
+        createdAt: { type: "string", format: "date-time" },
+        reason: { type: "string" },
+        outcomeStatus: { type: "string" },
+        revokeDebtIds: { type: "array", items: { type: "string" } },
+        detail: jsonObject,
+        provenance: jsonObject,
+      },
+      additionalProperties: false,
+    },
     DeployPublicDeploymentSummary: {
       type: "object",
       required: [
+        "id",
         "name",
         "status",
         "tenantId",
@@ -1112,11 +1209,13 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         "resources",
       ],
       properties: {
+        id: { type: "string" },
         name: { type: "string" },
         status: { enum: ["applied", "destroyed", "failed"] },
         tenantId: { type: "string" },
         appliedAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
+        provenance: jsonObject,
         journal: ref("DeployPublicJournalSummary"),
         revokeDebt: ref("DeployPublicRevokeDebtSummary"),
         resources: {
@@ -1215,6 +1314,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         effectDigest: { type: "string", pattern: "^sha256:" },
         status: { enum: ["recorded", "succeeded", "failed", "skipped"] },
         createdAt: { type: "string", format: "date-time" },
+        provenance: jsonObject,
       },
       additionalProperties: false,
     },

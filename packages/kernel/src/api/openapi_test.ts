@@ -34,6 +34,7 @@ Deno.test("createPaaSOpenApiDocument emits process and Deployment-centric public
   assert.ok(doc.paths[TAKOSUMI_DEPLOY_PUBLIC_PATH]?.post);
   assert.ok(doc.paths[TAKOSUMI_DEPLOY_PUBLIC_PATH]?.get);
   assert.ok(doc.paths[`${TAKOSUMI_DEPLOY_PUBLIC_PATH}/:name`]?.get);
+  assert.ok(doc.paths[`${TAKOSUMI_DEPLOY_PUBLIC_PATH}/:name/audit`]?.get);
   assert.ok(doc.paths[ARTIFACTS_BASE_PATH]?.post);
   assert.ok(doc.paths[ARTIFACTS_BASE_PATH]?.get);
   assert.ok(doc.paths[`${ARTIFACTS_BASE_PATH}/kinds`]?.get);
@@ -62,14 +63,22 @@ Deno.test("createPaaSOpenApiDocument emits process and Deployment-centric public
   assert.ok(doc.components.schemas.OperationPlanPreview);
   assert.ok(doc.components.schemas.OperationPlanPreviewOperation);
   assert.ok(doc.components.schemas.DeployPublicDeploymentSummary);
+  assert.ok(doc.components.schemas.DeployPublicAuditResponse);
+  assert.ok(doc.components.schemas.DeployPublicAuditSummary);
+  assert.ok(doc.components.schemas.DeployPublicAuditCauseSummary);
   const deploySummary = doc.components.schemas
     .DeployPublicDeploymentSummary as {
       readonly properties?: Record<string, unknown>;
     };
+  assert.deepEqual(deploySummary.properties?.id, { type: "string" });
   assert.deepEqual(
     deploySummary.properties?.journal,
     { "$ref": "#/components/schemas/DeployPublicJournalSummary" },
   );
+  assert.deepEqual(deploySummary.properties?.provenance, {
+    type: "object",
+    additionalProperties: true,
+  });
   assert.ok(doc.components.schemas.DeployPublicJournalSummary);
   assert.ok(doc.components.schemas.DeployPublicRecoveryInspectOutcome);
   assert.ok(doc.components.schemas.DeployPublicRecoveryCompensateOutcome);

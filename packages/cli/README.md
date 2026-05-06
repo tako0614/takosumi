@@ -25,6 +25,7 @@ takosumi init ./manifest.yml --template selfhosted-single-vm
 takosumi doctor --manifest ./manifest.yml
 takosumi deploy ./manifest.yml
 takosumi status
+takosumi audit show <deployment-id-or-name>
 takosumi destroy ./manifest.yml
 ```
 
@@ -39,6 +40,7 @@ takosumi destroy ./manifest.yml
 | `takosumi deploy <manifest>`                                        | apply; manifest path is required                     |
 | `takosumi destroy <manifest> [--force]`                             | tear down a previously-applied manifest              |
 | `takosumi status [<name>]`                                          | query kernel for current deployment state            |
+| `takosumi audit show <deployment-id-or-name>`                       | show WAL / provenance / rollback cause chain         |
 | `takosumi plan <manifest>`                                          | dry-run (validate + DAG, no provider.apply)          |
 | `takosumi doctor --manifest <path>`                                 | show manifest / mode / token before deploy           |
 | `takosumi server [--port] [--no-agent]`                             | boot kernel + embedded agent                         |
@@ -60,14 +62,14 @@ Priority (highest first):
 2. Command-specific env (`TAKOSUMI_DEPLOY_TOKEN`, `TAKOSUMI_AGENT_TOKEN`)
 3. Generic env (`TAKOSUMI_REMOTE_URL`, `TAKOSUMI_TOKEN`)
 
-| Env var                                       | Used by                                                             |
-| --------------------------------------------- | ------------------------------------------------------------------- |
-| `TAKOSUMI_REMOTE_URL`                         | `takosumi {deploy,destroy,status,plan,artifact}` default kernel URL |
-| `TAKOSUMI_DEPLOY_TOKEN`                       | bearer token for kernel deploy/artifact endpoints                   |
-| `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target                       |
-| `TAKOSUMI_DEV_MODE=1`                         | dev opt-out: plaintext secrets / unencrypted DB / unsafe defaults   |
-| `TAKOSUMI_LOG_LEVEL=warn`                     | suppress dev-mode in-memory fallback notices                        |
-| `TAKOSUMI_KERNEL_URL` / `TAKOSUMI_TOKEN`      | **deprecated** aliases of the above                                 |
+| Env var                                       | Used by                                                                   |
+| --------------------------------------------- | ------------------------------------------------------------------------- |
+| `TAKOSUMI_REMOTE_URL`                         | `takosumi {deploy,destroy,status,audit,plan,artifact}` default kernel URL |
+| `TAKOSUMI_DEPLOY_TOKEN`                       | bearer token for kernel deploy/artifact endpoints                         |
+| `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target                             |
+| `TAKOSUMI_DEV_MODE=1`                         | dev opt-out: plaintext secrets / unencrypted DB / unsafe defaults         |
+| `TAKOSUMI_LOG_LEVEL=warn`                     | suppress dev-mode in-memory fallback notices                              |
+| `TAKOSUMI_KERNEL_URL` / `TAKOSUMI_TOKEN`      | **deprecated** aliases of the above                                       |
 
 See
 [`docs/getting-started/quickstart.md`](../../docs/getting-started/quickstart.md)

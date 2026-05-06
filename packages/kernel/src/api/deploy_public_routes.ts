@@ -142,6 +142,39 @@ export interface DeployPublicRecoveryCompensateResponse {
   };
 }
 
+export interface DeployPublicAuditResponse {
+  readonly status: "ok";
+  readonly audit: DeploymentAuditSummary;
+}
+
+export interface DeploymentAuditSummary {
+  readonly deployment: DeploymentSummary;
+  readonly journal?: DeploymentJournalSummary;
+  readonly provenance?: DeployPublicProvenance;
+  readonly causeChain: readonly DeploymentAuditCauseSummary[];
+  readonly entries: readonly DeploymentJournalEntrySummary[];
+  readonly revokeDebts: readonly DeploymentRevokeDebtRecordSummary[];
+}
+
+export interface DeploymentAuditCauseSummary {
+  readonly operationPlanDigest: `sha256:${string}`;
+  readonly journalEntryId: string;
+  readonly operationId: string;
+  readonly phase: OperationJournalPhase;
+  readonly stage: OperationJournalStage;
+  readonly operationKind: string;
+  readonly effectDigest: `sha256:${string}`;
+  readonly status: OperationJournalStatus;
+  readonly createdAt: string;
+  readonly resourceName?: string;
+  readonly providerId?: string;
+  readonly reason?: string;
+  readonly outcomeStatus?: string;
+  readonly revokeDebtIds?: readonly string[];
+  readonly detail?: JsonObject;
+  readonly provenance?: DeployPublicProvenance;
+}
+
 export interface RegisterDeployPublicRoutesOptions {
   /**
    * Shared-secret token. When undefined the route is disabled (a startup
@@ -1004,6 +1037,27 @@ export function registerDeployPublicRoutes(
           ),
         ),
       },
+      200,
+    );
+  });
+
+  app.get(`${TAKOSUMI_DEPLOY_PUBLIC_PATH}/:name/audit`, async (c) => {
+    const auth = checkBearer(c.req.header("authorization"), getToken());
+    if (auth.status !== "ok") return c.json(auth.body, auth.code);
+    const name = c.req.param("name");
+    if (!name) {
+      return c.json(apiError("invalid_argument", "name is required"), 400);
+    }
+    const record = await recordStore.get(tenantId, name);
+    if (!record) {
+      return c.json(apiError("not_found", `deployment ${name} not found`), 404);
+    }
+    return c.json(
+      await toDeploymentAuditResponse(
+        record,
+        operationJournalStore,
+        revokeDebtStore,
+      ),
       200,
     );
   });
@@ -1961,7 +2015,8 @@ interface DeploymentResourceSummary {
   readonly handle: ResourceHandle;
 }
 
-interface DeploymentSummary {
+export interface DeploymentSummary {
+  readonly id: string;
   readonly name: string;
   readonly status: TakosumiDeploymentRecord["status"];
   readonly tenantId: string;
@@ -2037,6 +2092,7 @@ async function toDeploymentSummary(
     record.name,
   );
   return {
+    id: record.id,
     name: record.name,
     status: record.status,
     tenantId: record.tenantId,
@@ -2048,6 +2104,39 @@ async function toDeploymentSummary(
       ? { revokeDebt: summarizeRevokeDebt(revokeDebts) }
       : {}),
     resources: record.appliedResources.map(toResourceSummary),
+  };
+}
+
+async function toDeploymentAuditResponse(
+  record: TakosumiDeploymentRecord,
+  journalStore: OperationJournalStore,
+  revokeDebtStore: RevokeDebtStore,
+): Promise<DeployPublicAuditResponse> {
+  const journalEntries = await journalStore.listByDeployment(
+    record.tenantId,
+    record.name,
+  );
+  const journal = summarizeLatestJournal(journalEntries);
+  const provenance = latestJournalProvenance(journalEntries);
+  const revokeDebts = await revokeDebtStore.listByDeployment(
+    record.tenantId,
+    record.name,
+  );
+  const deployment = await toDeploymentSummary(
+    record,
+    journalStore,
+    revokeDebtStore,
+  );
+  return {
+    status: "ok",
+    audit: {
+      deployment,
+      ...(journal ? { journal } : {}),
+      ...(provenance ? { provenance } : {}),
+      causeChain: journalEntries.map(toDeploymentAuditCauseSummary),
+      entries: journalEntries.map(toJournalEntrySummary),
+      revokeDebts: revokeDebts.map(toRevokeDebtRecordSummary),
+    },
   };
 }
 
@@ -2140,6 +2229,56 @@ function toJournalEntrySummary(
   };
 }
 
+function toDeploymentAuditCauseSummary(
+  entry: OperationJournalEntry,
+): DeploymentAuditCauseSummary {
+  const detail = journalEntryDetail(entry);
+  const reason = detailReason(detail);
+  return {
+    operationPlanDigest: entry.operationPlanDigest,
+    journalEntryId: entry.journalEntryId,
+    operationId: entry.operationId,
+    phase: entry.phase,
+    stage: entry.stage,
+    operationKind: entry.operationKind,
+    ...(entry.resourceName ? { resourceName: entry.resourceName } : {}),
+    ...(entry.providerId ? { providerId: entry.providerId } : {}),
+    effectDigest: entry.effectDigest,
+    status: entry.status,
+    createdAt: entry.createdAt,
+    ...(detail ? { detail } : {}),
+    ...(reason ? { reason } : {}),
+    ...(detail && typeof detail.outcomeStatus === "string"
+      ? { outcomeStatus: detail.outcomeStatus }
+      : {}),
+    ...(detail && Array.isArray(detail.revokeDebtIds)
+      ? { revokeDebtIds: detail.revokeDebtIds.map(String) }
+      : {}),
+    ...(journalEntryProvenance(entry)
+      ? { provenance: journalEntryProvenance(entry) }
+      : {}),
+  };
+}
+
+function detailReason(detail: JsonObject | undefined): string | undefined {
+  if (!detail) return undefined;
+  if (typeof detail.reason === "string") return detail.reason;
+  const catalogReleaseHook = isJsonObject(detail.catalogReleaseHook)
+    ? detail.catalogReleaseHook
+    : undefined;
+  if (typeof catalogReleaseHook?.reason === "string") {
+    return catalogReleaseHook.reason;
+  }
+  const executableHook = isJsonObject(detail.executableHook)
+    ? detail.executableHook
+    : isJsonObject(catalogReleaseHook?.executableHook)
+    ? catalogReleaseHook.executableHook
+    : undefined;
+  return typeof executableHook?.reason === "string"
+    ? executableHook.reason
+    : undefined;
+}
+
 function latestJournalProvenance(
   entries: readonly OperationJournalEntry[],
 ): DeployPublicProvenance | undefined {
@@ -2158,11 +2297,18 @@ function latestJournalProvenance(
 function journalEntryProvenance(
   entry: OperationJournalEntry,
 ): DeployPublicProvenance | undefined {
+  const detail = journalEntryDetail(entry);
+  const provenance = detail?.provenance;
+  return isJsonObject(provenance) ? provenance : undefined;
+}
+
+function journalEntryDetail(
+  entry: OperationJournalEntry,
+): JsonObject | undefined {
   const detail = isJsonObject(entry.effect.detail)
     ? entry.effect.detail
     : undefined;
-  const provenance = detail?.provenance;
-  return isJsonObject(provenance) ? provenance : undefined;
+  return detail;
 }
 
 function summarizeJournalStatus(

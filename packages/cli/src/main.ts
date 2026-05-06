@@ -10,6 +10,7 @@ import { initCommand } from "./commands/init.ts";
 import { versionCommand } from "./commands/version.ts";
 import { runtimeAgentCommand } from "./commands/runtime_agent.ts";
 import { artifactCommand } from "./commands/artifact.ts";
+import { auditCommand } from "./commands/audit.ts";
 import { pluginCommand } from "./commands/plugin.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { TAKOSUMI_CLI_VERSION } from "./version.ts";
@@ -27,6 +28,7 @@ function createTakosumi(): Command {
     .command("migrate", migrateCommand)
     .command("init", initCommand)
     .command("artifact", artifactCommand)
+    .command("audit", auditCommand)
     .command("plugin", pluginCommand)
     .command("doctor", doctorCommand)
     .command("runtime-agent", runtimeAgentCommand)

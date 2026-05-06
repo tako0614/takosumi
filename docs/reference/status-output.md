@@ -38,6 +38,7 @@ tested.
 type JsonObject = Record<string, unknown>;
 
 interface DeploymentSummary {
+  readonly id: string;
   readonly name: string;
   readonly status: "applied" | "failed" | "destroyed";
   readonly tenantId: string;
@@ -86,11 +87,16 @@ interface DeploymentResourceSummary {
 Destroyed records keep the deployment-level summary but return an empty
 `resources` array.
 
+`id` is the public deploy record id. The natural key remains `(tenantId, name)`,
+so existing status URLs continue to use `name`; `takosumi audit show <id>` uses
+the list endpoint to resolve the id back to `name` before fetching audit detail.
+
 `provenance`, when present, is the latest opaque JSON object recorded in public
 deploy WAL entries. Upstream clients such as `takosumi-git` use it to expose the
 workflow run id, git commit SHA, artifact URI, and step log digest chain that
 produced the deployed manifest. The status route returns it for audit consumers;
-the `takosumi status` table does not render the raw JSON.
+the `takosumi status` table renders only the deployment id and does not render
+the raw provenance JSON.
 
 ## CLI Rendering
 
@@ -100,7 +106,7 @@ the `takosumi status` table does not render the raw JSON.
 The table columns are:
 
 ```text
-deployment | resource | shape | provider | status | journal
+deployment | id | resource | shape | provider | status | journal
 ```
 
 When a deployment has no resources, the CLI still emits one row carrying the
@@ -126,6 +132,7 @@ column empty.
   "deployments": [
     {
       "name": "my-app",
+      "id": "deployment:123",
       "status": "applied",
       "tenantId": "takosumi-deploy",
       "appliedAt": "2026-05-01T00:00:00.000Z",

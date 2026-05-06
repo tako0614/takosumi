@@ -221,10 +221,36 @@ Without `<name>`, lists every deployment by calling `GET /v1/deployments`. With
 `<name>`, fetches a single deployment via `GET /v1/deployments/:name`. Both
 endpoints return the [Status Output](/reference/status-output) document; the CLI
 renders a small text table whose columns are
-`deployment / resource / shape / provider / status`.
+`deployment / id / resource / shape / provider / status`.
 
 Exit codes: `0` rendered, `1` kernel error or unsupported route, `2` if remote /
 token are missing.
+
+### `takosumi audit show <deployment-id-or-name>`
+
+Show the public deploy WAL / provenance / rollback cause chain for one
+deployment. Remote-only.
+
+```text
+takosumi audit show <deployment-id-or-name> [--remote <url>] [--token <t>]
+```
+
+The command first calls `GET /v1/deployments/:name/audit`. If the argument is a
+deployment id rather than a manifest `metadata.name`, the command falls back to
+`GET /v1/deployments`, resolves the id to its deployment name, and then fetches
+the audit endpoint.
+
+The output includes:
+
+- deployment id / name / status / tenant
+- latest WAL phase / stage / status / OperationPlan digest
+- upstream provenance (`workflowRunId`, git commit/ref/repository, artifact URI)
+- cause-chain rows from public WAL entries, including rollback / abort reasons
+  and outcome status when recorded
+- RevokeDebt records created by compensation or rollback paths
+
+Exit codes: `0` rendered, `1` kernel error / deployment not found, `2` malformed
+flags.
 
 ### `takosumi migrate`
 
