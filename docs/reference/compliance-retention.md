@@ -143,6 +143,14 @@ archive sink への delivery 方式は kernel が batch で push する。 deliv
 sink ごとの ack semantics に従う (S3 Object Lock の PutObject 成功 + Object Lock
 確認、など)。
 
+Takosumi の current implementation では、SQL audit retention は
+`SqlObservabilitySink.applyRetentionPolicy()` が担う。retention cutoff を超えた
+entry は、configured `AuditReplicationSink` へ配送してから `archived=true` に
+mark される。汎用 object-store archive は `ObjectStorageAuditReplicationSink`
+が担当し、`ObjectStoragePort` 経由で `<prefix>/events/<sequence>-<hash>.json` に
+hash-chain record を保存する。S3 Object Lock / GCS Bucket Lock / R2 / MinIO
+などの immutability は adapter 側の 運用 policy として満たす。
+
 ### Delivery contract
 
 - delivery は audit hash chain の連続性を維持する。chunk ごとに `from-eventId` /

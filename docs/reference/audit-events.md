@@ -309,6 +309,19 @@ protect, and the regime-selection rules are defined in the operator-facing
 compliance reference. This audit-events reference defines only the event-shape
 contract; the retention windows attach to the events recorded here.
 
+Implementation status:
+
+- `SqlObservabilitySink.applyRetentionPolicy()` archives candidates only after
+  they have been delivered to the configured audit replication sink.
+- `ObjectStorageAuditReplicationSink` writes each chained audit record as JSON
+  through the generic `ObjectStoragePort` at
+  `<prefix>/events/<sequence>-<hash>.json`, so operators can back long-term
+  retention with S3 Object Lock, GCS Bucket Lock, R2, MinIO, or an equivalent
+  immutable object-store adapter.
+- `TAKOSUMI_AUDIT_DELETE_AFTER_ARCHIVE=true` is accepted only when a replication
+  sink is attached; without delivery confirmation, primary rows remain in the
+  SQL audit store.
+
 ## Event payload notes
 
 Every event payload conforms to the closed schema for its `eventType`. The

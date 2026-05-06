@@ -209,6 +209,13 @@ export class SqlObservabilitySink implements ObservabilitySink {
     const archiveCutoff = new Date(
       now - this.#auditRetentionDays * 86_400_000,
     ).toISOString();
+    const existing = this.#replication ? await this.listAudit() : [];
+    const archiveCandidates = existing.filter((record) =>
+      record.event.occurredAt < archiveCutoff
+    );
+    if (archiveCandidates.length > 0) {
+      await replicateRetentionRecords(this.#replication, archiveCandidates);
+    }
     const archived = await this.#client.query(
       `update audit_events set archived = true
         where archived = false and occurred_at < :cutoff`,
@@ -218,11 +225,22 @@ export class SqlObservabilitySink implements ObservabilitySink {
     let deleted = 0;
     const policy = this.#retentionPolicy;
     if (policy?.deleteAfterArchive) {
+      if (!this.#replication) {
+        throw new Error(
+          "audit delete-after-archive requires a configured replication sink",
+        );
+      }
       const deleteCutoff = new Date(
         now -
           (this.#auditRetentionDays + policy.archiveGracePeriodDays) *
             86_400_000,
       ).toISOString();
+      const deleteCandidates = existing.filter((record) =>
+        record.event.occurredAt < deleteCutoff
+      );
+      if (deleteCandidates.length > 0) {
+        await replicateRetentionRecords(this.#replication, deleteCandidates);
+      }
       const deletion = await this.#client.query(
         `delete from audit_events
           where archived = true and occurred_at < :cutoff`,
@@ -250,6 +268,25 @@ export class SqlObservabilitySink implements ObservabilitySink {
       if (tx.rollback) await tx.rollback().catch(() => {});
       else await tx.query("rollback").catch(() => {});
       throw error;
+    }
+  }
+}
+
+async function replicateRetentionRecords(
+  replication: AuditReplicationDriver | AuditReplicationSink | undefined,
+  records: readonly ChainedAuditEvent[],
+): Promise<void> {
+  if (!replication) return;
+  for (const record of records) {
+    const result = await replication.replicate(record);
+    if (Array.isArray(result)) {
+      const failed = result.find((entry) => !entry.ok);
+      if (failed) {
+        throw new Error(
+          `audit archive replication failed for sequence ${record.sequence}` +
+            ` via ${failed.sink}: ${failed.error?.message ?? "unknown error"}`,
+        );
+      }
     }
   }
 }

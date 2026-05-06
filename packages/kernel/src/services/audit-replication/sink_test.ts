@@ -4,6 +4,7 @@ import {
   type AuditReplicationFailure,
   type AuditReplicationSink,
   InMemoryAuditReplicationSink,
+  ObjectStorageAuditReplicationSink,
   runReplicationBatch,
 } from "./sink.ts";
 import {
@@ -12,6 +13,7 @@ import {
 } from "./policy.ts";
 import type { ChainedAuditEvent } from "../observability/audit_chain.ts";
 import type { AuditEvent } from "../../domains/audit/types.ts";
+import { MemoryObjectStorage } from "../../adapters/object-storage/mod.ts";
 
 function makeEvent(id: string, occurredAt: string): AuditEvent {
   return {
@@ -64,6 +66,42 @@ Deno.test("InMemoryAuditReplicationSink dedups duplicate event ids", async () =>
   );
   assert.equal(second.accepted, false);
   assert.equal(sink.records().length, 1);
+});
+
+Deno.test("ObjectStorageAuditReplicationSink writes idempotent archive objects", async () => {
+  const objectStorage = new MemoryObjectStorage();
+  const sink = new ObjectStorageAuditReplicationSink({
+    objectStorage,
+    bucket: "audit-cold-store",
+    prefix: "takosumi/audit",
+  });
+  const record = makeChained(
+    "audit_1",
+    1,
+    "2026-04-27T00:00:00.000Z",
+  );
+
+  const first = await sink.replicate(record);
+  const second = await sink.replicate(record);
+
+  assert.equal(first.accepted, true);
+  assert.match(first.receipt ?? "", /^object-storage:\/\/audit-cold-store\//);
+  assert.equal(second.accepted, false);
+  const listed = await objectStorage.listObjects({
+    bucket: "audit-cold-store",
+    prefix: "takosumi/audit/events/",
+  });
+  assert.equal(listed.objects.length, 1);
+  const archived = await objectStorage.getObject({
+    bucket: "audit-cold-store",
+    key: listed.objects[0]!.key,
+  });
+  assert.ok(archived);
+  assert.equal(archived.metadata["audit-event-id"], "audit_1");
+  const body = JSON.parse(new TextDecoder().decode(archived.body));
+  assert.equal(body.sequence, 1);
+  assert.equal(body.event.id, "audit_1");
+  assert.equal(body.hash, "hash_audit_1");
 });
 
 Deno.test("runReplicationBatch falls back to sequential replicate", async () => {

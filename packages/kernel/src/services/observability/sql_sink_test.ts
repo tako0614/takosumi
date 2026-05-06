@@ -286,6 +286,38 @@ Deno.test("SqlObservabilitySink applies retention policy by archiving old events
   assert.equal(await sink.verifyAuditChain(), true);
 });
 
+Deno.test("SqlObservabilitySink sends archive candidates to replication before marking archived", async () => {
+  const { InMemoryAuditReplicationSink, AuditReplicationDriver } = await import(
+    "../audit-replication/sink.ts"
+  );
+  const replicationSink = new InMemoryAuditReplicationSink({
+    id: "object-store-archive",
+  });
+  const driver = new AuditReplicationDriver({ sinks: [replicationSink] });
+  const client = new FakeAuditSqlClient();
+  const fixedNow = new Date("2026-05-01T00:00:00.000Z");
+  const sink = new SqlObservabilitySink({
+    client,
+    clock: () => fixedNow,
+    auditRetentionDays: 7,
+    replication: driver,
+  });
+
+  await sink.appendAudit(event("old_1", "2026-04-01T00:00:00.000Z"));
+  await sink.appendAudit(event("recent", "2026-04-29T00:00:00.000Z"));
+  replicationSink.reset();
+
+  const result = await sink.applyRetentionPolicy();
+
+  assert.equal(result.archived, 1);
+  assert.deepEqual(
+    replicationSink.records().map((record) => record.event.id),
+    ["old_1"],
+  );
+  assert.equal(client.rows.find((r) => r.id === "old_1")?.archived, true);
+  assert.equal(client.rows.find((r) => r.id === "recent")?.archived, false);
+});
+
 Deno.test("SqlObservabilitySink replicates new appends to attached replication driver", async () => {
   const { InMemoryAuditReplicationSink, AuditReplicationDriver } = await import(
     "../audit-replication/sink.ts"
@@ -310,6 +342,13 @@ Deno.test("SqlObservabilitySink delete-after-archive only triggers when policy e
   const { resolveAuditRetention } = await import(
     "../audit-replication/policy.ts"
   );
+  const { InMemoryAuditReplicationSink, AuditReplicationDriver } = await import(
+    "../audit-replication/sink.ts"
+  );
+  const replicationSink = new InMemoryAuditReplicationSink({
+    id: "object-store-archive",
+  });
+  const driver = new AuditReplicationDriver({ sinks: [replicationSink] });
   const client = new FakeAuditSqlClient();
   const fixedNow = new Date("2026-05-01T00:00:00.000Z");
   const policy = resolveAuditRetention({
@@ -324,6 +363,7 @@ Deno.test("SqlObservabilitySink delete-after-archive only triggers when policy e
     client,
     clock: () => fixedNow,
     retentionPolicy: policy,
+    replication: driver,
   });
 
   // 30d ago: past the 7d archive cutoff AND the 17d delete cutoff.
@@ -331,15 +371,45 @@ Deno.test("SqlObservabilitySink delete-after-archive only triggers when policy e
   // 12d ago: past archive but inside the 17d grace window -> archived only.
   await sink.appendAudit(event("aging", "2026-04-19T00:00:00.000Z"));
   await sink.appendAudit(event("recent", "2026-04-29T00:00:00.000Z"));
+  replicationSink.reset();
 
   const first = await sink.applyRetentionPolicy();
   // First pass archives "ancient" and "aging", and deletes "ancient" (which
   // was archived in the same pass, so the delete sees it as archived).
   assert.equal(first.archived, 2);
   assert.equal(first.deleted, 1);
+  assert.deepEqual(
+    replicationSink.records().map((record) => record.event.id),
+    ["ancient", "aging"],
+  );
   assert.equal(client.rows.find((r) => r.id === "ancient"), undefined);
   assert.equal(client.rows.find((r) => r.id === "aging")?.archived, true);
   assert.equal(client.rows.find((r) => r.id === "recent")?.archived, false);
+});
+
+Deno.test("SqlObservabilitySink refuses delete-after-archive without replication", async () => {
+  const { resolveAuditRetention } = await import(
+    "../audit-replication/policy.ts"
+  );
+  const client = new FakeAuditSqlClient();
+  const fixedNow = new Date("2026-05-01T00:00:00.000Z");
+  const policy = resolveAuditRetention({
+    env: {
+      TAKOSUMI_AUDIT_RETENTION_DAYS: "7",
+      TAKOSUMI_AUDIT_DELETE_AFTER_ARCHIVE: "true",
+    },
+  });
+  const sink = new SqlObservabilitySink({
+    client,
+    clock: () => fixedNow,
+    retentionPolicy: policy,
+  });
+  await sink.appendAudit(event("ancient", "2026-04-01T00:00:00.000Z"));
+
+  await assert.rejects(
+    () => sink.applyRetentionPolicy(),
+    /delete-after-archive requires a configured replication sink/,
+  );
 });
 
 Deno.test("StandaloneBootstrapService rejects memory observability sink in production", async () => {

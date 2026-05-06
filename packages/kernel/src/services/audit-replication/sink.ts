@@ -1,4 +1,5 @@
 import type { ChainedAuditEvent } from "../observability/audit_chain.ts";
+import type { ObjectStoragePort } from "../../adapters/object-storage/mod.ts";
 
 /**
  * AuditReplicationSink — external replication hook for tamper-evident audit
@@ -146,6 +147,103 @@ export class InMemoryAuditReplicationSink implements AuditReplicationSink {
   }
 }
 
+export interface ObjectStorageAuditReplicationSinkOptions {
+  readonly objectStorage: ObjectStoragePort;
+  readonly bucket: string;
+  readonly prefix?: string;
+  readonly id?: string;
+  readonly description?: string;
+}
+
+/**
+ * Object-storage backed audit archive sink.
+ *
+ * Each chained audit event is stored as one immutable-by-key JSON object.
+ * Operators back this port with S3 Object Lock, GCS Bucket Lock, R2, MinIO,
+ * or another object-store adapter; the kernel keeps the archive format
+ * provider-neutral.
+ */
+export class ObjectStorageAuditReplicationSink implements AuditReplicationSink {
+  readonly id: string;
+  readonly description?: string;
+  readonly #objectStorage: ObjectStoragePort;
+  readonly #bucket: string;
+  readonly #prefix: string;
+
+  constructor(options: ObjectStorageAuditReplicationSinkOptions) {
+    if (!options.bucket) {
+      throw new Error("object-storage audit archive bucket required");
+    }
+    this.id = options.id ?? "object-storage-audit-archive";
+    this.description = options.description ??
+      "Audit hash-chain archive stored through ObjectStoragePort";
+    this.#objectStorage = options.objectStorage;
+    this.#bucket = options.bucket;
+    this.#prefix = normalizePrefix(options.prefix ?? "audit-archive");
+  }
+
+  async replicate(record: ChainedAuditEvent): Promise<AuditReplicationResult> {
+    const key = this.#keyFor(record);
+    const existing = await this.#objectStorage.headObject({
+      bucket: this.#bucket,
+      key,
+    });
+    if (existing) {
+      return {
+        id: record.event.id,
+        sequence: record.sequence,
+        accepted: false,
+        receipt: receiptFor(existing.bucket, existing.key, existing.digest),
+      };
+    }
+    const body = JSON.stringify({
+      sequence: record.sequence,
+      previousHash: record.previousHash,
+      hash: record.hash,
+      event: record.event,
+    });
+    const head = await this.#objectStorage.putObject({
+      bucket: this.#bucket,
+      key,
+      body,
+      contentType: "application/json",
+      metadata: {
+        "audit-event-id": record.event.id,
+        "audit-sequence": String(record.sequence),
+        "audit-hash": record.hash,
+        "audit-previous-hash": record.previousHash,
+        "audit-occurred-at": record.event.occurredAt,
+      },
+    });
+    return {
+      id: record.event.id,
+      sequence: record.sequence,
+      accepted: true,
+      receipt: receiptFor(head.bucket, head.key, head.digest),
+    };
+  }
+
+  async replicateBatch(
+    records: readonly ChainedAuditEvent[],
+  ): Promise<AuditReplicationBatchResult> {
+    const results: AuditReplicationResult[] = [];
+    for (const record of records) {
+      results.push(await this.replicate(record));
+    }
+    return {
+      accepted: results.filter((result) => result.accepted).length,
+      results,
+    };
+  }
+
+  #keyFor(record: ChainedAuditEvent): string {
+    const padded = String(record.sequence).padStart(10, "0");
+    const tag = record.hash.slice(0, 16);
+    const suffix = `events/${padded}-${tag}.json`;
+    return this.#prefix ? `${this.#prefix}/${suffix}` : suffix;
+  }
+}
+
 /**
  * Driver that fans out a chained audit record to N replication sinks. The
  * driver swallows individual sink failures by default so a misbehaving sink
@@ -199,4 +297,12 @@ export interface AuditReplicationFailure {
   readonly eventId: string;
   readonly sequence: number;
   readonly error: Error;
+}
+
+function normalizePrefix(prefix: string): string {
+  return prefix.trim().replace(/^\/+|\/+$/g, "");
+}
+
+function receiptFor(bucket: string, key: string, digest: string): string {
+  return `object-storage://${bucket}/${key}#${digest}`;
 }
