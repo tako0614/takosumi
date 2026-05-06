@@ -46,6 +46,11 @@ stream plus a small number of derived events (for example,
 `approval-near-expiry` is derived from approval TTL and is not a raw audit event
 on its own).
 
+The current kernel primitive for SLA breach detection emits the
+`sla-breach-detected` notification signal from `SlaBreachDetectionService` when
+a notification adapter is configured. Delivery remains pull-only and
+operator-owned.
+
 ## Signal categories
 
 The v1 category enum is closed:

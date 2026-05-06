@@ -427,10 +427,10 @@ See also: [Notification Emission](/reference/notification-emission).
 | Event                   | Severity | Description                                                     | Payload fields                                                                           |
 | ----------------------- | -------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `sla-warning-raised`    | warning  | An SLA dimension entered a warning band before breach.          | `dimension`, `scope`, `scopeId`, `value`, `thresholdId`                                  |
-| `sla-breach-detected`   | error    | An SLA threshold was breached.                                  | `dimension`, `scope`, `scopeId`, `value`, `thresholdId`, `incidentId`                    |
-| `sla-recovering`        | notice   | An SLA dimension is returning toward nominal during hysteresis. | `dimension`, `scope`, `scopeId`, `value`, `thresholdId`                                  |
+| `sla-breach-detected`   | warning  | An SLA threshold was breached.                                  | `dimension`, `scope`, `scopeId`, `value`, `thresholdId`, `incidentId`                    |
+| `sla-recovering`        | warning  | An SLA dimension is returning toward nominal during hysteresis. | `dimension`, `scope`, `scopeId`, `value`, `thresholdId`                                  |
 | `sla-recovered`         | info     | An SLA dimension recovered to nominal.                          | `dimension`, `scope`, `scopeId`, `recoveredAt`, `thresholdId`                            |
-| `sla-threshold-changed` | notice   | An SLAThreshold record was registered or updated.               | `thresholdId`, `dimension`, `scope`, `scopeId`, `previousValue`, `newValue`, `changedBy` |
+| `sla-threshold-changed` | info     | An SLAThreshold record was registered or updated.               | `thresholdId`, `dimension`, `scope`, `scopeId`, `previousValue`, `newValue`, `changedBy` |
 
 See also: [SLA Breach Detection](/reference/sla-breach-detection).
 

@@ -26,6 +26,13 @@ mount `/api/internal/v1/sla`; see
 [Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
 :::
 
+::: info Current kernel primitive `SlaBreachDetectionService` implements the v1
+threshold evaluator, hysteresis state machine, and event publish path. Callers
+provide threshold records and rolling-window observations; the service publishes
+transition events to the kernel outbox, appends audit events through the
+observability sink, and emits an operator notification signal for
+`sla-breach-detected` when a notification adapter is supplied. :::
+
 ## SLA dimensions (closed v1 set)
 
 The v1 measurement set is closed. Adding a dimension goes through the
@@ -189,9 +196,10 @@ State machine transitions emit closed-enum audit events (see
   — emitted on threshold mutation. Payload carries the threshold snapshot before
   and after.
 
-Severity mapping: `sla-warning-raised` is `notice`, `sla-breach-detected` is
-`warning`, `sla-recovered` is `notice`, and threshold mutation events are
-`info`. Operators escalate to paging through their downstream alerting layer.
+Severity mapping on the kernel audit envelope uses the current `AuditSeverity`
+enum: `sla-warning-raised`, `sla-breach-detected`, and `sla-recovering` are
+`warning`; `sla-recovered` and threshold mutation events are `info`. Operators
+escalate to paging through their downstream alerting layer.
 
 ## Storage
 

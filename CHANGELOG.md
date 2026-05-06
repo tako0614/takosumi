@@ -121,6 +121,10 @@ entry).
 - `UsageProjectionService` now supports per-Space CPU / storage / bandwidth
   quota tiers through `LocalUsageQuotaPolicy`, including `requireWithinQuota()`
   for fail-closed usage recording.
+- `SlaBreachDetectionService` now evaluates operator-supplied thresholds,
+  persists hysteresis state, and publishes `sla-warning-raised` /
+  `sla-breach-detected` / `sla-recovering` / `sla-recovered` events to audit,
+  outbox, and the operator notification signal path.
 
 ### 0.14.0 — 2026-05-06
 
