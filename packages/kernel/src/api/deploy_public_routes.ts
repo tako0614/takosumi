@@ -4,6 +4,7 @@ import type {
   ManifestResource,
   PlatformContext,
   PlatformOperationRecoveryMode,
+  PlatformTraceContext,
   RefResolver,
   ResourceHandle,
 } from "takosumi-contract";
@@ -48,7 +49,9 @@ import {
 } from "../domains/deploy/deploy_metrics.ts";
 import {
   readRequestCorrelation,
+  readRequestTrace,
   type RequestCorrelation,
+  type RequestTraceContext,
 } from "./request_correlation.ts";
 import {
   type DeployPublicIdempotencyStore,
@@ -161,6 +164,7 @@ export interface RegisterDeployPublicRoutesOptions {
     dryRun?: boolean,
     operationPlanPreview?: OperationPlanPreview,
     recoveryMode?: PlatformOperationRecoveryMode,
+    trace?: PlatformTraceContext,
   ) => Promise<ApplyV2Outcome>;
   /**
    * Optional injection point for tests so destroy runs against a fake.
@@ -179,6 +183,7 @@ export interface RegisterDeployPublicRoutesOptions {
     handleFor?: (resource: ManifestResource) => ResourceHandle,
     operationPlanPreview?: OperationPlanPreview,
     recoveryMode?: PlatformOperationRecoveryMode,
+    trace?: PlatformTraceContext,
   ) => Promise<DestroyV2Outcome>;
   /**
    * Real `AppContext` from which the public deploy route derives the
@@ -301,10 +306,14 @@ export function registerDeployPublicRoutes(
     options.appContext?.adapters.observability;
   const now = options.now ?? (() => new Date().toISOString());
 
-  const buildPlatformContext = (): PlatformContext => {
-    if (options.createPlatformContext) return options.createPlatformContext();
+  const buildPlatformContext = (
+    trace?: PlatformTraceContext,
+  ): PlatformContext => {
+    if (options.createPlatformContext) {
+      return attachPlatformTrace(options.createPlatformContext(), trace);
+    }
     if (options.appContext) {
-      return platformContextFromAppContext(options.appContext, tenantId);
+      return platformContextFromAppContext(options.appContext, tenantId, trace);
     }
     throw new Error(
       "registerDeployPublicRoutes: no platform context configured. " +
@@ -314,10 +323,17 @@ export function registerDeployPublicRoutes(
   };
 
   const applyResources = options.applyResources ??
-    ((resources, priorApplied, dryRun, operationPlanPreview, recoveryMode) =>
+    ((
+      resources,
+      priorApplied,
+      dryRun,
+      operationPlanPreview,
+      recoveryMode,
+      trace,
+    ) =>
       applyV2({
         resources,
-        context: buildPlatformContext(),
+        context: buildPlatformContext(trace),
         ...(priorApplied ? { priorApplied } : {}),
         ...(dryRun ? { dryRun } : {}),
         ...(operationPlanPreview ? { operationPlanPreview } : {}),
@@ -325,10 +341,10 @@ export function registerDeployPublicRoutes(
       }));
 
   const destroyResources = options.destroyResources ??
-    ((resources, handleFor, operationPlanPreview, recoveryMode) =>
+    ((resources, handleFor, operationPlanPreview, recoveryMode, trace) =>
       destroyV2({
         resources,
-        context: buildPlatformContext(),
+        context: buildPlatformContext(trace),
         ...(handleFor ? { handleFor } : {}),
         ...(operationPlanPreview ? { operationPlanPreview } : {}),
         ...(recoveryMode ? { recoveryMode } : {}),
@@ -337,6 +353,7 @@ export function registerDeployPublicRoutes(
   const executeDeployPublicPost = async (
     body: Record<string, unknown>,
     requestCorrelation?: RequestCorrelation,
+    requestTrace?: RequestTraceContext,
   ): Promise<DeployPublicHandledResponse> => {
     const rawManifest = body.manifest;
     const mode = readMode(body.mode);
@@ -368,6 +385,7 @@ export function registerDeployPublicRoutes(
       manifestObject,
       resources.value,
     );
+    const trace = deployTraceFromRequest(requestTrace, requestCorrelation);
     const metricTimer = startDeployMetricTimer();
     const recordMetric = (
       operationKind: DeployMetricOperationKind,
@@ -400,7 +418,14 @@ export function registerDeployPublicRoutes(
         await recordMetric("plan", "failed-validation");
         return quota.response;
       }
-      const outcome = await applyResources(resources.value, undefined, true);
+      const outcome = await applyResources(
+        resources.value,
+        undefined,
+        true,
+        undefined,
+        undefined,
+        trace,
+      );
       if (outcome.status === "failed-validation") {
         await recordMetric("plan", "failed-validation");
         return { status: 400, body: { status: "error", outcome } };
@@ -561,6 +586,7 @@ export function registerDeployPublicRoutes(
             handleFor,
             operationPlan,
             platformRecoveryMode(recoveryMode.value),
+            trace,
           );
           if (outcome.status === "failed-validation") {
             await appendOperationPlanJournalStages({
@@ -738,6 +764,7 @@ export function registerDeployPublicRoutes(
           false,
           operationPlan,
           platformRecoveryMode(recoveryMode.value),
+          trace,
         );
         if (outcome.status === "failed-validation") {
           await appendOperationPlanJournalStages({
@@ -908,6 +935,7 @@ export function registerDeployPublicRoutes(
       const response = await executeDeployPublicPost(
         body.value,
         readRequestCorrelation(c),
+        readRequestTrace(c),
       );
       await idempotencyStore.save({
         tenantId,
@@ -2183,9 +2211,10 @@ function platformRecoveryMode(
 function platformContextFromAppContext(
   appContext: AppContext,
   tenantId: string,
+  trace?: PlatformTraceContext,
 ): PlatformContext {
   const adapters = appContext.adapters;
-  return {
+  return attachPlatformTrace({
     tenantId,
     spaceId: tenantId,
     secrets: adapters.secrets as PlatformContext["secrets"],
@@ -2194,6 +2223,28 @@ function platformContextFromAppContext(
     objectStorage: adapters.objectStorage as PlatformContext["objectStorage"],
     refResolver: PUBLIC_DEPLOY_REF_RESOLVER,
     resolvedOutputs: new Map<string, JsonObject>(),
+  }, trace);
+}
+
+function attachPlatformTrace(
+  context: PlatformContext,
+  trace: PlatformTraceContext | undefined,
+): PlatformContext {
+  return trace ? { ...context, trace } : context;
+}
+
+function deployTraceFromRequest(
+  trace: RequestTraceContext | undefined,
+  correlation: RequestCorrelation | undefined,
+): PlatformTraceContext | undefined {
+  if (!trace) return undefined;
+  return {
+    traceId: trace.traceId,
+    parentSpanId: trace.spanId,
+    ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
+    ...(correlation?.correlationId
+      ? { correlationId: correlation.correlationId }
+      : {}),
   };
 }
 

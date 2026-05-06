@@ -22,6 +22,10 @@ import {
   buildOperationPlanPreview,
   type OperationPlanPreview,
 } from "./operation_plan_preview.ts";
+import {
+  withDeployTraceContext,
+  withDeployTraceSpan,
+} from "./deploy_traces.ts";
 
 export type {
   OperationPlanPreview,
@@ -193,13 +197,14 @@ export async function applyV2(
 ): Promise<ApplyV2Outcome> {
   const {
     resources,
-    context,
+    context: inputContext,
     dryRun = false,
     priorApplied,
     deploymentName,
     operationPlanPreview,
     recoveryMode = "normal",
   } = options;
+  const context = withDeployTraceContext(inputContext);
 
   const resolution = resolveResourcesV2(resources);
   if (resolution.issues.length > 0) {
@@ -293,13 +298,34 @@ export async function applyV2(
       continue;
     }
 
+    const operation = operationContextByResourceName.get(name);
     try {
-      const result = await item.provider.apply(
-        resolvedSpec,
-        withOperationContext(
-          context,
-          operationContextByResourceName.get(name),
-        ),
+      const result = await withDeployTraceSpan(
+        { observability: context.observability },
+        {
+          name: "takosumi.provider.apply",
+          trace: context.trace,
+          spaceId: context.spaceId,
+          groupId: deploymentName,
+          operation,
+          operationKind: "apply",
+          attributes: {
+            "takosumi.shape": item.resource.shape,
+            "takosumi.provider_id": item.provider.id,
+            "takosumi.resource_name": name,
+          },
+          resultAttributes: (result) => ({
+            "takosumi.provider_handle": String(result.handle),
+          }),
+        },
+        () =>
+          item.provider.apply(
+            resolvedSpec,
+            withOperationContext(
+              context,
+              operation,
+            ),
+          ),
       );
       outputsByName.set(name, result.outputs as JsonObject);
       const appliedResource = {
@@ -450,11 +476,12 @@ export async function destroyV2(
 ): Promise<DestroyV2Outcome> {
   const {
     resources,
-    context,
+    context: inputContext,
     handleFor,
     operationPlanPreview,
     recoveryMode = "normal",
   } = options;
+  const context = withDeployTraceContext(inputContext);
 
   const resolution = resolveResourcesV2(resources);
   if (resolution.issues.length > 0) {
@@ -494,13 +521,31 @@ export async function destroyV2(
     const handle: ResourceHandle = handleFor
       ? handleFor(item.resource)
       : item.resource.name;
+    const operation = operationContextByResourceName.get(name);
     try {
-      await item.provider.destroy(
-        handle,
-        withOperationContext(
-          context,
-          operationContextByResourceName.get(name),
-        ),
+      await withDeployTraceSpan(
+        { observability: context.observability },
+        {
+          name: "takosumi.provider.destroy",
+          trace: context.trace,
+          spaceId: context.spaceId,
+          operation,
+          operationKind: "destroy",
+          attributes: {
+            "takosumi.shape": item.resource.shape,
+            "takosumi.provider_id": item.provider.id,
+            "takosumi.resource_name": name,
+            "takosumi.provider_handle": String(handle),
+          },
+        },
+        () =>
+          item.provider.destroy(
+            handle,
+            withOperationContext(
+              context,
+              operation,
+            ),
+          ),
       );
       destroyed.push({ name, providerId: item.provider.id, handle });
     } catch (error) {

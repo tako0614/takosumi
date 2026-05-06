@@ -365,6 +365,36 @@ export class GcpObservabilityAdapter implements ObservabilitySink {
     }
     return this.client.listMetrics(query);
   }
+
+  recordTrace(
+    event: Parameters<ObservabilitySink["recordTrace"]>[0],
+  ): ReturnType<ObservabilitySink["recordTrace"]> {
+    if (
+      "writeTrace" in this.client &&
+      typeof this.client.writeTrace === "function"
+    ) {
+      return this.client.writeTrace(event);
+    }
+    if ("recordTrace" in this.client) {
+      return this.client.recordTrace(event);
+    }
+    return Promise.resolve(event);
+  }
+
+  listTraces(
+    query?: Parameters<ObservabilitySink["listTraces"]>[0],
+  ): ReturnType<ObservabilitySink["listTraces"]> {
+    if (
+      "listTraceEvents" in this.client &&
+      typeof this.client.listTraceEvents === "function"
+    ) {
+      return this.client.listTraceEvents(query);
+    }
+    if ("listTraces" in this.client) {
+      return this.client.listTraces(query);
+    }
+    return Promise.resolve([]);
+  }
 }
 
 export class GcpRuntimeAgentAdapter implements RuntimeAgentRegistry {

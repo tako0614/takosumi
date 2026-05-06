@@ -137,6 +137,10 @@ entry).
   server spans in the configured `ObservabilitySink`, exports spans through
   native OTLP/HTTP JSON `/v1/traces`, and adds `trace_id` / `span_id` to JSON
   request logs.
+- WAL-backed `applyV2` / `destroyV2` provider calls now record
+  `takosumi.provider.apply` / `takosumi.provider.destroy` spans with operation
+  id, operation kind, WAL stage, idempotency key, provider id, resource name,
+  request id, and correlation id attributes.
 - Added the Observability Stack ownership reference, including managed vs
   self-hosted responsibilities, default SLI / SLO targets, and alert policy
   ownership.

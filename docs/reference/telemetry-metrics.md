@@ -16,12 +16,13 @@ schema versioning rule.
 
 ::: info Current implementation status The metric schemas, observability sink
 records, Prometheus `/metrics` HTTP route, OTLP/HTTP JSON metric exporter, and
-kernel HTTP server spans are current service contracts. The bootstrap path
-mounts `/metrics` on the API role when `TAKOSUMI_METRICS_SCRAPE_TOKEN` is set,
-and wraps the configured `ObservabilitySink` with native OTLP metric / trace
-export when `TAKOSUMI_OTLP_METRICS_ENDPOINT`, `TAKOSUMI_OTLP_TRACES_ENDPOINT`,
-or standard `OTEL_EXPORTER_OTLP_*` endpoint env vars are set. Full per-operation
-trace coverage across every kernel service remains the target contract. The
+kernel HTTP server / provider operation spans are current service contracts. The
+bootstrap path mounts `/metrics` on the API role when
+`TAKOSUMI_METRICS_SCRAPE_TOKEN` is set, and wraps the configured
+`ObservabilitySink` with native OTLP metric / trace export when
+`TAKOSUMI_OTLP_METRICS_ENDPOINT`, `TAKOSUMI_OTLP_TRACES_ENDPOINT`, or standard
+`OTEL_EXPORTER_OTLP_*` endpoint env vars are set. Full trace coverage across
+runtime-agent loop and internal RPC workers remains the target contract. The
 deploy overview Grafana dashboard is published at
 `deploy/observability/grafana/takosumi-deploy-overview.json`. :::
 
@@ -30,14 +31,14 @@ deploy overview Grafana dashboard is published at
 The target contract exports telemetry through two protocols at the same time.
 
 - **OpenTelemetry / OTLP (primary)** — push-based OTLP/HTTP JSON exporter for
-  metrics and kernel HTTP server spans, plus the target contract for broader
-  per-operation traces and optional logs. The kernel exports metrics whenever
-  `TAKOSUMI_OTLP_METRICS_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, or
-  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and exports HTTP server spans whenever
-  `TAKOSUMI_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, or
-  `OTEL_EXPORTER_OTLP_ENDPOINT` is set. OTLP is the protocol operators wire into
-  a collector when they need remote attribute enrichment or a vendor-neutral
-  telemetry ingress.
+  metrics, kernel HTTP server spans, and provider apply / destroy operation
+  spans, plus the target contract for broader runtime-agent and internal RPC
+  traces. The kernel exports metrics whenever `TAKOSUMI_OTLP_METRICS_ENDPOINT`,
+  `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, or `OTEL_EXPORTER_OTLP_ENDPOINT` is
+  set, and exports HTTP server spans whenever `TAKOSUMI_OTLP_TRACES_ENDPOINT`,
+  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, or `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+  OTLP is the protocol operators wire into a collector when they need remote
+  attribute enrichment or a vendor-neutral telemetry ingress.
 - **Prometheus pull endpoint (secondary)** — `/metrics` endpoint on the kernel
   HTTP server, scraped by Prometheus or a Prometheus-compatible agent. The
   endpoint exposes recorded `ObservabilitySink` metric events in Prometheus text
@@ -136,8 +137,9 @@ Grafana dashboard uses these PromQL expressions:
 
 The target contract emits OTLP traces for every operation that crosses an
 external boundary. The current kernel implementation emits HTTP server spans for
-API requests and exports them through the native OTLP traces endpoint. Every
-per-operation span carries the same attribute set:
+API requests and provider apply / destroy spans for WAL-backed `applyV2` /
+`destroyV2` operations, then exports them through the native OTLP traces
+endpoint. Every per-operation span carries the same attribute set:
 
 ```text
 takosumi.space_id          spaceId

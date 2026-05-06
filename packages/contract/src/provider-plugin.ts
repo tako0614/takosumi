@@ -113,6 +113,13 @@ export interface PlatformOperationContext {
   readonly deadline?: string;
 }
 
+export interface PlatformTraceContext {
+  readonly traceId: string;
+  readonly parentSpanId?: string;
+  readonly requestId?: string;
+  readonly correlationId?: string;
+}
+
 export interface PlatformContext {
   readonly tenantId: string;
   readonly spaceId: string;
@@ -129,6 +136,11 @@ export interface PlatformContext {
    * Absent outside WAL-backed apply / destroy paths.
    */
   readonly operation?: PlatformOperationContext;
+  /**
+   * Active trace context attached by the kernel when a provider operation is
+   * executed under an HTTP request or another operation span.
+   */
+  readonly trace?: PlatformTraceContext;
 }
 
 export function formatPlatformOperationIdempotencyKey(

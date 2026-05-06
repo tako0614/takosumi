@@ -14,6 +14,7 @@ import {
   unregisterShape,
 } from "takosumi-contract";
 import { applyV2 } from "./apply_v2.ts";
+import { InMemoryObservabilitySink } from "../../services/observability/mod.ts";
 
 const SHAPE = "test-apply-shape";
 const PROV_OK = "test-apply-provider-ok";
@@ -424,6 +425,60 @@ Deno.test("applyV2 threads WAL idempotency context to provider.apply", async () 
       firstApply.operation?.idempotencyKeyString,
       formatPlatformOperationIdempotencyKey(firstOperation.idempotencyKey),
     );
+  } finally {
+    tearDown();
+  }
+});
+
+Deno.test("applyV2 records provider apply trace spans", async () => {
+  setUp();
+  try {
+    const observability = new InMemoryObservabilitySink();
+    const resources: ManifestResource[] = [
+      { shape: `${SHAPE}@v1`, name: "db", provider: PROV_OK, spec: {} },
+    ];
+    const planned = await applyV2({
+      resources,
+      context: { ...ctx, spaceId: "space:trace" },
+      dryRun: true,
+      deploymentName: "trace-app",
+    });
+    assert.ok(planned.operationPlanPreview);
+
+    const result = await applyV2({
+      resources,
+      context: {
+        ...ctx,
+        spaceId: "space:trace",
+        observability,
+        trace: {
+          traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+          parentSpanId: "1111111111111111",
+          requestId: "req_trace",
+          correlationId: "corr_trace",
+        },
+      },
+      deploymentName: "trace-app",
+      operationPlanPreview: planned.operationPlanPreview,
+    });
+
+    assert.equal(result.status, "succeeded");
+    const traces = await observability.listTraces();
+    assert.equal(traces.length, 1);
+    const span = traces[0];
+    assert.ok(span);
+    assert.equal(span.name, "takosumi.provider.apply");
+    assert.equal(span.traceId, "4bf92f3577b34da6a3ce929d0e0e4736");
+    assert.equal(span.parentSpanId, "1111111111111111");
+    assert.equal(span.spaceId, "space:trace");
+    assert.equal(span.groupId, "trace-app");
+    assert.equal(span.requestId, "req_trace");
+    assert.equal(span.correlationId, "corr_trace");
+    assert.equal(span.status, "ok");
+    assert.equal(span.attributes?.["takosumi.operation_kind"], "apply");
+    assert.equal(span.attributes?.["takosumi.wal_stage"], "commit");
+    assert.equal(span.attributes?.["takosumi.resource_name"], "db");
+    assert.equal(span.attributes?.["takosumi.provider_id"], PROV_OK);
   } finally {
     tearDown();
   }

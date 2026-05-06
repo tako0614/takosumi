@@ -3,6 +3,8 @@ import { Hono, type Hono as HonoApp } from "hono";
 import type {
   JsonObject,
   ManifestResource,
+  PlatformOperationRecoveryMode,
+  PlatformTraceContext,
   ResourceHandle,
   Template,
 } from "takosumi-contract";
@@ -58,11 +60,15 @@ function createApp(opts: {
     priorApplied?: ReadonlyMap<string, PriorAppliedSnapshot>,
     dryRun?: boolean,
     operationPlanPreview?: OperationPlanPreview,
+    recoveryMode?: PlatformOperationRecoveryMode,
+    trace?: PlatformTraceContext,
   ) => Promise<ApplyV2Outcome>;
   destroyResources?: (
     resources: readonly ManifestResource[],
     handleFor?: (resource: ManifestResource) => ResourceHandle,
     operationPlanPreview?: OperationPlanPreview,
+    recoveryMode?: PlatformOperationRecoveryMode,
+    trace?: PlatformTraceContext,
   ) => Promise<DestroyV2Outcome>;
   recordStore?: TakosumiDeploymentRecordStore;
   idempotencyStore?: DeployPublicIdempotencyStore;
@@ -281,6 +287,55 @@ Deno.test("deploy public route records deploy success and latency metrics", asyn
   assert.equal(latency.kind, "histogram");
   assert.equal(latency.unit, "seconds");
   assert.equal(latency.tags?.status, "succeeded");
+});
+
+Deno.test("deploy public route forwards request trace context to applyV2", async () => {
+  let capturedTrace: PlatformTraceContext | undefined;
+  const app = createApp({
+    token: VALID_TOKEN,
+    applyResources: (
+      _resources,
+      _priorApplied,
+      _dryRun,
+      _operationPlanPreview,
+      _recoveryMode,
+      trace,
+    ) => {
+      capturedTrace = trace;
+      return Promise.resolve({
+        applied: [],
+        issues: [],
+        status: "succeeded",
+      });
+    },
+  });
+
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+      "x-request-id": "req_deploy_trace",
+      "x-correlation-id": "corr_deploy_trace",
+      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-1111111111111111-01",
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      manifest: {
+        apiVersion: "1.0" as const,
+        kind: "Manifest" as const,
+        metadata: { name: "trace-demo" },
+        resources: [SAMPLE_RESOURCE],
+      },
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedTrace?.traceId, "4bf92f3577b34da6a3ce929d0e0e4736");
+  assert.match(capturedTrace?.parentSpanId ?? "", /^[0-9a-f]{16}$/);
+  assert.notEqual(capturedTrace?.parentSpanId, "1111111111111111");
+  assert.equal(capturedTrace?.requestId, "req_deploy_trace");
+  assert.equal(capturedTrace?.correlationId, "corr_deploy_trace");
 });
 
 Deno.test(

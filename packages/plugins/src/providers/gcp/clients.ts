@@ -175,6 +175,12 @@ export interface GcpObservabilityClient {
   listMetricEvents(
     query?: Parameters<ObservabilitySink["listMetrics"]>[0],
   ): ReturnType<ObservabilitySink["listMetrics"]>;
+  writeTrace?(
+    event: Parameters<ObservabilitySink["recordTrace"]>[0],
+  ): ReturnType<ObservabilitySink["recordTrace"]>;
+  listTraceEvents?(
+    query?: Parameters<ObservabilitySink["listTraces"]>[0],
+  ): ReturnType<ObservabilitySink["listTraces"]>;
 }
 
 export interface GcpRuntimeAgentClient {

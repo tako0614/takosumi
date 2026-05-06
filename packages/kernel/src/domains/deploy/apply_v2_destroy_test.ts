@@ -15,6 +15,7 @@ import {
 } from "takosumi-contract";
 import { destroyV2 } from "./apply_v2.ts";
 import { buildOperationPlanPreview } from "./operation_plan_preview.ts";
+import { InMemoryObservabilitySink } from "../../services/observability/mod.ts";
 
 const SHAPE = "test-destroy-shape";
 const PROV_OK = "test-destroy-provider-ok";
@@ -237,6 +238,59 @@ Deno.test("destroyV2 threads WAL idempotency context to provider.destroy", async
       operation.idempotencyKeyString,
       formatPlatformOperationIdempotencyKey(plannedOperation.idempotencyKey),
     );
+  } finally {
+    tearDown();
+  }
+});
+
+Deno.test("destroyV2 records provider destroy trace spans", async () => {
+  setUp();
+  try {
+    const observability = new InMemoryObservabilitySink();
+    const resources: ManifestResource[] = [
+      { shape: `${SHAPE}@v1`, name: "db", provider: PROV_OK, spec: {} },
+    ];
+    const operationPlanPreview = buildOperationPlanPreview({
+      resources,
+      planned: [{
+        name: "db",
+        shape: `${SHAPE}@v1`,
+        providerId: PROV_OK,
+        op: "delete",
+      }],
+      edges: [],
+      spaceId: "space:trace",
+      deploymentName: "destroy-trace-app",
+    });
+
+    const outcome = await destroyV2({
+      resources,
+      context: {
+        ...ctx,
+        spaceId: "space:trace",
+        observability,
+        trace: {
+          traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+          parentSpanId: "1111111111111111",
+        },
+      },
+      operationPlanPreview,
+    });
+
+    assert.equal(outcome.status, "succeeded");
+    const traces = await observability.listTraces();
+    assert.equal(traces.length, 1);
+    const span = traces[0];
+    assert.ok(span);
+    assert.equal(span.name, "takosumi.provider.destroy");
+    assert.equal(span.traceId, "4bf92f3577b34da6a3ce929d0e0e4736");
+    assert.equal(span.parentSpanId, "1111111111111111");
+    assert.equal(span.spaceId, "space:trace");
+    assert.equal(span.status, "ok");
+    assert.equal(span.attributes?.["takosumi.operation_kind"], "destroy");
+    assert.equal(span.attributes?.["takosumi.wal_stage"], "commit");
+    assert.equal(span.attributes?.["takosumi.resource_name"], "db");
+    assert.equal(span.attributes?.["takosumi.provider_id"], PROV_OK);
   } finally {
     tearDown();
   }

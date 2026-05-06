@@ -14,10 +14,11 @@ defines the SLI / SLO targets that bundled dashboards and alert policies use.
 ::: info Current implementation status The kernel currently exports readiness
 probes, audit events, JSON HTTP request logs, Prometheus metrics, native OTLP
 metric push, SLA breach events, and the bundled deploy Grafana dashboard. Native
-OTLP HTTP server spans are implemented; broader per-operation traces remain a
-target contract. Operators can correlate HTTP logs, traces, metrics, audit
-events, and deploy records through `requestId`, `correlationId`, `spaceId`,
-`groupId`, and deployment identifiers. :::
+OTLP HTTP server spans and WAL-backed provider operation spans are implemented;
+runtime-agent loop / internal RPC worker traces remain a target contract.
+Operators can correlate HTTP logs, traces, metrics, audit events, and deploy
+records through `requestId`, `correlationId`, `spaceId`, `groupId`, and
+deployment identifiers. :::
 
 ## Ownership Decision
 

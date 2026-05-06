@@ -1528,17 +1528,58 @@ export interface MetricEventQuery {
   readonly until?: string;
 }
 
+export type TraceSpanKind =
+  | "internal"
+  | "server"
+  | "client"
+  | "producer"
+  | "consumer";
+export type TraceSpanStatus = "unset" | "ok" | "error";
+
+export interface TraceSpanEvent {
+  readonly id: string;
+  readonly traceId: string;
+  readonly spanId: string;
+  readonly parentSpanId?: string;
+  readonly name: string;
+  readonly kind: TraceSpanKind;
+  readonly status: TraceSpanStatus;
+  readonly statusMessage?: string;
+  readonly startTime: string;
+  readonly endTime: string;
+  readonly attributes?: Record<string, string | number | boolean>;
+  readonly spaceId?: string;
+  readonly groupId?: string;
+  readonly requestId?: string;
+  readonly correlationId?: string;
+}
+
+export interface TraceSpanQuery {
+  readonly traceId?: string;
+  readonly spanId?: string;
+  readonly name?: string;
+  readonly kind?: TraceSpanKind;
+  readonly status?: TraceSpanStatus;
+  readonly spaceId?: string;
+  readonly groupId?: string;
+  readonly since?: string;
+  readonly until?: string;
+}
+
 export interface ObservabilitySink {
   appendAudit(event: AuditEvent): Promise<ChainedAuditEvent>;
   listAudit(): Promise<readonly ChainedAuditEvent[]>;
   verifyAuditChain(): Promise<boolean>;
   recordMetric(event: MetricEvent): Promise<MetricEvent>;
   listMetrics(query?: MetricEventQuery): Promise<readonly MetricEvent[]>;
+  recordTrace(event: TraceSpanEvent): Promise<TraceSpanEvent>;
+  listTraces(query?: TraceSpanQuery): Promise<readonly TraceSpanEvent[]>;
 }
 
 export class InMemoryObservabilitySink implements ObservabilitySink {
   readonly #auditRecords: ChainedAuditEvent[] = [];
   readonly #metrics: MetricEvent[] = [];
+  readonly #traces: TraceSpanEvent[] = [];
 
   async appendAudit(event: AuditEvent): Promise<ChainedAuditEvent> {
     const previous = this.#auditRecords.at(-1);
@@ -1576,6 +1617,27 @@ export class InMemoryObservabilitySink implements ObservabilitySink {
         (!query.groupId || event.groupId === query.groupId) &&
         (!query.since || event.observedAt >= query.since) &&
         (!query.until || event.observedAt <= query.until)
+      ).map(clone),
+    );
+  }
+
+  recordTrace(event: TraceSpanEvent): Promise<TraceSpanEvent> {
+    this.#traces.push(clone(event));
+    return Promise.resolve(clone(event));
+  }
+
+  listTraces(query: TraceSpanQuery = {}): Promise<readonly TraceSpanEvent[]> {
+    return Promise.resolve(
+      this.#traces.filter((event) =>
+        (!query.traceId || event.traceId === query.traceId) &&
+        (!query.spanId || event.spanId === query.spanId) &&
+        (!query.name || event.name === query.name) &&
+        (!query.kind || event.kind === query.kind) &&
+        (!query.status || event.status === query.status) &&
+        (!query.spaceId || event.spaceId === query.spaceId) &&
+        (!query.groupId || event.groupId === query.groupId) &&
+        (!query.since || event.startTime >= query.since) &&
+        (!query.until || event.endTime <= query.until)
       ).map(clone),
     );
   }
