@@ -268,6 +268,18 @@ Deno.test("deploy public route resolves service imports before apply", async () 
     expiresAt: "2026-05-09T00:05:00.000Z",
     providerInstance: "provider_takosumi_cloud",
   };
+  const resourceWithImport: ManifestResource = {
+    ...SAMPLE_RESOURCE,
+    spec: {
+      name: "logs",
+      region: "local",
+      env: {
+        OIDC_ISSUER_URL: "${imports.account-auth.endpoints.oidc-issuer.url}",
+        OIDC_ISSUER_PATH: "${imports.account-auth.endpoints.oidc-issuer.path}",
+        OIDC_SERVICE_ID: "${imports.account-auth.serviceId}",
+      },
+    },
+  };
   const app = createApp({
     token: VALID_TOKEN,
     tenantId: "space_1",
@@ -335,13 +347,28 @@ Deno.test("deploy public route resolves service imports before apply", async () 
           url: "https://anchor.example.test/v1/services/",
           publicKey: "pubkey",
         }],
-        resources: [SAMPLE_RESOURCE],
+        resources: [resourceWithImport],
       },
     }),
   });
 
   assert.equal(response.status, 200);
   assert.equal(resolverDeploymentId, "space_1/logs");
+  assert.equal(
+    (captured?.[0].spec as { env?: Record<string, string> }).env
+      ?.OIDC_ISSUER_URL,
+    "https://accounts.example.test",
+  );
+  assert.equal(
+    (captured?.[0].spec as { env?: Record<string, string> }).env
+      ?.OIDC_ISSUER_PATH,
+    "/",
+  );
+  assert.equal(
+    (captured?.[0].spec as { env?: Record<string, string> }).env
+      ?.OIDC_SERVICE_ID,
+    "takosumi.account.auth@v1",
+  );
   const pins = captured?.[0].metadata?.takosumiServiceImports as
     | { pins?: readonly { descriptorDigest?: string }[] }
     | undefined;
@@ -376,6 +403,93 @@ Deno.test("deploy public route resolves service imports before apply", async () 
     detail?.serviceImports?.pins?.[0]?.resolvedDescriptor?.signature,
     "ed25519:sig",
   );
+});
+
+Deno.test("deploy public route rejects missing service import endpoint placeholders", async () => {
+  let applyCalled = false;
+  const descriptor = {
+    id: "takosumi.account.auth",
+    version: "v1",
+    contract: "takosumi.account.auth@v1",
+    endpoints: [{
+      role: "jwks",
+      url: "https://accounts.example.test/oauth/jwks",
+      path: "/oauth/jwks",
+    }],
+    metadata: {},
+    signature: "ed25519:sig",
+    publishedAt: "2026-05-09T00:00:00.000Z",
+    expiresAt: "2026-05-09T00:05:00.000Z",
+    providerInstance: "provider_takosumi_cloud",
+  };
+  const app = createApp({
+    token: VALID_TOKEN,
+    now: () => "2026-05-09T00:00:00.000Z",
+    resolveServiceImports: () =>
+      Promise.resolve({
+        ok: true,
+        value: [{
+          alias: "account-auth",
+          serviceId: "takosumi.account.auth@v1",
+          resolverUrl: "https://anchor.example.test/v1/services/",
+          descriptorDigest: "sha256:descriptor",
+          descriptor,
+          share: {
+            id: "cross-instance-share:account-auth",
+            serviceId: "takosumi.account.auth@v1",
+            toDeploymentId: "takosumi-deploy/logs",
+            resolvedDescriptor: descriptor,
+            resolvedAt: "2026-05-09T00:00:00.000Z",
+            refreshPolicy: { kind: "ttl", ttl: "300s" },
+            auditTrail: [],
+          },
+        }],
+      }),
+    applyResources: () => {
+      applyCalled = true;
+      return Promise.resolve({ applied: [], issues: [], status: "succeeded" });
+    },
+  });
+
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      manifest: {
+        apiVersion: "1.0",
+        kind: "Manifest",
+        metadata: { name: "logs" },
+        imports: [{
+          alias: "account-auth",
+          service: "takosumi.account.auth@v1",
+        }],
+        serviceResolvers: [{
+          kind: "anchor",
+          url: "https://anchor.example.test/v1/services/",
+          publicKey: "pubkey",
+        }],
+        resources: [{
+          ...SAMPLE_RESOURCE,
+          spec: {
+            env: {
+              OIDC_ISSUER_URL:
+                "${imports.account-auth.endpoints.oidc-issuer.url}",
+            },
+          },
+        }],
+      },
+    }),
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(applyCalled, false);
+  const body = await response.json();
+  assert.equal(body.error.code, "invalid_argument");
+  assert.match(body.error.message, /missing endpoint role 'oidc-issuer'/);
 });
 
 Deno.test("deploy public route rejects unresolved service imports before apply", async () => {

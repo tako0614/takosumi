@@ -1,6 +1,7 @@
 import type { Hono as HonoApp } from "hono";
 import type {
   JsonObject,
+  JsonValue,
   ManifestResource,
   PlatformContext,
   PlatformOperationRecoveryMode,
@@ -463,9 +464,19 @@ export function registerDeployPublicRoutes(
       manifestObject,
       serviceImports.value,
     );
+    const materializedResources = materializeServiceImportReferences(
+      resources.value,
+      serviceImports.value,
+    );
+    if (!materializedResources.ok) {
+      return {
+        status: 400,
+        body: apiError("invalid_argument", materializedResources.error),
+      };
+    }
     const deployResources = attachServiceImportPinsToResources(
       attachProvenanceToResources(
-        resources.value,
+        materializedResources.value,
         provenance.value,
       ),
       serviceImports.value,
@@ -1346,6 +1357,163 @@ function serviceImportPin(entry: ResolvedServiceImport): JsonObject {
     providerInstance: entry.descriptor.providerInstance,
     expiresAt: entry.descriptor.expiresAt,
   };
+}
+
+type ServiceImportMaterializationResult =
+  | { readonly ok: true; readonly value: readonly ManifestResource[] }
+  | { readonly ok: false; readonly error: string };
+
+function materializeServiceImportReferences(
+  resources: readonly ManifestResource[],
+  imports: readonly ResolvedServiceImport[],
+): ServiceImportMaterializationResult {
+  if (imports.length === 0) return { ok: true, value: resources };
+  const importsByAlias = new Map(imports.map((entry) => [entry.alias, entry]));
+  const materialized: ManifestResource[] = [];
+  for (const resource of resources) {
+    const spec = materializeServiceImportValue(
+      resource.spec,
+      importsByAlias,
+      `resources.${resource.name}.spec`,
+    );
+    if (!spec.ok) return spec;
+    materialized.push({ ...resource, spec: spec.value });
+  }
+  return { ok: true, value: materialized };
+}
+
+type MaterializedJsonValueResult =
+  | { readonly ok: true; readonly value: JsonValue }
+  | { readonly ok: false; readonly error: string };
+
+function materializeServiceImportValue(
+  value: JsonValue,
+  importsByAlias: ReadonlyMap<string, ResolvedServiceImport>,
+  path: string,
+): MaterializedJsonValueResult {
+  if (typeof value === "string") {
+    return materializeServiceImportString(value, importsByAlias, path);
+  }
+  if (Array.isArray(value)) {
+    const next: JsonValue[] = [];
+    for (const [index, item] of value.entries()) {
+      const materialized = materializeServiceImportValue(
+        item,
+        importsByAlias,
+        `${path}[${index}]`,
+      );
+      if (!materialized.ok) return materialized;
+      next.push(materialized.value);
+    }
+    return { ok: true, value: next };
+  }
+  if (isJsonObject(value)) {
+    const next: JsonObject = {};
+    for (const [key, item] of Object.entries(value)) {
+      const materialized = materializeServiceImportValue(
+        item as JsonValue,
+        importsByAlias,
+        `${path}.${key}`,
+      );
+      if (!materialized.ok) return materialized;
+      next[key] = materialized.value;
+    }
+    return { ok: true, value: next };
+  }
+  return { ok: true, value };
+}
+
+const serviceImportEndpointRefPattern =
+  /^\$\{(?:imports|bindings)\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.endpoints\.([a-z][a-z0-9-]*)\.(url|path)\}$/;
+const serviceImportMetadataRefPattern =
+  /^\$\{(?:imports|bindings)\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.metadata\.([A-Za-z0-9_.-]+)\}$/;
+const serviceImportServiceIdRefPattern =
+  /^\$\{(?:imports|bindings)\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.serviceId\}$/;
+
+function materializeServiceImportString(
+  value: string,
+  importsByAlias: ReadonlyMap<string, ResolvedServiceImport>,
+  path: string,
+): MaterializedJsonValueResult {
+  if (!value.includes("${imports.") && !value.includes("${bindings.")) {
+    return { ok: true, value };
+  }
+  const endpointMatch = value.match(serviceImportEndpointRefPattern);
+  if (endpointMatch) {
+    const [, alias, , endpointRole, field] = endpointMatch;
+    const entry = importsByAlias.get(alias);
+    if (!entry) {
+      return {
+        ok: false,
+        error: `${path} references unknown service import '${alias}'`,
+      };
+    }
+    const endpoint = entry.descriptor.endpoints.find((candidate) =>
+      candidate.role === endpointRole
+    );
+    if (!endpoint) {
+      return {
+        ok: false,
+        error:
+          `${path} references missing endpoint role '${endpointRole}' on service import '${alias}'`,
+      };
+    }
+    return { ok: true, value: field === "path" ? endpoint.path : endpoint.url };
+  }
+  const metadataMatch = value.match(serviceImportMetadataRefPattern);
+  if (metadataMatch) {
+    const [, alias, , keyPath] = metadataMatch;
+    const entry = importsByAlias.get(alias);
+    if (!entry) {
+      return {
+        ok: false,
+        error: `${path} references unknown service import '${alias}'`,
+      };
+    }
+    const metadataValue = readJsonPath(entry.descriptor.metadata, keyPath);
+    if (metadataValue === undefined) {
+      return {
+        ok: false,
+        error:
+          `${path} references missing metadata '${keyPath}' on service import '${alias}'`,
+      };
+    }
+    return { ok: true, value: metadataValue };
+  }
+  const serviceIdMatch = value.match(serviceImportServiceIdRefPattern);
+  if (serviceIdMatch) {
+    const [, alias] = serviceIdMatch;
+    const entry = importsByAlias.get(alias);
+    if (!entry) {
+      return {
+        ok: false,
+        error: `${path} references unknown service import '${alias}'`,
+      };
+    }
+    return { ok: true, value: entry.serviceId };
+  }
+  return {
+    ok: false,
+    error:
+      `${path} contains an invalid service import placeholder; use a standalone ` +
+      "`${imports.<alias>.endpoints.<role>.url}`, " +
+      "`${imports.<alias>.endpoints.<role>.path}`, " +
+      "`${imports.<alias>.metadata.<key>}`, or " +
+      "`${imports.<alias>.serviceId}` reference",
+  };
+}
+
+function readJsonPath(
+  value: JsonObject,
+  keyPath: string,
+): JsonValue | undefined {
+  let current: JsonValue | undefined = value;
+  for (const segment of keyPath.split(".")) {
+    if (!segment) return undefined;
+    if (!isJsonObject(current)) return undefined;
+    current = current[segment] as JsonValue | undefined;
+  }
+  return current;
 }
 
 function checkBearer(
