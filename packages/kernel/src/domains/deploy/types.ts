@@ -61,7 +61,8 @@ export type PublicComponentBindingSource =
   | { resource: string; access: { contract: string; mode: string } | string }
   | { output: string; field?: string; request?: JsonObject }
   | { secret: string }
-  | { providerOutput: string; field: string };
+  | { providerOutput: string; field: string }
+  | { import: string; endpointRole: string; field: string };
 
 export interface PublicComponentBindingSpec {
   from: PublicComponentBindingSource;

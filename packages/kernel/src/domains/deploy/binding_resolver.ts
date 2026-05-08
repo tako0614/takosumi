@@ -227,6 +227,7 @@ function bindingSourceFor(
   if ("output" in from) return "output";
   if ("secret" in from) return "secret";
   if ("providerOutput" in from) return "provider-output";
+  if ("import" in from) return "service-import";
   throw new TypeError("binding.from must declare a source");
 }
 
@@ -235,6 +236,7 @@ function bindingSourceName(spec: PublicComponentBindingSpec): string {
   if ("resource" in from) return from.resource;
   if ("output" in from) return from.output;
   if ("secret" in from) return from.secret;
+  if ("import" in from) return from.import;
   return from.providerOutput;
 }
 
@@ -243,12 +245,13 @@ function sourceAddressFor(
   sourceName: string,
 ): ObjectAddress {
   const name = sourceName.replace(
-    /^(resource|output|secret|provider-output)\./,
+    /^(resource|output|secret|provider-output|service-import)\./,
     "",
   );
   if (source === "resource") return objectAddress("resource", name);
   if (source === "output") return objectAddress("output", name);
   if (source === "secret") return objectAddress("secret", name);
+  if (source === "service-import") return objectAddress("service-import", name);
   return objectAddress("provider-output", name);
 }
 
@@ -291,6 +294,8 @@ function sensitivityFor(source: DeploymentBindingSource): CoreSensitivity {
     case "output":
       return "internal";
     case "resource":
+      return "internal";
+    case "service-import":
       return "internal";
   }
 }
@@ -378,6 +383,8 @@ function stageRole(
       return "resource-host";
     case "output":
       return "resource-host";
+    case "service-import":
+      return "resource-host";
     case "secret":
       return "credential-source";
     case "provider-output":
@@ -392,6 +399,8 @@ function stageLifecycle(
     case "resource":
       return "per-resource";
     case "output":
+      return "shared";
+    case "service-import":
       return "shared";
     case "secret":
       return "per-resource";
@@ -412,6 +421,8 @@ function credentialBoundaryFor(
       return "resource-credential";
     case "output":
       return "none";
+    case "service-import":
+      return "none";
   }
 }
 
@@ -426,6 +437,8 @@ function credentialVisibilityFor(
     case "resource":
       return "mediator-only";
     case "output":
+      return "consumer-runtime";
+    case "service-import":
       return "consumer-runtime";
   }
 }
@@ -445,6 +458,8 @@ function networkBoundaryFor(
   }
   switch (source) {
     case "output":
+      return "external";
+    case "service-import":
       return "external";
     case "resource":
       return "provider-internal";

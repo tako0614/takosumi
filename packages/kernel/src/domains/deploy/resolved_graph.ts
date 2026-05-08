@@ -442,16 +442,23 @@ function bindingSourceFor(spec: PublicComponentBindingSpec): BindingSource {
   if ("resource" in from) return "resource";
   if ("output" in from) return "output";
   if ("secret" in from) return "secret";
+  if ("import" in from) return "service-import";
   return "provider-output";
 }
 
-type BindingSource = "resource" | "output" | "secret" | "provider-output";
+type BindingSource =
+  | "resource"
+  | "output"
+  | "secret"
+  | "provider-output"
+  | "service-import";
 
 function bindingSourceName(spec: PublicComponentBindingSpec): string {
   const from = spec.from;
   if ("resource" in from) return from.resource;
   if ("output" in from) return from.output;
   if ("secret" in from) return from.secret;
+  if ("import" in from) return from.import;
   return from.providerOutput;
 }
 

@@ -23,6 +23,11 @@ import {
   readDeploymentNameV1,
   resolveManifestResourcesV1,
 } from "../domains/deploy/manifest_v1.ts";
+import {
+  type ResolvedServiceImport,
+  resolveManifestServiceImports,
+  type ServiceImportResolution,
+} from "../domains/deploy/service_import_resolver.ts";
 import { buildOperationPlanPreview } from "../domains/deploy/operation_plan_preview.ts";
 import {
   appendOperationPlanJournalStages,
@@ -221,6 +226,17 @@ export interface RegisterDeployPublicRoutesOptions {
     trace?: PlatformTraceContext,
   ) => Promise<DestroyV2Outcome>;
   /**
+   * Resolves manifest `imports[]` through `serviceResolvers[]`. Defaults to
+   * the anchor-backed resolver; tests can inject a deterministic resolver.
+   */
+  readonly resolveServiceImports?: (
+    manifest: JsonObject,
+    options: {
+      readonly now: () => string;
+      readonly deploymentId: string;
+    },
+  ) => Promise<ServiceImportResolution>;
+  /**
    * Real `AppContext` from which the public deploy route derives the
    * `PlatformContext` passed to `applyV2`. The kernel boots the AppContext
    * once at startup with DB-backed secrets / KMS / observability / object
@@ -384,6 +400,9 @@ export function registerDeployPublicRoutes(
         ...(operationPlanPreview ? { operationPlanPreview } : {}),
         ...(recoveryMode ? { recoveryMode } : {}),
       }));
+  const resolveServiceImports = options.resolveServiceImports ??
+    ((manifest, resolverOptions) =>
+      resolveManifestServiceImports(manifest, resolverOptions));
 
   const executeDeployPublicPost = async (
     body: Record<string, unknown>,
@@ -427,9 +446,22 @@ export function registerDeployPublicRoutes(
       manifestObject,
       resources.value,
     );
-    const deployResources = attachProvenanceToResources(
-      resources.value,
-      provenance.value,
+    const serviceImports = await resolveServiceImports(manifestObject, {
+      now,
+      deploymentId: `${tenantId}/${deploymentName}`,
+    });
+    if (!serviceImports.ok) {
+      return {
+        status: 400,
+        body: apiError("invalid_argument", serviceImports.error),
+      };
+    }
+    const deployResources = attachServiceImportPinsToResources(
+      attachProvenanceToResources(
+        resources.value,
+        provenance.value,
+      ),
+      serviceImports.value,
     );
     const trace = deployTraceFromRequest(requestTrace, requestCorrelation);
     const metricTimer = startDeployMetricTimer();
@@ -1229,6 +1261,31 @@ function attachProvenanceToResources(
       takosumiDeployProvenance: {
         kind: "takosumi.deploy-provenance-digest@v1",
         digest: provenanceDigest,
+      },
+    },
+  }));
+}
+
+function attachServiceImportPinsToResources(
+  resources: readonly ManifestResource[],
+  imports: readonly ResolvedServiceImport[],
+): readonly ManifestResource[] {
+  if (imports.length === 0) return resources;
+  const pins = imports.map((entry) => ({
+    alias: entry.alias,
+    serviceId: entry.serviceId,
+    descriptorDigest: entry.descriptorDigest,
+    resolverUrl: entry.resolverUrl,
+    providerInstance: entry.descriptor.providerInstance,
+    expiresAt: entry.descriptor.expiresAt,
+  }));
+  return resources.map((resource) => ({
+    ...resource,
+    metadata: {
+      ...(resource.metadata ?? {}),
+      takosumiServiceImports: {
+        kind: "takosumi.service-import-pins@v1",
+        pins,
       },
     },
   }));

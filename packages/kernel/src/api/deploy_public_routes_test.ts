@@ -43,6 +43,9 @@ import {
 import { InMemoryObservabilitySink } from "../services/observability/mod.ts";
 import { buildOperationPlanPreview } from "../domains/deploy/operation_plan_preview.ts";
 import { buildRefDag } from "../domains/deploy/ref_resolver_v2.ts";
+import type {
+  ServiceImportResolution,
+} from "../domains/deploy/service_import_resolver.ts";
 
 const VALID_TOKEN = "test-token-abc";
 
@@ -70,6 +73,13 @@ function createApp(opts: {
     recoveryMode?: PlatformOperationRecoveryMode,
     trace?: PlatformTraceContext,
   ) => Promise<DestroyV2Outcome>;
+  resolveServiceImports?: (
+    manifest: JsonObject,
+    options: {
+      readonly now: () => string;
+      readonly deploymentId: string;
+    },
+  ) => Promise<ServiceImportResolution>;
   recordStore?: TakosumiDeploymentRecordStore;
   idempotencyStore?: DeployPublicIdempotencyStore;
   operationJournalStore?: OperationJournalStore;
@@ -101,6 +111,9 @@ function createApp(opts: {
       })),
     ...(opts.destroyResources
       ? { destroyResources: opts.destroyResources }
+      : {}),
+    ...(opts.resolveServiceImports
+      ? { resolveServiceImports: opts.resolveServiceImports }
       : {}),
     ...(opts.recordStore ? { recordStore: opts.recordStore } : {}),
     ...(opts.idempotencyStore
@@ -233,6 +246,149 @@ Deno.test("deploy public route applies manifest with valid token", async () => {
   assert.equal(body.outcome.applied.length, 1);
   assert.equal(body.outcome.applied[0].name, SAMPLE_RESOURCE.name);
   assert.deepEqual(captured, [SAMPLE_RESOURCE]);
+});
+
+Deno.test("deploy public route resolves service imports before apply", async () => {
+  let captured: readonly ManifestResource[] | undefined;
+  let resolverDeploymentId: string | undefined;
+  const descriptor = {
+    id: "takosumi.account.auth",
+    version: "v1",
+    contract: "takosumi.account.auth@v1",
+    endpoints: [{
+      role: "oidc-issuer",
+      url: "https://accounts.example.test",
+      path: "/",
+    }],
+    metadata: {},
+    signature: "ed25519:sig",
+    publishedAt: "2026-05-09T00:00:00.000Z",
+    expiresAt: "2026-05-09T00:05:00.000Z",
+    providerInstance: "provider_takosumi_cloud",
+  };
+  const app = createApp({
+    token: VALID_TOKEN,
+    tenantId: "space_1",
+    now: () => "2026-05-09T00:00:00.000Z",
+    resolveServiceImports: (_manifest, options) => {
+      resolverDeploymentId = options.deploymentId;
+      return Promise.resolve({
+        ok: true,
+        value: [{
+          alias: "account-auth",
+          serviceId: "takosumi.account.auth@v1",
+          resolverUrl: "https://anchor.example.test/v1/services/",
+          descriptorDigest: "sha256:descriptor",
+          descriptor,
+          share: {
+            id: "cross-instance-share:account-auth",
+            serviceId: "takosumi.account.auth@v1",
+            toDeploymentId: "space_1/logs",
+            resolvedDescriptor: descriptor,
+            resolvedAt: "2026-05-09T00:00:00.000Z",
+            refreshPolicy: { kind: "ttl", ttl: "300s" },
+            auditTrail: [],
+          },
+        }],
+      });
+    },
+    applyResources: (resources) => {
+      captured = resources;
+      return Promise.resolve({
+        applied: [{
+          name: resources[0].name,
+          providerId: resources[0].provider,
+          handle: { kind: "test", id: "applied" } as unknown as ApplyV2Outcome[
+            "applied"
+          ][number]["handle"],
+          outputs: { ok: true },
+          specFingerprint: "fnv1a32:00000000",
+        }],
+        issues: [],
+        status: "succeeded",
+      });
+    },
+  });
+
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      manifest: {
+        apiVersion: "1.0",
+        kind: "Manifest",
+        metadata: { name: "logs" },
+        imports: [{
+          alias: "account-auth",
+          service: "takosumi.account.auth@v1",
+        }],
+        serviceResolvers: [{
+          kind: "anchor",
+          url: "https://anchor.example.test/v1/services/",
+          publicKey: "pubkey",
+        }],
+        resources: [SAMPLE_RESOURCE],
+      },
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(resolverDeploymentId, "space_1/logs");
+  const pins = captured?.[0].metadata?.takosumiServiceImports as
+    | { pins?: readonly { descriptorDigest?: string }[] }
+    | undefined;
+  assert.equal(pins?.pins?.[0]?.descriptorDigest, "sha256:descriptor");
+});
+
+Deno.test("deploy public route rejects unresolved service imports before apply", async () => {
+  let applyCalled = false;
+  const app = createApp({
+    token: VALID_TOKEN,
+    resolveServiceImports: () =>
+      Promise.resolve({
+        ok: false,
+        error: "descriptor signature invalid",
+      }),
+    applyResources: () => {
+      applyCalled = true;
+      return Promise.resolve({ applied: [], issues: [], status: "succeeded" });
+    },
+  });
+
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      manifest: {
+        apiVersion: "1.0",
+        kind: "Manifest",
+        imports: [{
+          alias: "account-auth",
+          service: "takosumi.account.auth@v1",
+        }],
+        serviceResolvers: [{
+          kind: "anchor",
+          url: "https://anchor.example.test/v1/services/",
+          publicKey: "pubkey",
+        }],
+        resources: [SAMPLE_RESOURCE],
+      },
+    }),
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(applyCalled, false);
+  const body = await response.json();
+  assert.equal(body.error.code, "invalid_argument");
+  assert.match(body.error.message, /signature invalid/);
 });
 
 Deno.test("deploy public route records deploy success and latency metrics", async () => {
