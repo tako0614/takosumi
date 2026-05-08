@@ -896,8 +896,21 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         apiVersion: { const: "1.0" },
         kind: { const: "Manifest" },
+        namespace: { type: "string" },
         metadata: ref("ManifestMetadata"),
         template: ref("ManifestTemplate"),
+        services: {
+          type: "array",
+          items: ref("ManifestService"),
+        },
+        imports: {
+          type: "array",
+          items: ref("ManifestImport"),
+        },
+        serviceResolvers: {
+          type: "array",
+          items: ref("ManifestServiceResolver"),
+        },
         resources: {
           type: "array",
           items: ref("ManifestResource"),
@@ -925,6 +938,78 @@ function createSchemas(): Record<string, Record<string, unknown>> {
           description:
             "Deprecated compatibility alias for template; new manifests use template.",
         },
+      },
+      additionalProperties: false,
+    },
+    ManifestService: {
+      type: "object",
+      required: ["id", "version", "contract", "endpoints", "publish"],
+      properties: {
+        id: { type: "string" },
+        version: { type: "string", pattern: "^v\\d+(?:-[a-z][a-z0-9-]*)?$" },
+        contract: { type: "string" },
+        endpoints: {
+          type: "array",
+          items: ref("ManifestServiceEndpoint"),
+        },
+        metadata: jsonObject,
+        publish: ref("ManifestServicePublish"),
+      },
+      additionalProperties: false,
+    },
+    ManifestServiceEndpoint: {
+      type: "object",
+      required: ["role", "url", "path"],
+      properties: {
+        role: { type: "string" },
+        url: { type: "string" },
+        path: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    ManifestServicePublish: {
+      type: "object",
+      required: ["anchors", "signing"],
+      properties: {
+        anchors: { type: "array", items: { type: "string" } },
+        signing: {
+          type: "object",
+          required: ["privateKeyRef"],
+          properties: {
+            privateKeyRef: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    },
+    ManifestImport: {
+      type: "object",
+      required: ["alias", "service"],
+      properties: {
+        alias: { type: "string" },
+        service: { type: "string" },
+        refreshPolicy: ref("ManifestRefreshPolicy"),
+      },
+      additionalProperties: false,
+    },
+    ManifestServiceResolver: {
+      type: "object",
+      required: ["kind", "url", "publicKey"],
+      properties: {
+        kind: { const: "anchor" },
+        url: { type: "string" },
+        publicKey: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    ManifestRefreshPolicy: {
+      type: "object",
+      required: ["kind"],
+      properties: {
+        kind: { enum: ["ttl", "event-driven"] },
+        ttl: { type: "string" },
+        triggers: { type: "array", items: jsonValue },
       },
       additionalProperties: false,
     },

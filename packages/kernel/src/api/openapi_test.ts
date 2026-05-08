@@ -231,6 +231,22 @@ Deno.test("createPaaSOpenApiDocument documents deploy public and artifact auth/s
     doc.components.schemas.ManifestBody.additionalProperties,
     false,
   );
+  assert.deepEqual(
+    Object.keys(
+      doc.components.schemas.ManifestBody.properties as Record<string, unknown>,
+    ).sort(),
+    [
+      "apiVersion",
+      "imports",
+      "kind",
+      "metadata",
+      "namespace",
+      "resources",
+      "serviceResolvers",
+      "services",
+      "template",
+    ],
+  );
   assert.equal(
     doc.components.schemas.ManifestResource.additionalProperties,
     false,
