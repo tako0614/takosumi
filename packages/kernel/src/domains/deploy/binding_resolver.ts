@@ -236,7 +236,9 @@ function bindingSourceName(spec: PublicComponentBindingSpec): string {
   if ("resource" in from) return from.resource;
   if ("output" in from) return from.output;
   if ("secret" in from) return from.secret;
-  if ("import" in from) return from.import;
+  if ("import" in from) {
+    return `${from.import}/${from.endpointRole}/${from.field}`;
+  }
   return from.providerOutput;
 }
 

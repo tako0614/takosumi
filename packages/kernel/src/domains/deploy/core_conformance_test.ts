@@ -251,6 +251,54 @@ Deno.test("core conformance: public resource bindings become plan-visible resour
   assert.equal(resolved.desired.bindings[0].bindingName, "DATABASE_URL");
 });
 
+Deno.test("core conformance: service import bindings keep endpoint field identity", async () => {
+  const store = new InMemoryDeploymentStore();
+  const service = new DeploymentService({
+    store,
+    idFactory: () => "deployment_service_import_binding_1",
+    clock: fixedClock("2026-04-27T00:00:00.000Z"),
+  });
+
+  const resolved = await service.resolveDeployment({
+    spaceId: "space_conformance",
+    manifest: {
+      name: "service-import-binding",
+      compute: {
+        web: {
+          type: "container",
+          image: DEMO_IMAGE,
+          port: 8080,
+          bindings: {
+            OIDC_ISSUER_URL: {
+              from: {
+                import: "account-auth",
+                endpointRole: "oidc-issuer",
+                field: "url",
+              },
+              inject: { mode: "env", target: "OIDC_ISSUER_URL" },
+            },
+          },
+        },
+      },
+      overrides: {
+        runtimeNetworkPolicy: { defaultEgress: "allow" },
+      },
+    },
+  });
+
+  assert.equal(resolved.status, "resolved");
+  const binding = resolved.desired.bindings.find((candidate) =>
+    candidate.bindingName === "OIDC_ISSUER_URL"
+  );
+  assert.ok(binding);
+  assert.equal(binding.source, "service-import");
+  assert.equal(
+    binding.sourceAddress,
+    "service-import:account-auth%2Foidc-issuer%2Furl",
+  );
+  assert.equal(binding.accessPath?.networkBoundary, "external");
+});
+
 Deno.test("core conformance: blockers from authoring resolution surface as Deployment.conditions", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
