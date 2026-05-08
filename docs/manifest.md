@@ -7,14 +7,14 @@ envelope の書き方をまとめます。`resources[]` で portable な
 output を配線します。
 
 Takosumi v1 の manifest envelope は **closed shape** で、top-level は
-`@context / apiVersion / kind / metadata / template / resources` の 6 field
-のみを受理します。`@context` は optional な JSON-LD context、`apiVersion:
-"1.0"`
-と `kind: Manifest` は固定値で、いずれも required。未知の top-level field を含む
-manifest は kernel の schema phase で reject されます
-([Manifest Validation](/reference/manifest-validation))。 本ページと
-[Manifest Validation](/reference/manifest-validation) が v1 envelope の
-canonical source です。
+`@context / apiVersion / kind / namespace / metadata / template / services /
+imports / serviceResolvers / resources`
+の 10 field のみを受理します。 `@context` は optional な JSON-LD
+context、`apiVersion: "1.0"` と `kind: Manifest` は固定値で、いずれも
+required。未知の top-level field を含む manifest は kernel の schema phase で
+reject されます ([Manifest Validation](/reference/manifest-validation))。
+本ページと [Manifest Validation](/reference/manifest-validation) が v1 envelope
+の canonical source です。
 
 ## Envelope 概観
 
@@ -51,6 +51,14 @@ JSON-LD と同じく external tooling / marketplace indexing / catalog publishin
 `template` と `resources[]` は併用できます。`template` の expansion 結果に
 `resources[]` を **append** する semantics です
 ([§ template と resources の併用](#template-と-resources-の併用))。
+
+`namespace` / `services[]` / `imports[]` / `serviceResolvers[]` は
+cross-instance service binding 用の optional field です。provider 側は
+`namespace` + `services[]` で service set を export 宣言し、consumer 側は
+`imports[]` + `serviceResolvers[]` で anchor-resolved service identifier を参照
+します。詳細は
+[Cross-instance service binding](/reference/manifest-validation#cross-instance-service-fields)
+と Takos product docs の service identifier spec を参照してください。
 
 ## Project layout は `takosumi-git` の責務
 
@@ -191,11 +199,13 @@ template が `app` / `db` / `assets` / `domain` を expand した上に、追加
 template 内部の参照は template 側で既に解決されており、外側 `resources[]` からも
 `${ref:app.url}` で参照できます。
 
-## Migration note: legacy target/services shape is rejected
+## Migration note: legacy target/service-map shape is rejected
 
 左側は historical form で、現行 kernel の public v1 manifest validation では
 受理されません。新しい manifest は右側の `apiVersion: "1.0"` / `kind: Manifest`
-/ `resources[]` shape model で書きます。
+/ `resources[]` shape model で書きます。current top-level `services[]` は
+cross-instance service export 専用の配列であり、左側の legacy `services` object
+map (`services: { app: ... }`) とは別物です。
 
 ::: code-group
 
