@@ -191,6 +191,11 @@ executable-hook failure appends the hook failure, enqueues
 `approval-invalidated` RevokeDebt for committed operations, and records
 observe/finalize evidence.
 
+If the manifest imports external services, the `prepare` effect detail also
+records `serviceImports.kind = "takosumi.service-import-resolution@v1"`. Each
+pin carries the alias, service id, resolver URL, descriptor digest, provider
+instance, expiry, share id, and hash-linked share audit witnesses.
+
 ## Orphaned debt 経路
 
 WAL stage が actual-effects を書いた後で外部依存が壊れると、kernel は RevokeDebt

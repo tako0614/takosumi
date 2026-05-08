@@ -456,6 +456,13 @@ export function registerDeployPublicRoutes(
         body: apiError("invalid_argument", serviceImports.error),
       };
     }
+    const serviceImportDetail = serviceImportJournalDetail(
+      serviceImports.value,
+    );
+    const persistedManifest = attachServiceImportPinsToManifest(
+      manifestObject,
+      serviceImports.value,
+    );
     const deployResources = attachServiceImportPinsToResources(
       attachProvenanceToResources(
         resources.value,
@@ -563,7 +570,7 @@ export function registerDeployPublicRoutes(
           stages: ["prepare"],
           status: "recorded",
           createdAt: journalStartedAt,
-          detail: journalDetail(undefined, provenance.value),
+          detail: journalDetail(serviceImportDetail, provenance.value),
         });
         const prior = await recordStore.get(tenantId, deploymentName);
         const force = body.force === true;
@@ -813,7 +820,7 @@ export function registerDeployPublicRoutes(
         stages: ["prepare"],
         status: "recorded",
         createdAt: now(),
-        detail: journalDetail(undefined, provenance.value),
+        detail: journalDetail(serviceImportDetail, provenance.value),
       });
       const preCommitHook = await invokeCatalogReleaseWalHook({
         verifier: catalogReleaseVerifier,
@@ -887,7 +894,7 @@ export function registerDeployPublicRoutes(
           await recordStore.upsert({
             tenantId,
             name: deploymentName,
-            manifest: prior?.manifest ?? manifestObject,
+            manifest: prior?.manifest ?? persistedManifest,
             appliedResources: prior?.appliedResources ?? [],
             status: "failed",
             now: failedStamp,
@@ -923,7 +930,7 @@ export function registerDeployPublicRoutes(
         await recordStore.upsert({
           tenantId,
           name: deploymentName,
-          manifest: manifestObject,
+          manifest: persistedManifest,
           appliedResources: recordsFromAppliedResources(
             outcome.applied,
             deployResources,
@@ -1271,14 +1278,7 @@ function attachServiceImportPinsToResources(
   imports: readonly ResolvedServiceImport[],
 ): readonly ManifestResource[] {
   if (imports.length === 0) return resources;
-  const pins = imports.map((entry) => ({
-    alias: entry.alias,
-    serviceId: entry.serviceId,
-    descriptorDigest: entry.descriptorDigest,
-    resolverUrl: entry.resolverUrl,
-    providerInstance: entry.descriptor.providerInstance,
-    expiresAt: entry.descriptor.expiresAt,
-  }));
+  const pins = serviceImportPins(imports);
   return resources.map((resource) => ({
     ...resource,
     metadata: {
@@ -1289,6 +1289,62 @@ function attachServiceImportPinsToResources(
       },
     },
   }));
+}
+
+function attachServiceImportPinsToManifest(
+  manifest: JsonObject,
+  imports: readonly ResolvedServiceImport[],
+): JsonObject {
+  if (imports.length === 0) return manifest;
+  const metadata = isJsonObject(manifest.metadata) ? manifest.metadata : {};
+  return {
+    ...manifest,
+    metadata: {
+      ...metadata,
+      takosumiServiceImports: {
+        kind: "takosumi.service-import-pins@v1",
+        pins: serviceImportPins(imports),
+      },
+    },
+  };
+}
+
+function serviceImportJournalDetail(
+  imports: readonly ResolvedServiceImport[],
+): JsonObject | undefined {
+  if (imports.length === 0) return undefined;
+  return {
+    serviceImports: {
+      kind: "takosumi.service-import-resolution@v1",
+      pins: imports.map((entry) => ({
+        ...serviceImportPin(entry),
+        shareId: entry.share.id,
+        resolvedAt: entry.share.resolvedAt,
+        auditTrail: entry.share.auditTrail.map((audit) => ({
+          kind: audit.kind,
+          hash: audit.hash,
+          ...(audit.prevHash ? { prevHash: audit.prevHash } : {}),
+        })),
+      })),
+    },
+  };
+}
+
+function serviceImportPins(
+  imports: readonly ResolvedServiceImport[],
+): JsonObject[] {
+  return imports.map(serviceImportPin);
+}
+
+function serviceImportPin(entry: ResolvedServiceImport): JsonObject {
+  return {
+    alias: entry.alias,
+    serviceId: entry.serviceId,
+    descriptorDigest: entry.descriptorDigest,
+    resolverUrl: entry.resolverUrl,
+    providerInstance: entry.descriptor.providerInstance,
+    expiresAt: entry.descriptor.expiresAt,
+  };
 }
 
 function checkBearer(

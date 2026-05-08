@@ -251,6 +251,8 @@ Deno.test("deploy public route applies manifest with valid token", async () => {
 Deno.test("deploy public route resolves service imports before apply", async () => {
   let captured: readonly ManifestResource[] | undefined;
   let resolverDeploymentId: string | undefined;
+  const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+  const journal = new InMemoryOperationJournalStore();
   const descriptor = {
     id: "takosumi.account.auth",
     version: "v1",
@@ -270,6 +272,8 @@ Deno.test("deploy public route resolves service imports before apply", async () 
     token: VALID_TOKEN,
     tenantId: "space_1",
     now: () => "2026-05-09T00:00:00.000Z",
+    recordStore,
+    operationJournalStore: journal,
     resolveServiceImports: (_manifest, options) => {
       resolverDeploymentId = options.deploymentId;
       return Promise.resolve({
@@ -342,6 +346,25 @@ Deno.test("deploy public route resolves service imports before apply", async () 
     | { pins?: readonly { descriptorDigest?: string }[] }
     | undefined;
   assert.equal(pins?.pins?.[0]?.descriptorDigest, "sha256:descriptor");
+  const record = await recordStore.get("space_1", "logs");
+  const manifestMetadata = record?.manifest.metadata as
+    | {
+      takosumiServiceImports?: { pins?: readonly { resolverUrl?: string }[] };
+    }
+    | undefined;
+  assert.equal(
+    manifestMetadata?.takosumiServiceImports?.pins?.[0]?.resolverUrl,
+    "https://anchor.example.test/v1/services/",
+  );
+  const entries = await journal.listByDeployment("space_1", "logs");
+  const prepare = entries.find((entry) => entry.stage === "prepare");
+  const detail = prepare?.effect.detail as
+    | { serviceImports?: { pins?: readonly { shareId?: string }[] } }
+    | undefined;
+  assert.equal(
+    detail?.serviceImports?.pins?.[0]?.shareId,
+    "cross-instance-share:account-auth",
+  );
 });
 
 Deno.test("deploy public route rejects unresolved service imports before apply", async () => {

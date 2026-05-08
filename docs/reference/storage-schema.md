@@ -240,16 +240,16 @@ digest hard-fails before the route advances the stage.
 Public deploy record for the CLI surface (`POST /v1/deployments` and
 `takosumi status`). Backed by `takosumi_deployments`.
 
-| Field              | Type            | Required | Notes                                           |
-| ------------------ | --------------- | -------- | ----------------------------------------------- |
-| `id`               | string          | yes      | Surrogate row id.                               |
-| `tenantId`         | string          | yes      | Public deploy tenant / Space scope.             |
-| `name`             | string          | yes      | Deployment name derived from manifest metadata. |
-| `manifest`         | object          | yes      | Submitted manifest JSON.                        |
-| `appliedResources` | `array<object>` | yes      | Last successful apply handles / outputs.        |
-| `status`           | enum            | yes      | `applied` / `destroyed` / `failed`.             |
-| `createdAt`        | timestamp       | yes      | Initial insert time.                            |
-| `updatedAt`        | timestamp       | yes      | Last apply / destroy / failure update.          |
+| Field              | Type            | Required | Notes                                                                                         |
+| ------------------ | --------------- | -------- | --------------------------------------------------------------------------------------------- |
+| `id`               | string          | yes      | Surrogate row id.                                                                             |
+| `tenantId`         | string          | yes      | Public deploy tenant / Space scope.                                                           |
+| `name`             | string          | yes      | Deployment name derived from manifest metadata.                                               |
+| `manifest`         | object          | yes      | Submitted manifest JSON plus kernel audit metadata such as `metadata.takosumiServiceImports`. |
+| `appliedResources` | `array<object>` | yes      | Last successful apply handles / outputs.                                                      |
+| `status`           | enum            | yes      | `applied` / `destroyed` / `failed`.                                                           |
+| `createdAt`        | timestamp       | yes      | Initial insert time.                                                                          |
+| `updatedAt`        | timestamp       | yes      | Last apply / destroy / failure update.                                                        |
 
 Persistence: retained until operator deletion or record GC. Indexed by
 `(tenantId, name)` unique, `(tenantId)`, and `(status)`.
@@ -257,6 +257,13 @@ Persistence: retained until operator deletion or record GC. Indexed by
 Mutation rule: upsert by `(tenantId, name)`. Destroy keeps the row with
 `status = destroyed` and clears `appliedResources` so status and audit reads
 still work.
+
+When a public deploy manifest imports external services, the stored manifest
+keeps `metadata.takosumiServiceImports.kind =
+"takosumi.service-import-pins@v1"`
+with pins for descriptor digest, resolver URL, provider instance, and expiry.
+This is the durable audit pointer for the descriptor the kernel verified before
+apply.
 
 ## PublicDeployIdempotencyRecord
 

@@ -126,6 +126,16 @@ that the value is a JSON object and that `kind`, when present, is a string; it
 does not execute workflows, read workflow files, parse build logs, or interpret
 git semantics.
 
+When the manifest declares `imports[]` and `serviceResolvers[]`, the public
+deploy route resolves provider-signed service descriptors before plan/apply. The
+resolved descriptor pins are attached to resource metadata for provider
+materialization, written into the persisted deployment manifest under
+`metadata.takosumiServiceImports`, and recorded on the WAL `prepare` detail as
+`serviceImports`. The persisted value is an audit pin: alias, service id,
+resolver URL, descriptor digest, provider instance, expiry, share id, and the
+share audit hashes. The kernel still fetches descriptors from the supplied
+anchor; it does not run a global service registry.
+
 Current public deploy scope is single-token. `TAKOSUMI_DEPLOY_TOKEN` maps to one
 operator-configured public deploy Space / tenant scope. The scope defaults to
 `takosumi-deploy` and can be set with `TAKOSUMI_DEPLOY_SPACE_ID`. Per-actor
