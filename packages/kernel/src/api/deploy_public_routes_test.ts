@@ -359,11 +359,22 @@ Deno.test("deploy public route resolves service imports before apply", async () 
   const entries = await journal.listByDeployment("space_1", "logs");
   const prepare = entries.find((entry) => entry.stage === "prepare");
   const detail = prepare?.effect.detail as
-    | { serviceImports?: { pins?: readonly { shareId?: string }[] } }
+    | {
+      serviceImports?: {
+        pins?: readonly {
+          shareId?: string;
+          resolvedDescriptor?: { signature?: string };
+        }[];
+      };
+    }
     | undefined;
   assert.equal(
     detail?.serviceImports?.pins?.[0]?.shareId,
     "cross-instance-share:account-auth",
+  );
+  assert.equal(
+    detail?.serviceImports?.pins?.[0]?.resolvedDescriptor?.signature,
+    "ed25519:sig",
   );
 });
 

@@ -1318,6 +1318,7 @@ function serviceImportJournalDetail(
       kind: "takosumi.service-import-resolution@v1",
       pins: imports.map((entry) => ({
         ...serviceImportPin(entry),
+        resolvedDescriptor: entry.descriptor as unknown as JsonObject,
         shareId: entry.share.id,
         resolvedAt: entry.share.resolvedAt,
         auditTrail: entry.share.auditTrail.map((audit) => ({

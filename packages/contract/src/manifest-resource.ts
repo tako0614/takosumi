@@ -20,6 +20,21 @@ export type ManifestJsonLdContext =
 export interface ManifestMetadata {
   readonly name?: string;
   readonly labels?: { readonly [key: string]: string };
+  readonly takosumiServiceImports?: ManifestServiceImportPinsMetadata;
+}
+
+export interface ManifestServiceImportPinsMetadata {
+  readonly kind: "takosumi.service-import-pins@v1";
+  readonly pins: readonly ManifestServiceImportPin[];
+}
+
+export interface ManifestServiceImportPin {
+  readonly alias: string;
+  readonly serviceId: string;
+  readonly descriptorDigest: string;
+  readonly resolverUrl: string;
+  readonly providerInstance: string;
+  readonly expiresAt: string;
 }
 
 export interface ManifestRefreshPolicy {
@@ -236,7 +251,11 @@ function validateManifestMetadata(
     });
     return;
   }
-  pushUnknownKeys("$.metadata", metadata, ["name", "labels"], issues);
+  pushUnknownKeys("$.metadata", metadata, [
+    "name",
+    "labels",
+    "takosumiServiceImports",
+  ], issues);
   if (metadata.name !== undefined && !isNonEmptyString(metadata.name)) {
     issues.push({
       path: "$.metadata.name",
@@ -246,6 +265,94 @@ function validateManifestMetadata(
   if (metadata.labels !== undefined) {
     validateStringMap("$.metadata.labels", metadata.labels, issues);
   }
+  validateManifestServiceImportPinsMetadata(
+    metadata.takosumiServiceImports,
+    "$.metadata.takosumiServiceImports",
+    issues,
+  );
+}
+
+function validateManifestServiceImportPinsMetadata(
+  value: unknown,
+  path: string,
+  issues: ManifestEnvelopeIssue[],
+): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push({ path, message: "takosumiServiceImports must be an object" });
+    return;
+  }
+  pushUnknownKeys(path, value, ["kind", "pins"], issues);
+  if (value.kind !== "takosumi.service-import-pins@v1") {
+    issues.push({
+      path: `${path}.kind`,
+      message: "kind must be takosumi.service-import-pins@v1",
+    });
+  }
+  if (!Array.isArray(value.pins)) {
+    issues.push({ path: `${path}.pins`, message: "pins must be an array" });
+    return;
+  }
+  value.pins.forEach((pin, index) => {
+    const pinPath = `${path}.pins[${index}]`;
+    if (!isRecord(pin)) {
+      issues.push({ path: pinPath, message: "pin must be a JSON object" });
+      return;
+    }
+    pushUnknownKeys(pinPath, pin, [
+      "alias",
+      "serviceId",
+      "descriptorDigest",
+      "resolverUrl",
+      "providerInstance",
+      "expiresAt",
+    ], issues);
+    if (!isNonEmptyString(pin.alias) || !aliasPattern.test(pin.alias)) {
+      issues.push({
+        path: `${pinPath}.alias`,
+        message: "alias must match binding name syntax",
+      });
+    }
+    if (
+      !isNonEmptyString(pin.serviceId) ||
+      !serviceIdentifierPattern.test(pin.serviceId)
+    ) {
+      issues.push({
+        path: `${pinPath}.serviceId`,
+        message: "serviceId must be a service identifier",
+      });
+    }
+    if (
+      !isNonEmptyString(pin.descriptorDigest) ||
+      !pin.descriptorDigest.startsWith("sha256:")
+    ) {
+      issues.push({
+        path: `${pinPath}.descriptorDigest`,
+        message: "descriptorDigest must be a sha256 digest",
+      });
+    }
+    if (!isHttpUrl(pin.resolverUrl)) {
+      issues.push({
+        path: `${pinPath}.resolverUrl`,
+        message: "resolverUrl must be an http or https URL",
+      });
+    }
+    if (!isNonEmptyString(pin.providerInstance)) {
+      issues.push({
+        path: `${pinPath}.providerInstance`,
+        message: "providerInstance must be a non-empty string",
+      });
+    }
+    if (
+      !isNonEmptyString(pin.expiresAt) ||
+      !Number.isFinite(Date.parse(pin.expiresAt))
+    ) {
+      issues.push({
+        path: `${pinPath}.expiresAt`,
+        message: "expiresAt must be a timestamp",
+      });
+    }
+  });
 }
 
 function validateManifestServices(

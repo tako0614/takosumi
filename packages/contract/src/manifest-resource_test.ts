@@ -61,6 +61,31 @@ Deno.test("validateManifestEnvelope accepts cross-instance manifest fields", () 
   assert.deepEqual(issues, []);
 });
 
+Deno.test("validateManifestEnvelope accepts service import pin metadata", () => {
+  const issues: { path: string; message: string }[] = [];
+  validateManifestEnvelope({
+    apiVersion: "1.0",
+    kind: "Manifest",
+    metadata: {
+      name: "logs",
+      takosumiServiceImports: {
+        kind: "takosumi.service-import-pins@v1",
+        pins: [{
+          alias: "account-auth",
+          serviceId: "takosumi.account.auth@v1",
+          descriptorDigest: "sha256:descriptor",
+          resolverUrl: "https://anchor.example.test/v1/services/",
+          providerInstance: "provider_takosumi_cloud",
+          expiresAt: "2026-05-09T00:05:00.000Z",
+        }],
+      },
+    },
+    resources: [],
+  }, issues);
+
+  assert.deepEqual(issues, []);
+});
+
 Deno.test("validateManifestEnvelope rejects malformed cross-instance fields", () => {
   const issues: { path: string; message: string }[] = [];
   validateManifestEnvelope({
