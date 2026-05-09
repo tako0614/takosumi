@@ -55,8 +55,8 @@ export class DryRunProviderMaterializer implements ProviderMaterializer {
       ),
       ...desiredState.routes.map((route) =>
         this.#operation({
-          kind: eventProtocol(route.protocol ?? "https")
-            ? "event.subscription.ensure"
+          kind: queueProtocol(route.protocol ?? "https")
+            ? "queue.subscription.ensure"
             : "router.listener.ensure",
           desiredState,
           targetId: route.id,
@@ -119,9 +119,8 @@ export class DryRunProviderMaterializer implements ProviderMaterializer {
   }
 }
 
-function eventProtocol(protocol: string): boolean {
-  return protocol === "queue" || protocol === "schedule" ||
-    protocol === "event";
+function queueProtocol(protocol: string): boolean {
+  return protocol === "queue";
 }
 
 function freezeClone<T>(value: T): T {

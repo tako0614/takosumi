@@ -460,46 +460,11 @@ See also: [SLA Breach Detection](/reference/sla-breach-detection).
 See also: [Quota Tiers](/reference/quota-tiers),
 [Cost Attribution](/reference/cost-attribution).
 
-## Trigger events
+## Workflow Events
 
-Reserved workflow-extension event vocabulary. The current kernel does not emit
-these events until trigger routes and stores are implemented.
-
-| Event                  | Severity | Description                                                                      | Payload fields                                                                                        |
-| ---------------------- | -------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `trigger-fired`        | info     | A registered trigger fired and produced a downstream OperationPlan.              | `triggerId`, `registrationId`, `kind`, `resourceRef`                                                  |
-| `trigger-rejected`     | warning  | A trigger fire attempt was rejected before it could produce a downstream effect. | `triggerId?`, `kind`, `reason` (`auth-failed` / `signature-invalid` / `rate-limit` / `unknown-event`) |
-| `trigger-deduplicated` | info     | A trigger fire collapsed into an earlier fire inside the dedup window.           | `triggerId`, `originalTriggerId`, `dedupWindowSeconds`                                                |
-
-See also:
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
-
-## Hook events
-
-Reserved declarable-hook event vocabulary. Catalog-supplied executable WAL hook
-evidence is currently recorded in the operation journal, not as these
-HookBinding audit events.
-
-| Event            | Severity | Description                                                                  | Payload fields                                              |
-| ---------------- | -------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `hook-fired`     | info     | A declared hook fired against a lifecycle phase boundary.                    | `hookBindingId`, `phase`, `hookOrder`, `bundleRef`          |
-| `hook-completed` | info     | A hook execution completed successfully.                                     | `hookBindingId`, `durationMs`, `outputCount`                |
-| `hook-failed`    | error    | A hook execution failed; the bound phase outcome depends on `failurePolicy`. | `hookBindingId`, `errorCode`, `durationMs`, `failurePolicy` |
-
-See also:
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
-
-## Step execution events
-
-Reserved `execute-step` event vocabulary. The current kernel does not emit these
-events until `execute-step` dispatch and StepResult storage are implemented.
-
-| Event                      | Severity | Description                                                  | Payload fields                                       |
-| -------------------------- | -------- | ------------------------------------------------------------ | ---------------------------------------------------- |
-| `step-execution-started`   | info     | An `execute-step` operation was dispatched to runtime-agent. | `operationId`, `bundleRef`, `attempt`                |
-| `step-execution-completed` | info     | An `execute-step` operation reached a terminal status.       | `operationId`, `status`, `durationMs`, `outputCount` |
-
-See also:
+The kernel does not reserve trigger, declarable-hook, or step-execution audit
+events. Workflow / cron / hook systems above the kernel own their own audit
+event vocabulary; see
 [Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
 
 ## See also

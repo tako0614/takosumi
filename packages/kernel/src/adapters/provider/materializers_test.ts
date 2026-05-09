@@ -89,7 +89,7 @@ Deno.test("DryRunProviderMaterializer renders protocol-aware route operations", 
     "runtime.resource.ensure",
     "router.listener.ensure",
     "router.listener.ensure",
-    "event.subscription.ensure",
+    "queue.subscription.ensure",
   ]);
   assert.deepEqual(plan.operations[3].details, {
     protocol: "tcp",

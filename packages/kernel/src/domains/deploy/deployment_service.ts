@@ -1955,8 +1955,6 @@ function providerFeatureSupport(appSpec: AppSpec): {
     "interface.tcp@v1",
     "interface.udp@v1",
     "interface.queue@v1",
-    "interface.schedule@v1",
-    "interface.event@v1",
   ]);
   const genericFeatures = new Set([
     ...runtimeCapabilities,
@@ -2075,14 +2073,7 @@ function hasShadowRollout(rollout: Record<string, unknown>): boolean {
 function hasSideEffectSurface(appSpec: AppSpec): boolean {
   if (appSpec.outputs.length > 0) return true;
   if (
-    appSpec.routes.some((route) =>
-      ["queue", "schedule", "event"].includes(route.protocol.toLowerCase())
-    )
-  ) {
-    return true;
-  }
-  if (
-    appSpec.components.some((component) => isRecord(component.raw.triggers))
+    appSpec.routes.some((route) => route.protocol.toLowerCase() === "queue")
   ) {
     return true;
   }

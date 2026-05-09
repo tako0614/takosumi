@@ -749,8 +749,6 @@ function routeProtocolsFromInterfaces(
     if (contract === "interface.tcp@v1") protocols.push("tcp");
     if (contract === "interface.udp@v1") protocols.push("udp");
     if (contract === "interface.queue@v1") protocols.push("queue");
-    if (contract === "interface.schedule@v1") protocols.push("schedule");
-    if (contract === "interface.event@v1") protocols.push("event");
   }
   return uniqueStrings(protocols);
 }

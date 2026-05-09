@@ -101,10 +101,7 @@ export function routeOwnershipKey(
   if (normalized === "tcp" || normalized === "udp") {
     return `${normalized}:${route.host ?? "*"}:${route.port ?? "*"}`;
   }
-  if (
-    normalized === "queue" || normalized === "schedule" ||
-    normalized === "event"
-  ) {
+  if (normalized === "queue") {
     return `${normalized}:${route.source ?? route.path ?? "*"}`;
   }
   return `${normalized}:${route.host ?? "*"}:${route.path ?? "/"}`;

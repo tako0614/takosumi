@@ -385,8 +385,6 @@ function routeInterfaceRef(route: AppSpecRoute): string {
   if (protocol === "tcp") return "interface.tcp@v1";
   if (protocol === "udp") return "interface.udp@v1";
   if (protocol === "queue") return "interface.queue@v1";
-  if (protocol === "schedule") return "interface.schedule@v1";
-  if (protocol === "event") return "interface.event@v1";
   return "interface.http@v1";
 }
 

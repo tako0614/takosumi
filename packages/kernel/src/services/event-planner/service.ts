@@ -27,10 +27,10 @@ export function buildEventSubscriptionSwitchPreview(
   input: EventSubscriptionSwitchPreviewInput,
 ): EventSubscriptionSwitchPreviewDto {
   const groupId = input.groupId ?? input.manifest.name;
-  const subscriptions = input.subscriptions ?? subscriptionsFromManifest(
+  const subscriptions = (input.subscriptions ?? subscriptionsFromManifest(
     input.manifest,
     groupId,
-  );
+  )).filter((subscription) => subscription.source.kind === "queue");
   const switchEntries = input.switchPlan?.entries ?? [];
   const switchEntryBySubscriptionId = new Map(
     switchEntries.map((entry) => [entry.subscriptionId, entry]),
@@ -80,13 +80,11 @@ export function buildEventSubscriptionSwitchPreview(
       : "ready" as const,
     policy: {
       canaryHttpAutoSwitchesQueueConsumers: false as const,
-      scheduleEventsTargetAppReleaseId: input.primaryAppReleaseId,
       explicitSwitchPlanRequired: true as const,
     },
     subscriptions: items,
     sideEffectControls: buildSideEffectControls(
       items.map((item) => item.sideEffectControl),
-      input.primaryAppReleaseId,
     ),
     switchPlan: {
       required: true as const,
@@ -121,39 +119,6 @@ function previewSubscription(input: {
   const sourceKind = input.subscription.source.kind;
   const explicitTarget = input.subscription.target.appReleaseId;
   const currentTargetAppReleaseId = explicitTarget ?? input.primaryAppReleaseId;
-
-  if (sourceKind === "schedule") {
-    if (input.switchEntry) {
-      input.issues.push(Object.freeze({
-        code: "schedule_switch_not_supported" as const,
-        subscriptionId: input.subscription.id,
-        message:
-          "schedule event subscriptions target primaryAppReleaseId in switch previews",
-      }));
-    }
-    return Object.freeze({
-      subscriptionId: input.subscription.id,
-      source: input.subscription.source,
-      target: input.subscription.target,
-      delivery: input.subscription.delivery,
-      enabled: input.subscription.enabled,
-      currentTargetAppReleaseId,
-      previewTargetAppReleaseId: input.primaryAppReleaseId,
-      action: "stay-on-primary" as const,
-      sideEffectControl: {
-        subscriptionId: input.subscription.id,
-        surface: "schedule" as const,
-        action: "pin-to-primary" as const,
-        currentTargetAppReleaseId,
-        previewTargetAppReleaseId: input.primaryAppReleaseId,
-        sideEffectsAllowed: false,
-        enforcementPoint: "event-scheduler-primary-release-pin" as const,
-        reason: "schedule-side-effects-pinned-to-primary-release" as const,
-      },
-      requiresExplicitSwitchPlan: false,
-      reason: "schedule-event-targets-primary-release" as const,
-    });
-  }
 
   if (input.switchEntry && sourceKind === "queue") {
     return Object.freeze({
@@ -195,22 +160,17 @@ function previewSubscription(input: {
       input.primaryAppReleaseId,
     ),
     requiresExplicitSwitchPlan: sourceKind === "queue",
-    reason: sourceKind === "queue"
-      ? "queue-consumer-pinned-during-http-canary" as const
-      : "event-subscription-pinned-during-http-canary" as const,
+    reason: "queue-consumer-pinned-during-http-canary" as const,
   });
 }
 
 function buildSideEffectControls(
   controls: readonly EventSubscriptionSideEffectControlDto[],
-  primaryAppReleaseId: string,
 ): EventSideEffectControlsDto {
   return Object.freeze({
     kind: "event_side_effect_controls" as const,
     queueAutoSwitchAllowed: false as const,
-    scheduleSwitchAllowed: false as const,
     queueSwitchRequiresExplicitPlan: true as const,
-    scheduleTargetAppReleaseId: primaryAppReleaseId,
     controls,
   });
 }
@@ -220,18 +180,6 @@ function sideEffectControlForPinnedSubscription(
   currentTargetAppReleaseId: string,
   primaryAppReleaseId: string,
 ): EventSubscriptionSideEffectControlDto {
-  if (subscription.source.kind === "schedule") {
-    return Object.freeze({
-      subscriptionId: subscription.id,
-      surface: "schedule" as const,
-      action: "pin-to-primary" as const,
-      currentTargetAppReleaseId,
-      previewTargetAppReleaseId: primaryAppReleaseId,
-      sideEffectsAllowed: false,
-      enforcementPoint: "event-scheduler-primary-release-pin" as const,
-      reason: "schedule-side-effects-pinned-to-primary-release" as const,
-    });
-  }
   return Object.freeze({
     subscriptionId: subscription.id,
     surface: "queue" as const,
@@ -284,7 +232,7 @@ function manifestEventSubscriptions(
     .map((subscription) => ({
       id: subscription.id,
       source: {
-        kind: subscription.sourceKind,
+        kind: "queue" as const,
         name: subscription.sourceName,
       },
       target: {
@@ -310,16 +258,17 @@ function routeEntries(manifest: PublicDeployManifest): readonly {
 
 function isEventProtocol(protocol: string | undefined): boolean {
   const normalized = protocol?.toLowerCase();
-  return normalized === "queue" || normalized === "schedule" ||
-    normalized === "event";
+  return normalized === "queue";
 }
 
 function normalizeEventSourceKind(
   protocol: string | undefined,
-): "queue" | "schedule" | "event" {
+): "queue" {
   const normalized = protocol?.toLowerCase();
-  if (normalized === "queue" || normalized === "schedule") return normalized;
-  return "event";
+  if (normalized !== "queue") {
+    throw new TypeError(`Unsupported event source protocol: ${protocol}`);
+  }
+  return "queue";
 }
 
 function sourceName(spec: PublicRouteSpec, fallback: string): string {
@@ -332,7 +281,7 @@ function isManifestEventSubscriptionSpec(
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
   return typeof candidate.id === "string" &&
-    typeof candidate.sourceKind === "string" &&
+    candidate.sourceKind === "queue" &&
     typeof candidate.sourceName === "string" &&
     typeof candidate.targetName === "string";
 }

@@ -201,48 +201,14 @@ The addition kinds slot into the stability rules from the section below.
 The addition table does not introduce content-addressed kinds; SHA suffixes are
 reserved for the kinds enumerated in the original section.
 
-### Workflow extension primitive additions
+### Workflow-shaped IDs
 
-The kinds below extend the v1 closed kind list with the resources introduced by
-the workflow extension primitives that wire trigger fan-in and declarable hook
-fan-out into the kernel apply pipeline. The closure rule from the previous
-sections applies: each kind is bound to a fixed suffix grammar and a fixed
-source-of-suffix; new kinds beyond this list still require the `CONVENTIONS.md`
-§6 RFC.
-
-Implementation status: these kinds are reserved. Current kernel code does not
-mint `trigger:` / `trigger-registration:` / `hook-binding:` ids yet.
-
-| Kind                   | Suffix grammar | Source of suffix                      | Reference                                                                         |
-| ---------------------- | -------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
-| `trigger`              | ULID           | Kernel-generated per fire instance.   | [Workflow Placement Rationale](/reference/architecture/workflow-extension-design) |
-| `trigger-registration` | ULID           | Kernel-generated per registration.    | [Workflow Placement Rationale](/reference/architecture/workflow-extension-design) |
-| `hook-binding`         | ULID           | Kernel-generated per declarable hook. | [Workflow Placement Rationale](/reference/architecture/workflow-extension-design) |
-
-Plugin-domain identifiers introduced by the workflow plugin family (`workflow:`
-/ `workflow-run:` / `workflow-step-run:`) are **not** kernel-curated v1 kinds
-and are not added to the closed list. The kernel persists workflow plugin state
-through the existing `object:` / `operation:` kinds; plugin authors may carry
-their own naming conventions inside opaque plugin payloads without claiming a
-kernel kind prefix.
-
-#### Examples
-
-```text
-trigger:01HMA0K3NJDF8C9V4Q7Y2X5RTM
-trigger-registration:01HMA0K3NJDF8C9V4Q7Y2X5RTN
-hook-binding:01HMA0K3NJDF8C9V4Q7Y2X5RTP
-```
-
-#### Stability classification
-
-All three reserved kinds are intended to be kernel-minted ULIDs and follow the
-**Kernel-minted ULIDs (immutable once issued)** rule below once implemented:
-once the kernel issues a `trigger:` / `trigger-registration:` / `hook-binding:`
-id, it persists for the lifetime of the resource and is never reassigned to a
-different resource. Revoking a `trigger-registration:` or detaching a
-`hook-binding:` does not free its id for reuse; the audit chain keeps the id
-resolvable for historical lookups.
+The kernel does not reserve `trigger:`, `trigger-registration:`,
+`hook-binding:`, `workflow:`, `workflow-run:`, or `workflow-step-run:` prefixes.
+Workflow / cron / hook systems live above `POST /v1/deployments`, for example in
+`takosumi-git`, and must keep their identifiers outside the kernel-curated kind
+list. See
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
 
 ## Suffix grammars
 

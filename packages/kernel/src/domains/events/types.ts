@@ -8,7 +8,7 @@ export type GroupId = string;
 export type AppReleaseId = string;
 export type ActivationId = string;
 
-export type EventSourceKind = "queue" | "schedule" | "event" | string;
+export type EventSourceKind = "queue";
 export type EventTargetKind = "component" | "route" | "output" | string;
 export type EventDeliverySemantics = "at-least-once" | "at-most-once";
 

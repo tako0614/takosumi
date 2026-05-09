@@ -76,14 +76,6 @@ const DOC_DESCRIPTOR_SOURCES: readonly { alias: string; path: string }[] = [
     path: "descriptors/contracts/interface-queue-v1.jsonld",
   },
   {
-    alias: "interface.schedule@v1",
-    path: "descriptors/contracts/interface-schedule-v1.jsonld",
-  },
-  {
-    alias: "interface.event@v1",
-    path: "descriptors/contracts/interface-event-v1.jsonld",
-  },
-  {
     alias: "output.http-endpoint@v1",
     path: "descriptors/contracts/output-http-endpoint-v1.jsonld",
   },

@@ -133,7 +133,7 @@ Deno.test("acceptance P3: private resource egress is denied when runtime policy 
   assert.equal(decision.policy?.id, "policy_worker_deny_private");
 });
 
-Deno.test("acceptance P3: schedule and queue event targets stay primary during canary", () => {
+Deno.test("acceptance P3: queue event targets stay primary during canary", () => {
   const preview = buildEventSubscriptionSwitchPreview({
     spaceId: "space_security",
     groupId: "worker",
@@ -145,22 +145,12 @@ Deno.test("acceptance P3: schedule and queue event targets stay primary during c
   const queue = preview.subscriptions.find((subscription) =>
     subscription.subscriptionId === "jobs"
   );
-  const schedule = preview.subscriptions.find((subscription) =>
-    subscription.subscriptionId === "nightly"
-  );
 
   assert.equal(preview.policy.canaryHttpAutoSwitchesQueueConsumers, false);
-  assert.equal(
-    preview.policy.scheduleEventsTargetAppReleaseId,
-    "release_primary",
-  );
   assert.equal(preview.status, "switch-plan-required");
   assert.equal(queue?.previewTargetAppReleaseId, "release_primary");
   assert.equal(queue?.requiresExplicitSwitchPlan, true);
   assert.equal(queue?.reason, "queue-consumer-pinned-during-http-canary");
-  assert.equal(schedule?.previewTargetAppReleaseId, "release_primary");
-  assert.equal(schedule?.requiresExplicitSwitchPlan, false);
-  assert.equal(schedule?.reason, "schedule-event-targets-primary-release");
 });
 
 function createRuntimeSecurityAcceptanceHarness(options?: {
@@ -228,7 +218,6 @@ function workerManifest(): PublicDeployManifest {
         path: "/",
       },
       jobs: { target: "handler", protocol: "queue", source: "jobs" },
-      nightly: { target: "handler", protocol: "schedule", source: "nightly" },
     },
   };
 }

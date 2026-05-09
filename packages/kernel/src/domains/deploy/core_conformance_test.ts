@@ -1308,10 +1308,10 @@ Deno.test("core conformance: shadow side-effect and DB semantic write manifests 
           type: "worker",
           image: DEMO_IMAGE,
           port: 8080,
-          triggers: {
-            queues: [{ queue: "jobs" }],
-          },
         },
+      },
+      routes: {
+        jobs: { target: "worker", protocol: "queue", source: "jobs" },
       },
       resources: {
         db: {

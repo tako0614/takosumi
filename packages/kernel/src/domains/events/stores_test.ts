@@ -20,8 +20,8 @@ Deno.test("event subscription revisions resolve implicit targets through primary
       delivery: "at-least-once",
       enabled: true,
     }, {
-      id: "sub_event_pinned",
-      source: { kind: "event", name: "docs.published" },
+      id: "sub_queue_pinned",
+      source: { kind: "queue", name: "docs-published" },
       target: {
         kind: "component",
         groupId: "worker",

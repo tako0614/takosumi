@@ -97,28 +97,25 @@ apply-object | delete-object | verify-object
 materialize-link | rematerialize-link | revoke-link
 prepare-exposure | activate-exposure
 transform-data-asset | observe | compensate
-execute-step
 ```
 
-Twelve-value reserved enum for internal rich `OperationRecord.operationKind`.
+Eleven-value reserved enum for internal rich `OperationRecord.operationKind`.
 Current public apply code stores operation kinds as strings and exposes only
-`planned[].op = "create" | "update" | "delete"` in `takosumi plan`; it does not
-dispatch `execute-step` yet.
+`planned[].op = "create" | "update" | "delete"` in `takosumi plan`.
 
-| Value                  | Meaning                                                                                                                                                                                                                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apply-object`         | Create or update a managed object on its connector.                                                                                                                                                                                                                             |
-| `delete-object`        | Remove a managed object during `destroy` or `rollback`.                                                                                                                                                                                                                         |
-| `verify-object`        | Re-read a managed object to confirm it matches the resolved spec; emits no mutation.                                                                                                                                                                                            |
-| `materialize-link`     | Render a generated object from a link source for the first time.                                                                                                                                                                                                                |
-| `rematerialize-link`   | Re-render a generated object after the source export digest changed.                                                                                                                                                                                                            |
-| `revoke-link`          | Tear down a generated object when the link is removed; may emit `RevokeDebt`.                                                                                                                                                                                                   |
-| `prepare-exposure`     | Stage a new Exposure (build routing surface) before traffic flips.                                                                                                                                                                                                              |
-| `activate-exposure`    | Flip traffic to a prepared Exposure during the `activate` phase.                                                                                                                                                                                                                |
-| `transform-data-asset` | Run a DataAsset transformer to produce a derived artifact.                                                                                                                                                                                                                      |
-| `observe`              | Long-lived runtime-agent describe used by the `observe` phase.                                                                                                                                                                                                                  |
-| `compensate`           | Recovery operation that undoes a partially-committed effect during `rollback` / `recovery`.                                                                                                                                                                                     |
-| `execute-step`         | Reserved kind for an arbitrary DataAsset bundle dispatched as a workflow step. The kernel does not host this primitive — execution is owned by upstream products such as `takosumi-git`; see [Workflow Placement Rationale](/reference/architecture/workflow-extension-design). |
+| Value                  | Meaning                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| `apply-object`         | Create or update a managed object on its connector.                                         |
+| `delete-object`        | Remove a managed object during `destroy` or `rollback`.                                     |
+| `verify-object`        | Re-read a managed object to confirm it matches the resolved spec; emits no mutation.        |
+| `materialize-link`     | Render a generated object from a link source for the first time.                            |
+| `rematerialize-link`   | Re-render a generated object after the source export digest changed.                        |
+| `revoke-link`          | Tear down a generated object when the link is removed; may emit `RevokeDebt`.               |
+| `prepare-exposure`     | Stage a new Exposure (build routing surface) before traffic flips.                          |
+| `activate-exposure`    | Flip traffic to a prepared Exposure during the `activate` phase.                            |
+| `transform-data-asset` | Run a DataAsset transformer to produce a derived artifact.                                  |
+| `observe`              | Long-lived runtime-agent describe used by the `observe` phase.                              |
+| `compensate`           | Recovery operation that undoes a partially-committed effect during `rollback` / `recovery`. |
 
 Per-kind input / output / WAL stage coverage lives in the internal OperationPlan
 architecture. Current public plan shape is in
@@ -475,78 +472,11 @@ Connector identity uses the closed prefix `connector:<id>`. Every connector is
 operator-installed and falls under the `operator` object lifecycle class above.
 The identity scheme is closed; no other prefix denotes a connector in v1.
 
-## Trigger kind
+## Workflow Primitive Enums
 
-Reserved workflow-extension vocabulary. Current deploy/apply code does not
-persist TriggerRegistration / Trigger rows yet.
-
-```text
-manual | schedule | external-event
-```
-
-Three-value closed enum on every TriggerRegistration and Trigger record.
-`manual` is an actor-initiated trigger; `schedule` is the kernel-side cron
-evaluator; `external-event` is a webhook receiver that accepts an HMAC-signed
-POST. The kernel does not host trigger registries — fire semantics and dedup
-rules are owned by upstream products such as `takosumi-git`; see
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
-
-## Trigger record status
-
-```text
-fired | rejected | deduplicated
-```
-
-Three-value closed status enum on every Trigger record (per-fire instance).
-`fired` is the success terminal state and is the only state that produces a
-`causedOperationId`; `rejected` covers signature-invalid / auth-failed / rate-
-limit / unknown-event reasons; `deduplicated` flags a fire that was collapsed
-into an earlier `fired` record inside the dedup window. See
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
-
-## Hook order
-
-Reserved declarable-hook vocabulary. Catalog-supplied executable WAL hooks use
-their own `pre-commit` / `post-commit` package stages.
-
-```text
-pre-X | post-X | side-X
-```
-
-Three-value closed ordering enum on every HookBinding, where `X` is a lifecycle
-phase from the six-phase enum above. `pre-X` runs before phase `X` begins;
-`post-X` runs after phase `X` completes; `side-X` runs concurrently with phase
-`X` and is advisory (it does not gate the phase). The cross product of hook
-order and lifecycle phase is the closed `hookOrder` value space. Binding
-contract and execution semantics are owned by upstream products such as
-`takosumi-git`; see
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
-
-## Hook failure policy
-
-```text
-abort | warn
-```
-
-Two-value closed failure policy enum on every HookBinding. `abort` causes a
-failed hook to fail the bound phase; `warn` records the failure as a warning
-audit event and lets the bound phase proceed. See
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
-
-## Step result status
-
-Reserved `execute-step` vocabulary. Current provider apply paths do not persist
-StepResult rows yet.
-
-```text
-succeeded | failed | timed-out | cancelled
-```
-
-Four-value closed status enum on every `execute-step` operation result.
-`succeeded` is the terminal success state; `failed` covers runtime-agent or
-bundle-reported failure; `timed-out` is set when the step exceeded its declared
-timeout; `cancelled` is set when the kernel signaled cancellation and the
-runtime-agent acknowledged within the cancel grace window. See
+The kernel does not reserve trigger, declarable-hook, or `execute-step` enum
+families. Workflow / cron / hook execution is modeled outside the kernel, for
+example by `takosumi-git`; see
 [Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
 
 ## Related architecture notes

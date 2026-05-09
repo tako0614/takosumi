@@ -204,14 +204,12 @@ Deno.test(
   },
 );
 
-// Phase 10 Wave 4: enabled — exercises compiler-level worker trigger
-// validation; Deployment.resolution surface coverage lives in
-// deployment_service tests.
-Deno.test("public manifest compiler validates worker triggers", () => {
+// Workflow/trigger authoring is owned above the kernel by takosumi-git.
+Deno.test("public manifest compiler rejects compute triggers", () => {
   assert.throws(
     () =>
       compileManifestToAppSpec({
-        name: "bad-trigger-selector",
+        name: "bad-trigger",
         compute: {
           jobs: {
             type: "js-worker",
@@ -221,21 +219,7 @@ Deno.test("public manifest compiler validates worker triggers", () => {
           },
         },
       }),
-    /requires exactly one of binding or queue/,
-  );
-  assert.throws(
-    () =>
-      compileManifestToAppSpec({
-        name: "bad-trigger-parent",
-        compute: {
-          api: {
-            image: IMAGE_A,
-            port: 8080,
-            triggers: { queues: [{ queue: "jobs" }] },
-          },
-        },
-      }),
-    /compute\.api\.triggers is worker-only/,
+    /compute\.jobs must not include 'triggers'/,
   );
 });
 
@@ -674,15 +658,6 @@ Deno.test("public manifest compiler normalizes non-HTTP route protocols", () => 
       target: "worker",
       protocol: "queue",
       source: "jobs.incoming",
-    }, {
-      id: "daily",
-      target: "worker",
-      protocol: "schedule",
-    }, {
-      id: "push",
-      target: "worker",
-      protocol: "event",
-      source: "repo.push",
     }],
   });
 
@@ -717,24 +692,6 @@ Deno.test("public manifest compiler normalizes non-HTTP route protocols", () => 
         8080,
         "jobs.incoming",
       ],
-      [
-        "daily",
-        "schedule",
-        "interface.schedule@v1",
-        undefined,
-        undefined,
-        8080,
-        "daily",
-      ],
-      [
-        "push",
-        "event",
-        "interface.event@v1",
-        undefined,
-        undefined,
-        8080,
-        "repo.push",
-      ],
     ],
   );
 
@@ -761,6 +718,17 @@ Deno.test("public manifest compiler normalizes non-HTTP route protocols", () => 
       }),
     /route\.jobs\.path is only valid for http\/https routes/,
   );
+  for (const protocol of ["schedule", "event"]) {
+    assert.throws(
+      () =>
+        compileManifestToAppSpec({
+          name: `bad-${protocol}`,
+          compute: { worker: { image: WORKER_IMAGE, port: 8080 } },
+          routes: [{ id: protocol, target: "worker", protocol }],
+        }),
+      new RegExp(`RouterProtocolUnsupported: ${protocol}`),
+    );
+  }
 });
 
 Deno.test(

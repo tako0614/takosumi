@@ -33,45 +33,6 @@ Deno.test("HTTP canary preview does not auto-switch queue consumers", () => {
   assert.equal(preview.issues[0]?.code, "explicit_switch_plan_required");
 });
 
-Deno.test("schedule events target primaryAppReleaseId in switch previews", () => {
-  const preview = buildEventSubscriptionSwitchPreview({
-    spaceId: "space_a",
-    groupId: "worker",
-    manifest: sampleManifest(),
-    primaryAppReleaseId: "release_primary",
-    switchPlan: {
-      entries: [{
-        subscriptionId: "nightly",
-        targetAppReleaseId: "release_canary",
-        mode: "switch-new-deliveries",
-      }],
-    },
-  });
-
-  const schedule = preview.subscriptions.find((item) =>
-    item.subscriptionId === "nightly"
-  );
-  assert.equal(
-    preview.policy.scheduleEventsTargetAppReleaseId,
-    "release_primary",
-  );
-  assert.equal(preview.sideEffectControls.scheduleSwitchAllowed, false);
-  assert.equal(
-    preview.sideEffectControls.scheduleTargetAppReleaseId,
-    "release_primary",
-  );
-  assert.equal(schedule?.previewTargetAppReleaseId, "release_primary");
-  assert.equal(schedule?.action, "stay-on-primary");
-  assert.equal(schedule?.sideEffectControl.sideEffectsAllowed, false);
-  assert.equal(
-    schedule?.sideEffectControl.enforcementPoint,
-    "event-scheduler-primary-release-pin",
-  );
-  assert.equal(schedule?.requiresExplicitSwitchPlan, false);
-  assert.equal(schedule?.reason, "schedule-event-targets-primary-release");
-  assert.equal(preview.issues[0]?.code, "schedule_switch_not_supported");
-});
-
 Deno.test("explicit switch plan previews queue consumers and in-flight message behavior", () => {
   const preview = buildEventSubscriptionSwitchPreview({
     spaceId: "space_a",
@@ -136,10 +97,7 @@ Deno.test("event switch preview runs before Deployment activation envelope creat
     preview.subscriptions[0]?.previewTargetAppReleaseId,
     "release_canary",
   );
-  assert.equal(
-    preview.subscriptions[1]?.previewTargetAppReleaseId,
-    "release_primary",
-  );
+  assert.equal(preview.subscriptions.length, 1);
 });
 
 function sampleManifest(): PublicDeployManifest {
@@ -162,7 +120,6 @@ function sampleManifest(): PublicDeployManifest {
         path: "/",
       },
       jobs: { target: "handler", protocol: "queue", source: "jobs" },
-      nightly: { target: "handler", protocol: "schedule", source: "nightly" },
     },
   };
 }

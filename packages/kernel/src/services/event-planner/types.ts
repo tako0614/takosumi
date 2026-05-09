@@ -17,7 +17,7 @@ export type EventSwitchPlanEntryMode = "switch-new-deliveries";
 export type EventSubscriptionSwitchAction =
   | "stay-on-primary"
   | "switch-new-deliveries";
-export type EventSideEffectSurface = "queue" | "schedule";
+export type EventSideEffectSurface = "queue";
 export type EventSideEffectControlAction =
   | "pin-to-primary"
   | "allow-explicit-new-deliveries"
@@ -63,7 +63,6 @@ export interface EventSubscriptionSwitchPreviewDto {
 
 export interface EventSwitchPolicyDto {
   readonly canaryHttpAutoSwitchesQueueConsumers: false;
-  readonly scheduleEventsTargetAppReleaseId: AppReleaseId;
   readonly explicitSwitchPlanRequired: true;
 }
 
@@ -80,17 +79,13 @@ export interface EventSubscriptionSwitchItemDto {
   readonly requiresExplicitSwitchPlan: boolean;
   readonly reason:
     | "queue-consumer-pinned-during-http-canary"
-    | "schedule-event-targets-primary-release"
-    | "event-subscription-pinned-during-http-canary"
     | "explicit-switch-plan-entry";
 }
 
 export interface EventSideEffectControlsDto {
   readonly kind: "event_side_effect_controls";
   readonly queueAutoSwitchAllowed: false;
-  readonly scheduleSwitchAllowed: false;
   readonly queueSwitchRequiresExplicitPlan: true;
-  readonly scheduleTargetAppReleaseId: AppReleaseId;
   readonly controls: readonly EventSubscriptionSideEffectControlDto[];
 }
 
@@ -101,13 +96,10 @@ export interface EventSubscriptionSideEffectControlDto {
   readonly currentTargetAppReleaseId: AppReleaseId;
   readonly previewTargetAppReleaseId: AppReleaseId;
   readonly sideEffectsAllowed: boolean;
-  readonly enforcementPoint:
-    | "event-subscription-switch-preview"
-    | "event-scheduler-primary-release-pin";
+  readonly enforcementPoint: "event-subscription-switch-preview";
   readonly reason:
     | "queue-side-effects-require-explicit-switch-plan"
-    | "queue-new-deliveries-explicitly-planned"
-    | "schedule-side-effects-pinned-to-primary-release";
+    | "queue-new-deliveries-explicitly-planned";
 }
 
 export interface EventSubscriptionSwitchPlanPreviewDto {
@@ -131,8 +123,7 @@ export interface InFlightMessageBehaviorProfileDto {
 export interface EventSubscriptionSwitchIssueDto {
   readonly code:
     | "explicit_switch_plan_required"
-    | "unknown_switch_plan_subscription"
-    | "schedule_switch_not_supported";
+    | "unknown_switch_plan_subscription";
   readonly subscriptionId?: EventSubscriptionId;
   readonly message: string;
 }

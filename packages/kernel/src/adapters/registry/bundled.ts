@@ -83,8 +83,6 @@ const BUILT_IN_PACKAGE_SEEDS: readonly BuiltInPackageSeed[] = [
           "interface.tcp@v1",
           "interface.udp@v1",
           "interface.queue@v1",
-          "interface.schedule@v1",
-          "interface.event@v1",
         ],
         dataContracts: ["data.json@v1"],
         outputContracts: ["output.route@v1"],
@@ -274,12 +272,10 @@ function providerSupportReport(
       "interface.tcp@v1",
       "interface.udp@v1",
       "interface.queue@v1",
-      "interface.schedule@v1",
-      "interface.event@v1",
     ];
   const routeProtocols = providerRef === "provider.local-docker@v1"
     ? ["http", "tcp", "udp"]
-    : ["http", "tcp", "udp", "queue", "schedule", "event"];
+    : ["http", "tcp", "udp", "queue"];
   return {
     providerPackageRef: resolution.ref,
     providerPackageDigest: resolution.digest,

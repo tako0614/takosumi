@@ -57,7 +57,6 @@ const COMPUTE_FIELDS = new Set([
   "icon",
   "readiness",
   "containers",
-  "triggers",
   "scaling",
   "dockerfile",
   "healthCheck",
@@ -90,19 +89,6 @@ const CLOUDFLARE_CONTAINER_FIELDS = new Set([
   "rolloutStepPercentage",
   "migrationTag",
   "sqlite",
-]);
-
-const TRIGGERS_FIELDS = new Set(["schedules", "queues"]);
-const SCHEDULE_TRIGGER_FIELDS = new Set(["cron"]);
-const QUEUE_TRIGGER_FIELDS = new Set([
-  "binding",
-  "queue",
-  "deadLetterQueue",
-  "maxBatchSize",
-  "maxConcurrency",
-  "maxRetries",
-  "maxWaitTimeMs",
-  "retryDelaySeconds",
 ]);
 
 const RESOURCE_FIELDS = new Set([
@@ -595,7 +581,7 @@ function normalizeNamedCollection(
         port,
         targetPort: targetPort ?? port,
         methods: route.methods ? [...route.methods] : undefined,
-        source: isEventRouteProtocol(protocol)
+        source: isQueueRouteProtocol(protocol)
           ? route.source ?? name
           : route.source,
         raw: structuredClone(route),
@@ -663,12 +649,6 @@ function validateComputeCollection(
         throw new TypeError(`compute.${name}.containers is worker-only`);
       }
       validateAttachedContainers(name, spec.containers);
-    }
-    if (spec.triggers !== undefined) {
-      if (runtimeContractRef !== "runtime.js-worker@v1") {
-        throw new TypeError(`compute.${name}.triggers is worker-only`);
-      }
-      validateTriggers(name, spec.triggers);
     }
     if (spec.bindings !== undefined) {
       validateBindingShape(`compute.${name}.bindings`, spec.bindings);
@@ -808,76 +788,6 @@ function cloudflareContainerMetadata(
   return metadata;
 }
 
-function validateTriggers(computeName: string, value: unknown): void {
-  const path = `compute.${computeName}.triggers`;
-  if (!isRecord(value)) throw new TypeError(`${path} must be object`);
-  assertKnownFields(value, TRIGGERS_FIELDS, path);
-  if (value.schedules !== undefined) {
-    if (!Array.isArray(value.schedules)) {
-      throw new TypeError(`${path}.schedules must be array`);
-    }
-    for (const [index, schedule] of value.schedules.entries()) {
-      const itemPath = `${path}.schedules[${index}]`;
-      if (!isRecord(schedule)) {
-        throw new TypeError(`${itemPath} must be object`);
-      }
-      assertKnownFields(schedule, SCHEDULE_TRIGGER_FIELDS, itemPath);
-      if (typeof schedule.cron !== "string" || schedule.cron.length === 0) {
-        throw new TypeError(`${itemPath}.cron must be string`);
-      }
-    }
-  }
-  if (value.queues !== undefined) {
-    if (!Array.isArray(value.queues)) {
-      throw new TypeError(`${path}.queues must be array`);
-    }
-    for (const [index, queue] of value.queues.entries()) {
-      validateQueueTrigger(`${path}.queues[${index}]`, queue);
-    }
-  }
-}
-
-function validateQueueTrigger(path: string, value: unknown): void {
-  if (!isRecord(value)) throw new TypeError(`${path} must be object`);
-  assertKnownFields(value, QUEUE_TRIGGER_FIELDS, path);
-  const hasBinding = value.binding !== undefined;
-  const hasQueue = value.queue !== undefined;
-  if (hasBinding === hasQueue) {
-    throw new TypeError(`${path} requires exactly one of binding or queue`);
-  }
-  if (hasBinding) {
-    if (typeof value.binding !== "string") {
-      throw new TypeError(`${path}.binding must be string`);
-    }
-    normalizeEnvName(value.binding, `${path}.binding`);
-  }
-  if (
-    hasQueue && (typeof value.queue !== "string" || value.queue.length === 0)
-  ) {
-    throw new TypeError(`${path}.queue must be string`);
-  }
-  for (
-    const field of [
-      "maxBatchSize",
-      "maxConcurrency",
-      "maxRetries",
-      "maxWaitTimeMs",
-      "retryDelaySeconds",
-    ] as const
-  ) {
-    if (value[field] !== undefined && !Number.isInteger(value[field])) {
-      throw new TypeError(`${path}.${field} must be integer`);
-    }
-  }
-  if (
-    value.deadLetterQueue !== undefined &&
-    (typeof value.deadLetterQueue !== "string" ||
-      value.deadLetterQueue.length === 0)
-  ) {
-    throw new TypeError(`${path}.deadLetterQueue must be string`);
-  }
-}
-
 function validateServiceImage(name: string, spec: PublicComputeSpec): void {
   if (
     typeof spec.image !== "string" || !IMAGE_DIGEST_PATTERN.test(spec.image)
@@ -952,7 +862,7 @@ function validateRoutes(
     const protocol = normalizeRouteProtocol(route.protocol);
     const isHttpRoute = isHttpRouteProtocol(protocol);
     const isPortRoute = isPortProtocol(protocol);
-    const isEventRoute = isEventRouteProtocol(protocol);
+    const isQueueRoute = isQueueRouteProtocol(protocol);
     if (isHttpRoute && typeof route.path !== "string") {
       throw new TypeError(`route.${name}.path must start with '/'`);
     }
@@ -962,14 +872,14 @@ function validateRoutes(
     if (route.path !== undefined && !route.path.startsWith("/")) {
       throw new TypeError(`route.${name}.path must start with '/'`);
     }
-    if ((isPortRoute || isEventRoute) && route.path !== undefined) {
+    if ((isPortRoute || isQueueRoute) && route.path !== undefined) {
       throw new TypeError(
         `route.${name}.path is only valid for http/https routes`,
       );
     }
-    if (!isEventRoute && route.source !== undefined) {
+    if (!isQueueRoute && route.source !== undefined) {
       throw new TypeError(
-        `route.${name}.source is only valid for queue/schedule/event routes`,
+        `route.${name}.source is only valid for queue routes`,
       );
     }
     const port = normalizeRoutePort(name, route.port);
@@ -981,7 +891,7 @@ function validateRoutes(
         `route.${name}.port or compute.${target}.port is required for ${protocol} routes`,
       );
     }
-    if (isEventRoute && port !== undefined) {
+    if (isQueueRoute && port !== undefined) {
       throw new TypeError(
         `route.${name}.port is only valid for http/https/tcp/udp routes`,
       );
@@ -1020,9 +930,8 @@ function isPortProtocol(protocol: string): boolean {
   return protocol === "tcp" || protocol === "udp";
 }
 
-function isEventRouteProtocol(protocol: string): boolean {
-  return protocol === "queue" || protocol === "schedule" ||
-    protocol === "event";
+function isQueueRouteProtocol(protocol: string): boolean {
+  return protocol === "queue";
 }
 
 function normalizeRouteProtocol(protocol: string | undefined): string {
@@ -1656,8 +1565,6 @@ function interfaceContractRefFor(protocol: string | undefined): string {
   if (normalized === "tcp") return "interface.tcp@v1";
   if (normalized === "udp") return "interface.udp@v1";
   if (normalized === "queue") return "interface.queue@v1";
-  if (normalized === "schedule") return "interface.schedule@v1";
-  if (normalized === "event") return "interface.event@v1";
   throw new TypeError(`RouterProtocolUnsupported: ${normalized}`);
 }
 

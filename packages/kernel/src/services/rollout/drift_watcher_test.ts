@@ -626,7 +626,7 @@ function sampleManifest(): PublicDeployManifest {
         host: "demo.example.test",
         path: "/",
       },
-      events: { target: "web", protocol: "event" },
+      events: { target: "web", protocol: "queue", source: "updates" },
     },
     outputs: {
       updates: {
