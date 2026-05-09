@@ -1424,18 +1424,26 @@ function materializeServiceImportValue(
 }
 
 const serviceImportEndpointRefPattern =
-  /^\$\{(?:imports|bindings)\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.endpoints\.([a-z][a-z0-9-]*)\.(url|path)\}$/;
+  /^\$\{imports\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.endpoints\.([a-z][a-z0-9-]*)\.(url|path)\}$/;
 const serviceImportMetadataRefPattern =
-  /^\$\{(?:imports|bindings)\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.metadata\.([A-Za-z0-9_.-]+)\}$/;
+  /^\$\{imports\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.metadata\.([A-Za-z0-9_.-]+)\}$/;
 const serviceImportServiceIdRefPattern =
-  /^\$\{(?:imports|bindings)\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.serviceId\}$/;
+  /^\$\{imports\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.serviceId\}$/;
 
 function materializeServiceImportString(
   value: string,
   importsByAlias: ReadonlyMap<string, ResolvedServiceImport>,
   path: string,
 ): MaterializedJsonValueResult {
-  if (!value.includes("${imports.") && !value.includes("${bindings.")) {
+  if (value.includes("${bindings.")) {
+    return {
+      ok: false,
+      error: `${path} contains unsupported \${bindings.*} placeholder; ` +
+        "AppBinding placeholders must be compiled before kernel apply, and " +
+        "service imports must use `${imports.<alias>...}`",
+    };
+  }
+  if (!value.includes("${imports.")) {
     return { ok: true, value };
   }
   const endpointMatch = value.match(serviceImportEndpointRefPattern);
