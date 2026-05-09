@@ -2,9 +2,9 @@
 //
 // The `Deployment` record (and its nested types) is canonical and lives in
 // `takosumi-contract`. Anything kept here is a deploy-domain-local helper
-// for: (1) the public `.takos/app.yml` manifest authoring surface, and
-// (2) status-narrowed views over `Deployment` used inside the deploy-domain
-// process pipeline.
+// for: (1) client-submitted public app manifest payloads, and (2)
+// status-narrowed views over `Deployment` used inside the deploy-domain process
+// pipeline.
 
 import type {
   Deployment,
@@ -30,9 +30,9 @@ export type {
   ProviderObservation,
 } from "takosumi-contract";
 
-// Public manifest authoring surface (`.takos/app.yml`). All shapes are open
-// (index-signature) because manifest fields are validated downstream by the
-// compiler/normalizer, not by these types.
+// Public app manifest payloads. All shapes are open (index-signature) because
+// manifest fields are validated downstream by the compiler/normalizer, not by
+// these types.
 
 export type DeploySourceKind = "manifest" | "git_ref" | "package";
 export type DeployPhase = "plan" | "apply";

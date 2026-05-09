@@ -2,8 +2,8 @@
 /**
  * Phase 11A: Takosumi DB migration runner CLI.
  *
- * Wraps the array-based StorageMigrationRunner (apps/paas/src/adapters/storage/migration-runner)
- * so operators can apply the canonical postgresStorageMigrationStatements catalog from a CLI:
+ * Wraps the array-based StorageMigrationRunner so operators can apply the
+ * canonical postgresStorageMigrationStatements catalog from a CLI:
  *
  *   deno task db:migrate                      # apply pending against $DATABASE_URL
  *   deno task db:migrate --env=staging        # apply pending against $TAKOSUMI_STAGING_DATABASE_URL

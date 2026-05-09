@@ -14,10 +14,10 @@ import type {
  * `internal_request_replay_log` table; the conflict on the composite
  * primary key is what guarantees only one replica wins the race.
  *
- * The SQL contract assumed here is the same `SqlClient` driver used by
- * `apps/paas/src/adapters/storage`, so any backend that can speak Postgres
- * (or a Postgres-compatible dialect such as Cloudflare D1 via the existing
- * driver shim) can host the table without bespoke wiring.
+ * The SQL contract assumed here is the kernel storage `SqlClient`, so any
+ * backend that can speak Postgres (or a Postgres-compatible dialect such as
+ * Cloudflare D1 via the existing driver shim) can host the table without
+ * bespoke wiring.
  */
 export class SqlReplayProtectionStore implements ReplayProtectionStore {
   readonly #client: SqlClient;

@@ -3,9 +3,9 @@
 // Direct deploy (image / source / bundle workload inputs without a
 // repo-managed manifest) is implemented as a thin shell over
 // `DeploymentService.resolveDeployment` + `applyDeployment`. It generates
-// a synthetic `.takosumi/app.yml` manifest, marks it with a `takosumi.directDeploy`
-// override so manifest-managed groups can refuse silent mutation, and feeds
-// it through the canonical Deployment lifecycle.
+// a synthetic public app manifest payload, marks it with a
+// `takosumi.directDeploy` override so manifest-managed groups can refuse silent
+// mutation, and feeds it through the canonical Deployment lifecycle.
 
 import { compileManifestToAppSpec } from "../../domains/deploy/compiler.ts";
 import type {

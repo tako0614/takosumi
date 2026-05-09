@@ -1,8 +1,8 @@
 // Direct deploy service tests — Deployment-centric.
 //
-// Direct deploy generates a `.takosumi/app.yml` manifest from raw image / source
-// / bundle inputs, then runs it through `DeploymentService.resolveDeployment`
-// + `applyDeployment`. These tests validate the manifest and source synthesis
+// Direct deploy generates a public app manifest payload from raw image / source
+// / bundle inputs, then runs it through `DeploymentService.resolveDeployment` +
+// `applyDeployment`. These tests validate the manifest and source synthesis
 // helpers as well as the full DirectDeployService flow against a stub
 // DeploymentClient.
 

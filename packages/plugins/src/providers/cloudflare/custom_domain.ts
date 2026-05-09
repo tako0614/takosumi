@@ -120,10 +120,9 @@ export interface CloudflareCustomDomainClient {
 
 /**
  * Reservation port used by the Cloudflare custom domain materializer to
- * serialize hostname ownership across tenants. The kernel exposes the
- * canonical implementation via `apps/paas/src/services/custom-domain-registry`
- * (see `CustomDomainRegistryService`); operators inject either the in-process
- * service or an HTTP client wrapping `POST /api/internal/custom-domains/...`.
+ * serialize hostname ownership across tenants. Operators inject either an
+ * in-process registry service or an HTTP client wrapping the internal custom
+ * domain registry route.
  */
 export interface CustomDomainRegistryClient {
   reserve(input: {
