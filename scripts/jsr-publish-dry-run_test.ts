@@ -3,6 +3,7 @@ import {
   JSR_PUBLISH_PACKAGES,
   parseDenoPublishWarnings,
   parseDenoWarningCodes,
+  parseMode,
   validateDryRunDiagnostics,
 } from "./jsr-publish-dry-run.ts";
 
@@ -18,6 +19,21 @@ Deno.test("JSR publish dry-run package list includes only publishable packages",
       "packages/all",
     ],
   );
+});
+
+Deno.test("JSR publish package list matches package metadata", async () => {
+  for (const packageInfo of JSR_PUBLISH_PACKAGES) {
+    const metadataPath = new URL(
+      `../${packageInfo.directory}/deno.json`,
+      import.meta.url,
+    );
+    const metadata = JSON.parse(await Deno.readTextFile(metadataPath)) as {
+      name?: string;
+      version?: string;
+    };
+    assert.equal(metadata.name, packageInfo.name);
+    assert.equal(metadata.version, packageInfo.version);
+  }
 });
 
 Deno.test("parseDenoPublishWarnings extracts warning codes and source locations", () => {
@@ -79,4 +95,12 @@ warning[unanalyzable-dynamic-import]: unable to analyze dynamic import
   assert.deepEqual(diagnostics.errors, [
     "@takos/takosumi-contract emitted unexpected warning[unanalyzable-dynamic-import] at /workspace/packages/contract/src/mod.ts",
   ]);
+});
+
+Deno.test("parseMode accepts explicit modes and rejects unknown args", () => {
+  assert.equal(parseMode([]), "dry-run");
+  assert.equal(parseMode(["--dry-run"]), "dry-run");
+  assert.equal(parseMode(["--publish"]), "publish");
+  assert.equal(parseMode(["--publish", "--dry-run"]), null);
+  assert.equal(parseMode(["--unknown"]), null);
 });

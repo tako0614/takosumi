@@ -44,6 +44,7 @@
     "check:cloudflare": "deno check --config deploy/cloudflare/deno.json deploy/cloudflare/src/worker.ts",
     "test": "deno test --allow-all",
     "publish:dry-run": "deno run --allow-run --allow-read scripts/jsr-publish-dry-run.ts",
+    "publish:jsr": "deno run --allow-run --allow-read scripts/jsr-publish-dry-run.ts --publish",
     "live-provisioning-smoke": "deno run --allow-read --allow-env --allow-net scripts/live-provisioning-smoke.ts",
     "live-provisioning-smoke:fixture:all": "deno run --allow-read --allow-env --allow-net scripts/live-provisioning-smoke.ts --fixture-all",
     "fmt": "deno fmt",

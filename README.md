@@ -142,6 +142,7 @@ deno test --allow-all           # workspace 全 test
 deno task check                 # 全 package type-check
 deno task fmt:check
 deno task lint
+deno task publish:dry-run       # JSR package publish gate
 ```
 
 per-package:
@@ -150,6 +151,13 @@ per-package:
 cd packages/cli && deno task test
 cd packages/kernel && deno task db:migrate:dry-run
 ```
+
+### Release
+
+Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks
+the workspace, runs tests, performs a JSR dry-run, publishes the six JSR
+packages with GitHub OIDC, and builds/pushes the `takosumi` OCI image to GHCR.
+Manual workflow runs stay dry-run unless the explicit `publish` input is set.
 
 ### Docs site (VitePress)
 

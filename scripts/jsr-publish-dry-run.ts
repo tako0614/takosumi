@@ -128,27 +128,38 @@ export function validateDryRunDiagnostics(
 export async function runJsrPublishDryRun(options: {
   readonly root?: URL;
 } = {}): Promise<boolean> {
+  return await runJsrPublish({ ...options, dryRun: true });
+}
+
+export async function runJsrPublish(options: {
+  readonly root?: URL;
+  readonly dryRun: boolean;
+}): Promise<boolean> {
   const root = options.root ?? new URL("../", import.meta.url);
   let allOk = true;
 
   for (const packageInfo of JSR_PUBLISH_PACKAGES) {
-    const ok = await runSinglePackageDryRun(root, packageInfo);
+    const ok = await runSinglePackagePublish(root, packageInfo, options.dryRun);
     allOk &&= ok;
   }
 
   return allOk;
 }
 
-async function runSinglePackageDryRun(
+async function runSinglePackagePublish(
   root: URL,
   packageInfo: JsrPublishPackage,
+  dryRun: boolean,
 ): Promise<boolean> {
   const label = `${packageInfo.name}@${packageInfo.version}`;
   const cwd = new URL(`${packageInfo.directory}/`, root);
-  console.log(`dry-run ${label}`);
+  const action = dryRun ? "dry-run" : "publish";
+  console.log(`${action} ${label}`);
+  const args = ["publish", "--quiet"];
+  if (dryRun) args.push("--dry-run", "--allow-dirty");
 
   const command = new Deno.Command(Deno.execPath(), {
-    args: ["publish", "--dry-run", "--quiet", "--allow-dirty"],
+    args,
     cwd,
     stdout: "piped",
     stderr: "piped",
@@ -198,6 +209,22 @@ function acceptedWarning(
 }
 
 if (import.meta.main) {
-  const ok = await runJsrPublishDryRun();
+  const mode = parseMode(Deno.args);
+  if (!mode) {
+    console.error(
+      "Usage: deno run --allow-run --allow-read scripts/jsr-publish-dry-run.ts [--dry-run|--publish]",
+    );
+    Deno.exit(2);
+  }
+  const ok = await runJsrPublish({ dryRun: mode === "dry-run" });
   if (!ok) Deno.exit(1);
+}
+
+export function parseMode(
+  args: readonly string[],
+): "dry-run" | "publish" | null {
+  if (args.length === 0) return "dry-run";
+  if (args.length === 1 && args[0] === "--dry-run") return "dry-run";
+  if (args.length === 1 && args[0] === "--publish") return "publish";
+  return null;
 }
