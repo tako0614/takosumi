@@ -71,6 +71,23 @@ export class ProviderOperationService {
       startedAt,
       updatedAt: startedAt,
     });
+    const credentialScopeError = validateProviderCredentialRefs(
+      this.#provider,
+      input.credentialRefs ?? [],
+    );
+    if (credentialScopeError) {
+      const failed = await this.#store.put({
+        ...running,
+        status: "failed",
+        updatedAt: this.#now(),
+        failure: {
+          reason: "provider_rejected",
+          retryable: false,
+          message: credentialScopeError,
+        },
+      });
+      return { record: failed, status: toMaterializationStatusDto(failed) };
+    }
     await this.#appendCredentialAudit(input, idempotencyKey, startedAt);
 
     try {
@@ -148,6 +165,18 @@ export class ProviderOperationService {
       requestId: input.requestId,
     });
   }
+}
+
+function validateProviderCredentialRefs(
+  provider: string,
+  refs: readonly string[],
+): string | undefined {
+  const allowed = `secret://providers/${provider}`;
+  for (const ref of refs) {
+    if (ref === allowed || ref.startsWith(`${allowed}/`)) continue;
+    return `provider credential ref ${ref} is outside provider scope ${allowed}`;
+  }
+  return undefined;
 }
 
 export async function deriveProviderOperationIdempotencyKey(options: {

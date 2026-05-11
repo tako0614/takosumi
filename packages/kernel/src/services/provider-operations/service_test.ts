@@ -169,6 +169,37 @@ Deno.test("ProviderOperationService writes an audit event when provider credenti
   assert.equal(events[0].requestId, "req_provider");
 });
 
+Deno.test("ProviderOperationService rejects tenant runtime secret refs before provider execution", async () => {
+  const provider = new FakeProviderMaterializer({
+    plan: providerPlan({
+      id: "plan-secret-scope",
+      operationStatus: "succeeded",
+    }),
+  });
+  const service = new ProviderOperationService({
+    provider: "fake",
+    materializer: provider,
+    clock: sequenceClock([
+      "2026-04-27T00:05:00.000Z",
+      "2026-04-27T00:05:01.000Z",
+    ]),
+  });
+
+  const result = await service.execute({
+    desiredState: desiredState(),
+    credentialRefs: [
+      "secret://providers/fake",
+      "secret://runtime/space-a/database-url",
+    ],
+  });
+
+  assert.equal(provider.callCount, 0);
+  assert.equal(result.status.status, "failed");
+  assert.equal(result.status.failureReason, "provider_rejected");
+  assert.equal(result.status.retryable, false);
+  assert.match(result.status.message ?? "", /outside provider scope/);
+});
+
 Deno.test("classifyProviderOperationFailure maps timeout to retryable timeout", () => {
   assert.deepEqual(
     classifyProviderOperationFailure(new Error("request timed out")),

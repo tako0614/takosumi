@@ -56,6 +56,11 @@ export interface ProviderOperationRecordStore {
 export interface ProviderOperationServiceExecuteInput {
   readonly desiredState: RuntimeDesiredState;
   readonly idempotencyKey?: string;
+  /**
+   * Provider credential handles visible to this provider execution. Refs are
+   * scoped by ProviderOperationService to `secret://providers/<provider>` and
+   * tenant/runtime secret refs are rejected before materialization begins.
+   */
   readonly credentialRefs?: readonly string[];
   readonly requestId?: string;
   readonly actorId?: string;
