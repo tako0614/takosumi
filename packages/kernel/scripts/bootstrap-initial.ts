@@ -4,8 +4,7 @@
  * Creates the first admin account, the initial tenant Space + Group, seeds the
  * default app distribution descriptors, and registers the operator-controlled
  * registry trust roots. Designed to be **idempotent**: re-running against a
- * machine that already has an admin / tenant skips creation and re-prints the
- * existing PAT (when it can be located in the secret store).
+ * machine that already has an admin / tenant skips creation.
  *
  * Usage:
  *   cd takos && deno task bootstrap:initial \
@@ -23,10 +22,11 @@
  *                                          packageKind?, trustLevel?,
  *                                          conformanceTier?, verifiedBy? }
  *
- * Outputs (stdout): admin email + initial PAT (operator login secret).
+ * Outputs (stdout): admin email and bootstrap identifiers. Operator
+ * credentials are issued by Takosumi Accounts, not this kernel bootstrap.
  */
 
-import type { TakosActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract";
 import {
   createCoreDomainServices,
   createInMemoryCoreDomainDependencies,
@@ -41,7 +41,6 @@ import {
   type TrustLevel,
   type TrustRecord,
 } from "../src/domains/registry/mod.ts";
-import { MemoryEncryptedSecretStore } from "../src/adapters/secret-store/memory.ts";
 
 interface CliArgs {
   readonly adminEmail: string;
@@ -83,13 +82,9 @@ interface BootstrapOutcome {
   readonly accountId: string;
   readonly spaceId: string;
   readonly groupId: string;
-  readonly pat: string;
-  readonly patReused: boolean;
   readonly defaultAppCount: number;
   readonly trustRootCount: number;
 }
-
-const ADMIN_PAT_SECRET_PREFIX = "pat:admin:";
 
 function parseArgs(argv: readonly string[]): CliArgs {
   const map = new Map<string, string>();
@@ -273,14 +268,6 @@ function isConformanceTier(value: unknown): value is ConformanceTier {
     value === "certified";
 }
 
-function generatePat(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  let hex = "";
-  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
-  return `tk_pat_${hex}`;
-}
-
 function buildPlan(args: CliArgs): BootstrapPlan {
   const env = Deno.env.toObject();
   const defaultApps = loadDefaultApps(env);
@@ -307,18 +294,10 @@ async function executePlan(plan: BootstrapPlan): Promise<BootstrapOutcome> {
   const descriptors = new InMemoryPackageDescriptorStore();
   const resolutions = new InMemoryPackageResolutionStore();
   const trustRecords = new InMemoryTrustRecordStore();
-  const secrets = new MemoryEncryptedSecretStore({});
 
   const existingSpace = await coreDeps.spaces.get(plan.spaceId);
-  const patSecretName =
-    `${ADMIN_PAT_SECRET_PREFIX}${plan.args.adminEmail.toLowerCase()}`;
-  const existingPat = await secrets.latestSecret(patSecretName);
 
-  if (existingSpace && existingPat) {
-    const patValue = await secrets.getSecret({
-      name: existingPat.name,
-      version: existingPat.version,
-    });
+  if (existingSpace) {
     const memberships = await coreDeps.memberships.listBySpace(
       existingSpace.id,
     );
@@ -329,14 +308,12 @@ async function executePlan(plan: BootstrapPlan): Promise<BootstrapOutcome> {
       accountId: memberships[0]?.accountId ?? plan.accountId,
       spaceId: existingSpace.id,
       groupId: groups[0]?.id ?? "",
-      pat: patValue ?? "",
-      patReused: true,
       defaultAppCount: plan.defaultApps.length,
       trustRootCount: plan.trustRoots.length,
     };
   }
 
-  const actor: TakosActorContext = {
+  const actor: TakosumiActorContext = {
     actorAccountId: plan.accountId,
     roles: ["owner"],
     requestId: `bootstrap-initial-${crypto.randomUUID()}`,
@@ -371,19 +348,6 @@ async function executePlan(plan: BootstrapPlan): Promise<BootstrapOutcome> {
       `failed to create initial group: ${group.error.code} ${group.error.message}`,
     );
   }
-
-  const pat = generatePat();
-  await secrets.putSecret({
-    name: patSecretName,
-    value: pat,
-    metadata: {
-      adminEmail: plan.args.adminEmail,
-      accountId: plan.accountId,
-      spaceId: space.value.id,
-      bootstrap: true,
-      environment: plan.args.environment,
-    },
-  });
 
   const verifiedAt = new Date().toISOString();
   for (const entry of plan.defaultApps) {
@@ -432,8 +396,6 @@ async function executePlan(plan: BootstrapPlan): Promise<BootstrapOutcome> {
     accountId: plan.accountId,
     spaceId: space.value.id,
     groupId: group.value.id,
-    pat,
-    patReused: false,
     defaultAppCount: plan.defaultApps.length,
     trustRootCount: plan.trustRoots.length,
   };
@@ -462,8 +424,7 @@ function previewPlan(plan: BootstrapPlan): void {
     }`,
   );
   console.log(
-    "PAT will be generated (32 random bytes, prefix tk_pat_) and stored as " +
-      `secret '${ADMIN_PAT_SECRET_PREFIX}${plan.args.adminEmail.toLowerCase()}'.`,
+    "no PAT will be generated; operator credentials are issued by Takosumi Accounts.",
   );
   console.log("no DB writes performed (dry-run).");
 }
@@ -484,13 +445,8 @@ function reportOutcome(outcome: BootstrapOutcome): void {
   console.log(`registry trust roots: ${outcome.trustRootCount}`);
   console.log("");
   console.log(
-    `Initial PAT (operator login)${outcome.patReused ? " [reused]" : ""}:`,
-  );
-  console.log(`  email : ${outcome.adminEmail}`);
-  console.log(`  pat   : ${outcome.pat || "<unavailable>"}`);
-  console.log("");
-  console.log(
-    "Store this PAT securely; it grants admin access on first login.",
+    "Operator login/PAT issuance is owned by Takosumi Accounts. Create a " +
+      "Takosumi Accounts PAT or OIDC bearer there before using Takos CLI automation.",
   );
 }
 
