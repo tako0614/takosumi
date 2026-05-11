@@ -851,15 +851,17 @@ export function registerDeployPublicRoutes(
           return { status: 400, body: { status: "error", outcome } };
         }
         if (outcome.status === "failed-apply") {
-          const failedStamp = now();
-          await recordStore.upsert({
-            tenantId,
-            name: deploymentName,
-            manifest: prior?.manifest ?? persistedManifest,
-            appliedResources: prior?.appliedResources ?? [],
-            status: "failed",
-            now: failedStamp,
-          });
+          if (prior?.status !== "applied") {
+            const failedStamp = now();
+            await recordStore.upsert({
+              tenantId,
+              name: deploymentName,
+              manifest: prior?.manifest ?? persistedManifest,
+              appliedResources: prior?.appliedResources ?? [],
+              status: "failed",
+              now: failedStamp,
+            });
+          }
           await appendOperationPlanJournalStages({
             store: operationJournalStore,
             preview: operationPlan,

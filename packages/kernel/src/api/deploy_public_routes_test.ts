@@ -24,6 +24,13 @@ import {
   InMemoryTakosumiDeploymentRecordStore,
   type TakosumiDeploymentRecordStore,
 } from "../domains/deploy/takosumi_deployment_record_store.ts";
+import {
+  InMemoryBindingSetRevisionStore,
+  InMemoryMigrationLedgerStore,
+  InMemoryResourceBindingStore,
+  InMemoryResourceInstanceStore,
+} from "../domains/resources/mod.ts";
+import { ResourceOperationService } from "../services/resources/mod.ts";
 import type { DeployPublicIdempotencyStore } from "../domains/deploy/deploy_public_idempotency_store.ts";
 import {
   appendOperationPlanJournalStages,
@@ -2592,8 +2599,25 @@ Deno.test("apply persists `failed` status when applyV2 returns failed-apply", as
   assert.equal(persisted!.status, "failed");
 });
 
-Deno.test("failed update apply preserves prior applied resource handles", async () => {
+Deno.test("failed update after migration leaves applied deployment unchanged", async () => {
   const recordStore = new InMemoryTakosumiDeploymentRecordStore();
+  const operationJournalStore = new InMemoryOperationJournalStore();
+  const resourceStores = {
+    instances: new InMemoryResourceInstanceStore(),
+    bindings: new InMemoryResourceBindingStore(),
+    bindingSetRevisions: new InMemoryBindingSetRevisionStore(),
+    migrationLedger: new InMemoryMigrationLedgerStore(),
+  };
+  const resourceService = new ResourceOperationService({
+    stores: resourceStores,
+    idFactory: sequenceIds(["resource_db", "migration_expand"]),
+    clock: fixedClock("2026-05-02T00:00:00.000Z"),
+  });
+  const resource = await resourceService.createResource({
+    spaceId: "takosumi-deploy",
+    groupId: "existing-app",
+    contract: "postgres.v1",
+  });
   const priorManifest = {
     apiVersion: "1.0" as const,
     kind: "Manifest" as const,
@@ -2616,15 +2640,26 @@ Deno.test("failed update apply preserves prior applied resource handles", async 
     status: "applied",
     now: "2026-05-01T00:00:00.000Z",
   });
+  const priorRecord = await recordStore.get("takosumi-deploy", "existing-app");
+  assert.ok(priorRecord);
   const app = createApp({
     token: VALID_TOKEN,
     recordStore,
-    applyResources: () =>
-      Promise.resolve({
+    operationJournalStore,
+    applyResources: async () => {
+      await resourceService.recordMigration({
+        resourceInstanceId: resource.id,
+        migrationRef: "postgres:expand-index",
+        fromVersion: "1",
+        toVersion: "2",
+        checksum: "sha256:migration-expand-index",
+      });
+      return {
         applied: [],
         issues: [{ path: "$.resources[web]", message: "boom" }],
         status: "failed-apply",
-      }),
+      };
+    },
     now: () => "2026-05-02T00:00:00.000Z",
   });
 
@@ -2650,11 +2685,28 @@ Deno.test("failed update apply preserves prior applied resource handles", async 
 
   assert.equal(response.status, 500);
   const persisted = await recordStore.get("takosumi-deploy", "existing-app");
-  assert.ok(persisted);
-  assert.equal(persisted.status, "failed");
-  assert.deepEqual(persisted.manifest, priorManifest);
-  assert.equal(persisted.appliedResources.length, 1);
-  assert.equal(persisted.appliedResources[0].handle, "arn:test:existing");
+  assert.deepEqual(persisted, priorRecord);
+  assert.equal(
+    (await resourceStores.instances.get(resource.id))?.lifecycle.generation,
+    2,
+  );
+  assert.deepEqual(
+    (await resourceStores.migrationLedger.listByResource(resource.id)).map((
+      item,
+    ) => [item.migrationRef, item.status]),
+    [["postgres:expand-index", "completed"]],
+  );
+  const entries = await operationJournalStore.listByDeployment(
+    "takosumi-deploy",
+    "existing-app",
+  );
+  assert.equal(
+    entries.some((entry) =>
+      entry.phase === "apply" && entry.stage === "abort" &&
+      entry.status === "failed"
+    ),
+    true,
+  );
 });
 
 Deno.test("apply does not persist on validation failure", async () => {
@@ -3366,3 +3418,17 @@ Deno.test(
     );
   },
 );
+
+function fixedClock(iso: string): () => Date {
+  return () => new Date(iso);
+}
+
+function sequenceIds(values: readonly string[]): () => string {
+  let index = 0;
+  return () => {
+    const value = values[index];
+    if (!value) throw new Error("test id sequence exhausted");
+    index += 1;
+    return value;
+  };
+}
