@@ -161,6 +161,27 @@ takosumi deploy ./manifest.yml --dry-run
 takosumi deploy ./manifest.yml --remote https://kernel.example.com --token $TAKOSUMI_DEPLOY_TOKEN
 ```
 
+GitHub Actions can call the same raw unmanaged deploy path without
+`takosumi-git`:
+
+```yaml
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: tako0614/takosumi/actions/deploy@v1
+        with:
+          manifest: ./manifest.yml
+          remote-url: ${{ secrets.TAKOSUMI_REMOTE_URL }}
+          token: ${{ secrets.TAKOSUMI_DEPLOY_TOKEN }}
+```
+
+The action runs `takosumi deploy <manifest> --remote ... --token ...` and posts
+to `POST /v1/deployments`. It does not create AppInstallation ownership,
+AppBinding, billing, or grant records; use the Takosumi Accounts install flow
+for owned app installs.
+
 ### `takosumi plan [<manifest>]`
 
 Validate and print the resolved plan without applying.
@@ -343,23 +364,14 @@ printed. `list` queries `GET /v1/connectors`. `verify` posts
 `POST /v1/lifecycle/verify` and runs each connector's read-only smoke test;
 failed connectors cause exit code 2.
 
-### `takosumi plugin <marketplace | install>`
+### Plugin marketplace subcommands
 
-Inspect and verify operator-installed plugin packages.
-
-```text
-takosumi plugin marketplace fetch --url <marketplace-index-url> [--json]
-takosumi plugin install --marketplace <url> --package <ref> --trust-keys <path> --policy <path> [--environment <name>]
-```
-
-`marketplace fetch` downloads a `takosumi.plugin-marketplace.v1` index and
-prints the package refs, versions, kinds, and module digests. `plugin install`
-fetches the index, fetches the selected remote module, checks the SHA-256 module
-digest, verifies the signed kernel plugin manifest, and applies the install
-policy. The command is an operator CI / promotion check; kernel boot uses the
-same marketplace URLs and package refs from
-[Environment Variables](/reference/env-vars). See
-[Plugin Marketplace](/reference/plugin-marketplace).
+No plugin marketplace subcommands are current kernel CLI surface. The kernel
+does not fetch marketplace indexes, remote plugin modules, or executable hook
+packages. Operator-selected ProviderPlugin implementations are supplied by the
+operator's deployment packaging and selected through explicit configuration. See
+[Plugin Marketplace](/reference/plugin-marketplace) for the removed design
+branch.
 
 ## Trigger / Step subcommands
 

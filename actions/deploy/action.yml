@@ -1,0 +1,62 @@
+name: Takosumi Deploy
+description: Deploy an explicit Takosumi manifest to a remote kernel.
+
+inputs:
+  manifest:
+    description: Explicit manifest path to submit.
+    required: true
+  remote-url:
+    description: Base URL of the Takosumi kernel HTTP server.
+    required: true
+  token:
+    description: Deploy bearer for POST /v1/deployments.
+    required: true
+  mode:
+    description: apply or plan.
+    required: false
+    default: apply
+  cli-version:
+    description: JSR version of @takos/takosumi-cli to run.
+    required: false
+    default: 0.15.0
+  deno-version:
+    description: Deno version passed to denoland/setup-deno.
+    required: false
+    default: v2.x
+
+runs:
+  using: composite
+  steps:
+    - uses: denoland/setup-deno@v2
+      with:
+        deno-version: ${{ inputs.deno-version }}
+
+    - name: Deploy manifest
+      shell: bash
+      env:
+        TAKOSUMI_ACTION_MANIFEST: ${{ inputs.manifest }}
+        TAKOSUMI_ACTION_REMOTE_URL: ${{ inputs.remote-url }}
+        TAKOSUMI_ACTION_MODE: ${{ inputs.mode }}
+        TAKOSUMI_ACTION_CLI_VERSION: ${{ inputs.cli-version }}
+        TAKOSUMI_DEPLOY_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        case "$TAKOSUMI_ACTION_MODE" in
+          apply)
+            dry_run=()
+            ;;
+          plan)
+            dry_run=(--dry-run)
+            ;;
+          *)
+            echo "::error::mode must be 'apply' or 'plan'"
+            exit 2
+            ;;
+        esac
+
+        deno run -A "jsr:@takos/takosumi-cli@$TAKOSUMI_ACTION_CLI_VERSION" \
+          deploy "$TAKOSUMI_ACTION_MANIFEST" \
+          --remote "$TAKOSUMI_ACTION_REMOTE_URL" \
+          --token "$TAKOSUMI_DEPLOY_TOKEN" \
+          "${dry_run[@]}"
