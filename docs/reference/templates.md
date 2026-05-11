@@ -1,24 +1,23 @@
 # Templates
 
-> Stability: stable Audience: integrator See also:
+> Stability: retired / historical Audience: integrator See also:
 > [Manifest Expand Semantics](/reference/manifest-expand-semantics),
 > [Shape Catalog](/reference/shapes), [Provider Plugins](/reference/providers)
 
-A **template** is the v1 manifest authoring shorthand that expands into a
-concrete `resources[]` array at OperationPlan construction time. The manifest
-names a template (`template: <id>@<version>`) and supplies `inputs`. The kernel
-calls `expand(inputs)` on the registered template, splices the produced
-[Shape](/reference/shapes) resources into the manifest, and from that point
-onward the deployment runs through the standard DAG / capability selection /
-[provider plugin](/reference/providers) lifecycle.
+`template` is a retired kernel manifest authoring shorthand. Current kernel
+`POST /v1/deployments` receives a compiled Shape manifest with concrete
+`resources[]`; template expansion, if an operator wants it, must run before the
+kernel request in an installer/compiler layer. A manifest submitted to the
+kernel with top-level `template` is not current v1 public contract.
 
-Source: `packages/contract/src/template.ts` (the contract and registry),
-`packages/plugins/src/templates/<template>.ts` (the bundled two).
+Historical source: `packages/contract/src/template.ts` (the contract and
+registry), `packages/plugins/src/templates/<template>.ts` (legacy bundled
+examples). These are compatibility internals, not a public kernel deploy API.
 
-## Public API surface
+## Historical API surface
 
-`registerTemplate` is the v1 entry point for any third party that wants to
-publish a template into the in-process registry.
+`registerTemplate` was the in-process entry point for registering a template. Do
+not use it as a kernel public contract.
 
 ```ts
 function registerTemplate(
@@ -47,31 +46,30 @@ its definition — `expand` returns `ManifestResource[]` where each resource
 carries a `provider:` id, and the kernel runs the normal selection rules over
 the result.
 
-A template ships only Shape compositions. Adding a new template never requires a
-Shape RFC — the catalog of `ManifestResource` produced by `expand` is
-constrained to the existing shapes.
+A template must compile to ordinary Shape resources before deploy. Adding a new
+authoring macro is an installer/compiler concern; it does not change the kernel
+manifest envelope.
 
 ## Expand result immutability
 
-Template expansion is **resolved once**, at OperationPlan construction:
+Historical template expansion was **resolved once**, before OperationPlan
+construction:
 
 - The expanded `ManifestResource[]` is captured into the OperationPlan and
   becomes immutable for the lifetime of that plan.
-- A subsequent **template revision** (registering a different `Template` value
-  at the same `id@version`, or publishing a new `id@version`) does **not**
-  re-expand any existing Deployment. The Deployment continues to track the
-  resources written into its plan.
-- A new expansion only occurs when the operator submits a new manifest apply —
-  the kernel re-resolves the template at that point and produces a fresh
-  OperationPlan from the latest registered template.
+- A subsequent **template revision** must not re-expand any existing Deployment.
+  The Deployment continues to track the concrete resources written into its
+  plan.
+- A new expansion only occurs when an installer/compiler submits a new compiled
+  manifest apply.
 
-This rule keeps drift detection, namespace export, and risk / approval
-invalidation deterministic against the captured plan rather than against a
-moving template definition.
+This rule keeps drift detection and risk / approval invalidation deterministic
+against the captured plan rather than against a moving template definition.
 
 ## Bundled templates
 
-Takosumi bundles two templates.
+Legacy examples included two templates. They are not current kernel public
+surface.
 
 | template id             | version | summary                                                                                   |
 | ----------------------- | ------- | ----------------------------------------------------------------------------------------- |
@@ -105,9 +103,10 @@ interface SelfhostedSingleVmInputs {
 | `<serviceName>`     | `web-service@v1`       | `@takos/selfhost-docker-compose` | spec: `{ image, port, scale: { min: 1, max: 1 } }`. links: `bindings.DATABASE_URL = ${ref:db.connectionString}`, `bindings.ASSETS_BUCKET = ${ref:assets.bucket}`. data asset: the `image` is consumed as an `oci-image` DataAsset by the provider. |
 | `domain` _(opt-in)_ | `custom-domain@v1`     | `@takos/selfhost-coredns`        | spec: `{ name: <domain>, target: ${ref:<serviceName>.url} }`. exposure: routes the FQDN to the web service's `url` output. Only emitted when `domain` is supplied.                                                                                 |
 
-### Manifest example
+### Historical authoring example
 
 ```yaml
+# Historical authoring input. Do not submit this directly to POST /v1/deployments.
 apiVersion: "1.0"
 kind: Manifest
 metadata:
@@ -153,9 +152,10 @@ interface WebAppOnCloudflareInputs {
 | `<serviceName>` | `web-service@v1`       | `@takos/cloudflare-container`          | spec: `{ image, port, scale: { min: 0, max: 10 } }`. links: `bindings.DATABASE_URL = ${ref:db.connectionString}`, `bindings.ASSETS_BUCKET = ${ref:assets.bucket}`, `bindings.ASSETS_ENDPOINT = ${ref:assets.endpoint}`. data asset: `image` is consumed as an `oci-image` DataAsset by the provider. |
 | `domain`        | `custom-domain@v1`     | `@takos/cloudflare-dns`                | spec: `{ name: <domain>, target: ${ref:<serviceName>.url} }`. exposure: routes the FQDN to the web service's `url`.                                                                                                                                                                                  |
 
-### Manifest example
+### Historical authoring example
 
 ```yaml
+# Historical authoring input. Do not submit this directly to POST /v1/deployments.
 apiVersion: "1.0"
 kind: Manifest
 metadata:
@@ -172,8 +172,8 @@ template:
 
 ## Cross-references
 
-- [Manifest](/manifest) — `template:` field の使い方、expanded resources と
-  operator-authored `resources[]` の関係。
+- [Manifest](/manifest) — current kernel input is the expanded `resources[]`
+  form.
 - [Shape catalog](/reference/shapes) — Spec / outputFields / capability
   vocabulary used inside `expand`.
 - [Provider plugins](/reference/providers) — selection rules applied to the

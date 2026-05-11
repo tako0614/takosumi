@@ -30,8 +30,29 @@ takosumi version
 まずは kernel server を起動せず、CLI の local mode で manifest を確認できます。
 状態は process 終了で消えるので、authoring と smoke test 向けです。
 
+`manifest.yml` は compiled Shape manifest として明示的に作ります。kernel に渡す
+manifest は `resources[]` だけを持ち、top-level `template` や `workflowRef`
+は含めません。
+
+```yaml
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: hello-worker
+resources:
+  - shape: worker@v1
+    name: web
+    provider: "@takos/selfhost-systemd"
+    spec:
+      artifact:
+        kind: js-bundle
+        hash: sha256:0123456789abcdef
+      compatibilityDate: "2026-05-09"
+      routes:
+        - hello.local/*
+```
+
 ```bash
-takosumi init ./manifest.yml --template selfhosted-single-vm
 takosumi doctor --manifest ./manifest.yml
 takosumi deploy ./manifest.yml
 ```
@@ -60,8 +81,9 @@ cloud credential はそのまま agent connector に届きます。
 
 ## 3. Self-hosted deploy (single VM、Docker / systemd)
 
-template `selfhosted-single-vm@v1` は VM 上に systemd / docker / filesystem /
-local Postgres / coredns で 1 台完結デプロイを構築します。
+VM 上に systemd / docker / filesystem / local Postgres / coredns で 1 台完結
+デプロイを構築する場合も、kernel に送る manifest は expanded `resources[]`
+です。
 
 `my-app.yml`:
 
@@ -70,13 +92,26 @@ apiVersion: "1.0"
 kind: Manifest
 metadata:
   name: my-app
-template:
-  ref: selfhosted-single-vm@v1
-  inputs:
-    serviceName: api
-    image: ghcr.io/me/api:v1.0.0
-    port: 8080
-    domain: api.example.com
+resources:
+  - shape: database-postgres@v1
+    name: db
+    provider: "@takos/selfhost-postgres"
+    spec:
+      version: "16"
+  - shape: web-service@v1
+    name: api
+    provider: "@takos/selfhost-docker-compose"
+    spec:
+      image: ghcr.io/me/api@sha256:0123456789abcdef
+      port: 8080
+      env:
+        DATABASE_URL: ${secret-ref:db.connectionString}
+  - shape: custom-domain@v1
+    name: api-domain
+    provider: "@takos/selfhost-coredns"
+    spec:
+      domain: api.example.com
+      target: ${ref:api.endpoint}
 ```
 
 operator side (VM 上):
@@ -240,7 +275,6 @@ takosumi runtime-agent serve          # standalone agent 起動 (multi-host)
                 [--token <token>]
                 [--env-file <path>]
 takosumi migrate                      # DB migrations
-takosumi init [<output>] [--template ...]  # manifest scaffold (stdout if no <output>)
 takosumi version
 ```
 
@@ -253,15 +287,15 @@ manifest path を必ず明示する pure deploy engine。
 
 ## 7. troubleshooting
 
-| 症状                                                                                           | 原因                                                                                                                 |
-| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `Refusing to start takosumi with plaintext secret storage`                                     | production mode で `TAKOSUMI_ENCRYPTION_KEY` 未設定                                                                  |
-| `Refusing to start takosumi against an unencrypted database`                                   | production mode で DB at-rest encryption 未確認 (dev は `TAKOSUMI_DEV_MODE=1` で opt-out 可)                         |
-| `manifest.resources[] or manifest.template is required` / `manifest expands to zero resources` | `template:` 指定なし、または `resources: []` だけで apply しようとしている                                           |
-| 401 from `/v1/deployments`                                                                     | `TAKOSUMI_DEPLOY_TOKEN` 未設定 or token mismatch                                                                     |
-| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`                                          | `takosumi server --no-agent` を使ったが external agent の URL を export してない、または embedded agent の起動に失敗 |
-| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`                            | agent host に該当 cloud の credential が無い → connector が register されてない                                      |
-| `runtime-agent /v1/lifecycle/apply failed: 401`                                                | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない                                                             |
+| 症状                                                                      | 原因                                                                                                                 |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `Refusing to start takosumi with plaintext secret storage`                | production mode で `TAKOSUMI_ENCRYPTION_KEY` 未設定                                                                  |
+| `Refusing to start takosumi against an unencrypted database`              | production mode で DB at-rest encryption 未確認 (dev は `TAKOSUMI_DEV_MODE=1` で opt-out 可)                         |
+| `manifest.resources[] is required` / `manifest expands to zero resources` | `resources[]` が無い、または `resources: []` だけで apply しようとしている                                           |
+| 401 from `/v1/deployments`                                                | `TAKOSUMI_DEPLOY_TOKEN` 未設定 or token mismatch                                                                     |
+| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`                     | `takosumi server --no-agent` を使ったが external agent の URL を export してない、または embedded agent の起動に失敗 |
+| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`       | agent host に該当 cloud の credential が無い → connector が register されてない                                      |
+| `runtime-agent /v1/lifecycle/apply failed: 401`                           | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない                                                             |
 
 ### Deprecated provider IDs
 

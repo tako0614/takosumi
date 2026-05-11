@@ -51,7 +51,7 @@ allow / deny / approval を扱う closed vocabulary。
 永続化レイヤと観測レイヤ。
 
 - [Storage Schema](./storage-schema) — Snapshot / Journal / RevokeDebt /
-  Approval / SpaceExportShare の論理 wire schema
+  Approval の論理 wire schema。SpaceExportShare は reserved / future RFC
 - [Journal Compaction](./journal-compaction) — compaction policy / retention
 - [Audit Events](./audit-events) — event taxonomy / hash chain
 - [Observation Retention](./observation-retention) — ObservationSet retention /
@@ -61,16 +61,14 @@ allow / deny / approval を扱う closed vocabulary。
 
 ## Identity & Access
 
-actor / role / credential 体系と認証 plug-in surface。
+account-plane identity / billing / RBAC は Takosumi Accounts に移管済みです。
+以下のページは link-compatible migration stub です。
 
-- [Actor / Organization Model](./actor-organization-model) — Actor /
-  Organization / Membership / 4 actor type
-- [RBAC Policy](./rbac-policy) — 7 role closed enum / capability matrix / Space
-  scope
-- [API Key Management](./api-key-management) — 4 key type / prefix grammar /
-  rotation / revocation
-- [Auth Providers](./auth-providers) — 4 provider type / verification protocol /
-  claim mapping
+- [Actor / Organization Model](./actor-organization-model) — moved to Takosumi
+  Accounts
+- [RBAC Policy](./rbac-policy) — moved to Takosumi Accounts
+- [API Key Management](./api-key-management) — kernel deploy credentials only
+- [Auth Providers](./auth-providers) — moved to Takosumi Accounts
 
 ## Security & trust
 
@@ -139,8 +137,8 @@ shape catalog / provider / template / artifact 拡張面。
 
 - [Shape Catalog](./shapes) — v1 shapes / outputFields / capability extension
 - [Provider Plugins](./providers) — v1 provider matrix / registerProvider
-- [Plugin Marketplace](./plugin-marketplace) — remote install / signed package
-  index / executable hook package
+- [Plugin Marketplace](./plugin-marketplace) — removed / not-current remote
+  plugin install design
 - [Templates](./templates) — registerTemplate / expand immutability
 - [Artifact Kinds](./artifact-kinds) — DataAsset kind registry /
   registerArtifactKind

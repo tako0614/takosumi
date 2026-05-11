@@ -133,7 +133,7 @@ stage.
 | `TAKOSUMI_REVOKE_DEBT_CLEANUP_INTERVAL_MS` | integer (ms) | apply poll interval | no       | RevokeDebt cleanup worker cadence              | RevokeDebt                 |
 | `TAKOSUMI_REVOKE_DEBT_CLEANUP_LIMIT`       | integer      | `50`                | no       | per-owner-Space cleanup batch limit            | RevokeDebt                 |
 
-### Plugin and supply-chain selectors
+### Plugin selectors
 
 The kernel selects an Implementation per plugin port (`auth`, `coordination`,
 `notification`, `operator-config`, `storage`, `source`, `provider`, `queue`,
@@ -149,21 +149,20 @@ The kernel selects an Implementation per plugin port (`auth`, `coordination`,
 | `TAKOSUMI_TRUSTED_KERNEL_PLUGIN_MANIFESTS` / `TAKOSUMI_KERNEL_PLUGIN_REGISTRY_MANIFESTS` | JSON list   | unset            | no                                  | trusted plugin manifest list                                   | OperatorBoundaries |
 | `TAKOSUMI_KERNEL_PLUGIN_TRUST_KEYS`                                                      | JSON list   | unset            | no                                  | trust public keys for plugin manifests                         | OperatorBoundaries |
 | `TAKOSUMI_KERNEL_PLUGIN_INSTALL_POLICY`                                                  | JSON object | unset            | no                                  | trusted install policy object                                  | OperatorBoundaries |
-| `TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_URLS`                                                | CSV string  | unset            | no                                  | remote plugin marketplace index URLs                           | OperatorBoundaries |
-| `TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_PACKAGES`                                            | CSV string  | unset            | no                                  | package refs to install from marketplace indexes               | OperatorBoundaries |
 | `TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON`                                                     | JSON object | provider default | no                                  | registry trust roots                                           | OperatorBoundaries |
 | `TAKOSUMI_ENABLE_DYNAMIC_KERNEL_PLUGIN_MODULES`                                          | boolean     | `false`          | no                                  | enables the dynamic kernel plugin loader                       | OperatorBoundaries |
 | `TAKOSUMI_ENABLE_REFERENCE_KERNEL_PLUGIN_LOADER`                                         | boolean     | `false`          | no                                  | enables the reference plugin loader                            | OperatorBoundaries |
 | `TAKOSUMI_ENABLE_DENO_DEPLOY_PROVIDER`                                                   | boolean     | `false`          | no                                  | opt-in registration of the Deno Deploy provider in stock boots | n/a                |
-| `TAKOSUMI_DEFAULT_APP_DISTRIBUTION_JSON`                                                 | JSON object | unset            | no                                  | inline default distribution injected at bootstrap              | n/a                |
 
-### Identity and Access
+The kernel does not support marketplace URL/package selectors or remote plugin
+install. Operator packaging may provide plugin modules, but marketplace
+discovery and executable hook packages are not current kernel contract.
 
-| Variable                             | Type          | Default       | Required | Consumer                                                      | Spec concept       |
-| ------------------------------------ | ------------- | ------------- | -------- | ------------------------------------------------------------- | ------------------ |
-| `TAKOSUMI_AUTH_PROVIDERS_JSON`       | JSON list     | unset (empty) | no       | kernel server; declarative auth provider list applied at boot | Auth Providers     |
-| `TAKOSUMI_API_KEY_ARGON2_MEMORY_KIB` | integer (KiB) | `65536`       | no       | kernel server; argon2id memory cost for API key hashing       | API Key Management |
-| `TAKOSUMI_API_KEY_ARGON2_ITERATIONS` | integer       | `3`           | no       | kernel server; argon2id iteration count for API key hashing   | API Key Management |
+### Deploy Credentials
+
+Account-plane auth providers and user API keys are owned by Takosumi Accounts.
+The kernel only owns operator deploy/artifact credentials and runtime-agent
+credentials.
 
 ### Tenant Lifecycle
 
@@ -316,9 +315,9 @@ weakens the OperatorBoundaries trust model.
 - [Quota Tiers](/reference/quota-tiers)
 - [Cost Attribution](/reference/cost-attribution)
 - [Zone Selection](/reference/zone-selection)
-- [API Key Management](/reference/api-key-management)
-- [Auth Providers](/reference/auth-providers)
-- [RBAC Policy](/reference/rbac-policy)
+- [API Key Management](/reference/api-key-management) — migration stub
+- [Auth Providers](/reference/auth-providers) — migration stub
+- [RBAC Policy](/reference/rbac-policy) — migration stub
 - [SLA Breach Detection](/reference/sla-breach-detection)
 - [Incident Model](/reference/incident-model)
 - [Support Impersonation](/reference/support-impersonation)

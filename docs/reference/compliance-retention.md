@@ -82,7 +82,7 @@ regime によらず共通の rule と、regime 固有の rule に分かれる。
 ### `regulated`
 
 - field 取り扱いは operator policy が指定。kernel は field-level redaction の
-  hook を提供し、operator が regulation ごとに rule を書く。
+  policy point を提供し、operator が regulation ごとに rule を書く。
 
 ### `default`
 

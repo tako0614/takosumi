@@ -71,7 +71,7 @@ Field responsibilities:
 - `desiredGeneration` / `desiredSnapshotId` / `resolutionSnapshotId` — the
   snapshots the kernel committed against. The runtime-agent must not read
   snapshots it was not handed.
-- `operationKind` — selects the connector hook.
+- `operationKind` — selects the connector lifecycle operation.
 - `inputRefs` / `preRecordedGeneratedObjectIds` /
   `expectedExternalIdempotencyKeys` — kernel-side pre-allocation so that retries
   do not duplicate generated objects.
@@ -175,9 +175,9 @@ ledger). Non-deterministic connectors are not v1-compliant.
 `connector:<id>` and `implementation` are layered roles inside the
 runtime-agent. A `connector:<id>` is the operator-installed adapter that defines
 the DataAsset / handle shape for a `(shape, provider)` pair and exposes the
-lifecycle hooks. An implementation is the operation-level logic that runs on top
-of a connector to fulfill an OperationPlan step. Both roles are hosted by the
-same runtime-agent process, but their responsibilities do not collapse:
+lifecycle operations. An implementation is the operation-level logic that runs
+on top of a connector to fulfill an OperationPlan step. Both roles are hosted by
+the same runtime-agent process, but their responsibilities do not collapse:
 connector lifecycle is the persistent, handle-keyed object; implementation is
 the per-operation execution that borrows the connector to drive the underlying
 SDK.
@@ -212,10 +212,10 @@ does not collapse the other.
 
 `spaceId` arrives in every envelope and every lifecycle request. Implementations
 and connectors must not read or mutate objects, secrets, artifacts, grants, or
-namespace exports belonging to a different Space unless the operation input
-includes an approved SpaceExportShare or an operator import. Cross-Space access
-without that input is a contract break and is closed under the
-`actual-effects-overflow` risk.
+namespace exports belonging to a different Space unless the operation input is
+operating under a future RFC that explicitly enables SpaceExportShare /
+namespace import semantics. Current v1 has no such input; cross-Space access is
+a contract break and is closed under the `actual-effects-overflow` risk.
 
 ## Failure modes
 
@@ -225,7 +225,7 @@ without that input is a contract break and is closed under the
   RevokeDebt for the leaked subset.
 - **Compensation.** The runtime-agent returns `compensation-required`, or
   `recoveryMode: compensate` is in force. The kernel runs the connector's
-  compensate hook against the recorded effects and emits a RevokeDebt with
+  compensate operation against the recorded effects and emits a RevokeDebt with
   reason `activation-rollback`.
 - **Debt.** Whenever an effect was applied but cannot be reconciled with the
   desired state — overflow, partial, compensate without full reverse — the

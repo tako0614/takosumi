@@ -96,8 +96,9 @@ Bootstrap 完了後に operator が kernel を操作するための初期 creden
 - 既に default operator account が存在する場合は bootstrap 全体が abort される
   (re-init 防止)
 
-CLI 経由 (`takosumi init`) で起動すると、token は CLI 側にも copy される ので
-scrolloff 後の取り戻しも可能。HTTP server を直接起動した場合は stdout のみ。
+将来 operator bootstrap CLI を追加する場合は、token を CLI 側にも copy して
+scrolloff 後に取り戻せるようにしてよい。現在の public `takosumi` CLI は manifest
+deploy engine であり、この bootstrap protocol を直接実行しない。
 
 ## Stage 5 — catalog-release-adopt
 
@@ -105,8 +106,7 @@ Initial CatalogRelease を adopt する。
 
 優先順:
 
-1. `--catalog <path>` flag (`takosumi init`) で operator-supplied CatalogRelease
-   を渡す
+1. operator-managed bootstrap config で operator-supplied CatalogRelease を渡す
 2. `TAKOSUMI_BOOTSTRAP_CATALOG_PATH` env で同様に渡す
 3. Embedded default catalog (kernel binary に内蔵)
 
@@ -191,12 +191,11 @@ Bootstrap は再起動で重複実行されない。
 
 ## CLI Exposure
 
-Current `takosumi init` scaffolds a Manifest file; it does **not** run this
-bootstrap protocol. Bootstrap is currently driven by kernel startup /
-operator-managed deployment automation and internal services.
+The public `takosumi` CLI is a manifest deploy engine and does **not** run this
+bootstrap protocol. Bootstrap is currently driven by kernel startup,
+operator-managed deployment automation, and internal services.
 
-The current public CLI surface is documented in [CLI](/reference/cli). It has
-`takosumi init [<output>] [--template <name>]` only.
+The current public CLI surface is documented in [CLI](/reference/cli).
 
 If a future operator bootstrap CLI is added, this reference must be updated with
 the exact command, flags, exit codes, and tests before documenting it as a

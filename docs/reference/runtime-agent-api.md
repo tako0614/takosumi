@@ -45,7 +45,7 @@ connector が artifact bytes を取得する必要がある場合、kernel は
 | POST   | `/v1/lifecycle/destroy`    | Agent token | handle 指定で resource を削除                                      |
 | POST   | `/v1/lifecycle/compensate` | Agent token | WAL recovery 用に commit 済み effect を逆再生                      |
 | POST   | `/v1/lifecycle/describe`   | Agent token | handle 指定で実体の状態を取得                                      |
-| POST   | `/v1/lifecycle/verify`     | Agent token | connector ごとに `verify` hook を smoke test                       |
+| POST   | `/v1/lifecycle/verify`     | Agent token | connector ごとに `verify` operation を smoke test                  |
 
 ### `POST /v1/lifecycle/apply`
 
@@ -149,10 +149,11 @@ interface LifecycleCompensateResponse {
 ```
 
 `compensate` は recovery / rollback が commit 済み effect を逆再生するための
-connector-native hook です。connector が専用 hook を持たない場合、runtime-agent
-dispatcher は handle-keyed `destroy` を complete reverse operation として
-fallback します。完全に逆再生できない connector は `revokeDebtRequired: true`
-を返し、kernel は該当 effect を RevokeDebt として保持します。
+connector-native operation です。connector が専用 operation
+を持たない場合、runtime-agent dispatcher は handle-keyed `destroy` を complete
+reverse operation として fallback します。完全に逆再生できない connector は
+`revokeDebtRequired: true` を返し、kernel は該当 effect を RevokeDebt
+として保持します。
 
 ### `POST /v1/lifecycle/describe`
 
@@ -184,7 +185,7 @@ restart しても同じ結果を返せる必要があります。
 
 ### `POST /v1/lifecycle/verify`
 
-connector の `verify` hook を smoke test します。Request:
+connector の `verify` operation を smoke test します。Request:
 
 ```ts
 interface LifecycleVerifyRequest {
@@ -221,7 +222,7 @@ interface LifecycleVerifyResult {
 ## Connector retry / credential refresh
 
 runtime-agent の `buildConnectorRegistry()` は、登録する connector の lifecycle
-hook (`apply` / `destroy` / `compensate` / `describe` / `verify`) を共通の
+operation (`apply` / `destroy` / `compensate` / `describe` / `verify`) を共通の
 resilience wrapper で包みます。既定では以下だけを retry 対象にします。
 
 - `HTTP 408` / `425` / `429` / `500` / `502` / `503` / `504`
@@ -237,8 +238,9 @@ exponential backoff で、同じ lifecycle envelope を再投入します。conn
 credential refresh は opt-in です。operator が
 `ConnectorBootOptions.resilience.refreshCredentials` を渡した場合のみ、wrapper
 は `HTTP 401` や expired token / credential に見える error を検出して refresh
-hook を 1 回呼び、その後同じ lifecycle hook を再試行します。refresh hook
-が無い場合、 credential error は通常の connector failure として返ります。
+operation を 1 回呼び、その後同じ lifecycle operation を再試行します。refresh
+operation が無い場合、 credential error は通常の connector failure
+として返ります。
 
 ## Lifecycle status state machine
 

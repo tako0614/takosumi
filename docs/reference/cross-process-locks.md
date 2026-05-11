@@ -16,17 +16,17 @@ TTL、recovery、deadlock 予防、SQL backed store 必須化までを扱う。
 cross-process lock が要求される resource は v1 で固定列挙される。新しい lock
 scope を増やすには `CONVENTIONS.md` §6 の RFC を要する。
 
-| Lock scope                            | 用途                                                              |
-| ------------------------------------- | ----------------------------------------------------------------- |
-| `group-head:<spaceId>:<group>`        | GroupHead update のシリアライズ (canary / shadow / rollout)       |
-| `activation-snapshot:<spaceId>`       | ActivationSnapshot update のシリアライズ                          |
-| `generated-credential:<spaceId>:<ns>` | generated credential mutation の Space-local serialization        |
-| `namespace-registry:<spaceId>`        | Namespace registry writes (namespace export 設定の追加 / 削除)    |
-| `space-export-share:<shareId>`        | SpaceExportShare 操作 (issue / refresh / revoke)                  |
-| `catalog-release:<releaseId>`         | CatalogRelease activation / Space assignment                      |
-| `operation-plan:<spaceId>:<digest>`   | 同一 OperationPlan に対する apply / activate / destroy / rollback |
-| `public-deploy:<tenantId>:<name>`     | `POST /v1/deployments` apply / destroy compatibility fence        |
-| `secret-partition:<spaceId>:<tag>`    | secret partition rotation                                         |
+| Lock scope                            | 用途                                                                   |
+| ------------------------------------- | ---------------------------------------------------------------------- |
+| `group-head:<spaceId>:<group>`        | GroupHead update のシリアライズ (canary / shadow / rollout)            |
+| `activation-snapshot:<spaceId>`       | ActivationSnapshot update のシリアライズ                               |
+| `generated-credential:<spaceId>:<ns>` | generated credential mutation の Space-local serialization             |
+| `namespace-registry:<spaceId>`        | Namespace registry writes (namespace export 設定の追加 / 削除)         |
+| `space-export-share:<shareId>`        | Reserved / future RFC SpaceExportShare 操作 (issue / refresh / revoke) |
+| `catalog-release:<releaseId>`         | CatalogRelease activation / Space assignment                           |
+| `operation-plan:<spaceId>:<digest>`   | 同一 OperationPlan に対する apply / activate / destroy / rollback      |
+| `public-deploy:<tenantId>:<name>`     | `POST /v1/deployments` apply / destroy compatibility fence             |
+| `secret-partition:<spaceId>:<tag>`    | secret partition rotation                                              |
 
 read path は **lock 不要**。observe / status / describe は lock を取得せず、
 直近 commit 済みの world view から read-only で動く。
@@ -191,10 +191,11 @@ namespace-registry:space-a → namespace-registry:space-b
 しており、誤順序の acquire は `cross_process_lock_invariant_broken` で
 fail-closed する (kernel bug detector として動く)。
 
-cross-Space lock を取る operation は v1 で以下に限定される:
+current v1 で cross-Space lock を取る operation は catalog release activation
+(release が複数 Space を assign する場合) に限定される。SpaceExportShare locks
+は reserved / future RFC。
 
 - catalog release activation (release が複数 Space を assign する場合)
-- space-export-share の issue (share が複数 Space を bind する場合)
 
 それ以外の operation は **single Space 内で完結** するため、deadlock の
 心配はない。

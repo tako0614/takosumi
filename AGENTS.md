@@ -26,8 +26,22 @@ takosumi/
 - **Manifest deploy engine 専念**: kernel の責務は `POST /v1/deployments` で
   closed `Manifest` envelope を受け取り、resource DAG を解決して apply する
   ことに限定する。workflow / git / build pipeline / cron / hook は kernel の
-  責務外であり、`takosumi-git` 等の上位 product に委譲する。詳細は
+  責務外であり、`takosumi-git` 等の **optional helper product**
+  に委譲する。詳細は
   [docs/reference/architecture/workflow-extension-design.md](./docs/reference/architecture/workflow-extension-design.md)。
+- **`POST /v1/deployments` is the canonical deploy entry point**: kernel は
+  manifest を受ける first-class API を持ち、`takosumi-git` はそこへの 1 client
+  にすぎない。`takosumi deploy <manifest>` CLI、GitHub Actions、自前 CI、
+  operator script はすべて kernel API を直接叩く構成で動作する必要がある。
+  `takosumi-git` は Git URL install / `.takosumi/` convention の正本だが、 raw
+  kernel deploy の critical path ではない。
+- **Substitutability で kernel pure を justify**:
+  「持たないものリスト」(workflow / identity / billing / project convention)
+  は、 kernel が Cloudflare Workers / Kubernetes / bare metal / 自前 runtime
+  を越えて移植可能であるための **必要 条件** として保持する。 substitutability
+  で justify できない responsibility は kernel に持ち込んでよい
+  (実際には現状ほぼ無いが、 原則として「持たないもの
+  list」自体を絶対視はしない)。
 - **Image-first model**: shape spec の `image` / `bundle` / `unit` は単なる URI
   文字列。 artifact 取得は provider 側の責務 (K8s が image pull するのと同じ)。
   manifest spec に `compute.build.fromWorkflow` 等の build
@@ -40,6 +54,11 @@ takosumi/
   workflow / cron / hook を kernel-known shape として追加することは行わない。
 - **credential を kernel core に持たない**: `factories.ts` 経由で operator が
   inject する。
+- **namespace export / account API は kernel の外側**: service identifier /
+  signed ServiceDescriptor / anchor URL resolution は current model
+  では採用しない。 operator-owned capabilities は Takosumi Accounts と namespace
+  export で公開され、 kernel は compiled Shape manifest と
+  provider/runtime-agent contract だけを扱う。
 - 設計語彙は contract (shape / provider / template / capability / output)
   をそのまま採用。
 

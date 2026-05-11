@@ -20,61 +20,6 @@ export type ManifestJsonLdContext =
 export interface ManifestMetadata {
   readonly name?: string;
   readonly labels?: { readonly [key: string]: string };
-  readonly takosumiServiceImports?: ManifestServiceImportPinsMetadata;
-}
-
-export interface ManifestServiceImportPinsMetadata {
-  readonly kind: "takosumi.service-import-pins@v1";
-  readonly pins: readonly ManifestServiceImportPin[];
-}
-
-export interface ManifestServiceImportPin {
-  readonly alias: string;
-  readonly serviceId: string;
-  readonly descriptorDigest: string;
-  readonly resolverUrl: string;
-  readonly providerInstance: string;
-  readonly expiresAt: string;
-}
-
-export interface ManifestRefreshPolicy {
-  readonly kind: "ttl" | "event-driven";
-  readonly ttl?: string;
-  readonly triggers?: readonly JsonValue[];
-}
-
-export interface ManifestServiceEndpoint {
-  readonly role: string;
-  readonly url: string;
-  readonly path: string;
-}
-
-export interface ManifestServicePublication {
-  readonly anchors: readonly string[];
-  readonly signing: {
-    readonly privateKeyRef: string;
-  };
-}
-
-export interface ManifestService {
-  readonly id: string;
-  readonly version: string;
-  readonly contract: string;
-  readonly endpoints: readonly ManifestServiceEndpoint[];
-  readonly metadata?: JsonObject;
-  readonly publish: ManifestServicePublication;
-}
-
-export interface ManifestImport {
-  readonly alias: string;
-  readonly service: string;
-  readonly refreshPolicy?: ManifestRefreshPolicy;
-}
-
-export interface ManifestServiceResolver {
-  readonly kind: "anchor";
-  readonly url: string;
-  readonly publicKey: string;
 }
 
 /**
@@ -89,9 +34,6 @@ export interface Manifest {
   readonly namespace?: string;
   readonly metadata?: ManifestMetadata;
   readonly template?: ManifestTemplateInvocation;
-  readonly services?: readonly ManifestService[];
-  readonly imports?: readonly ManifestImport[];
-  readonly serviceResolvers?: readonly ManifestServiceResolver[];
   readonly resources?: readonly ManifestResource[];
 }
 
@@ -137,9 +79,6 @@ export function validateManifestEnvelope(
     "namespace",
     "metadata",
     "template",
-    "services",
-    "imports",
-    "serviceResolvers",
     "resources",
   ], issues);
   validateManifestJsonLdContext(m["@context"], issues);
@@ -157,12 +96,9 @@ export function validateManifestEnvelope(
         `(got: ${JSON.stringify(m.kind)})`,
     });
   }
-  validateManifestNamespace(m.namespace, m.services, issues);
+  validateManifestNamespace(m.namespace, issues);
   validateManifestMetadata(m.metadata, issues);
   validateManifestTemplateInvocation(m.template, issues, options);
-  validateManifestServices(m.services, m.namespace, issues);
-  validateManifestImports(m.imports, m.serviceResolvers, issues);
-  validateManifestServiceResolvers(m.serviceResolvers, issues);
   validateManifestResources(m.resources, issues);
 }
 
@@ -195,7 +131,15 @@ function validateManifestJsonLdContext(
 export interface ManifestResource {
   readonly shape: string;
   readonly name: string;
-  readonly provider: string;
+  /**
+   * Optional provider selection hint.
+   *
+   * Authoring manifests are Shape-first: `shape` names the portable type
+   * contract and the operator policy / provider resolver decides how to
+   * realize it. A manifest may pin `provider` for reproducible low-level
+   * deployment plans, but it is not required for the public Shape intent.
+   */
+  readonly provider?: string;
   readonly spec: JsonValue;
   readonly requires?: readonly string[];
   readonly metadata?: JsonObject;
@@ -206,35 +150,14 @@ export interface ManifestTemplateInvocation {
   readonly inputs?: JsonObject;
 }
 
-const serviceNamePattern =
-  /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
-const serviceIdentifierPattern =
-  /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*@v\d+(?:-[a-z][a-z0-9-]*)?$/;
-const serviceVersionPattern = /^v\d+(?:-[a-z][a-z0-9-]*)?$/;
-const aliasPattern = /^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$/;
-const endpointRolePattern = /^[a-z][a-z0-9-]*$/;
-const ttlDurationPattern = /^\d+[smhd]$/;
-const pathPattern = /^\/[^?#]*$/;
-
 function validateManifestNamespace(
   namespace: unknown,
-  services: unknown,
   issues: ManifestEnvelopeIssue[],
 ): void {
   if (namespace !== undefined && !isNonEmptyString(namespace)) {
     issues.push({
       path: "$.namespace",
       message: "namespace must be a non-empty string",
-    });
-  }
-  if (
-    namespace === undefined &&
-    Array.isArray(services) &&
-    services.length > 0
-  ) {
-    issues.push({
-      path: "$.namespace",
-      message: "namespace is required when services are exported",
     });
   }
 }
@@ -251,11 +174,7 @@ function validateManifestMetadata(
     });
     return;
   }
-  pushUnknownKeys("$.metadata", metadata, [
-    "name",
-    "labels",
-    "takosumiServiceImports",
-  ], issues);
+  pushUnknownKeys("$.metadata", metadata, ["name", "labels"], issues);
   if (metadata.name !== undefined && !isNonEmptyString(metadata.name)) {
     issues.push({
       path: "$.metadata.name",
@@ -265,426 +184,6 @@ function validateManifestMetadata(
   if (metadata.labels !== undefined) {
     validateStringMap("$.metadata.labels", metadata.labels, issues);
   }
-  validateManifestServiceImportPinsMetadata(
-    metadata.takosumiServiceImports,
-    "$.metadata.takosumiServiceImports",
-    issues,
-  );
-}
-
-function validateManifestServiceImportPinsMetadata(
-  value: unknown,
-  path: string,
-  issues: ManifestEnvelopeIssue[],
-): void {
-  if (value === undefined) return;
-  if (!isRecord(value)) {
-    issues.push({ path, message: "takosumiServiceImports must be an object" });
-    return;
-  }
-  pushUnknownKeys(path, value, ["kind", "pins"], issues);
-  if (value.kind !== "takosumi.service-import-pins@v1") {
-    issues.push({
-      path: `${path}.kind`,
-      message: "kind must be takosumi.service-import-pins@v1",
-    });
-  }
-  if (!Array.isArray(value.pins)) {
-    issues.push({ path: `${path}.pins`, message: "pins must be an array" });
-    return;
-  }
-  value.pins.forEach((pin, index) => {
-    const pinPath = `${path}.pins[${index}]`;
-    if (!isRecord(pin)) {
-      issues.push({ path: pinPath, message: "pin must be a JSON object" });
-      return;
-    }
-    pushUnknownKeys(pinPath, pin, [
-      "alias",
-      "serviceId",
-      "descriptorDigest",
-      "resolverUrl",
-      "providerInstance",
-      "expiresAt",
-    ], issues);
-    if (!isNonEmptyString(pin.alias) || !aliasPattern.test(pin.alias)) {
-      issues.push({
-        path: `${pinPath}.alias`,
-        message: "alias must match binding name syntax",
-      });
-    }
-    if (
-      !isNonEmptyString(pin.serviceId) ||
-      !serviceIdentifierPattern.test(pin.serviceId)
-    ) {
-      issues.push({
-        path: `${pinPath}.serviceId`,
-        message: "serviceId must be a service identifier",
-      });
-    }
-    if (
-      !isNonEmptyString(pin.descriptorDigest) ||
-      !pin.descriptorDigest.startsWith("sha256:")
-    ) {
-      issues.push({
-        path: `${pinPath}.descriptorDigest`,
-        message: "descriptorDigest must be a sha256 digest",
-      });
-    }
-    if (!isHttpUrl(pin.resolverUrl)) {
-      issues.push({
-        path: `${pinPath}.resolverUrl`,
-        message: "resolverUrl must be an http or https URL",
-      });
-    }
-    if (!isNonEmptyString(pin.providerInstance)) {
-      issues.push({
-        path: `${pinPath}.providerInstance`,
-        message: "providerInstance must be a non-empty string",
-      });
-    }
-    if (
-      !isNonEmptyString(pin.expiresAt) ||
-      !Number.isFinite(Date.parse(pin.expiresAt))
-    ) {
-      issues.push({
-        path: `${pinPath}.expiresAt`,
-        message: "expiresAt must be a timestamp",
-      });
-    }
-  });
-}
-
-function validateManifestServices(
-  services: unknown,
-  namespace: unknown,
-  issues: ManifestEnvelopeIssue[],
-): void {
-  if (services === undefined) return;
-  if (!Array.isArray(services)) {
-    issues.push({ path: "$.services", message: "services must be an array" });
-    return;
-  }
-  const seenContracts = new Set<string>();
-  services.forEach((service, index) => {
-    const path = `$.services[${index}]`;
-    if (!isRecord(service)) {
-      issues.push({ path, message: "service must be a JSON object" });
-      return;
-    }
-    pushUnknownKeys(path, service, [
-      "id",
-      "version",
-      "contract",
-      "endpoints",
-      "metadata",
-      "publish",
-    ], issues);
-    if (!isNonEmptyString(service.id) || !serviceNamePattern.test(service.id)) {
-      issues.push({
-        path: `${path}.id`,
-        message: "id must be a forward 3-level dotted service name",
-      });
-    } else if (
-      typeof namespace === "string" &&
-      service.id.split(".")[0] !== namespace
-    ) {
-      issues.push({
-        path: `${path}.id`,
-        message: "id must use the manifest namespace prefix",
-      });
-    }
-    if (
-      !isNonEmptyString(service.version) ||
-      !serviceVersionPattern.test(service.version)
-    ) {
-      issues.push({
-        path: `${path}.version`,
-        message: "version must be v<major> or v<major>-<label>",
-      });
-    }
-    if (
-      !isNonEmptyString(service.contract) ||
-      !serviceIdentifierPattern.test(service.contract)
-    ) {
-      issues.push({
-        path: `${path}.contract`,
-        message: "contract must be a service identifier",
-      });
-    } else {
-      if (seenContracts.has(service.contract)) {
-        issues.push({
-          path: `${path}.contract`,
-          message: "contract must be unique",
-        });
-      }
-      seenContracts.add(service.contract);
-    }
-    if (
-      isNonEmptyString(service.id) &&
-      isNonEmptyString(service.version) &&
-      isNonEmptyString(service.contract) &&
-      service.contract !== `${service.id}@${service.version}`
-    ) {
-      issues.push({
-        path: `${path}.contract`,
-        message: "contract must equal <id>@<version>",
-      });
-    }
-    validateManifestServiceEndpoints(
-      service.endpoints,
-      `${path}.endpoints`,
-      issues,
-    );
-    if (service.metadata !== undefined && !isRecord(service.metadata)) {
-      issues.push({
-        path: `${path}.metadata`,
-        message: "metadata must be a JSON object",
-      });
-    } else if (isRecord(service.metadata) && !isJsonValue(service.metadata)) {
-      issues.push({
-        path: `${path}.metadata`,
-        message: "metadata must be JSON-compatible",
-      });
-    }
-    validateManifestServicePublish(service.publish, `${path}.publish`, issues);
-  });
-}
-
-function validateManifestServiceEndpoints(
-  endpoints: unknown,
-  path: string,
-  issues: ManifestEnvelopeIssue[],
-): void {
-  if (!Array.isArray(endpoints) || endpoints.length < 1) {
-    issues.push({
-      path,
-      message: "endpoints must be a non-empty array",
-    });
-    return;
-  }
-  const seenRoles = new Set<string>();
-  endpoints.forEach((endpoint, index) => {
-    const endpointPath = `${path}[${index}]`;
-    if (!isRecord(endpoint)) {
-      issues.push({
-        path: endpointPath,
-        message: "endpoint must be a JSON object",
-      });
-      return;
-    }
-    pushUnknownKeys(endpointPath, endpoint, ["role", "url", "path"], issues);
-    if (
-      !isNonEmptyString(endpoint.role) ||
-      !endpointRolePattern.test(endpoint.role)
-    ) {
-      issues.push({
-        path: `${endpointPath}.role`,
-        message: "role must be an endpoint role identifier",
-      });
-    } else {
-      if (seenRoles.has(endpoint.role)) {
-        issues.push({
-          path: `${endpointPath}.role`,
-          message: "role must be unique",
-        });
-      }
-      seenRoles.add(endpoint.role);
-    }
-    if (!isNonEmptyString(endpoint.url)) {
-      issues.push({
-        path: `${endpointPath}.url`,
-        message: "url must be a non-empty string",
-      });
-    }
-    if (!isNonEmptyString(endpoint.path) || !pathPattern.test(endpoint.path)) {
-      issues.push({
-        path: `${endpointPath}.path`,
-        message: "path must be a slash-prefixed path",
-      });
-    }
-  });
-}
-
-function validateManifestServicePublish(
-  publish: unknown,
-  path: string,
-  issues: ManifestEnvelopeIssue[],
-): void {
-  if (!isRecord(publish)) {
-    issues.push({ path, message: "publish must be a JSON object" });
-    return;
-  }
-  pushUnknownKeys(path, publish, ["anchors", "signing"], issues);
-  if (
-    !Array.isArray(publish.anchors) ||
-    publish.anchors.length < 1 ||
-    publish.anchors.some((anchor) => !isNonEmptyString(anchor))
-  ) {
-    issues.push({
-      path: `${path}.anchors`,
-      message: "anchors must be a non-empty string array",
-    });
-  }
-  if (!isRecord(publish.signing)) {
-    issues.push({
-      path: `${path}.signing`,
-      message: "signing must be a JSON object",
-    });
-    return;
-  }
-  pushUnknownKeys(
-    `${path}.signing`,
-    publish.signing,
-    ["privateKeyRef"],
-    issues,
-  );
-  if (!isNonEmptyString(publish.signing.privateKeyRef)) {
-    issues.push({
-      path: `${path}.signing.privateKeyRef`,
-      message: "privateKeyRef must be a non-empty string",
-    });
-  }
-}
-
-function validateManifestImports(
-  imports: unknown,
-  serviceResolvers: unknown,
-  issues: ManifestEnvelopeIssue[],
-): void {
-  if (imports === undefined) return;
-  if (!Array.isArray(imports)) {
-    issues.push({ path: "$.imports", message: "imports must be an array" });
-    return;
-  }
-  if (
-    imports.length > 0 &&
-    (!Array.isArray(serviceResolvers) || serviceResolvers.length < 1)
-  ) {
-    issues.push({
-      path: "$.serviceResolvers",
-      message: "serviceResolvers is required when imports are declared",
-    });
-  }
-  const seenAliases = new Set<string>();
-  imports.forEach((entry, index) => {
-    const path = `$.imports[${index}]`;
-    if (!isRecord(entry)) {
-      issues.push({ path, message: "import must be a JSON object" });
-      return;
-    }
-    pushUnknownKeys(path, entry, ["alias", "service", "refreshPolicy"], issues);
-    if (!isNonEmptyString(entry.alias) || !aliasPattern.test(entry.alias)) {
-      issues.push({
-        path: `${path}.alias`,
-        message: "alias must match binding name syntax",
-      });
-    } else {
-      if (seenAliases.has(entry.alias)) {
-        issues.push({
-          path: `${path}.alias`,
-          message: "alias must be unique",
-        });
-      }
-      seenAliases.add(entry.alias);
-    }
-    if (
-      !isNonEmptyString(entry.service) ||
-      !serviceIdentifierPattern.test(entry.service)
-    ) {
-      issues.push({
-        path: `${path}.service`,
-        message: "service must be a service identifier",
-      });
-    }
-    validateManifestRefreshPolicy(
-      entry.refreshPolicy,
-      `${path}.refreshPolicy`,
-      issues,
-    );
-  });
-}
-
-function validateManifestServiceResolvers(
-  serviceResolvers: unknown,
-  issues: ManifestEnvelopeIssue[],
-): void {
-  if (serviceResolvers === undefined) return;
-  if (!Array.isArray(serviceResolvers)) {
-    issues.push({
-      path: "$.serviceResolvers",
-      message: "serviceResolvers must be an array",
-    });
-    return;
-  }
-  serviceResolvers.forEach((resolver, index) => {
-    const path = `$.serviceResolvers[${index}]`;
-    if (!isRecord(resolver)) {
-      issues.push({ path, message: "service resolver must be a JSON object" });
-      return;
-    }
-    pushUnknownKeys(path, resolver, ["kind", "url", "publicKey"], issues);
-    if (resolver.kind !== "anchor") {
-      issues.push({
-        path: `${path}.kind`,
-        message: "kind must be anchor",
-      });
-    }
-    if (!isHttpUrl(resolver.url)) {
-      issues.push({
-        path: `${path}.url`,
-        message: "url must be an http or https URL",
-      });
-    }
-    if (!isNonEmptyString(resolver.publicKey)) {
-      issues.push({
-        path: `${path}.publicKey`,
-        message: "publicKey must be a non-empty string",
-      });
-    }
-  });
-}
-
-function validateManifestRefreshPolicy(
-  refreshPolicy: unknown,
-  path: string,
-  issues: ManifestEnvelopeIssue[],
-): void {
-  if (refreshPolicy === undefined) return;
-  if (!isRecord(refreshPolicy)) {
-    issues.push({ path, message: "refreshPolicy must be a JSON object" });
-    return;
-  }
-  pushUnknownKeys(path, refreshPolicy, ["kind", "ttl", "triggers"], issues);
-  if (refreshPolicy.kind === "ttl") {
-    if (
-      typeof refreshPolicy.ttl !== "string" ||
-      !ttlDurationPattern.test(refreshPolicy.ttl)
-    ) {
-      issues.push({
-        path: `${path}.ttl`,
-        message: "ttl must be a duration such as 300s or 1h",
-      });
-    }
-    return;
-  }
-  if (refreshPolicy.kind === "event-driven") {
-    if (
-      refreshPolicy.triggers !== undefined &&
-      (!Array.isArray(refreshPolicy.triggers) ||
-        !isJsonValue(refreshPolicy.triggers))
-    ) {
-      issues.push({
-        path: `${path}.triggers`,
-        message: "triggers must be a JSON-compatible array",
-      });
-    }
-    return;
-  }
-  issues.push({
-    path: `${path}.kind`,
-    message: "kind must be ttl or event-driven",
-  });
 }
 
 function validateManifestTemplateInvocation(
@@ -751,13 +250,21 @@ function validateManifestResources(
       "requires",
       "metadata",
     ], issues);
-    for (const key of ["shape", "name", "provider"]) {
+    for (const key of ["shape", "name"]) {
       if (!isNonEmptyString(resource[key])) {
         issues.push({
           path: `${path}.${key}`,
           message: `${key} must be a non-empty string`,
         });
       }
+    }
+    if (
+      resource.provider !== undefined && !isNonEmptyString(resource.provider)
+    ) {
+      issues.push({
+        path: `${path}.provider`,
+        message: "provider must be a non-empty string when present",
+      });
     }
     if (resource.spec === undefined) {
       issues.push({ path: `${path}.spec`, message: "spec is required" });
@@ -831,16 +338,6 @@ function validateStringMap(
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
-}
-
-function isHttpUrl(value: unknown): value is string {
-  if (!isNonEmptyString(value)) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

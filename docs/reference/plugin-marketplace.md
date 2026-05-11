@@ -1,149 +1,51 @@
 # Plugin Marketplace and Remote Install
 
-> Stability: beta Audience: operator / plugin publisher See also:
-> [Catalog Release Trust](/reference/catalog-release-trust),
-> [WAL Stages](/reference/wal-stages), [Provider Plugins](/reference/providers)
+> Stability: removed / not current Audience: operator / kernel-implementer See
+> also: [Provider Plugins](/reference/providers),
+> [WAL Stages](/reference/wal-stages),
+> [Environment Variables](/reference/env-vars)
 
-Takosumi plugin marketplace install is an **operator-only** supply-chain path.
-User manifests never install code. A marketplace publishes a signed package
-index; the kernel fetches the selected package module, verifies its SHA-256
-digest, verifies the signed kernel plugin manifest against operator-trusted
-publisher keys, then enables the package.
+This page is kept only to close a historical design branch. Current Takosumi
+kernel contract does **not** include a plugin marketplace, remote plugin install
+path, executable hook package, or catalog-supplied WAL hook runtime.
 
-## Package kinds
+## Current Contract
 
-Two package kinds are supported.
+- User manifests never install executable code.
+- The kernel does not fetch marketplace indexes or remote package modules.
+- The kernel does not run `pre-commit` / `post-commit` hook packages from a
+  marketplace.
+- Operator-selected ProviderPlugin implementations are supplied out-of-band by
+  the operator's deployment packaging and selected by explicit kernel
+  configuration.
+- Workflow / build / Git / hook-like repository automation belongs to
+  `takosumi-git` or another upstream product that calls the kernel deploy API
+  with a compiled Shape manifest.
 
-| Kind                      | Runtime effect                                                               |
-| ------------------------- | ---------------------------------------------------------------------------- |
-| `kernel-plugin`           | Installs a `TakosumiKernelPlugin` implementation for a kernel plugin port.   |
-| `executable-hook-package` | Installs a CatalogRelease WAL hook package for `pre-commit` / `post-commit`. |
+In other words, `ProviderPlugin` is a kernel extension point, but **marketplace
+install of plugin code is not a kernel feature**.
 
-Executable hook packages expose:
+## Rejected Vocabulary
 
-```ts
-export const catalogHookPackage = {
-  id: "takos.hook.risk-gate",
-  version: "1.0.0",
-  stages: ["pre-commit", "post-commit"],
-  async run(input) {
-    return { ok: true };
-  },
-};
-```
+Do not add the following as active docs, APIs, CLI surfaces, manifest fields, or
+environment variables:
 
-The hook input contains the Space id, stage, OperationPlan digest,
-DesiredSnapshot digest, per-operation idempotency keys, and the verified
-CatalogRelease identity when one is adopted for the Space.
+- `takosumi.plugin-marketplace.v1`
+- `takosumi plugin marketplace fetch`
+- `takosumi plugin install --marketplace ...`
+- `TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_URLS`
+- `TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_PACKAGES`
+- removed `executable-hook-package`
+- marketplace-installed `pre-commit` / `post-commit` hook packages
 
-## Marketplace index
+Historical references may appear only when they are clearly labeled as removed,
+rejected, or future RFC material.
 
-```json
-{
-  "@context": "https://takosumi.com/contexts/plugin-marketplace-v1.jsonld",
-  "schemaVersion": "takosumi.plugin-marketplace.v1",
-  "marketplaceId": "market:example",
-  "generatedAt": "2026-05-05T00:00:00.000Z",
-  "packages": [
-    {
-      "packageRef": "takos.hook.risk-gate",
-      "kind": "executable-hook-package",
-      "version": "1.0.0",
-      "manifestEnvelope": {
-        "manifest": {
-          "id": "takos.hook.risk-gate",
-          "name": "Risk Gate",
-          "version": "1.0.0",
-          "kernelApiVersion": "2026-04-29",
-          "capabilities": [
-            {
-              "port": "catalog-hook",
-              "kind": "catalog-release-wal-hook",
-              "externalIo": ["network"]
-            }
-          ],
-          "metadata": {
-            "implementationProvenance": {
-              "moduleSpecifier": "https://market.example/risk-gate.js",
-              "moduleDigest": "sha256:..."
-            }
-          }
-        },
-        "signature": {
-          "alg": "ECDSA-P256-SHA256",
-          "keyId": "publisher-key:example",
-          "value": "base64url-signature"
-        }
-      },
-      "module": {
-        "specifier": "https://market.example/risk-gate.js",
-        "digest": "sha256:..."
-      }
-    }
-  ]
-}
-```
+## Why Removed
 
-`packageRef` must match the signed manifest id. The module digest is verified
-before import. In production policy, set `requireImplementationProvenance` and
-`requireRemoteModuleDigest` so the signed manifest binds the same
-`moduleSpecifier` and `moduleDigest` as the marketplace index.
-
-`@context` is optional and is ignored for install decisions. It gives external
-marketplaces, catalogs, and audit tooling a stable JSON-LD vocabulary without
-making user manifests install code.
-
-## Kernel boot env
-
-Remote marketplace install is configured at kernel boot:
-
-| Variable                                      | Format                           |
-| --------------------------------------------- | -------------------------------- |
-| `TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_URLS`     | comma-separated marketplace URLs |
-| `TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE_PACKAGES` | comma-separated package refs     |
-| `TAKOSUMI_KERNEL_PLUGIN_TRUST_KEYS`           | JSON array of publisher keys     |
-| `TAKOSUMI_KERNEL_PLUGIN_INSTALL_POLICY`       | JSON install policy object       |
-
-The install policy supports the trusted-install fields plus marketplace module
-guards:
-
-```json
-{
-  "enabledPluginIds": ["takos.hook.risk-gate"],
-  "trustedKeyIds": ["publisher-key:example"],
-  "allowedPublisherIds": ["publisher:example"],
-  "allowedPorts": ["catalog-hook"],
-  "allowedExternalIo": ["network"],
-  "allowedModuleSpecifierPrefixes": ["https://market.example/"],
-  "requireImplementationProvenance": true,
-  "requireRemoteModuleDigest": true
-}
-```
-
-## CLI
-
-```bash
-takosumi plugin marketplace fetch --url https://market.example/index.json
-takosumi plugin install \
-  --marketplace https://market.example/index.json \
-  --package takos.hook.risk-gate \
-  --trust-keys ./publisher-keys.json \
-  --policy ./install-policy.json
-```
-
-`plugin install` performs the same fetch, module digest verification, signed
-manifest verification, and install-policy checks locally. It is intended for
-operator CI and release promotion before the same marketplace URL/package list
-is placed in the kernel boot environment.
-
-## WAL behavior
-
-Executable hook packages run after CatalogRelease re-verification at the
-matching WAL stage.
-
-- `pre-commit` hook failure fails closed before provider side effects and
-  appends terminal `abort`.
-- `post-commit` hook failure is journaled, enqueues `approval-invalidated`
-  RevokeDebt for committed operations, and records observe/finalize evidence.
-- Hook packages must be idempotent for repeated calls with the same
-  OperationPlan digest and journal entry ids.
+Remote marketplace install would make the kernel responsible for supply-chain
+discovery, publisher trust policy, remote module import, and hook execution.
+That breaks the current layer model: the kernel is a manifest deploy engine and
+compute substrate. Installer UX, repository workflow, catalog trust, and
+operator release promotion are substitutable products around the kernel API, not
+kernel responsibilities.

@@ -37,7 +37,7 @@ and ordering used for hash computation are stable.
 | ----------- | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `eventId`   | string    | yes      | Unique per event.                                                                                                              |
 | `ts`        | timestamp | yes      | RFC 3339 UTC, millisecond precision.                                                                                           |
-| `spaceId`   | string    | no       | Owning Space. Nullable for cross-Space events such as `share-created`.                                                         |
+| `spaceId`   | string    | no       | Owning Space. Nullable only for operator-global events. Cross-Space share events are reserved / future RFC.                    |
 | `actor`     | string    | yes      | Identity of the principal that caused the event (operator id, deploy bearer subject, or `system` for kernel-initiated events). |
 | `eventType` | enum      | yes      | One of the closed v1 enum below.                                                                                               |
 | `severity`  | enum      | yes      | One of `info`, `notice`, `warning`, `error`, `critical`.                                                                       |
@@ -95,7 +95,7 @@ Drift:
 
 - `drift-detected`
 
-Cross-Space share:
+Cross-Space share (reserved / future RFC, not current v1):
 
 - `share-created`
 - `share-activated`
@@ -110,7 +110,7 @@ Catalog and connector:
 - `publisher-key-enrolled`
 - `publisher-key-revoked`
 
-External participants:
+External participants (reserved / future RFC, not current v1):
 
 - `external-participant-registered`
 - `external-participant-revoked`
@@ -205,19 +205,19 @@ Cost / quota:
 - `quota-tier-removed`
 - `space-tier-changed`
 
-Trigger:
+Removed / not-current workflow trigger events:
 
 - `trigger-fired`
 - `trigger-rejected`
 - `trigger-deduplicated`
 
-Hook:
+Removed / not-current declarable hook events:
 
 - `hook-fired`
 - `hook-completed`
 - `hook-failed`
 
-Step execution:
+Removed / not-current step execution events:
 
 - `step-execution-started`
 - `step-execution-completed`
@@ -334,7 +334,8 @@ schemas reference records defined in
 - Approval events reference Approval ids and the closed risk enum.
 - Drift and RevokeDebt events reference DriftIndex and RevokeDebt ids
   respectively.
-- Share events reference SpaceExportShare ids and lifecycle transitions.
+- Share events are reserved / future RFC and would reference SpaceExportShare
+  ids and lifecycle transitions if enabled.
 - Catalog and connector events reference Connector identities under the
   `connector:<id>` form (see
   [Connector Contract](/reference/connector-contract)).

@@ -30,7 +30,7 @@ Takosumi kernel owns the **shape and emission** of signals:
 | Metrics              | v1 metric names, labels, units, `/metrics`, and OTLP metric export                                                    |
 | Traces               | HTTP server / provider / runtime-agent / internal RPC span emission, `traceparent` propagation, and OTLP trace export |
 | Logs                 | HTTP request id propagation, JSON request log envelope, and redaction rules                                           |
-| Audit                | tamper-evident audit event chain, retention policy hooks, and replication primitives                                  |
+| Audit                | tamper-evident audit event chain, retention policy controls, and replication primitives                               |
 | SLA breach detection | threshold evaluation, state transitions, audit / outbox / notification signal publish                                 |
 | Dashboard artifact   | versioned Grafana JSON under `deploy/observability/grafana/`                                                          |
 

@@ -52,15 +52,15 @@ idle | preparing | canary-active | shadow-active
 
 ### State 意味
 
-| State           | 意味                                                                               |
-| --------------- | ---------------------------------------------------------------------------------- |
-| `idle`          | rollout が動いていない steady state。pointer は安定し、approval も完了済み。       |
-| `preparing`     | 新 deployment が選ばれ、approval / pre-commit hook を待っている。pointer 未前進。  |
-| `canary-active` | traffic 一部 (closed split) を新 deployment へ流している。健全性監視中。           |
-| `shadow-active` | production traffic を mirror して新 deployment に流す。production 結果は変えない。 |
-| `full-rollout`  | 全 traffic が新 deployment に乗った。`idle` 確定前の収束観察 window。              |
-| `rolling-back`  | rollout の途中失敗で旧 pointer に戻している最中。compensate / abort 進行中。       |
-| `rolled-back`   | rollback が完了して旧 pointer に固定された terminal observation state。            |
+| State           | 意味                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------- |
+| `idle`          | rollout が動いていない steady state。pointer は安定し、approval も完了済み。              |
+| `preparing`     | 新 deployment が選ばれ、approval / pre-commit verification を待っている。pointer 未前進。 |
+| `canary-active` | traffic 一部 (closed split) を新 deployment へ流している。健全性監視中。                  |
+| `shadow-active` | production traffic を mirror して新 deployment に流す。production 結果は変えない。        |
+| `full-rollout`  | 全 traffic が新 deployment に乗った。`idle` 確定前の収束観察 window。                     |
+| `rolling-back`  | rollout の途中失敗で旧 pointer に戻している最中。compensate / abort 進行中。              |
+| `rolled-back`   | rollback が完了して旧 pointer に固定された terminal observation state。                   |
 
 ### Transition 規則
 
@@ -109,9 +109,9 @@ canary では traffic split を closed な比率列で進めます。
 - 各 step の昇格は readiness probe / observe 結果が pass したときのみ進み
   ます。pass 条件は kernel が固定し、provider plugin は独自に override
   できません。
-- canary 失敗時は **`rolling-back` に遷移**し、compensate hook を経由して 旧
-  pointer に戻します。途中段階で停止する「canary を保ったまま hold」 は v1 では
-  state として持ちません。`canary-active` に留まったまま operator
+- canary 失敗時は **`rolling-back` に遷移**し、compensate operation を経由して
+  旧 pointer に戻します。途中段階で停止する「canary を保ったまま hold」 は v1
+  では state として持ちません。`canary-active` に留まったまま operator
   が判断するか、`rolling-back` に進むかの 2 択です。
 
 ## Shadow state

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import {
   assertObjectAddress,
-  assertServiceDescriptorContract,
   CORE_CONDITION_REASONS,
   type CoreBindingDeclaration,
   type CoreBindingResolution,
@@ -9,16 +8,12 @@ import {
   type CoreOutputDeclaration,
   type CoreOutputRevision,
   type CoreOutputValue,
-  type CrossInstanceShare,
   type DeploymentBinding,
   type DeploymentBindingSource,
   isCoreConditionReason,
   isObjectAddress,
-  isServiceIdentifier,
   joinObjectAddressSegments,
   objectAddressSegment,
-  parseServiceIdentifier,
-  type ServiceDescriptor,
 } from "./core-v1.ts";
 
 Deno.test("isCoreConditionReason validates the exported condition reason catalog", () => {
@@ -68,72 +63,6 @@ Deno.test("Core condition reason catalog includes the Output / Binding vocabular
   }
 });
 
-Deno.test("service identifier helpers validate forward three-level contracts", () => {
-  assert.deepEqual(parseServiceIdentifier("takosumi.account.auth@v1"), {
-    id: "takosumi.account.auth",
-    version: "v1",
-  });
-  assert.equal(
-    isServiceIdentifier("acme.identity.workforce-sso@v2-beta"),
-    true,
-  );
-  assert.equal(isServiceIdentifier("takosumi.account.auth.oidc@v1"), false);
-  assert.equal(isServiceIdentifier("takosumi.account.auth@1"), false);
-});
-
-Deno.test("ServiceDescriptor and CrossInstanceShare model anchor-resolved imports", () => {
-  const descriptor: ServiceDescriptor = {
-    id: "takosumi.account.auth",
-    version: "v1",
-    contract: "takosumi.account.auth@v1",
-    endpoints: [{
-      role: "oidc-issuer",
-      url: "https://accounts.example.test",
-      path: "/",
-    }],
-    metadata: { pairwiseSubjectMode: true },
-    signature: "ed25519:signature",
-    publishedAt: "2026-05-09T00:00:00Z",
-    expiresAt: "2026-05-09T00:05:00Z",
-    providerInstance: "provider_takosumi_cloud",
-  };
-  assert.doesNotThrow(() => assertServiceDescriptorContract(descriptor));
-
-  const share: CrossInstanceShare = {
-    id: "cross-share-1",
-    serviceId: descriptor.contract,
-    toDeploymentId: "deployment_1",
-    resolvedDescriptor: descriptor,
-    resolvedAt: "2026-05-09T00:00:01Z",
-    refreshPolicy: { kind: "ttl", ttl: "300s" },
-    auditTrail: [{
-      at: "2026-05-09T00:00:01Z",
-      kind: "verified",
-      detail: { anchor: "https://anchor.example.test/v1/services/" },
-      hash: "sha256:audit",
-    }],
-  };
-  assert.equal(share.resolvedDescriptor.contract, share.serviceId);
-});
-
-Deno.test("ServiceDescriptor rejects contract mismatches", () => {
-  assert.throws(
-    () =>
-      assertServiceDescriptorContract({
-        id: "takosumi.account.auth",
-        version: "v2",
-        contract: "takosumi.account.auth@v1",
-        endpoints: [],
-        metadata: {},
-        signature: "ed25519:signature",
-        publishedAt: "2026-05-09T00:00:00Z",
-        expiresAt: "2026-05-09T00:05:00Z",
-        providerInstance: "provider_takosumi_cloud",
-      }),
-    /contract must equal/,
-  );
-});
-
 Deno.test("Legacy Publication-* condition reasons are no longer in the catalog", () => {
   const removed = [
     "PublicationWithdrawn",
@@ -162,7 +91,6 @@ Deno.test("DeploymentBindingSource accepts only canonical sources", () => {
     "output",
     "secret",
     "provider-output",
-    "service-import",
   ];
   for (const source of sources) {
     const binding: DeploymentBinding = {
@@ -173,8 +101,6 @@ Deno.test("DeploymentBindingSource accepts only canonical sources", () => {
         ? "secret:db-password"
         : source === "output"
         ? "output:search-agent/search"
-        : source === "service-import"
-        ? "service-import:account-auth/oidc-issuer"
         : "resource.instance:db",
       injection: { mode: "env", target: "X" },
       sensitivity: "internal",
@@ -263,24 +189,10 @@ Deno.test("CoreBindingDeclaration distinguishes resource / output / secret / pro
     },
     inject: { mode: "env", target: "CDN_HOST" },
   };
-  const serviceImport: CoreBindingDeclaration = {
-    address: "app.binding:web%2FOIDC_ISSUER_URL",
-    componentAddress: "app.component:web",
-    bindingName: "OIDC_ISSUER_URL",
-    source: {
-      kind: "service-import",
-      importAlias: "account-auth",
-      service: "takosumi.account.auth@v1",
-      endpointRole: "oidc-issuer",
-      field: "url",
-    },
-    inject: { mode: "env", target: "OIDC_ISSUER_URL" },
-  };
   assert.equal(resource.source.kind, "resource");
   assert.equal(output.source.kind, "output");
   assert.equal(credential.inject.mode, "secret-ref");
   assert.equal(providerOutput.source.kind, "provider-output");
-  assert.equal(serviceImport.source.kind, "service-import");
 });
 
 Deno.test("CoreBindingResolution carries policy, grant, approval, and source revision", () => {

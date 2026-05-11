@@ -307,11 +307,14 @@ function readResourcesArray(candidate: unknown): ManifestV1Resolution {
         error: `manifest.resources[${index}].name must be a non-empty string`,
       };
     }
-    if (typeof entry.provider !== "string" || entry.provider.length === 0) {
+    if (
+      entry.provider !== undefined &&
+      (typeof entry.provider !== "string" || entry.provider.length === 0)
+    ) {
       return {
         ok: false,
         error:
-          `manifest.resources[${index}].provider must be a non-empty string`,
+          `manifest.resources[${index}].provider must be a non-empty string when present`,
       };
     }
     if (entry.spec === undefined) {
@@ -347,7 +350,7 @@ function fallbackResourceHash(
   let hash = 5381;
   const seed = resources
     .map((resource) =>
-      `${resource.shape}|${resource.name}|${resource.provider}`
+      `${resource.shape}|${resource.name}|${resource.provider ?? "(auto)"}`
     )
     .join(";");
   for (let i = 0; i < seed.length; i++) {

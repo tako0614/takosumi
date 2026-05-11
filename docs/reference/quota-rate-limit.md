@@ -31,9 +31,9 @@ Two scopes apply, in this order of precedence:
    signal but does not pre-empt running traffic.
 
 Quota itself is **fail-closed for new work and fail-open for inflight work**:
-once a Space crosses a cap, the kernel rejects new deployments, new activation
-snapshots, and new SpaceExportShare issuances, but already-running operations
-continue and read paths stay available.
+once a Space crosses a cap, the kernel rejects new deployments and new
+activation snapshots, but already-running operations continue and read paths
+stay available. Future RFC quota dimensions may add SpaceExportShare issuance.
 
 Quota signals are exposed; enforcement is policy. The kernel publishes the raw
 counters in audit events and on the status endpoint, and the operator policy
@@ -52,7 +52,7 @@ RFC.
 | `artifact-storage-bytes`          | bytes          | yes        | Sum of `DataAsset.bytes` referenced by the Space, after dedup.                                               |
 | `journal-volume-bytes-per-bucket` | bytes / bucket | yes        | OperationJournal write volume per fixed time bucket (`TAKOSUMI_QUOTA_JOURNAL_BUCKET_SECONDS`, default 3600). |
 | `approval-pending-count`          | count          | yes        | Approval rows in `pending` state.                                                                            |
-| `space-export-share-count`        | count          | yes        | Active (non-revoked, non-expired) SpaceExportShare rows the Space owns.                                      |
+| `space-export-share-count`        | count          | yes        | Reserved / future RFC only; not part of current v1 enforcement.                                              |
 
 Each dimension has a corresponding raw counter on the status endpoint and a
 corresponding audit signal: deployment-count and active-object-count update on

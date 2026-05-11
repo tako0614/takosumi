@@ -23,6 +23,23 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Reference / Architecture",
       items: [
         { text: "Overview", link: "/reference/architecture/" },
+        { text: "Kernel", link: "/reference/architecture/kernel" },
+        {
+          text: "Control Plane",
+          link: "/reference/architecture/control-plane",
+        },
+        {
+          text: "Deploy System",
+          link: "/reference/architecture/deploy-system",
+        },
+        {
+          text: "Tenant Runtime",
+          link: "/reference/architecture/tenant-runtime",
+        },
+        {
+          text: "Container Hosts",
+          link: "/reference/architecture/container-hosts",
+        },
         {
           text: "API Surface",
           link: "/reference/architecture/api-surface-architecture",
@@ -80,11 +97,13 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Reference / Manifest & Wire Formats",
       items: [
+        { text: "Manifest Spec", link: "/reference/manifest-spec" },
         { text: "Manifest Validation", link: "/reference/manifest-validation" },
         {
           text: "Manifest Expand Semantics",
           link: "/reference/manifest-expand-semantics",
         },
+        { text: "Compatibility", link: "/reference/compatibility" },
         { text: "Plan Output Schema", link: "/reference/plan-output" },
         { text: "Status Output Schema", link: "/reference/status-output" },
         { text: "Resource IDs", link: "/reference/resource-ids" },

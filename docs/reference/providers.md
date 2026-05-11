@@ -77,12 +77,12 @@ capability set is closed within the in-tree provider (closed-within-provider).
 
 ### Cloudflare
 
-| provider id                   | shape              | declared capabilities                                                | extension policy |
-| ----------------------------- | ------------------ | -------------------------------------------------------------------- | ---------------- |
-| `@takos/cloudflare-r2`        | `object-store@v1`  | `presigned-urls`, `public-access`, `multipart-upload`                | extensible       |
-| `@takos/cloudflare-container` | `web-service@v1`   | `scale-to-zero`, `geo-routing`                                       | extensible       |
-| `@takos/cloudflare-workers`   | `worker@v1`        | `scale-to-zero`, `websocket`, `long-request`, `geo-routing`, `crons` | extensible       |
-| `@takos/cloudflare-dns`       | `custom-domain@v1` | `wildcard`, `auto-tls`, `sni`, `http3`                               | extensible       |
+| provider id                   | shape              | declared capabilities                                       | extension policy |
+| ----------------------------- | ------------------ | ----------------------------------------------------------- | ---------------- |
+| `@takos/cloudflare-r2`        | `object-store@v1`  | `presigned-urls`, `public-access`, `multipart-upload`       | extensible       |
+| `@takos/cloudflare-container` | `web-service@v1`   | `scale-to-zero`, `geo-routing`                              | extensible       |
+| `@takos/cloudflare-workers`   | `worker@v1`        | `scale-to-zero`, `websocket`, `long-request`, `geo-routing` | extensible       |
+| `@takos/cloudflare-dns`       | `custom-domain@v1` | `wildcard`, `auto-tls`, `sni`, `http3`                      | extensible       |
 
 ### Azure
 

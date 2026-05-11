@@ -1,33 +1,34 @@
 # External Participants
 
-> Stability: stable Audience: operator, integrator, kernel-implementer See also:
-> [Closed Enums](/reference/closed-enums),
+> Stability: reserved / future RFC Audience: operator, integrator,
+> kernel-implementer See also: [Closed Enums](/reference/closed-enums),
 > [Risk Taxonomy](/reference/risk-taxonomy),
 > [Catalog Release Trust](/reference/catalog-release-trust),
 > [Audit Events](/reference/audit-events),
 > [RevokeDebt Model](/reference/revoke-debt)
 
-This reference defines the v1 contract for **ExternalParticipants** and
-**ExternalImplementations**: systems that run outside the Takosumi kernel yet
-contribute namespace exports or provider plugins into a Space. The reference
-covers the participant identity model, the registration record, the verification
-protocol, namespace visibility, the revocation pipeline, and the operator
-surface.
+This reference records reserved vocabulary for **ExternalParticipants** and
+**ExternalImplementations**: systems that run outside the Takosumi kernel and
+may contribute namespace exports or provider plugins into a Space in a future
+RFC. Current v1 install / deploy contracts do not require external participant
+exports; they may depend only on operator-owned namespace exports.
 
 ## ExternalParticipant model
 
-An ExternalParticipant is a system that operates outside the Takosumi kernel and
-supplies namespace exports to one or more Spaces. Typical examples are:
+The following model is candidate future-RFC material, not current v1 storage,
+API, or resolution contract. An ExternalParticipant would be a system that
+operates outside the Takosumi kernel and supplies namespace exports to one or
+more Spaces. Typical examples are:
 
-- an in-house OAuth / OIDC provider that publishes `auth/oidc/*` exports,
-- an external secret manager that publishes `secret/*` references,
-- an external catalog publisher that publishes `catalog/*` discoveries consumed
-  by the kernel resolver.
+- an external account-plane adapter that publishes identity exports through an
+  operator-owned namespace,
+- an external secret manager that publishes future `secret/*` references,
+- an external catalog publisher that publishes future catalog discoveries.
 
-The participant is **identity-bearing** (the kernel binds exports to a stable
-id) but **never trusted to own kernel state**: every export the participant
-claims to publish is signature-verified at resolution time and at refresh time,
-and visibility into a Space is gated by operator policy.
+If this vocabulary is accepted later, the participant would be
+**identity-bearing** but **never trusted to own kernel state**. Current v1 does
+not register external participants, verify their export signatures, or resolve
+their exports.
 
 ### Identity
 
@@ -45,7 +46,7 @@ id appears in `RevokeDebt.externalParticipantId`, in
 
 ## ExternalParticipant registration record
 
-Operators register a participant with a YAML record:
+Future RFC candidate registration record:
 
 ```yaml
 ExternalParticipant:
@@ -74,19 +75,20 @@ Field semantics:
 | `verifiedAt`      | yes      | Timestamp of the most recent successful registration verification.                                                           |
 | `expiresAt`       | no       | When set, registration auto-revokes at this instant. The kernel emits `external-participant-revoked` with `reason: expired`. |
 
-The kernel persists the record in the partition declared in
-[Storage Schema](/reference/storage-schema); rotation of the public key is a
-`revoke` + `register` cycle, never an in-place mutation.
+If accepted, the record would be persisted in the partition declared in
+[Storage Schema](/reference/storage-schema); rotation of the public key would be
+a `revoke` + `register` cycle, never an in-place mutation.
 
 ## Verification protocol
 
-Verification runs at three points: registration, every export resolution that
-traverses the participant, and every freshness refresh.
+Future verification would run at three points: registration, every export
+resolution that traverses the participant, and every freshness refresh. Current
+v1 has no such verification path.
 
 ### Registration challenge-response
 
-The operator submits a registration request; the kernel issues a 32-byte random
-challenge bound to the proposed `id` and `publicKey`:
+The future operator flow would submit a registration request; the kernel would
+issue a 32-byte random challenge bound to the proposed `id` and `publicKey`:
 
 ```text
 challenge = random(32)
@@ -94,13 +96,13 @@ expectedSignature = Ed25519-sign(privateKey,
   canonical("external-participant-register" || id || publicKey || challenge))
 ```
 
-The participant returns the signature. The kernel verifies, persists
-`verifiedAt`, and emits `external-participant-registered`.
+The participant would return the signature. The kernel would verify, persist
+`verifiedAt`, and emit `external-participant-registered`.
 
 ### Export-time signature
 
-When a participant publishes an export it attaches an Ed25519 signature over the
-canonical bytes of the export envelope:
+If a participant publishes an export in a future RFC, it attaches an Ed25519
+signature over the canonical bytes of the export envelope:
 
 ```text
 sig = Ed25519-sign(privateKey,
@@ -108,7 +110,7 @@ sig = Ed25519-sign(privateKey,
             exportContentDigest || issuedAt))
 ```
 
-The kernel verifies the signature at:
+The future verifier would check the signature at:
 
 - resolution time, against the registered `publicKey`,
 - ResolutionSnapshot freshness refresh,
@@ -210,11 +212,11 @@ the prior / new registration digest.
 
 ## Operator surface
 
-Operators interact with the participant lifecycle through internal API /
-operator tooling. The current public `takosumi` CLI does not expose
-external-participant or external-implementation subcommands.
+There is no current public or internal participant lifecycle API. The current
+public `takosumi` CLI does not expose external-participant or
+external-implementation subcommands.
 
-Internal API (see [Kernel HTTP API](/reference/kernel-http-api)):
+Future candidate internal API:
 
 | Method | Path                                                   | Purpose                                 |
 | ------ | ------------------------------------------------------ | --------------------------------------- |

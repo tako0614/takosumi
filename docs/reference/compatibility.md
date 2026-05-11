@@ -1,0 +1,196 @@
+# 互換性と制限
+
+Takos manifest の deploy / runtime surface は backend-neutral な Takos deploy
+manifest (`.takosumi/manifest.yml`) を基準にし、resource layer も
+backend-neutral な abstract type (sql, object-store, key-value, etc.)
+で書く。Cloudflare / AWS / GCP / k8s / local は同じ public contract
+を共有し、差分は operator 内部の adapter で吸収する。ただしここでの
+compatibility は schema / translation parity を指し、runtime behavior、provider
+resource の存在、性能特性の一致を保証しない。
+
+backend は同一ではないため、「何を揃え、何を差分として扱うか」を明示する。
+hosting surface の contract 境界は
+[環境ごとの差異](https://github.com/tako0614/takos/blob/master/docs/hosting/differences.md)
+と
+[Not A Current Contract](https://github.com/tako0614/takos/blob/master/docs/hosting/differences.md#not-a-current-contract)
+を参照。
+
+## 何を揃えるか
+
+Takos が parity の対象にしているもの:
+
+- tenant artifact と deploy/runtime contract
+- manifest で宣言される Shape resources (`worker@v1` / `web-service@v1` /
+  `database-postgres@v1` / `custom-domain@v1`) と resource output reference
+- AppBinding materialization 後の runtime env / secret refs
+- group deployment history / rollback contract
+- routing target が保持する service identity / deployment identity
+- deployment ごとの runtime config / bindings / env vars
+- dispatch を経由して tenant runtime に到達する request contract
+- app metadata registry（MCP / file handler / launcher など。kernel manifest の
+  `publications[]` ではない）
+
+### workload translation
+
+runtime translation report は compiled desired declaration の workload / route
+translation と backend requirement を `compatible` / `unsupported`
+で表現する。`compatible` は tenant runtime へ渡す schema / translation
+が成立する という意味で、resource existence、backing service
+availability、runtime behavior parity を判定する report ではない。以下の backend
+固有名は出さず、実際の materialization は operator adapter が選ぶ。backend /
+adapter 名は operator-only configuration であり、public deploy manifest の field
+ではない。
+
+| manifest declaration | Public surface | Internal materialization                              |
+| -------------------- | -------------- | ----------------------------------------------------- |
+| `worker@v1`          | compatible     | selected worker runtime adapter                       |
+| `web-service@v1`     | compatible     | selected container runtime adapter / OCI orchestrator |
+
+### container-image deploy の制約
+
+- legacy `workers-dispatch` と `runtime-host` compatibility adapters は direct
+  `container-image` deploy を受け付けない
+- 同一 component で artifact kind の混在はできない (初回 deploy で確定)
+- worker bindings は container runtime には注入されない
+- `container-image` deploy では canary strategy は使えない
+- image-backed `web-service@v1` を反映するときは digest-pinned image ref が必要
+
+`web-service@v1` は backend に関係なく Takos の public contract では同じ扱いで、
+内部では選択された container adapter / orchestrator を通る。
+
+### manifest-level feature support
+
+本 table は compiled Shape manifest と account-plane AppBinding
+を分けて評価します。
+
+| feature                                      | `.takosumi/manifest.yml` | `.takosumi/app.yml` | runtime notes                                     |
+| -------------------------------------------- | ------------------------ | ------------------- | ------------------------------------------------- |
+| `worker@v1`                                  | yes                      | no                  | selected worker runtime adapter                   |
+| `web-service@v1`                             | yes                      | no                  | selected container runtime adapter / orchestrator |
+| `database-postgres@v1`                       | yes                      | via AppBinding      | provider output / secret refs                     |
+| `custom-domain@v1`                           | yes                      | via AppBinding      | route projection / DNS materialization            |
+| resource references (`${ref:...}`)           | yes                      | no                  | kernel resolves resource outputs                  |
+| namespace exports                            | no                       | via account plane   | operator / Space export + explicit grant          |
+| `identity.oidc@v1` AppBinding                | no                       | yes                 | OIDC client provisioned by Takosumi Accounts      |
+| MCP / file handler / launcher metadata       | no                       | yes / registry      | Takos app/catalog layer interprets metadata       |
+| legacy `publications[]` / top-level bindings | no                       | no                  | migration-only vocabulary                         |
+
+SQL / object-store / queue / analytics-engine / workflow / vector-index /
+durable-object などの access は、current compiled Shape manifest では Shape
+resource や AppBinding materialization に分解して扱います。MCP / file handler /
+launcher は app metadata registry の surface であり、kernel manifest の
+`publications[]` ではありません。
+
+### resource runtime binding support
+
+| resource type      | public surface                 | runtime notes                                       |
+| ------------------ | ------------------------------ | --------------------------------------------------- |
+| `queue`            | resource API / runtime binding | delivery semantics は backend 依存                  |
+| `workflow`         | outside kernel                 | takosumi-git / operator product の責務              |
+| `analytics-engine` | resource API / runtime binding | write path は contract を揃える                     |
+| `vector-index`     | resource API / runtime binding | local / self-host では PostgreSQL + pgvector が必要 |
+| `durable-object`   | resource API / runtime binding | local tenant runtime でも namespace を materialize  |
+
+## Cloudflare
+
+Cloudflare は **tracked reference Workers backend** の reference
+materialization。 tracked reference Workers backend 固有の用語と Core
+用語の対応は
+[Glossary - Workers backend implementation note](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/glossary.md#workers-backend-implementation-note)
+を参照。
+
+- tracked reference Workers backend の reference materialization
+- actual deploy / rollback / routing backend
+- worker workload は tracked reference Workers backend adapter で materialize
+  される
+- image-backed workload は selected container adapter / orchestrator 経由
+
+## Local / Self-host
+
+local は検証用 backend。self-host は production-grade PostgreSQL / Redis /
+object storage / TLS / secret management を組み合わせることで production
+packaging として運用できる。
+
+- Cloudflare account なしで control plane を起動できる
+- tenant worker contract を local で materialize できる
+- smoke / proxyless smoke で canonical path を検証できる
+- image-backed workload は local OCI deployment adapter と
+  `OCI_ORCHESTRATOR_URL` で materialize する
+
+## AWS / GCP / k8s
+
+AWS / GCP の current docs contract は k8s Helm overlay。ECS / Cloud Run は
+tenant image workload adapter として OCI orchestrator 経由で使う対象であり、
+Takosumi kernel hosting target ではない。
+
+- public spec は backend-neutral な Takos deploy manifest のまま
+- resource は operator が用意した backing service または Takos-managed runtime
+  に解決される
+- worker workload は operator-selected worker runtime path を使う
+- image-backed workload は `ecs` / `cloud-run` / `k8s` など tenant image
+  workload adapter に解決される
+
+## 意図的に残している差分
+
+### local control plane は Node-backed
+
+local の control plane は Node-backed。control plane の起動性と local DX
+を優先した設計。
+
+### local tenant runtime は worker runtime path
+
+local の tenant runtime は legacy runtime-host worker runtime path で、内部では
+Workers-compatible local adapter を使う。 tracked reference Workers backend と
+byte-for-byte 同一ではない。local は `worker-bundle` を local adapter 上で
+materialize して実行する。
+
+### non-AI features の parity
+
+feature ごとに成熟度が異なる。
+
+- `queue`: resource API / runtime binding 対応。delivery parity は backend 依存
+- `queue trigger`: queue consumer semantics は provider / runtime binding
+  の範囲で扱う。cron / scheduler surface ではない
+- `scheduled`: kernel manifest / bundle surface では扱わない。必要な schedule は
+  takosumi-git / operator product の責務
+- `workflow`: kernel resource API では扱わない。orchestration は takosumi-git /
+  operator product の責務
+- `analytics-engine`: resource API / runtime binding 対応。write path は
+  contract を揃える。query semantics は揃え切っていない
+
+`vector-index` は local で PostgreSQL + pgvector が利用可能であれば materialize
+される（`POSTGRES_URL` + `PGVECTOR_ENABLED=true` が必要）。`durable-object` は
+local tenant runtime でも namespace binding として materialize する。
+
+### infra host は URL forward を使う
+
+local の URL forward は tenant worker の canonical path ではなく、主に infra
+host 用。
+
+- legacy `runtime-host`
+- `takos-egress`
+
+`worker-bundle` の tenant service は local でも worker runtime で解決する。
+
+## local でできないこと
+
+- Cloudflare 固有の内部最適化や実装差の再現
+- backend ごとの performance 特性の再現
+- PostgreSQL + pgvector なしで `vector-index` binding を実行すること
+- backend-specific queue / scheduler / workflow semantics の完全再現
+- production traffic 上での最終的な実証
+
+local は production backend の代替ではなく、product contract
+を大きく崩さずに検証するための backend。self-host production は prod-grade
+backing services と operator-managed TLS / ingress / secrets を前提にする。
+
+## operator への意味
+
+実運用での使い分け:
+
+- local: 早い検証、smoke、proxyless 確認
+- staging: actual runtime/backend 上での deploy / routing / execution context
+  rollback 検証
+- production: 実 traffic と実 resource を扱う本番運用
+
+local が green でも、backend 固有の最終確認は staging / production で行う。

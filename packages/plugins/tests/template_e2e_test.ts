@@ -7,6 +7,7 @@ import {
   getShapeByRef,
   type JsonObject,
   type JsonValue,
+  type ManifestResource,
   parseRef,
   type PlatformContext,
   registerProvider,
@@ -29,20 +30,17 @@ interface AppliedRecord {
 }
 
 async function applyResources(
-  resources: readonly {
-    shape: string;
-    name: string;
-    provider: string;
-    spec: JsonValue;
-  }[],
+  resources: readonly ManifestResource[],
 ): Promise<AppliedRecord[]> {
   const outputsByName = new Map<string, JsonObject>();
   const applied: AppliedRecord[] = [];
   for (const resource of resources) {
     const shape = getShapeByRef(resource.shape);
     assert.ok(shape, `shape not registered: ${resource.shape}`);
-    const provider = getProvider(resource.provider);
-    assert.ok(provider, `provider not registered: ${resource.provider}`);
+    const providerId = resource.provider;
+    assert.ok(providerId, `provider missing for resource: ${resource.name}`);
+    const provider = getProvider(providerId);
+    assert.ok(provider, `provider not registered: ${providerId}`);
     assert.equal(provider.implements.id, shape.id);
 
     const resolvedSpec = resolveRefs(resource.spec, outputsByName);

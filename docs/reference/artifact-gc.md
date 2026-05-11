@@ -48,8 +48,7 @@ The mark phase walks live references from a closed root set:
 1. Every Deployment's most recent ResolutionSnapshot.
 2. Every retained ResolutionSnapshot within the audit retention window.
 3. Every retained ActivationSnapshot within the audit retention window.
-4. Every active SpaceExportShare that pins a snapshot.
-5. Every RevokeDebt row whose `status` is `open` or `operator-action-required`
+4. Every RevokeDebt row whose `status` is `open` or `operator-action-required`
    (see [RevokeDebt Model](/reference/revoke-debt)).
 
 A DataAsset reachable from any root is marked `live`. A DataAsset reachable from
@@ -209,9 +208,8 @@ underlying event id space.
   event followed by zero or more `group-head-moved` events for re-pinning. The
   `payload.cause` field carries the `recoveryMode` discriminator so analytics
   distinguish rollback from forward shift.
-- **SpaceExportShare lifecycle**: share activation and revocation appear under
-  the share's owning Space, not under the importing Space. Importing Spaces
-  consume the events through their own audit history.
+- **SpaceExportShare lifecycle**: reserved / future RFC. Current v1 artifact GC
+  does not root assets through cross-Space share records.
 
 ### Audit linkage
 

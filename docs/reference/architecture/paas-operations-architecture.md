@@ -89,8 +89,9 @@ constraint:
 
 - **All zones in a v1 installation live in one region.** Cross-region writes,
   region failover, and geo-routing are out of scope. An operator that needs
-  multiple regions runs one Takosumi installation per region and federates at
-  the operator boundary, not inside the kernel.
+  multiple regions must use a future multi-region account-plane / operator RFC.
+  Running one Takosumi installation per region does not create platform
+  federation; those installations remain independent.
 - **Zone strings are opaque.** Two zones with similar names are unrelated. The
   kernel does not infer adjacency from the string shape. Affinity rules ("place
   this object in the same zone as that DataAsset") are expressible because they
@@ -101,7 +102,7 @@ constraint:
   cost of declaring a zone vocabulary.
 
 Cross-region semantics, when they land, will go through a `CONVENTIONS.md` §6
-RFC because they change the federation invariant in
+RFC because they change the single-region invariant in
 [PaaS Provider Architecture](./paas-provider-architecture.md).
 
 ## Incident model: kernel-side detection, kernel-side state, operator-side narrative

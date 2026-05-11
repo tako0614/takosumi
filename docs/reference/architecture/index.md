@@ -30,8 +30,6 @@ kind
 metadata
 name
 labels
-template
-inputs
 resources
 shape
 provider
@@ -40,11 +38,10 @@ requires
 ```
 
 The manifest is a closed vocabulary. Unknown top-level fields fail validation.
-Public v1 deploy intent is expressed as optional Template invocation plus a
-`resources[]` graph of Shape resources. Shape ids, provider ids, artifact
-references, bindings, routes, and custom domains are resolved through contract
-packages and operator policy; arbitrary descriptor URLs are not public manifest
-inputs.
+Public v1 deploy intent is expressed as a `resources[]` graph of Shape
+resources. Shape ids, provider ids, artifact references, bindings, routes, and
+custom domains are resolved through contract packages and operator policy;
+arbitrary descriptor URLs are not public manifest inputs.
 
 `Space` is not a manifest field. It is supplied by actor auth, API route,
 operator context, or client profile. The same manifest can be applied in

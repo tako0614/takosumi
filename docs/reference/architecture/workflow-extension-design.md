@@ -40,10 +40,11 @@ surfaces do not belong in this set. The reasoning:
   the-road. A built-in `workflow` shape would either be too opinionated for the
   long tail of CI / cron / lifecycle use cases or too generic to ship without
   becoming yet another DAG language.
-- **Plugin freedom.** A plugin can model "cron job", "single-step build",
-  "multi-step pipeline", "post-activate notification", and so on at exactly the
-  level of detail its users need. Forcing all of them through one kernel-owned
-  abstraction is more restrictive than the v1 plugin model already accepts.
+- **Product freedom.** An above-kernel product can model "cron job",
+  "single-step build", "multi-step pipeline", "post-activate notification", and
+  so on at exactly the level of detail its users need. Forcing all of them
+  through one kernel-owned abstraction would make the kernel the workflow
+  scheduler.
 - **Cyclical dependency risk.** Workflow features tend to be expressed as
   "deploy + run hook + observe + redeploy". Encoding that loop into a kernel
   primitive would deploy-bind the lifecycle and make `OperationPlan` ordering
@@ -83,28 +84,31 @@ any other client) drives it.
 - The kernel data model has no first-class `commit`, `branch`, `ref`, or `repo`
   field. Such values may appear only inside opaque deploy provenance supplied by
   an upstream client.
-- `external-event` payloads, when surfaced on the kernel API, are opaque to the
-  kernel. The kernel verifies the HMAC-SHA256 signature, attaches the payload as
-  audit data, and refuses to parse it.
-- HMAC-SHA256 verification is kernel-enforced, not optional. An unsigned
-  external event is rejected before any `OperationPlan` is constructed.
+- `external-event` payloads are accepted by upstream products such as
+  `takosumi-git`, not by the kernel public API. Those products verify webhook
+  signatures and may attach opaque provenance to the manifest request.
+- The kernel may persist opaque deploy provenance, but it does not expose an
+  external-event endpoint or make event signature verification part of
+  `POST /v1/deployments`.
 - The `source-archive` DataAsset kind continues to be git-agnostic. Its optional
   `metadata.gitCommit` field is audit annotation only and does not flow into any
   kernel decision.
 
-## 4. No kernel-known "workflow" shape
+## 4. No kernel-known workflow shape
 
 A kernel-aware workflow shape (e.g. `resource-workflow-v1`) is **not** provided.
-Operators who want to provision a vendor workflow service (Cloudflare Workflows,
-Temporal, Argo, etc.) do so through provider-local shapes whose IDs are owned by
-the plugin, not by the kernel catalog. This preserves:
+Current v1 also does not define provider-local workflow / cron / hook shapes as
+normal `resources[]`. Operators who want to run a vendor workflow service
+(Cloudflare Workflows, Temporal, Argo, etc.) provision that system as an
+above-kernel product, or deploy its backing compute / storage with ordinary
+resource shapes and keep trigger semantics outside the kernel. This preserves:
 
 - Curation neutrality — the curated 5-shape catalog stays focused on PaaS
   primitives.
 - Image-first consistency — no `build` / `pipeline` vocabulary leaks into
   kernel-known shapes.
-- Plugin freedom — each provider chooses its own surface for any
-  workflow-as-resource modelling.
+- Product freedom — each workflow product chooses its own trigger and run
+  semantics without making them kernel manifest vocabulary.
 
 ## 5. Structural alternatives considered and rejected
 
@@ -125,7 +129,7 @@ the plugin, not by the kernel catalog. This preserves:
 ## 6. Boundary
 
 ```text
-inside Takosumi kernel       Manifest envelope (apiVersion / kind / metadata / template / resources)
+inside Takosumi kernel       Manifest envelope (apiVersion / kind / metadata / resources)
                              Opaque deploy provenance persistence
                              Resource DAG resolution and apply
                              WAL idempotency, rollback, observation

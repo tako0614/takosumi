@@ -48,12 +48,12 @@ digest の replay は冪等で、異なる effect digest は hard-fail します
 CatalogRelease の publisher key enrollment、署名検証、Space adoption record、
 rotation audit は registry domain primitive として実装済みです。public route の
 WAL は `AppContext` から構成された場合、adopted CatalogRelease を
-pre/post-commit verification hook として呼びます。pre-commit verification
-failure は provider side effect 前に terminal `abort` へ進み、post-commit
-verification failure は hook failure を journal し、committed effect に対する
+pre/post-commit verification として呼びます。pre-commit verification failure は
+provider side effect 前に terminal `abort` へ進み、post-commit verification
+failure は verification failure を journal し、committed effect に対する
 RevokeDebt を enqueue して observe / finalize evidence を残します。runtime-agent
-protocol には connector-native `compensate` hook があり、専用 hook を持たない
-connector は handle-keyed `destroy` を compensation fallback
+protocol には connector-native `compensate` operation があり、専用 operation
+を持たない connector は handle-keyed `destroy` を compensation fallback
 とします。RevokeDebt store には retry attempt、 policy-controlled aging、manual
 reopen / clearance の lifecycle primitive が実装 されています。connector-backed
 RevokeDebt cleanup worker は deployment record から handle を解決して provider
@@ -99,8 +99,8 @@ v1 では 6 phase を 1:1 に区別します。各 phase は対応する Snapsho
   が回るにつれて `observing → healthy / degraded / unhealthy` へ 遷移します。
 - `destroy` は `finalize` stage で managed / generated lifecycle class の object
   を完全に消し、external / operator / imported は触りません。
-- `rollback` は WAL の `commit` 済み effect を逆再生するため `compensate` hook
-  を `pre-commit` で起動した上で `abort` 終端に進みます。
+- `rollback` は WAL の `commit` 済み effect を逆再生するため `compensate`
+  operation を `pre-commit` で起動した上で `abort` 終端に進みます。
 - `recovery` は kernel restart 時に WAL を読み直して再開します。最後に
   記録された stage の **次** から resume します。
 - `observe` phase の起動 / 維持は kernel readiness と連動します。kernel pod の
@@ -156,8 +156,8 @@ mode を選択します。
   実行済みの可能性が高い: `continue` で `commit` を最後まで走らせる。
 - `commit` まで終わったが `post-commit` で外部依存が壊れ続けて回復見込みが ない:
   `compensate` を選び、`activation-rollback` reason の RevokeDebt を open
-  する。`SpaceExportShare` が `active` だった場合は `refresh-required`
-  状態に遷移します。
+  する。SpaceExportShare lifecycle 連動は reserved / future RFC であり current
+  v1 の recovery mode では扱わない。
 - 状況不明 / 復旧前にまず差分を見たい: `inspect` を選び、WAL の journalEntryId
   単位で `actual-effects-overflow` の有無を確認する。
 
@@ -172,13 +172,13 @@ requested phase and OperationPlan digest match the unfinished WAL.
 `recoveryMode: "compensate"` is implemented for public WAL entries that reached
 `commit` or later by opening `activation-rollback` RevokeDebt and appending
 `abort`. Runtime-agent protocol exposes connector-native `compensate` with
-destroy fallback, and apply rollback uses a provider compensate hook when
+destroy fallback, and apply rollback uses a provider compensate operation when
 available. RevokeDebt store-level retry attempt, policy-controlled aging, manual
 reopen, clearance transitions, connector-backed cleanup worker, and worker
 daemon scheduling are implemented. CatalogRelease adoption / signature
 verification is implemented in the registry domain, and public apply / destroy
-WAL invokes the adopted release as a fail-closed pre/post-commit verification
-hook. Apply / destroy commit calls receive the WAL idempotency tuple through
+WAL invokes the adopted release as fail-closed pre/post-commit verification.
+Apply / destroy commit calls receive the WAL idempotency tuple through
 `PlatformContext.operation` and runtime-agent lifecycle `idempotencyKey`.
 
 ## Cross-references

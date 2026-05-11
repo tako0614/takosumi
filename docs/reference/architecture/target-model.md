@@ -17,8 +17,10 @@ resources:
 ```
 
 Public v1 does not expose a separate top-level `target` field. A resource target
-is the pair of `resources[].shape` and `resources[].provider`, resolved against
-the catalog, provider registry, and policy allowed for the current Space.
+starts from `resources[].shape` plus an optional `resources[].provider` hint,
+then resolves against the catalog, provider registry, and policy allowed for the
+current Space. The resolved provider is Deployment evidence, not the semantic
+identity of the Shape.
 
 ## ObjectTarget descriptor
 
@@ -81,7 +83,8 @@ more-than-one candidate fails resolution.
 ## Input schema
 
 Target input validation validates `resources[].spec` against the Shape contract
-selected by `resources[].shape` and the provider's declared support.
+selected by `resources[].shape`. Provider support and capability constraints are
+checked during provider resolution.
 
 ```text
 JSON-LD / descriptor:

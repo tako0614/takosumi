@@ -148,7 +148,7 @@ expressions resolved against other resources' outputs; `env` is plain literal.
 ### Declared capabilities
 
 `always-on`, `scale-to-zero`, `websocket`, `long-request`, `sticky-session`,
-`geo-routing`, `crons`, `private-networking`.
+`geo-routing`, `private-networking`.
 
 ## `database-postgres@v1`
 
@@ -247,7 +247,7 @@ interface WorkerSpec {
 
 ### Declared capabilities
 
-`scale-to-zero`, `websocket`, `long-request`, `geo-routing`, `crons`.
+`scale-to-zero`, `websocket`, `long-request`, `geo-routing`.
 
 ## Catalog extension
 
@@ -262,13 +262,13 @@ Kernel curated catalog は v1 で 5 shape (`object-store@v1` / `web-service@v1` 
 `database-postgres@v1` / `custom-domain@v1` / `worker@v1`) に閉じます。 新 shape
 の追加は `CONVENTIONS.md` §6 RFC で coordinate されます。
 
-Workflow / cron / lifecycle hook 等の shape は curated catalog に含めず、third
-party plugin が独自 shape として提供します — 例えば `cron-job@v1` /
-`workflow-job@v1` / `pre-apply-hook@v1` / `post-activate-hook@v1`。 kernel は
-trigger / execute-step / declarable-hook 等の workflow primitive を一切
-ホストせず、これらは `takosumi-git` 等の上位 sibling product の責務です。
-plugin-provided な shape は通常の `resources[]` として deploy されます。詳細な
-extension 手順は [Extending the Shape Model](/extending) と
+Workflow / cron / lifecycle hook 等の shape は current v1 catalog / plugin
+extension surface に含めません。`cron-job@v1` / `workflow-job@v1` /
+`pre-apply-hook@v1` / `post-activate-hook@v1` のような names は future RFC 用の
+reserved vocabulary であり、current kernel は通常の `resources[]` として
+受け付けません。Git / webhook / build / schedule / deployment hook は
+`takosumi-git` 等の上位 sibling product の責務です。詳細な placement は
+[Extending the Shape Model](/extending) と
 [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
 を参照。
 

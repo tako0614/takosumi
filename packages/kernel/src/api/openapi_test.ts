@@ -237,13 +237,10 @@ Deno.test("createPaaSOpenApiDocument documents deploy public and artifact auth/s
     ).sort(),
     [
       "apiVersion",
-      "imports",
       "kind",
       "metadata",
       "namespace",
       "resources",
-      "serviceResolvers",
-      "services",
       "template",
     ],
   );

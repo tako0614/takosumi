@@ -19,11 +19,11 @@ rule / approver UX state を整理する reference です。
    access / network egress shape の変更。
 3. **implementation change** — 選択された Implementation (provider plugin の
    particular binding) の変更。
-4. **external freshness change** — ExportDeclaration / SpaceExportShare の
-   freshness state 遷移。
+4. **external freshness change** — operator-owned ExportDeclaration の freshness
+   state 遷移。SpaceExportShare freshness は reserved / future RFC。
 5. **catalog release change** — Space に adopted な CatalogRelease の変更。
-6. **Space-context change** — Space membership / policy pack / SpaceExportShare
-   governance の変更。
+6. **Space-context change** — Space membership / policy pack の変更。
+   SpaceExportShare governance は reserved / future RFC。
 
 ### 1. digest change
 
@@ -40,8 +40,8 @@ rule / approver UX state を整理する reference です。
 - **発火条件**: prepare で resolve された `approvedEffects` /
   `effectDetailsDigest` / 個別 grant access mode / network egress allow set が
   approval record の binding と一致しない。
-- **検出 timing**: `prepare` stage と `pre-commit` catalog hook の両方。hook が
-  effect を後から expand したケースを catch する。
+- **検出 timing**: `prepare` stage と `pre-commit` verification の両方。
+  verification が effect を後から expand したケースを catch する。
 - **再評価範囲**: approval は即時 `invalidated`。短絡 invalidate (他 binding
   を再評価しない)。
 
@@ -50,23 +50,24 @@ rule / approver UX state を整理する reference です。
 - **発火条件**: provider plugin の selected Implementation (registerProvider で
   binding された particular implementation) が approval bind 時と異なる。
   provider matrix を operator が swap した場合や catalog release 切替で 起きる。
-- **検出 timing**: `prepare` stage の resolve、および `pre-commit` の hook
-  起動直前。
+- **検出 timing**: `prepare` stage の resolve、および `pre-commit` verification
+  の直前。
 - **再評価範囲**: plan を保ったまま `invalidated`。kernel は影響範囲を **当該
   implementation に依存する binding subset** に絞って propagate する。
 
 ### 4. external freshness change
 
-- **発火条件**: ExportDeclaration / SpaceExportShare の freshness state が
-  `fresh` から `stale` または `revoked` に遷移。`fresh → refresh-required` は
-  warning 相当 (Risk emit のみ) で trigger 4 を **発火させない** — approval は
+- **発火条件**: operator-owned ExportDeclaration の freshness state が `fresh`
+  から `stale` または `revoked` に遷移。`fresh → refresh-required` は warning
+  相当 (Risk emit のみ) で trigger 4 を **発火させない** — approval は
   `approved` のまま保持される
   ([Observation Retention — Approval invalidation との関係](/reference/observation-retention#approval-invalidation-との関係))。
 - **検出 timing**: external freshness は kernel observe loop が継続的に監視
   し、`stale` / `revoked` への遷移を検出した瞬間に対応 approval を再評価
   する。`prepare` stage 起動時の最初の確認も含む。
 - **再評価範囲**: 当該 export を消費する binding subset に絞って propagate。
-  他の Space に adopted な ExportDeclaration には影響しない。
+  他の Space には影響しない。SpaceExportShare freshness は current v1 では
+  監視しない。
 
 ### 5. catalog release change
 
@@ -79,8 +80,8 @@ rule / approver UX state を整理する reference です。
 
 ### 6. Space-context change
 
-- **発火条件**: Space membership (actor 集合)、policy pack、または
-  SpaceExportShare governance (importing/exporting Space relationship) の変更。
+- **発火条件**: Space membership (actor 集合)、policy pack の変更。
+  SpaceExportShare governance は reserved / future RFC。
 - **検出 timing**: 該当 mutation の commit 完了直後。kernel は Space 単位で 関連
   approval を walk する。
 - **再評価範囲**: context に依存する binding subset に絞って propagate。actor
@@ -96,7 +97,7 @@ rule / approver UX state を整理する reference です。
   approval set に絞って propagate** する。Space 全体や全 plan を巻き込まない。
 - propagation 中の approval re-validation は WAL stage を進めず、`prepare`
   への巻き戻し経路でのみ stage に作用する (詳細は
-  [WAL Stages — Pre/post-commit hook lifecycle](/reference/wal-stages#prepost-commit-hook-lifecycle))。
+  [WAL Stages — Pre/post-commit verification lifecycle](/reference/wal-stages#prepost-commit-verification-lifecycle))。
 
 ## Approver UX states
 
@@ -123,10 +124,10 @@ state machine が永続化する terminal state は 6
 由来の取り消し (binding 崩壊) を表す のに対し、`consumed` は binding が valid
 のまま正常消費された後の終端で ある点が異なる。
 
-## Cross-Space approval ownership
+## Future Cross-Space approval ownership
 
-SpaceExportShare 経由の approval は、ownership を share governance に従って
-扱う:
+Current v1 は Cross-Space approval を持たない。SpaceExportShare 経由の approval
+を future RFC で有効化する場合、ownership を share governance に従って扱う:
 
 - **Approver は importing Space の owner**: 自 Space に effect を取り込む側が
   approve 責務を持つ。

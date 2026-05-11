@@ -241,51 +241,33 @@ secret の raw value は **絶対に返しません**。`*Ref` field に
 `secret://<provider>/<scope>/<key>` を入れ、kernel 側 secret-store adapter が
 解決します。
 
-## Workflow / cron / hook を提供したい場合
+## Workflow / cron / hook が必要な場合
 
-GitHub Actions に相当する workflow / cron / lifecycle hook 機能は kernel curated
-catalog に含めず、provider plugin が独自 shape として提供します。kernel は
-trigger / execute-step / declarable-hook 等の workflow primitive を一切ホスト
-しません (これらは `takosumi-git` 等の上位 sibling product の責務です。詳細は
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
-を参照)。現時点では plugin shape を通常の `resources[]` として deploy し、
-必要な実行や webhook receiver は provider plugin / operator-side で実装して
-ください。multi-step DAG が必要な場合は **template** に複数 single-step shape を
-expand させる設計を推奨します — 既存の template mechanism をそのまま再利用
-できます。
+GitHub Actions に相当する workflow / cron / lifecycle hook 機能は current kernel
+extension path ではありません。kernel は trigger / execute-step /
+declarable-hook 等の workflow primitive を一切ホストしません。Git push / webhook
+/ build / schedule / deployment hook は `takosumi-git`、外部 CI、または
+operator-owned product が処理し、kernel には compiled Shape manifest だけを
+`POST /v1/deployments` で渡します。
 
-### Case 1: `cron-job@v1` shape
+current v1 では、`cron-job@v1` / `workflow-job@v1` / `pre-apply-hook@v1` /
+`post-activate-hook@v1` のような shape を通常の `resources[]` として publish
+することも current extension recipe では ありません。これらは将来 RFC 用の
+reserved vocabulary として扱います。
 
-Schedule trigger と single-step bundle を 1 つの resource として束ねる shape。
-spec は `{ cron, missedFirePolicy, bundle, inputs }` 程度で済みます。 provider
-plugin / operator-side scheduler が bundle 実行を駆動し、将来の Trigger registry
-実装が入ったら同じ vocabulary に移行できます。 例: 夜間 backup runner、 定期
-metrics rotate、 TTL 付き artifact GC。 shape spec は CONVENTIONS §6 RFC
-として上げ、provider plugin と一緒に出版します。
+必要な場合の current placement:
 
-### Case 2: `workflow-job@v1` shape (single step build / test / migrate)
+| concern                        | current owner                                      |
+| ------------------------------ | -------------------------------------------------- |
+| git push / webhook / build     | `takosumi-git` or external CI                      |
+| scheduled invocation           | app / operator product using substrate scheduler   |
+| deployment pre/post automation | upstream workflow before compiled manifest deploy  |
+| multi-step pipeline            | upstream workflow that emits one compiled manifest |
 
-Manual fire か external-event を受けて 1 ステップだけ走らせる shape。 spec は
-`{ triggers, bundle, inputs, retry }`。 typical な使い方は GitHub PR の test
-runner 相当で、現時点では webhook receiver は operator-side に置きます。
-external-event の受け取りや schedule 駆動は `takosumi-git` 等の上位 product が
-担い、その結果生成された manifest が kernel に投下されます。 build / test /
-migrate のように DAG が要らないケースを最小コストで provide できる shape
-として位置付け ます。 multi-step pipeline が必要なら template が複数
-`workflow-job@v1` resource を expand する形で表現します。
-
-### Case 3: `pre-apply-hook@v1` / `post-activate-hook@v1` shape
-
-Lifecycle hook を任意の deployment に declare 可能にする shape。 spec は
-`{ bindToDeployment, bundle, inputs, hookOrder, failurePolicy, timeout }`。 例:
-db migration runner (pre-apply)、smoke test runner / notification poster
-(post-activate)。kernel は declarable hook bus を持たないため、hook dispatch は
-provider plugin / operator-side、もしくは `takosumi-git` 側 workflow runner で
-実装します。
-
-各 case とも、shape spec / provider plugin 実装 / template による pipeline 化 の
-3 レイヤを揃えれば curated 5 shape を変更せずに workflow surface を拡張
-できます。 詳細は
+kernel 側で追加できるのは desired-state resource shape と provider plugin
+までです。template expansion は installer/compiler layer、workflow runner や
+scheduler は above-kernel product の責務です。これらを kernel catalog extension
+として足さないでください。詳細は
 [Workflow Extension Design](/reference/architecture/workflow-extension-design)
 を参照。
 

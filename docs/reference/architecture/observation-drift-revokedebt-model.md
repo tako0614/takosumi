@@ -24,9 +24,10 @@ ObservationSet does not mutate DesiredSnapshot.
 ## Space rule
 
 ObservationSet, DriftIndex, and RevokeDebt are Space-scoped. Observation from
-one Space must not mutate or validate DesiredSnapshot in another Space.
-RevokeDebt from a cross-space share belongs to the consuming Space and may
-reference the provider Space only through the recorded SpaceExportShare.
+one Space must not mutate or validate DesiredSnapshot in another Space. Current
+v1 does not create cross-Space share debt. Future RFCs that enable
+SpaceExportShare must keep debt ownership on the consuming Space and reference
+the provider Space only through the recorded share.
 
 ## DriftIndex
 
@@ -70,7 +71,7 @@ reason:
   activation-rollback     activation rolled back but cleanup is pending
   approval-invalidated    a previously approved retain became invalid
   cross-space-share-expired
-                          share expired before consumer cleanup completed
+                          reserved / future RFC; share expired before consumer cleanup completed
 
 status:
   open                    debt is queued and will be retried
@@ -79,10 +80,11 @@ status:
   cleared                 debt is satisfied; entry is preserved for audit
 ```
 
-### Multi-Space ownership rule
+### Future Multi-Space ownership rule
 
-RevokeDebt is owned by the Space that materialized the generated object. For
-material produced through a SpaceExportShare:
+RevokeDebt is owned by the Space that materialized the generated object. Current
+v1 does not materialize objects through SpaceExportShare. If a future RFC
+enables that vocabulary:
 
 - `ownerSpaceId` is the importing (consuming) Space; the import side drives
   retry, status, and cleanup.

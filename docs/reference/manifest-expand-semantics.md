@@ -8,9 +8,10 @@
 
 This page is the v1 contract for `${ref:...}` resolution inside manifests: the
 grammar, the resolution timing, the resolution order, cycle detection, the
-unresolved-ref rules, the cross-component and cross-Space scoping rules, the
-interaction with templates, the distinction between literal and reference
-values, the escape rule, and the type coercion rules at the bind point.
+unresolved-ref rules, the cross-component scoping rules, the current denial of
+cross-Space references, the interaction with templates, the distinction between
+literal and reference values, the escape rule, and the type coercion rules at
+the bind point.
 
 ## Grammar
 
@@ -20,9 +21,8 @@ A reference is a single token of the form
 ${ref:<resource>.<field>[.<subfield>...]}
 ```
 
-- `<resource>` names a component declared in the same manifest, or a share alias
-  declared via the `share:` prefix (see
-  [cross-Space references](#cross-space-references) below).
+- `<resource>` names a component declared in the same manifest. The `share:`
+  prefix is reserved for a future RFC and is rejected by current v1.
 - `<field>` is a top-level output field on the resource.
 - `<subfield>` is a dot-path into a nested object output. Array indexing is
   **not** supported in v1; outputs that need element access expose a flat field
@@ -119,8 +119,9 @@ own outputs.
 
 ## Cross-Space references
 
-Cross-Space references are not allowed by default. Two Spaces are connected only
-through a [SpaceExportShare](/reference/space-export-share).
+Cross-Space references are rejected in current v1. Two Spaces are not connected
+by manifest references. `SpaceExportShare` / `share:` syntax is reserved for a
+future RFC.
 
 - The share-aware reference syntax is
 

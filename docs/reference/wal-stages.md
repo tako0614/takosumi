@@ -6,32 +6,32 @@
 > [RevokeDebt Model](/reference/revoke-debt)
 
 Takosumi v1 の WriteAheadOperationJournal (WAL) における stage closed enum、
-idempotency key の構造、replay rule、および pre/post-commit hook lifecycle を
-まとめる reference です。kernel apply pipeline の各 phase は本ページの stage
-を駆動し、recovery / approval invalidation / RevokeDebt 生成は本ページの
-規則に従います。
+idempotency key の構造、replay rule、および pre/post-commit verification
+lifecycle を まとめる reference です。kernel apply pipeline の各 phase
+は本ページの stage を駆動し、recovery / approval invalidation / RevokeDebt
+生成は本ページの 規則に従います。
 
 ## Stage closed enum (8 値)
 
 WAL stage は 8 値の closed enum です。新 stage 追加は `CONVENTIONS.md` §6 RFC
 を要します。
 
-| Stage         | actual-effects 書き込み | RevokeDebt キュー | approval re-validation  | 失敗時の遷移先                      |
-| ------------- | ----------------------- | ----------------- | ----------------------- | ----------------------------------- |
-| `prepare`     | no                      | no                | yes (entry 起動時)      | `abort`                             |
-| `pre-commit`  | no                      | no                | yes (catalog hook 経由) | `abort`                             |
-| `commit`      | yes                     | no                | no                      | `abort` / `commit` retry            |
-| `post-commit` | yes (補助 effect)       | yes               | no                      | `observe` 続行 / RevokeDebt enqueue |
-| `observe`     | no (read-only)          | yes               | no                      | `finalize` / `observe` 継続         |
-| `finalize`    | no (cleanup のみ)       | yes (cleanup 残)  | no                      | terminal                            |
-| `abort`       | no                      | yes (compensate)  | no                      | terminal                            |
-| `skip`        | no                      | no                | no                      | terminal                            |
+| Stage         | actual-effects 書き込み | RevokeDebt キュー | approval re-validation     | 失敗時の遷移先                      |
+| ------------- | ----------------------- | ----------------- | -------------------------- | ----------------------------------- |
+| `prepare`     | no                      | no                | yes (entry 起動時)         | `abort`                             |
+| `pre-commit`  | no                      | no                | yes (catalog verification) | `abort`                             |
+| `commit`      | yes                     | no                | no                         | `abort` / `commit` retry            |
+| `post-commit` | yes (補助 effect)       | yes               | no                         | `observe` 続行 / RevokeDebt enqueue |
+| `observe`     | no (read-only)          | yes               | no                         | `finalize` / `observe` 継続         |
+| `finalize`    | no (cleanup のみ)       | yes (cleanup 残)  | no                         | terminal                            |
+| `abort`       | no                      | yes (compensate)  | no                         | terminal                            |
+| `skip`        | no                      | no                | no                         | terminal                            |
 
 stage の意味:
 
 - `prepare`: OperationPlan を確定し、idempotency key を割り当て、approval
   binding を再評価する。actual-effects は書かない。失敗時は `abort`。
-- `pre-commit`: catalog-supplied hook を起動し、external precondition
+- `pre-commit`: catalog / provider verification を実行し、external precondition
   (credential reachability、collision check、freshness re-confirm) を
   fail-closed で確認する。actual-effects は書かない。失敗時は `abort`。
 - `commit`: connector / runtime-agent 経由で external system を実際に変更する。
@@ -167,34 +167,20 @@ This is how clients such as `takosumi-git` make artifact URI -> workflow run id
 -> git commit SHA -> step log digest traceability durable without moving
 workflow execution into the kernel.
 
-## Pre/post-commit hook lifecycle
+## Pre/post-commit verification lifecycle
 
-catalog-supplied hook は `pre-commit` / `post-commit` stage で kernel が
-起動する。
+Current kernel contract has no catalog-supplied executable hook package runtime.
+WAL stages may include kernel-owned validation and evidence collection, but the
+kernel does not load marketplace hook code or expose generic `pre-commit` /
+`post-commit` hook execution as a public extension point.
 
-- **Hook contract は fail-closed**: hook が timeout または error を返した
-  場合、当該 entry の stage は失敗扱いとなり、`pre-commit` 失敗は `abort` へ、
-  `post-commit` 失敗は RevokeDebt enqueue + observe 続行へ遷移する。
-- Hook は同じ idempotency tuple で複数回呼ばれうる。catalog 提供側は side effect
-  の冪等化を保証する (生成系は generated material の content digest で
-  dedupe、external API call は外部 idempotency key を再利用する)。
-- Hook が approval を改めて要求するケース (approval re-validation trigger 2 / 3)
-  では、kernel は当該 entry を `prepare` まで巻き戻して再評価する。stage
-  進行中の hook 結果で approval を直接 invalidate することはしない。
+Workflow / repository automation that needs hook-like behavior belongs to
+`takosumi-git` or another upstream product. Those products must finish their
+checks before sending a compiled Shape manifest to `POST /v1/deployments`.
 
-Current public deploy implementation: when the route is wired from `AppContext`,
-the active CatalogRelease verification path is invoked as the pre/post-commit
-hook. Marketplace-installed executable hook packages run after that verification
-boundary. `pre-commit` verification or executable-hook failure appends terminal
-`abort` before provider side effects. `post-commit` verification or
-executable-hook failure appends the hook failure, enqueues
-`approval-invalidated` RevokeDebt for committed operations, and records
-observe/finalize evidence.
-
-If the manifest imports external services, the `prepare` effect detail also
-records `serviceImports.kind = "takosumi.service-import-resolution@v1"`. Each
-pin carries the alias, service id, resolver URL, descriptor digest, provider
-instance, expiry, share id, and hash-linked share audit witnesses.
+Removed service import descriptors are not recorded in `prepare`. Current
+`prepare` detail contains manifest provenance, resource operation plan, and
+kernel validation evidence only.
 
 ## Orphaned debt 経路
 
@@ -220,8 +206,8 @@ subsystem に委ねる。
 関連 architecture notes:
 
 - `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  WAL stage 設計 の動機、idempotency tuple の derivation、catalog hook contract
-  の議論
+  WAL stage 設計 の動機、idempotency tuple の derivation、catalog verification
+  contract の議論
 - `docs/reference/architecture/execution-lifecycle.md` — phase ↔ stage
   マッピングの設計 rationale と recovery mode の選定背景
 - `docs/reference/architecture/observation-drift-revokedebt-model.md` — orphaned

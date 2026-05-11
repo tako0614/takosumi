@@ -1,7 +1,7 @@
-# Concepts — Shape × Provider × Template
+# Concepts — Shape × Provider
 
-Takosumi の manifest は 3 つの語彙だけで構成されます。 ここでは新しい operator
-が **5 分で全体像を掴む** ためのモデル図を示します。
+Takosumi の kernel manifest は Shape と Provider の語彙で構成されます。
+ここでは新しい operator が **5 分で全体像を掴む** ためのモデル図を示します。
 
 [Quickstart](/getting-started/quickstart) で `takosumi deploy` を 1 回通した
 あとに読むのがおすすめです。
@@ -13,10 +13,9 @@ Takosumi の manifest は 3 つの語彙だけで構成されます。 ここで
 ```
 ┌────────────────────────────────────────────┐
 │ Manifest (YAML / JSON)                     │
-│  • template:        ← Template invocation  │
 │  • resources[]:     ← Shape resources      │
 └────────────┬───────────────────────────────┘
-             │ expand / validate
+             │ validate
              ▼
 ┌────────────────────────────────────────────┐
 │ Shape catalog (5 種、Takosumi が curate)   │
@@ -34,7 +33,6 @@ Takosumi の manifest は 3 つの語彙だけで構成されます。 ここで
 
 | Layer        | 何を表すか                                           | 誰が owner か            |
 | ------------ | ---------------------------------------------------- | ------------------------ |
-| **Template** | 複数 Shape を 1 invocation で expand する高位構造    | Takosumi (RFC で追加)    |
 | **Shape**    | portable な resource 型 (S3-class bucket / HTTP svc) | Takosumi (RFC で追加)    |
 | **Provider** | Shape を実装する具体実装 (cloud-specific)            | operator / plugin author |
 
@@ -100,32 +98,18 @@ Provider は `provider:` field で **manifest が陽に指定** します。同 
 
 ## Template
 
-**Template は複数 Shape を 1 つの invocation で expand する authoring 短縮**
-です。 例えば `selfhosted-single-vm@v1` を 1 行書くと、`web-service` +
-`database-postgres` + `object-store` + (任意で) `custom-domain` がまとめて
-生成されます。
-
-bundled template は 2 つ:
-
-| Template                   | summary                                                   |
-| -------------------------- | --------------------------------------------------------- |
-| `selfhosted-single-vm@v1`  | 1 ホスト VM で web + Postgres + filesystem + DNS          |
-| `web-app-on-cloudflare@v1` | Cloudflare edge で CF Container + R2 + DNS + pluggable PG |
-
-template 自体は provider を持ちません。expansion 結果の `resources[]` が
-provider id を持ち、通常の DAG / selection に乗ります。
-
-詳細: [Templates](/reference/templates)
+`template` は retired authoring shorthand です。current kernel
+`POST /v1/deployments` は top-level `template` を受けず、展開済みの
+`resources[]` だけを受けます。template expansion が必要な場合は
+installer/compiler layer で kernel request 前に実行します。
 
 ---
 
 ## Manifest 内での組み合わせ方
 
-manifest envelope は次の 3 つの組み合わせを取りえます:
+current kernel manifest envelope は `resources[]` だけを受けます:
 
-::: code-group
-
-```yaml [resources[] のみ]
+```yaml
 apiVersion: "1.0"
 kind: Manifest
 metadata:
@@ -136,37 +120,6 @@ resources:
     provider: "@takos/aws-fargate"
     spec: { image: ghcr.io/me/api:v1, port: 8080, scale: { min: 1, max: 3 } }
 ```
-
-```yaml [template のみ]
-apiVersion: "1.0"
-kind: Manifest
-metadata:
-  name: my-app
-template:
-  template: selfhosted-single-vm@v1
-  inputs:
-    serviceName: api
-    image: ghcr.io/me/api:v1
-    port: 8080
-    domain: api.example.com
-```
-
-```yaml [併用 (template の expansion + 追加 resources)]
-apiVersion: "1.0"
-kind: Manifest
-metadata:
-  name: my-app
-template:
-  template: web-app-on-cloudflare@v1
-  inputs: { serviceName: app, image: ..., port: 8080, domain: app.example.com }
-resources:
-  - shape: object-store@v1
-    name: backups
-    provider: "@takos/aws-s3"
-    spec: { name: app-backups, versioning: true }
-```
-
-:::
 
 resource 間の配線は **string interpolation** で書きます:
 
@@ -233,7 +186,7 @@ AWS / GCP / Cloudflare / k8s / OS
 | manifest の YAML を書く                            | [Manifest (Shape Model)](/manifest)               |
 | Shape の spec / outputs を確認する                 | [Shape Catalog](/reference/shapes)                |
 | 20 default + 1 opt-in provider の対応 cloud と用途 | [Provider Plugins](/reference/providers)          |
-| bundled template の inputs / outputs               | [Templates](/reference/templates)                 |
+| retired template shorthand の背景                  | [Templates](/reference/templates)                 |
 | `takosumi` CLI コマンド                            | [CLI Reference](/reference/cli)                   |
 | `POST /v1/deployments` 等の HTTP API               | [Kernel HTTP API](/reference/kernel-http-api)     |
 | kernel ↔ agent envelope                            | [Runtime-Agent API](/reference/runtime-agent-api) |

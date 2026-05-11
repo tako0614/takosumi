@@ -293,23 +293,19 @@ even for staging or production.
 Exit codes: `0` migrated or dry-run printed, `1` migration error or kernel
 script missing, `2` required env unset for non-dry-run staging / production.
 
-### `takosumi init [<output>]`
+### `takosumi init [<output>]` (deprecated compatibility)
 
-Scaffold a Manifest.
+Historical CLI builds could scaffold a manifest. Current public workflow writes
+an explicit compiled Shape manifest and passes its path to `takosumi deploy`.
+Project-layout scaffolding belongs to `takosumi-git`.
 
 ```text
-takosumi init [<output>] [--template <name>]
+takosumi init [<output>]
 ```
 
-| Flag         | Type   | Default                | Notes                                  |
-| ------------ | ------ | ---------------------- | -------------------------------------- |
-| `--template` | string | `selfhosted-single-vm` | one of `selfhosted-single-vm`, `empty` |
-
-If `<output>` is given, the rendered Manifest is written to that path; otherwise
-it is printed to stdout. Templates render with `apiVersion: "1.0"` and
-`kind: Manifest` set, matching the contract envelope. The kernel CLI no longer
-auto-creates a `.takosumi/` project directory — that project-layout UX is owned
-by the `takosumi-git` sibling product.
+If `<output>` is given, the rendered compatibility manifest is written to that
+path; otherwise it is printed to stdout. Do not treat top-level `template` as a
+current kernel public field.
 
 ### `takosumi doctor`
 

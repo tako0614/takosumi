@@ -43,9 +43,6 @@ import {
 import { InMemoryObservabilitySink } from "../services/observability/mod.ts";
 import { buildOperationPlanPreview } from "../domains/deploy/operation_plan_preview.ts";
 import { buildRefDag } from "../domains/deploy/ref_resolver_v2.ts";
-import type {
-  ServiceImportResolution,
-} from "../domains/deploy/service_import_resolver.ts";
 
 const VALID_TOKEN = "test-token-abc";
 
@@ -55,6 +52,10 @@ const SAMPLE_RESOURCE: ManifestResource = {
   provider: "@takos/selfhost-filesystem",
   spec: { name: "logs", region: "local" },
 };
+
+function providerIdFor(resource: ManifestResource): string {
+  return resource.provider ?? "(auto)";
+}
 
 function createApp(opts: {
   token?: string | undefined;
@@ -73,13 +74,6 @@ function createApp(opts: {
     recoveryMode?: PlatformOperationRecoveryMode,
     trace?: PlatformTraceContext,
   ) => Promise<DestroyV2Outcome>;
-  resolveServiceImports?: (
-    manifest: JsonObject,
-    options: {
-      readonly now: () => string;
-      readonly deploymentId: string;
-    },
-  ) => Promise<ServiceImportResolution>;
   recordStore?: TakosumiDeploymentRecordStore;
   idempotencyStore?: DeployPublicIdempotencyStore;
   operationJournalStore?: OperationJournalStore;
@@ -98,7 +92,7 @@ function createApp(opts: {
         applied: [
           {
             name: SAMPLE_RESOURCE.name,
-            providerId: SAMPLE_RESOURCE.provider,
+            providerId: providerIdFor(SAMPLE_RESOURCE),
             handle: { kind: "test", id: "h_1" } as unknown as ApplyV2Outcome[
               "applied"
             ][number]["handle"],
@@ -111,9 +105,6 @@ function createApp(opts: {
       })),
     ...(opts.destroyResources
       ? { destroyResources: opts.destroyResources }
-      : {}),
-    ...(opts.resolveServiceImports
-      ? { resolveServiceImports: opts.resolveServiceImports }
       : {}),
     ...(opts.recordStore ? { recordStore: opts.recordStore } : {}),
     ...(opts.idempotencyStore
@@ -208,7 +199,7 @@ Deno.test("deploy public route applies manifest with valid token", async () => {
         applied: [
           {
             name: resources[0].name,
-            providerId: resources[0].provider,
+            providerId: providerIdFor(resources[0]),
             handle: {
               kind: "test",
               id: "applied",
@@ -248,349 +239,10 @@ Deno.test("deploy public route applies manifest with valid token", async () => {
   assert.deepEqual(captured, [SAMPLE_RESOURCE]);
 });
 
-Deno.test("deploy public route resolves service imports before apply", async () => {
-  let captured: readonly ManifestResource[] | undefined;
-  let resolverDeploymentId: string | undefined;
-  const recordStore = new InMemoryTakosumiDeploymentRecordStore();
-  const journal = new InMemoryOperationJournalStore();
-  const descriptor = {
-    id: "takosumi.account.auth",
-    version: "v1",
-    contract: "takosumi.account.auth@v1",
-    endpoints: [{
-      role: "oidc-issuer",
-      url: "https://accounts.example.test",
-      path: "/",
-    }],
-    metadata: {},
-    signature: "ed25519:sig",
-    publishedAt: "2026-05-09T00:00:00.000Z",
-    expiresAt: "2026-05-09T00:05:00.000Z",
-    providerInstance: "provider_takosumi_cloud",
-  };
-  const resourceWithImport: ManifestResource = {
-    ...SAMPLE_RESOURCE,
-    spec: {
-      name: "logs",
-      region: "local",
-      env: {
-        OIDC_ISSUER_URL: "${imports.account-auth.endpoints.oidc-issuer.url}",
-        OIDC_ISSUER_PATH: "${imports.account-auth.endpoints.oidc-issuer.path}",
-        OIDC_SERVICE_ID: "${imports.account-auth.serviceId}",
-      },
-    },
-  };
-  const app = createApp({
-    token: VALID_TOKEN,
-    tenantId: "space_1",
-    now: () => "2026-05-09T00:00:00.000Z",
-    recordStore,
-    operationJournalStore: journal,
-    resolveServiceImports: (_manifest, options) => {
-      resolverDeploymentId = options.deploymentId;
-      return Promise.resolve({
-        ok: true,
-        value: [{
-          alias: "account-auth",
-          serviceId: "takosumi.account.auth@v1",
-          resolverUrl: "https://anchor.example.test/v1/services/",
-          descriptorDigest: "sha256:descriptor",
-          descriptor,
-          share: {
-            id: "cross-instance-share:account-auth",
-            serviceId: "takosumi.account.auth@v1",
-            toDeploymentId: "space_1/logs",
-            resolvedDescriptor: descriptor,
-            resolvedAt: "2026-05-09T00:00:00.000Z",
-            refreshPolicy: { kind: "ttl", ttl: "300s" },
-            auditTrail: [],
-          },
-        }],
-      });
-    },
-    applyResources: (resources) => {
-      captured = resources;
-      return Promise.resolve({
-        applied: [{
-          name: resources[0].name,
-          providerId: resources[0].provider,
-          handle: { kind: "test", id: "applied" } as unknown as ApplyV2Outcome[
-            "applied"
-          ][number]["handle"],
-          outputs: { ok: true },
-          specFingerprint: "fnv1a32:00000000",
-        }],
-        issues: [],
-        status: "succeeded",
-      });
-    },
-  });
-
-  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${VALID_TOKEN}`,
-    },
-    body: JSON.stringify({
-      mode: "apply",
-      manifest: {
-        apiVersion: "1.0",
-        kind: "Manifest",
-        metadata: { name: "logs" },
-        imports: [{
-          alias: "account-auth",
-          service: "takosumi.account.auth@v1",
-        }],
-        serviceResolvers: [{
-          kind: "anchor",
-          url: "https://anchor.example.test/v1/services/",
-          publicKey: "pubkey",
-        }],
-        resources: [resourceWithImport],
-      },
-    }),
-  });
-
-  assert.equal(response.status, 200);
-  assert.equal(resolverDeploymentId, "space_1/logs");
-  assert.equal(
-    (captured?.[0].spec as { env?: Record<string, string> }).env
-      ?.OIDC_ISSUER_URL,
-    "https://accounts.example.test",
-  );
-  assert.equal(
-    (captured?.[0].spec as { env?: Record<string, string> }).env
-      ?.OIDC_ISSUER_PATH,
-    "/",
-  );
-  assert.equal(
-    (captured?.[0].spec as { env?: Record<string, string> }).env
-      ?.OIDC_SERVICE_ID,
-    "takosumi.account.auth@v1",
-  );
-  const pins = captured?.[0].metadata?.takosumiServiceImports as
-    | { pins?: readonly { descriptorDigest?: string }[] }
-    | undefined;
-  assert.equal(pins?.pins?.[0]?.descriptorDigest, "sha256:descriptor");
-  const record = await recordStore.get("space_1", "logs");
-  const manifestMetadata = record?.manifest.metadata as
-    | {
-      takosumiServiceImports?: { pins?: readonly { resolverUrl?: string }[] };
-    }
-    | undefined;
-  assert.equal(
-    manifestMetadata?.takosumiServiceImports?.pins?.[0]?.resolverUrl,
-    "https://anchor.example.test/v1/services/",
-  );
-  const entries = await journal.listByDeployment("space_1", "logs");
-  const prepare = entries.find((entry) => entry.stage === "prepare");
-  const detail = prepare?.effect.detail as
-    | {
-      serviceImports?: {
-        pins?: readonly {
-          shareId?: string;
-          resolvedDescriptor?: { signature?: string };
-        }[];
-      };
-    }
-    | undefined;
-  assert.equal(
-    detail?.serviceImports?.pins?.[0]?.shareId,
-    "cross-instance-share:account-auth",
-  );
-  assert.equal(
-    detail?.serviceImports?.pins?.[0]?.resolvedDescriptor?.signature,
-    "ed25519:sig",
-  );
-});
-
-Deno.test("deploy public route rejects bindings-prefixed service import placeholders", async () => {
-  let applyCalled = false;
-  const descriptor = {
-    id: "takosumi.account.auth",
-    version: "v1",
-    contract: "takosumi.account.auth@v1",
-    endpoints: [{
-      role: "oidc-issuer",
-      url: "https://accounts.example.test",
-      path: "/",
-    }],
-    metadata: {},
-    signature: "ed25519:sig",
-    publishedAt: "2026-05-09T00:00:00.000Z",
-    expiresAt: "2026-05-09T00:05:00.000Z",
-    providerInstance: "provider_takosumi_cloud",
-  };
-  const app = createApp({
-    token: VALID_TOKEN,
-    now: () => "2026-05-09T00:00:00.000Z",
-    resolveServiceImports: () =>
-      Promise.resolve({
-        ok: true,
-        value: [{
-          alias: "account-auth",
-          serviceId: "takosumi.account.auth@v1",
-          resolverUrl: "https://anchor.example.test/v1/services/",
-          descriptorDigest: "sha256:descriptor",
-          descriptor,
-          share: {
-            id: "cross-instance-share:account-auth",
-            serviceId: "takosumi.account.auth@v1",
-            toDeploymentId: "space_1/logs",
-            resolvedDescriptor: descriptor,
-            resolvedAt: "2026-05-09T00:00:00.000Z",
-            refreshPolicy: { kind: "ttl", ttl: "300s" },
-            auditTrail: [],
-          },
-        }],
-      }),
-    applyResources: () => {
-      applyCalled = true;
-      return Promise.resolve({ applied: [], issues: [], status: "succeeded" });
-    },
-  });
-
-  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${VALID_TOKEN}`,
-    },
-    body: JSON.stringify({
-      mode: "apply",
-      manifest: {
-        apiVersion: "1.0",
-        kind: "Manifest",
-        metadata: { name: "logs" },
-        imports: [{
-          alias: "account-auth",
-          service: "takosumi.account.auth@v1",
-        }],
-        serviceResolvers: [{
-          kind: "anchor",
-          url: "https://anchor.example.test/v1/services/",
-          publicKey: "pubkey",
-        }],
-        resources: [{
-          ...SAMPLE_RESOURCE,
-          spec: {
-            env: {
-              OIDC_ISSUER_URL:
-                "${bindings.account-auth.endpoints.oidc-issuer.url}",
-            },
-          },
-        }],
-      },
-    }),
-  });
-
-  assert.equal(response.status, 400);
-  assert.equal(applyCalled, false);
-  const body = await response.json();
-  assert.equal(body.error.code, "invalid_argument");
-  assert.match(
-    body.error.message,
-    /unsupported \$\{bindings\.\*\} placeholder/,
-  );
-});
-
-Deno.test("deploy public route rejects missing service import endpoint placeholders", async () => {
-  let applyCalled = false;
-  const descriptor = {
-    id: "takosumi.account.auth",
-    version: "v1",
-    contract: "takosumi.account.auth@v1",
-    endpoints: [{
-      role: "jwks",
-      url: "https://accounts.example.test/oauth/jwks",
-      path: "/oauth/jwks",
-    }],
-    metadata: {},
-    signature: "ed25519:sig",
-    publishedAt: "2026-05-09T00:00:00.000Z",
-    expiresAt: "2026-05-09T00:05:00.000Z",
-    providerInstance: "provider_takosumi_cloud",
-  };
-  const app = createApp({
-    token: VALID_TOKEN,
-    now: () => "2026-05-09T00:00:00.000Z",
-    resolveServiceImports: () =>
-      Promise.resolve({
-        ok: true,
-        value: [{
-          alias: "account-auth",
-          serviceId: "takosumi.account.auth@v1",
-          resolverUrl: "https://anchor.example.test/v1/services/",
-          descriptorDigest: "sha256:descriptor",
-          descriptor,
-          share: {
-            id: "cross-instance-share:account-auth",
-            serviceId: "takosumi.account.auth@v1",
-            toDeploymentId: "takosumi-deploy/logs",
-            resolvedDescriptor: descriptor,
-            resolvedAt: "2026-05-09T00:00:00.000Z",
-            refreshPolicy: { kind: "ttl", ttl: "300s" },
-            auditTrail: [],
-          },
-        }],
-      }),
-    applyResources: () => {
-      applyCalled = true;
-      return Promise.resolve({ applied: [], issues: [], status: "succeeded" });
-    },
-  });
-
-  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${VALID_TOKEN}`,
-    },
-    body: JSON.stringify({
-      mode: "apply",
-      manifest: {
-        apiVersion: "1.0",
-        kind: "Manifest",
-        metadata: { name: "logs" },
-        imports: [{
-          alias: "account-auth",
-          service: "takosumi.account.auth@v1",
-        }],
-        serviceResolvers: [{
-          kind: "anchor",
-          url: "https://anchor.example.test/v1/services/",
-          publicKey: "pubkey",
-        }],
-        resources: [{
-          ...SAMPLE_RESOURCE,
-          spec: {
-            env: {
-              OIDC_ISSUER_URL:
-                "${imports.account-auth.endpoints.oidc-issuer.url}",
-            },
-          },
-        }],
-      },
-    }),
-  });
-
-  assert.equal(response.status, 400);
-  assert.equal(applyCalled, false);
-  const body = await response.json();
-  assert.equal(body.error.code, "invalid_argument");
-  assert.match(body.error.message, /missing endpoint role 'oidc-issuer'/);
-});
-
-Deno.test("deploy public route rejects unresolved service imports before apply", async () => {
+Deno.test("deploy public route rejects removed service import fields", async () => {
   let applyCalled = false;
   const app = createApp({
     token: VALID_TOKEN,
-    resolveServiceImports: () =>
-      Promise.resolve({
-        ok: false,
-        error: "descriptor signature invalid",
-      }),
     applyResources: () => {
       applyCalled = true;
       return Promise.resolve({ applied: [], issues: [], status: "succeeded" });
@@ -626,7 +278,49 @@ Deno.test("deploy public route rejects unresolved service imports before apply",
   assert.equal(applyCalled, false);
   const body = await response.json();
   assert.equal(body.error.code, "invalid_argument");
-  assert.match(body.error.message, /signature invalid/);
+  assert.match(body.error.message, /\$\.imports: imports is not a known field/);
+  assert.match(
+    body.error.message,
+    /\$\.serviceResolvers: serviceResolvers is not a known field/,
+  );
+});
+
+Deno.test("deploy public route rejects legacy target and services manifest", async () => {
+  let applyCalled = false;
+  const app = createApp({
+    token: VALID_TOKEN,
+    applyResources: () => {
+      applyCalled = true;
+      return Promise.resolve({ applied: [], issues: [], status: "succeeded" });
+    },
+  });
+
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      manifest: {
+        target: "cloudflare",
+        services: {
+          app: { image: "ghcr.io/example/app:latest" },
+        },
+      },
+    }),
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(applyCalled, false);
+  const body = await response.json();
+  assert.equal(body.error.code, "invalid_argument");
+  assert.match(body.error.message, /\$\.target: target is not a known field/);
+  assert.match(
+    body.error.message,
+    /\$\.services: services is not a known field/,
+  );
 });
 
 Deno.test("deploy public route records deploy success and latency metrics", async () => {
@@ -845,7 +539,7 @@ Deno.test("deploy public route records apply WAL stages around provider side eff
       return Promise.resolve({
         applied: [{
           name: resources[0].name,
-          providerId: resources[0].provider,
+          providerId: providerIdFor(resources[0]),
           handle: "handle-wal",
           outputs: { ok: true },
           specFingerprint: "fnv1a32:00000000",
@@ -921,7 +615,7 @@ Deno.test("deploy public route records upstream provenance in WAL and status", a
       return Promise.resolve({
         applied: [{
           name: resources[0].name,
-          providerId: resources[0].provider,
+          providerId: providerIdFor(resources[0]),
           handle: "handle-provenance",
           outputs: { ok: true },
           specFingerprint: "fnv1a32:00000000",
@@ -1192,7 +886,7 @@ Deno.test("deploy public route enqueues RevokeDebt when CatalogRelease post-comm
       return Promise.resolve({
         applied: [{
           name: resources[0].name,
-          providerId: resources[0].provider,
+          providerId: providerIdFor(resources[0]),
           handle: "handle-post-hook",
           outputs: { ok: true },
           specFingerprint: "fnv1a32:00000000",
@@ -1300,7 +994,7 @@ Deno.test("deploy public route records RevokeDebt when executable post-commit ho
       return Promise.resolve({
         applied: [{
           name: resources[0].name,
-          providerId: resources[0].provider,
+          providerId: providerIdFor(resources[0]),
           handle: "handle-executable-hook",
           outputs: { ok: true },
           specFingerprint: "fnv1a32:00000000",
@@ -1366,7 +1060,7 @@ Deno.test("deploy public route forwards apply WAL operation plan to applyResourc
       return Promise.resolve({
         applied: [{
           name: resources[0].name,
-          providerId: resources[0].provider,
+          providerId: providerIdFor(resources[0]),
           handle: "handle-forward",
           outputs: { ok: true },
           specFingerprint: "fnv1a32:00000000",
@@ -1484,7 +1178,7 @@ Deno.test("deploy public route refuses apply when prior public WAL is unfinished
     planned: [{
       name: SAMPLE_RESOURCE.name,
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       op: "create",
     }],
     edges: buildRefDag([SAMPLE_RESOURCE]).edges,
@@ -1543,7 +1237,7 @@ Deno.test("deploy public route recoveryMode continue resumes matching unfinished
     planned: [{
       name: SAMPLE_RESOURCE.name,
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       op: "create",
     }],
     edges: buildRefDag([SAMPLE_RESOURCE]).edges,
@@ -1571,7 +1265,7 @@ Deno.test("deploy public route recoveryMode continue resumes matching unfinished
       return Promise.resolve({
         applied: [{
           name: resources[0].name,
-          providerId: resources[0].provider,
+          providerId: providerIdFor(resources[0]),
           handle: "handle-continue",
           outputs: { ok: true },
           specFingerprint: "fnv1a32:00000000",
@@ -1620,7 +1314,7 @@ Deno.test("deploy public route recoveryMode continue rejects changed OperationPl
     planned: [{
       name: SAMPLE_RESOURCE.name,
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       op: "create",
     }],
     edges: buildRefDag([SAMPLE_RESOURCE]).edges,
@@ -1709,7 +1403,7 @@ Deno.test("deploy public route recoveryMode compensate aborts WAL and enqueues R
     planned: [{
       name: SAMPLE_RESOURCE.name,
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       op: "create",
     }],
     edges: buildRefDag([SAMPLE_RESOURCE]).edges,
@@ -1809,7 +1503,7 @@ Deno.test("deploy public route recoveryMode compensate rejects pre-commit WAL wi
     planned: [{
       name: SAMPLE_RESOURCE.name,
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       op: "create",
     }],
     edges: buildRefDag([SAMPLE_RESOURCE]).edges,
@@ -1860,7 +1554,7 @@ Deno.test("deploy public route recoveryMode inspect returns journal without prov
     planned: [{
       name: SAMPLE_RESOURCE.name,
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       op: "create",
     }],
     edges: buildRefDag([SAMPLE_RESOURCE]).edges,
@@ -1937,7 +1631,7 @@ Deno.test("GET /v1/deployments/:name/audit returns rollback cause chain", async 
     planned: [{
       name: SAMPLE_RESOURCE.name,
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       op: "create",
     }],
     edges: buildRefDag([SAMPLE_RESOURCE]).edges,
@@ -2011,7 +1705,7 @@ Deno.test("GET /v1/deployments/:name/audit returns rollback cause chain", async 
     journalEntryId: preview.operations[0].idempotencyKey.journalEntryId,
     operationId: preview.operations[0].operationId,
     resourceName: "logs",
-    providerId: SAMPLE_RESOURCE.provider,
+    providerId: providerIdFor(SAMPLE_RESOURCE),
     now: "2026-05-07T00:00:02.000Z",
   });
   const app = createApp({
@@ -2081,7 +1775,7 @@ Deno.test("deploy public route journal summary stays unfinished until every oper
     planned: resources.map((resource) => ({
       name: resource.name,
       shape: resource.shape,
-      providerId: resource.provider,
+      providerId: providerIdFor(resource),
       op: "create" as const,
     })),
     edges: buildRefDag(resources).edges,
@@ -2241,7 +1935,7 @@ Deno.test("deploy public route plan mode runs applyV2 dry-run without persisting
         planned: [{
           name: SAMPLE_RESOURCE.name,
           shape: SAMPLE_RESOURCE.shape,
-          providerId: SAMPLE_RESOURCE.provider,
+          providerId: providerIdFor(SAMPLE_RESOURCE),
           op: "create",
         }],
       });
@@ -2289,7 +1983,7 @@ Deno.test("deploy public route replays same idempotency key without re-applying"
       return Promise.resolve({
         applied: [{
           name: resources[0].name,
-          providerId: resources[0].provider,
+          providerId: providerIdFor(resources[0]),
           handle: `handle-${applyCount}`,
           outputs: { applyCount },
           specFingerprint: `fnv1a32:${applyCount}`,
@@ -2349,7 +2043,7 @@ Deno.test("deploy public route rejects same idempotency key with different body"
       return Promise.resolve({
         applied: [{
           name: resources[0].name,
-          providerId: resources[0].provider,
+          providerId: providerIdFor(resources[0]),
           handle: `handle-${applyCount}`,
           outputs: {},
           specFingerprint: `fnv1a32:${applyCount}`,
@@ -2447,7 +2141,7 @@ Deno.test("deploy public route expands template with valid inputs", async () => 
           applied: [
             {
               name: resources[0].name,
-              providerId: resources[0].provider,
+              providerId: providerIdFor(resources[0]),
               handle: {
                 kind: "test",
                 id: "applied",
@@ -2532,7 +2226,7 @@ Deno.test("deploy public route appends explicit resources after template expansi
         return Promise.resolve({
           applied: resources.map((resource) => ({
             name: resource.name,
-            providerId: resource.provider,
+            providerId: providerIdFor(resource),
             handle: resource.name,
             outputs: {},
             specFingerprint: "fnv1a32:00000000",
@@ -2608,7 +2302,7 @@ Deno.test("deploy public route runs destroy mode against destroyV2", async () =>
           destroyed: [
             {
               name: resources[0].name,
-              providerId: resources[0].provider,
+              providerId: providerIdFor(resources[0]),
               handle: resources[0].name,
             },
           ],
@@ -2654,7 +2348,7 @@ Deno.test("deploy public route forwards destroy WAL operation plan to destroyRes
       return Promise.resolve({
         destroyed: [{
           name: resources[0].name,
-          providerId: resources[0].provider,
+          providerId: providerIdFor(resources[0]),
           handle: resources[0].name,
         }],
         errors: [],
@@ -2715,7 +2409,7 @@ Deno.test("deploy public route recoveryMode continue finalizes destroy already m
     planned: [{
       name: SAMPLE_RESOURCE.name,
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       op: "delete",
     }],
     edges: buildRefDag([SAMPLE_RESOURCE]).edges,
@@ -2795,7 +2489,7 @@ Deno.test("deploy public route records destroy WAL stages", async () => {
     appliedResources: [{
       resourceName: SAMPLE_RESOURCE.name,
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       handle: "handle-destroy-wal",
       outputs: {},
       appliedAt: "2026-05-02T00:00:00.000Z",
@@ -2814,7 +2508,7 @@ Deno.test("deploy public route records destroy WAL stages", async () => {
       Promise.resolve({
         destroyed: [{
           name: resources[0].name,
-          providerId: resources[0].provider,
+          providerId: providerIdFor(resources[0]),
           handle: handleFor?.(resources[0]) ?? resources[0].name,
         }],
         errors: [],
@@ -2846,7 +2540,7 @@ Deno.test("deploy public route records destroy WAL stages", async () => {
     planned: [{
       name: SAMPLE_RESOURCE.name,
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       op: "delete",
     }],
     edges: dag.edges,
@@ -2956,7 +2650,7 @@ Deno.test("apply persists handles + manifest to recordStore", async () => {
         applied: [
           {
             name: SAMPLE_RESOURCE.name,
-            providerId: SAMPLE_RESOURCE.provider,
+            providerId: providerIdFor(SAMPLE_RESOURCE),
             handle: "arn:aws:s3:::real-bucket",
             outputs: { url: "https://logs.example" },
             specFingerprint: "fnv1a32:00000000",
@@ -3086,7 +2780,7 @@ Deno.test("failed update apply preserves prior applied resource handles", async 
     appliedResources: [{
       resourceName: "logs",
       shape: SAMPLE_RESOURCE.shape,
-      providerId: SAMPLE_RESOURCE.provider,
+      providerId: providerIdFor(SAMPLE_RESOURCE),
       handle: "arn:test:existing",
       outputs: { url: "https://existing.example" },
       appliedAt: "2026-05-01T00:00:00.000Z",
@@ -3201,7 +2895,7 @@ Deno.test("destroy feeds persisted handles into destroyV2 via handleFor", async 
         {
           destroyed: [{
             name: resources[0].name,
-            providerId: resources[0].provider,
+            providerId: providerIdFor(resources[0]),
             handle: handleFor?.(resources[0]) ?? resources[0].name,
           }],
           errors: [],
@@ -3301,7 +2995,7 @@ Deno.test(
           {
             destroyed: [{
               name: SAMPLE_RESOURCE.name,
-              providerId: SAMPLE_RESOURCE.provider,
+              providerId: providerIdFor(SAMPLE_RESOURCE),
               handle: SAMPLE_RESOURCE.name,
             }],
             errors: [],
@@ -3415,7 +3109,7 @@ Deno.test(
       planned: [{
         name: SAMPLE_RESOURCE.name,
         shape: SAMPLE_RESOURCE.shape,
-        providerId: SAMPLE_RESOURCE.provider,
+        providerId: providerIdFor(SAMPLE_RESOURCE),
         op: "create",
       }],
       edges: dag.edges,
@@ -3519,7 +3213,7 @@ Deno.test(
           return Promise.resolve({
             applied: [{
               name: resources[0].name,
-              providerId: resources[0].provider,
+              providerId: providerIdFor(resources[0]),
               handle: snapshot.handle,
               outputs: snapshot.outputs,
               specFingerprint: fingerprint,
@@ -3533,7 +3227,7 @@ Deno.test(
         return Promise.resolve({
           applied: [{
             name: resources[0].name,
-            providerId: resources[0].provider,
+            providerId: providerIdFor(resources[0]),
             handle: `arn:test:${applyCount}`,
             outputs: { url: `https://test/${applyCount}` },
             specFingerprint: fingerprint,
@@ -3627,7 +3321,7 @@ Deno.test(
           return Promise.resolve({
             applied: [{
               name: resources[0].name,
-              providerId: resources[0].provider,
+              providerId: providerIdFor(resources[0]),
               handle: snapshot.handle,
               outputs: snapshot.outputs,
               specFingerprint: fingerprint,
@@ -3641,7 +3335,7 @@ Deno.test(
         return Promise.resolve({
           applied: [{
             name: resources[0].name,
-            providerId: resources[0].provider,
+            providerId: providerIdFor(resources[0]),
             handle: `arn:test:${applyCount}`,
             outputs: { url: `https://test/${applyCount}` },
             specFingerprint: fingerprint,
@@ -3724,7 +3418,7 @@ Deno.test(
         return {
           applied: [{
             name: resources[0].name,
-            providerId: resources[0].provider,
+            providerId: providerIdFor(resources[0]),
             handle: "arn:test:concurrent",
             outputs: { ok: true },
             specFingerprint: "fnv1a32:00000000",
@@ -3794,7 +3488,7 @@ Deno.test(
         return {
           applied: [{
             name: resources[0].name,
-            providerId: resources[0].provider,
+            providerId: providerIdFor(resources[0]),
             handle: "arn:test:parallel",
             outputs: { ok: true },
             specFingerprint: "fnv1a32:00000000",

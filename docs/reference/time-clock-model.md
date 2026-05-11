@@ -40,7 +40,7 @@ The following bindings are normative.
 | Feature                                            | Clock source                                             |
 | -------------------------------------------------- | -------------------------------------------------------- |
 | Approval `expiresAt` evaluation                    | wall clock                                               |
-| SpaceExportShare `expiresAt` evaluation            | wall clock                                               |
+| SpaceExportShare `expiresAt` evaluation            | reserved / future RFC; wall clock if enabled             |
 | RevokeDebt aging window                            | wall clock; monotonic for the in-process grace timer     |
 | Lock acquire timeout                               | monotonic                                                |
 | Lock heartbeat / TTL                               | monotonic                                                |

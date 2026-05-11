@@ -109,13 +109,12 @@ interface DeployPublicRequest {
 }
 ```
 
-`manifest` は Takosumi v1 shape manifest です。Top-level は `apiVersion: "1.0"`
-/ `kind: "Manifest"` / `metadata` / `template` / `resources` の closed envelope
-で、`template` は `{ template:
-"<id>@<version>", inputs?: {} }`、`resources[]`
-は `ManifestResource` (`shape` / `name` / `provider` / `spec` / optional
-`requires` / `metadata`) です。`template` と `resources[]` は併用でき、template
-expansion の後に explicit resources が append されます。詳細は
+`manifest` は Takosumi v1 compiled Shape manifest です。Top-level は
+`apiVersion: "1.0"` / `kind: "Manifest"` / `metadata` / `resources` の closed
+envelope で、`resources[]` は `ManifestResource` (`shape` / `name` / `spec` /
+optional `provider` hint / `requires` / `metadata`) です。`template` は current
+kernel public contract ではなく、必要なら installer/compiler layer で
+`resources[]` に展開してから `POST /v1/deployments` に渡します。詳細は
 [Manifest](/manifest) と [Manifest Validation](/reference/manifest-validation)。
 
 `provenance` is an optional JSON object supplied by an upstream deploy client.
@@ -126,15 +125,12 @@ that the value is a JSON object and that `kind`, when present, is a string; it
 does not execute workflows, read workflow files, parse build logs, or interpret
 git semantics.
 
-When the manifest declares `imports[]` and `serviceResolvers[]`, the public
-deploy route resolves provider-signed service descriptors before plan/apply. The
-resolved descriptor pins are attached to resource metadata for provider
-materialization, written into the persisted deployment manifest under
-`metadata.takosumiServiceImports`, and recorded on the WAL `prepare` detail as
-`serviceImports`. The persisted value is an audit pin: alias, service id,
-resolver URL, descriptor digest, provider instance, expiry, share id, and the
-share audit hashes. The kernel still fetches descriptors from the supplied
-anchor; it does not run a global service registry.
+`services[]`, `imports[]`, `serviceResolvers[]`, and
+`metadata.takosumiServiceImports` are not public deploy fields. The public
+deploy route rejects them during manifest validation. Operator/account-plane
+dependencies are resolved before kernel deploy through namespace exports,
+account API, OIDC discovery, or BillingPort contracts; the kernel does not fetch
+or verify service descriptors.
 
 Current public deploy scope is single-token. `TAKOSUMI_DEPLOY_TOKEN` maps to one
 operator-configured public deploy Space / tenant scope. The scope defaults to
@@ -499,11 +495,6 @@ DELETE /api/internal/v1/spaces/:id
 POST /api/internal/v1/spaces/:id/exports
 GET /api/internal/v1/spaces/:id/exports/:exportId
 POST /api/internal/v1/spaces/:id/trial/extend
-POST /api/internal/v1/api-keys
-POST /v1/api-keys
-POST /v1/api-keys/:id/rotate
-DELETE /v1/api-keys/:id
-POST /api/internal/v1/auth-providers
 POST /api/internal/v1/quota-tiers
 PATCH /api/internal/v1/quota-tiers/:tierId
 DELETE /api/internal/v1/quota-tiers/:tierId
@@ -544,9 +535,9 @@ plus route code, authorization tests, storage migrations, OpenAPI/capabilities
 updates, and an update to the
 [Public Spec Source Map](/reference/public-spec-source-map).
 
-Catalog release executable hooks are a separate operator plugin mechanism; they
-are documented in [Plugin Marketplace](/reference/plugin-marketplace) and are
-not workflow trigger routes.
+Catalog release executable hooks / plugin marketplace install are not current
+kernel contract. The current WAL may perform kernel-owned CatalogRelease
+signature re-verification, but it does not load executable hook packages.
 
 ## Runtime-Agent control RPC
 
@@ -635,9 +626,9 @@ interface ApiErrorEnvelope {
 - [Quota Tiers](/reference/quota-tiers)
 - [Cost Attribution](/reference/cost-attribution)
 - [Zone Selection](/reference/zone-selection)
-- [API Key Management](/reference/api-key-management)
-- [Auth Providers](/reference/auth-providers)
-- [RBAC Policy](/reference/rbac-policy)
+- [API Key Management](/reference/api-key-management) — migration stub
+- [Auth Providers](/reference/auth-providers) — migration stub
+- [RBAC Policy](/reference/rbac-policy) — migration stub
 - [SLA Breach Detection](/reference/sla-breach-detection)
 - [Incident Model](/reference/incident-model)
 - [Support Impersonation](/reference/support-impersonation)

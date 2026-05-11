@@ -46,8 +46,8 @@ always re-enter via WAL replay against the last persisted journal entry.
 - **WAL stages touched.** `prepare` -> `pre-commit` -> `commit`.
 - **Failure behavior.** Failures inside `prepare` discard the new plan with no
   side effects. Failures inside `pre-commit` run the operation's registered
-  compensate hook on the same WAL entry. Failures inside `commit` mark the entry
-  as `commit-failed`; recovery determines resume vs. compensate.
+  compensate operation on the same WAL entry. Failures inside `commit` mark the
+  entry as `commit-failed`; recovery determines resume vs. compensate.
 - **Blocking semantics.** Holds the `(spaceId, operationPlanDigest)`
   cross-process lock for its full duration. Other intentional phases on the same
   Space queue.
@@ -103,7 +103,7 @@ always re-enter via WAL replay against the last persisted journal entry.
   `activation-rollback`.
 - **Blocking semantics.** Same lock as forward phases.
 - **Typical duration.** Similar to the original `apply`; bounded by the slowest
-  compensate hook.
+  compensate operation.
 
 ### `recovery`
 

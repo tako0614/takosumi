@@ -97,16 +97,15 @@ Current kernel primitive:
 - `verifyCurrentReleaseForSpace` re-verifies the stored adopted descriptor and
   fails closed with `implementation-unverified` risk metadata if the key is
   missing, revoked, mismatched, or the signature no longer verifies.
-- The public deploy WAL invokes that verifier as the CatalogRelease
-  pre/post-commit hook when the route is built from `AppContext`. Pre-commit
+- The public deploy WAL invokes that verifier as kernel-owned CatalogRelease
+  re-verification during the matching WAL stages. Pre-commit verification
   failure appends terminal `abort` before provider side effects. Post-commit
-  failure appends the failed hook result, enqueues `approval-invalidated`
-  RevokeDebt for committed operations, then records observe/finalize evidence.
-- Marketplace-installed executable hook packages are verified through the
-  trusted kernel plugin install path (`ECDSA-P256-SHA256` signed manifest +
-  SHA-256 module digest) and then run after CatalogRelease Ed25519
-  re-verification at the matching WAL stage. The Ed25519 CatalogRelease tier and
-  the ECDSA trusted plugin package tier are separate trust roots.
+  verification failure appends the failed verification result, enqueues
+  `approval-invalidated` RevokeDebt for committed operations, then records
+  observe/finalize evidence.
+- Marketplace-installed executable hook packages are not current kernel
+  contract. CatalogRelease Ed25519 verification is the only current trust check
+  described by this page.
 
 ## Verify 失敗時の挙動
 

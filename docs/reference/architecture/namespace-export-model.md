@@ -1,5 +1,8 @@
 # Namespace Export Model
 
+Root-level canonical spec:
+[Namespace Exports](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/namespace-exports.md).
+
 Exports are namespace-addressable usable surfaces. Namespace paths are resolved
 inside a Space. Producers publish export declarations; link materialization
 produces export material.
@@ -94,7 +97,8 @@ are never implicit.
 ## Space-scoped namespace resolution
 
 Namespace resolution always happens inside a Space. The same path in another
-Space is a different subject unless explicitly shared.
+Space is a different subject. Current v1 dependencies are limited to
+operator-owned namespace exports granted to the Space.
 
 ```text
 1. deployment-local object namespace
@@ -103,8 +107,8 @@ Space is a different subject unless explicitly shared.
 4. environment namespace, if defined by the Space
 5. space namespace
 6. operator namespace granted to the Space
-7. external participant namespace registered into the Space
-8. explicitly shared namespace imports from another Space
+7. reserved: external participant namespace registered into the Space
+8. reserved: explicitly shared namespace imports from another Space
 ```
 
 Shadowing is policy-gated. Production should deny or require approval for
@@ -113,8 +117,9 @@ operator, or external namespace.
 
 ## Space export sharing
 
-Cross-space namespace use is denied by default. To use an export from another
-Space, the operator must create a Space export share or namespace import.
+Cross-space namespace use is denied by default and is not a current v1
+dependency. `SpaceExportShare` / namespace import records are reserved
+vocabulary for a future RFC.
 
 ```yaml
 SpaceExportShare:
@@ -127,8 +132,8 @@ SpaceExportShare:
     - call
 ```
 
-ResolutionSnapshot records the share. Plan output must mark cross-space use as a
-risk.
+If a future RFC enables this vocabulary, ResolutionSnapshot must record the
+share and plan output must mark cross-space use as a risk.
 
 ## Freshness
 

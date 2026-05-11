@@ -19,8 +19,10 @@ latency table, or zone-pricing model.
 
 All zones in a Takosumi v1 installation live inside **one region**. The kernel
 enforces this invariant: cross-region links are out of scope for v1. An operator
-distribution that wants to span multiple regions runs one Takosumi installation
-per region and federates at the operator boundary, not inside the kernel.
+distribution that wants to span multiple regions must treat that as a future
+multi-region account-plane / operator RFC. Running one Takosumi installation per
+region does not create platform federation; those installations remain
+independent.
 
 Adding cross-region semantics — multi-region writes, region failover,
 geo-routing — requires a `CONVENTIONS.md` §6 RFC.

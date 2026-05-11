@@ -2,6 +2,7 @@ import {
   capabilitySubsetIssues,
   getProvider,
   getShapeByRef,
+  listProvidersForShape,
   type ManifestResource,
   parseShapeRef,
   type ProviderPlugin,
@@ -58,6 +59,12 @@ const LEGACY_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   "coredns-local": "@takos/selfhost-coredns",
 };
 
+type ProviderSelection = {
+  readonly provider?: ProviderPlugin;
+  readonly suggested?: string;
+  readonly issue?: string;
+};
+
 /**
  * Look up a provider by id. If the operator wrote a known legacy bare id,
  * return `{ provider: undefined, suggested: "@takos/<name>" }` so the caller
@@ -65,12 +72,46 @@ const LEGACY_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
  */
 function lookupProvider(
   rawId: string,
-): { provider?: ProviderPlugin; suggested?: string } {
+): ProviderSelection {
   const direct = getProvider(rawId);
   if (direct) return { provider: direct };
   if (rawId.startsWith("@")) return {};
   const suggested = LEGACY_PROVIDER_ALIASES[rawId];
   return suggested ? { suggested } : {};
+}
+
+function selectProviderForShape(
+  shapeId: string,
+  shapeVersion: string,
+  requires: readonly string[] | undefined,
+): ProviderSelection {
+  const candidates = listProvidersForShape(shapeId, shapeVersion);
+  if (candidates.length === 0) {
+    return {
+      issue: `no provider registered for shape: ${shapeId}@${shapeVersion}`,
+    };
+  }
+  const capable = requires && requires.length > 0
+    ? candidates.filter((candidate) =>
+      capabilitySubsetIssues(requires, candidate.capabilities, "$").length === 0
+    )
+    : candidates;
+  if (capable.length === 0) {
+    return {
+      issue:
+        `no provider for ${shapeId}@${shapeVersion} satisfies required capabilities: ${
+          requires?.join(", ") ?? "(none)"
+        }`,
+    };
+  }
+  if (capable.length > 1) {
+    return {
+      issue:
+        `provider selection for ${shapeId}@${shapeVersion} is ambiguous; ` +
+        `pin resource.provider or configure an operator provider policy`,
+    };
+  }
+  return { provider: capable[0] };
 }
 
 export function resolveResourcesV2(
@@ -110,15 +151,19 @@ export function resolveResourcesV2(
       continue;
     }
 
-    const lookup = lookupProvider(resource.provider);
-    const provider = lookup.provider;
+    const providerSelection = resource.provider
+      ? lookupProvider(resource.provider)
+      : selectProviderForShape(ref.id, ref.version, resource.requires);
+    const provider = providerSelection.provider;
     if (!provider) {
       issues.push({
         path: `${path}.provider`,
-        message: lookup.suggested
-          ? `provider id "${resource.provider}" is the legacy bare form ` +
-            `removed in Takosumi 0.12; rewrite as "${lookup.suggested}"`
-          : `provider not registered: ${resource.provider}`,
+        message: resource.provider
+          ? providerSelection.suggested
+            ? `provider id "${resource.provider}" is the legacy bare form ` +
+              `removed in Takosumi 0.12; rewrite as "${providerSelection.suggested}"`
+            : `provider not registered: ${resource.provider}`
+          : providerSelection.issue ?? "provider selection failed",
       });
       continue;
     }

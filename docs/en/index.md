@@ -63,7 +63,7 @@ See [Concepts (JA)](/getting-started/concepts) for details.
 
 - [Quickstart](/en/getting-started/quickstart) — from `takosumi server` to a
   cloud deploy in one command
-- [Manifest (Shape Model) (JA)](/manifest) — `resources[]` / `template:` /
+- [Manifest (Shape Model) (JA)](/manifest) — compiled `resources[]` manifest /
   `${ref:...}` / `${secret-ref:...}` syntax
 - [Shape Catalog (JA)](/reference/shapes) — spec / outputs / capabilities for
   all 5 shapes

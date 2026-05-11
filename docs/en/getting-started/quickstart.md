@@ -35,8 +35,29 @@ takosumi version
 Start with CLI local mode. It does not need a kernel server and its state is
 ephemeral, so it is best for authoring and smoke tests:
 
+Create `manifest.yml` as an explicit compiled Shape manifest. Kernel manifests
+use `resources[]` only; top-level `template` and `workflowRef` must be resolved
+before the kernel request.
+
+```yaml
+apiVersion: "1.0"
+kind: Manifest
+metadata:
+  name: hello-worker
+resources:
+  - shape: worker@v1
+    name: web
+    provider: "@takos/selfhost-systemd"
+    spec:
+      artifact:
+        kind: js-bundle
+        hash: sha256:0123456789abcdef
+      compatibilityDate: "2026-05-09"
+      routes:
+        - hello.local/*
+```
+
 ```bash
-takosumi init ./manifest.yml --template selfhosted-single-vm
 takosumi doctor --manifest ./manifest.yml
 takosumi deploy ./manifest.yml
 ```
@@ -66,8 +87,8 @@ credentials exported into the env reach the agent connectors directly.
 
 ## 3. Self-hosted deploy (single VM, Docker / systemd)
 
-The `selfhosted-single-vm@v1` template builds a one-box deployment on a VM using
-systemd / docker / filesystem / a local Postgres / coredns.
+A single-VM self-hosted deployment is still expressed as expanded `resources[]`
+before it reaches the kernel.
 
 `my-app.yml`:
 
@@ -76,13 +97,26 @@ apiVersion: "1.0"
 kind: Manifest
 metadata:
   name: my-app
-template:
-  ref: selfhosted-single-vm@v1
-  inputs:
-    serviceName: api
-    image: ghcr.io/me/api:v1.0.0
-    port: 8080
-    domain: api.example.com
+resources:
+  - shape: database-postgres@v1
+    name: db
+    provider: "@takos/selfhost-postgres"
+    spec:
+      version: "16"
+  - shape: web-service@v1
+    name: api
+    provider: "@takos/selfhost-docker-compose"
+    spec:
+      image: ghcr.io/me/api@sha256:0123456789abcdef
+      port: 8080
+      env:
+        DATABASE_URL: ${secret-ref:db.connectionString}
+  - shape: custom-domain@v1
+    name: api-domain
+    provider: "@takos/selfhost-coredns"
+    spec:
+      domain: api.example.com
+      target: ${ref:api.endpoint}
 ```
 
 Operator side (on the VM):
@@ -246,7 +280,6 @@ takosumi runtime-agent serve          # start standalone agent (multi-host)
                 [--token <token>]
                 [--env-file <path>]
 takosumi migrate                      # DB migrations
-takosumi init [<output>] [--template ...]  # manifest scaffold (stdout if no <output>)
 takosumi version
 ```
 
@@ -260,15 +293,15 @@ path.
 
 ## 7. Troubleshooting
 
-| Symptom                                                                                        | Cause                                                                                                                    |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `Refusing to start takosumi with plaintext secret storage`                                     | Production mode without `TAKOSUMI_ENCRYPTION_KEY` set                                                                    |
-| `Refusing to start takosumi against an unencrypted database`                                   | Production mode could not confirm DB at-rest encryption (dev can opt out via `TAKOSUMI_DEV_MODE=1`)                      |
-| `manifest.resources[] or manifest.template is required` / `manifest expands to zero resources` | No `template:`, or trying to apply only `resources: []`                                                                  |
-| 401 from `/v1/deployments`                                                                     | `TAKOSUMI_DEPLOY_TOKEN` unset or token mismatch                                                                          |
-| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`                                          | `takosumi server --no-agent` is in use but the external agent URL is not exported, or the embedded agent failed to start |
-| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`                            | The agent host is missing credentials for that cloud, so the connector is not registered                                 |
-| `runtime-agent /v1/lifecycle/apply failed: 401`                                                | `TAKOSUMI_AGENT_TOKEN` does not match between agent and kernel                                                           |
+| Symptom                                                                   | Cause                                                                                                                    |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `Refusing to start takosumi with plaintext secret storage`                | Production mode without `TAKOSUMI_ENCRYPTION_KEY` set                                                                    |
+| `Refusing to start takosumi against an unencrypted database`              | Production mode could not confirm DB at-rest encryption (dev can opt out via `TAKOSUMI_DEV_MODE=1`)                      |
+| `manifest.resources[] is required` / `manifest expands to zero resources` | No `resources[]`, or trying to apply only `resources: []`                                                                |
+| 401 from `/v1/deployments`                                                | `TAKOSUMI_DEPLOY_TOKEN` unset or token mismatch                                                                          |
+| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`                     | `takosumi server --no-agent` is in use but the external agent URL is not exported, or the embedded agent failed to start |
+| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`       | The agent host is missing credentials for that cloud, so the connector is not registered                                 |
+| `runtime-agent /v1/lifecycle/apply failed: 401`                           | `TAKOSUMI_AGENT_TOKEN` does not match between agent and kernel                                                           |
 
 ### Deprecated provider IDs
 

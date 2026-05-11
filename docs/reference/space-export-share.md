@@ -1,6 +1,7 @@
 # SpaceExportShare
 
-> Stability: stable Audience: operator, kernel-implementer, integrator See also:
+> Stability: reserved / future RFC Audience: operator, kernel-implementer,
+> integrator See also:
 > [Approval Invalidation Triggers](/reference/approval-invalidation),
 > [RevokeDebt Model](/reference/revoke-debt),
 > [Risk Taxonomy](/reference/risk-taxonomy),
@@ -9,13 +10,16 @@
 > [Kernel HTTP API](/reference/kernel-http-api),
 > [Closed Enums](/reference/closed-enums)
 
-SpaceExportShare は Takosumi v1 における **cross-Space link の唯一の
-許可された経路**です。default では Space 境界を越える link projection は denied
-で、SpaceExportShare が明示的に enroll されたパスのみ許可されます。 本 reference
-では share record schema、closed lifecycle、TTL refresh policy、 stale / revoked
-時の cleanup、RevokeDebt ownership、operator surface を 固定します。
+SpaceExportShare は reserved vocabulary です。current v1 の install / deploy
+contract は cross-Space link を要求せず、operator-owned namespace export にだけ
+依存できます。将来 RFC で有効化する場合、この reference の record schema、
+closed lifecycle、TTL refresh policy、stale / revoked 時の cleanup、RevokeDebt
+ownership、operator surface を acceptance gate として再検証します。
 
-## SpaceExportShare record
+## Candidate SpaceExportShare record
+
+The following schema is candidate future-RFC material, not current v1 storage or
+API contract.
 
 ```yaml
 SpaceExportShare:
@@ -103,9 +107,11 @@ successful refresh は `refresh-required → active` に戻し、`exportSnapshot
 
 ## Cross-space link denial が default
 
-cross-Space link projection は default で denied。
+Current v1 cross-Space link projection is denied and there is no active
+SpaceExportShare dependency. If a future RFC enables this vocabulary, the
+default must remain denied unless an accepted share exists.
 
-- importing Space の link declaration が exporting Space の export を
+- Future importing Space の link declaration が exporting Space の export を
   参照しても、対応する SpaceExportShare が `active` (または `refresh-required`)
   でなければ resolution は失敗する。
 - SpaceExportShare 経由で許される access mode は `allowedAccess` 集合に
@@ -191,7 +197,8 @@ share lifecycle に関連する audit event
 
 ## Invariants
 
-- cross-Space link projection は SpaceExportShare 経由でのみ許可される。
+- Current v1 では cross-Space link projection は常に denied。future RFC
+  で有効化する場合だけ SpaceExportShare 経由の許可を検討する。
 - lifecycle state は 5 値 closed。terminal は `revoked` のみ。
 - importing Space が RevokeDebt の owner、exporting Space は read-only mirror。
 - `refreshPolicy` は operator-controlled。kernel default なし。

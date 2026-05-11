@@ -246,11 +246,6 @@ export type CoreComponentBindingSource =
   | {
     providerOutput: string;
     field: string;
-  }
-  | {
-    import: string;
-    endpointRole: string;
-    field: string;
   };
 
 /** Authoring shape for an Output declaration. */
@@ -305,109 +300,6 @@ export interface CoreDescriptorClosure {
   resolutions: readonly CoreDescriptorResolution[];
   dependencies?: readonly CoreDescriptorDependency[];
   createdAt: IsoTimestamp;
-}
-
-// ---------------------------------------------------------------------------
-// 6.5 Cross-instance service descriptors
-// ---------------------------------------------------------------------------
-
-export type ServiceIdentifier = string;
-export type ServiceName = string;
-export type ServiceVersion = string;
-
-const SERVICE_NAME_PATTERN =
-  /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
-const SERVICE_VERSION_PATTERN = /^v\d+(?:-[a-z][a-z0-9-]*)?$/;
-const SERVICE_IDENTIFIER_PATTERN =
-  /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*@v\d+(?:-[a-z][a-z0-9-]*)?$/;
-
-export interface ParsedServiceIdentifier {
-  id: ServiceName;
-  version: ServiceVersion;
-}
-
-export function parseServiceIdentifier(
-  value: string,
-): ParsedServiceIdentifier | undefined {
-  if (!SERVICE_IDENTIFIER_PATTERN.test(value)) return undefined;
-  const at = value.lastIndexOf("@");
-  return {
-    id: value.slice(0, at),
-    version: value.slice(at + 1),
-  };
-}
-
-export function isServiceIdentifier(
-  value: unknown,
-): value is ServiceIdentifier {
-  return typeof value === "string" &&
-    parseServiceIdentifier(value) !== undefined;
-}
-
-export function assertServiceIdentifier(
-  value: string,
-): asserts value is ServiceIdentifier {
-  if (!isServiceIdentifier(value)) {
-    throw new TypeError(`Invalid service identifier: ${value}`);
-  }
-}
-
-export interface EndpointRoleResolved {
-  role: string;
-  url: string;
-  path: string;
-}
-
-export interface ServiceDescriptor {
-  id: ServiceName;
-  version: ServiceVersion;
-  contract: ServiceIdentifier;
-  endpoints: readonly EndpointRoleResolved[];
-  metadata: JsonObject;
-  signature: string;
-  publishedAt: IsoTimestamp;
-  expiresAt: IsoTimestamp;
-  providerInstance: string;
-}
-
-export function assertServiceDescriptorContract(
-  descriptor: ServiceDescriptor,
-): void {
-  if (!SERVICE_NAME_PATTERN.test(descriptor.id)) {
-    throw new TypeError(`Invalid service descriptor id: ${descriptor.id}`);
-  }
-  if (!SERVICE_VERSION_PATTERN.test(descriptor.version)) {
-    throw new TypeError(
-      `Invalid service descriptor version: ${descriptor.version}`,
-    );
-  }
-  assertServiceIdentifier(descriptor.contract);
-  if (descriptor.contract !== `${descriptor.id}@${descriptor.version}`) {
-    throw new TypeError("ServiceDescriptor contract must equal <id>@<version>");
-  }
-}
-
-export type CrossInstanceRefreshPolicy =
-  | { kind: "ttl"; ttl: string }
-  | { kind: "event-driven"; triggers?: readonly JsonObject[] };
-
-export interface CrossInstanceShareAuditEvent {
-  at: IsoTimestamp;
-  kind: "resolved" | "verified" | "rejected" | "revoked" | "refreshed";
-  detail: JsonObject;
-  prevHash?: Digest;
-  hash: Digest;
-}
-
-export interface CrossInstanceShare {
-  id: string;
-  serviceId: ServiceIdentifier;
-  toDeploymentId: string;
-  resolvedDescriptor: ServiceDescriptor;
-  resolvedAt: IsoTimestamp;
-  refreshPolicy: CrossInstanceRefreshPolicy;
-  revokedAt?: IsoTimestamp;
-  auditTrail: readonly CrossInstanceShareAuditEvent[];
 }
 
 // ---------------------------------------------------------------------------
@@ -542,8 +434,7 @@ export type DeploymentBindingSource =
   | "resource"
   | "output"
   | "secret"
-  | "provider-output"
-  | "service-import";
+  | "provider-output";
 
 export type DeploymentBindingResolutionPolicy =
   | "latest-at-activation"
@@ -935,13 +826,6 @@ export type CoreBindingSourceRef =
   | {
     kind: "provider-output";
     materialization: ObjectAddress;
-    field: string;
-  }
-  | {
-    kind: "service-import";
-    importAlias: string;
-    service: ServiceIdentifier;
-    endpointRole: string;
     field: string;
   };
 

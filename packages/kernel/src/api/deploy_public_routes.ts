@@ -1,7 +1,6 @@
 import type { Hono as HonoApp } from "hono";
 import type {
   JsonObject,
-  JsonValue,
   ManifestResource,
   PlatformContext,
   PlatformOperationRecoveryMode,
@@ -24,11 +23,6 @@ import {
   readDeploymentNameV1,
   resolveManifestResourcesV1,
 } from "../domains/deploy/manifest_v1.ts";
-import {
-  type ResolvedServiceImport,
-  resolveManifestServiceImports,
-  type ServiceImportResolution,
-} from "../domains/deploy/service_import_resolver.ts";
 import { buildOperationPlanPreview } from "../domains/deploy/operation_plan_preview.ts";
 import {
   appendOperationPlanJournalStages,
@@ -227,17 +221,6 @@ export interface RegisterDeployPublicRoutesOptions {
     trace?: PlatformTraceContext,
   ) => Promise<DestroyV2Outcome>;
   /**
-   * Resolves manifest `imports[]` through `serviceResolvers[]`. Defaults to
-   * the anchor-backed resolver; tests can inject a deterministic resolver.
-   */
-  readonly resolveServiceImports?: (
-    manifest: JsonObject,
-    options: {
-      readonly now: () => string;
-      readonly deploymentId: string;
-    },
-  ) => Promise<ServiceImportResolution>;
-  /**
    * Real `AppContext` from which the public deploy route derives the
    * `PlatformContext` passed to `applyV2`. The kernel boots the AppContext
    * once at startup with DB-backed secrets / KMS / observability / object
@@ -401,10 +384,6 @@ export function registerDeployPublicRoutes(
         ...(operationPlanPreview ? { operationPlanPreview } : {}),
         ...(recoveryMode ? { recoveryMode } : {}),
       }));
-  const resolveServiceImports = options.resolveServiceImports ??
-    ((manifest, resolverOptions) =>
-      resolveManifestServiceImports(manifest, resolverOptions));
-
   const executeDeployPublicPost = async (
     body: Record<string, unknown>,
     requestCorrelation?: RequestCorrelation,
@@ -447,39 +426,10 @@ export function registerDeployPublicRoutes(
       manifestObject,
       resources.value,
     );
-    const serviceImports = await resolveServiceImports(manifestObject, {
-      now,
-      deploymentId: `${tenantId}/${deploymentName}`,
-    });
-    if (!serviceImports.ok) {
-      return {
-        status: 400,
-        body: apiError("invalid_argument", serviceImports.error),
-      };
-    }
-    const serviceImportDetail = serviceImportJournalDetail(
-      serviceImports.value,
-    );
-    const persistedManifest = attachServiceImportPinsToManifest(
-      manifestObject,
-      serviceImports.value,
-    );
-    const materializedResources = materializeServiceImportReferences(
+    const persistedManifest = manifestObject;
+    const deployResources = attachProvenanceToResources(
       resources.value,
-      serviceImports.value,
-    );
-    if (!materializedResources.ok) {
-      return {
-        status: 400,
-        body: apiError("invalid_argument", materializedResources.error),
-      };
-    }
-    const deployResources = attachServiceImportPinsToResources(
-      attachProvenanceToResources(
-        materializedResources.value,
-        provenance.value,
-      ),
-      serviceImports.value,
+      provenance.value,
     );
     const trace = deployTraceFromRequest(requestTrace, requestCorrelation);
     const metricTimer = startDeployMetricTimer();
@@ -581,7 +531,7 @@ export function registerDeployPublicRoutes(
           stages: ["prepare"],
           status: "recorded",
           createdAt: journalStartedAt,
-          detail: journalDetail(serviceImportDetail, provenance.value),
+          detail: journalDetail(undefined, provenance.value),
         });
         const prior = await recordStore.get(tenantId, deploymentName);
         const force = body.force === true;
@@ -626,7 +576,7 @@ export function registerDeployPublicRoutes(
           const outcome: DestroyV2Outcome = {
             destroyed: deployResources.map((resource) => ({
               name: resource.name,
-              providerId: resource.provider,
+              providerId: providerIdForIntentPreview(resource),
               handle: resource.name,
             })),
             errors: [],
@@ -831,7 +781,7 @@ export function registerDeployPublicRoutes(
         stages: ["prepare"],
         status: "recorded",
         createdAt: now(),
-        detail: journalDetail(serviceImportDetail, provenance.value),
+        detail: journalDetail(undefined, provenance.value),
       });
       const preCommitHook = await invokeCatalogReleaseWalHook({
         verifier: catalogReleaseVerifier,
@@ -1284,246 +1234,6 @@ function attachProvenanceToResources(
   }));
 }
 
-function attachServiceImportPinsToResources(
-  resources: readonly ManifestResource[],
-  imports: readonly ResolvedServiceImport[],
-): readonly ManifestResource[] {
-  if (imports.length === 0) return resources;
-  const pins = serviceImportPins(imports);
-  return resources.map((resource) => ({
-    ...resource,
-    metadata: {
-      ...(resource.metadata ?? {}),
-      takosumiServiceImports: {
-        kind: "takosumi.service-import-pins@v1",
-        pins,
-      },
-    },
-  }));
-}
-
-function attachServiceImportPinsToManifest(
-  manifest: JsonObject,
-  imports: readonly ResolvedServiceImport[],
-): JsonObject {
-  if (imports.length === 0) return manifest;
-  const metadata = isJsonObject(manifest.metadata) ? manifest.metadata : {};
-  return {
-    ...manifest,
-    metadata: {
-      ...metadata,
-      takosumiServiceImports: {
-        kind: "takosumi.service-import-pins@v1",
-        pins: serviceImportPins(imports),
-      },
-    },
-  };
-}
-
-function serviceImportJournalDetail(
-  imports: readonly ResolvedServiceImport[],
-): JsonObject | undefined {
-  if (imports.length === 0) return undefined;
-  return {
-    serviceImports: {
-      kind: "takosumi.service-import-resolution@v1",
-      pins: imports.map((entry) => ({
-        ...serviceImportPin(entry),
-        resolvedDescriptor: entry.descriptor as unknown as JsonObject,
-        shareId: entry.share.id,
-        resolvedAt: entry.share.resolvedAt,
-        auditTrail: entry.share.auditTrail.map((audit) => ({
-          kind: audit.kind,
-          hash: audit.hash,
-          ...(audit.prevHash ? { prevHash: audit.prevHash } : {}),
-        })),
-      })),
-    },
-  };
-}
-
-function serviceImportPins(
-  imports: readonly ResolvedServiceImport[],
-): JsonObject[] {
-  return imports.map(serviceImportPin);
-}
-
-function serviceImportPin(entry: ResolvedServiceImport): JsonObject {
-  return {
-    alias: entry.alias,
-    serviceId: entry.serviceId,
-    descriptorDigest: entry.descriptorDigest,
-    resolverUrl: entry.resolverUrl,
-    providerInstance: entry.descriptor.providerInstance,
-    expiresAt: entry.descriptor.expiresAt,
-  };
-}
-
-type ServiceImportMaterializationResult =
-  | { readonly ok: true; readonly value: readonly ManifestResource[] }
-  | { readonly ok: false; readonly error: string };
-
-function materializeServiceImportReferences(
-  resources: readonly ManifestResource[],
-  imports: readonly ResolvedServiceImport[],
-): ServiceImportMaterializationResult {
-  if (imports.length === 0) return { ok: true, value: resources };
-  const importsByAlias = new Map(imports.map((entry) => [entry.alias, entry]));
-  const materialized: ManifestResource[] = [];
-  for (const resource of resources) {
-    const spec = materializeServiceImportValue(
-      resource.spec,
-      importsByAlias,
-      `resources.${resource.name}.spec`,
-    );
-    if (!spec.ok) return spec;
-    materialized.push({ ...resource, spec: spec.value });
-  }
-  return { ok: true, value: materialized };
-}
-
-type MaterializedJsonValueResult =
-  | { readonly ok: true; readonly value: JsonValue }
-  | { readonly ok: false; readonly error: string };
-
-function materializeServiceImportValue(
-  value: JsonValue,
-  importsByAlias: ReadonlyMap<string, ResolvedServiceImport>,
-  path: string,
-): MaterializedJsonValueResult {
-  if (typeof value === "string") {
-    return materializeServiceImportString(value, importsByAlias, path);
-  }
-  if (Array.isArray(value)) {
-    const next: JsonValue[] = [];
-    for (const [index, item] of value.entries()) {
-      const materialized = materializeServiceImportValue(
-        item,
-        importsByAlias,
-        `${path}[${index}]`,
-      );
-      if (!materialized.ok) return materialized;
-      next.push(materialized.value);
-    }
-    return { ok: true, value: next };
-  }
-  if (isJsonObject(value)) {
-    const next: JsonObject = {};
-    for (const [key, item] of Object.entries(value)) {
-      const materialized = materializeServiceImportValue(
-        item as JsonValue,
-        importsByAlias,
-        `${path}.${key}`,
-      );
-      if (!materialized.ok) return materialized;
-      next[key] = materialized.value;
-    }
-    return { ok: true, value: next };
-  }
-  return { ok: true, value };
-}
-
-const serviceImportEndpointRefPattern =
-  /^\$\{imports\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.endpoints\.([a-z][a-z0-9-]*)\.(url|path)\}$/;
-const serviceImportMetadataRefPattern =
-  /^\$\{imports\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.metadata\.([A-Za-z0-9_.-]+)\}$/;
-const serviceImportServiceIdRefPattern =
-  /^\$\{imports\.([a-z]([a-z0-9-]{0,30}[a-z0-9])?)\.serviceId\}$/;
-
-function materializeServiceImportString(
-  value: string,
-  importsByAlias: ReadonlyMap<string, ResolvedServiceImport>,
-  path: string,
-): MaterializedJsonValueResult {
-  if (value.includes("${bindings.")) {
-    return {
-      ok: false,
-      error: `${path} contains unsupported \${bindings.*} placeholder; ` +
-        "AppBinding placeholders must be compiled before kernel apply, and " +
-        "service imports must use `${imports.<alias>...}`",
-    };
-  }
-  if (!value.includes("${imports.")) {
-    return { ok: true, value };
-  }
-  const endpointMatch = value.match(serviceImportEndpointRefPattern);
-  if (endpointMatch) {
-    const [, alias, , endpointRole, field] = endpointMatch;
-    const entry = importsByAlias.get(alias);
-    if (!entry) {
-      return {
-        ok: false,
-        error: `${path} references unknown service import '${alias}'`,
-      };
-    }
-    const endpoint = entry.descriptor.endpoints.find((candidate) =>
-      candidate.role === endpointRole
-    );
-    if (!endpoint) {
-      return {
-        ok: false,
-        error:
-          `${path} references missing endpoint role '${endpointRole}' on service import '${alias}'`,
-      };
-    }
-    return { ok: true, value: field === "path" ? endpoint.path : endpoint.url };
-  }
-  const metadataMatch = value.match(serviceImportMetadataRefPattern);
-  if (metadataMatch) {
-    const [, alias, , keyPath] = metadataMatch;
-    const entry = importsByAlias.get(alias);
-    if (!entry) {
-      return {
-        ok: false,
-        error: `${path} references unknown service import '${alias}'`,
-      };
-    }
-    const metadataValue = readJsonPath(entry.descriptor.metadata, keyPath);
-    if (metadataValue === undefined) {
-      return {
-        ok: false,
-        error:
-          `${path} references missing metadata '${keyPath}' on service import '${alias}'`,
-      };
-    }
-    return { ok: true, value: metadataValue };
-  }
-  const serviceIdMatch = value.match(serviceImportServiceIdRefPattern);
-  if (serviceIdMatch) {
-    const [, alias] = serviceIdMatch;
-    const entry = importsByAlias.get(alias);
-    if (!entry) {
-      return {
-        ok: false,
-        error: `${path} references unknown service import '${alias}'`,
-      };
-    }
-    return { ok: true, value: entry.serviceId };
-  }
-  return {
-    ok: false,
-    error:
-      `${path} contains an invalid service import placeholder; use a standalone ` +
-      "`${imports.<alias>.endpoints.<role>.url}`, " +
-      "`${imports.<alias>.endpoints.<role>.path}`, " +
-      "`${imports.<alias>.metadata.<key>}`, or " +
-      "`${imports.<alias>.serviceId}` reference",
-  };
-}
-
-function readJsonPath(
-  value: JsonObject,
-  keyPath: string,
-): JsonValue | undefined {
-  let current: JsonValue | undefined = value;
-  for (const segment of keyPath.split(".")) {
-    if (!segment) return undefined;
-    if (!isJsonObject(current)) return undefined;
-    current = current[segment] as JsonValue | undefined;
-  }
-  return current;
-}
-
 function checkBearer(
   header: string | undefined,
   expected: string | undefined,
@@ -1615,7 +1325,7 @@ function withOperationPlanPreview(input: {
       ? [{
         name: resource.name,
         shape: resource.shape,
-        providerId: resource.provider,
+        providerId: providerIdForIntentPreview(resource),
         op: "create" as const,
       }]
       : [];
@@ -2259,7 +1969,7 @@ function buildPublicOperationPlanPreview(input: {
     const planned = input.resources.map((resource) => ({
       name: resource.name,
       shape: resource.shape,
-      providerId: resource.provider,
+      providerId: providerIdForIntentPreview(resource),
       op: input.op,
     }));
     return buildOperationPlanPreview({
@@ -2282,7 +1992,7 @@ function buildPublicOperationPlanPreview(input: {
       ? [{
         name: resource.name,
         shape: resource.shape,
-        providerId: resource.provider,
+        providerId: providerIdForIntentPreview(resource),
         op: input.op,
       }]
       : [];
@@ -2294,6 +2004,10 @@ function buildPublicOperationPlanPreview(input: {
     spaceId: input.tenantId,
     deploymentName: input.deploymentName,
   });
+}
+
+function providerIdForIntentPreview(resource: ManifestResource): string {
+  return resource.provider ?? "(auto)";
 }
 
 interface DeploymentResourceSummary {

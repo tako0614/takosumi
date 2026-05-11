@@ -33,7 +33,7 @@ which CatalogRelease ids are allowed
 which policy pack applies
 which namespace exports are visible
 which operator namespaces are granted
-which external participants can register exports
+which operator-owned namespace exports are visible (external participants are reserved / future RFC)
 which secrets and artifacts are visible
 which groups exist or may be created
 ```
@@ -74,7 +74,8 @@ release id allowed for their Space.
 
 ## Space export sharing
 
-Cross-space export sharing is an operator operation. It must record source
-Space, destination Space, export path, export snapshot id, allowed access,
-expiry if any, and policy decision references. Cross-space sharing is denied by
-default.
+Cross-space export sharing is reserved vocabulary, not a current v1 default
+surface. If a future RFC enables it, it must be an operator operation and record
+source Space, destination Space, export path, export snapshot id, allowed
+access, expiry if any, and policy decision references. Cross-space sharing is
+denied by default, and cross-instance sharing is not adopted.

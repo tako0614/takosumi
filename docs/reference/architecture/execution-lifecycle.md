@@ -26,9 +26,9 @@ The phase walks the WAL stages defined in the
 prepare      load immutable ResolutionSnapshot and DesiredSnapshot;
              derive OperationPlan from current ObservationSet
 pre-commit   revalidate Space membership, catalog release availability,
-             export freshness, approvals (including the predicted
-             effect digest), SpaceExportShare state, and data asset
-             availability; raise Risks; fail closed on any invalidation
+	             export freshness, approvals (including the predicted
+	             effect digest), data asset
+	             availability; raise Risks; fail closed on any invalidation
 commit       record operation intent and execute operations through
              implementations; append generated object handles
 post-commit  append actual effects; compensate or queue RevokeDebt on

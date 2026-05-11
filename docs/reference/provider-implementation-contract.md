@@ -86,7 +86,7 @@ Runtime-agent-backed providers forward it as `LifecycleApplyRequest` /
 `LifecycleDestroyRequest.idempotencyKey`, `operationRequest`, and
 `metadata.takosumiOperation`. `LifecycleCompensateRequest` is also exposed for
 connector-native reverse effects, with runtime-agent fallback to handle-keyed
-`destroy` when a connector does not implement a dedicated hook. The v1
+`destroy` when a connector does not implement a dedicated operation. The v1
 `operationRequest` projection carries the WAL coordinates, idempotency key,
 recovery mode, expected external request token, and current `walStage`; fields
 that are not yet derived by the public route, such as non-empty

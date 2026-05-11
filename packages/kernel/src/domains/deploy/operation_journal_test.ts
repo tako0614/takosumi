@@ -7,12 +7,12 @@ import {
   OperationJournalReplayMismatchError,
 } from "./operation_journal.ts";
 
-const RESOURCE: ManifestResource = {
+const RESOURCE = {
   shape: "object-store@v1",
   name: "logs",
   provider: "@takos/selfhost-filesystem",
   spec: { name: "logs" },
-};
+} satisfies ManifestResource;
 
 Deno.test("operation journal appends public plan stages idempotently", async () => {
   let ids = 0;

@@ -974,47 +974,11 @@ Deno.test("public manifest compiler accepts component bindings authoring", () =>
   assert.equal(binding!.inject.target, "TAKOSUMI_API_KEY");
 });
 
-Deno.test("public manifest compiler accepts service import bindings authoring", () => {
-  const manifest: PublicDeployManifest = {
-    name: "service-import-binding",
-    version: "1.0.0",
-    compute: {
-      web: {
-        image: WORKER_IMAGE,
-        port: 8080,
-        bindings: {
-          OIDC_ISSUER_URL: {
-            from: {
-              import: "account-auth",
-              endpointRole: "oidc-issuer",
-              field: "url",
-            },
-            inject: { mode: "env", target: "OIDC_ISSUER_URL" },
-          },
-        },
-      },
-    },
-  };
-
-  const appSpec = compileManifestToAppSpec(manifest);
-  const web = appSpec.components.find((component) => component.name === "web");
-  assert.ok(web, "web component must exist after expansion");
-  const binding = web?.bindings.OIDC_ISSUER_URL;
-  assert.ok(binding);
-  assert.equal((binding!.from as { import: string }).import, "account-auth");
-  assert.equal(
-    (binding!.from as { endpointRole: string }).endpointRole,
-    "oidc-issuer",
-  );
-  assert.equal((binding!.from as { field: string }).field, "url");
-  assert.equal(binding!.inject.target, "OIDC_ISSUER_URL");
-});
-
-Deno.test("public manifest compiler rejects malformed service import bindings", () => {
+Deno.test("public manifest compiler rejects removed service import bindings", () => {
   assert.throws(
     () =>
       compileManifestToAppSpec({
-        name: "bad-service-import-binding",
+        name: "removed-service-import-binding",
         compute: {
           web: {
             image: WORKER_IMAGE,
@@ -1031,6 +995,6 @@ Deno.test("public manifest compiler rejects malformed service import bindings", 
           },
         },
       } as unknown as PublicDeployManifest),
-    /compute\.web\.bindings\.OIDC_ISSUER_URL\.from\.endpointRole must be a non-empty string/,
+    /compute\.web\.bindings\.OIDC_ISSUER_URL\.from must not include 'import'/,
   );
 });

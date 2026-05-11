@@ -1,14 +1,15 @@
 # Manifest Model
 
-The manifest is a closed authoring surface. It declares desired portable
-resources and template invocations; it is not canonical state. Space, tenant,
-actor, catalog release, policy, quota, credentials, approvals, journal state,
-observations, and GroupHead are supplied by deploy context, not by the manifest.
+The manifest is a closed deploy surface. It declares desired portable resources;
+it is not canonical state. Space, tenant, actor, catalog release, policy, quota,
+credentials, approvals, journal state, observations, and GroupHead are supplied
+by deploy context, not by the manifest.
 
-Public v1 is the **Shape + Provider + Template** manifest model implemented by
-`POST /v1/deployments` and `takosumi deploy`. The old
-`schemaVersion/profile/components/expose` authoring shape is not a current
-public manifest schema.
+Public v1 is the **Shape + Provider** manifest model implemented by
+`POST /v1/deployments` and `takosumi deploy`. The retired top-level `template`
+authoring shorthand belongs to installer/compiler compatibility, not the current
+kernel public contract. The old `schemaVersion/profile/components/expose`
+authoring shape is not a current public manifest schema.
 
 ## Allowed Public Fields
 
@@ -18,7 +19,6 @@ Root fields:
 apiVersion
 kind
 metadata
-template
 resources
 ```
 
@@ -32,18 +32,6 @@ warnings.
 name
 labels
 ```
-
-`template` fields:
-
-```text
-template
-inputs
-```
-
-`template.template` is a pinned `id@version` template reference. During the v1
-compatibility window the resolver may accept legacy `template.ref`, and CLI
-local mode may accept `template.name`; new manifests and docs must use
-`template.template`.
 
 `resources[]` entry fields:
 
@@ -115,29 +103,10 @@ Rules:
 
 ## Templates
 
-Templates are authoring macros that expand into concrete `resources[]` before
-reference resolution and planning.
-
-```yaml
-apiVersion: "1.0"
-kind: Manifest
-metadata:
-  name: my-app
-template:
-  template: selfhosted-single-vm@v1
-  inputs:
-    serviceName: api
-    image: ghcr.io/example/api@sha256:...
-    port: 8080
-```
-
-`template` and `resources[]` may be used together. Expansion runs first, then
-explicit `resources[]` are appended. The combined resource list is what enters
-reference resolution, plan construction, idempotency assignment, and apply /
-destroy. Current public deploy records idempotency in the public deploy replay
-store; `mode: "plan"` also returns the deterministic WAL tuple preview that the
-internal OperationPlan path will use as execution authority once the public
-route adopts it end to end.
+Top-level `template` is not a current kernel manifest field. Historical clients
+used templates as authoring macros, but current deploy callers must submit the
+expanded `resources[]` form. If an operator keeps a template/compiler layer, it
+must run before `POST /v1/deployments`.
 
 ## References
 
@@ -178,9 +147,6 @@ artifact records before a remote kernel can apply them.
 metadata.name:
   Deployment record name inside the deploy context's Space
 
-template:
-  Template invocation expanded into resources before planning
-
 resources[].shape:
   Portable Shape contract intent
 
@@ -211,7 +177,7 @@ supports side-effect-free `inspect`, guarded same-digest `continue`, and
 compensate is exposed in the runtime-agent protocol with destroy fallback, while
 CatalogRelease adoption / signature verification is implemented in the registry
 domain. Public apply / destroy WAL invokes the adopted release as a fail-closed
-pre/post-commit verification hook; richer catalog-declared executable hook
-packages are treated as an extension point. RevokeDebt retry attempt,
-policy-controlled aging, manual reopen, clearance, connector-backed cleanup, and
-worker daemon scheduling are implemented as lifecycle primitives.
+pre/post-commit verification step. Catalog-declared executable hook packages are
+not current kernel contract. RevokeDebt retry attempt, policy-controlled aging,
+manual reopen, clearance, connector-backed cleanup, and worker daemon scheduling
+are implemented as lifecycle primitives.

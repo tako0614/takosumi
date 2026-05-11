@@ -11,18 +11,19 @@ docs.
 
 ## PaaS deployment topology
 
-Three deployment topologies are recognized. Only the first is in v1 scope.
+One deployment topology is in v1 scope. The other rows are rejected concepts,
+kept here only to prevent accidental scope expansion.
 
 ```text
 single-operator       one operator runs one Takosumi kernel and hosts N Spaces
-multi-operator        multiple operators share infrastructure but keep separate kernels
-federation            kernels exchange catalog releases or shares across operator trust domains
+multi-operator        not adopted; separate operators run separate installations
+platform federation   not adopted; kernels do not exchange catalog releases or shares
 ```
 
 Takosumi v1 targets **single-operator + multi-Space tenant model**.
-Multi-operator and federation are not supported by v1 contracts; they are
-intentionally left for future revisions and must not be assumed by v1
-architecture decisions.
+Multi-operator sharing and platform federation are not Takosumi platform
+features and must not be assumed by architecture decisions. App-level
+federation, if any, belongs to apps outside the platform layer.
 
 ## Multi-tenant boundary
 
@@ -59,9 +60,10 @@ debt             RevokeDebt ownership is Space-scoped per the import side rule
 activation       ActivationSnapshot and GroupHead are Space-local
 ```
 
-Cross-space surfaces are denied by default. Crossing a Space boundary requires
-an explicit `SpaceExportShare` or operator-approved namespace import. See
-[Space Model](./space-model.md).
+Cross-space surfaces are denied by default. Cross-space export/share vocabulary
+is reserved for a future RFC and is not a current v1 dependency. Current v1
+architecture may depend only on operator-owned namespace exports granted to the
+Space.
 
 ## Billing readiness surfaces
 
@@ -119,7 +121,7 @@ Surface inventory:
 | --------------------------- | -------- | ------------ | ---------------- |
 | Space CRUD                  | yes      | yes          | yes              |
 | Catalog release assignment  | yes      | yes          | yes              |
-| SpaceExportShare lifecycle  | yes      | yes          | yes              |
+| SpaceExportShare lifecycle  | future   | future       | future           |
 | Approval issue / revoke     | optional | yes          | yes              |
 | RevokeDebt resolution       | yes      | yes          | yes              |
 | Runtime-agent enrollment    | yes      | yes          | optional         |
@@ -159,7 +161,7 @@ recovery-critical (must be backed up)
   Approval and PolicyDecision
   RevokeDebt
   ActivationSnapshot history
-  SpaceExportShare records
+  SpaceExportShare records (future RFC only)
   secret-store partition references (not values)
 
 regenerable (must not be relied on as authority)

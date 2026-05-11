@@ -50,11 +50,11 @@ activation and Space assignment are serialized operator operations. The registry
 domain now implements the primitive pieces for this boundary: publisher key
 enrollment/revocation, Ed25519 signature verification of the canonical
 descriptor payload, signed descriptor persistence, and append-only per-Space
-adoption records. Public OperationPlan WAL now invokes the adopted release as a
-pre/post-commit verification hook: pre-commit verification fails closed before
-provider side effects, and post-commit verification failure is journaled with
-RevokeDebt for committed effects. Rich catalog-declared executable hook packages
-are modeled as an extension point on top of this verification hook boundary.
+adoption records. Public OperationPlan WAL invokes CatalogRelease
+re-verification during pre/post-commit: pre-commit verification fails closed
+before provider side effects, and post-commit verification failure is journaled
+with RevokeDebt for committed effects. Catalog-declared executable hook packages
+are not current kernel contract.
 
 ## Space assignment
 

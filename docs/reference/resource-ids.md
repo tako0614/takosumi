@@ -79,9 +79,9 @@ kind is rejected.
 | `activation`           | ULID                                     | Kernel-generated on activate.                                     |
 | `revoke-debt`          | ULID                                     | Kernel-generated when the entry is enqueued.                      |
 | `approval`             | ULID                                     | Kernel-generated on approval.                                     |
-| `share`                | ULID                                     | Kernel-generated for SpaceExportShare.                            |
+| `share`                | ULID                                     | Reserved / future RFC for SpaceExportShare.                       |
 | `connector`            | kebab-case id                            | Operator-installed.                                               |
-| `external-participant` | kebab-case id                            | Operator-controlled.                                              |
+| `external-participant` | kebab-case id                            | Reserved / future RFC.                                            |
 | `export-snapshot`      | sha256 hex                               | Content-addressed over the export contents.                       |
 | `catalog-release`      | sha256 hex or operator-tagged kebab-case | Content-addressed by default; operator may pin a tag.             |
 | `policy`               | sha256 hex                               | Content-addressed over the policy bundle.                         |
@@ -124,23 +124,18 @@ closure rule from the section above applies: each addition is bound to a fixed
 suffix grammar and a fixed source-of-suffix; new kinds beyond this list still
 require a `CONVENTIONS.md` §6 RFC.
 
-### Identity additions
+### Account-plane additions
 
-| Kind              | Suffix grammar             | Source of suffix                                                                               | Reference                                                         |
-| ----------------- | -------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `actor`           | kebab-case name or UUID v4 | Operator-controlled human or service-account name; UUID v4 when minted by an enrollment flow.  | [Actor / Organization Model](/reference/actor-organization-model) |
-| `organization`    | kebab-case name            | Operator-controlled at organization create.                                                    | [Actor / Organization Model](/reference/actor-organization-model) |
-| `membership`      | ULID                       | Kernel-generated on Membership create.                                                         | [Actor / Organization Model](/reference/actor-organization-model) |
-| `role-assignment` | ULID                       | Kernel-generated on RoleAssignment create.                                                     | [RBAC Policy](/reference/rbac-policy)                             |
-| `api-key`         | ULID                       | Kernel-generated on issue. The plaintext token is independent and is never embedded in the ID. | [API Key Management](/reference/api-key-management)               |
-| `auth-provider`   | kebab-case name            | Operator-controlled at auth provider register.                                                 | [Auth Providers](/reference/auth-providers)                       |
+`actor`, `organization`, `membership`, `role-assignment`, account `api-key`, and
+`auth-provider` identifiers are Takosumi Accounts identifiers, not takosumi
+kernel resource IDs. They are documented in `takosumi-cloud/` and may appear in
+cross-product audit evidence as opaque strings only.
 
-`actor:` admits a sub-kind discriminator for support-staff Actors: the form
-`actor:support-staff/<id>` is the only sub-kind shape in v1 (see
-[Support Impersonation](/reference/support-impersonation)). Other Actor types
-use the bare `actor:<name>` or `actor:<uuid>` form. The suffix may not contain a
-`:`; the `/` separates the Actor sub-kind discriminator and is the only `/`
-permitted in an Actor ID.
+`actor:` previously admitted a sub-kind discriminator for support-staff Actors:
+the form `actor:support-staff/<id>` is retained only as legacy vocabulary. Other
+Actor types use the bare `actor:<name>` or `actor:<uuid>` form. The suffix may
+not contain a `:`; the `/` separates the Actor sub-kind discriminator and is the
+only `/` permitted in an Actor ID.
 
 ### PaaS operations additions
 
@@ -190,13 +185,11 @@ sla-observation:01HM9N7XK4QY8RT2P5JZF6V3WK
 
 The addition kinds slot into the stability rules from the section below.
 
-- **Operator-controlled names (immutable, no rename)**: `organization:`,
-  `auth-provider:`, `tier:`. Operator-named `actor:` IDs follow the same rule;
-  UUID-form `actor:` IDs are treated as kernel-minted.
-- **Kernel-minted ULIDs (immutable once issued)**: `membership:`,
-  `role-assignment:`, `api-key:`, `incident:`, `support-grant:`,
-  `support-session:`, `notification-signal:`, `provisioning-session:`,
-  `export-job:`, `sla-threshold:`, `sla-observation:`.
+- **Operator-controlled names (immutable, no rename)**: `tier:` and provider /
+  runtime identifiers. Account-plane identifiers are owned by Takosumi Accounts.
+- **Kernel-minted ULIDs (immutable once issued)**: `incident:`,
+  `support-grant:`, `support-session:`, `notification-signal:`,
+  `provisioning-session:`, `export-job:`, `sla-threshold:`, `sla-observation:`.
 
 The addition table does not introduce content-addressed kinds; SHA suffixes are
 reserved for the kinds enumerated in the original section.
@@ -264,8 +257,8 @@ IDs are surfaced in two equivalent forms.
 - **Canonical**: `<kind>:<suffix>` as a single string. This is the form
   persisted in storage, embedded in JSON, and emitted by the audit log.
 - **Tuple form**: `(space:<name>, <kind>:<suffix>)` when the ID's Space context
-  matters. The kernel emits tuple form in cross-Space references and in CLI
-  output that aggregates across Spaces.
+  matters. The kernel emits tuple form in CLI output that aggregates across
+  Spaces. Cross-Space reference use is reserved / future RFC.
 
 Human-readable display in CLI output uses the **path form**:
 
@@ -277,18 +270,19 @@ Path form joins the Space ID and the resource ID with a single `/`. Path form is
 informational only; the canonical form is the source of truth at the kernel
 boundary.
 
-## Cross-Space references
+## Future Cross-Space references
 
-When a resource in Space A references a resource in Space B (e.g. through a
-`SpaceExportShare`), the kernel uses tuple form:
+Current v1 rejects cross-Space resource references. If a future RFC enables a
+resource in Space A to reference a resource in Space B (for example through a
+`SpaceExportShare`), the kernel should use tuple form:
 
 ```text
 (space:b-prod, object:shared-config)
 ```
 
-Tuple form is required at every cross-Space surface: snapshot fields, audit
-events, and approval bindings. Bare `<kind>:<suffix>` IDs are implicitly
-Space-local and refer to the active Space context.
+Tuple form would be required at every future cross-Space surface: snapshot
+fields, audit events, and approval bindings. Bare `<kind>:<suffix>` IDs are
+implicitly Space-local and refer to the active Space context.
 
 ## ID stability rules
 

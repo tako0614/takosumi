@@ -90,8 +90,8 @@ by policy.
 
 Transform approval is enforced in the `pre-commit` stage of the
 [Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md).
-The pre-commit hook re-validates the approval that authorized the transform; any
-approval invalidation trigger from
+The pre-commit verification step re-validates the approval that authorized the
+transform; any approval invalidation trigger from
 [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md)
 fails the operation closed before any external transform call begins.
 

@@ -175,7 +175,7 @@ Trigger contract and propagation rules live in
 ```text
 collision-detected | transform-unapproved | stale-export
 revoke-debt-created | secret-projection | grant-escalation
-network-egress-expansion | cross-space-import
+network-egress-expansion | cross-space-import (reserved)
 external-implementation | catalog-release-bump
 policy-pack-bump | space-context-change
 artifact-policy-override | post-commit-failed
@@ -193,7 +193,7 @@ semantics and the operator-fix flow live in
 
 ```text
 external-revoke | link-revoke | activation-rollback
-approval-invalidated | cross-space-share-expired
+approval-invalidated | cross-space-share-expired (reserved)
 ```
 
 Five-value closed reason enum on `RevokeDebt`. `external-revoke` is emitted when
@@ -221,13 +221,13 @@ managed | generated | external | operator | imported
 
 Five-value closed classification of every object the kernel tracks.
 
-| Class       | Meaning                                                                                            |
-| ----------- | -------------------------------------------------------------------------------------------------- |
-| `managed`   | Created and owned by the current Space's apply pipeline; destroyed by its `destroy` phase.         |
-| `generated` | Materialized from a managed object via projection / link rendering; destroyed when its source is.  |
-| `external`  | Pre-existing on the connector; the kernel may read or grant against it but never deletes it.       |
-| `operator`  | Operator-installed (e.g. `connector:<id>`); not part of any tenant Space's lifecycle.              |
-| `imported`  | Reachable through a SpaceExportShare from another Space; lifecycle bound to the share's freshness. |
+| Class       | Meaning                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| `managed`   | Created and owned by the current Space's apply pipeline; destroyed by its `destroy` phase.        |
+| `generated` | Materialized from a managed object via projection / link rendering; destroyed when its source is. |
+| `external`  | Pre-existing on the connector; the kernel may read or grant against it but never deletes it.      |
+| `operator`  | Operator-installed (e.g. `connector:<id>`); not part of any tenant Space's lifecycle.             |
+| `imported`  | Reserved / future RFC. Reachable through a SpaceExportShare from another Space.                   |
 
 Only `managed` and `generated` are removed by `destroy`.
 
@@ -346,6 +346,9 @@ extension codes that runtime-agent forwards verbatim. See
 
 ## SpaceExportShare lifecycle
 
+Reserved / future RFC. Current v1 does not create or consume SpaceExportShare
+records.
+
 ```text
 draft | active | refresh-required | stale | revoked
 ```
@@ -376,10 +379,8 @@ org-owner | org-admin | org-billing | space-admin
 space-deployer | space-viewer | support-staff
 ```
 
-Seven-value closed RBAC role enum. `org-*` roles bind at Organization scope;
-`space-*` roles bind at Space scope; `support-staff` is operator-scope and gated
-by an active impersonation grant. Per-role capability matrix and scope rules
-live in [RBAC Policy](/reference/rbac-policy).
+Legacy account-plane RBAC role enum. Current ownership is Takosumi Accounts; the
+kernel does not persist or enforce this role matrix.
 
 ## API key types
 
@@ -387,12 +388,9 @@ live in [RBAC Policy](/reference/rbac-policy).
 deploy-token | read-token | admin-token | support-token
 ```
 
-Four-value closed enum on every API key record. `deploy-token` authorizes apply
-/ activate / destroy; `read-token` is read-only; `admin-token` covers
-Organization / Space management; `support-token` is operator-scope and only
-valid while a matching impersonation grant is `approved`. Prefix grammar,
-rotation, and revocation rules live in
-[API Key Management](/reference/api-key-management).
+Legacy account-plane API key enum. Current kernel public routes use
+operator-configured deploy/artifact credentials; account API keys are owned by
+Takosumi Accounts.
 
 ## Auth provider types
 
@@ -400,11 +398,9 @@ rotation, and revocation rules live in
 bearer-token | oidc | mtls | runtime-agent-enrollment
 ```
 
-Four-value closed enum on every auth provider plug-in. `bearer-token` is the
-default API key path; `oidc` accepts external OIDC issuers mapped to Actors;
-`mtls` binds a client certificate chain; and `runtime-agent-enrollment` is the
-bootstrap path for runtime-agent processes. Verification protocol and claim
-mapping live in [Auth Providers](/reference/auth-providers).
+Legacy account-plane auth provider enum. Current user identity and upstream IdP
+brokering live in Takosumi Accounts; runtime-agent enrollment remains a kernel /
+operator trust concern and is not a user auth provider.
 
 ## Trial Space lifecycle
 

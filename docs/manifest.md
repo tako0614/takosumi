@@ -1,15 +1,16 @@
 # Manifest (Shape Model)
 
-このページは新しい **Shape + Provider + Template** model における manifest
-envelope の書き方をまとめます。`resources[]` で portable な
-[Shape](/reference/shapes) resource を declarative に並べ、`template:` で
-[Template](/reference/templates) を呼び、`${ref:...}` syntax で resource 間の
-output を配線します。
+このページは **Shape + optional Provider hint** model における current kernel
+manifest envelope の書き方をまとめます。 `resources[]` で portable な
+[Shape](/reference/shapes) resource を declarative に並べ、`${ref:...}` syntax
+で resource 間の output を配線します。top-level `template` は retired authoring
+shorthand であり、current kernel public deploy API には渡しません。必要な
+expansion は installer/compiler layer で済ませてから `POST /v1/deployments`
+に送ります。
 
 Takosumi v1 の manifest envelope は **closed shape** で、top-level は
-`@context / apiVersion / kind / namespace / metadata / template / services /
-imports / serviceResolvers / resources`
-の 10 field のみを受理します。 `@context` は optional な JSON-LD
+`@context / apiVersion / kind / namespace / metadata / resources`
+のみを受理します。 `@context` は optional な JSON-LD
 context、`apiVersion: "1.0"` と `kind: Manifest` は固定値で、いずれも
 required。未知の top-level field を含む manifest は kernel の schema phase で
 reject されます ([Manifest Validation](/reference/manifest-validation))。
@@ -25,10 +26,7 @@ kind: Manifest # required (上記同様、固定値)
 metadata:
   name: my-app # 論理 app 名 (deployment record の name に使われる)
   labels: { tier: demo } # optional string labels
-template: # optional: Template invocation
-  template: web-app-on-cloudflare@v1
-  inputs: { ... }
-resources: # optional: portable Shape resources
+resources: # required: portable Shape resources
   - shape: object-store@v1
     name: assets
     provider: "@takos/cloudflare-r2"
@@ -48,17 +46,15 @@ kernel が version ごとに routing できるようにする番号。
 JSON-LD と同じく external tooling / marketplace indexing / catalog publishing
 のための semantic hint として保持します。
 
-`template` と `resources[]` は併用できます。`template` の expansion 結果に
-`resources[]` を **append** する semantics です
-([§ template と resources の併用](#template-と-resources-の併用))。
+top-level `template` と `resources[]` を併用する historical authoring form は
+current kernel public contract では ありません。`template` を使う tool は kernel
+request 前に expanded `resources[]` へ compile してください。
 
-`namespace` / `services[]` / `imports[]` / `serviceResolvers[]` は
-cross-instance service binding 用の optional field です。provider 側は
-`namespace` + `services[]` で service set を export 宣言し、consumer 側は
-`imports[]` + `serviceResolvers[]` で anchor-resolved service identifier を参照
-します。詳細は
-[Cross-instance service binding](/reference/manifest-validation#cross-instance-service-fields)
-と Takos product docs の service identifier spec を参照してください。
+`namespace` は manifest-local / Space-scoped namespace の hint です。
+operator-owned capability (OIDC / billing / dashboard / deploy API など) は
+manifest top-level field ではなく namespace export / account API で接続します。
+`services[]` / `imports[]` / `serviceResolvers[]` / ServiceDescriptor
+は削除済みで、 current kernel は unknown field として reject します。
 
 ## Project layout は `takosumi-git` の責務
 
@@ -81,7 +77,7 @@ sibling product [`takosumi-git`](https://github.com/tako0614/takosumi-git)
 interface ManifestResource {
   readonly shape: string; // "object-store@v1" 等
   readonly name: string; // resource 論理名 (manifest scope)
-  readonly provider: string; // namespaced provider id e.g. "@takos/aws-s3"
+  readonly provider?: string; // optional provider placement hint e.g. "@takos/aws-s3"
   readonly spec: JsonValue; // shape の Spec 型に validate される
   readonly requires?: readonly string[]; // capability requirement
   readonly metadata?: JsonObject;
@@ -91,7 +87,9 @@ interface ManifestResource {
 - `name` は manifest 内で unique。`${ref:<name>.<field>}` で参照されます。
 - `spec` は `<shape>.validateSpec` で validate (`shape: object-store@v1` なら
   `ObjectStoreShape.validateSpec`)。
-- `provider` の `implements` が `shape` と一致しない場合は manifest reject。
+- `provider` が指定された場合、その provider の `implements` が `shape`
+  と一致しない と manifest reject。省略時は operator policy / provider registry
+  が resolved provider を決め、Deployment evidence に記録する。
 
 ## `${ref:...}` / `${secret-ref:...}` syntax {#ref-syntax}
 
@@ -164,48 +162,26 @@ resources:
 
 1. **DAG build** — `extractRefsFromValue(spec)` で各 resource の参照先を抽出。
 2. **Cycle detection** — 自己ループ / 相互参照を検出した場合は reject。
-3. **Apply phase (topological order)** — 各 resource の
-   `provider.apply(spec, ctx)` を順に実行。 `ctx.refResolver.resolve(...)`
-   は既に apply 済み resource の outputs を 返します。
+3. **Apply phase (topological order)** — 各 resource の resolved provider の
+   `apply(spec, ctx)` を順に実行。 `ctx.refResolver.resolve(...)` は既に apply
+   済み resource の outputs を 返します。
 4. **Status phase** — apply 後に各 resource の `status(handle, ctx)` で確認。
 5. **Rollback on failure** — apply phase で失敗した時点までに作られた resource
    は **逆順** に `destroy(handle, ctx)` されます (best effort)。
 
-## Template と resources の併用
+## Retired template shorthand
 
-```yaml
-apiVersion: "1.0"
-kind: Manifest
-metadata:
-  name: my-app
-template:
-  template: web-app-on-cloudflare@v1
-  inputs:
-    serviceName: app
-    image: ghcr.io/example/app@sha256:abcd...
-    port: 8080
-    domain: app.example.com
-
-resources:
-  - shape: object-store@v1
-    name: backups
-    provider: "@takos/aws-s3"
-    requires: [versioning, server-side-encryption]
-    spec: { name: app-backups, versioning: true }
-```
-
-template が `app` / `db` / `assets` / `domain` を expand した上に、追加で
-`backups` resource が aws-s3 で apply されます。`${ref:app.url}` のような
-template 内部の参照は template 側で既に解決されており、外側 `resources[]` からも
-`${ref:app.url}` で参照できます。
+historical clients could submit top-level `template` plus `resources[]` and rely
+on in-process expansion. That surface is retired. Current docs and apps must
+submit expanded `resources[]` only; see [Templates](/reference/templates) for
+the historical compatibility note.
 
 ## Migration note: legacy target/service-map shape is rejected
 
 左側は historical form で、現行 kernel の public v1 manifest validation では
 受理されません。新しい manifest は右側の `apiVersion: "1.0"` / `kind: Manifest`
-/ `resources[]` shape model で書きます。current top-level `services[]` は
-cross-instance service export 専用の配列であり、左側の legacy `services` object
-map (`services: { app: ... }`) とは別物です。
+/ `resources[]` shape model で書きます。top-level `services` は object map でも
+array でも current manifest ではありません。
 
 ::: code-group
 
@@ -257,8 +233,9 @@ resources:
 
 新 model の良い点:
 
-- **portable** — `provider:` を `@takos/aws-fargate` /
-  `@takos/kubernetes-deployment` 等に差し替えるだけで cloud 切替。
+- **portable** — `shape` を保ったまま operator policy / provider registry で
+  placement を変えられる。`provider:` は必要な場合だけ authoring hint
+  として使う。
 - **explicit** — `${ref:db.connectionString}` で配線が manifest
   に書かれており、ブラックボックスがない。
 - **DAG** — 依存解析が contract 側で portable に行われる。
@@ -268,10 +245,10 @@ resources:
 - [Reference Index](/reference/) — 全 v1 仕様の索引
 - [Shape Catalog](/reference/shapes) — 各 Shape の spec / outputs / capabilities
 - [Provider Plugins](/reference/providers) — provider id と実装
-- [Templates](/reference/templates) — `template:` で展開する bundled template
+- [Templates](/reference/templates) — retired `template:` authoring shorthand
 - [Access Modes](/reference/access-modes) — link projection が使う access mode
 - [Connector Contract](/reference/connector-contract) — `connector:<id>` 境界
 - [DataAsset Policy](/reference/data-asset-policy) — artifact policy / transform
   approval
 - [Operator Bootstrap](/operator/bootstrap) — operator 側 wire 手順
-- [Extending](/extending) — provider / shape / template 拡張
+- [Extending](/extending) — provider / shape extension

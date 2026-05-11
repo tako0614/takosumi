@@ -93,22 +93,23 @@ digest from the previously recorded entry, the kernel hard-fails the operation
 and refuses to advance the stage. Recovery in that case must mint a new
 `operationPlanDigest` (a fresh OperationPlan).
 
-## Pre/post-commit hooks
+## Pre/post-commit verification
 
-CatalogRelease may declare pre-commit and post-commit hooks bound to specific
-operation kinds. Hook lifecycle:
+CatalogRelease may require kernel-owned verification at pre-commit and
+post-commit. The kernel does not run catalog-declared executable hook packages.
+Verification lifecycle:
 
 ```text
-1. discovery        — hooks adopted by the active CatalogRelease
-2. invocation       — runs in the corresponding stage above
-3. result recorded  — hook outcome is journaled as a side-effect entry
+1. discovery        — active CatalogRelease descriptor selected by Space policy
+2. invocation       — verifier runs in the corresponding stage above
+3. result recorded  — verification outcome is journaled as evidence
 4. fail-closed      — pre-commit failure aborts before provider effects;
                       post-commit failure records RevokeDebt and continues
                       observe/finalize evidence
 ```
 
-Hooks must not bypass policy or approval re-validation. They may emit RevokeDebt
-only from `post-commit` or `observe` stages.
+Verification must not bypass policy or approval re-validation. It may emit
+RevokeDebt only from `post-commit` or `observe` stages.
 
 ## Journal entries
 

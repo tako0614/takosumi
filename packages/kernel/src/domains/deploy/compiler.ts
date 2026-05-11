@@ -129,8 +129,6 @@ const BINDING_FROM_FIELDS = new Set([
   "output",
   "secret",
   "providerOutput",
-  "import",
-  "endpointRole",
   "field",
   "access",
   "request",
@@ -678,7 +676,6 @@ function validateBindingShape(
       "output",
       "secret",
       "providerOutput",
-      "import",
     ]
       .filter(
         (key) =>
@@ -686,7 +683,7 @@ function validateBindingShape(
       );
     if (sourceKeys.length !== 1) {
       throw new TypeError(
-        `${path}.from must declare exactly one of resource | output | secret | providerOutput | import`,
+        `${path}.from must declare exactly one of resource | output | secret | providerOutput`,
       );
     }
     if (!isRecord(spec.inject)) {
@@ -1064,7 +1061,6 @@ function validateBindings(
   for (const [bindingName, spec] of Object.entries(bindings)) {
     const path = `${pathPrefix}.bindings.${bindingName}`;
     validateBuiltinOutputRequest(path, spec, options);
-    validateServiceImportBinding(path, spec);
     const inject = spec.inject;
     if (inject.mode === "env") {
       const normalized = normalizeEnvName(
@@ -1078,25 +1074,6 @@ function validateBindings(
       }
       injectedEnvNames.add(normalized);
     }
-  }
-}
-
-function validateServiceImportBinding(
-  path: string,
-  spec: PublicComponentBindingSpec,
-): void {
-  const from = spec.from;
-  if (!("import" in from)) return;
-  if (typeof from.import !== "string" || from.import.length === 0) {
-    throw new TypeError(`${path}.from.import must be a non-empty string`);
-  }
-  if (
-    typeof from.endpointRole !== "string" || from.endpointRole.length === 0
-  ) {
-    throw new TypeError(`${path}.from.endpointRole must be a non-empty string`);
-  }
-  if (typeof from.field !== "string" || from.field.length === 0) {
-    throw new TypeError(`${path}.from.field must be a non-empty string`);
   }
 }
 

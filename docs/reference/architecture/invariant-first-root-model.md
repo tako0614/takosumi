@@ -122,8 +122,9 @@ namespace registry writes, Space export sharing, and catalog release activation.
 Every Deployment, ResolutionSnapshot, DesiredSnapshot, OperationJournal,
 ObservationSet, RevokeDebt, ActivationSnapshot, approval, and GroupHead belongs
 to exactly one Space. A deployment must not resolve, materialize, activate,
-observe, or destroy outside its Space unless an explicit Space export share or
-operator-approved namespace import permits it.
+observe, or destroy outside its Space. Space export share / operator-approved
+namespace import semantics are reserved for future RFCs and are not current v1
+escape hatches.
 
 ### 14. Namespace isolation invariant
 

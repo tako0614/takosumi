@@ -35,13 +35,14 @@ reconstructs after a restore.
 | `OperationJournal` (WAL)     | Idempotency tuples and effect digests; without this, replay diverges. |
 | `RevokeDebt`                 | Outstanding rollback obligations; loss leaks effects.                 |
 | `Approval`                   | Bound `approvedEffects` for in-flight and historical operations.      |
-| `SpaceExportShare`           | Cross-Space sharing state including freshness and revoke records.     |
+| `SpaceExportShare`           | Reserved / future RFC; not present in current v1 backup set.          |
 | `AuditLog`                   | Hash-chained event log; loss breaks chain verification.               |
 | Secret partition (encrypted) | Operator-managed master-key-encrypted secret material.                |
 | Catalog adoption record      | Which catalog releases the operator has installed and trusts.         |
 
-These records collectively form the **backup set**. A backup that omits any one
-of them is non-conformant.
+The non-reserved records collectively form the current v1 **backup set**. A
+current v1 backup that omits any non-reserved row is non-conformant. Reserved
+future records become required only if the corresponding RFC is accepted.
 
 ### Regenerable (no backup needed)
 
@@ -152,7 +153,7 @@ The restore tool ingests the export stream transactionally in dependency order:
 5. `ActivationSnapshot` records.
 6. `OperationJournal` (WAL) entries, ordered by per-Space WAL cursor.
 7. `RevokeDebt` records.
-8. `SpaceExportShare` records.
+8. Reserved SpaceExportShare records if a future RFC enables them.
 9. `AuditLog` entries.
 10. Secret partition entries (encrypted blobs).
 

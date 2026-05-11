@@ -24,7 +24,22 @@ Deno.test("validateManifestEnvelope accepts JSON-LD @context", () => {
   assert.deepEqual(issues, []);
 });
 
-Deno.test("validateManifestEnvelope accepts cross-instance manifest fields", () => {
+Deno.test("validateManifestEnvelope accepts Shape resource without provider pin", () => {
+  const issues: { path: string; message: string }[] = [];
+  validateManifestEnvelope({
+    "@context": TAKOSUMI_MANIFEST_JSONLD_CONTEXT,
+    apiVersion: "1.0",
+    kind: "Manifest",
+    resources: [{
+      shape: "object-store@v1",
+      name: "assets",
+      spec: { name: "assets" },
+    }],
+  }, issues);
+  assert.deepEqual(issues, []);
+});
+
+Deno.test("validateManifestEnvelope rejects removed service import fields", () => {
   const issues: { path: string; message: string }[] = [];
   validateManifestEnvelope({
     apiVersion: "1.0",
@@ -58,10 +73,14 @@ Deno.test("validateManifestEnvelope accepts cross-instance manifest fields", () 
     resources: [],
   }, issues);
 
-  assert.deepEqual(issues, []);
+  assert.deepEqual(issues.map((issue) => issue.path), [
+    "$.services",
+    "$.serviceResolvers",
+    "$.imports",
+  ]);
 });
 
-Deno.test("validateManifestEnvelope accepts service import pin metadata", () => {
+Deno.test("validateManifestEnvelope rejects service import pin metadata", () => {
   const issues: { path: string; message: string }[] = [];
   validateManifestEnvelope({
     apiVersion: "1.0",
@@ -70,63 +89,14 @@ Deno.test("validateManifestEnvelope accepts service import pin metadata", () => 
       name: "logs",
       takosumiServiceImports: {
         kind: "takosumi.service-import-pins@v1",
-        pins: [{
-          alias: "account-auth",
-          serviceId: "takosumi.account.auth@v1",
-          descriptorDigest: "sha256:descriptor",
-          resolverUrl: "https://anchor.example.test/v1/services/",
-          providerInstance: "provider_takosumi_cloud",
-          expiresAt: "2026-05-09T00:05:00.000Z",
-        }],
+        pins: [],
       },
     },
     resources: [],
   }, issues);
 
-  assert.deepEqual(issues, []);
-});
-
-Deno.test("validateManifestEnvelope rejects malformed cross-instance fields", () => {
-  const issues: { path: string; message: string }[] = [];
-  validateManifestEnvelope({
-    apiVersion: "1.0",
-    kind: "Manifest",
-    services: [{
-      id: "takosumi.account.auth.extra",
-      version: "1",
-      contract: "takosumi.account.auth@v1",
-      endpoints: [{ role: "OIDC", url: "", path: "oidc" }],
-      publish: { anchors: [], signing: {} },
-    }],
-    imports: [{
-      alias: "AccountAuth",
-      service: "takosumi.account.auth.oidc@v1",
-      refreshPolicy: { kind: "ttl", ttl: "five-minutes" },
-    }],
-    serviceResolvers: [{
-      kind: "registry",
-      url: "file:///tmp/anchor",
-      publicKey: "",
-    }],
-    resources: [],
-  }, issues);
-
   assert.deepEqual(issues.map((issue) => issue.path), [
-    "$.namespace",
-    "$.services[0].id",
-    "$.services[0].version",
-    "$.services[0].contract",
-    "$.services[0].endpoints[0].role",
-    "$.services[0].endpoints[0].url",
-    "$.services[0].endpoints[0].path",
-    "$.services[0].publish.anchors",
-    "$.services[0].publish.signing.privateKeyRef",
-    "$.imports[0].alias",
-    "$.imports[0].service",
-    "$.imports[0].refreshPolicy.ttl",
-    "$.serviceResolvers[0].kind",
-    "$.serviceResolvers[0].url",
-    "$.serviceResolvers[0].publicKey",
+    "$.metadata.takosumiServiceImports",
   ]);
 });
 

@@ -101,6 +101,20 @@ Deno.test("manifest v1 resolver appends resources after template expansion", () 
   }
 });
 
+Deno.test("manifest v1 resolver accepts resources without provider pin", () => {
+  const result = resolveManifestResourcesV1({
+    apiVersion: "1.0",
+    kind: "Manifest",
+    resources: [{
+      shape: "object-store@v1",
+      name: "assets",
+      spec: { name: "assets" },
+    }],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.ok ? result.value[0].provider : undefined, undefined);
+});
+
 Deno.test("manifest v1 resolver rejects unknown closed-envelope fields", () => {
   const result = resolveManifestResourcesV1({
     apiVersion: "1.0",

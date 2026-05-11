@@ -81,6 +81,48 @@ Deno.test("resolveResourcesV2 returns resolved when shape and provider match", (
   }
 });
 
+Deno.test("resolveResourcesV2 selects a single registered provider when omitted", () => {
+  setUp();
+  try {
+    const resources: ManifestResource[] = [{
+      shape: `${SHAPE_ID}@v1`,
+      name: "ok",
+      spec: { foo: "bar" },
+    }];
+    const result = resolveResourcesV2(resources);
+    assert.equal(result.issues.length, 0);
+    assert.equal(result.resolved.length, 1);
+    assert.equal(result.resolved[0].provider.id, PROVIDER_ID);
+  } finally {
+    tearDown();
+  }
+});
+
+Deno.test("resolveResourcesV2 reports ambiguous provider selection", () => {
+  setUp();
+  const otherProviderId = "test-rr-provider-other";
+  registerProvider(
+    fakeProvider(otherProviderId, { id: SHAPE_ID, version: "v1" }),
+  );
+  try {
+    const result = resolveResourcesV2([{
+      shape: `${SHAPE_ID}@v1`,
+      name: "x",
+      spec: { foo: "bar" },
+    }]);
+    assert.equal(result.resolved.length, 0);
+    assert.ok(
+      result.issues.some((i) =>
+        i.path === "$.resources[0].provider" &&
+        i.message.includes("ambiguous")
+      ),
+    );
+  } finally {
+    unregisterProvider(otherProviderId);
+    tearDown();
+  }
+});
+
 Deno.test("resolveResourcesV2 reports unknown shape", () => {
   setUp();
   try {

@@ -76,8 +76,8 @@ Resolution happens inside a Space. The resolver checks scopes in this order:
 4. environment namespace, if the Space defines environments
 5. space namespace
 6. operator namespace granted to this Space
-7. external participant namespace registered into this Space
-8. explicitly shared namespace imports from another Space
+7. reserved: external participant namespace registered into this Space
+8. reserved: explicitly shared namespace imports from another Space
 ```
 
 If a namespace path exists in multiple scopes, the first matching scope wins
@@ -115,15 +115,14 @@ ExternalNamespaceRegistration:
     state: fresh
 ```
 
-External participants must not publish into another Space unless operator policy
-authorizes that participant for that Space.
+External participant publishing is reserved vocabulary for a future RFC. Current
+v1 dependencies must not require it.
 
 ## Cross-space links
 
-Cross-space links are denied by default.
-
-A Link may use an export from another Space only through an explicit
-`SpaceExportShare` or operator-approved namespace import.
+Cross-space links are denied by default and are not a current v1 dependency.
+`SpaceExportShare` and operator-approved namespace imports are reserved
+vocabulary for a future RFC.
 
 ```yaml
 SpaceExportShare:
@@ -137,12 +136,12 @@ SpaceExportShare:
   expiresAt: optional
 ```
 
-Resolution records the share in `ResolutionSnapshot`. Plan output must show
-cross-space usage as a risk.
+If a future RFC enables this vocabulary, resolution records the share in
+`ResolutionSnapshot` and plan output must show cross-space usage as a risk.
 
 ## SpaceExportShare lifecycle
 
-A SpaceExportShare progresses through a closed v1 state machine:
+A future SpaceExportShare progresses through this reserved state machine:
 
 ```text
 draft → active → refresh-required → stale → revoked
@@ -214,7 +213,7 @@ current in another Space.
 
 ```text
 Space containment invariant:
-  No Deployment may resolve, materialize, activate, observe, or destroy outside its Space unless an explicit SpaceExportShare or operator import permits it.
+  No Deployment may resolve, materialize, activate, observe, or destroy outside its Space. SpaceExportShare / operator import escape hatches are reserved for future RFCs.
 
 Namespace isolation invariant:
   Namespace paths are Space-scoped. Same path in different Spaces is not the same export by default.

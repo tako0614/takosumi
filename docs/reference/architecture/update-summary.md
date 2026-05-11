@@ -45,7 +45,7 @@ public manifest vocabulary is closed and unchanged.
   (`prepare → pre-commit → commit → post-commit → observe → finalize`, terminal
   `abort` / `skip`), defines the
   `(spaceId, operationPlanDigest, journalEntryId)` idempotency key tuple, and
-  the pre/post-commit hook contract.
+  the pre/post-commit verification contract.
 - **Exposure post-activate health state.**
   [Exposure and Activation Model](./exposure-activation-model.md) defines the
   `unknown / observing / healthy / degraded / unhealthy` state machine and the
@@ -57,9 +57,9 @@ public manifest vocabulary is closed and unchanged.
   ownership rule (importing Space owns; exporting Space gets a read-only
   mirror), and the fail-safe-not-fail-closed propagation into
   ActivationSnapshot.
-- **SpaceExportShare lifecycle.** [Space Model](./space-model.md) defines the
-  `draft / active / refresh-required / stale / revoked` lifecycle, TTL refresh,
-  and the `stale-export` Risk.
+- **SpaceExportShare lifecycle.** [Space Model](./space-model.md) records the
+  reserved future `draft / active / refresh-required / stale / revoked`
+  lifecycle. Current v1 does not enable cross-Space share dependency.
 - **Risk and Approval enums closed.**
   [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md)
   closes the v1 Risk enum (19 entries, including `collision-detected` and
@@ -131,8 +131,8 @@ public manifest vocabulary is closed and unchanged.
 - **Approval flow architecture.**
   [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md)
   now records the approver UX states, plan-level approval batching, invalidation
-  propagation rules (digest-trigger short-circuit), and cross-Space approval
-  ownership rules.
+  propagation rules (digest-trigger short-circuit), and reserved future
+  cross-Space approval ownership rules.
 - **Observability architecture.**
   [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
   now records the four-layer audit retention architecture (ObservationSet /
@@ -166,8 +166,10 @@ public manifest vocabulary is closed and unchanged.
   / workflow definition は upstream `takosumi-git` が provide する
   ([CLI Reference](/reference/cli) Project Layout section)。 kernel 側は
   manifest 以外を一切参照しない。
-- **Plugin shape examples.** workflow / cron-job / pre-apply-hook 等の shape は
-  kernel curated 5 種に含めず、3rd party plugin が CONVENTIONS.md §6 RFC で提供
+- **Workflow-like shape examples reserved.** workflow / cron-job /
+  pre-apply-hook 等の shape は current v1 catalog / plugin extension surface に
+  含めない。必要な workflow / schedule / hook semantics は `takosumi-git` や
+  operator product が `POST /v1/deployments` の上で実装する
   ([Extending](/extending), [Shape Catalog](/reference/shapes))。kernel-known な
   workflow shape (`resource.workflow@v1`) は提供しない方針で、登録は撤去済み。
 

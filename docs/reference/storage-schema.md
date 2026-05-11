@@ -3,11 +3,8 @@
 > Stability: stable Audience: kernel-implementer, operator See also:
 > [Journal Compaction](/reference/journal-compaction),
 > [Audit Events](/reference/audit-events),
-> [Lifecycle Protocol](/reference/lifecycle),
-> [Actor / Organization Model](/reference/actor-organization-model),
-> [API Key Management](/reference/api-key-management),
-> [Auth Providers](/reference/auth-providers),
-> [RBAC Policy](/reference/rbac-policy),
+> [Lifecycle Protocol](/reference/lifecycle), account-plane identity records
+> live in Takosumi Accounts,
 > [Tenant Provisioning](/reference/tenant-provisioning),
 > [Tenant Export / Deletion](/reference/tenant-export-deletion),
 > [Trial Spaces](/reference/trial-spaces),
@@ -78,9 +75,7 @@ Primitive types used throughout:
                                | RevokeDebt           |
                                +----------------------+
 
-   +----------------------+
-   | SpaceExportShare     |  (cross-Space, references Snapshots)
-   +----------------------+
+   (SpaceExportShare is reserved / future RFC and is not part of current v1 live schema)
 ```
 
 ## ResolutionSnapshot
@@ -94,7 +89,7 @@ Captures the resolved manifest world for a deploy.
 | `manifestDigest`    | sha256          | yes      | Digest of the canonical manifest bytes.                       |
 | `catalogReleaseId`  | string          | yes      | Adopted catalog release at resolve time.                      |
 | `exportSnapshotIds` | `array<string>` | yes      | Snapshots of own Space exports referenced by this resolution. |
-| `importedShares`    | `array<string>` | yes      | SpaceExportShare ids consumed by this resolution.             |
+| `importedShares`    | `array<string>` | no       | Reserved / future RFC. Current v1 omits this field.           |
 | `recordedAt`        | timestamp       | yes      | Resolve time.                                                 |
 
 Persistence: kept while any DesiredSnapshot referencing this snapshot is
@@ -240,16 +235,16 @@ digest hard-fails before the route advances the stage.
 Public deploy record for the CLI surface (`POST /v1/deployments` and
 `takosumi status`). Backed by `takosumi_deployments`.
 
-| Field              | Type            | Required | Notes                                                                                         |
-| ------------------ | --------------- | -------- | --------------------------------------------------------------------------------------------- |
-| `id`               | string          | yes      | Surrogate row id.                                                                             |
-| `tenantId`         | string          | yes      | Public deploy tenant / Space scope.                                                           |
-| `name`             | string          | yes      | Deployment name derived from manifest metadata.                                               |
-| `manifest`         | object          | yes      | Submitted manifest JSON plus kernel audit metadata such as `metadata.takosumiServiceImports`. |
-| `appliedResources` | `array<object>` | yes      | Last successful apply handles / outputs.                                                      |
-| `status`           | enum            | yes      | `applied` / `destroyed` / `failed`.                                                           |
-| `createdAt`        | timestamp       | yes      | Initial insert time.                                                                          |
-| `updatedAt`        | timestamp       | yes      | Last apply / destroy / failure update.                                                        |
+| Field              | Type            | Required | Notes                                                                                |
+| ------------------ | --------------- | -------- | ------------------------------------------------------------------------------------ |
+| `id`               | string          | yes      | Surrogate row id.                                                                    |
+| `tenantId`         | string          | yes      | Public deploy tenant / Space scope.                                                  |
+| `name`             | string          | yes      | Deployment name derived from manifest metadata.                                      |
+| `manifest`         | object          | yes      | Submitted manifest JSON. Removed service import metadata is not added by the kernel. |
+| `appliedResources` | `array<object>` | yes      | Last successful apply handles / outputs.                                             |
+| `status`           | enum            | yes      | `applied` / `destroyed` / `failed`.                                                  |
+| `createdAt`        | timestamp       | yes      | Initial insert time.                                                                 |
+| `updatedAt`        | timestamp       | yes      | Last apply / destroy / failure update.                                               |
 
 Persistence: retained until operator deletion or record GC. Indexed by
 `(tenantId, name)` unique, `(tenantId)`, and `(status)`.
@@ -258,12 +253,9 @@ Mutation rule: upsert by `(tenantId, name)`. Destroy keeps the row with
 `status = destroyed` and clears `appliedResources` so status and audit reads
 still work.
 
-When a public deploy manifest imports external services, the stored manifest
-keeps `metadata.takosumiServiceImports.kind =
-"takosumi.service-import-pins@v1"`
-with pins for descriptor digest, resolver URL, provider instance, and expiry.
-This is the durable audit pointer for the descriptor the kernel verified before
-apply.
+Historical rows may contain `metadata.takosumiServiceImports` from the removed
+service import design. Current public deploy validation rejects that metadata
+and the kernel no longer writes descriptor pins.
 
 ## PublicDeployIdempotencyRecord
 
@@ -316,33 +308,33 @@ Tracks pending revocations whose effects have not yet been observed as cleared
 in the world. See [RevokeDebt Model](/reference/revoke-debt) for the canonical
 schema, reason / status enums, aging window, and Multi-Space ownership rule.
 
-| Field                    | Type      | Required    | Notes                                                                                                                                    |
-| ------------------------ | --------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                     | string    | yes         | RevokeDebt identifier (`revoke-debt:<ulid>`).                                                                                            |
-| `sourceKey`              | sha256    | yes         | Idempotency key for enqueue; derived from owner Space, reason, generated object, and WAL/source tuple.                                   |
-| `generatedObjectId`      | string    | yes         | Owner generated object id; format `generated:...`.                                                                                       |
-| `sourceExportSnapshotId` | string    | conditional | Required when reason is `link-revoke` / `cross-space-share-expired`.                                                                     |
-| `externalParticipantId`  | string    | conditional | Required when an external participant initiated the revoke attempt.                                                                      |
-| `reason`                 | enum      | yes         | Closed enum 5 values (`external-revoke` / `link-revoke` / `activation-rollback` / `approval-invalidated` / `cross-space-share-expired`). |
-| `status`                 | enum      | yes         | Closed enum 3 values (`open` / `operator-action-required` / `cleared`).                                                                  |
-| `ownerSpaceId`           | string    | yes         | Space owning the debt; for SpaceExportShare-derived debt this is the importing Space.                                                    |
-| `originatingSpaceId`     | string    | yes         | Space that materialized the generated object. May equal `ownerSpaceId`.                                                                  |
-| `deploymentName`         | string    | no          | Public deploy deployment name when debt originates from `/v1/deployments`.                                                               |
-| `operationPlanDigest`    | sha256    | no          | WAL OperationPlan digest that produced the debt.                                                                                         |
-| `journalEntryId`         | string    | no          | WAL entry id that produced the debt.                                                                                                     |
-| `operationId`            | string    | no          | Operation id that produced the debt.                                                                                                     |
-| `resourceName`           | string    | no          | Manifest resource name when debt is resource-scoped.                                                                                     |
-| `providerId`             | string    | no          | Provider id associated with the resource-scoped debt.                                                                                    |
-| `retryPolicy`            | object    | yes         | Retry policy parameters (interval, attempts, backoff). Owner-tunable.                                                                    |
-| `retryAttempts`          | integer   | yes         | Count of cleanup retry attempts recorded for this debt.                                                                                  |
-| `lastRetryAt`            | timestamp | no          | Last cleanup retry attempt timestamp.                                                                                                    |
-| `nextRetryAt`            | timestamp | no          | Next scheduled retry time when policy can compute one.                                                                                   |
-| `lastRetryError`         | object    | no          | Structured retry failure detail from the last attempt.                                                                                   |
-| `detail`                 | object    | no          | Origin-specific structured detail.                                                                                                       |
-| `createdAt`              | timestamp | yes         | Initial debt creation.                                                                                                                   |
-| `statusUpdatedAt`        | timestamp | yes         | Last status transition timestamp; aging windows are evaluated from this value while status is `open`.                                    |
-| `agedAt`                 | timestamp | no          | Auto-aging transition (`open` → `operator-action-required`).                                                                             |
-| `clearedAt`              | timestamp | no          | Terminal clearance (`status = cleared`).                                                                                                 |
+| Field                    | Type      | Required    | Notes                                                                                                                                          |
+| ------------------------ | --------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                     | string    | yes         | RevokeDebt identifier (`revoke-debt:<ulid>`).                                                                                                  |
+| `sourceKey`              | sha256    | yes         | Idempotency key for enqueue; derived from owner Space, reason, generated object, and WAL/source tuple.                                         |
+| `generatedObjectId`      | string    | yes         | Owner generated object id; format `generated:...`.                                                                                             |
+| `sourceExportSnapshotId` | string    | conditional | Required when reason is `link-revoke`; cross-space use is reserved / future RFC.                                                               |
+| `externalParticipantId`  | string    | no          | Reserved / future RFC.                                                                                                                         |
+| `reason`                 | enum      | yes         | Closed enum values (`external-revoke` / `link-revoke` / `activation-rollback` / `approval-invalidated`; `cross-space-share-expired` reserved). |
+| `status`                 | enum      | yes         | Closed enum 3 values (`open` / `operator-action-required` / `cleared`).                                                                        |
+| `ownerSpaceId`           | string    | yes         | Space owning the debt. SpaceExportShare-derived debt is reserved / future RFC.                                                                 |
+| `originatingSpaceId`     | string    | yes         | Space that materialized the generated object. May equal `ownerSpaceId`.                                                                        |
+| `deploymentName`         | string    | no          | Public deploy deployment name when debt originates from `/v1/deployments`.                                                                     |
+| `operationPlanDigest`    | sha256    | no          | WAL OperationPlan digest that produced the debt.                                                                                               |
+| `journalEntryId`         | string    | no          | WAL entry id that produced the debt.                                                                                                           |
+| `operationId`            | string    | no          | Operation id that produced the debt.                                                                                                           |
+| `resourceName`           | string    | no          | Manifest resource name when debt is resource-scoped.                                                                                           |
+| `providerId`             | string    | no          | Provider id associated with the resource-scoped debt.                                                                                          |
+| `retryPolicy`            | object    | yes         | Retry policy parameters (interval, attempts, backoff). Owner-tunable.                                                                          |
+| `retryAttempts`          | integer   | yes         | Count of cleanup retry attempts recorded for this debt.                                                                                        |
+| `lastRetryAt`            | timestamp | no          | Last cleanup retry attempt timestamp.                                                                                                          |
+| `nextRetryAt`            | timestamp | no          | Next scheduled retry time when policy can compute one.                                                                                         |
+| `lastRetryError`         | object    | no          | Structured retry failure detail from the last attempt.                                                                                         |
+| `detail`                 | object    | no          | Origin-specific structured detail.                                                                                                             |
+| `createdAt`              | timestamp | yes         | Initial debt creation.                                                                                                                         |
+| `statusUpdatedAt`        | timestamp | yes         | Last status transition timestamp; aging windows are evaluated from this value while status is `open`.                                          |
+| `agedAt`                 | timestamp | no          | Auto-aging transition (`open` → `operator-action-required`).                                                                                   |
+| `clearedAt`              | timestamp | no          | Terminal clearance (`status = cleared`).                                                                                                       |
 
 Persistence: kept while `status` is not `cleared`, plus the retain-after-cleared
 retention window per [Compliance Retention](/reference/compliance-retention).
@@ -389,7 +381,9 @@ invalidation triggers from the policy / risk / approval / error model.
 
 ## SpaceExportShare
 
-The cross-Space share record.
+Reserved / future RFC cross-Space share record. Current v1 storage does not
+require this table for install or deploy; consumer contracts may depend only on
+operator-owned namespace exports.
 
 | Field                | Type            | Required | Notes                                                                 |
 | -------------------- | --------------- | -------- | --------------------------------------------------------------------- |
@@ -448,8 +442,9 @@ DriftIndex.
 
 ## ExternalParticipant
 
-Operator-issued identity for a non-Space participant that consumes exports or
-signs envelopes.
+Reserved / future RFC operator-issued identity for a non-Space participant that
+consumes exports or signs envelopes. Current v1 storage does not require this
+record for install or deploy.
 
 | Field             | Type            | Required | Notes                                                |
 | ----------------- | --------------- | -------- | ---------------------------------------------------- |
@@ -621,119 +616,13 @@ value は本 record に **絶対に含まれない** (reference のみ).
 
 See also: [Secret Partitions](/reference/secret-partitions).
 
-## Organization
+## Account-plane identity records
 
-Operator-managed group that owns one or more Spaces and their billing contact
-actor.
-
-| Field                   | Type      | Required | Notes                                                                                       |
-| ----------------------- | --------- | -------- | ------------------------------------------------------------------------------------------- |
-| `id`                    | string    | yes      | `organization:<ulid>` form.                                                                 |
-| `displayName`           | string    | yes      | Human-readable name.                                                                        |
-| `billingContactActorId` | string    | yes      | Actor identity that receives billing-related notifications.                                 |
-| `complianceRegime`      | enum      | no       | One of the audit retention regimes (`default` / `pci-dss` / `hipaa` / `sox` / `regulated`). |
-| `metadata`              | object    | no       | Operator-defined metadata bag (no secrets).                                                 |
-| `createdAt`             | timestamp | yes      | Creation time.                                                                              |
-
-Persistence: kept indefinitely while any Space references the Organization, plus
-the audit retention window. Indexed by `(id)` and `(billingContactActorId)`.
-
-Immutability: `displayName`, `billingContactActorId`, `complianceRegime`, and
-`metadata` are mutable in place; transitions emit audit events. `id` and
-`createdAt` are immutable.
-
-See also: [Actor / Organization Model](/reference/actor-organization-model).
-
-## Membership
-
-Binds an actor to an Organization at a coarse role level.
-
-| Field            | Type      | Required | Notes                                         |
-| ---------------- | --------- | -------- | --------------------------------------------- |
-| `id`             | string    | yes      | `membership:<ulid>` form.                     |
-| `actorId`        | string    | yes      | Actor identity.                               |
-| `organizationId` | string    | yes      | Owning Organization.                          |
-| `role`           | enum      | yes      | One of `owner`, `admin`, `member`, `billing`. |
-| `joinedAt`       | timestamp | yes      | Acceptance time.                              |
-| `leftAt`         | timestamp | no       | Departure / removal time; null while active.  |
-
-Persistence: kept while `leftAt` is null, plus the audit retention window.
-Indexed by `(organizationId, role)` and `(actorId)`.
-
-Immutability: `role` and `leftAt` are mutable in place; lifecycle transitions
-emit audit events. `id`, `actorId`, `organizationId`, and `joinedAt` are
-immutable.
-
-See also: [Actor / Organization Model](/reference/actor-organization-model).
-
-## RoleAssignment
-
-Binds an actor to a role at a closed scope (org-level or space-level) for the
-[RBAC Policy](/reference/rbac-policy).
-
-| Field        | Type      | Required | Notes                                                          |
-| ------------ | --------- | -------- | -------------------------------------------------------------- |
-| `id`         | string    | yes      | `role-assignment:<ulid>` form.                                 |
-| `actorId`    | string    | yes      | Actor identity.                                                |
-| `scope`      | enum      | yes      | One of `org-level`, `space-level`.                             |
-| `scopeId`    | string    | yes      | `organizationId` for `org-level`; `spaceId` for `space-level`. |
-| `role`       | enum      | yes      | One of the closed roles in the RBAC matrix.                    |
-| `assignedAt` | timestamp | yes      | Assignment time.                                               |
-| `expiresAt`  | timestamp | no       | Optional auto-expiry instant.                                  |
-| `revokedAt`  | timestamp | no       | Manual revocation instant; null while active.                  |
-
-Persistence: kept while `revokedAt` is null and `expiresAt` has not passed, plus
-the audit retention window. Indexed by `(actorId)` and `(scope, scopeId, role)`.
-
-Immutability: `expiresAt` and `revokedAt` are mutable in place; transitions emit
-audit events. The other fields are immutable.
-
-See also: [RBAC Policy](/reference/rbac-policy).
-
-## APIKey
-
-Per-actor API key record for programmatic access.
-
-| Field           | Type      | Required | Notes                                                                          |
-| --------------- | --------- | -------- | ------------------------------------------------------------------------------ |
-| `id`            | string    | yes      | `api-key:<ulid>` form.                                                         |
-| `actorId`       | string    | yes      | Actor identity bound to the key.                                               |
-| `kind`          | enum      | yes      | One of the closed APIKey kinds (operator / actor / runtime-agent).             |
-| `scope`         | object    | yes      | Scope descriptor (allowed orgs, spaces, capabilities).                         |
-| `tokenHash`     | string    | yes      | Argon2id hash of the issued bearer token; the plaintext token is never stored. |
-| `expiresAt`     | timestamp | yes      | Required expiry instant.                                                       |
-| `createdAt`     | timestamp | yes      | Issue time.                                                                    |
-| `rotatedFromId` | string    | no       | Predecessor APIKey id when this key was produced by rotation.                  |
-| `revokedAt`     | timestamp | no       | Revocation instant; null while active.                                         |
-
-Persistence: kept while `revokedAt` is null and `expiresAt` has not passed, plus
-the audit retention window. Indexed by `(actorId, kind)` and `(tokenHash)`.
-
-Immutability: `revokedAt` is mutable in place; rotation produces a new APIKey
-record with `rotatedFromId` set rather than mutating the prior record. The other
-fields are immutable.
-
-See also: [API Key Management](/reference/api-key-management).
-
-## AuthProvider
-
-Operator-installed authentication provider configuration.
-
-| Field          | Type      | Required | Notes                                                                                                                   |
-| -------------- | --------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `id`           | string    | yes      | `auth-provider:<ulid>` form.                                                                                            |
-| `type`         | enum      | yes      | One of the closed auth-provider types (`oidc` / `mtls` / `runtime-agent-enrollment` / `bearer-token`).                  |
-| `config`       | object    | yes      | Full provider configuration JSON. Secret-bearing fields are stored as secret references (`secret://...`), never inline. |
-| `registeredAt` | timestamp | yes      | Install time.                                                                                                           |
-| `revokedAt`    | timestamp | no       | Revocation instant; null while active.                                                                                  |
-
-Persistence: kept while `revokedAt` is null, plus the audit retention window.
-Indexed by `(id)` and `(type)`.
-
-Immutability: `config` is mutable in place; updates emit audit events.
-`revokedAt` is mutable in place. `id`, `type`, and `registeredAt` are immutable.
-
-See also: [Auth Providers](/reference/auth-providers).
+Organization, Membership, RoleAssignment, account API keys, and AuthProvider
+records are not part of the current takosumi kernel storage schema. They are
+owned by Takosumi Accounts in `takosumi-cloud/`. Kernel storage covers deploy
+records, journals, provider observations, artifacts, locks, quota signals, and
+operator/runtime credentials only.
 
 ## TrialAttribute
 
@@ -1026,10 +915,11 @@ for example `takosumi-git`; see
 
 ## See also
 
-- [Actor / Organization Model](/reference/actor-organization-model)
-- [API Key Management](/reference/api-key-management)
-- [Auth Providers](/reference/auth-providers)
-- [RBAC Policy](/reference/rbac-policy)
+- [Actor / Organization Model](/reference/actor-organization-model) — migration
+  stub
+- [API Key Management](/reference/api-key-management) — migration stub
+- [Auth Providers](/reference/auth-providers) — migration stub
+- [RBAC Policy](/reference/rbac-policy) — migration stub
 - [Tenant Provisioning](/reference/tenant-provisioning)
 - [Tenant Export / Deletion](/reference/tenant-export-deletion)
 - [Trial Spaces](/reference/trial-spaces)

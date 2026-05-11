@@ -115,12 +115,12 @@ conversion は `trial-converted` audit event を emit し、`oldQuotaTierId` /
 operator が定義する trial tier は以下のような caps を持つことを kernel が
 想定している (具体値は operator policy)。
 
-| Dimension                  | 例     | Notes                                              |
-| -------------------------- | ------ | -------------------------------------------------- |
-| `deployment-count`         | 3      | 同時 active deployment の上限。                    |
-| `artifact-storage-bytes`   | 1 GB   | DataAsset 集計後の artifact 容量上限。             |
-| journal retention          | 7 days | journal 自体の retention は trial 用に短縮できる。 |
-| `space-export-share-count` | 0      | trial Space は cross-Space share を発行できない。  |
+| Dimension                  | 例     | Notes                                                                              |
+| -------------------------- | ------ | ---------------------------------------------------------------------------------- |
+| `deployment-count`         | 3      | 同時 active deployment の上限。                                                    |
+| `artifact-storage-bytes`   | 1 GB   | DataAsset 集計後の artifact 容量上限。                                             |
+| journal retention          | 7 days | journal 自体の retention は trial 用に短縮できる。                                 |
+| `space-export-share-count` | 0      | Reserved / future RFC。current v1 は全 Space で cross-Space share を発行できない。 |
 
 journal retention の短縮は
 [Compliance Retention](/reference/compliance-retention) の regime minimum
@@ -135,35 +135,28 @@ quota 計上 / audit chain / observation set がすべて per-Space で fail-clo
 に分離されており、trial / paid の区別なくこの invariant は kernel が直接強制する
 (operator が無効化する余地は v1 で存在しない)。
 
-これに加えて、trial と paid の間の cross-Space share は **operator policy
-layer** で塞ぐ。kernel は trial quota tier で `space-export-share-count: 0` を
-default 固定値として扱うため、SpaceExportShare の発行も受領も fail-closed に
-reject される。
+これに加えて、current v1 では trial / paid を問わず cross-Space share を
+有効化しない。`space-export-share-count` は reserved / future RFC dimension
+として 0 に固定される。
 
 この境界は意図的に二段構成になっている。
 
 - 上記の per-Space partition / audit chain / secret partition は kernel
   invariant であり、quota tier policy をどう変えても trial Space が paid Space
   の partition を横断することはない。
-- 一方 cross-Space share の禁止は kernel invariant ではなく **operator-tunable
-  な quota tier policy** である。`space-export-share-count` を 0 から引き上げる
-  trial tier を operator が定義すれば、trial Space でも cross-Space share
-  を許可する余地は v1 wire shape として残る。 Takosumi v1 default では operator
-  が trial tier に share を許可しない 運用を想定しており、distribution 同梱の
-  trial tier も 0 で出荷する。
+- cross-Space share の将来解禁は operator-tunable quota tier policy ではなく、
+  future RFC と acceptance gate の対象。current v1 distribution は全 tier で
+  share を持たない。
 
 具体的な fail-closed 経路:
 
 - partition 分離 / quota 計上 / audit chain / secret partition / observation set
   はすべて per-Space で、trial か paid かで挙動を変えない (kernel invariant)。
-- trial Space と production Space (paid Space) の間の cross-link は default
-  で禁止する。具体的には `space-export-share-count` を 0 に固定する ことで share
-  発行を fail-closed にし、cross-Space link projection が 生まれないようにする
-  (operator policy)。
-- 受け側として trial Space を `toSpaceId` に取る SpaceExportShare の draft
-  も同じ tier policy で kernel が reject する。これは「trial に paid Space の
-  data が漏れる」逆向きも遮断するため。
-- conversion 後は通常 Space と同じ規則で SpaceExportShare を扱える。
+- trial Space と production Space (paid Space) の間の cross-link は current v1
+  では常に拒否する。SpaceExportShare draft / active state は作らない。
+- conversion 後も current v1 では SpaceExportShare
+  を扱わない。将来解禁する場合は conversion 後の policy を future RFC
+  で定義する。
 
 ## Audit events
 
@@ -204,7 +197,7 @@ trial の挙動は環境変数で operator が制御する。
   `converted`。
 - `frozen` は read-only で操作が落とされ、grace 経過後の auto-cleanup は Space
   deletion API を経由する。
-- trial Space は `space-export-share-count` 0 で cross-Space link 不可。
+- trial Space は current v1 で cross-Space link 不可。
 - trial extension は operator-only で、actor self-service は v1 範囲外。
 
 ## kernel 範囲と外側の境界

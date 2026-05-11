@@ -167,7 +167,7 @@ When a regulated regime applies (see
 [Compliance Retention](/reference/compliance-retention)), the operator policy
 layer SHOULD reject attribution writes whose values look like email addresses,
 phone numbers, or other PII at request ingest. The kernel exposes the raw write
-hook so policy can run there.
+path so policy can run there.
 
 ## Operator boundary
 
