@@ -21,6 +21,10 @@ import type {
 } from "../../domains/deploy/types.ts";
 import type { ApprovalGateDecision } from "../approvals/mod.ts";
 import type { PackageConformanceResult } from "../conformance/mod.ts";
+import type {
+  PreparedArtifactPreApplyValidationInput,
+  PreparedArtifactPreApplyValidationResult,
+} from "../supply-chain/mod.ts";
 
 export type DeploymentPhase = "resolve" | "apply";
 
@@ -80,12 +84,21 @@ export interface OrchestrateDeploymentInput {
     | readonly PackageConformanceResult[];
   readonly approvalDecision?: ApprovalGateDecision;
   readonly phaseBoundaryChecks?: readonly DeploymentPhaseBoundaryCheck[];
+  readonly preparedArtifactExpectations?:
+    readonly PreparedArtifactPreApplyExpectation[];
 }
 
 export interface DeploymentOrchestrationResult {
   readonly deployment: Deployment;
   readonly groupHead: GroupHead;
 }
+
+export type PreparedArtifactPreApplyExpectation =
+  & Omit<PreparedArtifactPreApplyValidationInput, "deploymentId" | "now">
+  & {
+    readonly deploymentId?: string;
+    readonly now?: PreparedArtifactPreApplyValidationInput["now"];
+  };
 
 /**
  * Subset of the deploy-domain `DeploymentService` used by the orchestrator.
@@ -110,7 +123,14 @@ export interface OrchestratorResolveInput {
 
 export interface DeploymentOrchestratorOptions {
   readonly deploymentService: OrchestratorDeploymentClient;
+  readonly supplyChain?: PreparedArtifactPreApplyValidator;
   readonly clock?: () => Date;
+}
+
+export interface PreparedArtifactPreApplyValidator {
+  requirePreparedArtifactForApply(
+    input: PreparedArtifactPreApplyValidationInput,
+  ): Promise<PreparedArtifactPreApplyValidationResult>;
 }
 
 /**
@@ -122,10 +142,12 @@ export interface DeploymentOrchestratorOptions {
  */
 export class DeploymentOrchestrator {
   readonly #deployments: OrchestratorDeploymentClient;
+  readonly #supplyChain?: PreparedArtifactPreApplyValidator;
   readonly #clock: () => Date;
 
   constructor(options: DeploymentOrchestratorOptions) {
     this.#deployments = options.deploymentService;
+    this.#supplyChain = options.supplyChain;
     this.#clock = options.clock ?? (() => new Date());
   }
 
@@ -149,7 +171,10 @@ export class DeploymentOrchestrator {
       createdBy: input.createdBy,
     });
 
-    const preApplyBlockers = await collectPhaseBlockers(input, "apply");
+    const preApplyBlockers = [
+      ...await this.#collectPreparedArtifactBlockers(input, resolved.id),
+      ...await collectPhaseBlockers(input, "apply"),
+    ];
     if (preApplyBlockers.length > 0) {
       throw new DeploymentPhaseBlockedError(preApplyBlockers);
     }
@@ -159,6 +184,47 @@ export class DeploymentOrchestrator {
 
   #now(): string {
     return this.#clock().toISOString();
+  }
+
+  async #collectPreparedArtifactBlockers(
+    input: OrchestrateDeploymentInput,
+    deploymentId: string,
+  ): Promise<readonly DeploymentPhaseBlocker[]> {
+    const expectations = input.preparedArtifactExpectations ?? [];
+    if (expectations.length === 0) return [];
+    if (!this.#supplyChain) {
+      return expectations.map((expectation) =>
+        preparedArtifactBlocker(
+          "PreparedArtifact pre-Apply validator is not configured",
+          expectation,
+          {
+            deploymentId,
+            artifactDigest: expectation.artifactDigest,
+            rejectionReasons: ["validator-missing"],
+          },
+        )
+      );
+    }
+
+    const blockers: DeploymentPhaseBlocker[] = [];
+    for (const expectation of expectations) {
+      try {
+        await this.#supplyChain.requirePreparedArtifactForApply({
+          ...expectation,
+          deploymentId,
+          now: expectation.now ?? this.#now(),
+        });
+      } catch (error) {
+        blockers.push(
+          preparedArtifactBlocker(
+            error instanceof Error ? error.message : String(error),
+            expectation,
+            preparedArtifactErrorMetadata(error, expectation, deploymentId),
+          ),
+        );
+      }
+    }
+    return blockers;
   }
 }
 
@@ -286,4 +352,49 @@ function codeFromErrorMessage(message: string): string {
   }
   return lower.replaceAll(/[^a-z0-9]+/g, "-").replaceAll(/(^-|-$)/g, "") ||
     "phase-boundary-check-failed";
+}
+
+function preparedArtifactBlocker(
+  message: string,
+  expectation: PreparedArtifactPreApplyExpectation,
+  metadata: Record<string, unknown>,
+): DeploymentPhaseBlocker {
+  return {
+    phase: "apply",
+    source: "read-set",
+    code: "prepared-artifact-pre-apply-validation-failed",
+    message,
+    subject: expectation.artifactDigest,
+    metadata,
+  };
+}
+
+function preparedArtifactErrorMetadata(
+  error: unknown,
+  expectation: PreparedArtifactPreApplyExpectation,
+  deploymentId: string,
+): Record<string, unknown> {
+  const details = errorDetails(error);
+  return {
+    deploymentId,
+    artifactDigest: expectation.artifactDigest,
+    ...details,
+    rejectionReasons: stringArray(details.rejectionReasons),
+  };
+}
+
+function errorDetails(error: unknown): Record<string, unknown> {
+  if (!error || typeof error !== "object" || !("details" in error)) {
+    return {};
+  }
+  const details = (error as { readonly details?: unknown }).details;
+  return details && typeof details === "object" && !Array.isArray(details)
+    ? details as Record<string, unknown>
+    : {};
+}
+
+function stringArray(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }

@@ -18,6 +18,12 @@ import {
 } from "./mod.ts";
 import type { Deployment, GroupHead } from "takosumi-contract";
 import type { PublicDeployManifest } from "../../domains/deploy/types.ts";
+import {
+  InMemoryPreparedArtifactStore,
+  InMemoryProtectedReferenceStore,
+  InMemorySupplyChainRecordStore,
+} from "../../domains/supply-chain/mod.ts";
+import { SupplyChainService } from "../supply-chain/mod.ts";
 
 Deno.test("DeploymentPhaseBlockedError preserves blocker codes for caller surfacing", () => {
   const blockers: readonly DeploymentPhaseBlocker[] = [
@@ -137,6 +143,91 @@ Deno.test("DeploymentOrchestrator raises DeploymentPhaseBlockedError after resol
   // Resolve was attempted but apply was not.
   assert.equal(client.resolveCalls.length, 1);
   assert.equal(client.applyCalls.length, 0);
+});
+
+Deno.test("DeploymentOrchestrator blocks apply when PreparedArtifact package resolution changed", async () => {
+  const client = new StubOrchestratorClient();
+  const orchestrator = new DeploymentOrchestrator({
+    deploymentService: client,
+    supplyChain: await supplyChainWithPreparedArtifact({
+      packageResolutionDigest: "sha256:packages-a",
+    }),
+    clock: () => new Date("2026-04-30T00:00:00.000Z"),
+  });
+
+  await assert.rejects(
+    () =>
+      orchestrator.orchestrate({
+        spaceId: "space_a",
+        manifest: sampleManifest(),
+        preparedArtifactExpectations: [preparedArtifactExpectation({
+          packageResolutionDigest: "sha256:packages-b",
+        })],
+      }),
+    (error) => {
+      assert.ok(error instanceof DeploymentPhaseBlockedError);
+      assert.equal(client.resolveCalls.length, 1);
+      assert.equal(client.applyCalls.length, 0);
+      assert.equal(
+        error.blockers[0].code,
+        "prepared-artifact-pre-apply-validation-failed",
+      );
+      assert.deepEqual(error.blockers[0].metadata?.rejectionReasons, [
+        "package-resolution-digest-mismatch",
+      ]);
+      assert.equal(error.blockers[0].metadata?.deploymentId, "deploy_0");
+      return true;
+    },
+  );
+});
+
+Deno.test("DeploymentOrchestrator applies when PreparedArtifact validation matches", async () => {
+  const client = new StubOrchestratorClient();
+  const orchestrator = new DeploymentOrchestrator({
+    deploymentService: client,
+    supplyChain: await supplyChainWithPreparedArtifact(),
+    clock: () => new Date("2026-04-30T00:00:00.000Z"),
+  });
+
+  const result = await orchestrator.orchestrate({
+    spaceId: "space_a",
+    manifest: sampleManifest(),
+    preparedArtifactExpectations: [preparedArtifactExpectation()],
+  });
+
+  assert.equal(result.deployment.status, "applied");
+  assert.equal(client.resolveCalls.length, 1);
+  assert.deepEqual(client.applyCalls, ["deploy_0"]);
+});
+
+Deno.test("DeploymentOrchestrator fails closed when PreparedArtifact expectations have no validator", async () => {
+  const client = new StubOrchestratorClient();
+  const orchestrator = new DeploymentOrchestrator({
+    deploymentService: client,
+    clock: () => new Date("2026-04-30T00:00:00.000Z"),
+  });
+
+  await assert.rejects(
+    () =>
+      orchestrator.orchestrate({
+        spaceId: "space_a",
+        manifest: sampleManifest(),
+        preparedArtifactExpectations: [preparedArtifactExpectation()],
+      }),
+    (error) => {
+      assert.ok(error instanceof DeploymentPhaseBlockedError);
+      assert.equal(client.resolveCalls.length, 1);
+      assert.equal(client.applyCalls.length, 0);
+      assert.equal(
+        error.blockers[0].code,
+        "prepared-artifact-pre-apply-validation-failed",
+      );
+      assert.deepEqual(error.blockers[0].metadata?.rejectionReasons, [
+        "validator-missing",
+      ]);
+      return true;
+    },
+  );
 });
 
 Deno.test("DeploymentOrchestrator surfaces phase boundary checks raised by callers", async () => {
@@ -271,5 +362,64 @@ function sampleManifest(): PublicDeployManifest {
         port: 8080,
       },
     },
+  };
+}
+
+async function supplyChainWithPreparedArtifact(
+  overrides: Partial<{
+    sourceDigest: string;
+    buildInputDigest: string;
+    buildEnvironmentDigest: string;
+    resolvedGraphDigest: string;
+    packageResolutionDigest: string;
+    artifactDigest: string;
+  }> = {},
+): Promise<SupplyChainService> {
+  const stores = {
+    records: new InMemorySupplyChainRecordStore(),
+    artifacts: new InMemoryPreparedArtifactStore(),
+    protectedReferences: new InMemoryProtectedReferenceStore(),
+  };
+  await stores.artifacts.put({
+    id: "artifact_existing",
+    digest: overrides.artifactDigest ?? "sha256:artifact",
+    storageRef: "s3://prepared/artifact_existing",
+    expiresAt: "2026-05-01T00:00:00.000Z",
+    sourceDigest: overrides.sourceDigest ?? "sha256:source",
+    buildInputDigest: overrides.buildInputDigest ?? "sha256:build-input",
+    buildEnvironmentDigest: overrides.buildEnvironmentDigest ??
+      "sha256:build-env",
+    resolvedGraphDigest: overrides.resolvedGraphDigest ?? "sha256:graph",
+    packageResolutionDigest: overrides.packageResolutionDigest ??
+      "sha256:packages-a",
+    createdAt: "2026-04-29T00:00:00.000Z",
+  });
+  return new SupplyChainService({
+    stores,
+    clock: () => new Date("2026-04-30T00:00:00.000Z"),
+  });
+}
+
+function preparedArtifactExpectation(
+  overrides: Partial<{
+    sourceDigest: string;
+    buildInputDigest: string;
+    buildEnvironmentDigest: string;
+    resolvedGraphDigest: string;
+    packageResolutionDigest: string;
+    artifactDigest: string;
+  }> = {},
+) {
+  return {
+    sourceDigest: overrides.sourceDigest ?? "sha256:source",
+    buildInputDigest: overrides.buildInputDigest ?? "sha256:build-input",
+    buildEnvironmentDigest: overrides.buildEnvironmentDigest ??
+      "sha256:build-env",
+    resolvedGraphDigest: overrides.resolvedGraphDigest ?? "sha256:graph",
+    packageResolutionDigest: overrides.packageResolutionDigest ??
+      "sha256:packages-a",
+    artifactDigest: overrides.artifactDigest ?? "sha256:artifact",
+    readSetValid: true,
+    approvalStateValid: true,
   };
 }
