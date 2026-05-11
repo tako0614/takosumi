@@ -31,6 +31,11 @@ export function buildEventSubscriptionSwitchPreview(
     input.manifest,
     groupId,
   )).filter((subscription) => subscription.source.kind === "queue");
+  const candidateSubscriptions = subscriptionsFromManifest(
+    input.manifest,
+    groupId,
+  )
+    .filter((subscription) => subscription.source.kind === "queue");
   const switchEntries = input.switchPlan?.entries ?? [];
   const switchEntryBySubscriptionId = new Map(
     switchEntries.map((entry) => [entry.subscriptionId, entry]),
@@ -57,10 +62,22 @@ export function buildEventSubscriptionSwitchPreview(
     }));
   }
 
+  issues.push(
+    ...queueDataContractIssues({
+      currentSubscriptions: subscriptions,
+      candidateSubscriptions,
+      items,
+      candidateAppReleaseId: input.candidateAppReleaseId,
+      primaryAppReleaseId: input.primaryAppReleaseId,
+      mismatchAllowed:
+        input.policy?.allowQueueDataContractMismatchDuringCanary === true,
+    }),
+  );
+
   if (
     !input.switchPlan && items.some((item) => item.requiresExplicitSwitchPlan)
   ) {
-    issues.unshift(Object.freeze({
+    issues.push(Object.freeze({
       code: "explicit_switch_plan_required" as const,
       message:
         "event subscriptions stay pinned to primaryAppReleaseId during HTTP canary; provide an explicit switch plan to move queue consumers",
@@ -74,13 +91,19 @@ export function buildEventSubscriptionSwitchPreview(
     primaryAppReleaseId: input.primaryAppReleaseId,
     candidateAppReleaseId: input.candidateAppReleaseId,
     status: issues.some((issue) =>
-        issue.code === "explicit_switch_plan_required"
+        issue.code === "queue_data_contract_mismatch_requires_policy"
       )
+      ? "blocked" as const
+      : issues.some((issue) =>
+          issue.code === "explicit_switch_plan_required"
+        )
       ? "switch-plan-required" as const
       : "ready" as const,
     policy: {
       canaryHttpAutoSwitchesQueueConsumers: false as const,
       explicitSwitchPlanRequired: true as const,
+      queueDataContractMismatchAllowed:
+        input.policy?.allowQueueDataContractMismatchDuringCanary === true,
     },
     subscriptions: items,
     sideEffectControls: buildSideEffectControls(
@@ -94,6 +117,48 @@ export function buildEventSubscriptionSwitchPreview(
     inFlightMessageBehavior: buildInFlightMessageBehaviorProfile(),
     issues,
   });
+}
+
+function queueDataContractIssues(input: {
+  readonly currentSubscriptions: readonly EventSubscription[];
+  readonly candidateSubscriptions: readonly EventSubscription[];
+  readonly items: readonly EventSubscriptionSwitchItemDto[];
+  readonly candidateAppReleaseId?: string;
+  readonly primaryAppReleaseId: string;
+  readonly mismatchAllowed: boolean;
+}): readonly EventSubscriptionSwitchIssueDto[] {
+  if (!input.candidateAppReleaseId || input.mismatchAllowed) return [];
+  const itemBySubscriptionId = new Map(
+    input.items.map((item) => [item.subscriptionId, item]),
+  );
+  const candidateBySubscriptionId = new Map(
+    input.candidateSubscriptions.map((subscription) => [
+      subscription.id,
+      subscription,
+    ]),
+  );
+  const issues: EventSubscriptionSwitchIssueDto[] = [];
+
+  for (const subscription of input.currentSubscriptions) {
+    const currentContract = subscription.dataContractRef;
+    if (!currentContract) continue;
+    const candidateContract = candidateBySubscriptionId.get(subscription.id)
+      ?.dataContractRef;
+    if (!candidateContract || candidateContract === currentContract) continue;
+    const item = itemBySubscriptionId.get(subscription.id);
+    if (!item) continue;
+    if (item.previewTargetAppReleaseId !== input.primaryAppReleaseId) {
+      continue;
+    }
+    issues.push(Object.freeze({
+      code: "queue_data_contract_mismatch_requires_policy" as const,
+      subscriptionId: subscription.id,
+      message:
+        `candidate ${input.candidateAppReleaseId} emits ${candidateContract} for queue subscription ${subscription.id}, but primary consumer ${input.primaryAppReleaseId} accepts ${currentContract}`,
+    }));
+  }
+
+  return issues;
 }
 
 export function buildInFlightMessageBehaviorProfile(): InFlightMessageBehaviorProfileDto {
@@ -240,6 +305,9 @@ function manifestEventSubscriptions(
         groupId,
         name: subscription.targetName,
       },
+      ...(subscription.dataContractRef === undefined
+        ? {}
+        : { dataContractRef: subscription.dataContractRef }),
       delivery: subscription.delivery ?? "at-least-once",
       enabled: subscription.enabled ?? true,
     }));
@@ -283,7 +351,9 @@ function isManifestEventSubscriptionSpec(
   return typeof candidate.id === "string" &&
     candidate.sourceKind === "queue" &&
     typeof candidate.sourceName === "string" &&
-    typeof candidate.targetName === "string";
+    typeof candidate.targetName === "string" &&
+    (candidate.dataContractRef === undefined ||
+      typeof candidate.dataContractRef === "string");
 }
 
 function deepFreeze<T>(value: T): T {

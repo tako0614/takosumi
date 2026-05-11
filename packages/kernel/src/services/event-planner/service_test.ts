@@ -75,6 +75,44 @@ Deno.test("explicit switch plan previews queue consumers and in-flight message b
   );
 });
 
+Deno.test("queue data contract mismatch during HTTP canary is blocked unless policy allows", () => {
+  const blocked = buildEventSubscriptionSwitchPreview({
+    spaceId: "space_a",
+    manifest: sampleManifestWithQueueContract("data.job@v2"),
+    primaryAppReleaseId: "release_primary",
+    candidateAppReleaseId: "release_canary",
+    subscriptions: primarySubscriptions("data.job@v1"),
+  });
+
+  assert.equal(blocked.status, "blocked");
+  const issue = blocked.issues.find((candidate) =>
+    candidate.code === "queue_data_contract_mismatch_requires_policy"
+  );
+  assert.equal(issue?.subscriptionId, "jobs");
+  const queue = blocked.subscriptions.find((candidate) =>
+    candidate.subscriptionId === "jobs"
+  );
+  assert.equal(queue?.previewTargetAppReleaseId, "release_primary");
+
+  const allowed = buildEventSubscriptionSwitchPreview({
+    spaceId: "space_a",
+    manifest: sampleManifestWithQueueContract("data.job@v2"),
+    primaryAppReleaseId: "release_primary",
+    candidateAppReleaseId: "release_canary",
+    subscriptions: primarySubscriptions("data.job@v1"),
+    switchPlan: { entries: [] },
+    policy: { allowQueueDataContractMismatchDuringCanary: true },
+  });
+
+  assert.equal(allowed.status, "ready");
+  assert.equal(
+    allowed.issues.some((candidate) =>
+      candidate.code === "queue_data_contract_mismatch_requires_policy"
+    ),
+    false,
+  );
+});
+
 Deno.test("event switch preview runs before Deployment activation envelope creation", () => {
   const createdDeploymentIds: string[] = [];
   const preview = buildEventSubscriptionSwitchPreview({
@@ -122,4 +160,37 @@ function sampleManifest(): PublicDeployManifest {
       jobs: { target: "handler", protocol: "queue", source: "jobs" },
     },
   };
+}
+
+function sampleManifestWithQueueContract(
+  dataContractRef: string,
+): PublicDeployManifest {
+  return {
+    ...sampleManifest(),
+    overrides: {
+      eventSubscriptions: [{
+        id: "jobs",
+        sourceKind: "queue",
+        sourceName: "jobs",
+        targetName: "handler",
+        dataContractRef,
+      }],
+    },
+  };
+}
+
+function primarySubscriptions(dataContractRef: string) {
+  return [{
+    id: "jobs",
+    source: { kind: "queue" as const, name: "jobs" },
+    target: {
+      kind: "component",
+      groupId: "worker",
+      name: "handler",
+      appReleaseId: "release_primary",
+    },
+    dataContractRef,
+    delivery: "at-least-once" as const,
+    enabled: true,
+  }];
 }

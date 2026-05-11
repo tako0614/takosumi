@@ -38,6 +38,7 @@ export interface EventSubscription {
   readonly id: EventSubscriptionId;
   readonly source: EventSourceRef;
   readonly target: EventTargetRef;
+  readonly dataContractRef?: string;
   readonly filter?: JsonObject;
   readonly delivery: EventDeliverySemantics;
   readonly enabled: boolean;

@@ -12,7 +12,10 @@ import type {
   SpaceId,
 } from "../../domains/events/mod.ts";
 
-export type EventSwitchPreviewStatus = "ready" | "switch-plan-required";
+export type EventSwitchPreviewStatus =
+  | "ready"
+  | "switch-plan-required"
+  | "blocked";
 export type EventSwitchPlanEntryMode = "switch-new-deliveries";
 export type EventSubscriptionSwitchAction =
   | "stay-on-primary"
@@ -34,6 +37,11 @@ export interface EventSubscriptionSwitchPreviewInput {
   readonly candidateAppReleaseId?: AppReleaseId;
   readonly subscriptions?: readonly EventSubscription[];
   readonly switchPlan?: EventSubscriptionSwitchPlanInput;
+  readonly policy?: EventSwitchPolicyInput;
+}
+
+export interface EventSwitchPolicyInput {
+  readonly allowQueueDataContractMismatchDuringCanary?: boolean;
 }
 
 export interface EventSubscriptionSwitchPlanInput {
@@ -64,6 +72,7 @@ export interface EventSubscriptionSwitchPreviewDto {
 export interface EventSwitchPolicyDto {
   readonly canaryHttpAutoSwitchesQueueConsumers: false;
   readonly explicitSwitchPlanRequired: true;
+  readonly queueDataContractMismatchAllowed: boolean;
 }
 
 export interface EventSubscriptionSwitchItemDto {
@@ -123,6 +132,7 @@ export interface InFlightMessageBehaviorProfileDto {
 export interface EventSubscriptionSwitchIssueDto {
   readonly code:
     | "explicit_switch_plan_required"
+    | "queue_data_contract_mismatch_requires_policy"
     | "unknown_switch_plan_subscription";
   readonly subscriptionId?: EventSubscriptionId;
   readonly message: string;
@@ -134,6 +144,7 @@ export interface ManifestEventSubscriptionSpec {
   readonly sourceName: string;
   readonly targetKind?: EventTargetKind;
   readonly targetName: string;
+  readonly dataContractRef?: string;
   readonly delivery?: EventDeliverySemantics;
   readonly enabled?: boolean;
 }

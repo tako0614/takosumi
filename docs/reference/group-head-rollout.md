@@ -109,6 +109,11 @@ canary では traffic split を closed な比率列で進めます。
 - 各 step の昇格は readiness probe / observe 結果が pass したときのみ進み
   ます。pass 条件は kernel が固定し、provider plugin は独自に override
   できません。
+- candidate release が queue に新しい DataContract を出す一方で preview 先の
+  consumer が primary release のまま古い contract しか受理しない場合、event
+  subscription switch preview は `queue_data_contract_mismatch_requires_policy`
+  で `blocked` になります。 operator policy が明示的に allow した mismatch
+  だけがこの block を解除 できます。
 - canary 失敗時は **`rolling-back` に遷移**し、compensate operation を経由して
   旧 pointer に戻します。途中段階で停止する「canary を保ったまま hold」 は v1
   では state として持ちません。`canary-active` に留まったまま operator
