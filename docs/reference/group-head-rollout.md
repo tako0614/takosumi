@@ -127,6 +127,10 @@ shadow では production traffic を新 deployment にも複製送付し、produ
   [Drift Detection](/reference/drift-detection) flow に乗ります。 drift severity
   が `error` であれば operator gate で `rolling-back` に
   遷移させる運用にします。
+- shadow rollout は副作用 surface を持つ manifest を受け付けません。
+  `outputs`、`queue` route、DB semantic write を含む shadow plan は
+  `shadow-side-effects:forbidden` で resolution 時に `deny` されます。 operator
+  approval では override できません。
 - shadow は read-side / invocation-side のいずれも mirror しますが、 shape
   単位で mirror 適用範囲が異なる場合は OperationPlan が固定します。
 

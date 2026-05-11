@@ -1665,8 +1665,8 @@ function validateCanarySafetyPolicies(input: {
     decisions.push(policyDecision({
       id: "policy-decision:canary:shadow-side-effects",
       gate: "operation-planning",
-      decision: "require-approval",
-      ruleRef: "shadow-side-effects:manual-approval-required",
+      decision: "deny",
+      ruleRef: "shadow-side-effects:forbidden",
       subjectAddress: objectAddress("rollout", input.appSpec.groupId),
       subject: { group: input.appSpec.groupId, kind },
       decidedAt: input.resolvedAt,

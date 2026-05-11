@@ -1283,7 +1283,7 @@ Deno.test("core conformance: canary candidate-scoped egress requires approval", 
   assert.equal(decision.decision, "require-approval");
 });
 
-Deno.test("core conformance: shadow side-effect and DB semantic write manifests require approval", async () => {
+Deno.test("core conformance: shadow side-effect manifests are denied before DB semantic write approval", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -1322,6 +1322,12 @@ Deno.test("core conformance: shadow side-effect and DB semantic write manifests 
   });
 
   const decisionIds = new Set(resolved.policy_decisions?.map((d) => d.id));
+  const shadowDecision = resolved.policy_decisions?.find((d) =>
+    d.id === "policy-decision:canary:shadow-side-effects"
+  );
+  assert.equal(resolved.status, "failed");
+  assert.equal(shadowDecision?.decision, "deny");
+  assert.equal(shadowDecision?.ruleRef, "shadow-side-effects:forbidden");
   assert.equal(
     decisionIds.has("policy-decision:canary:shadow-side-effects"),
     true,
