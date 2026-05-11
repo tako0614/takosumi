@@ -7,6 +7,7 @@ interface CapturedRequest {
   readonly method: string;
   readonly body: unknown;
   readonly authorization: string | null;
+  readonly idempotencyKey: string | null;
 }
 
 Deno.test(
@@ -27,6 +28,10 @@ Deno.test(
       assert.equal(captured.method, "POST");
       assert.equal(captured.url, "https://kernel.example/v1/deployments");
       assert.equal(captured.authorization, "Bearer deploy-token");
+      assert.ok(
+        captured.idempotencyKey,
+        "remote deploy must carry an idempotency key",
+      );
       const body = captured.body as Record<string, unknown>;
       assert.equal(body.mode, "apply");
       assert.deepEqual(body.manifest, {
@@ -42,6 +47,30 @@ Deno.test(
           },
         ],
       });
+    } finally {
+      restoreEnv(env);
+      __resetConfigFileCacheForTesting();
+      await Deno.remove(manifestPath);
+    }
+  },
+);
+
+Deno.test(
+  "deploy command normalizes a trailing-slash remote URL",
+  async () => {
+    const manifestPath = await writeManifest();
+    const env = snapshotEnv();
+    try {
+      isolateConfig();
+      const captured = await runDeployAgainstFakeKernel([
+        manifestPath,
+        "--remote",
+        "https://kernel.example/",
+        "--token",
+        "deploy-token",
+      ]);
+
+      assert.equal(captured.url, "https://kernel.example/v1/deployments");
     } finally {
       restoreEnv(env);
       __resetConfigFileCacheForTesting();
@@ -107,6 +136,9 @@ async function runDeployAgainstFakeKernel(
       method: init?.method ?? "GET",
       body: parsed,
       authorization: auth,
+      idempotencyKey: init?.headers
+        ? new Headers(init.headers).get("x-idempotency-key")
+        : null,
     });
     return Promise.resolve(
       new Response(JSON.stringify({ status: "ok", outcome: {} }), {

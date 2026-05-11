@@ -36,6 +36,8 @@ import {
   type CreatedPaaSApp,
   createPaaSApp,
 } from "@takos/takosumi-kernel/bootstrap";
+import { deployCommand } from "../../cli/src/commands/deploy.ts";
+import { __resetConfigFileCacheForTesting } from "../../cli/src/config.ts";
 
 const SHAPE_ID = "object-store@v1";
 const PROVIDER_ID = "@takos/aws-s3";
@@ -341,6 +343,52 @@ Deno.test("e2e: mode=plan returns DAG without invoking provider.apply", async ()
     await harness.shutdown();
   }
 });
+
+Deno.test(
+  "e2e: takosumi deploy CLI submits an explicit manifest to a remote kernel",
+  async () => {
+    const harness = await buildE2eHarness({ serveKernel: true });
+    const manifestPath = await Deno.makeTempFile({ suffix: ".json" });
+    const originalLog = console.log;
+    try {
+      assert.ok(harness.kernelUrl, "expected kernel HTTP listener");
+      await Deno.writeTextFile(
+        manifestPath,
+        JSON.stringify(manifestForS3()),
+      );
+
+      __resetConfigFileCacheForTesting();
+      console.log = () => {};
+      await deployCommand.parse([
+        manifestPath,
+        "--remote",
+        harness.kernelUrl,
+        "--token",
+        DEPLOY_TOKEN,
+      ]);
+
+      assert.equal(harness.calls.length, 1);
+      assert.equal(harness.calls[0].op, "apply");
+      assert.equal(harness.calls[0].resourceName, "primary");
+
+      const listResponse = await fetch(`${harness.kernelUrl}/v1/deployments`, {
+        method: "GET",
+        headers: bearer(DEPLOY_TOKEN),
+      });
+      assert.equal(listResponse.status, 200);
+      const listBody = await listResponse.json();
+      assert.ok(Array.isArray(listBody.deployments));
+      assert.equal(listBody.deployments.length, 1);
+      assert.equal(listBody.deployments[0].name, "e2e-app");
+      assert.equal(listBody.deployments[0].status, "applied");
+    } finally {
+      console.log = originalLog;
+      __resetConfigFileCacheForTesting();
+      await Deno.remove(manifestPath).catch(() => {});
+      await harness.shutdown();
+    }
+  },
+);
 
 Deno.test("e2e: GET /v1/deployments and /:name return persisted state", async () => {
   const harness = await buildE2eHarness();
