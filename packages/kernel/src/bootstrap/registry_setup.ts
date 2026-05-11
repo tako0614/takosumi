@@ -1,10 +1,5 @@
-import {
-  registerProvider,
-  registerShape,
-  registerTemplate,
-} from "takosumi-contract";
+import { registerProvider, registerShape } from "takosumi-contract";
 import { TAKOSUMI_BUNDLED_SHAPES } from "@takos/takosumi-plugins/shapes";
-import { TAKOSUMI_BUNDLED_TEMPLATES } from "@takos/takosumi-plugins/templates";
 import { createTakosumiProductionProviders } from "@takos/takosumi-plugins/shape-providers/factories";
 import { registerBundledArtifactKinds } from "@takos/takosumi-plugins/shape-providers";
 import { detectRuntimeAgent } from "./agent_detection.ts";
@@ -12,8 +7,8 @@ import { detectRuntimeAgent } from "./agent_detection.ts";
 let bundledShapesRegistered = false;
 
 /**
- * Idempotently registers all bundled shapes, templates, and runtime-agent-
- * backed providers into the global contract registry. Called once per
+ * Idempotently registers all bundled shapes and runtime-agent-backed providers
+ * into the global contract registry. Called once per
  * `createPaaSApp` invocation; safe to call repeatedly.
  *
  * Provider registration only fires when `TAKOSUMI_AGENT_URL` and
@@ -26,9 +21,6 @@ export function registerBundledShapesAndProviders(
 ): void {
   if (!bundledShapesRegistered) {
     for (const shape of TAKOSUMI_BUNDLED_SHAPES) registerShape(shape);
-    for (const template of TAKOSUMI_BUNDLED_TEMPLATES) {
-      registerTemplate(template);
-    }
     registerBundledArtifactKinds();
     bundledShapesRegistered = true;
   }

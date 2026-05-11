@@ -3,8 +3,7 @@
 // Verifies that:
 //   1. A manifest carrying the new shape-model `resources` array is routed
 //      through `apply_v2` (observable via the fake provider apply log).
-//   2. A manifest using a `template` invocation expands the template and
-//      then dispatches through `apply_v2`.
+//   2. Retired top-level `template` shorthand is rejected at this boundary.
 //   3. Legacy `compute + resources(map) + routes` manifests continue to use
 //      the existing plan-then-apply pipeline unchanged.
 
@@ -17,13 +16,10 @@ import {
   type ProviderPlugin,
   registerProvider,
   registerShape,
-  registerTemplate,
   secretStore,
   type Shape,
-  type Template,
   unregisterProvider,
   unregisterShape,
-  unregisterTemplate,
 } from "takosumi-contract";
 import { ApplyService } from "./apply_service.ts";
 import { InMemoryDeploymentStore } from "./deployment_service.ts";
@@ -32,8 +28,6 @@ import type { PublicDeployManifest } from "./types.ts";
 const SHAPE = "test-dispatch-shape";
 const SHAPE_VERSION = "v1";
 const PROV_OK = "test-dispatch-provider";
-const TEMPLATE_ID = "test-dispatch-template";
-const TEMPLATE_VERSION = "v1";
 
 interface ApplyLogEntry {
   readonly providerId: string;
@@ -92,36 +86,15 @@ function provider(): ProviderPlugin {
   };
 }
 
-function template(): Template {
-  return {
-    id: TEMPLATE_ID,
-    version: TEMPLATE_VERSION,
-    description: "test dispatch template",
-    validateInputs(_value, _issues) {},
-    expand(_inputs) {
-      return [
-        {
-          shape: `${SHAPE}@${SHAPE_VERSION}`,
-          name: "from-template",
-          provider: PROV_OK,
-          spec: { kind: "expanded" },
-        },
-      ];
-    },
-  };
-}
-
 function setUp() {
   applyLog.length = 0;
   registerShape(shape());
   registerProvider(provider());
-  registerTemplate(template());
 }
 
 function tearDown() {
   unregisterShape(SHAPE, SHAPE_VERSION);
   unregisterProvider(PROV_OK);
-  unregisterTemplate(TEMPLATE_ID, TEMPLATE_VERSION);
 }
 
 function platformAdapters() {
@@ -223,7 +196,7 @@ Deno.test("ApplyService dispatches shape-model resources to apply_v2", async () 
   }
 });
 
-Deno.test("ApplyService expands manifest.template and dispatches to apply_v2", async () => {
+Deno.test("ApplyService rejects retired top-level template shorthand", async () => {
   setUp();
   try {
     const store = new InMemoryDeploymentStore();
@@ -234,21 +207,20 @@ Deno.test("ApplyService expands manifest.template and dispatches to apply_v2", a
     const manifest = {
       name: "template-app",
       template: {
-        template: `${TEMPLATE_ID}@${TEMPLATE_VERSION}`,
+        template: "selfhosted-single-vm@v1",
         inputs: {},
       },
     } as unknown as PublicDeployManifest;
 
-    const result = await service.applyManifest({
-      spaceId: "space_template",
-      manifest,
-    });
-
-    assert.equal(applyLog.length, 1, "template expanded into one resource");
-    assert.equal(result.v2Outcome?.status, "succeeded");
-    assert.equal(result.v2Outcome?.applied.length, 1);
-    assert.equal(result.v2Outcome?.applied[0].name, "from-template");
-    assert.equal(result.deployment.group_id, "template-app");
+    await assert.rejects(
+      () =>
+        service.applyManifest({
+          spaceId: "space_template",
+          manifest,
+        }),
+      /top-level `template` is retired/,
+    );
+    assert.equal(applyLog.length, 0);
   } finally {
     tearDown();
   }

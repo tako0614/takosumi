@@ -129,10 +129,12 @@ operator gateway 経由で Hetzner Cloud API を呼びます。
 cf.
 [Operator Bootstrap § Gateway URL pattern](/operator/bootstrap#gateway-url-pattern)
 
-## 新 template の追加
+## compiler template の追加
 
 template は **既存 Shape / Provider の合成** だけで作れます。新 Shape を
-増やしません。
+増やしません。これは kernel `POST /v1/deployments` の入力ではなく、installer /
+compiler layer が deploy 前に `resources[]` へ展開するための authoring helper
+です。
 
 ### 1. ファイルを作る
 
@@ -181,10 +183,11 @@ export const SelfhostedK3sClusterTemplate: Template<SelfhostedK3sClusterInputs> 
 export { SelfhostedK3sClusterTemplate } from "./selfhosted-k3s-cluster.ts";
 ```
 
-### 5. registry へ register
+### 5. compiler registry へ register
 
-operator side で `registerTemplate(SelfhostedK3sClusterTemplate)` を呼ぶか、
-bundled template として `mod.ts` 一括 register に追加します。
+installer / compiler process で `registerTemplate(SelfhostedK3sClusterTemplate)`
+を呼ぶか、bundled template として `mod.ts` 一括 register に追加します。kernel
+boot path では template を register しません。
 
 ### 6. 既存 docs を更新
 

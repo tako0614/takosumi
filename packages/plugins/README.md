@@ -1,7 +1,9 @@
 # @takos/takosumi-plugins
 
-Shape catalog, provider plugins, and templates bundled with Takosumi. The kernel
-auto-registers everything from this package on boot.
+Shape catalog, provider plugins, and compiler templates bundled with Takosumi.
+The kernel auto-registers Shape contracts, artifact kinds, and runtime-agent
+backed providers on boot. Templates are not kernel manifest input; installer /
+compiler layers expand them to `resources[]` before deploy.
 
 Plugins themselves are paper-thin HTTP wrappers around the runtime-agent (see
 [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)).
@@ -26,8 +28,9 @@ const providers = createTakosumiProductionProviders({
 });
 ```
 
-The kernel calls this on boot via `registerBundledShapesAndProviders(env)` —
-operators usually don't import this directly.
+The kernel calls the Shape/provider registration path on boot via
+`registerBundledShapesAndProviders(env)`. Template registration is only for
+compiler processes that need authoring macros.
 
 ## Shapes (5)
 

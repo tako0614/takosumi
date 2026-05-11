@@ -148,8 +148,9 @@ Behaviour:
   kernel configuration (`TAKOSUMI_DEPLOY_SPACE_ID`, default `takosumi-deploy`).
   Each remote write carries a fresh `X-Idempotency-Key` so transport retries
   replay the first kernel response instead of re-running apply.
-- Local: expands the manifest with the bundled registry and runs an in-process
-  apply (or plan, when `--dry-run` is set). State is discarded on exit.
+- Local: validates the compiled `resources[]` manifest with the bundled Shape /
+  provider registry and runs an in-process apply (or plan, when `--dry-run` is
+  set). State is discarded on exit.
 
 Exit codes: `0` accepted, `1` validation or apply failure, `2` malformed flags.
 
@@ -293,19 +294,18 @@ even for staging or production.
 Exit codes: `0` migrated or dry-run printed, `1` migration error or kernel
 script missing, `2` required env unset for non-dry-run staging / production.
 
-### `takosumi init [<output>]` (deprecated compatibility)
+### `takosumi init [<output>]`
 
-Historical CLI builds could scaffold a manifest. Current public workflow writes
-an explicit compiled Shape manifest and passes its path to `takosumi deploy`.
-Project-layout scaffolding belongs to `takosumi-git`.
+Scaffold an explicit compiled Shape manifest and pass its path to
+`takosumi deploy`. Project-layout scaffolding belongs to `takosumi-git`.
 
 ```text
 takosumi init [<output>]
 ```
 
-If `<output>` is given, the rendered compatibility manifest is written to that
-path; otherwise it is printed to stdout. Do not treat top-level `template` as a
-current kernel public field.
+If `<output>` is given, the rendered `resources[]` manifest is written to that
+path; otherwise it is printed to stdout. Top-level `template` is not a current
+kernel public field.
 
 ### `takosumi doctor`
 

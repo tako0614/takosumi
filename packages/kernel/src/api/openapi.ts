@@ -898,7 +898,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         kind: { const: "Manifest" },
         namespace: { type: "string" },
         metadata: ref("ManifestMetadata"),
-        template: ref("ManifestTemplate"),
         resources: {
           type: "array",
           items: ref("ManifestResource"),
@@ -911,21 +910,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         name: { type: "string" },
         labels: stringMap,
-      },
-      additionalProperties: false,
-    },
-    ManifestTemplate: {
-      type: "object",
-      properties: {
-        template: { type: "string", pattern: "^[^@]+@[^@]+$" },
-        inputs: jsonObject,
-        ref: {
-          type: "string",
-          pattern: "^[^@]+@[^@]+$",
-          deprecated: true,
-          description:
-            "Deprecated compatibility alias for template; new manifests use template.",
-        },
       },
       additionalProperties: false,
     },

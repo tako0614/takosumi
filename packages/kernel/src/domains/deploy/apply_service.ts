@@ -12,11 +12,11 @@
 //
 // Shape-model dispatch (apply_v2)
 // -------------------------------
-// When a manifest carries the new shape-model fields (`resources` as an
-// array, or a `template` invocation), `applyManifest` short-circuits the
-// legacy plan-then-apply pipeline and dispatches to `applyV2`. The legacy
-// `target + services` (and the legacy authoring `resources` *map*) flow is
-// unchanged; only manifests that opt in to the shape model are routed to v2.
+// When a manifest carries the current shape-model field (`resources` as an
+// array), `applyManifest` short-circuits the legacy plan-then-apply pipeline
+// and dispatches to `applyV2`. Historical top-level `template` authoring
+// shorthand is intentionally rejected here; template/compiler layers must
+// submit expanded `resources[]`.
 
 import type {
   ActorContext,
@@ -27,11 +27,10 @@ import type {
   IsoTimestamp,
   JsonObject,
   ManifestResource,
-  ManifestTemplateInvocation,
   PlatformContext,
   RefResolver,
 } from "takosumi-contract";
-import { getTemplateByRef, objectAddress } from "takosumi-contract";
+import { objectAddress } from "takosumi-contract";
 import { applyV2, type ApplyV2Outcome } from "./apply_v2.ts";
 import {
   type DeploymentFilter,
@@ -105,9 +104,9 @@ export interface ApplyServiceOptions
   readSetRevalidator?: unknown;
   /**
    * Adapters required to construct a `PlatformContext` for the shape-model
-   * (`apply_v2`) dispatch path. When omitted, manifests using the shape
-   * model fail with a clear error; legacy `target + services` manifests
-   * continue to work without these adapters.
+   * (`apply_v2`) dispatch path. When omitted, manifests using `resources[]`
+   * fail with a clear error; legacy `target + services` manifests continue
+   * to work without these adapters.
    */
   platformAdapters?: PlatformContextAdapters;
   /** Tenant id surfaced into `PlatformContext.tenantId` (defaults to spaceId). */
@@ -189,13 +188,15 @@ export class ApplyService {
   /**
    * Resolve a manifest into a Deployment, then immediately apply it.
    *
-   * If the manifest opts in to the shape model (`resources` as an array, or
-   * a `template` invocation) the call is dispatched through `apply_v2`
-   * instead of the legacy plan-then-apply pipeline.
+   * If the manifest opts in to the shape model (`resources` as an array), the
+   * call is dispatched through `apply_v2` instead of the legacy plan-then-apply
+   * pipeline. Top-level `template` is retired and must be expanded before this
+   * boundary.
    */
   async applyManifest(
     input: ApplyDeployManifestInput,
   ): Promise<ApplyDeployResult> {
+    assertNoRetiredTemplateShorthand(input.manifest);
     if (manifestUsesShapeModel(input.manifest)) {
       return await this.#applyManifestV2(input);
     }
@@ -339,13 +340,24 @@ export class ApplyService {
 /**
  * `true` when the manifest opts into the shape model. The legacy authoring
  * surface uses `resources` as a `Record<string, ...>` map; the shape model
- * uses an array. A `template` invocation is always shape-model.
+ * uses an array.
  */
 function manifestUsesShapeModel(manifest: PublicDeployManifest): boolean {
   const m = manifest as Record<string, unknown>;
   if (Array.isArray(m.resources)) return true;
-  if (m.template !== undefined && m.template !== null) return true;
   return false;
+}
+
+function assertNoRetiredTemplateShorthand(
+  manifest: PublicDeployManifest,
+): void {
+  const m = manifest as Record<string, unknown>;
+  if (m.template !== undefined) {
+    throw new Error(
+      "ApplyService.applyManifest: top-level `template` is retired; submit " +
+        "expanded `resources[]` instead",
+    );
+  }
 }
 
 function resolveManifestResources(
@@ -355,29 +367,7 @@ function resolveManifestResources(
   if (Array.isArray(m.resources)) {
     return m.resources as readonly ManifestResource[];
   }
-  const invocation = m.template as ManifestTemplateInvocation | undefined;
-  if (!invocation || typeof invocation.template !== "string") {
-    throw new Error(
-      "ApplyService: shape-model manifest requires either `resources` " +
-        "(array) or `template` (invocation)",
-    );
-  }
-  const template = getTemplateByRef(invocation.template);
-  if (!template) {
-    throw new Error(
-      `ApplyService: unknown manifest template '${invocation.template}'`,
-    );
-  }
-  const issues: { readonly path: string; readonly message: string }[] = [];
-  template.validateInputs(invocation.inputs ?? {}, issues);
-  if (issues.length > 0) {
-    const summary = issues.map((i) => `${i.path}: ${i.message}`).join("; ");
-    throw new Error(
-      `ApplyService: template '${invocation.template}' input validation ` +
-        `failed: ${summary}`,
-    );
-  }
-  return template.expand(invocation.inputs ?? {});
+  throw new Error("ApplyService: shape-model manifest requires `resources[]`");
 }
 
 const NOOP_REF_RESOLVER: RefResolver = {

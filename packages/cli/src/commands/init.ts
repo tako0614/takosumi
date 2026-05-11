@@ -5,12 +5,25 @@ const TEMPLATES = {
 kind: Manifest
 metadata:
   name: my-app
-template:
-  template: selfhosted-single-vm@v1
-  inputs:
-    serviceName: api
-    image: oci://ghcr.io/me/api:latest
-    port: 8080
+resources:
+  - shape: database-postgres@v1
+    name: db
+    provider: "@takos/selfhost-postgres"
+    spec: { version: "16", size: small }
+  - shape: object-store@v1
+    name: assets
+    provider: "@takos/selfhost-filesystem"
+    spec: { name: api-assets }
+  - shape: web-service@v1
+    name: api
+    provider: "@takos/selfhost-docker-compose"
+    spec:
+      image: oci://ghcr.io/me/api:latest
+      port: 8080
+      scale: { min: 1, max: 1 }
+      bindings:
+        DATABASE_URL: "\${ref:db.connectionString}"
+        ASSETS_BUCKET: "\${ref:assets.bucket}"
 `,
   empty: `apiVersion: "1.0"
 kind: Manifest

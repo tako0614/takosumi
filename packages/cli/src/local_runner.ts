@@ -13,7 +13,6 @@ import {
 import { expandManifestResourcesV1 } from "@takos/takosumi-kernel/manifest-v1";
 import { TAKOSUMI_BUNDLED_SHAPES } from "@takos/takosumi-plugins/shapes";
 import { createInMemoryTakosumiProviders } from "@takos/takosumi-plugins/shape-providers";
-import { TAKOSUMI_BUNDLED_TEMPLATES } from "@takos/takosumi-plugins/templates";
 
 export async function applyLocal(
   resources: readonly ManifestResource[],
@@ -51,25 +50,14 @@ export async function destroyLocal(
  * Resolve a manifest down to the concrete resource list that
  * {@link applyLocal} / {@link destroyLocal} consume.
  *
- * Accepts either:
- *  - `{ resources: ManifestResource[] }` — returned as-is.
- *  - `{ template: { template: "id@version", inputs?: {} } }` — canonical
- *    manifest v1 template invocation.
- *  - both of the above — explicit resources append after template expansion.
- *  - `{ template: { name: "id", inputs?: {} } }` — friendlier alternate
- *    shape: looks up `name` against the bundled templates by id (matching
- *    the latest version that is bundled).
- *
- * Throws a descriptive `Error` listing the bundled template ids when the
- * manifest matches none of the above.
+ * Accepts only compiled Shape manifests with concrete `resources[]`.
+ * Template expansion is an installer/compiler concern that must run before
+ * invoking either CLI local mode or the remote kernel route.
  */
 export function expandManifestLocal(
   manifest: unknown,
 ): readonly ManifestResource[] {
-  return expandManifestResourcesV1(manifest, {
-    templates: TAKOSUMI_BUNDLED_TEMPLATES,
-    allowTemplateName: true,
-  });
+  return expandManifestResourcesV1(manifest);
 }
 
 function registerLocalRegistry(): void {

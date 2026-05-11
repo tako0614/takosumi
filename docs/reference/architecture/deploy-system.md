@@ -463,8 +463,8 @@ operator script は同じ API を呼ぶ client です。pipeline は Deployment 
 
 1. **Authoring expansion**
    - deploy manifest envelope (`apiVersion: "1.0"` / `kind: Manifest`) を parse
-   - bundled `template` があれば `resources[]` に展開する
-   - kernel 到達時点で `workflowRef` や installer-only placeholder
+   - `resources[]` が concrete Shape resource list であることを検証する
+   - kernel 到達時点で `template` / `workflowRef` / installer-only placeholder
      が残っていれば reject する
    - group が指定されている場合は group membership を付与する
 2. **Resolution** (status → `resolved`)

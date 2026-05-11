@@ -241,7 +241,6 @@ Deno.test("createPaaSOpenApiDocument documents deploy public and artifact auth/s
       "metadata",
       "namespace",
       "resources",
-      "template",
     ],
   );
   assert.equal(

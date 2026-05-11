@@ -1,14 +1,9 @@
 import assert from "node:assert/strict";
-import type { ManifestResource, Template } from "takosumi-contract";
-import { registerTemplate, unregisterTemplate } from "takosumi-contract";
+import type { ManifestResource } from "takosumi-contract";
 import {
   readDeploymentNameV1,
   resolveManifestResourcesV1,
 } from "./manifest_v1.ts";
-
-const TEMPLATE_ID = "manifest-v1-test-template";
-const TEMPLATE_VERSION = "v1";
-const TEMPLATE_REF = `${TEMPLATE_ID}@${TEMPLATE_VERSION}`;
 
 const EXTRA_RESOURCE: ManifestResource = {
   shape: "object-store@v1",
@@ -16,90 +11,6 @@ const EXTRA_RESOURCE: ManifestResource = {
   provider: "@takos/selfhost-filesystem",
   spec: { name: "backups" },
 };
-
-const testTemplate: Template = {
-  id: TEMPLATE_ID,
-  version: TEMPLATE_VERSION,
-  validateInputs(value, issues) {
-    if (
-      typeof value !== "object" || value === null || Array.isArray(value)
-    ) {
-      issues.push({ path: "$", message: "must be an object" });
-      return;
-    }
-    const input = value as Record<string, unknown>;
-    if (typeof input.name !== "string" || input.name.length === 0) {
-      issues.push({ path: "$.name", message: "must be a non-empty string" });
-    }
-  },
-  expand(input) {
-    const name = (input as { name: string }).name;
-    return [{
-      shape: "object-store@v1",
-      name,
-      provider: "@takos/selfhost-filesystem",
-      spec: { name },
-    }];
-  },
-};
-
-Deno.test("manifest v1 resolver expands canonical template.template", () => {
-  registerTemplate(testTemplate);
-  try {
-    const result = resolveManifestResourcesV1({
-      apiVersion: "1.0",
-      kind: "Manifest",
-      template: {
-        template: TEMPLATE_REF,
-        inputs: { name: "assets" },
-      },
-    });
-    assert.equal(result.ok, true);
-    assert.equal(result.ok ? result.value[0].name : undefined, "assets");
-  } finally {
-    unregisterTemplate(TEMPLATE_ID, TEMPLATE_VERSION);
-  }
-});
-
-Deno.test("manifest v1 resolver keeps template.ref as legacy compatibility", () => {
-  registerTemplate(testTemplate);
-  try {
-    const result = resolveManifestResourcesV1({
-      apiVersion: "1.0",
-      kind: "Manifest",
-      template: {
-        ref: TEMPLATE_REF,
-        inputs: { name: "assets" },
-      },
-    });
-    assert.equal(result.ok, true);
-    assert.equal(result.ok ? result.value[0].name : undefined, "assets");
-  } finally {
-    unregisterTemplate(TEMPLATE_ID, TEMPLATE_VERSION);
-  }
-});
-
-Deno.test("manifest v1 resolver appends resources after template expansion", () => {
-  registerTemplate(testTemplate);
-  try {
-    const result = resolveManifestResourcesV1({
-      apiVersion: "1.0",
-      kind: "Manifest",
-      template: {
-        template: TEMPLATE_REF,
-        inputs: { name: "assets" },
-      },
-      resources: [EXTRA_RESOURCE],
-    });
-    assert.equal(result.ok, true);
-    assert.deepEqual(
-      result.ok ? result.value.map((resource) => resource.name) : [],
-      ["assets", "backups"],
-    );
-  } finally {
-    unregisterTemplate(TEMPLATE_ID, TEMPLATE_VERSION);
-  }
-});
 
 Deno.test("manifest v1 resolver accepts resources without provider pin", () => {
   const result = resolveManifestResourcesV1({
@@ -113,6 +24,20 @@ Deno.test("manifest v1 resolver accepts resources without provider pin", () => {
   });
   assert.equal(result.ok, true);
   assert.equal(result.ok ? result.value[0].provider : undefined, undefined);
+});
+
+Deno.test("manifest v1 resolver rejects retired top-level template", () => {
+  const result = resolveManifestResourcesV1({
+    apiVersion: "1.0",
+    kind: "Manifest",
+    template: {
+      template: "selfhosted-single-vm@v1",
+      inputs: { name: "assets" },
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? "" : result.error, /\$\.template/);
+  assert.match(result.ok ? "" : result.error, /template is not a known field/);
 });
 
 Deno.test("manifest v1 resolver rejects unknown closed-envelope fields", () => {
@@ -156,35 +81,16 @@ Deno.test("manifest v1 resolver validates metadata and resource field shape", ()
   );
 });
 
-Deno.test("manifest v1 resolver rejects conflicting template aliases", () => {
+Deno.test("manifest v1 resolver requires resources[]", () => {
   const result = resolveManifestResourcesV1({
     apiVersion: "1.0",
     kind: "Manifest",
-    template: {
-      template: TEMPLATE_REF,
-      ref: "other-template@v1",
-      inputs: { name: "assets" },
-    },
   });
   assert.equal(result.ok, false);
-  assert.match(result.ok ? "" : result.error, /conflict/);
-});
-
-Deno.test("manifest v1 resolver allows CLI-local template.name only by option", () => {
-  const strict = resolveManifestResourcesV1({
-    apiVersion: "1.0",
-    kind: "Manifest",
-    template: { name: TEMPLATE_ID, inputs: { name: "assets" } },
-  }, { templates: [testTemplate] });
-  assert.equal(strict.ok, false);
-
-  const compat = resolveManifestResourcesV1({
-    apiVersion: "1.0",
-    kind: "Manifest",
-    template: { name: TEMPLATE_ID, inputs: { name: "assets" } },
-  }, { templates: [testTemplate], allowTemplateName: true });
-  assert.equal(compat.ok, true);
-  assert.equal(compat.ok ? compat.value[0].name : undefined, "assets");
+  assert.match(
+    result.ok ? "" : result.error,
+    /manifest\.resources\[\] is required/,
+  );
 });
 
 Deno.test("manifest v1 deployment name falls back deterministically", () => {

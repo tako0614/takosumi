@@ -33,7 +33,6 @@ export interface Manifest {
   readonly kind: typeof MANIFEST_KIND;
   readonly namespace?: string;
   readonly metadata?: ManifestMetadata;
-  readonly template?: ManifestTemplateInvocation;
   readonly resources?: readonly ManifestResource[];
 }
 
@@ -42,30 +41,14 @@ export interface ManifestEnvelopeIssue {
   readonly message: string;
 }
 
-export interface ManifestEnvelopeValidationOptions {
-  /**
-   * CLI local compatibility for the friendlier shorthand
-   * `template: { name: "id" }`. Canonical remote manifests must use
-   * `template.template: "id@version"`.
-   */
-  readonly allowTemplateName?: boolean;
-  /**
-   * Backward compatibility for early v1 public deploy clients that used
-   * `template.ref` as the pinned template reference.
-   */
-  readonly allowLegacyTemplateRef?: boolean;
-}
-
 /**
  * Validate the top-level apiVersion / kind of a manifest body. Returns
- * issues (empty == valid). Designed to run BEFORE template expansion or
- * resource resolution so misversioned manifests fail fast with an actionable
- * error.
+ * issues (empty == valid). Designed to run BEFORE resource resolution so
+ * misversioned manifests fail fast with an actionable error.
  */
 export function validateManifestEnvelope(
   body: unknown,
   issues: ManifestEnvelopeIssue[],
-  options: ManifestEnvelopeValidationOptions = {},
 ): void {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     issues.push({ path: "$", message: "manifest must be a JSON object" });
@@ -78,7 +61,6 @@ export function validateManifestEnvelope(
     "kind",
     "namespace",
     "metadata",
-    "template",
     "resources",
   ], issues);
   validateManifestJsonLdContext(m["@context"], issues);
@@ -98,7 +80,6 @@ export function validateManifestEnvelope(
   }
   validateManifestNamespace(m.namespace, issues);
   validateManifestMetadata(m.metadata, issues);
-  validateManifestTemplateInvocation(m.template, issues, options);
   validateManifestResources(m.resources, issues);
 }
 
@@ -145,11 +126,6 @@ export interface ManifestResource {
   readonly metadata?: JsonObject;
 }
 
-export interface ManifestTemplateInvocation {
-  readonly template: string;
-  readonly inputs?: JsonObject;
-}
-
 function validateManifestNamespace(
   namespace: unknown,
   issues: ManifestEnvelopeIssue[],
@@ -183,44 +159,6 @@ function validateManifestMetadata(
   }
   if (metadata.labels !== undefined) {
     validateStringMap("$.metadata.labels", metadata.labels, issues);
-  }
-}
-
-function validateManifestTemplateInvocation(
-  template: unknown,
-  issues: ManifestEnvelopeIssue[],
-  options: ManifestEnvelopeValidationOptions,
-): void {
-  if (template === undefined) return;
-  if (!isRecord(template)) {
-    issues.push({
-      path: "$.template",
-      message: "template must be a JSON object",
-    });
-    return;
-  }
-
-  const allowed = ["template", "inputs"];
-  if (options.allowLegacyTemplateRef !== false) allowed.push("ref");
-  if (options.allowTemplateName === true) allowed.push("name");
-  pushUnknownKeys("$.template", template, allowed, issues);
-
-  for (const key of ["template", "ref", "name"]) {
-    if (
-      template[key] !== undefined &&
-      !isNonEmptyString(template[key])
-    ) {
-      issues.push({
-        path: `$.template.${key}`,
-        message: `template.${key} must be a non-empty string`,
-      });
-    }
-  }
-  if (template.inputs !== undefined && !isRecord(template.inputs)) {
-    issues.push({
-      path: "$.template.inputs",
-      message: "template.inputs must be a JSON object",
-    });
   }
 }
 

@@ -109,13 +109,14 @@ interface DeployPublicRequest {
 }
 ```
 
-`manifest` は Takosumi v1 compiled Shape manifest です。Top-level は
-`apiVersion: "1.0"` / `kind: "Manifest"` / `metadata` / `resources` の closed
-envelope で、`resources[]` は `ManifestResource` (`shape` / `name` / `spec` /
-optional `provider` hint / `requires` / `metadata`) です。`template` は current
-kernel public contract ではなく、必要なら installer/compiler layer で
-`resources[]` に展開してから `POST /v1/deployments` に渡します。詳細は
-[Manifest](/manifest) と [Manifest Validation](/reference/manifest-validation)。
+`manifest` は Takosumi v1 compiled Shape manifest です。Top-level は `@context`
+/ `apiVersion: "1.0"` / `kind: "Manifest"` / `namespace` / `metadata` /
+`resources` の closed envelope で、`resources[]` は `ManifestResource` (`shape`
+/ `name` / `spec` / optional `provider` hint / `requires` / `metadata`)
+です。`template` は current kernel public contract ではなく、必要なら
+installer/compiler layer で `resources[]` に展開してから `POST /v1/deployments`
+に渡します。詳細は [Manifest](/manifest) と
+[Manifest Validation](/reference/manifest-validation)。
 
 `provenance` is an optional JSON object supplied by an upstream deploy client.
 The kernel treats it as opaque audit evidence. For example, `takosumi-git push`

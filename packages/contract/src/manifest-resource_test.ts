@@ -100,6 +100,21 @@ Deno.test("validateManifestEnvelope rejects service import pin metadata", () => 
   ]);
 });
 
+Deno.test("validateManifestEnvelope rejects retired top-level template", () => {
+  const issues: { path: string; message: string }[] = [];
+  validateManifestEnvelope({
+    apiVersion: "1.0",
+    kind: "Manifest",
+    template: {
+      template: "selfhosted-single-vm@v1",
+      inputs: { serviceName: "api" },
+    },
+    resources: [],
+  }, issues);
+
+  assert.deepEqual(issues.map((issue) => issue.path), ["$.template"]);
+});
+
 Deno.test("validateManifestEnvelope rejects malformed JSON-LD @context", () => {
   const issues: { path: string; message: string }[] = [];
   validateManifestEnvelope({

@@ -186,7 +186,6 @@ Plan is side-effect free in the current public route:
 It does perform the same structural checks that apply needs before side effects:
 
 - manifest v1 closed envelope validation
-- template expansion
 - Shape / Provider lookup
 - Shape `validateSpec`
 - provider capability subset check from `resources[].requires`

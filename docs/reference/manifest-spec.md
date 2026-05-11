@@ -57,7 +57,7 @@ resources: []
 | `kind`       | yes      | `"Manifest"`            | v1 manifest kind                                      |
 | `namespace`  | no       | string                  | Space-scoped namespace hint                           |
 | `metadata`   | no       | object                  | `name` / `labels` / kernel audit metadata             |
-| `resources`  | no       | array                   | portable Shape resources                              |
+| `resources`  | yes      | array                   | portable Shape resources                              |
 
 `resources[]` が無い manifest、または resource が 0 件になる manifest は reject
 されます。`template` は current kernel public contract ではありません。必要なら

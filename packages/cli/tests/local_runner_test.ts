@@ -28,74 +28,32 @@ Deno.test(
 );
 
 Deno.test(
-  "expandManifestLocal expands kernel-style template invocation (template.template = 'id@version')",
+  "expandManifestLocal rejects retired top-level template shorthand",
   () => {
-    const resources = expandManifestLocal({
-      apiVersion: "1.0",
-      kind: "Manifest",
-      template: {
-        template: "selfhosted-single-vm@v1",
-        inputs: {
-          serviceName: "api",
-          image: "oci://example/api:latest",
-          port: 8080,
+    let caught: Error | undefined;
+    try {
+      expandManifestLocal({
+        apiVersion: "1.0",
+        kind: "Manifest",
+        template: {
+          template: "selfhosted-single-vm@v1",
+          inputs: {
+            serviceName: "api",
+            image: "oci://example/api:latest",
+            port: 8080,
+          },
         },
-      },
-    });
-    assert.ok(resources.length >= 3);
-    const names = resources.map((r) => r.name);
-    assert.ok(names.includes("db"));
-    assert.ok(names.includes("assets"));
-    assert.ok(names.includes("api"));
+      });
+    } catch (err) {
+      caught = err as Error;
+    }
+    assert.ok(caught instanceof Error);
+    assert.match(caught.message, /template is not a known field/);
   },
 );
 
 Deno.test(
-  "expandManifestLocal expands friendlier template form (template.name = 'id')",
-  () => {
-    const resources = expandManifestLocal({
-      apiVersion: "1.0",
-      kind: "Manifest",
-      template: {
-        name: "selfhosted-single-vm",
-        inputs: {
-          serviceName: "api",
-          image: "oci://example/api:latest",
-          port: 8080,
-        },
-      },
-    });
-    assert.ok(resources.length >= 3);
-  },
-);
-
-Deno.test(
-  "expandManifestLocal appends resources after template expansion",
-  () => {
-    const resources = expandManifestLocal({
-      apiVersion: "1.0",
-      kind: "Manifest",
-      template: {
-        template: "selfhosted-single-vm@v1",
-        inputs: {
-          serviceName: "api",
-          image: "oci://example/api:latest",
-          port: 8080,
-        },
-      },
-      resources: [{
-        shape: "object-store@v1",
-        name: "backups",
-        provider: "@takos/selfhost-filesystem",
-        spec: { name: "backups" },
-      }],
-    });
-    assert.equal(resources.at(-1)?.name, "backups");
-  },
-);
-
-Deno.test(
-  "expandManifestLocal throws descriptive error listing templates when neither shape matches",
+  "expandManifestLocal throws when resources[] is missing",
   () => {
     let caught: Error | undefined;
     try {
@@ -104,49 +62,7 @@ Deno.test(
       caught = err as Error;
     }
     assert.ok(caught instanceof Error);
-    // The error must mention the manifest shape options and at least one
-    // bundled template id so operators know what they can self-host.
-    assert.match(caught.message, /resources/);
-    assert.match(caught.message, /template/);
-    assert.match(caught.message, /selfhosted-single-vm@v1/);
-  },
-);
-
-Deno.test(
-  "expandManifestLocal throws when template ref is unknown, listing bundled templates",
-  () => {
-    let caught: Error | undefined;
-    try {
-      expandManifestLocal({
-        apiVersion: "1.0",
-        kind: "Manifest",
-        template: { template: "no-such-template@v1", inputs: {} },
-      });
-    } catch (err) {
-      caught = err as Error;
-    }
-    assert.ok(caught instanceof Error);
-    assert.match(caught.message, /no-such-template@v1/);
-    assert.match(caught.message, /selfhosted-single-vm@v1/);
-  },
-);
-
-Deno.test(
-  "expandManifestLocal surfaces template input validation issues",
-  () => {
-    let caught: Error | undefined;
-    try {
-      expandManifestLocal({
-        apiVersion: "1.0",
-        kind: "Manifest",
-        template: { template: "selfhosted-single-vm@v1", inputs: {} },
-      });
-    } catch (err) {
-      caught = err as Error;
-    }
-    assert.ok(caught instanceof Error);
-    // serviceName / image / port are all required.
-    assert.match(caught.message, /inputs invalid/);
+    assert.match(caught.message, /manifest\.resources\[\] is required/);
   },
 );
 

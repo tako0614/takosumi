@@ -6,9 +6,7 @@ import type {
   PlatformOperationRecoveryMode,
   PlatformTraceContext,
   ResourceHandle,
-  Template,
 } from "takosumi-contract";
-import { registerTemplate, unregisterTemplate } from "takosumi-contract";
 import {
   type CatalogReleaseWalHookVerifier,
   registerDeployPublicRoutes,
@@ -2093,182 +2091,7 @@ Deno.test("deploy public route rejects same idempotency key with different body"
   assert.equal(applyCount, 1);
 });
 
-const TEST_TEMPLATE_ID = "deploy-public-test-template";
-const TEST_TEMPLATE_VERSION = "v1";
-const TEST_TEMPLATE_REF = `${TEST_TEMPLATE_ID}@${TEST_TEMPLATE_VERSION}`;
-
-const testTemplate: Template = {
-  id: TEST_TEMPLATE_ID,
-  version: TEST_TEMPLATE_VERSION,
-  description: "fixture for deploy_public_routes template-expansion tests",
-  validateInputs(value, issues) {
-    if (
-      typeof value !== "object" || value === null || Array.isArray(value)
-    ) {
-      issues.push({ path: "$", message: "must be an object" });
-      return;
-    }
-    const inputs = value as Record<string, unknown>;
-    if (typeof inputs.serviceName !== "string" || inputs.serviceName === "") {
-      issues.push({
-        path: "$.serviceName",
-        message: "must be a non-empty string",
-      });
-    }
-  },
-  expand(inputs) {
-    const serviceName = (inputs as { serviceName: string }).serviceName;
-    return [
-      {
-        shape: "object-store@v1",
-        name: serviceName,
-        provider: "@takos/selfhost-filesystem",
-        spec: { name: serviceName, region: "local" },
-      },
-    ];
-  },
-};
-
-Deno.test("deploy public route expands template with valid inputs", async () => {
-  registerTemplate(testTemplate);
-  try {
-    let captured: readonly ManifestResource[] | undefined;
-    const app = createApp({
-      token: VALID_TOKEN,
-      applyResources: (resources) => {
-        captured = resources;
-        return Promise.resolve({
-          applied: [
-            {
-              name: resources[0].name,
-              providerId: providerIdFor(resources[0]),
-              handle: {
-                kind: "test",
-                id: "applied",
-              } as unknown as ApplyV2Outcome["applied"][number]["handle"],
-              outputs: { ok: true },
-              specFingerprint: "fnv1a32:00000000",
-            },
-          ],
-          issues: [],
-          status: "succeeded",
-        });
-      },
-    });
-    const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${VALID_TOKEN}`,
-      },
-      body: JSON.stringify({
-        mode: "apply",
-        manifest: {
-          apiVersion: "1.0" as const,
-          kind: "Manifest" as const,
-          template: {
-            template: TEST_TEMPLATE_REF,
-            inputs: { serviceName: "logs" },
-          },
-        },
-      }),
-    });
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    assert.equal(body.status, "ok");
-    assert.equal(body.outcome.status, "succeeded");
-    assert.ok(captured, "applyResources must receive expanded resources");
-    assert.equal(captured!.length, 1);
-    assert.equal(captured![0].name, "logs");
-    assert.equal(captured![0].shape, "object-store@v1");
-  } finally {
-    unregisterTemplate(TEST_TEMPLATE_ID, TEST_TEMPLATE_VERSION);
-  }
-});
-
-Deno.test("deploy public route surfaces template input validation as 400", async () => {
-  registerTemplate(testTemplate);
-  try {
-    const app = createApp({ token: VALID_TOKEN });
-    const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${VALID_TOKEN}`,
-      },
-      body: JSON.stringify({
-        mode: "apply",
-        manifest: {
-          apiVersion: "1.0" as const,
-          kind: "Manifest" as const,
-          template: { template: TEST_TEMPLATE_REF, inputs: {} },
-        },
-      }),
-    });
-    assert.equal(response.status, 400);
-    const body = await response.json();
-    assert.equal(body.error.code, "invalid_argument");
-    assert.match(body.error.message, /serviceName/);
-    assert.match(body.error.message, /must be a non-empty string/);
-  } finally {
-    unregisterTemplate(TEST_TEMPLATE_ID, TEST_TEMPLATE_VERSION);
-  }
-});
-
-Deno.test("deploy public route appends explicit resources after template expansion", async () => {
-  registerTemplate(testTemplate);
-  try {
-    let captured: readonly ManifestResource[] | undefined;
-    const app = createApp({
-      token: VALID_TOKEN,
-      applyResources: (resources) => {
-        captured = resources;
-        return Promise.resolve({
-          applied: resources.map((resource) => ({
-            name: resource.name,
-            providerId: providerIdFor(resource),
-            handle: resource.name,
-            outputs: {},
-            specFingerprint: "fnv1a32:00000000",
-          })),
-          issues: [],
-          status: "succeeded",
-        });
-      },
-    });
-    const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${VALID_TOKEN}`,
-      },
-      body: JSON.stringify({
-        mode: "apply",
-        manifest: {
-          apiVersion: "1.0" as const,
-          kind: "Manifest" as const,
-          template: {
-            template: TEST_TEMPLATE_REF,
-            inputs: { serviceName: "logs" },
-          },
-          resources: [SAMPLE_RESOURCE],
-        },
-      }),
-    });
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    assert.equal(body.status, "ok");
-    assert.ok(captured, "applyResources must receive expanded resources");
-    assert.deepEqual(captured!.map((resource) => resource.name), [
-      "logs",
-      SAMPLE_RESOURCE.name,
-    ]);
-  } finally {
-    unregisterTemplate(TEST_TEMPLATE_ID, TEST_TEMPLATE_VERSION);
-  }
-});
-
-Deno.test("deploy public route rejects unknown template ref", async () => {
+Deno.test("deploy public route rejects retired top-level template", async () => {
   const app = createApp({ token: VALID_TOKEN });
   const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
     method: "POST",
@@ -2281,14 +2104,18 @@ Deno.test("deploy public route rejects unknown template ref", async () => {
       manifest: {
         apiVersion: "1.0" as const,
         kind: "Manifest" as const,
-        template: { template: "nonexistent-template@v999", inputs: {} },
+        template: {
+          template: "selfhosted-single-vm@v1",
+          inputs: { serviceName: "logs" },
+        },
       },
     }),
   });
   assert.equal(response.status, 400);
   const body = await response.json();
   assert.equal(body.error.code, "invalid_argument");
-  assert.match(body.error.message, /not registered/);
+  assert.match(body.error.message, /\$\.template/);
+  assert.match(body.error.message, /template is not a known field/);
 });
 
 Deno.test("deploy public route runs destroy mode against destroyV2", async () => {
