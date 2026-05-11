@@ -290,6 +290,49 @@ Deno.test("deploy public route rejects removed service import fields", async () 
   );
 });
 
+Deno.test("deploy public route rejects takosumi-git workflowRef before apply", async () => {
+  let applyCalled = false;
+  const app = createApp({
+    token: VALID_TOKEN,
+    applyResources: () => {
+      applyCalled = true;
+      return Promise.resolve({ applied: [], issues: [], status: "succeeded" });
+    },
+  });
+
+  const response = await app.request(TAKOSUMI_DEPLOY_PUBLIC_PATH, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${VALID_TOKEN}`,
+    },
+    body: JSON.stringify({
+      mode: "apply",
+      manifest: {
+        apiVersion: "1.0",
+        kind: "Manifest",
+        resources: [{
+          ...SAMPLE_RESOURCE,
+          workflowRef: {
+            file: "build.yml",
+            job: "image",
+            artifact: "image",
+          },
+        }],
+      },
+    }),
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(applyCalled, false);
+  const body = await response.json();
+  assert.equal(body.error.code, "invalid_argument");
+  assert.match(
+    body.error.message,
+    /\$\.resources\[0\]\.workflowRef: workflowRef is not a known field/,
+  );
+});
+
 Deno.test("deploy public route rejects legacy target and services manifest", async () => {
   let applyCalled = false;
   const app = createApp({
