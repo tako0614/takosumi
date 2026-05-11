@@ -54,6 +54,22 @@ function fixedClock(iso: string): () => Date {
   return () => new Date(iso);
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // --- Surviving lifecycle tests ----------------------------------------
 
 Deno.test("deploy: resolve produces an immutable resolved Deployment", async () => {
@@ -940,6 +956,88 @@ Deno.test("apply atomic commit rejects a stale group pointer race without creati
   assert.equal(head?.current_deployment_id, v1.id);
   const secondAfter = await store.getDeployment(secondDeployment.id);
   assert.equal(secondAfter?.status, "failed");
+});
+
+Deno.test("deploy: long materialization does not hold GroupHead lock", async () => {
+  const store = new InMemoryDeploymentStore();
+  let counter = 0;
+  let releaseFirstResourceBind!: () => void;
+  let markFirstResourceBindEntered!: () => void;
+  const firstResourceBindEntered = new Promise<void>((resolve) => {
+    markFirstResourceBindEntered = resolve;
+  });
+  const unblockFirstResourceBind = new Promise<void>((resolve) => {
+    releaseFirstResourceBind = resolve;
+  });
+  let firstBlocked = false;
+  const providerAdapter: DeploymentProviderAdapter = {
+    async materialize(
+      deployment: Deployment,
+      operation: PlannedOperation,
+    ): Promise<OperationOutcome> {
+      if (
+        deployment.id === "deployment_long_migration_1" &&
+        operation.kind === "resource.bind" &&
+        !firstBlocked
+      ) {
+        firstBlocked = true;
+        markFirstResourceBindEntered();
+        await unblockFirstResourceBind;
+      }
+      return { success: true, reason: "OperationApplied" };
+    },
+    rollback(): OperationOutcome {
+      return { success: true, reason: "OperationReverted" };
+    },
+  };
+  const service = new DeploymentService({
+    store,
+    idFactory: () => `deployment_long_migration_${++counter}`,
+    clock: fixedClock("2026-04-27T00:00:00.000Z"),
+    providerAdapter,
+  });
+
+  const slow = await service.resolveDeployment({
+    spaceId: "space_deploy",
+    manifest: sampleManifest(),
+  });
+  const fast = await service.resolveDeployment({
+    spaceId: "space_deploy",
+    manifest: { ...sampleManifest(), version: "2.0.0" },
+  });
+
+  const slowApply = service.applyDeployment({
+    deploymentId: slow.id,
+    appliedAt: "2026-04-27T00:01:00.000Z",
+  });
+  await withTimeout(
+    firstResourceBindEntered,
+    500,
+    "first apply did not reach resource.bind",
+  );
+
+  const fastApplied = await withTimeout(
+    service.applyDeployment({
+      deploymentId: fast.id,
+      appliedAt: "2026-04-27T00:02:00.000Z",
+    }),
+    500,
+    "second apply was blocked by first materialization",
+  );
+  assert.equal(fastApplied.status, "applied");
+  assert.equal(
+    (await store.getGroupHead("demo-app"))?.current_deployment_id,
+    fast.id,
+  );
+
+  releaseFirstResourceBind();
+  await assert.rejects(() => slowApply, /stale group head/i);
+  const slowAfter = await store.getDeployment(slow.id);
+  assert.equal(slowAfter?.status, "failed");
+  assert.equal(
+    (await store.getGroupHead("demo-app"))?.current_deployment_id,
+    fast.id,
+  );
 });
 
 Deno.test("apply reruns validation for must-revalidate read sets before activation", async () => {

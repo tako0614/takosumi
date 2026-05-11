@@ -134,7 +134,10 @@ export interface ApplyDeploymentInput {
    * Optimistic-lock expected current Deployment id. When set, the GroupHead
    * advance step rejects with a stale-precondition error if the current head
    * does not match. `null` means "no current Deployment expected" (first
-   * apply for a group).
+   * apply for a group). When omitted, apply snapshots the current GroupHead
+   * before provider materialization and enforces that pointer + generation at
+   * activation commit, so long-running materialization does not hold the
+   * GroupHead lock but also cannot overwrite a newer commit.
    */
   readonly expectedCurrentDeploymentId?: string | null;
   /**
@@ -553,6 +556,13 @@ export class DeploymentService {
       current,
     );
 
+    const implicitHeadPrecondition = "expectedCurrentDeploymentId" in input
+      ? undefined
+      : await this.#store.getGroupHead({
+        spaceId: current.space_id,
+        groupId: current.group_id,
+      });
+
     // Step 1: transition resolved → applying so consumers observing the store
     // mid-apply see a progressing Deployment rather than a stuck `resolved`
     // record. The phase condition lives on conditions[] (scope=phase).
@@ -673,7 +683,11 @@ export class DeploymentService {
           expectedCurrentDeploymentId: input.expectedCurrentDeploymentId ??
             undefined,
         }
-        : {}),
+        : {
+          expectedCurrentDeploymentId: implicitHeadPrecondition
+            ?.current_deployment_id,
+          expectedGeneration: implicitHeadPrecondition?.generation ?? 0,
+        }),
     };
     const successConditions = appendCondition(
       conditions,
