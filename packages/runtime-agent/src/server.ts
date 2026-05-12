@@ -8,7 +8,7 @@
  */
 
 // @ts-types="npm:hono@^4.12.4"
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import {
   LIFECYCLE_APPLY_PATH,
   LIFECYCLE_COMPENSATE_PATH,
@@ -251,8 +251,7 @@ function errorBody(error: string, code?: string): LifecycleErrorBody {
   return code ? { error, code } : { error };
 }
 
-// deno-lint-ignore no-explicit-any
-function errorResponse(c: any, err: unknown) {
+function errorResponse(c: Context, err: unknown) {
   if (err instanceof ConnectorNotFoundError) {
     return c.json(
       {

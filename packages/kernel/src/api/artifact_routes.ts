@@ -1,4 +1,4 @@
-import type { Hono as HonoApp } from "hono";
+import type { Context, Hono as HonoApp } from "hono";
 import {
   ARTIFACTS_BASE_PATH,
   type ArtifactStored,
@@ -574,12 +574,10 @@ function tooLargeMessage(
 }
 
 type AuthOk = { kind: "ok" };
-// deno-lint-ignore no-explicit-any
-type AuthFail = { kind: "fail"; response: any };
+type AuthFail = { kind: "fail"; response: Response };
 
 function checkAuth(
-  // deno-lint-ignore no-explicit-any
-  c: any,
+  c: Context,
   getToken: () => string | undefined,
 ): AuthOk | AuthFail {
   const expected = getToken();
@@ -624,8 +622,7 @@ function checkAuth(
  * configure the deploy token.
  */
 function checkReadAuth(
-  // deno-lint-ignore no-explicit-any
-  c: any,
+  c: Context,
   getToken: () => string | undefined,
   getFetchToken: () => string | undefined,
 ): AuthOk | AuthFail {
