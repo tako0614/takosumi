@@ -603,9 +603,10 @@ See also: [Secret Partitions](/reference/secret-partitions).
 
 Organization, Membership, RoleAssignment, account API keys, and AuthProvider
 records are not part of the current takosumi kernel storage schema. They are
-owned by Takosumi Accounts in `takosumi-cloud/`. Kernel storage covers deploy
-records, journals, provider observations, artifacts, locks, quota signals, and
-operator/runtime credentials only.
+owned by an operator account plane (reference implementation: Takosumi Accounts
+in `takosumi-cloud/`). Kernel storage covers deploy records, journals, provider
+observations, artifacts, locks, quota signals, and operator/runtime credentials
+only.
 
 ## TrialAttribute
 

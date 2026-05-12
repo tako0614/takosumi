@@ -13,7 +13,8 @@
 | 既存 Shape の組み合わせで定型構成を作りたい               | [§ template を追加する](#新-template-の追加)     | 不要     |
 | 既存 Shape では足りない new portable resource type を作る | [§ Shape を RFC する](#新しい-shape-を-rfc-する) | 必要     |
 
-> **大原則**: Takos は Shape catalog を curate する。第三者は **provider** か
+> **大原則**: Shape catalog は **Takosumi** が curate する (kernel が known
+> shape として扱える contract を維持するため)。第三者は **provider** か
 > **template** を増やす。Shape を増やす場合は ecosystem RFC が必要。
 
 ## 新 provider の追加

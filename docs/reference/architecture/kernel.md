@@ -40,11 +40,16 @@ Core の normative 定義は
 
 ## Takos と kernel の境界
 
+> kernel は **任意 application を deploy できる generic PaaS** であり、Takos
+> 専用 platform ではありません。本節は kernel から見た 1 sample application
+> (Takos product) との境界を説明する参考情報です。
+
 Takos は AI agent がソフトウェアを作り・管理し・配布する product です。ただし
 Agent / Chat、Git hosting、Storage、Store、public API gateway は Takos product
 側の service / app feature であり、takosumi kernel には入りません。kernel が
 持つのは compute manifest apply、routing projection、resource provisioning、
-provider reconciliation です。
+provider reconciliation で、これは Takos に限らず任意の InstallableApp に
+共通する責務です。
 
 `Auth` と `Billing` も kernel features に含めません。Auth/identity は
 [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
@@ -343,8 +348,9 @@ kernel が **持たない** 領域は次の正本で扱われる:
 
 - [Installable App Model](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/installable-app-model.md)
   — Takos が bundled / third-party apps を Takosumi Account に install
-  する全体モデル。Takos product 自身は AI-first chat & agent platform
-  であり、通常の InstallableApp ではない。本ページの上位 canonical reference。
+  する全体モデル。Takos product 自身は AI agent でソフトウェア作りを民主化する
+  distribution であり、kernel から見ると任意 application の 1 例にすぎない。
+  本ページの上位 canonical reference。
 - [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
   — OAuth / OIDC issuer / billing / upstream IdP broker。OAuth provider /
   consent screen / upstream IdP login の 正本。Takos の `/auth/login` は公開

@@ -125,9 +125,11 @@ require a `CONVENTIONS.md` §6 RFC.
 ### Account-plane additions
 
 `actor`, `organization`, `membership`, `role-assignment`, account `api-key`, and
-`auth-provider` identifiers are Takosumi Accounts identifiers, not takosumi
-kernel resource IDs. They are documented in `takosumi-cloud/` and may appear in
-cross-product audit evidence as opaque strings only.
+`auth-provider` identifiers are owned by the operator's account plane (reference
+implementation: Takosumi Accounts in `takosumi-cloud/`), not by takosumi kernel
+resource IDs. They are documented in that plane's docs (the reference impl
+publishes them under `takosumi-cloud/`) and may appear in cross-product audit
+evidence as opaque strings only.
 
 `actor:` previously admitted a sub-kind discriminator for support-staff Actors:
 Actor types use the bare `actor:<name>` or `actor:<uuid>` form. The suffix may

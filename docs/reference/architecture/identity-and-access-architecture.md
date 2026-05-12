@@ -3,9 +3,10 @@
 This page is retained as a link-compatible migration stub.
 
 Identity and access for users, accounts, organizations, memberships, billing,
-OIDC, launch tokens, AppInstallations, AppBindings, and AppGrants live in
-Takosumi Accounts. The takosumi kernel stays a generic manifest deploy engine
-and does not own account-plane identity.
+OIDC, launch tokens, AppInstallations, AppBindings, and AppGrants live in an
+operator account plane (reference implementation: Takosumi Accounts in
+`takosumi-cloud/`). The takosumi kernel stays a generic manifest deploy engine
+that can deploy any application and does not own account-plane identity.
 
 Kernel-side trust is limited to:
 

@@ -2,8 +2,9 @@
 
 This page is retained as a link-compatible migration stub.
 
-End-user, account, installation, and dashboard API keys belong to Takosumi
-Accounts. The takosumi kernel only accepts operator-configured deploy
+End-user, account, installation, and dashboard API keys belong to the operator's
+account plane (reference implementation: Takosumi Accounts in
+`takosumi-cloud/`). The takosumi kernel only accepts operator-configured deploy
 credentials for its public deploy/artifact routes and internal runtime-agent
 credentials for control-plane RPC.
 

@@ -183,8 +183,8 @@ without `.takosumi/` or `takosumi-git`.
 
 The action runs `takosumi deploy <manifest> --remote ... --token ...` and posts
 to `POST /v1/deployments`. It does not create AppInstallation ownership,
-AppBinding, billing, or grant records; use the Takosumi Accounts install flow
-for owned app installs.
+AppBinding, billing, or grant records; use the operator's Takosumi Accounts
+install flow for owned app installs.
 
 ### `takosumi plan [<manifest>]`
 
