@@ -40,6 +40,7 @@ const REQUIRED_SPEC_KEYS = [
   "manifest-v1",
   "shape-catalog-v1",
   "kernel-http-api-v1",
+  "deploy-public-api-v1",
   "takosumi-jsr-packages",
   "takosumi-git-workflow-ref-v0",
   "takosumi-git-artifact-uri-v0",
@@ -73,8 +74,14 @@ Deno.test("public spec source map covers deploy public OpenAPI route", async () 
   });
 
   assert.match(source, /`kernel-http-api-v1`/);
+  assert.match(source, /`deploy-public-api-v1`/);
   assert.ok(source.includes("packages/kernel/src/api/openapi.ts"));
   assert.ok(source.includes("packages/kernel/src/api/deploy_public_routes.ts"));
+  assert.ok(source.includes("TAKOSUMI_DEPLOY_PUBLIC_PATH"));
+  assert.ok(source.includes("runDeployPublicDeployment"));
+  assert.ok(source.includes("packages/cli/src/commands/deploy.ts"));
+  assert.ok(source.includes("packages/cli/tests/deploy_remote_test.ts"));
+  assert.ok(source.includes("packages/all/tests/e2e_deploy_test.ts"));
   assert.ok(openapi.paths[TAKOSUMI_DEPLOY_PUBLIC_PATH]?.post);
   assert.ok(reference.includes("POST   | `/v1/deployments`"));
   assert.ok(reference.includes("### `POST /v1/deployments`"));
