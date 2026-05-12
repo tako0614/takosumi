@@ -110,10 +110,7 @@ export async function sigv4Fetch(
   return fetchImpl(url, {
     method: request.method,
     headers,
-    body: bodyBytes.byteLength === 0
-      ? undefined
-      // deno-lint-ignore no-explicit-any
-      : (bodyBytes as any as BodyInit),
+    body: bodyBytes.byteLength === 0 ? undefined : asBufferSource(bodyBytes),
   });
 }
 
@@ -168,19 +165,23 @@ async function hmacSha256(
 }
 
 /**
- * Workaround for the lib.dom.d.ts overloads expecting `ArrayBuffer` (not
- * `ArrayBufferLike`). Deno's TextEncoder produces `Uint8Array<ArrayBufferLike>`
- * which is structurally compatible but rejected by the strict overload.
+ * Narrow Deno's `Uint8Array<ArrayBufferLike>` to a concrete `ArrayBuffer` for
+ * the strict `BufferSource` overload of `crypto.subtle`. Reuses the underlying
+ * buffer when the view spans it exactly; otherwise copies into a freshly
+ * allocated `ArrayBuffer`.
  */
 function asBufferSource(data: Uint8Array): ArrayBuffer {
-  if (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) {
-    // deno-lint-ignore no-explicit-any
-    return data.buffer as any as ArrayBuffer;
+  const buffer = data.buffer;
+  if (
+    buffer instanceof ArrayBuffer &&
+    data.byteOffset === 0 &&
+    data.byteLength === buffer.byteLength
+  ) {
+    return buffer;
   }
-  const copy = new Uint8Array(data.byteLength);
-  copy.set(data);
-  // deno-lint-ignore no-explicit-any
-  return copy.buffer as any as ArrayBuffer;
+  const out = new ArrayBuffer(data.byteLength);
+  new Uint8Array(out).set(data);
+  return out;
 }
 
 async function deriveSigningKey(
