@@ -1,5 +1,6 @@
 import type { provider } from "takosumi-contract";
 import type { RuntimeDesiredState } from "takosumi-contract";
+import { readBooleanField, readStringField } from "./_dag_field_readers.ts";
 
 /**
  * Cloudflare KV namespace materialization.
@@ -170,20 +171,18 @@ function defaultExtractKvNamespaces(
 ): readonly CloudflareKvNamespaceSpec[] {
   const out: CloudflareKvNamespaceSpec[] = [];
   for (const resource of desiredState.resources) {
-    const kind = (resource as { kind?: string }).kind;
+    const kind = readStringField(resource, "kind");
     if (kind !== "kv" && kind !== "cloudflare-kv") continue;
-    const meta = resource as unknown as {
-      readonly name?: string;
-      readonly id?: string;
-      readonly bindingName?: string;
-      readonly title?: string;
-      readonly preview?: boolean;
-    };
+    const name = readStringField(resource, "name");
+    const bindingName = readStringField(resource, "bindingName");
+    const title = readStringField(resource, "title");
+    const id = readStringField(resource, "id");
+    const preview = readBooleanField(resource, "preview");
     out.push({
-      id: meta.id,
-      title: meta.title ?? meta.name ?? meta.bindingName ?? "kv",
-      bindingName: meta.bindingName ?? meta.name ?? "KV",
-      preview: meta.preview,
+      id,
+      title: title ?? name ?? bindingName ?? "kv",
+      bindingName: bindingName ?? name ?? "KV",
+      preview,
     });
   }
   return out;

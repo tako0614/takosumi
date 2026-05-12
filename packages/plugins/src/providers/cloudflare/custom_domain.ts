@@ -1,5 +1,6 @@
 import type { provider } from "takosumi-contract";
 import type { RuntimeDesiredState } from "takosumi-contract";
+import { readEnumField, readStringField } from "./_dag_field_readers.ts";
 
 /**
  * Cloudflare Custom Hostname / Custom Domain materialization.
@@ -396,12 +397,18 @@ function isAbortLike(err: unknown, signal?: AbortSignal): boolean {
 function cloneAbortReason(signal: AbortSignal): unknown {
   // `signal.reason` carries the structured abort reason in modern runtimes.
   // Fall back to a plain `AbortError` if the runtime does not surface one.
-  const reason = (signal as unknown as { reason?: unknown }).reason;
+  const reason = signal.reason;
   if (reason !== undefined && reason !== null) return reason;
   const err = new Error("custom domain materialization aborted");
   err.name = "AbortError";
   return err;
 }
+
+const SSL_METHODS: readonly CloudflareCustomHostnameSslMethod[] = [
+  "http",
+  "txt",
+  "email",
+];
 
 function defaultExtractCustomHostnames(
   desiredState: RuntimeDesiredState,
@@ -409,20 +416,16 @@ function defaultExtractCustomHostnames(
   const out: CloudflareCustomHostnameSpec[] = [];
   const seen = new Set<string>();
   for (const route of desiredState.routes) {
-    const meta = route as unknown as {
-      readonly hostname?: string;
-      readonly host?: string;
-      readonly originHostname?: string;
-      readonly sslMethod?: CloudflareCustomHostnameSslMethod;
-    };
-    const hostname = meta.hostname ?? meta.host;
+    const hostname = readStringField(route, "hostname") ??
+      readStringField(route, "host");
     if (!hostname) continue;
     if (seen.has(hostname)) continue;
     seen.add(hostname);
+    const originHostname = readStringField(route, "originHostname");
     out.push({
       hostname,
-      originHostname: meta.originHostname,
-      sslMethod: meta.sslMethod ?? "http",
+      ...(originHostname !== undefined ? { originHostname } : {}),
+      sslMethod: readEnumField(route, "sslMethod", SSL_METHODS) ?? "http",
     });
   }
   return out;

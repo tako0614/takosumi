@@ -1,5 +1,10 @@
 import type { provider } from "takosumi-contract";
 import type { RuntimeDesiredState } from "takosumi-contract";
+import {
+  readEnumField,
+  readNumberField,
+  readStringField,
+} from "./_dag_field_readers.ts";
 
 /**
  * Cloudflare Vectorize index materialization.
@@ -187,25 +192,28 @@ export class CloudflareVectorizeProviderMaterializer
   }
 }
 
+const VECTORIZE_METRICS: readonly CloudflareVectorizeMetric[] = [
+  "cosine",
+  "euclidean",
+  "dot-product",
+];
+
 function defaultExtractVectorizeIndexes(
   desiredState: RuntimeDesiredState,
 ): readonly CloudflareVectorizeIndexSpec[] {
   const out: CloudflareVectorizeIndexSpec[] = [];
   for (const resource of desiredState.resources) {
-    const kind = (resource as { kind?: string }).kind;
+    const kind = readStringField(resource, "kind");
     if (kind !== "vectorize" && kind !== "cloudflare-vectorize") continue;
-    const meta = resource as unknown as {
-      readonly name?: string;
-      readonly dimensions?: number;
-      readonly metric?: CloudflareVectorizeMetric;
-      readonly description?: string;
-    };
-    if (!meta.name || typeof meta.dimensions !== "number") continue;
+    const name = readStringField(resource, "name");
+    const dimensions = readNumberField(resource, "dimensions");
+    if (!name || dimensions === undefined) continue;
+    const description = readStringField(resource, "description");
     out.push({
-      name: meta.name,
-      dimensions: meta.dimensions,
-      metric: meta.metric ?? "cosine",
-      description: meta.description,
+      name,
+      dimensions,
+      metric: readEnumField(resource, "metric", VECTORIZE_METRICS) ?? "cosine",
+      ...(description !== undefined ? { description } : {}),
     });
   }
   return out;

@@ -1,5 +1,6 @@
 import type { provider } from "takosumi-contract";
 import type { RuntimeDesiredState } from "takosumi-contract";
+import { readStringField } from "./_dag_field_readers.ts";
 
 /**
  * Cloudflare Analytics Engine dataset materialization.
@@ -151,20 +152,18 @@ function defaultExtractAnalyticsEngineDatasets(
 ): readonly CloudflareAnalyticsEngineDatasetSpec[] {
   const out: CloudflareAnalyticsEngineDatasetSpec[] = [];
   for (const resource of desiredState.resources) {
-    const kind = (resource as { kind?: string }).kind;
+    const kind = readStringField(resource, "kind");
     if (
       kind !== "analytics-engine" &&
       kind !== "cloudflare-analytics-engine"
     ) continue;
-    const meta = resource as unknown as {
-      readonly name?: string;
-      readonly dataset?: string;
-      readonly bindingName?: string;
-    };
-    if (!meta.dataset && !meta.name) continue;
+    const name = readStringField(resource, "name");
+    const dataset = readStringField(resource, "dataset");
+    if (!dataset && !name) continue;
+    const bindingName = readStringField(resource, "bindingName");
     out.push({
-      dataset: meta.dataset ?? meta.name ?? "default",
-      bindingName: meta.bindingName ?? meta.name ?? "AE",
+      dataset: dataset ?? name ?? "default",
+      bindingName: bindingName ?? name ?? "AE",
     });
   }
   return out;

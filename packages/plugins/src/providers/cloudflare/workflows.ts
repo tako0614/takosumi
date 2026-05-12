@@ -1,5 +1,11 @@
 import type { provider } from "takosumi-contract";
 import type { RuntimeDesiredState } from "takosumi-contract";
+import {
+  readRecordField,
+  readStringArrayField,
+  readStringField,
+  readStringOrBytesField,
+} from "./_dag_field_readers.ts";
 
 /**
  * Cloudflare Workflows materialization.
@@ -179,24 +185,25 @@ function defaultExtractWorkflows(
 ): readonly CloudflareWorkflowSpec[] {
   const out: CloudflareWorkflowSpec[] = [];
   for (const workload of desiredState.workloads) {
-    const kind = (workload as { kind?: string }).kind;
+    const kind = readStringField(workload, "kind");
     if (kind !== "workflow" && kind !== "cloudflare-workflow") continue;
-    const meta = workload as unknown as {
-      readonly name?: string;
-      readonly script?: Uint8Array | string;
-      readonly className?: string;
-      readonly bindings?: Record<string, unknown>;
-      readonly compatibilityDate?: string;
-      readonly compatibilityFlags?: readonly string[];
-    };
-    if (!meta.name || !meta.script || !meta.className) continue;
+    const name = readStringField(workload, "name");
+    const script = readStringOrBytesField(workload, "script");
+    const className = readStringField(workload, "className");
+    if (!name || !script || !className) continue;
+    const bindings = readRecordField(workload, "bindings");
+    const compatibilityDate = readStringField(workload, "compatibilityDate");
+    const compatibilityFlags = readStringArrayField(
+      workload,
+      "compatibilityFlags",
+    );
     out.push({
-      name: meta.name,
-      script: meta.script,
-      className: meta.className,
-      bindings: meta.bindings,
-      compatibilityDate: meta.compatibilityDate,
-      compatibilityFlags: meta.compatibilityFlags,
+      name,
+      script,
+      className,
+      ...(bindings !== undefined ? { bindings } : {}),
+      ...(compatibilityDate !== undefined ? { compatibilityDate } : {}),
+      ...(compatibilityFlags !== undefined ? { compatibilityFlags } : {}),
     });
   }
   return out;
