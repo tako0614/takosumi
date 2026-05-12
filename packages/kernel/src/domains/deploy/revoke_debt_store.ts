@@ -518,19 +518,18 @@ function recordWith(
   record: RevokeDebtRecord,
   updates: Partial<RevokeDebtRecord>,
 ): RevokeDebtRecord {
-  const next = { ...record, ...updates } as Record<string, unknown>;
-  for (
-    const key of [
-      "lastRetryAt",
-      "nextRetryAt",
-      "lastRetryError",
-      "agedAt",
-      "clearedAt",
-    ]
-  ) {
+  const next: RevokeDebtRecord = { ...record, ...updates };
+  const optionalKeys = [
+    "lastRetryAt",
+    "nextRetryAt",
+    "lastRetryError",
+    "agedAt",
+    "clearedAt",
+  ] as const satisfies readonly (keyof RevokeDebtRecord)[];
+  for (const key of optionalKeys) {
     if (next[key] === undefined) delete next[key];
   }
-  return freezeClone(next as unknown as RevokeDebtRecord);
+  return freezeClone(next);
 }
 
 function canonicalize(value: unknown): unknown {

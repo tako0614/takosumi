@@ -427,7 +427,7 @@ function buildBindingRequests(
         sourceKind,
         sourceName,
         access: accessFor(spec),
-        injection: spec.inject as unknown as JsonObject,
+        injection: spec.inject,
         descriptor: descriptorId,
       }),
     });
