@@ -21,6 +21,7 @@ import {
   verifyResultFromError,
   verifyResultFromStatus,
 } from "../_verify_helpers.ts";
+import { parsePostgresSpec } from "../_spec.ts";
 import {
   type AwsRdsInstanceDescriptor,
   DirectAwsRdsLifecycle,
@@ -77,12 +78,7 @@ export class AwsRdsConnector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = req.spec as unknown as {
-      version: string;
-      size: string;
-      storage?: { sizeGiB?: number };
-      highAvailability?: boolean;
-    };
+    const spec = parsePostgresSpec(req.spec);
     const instanceId = `pg-${this.#dbName}-${randomId()}`;
     const password = this.#generatePassword();
     const desc = await this.#lifecycle.createInstance({

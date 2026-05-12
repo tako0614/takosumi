@@ -21,6 +21,7 @@ import {
   verifyResultFromError,
   verifyResultFromStatus,
 } from "../_verify_helpers.ts";
+import { parseObjectStoreSpec } from "../_spec.ts";
 import {
   type AwsS3BucketDescriptor,
   DirectAwsS3Lifecycle,
@@ -61,12 +62,7 @@ export class AwsS3Connector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = req.spec as unknown as {
-      name: string;
-      region?: string;
-      versioning?: boolean;
-      public?: boolean;
-    };
+    const spec = parseObjectStoreSpec(req.spec);
     const desc = await this.#lifecycle.createBucket({
       bucketName: spec.name,
       region: spec.region ?? this.#region,

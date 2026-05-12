@@ -27,6 +27,7 @@ import {
   verifyResultFromError,
   verifyResultFromStatus,
 } from "../_verify_helpers.ts";
+import { parseWorkerSpec } from "../_spec.ts";
 import {
   type CloudflareWorkersDescriptor,
   DirectCloudflareWorkersLifecycle,
@@ -38,14 +39,6 @@ export interface CloudflareWorkersConnectorOptions {
   readonly accountId: string;
   readonly apiToken: string;
   readonly fetch?: typeof fetch;
-}
-
-interface WorkerSpecLike {
-  readonly artifact: Artifact;
-  readonly compatibilityDate: string;
-  readonly compatibilityFlags?: readonly string[];
-  readonly env?: Readonly<Record<string, string>>;
-  readonly routes?: readonly string[];
 }
 
 export class CloudflareWorkersConnector implements Connector {
@@ -71,7 +64,7 @@ export class CloudflareWorkersConnector implements Connector {
         "cloudflare-workers requires artifactStore to fetch js-bundle",
       );
     }
-    const spec = req.spec as unknown as WorkerSpecLike;
+    const spec = parseWorkerSpec(req.spec);
     if (!spec.artifact?.hash) {
       throw new Error(
         "cloudflare-workers spec.artifact.hash is required for js-bundle",

@@ -21,6 +21,7 @@ import {
   verifyResultFromError,
   verifyResultFromStatus,
 } from "../_verify_helpers.ts";
+import { parseNamedBucketSpec } from "../_spec.ts";
 
 export interface MinioConnectorOptions {
   readonly endpoint: string;
@@ -49,7 +50,7 @@ export class MinioConnector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = req.spec as unknown as { name: string };
+    const spec = parseNamedBucketSpec(req.spec);
     const response = await this.#fetch(`${this.#endpoint}/${spec.name}`, {
       method: "PUT",
     });

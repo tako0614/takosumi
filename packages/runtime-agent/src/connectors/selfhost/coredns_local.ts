@@ -19,6 +19,7 @@ import type {
   ConnectorVerifyResult,
 } from "../connector.ts";
 import { verifyResultFromError } from "../_verify_helpers.ts";
+import { parseDnsRecordSpec } from "../_spec.ts";
 
 export interface CorednsLocalConnectorOptions {
   readonly zoneFile: string;
@@ -46,7 +47,7 @@ export class CorednsLocalConnector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = req.spec as unknown as { name: string; target: string };
+    const spec = parseDnsRecordSpec(req.spec);
     const recordName = `coredns-${++this.#counter}`;
     const desc: RecordDescriptor = {
       recordName,

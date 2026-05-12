@@ -20,6 +20,7 @@ import {
   verifyResultFromError,
   verifyResultFromStatus,
 } from "../_verify_helpers.ts";
+import { parseObjectStoreSpec } from "../_spec.ts";
 import {
   DirectGcsLifecycle,
   type GcsBucketDescriptor,
@@ -58,12 +59,7 @@ export class GcpGcsConnector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = req.spec as unknown as {
-      name: string;
-      region?: string;
-      versioning?: boolean;
-      public?: boolean;
-    };
+    const spec = parseObjectStoreSpec(req.spec);
     const desc = await this.#lifecycle.createBucket({
       bucketName: spec.name,
       location: spec.region ?? this.#defaultLocation,

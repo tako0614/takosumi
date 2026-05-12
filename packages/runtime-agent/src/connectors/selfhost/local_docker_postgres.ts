@@ -22,6 +22,7 @@ import type {
   ConnectorVerifyResult,
 } from "../connector.ts";
 import { verifyResultFromError } from "../_verify_helpers.ts";
+import { parsePostgresVersionSpec } from "../_spec.ts";
 
 export interface LocalDockerPostgresConnectorOptions {
   readonly hostBinding?: string;
@@ -72,7 +73,7 @@ export class LocalDockerPostgresConnector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = req.spec as unknown as { version: string };
+    const spec = parsePostgresVersionSpec(req.spec);
     const containerName = `pg-${this.#dbName}-${randomId()}`;
     const password = this.#generatePassword();
 

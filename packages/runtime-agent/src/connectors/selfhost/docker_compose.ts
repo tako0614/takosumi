@@ -23,6 +23,7 @@ import type {
   ConnectorVerifyResult,
 } from "../connector.ts";
 import { verifyResultFromError } from "../_verify_helpers.ts";
+import { parseSelfhostWebServiceSpec } from "../_spec.ts";
 
 export interface DockerComposeConnectorOptions {
   readonly hostBinding?: string;
@@ -60,14 +61,7 @@ export class DockerComposeConnector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = req.spec as unknown as {
-      image?: string;
-      artifact?: { kind: string; uri?: string };
-      port: number;
-      env?: Record<string, string>;
-      bindings?: Record<string, string>;
-      command?: readonly string[];
-    };
+    const spec = parseSelfhostWebServiceSpec(req.spec);
     const image = spec.image ?? spec.artifact?.uri;
     if (!image) {
       throw new Error("web-service spec requires `image` or `artifact.uri`");

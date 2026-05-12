@@ -20,6 +20,7 @@ import type {
   ConnectorVerifyResult,
 } from "../connector.ts";
 import { verifyResultFromError } from "../_verify_helpers.ts";
+import { parseObjectStoreSpec } from "../_spec.ts";
 
 export interface FilesystemConnectorOptions {
   readonly rootDir: string;
@@ -42,7 +43,7 @@ export class FilesystemConnector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = req.spec as unknown as { name: string };
+    const spec = parseObjectStoreSpec(req.spec);
     const path = `${this.#rootDir}/${spec.name}`;
     await Deno.mkdir(path, { recursive: true });
     return {

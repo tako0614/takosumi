@@ -32,6 +32,7 @@ import {
   verifyResultFromError,
   verifyResultFromStatus,
 } from "../_verify_helpers.ts";
+import { parseWorkerSpec } from "../_spec.ts";
 import {
   type DenoDeployDescriptor,
   DirectDenoDeployWorkersLifecycle,
@@ -43,14 +44,6 @@ export interface DenoDeployWorkersConnectorOptions {
   readonly accessToken: string;
   readonly organizationId?: string;
   readonly fetch?: typeof fetch;
-}
-
-interface WorkerSpecLike {
-  readonly artifact: Artifact;
-  readonly compatibilityDate: string;
-  readonly compatibilityFlags?: readonly string[];
-  readonly env?: Readonly<Record<string, string>>;
-  readonly routes?: readonly string[];
 }
 
 export class DenoDeployWorkersConnector implements Connector {
@@ -76,7 +69,7 @@ export class DenoDeployWorkersConnector implements Connector {
         "deno-deploy requires artifactStore to fetch js-bundle",
       );
     }
-    const spec = req.spec as unknown as WorkerSpecLike;
+    const spec = parseWorkerSpec(req.spec);
     if (!spec.artifact?.hash) {
       throw new Error(
         "deno-deploy spec.artifact.hash is required for js-bundle",

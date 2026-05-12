@@ -20,6 +20,7 @@ import {
   verifyResultFromError,
   verifyResultFromStatus,
 } from "../_verify_helpers.ts";
+import { parseDnsRecordSpec } from "../_spec.ts";
 import {
   DirectRoute53Lifecycle,
   type Route53RecordDescriptor,
@@ -55,7 +56,7 @@ export class Route53Connector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = req.spec as unknown as { name: string; target: string };
+    const spec = parseDnsRecordSpec(req.spec);
     const desc = await this.#lifecycle.createRecord({
       fqdn: spec.name,
       target: spec.target,

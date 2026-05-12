@@ -21,6 +21,7 @@ import {
   verifyResultFromError,
   verifyResultFromStatus,
 } from "../_verify_helpers.ts";
+import { parseWebServiceSpec, type WebServiceSpec } from "../_spec.ts";
 import {
   type AwsFargateServiceDescriptor,
   DirectAwsFargateLifecycle,
@@ -66,7 +67,7 @@ export class AwsFargateConnector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = specOf(req);
+    const spec = parseWebServiceSpec(req.spec);
     const image = imageOf(spec);
     const desc = await this.#lifecycle.createService({
       serviceName: serviceNameFromImage(image),
@@ -115,21 +116,6 @@ export class AwsFargateConnector implements Connector {
       return verifyResultFromError(error, "ecs:DescribeClusters");
     }
   }
-}
-
-interface WebServiceSpec {
-  readonly image?: string;
-  readonly artifact?: { readonly kind: string; readonly uri?: string };
-  readonly port: number;
-  readonly scale: { readonly min: number; readonly max: number };
-  readonly resources?: { readonly cpu?: string; readonly memory?: string };
-  readonly env?: Readonly<Record<string, string>>;
-  readonly bindings?: Readonly<Record<string, string>>;
-  readonly command?: readonly string[];
-}
-
-function specOf(req: LifecycleApplyRequest): WebServiceSpec {
-  return req.spec as unknown as WebServiceSpec;
 }
 
 function imageOf(spec: WebServiceSpec): string {

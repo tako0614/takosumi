@@ -20,6 +20,7 @@ import {
   verifyResultFromError,
   verifyResultFromStatus,
 } from "../_verify_helpers.ts";
+import { parseWebServiceSpec } from "../_spec.ts";
 import {
   type CloudRunServiceDescriptor,
   DirectCloudRunLifecycle,
@@ -53,15 +54,7 @@ export class CloudRunConnector implements Connector {
     req: LifecycleApplyRequest,
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    const spec = req.spec as unknown as {
-      image?: string;
-      artifact?: { kind: string; uri?: string };
-      port: number;
-      scale: { min: number; max: number };
-      resources?: { cpu?: string; memory?: string };
-      env?: Record<string, string>;
-      bindings?: Record<string, string>;
-    };
+    const spec = parseWebServiceSpec(req.spec);
     const image = spec.image ?? spec.artifact?.uri;
     if (!image) {
       throw new Error("web-service spec requires `image` or `artifact.uri`");
