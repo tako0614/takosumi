@@ -37,11 +37,11 @@ eligible iff `requires ⊆ capabilities`.
 
 To keep the global vocabulary coherent, three prefixes are **reserved**:
 
-| Prefix       | Owner                                              |
-| ------------ | -------------------------------------------------- |
-| `takos.*`    | Takos product surface                              |
-| `system.*`   | Takosumi kernel / runtime-agent / observation tier |
-| `operator.*` | Operator-defined deployment-local capabilities     |
+| Prefix       | Owner                                                                                                            |
+| ------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `takos.*`    | consumer-application reserved namespace (e.g. Takos product surface); kernel assumes no Takos-specific semantics |
+| `system.*`   | Takosumi kernel / runtime-agent / observation tier                                                               |
+| `operator.*` | Operator-defined deployment-local capabilities                                                                   |
 
 A bare identifier (no `.`) is a **general capability** that any provider may
 declare. Adding a new reserved prefix is governed by `CONVENTIONS.md` §6 RFC and

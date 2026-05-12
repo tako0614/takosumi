@@ -23,11 +23,11 @@ Source: `packages/contract/src/shape.ts` (the contract and registry),
 Capabilities are **open strings**. The catalog does **not** lock the set into a
 closed enum; instead, the v1 rule is open string + reserved prefix:
 
-| Prefix       | Owner                                              |
-| ------------ | -------------------------------------------------- |
-| `takos.*`    | Takos product surface                              |
-| `system.*`   | Takosumi kernel / runtime-agent / observation tier |
-| `operator.*` | Operator-defined deployment-local capabilities     |
+| Prefix       | Owner                                                                                                            |
+| ------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `takos.*`    | consumer-application reserved namespace (e.g. Takos product surface); kernel assumes no Takos-specific semantics |
+| `system.*`   | Takosumi kernel / runtime-agent / observation tier                                                               |
+| `operator.*` | Operator-defined deployment-local capabilities                                                                   |
 
 A provider may declare any kebab-case identifier in `capabilities`. A manifest
 may reference any kebab-case identifier in `requires`. Selection verifies subset
