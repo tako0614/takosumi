@@ -102,10 +102,8 @@ Current kernel primitive:
   failure appends terminal `abort` before provider side effects. Post-commit
   verification failure appends the failed verification result, enqueues
   `approval-invalidated` RevokeDebt for committed operations, then records
-  observe/finalize evidence.
-- Marketplace-installed executable hook packages are not current kernel
-  contract. CatalogRelease Ed25519 verification is the only current trust check
-  described by this page.
+  observe/finalize evidence. contract. CatalogRelease Ed25519 verification is
+  the only current trust check described by this page.
 
 ## Verify 失敗時の挙動
 

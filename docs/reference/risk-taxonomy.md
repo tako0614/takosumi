@@ -48,8 +48,8 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 2. `external-export`
 
-- **意味**: reserved / future RFC。自 Space の object を external participant /
-  外部 Space に export する宣言が含まれる場合の候補 Risk。
+外部 Space に export する宣言が含まれる場合の候補 Risk。
+
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 2, 4
@@ -92,8 +92,6 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 ### 7. `stale-export`
 
 - **意味**: 消費する operator-owned ExportDeclaration freshness が
-  `refresh-required` または `stale` に落ちている。SpaceExportShare freshness は
-  reserved / future RFC。
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 4
@@ -102,7 +100,6 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 ### 8. `revoked-export`
 
 - **意味**: 消費する operator-owned ExportDeclaration が
-  `revoked`。SpaceExportShare revoke は reserved / future RFC。
 - **発火 stage**: `prepare`
 - **severity**: `error`
 - **invalidation trigger**: 4
@@ -119,8 +116,8 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 10. `cross-space-link`
 
-- **意味**: reserved / future RFC。SpaceExportShare 経由で異 Space の object に
-  link を貼る場合の候補 Risk。current v1 は cross-Space link を reject する。
+link を貼る場合の候補 Risk。current v1 は cross-Space link を reject する。
+
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 4, 6
@@ -135,16 +132,7 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 - **invalidation trigger**: 4, 5
 - **fix kind**: `requiresPolicyReview`
 
-### 12. `space-export-share`
-
-- **意味**: reserved / future RFC。新 SpaceExportShare を draft → active に遷移
-  させる、または既存 share を更新する場合の候補 Risk。
-- **発火 stage**: `prepare`
-- **severity**: `warning`
-- **invalidation trigger**: 6
-- **fix kind**: `requiresPolicyReview`
-
-### 13. `implementation-unverified`
+### 12. `implementation-unverified`
 
 - **意味**: 選択された Implementation が catalog signature 未検証 / publisher
   key 未 enroll の状態で binding されようとしている。
@@ -153,7 +141,7 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 - **invalidation trigger**: 3, 5
 - **fix kind**: `operatorFix`
 
-### 14. `actual-effects-overflow`
+### 13. `actual-effects-overflow`
 
 - **意味**: connector が `commit` / `post-commit` で報告した actual-effects が
   `predictedActualEffectsDigest` を超過した。
@@ -162,7 +150,7 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 - **invalidation trigger**: 2
 - **fix kind**: `operatorFix`
 
-### 15. `rollback-revalidation-required`
+### 14. `rollback-revalidation-required`
 
 - **意味**: rollback / compensate recovery が走った際、prior ResolutionSnapshot
   に戻すために改めて approval が要る。
@@ -199,8 +187,8 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 19. `transform-unapproved`
 
-- **意味**: spec-reserved DataAsset transform が未承認のまま実行されようと
-  している。
+している。
+
 - **発火 stage**: `pre-commit`
 - **severity**: `error`
 - **invalidation trigger**: 2
@@ -228,7 +216,6 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 新 Risk kind の追加は plan / approval / WAL のすべてに影響するため、
 `CONVENTIONS.md` §6 の RFC を要する。stable id は付与後 rename しない。 削除も同
-RFC 経路で legacy id の wire 互換期間を確保した上で行う。
 
 ## Related architecture notes
 

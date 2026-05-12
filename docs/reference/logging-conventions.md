@@ -91,7 +91,7 @@ normative; misapplying a level is a kernel implementation bug.
   low-rate stream of `info` lines.
 - **warn** — anomalies that do not block progress but require operator attention
   soon. Examples: drift detected, approval near expiry, quota near limit, clock
-  skew within tolerance, deprecation warning used.
+  skew within tolerance, transition warning used.
 - **error** — operation failures that block a single operation but do not block
   the kernel. Examples: operation failed, external system rejected, RevokeDebt
   created, runtime-agent unreachable for a single operation.

@@ -13,7 +13,6 @@ signals; enforcement (block, throttle, alert) lives in the operator policy layer
 that consumes those signals.
 
 ::: info Current HTTP status Quota and rate-limit records are current service
-contracts, but the operator status route described below is spec-reserved. The
 current kernel HTTP router does not mount `/api/internal/v1/status`, and current
 `/readyz` does not emit quota near-limit rows; see
 [Readiness Probes](/reference/readiness-probes) for the current probe shape. :::
@@ -33,12 +32,10 @@ Two scopes apply, in this order of precedence:
 Quota itself is **fail-closed for new work and fail-open for inflight work**:
 once a Space crosses a cap, the kernel rejects new deployments and new
 activation snapshots, but already-running operations continue and read paths
-stay available. Future RFC quota dimensions may add SpaceExportShare issuance.
-
-Quota signals are exposed; enforcement is policy. The kernel publishes the raw
-counters in audit events and on the status endpoint, and the operator policy
-layer maps those counters to allow / deny / require- approval decisions through
-the same policy pack used by Risk evaluation.
+stay available. Quota signals are exposed; enforcement is policy. The kernel
+publishes the raw counters in audit events and on the status endpoint, and the
+operator policy layer maps those counters to allow / deny / require- approval
+decisions through the same policy pack used by Risk evaluation.
 
 ## Quota dimensions (closed v1 set)
 
@@ -52,7 +49,6 @@ RFC.
 | `artifact-storage-bytes`          | bytes          | yes        | Sum of `DataAsset.bytes` referenced by the Space, after dedup.                                               |
 | `journal-volume-bytes-per-bucket` | bytes / bucket | yes        | OperationJournal write volume per fixed time bucket (`TAKOSUMI_QUOTA_JOURNAL_BUCKET_SECONDS`, default 3600). |
 | `approval-pending-count`          | count          | yes        | Approval rows in `pending` state.                                                                            |
-| `space-export-share-count`        | count          | yes        | Reserved / future RFC only; not part of current v1 enforcement.                                              |
 
 Each dimension has a corresponding raw counter on the status endpoint and a
 corresponding audit signal: deployment-count and active-object-count update on
@@ -60,8 +56,7 @@ corresponding audit signal: deployment-count and active-object-count update on
 update on `POST /v1/artifacts` write and on artifact GC sweep (see
 [Artifact GC](/reference/artifact-gc)); journal-volume updates per bucket
 boundary; approval-pending-count updates on `approval-issued` /
-`approval-consumed` / `approval-invalidated`; space-export-share-count updates
-on `share-created` / `share-revoked`.
+`approval-consumed` / `approval-invalidated`.
 
 ## Per-tenant metering
 
@@ -122,16 +117,15 @@ can change caps without redeploying the kernel. Variables follow the catalog in
 
 Quota:
 
-| Variable                                            | Type    | Default | Notes                                           |
-| --------------------------------------------------- | ------- | ------- | ----------------------------------------------- |
-| `TAKOSUMI_QUOTA_DEPLOYMENT_COUNT_PER_SPACE`         | integer | unset   | Cap for `deployment-count`. Unset means no cap. |
-| `TAKOSUMI_QUOTA_ACTIVE_OBJECT_COUNT_PER_SPACE`      | integer | unset   | Cap for `active-object-count`.                  |
-| `TAKOSUMI_QUOTA_ARTIFACT_STORAGE_BYTES_PER_SPACE`   | bytes   | unset   | Cap for `artifact-storage-bytes`.               |
-| `TAKOSUMI_QUOTA_JOURNAL_VOLUME_BYTES_PER_BUCKET`    | bytes   | unset   | Cap for `journal-volume-bytes-per-bucket`.      |
-| `TAKOSUMI_QUOTA_JOURNAL_BUCKET_SECONDS`             | integer | `3600`  | Bucket size for journal volume.                 |
-| `TAKOSUMI_QUOTA_APPROVAL_PENDING_COUNT_PER_SPACE`   | integer | unset   | Cap for `approval-pending-count`.               |
-| `TAKOSUMI_QUOTA_SPACE_EXPORT_SHARE_COUNT_PER_SPACE` | integer | unset   | Cap for `space-export-share-count`.             |
-| `TAKOSUMI_QUOTA_GLOBAL_*`                           | mixed   | unset   | Kernel-global counterparts for each dimension.  |
+| Variable                                          | Type    | Default | Notes                                           |
+| ------------------------------------------------- | ------- | ------- | ----------------------------------------------- |
+| `TAKOSUMI_QUOTA_DEPLOYMENT_COUNT_PER_SPACE`       | integer | unset   | Cap for `deployment-count`. Unset means no cap. |
+| `TAKOSUMI_QUOTA_ACTIVE_OBJECT_COUNT_PER_SPACE`    | integer | unset   | Cap for `active-object-count`.                  |
+| `TAKOSUMI_QUOTA_ARTIFACT_STORAGE_BYTES_PER_SPACE` | bytes   | unset   | Cap for `artifact-storage-bytes`.               |
+| `TAKOSUMI_QUOTA_JOURNAL_VOLUME_BYTES_PER_BUCKET`  | bytes   | unset   | Cap for `journal-volume-bytes-per-bucket`.      |
+| `TAKOSUMI_QUOTA_JOURNAL_BUCKET_SECONDS`           | integer | `3600`  | Bucket size for journal volume.                 |
+| `TAKOSUMI_QUOTA_APPROVAL_PENDING_COUNT_PER_SPACE` | integer | unset   | Cap for `approval-pending-count`.               |
+| `TAKOSUMI_QUOTA_GLOBAL_*`                         | mixed   | unset   | Kernel-global counterparts for each dimension.  |
 
 Rate limit:
 
@@ -177,7 +171,6 @@ so operator alerting wires fire.
 
 ## Operator visibility
 
-In the spec-reserved operator surface, operators read quota and rate-limit state
 through:
 
 - The `/api/internal/v1/status` endpoint (see

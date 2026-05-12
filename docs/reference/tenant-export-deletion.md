@@ -7,7 +7,6 @@
 > [Compliance Retention](/reference/compliance-retention),
 > [Backup and Restore](/reference/backup-restore),
 > [Secret Partitions](/reference/secret-partitions),
-> [Space Export Share](/reference/space-export-share),
 > [Artifact GC](/reference/artifact-gc),
 > [Kernel HTTP API](/reference/kernel-http-api)
 
@@ -17,16 +16,8 @@ access 対応)、Space を退役させる経路 (soft-delete → hard-delete の
 field-level redaction、audit chain との 整合を固定する。本 reference は
 wire-level API のみを定義し、顧客向け UI や承認 flow は扱わない。
 
-::: info Current HTTP status The export, deletion, restore, deletion-confirm,
-and redaction endpoints in this reference are a spec / service contract. The
-current kernel HTTP router does not mount `/api/internal/v1/spaces/:id/exports`
-or `DELETE /api/internal/v1/spaces/:id`; see
-[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
-:::
-
 ## Data export API
 
-Design-reserved operator-only internal control plane endpoint。caller は
 [Kernel HTTP API](/reference/kernel-http-api) の internal HMAC credential を
 保持する。
 
@@ -96,12 +87,11 @@ Space の export 履歴を cursor pagination で列挙する。
 
 `mode` は closed enum で、追加には `CONVENTIONS.md` §6 RFC を要する。
 
-| Mode               | 含まれる内容                                                                                                             |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `full`             | Snapshot / Journal / Approval / RevokeDebt / SpaceExportShare reference / observation set / metadata の logical export。 |
-| `manifest-only`    | 顧客が deploy した manifest body 集合 (resolved 前の declarative source)。                                               |
-| `audit-only`       | 当 Space の audit log 全件 (chain hash 込み)。                                                                           |
-| `data-portability` | 別 takosumi instance に import 可能な schema-versioned logical export。                                                  |
+| Mode               | 含まれる内容                                                               |
+| ------------------ | -------------------------------------------------------------------------- |
+| `manifest-only`    | 顧客が deploy した manifest body 集合 (resolved 前の declarative source)。 |
+| `audit-only`       | 当 Space の audit log 全件 (chain hash 込み)。                             |
+| `data-portability` | 別 takosumi instance に import 可能な schema-versioned logical export。    |
 
 `full` と `data-portability` は重複する内容を持つが、`data-portability` は
 import 想定の schema 安定性を保証する形式に正規化される。`full` は kernel 内部
@@ -123,10 +113,6 @@ export は **point-in-time consistent** に作る。
 - secret partition は **encrypted reference** のみ含める。raw value は
   含まれない。受け手が master key を別経路で保持している前提で、master key
   自体は本 export には含めない。
-- cross-Space data は SpaceExportShare の **reference** のみ含み、 reference 先
-  Space の中身は含めない。これは
-  [Space Export Share](/reference/space-export-share) の cross-Space link
-  denial-by-default と整合させるため。
 
 ## Space deletion
 

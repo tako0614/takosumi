@@ -54,7 +54,6 @@ adoption records. Public OperationPlan WAL invokes CatalogRelease
 re-verification during pre/post-commit: pre-commit verification fails closed
 before provider side effects, and post-commit verification failure is journaled
 with RevokeDebt for committed effects. Catalog-declared executable hook packages
-are not current kernel contract.
 
 ## Space assignment
 

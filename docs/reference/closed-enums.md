@@ -11,7 +11,6 @@
 > [Tenant Export & Deletion](/reference/tenant-export-deletion),
 > [Trial Spaces](/reference/trial-spaces),
 > [Quota Tiers](/reference/quota-tiers),
-> [Space Export Share](/reference/space-export-share),
 > [Incident Model](/reference/incident-model),
 > [Notification Emission](/reference/notification-emission),
 > [SLA Breach Detection](/reference/sla-breach-detection),
@@ -19,7 +18,6 @@
 > [Cost Attribution](/reference/cost-attribution),
 > [Backup / Restore](/reference/backup-restore),
 > [Migration & Upgrade](/reference/migration-upgrade),
-> [External Participants](/reference/external-participants),
 > [Catalog Release Trust](/reference/catalog-release-trust),
 > [Kernel HTTP API](/reference/kernel-http-api),
 > [Audit Events](/reference/audit-events),
@@ -227,7 +225,6 @@ Five-value closed classification of every object the kernel tracks.
 | `generated` | Materialized from a managed object via projection / link rendering; destroyed when its source is. |
 | `external`  | Pre-existing on the connector; the kernel may read or grant against it but never deletes it.      |
 | `operator`  | Operator-installed (e.g. `connector:<id>`); not part of any tenant Space's lifecycle.             |
-| `imported`  | Reserved / future RFC. Reachable through a SpaceExportShare from another Space.                   |
 
 Only `managed` and `generated` are removed by `destroy`.
 
@@ -344,20 +341,7 @@ responses. The `connector-extended:*` prefix is reserved for connector-defined
 extension codes that runtime-agent forwards verbatim. See
 [Runtime-Agent API — Error model](/reference/runtime-agent-api#error-model).
 
-## SpaceExportShare lifecycle
-
-Reserved / future RFC. Current v1 does not create or consume SpaceExportShare
 records.
-
-```text
-draft | active | refresh-required | stale | revoked
-```
-
-Five-value closed share lifecycle. `draft` is pre-publish; `active` is
-consumable; `refresh-required` flags freshness loss that operators may resolve
-without revoking; `stale` is the threshold-crossed terminal-but-recoverable
-state; `revoked` is terminal. See
-[Space Export Share](/reference/space-export-share).
 
 ## Actor types
 
@@ -379,7 +363,6 @@ org-owner | org-admin | org-billing | space-admin
 space-deployer | space-viewer | support-staff
 ```
 
-Legacy account-plane RBAC role enum. Current ownership is Takosumi Accounts; the
 kernel does not persist or enforce this role matrix.
 
 ## API key types
@@ -388,7 +371,6 @@ kernel does not persist or enforce this role matrix.
 deploy-token | read-token | admin-token | support-token
 ```
 
-Legacy account-plane API key enum. Current kernel public routes use
 operator-configured deploy/artifact credentials; account API keys are owned by
 Takosumi Accounts.
 
@@ -398,7 +380,6 @@ Takosumi Accounts.
 bearer-token | oidc | mtls | runtime-agent-enrollment
 ```
 
-Legacy account-plane auth provider enum. Current user identity and upstream IdP
 brokering live in Takosumi Accounts; runtime-agent enrollment remains a kernel /
 operator trust concern and is not a user auth provider.
 

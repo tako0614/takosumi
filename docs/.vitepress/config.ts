@@ -37,10 +37,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           link: "/reference/architecture/tenant-runtime",
         },
         {
-          text: "Container Hosts",
-          link: "/reference/architecture/container-hosts",
-        },
-        {
           text: "API Surface",
           link: "/reference/architecture/api-surface-architecture",
         },
@@ -103,7 +99,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           text: "Manifest Expand Semantics",
           link: "/reference/manifest-expand-semantics",
         },
-        { text: "Compatibility", link: "/reference/compatibility" },
         { text: "Plan Output Schema", link: "/reference/plan-output" },
         { text: "Status Output Schema", link: "/reference/status-output" },
         { text: "Resource IDs", link: "/reference/resource-ids" },
@@ -170,10 +165,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           text: "Catalog Release Trust",
           link: "/reference/catalog-release-trust",
         },
-        {
-          text: "External Participants",
-          link: "/reference/external-participants",
-        },
       ],
     },
     {
@@ -228,13 +219,11 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Shape Catalog", link: "/reference/shapes" },
         { text: "Provider Plugins", link: "/reference/providers" },
-        { text: "Plugin Marketplace", link: "/reference/plugin-marketplace" },
         { text: "Templates", link: "/reference/templates" },
         { text: "Artifact Kinds", link: "/reference/artifact-kinds" },
         { text: "Connector Contract", link: "/reference/connector-contract" },
         { text: "DataAsset Policy", link: "/reference/data-asset-policy" },
         { text: "Artifact GC", link: "/reference/artifact-gc" },
-        { text: "Space Export Share", link: "/reference/space-export-share" },
       ],
     },
     {

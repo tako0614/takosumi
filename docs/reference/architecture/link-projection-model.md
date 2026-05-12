@@ -34,11 +34,8 @@ ProjectionSelection is a Link field, not a public manifest object.
 ## Space rule
 
 A Link normally connects a consumer Object to an ExportDeclaration in the same
-Space. Current v1 denies cross-Space links. SpaceExportShare / namespace import
-resolution is reserved for a future RFC and is not a dependency current
 manifests may rely on.
 
-If a future RFC enables cross-Space links, they must appear in plan risk output
 and approval binding.
 
 ## Projection families

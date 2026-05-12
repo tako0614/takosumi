@@ -17,12 +17,6 @@ audit primitives, and the operator-only API surface. Concrete support
 dashboards, ticket integration, screen-sharing tools, and customer-facing
 approval UI are out of scope for the kernel.
 
-::: info Current HTTP status The support impersonation endpoints in this
-reference are a spec / service contract. The current kernel HTTP router does not
-mount `/api/internal/v1/support/impersonations` or `/v1/impersonations/*`; see
-[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
-:::
-
 ## Support-staff actor
 
 The `support-staff` actor type is part of the closed v1 actor type enum (see
@@ -214,7 +208,6 @@ through the same audit query the kernel exposes for any Space-scoped event.
 
 ## Operator-only endpoints
 
-The spec-reserved endpoints below are operator-only on the internal control
 plane, gated by HMAC (see [Kernel HTTP API](/reference/kernel-http-api)):
 
 - `POST /api/internal/v1/support/impersonations` — operator creates a grant.

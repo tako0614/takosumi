@@ -33,8 +33,8 @@ GitOps intent** と **kernel deploy** は別の surface です。
 
 > **kernel 直叩きは canonical deploy API**
 >
-> 旧来の "CLI から直接 kernel に compiled manifest を投げる" 経路は、 operator /
-> CI / custom automation が使える unmanaged deploy path として残します。
+> CLI から kernel に compiled manifest を投げる経路は、operator / CI / custom
+> automation が使える unmanaged deploy path です。
 >
 > - AppInstallation ownership を伴う install / upgrade は上記 3 path
 >   のいずれかを通る
@@ -63,7 +63,7 @@ GitOps intent** と **kernel deploy** は別の surface です。
 入れる経路。operator-selected install UI URL (managed example:
 `takosumi.cloud/install?git=...&ref=...`) の Git URL install 流入や
 `takosumi-git install <git-url>` CLI、`POST /v1/installations` API がここに集約
-されます。Takos product 自身は unique top consumer であり、この通常
+されます。Takos product 自身は AI software creation product であり、この通常
 InstallableApp path の対象ではありません。
 
 ### 1.1 Install pipeline 13 step
@@ -172,7 +172,7 @@ takosumi kernel
 
 GitOps deploy binding を採用すると、Takos の runtime 依存は次の env のみに
 なります (詳細は
-[Binding Catalog § deploy-intent.gitops@v1](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/binding-catalog.md)
+[Binding Catalog § deploy-intent.gitops@v1](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/binding-catalog.md)
 を参照)。
 
 ```env
@@ -235,7 +235,7 @@ Approve?
 field 定義は
 [.takosumi/app.yml spec](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/app-yml-spec.md)、placeholder
 文法と binding 種別は
-[Binding Catalog](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/binding-catalog.md)、Compiler
+[Binding Catalog](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/binding-catalog.md)、Compiler
 の動きは
 [Installer Pipeline](https://github.com/tako0614/takosumi-git/blob/master/docs/architecture/installer-pipeline.md)
 を参照。
@@ -376,9 +376,8 @@ Worker route patterns are strings in `worker@v1.spec.routes`.
 ### Namespace exports
 
 External / operator-owned dependency は namespace export と account API /
-BillingPort で表現します。consumer manifest に `imports[]` /
-`serviceResolvers[]` は書きません。OIDC / billing / dashboard / deploy API など
-は `operator.identity.oidc` / `operator.billing.default` のような export を
+BillingPort で表現します。OIDC / billing / dashboard / deploy API などは
+`operator.identity.oidc` / `operator.billing.default` のような export を
 installer / account plane が explicit grant として扱います。
 
 ### Installable App binding は別レイヤー
@@ -387,7 +386,7 @@ Installable App Model の `.takosumi/app.yml` の `bindings:` (`identity.oidc@v1
 / `database.postgres@v1` 等) は installer-bound です。current takosumi-git は
 unresolved `${bindings.*}` / `${secrets.*}` を kernel に渡さず、deploy request
 build 後も残る場合は kernel request 前に失敗します。詳しくは
-[Binding Catalog](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/binding-catalog.md)
+[Binding Catalog](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/binding-catalog.md)
 を参照。
 
 ## 8. CLI / API
@@ -403,10 +402,8 @@ takosumi deployments plan ./manifest.yml       # non-mutating plan / validation
 ```
 
 Git URL install / `.takosumi/` project layout / workflowRef 解決は kernel CLI
-ではなく `takosumi-git` の責務です。 AppInstallation 作成は Takosumi Accounts
-の責務です。Takos product docs に残る `takos deploy` / `takos install` は
-migration window 中の Takos compatibility surface であり、この kernel reference
-の public API では ありません。
+ではなく `takosumi-git` の責務です。AppInstallation 作成は Takosumi Accounts
+の責務です。
 
 通常の install path:
 
@@ -563,7 +560,6 @@ Kernel deploy boundary:
     - workflowRef は strip 済み
     - ${bindings.*} / ${secrets.*} / ${artifacts.*} / ${installation.*} は残らない
     - ${ref:...} / ${secret-ref:...} は kernel deploy route が扱う
-    - ${imports.*} は removed placeholder なので残らない
     - kernel は app.yml を解釈しない
 
   Core records (kernel 内部)
@@ -586,13 +582,13 @@ Kernel deploy boundary:
   — 全体像と product / layer 責務分離
 - [Installer Pipeline](https://github.com/tako0614/takosumi-git/blob/master/docs/architecture/installer-pipeline.md)
   — 13 step の install pipeline 詳細
-- [AppInstallation 台帳](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/app-installation.md)
+- [AppInstallation 台帳](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/app-installation.md)
   — source pin と status 遷移
 - [.takosumi/app.yml spec](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/app-yml-spec.md)
   — installer-bound manifest
-- [Binding Catalog](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/binding-catalog.md)
+- [Binding Catalog](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/binding-catalog.md)
   — 6 種の installer-bound AppBinding type
-- [Install API](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/install-api.md)
+- [Install API](https://github.com/tako0614/takosumi-cloud/blob/master/docs/accounts-service.md)
   — `POST /v1/installations` 等
 - [Upgrade / Export](https://github.com/tako0614/takos/blob/master/docs/platform/upgrade-export.md)
   — upgrade / rollback / export

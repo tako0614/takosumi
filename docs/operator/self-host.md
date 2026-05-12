@@ -119,11 +119,11 @@ timing は以下で調整できます。
 - `TAKOSUMI_LOCK_HEARTBEAT_MS` — renewal interval。default は lease / 3 (`30000`
   の場合 `10000`)。
 
-::: warning この lock は現在の public deploy route 用の compatibility fence
-です。 apply / destroy は `takosumi_operation_journal_entries` に public
-OperationPlan WAL stage を記録しますが、下流 provider へ fencing token を渡す
-full OperationPlan / WAL protocol では ありません。pod freeze 等で holder が
-lease 失効後も処理を続けると、外部 provider side effect までは lock
+::: warning この lock は現在の public deploy route 用の apply fence です。 apply
+/ destroy は `takosumi_operation_journal_entries` に public OperationPlan WAL
+stage を記録しますが、下流 provider へ fencing token を渡す full OperationPlan /
+WAL protocol では ありません。pod freeze 等で holder が lease
+失効後も処理を続けると、外部 provider side effect までは lock
 だけで取り消せません。 長時間 apply/destroy を行う provider では lease
 を最大実行時間より十分長くするか、 single-writer apply tier を使ってください。
 :::
@@ -171,8 +171,7 @@ key は **cloud partition 別** に独立に派生されます:
 
 partition の override が無ければ `global` passphrase に partition label を mix
 した HKDF-style salt から派生されます。 そのため **AWS partition の secret
-を漏らしても他 cloud の ciphertext は復号できません**
-(`MultiCloudSecretBoundaryCrypto`、Phase 18.2 H14)。
+を漏らしても他 cloud の ciphertext は復号できません**。
 
 `additionalData (AAD)` に partition label が bind されているため、payload の
 partition tag を swap すると open() が失敗します。

@@ -263,9 +263,8 @@ Kernel curated catalog は v1 で 5 shape (`object-store@v1` / `web-service@v1` 
 の追加は `CONVENTIONS.md` §6 RFC で coordinate されます。
 
 Workflow / cron / lifecycle hook 等の shape は current v1 catalog / plugin
-extension surface に含めません。`cron-job@v1` / `workflow-job@v1` /
-`pre-apply-hook@v1` / `post-activate-hook@v1` のような names は future RFC 用の
-reserved vocabulary であり、current kernel は通常の `resources[]` として
+extension surface に含めません。`cron-job@v1` / `workflow-job@v1` / reserved
+vocabulary であり、current kernel は通常の `resources[]` として
 受け付けません。Git / webhook / build / schedule / deployment hook は
 `takosumi-git` 等の上位 sibling product の責務です。詳細な placement は
 [Extending the Shape Model](/extending) と

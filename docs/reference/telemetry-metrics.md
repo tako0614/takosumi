@@ -235,7 +235,7 @@ The metric set, label set, and span attribute set above are the **v1 closed
 schema**. A consumer that wires dashboards or alerts against the v1 names is
 contractually safe across patch and minor versions.
 
-- Renames go through the `CONVENTIONS.md` §6 RFC and announce a deprecation
+- Renames go through the `CONVENTIONS.md` §6 RFC and announce a transition
   window.
 - New metrics added under the RFC are allowed; consumers that ignore unknown
   metrics keep working.

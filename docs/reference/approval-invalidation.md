@@ -20,10 +20,8 @@ rule / approver UX state を整理する reference です。
 3. **implementation change** — 選択された Implementation (provider plugin の
    particular binding) の変更。
 4. **external freshness change** — operator-owned ExportDeclaration の freshness
-   state 遷移。SpaceExportShare freshness は reserved / future RFC。
 5. **catalog release change** — Space に adopted な CatalogRelease の変更。
 6. **Space-context change** — Space membership / policy pack の変更。
-   SpaceExportShare governance は reserved / future RFC。
 
 ### 1. digest change
 
@@ -66,7 +64,6 @@ rule / approver UX state を整理する reference です。
   し、`stale` / `revoked` への遷移を検出した瞬間に対応 approval を再評価
   する。`prepare` stage 起動時の最初の確認も含む。
 - **再評価範囲**: 当該 export を消費する binding subset に絞って propagate。
-  他の Space には影響しない。SpaceExportShare freshness は current v1 では
   監視しない。
 
 ### 5. catalog release change
@@ -81,7 +78,6 @@ rule / approver UX state を整理する reference です。
 ### 6. Space-context change
 
 - **発火条件**: Space membership (actor 集合)、policy pack の変更。
-  SpaceExportShare governance は reserved / future RFC。
 - **検出 timing**: 該当 mutation の commit 完了直後。kernel は Space 単位で 関連
   approval を walk する。
 - **再評価範囲**: context に依存する binding subset に絞って propagate。actor
@@ -126,15 +122,11 @@ state machine が永続化する terminal state は 6
 
 ## Future Cross-Space approval ownership
 
-Current v1 は Cross-Space approval を持たない。SpaceExportShare 経由の approval
-を future RFC で有効化する場合、ownership を share governance に従って扱う:
-
 - **Approver は importing Space の owner**: 自 Space に effect を取り込む側が
   approve 責務を持つ。
 - **Exporting Space は通知のみ**: share の存在を可視化し、freshness state を
-  更新するが、approval 状態を mutate できない。
-- exporting Space で SpaceExportShare governance が変わった場合、importing Space
-  側の approval は trigger 6 (Space-context change) として再評価される。
+  更新するが、approval 状態を mutate できない。 側の approval は trigger 6
+  (Space-context change) として再評価される。
 
 ## Approval record binding fields
 

@@ -178,6 +178,5 @@ compensate is exposed in the runtime-agent protocol with destroy fallback, while
 CatalogRelease adoption / signature verification is implemented in the registry
 domain. Public apply / destroy WAL invokes the adopted release as a fail-closed
 pre/post-commit verification step. Catalog-declared executable hook packages are
-not current kernel contract. RevokeDebt retry attempt, policy-controlled aging,
 manual reopen, clearance, connector-backed cleanup, and worker daemon scheduling
 are implemented as lifecycle primitives.

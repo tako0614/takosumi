@@ -76,7 +76,6 @@ Resolution happens inside a Space. The resolver checks scopes in this order:
 4. environment namespace, if the Space defines environments
 5. space namespace
 6. operator namespace granted to this Space
-7. reserved: external participant namespace registered into this Space
 8. reserved: explicitly shared namespace imports from another Space
 ```
 
@@ -98,9 +97,6 @@ Only the operator may publish these prefixes. A reserved export such as
 `takos.oauth.token` must still be granted or made visible to the Space before
 resolution can use it.
 
-## External participant registration
-
-External participants register exports into a Space or into an operator
 namespace that is explicitly granted to Spaces.
 
 ```yaml
@@ -115,33 +111,24 @@ ExternalNamespaceRegistration:
     state: fresh
 ```
 
-External participant publishing is reserved vocabulary for a future RFC. Current
 v1 dependencies must not require it.
 
 ## Cross-space links
 
 Cross-space links are denied by default and are not a current v1 dependency.
-`SpaceExportShare` and operator-approved namespace imports are reserved
-vocabulary for a future RFC.
 
 ```yaml
-SpaceExportShare:
-  fromSpaceId: space:platform
-  toSpaceId: space:acme-prod
-  exportPath: takos.oauth.token
-  exportSnapshotId: export-snapshot:...
-  allowedAccess:
-    - read
-    - call
-  expiresAt: optional
+fromSpaceId: space:platform
+toSpaceId: space:acme-prod
+exportPath: takos.oauth.token
+exportSnapshotId: export-snapshot:...
+allowedAccess:
+  - read
+  - call
+expiresAt: optional
 ```
 
-If a future RFC enables this vocabulary, resolution records the share in
 `ResolutionSnapshot` and plan output must show cross-space usage as a risk.
-
-## SpaceExportShare lifecycle
-
-A future SpaceExportShare progresses through this reserved state machine:
 
 ```text
 draft → active → refresh-required → stale → revoked
@@ -183,7 +170,6 @@ observation sets
 audit event partition
 approvals and policy decisions
 group heads and activation history
-external participant registrations
 ```
 
 Space isolation does not mean all data is physically stored in a separate
@@ -213,7 +199,6 @@ current in another Space.
 
 ```text
 Space containment invariant:
-  No Deployment may resolve, materialize, activate, observe, or destroy outside its Space. SpaceExportShare / operator import escape hatches are reserved for future RFCs.
 
 Namespace isolation invariant:
   Namespace paths are Space-scoped. Same path in different Spaces is not the same export by default.

@@ -17,12 +17,6 @@ every state transition. The kernel ships the incident record, the state machine,
 and the audit primitives. Customer-facing status pages, incident timeline
 visualization, and notification rendering are out of scope for the kernel.
 
-::: info Current HTTP status The incident endpoints in this reference are a spec
-/ service contract. The current kernel HTTP router does not mount
-`/api/internal/v1/incidents` or `/api/internal/v1/spaces/:id/incidents`; see
-[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
-:::
-
 ## Incident definition
 
 An Incident is a kernel-recorded service-impacting event that satisfies one of
@@ -178,7 +172,6 @@ appends to the open incident; outside the window, a new incident is minted.
 
 ## Operator actions
 
-The spec-reserved operator-only endpoints run through the internal control
 plane, gated by HMAC (see [Kernel HTTP API](/reference/kernel-http-api)):
 
 - `POST /api/internal/v1/incidents` — declare an operator-declared incident.

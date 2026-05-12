@@ -64,28 +64,26 @@ The closure rule is unchanged: every kind that the kernel accepts at the API
 boundary appears in either the base table or the addition table, and every other
 kind is rejected.
 
-| Kind                   | Suffix grammar                           | Source of suffix                                                  |
-| ---------------------- | ---------------------------------------- | ----------------------------------------------------------------- |
-| `space`                | kebab-case name                          | Operator-controlled.                                              |
-| `deployment`           | ULID                                     | Kernel-generated on apply.                                        |
-| `link`                 | `<consumer>.<slot>`                      | Derived from consumer object ID and slot name.                    |
-| `object`               | kebab-case name                          | Operator-controlled within a Space.                               |
-| `generated`            | `<owner-kind>:<owner-id>/<reason>`       | Kernel-generated, deterministic from owner.                       |
-| `exposure`             | kebab-case name                          | Operator-controlled within a Space.                               |
-| `journal`              | ULID                                     | Kernel-generated per WAL entry.                                   |
-| `operation`            | ULID                                     | Kernel-generated per OperationPlan entry.                         |
-| `desired`              | sha256 hex                               | Content-addressed over the DesiredSnapshot canonical encoding.    |
-| `resolution`           | sha256 hex                               | Content-addressed over the ResolutionSnapshot canonical encoding. |
-| `activation`           | ULID                                     | Kernel-generated on activate.                                     |
-| `revoke-debt`          | ULID                                     | Kernel-generated when the entry is enqueued.                      |
-| `approval`             | ULID                                     | Kernel-generated on approval.                                     |
-| `share`                | ULID                                     | Reserved / future RFC for SpaceExportShare.                       |
-| `connector`            | kebab-case id                            | Operator-installed.                                               |
-| `external-participant` | kebab-case id                            | Reserved / future RFC.                                            |
-| `export-snapshot`      | sha256 hex                               | Content-addressed over the export contents.                       |
-| `catalog-release`      | sha256 hex or operator-tagged kebab-case | Content-addressed by default; operator may pin a tag.             |
-| `policy`               | sha256 hex                               | Content-addressed over the policy bundle.                         |
-| `group`                | kebab-case name                          | Operator-controlled within a Space.                               |
+| Kind              | Suffix grammar                           | Source of suffix                                                  |
+| ----------------- | ---------------------------------------- | ----------------------------------------------------------------- |
+| `space`           | kebab-case name                          | Operator-controlled.                                              |
+| `deployment`      | ULID                                     | Kernel-generated on apply.                                        |
+| `link`            | `<consumer>.<slot>`                      | Derived from consumer object ID and slot name.                    |
+| `object`          | kebab-case name                          | Operator-controlled within a Space.                               |
+| `generated`       | `<owner-kind>:<owner-id>/<reason>`       | Kernel-generated, deterministic from owner.                       |
+| `exposure`        | kebab-case name                          | Operator-controlled within a Space.                               |
+| `journal`         | ULID                                     | Kernel-generated per WAL entry.                                   |
+| `operation`       | ULID                                     | Kernel-generated per OperationPlan entry.                         |
+| `desired`         | sha256 hex                               | Content-addressed over the DesiredSnapshot canonical encoding.    |
+| `resolution`      | sha256 hex                               | Content-addressed over the ResolutionSnapshot canonical encoding. |
+| `activation`      | ULID                                     | Kernel-generated on activate.                                     |
+| `revoke-debt`     | ULID                                     | Kernel-generated when the entry is enqueued.                      |
+| `approval`        | ULID                                     | Kernel-generated on approval.                                     |
+| `connector`       | kebab-case id                            | Operator-installed.                                               |
+| `export-snapshot` | sha256 hex                               | Content-addressed over the export contents.                       |
+| `catalog-release` | sha256 hex or operator-tagged kebab-case | Content-addressed by default; operator may pin a tag.             |
+| `policy`          | sha256 hex                               | Content-addressed over the policy bundle.                         |
+| `group`           | kebab-case name                          | Operator-controlled within a Space.                               |
 
 The above is the v1 closed set. Adding a new kind, removing a kind, or changing
 the suffix grammar of an existing kind requires the `CONVENTIONS.md` §6 RFC.
@@ -132,7 +130,6 @@ kernel resource IDs. They are documented in `takosumi-cloud/` and may appear in
 cross-product audit evidence as opaque strings only.
 
 `actor:` previously admitted a sub-kind discriminator for support-staff Actors:
-the form `actor:support-staff/<id>` is retained only as legacy vocabulary. Other
 Actor types use the bare `actor:<name>` or `actor:<uuid>` form. The suffix may
 not contain a `:`; the `/` separates the Actor sub-kind discriminator and is the
 only `/` permitted in an Actor ID.
@@ -258,7 +255,6 @@ IDs are surfaced in two equivalent forms.
   persisted in storage, embedded in JSON, and emitted by the audit log.
 - **Tuple form**: `(space:<name>, <kind>:<suffix>)` when the ID's Space context
   matters. The kernel emits tuple form in CLI output that aggregates across
-  Spaces. Cross-Space reference use is reserved / future RFC.
 
 Human-readable display in CLI output uses the **path form**:
 
@@ -272,9 +268,7 @@ boundary.
 
 ## Future Cross-Space references
 
-Current v1 rejects cross-Space resource references. If a future RFC enables a
 resource in Space A to reference a resource in Space B (for example through a
-`SpaceExportShare`), the kernel should use tuple form:
 
 ```text
 (space:b-prod, object:shared-config)

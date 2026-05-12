@@ -95,7 +95,7 @@ interface ApiErrorEnvelope {
 ## Versioning strategy
 
 - **public surface** (`/v1/deployments`、`/v1/artifacts`): `/v1/` を URL
-  に固定。breaking change は新 prefix (`/v2/`) を切って併走させ、deprecation
+  に固定。breaking change は新 prefix (`/v2/`) を切って併走させ、transition
   window は最低 90 日。breaking とは「同じ request に対する response shape /
   status code / error code の意味が変わる」ことを言い、項目追加だけでは
   ありません。

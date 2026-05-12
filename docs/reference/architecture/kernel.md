@@ -22,11 +22,10 @@
 
 > **kernel-pure / no service registry**
 >
-> kernel は **service registry を持ちません**。`services[]` / `imports[]` /
-> `serviceResolvers[]` / signed `ServiceDescriptor` は削除済みです。kernel は
-> JSON-LD `@context` と Shape `resources[]` を受け取り、descriptor closure と
-> Deployment evidence を記録します。operator capability は namespace export /
-> account API で扱います。
+> kernel は service registry を持ちません。JSON-LD `@context` と Shape
+> `resources[]` を受け取り、descriptor closure と Deployment evidence
+> を記録します。 operator capability は namespace export / account API
+> で扱います。
 
 kernel が serve する request は、compiled manifest を起点にした Deployment
 lifecycle に従って routing / activation / resource wiring が解決される。
@@ -111,8 +110,7 @@ Takosumi Account  (契約 / billing / identity owner)
   `custom-domain@v1` など、Shape spec から生成される routing projection
 - **Namespace export**: current v1 では operator が公開する capability。 account
   plane、billing、dashboard、deploy API などは explicit grant / account API /
-  OIDC discovery / BillingPort で参照する。Space / external participant export
-  は reserved vocabulary。
+  OIDC discovery / BillingPort で扱う。
 
 Deployment が `applied` になると GroupHead の `current_deployment_id` がその
 Deployment を指し、kernel はそれを current として serve する。group に所属して
@@ -147,13 +145,12 @@ resources:
         - my-app.example.com/*
 ```
 
-top-level `components` / `routes` / `bindings` / `publications` / `environments`
-/ `policy` を持つ旧 AppSpec は current manifest ではありません。resource 間
-dependency は `${ref:<resource>.<field>}` / `${secret-ref:<resource>.<field>}`
-で表現します。installer-only placeholder (`${bindings.*}` / `${secrets.*}` /
-`${artifacts.*}` 等) は current takosumi-git が Accounts materialization 後の
-deploy request build でも未解決なら kernel request 前に失敗し、 `workflowRef` は
-kernel に渡す前に strip します。
+current manifest は `resources[]` の Shape model です。resource 間 dependency は
+`${ref:<resource>.<field>}` / `${secret-ref:<resource>.<field>}` で表現します。
+installer-only placeholder (`${bindings.*}` / `${secrets.*}` / `${artifacts.*}`
+等) は current takosumi-git が Accounts materialization 後の deploy request
+build でも 未解決なら kernel request 前に失敗し、 `workflowRef` は kernel
+に渡す前に strip します。
 
 normative な field 仕様は [manifest spec](/reference/manifest-spec) を参照。
 
@@ -275,7 +272,7 @@ installer-bound です。current takosumi-git は unresolved `${bindings.*}` /
 `${secrets.*}` を kernel に渡さず、deploy request build 後も残る場合は kernel
 request 前に失敗します。OIDC client は `identity.oidc@v1` AppBinding 経由で
 installation 単位に発行されます
-([binding-catalog](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/binding-catalog.md#_1-identity-oidc-v1)
+([binding-catalog](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/binding-catalog.md#_1-identity-oidc-v1)
 参照)。
 
 Takos API access は Takos product API / AppGrant の責務です。kernel は
@@ -314,7 +311,7 @@ Event 処理の原則: idempotent, graceful, non-blocking。
 
 > このセクションは Cloudflare Workers backend に固有の materialization
 > detail。Core 用語との対応は
-> [Glossary § Workers backend implementation note](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/glossary.md#workers-backend-implementation-note)
+> [Workers backend implementation note](../workers-backend.md)
 > を参照。
 
 tracked reference Workers backend では、kernel は admin host と tenant hostname
@@ -347,13 +344,13 @@ kernel が **持たない** 領域は次の正本で扱われる:
 
 - [Installable App Model](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/installable-app-model.md)
   — Takos が bundled / third-party apps を Takosumi Account に install
-  する全体モデル。Takos product 自身は unique top consumer であり、通常の
-  InstallableApp ではない。本ページの 上位 canonical reference。
+  する全体モデル。Takos product 自身は AI software creation product
+  であり、通常の InstallableApp ではない。本ページの上位 canonical reference。
 - [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
   — OAuth / OIDC issuer / billing / upstream IdP broker。OAuth provider /
   consent screen / upstream IdP login の 正本。Takos の `/auth/login` は公開
   route ではない。
-- [AppInstallation 台帳](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/app-installation.md)
+- [AppInstallation 台帳](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/app-installation.md)
   — 所有権の primitive。 AppInstallation / AppBinding / AppGrant /
   RuntimeBinding / InstallationEvent。
 - [Installer Pipeline](https://github.com/tako0614/takosumi-git/blob/master/docs/architecture/installer-pipeline.md)

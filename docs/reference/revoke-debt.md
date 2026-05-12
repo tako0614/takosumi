@@ -36,8 +36,6 @@ RevokeDebt:
 
 `generatedObjectId` は generated lifecycle class の object、external object、
 または link projection の対象を指す。`sourceExportSnapshotId` は debt 発生時
-点の export snapshot を fix する。SpaceExportShare 経由の再 evaluate は reserved
-/ future RFC。
 
 `retryPolicy` は kernel 定数ではなく policy-controlled で、Space の policy pack
 から派生する。kernel が直接解釈する portable subset は `maxAttempts`,
@@ -50,13 +48,12 @@ operator policy engine が解釈してよい。
 `reason` field は debt 発生の origin を示す closed enum。新 reason 追加は
 `CONVENTIONS.md` §6 RFC を要する。
 
-| Reason                      | 発生 trigger                                                                                      |
-| --------------------------- | ------------------------------------------------------------------------------------------------- |
-| `external-revoke`           | 外部 system が revoke を ack せず、現実の外部状態が retain している                               |
-| `link-revoke`               | link revoke (link projection の解除) が cleanup できなかった                                      |
-| `activation-rollback`       | activation rollback / compensate recovery 後の cleanup 残り                                       |
-| `approval-invalidated`      | 前承認のもとで retain した material が、approval invalidation で根拠を失った                      |
-| `cross-space-share-expired` | Reserved / future RFC。SpaceExportShare expiry 後に share 経由で materialize された debt が残った |
+| Reason                 | 発生 trigger                                                                 |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| `external-revoke`      | 外部 system が revoke を ack せず、現実の外部状態が retain している          |
+| `link-revoke`          | link revoke (link projection の解除) が cleanup できなかった                 |
+| `activation-rollback`  | activation rollback / compensate recovery 後の cleanup 残り                  |
+| `approval-invalidated` | 前承認のもとで retain した material が、approval invalidation で根拠を失った |
 
 reason ごとの典型ケース:
 
@@ -68,7 +65,6 @@ reason ごとの典型ケース:
   material。`abort` 経路で enqueue。
 - `approval-invalidated`: approval が `invalidated` に落ちたが既に materialize
   済みの retain 物。新規 approval の granting までは debt として可視化する。
-- `cross-space-share-expired`: reserved / future RFC。SpaceExportShare の
   lifecycle が expiry に達し、importing Space 側で materialize された material
   が exporting Space 側の retention 範囲を超える。
 
@@ -129,20 +125,16 @@ worker を周期実行する。cadence と batch size は
 
 ## Future Multi-Space ownership
 
-Current v1 では generated material は SpaceExportShare 経由で複数 Space
-に渡らない。 future RFC でこれを有効化する場合、debt の ownership
 は次の規則で決める:
 
 - **生成 Space が default owner**: generated material を最初に materialize した
-  Space が `ownerSpaceId` を持つ。
-- **Future SpaceExportShare 経由で渡った場合**: importing Space 側で materialize
-  された debt は、importing Space を `ownerSpaceId` とする。`originatingSpaceId`
-  は exporting Space を保持する (audit / drift 連動の参照点)。
+  Space が `ownerSpaceId` を持つ。 された debt は、importing Space を
+  `ownerSpaceId` とする。`originatingSpaceId` は exporting Space を保持する
+  (audit / drift 連動の参照点)。
 - **Exporting Space は read-only mirror**: exporting Space からは status を
   mutate できない。`open` / `operator-action-required` / `cleared` への
-  transition は importing Space owner の責務。
-- future exporting Space は debt の存在を可視化し、SpaceExportShare の freshness
-  state に反映する (`refresh-required` / `revoked` などへの遷移条件)。
+  transition は importing Space owner の責務。 state に反映する
+  (`refresh-required` / `revoked` などへの遷移条件)。
 
 ## ActivationSnapshot propagation (fail-safe-not-fail-closed)
 
@@ -196,4 +188,3 @@ production deployment では status 表示を必須とする:
 - `docs/reference/architecture/exposure-activation-model.md` —
   ActivationSnapshot propagation と fail-safe-not-fail-closed スタンスの議論
 - `docs/reference/architecture/space-model.md` — future Multi-Space ownership と
-  SpaceExportShare 経由の debt 受け渡しの設計議論

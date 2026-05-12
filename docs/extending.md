@@ -283,8 +283,6 @@ scheduler は above-kernel product の責務です。これらを kernel catalog
 - [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
   — workflow / trigger / hook / execute-step を kernel から外し上位 product
   へ寄せる設計 rationale
-- [External Participants](/reference/external-participants) — 3rd-party export /
-  ExternalImplementation の登録
 - [Catalog Release Trust](/reference/catalog-release-trust) — publisher key /
   signature chain
 - [Connector Contract](/reference/connector-contract) — connector identity /

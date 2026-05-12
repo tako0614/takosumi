@@ -10,7 +10,6 @@ lists the consuming target, the type the value is parsed as, the default,
 whether the variable is required, and the spec concept it relates to.
 
 ::: info Current implementation scope This catalog includes both current boot
-variables and spec-reserved variables for domain references whose HTTP routes or
 workers are not mounted yet. Current kernel boot code definitely parses the role
 / environment / public-route / deploy-token / internal-secret / database /
 artifact / plugin-selection / audit-retention / observation-retention /
@@ -45,21 +44,20 @@ across roles unless noted.
 
 ### Connectivity and identity
 
-| Variable                           | Type      | Default                        | Required                                | Consumer                                                                                       | Spec concept            |
-| ---------------------------------- | --------- | ------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------- |
-| `TAKOSUMI_PAAS_PROCESS_ROLE`       | enum      | `takosumi-api`                 | yes (production)                        | kernel boot, bootstrap                                                                         | role selection          |
-| `TAKOSUMI_PROCESS_ROLE`            | enum      | `takosumi-api`                 | no                                      | alias of `TAKOSUMI_PAAS_PROCESS_ROLE`; if both are set they must match                         | role selection          |
-| `TAKOSUMI_ENVIRONMENT`             | enum      | `local`                        | no                                      | runtime config (`local` / `development` / `test` / `staging` / `production`)                   | OperatorBoundaries      |
-| `TAKOSUMI_DEV_MODE`                | boolean   | `false`                        | no                                      | runtime config; gates `allowUnsafeProductionDefaults`                                          | OperatorBoundaries      |
-| `TAKOSUMI_LISTEN_ADDR`             | host:port | `0.0.0.0:8788`                 | no                                      | kernel HTTP server bind                                                                        | n/a                     |
-| `TAKOSUMI_PUBLIC_BASE_URL`         | URL       | unset                          | yes when artifact routes are on         | artifact route enablement, presigned URL synthesis                                             | DataAsset Model         |
-| `TAKOSUMI_PUBLIC_ROUTES_ENABLED`   | boolean   | `false`                        | no                                      | enables `/api/public/v1/*`; CLI deploy `/v1/deployments` is enabled by `TAKOSUMI_DEPLOY_TOKEN` | public API host         |
-| `TAKOSUMI_DEPLOY_TOKEN`            | secret    | unset                          | yes for public deploy / artifact routes | bearer for `POST /v1/deployments`, artifact write endpoints                                    | OperatorBoundaries      |
-| `TAKOSUMI_DEPLOY_SPACE_ID`         | string    | `takosumi-deploy`              | no                                      | public deploy tenant / Space scope for the single deploy bearer                                | Space Model             |
-| `TAKOSUMI_INTERNAL_API_SECRET`     | secret    | unset                          | yes in production                       | bearer for the internal control-plane RPC                                                      | OperatorBoundaries      |
-| `TAKOSUMI_INTERNAL_SERVICE_SECRET` | secret    | unset                          | no                                      | deprecated compatibility alias for `TAKOSUMI_INTERNAL_API_SECRET`                              | OperatorBoundaries      |
-| `TAKOSUMI_AGENT_URL`               | URL       | unset (kernel embeds an agent) | no                                      | runtime-agent base URL the kernel posts to                                                     | runtime-agent lifecycle |
-| `TAKOSUMI_AGENT_TOKEN`             | secret    | unset                          | yes when `TAKOSUMI_AGENT_URL` is set    | bearer for runtime-agent calls                                                                 | runtime-agent lifecycle |
+| Variable                         | Type      | Default                        | Required                                | Consumer                                                                                       | Spec concept            |
+| -------------------------------- | --------- | ------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------- |
+| `TAKOSUMI_PAAS_PROCESS_ROLE`     | enum      | `takosumi-api`                 | yes (production)                        | kernel boot, bootstrap                                                                         | role selection          |
+| `TAKOSUMI_PROCESS_ROLE`          | enum      | `takosumi-api`                 | no                                      | alias of `TAKOSUMI_PAAS_PROCESS_ROLE`; if both are set they must match                         | role selection          |
+| `TAKOSUMI_ENVIRONMENT`           | enum      | `local`                        | no                                      | runtime config (`local` / `development` / `test` / `staging` / `production`)                   | OperatorBoundaries      |
+| `TAKOSUMI_DEV_MODE`              | boolean   | `false`                        | no                                      | runtime config; gates `allowUnsafeProductionDefaults`                                          | OperatorBoundaries      |
+| `TAKOSUMI_LISTEN_ADDR`           | host:port | `0.0.0.0:8788`                 | no                                      | kernel HTTP server bind                                                                        | n/a                     |
+| `TAKOSUMI_PUBLIC_BASE_URL`       | URL       | unset                          | yes when artifact routes are on         | artifact route enablement, presigned URL synthesis                                             | DataAsset Model         |
+| `TAKOSUMI_PUBLIC_ROUTES_ENABLED` | boolean   | `false`                        | no                                      | enables `/api/public/v1/*`; CLI deploy `/v1/deployments` is enabled by `TAKOSUMI_DEPLOY_TOKEN` | public API host         |
+| `TAKOSUMI_DEPLOY_TOKEN`          | secret    | unset                          | yes for public deploy / artifact routes | bearer for `POST /v1/deployments`, artifact write endpoints                                    | OperatorBoundaries      |
+| `TAKOSUMI_DEPLOY_SPACE_ID`       | string    | `takosumi-deploy`              | no                                      | public deploy tenant / Space scope for the single deploy bearer                                | Space Model             |
+| `TAKOSUMI_INTERNAL_API_SECRET`   | secret    | unset                          | yes in production                       | bearer for the internal control-plane RPC                                                      | OperatorBoundaries      |
+| `TAKOSUMI_AGENT_URL`             | URL       | unset (kernel embeds an agent) | no                                      | runtime-agent base URL the kernel posts to                                                     | runtime-agent lifecycle |
+| `TAKOSUMI_AGENT_TOKEN`           | secret    | unset                          | yes when `TAKOSUMI_AGENT_URL` is set    | bearer for runtime-agent calls                                                                 | runtime-agent lifecycle |
 
 ### State and storage
 
@@ -156,7 +154,6 @@ The kernel selects an Implementation per plugin port (`auth`, `coordination`,
 
 The kernel does not support marketplace URL/package selectors or remote plugin
 install. Operator packaging may provide plugin modules, but marketplace
-discovery and executable hook packages are not current kernel contract.
 
 ### Deploy Credentials
 
@@ -175,8 +172,8 @@ credentials.
 | `TAKOSUMI_QUOTA_TIER_BOOTSTRAP_REQUIRED`    | boolean           | `true`  | no       | kernel server; refuses boot when no quota tier catalog row is present    | Quota Tiers              |
 | `TAKOSUMI_SPACE_DELETE_CONFIRM_TTL_SECONDS` | integer (seconds) | `600`   | no       | kernel server; lifetime of `confirmCode` issued for `DELETE /spaces/:id` | Tenant Export & Deletion |
 | `TAKOSUMI_SPACE_SOFT_DELETE_RETENTION_DAYS` | integer (days)    | `30`    | no       | kernel server; retention window before soft-deleted Space is purged      | Tenant Export & Deletion |
-| `TAKOSUMI_EXPORT_DOWNLOAD_URL_TTL_SECONDS`  | integer (seconds) | `3600`  | no       | kernel server; TTL of presigned export download URLs                     | Space Export Share       |
-| `TAKOSUMI_EXPORT_MAX_CONCURRENT_PER_SPACE`  | integer           | `1`     | no       | kernel server; max concurrent export jobs per Space                      | Space Export Share       |
+| `TAKOSUMI_EXPORT_DOWNLOAD_URL_TTL_SECONDS`  | integer (seconds) | `3600`  | no       | kernel server; TTL of presigned export download URLs                     | Tenant Export            |
+| `TAKOSUMI_EXPORT_MAX_CONCURRENT_PER_SPACE`  | integer           | `1`     | no       | kernel server; max concurrent export jobs per Space                      | Tenant Export            |
 
 ### PaaS Operations
 
@@ -201,16 +198,14 @@ The `takosumi` CLI reads its own variables and resolves a remote URL, token, and
 config-file path from them. See [CLI Reference](/reference/cli) for the full
 resolution order.
 
-| Variable                       | Type    | Default                  | Required                                | Consumer                                                                        | Spec concept            |
-| ------------------------------ | ------- | ------------------------ | --------------------------------------- | ------------------------------------------------------------------------------- | ----------------------- |
-| `TAKOSUMI_REMOTE_URL`          | URL     | unset                    | yes for remote-only commands            | base URL of the kernel HTTP server                                              | n/a                     |
-| `TAKOSUMI_DEPLOY_TOKEN`        | secret  | unset                    | yes for deploy and artifact subcommands | bearer for `/v1/deployments` and `/v1/artifacts/*`                              | DataAsset Model         |
-| `TAKOSUMI_TOKEN`               | secret  | unset                    | no                                      | generic token alias; warns once and prefers `TAKOSUMI_DEPLOY_TOKEN`             | n/a                     |
-| `TAKOSUMI_AGENT_URL`           | URL     | unset                    | yes for `runtime-agent list / verify`   | runtime-agent base URL                                                          | runtime-agent lifecycle |
-| `TAKOSUMI_AGENT_TOKEN`         | secret  | unset                    | yes when `TAKOSUMI_AGENT_URL` is set    | bearer for runtime-agent calls                                                  | runtime-agent lifecycle |
-| `TAKOSUMI_CONFIG_FILE`         | path    | `~/.takosumi/config.yml` | no                                      | override path for the CLI config file                                           | n/a                     |
-| `TAKOSUMI_NO_DEPRECATION_WARN` | boolean | `false`                  | no                                      | suppress every CLI deprecation warning at once                                  | n/a                     |
-| `TAKOSUMI_KERNEL_URL`          | URL     | unset                    | no                                      | deprecated alias of `TAKOSUMI_REMOTE_URL`; warns once and resolves the same way | n/a                     |
+| Variable                | Type   | Default                  | Required                                | Consumer                                                            | Spec concept            |
+| ----------------------- | ------ | ------------------------ | --------------------------------------- | ------------------------------------------------------------------- | ----------------------- |
+| `TAKOSUMI_REMOTE_URL`   | URL    | unset                    | yes for remote-only commands            | base URL of the kernel HTTP server                                  | n/a                     |
+| `TAKOSUMI_DEPLOY_TOKEN` | secret | unset                    | yes for deploy and artifact subcommands | bearer for `/v1/deployments` and `/v1/artifacts/*`                  | DataAsset Model         |
+| `TAKOSUMI_TOKEN`        | secret | unset                    | no                                      | generic token alias; warns once and prefers `TAKOSUMI_DEPLOY_TOKEN` | n/a                     |
+| `TAKOSUMI_AGENT_URL`    | URL    | unset                    | yes for `runtime-agent list / verify`   | runtime-agent base URL                                              | runtime-agent lifecycle |
+| `TAKOSUMI_AGENT_TOKEN`  | secret | unset                    | yes when `TAKOSUMI_AGENT_URL` is set    | bearer for runtime-agent calls                                      | runtime-agent lifecycle |
+| `TAKOSUMI_CONFIG_FILE`  | path   | `~/.takosumi/config.yml` | no                                      | override path for the CLI config file                               | n/a                     |
 
 ## Runtime-Agent
 
@@ -311,7 +306,6 @@ weakens the OperatorBoundaries trust model.
 - [Tenant Provisioning](/reference/tenant-provisioning)
 - [Tenant Export & Deletion](/reference/tenant-export-deletion)
 - [Trial Spaces](/reference/trial-spaces)
-- [Space Export Share](/reference/space-export-share)
 - [Quota Tiers](/reference/quota-tiers)
 - [Cost Attribution](/reference/cost-attribution)
 - [Zone Selection](/reference/zone-selection)

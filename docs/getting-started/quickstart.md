@@ -297,47 +297,6 @@ manifest path を必ず明示する pure deploy engine。
 | `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`       | agent host に該当 cloud の credential が無い → connector が register されてない                                      |
 | `runtime-agent /v1/lifecycle/apply failed: 401`                           | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない                                                             |
 
-### Deprecated provider IDs
-
-0.10 から、Takosumi が ship する provider id はすべて `@takos/<cloud>-<service>`
-形式に namespace 化されました。 二つの operator plugin が同じ bare id を再
-register してしまう last-write-wins 衝突を避けるためです。
-
-| 旧 (deprecated)         | 新 (recommended)                 |
-| ----------------------- | -------------------------------- |
-| `aws-s3`                | `@takos/aws-s3`                  |
-| `aws-fargate`           | `@takos/aws-fargate`             |
-| `aws-rds`               | `@takos/aws-rds`                 |
-| `route53`               | `@takos/aws-route53`             |
-| `gcp-gcs`               | `@takos/gcp-gcs`                 |
-| `cloud-run`             | `@takos/gcp-cloud-run`           |
-| `cloud-sql`             | `@takos/gcp-cloud-sql`           |
-| `cloud-dns`             | `@takos/gcp-cloud-dns`           |
-| `cloudflare-r2`         | `@takos/cloudflare-r2`           |
-| `cloudflare-container`  | `@takos/cloudflare-container`    |
-| `cloudflare-workers`    | `@takos/cloudflare-workers`      |
-| `cloudflare-dns`        | `@takos/cloudflare-dns`          |
-| `azure-container-apps`  | `@takos/azure-container-apps`    |
-| `k3s-deployment`        | `@takos/kubernetes-deployment`   |
-| `deno-deploy`           | `@takos/deno-deploy`             |
-| `filesystem`            | `@takos/selfhost-filesystem`     |
-| `minio`                 | `@takos/selfhost-minio`          |
-| `docker-compose`        | `@takos/selfhost-docker-compose` |
-| `systemd-unit`          | `@takos/selfhost-systemd`        |
-| `local-docker-postgres` | `@takos/selfhost-postgres`       |
-| `coredns-local`         | `@takos/selfhost-coredns`        |
-
-旧 id は 0.10 / 0.11 では引き続き受け付けますが、次のような警告が kernel log に
-出ます:
-
-```
-[takosumi-resolver] provider id "aws-fargate" is deprecated;
-use "@takos/aws-fargate" — bare ids will be rejected in 0.12.
-```
-
-`@` で始まる id は変換されません。0.12 で旧 id 受け入れは削除されるので、
-manifest の `provider:` 値を新形式に書き換えてください。
-
 ### Artifact storage hygiene
 
 `takosumi artifact push` でアップロードした blob は object storage
@@ -404,7 +363,7 @@ export TAKOSUMI_ARTIFACT_FETCH_TOKEN=$(openssl rand -hex 32)
 
 `TAKOSUMI_PUBLIC_BASE_URL` と組み合わせて kernel が runtime-agent に渡す
 artifact-store locator は、 fetch token が set されていればそちらを優先します
-(set されていなければ後方互換で deploy token を渡します)。
+(set されていなければ deploy token を渡します)。
 
 ---
 

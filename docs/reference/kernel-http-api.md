@@ -126,12 +126,9 @@ that the value is a JSON object and that `kind`, when present, is a string; it
 does not execute workflows, read workflow files, parse build logs, or interpret
 git semantics.
 
-`services[]`, `imports[]`, `serviceResolvers[]`, and
-`metadata.takosumiServiceImports` are not public deploy fields. The public
-deploy route rejects them during manifest validation. Operator/account-plane
-dependencies are resolved before kernel deploy through namespace exports,
-account API, OIDC discovery, or BillingPort contracts; the kernel does not fetch
-or verify service descriptors.
+Operator/account-plane dependencies are resolved before kernel deploy through
+namespace exports, account API, OIDC discovery, or BillingPort contracts. The
+kernel deploy route receives only the compiled Shape manifest.
 
 Current public deploy scope is single-token. `TAKOSUMI_DEPLOY_TOKEN` maps to one
 operator-configured public deploy Space / tenant scope. The scope defaults to
@@ -475,10 +472,7 @@ space_id: string?
 The route hides cross-Space deployment ids as 404 and returns the same mutation
 response shape as resolve.
 
-### Spec-Reserved Internal Surfaces
-
 The following HTTP route families are documented in their domain references as
-spec / service contracts, but they are **not current kernel HTTP routes** in
 this repository:
 
 ```text
@@ -536,7 +530,6 @@ plus route code, authorization tests, storage migrations, OpenAPI/capabilities
 updates, and an update to the
 [Public Spec Source Map](/reference/public-spec-source-map).
 
-Catalog release executable hooks / plugin marketplace install are not current
 kernel contract. The current WAL may perform kernel-owned CatalogRelease
 signature re-verification, but it does not load executable hook packages.
 
@@ -623,7 +616,6 @@ interface ApiErrorEnvelope {
 - [Tenant Provisioning](/reference/tenant-provisioning)
 - [Tenant Export & Deletion](/reference/tenant-export-deletion)
 - [Trial Spaces](/reference/trial-spaces)
-- [Space Export Share](/reference/space-export-share)
 - [Quota Tiers](/reference/quota-tiers)
 - [Cost Attribution](/reference/cost-attribution)
 - [Zone Selection](/reference/zone-selection)

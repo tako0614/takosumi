@@ -4,8 +4,7 @@
 > [Audit Events](/reference/audit-events),
 > [Approval Invalidation Triggers](/reference/approval-invalidation),
 > [RevokeDebt Model](/reference/revoke-debt),
-> [Cross-Process Locks](/reference/cross-process-locks),
-> [Space Export Share](/reference/space-export-share)
+> [Cross-Process Locks](/reference/cross-process-locks)
 
 This page is the v1 contract for time and clock handling in a Takosumi
 installation. It defines which clock source backs each time-sensitive feature,
@@ -21,8 +20,7 @@ bug.
 
 - **Wall clock** — UTC, NTP-synchronized. Used for any value that an operator,
   integrator, or auditor must interpret as a calendar time: audit `ts`, TTL
-  evaluation, approval `expiresAt`, share `expiresAt`, and idempotency window
-  boundaries.
+  evaluation, approval `expiresAt`, idempotency window boundaries.
 - **Monotonic clock** — process-local, never moves backward, advances during
   sleep. Used for any value that is meaningful only as a duration: operation
   duration, lock heartbeat, lock acquire timeout, rate limit window accounting,
@@ -40,7 +38,6 @@ The following bindings are normative.
 | Feature                                            | Clock source                                             |
 | -------------------------------------------------- | -------------------------------------------------------- |
 | Approval `expiresAt` evaluation                    | wall clock                                               |
-| SpaceExportShare `expiresAt` evaluation            | reserved / future RFC; wall clock if enabled             |
 | RevokeDebt aging window                            | wall clock; monotonic for the in-process grace timer     |
 | Lock acquire timeout                               | monotonic                                                |
 | Lock heartbeat / TTL                               | monotonic                                                |
@@ -108,9 +105,9 @@ parse time.
 TTL evaluation reads the wall clock at the **moment** of evaluation, never from
 a cache.
 
-- Approval `expiresAt`, share `expiresAt`, and any other TTL field is re-read
-  every time the kernel needs to decide validity. A cached decision from a
-  previous request is never reused for a TTL check.
+- Approval `expiresAt`, any other TTL field is re-read every time the kernel
+  needs to decide validity. A cached decision from a previous request is never
+  reused for a TTL check.
 - The kernel evaluates TTL strictly: `now > expiresAt` is expired,
   `now == expiresAt` is expired. There is no slop window built into the
   comparator; operator-tunable grace must be applied to `expiresAt` at write

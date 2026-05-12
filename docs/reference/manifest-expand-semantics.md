@@ -3,7 +3,6 @@
 > Stability: stable Audience: integrator, kernel-implementer See also:
 > [Manifest Validation](/reference/manifest-validation),
 > [Templates](/reference/templates), [Shapes](/reference/shapes),
-> [Space Export Share](/reference/space-export-share),
 > [Closed Enums](/reference/closed-enums)
 
 This page is the v1 contract for `${ref:...}` resolution inside manifests: the
@@ -22,7 +21,6 @@ ${ref:<resource>.<field>[.<subfield>...]}
 ```
 
 - `<resource>` names a component declared in the same manifest. The `share:`
-  prefix is reserved for a future RFC and is rejected by current v1.
 - `<field>` is a top-level output field on the resource.
 - `<subfield>` is a dot-path into a nested object output. Array indexing is
   **not** supported in v1; outputs that need element access expose a flat field
@@ -120,8 +118,6 @@ own outputs.
 ## Cross-Space references
 
 Cross-Space references are rejected in current v1. Two Spaces are not connected
-by manifest references. `SpaceExportShare` / `share:` syntax is reserved for a
-future RFC.
 
 - The share-aware reference syntax is
 

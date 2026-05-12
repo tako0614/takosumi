@@ -68,7 +68,6 @@ Values exceeding the caps are rejected at write time with HTTP
 
 ## Update API
 
-In the spec-reserved internal HTTP surface, attribution metadata is mutated
 through:
 
 ```text
@@ -145,8 +144,6 @@ stops promoting that key until the operator either raises the threshold or
 removes the key from the promote list.
 
 ## Reporting query
-
-In the spec-reserved internal API, operators read attribution through:
 
 - `GET /api/internal/v1/spaces?costCenter=cc:platform`
 - `GET /api/internal/v1/spaces?customerSegment=enterprise`

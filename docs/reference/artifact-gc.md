@@ -161,15 +161,12 @@ ActivationHistoryEvent:
 - `activation-snapshot-created`
 - `group-head-moved`
 - `group-head-rolled-back`
-- `space-export-share-activated`
-- `space-export-share-revoked`
 
 The bucket key is fixed at one hour for the v1 export. Operators that need finer
 granularity consume the underlying audit events directly.
 
 ### Resume cursor
 
-The spec-reserved activation-history export endpoint accepts an `afterEventId`
 cursor and returns results strictly after that id. Pagination is forward-only
 and monotonic; clients persist the last-seen `eventId` and resume from there:
 
@@ -183,8 +180,6 @@ kernel's serialization clock at response time; later events appear on the next
 call.
 
 ### Filters
-
-The spec-reserved endpoint accepts:
 
 | Filter       | Notes                                                                                  |
 | ------------ | -------------------------------------------------------------------------------------- |
@@ -207,9 +202,8 @@ underlying event id space.
 - **Rollback**: a recovery-mode rollback emits one `group-head-rolled-back`
   event followed by zero or more `group-head-moved` events for re-pinning. The
   `payload.cause` field carries the `recoveryMode` discriminator so analytics
-  distinguish rollback from forward shift.
-- **SpaceExportShare lifecycle**: reserved / future RFC. Current v1 artifact GC
-  does not root assets through cross-Space share records.
+  distinguish rollback from forward shift. does not root assets through
+  cross-Space share records.
 
 ### Audit linkage
 

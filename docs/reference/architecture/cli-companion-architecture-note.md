@@ -94,9 +94,8 @@ The CLI resolves remote URL and bearer token through a single fixed precedence:
 1. explicit command flag (`--remote`, `--token`)
 2. specific env (`TAKOSUMI_REMOTE_URL`, `TAKOSUMI_DEPLOY_TOKEN`,
    `TAKOSUMI_AGENT_TOKEN`)
-3. generic / deprecated env aliases (`TAKOSUMI_TOKEN`, `TAKOSUMI_KERNEL_URL`)
-4. config file `~/.takosumi/config.yml`
-5. built-in default (none for URL / token; `8788` / `8789` for ports)
+3. config file `~/.takosumi/config.yml`
+4. built-in default (none for URL / token; `8788` / `8789` for ports)
 
 Env is the first persistent layer because it is the natural integration point
 for shells, CI, and supervisors; the file exists to keep the single-host
@@ -137,9 +136,7 @@ Exit codes are a small reserved set:
 - `1` — command-specific failure (kernel ≥ 400, plan / apply failure, partial
   destroy, migration failure, verify failure of a connector).
 - `2` — usage or precondition error (malformed flag, missing required env,
-  remote-only command without remote URL).
-- `70+` — reserved for future signal-driven and host-driven exits, not currently
-  emitted.
+  remote-only command without remote URL). emitted.
 
 The 70+ band is reserved to stay aligned with `sysexits.h` (`EX_OSERR
 = 71`,
@@ -147,20 +144,14 @@ The 70+ band is reserved to stay aligned with `sysexits.h` (`EX_OSERR
 its conventional "usage error" meaning and future host-class exits do not
 collide with the small set users routinely handle.
 
-## Deprecation policy architecture
+## Warning Policy Architecture
 
-The CLI prints at most one stderr warning per process per deprecated selector.
 Three rules carry this:
 
 - Warnings go to stderr, never stdout, so JSON-producing commands and pipelines
-  stay byte-identical regardless of deprecation state.
-- `TAKOSUMI_NO_DEPRECATION_WARN=1` suppresses every CLI deprecation warning at
-  once. CI noise control is the explicit use case: an operator pinned to a
-  known-deprecated env name during a migration window mutes the warning
-  fleet-wide without per-flag overrides.
-- The grace window for any deprecated alias is one CLI minor release: the minor
-  that introduces a warning is the last that still resolves the alias; the next
-  minor removes it.
+  stay byte-identical regardless of warning state.
+- CI noise control is explicit and command-scoped; it does not change command
+  semantics or output payloads.
 
 ## Security boundary
 

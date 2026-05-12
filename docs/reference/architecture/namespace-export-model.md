@@ -1,7 +1,7 @@
 # Namespace Export Model
 
 Root-level canonical spec:
-[Namespace Exports](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/namespace-exports.md).
+[Namespace Exports](https://github.com/tako0614/takosumi/blob/master/docs/reference/namespace-exports.md).
 
 Exports are namespace-addressable usable surfaces. Namespace paths are resolved
 inside a Space. Producers publish export declarations; link materialization
@@ -107,7 +107,6 @@ operator-owned namespace exports granted to the Space.
 4. environment namespace, if defined by the Space
 5. space namespace
 6. operator namespace granted to the Space
-7. reserved: external participant namespace registered into the Space
 8. reserved: explicitly shared namespace imports from another Space
 ```
 
@@ -118,21 +117,17 @@ operator, or external namespace.
 ## Space export sharing
 
 Cross-space namespace use is denied by default and is not a current v1
-dependency. `SpaceExportShare` / namespace import records are reserved
-vocabulary for a future RFC.
 
 ```yaml
-SpaceExportShare:
-  fromSpaceId: space:platform
-  toSpaceId: space:acme-prod
-  exportPath: takos.oauth.token
-  exportSnapshotId: export-snapshot:...
-  allowedAccess:
-    - read
-    - call
+fromSpaceId: space:platform
+toSpaceId: space:acme-prod
+exportPath: takos.oauth.token
+exportSnapshotId: export-snapshot:...
+allowedAccess:
+  - read
+  - call
 ```
 
-If a future RFC enables this vocabulary, ResolutionSnapshot must record the
 share and plan output must mark cross-space use as a risk.
 
 ## Freshness

@@ -40,42 +40,40 @@ Primitive types used throughout:
 ## Relationship overview
 
 ```text
-                +----------------------+
-                | ResolutionSnapshot   |
-                +----------+-----------+
-                           |
-                           v
-                +----------------------+
-                | DesiredSnapshot      |
-                +----------+-----------+
-                           |
-              +------------+------------+
-              v                         v
-   +----------------------+  +----------------------+
-   | OperationPlan        |  | Approval             |
-   +----------+-----------+  +----------+-----------+
-              |                         |
-              v                         |
-   +----------------------+             |
-   | JournalEntry (WAL)   |<------------+
-   +----------+-----------+
-              |
-              v
-   +----------------------+
-   | ActivationSnapshot   |
-   +----------+-----------+
-              |
-              v
-   +----------------------+    +----------------------+
-   | ObservationSet       |--->| DriftIndex           |
-   +----------------------+    +----------+-----------+
-                                          |
-                                          v
-                               +----------------------+
-                               | RevokeDebt           |
-                               +----------------------+
-
-   (SpaceExportShare is reserved / future RFC and is not part of current v1 live schema)
+             +----------------------+
+             | ResolutionSnapshot   |
+             +----------+-----------+
+                        |
+                        v
+             +----------------------+
+             | DesiredSnapshot      |
+             +----------+-----------+
+                        |
+           +------------+------------+
+           v                         v
++----------------------+  +----------------------+
+| OperationPlan        |  | Approval             |
++----------+-----------+  +----------+-----------+
+           |                         |
+           v                         |
++----------------------+             |
+| JournalEntry (WAL)   |<------------+
++----------+-----------+
+           |
+           v
++----------------------+
+| ActivationSnapshot   |
++----------+-----------+
+           |
+           v
++----------------------+    +----------------------+
+| ObservationSet       |--->| DriftIndex           |
++----------------------+    +----------+-----------+
+                                       |
+                                       v
+                            +----------------------+
+                            | RevokeDebt           |
+                            +----------------------+
 ```
 
 ## ResolutionSnapshot
@@ -89,7 +87,6 @@ Captures the resolved manifest world for a deploy.
 | `manifestDigest`    | sha256          | yes      | Digest of the canonical manifest bytes.                       |
 | `catalogReleaseId`  | string          | yes      | Adopted catalog release at resolve time.                      |
 | `exportSnapshotIds` | `array<string>` | yes      | Snapshots of own Space exports referenced by this resolution. |
-| `importedShares`    | `array<string>` | no       | Reserved / future RFC. Current v1 omits this field.           |
 | `recordedAt`        | timestamp       | yes      | Resolve time.                                                 |
 
 Persistence: kept while any DesiredSnapshot referencing this snapshot is
@@ -253,10 +250,6 @@ Mutation rule: upsert by `(tenantId, name)`. Destroy keeps the row with
 `status = destroyed` and clears `appliedResources` so status and audit reads
 still work.
 
-Historical rows may contain `metadata.takosumiServiceImports` from the removed
-service import design. Current public deploy validation rejects that metadata
-and the kernel no longer writes descriptor pins.
-
 ## PublicDeployIdempotencyRecord
 
 Replay cache for the public deploy CLI surface (`POST /v1/deployments`). This is
@@ -308,33 +301,30 @@ Tracks pending revocations whose effects have not yet been observed as cleared
 in the world. See [RevokeDebt Model](/reference/revoke-debt) for the canonical
 schema, reason / status enums, aging window, and Multi-Space ownership rule.
 
-| Field                    | Type      | Required    | Notes                                                                                                                                          |
-| ------------------------ | --------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                     | string    | yes         | RevokeDebt identifier (`revoke-debt:<ulid>`).                                                                                                  |
-| `sourceKey`              | sha256    | yes         | Idempotency key for enqueue; derived from owner Space, reason, generated object, and WAL/source tuple.                                         |
-| `generatedObjectId`      | string    | yes         | Owner generated object id; format `generated:...`.                                                                                             |
-| `sourceExportSnapshotId` | string    | conditional | Required when reason is `link-revoke`; cross-space use is reserved / future RFC.                                                               |
-| `externalParticipantId`  | string    | no          | Reserved / future RFC.                                                                                                                         |
-| `reason`                 | enum      | yes         | Closed enum values (`external-revoke` / `link-revoke` / `activation-rollback` / `approval-invalidated`; `cross-space-share-expired` reserved). |
-| `status`                 | enum      | yes         | Closed enum 3 values (`open` / `operator-action-required` / `cleared`).                                                                        |
-| `ownerSpaceId`           | string    | yes         | Space owning the debt. SpaceExportShare-derived debt is reserved / future RFC.                                                                 |
-| `originatingSpaceId`     | string    | yes         | Space that materialized the generated object. May equal `ownerSpaceId`.                                                                        |
-| `deploymentName`         | string    | no          | Public deploy deployment name when debt originates from `/v1/deployments`.                                                                     |
-| `operationPlanDigest`    | sha256    | no          | WAL OperationPlan digest that produced the debt.                                                                                               |
-| `journalEntryId`         | string    | no          | WAL entry id that produced the debt.                                                                                                           |
-| `operationId`            | string    | no          | Operation id that produced the debt.                                                                                                           |
-| `resourceName`           | string    | no          | Manifest resource name when debt is resource-scoped.                                                                                           |
-| `providerId`             | string    | no          | Provider id associated with the resource-scoped debt.                                                                                          |
-| `retryPolicy`            | object    | yes         | Retry policy parameters (interval, attempts, backoff). Owner-tunable.                                                                          |
-| `retryAttempts`          | integer   | yes         | Count of cleanup retry attempts recorded for this debt.                                                                                        |
-| `lastRetryAt`            | timestamp | no          | Last cleanup retry attempt timestamp.                                                                                                          |
-| `nextRetryAt`            | timestamp | no          | Next scheduled retry time when policy can compute one.                                                                                         |
-| `lastRetryError`         | object    | no          | Structured retry failure detail from the last attempt.                                                                                         |
-| `detail`                 | object    | no          | Origin-specific structured detail.                                                                                                             |
-| `createdAt`              | timestamp | yes         | Initial debt creation.                                                                                                                         |
-| `statusUpdatedAt`        | timestamp | yes         | Last status transition timestamp; aging windows are evaluated from this value while status is `open`.                                          |
-| `agedAt`                 | timestamp | no          | Auto-aging transition (`open` → `operator-action-required`).                                                                                   |
-| `clearedAt`              | timestamp | no          | Terminal clearance (`status = cleared`).                                                                                                       |
+| Field                 | Type      | Required | Notes                                                                                                                                          |
+| --------------------- | --------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                  | string    | yes      | RevokeDebt identifier (`revoke-debt:<ulid>`).                                                                                                  |
+| `sourceKey`           | sha256    | yes      | Idempotency key for enqueue; derived from owner Space, reason, generated object, and WAL/source tuple.                                         |
+| `generatedObjectId`   | string    | yes      | Owner generated object id; format `generated:...`.                                                                                             |
+| `reason`              | enum      | yes      | Closed enum values (`external-revoke` / `link-revoke` / `activation-rollback` / `approval-invalidated`; `cross-space-share-expired` reserved). |
+| `status`              | enum      | yes      | Closed enum 3 values (`open` / `operator-action-required` / `cleared`).                                                                        |
+| `originatingSpaceId`  | string    | yes      | Space that materialized the generated object. May equal `ownerSpaceId`.                                                                        |
+| `deploymentName`      | string    | no       | Public deploy deployment name when debt originates from `/v1/deployments`.                                                                     |
+| `operationPlanDigest` | sha256    | no       | WAL OperationPlan digest that produced the debt.                                                                                               |
+| `journalEntryId`      | string    | no       | WAL entry id that produced the debt.                                                                                                           |
+| `operationId`         | string    | no       | Operation id that produced the debt.                                                                                                           |
+| `resourceName`        | string    | no       | Manifest resource name when debt is resource-scoped.                                                                                           |
+| `providerId`          | string    | no       | Provider id associated with the resource-scoped debt.                                                                                          |
+| `retryPolicy`         | object    | yes      | Retry policy parameters (interval, attempts, backoff). Owner-tunable.                                                                          |
+| `retryAttempts`       | integer   | yes      | Count of cleanup retry attempts recorded for this debt.                                                                                        |
+| `lastRetryAt`         | timestamp | no       | Last cleanup retry attempt timestamp.                                                                                                          |
+| `nextRetryAt`         | timestamp | no       | Next scheduled retry time when policy can compute one.                                                                                         |
+| `lastRetryError`      | object    | no       | Structured retry failure detail from the last attempt.                                                                                         |
+| `detail`              | object    | no       | Origin-specific structured detail.                                                                                                             |
+| `createdAt`           | timestamp | yes      | Initial debt creation.                                                                                                                         |
+| `statusUpdatedAt`     | timestamp | yes      | Last status transition timestamp; aging windows are evaluated from this value while status is `open`.                                          |
+| `agedAt`              | timestamp | no       | Auto-aging transition (`open` → `operator-action-required`).                                                                                   |
+| `clearedAt`           | timestamp | no       | Terminal clearance (`status = cleared`).                                                                                                       |
 
 Persistence: kept while `status` is not `cleared`, plus the retain-after-cleared
 retention window per [Compliance Retention](/reference/compliance-retention).
@@ -379,9 +369,6 @@ Immutability: status transitions are append-only in the audit log. The live
 record updates `status` in place to support fast lookup. Approvals carry the 6
 invalidation triggers from the policy / risk / approval / error model.
 
-## SpaceExportShare
-
-Reserved / future RFC cross-Space share record. Current v1 storage does not
 require this table for install or deploy; consumer contracts may depend only on
 operator-owned namespace exports.
 
@@ -394,7 +381,6 @@ operator-owned namespace exports.
 | `exportSnapshotId`   | string          | yes      | The Snapshot of the producer-side export.                             |
 | `allowedAccess`      | enum            | yes      | Access mode (read / read-write / admin / invoke-only / observe-only). |
 | `expiresAt`          | timestamp       | no       | Optional hard expiry.                                                 |
-| `lifecycleState`     | enum            | yes      | One of the 5 SpaceExportShare lifecycle values.                       |
 | `policyDecisionRefs` | `array<string>` | yes      | Policy decisions that govern the share.                               |
 
 Persistence: kept while `lifecycleState` is anything other than `revoked`, plus
@@ -442,7 +428,6 @@ DriftIndex.
 
 ## ExternalParticipant
 
-Reserved / future RFC operator-issued identity for a non-Space participant that
 consumes exports or signs envelopes. Current v1 storage does not require this
 record for install or deploy.
 
@@ -459,8 +444,6 @@ record for install or deploy.
 Persistence: kept while `revokedAt` is null OR audit retention で要求される間.
 Indexed by `(id, spaceVisibility)`. Immutability: mutable in place:
 `spaceVisibility` / `verifiedAt` / `revokedAt` のみ.
-
-See also: [External Participants](/reference/external-participants).
 
 ## Connector
 
@@ -960,4 +943,3 @@ Implementations are not free to:
   drift, and RevokeDebt semantics.
 - `reference/architecture/policy-risk-approval-error-model` — Approval
   invalidation triggers and risk enum.
-- `reference/architecture/namespace-export-model` — SpaceExportShare lifecycle.

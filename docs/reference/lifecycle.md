@@ -155,9 +155,8 @@ mode を選択します。
 - 直前 phase が `commit` 半ばで落ち、外部 side effect (cloud API call) が
   実行済みの可能性が高い: `continue` で `commit` を最後まで走らせる。
 - `commit` まで終わったが `post-commit` で外部依存が壊れ続けて回復見込みが ない:
-  `compensate` を選び、`activation-rollback` reason の RevokeDebt を open
-  する。SpaceExportShare lifecycle 連動は reserved / future RFC であり current
-  v1 の recovery mode では扱わない。
+  `compensate` を選び、`activation-rollback` reason の RevokeDebt を open v1 の
+  recovery mode では扱わない。
 - 状況不明 / 復旧前にまず差分を見たい: `inspect` を選び、WAL の journalEntryId
   単位で `actual-effects-overflow` の有無を確認する。
 

@@ -51,7 +51,7 @@ allow / deny / approval を扱う closed vocabulary。
 永続化レイヤと観測レイヤ。
 
 - [Storage Schema](./storage-schema) — Snapshot / Journal / RevokeDebt /
-  Approval の論理 wire schema。SpaceExportShare は reserved / future RFC
+  Approval の論理 wire schema
 - [Journal Compaction](./journal-compaction) — compaction policy / retention
 - [Audit Events](./audit-events) — event taxonomy / hash chain
 - [Observation Retention](./observation-retention) — ObservationSet retention /
@@ -79,8 +79,6 @@ operator が production 運用するための trust 境界。
 - [Cross-Process Locks](./cross-process-locks) — heartbeat / TTL / recovery
 - [Catalog Release Trust](./catalog-release-trust) — signature / publisher key
   enrollment
-- [External Participants](./external-participants) — registration / verification
-  / external implementation
 
 ## Tenant lifecycle
 
@@ -137,8 +135,6 @@ shape catalog / provider / template / artifact 拡張面。
 
 - [Shape Catalog](./shapes) — v1 shapes / outputFields / capability extension
 - [Provider Plugins](./providers) — v1 provider matrix / registerProvider
-- [Plugin Marketplace](./plugin-marketplace) — removed / not-current remote
-  plugin install design
 - [Templates](./templates) — registerTemplate / expand immutability
 - [Artifact Kinds](./artifact-kinds) — DataAsset kind registry /
   registerArtifactKind
@@ -147,8 +143,6 @@ shape catalog / provider / template / artifact 拡張面。
 - [DataAsset Policy](./data-asset-policy) — upload cap / accepted-kind
   enforcement / artifact auth boundaries
 - [Artifact GC](./artifact-gc) — artifact GC / ActivationSnapshot history export
-- [Space Export Share](./space-export-share) — share lifecycle protocol / TTL /
-  revoke
 
 ## Manifest & wire formats
 

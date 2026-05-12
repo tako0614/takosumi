@@ -7,8 +7,6 @@
 - [ ] Manifest does not declare Space; Space comes from deploy context / auth /
       API / operator profile.
 - [ ] Namespace paths are Space-scoped.
-- [ ] Cross-space links are denied in current v1. SpaceExportShare / operator
-      import exceptions are reserved for future RFCs.
 - [ ] Secrets, artifacts, journals, approvals, observations, and audit events
       are Space-scoped.
 - [ ] Reserved prefixes are operator-controlled and granted into Spaces.

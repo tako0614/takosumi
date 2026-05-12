@@ -49,7 +49,6 @@ namespace-scope-resolution:
   Is the export visible inside this Space?
 
 cross-space-link:
-  Reserved / future RFC. Current v1 rejects cross-Space links.
 
 space-secret-projection:
   May this Space receive the secret projection?
@@ -76,7 +75,6 @@ revoked-export
 cross-scope-link
 cross-space-link
 shadowed-namespace
-space-export-share
 implementation-unverified
 actual-effects-overflow
 rollback-revalidation-required
@@ -90,9 +88,8 @@ transform-unapproved
 [Link and Projection Model — Collision rules](./link-projection-model.md).
 `transform-unapproved` is raised by
 [DataAsset Model — Transform approval enforcement](./data-asset-model.md).
-`stale-export` is raised when an operator-owned export becomes stale.
-SpaceExportShare freshness is reserved / future RFC. `revoke-debt-created` is
-raised when an operation queues a RevokeDebt record per
+`stale-export` is raised when an operator-owned export becomes stale. raised
+when an operation queues a RevokeDebt record per
 [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md).
 
 ## Approval lifecycle
@@ -140,14 +137,12 @@ invalidates the approval.
 
 4. external freshness change
    An operator-owned ExportDeclaration referenced by the snapshot is no longer
-   fresh. SpaceExportShare imports are reserved / future RFC.
 
 5. catalog release change
    The CatalogRelease adopted by the Space has changed.
 
 6. Space-context change
    Space id, Space membership, or Space policy pack governing this resolution
-   has changed. SpaceExportShare governance is reserved / future RFC.
 ```
 
 ## Error model
@@ -218,9 +213,7 @@ minimum approval set に絞って propagate します。
 ### Future Cross-Space approvals
 
 Current v1 は Cross-Space approval を持たない。Future RFC で有効化する場合、
-SpaceExportShare に紐づく approval は importing Space owner が approver
 です。exporting Space には **通知のみ** が送られ、approve 権限は付与され
-ません。これは [Space Model — SpaceExportShare lifecycle](./space-model.md)
 の所有権モデル (importing Space が消費する責任を負う) に従っています。 exporting
 Space owner は通知から share の利用状況を把握できますが、 approval flow
 には介入しません。

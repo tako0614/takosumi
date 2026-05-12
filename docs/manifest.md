@@ -34,11 +34,10 @@ resources: # required: portable Shape resources
     spec: { name: app-assets }
 ```
 
-`apiVersion` と `kind` は **required** で、 値もそれぞれ `"1.0"` / `Manifest`
-固定。 これら 2 field を欠いた manifest は kernel (`POST /v1/deployments`) と
-CLI local mode の両方で **400 / envelope rejected** される。 `1.0` は将来の
-breaking schema 変更で `"2.0"` に bump され、 互換性のない manifest が混在しても
-kernel が version ごとに routing できるようにする番号。
+`apiVersion` と `kind` は **required** で、値もそれぞれ `"1.0"` / `Manifest`
+固定。これら 2 field を欠いた manifest は kernel (`POST /v1/deployments`) と CLI
+local mode の両方で **400 / envelope rejected** されます。`1.0` は manifest
+contract の major version です。
 
 `@context` は manifest を JSON-LD document として扱うための optional field
 です。 推奨値は `https://takosumi.com/contexts/manifest-v1.jsonld`。kernel は
@@ -46,15 +45,13 @@ kernel が version ごとに routing できるようにする番号。
 JSON-LD と同じく external tooling / marketplace indexing / catalog publishing
 のための semantic hint として保持します。
 
-top-level `template` と `resources[]` を併用する historical authoring form は
-current kernel public contract では ありません。`template` を使う tool は kernel
-request 前に expanded `resources[]` へ compile してください。
+`template` を使う tool は kernel request 前に expanded `resources[]` へ compile
+してください。kernel public contract は `resources[]` です。
 
 `namespace` は manifest-local / Space-scoped namespace の hint です。
 operator-owned capability (OIDC / billing / dashboard / deploy API など) は
 manifest top-level field ではなく namespace export / account API で接続します。
-`services[]` / `imports[]` / `serviceResolvers[]` / ServiceDescriptor
-は削除済みで、 current kernel は unknown field として reject します。
+kernel manifest には operator account-plane dependency を書きません。
 
 ## Project layout は `takosumi-git` の責務
 
@@ -168,87 +165,3 @@ resources:
 4. **Status phase** — apply 後に各 resource の `status(handle, ctx)` で確認。
 5. **Rollback on failure** — apply phase で失敗した時点までに作られた resource
    は **逆順** に `destroy(handle, ctx)` されます (best effort)。
-
-## Retired template shorthand
-
-historical clients could submit top-level `template` plus `resources[]` and rely
-on in-process expansion. That surface is retired. Current docs and apps must
-submit expanded `resources[]` only; see [Templates](/reference/templates) for
-the historical compatibility note.
-
-## Migration note: legacy target/service-map shape is rejected
-
-左側は historical form で、現行 kernel の public v1 manifest validation では
-受理されません。新しい manifest は右側の `apiVersion: "1.0"` / `kind: Manifest`
-/ `resources[]` shape model で書きます。top-level `services` は object map でも
-array でも current manifest ではありません。
-
-::: code-group
-
-```yaml [rejected legacy form]
-target: cloudflare
-services:
-  app:
-    runtime: cloudflare-container
-    image: ghcr.io/example/app@sha256:abcd...
-    port: 8080
-  db:
-    profile: aws-rds
-    version: "16"
-domains:
-  - host: app.example.com
-    service: app
-```
-
-```yaml [new (resources[] + ${ref:...})]
-apiVersion: "1.0"
-kind: Manifest
-metadata:
-  name: my-app
-resources:
-  - shape: database-postgres@v1
-    name: db
-    provider: "@takos/aws-rds"
-    spec: { version: "16", size: small }
-
-  - shape: web-service@v1
-    name: app
-    provider: "@takos/cloudflare-container"
-    spec:
-      image: ghcr.io/example/app@sha256:abcd...
-      port: 8080
-      scale: { min: 0, max: 10 }
-      bindings:
-        DATABASE_URL: ${ref:db.connectionString}
-
-  - shape: custom-domain@v1
-    name: domain
-    provider: "@takos/cloudflare-dns"
-    spec:
-      name: app.example.com
-      target: ${ref:app.url}
-```
-
-:::
-
-新 model の良い点:
-
-- **portable** — `shape` を保ったまま operator policy / provider registry で
-  placement を変えられる。`provider:` は必要な場合だけ authoring hint
-  として使う。
-- **explicit** — `${ref:db.connectionString}` で配線が manifest
-  に書かれており、ブラックボックスがない。
-- **DAG** — 依存解析が contract 側で portable に行われる。
-
-## 関連ページ
-
-- [Reference Index](/reference/) — 全 v1 仕様の索引
-- [Shape Catalog](/reference/shapes) — 各 Shape の spec / outputs / capabilities
-- [Provider Plugins](/reference/providers) — provider id と実装
-- [Templates](/reference/templates) — retired `template:` authoring shorthand
-- [Access Modes](/reference/access-modes) — link projection が使う access mode
-- [Connector Contract](/reference/connector-contract) — `connector:<id>` 境界
-- [DataAsset Policy](/reference/data-asset-policy) — artifact policy / transform
-  approval
-- [Operator Bootstrap](/operator/bootstrap) — operator 側 wire 手順
-- [Extending](/extending) — provider / shape extension

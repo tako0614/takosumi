@@ -61,7 +61,6 @@ activation       ActivationSnapshot and GroupHead are Space-local
 ```
 
 Cross-space surfaces are denied by default. Cross-space export/share vocabulary
-is reserved for a future RFC and is not a current v1 dependency. Current v1
 architecture may depend only on operator-owned namespace exports granted to the
 Space.
 
@@ -98,9 +97,8 @@ Implementation       signed by implementation publisher, verified by operator po
 
 Trust rules:
 
-- The kernel does not federate trust across operators in v1.
-- An external participant publishing into a Space goes through Connector trust,
-  not CatalogRelease trust.
+- The kernel does not federate trust across operators in v1. not CatalogRelease
+  trust.
 - Trust state is recorded in `ResolutionSnapshot`. A resolution against an
   untrusted artifact must surface a Risk and not silently succeed.
 
@@ -121,7 +119,6 @@ Surface inventory:
 | --------------------------- | -------- | ------------ | ---------------- |
 | Space CRUD                  | yes      | yes          | yes              |
 | Catalog release assignment  | yes      | yes          | yes              |
-| SpaceExportShare lifecycle  | future   | future       | future           |
 | Approval issue / revoke     | optional | yes          | yes              |
 | RevokeDebt resolution       | yes      | yes          | yes              |
 | Runtime-agent enrollment    | yes      | yes          | optional         |
@@ -161,7 +158,6 @@ recovery-critical (must be backed up)
   Approval and PolicyDecision
   RevokeDebt
   ActivationSnapshot history
-  SpaceExportShare records (future RFC only)
   secret-store partition references (not values)
 
 regenerable (must not be relied on as authority)

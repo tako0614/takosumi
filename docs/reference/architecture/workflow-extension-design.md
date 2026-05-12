@@ -10,15 +10,8 @@ at `POST /v1/deployments`, resolves the resource DAG, and applies it. Upstream
 clients may attach opaque deploy provenance for audit, but that provenance is
 not a workflow execution contract.
 
-> **Policy change note.** Earlier drafts of this document reserved four kernel
-> primitives (trigger, `execute-step` operation kind, declarable hook extension
-> point, trigger ↔ resource binding) for future workflow integration. That
-> reservation has been **withdrawn**. The kernel ships no workflow primitive at
-> all; everything workflow-shaped lives above the `POST /v1/deployments`
-> boundary in `takosumi-git`. The reference docs written for the reserved
-> primitives (`triggers.md`, `execute-step-operation.md`, `declarable-hooks.md`)
-> have been removed along with the `compute.<name>.build.fromWorkflow` validator
-> and the `resource.workflow@v1` kernel-known shape.
+The kernel ships no workflow primitive. Everything workflow-shaped lives above
+the `POST /v1/deployments` boundary in `takosumi-git`.
 
 The doc is design-layer only.
 
@@ -114,17 +107,14 @@ resource shapes and keep trigger semantics outside the kernel. This preserves:
 
 - **Embed workflow as a built-in shape.** Rejected on curation neutrality and to
   preserve kernel thinness (§1).
-- **Reserve kernel primitives for future workflow integration** (trigger /
-  `execute-step` / declarable hook / trigger ↔ resource binding). Initially
-  recorded as the "reserved contract" in earlier revisions of this doc;
-  subsequently rejected. Any such primitive forces the kernel to model a second
-  scheduler. `takosumi-git` owns that concern at the product layer instead.
+- **Add kernel workflow primitives.** Rejected because it forces the kernel to
+  model a second scheduler. `takosumi-git` owns that concern at the product
+  layer instead.
 - **Introduce a separate manifest kind for workflows.** Rejected: `takosumi-git`
   generates regular `kind: Manifest` documents; no envelope split is needed.
-- **Allow `compute.<name>.build.fromWorkflow` references inside manifest spec.**
-  Rejected as it forces the kernel to know about workflow file paths and build
-  artifacts. This concept is removed from the manifest spec; `takosumi-git`
-  resolves artifact URIs before submitting the manifest.
+- **Allow workflow file references inside manifest spec.** Rejected as it forces
+  the kernel to know about workflow file paths and build artifacts.
+  `takosumi-git` resolves artifact URIs before submitting the manifest.
 
 ## 6. Boundary
 

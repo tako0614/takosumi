@@ -52,7 +52,7 @@ digest = "sha256:" + lowercase_hex(SHA-256(canonical_encoding(input)))
 The `sha256:` prefix exists so that a future migration to a different hash
 function lands behind a `CONVENTIONS.md` §6 RFC without breaking the existing
 wire shape: digests with a different prefix would coexist with `sha256:` digests
-during the deprecation window.
+during the transition window.
 
 ## Canonical encoding
 

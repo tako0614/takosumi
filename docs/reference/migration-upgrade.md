@@ -96,7 +96,6 @@ cross-minor migration の間、kernel は以下を満たす:
 - read 系 endpoint (`status` / `describe` / `observe`) は引き続き 200
 - migration 完了後、resume key から in-flight operation を再開
 
-migration window 中の cross-process lock acquire は `cross_process_lock_busy` で
 fail-closed する。
 
 ## Rollback gate
@@ -215,8 +214,6 @@ audit event は migration の各 phase で emit され、operator dashboard が 
 関連 architecture notes:
 
 - `docs/reference/architecture/operator-boundaries.md` — kernel と runtime-agent
-  の trust 境界、skew tolerance の選定 rationale
-- `docs/reference/architecture/execution-lifecycle.md` — migration window と
-  recovery mode の interplay
+  の trust 境界、skew tolerance の選定 rationale recovery mode の interplay
 - `docs/reference/architecture/operational-hardening-checklist.md` — production
   rolling upgrade の運用 checklist

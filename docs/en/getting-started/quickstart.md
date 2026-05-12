@@ -303,40 +303,28 @@ path.
 | `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`       | The agent host is missing credentials for that cloud, so the connector is not registered                                 |
 | `runtime-agent /v1/lifecycle/apply failed: 401`                           | `TAKOSUMI_AGENT_TOKEN` does not match between agent and kernel                                                           |
 
-### Deprecated provider IDs
-
 Starting in 0.10, every provider id Takosumi ships is namespaced as
 `@takos/<cloud>-<service>`. This avoids the last-write-wins collision that
 happens when two operator plugins re-register the same bare id.
 
-| Old (deprecated)        | New (recommended)                |
-| ----------------------- | -------------------------------- |
-| `aws-s3`                | `@takos/aws-s3`                  |
-| `aws-fargate`           | `@takos/aws-fargate`             |
-| `aws-rds`               | `@takos/aws-rds`                 |
-| `route53`               | `@takos/aws-route53`             |
-| `gcp-gcs`               | `@takos/gcp-gcs`                 |
-| `cloud-run`             | `@takos/gcp-cloud-run`           |
-| `cloud-sql`             | `@takos/gcp-cloud-sql`           |
-| `cloud-dns`             | `@takos/gcp-cloud-dns`           |
-| `cloudflare-r2`         | `@takos/cloudflare-r2`           |
-| `cloudflare-container`  | `@takos/cloudflare-container`    |
-| `cloudflare-workers`    | `@takos/cloudflare-workers`      |
-| `cloudflare-dns`        | `@takos/cloudflare-dns`          |
-| `azure-container-apps`  | `@takos/azure-container-apps`    |
-| `k3s-deployment`        | `@takos/kubernetes-deployment`   |
-| `deno-deploy`           | `@takos/deno-deploy`             |
-| `filesystem`            | `@takos/selfhost-filesystem`     |
-| `minio`                 | `@takos/selfhost-minio`          |
-| `docker-compose`        | `@takos/selfhost-docker-compose` |
-| `systemd-unit`          | `@takos/selfhost-systemd`        |
-| `local-docker-postgres` | `@takos/selfhost-postgres`       |
-| `coredns-local`         | `@takos/selfhost-coredns`        |
+| ----------------------- | -------------------------------- | | `aws-s3` |
+`@takos/aws-s3` | | `aws-fargate` | `@takos/aws-fargate` | | `aws-rds` |
+`@takos/aws-rds` | | `route53` | `@takos/aws-route53` | | `gcp-gcs` |
+`@takos/gcp-gcs` | | `cloud-run` | `@takos/gcp-cloud-run` | | `cloud-sql` |
+`@takos/gcp-cloud-sql` | | `cloud-dns` | `@takos/gcp-cloud-dns` | |
+`cloudflare-r2` | `@takos/cloudflare-r2` | | `cloudflare-container` |
+`@takos/cloudflare-container` | | `cloudflare-workers` |
+`@takos/cloudflare-workers` | | `cloudflare-dns` | `@takos/cloudflare-dns` | |
+`azure-container-apps` | `@takos/azure-container-apps` | | `k3s-deployment` |
+`@takos/kubernetes-deployment` | | `deno-deploy` | `@takos/deno-deploy` | |
+`filesystem` | `@takos/selfhost-filesystem` | | `minio` |
+`@takos/selfhost-minio` | | `docker-compose` | `@takos/selfhost-docker-compose`
+| | `systemd-unit` | `@takos/selfhost-systemd` | | `local-docker-postgres` |
+`@takos/selfhost-postgres` | | `coredns-local` | `@takos/selfhost-coredns` |
 
 The old ids are still accepted in 0.10 / 0.11, but the kernel logs a warning:
 
 ```
-[takosumi-resolver] provider id "aws-fargate" is deprecated;
 use "@takos/aws-fargate" — bare ids will be rejected in 0.12.
 ```
 

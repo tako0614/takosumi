@@ -123,7 +123,6 @@ Exit codes: `0` on clean shutdown via SIGINT/SIGTERM, `1` on bind failure or
 kernel boot error.
 
 `takosumi server` の rolling upgrade / drain / kernel ↔ runtime-agent skew
-tolerance / schema migration window については
 [Migration / Upgrade](/reference/migration-upgrade) を参照してください。
 
 ### `takosumi deploy [<manifest>]`
@@ -364,15 +363,6 @@ printed. `list` queries `GET /v1/connectors`. `verify` posts
 `POST /v1/lifecycle/verify` and runs each connector's read-only smoke test;
 failed connectors cause exit code 2.
 
-### Plugin marketplace subcommands
-
-No plugin marketplace subcommands are current kernel CLI surface. The kernel
-does not fetch marketplace indexes, remote plugin modules, or executable hook
-packages. Operator-selected ProviderPlugin implementations are supplied by the
-operator's deployment packaging and selected through explicit configuration. See
-[Plugin Marketplace](/reference/plugin-marketplace) for the removed design
-branch.
-
 ## Trigger / Step subcommands
 
 No trigger / step CLI subcommands are wired. The kernel does not host trigger /
@@ -426,21 +416,6 @@ The CLI uses a small reserved set:
 Codes `70` and above are reserved for future signal-driven exits and are not
 currently emitted. The CLI does not mirror process signals into distinct exit
 codes.
-
-## Deprecation policy
-
-The CLI prints a one-shot stderr warning when an operator relies on a selector
-that has been superseded but is still resolved for compatibility. Each warning
-is emitted at most once per process. Setting `TAKOSUMI_NO_DEPRECATION_WARN=1`
-suppresses every CLI deprecation warning at once. The grace window for any
-deprecated alias is one minor release of the CLI; the next minor release after a
-warning is introduced removes the alias.
-
-Currently warned aliases:
-
-- `TAKOSUMI_KERNEL_URL` — replaced by `TAKOSUMI_REMOTE_URL`.
-- `TAKOSUMI_TOKEN` (used as a deploy / artifact token) — replaced by
-  `TAKOSUMI_DEPLOY_TOKEN`.
 
 ## Related
 

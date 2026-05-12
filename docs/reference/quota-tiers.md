@@ -14,13 +14,6 @@ resolves to are operator-defined and live entirely in operator policy. The
 kernel does not ship a price book, a free / pro / enterprise ladder, or any
 built-in commercial semantics.
 
-::: info Current HTTP status The quota-tier registration and assignment
-endpoints in this reference are a spec / service contract. The current kernel
-HTTP router does not mount `/api/internal/v1/quota-tiers` or
-`PATCH /api/internal/v1/spaces/:id`; see
-[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
-:::
-
 ## Tier model
 
 A quota tier is a named bundle of dimension caps. Each Space carries exactly one
@@ -54,7 +47,6 @@ A tier carries a cap for each dimension in the closed v1 quota set:
 | `artifact-storage-bytes`          | [Quota / Rate Limit](/reference/quota-rate-limit). |
 | `journal-volume-bytes-per-bucket` | [Quota / Rate Limit](/reference/quota-rate-limit). |
 | `approval-pending-count`          | [Quota / Rate Limit](/reference/quota-rate-limit). |
-| `space-export-share-count`        | [Quota / Rate Limit](/reference/quota-rate-limit). |
 | `cpu-milliseconds`                | Usage projection: `runtime.*_milliseconds`.        |
 | `storage-bytes`                   | Usage projection: `resource.storage_bytes`.        |
 | `bandwidth-bytes`                 | Usage projection: `runtime.bandwidth_bytes`.       |
@@ -74,7 +66,6 @@ that dimension. A cap of `0` is rejected at registration time.
 
 ## Tier registration API
 
-The spec-reserved tier registration API is operator-only and lives on the
 internal HTTP surface (see [Kernel HTTP API](/reference/kernel-http-api)).
 
 `POST /api/internal/v1/quota-tiers`

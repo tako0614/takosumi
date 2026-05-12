@@ -132,7 +132,6 @@ artifacts it accepts:
 | `required` | Connector rejects unsigned artifacts at plan time.                                                              |
 
 Signing expectations are connector metadata in current v1. Artifact signature
-verification policy is spec-reserved until the operator signing backend is
 implemented:
 
 - Signature verification itself is performed by the operator-installed signing
@@ -145,11 +144,11 @@ versioned independently from the kernel HTTP API.
 
 - v1 is the only envelope version defined for the v1 release.
 - A breaking change to the envelope produces v2, which runs in parallel with v1
-  during a deprecation window.
-- During the deprecation window, both Connector versions are addressable through
+  during a transition window.
+- During the transition window, both Connector versions are addressable through
   their `envelopeVersion` field; the runtime-agent dispatches based on the
   Connector record.
-- The deprecation window is operator-configurable and recorded in the audit log
+- The transition window is operator-configurable and recorded in the audit log
   under `catalog-release-rotated`.
 
 For v1 apply / destroy envelopes, runtime-agent requests carry a WAL-derived

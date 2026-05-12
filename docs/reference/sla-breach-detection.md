@@ -20,12 +20,6 @@ events whenever a dimension crosses into or out of breach. The kernel does not
 compute service credits, render status pages, or own the customer communication
 path.
 
-::: info Current HTTP status The SLA threshold and query endpoints in this
-reference are a spec / service contract. The current kernel HTTP router does not
-mount `/api/internal/v1/sla`; see
-[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
-:::
-
 ::: info Current kernel primitive `SlaBreachDetectionService` implements the v1
 threshold evaluator, hysteresis state machine, and event publish path. Callers
 provide threshold records and rolling-window observations; the service publishes
@@ -79,8 +73,6 @@ and a shorter one for a low-traffic dimension configure each independently.
 
 Thresholds are **operator-supplied**. The kernel ships no built-in threshold; an
 installation that has not registered any threshold emits no breach events.
-
-Design-reserved threshold registration endpoint:
 
 `POST /api/internal/v1/sla/thresholds`
 
@@ -147,8 +139,6 @@ The same dimension may breach at multiple scopes simultaneously. State machines
 are independent per (dimension, scope, target).
 
 ## Reporting surface
-
-In the spec-reserved internal HTTP surface, operators read SLA state through:
 
 `GET /api/internal/v1/sla`
 

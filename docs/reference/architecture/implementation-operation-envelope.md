@@ -213,7 +213,6 @@ does not collapse the other.
 `spaceId` arrives in every envelope and every lifecycle request. Implementations
 and connectors must not read or mutate objects, secrets, artifacts, grants, or
 namespace exports belonging to a different Space unless the operation input is
-operating under a future RFC that explicitly enables SpaceExportShare /
 namespace import semantics. Current v1 has no such input; cross-Space access is
 a contract break and is closed under the `actual-effects-overflow` risk.
 

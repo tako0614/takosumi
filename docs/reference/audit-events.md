@@ -37,7 +37,6 @@ and ordering used for hash computation are stable.
 | ----------- | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `eventId`   | string    | yes      | Unique per event.                                                                                                              |
 | `ts`        | timestamp | yes      | RFC 3339 UTC, millisecond precision.                                                                                           |
-| `spaceId`   | string    | no       | Owning Space. Nullable only for operator-global events. Cross-Space share events are reserved / future RFC.                    |
 | `actor`     | string    | yes      | Identity of the principal that caused the event (operator id, deploy bearer subject, or `system` for kernel-initiated events). |
 | `eventType` | enum      | yes      | One of the closed v1 enum below.                                                                                               |
 | `severity`  | enum      | yes      | One of `info`, `notice`, `warning`, `error`, `critical`.                                                                       |
@@ -95,8 +94,6 @@ Drift:
 
 - `drift-detected`
 
-Cross-Space share (reserved / future RFC, not current v1):
-
 - `share-created`
 - `share-activated`
 - `share-refreshed`
@@ -109,8 +106,6 @@ Catalog and connector:
 - `catalog-release-rotated`
 - `publisher-key-enrolled`
 - `publisher-key-revoked`
-
-External participants (reserved / future RFC, not current v1):
 
 - `external-participant-registered`
 - `external-participant-revoked`
@@ -333,9 +328,7 @@ schemas reference records defined in
   ActivationSnapshot ids and digests.
 - Approval events reference Approval ids and the closed risk enum.
 - Drift and RevokeDebt events reference DriftIndex and RevokeDebt ids
-  respectively.
-- Share events are reserved / future RFC and would reference SpaceExportShare
-  ids and lifecycle transitions if enabled.
+  respectively. ids and lifecycle transitions if enabled.
 - Catalog and connector events reference Connector identities under the
   `connector:<id>` form (see
   [Connector Contract](/reference/connector-contract)).

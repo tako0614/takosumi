@@ -19,12 +19,6 @@ delivery integration model, the idempotency rule that suppresses duplicate
 signals, and the audit primitives. The kernel emits signals; concrete email,
 Slack, SMS, in-app, and digest delivery live outside the kernel.
 
-::: info Current HTTP status The notification pull endpoints in this reference
-are a spec / service contract. The current kernel HTTP router does not mount
-`/api/internal/v1/notifications`; see
-[Kernel HTTP API — Spec-Reserved Internal Surfaces](/reference/kernel-http-api#spec-reserved-internal-surfaces).
-:::
-
 ## Notification model
 
 The kernel does not deliver notifications. It records a structured signal
@@ -152,7 +146,6 @@ before a Membership transitions to `removed` carries the prior
 
 ## Pull-only delivery integration
 
-The kernel does not push to operator delivery systems. In the spec-reserved HTTP
 surface, operators pull the signal queue:
 
 - `GET /api/internal/v1/notifications` — list signals with cursor pagination.

@@ -94,13 +94,11 @@ regime 制約は受けない。
 ## Freshness propagation
 
 operator-owned ExportDeclaration の freshness は kernel が観測し、ObservationSet
-に annotation として埋まる。SpaceExportShare freshness は reserved / future
 RFC。
 
 ### 4-state freshness
 
 freshness state は ObservationSet annotation 上で `refresh-required` と `stale`
-を別 state として保持する。Future SpaceExportShare lifecycle を有効化する場合も
 この state vocabulary と整合させる。
 
 | state              | 意味                                                                                              |

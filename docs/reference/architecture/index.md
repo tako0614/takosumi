@@ -115,7 +115,6 @@ unless an explicit Space export share allows otherwise.
 | [PaaS Operations Architecture](./paas-operations-architecture.md)                             | How are quota tiers, SLA, incidents, support, and notifications kernel-side?                  |
 | [Workflow Placement Rationale](./workflow-extension-design.md)                                | Why does the kernel host no workflow primitive, and how does `takosumi-git` own this concern? |
 | [Operational Hardening Checklist](./operational-hardening-checklist.md)                       | What must production enforce?                                                                 |
-| [Update Summary](./update-summary.md)                                                         | What changed in this final abstract version?                                                  |
 
 ## Minimal example
 
