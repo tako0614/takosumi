@@ -6,9 +6,19 @@ export { SelfhostedSingleVmTemplate, WebAppOnCloudflareTemplate };
 export type { SelfhostedSingleVmInputs } from "./selfhosted-single-vm.ts";
 export type { WebAppOnCloudflareInputs } from "./web-app-on-cloudflare.ts";
 
+/**
+ * Erases the per-template `Inputs` generic for storage in the bare
+ * `Template`-keyed registry. `validateInputs` accepts `unknown` and `expand`
+ * only ever receives values that have already passed validation, so the
+ * widening to `Template = Template<JsonObject>` is safe at runtime.
+ */
+function asGenericTemplate<Inputs>(template: Template<Inputs>): Template {
+  return template as unknown as Template;
+}
+
 export const TAKOSUMI_BUNDLED_TEMPLATES: readonly Template[] = [
-  SelfhostedSingleVmTemplate as unknown as Template,
-  WebAppOnCloudflareTemplate as unknown as Template,
+  asGenericTemplate(SelfhostedSingleVmTemplate),
+  asGenericTemplate(WebAppOnCloudflareTemplate),
 ];
 
 export function registerTakosumiTemplates(): void {
