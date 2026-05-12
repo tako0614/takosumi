@@ -63,9 +63,10 @@ GitOps intent** と **kernel deploy** は別の surface です。
 入れる経路。operator-selected install UI URL (managed example:
 `takosumi.cloud/install?git=...&ref=...`) の Git URL install 流入や
 `takosumi-git install <git-url>` CLI、`POST /v1/installations` API がここに集約
-されます。Takos product 自身は AI agent でソフトウェアを民主化する distribution
-であり、この通常 InstallableApp path の対象ではありません (kernel
-から見ると任意の application を deploy する 1 example にすぎません)。
+されます。kernel から見ると、 distribution として ship される consumer
+application (例: Takos product のような reference distribution) も、 通常 path
+で install される third-party app も、 任意の application を deploy する 1
+example として等価に扱われます。
 
 ### 1.1 Install pipeline 13 step
 
@@ -136,12 +137,18 @@ upgrade / rollback の UI / 仕様は
 [Upgrade / Export](https://github.com/tako0614/takos/blob/master/docs/platform/upgrade-export.md)
 を参照。
 
-## 3. GitOps deploy binding (Takos が deploy intent を出す)
+## 3. GitOps deploy binding (consumer application が deploy intent を出す)
 
-Takos 自身が "何かを deploy したい" と判断したとき (例: ユーザーが Takos 内の
-sub-app を作る、agent が新しい worker を立てる) には、**Takos は kernel API を
-直接叩きません**。代わりに **GitOps deploy binding** (`deploy-intent.gitops@v1`)
-を使い、deployment intent を Git repo に commit / push するだけにします。
+> 以下は consumer application 側が kernel に対して deploy intent を出す
+> reference example として **Takos product** を取り上げます。kernel 仕様は この
+> pattern を強制しません — `deploy-intent.gitops@v1` binding を採用する 任意の
+> consumer application で同じ形が成立します。
+
+Takos product 自身が "何かを deploy したい" と判断したとき (例: ユーザーが Takos
+内の sub-app を作る、agent が新しい worker を立てる) には、**Takos は kernel API
+を直接叩きません**。代わりに **GitOps deploy binding**
+(`deploy-intent.gitops@v1`) を使い、deployment intent を Git repo に commit /
+push するだけにします。
 
 ### 3.1 流れ
 
