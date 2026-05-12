@@ -63,7 +63,7 @@ GitOps intent** と **kernel deploy** は別の surface です。
 入れる経路。operator-selected install UI URL (managed example:
 `takosumi.cloud/install?git=...&ref=...`) の Git URL install 流入や
 `takosumi-git install <git-url>` CLI、`POST /v1/installations` API がここに集約
-されます。Takos product 自身は AI software creation product であり、この通常
+されます。Takos product 自身は AI-first chat & agent platform であり、この通常
 InstallableApp path の対象ではありません。
 
 ### 1.1 Install pipeline 13 step

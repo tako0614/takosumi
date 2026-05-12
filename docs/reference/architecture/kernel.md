@@ -311,8 +311,7 @@ Event 処理の原則: idempotent, graceful, non-blocking。
 
 > このセクションは Cloudflare Workers backend に固有の materialization
 > detail。Core 用語との対応は
-> [Workers backend implementation note](../workers-backend.md)
-> を参照。
+> [Workers backend implementation note](../workers-backend.md) を参照。
 
 tracked reference Workers backend では、kernel は admin host と tenant hostname
 を分離した複数 worker / Container DO に展開される。
@@ -344,7 +343,7 @@ kernel が **持たない** 領域は次の正本で扱われる:
 
 - [Installable App Model](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/installable-app-model.md)
   — Takos が bundled / third-party apps を Takosumi Account に install
-  する全体モデル。Takos product 自身は AI software creation product
+  する全体モデル。Takos product 自身は AI-first chat & agent platform
   であり、通常の InstallableApp ではない。本ページの上位 canonical reference。
 - [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
   — OAuth / OIDC issuer / billing / upstream IdP broker。OAuth provider /
