@@ -193,7 +193,7 @@ class InMemorySqlClient implements SqlClient, SqlTransaction {
           ? left.id.localeCompare(right.id)
           : left.version - right.version
       );
-      return { rows: rows as unknown as Row[], rowCount: rows.length };
+      return ledgerRowsAs<Row>(rows);
     }
     if (normalized.startsWith("insert into storage_migrations")) {
       const params = asRecord(parameters);
@@ -233,6 +233,22 @@ function asRecord(
     return value as Readonly<Record<string, unknown>>;
   }
   return {};
+}
+
+// The in-memory ledger only ever serves one `select` (the storage_migrations
+// ledger), and its row shape is `AppliedRow`. The `query<Row>` signature
+// allows callers to choose a `Row` extending `Record<string, unknown>`, which
+// is strictly broader than `AppliedRow`. TS treats the widening as unsound
+// (a caller could pick a narrower subtype), so we funnel through one named
+// helper where the unsoundness is bounded and the migration script is the
+// only caller.
+function ledgerRowsAs<Row extends Record<string, unknown>>(
+  rows: readonly AppliedRow[],
+): SqlQueryResult<Row> {
+  return {
+    rows: rows as unknown as readonly Row[],
+    rowCount: rows.length,
+  };
 }
 
 // ---------------------------------------------------------------------------

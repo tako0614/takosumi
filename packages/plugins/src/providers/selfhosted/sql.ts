@@ -135,7 +135,7 @@ class SelfHostedSqlStorageTransaction implements storage.StorageTransaction {
         },
         get: (spaceId: string) => documents.get("core_spaces", spaceId),
         list: () => documents.list("core_spaces"),
-      } as unknown as storage.CoreStorageStores["spaces"],
+      } satisfies storage.CoreStorageStores["spaces"],
       groups: {
         create: async (
           group: {
@@ -170,7 +170,7 @@ class SelfHostedSqlStorageTransaction implements storage.StorageTransaction {
         listBySpace: async (spaceId: unknown) =>
           (await documents.list<Record<string, unknown>>("core_groups"))
             .filter((group) => group.spaceId === spaceId) as never,
-      } as unknown as storage.CoreStorageStores["groups"],
+      } satisfies storage.CoreStorageStores["groups"],
       spaceMemberships: {
         upsert: async (
           membership: { readonly spaceId: string; readonly accountId: string },
@@ -189,7 +189,7 @@ class SelfHostedSqlStorageTransaction implements storage.StorageTransaction {
             "core_space_memberships",
           ))
             .filter((membership) => membership.spaceId === spaceId) as never,
-      } as unknown as storage.CoreStorageStores["spaceMemberships"],
+      } satisfies storage.CoreStorageStores["spaceMemberships"],
     };
 
     this.deploy = {
@@ -296,7 +296,7 @@ class SelfHostedSqlStorageTransaction implements storage.StorageTransaction {
           await documents.put("deploy_operation_records", record.id, record);
           return freezeClone(record);
         },
-      } as unknown as storage.DeployStorageStores["deploys"],
+      } satisfies storage.DeployStorageStores["deploys"],
     };
 
     this.runtime = {
@@ -325,7 +325,7 @@ class SelfHostedSqlStorageTransaction implements storage.StorageTransaction {
             .filter((state) =>
               state.spaceId === spaceId && state.groupId === groupId
             ) as never,
-      } as unknown as storage.RuntimeStorageStores["desiredStates"],
+      } satisfies storage.RuntimeStorageStores["desiredStates"],
       observedStates: {
         record: async (snapshot: { readonly id: string }) => {
           await documents.put("runtime_observed_states", snapshot.id, snapshot);
@@ -349,7 +349,7 @@ class SelfHostedSqlStorageTransaction implements storage.StorageTransaction {
             .filter((snapshot) =>
               snapshot.spaceId === spaceId && snapshot.groupId === groupId
             ) as never,
-      } as unknown as storage.RuntimeStorageStores["observedStates"],
+      } satisfies storage.RuntimeStorageStores["observedStates"],
       providerObservations: {
         record: async (observation: unknown) => {
           await documents.put(
@@ -376,7 +376,7 @@ class SelfHostedSqlStorageTransaction implements storage.StorageTransaction {
             .filter((observation) =>
               observation.materializationId === materializationId
             ) as never,
-      } as unknown as storage.RuntimeStorageStores["providerObservations"],
+      } satisfies storage.RuntimeStorageStores["providerObservations"],
     };
 
     this.resources = {
@@ -416,7 +416,7 @@ class SelfHostedSqlStorageTransaction implements storage.StorageTransaction {
             .filter((entry) =>
               entry.resourceInstanceId === instanceId
             ) as never,
-      } as unknown as storage.ResourceStorageStores["migrationLedger"],
+      } satisfies storage.ResourceStorageStores["migrationLedger"],
     };
 
     this.registry = {
@@ -476,7 +476,7 @@ class SelfHostedSqlStorageTransaction implements storage.StorageTransaction {
             matchesAuditQuery(event, query as Record<string, unknown>)
           ) as never;
         },
-      } as unknown as storage.AuditStorageStores["events"],
+      } satisfies storage.AuditStorageStores["events"],
     };
 
     this.usage = {
@@ -528,7 +528,7 @@ class SelfHostedSqlStorageTransaction implements storage.StorageTransaction {
         listBySpace: async (spaceId: unknown) =>
           (await documents.list<Record<string, unknown>>("usage_aggregates"))
             .filter((aggregate) => aggregate.spaceId === spaceId) as never,
-      }) as unknown as storage.UsageStorageStores["aggregates"],
+      }) satisfies storage.UsageStorageStores["aggregates"],
     };
 
     this.serviceEndpoints = {

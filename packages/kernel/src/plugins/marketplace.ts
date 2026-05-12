@@ -7,6 +7,7 @@ import {
 } from "./executable_hooks.ts";
 import {
   installTrustedKernelPlugins,
+  TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM,
   type TrustedKernelPluginInstallPolicy,
   type TrustedKernelPluginManifestEnvelope,
   type TrustedKernelPluginPublisherKey,
@@ -314,14 +315,11 @@ function assertMarketplacePackage(
     throw new Error(`plugin marketplace package module is required: ${source}`);
   }
   const module = assertMarketplaceModule(value.module, source);
-  if (!isRecord(value.manifestEnvelope)) {
-    throw new Error(
-      `plugin marketplace package manifestEnvelope is required: ${source}`,
-    );
-  }
-  const envelope = value
-    .manifestEnvelope as unknown as TrustedKernelPluginManifestEnvelope;
-  if (envelope.manifest?.id !== value.packageRef) {
+  const envelope = assertMarketplaceManifestEnvelope(
+    value.manifestEnvelope,
+    source,
+  );
+  if (envelope.manifest.id !== value.packageRef) {
     throw new Error(
       `plugin marketplace packageRef must match signed manifest id: ${source}`,
     );
@@ -335,6 +333,95 @@ function assertMarketplacePackage(
     ...(isRecord(value.metadata)
       ? { metadata: value.metadata as JsonObject }
       : {}),
+  };
+}
+
+function assertMarketplaceManifestEnvelope(
+  value: unknown,
+  source: string,
+): TrustedKernelPluginManifestEnvelope {
+  if (!isRecord(value)) {
+    throw new Error(
+      `plugin marketplace package manifestEnvelope must be an object: ${source}`,
+    );
+  }
+  // Downstream `installTrustedKernelPlugins` performs the full signature
+  // verification and full manifest-shape validation; the marketplace layer
+  // owns the structural envelope check needed for the digest+ref matching
+  // that runs before signature verification.
+  return {
+    manifest: assertManifestEnvelopeManifest(value.manifest, source),
+    signature: assertManifestEnvelopeSignature(value.signature, source),
+  };
+}
+
+function assertManifestEnvelopeManifest(
+  value: unknown,
+  source: string,
+): TrustedKernelPluginManifestEnvelope["manifest"] {
+  if (!isRecord(value)) {
+    throw new Error(
+      `plugin marketplace package manifestEnvelope.manifest must be an object: ${source}`,
+    );
+  }
+  const requiredString = (key: string): string => {
+    const v = value[key];
+    if (typeof v !== "string" || !v.trim()) {
+      throw new Error(
+        `plugin marketplace package manifestEnvelope.manifest.${key} is required: ${source}`,
+      );
+    }
+    return v;
+  };
+  if (!Array.isArray(value.capabilities)) {
+    throw new Error(
+      `plugin marketplace package manifestEnvelope.manifest.capabilities must be an array: ${source}`,
+    );
+  }
+  const capabilities = value
+    .capabilities as TrustedKernelPluginManifestEnvelope[
+      "manifest"
+    ]["capabilities"];
+  return {
+    id: requiredString("id"),
+    name: requiredString("name"),
+    version: requiredString("version"),
+    kernelApiVersion: requiredString("kernelApiVersion"),
+    capabilities,
+    ...(isRecord(value.metadata)
+      ? { metadata: value.metadata as JsonObject }
+      : {}),
+  };
+}
+
+function assertManifestEnvelopeSignature(
+  value: unknown,
+  source: string,
+): TrustedKernelPluginManifestEnvelope["signature"] {
+  if (!isRecord(value)) {
+    throw new Error(
+      `plugin marketplace package manifestEnvelope.signature must be an object: ${source}`,
+    );
+  }
+  if (value.alg !== TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM) {
+    throw new Error(
+      `plugin marketplace package manifestEnvelope.signature.alg must be ${TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM}: ${source}`,
+    );
+  }
+  if (typeof value.keyId !== "string" || !value.keyId.trim()) {
+    throw new Error(
+      `plugin marketplace package manifestEnvelope.signature.keyId is required: ${source}`,
+    );
+  }
+  if (typeof value.value !== "string" || !value.value.trim()) {
+    throw new Error(
+      `plugin marketplace package manifestEnvelope.signature.value is required: ${source}`,
+    );
+  }
+  return {
+    alg: TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM,
+    keyId: value.keyId,
+    value: value.value,
   };
 }
 

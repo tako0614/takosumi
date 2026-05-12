@@ -1309,7 +1309,12 @@ export namespace storage {
     readonly serviceEndpoints: ServiceEndpointStorageStores;
   }
 
-  type EmptyStoreMethod = (...args: readonly unknown[]) => unknown;
+  // `AnyStore` deliberately uses `any[]` in the method-param position so that
+  // concrete store implementations with typed methods (`(space: Space) => …`)
+  // are assignable without a bridging cast. Param-position contravariance
+  // would otherwise reject typed methods against `readonly unknown[]`.
+  // deno-lint-ignore no-explicit-any
+  type EmptyStoreMethod = (...args: any[]) => unknown;
   type AnyStore = Record<string, EmptyStoreMethod>;
 
   export class MemoryStorageDriver implements StorageDriver {
