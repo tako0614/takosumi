@@ -44,7 +44,7 @@ Install path は次の順に evidence を pin します。
 6. installer-only placeholder (`${params.*}` / `${installation.*}` /
    `${artifacts.*}` / `${bindings.*}` / `${secrets.*}`) を materialize する
    (詳細順序は
-   [binding-catalog § 8](../../../takosumi-git/docs/reference/binding-catalog.md#8-placeholder-解決順序))。
+   [takosumi-git binding catalog](https://github.com/tako0614/takosumi-git/blob/main/docs/reference/binding-catalog.md))。
 7. compiled Shape manifest digest を計算する。
 8. AppInstallation ledger に source commit / app manifest digest / compiled
    manifest digest / bindings / grants を保存する。
