@@ -335,9 +335,6 @@ export interface DeploymentApplyFacade {
   rollbackToDeployment(
     input: RollbackDeploymentFacadeInput,
   ): Promise<ApplyDeploymentResult>;
-  rollbackToActivation(
-    input: RollbackDeploymentFacadeInput,
-  ): Promise<ApplyDeploymentResult>;
   getDeployment(id: string): Promise<Deployment | undefined>;
   listDeployments(filter?: DeploymentFilter): Promise<readonly Deployment[]>;
 }
@@ -698,7 +695,6 @@ function createDeploymentApplyFacade(
     },
     applyDeployment,
     rollbackToDeployment,
-    rollbackToActivation: rollbackToDeployment,
     getDeployment: (id) => deploymentService.getDeployment(id),
     listDeployments: (filter = {}) => deploymentService.listDeployments(filter),
   };

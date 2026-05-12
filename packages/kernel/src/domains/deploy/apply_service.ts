@@ -7,7 +7,7 @@
 //   - `rollbackGroup(id)`    — point a GroupHead at a prior Deployment
 //
 // Existing call-sites instantiate `ApplyService` and call `applyManifest` /
-// `applyPlan` / `rollbackToActivation`; those method names route to the
+// `applyPlan` / `rollbackToDeployment`; those method names route to the
 // canonical service.
 //
 // Shape-model dispatch (apply_v2)
@@ -268,16 +268,6 @@ export class ApplyService {
       );
     }
     return { deployment, head };
-  }
-
-  /**
-   * @deprecated Use `rollbackToDeployment`. Retained because external
-   * call-sites still spell it `rollbackToActivation`.
-   */
-  rollbackToActivation(
-    input: RollbackDeploymentInput,
-  ): Promise<ApplyDeployResult> {
-    return this.rollbackToDeployment(input);
   }
 
   /** Look up a Deployment record by id. */
