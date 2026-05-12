@@ -64,21 +64,15 @@ export class TakosCoordinationObject {
       switch (trimPath(url.pathname)) {
         case "acquire-lease":
           return Response.json({
-            result: await this.acquireLease(
-              body as unknown as CoordinationLeaseInput,
-            ),
+            result: await this.acquireLease(parseLeaseInput(body)),
           });
         case "renew-lease":
           return Response.json({
-            result: await this.renewLease(
-              body as unknown as CoordinationRenewInput,
-            ),
+            result: await this.renewLease(parseRenewInput(body)),
           });
         case "release-lease":
           return Response.json({
-            result: await this.releaseLease(
-              body as unknown as CoordinationReleaseInput,
-            ),
+            result: await this.releaseLease(parseReleaseInput(body)),
           });
         case "get-lease":
           return Response.json({
@@ -86,9 +80,7 @@ export class TakosCoordinationObject {
           });
         case "schedule-alarm":
           return Response.json({
-            result: await this.scheduleAlarm(
-              body as unknown as CoordinationAlarmInput,
-            ),
+            result: await this.scheduleAlarm(parseAlarmInput(body)),
           });
         case "cancel-alarm":
           return Response.json({
@@ -310,6 +302,83 @@ async function readJsonObject(
     return value as Record<string, unknown>;
   }
   throw new Error("request body must be a JSON object");
+}
+
+function requireString(
+  body: Record<string, unknown>,
+  field: string,
+): string {
+  const value = body[field];
+  if (typeof value !== "string" || !value) {
+    throw new Error(`field ${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requireNumber(
+  body: Record<string, unknown>,
+  field: string,
+): number {
+  const value = body[field];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`field ${field} must be a finite number`);
+  }
+  return value;
+}
+
+function optionalRecord(
+  body: Record<string, unknown>,
+  field: string,
+): Record<string, unknown> | undefined {
+  const value = body[field];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`field ${field} must be a JSON object when present`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseLeaseInput(
+  body: Record<string, unknown>,
+): CoordinationLeaseInput {
+  return {
+    scope: requireString(body, "scope"),
+    holderId: requireString(body, "holderId"),
+    ttlMs: requireNumber(body, "ttlMs"),
+    metadata: optionalRecord(body, "metadata"),
+  };
+}
+
+function parseRenewInput(
+  body: Record<string, unknown>,
+): CoordinationRenewInput {
+  return {
+    scope: requireString(body, "scope"),
+    holderId: requireString(body, "holderId"),
+    token: requireString(body, "token"),
+    ttlMs: requireNumber(body, "ttlMs"),
+  };
+}
+
+function parseReleaseInput(
+  body: Record<string, unknown>,
+): CoordinationReleaseInput {
+  return {
+    scope: requireString(body, "scope"),
+    holderId: requireString(body, "holderId"),
+    token: requireString(body, "token"),
+  };
+}
+
+function parseAlarmInput(
+  body: Record<string, unknown>,
+): CoordinationAlarmInput {
+  return {
+    id: requireString(body, "id"),
+    scope: requireString(body, "scope"),
+    fireAt: requireString(body, "fireAt"),
+    payload: optionalRecord(body, "payload"),
+  };
 }
 
 function trimPath(pathname: string): string {

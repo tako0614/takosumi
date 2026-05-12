@@ -178,9 +178,7 @@ export function manifestToProofFixture(
     version: "takos.provider-proof/v1",
     provider: providerName,
     runId: desiredState.id,
-    desiredState: desiredState as unknown as ProviderProofFixture[
-      "desiredState"
-    ],
+    desiredState: desiredState satisfies ProviderProofFixture["desiredState"],
     expectedDescriptors: resources.map(resourceDescriptor),
     verify: { gateway: true, expectedStatus: 200 },
     cleanup: { enabled: true, strategy: "gateway", requireSmokeLabels: true },
@@ -664,7 +662,11 @@ function fixtureOperation(
 function normalizeProofFixture(
   fixture: ProviderProofFixture,
 ): ProviderProofFixture {
-  const desiredState = fixture.desiredState as unknown as RuntimeDesiredState;
+  // ProviderProofDesiredState has a `[key: string]: unknown` index signature
+  // for cross-provider serialization, so we narrow to the typed
+  // RuntimeDesiredState the kernel consumes via a structural parser before
+  // synthesising the `materializedAt` default.
+  const desiredState = parseRuntimeDesiredState(fixture.desiredState);
   return {
     ...fixture,
     desiredState: {
@@ -885,6 +887,45 @@ function stringValue(value: unknown, label: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseRuntimeDesiredState(
+  value: ProviderProofFixture["desiredState"],
+): RuntimeDesiredState {
+  const requireString = (field: string): string => {
+    const v = value[field];
+    if (typeof v !== "string" || !v) {
+      throw new Error(
+        `RuntimeDesiredState.${field} must be a non-empty string`,
+      );
+    }
+    return v;
+  };
+  const requireArray = (field: string): readonly unknown[] => {
+    const v = value[field];
+    if (!Array.isArray(v)) {
+      throw new Error(`RuntimeDesiredState.${field} must be an array`);
+    }
+    return v;
+  };
+  return {
+    id: requireString("id") as RuntimeDesiredState["id"],
+    spaceId: requireString("spaceId"),
+    groupId: requireString("groupId"),
+    activationId: requireString("activationId"),
+    appName: value.appName,
+    appVersion: typeof value.appVersion === "string"
+      ? value.appVersion
+      : undefined,
+    materializedAt: requireString("materializedAt"),
+    workloads: requireArray(
+      "workloads",
+    ) as RuntimeDesiredState["workloads"],
+    resources: requireArray(
+      "resources",
+    ) as RuntimeDesiredState["resources"],
+    routes: requireArray("routes") as RuntimeDesiredState["routes"],
+  };
 }
 
 function now(): string {
