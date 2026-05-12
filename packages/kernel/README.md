@@ -97,3 +97,8 @@ list.
 - [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — operator CLI
 - [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) — type
   contract
+
+> The `@takos/` JSR scope is the reference Takosumi distribution published by
+> Takos; authority lives in the contract, not in the publisher — alternative
+> publishers (e.g., `@example/takosumi-kernel`) are spec-permitted, currently
+> untested, and hold no architectural privilege.

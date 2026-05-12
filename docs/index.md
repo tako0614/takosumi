@@ -53,6 +53,12 @@ Takosumi は **6 つの JSR package** で配布される:
 | [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi deploy` / `takosumi server` 等の CLI          |
 | [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | umbrella: 上記 5 つを再公開                             |
 
+`@takos/` scope は Takos が publish する **reference distribution** です。
+authority は contract (`@takos/takosumi-contract`) 側にあり、 publisher 側には
+ありません。 contract-compatible な alternative publisher (例:
+`@example/takosumi-kernel`) も spec 上可能で、 現状は untested ですが
+architectural privilege は持ちません。
+
 詳細は [Concepts](/getting-started/concepts) を参照。
 
 ## 関連 docs

@@ -57,6 +57,12 @@ Takosumi is distributed as **6 JSR packages**:
 | [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | CLI for `takosumi deploy` / `takosumi server` and friends |
 | [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | Umbrella that re-publishes the five packages above        |
 
+The `@takos/` JSR scope is the **reference distribution** that Takos publishes;
+authority lives in the contract (`@takos/takosumi-contract`), not in the
+publisher. Contract-compatible alternative publishers (e.g.,
+`@example/takosumi-kernel`) are spec-permitted — currently untested, but they
+hold no architectural privilege over the reference distribution.
+
 See [Concepts (JA)](/getting-started/concepts) for details.
 
 ## Related docs

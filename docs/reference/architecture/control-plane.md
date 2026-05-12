@@ -9,7 +9,8 @@ contract は [manifest spec](/reference/manifest-spec) と
 ::: info control plane は 2 層 Installable App Model における control plane は
 **2 層** に分かれます。
 
-- **Account plane** =
+- **Account plane** = operator-provided account plane。reference implementation
+  は
   [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
   (operator namespace export / OIDC / account API / BillingPort で参照される
   service set) — identity / billing / AppInstallation 台帳。 OAuth / OIDC issuer
@@ -18,9 +19,10 @@ contract は [manifest spec](/reference/manifest-spec) と
   / provider DAG / resource resolution / routing layer / Deployment lifecycle
   を所有する。
 
-本ページは **kernel control** 側の実装を扱います。account plane の正本は
+本ページは **kernel control** 側の実装を扱います。operator account plane の
+reference implementation は
 [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)、AppInstallation
-台帳の正本は
+台帳の reference docs は
 [AppInstallation 台帳](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/app-installation.md)
 を参照してください。 :::
 

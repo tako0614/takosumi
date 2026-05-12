@@ -83,6 +83,12 @@ takosumi/
 | `@takos/takosumi-cli`      | 0.1.0+  | CLI (`takosumi deploy` 等)                               |
 | `@takos/takosumi`          | 0.2.0+  | umbrella (kernel + plugins + cli を再公開)               |
 
+> Note: `@takos/` JSR scope は Takos が publish する **reference distribution**
+> であり、 authority は publisher ではなく contract (`@takos/takosumi-contract`)
+> の側にある。 contract-compatible な alternative publisher (例:
+> `@example/takosumi-kernel`) は spec 上可能 — 現状は untested だが
+> architectural privilege は持たない。
+
 ## Self-host 起点
 
 ```bash

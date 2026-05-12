@@ -115,3 +115,8 @@ surface small.
   `takosumi runtime-agent serve`
 - [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) —
   defines `LifecycleApplyRequest` etc.
+
+> The `@takos/` JSR scope is the reference Takosumi distribution published by
+> Takos; the contract is the authority, and contract-compatible alternative
+> publishers (e.g., `@example/takosumi-runtime-agent`) are spec-permitted —
+> currently untested, with no architectural privilege.

@@ -58,6 +58,12 @@ Canonical contract:
 | [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                                   |
 | [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | 型契約 (上流)                                                         |
 
+The `@takos/` JSR scope is the **reference Takosumi distribution** published by
+Takos; the authority is the contract (`@takos/takosumi-contract`), not the
+publisher. Alternative publishers (e.g., `@example/takosumi-kernel`) are
+spec-compatible — currently untested, but have no architectural privilege over
+this scope.
+
 ## 設計の核
 
 ### Image-first model

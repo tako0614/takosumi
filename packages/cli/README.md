@@ -80,3 +80,8 @@ troubleshooting.
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
 - [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)
+
+> The `@takos/` JSR scope is the reference Takosumi distribution published by
+> Takos; the contract is the authority, and alternative publishers (e.g.,
+> `@example/takosumi-cli`) are spec-permitted — currently untested, with no
+> architectural privilege.

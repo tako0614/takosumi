@@ -560,7 +560,7 @@ Installable App Model における source pin は AppInstallation 行の `source
 Kernel deploy boundary:
 
   Upstream lifecycle paths
-    - Takosumi Accounts owns AppInstallation / install / upgrade
+    - operator account plane owns AppInstallation / install / upgrade
     - takosumi-git owns Git URL fetch / workflow / compile-strip
     - kernel receives only POST /v1/deployments
 

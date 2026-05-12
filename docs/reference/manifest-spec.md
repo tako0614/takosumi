@@ -4,21 +4,21 @@
 `.takosumi/manifest.yml` は `takosumi-git` が所有する authoring convention
 であり、 kernel に届く前に compiled manifest へ変換されます。
 
-| ファイル                 | 用途                                                                          | 渡し先                                 |
-| ------------------------ | ----------------------------------------------------------------------------- | -------------------------------------- |
-| `.takosumi/app.yml`      | InstallableApp v1。install UI / binding / permission preview / upgrade policy | `takosumi-git` と Takosumi Accounts    |
-| `.takosumi/manifest.yml` | authoring compute manifest。Shape resource / compile-time extension           | takosumi-git / installer compiler      |
-| compiled manifest        | closed Shape manifest。`workflowRef` / installer placeholder strip 済み       | takosumi kernel `POST /v1/deployments` |
+| ファイル                 | 用途                                                                          | 渡し先                                   |
+| ------------------------ | ----------------------------------------------------------------------------- | ---------------------------------------- |
+| `.takosumi/app.yml`      | InstallableApp v1。install UI / binding / permission preview / upgrade policy | `takosumi-git` と operator account plane |
+| `.takosumi/manifest.yml` | authoring compute manifest。Shape resource / compile-time extension           | takosumi-git / installer compiler        |
+| compiled manifest        | closed Shape manifest。`workflowRef` / installer placeholder strip 済み       | takosumi kernel `POST /v1/deployments`   |
 
 `.takosumi/app.yml` は kernel に渡しません。`.takosumi/manifest.yml` は
 `takosumi-git` が compile し、`workflowRef` を strip します。`install apply`
-では Takosumi Accounts が所有する AppInstallation の materialization result で
-`${bindings.*}` / `${secrets.*}` / `${installation.*}` を解決し、deploy request
-build 後も installer-only placeholder が残る場合は kernel request
+では operator account plane が所有する AppInstallation の materialization result
+で `${bindings.*}` / `${secrets.*}` / `${installation.*}` を解決し、deploy
+request build 後も installer-only placeholder が残る場合は kernel request
 の前に失敗します。
 
 このページの **deploy** は kernel `POST /v1/deployments` への apply
-操作を指します。 **install** は Takosumi Accounts の AppInstallation ledger
+操作を指します。 **install** は operator account plane の AppInstallation ledger
 lifecycle であり、 owner / billing / binding / grant / launch token
 を扱います。kernel direct deploy は AppInstallation を作らない unmanaged
 deployment です。
@@ -206,10 +206,11 @@ installer/compiler concern, not as `POST /v1/deployments` input.
 
 Installable App Model の `.takosumi/manifest.yml` は、installer / account plane
 が materialize する reserved placeholder syntax を持ちます。current
-`takosumi-git install apply` は Takosumi Accounts が所有する AppInstallation の
-materialization result で supported placeholder を解決し、deploy request build
-後も installer-only placeholder が残っている場合は kernel request の前に reject
-します。kernel に送る compiled Shape manifest には残してはいけません。
+`takosumi-git install apply` は operator account plane が所有する
+AppInstallation の materialization result で supported placeholder
+を解決し、deploy request build 後も installer-only placeholder
+が残っている場合は kernel request の前に reject します。kernel に送る compiled
+Shape manifest には残してはいけません。
 
 | installer-only family       | 解決元                         | 例                             |
 | --------------------------- | ------------------------------ | ------------------------------ |

@@ -32,3 +32,12 @@ takosumi deploy ./manifest.yml
 - `jsr:@takos/takosumi-kernel` — kernel only (server + apply pipeline)
 - `jsr:@takos/takosumi-plugins` — plugins only (shapes / providers / templates)
 - `jsr:@takos/takosumi-cli` — CLI only
+
+## Scope note
+
+The `@takos/` JSR scope is the **reference distribution** that Takos publishes
+for Takosumi. Authority lives in the contract (`@takos/takosumi-contract`), not
+in the publisher: this umbrella package only re-exports a specific reference
+implementation of that contract. Contract-compatible alternative publishers
+(e.g., `@example/takosumi-kernel`) are spec-permitted — currently untested, but
+they hold no architectural privilege over this reference distribution.

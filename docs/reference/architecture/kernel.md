@@ -52,10 +52,11 @@ public API gateway 等) は consumer application 側の service / app feature
 apply、routing projection、resource provisioning、provider reconciliation で、
 これは任意の InstallableApp に共通する責務です。
 
-`Auth` と `Billing` も kernel features に含めません。Auth/identity は
-[Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
-(OIDC issuer / upstream IdP broker) が、Billing も Takosumi Accounts (billing
-owner) が責務を持ちます。consumer application は Takosumi Accounts の OIDC を
+`Auth` と `Billing` も kernel features に含めません。Auth/identity は operator
+account plane (reference implementation:
+[Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md))
+が OIDC issuer / upstream IdP broker として、Billing は operator BillingPort
+として責務を持ちます。consumer application は operator account plane の OIDC を
 (例えば `AUTH_DRIVER=oidc` のような) standard OIDC consumer として consume
 するだけで、kernel 自身は OAuth/OIDC を発行しません。
 
@@ -172,7 +173,7 @@ Deployment であり、resource や group は特権化されない。
 
 ### Lifecycle
 
-install は Takosumi Accounts が所有する AppInstallation lifecycle
+install は operator account plane が所有する AppInstallation lifecycle
 で、takosumi-git は install/deploy step を実行する helper です。kernel は
 compiled manifest を `POST /v1/deployments` で受け取り、deploy → reconcile →
 rollback → uninstall の compute lifecycle を扱う。
