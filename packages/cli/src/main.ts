@@ -15,8 +15,8 @@ import { pluginCommand } from "./commands/plugin.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { TAKOSUMI_CLI_VERSION } from "./version.ts";
 
-function createTakosumi(): Command {
-  return (new Command()
+function createTakosumi() {
+  return new Command()
     .name("takosumi")
     .description("Takosumi: self-hostable PaaS toolkit")
     .version(TAKOSUMI_CLI_VERSION)
@@ -36,10 +36,10 @@ function createTakosumi(): Command {
     // Cliffy ships shell completion generators for bash / zsh / fish; wiring
     // the bundled subcommand here is the cleanest way to expose
     // `takosumi completions <shell>` without re-implementing the generator.
-    .command("completions", new CompletionsCommand())) as unknown as Command;
+    .command("completions", new CompletionsCommand());
 }
 
-export const takosumi: Command = createTakosumi();
+export const takosumi = createTakosumi();
 
 if (import.meta.main) {
   await takosumi.parse(Deno.args);

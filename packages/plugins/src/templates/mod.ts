@@ -13,7 +13,7 @@ export type { WebAppOnCloudflareInputs } from "./web-app-on-cloudflare.ts";
  * widening to `Template = Template<JsonObject>` is safe at runtime.
  */
 function asGenericTemplate<Inputs>(template: Template<Inputs>): Template {
-  return template as unknown as Template;
+  return template as Template;
 }
 
 export const TAKOSUMI_BUNDLED_TEMPLATES: readonly Template[] = [

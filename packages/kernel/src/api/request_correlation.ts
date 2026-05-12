@@ -196,7 +196,7 @@ interface CorrelationContextVars {
 }
 
 function correlationVars(c: Context): CorrelationContextVars {
-  return c as unknown as CorrelationContextVars;
+  return c as CorrelationContextVars;
 }
 
 function storeRequestCorrelation(

@@ -116,7 +116,7 @@ export {
 function asGenericProvider<S, O, C extends string>(
   plugin: ProviderPlugin<S, O, C>,
 ): ProviderPlugin {
-  return plugin as unknown as ProviderPlugin;
+  return plugin as ProviderPlugin;
 }
 
 /**
