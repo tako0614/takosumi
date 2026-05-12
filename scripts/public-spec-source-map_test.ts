@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { TAKOSUMI_DEPLOY_PUBLIC_PATH } from "../packages/kernel/src/api/deploy_public_routes.ts";
+import { createPaaSOpenApiDocument } from "../packages/kernel/src/api/openapi.ts";
 
 const root = new URL("../", import.meta.url);
 
@@ -61,6 +63,21 @@ Deno.test("public spec source map covers required public surfaces", async () => 
   assert.match(source, /Source of truth/);
   assert.match(source, /Published reference/);
   assert.match(source, /Drift check/);
+});
+
+Deno.test("public spec source map covers deploy public OpenAPI route", async () => {
+  const source = await read("docs/reference/public-spec-source-map.md");
+  const reference = await read("docs/reference/kernel-http-api.md");
+  const openapi = createPaaSOpenApiDocument({
+    deployPublicRoutesMounted: true,
+  });
+
+  assert.match(source, /`kernel-http-api-v1`/);
+  assert.ok(source.includes("packages/kernel/src/api/openapi.ts"));
+  assert.ok(source.includes("packages/kernel/src/api/deploy_public_routes.ts"));
+  assert.ok(openapi.paths[TAKOSUMI_DEPLOY_PUBLIC_PATH]?.post);
+  assert.ok(reference.includes("POST   | `/v1/deployments`"));
+  assert.ok(reference.includes("### `POST /v1/deployments`"));
 });
 
 Deno.test("public spec source map Takosumi-owned paths exist", async () => {
