@@ -178,6 +178,10 @@ jobs:
           token: ${{ secrets.TAKOSUMI_DEPLOY_TOKEN }}
 ```
 
+The repository fixture `examples/direct-deploy/` is the sample repo shape for
+this action: it contains `manifest.yml` and `.github/workflows/deploy.yml`
+without `.takosumi/` or `takosumi-git`.
+
 The action runs `takosumi deploy <manifest> --remote ... --token ...` and posts
 to `POST /v1/deployments`. It does not create AppInstallation ownership,
 AppBinding, billing, or grant records; use the Takosumi Accounts install flow

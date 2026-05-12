@@ -23,3 +23,28 @@ Deno.test("deploy action docs show the raw unmanaged deploy path", async () => {
   assert.match(docs, /AppInstallation ownership/);
   assert.match(docs, /POST \/v1\/deployments/);
 });
+
+Deno.test("direct deploy sample uses the reusable action without takosumi-git", async () => {
+  const workflow = await Deno.readTextFile(
+    new URL(
+      "examples/direct-deploy/.github/workflows/deploy.yml",
+      root,
+    ),
+  );
+  const manifest = await Deno.readTextFile(
+    new URL("examples/direct-deploy/manifest.yml", root),
+  );
+  const readme = await Deno.readTextFile(
+    new URL("examples/direct-deploy/README.md", root),
+  );
+
+  assert.match(workflow, /tako0614\/takosumi\/actions\/deploy@v1/);
+  assert.match(workflow, /manifest: manifest\.yml/);
+  assert.match(workflow, /secrets\.TAKOSUMI_REMOTE_URL/);
+  assert.match(workflow, /secrets\.TAKOSUMI_DEPLOY_TOKEN/);
+  assert.match(manifest, /kind: Manifest/);
+  assert.match(manifest, /resources:/);
+  assert.match(readme, /POST \/v1\/deployments/);
+  assert.equal(workflow.includes("takosumi-git"), false);
+  assert.equal(workflow.includes(".takosumi"), false);
+});

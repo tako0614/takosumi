@@ -1,0 +1,21 @@
+name: Direct Takosumi Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - manifest.yml
+      - .github/workflows/deploy.yml
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: tako0614/takosumi/actions/deploy@v1
+        with:
+          manifest: manifest.yml
+          remote-url: ${{ secrets.TAKOSUMI_REMOTE_URL }}
+          token: ${{ secrets.TAKOSUMI_DEPLOY_TOKEN }}
