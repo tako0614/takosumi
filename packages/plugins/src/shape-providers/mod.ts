@@ -105,95 +105,110 @@ export {
 } from "./_artifact_kinds_bundled.ts";
 
 /**
+ * Erases provider-plugin generics for storage in the generic registry.
+ *
+ * Plugin factories return `ProviderPlugin<SpecificSpec, SpecificOutputs>`,
+ * but the registry stores plugins keyed by `implements.id` and only ever
+ * dispatches each plugin with specs of its declared shape kind — so the
+ * widening to bare `ProviderPlugin` is safe at runtime. Centralizing the
+ * cast here keeps individual call sites readable.
+ */
+function asGenericProvider<S, O, C extends string>(
+  plugin: ProviderPlugin<S, O, C>,
+): ProviderPlugin {
+  return plugin as unknown as ProviderPlugin;
+}
+
+/**
  * Build the full set of in-memory shape-provider plugins. Used by tests and
  * by the CLI's local-runner mode where deploys execute in-process without
  * cloud credentials.
  */
 export function createInMemoryTakosumiProviders(): readonly ProviderPlugin[] {
   return [
-    createAwsS3ObjectStoreProvider({
+    asGenericProvider(createAwsS3ObjectStoreProvider({
       lifecycle: new InMemoryAwsS3Lifecycle(),
-    }) as unknown as ProviderPlugin,
-    createCloudflareR2ObjectStoreProvider({
+    })),
+    asGenericProvider(createCloudflareR2ObjectStoreProvider({
       lifecycle: new InMemoryCloudflareR2Lifecycle("test-account"),
       accountId: "test-account",
-    }) as unknown as ProviderPlugin,
-    createFilesystemObjectStoreProvider({
+    })),
+    asGenericProvider(createFilesystemObjectStoreProvider({
       lifecycle: new InMemoryFilesystemLifecycle("/var/lib/takos/object-store"),
       rootDir: "/var/lib/takos/object-store",
-    }) as unknown as ProviderPlugin,
-    createGcsObjectStoreProvider({
+    })),
+    asGenericProvider(createGcsObjectStoreProvider({
       lifecycle: new InMemoryGcsLifecycle("test-project"),
       project: "test-project",
-    }) as unknown as ProviderPlugin,
-    createMinioObjectStoreProvider({
+    })),
+    asGenericProvider(createMinioObjectStoreProvider({
       lifecycle: new InMemoryMinioLifecycle("http://minio.local:9000"),
       endpoint: "http://minio.local:9000",
-    }) as unknown as ProviderPlugin,
-    createDockerComposeWebServiceProvider({
+    })),
+    asGenericProvider(createDockerComposeWebServiceProvider({
       lifecycle: new InMemoryDockerComposeLifecycle(),
-    }) as unknown as ProviderPlugin,
-    createAwsFargateWebServiceProvider({
+    })),
+    asGenericProvider(createAwsFargateWebServiceProvider({
       lifecycle: new InMemoryAwsFargateLifecycle("takos-cluster", "us-east-1"),
       clusterName: "takos-cluster",
       region: "us-east-1",
-    }) as unknown as ProviderPlugin,
-    createCloudRunWebServiceProvider({
+    })),
+    asGenericProvider(createCloudRunWebServiceProvider({
       lifecycle: new InMemoryCloudRunLifecycle("test-project", "us-central1"),
       project: "test-project",
       region: "us-central1",
-    }) as unknown as ProviderPlugin,
-    createCloudflareContainerWebServiceProvider({
+    })),
+    asGenericProvider(createCloudflareContainerWebServiceProvider({
       lifecycle: new InMemoryCloudflareContainerLifecycle("test-account"),
       accountId: "test-account",
-    }) as unknown as ProviderPlugin,
-    createK3sDeploymentWebServiceProvider({
+    })),
+    asGenericProvider(createK3sDeploymentWebServiceProvider({
       lifecycle: new InMemoryK3sDeploymentLifecycle(),
       namespace: "takos",
-    }) as unknown as ProviderPlugin,
-    createSystemdUnitWebServiceProvider({
+    })),
+    asGenericProvider(createSystemdUnitWebServiceProvider({
       lifecycle: new InMemorySystemdUnitLifecycle(),
-    }) as unknown as ProviderPlugin,
-    createLocalDockerPostgresProvider({
+    })),
+    asGenericProvider(createLocalDockerPostgresProvider({
       lifecycle: new InMemoryLocalDockerPostgresLifecycle(),
-    }) as unknown as ProviderPlugin,
-    createAwsRdsProvider({
+    })),
+    asGenericProvider(createAwsRdsProvider({
       lifecycle: new InMemoryAwsRdsLifecycle("us-east-1"),
-    }) as unknown as ProviderPlugin,
-    createCloudSqlProvider({
+    })),
+    asGenericProvider(createCloudSqlProvider({
       lifecycle: new InMemoryCloudSqlLifecycle(
         "test-project",
         "us-central1",
       ),
       project: "test-project",
       region: "us-central1",
-    }) as unknown as ProviderPlugin,
-    createCloudflareDnsProvider({
+    })),
+    asGenericProvider(createCloudflareDnsProvider({
       lifecycle: new InMemoryCloudflareDnsLifecycle("test-zone"),
       zoneId: "test-zone",
       accountId: "test-account",
-    }) as unknown as ProviderPlugin,
-    createRoute53Provider({
+    })),
+    asGenericProvider(createRoute53Provider({
       lifecycle: new InMemoryRoute53Lifecycle("Z123"),
       hostedZoneId: "Z123",
-    }) as unknown as ProviderPlugin,
-    createCloudDnsProvider({
+    })),
+    asGenericProvider(createCloudDnsProvider({
       lifecycle: new InMemoryCloudDnsLifecycle("test-project", "test-zone"),
       project: "test-project",
       zoneName: "test-zone",
-    }) as unknown as ProviderPlugin,
-    createCoreDnsLocalProvider({
+    })),
+    asGenericProvider(createCoreDnsLocalProvider({
       lifecycle: new InMemoryCoreDnsLifecycle("/etc/coredns/Corefile"),
       zoneFile: "/etc/coredns/Corefile",
-    }) as unknown as ProviderPlugin,
-    createCloudflareWorkersProvider({
+    })),
+    asGenericProvider(createCloudflareWorkersProvider({
       lifecycle: new InMemoryCloudflareWorkersLifecycle("test-account"),
       accountId: "test-account",
-    }) as unknown as ProviderPlugin,
-    createDenoDeployProvider({
+    })),
+    asGenericProvider(createDenoDeployProvider({
       lifecycle: new InMemoryDenoDeployLifecycle("test-org"),
       organizationId: "test-org",
-    }) as unknown as ProviderPlugin,
+    })),
   ];
 }
 

@@ -147,7 +147,7 @@ export class GcpSecretManagerProviderMaterializer
     const drift = result?.observed
       ? computeDrift(
         desiredFingerprint,
-        result.observed as unknown as Readonly<Record<string, unknown>>,
+        result.observed,
         completedAt,
       )
       : undefined;
@@ -225,7 +225,7 @@ export class GcpSecretManagerProviderMaterializer
         secretId: this.#secretId,
         replicationPolicy: this.#replicationPolicy,
       }),
-      observed as unknown as Readonly<Record<string, unknown>>,
+      observed,
       observedAt,
     );
   }

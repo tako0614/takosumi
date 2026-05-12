@@ -524,22 +524,28 @@ export interface GcpDriftReport {
 
 /**
  * Compute a shallow drift report between desired and observed records.
- * - missing: observed is undefined
+ * - missing: observed is undefined / not an object
  * - drift: any differing key
  * - in-sync: every desired key matches observed
+ *
+ * `observed` is accepted as `unknown` so callers can pass plan-result
+ * payloads (typed as `unknown` from the provider contract) without
+ * `as unknown as Record` double-casts. Non-object values are treated
+ * as `missing`.
  */
 export function computeDrift(
   desired: Readonly<Record<string, unknown>>,
-  observed: Readonly<Record<string, unknown>> | undefined,
+  observed: unknown,
   observedAt: string,
 ): GcpDriftReport {
-  if (!observed) {
+  if (!observed || typeof observed !== "object" || Array.isArray(observed)) {
     return { status: "missing", entries: [], observedAt };
   }
+  const observedRecord = observed as Readonly<Record<string, unknown>>;
   const entries: GcpDriftEntry[] = [];
   for (const [key, value] of Object.entries(desired)) {
     if (value === undefined) continue;
-    const observedValue = observed[key];
+    const observedValue = observedRecord[key];
     if (!deepEqual(value, observedValue)) {
       entries.push({ path: key, desired: value, observed: observedValue });
     }

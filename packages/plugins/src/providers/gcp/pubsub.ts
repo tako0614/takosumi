@@ -165,7 +165,7 @@ export class GcpPubSubProviderMaterializer
           messageRetentionDuration: this.#messageRetentionDuration,
           deadLetterTopic: this.#deadLetterTopic,
         }),
-        result.observed as unknown as Readonly<Record<string, unknown>>,
+        result.observed,
         completedAt,
       )
       : undefined;
@@ -242,7 +242,7 @@ export class GcpPubSubProviderMaterializer
         messageRetentionDuration: this.#messageRetentionDuration,
         deadLetterTopic: this.#deadLetterTopic,
       }),
-      observed as unknown as Readonly<Record<string, unknown>>,
+      observed,
       observedAt,
     );
   }

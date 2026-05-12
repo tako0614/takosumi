@@ -159,7 +159,7 @@ export class GcpCloudSqlProviderMaterializer
           tier: this.#tier,
           region: this.#region,
         }),
-        result.observed as unknown as Readonly<Record<string, unknown>>,
+        result.observed,
         completedAt,
       )
       : undefined;
@@ -235,7 +235,7 @@ export class GcpCloudSqlProviderMaterializer
         tier: this.#tier,
         region: this.#region,
       }),
-      observed as unknown as Readonly<Record<string, unknown>>,
+      observed,
       observedAt,
     );
   }

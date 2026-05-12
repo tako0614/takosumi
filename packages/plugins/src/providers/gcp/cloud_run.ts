@@ -156,7 +156,7 @@ export class GcpCloudRunProviderMaterializer
           serviceAccount: this.#serviceAccount,
           region: this.#region,
         }),
-        result.observed as unknown as Readonly<Record<string, unknown>>,
+        result.observed,
         completedAt,
       )
       : undefined;
@@ -241,7 +241,7 @@ export class GcpCloudRunProviderMaterializer
     });
     return computeDrift(
       desired,
-      observed as unknown as Readonly<Record<string, unknown>>,
+      observed,
       observedAt,
     );
   }

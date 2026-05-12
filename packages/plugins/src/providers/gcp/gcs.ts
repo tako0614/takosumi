@@ -174,7 +174,7 @@ export class GcpGcsProviderMaterializer
           versioning: this.#versioning,
           publicAccessPrevention: this.#publicAccessPrevention,
         }),
-        result.observed as unknown as Readonly<Record<string, unknown>>,
+        result.observed,
         completedAt,
       )
       : undefined;
@@ -250,7 +250,7 @@ export class GcpGcsProviderMaterializer
         versioning: this.#versioning,
         publicAccessPrevention: this.#publicAccessPrevention,
       }),
-      observed as unknown as Readonly<Record<string, unknown>>,
+      observed,
       observedAt,
     );
   }

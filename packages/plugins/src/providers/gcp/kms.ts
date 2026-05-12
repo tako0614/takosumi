@@ -155,7 +155,7 @@ export class GcpKmsProviderMaterializer
           rotationPeriod: this.#rotationPeriod,
           protectionLevel: this.#protectionLevel,
         }),
-        result.observed as unknown as Readonly<Record<string, unknown>>,
+        result.observed,
         completedAt,
       )
       : undefined;
@@ -236,7 +236,7 @@ export class GcpKmsProviderMaterializer
         rotationPeriod: this.#rotationPeriod,
         protectionLevel: this.#protectionLevel,
       }),
-      observed as unknown as Readonly<Record<string, unknown>>,
+      observed,
       observedAt,
     );
   }

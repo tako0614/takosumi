@@ -264,7 +264,7 @@ export class GcpLoadBalancerProviderMaterializer
     const drift = result?.observed
       ? computeDrift(
         desiredObservedSnapshot,
-        result.observed as unknown as Readonly<Record<string, unknown>>,
+        result.observed,
         completedAt,
       )
       : undefined;
@@ -358,7 +358,7 @@ export class GcpLoadBalancerProviderMaterializer
     };
     return computeDrift(
       desired,
-      observed as unknown as Readonly<Record<string, unknown>>,
+      observed,
       observedAt,
     );
   }
