@@ -185,12 +185,24 @@ export class GcpCompositeProviderMaterializer
 function hintFromWorkload(
   workload: RuntimeDesiredState["workloads"][number],
 ): string | undefined {
-  const candidate = workload as unknown as {
-    labels?: Record<string, string>;
-    annotations?: Record<string, string>;
-  };
-  return candidate.labels?.["takos.paas/provider-descriptor"] ??
-    candidate.annotations?.["takos.paas/provider-descriptor"];
+  return readStringMapEntry(workload, "labels") ??
+    readStringMapEntry(workload, "annotations");
+}
+
+function readStringMapEntry(
+  source: unknown,
+  field: "labels" | "annotations",
+): string | undefined {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return undefined;
+  }
+  const container = (source as Record<string, unknown>)[field];
+  if (!container || typeof container !== "object" || Array.isArray(container)) {
+    return undefined;
+  }
+  const value =
+    (container as Record<string, unknown>)["takos.paas/provider-descriptor"];
+  return typeof value === "string" ? value : undefined;
 }
 
 function isGcpDescriptor(value: string): value is GcpProviderDescriptor {
