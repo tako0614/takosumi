@@ -266,7 +266,7 @@ Workflow / cron / lifecycle hook 等の shape は current v1 catalog / plugin
 extension surface に含めません。`cron-job@v1` / `workflow-job@v1` / reserved
 vocabulary であり、current kernel は通常の `resources[]` として
 受け付けません。Git / webhook / build / schedule / deployment hook は
-`takosumi-git` 等の上位 sibling product の責務です。詳細な placement は
+`takosumi-git` 等の installer/helper surface の責務です。詳細な placement は
 [Extending the Shape Model](/extending) と
 [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
 を参照。

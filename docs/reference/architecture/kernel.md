@@ -16,7 +16,7 @@
 > [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
 > (account plane、operator namespace export / OIDC / BillingPort 経由で参照) と
 > [takosumi-git](https://github.com/tako0614/takosumi-git/blob/master/docs/architecture/installer-pipeline.md)
-> (上位 sibling product) の責務です。 全体モデルは
+> (canonical installer implementation) の責務です。 全体モデルは
 > [Installable App Model](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/installable-app-model.md)
 > を参照。
 
@@ -353,9 +353,9 @@ kernel が **持たない** 領域は次の正本で扱われる:
   — 所有権の primitive。 AppInstallation / AppBinding / AppGrant /
   RuntimeBinding / InstallationEvent。
 - [Installer Pipeline](https://github.com/tako0614/takosumi-git/blob/master/docs/architecture/installer-pipeline.md)
-  — `takosumi-git` (上位 sibling product) の Git URL installer / workflow runner
-  / manifest compiler。 `.takosumi/app.yml` と `.takosumi/workflows/*.yml` は
-  kernel ではなく installer 側で解釈される。
+  — `takosumi-git` (canonical installer implementation) の Git URL installer /
+  workflow runner / manifest compiler。 `.takosumi/app.yml` と
+  `.takosumi/workflows/*.yml` は kernel ではなく installer 側で解釈される。
 - [Runtime Modes](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/runtime-modes.md)
   — shared-cell / dedicated / self-hosted の 3 mode 比較。kernel は同じ compiled
   manifest を mode 越しに apply する。

@@ -59,11 +59,11 @@ takosumi/
   では採用しない。 operator-owned capabilities は Takosumi Accounts と namespace
   export で公開され、 kernel は compiled Shape manifest と
   provider/runtime-agent contract だけを扱う。
-- **signing 機構を kernel が持たない**: ecosystem trust model は
-  「TLS + digest pin + 1 signing domain (OIDC)」 で、 OIDC ID token signing と
-  install launch token signing は両方とも **Takosumi Accounts** が所有する。
-  kernel が直接関わる signing は **CatalogRelease verification のみ** であり、
-  これも publisher signing ではなく **operator-pinned sha256 digest**
+- **signing 機構を kernel が持たない**: ecosystem trust model は 「TLS + digest
+  pin + 1 signing domain (OIDC)」 で、 OIDC ID token signing と install launch
+  token signing は両方とも **Takosumi Accounts** が所有する。 kernel
+  が直接関わる signing は **CatalogRelease verification のみ** であり、 これも
+  publisher signing ではなく **operator-pinned sha256 digest**
   (`CATALOG_DIGEST` + TLS fetch + digest match) で fail-closed に検証する。
   publisher key enrollment / Ed25519 descriptor signing / universal package
   signing は採用しない。 kernel ↔ runtime-agent 間の gateway-manifest 署名
@@ -108,8 +108,8 @@ takosumi deploy ./manifest.yml --remote https://kernel.example.com --token $T
 
 - **Upstream**: `@takos/takosumi-contract` (型契約のみ、独立 repo)
 - **Downstream consumers**: 任意の operator が JSR から install して self-host
-- **`takosumi-git` (上位 sibling product)**: git 連携 / workflow runner /
-  artifact build / manifest generation を担い、本 kernel の
+- **`takosumi-git` (canonical installer implementation)**: git 連携 / workflow
+  runner / artifact build / manifest generation を担い、本 kernel の
   `POST /v1/deployments` を叩く HTTP client として接続する。本 kernel は
   `takosumi-git` の存在を 知らない (kernel は manifest を受け取るだけ)。
 - **Takos ecosystem**: Takos product distribution は本 repo の上に Takos 固有

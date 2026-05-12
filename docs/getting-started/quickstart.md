@@ -279,7 +279,7 @@ takosumi version
 ```
 
 `.takosumi/manifest.yml` を中心とした project layout / git 連携 / workflow
-runner が欲しい場合は、上位 sibling product
+runner が欲しい場合は、canonical installer implementation の
 [`takosumi-git`](https://github.com/tako0614/takosumi-git) を使う。本 CLI は
 manifest path を必ず明示する pure deploy engine。
 
