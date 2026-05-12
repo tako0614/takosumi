@@ -5,6 +5,15 @@ custody として固定します。 ecosystem の trust model は **TLS + digest
 つの signing domain (OIDC)** の組み合わせで、 universal signing model は採用
 しません。 これは design-principles § 6 と整合します。
 
+### Design history
+
+v0 spec では 4 signing domain (OIDC ID token / launch token JWS / CatalogRelease / future marketplace package) を
+「narrow domain」 として整理していた。 Wave 12 (2026-Q2) で launch token JWS impl (~1900 行) を opaque token +
+Accounts `/consume` に redesign し、 CatalogRelease を operator-pinned digest に整理した結果、 active signing domain
+は OIDC 1 つに収束した。 これは「初めから minimum design を意図していた」 のではなく、 v0 で 4 domain として
+実装した後の **設計 pivot**。 implementation 経験を経て「OIDC 以外は TLS + digest pin で代替可」 と判定したもので、
+narrow signing は **empirical conclusion** であり a priori な principle ではない。
+
 ## 1. Trust Boundaries
 
 | Boundary               | Evidence                                           | 取得機構                     | Owner                            |
@@ -164,6 +173,36 @@ verify します。 publisher signing は不要。
 dynamic registry (operator が runtime に catalog version を切り替える) や
 multi-mirror が必要になった場合は、 future RFC で publisher signing domain
 を追加することは可能です。 v1 default は static operator pin。
+
+### Operator-pinned trust の trade-off
+
+operator-pinned digest model は **operator が trust authority** であることを
+意味する。 container image digest と「同じ pattern」 と書きましたが、 OCI
+registry には Notary / Cosign 等の signature verification path も並列に存在
+するのに対し、 current Takosumi は operator pin のみで publisher signature
+を持たない点が異なります。 具体的な trade-off:
+
+- ✅ 鍵管理コスト 0、 publisher key registry なし、 setup 簡単
+- ✅ pin 値を operator が掌握できるので supply chain attack の blast radius
+  が operator の config boundary に閉じる (kernel が勝手に新 version を pull
+  しない)
+- ❌ **operator monopoly on truth**: operator account / config storage が
+  compromised なら attacker は任意 catalog digest に pin を変更可能。
+  publisher assertion が無いので「pin 値が genuine な release を指しているか」
+  は detect 困難 (out-of-band verification が必要)
+- ❌ **cross-instance trust chain なし**: 2 Takosumi instance が異なる
+  `CATALOG_DIGEST` 値を持つ場合、 chain of custody は instance ごとに
+  isolated。 「同じ release を pin している」 ことを protocol level で
+  確認する手段は無い
+- ❌ **dynamic catalog discovery 不可**: marketplace 等で「最新 release を
+  fetch」 する flow には publisher signature か trusted registry index が
+  必要 (future RFC)
+
+これは **single-operator-trust model** であり、 publisher-direct-trust や
+federated trust を要求する use case には不十分です。 v1 default は「operator
+が catalog version を慎重に pin する」 を user expectation とし、 そのコスト
+(operator 側で release notes を読む、 hash を out-of-band verify する) を
+operator に課します。
 
 ## 7. Marketplace Trust (future)
 

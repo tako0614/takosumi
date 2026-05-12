@@ -28,6 +28,19 @@ operator.dashboard.web
 operator.platform.deploy
 ```
 
+### v1 maturity
+
+本 grammar は「将来の cross-space / external participant / namespace import を見据えた
+future-proof spec」 として定義されている。 v1 実 usage は 4 operator-owned path のみ:
+`operator.identity.oidc` / `operator.billing.default` / `operator.dashboard.web` /
+`operator.platform.deploy`。 8 segments / 255 chars / leaf segment 限定 等の strict
+grammar は v1 では over-spec 寄りだが、 future RFC で path namespace 拡張時の breaking
+change を避けるため early に固定している。
+
+v1 contributor は: (1) operator-owned path のみ追加する、 (2) 新 path 追加時は spec
+を update する、 (3) Space-owned / external-participant / cross-space share の path は
+future RFC まで使わない。
+
 ## Owner Model
 
 Current v1 の namespace export owner は `operator` です。app は `operator.*` を shadow できません。
