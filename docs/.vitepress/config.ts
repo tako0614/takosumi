@@ -165,6 +165,23 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           text: "Catalog Release Trust",
           link: "/reference/catalog-release-trust",
         },
+        {
+          text: "Supply Chain Trust",
+          link: "/reference/supply-chain-trust",
+        },
+      ],
+    },
+    {
+      text: "Reference / Cross-Product Contracts",
+      items: [
+        {
+          text: "Namespace Exports",
+          link: "/reference/namespace-exports",
+        },
+        {
+          text: "Provider Resolution",
+          link: "/reference/provider-resolution",
+        },
       ],
     },
     {
@@ -230,6 +247,12 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Reference / Configuration",
       items: [
         { text: "Environment Variables", link: "/reference/env-vars" },
+      ],
+    },
+    {
+      text: "Reference / Backend Reference",
+      items: [
+        { text: "Workers Backend", link: "/reference/workers-backend" },
       ],
     },
     {

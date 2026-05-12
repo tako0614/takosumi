@@ -48,9 +48,10 @@ resources:
         - web.example.com/*
 ```
 
-`workflowRef` は takosumi-git の authoring extension で、tenant runtime
-が受け取る snapshot には存在しません。 kernel に届く前に `spec.artifact.hash` へ
-concrete digest を書き込み、strip されます。
+workflowRef strip behavior は
+[Manifest Spec § Workflow ref resolution](../manifest-spec.md#workflow-ref)
+で定義されています。tenant runtime が受け取る snapshot に `workflowRef`
+は存在しません。
 
 ## Container / Web Service Runtime
 

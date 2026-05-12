@@ -135,6 +135,8 @@ resolution の入力、出力、失敗条件、audit evidence は
 [Provider Resolution](https://github.com/tako0614/takosumi/blob/master/docs/reference/provider-resolution.md)
 を参照してください。
 
+### Workflow ref resolution {#workflow-ref}
+
 `workflowRef` は takosumi-git の authoring extension です。kernel manifest
 仕様の field ではありません。`.takosumi/manifest.yml` 内では resource
 に併記できますが、`takosumi-git push` / `install apply` が workflow

@@ -52,9 +52,14 @@ kernel features の正本記述は
 に集約されます。
 
 current compiled Shape manifest は top-level `publications[]` / `bindings[]` を
-持ちません。app catalog / MCP / file handler などの app-facing metadata は Takos
-app / installer layer で扱い、kernel control は compiled Shape manifest を apply
-します。
+持ちません。これらの field は v0.x manifest contract finalization の過程で
+kernel envelope から除去されました。 cross-product capability は **namespace
+exports** に、installer-side metadata (MCP endpoint / file handler / app
+catalog) は Takosumi Accounts AppInstallation 配下の **AppBinding** に
+migrate されています。canonical envelope 定義は
+[Manifest Spec](../manifest-spec.md) を参照してください。app catalog / MCP /
+file handler などの app-facing metadata は Takos app / installer layer で
+扱い、kernel control は compiled Shape manifest を apply します。
 
 PaaS Core 視点では、control plane は compiled Shape manifest を Deployment
 として record し、`applied` 遷移と GroupHead 進行で route projection を

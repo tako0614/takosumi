@@ -50,6 +50,24 @@ current design の署名 domain は限定します。
 provider endpoint descriptor に署名して discovery する model は current design では 使いません。provider trust は
 CatalogRelease / implementation trust / operator policy の採用 decision として扱います。
 
+「署名する / しない」の boundary を明確にしておきます。
+
+- **CatalogRelease descriptor (signed)**: shape / provider / template release pin
+  は CatalogRelease 単位で trusted catalog publisher が署名し、kernel が
+  verify します (上の table 参照)。
+- **Individual provider endpoint URL / webhook URL (NOT individually signed)**:
+  provider plugin が公開する具体的な endpoint URL や callback / webhook URL は
+  individually 署名しません。これらは CatalogRelease に含まれる descriptor の
+  digest 経由で間接的に pin されるだけで、kernel が URL ごとに signature を
+  verify する model は採用しません。
+- **Provider public key registry (future)**: publisher key registry / signed app
+  package は future marketplace の機能であり、current contract には含まれません
+  (§5 Current Gaps 参照)。
+
+つまり 「provider endpoint descriptor に署名しない」 = 「CatalogRelease を
+署名しない」 ではありません。CatalogRelease は署名され、individual endpoint
+URL や marketplace publisher key は別 boundary として扱います。
+
 ## 4. Digest Invariants
 
 次の digest は AppInstallation / Deployment evidence で説明可能である必要がある。
