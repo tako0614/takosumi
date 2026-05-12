@@ -86,9 +86,9 @@ down migration の規約:
 - column drop は data loss を伴う場合があり、その時は CLI が `--allow-data-loss`
   を要求する
 
-### Migration window
+### Upgrade maintenance window
 
-cross-minor migration の間、kernel は以下を満たす:
+cross-minor upgrade の間、kernel は以下を満たす:
 
 - 全 pod を 503 にして mutation 系 endpoint を停止
 - `apply` / `activate` / `destroy` / `rollback` は WAL stage の切れ目で停止し

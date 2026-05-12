@@ -480,8 +480,8 @@ export interface ClosureVersionMismatch {
   readonly liveAlias?: string;
   /** Live plugin raw digest when known. */
   readonly liveDigest?: string;
-  /** Human-readable migration guide. */
-  readonly migrationGuide: string;
+  /** Human-readable upgrade guide. */
+  readonly upgradeGuide: string;
 }
 
 export interface ClosureVersionCompatibilityReport {
@@ -494,7 +494,7 @@ export interface ClosureVersionCompatibilityReport {
  * the live plugin set described by `liveDescriptors` (alias → live state).
  *
  * Apply MUST call this BEFORE consuming the closure. When `compatible` is
- * false, apply MUST fail-closed with the rendered migration guide rather
+ * false, apply MUST fail-closed with the rendered upgrade guide rather
  * than proceeding with stale pins.
  *
  * Aliases the live plugin set does not know about are reported as
@@ -525,7 +525,7 @@ export function verifyClosureVersionCompatibility(
           kind: "alias-not-loaded",
           pinnedAlias: alias,
           pinnedDigest: resolution.rawDigest,
-          migrationGuide:
+          upgradeGuide:
             `Descriptor '${alias}' is pinned in the deployment closure but ` +
             `no loaded provider plugin currently consumes it. Either re-enable ` +
             `the plugin that supplies '${alias}', or redeploy the manifest so a ` +
@@ -563,7 +563,7 @@ function verifyAliasMatch(
       pinnedDigest: resolution.rawDigest,
       liveAlias: live.alias,
       liveDigest: live.rawDigest,
-      migrationGuide:
+      upgradeGuide:
         `Descriptor '${alias}' was pinned at major version v${pinnedMajor} ` +
         `but the live plugin now consumes '${live.alias}' (major v${liveMajor}). ` +
         `Major version bumps signal a breaking contract change and the closure ` +
@@ -581,8 +581,7 @@ function verifyAliasMatch(
       pinnedDigest: resolution.rawDigest,
       liveAlias: live.alias,
       liveDigest: live.rawDigest,
-      migrationGuide:
-        `Descriptor '${alias}' raw digest pinned in the closure ` +
+      upgradeGuide: `Descriptor '${alias}' raw digest pinned in the closure ` +
         `(${resolution.rawDigest}) does not match the digest the loaded plugin ` +
         `currently consumes (${live.rawDigest}). The descriptor body changed ` +
         `(likely an apiVersion bump that did not change the alias). Rebuild ` +
@@ -611,7 +610,7 @@ function parseMajorVersion(alias: string): number | undefined {
  * and get fail-closed behaviour automatically.
  *
  * Returns silently when compatible; throws a `TypeError` whose message lists
- * every mismatch with its migration guide when not.
+ * every mismatch with its upgrade guide when not.
  */
 export function verifyDescriptorClosureCompatibility(
   closure: DeploymentDescriptorClosure,
@@ -625,7 +624,7 @@ export function verifyDescriptorClosureCompatibility(
         entry.liveDigest ?? "<unknown>"
       })`
       : "";
-    return `  - [${entry.kind}] ${entry.alias}${liveSuffix}: ${entry.migrationGuide}`;
+    return `  - [${entry.kind}] ${entry.alias}${liveSuffix}: ${entry.upgradeGuide}`;
   });
   throw new TypeError(
     `descriptor closure incompatible with live registry: ${report.mismatches.length} mismatch(es)\n${

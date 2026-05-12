@@ -109,10 +109,10 @@ Deno.test("H9: closure incompatible on major version mismatch (v1 pinned, v2 liv
   assert.equal(mismatch.kind, "major-version-mismatch");
   assert.equal(mismatch.alias, "provider.aws.rds@v1");
   assert.equal(mismatch.liveAlias, "provider.aws.rds@v2");
-  assert.match(mismatch.migrationGuide, /takos deploy plan --refresh/);
+  assert.match(mismatch.upgradeGuide, /takos deploy plan --refresh/);
 
   // Throwing wrapper surfaces a TypeError naming the mismatch + the
-  // migration guide so apply preflight fails closed with an actionable
+  // upgrade guide so apply preflight fails closed with an actionable
   // signal for the operator.
   assert.throws(
     () => verifyDescriptorClosureCompatibility(closure, live),
@@ -167,7 +167,7 @@ Deno.test("H9: closure incompatible when pinned alias not present in live regist
     "provider.cloudflare.workers@v1",
   );
   assert.match(
-    report.mismatches[0].migrationGuide,
+    report.mismatches[0].upgradeGuide,
     /re-enable the plugin/,
   );
 });
