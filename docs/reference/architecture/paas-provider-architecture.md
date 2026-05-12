@@ -86,21 +86,31 @@ Architecture rules:
 
 ## Supply chain trust
 
-Three trust steps form the v1 supply chain. Each step has a distinct signer and
-a distinct verifier.
+v1 supply chain trust is **TLS + digest pin + 1 signing domain (OIDC)**. The
+kernel itself does not run a universal signing model; each boundary uses the
+minimum mechanism that fits. See
+[Supply Chain Trust](../supply-chain-trust.md) for the canonical chain of
+custody, and the boundary table below for kernel-touching steps.
 
 ```text
-CatalogRelease       signed by catalog publisher, verified by operator at adoption
-Connector            signed by operator (operator-installed), verified by kernel at registration
-Implementation       signed by implementation publisher, verified by operator policy at registration
+CatalogRelease       operator-pinned sha256 digest (CATALOG_DIGEST), TLS fetch + digest verify
+Connector            operator-installed, identified by operator config, kernel verifies registration via deploy token
+Implementation       provider/runtime-agent contract, registration is operator-policy-gated (no kernel-side signing)
 ```
 
 Trust rules:
 
-- The kernel does not federate trust across operators in v1. not CatalogRelease
-  trust.
+- CatalogRelease trust is operator-pinned digest, not publisher signing. The
+  kernel reads `CATALOG_DIGEST` from operator config and fails closed when the
+  fetched catalog sha256 does not match.
+- The kernel does not federate trust across operators in v1, and does not
+  federate CatalogRelease trust either.
 - Trust state is recorded in `ResolutionSnapshot`. A resolution against an
   untrusted artifact must surface a Risk and not silently succeed.
+- The only signed runtime boundary the kernel issues internally is the
+  Ed25519-signed gateway manifest to runtime-agents (kernel ↔ runtime-agent
+  authentication); this is internal infra, not a public-facing publisher
+  signing domain.
 
 ## Operator UX surfaces
 

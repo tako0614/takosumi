@@ -111,6 +111,18 @@ entry).
 
 ## takosumi-kernel
 
+### Unreleased — docs-only (trust model simplification)
+
+- **Docs-only**: CatalogRelease trust is documented as operator-pinned sha256
+  digest (`CATALOG_DIGEST`) + TLS fetch, not publisher signing. Aligns the
+  kernel docs with the ecosystem-wide "TLS + digest pin + 1 signing domain
+  (OIDC)" model (ecosystem Wave 11/12). No kernel runtime code change in this
+  changelog entry; the kernel itself still has no OIDC ID token signing and no
+  launch token signing — both belong to Takosumi Accounts. Reference:
+  [Supply Chain Trust](./docs/reference/supply-chain-trust.md),
+  [paas-provider-architecture § Supply chain trust](./docs/reference/architecture/paas-provider-architecture.md#supply-chain-trust),
+  [catalog-release-descriptor-model](./docs/reference/architecture/catalog-release-descriptor-model.md).
+
 ### 0.15.0 — 2026-05-07
 
 - Public `POST /v1/deployments` now enforces manifest-declared

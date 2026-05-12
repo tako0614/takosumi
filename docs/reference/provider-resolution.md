@@ -34,7 +34,7 @@ Resolution input は次に閉じます。
 | `catalogRelease` | digest / release id            | shape / provider / template release pin      |
 | `operatorPolicy` | policy pack id + version       | placement / region / quota / compliance rule |
 | `costContext`    | plan / quota / billing account | cost estimate と admission gate              |
-| `trustContext`   | catalog signature state        | adopted release / implementation trust state |
+| `trustContext`   | catalog digest pin state       | adopted release / implementation trust state |
 
 consumer manifest に endpoint URL、service import、anchor URL、operator hostname は 書きません。OIDC / billing /
 dashboard / deploy API は namespace export / account API / OIDC discovery / BillingPort で扱います。
@@ -77,7 +77,9 @@ Resolution は fail-closed です。
 
 1. envelope / resource schema を validate する。
 2. Space に adopted な CatalogRelease を読む。
-3. CatalogRelease signature と publisher key state を verify する。
+3. CatalogRelease の sha256 が operator-pinned `CATALOG_DIGEST` と一致することを
+   verify する (publisher signing ではなく digest pin。詳細は
+   [Supply Chain Trust § 6](./supply-chain-trust.md#_6-catalog-release-trust))。
 4. `shape` を実装する provider candidates を provider registry から列挙する。
 5. `requires[]` と provider capability を照合する。
 6. `providerHint` がある場合は candidates をその provider に絞る。

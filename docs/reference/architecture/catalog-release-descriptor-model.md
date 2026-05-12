@@ -46,14 +46,17 @@ CatalogRelease:
 
 Resolution uses exactly one CatalogRelease allowed by the current Space. Apply
 uses the CatalogRelease recorded in `ResolutionSnapshot`. CatalogRelease
-activation and Space assignment are serialized operator operations. The registry
-domain now implements the primitive pieces for this boundary: publisher key
-enrollment/revocation, Ed25519 signature verification of the canonical
-descriptor payload, signed descriptor persistence, and append-only per-Space
-adoption records. Public OperationPlan WAL invokes CatalogRelease
+activation and Space assignment are serialized operator operations. v1 trust is
+**operator-pinned digest** (sha256), not publisher signing: the operator pins a
+`CATALOG_DIGEST` in kernel host config, the kernel TLS-fetches the catalog and
+verifies the sha256, and the resulting digest is persisted in append-only
+per-Space adoption records. Public OperationPlan WAL invokes CatalogRelease
 re-verification during pre/post-commit: pre-commit verification fails closed
 before provider side effects, and post-commit verification failure is journaled
-with RevokeDebt for committed effects. Catalog-declared executable hook packages
+with RevokeDebt for committed effects. A future publisher-signing domain may be
+added by RFC for dynamic registry / multi-mirror use cases, but is not part of
+v1 (see [Supply Chain Trust § 6](../supply-chain-trust.md#_6-catalog-release-trust)).
+Catalog-declared executable hook packages
 
 ## Space assignment
 

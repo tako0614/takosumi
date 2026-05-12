@@ -164,7 +164,8 @@ install / cypherpunk 用途で必要なら RFC で追加します。 v1 default 
 このページは trust chain の target contract です。 current implementation では次の領域に gap が残り得ます。
 
 - launch token の opaque-token migration: 既存 implementation は JWS。 migration は
-  [Install Lifecycle Roadmap](../../../takosumi-cloud/docs/install-lifecycle-roadmap.md) を参照
+  [Install Lifecycle Roadmap](https://github.com/tako0614/takosumi-cloud/blob/master/docs/install-lifecycle-roadmap.md)
+  を参照
 - third-party CI artifact provenance attestation: SLSA-level の attestation は v1 では digest pin のみ
 - future marketplace の publisher direct signing path
 - export bundle の provider data restore integrity
