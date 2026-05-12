@@ -237,18 +237,30 @@ function asRecord(
 
 // The in-memory ledger only ever serves one `select` (the storage_migrations
 // ledger), and its row shape is `AppliedRow`. The `query<Row>` signature
-// allows callers to choose a `Row` extending `Record<string, unknown>`, which
-// is strictly broader than `AppliedRow`. TS treats the widening as unsound
-// (a caller could pick a narrower subtype), so we funnel through one named
-// helper where the unsoundness is bounded and the migration script is the
-// only caller.
+// allows callers to choose a `Row` extending `Record<string, unknown>` —
+// strictly broader than `AppliedRow`. The migration-runner is the only
+// caller, and it asks for an `AppliedMigrationRow` (the same shape with
+// `unknown` field types) and coerces every field with `String(...)` /
+// `Number(...)` immediately. The named type-guard below documents that
+// trust at the boundary.
+function rowsSatisfyCallerRowType<Row extends Record<string, unknown>>(
+  rows: readonly AppliedRow[],
+): rows is readonly AppliedRow[] & readonly Row[] {
+  return rows.every((row) =>
+    typeof row.id === "string" &&
+    typeof row.version === "number" &&
+    typeof row.checksum === "string" &&
+    typeof row.applied_at === "string"
+  );
+}
+
 function ledgerRowsAs<Row extends Record<string, unknown>>(
   rows: readonly AppliedRow[],
 ): SqlQueryResult<Row> {
-  return {
-    rows: rows as unknown as readonly Row[],
-    rowCount: rows.length,
-  };
+  if (!rowsSatisfyCallerRowType<Row>(rows)) {
+    throw new Error("InMemorySqlClient ledger row shape drifted");
+  }
+  return { rows, rowCount: rows.length };
 }
 
 // ---------------------------------------------------------------------------
