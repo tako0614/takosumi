@@ -28,9 +28,9 @@ surface ごとに client / auth / SLA を完全に分離する目的:
 
 ## Authentication model
 
-具体的な credential 名 (`TAKOSUMI_DEPLOY_TOKEN` /
-`TAKOSUMI_INTERNAL_API_SECRET` / `TAKOSUMI_ARTIFACT_FETCH_TOKEN`) と
-endpoint への bind は [Kernel HTTP API § Authentication](/reference/kernel-http-api#authentication)
+具体的な credential 名 (`TAKOSUMI_DEPLOY_TOKEN` / `TAKOSUMI_INTERNAL_API_SECRET`
+/ `TAKOSUMI_ARTIFACT_FETCH_TOKEN`) と endpoint への bind は
+[Kernel HTTP API § Authentication](/reference/kernel-http-api#authentication)
 が一次資料です。本節は **credential を分離した設計判断** を扱います。
 
 設計判断:
@@ -51,8 +51,8 @@ endpoint への bind は [Kernel HTTP API § Authentication](/reference/kernel-h
 ## Error envelope philosophy
 
 すべての public / internal endpoint は closed shape の error envelope を
-返します。具体的な `ApiErrorEnvelope` 型と `DomainErrorCode` 9 値の
-closed enum は [Kernel HTTP API § Error envelope](/reference/kernel-http-api#error-envelope)
+返します。具体的な `ApiErrorEnvelope` 型と `DomainErrorCode` 9 値の closed enum
+は [Kernel HTTP API § Error envelope](/reference/kernel-http-api#error-envelope)
 を参照。本節は envelope を closed にした **設計判断** を扱います。
 
 設計判断:
@@ -148,9 +148,8 @@ algorithm / rotation window などの wire-level reference は
 - 採用: Ed25519。short signature / constant-time verify / kernel が credential
   を保持しない設計と整合 (private key は kernel host 限定)。
 - 鍵 rotation: 旧鍵 + 新鍵を同時 publish し、retire まで **最大 7 日 window**
-  で両 keyId を accept する。これは runtime-agent fleet を rolling 更新する
-  間に kernel 側で issuer 切替を強行しないため (trust store の伝播時間を確保
-  する)。
+  で両 keyId を accept する。これは runtime-agent fleet を rolling 更新する 間に
+  kernel 側で issuer 切替を強行しないため (trust store の伝播時間を確保 する)。
 - header に keyId を必須にしたのは、rotation 中の signature parse 時に旧/新
   鍵を区別できるようにするため。`alg=ed25519` だけでは rotation 中の判別が
   できない。

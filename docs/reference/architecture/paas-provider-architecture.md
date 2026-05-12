@@ -88,9 +88,9 @@ Architecture rules:
 
 v1 supply chain trust is **TLS + digest pin + 1 signing domain (OIDC)**. The
 kernel itself does not run a universal signing model; each boundary uses the
-minimum mechanism that fits. See
-[Supply Chain Trust](../supply-chain-trust.md) for the canonical chain of
-custody, and the boundary table below for kernel-touching steps.
+minimum mechanism that fits. See [Supply Chain Trust](../supply-chain-trust.md)
+for the canonical chain of custody, and the boundary table below for
+kernel-touching steps.
 
 ```text
 CatalogRelease       operator-pinned sha256 digest (CATALOG_DIGEST), TLS fetch + digest verify
@@ -109,8 +109,8 @@ Trust rules:
   untrusted artifact must surface a Risk and not silently succeed.
 - The only signed runtime boundary the kernel issues internally is the
   Ed25519-signed gateway manifest to runtime-agents (kernel ↔ runtime-agent
-  authentication); this is internal infra, not a public-facing publisher
-  signing domain.
+  authentication); this is internal infra, not a public-facing publisher signing
+  domain.
 
 ## Operator UX surfaces
 

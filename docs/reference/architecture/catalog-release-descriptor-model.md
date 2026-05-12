@@ -55,7 +55,8 @@ re-verification during pre/post-commit: pre-commit verification fails closed
 before provider side effects, and post-commit verification failure is journaled
 with RevokeDebt for committed effects. A future publisher-signing domain may be
 added by RFC for dynamic registry / multi-mirror use cases, but is not part of
-v1 (see [Supply Chain Trust § 6](../supply-chain-trust.md#_6-catalog-release-trust)).
+v1 (see
+[Supply Chain Trust § 6](../supply-chain-trust.md#_6-catalog-release-trust)).
 Catalog-declared executable hook packages
 
 ## Space assignment
