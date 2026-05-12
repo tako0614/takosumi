@@ -486,7 +486,7 @@ export function registerDeployPublicRoutes(
           deploymentName,
         }),
       };
-      return { status: 200, body: ok as unknown as JsonObject };
+      return { status: 200, body: ok };
     }
 
     if (mode.value === "destroy") {
@@ -597,7 +597,7 @@ export function registerDeployPublicRoutes(
           });
           const ok: DeployPublicDestroyResponse = { status: "ok", outcome };
           await recordMetric("destroy", "succeeded");
-          return { status: 200, body: ok as unknown as JsonObject };
+          return { status: 200, body: ok };
         }
         const preCommitHook = await invokeCatalogReleaseWalHook({
           verifier: catalogReleaseVerifier,
@@ -705,7 +705,7 @@ export function registerDeployPublicRoutes(
             "destroy",
             outcome.status === "succeeded" ? "succeeded" : "partial",
           );
-          return { status: 200, body: ok as unknown as JsonObject };
+          return { status: 200, body: ok };
         } catch (error) {
           await appendOperationPlanJournalStages({
             store: operationJournalStore,
@@ -936,7 +936,7 @@ export function registerDeployPublicRoutes(
         });
         const ok: DeployPublicResponse = { status: "ok", outcome };
         await recordMetric("apply", "succeeded");
-        return { status: 200, body: ok as unknown as JsonObject };
+        return { status: 200, body: ok };
       } catch (error) {
         await appendOperationPlanJournalStages({
           store: operationJournalStore,
@@ -1370,7 +1370,7 @@ async function handleRecoveryPreflight(input: {
         entries: entries.map(toJournalEntrySummary),
       },
     };
-    return { status: 200, body: ok as unknown as JsonObject };
+    return { status: 200, body: ok };
   }
   if (input.recoveryMode === "continue") {
     if (!journal || journal.terminal) {
@@ -1558,7 +1558,7 @@ async function handleRecoveryCompensate(input: {
       debts: debts.map(toRevokeDebtRecordSummary),
     },
   };
-  return { status: 200, body: ok as unknown as JsonObject };
+  return { status: 200, body: ok };
 }
 
 type CatalogReleaseWalHookStage = "pre-commit" | "post-commit";
