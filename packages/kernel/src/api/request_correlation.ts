@@ -4,6 +4,16 @@ import type {
   TraceSpanEvent,
 } from "../services/observability/mod.ts";
 
+declare module "hono" {
+  interface ContextVariableMap {
+    "takosumi.requestId": string;
+    "takosumi.correlationId": string;
+    "takosumi.traceId": string;
+    "takosumi.spanId": string;
+    "takosumi.parentSpanId": string;
+  }
+}
+
 export const TAKOSUMI_REQUEST_ID_HEADER = "x-request-id" as const;
 export const TAKOSUMI_CORRELATION_ID_HEADER = "x-correlation-id" as const;
 export const TRACEPARENT_HEADER = "traceparent" as const;
@@ -180,29 +190,30 @@ function storeRequestCorrelation(
   c: Context,
   correlation: RequestCorrelation,
 ): void {
-  const context = c as unknown as {
-    set(key: string, value: string): void;
-  };
-  context.set(REQUEST_ID_CONTEXT_KEY, correlation.requestId);
-  context.set(CORRELATION_ID_CONTEXT_KEY, correlation.correlationId);
+  c.set(REQUEST_ID_CONTEXT_KEY, correlation.requestId);
+  c.set(CORRELATION_ID_CONTEXT_KEY, correlation.correlationId);
 }
 
 function storeRequestTrace(c: Context, trace: RequestTraceContext): void {
-  const context = c as unknown as {
-    set(key: string, value: string): void;
-  };
-  context.set(TRACE_ID_CONTEXT_KEY, trace.traceId);
-  context.set(SPAN_ID_CONTEXT_KEY, trace.spanId);
+  c.set(TRACE_ID_CONTEXT_KEY, trace.traceId);
+  c.set(SPAN_ID_CONTEXT_KEY, trace.spanId);
   if (trace.parentSpanId) {
-    context.set(PARENT_SPAN_ID_CONTEXT_KEY, trace.parentSpanId);
+    c.set(PARENT_SPAN_ID_CONTEXT_KEY, trace.parentSpanId);
   }
 }
 
-function readContextString(c: Context, key: string): string | undefined {
-  const context = c as unknown as {
-    get(key: string): unknown;
-  };
-  const value = context.get(key);
+type ContextStringKey =
+  | typeof REQUEST_ID_CONTEXT_KEY
+  | typeof CORRELATION_ID_CONTEXT_KEY
+  | typeof TRACE_ID_CONTEXT_KEY
+  | typeof SPAN_ID_CONTEXT_KEY
+  | typeof PARENT_SPAN_ID_CONTEXT_KEY;
+
+function readContextString(
+  c: Context,
+  key: ContextStringKey,
+): string | undefined {
+  const value = c.get(key) as unknown;
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
