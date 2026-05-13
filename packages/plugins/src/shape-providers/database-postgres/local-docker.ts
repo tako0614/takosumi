@@ -141,7 +141,9 @@ function createPortAllocator(start: number): () => number {
 }
 
 function randomSuffix(): string {
-  return Math.random().toString(36).slice(2, 8);
+  const bytes = new Uint8Array(3);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function generatePasswordToken(): string {
