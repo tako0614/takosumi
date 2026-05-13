@@ -140,6 +140,31 @@ Deno.test(
 );
 
 Deno.test(
+  "status projection degrades committed activation when security is blocked",
+  () => {
+    const projector = new DefaultGroupSummaryStatusProjector({
+      clock: () => new Date("2026-04-27T00:00:03.000Z"),
+    });
+
+    const projection = projector.project({
+      ...baseInput,
+      securityConditions: [{
+        type: "RegistryTrustActive",
+        status: "false",
+        reason: "DescriptorUntrusted",
+        message: "Trust record has been revoked",
+      }],
+    });
+
+    assert.equal(projection.status, "degraded");
+    assert.equal(projection.desired.status, "committed");
+    assert.equal(projection.serving.status, "converged");
+    assert.equal(projection.dependencies.status, "ready");
+    assert.equal(projection.security.status, "blocked");
+  },
+);
+
+Deno.test(
   "status projection requires current provider observation before serving converges",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({

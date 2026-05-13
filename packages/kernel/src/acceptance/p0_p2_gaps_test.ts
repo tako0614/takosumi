@@ -85,7 +85,7 @@ Deno.test("acceptance P0: provider failure does not mutate committed deployment"
   assert.equal(reread?.applied_at, "2026-04-27T00:01:00.000Z");
 });
 
-Deno.test("acceptance P1: revoked registry trust reports blocked security", async () => {
+Deno.test("acceptance P1: revoked registry trust degrades group and blocks security", async () => {
   const descriptors = new InMemoryPackageDescriptorStore();
   const resolutions = new InMemoryPackageResolutionStore();
   const trustRecords = new InMemoryTrustRecordStore();
@@ -143,10 +143,16 @@ Deno.test("acceptance P1: revoked registry trust reports blocked security", asyn
     },
     activation: { id: "activation_trust", status: "succeeded" },
     runtimeMaterialization: {
+      materializationId: "materialization_trust",
       activationId: "activation_trust",
       desiredStateId: "desired_trust",
       status: "materialized",
       materializedAt: "2026-04-27T00:02:00.000Z",
+      providerObservation: {
+        materializationId: "materialization_trust",
+        observedState: "present",
+        observedAt: "2026-04-27T00:02:30.000Z",
+      },
     },
     runtimeObserved: {
       activationId: "activation_trust",
@@ -162,7 +168,7 @@ Deno.test("acceptance P1: revoked registry trust reports blocked security", asyn
   });
 
   assert.equal(projection.security.status, "blocked");
-  assert.equal(projection.status, "failed");
+  assert.equal(projection.status, "degraded");
   assert.ok(
     projection.conditions.some((condition) =>
       condition.type === "RegistryTrustActive" &&

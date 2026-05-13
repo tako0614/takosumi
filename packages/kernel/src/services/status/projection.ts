@@ -339,10 +339,9 @@ export function summarizeGroupStatus(input: {
   if (input.desired === "applying") return "applying";
   if (input.desired === "failed") return "failed";
 
-  if (
-    input.serving === "failed" || input.dependencies === "failed" ||
-    input.security === "blocked"
-  ) {
+  // Revoked trust blocks new plan/apply boundaries, but an already committed
+  // activation is degraded rather than marked failed by projection alone.
+  if (input.serving === "failed" || input.dependencies === "failed") {
     return "failed";
   }
   // Phase 18.2 SLA-aware roll-up: per-provider outage on a critical-path
