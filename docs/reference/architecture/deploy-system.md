@@ -97,7 +97,7 @@ example として等価に扱われます。
 step 11 で **compiled manifest digest** が確定し、AppInstallation 行の
 `compiledManifestDigest` 列に保存されます。kernel はこの digest と一致する
 compiled manifest だけを apply します。Step 12 以降は本ページ後半で説明する
-従来の Deployment / ProviderObservation / GroupHead の世界に入ります。
+kernel Deployment / ProviderObservation / GroupHead backend model に入ります。
 
 ### 1.2 何が AppInstallation に保存されるか
 
@@ -439,7 +439,7 @@ Group と primitive projection record の責務は次のように分ける。
 - resource output と binding evidence は output planner / WAL / resource
   metadata に保存される
 - group は `groups` row として inventory / source metadata / current deployment
-  pointer / reconcile status を持つ compatibility projection
+  pointer / reconcile status を持つ inventory projection
 - deployment history / rollback / uninstall は group inventory に対する
   機能であり、primitive runtime の特別処理ではない
 
