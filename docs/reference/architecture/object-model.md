@@ -1,26 +1,28 @@
 # Object Model
 
-Object is the canonical entity in the kernel graph. Every Object belongs to
-exactly one Space. A public `resources[]` entry becomes an Object intent, then a
-resolved Object.
+> このページでわかること: kernel の object model とエンティティ関係。
+
+Object は kernel graph の canonical entity である。すべての Object は厳密に 1
+つの Space に属する。public な `resources[]` entry は Object intent となり、
+その後 resolved な Object になる。
 
 ## Space-qualified identity
 
-Object addresses are unique within a Space. Storage should treat identity as a
-tuple.
+Object のアドレスは Space 内で一意である。storage は identity を tuple として
+扱うべきである。
 
 ```text
 (spaceId, objectAddress)
 ```
 
-Qualified display form is allowed for logs and plans.
+qualified な表示形式は log や plan で許される。
 
 ```text
 space:acme-prod/object:api
 ```
 
-An Object in one Space must never be updated, deleted, or observed as authority
-for another Space.
+ある Space の Object を別の Space の authority として更新・削除・observe する
+ことは決して許されない。
 
 ## Object lifecycle classes
 
@@ -63,7 +65,7 @@ Object:
 
 ## Generated object requirements
 
-Every generated object has:
+すべての generated object は以下を持つ。
 
 ```yaml
 GeneratedObject:
@@ -75,12 +77,12 @@ GeneratedObject:
   lifecycleClass: generated
 ```
 
-Generated object identity is recorded before side effects begin.
+生成 object の identity は side effect が始まる前に記録される。
 
 ## Object revoke flow
 
-Revoke is the lifecycle that replaces a managed or generated object with its
-absence while honoring external constraints. The state machine:
+Revoke は managed または generated object をその不在で置き換える lifecycle で、
+外部制約を尊重する。state machine は次の通り。
 
 ```text
 live → revoking → revoked
@@ -88,24 +90,24 @@ live → revoking → revoked
              → debt          (revoke could not complete cleanly)
 ```
 
-Revoke participation is restricted by lifecycle class. `external-source` and
-`external-participant` (the `external` and `operator` rows below) must never
-enter this flow as the revoke target; only their generated children may. This
-re-states the [Invariant-first Root Model](./invariant-first-root-model.md)
-external-ownership invariant.
+revoke 参加は lifecycle class で制限される。`external-source` と
+`external-participant` (下表の `external` と `operator` 行) は revoke target と
+してこの flow に入ってはならず、その generated child だけが対象となる。これは
+[Invariant-first Root Model](./invariant-first-root-model.md) の external
+ownership invariant の再宣言である。
 
-When external cleanup is required and the external system rejects or cannot
-acknowledge the revoke, the link's owner queues a `RevokeDebt` record per
+外部 cleanup が必要で外部システムが revoke を reject または ack できなかった
+とき、link の owner は
 [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
-and the object enters the `debt` state until the debt is cleared.
+に従って `RevokeDebt` record を queue し、object は debt が clear されるまで
+`debt` state に入る。
 
 ## Revoke participation matrix
 
-Rows are object lifecycle classes. Columns are the four operations involved in
-tearing an object down. `yes` allows the operation; `gen-only` allows it only on
-the object's generated children, never on the object itself; `no` forbids the
-operation; `debt-on-fail` describes whether a failed external cleanup queues
-`RevokeDebt`.
+行は object の lifecycle class、列は object を tear down する際に関わる 4 つ の
+operation。`yes` は許可、`gen-only` は object 自身ではなく generated child
+にのみ許可、`no` は禁止、`debt-on-fail` は外部 cleanup の失敗が `RevokeDebt` を
+queue するかどうかを表す。
 
 | Lifecycle class | delete             | revoke             | detach       | debt-on-fail |
 | --------------- | ------------------ | ------------------ | ------------ | ------------ |
@@ -115,13 +117,13 @@ operation; `debt-on-fail` describes whether a failed external cleanup queues
 | operator        | no                 | gen-only           | policy-gated | gen-only     |
 | imported        | policy-gated       | gen-only           | yes          | gen-only     |
 
-`detach` removes the consumer-side reference (Link or Exposure) without mutating
-the source object; it is always legal except when explicitly policy-gated.
+`detach` は source object を変更せずに consumer 側の reference (Link または
+Exposure) を取り除く。policy で明示的に gate されない限り、常に合法である。
 
 ## Operation restrictions
 
-Lifecycle class restricts operation kinds. Space containment also restricts
-operation kinds.
+lifecycle class は operation 種別を制限する。Space containment も operation
+種別を制限する。
 
 | Lifecycle class | Create/update/delete  | Verify/observe | Link/materialize | Revoke generated child  |
 | --------------- | --------------------- | -------------- | ---------------- | ----------------------- |

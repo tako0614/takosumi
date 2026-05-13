@@ -1,24 +1,13 @@
 # SLA Breach Detection
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Telemetry / Metrics](/reference/telemetry-metrics),
-> [Audit Events](/reference/audit-events),
-> [Storage Schema](/reference/storage-schema),
-> [Readiness Probes](/reference/readiness-probes),
-> [Quota / Rate Limit](/reference/quota-rate-limit),
-> [Drift Detection](/reference/drift-detection),
-> [RevokeDebt](/reference/revoke-debt),
-> [Time / Clock Model](/reference/time-clock-model),
-> [Environment Variables](/reference/env-vars),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Closed Enums](/reference/closed-enums)
+> このページでわかること: SLA 違反の検知条件とアラートの仕組み。
 
-This reference defines the v1 SLA breach detection surface. The kernel measures
-a closed set of latency, throughput, and error dimensions over rolling windows,
-evaluates each dimension against operator- supplied thresholds, and emits audit
-events whenever a dimension crosses into or out of breach. The kernel does not
-compute service credits, render status pages, or own the customer communication
-path.
+本リファレンスは v1 の SLA breach detection surface を定義する。kernel は closed
+な latency / throughput / error の dimension 集合を rolling window 上で
+計測し、各 dimension を operator が供給する閾値に対して評価し、dimension が
+breach に入ったり出たりするたびに audit event を発行する。kernel はサービス
+クレジット計算、ステータスページ描画、顧客コミュニケーション path の所有を
+行わない。
 
 ::: info Current kernel primitive `SlaBreachDetectionService` implements the v1
 threshold evaluator, hysteresis state machine, and event publish path. Callers
@@ -29,8 +18,8 @@ observability sink, and emits an operator notification signal for
 
 ## SLA dimensions (closed v1 set)
 
-The v1 measurement set is closed. Adding a dimension goes through the
-`CONVENTIONS.md` §6 RFC.
+v1 の計測集合は closed である。dimension の追加は `CONVENTIONS.md` §6 RFC を
+要する。
 
 | Dimension                   | Source                                            | Notes                                                               |
 | --------------------------- | ------------------------------------------------- | ------------------------------------------------------------------- |
@@ -46,14 +35,14 @@ The v1 measurement set is closed. Adding a dimension goes through the
 | `error-rate-5xx`            | HTTP edge                                         | Ratio of HTTP 5xx responses to total responses.                     |
 | `error-rate-4xx`            | HTTP edge                                         | Ratio of HTTP 4xx responses to total responses.                     |
 
-Each dimension is observed at the kernel HTTP edge or at the worker boundary
-that already emits the corresponding telemetry metric in
-[Telemetry / Metrics](/reference/telemetry-metrics). Breach detection re-uses
-the same observation; it does not introduce a parallel measurement path.
+各 dimension は、対応する telemetry metric を既に発行している kernel HTTP edge
+または worker boundary で観測される
+([Telemetry / Metrics](/reference/telemetry-metrics) 参照)。breach detection
+は同じ観測を再利用する。並行する計測 path は導入しない。
 
 ## Measurement window
 
-Every dimension is evaluated over a rolling window:
+すべての dimension は rolling window 上で評価される。
 
 - Default window length: 5 minutes.
 - Operator-tunable through `TAKOSUMI_SLA_WINDOW_SECONDS` (allowed range:
@@ -64,15 +53,15 @@ Every dimension is evaluated over a rolling window:
   [Time / Clock Model](/reference/time-clock-model) so that successive windows
   do not overlap or drop samples on clock skew.
 
-Per-dimension overrides are allowed through
-`TAKOSUMI_SLA_WINDOW_SECONDS_<DIMENSION>` (uppercase, dashes converted to
-underscores). Operators that want a longer window for a high-volume dimension
-and a shorter one for a low-traffic dimension configure each independently.
+dimension 単位の上書きは `TAKOSUMI_SLA_WINDOW_SECONDS_<DIMENSION>` (大文字、
+ダッシュをアンダースコアに変換) で許可される。高ボリュームの dimension には 長い
+window、低トラフィックの dimension には短い window を設定したい operator
+は、それぞれ独立に設定する。
 
 ## Threshold and breach criterion
 
-Thresholds are **operator-supplied**. The kernel ships no built-in threshold; an
-installation that has not registered any threshold emits no breach events.
+閾値は **operator が供給する**。kernel に組み込みの閾値は無い。閾値を 1 つも
+登録していない installation は breach event を発行しない。
 
 `POST /api/internal/v1/sla/thresholds`
 
@@ -94,13 +83,13 @@ installation that has not registered any threshold emits no breach events.
   thresholds carry an additional `targetId` field.
 - `windowSeconds` overrides the default window for this threshold.
 
-Mutating endpoints `PATCH` and `DELETE` accept the same body shape keyed by
-`thresholdId`. The kernel persists thresholds in the audit partition consistent
-with [Storage Schema](/reference/storage-schema).
+変更系エンドポイント `PATCH` と `DELETE` は `thresholdId` を key にした同じ body
+形を受け付ける。kernel は閾値を [Storage Schema](/reference/storage-schema)
+に整合する audit partition に永続化する。
 
 ## State machine and hysteresis
 
-Each (dimension, scope, target) tuple carries a state machine:
+(dimension, scope, target) tuple ごとに state machine を持つ。
 
 ```text
 ok → warning → breached → recovering → ok
@@ -118,14 +107,14 @@ Transitions:
   `TAKOSUMI_SLA_RECOVERY_CONSECUTIVE_WINDOWS` (default `3`) consecutive
   sub-windows.
 
-The `warning` and `recovering` states implement hysteresis: a single off-window
-observation does not flap the dimension into or out of `breached`, which keeps
-audit volume and downstream paging predictable.
+`warning` と `recovering` state は hysteresis を実装する: 単一の window 外
+観測で dimension が `breached` に出入りすることはない。これにより audit 量と
+下流ページングが予測可能に保たれる。
 
 ## Breach attribution
 
-Every state-change event carries scope information so that downstream consumers
-can tell apart Space-, org-, and kernel-global breaches:
+すべての state-change event は scope 情報を運び、下流 consumer が Space / org /
+kernel-global の breach を見分けられるようにする。
 
 - `scope: space` — payload carries `spaceId`. Indicates a tenant- visible breach
   attributable to a single Space's traffic shape or to a per-Space resource
@@ -135,8 +124,8 @@ can tell apart Space-, org-, and kernel-global breaches:
 - `scope: kernel-global` — payload carries no tenant ID. Indicates an
   operator-side root cause (storage, network, runtime-agent).
 
-The same dimension may breach at multiple scopes simultaneously. State machines
-are independent per (dimension, scope, target).
+同じ dimension が同時に複数 scope で breach することはある。state machine は
+(dimension, scope, target) ごとに独立。
 
 ## Reporting surface
 
@@ -167,13 +156,13 @@ are independent per (dimension, scope, target).
 }
 ```
 
-Filtering accepts `dimension`, `scope`, `spaceId`, `orgId`, and `state` query
-parameters. The endpoint is read-mostly and never mutates state.
+filter は `dimension`、`scope`、`spaceId`、`orgId`、`state` の query parameter
+を受け付ける。エンドポイントは read-mostly で state を変更しない。
 
 ## Audit events
 
-State machine transitions emit closed-enum audit events (see
-[Audit Events](/reference/audit-events)):
+state machine 遷移は closed enum の audit event を発行する
+([Audit Events](/reference/audit-events) 参照)。
 
 - `sla-breach-detected` — emitted on `warning → breached`. Payload carries
   `thresholdId`, `dimension`, `scope`, `targetId`, `windowSeconds`,
@@ -186,15 +175,15 @@ State machine transitions emit closed-enum audit events (see
   — emitted on threshold mutation. Payload carries the threshold snapshot before
   and after.
 
-Severity mapping on the kernel audit envelope uses the current `AuditSeverity`
-enum: `sla-warning-raised`, `sla-breach-detected`, and `sla-recovering` are
-`warning`; `sla-recovered` and threshold mutation events are `info`. Operators
-escalate to paging through their downstream alerting layer.
+kernel audit envelope の severity マッピングは current の `AuditSeverity` enum
+を使う: `sla-warning-raised`、`sla-breach-detected`、`sla-recovering` は
+`warning`、`sla-recovered` と閾値変更 event は `info`。operator は下流 alerting
+層を通じてページングへエスカレートする。
 
 ## Storage
 
-SLA state persists as a dedicated record class consistent with
-[Storage Schema](/reference/storage-schema):
+SLA state は [Storage Schema](/reference/storage-schema) に整合する専用 record
+class として永続化される。
 
 | Field         | Type      | Required | Notes                                         |
 | ------------- | --------- | -------- | --------------------------------------------- |
@@ -207,19 +196,17 @@ SLA state persists as a dedicated record class consistent with
 | `observation` | number    | yes      | Most recent sub-window observation.           |
 | `thresholdId` | string    | yes      | Reference to the active threshold.            |
 
-Threshold records persist alongside SLAObservation records and follow the same
-retention as quota counters: read-mostly, outside the OperationJournal, retained
-until explicitly removed.
+閾値 record は SLAObservation record と並列に永続化され、quota カウンタと同じ
+保持: read-mostly、OperationJournal の外、明示削除まで保持。
 
 ## Operator boundary
 
-This reference defines the kernel-side primitive: the closed measurement set,
-the rolling-window evaluation, the state machine, the threshold registration
-API, and the audit shape. The **commercial SLA workflow** — service credit
-calculation in any currency, contract-specific carve-outs, scheduled-maintenance
-exclusions, public status page rendering, customer-facing incident write-ups,
-and post-incident communication templates — lives in operator distributions such
-as `takos-private/`. The kernel ships detection and audit, and stops there.
+本リファレンスは kernel 側 primitive を定義する: closed な計測集合、rolling
+window 評価、state machine、閾値登録 API、audit 形。**商用 SLA workflow** —
+任意通貨でのサービスクレジット計算、契約固有の例外、スケジュールメンテナンス
+の除外、公開ステータスページ描画、顧客向け incident 報告、事後コミュニケー
+ションテンプレート — は `takos-private/` のような operator distribution に住む。
+kernel は detection と audit を同梱してそこで止まる。
 
 ## Related architecture notes
 
@@ -229,3 +216,17 @@ as `takos-private/`. The kernel ships detection and audit, and stops there.
   apply pipeline that produces apply-latency observations.
 - `docs/reference/architecture/exposure-activation-model.md` — activation
   pipeline that produces activation-latency observations.
+
+## 関連ページ
+
+- [Telemetry / Metrics](/reference/telemetry-metrics)
+- [Audit Events](/reference/audit-events)
+- [Storage Schema](/reference/storage-schema)
+- [Readiness Probes](/reference/readiness-probes)
+- [Quota / Rate Limit](/reference/quota-rate-limit)
+- [Drift Detection](/reference/drift-detection)
+- [RevokeDebt](/reference/revoke-debt)
+- [Time / Clock Model](/reference/time-clock-model)
+- [Environment Variables](/reference/env-vars)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Closed Enums](/reference/closed-enums)

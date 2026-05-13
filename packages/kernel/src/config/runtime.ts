@@ -65,7 +65,6 @@ export class RuntimeConfigError extends Error {
 const DEFAULT_ENVIRONMENT = "local" satisfies RuntimeEnvironment;
 const DEFAULT_PROCESS_ROLE = "takosumi-api" satisfies PaaSProcessRole;
 export const PROCESS_ROLE_ENV_KEYS = [
-  "TAKOSUMI_PAAS_PROCESS_ROLE",
   "TAKOSUMI_PROCESS_ROLE",
 ] as const;
 
@@ -412,25 +411,6 @@ async function selectProcessRole(
   const values = await reader.allPlain(PROCESS_ROLE_ENV_KEYS);
   const raw = values[0];
   if (!raw) return { value: DEFAULT_PROCESS_ROLE, defaulted: true };
-
-  const normalizedValues = values.map((value) => ({
-    ...value,
-    normalized: normalizeToken(value.value),
-  }));
-  const canonical = normalizedValues[0];
-  const conflict = normalizedValues.find((value) =>
-    value.normalized !== canonical.normalized
-  );
-  if (conflict) {
-    diagnostics.push({
-      severity: "error",
-      code: "conflicting_process_role_env",
-      key: conflict.key,
-      message: `${conflict.key} conflicts with ${canonical.key}; set only ${
-        PROCESS_ROLE_ENV_KEYS[0]
-      } or use the same role value`,
-    });
-  }
 
   const normalized = normalizeToken(raw.value);
   if (isPaaSProcessRole(normalized)) {

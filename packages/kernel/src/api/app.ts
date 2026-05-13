@@ -652,8 +652,7 @@ function createRuntimeAgentRouteOptions(
 }
 
 function defaultInternalServiceSecret(): string | undefined {
-  return Deno.env.get("TAKOSUMI_INTERNAL_API_SECRET") ??
-    Deno.env.get("TAKOSUMI_INTERNAL_SERVICE_SECRET");
+  return Deno.env.get("TAKOSUMI_INTERNAL_API_SECRET");
 }
 
 function createDefaultReadinessProbes(): ReadinessRouteProbes {

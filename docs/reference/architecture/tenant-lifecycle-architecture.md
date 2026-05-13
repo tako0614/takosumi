@@ -1,36 +1,37 @@
 # Tenant Lifecycle Architecture
 
-This document records the architecture rationale for the v1 tenant lifecycle:
-how a Space is provisioned, how a trial Space differs from a paid Space, how a
-customer's data is exported, and how a Space is deleted. Wire-level shapes
-(request bodies, status fields, audit event payloads) live in the reference
-layer; this document explains the invariants the kernel keeps and the surfaces
-it intentionally leaves to operators.
+> このページでわかること: tenant lifecycle の設計とステート管理。
 
-## Tenant unit invariant
+本ドキュメントは、v1 の tenant lifecycle のアーキテクチャ根拠を記録する: Space
+の provisioning、trial Space と paid Space の違い、顧客データの export、Space の
+deletion。wire-level の shape (request body、status field、audit event payload)
+は reference 層にある。本ドキュメントは kernel が保つ invariant と、 意図的に
+operator に委ねる surface を説明する。
 
-The v1 tenant unit is `Space`. A customer is one Space inside one Organization.
-The reasoning is:
+## Tenant 単位の invariant
 
-- **`Space` is already the kernel's isolation primitive.** Namespace, secrets,
-  journal, observation, approvals, and activation are all Space-scoped
-  ([Space Model](./space-model.md)). Adding a parallel "tenant" concept on top
-  of `Space` would create two boundaries that the kernel must keep aligned.
-- **A larger "tenant" is allowed but operator-defined.** A customer that runs
-  `prod`, `staging`, and `dev` as separate Spaces under one Organization is
-  fully expressible. The kernel only enforces the per-Space invariants; the
-  customer-shaped grouping is a property of the Organization and of operator
-  policy, not of kernel state.
-- **`1 Space = N tenants` is rejected.** Two contractual boundaries inside one
-  Space would force the kernel to split per-Space state at apply time. The
-  kernel never sees that split; the invariant stops at "one Space, one tenant."
+v1 の tenant 単位は `Space` である。顧客は 1 つの Organization の中の 1 つの
+Space である。理由:
 
-A "tenant lifecycle" therefore means a `Space` lifecycle.
+- **`Space` はすでに kernel の isolation primitive である。** namespace、
+  secret、journal、observation、approval、activation はすべて Space scope で
+  ある ([Space Model](./space-model.md))。`Space` の上に並列の "tenant" 概念を
+  追加すると、kernel が揃え続けねばならない境界が 2 つになる。
+- **より大きな "tenant" は許可するが operator 定義である。** 顧客が 1 つの
+  Organization 下に `prod` / `staging` / `dev` を別 Space として運用するのは
+  完全に表現可能。kernel は per-Space invariant のみを強制する。顧客形のグルー
+  プ化は Organization と operator policy の性質であって kernel state ではない。
+- **`1 Space = N tenants` は却下。** 1 つの Space の中に 2
+  つの契約境界を持つと、 kernel は apply 時に per-Space state
+  を分割する必要が生じる。kernel はその 分割を見ない。invariant は「1 Space = 1
+  tenant」で止まる。
 
-## Why provisioning is a closed seven-stage sequence
+したがって、「tenant lifecycle」は `Space` lifecycle を意味する。
 
-Tenant provisioning is decomposed into seven ordered stages, each idempotent and
-journaled:
+## provisioning が closed な 7 段 sequence である理由
+
+tenant provisioning は順序付き 7 ステージに分解され、各ステージは idempotent で
+journal される。
 
 ```text
 1. namespace-partition-allocate
@@ -42,130 +43,121 @@ journaled:
 7. observation-set-init
 ```
 
-Architecture rationale:
+アーキテクチャ根拠:
 
-- **Each stage targets one already-existing kernel substrate.** Step 1 belongs
-  to the storage schema, step 2 to the secret partition, step 3 to the quota
-  dimension table, step 4 to catalog adoption, and so on. Provisioning is the
-  fan-in point that walks every Space-scoped substrate exactly once. This avoids
-  inventing a new "tenant table" that lives parallel to the existing
-  Space-scoped state.
-- **Idempotent + journaled means recovery is free.** A retry resumes from the
-  first uncompleted stage. A power loss between stages does not produce a
-  half-Space; the next call reads the journaled completion record and continues.
-- **Partial failure is not auto-cleaned.** If a stage fails permanently, the
-  kernel rolls back completed stages in reverse order. If rollback itself fails,
-  the Space is held in `operator-action-required` instead of being silently
-  destroyed. The kernel does not assume that abandoning a half-built Space is
-  safer than holding it for operator inspection: a partial provisioning may
-  still hold customer data (audit chain genesis, secret partition).
-- **`Idempotency-Key` is required.** This stops a retry on the client side from
-  minting a second Space with a different id under the same intent.
+- **各ステージは既存の 1 つの kernel substrate を対象とする。** Step 1 は
+  storage schema、Step 2 は secret partition、Step 3 は quota dimension table、
+  Step 4 は catalog adoption、…。provisioning はすべての Space scope substrate
+  を 1 回ずつ歩く fan-in 点である。これにより、既存 Space scope state と並列に
+  存在する新規 "tenant table" を発明せずに済む。
+- **idempotent + journal は recovery を無料にする。** retry は未完了の最初の
+  ステージから再開する。ステージ間の電源断は半端な Space を作らず、次の呼び出し
+  が journal の完了 record を読んで続行する。
+- **partial failure は自動 cleanup されない。** ステージが永続失敗した場合、
+  kernel は完了済みステージを逆順で rollback する。rollback 自身が失敗したら、
+  Space は黙って破壊されるのではなく `operator-action-required` で保持される。
+  kernel は「半端な Space を放置する方が安全」とは仮定しない。partial
+  provisioning でも顧客データ (audit chain genesis、secret partition) を保持
+  しうるからである。
+- **`Idempotency-Key` は必須。** これは client 側 retry が同じ intent 下で別の
+  id で 2 番目の Space を mint することを防ぐ。
 
-The decomposition is closed in v1. A new stage requires a `CONVENTIONS.md` §6
-RFC, because adding a stage changes the failure surface every operator already
-accounts for.
+この分解は v1 で closed である。新規ステージを追加するには `CONVENTIONS.md` §6
+RFC を要する。ステージを追加すると、operator が既に考慮している failure surface
+が変わるためである。
 
-## Why trial Spaces are a separate lifecycle
+## trial Space が別 lifecycle である理由
 
-A trial Space is not just "a Space with a low quota tier." It uses a separate
-lifecycle state machine: `active-trial`, `expiring-soon`, `frozen`,
-`cleaned-up`, `converted`. The reasoning is:
+trial Space は「単に低い quota tier を持つ Space」ではない。別の lifecycle state
+machine を使う: `active-trial`、`expiring-soon`、`frozen`、`cleaned-up`、
+`converted`。理由:
 
-- **A commercial PaaS treats trials differently for incident scoping.** When
-  operators triage an outage, they need to slice impact by paid customers vs.
-  trial customers. Treating both through one lifecycle would either dilute
-  paid-customer signals with trial noise or hold trial Spaces under paid-tier
-  escalation paths.
-- **Trials have an end date by construction.** `trialExpiresAt` is required for
-  a trial Space. The state machine encodes the four observable outcomes — still
-  active, approaching expiry, expired into a read-only grace, cleaned up —
-  without operators having to invent a side-table.
-- **Conversion preserves audit continuity.** A trial-to-paid conversion does not
-  mint a new Space id. The audit chain, journal, observation set, and namespace
-  registry stay attached to the same `space:<id>`. A customer that converts
-  during a trial loses no data and produces no migration boundary.
-- **Frozen grace is a kernel-side property.** The 24-hour read-only window after
-  `trialExpiresAt` is not something operators implement on top of the kernel; it
-  is part of the Space's own state machine. This stops two operators from
-  disagreeing on what "expired" means.
+- **商用 PaaS は incident scoping のために trial を別扱いする。** operator は
+  outage の triage で paid 顧客と trial 顧客のインパクトを切り分ける必要がある。
+  両方を 1 つの lifecycle に通すと、paid 顧客の signal が trial ノイズで薄まる
+  か、trial Space が paid 級のエスカレーション path に置かれる。
+- **trial は構造上終了日を持つ。** trial Space では `trialExpiresAt` が必須。
+  state machine は 4 つの観測可能な転帰 — まだアクティブ、期限接近、期限切れで
+  読取専用 grace、cleanup 済み — を、operator が脇テーブルを発明せずに表現
+  できる形でエンコードする。
+- **conversion は audit 連続性を保つ。** trial から paid への conversion は
+  新しい Space id を mint しない。audit chain、journal、observation set、
+  namespace registry は同じ `space:<id>` に attached されたまま。trial 中に
+  conversion する顧客はデータを失わず、migration 境界も生じない。
+- **frozen grace は kernel 側の性質。** `trialExpiresAt` 後の 24 時間 read-only
+  window は operator が kernel の上で実装するものではなく、Space 自身の state
+  machine の一部。これにより、2 つの operator が「期限切れ」の意味で食い違わ
+  ない。
 
-`active-trial` and `converted` are the only customer-visible long-running
-states; `frozen` and `cleaned-up` are operator-visible terminals. The
-operator-driven extension path is explicit
-(`POST /api/internal/v1/spaces/:id/trial/extend`) so that "extend a trial" is a
-first-class action, not an ad-hoc field write.
+`active-trial` と `converted` だけが顧客可視の長時間 state である。`frozen` と
+`cleaned-up` は operator 可視の終端。operator 駆動の延長 path は明示的
+(`POST /api/internal/v1/spaces/:id/trial/extend`) であり、「trial 延長」は
+ad-hoc な field 書き込みではなく first-class アクションとなる。
 
-## Data export and deletion: architecture constraints
+## data export と deletion: アーキテクチャ制約
 
-Customers can export their Space data and delete their Space. The kernel exposes
-the primitives that make these compliant with right-to-erasure regimes (GDPR,
-regional equivalents). The constraints:
+顧客は Space のデータを export し、Space を delete できる。kernel はこれらを
+right-to-erasure 規制 (GDPR、地域同等品) に準拠させる primitive を公開する。
+制約:
 
-- **Two-phase delete (soft → hard).** Soft-delete is reversible inside a bounded
-  window; hard-delete is terminal. Customer accidents and operator accidents
-  both have a recovery path in the soft phase. Once hard-delete completes, the
-  Space cannot be recovered, and the audit retention window starts.
-- **Audit chain hash is preserved through redaction.** A hard-delete does not
-  destroy the audit chain. Field-level redaction zeroes out PII while keeping
-  the hash chain intact, so that downstream verifiers (compliance tools, legal
-  review) still see an unbroken chain. A break in the chain would itself be a
-  compliance signal that needs investigation; redaction must not produce that
-  signal.
-- **Retention regimes are kernel-aware.** `complianceRegime` on the Organization
-  decides how long the redacted audit chain stays. The kernel does not pick the
-  regime; the operator picks it at Organization create. The kernel guarantees
-  only that whichever regime is set is enforced.
-- **Export is a logical format, not a database dump.** A `data-portability`
-  export produces a schema-versioned bundle that another Takosumi instance could
-  import. This is the v1 data-portability contract. Future schema-breaking
-  changes will land through versioned export; today's export will still be
-  readable then.
-- **Customer self-service deletion is in scope; admin escalation is not.** The
-  kernel exposes the export and delete endpoints. The customer-facing UI, the
-  legal-hold escalation, and the support-side cancel-deletion workflow live
-  outside Takosumi.
+- **2-phase delete (soft → hard)。** soft-delete は範囲付き window 内で
+  reversible、hard-delete は終端。顧客事故と operator 事故の両方が soft phase
+  で復旧 path を持つ。hard-delete が完了したら Space は復旧できず、audit
+  retention window が始まる。
+- **redaction を通じて audit chain hash は保たれる。** hard-delete は audit
+  chain を破壊しない。field-level の redaction が PII をゼロ化しつつ hash chain
+  整合性を保つので、下流 verifier (compliance tool、legal review) は壊れていない
+  chain を見続けられる。chain の断絶自身が調査を要する compliance signal で
+  あり、redaction はその signal を出してはならない。
+- **retention regime は kernel-aware。** Organization 上の `complianceRegime` が
+  redacted audit chain の保持期間を決める。kernel は regime を選ばない。
+  operator が Organization 作成時に選ぶ。kernel はセットされた regime が
+  強制されることのみを保証する。
+- **export は database dump ではなく論理フォーマット。** `data-portability`
+  export は別の Takosumi installation が import できる schema バージョン付き
+  バンドルを生成する。これが v1 のデータ可搬性 contract。将来の schema 破壊
+  変更はバージョン付き export を通る。今日の export は将来も読める。
+- **顧客セルフサービス削除は scope 内、admin エスカレーションは scope 外。**
+  kernel は export / delete エンドポイントを公開する。顧客向け UI、legal-hold
+  エスカレーション、サポート側の削除取消ワークフローは Takosumi の外。
 
-## Tenant data portability rationale
+## tenant data portability の根拠
 
-A logical export format exists so that:
+論理 export フォーマットが存在するのは次のため:
 
-- a customer can leave one Takosumi installation and rejoin another without
-  losing audit history;
-- an operator can move a Space across kernels for capacity or compliance
-  reasons;
-- a future major migration has a stable input format that does not require
-  database-level translation.
+- 顧客が 1 つの Takosumi installation を離れて別の installation に audit history
+  を失わずに再加入できるように。
+- operator が容量や compliance 上の理由で Space を kernel 間で移動できるように。
+- 将来の major migration が、database レベルの翻訳を要しない安定入力形式を持つ
+  ように。
 
-The export is **not** a backup substitute. Backups are for kernel-side recovery
-and follow [Backup and Restore](../backup-restore.md). Exports are the
-customer-facing portability surface and are independent of operator backup
-policy.
+export は backup の代替では **ない**。Backup は kernel 側の recovery 用で、
+[Backup and Restore](../backup-restore.md) に従う。Export は顧客向け可搬性
+surface で、operator backup policy から独立している。
 
-## Boundary
+## 境界
 
-The kernel ships:
+kernel が同梱するもの:
 
-- the seven-stage provisioning state machine and its idempotency / rollback
-  rules;
-- the trial Space attribute set and the five-state lifecycle, including frozen
-  grace and operator-driven extension;
-- the soft-delete / hard-delete two-phase deletion API and the field-level
-  redaction that keeps audit hashes intact;
-- the four export modes (`full`, `manifest-only`, `audit-only`,
-  `data-portability`) and their schema-versioned format.
+- 7 ステージ provisioning state machine と idempotency / rollback ルール。
+- trial Space 属性集合と 5-state lifecycle (frozen grace、operator 駆動延長を
+  含む)。
+- soft-delete / hard-delete の 2-phase deletion API と、audit hash を保つ
+  field-level redaction。
+- 4 つの export モード (`full`、`manifest-only`、`audit-only`、
+  `data-portability`) と、その schema バージョン付きフォーマット。
 
-The kernel does not ship:
+kernel が同梱しないもの:
 
-- the customer-facing signup form, the payment flow, the TOS acceptance UI;
-- the customer-facing delete-my-account UI or the cancel-deletion workflow;
-- admin escalation paths, legal-hold orchestration, or the regime-selection
-  wizard;
-- email templates, in-app banners, or the trial-conversion marketing surface.
+- 顧客向けサインアップフォーム、決済フロー、TOS 同意 UI。
+- 顧客向けアカウント削除 UI や 削除取消ワークフロー。
+- admin エスカレーション path、legal-hold オーケストレーション、regime 選択
+  ウィザード。
+- メールテンプレート、in-app バナー、trial conversion マーケティング surface。
 
-These compose on top of the kernel primitives but are operator concerns.
+これらは kernel primitive の上に組み立てられるが operator の関心事である。
 
-## Related reference docs
+## 関連 reference ドキュメント
 
 - [Tenant Provisioning](../tenant-provisioning.md)
 - [Trial Spaces](../trial-spaces.md)
@@ -174,7 +166,7 @@ These compose on top of the kernel primitives but are operator concerns.
 - [Storage Schema](../storage-schema.md)
 - [Backup and Restore](../backup-restore.md)
 
-## Cross-references
+## クロスリファレンス
 
 - [Space Model](./space-model.md)
 - [Operator Boundaries](./operator-boundaries.md)

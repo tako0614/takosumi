@@ -1,27 +1,20 @@
 # Support Impersonation
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Actor / Organization Model](/reference/actor-organization-model),
-> [Audit Events](/reference/audit-events),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Storage Schema](/reference/storage-schema),
-> [Incident Model](/reference/incident-model),
-> [Resource IDs](/reference/resource-ids)
+> このページでわかること: サポート用 impersonation の仕組みと制約。
 
-This reference defines the v1 authentication model for support-staff Actors that
-read or write into a customer Space on behalf of the operator's support
-function. It pins the support-staff actor type, the impersonation grant and
-session records, the approval flow that lets a customer admin authorize the
-grant, the read-only and read-write scope rules, the session TTL bounds, the
-audit primitives, and the operator-only API surface. Concrete support
-dashboards, ticket integration, screen-sharing tools, and customer-facing
-approval UI are out of scope for the kernel.
+本リファレンスは、operator の support 機能を代行して顧客 Space に読み書きする
+support-staff Actor の v1 認証モデルを定義する。support-staff actor 型、
+impersonation grant と session record、顧客 admin が grant を承認するための
+承認フロー、read-only / read-write スコープ規則、session TTL 上限、audit
+primitive、operator 専用 API surface を固定する。具体的なサポートダッシュ
+ボード、チケット連携、画面共有ツール、顧客向け承認 UI は kernel の scope 外
+である。
 
 ## Support-staff actor
 
-The `support-staff` actor type is part of the closed v1 actor type enum (see
-[Actor / Organization Model](/reference/actor-organization-model#actor-types)).
-Its identity form is:
+`support-staff` actor 型は closed な v1 actor 型 enum の一部である
+([Actor / Organization Model](/reference/actor-organization-model#actor-types)
+参照)。identity 形式は次の通り。
 
 ```text
 actor:support-staff/<id>
@@ -39,14 +32,14 @@ Properties:
 - A support-staff Actor lifecycle is operator-controlled: creating, suspending,
   and deleting them lives on the operator side.
 
-The kernel rejects a public-deploy-bearer or runtime-agent enrollment that would
-mint a support-staff Actor. The minting path is operator internal-control-plane
-only.
+kernel は support-staff Actor を mint しようとする public deploy bearer や
+runtime-agent enrollment を reject する。発行 path は operator の内部 control
+plane のみである。
 
 ## Impersonation grant
 
-An impersonation grant is the authorization artifact that allows a support-staff
-Actor to open sessions against a Space.
+impersonation grant は、support-staff Actor が Space に対して session を open
+できるようにする認可 artifact である。
 
 ```yaml
 SupportImpersonationGrant:
@@ -120,14 +113,13 @@ terminal grant back to an active state. A new grant must be minted.
 4. Rejection moves the grant to `rejected` with `rejectedByActorId` and
    `rejectedAt`.
 
-A `read-write` grant requires the customer admin's explicit consent at approval
-time: the approval payload carries an explicit `acceptScope: "read-write"`
-field. The kernel rejects a `read-write` grant if the approval payload only
-carries `read-only`.
+`read-write` grant は承認時に顧客 admin の明示同意を要求する: 承認 payload は
+明示的な `acceptScope: "read-write"` field を運ぶ。承認 payload が `read-only`
+しか運ばない場合、kernel は `read-write` grant を reject する。
 
 ## Impersonation session
 
-A session is the runtime token issued under an approved grant.
+session は承認された grant の下で発行される runtime token である。
 
 ```yaml
 SupportImpersonationSession:
@@ -169,7 +161,7 @@ Session rules:
 
 ## Rate limit and active-session caps
 
-The kernel enforces caps to prevent over-broad impersonation:
+kernel は過度に広い impersonation を防ぐため、上限を強制する。
 
 - Per Space, a maximum number of concurrently `approved` grants
   (operator-tunable, default 3). Excess grant requests are rejected.
@@ -178,16 +170,16 @@ The kernel enforces caps to prevent over-broad impersonation:
 - Per support-staff Actor, a maximum number of concurrent active sessions across
   all Spaces (operator-tunable, default 5).
 
-Cap exhaustion emits a `severity: warning` audit signal. Repeated cap exhaustion
-within the operator-tunable window is itself a trigger family for the
-[Incident Model](/reference/incident-model) auto-detection path: a sustained
-burst of rejected grant requests or session opens auto-mints an incident under
-the `support-impersonation-burst` family.
+上限到達は `severity: warning` の audit signal を発行する。operator が tune
+できる window 内での上限到達の繰り返しは
+[Incident Model](/reference/incident-model) 自動検知 path の trigger family と
+なる: 拒否された grant 要求や session open のバーストが持続すると、
+`support-impersonation-burst` family の下で incident が自動 mint される。
 
 ## Audit events
 
-The v1 support-impersonation audit event taxonomy is closed and joins the
-[Audit Events](/reference/audit-events) closed enum:
+v1 support-impersonation の audit event 分類は closed で、
+[Audit Events](/reference/audit-events) の closed enum に加わる。
 
 - `support-impersonation-requested`
 - `support-impersonation-approved`
@@ -198,17 +190,17 @@ The v1 support-impersonation audit event taxonomy is closed and joins the
 - `support-impersonation-session-ended`
 - `support-impersonation-write-action-recorded`
 
-Each event carries the standard envelope plus a payload recording
-`{grantId, sessionId, supportActorId, spaceId, scope, reason,
-endReason}` where
-applicable. The audit chain is permanent: terminal grants and sessions remain in
-the audit store under the Space's compliance regime (see
-[Audit Events](/reference/audit-events)). Customer admins read these events
-through the same audit query the kernel exposes for any Space-scoped event.
+各 event は標準 envelope に
+`{grantId, sessionId, supportActorId, spaceId, scope, reason, endReason}` を
+記録した payload を持つ (該当箇所のみ)。audit chain は永続的: 終端の grant と
+session は Space の compliance regime ([Audit Events](/reference/audit-events)
+参照) のもと audit store に残る。 顧客 admin はこれらの event を、kernel が
+Space scope の任意の event 向けに 公開する同じ audit クエリで読み取る。
 
 ## Operator-only endpoints
 
-plane, gated by HMAC (see [Kernel HTTP API](/reference/kernel-http-api)):
+operator は HMAC で gate された内部 control plane を通じて操作する
+([Kernel HTTP API](/reference/kernel-http-api) 参照)。
 
 - `POST /api/internal/v1/support/impersonations` — operator creates a grant.
   Body: `supportActorId`, `spaceId`, `scope`, `reason`, optional `ticketRef`,
@@ -219,8 +211,8 @@ plane, gated by HMAC (see [Kernel HTTP API](/reference/kernel-http-api)):
 - `GET /api/internal/v1/support/impersonations` — list with filters on `state`,
   `spaceId`, `supportActorId`, time window.
 
-A customer-self-service plane carries the approval and revoke endpoints for the
-customer admin:
+customer self-service plane は、顧客 admin 向けの approval / revoke エンド
+ポイントを公開する。
 
 - `POST /v1/impersonations/:id/accept` — customer admin approves. Body carries
   `acceptScope` to confirm the requested scope.
@@ -228,15 +220,14 @@ customer admin:
 - `DELETE /v1/impersonations/:id` — customer admin revokes an approved grant
   (terminates every session it owns).
 
-The customer-self-service plane uses the same RBAC enforcement as other
-Space-admin operations. The kernel rejects any of the above from an Actor that
-does not hold `space-admin` on the target Organization at the moment of the
-call.
+customer self-service plane は他の Space admin 操作と同じ RBAC 強制を使う。
+kernel は呼び出し時点で target Organization に対して `space-admin` を保持して
+いない Actor からの上記すべてを reject する。
 
 ## Storage schema
 
-Support impersonation extends [Storage Schema](/reference/storage-schema) with
-two record classes:
+support impersonation は [Storage Schema](/reference/storage-schema) を 2 つの
+record class で拡張する。
 
 | Record                        | Indexed by                                                                 | Persistence                              |
 | ----------------------------- | -------------------------------------------------------------------------- | ---------------------------------------- |
@@ -245,15 +236,14 @@ two record classes:
 
 ## Scope boundary
 
-The Takosumi kernel ships the support-staff actor type, the grant and session
-records, the approval flow, the scope and TTL enforcement, the rate limits, the
-audit chain, and the operator and self-service endpoints listed above. Customer
-admin notification UI, support-staff dashboard, ticket-tracker integration,
-screen-sharing or remote-control tooling, support-tenant identity provisioning,
-and read-only redacted-view rendering are **outside Takosumi's scope** and are
-implemented by the operator's outer stack (for example, `takos-private/` or any
-other PaaS-provider front end). The kernel exposes the auth model and audit
-primitives that those outer surfaces compose against.
+Takosumi kernel は support-staff actor 型、grant と session の record、approval
+フロー、scope / TTL 強制、rate limit、audit chain、上記の operator /
+self-service エンドポイントを同梱する。顧客 admin 通知 UI、support-staff
+ダッシュボード、 チケットトラッカー連携、画面共有 / リモート制御ツール、support
+tenant の identity provisioning、読取専用 redacted view の描画は **Takosumi の
+scope 外** であり、operator の外側スタック (例: `takos-private/` や別の PaaS
+provider front end) が実装する。kernel はそれら外側 surface が組み立てに使う
+auth モデルと audit primitive を公開する。
 
 ## Related architecture notes
 
@@ -263,3 +253,12 @@ primitives that those outer surfaces compose against.
   semantics referenced by the read-write consent rule.
 - `docs/reference/architecture/space-model.md` — Space-admin role binding
   referenced by the customer-self-service approval flow.
+
+## 関連ページ
+
+- [Actor / Organization Model](/reference/actor-organization-model)
+- [Audit Events](/reference/audit-events)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Storage Schema](/reference/storage-schema)
+- [Incident Model](/reference/incident-model)
+- [Resource IDs](/reference/resource-ids)

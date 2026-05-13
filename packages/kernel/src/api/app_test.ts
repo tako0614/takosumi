@@ -287,33 +287,9 @@ Deno.test("createApiApp mounts signed internal routes and leaves old aliases unm
   assert.equal(removedDeployApply.status, 404);
 });
 
-Deno.test("createApiApp reads TAKOSUMI_INTERNAL_API_SECRET before the legacy alias", async () => {
+Deno.test("createApiApp uses TAKOSUMI_INTERNAL_API_SECRET for internal routes", async () => {
   await withInternalSecretEnv(
-    { api: undefined, legacy: "legacy-route-secret" },
-    async () => {
-      const app = await createApiApp();
-      const body = JSON.stringify({
-        spaceId: "space_legacy_secret",
-        name: "Legacy Secret",
-      });
-
-      const created = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces, {
-        method: "POST",
-        headers: await signedHeaders({
-          secret: "legacy-route-secret",
-          method: "POST",
-          path: TAKOSUMI_INTERNAL_PATHS.spaces,
-          body,
-          actor: internalRouteActor("req_legacy_secret"),
-        }),
-        body,
-      });
-      assert.equal(created.status, 201);
-    },
-  );
-
-  await withInternalSecretEnv(
-    { api: "api-route-secret", legacy: "legacy-route-secret" },
+    { api: "api-route-secret" },
     async () => {
       const app = await createApiApp();
       const body = JSON.stringify({
@@ -334,19 +310,11 @@ Deno.test("createApiApp reads TAKOSUMI_INTERNAL_API_SECRET before the legacy ali
       });
       assert.equal(created.status, 201);
 
-      const wrongSecretBody = JSON.stringify({ spaceId: "space_wrong_secret" });
-      const legacySigned = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces, {
+      const unsigned = await app.request(TAKOSUMI_INTERNAL_PATHS.spaces, {
         method: "POST",
-        headers: await signedHeaders({
-          secret: "legacy-route-secret",
-          method: "POST",
-          path: TAKOSUMI_INTERNAL_PATHS.spaces,
-          body: wrongSecretBody,
-          actor: internalRouteActor("req_legacy_rejected"),
-        }),
-        body: wrongSecretBody,
+        body: JSON.stringify({ spaceId: "space_unsigned" }),
       });
-      assert.equal(legacySigned.status, 401);
+      assert.equal(unsigned.status, 401);
     },
   );
 });
@@ -892,18 +860,15 @@ function internalRouteActor(requestId: string): TakosumiActorContext {
 }
 
 async function withInternalSecretEnv(
-  values: { readonly api?: string; readonly legacy?: string },
+  values: { readonly api?: string },
   fn: () => Promise<void>,
 ): Promise<void> {
   const previousApi = Deno.env.get("TAKOSUMI_INTERNAL_API_SECRET");
-  const previousLegacy = Deno.env.get("TAKOSUMI_INTERNAL_SERVICE_SECRET");
   try {
     setOrDeleteEnv("TAKOSUMI_INTERNAL_API_SECRET", values.api);
-    setOrDeleteEnv("TAKOSUMI_INTERNAL_SERVICE_SECRET", values.legacy);
     await fn();
   } finally {
     setOrDeleteEnv("TAKOSUMI_INTERNAL_API_SECRET", previousApi);
-    setOrDeleteEnv("TAKOSUMI_INTERNAL_SERVICE_SECRET", previousLegacy);
   }
 }
 

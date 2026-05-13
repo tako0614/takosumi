@@ -1,5 +1,7 @@
 # Concepts — Shape × Provider
 
+> このページでわかること: Shape と Provider のモデルを 5 分で理解する。
+
 Takosumi の kernel manifest は Shape と Provider の語彙で構成されます。
 ここでは新しい operator が **5 分で全体像を掴む** ためのモデル図を示します。
 
@@ -98,10 +100,9 @@ Provider は `provider:` field で **manifest が陽に指定** します。同 
 
 ## Template
 
-`template` は retired authoring shorthand です。current kernel
-`POST /v1/deployments` は top-level `template` を受けず、展開済みの
-`resources[]` だけを受けます。template expansion が必要な場合は
-installer/compiler layer で kernel request 前に実行します。
+kernel `POST /v1/deployments` は展開済みの `resources[]` だけを受け取ります。
+template expansion は installer/compiler layer で kernel request
+前に実行します。
 
 ---
 
@@ -186,7 +187,7 @@ AWS / GCP / Cloudflare / k8s / OS
 | manifest の YAML を書く                            | [Manifest (Shape Model)](/manifest)               |
 | Shape の spec / outputs を確認する                 | [Shape Catalog](/reference/shapes)                |
 | 20 default + 1 opt-in provider の対応 cloud と用途 | [Provider Plugins](/reference/providers)          |
-| retired template shorthand の背景                  | [Templates](/reference/templates)                 |
+| template shorthand の仕様                          | [Templates](/reference/templates)                 |
 | `takosumi` CLI コマンド                            | [CLI Reference](/reference/cli)                   |
 | `POST /v1/deployments` 等の HTTP API               | [Kernel HTTP API](/reference/kernel-http-api)     |
 | kernel ↔ agent envelope                            | [Runtime-Agent API](/reference/runtime-agent-api) |

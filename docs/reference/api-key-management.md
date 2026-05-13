@@ -1,15 +1,16 @@
 # API Key Management
 
-This page is retained as a link-compatible migration stub.
+> このページでわかること: API key の発行・ローテーション・失効の仕様。
 
-End-user, account, installation, and dashboard API keys belong to the operator's
-account plane (reference implementation: Takosumi Accounts in
-`takosumi-cloud/`). The takosumi kernel only accepts operator-configured deploy
-credentials for its public deploy/artifact routes and internal runtime-agent
-credentials for control-plane RPC.
+end-user / account / installation / dashboard 向けの API key は operator の
+account plane が所有する (reference 実装: `takosumi-cloud/` の Takosumi
+Accounts)。 takosumi kernel が受け付けるのは次の 2 種類のみ:
 
-References:
+- public な deploy / artifact route 向けに operator が設定する deploy credential
+- control-plane RPC 用の internal runtime-agent credential
 
-- `takosumi/docs/reference/env-vars.md`
-- `takosumi/docs/reference/kernel-http-api.md`
+## 関連ページ
+
+- [Environment Variables](/reference/env-vars)
+- [Kernel HTTP API](/reference/kernel-http-api)
 - `takosumi-cloud/docs/accounts-service.md`

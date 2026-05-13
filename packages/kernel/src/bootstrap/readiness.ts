@@ -64,10 +64,7 @@ export function createRoleReadinessProbes(
       });
       if (requiresInternalApiSecret(options.role)) {
         await recordCheck(checks, failures, "internalApiSecret", () => {
-          if (
-            !options.runtimeEnv.TAKOSUMI_INTERNAL_API_SECRET &&
-            !options.runtimeEnv.TAKOSUMI_INTERNAL_SERVICE_SECRET
-          ) {
+          if (!options.runtimeEnv.TAKOSUMI_INTERNAL_API_SECRET) {
             throw new Error("TAKOSUMI_INTERNAL_API_SECRET is required");
           }
           return "configured";

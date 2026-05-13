@@ -45,8 +45,8 @@ takosumi/
 - **Image-first model**: shape spec の `image` / `bundle` / `unit` は単なる URI
   文字列。 artifact 取得は provider 側の責務 (K8s が image pull するのと同じ)。
   manifest spec に `compute.build.fromWorkflow` 等の build
-  概念は今後持ち込まない (既存 `validateWorkflowBuild` は deprecation
-  経由で削除予定)。
+  概念は今後持ち込まない。`validateWorkflowBuild` / `compute.build.fromWorkflow`
+  系の pre-GA workflow path は hard rejection 済みで、再導入しない。
 - **Takos 中立**: takos-git / Takos 固有 service ID への直接依存は kernel core
   から完全に除去済み。
 - **Shape catalog は Takosumi 所有**: 新 shape は RFC ベース (`CONVENTIONS.md`
@@ -136,5 +136,6 @@ takosumi deploy ./manifest.yml --remote https://kernel.example.com --token $T
   で固定。
 - workflow / git 連携 / build pipeline / cron / hook 関連の change は本 repo
   ではなく `takosumi-git` 側で行う。本 repo に該当機能を追加してはいけない。
-  既存 `compute.build.fromWorkflow` 等の deprecated path も新 client は
-  使わず、`takosumi-git` 経由で manifest を生成する。
+  `compute.build.fromWorkflow` 等の retired path は新 client だけでなく current
+  surface 全体で hard rejection とし、`takosumi-git` 経由で manifest
+  を生成する。

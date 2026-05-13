@@ -42,8 +42,8 @@ const REQUIRED_SPEC_KEYS = [
   "kernel-http-api-v1",
   "deploy-public-api-v1",
   "takosumi-jsr-packages",
-  "takosumi-git-workflow-ref-v0",
-  "takosumi-git-artifact-uri-v0",
+  "takosumi-git-workflow-ref-v1",
+  "takosumi-git-artifact-uri-v1",
 ];
 
 Deno.test("public spec source map covers required public surfaces", async () => {

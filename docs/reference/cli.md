@@ -1,116 +1,107 @@
 # CLI Reference
 
-> Stability: stable Audience: operator See also:
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Environment Variables](/reference/env-vars),
-> [Migration & Upgrade](/reference/migration-upgrade)
+> このページでわかること: Takosumi CLI のコマンド一覧とオプション。
 
-`takosumi` is the command-line companion to the Takosumi PaaS kernel. It authors
-and submits Manifests, manages content-addressed DataAssets, operates the
-runtime-agent, and runs the kernel server itself. The CLI is not the semantic
-authority for any of these operations — every authoritative decision
-(resolution, planning, journaling, activation) is made by the kernel inside the
-public deploy Space selected for the deploy bearer, or by the internal
-control-plane Space context for operator-only routes.
+`takosumi` は Takosumi PaaS kernel に対応する CLI です。 Manifest の作成・送
+信、 content-addressed DataAsset の管理、 runtime-agent の操作、 kernel server
+の起動を行います。 CLI 自体は decision authority ではなく、 resolution /
+planning / journaling / activation の権威ある判断は kernel が deploy bearer
+に対応する public deploy Space、 または operator routes 向けの control-plane
+Space context で行います。
 
-## Modes
+## モード
 
-`takosumi` runs in two modes:
+`takosumi` は 2 モードで動作します。
 
-| Mode     | Trigger                                         | State                                      | Use cases                                         |
-| -------- | ----------------------------------------------- | ------------------------------------------ | ------------------------------------------------- |
-| `local`  | no remote URL is resolved                       | in-process kernel; ephemeral; lost on exit | authoring, single-host experiments, test fixtures |
-| `remote` | a remote URL is resolved (flag, env, or config) | persisted by the remote kernel             | shared development, staging, production           |
+| Mode     | Trigger                                            | State                                          | 用途                                     |
+| -------- | -------------------------------------------------- | ---------------------------------------------- | ---------------------------------------- |
+| `local`  | remote URL が resolve されない                     | in-process kernel、 ephemeral、 終了時に消える | 著者作業、 単一ホスト実験、 test fixture |
+| `remote` | remote URL が resolve される (flag / env / config) | remote kernel が persist                       | 共有開発、 staging、 production          |
 
-Local mode does not maintain Space state; resolution happens against the bundled
-shape / provider registry inside the same process. Remote mode talks to a
-Takosumi kernel HTTP server, which performs Space-scoped resolution, planning,
-and journaling per the [WAL Stages](/reference/wal-stages) reference.
+local mode は Space 状態を保持せず、 同一プロセス内 bundle の shape / provider
+registry に対して resolution します。 remote mode は Takosumi kernel HTTP server
+と通信し、 Space scope の resolution / planning / journaling を
+[WAL Stages](/reference/wal-stages) に従って実行します。
 
-## Installation
+## インストール
 
 ```bash
 deno install -gA -n takosumi jsr:@takos/takosumi-cli
 takosumi version
 ```
 
-Deno 2.x is the supported runtime. The CLI has no kernel-side or
-runtime-agent-side install dependency: a CLI host can run without ever hosting a
-kernel.
+サポート runtime は Deno 2.x。 CLI 自体は kernel / runtime-agent の install
+を必要としないため、 CLI host だけで動かせます。
 
-## Authentication
+## 認証
 
-Remote-mode commands authenticate to the kernel with a bearer token. The token
-granted to the CLI is the operator-issued `TAKOSUMI_DEPLOY_TOKEN`, which scopes
-deploy and DataAsset endpoints. Runtime-Agent subcommands use a separate bearer
-(`TAKOSUMI_AGENT_TOKEN`) scoped to the runtime-agent service.
+remote mode の command は bearer token で kernel に対して認証します。 CLI に
+渡す token は operator 発行の `TAKOSUMI_DEPLOY_TOKEN` (deploy / DataAsset
+endpoint scope)。 runtime-agent subcommand は別の bearer
+(`TAKOSUMI_AGENT_TOKEN`) を使います。
 
-The public deploy bearer maps to one kernel-side public deploy Space / tenant
-scope. Operators set that scope with `TAKOSUMI_DEPLOY_SPACE_ID`; when unset it
-is `takosumi-deploy`. The CLI does not send a Space field in the manifest.
+public deploy bearer は kernel 側で 1 つの public deploy Space / tenant scope
+に対応します。 operator は `TAKOSUMI_DEPLOY_SPACE_ID` で設定し、 未設定時は
+`takosumi-deploy`。 manifest に Space field は載せません。
 
-A token is resolved from one of these sources, in this exact order:
+token は次の順序で resolve します。
 
 1. command flag (`--token`)
-2. `TAKOSUMI_DEPLOY_TOKEN` env (deploy / artifact paths) or
-   `TAKOSUMI_AGENT_TOKEN` env (runtime-agent paths)
-3. `TAKOSUMI_TOKEN` env (generic; warns once on first use)
-4. config file `token` field
+2. `TAKOSUMI_DEPLOY_TOKEN` env (deploy / artifact 系) または
+   `TAKOSUMI_AGENT_TOKEN` env (runtime-agent 系)
+3. config file の `token` field
 
-A remote URL is resolved from:
+remote URL は次の順序で resolve します。
 
 1. `--remote` flag
 2. `TAKOSUMI_REMOTE_URL` env
-3. config file `remote_url` field
+3. config file の `remote_url` field
 
-Missing both flag and any source places the CLI in local mode. Endpoints that
-require remote (`status`, `artifact ...`) exit with code 2 in that case.
+flag / source のいずれも無ければ local mode。 remote 必須の endpoint (`status`、
+`artifact ...`) はこの場合 exit code 2 で終了します。
 
-## Config file
+## 設定ファイル
 
-The CLI reads `~/.takosumi/config.yml` once per process. The path may be
-overridden with `TAKOSUMI_CONFIG_FILE`. The schema is closed:
+CLI はプロセス毎に 1 度 `~/.takosumi/config.yml` を読み込みます。 パスは
+`TAKOSUMI_CONFIG_FILE` で上書き可。 schema は閉じています。
 
 ```yaml
-remote_url: <string, optional> # bare URL of the kernel HTTP server
-token: <string, optional> # bearer token for the kernel
+remote_url: <string, optional> # kernel HTTP server の URL
+token: <string, optional> # kernel への bearer token
 ```
 
-Behaviour:
+挙動:
 
-- `$HOME` (or `$USERPROFILE` on Windows) unset and no `TAKOSUMI_CONFIG_FILE`
-  override: the file is skipped silently.
-- File missing or empty: skipped silently.
-- File present but not a YAML mapping: a single stderr warning is printed and
-  the file is ignored.
-- Any other read error: a single stderr warning is printed and the file is
-  ignored.
+- `$HOME` (Windows は `$USERPROFILE`) 未設定で `TAKOSUMI_CONFIG_FILE` も無い:
+  silently skip
+- file 不在または空: silently skip
+- YAML mapping でない: stderr に 1 度警告を出し ignore
+- その他読込エラー: stderr に 1 度警告を出し ignore
 
-Process env always overrides the config file. Both are overridden by an explicit
-command flag.
+env は config file を上書きし、 明示 flag は両方を上書きします。
 
 ## Commands
 
 ### `takosumi server`
 
-Start the kernel HTTP server.
+kernel HTTP server を起動します。
 
 ```text
 takosumi server [--port <n>] [--agent-port <n>] [--no-agent] [--detach]
 ```
 
-| Flag           | Type   | Default | Notes                                                                              |
-| -------------- | ------ | ------- | ---------------------------------------------------------------------------------- |
-| `--port`       | number | `8788`  | kernel HTTP listen port                                                            |
-| `--agent-port` | number | `8789`  | port for the embedded runtime-agent (only used when `TAKOSUMI_AGENT_URL` is unset) |
-| `--no-agent`   | switch | off     | skip the embedded runtime-agent; the operator must run one separately              |
-| `--detach`     | switch | off     | print a recommended systemd / docker / nohup template and exit                     |
+| Flag           | 型     | Default | 説明                                                               |
+| -------------- | ------ | ------- | ------------------------------------------------------------------ |
+| `--port`       | number | `8788`  | kernel HTTP の listen port                                         |
+| `--agent-port` | number | `8789`  | 同居 runtime-agent の port (`TAKOSUMI_AGENT_URL` 未設定時のみ使用) |
+| `--no-agent`   | switch | off     | 同居 runtime-agent を起動しない (別途 operator が起動する前提)     |
+| `--detach`     | switch | off     | systemd / docker / nohup 向けテンプレートを表示して終了            |
 
-`--detach` does not fork the process; Deno does not provide a portable detach
-primitive. The CLI prints supervisor templates so the operator can wire systemd,
-docker compose, or nohup themselves.
+`--detach` はプロセスを fork しません (Deno に portable な detach API がない
+ため)。 CLI が supervisor テンプレートを出力するので、 operator が systemd /
+docker compose / nohup を自分で配線します。
 
-Examples:
+例:
 
 ```bash
 takosumi server
@@ -119,41 +110,41 @@ takosumi server --no-agent
 takosumi server --detach > takosumi-api.service
 ```
 
-Exit codes: `0` on clean shutdown via SIGINT/SIGTERM, `1` on bind failure or
-kernel boot error.
+Exit codes: `0` SIGINT/SIGTERM での正常終了、 `1` bind 失敗または kernel boot
+エラー。
 
 `takosumi server` の rolling upgrade / drain / kernel ↔ runtime-agent skew
 [Migration / Upgrade](/reference/migration-upgrade) を参照してください。
 
 ### `takosumi deploy [<manifest>]`
 
-Submit a Manifest for apply.
+Manifest を apply 用に送信します。
 
 ```text
 takosumi deploy [<manifest>] [--manifest <path>] [--remote <url>] [--token <t>] [--dry-run]
 ```
 
-| Flag         | Type   | Notes                                              |
+| Flag         | 型     | 説明                                               |
 | ------------ | ------ | -------------------------------------------------- |
-| `--manifest` | path   | explicit manifest path, equivalent to `<manifest>` |
-| `--remote`   | url    | overrides resolved remote URL                      |
-| `--token`    | string | overrides resolved token                           |
-| `--dry-run`  | switch | validate and plan only; do not apply               |
+| `--manifest` | path   | manifest path の明示 (`<manifest>` 位置引数と等価) |
+| `--remote`   | url    | resolve した remote URL を上書き                   |
+| `--token`    | string | resolve した token を上書き                        |
+| `--dry-run`  | switch | 検証と plan のみ。 apply しない                    |
 
-Behaviour:
+挙動:
 
-- Remote: posts `POST /v1/deployments` with body
-  `{ mode: "apply" | "plan", manifest }`. The public deploy Space is selected by
-  kernel configuration (`TAKOSUMI_DEPLOY_SPACE_ID`, default `takosumi-deploy`).
-  Each remote write carries a fresh `X-Idempotency-Key` so transport retries
-  replay the first kernel response instead of re-running apply.
-- Local: validates the compiled `resources[]` manifest with the bundled Shape /
-  provider registry and runs an in-process apply (or plan, when `--dry-run` is
-  set). State is discarded on exit.
+- remote: `POST /v1/deployments` に body `{ mode: "apply" | "plan", manifest }`
+  を送信。 public deploy Space は kernel 設定 (`TAKOSUMI_DEPLOY_SPACE_ID`、 既定
+  `takosumi-deploy`) で決まる。 各 remote write は fresh `X-Idempotency-Key`
+  を伴うため、 transport retry は apply の再実行ではなく 最初の kernel response
+  を replay する
+- local: 同梱の Shape / provider registry で compile 済 `resources[]` manifest
+  を検証し、 in-process apply (`--dry-run` 時は plan) を実行。 状態
+  は終了時に破棄
 
-Exit codes: `0` accepted, `1` validation or apply failure, `2` malformed flags.
+Exit codes: `0` 受理、 `1` validation / apply 失敗、 `2` flag 不正。
 
-Examples:
+例:
 
 ```bash
 takosumi deploy ./manifest.yml
@@ -161,8 +152,7 @@ takosumi deploy ./manifest.yml --dry-run
 takosumi deploy ./manifest.yml --remote https://kernel.example.com --token $TAKOSUMI_DEPLOY_TOKEN
 ```
 
-GitHub Actions can call the same raw unmanaged deploy path without
-`takosumi-git`:
+GitHub Actions から `takosumi-git` を介さず raw deploy する例:
 
 ```yaml
 jobs:
@@ -177,158 +167,153 @@ jobs:
           token: ${{ secrets.TAKOSUMI_DEPLOY_TOKEN }}
 ```
 
-The repository fixture `examples/direct-deploy/` is the sample repo shape for
-this action: it contains `manifest.yml` and `.github/workflows/deploy.yml`
-without `.takosumi/` or `takosumi-git`.
+repository fixture `examples/direct-deploy/` がこの action 用の sample。
+`.takosumi/` や `takosumi-git` を使わず、 `manifest.yml` と
+`.github/workflows/deploy.yml` のみ含みます。
 
-The action runs `takosumi deploy <manifest> --remote ... --token ...` and posts
-to `POST /v1/deployments`. It does not create AppInstallation ownership,
-AppBinding, billing, or grant records; use the operator's Takosumi Accounts
-install flow for owned app installs.
+action は `takosumi deploy <manifest> --remote ... --token ...` を実行し、
+`POST /v1/deployments` に POST します。 AppInstallation ownership / AppBinding /
+billing / grant record は作成しません。 これらが必要な install は operator の
+Takosumi Accounts install flow を使ってください。
 
 ### `takosumi plan [<manifest>]`
 
-Validate and print the resolved plan without applying.
+apply せずに resolved plan を表示します。
 
 ```text
 takosumi plan [<manifest>] [--manifest <path>] [--remote <url>] [--token <t>]
 ```
 
-| Flag         | Type   | Notes                                              |
+| Flag         | 型     | 説明                                               |
 | ------------ | ------ | -------------------------------------------------- |
-| `--manifest` | path   | explicit manifest path, equivalent to `<manifest>` |
-| `--remote`   | url    | overrides resolved remote URL                      |
-| `--token`    | string | overrides resolved token                           |
+| `--manifest` | path   | manifest path の明示 (`<manifest>` 位置引数と等価) |
+| `--remote`   | url    | resolve した remote URL を上書き                   |
+| `--token`    | string | resolve した token を上書き                        |
 
-Remote-mode `plan` posts `POST /v1/deployments` with `mode: "plan"` and prints
-the kernel's response body verbatim. The request carries a fresh
-`X-Idempotency-Key` just like `deploy`, even though plan has no provider side
-effects. Local-mode `plan` runs the bundled validators in-process and prints
-`{ status, outcome }` as JSON on stdout. In both modes,
-`outcome.operationPlanPreview` carries deterministic DesiredSnapshot /
-OperationPlan digests and WAL idempotency tuple previews; no WAL entry is
-written by `plan`.
+remote mode の `plan` は `POST /v1/deployments` を `mode: "plan"` で送信し、
+kernel response body をそのまま表示します。 plan には provider 副作用が無く
+ても、 `deploy` と同様 fresh `X-Idempotency-Key` を伴います。 local mode は
+同梱の validator を in-process で走らせ、 stdout に `{ status, outcome }` を
+JSON で出力します。 両モードとも `outcome.operationPlanPreview` には決定的な
+DesiredSnapshot / OperationPlan digest と WAL idempotency tuple
+のプレビューが入り、 WAL entry は書かれま せん。
 
-Exit codes: `0` plan succeeded, `1` plan failed.
+Exit codes: `0` 成功、 `1` 失敗。
 
 ### `takosumi destroy [<manifest>]`
 
-Tear down resources declared by a previously applied manifest.
+以前 apply した manifest が宣言する resource を破棄します。
 
 ```text
 takosumi destroy [<manifest>] [--manifest <path>] [--remote <url>] [--token <t>] [--force]
 ```
 
-| Flag         | Type   | Notes                                                                                                                                 |
-| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `--manifest` | path   | explicit manifest path, equivalent to `<manifest>`                                                                                    |
-| `--remote`   | url    | overrides resolved remote URL                                                                                                         |
-| `--token`    | string | overrides resolved token                                                                                                              |
-| `--force`    | switch | destroy by resource name when no prior apply record exists; safe only for self-hosted resources whose handle equals the resource name |
+| Flag         | 型     | 説明                                                                                             |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------ |
+| `--manifest` | path   | manifest path の明示 (`<manifest>` 位置引数と等価)                                               |
+| `--remote`   | url    | resolve した remote URL を上書き                                                                 |
+| `--token`    | string | resolve した token を上書き                                                                      |
+| `--force`    | switch | apply 記録が無くても resource 名で destroy する。 handle が resource 名と一致する self-hosted 用 |
 
-Remote mode posts `POST /v1/deployments` with `mode: "destroy"` so the kernel
-can look up persisted handles and submit them through the runtime-agent. The
-remote request carries a fresh `X-Idempotency-Key` so a retry cannot run
-provider destroy twice. Local mode destroys in-process; without prior state the
-operation is best-effort.
+remote mode は `POST /v1/deployments` を `mode: "destroy"` で送信。 kernel は
+persist 済 handle を引き、 runtime-agent に発送します。 retry が provider
+destroy を二重実行しないよう fresh `X-Idempotency-Key` を付けます。 local mode
+は in-process で破棄し、 事前 state が無ければ best-effort になります。
 
-Exit codes: `0` all destroyed, `1` partial or validation failure.
+Exit codes: `0` 全破棄成功、 `1` 部分失敗または validation 失敗。
 
 ### `takosumi status [<name>]`
 
-Query the kernel for deployment state. Remote-only.
+deployment 状態を kernel から取得します。 remote のみ。
 
 ```text
 takosumi status [<name>] [--remote <url>] [--token <t>]
 ```
 
-Without `<name>`, lists every deployment by calling `GET /v1/deployments`. With
-`<name>`, fetches a single deployment via `GET /v1/deployments/:name`. Both
-endpoints return the [Status Output](/reference/status-output) document; the CLI
-renders a small text table whose columns are
-`deployment / id / resource / shape / provider / status`.
+`<name>` 無しは `GET /v1/deployments` で全 deployment を一覧。 `<name>` 指定
+時は `GET /v1/deployments/:name` で 1 件を取得。 いずれも
+[Status Output](/reference/status-output) document を返し、 CLI は
+`deployment / id / resource / shape / provider / status` を表で表示します。
 
-Exit codes: `0` rendered, `1` kernel error or unsupported route, `2` if remote /
-token are missing.
+Exit codes: `0` 表示、 `1` kernel error / 未対応 route、 `2` remote / token
+未指定。
 
 ### `takosumi audit show <deployment-id-or-name>`
 
-Show the public deploy WAL / provenance / rollback cause chain for one
-deployment. Remote-only.
+1 deployment の public deploy WAL / provenance / rollback cause chain を
+表示します。 remote のみ。
 
 ```text
 takosumi audit show <deployment-id-or-name> [--remote <url>] [--token <t>]
 ```
 
-The command first calls `GET /v1/deployments/:name/audit`. If the argument is a
-deployment id rather than a manifest `metadata.name`, the command falls back to
-`GET /v1/deployments`, resolves the id to its deployment name, and then fetches
-the audit endpoint.
+まず `GET /v1/deployments/:name/audit` を呼び、 引数が manifest `metadata.name`
+ではなく deployment id の場合は `GET /v1/deployments` で id から name を解決して
+audit endpoint を取得します。
 
-The output includes:
+出力に含まれるもの:
 
 - deployment id / name / status / tenant
-- latest WAL phase / stage / status / OperationPlan digest
-- upstream provenance (`workflowRunId`, git commit/ref/repository, artifact URI)
-- cause-chain rows from public WAL entries, including rollback / abort reasons
-  and outcome status when recorded
-- RevokeDebt records created by compensation or rollback paths
+- 最新 WAL の phase / stage / status / OperationPlan digest
+- upstream provenance (`workflowRunId`、 git commit / ref / repository、
+  artifact URI)
+- public WAL entry から組み立てた cause chain (rollback / abort 理由、 記録 済
+  outcome status を含む)
+- compensation / rollback path で作成された RevokeDebt record
 
-Exit codes: `0` rendered, `1` kernel error / deployment not found, `2` malformed
-flags.
+Exit codes: `0` 表示、 `1` kernel error / 該当なし、 `2` flag 不正。
 
 ### `takosumi migrate`
 
-Run kernel database migrations.
+kernel database の migration を実行します。
 
 ```text
 takosumi migrate [--env <name>] [--dry-run]
 ```
 
-| Flag        | Type   | Default | Notes                                                            |
-| ----------- | ------ | ------- | ---------------------------------------------------------------- |
-| `--env`     | string | `local` | `local` / `staging` / `production`, or any operator-defined name |
-| `--dry-run` | switch | off     | report planned migrations without applying                       |
+| Flag        | 型     | Default | 説明                                                                |
+| ----------- | ------ | ------- | ------------------------------------------------------------------- |
+| `--env`     | string | `local` | `local` / `staging` / `production`、 または operator が定義した名前 |
+| `--dry-run` | switch | off     | 適用せず planned migration を表示                                   |
 
-The `--env` value selects which env-specific `*_DATABASE_URL` is preferred (see
-[Environment Variables](/reference/env-vars)). Dry-run does not require a URL
-even for staging or production.
+`--env` の値で env 固有 `*_DATABASE_URL` の優先順位が決まります
+([Environment Variables](/reference/env-vars))。 dry-run は staging / production
+であっても URL を要求しません。
 
-Exit codes: `0` migrated or dry-run printed, `1` migration error or kernel
-script missing, `2` required env unset for non-dry-run staging / production.
+Exit codes: `0` migration 完了 / dry-run 表示、 `1` migration error / kernel
+script 不在、 `2` non-dry-run の staging / production で必須 env 未 設定。
 
 ### `takosumi init [<output>]`
 
-Scaffold an explicit compiled Shape manifest and pass its path to
-`takosumi deploy`. Project-layout scaffolding belongs to `takosumi-git`.
+compile 済 Shape manifest を生成し、 path を `takosumi deploy` に渡せるよう
+にします。 project layout の scaffold は `takosumi-git` の責務です。
 
 ```text
 takosumi init [<output>]
 ```
 
-If `<output>` is given, the rendered `resources[]` manifest is written to that
-path; otherwise it is printed to stdout. Top-level `template` is not a current
-kernel public field.
+`<output>` 指定時は `resources[]` manifest を当該 path に出力、 無指定時は
+stdout に表示。 top-level `template` は現行 kernel の public field ではあり
+ません。
 
 ### `takosumi doctor`
 
-Show the manifest, target mode, and auth state that the CLI will use.
+CLI が使う manifest / target mode / auth 状態を表示します。
 
 ```text
 takosumi doctor [--manifest <path>] [--remote <url>] [--token <t>]
 ```
 
-`doctor` requires `--manifest <path>` (same explicit-path rule as `deploy` /
-`plan` / `destroy`) and shares the local/remote resolution. It prints the
-selected manifest path, resolved resource count, deployment name when present,
-local vs remote mode, token presence, and the next command to run. It exits `1`
-when the manifest is missing or invalid.
+`deploy` / `plan` / `destroy` と同じく `--manifest <path>` が必須で、 local /
+remote 解決を共有します。 出力: 選択した manifest path、 解決済 resource 数、
+deployment 名 (存在すれば)、 local vs remote、 token 有無、 次に実行すべき
+command。 manifest が無い / 不正なら `1` で終了。
 
 ### `takosumi artifact <push | list | rm | gc | kinds>`
 
-Manage content-addressed DataAssets in the kernel artifact store. Every
-subcommand requires a remote URL and a deploy-scoped token; missing either exits
-with code 2.
+kernel artifact store の content-addressed DataAsset を管理します。 全
+subcommand に remote URL と deploy scope の token が必要。 不足時は exit code
+2。
 
 ```text
 takosumi artifact push <file> --kind <kind> [--metadata k=v ...] [--remote <url>] [--token <t>]
@@ -338,18 +323,20 @@ takosumi artifact gc                         [--dry-run] [--remote <url>] [--tok
 takosumi artifact kinds                      [--table] [--remote <url>] [--token <t>]
 ```
 
-`push` uploads bytes via `POST /v1/artifacts` and prints the
-`{ hash, kind, size, uploadedAt }` envelope; the operator embeds the returned
-hash into the manifest. `list` walks paginated `GET /v1/artifacts` results. `rm`
-deletes a single hash. `gc` runs the kernel mark-and-sweep against the persisted
-DesiredSnapshot reference graph. `kinds` calls `GET /v1/artifacts/kinds` to list
-the kinds the kernel currently understands. See
-[DataAsset Kinds](/reference/artifact-kinds) for the registry semantics.
+- `push`: `POST /v1/artifacts` で bytes を upload し、
+  `{ hash, kind, size, uploadedAt }` envelope を表示。 hash を manifest に埋
+  め込んで使う
+- `list`: `GET /v1/artifacts` の paginated 結果を辿る
+- `rm`: 単一 hash を削除
+- `gc`: persist 済 DesiredSnapshot 参照グラフに対する mark-and-sweep
+- `kinds`: `GET /v1/artifacts/kinds` を呼び、 kernel が認識する kind 一覧を 返す
+
+semantics は [DataAsset Kinds](/reference/artifact-kinds) を参照。
 
 ### `takosumi runtime-agent <serve | list | verify>`
 
-Operate the Takosumi runtime-agent, which holds cloud credentials and performs
-lifecycle work on behalf of the kernel.
+cloud credential を保持し、 kernel の代わりに lifecycle 作業を行う Takosumi
+runtime-agent を操作します。
 
 ```text
 takosumi runtime-agent serve  [--port <n>] [--hostname <h>] [--token <t>] [--env-file <path>]
@@ -357,41 +344,41 @@ takosumi runtime-agent list   [--url <url>] [--token <t>]
 takosumi runtime-agent verify [--url <url>] [--token <t>] [--shape <s>] [--provider <p>]
 ```
 
-`serve` starts the agent HTTP server (default `127.0.0.1:8789`); when `--token`
-and `TAKOSUMI_AGENT_TOKEN` are both unset, a random token is generated and
-printed. `list` queries `GET /v1/connectors`. `verify` posts
-`POST /v1/lifecycle/verify` and runs each connector's read-only smoke test;
-failed connectors cause exit code 2.
+- `serve`: agent HTTP server を起動 (既定 `127.0.0.1:8789`)。 `--token` と
+  `TAKOSUMI_AGENT_TOKEN` がいずれも未設定なら、 random token を生成して表示
+- `list`: `GET /v1/connectors` を呼ぶ
+- `verify`: `POST /v1/lifecycle/verify` を呼び、 connector ごとの read-only
+  smoke test を実行。 失敗 connector があれば exit code 2
 
-## Trigger / Step subcommands
+## Trigger / Step subcommand
 
-No trigger / step CLI subcommands are wired. The kernel does not host trigger /
-hook / execute-step primitives — workflow / cron / hook surfaces are declared as
-plugin-provided manifest resources and deployed through the normal
-`takosumi deploy` path, with execution semantics owned by upstream products such
-as `takosumi-git`. See
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
+trigger / step CLI subcommand は提供しません。 kernel は trigger / hook /
+execute-step primitive を持たず、 workflow / cron / hook は plugin が提供 する
+manifest resource として宣言し、 通常の `takosumi deploy` で送信し、 実行は
+`takosumi-git` 等の上流 product が担当します。 詳細は
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+を参照。
 
 ## Project Layout
 
-`deploy` / `plan` / `destroy` / `doctor` require an **explicit manifest path**:
-either as the positional `<manifest>` argument or as `--manifest <path>`. There
-is no built-in project-layout discovery — the kernel CLI is a pure manifest
-deploy engine and does not look for `.takosumi/manifest.yml` or `manifest.yml`
-at the working tree root.
+`deploy` / `plan` / `destroy` / `doctor` は **manifest path の明示** が必須 で、
+位置引数 `<manifest>` か `--manifest <path>` のいずれかで渡します。 CLI
+組み込みの project layout discovery はありません (kernel CLI は manifest deploy
+engine に徹し、 working tree root の `.takosumi/manifest.yml` や `manifest.yml`
+は探さない)。
 
-Repository-level project conventions (the `.takosumi/` directory,
-`.takosumi/workflows/*.yml`, git push / webhook / build pipeline / cron / hook
-wiring) are owned by the **`takosumi-git`** sibling product. `takosumi-git`
-turns a project repository into a generated `Manifest` and posts it to the
-kernel's `POST /v1/deployments`. See
+repository レベルの project 慣習 (`.takosumi/` ディレクトリ、
+`.takosumi/workflows/*.yml`、 git push / webhook / build pipeline / cron / hook
+配線) は **`takosumi-git`** が所有します。 `takosumi-git` は project repository
+を生成 `Manifest` に変換し、 kernel の `POST /v1/deployments` に 送信します。
+境界は
 [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
-for the ownership boundary.
+を参照。
 
 ### `takosumi completions <shell>`
 
-Print a completion script for `bash`, `zsh`, or `fish`. Generated by the bundled
-cliffy completions command.
+`bash` / `zsh` / `fish` 用の completion script を出力します (cliffy completions
+command で生成)。
 
 ```bash
 takosumi completions bash > /etc/bash_completion.d/takosumi
@@ -401,32 +388,35 @@ takosumi completions fish > ~/.config/fish/completions/takosumi.fish
 
 ### `takosumi version`
 
-Print the CLI version. No flags.
+CLI version を表示。 flag 無し。
 
 ## Exit codes
 
-The CLI uses a small reserved set:
+CLI が使う小さな予約集合:
 
-| Code | Meaning                                                                                                                                                       |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | command succeeded                                                                                                                                             |
-| `1`  | command-specific failure (kernel returned ≥ 400; plan or apply failed; partial destroy; migration failed)                                                     |
-| `2`  | usage error or precondition failure (malformed flag value, missing required env, remote-only command without remote URL, `verify` reported failed connectors) |
+| Code | 意味                                                                                                                                                  |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | 成功                                                                                                                                                  |
+| `1`  | command 固有の失敗 (kernel が ≥ 400 を返した、 plan / apply 失敗、 partial destroy、 migration 失敗)                                                  |
+| `2`  | usage error / precondition 失敗 (flag 値不正、 必須 env 欠落、 remote 必須 command で remote URL 無し、 `verify` が failed connector を報告した、 等) |
 
-Codes `70` and above are reserved for future signal-driven exits and are not
-currently emitted. The CLI does not mirror process signals into distinct exit
-codes.
+`70` 以上は将来の signal 駆動 exit のために予約 (現状は未使用)。 CLI は process
+signal を個別の exit code に mirror しません。
 
-## Related
+## 関連
 
-- Reference: [Manifest](/manifest),
-  [Environment Variables](/reference/env-vars),
-  [DataAsset Kinds](/reference/artifact-kinds),
+- リファレンス: [Manifest](/manifest)、
+  [Environment Variables](/reference/env-vars)、
+  [DataAsset Kinds](/reference/artifact-kinds)、
   [Migration / Upgrade](/reference/migration-upgrade)
 
-## Related architecture notes
-
-関連 architecture notes:
+## 関連 architecture notes
 
 - `docs/reference/architecture/cli-companion-architecture-note.md` — CLI surface
-  architecture rationale
+  の設計
+
+## 関連ページ
+
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Environment Variables](/reference/env-vars)
+- [Migration & Upgrade](/reference/migration-upgrade)

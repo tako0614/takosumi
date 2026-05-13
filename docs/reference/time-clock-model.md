@@ -1,16 +1,11 @@
 # Time / Clock Model
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Audit Events](/reference/audit-events),
-> [Approval Invalidation Triggers](/reference/approval-invalidation),
-> [RevokeDebt Model](/reference/revoke-debt),
-> [Cross-Process Locks](/reference/cross-process-locks)
+> このページでわかること: kernel の時刻モデルと clock 依存の扱い。
 
-This page is the v1 contract for time and clock handling in a Takosumi
-installation. It defines which clock source backs each time-sensitive feature,
-how much skew the kernel tolerates between pods, the canonical timestamp format,
-when the kernel reads the clock, how operator clock operations are detected, and
-how time interacts with the audit chain.
+本ページは Takosumi installation での時刻と clock 取り扱いに関する v1 contract
+である。各時刻依存機能の clock source、pod 間で許容する skew、canonical な
+timestamp フォーマット、kernel が clock を読むタイミング、operator の clock
+操作の検知、時刻と audit chain の相互作用を定義する。
 
 ## Clock sources
 
@@ -33,7 +28,7 @@ bug.
 
 ## Per-feature clock binding
 
-The following bindings are normative.
+下記 binding は normative である。
 
 | Feature                                            | Clock source                                             |
 | -------------------------------------------------- | -------------------------------------------------------- |
@@ -95,10 +90,9 @@ RFC 3339 in UTC, millisecond precision, trailing Z
 example: 2026-05-05T10:00:00.123Z
 ```
 
-This format applies uniformly across the audit log envelope, the kernel HTTP
-API, the runtime-agent API, the CLI output, log lines, and metric exemplars.
-Other zone offsets, sub-millisecond precision, and bare seconds are rejected at
-parse time.
+このフォーマットは audit log envelope、kernel HTTP API、runtime-agent API、 CLI
+出力、ログ行、metric exemplar に一律に適用される。他の zone offset、
+ミリ秒未満の精度、秒のみの形式は parse 時に reject される。
 
 ## TTL evaluation
 
@@ -147,7 +141,7 @@ local time on top of the UTC value.
 
 ## Clock and the audit chain
 
-The audit chain decouples integrity from clock truth.
+audit chain は整合性と clock 真値を切り離す。
 
 - Each event records `ts` as the wall-clock value at write time. A later
   operator who finds `ts` implausible cannot rewrite the event without breaking
@@ -164,10 +158,10 @@ The audit chain decouples integrity from clock truth.
 
 ## Bootstrap
 
-The very first event in a chain (genesis or post-rotation genesis) reads the
-wall clock for `ts` and the chain identifier. Every later event in that chain
-derives `prevHash` from the prior event, so the chain remains valid across
-subsequent clock skew or operator clock operations.
+chain の最初の event (genesis または rotation 後の genesis) は wall clock を
+読んで `ts` と chain identifier に使う。同じ chain の以降の event はすべて、
+前の event から `prevHash` を導出するので、後続の clock skew や operator clock
+操作を跨いでも chain は有効なまま残る。
 
 A fresh kernel install whose host clock is unset surfaces as a hard boot
 failure: the kernel refuses to write the genesis event when the wall clock
@@ -176,7 +170,7 @@ the host clock and NTP source before the first kernel start.
 
 ## Operator-facing summary
 
-The minimum operator obligations are:
+operator の最小義務は次の通り。
 
 - Run NTP on every kernel and runtime-agent host with a stable upstream.
 - Keep pairwise wall-clock skew within 5 seconds.
@@ -196,3 +190,10 @@ per-feature binding table to behave correctly.
   binding for WAL stage retry and idempotency window.
 - `reference/architecture/policy-risk-approval-error-model` — approval
   `expiresAt` derivation and skew-related fail-closed rules.
+
+## 関連ページ
+
+- [Audit Events](/reference/audit-events)
+- [Approval Invalidation Triggers](/reference/approval-invalidation)
+- [RevokeDebt Model](/reference/revoke-debt)
+- [Cross-Process Locks](/reference/cross-process-locks)

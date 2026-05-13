@@ -4,8 +4,8 @@
 //   1. A manifest carrying the new shape-model `resources` array is routed
 //      through `apply_v2` (observable via the fake provider apply log).
 //   2. Retired top-level `template` shorthand is rejected at this boundary.
-//   3. Legacy `compute + resources(map) + routes` manifests continue to use
-//      the existing plan-then-apply pipeline unchanged.
+//   3. Internal `compute + resources(map) + routes` plan inputs continue to
+//      use the plan-then-apply pipeline unchanged.
 
 import assert from "node:assert/strict";
 import {
@@ -110,9 +110,9 @@ function platformAdapters() {
   };
 }
 
-function legacyManifest(): PublicDeployManifest {
+function componentMapManifest(): PublicDeployManifest {
   return {
-    name: "demo-app-legacy",
+    name: "demo-app-component-map",
     version: "1.0.0",
     compute: {
       web: {
@@ -226,7 +226,7 @@ Deno.test("ApplyService rejects retired top-level template shorthand", async () 
   }
 });
 
-Deno.test("ApplyService preserves legacy target+services flow (no v2 dispatch)", async () => {
+Deno.test("ApplyService keeps component-map inputs on the plan/apply path", async () => {
   setUp();
   try {
     const store = new InMemoryDeploymentStore();
@@ -234,23 +234,24 @@ Deno.test("ApplyService preserves legacy target+services flow (no v2 dispatch)",
       store,
       platformAdapters: platformAdapters(),
     });
-    const manifest = legacyManifest();
+    const manifest = componentMapManifest();
 
     const result = await service.applyManifest({
-      spaceId: "space_legacy",
+      spaceId: "space_component_map",
       manifest,
       createdAt: "2026-05-01T00:00:00.000Z",
     });
 
-    // The legacy flow does NOT touch the v2 provider apply log.
-    assert.equal(applyLog.length, 0, "legacy flow does not call apply_v2");
+    assert.equal(
+      applyLog.length,
+      0,
+      "component-map flow does not call apply_v2",
+    );
     assert.equal(result.v2Outcome, undefined);
-    // Legacy flow returns an `applied` Deployment from DeploymentService.
     assert.equal(result.deployment.status, "applied");
-    assert.equal(result.deployment.space_id, "space_legacy");
-    assert.equal(result.deployment.group_id, "demo-app-legacy");
-    // The legacy flow advances the GroupHead.
-    assert.ok(result.head, "legacy flow returns a GroupHead");
+    assert.equal(result.deployment.space_id, "space_component_map");
+    assert.equal(result.deployment.group_id, "demo-app-component-map");
+    assert.ok(result.head, "component-map flow returns a GroupHead");
     assert.equal(result.head!.current_deployment_id, result.deployment.id);
   } finally {
     tearDown();

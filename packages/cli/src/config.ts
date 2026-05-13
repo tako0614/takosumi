@@ -4,10 +4,8 @@
  * Resolution order for `--remote` / `--token` (highest priority first):
  *   1. CLI flag (`--remote`, `--token`) — explicit wins.
  *   2. Specific env: `TAKOSUMI_REMOTE_URL` / `TAKOSUMI_DEPLOY_TOKEN`.
- *   3. Generic token env: `TAKOSUMI_TOKEN` (warns once).
- *   4. `~/.takosumi/config.yml` — operator-managed defaults so common
+ *   3. `~/.takosumi/config.yml` — operator-managed defaults so common
  *      flags (`remote_url`, `token`) need not be re-typed per command.
- *   5. Deprecated remote URL alias: `TAKOSUMI_KERNEL_URL` (warns once).
  *
  * The config file is parsed lazily on first `loadConfig()` call and cached
  * for the lifetime of the process — every CLI invocation already starts a
@@ -17,9 +15,6 @@
  */
 
 import { parse as parseYaml } from "@std/yaml";
-
-let warnedKernelUrl = false;
-let warnedToken = false;
 
 export interface CliConfig {
   readonly kernelUrl?: string;
@@ -119,16 +114,6 @@ function resolveKernelUrl(
   const fresh = Deno.env.get("TAKOSUMI_REMOTE_URL");
   if (fresh) return fresh;
   if (file?.remote_url) return file.remote_url;
-  const legacy = Deno.env.get("TAKOSUMI_KERNEL_URL");
-  if (legacy) {
-    if (!warnedKernelUrl) {
-      console.warn(
-        "[takosumi] TAKOSUMI_KERNEL_URL is deprecated; use TAKOSUMI_REMOTE_URL",
-      );
-      warnedKernelUrl = true;
-    }
-    return legacy;
-  }
   return undefined;
 }
 
@@ -137,20 +122,6 @@ function resolveToken(
 ): string | undefined {
   const deployToken = Deno.env.get("TAKOSUMI_DEPLOY_TOKEN");
   if (deployToken) return deployToken;
-
-  // Generic alias matches `TAKOSUMI_TOKEN`. It only fires when the
-  // more-specific deploy endpoint token is unset.
-  const token = Deno.env.get("TAKOSUMI_TOKEN");
-  if (token) {
-    if (!warnedToken) {
-      console.warn(
-        "[takosumi] TAKOSUMI_TOKEN is generic; prefer TAKOSUMI_DEPLOY_TOKEN " +
-          "for kernel deploy / artifact endpoints",
-      );
-      warnedToken = true;
-    }
-    return token;
-  }
   if (file?.token) return file.token;
   return undefined;
 }
@@ -158,6 +129,4 @@ function resolveToken(
 /** Test hook: clear the lazily-cached config file. */
 export function __resetConfigFileCacheForTesting(): void {
   configFileCache = undefined;
-  warnedKernelUrl = false;
-  warnedToken = false;
 }

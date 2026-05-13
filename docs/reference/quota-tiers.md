@@ -1,26 +1,19 @@
 # Quota Tiers
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Quota / Rate Limit](/reference/quota-rate-limit),
-> [Storage Schema](/reference/storage-schema),
-> [Audit Events](/reference/audit-events),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Environment Variables](/reference/env-vars),
-> [Resource IDs](/reference/resource-ids)
+> このページでわかること: quota tier の定義と各 tier の制限値。
 
-This reference defines the v1 quota tier model. The kernel exposes a **tier
-attribute** that operators attach to a Space; the dimensional caps that the tier
-resolves to are operator-defined and live entirely in operator policy. The
-kernel does not ship a price book, a free / pro / enterprise ladder, or any
-built-in commercial semantics.
+本リファレンスは v1 quota tier モデルを定義する。kernel は operator が Space に
+attach する **tier 属性** を公開する。tier が resolve する dimensional cap は
+operator 定義で、operator policy の中に完全に住む。kernel は price book、 free /
+pro / enterprise ラダー、組み込みの商用 semantics を同梱しない。
 
 ## Tier model
 
-A quota tier is a named bundle of dimension caps. Each Space carries exactly one
-`quotaTierId`. When the kernel evaluates a quota dimension for a Space, it
-resolves the dimension cap through the Space's tier record and applies the same
-fail-closed-for-new-work, fail-open-for- inflight semantics defined in
-[Quota / Rate Limit](/reference/quota-rate-limit).
+quota tier は dimension cap の named bundle である。各 Space はちょうど 1 つの
+`quotaTierId` を持つ。kernel が Space の quota dimension を評価するとき、Space
+の tier record を通じて dimension cap を resolve し、
+[Quota / Rate Limit](/reference/quota-rate-limit) で定義された fail-closed-for-
+new-work / fail-open-for-inflight semantics を同様に適用する。
 
 - `quotaTierId` is a string with the same kebab-case suffix grammar as other
   operator-controlled IDs (see [Resource IDs](/reference/resource-ids)). The
@@ -32,9 +25,9 @@ fail-closed-for-new-work, fail-open-for- inflight semantics defined in
   [Storage Schema](/reference/storage-schema) and survive kernel restart,
   journal compaction, and restore from backup.
 
-The kernel ships **no default tiers**. Operators register at least one tier
-during bootstrap; an installation that has zero registered tiers fails closed at
-boot and refuses Space provisioning.
+kernel は **default tier を同梱しない**。operator は bootstrap で少なくとも 1
+つの tier を登録する。登録 tier がゼロの installation は boot 時に fail-closed
+して Space provisioning を拒否する。
 
 ## Tier dimensions
 
@@ -55,18 +48,19 @@ A tier may additionally declare per-tier rate-limit overrides for the public and
 internal route classes. Rate-limit overrides are optional; when omitted, the
 Space resolves to the kernel-wide defaults from `TAKOSUMI_RATE_LIMIT_*`.
 
-The service-level `LocalUsageQuotaPolicy` used by embedded / self-hosted
-deployments resolves these three usage dimensions per Space before usage is
-recorded. `UsageProjectionService.requireWithinQuota()` rejects a projected
-counter that would exceed the tier cap, so CPU / storage / bandwidth gates can
-fail closed before downstream billing projection or provider scheduling.
+embedded / self-hosted deployment が使うサービスレベルの `LocalUsageQuotaPolicy`
+は、usage が記録される前にこれら 3 つの usage dimension を Space ごとに resolve
+する。`UsageProjectionService.requireWithinQuota()` は tier cap を超える
+projected counter を reject するので、CPU / storage / bandwidth gate は下流の
+billing projection や provider スケジューリングの前に fail-closed できる。
 
 A cap value of the literal string `unlimited` means the tier removes the cap for
 that dimension. A cap of `0` is rejected at registration time.
 
 ## Tier registration API
 
-internal HTTP surface (see [Kernel HTTP API](/reference/kernel-http-api)).
+tier 登録は内部 HTTP surface 経由で行う
+([Kernel HTTP API](/reference/kernel-http-api) 参照)。
 
 `POST /api/internal/v1/quota-tiers`
 
@@ -126,11 +120,11 @@ provisioning: a Space cannot exist without a resolved tier.
 
 ## Bootstrap requirement
 
-The bootstrap protocol (see [Bootstrap Protocol](/reference/bootstrap-protocol))
-requires the operator to register at least one tier before the kernel will
-accept Space provisioning. The convention is to register `tier:default` and bind
-every Space to it until the operator introduces additional tiers; the suffix is
-not enforced and operators may pick any kebab-case name.
+bootstrap protocol ([Bootstrap Protocol](/reference/bootstrap-protocol) 参照)
+は、 kernel が Space provisioning を受け付ける前に operator が少なくとも 1 つの
+tier を登録することを要求する。慣習として `tier:default` を登録し、operator が
+追加 tier を導入するまですべての Space をこれに bind する。suffix は強制
+されず、operator は任意の kebab-case 名を選べる。
 
 `TAKOSUMI_QUOTA_TIER_BOOTSTRAP_REQUIRED` (default `true`) controls the boot-time
 check. Disabling it is permitted for local-mode operator testing only and is
@@ -166,20 +160,17 @@ Tier records persist as a dedicated record class consistent with
 | `createdAt`          | timestamp | yes      | Set on registration.                          |
 | `updatedAt`          | timestamp | yes      | Updated on every `PATCH`.                     |
 
-The Space record carries `quotaTierId` as a foreign reference. Quota counters
-themselves remain on the Space record; the tier only supplies the cap that the
-counter is compared against.
+Space record は `quotaTierId` を外部参照として持つ。quota counter 自体は Space
+record に残る。tier は counter と比較される cap を供給するだけである。
 
 ## Operator boundary
 
-This reference defines the kernel-side primitive: the tier model, the
-registration API, the assignment surface, and the audit shape. The **commercial
-semantics** that bind a tier to a customer plan — pricing in any currency,
-contract clauses, dunning policy, free-to-paid upgrade flows, dashboard
-rendering of tier comparisons, and tier-aware billing exports — live in operator
-distributions such as `takos-private/` and in third-party billing systems
-consuming the kernel audit log. The kernel does not encode any of those
-concepts.
+本リファレンスは kernel 側 primitive を定義する: tier モデル、登録 API、
+割り当て surface、audit 形。tier を顧客プランに結びつける **商用 semantics** —
+任意通貨での価格設定、契約条項、督促 policy、free-to-paid アップグレードフロー、
+tier 比較のダッシュボード描画、tier 認識の billing export — は `takos-private/`
+のような operator distribution と kernel audit log を consume するサードパー
+ティ billing システムに住む。kernel はこれらの概念を一切エンコードしない。
 
 ## Related architecture notes
 
@@ -189,3 +180,12 @@ concepts.
   assignment.
 - `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
   quota evaluation point against tier-resolved caps.
+
+## 関連ページ
+
+- [Quota / Rate Limit](/reference/quota-rate-limit)
+- [Storage Schema](/reference/storage-schema)
+- [Audit Events](/reference/audit-events)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Environment Variables](/reference/env-vars)
+- [Resource IDs](/reference/resource-ids)

@@ -1,7 +1,9 @@
 # Target Model
 
-An ObjectTarget defines the surface and lifecycle expectations of an Object. It
-is not decomposed into separate public fields.
+> このページでわかること: target モデルの設計と deploy 先の解決。
+
+ObjectTarget は Object の surface と lifecycle 期待値を定義する。public な
+フィールドに分解されることはない。
 
 ## Public resource target
 
@@ -16,15 +18,15 @@ resources:
         hash: sha256:...
 ```
 
-Public v1 does not expose a separate top-level `target` field. A resource target
-starts from `resources[].shape` plus an optional `resources[].provider` hint,
-then resolves against the catalog, provider registry, and policy allowed for the
-current Space. The resolved provider is Deployment evidence, not the semantic
-identity of the Shape.
+public v1 は別の top-level `target` field を公開しない。resource target は
+`resources[].shape` と optional な `resources[].provider` hint から始まり、
+current Space に許可された catalog / provider registry / policy に対して
+解決される。解決された provider は Deployment の証拠であり、Shape の semantic
+identity ではない。
 
 ## ObjectTarget descriptor
 
-ObjectTarget descriptors define:
+ObjectTarget descriptor は次を定義する。
 
 ```text
 input schema
@@ -51,9 +53,9 @@ composite target:
 
 ### Target selection algorithm
 
-Resolution uses a deterministic, fail-closed pipeline. The first step that
-yields exactly one allowed candidate wins. Any step that yields zero or
-more-than-one candidate fails resolution.
+resolution は決定的で fail-closed な pipeline を使う。許可された candidate を 1
+つだけ出した最初のステップが勝つ。0 個または 2 個以上の candidate を出した
+ステップは resolution を失敗させる。
 
 ```text
 1. Catalog alias lookup
@@ -82,9 +84,9 @@ more-than-one candidate fails resolution.
 
 ## Input schema
 
-Target input validation validates `resources[].spec` against the Shape contract
-selected by `resources[].shape`. Provider support and capability constraints are
-checked during provider resolution.
+Target input 検証は `resources[].spec` を `resources[].shape` で選ばれた Shape
+contract に対して validate する。provider のサポートと capability 制約は
+provider resolution の段階でチェックされる。
 
 ```text
 JSON-LD / descriptor:
@@ -102,10 +104,9 @@ Implementation verify:
 
 ## Mutation constraints
 
-A target's mutation behavior is one of the closed v1 constraint kinds below.
-Each constraint declares which lifecycle classes from
-[Object Model](./object-model.md) may use it. New constraint kinds require an
-RFC (CONVENTIONS.md §6).
+target の mutation 動作は下記 closed v1 制約種のいずれかである。各制約は
+[Object Model](./object-model.md) のどの lifecycle class がそれを使えるかを
+宣言する。新規の制約種は RFC (CONVENTIONS.md §6) を要する。
 
 | mutation-constraint | semantics                                                            | allowed lifecycle classes    |
 | ------------------- | -------------------------------------------------------------------- | ---------------------------- |
@@ -116,21 +117,22 @@ RFC (CONVENTIONS.md §6).
 | `ordered-replace`   | replaces are serialized; no concurrent replaces in one Space         | managed, generated           |
 | `reroute-only`      | object identity is fixed; mutations only re-point traffic / handles  | external, operator, imported |
 
-`external` and `operator` lifecycle classes only ever take `reroute-only`
-mutations because their identity is owned outside Takosumi.
+`external` と `operator` lifecycle class は identity が Takosumi の外側で
+所有されるため、`reroute-only` mutation しか取らない。
 
-Mutation constraints are descriptor metadata. The runtime operations that
-realize them are issued by the
+Mutation 制約は descriptor のメタデータである。これを実現する runtime operation
+は
 [Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
-and bounded by [Object Model — Revoke participation matrix](./object-model.md).
+が発行し、[Object Model — Revoke participation matrix](./object-model.md) で
+制約される。
 
 ## Access mode enum
 
-`access` on a Link declaration is one of the closed v1 modes below. This is the
-canonical home for the access vocabulary;
-[Link and Projection Model](./link-projection-model.md) and
-[Namespace Export Model](./namespace-export-model.md) reference it without
-redefining.
+Link 宣言の `access` は下記 closed v1 モードのいずれかである。これが access
+語彙の canonical な home である。
+[Link and Projection Model](./link-projection-model.md) と
+[Namespace Export Model](./namespace-export-model.md) は再定義せずにここを
+参照する。
 
 ```text
 read         observation only; no grant material is generated
@@ -140,11 +142,11 @@ invoke-only  may call the resource but cannot read or mutate underlying state
 observe-only may only receive notifications / metrics; no resource access
 ```
 
-`safeDefaultAccess` on an export declaration may pick a default from this set.
-New access modes require an RFC (CONVENTIONS.md §6).
+export 宣言の `safeDefaultAccess` はこの集合から default を選べる。新規の access
+mode は RFC (CONVENTIONS.md §6) を要する。
 
 ## Space-specific availability
 
-A target alias may exist in the operator catalog but still be unavailable in a
-Space. Target resolution requires both catalog alias resolution and Space policy
-permission.
+target alias が operator catalog に存在しても、ある Space では利用不可能で
+あることがある。target resolution は catalog alias resolution と Space policy
+の許可の両方を要求する。

@@ -1,10 +1,6 @@
 # Lifecycle Protocol
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Lifecycle Phases](/reference/lifecycle-phases),
-> [WAL Stages](/reference/wal-stages),
-> [Cross-Process Locks](/reference/cross-process-locks),
-> [Approval Invalidation](/reference/approval-invalidation)
+> このページでわかること: deployment lifecycle プロトコルの全体像。
 
 Takosumi の deployment lifecycle
 (`apply / activate / destroy / rollback /
@@ -164,21 +160,26 @@ mode を選択します。
 しないように動作するため、同じ mode を繰り返し起動しても重複 effect は
 発生しません。
 
-Current public deploy implementation status: `recoveryMode: "inspect"` is
-implemented as a side-effect-free WAL dump, unfinished WAL entries block new
-apply / destroy requests, and `recoveryMode: "continue"` resumes only when the
-requested phase and OperationPlan digest match the unfinished WAL.
-`recoveryMode: "compensate"` is implemented for public WAL entries that reached
-`commit` or later by opening `activation-rollback` RevokeDebt and appending
-`abort`. Runtime-agent protocol exposes connector-native `compensate` with
-destroy fallback, and apply rollback uses a provider compensate operation when
-available. RevokeDebt store-level retry attempt, policy-controlled aging, manual
-reopen, clearance transitions, connector-backed cleanup worker, and worker
-daemon scheduling are implemented. CatalogRelease adoption / signature
-verification is implemented in the registry domain, and public apply / destroy
-WAL invokes the adopted release as fail-closed pre/post-commit verification.
-Apply / destroy commit calls receive the WAL idempotency tuple through
-`PlatformContext.operation` and runtime-agent lifecycle `idempotencyKey`.
+実装状態のまとめ:
+
+- `recoveryMode: "inspect"` は副作用なしの WAL dump として動作し、 未完了 WAL
+  entry は新規 apply / destroy を block する
+- `recoveryMode: "continue"` は要求 phase と OperationPlan digest が未完了 WAL
+  と一致するときのみ resume する
+- `recoveryMode: "compensate"` は `commit` 以降に到達した public WAL entry に
+  対して `activation-rollback` の RevokeDebt を開き、 `abort` を追記する
+- runtime-agent protocol は connector-native `compensate` を destroy fallback
+  付きで公開し、 apply rollback は provider compensate operation が利用可能な
+  場合これを使う
+- RevokeDebt store の retry attempt、 policy-controlled aging、 manual reopen、
+  clearance 遷移、 connector-backed cleanup worker、 worker daemon 周期実行は
+  実装済み
+- CatalogRelease の adoption / 署名検証は registry domain に実装され、 public
+  apply / destroy WAL は adopted release を fail-closed な pre/post-commit
+  verification として呼ぶ
+- apply / destroy commit 呼出には WAL idempotency tuple が
+  `PlatformContext.operation` と runtime-agent lifecycle `idempotencyKey` 経由
+  で渡る
 
 ## Cross-references
 
@@ -191,3 +192,10 @@ Apply / destroy commit calls receive the WAL idempotency tuple through
 - [Runtime-Agent API](/reference/runtime-agent-api)
 - [Readiness Probes](/reference/readiness-probes)
 - [Cross-Process Locks](/reference/cross-process-locks)
+
+## 関連ページ
+
+- [Lifecycle Phases](/reference/lifecycle-phases)
+- [WAL Stages](/reference/wal-stages)
+- [Cross-Process Locks](/reference/cross-process-locks)
+- [Approval Invalidation](/reference/approval-invalidation)

@@ -133,7 +133,7 @@ Deno.test("MemoryEncryptedSecretStore env option uses AES-GCM with key", async (
     idGenerator: () => "v1",
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
-      ENCRYPTION_KEY: "production-secret-passphrase-32-byte",
+      TAKOSUMI_SECRET_STORE_PASSPHRASE: "production-secret-passphrase-32-byte",
     },
   });
   const record = await store.putSecret({
@@ -152,8 +152,6 @@ Deno.test("cloudPartitionEnvKeys derives per-cloud env names", () => {
   assert.deepEqual(cloudPartitionEnvKeys("aws"), [
     "TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS",
     "TAKOSUMI_SECRET_STORE_KEY_AWS",
-    "TAKOSUMI_SECRET_ENCRYPTION_KEY_AWS",
-    "ENCRYPTION_KEY_AWS",
   ]);
 });
 

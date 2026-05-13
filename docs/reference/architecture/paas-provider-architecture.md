@@ -1,18 +1,19 @@
 # PaaS Provider Architecture
 
-This document defines the architecture-layer surface that Takosumi must expose
-when it is offered "as a PaaS". It records the deployment topology, the
-multi-tenant boundary, the trust chain, the operator-facing surface set, and the
-observable signals that allow an operator to run Takosumi as a tenant-bearing
-service.
+> このページでわかること: PaaS provider architecture の設計。
 
-This doc is architecture-layer only. Wire-level shape lives in the reference
-docs.
+本ドキュメントは、Takosumi を "PaaS として" 提供する際に公開すべきアーキテクチャ
+層の surface を定義する。deployment topology、multi-tenant 境界、trust chain、
+operator 向け surface 集合、operator が Takosumi を tenant 持ちサービスとして
+運用するために必要な観測可能 signal を記録する。
+
+本書はアーキテクチャ層のみを扱う。wire-level の shape は reference ドキュメント
+にある。
 
 ## PaaS deployment topology
 
-One deployment topology is in v1 scope. The other rows are rejected concepts,
-kept here only to prevent accidental scope expansion.
+v1 の対象 topology は 1 つ。他の行は誤って scope が広がらないように記録する
+却下概念である。
 
 ```text
 single-operator       one operator runs one Takosumi kernel and hosts N Spaces
@@ -20,20 +21,20 @@ multi-operator        not adopted; separate operators run separate installations
 platform federation   not adopted; kernels do not exchange catalog releases or shares
 ```
 
-Takosumi v1 targets **single-operator + multi-Space tenant model**.
-Multi-operator sharing and platform federation are not Takosumi platform
-features and must not be assumed by architecture decisions. App-level
-federation, if any, belongs to apps outside the platform layer.
+Takosumi v1 は **single-operator + multi-Space tenant モデル** を狙う。
+multi-operator sharing や platform federation は Takosumi プラットフォーム機能
+ではなく、アーキテクチャ判断で前提にしてはならない。アプリケーション層の
+federation がある場合、それはプラットフォーム層の外のアプリに属する。
 
-## Multi-tenant boundary
+## Multi-tenant 境界
 
-`Space` is the v1 tenant boundary.
+`Space` が v1 の tenant 境界である。
 
 ```text
 Space = tenant boundary baseline
 ```
 
-The operator chooses the tenant mapping policy:
+operator は tenant マッピング方針を選ぶ。
 
 ```text
 1 Space = 1 tenant      strict isolation per customer
@@ -41,13 +42,13 @@ N Space = 1 tenant      one tenant runs prod / staging / dev as separate Spaces
 1 Space = N tenant      not supported in v1; tenants must not share a Space
 ```
 
-A tenant identity larger than `Space` is operator-defined and lives outside
-kernel state. The kernel only enforces Space-level invariants.
+`Space` より大きな tenant identity は operator 定義であり、kernel state の外側
+に存在する。kernel は Space レベルの invariant のみを強制する。
 
-## Tenant isolation invariants
+## Tenant isolation invariant
 
-A Space-level invariant set is the v1 tenant guarantee. Every state surface
-listed below is Space-scoped.
+Space レベルの invariant 集合が v1 の tenant 保証である。下表のすべての state
+surface は Space scope である。
 
 ```text
 namespace        namespace registry visibility is Space-scoped
@@ -60,17 +61,16 @@ debt             RevokeDebt ownership is Space-scoped per the import side rule
 activation       ActivationSnapshot and GroupHead are Space-local
 ```
 
-Cross-space surfaces are denied by default. Cross-space export/share vocabulary
-architecture may depend only on operator-owned namespace exports granted to the
-Space.
+Space 跨ぎ surface はデフォルトで拒否される。Space 跨ぎ export / share 語彙は
+Space に許可された operator 所有 namespace export だけに依存しうる。
 
-## Billing readiness surfaces
+## Billing readiness surface
 
-Billing is external. The kernel does not implement billing logic. The
-architecture must, however, expose measurement hooks so an external billing
-system can attach without scraping internal storage.
+billing は外部にある。kernel は billing ロジックを実装しない。ただしアーキテ
+クチャは、外部 billing system が内部 storage を scrape せずに attach できる
+ように測定 hook を公開しなければならない。
 
-Three measurement surfaces are required at architecture level:
+アーキテクチャ層で必要な測定 surface は 3 つ。
 
 ```text
 ActivationSnapshot history       per-Space activation events drive "what is running" usage
@@ -78,19 +78,19 @@ OperationJournal retention       per-Space apply / activate / destroy volume dri
 ObservationSet cardinality       per-Space object / link / export count drives "footprint" usage
 ```
 
-Architecture rules:
+アーキテクチャ規則:
 
-- Each surface is queryable per `spaceId`.
-- Each surface emits monotonic event ids so an external collector can resume.
-- The kernel does not retain billing-derived state. It exposes raw signals only.
+- 各 surface は `spaceId` 単位で query 可能。
+- 各 surface は monotonic な event id を発行し、外部 collector が resume
+  できる。
+- kernel は billing-derived state を保持しない。raw signal のみ公開する。
 
 ## Supply chain trust
 
-v1 supply chain trust is **TLS + digest pin + 1 signing domain (OIDC)**. The
-kernel itself does not run a universal signing model; each boundary uses the
-minimum mechanism that fits. See [Supply Chain Trust](../supply-chain-trust.md)
-for the canonical chain of custody, and the boundary table below for
-kernel-touching steps.
+v1 supply chain trust は **TLS + digest pin + 1 signing domain (OIDC)** である。
+kernel 自身は universal signing model を運用せず、各境界が必要最小の機構を使う。
+canonical な chain of custody は [Supply Chain Trust](../supply-chain-trust.md)
+を参照。下表は kernel が触れる step を要約する。
 
 ```text
 CatalogRelease       operator-pinned sha256 digest (CATALOG_DIGEST), TLS fetch + digest verify
@@ -98,24 +98,23 @@ Connector            operator-installed, identified by operator config, kernel v
 Implementation       provider/runtime-agent contract, registration is operator-policy-gated (no kernel-side signing)
 ```
 
-Trust rules:
+trust 規則:
 
-- CatalogRelease trust is operator-pinned digest, not publisher signing. The
-  kernel reads `CATALOG_DIGEST` from operator config and fails closed when the
-  fetched catalog sha256 does not match.
-- The kernel does not federate trust across operators in v1, and does not
-  federate CatalogRelease trust either.
-- Trust state is recorded in `ResolutionSnapshot`. A resolution against an
-  untrusted artifact must surface a Risk and not silently succeed.
-- The only signed runtime boundary the kernel issues internally is the
-  Ed25519-signed gateway manifest to runtime-agents (kernel ↔ runtime-agent
-  authentication); this is internal infra, not a public-facing publisher signing
-  domain.
+- CatalogRelease trust は operator-pinned digest であり、publisher signing では
+  ない。kernel は operator 設定から `CATALOG_DIGEST` を読み、fetch した catalog
+  の sha256 が一致しなければ fail-closed する。
+- kernel は v1 で operator 間の trust を federate せず、CatalogRelease trust も
+  federate しない。
+- trust state は `ResolutionSnapshot` に記録される。信頼できない artifact に
+  対する resolution は Risk を surface し、黙って成功してはならない。
+- kernel が内部で発行する唯一の署名付き runtime 境界は、runtime-agent への
+  Ed25519 署名済み gateway manifest (kernel ↔ runtime-agent 認証) である。
+  これは内部インフラで、public-facing な publisher signing domain ではない。
 
-## Operator UX surfaces
+## Operator UX surface
 
-Operator-facing surfaces are split across three channels. Every operator action
-belongs to exactly one of them at architecture level.
+operator 向け surface は 3 channel に分かれる。すべての operator アクションは
+アーキテクチャ層で正確に 1 つに属する。
 
 ```text
 CLI                  takosumi-cli for human / scripted operator workflows
@@ -123,7 +122,7 @@ internal API         kernel internal HTTP endpoints for automation
 operator console     UI surface that consumes the internal API
 ```
 
-Surface inventory:
+surface 一覧:
 
 | Surface                     | CLI      | internal API | operator console |
 | --------------------------- | -------- | ------------ | ---------------- |
@@ -135,13 +134,13 @@ Surface inventory:
 | Implementation registration | yes      | yes          | optional         |
 | Connector registration      | yes      | yes          | optional         |
 
-The internal API is the canonical surface. The CLI and operator console are
-clients of that API. Public deploy clients never address operator surfaces.
+internal API が canonical surface である。CLI と operator console はその API の
+client である。public deploy client は operator surface に直接アクセスしない。
 
-## SLA observable surfaces
+## SLA 観測可能 surface
 
-A 99.x% availability promise is an operator commitment, not a kernel guarantee.
-The kernel exposes the indicators that make such a promise auditable.
+99.x% の可用性約束は operator のコミットメントであり、kernel の保証ではない。
+kernel はそのような約束を監査可能にするための指標を公開する。
 
 ```text
 apply latency                preview to OperationPlan accepted
@@ -151,13 +150,12 @@ drift detection latency      ObservationSet observedAt to DriftIndex emitted
 RevokeDebt aging             RevokeDebt createdAt to status terminal transition
 ```
 
-Each indicator is per-Space and time-bucketed. None of them are "alarm
-thresholds" at architecture level. They are the observable surface. Thresholding
-is operator policy.
+各指標は Space 単位かつ時間 bucket 化される。アーキテクチャ層では「アラーム
+閾値」ではない。観測可能な surface である。閾値設定は operator policy。
 
-## Disaster recovery boundary
+## Disaster recovery 境界
 
-Backup boundaries are split into recovery-critical and regenerable.
+backup 境界は recovery-critical と regenerable に分かれる。
 
 ```text
 recovery-critical (must be backed up)
@@ -177,39 +175,38 @@ regenerable (must not be relied on as authority)
   generated objects whose source is intact
 ```
 
-Restore rule: a restore is consistent only if recovery-critical backups are
-aligned to a common journal cut. Regenerable surfaces must be rebuilt from
-observation after restore, not restored from backup as authority.
+restore 規則: restore が整合するのは、recovery-critical backup が共通の journal
+cut に揃っている場合のみ。regenerable surface は restore 後に observation から
+再構築すべきで、backup から authority として復元してはならない。
 
-## kernel-side primitives for tenant operations
+## Tenant operation 向けの kernel 側 primitive
 
-The surfaces above (multi-tenant boundary, billing readiness, supply chain
-trust, operator UX, SLA observability, disaster recovery) describe what the
-kernel exposes for tenant-bearing service. The detailed rationale for the
-per-tenant primitives is split across three companion architecture docs, each
-scoped to one concern:
+上記 surface (multi-tenant 境界、billing readiness、supply chain trust、operator
+UX、SLA 観測可能性、災害復旧) は、tenant 持ちサービスのために kernel が公開する
+ものを記述する。per-tenant primitive の詳細な根拠は 3 つの姉妹アーキテクチャ
+ドキュメントに分割され、それぞれが 1 つの関心事に scope する。
 
 - [Identity and Access Architecture](./identity-and-access-architecture.md) —
-  why Actor, Organization, Membership, RBAC, API keys, and auth providers are
-  kernel primitives; why the role enum is closed and provider binding is
-  immutable.
-- [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md) — why
-  provisioning is a closed seven-stage idempotent sequence, why trial Spaces use
-  a separate lifecycle, and how export and two-phase deletion preserve audit
-  chain integrity.
-- [PaaS Operations Architecture](./paas-operations-architecture.md) — why quota
-  tiers are operator-named and kernel-enforced, why cost attribution is opaque
-  metadata, why SLA detection and incidents are kernel-side, why support
-  impersonation is a separate auth path, and why notifications are pull-only.
+  なぜ Actor、Organization、Membership、RBAC、API key、auth provider が kernel
+  primitive なのか。なぜ role enum は closed で provider binding は immutable
+  なのか。
+- [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md) — なぜ
+  provisioning は closed な 7 段 idempotent sequence なのか。trial Space は
+  なぜ別 lifecycle なのか。export と 2-phase deletion が audit chain 整合性を
+  どう保つか。
+- [PaaS Operations Architecture](./paas-operations-architecture.md) — なぜ quota
+  tier は operator 命名 / kernel 強制なのか。なぜ cost attribution は opaque
+  メタデータなのか。なぜ SLA detection と incident は kernel 側なのか。 なぜ
+  support impersonation は別の auth path なのか。なぜ notification は pull only
+  なのか。
 
-Together with the surfaces in this document, these three architecture docs
-define the kernel-side scope for v1 PaaS operation. Customer signup UIs, payment
-flows, status pages, branded notifications, ticket systems, SLA credit formulas,
-and admin escalation workflows compose on top of these primitives but live
-outside Takosumi (typically in `takos-private/` or another operator-owned
-distribution).
+本書の surface と合わせて、これら 3 つは v1 PaaS operation の kernel 側 scope
+を定義する。顧客サインアップ UI、決済フロー、ステータスページ、ブランド付き
+notification、チケットシステム、SLA credit 公式、admin エスカレーション workflow
+はこれらの primitive の上に組み立てられるが、Takosumi の外側 (典型 的には
+`takos-private/` または別の operator 所有 distribution) に住む。
 
-## Cross-references
+## クロスリファレンス
 
 - [Operator Boundaries](./operator-boundaries.md)
 - [Space Model](./space-model.md)

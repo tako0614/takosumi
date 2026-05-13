@@ -124,8 +124,8 @@ takosumi deploy ./manifest.yml \
 ```
 
 設定の優先順位は **flag > env > `~/.takosumi/config.yml`** です。env は
-`TAKOSUMI_REMOTE_URL` / `TAKOSUMI_DEPLOY_TOKEN`、deprecated alias は
-`TAKOSUMI_KERNEL_URL` / `TAKOSUMI_TOKEN`。config file は次の YAML スキーマ:
+`TAKOSUMI_REMOTE_URL` / `TAKOSUMI_DEPLOY_TOKEN`。config file は次の YAML
+スキーマ:
 
 ```yaml
 # ~/.takosumi/config.yml

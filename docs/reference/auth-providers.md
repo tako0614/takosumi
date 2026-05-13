@@ -1,14 +1,13 @@
 # Auth Providers
 
-This page is retained as a link-compatible migration stub.
+> このページでわかること: kernel が受け付ける認証プロバイダーの一覧と設定。
 
-Auth providers, upstream IdP brokering, passkeys, OIDC discovery, and pairwise
-subject derivation are responsibilities of the operator's account plane
-(reference implementation: Takosumi Accounts in `takosumi-cloud/`). The takosumi
-kernel does not own OAuth/OIDC provider behavior and does not broker user
-identity.
+Auth provider / upstream IdP brokering / passkey / OIDC discovery / pairwise
+subject derivation は operator の account plane が所有する (reference 実装:
+`takosumi-cloud/` の Takosumi Accounts)。 takosumi kernel は OAuth / OIDC
+provider 動作を所有せず、 user identity の broker も行わない。
 
-References:
+## 関連ページ
 
 - `takosumi-cloud/docs/architecture/takosumi-accounts.md`
 - `takosumi-cloud/docs/accounts-service.md`

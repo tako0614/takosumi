@@ -9,7 +9,7 @@ Deno.test("createPaaSApp uses validated runtime config role and keeps worker int
   const created = await createPaaSApp({
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_PAAS_PROCESS_ROLE: "takosumi-worker",
+      TAKOSUMI_PROCESS_ROLE: "takosumi-worker",
     },
     startWorkerDaemon: false,
   });
@@ -25,7 +25,7 @@ Deno.test("createPaaSApp readiness fails closed when API internal secret is miss
   const created = await createPaaSApp({
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_PAAS_PROCESS_ROLE: "takosumi-api",
+      TAKOSUMI_PROCESS_ROLE: "takosumi-api",
     },
   });
 
@@ -38,7 +38,7 @@ Deno.test("createPaaSApp readiness accepts TAKOSUMI_INTERNAL_API_SECRET", async 
   const created = await createPaaSApp({
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_PAAS_PROCESS_ROLE: "takosumi-api",
+      TAKOSUMI_PROCESS_ROLE: "takosumi-api",
       TAKOSUMI_INTERNAL_API_SECRET: "api-secret",
     },
   });
@@ -52,7 +52,7 @@ Deno.test("createPaaSApp mounts deploy CLI route from deploy token without publi
   const created = await createPaaSApp({
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_PAAS_PROCESS_ROLE: "takosumi-api",
+      TAKOSUMI_PROCESS_ROLE: "takosumi-api",
       TAKOSUMI_DEPLOY_TOKEN: "deploy-token",
     },
   });
@@ -70,7 +70,7 @@ Deno.test("createPaaSApp mounts metrics route from scrape token", async () => {
   const created = await createPaaSApp({
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_PAAS_PROCESS_ROLE: "takosumi-api",
+      TAKOSUMI_PROCESS_ROLE: "takosumi-api",
       TAKOSUMI_METRICS_SCRAPE_TOKEN: "metrics-token",
     },
   });
@@ -86,7 +86,7 @@ Deno.test("createPaaSApp readiness fails closed when worker daemon is disabled",
   const created = await createPaaSApp({
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_PAAS_PROCESS_ROLE: "takosumi-worker",
+      TAKOSUMI_PROCESS_ROLE: "takosumi-worker",
     },
     startWorkerDaemon: false,
   });

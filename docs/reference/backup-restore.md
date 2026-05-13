@@ -1,31 +1,24 @@
 # Backup and Restore
 
-> Stability: stable Audience: operator See also:
-> [Storage Schema](/reference/storage-schema),
-> [Audit Events](/reference/audit-events),
-> [Secret Partitions](/reference/secret-partitions),
-> [Migration / Upgrade](/reference/migration-upgrade), [CLI](/reference/cli),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Closed Enums](/reference/closed-enums)
+> このページでわかること: kernel state のバックアップとリストアの手順。
 
-This page defines the Takosumi v1 backup and restore protocol for operator
-self-host deployments. It enumerates which storage records are critical to back
-up, which records are regenerable and may be skipped, the on-disk backup format,
-the point-in-time consistency invariants, and the ordered restore procedure that
-preserves audit-chain integrity.
+本ページは operator self-host deployment 向けの Takosumi v1 backup / restore
+プロトコルを定義する。どの storage record が backup 必須か、どれが regenerable
+で skip 可能か、on-disk な backup フォーマット、point-in-time 整合性 invariant、
+audit chain 整合性を保つ順序付き restore 手順を列挙する。
 
-The protocol is logical, not physical. Snapshots are taken from the kernel's
-storage abstraction, not from the underlying SQL / object store / filesystem
-layout. Operators may layer physical backups underneath for redundancy, but a
-Takosumi-conformant restore always goes through the logical path defined here.
+protocol は logical であり physical ではない。snapshot は kernel の storage 抽象
+から取得され、基底の SQL / object store / filesystem layout からではない。
+operator は冗長性のために物理 backup を下に重ねてよいが、Takosumi 適合な restore
+は常にここで定義する logical path を通る。
 
-## Backup scope
+## Backup の scope
 
-Storage records partition into two classes: **critical** records that must be
-backed up to recover the kernel, and **regenerable** records that the kernel
-reconstructs after a restore.
+storage record は 2 クラスに分割される: kernel を回復するために **backup 必須**
+な critical record と、restore 後に kernel が再構成する **regenerable** な
+record。
 
-### Critical (must back up)
+### Critical (backup 必須)
 
 | Record                       | Why critical                                                          |
 | ---------------------------- | --------------------------------------------------------------------- |
@@ -39,11 +32,11 @@ reconstructs after a restore.
 | Secret partition (encrypted) | Operator-managed master-key-encrypted secret material.                |
 | Catalog adoption record      | Which catalog releases the operator has installed and trusts.         |
 
-The non-reserved records collectively form the current v1 **backup set**. A
-current v1 backup that omits any non-reserved row is non-conformant. Reserved
-future records become required only if the corresponding RFC is accepted.
+予約されていないこれらの record が集合として v1 の **backup set** を構成する。
+予約されていない行をいずれか省略する v1 backup は非適合である。予約された 将来の
+record は、対応する RFC が受理されたときにのみ必須となる。
 
-### Regenerable (no backup needed)
+### Regenerable (backup 不要)
 
 | Record                           | How regenerated                                                            |
 | -------------------------------- | -------------------------------------------------------------------------- |
@@ -53,28 +46,28 @@ future records become required only if the corresponding RFC is accepted.
 | Generated object cache           | Re-rendered from link projection rules and source exports.                 |
 | `ObservationHistory` (opt-in)    | Operator-configurable; treated as regenerable unless the operator pins it. |
 
-Operators **may** include regenerable records in a backup for faster warm-up
-after restore, but a conformant restore must succeed without them.
+operator は restore 後の warm-up を速めるために regenerable record を backup に
+含めて **もよい** が、適合な restore はそれらが無くても成功しなければならない。
 
-## Backup format
+## Backup フォーマット
 
-Logical exports are produced as a single multi-record stream in kernel-internal
-JSON. Each record carries:
+logical export は kernel 内部 JSON の単一 multi-record stream として生成される。
+各 record は次を含む。
 
-- `spaceId` — owning Space ID. Cross-Space records (audit chain globals, catalog
-  adoption) use the reserved `space:_global`.
-- `id` — the resource ID following [Resource IDs](/reference/resource-ids).
-- `kind` — the record kind (e.g. `resolution-snapshot`, `journal-entry`).
-- `body` — the record contents.
-- `chainRef` — for audit-chained records, the hash chain reference pointing to
-  the immediately prior chained record.
+- `spaceId` — 所有 Space ID。Space を跨ぐ record (audit chain global、catalog
+  adoption) は予約値 `space:_global` を使う。
+- `id` — [Resource IDs](/reference/resource-ids) に従う resource ID。
+- `kind` — record の kind (例: `resolution-snapshot`、`journal-entry`)。
+- `body` — record の中身。
+- `chainRef` — audit chain に乗る record は、直前の chained record を指す hash
+  chain reference。
 
-The stream is human-readable JSON, one record per line, ordered such that
-`chainRef` always points backward to a record already emitted in the stream.
-Restore reads the stream sequentially and verifies the chain as it goes.
+stream は人間可読な JSON で、1 行 1 record。`chainRef` が常に stream 内で既出 の
+record を後方参照するように順序付けされる。restore は stream を順次読み、 chain
+を進みながら検証する。
 
-The format is stable within a kernel major version; cross-major restore goes
-through migration (see [Migration / Upgrade](/reference/migration-upgrade)).
+フォーマットは kernel major version 内で安定。cross-major restore は migration
+を経由する ([Migration / Upgrade](/reference/migration-upgrade) 参照)。
 
 Rationale: cross-major restore は schema migration を経由する別 protocol で
 扱う。format を major に bind することで restore path 自体は logical import
@@ -83,166 +76,167 @@ Rationale: cross-major restore は schema migration を経由する別 protocol 
 recovery は明示的に source-major restore → migration の 2 段階で operator に
 意図させる設計にしている。
 
-## Backup invariants
+## Backup の invariant
 
-A backup must satisfy three invariants. Operator backup tooling must hold them
-by construction.
+backup は 3 つの invariant を満たさなければならない。operator backup ツールは
+構造的にこれらを満たすこと。
 
-### Point-in-time consistency
+### Point-in-time 整合性
 
-The backup acquires a backup-mode lock across all Spaces and all critical record
-stores. Under the lock:
+backup はすべての Space と critical record store に対する backup mode lock を
+取得する。lock 下で:
 
-- All critical records are exported as a single point-in-time snapshot.
-- In-flight operations either complete to a WAL terminal stage before the lock
-  is granted, or are paused (their WAL cursor is included as the latest cursor
-  in the backup).
-- New deploy / approve / observe writes are rejected with `failed_precondition`
-  and `retryable: true` for the duration of the lock.
+- すべての critical record は単一の point-in-time snapshot として export
+  される。
+- in-flight operation は、lock 取得前に WAL terminal stage まで完了するか、
+  pause される (WAL cursor は backup 内の最新 cursor として含まれる)。
+- lock の継続時間中、新規の deploy / approve / observe 書き込みは
+  `failed_precondition` かつ `retryable: true` で reject される。
 
-Backup duration is bounded by the per-Space lock TTL. Operators tune the TTL;
-the default is conservative enough that real-world backup windows fit inside a
-single TTL.
+backup duration は per-Space lock TTL で範囲が決まる。operator が TTL を調整
+する。default は現実の backup window が単一 TTL に収まるよう保守的に設定して
+ある。
 
-### Secret partition non-re-encryption
+### Secret partition の non-re-encryption
 
-Secret partition records are exported **as-is**, encrypted under the operator's
-master key. The backup tool never decrypts and re-encrypts secret material. This
-invariant has two consequences:
+secret partition record は **そのまま** 、operator の master key で暗号化された
+ままで export される。backup ツールは secret material を復号して再暗号化しない。
+この invariant は 2 つの結果を持つ。
 
-- The backup is unusable without the master key, even if the export stream
-  leaks.
-- Restore requires the operator to provide the same master key (or a master key
-  whose key derivation tree contains the same partition keys); a mismatched
-  master key fails restore at the secret-partition read step.
+- export stream が漏洩しても、master key なしには backup は使えない。
+- restore には operator が同じ master key (または同じ partition key を派生
+  ツリー内に持つ master key) を供給する必要がある。master key が一致しないと
+  secret partition の読み込みステップで restore が失敗する。
 
-### Cross-Space ordering preservation
+### Space 横断の順序保存
 
-The audit chain rotates globally, not per Space. The backup preserves the global
-chain order: when records from different Spaces share a chain segment, their
-relative emission order in the export stream matches the chain hash linkage.
-Restore verifies the global chain during ingest; out-of-order ingest fails fast.
+audit chain は per-Space ではなく global に rotate する。backup は global chain
+の順序を保つ: 異なる Space の record が同じ chain segment を共有するとき、
+export stream 内での相対的な emission 順序は chain hash linkage と一致する。
+restore は ingest 中に global chain を検証する。順序外の ingest は早期失敗する。
 
-## Restore flow
+## Restore のフロー
 
-Restore is a six-step sequence. Each step is a hard gate; the next step must not
-begin until the prior step verifies.
+restore は 6 ステップの sequence。各ステップは hard gate であり、前のステップが
+検証されるまで次のステップは始められない。
 
-### 1. Initialize storage
+### 1. Storage の初期化
 
-The target storage is either empty or initialized to the same kernel schema
-version that produced the backup. Operators verify the schema version before
-restore. Cross-major restore is handled by migration and is rejected at this
-step (see boundary section below).
+ターゲット storage は空、または backup を生成した kernel と同じ schema version
+で初期化されている。operator は restore 前に schema version を確認する。
+cross-major restore は migration が扱うため、このステップで reject される (下記
+boundary 節を参照)。
 
-### 2. Inject secret master key
+### 2. Secret master key の注入
 
-The operator supplies the master key (or master-key derivation material) before
-any record ingest. The key is held by the operator's secret backend; the restore
-tool reads it through the same factories the kernel uses at runtime.
+operator は record ingest の前に master key (または master key 派生材料) を
+供給する。鍵は operator の secret backend が保持し、restore ツールは kernel が
+runtime で使うのと同じ factory 経由で読み込む。
 
 ### 3. Logical import
 
-The restore tool ingests the export stream transactionally in dependency order:
+restore ツールは export stream を依存順にトランザクションで ingest する。
 
-1. Catalog adoption records.
-2. `Approval` records.
-3. `DesiredSnapshot` records.
-4. `ResolutionSnapshot` records.
-5. `ActivationSnapshot` records.
-6. `OperationJournal` (WAL) entries, ordered by per-Space WAL cursor.
-7. `RevokeDebt` records.
-8. `AuditLog` entries.
-9. Secret partition entries (encrypted blobs).
+1. catalog adoption record。
+2. `Approval` record。
+3. `DesiredSnapshot` record。
+4. `ResolutionSnapshot` record。
+5. `ActivationSnapshot` record。
+6. `OperationJournal` (WAL) entry、per-Space WAL cursor 順。
+7. `RevokeDebt` record。
+8. `AuditLog` entry。
+9. secret partition entry (暗号化 blob)。
 
-Each record's identity and content are checked against the encoded form on
-ingest. Identity collisions abort restore.
+各 record の identity と内容は ingest 時に encode 済みの形と照合される。
+identity 衝突は restore を abort する。
 
-### 4. Audit chain verification
+### 4. Audit chain の検証
 
-Once `AuditLog` is fully ingested, the restore tool walks the chain from genesis
-and verifies every hash link. A broken chain aborts restore with no record
-committed (the transaction from step 3 is rolled back on failure).
+`AuditLog` の ingest が終わったら、restore ツールは chain を genesis から walk
+して各 hash link を検証する。chain が壊れていれば、何の record も commit せずに
+restore が abort される (失敗時にステップ 3 のトランザクションは rollback
+される)。
 
-### 5. Lock store reconstruction
+### 5. Lock store の再構築
 
-In-flight operations recorded in the WAL are reconciled. For each operation
-whose WAL terminal stage is not reached:
+WAL に記録された in-flight operation を reconcile する。terminal stage に
+達していない各 operation について:
 
-- If a `commit` cursor exists with a recorded effect digest, the operation is
-  marked completable; the apply pipeline finishes it on the first post-restore
-  tick using `recoveryMode = continue`.
-- If a `commit` cursor is absent, the operation is marked rollback- pending; the
-  apply pipeline schedules `recoveryMode = compensate`.
+- `commit` cursor と effect digest が存在する場合、operation は completable と
+  mark され、apply pipeline は restore 後の最初の tick で
+  `recoveryMode =
+  continue` を使って完了する。
+- `commit` cursor が無い場合、operation は rollback-pending と mark され、 apply
+  pipeline は `recoveryMode = compensate` をスケジュールする。
 
-The cross-process lock store is rebuilt from in-flight operation metadata. No
-new operations are dispatched until reconstruction completes.
+cross-process lock store は in-flight operation の metadata から再構築される。
+再構築が完了するまで新規 operation は dispatch されない。
 
-### 6. ActivationSnapshot re-evaluation
+### 6. ActivationSnapshot の再評価
 
-Activation state from the backup is restored as the authoritative intent, but
-per-object health (`observe` outputs) is **not** restored from the backup (it is
-regenerable). The first post-restore observe tick rebuilds `ObservationSet` and
-`DriftIndex` from runtime-agent describe.
+backup の activation state は authoritative な intent として復元されるが、
+object ごとの health (`observe` 出力) は backup から復元 **されない** (これは
+regenerable)。restore 後の最初の observe tick が runtime-agent describe から
+`ObservationSet` と `DriftIndex` を再構築する。
 
-Until the first observe tick completes, `LifecycleStatus` for restored objects
-is reported as `unknown`. Operators should expect a warm-up window proportional
-to the number of restored objects.
+最初の observe tick が完了するまで、復元された object の `LifecycleStatus` は
+`unknown` として報告される。operator は復元する object 数に比例した warm-up
+window を見込むべき。
 
-## Post-restore behaviour
+## Restore 後の挙動
 
-### DesiredSnapshot immutability
+### DesiredSnapshot の immutability
 
-`DesiredSnapshot` records are immutable on restore. Any pending desired-state
-change that was not yet snapshotted at backup time is not preserved; operators
-re-author and re-deploy.
+`DesiredSnapshot` record は restore 上で immutable。backup 時点でまだ snapshot
+化されていなかった desired state 変更は保存されない。operator は再 authoring
+し再 deploy する。
 
-### In-flight operation resolution
+### In-flight operation の解決
 
-In-flight operations resume through the recovery modes recorded during step 5.
-The
+in-flight operation はステップ 5 で記録された recovery mode を通じて resume
+する。
 [Provider Implementation Contract](/reference/provider-implementation-contract)
-governs how each Implementation must treat `recoveryMode = continue` versus
-`recoveryMode = compensate`.
+が、各 Implementation が `recoveryMode = continue` と
+`recoveryMode =
+compensate` をどう扱わなければならないかを定める。
 
-### GroupHead and canary state
+### GroupHead と canary の状態
 
-`GroupHead` pointers and canary / shadow rollout state are part of
-`ActivationSnapshot` and are restored exactly as they were at backup time. A
-canary that was 30% rolled out remains 30% rolled out after restore; the rollout
-state machine continues from that point on the next deploy.
+`GroupHead` pointer と canary / shadow rollout state は `ActivationSnapshot`
+の一部で、backup 時点の通りに復元される。30% で rollout 中だった canary は
+restore 後も 30% 状態のままで、rollout state machine は次の deploy でその点
+から続行する。
 
 ## Restore boundary
 
-Restore is **guaranteed within the same kernel major version only**. Cross-major
-restore must go through migration. The migration path is:
+restore は **同じ kernel major version 内でのみ保証される**。cross-major restore
+は migration を経由しなければならない。migration path は:
 
-1. Restore into a kernel running the **source** major version.
-2. Run the operator-published rolling upgrade procedure (see
-   [Migration / Upgrade](/reference/migration-upgrade)) to advance to the target
-   major version.
+1. **source** major version で動く kernel に restore する。
+2. operator 公開の rolling upgrade 手順
+   ([Migration / Upgrade](/reference/migration-upgrade)) を実行し、target major
+   version に進める。
 
-The restore tool refuses cross-major direct restore at step 1 and emits a closed
-`failed_precondition` error pointing at the migration documentation.
+restore ツールはステップ 1 で cross-major 直接 restore を拒否し、migration
+ドキュメントを指す closed な `failed_precondition` エラーを発行する。
 
-## Operator Surface
+## Operator surface
 
-The current public `takosumi` CLI does not expose backup / restore commands.
-Backup and restore are operator-only workflows that must be driven through
-internal control-plane tooling or deployment automation until a public operator
-CLI surface is implemented and documented in [CLI](/reference/cli).
+現行の public `takosumi` CLI は backup / restore コマンドを公開していない。
+backup と restore は operator 限定の workflow であり、public operator CLI
+surface が実装され [CLI](/reference/cli) で文書化されるまで、内部 control plane
+ツールや deployment 自動化を通じて駆動する必要がある。
 
-- Backup produces the export stream under the point-in-time lock described
-  above.
-- Restore runs the six-step flow above against initialized empty storage.
+- backup は上述の point-in-time lock 下で export stream を生成する。
+- restore は上記 6 ステップのフローを、初期化された空 storage に対して実行する。
 
-Both commands require operator-bearer credentials, not deploy bearers. Both
-commands record their progress through the audit events below.
+両コマンドとも deploy bearer ではなく operator bearer 認証を要求する。両
+コマンドとも下記 audit event を通じて進捗を記録する。
 
-## Audit events
+## Audit event
 
-Backup and restore emit dedicated audit events into the same hash chain as
-runtime kernel events:
+backup と restore は runtime kernel event と同じ hash chain に専用 audit event
+を発行する。
 
 | Event               | Emitted at                                                      |
 | ------------------- | --------------------------------------------------------------- |
@@ -251,14 +245,24 @@ runtime kernel events:
 | `restore-started`   | Storage initialized and master key accepted.                    |
 | `restore-completed` | Step 6 finished and the kernel transitions to normal operation. |
 
-Each event carries the backup's chain head hash. Verifying a restore against its
-backup amounts to checking that the `restore-completed` event's chain head
-matches the `backup-completed` event's chain head.
+各 event は backup の chain head hash を運ぶ。restore を backup に対して検証
+することは、`restore-completed` event の chain head が `backup-completed` event
+の chain head と一致することの確認に等しい。
 
-## Related architecture notes
+## 関連アーキテクチャノート
 
 - docs/reference/architecture/snapshot-model.md
 - docs/reference/architecture/operation-plan-write-ahead-journal-model.md
 - docs/reference/architecture/observation-drift-revokedebt-model.md
 - docs/reference/architecture/operational-hardening-checklist.md
 - docs/reference/architecture/operator-boundaries.md
+
+## 関連ページ
+
+- [Storage Schema](/reference/storage-schema)
+- [Audit Events](/reference/audit-events)
+- [Secret Partitions](/reference/secret-partitions)
+- [Migration / Upgrade](/reference/migration-upgrade)
+- [CLI](/reference/cli)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Closed Enums](/reference/closed-enums)

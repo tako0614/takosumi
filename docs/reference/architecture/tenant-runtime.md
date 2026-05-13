@@ -1,5 +1,7 @@
 # Tenant Runtime
 
+> このページでわかること: tenant runtime の設計と isolation モデル。
+
 Tenant runtime は takosumi kernel が apply した `resources[]` を実行環境へ
 materialize する execution plane です。Takosumi Account / AppInstallation ledger
 は account plane にあり、tenant runtime は所有権や billing を直接扱いません。
@@ -76,9 +78,9 @@ resources:
         - api.example.com
 ```
 
-旧 attached container pattern は current manifest では別 resource として並べま
-す。Worker から container に渡す internal endpoint は provider output を
-`${ref:...}` で受け取ります。
+attached container を併用するときは別 resource として並べます。Worker から
+container に渡す internal endpoint は provider output を `${ref:...}` で
+受け取ります。
 
 ```yaml
 resources:

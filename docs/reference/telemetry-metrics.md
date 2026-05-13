@@ -1,53 +1,45 @@
 # Telemetry / Metrics
 
-> Stability: stable Audience: operator, kernel-implementer, integrator See also:
-> [Logging Conventions](/reference/logging-conventions),
-> [Observability Stack](/reference/observability-stack),
-> [Time / Clock Model](/reference/time-clock-model),
-> [Audit Events](/reference/audit-events),
-> [Quota / Rate Limit](/reference/quota-rate-limit),
-> [Environment Variables](/reference/env-vars)
+> このページでわかること: テレメトリメトリクスの命名規則と emit ポイント。
 
-This page is the v1 contract for telemetry export from a Takosumi installation.
-It defines the export protocols the kernel speaks, the metric naming convention,
-the closed v1 metric set operators rely on, trace export and span attributes,
-sampling, cardinality controls, authentication for the export surface, and the
-schema versioning rule.
+Takosumi installation の telemetry export に関する v1 contract です。 export
+protocol、 metric 命名規則、 operator が依存する閉じた v1 metric set、 trace
+export と span attribute、 sampling、 cardinality 制御、 export surface の認証、
+schema versioning rule を定義します。
 
-::: info Current implementation status The metric schemas, observability sink
-records, Prometheus `/metrics` HTTP route, OTLP/HTTP JSON metric exporter, and
-kernel HTTP server spans, provider operation spans, runtime-agent loop spans,
-and internal RPC client spans are current service contracts. The bootstrap path
-mounts `/metrics` on the API role when `TAKOSUMI_METRICS_SCRAPE_TOKEN` is set,
-and wraps the configured `ObservabilitySink` with native OTLP metric / trace
-export when `TAKOSUMI_OTLP_METRICS_ENDPOINT`, `TAKOSUMI_OTLP_TRACES_ENDPOINT`,
-or standard `OTEL_EXPORTER_OTLP_*` endpoint env vars are set. The deploy
-overview Grafana dashboard is published at
-`deploy/observability/grafana/takosumi-deploy-overview.json`. :::
+::: info 実装状況 metric schema、 observability sink record、 Prometheus
+`/metrics` HTTP route、 OTLP/HTTP JSON metric exporter、 kernel HTTP server
+span、 provider operation span、 runtime-agent loop span、 internal RPC client
+span は service contract として実装されています。 bootstrap path は
+`TAKOSUMI_METRICS_SCRAPE_TOKEN` が設定されていれば API role に `/metrics` を
+mount し、 `TAKOSUMI_OTLP_METRICS_ENDPOINT` / `TAKOSUMI_OTLP_TRACES_ENDPOINT`
+または標準 `OTEL_EXPORTER_OTLP_*` endpoint env が設定されていれば、 構成済
+`ObservabilitySink` を native OTLP metric / trace export で wrap し ます。
+deploy overview Grafana dashboard は
+`deploy/observability/grafana/takosumi-deploy-overview.json` に公開済み。 :::
 
-## Export protocols
+## Export protocol
 
-The target contract exports telemetry through two protocols at the same time.
+telemetry は 2 protocol で同時 export します。
 
-- **OpenTelemetry / OTLP (primary)** — push-based OTLP/HTTP JSON exporter for
-  metrics, kernel HTTP server spans, provider apply / destroy operation spans,
-  runtime-agent loop spans, and internal RPC client spans. The kernel exports
-  metrics whenever `TAKOSUMI_OTLP_METRICS_ENDPOINT`,
-  `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, or `OTEL_EXPORTER_OTLP_ENDPOINT` is
-  set, and exports HTTP server spans whenever `TAKOSUMI_OTLP_TRACES_ENDPOINT`,
-  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, or `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
-  OTLP is the protocol operators wire into a collector when they need remote
-  attribute enrichment or a vendor-neutral telemetry ingress.
-- **Prometheus pull endpoint (secondary)** — `/metrics` endpoint on the kernel
-  HTTP server, scraped by Prometheus or a Prometheus-compatible agent. The
-  endpoint exposes recorded `ObservabilitySink` metric events in Prometheus text
-  format and carries no trace data.
+- **OpenTelemetry / OTLP (primary)** — push 型の OTLP/HTTP JSON exporter で、
+  metric、 kernel HTTP server span、 provider apply / destroy operation span、
+  runtime-agent loop span、 internal RPC client span を export。
+  `TAKOSUMI_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` /
+  `OTEL_EXPORTER_OTLP_ENDPOINT` のいずれかが設定されていれば metric を、
+  `TAKOSUMI_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` /
+  `OTEL_EXPORTER_OTLP_ENDPOINT` のいずれかが設定されていれば HTTP server span を
+  export する。 collector で attribute 拡充や vendor-neutral telemetry ingress
+  を行いたい operator はこちらを使う
+- **Prometheus pull endpoint (secondary)** — kernel HTTP server の `/metrics` を
+  Prometheus 互換 agent が scrape する。 記録された `ObservabilitySink` metric
+  event を Prometheus text format で公開する (trace は含まない)
 
-OTLP and Prometheus are not alternatives. Operators can run both: `/metrics`
-serves pull-based local scraping, while the OTLP wrapper mirrors recorded metric
-and trace events to the configured collector.
+OTLP と Prometheus は排他ではありません。 両方を運用できます。 `/metrics` は
+local pull scrape を、 OTLP wrapper は記録した metric / trace event を collector
+に mirror します。
 
-The OTLP exporter reads the following kernel environment:
+OTLP exporter が読む kernel 環境変数:
 
 ```text
 TAKOSUMI_OTLP_METRICS_ENDPOINT        URL of the collector /v1/metrics endpoint
@@ -62,34 +54,33 @@ OTEL_EXPORTER_OTLP_HEADERS            standard comma-separated OTEL headers
 OTEL_SERVICE_NAME                     standard service.name fallback
 ```
 
-Adding a new transport variable requires the `CONVENTIONS.md` §6 RFC.
+新 transport 変数追加には `CONVENTIONS.md` §6 RFC が必須。
 
-## Metric naming
+## Metric 命名
 
-Every Takosumi metric name follows the same shape:
+Takosumi metric 名は次の形に統一します。
 
 ```text
 takosumi_<subsystem>_<metric>_<unit>
 
-example: takosumi_apply_duration_seconds
+例: takosumi_apply_duration_seconds
 ```
 
-- `<subsystem>` is a closed lowercase identifier (`apply`, `wal`, `revoke_debt`,
-  `approval`, `drift`, `artifact`, `journal`, `lock`, `runtime_agent`, `http`,
-  `rate_limit`, `quota`, `secret_partition`).
-- `<metric>` is a short descriptor: `duration`, `count`, `bytes`, `ratio`,
-  `age`.
-- `<unit>` is the SI / Prometheus-canonical unit (`seconds`, `bytes`, `ratio`)
-  or omitted when the metric is dimensionless count.
+- `<subsystem>`: 閉じた lowercase 識別子 (`apply` / `wal` / `revoke_debt` /
+  `approval` / `drift` / `artifact` / `journal` / `lock` / `runtime_agent` /
+  `http` / `rate_limit` / `quota` / `secret_partition`)
+- `<metric>`: 短い記述子 (`duration` / `count` / `bytes` / `ratio` / `age`)
+- `<unit>`: SI / Prometheus canonical unit (`seconds` / `bytes` / `ratio`)。
+  無次元 count では省略
 
-Histograms carry the `_seconds` suffix. Counters use `_count` (monotonic) or
-`_total` only when the OTLP `Sum` semantic requires it. Gauges carry no suffix
-beyond the unit.
+histogram は `_seconds` suffix、 counter は monotonic な `_count`、 OTLP の
+`Sum` semantics が必要な場合のみ `_total`、 gauge は unit 以外の suffix を
+付けません。
 
 ## v1 closed metric set
 
-The v1 metric set is **closed**. Operators may rely on these names, labels, and
-types without coordination. New metrics go through the `CONVENTIONS.md` §6 RFC.
+v1 metric set は **閉じ** ています。 operator は調整なしで名前 / label /
+型を当てにできます。 新規 metric は `CONVENTIONS.md` §6 RFC を通します。
 
 | Metric                                           | Type      | Labels                               |
 | ------------------------------------------------ | --------- | ------------------------------------ |
@@ -110,21 +101,21 @@ types without coordination. New metrics go through the `CONVENTIONS.md` §6 RFC.
 | `takosumi_quota_usage_ratio`                     | gauge     | `spaceId`, `dimension`               |
 | `takosumi_secret_partition_rotation_age_seconds` | gauge     | `partition`                          |
 
-The current OTLP metric exporter mirrors each recorded histogram event as one
-delta histogram datapoint. Prometheus exposition folds recorded histogram events
-into explicit buckets
-`[0.005, 0.01, 0.025, 0.05, 0.1, 0.25,
-0.5, 1, 2.5, 5, 10, 30]` seconds.
+OTLP metric exporter は記録した histogram event を 1 delta datapoint として
+mirror します。 Prometheus exposition は histogram event を bucket
+`[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]` 秒に集約し
+ます。
 
-`takosumi_wal_stage_duration_seconds` carries the `stage` label drawn from the
-8-value WAL stage enum: `prepare`, `pre-commit`, `commit`, `post-commit`,
-`observe`, `finalize`, `abort`, `skip`.
+`takosumi_wal_stage_duration_seconds` は 8 値 WAL stage enum (`prepare` /
+`pre-commit` / `commit` / `post-commit` / `observe` / `finalize` / `abort` /
+`skip`) を `stage` label に取ります。
 
-`takosumi_revoke_debt_count` carries the closed RevokeDebt `status` enum, and
-`takosumi_quota_usage_ratio` carries the closed quota `dimension` enum.
+`takosumi_revoke_debt_count` は閉じた RevokeDebt `status` enum、
+`takosumi_quota_usage_ratio` は閉じた quota `dimension` enum を label に持
+ちます。
 
-Deploy dashboard queries are part of the v1 operator surface. The bundled
-Grafana dashboard uses these PromQL expressions:
+deploy dashboard の query も v1 operator surface です。 同梱 Grafana dashboard
+が使う PromQL:
 
 | Panel               | PromQL                                                                                                                                                             |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -134,12 +125,11 @@ Grafana dashboard uses these PromQL expressions:
 
 ## Trace export
 
-The target contract emits OTLP traces for every operation that crosses an
-external boundary. The current implementation emits HTTP server spans for API
-requests, provider apply / destroy spans for WAL-backed `applyV2` / `destroyV2`
-operations, runtime-agent work execution spans, and client spans for runtime
-agent / internal RPC calls, then exports them through the native OTLP traces
-endpoint. Every per-operation span carries the same attribute set:
+OTLP trace は外部境界を跨ぐ全 operation で emit します。 API request の HTTP
+server span、 WAL-backed `applyV2` / `destroyV2` の provider apply / destroy
+span、 runtime-agent の work execution span、 runtime agent / internal RPC call
+の client span が対象で、 native OTLP traces endpoint 経由 で export されます。
+operation 単位 span は次の attribute set を持ちます。
 
 ```text
 takosumi.space_id          spaceId
@@ -150,56 +140,50 @@ takosumi.idempotency_key   idempotency tuple digest
 takosumi.agent_id          runtime-agent identity (if applicable)
 ```
 
-Span names are stable across versions and follow the form
-`takosumi.<subsystem>.<verb>` (`takosumi.apply.execute`,
-`takosumi.runtime_agent.describe`).
+span 名は version 間で安定し、 `takosumi.<subsystem>.<verb>` 形式に従いま す
+(例: `takosumi.apply.execute`、 `takosumi.runtime_agent.describe`)。
 
-Trace exemplars on histogram metrics carry `trace_id` and `span_id`, allowing
-the operator to pivot from a slow histogram bucket directly into the offending
-trace in their backend of choice.
+histogram metric の trace exemplar は `trace_id` / `span_id` を持つため、 slow
+bucket から該当 trace に直接 pivot できます。
 
 ## Sampling
 
-Sampling is **head-based** by default and operator-tunable.
+既定の sampling は **head-based** で、 operator が調整できます。
 
-- The default head sampler keeps `1.0` (100%) of traces in `local` and
-  `development`, and a configurable ratio in `staging` and `production`
-  (`TAKOSUMI_OTLP_TRACE_SAMPLE_RATIO`, default `0.05`).
-- Operations whose terminal status is an error are **always sampled**. The
-  kernel forces the sampling decision to `RECORD_AND_SAMPLED` before exporting
-  an operation that ends with `operation-failed` or `compensation-completed`.
-- Tail sampling, if any, is the operator's collector-side concern. The kernel
-  does not implement tail sampling.
+- 既定 head sampler は `local` / `development` で `1.0` (100%)、 `staging` /
+  `production` では設定可能比率 (`TAKOSUMI_OTLP_TRACE_SAMPLE_RATIO`、 既定
+  `0.05`)
+- 終了状態がエラーの operation は **常に sample** される。 kernel は
+  `operation-failed` / `compensation-completed` で終わる operation を export
+  する前に sampling decision を `RECORD_AND_SAMPLED` に強制
+- tail sampling は collector 側の関心事。 kernel は実装しない
 
 ## Cardinality
 
-High-cardinality labels are forbidden in the v1 closed set.
+v1 closed set では高 cardinality な label を禁止します。
 
-- `deploymentId`, `operationId`, `journalEntryId`, and similar per-event
-  identifiers never appear as labels. They appear as span attributes or exemplar
-  fields, never as time-series identity.
-- `spaceId` is permitted as a label. Operators with a large number of Spaces (in
-  v1, the rule of thumb is `> 1000`) configure their collector to aggregate
-  `spaceId` away before storage.
-- Free-form labels (operator names, hostnames, region) are not added by the
-  kernel. Operators wanting them inject through the OTLP collector at the
-  resource attribute layer.
+- `deploymentId` / `operationId` / `journalEntryId` 等の per-event 識別子は
+  label にはせず、 span attribute や exemplar field として扱う
+- `spaceId` は label として許可。 Space 数が大きい場合 (v1 では目安として 1000
+  超) は collector で storage 前に `spaceId` を aggregate する設定を 行う
+- operator 名 / hostname / region などの自由 label を kernel は追加しない。
+  必要なら OTLP collector の resource attribute 層で注入する
 
-## Authentication
+## 認証
 
-Both export surfaces require authentication.
+両 export surface とも認証必須。
 
-- The OTLP exporter authenticates to the collector via headers configured in
-  `TAKOSUMI_OTLP_HEADERS_JSON` or `OTEL_EXPORTER_OTLP_HEADERS`.
-- The current Prometheus `/metrics` endpoint requires a scrape token via
-  `Authorization: Bearer <TAKOSUMI_METRICS_SCRAPE_TOKEN>`. Unauthenticated
-  scrapes are rejected with `401`. The endpoint is intended for in-cluster
-  scrape from a known Prometheus identity, not for internet exposure.
+- OTLP exporter は `TAKOSUMI_OTLP_HEADERS_JSON` または
+  `OTEL_EXPORTER_OTLP_HEADERS` で設定した header で collector に対し認証
+- Prometheus `/metrics` は
+  `Authorization: Bearer <TAKOSUMI_METRICS_SCRAPE_TOKEN>` で scrape token を
+  要求。 未認証 scrape は `401` で reject。 既知 Prometheus identity から
+  in-cluster scrape する想定で、 internet 公開は想定しない
 
-## Resource attributes
+## Resource attribute
 
-Every OTLP export carries a stable resource attribute set so the collector can
-route by installation and role.
+OTLP export には installation / role で routing できるよう安定した resource
+attribute を付けます。
 
 ```text
 service.name              "takosumi"
@@ -210,42 +194,48 @@ takosumi.environment      local | development | test | staging | production
 takosumi.release          kernel package version
 ```
 
-Resource attributes appear once per export batch, not on each metric point.
-Operators add deployment-specific attributes (region, cluster) through the OTLP
-collector's resource processor; the kernel does not read region or cluster from
-its own environment.
+resource attribute は export batch ごとに 1 回付き、 metric point ごとには
+付きません。 region / cluster などは OTLP collector の resource processor で
+operator 側が追加します。 kernel が region / cluster を自身の環境から
+読み取ることはありません。
 
 ## Pull endpoint contract
 
-The Prometheus `/metrics` endpoint guarantees the following.
+Prometheus `/metrics` の保証:
 
-- Response status `200` whenever the kernel HTTP server is up.
-- Content type `text/plain; version=0.0.4`.
-- One scrape returns a consistent snapshot of metric events held by the
-  configured `ObservabilitySink`.
-- The endpoint surfaces no metric whose labels would push cardinality above the
-  v1 closed set above.
+- kernel HTTP server 稼働中は `200` を返す
+- content type は `text/plain; version=0.0.4`
+- 1 scrape で `ObservabilitySink` が保持する metric event の一貫した snapshot
+  を返す
+- 上記 v1 closed set を超える cardinality の label を含む metric は露出し ない
 
-A scrape that arrives during kernel shutdown returns `503` with
-`Retry-After: 1`.
+kernel shutdown 中の scrape は `Retry-After: 1` を付けて `503` を返します。
 
 ## Schema versioning
 
-The metric set, label set, and span attribute set above are the **v1 closed
-schema**. A consumer that wires dashboards or alerts against the v1 names is
-contractually safe across patch and minor versions.
+上記 metric set / label set / span attribute set は **v1 closed schema** です。
+v1 名で dashboard / alert を組んだ consumer は patch / minor 版
+を跨いで動作保証されます。
 
-- Renames go through the `CONVENTIONS.md` §6 RFC and announce a transition
-  window.
-- New metrics added under the RFC are allowed; consumers that ignore unknown
-  metrics keep working.
-- Removed metrics are not allowed within v1.
+- rename は `CONVENTIONS.md` §6 RFC を通し、 移行期間を告知する
+- RFC に基づく新規 metric 追加は許可。 未知 metric を無視する consumer は
+  動作する
+- v1 中の削除は不可
 
-## Related architecture notes
+## 関連 architecture notes
 
-- `reference/architecture/observation-drift-revokedebt-model` — derivation of
-  the drift, debt, and observation gauges.
+- `reference/architecture/observation-drift-revokedebt-model` — drift / debt /
+  observation gauge の導出
 - `reference/architecture/operation-plan-write-ahead-journal-model` — WAL stage
-  histogram label rationale.
-- `reference/architecture/operator-boundaries` — placement of the export surface
-  inside the kernel host trust boundary.
+  histogram label の根拠
+- `reference/architecture/operator-boundaries` — kernel host trust 境界に おける
+  export surface の配置
+
+## 関連ページ
+
+- [Logging Conventions](/reference/logging-conventions)
+- [Observability Stack](/reference/observability-stack)
+- [Time / Clock Model](/reference/time-clock-model)
+- [Audit Events](/reference/audit-events)
+- [Quota / Rate Limit](/reference/quota-rate-limit)
+- [Environment Variables](/reference/env-vars)

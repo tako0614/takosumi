@@ -1,8 +1,6 @@
 # Templates
 
-> Stability: stable Audience: integrator See also:
-> [Manifest Expand Semantics](/reference/manifest-expand-semantics),
-> [Shape Catalog](/reference/shapes), [Provider Plugins](/reference/providers)
+> このページでわかること: manifest template の仕組みと使い方。
 
 Takosumi kernel receives compiled Shape manifests with concrete `resources[]`.
 Template expansion is an installer/compiler concern and must happen before
@@ -27,3 +25,9 @@ Deployments. To update a workload, submit a new compiled manifest.
 - [Manifest Spec](/reference/manifest-spec)
 - [Manifest Expand Semantics](/reference/manifest-expand-semantics)
 - [Shape Catalog](/reference/shapes)
+
+## 関連ページ
+
+- [Manifest Expand Semantics](/reference/manifest-expand-semantics)
+- [Shape Catalog](/reference/shapes)
+- [Provider Plugins](/reference/providers)

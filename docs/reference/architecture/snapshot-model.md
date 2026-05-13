@@ -1,6 +1,8 @@
 # Snapshot Model
 
-Snapshots are immutable authority records scoped to a Space.
+> このページでわかること: snapshot モデルとバージョニングの仕組み。
+
+snapshot は Space scope の immutable な authority record である。
 
 ## IntentGraph
 

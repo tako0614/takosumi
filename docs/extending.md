@@ -1,9 +1,12 @@
 # Extending the Shape Model
 
-このページは provider plugin / Shape / Template を **追加・拡張** する RFC-style
-ガイドです。canonical な命名規則と最小コミットメントは
+> このページでわかること: 新しい Shape / Provider plugin / Template
+> を追加する手順。
+
+このページは provider plugin / Shape / Template を **追加・拡張** する手順を
+日本語でまとめたものです。命名規則と最小コミットメントの詳細は
 [`takosumi/CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md)
-を正本とし、本ページは docs site での日本語サマリです。
+を参照してください。
 
 ## 拡張の選び方
 

@@ -222,9 +222,9 @@ export interface CoreInjectionTarget {
 }
 
 /**
- * Component-level binding declaration — the canonical, non-legacy authoring
- * shape for explicitly requesting that a selected source field be injected
- * into a component. Compiles to a CoreBindingDeclaration.
+ * Component-level binding declaration — the canonical authoring shape for
+ * explicitly requesting that a selected source field be injected into a
+ * component. Compiles to a CoreBindingDeclaration.
  */
 export interface CoreComponentBindingSpec {
   from: CoreComponentBindingSource;

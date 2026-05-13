@@ -1,53 +1,47 @@
 # Environment Variables
 
-> Stability: stable Audience: operator See also:
-> [Secret Partitions](/reference/secret-partitions),
-> [CLI Reference](/reference/cli),
-> [DataAsset Policy](/reference/data-asset-policy)
+> このページでわかること: kernel が読む環境変数の一覧。
 
-This page is the v1 catalog of `TAKOSUMI_*` environment variables. Each entry
-lists the consuming target, the type the value is parsed as, the default,
-whether the variable is required, and the spec concept it relates to.
+v1 で kernel が読み取る `TAKOSUMI_*` 環境変数のカタログです。 各 entry に消費
+側、 parse 後の型、 既定値、 必須かどうか、 関連 spec concept を列挙します。
 
-::: info Current implementation scope This catalog includes both current boot
-workers are not mounted yet. Current kernel boot code definitely parses the role
-/ environment / public-route / deploy-token / internal-secret / database /
-artifact / plugin-selection / audit-retention / observation-retention /
-runtime-agent variables documented below. Domain-specific rows such as API key
-hashing, trial cleanup, SLA windows, support impersonation, auth-provider JSON,
-and quota-tier bootstrap are spec contracts until their corresponding service
-routes or workers are wired. :::
+::: info 実装範囲 本ページは現行 boot 系と spec 上の契約の両方を列挙してい
+ます。 role / environment / public-route / deploy-token / internal-secret /
+database / artifact / plugin-selection / audit-retention / observation-retention
+/ runtime-agent は kernel boot で確実に parse されます。 API key hashing / trial
+cleanup / SLA window / support impersonation / auth-provider JSON / quota-tier
+bootstrap などの domain 固有 entry は、 対応 route / worker が配線 されるまでは
+spec 上の契約として扱います。 :::
 
 ## Precedence
 
-Across every consumer, values are resolved in this order:
+すべての consumer で次の順序で値を解決します。
 
 ```text
-1. process env                      # highest precedence
-2. configuration file / inline operator config
-3. built-in default                 # lowest precedence
+1. process env                      # 最優先
+2. 設定ファイル / inline operator config
+3. built-in default                 # 最低
 ```
 
-A flag passed on a CLI command always overrides every source above when the
-command exposes the flag. Adding a new `TAKOSUMI_*` variable requires the
-`CONVENTIONS.md` §6 RFC; ad-hoc variables are not allowed.
+CLI が flag を提供する command では、 その flag が上記すべてを上書きします。 新
+`TAKOSUMI_*` を追加するには `CONVENTIONS.md` §6 RFC が必須で、 ad-hoc な
+追加は不可。
 
-Boolean variables accept `1 / true / yes / on / enabled` as truthy and
-`0 / false / no / off / disabled` as falsy. Anything else fails closed.
+boolean 変数は `1 / true / yes / on / enabled` を真、
+`0 / false / no / off / disabled` を偽と解釈。 それ以外は fail closed です。
 
 ## Kernel server
 
-The kernel process roles are
-`takosumi-{api,worker,router,runtime-agent,log-worker}`. Selection between roles
-is driven by `TAKOSUMI_PAAS_PROCESS_ROLE`; every other variable below is shared
-across roles unless noted.
+kernel の process role は
+`takosumi-{api,worker,router,runtime-agent,log-worker}`。 role の選択は
+`TAKOSUMI_PROCESS_ROLE` で行い、 以下の他の変数は注記が無い限り role
+間で共有されます。
 
 ### Connectivity and identity
 
 | Variable                         | Type      | Default                        | Required                                | Consumer                                                                                       | Spec concept            |
 | -------------------------------- | --------- | ------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------- |
-| `TAKOSUMI_PAAS_PROCESS_ROLE`     | enum      | `takosumi-api`                 | yes (production)                        | kernel boot, bootstrap                                                                         | role selection          |
-| `TAKOSUMI_PROCESS_ROLE`          | enum      | `takosumi-api`                 | no                                      | alias of `TAKOSUMI_PAAS_PROCESS_ROLE`; if both are set they must match                         | role selection          |
+| `TAKOSUMI_PROCESS_ROLE`          | enum      | `takosumi-api`                 | yes (production)                        | kernel boot, bootstrap                                                                         | role selection          |
 | `TAKOSUMI_ENVIRONMENT`           | enum      | `local`                        | no                                      | runtime config (`local` / `development` / `test` / `staging` / `production`)                   | OperatorBoundaries      |
 | `TAKOSUMI_DEV_MODE`              | boolean   | `false`                        | no                                      | runtime config; gates `allowUnsafeProductionDefaults`                                          | OperatorBoundaries      |
 | `TAKOSUMI_LISTEN_ADDR`           | host:port | `0.0.0.0:8788`                 | no                                      | kernel HTTP server bind                                                                        | n/a                     |
@@ -63,7 +57,6 @@ across roles unless noted.
 
 | Variable                           | Type            | Default                                        | Required                                   | Consumer                                                                                       | Spec concept                 |
 | ---------------------------------- | --------------- | ---------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------- | ---------------------------- |
-| `TAKOSUMI_DB_URL`                  | URL             | unset                                          | no                                         | shared alias for the active environment's database URL                                         | OperationJournal persistence |
 | `TAKOSUMI_DATABASE_URL`            | URL             | unset (in-memory fallback)                     | yes (production)                           | primary state DB; resolved when no env-specific override matches                               | OperationJournal persistence |
 | `TAKOSUMI_STAGING_DATABASE_URL`    | URL             | unset                                          | yes when `TAKOSUMI_ENVIRONMENT=staging`    | preferred URL for staging                                                                      | OperationJournal persistence |
 | `TAKOSUMI_PRODUCTION_DATABASE_URL` | URL             | unset                                          | yes when `TAKOSUMI_ENVIRONMENT=production` | preferred URL for production                                                                   | OperationJournal persistence |
@@ -72,15 +65,13 @@ across roles unless noted.
 | `TAKOSUMI_ARTIFACT_MAX_BYTES`      | bytes (integer) | `52428800` (50 MiB)                            | no                                         | global upload cap; registered artifact kind `maxSize` may override it                          | DataAsset Model              |
 | `TAKOSUMI_SECRET_STORE_PASSPHRASE` | secret          | unset                                          | yes when memory secret-store is selected   | passphrase for the in-memory secret partition; partition-scoped suffixes (`_<NAME>`) supported | Secret isolation invariant   |
 | `TAKOSUMI_SECRET_STORE_KEY`        | secret          | unset                                          | no                                         | raw key alternative to the passphrase                                                          | Secret isolation invariant   |
-| `TAKOSUMI_SECRET_ENCRYPTION_KEY`   | secret          | unset                                          | no                                         | additional alias of `TAKOSUMI_SECRET_STORE_KEY`                                                | Secret isolation invariant   |
 | `TAKOSUMI_LOCK_LEASE_MS`           | integer (ms)    | `30000`                                        | no                                         | cross-process lock lease window                                                                | Cross-Process Locks          |
 | `TAKOSUMI_LOCK_HEARTBEAT_MS`       | integer (ms)    | `10000`                                        | no                                         | cross-process lock heartbeat interval                                                          | Cross-Process Locks          |
 
 ### Boot timeouts
 
-The kernel boot pipeline waits for each substrate to become ready before
-transitioning to `serving`. Each timeout below caps the wait window for one boot
-stage.
+kernel boot pipeline は各 substrate が ready になるまで待ってから `serving`
+に遷移します。 以下の各 timeout は 1 boot stage の待ち時間上限です。
 
 | Variable                                           | Type              | Default | Required | Consumer                                        | Spec concept       |
 | -------------------------------------------------- | ----------------- | ------- | -------- | ----------------------------------------------- | ------------------ |
@@ -133,10 +124,10 @@ stage.
 
 ### Plugin selectors
 
-The kernel selects an Implementation per plugin port (`auth`, `coordination`,
-`notification`, `operator-config`, `storage`, `source`, `provider`, `queue`,
-`object-storage`, `kms`, `secret-store`, `router-config`, `observability`,
-`runtime-agent`).
+kernel は plugin port (`auth` / `coordination` / `notification` /
+`operator-config` / `storage` / `source` / `provider` / `queue` /
+`object-storage` / `kms` / `secret-store` / `router-config` / `observability` /
+`runtime-agent`) ごとに Implementation を選択します。
 
 | Variable                                                                                 | Type        | Default          | Required                            | Consumer                                                       | Spec concept       |
 | ---------------------------------------------------------------------------------------- | ----------- | ---------------- | ----------------------------------- | -------------------------------------------------------------- | ------------------ |
@@ -152,14 +143,15 @@ The kernel selects an Implementation per plugin port (`auth`, `coordination`,
 | `TAKOSUMI_ENABLE_REFERENCE_KERNEL_PLUGIN_LOADER`                                         | boolean     | `false`          | no                                  | enables the reference plugin loader                            | OperatorBoundaries |
 | `TAKOSUMI_ENABLE_DENO_DEPLOY_PROVIDER`                                                   | boolean     | `false`          | no                                  | opt-in registration of the Deno Deploy provider in stock boots | n/a                |
 
-The kernel does not support marketplace URL/package selectors or remote plugin
-install. Operator packaging may provide plugin modules, but marketplace
+kernel は marketplace URL / package selector や remote plugin install を
+サポートしません。 operator packaging が plugin module
+を持ち込むのは可能ですが、 marketplace 機構は持ちません。
 
 ### Deploy Credentials
 
-Account-plane auth providers and user API keys are owned by Takosumi Accounts.
-The kernel only owns operator deploy/artifact credentials and runtime-agent
-credentials.
+account plane の auth provider と user API key は Takosumi Accounts が所有 し、
+kernel は operator の deploy / artifact credential と runtime-agent credential
+のみを所有します。
 
 ### Tenant Lifecycle
 
@@ -194,25 +186,23 @@ credentials.
 
 ## CLI
 
-The `takosumi` CLI reads its own variables and resolves a remote URL, token, and
-config-file path from them. See [CLI Reference](/reference/cli) for the full
-resolution order.
+`takosumi` CLI は以下の変数を読み、 remote URL / token / config file path を
+解決します。 解決順序は [CLI Reference](/reference/cli) を参照。
 
-| Variable                | Type   | Default                  | Required                                | Consumer                                                            | Spec concept            |
-| ----------------------- | ------ | ------------------------ | --------------------------------------- | ------------------------------------------------------------------- | ----------------------- |
-| `TAKOSUMI_REMOTE_URL`   | URL    | unset                    | yes for remote-only commands            | base URL of the kernel HTTP server                                  | n/a                     |
-| `TAKOSUMI_DEPLOY_TOKEN` | secret | unset                    | yes for deploy and artifact subcommands | bearer for `/v1/deployments` and `/v1/artifacts/*`                  | DataAsset Model         |
-| `TAKOSUMI_TOKEN`        | secret | unset                    | no                                      | generic token alias; warns once and prefers `TAKOSUMI_DEPLOY_TOKEN` | n/a                     |
-| `TAKOSUMI_AGENT_URL`    | URL    | unset                    | yes for `runtime-agent list / verify`   | runtime-agent base URL                                              | runtime-agent lifecycle |
-| `TAKOSUMI_AGENT_TOKEN`  | secret | unset                    | yes when `TAKOSUMI_AGENT_URL` is set    | bearer for runtime-agent calls                                      | runtime-agent lifecycle |
-| `TAKOSUMI_CONFIG_FILE`  | path   | `~/.takosumi/config.yml` | no                                      | override path for the CLI config file                               | n/a                     |
+| Variable                | Type   | Default                  | Required                                | Consumer                                           | Spec concept            |
+| ----------------------- | ------ | ------------------------ | --------------------------------------- | -------------------------------------------------- | ----------------------- |
+| `TAKOSUMI_REMOTE_URL`   | URL    | unset                    | yes for remote-only commands            | base URL of the kernel HTTP server                 | n/a                     |
+| `TAKOSUMI_DEPLOY_TOKEN` | secret | unset                    | yes for deploy and artifact subcommands | bearer for `/v1/deployments` and `/v1/artifacts/*` | DataAsset Model         |
+| `TAKOSUMI_AGENT_URL`    | URL    | unset                    | yes for `runtime-agent list / verify`   | runtime-agent base URL                             | runtime-agent lifecycle |
+| `TAKOSUMI_AGENT_TOKEN`  | secret | unset                    | yes when `TAKOSUMI_AGENT_URL` is set    | bearer for runtime-agent calls                     | runtime-agent lifecycle |
+| `TAKOSUMI_CONFIG_FILE`  | path   | `~/.takosumi/config.yml` | no                                      | override path for the CLI config file              | n/a                     |
 
 ## Runtime-Agent
 
-The runtime-agent process holds cloud SDK credentials. Cloud credentials are
-read from each SDK's standard variables (for example `AWS_*`,
-`GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDFLARE_API_TOKEN`, `AZURE_*`); they are
-not part of the Takosumi catalog and must never live on the kernel host.
+runtime-agent プロセスは cloud SDK の credential を保持します。 cloud credential
+は各 SDK の標準変数 (例: `AWS_*`、 `GOOGLE_APPLICATION_CREDENTIALS`、
+`CLOUDFLARE_API_TOKEN`、 `AZURE_*`) から 読み込み、 Takosumi catalog
+の対象外です。 kernel host には絶対に置きませ ん。
 
 | Variable                                    | Type   | Default           | Required                         | Consumer                                                                | Spec concept            |
 | ------------------------------------------- | ------ | ----------------- | -------------------------------- | ----------------------------------------------------------------------- | ----------------------- |
@@ -227,23 +217,18 @@ not part of the Takosumi catalog and must never live on the kernel host.
 | `TAKOSUMI_SELFHOSTED_COREDNS_FILE`          | path   | unset             | no                               | coredns configuration file path                                         | runtime-agent lifecycle |
 | `TAKOSUMI_SELFHOSTED_POSTGRES_HOST`         | string | unset             | no                               | self-hosted postgres host                                               | runtime-agent lifecycle |
 
-The runtime-agent enrolment flow uses the agent token: the operator provisions a
-token on the agent host (env or random), the kernel host is configured with the
-same token through `TAKOSUMI_AGENT_URL` plus `TAKOSUMI_AGENT_TOKEN`, and the
-kernel verifies the agent's `GET /v1/health` before posting any lifecycle
-envelope.
+runtime-agent の enrolment フロー: operator が agent host に token (env 設定
+または乱数生成) を渡し、 kernel host を `TAKOSUMI_AGENT_URL` +
+`TAKOSUMI_AGENT_TOKEN` で同じ token に揃え、 kernel は lifecycle envelope を
+送信する前に agent の `GET /v1/health` を検証します。
 
-## Stale selector keys
+## 拒否される selector key
 
-A small set of variable names is rejected at boot and must be migrated before
-the kernel will start. The rejected names span pre-v1 plugin selector layouts
-(`*_BACKEND`, `*_ADAPTER`, and the earlier bootstrap adapter family). The
-current shape is `TAKOSUMI_<PORT>_PLUGIN`; existing deployments migrate by
-translating each rejected name into the corresponding `_PLUGIN` selector and
-re-running boot. A successful boot is sufficient migration; there is no
-intermediate compatibility layer.
+非 current plugin selector 形式 (`*_BACKEND` / `*_ADAPTER`、旧 bootstrap adapter
+family) は boot 時に reject されます。 current 形式は `TAKOSUMI_<PORT>_PLUGIN`。
+これらの key が存在する構成は起動拒否され、互換 layer はありません。
 
-The closed list of rejected names is:
+拒否される名前の閉じた一覧:
 
 ```text
 TAKOSUMI_STORAGE_BACKEND
@@ -273,35 +258,34 @@ TAKOSUMI_SECRET_STORE_NAMESPACE
 TAKOSUMI_BOOTSTRAP_*_ADAPTER
 ```
 
-If any of these are present, `loadRuntimeConfig` raises a diagnostic tagged
-`stale_runtime_selector` and refuses to start.
+これらが存在すると、 `loadRuntimeConfig` は `stale_runtime_selector` の
+diagnostic を出して起動を拒否します。
 
-## Host placement
+## Host 配置
 
-The variables above belong on different hosts; mixing them on a single host
-weakens the OperatorBoundaries trust model.
+上記変数は host 役割ごとに分割します。 同一 host で混在させると
+OperatorBoundaries trust model を弱めます。
 
-- Kernel host: state and storage variables, deploy / internal tokens, artifact
-  policy variables, plugin selectors, audit and observation retention controls,
-  the runtime-agent URL and bearer.
-- Runtime-Agent host: the agent bearer, every `TAKOSUMI_KUBERNETES_*` and
-  `TAKOSUMI_SELFHOSTED_*` variable, and the cloud SDK credentials. The deploy
-  bearer and the internal control-plane secret never leave the kernel host.
-- CLI host (operator workstation, CI): the remote URL, the deploy bearer,
-  optionally the runtime-agent URL and bearer, and `TAKOSUMI_CONFIG_FILE` when a
-  non-default config path is in use.
+- kernel host: state / storage 変数、 deploy / internal token、 artifact
+  policy、 plugin selector、 audit / observation retention、 runtime-agent URL /
+  bearer
+- runtime-agent host: agent bearer、 `TAKOSUMI_KUBERNETES_*` /
+  `TAKOSUMI_SELFHOSTED_*`、 cloud SDK credential。 deploy bearer と internal
+  control-plane secret は kernel host から外に出さない
+- CLI host (operator workstation、 CI): remote URL、 deploy bearer、 必要に
+  応じて runtime-agent URL / bearer、 非デフォルト設定で `TAKOSUMI_CONFIG_FILE`
 
-## Related
+## 関連
 
-- Reference: [CLI](/reference/cli),
-  [DataAsset Kinds](/reference/artifact-kinds),
-  [DataAsset Policy](/reference/data-asset-policy),
-  [Secret Partitions](/reference/secret-partitions),
-  [Migration / Upgrade](/reference/migration-upgrade),
-  [Compliance Retention](/reference/compliance-retention),
+- リファレンス: [CLI](/reference/cli)、
+  [DataAsset Kinds](/reference/artifact-kinds)、
+  [DataAsset Policy](/reference/data-asset-policy)、
+  [Secret Partitions](/reference/secret-partitions)、
+  [Migration / Upgrade](/reference/migration-upgrade)、
+  [Compliance Retention](/reference/compliance-retention)、
   [Observation Retention](/reference/observation-retention)
 
-## See also
+## 関連ページ
 
 - [Tenant Provisioning](/reference/tenant-provisioning)
 - [Tenant Export & Deletion](/reference/tenant-export-deletion)
@@ -309,11 +293,17 @@ weakens the OperatorBoundaries trust model.
 - [Quota Tiers](/reference/quota-tiers)
 - [Cost Attribution](/reference/cost-attribution)
 - [Zone Selection](/reference/zone-selection)
-- [API Key Management](/reference/api-key-management) — migration stub
-- [Auth Providers](/reference/auth-providers) — migration stub
-- [RBAC Policy](/reference/rbac-policy) — migration stub
+- [API Key Management](/reference/api-key-management)
+- [Auth Providers](/reference/auth-providers)
+- [RBAC Policy](/reference/rbac-policy)
 - [SLA Breach Detection](/reference/sla-breach-detection)
 - [Incident Model](/reference/incident-model)
 - [Support Impersonation](/reference/support-impersonation)
 - [Notification Emission](/reference/notification-emission)
 - [Kernel HTTP API](/reference/kernel-http-api)
+
+## 関連ページ
+
+- [Secret Partitions](/reference/secret-partitions)
+- [CLI Reference](/reference/cli)
+- [DataAsset Policy](/reference/data-asset-policy)

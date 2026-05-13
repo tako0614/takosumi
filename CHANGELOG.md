@@ -66,8 +66,8 @@ entry).
 ### 0.11.0 — 2026-05-02
 
 - `~/.takosumi/config.yml` is consulted as a last-priority default for
-  `--remote` / `--token` (resolution: flag > env > config file > deprecated env
-  alias). Override path via `TAKOSUMI_CONFIG_FILE`.
+  `--remote` / `--token` (resolution: flag > env > config file). Override path
+  via `TAKOSUMI_CONFIG_FILE`.
 - New `takosumi completions <bash|zsh|fish>` subcommand via
   `@cliffy/command/completions`.
 - `takosumi server --detach` prints systemd / docker / nohup templates instead
@@ -75,8 +75,9 @@ entry).
 
 ### 0.10.0 — earlier
 
-- Provider-id namespacing under `@takos/<cloud>-<service>`. Bare ids
-  (`aws-fargate` etc.) accepted with deprecation warning, slated for removal.
+- Provider-id namespacing under `@takos/<cloud>-<service>`. Current manifests
+  use namespaced ids such as `@takos/aws-fargate`; bare provider ids are not the
+  current public contract.
 
 ## takosumi-runtime-agent
 
@@ -106,7 +107,7 @@ entry).
 
 ### 0.6.0 — 2026-05-02
 
-- Connector `provider` field migrated to `@takos/<cloud>-<service>` namespacing.
+- Connector `provider` field now uses `@takos/<cloud>-<service>` namespacing.
 - New `verify` action across connectors for read-only credential smoke tests.
 
 ## takosumi-kernel
@@ -191,9 +192,8 @@ entry).
   path-prefixed error.
 - **Breaking**: bare provider ids (`aws-fargate`, `cloud-run`, `local-docker`,
   etc.) are now **rejected** at the resource resolver with a
-  namespaced-replacement suggestion. Earlier the resolver fell back
-  transparently to namespaced ids with a deprecation warning. Migration: rewrite
-  every `provider:` field to `@takos/<cloud>-<service>`.
+  namespaced-replacement suggestion. Current manifests must write every
+  `provider:` field as `@takos/<cloud>-<service>`.
 
 ### 0.12.0 — 2026-05-02
 
@@ -225,12 +225,12 @@ entry).
   `satisfies readonly XxxCapability[]` on each entry's `capabilities` array.
   Capability typos in the catalog are caught at compile time (TypeScript
   `TS2820` "Did you mean ..." suggestion). The runtime shape remains a
-  `readonly string[]` for compatibility.
+  `readonly string[]` to match the provider contract.
 
 ### 0.10.0 — 2026-05-02
 
-- 21 production providers under `@takos/<cloud>-<service>` namespacing (was bare
-  ids). Resolves bare ids with a deprecation warning.
+- 21 production providers under `@takos/<cloud>-<service>` namespacing. Current
+  manifests use namespaced provider ids.
 - Bundled artifact-kind registry: `oci-image`, `js-bundle`, `lambda-zip`,
   `static-bundle`, `wasm`. `GET /v1/artifacts/kinds` lists registered kinds; CLI
   `takosumi artifact kinds` queries it.

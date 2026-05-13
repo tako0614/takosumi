@@ -23,7 +23,8 @@ Most operators run the kernel via the CLI:
 - `GET /v1/deployments[/:name]` — state query
 - `POST /v1/artifacts` (multipart upload) + GET / HEAD / DELETE / list / GC /
   kinds — artifact store
-- `POST /v1/runtime-agent/*` — fleet enrollment / lease / heartbeat (legacy)
+- `POST /v1/runtime-agent/*` — runtime-agent fleet enrollment / lease /
+  heartbeat
 - `applyV2` — DAG topological apply with idempotency (spec fingerprint),
   rollback on partial failure, concurrency lock per `(tenant, deployment)`
 - `destroyV2` — reverse-order teardown with persisted handle resolution
@@ -38,7 +39,7 @@ Most operators run the kernel via the CLI:
 | Env var                                         | Description                                           |
 | ----------------------------------------------- | ----------------------------------------------------- |
 | `TAKOSUMI_DATABASE_URL`                         | Postgres URL for state / record store                 |
-| `TAKOSUMI_ENCRYPTION_KEY`                       | Symmetric key for at-rest secret encryption           |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE`              | Symmetric key for at-rest secret encryption           |
 | `TAKOSUMI_DEPLOY_TOKEN`                         | Bearer for `POST /v1/deployments` and artifact write  |
 | `TAKOSUMI_DEPLOY_SPACE_ID`                      | Public deploy Space scope (default `takosumi-deploy`) |
 | `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN`   | runtime-agent locator                                 |

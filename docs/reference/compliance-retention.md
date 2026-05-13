@@ -1,11 +1,6 @@
 # Compliance Retention
 
-> Stability: stable Audience: operator See also:
-> [Audit Events](/reference/audit-events),
-> [Observation Retention](/reference/observation-retention),
-> [Journal Compaction](/reference/journal-compaction),
-> [Secret Partitions](/reference/secret-partitions),
-> [Environment Variables](/reference/env-vars)
+> このページでわかること: コンプライアンス要件に基づくデータ保持ポリシー。
 
 Takosumi v1 における compliance regime ごとの audit retention 仕様。 PCI-DSS /
 HIPAA / SOX / regulated / default の 5 値 closed enum を採用し、 各 regime
@@ -143,13 +138,13 @@ archive sink への delivery 方式は kernel が batch で push する。 deliv
 sink ごとの ack semantics に従う (S3 Object Lock の PutObject 成功 + Object Lock
 確認、など)。
 
-Takosumi の current implementation では、SQL audit retention は
-`SqlObservabilitySink.applyRetentionPolicy()` が担う。retention cutoff を超えた
-entry は、configured `AuditReplicationSink` へ配送してから `archived=true` に
-mark される。汎用 object-store archive は `ObjectStorageAuditReplicationSink`
-が担当し、`ObjectStoragePort` 経由で `<prefix>/events/<sequence>-<hash>.json` に
-hash-chain record を保存する。S3 Object Lock / GCS Bucket Lock / R2 / MinIO
-などの immutability は adapter 側の 運用 policy として満たす。
+SQL audit retention は `SqlObservabilitySink.applyRetentionPolicy()`
+が担う。retention cutoff を超えた entry は、configured `AuditReplicationSink`
+へ配送してから `archived=true` に mark される。汎用 object-store archive は
+`ObjectStorageAuditReplicationSink` が担当し、`ObjectStoragePort` 経由で
+`<prefix>/events/<sequence>-<hash>.json` に hash-chain record を保存する。S3
+Object Lock / GCS Bucket Lock / R2 / MinIO などの immutability は adapter 側の
+運用 policy として満たす。
 
 ### Delivery contract
 
@@ -247,3 +242,11 @@ erasure 操作自体が audit event として記録される:
   Risk / approval の interplay
 - `docs/reference/architecture/snapshot-model.md` — snapshot / journal / audit
   の retention 階層分離 rationale
+
+## 関連ページ
+
+- [Audit Events](/reference/audit-events)
+- [Observation Retention](/reference/observation-retention)
+- [Journal Compaction](/reference/journal-compaction)
+- [Secret Partitions](/reference/secret-partitions)
+- [Environment Variables](/reference/env-vars)

@@ -1,9 +1,11 @@
 # Exposure and Activation Model
 
-Route-bearing resources create Exposure intent inside one Space. In the public
-manifest this is expressed through Shape resources such as `custom-domain@v1` or
-route fields on `web-service@v1`, not through a separate top-level `expose`
-object. Exposure is not a Link.
+> このページでわかること: exposure と activation のモデル定義。
+
+route を持つ resource は 1 つの Space の中に Exposure intent を作成する。public
+manifest では、これは `custom-domain@v1` や `web-service@v1` の route フィールド
+などの Shape resource で表現され、別の top-level `expose` object で表現しない。
+Exposure は Link ではない。
 
 ## Exposure
 
@@ -17,9 +19,9 @@ resources:
       target: ${ref:api.url}
 ```
 
-The resolver turns this into an Exposure record for `app.example.com` that
-targets the `api` resource output. Exposure prepares external ingress. It does
-not by itself make the deployment current.
+resolver はこれを `api` resource output を target にした `app.example.com` の
+Exposure record に変換する。Exposure は外部 ingress を準備するが、それだけで
+deployment を current にはしない。
 
 ## Apply vs activation
 
@@ -36,20 +38,20 @@ post-activate observe:
 
 ## Space rule
 
-Exposure ownership, ingress reservation, route materialization,
-ActivationSnapshot, and GroupHead are Space-local. Two Spaces may not claim the
-same global ingress unless the operator route policy allows shared ownership or
-delegation.
+Exposure 所有権、ingress 予約、route の materialization、ActivationSnapshot、
+GroupHead は Space-local である。operator の route policy が shared ownership や
+delegation を許可しない限り、2 つの Space が同じ global ingress を主張する
+ことはできない。
 
 ```text
 GroupHead identity = spaceId + groupId
 ```
 
-Cross-space traffic assignment is not part of public v1.
+Space を跨ぐ traffic assignment は public v1 の一部ではない。
 
 ## Exposure generated objects
 
-Exposure materialization may create generated objects:
+Exposure の materialization は generated object を作成しうる。
 
 ```text
 IngressReservation
@@ -59,7 +61,7 @@ ProviderIngressObject
 TrafficAssignment
 ```
 
-Each generated object has owner, reason, deterministic id, and delete policy.
+各 generated object は owner、reason、決定的 id、delete policy を持つ。
 
 ```yaml
 GeneratedObject:
@@ -80,20 +82,19 @@ ActivationSnapshot:
   sourceObservationDigest: sha256:... # latest observation feeding `health`
 ```
 
-`sourceObservationDigest` records the ObservationSet entry that produced the
-current `health` annotation; it is the only authoritative link from runtime
-reality back to the snapshot. ObservationSet entries do not mutate
-`assignments`.
+`sourceObservationDigest` は現在の `health` 注記を生成した ObservationSet entry
+を記録する。これは runtime reality を snapshot に結びつける唯一の authoritative
+な link である。ObservationSet entry は `assignments` を変更しない。
 
-GroupHead moves only after apply-phase revalidation and activation policy pass.
+GroupHead は apply phase の再検証と activation policy の通過後にのみ動く。
 
 ## Post-activate health state
 
-After activation, an exposure tracks runtime reality through a closed v1 state
-machine. Transitions are driven only by entries appended to ObservationSet by
-the `observe` stage of the
-[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md).
-No transition mutates DesiredSnapshot.
+activation 後、exposure は closed v1 state machine を通じて runtime reality を
+追跡する。状態遷移は
+[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+の `observe` stage が ObservationSet に append する entry
+によってのみ駆動される。 どの状態遷移も DesiredSnapshot を変更しない。
 
 ```text
 unknown → observing → healthy
@@ -111,13 +112,13 @@ healthy   ↔ degraded ↔ unhealthy   (re-entry on observation change)
 | `degraded`  | partial signal; some checks pass, some fail           |
 | `unhealthy` | latest observation contradicts the desired assignment |
 
-Effects of `unhealthy`:
+`unhealthy` の effect:
 
-- `unhealthy` does not rewrite DesiredSnapshot. It only feeds DriftIndex and an
-  annotation on ActivationSnapshot.
-- `unhealthy` blocks new traffic shifts initiated by future activations unless
-  an approval explicitly overrides; existing GroupHead pointers are not rolled
-  back automatically (fail-safe-not-fail-closed).
-- See
+- `unhealthy` は DesiredSnapshot を書き換えない。DriftIndex と
+  ActivationSnapshot 上の注記に流れるだけ。
+- `unhealthy` は将来の activation が開始する新規 traffic shift を block する
+  (approval で明示的に override されない限り)。既存の GroupHead pointer は
+  自動的には rollback されない (fail-safe-not-fail-closed)。
+- この state から drift entry がどう作られるかは
   [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
-  for how drift entries are produced from this state.
+  を参照。

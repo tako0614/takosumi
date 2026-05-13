@@ -1,9 +1,6 @@
 # WAL Stages
 
-> Stability: stable Audience: kernel-implementer See also:
-> [Lifecycle Protocol](/reference/lifecycle),
-> [Approval Invalidation Triggers](/reference/approval-invalidation),
-> [RevokeDebt Model](/reference/revoke-debt)
+> このページでわかること: WAL の各ステージとステート遷移。
 
 Takosumi v1 の WriteAheadOperationJournal (WAL) における stage closed enum、
 idempotency key の構造、replay rule、および pre/post-commit verification
@@ -149,38 +146,36 @@ compensate 対象ではなく `failed_precondition` になる。
 
 ## Public deploy provenance
 
-`POST /v1/deployments` may receive top-level `provenance` from an upstream
-client. The kernel treats this value as opaque JSON. It does not execute
-workflows, parse build logs, or interpret git fields, but it does persist the
-chain as WAL evidence:
+`POST /v1/deployments` は upstream client から top-level `provenance` を受け
+取ることがあります。 kernel はこの値を opaque JSON として扱い、 workflow を
+実行したり build log を parse したり git field を解釈したりはせず、 WAL evidence
+として永続化します。
 
-- every public WAL effect detail carries the full `provenance` object
-- every resolved resource receives `metadata.takosumiDeployProvenance` with
-  `kind: "takosumi.deploy-provenance-digest@v1"` and the provenance digest
-- the resource metadata participates in the public OperationPlan digest, so a
-  same manifest body with a different artifact provenance is a different
-  operation intent
-- status and recovery inspect responses can surface the recorded provenance for
-  audit consumers
+- public WAL の effect detail には `provenance` object 全体を含める
+- 解決後の resource には `metadata.takosumiDeployProvenance` を付け、
+  `kind: "takosumi.deploy-provenance-digest@v1"` と provenance digest を記録
+- 当該 metadata は public OperationPlan digest に参加する。 同じ manifest body
+  でも artifact provenance が違えば別 operation intent になる
+- status / recovery inspect の response から audit consumer に記録済 provenance
+  を返せる
 
-This is how clients such as `takosumi-git` make artifact URI -> workflow run id
--> git commit SHA -> step log digest traceability durable without moving
-workflow execution into the kernel.
+これにより `takosumi-git` のような client は、 artifact URI -> workflow run id
+-> git commit SHA -> step log digest の traceability を kernel に workflow
+を持ち込まずに永続化できます。
 
 ## Pre/post-commit verification lifecycle
 
-Current kernel contract has no catalog-supplied executable hook package runtime.
-WAL stages may include kernel-owned validation and evidence collection, but the
-kernel does not load marketplace hook code or expose generic `pre-commit` /
-`post-commit` hook execution as a public extension point.
+kernel contract には catalog 供給の実行可能 hook package runtime はありませ ん。
+WAL stage は kernel が所有する validation / evidence collection を含む
+ことがありますが、 marketplace hook code を load したり、 汎用の `pre-commit` /
+`post-commit` hook 実行を公開拡張点として露出したりはしません。
 
-Workflow / repository automation that needs hook-like behavior belongs to
-`takosumi-git` or another upstream product. Those products must finish their
-checks before sending a compiled Shape manifest to `POST /v1/deployments`.
+hook 的挙動が必要な workflow / repository automation は `takosumi-git` など
+の上流 product 側で行い、 compile 済 Shape manifest を `POST /v1/deployments`
+に送る前に検査を済ませる前提です。
 
-Removed service import descriptors are not recorded in `prepare`. Current
-`prepare` detail contains manifest provenance, resource operation plan, and
-kernel validation evidence only.
+`prepare` 詳細には manifest provenance、 resource operation plan、 kernel
+validation evidence のみが含まれます。
 
 ## Orphaned debt 経路
 
@@ -212,3 +207,9 @@ subsystem に委ねる。
   マッピングの設計 rationale と recovery mode の選定背景
 - `docs/reference/architecture/observation-drift-revokedebt-model.md` — orphaned
   debt の taxonomy と observe 経路の設計議論
+
+## 関連ページ
+
+- [Lifecycle Protocol](/reference/lifecycle)
+- [Approval Invalidation Triggers](/reference/approval-invalidation)
+- [RevokeDebt Model](/reference/revoke-debt)

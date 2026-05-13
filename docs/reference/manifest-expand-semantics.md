@@ -1,16 +1,11 @@
 # Manifest Expand Semantics
 
-> Stability: stable Audience: integrator, kernel-implementer See also:
-> [Manifest Validation](/reference/manifest-validation),
-> [Templates](/reference/templates), [Shapes](/reference/shapes),
-> [Closed Enums](/reference/closed-enums)
+> このページでわかること: manifest の expand (参照解決) セマンティクス。
 
-This page is the v1 contract for `${ref:...}` resolution inside manifests: the
-grammar, the resolution timing, the resolution order, cycle detection, the
-unresolved-ref rules, the cross-component scoping rules, the current denial of
-cross-Space references, the interaction with templates, the distinction between
-literal and reference values, the escape rule, and the type coercion rules at
-the bind point.
+本ページは manifest 内 `${ref:...}` 解決の v1 contract である: 文法、解決
+タイミング、解決順序、循環検出、未解決 ref 規則、コンポーネント間スコープ
+規則、Space 間参照の現状の拒否、template との相互作用、リテラル値と参照値の
+区別、エスケープ規則、bind 時の型強制規則を定める。
 
 ## Grammar
 
@@ -49,9 +44,9 @@ Resolution runs in two distinct phases.
    topological order and binds each reference to the actual output value of the
    producing resource.
 
-The bound values are captured into a `ResolutionSnapshot` and become immutable
-for the lifetime of the OperationPlan. Re-`apply` of the same manifest re-runs
-both phases and produces a fresh snapshot.
+bind された値は `ResolutionSnapshot` に capture され、OperationPlan の生存期間
+中は immutable となる。同じ manifest の再 `apply` は両 phase を再実行し、新しい
+snapshot を生成する。
 
 ## Resolution order
 
@@ -65,10 +60,9 @@ Resolution follows the dependency DAG.
 - Nested references are resolved bottom-up: `${ref:web.endpoint}/api` resolves
   `web.endpoint` first, then concatenates the suffix.
 
-Parallelism is implementation-defined. The kernel may resolve independent leaves
-concurrently; the snapshot is deterministic regardless of resolution order,
-because the source-of-truth is the DAG, not the wall-clock arrival of resolved
-values.
+並列度は実装定義である。kernel は独立 leaf を並行 resolve しうる。真実の source
+は DAG であって解決値の wall-clock 到着順ではないため、snapshot は resolve
+順序によらず決定的である。
 
 ## Cycle detection
 
@@ -81,8 +75,8 @@ Cycles in the DAG are rejected at validation time.
 - A self-reference (`a -> a`, where component `a` references its own output) is
   a cycle of length one and is rejected with the same error code.
 
-The kernel does not implement partial-cycle resolution. A manifest with any
-cycle is unprocessable until the operator removes it.
+kernel は partial-cycle 解決を実装しない。循環を含む manifest は operator が
+それを取り除くまで処理不能である。
 
 ## Unresolved references
 
@@ -100,9 +94,8 @@ Three failure modes exist for an otherwise-well-formed reference.
   replayed, not rejected; the apply pipeline drives the producing resource
   through its WAL stages before re-attempting the consumer.
 
-The first two are static manifest errors and surface to the operator
-synchronously. The third is a dynamic dependency the kernel resolves on the
-operator's behalf.
+最初の 2 つは静的 manifest エラーで、operator に同期的に surface する。3 つ目 は
+kernel が operator に代わって解決する動的依存である。
 
 ## Cross-component references
 
@@ -174,8 +167,8 @@ shellCommand: "echo $$HOME" # emits literal "$HOME"
 template: "$${ref:not.parsed}" # emits literal "${ref:not.parsed}"
 ```
 
-The kernel processes `$$` once during validation; nested escapes (`$$$$`)
-collapse pairwise.
+kernel は validation 中に `$$` を 1 度処理する。ネスト した escape (`$$$$`) は
+ペア単位で畳まれる。
 
 ## Type coercion
 
@@ -204,3 +197,10 @@ the bind site path in the error payload.
   re-resolve.
 - `reference/architecture/policy-risk-approval-error-model` — placement of the
   `invalid_argument` code in the closed DomainErrorCode enum.
+
+## 関連ページ
+
+- [Manifest Validation](/reference/manifest-validation)
+- [Templates](/reference/templates)
+- [Shapes](/reference/shapes)
+- [Closed Enums](/reference/closed-enums)

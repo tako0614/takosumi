@@ -1,8 +1,8 @@
 import type { WebServiceSpec } from "../../shapes/web-service.ts";
 
 /**
- * Resolves the OCI image URI from either the legacy `spec.image` field or the
- * new `spec.artifact: { kind: "oci-image", uri }` discriminated union.
+ * Resolves the OCI image URI from either `spec.image` shorthand or the
+ * `spec.artifact: { kind: "oci-image", uri }` discriminated union.
  *
  * `validateSpec` guarantees one of the two forms is present, but the
  * inferred type is `string | undefined` so call sites still need a runtime

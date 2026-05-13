@@ -26,16 +26,10 @@ export interface ResourceResolutionResult {
 }
 
 /**
- * Bare provider id → namespaced provider id (used for error-message hints
- * only).
- *
- * Manifests generated before Takosumi 0.10 used bare ids (e.g. `aws-fargate`).
- * Two operator plugins could both register the same bare id, last-write-wins.
- * From 0.12 onward bare ids are rejected at resolve time; this map only
- * lets the resolver point operators at the namespaced replacement in the
- * resolution issue message.
+ * Bare provider id → namespaced provider id suggestions. Bare provider ids are
+ * rejected; this map keeps the resolution issue actionable.
  */
-const LEGACY_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+const BARE_PROVIDER_SUGGESTIONS: Readonly<Record<string, string>> = {
   "aws-s3": "@takos/aws-s3",
   "aws-fargate": "@takos/aws-fargate",
   "aws-rds": "@takos/aws-rds",
@@ -66,9 +60,8 @@ type ProviderSelection = {
 };
 
 /**
- * Look up a provider by id. If the operator wrote a known legacy bare id,
- * return `{ provider: undefined, suggested: "@takos/<name>" }` so the caller
- * can emit a helpful resolution issue pointing at the namespaced replacement.
+ * Look up a provider by id. For known bare ids, return a namespaced suggestion
+ * so the caller can emit a helpful resolution issue.
  */
 function lookupProvider(
   rawId: string,
@@ -76,7 +69,7 @@ function lookupProvider(
   const direct = getProvider(rawId);
   if (direct) return { provider: direct };
   if (rawId.startsWith("@")) return {};
-  const suggested = LEGACY_PROVIDER_ALIASES[rawId];
+  const suggested = BARE_PROVIDER_SUGGESTIONS[rawId];
   return suggested ? { suggested } : {};
 }
 
@@ -160,8 +153,8 @@ export function resolveResourcesV2(
         path: `${path}.provider`,
         message: resource.provider
           ? providerSelection.suggested
-            ? `provider id "${resource.provider}" is the legacy bare form ` +
-              `removed in Takosumi 0.12; rewrite as "${providerSelection.suggested}"`
+            ? `provider id "${resource.provider}" must be namespaced; ` +
+              `use "${providerSelection.suggested}"`
             : `provider not registered: ${resource.provider}`
           : providerSelection.issue ?? "provider selection failed",
       });

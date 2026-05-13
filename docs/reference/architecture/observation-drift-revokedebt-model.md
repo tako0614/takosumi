@@ -1,7 +1,9 @@
 # Observation, Drift, and RevokeDebt Model
 
-Observation records reality inside a Space. Drift is computed. Debt records
-failed cleanup.
+> このページでわかること: observation / drift / RevokeDebt のモデル定義。
+
+Observation は Space 内の reality を記録する。Drift は計算される。Debt は失敗
+した cleanup を記録する。
 
 ## ObservationSet
 
@@ -19,18 +21,18 @@ ObservationSet:
       freshness: fresh | stale | revoked | unknown
 ```
 
-ObservationSet does not mutate DesiredSnapshot.
+ObservationSet は DesiredSnapshot を変更しない。
 
 ## Space rule
 
-ObservationSet, DriftIndex, and RevokeDebt are Space-scoped. Observation from
-one Space must not mutate or validate DesiredSnapshot in another Space. Current
-v1 does not create cross-Space share debt. Future RFCs that enable the provider
-Space only through the recorded share.
+ObservationSet、DriftIndex、RevokeDebt は Space scope である。ある Space の
+observation は別 Space の DesiredSnapshot を変更したり validate したりしては
+ならない。current v1 は Space を跨ぐ share debt を作らない。将来の RFC で
+provider Space を有効化する場合も、記録された share 経由でのみアクセスする。
 
 ## DriftIndex
 
-DriftIndex compares DesiredSnapshot with ObservationSet.
+DriftIndex は DesiredSnapshot と ObservationSet を比較する。
 
 ```yaml
 Drift:
@@ -42,8 +44,8 @@ Drift:
 
 ## RevokeDebt
 
-RevokeDebt records generated material that should be revoked or deleted but
-could not be cleaned up.
+RevokeDebt は revoke または削除すべきだが cleanup できなかった生成 material を
+記録する。
 
 ### RevokeDebt record schema
 
@@ -61,7 +63,7 @@ RevokeDebt:
   createdAt: ...
 ```
 
-Closed v1 enums:
+closed な v1 enum:
 
 ```text
 reason:
@@ -78,50 +80,46 @@ status:
   cleared                 debt is satisfied; entry is preserved for audit
 ```
 
-### Future Multi-Space ownership rule
+### Ownership fields
 
-RevokeDebt is owned by the Space that materialized the generated object. Current
-enables that vocabulary:
+RevokeDebt は cleanup / retry を実行する Space が所有する。current v1 は
+次の語彙を使う。
 
-- `ownerSpaceId` is the importing (consuming) Space; the import side drives
-  retry, status, and cleanup.
-- `originatingSpaceId` is the exporting (provider) Space and gets a read-only
-  mirror entry of the same RevokeDebt id for audit.
-- The exporting Space cannot mutate `status` directly; it may only revoke the
-  the importing side.
+- `ownerSpaceId` drives retry, status transitions, cleanup, and worker context.
+- `originatingSpaceId` records where the debt originated; omitted values default
+  to `ownerSpaceId`.
+- status mutation is scoped to `ownerSpaceId`.
 
 ### ActivationSnapshot propagation
 
-`status: operator-action-required` propagates into ActivationSnapshot state but
-is fail-safe-not-fail-closed:
+`status: operator-action-required` は ActivationSnapshot state に伝播するが、
+fail-safe-not-fail-closed である。
 
-- New traffic shifts (i.e. activations that would advance GroupHead) are blocked
-  while the related debt is `operator-action-required`.
-- Existing GroupHead pointers and existing TrafficAssignments are **not** rolled
-  back automatically; runtime continues serving the previous assignment.
-- See
+- 関連する debt が `operator-action-required` の間、新規 traffic shift
+  (GroupHead を進める activation) は block される。
+- 既存の GroupHead pointer と TrafficAssignment は自動的に rollback
+  **されない**。 runtime は以前の assignment を提供し続ける。
+- observation で `unhealthy` 注記と debt がどう相互作用するかは
   [Exposure and Activation Model — Post-activate health state](./exposure-activation-model.md)
-  for how `unhealthy` annotations and debt interact in observation.
+  を参照。
 
-RevokeDebt is not a warning. It is operational debt and must be visible in
-status, plan, audit, and production readiness checks.
+RevokeDebt は警告ではない。operational debt であり、status、plan、audit、
+production readiness check で可視でなければならない。
 
 ## Observation retention
 
-ObservationSet stores latest reality. ObservationHistory is optional and
-policy-controlled. OperationJournal and RevokeDebt carry recovery-critical
-history.
+ObservationSet は最新の reality を保存する。ObservationHistory は optional で
+policy 管理。OperationJournal と RevokeDebt は recovery クリティカルな履歴を
+持つ。
 
 ## Observability architecture
 
-This section records the architecture-layer rules that govern how observation,
-drift, and debt become operator-visible signals. Wire shape lives in the
-reference docs.
+この節は observation / drift / debt が operator から見える signal になるまでを
+規律するアーキテクチャ層の規則を記録する。wire shape は reference 文書にある。
 
 ### Audit retention policy
 
-Retention is layered. Each layer has a distinct purpose and a distinct TTL
-boundary.
+retention は階層的である。各層は別個の目的と TTL 境界を持つ。
 
 ```text
 ObservationSet         latest reality only; superseded by next observation
@@ -130,21 +128,19 @@ OperationJournal       recovery-critical; retained until journal compaction allo
 AuditLog               compliance-driven; retained per operator policy
 ```
 
-Architecture rules:
+アーキテクチャ規則:
 
-- TTL values are not fixed by the kernel. Each layer carries an
-  operator-controlled retention policy.
-- ObservationSet may be discarded freely as long as a successor ObservationSet
-  exists.
-- OperationJournal entries must not be discarded while any dependent RevokeDebt
-  is non-terminal or while WAL replay correctness depends on them.
-- AuditLog retention is independent of the other three; compliance windows do
-  not shorten OperationJournal retention.
+- TTL は kernel が固定しない。各層は operator 管理の retention policy を持つ。
+- 後続の ObservationSet が存在する限り ObservationSet は自由に破棄できる。
+- 依存する RevokeDebt が非終了状態にある間、または WAL replay の正しさが依存
+  している間は、OperationJournal entry を破棄してはならない。
+- AuditLog retention は他 3 つから独立している。compliance window が
+  OperationJournal retention を短くすることはない。
 
 ### Drift propagation
 
-A drift entry surfaces in `DriftIndex` first. From there it propagates along a
-fixed path:
+drift entry はまず `DriftIndex` に surface する。そこから固定 path に沿って
+伝播する。
 
 ```text
 DriftIndex
@@ -153,46 +149,46 @@ DriftIndex
   -> approval invalidation             see Approval invalidation triggers in policy-risk-approval-error-model
 ```
 
-DriftIndex never mutates DesiredSnapshot. Activation rollback caused by drift is
-mediated by RevokeDebt and the activation lifecycle, not by direct
-DesiredSnapshot edit.
+DriftIndex は DesiredSnapshot を変更しない。drift による activation rollback は
+RevokeDebt と activation lifecycle が仲介し、DesiredSnapshot を直接編集する
+ことはない。
 
 ### RevokeDebt aging
 
-RevokeDebt that remains in `status: open` past an aging window transitions
-automatically to `operator-action-required`.
+`status: open` のまま aging window を過ぎた RevokeDebt は、自動的に
+`operator-action-required` に遷移する。
 
 ```text
 open --(aging window elapsed without retry success)--> operator-action-required
 ```
 
-Aging architecture rules:
+Aging のアーキテクチャ規則:
 
-- The aging window is policy-controlled, not a kernel constant. The architecture
-  only requires that such a window exists and that the transition is automatic,
-  idempotent, and journaled.
-- Manual operator action can move `open` directly to `operator-action-required`
-  regardless of the window.
-- `cleared` is terminal. Aged debt that becomes cleared records both the aging
-  transition and the clearance event.
+- aging window は policy 管理であり、kernel 定数ではない。アーキテクチャは
+  そのような window が存在し、遷移が自動・idempotent・journal 済みであること
+  だけを要求する。
+- 手動 operator action は window によらず `open` から `operator-action-required`
+  に直接遷移できる。
+- `cleared` は終端である。aged debt が clear されたときは aging 遷移と clearance
+  event の両方を記録する。
 
 ### ObservationHistory policy
 
-ObservationHistory is optional and Space-scoped.
+ObservationHistory は optional で Space scope である。
 
 ```text
 opt-in    operator enables retention; ObservationSet entries are appended to history
 opt-out   default; only the latest ObservationSet is kept
 ```
 
-Architecture rules:
+アーキテクチャ規則:
 
-- ObservationHistory is never authoritative for resolution or planning. It is a
-  query surface only.
-- Enabling ObservationHistory does not change DriftIndex semantics. Drift is
-  computed against current ObservationSet versus DesiredSnapshot.
-- Disabling ObservationHistory must not delete OperationJournal or RevokeDebt
-  records.
+- ObservationHistory は resolution や planning の authority にはならない。query
+  surface に過ぎない。
+- ObservationHistory を有効化しても DriftIndex の semantics は変わらない。drift
+  は current ObservationSet と DesiredSnapshot を比較して計算される。
+- ObservationHistory を無効化しても OperationJournal や RevokeDebt record を
+  削除してはならない。
 
 ## Cross-references
 

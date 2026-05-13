@@ -418,7 +418,7 @@ Deno.test("StandaloneBootstrapService rejects memory observability sink in produ
     values: {
       TAKOSUMI_ENVIRONMENT: "production",
       TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
-      TAKOSUMI_INTERNAL_SERVICE_SECRET: "production-secret-7d3f1a8b9e2c",
+      TAKOSUMI_INTERNAL_API_SECRET: "production-secret-7d3f1a8b9e2c",
       TAKOSUMI_BOOTSTRAP_OBSERVABILITY_ADAPTER: "memory",
     },
   });
@@ -445,7 +445,7 @@ Deno.test("StandaloneBootstrapService selects sql observability when sqlClient a
     values: {
       TAKOSUMI_ENVIRONMENT: "production",
       TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
-      TAKOSUMI_INTERNAL_SERVICE_SECRET: "production-secret-7d3f1a8b9e2c",
+      TAKOSUMI_INTERNAL_API_SECRET: "production-secret-7d3f1a8b9e2c",
       TAKOSUMI_BOOTSTRAP_OBSERVABILITY_ADAPTER: "sql",
     },
   });

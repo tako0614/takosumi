@@ -1,149 +1,138 @@
 # Access Modes
 
-> Stability: stable Audience: integrator See also:
-> [Closed Enums](/reference/closed-enums), [Shape Catalog](/reference/shapes),
-> [Provider Plugins](/reference/providers)
+> このページでわかること: deploy / plan / destroy 各アクセスモードの動作仕様。
 
-The Takosumi v1 access mode enum is the closed vocabulary that governs how a
-Link consumer interacts with an export's resource. It is the canonical authority
-field on grant-producing exports and on link declarations that project an export
-into a consuming Space.
+Takosumi v1 の access mode enum は、 link consumer が export の resource とどう
+やり取りするかを規定する閉じた語彙です。 grant を発行する export、 および
+consuming space に export を射影する link 宣言の両方で、 権限の正本フィールドと
+して用いられます。
 
 ```text
 read | read-write | admin | invoke-only | observe-only
 ```
 
-The enum is closed. Adding a mode requires a `CONVENTIONS.md` §6 RFC. No
-provider, connector, or template extends it unilaterally.
+enum は閉じています。 新規モード追加には `CONVENTIONS.md` §6 の RFC が必須で、
+provider / connector / template が単独で拡張することはできません。
 
-## Mode semantics
+## モードごとの意味
 
 ### `read`
 
-Observation-only access to the export's underlying resource. The consumer may
-read state (object payload, table rows, queue depth, configuration), subscribe
-to materialized snapshots, and inspect schema. **No grant material is
-generated** beyond what is needed to authenticate the read, and no mutation API
-surface is projected.
+export の resource に対する観測のみのアクセス。 consumer は state (object
+payload、 table rows、 queue depth、 configuration) の参照、 materialized
+snapshot の購読、 schema の確認ができます。 **認証に必要な最小限以上の grant
+material は生成されず**、 mutation API は射影されません。
 
-Allowed: select / get / list / describe / subscribe. Not allowed: any
-state-changing call on the resource.
-
-Typical use: a `web-service` shape consuming a `database` shape's `read` link to
-power a status dashboard; a downstream Space consuming an external tenant's
-`bucket` shape for analytics-only.
+- 許可: select / get / list / describe / subscribe
+- 不許可: resource を変更する全ての呼び出し
+- 典型例: `web-service` shape が `database` shape の `read` link で status
+  dashboard を構築する、 下流 space が外部 tenant の `bucket` shape を解析専用
+  で消費する
 
 ### `read-write`
 
-`read` plus mutation rights on the export's primary state surface. The consumer
-may both observe and update the resource through the API contract that the shape
-defines as its mutation surface.
+`read` に加えて、 export の primary state surface に対する mutation 権限を持ち
+ます。 consumer は shape が mutation surface として定義する API contract を介
+して、 観測と更新の両方ができます。
 
-Allowed: everything in `read`, plus insert / update / upsert / delete within the
-shape's mutation contract. Not allowed: lifecycle administration of the resource
-(recreate, drop, re-shard, rotate root credential, delete the resource container
-itself).
-
-Typical use: a backend `web-service` writing to its own `database` shape; a
-worker shape pushing into an `object-store` shape.
+- 許可: `read` の全権限に加え、 insert / update / upsert / delete
+- 不許可: resource の lifecycle 管理 (recreate / drop / re-shard / root
+  credential rotation / container 自体の削除)
+- 典型例: backend `web-service` が自身の `database` shape に書き込む、 worker
+  shape が `object-store` shape へ push する
 
 ### `admin`
 
-Full management of the export's resource. The consumer can perform mutation
-**and** lifecycle administration (rotate credentials, recreate, re-shard, drop),
-within the limits the provider enforces at its boundary. Treated as the most
-privileged closed-enum value.
+export の resource を完全に管理する権限です。 mutation に加えて lifecycle
+operation (credential rotation、 recreate、 re-shard、 drop) を provider 境界の
+許す範囲で実行できます。 閉じた enum の中でもっとも特権的な値として扱います。
 
-Allowed: everything in `read-write`, plus shape-defined administrative
-operations. Not allowed: nothing within the resource scope; cross-resource
-administrative implications (e.g. revoking links granted from this export) still
-go through the kernel's grant model.
-
-`admin` is never an implicit default. Defaults that imply admin must be declared
-explicitly on the link, never derived from `safeDefaultAccess`.
-
-Typical use: an operator-facing control plane Space that manages the underlying
-database for a tenant; rare in tenant Spaces.
+- 許可: `read-write` の全権限に加え、 shape が定義する管理操作
+- 不許可: resource scope 内では特になし。 ただし他 resource への波及 (この
+  export が発行した link の revoke など) は kernel の grant model 経由
+- 既定では `admin` にはなりません。 admin を含む default は link 上で明示宣言
+  が必要で、 `safeDefaultAccess` からは導出されません
+- 典型例: tenant の database を管理する operator 向け control plane space
+  (tenant space では稀)
 
 ### `invoke-only`
 
-The consumer may call the resource through the shape's invocation surface but
-cannot read or mutate underlying state directly. State inspection is available
-only through the invocation result envelope that the shape defines.
+consumer は shape の invocation surface を経由して resource を呼び出せますが、
+state の直接 read / mutation はできません。 状態の確認は invocation result
+envelope を介してのみ可能です。
 
-Allowed: invoke / call / publish / submit through the shape's invocation
-contract. Not allowed: read of stored state, observation of internal queues,
-mutation outside the invocation envelope.
-
-Typical use: a `web-service` invoking another `web-service`'s public API; a
-producer publishing to a queue without read on the queue itself.
+- 許可: shape の invocation contract に基づく invoke / call / publish / submit
+- 不許可: 蓄積された state の read、 内部 queue の観測、 invocation envelope
+  外での mutation
+- 典型例: `web-service` が他 `web-service` の公開 API を呼ぶ、 queue 自体の read
+  権限を持たず producer として publish のみ行う
 
 ### `observe-only`
 
-The consumer may receive notifications, metrics, or projection events the export
-emits, but holds no access to the resource itself. No synchronous read, no
-invocation, no mutation.
+consumer は export が emit する notification / metrics / projection event を受
+け取れますが、 resource 自体には一切アクセスできません。 同期 read も invocation
+も mutation もありません。
 
-Allowed: metric / event / notification consumption through the shape's
-observation surface. Not allowed: any direct interaction with the resource.
-
-Typical use: a metrics aggregator subscribing to many export's emission streams;
-a SIEM consumer.
+- 許可: shape の observation surface 経由の metric / event / notification 消費
+- 不許可: resource への直接的な操作すべて
+- 典型例: 多数の export の emission stream を購読する metrics aggregator、 SIEM
+  consumer
 
 ## `safeDefaultAccess`
 
-A shape may declare `safeDefaultAccess` on an export that participates in
-`${ref:...}` resolution without an explicit `access` field on the consuming
-link. The value picked must be one of the closed modes above.
+shape は `safeDefaultAccess` を export に宣言できます。 これは consuming link
+側で `access` を明示しない `${ref:...}` 解決の既定値で、 上記の閉じたモードの
+いずれかである必要があります。
 
-The contract:
+contract:
 
-- `safeDefaultAccess` may be `null`, `read`, `invoke-only`, or `observe-only`.
-  `read-write` and `admin` are **never** valid as defaults.
-- A grant-producing export with `safeDefaultAccess: null` requires the consuming
-  link to specify `access` explicitly. Resolution fails with `access-required`
-  otherwise.
-- The resolved access mode is recorded on the
-  `ResolutionSnapshot.linkProjections[].access` slot, regardless of whether it
-  came from the explicit link field or the default.
+- `safeDefaultAccess` は `null` / `read` / `invoke-only` / `observe-only` のい
+  ずれか。 `read-write` と `admin` は default にできない
+- grant 発行 export で `safeDefaultAccess: null` の場合、 consuming link は
+  `access` を明示しなければならない。 そうでなければ `access-required` で解決
+  に失敗する
+- 解決後の access mode は、 link 上の明示値か default 由来かにかかわらず
+  `ResolutionSnapshot.linkProjections[].access` に記録される
 
-## Where `access` is required on the link
+## link 側で `access` 明示が必須となる条件
 
-The link declaration must carry `access` explicitly when:
+- export の `safeDefaultAccess` が `null` のとき
+- link が grant 発行 export を射影し、 consuming shape spec が当該 slot に grant
+  detail を要求しているとき
+- operator の policy pack が暗黙アクセスを禁止する shape のとき (`prod/strict`
+  と `enterprise/catalog-approved-only` で有効)
 
-- The export's `safeDefaultAccess` is `null`.
-- The link projects a grant-producing export and the consuming shape's spec
-  marks the slot as requiring grant detail.
-- The operator policy pack forbids implicit access on the export's shape
-  (`prod/strict` and `enterprise/catalog-approved-only` enable this).
+`access` を明示した場合、 shape の `outputFields` が unsupported と宣言する
+モードは kernel validation で reject されます。
 
-When `access` is provided, kernel validation rejects modes that the shape's
-`outputFields` declares unsupported.
+## 承認 (approval) 無効化との関係
 
-## Approval invalidation interaction
+link projection の resolved access mode が変わると、 approval invalidation enum
+の **effect-detail change** trigger に該当します。 既存 approval が
+`ResolutionSnapshot` に紐付いている場合、 以下の状況で短絡的に無効化されま す。
 
-A change to the resolved access mode on any link projection counts as the
-**effect-detail change** trigger in the approval invalidation enum. An existing
-approval bound to a `ResolutionSnapshot` is short-circuit invalidated when:
+- consuming link の `access` が別モードに切り替わった
+- export の `safeDefaultAccess` が変わり、 consuming link が default に依存し
+  ていた
+- grant 発行 export が新たに operator policy review 越しでないと特定モードを
+  許可しないように設定された
 
-- A consuming link toggles `access` from one mode to another.
-- The export's `safeDefaultAccess` changes and a consuming link relied on the
-  default.
-- A grant-producing export newly gates an access mode behind operator policy
-  review.
+approval invalidation trigger の全リストは
+[Closed Enums](/reference/closed-enums) を参照。 access mode
+変更は実運用上もっとも頻繁な `effect-detail change` の 原因であり、 `read-write`
+と `admin` を link 上で明示宣言させる理由でもあり ます。
 
-The full set of approval invalidation triggers lives in
-[Closed Enums](/reference/closed-enums). The access-mode-driven invalidation is
-the most common cause of `effect-detail change` in practice and is the reason
-`read-write` and `admin` always require an explicit declaration on the link.
+## 関連 architecture notes
 
-## Related architecture notes
-
-関連 architecture notes:
-
-- `docs/reference/architecture/target-model.md` — access mode enum closure
-  rationale と `safeDefaultAccess` の choice space
+- `docs/reference/architecture/target-model.md` — access mode enum を閉じる
+  根拠と `safeDefaultAccess` の選択肢
 - `docs/reference/architecture/link-projection-model.md` — link projection が
   access mode を `${ref:...}` resolver に通す経路と effect-detail への影響
-- `docs/reference/architecture/namespace-export-model.md` — grant-producing
-  default が `admin` を取り得ない理由と export 側からの enforcement
+- `docs/reference/architecture/namespace-export-model.md` — grant 発行 default
+  が `admin` を取れない理由と export 側 enforcement
+
+## 関連ページ
+
+- [Closed Enums](/reference/closed-enums)
+- [Shape Catalog](/reference/shapes)
+- [Provider Plugins](/reference/providers)

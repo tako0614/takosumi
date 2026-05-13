@@ -1,9 +1,6 @@
 # Provider Plugins
 
-> Stability: stable Audience: integrator See also:
-> [Shape Catalog](/reference/shapes),
-> [Connector Contract](/reference/connector-contract),
-> [Access Modes](/reference/access-modes)
+> このページでわかること: bundled provider plugin の一覧と対応 shape。
 
 A **provider plugin** is the v1 unit that materializes a
 [Shape](/reference/shapes) on a concrete cloud or local backend. Each plugin
@@ -30,10 +27,10 @@ Source roots:
 
 ## Capability vocabulary: open string + reserved prefix
 
-Capabilities are **open strings**. A provider may declare any kebab-case
-identifier in its `capabilities` array, and a manifest may reference any
-identifier in `requires`. Selection only checks subset membership: a provider is
-eligible iff `requires ⊆ capabilities`.
+capability は **open string** である。provider は `capabilities` 配列に任意の
+kebab-case 識別子を宣言でき、manifest は任意の識別子を `requires` で参照できる。
+選択は subset の所属だけをチェックする: provider が選択可能なのは
+`requires ⊆ capabilities` の場合に限る。
 
 To keep the global vocabulary coherent, three prefixes are **reserved**:
 
@@ -51,11 +48,11 @@ new identifier under `takos.*` or `system.*` also goes through the §6 RFC;
 
 ## Bundled provider catalog
 
-The 21 bundled providers, grouped by cloud. Shape and capability sets match
-`packages/plugins/src/shape-providers/factories.ts` exactly. The **extension
-policy** column states whether a third party may add new capabilities to that
-provider via the standard provider PR flow (extensible) or whether the
-capability set is closed within the in-tree provider (closed-within-provider).
+同梱されている 21 個の provider をクラウド別にグルーピング。Shape と capability
+集合は `packages/plugins/src/shape-providers/factories.ts` と完全に一致する。
+**extension policy** 列は、サードパーティが標準の provider PR フローで
+capability を追加してよいか (extensible)、あるいは in-tree provider 内で
+capability 集合が 閉じているか (closed-within-provider) を示す。
 
 ### AWS
 
@@ -144,8 +141,9 @@ back through the apply result.
 
 ## Public API surface
 
-The `registerProvider` entry point — `packages/contract/src/provider-plugin.ts`
-in source — is the v1 way to install a plugin into the in-process registry.
+`registerProvider` エントリポイント (source は
+`packages/contract/src/provider-plugin.ts`) は、in-process registry に plugin を
+インストールする v1 の方法である。
 
 ```ts
 function registerProvider(
@@ -154,7 +152,7 @@ function registerProvider(
 ): ProviderPlugin | undefined;
 ```
 
-The `ProviderPlugin` shape:
+`ProviderPlugin` の形:
 
 ```ts
 interface ProviderPlugin<Spec, Outputs, Capability extends string = string> {
@@ -196,3 +194,9 @@ storage port, observability sink, and the resolved-output map used by
 - `CONVENTIONS.md` §6 RFC (at the takosumi repo root) — process for proposing
   new reserved capability prefixes and for changes to the shape-level capability
   union.
+
+## 関連ページ
+
+- [Shape Catalog](/reference/shapes)
+- [Connector Contract](/reference/connector-contract)
+- [Access Modes](/reference/access-modes)

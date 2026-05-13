@@ -1,21 +1,17 @@
 # Journal Compaction
 
-> Stability: stable Audience: kernel-implementer, operator See also:
-> [Storage Schema](/reference/storage-schema),
-> [Audit Events](/reference/audit-events),
-> [Lifecycle Protocol](/reference/lifecycle)
+> このページでわかること: WAL journal の compaction ポリシー。
 
-The WriteAheadOperationJournal grows monotonically as deploy operations transit
-the WAL stages. Without compaction the journal would grow without bound, replay
-would slow with every additional deploy, and storage cost would diverge from the
-size of the live state. This reference defines the compaction triggers, the
-retention rules that protect replay correctness, the snapshotization step that
-converts compacted ranges into a base snapshot, and the operator controls
-available for tuning compaction frequency.
+WriteAheadOperationJournal は deploy operation が WAL stage を進むにつれて単調に
+増大する。compaction なしでは journal は際限なく成長し、deploy のたびに replay
+が 遅くなり、storage コストは live state のサイズと乖離する。本リファレンスは
+compaction trigger、replay 正しさを守る retention 規則、compacted 範囲を base
+snapshot に変換する snapshotization ステップ、compaction 頻度を tune する
+operator コントロールを定義する。
 
-Compaction is independent from audit log retention; see
-[Audit Events](/reference/audit-events) for the regime-driven retention rules
-that govern audit storage.
+Compaction は audit log retention とは独立している。audit storage を支配する
+regime 駆動の retention 規則については [Audit Events](/reference/audit-events)
+を参照。
 
 ## Compaction triggers
 
@@ -33,8 +29,8 @@ any deploy.
 - Manual operator instruction through internal operator tooling or the
   equivalent kernel HTTP API endpoint.
 
-Triggers are OR-combined. The first condition to fire wins; only one compaction
-pass runs against a journal at a time. Concurrent triggers are coalesced.
+trigger は OR で結合される。最初に発火した条件が勝つ。journal に対して 1 度に
+動く compaction pass は 1 つだけで、並行 trigger は合一される。
 
 ## Retention rules
 
@@ -93,8 +89,8 @@ and must not leave the base snapshot pair in a partially written state.
   leaves orphan compacted entries; the next compaction pass recognizes the
   orphan range by its position before the active cursor and reclaims it.
 
-The journal cursor itself is part of the kernel's recovery state and is durable
-across restarts.
+journal cursor 自体は kernel の recovery state の一部で、再起動を跨いで durable
+である。
 
 ## Relationship with retention regimes
 
@@ -137,7 +133,7 @@ Operators may also place targeted holds through internal operator tooling:
   investigation.
 - release clears the hold.
 
-Holds are recorded under the `lock-acquired` and `lock-released` audit events.
+hold は `lock-acquired` と `lock-released` の audit event として記録される。
 
 ## Inspection
 
@@ -159,3 +155,9 @@ Inspection commands require the operator bearer.
   garbage collection.
 - `reference/architecture/observation-drift-revokedebt-model` — RevokeDebt
   status rules referenced by retention.
+
+## 関連ページ
+
+- [Storage Schema](/reference/storage-schema)
+- [Audit Events](/reference/audit-events)
+- [Lifecycle Protocol](/reference/lifecycle)

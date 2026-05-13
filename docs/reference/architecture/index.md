@@ -1,13 +1,16 @@
 # Takosumi v1 Final Abstract Spec
 
-Takosumi v1 is an **invariant-first, space-isolated, snapshot-backed,
-graph-shaped, write-ahead-operation-journaled PaaS operation kernel**.
+> このページでわかること: Takosumi v1 kernel の抽象仕様と設計モデルの全体像。
 
-The public manifest stays intentionally small. The kernel does not treat the
-manifest as canonical state. A manifest creates intent. The request context
-chooses a `Space`. The kernel resolves intent inside that Space against an
-adopted catalog release, records immutable snapshots, then executes idempotent
-operations through a write-ahead journal.
+Takosumi v1 は
+**invariant-first、space-isolated、snapshot-backed、graph-shaped、
+write-ahead-operation-journaled な PaaS operation kernel** である。
+
+public manifest は意図的に小さく保たれている。kernel は manifest を canonical
+state として扱わない。manifest は intent を作る。request context が `Space`
+を選ぶ。kernel はその Space の中で、adopt 済みの catalog release に対して intent
+を解決し、immutable snapshot を記録し、write-ahead journal を通じて idempotent
+な operation を実行する。
 
 ```text
 Manifest + Space context
@@ -22,7 +25,7 @@ Manifest + Space context
 
 ## Public v1 manifest words
 
-Only these words belong to the public manifest vocabulary:
+public manifest の語彙に属するのは次の語のみである。
 
 ```text
 apiVersion
@@ -37,16 +40,16 @@ spec
 requires
 ```
 
-The manifest is a closed vocabulary. Unknown top-level fields fail validation.
-Public v1 deploy intent is expressed as a `resources[]` graph of Shape
-resources. Shape ids, provider ids, artifact references, bindings, routes, and
-custom domains are resolved through contract packages and operator policy;
-arbitrary descriptor URLs are not public manifest inputs.
+manifest は closed vocabulary である。未知の top-level field は validation で
+失敗する。Public v1 の deploy intent は Shape resource からなる `resources[]`
+graph として表現される。Shape id、provider id、artifact reference、binding、
+route、custom domain は contract package と operator policy を通じて解決される。
+任意の descriptor URL は public manifest の入力ではない。
 
-`Space` is not a manifest field. It is supplied by actor auth, API route,
-operator context, or client profile. The same manifest can be applied in
-different Spaces and resolve different namespace exports, policies, catalog
-releases, secrets, and activation history.
+`Space` は manifest field ではない。actor auth、API route、operator context、
+または client profile から供給される。同じ manifest を異なる Space
+で適用すると、 異なる namespace export、policy、catalog
+release、secret、activation history が解決される。
 
 ## Kernel v1 root words
 
@@ -79,12 +82,12 @@ Connector
 
 ## Root statement
 
-Takosumi v1 creates immutable snapshots before it acts. Every side effect is
-journaled before and after execution. Observations never rewrite desired state.
-External source objects are never destroyed by a deployment; only link-owned
-generated objects are revoked or deleted. All resolution, namespace lookup,
-policy, secrets, journals, observations, and activation are scoped by Space
-unless an explicit Space export share allows otherwise.
+Takosumi v1 は行動の前に immutable snapshot を作る。すべての side effect は
+実行前後に journal される。Observation が desired state を書き換えることはない。
+deployment が外部 source object を破壊することはなく、link が所有する生成 object
+だけが revoke または削除される。すべての resolution、namespace lookup、
+policy、secret、journal、observation、activation は、明示的な Space export share
+が許さない限り Space scope である。
 
 ## Reading order
 
@@ -150,8 +153,8 @@ resources:
       target: ${ref:api.url}
 ```
 
-`db`, `api`, and `web` become resource intents in one Space-scoped graph.
-`${ref:db.connectionString}` and `${ref:api.url}` are resolved only after the
-producer resource outputs are known. The selected provider descriptors, data
-asset requirements, approval decisions, implementation choices, and Space
-provenance are recorded in `ResolutionSnapshot`.
+`db`、`api`、`web` は 1 つの Space scope graph の中で resource intent となる。
+`${ref:db.connectionString}` と `${ref:api.url}` は producer resource output が
+判明した後にのみ解決される。選ばれた provider descriptor、data asset 要件、
+承認決定、implementation 選択、Space provenance は `ResolutionSnapshot` に
+記録される。

@@ -1,49 +1,42 @@
 # Artifact GC and Activation History
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [DataAsset Kinds](/reference/artifact-kinds),
-> [Storage Schema](/reference/storage-schema),
-> [Audit Events](/reference/audit-events),
-> [Kernel HTTP API](/reference/kernel-http-api), [CLI](/reference/cli),
-> [Quota and Rate Limit](/reference/quota-rate-limit),
-> [Revoke Debt](/reference/revoke-debt)
+> このページでわかること: artifact の GC ポリシーと activation history
+> の保持ルール。
 
-This reference defines the v1 artifact garbage-collection contract and the
-ActivationSnapshot history export surface. Both surfaces share a
-mark-and-traverse pattern over the persistent record set declared in
-[Storage Schema](/reference/storage-schema).
+本リファレンスは v1 artifact ガベージコレクション contract と ActivationSnapshot
+history export surface を定義する。両 surface は
+[Storage Schema](/reference/storage-schema) で宣言される永続レコード集合に対する
+mark-and-traverse パターンを共有する。
 
 ## Artifact GC scope
 
-GC operates on **DataAsset** records (see
-[DataAsset Kinds](/reference/artifact-kinds)) and their backing object bytes.
-Every DataAsset belongs to one of three reachability classes determined at GC
-time:
+GC は **DataAsset** レコード ([DataAsset Kinds](/reference/artifact-kinds) 参照)
+とその裏付け object bytes に対して動作する。各 DataAsset は GC 時に次の 3 つの
+到達性クラスのいずれかに割り当てられる。
 
-- **Generated-object reachable**: a DataAsset is referenced from an object whose
-  binding is live in the most recent ResolutionSnapshot of any active
-  Deployment. The reference may be direct (Manifest `artifact:` field) or
-  indirect (output that resolves to the artifact's content hash).
-- **Snapshot reachable**: a DataAsset is referenced from a retained
-  ResolutionSnapshot or ActivationSnapshot, even if no live binding exists
-  today. Snapshot retention windows are operator-controlled through the audit
-  retention regime.
-- **Unreferenced**: neither class above. Unreferenced DataAssets become
-  candidates for sweep after the grace window.
+- **Generated-object reachable**: アクティブな Deployment の最新
+  ResolutionSnapshot で binding が live な object から参照されている
+  DataAsset。参照は直接 (Manifest の `artifact:` field) でも間接 (artifact の
+  content hash に resolve される出力) でもよい。
+- **Snapshot reachable**: たとえ今日 live な binding が無くても、保持されている
+  ResolutionSnapshot または ActivationSnapshot から参照されている DataAsset。
+  Snapshot の retention window は audit retention regime を通じて operator が
+  制御する。
+- **Unreferenced**: 上記いずれにも該当しない。Unreferenced な DataAsset は grace
+  window を経過すると sweep 候補となる。
 
-The reachability check is conservative: when a DataAsset is referenced by _any_
-retained snapshot, even one that is no longer the latest, the DataAsset is kept.
-This avoids GC-induced reference breakage during rollback and during
-ActivationSnapshot history queries.
+到達性チェックは保守的である: 最新でなくとも _いずれかの_ 保持済み snapshot に
+参照されていれば DataAsset は保持される。これにより rollback 時や
+ActivationSnapshot history クエリ中の GC 起因の参照破損を回避する。
 
 ## GC process
 
-GC runs as a **mark-then-sweep** sequence with a grace window between the two
-phases.
+GC は **mark-then-sweep** の sequence として実行され、2 つの phase の間に grace
+window を持つ。
 
 ### Mark phase
 
-The mark phase walks live references from a closed root set:
+mark phase は closed な root 集合から live な参照を辿る。
 
 1. Every Deployment's most recent ResolutionSnapshot.
 2. Every retained ResolutionSnapshot within the audit retention window.
@@ -51,40 +44,40 @@ The mark phase walks live references from a closed root set:
 4. Every RevokeDebt row whose `status` is `open` or `operator-action-required`
    (see [RevokeDebt Model](/reference/revoke-debt)).
 
-A DataAsset reachable from any root is marked `live`. A DataAsset reachable from
-no root is marked `unreferenced`. Marks are written to the partition declared in
-[Storage Schema](/reference/storage-schema) and survive process restart; the
-next phase reads them back.
+いずれかの root から到達可能な DataAsset は `live` と mark される。どの root
+からも到達不能な DataAsset は `unreferenced` と mark される。mark は
+[Storage Schema](/reference/storage-schema) で宣言された partition
+に書き込まれ、 process 再起動を跨いで保持される。次の phase がそれを読み戻す。
 
-The mark phase progresses by **cursor**: each root class advances a cursor
-through its record set so a crash mid-mark resumes from the last committed
-cursor. The cursor is monotonic on `eventId` to align with audit ordering.
+mark phase は **cursor** で進行する: 各 root class はその record 集合を通じて
+cursor を進めるので、mark 中にクラッシュしても最後に commit された cursor から
+再開する。cursor は audit ordering に合わせて `eventId` で単調である。
 
 ### Sweep phase
 
-The sweep phase deletes a DataAsset only after it has been marked `unreferenced`
-for at least the **grace window**:
+sweep phase は DataAsset が少なくとも **grace window** の間 `unreferenced` と
+mark されている場合に限り削除する。
 
 ```text
 sweep eligibility = markedAt + graceWindow <= now
 ```
 
-The grace window is operator-controlled via `TAKOSUMI_ARTIFACT_GC_GRACE_DAYS`
-(default `7`). A DataAsset that re-acquires a live reference during the grace
-window is re-marked `live` and skipped on this sweep cycle.
+grace window は `TAKOSUMI_ARTIFACT_GC_GRACE_DAYS` (default `7`) で operator が
+制御する。grace window 中に live な参照を再取得した DataAsset は `live` に
+re-mark され、今回の sweep cycle ではスキップされる。
 
 Rationale: 7 日は典型的な weekly operator review cycle に整合し、誤って
 unreferenced 化された DataAsset を operator が手動で keep に戻せる猶予を provide
 する。短すぎると operator vacation / on-call rotation 中の事故 recovery
 余地が無くなり、長すぎると storage pressure 緩和の reactivity を損なう。
 
-Sweep emits one `artifact-gc-completed` audit event per cycle (see
-[Audit Events](/reference/audit-events)). The payload reports `markedLive`,
-`markedUnreferenced`, `swept`, `bytesReclaimed`, and the cursor head.
+Sweep は cycle ごとに 1 件の `artifact-gc-completed` audit event を発行する
+([Audit Events](/reference/audit-events) 参照)。payload には `markedLive`、
+`markedUnreferenced`、`swept`、`bytesReclaimed`、cursor head が含まれる。
 
 ## GC trigger
 
-Three triggers produce a GC cycle:
+GC cycle を生む trigger は 3 種類。
 
 | Trigger           | Source                                               | Notes                                                                                                                                |
 | ----------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -102,13 +95,13 @@ Rationale (0.85 pressure): 0.85 は steady-state における burst write buffer
 を引かない閾値。0.9 以上では cycle 走行中に書き込み backpressure が発生し、0.8
 以下では periodic cycle と頻繁に重複してしまう。
 
-Multiple triggers within a single mark cycle coalesce: a queued cycle absorbs
-subsequent enqueues until it completes. The `artifact-gc-completed` audit event
-records the union of triggers that caused the cycle.
+単一 mark cycle 内の複数 trigger は合一される: queue 済み cycle は完了するまで
+後続の enqueue を吸収する。`artifact-gc-completed` audit event は cycle を起こ
+した trigger の和集合を記録する。
 
 ## Atomicity
 
-GC is **idempotent and crash-safe**:
+GC は **idempotent でクラッシュ安全** である。
 
 - Mark and sweep cursors are persisted on every batch boundary. A crash
   mid-cycle resumes at the last cursor without double-marking.
@@ -131,17 +124,17 @@ GC is **idempotent and crash-safe**:
 
 ## ActivationSnapshot history export
 
-ActivationSnapshot history is the operator-facing audit of activation state per
-Space (see [Storage Schema](/reference/storage-schema) and
-[Audit Events](/reference/audit-events) `activation-snapshot-created` /
-`group-head-moved`). The export surface produces a queryable, resumable
-projection of that history for billing pipelines, compliance dashboards, and
-external analytics.
+ActivationSnapshot history は Space 単位の activation 状態を operator 向けに監査
+するもの ([Storage Schema](/reference/storage-schema) および
+[Audit Events](/reference/audit-events) の `activation-snapshot-created` /
+`group-head-moved` を参照)。export surface は billing パイプライン、コンプライ
+アンスダッシュボード、外部分析向けにこの history の query 可能 / resume 可能な
+projection を生成する。
 
 ### Format
 
-The export is an ordered stream of records keyed by **monotonic event id** and
-**time bucket**:
+export は **monotonic event id** と **time bucket** で key 付けされた順序付き
+レコード stream である。
 
 ```yaml
 ActivationHistoryEvent:
@@ -162,22 +155,22 @@ ActivationHistoryEvent:
 - `group-head-moved`
 - `group-head-rolled-back`
 
-The bucket key is fixed at one hour for the v1 export. Operators that need finer
-granularity consume the underlying audit events directly.
+v1 export の bucket key は 1 時間に固定される。より細かい粒度が必要な operator
+は基となる audit event を直接 consume する。
 
 ### Resume cursor
 
-cursor and returns results strictly after that id. Pagination is forward-only
-and monotonic; clients persist the last-seen `eventId` and resume from there:
+cursor を受け取り、その id より厳密に後ろの結果を返す。pagination は forward
+のみで monotonic。client は最後に見た `eventId` を永続化してそこから resume
+する。
 
 ```http
 GET /api/internal/v1/spaces/:spaceId/activation-history?afterEventId=01HZ...&limit=500
 ```
 
-The response includes `nextEventId` (the highest id in the page) and `hasMore`.
-A response with `hasMore: false` is consistent with the audit log up to the
-kernel's serialization clock at response time; later events appear on the next
-call.
+response には `nextEventId` (このページ内の最大 id) と `hasMore` が含まれる。
+`hasMore: false` の response は応答時点の kernel serialization clock までの
+audit log と整合する。それ以降の event は次の呼び出しで現れる。
 
 ### Filters
 
@@ -188,9 +181,9 @@ call.
 | `from`, `to` | RFC 3339; restricts the returned bucket range. Inclusive on `from`, exclusive on `to`. |
 | `kind`       | Repeatable; filters to the listed kinds.                                               |
 
-Filter combination is conjunctive. The `afterEventId` cursor is applied after
-filters: `afterEventId` does not skip filtered-out events, it advances over the
-underlying event id space.
+Filter の組み合わせは論理積。`afterEventId` cursor は filter の後に適用される:
+`afterEventId` は filter 除外された event をスキップするのではなく、基底の event
+id 空間上を進む。
 
 ### Edge cases
 
@@ -207,15 +200,15 @@ underlying event id space.
 
 ### Audit linkage
 
-Every history record corresponds 1:1 to an audit event in the closed event-type
-enum (see [Audit Events](/reference/audit-events)). The history export does not
-invent new events; it projects existing events with a stable schema and a stable
-cursor. This keeps the audit log the single source of truth and lets operators
-reconcile history exports against the audit hash chain offline.
+すべての history record は closed な event-type enum の audit event と 1:1 に
+対応する ([Audit Events](/reference/audit-events) 参照)。history export は新規
+event を発明しない。既存の event を安定 schema と安定 cursor で projection
+する。 これにより audit log を唯一の真実とし、operator が history export を
+audit hash chain と offline で照合できるようにする。
 
 ## Audit events
 
-The two surfaces emit:
+2 つの surface は次を発行する。
 
 - `artifact-gc-completed` — issued at the end of every GC cycle. Payload reports
   cursor, mark counts, sweep counts, bytes reclaimed, triggers, and run
@@ -226,9 +219,9 @@ The two surfaces emit:
   fetch). Payload reports actor, filter parameters, `afterEventId`,
   `nextEventId`, and result count.
 
-Both events ride the standard envelope and the per-Space hash chain. GC's
-`spaceId` is `null` (kernel-global) when the cycle covers all Spaces and the
-owning Space id when an operator scopes the cycle.
+どちらの event も標準 envelope と per-Space hash chain に乗る。GC の `spaceId`
+は cycle が全 Space をカバーする場合 `null` (kernel-global)、operator が cycle
+を scope したときは所有 Space の id となる。
 
 ## Related architecture notes
 
@@ -241,3 +234,13 @@ owning Space id when an operator scopes the cycle.
 - `docs/reference/architecture/observation-drift-revokedebt-model.md` —
   RevokeDebt rows as a GC root, ensuring debt-pinned material is not swept while
   cleanup is in flight.
+
+## 関連ページ
+
+- [DataAsset Kinds](/reference/artifact-kinds)
+- [Storage Schema](/reference/storage-schema)
+- [Audit Events](/reference/audit-events)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [CLI](/reference/cli)
+- [Quota and Rate Limit](/reference/quota-rate-limit)
+- [Revoke Debt](/reference/revoke-debt)

@@ -1,53 +1,41 @@
 # Notification Emission
 
-> Stability: stable Audience: operator, integrator, kernel-implementer See also:
-> [Audit Events](/reference/audit-events),
-> [Actor / Organization Model](/reference/actor-organization-model),
-> [Approval Invalidation Triggers](/reference/approval-invalidation),
-> [RevokeDebt Model](/reference/revoke-debt),
-> [Quota and Rate Limit](/reference/quota-rate-limit),
-> [Incident Model](/reference/incident-model),
-> [Migration / Upgrade](/reference/migration-upgrade),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Storage Schema](/reference/storage-schema),
-> [Resource IDs](/reference/resource-ids)
+> このページでわかること: kernel が emit する通知イベントの型と配信先。
 
-This reference defines the v1 notification signal surface: the kernel-side
-record the kernel emits when a downstream operator notification path should
-fire, the closed category enum, the recipient resolution rule, the pull-only
-delivery integration model, the idempotency rule that suppresses duplicate
-signals, and the audit primitives. The kernel emits signals; concrete email,
-Slack, SMS, in-app, and digest delivery live outside the kernel.
+本リファレンスは v1 notification signal surface を定義する: 下流の operator 通知
+path を発火させるべきときに kernel が emit する kernel 側の record、closed な
+category enum、recipient 解決規則、pull-only な配信統合モデル、重複 signal を
+抑制する idempotency 規則、audit primitive。kernel は signal を emit するだけ
+で、具体的な email / Slack / SMS / in-app / digest 配信は kernel
+の外で動作する。
 
 ## Notification model
 
-The kernel does not deliver notifications. It records a structured signal
-whenever a kernel-side event meets the criteria for one of the closed v1
-categories. Operators consume the signal queue and fan out to their own delivery
-channels.
+kernel は notification を配信しない。kernel 側の event が closed な v1 category
+のいずれかの条件を満たすたびに、構造化 signal を記録する。operator が signal
+queue を consume し、自前の配信チャネルに fan out する。
 
-Two consequences of this model:
+このモデルの 2 つの帰結:
 
-- The kernel never holds SMTP, Slack, or webhook credentials. Deferring delivery
-  to the operator's outer stack matches the same credential boundary used for
-  shape providers (see the project AGENTS.md).
-- Every notification that customers see has a corresponding kernel audit event.
-  The operator's outer stack cannot mint a customer-visible notification that
-  the kernel did not first emit as a signal.
+- kernel は SMTP / Slack / webhook の credential を保持しない。配信を operator
+  の外側スタックに委ねることは、shape provider と同じ credential 境界 (project
+  AGENTS.md 参照) と一致する。
+- 顧客が見るすべての notification は対応する kernel audit event を持つ。operator
+  の外側スタックは、kernel が先に signal として emit していない顧客可視の
+  notification を mint できない。
 
-Signals are a curated subset of the [Audit Events](/reference/audit-events)
-stream plus a small number of derived events (for example,
-`approval-near-expiry` is derived from approval TTL and is not a raw audit event
-on its own).
+signal は [Audit Events](/reference/audit-events) stream の精選 subset に少数の
+derived event を加えたものである (例: `approval-near-expiry` は approval TTL
+から derive されたもので、それ自身は raw audit event ではない)。
 
-The current kernel primitive for SLA breach detection emits the
-`sla-breach-detected` notification signal from `SlaBreachDetectionService` when
-a notification adapter is configured. Delivery remains pull-only and
-operator-owned.
+現行 kernel の SLA breach detection 原始機能は、notification adapter が設定
+されているとき `SlaBreachDetectionService` から `sla-breach-detected`
+notification signal を emit する。配信は引き続き pull-only で operator が所有
+する。
 
 ## Signal categories
 
-The v1 category enum is closed:
+v1 category enum は closed である。
 
 ```text
 approval-pending
@@ -79,8 +67,8 @@ Trigger detail:
 | `migration-completed`                  | A kernel migration finished successfully (see [Migration / Upgrade](/reference/migration-upgrade)).          | info             |
 | `migration-rollback`                   | A kernel migration rolled back.                                                                              | warning          |
 
-The category enum is closed in v1. Adding a new category goes through the
-`CONVENTIONS.md` §6 RFC.
+category enum は v1 で closed。新規 category 追加は `CONVENTIONS.md` §6 RFC を
+要する。
 
 ## Signal record
 
@@ -122,9 +110,10 @@ Field semantics:
 
 ## Recipient resolution
 
-The kernel computes `recipientActorIds` at emit time from the identity model
-(see [Actor / Organization Model](/reference/actor-organization-model)) and the
-category-specific recipient rule. The rule is closed in v1:
+kernel は emit 時に identity model
+([Actor / Organization Model](/reference/actor-organization-model) 参照) と
+category 固有の recipient 規則から `recipientActorIds` を計算する。規則は v1 で
+closed である。
 
 | Category                               | Recipient rule                                                                                                     |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -140,13 +129,13 @@ category-specific recipient rule. The rule is closed in v1:
 | `migration-completed`                  | `org-owner` Actors of every Organization with at least one active Space.                                           |
 | `migration-rollback`                   | Same recipient set as `migration-completed` for the same migration id.                                             |
 
-The resolution uses the live identity view at emit time. A signal emitted just
-before a Membership transitions to `removed` carries the prior
-`recipientActorIds`; the kernel does not re-resolve after emission.
+解決は emit 時の live identity view を使う。Membership が `removed` に遷移する
+直前に emit された signal は以前の `recipientActorIds` を運ぶ。kernel は emit
+後に再解決しない。
 
 ## Pull-only delivery integration
 
-surface, operators pull the signal queue:
+push surface ではなく、operator は signal queue を pull する。
 
 - `GET /api/internal/v1/notifications` — list signals with cursor pagination.
   Filters on `category`, `spaceId`, `organizationId`, `severity`, and time
@@ -157,23 +146,22 @@ surface, operators pull the signal queue:
   once delivery has been attempted. Sets `acknowledgedAt`. Acknowledgement is
   independent of delivery outcome; the kernel records the signal regardless.
 
-The pull-only model:
+pull-only モデル:
 
-- Removes any push credential from the kernel.
-- Lets operators deploy a single delivery worker per region and scale
-  horizontally with at-least-once consumer semantics.
-- Keeps signals durable until the operator-tunable retention window closes;
-  unacknowledged signals are retained longer than acknowledged signals, bounded
-  by audit retention.
+- kernel から push credential を取り除く。
+- operator は region ごとに 1 つの delivery worker を deploy し、at-least-once
+  な consumer semantics で水平スケールできる。
+- operator が tune できる retention window が閉じるまで signal は durable。 ack
+  済み signal より未 ack signal の方が長く保持され、audit retention で
+  上限が決まる。
 
-A webhook-style push mode is **out of scope for v1**. The kernel does not
-initiate any outbound HTTP call for notification delivery.
+webhook 風の push モードは **v1 では scope 外**。kernel は notification 配信の
+ための outbound HTTP 呼び出しを開始しない。
 
 ## Idempotency
 
-Signal `id` is deterministic per `(category, scope, trigger
-fingerprint)` tuple.
-The trigger fingerprint is category-specific:
+signal `id` は `(category, scope, trigger fingerprint)` tuple ごとに決定的で
+ある。trigger fingerprint は category 固有である。
 
 - `approval-pending`, `approval-near-expiry`: `approvalId` plus the TTL
   milestone (`issue`, `50pct`, `90pct`).
@@ -189,48 +177,47 @@ The trigger fingerprint is category-specific:
 - `migration-completed`, `migration-rollback`: `(migrationId,
   outcome)`.
 
-Re-evaluating the same trigger produces the same `id`. The kernel deduplicates
-at write time: an attempted second emit with an existing `id` is recorded as a
-no-op and surfaces in audit as a `notification-emit-suppressed-duplicate`
-envelope on the same record.
+同じ trigger を再評価すると同じ `id` が生成される。kernel は write 時に重複
+排除する: 既存の `id` での 2 度目の emit は no-op として記録され、同じ record
+上の `notification-emit-suppressed-duplicate` envelope として audit に surface
+する。
 
 ## Audit events
 
-The v1 notification audit event taxonomy is closed and joins the
-[Audit Events](/reference/audit-events) closed enum:
+v1 の notification audit event 分類は closed で、
+[Audit Events](/reference/audit-events) の closed enum に加わる。
 
 - `notification-emitted`
 - `notification-acknowledged`
 
-Each event carries the standard envelope plus a payload recording
-`{notificationId, category, recipientActorIds, relatedAuditEventIds}`. The audit
-chain links the notification record to the source events in
-`relatedAuditEventIds`, so operators can replay the chain that grounded any
-signal.
+各 event は標準 envelope に
+`{notificationId, category, recipientActorIds, relatedAuditEventIds}` を記録
+した payload を持つ。audit chain は notification record を
+`relatedAuditEventIds` の source event にリンクし、任意の signal を根拠付けた
+chain を operator が replay できる。
 
 ## Storage schema
 
-NotificationSignal extends [Storage Schema](/reference/storage-schema) with one
-record class:
+NotificationSignal は [Storage Schema](/reference/storage-schema) を 1 つの
+record class で拡張する。
 
 | Record               | Indexed by                                                                                                 | Persistence                                                                        |
 | -------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `NotificationSignal` | `(id)`, `(category, emittedAt)`, `(spaceId, emittedAt)`, `(organizationId, emittedAt)`, `(acknowledgedAt)` | Kept under audit retention; acknowledged signals trim earlier than unacknowledged. |
 
-Implementations may co-locate the signal store with the audit store but must
-keep the indexed columns above.
+実装は signal store を audit store と同居させてよいが、上記 indexed カラムは
+保持しなければならない。
 
 ## Scope boundary
 
-The Takosumi kernel ships the signal record, the closed category enum, the
-recipient resolution rule, the pull-only operator endpoints, the idempotency
-rule, and the audit chain. Concrete email templates, Slack bot wiring, in-app
-push channels, SMS and voice gateways, digest scheduling, locale-aware
-rendering, unsubscribe and preference UI, and per-recipient delivery throttling
-are **outside Takosumi's scope** and are implemented by the operator's outer
-stack (for example, `takos-private/` or any other PaaS-provider front end). The
-kernel exposes the signal and audit primitives that those outer surfaces compose
-against.
+Takosumi kernel は signal record、closed category enum、recipient 解決規則、
+pull-only operator エンドポイント、idempotency 規則、audit chain を同梱する。
+具体的な email テンプレート、Slack bot 配線、in-app push チャネル、SMS / 音声
+gateway、digest スケジューリング、locale 対応レンダリング、unsubscribe / 設定
+UI、per-recipient 配信 throttling は **Takosumi の scope 外** であり、operator
+の外側スタック (`takos-private/` や別の PaaS provider front end など) が実装
+する。kernel はそれら外側 surface が組み立てに使う signal / audit primitive を
+公開する。
 
 ## Related architecture notes
 
@@ -241,3 +228,16 @@ against.
 - `docs/reference/architecture/observation-drift-revokedebt-model.md` —
   RevokeDebt trigger grounding the `revoke-debt-operator-action-required`
   category.
+
+## 関連ページ
+
+- [Audit Events](/reference/audit-events)
+- [Actor / Organization Model](/reference/actor-organization-model)
+- [Approval Invalidation Triggers](/reference/approval-invalidation)
+- [RevokeDebt Model](/reference/revoke-debt)
+- [Quota and Rate Limit](/reference/quota-rate-limit)
+- [Incident Model](/reference/incident-model)
+- [Migration / Upgrade](/reference/migration-upgrade)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Storage Schema](/reference/storage-schema)
+- [Resource IDs](/reference/resource-ids)

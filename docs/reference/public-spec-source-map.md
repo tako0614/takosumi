@@ -1,13 +1,10 @@
 # Public Spec Source Map
 
-> Stability: stable Audience: maintainer, integrator See also:
-> [Manifest](/manifest), [Kernel HTTP API](/reference/kernel-http-api),
-> [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+> このページでわかること: 公開仕様とソースコードの対応マップ。
 
-This page maps each public surface to its source of truth, published reference,
-and drift check. When a public shape changes, update the owning source and the
-row below in the same change. A doc-only update is not enough for a wire or
-package surface.
+本ページは、各 public surface を真実の source、公開リファレンス、drift check
+にマップする。public shape が変わったら、所有 source と下記の行を同じ変更で
+更新する。wire / package surface ではドキュメントのみの更新では不十分である。
 
 ## Map
 
@@ -18,23 +15,29 @@ package surface.
 | `kernel-http-api-v1`           | Public deploy, artifact, internal control, runtime-agent control, health/readiness, OpenAPI | takosumi kernel            | `packages/kernel/src/api/app.ts`; `packages/kernel/src/api/public_routes.ts`; `packages/kernel/src/api/deploy_public_routes.ts`; `packages/kernel/src/api/artifact_routes.ts`; `packages/kernel/src/api/internal_routes.ts`; `packages/kernel/src/api/runtime_agent_routes.ts`; `packages/kernel/src/api/readiness_routes.ts`; `packages/kernel/src/api/openapi.ts` | `https://docs.takosumi.com/reference/kernel-http-api`; `https://docs.takosumi.com/reference/runtime-agent-api`                                                                                                                                       | `packages/kernel/src/api/*_test.ts`; `packages/kernel/src/api/openapi_test.ts`; `scripts/public-spec-source-map_test.ts`                                                                                   |
 | `deploy-public-api-v1`         | Direct unmanaged deploy API: `POST /v1/deployments`                                         | takosumi kernel + CLI      | `packages/kernel/src/api/deploy_public_routes.ts` (`TAKOSUMI_DEPLOY_PUBLIC_PATH`); `packages/kernel/src/api/openapi.ts` (`runDeployPublicDeployment`); `packages/cli/src/commands/deploy.ts`                                                                                                                                                                        | `https://docs.takosumi.com/reference/kernel-http-api`; `https://docs.takosumi.com/reference/cli`                                                                                                                                                     | `scripts/public-spec-source-map_test.ts`; `packages/cli/tests/deploy_remote_test.ts`; `packages/all/tests/e2e_deploy_test.ts`                                                                              |
 | `takosumi-jsr-packages`        | JSR package exports and dependency pins                                                     | takosumi package owners    | `packages/*/deno.json`; package entrypoints under `packages/*/src/` or `packages/all/*.ts`                                                                                                                                                                                                                                                                          | `https://jsr.io/@takos/takosumi`; `https://jsr.io/@takos/takosumi-kernel`; `https://jsr.io/@takos/takosumi-plugins`; `https://jsr.io/@takos/takosumi-cli`; `https://jsr.io/@takos/takosumi-runtime-agent`; `https://jsr.io/@takos/takosumi-contract` | `deno task publish:dry-run`; `scripts/jsr-publish-dry-run_test.ts`                                                                                                                                         |
-| `takosumi-git-workflow-ref-v0` | `.takosumi/manifest.yml` + `resources[i].workflowRef` private extension                     | takosumi-git               | sibling repo `takosumi-git/packages/workflow-contract/src/mod.ts`; `takosumi-git/packages/cli/src/push.ts`                                                                                                                                                                                                                                                          | sibling repo `takosumi-git/docs/workflow-ref.md`; `https://jsr.io/@takos/takosumi-git-workflow-contract` after A-6                                                                                                                                   | sibling repo `docs/artifact-contract_test.ts`; `packages/cli/src/push_test.ts`; `packages/all/src/mod_test.ts`                                                                                             |
-| `takosumi-git-artifact-uri-v0` | Workflow artifact URI discovery contract used by `takosumi-git push`                        | takosumi-git               | sibling repo `takosumi-git/packages/cli/src/push.ts`; `takosumi-git/packages/workflow-runner/src/mod.ts`                                                                                                                                                                                                                                                            | sibling repo `takosumi-git/docs/artifact-contract.md`; `takosumi-git/README.md`                                                                                                                                                                      | sibling repo `docs/artifact-contract_test.ts`; `packages/cli/src/push_test.ts`                                                                                                                             |
+| `takosumi-git-workflow-ref-v1` | `.takosumi/manifest.yml` + `resources[i].workflowRef` private extension                     | takosumi-git               | sibling repo `takosumi-git/packages/workflow-contract/src/mod.ts`; `takosumi-git/packages/cli/src/push.ts`                                                                                                                                                                                                                                                          | sibling repo `takosumi-git/docs/workflow-ref.md`; `https://jsr.io/@takos/takosumi-git-workflow-contract`                                                                                                                                             | sibling repo `docs/artifact-contract_test.ts`; `packages/cli/src/push_test.ts`; `packages/all/src/mod_test.ts`                                                                                             |
+| `takosumi-git-artifact-uri-v1` | Workflow artifact URI discovery contract used by `takosumi-git push`                        | takosumi-git               | sibling repo `takosumi-git/packages/cli/src/push.ts`; `takosumi-git/packages/workflow-runner/src/mod.ts`                                                                                                                                                                                                                                                            | sibling repo `takosumi-git/docs/artifact-contract.md`; `takosumi-git/README.md`                                                                                                                                                                      | sibling repo `docs/artifact-contract_test.ts`; `packages/cli/src/push_test.ts`                                                                                                                             |
 
 ## Boundary Rules
 
-- The Takosumi kernel receives manifests by explicit path or HTTP body only. It
-  does not discover `.takosumi/`, read workflow files, run builds, accept
-  `workflowRef`, or expose workflow trigger routes.
-- Upstream clients may attach opaque deployment provenance to
-  `POST /v1/deployments`. The kernel records that JSON in public WAL entries and
-  status output, but the provenance does not create kernel-owned workflow or git
-  vocabulary.
-- `resources[i].workflowRef` is a `takosumi-git` private project convention. It
-  must be stripped before the manifest is submitted to `POST /v1/deployments`.
-- Public JSR package checks must use the package `deno.json` files, not the root
-  workspace import map, so stale published dependency pins are caught.
-- Any row whose source of truth lives outside this repository must name the
-  owning repository and the test location there. This repository's drift test
-  verifies the Takosumi-owned paths and the existence of this cross-repo
-  ownership record.
+- Takosumi kernel は manifest を明示的 path または HTTP body でのみ受け取る。
+  `.takosumi/` を discover せず、workflow ファイルを読まず、build を実行せず、
+  `workflowRef` を受け付けず、workflow trigger route を公開しない。
+- upstream client は `POST /v1/deployments` に不透明な deployment provenance を
+  attach できる。kernel はその JSON を public WAL entry と status 出力に記録
+  するが、provenance が kernel 所有の workflow / git 語彙を作ることはない。
+- `resources[i].workflowRef` は `takosumi-git` の私的プロジェクト convention で
+  ある。manifest を `POST /v1/deployments` に submit する前に strip しなければ
+  ならない。
+- public JSR package チェックは root workspace import map ではなく package の
+  `deno.json` ファイルを使う必要があり、これにより古い publish 済み依存 pin が
+  捕捉される。
+- 真実の source が本リポジトリ外にある行は、所有リポジトリとそこの test location
+  を名指しすること。本リポジトリの drift test は Takosumi 所有の path
+  と、このクロスリポジトリ所有レコードの存在を検証する。
+
+## 関連ページ
+
+- [Manifest](/manifest)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)

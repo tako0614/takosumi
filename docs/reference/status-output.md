@@ -1,13 +1,10 @@
 # Status Output
 
-> Stability: stable Audience: operator See also: [CLI](/reference/cli),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Manifest Validation](/reference/manifest-validation),
-> [Artifact GC](/reference/artifact-gc)
+> このページでわかること: resource status の出力形式と conditions の読み方。
 
-This page defines the current public status response returned by
-`GET /v1/deployments` and `GET /v1/deployments/:name`. The `takosumi status` CLI
-renders this response as a small table.
+本ページは、`GET /v1/deployments` と `GET /v1/deployments/:name` が返す current
+public な status response を定義する。`takosumi status` CLI はこの response
+を小さなテーブルとして描画する。
 
 Status queries are read-only. They do not write WAL entries, mutate deployment
 records, call runtime-agent lifecycle endpoints, or change artifact GC roots.
@@ -22,13 +19,13 @@ interface DeploymentListResponse {
 }
 ```
 
-The list is scoped by the public deploy Space / tenant selected for the deploy
-bearer. That scope is `TAKOSUMI_DEPLOY_SPACE_ID`, or `takosumi-deploy` when the
-env var is unset. The current public route does not expose `--space`, `--group`,
-`--kind`, `--since`, `--cursor`, or `--limit` CLI filters. Broader operator
-status, activation history, drift, quota usage, and approval queues belong to
-the internal control-plane surface until a public route is implemented and
-tested.
+リストは deploy bearer に対して選ばれた public deploy Space / tenant で scope
+される。その scope は `TAKOSUMI_DEPLOY_SPACE_ID`、または env が未設定の場合
+`takosumi-deploy` となる。current public route は `--space`、`--group`、
+`--kind`、`--since`、`--cursor`、`--limit` の CLI filter を公開しない。
+より広範な operator status、activation history、drift、quota 使用、approval
+queue は、public route が実装・テストされるまで内部 control plane surface に
+属する。
 
 ## Single Shape
 
@@ -103,7 +100,7 @@ the raw provenance JSON.
 `takosumi status` is remote-only. Without a name, it calls
 `GET /v1/deployments`; with a name, it calls `GET /v1/deployments/:name`.
 
-The table columns are:
+テーブルの列は次の通り。
 
 ```text
 deployment | id | resource | shape | provider | status | journal
@@ -185,3 +182,10 @@ column empty.
   ]
 }
 ```
+
+## 関連ページ
+
+- [CLI](/reference/cli)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Manifest Validation](/reference/manifest-validation)
+- [Artifact GC](/reference/artifact-gc)

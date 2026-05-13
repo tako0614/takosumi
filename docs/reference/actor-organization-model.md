@@ -1,22 +1,22 @@
 # Actor / Organization Model
 
-This page is retained as a link-compatible migration stub.
+> このページでわかること: Actor と Organization のモデル定義。
 
-Actor, organization, membership, account ownership, and billing ownership are
-not owned by the takosumi kernel. They belong to an operator account plane;
-`takosumi-cloud/` is the reference (currently exercised) implementation of that
-plane, but the kernel contract does not privilege it.
+Actor / Organization / membership / account ownership / billing ownership は
+takosumi kernel が持たず、 operator account plane が所有する (reference 実装は
+`takosumi-cloud/` の Takosumi Accounts)。
 
-Current model:
+モデル:
 
-- takosumi kernel accepts compiled Shape manifests and records deploy evidence.
-- An operator account plane (reference impl: Takosumi Accounts in
-  `takosumi-cloud/`) owns account, billing, AppInstallation ledger, OIDC issuer,
-  pairwise subject, AppBinding, AppGrant, and audit lifecycle.
-- Kernel deploys created directly through `POST /v1/deployments` are unmanaged
-  deployments and do not create AppInstallation ownership.
+- takosumi kernel は compiled Shape manifest を受け取り、 deploy evidence
+  を記録する。
+- operator account plane が account / billing / AppInstallation ledger / OIDC
+  issuer / pairwise subject / AppBinding / AppGrant / audit lifecycle
+  を所有する。
+- `POST /v1/deployments` を直接叩いて作られた deploy は unmanaged deployment
+  となり、 AppInstallation ownership を持たない。
 
-References:
+## 関連ページ
 
 - `takosumi-cloud/docs/accounts-service.md`
 - `takosumi-cloud/docs/architecture/takosumi-accounts.md`

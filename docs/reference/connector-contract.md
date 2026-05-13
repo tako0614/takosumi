@@ -1,18 +1,15 @@
 # Connector Contract
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [DataAsset Kinds](/reference/artifact-kinds),
-> [Providers](/reference/providers),
-> [Runtime-Agent API](/reference/runtime-agent-api),
-> [Audit Events](/reference/audit-events)
+> このページでわかること: connector plugin の実装契約。
 
-A Connector is the operator-installed software unit that materializes a
-DataAsset onto an external runtime (a serverless host, a container orchestrator,
-an object storage backend, etc.). Connectors are the only component permitted to
-hold cloud or platform credentials at apply time; the kernel itself never holds
-them. This reference defines the v1 Connector identity, record schema,
-accepted-kind vector, Space visibility rules, signing expectations, envelope
-versioning, and the operator-only operations that govern Connector lifecycle.
+Connector は、DataAsset を外部 runtime (serverless host、container
+orchestrator、 object storage backend など) に materialize する operator
+がインストールする ソフトウェアユニットである。apply 時にクラウド /
+プラットフォーム credential を 保持できるのは Connector だけであり、kernel
+自身は保持しない。本リファレンスは v1 Connector の identity、record
+schema、accepted-kind vector、Space visibility ルール、signing
+expectation、envelope バージョニング、Connector lifecycle を 管理する operator
+専用 operation を定義する。
 
 ## Identity
 
@@ -22,10 +19,10 @@ A Connector identity has the closed shape:
 connector:<id>
 ```
 
-The `<id>` segment is operator-controlled. It is never user-named, never derived
-from manifest input, and never appears in user-authored manifests. Users select
-an Implementation; the resolver picks the Connector bound to the
-Implementation's accepted-kind vector and Space visibility.
+`<id>` segment は operator が管理する。ユーザーが命名することはなく、manifest
+入力から導出されず、ユーザー作成 manifest に現れることもない。ユーザーは
+Implementation を選び、resolver が Implementation の accepted-kind vector と
+Space visibility に bound された Connector を選ぶ。
 
 Identity rules:
 
@@ -38,8 +35,8 @@ Identity rules:
 
 ## Connector record
 
-Each Connector is described by a record that the kernel reads at boot from the
-operator-installed Connector registry:
+各 Connector は、kernel が起動時に operator がインストールした Connector
+registry から読む record で記述される。
 
 ```yaml
 Connector:
@@ -60,17 +57,17 @@ Field semantics:
 | `signingExpectations` | yes      | One of `none`, `optional`, `required`.                                      |
 | `envelopeVersion`     | yes      | The control envelope version this Connector speaks, currently `v1`.         |
 
-The record is immutable for a given Connector instance. An operator who needs to
-broaden `acceptedKinds`, raise signing expectations, or change envelope version
-performs a Connector `replace` operation; the kernel treats this as a new
-Connector record bound to the same `connector:<id>` identity, with the previous
-record retained for audit and replay.
+所与の Connector インスタンスについて record は immutable である。
+`acceptedKinds` を広げたい / signing expectation を上げたい / envelope version
+を変えたい operator は Connector `replace` operation を実行する。kernel は
+これを同じ `connector:<id>` identity に bound された新規 Connector record と
+して扱い、以前の record は audit と replay 用に保持される。
 
 ## Accepted-kind vector
 
-The `acceptedKinds` vector lists the artifact kinds this connector can consume.
-`Artifact.kind` is open at the protocol layer, and the bundled kind registry
-starts with:
+`acceptedKinds` ベクトルは、この connector が consume できる artifact kind を
+列挙する。`Artifact.kind` は protocol 層では open で、同梱の kind registry は
+次から始まる。
 
 ```text
 oci-image | js-bundle | lambda-zip | static-bundle | wasm
@@ -87,16 +84,15 @@ Plan-time enforcement:
   metadata with `registerArtifactKind`; a Connector must still explicitly list
   the kind in `acceptedKinds` before it can consume it.
 
-The accepted-kind vector is the only mechanism by which a Connector declares
-which artifacts it will materialize. Implementation matching proceeds through
-the resolver: an Implementation declares an accepted-kind vector of its own, and
-the resolver intersects it with each candidate Connector's vector before
-binding.
+accepted-kind ベクトルは、Connector がどの artifact を materialize するかを
+宣言する唯一の仕組みである。Implementation のマッチングは resolver を通る:
+Implementation も自身の accepted-kind ベクトルを宣言し、resolver は各候補
+Connector のベクトルと積集合を取ってから binding する。
 
 ## Space visibility
 
-Connectors are not globally addressable. Visibility is controlled by operator
-policy and is resolved per Space:
+Connector はグローバルに addressing できない。可視性は operator policy が制御
+し、Space ごとに resolve される。
 
 - `spaceVisibility: operator-policy-driven` (the default): the kernel consults
   operator policy at resolve time to determine which Spaces see this Connector.
@@ -116,14 +112,14 @@ Resolver behaviour:
 - Visibility changes never mutate an existing ResolutionSnapshot. They surface
   on the next deploy through a new snapshot.
 
-Operators are expected to drive visibility from policy, not from ad-hoc Space
-configuration. This keeps Space-level policy auditable and keeps the resolver
-deterministic.
+operator はアドホックな Space 設定ではなく policy から visibility を駆動する
+ことが期待される。これにより Space レベル policy が監査可能になり、resolver も
+決定的に保たれる。
 
 ## Signing expectations
 
-The `signingExpectations` field declares what the Connector requires from the
-artifacts it accepts:
+`signingExpectations` field は、Connector が受け付ける artifact に対して何を
+要求するかを宣言する。
 
 | Value      | Meaning                                                                                                         |
 | ---------- | --------------------------------------------------------------------------------------------------------------- |
@@ -131,16 +127,14 @@ artifacts it accepts:
 | `optional` | Connector accepts both signed and unsigned artifacts. Plan logs the absence of a signature but does not reject. |
 | `required` | Connector rejects unsigned artifacts at plan time.                                                              |
 
-Signing expectations are connector metadata in current v1. Artifact signature
-implemented:
-
-- Signature verification itself is performed by the operator-installed signing
-  backend; the Connector record only declares the expectation.
+signing expectation は current v1 では connector のメタデータである。Artifact
+署名の検証自体は operator がインストールした signing backend が行い、Connector
+record はその期待を宣言するだけである。
 
 ## Envelope versioning
 
-Connectors speak a control envelope to the runtime-agent. The envelope is
-versioned independently from the kernel HTTP API.
+Connector は runtime-agent との間で control envelope を喋る。envelope は kernel
+HTTP API とは独立にバージョンが付く。
 
 - v1 is the only envelope version defined for the v1 release.
 - A breaking change to the envelope produces v2, which runs in parallel with v1
@@ -151,24 +145,24 @@ versioned independently from the kernel HTTP API.
 - The transition window is operator-configurable and recorded in the audit log
   under `catalog-release-rotated`.
 
-For v1 apply / destroy envelopes, runtime-agent requests carry a WAL-derived
-`idempotencyKey` when the call comes from the public OperationJournal path. The
-same operation tuple is also available as `operationRequest` and in
-`metadata.takosumiOperation` (`phase`, `walStage`, `operationId`,
-`resourceName`, `providerId`, `operationPlanDigest`, and the raw tuple).
-Connectors must treat repeated calls with the same key as the same logical side
-effect and forward the key to cloud APIs that expose request-token semantics.
+v1 の apply / destroy envelope では、呼び出しが public OperationJournal path
+から来るとき runtime-agent request は WAL 由来の `idempotencyKey` を運ぶ。同じ
+operation tuple は `operationRequest` と `metadata.takosumiOperation`
+(`phase`、`walStage`、`operationId`、
+`resourceName`、`providerId`、`operationPlanDigest`、raw tuple) からも得られる。
+Connector は同じキーでの繰り返し呼び出しを同一の論理 side effect として扱い、
+request-token semantics を公開するクラウド API にキーを forward しなければ
+ならない。
 
-Envelope version is part of the Connector record, not part of the Connector
-identity. A Connector keeps its `connector:<id>` across envelope upgrades; the
-upgrade path is a `replace` operation that records both the prior and the new
-envelope version.
+envelope version は Connector record の一部であり、Connector identity の一部
+ではない。Connector は envelope upgrade を跨いで `connector:<id>` を保つ。
+upgrade path は `replace` operation で、以前と新規の envelope version の両方を
+記録する。
 
 ## Operator-only operations
 
-The following Connector operations are reserved for the operator surface. None
-of them are addressable from user-authored manifests, and none of them are
-exposed on the public CLI deploy path.
+次の Connector operation は operator surface に予約されている。ユーザー作成
+manifest から address できず、public CLI deploy path にも公開されない。
 
 - `install`: register a new `connector:<id>` with its initial record. Records
   the install in the audit log under `catalog-release-adopted`.
@@ -182,12 +176,12 @@ exposed on the public CLI deploy path.
   ActivationSnapshots that reference the revoked Connector remain replayable;
   new resolutions targeting the revoked identity fail.
 
-Operator-only operations are gated by the operator bearer, not the deploy
-bearer. The runtime-agent never performs these operations on behalf of users.
+operator 専用 operation は deploy bearer ではなく operator bearer で gate
+される。runtime-agent はユーザーに代わってこれらの operation を実行しない。
 
 ## Provider plugin consumption
 
-Provider plugins are downstream consumers of Connectors:
+Provider plugin は Connector の下流 consumer である。
 
 - A provider plugin declares the `connector:<id>` identities it depends on. The
   kernel resolves each declared identity at apply time and rejects the apply if
@@ -199,12 +193,12 @@ Provider plugins are downstream consumers of Connectors:
   that need a new Connector raise the request through the operator `install`
   operation.
 
-See [Providers](/reference/providers) for the provider plugin record schema and
-registration API.
+provider plugin の record schema と registration API は
+[Providers](/reference/providers) を参照。
 
 ## Runtime-Agent hosting
 
-The runtime-agent hosts Connectors as in-process modules:
+runtime-agent は Connector を in-process モジュールとして host する。
 
 - Each Connector is loaded once per runtime-agent boot. The
   `(shape, provider, acceptedArtifactKinds)` tuple is exposed at
@@ -218,8 +212,8 @@ The runtime-agent hosts Connectors as in-process modules:
   partition using `TAKOSUMI_ARTIFACT_FETCH_TOKEN`; the Connector receives bytes
   by hash, never the deploy bearer.
 
-See [Runtime-Agent API](/reference/runtime-agent-api) for the lifecycle envelope
-wire format and error code enum.
+lifecycle envelope の wire format と error code enum は
+[Runtime-Agent API](/reference/runtime-agent-api) を参照。
 
 ## Related architecture notes
 
@@ -229,3 +223,10 @@ wire format and error code enum.
   Connector credentials in the runtime-agent host.
 - `reference/architecture/paas-provider-architecture` — provider plugin
   authoring patterns that consume Connectors.
+
+## 関連ページ
+
+- [DataAsset Kinds](/reference/artifact-kinds)
+- [Providers](/reference/providers)
+- [Runtime-Agent API](/reference/runtime-agent-api)
+- [Audit Events](/reference/audit-events)

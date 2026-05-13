@@ -114,7 +114,5 @@ function restoreEnv(
 const ENV_KEYS = [
   "TAKOSUMI_CONFIG_FILE",
   "TAKOSUMI_REMOTE_URL",
-  "TAKOSUMI_KERNEL_URL",
   "TAKOSUMI_DEPLOY_TOKEN",
-  "TAKOSUMI_TOKEN",
 ] as const;

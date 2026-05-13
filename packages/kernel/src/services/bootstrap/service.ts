@@ -296,9 +296,6 @@ export class StandaloneBootstrapService {
       const secret = snapshotPlainValue(
         snapshot,
         "TAKOSUMI_INTERNAL_API_SECRET",
-      ) ?? snapshotPlainValue(
-        snapshot,
-        "TAKOSUMI_INTERNAL_SERVICE_SECRET",
       );
       if (!secret) {
         errors.push({
@@ -425,7 +422,6 @@ export class StandaloneBootstrapService {
     for (
       const key of [
         "TAKOSUMI_INTERNAL_API_SECRET",
-        "TAKOSUMI_INTERNAL_SERVICE_SECRET",
         "TAKOSUMI_SECRET_STORE_PASSPHRASE",
         "EXECUTOR_PROXY_SECRET",
       ]
@@ -528,8 +524,6 @@ function bootstrapCryptoEnv(
     "ENVIRONMENT",
     "TAKOSUMI_SECRET_STORE_PASSPHRASE",
     "TAKOSUMI_SECRET_STORE_KEY",
-    "TAKOSUMI_SECRET_ENCRYPTION_KEY",
-    "ENCRYPTION_KEY",
     "TAKOSUMI_DEV_MODE",
   ] as const;
   const env: Record<string, string | undefined> = {};

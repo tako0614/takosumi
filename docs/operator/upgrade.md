@@ -1,5 +1,7 @@
 # Upgrade
 
+> このページでわかること: Takosumi のバージョンアップグレード手順。
+
 operator が takosumi の version を bump するときに参照する runbook です。
 
 ---

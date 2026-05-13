@@ -1,5 +1,7 @@
 # Control Plane
 
+> このページでわかること: control plane の構成と責務分担。
+
 ::: tip Internal implementation このページは control plane の internal
 実装を説明する。public contract ではない。実装は変更される可能性がある。public
 contract は [manifest spec](/reference/manifest-spec) と
@@ -54,14 +56,13 @@ kernel features の正本記述は
 に集約されます。
 
 current compiled Shape manifest は top-level `publications[]` / `bindings[]` を
-持ちません。これらの field は v0.x manifest contract finalization の過程で
-kernel envelope から除去されました。 cross-product capability は **namespace
-exports** に、installer-side metadata (MCP endpoint / file handler / app
-catalog) は Takosumi Accounts AppInstallation 配下の **AppBinding** に migrate
-されています。canonical envelope 定義は [Manifest Spec](../manifest-spec.md)
-を参照してください。app catalog / MCP / file handler などの app-facing metadata
-は consumer application / installer layer (例: reference Takos distribution の
-app gateway) で扱い、kernel control は compiled Shape manifest を apply します。
+持ちません。cross-product capability は **namespace exports**、installer-side
+metadata (MCP endpoint / file handler / app catalog) は Takosumi Accounts
+AppInstallation 配下の **AppBinding** が持ちます。canonical envelope 定義は
+[Manifest Spec](../manifest-spec.md) を参照してください。app catalog / MCP /
+file handler などの app-facing metadata は consumer application / installer
+layer (例: reference Takos distribution の app gateway) で扱い、kernel control
+は compiled Shape manifest を apply します。
 
 PaaS Core 視点では、control plane は compiled Shape manifest を Deployment
 として record し、`applied` 遷移と GroupHead 進行で route projection を
@@ -196,11 +197,11 @@ billing 系の schema は kernel ではなく Takosumi Accounts (account plane)
 | Platform     | kernel resource/session bookkeeping needed for provider reconciliation                                                                 |
 | Metering     | kernel resource usage event emit (請求 invoice の materialize は Takosumi Accounts 側)                                                 |
 
-App-local features such as Agent / Chat, Git hosting, Storage, Store, sessions,
-and workflows are not kernel schema ownership — irrespective of which
-InstallableApp owns them. They live in the owning application's product roots /
-services (in the reference distribution, that is the Takos product set) and may
-consume kernel outputs through published APIs or AppInstallation bindings.
+app-local 機能 (Agent / Chat、 Git hosting、 Storage、 Store、 session、
+workflow など) は、 どの InstallableApp が所有するかに関わらず kernel schema
+の責務ではありません。 これらは所有 application の product root / service 側
+(reference distribution では Takos product 一式) に置かれ、 公開 API や
+AppInstallation binding 経由で kernel output を利用します。
 
 account plane が所有する schema (本ページ対象外):
 
@@ -564,12 +565,11 @@ provide される。
 
 ### Maintenance loops
 
-Current kernel contract has no workflow / cron / scheduler public surface.
-Provider retry, route refresh, observation GC, and recovery are implementation
-maintenance loops behind desired-state / observation semantics. Packaging may
-trigger those loops however the substrate supports, but no manifest field,
-public HTTP route, or operator-facing scheduler vocabulary is part of the kernel
-contract.
+kernel contract に workflow / cron / scheduler の public surface はありませ ん。
+provider retry / route refresh / observation GC / recovery は desired-state /
+observation semantics の裏で動く実装側 maintenance loop で す。 packaging
+はこれらの loop を substrate 側で trigger できますが、 manifest field、 public
+HTTP route、 operator 向け scheduler 語彙は kernel contract に含まれません。
 
 ## DB migration
 
@@ -781,10 +781,9 @@ queue と DO ベースの notifier を併用する。
 
 ### Maintenance trigger packaging (Cloudflare reference detail)
 
-Cloudflare reference packaging may trigger maintenance loops through Workers
-platform facilities. The concrete trigger cadence is backend materialization
-detail and is intentionally not documented as kernel cron / scheduler contract
-here.
+Cloudflare reference packaging では Workers platform 機構で maintenance loop を
+trigger できます。 具体的な trigger 周期は backend 側の materialization
+詳細であり、 ここでは kernel cron / scheduler contract として記述しません。
 
 ### DB / persistence backing (Cloudflare 詳細)
 

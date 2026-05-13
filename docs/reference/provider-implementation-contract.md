@@ -1,32 +1,26 @@
 # Provider Implementation Contract
 
-> Stability: stable Audience: kernel-implementer, integrator See also:
-> [Runtime-Agent API](/reference/runtime-agent-api),
-> [Connector Contract](/reference/connector-contract),
-> [WAL Stages](/reference/wal-stages),
-> [Risk Taxonomy](/reference/risk-taxonomy),
-> [Closed Enums](/reference/closed-enums)
+> このページでわかること: provider plugin の実装契約と必須メソッド。
 
-This page defines the **wire-level lifecycle contract** that a provider plugin
-Implementation must satisfy when hosted inside a runtime-agent.
-[Runtime-Agent API](/reference/runtime-agent-api) covers the kernel ↔
-runtime-agent HTTP RPC envelope, and
-[Connector Contract](/reference/connector-contract) covers the `connector:<id>`
-identity and accepted-kind vector. This page sits between those two: it
-specifies the request / response envelope an Implementation receives from the
-runtime-agent dispatcher, the closed status enum it must return, the effect
-bound it must respect, and the recovery / dry-materialization / verify
-behaviours it must implement.
+本ページは、provider plugin の Implementation が runtime-agent 内で host される
+ときに満たすべき **wire-level lifecycle contract** を定義する。
+[Runtime-Agent API](/reference/runtime-agent-api) は kernel ↔ runtime-agent の
+HTTP RPC envelope を、 [Connector Contract](/reference/connector-contract) は
+`connector:<id>` の identity と accepted-kind vector
+を扱う。本ページはその中間にある: Implementation が runtime-agent dispatcher
+から受け取る request / response envelope、返さ なければならない closed status
+enum、守るべき effect bound、実装すべき recovery / dry-materialization / verify
+動作を規定する。
 
-The contract is wire-shape only. Packaging is free: an Implementation may ship
-as a Deno module, a binary, an HTTP service, a WASM module, or a container
-image. As long as the runtime-agent dispatcher can materialize the operation
-envelope below into a call, the Implementation conforms.
+contract は wire 形のみを縛る。packaging は自由: Implementation は Deno module、
+バイナリ、HTTP service、WASM module、コンテナイメージのいずれでも ship できる。
+runtime-agent dispatcher が下記 operation envelope を呼び出しに realize できる
+限り、Implementation は適合している。
 
 ## Operation request envelope
 
-The runtime-agent invokes an Implementation with the following envelope. Field
-order is normative; absent fields are explicit nulls, not omissions.
+runtime-agent は次の envelope で Implementation を呼び出す。フィールド順は
+normative。欠落フィールドは省略ではなく明示的 null とする。
 
 ```yaml
 OperationRequest:
@@ -80,23 +74,22 @@ Field semantics:
   abort and return `failed` with a `retryable` error before the deadline
   elapses.
 
-Current v1 bridge: the public deploy route records the WAL stages, then passes
-the matching operation tuple to provider calls as `PlatformContext.operation`.
-Runtime-agent-backed providers forward it as `LifecycleApplyRequest` /
-`LifecycleDestroyRequest.idempotencyKey`, `operationRequest`, and
-`metadata.takosumiOperation`. `LifecycleCompensateRequest` is also exposed for
-connector-native reverse effects, with runtime-agent fallback to handle-keyed
-`destroy` when a connector does not implement a dedicated operation. The v1
-`operationRequest` projection carries the WAL coordinates, idempotency key,
-recovery mode, expected external request token, and current `walStage`; fields
-that are not yet derived by the public route, such as non-empty
-`approvedEffects` and pre-recorded generated object IDs, are sent as explicit
-empty arrays.
+現行 v1 ブリッジ: public deploy route は WAL stage を記録した後、対応する
+operation tuple を `PlatformContext.operation` として provider 呼び出しに渡す。
+runtime-agent backed の provider はそれを `LifecycleApplyRequest` /
+`LifecycleDestroyRequest.idempotencyKey`、`operationRequest`、
+`metadata.takosumiOperation` として forward する。`LifecycleCompensateRequest`
+は connector-native の reverse effect 用にも公開され、connector が専用 operation
+を実装しない場合は handle-keyed `destroy` への runtime-agent fallback を持つ。
+v1 の `operationRequest` projection は WAL 座標、idempotency key、recovery
+mode、 予想される外部 request token、現在の `walStage` を運ぶ。非空の
+`approvedEffects` や pre-recorded な生成 object ID のような public route
+がまだ導出しない フィールドは、明示的に空配列として送られる。
 
 ## Operation result envelope
 
-The Implementation returns the following envelope. Fields the Implementation
-does not produce are explicit empty arrays, not omissions.
+Implementation は次の envelope を返す。Implementation が生成しないフィールドは
+省略ではなく明示的な空配列とする。
 
 ```yaml
 OperationResult:
@@ -114,14 +107,13 @@ OperationResult:
   walStageAck: prepare | pre-commit | commit | post-commit | observe | finalize | abort | skip
 ```
 
-The Implementation never invents new identity prefixes. It echoes the IDs
-supplied in the request (`operationId`, `preRecordedGeneratedObjectIds`) and
-uses them verbatim.
+Implementation は新規 identity prefix を発明しない。request で供給された ID
+(`operationId`、`preRecordedGeneratedObjectIds`) を verbatim にエコーする。
 
 ## Operation status enum (5 values)
 
-The `status` field is a closed 5-value enum. Each value has a precise semantic
-meaning that the apply pipeline relies on:
+`status` field は closed な 5 値 enum。各値は apply pipeline が依存する厳密な
+semantic 意味を持つ。
 
 | Status                  | Meaning                                                                                                                          |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -131,14 +123,14 @@ meaning that the apply pipeline relies on:
 | `requires-approval`     | The Implementation discovered an effect that needs explicit approval; the apply pipeline pauses and surfaces a Risk.             |
 | `compensation-required` | Prior partial state must be rolled back; the WAL stage transitions to `abort` and `compensationHint` drives compensate recovery. |
 
-`partial` is the only non-terminal status. The other four are terminal for the
-current attempt; the apply pipeline reschedules a fresh attempt only after
-re-resolving approval / compensation as required.
+非終端 status は `partial` だけである。他の 4 つは現 attempt の終端であり、
+apply pipeline は必要に応じて approval / compensation を再解決した後にのみ 新規
+attempt を再スケジュールする。
 
 ## Recovery mode behaviour
 
-`recoveryMode` is a closed 4-value enum that tells the Implementation what
-assumptions to make about prior state:
+`recoveryMode` は Implementation が事前状態についてどんな前提を置くべきかを
+伝える closed 4 値 enum である。
 
 - `normal`: no prior partial state exists; the Implementation acts as if this is
   a first attempt for the `idempotencyKey`.
@@ -154,22 +146,22 @@ assumptions to make about prior state:
   performing any mutating call. This mode is used by `actual-effects-overflow`
   triage and by recovery dry-runs.
 
-`inspect` mode never advances the WAL beyond the current stage. The
-Implementation returns `succeeded` with `actualEffects` reflecting the observed
-external state and a `walStageAck` equal to the input `walStage`.
+`inspect` モードは現在の stage を超えて WAL を進めない。Implementation は観測
+された外部状態を反映した `actualEffects` と、入力の `walStage` と等しい
+`walStageAck` を持つ `succeeded` を返す。
 
 ## Effect bound rule
 
-The Implementation operates under a strict invariant:
+Implementation は次の厳密な invariant の下で動作する。
 
 ```text
 actualEffects ⊆ approvedEffects
 ```
 
-The Implementation must compute its own intended effect set before performing
-any external mutation, and refuse to proceed if the intended set escapes
-`approvedEffects`. If actual external state diverges and the Implementation
-discovers it has produced an effect outside `approvedEffects`, it must:
+Implementation は外部 mutation を行う前に自身の intended effect 集合を計算し、
+intended 集合が `approvedEffects` を逸脱するなら処理を拒否しなければならない。
+外部の実状態が乖離して Implementation が `approvedEffects` 外の effect を生成
+したと気付いた場合、次を行う必要がある。
 
 1. Stop further mutation.
 2. Return `status = failed` with `errorCode = actual-effects-overflow`.
@@ -178,15 +170,15 @@ discovers it has produced an effect outside `approvedEffects`, it must:
 4. Set `compensationHint.kind = overflow` so the apply pipeline can schedule
    compensate recovery.
 
-`actual-effects-overflow` is a closed Risk (see
-[Risk Taxonomy — `actual-effects-overflow`](/reference/risk-taxonomy)). The
-kernel never silently widens `approvedEffects` in response.
+`actual-effects-overflow` は closed な Risk である
+([Risk Taxonomy — `actual-effects-overflow`](/reference/risk-taxonomy) 参照)。
+kernel はこれに応じて `approvedEffects` を黙って広げることはない。
 
 ## Dry materialization phase
 
-Before the apply pipeline binds approval, it asks each Implementation to predict
-its actual effects. The runtime-agent dispatches this as a normal
-`OperationRequest` with the following constraints:
+apply pipeline が approval を bind する前に、各 Implementation に actual effect
+を予測させる。runtime-agent はこれを通常の `OperationRequest` として
+次の制約付きで dispatch する。
 
 - `walStage = prepare`.
 - `recoveryMode = inspect`.
@@ -194,20 +186,18 @@ its actual effects. The runtime-agent dispatches this as a normal
 - The Implementation populates `actualEffects` with its **predicted** effect
   set.
 
-The kernel hashes the predicted set with
-[the digest computation rules](/reference/digest-computation) and binds the
-result as `predictedActualEffectsDigest` on the OperationPlan. Subsequent
-`commit` / `post-commit` attempts are bound to that digest: deviating from it
-triggers `actual-effects-overflow`.
+kernel は [digest 計算ルール](/reference/digest-computation) で予測集合を hash
+し、結果を OperationPlan の `predictedActualEffectsDigest` として bind する。
+以降の `commit` / `post-commit` attempt はその digest に bound される: 逸脱は
+`actual-effects-overflow` を引き起こす。
 
-Dry materialization is side-effect free by contract. Implementations that cannot
-produce a deterministic prediction must return `status = requires-approval` with
-an explanatory `errorCode`; the apply pipeline then surfaces this as a
-plan-level Risk.
+Dry materialization は contract 上 side-effect free。決定的な予測を生成できない
+Implementation は説明的な `errorCode` 付きで `status = requires-approval` を
+返すこと。apply pipeline がそれを plan-level の Risk として surface する。
 
 ## Idempotency contract
 
-For any single `idempotencyKey`:
+単一の `idempotencyKey` について:
 
 - The Implementation must produce the **same** `actualEffects` digest on every
   successful attempt. Returning a different digest under the same key is a
@@ -222,9 +212,9 @@ For any single `idempotencyKey`:
 
 ## Connector relationship
 
-An Implementation never holds external credentials. Mutating calls flow through
-a Connector, which is the operator-installed software unit defined in
-[Connector Contract](/reference/connector-contract).
+Implementation は外部 credential を保持しない。mutate する呼び出しは
+[Connector Contract](/reference/connector-contract) に定義された operator が
+インストールする Connector を経由する。
 
 - The active `connector:<id>` for the Implementation is part of the resolved
   `inputRefs` set; the runtime-agent supplies the resolved Connector record
@@ -241,27 +231,27 @@ a Connector, which is the operator-installed software unit defined in
 
 ## Verify operation
 
-`POST /v1/lifecycle/verify` (see
-[Runtime-Agent API — `/v1/lifecycle/verify`](/reference/runtime-agent-api))
-dispatches a verify-style OperationRequest with:
+`POST /v1/lifecycle/verify`
+([Runtime-Agent API — `/v1/lifecycle/verify`](/reference/runtime-agent-api)
+参照) は次の verify 形式 OperationRequest を dispatch する。
 
 - `operationKind = verify-object`.
 - `walStage = prepare` (verify never advances the WAL).
 - `recoveryMode = inspect`.
 
-The Implementation must perform a read-only health check against its Connector
-and return:
+Implementation は Connector に対する read-only な health チェックを行い、
+次を返さなければならない。
 
 - `status = succeeded` with empty `actualEffects` on a healthy probe.
 - `status = failed` with `errorCode` set to a closed `LifecycleErrorBody` code
   on an unhealthy probe.
 
-Verify operations never produce WAL entries, never widen `approvedEffects`, and
-never enqueue RevokeDebt.
+verify operation は WAL entry を生成せず、`approvedEffects` を広げず、
+RevokeDebt も queue しない。
 
 ## Failure mode to journal entry mapping
 
-Each terminal status maps to a fixed WAL transition:
+各終端 status は固定 WAL 遷移にマップされる。
 
 | Status                  | WAL effect                                             | Journal entry recorded                                                               |
 | ----------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------ |
@@ -271,13 +261,13 @@ Each terminal status maps to a fixed WAL transition:
 | `requires-approval`     | Stage transitions to `skip` for this attempt.          | Approval re-validation Risk surfaces; the apply pipeline waits for a fresh approval. |
 | `compensation-required` | Stage transitions to `abort`.                          | RevokeDebt enqueued via `compensationHint.debt`; compensate recovery scheduled.      |
 
-The Implementation never writes the WAL directly. The runtime-agent forwards the
-OperationResult to the kernel, which is the sole writer of the WAL ledger.
+Implementation が WAL を直接書くことはない。runtime-agent が OperationResult を
+kernel に forward し、WAL ledger の唯一の書き手は kernel である。
 
 ## Packaging freedom
 
-The contract above constrains the wire shape, not the implementation language or
-runtime. A conforming Implementation may be:
+上記 contract は wire 形を縛り、実装言語や runtime を縛らない。適合する
+Implementation は次のいずれでもよい。
 
 - A Deno module loaded by the runtime-agent in-process.
 - A standalone binary the runtime-agent invokes through a stable on-host
@@ -287,10 +277,9 @@ runtime. A conforming Implementation may be:
 - A WASM module the runtime-agent instantiates per attempt.
 - A container the runtime-agent runs through a host-local container runtime.
 
-The runtime-agent dispatcher is the boundary that adapts each form to the
-OperationRequest / OperationResult envelope. As long as the envelope, the status
-enum, the effect bound, and the idempotency rule are satisfied, the
-Implementation is conformant.
+runtime-agent dispatcher が、各形式を OperationRequest / OperationResult
+envelope に適合させる境界である。envelope、status enum、effect bound、
+idempotency 規則が満たされている限り、Implementation は適合する。
 
 ## Related architecture notes
 
@@ -299,3 +288,11 @@ Implementation is conformant.
 - docs/reference/architecture/operation-plan-write-ahead-journal-model.md
 - docs/reference/architecture/policy-risk-approval-error-model.md
 - docs/reference/architecture/data-asset-model.md
+
+## 関連ページ
+
+- [Runtime-Agent API](/reference/runtime-agent-api)
+- [Connector Contract](/reference/connector-contract)
+- [WAL Stages](/reference/wal-stages)
+- [Risk Taxonomy](/reference/risk-taxonomy)
+- [Closed Enums](/reference/closed-enums)

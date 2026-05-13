@@ -1,5 +1,7 @@
 # Self-host Notes
 
+> このページでわかること: Takosumi をセルフホストする際の注意点と前提条件。
+
 production で takosumi を self-host する operator が **deploy 前に知って
 おくべき** 振る舞いを集めたページです。 quickstart は
 [Getting Started](/getting-started/quickstart) を見てください。 ここでは

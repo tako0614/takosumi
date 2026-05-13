@@ -1,13 +1,6 @@
 # CatalogRelease Trust Model
 
-> Stability: stable Audience: operator, kernel-implementer, integrator See also:
-> [Connector Contract](/reference/connector-contract),
-> [Provider Plugins](/reference/providers),
-> [Risk Taxonomy](/reference/risk-taxonomy),
-> [Approval Invalidation Triggers](/reference/approval-invalidation),
-> [Audit Events](/reference/audit-events), [CLI](/reference/cli),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Closed Enums](/reference/closed-enums)
+> このページでわかること: CatalogRelease の trust model と digest 検証の仕組み。
 
 CatalogRelease は Takosumi v1 で「shape / provider / template の release pin」
 を Space に adopt する単位です。本 reference では CatalogRelease / Connector /
@@ -215,3 +208,14 @@ failure を他 tier が暗黙に補正することはない。
   author signing と runtime-agent verification の境界 rationale
 - `docs/reference/architecture/operator-boundaries.md` — operator が trusted
   entity を enroll する surface と redaction trust boundary の議論
+
+## 関連ページ
+
+- [Connector Contract](/reference/connector-contract)
+- [Provider Plugins](/reference/providers)
+- [Risk Taxonomy](/reference/risk-taxonomy)
+- [Approval Invalidation Triggers](/reference/approval-invalidation)
+- [Audit Events](/reference/audit-events)
+- [CLI](/reference/cli)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Closed Enums](/reference/closed-enums)

@@ -1,8 +1,10 @@
 # Catalog Release and Descriptor Model
 
-Takosumi uses distributed descriptors, but live descriptor web is not runtime
-authority. Runtime authority comes from a `CatalogRelease` adopted by the
-operator and allowed for the Space that is resolving the deployment.
+> このページでわかること: CatalogRelease と Descriptor のデータモデル。
+
+Takosumi は分散 descriptor を使うが、生きた descriptor web は runtime authority
+ではない。runtime authority は operator が adopt し、 deployment を resolve する
+Space に許可された `CatalogRelease` から来る。
 
 ## Descriptor source vs runtime authority
 
@@ -20,12 +22,12 @@ ResolutionSnapshot:
   deployment-specific fixed semantic snapshot inside one Space
 ```
 
-JSON-LD is an ingestion format, not the kernel runtime reasoning engine. Kernel
-runtime uses normalized descriptor records.
+JSON-LD は ingestion 形式であり、kernel runtime の推論エンジンではない。kernel
+runtime は normalize 済みの descriptor record を使う。
 
 ## CatalogRelease
 
-A CatalogRelease is atomic.
+CatalogRelease は atomic である。
 
 ```yaml
 CatalogRelease:
@@ -44,25 +46,25 @@ CatalogRelease:
   activatedAt: "2026-05-04T00:10:00Z"
 ```
 
-Resolution uses exactly one CatalogRelease allowed by the current Space. Apply
-uses the CatalogRelease recorded in `ResolutionSnapshot`. CatalogRelease
-activation and Space assignment are serialized operator operations. v1 trust is
-**operator-pinned digest** (sha256), not publisher signing: the operator pins a
-`CATALOG_DIGEST` in kernel host config, the kernel TLS-fetches the catalog and
-verifies the sha256, and the resulting digest is persisted in append-only
-per-Space adoption records. Public OperationPlan WAL invokes CatalogRelease
-re-verification during pre/post-commit: pre-commit verification fails closed
-before provider side effects, and post-commit verification failure is journaled
-with RevokeDebt for committed effects. A future publisher-signing domain may be
-added by RFC for dynamic registry / multi-mirror use cases, but is not part of
-v1 (see
-[Supply Chain Trust § 6](../supply-chain-trust.md#_6-catalog-release-trust)).
-Catalog-declared executable hook packages
+Resolution は現在の Space に許可された 1 つの CatalogRelease を使う。Apply は
+`ResolutionSnapshot` に記録された CatalogRelease を使う。CatalogRelease の
+activation と Space assignment は直列化された operator 操作である。v1 の trust
+は **operator-pinned digest** (sha256) であり、publisher signing
+ではない。operator は kernel host config に `CATALOG_DIGEST` を pin し、kernel
+は TLS で catalog を fetch して sha256 を検証し、得られた digest を append-only
+な per-Space adoption record に永続化する。Public OperationPlan WAL は
+pre/post-commit で CatalogRelease の再検証を行う。pre-commit verification は
+provider side effect の前に fail-closed で失敗し、post-commit verification
+の失敗は commit 済み effect に対して RevokeDebt 付きで journal される。動的
+registry / multi-mirror の用途には将来 RFC で publisher-signing domain
+が追加されうるが、v1 の一部ではない (詳細は
+[Supply Chain Trust § 6](../supply-chain-trust.md#_6-catalog-release-trust))。
+catalog 宣言された実行可能 hook package。
 
 ## Space assignment
 
-A CatalogRelease is not automatically visible to every Space. Operator policy
-assigns releases to Spaces.
+CatalogRelease は自動的にすべての Space から見えるわけではない。operator policy
+が release を Space に割り当てる。
 
 ```yaml
 SpaceCatalogAssignment:
@@ -73,11 +75,11 @@ SpaceCatalogAssignment:
   policyPack: prod/strict
 ```
 
-A deployment may resolve only against a release allowed for its Space.
+deployment は自身の Space に許可された release に対してのみ resolve できる。
 
 ## Catalog registries
 
-The operator catalog is implemented as separate registries.
+operator catalog は複数の registry に分割して実装される。
 
 ```text
 Target Registry:
@@ -113,9 +115,9 @@ Artifact Policy:
 
 ## Descriptor documents
 
-Descriptors define semantic data only. They do not carry executable code.
+Descriptor は semantic data のみを定義する。実行可能コードは持たない。
 
-Descriptor families:
+Descriptor family:
 
 ```text
 ObjectTarget
@@ -127,11 +129,11 @@ DataAssetKind
 InputSchema
 ```
 
-Implementation packaging is not part of descriptor identity.
+Implementation packaging は descriptor identity の一部ではない。
 
 ## Descriptor digest
 
-A descriptor identity used in snapshots is:
+snapshot で使う descriptor identity は次の組合せ:
 
 ```text
 descriptor URL + normalized descriptor digest + normalized context digests
@@ -139,6 +141,6 @@ descriptor URL + normalized descriptor digest + normalized context digests
 
 ## Production rule
 
-Public v1 manifests reference catalog aliases. Direct descriptor URL usage may
-exist in self-host development or catalog ingestion, but not as default public
-v1 syntax.
+Public v1 manifest は catalog alias を参照する。self-host 開発や catalog
+ingestion で descriptor URL を直接参照することはあり得るが、 public v1
+のデフォルト構文ではない。

@@ -1,5 +1,7 @@
 # Kernel
 
+> このページでわかること: kernel の内部構造と主要コンポーネント。
+
 > **Internal implementation**
 >
 > このページは kernel の internal 実装を説明する。public contract

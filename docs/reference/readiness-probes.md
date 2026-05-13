@@ -1,19 +1,15 @@
 # Readiness Probes
 
-> Stability: stable Audience: operator See also:
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Lifecycle Protocol](/reference/lifecycle),
-> [Cross-Process Locks](/reference/cross-process-locks),
-> [Migration / Upgrade](/reference/migration-upgrade)
+> このページでわかること: readiness probe の仕様と provider 実装ガイド。
 
 Takosumi v1 における readiness probe (`/readyz`) の current HTTP response shape
 と、将来の port-level readiness architecture を分けて定義する。 liveness probe
 との分離もここで明示する。
 
-## Current implementation scope
+## 実装スコープ
 
-この repository の current implementation は `createPaaSApp()` が `/readyz` を
-mount し、request ごとに lightweight check を実行する。Current checks は:
+`createPaaSApp()` が `/readyz` を mount し、リクエストごとに lightweight な
+check を実行します。実施する check は次の通りです:
 
 - `role`: runtime config role と process role の一致
 - `storage`: storage adapter transaction の成功
@@ -226,3 +222,10 @@ cascading failure 防止の不変条件:
   phase の interplay、boot recovery 経路の選定背景
 - `docs/reference/architecture/operational-hardening-checklist.md` — readiness
   を運用 signal として活用する checklist
+
+## 関連ページ
+
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Lifecycle Protocol](/reference/lifecycle)
+- [Cross-Process Locks](/reference/cross-process-locks)
+- [Migration / Upgrade](/reference/migration-upgrade)

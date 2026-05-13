@@ -1,10 +1,12 @@
 # Link and Projection Model
 
-Shape-defined resource wiring creates Link intent. In the public manifest this
-comes from fields such as `resources[].spec.bindings` and `${ref:...}` /
-`${secret-ref:...}` values, not from a separate top-level `uses` object. A Link
-connects a consumer slot to a producer output or ExportDeclaration snapshot
-inside one Space.
+> このページでわかること: link と projection のモデル定義。
+
+Shape が定義する resource 配線は Link intent を作る。public manifest では
+`resources[].spec.bindings` のような field や `${ref:...}` / `${secret-ref:...}`
+値から発生し、別の top-level `uses` object からは作られ ない。Link は 1 つの
+Space の中で consumer slot を producer output または ExportDeclaration snapshot
+に接続する。
 
 ## Link record
 
@@ -29,14 +31,12 @@ Link:
   policyDecisionRefs: []
 ```
 
-ProjectionSelection is a Link field, not a public manifest object.
+ProjectionSelection は Link field であり、public manifest object ではない。
 
 ## Space rule
 
-A Link normally connects a consumer Object to an ExportDeclaration in the same
-manifests may rely on.
-
-and approval binding.
+Link は通常、consumer Object を同じ Space の ExportDeclaration に接続する。
+Space を跨ぐ Link は明示的な Space export 共有と approval binding を要求する。
 
 ## Projection families
 
@@ -51,13 +51,13 @@ service-endpoint
 volume-mount
 ```
 
-Secret exports must not project to plain `env`.
+Secret export はプレーンな `env` に projection してはならない。
 
 ## Access defaults
 
-Grant-producing exports require explicit `access` unless the export declares
-`safeDefaultAccess`. The closed v1 access mode vocabulary lives in
-[Target Model — Access mode enum](./target-model.md).
+grant を生み出す export は、export が `safeDefaultAccess` を宣言していない限り
+明示的な `access` を必要とする。closed な v1 access mode 語彙は
+[Target Model — Access mode enum](./target-model.md) にある。
 
 ```yaml
 resources:
@@ -71,7 +71,7 @@ resources:
 
 ## Link mutation
 
-The closed v1 set of Link mutations:
+v1 で closed な Link mutation 集合:
 
 ```text
 rematerialize:
@@ -100,15 +100,15 @@ repair:
   back to a healthy state without changing source / access / projection
 ```
 
-No new mutation kinds without RFC (CONVENTIONS.md §6).
+RFC (CONVENTIONS.md §6) なしに新規 mutation 種別を追加しない。
 
 ## Link mutation × state transition
 
-Rows are mutations, columns are the link's current state. Each cell records the
-next state when the mutation is applied. `—` means the mutation is illegal in
-that state (resolution / plan must reject). `debt!` means the mutation may queue
-a `RevokeDebt` record per
-[Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md).
+行は mutation、列は link の current state。各セルは mutation を適用したときの
+next state を記録する。`—` は mutation がその state で違法であることを意味する
+(resolution / plan は reject しなければならない)。`debt!` は mutation が
+[Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
+に従って `RevokeDebt` レコードを queue しうることを意味する。
 
 | mutation \\ state | pending       | materializing | materialized    | stale           | rematerializing | revoking | revoked | failed           | debt             |
 | ----------------- | ------------- | ------------- | --------------- | --------------- | --------------- | -------- | ------- | ---------------- | ---------------- |
@@ -121,26 +121,26 @@ a `RevokeDebt` record per
 | no-op             | pending       | materializing | materialized    | stale           | rematerializing | revoking | revoked | failed           | debt             |
 | repair            | —             | —             | —               | —               | —               | —        | —       | rematerializing  | revoking · debt! |
 
-Notes:
+注記:
 
-- A mutation that targets an in-flight state (`materializing`,
-  `rematerializing`, `revoking`) is always illegal in v1; recovery proceeds via
-  `repair` after the in-flight operation lands in `failed` or `debt`.
-- `revoke` from `failed` and `repair` from `debt` may queue a RevokeDebt when
-  external cleanup cannot complete; see Object revoke flow in
-  [Object Model](./object-model.md).
-- `retain-generated` is only legal when accompanied by an approval that
-  satisfies all
-  [Approval invalidation triggers](./policy-risk-approval-error-model.md).
-- `no-op` always preserves state and emits no journal effects.
-- Generated child object lifecycle follows the
-  [Object Model revoke participation matrix](./object-model.md).
+- in-flight な state (`materializing`、`rematerializing`、`revoking`) を対象と
+  する mutation は v1 では常に違法である。recovery は in-flight operation が
+  `failed` または `debt` に着地した後に `repair` を経て進む。
+- `failed` からの `revoke` と `debt` からの `repair` は外部 cleanup が完了でき
+  ないときに RevokeDebt を queue しうる。[Object Model](./object-model.md) の
+  Object revoke flow を参照。
+- `retain-generated` は
+  [Approval invalidation triggers](./policy-risk-approval-error-model.md) を
+  すべて満たす approval を伴うときのみ合法である。
+- `no-op` は常に state を保ち、journal effect を出さない。
+- 生成された子 object の lifecycle は
+  [Object Model revoke participation matrix](./object-model.md) に従う。
 
 ## Collision rules
 
-When a Link projection would collide with another resolved binding, the kernel
-must apply the precedence list in resolution order. The first match wins; later
-inputs that would overwrite an earlier binding fail the resolution.
+Link の projection が別の解決済み binding と衝突する場合、kernel は resolution
+の順序で precedence list を適用しなければならない。最初に一致したものが勝ち、
+先行 binding を上書きするような後続入力は resolution を失敗させる。
 
 ```text
 1. literal target input field        (strongest)
@@ -151,8 +151,9 @@ inputs that would overwrite an earlier binding fail the resolution.
 6. projection produced by this link  (weakest)
 ```
 
-Detected collisions surface as the `collision-detected` Risk in
+検知された衝突は
 [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md)
-and fail-closed unless the resolution provides a deterministic precedence match.
-Public v1 has no manifest-level override mechanism. Operator-side overrides, if
-introduced later, must enter through a separate RFC.
+の `collision-detected` Risk として surface し、resolution が決定的な precedence
+の一致を提供しない限り fail-closed する。public v1 には manifest-level の
+override 機構は無い。operator 側の override を後で導入する場合、別の RFC で
+入れる。

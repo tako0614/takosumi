@@ -14,7 +14,7 @@
  *   - rollback / uninstall releases the reservation; tenant-B can then claim
  *   - same-tenant re-deploy is idempotent
  *   - cross-tenant collision short-circuits before Cloudflare is mutated
- *   - registry-less materializer keeps the legacy behavior (no reservation)
+ *   - registry-less materializer skips reservation checks
  */
 import assert from "node:assert/strict";
 import type { RuntimeDesiredState } from "takosumi-contract";
@@ -412,19 +412,19 @@ Deno.test("phase 18: collision short-circuits before Cloudflare is touched (no p
   assert.equal(cloudflareClient.calls.length, beforeCalls);
 });
 
-Deno.test("phase 18: registry-less materializer preserves legacy behavior (no collision check)", async () => {
+Deno.test("phase 18: registry-less materializer skips collision checks", async () => {
   const cloudflareClient = new StubCloudflareCustomDomainClient();
   const materializerA = buildMaterializer(
     cloudflareClient,
     undefined,
-    "cf-legacy-a",
+    "cf-unregistered-a",
   );
   const materializerB = buildMaterializer(
     cloudflareClient,
     undefined,
-    "cf-legacy-b",
+    "cf-unregistered-b",
   );
-  // Without a registry, both apply paths run (legacy compat).
+  // Without a registry, both apply paths run.
   await materializerA.materialize(buildDesiredState({
     host: "api.example.com",
     spaceId: "tenant-a",

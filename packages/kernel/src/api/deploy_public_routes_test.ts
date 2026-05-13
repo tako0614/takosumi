@@ -333,7 +333,7 @@ Deno.test("deploy public route rejects takosumi-git workflowRef before apply", a
   );
 });
 
-Deno.test("deploy public route rejects legacy target and services manifest", async () => {
+Deno.test("deploy public route rejects target and services manifest", async () => {
   let applyCalled = false;
   const app = createApp({
     token: VALID_TOKEN,

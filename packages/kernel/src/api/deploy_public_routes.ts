@@ -1289,8 +1289,8 @@ function buildHandleForFromRecord(
  * Build the `priorApplied` map that `applyV2` consults to short-circuit
  * `provider.apply` when a resource's fingerprint is unchanged since its
  * last apply. Only entries that carry a `specFingerprint` produce a
- * snapshot — pre-0.9.0 records lack the field and force a re-apply,
- * which is safe (provider.apply still runs) but not idempotent.
+ * snapshot; entries without the field force a re-apply, which is safe
+ * (provider.apply still runs) but not idempotent.
  */
 function buildPriorAppliedFromRecord(
   record: TakosumiDeploymentRecord,

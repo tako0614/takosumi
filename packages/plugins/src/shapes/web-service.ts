@@ -39,10 +39,10 @@ export interface WebServiceResources {
 }
 
 export interface WebServiceSpec {
-  /** Backwards-compat alias: shorthand for `artifact: { kind: "oci-image", uri: image }`. */
+  /** OCI image shorthand for `artifact: { kind: "oci-image", uri: image }`. */
   readonly image?: string;
-  /** Preferred: full Artifact descriptor. `kind` typically `"oci-image"` for
-   *  this shape. New connectors may declare other accepted kinds. */
+  /** Full Artifact descriptor. `kind` is typically `"oci-image"` for this
+   *  shape. Connectors may declare other accepted kinds. */
   readonly artifact?: Artifact;
   readonly port: number;
   readonly scale: WebServiceScale;
@@ -129,9 +129,9 @@ export const WebServiceShape: Shape<
 };
 
 /**
- * `image: string` (legacy) and `artifact: { kind, uri | hash }` (new) both
- * accepted. Either must be present and non-empty. If `artifact` is supplied
- * its `kind` is required and either `uri` or `hash` must be set.
+ * `image: string` and `artifact: { kind, uri | hash }` are both current
+ * authoring forms. Either must be present and non-empty. If `artifact` is
+ * supplied its `kind` is required and either `uri` or `hash` must be set.
  */
 function validateArtifactSource(
   value: Record<string, unknown>,

@@ -33,8 +33,8 @@ export interface SelfHostedS3CompatClient extends SelfHostedObjectClient {
 
 /**
  * Aggregated operator-injected adapter bag for the self-hosted profile. The
- * profile composer reads this to wire base adapters in addition to the legacy
- * client-ref configuration.
+ * profile composer reads this to wire base adapters in addition to client-ref
+ * configuration.
  */
 export interface SelfHostedInjectedClients {
   readonly postgres?: SelfHostedPostgresPoolClient;

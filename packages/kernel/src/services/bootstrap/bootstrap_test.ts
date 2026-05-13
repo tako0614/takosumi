@@ -119,29 +119,6 @@ Deno.test("standalone bootstrap reports unsafe default adapters in production", 
   );
 });
 
-Deno.test("standalone bootstrap keeps legacy internal service secret alias for service auth", async () => {
-  const config = new LocalOperatorConfig({
-    clock: fixedClock,
-    values: {
-      TAKOSUMI_ENVIRONMENT: "production",
-      TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
-      TAKOSUMI_INTERNAL_SERVICE_SECRET: "legacy-service-secret-value",
-    },
-  });
-
-  const report = await new StandaloneBootstrapService({
-    operatorConfig: config,
-    clock: fixedClock,
-  }).bootstrap();
-
-  assert.ok(
-    !report.errors.some((error) =>
-      error.code === "auth_service_secret_missing"
-    ),
-    `unexpected auth_service_secret_missing: ${JSON.stringify(report.errors)}`,
-  );
-});
-
 Deno.test("standalone bootstrap reports the primary internal API secret name", async () => {
   const config = new LocalOperatorConfig({
     clock: fixedClock,

@@ -60,7 +60,8 @@ Priority (highest first):
 
 1. CLI flag (`--remote` / `--token`)
 2. Command-specific env (`TAKOSUMI_DEPLOY_TOKEN`, `TAKOSUMI_AGENT_TOKEN`)
-3. Generic env (`TAKOSUMI_REMOTE_URL`, `TAKOSUMI_TOKEN`)
+3. Remote URL env (`TAKOSUMI_REMOTE_URL`)
+4. Config file (`~/.takosumi/config.yml`)
 
 | Env var                                       | Used by                                                                   |
 | --------------------------------------------- | ------------------------------------------------------------------------- |
@@ -69,7 +70,6 @@ Priority (highest first):
 | `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target                             |
 | `TAKOSUMI_DEV_MODE=1`                         | dev opt-out: plaintext secrets / unencrypted DB / unsafe defaults         |
 | `TAKOSUMI_LOG_LEVEL=warn`                     | suppress dev-mode in-memory fallback notices                              |
-| `TAKOSUMI_KERNEL_URL` / `TAKOSUMI_TOKEN`      | **deprecated** aliases of the above                                       |
 
 See
 [`docs/getting-started/quickstart.md`](../../docs/getting-started/quickstart.md)

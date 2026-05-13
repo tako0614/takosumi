@@ -12,11 +12,11 @@
 //
 // Shape-model dispatch (apply_v2)
 // -------------------------------
-// When a manifest carries the current shape-model field (`resources` as an
-// array), `applyManifest` short-circuits the legacy plan-then-apply pipeline
-// and dispatches to `applyV2`. Historical top-level `template` authoring
-// shorthand is intentionally rejected here; template/compiler layers must
-// submit expanded `resources[]`.
+// Current public manifests carry `resources[]` and dispatch to `applyV2`.
+// Internal plan/apply call-sites still use `ApplyService` method names while
+// their authoring layer is being folded behind the same service boundary.
+// Top-level `template` shorthand is intentionally rejected here; template /
+// compiler layers must submit expanded `resources[]`.
 
 import type {
   ActorContext,
@@ -74,7 +74,7 @@ export interface ApplyDeployResult {
   /**
    * Populated only when the manifest was dispatched through the shape-model
    * (`apply_v2`) pipeline. The `head` field is omitted in that case because
-   * v2 does not advance the legacy GroupHead.
+   * v2 records resource state directly instead of advancing a GroupHead.
    */
   readonly v2Outcome?: ApplyV2Outcome;
 }
@@ -105,8 +105,7 @@ export interface ApplyServiceOptions
   /**
    * Adapters required to construct a `PlatformContext` for the shape-model
    * (`apply_v2`) dispatch path. When omitted, manifests using `resources[]`
-   * fail with a clear error; legacy `target + services` manifests continue
-   * to work without these adapters.
+   * fail with a clear error.
    */
   platformAdapters?: PlatformContextAdapters;
   /** Tenant id surfaced into `PlatformContext.tenantId` (defaults to spaceId). */
@@ -188,10 +187,9 @@ export class ApplyService {
   /**
    * Resolve a manifest into a Deployment, then immediately apply it.
    *
-   * If the manifest opts in to the shape model (`resources` as an array), the
-   * call is dispatched through `apply_v2` instead of the legacy plan-then-apply
-   * pipeline. Top-level `template` is retired and must be expanded before this
-   * boundary.
+   * Current public manifests use the shape model (`resources` as an array) and
+   * dispatch through `apply_v2`. Top-level `template` is retired and must be
+   * expanded before this boundary.
    */
   async applyManifest(
     input: ApplyDeployManifestInput,
@@ -328,9 +326,9 @@ export class ApplyService {
 // ---------------------------------------------------------------------
 
 /**
- * `true` when the manifest opts into the shape model. The legacy authoring
- * surface uses `resources` as a `Record<string, ...>` map; the shape model
- * uses an array.
+ * `true` when the manifest uses the current shape model. Internal compiler
+ * inputs may still carry a `resources` map before they are expanded; public
+ * deploy manifests use an array.
  */
 function manifestUsesShapeModel(manifest: PublicDeployManifest): boolean {
   const m = manifest as Record<string, unknown>;

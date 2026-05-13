@@ -1,41 +1,25 @@
 # Storage Schema
 
-> Stability: stable Audience: kernel-implementer, operator See also:
-> [Journal Compaction](/reference/journal-compaction),
-> [Audit Events](/reference/audit-events),
-> [Lifecycle Protocol](/reference/lifecycle), account-plane identity records
-> live in Takosumi Accounts,
-> [Tenant Provisioning](/reference/tenant-provisioning),
-> [Tenant Export / Deletion](/reference/tenant-export-deletion),
-> [Trial Spaces](/reference/trial-spaces),
-> [Quota Tiers](/reference/quota-tiers),
-> [Cost Attribution](/reference/cost-attribution),
-> [SLA Breach Detection](/reference/sla-breach-detection),
-> [Incident Model](/reference/incident-model),
-> [Support Impersonation](/reference/support-impersonation),
-> [Notification Emission](/reference/notification-emission),
-> [Zone Selection](/reference/zone-selection)
+> このページでわかること: kernel storage のスキーマ定義。
 
-This reference defines the logical wire schema of the persistent records that
-back the Takosumi kernel. It is intentionally not an SQL dump and not a
-column-by-column DDL: kernel implementations may store each record class in a
-relational table, a key-value engine, or a log-structured store, and they may
-persist a subset of the fields listed here when the omitted fields are derivable
-from other records.
+Takosumi kernel が永続化する record の論理 wire schema を定義します。 SQL dump
+や column 単位 DDL ではなく、 各 record class を relational table / key-value
+engine / log-structured store のいずれで保持しても構いません。 他 record
+から導出可能な field は実装側で省略 persist できます。
 
-The schema is expressed as record classes, each with required and optional
-fields, primitive types, persistence semantics, and immutability rules. Where a
-field references another record, the reference is by identifier and the
-reference is read consistent with the originating snapshot.
+schema は record class として表現し、 必須 / optional field、 primitive 型、
+永続化のセマンティクス、 immutability rule を持ちます。 field が別 record
+を参照する場合は識別子参照で、 由来 snapshot と read consistent と
+なるよう読みます。
 
-Primitive types used throughout:
+primitive 型:
 
-- `string`: UTF-8 string, bounded by per-field caps documented inline.
-- `sha256`: lowercase hex digest with a `sha256:` prefix.
-- `timestamp`: RFC 3339 UTC instant with millisecond precision.
-- `enum`: closed string enum, declared inline.
-- `array<T>`: ordered sequence with the inner type T.
-- `digest`: opaque content-addressed identifier; in v1 always sha256.
+- `string`: UTF-8 文字列。 field ごとの上限は inline で記述
+- `sha256`: `sha256:` プレフィックス付き小文字 hex digest
+- `timestamp`: RFC 3339 UTC、 ミリ秒精度
+- `enum`: inline 宣言の閉じた文字列 enum
+- `array<T>`: 内部型 T を持つ順序付き列
+- `digest`: opaque な content-addressed 識別子。 v1 では常に sha256
 
 ## Relationship overview
 
@@ -78,358 +62,355 @@ Primitive types used throughout:
 
 ## ResolutionSnapshot
 
-Captures the resolved manifest world for a deploy.
+deploy 時点で解決された manifest 世界を記録する。
 
-| Field               | Type            | Required | Notes                                                         |
-| ------------------- | --------------- | -------- | ------------------------------------------------------------- |
-| `id`                | string          | yes      | Snapshot identifier; immutable.                               |
-| `spaceId`           | string          | yes      | Owning Space.                                                 |
-| `manifestDigest`    | sha256          | yes      | Digest of the canonical manifest bytes.                       |
-| `catalogReleaseId`  | string          | yes      | Adopted catalog release at resolve time.                      |
-| `exportSnapshotIds` | `array<string>` | yes      | Snapshots of own Space exports referenced by this resolution. |
-| `recordedAt`        | timestamp       | yes      | Resolve time.                                                 |
+| Field               | Type            | Required | Notes                                                      |
+| ------------------- | --------------- | -------- | ---------------------------------------------------------- |
+| `id`                | string          | yes      | Snapshot 識別子。 immutable。                              |
+| `spaceId`           | string          | yes      | 所属 Space。                                               |
+| `manifestDigest`    | sha256          | yes      | canonical manifest bytes の digest。                       |
+| `catalogReleaseId`  | string          | yes      | resolve 時点で adopt された catalog release。              |
+| `exportSnapshotIds` | `array<string>` | yes      | この resolution が参照する自 Space export の Snapshot 群。 |
+| `recordedAt`        | timestamp       | yes      | resolve 時刻。                                             |
 
-Persistence: kept while any DesiredSnapshot referencing this snapshot is
-replayable. Indexed by `(spaceId, recordedAt)`.
+Persistence: 本 snapshot を参照する DesiredSnapshot が replay 可能な間は保持。
+`(spaceId, recordedAt)` で index。
 
-Immutability: ResolutionSnapshots are immutable. Replay against a different
-catalog release or import set produces a new snapshot.
+Immutability: ResolutionSnapshot は immutable。 異なる catalog release または
+import set に対して replay すると新しい snapshot が生まれる。
 
 ## DesiredSnapshot
 
-Captures the desired component / link / exposure / data-asset graph for a
-deploy.
+deploy 対象の component / link / exposure / data-asset グラフの desired 状態を
+記録する。
 
-| Field                  | Type            | Required | Notes                        |
-| ---------------------- | --------------- | -------- | ---------------------------- |
-| `id`                   | string          | yes      | Snapshot identifier.         |
-| `resolutionSnapshotId` | string          | yes      | Backing ResolutionSnapshot.  |
-| `spaceId`              | string          | yes      | Owning Space.                |
-| `desiredGeneration`    | integer         | yes      | Monotonic per Space.         |
-| `components`           | `array<object>` | yes      | Resolved component records.  |
-| `links`                | `array<object>` | yes      | Resolved link records.       |
-| `exposures`            | `array<object>` | yes      | Resolved exposure records.   |
-| `dataAssets`           | `array<object>` | yes      | Resolved DataAsset bindings. |
-| `createdAt`            | timestamp       | yes      | Snapshot creation time.      |
+| Field                  | Type            | Required | Notes                               |
+| ---------------------- | --------------- | -------- | ----------------------------------- |
+| `id`                   | string          | yes      | Snapshot 識別子。                   |
+| `resolutionSnapshotId` | string          | yes      | 由来 ResolutionSnapshot。           |
+| `spaceId`              | string          | yes      | 所属 Space。                        |
+| `desiredGeneration`    | integer         | yes      | Space ごとに monotonic な世代番号。 |
+| `components`           | `array<object>` | yes      | 解決済 component record 群。        |
+| `links`                | `array<object>` | yes      | 解決済 link record 群。             |
+| `exposures`            | `array<object>` | yes      | 解決済 exposure record 群。         |
+| `dataAssets`           | `array<object>` | yes      | 解決済 DataAsset binding 群。       |
+| `createdAt`            | timestamp       | yes      | snapshot 作成時刻。                 |
 
-Persistence: kept while any OperationPlan or ActivationSnapshot references this
-DesiredSnapshot. Indexed by `(spaceId, desiredGeneration)`.
+Persistence: 本 DesiredSnapshot を参照する OperationPlan または
+ActivationSnapshot がある間は保持。 `(spaceId, desiredGeneration)` で index。
 
-Immutability: DesiredSnapshots are immutable.
+Immutability: DesiredSnapshot は immutable。
 
 ## OperationPlan
 
-Derived from a DesiredSnapshot pair (current activation, target desired).
-OperationPlan is not authoritative state; it is recomputed from the snapshots it
-references.
+DesiredSnapshot のペア (現在の activation / target desired) から導出される。
+OperationPlan は authoritative state ではなく、 参照先の snapshot 群から再計算
+可能なものである。
 
-| Field               | Type            | Required | Notes                               |
-| ------------------- | --------------- | -------- | ----------------------------------- |
-| `id`                | string          | yes      | Plan identifier.                    |
-| `desiredSnapshotId` | string          | yes      | Target DesiredSnapshot.             |
-| `spaceId`           | string          | yes      | Owning Space.                       |
-| `operations`        | `array<object>` | yes      | Ordered Operation records.          |
-| `planDigest`        | sha256          | yes      | Digest of the canonical plan bytes. |
-| `createdAt`         | timestamp       | yes      | Plan creation time.                 |
+| Field               | Type            | Required | Notes                            |
+| ------------------- | --------------- | -------- | -------------------------------- |
+| `id`                | string          | yes      | Plan 識別子。                    |
+| `desiredSnapshotId` | string          | yes      | target の DesiredSnapshot。      |
+| `spaceId`           | string          | yes      | 所属 Space。                     |
+| `operations`        | `array<object>` | yes      | 順序付き Operation record 列。   |
+| `planDigest`        | sha256          | yes      | canonical plan bytes の digest。 |
+| `createdAt`         | timestamp       | yes      | plan 作成時刻。                  |
 
-Persistence: kept while the JournalEntry stream that references `planDigest` is
-replayable. Implementations may evict plan bodies once the journal is fully
-completed and the next plan supersedes them. Indexed by `(spaceId, createdAt)`
-and `(planDigest)`.
+Persistence: `planDigest` を参照する JournalEntry stream が replay 可能な間は
+保持。 journal が完全に完了し次の plan に置換された時点で plan 本体を破棄して
+よい。 `(spaceId, createdAt)` と `(planDigest)` で index。
 
-Immutability: OperationPlans are immutable per `id`. Recomputation yields a new
-plan.
+Immutability: OperationPlan は `id` 単位で immutable。 再計算は別の新 plan を
+生成する。
 
 ## ActivationSnapshot
 
-Captures the Space's activation state at the close of a deploy.
+deploy 完了時点の Space activation 状態を記録する。
 
-| Field                     | Type            | Required | Notes                                                |
-| ------------------------- | --------------- | -------- | ---------------------------------------------------- |
-| `id`                      | string          | yes      | Snapshot identifier.                                 |
-| `desiredSnapshotId`       | string          | yes      | DesiredSnapshot the activation realizes.             |
-| `spaceId`                 | string          | yes      | Owning Space.                                        |
-| `assignments`             | `array<object>` | yes      | Object-to-Implementation assignments.                |
-| `activatedAt`             | timestamp       | yes      | Activation close time.                               |
-| `health`                  | enum            | yes      | One of `healthy`, `degraded`, `unhealthy`.           |
-| `sourceObservationDigest` | sha256          | yes      | Digest of the ObservationSet used to compute health. |
+| Field                     | Type            | Required | Notes                                             |
+| ------------------------- | --------------- | -------- | ------------------------------------------------- |
+| `id`                      | string          | yes      | Snapshot 識別子。                                 |
+| `desiredSnapshotId`       | string          | yes      | activation が実現する DesiredSnapshot。           |
+| `spaceId`                 | string          | yes      | 所属 Space。                                      |
+| `assignments`             | `array<object>` | yes      | Object → Implementation の割当。                  |
+| `activatedAt`             | timestamp       | yes      | activation 完了時刻。                             |
+| `health`                  | enum            | yes      | `healthy` / `degraded` / `unhealthy` のいずれか。 |
+| `sourceObservationDigest` | sha256          | yes      | health 算出に用いた ObservationSet の digest。    |
 
-Persistence: kept while the snapshot is the head of any group-activation chain
-or while any DriftIndex points at it. Indexed by `(spaceId, activatedAt)`.
+Persistence: 本 snapshot が group-activation chain の head である間、または
+DriftIndex に参照されている間は保持。 `(spaceId, activatedAt)` で index。
 
-Immutability: ActivationSnapshots are immutable. Group-head moves record a new
-ActivationSnapshot rather than mutating an existing one.
+Immutability: ActivationSnapshot は immutable。 group-head の移動は既存 snapshot
+の mutation ではなく新規 ActivationSnapshot として記録する。
 
 ## JournalEntry (WriteAheadOperationJournal)
 
-The write-ahead log that drives the apply pipeline.
+apply pipeline を駆動する write-ahead log。
 
-| Field                 | Type            | Required | Notes                                                                                          |
-| --------------------- | --------------- | -------- | ---------------------------------------------------------------------------------------------- |
-| `journalId`           | string          | yes      | Journal identifier; one per Space.                                                             |
-| `operationId`         | string          | yes      | Identifier within the plan.                                                                    |
-| `deploymentId`        | string          | yes      | Owning deployment.                                                                             |
-| `spaceId`             | string          | yes      | Owning Space.                                                                                  |
-| `desiredSnapshotId`   | string          | yes      | Target DesiredSnapshot.                                                                        |
-| `operationPlanDigest` | sha256          | yes      | Digest of the OperationPlan that contains this entry.                                          |
-| `stage`               | enum            | yes      | One of the WAL stage 8 values.                                                                 |
-| `idempotencyKey`      | string          | yes      | The 4-tuple idempotency key.                                                                   |
-| `desiredGeneration`   | integer         | yes      | Generation of the target DesiredSnapshot.                                                      |
-| `approvedEffects`     | `array<object>` | yes      | Closed-enum approved effect records.                                                           |
-| `actualEffects`       | `array<object>` | no       | Closed-enum actual effect records, recorded when stage transitions to `commit-acked` or later. |
-| `generatedObjectIds`  | `array<string>` | no       | Object ids the operation produced.                                                             |
-| `errorCode`           | enum            | no       | Closed lifecycle error code; present on failure stages.                                        |
-| `timestamp`           | timestamp       | yes      | Stage transition time.                                                                         |
+| Field                 | Type            | Required | Notes                                                                                           |
+| --------------------- | --------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `journalId`           | string          | yes      | Journal 識別子。 Space ごとに 1 つ。                                                            |
+| `operationId`         | string          | yes      | plan 内での識別子。                                                                             |
+| `deploymentId`        | string          | yes      | 所属 deployment。                                                                               |
+| `spaceId`             | string          | yes      | 所属 Space。                                                                                    |
+| `desiredSnapshotId`   | string          | yes      | target の DesiredSnapshot。                                                                     |
+| `operationPlanDigest` | sha256          | yes      | 本 entry を含む OperationPlan の digest。                                                       |
+| `stage`               | enum            | yes      | WAL stage 8 値のいずれか。                                                                      |
+| `idempotencyKey`      | string          | yes      | 4-tuple の idempotency key。                                                                    |
+| `desiredGeneration`   | integer         | yes      | target DesiredSnapshot の generation。                                                          |
+| `approvedEffects`     | `array<object>` | yes      | closed enum による approved effect record 群。                                                  |
+| `actualEffects`       | `array<object>` | no       | closed enum による actual effect record 群。 stage が `commit-acked` 以降に遷移した時点で記録。 |
+| `generatedObjectIds`  | `array<string>` | no       | 当 operation が生成した Object id 群。                                                          |
+| `errorCode`           | enum            | no       | closed lifecycle error code。 failure stage で付与。                                            |
+| `timestamp`           | timestamp       | yes      | stage 遷移時刻。                                                                                |
 
-Persistence: kept until compaction (see
-[Journal Compaction](/reference/journal-compaction)). Indexed by
-`(spaceId, journalId, timestamp)` and `(idempotencyKey)`.
+Persistence: compaction まで保持 (詳細は
+[Journal Compaction](/reference/journal-compaction))。
+`(spaceId, journalId, timestamp)` および `(idempotencyKey)` で index。
 
-Immutability: each entry is append-only. Stage transitions write a new entry;
-entries are never updated in place. Replay reconstructs the operation state by
-folding the entry stream.
+Immutability: 各 entry は append-only。 stage 遷移は新 entry の追記で表現し、
+既存 entry を in place で更新することはない。 replay は entry stream を畳み込ん
+で operation 状態を復元する。
 
 ## PublicOperationJournalEntry
 
-Current public deploy route WAL stage record for `POST /v1/deployments`. Backed
-by `takosumi_operation_journal_entries`.
+`POST /v1/deployments` の現在の public deploy route が記録する WAL stage
+record。 `takosumi_operation_journal_entries` で実装される。
 
-This record is intentionally narrower than the full internal `JournalEntry`: it
-is derived from the public OperationPlan preview and records stage progress
-around `applyV2` / `destroyV2` provider calls. It gives the public entrypoint
-durable replay evidence and effect-digest mismatch checks, but it does not yet
-implement full recovery mode selection or provider fencing tokens.
+本 record は内部 `JournalEntry` よりも意図的に狭い: public OperationPlan の
+preview から導出され、 `applyV2` / `destroyV2` provider 呼び出し前後の stage
+進行を記録する。 public entrypoint に対し durable な replay 証跡と effect-digest
+不一致検出を提供するが、 full recovery mode 選択や provider fencing token
+はまだ実装していない。
 
-| Field                 | Type      | Required | Notes                                                                                            |
-| --------------------- | --------- | -------- | ------------------------------------------------------------------------------------------------ |
-| `id`                  | string    | yes      | Row identifier.                                                                                  |
-| `spaceId`             | string    | yes      | Public deploy Space / tenant scope.                                                              |
-| `deploymentName`      | string    | no       | Deployment name from manifest metadata.                                                          |
-| `operationPlanDigest` | sha256    | yes      | Deterministic public OperationPlan preview digest.                                               |
-| `journalEntryId`      | string    | yes      | Operation id used in the WAL idempotency tuple.                                                  |
-| `operationId`         | string    | yes      | Same operation identifier, duplicated for query ergonomics.                                      |
-| `phase`               | enum      | yes      | `apply` / `destroy` today; full enum also reserves lifecycle phases.                             |
-| `stage`               | enum      | yes      | One of `prepare`, `pre-commit`, `commit`, `post-commit`, `observe`, `finalize`, `abort`, `skip`. |
-| `operationKind`       | string    | yes      | Public operation kind, for example `create` or `delete`.                                         |
-| `resourceName`        | string    | no       | Manifest resource name.                                                                          |
-| `providerId`          | string    | no       | Provider id selected by the manifest.                                                            |
-| `effectDigest`        | sha256    | yes      | Digest of the canonical public WAL effect payload.                                               |
-| `effect`              | object    | yes      | Canonical effect payload used for idempotent replay comparison.                                  |
-| `status`              | enum      | yes      | `recorded` / `succeeded` / `failed` / `skipped`.                                                 |
-| `createdAt`           | timestamp | yes      | Stage append time.                                                                               |
+| Field                 | Type      | Required | Notes                                                                                                        |
+| --------------------- | --------- | -------- | ------------------------------------------------------------------------------------------------------------ |
+| `id`                  | string    | yes      | 行識別子。                                                                                                   |
+| `spaceId`             | string    | yes      | public deploy の Space / tenant scope。                                                                      |
+| `deploymentName`      | string    | no       | manifest metadata 由来の deployment 名。                                                                     |
+| `operationPlanDigest` | sha256    | yes      | 決定的に算出される public OperationPlan preview digest。                                                     |
+| `journalEntryId`      | string    | yes      | WAL idempotency tuple で使用する operation id。                                                              |
+| `operationId`         | string    | yes      | 同じ operation 識別子。 クエリ利便性のため重複保持。                                                         |
+| `phase`               | enum      | yes      | 現状 `apply` / `destroy`。 full enum は lifecycle phase も予約。                                             |
+| `stage`               | enum      | yes      | `prepare` / `pre-commit` / `commit` / `post-commit` / `observe` / `finalize` / `abort` / `skip` のいずれか。 |
+| `operationKind`       | string    | yes      | public operation kind (例: `create` / `delete`)。                                                            |
+| `resourceName`        | string    | no       | manifest 上の resource 名。                                                                                  |
+| `providerId`          | string    | no       | manifest が選択した provider id。                                                                            |
+| `effectDigest`        | sha256    | yes      | canonical public WAL effect payload の digest。                                                              |
+| `effect`              | object    | yes      | idempotent replay 比較に用いる canonical effect payload。                                                    |
+| `status`              | enum      | yes      | `recorded` / `succeeded` / `failed` / `skipped`。                                                            |
+| `createdAt`           | timestamp | yes      | stage 追記時刻。                                                                                             |
 
-Persistence: retained under the same policy as public deploy records until a
-full journal compaction policy is enabled. Indexed by
-`(spaceId, operationPlanDigest)`, `(spaceId, deploymentName)`, and `createdAt`.
+Persistence: full journal compaction policy が有効になるまでは public deploy
+record と同一の policy で保持。 `(spaceId, operationPlanDigest)` /
+`(spaceId, deploymentName)` / `createdAt` で index。
 
-Mutation rule: append-only per
-`(spaceId, operationPlanDigest, journalEntryId, stage)`. Re-appending the same
-tuple with the same `effectDigest` is idempotent; re-appending with a different
-digest hard-fails before the route advances the stage.
+Mutation rule: `(spaceId, operationPlanDigest, journalEntryId, stage)` 単位で
+append-only。 同一 tuple を同一 `effectDigest` で再 append するのは idempotent。
+異なる digest での再 append は route の stage 進行前に hard-fail する。
 
 ## TakosumiDeploymentRecord
 
-Public deploy record for the CLI surface (`POST /v1/deployments` and
-`takosumi status`). Backed by `takosumi_deployments`.
+CLI surface (`POST /v1/deployments` および `takosumi status`) 向けの public
+deploy record。 `takosumi_deployments` で実装される。
 
-| Field              | Type            | Required | Notes                                                                                |
-| ------------------ | --------------- | -------- | ------------------------------------------------------------------------------------ |
-| `id`               | string          | yes      | Surrogate row id.                                                                    |
-| `tenantId`         | string          | yes      | Public deploy tenant / Space scope.                                                  |
-| `name`             | string          | yes      | Deployment name derived from manifest metadata.                                      |
-| `manifest`         | object          | yes      | Submitted manifest JSON. Removed service import metadata is not added by the kernel. |
-| `appliedResources` | `array<object>` | yes      | Last successful apply handles / outputs.                                             |
-| `status`           | enum            | yes      | `applied` / `destroyed` / `failed`.                                                  |
-| `createdAt`        | timestamp       | yes      | Initial insert time.                                                                 |
-| `updatedAt`        | timestamp       | yes      | Last apply / destroy / failure update.                                               |
+| Field              | Type            | Required | Notes                                                                  |
+| ------------------ | --------------- | -------- | ---------------------------------------------------------------------- |
+| `id`               | string          | yes      | 代理行 id。                                                            |
+| `tenantId`         | string          | yes      | public deploy tenant / Space scope。                                   |
+| `name`             | string          | yes      | manifest metadata 由来の deployment 名。                               |
+| `manifest`         | object          | yes      | 提出された manifest JSON。 kernel は installer metadata を追加しない。 |
+| `appliedResources` | `array<object>` | yes      | 直近成功 apply の handle / output。                                    |
+| `status`           | enum            | yes      | `applied` / `destroyed` / `failed`。                                   |
+| `createdAt`        | timestamp       | yes      | 初回挿入時刻。                                                         |
+| `updatedAt`        | timestamp       | yes      | 直近の apply / destroy / failure 更新時刻。                            |
 
-Persistence: retained until operator deletion or record GC. Indexed by
-`(tenantId, name)` unique, `(tenantId)`, and `(status)`.
+Persistence: operator 削除または record GC まで保持。 `(tenantId, name)`
+unique、 `(tenantId)`、 `(status)` で index。
 
-Mutation rule: upsert by `(tenantId, name)`. Destroy keeps the row with
-`status = destroyed` and clears `appliedResources` so status and audit reads
-still work.
+Mutation rule: `(tenantId, name)` で upsert。 destroy は行を残し
+`status = destroyed` を設定して `appliedResources` を空にし、 status / audit
+read が継続できるようにする。
 
 ## PublicDeployIdempotencyRecord
 
-Replay cache for the public deploy CLI surface (`POST /v1/deployments`). This is
-the storage-level backing for `X-Idempotency-Key` before a write enters the
-deeper OperationJournal model.
+public deploy CLI surface (`POST /v1/deployments`) の replay cache。 write が
+深い OperationJournal model に入る前段で `X-Idempotency-Key` を支える storage
+level の backing。
 
-| Field            | Type      | Required | Notes                                   |
-| ---------------- | --------- | -------- | --------------------------------------- |
-| `id`             | string    | yes      | Row identifier.                         |
-| `tenantId`       | string    | yes      | Public deploy tenant / Space scope.     |
-| `idempotencyKey` | string    | yes      | Caller-supplied operation key.          |
-| `requestDigest`  | sha256    | yes      | Digest of the exact request body bytes. |
-| `responseStatus` | integer   | yes      | HTTP status of the first JSON response. |
-| `responseBody`   | object    | yes      | First JSON response body to replay.     |
-| `createdAt`      | timestamp | yes      | First-seen time.                        |
+| Field            | Type      | Required | Notes                                  |
+| ---------------- | --------- | -------- | -------------------------------------- |
+| `id`             | string    | yes      | 行識別子。                             |
+| `tenantId`       | string    | yes      | public deploy tenant / Space scope。   |
+| `idempotencyKey` | string    | yes      | caller が指定する operation key。      |
+| `requestDigest`  | sha256    | yes      | 実 request body bytes の digest。      |
+| `responseStatus` | integer   | yes      | 初回 JSON response の HTTP status。    |
+| `responseBody`   | object    | yes      | replay に使う初回 JSON response body。 |
+| `createdAt`      | timestamp | yes      | 初回観測時刻。                         |
 
-Persistence: retained at least for the public deploy retry window. Indexed by
-`(tenantId, idempotencyKey)` unique and `(createdAt)` for retention sweeps.
+Persistence: 少なくとも public deploy の retry window まで保持。
+`(tenantId, idempotencyKey)` unique と `(createdAt)` で index (後者は retention
+sweep 用)。
 
-Mutation rule: first writer wins. A later request with the same key and same
-`requestDigest` replays the stored response; the same key with a different
-digest is rejected with `failed_precondition`.
+Mutation rule: first writer wins。 同一 key かつ同一 `requestDigest` の後続
+request は格納済 response を replay する。 同一 key で異なる digest は
+`failed_precondition` で拒否する。
 
 ## PublicDeployLeaseLock
 
-Cross-process lease row for the public deploy CLI surface. Backed by
-`takosumi_deploy_locks`.
+public deploy CLI surface 向けの cross-process lease 行。
+`takosumi_deploy_locks` で実装される。
 
-| Field         | Type      | Required | Notes                                                    |
-| ------------- | --------- | -------- | -------------------------------------------------------- |
-| `tenantId`    | string    | yes      | Public deploy tenant / Space scope.                      |
-| `name`        | string    | yes      | Deployment name.                                         |
-| `ownerToken`  | string    | yes      | Opaque holder token generated at acquire time.           |
-| `lockedUntil` | timestamp | yes      | Lease expiry. Another pod may take over after this time. |
-| `createdAt`   | timestamp | yes      | First acquisition time for the current row.              |
-| `updatedAt`   | timestamp | yes      | Last acquire / renewal time.                             |
+| Field         | Type      | Required | Notes                                              |
+| ------------- | --------- | -------- | -------------------------------------------------- |
+| `tenantId`    | string    | yes      | public deploy tenant / Space scope。               |
+| `name`        | string    | yes      | deployment 名。                                    |
+| `ownerToken`  | string    | yes      | acquire 時に発行される opaque holder token。       |
+| `lockedUntil` | timestamp | yes      | lease 期限。 これを過ぎると他 pod が引き継ぎ可能。 |
+| `createdAt`   | timestamp | yes      | 現行行の初回 acquire 時刻。                        |
+| `updatedAt`   | timestamp | yes      | 直近の acquire / renewal 時刻。                    |
 
-Persistence: row exists only while a public deploy apply / destroy lock is held.
-Primary key is `(tenantId, name)`, with `(lockedUntil)` indexed for expiry
-inspection.
+Persistence: public deploy の apply / destroy lock を保持している間のみ存在。
+primary key は `(tenantId, name)`。 expiry 確認用に `(lockedUntil)` を index。
 
-Mutation rule: acquire inserts or takes over an expired row atomically;
-heartbeat extends `lockedUntil` for the matching `ownerToken`; release deletes
-only the matching `ownerToken`.
+Mutation rule: acquire は新規 insert または expire 済 行の引き継ぎを atomic に
+行う。 heartbeat は一致する `ownerToken` に対して `lockedUntil` を延長する。
+release は一致する `ownerToken` のみを削除する。
 
 ## RevokeDebt
 
-Tracks pending revocations whose effects have not yet been observed as cleared
-in the world. See [RevokeDebt Model](/reference/revoke-debt) for the canonical
-schema, reason / status enums, aging window, and Multi-Space ownership rule.
+世界側で clear 観測がまだ取れていない revocation を追跡する。 canonical schema、
+reason / status enum、 aging window、 Multi-Space ownership rule の正本は
+[RevokeDebt Model](/reference/revoke-debt) 参照。
 
-| Field                 | Type      | Required | Notes                                                                                                                                          |
-| --------------------- | --------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                  | string    | yes      | RevokeDebt identifier (`revoke-debt:<ulid>`).                                                                                                  |
-| `sourceKey`           | sha256    | yes      | Idempotency key for enqueue; derived from owner Space, reason, generated object, and WAL/source tuple.                                         |
-| `generatedObjectId`   | string    | yes      | Owner generated object id; format `generated:...`.                                                                                             |
-| `reason`              | enum      | yes      | Closed enum values (`external-revoke` / `link-revoke` / `activation-rollback` / `approval-invalidated`; `cross-space-share-expired` reserved). |
-| `status`              | enum      | yes      | Closed enum 3 values (`open` / `operator-action-required` / `cleared`).                                                                        |
-| `originatingSpaceId`  | string    | yes      | Space that materialized the generated object. May equal `ownerSpaceId`.                                                                        |
-| `deploymentName`      | string    | no       | Public deploy deployment name when debt originates from `/v1/deployments`.                                                                     |
-| `operationPlanDigest` | sha256    | no       | WAL OperationPlan digest that produced the debt.                                                                                               |
-| `journalEntryId`      | string    | no       | WAL entry id that produced the debt.                                                                                                           |
-| `operationId`         | string    | no       | Operation id that produced the debt.                                                                                                           |
-| `resourceName`        | string    | no       | Manifest resource name when debt is resource-scoped.                                                                                           |
-| `providerId`          | string    | no       | Provider id associated with the resource-scoped debt.                                                                                          |
-| `retryPolicy`         | object    | yes      | Retry policy parameters (interval, attempts, backoff). Owner-tunable.                                                                          |
-| `retryAttempts`       | integer   | yes      | Count of cleanup retry attempts recorded for this debt.                                                                                        |
-| `lastRetryAt`         | timestamp | no       | Last cleanup retry attempt timestamp.                                                                                                          |
-| `nextRetryAt`         | timestamp | no       | Next scheduled retry time when policy can compute one.                                                                                         |
-| `lastRetryError`      | object    | no       | Structured retry failure detail from the last attempt.                                                                                         |
-| `detail`              | object    | no       | Origin-specific structured detail.                                                                                                             |
-| `createdAt`           | timestamp | yes      | Initial debt creation.                                                                                                                         |
-| `statusUpdatedAt`     | timestamp | yes      | Last status transition timestamp; aging windows are evaluated from this value while status is `open`.                                          |
-| `agedAt`              | timestamp | no       | Auto-aging transition (`open` → `operator-action-required`).                                                                                   |
-| `clearedAt`           | timestamp | no       | Terminal clearance (`status = cleared`).                                                                                                       |
+| Field                 | Type      | Required | Notes                                                                                                                                   |
+| --------------------- | --------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                  | string    | yes      | RevokeDebt 識別子 (`revoke-debt:<ulid>`)。                                                                                              |
+| `sourceKey`           | sha256    | yes      | enqueue 用 idempotency key。 owner Space / reason / generated object / WAL ソース tuple から導出。                                      |
+| `generatedObjectId`   | string    | yes      | owner generated object id。 形式は `generated:...`。                                                                                    |
+| `reason`              | enum      | yes      | closed enum (`external-revoke` / `link-revoke` / `activation-rollback` / `approval-invalidated`、 `cross-space-share-expired` は予約)。 |
+| `status`              | enum      | yes      | 3 値の closed enum (`open` / `operator-action-required` / `cleared`)。                                                                  |
+| `originatingSpaceId`  | string    | yes      | generated object を materialize した Space。 `ownerSpaceId` と一致する場合あり。                                                        |
+| `deploymentName`      | string    | no       | debt が `/v1/deployments` 由来のときの public deploy deployment 名。                                                                    |
+| `operationPlanDigest` | sha256    | no       | debt を生んだ WAL OperationPlan digest。                                                                                                |
+| `journalEntryId`      | string    | no       | debt を生んだ WAL entry id。                                                                                                            |
+| `operationId`         | string    | no       | debt を生んだ operation id。                                                                                                            |
+| `resourceName`        | string    | no       | debt が resource-scoped の場合の manifest resource 名。                                                                                 |
+| `providerId`          | string    | no       | resource-scoped debt に紐づく provider id。                                                                                             |
+| `retryPolicy`         | object    | yes      | retry policy parameter (interval / attempts / backoff)。 owner が tune 可能。                                                           |
+| `retryAttempts`       | integer   | yes      | 本 debt に対する cleanup retry 試行回数。                                                                                               |
+| `lastRetryAt`         | timestamp | no       | 直近の cleanup retry 試行時刻。                                                                                                         |
+| `nextRetryAt`         | timestamp | no       | policy 上算出可能な場合の次回 retry 予定時刻。                                                                                          |
+| `lastRetryError`      | object    | no       | 直近 retry 失敗の structured detail。                                                                                                   |
+| `detail`              | object    | no       | 起源固有の structured detail。                                                                                                          |
+| `createdAt`           | timestamp | yes      | debt 初回生成時刻。                                                                                                                     |
+| `statusUpdatedAt`     | timestamp | yes      | 直近の status 遷移時刻。 `open` の間は aging window をこの値から評価する。                                                              |
+| `agedAt`              | timestamp | no       | 自動 aging 遷移時刻 (`open` → `operator-action-required`)。                                                                             |
+| `clearedAt`           | timestamp | no       | terminal clear 時刻 (`status = cleared`)。                                                                                              |
 
-Persistence: kept while `status` is not `cleared`, plus the retain-after-cleared
-retention window per [Compliance Retention](/reference/compliance-retention).
-Implementation table: `takosumi_revoke_debts`, keyed by `id` with unique
-`sourceKey`. Indexed by `(ownerSpaceId, status)`,
-`(ownerSpaceId,
-deploymentName)`, `(ownerSpaceId, operationPlanDigest)`, and
-`(ownerSpaceId, status, nextRetryAt)`, and `createdAt`.
+Persistence: `status` が `cleared` でない間に加え、
+[Compliance Retention](/reference/compliance-retention) 規定の cleared 後
+retention window まで保持。 実装テーブルは `takosumi_revoke_debts`、 key は
+`id`、 `sourceKey` は unique。 `(ownerSpaceId, status)` /
+`(ownerSpaceId, deploymentName)` / `(ownerSpaceId, operationPlanDigest)` /
+`(ownerSpaceId, status, nextRetryAt)` / `createdAt` で index。
 
-Multi-Space ownership rule: the importing Space (consumer) is the owner; the
-exporting Space gets a read-only mirror (non-storage; status mutation only by
-the owner).
+Multi-Space ownership rule: import 側 Space (consumer) が owner で、 export 側
+Space は read-only mirror を得る (mirror は storage を持たず、 status 変更は
+owner のみ可能)。
 
-Immutability: each status transition appends an entry to the audit log; the live
-RevokeDebt record itself updates `status`, retry metadata, `statusUpdatedAt`,
-`agedAt`, and `clearedAt` in place.
+Immutability: status 遷移ごとに audit log に entry を append する。 live
+RevokeDebt record 自体は `status` / retry metadata / `statusUpdatedAt` /
+`agedAt` / `clearedAt` を in place 更新する。
 
 ## Approval
 
-Records an issued approval for a risk-bearing plan.
+risk を伴う plan に対して発行された approval を記録する。
 
-| Field                          | Type            | Required | Notes                                                                         |
-| ------------------------------ | --------------- | -------- | ----------------------------------------------------------------------------- |
-| `id`                           | string          | yes      | Approval identifier.                                                          |
-| `spaceId`                      | string          | yes      | Owning Space.                                                                 |
-| `desiredSnapshotDigest`        | sha256          | yes      | Digest of the DesiredSnapshot the approval covers.                            |
-| `operationPlanDigest`          | sha256          | yes      | Digest of the OperationPlan.                                                  |
-| `riskItemIds`                  | `array<string>` | yes      | Closed risk enum members the approval covers.                                 |
-| `approvedEffects`              | `array<object>` | yes      | Approved effects, by closed effect enum.                                      |
-| `effectDetailsDigest`          | sha256          | yes      | Digest of the per-effect detail payload.                                      |
-| `predictedActualEffectsDigest` | sha256          | yes      | Digest of the predicted actual-effects payload.                               |
-| `actor`                        | string          | yes      | Approving actor identity.                                                     |
-| `policyVersion`                | string          | yes      | Active policy version at issue time.                                          |
-| `expiresAt`                    | timestamp       | yes      | Expiry instant.                                                               |
-| `status`                       | enum            | yes      | One of `pending`, `approved`, `denied`, `expired`, `invalidated`, `consumed`. |
+| Field                          | Type            | Required | Notes                                                                                   |
+| ------------------------------ | --------------- | -------- | --------------------------------------------------------------------------------------- |
+| `id`                           | string          | yes      | Approval 識別子。                                                                       |
+| `spaceId`                      | string          | yes      | 所属 Space。                                                                            |
+| `desiredSnapshotDigest`        | sha256          | yes      | approval が対象とする DesiredSnapshot の digest。                                       |
+| `operationPlanDigest`          | sha256          | yes      | OperationPlan の digest。                                                               |
+| `riskItemIds`                  | `array<string>` | yes      | approval が対象とする closed risk enum 値。                                             |
+| `approvedEffects`              | `array<object>` | yes      | closed effect enum で表現された approved effect 群。                                    |
+| `effectDetailsDigest`          | sha256          | yes      | per-effect detail payload の digest。                                                   |
+| `predictedActualEffectsDigest` | sha256          | yes      | predicted actual-effects payload の digest。                                            |
+| `actor`                        | string          | yes      | 承認 actor の identity。                                                                |
+| `policyVersion`                | string          | yes      | 発行時点で active な policy version。                                                   |
+| `expiresAt`                    | timestamp       | yes      | 失効時刻。                                                                              |
+| `status`                       | enum            | yes      | `pending` / `approved` / `denied` / `expired` / `invalidated` / `consumed` のいずれか。 |
 
-Persistence: kept while the journal that references the approval is replayable,
-plus the configured audit retention window. Indexed by `(spaceId, status)` and
-`(operationPlanDigest)`.
+Persistence: approval を参照する journal が replay 可能な間に加え、 設定された
+audit retention window まで保持。 `(spaceId, status)` と `(operationPlanDigest)`
+で index。
 
-Immutability: status transitions are append-only in the audit log. The live
-record updates `status` in place to support fast lookup. Approvals carry the 6
-invalidation triggers from the policy / risk / approval / error model.
+Immutability: status 遷移は audit log に append-only。 高速 lookup のため live
+record は `status` を in place 更新する。 Approval は policy / risk / approval /
+error model における 6 種類の invalidation trigger を担う。
 
-require this table for install or deploy; consumer contracts may depend only on
-operator-owned namespace exports.
+install や deploy ではこのテーブルを必須としない。 consumer contract は
+operator-owned namespace export だけに依存してよい。
 
-| Field                | Type            | Required | Notes                                                                 |
-| -------------------- | --------------- | -------- | --------------------------------------------------------------------- |
-| `id`                 | string          | yes      | Share identifier.                                                     |
-| `fromSpaceId`        | string          | yes      | Producer Space.                                                       |
-| `toSpaceId`          | string          | yes      | Consumer Space.                                                       |
-| `exportPath`         | string          | yes      | The exported namespace path.                                          |
-| `exportSnapshotId`   | string          | yes      | The Snapshot of the producer-side export.                             |
-| `allowedAccess`      | enum            | yes      | Access mode (read / read-write / admin / invoke-only / observe-only). |
-| `expiresAt`          | timestamp       | no       | Optional hard expiry.                                                 |
-| `policyDecisionRefs` | `array<string>` | yes      | Policy decisions that govern the share.                               |
+| Field                | Type            | Required | Notes                                                                  |
+| -------------------- | --------------- | -------- | ---------------------------------------------------------------------- |
+| `id`                 | string          | yes      | Share 識別子。                                                         |
+| `fromSpaceId`        | string          | yes      | producer Space。                                                       |
+| `toSpaceId`          | string          | yes      | consumer Space。                                                       |
+| `exportPath`         | string          | yes      | export された namespace path。                                         |
+| `exportSnapshotId`   | string          | yes      | producer 側 export の Snapshot。                                       |
+| `allowedAccess`      | enum            | yes      | access mode (read / read-write / admin / invoke-only / observe-only)。 |
+| `expiresAt`          | timestamp       | no       | 任意の hard expiry。                                                   |
+| `policyDecisionRefs` | `array<string>` | yes      | share を統治する policy decision 群。                                  |
 
-Persistence: kept while `lifecycleState` is anything other than `revoked`, plus
-the audit retention window. Indexed by
-`(fromSpaceId, toSpaceId, lifecycleState)` and `(exportPath)`.
+Persistence: `lifecycleState` が `revoked` 以外の間に加え、 audit retention
+window まで保持。 `(fromSpaceId, toSpaceId, lifecycleState)` と `(exportPath)`
+で index。
 
-Immutability: lifecycle transitions are append-only in the audit log. The live
-record updates `lifecycleState` and `policyDecisionRefs` in place.
+Immutability: lifecycle 遷移は audit log に append-only。 live record は
+`lifecycleState` と `policyDecisionRefs` を in place 更新する。
 
 ## ObservationSet
 
-A point-in-time bundle of observed facts for a Space.
+ある時点における Space の observed fact をまとめた bundle。
 
-| Field               | Type            | Required | Notes                                                |
-| ------------------- | --------------- | -------- | ---------------------------------------------------- |
-| `id`                | string          | yes      | Observation set identifier.                          |
-| `spaceId`           | string          | yes      | Owning Space.                                        |
-| `desiredSnapshotId` | string          | yes      | DesiredSnapshot the observation is compared against. |
-| `observedAt`        | timestamp       | yes      | Observation time.                                    |
-| `observations`      | `array<object>` | yes      | Per-object observation records.                      |
+| Field               | Type            | Required | Notes                                 |
+| ------------------- | --------------- | -------- | ------------------------------------- |
+| `id`                | string          | yes      | observation set 識別子。              |
+| `spaceId`           | string          | yes      | 所属 Space。                          |
+| `desiredSnapshotId` | string          | yes      | 比較対象の DesiredSnapshot。          |
+| `observedAt`        | timestamp       | yes      | 観測時刻。                            |
+| `observations`      | `array<object>` | yes      | object 単位の observation record 群。 |
 
-Persistence: kept while the corresponding DriftIndex is live, plus the
-configured observation retention. Indexed by `(spaceId, observedAt)`.
+Persistence: 対応する DriftIndex が live な間に加え、 設定された observation
+retention まで保持。 `(spaceId, observedAt)` で index。
 
-Immutability: ObservationSets are immutable.
+Immutability: ObservationSet は immutable。
 
 ## DriftIndex
 
-The drift state computed from a DesiredSnapshot and an ObservationSet.
+DesiredSnapshot と ObservationSet から計算される drift 状態。
 
-| Field               | Type            | Required | Notes                                   |
-| ------------------- | --------------- | -------- | --------------------------------------- |
-| `id`                | string          | yes      | Drift index identifier.                 |
-| `spaceId`           | string          | yes      | Owning Space.                           |
-| `desiredSnapshotId` | string          | yes      | DesiredSnapshot side of the comparison. |
-| `observationSetId`  | string          | yes      | ObservationSet side of the comparison.  |
-| `driftEntries`      | `array<object>` | yes      | Per-object drift records.               |
-| `computedAt`        | timestamp       | yes      | Computation time.                       |
+| Field               | Type            | Required | Notes                           |
+| ------------------- | --------------- | -------- | ------------------------------- |
+| `id`                | string          | yes      | drift index 識別子。            |
+| `spaceId`           | string          | yes      | 所属 Space。                    |
+| `desiredSnapshotId` | string          | yes      | 比較の DesiredSnapshot 側。     |
+| `observationSetId`  | string          | yes      | 比較の ObservationSet 側。      |
+| `driftEntries`      | `array<object>` | yes      | object 単位の drift record 群。 |
+| `computedAt`        | timestamp       | yes      | 計算時刻。                      |
 
-Persistence: kept while drift is open or unresolved. Indexed by
-`(spaceId, computedAt)`.
+Persistence: drift が open または未解消の間は保持。 `(spaceId, computedAt)` で
+index。
 
-Immutability: DriftIndexes are immutable. A new drift computation produces a new
-DriftIndex.
+Immutability: DriftIndex は immutable。 新たな drift 計算は新 DriftIndex を
+生む。
 
 ## ExternalParticipant
 
-consumes exports or signs envelopes. Current v1 storage does not require this
-record for install or deploy.
+export を consume したり envelope に署名する外部参加者。 現状の v1 storage は
+install / deploy 用途では本 record を必須としない。
 
 | Field             | Type            | Required | Notes                                                |
 | ----------------- | --------------- | -------- | ---------------------------------------------------- |
@@ -441,13 +422,13 @@ record for install or deploy.
 | `expiresAt`       | timestamp       | no       | optional expiry, 経過後は revocation 扱い.           |
 | `revokedAt`       | timestamp       | no       | revocation 時刻 (status:revoked).                    |
 
-Persistence: kept while `revokedAt` is null OR audit retention で要求される間.
-Indexed by `(id, spaceVisibility)`. Immutability: mutable in place:
-`spaceVisibility` / `verifiedAt` / `revokedAt` のみ.
+Persistence: `revokedAt` が null の間、 または audit retention で要求される間
+保持。 `(id, spaceVisibility)` で index。 Immutability: in place で mutate
+可能なのは `spaceVisibility` / `verifiedAt` / `revokedAt` のみ。
 
 ## Connector
 
-Operator-installed connector record that gates DataAsset accept paths.
+DataAsset accept 経路を gate する、 operator が install する connector record。
 
 | Field                 | Type            | Required | Notes                                           |
 | --------------------- | --------------- | -------- | ----------------------------------------------- |
@@ -459,14 +440,14 @@ Operator-installed connector record that gates DataAsset accept paths.
 | `installedAt`         | timestamp       | yes      | 初回 install.                                   |
 | `revokedAt`           | timestamp       | no       | revocation 時刻.                                |
 
-Persistence: kept while `revokedAt` is null. Indexed by `(id)`. Immutability:
-operator-only mutation.
+Persistence: `revokedAt` が null の間は保持。 `(id)` で index。 Immutability:
+operator のみ mutate 可能。
 
 See also: [Connector Contract](/reference/connector-contract).
 
 ## AuditLogEvent
 
-A single append-only audit chain entry.
+append-only な audit chain の単一 entry。
 
 | Field       | Type      | Required | Notes                                               |
 | ----------- | --------- | -------- | --------------------------------------------------- |
@@ -480,92 +461,93 @@ A single append-only audit chain entry.
 | `prevHash`  | string    | yes      | 前 event の hash (chain integrity).                 |
 | `hash`      | string    | yes      | 当 event の hash.                                   |
 
-Persistence: compliance regime ごとの retention window (see
-[Compliance Retention](/reference/compliance-retention)). Indexed by
-`(spaceId, ts, actor, eventType)`. Immutability: append-only, never mutated.
+Persistence: compliance regime ごとの retention window まで保持 (詳細は
+[Compliance Retention](/reference/compliance-retention))。
+`(spaceId, ts, actor, eventType)` で index。 Immutability: append-only、
+mutation は不可。
 
 See also: [Audit Events](/reference/audit-events).
 
 ## CatalogRelease Publisher Key
 
-Operator-enrolled Ed25519 key used to verify CatalogRelease descriptors.
+CatalogRelease descriptor の verify に用いる operator enrollment 済 Ed25519 鍵。
 
-| Field             | Type      | Required | Notes                           |
-| ----------------- | --------- | -------- | ------------------------------- |
-| `keyId`           | string    | yes      | Publisher key identifier.       |
-| `publisherId`     | string    | yes      | Trusted publisher owner.        |
-| `publicKeyBase64` | string    | yes      | Raw Ed25519 public key, base64. |
-| `status`          | enum      | yes      | `active` / `revoked`.           |
-| `enrolledAt`      | timestamp | yes      | enrollment 完了時刻.            |
-| `revokedAt`       | timestamp | no       | revoke 完了時刻.                |
-| `reason`          | string    | no       | operator reason.                |
+| Field             | Type      | Required | Notes                         |
+| ----------------- | --------- | -------- | ----------------------------- |
+| `keyId`           | string    | yes      | publisher key 識別子。        |
+| `publisherId`     | string    | yes      | trusted publisher owner。     |
+| `publicKeyBase64` | string    | yes      | raw Ed25519 公開鍵 (base64)。 |
+| `status`          | enum      | yes      | `active` / `revoked`。        |
+| `enrolledAt`      | timestamp | yes      | enrollment 完了時刻。         |
+| `revokedAt`       | timestamp | no       | revoke 完了時刻。             |
+| `reason`          | string    | no       | operator 記入の理由。         |
 
-Persistence: operator trust root. Indexed by `(publisherId)` and `(status)`.
+Persistence: operator trust root。 `(publisherId)` と `(status)` で index。
 
 ## CatalogRelease Descriptor
 
-Signed descriptor body adopted by Spaces.
+Space が adopt する署名付き descriptor 本体。
 
-| Field                | Type      | Required | Notes                                     |
-| -------------------- | --------- | -------- | ----------------------------------------- |
-| `releaseId`          | string    | yes      | CatalogRelease id.                        |
-| `publisherId`        | string    | yes      | descriptor signer publisher.              |
-| `descriptorDigest`   | sha256    | yes      | sha256 over canonical payload.            |
-| `descriptor`         | object    | yes      | Signed descriptor body including pins.    |
-| `signatureAlgorithm` | string    | yes      | `Ed25519`.                                |
-| `signatureKeyId`     | string    | yes      | key used for verification.                |
-| `signatureValue`     | string    | yes      | base64 signature over canonical payload.  |
-| `createdAt`          | timestamp | yes      | descriptor created time.                  |
-| `activatedAt`        | timestamp | no       | publisher activation time, when supplied. |
+| Field                | Type      | Required | Notes                                        |
+| -------------------- | --------- | -------- | -------------------------------------------- |
+| `releaseId`          | string    | yes      | CatalogRelease id。                          |
+| `publisherId`        | string    | yes      | descriptor 署名 publisher。                  |
+| `descriptorDigest`   | sha256    | yes      | canonical payload の sha256。                |
+| `descriptor`         | object    | yes      | pin を含む署名付き descriptor 本体。         |
+| `signatureAlgorithm` | string    | yes      | `Ed25519`。                                  |
+| `signatureKeyId`     | string    | yes      | verification に用いる鍵。                    |
+| `signatureValue`     | string    | yes      | canonical payload に対する base64 署名。     |
+| `createdAt`          | timestamp | yes      | descriptor 作成時刻。                        |
+| `activatedAt`        | timestamp | no       | publisher activation 時刻 (供給される場合)。 |
 
-Persistence: immutable while any adoption references the release. Indexed by
-`(publisherId)`, `(descriptorDigest)`, and `(createdAt)`.
+Persistence: 当 release を参照する adoption がある間は immutable に保持。
+`(publisherId)` / `(descriptorDigest)` / `(createdAt)` で index。
 
 ## CatalogReleaseAdoption
 
-Per-Space adoption record for a catalog release.
+catalog release に対する Space 単位の adoption record。
 
-| Field                         | Type      | Required | Notes                               |
-| ----------------------------- | --------- | -------- | ----------------------------------- |
-| `id`                          | string    | yes      | adoption record id.                 |
-| `catalogReleaseId`            | string    | yes      | adopted release id.                 |
-| `spaceId`                     | string    | yes      | adoption 対象 Space.                |
-| `publisherId`                 | string    | yes      | descriptor publisher.               |
-| `publisherKeyId`              | string    | yes      | adoption に使った publisher key id. |
-| `descriptorDigest`            | sha256    | yes      | sha256 catalog descriptor digest.   |
-| `adoptedAt`                   | timestamp | yes      | adoption 完了時刻.                  |
-| `rotatedFromCatalogReleaseId` | string    | no       | rotation 元 release.                |
-| `verification`                | object    | yes      | verifiedAt / algorithm / digest.    |
+| Field                         | Type      | Required | Notes                                |
+| ----------------------------- | --------- | -------- | ------------------------------------ |
+| `id`                          | string    | yes      | adoption record id。                 |
+| `catalogReleaseId`            | string    | yes      | adopt した release id。              |
+| `spaceId`                     | string    | yes      | adoption 対象 Space。                |
+| `publisherId`                 | string    | yes      | descriptor publisher。               |
+| `publisherKeyId`              | string    | yes      | adoption に使った publisher key id。 |
+| `descriptorDigest`            | sha256    | yes      | sha256 catalog descriptor digest。   |
+| `adoptedAt`                   | timestamp | yes      | adoption 完了時刻。                  |
+| `rotatedFromCatalogReleaseId` | string    | no       | rotation 元 release。                |
+| `verification`                | object    | yes      | verifiedAt / algorithm / digest。    |
 
-Persistence: kept while resolution が当 release を参照する間 + audit retention.
-Indexed by `(spaceId, adoptedAt)`, `(catalogReleaseId)`, and `(publisherKeyId)`.
-Immutability: operator-only append.
+Persistence: resolution が当 release を参照する間に加え、 audit retention window
+まで保持。 `(spaceId, adoptedAt)` / `(catalogReleaseId)` / `(publisherKeyId)` で
+index。 Immutability: operator のみ append 可能。
 
 See also: [Catalog Release Trust](/reference/catalog-release-trust).
 
 ## ImplementationRegistry
 
-Operator-managed registry of provider implementations.
+provider 実装の operator 管理 registry。
 
-| Field                 | Type            | Required | Notes                                          |
-| --------------------- | --------------- | -------- | ---------------------------------------------- |
-| `id`                  | string          | yes      | `implementation:<id>` form.                    |
-| `providerKind`        | string          | yes      | namespaced provider id (e.g. `@takos/aws-s3`). |
-| `acceptedShapes`      | `array<string>` | yes      | `shape@version` list.                          |
-| `signingExpectations` | enum            | yes      | `none` / `optional` / `required`.              |
-| `publicKey`           | string          | no       | optional, signed implementation の verify 用.  |
-| `installedAt`         | timestamp       | yes      | install 時刻.                                  |
-| `revokedAt`           | timestamp       | no       | revocation 時刻.                               |
+| Field                 | Type            | Required | Notes                                              |
+| --------------------- | --------------- | -------- | -------------------------------------------------- |
+| `id`                  | string          | yes      | `implementation:<id>` 形式。                       |
+| `providerKind`        | string          | yes      | namespace 付き provider id (例: `@takos/aws-s3`)。 |
+| `acceptedShapes`      | `array<string>` | yes      | `shape@version` の一覧。                           |
+| `signingExpectations` | enum            | yes      | `none` / `optional` / `required`。                 |
+| `publicKey`           | string          | no       | 任意。 署名付き実装の verify 用。                  |
+| `installedAt`         | timestamp       | yes      | install 時刻。                                     |
+| `revokedAt`           | timestamp       | no       | revocation 時刻。                                  |
 
-Persistence: kept while `revokedAt` is null. Indexed by `(id, providerKind)`.
-Immutability: operator-only.
+Persistence: `revokedAt` が null の間は保持。 `(id, providerKind)` で index。
+Immutability: operator のみ mutate 可能。
 
 See also:
 [Provider Implementation Contract](/reference/provider-implementation-contract).
 
 ## LockRecord
 
-Cross-process lock lease record held by a kernel pod.
+kernel pod が保持する cross-process lock lease record。
 
 | Field            | Type      | Required | Notes                               |
 | ---------------- | --------- | -------- | ----------------------------------- |
@@ -575,15 +557,15 @@ Cross-process lock lease record held by a kernel pod.
 | `leaseExpiresAt` | timestamp | yes      | monotonic-derived expiry.           |
 | `epoch`          | integer   | yes      | 取得 epoch (recovery で increment). |
 
-Persistence: lease expire 後に削除可. Indexed by `(lockId)`. Immutability:
-mutable in place: `leaseExpiresAt` / heartbeat 更新.
+Persistence: lease expire 後に削除可。 `(lockId)` で index。 Immutability: in
+place で mutate 可能なのは `leaseExpiresAt` / heartbeat 更新のみ。
 
 See also: [Cross-Process Locks](/reference/cross-process-locks).
 
 ## SecretPartitionReference
 
-Per-Space encrypted reference into a secret partition. Raw secret material is
-never embedded in this record.
+secret partition への Space 単位の暗号化参照。 raw な secret material は本
+record に embed されない。
 
 | Field           | Type      | Required | Notes                                                                     |
 | --------------- | --------- | -------- | ------------------------------------------------------------------------- |
@@ -593,317 +575,314 @@ never embedded in this record.
 | `createdAt`     | timestamp | yes      | 初回 reference 生成時刻.                                                  |
 | `rotatedAt`     | timestamp | no       | rotation 時刻.                                                            |
 
-Persistence: kept indefinitely (rotation 履歴は audit に依存). Indexed by
-`(spaceId, partitionTag)`. Immutability: append-only generation. 注: raw secret
-value は本 record に **絶対に含まれない** (reference のみ).
+Persistence: 無期限に保持 (rotation 履歴は audit に依存)。
+`(spaceId, partitionTag)` で index。 Immutability: generation は append-only。
+注: raw secret value は本 record に **絶対に含まれない** (reference のみ)。
 
 See also: [Secret Partitions](/reference/secret-partitions).
 
 ## Account-plane identity records
 
-Organization, Membership, RoleAssignment, account API keys, and AuthProvider
-records are not part of the current takosumi kernel storage schema. They are
-owned by an operator account plane (reference implementation: Takosumi Accounts
-in `takosumi-cloud/`). Kernel storage covers deploy records, journals, provider
-observations, artifacts, locks, quota signals, and operator/runtime credentials
-only.
+Organization、 Membership、 RoleAssignment、 account API key、 AuthProvider の
+record は現在の takosumi kernel storage schema には含まれない。 これらは
+operator account plane (reference 実装は `takosumi-cloud/` の Takosumi Accounts)
+が所有する。 kernel storage が扱うのは deploy record、 journal、 provider
+observation、 artifact、 lock、 quota signal、 operator / runtime credential
+のみである。
 
 ## TrialAttribute
 
-Trial-specific metadata attached to a Space.
+Space に付与される trial 固有 metadata。
 
-| Field              | Type      | Required | Notes                                                                 |
-| ------------------ | --------- | -------- | --------------------------------------------------------------------- |
-| `spaceId`          | string    | yes      | Owning Space; primary key.                                            |
-| `trial`            | boolean   | yes      | Always `true` while the attribute is present.                         |
-| `trialExpiresAt`   | timestamp | yes      | Trial expiry instant.                                                 |
-| `trialQuotaTierId` | string    | yes      | QuotaTier applied while the trial is active.                          |
-| `trialOrigin`      | enum      | yes      | Closed origin enum (e.g. `self-service`, `operator-grant`, `import`). |
+| Field              | Type      | Required | Notes                                                                   |
+| ------------------ | --------- | -------- | ----------------------------------------------------------------------- |
+| `spaceId`          | string    | yes      | 所属 Space。 primary key。                                              |
+| `trial`            | boolean   | yes      | attribute が存在する間は常に `true`。                                   |
+| `trialExpiresAt`   | timestamp | yes      | trial 失効時刻。                                                        |
+| `trialQuotaTierId` | string    | yes      | trial 中に適用される QuotaTier。                                        |
+| `trialOrigin`      | enum      | yes      | closed origin enum (例: `self-service` / `operator-grant` / `import`)。 |
 
-Persistence: kept while the Space is in the trial state. On conversion the
-record is removed; on cleanup the record is removed together with the Space.
-Indexed by `(trialExpiresAt)`.
+Persistence: Space が trial 状態の間は保持。 conversion 時に削除、 cleanup 時に
+Space と共に削除される。 `(trialExpiresAt)` で index。
 
-Immutability: `trialExpiresAt` and `trialQuotaTierId` are mutable in place via
-the trial-extension flow; transitions emit audit events. `spaceId`, `trial`, and
-`trialOrigin` are immutable.
+Immutability: `trialExpiresAt` と `trialQuotaTierId` は trial 延長 flow で in
+place 更新可能 (遷移時に audit event 発行)。 `spaceId` / `trial` / `trialOrigin`
+は immutable。
 
 See also: [Trial Spaces](/reference/trial-spaces).
 
 ## ProvisioningSession
 
-Tracks an in-flight Space provisioning attempt.
+進行中の Space provisioning 試行を追跡する。
 
-| Field          | Type      | Required | Notes                                                                                                      |
-| -------------- | --------- | -------- | ---------------------------------------------------------------------------------------------------------- |
-| `id`           | string    | yes      | `provisioning-session:<ulid>` form.                                                                        |
-| `spaceId`      | string    | yes      | Target Space.                                                                                              |
-| `status`       | enum      | yes      | One of the closed provisioning statuses (e.g. `pending`, `running`, `completed`, `failed`, `rolled-back`). |
-| `currentStage` | enum      | yes      | One of the closed provisioning stage values.                                                               |
-| `startedAt`    | timestamp | yes      | Session start time.                                                                                        |
-| `completedAt`  | timestamp | no       | Terminal time when `status` is `completed`, `failed`, or `rolled-back`.                                    |
-| `error`        | object    | no       | Closed error envelope (`errorCode`, `message`, `stage`) on failure.                                        |
+| Field          | Type      | Required | Notes                                                                                                        |
+| -------------- | --------- | -------- | ------------------------------------------------------------------------------------------------------------ |
+| `id`           | string    | yes      | `provisioning-session:<ulid>` 形式。                                                                         |
+| `spaceId`      | string    | yes      | target Space。                                                                                               |
+| `status`       | enum      | yes      | closed provisioning status のいずれか (例: `pending` / `running` / `completed` / `failed` / `rolled-back`)。 |
+| `currentStage` | enum      | yes      | closed provisioning stage のいずれか。                                                                       |
+| `startedAt`    | timestamp | yes      | session 開始時刻。                                                                                           |
+| `completedAt`  | timestamp | no       | `status` が `completed` / `failed` / `rolled-back` のときの終端時刻。                                        |
+| `error`        | object    | no       | failure 時の closed error envelope (`errorCode` / `message` / `stage`)。                                     |
 
-Persistence: kept while `status` is non-terminal, plus the audit retention
-window after a terminal status. Indexed by `(spaceId, status)` and
-`(startedAt)`.
+Persistence: `status` が非終端の間に加え、 terminal 後は audit retention window
+まで保持。 `(spaceId, status)` と `(startedAt)` で index。
 
-Immutability: `status`, `currentStage`, `completedAt`, and `error` are mutable
-in place; transitions emit audit events. The other fields are immutable.
+Immutability: `status` / `currentStage` / `completedAt` / `error` は in place
+更新可能 (遷移時に audit event 発行)。 他 field は immutable。
 
 See also: [Tenant Provisioning](/reference/tenant-provisioning).
 
 ## ExportJob
 
-Tracks a Space export request.
+Space export 要求を追跡する。
 
-| Field                  | Type      | Required | Notes                                                               |
-| ---------------------- | --------- | -------- | ------------------------------------------------------------------- |
-| `id`                   | string    | yes      | `export-job:<ulid>` form.                                           |
-| `spaceId`              | string    | yes      | Source Space.                                                       |
-| `mode`                 | enum      | yes      | Closed export mode (e.g. `full`, `metadata-only`, `audit-only`).    |
-| `status`               | enum      | yes      | Closed export status (`pending`, `running`, `completed`, `failed`). |
-| `artifactSha256`       | sha256    | no       | Digest of the export artifact when `status` is `completed`.         |
-| `downloadUrlExpiresAt` | timestamp | no       | Expiry instant of the issued pre-signed download URL.               |
-| `requestedAt`          | timestamp | yes      | Request time.                                                       |
-| `completedAt`          | timestamp | no       | Terminal time when `status` is `completed` or `failed`.             |
+| Field                  | Type      | Required | Notes                                                                   |
+| ---------------------- | --------- | -------- | ----------------------------------------------------------------------- |
+| `id`                   | string    | yes      | `export-job:<ulid>` 形式。                                              |
+| `spaceId`              | string    | yes      | source Space。                                                          |
+| `mode`                 | enum      | yes      | closed export mode (例: `full` / `metadata-only` / `audit-only`)。      |
+| `status`               | enum      | yes      | closed export status (`pending` / `running` / `completed` / `failed`)。 |
+| `artifactSha256`       | sha256    | no       | `status` が `completed` のときの export artifact digest。               |
+| `downloadUrlExpiresAt` | timestamp | no       | 発行された pre-signed download URL の失効時刻。                         |
+| `requestedAt`          | timestamp | yes      | 要求時刻。                                                              |
+| `completedAt`          | timestamp | no       | `status` が `completed` または `failed` のときの終端時刻。              |
 
-Persistence: kept while the artifact is downloadable, plus the audit retention
-window. Indexed by `(spaceId, requestedAt)` and `(status)`.
+Persistence: artifact が download 可能な間に加え、 audit retention window まで
+保持。 `(spaceId, requestedAt)` と `(status)` で index。
 
-Immutability: `status`, `artifactSha256`, `downloadUrlExpiresAt`, and
-`completedAt` are mutable in place; transitions emit audit events. The other
-fields are immutable.
+Immutability: `status` / `artifactSha256` / `downloadUrlExpiresAt` /
+`completedAt` は in place 更新可能 (遷移時に audit event 発行)。 他 field は
+immutable。
 
 See also: [Tenant Export / Deletion](/reference/tenant-export-deletion).
 
 ## QuotaTier
 
-Operator-managed quota tier definition.
+operator が管理する quota tier 定義。
 
-| Field                | Type      | Required | Notes                                                                                                                                   |
-| -------------------- | --------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `tierId`             | string    | yes      | `quota-tier:<id>` form; primary key.                                                                                                    |
-| `dimensions`         | object    | yes      | Closed dimension map: `deploymentCount`, `artifactStorageBytes`, `journalVolumeBytes`, `approvalPendingCount`, `spaceExportShareCount`. |
-| `rateLimitOverrides` | object    | no       | Optional rate-limit overrides keyed by closed rate-limit dimension.                                                                     |
-| `createdAt`          | timestamp | yes      | Registration time.                                                                                                                      |
+| Field                | Type      | Required | Notes                                                                                                                                        |
+| -------------------- | --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tierId`             | string    | yes      | `quota-tier:<id>` 形式。 primary key。                                                                                                       |
+| `dimensions`         | object    | yes      | closed dimension map: `deploymentCount` / `artifactStorageBytes` / `journalVolumeBytes` / `approvalPendingCount` / `spaceExportShareCount`。 |
+| `rateLimitOverrides` | object    | no       | 任意。 closed rate-limit dimension を key とする上書き。                                                                                     |
+| `createdAt`          | timestamp | yes      | 登録時刻。                                                                                                                                   |
 
-Persistence: kept while any Space references the tier, plus the audit retention
-window. Indexed by `(tierId)`.
+Persistence: tier を参照する Space がある間に加え、 audit retention window まで
+保持。 `(tierId)` で index。
 
-Immutability: `dimensions` and `rateLimitOverrides` are mutable in place;
-updates emit audit events. `tierId` and `createdAt` are immutable.
+Immutability: `dimensions` と `rateLimitOverrides` は in place 更新可能 (更新時
+に audit event 発行)。 `tierId` / `createdAt` は immutable。
 
 See also: [Quota Tiers](/reference/quota-tiers).
 
 ## CostAttributionConfig
 
-Per-Space cost attribution configuration.
+Space 単位の cost attribution 設定。
 
-| Field         | Type      | Required | Notes                                                                                                                            |
-| ------------- | --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `spaceId`     | string    | yes      | Owning Space; primary key.                                                                                                       |
-| `attribution` | object    | yes      | Closed-key attribution map (cost-center, project, environment, owner-actor). Values are operator-controlled strings; no secrets. |
-| `updatedAt`   | timestamp | yes      | Last update time.                                                                                                                |
+| Field         | Type      | Required | Notes                                                                                                                                 |
+| ------------- | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `spaceId`     | string    | yes      | 所属 Space。 primary key。                                                                                                            |
+| `attribution` | object    | yes      | closed key attribution map (cost-center / project / environment / owner-actor)。 値は operator が制御する文字列。 secret は含まない。 |
+| `updatedAt`   | timestamp | yes      | 直近更新時刻。                                                                                                                        |
 
-Persistence: kept while the Space exists, plus the audit retention window.
-Indexed by `(spaceId)`.
+Persistence: Space が存在する間に加え、 audit retention window まで保持。
+`(spaceId)` で index。
 
-Immutability: `attribution` and `updatedAt` are mutable in place; updates emit
-audit events. `spaceId` is immutable.
+Immutability: `attribution` / `updatedAt` は in place 更新可能 (更新時に audit
+event 発行)。 `spaceId` は immutable。
 
 See also: [Cost Attribution](/reference/cost-attribution).
 
 ## SLAThreshold
 
-Operator-registered SLA threshold definition.
+operator が登録する SLA threshold 定義。
 
-| Field          | Type      | Required    | Notes                                      |
-| -------------- | --------- | ----------- | ------------------------------------------ |
-| `id`           | string    | yes         | `sla-threshold:<ulid>` form.               |
-| `dimension`    | enum      | yes         | One of the closed v1 SLA dimensions.       |
-| `comparator`   | enum      | yes         | One of `gt`, `gte`, `lt`, `lte`.           |
-| `value`        | number    | yes         | Threshold value.                           |
-| `scope`        | enum      | yes         | One of `kernel-global`, `org`, `space`.    |
-| `scopeId`      | string    | conditional | Required when `scope` is `org` or `space`. |
-| `registeredAt` | timestamp | yes         | Registration time.                         |
+| Field          | Type      | Required    | Notes                                          |
+| -------------- | --------- | ----------- | ---------------------------------------------- |
+| `id`           | string    | yes         | `sla-threshold:<ulid>` 形式。                  |
+| `dimension`    | enum      | yes         | closed v1 SLA dimension のいずれか。           |
+| `comparator`   | enum      | yes         | `gt` / `gte` / `lt` / `lte` のいずれか。       |
+| `value`        | number    | yes         | 閾値。                                         |
+| `scope`        | enum      | yes         | `kernel-global` / `org` / `space` のいずれか。 |
+| `scopeId`      | string    | conditional | `scope` が `org` または `space` のとき必須。   |
+| `registeredAt` | timestamp | yes         | 登録時刻。                                     |
 
-Persistence: kept while the threshold is active, plus the audit retention
-window. Indexed by `(dimension, scope, scopeId)`.
+Persistence: threshold が active な間に加え、 audit retention window まで保持。
+`(dimension, scope, scopeId)` で index。
 
-Immutability: `comparator` and `value` are mutable in place; transitions emit
-audit events. The other fields are immutable.
+Immutability: `comparator` と `value` は in place 更新可能 (遷移時に audit event
+発行)。 他 field は immutable。
 
 See also: [SLA Breach Detection](/reference/sla-breach-detection).
 
 ## SLAObservation
 
-Append-only point-in-time SLA observation.
+append-only な点 SLA 観測。
 
-| Field       | Type      | Required    | Notes                                      |
-| ----------- | --------- | ----------- | ------------------------------------------ |
-| `id`        | string    | yes         | `sla-observation:<ulid>` form.             |
-| `dimension` | enum      | yes         | One of the closed v1 SLA dimensions.       |
-| `scope`     | enum      | yes         | One of `kernel-global`, `org`, `space`.    |
-| `scopeId`   | string    | conditional | Required when `scope` is `org` or `space`. |
-| `value`     | number    | yes         | Observed value at `ts`.                    |
-| `ts`        | timestamp | yes         | Observation time.                          |
+| Field       | Type      | Required    | Notes                                          |
+| ----------- | --------- | ----------- | ---------------------------------------------- |
+| `id`        | string    | yes         | `sla-observation:<ulid>` 形式。                |
+| `dimension` | enum      | yes         | closed v1 SLA dimension のいずれか。           |
+| `scope`     | enum      | yes         | `kernel-global` / `org` / `space` のいずれか。 |
+| `scopeId`   | string    | conditional | `scope` が `org` または `space` のとき必須。   |
+| `value`     | number    | yes         | `ts` 時点の観測値。                            |
+| `ts`        | timestamp | yes         | 観測時刻。                                     |
 
-Persistence: kept for the observation retention window (see
-[Observation Retention](/reference/observation-retention)). Indexed by
-`(dimension, scope, scopeId, ts)`.
+Persistence: observation retention window まで保持 (詳細は
+[Observation Retention](/reference/observation-retention))。
+`(dimension, scope, scopeId, ts)` で index。
 
-Immutability: append-only; never mutated.
+Immutability: append-only。 mutation は不可。
 
 See also: [SLA Breach Detection](/reference/sla-breach-detection).
 
 ## Incident
 
-Operator- or auto-detection-opened incident record.
+operator または auto-detection が open する incident record。
 
-| Field                  | Type            | Required | Notes                                                                                    |
-| ---------------------- | --------------- | -------- | ---------------------------------------------------------------------------------------- |
-| `id`                   | string          | yes      | `incident:<ulid>` form.                                                                  |
-| `title`                | string          | yes      | Human-readable summary.                                                                  |
-| `state`                | enum            | yes      | One of the closed incident states (`detected`, `acknowledged`, `mitigated`, `resolved`). |
-| `severity`             | enum            | yes      | One of the closed incident severity values.                                              |
-| `origin`               | enum            | yes      | One of `auto-detection`, `operator`, `customer-report`.                                  |
-| `affectedSpaceIds`     | `array<string>` | yes      | Spaces affected; may be empty.                                                           |
-| `affectedOrgIds`       | `array<string>` | yes      | Organizations affected; may be empty.                                                    |
-| `detectedAt`           | timestamp       | yes      | Detection time.                                                                          |
-| `acknowledgedAt`       | timestamp       | no       | Acknowledgement time.                                                                    |
-| `mitigatedAt`          | timestamp       | no       | Mitigation time.                                                                         |
-| `resolvedAt`           | timestamp       | no       | Resolution time.                                                                         |
-| `rootCause`            | string          | no       | Operator-provided summary; recorded on resolution.                                       |
-| `relatedAuditEventIds` | `array<string>` | yes      | Audit events that anchor the incident timeline.                                          |
+| Field                  | Type            | Required | Notes                                                                                       |
+| ---------------------- | --------------- | -------- | ------------------------------------------------------------------------------------------- |
+| `id`                   | string          | yes      | `incident:<ulid>` 形式。                                                                    |
+| `title`                | string          | yes      | 人間可読サマリ。                                                                            |
+| `state`                | enum            | yes      | closed incident state のいずれか (`detected` / `acknowledged` / `mitigated` / `resolved`)。 |
+| `severity`             | enum            | yes      | closed incident severity のいずれか。                                                       |
+| `origin`               | enum            | yes      | `auto-detection` / `operator` / `customer-report` のいずれか。                              |
+| `affectedSpaceIds`     | `array<string>` | yes      | 影響を受けた Space。 空でもよい。                                                           |
+| `affectedOrgIds`       | `array<string>` | yes      | 影響を受けた Organization。 空でもよい。                                                    |
+| `detectedAt`           | timestamp       | yes      | 検知時刻。                                                                                  |
+| `acknowledgedAt`       | timestamp       | no       | acknowledge 時刻。                                                                          |
+| `mitigatedAt`          | timestamp       | no       | mitigation 時刻。                                                                           |
+| `resolvedAt`           | timestamp       | no       | resolution 時刻。                                                                           |
+| `rootCause`            | string          | no       | operator が記入するサマリ。 resolution 時に記録。                                           |
+| `relatedAuditEventIds` | `array<string>` | yes      | incident timeline の anchor となる audit event。                                            |
 
-Persistence: kept indefinitely while `state` is non-`resolved`, plus the audit
-retention window after resolution. Indexed by `(state, severity, detectedAt)`.
+Persistence: `state` が `resolved` 以外の間は無期限に保持し、 resolution 後は
+audit retention window まで保持。 `(state, severity, detectedAt)` で index。
 
-Immutability: `state`, `severity`, `acknowledgedAt`, `mitigatedAt`,
-`resolvedAt`, `rootCause`, and `relatedAuditEventIds` are mutable in place;
-transitions emit audit events. The other fields are immutable.
+Immutability: `state` / `severity` / `acknowledgedAt` / `mitigatedAt` /
+`resolvedAt` / `rootCause` / `relatedAuditEventIds` は in place 更新可能 (遷移
+時に audit event 発行)。 他 field は immutable。
 
 See also: [Incident Model](/reference/incident-model).
 
 ## SupportImpersonationGrant
 
-Approved or pending grant that allows a support actor to impersonate within a
-Space.
+support actor が Space 内で impersonate するための approved または pending な
+grant。
 
-| Field            | Type      | Required | Notes                                                                          |
-| ---------------- | --------- | -------- | ------------------------------------------------------------------------------ |
-| `id`             | string    | yes      | `support-impersonation-grant:<ulid>` form.                                     |
-| `supportActorId` | string    | yes      | Support-staff actor identity.                                                  |
-| `spaceId`        | string    | yes      | Target Space.                                                                  |
-| `requestedAt`    | timestamp | yes      | Request time.                                                                  |
-| `approvedAt`     | timestamp | no       | Approval time; null while pending.                                             |
-| `scope`          | enum      | yes      | One of `read`, `read-write`.                                                   |
-| `status`         | enum      | yes      | Closed grant status (`pending`, `approved`, `rejected`, `revoked`, `expired`). |
-| `expiresAt`      | timestamp | no       | Optional expiry instant.                                                       |
-| `revokedAt`      | timestamp | no       | Revocation instant; null unless `status` is `revoked`.                         |
+| Field            | Type      | Required | Notes                                                                               |
+| ---------------- | --------- | -------- | ----------------------------------------------------------------------------------- |
+| `id`             | string    | yes      | `support-impersonation-grant:<ulid>` 形式。                                         |
+| `supportActorId` | string    | yes      | support staff actor identity。                                                      |
+| `spaceId`        | string    | yes      | target Space。                                                                      |
+| `requestedAt`    | timestamp | yes      | 要求時刻。                                                                          |
+| `approvedAt`     | timestamp | no       | 承認時刻。 pending の間は null。                                                    |
+| `scope`          | enum      | yes      | `read` / `read-write` のいずれか。                                                  |
+| `status`         | enum      | yes      | closed grant status (`pending` / `approved` / `rejected` / `revoked` / `expired`)。 |
+| `expiresAt`      | timestamp | no       | 任意の失効時刻。                                                                    |
+| `revokedAt`      | timestamp | no       | revocation 時刻。 `status` が `revoked` でない限り null。                           |
 
-Persistence: kept while `status` is non-terminal, plus the audit retention
-window. Indexed by `(supportActorId, status)` and `(spaceId, status)`.
+Persistence: `status` が非終端の間に加え、 audit retention window まで保持。
+`(supportActorId, status)` と `(spaceId, status)` で index。
 
-Immutability: `status`, `approvedAt`, `expiresAt`, and `revokedAt` are mutable
-in place; transitions emit audit events. The other fields are immutable.
+Immutability: `status` / `approvedAt` / `expiresAt` / `revokedAt` は in place
+更新可能 (遷移時に audit event 発行)。 他 field は immutable。
 
 See also: [Support Impersonation](/reference/support-impersonation).
 
 ## SupportImpersonationSession
 
-Open or closed support impersonation session under an approved grant.
+approved grant の下で open または close された support impersonation session。
 
-| Field              | Type      | Required | Notes                                                                 |
-| ------------------ | --------- | -------- | --------------------------------------------------------------------- |
-| `id`               | string    | yes      | `support-impersonation-session:<ulid>` form.                          |
-| `grantId`          | string    | yes      | Backing SupportImpersonationGrant.                                    |
-| `openedAt`         | timestamp | yes      | Session start time.                                                   |
-| `endedAt`          | timestamp | no       | Session close time; null while open.                                  |
-| `sessionTokenHash` | string    | yes      | Argon2id hash of the session bearer token; plaintext is never stored. |
-| `acceptScope`      | enum      | yes      | One of `read`, `read-write`; bounded by the grant scope.              |
+| Field              | Type      | Required | Notes                                                            |
+| ------------------ | --------- | -------- | ---------------------------------------------------------------- |
+| `id`               | string    | yes      | `support-impersonation-session:<ulid>` 形式。                    |
+| `grantId`          | string    | yes      | 由来 SupportImpersonationGrant。                                 |
+| `openedAt`         | timestamp | yes      | session 開始時刻。                                               |
+| `endedAt`          | timestamp | no       | session 終了時刻。 open の間は null。                            |
+| `sessionTokenHash` | string    | yes      | session bearer token の Argon2id hash。 平文は決して保存しない。 |
+| `acceptScope`      | enum      | yes      | `read` / `read-write` のいずれか。 grant scope に bound される。 |
 
-Persistence: kept while the session is open, plus the audit retention window.
-Indexed by `(grantId)` and `(openedAt)`.
+Persistence: session が open の間に加え、 audit retention window まで保持。
+`(grantId)` と `(openedAt)` で index。
 
-Immutability: `endedAt` is mutable in place; the other fields are immutable.
-Write actions performed within a `read-write` session are recorded as audit
-events rather than mutations on this record.
+Immutability: `endedAt` は in place 更新可能。 他 field は immutable。
+`read-write` session 内で行われる write action は本 record の mutation ではなく
+audit event として記録する。
 
 See also: [Support Impersonation](/reference/support-impersonation).
 
 ## NotificationSignal
 
-Pull-only notification record.
+pull のみで受け取る notification record。
 
-| Field               | Type            | Required    | Notes                                               |
-| ------------------- | --------------- | ----------- | --------------------------------------------------- |
-| `id`                | string          | yes         | `notification:<ulid>` form.                         |
-| `category`          | enum            | yes         | One of the closed v1 notification categories.       |
-| `scope`             | enum            | yes         | One of `kernel-global`, `org`, `space`.             |
-| `scopeId`           | string          | conditional | Required when `scope` is `org` or `space`.          |
-| `payload`           | object          | yes         | Category-specific payload; redacted of secrets.     |
-| `recipientActorIds` | `array<string>` | yes         | Actors that may pull the signal.                    |
-| `emittedAt`         | timestamp       | yes         | Emission time.                                      |
-| `acknowledgedAt`    | timestamp       | no          | Acknowledgement time when a recipient acknowledges. |
+| Field               | Type            | Required    | Notes                                           |
+| ------------------- | --------------- | ----------- | ----------------------------------------------- |
+| `id`                | string          | yes         | `notification:<ulid>` 形式。                    |
+| `category`          | enum            | yes         | closed v1 notification category のいずれか。    |
+| `scope`             | enum            | yes         | `kernel-global` / `org` / `space` のいずれか。  |
+| `scopeId`           | string          | conditional | `scope` が `org` または `space` のとき必須。    |
+| `payload`           | object          | yes         | category 固有の payload。 secret は redact 済。 |
+| `recipientActorIds` | `array<string>` | yes         | signal を pull できる actor 群。                |
+| `emittedAt`         | timestamp       | yes         | 発出時刻。                                      |
+| `acknowledgedAt`    | timestamp       | no          | recipient が acknowledge した時刻。             |
 
-Persistence: kept while unacknowledged, plus the audit retention window. Indexed
-by `(scope, scopeId, emittedAt)` and `(recipientActorIds)`.
+Persistence: 未 acknowledge の間に加え、 audit retention window まで保持。
+`(scope, scopeId, emittedAt)` と `(recipientActorIds)` で index。
 
-Immutability: `acknowledgedAt` is mutable in place; transitions emit audit
-events. The other fields are immutable.
+Immutability: `acknowledgedAt` は in place 更新可能 (遷移時に audit event
+発行)。 他 field は immutable。
 
 See also: [Notification Emission](/reference/notification-emission).
 
 ## ZoneAttribute
 
-Zone attribute model attached to Space, Object, DataAsset, and Connector records
-to express single-region zone preferences. The attribute is a layered overlay
-rather than a standalone table; it is materialized as the following fields on
-the host records:
+Space / Object / DataAsset / Connector record に付与される zone attribute
+model。 single-region な zone preference を表現する。 attribute は独立テーブル
+ではなく layered overlay であり、 host record 上に以下の field として
+materialize される:
 
-| Host record | Field            | Type   | Required | Notes                                                                                                                         |
-| ----------- | ---------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Space       | `defaultZone`    | string | yes      | The Space's default zone identifier. All Objects and DataAssets in the Space inherit this zone unless they declare their own. |
-| Object      | `zone`           | string | yes      | The materialized zone for this Object. Inherited from Space `defaultZone` at creation; may be overridden at create time.      |
-| DataAsset   | `zonePreference` | string | no       | Declared zone preference; resolved against connector zone constraints at bind time.                                           |
-| Connector   | `zonePreference` | string | no       | Operator-declared zone preference for the connector implementation.                                                           |
+| Host record | Field            | Type   | Required | Notes                                                                                                                |
+| ----------- | ---------------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| Space       | `defaultZone`    | string | yes      | Space の default zone 識別子。 Space 内のすべての Object / DataAsset は、 自身で宣言しない限りこの zone を継承する。 |
+| Object      | `zone`           | string | yes      | 当 Object に materialize された zone。 作成時は Space `defaultZone` から継承するが、 作成時に override 可能。        |
+| DataAsset   | `zonePreference` | string | no       | 宣言された zone preference。 bind 時に connector の zone 制約に対して解決する。                                      |
+| Connector   | `zonePreference` | string | no       | connector 実装に対して operator が宣言する zone preference。                                                         |
 
-Persistence: each field is co-persisted with its host record and inherits the
-host's persistence and retention rules. No standalone ZoneAttribute table
-exists.
+Persistence: 各 field は host record と co-persist され、 host の persistence /
+retention rule を継承する。 独立した ZoneAttribute テーブルは存在しない。
 
-Indexing: `(spaceId, defaultZone)` on Space; `(spaceId, zone)` on Object;
-`(zonePreference)` on DataAsset and Connector when present.
+Indexing: Space では `(spaceId, defaultZone)`、 Object では `(spaceId, zone)`、
+DataAsset と Connector では存在時に `(zonePreference)` で index。
 
-Immutability: `defaultZone` is mutable in place at the Space level (transitions
-emit audit events). Object `zone` is immutable once the Object is created; zone
-movement is performed by replacing the Object. DataAsset and Connector
-`zonePreference` are mutable in place by the operator.
+Immutability: Space の `defaultZone` は in place 更新可能 (遷移時に audit event
+発行)。 Object `zone` は Object 作成後は immutable。 zone 移動は Object の
+置き換えで行う。 DataAsset / Connector の `zonePreference` は operator が in
+place 更新可能。
 
-Relationship: Object zone resolves from Space `defaultZone`; DataAsset binding
-requires zone-compatibility between the Space `defaultZone` and the Connector
-`zonePreference`. Cross-zone links are governed by the cross-zone link policy;
-see [Zone Selection](/reference/zone-selection).
+Relationship: Object の zone は Space `defaultZone` から解決される。 DataAsset
+binding は Space `defaultZone` と Connector `zonePreference` の zone 互換性を
+要求する。 cross-zone link は cross-zone link policy が統治する (詳細は
+[Zone Selection](/reference/zone-selection))。
 
 See also: [Zone Selection](/reference/zone-selection).
 
 ## Workflow-Extension Records
 
-The kernel does not create, reserve, or persist Trigger, TriggerRegistration,
-HookBinding, StepResult, cron, webhook, or declarable-hook records. Workflow /
-cron / hook state belongs to products layered above the manifest deploy engine,
-for example `takosumi-git`; see
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
+kernel は Trigger / TriggerRegistration / HookBinding / StepResult / cron /
+webhook / declarable-hook の record を生成・予約・永続化しない。 workflow / cron
+/ hook の state は manifest deploy engine の上に重ねる product (例:
+`takosumi-git`) に属する。 詳細は
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+を参照。
 
 ## See also
 
-- [Actor / Organization Model](/reference/actor-organization-model) — migration
-  stub
-- [API Key Management](/reference/api-key-management) — migration stub
-- [Auth Providers](/reference/auth-providers) — migration stub
-- [RBAC Policy](/reference/rbac-policy) — migration stub
+- [Actor / Organization Model](/reference/actor-organization-model)
+- [API Key Management](/reference/api-key-management)
+- [Auth Providers](/reference/auth-providers)
+- [RBAC Policy](/reference/rbac-policy)
 - [Tenant Provisioning](/reference/tenant-provisioning)
 - [Tenant Export / Deletion](/reference/tenant-export-deletion)
 - [Trial Spaces](/reference/trial-spaces)
@@ -917,30 +896,45 @@ for example `takosumi-git`; see
 
 ## Implementation freedom
 
-Kernel implementations are free to:
+kernel 実装に許される自由:
 
-- Persist a subset of these record classes in a single physical store.
-- Materialize OperationPlan from the JournalEntry stream rather than storing the
-  plan body, as long as `planDigest` remains computable and verifiable.
-- Combine ObservationSet and DriftIndex into a single physical store so long as
-  the logical fields above remain queryable.
-- Replace the suggested indexes with equivalent indexes that satisfy the
-  documented query patterns.
+- 上記 record class の一部を単一の物理 store に纏めて永続化してよい。
+- `planDigest` が算出・検証可能である限り、 OperationPlan を本体保存せず
+  JournalEntry stream から materialize してよい。
+- 上記論理 field が照会可能である限り、 ObservationSet と DriftIndex を単一 物理
+  store に統合してよい。
+- 同等の query pattern を満たす index で、 推奨 index を置き換えてよい。
 
-Implementations are not free to:
+kernel 実装に許されない事項:
 
-- Mutate immutable snapshot records in place.
-- Drop fields whose presence is required to satisfy
-  [Journal Compaction](/reference/journal-compaction) retention rules.
-- Persist secret values inline; secrets are referenced, never embedded (see
-  [Audit Events](/reference/audit-events)).
+- immutable な snapshot record を in place で mutate すること。
+- [Journal Compaction](/reference/journal-compaction) の retention rule を
+  満たすために必要な field を drop すること。
+- secret 値を inline で永続化すること。 secret は参照のみで、 embed しない
+  (詳細は [Audit Events](/reference/audit-events))。
 
-## Related architecture notes
+## 関連 architecture note
 
-- `reference/architecture/snapshot-model` — the immutable snapshot taxonomy.
+- `reference/architecture/snapshot-model` — immutable snapshot 分類。
 - `reference/architecture/operation-plan-write-ahead-journal-model` — WAL stage
-  enum and idempotency tuple.
-- `reference/architecture/observation-drift-revokedebt-model` — observation,
-  drift, and RevokeDebt semantics.
+  enum と idempotency tuple。
+- `reference/architecture/observation-drift-revokedebt-model` — observation /
+  drift / RevokeDebt のセマンティクス。
 - `reference/architecture/policy-risk-approval-error-model` — Approval
-  invalidation triggers and risk enum.
+  invalidation trigger と risk enum。
+
+## 関連ページ
+
+- [Journal Compaction](/reference/journal-compaction)
+- [Audit Events](/reference/audit-events)
+- [Lifecycle Protocol](/reference/lifecycle)
+- [Tenant Provisioning](/reference/tenant-provisioning)
+- [Tenant Export / Deletion](/reference/tenant-export-deletion)
+- [Trial Spaces](/reference/trial-spaces)
+- [Quota Tiers](/reference/quota-tiers)
+- [Cost Attribution](/reference/cost-attribution)
+- [SLA Breach Detection](/reference/sla-breach-detection)
+- [Incident Model](/reference/incident-model)
+- [Support Impersonation](/reference/support-impersonation)
+- [Notification Emission](/reference/notification-emission)
+- [Zone Selection](/reference/zone-selection)

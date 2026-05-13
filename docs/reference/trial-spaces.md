@@ -1,13 +1,6 @@
 # Trial Spaces
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Tenant Provisioning](/reference/tenant-provisioning),
-> [Quota and Rate Limit](/reference/quota-rate-limit),
-> [Audit Events](/reference/audit-events),
-> [Compliance Retention](/reference/compliance-retention),
-> [Tenant Export and Deletion](/reference/tenant-export-deletion),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Closed Enums](/reference/closed-enums)
+> このページでわかること: trial space の制限と通常 space への昇格。
 
 Takosumi v1 における **trial / ephemeral Space** の auto-expire 設計と quota
 制限。trial Space は通常 Space と同等の isolation invariant を
@@ -201,3 +194,13 @@ grace、auto-cleanup、conversion 経路を抽象として提供する。
   operator policy に置く理由と kernel が emit する primitive の境界
 - `docs/reference/architecture/exposure-activation-model.md` — `frozen` 状態で
   write を 落とし read を保つ fail-safe-not-fail-closed stance の整合
+
+## 関連ページ
+
+- [Tenant Provisioning](/reference/tenant-provisioning)
+- [Quota and Rate Limit](/reference/quota-rate-limit)
+- [Audit Events](/reference/audit-events)
+- [Compliance Retention](/reference/compliance-retention)
+- [Tenant Export and Deletion](/reference/tenant-export-deletion)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Closed Enums](/reference/closed-enums)

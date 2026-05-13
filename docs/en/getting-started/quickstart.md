@@ -1,5 +1,8 @@
 # Quickstart — from git clone to first deploy
 
+> このページでわかること: Write a manifest and run your first deploy (English
+> version).
+
 ::: info Translation status Reference, operator, and extending docs remain in
 Japanese. See the original [Quickstart (JA)](/getting-started/quickstart) for
 cross-reference. :::
@@ -123,7 +126,7 @@ Operator side (on the VM):
 
 ```bash
 export TAKOSUMI_DATABASE_URL=postgresql://localhost/takosumi
-export TAKOSUMI_ENCRYPTION_KEY=$(openssl rand -base64 32)
+export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
 export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
 
 # Selfhosted connector storage locations (optional, defaults exist)
@@ -236,7 +239,7 @@ takosumi runtime-agent serve --port 8789 --token mytoken
 ```bash
 export TAKOSUMI_ENVIRONMENT=production
 export TAKOSUMI_DATABASE_URL=postgresql://prod-db.internal/takosumi
-export TAKOSUMI_ENCRYPTION_KEY=$(openssl rand -base64 32)
+export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
 export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
 
 # Connection info for the agent
@@ -295,7 +298,7 @@ path.
 
 | Symptom                                                                   | Cause                                                                                                                    |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `Refusing to start takosumi with plaintext secret storage`                | Production mode without `TAKOSUMI_ENCRYPTION_KEY` set                                                                    |
+| `Refusing to start takosumi with plaintext secret storage`                | Production mode without `TAKOSUMI_SECRET_STORE_PASSPHRASE` set                                                           |
 | `Refusing to start takosumi against an unencrypted database`              | Production mode could not confirm DB at-rest encryption (dev can opt out via `TAKOSUMI_DEV_MODE=1`)                      |
 | `manifest.resources[] is required` / `manifest expands to zero resources` | No `resources[]`, or trying to apply only `resources: []`                                                                |
 | 401 from `/v1/deployments`                                                | `TAKOSUMI_DEPLOY_TOKEN` unset or token mismatch                                                                          |
@@ -303,33 +306,19 @@ path.
 | `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`       | The agent host is missing credentials for that cloud, so the connector is not registered                                 |
 | `runtime-agent /v1/lifecycle/apply failed: 401`                           | `TAKOSUMI_AGENT_TOKEN` does not match between agent and kernel                                                           |
 
-Starting in 0.10, every provider id Takosumi ships is namespaced as
-`@takos/<cloud>-<service>`. This avoids the last-write-wins collision that
-happens when two operator plugins re-register the same bare id.
+Every bundled provider id is namespaced as `@takos/<cloud>-<service>`. The
+kernel rejects bare provider ids at resolve time and includes the namespaced id
+in the error message when it can infer the intended provider.
 
-| ----------------------- | -------------------------------- | | `aws-s3` |
-`@takos/aws-s3` | | `aws-fargate` | `@takos/aws-fargate` | | `aws-rds` |
-`@takos/aws-rds` | | `route53` | `@takos/aws-route53` | | `gcp-gcs` |
-`@takos/gcp-gcs` | | `cloud-run` | `@takos/gcp-cloud-run` | | `cloud-sql` |
-`@takos/gcp-cloud-sql` | | `cloud-dns` | `@takos/gcp-cloud-dns` | |
-`cloudflare-r2` | `@takos/cloudflare-r2` | | `cloudflare-container` |
-`@takos/cloudflare-container` | | `cloudflare-workers` |
-`@takos/cloudflare-workers` | | `cloudflare-dns` | `@takos/cloudflare-dns` | |
-`azure-container-apps` | `@takos/azure-container-apps` | | `k3s-deployment` |
-`@takos/kubernetes-deployment` | | `deno-deploy` | `@takos/deno-deploy` | |
-`filesystem` | `@takos/selfhost-filesystem` | | `minio` |
-`@takos/selfhost-minio` | | `docker-compose` | `@takos/selfhost-docker-compose`
-| | `systemd-unit` | `@takos/selfhost-systemd` | | `local-docker-postgres` |
-`@takos/selfhost-postgres` | | `coredns-local` | `@takos/selfhost-coredns` |
-
-The old ids are still accepted in 0.10 / 0.11, but the kernel logs a warning:
-
-```
-use "@takos/aws-fargate" — bare ids will be rejected in 0.12.
-```
-
-Ids that already start with `@` are never rewritten. 0.12 drops the old-id path
-entirely, so rewrite the `provider:` values in your manifests to the new form.
+| Cloud      | Provider ids                                                                                                                                                              |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AWS        | `@takos/aws-s3`, `@takos/aws-fargate`, `@takos/aws-rds`, `@takos/aws-route53`                                                                                             |
+| GCP        | `@takos/gcp-gcs`, `@takos/gcp-cloud-run`, `@takos/gcp-cloud-sql`, `@takos/gcp-cloud-dns`                                                                                  |
+| Cloudflare | `@takos/cloudflare-r2`, `@takos/cloudflare-container`, `@takos/cloudflare-workers`, `@takos/cloudflare-dns`                                                               |
+| Azure      | `@takos/azure-container-apps`                                                                                                                                             |
+| Kubernetes | `@takos/kubernetes-deployment`                                                                                                                                            |
+| Deno       | `@takos/deno-deploy`                                                                                                                                                      |
+| Self-host  | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres`, `@takos/selfhost-coredns` |
 
 ### Artifact storage hygiene
 
@@ -395,7 +384,7 @@ export TAKOSUMI_ARTIFACT_FETCH_TOKEN=$(openssl rand -hex 32)
 
 When the kernel passes an artifact-store locator to the runtime-agent (combined
 with `TAKOSUMI_PUBLIC_BASE_URL`), it prefers the fetch token if one is set (and
-falls back to the deploy token for backward compatibility when it is not).
+uses the deploy token when no fetch token is configured).
 
 ---
 

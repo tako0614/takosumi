@@ -1,9 +1,10 @@
 # Provider Resolution
 
-このページは Shape manifest を concrete deployment plan に落とす **provider
-resolution** の正本仕様です。`resources[].provider` を optional hint
-にした以上、operator policy / provider registry が何を決めるのかをここで
-固定します。
+> このページでわかること: manifest から provider を解決するアルゴリズム。
+
+このページは Shape manifest から concrete deployment plan を生成する **provider
+resolution** のアルゴリズムを定義します。`resources[].provider` を optional hint
+にした上で、operator policy / provider registry が何を決めるかを 明確にします。
 
 ## 1. Principle
 

@@ -1,25 +1,23 @@
 # DataAsset Kinds
 
-> Stability: stable Audience: operator, integrator See also:
-> [Connector Contract](/reference/connector-contract),
-> [DataAsset Policy](/reference/data-asset-policy),
-> [Closed Enums](/reference/closed-enums)
+> このページでわかること: DataAsset の kind 一覧と各 kind の用途。
 
-A Takosumi artifact is the content-addressed byte-or-pointer record that backs a
-DataAsset. Every `Artifact` referenced by a Manifest resource has a `kind` and
-either a `hash` (`sha256:<hex>`, returned by `POST /v1/artifacts`) or a `uri`
-(an external pointer such as an OCI registry URL).
+Takosumi の artifact は DataAsset を裏付ける content-addressed な bytes /
+pointer レコードである。Manifest resource が参照する `Artifact` は `kind` と、
+`hash` (`POST /v1/artifacts` が返す `sha256:<hex>`) または `uri` (OCI registry
+URL のような外部 pointer) のいずれかを持つ。
 
-`Artifact.kind` is an **open string at the protocol level**. The bundled kernel
-registers the kinds below so `GET /v1/artifacts/kinds` and
-`takosumi artifact kinds` can show operators what the deployed kernel and
-runtime-agent connector set understands. Third-party connectors may register
-additional kinds through `registerArtifactKind`; the registry is the discovery
-surface, not a hard-coded public enum.
+`Artifact.kind` は **protocol レベルでは open string** である。同梱の kernel は
+下記の kind を登録するため、`GET /v1/artifacts/kinds` や
+`takosumi artifact
+kinds` から、deploy された kernel と runtime-agent connector
+集合が認識する 種別を operator に見せることができる。サードパーティの connector
+は `registerArtifactKind` で追加の kind を登録できる。registry は discovery
+surface であって、hard-coded された public enum ではない。
 
 ## Bundled Kinds
 
-The bundled Takosumi plugins register these five kinds:
+同梱の Takosumi プラグインは次の 5 種類を登録する。
 
 ```text
 oci-image | js-bundle | lambda-zip | static-bundle | wasm
@@ -33,30 +31,32 @@ oci-image | js-bundle | lambda-zip | static-bundle | wasm
 | `static-bundle` | Static site archive for Pages-style hosts.                                                | `artifact: { kind: "static-bundle", hash: "sha256:..." }` | content-addressed upload             |
 | `wasm`          | WebAssembly module bytes for connectors that execute or attach WASM artifacts.            | `artifact: { kind: "wasm", hash: "sha256:..." }`          | content-addressed upload             |
 
-`worker@v1` is intentionally stricter than the protocol: its shape validation
-requires `artifact.kind: "js-bundle"` and a non-empty `hash`. `web-service@v1`
-accepts `image` as the backwards-compatible shorthand for
-`artifact: { kind: "oci-image", uri: image }`; other artifact kinds are valid
-only when the selected connector declares them in `acceptedArtifactKinds`.
+`worker@v1` は protocol よりも意図的に厳しい: shape validation は
+`artifact.kind: "js-bundle"` と空でない `hash` を要求する。`web-service@v1` は
+current canonical shorthand として `image` を受け付け、provider request では
+`artifact: { kind: "oci-image", uri: image }` と同じ意味に正規化される。他の
+artifact kind は、選ばれた connector が `acceptedArtifactKinds` で宣言したときに
+限り有効である。
 
 ## Connector Enforcement
 
-A runtime-agent connector declares an `acceptedArtifactKinds` vector. The
-runtime-agent lifecycle dispatcher rejects an apply request when the artifact
-kind in `spec.artifact.kind` is not in that vector. This keeps protocol
-extension open while still failing closed at the concrete connector boundary.
+runtime-agent connector は `acceptedArtifactKinds` ベクトルを宣言する。
+runtime-agent lifecycle dispatcher は、`spec.artifact.kind` の artifact kind が
+そのベクトルに含まれない apply request を reject する。これにより protocol
+拡張を open に保ちつつ、具体的な connector 境界で fail-closed する。
 
-Examples:
+例:
 
-- Cloudflare Workers and Deno Deploy worker connectors accept `js-bundle`.
-- OCI-backed web-service connectors accept `oci-image`.
-- Future or operator-installed connectors can accept `lambda-zip`,
-  `static-bundle`, `wasm`, or a custom registered kind.
+- Cloudflare Workers / Deno Deploy worker connector は `js-bundle`
+  を受け入れる。
+- OCI-backed の web-service connector は `oci-image` を受け入れる。
+- 将来の / operator がインストールする connector は `lambda-zip`、
+  `static-bundle`、`wasm`、または登録済み独自種を受け入れうる。
 
 ## Registration API
 
-The contract package exposes a process-global registry that backs
-`GET /v1/artifacts/kinds`.
+contract パッケージは `GET /v1/artifacts/kinds` を裏付ける process global な
+registry を公開する。
 
 ```ts
 import {
@@ -75,7 +75,7 @@ registerArtifactKind({
 });
 ```
 
-Signatures:
+シグネチャ:
 
 ```ts
 registerArtifactKind(
@@ -89,35 +89,33 @@ isArtifactKindRegistered(kind: string): boolean;
 unregisterArtifactKind(kind: string): boolean;
 ```
 
-Collision behaviour:
+衝突時の挙動:
 
-- The first registration for a `kind` succeeds and returns `undefined`.
-- A second registration with identical metadata is a silent no-op.
-- A second registration with different metadata and `allowOverride: false`
-  prints a warning and keeps the original record.
-- A second registration with `allowOverride: true` replaces the record and
-  returns the previous one. This path is reserved for operator-controlled
-  bootstrap and plugin-loader contexts.
+- ある `kind` の最初の登録は成功し `undefined` を返す。
+- 同一メタデータでの 2 回目の登録は silent no-op。
+- メタデータが異なり `allowOverride: false` の 2 回目の登録は警告を出し、元の
+  レコードを残す。
+- `allowOverride: true` の 2 回目の登録はレコードを置き換え、以前のものを返す。
+  この path は operator 管理の bootstrap や plugin loader 文脈に予約される。
 
 ## Size Limits
 
-The artifact route enforces `TAKOSUMI_ARTIFACT_MAX_BYTES` globally. If a
-registered kind carries `maxSize`, that per-kind value overrides the route
-default for uploads of that kind. Unknown or unregistered kinds fall back to the
-global cap.
+artifact route は `TAKOSUMI_ARTIFACT_MAX_BYTES` をグローバルに強制する。
+登録済み kind が `maxSize` を持つ場合、その per-kind 値がその kind の upload
+について route default を上書きする。未知 / 未登録の kind は global cap に
+フォールバックする。
 
-The deploy route also enforces manifest-declared artifact sizes before plan /
-apply side effects. When a resource contains `spec.artifact.size`, the value is
-interpreted as a byte count and must be a non-negative integer no larger than
-the registered kind's `maxSize` (or the global cap for unknown kinds). This is a
-pre-provider quota gate for external pointers such as OCI image URIs; content
-uploaded through `POST /v1/artifacts` is still checked again by the artifact
-upload route.
+deploy route も plan / apply 副作用の前に manifest 宣言の artifact size を
+強制する。resource が `spec.artifact.size` を含むとき、その値はバイト数として
+解釈され、登録済み kind の `maxSize` (未知 kind は global cap) を超えない
+非負整数でなければならない。これは OCI image URI のような外部 pointer に対する
+provider 前の quota gate である。`POST /v1/artifacts` 経由でアップロードされた
+content は artifact upload route で再度チェックされる。
 
-`oci-image` normally uses `uri`, so it does not need `takosumi artifact push`.
-Every uploaded kind is stored under `<bucket>/artifacts/<sha256-hex>` through
-the kernel object-storage adapter; the digest is computed and verified
-server-side regardless of any client-side `expectedDigest` field.
+`oci-image` は通常 `uri` を使うため、`takosumi artifact push` は不要である。
+upload された各 kind は kernel object-storage アダプタ経由で
+`<bucket>/artifacts/<sha256-hex>` の下に保存される。client 側の `expectedDigest`
+field の有無にかかわらず、digest は server 側で計算・検証される。
 
 ## Upload Flow
 
@@ -139,13 +137,13 @@ kernel apply
   -> connector materializes the resource and returns a handle
 ```
 
-Auth boundaries:
+認証境界:
 
-- Write endpoints (`POST /v1/artifacts`, `DELETE /v1/artifacts/:hash`,
-  `POST /v1/artifacts/gc`) require the deploy bearer.
-- Read endpoints (`GET /v1/artifacts/:hash`, `HEAD /v1/artifacts/:hash`) also
-  accept `TAKOSUMI_ARTIFACT_FETCH_TOKEN` so the runtime-agent can fetch bytes
-  without holding the deploy bearer.
+- 書き込み endpoint (`POST /v1/artifacts`、`DELETE /v1/artifacts/:hash`、
+  `POST /v1/artifacts/gc`) は deploy bearer を要求する。
+- 読み込み endpoint (`GET /v1/artifacts/:hash`、`HEAD /v1/artifacts/:hash`) は
+  `TAKOSUMI_ARTIFACT_FETCH_TOKEN` も受け付けるので、runtime-agent は deploy
+  bearer を保持せずに bytes を取得できる。
 
 ## Discovery and CLI
 
@@ -157,5 +155,11 @@ takosumi artifact gc --dry-run
 takosumi artifact rm sha256:abc123...
 ```
 
-`takosumi artifact kinds` reflects the registry snapshot exposed by the kernel
-at the moment of the call. It does not mutate the registry.
+`takosumi artifact kinds` は呼び出し時点で kernel が公開する registry の
+snapshot を反映する。registry を変更することはない。
+
+## 関連ページ
+
+- [Connector Contract](/reference/connector-contract)
+- [DataAsset Policy](/reference/data-asset-policy)
+- [Closed Enums](/reference/closed-enums)

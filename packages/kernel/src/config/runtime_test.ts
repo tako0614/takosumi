@@ -45,27 +45,26 @@ Deno.test("runtime config loader reads explicit plugin selection map", async () 
 Deno.test("runtime config loader prefers canonical process role key", async () => {
   const config = await loadRuntimeConfigFromEnv({
     env: {
-      TAKOSUMI_PAAS_PROCESS_ROLE: "takosumi-runtime-agent",
+      TAKOSUMI_PROCESS_ROLE: "takosumi-runtime-agent",
     },
   });
 
   assert.equal(config.processRole, "takosumi-runtime-agent");
 });
 
-Deno.test("runtime config loader rejects conflicting process role aliases", async () => {
+Deno.test("runtime config loader rejects invalid process role", async () => {
   await assert.rejects(
     () =>
       loadRuntimeConfigFromEnv({
         env: {
-          TAKOSUMI_PAAS_PROCESS_ROLE: "takosumi-worker",
-          TAKOSUMI_PROCESS_ROLE: "takosumi-api",
+          TAKOSUMI_PROCESS_ROLE: "takosumi-paused",
         },
       }),
     (error) => {
       assert.ok(error instanceof RuntimeConfigError);
       assert.deepEqual(
         error.diagnostics.map((diagnostic) => diagnostic.code),
-        ["conflicting_process_role_env"],
+        ["invalid_process_role"],
       );
       return true;
     },

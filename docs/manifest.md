@@ -1,12 +1,13 @@
 # Manifest (Shape Model)
 
-このページは **Shape + optional Provider hint** model における current kernel
-manifest envelope の書き方をまとめます。 `resources[]` で portable な
-[Shape](/reference/shapes) resource を declarative に並べ、`${ref:...}` syntax
-で resource 間の output を配線します。top-level `template` は retired authoring
-shorthand であり、current kernel public deploy API には渡しません。必要な
-expansion は installer/compiler layer で済ませてから `POST /v1/deployments`
-に送ります。
+> このページでわかること: Takosumi kernel manifest の書き方と resources[]
+> の構造。
+
+このページは **Shape + optional Provider hint** モデルにおける kernel manifest
+envelope の書き方をまとめます。`resources[]` に portable な
+[Shape](/reference/shapes) resource を並べ、`${ref:...}` 構文で resource 間の
+output を配線します。authoring shorthand は installer/compiler layer で
+展開してから `POST /v1/deployments` に送ります。
 
 Takosumi v1 の manifest envelope は **closed shape** で、top-level は
 `@context / apiVersion / kind / namespace / metadata / resources`

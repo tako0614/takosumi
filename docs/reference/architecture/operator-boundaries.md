@@ -1,7 +1,9 @@
 # Operator Boundaries
 
-Operator controls the adopted semantic world, implementation world, credentials,
-Space configuration, and production safety boundaries.
+> このページでわかること: operator の責務境界と kernel との接点。
+
+operator は採用した semantic world / implementation world / credential / Space
+構成 / 本番安全境界を制御する。
 
 ## Operator-controlled areas
 
@@ -25,7 +27,7 @@ Production coordination
 
 ## Space administration
 
-A Space is an operator-governed isolation boundary. The operator defines:
+Space は operator が統治する isolation 境界である。operator は次を定義する。
 
 ```text
 who can deploy into the Space
@@ -37,43 +39,43 @@ which secrets and artifacts are visible
 which groups exist or may be created
 ```
 
-The manifest does not create or configure Spaces.
+manifest は Space を作成・設定しない。
 
 ## Public manifest does not install implementation code
 
-The manifest references catalog aliases and namespace paths visible in the
-active Space. It does not install implementation packages.
+manifest はアクティブな Space で見える catalog alias と namespace path を参照
+する。implementation package を install することはない。
 
 ## Credential boundary
 
-Core canonical state stores references and handles, not raw secret values.
-External I/O and credentials stay inside implementation / connector / runtime
-boundary. Secret partitions are Space-scoped unless operator policy explicitly
-shares them.
+core canonical state は reference と handle を保存し、raw secret
+値は保存しない。 外部 I/O と credential は implementation / connector / runtime
+境界の内側に 留まる。secret partition は operator policy で明示共有しない限り
+Space scope で ある。
 
 ## Connector boundary
 
-Connectors are operator-installed and operator-controlled. They are addressed as
-`connector:<id>` per
-[DataAsset Model — Connector contract](./data-asset-model.md); the public
-manifest never names a connector. Connector visibility, acceptedKinds, and
-signing expectations are operator-governed and Space-scoped.
+connector は operator がインストールし、operator が管理する。
+[DataAsset Model — Connector contract](./data-asset-model.md) に従って
+`connector:<id>` で addressing される。public manifest が connector を命名
+することはない。connector の可視性、acceptedKinds、signing expectation は
+operator 統治で Space scope である。
 
 ## Production mode
 
-Production must fail closed when required operator ports, trusted
-implementations, Space policies, or Space catalog assignments are missing. Dev
-fallback must not be silently accepted in production.
+本番では、必要な operator port、信頼 implementation、Space policy、Space catalog
+割当てが欠けた場合 fail-closed しなければならない。本番で dev fallback
+を黙って受け入れてはならない。
 
 ## Catalog release activation
 
-CatalogRelease activation is a serialized operator operation. Assignment of a
-CatalogRelease to a Space is also serialized. Deployments resolve against a
-release id allowed for their Space.
+CatalogRelease の activation は直列化された operator operation である。Space
+への CatalogRelease 割当ても直列化される。deployment は自身の Space に許可
+された release id に対して resolve する。
 
 ## Space export sharing
 
-Cross-space export sharing is reserved vocabulary, not a current v1 default
-source Space, destination Space, export path, export snapshot id, allowed
-access, expiry if any, and policy decision references. Cross-space sharing is
-denied by default, and cross-instance sharing is not adopted.
+Space を跨ぐ export sharing は予約語彙で、current v1 のデフォルトではない。
+source Space、destination Space、export path、export snapshot id、allowed
+access、(あれば) expiry、policy decision reference を持つ。Space を跨ぐ sharing
+はデフォルトで拒否され、instance を跨ぐ sharing は採用しない。

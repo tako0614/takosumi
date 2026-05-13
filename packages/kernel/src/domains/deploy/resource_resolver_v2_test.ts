@@ -236,7 +236,7 @@ Deno.test("resolveResourcesV2 detects duplicate resource names", () => {
 });
 
 Deno.test(
-  "resolveResourcesV2 rejects legacy bare provider id with a namespaced suggestion",
+  "resolveResourcesV2 rejects bare provider id with a namespaced suggestion",
   () => {
     registerShape(fakeShape("object-store"));
     registerProvider(
@@ -259,9 +259,8 @@ Deno.test(
       assert.equal(issue.path, "$.resources[0].provider");
       assert.ok(
         issue.message.includes("aws-s3") &&
-          issue.message.includes("@takos/aws-s3") &&
-          issue.message.includes("0.12"),
-        `expected rejection message naming both the legacy id and the ` +
+          issue.message.includes("@takos/aws-s3"),
+        `expected rejection message naming both the bare id and the ` +
           `namespaced replacement, got: ${issue.message}`,
       );
     } finally {

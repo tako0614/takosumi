@@ -1,12 +1,6 @@
 # Drift Detection
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Lifecycle Protocol](/reference/lifecycle),
-> [Lifecycle Phases](/reference/lifecycle-phases),
-> [RevokeDebt Model](/reference/revoke-debt),
-> [Approval Invalidation Triggers](/reference/approval-invalidation),
-> [Risk Taxonomy](/reference/risk-taxonomy),
-> [Audit Events](/reference/audit-events)
+> このページでわかること: desired state と actual state のドリフト検知の仕組み。
 
 Drift detection は Takosumi v1 で「DesiredSnapshot が宣言した世界」と
 「ObservationSet が報告した実世界」の乖離を構造化する仕組みです。 DriftIndex の
@@ -205,3 +199,12 @@ operator が手動で re-observe を要求する経路は internal control-plane
   ObservationSet / ActivationSnapshot の関係と DriftIndex の位置付け
 - `docs/reference/architecture/exposure-activation-model.md` — drift annotation
   が ActivationSnapshot を経由して traffic shift gate に効く経路の議論
+
+## 関連ページ
+
+- [Lifecycle Protocol](/reference/lifecycle)
+- [Lifecycle Phases](/reference/lifecycle-phases)
+- [RevokeDebt Model](/reference/revoke-debt)
+- [Approval Invalidation Triggers](/reference/approval-invalidation)
+- [Risk Taxonomy](/reference/risk-taxonomy)
+- [Audit Events](/reference/audit-events)

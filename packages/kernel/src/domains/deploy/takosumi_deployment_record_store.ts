@@ -49,10 +49,9 @@ export interface TakosumiAppliedResourceRecord {
    * Stable hash of `(shape, providerId, name, spec)` captured by
    * `applyV2.computeSpecFingerprint` at apply time. Persisted so that a
    * subsequent apply submission of the same manifest can short-circuit
-   * `provider.apply` when the fingerprint is unchanged. Optional for
-   * backward compatibility with rows persisted by pre-0.9.0 kernels;
-   * unset rows force a re-apply (provider.apply is called) on the next
-   * submission, which is safe but not idempotent.
+   * `provider.apply` when the fingerprint is unchanged. Unset rows force a
+   * re-apply (`provider.apply` is called) on the next submission, which is
+   * safe but not idempotent.
    */
   readonly specFingerprint?: string;
 }

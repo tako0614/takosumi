@@ -45,14 +45,10 @@ Deno.test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => 
 
     const previousFile = Deno.env.get("TAKOSUMI_CONFIG_FILE");
     const previousRemote = Deno.env.get("TAKOSUMI_REMOTE_URL");
-    const previousToken = Deno.env.get("TAKOSUMI_TOKEN");
     const previousDeployToken = Deno.env.get("TAKOSUMI_DEPLOY_TOKEN");
-    const previousKernelUrl = Deno.env.get("TAKOSUMI_KERNEL_URL");
     Deno.env.set("TAKOSUMI_CONFIG_FILE", path);
     Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    Deno.env.delete("TAKOSUMI_TOKEN");
     Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
-    Deno.env.delete("TAKOSUMI_KERNEL_URL");
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
@@ -67,14 +63,8 @@ Deno.test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => 
       if (previousRemote !== undefined) {
         Deno.env.set("TAKOSUMI_REMOTE_URL", previousRemote);
       }
-      if (previousToken !== undefined) {
-        Deno.env.set("TAKOSUMI_TOKEN", previousToken);
-      }
       if (previousDeployToken !== undefined) {
         Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", previousDeployToken);
-      }
-      if (previousKernelUrl !== undefined) {
-        Deno.env.set("TAKOSUMI_KERNEL_URL", previousKernelUrl);
       }
       __resetConfigFileCacheForTesting();
     }
@@ -94,14 +84,10 @@ Deno.test("loadConfig env wins over config file", async () => {
 
     const previousFile = Deno.env.get("TAKOSUMI_CONFIG_FILE");
     const previousRemote = Deno.env.get("TAKOSUMI_REMOTE_URL");
-    const previousToken = Deno.env.get("TAKOSUMI_TOKEN");
     const previousDeployToken = Deno.env.get("TAKOSUMI_DEPLOY_TOKEN");
-    const previousKernelUrl = Deno.env.get("TAKOSUMI_KERNEL_URL");
     Deno.env.set("TAKOSUMI_CONFIG_FILE", path);
     Deno.env.set("TAKOSUMI_REMOTE_URL", "https://from-env.local");
-    Deno.env.set("TAKOSUMI_TOKEN", "env-token");
-    Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
-    Deno.env.delete("TAKOSUMI_KERNEL_URL");
+    Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", "env-token");
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
@@ -118,69 +104,15 @@ Deno.test("loadConfig env wins over config file", async () => {
       } else {
         Deno.env.set("TAKOSUMI_REMOTE_URL", previousRemote);
       }
-      if (previousToken === undefined) {
-        Deno.env.delete("TAKOSUMI_TOKEN");
-      } else {
-        Deno.env.set("TAKOSUMI_TOKEN", previousToken);
-      }
       if (previousDeployToken === undefined) {
         Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
       } else {
         Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", previousDeployToken);
       }
-      if (previousKernelUrl !== undefined) {
-        Deno.env.set("TAKOSUMI_KERNEL_URL", previousKernelUrl);
-      }
       __resetConfigFileCacheForTesting();
     }
   } finally {
     await Deno.remove(dir, { recursive: true });
-  }
-});
-
-Deno.test("loadConfig prefers TAKOSUMI_DEPLOY_TOKEN over generic token", async () => {
-  const previousFile = Deno.env.get("TAKOSUMI_CONFIG_FILE");
-  const previousRemote = Deno.env.get("TAKOSUMI_REMOTE_URL");
-  const previousToken = Deno.env.get("TAKOSUMI_TOKEN");
-  const previousDeployToken = Deno.env.get("TAKOSUMI_DEPLOY_TOKEN");
-  const previousKernelUrl = Deno.env.get("TAKOSUMI_KERNEL_URL");
-  Deno.env.set("TAKOSUMI_CONFIG_FILE", "/tmp/takosumi-missing-config.yml");
-  Deno.env.set("TAKOSUMI_REMOTE_URL", "https://from-env.local");
-  Deno.env.set("TAKOSUMI_TOKEN", "generic-token");
-  Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", "deploy-token");
-  Deno.env.delete("TAKOSUMI_KERNEL_URL");
-  __resetConfigFileCacheForTesting();
-  try {
-    const config = await loadConfig();
-    assert.equal(config.kernelUrl, "https://from-env.local");
-    assert.equal(config.token, "deploy-token");
-  } finally {
-    if (previousFile === undefined) {
-      Deno.env.delete("TAKOSUMI_CONFIG_FILE");
-    } else {
-      Deno.env.set("TAKOSUMI_CONFIG_FILE", previousFile);
-    }
-    if (previousRemote === undefined) {
-      Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    } else {
-      Deno.env.set("TAKOSUMI_REMOTE_URL", previousRemote);
-    }
-    if (previousToken === undefined) {
-      Deno.env.delete("TAKOSUMI_TOKEN");
-    } else {
-      Deno.env.set("TAKOSUMI_TOKEN", previousToken);
-    }
-    if (previousDeployToken === undefined) {
-      Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
-    } else {
-      Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", previousDeployToken);
-    }
-    if (previousKernelUrl === undefined) {
-      Deno.env.delete("TAKOSUMI_KERNEL_URL");
-    } else {
-      Deno.env.set("TAKOSUMI_KERNEL_URL", previousKernelUrl);
-    }
-    __resetConfigFileCacheForTesting();
   }
 });
 
@@ -190,14 +122,10 @@ Deno.test("loadConfig returns empty when neither env nor file present", async ()
     const path = `${dir}/missing-config.yml`;
     const previousFile = Deno.env.get("TAKOSUMI_CONFIG_FILE");
     const previousRemote = Deno.env.get("TAKOSUMI_REMOTE_URL");
-    const previousToken = Deno.env.get("TAKOSUMI_TOKEN");
     const previousDeployToken = Deno.env.get("TAKOSUMI_DEPLOY_TOKEN");
-    const previousKernelUrl = Deno.env.get("TAKOSUMI_KERNEL_URL");
     Deno.env.set("TAKOSUMI_CONFIG_FILE", path);
     Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    Deno.env.delete("TAKOSUMI_TOKEN");
     Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
-    Deno.env.delete("TAKOSUMI_KERNEL_URL");
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
@@ -212,14 +140,8 @@ Deno.test("loadConfig returns empty when neither env nor file present", async ()
       if (previousRemote !== undefined) {
         Deno.env.set("TAKOSUMI_REMOTE_URL", previousRemote);
       }
-      if (previousToken !== undefined) {
-        Deno.env.set("TAKOSUMI_TOKEN", previousToken);
-      }
       if (previousDeployToken !== undefined) {
         Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", previousDeployToken);
-      }
-      if (previousKernelUrl !== undefined) {
-        Deno.env.set("TAKOSUMI_KERNEL_URL", previousKernelUrl);
       }
       __resetConfigFileCacheForTesting();
     }

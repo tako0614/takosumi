@@ -50,7 +50,7 @@ Deno.test("dispatcher rejects request whose artifact.kind is not accepted", () =
   );
 });
 
-Deno.test("dispatcher accepts legacy spec.image as oci-image kind", async () => {
+Deno.test("dispatcher accepts spec.image shorthand as oci-image kind", async () => {
   const reg = new ConnectorRegistry();
   let received: unknown;
   reg.register({

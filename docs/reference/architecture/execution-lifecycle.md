@@ -1,6 +1,8 @@
 # Execution Lifecycle
 
-Execution is Space-scoped, snapshot-backed, and journaled.
+> このページでわかること: deployment 実行のライフサイクルとステート遷移。
+
+Execution は Space scope であり、snapshot に裏付けられ、journal される。
 
 ## Preview / resolve
 
@@ -15,12 +17,13 @@ Execution is Space-scoped, snapshot-backed, and journaled.
 8. show summary / risk / details
 ```
 
-Preview has no side effects.
+Preview に副作用はない。
 
 ## Apply
 
-The phase walks the WAL stages defined in the
-[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md):
+この phase は
+[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+で定義された WAL stage を進行する。
 
 ```text
 prepare      load immutable ResolutionSnapshot and DesiredSnapshot;
@@ -75,9 +78,9 @@ re-resolved recovery:
 
 ## Dry materialization & approval carry
 
-When resolution surfaces a `require-approval` Risk, the kernel produces a
-**dry-materialized prediction** that captures the effect digests an approver is
-asked to consent to:
+resolution が `require-approval` Risk を surface したとき、kernel は
+**dry-materialized prediction** を生成し、承認者に同意を求める effect digest
+を捕捉する。
 
 ```text
 predictedActualEffectsDigest:
@@ -91,7 +94,7 @@ predictedRevokeDebtPreview:
   any RevokeDebt that an apply would queue if external cleanup fails
 ```
 
-The prediction digest is bound into the Approval record:
+prediction digest は Approval record に bind される。
 
 ```yaml
 Approval:
@@ -101,17 +104,18 @@ Approval:
   desiredSnapshotDigest: sha256:...
 ```
 
-The next apply must observe a matching prediction digest. If any of the
-[Approval invalidation triggers](./policy-risk-approval-error-model.md) fire
-between approval and apply, the prediction digest will not match and the
-approval is invalidated; apply fails closed at the `pre-commit` stage of the
-[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md).
-A new approval cycle must run with the new prediction.
+次の apply は一致する prediction digest を観測しなければならない。承認と apply
+の間に [Approval invalidation trigger](./policy-risk-approval-error-model.md) の
+いずれかが発火した場合、prediction digest は一致せず approval は無効化され、
+apply は
+[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+の `pre-commit` stage で fail-closed する。新しい prediction で承認サイクルを
+やり直す必要がある。
 
 ## Production concurrency
 
-Production must serialize these operations within a Space, and global ingress
-reservation may also require operator-global serialization:
+本番は次の operation を Space 内で直列化しなければならず、global ingress の
+予約は operator-global の直列化も必要としうる。
 
 ```text
 GroupHead update

@@ -1,26 +1,19 @@
 # Incident Model
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Audit Events](/reference/audit-events),
-> [Storage Schema](/reference/storage-schema),
-> [RevokeDebt Model](/reference/revoke-debt),
-> [Quota and Rate Limit](/reference/quota-rate-limit),
-> [Readiness Probes](/reference/readiness-probes),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Resource IDs](/reference/resource-ids)
+> このページでわかること: インシデントのモデル定義とステート遷移。
 
-This reference defines the v1 Incident primitive: a kernel-side record of a
-service-impacting event, the closed state machine that governs its lifecycle,
-the auto-detection triggers that mint incidents from existing kernel signals,
-the operator and customer visibility rules, and the audit chain that records
-every state transition. The kernel ships the incident record, the state machine,
-and the audit primitives. Customer-facing status pages, incident timeline
-visualization, and notification rendering are out of scope for the kernel.
+本リファレンスは v1 Incident primitive を定義する: service-impacting event の
+kernel 側 record、その lifecycle を支配する closed な state machine、既存の
+kernel signal から incident を mint する auto-detection trigger、operator と
+顧客に対する可視性ルール、すべての state 遷移を記録する audit chain。kernel は
+incident record、state machine、audit primitive を同梱する。顧客向けステータス
+ページ、incident タイムライン可視化、notification 描画は kernel の scope 外
+である。
 
 ## Incident definition
 
-An Incident is a kernel-recorded service-impacting event that satisfies one of
-two origin conditions:
+Incident は次の 2 つの origin 条件のいずれかを満たす、kernel に記録される
+service-impacting event である。
 
 - **Auto-detected** from a kernel-side measurable signal: an SLA breach,
   RevokeDebt aging into `operator-action-required`, a readiness probe failure
@@ -29,9 +22,9 @@ two origin conditions:
   signal (customer report, third-party dependency outage, operator-side change
   failure) needs to be tracked through the same state machine and audit chain.
 
-Both origins produce the same record shape and traverse the same state machine.
-Origin is recorded on the record so operators can slice incident review by
-detection source.
+両 origin は同じ record 形を生成し、同じ state machine をたどる。Origin が
+record に記録されるので、operator は incident review を検知ソースで slice
+できる。
 
 ## Incident record
 
@@ -76,12 +69,12 @@ Field semantics:
 | `rootCause`            | no       | Free-form structured text. Populated only in `postmortem`; required to leave `postmortem` as terminal-published.                                  |
 | `relatedAuditEventIds` | yes      | Chain back to the source audit events that triggered detection or that were emitted under this incident. May grow as the incident advances.       |
 
-The kernel rejects mutation of `id`, `origin`, `detectedAt`, or `kernelGlobal`
-after create.
+kernel は作成後に `id`、`origin`、`detectedAt`、`kernelGlobal`
+の変更を拒否する。
 
 ## State machine
 
-The v1 state enum is closed:
+v1 state enum は closed である。
 
 ```text
 detecting | acknowledged | mitigating | monitoring | resolved | postmortem
@@ -134,16 +127,14 @@ low | medium | high | critical
   across the kernel-global readiness probe.
 - `critical`: kernel-global outage or compliance-relevant data path failure.
 
-Severity is computed at detection from the trigger family and is adjustable by
-the operator. A severity raise records an audit event with reason. A severity
-lower also records an audit event and requires the same authorization scope as
-state transitions.
+severity は detection 時に trigger family から計算され、operator が調整できる。
+severity の引き上げは理由付きの audit event を記録する。severity の引き下げも
+audit event を記録し、state 遷移と同じ承認スコープを要求する。
 
 ## Auto-detection triggers
 
-The kernel mints incidents from the following families. Each family maps to a
-default severity and an auto-acknowledge default that the operator may override
-per Space.
+kernel は次の family から incident を mint する。各 family は default severity
+と auto-acknowledge default にマップされ、operator は Space 単位で上書きできる。
 
 | Trigger family                         | Source signal                                                         | Default severity | Default auto-ack |
 | -------------------------------------- | --------------------------------------------------------------------- | ---------------- | ---------------- |
@@ -166,13 +157,14 @@ Trigger detail:
 - **Sustained error rate**: per-Space when the error stream carries a Space
   scope; kernel-global otherwise.
 
-The kernel deduplicates auto-detected incidents within a sliding window per
-`(trigger family, scope)` tuple. A second matching trigger within the window
-appends to the open incident; outside the window, a new incident is minted.
+kernel は `(trigger family, scope)` tuple 単位の sliding window 内で auto
+検知された incident を重複排除する。window 内で 2 度目の一致 trigger が来た
+場合は open な incident に追記する。window 外では新規 incident を mint する。
 
 ## Operator actions
 
-plane, gated by HMAC (see [Kernel HTTP API](/reference/kernel-http-api)):
+operator は HMAC で gate された内部 control plane を通じて操作する
+([Kernel HTTP API](/reference/kernel-http-api) 参照)。
 
 - `POST /api/internal/v1/incidents` — declare an operator-declared incident.
   Body fields: `title`, `severity`, `affectedSpaceIds` or `kernelGlobal`,
@@ -189,27 +181,24 @@ plane, gated by HMAC (see [Kernel HTTP API](/reference/kernel-http-api)):
 
 ## Customer-affecting query
 
-A read-only customer query exposes incidents whose `state` is `acknowledged` or
-beyond and whose `affectedSpaceIds` includes a Space the caller is authorized to
-read:
+読み取り専用の顧客クエリは、`state` が `acknowledged` 以降で、`affectedSpaceIds`
+に caller が読める Space を含む incident を公開する。
 
 - `GET /api/internal/v1/spaces/:id/incidents` — list incidents scoped to the
   Space. Returns `id`, `title`, `state`, `severity`, `detectedAt`,
   `acknowledgedAt`, `mitigatedAt`, `resolvedAt`, `rootCause` (only when
   `state = postmortem`).
 
-The query suppresses incidents in `detecting` regardless of access:
-auto-detected incidents that are later determined to be false positives never
-become customer-visible.
+クエリはアクセス権にかかわらず `detecting` 状態の incident を抑制する: 後で
+false positive と判定された auto-detected incident が顧客に見えることはない。
 
-`kernelGlobal` incidents are returned for every Space query whose caller is
-authorized for any Space in the kernel.
+`kernelGlobal` incident は、caller が kernel 内のいずれかの Space に対する
+権限を持つあらゆる Space クエリで返される。
 
 ## Audit events
 
-Every state transition emits an audit event. The v1 incident audit event
-taxonomy is closed and joins the [Audit Events](/reference/audit-events) closed
-enum:
+すべての state 遷移は audit event を発行する。v1 incident audit event 分類は
+closed で、[Audit Events](/reference/audit-events) の closed enum に加わる。
 
 - `incident-detected`
 - `incident-acknowledged`
@@ -218,35 +207,34 @@ enum:
 - `incident-resolved`
 - `incident-postmortem-published`
 
-Each event carries the standard envelope plus an incident-payload recording
+各 event は標準 envelope に
 `{incidentId, fromState, toState, fromSeverity, toSeverity,
 relatedAuditEventIds}`
-where applicable. The kernel rejects an audit write whose state pair is not a
-valid transition.
+を記録した incident payload を持つ (該当箇所のみ)。 kernel は state pair
+が有効な遷移でない audit write を reject する。
 
 ## Storage schema
 
-Incident extends [Storage Schema](/reference/storage-schema) with one record
-class:
+Incident は [Storage Schema](/reference/storage-schema) を 1 つの record class
+で拡張する。
 
 | Record     | Indexed by                                                          | Persistence                                                        |
 | ---------- | ------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `Incident` | `(id)`, `(state)`, `(detectedAt)`, `(spaceId via affectedSpaceIds)` | Kept indefinitely under audit retention; `postmortem` is terminal. |
 
-Implementations may co-locate the incident store with the audit store but must
-keep the indexed columns above.
+実装は incident store を audit store と同居させてよいが、上記の indexed カラム
+は保持しなければならない。
 
 ## Scope boundary
 
-The spec surface includes the incident record, the state machine, the
-auto-detection triggers, the operator and customer-read endpoints listed above,
-and the audit chain. The current kernel repository does not mount those HTTP
-routes. Public-facing status page UI, customer notification template rendering,
-incident timeline visualization, third-party paging integration, on-call
-rotation, and ticket-tracker linkage are **outside Takosumi's scope** and are
-implemented by the operator's outer stack (for example, `takos-private/` or any
-other PaaS-provider front end). The kernel exposes the storage and audit
-primitives that those outer surfaces compose against.
+spec surface は incident record、state machine、auto-detection trigger、上記の
+operator / 顧客読取りエンドポイント、audit chain を含む。現行 kernel リポジ
+トリはそれら HTTP route をマウントしていない。公開ステータスページ UI、顧客
+notification テンプレート描画、incident タイムライン可視化、third-party paging
+integration、on-call rotation、チケットトラッカー連携は **Takosumi の scope 外**
+であり、operator の外側スタック (例: `takos-private/` や別の PaaS provider front
+end) が実装する。kernel はそれら外側 surface が組み立てに使う storage / audit
+primitive を公開する。
 
 ## Related architecture notes
 
@@ -256,3 +244,13 @@ primitives that those outer surfaces compose against.
   derivation and trigger family mapping.
 - `docs/reference/architecture/observation-drift-revokedebt-model.md` —
   RevokeDebt aging trigger source.
+
+## 関連ページ
+
+- [Audit Events](/reference/audit-events)
+- [Storage Schema](/reference/storage-schema)
+- [RevokeDebt Model](/reference/revoke-debt)
+- [Quota and Rate Limit](/reference/quota-rate-limit)
+- [Readiness Probes](/reference/readiness-probes)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Resource IDs](/reference/resource-ids)

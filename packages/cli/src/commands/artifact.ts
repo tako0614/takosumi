@@ -258,7 +258,7 @@ async function requireRemote(
   if (target.mode !== "remote" || !target.url || !target.token) {
     console.error(
       "artifact commands require a remote kernel: pass --remote and --token, " +
-        "or set TAKOSUMI_KERNEL_URL + TAKOSUMI_TOKEN",
+        "or set TAKOSUMI_REMOTE_URL + TAKOSUMI_DEPLOY_TOKEN",
     );
     Deno.exit(2);
   }

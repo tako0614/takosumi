@@ -63,7 +63,7 @@ Deno.test("Core condition reason catalog includes the Output / Binding vocabular
   }
 });
 
-Deno.test("Legacy Publication-* condition reasons are no longer in the catalog", () => {
+Deno.test("Retired Publication-* condition reasons are no longer in the catalog", () => {
   const removed = [
     "PublicationWithdrawn",
     "PublicationUnavailable",
@@ -80,7 +80,7 @@ Deno.test("Legacy Publication-* condition reasons are no longer in the catalog",
     assert.equal(
       isCoreConditionReason(reason),
       false,
-      `expected legacy ${reason} to be removed from catalog`,
+      `expected ${reason} to be absent from catalog`,
     );
   }
 });

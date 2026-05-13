@@ -1,21 +1,11 @@
 # Supply Chain Trust
 
-このページは install / deploy 時に「何を信用しているか」 を 1 本の chain of
-custody として固定します。 ecosystem の trust model は **TLS + digest pin + 1
-つの signing domain (OIDC)** の組み合わせで、 universal signing model は採用
-しません。 これは design-principles § 6 と整合します。
+> このページでわかること: supply chain trust model の全体設計。
 
-### Design history
-
-v0 spec では 4 signing domain (OIDC ID token / launch token JWS / CatalogRelease
-/ future marketplace package) を 「narrow domain」 として整理していた。 Wave 12
-(2026-Q2) で launch token JWS impl (~1900 行) を opaque token + Accounts
-`/consume` に redesign し、 CatalogRelease を operator-pinned digest
-に整理した結果、 active signing domain は OIDC 1 つに収束した。 これは「初めから
-minimum design を意図していた」 のではなく、 v0 で 4 domain として 実装した後の
-**設計 pivot**。 implementation 経験を経て「OIDC 以外は TLS + digest pin
-で代替可」 と判定したもので、 narrow signing は **empirical conclusion** であり
-a priori な principle ではない。
+このページは install / deploy 時に「何を信用しているか」を 1 本の chain of
+custody として固定します。ecosystem の trust model は **TLS + digest pin + 1
+つの signing domain (OIDC)** の組み合わせです。design-principles § 6 と
+整合します。
 
 ## 1. Trust Boundaries
 
@@ -54,9 +44,8 @@ Install path は次の順に evidence を pin します。
       `/consume` 経由で redeem (TLS)
     - 以後の session: OIDC ID token (Accounts issuer 署名)。
 
-この chain の途中に mutable ref、 unresolved placeholder、 unverified catalog
-digest、 unexplained provider decision が残る場合は current contract
-として扱いません。
+この chain の途中に mutable ref、unresolved placeholder、unverified catalog
+digest、unexplained provider decision が残っていてはいけません。
 
 ## 3. Signing Domain (1 only)
 
@@ -118,9 +107,9 @@ opaque token** を redirect carrier として 使い、 redeem を TLS で行い
    session JWT は返さない (通常 OIDC sign-in flow は app が別途実行)。
 ```
 
-JWS / 公開鍵 verify / audience claim 検証は不要。 app は Accounts の TLS
-endpoint だけを trust すれば良い。 これは OAuth 2.0 RFC 6749 の authorization
-code grant flow と本質的に同じ pattern。
+app は Accounts の TLS endpoint だけを trust すれば良い。 公開鍵 verify や
+audience claim 検証は不要。 OAuth 2.0 RFC 6749 の authorization code grant flow
+と本質的に同じ pattern。
 
 ### 4.1 セキュリティ性質
 
@@ -131,19 +120,6 @@ code grant flow と本質的に同じ pattern。
   を防ぐ)
 - **短命**: TTL 5 分以下、 leak しても window が短い
 - **TLS 必須**: token を carry する URL も redeem call も TLS で保護
-
-JWS 版と比べた trade-off:
-
-| 性質                      | JWS 版                       | opaque token 版 (current)    |
-| ------------------------- | ---------------------------- | ---------------------------- |
-| 鍵管理                    | issuer + JWKS rotation       | なし                         |
-| offline 検証              | 可 (app が local verify)     | 不可 (Accounts に redeem 要) |
-| install bootstrap latency | low                          | low (1 回の TLS round trip)  |
-| export migration          | source 鍵持ち越し問題あり    | なし (鍵自体無い)            |
-| 実装複雑度                | 高 (JWS + JWKS + verify lib) | 低 (TLS + DB lookup)         |
-
-install 直後の 1 回限り bootstrap で offline 検証は不要なので、 opaque token を
-default にしています。
 
 ## 5. Digest Invariants
 
@@ -228,12 +204,10 @@ RFC で追加します。 v1 default は marketplace trust。
 
 ## 8. Current Gaps
 
-このページは trust chain の target contract です。 current implementation
-では次の領域に gap が残り得ます。
+このページは trust chain の target contract です。実装には次の領域で gap が
+残り得ます。
 
-- launch token の opaque-token migration は Wave 12 で完了済み。current
-  implementation は one-time opaque token + Accounts `/consume` で、JWS
-  launch-token implementation は retired
+- launch token: one-time opaque token + Accounts `/consume` で運用
 - third-party CI artifact provenance attestation: SLSA-level の attestation は
   v1 では digest pin のみ
 - future marketplace の publisher direct signing path

@@ -1,9 +1,6 @@
 # Approval Invalidation Triggers
 
-> Stability: stable Audience: kernel-implementer, operator See also:
-> [WAL Stages](/reference/wal-stages),
-> [Risk Taxonomy](/reference/risk-taxonomy),
-> [Lifecycle Protocol](/reference/lifecycle)
+> このページでわかること: approval が無効化されるトリガー条件の一覧。
 
 Takosumi v1 で approval が `approved` 状態から `invalidated` に落ちる trigger を
 6 値の closed enum で定義し、各 trigger の発火条件 / 検出 timing / propagation
@@ -120,14 +117,6 @@ state machine が永続化する terminal state は 6
 由来の取り消し (binding 崩壊) を表す のに対し、`consumed` は binding が valid
 のまま正常消費された後の終端で ある点が異なる。
 
-## Future Cross-Space approval ownership
-
-- **Approver は importing Space の owner**: 自 Space に effect を取り込む側が
-  approve 責務を持つ。
-- **Exporting Space は通知のみ**: share の存在を可視化し、freshness state を
-  更新するが、approval 状態を mutate できない。 側の approval は trigger 6
-  (Space-context change) として再評価される。
-
 ## Approval record binding fields
 
 approval record は以下 binding field を持ち、trigger 1-6 はそれぞれ対応 field の
@@ -158,3 +147,9 @@ change として実装される。
   approval binding が WAL stage と接続する境界の rationale
 - `docs/reference/architecture/space-model.md` — Cross-Space approval ownership
   の設計議論
+
+## 関連ページ
+
+- [WAL Stages](/reference/wal-stages)
+- [Risk Taxonomy](/reference/risk-taxonomy)
+- [Lifecycle Protocol](/reference/lifecycle)

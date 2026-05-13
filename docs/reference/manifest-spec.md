@@ -1,8 +1,10 @@
 # マニフェストリファレンス
 
-このページは takosumi kernel が受け取る **compiled manifest** の正本仕様です。
-`.takosumi/manifest.yml` は `takosumi-git` が所有する authoring convention
-であり、 kernel に届く前に compiled manifest へ変換されます。
+> このページでわかること: Takosumi v1 マニフェストの全フィールド仕様。
+
+このページは takosumi kernel が受け取る **compiled manifest**
+の仕様を定義します。 `.takosumi/manifest.yml` は `takosumi-git` が所有する
+authoring convention で、kernel に届く前に compiled manifest へ変換されます。
 
 | ファイル                 | 用途                                                                          | 渡し先                                   |
 | ------------------------ | ----------------------------------------------------------------------------- | ---------------------------------------- |
@@ -243,6 +245,6 @@ substitute unresolved installer-only placeholders; it fails before
 - `${ref:...}` / `${secret-ref:...}` が存在しない resource output を参照する
 
 validation order は本ページの **Envelope** / **Resources** / **Compile-time
-placeholders** section が正本です (kernel 実装は順に: envelope schema → resource
+placeholders** section に従います (kernel 実装は順に: envelope schema → resource
 entry schema → unknown installer-only placeholder の reject → `${ref:...}` /
 `${secret-ref:...}` resolution check)。

@@ -1,12 +1,6 @@
 # Manifest Validation
 
-> Stability: stable Audience: kernel-implementer See also:
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Closed Enums](/reference/closed-enums),
-> [Risk Taxonomy](/reference/risk-taxonomy),
-> [Catalog Release Trust](/reference/catalog-release-trust),
-> [Shape Catalog](/reference/shapes),
-> [Quota and Rate Limit](/reference/quota-rate-limit)
+> このページでわかること: manifest の validation ルール一覧。
 
 Takosumi v1 における manifest validation の正式仕様。Manifest 語彙そのものは
 `docs/manifest.md` で列挙する。本 reference は **validation phase** の順序、 各
@@ -78,8 +72,8 @@ non-empty array。空 array / null / number は schema phase で reject され�
 name | labels
 ```
 
-Template expansion, if used by a tool, must run before the kernel request and
-submit only expanded `resources[]`.
+template の展開を行う tool がある場合は、 kernel request 前に展開して expand
+済の `resources[]` だけを送る。
 
 `resources[]` entry の closed key:
 
@@ -173,10 +167,10 @@ re-verify し、key 未 enroll / revoked / publisher mismatch / signature failur
 Auth credential から resolve された Space に対して manifest が admissible
 かを判定する。
 
-Current public deploy route uses the single deploy bearer scope as that Space
-context: `TAKOSUMI_DEPLOY_SPACE_ID`, defaulting to `takosumi-deploy`. Full
-per-actor Space membership / entitlement checks are enforced by the internal
-control-plane path and remain outside the public manifest body.
+public deploy route は単一 deploy bearer scope を Space context として使う
+(`TAKOSUMI_DEPLOY_SPACE_ID`、 既定 `takosumi-deploy`)。 actor 単位の Space
+membership / entitlement check は internal control-plane path 側で enforce
+され、 public manifest body には現れない。
 
 Reject 条件:
 
@@ -256,3 +250,12 @@ ignore されることがない。
 - `docs/reference/architecture/catalog-release-descriptor-model.md`
 - `docs/reference/architecture/space-model.md`
 - `docs/reference/architecture/target-model.md`
+
+## 関連ページ
+
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Closed Enums](/reference/closed-enums)
+- [Risk Taxonomy](/reference/risk-taxonomy)
+- [Catalog Release Trust](/reference/catalog-release-trust)
+- [Shape Catalog](/reference/shapes)
+- [Quota and Rate Limit](/reference/quota-rate-limit)

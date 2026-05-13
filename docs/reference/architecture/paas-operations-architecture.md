@@ -1,210 +1,195 @@
 # PaaS Operations Architecture
 
-This document records the architecture rationale for the v1 operations
-primitives that Takosumi exposes when it is run as a PaaS: quota tiers, cost
-attribution, SLA breach detection, zone selection, the incident model, support
-impersonation, and notification emission. Wire-level shapes live in the
-reference layer; this document explains why each surface is kernel-side and
-where the line stops.
+> このページでわかること: PaaS 運用アーキテクチャの全体像。
 
-## Quota tiers: operator-defined names, kernel-enforced caps
+本ドキュメントは、Takosumi を PaaS として運用するときに公開する v1 operations
+primitive — quota tier、cost attribution、SLA breach detection、zone 選択、
+incident model、support impersonation、notification emission — のアーキテクチャ
+上の根拠を記録する。wire-level の shape は reference 層に置き、本ドキュメント
+は「なぜ各 surface が kernel 側にあるか」と「境界はどこで止まるか」を説明する。
 
-A quota tier is a named bundle of dimension caps. The kernel does **not** ship
-`free`, `pro`, or `enterprise` as defaults. The reasoning is:
+## Quota tier: operator が命名、kernel が cap を強制
 
-- **Tier names are pricing artifacts.** Each PaaS distribution has its own price
-  book and contract surface. If the kernel hard-coded tier names, every operator
-  would either accept a foreign vocabulary or fork the kernel to change a
-  string. Neither is acceptable.
-- **The kernel still enforces the caps.** Operators register tiers through the
-  internal control plane. A Space carries exactly one `quotaTierId`. When the
-  kernel evaluates a quota dimension, it resolves through the Space's tier and
-  applies the same fail-closed-for-new-work, fail-open-for-inflight rule that
-  already governs quota enforcement.
-- **Tiers are flat in v1.** No inheritance, no parent tier, no composition. Each
-  Space resolves to one tier and one tier only. Composition would force the
-  kernel to compute a derived cap at request time and would dilute the audit
-  trail; operators that want layered tiers compose them in their pricing system
-  before registering the resulting flat tier.
-- **An installation with zero registered tiers fails closed at boot.** This is
-  intentional: a PaaS without a tier system has no enforceable per-Space limits,
-  and the kernel refuses to provision Spaces in that mode.
+quota tier は dimension cap の名前付きバンドルである。kernel は `free`、`pro`、
+`enterprise` 等を default として **同梱しない**。理由は次の通り。
 
-The result is a tier abstraction that the kernel owns mechanically and the
-operator owns semantically.
+- **tier 名は pricing 成果物である。** 各 PaaS distribution は独自の price book
+  と契約 surface を持つ。kernel が tier 名を hard-code すれば、operator は外来
+  語彙を受け入れるか、文字列を変えるために kernel を fork するかになる。どちら
+  も許容できない。
+- **cap の強制は依然 kernel が行う。** operator は内部 control plane で tier を
+  登録する。Space は厳密に 1 つの `quotaTierId` を持つ。kernel は quota
+  dimension を評価するとき Space の tier を解決し、quota 強制で既に使われている
+  「new work は fail-closed、in-flight は fail-open」 のルールを適用する。
+- **v1 では tier は flat である。** 継承なし、親 tier なし、合成なし。各 Space
+  はちょうど 1 つの tier に解決される。合成すると kernel がリクエスト時に
+  derived cap を計算する必要が生じ、audit trail も薄まる。階層化したい operator
+  は pricing system 側で合成し、結果として得られる flat tier を登録する。
+- **登録 tier がゼロの installation は boot 時に fail-closed する。** これは
+  意図的: tier system のない PaaS には強制可能な per-Space 上限がない。kernel は
+  そのモードで Space provisioning を拒否する。
 
-## Cost attribution as opaque metadata
+結果として、kernel が機械的に所有し、operator が意味的に所有する tier 抽象が
+得られる。
 
-Each Space carries an optional `attribution` map (`costCenter`, `projectCode`,
-`customerSegment`, `customLabels`). The kernel never derives a value, never
-validates a vocabulary, and never normalizes case. Why:
+## Cost attribution は opaque メタデータ
 
-- **Cost vocabulary is operator-private.** A `costCenter` string maps to an
-  external general-ledger system the kernel will never see. If the kernel
-  format-checked these values, it would either reject legitimate operator codes
-  or accept invalid ones with false confidence.
-- **PII risk is operator-managed.** A `customerSegment` value may be a marketing
-  label, a compliance class, or a contract code. The kernel cannot know which.
-  Treating every value as opaque keeps the kernel out of decisions it has no
-  signal for.
-- **Telemetry labels and audit envelopes carry the map verbatim.** External cost
-  pipelines aggregate signals using kernel-emitted metrics labeled by
-  attribution keys, plus audit events that include the same map. The kernel
-  exposes the join key; the operator builds the join.
+各 Space は optional な `attribution` map (`costCenter`、`projectCode`、
+`customerSegment`、`customLabels`) を持つ。kernel は値を導出せず、語彙を
+validate せず、case を正規化もしない。理由:
 
-Per-key value caps (length, character class, total map size) **are** enforced.
-These are correctness caps for storage and telemetry, not vocabulary caps.
+- **cost 語彙は operator 私用である。** `costCenter` 文字列は kernel が決して
+  見ない外部の総勘定元帳システムに対応する。kernel が値を format-check すれば、
+  正当な operator code を reject するか、無効な値を誤って受け入れることになる。
+- **PII リスクは operator 管理である。** `customerSegment` 値はマーケティング
+  ラベル、コンプライアンスクラス、契約コードかもしれない。kernel にはわからな
+  い。すべての値を opaque に扱うことで、kernel は signal のない判断から離れる。
+- **テレメトリラベルと audit envelope は map をそのまま運ぶ。** 外部 cost
+  pipeline は attribution key でラベル付けされた kernel 発行 metric と、同じ map
+  を含む audit event を集約する。kernel は join key を公開し、operator が join
+  を組む。
 
-## SLA breach detection: kernel-side measurement, operator-side credit
+per-key 値 cap (length、文字クラス、map 合計サイズ) は **強制される**。これら は
+storage / telemetry のための正しさ cap であり、語彙 cap ではない。
 
-SLA breach detection is kernel-side. Service credit calculation is not. The
-reasoning:
+## SLA breach detection: 計測は kernel、credit 計算は operator
 
-- **Double-bookkeeping breaks audit integrity.** If the kernel emitted only raw
-  metrics and an external system computed breaches, two systems would track
-  windows, thresholds, and breach states. They would drift. Customers and
-  operators would disagree about whether a breach occurred.
-- **Breach detection participates in the audit chain.** Each breach transition
-  is an audit event. Tying it to the chain means every credit dispute can be
-  settled by replaying the chain, not by reconciling parallel logs.
-- **Credit formulas are contract-specific.** "Customer gets 10% credit on a p99
-  breach over 5 minutes" is a contract clause, not a kernel invariant. The
-  kernel emits the breach signal; the operator's billing pipeline computes
-  credits using its own formulas.
-- **Dimensions are closed.** The v1 dimension set is fixed (apply latency
-  percentiles, activation latency, WAL stage duration, drift detection latency,
-  RevokeDebt aging, readiness ratio, throttle ratio, error rates). Adding a
-  dimension changes operator SLO commitments and goes through `CONVENTIONS.md`
-  §6.
+SLA breach detection は kernel 側、サービス credit 計算はそうではない。理由:
 
-Threshold values are operator-supplied. Window length is operator-tunable within
-a bounded range. Detection logic and the audit transitions are kernel-fixed.
+- **二重簿記は audit 整合性を壊す。** kernel が raw metric だけを出し外部
+  システムが breach を計算すると、2 つのシステムが window / threshold / breach
+  状態を追跡する。両者は drift する。breach が起きたかどうかで顧客と operator
+  が食い違う。
+- **breach detection は audit chain に参加する。** 各 breach 遷移は audit event
+  である。chain に結びつけることで、credit の disputed はすべて chain replay で
+  決着でき、parallel log の reconcile では決まらない。
+- **credit 公式は契約固有である。** 「p99 breach が 5 分続いたら顧客に 10%
+  credit」 は契約条項であり、kernel invariant ではない。kernel は breach signal
+  を発行 し、operator の billing pipeline が独自公式で credit を計算する。
+- **dimension は closed。** v1 dimension 集合は固定 (apply latency percentile、
+  activation latency、WAL stage 期間、drift detection 遅延、RevokeDebt aging、
+  readiness 比、throttle 比、エラー率)。dimension を追加すると operator の SLO
+  コミットメントが変わるため、`CONVENTIONS.md` §6 を経る。
 
-## Zone selection: single-region in v1
+閾値は operator が供給する。window 長は範囲内で operator が tune できる。検知
+ロジックと audit 遷移は kernel 固定である。
 
-A zone is an operator-defined string attached to Space, Object, DataAsset, and
-Connector scopes. The kernel propagates it through manifest expansion, drift
-detection, and audit. It does not own a topology graph or a latency table. The
-constraint:
+## Zone 選択: v1 では single-region
 
-- **All zones in a v1 installation live in one region.** Cross-region writes,
-  region failover, and geo-routing are out of scope. An operator that needs
-  multiple regions must use a future multi-region account-plane / operator RFC.
-  Running one Takosumi installation per region does not create platform
-  federation; those installations remain independent.
-- **Zone strings are opaque.** Two zones with similar names are unrelated. The
-  kernel does not infer adjacency from the string shape. Affinity rules ("place
-  this object in the same zone as that DataAsset") are expressible because they
-  compare equal strings; latency-aware placement is not, because it would need a
-  topology the kernel does not own.
-- **Zone-agnostic mode exists.** If `TAKOSUMI_ZONES_AVAILABLE` is unset, every
-  zone field is ignored at evaluation time. Small installations do not pay the
-  cost of declaring a zone vocabulary.
+zone は Space / Object / DataAsset / Connector scope に付く operator 定義の
+文字列である。kernel は manifest 展開、drift detection、audit を通じてこれを
+伝播する。topology graph や latency table を所有しない。制約:
 
-Cross-region semantics, when they land, will go through a `CONVENTIONS.md` §6
-RFC because they change the single-region invariant in
-[PaaS Provider Architecture](./paas-provider-architecture.md).
+- **v1 installation のすべての zone は 1 region にある。** region 跨ぎの書込み、
+  region failover、geo-routing は scope 外。複数 region が必要な operator は
+  将来の multi-region account-plane / operator RFC を使うこと。region ごとに
+  Takosumi installation を 1 つずつ動かしてもプラットフォーム federation には
+  ならない。
+- **zone 文字列は opaque。** 似た名前の 2 つの zone は無関係である。kernel は
+  文字列形から隣接性を推論しない。affinity rule (「この object を あの DataAsset
+  と同じ zone に置く」) は等値比較なので表現できる。latency-aware placement は
+  topology を要するため表現できない。
+- **zone-agnostic モードがある。** `TAKOSUMI_ZONES_AVAILABLE` が未設定なら
+  すべての zone field は評価時に無視される。小規模 installation は zone 語彙
+  を宣言するコストを払わずに済む。
 
-## Incident model: kernel-side detection, kernel-side state, operator-side narrative
+region 跨ぎ semantics が来るときは
+[PaaS Provider Architecture](./paas-provider-architecture.md) の single-region
+invariant を変えるため、`CONVENTIONS.md` §6 RFC を通す。
 
-An Incident is a kernel-recorded service-impacting event. Origin is either
-auto-detected (SLA breach, RevokeDebt aging into `operator-action-required`,
-readiness probe failure, sustained internal-error rate) or operator-declared.
-The reasoning:
+## Incident model: 検知も state も kernel、narrative は operator
 
-- **Auto-detection lives where the signals live.** SLA breach evaluation,
-  RevokeDebt aging, and readiness probes are already kernel-side. Triggering an
-  incident from those signals avoids a second polling layer.
-- **State machine binds to the audit chain.** Each transition is an audit event.
-  Postmortem evidence is a chain replay, not a reconstructed timeline from logs.
-  This is the same property that drives kernel-side SLA detection.
-- **Operator-declared incidents share the record shape.** When a customer
-  reports an outage that did not auto-detect, the operator declares the incident
-  through the internal control plane. It traverses the same state machine and
-  produces the same audit envelope. Origin is recorded so that incident review
-  can slice by detection source.
-- **Customer-facing presentation is operator surface.** Status pages, incident
-  timelines, customer email blasts, and Slack rendering are not kernel concerns.
-  The kernel emits the structured record and the audit transitions; the operator
-  chooses how to surface them.
+Incident は kernel に記録される service-impacting event である。Origin は自動
+検知 (SLA breach、RevokeDebt が `operator-action-required` まで aging、
+readiness probe 失敗、内部エラー率の持続) または operator 宣言のいずれかである。
+理由:
 
-## Support impersonation: a separate auth path
+- **自動検知は signal が存在する場所にある。** SLA breach 評価、RevokeDebt
+  aging、readiness probe はすでに kernel 側。これらの signal から incident を
+  起こすことで二重 polling 層を避ける。
+- **state machine は audit chain に結びつく。** 各遷移は audit event。事後
+  分析の証拠は chain replay であり、log から復元したタイムラインではない。
+  kernel 側 SLA 検知と同じ性質。
+- **operator 宣言 incident も同じ record 形を共有する。** 自動検知されなかった
+  障害を顧客が報告した場合、operator は内部 control plane で incident を宣言
+  する。同じ state machine をたどり、同じ audit envelope を生成する。Origin が
+  記録されるので incident review を検知ソースで slice できる。
+- **顧客向け表示は operator surface。** ステータスページ、incident
+  タイムライン、 顧客メール、Slack 描画は kernel の関心事ではない。kernel
+  は構造化 record と audit 遷移を発行し、operator がどう surface するかを選ぶ。
 
-Support staff that need to look at a customer Space go through a separate auth
-path:
+## Support impersonation: 別の auth path
 
-- **`support-staff` is its own Actor type.** A support-staff Actor never holds a
-  Space role through Membership. It is operator-controlled and lives in the
-  operator's support tenant.
-- **Authority comes from a grant, not a role.** A support-staff Actor obtains
-  `read-only` or `read-write` access to a specific Space through a
-  `SupportImpersonationGrant`. Read-write grants require the customer admin's
-  explicit approval. Both grant types are time-bounded.
-- **Every session is audit-grade.** Session open, every kernel operation under
-  the impersonation, and session close all attach the support actor id, the
-  grant id, the ticket reference, and the customer admin who approved.
-  Cross-tenant access is therefore replayable.
-- **Bootstrap surface is operator-only.** Public deploy bearer tokens and
-  runtime-agent enrollments cannot mint a `support-staff` Actor. The minting
-  path is internal-control-plane only, gated by HMAC.
+顧客 Space を見る必要のあるサポート担当者は別の auth path を通る。
 
-This architecture lets operators support customers without violating the Space
-containment invariant. The kernel proves the access was scoped, time-bounded,
-and approved; it does not prove the support staff did the right thing once
-inside, which is an operator policy concern.
+- **`support-staff` は独立した Actor 型である。** support-staff Actor は
+  Membership 経由で Space role を持たない。operator 管理で operator の support
+  tenant に住む。
+- **権限は role でなく grant から来る。** support-staff Actor は
+  `SupportImpersonationGrant` で特定 Space への `read-only` または `read-write`
+  アクセスを得る。read-write grant は顧客 admin の明示承認を要する。両 grant
+  種別とも時間制限付き。
+- **すべての session が audit grade。** session open、impersonation 下のすべての
+  kernel operation、session close は、support actor id、grant id、ticket
+  reference、承認した顧客 admin を attach する。tenant 跨ぎアクセスは replay
+  可能。
+- **bootstrap surface は operator only。** public deploy bearer token や
+  runtime-agent enrollment は `support-staff` Actor を mint できない。発行 path
+  は内部 control plane のみで HMAC で gate される。
 
-## Notification emission: pull-only, kernel never delivers
+このアーキテクチャは Space containment invariant に違反せず operator が顧客を
+サポートできるようにする。kernel はアクセスが scoped・時間制限付き・承認済み
+であったことを証明する。中に入った support staff が正しく振る舞ったかは証明
+しない (これは operator policy の関心事)。
 
-The kernel records notification signals but does not deliver them. Operators
-consume the signal queue and fan out to email, Slack, SMS, in-app, or digest
-channels. The reasoning:
+## Notification emission: pull only、kernel は配信しない
 
-- **The kernel never holds delivery credentials.** SMTP servers, Slack workspace
-  tokens, SMS gateway keys, and webhook secrets are operator artifacts. Holding
-  them in the kernel would expand the kernel's blast radius for credentials it
-  has no need to verify.
-- **Pull-only matches the existing webhook decision.** Takosumi does not push to
-  external listeners intentionally (see the v1 webhook scope decision in
-  [PaaS Provider Architecture](./paas-provider-architecture.md)). Notifications
-  follow the same boundary: the kernel emits a signal, an operator-controlled
-  delivery worker reads the queue.
-- **Every customer-visible notification has an audit event.** The signal stream
-  is a curated subset of audit events plus a small number of derived events
-  (e.g., `approval-near-expiry`). The operator's outer stack cannot mint a
-  customer-visible notification that the kernel did not first emit as a signal.
-- **Idempotency is kernel-side.** Duplicate-signal suppression is part of the
-  emission rule, so that a retried apply or a flapping breach does not mint a
-  flood of notifications. The operator pulls a deduplicated stream.
+kernel は notification signal を記録するが配信しない。operator が signal queue
+を consume し、email / Slack / SMS / in-app / digest channel に fan out する。
+理由:
 
-Recipient resolution is kernel-side: the kernel resolves which Actors should
-receive a signal based on role and Membership. Delivery channel selection (email
-vs. Slack vs. nothing) is operator-side.
+- **kernel は配信 credential を保持しない。** SMTP server、Slack workspace
+  token、SMS gateway key、webhook secret は operator の成果物。kernel に置けば、
+  検証する必要のない credential まで kernel の blast radius を広げる。
+- **pull only は既存の webhook 決定と整合する。** Takosumi は意図的に外部
+  listener に push しない (v1 webhook scope 決定について
+  [PaaS Provider Architecture](./paas-provider-architecture.md) を参照)。
+  notification は同じ境界に従う: kernel は signal を発行し、operator 管理の 配信
+  worker が queue を読む。
+- **顧客可視の notification はすべて audit event を持つ。** signal stream は
+  audit event の精選 subset に少数の derived event (`approval-near-expiry` 等)
+  を加えたもの。operator の外側のスタックは kernel が先に signal として発行
+  していない顧客可視 notification を mint できない。
+- **idempotency は kernel 側。** 重複 signal の抑制は発行ルールの一部であり、
+  retry された apply や ばたつく breach が notification の洪水を mint しない
+  ようになっている。operator は de-duplicate された stream を pull する。
 
-## Boundary
+受信者解決は kernel 側: kernel は role と Membership に基づいて signal を
+受けるべき Actor を解決する。配信 channel 選択 (email vs. Slack vs. なし) は
+operator 側。
 
-The kernel ships:
+## 境界
 
-- the quota tier registration API and per-Space tier binding;
-- the opaque attribution map and its propagation through audit and telemetry;
-- the closed SLA dimension set and the breach detection state machine;
-- the single-region zone attribute and its propagation through manifest
-  expansion;
-- the Incident record, its state machine, the auto-detection triggers, and the
-  audit transitions;
-- the support impersonation grant / session records and the audit-grade scoping
-  rule;
-- the notification signal record, the closed category enum, recipient
-  resolution, and the pull queue.
+kernel が同梱するもの:
 
-The kernel does not ship:
+- quota tier 登録 API と per-Space tier binding。
+- 不透明な attribution map と audit / telemetry を通じた伝播。
+- closed な SLA dimension 集合と breach detection の state machine。
+- single-region な zone 属性と manifest 展開を通じた伝播。
+- Incident record、その state machine、自動検知 trigger、audit 遷移。
+- support impersonation の grant / session record と audit grade な scoping
+  ルール。
+- notification signal record、closed category enum、受信者解決、pull queue。
 
-- public status page UIs, customer dashboards, internal tooling for SRE;
-- ticket systems, screen-sharing tools, support-side incident editors;
-- SLA credit calculators, contract-specific credit formulas, invoice surfaces;
-- email templates, Slack bots, SMS rendering, in-app banner components;
-- the customer-side acknowledge / mute UI for incidents or notifications.
+kernel が同梱しないもの:
 
-## Related reference docs
+- 公開ステータスページ UI、顧客ダッシュボード、SRE 向け内部ツール。
+- チケットシステム、画面共有ツール、サポート側の incident editor。
+- SLA credit calculator、契約固有の credit 公式、invoice surface。
+- メールテンプレート、Slack bot、SMS レンダリング、in-app バナーコンポーネント。
+- incident / notification の顧客側 acknowledge / mute UI。
+
+## 関連 reference ドキュメント
 
 - [Quota Tiers](../quota-tiers.md)
 - [Quota and Rate Limit](../quota-rate-limit.md)
@@ -217,7 +202,7 @@ The kernel does not ship:
 - [Audit Events](../audit-events.md)
 - [Telemetry / Metrics](../telemetry-metrics.md)
 
-## Cross-references
+## クロスリファレンス
 
 - [Space Model](./space-model.md)
 - [Operator Boundaries](./operator-boundaries.md)

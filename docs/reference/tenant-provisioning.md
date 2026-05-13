@@ -1,13 +1,6 @@
 # Tenant Provisioning
 
-> Stability: stable Audience: operator, integrator, kernel-implementer See also:
-> [Storage Schema](/reference/storage-schema),
-> [Audit Events](/reference/audit-events),
-> [Quota and Rate Limit](/reference/quota-rate-limit),
-> [Secret Partitions](/reference/secret-partitions),
-> [Resource IDs](/reference/resource-ids),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Catalog Release Trust](/reference/catalog-release-trust)
+> このページでわかること: テナントのプロビジョニングフロー。
 
 Takosumi v1 における tenant onboarding の kernel-side primitive。 本 reference
 は **Space** を tenant unit とし、Space を新規に立ち上げる ための internal
@@ -252,3 +245,13 @@ idempotent な internal API、closed provisioning 段階、 audit primitive
   provisioning primitive と operator policy 層の責務分担
 - `docs/reference/architecture/catalog-release-descriptor-model.md` —
   initialCatalogReleaseId adopt 段階の semantics と再試行設計
+
+## 関連ページ
+
+- [Storage Schema](/reference/storage-schema)
+- [Audit Events](/reference/audit-events)
+- [Quota and Rate Limit](/reference/quota-rate-limit)
+- [Secret Partitions](/reference/secret-partitions)
+- [Resource IDs](/reference/resource-ids)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Catalog Release Trust](/reference/catalog-release-trust)

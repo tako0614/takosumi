@@ -1,5 +1,7 @@
 # Namespace Exports
 
+> このページでわかること: namespace export の仕組みと使い方。
+
 Namespace export は operator / account plane / billing / dashboard / deploy API
 など、kernel Shape manifest の外にある usable surface を Space-scoped に公開する
 contract です。kernel は namespace export を discover / grant / fetch せず、

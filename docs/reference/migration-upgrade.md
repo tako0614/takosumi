@@ -1,12 +1,6 @@
 # Migration / Upgrade
 
-> Stability: stable Audience: operator See also: [CLI](/reference/cli),
-> [Environment Variables](/reference/env-vars),
-> [Cross-Process Locks](/reference/cross-process-locks),
-> [Audit Events](/reference/audit-events),
-> [Readiness Probes](/reference/readiness-probes),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Closed Enums](/reference/closed-enums)
+> このページでわかること: kernel のマイグレーションとアップグレードの仕様。
 
 Takosumi v1 における migration と upgrade の正式仕様。kernel version の rolling
 upgrade、schema migration の up / down semantics、rollback gate、 kernel ↔
@@ -217,3 +211,13 @@ audit event は migration の各 phase で emit され、operator dashboard が 
   の trust 境界、skew tolerance の選定 rationale recovery mode の interplay
 - `docs/reference/architecture/operational-hardening-checklist.md` — production
   rolling upgrade の運用 checklist
+
+## 関連ページ
+
+- [CLI](/reference/cli)
+- [Environment Variables](/reference/env-vars)
+- [Cross-Process Locks](/reference/cross-process-locks)
+- [Audit Events](/reference/audit-events)
+- [Readiness Probes](/reference/readiness-probes)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Closed Enums](/reference/closed-enums)

@@ -1,21 +1,20 @@
 # Identity and Access Architecture
 
-This page is retained as a link-compatible migration stub.
+> このページでわかること: identity / access の設計とアクセス制御モデル。
 
-Identity and access for users, accounts, organizations, memberships, billing,
-OIDC, launch tokens, AppInstallations, AppBindings, and AppGrants live in an
-operator account plane (reference implementation: Takosumi Accounts in
-`takosumi-cloud/`). The takosumi kernel stays a generic manifest deploy engine
-that can deploy any application and does not own account-plane identity.
+user / account / organization / membership / billing / OIDC / launch token /
+AppInstallation / AppBinding / AppGrant に関する identity & access は operator
+の account plane が所有する (reference 実装: `takosumi-cloud/` の Takosumi
+Accounts)。 takosumi kernel は generic manifest deploy engine として動作し、
+account-plane identity を所有しない。
 
-Kernel-side trust is limited to:
+kernel 側の trust は次の範囲に限られる:
 
-- public deploy/artifact route authentication configured by the operator
-- ProviderPlugin / runtime-agent contracts
-- deploy evidence, WAL, audit, and observation records for unmanaged deployments
+- operator が設定する public deploy / artifact route の authentication
+- ProviderPlugin / runtime-agent contract
+- unmanaged deployment 向けの deploy evidence / WAL / audit / observation 記録
 
-References:
+## 関連ページ
 
 - `takosumi-cloud/docs/architecture/takosumi-accounts.md`
 - `takosumi-cloud/docs/accounts-service.md`
-- `docs/reference/design-principles.md`

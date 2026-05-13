@@ -68,8 +68,6 @@ export class SecretEncryptionConfigurationError extends Error {
 export const SECRET_STORE_KEY_ENV_KEYS: readonly string[] = [
   "TAKOSUMI_SECRET_STORE_PASSPHRASE",
   "TAKOSUMI_SECRET_STORE_KEY",
-  "TAKOSUMI_SECRET_ENCRYPTION_KEY",
-  "ENCRYPTION_KEY",
 ];
 
 /**

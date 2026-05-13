@@ -1,92 +1,71 @@
 # Resource IDs
 
-> Stability: stable Audience: kernel-implementer, integrator See also:
-> [Closed Enums](/reference/closed-enums),
-> [Connector Contract](/reference/connector-contract),
-> [Storage Schema](/reference/storage-schema),
-> [Digest Computation](/reference/digest-computation),
-> [Actor / Organization Model](/reference/actor-organization-model),
-> [API Key Management](/reference/api-key-management),
-> [Auth Providers](/reference/auth-providers),
-> [RBAC Policy](/reference/rbac-policy),
-> [Tenant Provisioning](/reference/tenant-provisioning),
-> [Tenant Export and Deletion](/reference/tenant-export-deletion),
-> [Trial Spaces](/reference/trial-spaces),
-> [Cost Attribution](/reference/cost-attribution),
-> [Quota Tiers](/reference/quota-tiers),
-> [SLA Breach Detection](/reference/sla-breach-detection),
-> [Incident Model](/reference/incident-model),
-> [Support Impersonation](/reference/support-impersonation),
-> [Notification Emission](/reference/notification-emission),
-> [Zone Selection](/reference/zone-selection)
+> このページでわかること: resource ID の命名規則と生成ルール。
 
-This page defines the Takosumi v1 resource ID grammar, the closed list of v1 ID
-kinds, the suffix grammar each kind uses, the canonical and display forms used
-at the kernel boundary, and the stability rules that govern which IDs may be
-regenerated and which are fixed forever.
+Takosumi v1 の resource ID grammar、 v1 ID kind の閉じた一覧、 各 kind の suffix
+grammar、 kernel 境界での canonical / display 形式、 そして再生成可否 を決める
+stability rule を定義します。
 
-Resource IDs are the **only** identity surface the kernel persists. No other
-identifier (operator-internal numeric primary keys, runtime- agent local
-handles, connector handles) is stable across kernel restarts. The surface
-defined here is what kernel API responses, audit events, snapshots, journal
-entries, and CLI output expose.
+resource ID は kernel が persist する **唯一の** identity surface です。
+他の識別子 (operator 内部の数値 primary key、 runtime-agent ローカル handle、
+connector handle) は kernel 再起動を跨いで安定ではありません。 本ページの
+surface が kernel API response、 audit event、 snapshot、 journal entry、 CLI
+output に露出します。
 
 ## ID grammar
 
-Every Takosumi v1 resource ID has the closed shape:
+Takosumi v1 の resource ID は次の閉じた形をとります。
 
 ```text
 <kind>:<unique-suffix>
 ```
 
-Rules:
+ルール:
 
-- `kind` is a kebab-case ASCII identifier from the closed list below.
-- `:` is the single delimiter between the kind and the suffix; the suffix may
-  not contain a literal `:` for any v1 kind.
-- `unique-suffix` follows a kind-specific grammar (ULID, UUID v4, sha256 hex,
-  content-addressed hash, or a kebab-case operator-controlled name).
-- The full ID is case-sensitive. ULID suffixes use Crockford's base32 alphabet
-  which is uppercase by convention; sha256 suffixes are lowercase hex.
-- Whitespace is forbidden anywhere in the ID. Trailing or leading whitespace is
-  rejected at ingest.
+- `kind` は下記の閉じたリストにある kebab-case ASCII 識別子
+- `:` は kind と suffix を区切る唯一の delimiter。 v1 のどの kind でも suffix に
+  literal `:` を含めない
+- `unique-suffix` は kind 固有の grammar (ULID / UUID v4 / sha256 hex /
+  content-addressed hash / kebab-case の operator 名)
+- ID 全体は case-sensitive。 ULID suffix は Crockford base32 (慣例で大文字)、
+  sha256 suffix は小文字 hex
+- ID 内部に空白を含まない。 前後の空白も ingest で reject
 
-`<kind>:` is treated as a reserved prefix. Plugin authors and operators may not
-invent new kinds. New kinds require a `CONVENTIONS.md` §6 RFC.
+`<kind>:` は予約 prefix。 plugin 作者 / operator は新 kind を発明できず、
+追加には `CONVENTIONS.md` §6 RFC が必須です。
 
 ## v1 closed kind list
 
-The kind list is closed in v1. The base table below enumerates the kernel-domain
-kinds (manifest, journal, snapshot, share, group); the PaaS-provider primitive
-additions follow under
-[v1 closed kind additions for PaaS provider primitives](#v1-closed-kind-additions-for-paas-provider-primitives).
-The closure rule is unchanged: every kind that the kernel accepts at the API
-boundary appears in either the base table or the addition table, and every other
-kind is rejected.
+v1 で kind list は閉じています。 下記 base table は kernel domain の kind
+(manifest / journal / snapshot / share / group) を列挙し、 PaaS provider
+primitive の追加分は
+[v1 closed kind additions for PaaS provider primitives](#v1-closed-kind-additions-for-paas-provider-primitives)
+に続きます。 kernel が API 境界で受理する kind はこれらの table のいずれかに
+必ず現れ、 それ以外は reject されます。
 
-| Kind              | Suffix grammar                           | Source of suffix                                                  |
-| ----------------- | ---------------------------------------- | ----------------------------------------------------------------- |
-| `space`           | kebab-case name                          | Operator-controlled.                                              |
-| `deployment`      | ULID                                     | Kernel-generated on apply.                                        |
-| `link`            | `<consumer>.<slot>`                      | Derived from consumer object ID and slot name.                    |
-| `object`          | kebab-case name                          | Operator-controlled within a Space.                               |
-| `generated`       | `<owner-kind>:<owner-id>/<reason>`       | Kernel-generated, deterministic from owner.                       |
-| `exposure`        | kebab-case name                          | Operator-controlled within a Space.                               |
-| `journal`         | ULID                                     | Kernel-generated per WAL entry.                                   |
-| `operation`       | ULID                                     | Kernel-generated per OperationPlan entry.                         |
-| `desired`         | sha256 hex                               | Content-addressed over the DesiredSnapshot canonical encoding.    |
-| `resolution`      | sha256 hex                               | Content-addressed over the ResolutionSnapshot canonical encoding. |
-| `activation`      | ULID                                     | Kernel-generated on activate.                                     |
-| `revoke-debt`     | ULID                                     | Kernel-generated when the entry is enqueued.                      |
-| `approval`        | ULID                                     | Kernel-generated on approval.                                     |
-| `connector`       | kebab-case id                            | Operator-installed.                                               |
-| `export-snapshot` | sha256 hex                               | Content-addressed over the export contents.                       |
-| `catalog-release` | sha256 hex or operator-tagged kebab-case | Content-addressed by default; operator may pin a tag.             |
-| `policy`          | sha256 hex                               | Content-addressed over the policy bundle.                         |
-| `group`           | kebab-case name                          | Operator-controlled within a Space.                               |
+| Kind              | Suffix grammar                               | suffix の由来                                                  |
+| ----------------- | -------------------------------------------- | -------------------------------------------------------------- |
+| `space`           | kebab-case 名                                | operator が指定                                                |
+| `deployment`      | ULID                                         | apply 時に kernel が生成                                       |
+| `link`            | `<consumer>.<slot>`                          | consumer object ID と slot 名から導出                          |
+| `object`          | kebab-case 名                                | Space 内で operator が指定                                     |
+| `generated`       | `<owner-kind>:<owner-id>/<reason>`           | kernel 生成、 owner から決定的                                 |
+| `exposure`        | kebab-case 名                                | Space 内で operator が指定                                     |
+| `journal`         | ULID                                         | WAL entry ごとに kernel が生成                                 |
+| `operation`       | ULID                                         | OperationPlan entry ごとに kernel が生成                       |
+| `desired`         | sha256 hex                                   | DesiredSnapshot canonical encoding に対する content-address    |
+| `resolution`      | sha256 hex                                   | ResolutionSnapshot canonical encoding に対する content-address |
+| `activation`      | ULID                                         | activate 時に kernel が生成                                    |
+| `revoke-debt`     | ULID                                         | entry enqueue 時に kernel が生成                               |
+| `approval`        | ULID                                         | approval 発行時に kernel が生成                                |
+| `connector`       | kebab-case id                                | operator が install                                            |
+| `export-snapshot` | sha256 hex                                   | export 内容に対する content-address                            |
+| `catalog-release` | sha256 hex または operator tag の kebab-case | 既定は content-address。 operator が tag を pin できる         |
+| `policy`          | sha256 hex                                   | policy bundle に対する content-address                         |
+| `group`           | kebab-case 名                                | Space 内で operator が指定                                     |
 
-The above is the v1 closed set. Adding a new kind, removing a kind, or changing
-the suffix grammar of an existing kind requires the `CONVENTIONS.md` §6 RFC.
+これが v1 の閉じた集合です。 新 kind の追加 / 削除、 既存 kind の suffix grammar
+変更には `CONVENTIONS.md` §6 RFC が必須。
 
 ### Examples
 
@@ -115,48 +94,44 @@ group:rollout-canary
 
 ## v1 closed kind additions for PaaS provider primitives
 
-The kinds below extend the v1 closed kind list with the resources introduced by
-the PaaS-provider primitives (identity, tenant lifecycle, quota and SLA
-enforcement, incident response, support impersonation, notification). The
-closure rule from the section above applies: each addition is bound to a fixed
-suffix grammar and a fixed source-of-suffix; new kinds beyond this list still
-require a `CONVENTIONS.md` §6 RFC.
+下記 kind は PaaS provider primitive (identity、 tenant lifecycle、 quota / SLA
+enforcement、 incident response、 support impersonation、 notification) が
+導入する resource を v1 closed kind list に追加するものです。 上節の closure
+rule が同様に適用され、 各追加 kind は固定の suffix grammar と suffix 由来に
+紐付き、 これを超える kind 追加には `CONVENTIONS.md` §6 RFC が必須です。
 
-### Account-plane additions
+### Account plane の追加 kind
 
-`actor`, `organization`, `membership`, `role-assignment`, account `api-key`, and
-`auth-provider` identifiers are owned by the operator's account plane (reference
-implementation: Takosumi Accounts in `takosumi-cloud/`), not by takosumi kernel
-resource IDs. They are documented in that plane's docs (the reference impl
-publishes them under `takosumi-cloud/`) and may appear in cross-product audit
-evidence as opaque strings only.
+`actor` / `organization` / `membership` / `role-assignment` / account `api-key`
+/ `auth-provider` の識別子は、 operator の account plane (reference 実装:
+`takosumi-cloud/` の Takosumi Accounts) が所有し、 takosumi kernel resource ID
+には属しません。 詳細は account plane 側の docs を参照。 cross-product audit
+evidence には opaque な文字列としてのみ現れます。
 
-`actor:` previously admitted a sub-kind discriminator for support-staff Actors:
-Actor types use the bare `actor:<name>` or `actor:<uuid>` form. The suffix may
-not contain a `:`; the `/` separates the Actor sub-kind discriminator and is the
-only `/` permitted in an Actor ID.
+`actor:` には support-staff Actor のための sub-kind 識別子があり、 通常の Actor
+は `actor:<name>` / `actor:<uuid>` 形式を用います。 suffix に `:` は
+含められませんが、 Actor ID に限り `/` が sub-kind の区切りとして 1 つだけ
+許可されます。
 
-### PaaS operations additions
+### PaaS operations の追加 kind
 
-| Kind                   | Suffix grammar  | Source of suffix                                            | Reference                                                       |
-| ---------------------- | --------------- | ----------------------------------------------------------- | --------------------------------------------------------------- |
-| `tier`                 | kebab-case name | Operator-controlled at quota tier register.                 | [Quota Tiers](/reference/quota-tiers)                           |
-| `incident`             | ULID            | Kernel-generated on incident open.                          | [Incident Model](/reference/incident-model)                     |
-| `support-grant`        | ULID            | Kernel-generated on operator grant create.                  | [Support Impersonation](/reference/support-impersonation)       |
-| `support-session`      | ULID            | Kernel-generated on session open under an `approved` grant. | [Support Impersonation](/reference/support-impersonation)       |
-| `notification-signal`  | ULID            | Kernel-generated on notification signal emit.               | [Notification Emission](/reference/notification-emission)       |
-| `provisioning-session` | ULID            | Kernel-generated on tenant provisioning session start.      | [Tenant Provisioning](/reference/tenant-provisioning)           |
-| `export-job`           | ULID            | Kernel-generated on Space export request.                   | [Tenant Export and Deletion](/reference/tenant-export-deletion) |
-| `sla-threshold`        | ULID            | Kernel-generated on operator SLA threshold register.        | [SLA Breach Detection](/reference/sla-breach-detection)         |
-| `sla-observation`      | ULID            | Kernel-generated on SLA observation emit.                   | [SLA Breach Detection](/reference/sla-breach-detection)         |
+| Kind                   | Suffix grammar | suffix の由来                                            | 参照                                                            |
+| ---------------------- | -------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
+| `tier`                 | kebab-case 名  | quota tier 登録時に operator が指定                      | [Quota Tiers](/reference/quota-tiers)                           |
+| `incident`             | ULID           | incident open 時に kernel が生成                         | [Incident Model](/reference/incident-model)                     |
+| `support-grant`        | ULID           | operator が grant 作成時に kernel が生成                 | [Support Impersonation](/reference/support-impersonation)       |
+| `support-session`      | ULID           | `approved` grant 下で session を開くときに kernel が生成 | [Support Impersonation](/reference/support-impersonation)       |
+| `notification-signal`  | ULID           | notification signal emit 時に kernel が生成              | [Notification Emission](/reference/notification-emission)       |
+| `provisioning-session` | ULID           | tenant provisioning session 開始時に kernel が生成       | [Tenant Provisioning](/reference/tenant-provisioning)           |
+| `export-job`           | ULID           | Space export request 時に kernel が生成                  | [Tenant Export and Deletion](/reference/tenant-export-deletion) |
+| `sla-threshold`        | ULID           | operator が SLA threshold 登録時に kernel が生成         | [SLA Breach Detection](/reference/sla-breach-detection)         |
+| `sla-observation`      | ULID           | SLA observation emit 時に kernel が生成                  | [SLA Breach Detection](/reference/sla-breach-detection)         |
 
-The closure rule applies to this addition table: a kind is fixed to exactly one
-suffix grammar; the `tier:` operator name is the only non-ULID kind in this
-addition table. Adding a new kind beyond this list requires the `CONVENTIONS.md`
-§6 RFC. The addition table does not relax the v1 grammar
-(`<kind>:<unique-suffix>`, kebab-case `kind`, no `:` inside the suffix); the
-`actor:support-staff/<id>` sub-kind is the single permitted exception and is
-bound to the `actor:` kind only.
+この追加 table にも closure rule が適用されます。 1 kind は 1 suffix grammar
+に固定で、 ここで非 ULID は `tier:` のみ。 追加には `CONVENTIONS.md` §6 RFC
+が必須。 v1 grammar (`<kind>:<unique-suffix>`、 kebab-case `kind`、 suffix 内に
+`:` 禁止) は緩めません。 `actor:support-staff/<id>` sub-kind は唯一の 例外で、
+`actor:` kind 限定です。
 
 ### Examples
 
@@ -180,149 +155,135 @@ sla-threshold:01HM9N7XK4QY8RT2P5JZF6V3WJ
 sla-observation:01HM9N7XK4QY8RT2P5JZF6V3WK
 ```
 
-### Stability classification
+### Stability 区分
 
-The addition kinds slot into the stability rules from the section below.
+追加 kind は下節の stability rule に対応します。
 
-- **Operator-controlled names (immutable, no rename)**: `tier:` and provider /
-  runtime identifiers. Account-plane identifiers are owned by Takosumi Accounts.
-- **Kernel-minted ULIDs (immutable once issued)**: `incident:`,
-  `support-grant:`, `support-session:`, `notification-signal:`,
-  `provisioning-session:`, `export-job:`, `sla-threshold:`, `sla-observation:`.
+- **operator-controlled name (immutable、 rename 不可)**: `tier:` および
+  provider / runtime 識別子。 account plane の識別子は Takosumi Accounts 所有
+- **kernel-minted ULID (発行後 immutable)**: `incident:` / `support-grant:` /
+  `support-session:` / `notification-signal:` / `provisioning-session:` /
+  `export-job:` / `sla-threshold:` / `sla-observation:`
 
-The addition table does not introduce content-addressed kinds; SHA suffixes are
-reserved for the kinds enumerated in the original section.
+追加 table に content-addressed kind は導入しません。 SHA suffix は元節で列挙
+した kind に予約されています。
 
-### Workflow-shaped IDs
+### Workflow 形の ID
 
-The kernel does not reserve `trigger:`, `trigger-registration:`,
-`hook-binding:`, `workflow:`, `workflow-run:`, or `workflow-step-run:` prefixes.
-Workflow / cron / hook systems live above `POST /v1/deployments`, for example in
-`takosumi-git`, and must keep their identifiers outside the kernel-curated kind
-list. See
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
+kernel は `trigger:` / `trigger-registration:` / `hook-binding:` / `workflow:` /
+`workflow-run:` / `workflow-step-run:` prefix を予約していません。 workflow /
+cron / hook は `POST /v1/deployments` の上位 (例: `takosumi-git`) で扱い、
+識別子は kernel が管理する kind list の外で保持します。 詳細は
+[Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+を参照。
 
-## Suffix grammars
+## Suffix grammar
 
-Each suffix grammar is closed in v1.
+v1 で各 suffix grammar は閉じています。
 
 ### ULID
 
-26-character Crockford's base32, time-sortable. Generated with a
-millisecond-resolution timestamp prefix and 80 bits of randomness. Lexicographic
-order matches creation order to within the timestamp resolution. ULIDs are fixed
-once minted; the kernel never reissues an ID for the same logical resource.
+26 文字 Crockford base32、 time-sortable。 ミリ秒解像度の timestamp prefix + 80
+bit 乱数で生成。 timestamp 解像度内で生成順と辞書順が一致。 ULID は発行 後
+immutable で、 kernel は同じ論理 resource に再発行しません。
 
 ### UUID v4
 
-Reserved for forward compatibility; no v1 kind currently uses UUID v4. The
-grammar (canonical hyphenated lowercase form) is documented for future kinds
-without committing kernel storage to support them today.
+forward compatibility のため予約。 v1 で UUID v4 を使う kind は現状なし。
+canonical hyphen 区切り小文字形式で文書化。
 
 ### sha256 hex
 
-Lowercase hexadecimal of a SHA-256 digest. Always 64 characters. The ID embeds
-the hash with a leading `sha256:` token to leave room for future hash algorithms
-behind a `CONVENTIONS.md` §6 RFC. Content- addressed kinds follow the canonical
-encoding rules in [Digest Computation](/reference/digest-computation).
+SHA-256 digest の小文字 hex (常に 64 文字)。 ID には先頭 `sha256:` token を
+付け、 将来 `CONVENTIONS.md` §6 RFC で別 hash に置換できる余地を残します。
+content-addressed kind の canonical encoding は
+[Digest Computation](/reference/digest-computation) を参照。
 
-### kebab-case name
+### kebab-case 名
 
-ASCII lowercase letters, digits, and `-`. Must start with a letter, must not end
-with `-`, must not contain consecutive `-`. Maximum length is 63 characters.
-Operator-controlled kinds (`space`, `object`, `exposure`, `connector`,
-`external-participant`, `group`, operator-tagged `catalog-release`) use this
-grammar.
+ASCII 小文字 + 数字 + `-`。 先頭は letter、 末尾は `-` 不可、 連続 `-` 不可。
+最大 63 文字。 operator-controlled kind (`space` / `object` / `exposure` /
+`connector` / `external-participant` / `group`、 operator-tag の
+`catalog-release`) で使用。
 
-### Composite suffixes
+### Composite suffix
 
-Two kinds use composite suffixes derived from other IDs.
+2 つの kind は他 ID から導出した composite suffix を使います。
 
-- `link:<consumer>.<slot>` — `<consumer>` is the consumer object's full ID (with
-  its own kind prefix); `<slot>` is the slot name as declared in the consumer's
-  shape spec.
-- `generated:<owner-kind>:<owner-id>/<reason>` — `<owner-kind>` and `<owner-id>`
-  identify the owning resource; `<reason>` is a closed short token (e.g.
-  `projection`, `materialization`) that the kernel selects at generation time.
+- `link:<consumer>.<slot>` — `<consumer>` は consumer object の完全 ID (kind
+  prefix 付き)、 `<slot>` は consumer の shape spec が宣言する slot 名
+- `generated:<owner-kind>:<owner-id>/<reason>` — `<owner-kind>` / `<owner-id>`
+  は所有 resource、 `<reason>` は kernel が生成時に選ぶ閉じた短い token (例:
+  `projection`、 `materialization`)
 
-Composite suffix construction is deterministic: the same owner and reason always
-produce the same generated ID. Replays of the same projection rule do not mint
-new generated IDs.
+composite suffix の構築は決定的で、 同じ owner / reason は常に同じ generated ID
+を生みます。 同一 projection rule の replay で新規 ID を生成しません。
 
 ## Display form
 
-IDs are surfaced in two equivalent forms.
+ID は等価な 2 形式で露出します。
 
-- **Canonical**: `<kind>:<suffix>` as a single string. This is the form
-  persisted in storage, embedded in JSON, and emitted by the audit log.
-- **Tuple form**: `(space:<name>, <kind>:<suffix>)` when the ID's Space context
-  matters. The kernel emits tuple form in CLI output that aggregates across
+- **canonical**: 単一文字列 `<kind>:<suffix>`。 storage、 JSON 埋め込み、 audit
+  log で使う形式
+- **tuple form**: ID の Space context が重要な場面で
+  `(space:<name>, <kind>:<suffix>)`。 Space を跨ぐ集計の CLI 出力で使う
 
-Human-readable display in CLI output uses the **path form**:
+CLI の人間向け表示には **path form** を使います。
 
 ```text
 space:acme-prod/deployment:01HM9N7XK4QY8RT2P5JZF6V3W9
 ```
 
-Path form joins the Space ID and the resource ID with a single `/`. Path form is
-informational only; the canonical form is the source of truth at the kernel
-boundary.
+path form は Space ID と resource ID を `/` で結合します。 path form は
+informational で、 kernel 境界での source of truth は canonical 形式です。
 
-## Future Cross-Space references
+## Cross-Space 参照 (将来)
 
-resource in Space A to reference a resource in Space B (for example through a
+Space A の resource が Space B の resource を参照する場面では tuple form を
+使います (例: `(space:b-prod, object:shared-config)`)。 将来 cross-Space surface
+(snapshot field、 audit event、 approval binding) では tuple form が
+必須になります。 bare `<kind>:<suffix>` は暗黙に Space-local で、 active Space
+context を指します。
 
-```text
-(space:b-prod, object:shared-config)
-```
+## ID stability rule
 
-Tuple form would be required at every future cross-Space surface: snapshot
-fields, audit events, and approval bindings. Bare `<kind>:<suffix>` IDs are
-implicitly Space-local and refer to the active Space context.
+ID の安定性は kind に依存します。
 
-## ID stability rules
+### Content-addressed (永続的に immutable)
 
-The stability of an ID depends on its kind.
+`desired:sha256:...` / `resolution:sha256:...` / `export-snapshot:sha256:...` /
+`policy:sha256:...`、 content-addressed `catalog-release:sha256:...`。 内容の
+hash なので、 内容変更で新 ID を生成し、 既存 ID を再利用しません。 Space 間で
+cache / pin / share できます。
 
-### Content-addressed (immutable forever)
+### Kernel-minted ULID (発行後 immutable)
 
-`desired:sha256:...`, `resolution:sha256:...`, `export-snapshot:sha256:...`,
-`policy:sha256:...`, content-addressed `catalog-release:sha256:...`. These IDs
-are the hash of their contents; mutating the contents produces a new ID, never
-reuses an existing one. The kernel may safely cache, pin, or share these IDs
-across Spaces.
+`deployment:` / `journal:` / `operation:` / `activation:` / `revoke-debt:` /
+`approval:` / `share:`。 発行された ID は resource lifetime にわたって不変 で、
+別 resource に再割当てしません。
 
-### Kernel-minted ULIDs (immutable once issued)
+### operator-controlled 名 (immutable、 rename 不可)
 
-`deployment:`, `journal:`, `operation:`, `activation:`, `revoke-debt:`,
-`approval:`, `share:`. Once the kernel issues such an ID, it persists for the
-lifetime of the resource and is never reassigned to a different resource.
+`space:` / `object:` / `exposure:` / `connector:` / `external-participant:` /
+`group:`。 operator が作成時に名前を選び、 v1 では rename を サポートしませ ん。
+将来の rename API は `CONVENTIONS.md` §6 RFC で alias 追加型 (履歴参照
+を書き換えない) として導入する想定です。
 
-### Operator-controlled names (immutable, no rename)
+### Deterministic composite ID (source ごとに stable)
 
-`space:`, `object:`, `exposure:`, `connector:`, `external-participant:`,
-`group:`. The operator chooses the name on creation; rename is **not** supported
-in v1. A future rename API would land through a `CONVENTIONS.md` §6 RFC and
-would be additive (creating an alias), not destructive (rewriting historical
-references).
+`link:` と `generated:`。 source 入力 (link は consumer + slot、 generated は
+owner + reason) から導出します。 projection を再実行しても同じ ID。 source
+を消すと ID も消え、 kernel は削除済 composite ID を別 resource に
+再利用しません。
 
-### Deterministic composite IDs (stable per source)
+## 予約 kind と forward compatibility
 
-`link:` and `generated:`. These IDs are derived from their source inputs
-(consumer + slot for links, owner + reason for generated objects). Re-running
-the projection produces the same ID. Removing the source removes the ID; the
-kernel does not reuse a removed composite ID for an unrelated resource later.
+上述の kind が v1 の **完全集合** です。 新 kind 追加 / 既存 kind の用途 変更 /
+alias には `CONVENTIONS.md` §6 RFC が必須。
 
-## Reserved kinds and forward compatibility
-
-The kinds enumerated above are the **complete** v1 set. Adding a new kind,
-repurposing an existing kind, or aliasing a kind requires a `CONVENTIONS.md` §6
-RFC.
-
-The `<kind>:<suffix>` shape is the only ID grammar the kernel recognizes.
-Strings outside this grammar are not valid IDs and are rejected by every kernel
-surface that ingests IDs (apply input, storage write, audit ingest, CLI flag
-parsing).
+`<kind>:<suffix>` 形が kernel が認識する唯一の ID grammar です。 これに
+合わない文字列は ID として無効で、 ID を受け取る全 surface (apply 入力、 storage
+書込、 audit ingest、 CLI flag parse) で reject されます。
 
 ## Related architecture notes
 
@@ -335,3 +296,24 @@ parsing).
 ## See also
 
 - [Kernel HTTP API](/reference/kernel-http-api)
+
+## 関連ページ
+
+- [Closed Enums](/reference/closed-enums)
+- [Connector Contract](/reference/connector-contract)
+- [Storage Schema](/reference/storage-schema)
+- [Digest Computation](/reference/digest-computation)
+- [Actor / Organization Model](/reference/actor-organization-model)
+- [API Key Management](/reference/api-key-management)
+- [Auth Providers](/reference/auth-providers)
+- [RBAC Policy](/reference/rbac-policy)
+- [Tenant Provisioning](/reference/tenant-provisioning)
+- [Tenant Export and Deletion](/reference/tenant-export-deletion)
+- [Trial Spaces](/reference/trial-spaces)
+- [Cost Attribution](/reference/cost-attribution)
+- [Quota Tiers](/reference/quota-tiers)
+- [SLA Breach Detection](/reference/sla-breach-detection)
+- [Incident Model](/reference/incident-model)
+- [Support Impersonation](/reference/support-impersonation)
+- [Notification Emission](/reference/notification-emission)
+- [Zone Selection](/reference/zone-selection)

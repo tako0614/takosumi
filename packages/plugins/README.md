@@ -56,8 +56,8 @@ All provider IDs use the `@takos/<cloud>-<service>` namespace.
 | Deno       | `@takos/deno-deploy`                                                                                                                                                      |
 | Self-host  | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres`, `@takos/selfhost-coredns` |
 
-Legacy bare IDs (`aws-fargate`, `cloud-run`, etc.) still resolve with a
-deprecation warning. They will be rejected in 0.12.
+Bare provider IDs (`aws-fargate`, `cloud-run`, etc.) are rejected. Use the
+namespaced IDs above.
 
 ## Templates (2)
 

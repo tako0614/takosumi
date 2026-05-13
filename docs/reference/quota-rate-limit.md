@@ -1,16 +1,11 @@
 # Quota and Rate Limit
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Environment Variables](/reference/env-vars),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Audit Events](/reference/audit-events),
-> [Readiness Probes](/reference/readiness-probes),
-> [Storage Schema](/reference/storage-schema)
+> このページでわかること: quota と rate limit の設定と適用ルール。
 
-This reference defines the v1 quota model, per-tenant metering surfaces, and
-rate-limit policy for the Takosumi kernel HTTP API. The kernel exposes raw
-signals; enforcement (block, throttle, alert) lives in the operator policy layer
-that consumes those signals.
+本リファレンスは Takosumi kernel HTTP API の v1 quota モデル、テナント単位の
+metering surface、rate-limit policy を定義する。kernel は raw signal を公開
+する。強制 (block / throttle / alert) はそれらの signal を consume する operator
+policy 層に住む。
 
 ::: info Current HTTP status Quota and rate-limit records are current service
 current kernel HTTP router does not mount `/api/internal/v1/status`, and current
@@ -39,8 +34,7 @@ decisions through the same policy pack used by Risk evaluation.
 
 ## Quota dimensions (closed v1 set)
 
-The v1 set is closed. Adding a dimension goes through the `CONVENTIONS.md` §6
-RFC.
+v1 集合は closed。dimension 追加は `CONVENTIONS.md` §6 RFC を要する。
 
 | Dimension                         | Unit           | Per-Space? | Notes                                                                                                        |
 | --------------------------------- | -------------- | ---------- | ------------------------------------------------------------------------------------------------------------ |
@@ -50,19 +44,18 @@ RFC.
 | `journal-volume-bytes-per-bucket` | bytes / bucket | yes        | OperationJournal write volume per fixed time bucket (`TAKOSUMI_QUOTA_JOURNAL_BUCKET_SECONDS`, default 3600). |
 | `approval-pending-count`          | count          | yes        | Approval rows in `pending` state.                                                                            |
 
-Each dimension has a corresponding raw counter on the status endpoint and a
-corresponding audit signal: deployment-count and active-object-count update on
-`deployment-applied` and `activation-snapshot-created`; artifact-storage-bytes
-update on `POST /v1/artifacts` write and on artifact GC sweep (see
-[Artifact GC](/reference/artifact-gc)); journal-volume updates per bucket
-boundary; approval-pending-count updates on `approval-issued` /
-`approval-consumed` / `approval-invalidated`.
+各 dimension は status endpoint 上の raw counter と対応する audit signal を持つ:
+deployment-count と active-object-count は `deployment-applied` および
+`activation-snapshot-created` で更新される。artifact-storage-bytes は
+`POST /v1/artifacts` の書き込みと artifact GC sweep
+([Artifact GC](/reference/artifact-gc) 参照) で更新される。journal-volume
+はバケット境界ごとに更新される。 approval-pending-count は `approval-issued` /
+`approval-consumed` / `approval-invalidated` で更新される。
 
 ## Per-tenant metering
 
-The kernel records the raw counters above per Space and exposes them without
-making any billing claim. A billing system runs externally and consumes the
-metering events.
+kernel は上記 raw counter を Space ごとに記録し、billing 上の主張を行わずに
+公開する。billing system は外部で動作し、metering event を consume する。
 
 - Counters are persisted in the partition declared in
   [Storage Schema](/reference/storage-schema). They are read-mostly and do not
@@ -144,8 +137,8 @@ A variable left `unset` means the cap is absent, not zero. Setting a variable to
 
 ## Quota exhaustion behavior
 
-The kernel handles quota exhaustion **fail-closed for new work, fail- open for
-inflight work**:
+kernel は quota 枯渇を **new work には fail-closed、inflight には fail-open** で
+扱う。
 
 - New `POST /v1/deployments` requests are rejected with HTTP
   `429 Too Many Requests` when the Space is over a deployment-bound quota, with
@@ -171,7 +164,7 @@ so operator alerting wires fire.
 
 ## Operator visibility
 
-through:
+operator は次を通じて quota 状況を可視化する。
 
 - The `/api/internal/v1/status` endpoint (see
   [Kernel HTTP API](/reference/kernel-http-api)). The response includes a
@@ -196,3 +189,11 @@ through:
 - `docs/reference/architecture/exposure-activation-model.md` —
   fail-safe-not-fail- closed stance applied to ActivationSnapshot creation under
   quota exhaustion.
+
+## 関連ページ
+
+- [Environment Variables](/reference/env-vars)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Audit Events](/reference/audit-events)
+- [Readiness Probes](/reference/readiness-probes)
+- [Storage Schema](/reference/storage-schema)

@@ -1,15 +1,16 @@
 # Manifest Model
 
-The manifest is a closed deploy surface. It declares desired portable resources;
-it is not canonical state. Space, tenant, actor, catalog release, policy, quota,
-credentials, approvals, journal state, observations, and GroupHead are supplied
-by deploy context, not by the manifest.
+> このページでわかること: manifest のデータモデルと resource graph の構造。
 
-Public v1 is the **Shape + Provider** manifest model implemented by
-`POST /v1/deployments` and `takosumi deploy`. The retired top-level `template`
-authoring shorthand belongs to installer/compiler compatibility, not the current
-kernel public contract. The old `schemaVersion/profile/components/expose`
-authoring shape is not a current public manifest schema.
+manifest は closed な deploy surface である。desired な portable resource を
+宣言するもので、canonical state ではない。Space、tenant、actor、catalog
+release、 policy、quota、credential、approval、journal
+state、observation、GroupHead は manifest ではなく deploy context
+から供給される。
+
+Public v1 は `POST /v1/deployments` と `takosumi deploy` が実装する **Shape +
+Provider** manifest モデルである。Authoring 用の shorthand は installer /
+compiler 層に属し、kernel に届く前に展開される。
 
 ## Allowed Public Fields
 
@@ -22,9 +23,8 @@ metadata
 resources
 ```
 
-`apiVersion` is required and fixed to `"1.0"`. `kind` is required and fixed to
-`Manifest`. Unknown top-level fields fail schema validation; they are not
-warnings.
+`apiVersion` は必須で `"1.0"` に固定。`kind` は必須で `Manifest` に固定。未知の
+top-level field は schema validation で失敗する。警告ではない。
 
 `metadata` fields:
 
@@ -44,27 +44,27 @@ requires
 metadata
 ```
 
-`spec` is target-shape-specific and is validated by the selected Shape's
-`validateSpec`. Unknown envelope fields outside `spec` fail validation.
+`spec` は target shape 固有で、選ばれた Shape の `validateSpec` で validate
+される。`spec` の外側の未知 envelope field は validation で失敗する。
 
 ## Space Context
 
-`Space` is outside the manifest. The same manifest can resolve differently in
-different Spaces. Namespace paths, catalog release selection, policy, secrets,
-artifacts, approvals, journals, observations, and GroupHead are Space-scoped.
+`Space` は manifest の外にある。同じ manifest が異なる Space で異なる resolve
+結果になることがある。namespace path、catalog release 選択、policy、secret、
+artifact、approval、journal、observation、GroupHead は Space scope である。
 
 ```text
 manifest + space:acme-prod -> production catalog / policy / quotas
 manifest + space:acme-dev  -> development catalog / policy / quotas
 ```
 
-A public manifest must not contain `space`, `tenant`, `org`, credential, or
-namespace registry configuration fields. Those are deployment context / operator
-configuration, not authoring intent.
+public manifest は `space`、`tenant`、`org`、credential、namespace registry の
+構成 field を含んではならない。これらは deployment context / operator 設定で
+あり、authoring intent ではない。
 
 ## Resources
 
-Each `resources[]` entry declares one portable Shape resource.
+各 `resources[]` entry は 1 つの portable Shape resource を宣言する。
 
 ```yaml
 apiVersion: "1.0"
@@ -90,42 +90,41 @@ resources:
         DATABASE_URL: ${ref:db.connectionString}
 ```
 
-Rules:
+規則:
 
-- `shape` names the portable contract (`web-service@v1`, `database-postgres@v1`,
-  `object-store@v1`, and so on).
-- `provider` names the selected implementation for that Shape, such as
-  `@takos/aws-fargate`, `@takos/cloudflare-workers`, or a self-hosted provider.
-- `name` is the manifest-local resource identity and the source namespace for
-  `${ref:<name>.<field>}`.
-- `requires` is a capability subset requirement. Provider capabilities must be a
-  superset or validation rejects the resource.
+- `shape` は portable contract を指す (`web-service@v1`、
+  `database-postgres@v1`、`object-store@v1` 等)。
+- `provider` はその Shape に対して選ばれた implementation を指す
+  (`@takos/aws-fargate`、`@takos/cloudflare-workers`、自前 provider など)。
+- `name` は manifest 内の resource identity で、`${ref:<name>.<field>}` の
+  source namespace でもある。
+- `requires` は capability の subset 要件である。provider の capability が
+  superset でなければ validation はその resource を reject する。
 
 ## Templates
 
-Top-level `template` is not a current kernel manifest field. Historical clients
-used templates as authoring macros, but current deploy callers must submit the
-expanded `resources[]` form. If an operator keeps a template/compiler layer, it
-must run before `POST /v1/deployments`.
+top-level の `template` は kernel manifest の field ではない。authoring macro
+として template を使う場合は、`POST /v1/deployments` に到達する前に展開された
+`resources[]` 形に変換しておく必要がある。operator が template / compiler 層
+を保持する場合、それは `POST /v1/deployments` の前に走らせる。
 
 ## References
 
-`spec` values may use reference tokens:
+`spec` 値は reference token を使える。
 
 ```text
 ${ref:<resource>.<field>}
 ${secret-ref:<resource>.<field>}
 ```
 
-References create dependency edges between resources. The kernel validates the
-grammar, builds a DAG, rejects cycles, and applies resources in topological
-order. `secret-ref` is for secret-reference outputs and must not be used for
-plain outputs.
+参照は resource 間に依存 edge を作る。kernel は文法を validate し、DAG を構築
+し、循環を reject し、トポロジカル順序で resource を適用する。`secret-ref` は
+secret-reference output 用で、プレーン output には使ってはならない。
 
 ## Data Inputs
 
-Artifacts are not top-level manifest authority. They are Shape `spec` input
-values and are subject to the Shape/provider contract and artifact policy.
+artifact は top-level manifest の authority ではない。Shape `spec` の入力値で
+あり、Shape / provider contract と artifact policy に従う。
 
 ```yaml
 resources:
@@ -138,8 +137,8 @@ resources:
         hash: sha256:...
 ```
 
-Local paths are unresolved authoring inputs. They must become content-addressed
-artifact records before a remote kernel can apply them.
+ローカル path は未解決の authoring 入力である。remote kernel が apply する前に
+content-addressed な artifact record にしておく必要がある。
 
 ## Manifest to Intent Graph
 
@@ -163,20 +162,19 @@ ${ref:...} / ${secret-ref:...}:
   Link / dependency intent between resource outputs and inputs
 ```
 
-The OperationPlan and write-ahead journal architecture is derived from this
-intent graph. On the current public deploy route, `mode: "plan"` exposes a
-deterministic OperationPlan preview (DesiredSnapshot digest, OperationPlan
-digest, planned operations, and WAL idempotency tuple preview) without writing
-the journal. `mode: "apply"` / `mode: "destroy"` now derive the same public
-OperationPlan shape internally and write public WAL stage records to
-`takosumi_operation_journal_entries`, while the persisted public deployment
-record still carries the compatibility status / handle state used by
-`takosumi status` and destroy handle resolution. Public recovery currently
-supports side-effect-free `inspect`, guarded same-digest `continue`, and
-`compensate` that opens `activation-rollback` RevokeDebt. Connector-native
-compensate is exposed in the runtime-agent protocol with destroy fallback, while
-CatalogRelease adoption / signature verification is implemented in the registry
-domain. Public apply / destroy WAL invokes the adopted release as a fail-closed
-pre/post-commit verification step. Catalog-declared executable hook packages are
-manual reopen, clearance, connector-backed cleanup, and worker daemon scheduling
-are implemented as lifecycle primitives.
+OperationPlan と write-ahead journal のアーキテクチャはこの intent graph から
+導出される。public deploy route では、`mode: "plan"` は journal を書かずに
+決定的な OperationPlan preview (DesiredSnapshot digest、OperationPlan digest、
+計画 operation、WAL idempotency tuple preview) を出す。`mode: "apply"` /
+`mode: "destroy"` は内部で同じ public OperationPlan shape を導出し、public WAL
+stage record を `takosumi_operation_journal_entries` に書く。永続化された public
+deployment record は依然として `takosumi status` と destroy handle 解決で使う
+互換ステータス / handle state を保持する。public recovery は現在、副作用なしの
+`inspect`、same-digest を保証する `continue`、`activation-rollback` RevokeDebt
+を open する `compensate` を支援する。Connector-native compensate は destroy
+fallback と共に runtime-agent protocol で公開され、CatalogRelease の adopt /
+署名検証は registry domain に実装されている。public apply / destroy WAL は adopt
+済 release を fail-closed な pre/post-commit verification step として
+呼び出す。catalog 宣言の実行可能 hook package、manual reopen、clearance、
+connector backed cleanup、worker daemon スケジューリングは lifecycle primitive
+として実装される。

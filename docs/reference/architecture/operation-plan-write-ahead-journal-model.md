@@ -1,14 +1,16 @@
 # Operation Plan and Write-ahead Journal Model
 
-OperationPlan is derived work inside one Space. WriteAheadOperationJournal is
-execution authority.
+> このページでわかること: operation plan と WAL のモデル定義。
+
+OperationPlan は 1 つの Space 内で derived される work である。
+WriteAheadOperationJournal は実行の authority である。
 
 ## OperationPlan
 
-An OperationPlan is derived from `DesiredSnapshot` and `ObservationSet` for the
-same Space.
+OperationPlan は同じ Space の `DesiredSnapshot` と `ObservationSet` から derive
+される。
 
-It contains operations such as:
+含まれる operation の例:
 
 ```text
 apply-object
@@ -24,11 +26,11 @@ observe
 compensate
 ```
 
-OperationPlan is not canonical desired state.
+OperationPlan は canonical な desired state ではない。
 
 ## Write-ahead journal
 
-Any side-effecting operation follows this shape:
+side-effect を持つ operation はこの形に従う。
 
 ```text
 operation-intent-recorded
@@ -38,7 +40,7 @@ generated-object-observed
 operation-completed
 ```
 
-On failure:
+失敗時:
 
 ```text
 operation-failed
@@ -49,9 +51,9 @@ revoke-debt-created when needed
 
 ## Stage enumeration
 
-Each journal entry carries a `stage` drawn from a closed v1 enum. Stages run in
-the order below for a successful operation. `abort` and `skip` are terminal
-stages that may replace any forward stage.
+各 journal entry は closed v1 enum から `stage` を持つ。stage は成功 operation
+では以下の順序で進む。`abort` と `skip` は forward stage を置き換えうる終端
+stage である。
 
 ```text
 prepare      → pre-commit → commit → post-commit → observe → finalize
@@ -71,32 +73,31 @@ prepare      → pre-commit → commit → post-commit → observe → finalize
 | abort       | no                       | yes                  | no                       |
 | skip        | no                       | no                   | no                       |
 
-`pre-commit` is the canonical enforcement point for transform approval gates
-(see [DataAsset Model](./data-asset-model.md)) and for collision risks raised by
-[Link and Projection Model](./link-projection-model.md). `post-commit` is the
-only stage that may mutate already-live objects; debt is queued from there or
-`observe` when external cleanup cannot complete. New stages require an RFC
-(CONVENTIONS.md §6).
+`pre-commit` は transform approval gate
+([DataAsset Model](./data-asset-model.md) 参照) と
+[Link and Projection Model](./link-projection-model.md) が上げる衝突 risk の
+canonical な enforcement point である。`post-commit` は live object を変更
+しうる唯一の stage である。外部 cleanup が完了できないとき、debt はここまたは
+`observe` から queue される。新規 stage は RFC (CONVENTIONS.md §6) を要する。
 
 ## Idempotency keys
 
-Each journal entry carries a deterministic idempotency key:
+各 journal entry は決定的な idempotency key を持つ。
 
 ```text
 idempotencyKey = (spaceId, operationPlanDigest, journalEntryId)
 ```
 
-The triple is unique within a Space's WAL. On replay, an identical triple
-deterministically re-applies the same operation. If a replay arrives with the
-same `(spaceId, operationPlanDigest, journalEntryId)` but a mismatching effect
-digest from the previously recorded entry, the kernel hard-fails the operation
-and refuses to advance the stage. Recovery in that case must mint a new
-`operationPlanDigest` (a fresh OperationPlan).
+この 3 つ組は Space の WAL 内で一意である。replay 時、同じ 3 つ組は決定的に 同じ
+operation を再適用する。同じ `(spaceId, operationPlanDigest, journalEntryId)`
+で来た replay の effect digest が以前に記録された entry と一致しない場合、kernel
+は operation を hard-fail させ stage を進めない。その場合の recovery は新しい
+`operationPlanDigest` (新規 OperationPlan) を発行しなければならない。
 
 ## Pre/post-commit verification
 
-CatalogRelease may require kernel-owned verification at pre-commit and
-post-commit. The kernel does not run catalog-declared executable hook packages.
+CatalogRelease は pre-commit と post-commit で kernel 所有の verification を
+要求しうる。kernel は catalog が宣言する実行可能 hook package を実行しない。
 Verification lifecycle:
 
 ```text
@@ -108,8 +109,9 @@ Verification lifecycle:
                       observe/finalize evidence
 ```
 
-Verification must not bypass policy or approval re-validation. It may emit
-RevokeDebt only from `post-commit` or `observe` stages.
+Verification は policy または approval 再検証を bypass してはならない。
+RevokeDebt を発行できるのは `post-commit` または `observe` stage からのみで
+ある。
 
 ## Journal entries
 
@@ -130,7 +132,7 @@ JournalEntry:
 
 ## Deterministic generated ids
 
-Generated object ids should be computed before external calls.
+生成 object の id は外部呼び出しの前に計算されるべきである。
 
 ```text
 grant id = hash(spaceId, deploymentId, linkId, exportSnapshotId, accessMode)
@@ -140,7 +142,7 @@ ingress reservation id = hash(spaceId, groupId, exposureId, host, path)
 
 ## Actual effects overflow
 
-If `actualEffects` exceed `approvedEffects`:
+`actualEffects` が `approvedEffects` を超えた場合:
 
 ```text
 1. journal overflow
@@ -152,20 +154,20 @@ If `actualEffects` exceed `approvedEffects`:
 
 ## Space isolation
 
-An OperationPlan, OperationJournal, generated object id, compensation record,
-and RevokeDebt belong to exactly one Space. A journal entry from one Space must
-not be used as recovery authority in another Space.
+OperationPlan、OperationJournal、生成 object id、compensation record、
+RevokeDebt は厳密に 1 つの Space に属する。ある Space の journal entry を別
+Space の recovery authority として使ってはならない。
 
-Critical operations that mutate Space-global state are serialized per Space, and
-global ingress reservation may require additional operator-level serialization.
+Space-global な state を変更する critical operation は Space 単位で直列化され、
+global ingress 予約は operator-level の追加直列化を要しうる。
 
 ## OperationJournal retention
 
-OperationJournal retains side-effect and recovery history. Entries related to
-active generated objects, unresolved compensation, unresolved revoke debt, or
-current activation must not be compacted away.
+OperationJournal は side-effect と recovery の履歴を保持する。アクティブな 生成
+object、未解決の compensation、未解決の revoke debt、現在の activation に
+関連する entry は compaction で消してはならない。
 
-Separate stores may hold:
+別 store が保持しうるもの:
 
 ```text
 AuditLog

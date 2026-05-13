@@ -51,7 +51,7 @@ export interface Connector {
    * `["js-bundle"]`). Empty array means the connector does not consume an
    * artifact at all (managed services, DNS, raw object-store buckets).
    *
-   * The dispatcher validates `spec.artifact.kind` (or `spec.image` legacy
+   * The dispatcher validates `spec.artifact.kind` (or `spec.image` shorthand
    * treated as `oci-image`) against this list before invoking `apply`.
    */
   readonly acceptedArtifactKinds: readonly string[];

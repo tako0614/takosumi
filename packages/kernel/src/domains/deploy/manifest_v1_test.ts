@@ -44,7 +44,7 @@ Deno.test("manifest v1 resolver rejects unknown closed-envelope fields", () => {
   const result = resolveManifestResourcesV1({
     apiVersion: "1.0",
     kind: "Manifest",
-    profile: "legacy",
+    profile: "retired",
     resources: [EXTRA_RESOURCE],
   });
   assert.equal(result.ok, false);

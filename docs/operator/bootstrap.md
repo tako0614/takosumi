@@ -1,5 +1,8 @@
 # Operator Bootstrap
 
+> このページでわかること: kernel に bundled provider plugin
+> を接続する初期設定の手順。
+
 operator が **21 個の bundled provider plugin (default-on 20 + opt-in 1)** を
 kernel に wire するための factory `createTakosumiProductionProviders(opts)`
 の使い方をまとめます。

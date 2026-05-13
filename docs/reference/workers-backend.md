@@ -1,5 +1,7 @@
 # Workers backend implementation note
 
+> このページでわかること: Cloudflare Workers backend の実装上の注意点。
+
 Cloudflare Workers / Cloudflare Containers / wrangler.toml は Takosumi の
 reference materialization detail です。
 

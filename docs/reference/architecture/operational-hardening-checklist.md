@@ -1,5 +1,7 @@
 # Operational Hardening Checklist
 
+> このページでわかること: 運用 hardening のチェックリスト。
+
 ## Space isolation
 
 - [ ] Every Deployment, snapshot, journal, observation, approval, debt,

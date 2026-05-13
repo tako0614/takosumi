@@ -71,8 +71,7 @@ export function expandManifestResourcesV1(
  *
  * Preference order:
  *   1. `metadata.name`
- *   2. legacy top-level `name`
- *   3. deterministic hash of the resolved resource identities
+ *   2. deterministic hash of the resolved resource identities
  */
 export function readDeploymentNameV1(
   manifest: JsonObject,
@@ -83,8 +82,6 @@ export function readDeploymentNameV1(
     const name = metadata.name;
     if (typeof name === "string" && name.length > 0) return name;
   }
-  const name = manifest.name;
-  if (typeof name === "string" && name.length > 0) return name;
   return `unnamed-${fallbackResourceHash(resources)}`;
 }
 

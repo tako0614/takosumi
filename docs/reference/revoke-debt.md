@@ -1,10 +1,6 @@
 # RevokeDebt Model
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [WAL Stages](/reference/wal-stages),
-> [Approval Invalidation Triggers](/reference/approval-invalidation),
-> [Risk Taxonomy](/reference/risk-taxonomy),
-> [Lifecycle Protocol](/reference/lifecycle)
+> このページでわかること: RevokeDebt モデルの仕組みと解消手順。
 
 Takosumi v1 で「commit 済みだが取り消しきれなかった external effect / generated
 material」を表現するための RevokeDebt record の正式仕様です。reason / status の
@@ -123,19 +119,6 @@ worker を周期実行する。cadence と batch size は
 - `operator-action-required` から `open` に戻す path も aging window を消費
   しない (operator の判断で retry queue に戻す)。
 
-## Future Multi-Space ownership
-
-は次の規則で決める:
-
-- **生成 Space が default owner**: generated material を最初に materialize した
-  Space が `ownerSpaceId` を持つ。 された debt は、importing Space を
-  `ownerSpaceId` とする。`originatingSpaceId` は exporting Space を保持する
-  (audit / drift 連動の参照点)。
-- **Exporting Space は read-only mirror**: exporting Space からは status を
-  mutate できない。`open` / `operator-action-required` / `cleared` への
-  transition は importing Space owner の責務。 state に反映する
-  (`refresh-required` / `revoked` などへの遷移条件)。
-
 ## ActivationSnapshot propagation (fail-safe-not-fail-closed)
 
 RevokeDebt の status は ActivationSnapshot に伝播し、traffic shift の挙動を gate
@@ -188,3 +171,10 @@ production deployment では status 表示を必須とする:
 - `docs/reference/architecture/exposure-activation-model.md` —
   ActivationSnapshot propagation と fail-safe-not-fail-closed スタンスの議論
 - `docs/reference/architecture/space-model.md` — future Multi-Space ownership と
+
+## 関連ページ
+
+- [WAL Stages](/reference/wal-stages)
+- [Approval Invalidation Triggers](/reference/approval-invalidation)
+- [Risk Taxonomy](/reference/risk-taxonomy)
+- [Lifecycle Protocol](/reference/lifecycle)

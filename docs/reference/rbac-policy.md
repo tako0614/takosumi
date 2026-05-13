@@ -1,16 +1,19 @@
 # RBAC Policy
 
-This page is retained as a link-compatible migration stub.
+> このページでわかること: RBAC ポリシーのモデルと設定方法。
 
-RBAC for accounts, spaces, AppInstallations, AppBindings, and AppGrants is owned
-by the operator's account plane (reference implementation: Takosumi Accounts in
-`takosumi-cloud/`), not by the takosumi kernel. Kernel provider authorization is
-limited to operator configuration, deploy token policy, ProviderPlugin
-contracts, and runtime-agent trust.
+account / space / AppInstallation / AppBinding / AppGrant に対する RBAC は
+operator の account plane が所有する (reference 実装: `takosumi-cloud/` の
+Takosumi Accounts)。 takosumi kernel の provider authorization は次の範囲に
+限られる:
 
-References:
+- operator configuration
+- deploy token policy
+- ProviderPlugin contract
+- runtime-agent trust
+
+## 関連ページ
 
 - `takosumi-cloud/docs/accounts-service.md`
 - `docs/platform/app-installation.md`
-- `docs/reference/binding-catalog.md`
-- `docs/reference/namespace-exports.md`
+- [Namespace Exports](/reference/namespace-exports)

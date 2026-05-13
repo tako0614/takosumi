@@ -1,18 +1,15 @@
 # Plan Output
 
-> Stability: stable Audience: integrator, kernel-implementer See also:
-> [Kernel HTTP API](/reference/kernel-http-api), [CLI](/reference/cli),
-> [Manifest Validation](/reference/manifest-validation),
-> [DataAsset Kinds](/reference/artifact-kinds)
+> このページでわかること: deploy plan の出力形式と読み方。
 
-This page defines the **current public** plan response returned by
-`takosumi plan` and `POST /v1/deployments` with `mode: "plan"`.
+本ページは、`takosumi plan` と `POST /v1/deployments` の `mode: "plan"` が返す
+**current public** な plan response を定義する。
 
-The current public plan path uses the same Shape + Provider validation and
-reference DAG resolution as apply, but runs it in dry-run mode. It returns a
-deterministic `operationPlanPreview` with the public DesiredSnapshot digest,
-OperationPlan digest, and WAL idempotency tuple preview. It does **not** write
-the WAL or expose the full internal Risk / Approval document yet.
+current の public plan path は apply と同じ Shape + Provider 検証と reference
+DAG 解決を使うが、それを dry-run モードで実行する。public DesiredSnapshot
+digest、OperationPlan digest、WAL idempotency tuple preview を含む決定的な
+`operationPlanPreview` を返す。WAL を書き込まず、完全な内部 Risk / Approval
+ドキュメントもまだ公開しない。
 
 ## Request
 
@@ -31,8 +28,8 @@ Remote `takosumi plan <manifest>` posts the same deploy public envelope as
 }
 ```
 
-The manifest envelope and template/resource validation rules are the same as
-`mode: "apply"`.
+manifest envelope と template / resource 検証ルールは `mode: "apply"` と同じ
+である。
 
 ## Success Shape
 
@@ -175,7 +172,7 @@ API error envelope documented in [Kernel HTTP API](/reference/kernel-http-api).
 
 ## Side-Effect Boundary
 
-Plan is side-effect free in the current public route:
+current public route では plan は副作用が無い。
 
 - no provider `apply` / `destroy` call
 - no runtime-agent lifecycle RPC
@@ -200,9 +197,9 @@ same `{ status, outcome }` envelope. There is no current global `--json`,
 
 ## Internal-Only OperationPlan Fields
 
-The public `operationPlanPreview` is a deterministic preview, not execution
-authority. The following fields still belong to the internal OperationPlan / WAL
-architecture model and are **not** current public plan output:
+public な `operationPlanPreview` は決定的な preview であって、実行 authority
+ではない。次のフィールドは依然として内部 OperationPlan / WAL アーキテクチャ
+モデルに属し、current public plan の出力には **含まれない**。
 
 ```text
 predictedActualEffectsDigest
@@ -223,3 +220,10 @@ route tests, OpenAPI, CLI rendering tests, and migration notes.
 - `docs/reference/architecture/snapshot-model.md`
 - `docs/reference/architecture/execution-lifecycle.md`
 - `docs/reference/architecture/manifest-model.md`
+
+## 関連ページ
+
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [CLI](/reference/cli)
+- [Manifest Validation](/reference/manifest-validation)
+- [DataAsset Kinds](/reference/artifact-kinds)

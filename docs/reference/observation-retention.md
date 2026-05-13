@@ -1,12 +1,6 @@
 # Observation Retention
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Lifecycle Protocol](/reference/lifecycle),
-> [Audit Events](/reference/audit-events),
-> [Journal Compaction](/reference/journal-compaction),
-> [RevokeDebt Model](/reference/revoke-debt),
-> [Approval Invalidation Triggers](/reference/approval-invalidation),
-> [Compliance Retention](/reference/compliance-retention)
+> このページでわかること: observation データの保持期間と GC ポリシー。
 
 Takosumi v1 で kernel が保持する observed state には複数の retention 層が
 あり、それぞれ目的・寿命・operator 制御点が異なる。本 reference は
@@ -198,3 +192,12 @@ compliance / approval invalidation の保証は崩れない。
   由来の Risk と approval invalidation の interplay
 - `docs/reference/architecture/operator-boundaries.md` — observe phase の
   operator 可視性 と authoritative source の trust 境界
+
+## 関連ページ
+
+- [Lifecycle Protocol](/reference/lifecycle)
+- [Audit Events](/reference/audit-events)
+- [Journal Compaction](/reference/journal-compaction)
+- [RevokeDebt Model](/reference/revoke-debt)
+- [Approval Invalidation Triggers](/reference/approval-invalidation)
+- [Compliance Retention](/reference/compliance-retention)

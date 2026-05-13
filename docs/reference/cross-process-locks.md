@@ -1,10 +1,6 @@
 # Cross-Process Locks
 
-> Stability: stable Audience: kernel-implementer See also:
-> [Lifecycle Protocol](/reference/lifecycle),
-> [WAL Stages](/reference/wal-stages),
-> [Storage Schema](/reference/storage-schema),
-> [Readiness Probes](/reference/readiness-probes)
+> このページでわかること: プロセス間ロックの仕組みと設定。
 
 Takosumi v1 における cross-process lock の正式仕様。複数 kernel pod が 並走する
 production 配置でも特定 resource 群への mutation が直列化される
@@ -73,10 +69,11 @@ acquire 成功後、kernel は heartbeat を回し、`try { ... } finally { rele
 release を保証する。release は `holderId` と `epoch` の両方が一致する 場合だけ
 row を消す。
 
-`TakosumiDeploymentRecordStore.acquireLock` は route contract 互換性のため、
-busy を返さず lease が取れるまで poll/wait する。これは
-`public-deploy:<tenantId>:<name>` scope に限定される挙動で、full lifecycle
-operation lock は上記の fail-closed busy semantics に従う。
+`TakosumiDeploymentRecordStore.acquireLock` の public deploy lock は、同じ
+`tenantId` / deployment `name` への concurrent apply を直列化するため、lease が
+取れるまで poll/wait する。これは `public-deploy:<tenantId>:<name>` scope に
+限定される挙動で、full lifecycle operation lock は上記の fail-closed busy
+semantics に従う。
 
 ## Heartbeat
 
@@ -206,3 +203,10 @@ current v1 で cross-Space lock を取る operation は catalog release activati
   mode 選定 rationale
 - `docs/reference/architecture/operator-boundaries.md` — lock store の trust
   境界、SQL backed 必須化の判断
+
+## 関連ページ
+
+- [Lifecycle Protocol](/reference/lifecycle)
+- [WAL Stages](/reference/wal-stages)
+- [Storage Schema](/reference/storage-schema)
+- [Readiness Probes](/reference/readiness-probes)

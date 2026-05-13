@@ -1,17 +1,11 @@
 # Logging Conventions
 
-> Stability: stable Audience: operator, kernel-implementer, integrator See also:
-> [Telemetry / Metrics](/reference/telemetry-metrics),
-> [Audit Events](/reference/audit-events),
-> [Time / Clock Model](/reference/time-clock-model),
-> [Secret Partitions](/reference/secret-partitions),
-> [Environment Variables](/reference/env-vars)
+> このページでわかること: kernel のログ出力規約と structured logging の形式。
 
-This page is the v1 contract for log emission across every Takosumi process:
-kernel, runtime-agent, CLI, and in-process plugins. It defines the line format,
-the required fields, the forbidden fields, the closed log-level enum and its
-semantic boundaries, the output sink, redaction rules, the relationship to the
-audit log, trace correlation, and the operator-facing configuration knobs.
+本ページは、すべての Takosumi process (kernel、runtime-agent、CLI、in-process
+plugin) のログ発行に関する v1 contract である。行フォーマット、必須フィールド、
+禁止フィールド、closed な log-level enum とその意味境界、出力 sink、redaction
+ルール、audit log との関係、trace 相関、operator 向けの設定キーを定義する。
 
 ::: info Current implementation status The kernel HTTP request correlation
 middleware is current: API responses echo `x-request-id` and `x-correlation-id`,
@@ -32,8 +26,8 @@ bytes.
 {"ts":"2026-05-05T10:00:00.123Z","level":"info","subsystem":"kernel","msg":"apply started","spaceId":"sp_01H...","operationId":"op_01H..."}
 ```
 
-The kernel does not buffer log lines across process exit; every line is flushed
-before the kernel acknowledges shutdown.
+kernel は process 終了を跨いでログ行を buffer しない。kernel が shutdown を ack
+する前にすべての行が flush される。
 
 ## Required fields
 
@@ -61,7 +55,7 @@ shutdown, and global periodic worker tick.
 
 ## Forbidden fields
 
-The following must never appear in log output.
+次のものはログ出力に決して現れてはならない。
 
 - **Raw secret values.** A line that would otherwise carry a secret carries the
   secret reference (`secret://<partition>/<key>`) instead. The kernel's log
@@ -79,8 +73,8 @@ line is dropped.
 
 ## Log-level boundaries
 
-The level enum is closed. The semantic boundary between adjacent levels is
-normative; misapplying a level is a kernel implementation bug.
+level enum は closed。隣接 level 間の意味境界は normative。level を誤適用する
+ことは kernel 実装バグである。
 
 - **debug** — operator verbose troubleshooting only. Off by default in
   production. Examples: per-stage trace inside `commit`, per-row storage
@@ -101,8 +95,8 @@ normative; misapplying a level is a kernel implementation bug.
 
 ## Output sink
 
-The kernel writes logs to **stdout** (or **stderr** for `error` and `fatal`).
-The kernel does not rotate, compress, or ship logs itself.
+kernel はログを **stdout** に書く (`error` と `fatal` は **stderr**)。kernel
+自身はログを rotate / 圧縮 / 出荷しない。
 
 - 12-factor: the operator's container runtime captures stdout / stderr and
   forwards to a structured collector (Loki, Fluentd, OpenSearch, CloudWatch,
@@ -115,7 +109,7 @@ The kernel does not rotate, compress, or ship logs itself.
 
 ## Relationship to audit events
 
-Logs and audit events are different surfaces with different guarantees.
+log と audit event は異なる保証を持つ別の surface である。
 
 - **Audit events** are tamper-evident, hash-chained, indexed,
   retention-governed, and consumed for compliance evidence. Their taxonomy is
@@ -124,27 +118,27 @@ Logs and audit events are different surfaces with different guarantees.
   retention-governed, and not part of the closed audit taxonomy. They may carry
   richer context than the corresponding audit event but never replace it.
 
-A kernel decision that is auditable always produces an audit event first; the
-corresponding log line is informational. Operators investigating an incident
-pivot from logs to audit events via `operationId` or `eventId`.
+監査可能な kernel の決定は必ず最初に audit event を生成し、対応するログ行は
+情報目的である。incident を調査する operator は `operationId` や `eventId` を
+通じてログから audit event に pivot する。
 
 ## Trace correlation
 
-Every kernel HTTP request log emitted by the correlation middleware carries
-`trace_id` and `span_id` fields for the active request span. The fields use the
-OTLP hex-string form so a sink can stitch logs to traces without further
-encoding.
+相関 middleware が emit する各 kernel HTTP request ログには、アクティブな
+request span の `trace_id` と `span_id` フィールドが含まれる。これらは OTLP の
+hex 文字列形式を使うため、sink は追加エンコードなしにログを trace と紐付け
+られる。
 
 ```text
 "trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"00f067aa0ba902b7"
 ```
 
-Logs emitted outside an active span omit the fields instead of emitting empty
-strings.
+アクティブな span の外で emit されるログは空文字列を出すのではなくフィールド
+自体を省略する。
 
 ## Operator configuration
 
-The kernel reads these log-related environment variables.
+kernel は次のログ関連環境変数を読む。
 
 | Variable                     | Type | Default                                  | Notes                                                                                          |
 | ---------------------------- | ---- | ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -155,13 +149,12 @@ The kernel reads these log-related environment variables.
 In `production` and `staging`, `TAKOSUMI_LOG_FORMAT=text` is rejected at boot.
 Text output is permitted only in `local` and `development`.
 
-The CLI reads the same variables for its own log emission. CLI lines carry
-`subsystem: cli`. The runtime-agent reads the same variables and emits
-`subsystem: runtime-agent`.
+CLI は自身のログ発行に同じ環境変数を読む。CLI 行は `subsystem: cli` を持つ。
+runtime-agent も同じ環境変数を読み、`subsystem: runtime-agent` を発行する。
 
 ## Per-subsystem conventions
 
-Beyond the shared envelope, each subsystem follows narrow extra rules.
+共有 envelope に加えて、各 subsystem は次の狭い追加規則に従う。
 
 - **kernel** — every line that crosses an HTTP boundary carries `route` (the
   matched route template, never the resolved URL) and `status` (the HTTP status
@@ -175,19 +168,17 @@ Beyond the shared envelope, each subsystem follows narrow extra rules.
 - **plugin** — every line carries `pluginId` and `port` (the plugin port name
   from the closed plugin port set).
 
-These fields are additive: a line that already carries an HTTP `requestId` still
-carries `route` and `status` when the line is emitted from the kernel.
+これらのフィールドは付加的: HTTP `requestId` を既に持つ行も、kernel から発行
+される際は `route` と `status` を持つ。
 
 ## Sampling
 
-Logs are not sampled. Every `info` and higher line that the kernel decides to
-emit is written to the sink. Sampling, if any, is the collector's
-responsibility, applied after ingestion.
+ログは sample されない。kernel が emit すると決めた `info` 以上の行はすべて sink
+に書かれる。sampling があるなら collector の責務であり、ingest 後に適用 される。
 
-`debug` lines may be subject to per-subsystem rate limits inside the kernel to
-prevent runaway debug output from drowning the sink. The limiter drops surplus
-`debug` lines silently and exposes the drop count via
-`takosumi_log_debug_dropped_count`.
+暴走 debug 出力が sink を埋め尽くさないよう、`debug` 行は kernel 内で per-
+subsystem の rate limit を受けうる。limiter は超過分の `debug` 行を黙って drop
+し、drop 数を `takosumi_log_debug_dropped_count` で公開する。
 
 ## Related architecture notes
 
@@ -197,3 +188,11 @@ prevent runaway debug output from drowning the sink. The limiter drops surplus
   between observation logs and the RevokeDebt taxonomy.
 - `reference/architecture/policy-risk-approval-error-model` — error / fatal
   mapping to the closed DomainErrorCode enum.
+
+## 関連ページ
+
+- [Telemetry / Metrics](/reference/telemetry-metrics)
+- [Audit Events](/reference/audit-events)
+- [Time / Clock Model](/reference/time-clock-model)
+- [Secret Partitions](/reference/secret-partitions)
+- [Environment Variables](/reference/env-vars)

@@ -1,14 +1,6 @@
 # Tenant Export and Deletion
 
-> Stability: stable Audience: operator, integrator, kernel-implementer See also:
-> [Tenant Provisioning](/reference/tenant-provisioning),
-> [Storage Schema](/reference/storage-schema),
-> [Audit Events](/reference/audit-events),
-> [Compliance Retention](/reference/compliance-retention),
-> [Backup and Restore](/reference/backup-restore),
-> [Secret Partitions](/reference/secret-partitions),
-> [Artifact GC](/reference/artifact-gc),
-> [Kernel HTTP API](/reference/kernel-http-api)
+> このページでわかること: テナントデータの export と削除の手順。
 
 Takosumi v1 における tenant data export と Space deletion の kernel-side API。
 顧客が自分の Space data を logical な形で取り出す経路 (data portability / GDPR
@@ -241,3 +233,14 @@ mode、2-phase deletion、redaction primitive を提供する。
   退役時の RevokeDebt 残処理と export の関係
 - `docs/reference/architecture/operator-boundaries.md` — kernel が公開する
   export / deletion primitive と operator policy 層の責務分担
+
+## 関連ページ
+
+- [Tenant Provisioning](/reference/tenant-provisioning)
+- [Storage Schema](/reference/storage-schema)
+- [Audit Events](/reference/audit-events)
+- [Compliance Retention](/reference/compliance-retention)
+- [Backup and Restore](/reference/backup-restore)
+- [Secret Partitions](/reference/secret-partitions)
+- [Artifact GC](/reference/artifact-gc)
+- [Kernel HTTP API](/reference/kernel-http-api)

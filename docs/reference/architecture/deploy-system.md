@@ -1,5 +1,7 @@
 # Kernel Deploy System
 
+> このページでわかること: kernel deploy system の内部構造とパイプライン。
+
 > **Internal implementation**
 >
 > このページは takosumi kernel deploy system の internal 実装を説明する。
@@ -251,10 +253,8 @@ field 定義は
 ## 5. 共通基盤: Deployment と Shape resource
 
 upstream path のいずれを通っても、kernel に apply された後の状態は takosumi
-kernel の Deployment lifecycle に集約されます。current authoring surface は
-`apiVersion: "1.0"` + `kind: Manifest` + `resources[]` の Shape model です。旧
-AppSpec の `components` / `routes` / `bindings` / `publications` は current
-manifest ではありません。
+kernel の Deployment lifecycle に集約されます。authoring surface は
+`apiVersion: "1.0"` + `kind: Manifest` + `resources[]` の Shape model です。
 
 - **Deployment** — input manifest、resource DAG、provider operation、 conditions
   / WAL を 1 lifecycle として扱う中核 record

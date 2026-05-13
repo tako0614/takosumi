@@ -1,27 +1,23 @@
 # Shape Catalog
 
-> Stability: stable Audience: integrator See also:
-> [Provider Plugins](/reference/providers),
-> [Access Modes](/reference/access-modes),
-> [Closed Enums](/reference/closed-enums)
+> このページでわかること: Shape catalog の一覧と各 shape の spec フィールド。
 
 A **Shape** is the v1 abstract resource type that a manifest declares and a
 [provider plugin](/reference/providers) materializes. Each shape pins three
 things: an input `Spec` schema, a fixed `outputFields` set, and a capability
 vocabulary the provider must advertise to be selectable.
 
-Shapes are owned by the Takosumi catalog. Adding a new shape is a breaking
-change to the ecosystem and requires a `CONVENTIONS.md` §6 RFC. New cloud
-support is delivered by adding **providers** for an existing shape, not by
-forking shapes.
+Shape は Takosumi catalog が所有する。新 shape の追加はエコシステムへの破壊的
+変更であり、`CONVENTIONS.md` §6 RFC を要する。新しいクラウド対応は shape を fork
+するのではなく、既存 shape に **provider** を追加することで提供される。
 
 Source: `packages/contract/src/shape.ts` (the contract and registry),
 `packages/plugins/src/shapes/<shape>.ts` (the bundled five).
 
 ## Capability extension guide
 
-Capabilities are **open strings**. The catalog does **not** lock the set into a
-closed enum; instead, the v1 rule is open string + reserved prefix:
+capability は **open string** である。catalog は集合を closed enum に**ロック
+しない**。代わりに、v1 の規則は open string + reserved prefix である。
 
 | Prefix       | Owner                                                                                                            |
 | ------------ | ---------------------------------------------------------------------------------------------------------------- |
@@ -65,11 +61,10 @@ meaning. Adding a new reserved name follows the §6 RFC.
 | `custom-domain`     | `v1`    | DNS + TLS-terminated public domain                                  |
 | `worker`            | `v1`    | Serverless JS function backed by a `js-bundle` artifact             |
 
-The notation in the lifecycle persistence column below uses the v1 object
-lifecycle classes: managed / generated / external / operator / imported. For the
-bundled shapes, every output field is **generated** — the provider writes the
-value during apply and the kernel persists it in the resolved output map for
-`${ref:...}` consumption.
+下記の lifecycle persistence 列の表記は、v1 object lifecycle class (managed /
+generated / external / operator / imported) を使う。同梱 shape では、すべての
+output field は **generated** である — provider が apply 中に値を書き、kernel
+はそれを `${ref:...}` consume 用の resolved output マップに永続化する。
 
 ## `object-store@v1`
 
@@ -289,3 +284,9 @@ vocabulary であり、current kernel は通常の `resources[]` として
   へ寄せる設計 rationale。
 - [Extending the Shape Model](/extending) — provider / template / new-shape
   extension flow.
+
+## 関連ページ
+
+- [Provider Plugins](/reference/providers)
+- [Access Modes](/reference/access-modes)
+- [Closed Enums](/reference/closed-enums)

@@ -1,18 +1,11 @@
 # Bootstrap Protocol
 
-> Stability: stable Audience: operator See also: [CLI](/reference/cli),
-> [Environment Variables](/reference/env-vars),
-> [Storage Schema](/reference/storage-schema),
-> [Secret Partitions](/reference/secret-partitions),
-> [Cross-Process Locks](/reference/cross-process-locks),
-> [Catalog Release Trust](/reference/catalog-release-trust),
-> [Audit Events](/reference/audit-events),
-> [Migration / Upgrade](/reference/migration-upgrade),
-> [Readiness Probes](/reference/readiness-probes)
+> このページでわかること: kernel 初回起動時の bootstrap プロトコル。
 
-Takosumi kernel の **初回起動 (new install)** における bootstrap 手順の 正本。本
-reference は new install のみを対象とし、既存 install の upgrade は
-[Migration / Upgrade](/reference/migration-upgrade) が扱う。
+Takosumi kernel の **初回起動 (new install)** における bootstrap
+手順をまとめます。 本ページは new install のみを対象とし、既存 install の
+upgrade は [Migration / Upgrade](/reference/migration-upgrade)
+を参照してください。
 
 Bootstrap は次を担う。
 
@@ -191,15 +184,15 @@ Bootstrap は再起動で重複実行されない。
 
 ## CLI Exposure
 
-The public `takosumi` CLI is a manifest deploy engine and does **not** run this
-bootstrap protocol. Bootstrap is currently driven by kernel startup,
-operator-managed deployment automation, and internal services.
+public な `takosumi` CLI は manifest deploy engine であり、この bootstrap
+protocol を **実行しない**。bootstrap は現在、kernel 起動・operator 管理の
+デプロイ自動化・内部サービスによって駆動される。
 
-The current public CLI surface is documented in [CLI](/reference/cli).
+現行 public CLI surface は [CLI](/reference/cli) に文書化されている。
 
-If a future operator bootstrap CLI is added, this reference must be updated with
-the exact command, flags, exit codes, and tests before documenting it as a
-supported operator workflow.
+将来 operator 向け bootstrap CLI が追加される場合は、サポートされる operator
+workflow として文書化する前に、本リファレンスを正確なコマンド・flag・exit
+code・test と共に更新しなければならない。
 
 ## Multi-pod bootstrap
 
@@ -253,3 +246,15 @@ semantics、kernel ↔ runtime-agent skew、rollback gate は
 - `docs/reference/architecture/catalog-release-descriptor-model.md`
 - `docs/reference/architecture/space-model.md`
 - `docs/reference/architecture/operational-hardening-checklist.md`
+
+## 関連ページ
+
+- [CLI](/reference/cli)
+- [Environment Variables](/reference/env-vars)
+- [Storage Schema](/reference/storage-schema)
+- [Secret Partitions](/reference/secret-partitions)
+- [Cross-Process Locks](/reference/cross-process-locks)
+- [Catalog Release Trust](/reference/catalog-release-trust)
+- [Audit Events](/reference/audit-events)
+- [Migration / Upgrade](/reference/migration-upgrade)
+- [Readiness Probes](/reference/readiness-probes)

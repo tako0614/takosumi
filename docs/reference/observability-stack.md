@@ -1,76 +1,70 @@
 # Observability Stack Ownership
 
-> Stability: stable Audience: operator, kernel-implementer, integrator See also:
-> [Telemetry / Metrics](/reference/telemetry-metrics),
-> [Logging Conventions](/reference/logging-conventions),
-> [SLA Breach Detection](/reference/sla-breach-detection),
-> [Incident Model](/reference/incident-model),
-> [Self-hosting Operator Guide](/operator/self-host)
+> このページでわかること: observability stack の所有モデルと推奨構成。
 
-This page is the v1 ownership decision for Takosumi observability. It separates
-the kernel-owned signal contract from the operator-owned monitoring stack, then
-defines the SLI / SLO targets that bundled dashboards and alert policies use.
+Takosumi の observability に関する v1 の所有モデルです。 kernel が所有する
+signal contract と、 operator が所有する monitoring stack を分け、 同梱
+dashboard / alert policy が用いる SLI / SLO を定義します。
 
-::: info Current implementation status The kernel currently exports readiness
-probes, audit events, JSON HTTP request logs, Prometheus metrics, native OTLP
-metric push, SLA breach events, and the bundled deploy Grafana dashboard. Native
-OTLP HTTP server spans, WAL-backed provider operation spans, runtime-agent loop
-spans, and internal RPC client spans are implemented. Operators can correlate
-HTTP logs, traces, metrics, audit events, and deploy records through
-`requestId`, `correlationId`, `spaceId`, `groupId`, and deployment identifiers.
-:::
+::: info 実装状況 kernel は readiness probe、 audit event、 JSON HTTP request
+log、 Prometheus metric、 native OTLP metric push、 SLA breach event、 同梱
+deploy Grafana dashboard を提供。 native OTLP の HTTP server span、 WAL 連携の
+provider operation span、 runtime-agent loop span、 internal RPC client span
+も実装済み。 operator は `requestId` / `correlationId` / `spaceId` / `groupId` /
+deployment identifier で HTTP log / trace / metric / audit event / deploy record
+を相関できます。 :::
 
-## Ownership Decision
+## 所有モデル
 
-Takosumi kernel owns the **shape and emission** of signals:
+Takosumi kernel は signal の **形状と emission** を所有します。
 
-| Signal               | Kernel responsibility                                                                                                 |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Readiness            | `/livez`, `/readyz`, `/status/summary` semantics and response shape                                                   |
-| Metrics              | v1 metric names, labels, units, `/metrics`, and OTLP metric export                                                    |
-| Traces               | HTTP server / provider / runtime-agent / internal RPC span emission, `traceparent` propagation, and OTLP trace export |
-| Logs                 | HTTP request id propagation, JSON request log envelope, and redaction rules                                           |
-| Audit                | tamper-evident audit event chain, retention policy controls, and replication primitives                               |
-| SLA breach detection | threshold evaluation, state transitions, audit / outbox / notification signal publish                                 |
-| Dashboard artifact   | versioned Grafana JSON under `deploy/observability/grafana/`                                                          |
+| Signal               | kernel の責務                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Readiness            | `/livez` / `/readyz` / `/status/summary` の semantics と response shape                                      |
+| Metrics              | v1 の metric 名 / label / unit、 `/metrics`、 OTLP metric export                                             |
+| Traces               | HTTP server / provider / runtime-agent / internal RPC span emission、 `traceparent` 伝播、 OTLP trace export |
+| Logs                 | HTTP request id 伝播、 JSON request log envelope、 redaction rule                                            |
+| Audit                | tamper-evident な audit event chain、 retention policy、 replication primitive                               |
+| SLA breach detection | threshold 評価、 state 遷移、 audit / outbox / notification signal publish                                   |
+| Dashboard artifact   | `deploy/observability/grafana/` 配下の versioned Grafana JSON                                                |
 
-Takosumi kernel does **not** own the operator's collector, long-term backend,
-paging provider, public status page, incident comms, or commercial SLA credit
-calculation.
+kernel は operator の collector、 long-term backend、 paging provider、 public
+status page、 incident communication、 商用 SLA credit 計算を **所有
+しません**。
 
-## Managed vs Self-hosted
+## Managed と Self-hosted
 
-The same signal contract is used in both operating modes.
+両モードで同じ signal contract を使います。
 
-| Concern                      | Self-hosted operator owns                                      | Managed distribution owns                                            |
-| ---------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Prometheus scrape            | scrape target, token distribution, retention, label relabeling | platform Prometheus or compatible managed metrics backend            |
-| OTLP metrics                 | collector endpoint, auth headers, retry / queue policy         | collector fleet, tenant routing, remote write, exporter credentials  |
-| OTLP traces                  | collector endpoint, auth headers, sampling / retention policy  | collector fleet, tenant routing, trace backend, exporter credentials |
-| Logs                         | stdout / stderr collector, retention, search index             | log pipeline, retention regime, customer support access controls     |
-| Grafana dashboards           | import, datasource binding, folder / RBAC                      | dashboard provisioning, tenant foldering, release migration          |
-| Alerting                     | alert rules, paging integration, on-call schedule              | managed alert rules, paging provider, escalation and status workflow |
-| Audit replication            | external immutable store and consistency verification          | regulated archive backend, proof export, auditor access workflow     |
-| Customer-facing status / SLA | status page, credit policy, customer messaging                 | branded status surface, customer comms, invoice / credit integration |
+| 関心事                       | Self-hosted operator の所有                             | Managed distribution の所有                                            |
+| ---------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Prometheus scrape            | scrape target、 token 配布、 retention、 label relabel  | platform Prometheus 互換 managed metrics backend                       |
+| OTLP metrics                 | collector endpoint、 auth header、 retry / queue policy | collector fleet、 tenant routing、 remote write、 exporter credential  |
+| OTLP traces                  | collector endpoint、 auth header、 sampling / retention | collector fleet、 tenant routing、 trace backend、 exporter credential |
+| Logs                         | stdout / stderr collector、 retention、 search index    | log pipeline、 retention regime、 customer support access              |
+| Grafana dashboards           | import、 datasource 紐付け、 folder / RBAC              | dashboard provisioning、 tenant foldering、 release migration          |
+| Alerting                     | alert rule、 paging integration、 on-call schedule      | managed alert rule、 paging provider、 escalation / status flow        |
+| Audit replication            | 外部 immutable store と整合性検証                       | 規制対応 archive backend、 proof export、 auditor access flow          |
+| Customer-facing status / SLA | status page、 credit policy、 顧客コミュニケーション    | branded status、 customer comms、 invoice / credit 連携                |
 
-Self-hosted installs should treat the bundled dashboard and PromQL below as the
-supported starting point, not as a complete incident-management product. Managed
-distributions may add richer labels and routing in their collector, but must not
-change the kernel metric names or labels defined in
-[Telemetry / Metrics](/reference/telemetry-metrics).
+self-hosted の install では、 同梱 dashboard と下記 PromQL を出発点として
+扱ってください (完成された incident 管理製品ではありません)。 managed
+distribution は collector で label / routing を拡張できますが、
+[Telemetry / Metrics](/reference/telemetry-metrics) で定義した kernel metric
+名と label は変更しません。
 
-## Reference Topologies
+## 参照 topology
 
-Self-hosted minimal topology:
+self-hosted の最小構成:
 
 ```text
 takosumi-api /metrics  -> Prometheus -> Grafana
 takosumi stdout/stderr -> log collector -> log backend
 ObservabilitySink      -> OTLP collector -> metrics / traces backend
-audit_events           -> SQL + optional immutable external replication
+audit_events           -> SQL + 任意の外部 immutable replication
 ```
 
-Managed topology:
+managed の構成:
 
 ```text
 takosumi kernel signals -> managed collector layer -> tenant metrics/log/audit backends
@@ -78,14 +72,14 @@ SLA breach events       -> notification + incident workflow
 Grafana dashboard JSON  -> provisioned dashboard template
 ```
 
-The collector layer may add resource attributes such as region, cluster, pod, or
-environment. It must not add high-cardinality labels to the kernel-owned v1
-metric series.
+collector layer は region / cluster / pod / environment などの resource
+attribute を追加できますが、 kernel 所有の v1 metric series に高 cardinality の
+label を追加してはいけません。
 
-## SLI / SLO Targets
+## SLI / SLO 目標
 
-These targets are the default operator SLOs for GA readiness. They are product
-targets, not hard-coded kernel behavior.
+GA 評価時の operator SLO の既定値です (kernel が hard-code する挙動ではな く、
+product 目標として提示します)。
 
 | SLI                        | Measurement                                                                                                                                                        | Target                | Primary owner             |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------- | ------------------------- |
@@ -97,46 +91,52 @@ targets, not hard-coded kernel behavior.
 | Failed deploy MTTD         | time from failed deploy metric / SLA observation to alert receipt                                                                                                  | < 5 minutes           | alerting owner            |
 | Restore MTTR               | time from incident acknowledgement to successful mitigation / rollback                                                                                             | < 30 minutes          | on-call owner             |
 
-For installations with low deploy volume, success-rate alerts should use burn
-rate windows and minimum event counts. A single failed deploy in a quiet staging
-cluster should create a warning, not a page.
+deploy 量が少ない環境では burn rate window と minimum event count を併用し、
+quiet な staging で 1 件失敗しただけで page しないよう調整してください。
 
-## Alert Policy
+## Alert policy
 
-Default alert policy:
+既定の alert policy:
 
-| Condition                                    | Severity | Action                                                      |
-| -------------------------------------------- | -------- | ----------------------------------------------------------- |
-| Deploy success rate below target for 30 min  | warning  | notify deploy operator; inspect provider failures           |
-| Deploy success rate below target for 2 hours | critical | page on-call; open or attach to an incident                 |
-| Apply latency p95 above target for 30 min    | warning  | inspect provider latency / artifact fetch path              |
-| API 5xx-free ratio below target for 10 min   | critical | page kernel API owner                                       |
-| SLA breach event with severity medium+       | warning  | route through notification signal and incident workflow     |
-| Audit chain verification failure             | critical | stop deploy automation; preserve evidence; page immediately |
+| 条件                                       | Severity | アクション                                       |
+| ------------------------------------------ | -------- | ------------------------------------------------ |
+| deploy 成功率が 30 分連続で目標未達        | warning  | deploy operator に通知。 provider failure を調査 |
+| deploy 成功率が 2 時間連続で目標未達       | critical | on-call を page。 incident を起票 / 紐付け       |
+| apply latency p95 が 30 分連続で目標超え   | warning  | provider latency / artifact fetch 経路を調査     |
+| API 5xx-free ratio が 10 分連続で目標未達  | critical | kernel API owner を page                         |
+| medium 以上の severity の SLA breach event | warning  | notification signal と incident flow に流す      |
+| audit chain verification 失敗              | critical | deploy 自動化を停止。 証拠保全。 即時 page       |
 
-The kernel emits the signals. Operators own alert rule installation, paging
-routing, silences, escalation policy, and post-incident review.
+kernel は signal を emit するだけで、 alert rule の install、 paging routing、
+silence、 escalation policy、 事後レビューは operator が所有しま す。
 
-## Bootstrap Checklist
+## ブートストラップ手順
 
-Self-hosted operators should wire the following before production traffic:
+self-hosted operator が production traffic を受ける前に行う設定:
 
-1. Set `TAKOSUMI_METRICS_SCRAPE_TOKEN` and scrape `/metrics` from a private
-   Prometheus identity.
-2. Set `TAKOSUMI_OTLP_METRICS_ENDPOINT`, `TAKOSUMI_OTLP_TRACES_ENDPOINT`, or
-   standard `OTEL_EXPORTER_OTLP_*` variables when using an OTLP collector.
-3. Import `deploy/observability/grafana/takosumi-deploy-overview.json` and bind
-   its `${DS_PROMETHEUS}` datasource.
-4. Enable JSON HTTP request logs in non-managed environments with
-   `TAKOSUMI_HTTP_REQUEST_LOGS=true` when local log collection is required.
-5. Configure audit replication for regulated environments before accepting
-   production deploys.
-6. Install alert rules from the SLI / SLO table and attach them to an on-call
-   policy.
+1. `TAKOSUMI_METRICS_SCRAPE_TOKEN` を設定し、 private Prometheus identity か ら
+   `/metrics` を scrape する
+2. OTLP collector を使う場合は `TAKOSUMI_OTLP_METRICS_ENDPOINT` /
+   `TAKOSUMI_OTLP_TRACES_ENDPOINT`、 または標準の `OTEL_EXPORTER_OTLP_*` を
+   設定する
+3. `deploy/observability/grafana/takosumi-deploy-overview.json` を import し、
+   `${DS_PROMETHEUS}` datasource を紐付ける
+4. ローカルで log 収集が必要な non-managed 環境では
+   `TAKOSUMI_HTTP_REQUEST_LOGS=true` で JSON HTTP request log を有効化
+5. 規制対象環境では production deploy 受入前に audit replication を設定
+6. SLI / SLO 表の alert rule を install し、 on-call policy に紐付ける
 
-## Non-goals
+## 非対象
 
-The kernel does not ship a bundled Prometheus server, Grafana instance, Loki
-stack, OpenTelemetry Collector, PagerDuty integration, public status page, or
-SLA credit calculator. Distribution layers can package those components, but
-they remain outside the generic Takosumi kernel.
+kernel は Prometheus server / Grafana instance / Loki stack / OpenTelemetry
+Collector / PagerDuty integration / public status page / SLA credit calculator
+を同梱しません。 distribution layer がこれらを package することは可能ですが、
+汎用 Takosumi kernel の対象外です。
+
+## 関連ページ
+
+- [Telemetry / Metrics](/reference/telemetry-metrics)
+- [Logging Conventions](/reference/logging-conventions)
+- [SLA Breach Detection](/reference/sla-breach-detection)
+- [Incident Model](/reference/incident-model)
+- [Self-hosting Operator Guide](/operator/self-host)

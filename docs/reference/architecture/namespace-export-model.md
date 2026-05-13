@@ -1,11 +1,13 @@
 # Namespace Export Model
 
+> このページでわかること: namespace export のモデル定義と使い方。
+
 Root-level canonical spec:
 [Namespace Exports](https://github.com/tako0614/takosumi/blob/master/docs/reference/namespace-exports.md).
 
-Exports are namespace-addressable usable surfaces. Namespace paths are resolved
-inside a Space. Producers publish export declarations; link materialization
-produces export material.
+Export は namespace アドレス可能な usable surface である。namespace path は
+Space の中で解決される。producer は export declaration を publish し、link
+materialization は export material を生成する。
 
 ## Namespace path grammar
 
@@ -36,7 +38,7 @@ system
 
 ### ExportDeclaration
 
-The declaration says what can be used.
+declaration は何が使えるかを宣言する。
 
 ```yaml
 ExportDeclaration:
@@ -66,7 +68,7 @@ ExportDeclaration:
 
 ### ExportMaterial
 
-The material is produced by link materialization.
+material は link materialization によって生成される。
 
 ```yaml
 ExportMaterial:
@@ -79,26 +81,27 @@ ExportMaterial:
   sdkConfigRefs: []
 ```
 
-Resolution stores declarations. OperationJournal and observations track
-material.
+Resolution は declaration を保存する。OperationJournal と observation が
+material を追跡する。
 
 ## Default export
 
-Bare namespace paths expand to `.default` only if the default export exists.
+bare な namespace path は default export が存在するときにのみ `.default` に
+展開される。
 
 ```text
 billing -> billing.default
 ```
 
-Default exports must not imply admin access. Grant-producing defaults require
-`safeDefaultAccess` to be used without explicit access. `read-write` and `admin`
-are never implicit.
+default export は admin access を意味してはいけない。grant を生む default は
+明示的な access なしに使うには `safeDefaultAccess` が必要である。`read-write` と
+`admin` は決して暗黙ではない。
 
 ## Space-scoped namespace resolution
 
-Namespace resolution always happens inside a Space. The same path in another
-Space is a different subject. Current v1 dependencies are limited to
-operator-owned namespace exports granted to the Space.
+namespace resolution は常に Space の中で行われる。別 Space の同じ path は別の
+subject である。current v1 の依存は Space に許可された operator 所有の namespace
+export に限られる。
 
 ```text
 1. deployment-local object namespace
@@ -110,13 +113,13 @@ operator-owned namespace exports granted to the Space.
 8. reserved: explicitly shared namespace imports from another Space
 ```
 
-Shadowing is policy-gated. Production should deny or require approval for
-meaningful shadowing, especially when a local namespace shadows a Space,
-operator, or external namespace.
+shadowing は policy で gate される。production では意味のある shadowing は
+拒否するか承認を要求すべきである。特にローカル namespace が Space / operator /
+external namespace を shadow するケース。
 
 ## Space export sharing
 
-Cross-space namespace use is denied by default and is not a current v1
+Space を跨ぐ namespace 使用は default で拒否され、current v1 の機能ではない。
 
 ```yaml
 fromSpaceId: space:platform
@@ -128,7 +131,7 @@ allowedAccess:
   - call
 ```
 
-share and plan output must mark cross-space use as a risk.
+share と plan 出力は Space を跨ぐ使用を risk として明示しなければならない。
 
 ## Freshness
 

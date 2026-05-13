@@ -1,9 +1,6 @@
 # Risk Taxonomy
 
-> Stability: stable Audience: kernel-implementer, operator See also:
-> [Approval Invalidation Triggers](/reference/approval-invalidation),
-> [WAL Stages](/reference/wal-stages),
-> [RevokeDebt Model](/reference/revoke-debt)
+> このページでわかること: リスク分類と severity/likelihood の定義。
 
 Takosumi v1 で plan / apply pipeline が発火しうる Risk の closed enum (19 値)
 を、stable id ベースで定義する reference です。各 Risk は plan 出力上の
@@ -228,3 +225,9 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
   位置付け
 - `docs/reference/architecture/observation-drift-revokedebt-model.md` —
   `revoke-debt-created` と observe / finalize stage の連動
+
+## 関連ページ
+
+- [Approval Invalidation Triggers](/reference/approval-invalidation)
+- [WAL Stages](/reference/wal-stages)
+- [RevokeDebt Model](/reference/revoke-debt)

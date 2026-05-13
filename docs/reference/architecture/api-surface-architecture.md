@@ -1,5 +1,7 @@
 # API Surface Architecture
 
+> このページでわかること: kernel の API surface 設計と endpoint 分類。
+
 Takosumi kernel が外部に公開する HTTP / RPC surface は、caller の信頼境界と SLA
 期待値が異なる 4 つの surface に分割されます。本 doc は「なぜそう分けた
 か」「error envelope の哲学」「version 戦略」「OpenAPI の意味」を architecture
@@ -98,11 +100,11 @@ surface ごとに client / auth / SLA を完全に分離する目的:
   body が来た場合だけ最初の response を返し、同じ key で別 body が来た場合は
   `409 failed_precondition` として拒否します。1 つの operation intent が別の
   manifest に再束縛されることを防ぐためです。
-- Current public deploy stores idempotency responses in the public deploy
-  idempotency store, scoped by public deploy Space / tenant. In the richer
-  OperationPlan path, the same caller intent maps onto the WAL idempotency model
-  described in
-  [OperationPlan / Write-Ahead Journal Model](./operation-plan-write-ahead-journal-model.md).
+- public deploy は idempotency response を public deploy idempotency store
+  (public deploy Space / tenant scope) に保存する。 OperationPlan path では 同じ
+  caller intent が
+  [OperationPlan / Write-Ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+  の WAL idempotency model に写像する。
 - client が key を送らなかった場合、kernel は per-request UUID を生成
   しますが、network 起因の重複再送に対する保護は得られません。これは CLI
   の責務として CLI 実装が key を必ず付与します。

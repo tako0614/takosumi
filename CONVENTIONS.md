@@ -7,8 +7,8 @@
 
 ## 1. Shape catalog principle
 
-- **Takos curates the shape catalog.** Shape (= portable resource shape) は
-  Takos ecosystem が ownership を持ち、`takosumi-contract` の
+- **Takosumi curates the shape catalog.** Shape (= portable resource shape) は
+  Takosumi contract / kernel が ownership を持ち、`takosumi-contract` の
   `Shape<TSpec, TOutputs,
   TCapability>` を満たす形で `src/shapes/`
   に登録する。
@@ -37,16 +37,15 @@
 
 - New public contract exports, internal route constants, docs, and runtime env
   names use `TAKOSUMI_*` as the canonical prefix.
-- Pre-split names such as `TAKOS_PAAS_*` and `TAKOS_RUNTIME_*` are compatibility
-  aliases only. They may remain in migration notes or in a deliberately scoped
-  compatibility shim, but new code and new operator docs must not introduce
-  them.
+- Pre-split names such as `TAKOS_PAAS_*` and `TAKOS_RUNTIME_*` are retired from
+  the current public contract. New code and new operator docs must not introduce
+  them; any internal fixture that mentions them must be explicitly scoped as
+  non-operator test debt.
 - JSR consumers should pin `jsr:@takos/takosumi-contract@^2.5.0` or newer when
   they need the canonical `TAKOSUMI_INTERNAL_PATHS`,
-  `TAKOSUMI_RUNTIME_INTERNAL_PATHS`, and `TakosumiInternalClient` exports.
-  Consumers that still depend on the v1 `TakosInternalClient` / `x-takos-*` RPC
-  header family must isolate that dependency behind a local compatibility import
-  until the called service has migrated.
+  `TAKOSUMI_RUNTIME_INTERNAL_PATHS`, and `TakosumiInternalClient` exports. The
+  v1 `TakosInternalClient` / `x-takos-*` RPC header family is not a current
+  public contract and must stay out of operator-facing docs.
 - Provider proof and live smoke env names use `TAKOSUMI_PLUGIN_*`.
   `TAKOS_PAAS_PLUGIN_*` is retired from current workflow and secret docs.
 

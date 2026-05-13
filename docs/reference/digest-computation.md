@@ -1,213 +1,189 @@
 # Digest Computation
 
-> Stability: stable Audience: kernel-implementer, integrator See also:
-> [Resource IDs](/reference/resource-ids),
-> [Provider Implementation Contract](/reference/provider-implementation-contract),
-> [WAL Stages](/reference/wal-stages),
-> [Catalog Release Trust](/reference/catalog-release-trust),
-> [Storage Schema](/reference/storage-schema)
+> このページでわかること: manifest / artifact の digest 計算方法。
 
-This page is the formal specification of how Takosumi v1 computes the digests
-that bind snapshots, plans, approvals, and predicted effects together. The same
-algorithm is used everywhere a digest is persisted, including resource IDs whose
-suffix is content-addressed.
+Takosumi v1 が snapshot / plan / approval / predicted effect を結びつけるため
+に使う digest 計算の規定です。 digest が persist される箇所、 および suffix が
+content-addressed な resource ID すべてで同一アルゴリズムを用います。
 
-The specification is normative: a kernel that produces digests differing from
-this page is non-conformant, even if it follows the same broad recipe.
-Cross-instance interoperability (replay, restore, catalog adoption) depends on
-byte-exact digest agreement.
+本仕様は normative であり、 本ページと異なる digest を生成する kernel は
+仮にレシピが大まかに合っていても非準拠とみなします。 replay / restore / catalog
+adoption など instance 間の相互運用は、 digest が byte 単位で一致す
+ることに依存します。
 
-## Where digests are used
+## digest の用途
 
-Five v1 digests fall under this specification:
+v1 でこの仕様に従う digest:
 
-| Digest                         | Purpose                                                        |
-| ------------------------------ | -------------------------------------------------------------- |
-| `desiredSnapshotDigest`        | Identity of a `desired:sha256:...` snapshot.                   |
-| `resolutionSnapshotDigest`     | Identity of a `resolution:sha256:...` snapshot.                |
-| `operationPlanDigest`          | Identity of an OperationPlan; binds the WAL idempotency tuple. |
-| `effectDetailsDigest`          | Identity of an `actualEffects` or `approvedEffects` view.      |
-| `predictedActualEffectsDigest` | Identity of the dry-materialization prediction.                |
+| Digest                         | 用途                                                             |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `desiredSnapshotDigest`        | `desired:sha256:...` snapshot の identity。                      |
+| `resolutionSnapshotDigest`     | `resolution:sha256:...` snapshot の identity。                   |
+| `operationPlanDigest`          | OperationPlan の identity。 WAL idempotency tuple を bind する。 |
+| `effectDetailsDigest`          | `actualEffects` / `approvedEffects` view の identity。           |
+| `predictedActualEffectsDigest` | dry-materialization 予測の identity。                            |
 
-Other content-addressed IDs in [Resource IDs](/reference/resource-ids)
-(`export-snapshot:`, `catalog-release:`, `policy:`) follow the same algorithm;
-their specific input shapes are defined in their respective references.
+[Resource IDs](/reference/resource-ids) の他の content-addressed ID
+(`export-snapshot:` / `catalog-release:` / `policy:`) も同アルゴリズム。 各 ID
+の入力形状はそれぞれの reference を参照。
 
-## Algorithm
+## アルゴリズム
 
-The digest algorithm is fixed in v1:
+v1 で digest アルゴリズムは固定です。
 
 ```text
 digest = "sha256:" + lowercase_hex(SHA-256(canonical_encoding(input)))
 ```
 
-- The hash function is **SHA-256** from FIPS 180-4. No other hash function is
-  permitted in v1.
-- The digest output is always prefixed with the literal string `sha256:` and a
-  lowercase hex encoding of the 32-byte hash. The `sha256:` prefix is part of
-  the digest and is included in any byte- for-byte comparison.
-- The input to the hash function is the canonical encoding of the source value,
-  defined below.
+- hash 関数は FIPS 180-4 の **SHA-256**。 v1 で他の hash は使えない
+- digest 出力は常に文字列 `sha256:` プレフィックス + 32 byte hash の小文字 hex。
+  `sha256:` プレフィックスは digest の一部で、 byte 単位比較に含まれる
+- hash への入力は次節の canonical encoding で得られる byte 列
 
-The `sha256:` prefix exists so that a future migration to a different hash
-function lands behind a `CONVENTIONS.md` §6 RFC without breaking the existing
-wire shape: digests with a different prefix would coexist with `sha256:` digests
-during the transition window.
+`sha256:` プレフィックスは、 将来 `CONVENTIONS.md` §6 RFC で別 hash に
+移行する際にも wire shape を壊さないために存在します。 移行期間中は別
+プレフィックスの digest と `sha256:` digest が共存できます。
 
 ## Canonical encoding
 
-The canonical encoding follows
+canonical encoding は
 [RFC 8785 (JSON Canonicalization Scheme, JCS)](https://www.rfc-editor.org/rfc/rfc8785)
-with v1-specific clarifications:
+に従い、 v1 固有の補足を加えます。
 
-- **Object keys** are sorted lexicographically by their UTF-16 code- unit
-  sequence (the JCS rule). Sorting is byte-stable across implementations.
-- **Numbers** are emitted as the IEEE 754 double-precision serialization defined
-  by JCS §3.2.2.3. Integers within the safe integer range are emitted without a
-  decimal point or exponent; fractional values use the canonical shortest
-  representation. The kernel rejects non-finite numbers (`NaN`, `+Infinity`,
-  `-Infinity`) at ingest, so they never reach digest computation.
-- **Strings** are normalized to Unicode Normalization Form C (NFC) before
-  encoding. The encoding is UTF-8 with the JCS escaping rules (`\"`, `\\`, `\/`
-  not escaped, control characters escaped as `\u00xx`).
-- **Arrays** preserve declared order; canonical encoding never reorders array
-  elements.
-- **Whitespace** is removed; the encoded byte stream contains no insignificant
-  whitespace.
-- **Charset** is fixed at UTF-8. The byte stream fed to SHA-256 is the UTF-8
-  representation of the canonical JSON.
+- **object key** は UTF-16 code unit 列で辞書式 sort (JCS の規則)。 実装間で
+  byte-stable に sort される
+- **数値** は JCS §3.2.2.3 の IEEE 754 double 表現で出力。 safe integer 範囲
+  の整数は小数点 / 指数なし、 小数は最短表現。 kernel は ingest 時に non-finite
+  (`NaN` / `+Infinity` / `-Infinity`) を拒否するため digest 計算へは到達しない
+- **文字列** は encoding 前に Unicode Normalization Form C (NFC) で正規化。
+  encoding は UTF-8 で、 JCS の escape rule (`\"`、 `\\`、 `\/` は非 escape、
+  制御文字は `\u00xx`)
+- **配列** は宣言順を保つ。 canonical encoding は要素を並べ替えない
+- **空白** は出力しない。 byte 列に余白は含まれない
+- **文字集合** は UTF-8 固定。 SHA-256 への入力は canonical JSON の UTF-8 表現
 
-Implementations should not roll their own canonicalizer for v1; using a vetted
-JCS library and applying the NFC pre-pass is sufficient.
+実装は自前の canonicalizer を作らず、 検証済み JCS library に NFC 前処理を
+かければ十分です。
 
-## Per-digest input scope
+## 各 digest の入力範囲
 
-Each digest is computed over a precise input. Including a different field,
-omitting a required field, or reordering nested arrays produces a different
-digest and is non-conformant.
+各 digest は厳密な入力に対して計算します。 異なる field を含めたり、 必須 field
+を欠いたり、 ネスト配列を並べ替えたりすると別 digest になり、 非準拠
+になります。
 
 ### `desiredSnapshotDigest`
 
-Input includes:
+含む:
 
-- `components` — the closed-shape component list of the snapshot.
-- `links` — the projected link set in declared order.
-- `exposures` — the exposure set in declared order.
-- `dataAssets` — the DataAsset bindings in declared order.
-- `desiredGeneration` — the monotonically increasing generation counter.
+- `components` — snapshot の closed-shape component list
+- `links` — 宣言順の link set
+- `exposures` — 宣言順の exposure set
+- `dataAssets` — 宣言順の DataAsset binding
+- `desiredGeneration` — 単調増加する generation counter
 
-Input excludes:
+含まない:
 
-- `spaceId` — the snapshot is identity-portable across Spaces; the binding to a
-  Space is recorded separately on the snapshot envelope.
-- `createdAt` — wall-clock timestamps are not part of identity.
-- Operator-only annotations (audit notes, deploy bearer identifiers).
+- `spaceId` — snapshot は Space 間で identity portable。 Space binding は
+  snapshot envelope 側で記録
+- `createdAt` — wall-clock timestamp は identity に含めない
+- operator 専用 annotation (audit note、 deploy bearer 識別子)
 
 ### `operationPlanDigest`
 
-Input includes:
+含む:
 
-- `operations` — the ordered list of operation entries with their closed-shape
-  descriptors.
-- `approvedEffects` bound — the effect bound the plan was authored against.
-- The resolved `connector:<id>` per operation.
-- The targeted `desired:sha256:...` and `resolution:sha256:...` IDs.
+- `operations` — closed-shape descriptor を持つ ordered operation list
+- `approvedEffects` bound — plan が前提とした effect bound
+- 各 operation の resolved `connector:<id>`
+- 対象 `desired:sha256:...` と `resolution:sha256:...` の ID
 
-Input excludes:
+含まない:
 
-- `idempotencyKey` — the key is **derived** from the `operationPlanDigest`, not
-  an input to it.
-- `journalCursor` — runtime WAL state is not part of plan identity.
-- Per-attempt counters (`operationAttempt`).
+- `idempotencyKey` — `operationPlanDigest` から **derive** される。 入力では
+  ない
+- `journalCursor` — runtime の WAL 状態は plan identity に含めない
+- per-attempt counter (`operationAttempt`)
 
 ### `effectDetailsDigest`
 
-Input is the closed-enum view of an effect set. The same algorithm is applied
-whether the input is `approvedEffects` (on an approval record) or
-`actualEffects` (on an OperationResult). The shape is identical so that a
-successful operation's result digest can be compared byte-for-byte against the
-approval's effect digest under the bound rule
-([Provider Implementation Contract — Effect bound rule](/reference/provider-implementation-contract#effect-bound-rule)).
+input は effect set の closed-enum view。 approval record 上の `approvedEffects`
+でも OperationResult 上の `actualEffects` でも同一アルゴ リズムを適用します。
+effect digest が同形状であることで、 成功 operation の result digest と approval
+の effect digest を bound rule
+([Provider Implementation Contract — Effect bound rule](/reference/provider-implementation-contract#effect-bound-rule))
+の下で byte 単位比較できます。
 
-Input includes the closed-shape effect descriptors in the order they appear in
-the source set; the canonical encoder sorts inside each descriptor by JCS rules
-but does not re-order the outer list.
+入力は source set の順序を保った closed-shape effect descriptor の列。 canonical
+encoder は各 descriptor 内部を JCS 規則で sort しますが、 外側の list
+を並べ替えることはしません。
 
 ### `predictedActualEffectsDigest`
 
-Input is the predicted effect map produced during dry materialization (see
-[Provider Implementation Contract — Dry materialization phase](/reference/provider-implementation-contract#dry-materialization-phase)).
-The shape is the same as `effectDetailsDigest`. The digest is bound to the
-OperationPlan and is the reference value the `actual-effects-overflow` Risk
-compares against at `commit` / `post-commit`.
+dry materialization で得られる予測 effect map が入力です
+([Provider Implementation Contract — Dry materialization phase](/reference/provider-implementation-contract#dry-materialization-phase))。
+形状は `effectDetailsDigest` と同じ。 digest は OperationPlan に bind され、
+`commit` / `post-commit` 時の `actual-effects-overflow` Risk 評価の参照値に
+なります。
 
 ### `resolutionSnapshotDigest`
 
-Input includes:
+含む:
 
-- `catalogReleaseId` — the closed `catalog-release:<...>` ID active at
-  resolution time.
-- `exportSnapshotIds` — the resolved `export-snapshot:<sha256>` IDs in declared
-  order.
-- `importedShares` — the `share:<ulid>` IDs the resolution depends on, with
-  their resolved freshness state.
-- Resolved targets — the closed-shape per-component target binding the resolver
-  chose.
+- `catalogReleaseId` — 解決時に active な closed `catalog-release:<...>` ID
+- `exportSnapshotIds` — 宣言順の解決済 `export-snapshot:<sha256>` ID
+- `importedShares` — 解決依存先の `share:<ulid>` ID と解決済 freshness state
+- resolved target — resolver が選んだ component ごとの closed-shape target
+  binding
 
-Input excludes:
+含まない:
 
-- `spaceId` — same identity-portability rule as `desiredSnapshotDigest`.
-- Wall-clock timestamps.
-- Resolver internal counters or telemetry.
+- `spaceId` — `desiredSnapshotDigest` と同じ identity portability rule
+- wall-clock timestamp
+- resolver の内部 counter / telemetry
 
-## Collision handling
+## 衝突の扱い
 
-SHA-256 is treated as collision-free for v1. The kernel relies on this
-assumption operationally:
+v1 では SHA-256 を衝突なしとして扱います。 kernel は運用上この仮定に依存
+します。
 
-- Content-addressed IDs assume that a digest match implies content match.
-- Replay assumes that a digest mismatch is always a content divergence, never a
-  hash collision.
+- content-addressed ID は digest 一致 = content 一致と仮定
+- replay は digest 不一致を必ず content divergence として扱い、 hash 衝突と
+  はみなさない
 
-A SHA-256 collision discovered in the wild would be handled by a
-`CONVENTIONS.md` §6 RFC migrating to a different hash function. The `sha256:`
-prefix in every digest leaves room for that migration.
+実運用で SHA-256 衝突が発見された場合は、 `CONVENTIONS.md` §6 RFC で別 hash
+への移行で対応します。 digest 先頭の `sha256:` プレフィックスはその移行の
+余地として設計されています。
 
-## Digest comparison
+## digest 比較
 
-How digests are compared depends on what is being compared:
+比較対象によって扱いが異なります。
 
-- **Equality on stored digests** uses byte-for-byte comparison. The kernel does
-  not normalize the prefix or hex case at comparison time; both sides are
-  already canonical.
-- **Signature verification on catalog releases** uses constant-time byte
-  comparison via the [Catalog Release Trust](/reference/catalog-release-trust)
-  signature backend. This is the only path that requires timing-safe comparison;
-  routine apply-pipeline checks do not.
+- **保存済 digest の等価性比較** は byte 単位。 両側はすでに canonical なの で、
+  比較時に prefix や hex case を正規化しない
+- **catalog release の署名検証** は
+  [Catalog Release Trust](/reference/catalog-release-trust) の署名 backend
+  を介した constant-time byte 比較。 timing-safe 比較が必要な のはここだけで、
+  通常の apply pipeline チェックでは不要
 
-The kernel never compares digests by re-decoding to JSON and walking the
-structure. The whole point of digest computation is that the canonical bytes are
-the identity.
+kernel は digest を JSON に re-decode して構造比較することはありません。
+canonical な byte 列そのものが identity です。
 
-## Re-computation rules
+## 再計算ルール
 
-The kernel persists digests at the moment they are first computed.
-Re-computation is permitted only against the original immutable input record.
+kernel は digest を初回計算時に persist し、 再計算は元の immutable 入力 record
+に対してのみ許可します。
 
-- `desired:sha256:...`, `resolution:sha256:...`, `export-snapshot:sha256:...`,
-  `catalog-release:sha256:...`, and `policy:sha256:...` are all backed by
-  immutable records. Re- computing the digest from the record yields the same
-  value forever.
-- `operationPlanDigest` is computed once at OperationPlan emission and persisted
-  in the WAL header. Replay re-computes it from the stored OperationPlan record
-  and verifies the match before advancing.
-- `effectDetailsDigest` and `predictedActualEffectsDigest` are bound to
-  immutable plan / approval / result records; re-computation is used by replay
-  and audit verification only.
+- `desired:sha256:...` / `resolution:sha256:...` / `export-snapshot:sha256:...`
+  / `catalog-release:sha256:...` / `policy:sha256:...` はいずれも immutable
+  record に backed。 record から再計算すれば永遠に同じ値が得られる
+- `operationPlanDigest` は OperationPlan emit 時に 1 度計算し、 WAL header に
+  persist。 replay 時は保存済 record から再計算し、 一致を確認した後で進行
+- `effectDetailsDigest` と `predictedActualEffectsDigest` は immutable な plan /
+  approval / result record に bind。 再計算は replay と audit verification
+  でのみ使う
 
-If an input record is mutable (the kernel never persists mutable inputs to
-digest computation in v1), re-computation is not valid and implementations must
-use the persisted digest instead.
+入力 record が mutable な場合 (v1 では digest 計算の入力は mutable では
+ないが)、 再計算は無効で、 実装は persist された digest を使います。
 
 ## Related architecture notes
 
@@ -216,3 +192,11 @@ use the persisted digest instead.
 - docs/reference/architecture/policy-risk-approval-error-model.md
 - docs/reference/architecture/catalog-release-descriptor-model.md
 - docs/reference/architecture/data-asset-model.md
+
+## 関連ページ
+
+- [Resource IDs](/reference/resource-ids)
+- [Provider Implementation Contract](/reference/provider-implementation-contract)
+- [WAL Stages](/reference/wal-stages)
+- [Catalog Release Trust](/reference/catalog-release-trust)
+- [Storage Schema](/reference/storage-schema)

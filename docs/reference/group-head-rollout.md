@@ -1,12 +1,6 @@
 # GroupHead Rollout
 
-> Stability: stable Audience: operator, kernel-implementer See also:
-> [Lifecycle Protocol](/reference/lifecycle),
-> [Lifecycle Phases](/reference/lifecycle-phases),
-> [Cross-Process Locks](/reference/cross-process-locks),
-> [Audit Events](/reference/audit-events),
-> [Risk Taxonomy](/reference/risk-taxonomy),
-> [Drift Detection](/reference/drift-detection)
+> このページでわかること: GroupHead のロールアウト戦略と pointer move の仕様。
 
 GroupHead は Takosumi v1 で「ある group に対して現在 traffic が流れている
 deployment / activation」を pin する mutable pointer です。本 reference では
@@ -195,3 +189,12 @@ GroupHead 関連の audit event は以下を発行します
   の閉じ方と v1 範囲を blue-green に広げない判断
 - `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
   pointer 前進と WAL stage の対応、シリアライズ要件の rationale
+
+## 関連ページ
+
+- [Lifecycle Protocol](/reference/lifecycle)
+- [Lifecycle Phases](/reference/lifecycle-phases)
+- [Cross-Process Locks](/reference/cross-process-locks)
+- [Audit Events](/reference/audit-events)
+- [Risk Taxonomy](/reference/risk-taxonomy)
+- [Drift Detection](/reference/drift-detection)

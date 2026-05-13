@@ -1,22 +1,14 @@
 # Cost Attribution
 
-> Stability: stable Audience: operator, integrator See also:
-> [Storage Schema](/reference/storage-schema),
-> [Audit Events](/reference/audit-events),
-> [Telemetry / Metrics](/reference/telemetry-metrics),
-> [Compliance Retention](/reference/compliance-retention),
-> [Quota / Rate Limit](/reference/quota-rate-limit),
-> [Quota Tiers](/reference/quota-tiers),
-> [Kernel HTTP API](/reference/kernel-http-api),
-> [Closed Enums](/reference/closed-enums)
+> このページでわかること: リソースコストの帰属先ルール。
 
-This reference defines the v1 cost-attribution metadata surface. The kernel
-exposes a free-form **operator-controlled metadata map** on each Space and
-propagates the map through audit events and telemetry labels, so that an
-external billing pipeline can join kernel-emitted usage signals to
-operator-defined accounting axes (cost center, project code, customer segment,
-ad-hoc labels). The kernel does not ship a billing engine, an invoice surface, a
-price book, or an opinion about what an attribution key means.
+本リファレンスは v1 の cost-attribution メタデータ surface を定義する。kernel
+は各 Space に自由形式の **operator 管理メタデータマップ** を公開し、その map を
+audit event と telemetry label を通じて伝播するので、外部 billing パイプ
+ラインが kernel が出す usage signal を operator 定義の会計軸 (cost center、
+project code、customer segment、ad-hoc label) に join できる。kernel は billing
+engine、invoice surface、price book、attribution key の意味についての
+意見を同梱しない。
 
 ::: info Current HTTP status Cost attribution fields are model / service
 contract fields. The current kernel HTTP router does not mount
@@ -27,7 +19,7 @@ contract fields. The current kernel HTTP router does not mount
 
 ## Attribution metadata model
 
-Each Space carries an optional `attribution` map:
+各 Space は optional な `attribution` map を持つ。
 
 | Field             | Type                | Required | Notes                                                                               |
 | ----------------- | ------------------- | -------- | ----------------------------------------------------------------------------------- |
@@ -36,24 +28,21 @@ Each Space carries an optional `attribution` map:
 | `customerSegment` | string              | no       | Operator-defined segment label (for example `enterprise`, `internal`, `community`). |
 | `customLabels`    | map<string, string> | no       | Free-form labels keyed by operator-controlled name.                                 |
 
-All four fields are optional. The kernel never derives a value, never requires a
-value, and never enforces a vocabulary. Every value is an opaque string from the
-kernel's perspective.
+4 つのフィールドはいずれも optional。kernel は値を導出せず、値を要求せず、
+語彙を強制しない。kernel から見ると、どの値も opaque な文字列である。
 
-The same model applies at organisation scope when the operator distribution
-exposes orgs over the kernel: an organisation record carries the same
-`attribution` shape and Spaces inside the org inherit nothing automatically —
-the operator distribution decides whether to mirror org-level attribution down
-into Space records at provisioning.
+operator distribution が kernel 上に Organization を公開するとき、同じモデルが
+組織スコープにも適用される: Organization record は同じ `attribution` 形を持ち、
+組織内の Space は何も自動継承しない。組織レベルの attribution を provisioning
+時に Space record にミラーするかどうかは operator distribution が決める。
 
 ## Storage
 
-Attribution metadata persists on the Space record as a map field, consistent
-with [Storage Schema](/reference/storage-schema). Keys under `customLabels` are
-stored verbatim; the kernel does not lower- case or normalise them. Operators
-that want a stable label namespace adopt a prefix convention (for example
-`cc:engineering`, `segment:enterprise`) and apply it at the operator policy
-layer.
+attribution メタデータは [Storage Schema](/reference/storage-schema) に整合し、
+Space record 上に map フィールドとして永続化される。`customLabels` の key は
+verbatim に保存される。kernel は lower-case 化も正規化もしない。安定した label
+namespace が欲しい operator は prefix convention (例: `cc:engineering`、
+`segment:enterprise`) を採用し、operator policy 層で適用する。
 
 Per-key value caps:
 
@@ -63,12 +52,12 @@ Per-key value caps:
 - `customLabels` values: 256 characters each.
 - The whole map: 32 entries and 8 KiB serialised.
 
-Values exceeding the caps are rejected at write time with HTTP
-`400 Bad Request`. The kernel does not silently truncate.
+上限を超えた値は HTTP `400 Bad Request` で write 時に reject される。kernel
+は黙って切り詰めない。
 
 ## Update API
 
-through:
+attribution は次の PATCH リクエストで更新する。
 
 ```text
 PATCH /api/internal/v1/spaces/:id
@@ -85,42 +74,41 @@ PATCH /api/internal/v1/spaces/:id
 }
 ```
 
-Update semantics:
+更新 semantics:
 
-- A `PATCH` replaces the full `attribution` map. Partial mutation is not
-  supported; clients re-send the full intended map. This matches the kernel's
-  preference for explicit, replay-safe state transitions.
-- Setting a field to `null` removes the field. Setting `attribution` itself to
-  `null` clears the entire map.
-- The kernel **rejects retroactive intent**: a `PATCH` applies to all audit
-  events and telemetry samples emitted at-or-after the patch commit timestamp.
-  Past audit rows and past telemetry samples retain the attribution that was
-  current when they were emitted. There is no rewrite path.
+- `PATCH` は `attribution` map 全体を置き換える。partial mutation はサポート
+  されない。client は意図する map 全体を再送する。これは kernel の明示的で
+  replay-safe な state 遷移を好む姿勢に合致する。
+- フィールドを `null` にセットするとそのフィールドが削除される。`attribution`
+  自体を `null` にセットすると map 全体がクリアされる。
+- kernel は **遡及意図を拒否する**: `PATCH` は patch commit timestamp 以降に
+  emit されたすべての audit event と telemetry サンプルに適用される。過去の
+  audit row と telemetry サンプルは、emit 時点で現在だった attribution を保持
+  する。書き換え path は無い。
 
 ## Audit propagation
 
-Every audit event whose envelope carries a `spaceId` (see
-[Audit Events](/reference/audit-events)) additionally carries the Space's
-current `attribution` snapshot in the event payload under the fixed key
-`attribution`. The snapshot is taken at event-write time and is part of the
-canonical bytes that feed the audit hash chain.
+envelope が `spaceId` を持つすべての audit event は
+([Audit Events](/reference/audit-events) 参照)、Space の現在の `attribution`
+snapshot を固定 key `attribution` 下で event payload に追加で持つ。snapshot は
+event 書込み時に取られ、audit hash chain に流れる canonical bytes の一部となる。
 
-A new audit event type tracks attribution mutation itself:
+新しい audit event type が attribution の変更自体を追跡する。
 
-- `space-attribution-changed` — payload carries `spaceId`, the previous map, the
-  next map, and the actor.
+- `space-attribution-changed` — payload に `spaceId`、以前の map、次の map、
+  actor を運ぶ。
 
-Attribution stays in the audit log for the full retention window declared by the
-Space's compliance regime (see
-[Compliance Retention](/reference/compliance-retention)). When retention drops
-an audit row, attribution drops with it; the kernel does not maintain an
-out-of-band attribution archive.
+attribution は Space の compliance regime
+([Compliance Retention](/reference/compliance-retention) 参照) が宣言する完全な
+retention window の間、audit log に残る。retention が audit row を drop する
+とき attribution も一緒に drop される。kernel は out-of-band な attribution
+アーカイブを保持しない。
 
 ## Telemetry labels
 
-The OTLP and Prometheus exporters defined in
-[Telemetry / Metrics](/reference/telemetry-metrics) attach attribution as
-resource attributes / labels on every Space-scoped metric and span:
+[Telemetry / Metrics](/reference/telemetry-metrics) が定義する OTLP と
+Prometheus exporter は、attribution を Space scope のすべての metric と span に
+resource 属性 / label として attach する。
 
 ```text
 takosumi_space_id          required
@@ -130,18 +118,16 @@ takosumi_project_code      optional
 takosumi_customer_segment  optional
 ```
 
-The `customLabels` map is **not** emitted as labels by default. An operator who
-wants a custom label exported promotes it through the
-`TAKOSUMI_TELEMETRY_ATTRIBUTION_PROMOTE` environment variable, which takes a
-comma-separated list of `customLabels` keys to promote to a metric label.
-Promotion is rejected for keys whose observed cardinality in the kernel exceeds
-the operator-tunable `TAKOSUMI_TELEMETRY_ATTRIBUTION_MAX_CARDINALITY` (default
-`200`).
+`customLabels` map はデフォルトでは label として **emit されない**。custom label
+を export したい operator は `TAKOSUMI_TELEMETRY_ATTRIBUTION_PROMOTE` 環境変数で
+promote する。この変数は metric label に promote する `customLabels` key
+のカンマ区切りリストを取る。kernel での観測 cardinality が operator が tune
+できる `TAKOSUMI_TELEMETRY_ATTRIBUTION_MAX_CARDINALITY` (default `200`) を超える
+key の promotion は reject される。
 
-The kernel emits a `severity: warning` audit event
-`telemetry-cardinality-warning` when a promoted key crosses the threshold and
-stops promoting that key until the operator either raises the threshold or
-removes the key from the promote list.
+promote 済み key が閾値を超えたとき、kernel は `severity: warning` の audit
+event `telemetry-cardinality-warning` を emit し、operator が閾値を上げるか key
+を promote list から外すまでその key の promotion を停止する。
 
 ## Reporting query
 
@@ -149,33 +135,32 @@ removes the key from the promote list.
 - `GET /api/internal/v1/spaces?customerSegment=enterprise`
 - `GET /api/internal/v1/spaces?customLabel=owner:team-a`
 
-The kernel returns the matching Space records. **Aggregation, grouping, totals,
-and chart rendering are out of scope**: operators join the audit log against the
-queried Space set in their downstream pipeline.
+kernel は一致する Space record を返す。**集約、グルーピング、合計、チャート
+描画は scope 外**: operator は下流パイプラインで audit log を query した Space
+集合と join する。
 
 ## Privacy
 
-Attribution metadata persists in the audit log and in telemetry exports for the
-retention window of each respective surface. Operators are responsible for
-keeping personally identifying information out of attribution. The kernel does
-not run a PII classifier and does not redact attribution values on read.
+attribution メタデータは各 surface の retention window 中、audit log と
+telemetry export に残る。operator は個人識別情報を attribution に入れない責任
+を負う。kernel は PII classifier を実行せず、読み取り時に attribution 値を
+redact しない。
 
-When a regulated regime applies (see
-[Compliance Retention](/reference/compliance-retention)), the operator policy
-layer SHOULD reject attribution writes whose values look like email addresses,
-phone numbers, or other PII at request ingest. The kernel exposes the raw write
-path so policy can run there.
+規制 regime が適用される場合
+([Compliance Retention](/reference/compliance-retention) 参照)、operator policy
+層は ingest 時に email / 電話番号 / その他 PII に見える 値を持つ attribution
+書込みを reject すべきである。kernel は policy がそこで 動けるよう raw write
+path を公開する。
 
 ## Operator boundary
 
-This reference defines the kernel-side primitive: the metadata field, the update
-API, the audit propagation, and the telemetry promotion contract. The
-**end-to-end cost workflow** — pulling the audit log into a billing system,
-joining attribution to a customer record, running price-book maths, generating
-invoices, surfacing per-cost- center dashboards, and reconciling against
-external accounting systems — lives in operator distributions such as
-`takos-private/` and in the billing pipeline an operator wires up. The kernel
-ships the metadata surface and stops there.
+本リファレンスは kernel 側 primitive を定義する: メタデータフィールド、update
+API、audit 伝播、telemetry promotion contract。**end-to-end な cost workflow** —
+audit log を billing system に取り込み、attribution を顧客 record に join し、
+price book 計算を実行し、invoice を生成し、cost-center 単位ダッシュボードを
+surface し、外部会計システムと reconcile する — は `takos-private/` のような
+operator distribution と operator が組む billing パイプラインに住む。kernel は
+メタデータ surface を同梱してそこで止まる。
 
 ## Related architecture notes
 
@@ -185,3 +170,14 @@ ships the metadata surface and stops there.
   attribution.
 - `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
   audit emission point where attribution snapshots are captured.
+
+## 関連ページ
+
+- [Storage Schema](/reference/storage-schema)
+- [Audit Events](/reference/audit-events)
+- [Telemetry / Metrics](/reference/telemetry-metrics)
+- [Compliance Retention](/reference/compliance-retention)
+- [Quota / Rate Limit](/reference/quota-rate-limit)
+- [Quota Tiers](/reference/quota-tiers)
+- [Kernel HTTP API](/reference/kernel-http-api)
+- [Closed Enums](/reference/closed-enums)

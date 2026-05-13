@@ -1,22 +1,24 @@
 # Space Model
 
-`Space` is the top-level isolation boundary for Takosumi v1.
+> このページでわかること: space モデルの設計と分離ルール。
 
-A manifest does not declare a Space. The deploy / preview / apply request is
-executed in a Space chosen by actor auth, API path, operator context, or CLI
-profile. The same manifest may be resolved differently in different Spaces
-because each Space has its own namespace scope, policy, allowed catalog
-releases, secrets, artifacts, approvals, journals, observations, and GroupHeads.
+`Space` は Takosumi v1 のトップレベル isolation 境界である。
+
+manifest は Space を宣言しない。deploy / preview / apply リクエストは、actor
+auth、API path、operator context、CLI profile が選んだ Space で実行される。 各
+Space は独自の namespace scope、policy、許可された catalog release、secret、
+artifact、approval、journal、observation、GroupHead を持つため、同じ manifest が
+Space ごとに異なる resolve 結果になりうる。
 
 ## Space root rule
 
 ```text
-Space is the boundary of meaning, authority, and ownership.
+Space は意味・authority・ownership の境界である。
 ```
 
-Every `Deployment`, `ResolutionSnapshot`, `DesiredSnapshot`, `OperationJournal`,
-`ObservationSet`, `RevokeDebt`, `ActivationSnapshot`, approval, and `GroupHead`
-belongs to exactly one Space.
+すべての `Deployment`、`ResolutionSnapshot`、`DesiredSnapshot`、
+`OperationJournal`、`ObservationSet`、`RevokeDebt`、`ActivationSnapshot`、
+approval、`GroupHead` は厳密に 1 つの Space に属する。
 
 ```yaml
 Space:
@@ -33,7 +35,7 @@ Space:
 
 ## Space vs namespace
 
-A namespace path is a name inside a Space-scoped namespace table.
+namespace path は Space scope の namespace テーブル内の名前である。
 
 ```text
 takos.oauth.token
@@ -41,20 +43,20 @@ billing.default
 takos.database.primary
 ```
 
-The same namespace path in two Spaces is not the same ExportDeclaration unless
-both Spaces explicitly import or share the same export snapshot.
+2 つの Space にある同じ namespace path は、両方の Space が同じ export snapshot
+を明示的に import / share しない限り、同じ ExportDeclaration ではない。
 
 ```text
 space:acme-prod / takos.database.primary
 space:acme-dev  / takos.database.primary
 ```
 
-These are separate resolution subjects.
+これらは別個の resolution subject である。
 
 ## Address qualification
 
-Canonical records carry `spaceId` as part of identity. Text addresses may be
-rendered either as a tuple or as a qualified address.
+canonical record は identity の一部として `spaceId` を持つ。テキスト表現は tuple
+または qualified address のいずれかで描画できる。
 
 ```text
 (space:acme-prod, object:api)
@@ -62,12 +64,12 @@ space:acme-prod/object:api
 space:acme-prod/link:api.DATABASE_URL
 ```
 
-The tuple form is preferred for storage. The qualified string is useful for
-logs, plan output, and audit events.
+storage では tuple 形式が望ましい。qualified 文字列は log、plan 出力、audit
+event で有用である。
 
 ## Namespace scope stack
 
-Resolution happens inside a Space. The resolver checks scopes in this order:
+resolution は Space の中で行われる。resolver は次の順で scope をチェックする。
 
 ```text
 1. deployment-local object namespace
@@ -79,13 +81,13 @@ Resolution happens inside a Space. The resolver checks scopes in this order:
 8. reserved: explicitly shared namespace imports from another Space
 ```
 
-If a namespace path exists in multiple scopes, the first matching scope wins
-only when shadowing policy allows it. Production policy should deny or require
-approval for meaningful shadowing.
+namespace path が複数 scope に存在する場合、shadowing policy が許可するときに
+限り最初の一致 scope が勝つ。本番 policy は意味のある shadowing を拒否するか
+approval を要求すべきである。
 
 ## Reserved prefixes
 
-Reserved prefixes are global names, but visibility is still Space-scoped.
+予約 prefix はグローバル名だが、可視性は依然として Space scope である。
 
 ```text
 takos
@@ -93,11 +95,11 @@ operator
 system
 ```
 
-Only the operator may publish these prefixes. A reserved export such as
-`takos.oauth.token` must still be granted or made visible to the Space before
-resolution can use it.
+これらの prefix を publish できるのは operator だけである。`takos.oauth.token`
+のような予約 export も、resolution で使う前にその Space に grant されるか可視に
+される必要がある。
 
-namespace that is explicitly granted to Spaces.
+predefined な operator-owned namespace は Space に明示的に grant される。
 
 ```yaml
 ExternalNamespaceRegistration:
@@ -111,11 +113,11 @@ ExternalNamespaceRegistration:
     state: fresh
 ```
 
-v1 dependencies must not require it.
+v1 の依存はこれを必須にしてはならない。
 
 ## Cross-space links
 
-Cross-space links are denied by default and are not a current v1 dependency.
+Space 跨ぎ link はデフォルトで拒否され、current v1 の依存ではない。
 
 ```yaml
 fromSpaceId: space:platform
@@ -128,7 +130,8 @@ allowedAccess:
 expiresAt: optional
 ```
 
-`ResolutionSnapshot` and plan output must show cross-space usage as a risk.
+`ResolutionSnapshot` と plan 出力は Space 跨ぎ利用を risk として示さなければ
+ならない。
 
 ```text
 draft → active → refresh-required → stale → revoked
@@ -143,23 +146,22 @@ draft → active → refresh-required → stale → revoked
 | `stale`            | the TTL elapsed before refresh; resolution surfaces the `stale-export` Risk and then fails closed                   |
 | `revoked`          | operator removed the share; new resolutions are denied and existing material enters cleanup                         |
 
-Refresh / TTL rules:
+Refresh / TTL 規則:
 
-- Each share carries an `expiresAt` and an operator-controlled refresh policy.
-  Approaching the TTL transitions `active → refresh-required`.
-- A successful refresh returns the share to `active`. A missed refresh
-  transitions to `stale`.
-- Both `stale` and `revoked` queue cleanup of dependent generated material per
-  the
-  [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md);
-  unsuccessful cleanup produces RevokeDebt with
-  `reason: cross-space-share-expired`.
-- `stale-export` and `revoke-debt-created` are part of the closed Risk enum in
-  [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md).
+- 各 share は `expiresAt` と operator 管理の refresh policy を持つ。TTL に
+  近づくと `active → refresh-required` に遷移する。
+- refresh 成功は share を `active` に戻す。refresh 失敗は `stale` に遷移する。
+- `stale` と `revoked` はいずれも
+  [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
+  に従って依存する生成 material の cleanup を queue する。cleanup 失敗は
+  `reason: cross-space-share-expired` の RevokeDebt を生成する。
+- `stale-export` と `revoke-debt-created` は
+  [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md)
+  の closed Risk enum の一部である。
 
 ## Space-owned data boundaries
 
-A Space owns or selects the following partitions:
+Space は以下の partition を所有または選択する。
 
 ```text
 namespace registry visibility
@@ -172,19 +174,19 @@ approvals and policy decisions
 group heads and activation history
 ```
 
-Space isolation does not mean all data is physically stored in a separate
-database. It means every read, write, resolution, and operation is scoped by
-`spaceId` and policy.
+Space isolation はすべてのデータが物理的に別 database に保管されることを意味
+しない。すべての読み込み・書き込み・resolution・operation が `spaceId` と policy
+で scope されることを意味する。
 
 ## Group inside Space
 
-A `Group` is a deployment stream inside a Space. `GroupHead` identity is:
+`Group` は Space 内の deployment stream である。`GroupHead` の identity は:
 
 ```text
 spaceId + groupId
 ```
 
-Examples:
+例:
 
 ```text
 space:acme-prod/group:web
@@ -192,8 +194,8 @@ space:acme-prod/group:api
 space:acme-dev/group:web
 ```
 
-GroupHead updates are serialized inside the owning Space. A Group cannot become
-current in another Space.
+GroupHead 更新は所有 Space 内で直列化される。Group は別の Space で current に
+なることはできない。
 
 ## Space invariants
 
@@ -218,7 +220,7 @@ Activation isolation invariant:
 
 ## Minimal example
 
-The manifest does not mention Space.
+manifest は Space を言及しない。
 
 ```yaml
 apiVersion: "1.0"
@@ -241,16 +243,16 @@ resources:
         DATABASE_URL: ${ref:db.connectionString}
 ```
 
-When applied in `space:acme-prod`, the resource graph, selected providers,
-output refs, policies, secrets, artifacts, and GroupHead all resolve against the
-production Space.
+`space:acme-prod` で apply すると、resource graph、選ばれた provider、output
+ref、policy、secret、artifact、GroupHead はすべて production Space に対して
+resolve される。
 
 ```text
 space:acme-prod/takos.database.primary
 ```
 
-When applied in `space:acme-dev`, the same manifest resolves against the
-development Space.
+`space:acme-dev` で apply すると、同じ manifest が development Space に対して
+resolve される。
 
 ```text
 space:acme-dev/takos.database.primary

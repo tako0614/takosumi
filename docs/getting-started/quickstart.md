@@ -1,5 +1,7 @@
 # Quickstart — git clone から first deploy まで
 
+> このページでわかること: manifest を書いて最初のデプロイを行うまでの最短手順。
+
 このドキュメントは Takosumi で **manifest を 1 本書いて、selfhosted / AWS / GCP
 / Cloudflare / Azure / Kubernetes に deploy する** までの最短経路を示します。
 
@@ -118,7 +120,7 @@ operator side (VM 上):
 
 ```bash
 export TAKOSUMI_DATABASE_URL=postgresql://localhost/takosumi
-export TAKOSUMI_ENCRYPTION_KEY=$(openssl rand -base64 32)
+export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
 export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
 
 # selfhosted connector の置き場 (任意、defaults あり)
@@ -231,7 +233,7 @@ takosumi runtime-agent serve --port 8789 --token mytoken
 ```bash
 export TAKOSUMI_ENVIRONMENT=production
 export TAKOSUMI_DATABASE_URL=postgresql://prod-db.internal/takosumi
-export TAKOSUMI_ENCRYPTION_KEY=$(openssl rand -base64 32)
+export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
 export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
 
 # agent への接続情報
@@ -289,7 +291,7 @@ manifest path を必ず明示する pure deploy engine。
 
 | 症状                                                                      | 原因                                                                                                                 |
 | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `Refusing to start takosumi with plaintext secret storage`                | production mode で `TAKOSUMI_ENCRYPTION_KEY` 未設定                                                                  |
+| `Refusing to start takosumi with plaintext secret storage`                | production mode で `TAKOSUMI_SECRET_STORE_PASSPHRASE` 未設定                                                         |
 | `Refusing to start takosumi against an unencrypted database`              | production mode で DB at-rest encryption 未確認 (dev は `TAKOSUMI_DEV_MODE=1` で opt-out 可)                         |
 | `manifest.resources[] is required` / `manifest expands to zero resources` | `resources[]` が無い、または `resources: []` だけで apply しようとしている                                           |
 | 401 from `/v1/deployments`                                                | `TAKOSUMI_DEPLOY_TOKEN` 未設定 or token mismatch                                                                     |

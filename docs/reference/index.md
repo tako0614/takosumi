@@ -1,7 +1,6 @@
 # Reference
 
-> Stability: stable Audience: operator See also: navigation hub for all v1
-> reference docs
+> このページでわかること: Takosumi v1 リファレンスドキュメントの目次。
 
 Takosumi v1 の正式な API surface 仕様 / closed enum 定義 / wire schema / 運用
 protocol を集約する。各 doc は self-contained で、実装者・operator
@@ -61,14 +60,14 @@ allow / deny / approval を扱う closed vocabulary。
 
 ## Identity & Access
 
-account-plane identity / billing / RBAC は Takosumi Accounts に移管済みです。
-以下のページは link-compatible migration stub です。
+account-plane identity / billing / RBAC は Takosumi Accounts が所有する。 kernel
+側から見たときの境界を次のページで説明する。
 
-- [Actor / Organization Model](./actor-organization-model) — moved to Takosumi
-  Accounts
-- [RBAC Policy](./rbac-policy) — moved to Takosumi Accounts
-- [API Key Management](./api-key-management) — kernel deploy credentials only
-- [Auth Providers](./auth-providers) — moved to Takosumi Accounts
+- [Actor / Organization Model](./actor-organization-model) — actor /
+  organization の責務境界
+- [RBAC Policy](./rbac-policy) — RBAC を所有する layer の整理
+- [API Key Management](./api-key-management) — kernel deploy credential のみ
+- [Auth Providers](./auth-providers) — auth provider の責務境界
 
 ## Security & trust
 
@@ -82,7 +81,7 @@ operator が production 運用するための trust 境界。
 
 ## Tenant lifecycle
 
-Space provisioning / trial / export / deletion の正本 protocol。
+Space provisioning / trial / export / deletion の手順。
 
 - [Tenant Provisioning](./tenant-provisioning) — Space onboarding / initial
   CatalogRelease binding
@@ -166,20 +165,22 @@ shape catalog / provider / template / artifact 拡張面。
 
 ## Stability
 
-各 doc は冒頭に `Stability:` を明記する。stability の意味は以下:
+reference doc が freeze する v1 wire shape の対象:
 
-- **stable**: wire shape (closed enum 値、record schema field 名、HTTP endpoint
-  path、CLI subcommand 名、audit event 名、env var 名) は v1 で freeze、変更には
-  `CONVENTIONS.md` §6 RFC が必須。一方、operator-tunable な default 値
-  (TTL、grace window、threshold、batch size、quota tier cap 値、polling interval
-  等) は operator が env / config で override 可能で、これは stable
-  範疇に含まれない。default 値変更は wire 互換性 破壊ではないため、CHANGELOG
-  への記載は行うが RFC は不要。
-- **beta**: wire 互換維持の対象だが、minor evolution が許容される。 breaking
-  変更には RFC が必須。
-- **experimental**: 変更可能性あり、production 採用前に operator が CHANGELOG
-  を確認。
+- closed enum 値 / state machine の状態名と遷移
+- record schema の field 名と型
+- HTTP endpoint path と request / response の field 名
+- CLI subcommand 名と flag 名
+- audit event 名と payload field 名
+- environment variable 名
+- resource ID prefix と format
 
-stable doc 内に "operator-tunable" / "operator-decided" / "policy-controlled"
-と書かれた値は default を tuning できる operator policy であり、wire shape の
+これらの breaking 変更には `CONVENTIONS.md` §6 RFC が必須。
+
+operator-tunable な default 値 (TTL / grace window / threshold / batch size /
+quota tier cap / polling interval 等) は wire shape ではないため、 stability
+とは独立。 default 値変更は CHANGELOG への記載のみで足りる。
+
+doc 内で "operator-tunable" / "operator-decided" / "policy-controlled"
+と書かれた値は operator policy で tuning できる対象であり、 wire shape の
 stability とは独立に評価する。
