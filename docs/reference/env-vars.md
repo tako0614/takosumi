@@ -281,7 +281,7 @@ OperatorBoundaries trust model を弱めます。
   [DataAsset Kinds](/reference/artifact-kinds)、
   [DataAsset Policy](/reference/data-asset-policy)、
   [Secret Partitions](/reference/secret-partitions)、
-  [Migration / Upgrade](/reference/migration-upgrade)、
+  [Schema Evolution](/reference/migration-upgrade)、
   [Compliance Retention](/reference/compliance-retention)、
   [Observation Retention](/reference/observation-retention)
 

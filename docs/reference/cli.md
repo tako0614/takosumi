@@ -114,7 +114,7 @@ Exit codes: `0` SIGINT/SIGTERM での正常終了、 `1` bind 失敗または ke
 エラー。
 
 `takosumi server` の rolling upgrade / drain / kernel ↔ runtime-agent skew
-[Migration / Upgrade](/reference/migration-upgrade) を参照してください。
+[Schema Evolution](/reference/migration-upgrade) を参照してください。
 
 ### `takosumi deploy [<manifest>]`
 
@@ -408,7 +408,7 @@ signal を個別の exit code に mirror しません。
 - リファレンス: [Manifest](/manifest)、
   [Environment Variables](/reference/env-vars)、
   [DataAsset Kinds](/reference/artifact-kinds)、
-  [Migration / Upgrade](/reference/migration-upgrade)
+  [Schema Evolution](/reference/migration-upgrade)
 
 ## 関連 architecture notes
 
@@ -419,4 +419,4 @@ signal を個別の exit code に mirror しません。
 
 - [Kernel HTTP API](/reference/kernel-http-api)
 - [Environment Variables](/reference/env-vars)
-- [Migration & Upgrade](/reference/migration-upgrade)
+- [Schema Evolution](/reference/migration-upgrade)

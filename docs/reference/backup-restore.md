@@ -67,7 +67,7 @@ record を後方参照するように順序付けされる。restore は stream 
 を進みながら検証する。
 
 フォーマットは kernel major version 内で安定。cross-major restore は migration
-を経由する ([Migration / Upgrade](/reference/migration-upgrade) 参照)。
+を経由する ([Schema Evolution](/reference/migration-upgrade) 参照)。
 
 Rationale: cross-major restore は schema migration を経由する別 protocol で
 扱う。format を major に bind することで restore path 自体は logical import
@@ -214,7 +214,7 @@ restore は **同じ kernel major version 内でのみ保証される**。cross-
 
 1. **source** major version で動く kernel に restore する。
 2. operator 公開の rolling upgrade 手順
-   ([Migration / Upgrade](/reference/migration-upgrade)) を実行し、target major
+   ([Schema Evolution](/reference/migration-upgrade)) を実行し、target major
    version に進める。
 
 restore ツールはステップ 1 で cross-major 直接 restore を拒否し、migration
@@ -262,7 +262,7 @@ backup と restore は runtime kernel event と同じ hash chain に専用 audit
 - [Storage Schema](/reference/storage-schema)
 - [Audit Events](/reference/audit-events)
 - [Secret Partitions](/reference/secret-partitions)
-- [Migration / Upgrade](/reference/migration-upgrade)
+- [Schema Evolution](/reference/migration-upgrade)
 - [CLI](/reference/cli)
 - [Kernel HTTP API](/reference/kernel-http-api)
 - [Closed Enums](/reference/closed-enums)

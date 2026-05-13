@@ -40,9 +40,9 @@ digest = "sha256:" + lowercase_hex(SHA-256(canonical_encoding(input)))
   `sha256:` プレフィックスは digest の一部で、 byte 単位比較に含まれる
 - hash への入力は次節の canonical encoding で得られる byte 列
 
-`sha256:` プレフィックスは、 将来 `CONVENTIONS.md` §6 RFC で別 hash に
-移行する際にも wire shape を壊さないために存在します。 移行期間中は別
-プレフィックスの digest と `sha256:` digest が共存できます。
+`sha256:` プレフィックスは digest algorithm を explicit にするために存在します。
+将来 `CONVENTIONS.md` §6 RFC で別 hash を採用する場合は、prefix / verifier /
+docs / tests を同じ change set で current spec として更新します。
 
 ## Canonical encoding
 

@@ -228,4 +228,4 @@ cascading failure 防止の不変条件:
 - [Kernel HTTP API](/reference/kernel-http-api)
 - [Lifecycle Protocol](/reference/lifecycle)
 - [Cross-Process Locks](/reference/cross-process-locks)
-- [Migration / Upgrade](/reference/migration-upgrade)
+- [Schema Evolution](/reference/migration-upgrade)

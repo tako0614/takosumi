@@ -255,4 +255,4 @@ native trace exporter は target contract です。 :::
 - [Environment Variables](/reference/env-vars) — `TAKOSUMI_*` 一覧
 - [Lifecycle Protocol](/reference/lifecycle) — apply / destroy / lock 詳細
 - [Kernel HTTP API](/reference/kernel-http-api) — `/v1/deployments` 等の API
-- [Upgrade](/operator/upgrade) — version bump 時の runbook
+- [Version Alignment](/operator/upgrade) — package alignment

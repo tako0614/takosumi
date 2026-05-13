@@ -4,8 +4,7 @@
 
 Takosumi kernel の **初回起動 (new install)** における bootstrap
 手順をまとめます。 本ページは new install のみを対象とし、既存 install の
-upgrade は [Migration / Upgrade](/reference/migration-upgrade)
-を参照してください。
+upgrade は [Schema Evolution](/reference/migration-upgrade) を参照してください。
 
 Bootstrap は次を担う。
 
@@ -43,8 +42,8 @@ Backing store (file / object store / DB) に対し schema migration を up
 方向に走らせ、現行 kernel version の schema 版に揃える。
 
 - Storage が空 (initial) の場合のみ bootstrap path に入る
-- Storage に既存 data がある場合は bootstrap を **skip** し、Migration / Upgrade
-  path に切り替わる ([Migration / Upgrade](/reference/migration-upgrade))
+- Storage に既存 data がある場合は bootstrap を **skip** し、Schema Evolution
+  path に切り替わる ([Schema Evolution](/reference/migration-upgrade))
 - Schema migration は idempotent な up step で構成される
 
 ## Stage 2 — secret-partition-init
@@ -227,7 +226,7 @@ or 続行)。
 `kernel-bootstrap-completed` の payload に bootstrap 完了 wall clock / duration
 を含める。
 
-## Bootstrap と Migration / Upgrade の関係
+## Bootstrap と Schema Evolution の関係
 
 | 状況                          | 走る path                       |
 | ----------------------------- | ------------------------------- |
@@ -237,7 +236,7 @@ or 続行)。
 
 Bootstrap は **new install 専用**。Schema migration の cross-version
 semantics、kernel ↔ runtime-agent skew、rollback gate は
-[Migration / Upgrade](/reference/migration-upgrade) で扱う。
+[Schema Evolution](/reference/migration-upgrade) で扱う。
 
 ## Related architecture notes
 
@@ -256,5 +255,5 @@ semantics、kernel ↔ runtime-agent skew、rollback gate は
 - [Cross-Process Locks](/reference/cross-process-locks)
 - [Catalog Release Trust](/reference/catalog-release-trust)
 - [Audit Events](/reference/audit-events)
-- [Migration / Upgrade](/reference/migration-upgrade)
+- [Schema Evolution](/reference/migration-upgrade)
 - [Readiness Probes](/reference/readiness-probes)

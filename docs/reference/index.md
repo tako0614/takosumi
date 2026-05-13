@@ -94,8 +94,8 @@ Space provisioning / trial / export / deletion の手順。
 
 運用タスクと制限。
 
-- [Migration / Upgrade](./migration-upgrade) — rolling upgrade / rollback /
-  kernel ↔ runtime-agent skew
+- [Schema Evolution](./migration-upgrade) — rolling upgrade / rollback / kernel
+  ↔ runtime-agent skew
 - [Quota / Rate Limit](./quota-rate-limit) — per-tenant metering / rate limit
   policy
 - [Compliance Retention](./compliance-retention) — PCI-DSS / HIPAA / SOX

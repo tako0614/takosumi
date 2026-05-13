@@ -64,7 +64,7 @@ Trigger detail:
 | `incident-resolved`                    | An incident moved into `resolved`.                                                                           | notice           |
 | `space-trial-expiring`                 | Trial Space at 7d, 1d, and 1h before expiry.                                                                 | notice           |
 | `api-key-expiring`                     | API key TTL approaching at operator-tunable thresholds.                                                      | notice           |
-| `migration-completed`                  | A kernel migration finished successfully (see [Migration / Upgrade](/reference/migration-upgrade)).          | info             |
+| `migration-completed`                  | A kernel migration finished successfully (see [Schema Evolution](/reference/migration-upgrade)).             | info             |
 | `migration-rollback`                   | A kernel migration rolled back.                                                                              | warning          |
 
 category enum は v1 で closed。新規 category 追加は `CONVENTIONS.md` §6 RFC を
@@ -237,7 +237,7 @@ UI、per-recipient 配信 throttling は **Takosumi の scope 外** であり、
 - [RevokeDebt Model](/reference/revoke-debt)
 - [Quota and Rate Limit](/reference/quota-rate-limit)
 - [Incident Model](/reference/incident-model)
-- [Migration / Upgrade](/reference/migration-upgrade)
+- [Schema Evolution](/reference/migration-upgrade)
 - [Kernel HTTP API](/reference/kernel-http-api)
 - [Storage Schema](/reference/storage-schema)
 - [Resource IDs](/reference/resource-ids)

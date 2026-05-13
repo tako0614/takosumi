@@ -495,7 +495,7 @@ workflow / cron / hook の実行は kernel の外 (例: `takosumi-git`) で扱�
 - [Support Impersonation](/reference/support-impersonation)
 - [Cost Attribution](/reference/cost-attribution)
 - [Backup / Restore](/reference/backup-restore)
-- [Migration & Upgrade](/reference/migration-upgrade)
+- [Schema Evolution](/reference/migration-upgrade)
 - [Catalog Release Trust](/reference/catalog-release-trust)
 - [Kernel HTTP API](/reference/kernel-http-api)
 - [Audit Events](/reference/audit-events)

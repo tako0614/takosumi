@@ -552,10 +552,10 @@ machine) は [Runtime-Agent API](/reference/runtime-agent-api) を参照
 - 署名対象 byte 範囲: response body の **JSON canonical 形式** (`JSON.stringify`
   with sorted keys) のまま。HTTP header と status は含まず、**body bytes の
   SHA-256 を Ed25519 で署名** します。
-- Key rotation: kernel は新旧 2 keyId を `keys[]` で同時 publish し、移行期間
-  中は両方を accept します。古い keyId は publish 終了後 7 日以内に retire
-  します。Issuer 切替時は `X-Takosumi-Signature-Issuer` を変える前に
-  runtime-agent の trust store を更新する運用です。
+- Key rotation: kernel は current key set を `keys[]` で publish します。 Issuer
+  切替時は `X-Takosumi-Signature-Issuer` を変える前に runtime-agent の trust
+  store を更新する運用です。複数 key の受理期間は release-specific operator
+  evidence で扱い、public docs では固定しません。
 - `X-Takosumi-Signature-Issuer` 未配線の kernel では 501 `not_implemented`
   を返します。
 
