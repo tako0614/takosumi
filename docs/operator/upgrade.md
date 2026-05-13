@@ -22,34 +22,8 @@ Takosumi は **6 つの package** を JSR で独立に publish します。 各 
 | `@takos/takosumi-cli`           | `takosumi` コマンド                          |
 | `@takos/takosumi`               | 上記 5 つの umbrella                         |
 
-::: warning pre-1.0 0.x の minor bump (`0.10 → 0.11 → 0.12 → 0.13`) は breaking
-change を 含み得ます。 必ず
-[`CHANGELOG.md`](https://github.com/tako0614/takosumi/blob/master/CHANGELOG.md)
-の該当 minor entry を読んでから bump してください。 :::
-
----
-
-## Upgrade order
-
-依存方向は `contract → runtime-agent → kernel → plugins → cli → umbrella`。
-operator が触るのは概ね **kernel + runtime-agent + cli** の 3 つです。
-
-```
-┌─ contract ─────────────────────────────────────────┐
-│  upgrade order:                                     │
-│   1. contract  (型契約; 新 contract 出てから bump)   │
-│   2. runtime-agent + kernel                         │
-│      ※ 必ず同 minor まで揃える                       │
-│   3. plugins                                        │
-│   4. cli                                            │
-│   5. umbrella (@takos/takosumi)                     │
-└─────────────────────────────────────────────────────┘
-```
-
-::: warning kernel と agent の version skew kernel ↔ runtime-agent の version
-skew は、current release set で検証された組み合わせだけを採用してください。 別
-minor を混ぜると lifecycle envelope の field 差異で 4xx が返る可能性が
-あります。 :::
+pre-GA の package bump は release-specific private runbook と検証済み evidence
+で扱います。public docs には production 操作手順を固定しません。
 
 ---
 
