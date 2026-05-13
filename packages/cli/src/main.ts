@@ -15,7 +15,10 @@ import { pluginCommand } from "./commands/plugin.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { TAKOSUMI_CLI_VERSION } from "./version.ts";
 
-function createTakosumi(): Command {
+// deno-lint-ignore no-explicit-any
+export type TakosumiCommand = Command<any>;
+
+function createTakosumi(): TakosumiCommand {
   return new Command()
     .name("takosumi")
     .description("Takosumi: self-hostable PaaS toolkit")
@@ -39,7 +42,7 @@ function createTakosumi(): Command {
     .command("completions", new CompletionsCommand());
 }
 
-export const takosumi: Command = createTakosumi();
+export const takosumi: TakosumiCommand = createTakosumi();
 
 if (import.meta.main) {
   await takosumi.parse(Deno.args);
