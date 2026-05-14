@@ -23,17 +23,13 @@ import { buildOperationPlanPreview } from "../domains/deploy/operation_plan_prev
 import {
   appendOperationPlanJournalStages,
   InMemoryOperationJournalStore,
-  type OperationJournalEntry,
   type OperationJournalPhase,
-  type OperationJournalStage,
-  type OperationJournalStatus,
   type OperationJournalStore,
 } from "../domains/deploy/operation_journal.ts";
 import { buildRefDag } from "../domains/deploy/ref_resolver_v2.ts";
 import {
   InMemoryTakosumiDeploymentRecordStore,
   recordsFromAppliedResources,
-  type TakosumiAppliedResourceRecord,
   type TakosumiDeploymentRecord,
   type TakosumiDeploymentRecordStore,
 } from "../domains/deploy/takosumi_deployment_record_store.ts";
@@ -56,7 +52,6 @@ import {
   InMemoryRevokeDebtStore,
   type RevokeDebtRecord,
   type RevokeDebtStore,
-  summarizeRevokeDebt,
 } from "../domains/deploy/revoke_debt_store.ts";
 import type { CatalogReleaseVerificationResult } from "../domains/registry/mod.ts";
 import type {
@@ -102,7 +97,6 @@ import {
   type DeploymentAuditSummary,
   type DeploymentJournalEntrySummary,
   type DeploymentJournalSummary,
-  type DeploymentResourceSummary,
   type DeploymentRevokeDebtRecordSummary,
   type DeploymentSummary,
   type DeployPublicAuditResponse,
