@@ -3,6 +3,7 @@ import type {
   ObservabilitySink,
   TraceSpanEvent,
 } from "../services/observability/mod.ts";
+import { log } from "../shared/log.ts";
 
 export const TAKOSUMI_REQUEST_ID_HEADER = "x-request-id" as const;
 export const TAKOSUMI_CORRELATION_ID_HEADER = "x-correlation-id" as const;
@@ -298,9 +299,13 @@ async function recordRequestTrace(
     await sink.recordTrace(span);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    (options.warn ?? console.warn)(
-      `[takosumi-trace] failed to record ${span.name}: ${message}`,
-    );
+    if (options.warn) {
+      options.warn(
+        `[takosumi-trace] failed to record ${span.name}: ${message}`,
+      );
+    } else {
+      log.warn("kernel.api.trace_record_failed", { span: span.name, message });
+    }
   }
 }
 
