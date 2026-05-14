@@ -13,7 +13,6 @@ import type {
 } from "./types.ts";
 import {
   assertKnownFields,
-  HTTP_METHOD_PATTERN,
   IMAGE_DIGEST_PATTERN,
   isRecord,
   isSafeRepositoryRelativePath,
@@ -31,6 +30,16 @@ import {
   resourceDefaultAccessModeFor,
   runtimeContractRefFor,
 } from "./internal/contract_refs.ts";
+import {
+  isHttpRouteProtocol,
+  isPortProtocol,
+  isQueueRouteProtocol,
+  normalizeRouteMethods,
+  normalizeRoutePort,
+  normalizeRouteProtocol,
+  portForCompute,
+  routeMethodsOverlap,
+} from "./internal/route_helpers.ts";
 
 export interface CompileManifestOptions {
   source?: DeploySourceRef;
@@ -932,82 +941,6 @@ function validateRoutes(
     byName.set(name, route);
   }
   return byName;
-}
-
-function isHttpRouteProtocol(protocol: string | undefined): boolean {
-  const normalized = normalizeRouteProtocol(protocol);
-  return normalized === "http" || normalized === "https";
-}
-
-function isPortProtocol(protocol: string): boolean {
-  return protocol === "tcp" || protocol === "udp";
-}
-
-function isQueueRouteProtocol(protocol: string): boolean {
-  return protocol === "queue";
-}
-
-function normalizeRouteProtocol(protocol: string | undefined): string {
-  const normalized = (protocol ?? "https").toLowerCase();
-  interfaceContractRefFor(normalized);
-  return normalized;
-}
-
-function normalizeRoutePort(
-  routeName: string,
-  port: unknown,
-): number | undefined {
-  if (port === undefined) return undefined;
-  if (
-    typeof port !== "number" || !Number.isInteger(port) || port < 1 ||
-    port > 65535
-  ) {
-    throw new TypeError(`route.${routeName}.port must be integer 1..65535`);
-  }
-  return port;
-}
-
-function portForCompute(
-  compute: PublicComputeSpec | undefined,
-): number | undefined {
-  return typeof compute?.port === "number" && Number.isInteger(compute.port)
-    ? compute.port
-    : undefined;
-}
-
-function normalizeRouteMethods(
-  routeName: string,
-  methods: string[] | undefined,
-): readonly string[] | undefined {
-  if (methods === undefined) return undefined;
-  if (!Array.isArray(methods) || methods.length === 0) {
-    throw new TypeError(
-      `route.${routeName}.methods must be non-empty string array`,
-    );
-  }
-  const normalized = methods.map((method) => {
-    if (typeof method !== "string" || method.length === 0) {
-      throw new TypeError(`route.${routeName}.methods must be string array`);
-    }
-    const upper = method.toUpperCase();
-    if (!HTTP_METHOD_PATTERN.test(upper)) {
-      throw new TypeError(`route.${routeName}.methods contains invalid method`);
-    }
-    return upper;
-  });
-  if (new Set(normalized).size !== normalized.length) {
-    throw new TypeError(`route.${routeName}.methods contains duplicate method`);
-  }
-  return normalized;
-}
-
-function routeMethodsOverlap(
-  left: readonly string[] | undefined,
-  right: readonly string[] | undefined,
-): boolean {
-  if (!left || !right) return true;
-  const rightSet = new Set(right);
-  return left.some((method) => rightSet.has(method));
 }
 
 function validateOutputs(
