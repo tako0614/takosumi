@@ -1,11 +1,13 @@
 # AGENTS.md — Takosumi
 
 This repository is **Takosumi**, a self-hostable PaaS toolkit. It contains the
-PaaS kernel, the shape / provider / template plugin host, and the CLI as
-co-equal workspace packages, all consumable from JSR.
+type contract, the PaaS kernel, the shape / provider / template plugin host, the
+runtime-agent, and the CLI as co-equal workspace packages, all consumable from
+JSR.
 
 Canonical contract:
-[`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract).
+[`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (本
+workspace の `packages/contract/`)。
 
 ## Workspace 構成
 
@@ -13,10 +15,12 @@ Canonical contract:
 takosumi/
 ├── deno.json                (workspace root, 自身は publish しない)
 ├── packages/
+│   ├── contract/            @takos/takosumi-contract — Shape / ProviderPlugin / Template の型契約
 │   ├── kernel/              @takos/takosumi-kernel — HTTP server + apply pipeline + storage + workers
-│   ├── plugins/             @takos/takosumi-plugins — shapes / shape-providers / templates / providers / runtime-agent
+│   ├── plugins/             @takos/takosumi-plugins — shapes / shape-providers / templates / providers / factories
+│   ├── runtime-agent/       @takos/takosumi-runtime-agent — kernel ↔ tenant 間の gateway-manifest runtime
 │   ├── cli/                 @takos/takosumi-cli — `takosumi deploy` / `takosumi server` 等のコマンド
-│   └── all/                 @takos/takosumi — umbrella (上記 3 つを re-export)
+│   └── all/                 @takos/takosumi — umbrella (上記 5 つを re-export)
 ├── docs/, deploy/, fixtures/
 └── README.md, CONVENTIONS.md, CHANGELOG.md
 ```
@@ -75,13 +79,14 @@ takosumi/
 
 ## JSR publish layout
 
-| Package                    | Version | 内容                                                     |
-| -------------------------- | ------- | -------------------------------------------------------- |
-| `@takos/takosumi-contract` | 1.0.0+  | Shape / ProviderPlugin / Template の型契約 (別 repo)     |
-| `@takos/takosumi-kernel`   | 0.1.0+  | HTTP server + apply pipeline + storage + workers         |
-| `@takos/takosumi-plugins`  | 0.2.0+  | shape catalog + provider plugins + templates + factories |
-| `@takos/takosumi-cli`      | 0.1.0+  | CLI (`takosumi deploy` 等)                               |
-| `@takos/takosumi`          | 0.2.0+  | umbrella (kernel + plugins + cli を再公開)               |
+| Package                         | Version | 内容                                                     |
+| ------------------------------- | ------- | -------------------------------------------------------- |
+| `@takos/takosumi-contract`      | 2.5.0   | Shape / ProviderPlugin / Template の型契約               |
+| `@takos/takosumi-kernel`        | 0.14.0  | HTTP server + apply pipeline + storage + workers         |
+| `@takos/takosumi-plugins`       | 0.12.0  | shape catalog + provider plugins + templates + factories |
+| `@takos/takosumi-runtime-agent` | 0.7.0   | kernel ↔ tenant gateway-manifest runtime                 |
+| `@takos/takosumi-cli`           | 0.15.0  | CLI (`takosumi deploy` 等)                               |
+| `@takos/takosumi`               | 0.17.0  | umbrella (上記 5 つを再公開)                             |
 
 > Note: `@takos/` JSR scope は Takos が publish する **reference distribution**
 > であり、 authority は publisher ではなく contract (`@takos/takosumi-contract`)
@@ -112,7 +117,8 @@ takosumi deploy ./manifest.yml --remote https://kernel.example.com --token $T
 
 ## 依存関係
 
-- **Upstream**: `@takos/takosumi-contract` (型契約のみ、独立 repo)
+- **Upstream**: `@takos/takosumi-contract` (型契約のみ、本 workspace の
+  `packages/contract/`)
 - **Downstream consumers**: 任意の operator が JSR から install して self-host
 - **`takosumi-git` (canonical installer implementation)**: git 連携 / workflow
   runner / artifact build / manifest generation を担い、本 kernel の
