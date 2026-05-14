@@ -3,7 +3,6 @@
 import type {
   Deployment,
   DeploymentApproval,
-  DeploymentCondition,
   DeploymentInput,
   DeploymentMode,
   DeploymentStatus,
@@ -12,15 +11,7 @@ import type {
   ProviderObservation,
 } from "takosumi-contract";
 import {
-  activationCommittedCondition,
-  applyFailedCondition,
-  applyRolledBackCondition,
   type DeploymentProviderAdapter,
-  operationCondition,
-  type OperationOutcome,
-  operationRolledBackCondition,
-  type PlannedOperation,
-  planProviderOperations,
   rolledBackCondition,
   SYNTHETIC_PROVIDER_ADAPTER,
 } from "./apply_orchestrator.ts";
@@ -34,13 +25,11 @@ import {
 import {
   accessPathDeniedCondition,
   appendCondition,
-  applyingTransition,
-  approvalRequiredCondition,
   blockersToConditions,
-  isMissingOptionalStoreMethod,
   runPreflightValidator,
   validateDeploymentApproval,
 } from "./internal/deployment_conditions.ts";
+import { executeApply } from "./internal/apply_phase.ts";
 import { deepFreeze, stableHash } from "./internal/hash.ts";
 import { buildDeploymentArtifacts } from "./internal/resolution_pipeline.ts";
 import {
@@ -458,7 +447,11 @@ export class DeploymentService {
   async applyDeployment(input: ApplyDeploymentInput): Promise<Deployment> {
     const timer = startDeployMetricTimer();
     try {
-      const deployment = await this.#applyDeployment(input);
+      const deployment = await executeApply({
+        store: this.#store,
+        providerAdapter: this.#providerAdapter,
+        clock: this.#clock,
+      }, input);
       await this.#recordDeployMetric({
         operationKind: "apply",
         status: deployment.status === "applied" ? "succeeded" : "failed",
@@ -473,292 +466,6 @@ export class DeploymentService {
         deploymentId: input.deploymentId,
         startedAtMs: timer.startedAtMs,
       });
-      throw error;
-    }
-  }
-
-  async #applyDeployment(input: ApplyDeploymentInput): Promise<Deployment> {
-    const current = await this.#store.getDeployment(input.deploymentId);
-    if (!current) {
-      throw new Error(`unknown deployment: ${input.deploymentId}`);
-    }
-    if (current.status !== "resolved" && current.status !== "applying") {
-      // Finalized applies are rejected so callers (apply_worker, smoke tests)
-      // see a clear stale-precondition error instead of silently re-running
-      // provider operations. A prior crash may leave the record in `applying`;
-      // that state is resumed below with the same operation keys.
-      throw new Error(
-        `deployment ${current.id} is not in 'resolved' status (got '${current.status}')`,
-      );
-    }
-
-    const appliedAt = input.appliedAt ?? this.#clock().toISOString();
-
-    // H4 — Approval gate. When the resolution carried at least one
-    // `require-approval` policy decision, apply MUST receive an `approval`
-    // payload (either via `input.approval` or already attached to the
-    // resolved Deployment by `approveDeployment`). Missing approval finalises
-    // the Deployment as `failed` with an `ApprovalRequired` condition rather
-    // than letting the apply silently advance to provider materialisation.
-    const requireApproval = (current.policy_decisions ?? []).some(
-      (decision) => decision.decision === "require-approval",
-    );
-    const effectiveApproval = input.approval ?? current.approval ?? null;
-    if (effectiveApproval) {
-      validateDeploymentApproval(current, effectiveApproval, appliedAt);
-    }
-    if (requireApproval && !effectiveApproval) {
-      const failedConditions = appendCondition(
-        current.conditions,
-        approvalRequiredCondition({
-          observedGeneration: current.conditions.length + 1,
-          observedAt: appliedAt,
-          decisions: current.policy_decisions ?? [],
-        }),
-      );
-      const failed: Deployment = {
-        ...current,
-        status: "failed",
-        conditions: failedConditions,
-        finalized_at: appliedAt,
-      };
-      return await this.#store.putDeployment(deepFreeze(failed));
-    }
-
-    // Phase 17D — preflight validators. Each hook is invoked against the
-    // immutable `resolved` Deployment before any state transition. A
-    // validator returning `ok=false` aborts apply with no committed state
-    // change so the caller observes the stale read-set / drift / source
-    // snapshot signal directly on the resolved record.
-    await runPreflightValidator(
-      "ReadSetStale",
-      input.readSetValidator,
-      current,
-    );
-    await runPreflightValidator(
-      "DescriptorClosureDrift",
-      input.descriptorClosureValidator,
-      current,
-    );
-    await runPreflightValidator(
-      "SourceSnapshotInvalid",
-      input.sourceSnapshotValidator,
-      current,
-    );
-
-    const implicitHeadPrecondition = "expectedCurrentDeploymentId" in input
-      ? undefined
-      : await this.#store.getGroupHead({
-        spaceId: current.space_id,
-        groupId: current.group_id,
-      });
-
-    // Step 1: transition resolved → applying so consumers observing the store
-    // mid-apply see a progressing Deployment rather than a stuck `resolved`
-    // record. The phase condition lives on conditions[] (scope=phase).
-    const applyingDeployment = current.status === "applying"
-      ? current
-      : applyingTransition(current, appliedAt);
-    if (current.status !== "applying") {
-      await this.#store.putDeployment(deepFreeze(applyingDeployment));
-    }
-
-    // Step 2: plan provider operations from the resolved-graph projections.
-    const operations = planProviderOperations(applyingDeployment);
-
-    // Step 3: dispatch each operation through the provider adapter. Conditions
-    // accumulate as we go so a partial failure leaves enough breadcrumbs on
-    // the Deployment for downstream observability. C1 — successful operations
-    // are recorded so a subsequent failure can revert them in reverse order.
-    let conditions: readonly DeploymentCondition[] =
-      applyingDeployment.conditions;
-    let failure:
-      | { operation: PlannedOperation; reason: string; message?: string }
-      | undefined;
-    const committed: PlannedOperation[] = [];
-    for (const operation of operations) {
-      let outcome: OperationOutcome;
-      try {
-        outcome = await this.#providerAdapter.materialize(
-          applyingDeployment,
-          operation,
-        );
-      } catch (error) {
-        outcome = {
-          success: false,
-          reason: "ProviderMaterializationThrew",
-          message: error instanceof Error ? error.message : String(error),
-        };
-      }
-      conditions = appendCondition(
-        conditions,
-        operationCondition({
-          operation,
-          outcome,
-          observedGeneration: conditions.length + 1,
-          observedAt: appliedAt,
-        }),
-      );
-      if (!outcome.success) {
-        failure = {
-          operation,
-          reason: outcome.reason,
-          message: outcome.message,
-        };
-        break;
-      }
-      committed.push(operation);
-    }
-
-    // Step 4: terminate. On failure we mark the Deployment `failed` and skip
-    // the GroupHead advance; on success we advance and record the
-    // ActivationCommitted condition. Both branches finalize via a single
-    // putDeployment write so the persisted state is internally consistent.
-    if (failure) {
-      // C1 — Multi-cloud partial-success cleanup. Revert each previously
-      // committed operation in reverse order so a Cloudflare commit followed
-      // by an AWS failure does not leave the CF side dangling. The terminal
-      // condition records both the ApplyFailed reason and the rollback
-      // outcome (RolledBack vs RolledBackPartial).
-      const rollbackResult = await this.#rollbackCommittedOperations({
-        deployment: applyingDeployment,
-        committed,
-        observedAt: appliedAt,
-        startingGeneration: conditions.length + 1,
-      });
-      conditions = [...conditions, ...rollbackResult.conditions];
-      const failedConditions = appendCondition(
-        appendCondition(
-          conditions,
-          applyFailedCondition({
-            operation: failure.operation,
-            outcome: {
-              success: false,
-              reason: failure.reason,
-              message: failure.message,
-            },
-            observedGeneration: conditions.length + 1,
-            observedAt: appliedAt,
-          }),
-        ),
-        applyRolledBackCondition({
-          observedGeneration: conditions.length + 2,
-          observedAt: appliedAt,
-          partial: rollbackResult.partial,
-          revertedCount: rollbackResult.revertedCount,
-          failedRevertCount: rollbackResult.failedRevertCount,
-        }),
-      );
-      const failed: Deployment = {
-        ...applyingDeployment,
-        status: "failed",
-        conditions: failedConditions,
-        finalized_at: appliedAt,
-      };
-      return await this.#store.putDeployment(deepFreeze(failed));
-    }
-
-    // GroupHead CAS — Phase 17D. When the caller pins
-    // `expectedCurrentDeploymentId`, the store rejects the commit if the
-    // observed pointer differs. The reject path rolls back provider
-    // operations and finalises this Deployment as `failed`; the head never
-    // points at an `applying` Deployment.
-    const advanceInput: AdvanceGroupHeadInput = {
-      spaceId: applyingDeployment.space_id,
-      groupId: applyingDeployment.group_id,
-      currentDeploymentId: applyingDeployment.id,
-      advancedAt: appliedAt,
-      ...("expectedCurrentDeploymentId" in input
-        ? {
-          expectedCurrentDeploymentId: input.expectedCurrentDeploymentId ??
-            undefined,
-        }
-        : {
-          expectedCurrentDeploymentId: implicitHeadPrecondition
-            ?.current_deployment_id,
-          expectedGeneration: implicitHeadPrecondition?.generation ?? 0,
-        }),
-    };
-    const successConditions = appendCondition(
-      conditions,
-      activationCommittedCondition({
-        observedGeneration: conditions.length + 1,
-        observedAt: appliedAt,
-      }),
-    );
-    const applied: Deployment = {
-      ...applyingDeployment,
-      status: "applied",
-      approval: input.approval ?? applyingDeployment.approval ?? null,
-      applied_at: appliedAt,
-      finalized_at: appliedAt,
-      conditions: successConditions,
-    };
-    try {
-      if (this.#store.commitAppliedDeployment) {
-        try {
-          const result = await this.#store.commitAppliedDeployment({
-            ...advanceInput,
-            deployment: deepFreeze(applied),
-          });
-          return result.deployment;
-        } catch (error) {
-          if (!isMissingOptionalStoreMethod(error, "commitAppliedDeployment")) {
-            throw error;
-          }
-        }
-      }
-      await this.#store.putDeployment(deepFreeze(applied));
-      await this.#store.advanceGroupHead(advanceInput);
-      return applied;
-    } catch (error) {
-      const rollbackResult = await this.#rollbackCommittedOperations({
-        deployment: applyingDeployment,
-        committed,
-        observedAt: appliedAt,
-        startingGeneration: conditions.length + 1,
-      });
-      const message = error instanceof Error ? error.message : String(error);
-      const rolledBackConditions = [
-        ...conditions,
-        ...rollbackResult.conditions,
-      ];
-      const failedConditions = appendCondition(
-        appendCondition(
-          rolledBackConditions,
-          applyFailedCondition({
-            operation: {
-              key: `${applyingDeployment.id}|activation.commit|stale-head`,
-              kind: "activation.commit",
-              objectAddress: applyingDeployment.desired.activation_envelope
-                .primary_assignment.componentAddress,
-              desiredDigest:
-                applyingDeployment.desired.activation_envelope.envelopeDigest,
-            },
-            outcome: {
-              success: false,
-              reason: "GroupHeadStale",
-              message,
-            },
-            observedGeneration: rolledBackConditions.length + 1,
-            observedAt: appliedAt,
-          }),
-        ),
-        applyRolledBackCondition({
-          observedGeneration: rolledBackConditions.length + 2,
-          observedAt: appliedAt,
-          partial: rollbackResult.partial,
-          revertedCount: rollbackResult.revertedCount,
-          failedRevertCount: rollbackResult.failedRevertCount,
-        }),
-      );
-      const failed: Deployment = {
-        ...applyingDeployment,
-        status: "failed",
-        conditions: failedConditions,
-        finalized_at: appliedAt,
-      };
-      await this.#store.putDeployment(deepFreeze(failed));
       throw error;
     }
   }
@@ -1070,77 +777,6 @@ export class DeploymentService {
     filter: ProviderObservationFilter = {},
   ): Promise<readonly ProviderObservation[]> {
     return await this.#store.listObservations?.(filter) ?? [];
-  }
-
-  /**
-   * C1 — Multi-cloud partial-success cleanup. Iterates the previously
-   * committed operations in reverse order and asks the provider adapter to
-   * revert each one. Adapters that omit `rollback` (logically irreversible)
-   * cause the result to flip to `partial=true` so the caller emits a
-   * `RolledBackPartial` terminal condition. The per-operation revert outcome
-   * is recorded as an `OperationRolledBack` / `OperationRollbackFailed`
-   * condition on the failed Deployment for downstream observability.
-   */
-  async #rollbackCommittedOperations(input: {
-    readonly deployment: Deployment;
-    readonly committed: readonly PlannedOperation[];
-    readonly observedAt: IsoTimestamp;
-    readonly startingGeneration: number;
-  }): Promise<{
-    readonly conditions: readonly DeploymentCondition[];
-    readonly partial: boolean;
-    readonly revertedCount: number;
-    readonly failedRevertCount: number;
-  }> {
-    const conditions: DeploymentCondition[] = [];
-    let generation = input.startingGeneration;
-    let revertedCount = 0;
-    let failedRevertCount = 0;
-    // Reverse order so later commits unwind before earlier ones (Cloudflare
-    // commit then AWS failure → revert AWS-shaped commits first if any, then
-    // Cloudflare-shaped commits).
-    for (let i = input.committed.length - 1; i >= 0; i--) {
-      const operation = input.committed[i];
-      let outcome: OperationOutcome;
-      if (typeof this.#providerAdapter.rollback !== "function") {
-        outcome = {
-          success: false,
-          reason: "RollbackUnsupported",
-          message:
-            "provider adapter does not implement rollback for this operation",
-        };
-        failedRevertCount += 1;
-      } else {
-        try {
-          outcome = await this.#providerAdapter.rollback(
-            input.deployment,
-            operation,
-          );
-          if (outcome.success) revertedCount += 1;
-          else failedRevertCount += 1;
-        } catch (error) {
-          outcome = {
-            success: false,
-            reason: "RollbackThrew",
-            message: error instanceof Error ? error.message : String(error),
-          };
-          failedRevertCount += 1;
-        }
-      }
-      conditions.push(operationRolledBackCondition({
-        operation,
-        outcome,
-        observedGeneration: generation,
-        observedAt: input.observedAt,
-      }));
-      generation += 1;
-    }
-    return {
-      conditions,
-      partial: failedRevertCount > 0,
-      revertedCount,
-      failedRevertCount,
-    };
   }
 }
 
