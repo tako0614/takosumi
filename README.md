@@ -5,6 +5,8 @@ self-hosted 環境にデプロイできる、完全独立の PaaS**。
 
 📖 ドキュメント: <https://docs.takosumi.com/>
 
+## Quickstart
+
 ```bash
 deno install -gA -n takosumi jsr:@takos/takosumi-cli
 takosumi init ./manifest.yml             # 明示 path に manifest を作る
@@ -23,46 +25,9 @@ takosumi doctor --manifest ./manifest.yml
 takosumi deploy ./manifest.yml
 ```
 
-`.takosumi/manifest.yml` と `.takosumi/workflows/*.yml` の project layout は
-`takosumi-git` の責務です。Takosumi kernel / CLI は project convention
-を自動探索せず、 manifest を明示 path で受け取ります。
-
-## Workspace layout
-
-```
-takosumi/
-├── packages/
-│   ├── contract/        @takos/takosumi-contract       — Shape / Provider / Template の型契約
-│   ├── runtime-agent/   @takos/takosumi-runtime-agent  — cloud SDK / OS executor (data plane)
-│   ├── plugins/         @takos/takosumi-plugins        — shapes / providers / templates / factories
-│   ├── kernel/          @takos/takosumi-kernel         — HTTP server + apply pipeline + storage + workers
-│   ├── cli/             @takos/takosumi-cli            — `takosumi deploy` 等のコマンド
-│   └── all/             @takos/takosumi                — umbrella (上記 5 つを再公開)
-├── docs/                                                — VitePress site (`deno task docs:dev`)
-├── deploy/, fixtures/
-└── AGENTS.md, CONVENTIONS.md, CHANGELOG.md
-```
-
-Canonical contract:
-[`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (別 repo,
-型のみ)。
-
-## JSR packages
-
-| Package                                                                             | 用途                                                                  |
-| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | turnkey: kernel + plugins + cli を一括取得                            |
-| [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | kernel only (`deno run -A jsr:@takos/takosumi-kernel` で server 起動) |
-| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | shape catalog + provider + template + factories                       |
-| [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | runtime-agent (data plane: cloud SDK / OS executor)                   |
-| [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                                   |
-| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | 型契約 (上流)                                                         |
-
-The `@takos/` JSR scope is the **reference Takosumi distribution** published by
-Takos; the authority is the contract (`@takos/takosumi-contract`), not the
-publisher. Alternative publishers (e.g., `@example/takosumi-kernel`) are
-spec-compatible — currently untested, but have no architectural privilege over
-this scope.
+> Note: `.takosumi/manifest.yml` と `.takosumi/workflows/*.yml` の project
+> layout は `takosumi-git` の責務です。Takosumi kernel / CLI は project
+> convention を自動探索せず、 manifest を明示 path で受け取ります。
 
 ## 設計の核
 
@@ -141,6 +106,42 @@ takosumi completions zsh  > ~/.zfunc/_takosumi
 takosumi completions fish > ~/.config/fish/completions/takosumi.fish
 ```
 
+## JSR packages
+
+| Package                                                                             | 用途                                                                  |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | turnkey: kernel + plugins + cli を一括取得                            |
+| [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | kernel only (`deno run -A jsr:@takos/takosumi-kernel` で server 起動) |
+| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | shape catalog + provider + template + factories                       |
+| [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | runtime-agent (data plane: cloud SDK / OS executor)                   |
+| [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                                   |
+| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | 型契約 (上流)                                                         |
+
+<sub>Note: `@takos/` JSR scope で公開される reference Takosumi distribution
+であり、 authority は publisher ではなく contract (`@takos/takosumi-contract`)
+の側にある。 alternative publisher (例: `@example/takosumi-kernel`) は
+spec-compatible — currently untested だが、この scope に対する architectural
+privilege は持たない。</sub>
+
+## Workspace layout
+
+```
+takosumi/
+├── packages/
+│   ├── contract/        @takos/takosumi-contract       — Shape / Provider / Template の型契約
+│   ├── runtime-agent/   @takos/takosumi-runtime-agent  — cloud SDK / OS executor (data plane)
+│   ├── plugins/         @takos/takosumi-plugins        — shapes / providers / templates / factories
+│   ├── kernel/          @takos/takosumi-kernel         — HTTP server + apply pipeline + storage + workers
+│   ├── cli/             @takos/takosumi-cli            — `takosumi deploy` 等のコマンド
+│   └── all/             @takos/takosumi                — umbrella (上記 5 つを再公開)
+├── docs/                                                — VitePress site (`deno task docs:dev`)
+├── deploy/, fixtures/
+└── AGENTS.md, CONVENTIONS.md, CHANGELOG.md
+```
+
+Canonical contract source は `packages/contract/` で、公開 package は
+[`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)。
+
 ## Development
 
 ```bash
@@ -158,14 +159,14 @@ cd packages/cli && deno task test
 cd packages/kernel && deno task db:migrate:dry-run
 ```
 
-### Release
+## Release
 
 Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks
 the workspace, runs tests, performs a JSR dry-run, publishes the six JSR
 packages with GitHub OIDC, and builds/pushes the `takosumi` OCI image to GHCR.
 Manual workflow runs stay dry-run unless the explicit `publish` input is set.
 
-### Docs site (VitePress)
+## Docs site (VitePress)
 
 ```bash
 deno task docs:install   # cd docs && npm install (vitepress を pin)
