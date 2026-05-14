@@ -18,10 +18,10 @@ import {
 /**
  * `provider.aws.s3@v1` — S3 bucket lifecycle + IAM-aware object access.
  *
- * For data plane object I/O the kernel uses {@link AwsObjectStorageClient}
- * (already routed through `AwsObjectStorageAdapter`). This module adds the
- * descriptor-side bucket lifecycle (create / configure / delete) plus narrow
- * IAM policy attachment that the resource subsystem invokes.
+ * For data plane object I/O the kernel uses {@link AwsObjectStorageClient}.
+ * This module adds the descriptor-side bucket lifecycle (create / configure /
+ * delete) plus narrow IAM policy attachment that the resource subsystem
+ * invokes.
  *
  * Production-grade behaviour:
  *  - retry / backoff on throttling / 5xx

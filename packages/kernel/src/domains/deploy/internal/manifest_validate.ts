@@ -42,7 +42,10 @@ import {
   portForCompute,
   routeMethodsOverlap,
 } from "./route_helpers.ts";
-import { resourceBindingsByComputeFor, resourceBindingsFor } from "./resource_bindings.ts";
+import {
+  resourceBindingsByComputeFor,
+  resourceBindingsFor,
+} from "./resource_bindings.ts";
 
 interface ValidateManifestOptions {
   autoHostnameAvailable?: boolean;

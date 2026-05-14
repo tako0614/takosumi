@@ -120,6 +120,27 @@ import type {
   UsageStorageStores,
 } from "./driver.ts";
 import { storageStatementCatalog } from "./statements.ts";
+import {
+  assertDeploymentHeadScope,
+  groupHeadKey,
+  immutable,
+  matchesAuditQuery,
+  maxIso,
+  membershipKey,
+  minIso,
+  normalizeDeploymentStatusFilter,
+  packageKey,
+} from "./memory/helpers.ts";
+import {
+  cloneState,
+  createEmptyState,
+  type MemoryDeployState,
+  type MemoryStorageSnapshot,
+  type MemoryStorageState,
+  snapshotState,
+} from "./memory/state.ts";
+
+export type { MemoryStorageSnapshot };
 
 export interface MemoryStorageDriverOptions {
   readonly providerSupportReports?: readonly ProviderSupportReport[];
@@ -161,29 +182,6 @@ export class MemoryStorageDriver implements StorageDriver {
   snapshot(): MemoryStorageSnapshot {
     return snapshotState(this.#state);
   }
-}
-
-export interface MemoryStorageSnapshot {
-  readonly spaces: readonly Space[];
-  readonly groups: readonly Group[];
-  readonly spaceMemberships: readonly SpaceMembership[];
-  readonly runtimeDesiredStates: readonly RuntimeDesiredState[];
-  readonly runtimeObservedStates: readonly RuntimeObservedStateSnapshot[];
-  readonly providerObservations: readonly ProviderObservation[];
-  readonly resourceInstances: readonly ResourceInstance[];
-  readonly resourceBindings: readonly ResourceBinding[];
-  readonly bindingSetRevisions: readonly BindingSetRevision[];
-  readonly migrationLedgerEntries: readonly MigrationLedgerEntry[];
-  readonly packageDescriptors: readonly PackageDescriptor[];
-  readonly packageResolutions: readonly PackageResolution[];
-  readonly trustRecords: readonly TrustRecord[];
-  readonly auditEvents: readonly AuditEvent[];
-  readonly usageAggregates: readonly UsageAggregate[];
-  readonly serviceEndpoints: readonly ServiceEndpoint[];
-  readonly serviceTrustRecords: readonly ServiceTrustRecord[];
-  readonly serviceGrants: readonly ServiceGrant[];
-  readonly runtimeAgents: readonly RuntimeAgentRecord[];
-  readonly runtimeAgentWorkItems: readonly RuntimeAgentWorkItem[];
 }
 
 class MemoryStorageTransaction implements StorageTransaction {
@@ -1154,254 +1152,4 @@ class MemoryServiceGrantStore implements ServiceGrantStore {
       [...this.grants.values()].filter((grant) => grant.subject === subject),
     );
   }
-}
-
-interface MemoryStorageState {
-  readonly core: {
-    readonly spaces: Map<SpaceId, Space>;
-    readonly groups: Map<string, Group>;
-    readonly spaceMemberships: Map<string, SpaceMembership>;
-  };
-  readonly deploy: MemoryDeployState;
-  readonly runtime: {
-    readonly desiredStates: Map<RuntimeDesiredStateId, RuntimeDesiredState>;
-    readonly observedStates: Map<
-      RuntimeObservedStateId,
-      RuntimeObservedStateSnapshot
-    >;
-    readonly providerObservations: ProviderObservation[];
-  };
-  readonly resources: {
-    readonly instances: Map<ResourceInstanceId, ResourceInstance>;
-    readonly bindings: Map<ResourceBindingId, ResourceBinding>;
-    readonly bindingSetRevisions: Map<BindingSetRevisionId, BindingSetRevision>;
-    readonly migrationLedger: Map<MigrationLedgerId, MigrationLedgerEntry>;
-  };
-  readonly registry: {
-    readonly descriptors: Map<string, PackageDescriptor>;
-    readonly resolutions: Map<string, PackageResolution>;
-    readonly trustRecords: Map<string, TrustRecord>;
-    readonly providerSupportReports: readonly ProviderSupportReport[];
-  };
-  readonly audit: {
-    readonly events: Map<AuditEventId, AuditEvent>;
-    readonly order: AuditEventId[];
-  };
-  readonly usage: {
-    readonly aggregates: Map<string, UsageAggregate>;
-  };
-  readonly serviceEndpoints: {
-    readonly endpoints: Map<ServiceEndpointId, ServiceEndpoint>;
-    readonly trustRecords: Map<ServiceTrustRecordId, ServiceTrustRecord>;
-    readonly grants: Map<ServiceGrantId, ServiceGrant>;
-  };
-  readonly runtimeAgent: {
-    readonly agents: Map<RuntimeAgentId, RuntimeAgentRecord>;
-    readonly works: Map<RuntimeAgentWorkId, RuntimeAgentWorkItem>;
-  };
-}
-
-interface MemoryDeployState {
-  readonly deployments: Map<string, Deployment>;
-  readonly groupHeads: Map<string, GroupHead>;
-  readonly providerObservations: Map<string, CoreProviderObservation>;
-}
-
-function createEmptyState(
-  providerSupportReports: readonly ProviderSupportReport[],
-): MemoryStorageState {
-  return {
-    core: {
-      spaces: new Map(),
-      groups: new Map(),
-      spaceMemberships: new Map(),
-    },
-    deploy: {
-      deployments: new Map(),
-      groupHeads: new Map(),
-      providerObservations: new Map(),
-    },
-    runtime: {
-      desiredStates: new Map(),
-      observedStates: new Map(),
-      providerObservations: [],
-    },
-    resources: {
-      instances: new Map(),
-      bindings: new Map(),
-      bindingSetRevisions: new Map(),
-      migrationLedger: new Map(),
-    },
-    registry: {
-      descriptors: new Map(),
-      resolutions: new Map(),
-      trustRecords: new Map(),
-      providerSupportReports: immutable(providerSupportReports),
-    },
-    audit: {
-      events: new Map(),
-      order: [],
-    },
-    usage: {
-      aggregates: new Map(),
-    },
-    serviceEndpoints: {
-      endpoints: new Map(),
-      trustRecords: new Map(),
-      grants: new Map(),
-    },
-    runtimeAgent: {
-      agents: new Map(),
-      works: new Map(),
-    },
-  };
-}
-
-function cloneState(state: MemoryStorageState): MemoryStorageState {
-  return {
-    core: {
-      spaces: cloneMap(state.core.spaces),
-      groups: cloneMap(state.core.groups),
-      spaceMemberships: cloneMap(state.core.spaceMemberships),
-    },
-    deploy: {
-      deployments: cloneMap(state.deploy.deployments),
-      groupHeads: cloneMap(state.deploy.groupHeads),
-      providerObservations: cloneMap(state.deploy.providerObservations),
-    },
-    runtime: {
-      desiredStates: cloneMap(state.runtime.desiredStates),
-      observedStates: cloneMap(state.runtime.observedStates),
-      providerObservations: state.runtime.providerObservations.map(immutable),
-    },
-    resources: {
-      instances: cloneMap(state.resources.instances),
-      bindings: cloneMap(state.resources.bindings),
-      bindingSetRevisions: cloneMap(state.resources.bindingSetRevisions),
-      migrationLedger: cloneMap(state.resources.migrationLedger),
-    },
-    registry: {
-      descriptors: cloneMap(state.registry.descriptors),
-      resolutions: cloneMap(state.registry.resolutions),
-      trustRecords: cloneMap(state.registry.trustRecords),
-      providerSupportReports: state.registry.providerSupportReports,
-    },
-    audit: {
-      events: cloneMap(state.audit.events),
-      order: [...state.audit.order],
-    },
-    usage: {
-      aggregates: cloneMap(state.usage.aggregates),
-    },
-    serviceEndpoints: {
-      endpoints: cloneMap(state.serviceEndpoints.endpoints),
-      trustRecords: cloneMap(state.serviceEndpoints.trustRecords),
-      grants: cloneMap(state.serviceEndpoints.grants),
-    },
-    runtimeAgent: {
-      agents: cloneMap(state.runtimeAgent.agents),
-      works: cloneMap(state.runtimeAgent.works),
-    },
-  };
-}
-
-function cloneMap<K, V>(source: Map<K, V>): Map<K, V> {
-  const next = new Map<K, V>();
-  for (const [key, value] of source) next.set(key, immutable(value));
-  return next;
-}
-
-function snapshotState(state: MemoryStorageState): MemoryStorageSnapshot {
-  return immutable({
-    spaces: [...state.core.spaces.values()],
-    groups: [...state.core.groups.values()],
-    spaceMemberships: [...state.core.spaceMemberships.values()],
-    runtimeDesiredStates: [...state.runtime.desiredStates.values()],
-    runtimeObservedStates: [...state.runtime.observedStates.values()],
-    providerObservations: [...state.runtime.providerObservations],
-    resourceInstances: [...state.resources.instances.values()],
-    resourceBindings: [...state.resources.bindings.values()],
-    bindingSetRevisions: [...state.resources.bindingSetRevisions.values()],
-    migrationLedgerEntries: [...state.resources.migrationLedger.values()],
-    packageDescriptors: [...state.registry.descriptors.values()],
-    packageResolutions: [...state.registry.resolutions.values()],
-    trustRecords: [...state.registry.trustRecords.values()],
-    auditEvents: state.audit.order
-      .map((id) => state.audit.events.get(id))
-      .filter((event): event is AuditEvent => event !== undefined),
-    usageAggregates: [...state.usage.aggregates.values()],
-    serviceEndpoints: [...state.serviceEndpoints.endpoints.values()],
-    serviceTrustRecords: [...state.serviceEndpoints.trustRecords.values()],
-    serviceGrants: [...state.serviceEndpoints.grants.values()],
-    runtimeAgents: [...state.runtimeAgent.agents.values()],
-    runtimeAgentWorkItems: [...state.runtimeAgent.works.values()],
-  });
-}
-
-function immutable<T>(value: T): T {
-  return deepFreeze(structuredClone(value));
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
-}
-
-function membershipKey(spaceId: SpaceId, accountId: AccountId): string {
-  return `${spaceId}:${accountId}`;
-}
-
-function groupHeadKey(spaceId: string, groupId: string): string {
-  return `${spaceId}\u0000${groupId}`;
-}
-
-function assertDeploymentHeadScope(
-  input: AdvanceGroupHeadInput,
-  deployment: Deployment,
-): void {
-  if (deployment.space_id !== input.spaceId) {
-    throw new Error(
-      `deployment ${deployment.id} belongs to space ${deployment.space_id}, not ${input.spaceId}`,
-    );
-  }
-  if (deployment.group_id !== input.groupId) {
-    throw new Error(
-      `deployment ${deployment.id} belongs to group ${deployment.group_id}, not ${input.groupId}`,
-    );
-  }
-}
-
-function normalizeDeploymentStatusFilter(
-  status: DeploymentFilter["status"],
-): Set<Deployment["status"]> | undefined {
-  if (status === undefined) return undefined;
-  return new Set(Array.isArray(status) ? status : [status]);
-}
-
-function packageKey(kind: PackageKind, ref: string, digest: string): string {
-  return `${kind}:${ref}:${digest}`;
-}
-
-function matchesAuditQuery(event: AuditEvent, query: AuditEventQuery): boolean {
-  if (query.spaceId && event.spaceId !== query.spaceId) return false;
-  if (query.groupId && event.groupId !== query.groupId) return false;
-  if (query.targetType && event.targetType !== query.targetType) return false;
-  if (query.targetId && event.targetId !== query.targetId) return false;
-  if (query.type && event.type !== query.type) return false;
-  if (query.since && event.occurredAt < query.since) return false;
-  if (query.until && event.occurredAt > query.until) return false;
-  return true;
-}
-
-function minIso(left: string, right: string): string {
-  return left <= right ? left : right;
-}
-
-function maxIso(left: string, right: string): string {
-  return left >= right ? left : right;
 }
