@@ -757,8 +757,7 @@ function warnAboutDevAdapterFallbacks(options: AppContextOptions): void {
   if (fallbacks.length === 0) return;
   log.warn("kernel.boot.in_memory_fallbacks", {
     ports: fallbacks,
-    hint:
-      "set TAKOSUMI_* env adapters or pass `adapters` explicitly to " +
+    hint: "set TAKOSUMI_* env adapters or pass `adapters` explicitly to " +
       "persist state across restarts. Set TAKOSUMI_LOG_LEVEL=warn to " +
       "suppress this notice.",
   });
