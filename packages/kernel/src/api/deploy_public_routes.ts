@@ -23,6 +23,7 @@ import {
   InMemoryRevokeDebtStore,
   type RevokeDebtStore,
 } from "../domains/deploy/revoke_debt_store.ts";
+import { log } from "../shared/log.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
 import { executeDeployPublicPost } from "./deploy_public_apply_handler.ts";
 import {
@@ -99,10 +100,11 @@ export function registerDeployPublicRoutes(
     (() => Deno.env.get("TAKOSUMI_DEPLOY_TOKEN"));
   const initialToken = getToken();
   if (!initialToken) {
-    console.warn(
-      `[takosumi-deploy] TAKOSUMI_DEPLOY_TOKEN is not set; ` +
-        `${TAKOSUMI_DEPLOY_PUBLIC_PATH} will return 404 until configured.`,
-    );
+    log.warn("kernel.api.deploy_public_disabled_no_token", {
+      path: TAKOSUMI_DEPLOY_PUBLIC_PATH,
+      hint: "TAKOSUMI_DEPLOY_TOKEN is not set; deploy public route will " +
+        "return 404 until configured.",
+    });
   }
 
   const tenantId = options.tenantId ?? "takosumi-deploy";

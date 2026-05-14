@@ -11,6 +11,7 @@ import type {
 } from "../adapters/object-storage/types.ts";
 import type { TakosumiDeploymentRecordStore } from "../domains/deploy/takosumi_deployment_record_store.ts";
 import { apiError } from "./errors.ts";
+import { log } from "../shared/log.ts";
 
 /**
  * Artifact upload endpoints — the data plane for `takosumi artifact push`.
@@ -126,10 +127,11 @@ export function registerArtifactRoutes(
 
   const initialToken = getToken();
   if (!initialToken) {
-    console.warn(
-      `[takosumi-artifacts] TAKOSUMI_DEPLOY_TOKEN unset; ` +
-        `${TAKOSUMI_ARTIFACTS_PATH} will return 404 until configured.`,
-    );
+    log.warn("kernel.api.artifacts_disabled_no_token", {
+      path: TAKOSUMI_ARTIFACTS_PATH,
+      hint: "TAKOSUMI_DEPLOY_TOKEN unset; artifact routes will return 404 " +
+        "until configured.",
+    });
   }
 
   app.post(TAKOSUMI_ARTIFACTS_PATH, async (c) => {
