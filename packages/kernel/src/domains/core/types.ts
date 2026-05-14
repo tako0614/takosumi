@@ -3,9 +3,10 @@ import type {
   TakosumiActorContext,
 } from "takosumi-contract";
 import type { IsoTimestamp } from "../../shared/time.ts";
+import type { SpaceId } from "../../shared/ids.ts";
 
+export type { SpaceId };
 export type AccountId = string;
-export type SpaceId = string;
 export type GroupId = string;
 export type GroupSlug = string;
 export type EntitlementKey = string;

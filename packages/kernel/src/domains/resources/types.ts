@@ -7,12 +7,13 @@ import type {
   ObjectAddress,
 } from "takosumi-contract";
 import type { IsoTimestamp } from "../../shared/time.ts";
+import type { SpaceId } from "../../shared/ids.ts";
 
+export type { SpaceId };
 export type ResourceInstanceId = string;
 export type ResourceBindingId = string;
 export type BindingSetRevisionId = string;
 export type MigrationLedgerId = string;
-export type SpaceId = string;
 export type GroupId = string;
 
 export type ResourceOrigin =

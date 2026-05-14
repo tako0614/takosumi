@@ -1,8 +1,10 @@
+import type { SpaceId } from "../../shared/ids.ts";
+
+export type { SpaceId };
 export type ServiceEndpointId = string;
 export type ServiceId = string;
 export type ServiceTrustRecordId = string;
 export type ServiceGrantId = string;
-export type SpaceId = string;
 export type GroupId = string;
 export type IsoTimestamp = string;
 
