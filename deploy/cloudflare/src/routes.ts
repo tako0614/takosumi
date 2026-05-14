@@ -1,6 +1,3 @@
-export const TAKOSUMI_KERNEL_CONTAINER_INSTANCE =
-  "takosumi-kernel-api" as const;
-
 export const TAKOSUMI_CLOUDFLARE_FRONT_HEADER =
   "x-takosumi-cloudflare-front" as const;
 
@@ -23,7 +20,7 @@ export function isKernelControlPlanePath(pathname: string): boolean {
     normalized.startsWith("/api/internal/v1/");
 }
 
-export function createKernelContainerRequest(request: Request): Request {
+export function createKernelWorkerRequest(request: Request): Request {
   const headers = new Headers(request.headers);
   headers.set(TAKOSUMI_CLOUDFLARE_FRONT_HEADER, "worker");
   return new Request(request, { headers });

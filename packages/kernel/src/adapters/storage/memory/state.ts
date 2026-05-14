@@ -56,6 +56,9 @@ export interface MemoryStorageSnapshot {
   readonly spaces: readonly Space[];
   readonly groups: readonly Group[];
   readonly spaceMemberships: readonly SpaceMembership[];
+  readonly deployments: readonly Deployment[];
+  readonly groupHeads: readonly GroupHead[];
+  readonly deployProviderObservations: readonly CoreProviderObservation[];
   readonly runtimeDesiredStates: readonly RuntimeDesiredState[];
   readonly runtimeObservedStates: readonly RuntimeObservedStateSnapshot[];
   readonly providerObservations: readonly ProviderObservation[];
@@ -176,6 +179,89 @@ export function createEmptyState(
   };
 }
 
+export function stateFromSnapshot(
+  snapshot: MemoryStorageSnapshot,
+  providerSupportReports: readonly ProviderSupportReport[] = [],
+): MemoryStorageState {
+  return {
+    core: {
+      spaces: mapBy(snapshot.spaces, (space) => space.id),
+      groups: mapBy(snapshot.groups, (group) => group.id),
+      spaceMemberships: mapBy(
+        snapshot.spaceMemberships,
+        (membership) => `${membership.spaceId}:${membership.accountId}`,
+      ),
+    },
+    deploy: {
+      deployments: mapBy(snapshot.deployments, (deployment) => deployment.id),
+      groupHeads: mapBy(
+        snapshot.groupHeads,
+        (head) => `${head.space_id}\u0000${head.group_id}`,
+      ),
+      providerObservations: mapBy(
+        snapshot.deployProviderObservations,
+        (observation) => observation.id,
+      ),
+    },
+    runtime: {
+      desiredStates: mapBy(
+        snapshot.runtimeDesiredStates,
+        (state) => state.id,
+      ),
+      observedStates: mapBy(
+        snapshot.runtimeObservedStates,
+        (state) => state.id,
+      ),
+      providerObservations: snapshot.providerObservations.map(immutable),
+    },
+    resources: {
+      instances: mapBy(snapshot.resourceInstances, (instance) => instance.id),
+      bindings: mapBy(snapshot.resourceBindings, (binding) => binding.id),
+      bindingSetRevisions: mapBy(
+        snapshot.bindingSetRevisions,
+        (revision) => revision.id,
+      ),
+      migrationLedger: mapBy(
+        snapshot.migrationLedgerEntries,
+        (entry) => entry.id,
+      ),
+    },
+    registry: {
+      descriptors: mapBy(
+        snapshot.packageDescriptors,
+        (descriptor) =>
+          `${descriptor.kind}:${descriptor.ref}:${descriptor.digest}`,
+      ),
+      resolutions: mapBy(
+        snapshot.packageResolutions,
+        (resolution) =>
+          `${resolution.kind}:${resolution.ref}:${resolution.digest}`,
+      ),
+      trustRecords: mapBy(snapshot.trustRecords, (record) => record.id),
+      providerSupportReports,
+    },
+    audit: {
+      events: mapBy(snapshot.auditEvents, (event) => event.id),
+      order: snapshot.auditEvents.map((event) => event.id),
+    },
+    usage: {
+      aggregates: mapBy(snapshot.usageAggregates, (aggregate) => aggregate.id),
+    },
+    serviceEndpoints: {
+      endpoints: mapBy(snapshot.serviceEndpoints, (endpoint) => endpoint.id),
+      trustRecords: mapBy(
+        snapshot.serviceTrustRecords,
+        (record) => record.id,
+      ),
+      grants: mapBy(snapshot.serviceGrants, (grant) => grant.id),
+    },
+    runtimeAgent: {
+      agents: mapBy(snapshot.runtimeAgents, (agent) => agent.id),
+      works: mapBy(snapshot.runtimeAgentWorkItems, (work) => work.id),
+    },
+  };
+}
+
 export function cloneState(state: MemoryStorageState): MemoryStorageState {
   return {
     core: {
@@ -224,6 +310,15 @@ export function cloneState(state: MemoryStorageState): MemoryStorageState {
   };
 }
 
+function mapBy<T, K>(
+  values: readonly T[],
+  key: (value: T) => K,
+): Map<K, T> {
+  const map = new Map<K, T>();
+  for (const value of values) map.set(key(value), immutable(value));
+  return map;
+}
+
 function cloneMap<K, V>(source: Map<K, V>): Map<K, V> {
   const next = new Map<K, V>();
   for (const [key, value] of source) next.set(key, immutable(value));
@@ -237,6 +332,11 @@ export function snapshotState(
     spaces: [...state.core.spaces.values()],
     groups: [...state.core.groups.values()],
     spaceMemberships: [...state.core.spaceMemberships.values()],
+    deployments: [...state.deploy.deployments.values()],
+    groupHeads: [...state.deploy.groupHeads.values()],
+    deployProviderObservations: [
+      ...state.deploy.providerObservations.values(),
+    ],
     runtimeDesiredStates: [...state.runtime.desiredStates.values()],
     runtimeObservedStates: [...state.runtime.observedStates.values()],
     providerObservations: [...state.runtime.providerObservations],

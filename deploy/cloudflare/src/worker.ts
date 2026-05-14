@@ -1,20 +1,8 @@
-import { Container, getContainer } from "@cloudflare/containers";
 import {
   type CloudflareWorkerEnv as Env,
   type CloudflareWorkerHandler,
   createCloudflareWorker,
 } from "./handler.ts";
-
-export class TakosWorkloadContainer extends Container {
-  override defaultPort = 8080;
-  override requiredPorts = [8080];
-  override sleepAfter = "10m";
-  override enableInternet = true;
-  override pingEndpoint = "healthz";
-  override envVars = {
-    TAKOS_RUNTIME_MODE: "cloudflare-container",
-  };
-}
 
 export class TakosCoordinationObject {
   constructor(
@@ -227,9 +215,7 @@ interface CoordinationAlarmInput {
   readonly payload?: Record<string, unknown>;
 }
 
-const worker: CloudflareWorkerHandler = createCloudflareWorker({
-  getContainer,
-});
+const worker: CloudflareWorkerHandler = createCloudflareWorker();
 
 export default worker;
 

@@ -1,11 +1,16 @@
-# Takos Cloudflare provider scaffold.
-# Replace placeholder resource identifiers from operator-managed config before deploy.
+# Takosumi Cloudflare Worker provider scaffold.
+# Replace placeholder resource identifiers and secrets from operator-managed config before deploy.
 
 name = "takosumi-cloudflare-provider"
-main = "src/worker.ts"
+main = ".wrangler/dist/takosumi-cloudflare-worker.mjs"
 compatibility_date = "2026-04-15"
 workers_dev = false
 compatibility_flags = ["nodejs_compat"]
+no_bundle = true
+
+[build]
+command = 'ROOT=.; if [ ! -f "$ROOT/deploy/cloudflare/deno.json" ]; then ROOT=../..; fi; mkdir -p "$ROOT/deploy/cloudflare/.wrangler/dist" && deno bundle --config "$ROOT/deploy/cloudflare/deno.json" --platform browser "$ROOT/deploy/cloudflare/src/worker.ts" -o "$ROOT/deploy/cloudflare/.wrangler/dist/takosumi-cloudflare-worker.mjs"'
+watch_dir = "deploy/cloudflare/src"
 
 [observability]
 enabled = true
@@ -34,23 +39,11 @@ dead_letter_queue = "takosumi-control-plane-dlq"
 name = "TAKOS_COORDINATION"
 class_name = "TakosCoordinationObject"
 
-[[durable_objects.bindings]]
-name = "TAKOS_WORKLOAD_CONTAINER"
-class_name = "TakosWorkloadContainer"
-
-[[durable_objects.bindings]]
-name = "TAKOS_KERNEL_CONTAINER"
-class_name = "TakosWorkloadContainer"
-
-[[containers]]
-class_name = "TakosWorkloadContainer"
-image = "./Dockerfile"
-max_instances = 10
-instance_type = "basic"
-
-  [containers.image_vars]
-  TAKOS_RUNTIME_MODE = "cloudflare-container"
+[vars]
+TAKOS_RUNTIME_MODE = "cloudflare-worker"
+TAKOSUMI_ENVIRONMENT = "staging"
+TAKOSUMI_PUBLIC_ROUTES_ENABLED = "true"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["TakosCoordinationObject", "TakosWorkloadContainer"]
+new_sqlite_classes = ["TakosCoordinationObject"]

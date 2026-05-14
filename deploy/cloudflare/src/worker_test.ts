@@ -1,31 +1,26 @@
 import assert from "node:assert/strict";
-import {
-  type CloudflareWorkerEnv,
-  createCloudflareWorker,
-  type DurableObjectNamespace,
-} from "./handler.ts";
-import {
-  TAKOSUMI_CLOUDFLARE_FRONT_HEADER,
-  TAKOSUMI_KERNEL_CONTAINER_INSTANCE,
-} from "./routes.ts";
+import type { CreatedPaaSApp } from "../../../packages/kernel/src/bootstrap.ts";
+import { type CloudflareWorkerEnv, createCloudflareWorker } from "./handler.ts";
+import type {
+  D1Database,
+  D1PreparedStatement,
+  DurableObjectNamespace,
+  R2Bucket,
+} from "./bindings.ts";
+import { TAKOSUMI_CLOUDFLARE_FRONT_HEADER } from "./routes.ts";
 
 interface CapturedRequest {
-  readonly instanceName: string;
+  readonly app: string;
   readonly method: string;
   readonly url: string;
   readonly headers: Headers;
   readonly body: string;
 }
 
-Deno.test("Cloudflare Worker proxies kernel control-plane routes to the kernel container", async () => {
+Deno.test("Cloudflare Worker dispatches kernel control-plane routes in-process", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
-    getContainer: (_namespace, instanceName) => ({
-      fetch: async (request) => {
-        calls.push(await captureRequest(instanceName, request));
-        return Response.json({ proxied: true });
-      },
-    }),
+    createKernelApp: () => Promise.resolve(createdApp("kernel", calls)),
   });
   const env = createEnv();
 
@@ -42,7 +37,6 @@ Deno.test("Cloudflare Worker proxies kernel control-plane routes to the kernel c
       "/v1/deployments/demo/audit?cursor=1",
       "/v1/artifacts/kinds",
       "/api/internal/v1/spaces",
-      "/api/internal/v1/runtime/agents/enroll",
     ]
   ) {
     calls.length = 0;
@@ -52,7 +46,7 @@ Deno.test("Cloudflare Worker proxies kernel control-plane routes to the kernel c
     );
     assert.equal(response.status, 200);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].instanceName, TAKOSUMI_KERNEL_CONTAINER_INSTANCE);
+    assert.equal(calls[0].app, "kernel");
     assert.equal(calls[0].url, `https://worker.example${path}`);
     assert.equal(
       calls[0].headers.get(TAKOSUMI_CLOUDFLARE_FRONT_HEADER),
@@ -61,15 +55,28 @@ Deno.test("Cloudflare Worker proxies kernel control-plane routes to the kernel c
   }
 });
 
-Deno.test("Cloudflare Worker preserves kernel request method, query, headers, and body", async () => {
+Deno.test("Cloudflare Worker dispatches runtime-agent routes to the runtime-agent app", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
-    getContainer: (_namespace, instanceName) => ({
-      fetch: async (request) => {
-        calls.push(await captureRequest(instanceName, request));
-        return Response.json({ proxied: true }, { status: 202 });
-      },
-    }),
+    createKernelApp: () => Promise.resolve(createdApp("kernel", calls)),
+    createRuntimeAgentApp: () =>
+      Promise.resolve(createdApp("runtime-agent", calls)),
+  });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/api/internal/v1/runtime/agents/enroll"),
+    createEnv(),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].app, "runtime-agent");
+});
+
+Deno.test("Cloudflare Worker preserves method, query, headers, and body", async () => {
+  const calls: CapturedRequest[] = [];
+  const worker = createCloudflareWorker({
+    createKernelApp: () => Promise.resolve(createdApp("kernel", calls, 202)),
   });
   const body = JSON.stringify({
     mode: "apply",
@@ -81,14 +88,10 @@ Deno.test("Cloudflare Worker preserves kernel request method, query, headers, an
       headers: {
         authorization: "Bearer deploy-token",
         "content-type": "application/json",
-        "traceparent":
-          "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
         "x-correlation-id": "corr_1",
         "x-idempotency-key": "deploy_1",
         "x-request-id": "req_1",
-        "x-takosumi-actor-context": "actor-json",
-        "x-takosumi-internal-signature": "sig",
-        "x-takosumi-internal-timestamp": "2026-04-15T00:00:00.000Z",
       },
       body,
     }),
@@ -98,17 +101,10 @@ Deno.test("Cloudflare Worker preserves kernel request method, query, headers, an
   assert.equal(response.status, 202);
   assert.equal(calls.length, 1);
   const call = calls[0];
-  assert.equal(call.instanceName, TAKOSUMI_KERNEL_CONTAINER_INSTANCE);
   assert.equal(call.method, "POST");
   assert.equal(call.url, "https://worker.example/v1/deployments?dryRun=1");
   assert.equal(call.headers.get("authorization"), "Bearer deploy-token");
   assert.equal(call.headers.get("x-idempotency-key"), "deploy_1");
-  assert.equal(call.headers.get("x-takosumi-internal-signature"), "sig");
-  assert.equal(
-    call.headers.get("x-takosumi-internal-timestamp"),
-    "2026-04-15T00:00:00.000Z",
-  );
-  assert.equal(call.headers.get("x-takosumi-actor-context"), "actor-json");
   assert.equal(
     call.headers.get("traceparent"),
     "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
@@ -117,15 +113,10 @@ Deno.test("Cloudflare Worker preserves kernel request method, query, headers, an
   assert.equal(call.body, body);
 });
 
-Deno.test("Cloudflare Worker keeps edge-local routes outside the kernel proxy", async () => {
+Deno.test("Cloudflare Worker keeps edge-local routes outside the kernel app", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
-    getContainer: (_namespace, instanceName) => ({
-      fetch: async (request) => {
-        calls.push(await captureRequest(instanceName, request));
-        return Response.json({ proxied: true });
-      },
-    }),
+    createKernelApp: () => Promise.resolve(createdApp("kernel", calls)),
   });
   const env = createEnv();
 
@@ -170,44 +161,42 @@ Deno.test("Cloudflare Worker keeps edge-local routes outside the kernel proxy", 
   assert.equal(calls.length, 0);
 });
 
-Deno.test("Cloudflare Worker preserves runtime container routing and unknown 404s", async () => {
-  const calls: CapturedRequest[] = [];
+Deno.test("Cloudflare Worker no longer exposes runtime container routing", async () => {
   const worker = createCloudflareWorker({
-    getContainer: (_namespace, instanceName) => ({
-      fetch: async (request) => {
-        calls.push(await captureRequest(instanceName, request));
-        return Response.json({ proxied: true });
-      },
-    }),
+    createKernelApp: () => Promise.resolve(createdApp("kernel", [])),
   });
-  const env = createEnv();
 
-  const runtimeResponse = await worker.fetch(
+  const response = await worker.fetch(
     new Request("https://worker.example/runtime/tasks/apply?instance=runner-1"),
-    env,
-  );
-  assert.equal(runtimeResponse.status, 200);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].instanceName, "runner-1");
-  assert.equal(
-    calls[0].url,
-    "https://worker.example/runtime/tasks/apply?instance=runner-1",
+    createEnv(),
   );
 
-  const unknownResponse = await worker.fetch(
-    new Request("https://worker.example/not-found"),
-    env,
-  );
-  assert.equal(unknownResponse.status, 404);
-  assert.equal(calls.length, 1);
+  assert.equal(response.status, 404);
 });
 
+function createdApp(
+  name: string,
+  calls: CapturedRequest[],
+  status = 200,
+): CreatedPaaSApp {
+  return {
+    app: {
+      fetch: async (request: Request) => {
+        calls.push(await captureRequest(name, request));
+        return Response.json({ app: name }, { status });
+      },
+    },
+    context: {},
+    role: name === "runtime-agent" ? "takosumi-runtime-agent" : "takosumi-api",
+  } as unknown as CreatedPaaSApp;
+}
+
 async function captureRequest(
-  instanceName: string,
+  app: string,
   request: Request,
 ): Promise<CapturedRequest> {
   return {
-    instanceName,
+    app,
     method: request.method,
     url: request.url,
     headers: new Headers(request.headers),
@@ -220,30 +209,59 @@ function createEnv(): CloudflareWorkerEnv {
     Response.json({ coordinationPath: new URL(request.url).pathname })
   );
   return {
-    TAKOS_D1: {
-      prepare: () => ({
-        bind() {
-          return this;
-        },
-        first<T = unknown>(): Promise<T | null> {
-          return Promise.resolve({ ok: 1 } as T);
-        },
-      }),
-    },
-    TAKOS_ARTIFACTS: {
-      head: () => Promise.resolve({ ok: true }),
-    },
+    TAKOS_D1: new FakeD1Database(),
+    TAKOS_ARTIFACTS: new FakeR2Bucket(),
     TAKOS_QUEUE: {
       send: () => Promise.resolve(),
     },
     TAKOS_COORDINATION: coordination,
-    TAKOS_WORKLOAD_CONTAINER: new FakeNamespace(() =>
-      Response.json({ workload: true })
-    ),
-    TAKOS_KERNEL_CONTAINER: new FakeNamespace(() =>
-      Response.json({ kernel: true })
-    ),
   };
+}
+
+class FakeD1Database implements D1Database {
+  prepare(_query: string): D1PreparedStatement {
+    return new FakeD1PreparedStatement();
+  }
+}
+
+class FakeD1PreparedStatement implements D1PreparedStatement {
+  bind(..._values: readonly unknown[]): D1PreparedStatement {
+    return this;
+  }
+
+  first<T = unknown>(): Promise<T | null> {
+    return Promise.resolve({ ok: 1 } as T);
+  }
+
+  all<T = unknown>(): Promise<{ results: readonly T[] }> {
+    return Promise.resolve({ results: [] });
+  }
+
+  run<T = unknown>(): Promise<{ results: readonly T[]; meta: { changes: 1 } }> {
+    return Promise.resolve({ results: [], meta: { changes: 1 } });
+  }
+}
+
+class FakeR2Bucket implements R2Bucket {
+  put(): never {
+    throw new Error("not implemented");
+  }
+
+  get(): never {
+    throw new Error("not implemented");
+  }
+
+  head(): Promise<null> {
+    return Promise.resolve(null);
+  }
+
+  list(): never {
+    throw new Error("not implemented");
+  }
+
+  delete(): never {
+    throw new Error("not implemented");
+  }
 }
 
 class FakeNamespace implements DurableObjectNamespace {

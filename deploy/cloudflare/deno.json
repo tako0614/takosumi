@@ -2,9 +2,6 @@
   "name": "@takos/takosumi-cloudflare-worker",
   "version": "0.0.0",
   "exports": "./src/worker.ts",
-  "imports": {
-    "@cloudflare/containers": "./src/cloudflare_containers.d.ts"
-  },
   "compilerOptions": {
     "strict": true,
     "lib": ["deno.window", "dom", "dom.iterable"]

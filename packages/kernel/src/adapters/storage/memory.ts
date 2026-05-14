@@ -24,6 +24,7 @@ import {
   type MemoryStorageSnapshot,
   type MemoryStorageState,
   snapshotState,
+  stateFromSnapshot,
 } from "./memory/state.ts";
 import {
   MemoryGroupStore,
@@ -61,6 +62,7 @@ export type { MemoryStorageSnapshot };
 
 export interface MemoryStorageDriverOptions {
   readonly providerSupportReports?: readonly ProviderSupportReport[];
+  readonly snapshot?: MemoryStorageSnapshot;
 }
 
 export class MemoryStorageDriver implements StorageDriver {
@@ -69,7 +71,12 @@ export class MemoryStorageDriver implements StorageDriver {
   #transactionTail: Promise<void> = Promise.resolve();
 
   constructor(options: MemoryStorageDriverOptions = {}) {
-    this.#state = createEmptyState(options.providerSupportReports ?? []);
+    this.#state = options.snapshot
+      ? stateFromSnapshot(
+        options.snapshot,
+        options.providerSupportReports ?? [],
+      )
+      : createEmptyState(options.providerSupportReports ?? []);
   }
 
   async transaction<T>(
