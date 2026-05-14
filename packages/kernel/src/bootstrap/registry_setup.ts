@@ -3,6 +3,7 @@ import { TAKOSUMI_BUNDLED_SHAPES } from "@takos/takosumi-plugins/shapes";
 import { createTakosumiProductionProviders } from "@takos/takosumi-plugins/shape-providers/factories";
 import { registerBundledArtifactKinds } from "@takos/takosumi-plugins/shape-providers";
 import { detectRuntimeAgent } from "./agent_detection.ts";
+import { log } from "../shared/log.ts";
 
 let bundledShapesRegistered = false;
 
@@ -26,10 +27,12 @@ export function registerBundledShapesAndProviders(
   }
   const agent = detectRuntimeAgent(runtimeEnv);
   if (!agent) {
-    console.warn(
-      "[takosumi-bootstrap] TAKOSUMI_AGENT_URL / TAKOSUMI_AGENT_TOKEN not set; " +
-        "no providers registered (apply requests will return provider_not_registered).",
-    );
+    log.warn("kernel.boot.providers_not_registered", {
+      reason: "agent_unconfigured",
+      hint:
+        "TAKOSUMI_AGENT_URL / TAKOSUMI_AGENT_TOKEN not set; apply requests " +
+        "will return provider_not_registered until an agent is configured.",
+    });
     return;
   }
   const artifactStore = detectArtifactStore(runtimeEnv);
@@ -47,12 +50,13 @@ export function registerBundledShapesAndProviders(
   for (const provider of providers) {
     registerProvider(provider, { allowOverride: true });
   }
-  console.log(
-    `[takosumi-bootstrap] registered ${providers.length} providers via agent at ${agent.agentUrl}` +
-      (artifactStore
-        ? ` (artifact store: ${artifactStore.baseUrl})`
-        : " (no artifact store: TAKOSUMI_PUBLIC_BASE_URL unset)"),
-  );
+  log.info("kernel.boot.providers_registered", {
+    count: providers.length,
+    agentUrl: agent.agentUrl,
+    ...(artifactStore
+      ? { artifactStoreBaseUrl: artifactStore.baseUrl }
+      : { artifactStoreBaseUrl: null }),
+  });
 }
 
 /**
