@@ -79,7 +79,7 @@ surface ごとに client / auth / SLA を完全に分離する目的:
 
 - **public surface** (`/v1/deployments`、`/v1/artifacts`): current spec は
   `/v1/` を URL に固定します。breaking change は同じ変更で spec / implementation
-  / tests / docs を一貫更新し、公開 docs に互換期間や並走運用の
+  / tests / docs を一貫更新し、公開 docs に old/new dual-run の
   約束を置きません。breaking とは「同じ request に対する response shape / status
   code / error code の意味が変わる」ことを言い、項目追加だけでは ありません。
 - **internal surface** (`/api/internal/v1/*`): `v1` は同居していますが、
