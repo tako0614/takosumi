@@ -2,7 +2,6 @@ import type {
   CoreConditionReason,
   GroupSummaryStatus,
 } from "takosumi-contract";
-import { isCoreConditionReason } from "takosumi-contract";
 import type { ProviderMaterializationReference } from "../../adapters/provider/mod.ts";
 import type { ProviderObservation as RuntimeProviderObservation } from "../../domains/runtime/mod.ts";
 import type {
@@ -17,6 +16,13 @@ import type {
   StatusConditionDto,
   StatusLayerProjection,
 } from "./types.ts";
+import {
+  condition,
+  layer,
+  projectConditions,
+  validateProjectionConditionReasons,
+  withCatalogReason,
+} from "./_layer_helpers.ts";
 
 export interface GroupSummaryStatusProjector {
   project(
@@ -612,44 +618,6 @@ function providerLayerCondition(
   }
 }
 
-function projectConditions<
-  TReady extends string,
-  TUnknown extends string,
-  TFalse extends string,
->(
-  conditions: readonly StatusConditionDto[],
-  ready: TReady,
-  unknown: TUnknown,
-  falseStatus: TFalse,
-): TReady | TUnknown | TFalse {
-  if (conditions.some((condition) => condition.status === "false")) {
-    return falseStatus;
-  }
-  if (conditions.some((condition) => condition.status === "unknown")) {
-    return unknown;
-  }
-  return ready;
-}
-
-function layer<TStatus extends string>(
-  status: TStatus,
-  ...conditions: StatusConditionDto[]
-): StatusLayerProjection<TStatus> {
-  return Object.freeze({
-    status,
-    conditions: Object.freeze(conditions),
-  });
-}
-
-function condition(
-  type: string,
-  status: StatusConditionDto["status"],
-  reason?: CoreConditionReason,
-  message?: string,
-): StatusConditionDto {
-  return Object.freeze({ type, status, reason, message });
-}
-
 function conditionFromProviderObservation(
   observation: RuntimeProviderObservation,
 ): StatusConditionDto | undefined {
@@ -881,40 +849,4 @@ function servingDegradedReason(input: {
   return input.diagnostics.length > 0
     ? "RuntimeReadinessUnknown"
     : "ServingDegraded";
-}
-
-function withCatalogReason(
-  condition: StatusConditionDto,
-  fallback: CoreConditionReason,
-): StatusConditionDto {
-  if (!condition.reason) return condition;
-  if (isCoreConditionReason(condition.reason)) {
-    return condition;
-  }
-  return Object.freeze({ ...condition, reason: fallback });
-}
-
-function validateProjectionConditionReasons(
-  projection: GroupSummaryStatusProjection,
-): GroupSummaryStatusProjection {
-  for (const condition of allProjectionConditions(projection)) {
-    if (!condition.reason) continue;
-    if (isCoreConditionReason(condition.reason)) continue;
-    throw new TypeError(
-      `status projection emitted non-catalog condition reason: ${condition.reason}`,
-    );
-  }
-  return projection;
-}
-
-function allProjectionConditions(
-  projection: GroupSummaryStatusProjection,
-): readonly StatusConditionDto[] {
-  return [
-    ...projection.desired.conditions,
-    ...projection.serving.conditions,
-    ...projection.dependencies.conditions,
-    ...projection.security.conditions,
-    ...projection.conditions,
-  ];
 }
