@@ -2,7 +2,6 @@ import {
   type CoreDomainDependencies,
   type CoreDomainServices,
   createCoreDomainServices,
-  createInMemoryCoreDomainDependencies,
 } from "./domains/core/mod.ts";
 import {
   type DeployBlocker,
@@ -10,28 +9,20 @@ import {
   DeploymentService,
   type DeploymentServiceOptions,
   type DeploymentStore,
-  InMemoryDeploymentStore,
   type PublicDeployManifest,
 } from "./domains/deploy/mod.ts";
 import {
   DefaultRuntimeMaterializer,
-  InMemoryProviderObservationStore,
-  InMemoryRuntimeDesiredStateStore,
-  InMemoryRuntimeObservedStateStore,
   type ProviderObservationStore,
   type RuntimeDesiredStateStore,
   type RuntimeMaterializer,
   type RuntimeObservedStateStore,
 } from "./domains/runtime/mod.ts";
-import {
-  type BindingSetRevisionStore,
-  InMemoryBindingSetRevisionStore,
-  InMemoryMigrationLedgerStore,
-  InMemoryResourceBindingStore,
-  InMemoryResourceInstanceStore,
-  type MigrationLedgerStore,
-  type ResourceBindingStore,
-  type ResourceInstanceStore,
+import type {
+  BindingSetRevisionStore,
+  MigrationLedgerStore,
+  ResourceBindingStore,
+  ResourceInstanceStore,
 } from "./domains/resources/mod.ts";
 import {
   type BundledRegistry,
@@ -39,22 +30,12 @@ import {
   type CatalogReleaseDescriptorStore,
   type CatalogReleasePublisherKeyStore,
   CatalogReleaseService,
-  InMemoryBundledRegistry,
-  InMemoryCatalogReleaseAdoptionStore,
-  InMemoryCatalogReleaseDescriptorStore,
-  InMemoryCatalogReleasePublisherKeyStore,
-  InMemoryPackageDescriptorStore,
-  InMemoryPackageResolutionStore,
-  InMemoryTrustRecordStore,
   type PackageDescriptorStore,
   type PackageResolutionStore,
   type TrustRecordStore,
 } from "./domains/registry/mod.ts";
-import { type AuditStore, InMemoryAuditStore } from "./domains/audit/mod.ts";
+import type { AuditStore } from "./domains/audit/mod.ts";
 import {
-  InMemoryServiceEndpointStore,
-  InMemoryServiceGrantStore,
-  InMemoryServiceTrustRecordStore,
   ServiceEndpointRegistry,
   type ServiceEndpointStore,
   type ServiceGrantStore,
@@ -102,10 +83,14 @@ import {
 import {
   MemoryStorageDriver,
   type StorageDriver,
-  type StorageTransaction,
 } from "./adapters/storage/mod.ts";
+import {
+  createAppStores,
+  shouldUseStorageBackedStores,
+} from "./app_context_stores.ts";
 import type { Clock } from "./shared/time.ts";
 import type { IdGenerator } from "./shared/ids.ts";
+import { log } from "./shared/log.ts";
 import {
   type ActorContext,
   type Deployment,
@@ -131,7 +116,6 @@ import {
 import { EntitlementPolicyService } from "./services/entitlements/mod.ts";
 import {
   HttpBillingPort,
-  InMemoryUsageAggregateStore,
   type UsageAggregateStore,
   UsageProjectionService,
 } from "./services/usage/mod.ts";
@@ -448,174 +432,6 @@ export function createInMemoryAppStores(
   options: AppContextOptions = {},
 ): AppStores {
   return createAppStores(options);
-}
-
-function createAppStores(
-  options: AppContextOptions = {},
-  storageDriver?: StorageDriver,
-): AppStores {
-  if (storageDriver) {
-    return createStorageBackedAppStores(options, storageDriver);
-  }
-  const registryStores = createRegistryStores(options.stores?.registry);
-  return {
-    core: createInMemoryCoreDomainDependencies({
-      ...options.core,
-      clock: options.core?.clock ?? options.clock,
-      idGenerator: options.core?.idGenerator ?? options.idGenerator,
-      ...options.stores?.core,
-    }),
-    deploy: {
-      deploys: options.stores?.deploy?.deploys ??
-        new InMemoryDeploymentStore(),
-    },
-    runtime: {
-      desiredStates: options.stores?.runtime?.desiredStates ??
-        new InMemoryRuntimeDesiredStateStore(),
-      observedStates: options.stores?.runtime?.observedStates ??
-        new InMemoryRuntimeObservedStateStore(),
-      providerObservations: options.stores?.runtime?.providerObservations ??
-        new InMemoryProviderObservationStore(),
-    },
-    resources: {
-      instances: options.stores?.resources?.instances ??
-        new InMemoryResourceInstanceStore(),
-      bindings: options.stores?.resources?.bindings ??
-        new InMemoryResourceBindingStore(),
-      bindingSetRevisions: options.stores?.resources?.bindingSetRevisions ??
-        new InMemoryBindingSetRevisionStore(),
-      migrationLedger: options.stores?.resources?.migrationLedger ??
-        new InMemoryMigrationLedgerStore(),
-    },
-    registry: registryStores,
-    audit: {
-      events: options.stores?.audit?.events ?? new InMemoryAuditStore(),
-    },
-    usage: {
-      aggregates: options.stores?.usage?.aggregates ??
-        new InMemoryUsageAggregateStore(),
-    },
-    serviceEndpoints: {
-      endpoints: options.stores?.serviceEndpoints?.endpoints ??
-        new InMemoryServiceEndpointStore(),
-      trustRecords: options.stores?.serviceEndpoints?.trustRecords ??
-        new InMemoryServiceTrustRecordStore(),
-      grants: options.stores?.serviceEndpoints?.grants ??
-        new InMemoryServiceGrantStore(),
-    },
-  };
-}
-
-function shouldUseStorageBackedStores(options: AppContextOptions): boolean {
-  return Boolean(
-    options.adapters?.storage || options.runtimeConfig?.plugins?.storage,
-  );
-}
-
-function createStorageBackedAppStores(
-  options: AppContextOptions,
-  driver: StorageDriver,
-): AppStores {
-  const registryStores = {
-    descriptors: options.stores?.registry?.descriptors ??
-      storageBackedStore(driver, (tx) => tx.registry.descriptors),
-    resolutions: options.stores?.registry?.resolutions ??
-      storageBackedStore(driver, (tx) => tx.registry.resolutions),
-    trustRecords: options.stores?.registry?.trustRecords ??
-      storageBackedStore(driver, (tx) => tx.registry.trustRecords),
-    bundledRegistry: options.stores?.registry?.bundledRegistry ??
-      storageBackedStore(driver, (tx) => tx.registry.bundledRegistry),
-    catalogReleases: options.stores?.registry?.catalogReleases ??
-      new InMemoryCatalogReleaseDescriptorStore(),
-    catalogPublisherKeys: options.stores?.registry?.catalogPublisherKeys ??
-      new InMemoryCatalogReleasePublisherKeyStore(),
-    catalogReleaseAdoptions:
-      options.stores?.registry?.catalogReleaseAdoptions ??
-        new InMemoryCatalogReleaseAdoptionStore(),
-  };
-  return {
-    core: createInMemoryCoreDomainDependencies({
-      ...options.core,
-      clock: options.core?.clock ?? options.clock,
-      idGenerator: options.core?.idGenerator ?? options.idGenerator,
-      spaces: options.stores?.core?.spaces ??
-        storageBackedStore(driver, (tx) => tx.core.spaces),
-      groups: options.stores?.core?.groups ??
-        storageBackedStore(driver, (tx) => tx.core.groups),
-      memberships: options.stores?.core?.memberships ??
-        storageBackedStore(driver, (tx) => tx.core.spaceMemberships),
-    }),
-    deploy: {
-      deploys: options.stores?.deploy?.deploys ??
-        storageBackedStore(driver, (tx) => tx.deploy.deploys, {
-          missingOptionalMethods: [
-            "getDefaultRollbackValidators",
-            "getGroupHeadHistory",
-            "listObservations",
-          ],
-        }),
-    },
-    runtime: {
-      desiredStates: options.stores?.runtime?.desiredStates ??
-        storageBackedStore(driver, (tx) => tx.runtime.desiredStates),
-      observedStates: options.stores?.runtime?.observedStates ??
-        storageBackedStore(driver, (tx) => tx.runtime.observedStates),
-      providerObservations: options.stores?.runtime?.providerObservations ??
-        storageBackedStore(driver, (tx) => tx.runtime.providerObservations),
-    },
-    resources: {
-      instances: options.stores?.resources?.instances ??
-        storageBackedStore(driver, (tx) => tx.resources.instances),
-      bindings: options.stores?.resources?.bindings ??
-        storageBackedStore(driver, (tx) => tx.resources.bindings),
-      bindingSetRevisions: options.stores?.resources?.bindingSetRevisions ??
-        storageBackedStore(driver, (tx) => tx.resources.bindingSetRevisions),
-      migrationLedger: options.stores?.resources?.migrationLedger ??
-        storageBackedStore(driver, (tx) => tx.resources.migrationLedger),
-    },
-    registry: registryStores,
-    audit: {
-      events: options.stores?.audit?.events ??
-        storageBackedStore(driver, (tx) => tx.audit.events),
-    },
-    usage: {
-      aggregates: options.stores?.usage?.aggregates ??
-        storageBackedStore(driver, (tx) => tx.usage.aggregates),
-    },
-    serviceEndpoints: {
-      endpoints: options.stores?.serviceEndpoints?.endpoints ??
-        storageBackedStore(driver, (tx) => tx.serviceEndpoints.endpoints),
-      trustRecords: options.stores?.serviceEndpoints?.trustRecords ??
-        storageBackedStore(driver, (tx) => tx.serviceEndpoints.trustRecords),
-      grants: options.stores?.serviceEndpoints?.grants ??
-        storageBackedStore(driver, (tx) => tx.serviceEndpoints.grants),
-    },
-  };
-}
-
-function storageBackedStore<TStore extends object>(
-  driver: StorageDriver,
-  select: (transaction: StorageTransaction) => TStore,
-  options: {
-    readonly missingOptionalMethods?: readonly string[];
-  } = {},
-): TStore {
-  const missingOptionalMethods = new Set(options.missingOptionalMethods ?? []);
-  return new Proxy({}, {
-    get(_target, property) {
-      if (typeof property !== "string") return undefined;
-      if (missingOptionalMethods.has(property)) return undefined;
-      return (...args: readonly unknown[]) =>
-        driver.transaction((transaction) => {
-          const store = select(transaction) as Record<string, unknown>;
-          const method = store[property];
-          if (typeof method !== "function") {
-            throw new Error(`storage store method not found: ${property}`);
-          }
-          return method.apply(store, args);
-        });
-    },
-  }) as TStore;
 }
 
 function createDeploymentPlanFacade(
@@ -939,12 +755,13 @@ function warnAboutDevAdapterFallbacks(options: AppContextOptions): void {
     fallbacks.push(port);
   }
   if (fallbacks.length === 0) return;
-  console.warn(
-    `[takosumi-bootstrap] dev mode is using in-memory fallbacks for: ` +
-      `${fallbacks.join(", ")} — set TAKOSUMI_* env adapters or pass ` +
-      `\`adapters\` explicitly to persist state across restarts. ` +
-      `Set TAKOSUMI_LOG_LEVEL=warn to suppress this notice.`,
-  );
+  log.warn("kernel.boot.in_memory_fallbacks", {
+    ports: fallbacks,
+    hint:
+      "set TAKOSUMI_* env adapters or pass `adapters` explicitly to " +
+      "persist state across restarts. Set TAKOSUMI_LOG_LEVEL=warn to " +
+      "suppress this notice.",
+  });
 }
 
 export function createServiceContainer(
@@ -1013,28 +830,4 @@ function createBillingPort(options: AppContextOptions) {
     options.runtimeEnv?.TAKOS_APP_BILLING_SECRET;
   if (!baseUrl || !secret) return undefined;
   return new HttpBillingPort({ baseUrl, secret });
-}
-
-function createRegistryStores(
-  overrides?: Partial<RegistryStores>,
-): RegistryStores {
-  const descriptors = overrides?.descriptors ??
-    new InMemoryPackageDescriptorStore();
-  const resolutions = overrides?.resolutions ??
-    new InMemoryPackageResolutionStore();
-  const trustRecords = overrides?.trustRecords ??
-    new InMemoryTrustRecordStore();
-  return {
-    descriptors,
-    resolutions,
-    trustRecords,
-    bundledRegistry: overrides?.bundledRegistry ??
-      new InMemoryBundledRegistry(descriptors, resolutions, trustRecords),
-    catalogReleases: overrides?.catalogReleases ??
-      new InMemoryCatalogReleaseDescriptorStore(),
-    catalogPublisherKeys: overrides?.catalogPublisherKeys ??
-      new InMemoryCatalogReleasePublisherKeyStore(),
-    catalogReleaseAdoptions: overrides?.catalogReleaseAdoptions ??
-      new InMemoryCatalogReleaseAdoptionStore(),
-  };
 }
