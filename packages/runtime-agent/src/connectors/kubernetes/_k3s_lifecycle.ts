@@ -4,6 +4,12 @@
  * or in-cluster ServiceAccount tokens).
  */
 
+import {
+  parseK8sDeploymentResponse,
+  parseK8sObjectResponse,
+  parseK8sServiceResponse,
+} from "../_wire.ts";
+
 export interface K3sDeploymentDescriptor {
   readonly namespace: string;
   readonly deploymentName: string;
@@ -109,6 +115,7 @@ export class DirectK3sDeploymentLifecycle {
       serviceBody,
       `k8s:CreateService ${input.namespace}/${input.name}`,
     );
+    const clusterIp = svcResult?.spec?.clusterIP;
     return {
       namespace: input.namespace,
       deploymentName: input.name,
@@ -116,24 +123,33 @@ export class DirectK3sDeploymentLifecycle {
       replicas: input.replicas,
       internalHost: `${input.name}.${input.namespace}.svc.cluster.local`,
       internalPort: input.port,
-      clusterIp: svcResult?.spec?.clusterIP,
+      clusterIp,
     };
   }
 
   async describeDeployment(
     input: { readonly namespace: string; readonly name: string },
   ): Promise<K3sDeploymentDescriptor | undefined> {
-    const dep = await this.#getJson<{
-      spec?: { replicas?: number };
-      status?: { replicas?: number };
-    }>(
-      `/apis/apps/v1/namespaces/${input.namespace}/deployments/${input.name}`,
+    const depPath =
+      `/apis/apps/v1/namespaces/${input.namespace}/deployments/${input.name}`;
+    const dep = await this.#getValidatedJson(
+      depPath,
+      (raw) =>
+        parseK8sDeploymentResponse(
+          raw,
+          `k8s:GetDeployment ${input.namespace}/${input.name}`,
+        ),
     );
     if (!dep) return undefined;
-    const svc = await this.#getJson<{
-      spec?: { clusterIP?: string; ports?: { port: number }[] };
-    }>(
-      `/api/v1/namespaces/${input.namespace}/services/${input.name}`,
+    const svcPath =
+      `/api/v1/namespaces/${input.namespace}/services/${input.name}`;
+    const svc = await this.#getValidatedJson(
+      svcPath,
+      (raw) =>
+        parseK8sServiceResponse(
+          raw,
+          `k8s:GetService ${input.namespace}/${input.name}`,
+        ),
     );
     return {
       namespace: input.namespace,
@@ -171,7 +187,15 @@ export class DirectK3sDeploymentLifecycle {
     });
   }
 
-  async #getJson<T>(path: string): Promise<T | undefined> {
+  /**
+   * GET `path` and run the response body through a structural parser. The
+   * parser owns error reporting (`ConnectorContractError`) so callers do not
+   * need to widen the result type. Returns `undefined` on 404.
+   */
+  async #getValidatedJson<T>(
+    path: string,
+    parse: (raw: unknown) => T | undefined,
+  ): Promise<T | undefined> {
     const response = await this.#fetch(`${this.#base}${path}`, {
       method: "GET",
       headers: this.#authHeaders(),
@@ -183,7 +207,16 @@ export class DirectK3sDeploymentLifecycle {
         `k8s GET ${path} failed: HTTP ${response.status}: ${text}`,
       );
     }
-    return JSON.parse(text) as T;
+    if (!text) return undefined;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch (cause) {
+      throw new Error(
+        `k8s GET ${path} returned non-JSON body: ${(cause as Error).message}`,
+      );
+    }
+    return parse(raw);
   }
 
   async #postOrIgnoreConflict(
@@ -203,7 +236,16 @@ export class DirectK3sDeploymentLifecycle {
         `${context} failed: HTTP ${response.status}: ${text}`,
       );
     }
-    return text ? JSON.parse(text) : undefined;
+    if (!text) return undefined;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch (cause) {
+      throw new Error(
+        `${context} returned non-JSON body: ${(cause as Error).message}`,
+      );
+    }
+    return parseK8sObjectResponse(raw, context);
   }
 
   async #deleteIgnoreNotFound(
