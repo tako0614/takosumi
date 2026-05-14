@@ -16,6 +16,7 @@ import {
   type WorkerDaemonTask,
   type WorkerDaemonTickResult,
 } from "../workers/daemon.ts";
+import { log } from "../shared/log.ts";
 import type {
   JsonObject,
   PlatformContext,
@@ -55,9 +56,10 @@ export function createRoleWorkerDaemon(
     tasks: createWorkerTasks(options),
     onTick: options.onTick,
     onError: (error, result) => {
-      console.error(
-        `[paas-worker] ${result.taskName} tick failed: ${errorMessage(error)}`,
-      );
+      log.error("kernel.worker.tick_failed", {
+        taskName: result.taskName,
+        message: errorMessage(error),
+      });
     },
   });
 }
