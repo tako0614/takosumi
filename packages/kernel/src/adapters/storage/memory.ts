@@ -7,23 +7,6 @@ import type {
   TrustRecordStore,
 } from "../../domains/registry/stores.ts";
 import type { ProviderSupportReport } from "../../domains/registry/types.ts";
-import type {
-  ServiceEndpointHealthUpdate,
-  ServiceEndpointStore,
-  ServiceGrantStore,
-  ServiceTrustRecordStore,
-  ServiceTrustRevokeInput,
-} from "../../domains/service-endpoints/stores.ts";
-import type {
-  ServiceEndpoint,
-  ServiceEndpointHealth,
-  ServiceEndpointId,
-  ServiceGrant,
-  ServiceGrantId,
-  ServiceId,
-  ServiceTrustRecord,
-  ServiceTrustRecordId,
-} from "../../domains/service-endpoints/types.ts";
 import type { WorkLedger } from "../../agents/mod.ts";
 import type {
   CoreStorageStores,
@@ -35,7 +18,6 @@ import type {
   UsageStorageStores,
 } from "./driver.ts";
 import { storageStatementCatalog } from "./statements.ts";
-import { immutable } from "./memory/helpers.ts";
 import {
   cloneState,
   createEmptyState,
@@ -209,4 +191,3 @@ class MemoryStorageTransaction implements StorageTransaction {
     );
   }
 }
-
