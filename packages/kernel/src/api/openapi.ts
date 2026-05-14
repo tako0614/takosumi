@@ -10,6 +10,18 @@ import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 export type OpenApiHttpMethod = "delete" | "get" | "head" | "post";
 
+/**
+ * Canonical version emitted in `info.version`. Kept in lockstep with the
+ * `@takos/takosumi-kernel` package version declared in `packages/kernel/deno.json`.
+ * Bump this when the kernel publishes a new minor/major release.
+ */
+export const TAKOSUMI_OPENAPI_VERSION = "0.14.0" as const;
+
+export interface OpenApiServer {
+  readonly url: string;
+  readonly description?: string;
+}
+
 export interface OpenApiDocument {
   readonly openapi: "3.1.0";
   readonly info: {
@@ -17,6 +29,7 @@ export interface OpenApiDocument {
     readonly version: string;
     readonly description: string;
   };
+  readonly servers: readonly OpenApiServer[];
   readonly paths: Record<string, OpenApiPathItem>;
   readonly components: {
     readonly securitySchemes: Record<string, Record<string, unknown>>;
@@ -47,19 +60,30 @@ export interface CreatePaaSOpenApiDocumentOptions {
   readonly internalRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
   readonly readinessRoutesMounted?: boolean;
+  /**
+   * Optional list of `servers[]` entries. Defaults to a single relative
+   * `{ url: "/" }` so clients can resolve against the host they fetched the
+   * document from. Operators that publish the document to an SDK pipeline
+   * can pass concrete `https://kernel.example.com` URLs.
+   */
+  readonly servers?: readonly OpenApiServer[];
 }
 
 export function createPaaSOpenApiDocument(
   options: CreatePaaSOpenApiDocumentOptions = {},
 ): OpenApiDocument {
+  const servers: readonly OpenApiServer[] = options.servers && options.servers.length > 0
+    ? options.servers
+    : [{ url: "/", description: "Relative to the kernel host" }];
   const document: OpenApiDocument = {
     openapi: "3.1.0",
     info: {
       title: "Takosumi API",
-      version: "0.1.0",
+      version: TAKOSUMI_OPENAPI_VERSION,
       description:
         "Dependency-free OpenAPI-ish description for mounted Takosumi process, public, internal, runtime-agent, readiness, and status route families.",
     },
+    servers,
     "x-takos-service": "takosumi",
     paths: {
       "/health": {

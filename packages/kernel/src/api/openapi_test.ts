@@ -5,7 +5,10 @@ import {
   TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
 import { TAKOSUMI_DEPLOY_PUBLIC_PATH } from "./deploy_public_routes.ts";
-import { createPaaSOpenApiDocument } from "./openapi.ts";
+import {
+  createPaaSOpenApiDocument,
+  TAKOSUMI_OPENAPI_VERSION,
+} from "./openapi.ts";
 import { TAKOSUMI_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
 import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
@@ -351,3 +354,36 @@ function allRoutesDoc() {
     readinessRoutesMounted: true,
   });
 }
+
+Deno.test("createPaaSOpenApiDocument emits info.version aligned with the kernel package", async () => {
+  const doc = allRoutesDoc();
+  const denoJsonUrl = new URL("../../deno.json", import.meta.url);
+  const denoJson = JSON.parse(await Deno.readTextFile(denoJsonUrl)) as {
+    readonly version?: string;
+  };
+  assert.equal(doc.info.version, TAKOSUMI_OPENAPI_VERSION);
+  assert.equal(
+    doc.info.version,
+    denoJson.version,
+    "openapi info.version must match packages/kernel/deno.json#version",
+  );
+});
+
+Deno.test("createPaaSOpenApiDocument emits a servers[] array", () => {
+  const doc = allRoutesDoc();
+  assert.ok(Array.isArray(doc.servers));
+  assert.ok(doc.servers.length >= 1, "expected at least one server entry");
+  assert.equal(doc.servers[0]?.url, "/");
+});
+
+Deno.test("createPaaSOpenApiDocument lets callers override servers[]", () => {
+  const doc = createPaaSOpenApiDocument({
+    publicRoutesMounted: true,
+    servers: [
+      { url: "https://kernel.example.com", description: "Production" },
+    ],
+  });
+  assert.equal(doc.servers.length, 1);
+  assert.equal(doc.servers[0]?.url, "https://kernel.example.com");
+  assert.equal(doc.servers[0]?.description, "Production");
+});
