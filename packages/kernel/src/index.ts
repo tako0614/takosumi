@@ -118,8 +118,7 @@ function fatalStartupError(error: unknown): never {
   if (error instanceof SecretEncryptionConfigurationError) {
     log.error("kernel.boot.secret_encryption_required", {
       message: error.message,
-      hint:
-        "Refusing to start takosumi with plaintext secret storage. " +
+      hint: "Refusing to start takosumi with plaintext secret storage. " +
         "See docs/operator/self-host.md and " +
         "docs/reference/secret-partitions.md for required " +
         "encryption-key configuration.",
@@ -129,8 +128,7 @@ function fatalStartupError(error: unknown): never {
   if (error instanceof DatabaseEncryptionConfigurationError) {
     log.error("kernel.boot.database_encryption_required", {
       message: error.message,
-      hint:
-        "Refusing to start takosumi against an unencrypted database. " +
+      hint: "Refusing to start takosumi against an unencrypted database. " +
         "See docs/operator/self-host.md and docs/reference/env-vars.md " +
         "for database at-rest encryption configuration.",
     });
@@ -494,8 +492,7 @@ function assertSecretEncryptionConfigured(
     if (error instanceof SecretEncryptionConfigurationError) {
       log.error("kernel.boot.secret_encryption_required", {
         message: error.message,
-        hint:
-          "Refusing to start takosumi with plaintext secret storage. " +
+        hint: "Refusing to start takosumi with plaintext secret storage. " +
           "See docs/operator/self-host.md and " +
           "docs/reference/secret-partitions.md for required " +
           "encryption-key configuration.",
@@ -528,8 +525,7 @@ function assertDatabaseEncryptionConfigured(
     if (error instanceof DatabaseEncryptionConfigurationError) {
       log.error("kernel.boot.database_encryption_required", {
         message: error.message,
-        hint:
-          "Refusing to start takosumi against an unencrypted database. " +
+        hint: "Refusing to start takosumi against an unencrypted database. " +
           "See docs/operator/self-host.md and docs/reference/env-vars.md " +
           "for database at-rest encryption configuration.",
       });
@@ -619,8 +615,7 @@ async function maybeVerifyAuditReplicationChain(
     if (productionLike) {
       log.error("kernel.boot.audit_replication_chain_mismatch", {
         ...inconsistency,
-        hint:
-          "Refusing to start: SQL audit chain disagrees with immutable " +
+        hint: "Refusing to start: SQL audit chain disagrees with immutable " +
           "replica. Investigate possible DB tampering before resuming traffic.",
       });
       Deno.exit(1);

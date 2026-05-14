@@ -291,8 +291,7 @@ export async function executeDeployPublicPost(
         log.warn("kernel.deploy.destroy_force_no_prior_record", {
           tenantId,
           deploymentName,
-          hint:
-            "destroy --force: no record; using resource.name as handle. " +
+          hint: "destroy --force: no record; using resource.name as handle. " +
             "Cloud handles may not match.",
         });
       }

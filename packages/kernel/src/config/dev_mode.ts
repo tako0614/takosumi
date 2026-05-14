@@ -62,8 +62,7 @@ export function warnIfDevMode(
     return;
   }
   log.warn("kernel.boot.dev_mode_enabled", {
-    hint:
-      "TAKOSUMI_DEV_MODE is on; do not use for production. Plaintext " +
+    hint: "TAKOSUMI_DEV_MODE is on; do not use for production. Plaintext " +
       "secrets, unencrypted databases, and unsafe defaults are permitted " +
       "in this process.",
   });
