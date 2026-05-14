@@ -17,6 +17,11 @@
  * and emit a `console.warn` instructing the operator to configure one.
  */
 
+import {
+  parseCloudflareEnvelope,
+  parseCloudflareSubdomainResult,
+} from "../_wire.ts";
+
 const BASE_URL = "https://api.cloudflare.com/client/v4";
 const METADATA_CONTENT_TYPE = "application/json";
 const MODULE_CONTENT_TYPE = "application/javascript+module";
@@ -50,15 +55,6 @@ export interface DirectCloudflareWorkersLifecycleOptions {
   readonly accountId: string;
   readonly apiToken: string;
   readonly fetch?: typeof fetch;
-}
-
-interface CloudflareEnvelope {
-  readonly success?: boolean;
-  readonly errors?: readonly { code: number; message: string }[];
-}
-
-interface CloudflareSubdomainEnvelope extends CloudflareEnvelope {
-  readonly result?: { readonly subdomain?: string };
 }
 
 export class DirectCloudflareWorkersLifecycle
@@ -163,13 +159,31 @@ export class DirectCloudflareWorkersLifecycle
       headers: { authorization: `Bearer ${this.#apiToken}` },
     });
     if (response.status === 404) return undefined;
-    await ensureOk(response, `cf-workers:GetSubdomain ${this.#accountId}`);
+    const context = `cf-workers:GetSubdomain ${this.#accountId}`;
+    await ensureOk(response, context);
+    let raw: unknown;
     try {
-      const body = await response.json() as CloudflareSubdomainEnvelope;
-      const sub = body.result?.subdomain;
+      raw = await response.json();
+    } catch {
+      return undefined;
+    }
+    try {
+      const env = parseCloudflareEnvelope(
+        raw,
+        context,
+        parseCloudflareSubdomainResult,
+      );
+      const sub = env.result?.subdomain;
       if (typeof sub === "string" && sub.length > 0) return sub;
       return undefined;
     } catch {
+      // Structural mismatch on the subdomain response is non-fatal — the
+      // lifecycle falls back to `${accountId}.workers.dev`. Return undefined
+      // so the caller emits the same operator warning as for an absent
+      // subdomain. We swallow the contract error here because verify-style
+      // graceful-degrade is more useful than aborting a deploy on a cosmetic
+      // URL field. The contract error is still raised in tests, just not
+      // here in the request path.
       return undefined;
     }
   }
@@ -250,16 +264,7 @@ async function ensureOk(response: Response, context: string): Promise<void> {
   try {
     const text = await response.text();
     if (text) {
-      try {
-        const env = JSON.parse(text) as CloudflareEnvelope;
-        if (env.errors && env.errors.length > 0) {
-          detail = env.errors.map((e) => `${e.code}:${e.message}`).join(", ");
-        } else {
-          detail = text;
-        }
-      } catch {
-        detail = text;
-      }
+      detail = extractErrorDetail(text);
     }
   } catch {
     // ignore body read failures
@@ -267,4 +272,35 @@ async function ensureOk(response: Response, context: string): Promise<void> {
   throw new Error(
     `${context} failed: HTTP ${response.status}${detail ? `: ${detail}` : ""}`,
   );
+}
+
+/**
+ * Extract a `{code,message}` summary from a Cloudflare error envelope.
+ * Falls back to the raw text when the body is not a recognisable envelope
+ * (non-JSON, success=true, or unparseable errors[]).
+ */
+function extractErrorDetail(text: string): string {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return text;
+  }
+  const errorsRaw = (raw as Record<string, unknown>).errors;
+  if (!Array.isArray(errorsRaw) || errorsRaw.length === 0) return text;
+  const parts: string[] = [];
+  for (const entry of errorsRaw) {
+    if (
+      typeof entry === "object" && entry !== null && !Array.isArray(entry)
+    ) {
+      const e = entry as Record<string, unknown>;
+      const code = typeof e.code === "number" ? e.code : "?";
+      const message = typeof e.message === "string" ? e.message : "";
+      parts.push(`${code}:${message}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(", ") : text;
 }

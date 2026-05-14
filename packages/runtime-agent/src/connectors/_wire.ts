@@ -264,6 +264,81 @@ export function passthroughObjectResult(
   return raw as Record<string, unknown>;
 }
 
+/** Cloudflare Container application response (`result` payload). */
+export interface CloudflareContainerResult {
+  readonly id?: string;
+  readonly url?: string;
+  readonly port?: number;
+}
+
+export function parseCloudflareContainerResult(
+  raw: unknown,
+  context: string,
+  path: string,
+): CloudflareContainerResult | undefined {
+  // Cloudflare returns `result: null` for non-success envelopes (e.g. 409
+  // conflict, 4xx errors). The lifecycle reads `envelope?.result?.url` so
+  // returning `undefined` here is the correct narrowing.
+  if (raw === undefined || raw === null) return undefined;
+  const obj = expectObject(raw, context, path);
+  return {
+    id: optionalString(obj, "id", context, path),
+    url: optionalString(obj, "url", context, path),
+    port: optionalNumber(obj, "port", context, path),
+  };
+}
+
+/** Cloudflare R2 bucket response (`result` payload). */
+export interface CloudflareR2Result {
+  readonly name?: string;
+  readonly location?: string;
+}
+
+export function parseCloudflareR2Result(
+  raw: unknown,
+  context: string,
+  path: string,
+): CloudflareR2Result | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const obj = expectObject(raw, context, path);
+  return {
+    name: optionalString(obj, "name", context, path),
+    location: optionalString(obj, "location", context, path),
+  };
+}
+
+/** Cloudflare DNS record response (`result` payload).
+ *
+ * On a successful 2xx response the Cloudflare DNS API guarantees an `id`. The
+ * record's `name` / `content` / `proxied` fields are also returned for GET
+ * responses; the `createRecord` path only reads `id` so those are marked
+ * optional and the validator surfaces them only when they are present and
+ * well-typed.
+ */
+export interface CloudflareDnsResult {
+  readonly id: string;
+  readonly name?: string;
+  readonly content?: string;
+  readonly proxied?: boolean;
+}
+
+export function parseCloudflareDnsResult(
+  raw: unknown,
+  context: string,
+  path: string,
+): CloudflareDnsResult | undefined {
+  // CF error envelopes have `result: null`; the lifecycle reaches here even
+  // on non-2xx via the shared cfFetchValidated path, so we tolerate that.
+  if (raw === undefined || raw === null) return undefined;
+  const obj = expectObject(raw, context, path);
+  return {
+    id: expectString(obj, "id", context, path),
+    name: optionalString(obj, "name", context, path),
+    content: optionalString(obj, "content", context, path),
+    proxied: optionalBoolean(obj, "proxied", context, path),
+  };
+}
+
 /** Cloudflare `/accounts/{id}/workers/subdomain` response. */
 export interface CloudflareSubdomainResult {
   readonly subdomain?: string;

@@ -3,7 +3,12 @@
  * REST API.
  */
 
-import { cfFetch, ensureCfOk } from "../../_cloudflare_api.ts";
+import {
+  cfFetch,
+  cfFetchValidated,
+  ensureCfOk,
+} from "../../_cloudflare_api.ts";
+import { parseCloudflareContainerResult } from "../_wire.ts";
 
 export interface CloudflareContainerDescriptor {
   readonly accountId: string;
@@ -49,21 +54,21 @@ export class DirectCloudflareContainerLifecycle {
       env: input.env ?? {},
       instances: { min: input.minInstances, max: input.maxInstances },
     };
-    const result = await cfFetch<{ id?: string; url?: string }>(
+    const context = `cf-containers:CreateApplication ${input.serviceName}`;
+    const result = await cfFetchValidated(
       {
         method: "POST",
         path: `/accounts/${this.#accountId}/containers/applications`,
         body,
       },
       { apiToken: this.#apiToken, fetch: this.#fetch },
+      parseCloudflareContainerResult,
+      context,
     );
     if (result.status !== 409) {
-      ensureCfOk(
-        result,
-        `cf-containers:CreateApplication ${input.serviceName}`,
-      );
+      ensureCfOk(result, context);
     }
-    let publicUrl = result.envelope?.result.url;
+    let publicUrl = result.envelope?.result?.url;
     if (!publicUrl) {
       const existing = await this.describeService({
         serviceName: input.serviceName,
@@ -89,24 +94,24 @@ export class DirectCloudflareContainerLifecycle {
   async describeService(
     input: { readonly serviceName: string },
   ): Promise<CloudflareContainerDescriptor | undefined> {
-    const result = await cfFetch<{ url?: string; port?: number }>(
+    const context = `cf-containers:GetApplication ${input.serviceName}`;
+    const result = await cfFetchValidated(
       {
         method: "GET",
         path:
           `/accounts/${this.#accountId}/containers/applications/${input.serviceName}`,
       },
       { apiToken: this.#apiToken, fetch: this.#fetch },
+      parseCloudflareContainerResult,
+      context,
     );
     if (result.status === 404) return undefined;
-    ensureCfOk(
-      result,
-      `cf-containers:GetApplication ${input.serviceName}`,
-    );
-    const publicUrl = result.envelope?.result.url;
+    ensureCfOk(result, context);
+    const publicUrl = result.envelope?.result?.url;
     if (!publicUrl) {
       throw new Error(
-        `cf-containers:GetApplication ${input.serviceName}: API response ` +
-          `did not include a public URL; refusing to fabricate one.`,
+        `${context}: API response did not include a public URL; ` +
+          `refusing to fabricate one.`,
       );
     }
     return {
@@ -114,7 +119,7 @@ export class DirectCloudflareContainerLifecycle {
       serviceName: input.serviceName,
       publicUrl,
       internalHost: `${input.serviceName}.cf.local`,
-      port: result.envelope?.result.port ?? 0,
+      port: result.envelope?.result?.port ?? 0,
     };
   }
 

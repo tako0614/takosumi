@@ -4,7 +4,12 @@
  * Endpoint: /accounts/{accountId}/r2/buckets
  */
 
-import { cfFetch, ensureCfOk } from "../../_cloudflare_api.ts";
+import {
+  cfFetch,
+  cfFetchValidated,
+  ensureCfOk,
+} from "../../_cloudflare_api.ts";
+import { parseCloudflareR2Result } from "../_wire.ts";
 
 export interface CloudflareR2BucketDescriptor {
   readonly accountId: string;
@@ -41,16 +46,19 @@ export class DirectCloudflareR2Lifecycle {
   ): Promise<CloudflareR2BucketDescriptor> {
     const body: Record<string, unknown> = { name: input.bucketName };
     if (input.locationHint) body.locationHint = input.locationHint;
-    const result = await cfFetch<{ name: string; location?: string }>(
+    const context = `r2:CreateBucket ${input.bucketName}`;
+    const result = await cfFetchValidated(
       {
         method: "POST",
         path: `/accounts/${this.#accountId}/r2/buckets`,
         body,
       },
       { apiToken: this.#apiToken, fetch: this.#fetch },
+      parseCloudflareR2Result,
+      context,
     );
     if (result.status !== 409) {
-      ensureCfOk(result, `r2:CreateBucket ${input.bucketName}`);
+      ensureCfOk(result, context);
     }
     return {
       accountId: this.#accountId,
@@ -63,19 +71,22 @@ export class DirectCloudflareR2Lifecycle {
   async describeBucket(
     input: { readonly bucketName: string },
   ): Promise<CloudflareR2BucketDescriptor | undefined> {
-    const result = await cfFetch<{ name: string; location?: string }>(
+    const context = `r2:GetBucket ${input.bucketName}`;
+    const result = await cfFetchValidated(
       {
         method: "GET",
         path: `/accounts/${this.#accountId}/r2/buckets/${input.bucketName}`,
       },
       { apiToken: this.#apiToken, fetch: this.#fetch },
+      parseCloudflareR2Result,
+      context,
     );
     if (result.status === 404) return undefined;
-    ensureCfOk(result, `r2:GetBucket ${input.bucketName}`);
+    ensureCfOk(result, context);
     return {
       accountId: this.#accountId,
       bucketName: input.bucketName,
-      locationHint: result.envelope?.result.location,
+      locationHint: result.envelope?.result?.location,
     };
   }
 

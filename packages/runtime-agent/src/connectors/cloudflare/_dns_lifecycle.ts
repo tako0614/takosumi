@@ -4,7 +4,12 @@
  * Endpoint: /zones/{zoneId}/dns_records
  */
 
-import { cfFetch, ensureCfOk } from "../../_cloudflare_api.ts";
+import {
+  cfFetch,
+  cfFetchValidated,
+  ensureCfOk,
+} from "../../_cloudflare_api.ts";
+import { parseCloudflareDnsResult } from "../_wire.ts";
 
 export interface CloudflareDnsRecordDescriptor {
   readonly recordId: string;
@@ -53,18 +58,23 @@ export class DirectCloudflareDnsLifecycle {
       ttl: this.#ttl,
       proxied: input.proxied,
     };
-    const result = await cfFetch<{ id: string }>(
+    const context = `cf-dns:CreateRecord ${input.fqdn}`;
+    const result = await cfFetchValidated(
       {
         method: "POST",
         path: `/zones/${this.#zoneId}/dns_records`,
         body,
       },
       { apiToken: this.#apiToken, fetch: this.#fetch },
+      parseCloudflareDnsResult,
+      context,
     );
-    const record = ensureCfOk(
-      result,
-      `cf-dns:CreateRecord ${input.fqdn}`,
-    );
+    const record = ensureCfOk(result, context);
+    if (!record) {
+      throw new Error(
+        `${context}: API returned success but no record body; cannot derive recordId`,
+      );
+    }
     return {
       recordId: record.id,
       fqdn: input.fqdn,
@@ -77,28 +87,28 @@ export class DirectCloudflareDnsLifecycle {
   async describeRecord(
     input: { readonly recordId: string },
   ): Promise<CloudflareDnsRecordDescriptor | undefined> {
-    const result = await cfFetch<{
-      id: string;
-      name: string;
-      content: string;
-      proxied: boolean;
-    }>(
+    const context = `cf-dns:GetRecord ${input.recordId}`;
+    const result = await cfFetchValidated(
       {
         method: "GET",
         path: `/zones/${this.#zoneId}/dns_records/${input.recordId}`,
       },
       { apiToken: this.#apiToken, fetch: this.#fetch },
+      parseCloudflareDnsResult,
+      context,
     );
     if (result.status === 404) return undefined;
-    const record = ensureCfOk(
-      result,
-      `cf-dns:GetRecord ${input.recordId}`,
-    );
+    const record = ensureCfOk(result, context);
+    if (!record) {
+      throw new Error(
+        `${context}: API returned success but no record body; cannot reconstruct descriptor`,
+      );
+    }
     return {
       recordId: record.id,
-      fqdn: record.name,
-      target: record.content,
-      proxied: record.proxied,
+      fqdn: record.name ?? "",
+      target: record.content ?? "",
+      proxied: record.proxied ?? false,
       zoneId: this.#zoneId,
     };
   }

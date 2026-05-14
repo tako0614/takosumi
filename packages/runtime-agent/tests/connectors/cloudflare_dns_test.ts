@@ -38,6 +38,32 @@ Deno.test("CloudflareDnsConnector.verify reports auth_failed on 401", async () =
   assert.equal(res.code, "auth_failed");
 });
 
+Deno.test("CloudflareDnsConnector.apply rejects malformed result.id in API response", async () => {
+  // CF DNS API contract: `result.id` is a string. A numeric id means the
+  // upstream envelope broke; the connector must refuse to derive a handle.
+  const { fetch: mockFetch } = recordingFetch(() =>
+    new Response(
+      JSON.stringify({ success: true, result: { id: 42 } }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )
+  );
+  const connector = new CloudflareDnsConnector({
+    zoneId: "zone-1",
+    apiToken: "cf-token",
+    fetch: mockFetch,
+  });
+  await assert.rejects(
+    () =>
+      connector.apply({
+        shape: "custom-domain@v1",
+        provider: "@takos/cloudflare-dns",
+        resourceName: "rs",
+        spec: { name: "app.example.com", target: "lb.example.com" },
+      }, {}),
+    /\$\.result\.id/,
+  );
+});
+
 Deno.test("CloudflareDnsConnector.apply creates record and returns id handle", async () => {
   const { fetch: mockFetch, calls } = recordingFetch(() =>
     new Response(
