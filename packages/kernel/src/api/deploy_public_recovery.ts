@@ -1,8 +1,8 @@
 import type { ManifestResource } from "takosumi-contract";
 import type {
-  type ApplyV2Outcome,
-  type OperationPlanPreview,
-  type PlannedResource,
+  ApplyV2Outcome,
+  OperationPlanPreview,
+  PlannedResource,
 } from "../domains/deploy/apply_v2.ts";
 import { buildOperationPlanPreview } from "../domains/deploy/operation_plan_preview.ts";
 import { buildRefDag } from "../domains/deploy/ref_resolver_v2.ts";
@@ -12,8 +12,8 @@ import {
   type OperationJournalStore,
 } from "../domains/deploy/operation_journal.ts";
 import type {
-  type RevokeDebtRecord,
-  type RevokeDebtStore,
+  RevokeDebtRecord,
+  RevokeDebtStore,
 } from "../domains/deploy/revoke_debt_store.ts";
 import { apiError } from "./errors.ts";
 import { generatedObjectIdForPublicOperation } from "./deploy_public_catalog_hooks.ts";
