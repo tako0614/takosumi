@@ -150,8 +150,15 @@ function base64UrlEncode(bytes: Uint8Array): string {
 /**
  * Helper for performing a JSON-bearing GCP REST call with the access token
  * applied. Used by every Direct GCP lifecycle.
+ *
+ * `json` is typed as `unknown` here on purpose: the response body is a
+ * foreign JSON payload that must be validated structurally before the
+ * lifecycle reads any fields. Callers should pipe `result.json` through one
+ * of the `parse*Response` validators in `connectors/_wire.ts` (or use the
+ * `gcpJsonFetchValidated` wrapper below). The `text` field remains available
+ * for the verify path which only cares about status + raw body.
  */
-export async function gcpJsonFetch<T = unknown>(
+export async function gcpJsonFetch(
   tokens: GcpAccessTokenProvider,
   request: {
     readonly method: string;
@@ -159,7 +166,7 @@ export async function gcpJsonFetch<T = unknown>(
     readonly body?: unknown;
     readonly fetch?: typeof fetch;
   },
-): Promise<{ status: number; ok: boolean; json: T | undefined; text: string }> {
+): Promise<{ status: number; ok: boolean; json: unknown; text: string }> {
   const token = await tokens.getAccessToken();
   const fetchImpl = request.fetch ?? fetch;
   const response = await fetchImpl(`${request.url}`, {
@@ -174,15 +181,50 @@ export async function gcpJsonFetch<T = unknown>(
     body: request.body !== undefined ? JSON.stringify(request.body) : undefined,
   });
   const text = await response.text();
-  let json: T | undefined;
+  let json: unknown;
   if (text) {
     try {
-      json = JSON.parse(text) as T;
+      json = JSON.parse(text);
     } catch {
       json = undefined;
     }
   }
   return { status: response.status, ok: response.ok, json, text };
+}
+
+/**
+ * Wrapper that performs a `gcpJsonFetch` and immediately runs the response
+ * body through a structural `parse` callback. Returns the same envelope as
+ * `gcpJsonFetch` but with a narrowed `json: T | undefined`. The parser
+ * throws `ConnectorContractError` on shape violations so descriptors are
+ * never reconstructed from corrupt fields.
+ *
+ * Note: parsing only runs on 2xx responses. Non-2xx bodies typically follow
+ * the GCP error envelope `{ error: { code, message } }` which is consumed
+ * verbatim by `ensureGcpResponseOk`, so the lifecycle does not need to
+ * narrow them.
+ */
+export async function gcpJsonFetchValidated<T>(
+  tokens: GcpAccessTokenProvider,
+  request: {
+    readonly method: string;
+    readonly url: string | URL;
+    readonly body?: unknown;
+    readonly fetch?: typeof fetch;
+  },
+  parse: (raw: unknown) => T | undefined,
+): Promise<{ status: number; ok: boolean; json: T | undefined; text: string }> {
+  const result = await gcpJsonFetch(tokens, request);
+  let parsed: T | undefined;
+  if (result.ok && result.json !== undefined) {
+    parsed = parse(result.json);
+  }
+  return {
+    status: result.status,
+    ok: result.ok,
+    json: parsed,
+    text: result.text,
+  };
 }
 
 export function ensureGcpResponseOk(

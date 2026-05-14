@@ -40,6 +40,38 @@ Deno.test("CloudRunConnector.verify reports auth_failed on 401", async () => {
   assert.equal(res.code, "auth_failed");
 });
 
+Deno.test("CloudRunConnector.apply rejects malformed uri in API response", async () => {
+  // Cloud Run API contract: `uri` is a string. A numeric value here means
+  // the upstream API broke its envelope; the connector should refuse to
+  // continue rather than coerce it into a URL.
+  const { fetch: mockFetch } = recordingFetch(() =>
+    new Response(
+      JSON.stringify({ uri: 12345 }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )
+  );
+  const connector = new CloudRunConnector({
+    project: "my-proj",
+    region: "us-central1",
+    bearerToken: "tok",
+    fetch: mockFetch,
+  });
+  await assert.rejects(
+    () =>
+      connector.apply({
+        shape: "web-service@v1",
+        provider: "@takos/gcp-cloud-run",
+        resourceName: "rs",
+        spec: {
+          image: "us-docker.pkg.dev/proj/app:1",
+          port: 8080,
+          scale: { min: 0, max: 5 },
+        },
+      }, {}),
+    /\$\.uri/,
+  );
+});
+
 Deno.test("CloudRunConnector.apply creates service and uses returned uri", async () => {
   const { fetch: mockFetch, calls } = recordingFetch(() =>
     new Response(

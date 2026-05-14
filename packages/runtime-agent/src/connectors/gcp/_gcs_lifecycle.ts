@@ -12,7 +12,9 @@ import {
   GcpAccessTokenProvider,
   type GcpAccessTokenProviderOptions,
   gcpJsonFetch,
+  gcpJsonFetchValidated,
 } from "../../_gcp_auth.ts";
+import { parseGcsBucketResponse } from "../_wire.ts";
 
 export interface GcsBucketDescriptor {
   readonly project: string;
@@ -58,7 +60,8 @@ export class DirectGcsLifecycle {
         publicAccessPrevention: input.publicAccess ? "inherited" : "enforced",
       },
     };
-    const result = await gcpJsonFetch<{ name?: string; location?: string }>(
+    const context = `gcs:CreateBucket ${input.bucketName}`;
+    const result = await gcpJsonFetchValidated(
       this.#tokens,
       {
         method: "POST",
@@ -68,11 +71,12 @@ export class DirectGcsLifecycle {
         body,
         fetch: this.#fetch,
       },
+      (raw) => parseGcsBucketResponse(raw, context),
     );
     if (result.status === 409) {
       // Bucket already exists; treat as idempotent
     } else {
-      ensureGcpResponseOk(result, `gcs:CreateBucket ${input.bucketName}`);
+      ensureGcpResponseOk(result, context);
     }
     return {
       project: this.#project,
@@ -86,7 +90,8 @@ export class DirectGcsLifecycle {
   async describeBucket(
     input: { readonly bucketName: string },
   ): Promise<GcsBucketDescriptor | undefined> {
-    const result = await gcpJsonFetch<{ name?: string; location?: string }>(
+    const context = `gcs:GetBucket ${input.bucketName}`;
+    const result = await gcpJsonFetchValidated(
       this.#tokens,
       {
         method: "GET",
@@ -95,9 +100,10 @@ export class DirectGcsLifecycle {
         }`,
         fetch: this.#fetch,
       },
+      (raw) => parseGcsBucketResponse(raw, context),
     );
     if (result.status === 404) return undefined;
-    ensureGcpResponseOk(result, `gcs:GetBucket ${input.bucketName}`);
+    ensureGcpResponseOk(result, context);
     return {
       project: this.#project,
       bucketName: input.bucketName,

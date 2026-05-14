@@ -9,7 +9,9 @@ import {
   GcpAccessTokenProvider,
   type GcpAccessTokenProviderOptions,
   gcpJsonFetch,
+  gcpJsonFetchValidated,
 } from "../../_gcp_auth.ts";
+import { parseCloudRunServiceResponse } from "../_wire.ts";
 
 export interface CloudRunServiceDescriptor {
   readonly serviceName: string;
@@ -80,7 +82,8 @@ export class DirectCloudRunLifecycle {
       },
       ingress: "INGRESS_TRAFFIC_ALL",
     };
-    const result = await gcpJsonFetch<{ name?: string; uri?: string }>(
+    const context = `cloudrun:CreateService ${input.serviceName}`;
+    const result = await gcpJsonFetchValidated(
       this.#tokens,
       {
         method: "POST",
@@ -91,14 +94,12 @@ export class DirectCloudRunLifecycle {
         body,
         fetch: this.#fetch,
       },
+      (raw) => parseCloudRunServiceResponse(raw, context),
     );
     if (result.status === 409) {
       // existing — fall through to GET below
     } else {
-      ensureGcpResponseOk(
-        result,
-        `cloudrun:CreateService ${input.serviceName}`,
-      );
+      ensureGcpResponseOk(result, context);
     }
     let uri = result.json?.uri;
     if (!uri) {
@@ -128,26 +129,17 @@ export class DirectCloudRunLifecycle {
   async describeService(
     input: { readonly serviceName: string },
   ): Promise<CloudRunServiceDescriptor | undefined> {
-    const result = await gcpJsonFetch<
-      {
-        uri?: string;
-        template?: {
-          containers?: Array<{ ports?: Array<{ containerPort?: number }> }>;
-        };
-      }
-    >(this.#tokens, {
+    const context = `cloudrun:GetService ${input.serviceName}`;
+    const result = await gcpJsonFetchValidated(this.#tokens, {
       method: "GET",
       url:
         `https://run.googleapis.com/v2/projects/${this.#project}/locations/${this.#region}/services/${
           encodeURIComponent(input.serviceName)
         }`,
       fetch: this.#fetch,
-    });
+    }, (raw) => parseCloudRunServiceResponse(raw, context));
     if (result.status === 404) return undefined;
-    ensureGcpResponseOk(
-      result,
-      `cloudrun:GetService ${input.serviceName}`,
-    );
+    ensureGcpResponseOk(result, context);
     const uri = result.json?.uri;
     if (!uri) {
       throw new Error(

@@ -9,7 +9,9 @@ import {
   GcpAccessTokenProvider,
   type GcpAccessTokenProviderOptions,
   gcpJsonFetch,
+  gcpJsonFetchValidated,
 } from "../../_gcp_auth.ts";
+import { parseCloudSqlInstanceResponse } from "../_wire.ts";
 
 export interface CloudSqlInstanceDescriptor {
   readonly instanceName: string;
@@ -75,10 +77,8 @@ export class DirectCloudSqlLifecycle {
         },
       },
     };
-    const result = await gcpJsonFetch<{
-      name?: string;
-      ipAddresses?: { ipAddress?: string; type?: string }[];
-    }>(
+    const context = `cloudsql:InstancesInsert ${input.instanceName}`;
+    const result = await gcpJsonFetchValidated(
       this.#tokens,
       {
         method: "POST",
@@ -87,14 +87,12 @@ export class DirectCloudSqlLifecycle {
         body,
         fetch: this.#fetch,
       },
+      (raw) => parseCloudSqlInstanceResponse(raw, context),
     );
     if (result.status === 409) {
       // Already exists; idempotent
     } else {
-      ensureGcpResponseOk(
-        result,
-        `cloudsql:InstancesInsert ${input.instanceName}`,
-      );
+      ensureGcpResponseOk(result, context);
     }
     return this.#descriptor(
       input.instanceName,
@@ -106,22 +104,17 @@ export class DirectCloudSqlLifecycle {
   async describeInstance(
     input: { readonly instanceName: string },
   ): Promise<CloudSqlInstanceDescriptor | undefined> {
-    const result = await gcpJsonFetch<{
-      databaseVersion?: string;
-      ipAddresses?: { ipAddress?: string; type?: string }[];
-    }>(this.#tokens, {
+    const context = `cloudsql:InstancesGet ${input.instanceName}`;
+    const result = await gcpJsonFetchValidated(this.#tokens, {
       method: "GET",
       url:
         `https://sqladmin.googleapis.com/v1/projects/${this.#project}/instances/${
           encodeURIComponent(input.instanceName)
         }`,
       fetch: this.#fetch,
-    });
+    }, (raw) => parseCloudSqlInstanceResponse(raw, context));
     if (result.status === 404) return undefined;
-    ensureGcpResponseOk(
-      result,
-      `cloudsql:InstancesGet ${input.instanceName}`,
-    );
+    ensureGcpResponseOk(result, context);
     return this.#descriptor(
       input.instanceName,
       {
