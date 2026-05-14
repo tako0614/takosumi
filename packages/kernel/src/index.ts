@@ -6,6 +6,7 @@ import {
   RuntimeConfigError,
   warnIfDevMode,
 } from "./config/mod.ts";
+import { log } from "./shared/log.ts";
 import { StorageMigrationRunner } from "./adapters/storage/migration-runner/mod.ts";
 import {
   SecretEncryptionConfigurationError,
@@ -80,15 +81,11 @@ function registerKernelShutdownHandlers(server: Deno.HttpServer): void {
   const handler = (signal: Deno.Signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(
-      `[takosumi-kernel] received ${signal}, draining HTTP server...`,
-    );
+    log.info("kernel.shutdown.draining", { signal });
     server.shutdown()
-      .catch((error) =>
-        console.error(`[takosumi-kernel] shutdown error:`, error)
-      )
+      .catch((error) => log.error("kernel.shutdown.error", { error }))
       .finally(() => {
-        console.log(`[takosumi-kernel] shutdown complete`);
+        log.info("kernel.shutdown.complete");
         Deno.exit(0);
       });
   };
@@ -99,53 +96,55 @@ function registerKernelShutdownHandlers(server: Deno.HttpServer): void {
       Deno.addSignalListener("SIGTERM", () => handler("SIGTERM"));
     }
   } catch (error) {
-    console.warn(
-      `[takosumi-kernel] failed to register shutdown signal handlers: ${
-        (error as Error).message
-      }`,
-    );
+    log.warn("kernel.shutdown.signal_register_failed", {
+      message: (error as Error).message,
+    });
   }
 }
 
 function fatalStartupError(error: unknown): never {
   if (error instanceof RuntimeConfigError) {
-    console.error(
-      `[paas-init] fatal: ${error.message}\n` +
-        error.diagnostics.map((diagnostic) =>
-          `  - ${diagnostic.code}${
-            diagnostic.key ? ` (${diagnostic.key})` : ""
-          }: ${diagnostic.message}`
-        ).join("\n"),
-    );
+    log.error("kernel.boot.runtime_config_invalid", {
+      message: error.message,
+      diagnostics: error.diagnostics.map((diagnostic) => ({
+        code: diagnostic.code,
+        ...(diagnostic.key ? { key: diagnostic.key } : {}),
+        message: diagnostic.message,
+      })),
+      docs: ["docs/operator/self-host.md", "docs/reference/env-vars.md"],
+    });
     Deno.exit(1);
   }
   if (error instanceof SecretEncryptionConfigurationError) {
-    console.error(
-      `[paas-init] fatal: ${error.message}\n` +
-        `Refusing to start takosumi with plaintext secret storage. ` +
-        `See docs/operator/self-host.md and ` +
-        `docs/reference/secret-partitions.md for required ` +
-        `encryption-key configuration.`,
-    );
+    log.error("kernel.boot.secret_encryption_required", {
+      message: error.message,
+      hint:
+        "Refusing to start takosumi with plaintext secret storage. " +
+        "See docs/operator/self-host.md and " +
+        "docs/reference/secret-partitions.md for required " +
+        "encryption-key configuration.",
+    });
     Deno.exit(1);
   }
   if (error instanceof DatabaseEncryptionConfigurationError) {
-    console.error(
-      `[paas-init] fatal: ${error.message}\n` +
-        `Refusing to start takosumi against an unencrypted database. ` +
-        `See docs/operator/self-host.md and docs/reference/env-vars.md ` +
-        `for database at-rest encryption configuration.`,
-    );
+    log.error("kernel.boot.database_encryption_required", {
+      message: error.message,
+      hint:
+        "Refusing to start takosumi against an unencrypted database. " +
+        "See docs/operator/self-host.md and docs/reference/env-vars.md " +
+        "for database at-rest encryption configuration.",
+    });
     Deno.exit(1);
   }
   if (error instanceof AuditReplicationConfigurationError) {
-    console.error(
-      `[paas-init] fatal: ${error.message}\n` +
-        `Refusing to start takosumi without an external audit-replication ` +
-        `sink. See docs/reference/audit-events.md and ` +
-        `docs/reference/env-vars.md for AuditExternalReplicationSink ` +
-        `configuration.`,
-    );
+    log.error("kernel.boot.audit_replication_required", {
+      message: error.message,
+      hint:
+        "Refusing to start takosumi without an external audit-replication " +
+        "sink. See docs/reference/audit-events.md and " +
+        "docs/reference/env-vars.md for AuditExternalReplicationSink " +
+        "configuration.",
+    });
     Deno.exit(1);
   }
   throw error;
@@ -185,9 +184,7 @@ async function maybeApplyDatabaseMigrations(
       : undefined) ??
     (environment === "staging" ? env.TAKOSUMI_STAGING_DATABASE_URL : undefined);
   if (!databaseUrl) {
-    console.warn(
-      `[paas-init] TAKOSUMI_DB_AUTO_MIGRATE requested but no DATABASE_URL is set; skipping migrations.`,
-    );
+    log.warn("kernel.boot.db_migrations_skipped_no_url");
     return;
   }
 
@@ -197,23 +194,23 @@ async function maybeApplyDatabaseMigrations(
     const runner = new StorageMigrationRunner(client.client);
     const result = await runner.applyPending();
     if (result.appliedNow.length === 0) {
-      console.log(
-        `[paas-init] storage migrations up-to-date (${result.applied.length} applied).`,
-      );
+      log.info("kernel.boot.db_migrations_up_to_date", {
+        applied: result.applied.length,
+      });
     } else {
-      console.log(
-        `[paas-init] applied ${result.appliedNow.length} storage migration(s):`,
-      );
-      for (const entry of result.appliedNow) {
-        console.log(
-          `  + ${entry.migration.id} v${entry.migration.version} (${entry.migration.domain})`,
-        );
-      }
+      log.info("kernel.boot.db_migrations_applied", {
+        appliedNow: result.appliedNow.length,
+        migrations: result.appliedNow.map((entry) => ({
+          id: entry.migration.id,
+          version: entry.migration.version,
+          domain: entry.migration.domain,
+        })),
+      });
     }
   } catch (error) {
-    console.error(
-      `[paas-init] storage migrations failed: ${(error as Error).message}`,
-    );
+    log.error("kernel.boot.db_migrations_failed", {
+      message: (error as Error).message,
+    });
   } finally {
     await client.close().catch(() => {});
   }
@@ -239,9 +236,7 @@ async function maybeApplyAuditRetention(
   const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
     env.TAKOSUMI_PRODUCTION_DATABASE_URL ?? env.TAKOSUMI_STAGING_DATABASE_URL;
   if (!databaseUrl) {
-    console.warn(
-      `[paas-init] audit retention requested but no DATABASE_URL configured; skipping.`,
-    );
+    log.warn("kernel.boot.audit_retention_skipped_no_url");
     return;
   }
 
@@ -253,14 +248,16 @@ async function maybeApplyAuditRetention(
       retentionPolicy: policy,
     });
     const { archived, deleted } = await sink.applyRetentionPolicy();
-    console.log(
-      `[paas-init] audit retention applied (regime=${policy.regime} retention=${policy.retentionDays}d): ` +
-        `${archived} archived, ${deleted} deleted.`,
-    );
+    log.info("kernel.boot.audit_retention_applied", {
+      regime: policy.regime,
+      retentionDays: policy.retentionDays,
+      archived,
+      deleted,
+    });
   } catch (error) {
-    console.error(
-      `[paas-init] audit retention failed: ${(error as Error).message}`,
-    );
+    log.error("kernel.boot.audit_retention_failed", {
+      message: (error as Error).message,
+    });
   } finally {
     await client.close().catch(() => {});
   }
@@ -307,15 +304,16 @@ async function maybeApplyObservationRetention(
       ...(Object.keys(policy).length ? { policy } : {}),
     });
     const report = await service.run();
-    console.log(
-      `[paas-init] observation retention applied: ` +
-        `archived deploy=${report.archivedDeploy} runtime=${report.archivedRuntime}, ` +
-        `deleted deploy=${report.deletedDeploy} runtime=${report.deletedRuntime}.`,
-    );
+    log.info("kernel.boot.observation_retention_applied", {
+      archivedDeploy: report.archivedDeploy,
+      archivedRuntime: report.archivedRuntime,
+      deletedDeploy: report.deletedDeploy,
+      deletedRuntime: report.deletedRuntime,
+    });
   } catch (error) {
-    console.error(
-      `[paas-init] observation retention failed: ${(error as Error).message}`,
-    );
+    log.error("kernel.boot.observation_retention_failed", {
+      message: (error as Error).message,
+    });
   } finally {
     await client.close().catch(() => {});
   }
@@ -337,16 +335,16 @@ function parsePositiveIntEnv(value: string | undefined): number | undefined {
  */
 function logDeploymentRecordStoreBackend(sqlClientResolved: boolean): void {
   if (sqlClientResolved) {
-    console.log(
-      "[takosumi-bootstrap] deployment record store: SQL " +
-        "(TAKOSUMI_DATABASE_URL)",
-    );
+    log.info("kernel.boot.deployment_record_store_selected", {
+      backend: "sql",
+      source: "TAKOSUMI_DATABASE_URL",
+    });
     return;
   }
-  console.log(
-    "[takosumi-bootstrap] deployment record store: in-memory " +
-      "(TAKOSUMI_DATABASE_URL unset; restarts will lose state)",
-  );
+  log.info("kernel.boot.deployment_record_store_selected", {
+    backend: "in_memory",
+    note: "TAKOSUMI_DATABASE_URL unset; restarts will lose state",
+  });
 }
 
 /**
@@ -422,9 +420,9 @@ async function tryCreatePostgresClient(
     };
     return { client, close: () => pool.end() };
   } catch (error) {
-    console.warn(
-      `[paas-init] failed to load postgres driver: ${(error as Error).message}`,
-    );
+    log.warn("kernel.boot.postgres_driver_unavailable", {
+      message: (error as Error).message,
+    });
     return undefined;
   }
 }
@@ -460,10 +458,14 @@ function startHeartbeatIfConfigured(): void {
       `${JSON.stringify({ ok: true, service: "takosumi", role, now })}\n`,
     );
   };
-  write().catch((error) => console.error("heartbeat write failed", error));
+  write().catch((error) =>
+    log.error("kernel.heartbeat.write_failed", { error })
+  );
   setInterval(
     () =>
-      write().catch((error) => console.error("heartbeat write failed", error)),
+      write().catch((error) =>
+        log.error("kernel.heartbeat.write_failed", { error })
+      ),
     Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 1_000,
   );
 }
@@ -490,13 +492,14 @@ function assertSecretEncryptionConfigured(
     selectSecretBoundaryCrypto({ env });
   } catch (error) {
     if (error instanceof SecretEncryptionConfigurationError) {
-      console.error(
-        `[paas-init] fatal: ${error.message}\n` +
-          `Refusing to start takosumi with plaintext secret storage. ` +
-          `See docs/operator/self-host.md and ` +
-          `docs/reference/secret-partitions.md for required ` +
-          `encryption-key configuration.`,
-      );
+      log.error("kernel.boot.secret_encryption_required", {
+        message: error.message,
+        hint:
+          "Refusing to start takosumi with plaintext secret storage. " +
+          "See docs/operator/self-host.md and " +
+          "docs/reference/secret-partitions.md for required " +
+          "encryption-key configuration.",
+      });
       Deno.exit(1);
     }
     throw error;
@@ -514,21 +517,22 @@ function assertDatabaseEncryptionConfigured(
   try {
     const assertion = assertDatabaseEncryptionAtRest({ env });
     if (assertion.satisfied && assertion.evidence) {
-      console.log(
-        `[paas-init] db at-rest encryption: ${assertion.evidence}` +
-          (assertion.overrideAccepted
-            ? " (TAKOSUMI_DEV_MODE override accepted)"
-            : ""),
-      );
+      log.info("kernel.boot.db_at_rest_encryption_satisfied", {
+        evidence: assertion.evidence,
+        ...(assertion.overrideAccepted
+          ? { overrideAccepted: true, override: "TAKOSUMI_DEV_MODE" }
+          : {}),
+      });
     }
   } catch (error) {
     if (error instanceof DatabaseEncryptionConfigurationError) {
-      console.error(
-        `[paas-init] fatal: ${error.message}\n` +
-          `Refusing to start takosumi against an unencrypted database. ` +
-          `See docs/operator/self-host.md and docs/reference/env-vars.md ` +
-          `for database at-rest encryption configuration.`,
-      );
+      log.error("kernel.boot.database_encryption_required", {
+        message: error.message,
+        hint:
+          "Refusing to start takosumi against an unencrypted database. " +
+          "See docs/operator/self-host.md and docs/reference/env-vars.md " +
+          "for database at-rest encryption configuration.",
+      });
       Deno.exit(1);
     }
     throw error;
@@ -546,20 +550,21 @@ function assertAuditReplicationConfigured(
   try {
     const sink = selectAuditExternalReplicationSink({ env });
     if (sink) {
-      console.log(
-        `[paas-init] audit-replication sink: ${sink.kind}`,
-      );
+      log.info("kernel.boot.audit_replication_sink_selected", {
+        kind: sink.kind,
+      });
     }
     return sink;
   } catch (error) {
     if (error instanceof AuditReplicationConfigurationError) {
-      console.error(
-        `[paas-init] fatal: ${error.message}\n` +
-          `Refusing to start takosumi without an external audit-replication ` +
-          `sink. See docs/reference/audit-events.md and ` +
-          `docs/reference/env-vars.md for AuditExternalReplicationSink ` +
-          `configuration.`,
-      );
+      log.error("kernel.boot.audit_replication_required", {
+        message: error.message,
+        hint:
+          "Refusing to start takosumi without an external audit-replication " +
+          "sink. See docs/reference/audit-events.md and " +
+          "docs/reference/env-vars.md for AuditExternalReplicationSink " +
+          "configuration.",
+      });
       Deno.exit(1);
     }
     throw error;
@@ -595,34 +600,36 @@ async function maybeVerifyAuditReplicationChain(
     const external = await sink.readChain();
     const result = await verifyAuditReplicationConsistency(primary, external);
     if (result.ok) {
-      console.log(
-        `[paas-init] audit-replication chain verified ` +
-          `(primary=${result.primaryCount} external=${result.externalCount}).`,
-      );
+      log.info("kernel.boot.audit_replication_chain_verified", {
+        primaryCount: result.primaryCount,
+        externalCount: result.externalCount,
+      });
       return;
     }
     const environment = (env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? "local")
       .toLowerCase();
     const productionLike = environment === "production" ||
       environment === "staging";
-    const message = `audit-replication consistency failed: ` +
-      `${result.reason} at sequence=${result.mismatchAtSequence ?? "?"} ` +
-      `(primary=${result.primaryCount} external=${result.externalCount})`;
+    const inconsistency = {
+      reason: result.reason,
+      mismatchAtSequence: result.mismatchAtSequence ?? null,
+      primaryCount: result.primaryCount,
+      externalCount: result.externalCount,
+    };
     if (productionLike) {
-      console.error(
-        `[paas-init] fatal: ${message}\n` +
-          `Refusing to start: SQL audit chain disagrees with immutable ` +
-          `replica. Investigate possible DB tampering before resuming traffic.`,
-      );
+      log.error("kernel.boot.audit_replication_chain_mismatch", {
+        ...inconsistency,
+        hint:
+          "Refusing to start: SQL audit chain disagrees with immutable " +
+          "replica. Investigate possible DB tampering before resuming traffic.",
+      });
       Deno.exit(1);
     }
-    console.warn(`[paas-init] ${message}`);
+    log.warn("kernel.boot.audit_replication_chain_mismatch", inconsistency);
   } catch (error) {
-    console.warn(
-      `[paas-init] audit-replication verification skipped: ${
-        (error as Error).message
-      }`,
-    );
+    log.warn("kernel.boot.audit_replication_verification_skipped", {
+      message: (error as Error).message,
+    });
   } finally {
     await client.close().catch(() => {});
   }
