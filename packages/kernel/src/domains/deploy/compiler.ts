@@ -23,6 +23,14 @@ import {
   stringField,
   validateStringRecord,
 } from "./internal/manifest_common.ts";
+import {
+  inferComputeType,
+  interfaceContractRefFor,
+  outputContractRefFor,
+  resourceContractRefFor,
+  resourceDefaultAccessModeFor,
+  runtimeContractRefFor,
+} from "./internal/contract_refs.ts";
 
 export interface CompileManifestOptions {
   source?: DeploySourceRef;
@@ -1209,39 +1217,6 @@ function isLocalhostName(hostname: string): boolean {
     normalized.endsWith(".localhost");
 }
 
-function inferComputeType(name: string, compute: PublicComputeSpec): string {
-  if (compute.image !== undefined) return "service";
-  throw new TypeError(
-    `compute.${name} requires type or an image field`,
-  );
-}
-
-function runtimeContractRefFor(type: string): string {
-  const normalized = type.toLowerCase();
-  if (
-    normalized === "runtime.oci-container@v1" ||
-    normalized === "https://takosumi.com/contracts/runtime/oci-container/v1"
-  ) {
-    return "runtime.oci-container@v1";
-  }
-  if (
-    normalized === "runtime.js-worker@v1" ||
-    normalized === "https://takosumi.com/contracts/runtime/js-worker/v1"
-  ) {
-    return "runtime.js-worker@v1";
-  }
-  if (
-    normalized === "container" || normalized === "oci-container" ||
-    normalized === "service"
-  ) {
-    return "runtime.oci-container@v1";
-  }
-  if (normalized === "js-worker" || normalized === "worker") {
-    return "runtime.js-worker@v1";
-  }
-  throw new TypeError(`DescriptorAliasAmbiguous: compute type ${type}`);
-}
-
 function computeRequirementsFor(
   compute: PublicComputeSpec,
 ): PublicComputeRequirements {
@@ -1263,89 +1238,6 @@ function computeRequirementsFor(
     ...(compute.requirements ?? {}),
     runtimeCapabilities: [...runtimeCapabilities].sort(),
   };
-}
-
-function resourceContractRefFor(type: string): string {
-  const normalized = type.toLowerCase();
-  for (const contract of RESOURCE_CONTRACTS) {
-    if (
-      normalized === contract.ref ||
-      normalized === contract.uri ||
-      (contract.aliases as readonly string[]).includes(normalized)
-    ) {
-      return contract.ref;
-    }
-  }
-  throw new TypeError(`DescriptorAliasAmbiguous: resource type ${type}`);
-}
-
-const RESOURCE_CONTRACTS = [
-  {
-    ref: "resource.sql.postgres@v1",
-    uri: "https://takosumi.com/contracts/resource/sql/postgres/v1",
-    aliases: ["postgres", "sql.postgres"],
-    defaultAccessMode: "database-url",
-  },
-  {
-    ref: "resource.sql.sqlite-serverless@v1",
-    uri: "https://takosumi.com/contracts/resource/sql/sqlite-serverless/v1",
-    aliases: ["sql", "sqlite", "sql.sqlite-serverless"],
-    defaultAccessMode: "sql-runtime-binding",
-  },
-  {
-    ref: "resource.object-store.s3@v1",
-    uri: "https://takosumi.com/contracts/resource/object-store/s3/v1",
-    aliases: ["object-store", "s3", "object-store.s3"],
-    defaultAccessMode: "object-runtime-binding",
-  },
-  {
-    ref: "resource.key-value@v1",
-    uri: "https://takosumi.com/contracts/resource/key-value/v1",
-    aliases: ["key-value", "kv"],
-    defaultAccessMode: "kv-runtime-binding",
-  },
-  {
-    ref: "resource.queue.at-least-once@v1",
-    uri: "https://takosumi.com/contracts/resource/queue/at-least-once/v1",
-    aliases: ["queue", "queue.at-least-once"],
-    defaultAccessMode: "queue-runtime-binding",
-  },
-  {
-    ref: "resource.secret@v1",
-    uri: "https://takosumi.com/contracts/resource/secret/v1",
-    aliases: ["secret"],
-    defaultAccessMode: "secret-env-binding",
-  },
-  {
-    ref: "resource.vector-index@v1",
-    uri: "https://takosumi.com/contracts/resource/vector-index/v1",
-    aliases: ["vector-index"],
-    defaultAccessMode: "vector-runtime-binding",
-  },
-  {
-    ref: "resource.analytics-engine@v1",
-    uri: "https://takosumi.com/contracts/resource/analytics-engine/v1",
-    aliases: ["analytics-engine"],
-    defaultAccessMode: "analytics-runtime-binding",
-  },
-  {
-    ref: "resource.durable-object@v1",
-    uri: "https://takosumi.com/contracts/resource/durable-object/v1",
-    aliases: ["durable-object"],
-    defaultAccessMode: "durable-object-runtime-binding",
-  },
-] as const;
-
-function resourceDefaultAccessModeFor(resourceContractRef: string): string {
-  const contract = RESOURCE_CONTRACTS.find((item) =>
-    item.ref === resourceContractRef
-  );
-  if (!contract) {
-    throw new TypeError(
-      `DescriptorAliasAmbiguous: resource type ${resourceContractRef}`,
-    );
-  }
-  return contract.defaultAccessMode;
 }
 
 function resourceBindingsByComputeFor(
@@ -1469,36 +1361,3 @@ function targetListFor(value: unknown): string[] {
   return [];
 }
 
-function interfaceContractRefFor(protocol: string | undefined): string {
-  const normalized = (protocol ?? "https").toLowerCase();
-  if (normalized === "http" || normalized === "https") {
-    return "interface.http@v1";
-  }
-  if (normalized === "tcp") return "interface.tcp@v1";
-  if (normalized === "udp") return "interface.udp@v1";
-  if (normalized === "queue") return "interface.queue@v1";
-  throw new TypeError(`RouterProtocolUnsupported: ${normalized}`);
-}
-
-function outputContractRefFor(type: string): string {
-  const normalized = type.toLowerCase();
-  if (
-    normalized === "output.http-endpoint@v1" ||
-    normalized === "https://takosumi.com/contracts/output/http-endpoint/v1"
-  ) {
-    return "output.http-endpoint@v1";
-  }
-  if (
-    normalized === "output.mcp-server@v1" ||
-    normalized === "https://takosumi.com/contracts/output/mcp-server/v1"
-  ) {
-    return "output.mcp-server@v1";
-  }
-  if (
-    normalized === "output.topic@v1" ||
-    normalized === "https://takosumi.com/contracts/output/topic/v1"
-  ) {
-    return "output.topic@v1";
-  }
-  throw new TypeError(`DescriptorAliasAmbiguous: output type ${type}`);
-}
