@@ -13,6 +13,7 @@ import {
   verifyAuditHashChain,
 } from "./audit_chain.ts";
 import type { ObservabilitySink } from "./sink.ts";
+import { log } from "../../shared/log.ts";
 import type {
   MetricEvent,
   MetricEventQuery,
@@ -131,15 +132,14 @@ export class SqlObservabilitySink implements ObservabilitySink {
       try {
         await this.#replication.replicate(record);
       } catch (error) {
-        // Replication is best-effort. Surfacing the failure as a console
-        // warning is enough for the in-region store to keep accepting
-        // writes; the operator alerting pipeline subscribes to the driver's
-        // onFailure callback for structured handling.
-        console.warn(
-          `[audit-replication] failed for ${record.event.id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        // Replication is best-effort. Surfacing the failure via the
+        // kernel logger is enough for the in-region store to keep
+        // accepting writes; the operator alerting pipeline subscribes to
+        // the driver's onFailure callback for structured handling.
+        log.warn("kernel.audit_replication.failed", {
+          eventId: record.event.id,
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
     }
     return record;
