@@ -1,38 +1,9 @@
 import { Container, getContainer } from "@cloudflare/containers";
-
-interface Env {
-  readonly TAKOS_D1: D1Database;
-  readonly TAKOS_ARTIFACTS: R2Bucket;
-  readonly TAKOS_QUEUE: Queue<unknown>;
-  readonly TAKOS_COORDINATION: DurableObjectNamespace;
-  readonly TAKOS_WORKLOAD_CONTAINER: DurableObjectNamespace;
-}
-
-interface D1Database {
-  prepare(query: string): D1PreparedStatement;
-}
-
-interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
-  first<T = unknown>(): Promise<T | null>;
-}
-
-interface R2Bucket {
-  head(key: string): Promise<unknown>;
-}
-
-interface Queue<T> {
-  send(message: T): Promise<void>;
-}
-
-interface DurableObjectNamespace {
-  idFromName(name: string): unknown;
-  get(id: unknown): DurableObjectStub;
-}
-
-interface DurableObjectStub {
-  fetch(request: Request): Promise<Response>;
-}
+import {
+  type CloudflareWorkerEnv as Env,
+  type CloudflareWorkerHandler,
+  createCloudflareWorker,
+} from "./handler.ts";
 
 export class TakosWorkloadContainer extends Container {
   override defaultPort = 8080;
@@ -256,41 +227,9 @@ interface CoordinationAlarmInput {
   readonly payload?: Record<string, unknown>;
 }
 
-interface CloudflareWorkerHandler {
-  fetch(request: Request, env: Env): Promise<Response>;
-}
-
-const worker: CloudflareWorkerHandler = {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.pathname === "/healthz") {
-      return Response.json({ ok: true, provider: "cloudflare" });
-    }
-    if (url.pathname.startsWith("/coordination/")) {
-      const id = env.TAKOS_COORDINATION.idFromName("takos-control-plane");
-      const targetPath = `/${url.pathname.slice("/coordination/".length)}`;
-      return env.TAKOS_COORDINATION.get(id).fetch(
-        new Request(new URL(targetPath, request.url), request),
-      );
-    }
-    if (url.pathname.startsWith("/runtime/")) {
-      const instanceName = url.searchParams.get("instance") ?? "default";
-      return getContainer(env.TAKOS_WORKLOAD_CONTAINER, instanceName).fetch(
-        request,
-      );
-    }
-    if (url.pathname === "/queue/test" && request.method === "POST") {
-      await env.TAKOS_QUEUE.send(await request.json());
-      return Response.json({ queued: true });
-    }
-    if (url.pathname === "/storage/healthz") {
-      await env.TAKOS_D1.prepare("select 1").first();
-      await env.TAKOS_ARTIFACTS.head("healthz");
-      return Response.json({ ok: true, storage: "cloudflare" });
-    }
-    return Response.json({ error: "not found" }, { status: 404 });
-  },
-};
+const worker: CloudflareWorkerHandler = createCloudflareWorker({
+  getContainer,
+});
 
 export default worker;
 

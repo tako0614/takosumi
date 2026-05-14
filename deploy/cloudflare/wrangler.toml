@@ -38,6 +38,10 @@ class_name = "TakosCoordinationObject"
 name = "TAKOS_WORKLOAD_CONTAINER"
 class_name = "TakosWorkloadContainer"
 
+[[durable_objects.bindings]]
+name = "TAKOS_KERNEL_CONTAINER"
+class_name = "TakosWorkloadContainer"
+
 [[containers]]
 class_name = "TakosWorkloadContainer"
 image = "./Dockerfile"
