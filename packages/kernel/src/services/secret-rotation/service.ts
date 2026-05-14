@@ -257,11 +257,31 @@ export class SecretRotationService {
 }
 
 function cryptoUuid(): string {
-  // Avoid using crypto.randomUUID directly so test envs without it still work.
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
+  // Generate a cryptographically random UUID. The kernel targets modern
+  // Deno / Node runtimes where `crypto.randomUUID` is always defined; fall
+  // back to a manual v4 UUID built from `crypto.getRandomValues` (still
+  // cryptographically random) just in case a host has stripped randomUUID
+  // off the global. Never fall back to Math.random — that would silently
+  // downgrade audit-event / request IDs to a non-cryptographic source.
+  const g = (globalThis as { crypto?: Crypto }).crypto;
+  if (g && typeof g.randomUUID === "function") {
+    return g.randomUUID();
   }
-  return Math.random().toString(36).slice(2);
+  if (g && typeof g.getRandomValues === "function") {
+    const bytes = new Uint8Array(16);
+    g.getRandomValues(bytes);
+    // Set version (4) and variant (RFC 4122) bits.
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex: string[] = [];
+    for (const b of bytes) hex.push(b.toString(16).padStart(2, "0"));
+    return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${
+      hex.slice(6, 8).join("")
+    }-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
+  }
+  throw new Error(
+    "cryptoUuid: no Web Crypto available; refusing to downgrade to Math.random",
+  );
 }
 
 // Re-export downstream type aliases for convenience.
