@@ -39,9 +39,8 @@ export interface ApplyV2Outcome {
   readonly status: "succeeded" | "failed-validation" | "failed-apply";
   /**
    * Present when an apply failure triggered rollback of already-created
-   * resources. `status` remains `failed-apply` for backward-compatible
-   * callers, while this field exposes leaked-resource risk when compensation
-   * or destroy also fails.
+   * resources. The top-level status stays `failed-apply`; this field exposes
+   * leaked-resource risk when compensation or destroy also fails.
    */
   readonly rollback?: ApplyV2RollbackOutcome;
   /**
