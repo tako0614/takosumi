@@ -72,9 +72,10 @@ export interface CreatePaaSOpenApiDocumentOptions {
 export function createPaaSOpenApiDocument(
   options: CreatePaaSOpenApiDocumentOptions = {},
 ): OpenApiDocument {
-  const servers: readonly OpenApiServer[] = options.servers && options.servers.length > 0
-    ? options.servers
-    : [{ url: "/", description: "Relative to the kernel host" }];
+  const servers: readonly OpenApiServer[] =
+    options.servers && options.servers.length > 0
+      ? options.servers
+      : [{ url: "/", description: "Relative to the kernel host" }];
   const document: OpenApiDocument = {
     openapi: "3.1.0",
     info: {
