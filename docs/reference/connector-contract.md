@@ -141,7 +141,7 @@ HTTP API とは独立にバージョンが付く。
   runtime-agent dispatch, docs, and tests in the same change set.
 - Current docs do not publish a parallel v1/v2 operation promise. If a future
   release needs multiple envelope versions, that behavior must be defined as a
-  new current contract instead of an implicit migration window.
+  new current contract instead of an implicit dual-run period.
 
 v1 の apply / destroy envelope では、呼び出しが public OperationJournal path
 から来るとき runtime-agent request は WAL 由来の `idempotencyKey` を運ぶ。同じ
