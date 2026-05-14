@@ -1,5 +1,6 @@
 import type { JsonObject } from "takosumi-contract";
 import type { IsoTimestamp } from "../../shared/time.ts";
+import { log } from "../../shared/log.ts";
 
 export const TAKOSUMI_DEPLOY_OPERATION_COUNT =
   "takosumi_deploy_operation_count";
@@ -143,9 +144,16 @@ async function safeRecordMetric(
     await options.observability?.recordMetric(event);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    (options.warn ?? console.warn)(
-      `[takosumi-metrics] failed to record ${event.name}: ${message}`,
-    );
+    if (options.warn) {
+      options.warn(
+        `[takosumi-metrics] failed to record ${event.name}: ${message}`,
+      );
+    } else {
+      log.warn("kernel.deploy.metric_record_failed", {
+        metric: event.name,
+        message,
+      });
+    }
   }
 }
 

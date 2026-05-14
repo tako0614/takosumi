@@ -9,6 +9,7 @@ import type {
   TraceSpanStatus,
 } from "../../services/observability/types.ts";
 import type { IsoTimestamp } from "../../shared/time.ts";
+import { log } from "../../shared/log.ts";
 
 export interface DeployTraceSink {
   recordTrace(event: TraceSpanEvent): Promise<unknown>;
@@ -145,9 +146,16 @@ async function recordDeployTraceSpan(
     await sink.recordTrace(span);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    (options.warn ?? console.warn)(
-      `[takosumi-trace] failed to record ${span.name}: ${message}`,
-    );
+    if (options.warn) {
+      options.warn(
+        `[takosumi-trace] failed to record ${span.name}: ${message}`,
+      );
+    } else {
+      log.warn("kernel.deploy.trace_record_failed", {
+        span: span.name,
+        message,
+      });
+    }
   }
 }
 
