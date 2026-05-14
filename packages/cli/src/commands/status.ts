@@ -100,12 +100,19 @@ function renderStatus(body: unknown): void {
  * destroyed or apply-failed), we still emit a single row with the
  * deployment-level status so the table reflects every record.
  */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
 function extractRows(body: unknown): readonly Record<string, unknown>[] {
   if (Array.isArray(body)) {
     return flattenDeployments(body);
   }
-  if (body && typeof body === "object") {
-    const record = body as Record<string, unknown>;
+  const record = asRecord(body);
+  if (record) {
     if (Array.isArray(record.deployments)) {
       return flattenDeployments(record.deployments);
     }
@@ -126,10 +133,8 @@ function flattenDeployments(
 ): readonly Record<string, unknown>[] {
   const rows: Record<string, unknown>[] = [];
   for (const entry of entries) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      continue;
-    }
-    const deployment = entry as Record<string, unknown>;
+    const deployment = asRecord(entry);
+    if (!deployment) continue;
     const deploymentName = String(deployment.name ?? "");
     const deploymentStatus = String(
       deployment.status ?? deployment.state ?? "",
@@ -150,19 +155,16 @@ function flattenDeployments(
       continue;
     }
     for (const resource of resources) {
-      if (
-        typeof resource !== "object" || resource === null ||
-        Array.isArray(resource)
-      ) continue;
+      const resourceRec = asRecord(resource);
+      if (!resourceRec) continue;
       rows.push({
-        ...resource as Record<string, unknown>,
+        ...resourceRec,
         deployment: deploymentName,
         id: deployment.id,
         // Default each row's status to the deployment-level status when the
         // resource itself does not override it (older kernel builds may omit
         // the per-resource `status` field).
-        status: (resource as Record<string, unknown>).status ??
-          deploymentStatus,
+        status: resourceRec.status ?? deploymentStatus,
         journal: formatJournalSummary(deployment.journal),
       });
     }
@@ -171,10 +173,8 @@ function flattenDeployments(
 }
 
 function formatJournalSummary(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return "";
-  }
-  const journal = value as Record<string, unknown>;
+  const journal = asRecord(value);
+  if (!journal) return "";
   const phase = typeof journal.phase === "string" ? journal.phase : "";
   const stage = typeof journal.latestStage === "string"
     ? journal.latestStage
