@@ -1,3 +1,5 @@
+import { log } from "../shared/log.ts";
+
 /**
  * Single dev-mode opt-out flag for Takosumi self-host.
  *
@@ -42,17 +44,27 @@ export function isDevMode(env: DevModeEnvLike): boolean {
  * Logs a single startup warning when dev mode is active. Safe to call
  * unconditionally — when dev mode is off, this is a no-op.
  *
- * Callers can pass an optional `logger` for testability; defaults to
- * `console.warn`.
+ * Callers can pass an optional `logger` for testability; defaults to a
+ * single structured `kernel.boot.dev_mode_enabled` warning emitted via
+ * the kernel logger.
  */
 export function warnIfDevMode(
   env: DevModeEnvLike,
-  logger: (message: string) => void = console.warn,
+  logger?: (message: string) => void,
 ): void {
   if (!isDevMode(env)) return;
-  logger(
-    "[takosumi] TAKOSUMI_DEV_MODE is on; do not use for production. " +
-      "Plaintext secrets, unencrypted databases, and unsafe defaults are " +
-      "permitted in this process.",
-  );
+  if (logger) {
+    logger(
+      "[takosumi] TAKOSUMI_DEV_MODE is on; do not use for production. " +
+        "Plaintext secrets, unencrypted databases, and unsafe defaults are " +
+        "permitted in this process.",
+    );
+    return;
+  }
+  log.warn("kernel.boot.dev_mode_enabled", {
+    hint:
+      "TAKOSUMI_DEV_MODE is on; do not use for production. Plaintext " +
+      "secrets, unencrypted databases, and unsafe defaults are permitted " +
+      "in this process.",
+  });
 }
