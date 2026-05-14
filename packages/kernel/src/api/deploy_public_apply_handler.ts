@@ -36,6 +36,7 @@ import type {
 } from "./request_correlation.ts";
 import type { RevokeDebtStore } from "../domains/deploy/revoke_debt_store.ts";
 import { apiError } from "./errors.ts";
+import { log } from "../shared/log.ts";
 import {
   catalogReleaseHookDetailField,
   catalogReleaseWalHookDetail,
@@ -287,11 +288,13 @@ export async function executeDeployPublicPost(
       }
       const handleFor = prior ? buildHandleForFromRecord(prior) : undefined;
       if (!prior) {
-        console.warn(
-          `[takosumi-deploy] destroy --force: no record for tenant=${tenantId} ` +
-            `name=${deploymentName}; using resource.name as handle. ` +
-            `Cloud handles may not match.`,
-        );
+        log.warn("kernel.deploy.destroy_force_no_prior_record", {
+          tenantId,
+          deploymentName,
+          hint:
+            "destroy --force: no record; using resource.name as handle. " +
+            "Cloud handles may not match.",
+        });
       }
       if (
         recoveryMode.value === "continue" && prior?.status === "destroyed"
@@ -602,11 +605,12 @@ export async function executeDeployPublicPost(
       if (
         typeof outcome.reused === "number" && outcome.reused > 0
       ) {
-        console.log(
-          `[takosumi-apply] reusing ${outcome.reused} resources from prior ` +
-            `apply (fingerprint match) for tenant=${tenantId} ` +
-            `name=${deploymentName}`,
-        );
+        log.info("kernel.deploy.apply_reusing_resources", {
+          reused: outcome.reused,
+          tenantId,
+          deploymentName,
+          reason: "fingerprint_match",
+        });
       }
       const stamp = now();
       await recordStore.upsert({
