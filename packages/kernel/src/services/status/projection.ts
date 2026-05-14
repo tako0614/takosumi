@@ -2,8 +2,6 @@ import type {
   CoreConditionReason,
   GroupSummaryStatus,
 } from "takosumi-contract";
-import type { ProviderMaterializationReference } from "../../adapters/provider/mod.ts";
-import type { ProviderObservation as RuntimeProviderObservation } from "../../domains/runtime/mod.ts";
 import type {
   DependencyLayerStatus,
   DesiredLayerStatus,
@@ -12,7 +10,6 @@ import type {
   ProviderLayerProjection,
   SecurityLayerStatus,
   ServingLayerStatus,
-  StatusConditionDto,
   StatusLayerProjection,
 } from "./types.ts";
 import {
