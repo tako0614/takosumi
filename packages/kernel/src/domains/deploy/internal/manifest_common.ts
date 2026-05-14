@@ -2,6 +2,9 @@
 // validate, and override-merge phases. Keeping them in one module avoids
 // circular imports between the validation phase and the override-merge phase.
 
+export const PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR =
+  "authoring.public-manifest-expansion@v1";
+
 export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const IMAGE_DIGEST_PATTERN = /@sha256:[a-fA-F0-9]{64}$/;
 export const HTTP_METHOD_PATTERN = /^[A-Z][A-Z0-9!#$%&'*+.^_`|~-]*$/;
