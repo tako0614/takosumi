@@ -146,6 +146,9 @@ import {
   MemoryPackageResolutionStore,
   MemoryTrustRecordStore,
 } from "./memory/registry_stores.ts";
+import { MemoryAuditStore } from "./memory/audit_store.ts";
+import { MemoryUsageAggregateStore } from "./memory/usage_store.ts";
+import { MemoryRuntimeAgentLedgerStore } from "./memory/runtime_agent_store.ts";
 
 export type { MemoryStorageSnapshot };
 
@@ -278,110 +281,6 @@ class MemoryStorageTransaction implements StorageTransaction {
     this.runtimeAgent = new MemoryRuntimeAgentLedgerStore(
       state.runtimeAgent.agents,
       state.runtimeAgent.works,
-    );
-  }
-}
-
-class MemoryRuntimeAgentLedgerStore implements WorkLedger {
-  constructor(
-    private readonly agents: Map<RuntimeAgentId, RuntimeAgentRecord>,
-    private readonly works: Map<RuntimeAgentWorkId, RuntimeAgentWorkItem>,
-  ) {}
-
-  snapshot(): Promise<WorkLedgerSnapshot> {
-    return Promise.resolve(immutable({
-      agents: [...this.agents.values()],
-      works: [...this.works.values()],
-    }));
-  }
-
-  apply(mutation: WorkLedgerMutation): Promise<void> {
-    if (mutation.agent) {
-      this.agents.set(mutation.agent.id, immutable(mutation.agent));
-    }
-    for (const work of mutation.works) {
-      this.works.set(work.id, immutable(work));
-    }
-    for (const removed of mutation.removedWorkIds ?? []) {
-      this.works.delete(removed);
-    }
-    for (const removed of mutation.removedAgentIds ?? []) {
-      this.agents.delete(removed);
-    }
-    return Promise.resolve();
-  }
-}
-
-class MemoryAuditStore implements AuditStore {
-  constructor(
-    private readonly events: Map<AuditEventId, AuditEvent>,
-    private readonly order: AuditEventId[],
-  ) {}
-
-  append(event: AuditEvent): Promise<AuditEvent> {
-    const existing = this.events.get(event.id);
-    if (existing) return Promise.resolve(existing);
-    const value = immutable(event);
-    this.events.set(event.id, value);
-    this.order.push(event.id);
-    return Promise.resolve(value);
-  }
-
-  get(id: AuditEventId): Promise<AuditEvent | undefined> {
-    return Promise.resolve(this.events.get(id));
-  }
-
-  list(query: AuditEventQuery = {}): Promise<readonly AuditEvent[]> {
-    return Promise.resolve(
-      this.order
-        .map((id) => this.events.get(id))
-        .filter((event): event is AuditEvent => event !== undefined)
-        .filter((event) => matchesAuditQuery(event, query)),
-    );
-  }
-}
-
-class MemoryUsageAggregateStore implements UsageAggregateStore {
-  constructor(private readonly aggregates: Map<string, UsageAggregate>) {}
-
-  recordEvent(
-    event: UsageEventDto,
-    projectedAt: string,
-  ): Promise<UsageAggregate> {
-    const key = aggregateKeyForEvent(event);
-    const id = encodeAggregateId(key);
-    const current = this.aggregates.get(id);
-    const aggregate: UsageAggregate = current
-      ? immutable({
-        ...current,
-        quantity: current.quantity + event.quantity,
-        eventCount: current.eventCount + 1,
-        firstOccurredAt: minIso(current.firstOccurredAt, event.occurredAt),
-        lastOccurredAt: maxIso(current.lastOccurredAt, event.occurredAt),
-        updatedAt: projectedAt,
-      })
-      : immutable({
-        ...key,
-        id,
-        quantity: event.quantity,
-        eventCount: 1,
-        firstOccurredAt: event.occurredAt,
-        lastOccurredAt: event.occurredAt,
-        updatedAt: projectedAt,
-      });
-    this.aggregates.set(id, aggregate);
-    return Promise.resolve(aggregate);
-  }
-
-  get(key: UsageAggregateKey): Promise<UsageAggregate | undefined> {
-    return Promise.resolve(this.aggregates.get(encodeAggregateId(key)));
-  }
-
-  listBySpace(spaceId: string): Promise<readonly UsageAggregate[]> {
-    return Promise.resolve(
-      [...this.aggregates.values()].filter((aggregate) =>
-        aggregate.spaceId === spaceId
-      ),
     );
   }
 }
