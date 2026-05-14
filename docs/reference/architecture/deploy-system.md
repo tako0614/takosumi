@@ -129,10 +129,10 @@ takosumi-git upgrade inst_abc --ref v1.2.4
 差分は以下:
 
 - step 7 の `install preview` は **upgrade preview** として manifest diff /
-  permission diff / migration plan を提示する
+  permission diff / data-change review を提示する
 - AppInstallation 行は新しい `sourceCommit` / `appManifestDigest` /
   `compiledManifestDigest` で **更新される** (新規 row は作らない)
-- 旧 compiled manifest digest は **rollback 用に保存** され、
+- previous compiled manifest digest は **rollback 用に保存** され、
   `takosumi-git rollback inst_abc --to v1.2.3` で前の digest に戻せる
 
 upgrade / rollback の UI / 仕様は
@@ -496,7 +496,7 @@ operator script は同じ API を呼ぶ client です。pipeline は Deployment 
 7. **Activation commit** (status → `applied`)
    - `Deployment.desired.activation_envelope` を commit、 GroupHead の
      `current_deployment_id` を新 Deployment に進め、 `previous_deployment_id`
-     に旧 current を保持
+     に previous current を保持
    - group がある場合は group-scoped declaration / observed state / deployment
      pointer を更新する
 
@@ -504,13 +504,13 @@ operator script は同じ API を呼ぶ client です。pipeline は Deployment 
 
 rollback は GroupHead の `current_deployment_id` を `previous_deployment_id`
 (または明示指定された retained Deployment id) に向けて切り替える pointer move
-です。 新 Deployment record は作成されず、 旧 current Deployment は
+です。 新 Deployment record は作成されず、 previous current Deployment は
 `rolled-back` status に遷移します。
 
 - code + config + bindings が戻る (retained `Deployment.input.manifest_snapshot`
   と `Deployment.resolution.descriptor_closure` を再利用)
-- DB data は戻らない (forward-only migration、 `MigrationLedger` は逆方向
-  に進まない)
+- DB data は戻らない (forward-only schema change、 `MigrationLedger`
+  は逆方向に進まない)
 - resource の data / schema は自動巻き戻ししない
 - group なし primitive の個別 rollback は、 その primitive API の contract
   に従う
