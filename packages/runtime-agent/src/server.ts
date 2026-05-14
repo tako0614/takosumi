@@ -78,7 +78,7 @@ export function createRuntimeAgentApp(
   });
 
   app.post(LIFECYCLE_APPLY_PATH, async (c) => {
-    const body = (await c.req.json()) as LifecycleApplyRequest;
+    const body: unknown = await c.req.json();
     if (!validApply(body)) return c.json(errorBody("bad_request"), 400);
     try {
       const ctx = buildContext(body.artifactStore);
@@ -90,7 +90,7 @@ export function createRuntimeAgentApp(
   });
 
   app.post(LIFECYCLE_DESTROY_PATH, async (c) => {
-    const body = (await c.req.json()) as LifecycleDestroyRequest;
+    const body: unknown = await c.req.json();
     if (!validDestroy(body)) return c.json(errorBody("bad_request"), 400);
     try {
       const result = await dispatcher.destroy(body, {});
@@ -101,7 +101,7 @@ export function createRuntimeAgentApp(
   });
 
   app.post(LIFECYCLE_COMPENSATE_PATH, async (c) => {
-    const body = (await c.req.json()) as LifecycleCompensateRequest;
+    const body: unknown = await c.req.json();
     if (!validCompensate(body)) return c.json(errorBody("bad_request"), 400);
     try {
       const result = await dispatcher.compensate(body, {});
@@ -112,7 +112,7 @@ export function createRuntimeAgentApp(
   });
 
   app.post(LIFECYCLE_DESCRIBE_PATH, async (c) => {
-    const body = (await c.req.json()) as LifecycleDescribeRequest;
+    const body: unknown = await c.req.json();
     if (!validDescribe(body)) return c.json(errorBody("bad_request"), 400);
     try {
       const result = await dispatcher.describe(body, {});
@@ -133,9 +133,9 @@ export function createRuntimeAgentApp(
     let filter: { shape?: string; provider?: string } = {};
     if (c.req.header("content-length") !== "0") {
       try {
-        const body = await c.req.json().catch(() => ({}));
-        if (body && typeof body === "object") {
-          const { shape, provider } = body as Record<string, unknown>;
+        const body: unknown = await c.req.json().catch(() => ({}));
+        if (isRecord(body)) {
+          const { shape, provider } = body;
           filter = {
             shape: typeof shape === "string" ? shape : undefined,
             provider: typeof provider === "string" ? provider : undefined,
@@ -179,17 +179,17 @@ async function safeVerify(
 ): Promise<{ ok: boolean; note?: string; code?: string }> {
   if (!connector.verify) return { ok: true, note: "no verify hook" };
   try {
-    const out = await connector.verify({}) as
-      | { ok?: boolean; note?: string; code?: string }
-      | undefined;
-    if (!out || typeof out.ok !== "boolean") {
+    const out: unknown = await connector.verify({});
+    if (!isRecord(out) || typeof out.ok !== "boolean") {
       return {
         ok: false,
         code: "network_error",
         note: "verify returned malformed result",
       };
     }
-    return { ok: out.ok, note: out.note, code: out.code };
+    const note = typeof out.note === "string" ? out.note : undefined;
+    const code = typeof out.code === "string" ? out.code : undefined;
+    return { ok: out.ok, note, code };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, code: "network_error", note: message };
@@ -208,43 +208,43 @@ function buildContext(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function validApply(body: unknown): body is LifecycleApplyRequest {
-  if (!body || typeof body !== "object") return false;
-  const r = body as LifecycleApplyRequest;
-  return typeof r.shape === "string" &&
-    typeof r.provider === "string" &&
-    typeof r.resourceName === "string" &&
-    (r.idempotencyKey === undefined ||
-      typeof r.idempotencyKey === "string") &&
-    "spec" in r;
+  if (!isRecord(body)) return false;
+  return typeof body.shape === "string" &&
+    typeof body.provider === "string" &&
+    typeof body.resourceName === "string" &&
+    (body.idempotencyKey === undefined ||
+      typeof body.idempotencyKey === "string") &&
+    "spec" in body;
 }
 
 function validDestroy(body: unknown): body is LifecycleDestroyRequest {
-  if (!body || typeof body !== "object") return false;
-  const r = body as LifecycleDestroyRequest;
-  return typeof r.shape === "string" &&
-    typeof r.provider === "string" &&
-    typeof r.handle === "string" &&
-    (r.idempotencyKey === undefined ||
-      typeof r.idempotencyKey === "string");
+  if (!isRecord(body)) return false;
+  return typeof body.shape === "string" &&
+    typeof body.provider === "string" &&
+    typeof body.handle === "string" &&
+    (body.idempotencyKey === undefined ||
+      typeof body.idempotencyKey === "string");
 }
 
 function validCompensate(body: unknown): body is LifecycleCompensateRequest {
-  if (!body || typeof body !== "object") return false;
-  const r = body as LifecycleCompensateRequest;
-  return typeof r.shape === "string" &&
-    typeof r.provider === "string" &&
-    typeof r.handle === "string" &&
-    (r.idempotencyKey === undefined ||
-      typeof r.idempotencyKey === "string");
+  if (!isRecord(body)) return false;
+  return typeof body.shape === "string" &&
+    typeof body.provider === "string" &&
+    typeof body.handle === "string" &&
+    (body.idempotencyKey === undefined ||
+      typeof body.idempotencyKey === "string");
 }
 
 function validDescribe(body: unknown): body is LifecycleDescribeRequest {
-  if (!body || typeof body !== "object") return false;
-  const r = body as LifecycleDescribeRequest;
-  return typeof r.shape === "string" &&
-    typeof r.provider === "string" &&
-    typeof r.handle === "string";
+  if (!isRecord(body)) return false;
+  return typeof body.shape === "string" &&
+    typeof body.provider === "string" &&
+    typeof body.handle === "string";
 }
 
 function errorBody(error: string, code?: string): LifecycleErrorBody {

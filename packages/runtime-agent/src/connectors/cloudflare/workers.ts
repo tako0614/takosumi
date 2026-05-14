@@ -124,11 +124,8 @@ export class CloudflareWorkersConnector implements Connector {
 }
 
 function pickMainModule(artifact: Artifact): string {
-  const meta = artifact.metadata;
-  if (meta && typeof meta === "object") {
-    const entry = (meta as Record<string, unknown>).entrypoint;
-    if (typeof entry === "string" && entry.length > 0) return entry;
-  }
+  const entry = artifact.metadata?.entrypoint;
+  if (typeof entry === "string" && entry.length > 0) return entry;
   return DEFAULT_MAIN_MODULE;
 }
 

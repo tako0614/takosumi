@@ -120,15 +120,18 @@ function validateArtifactKind(
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function inferArtifactKind(spec: unknown): string | undefined {
-  if (!spec || typeof spec !== "object") return undefined;
-  const obj = spec as Record<string, unknown>;
-  const artifact = obj.artifact;
-  if (artifact && typeof artifact === "object") {
-    const k = (artifact as Record<string, unknown>).kind;
+  if (!isRecord(spec)) return undefined;
+  const artifact = spec.artifact;
+  if (isRecord(artifact)) {
+    const k = artifact.kind;
     if (typeof k === "string" && k.length > 0) return k;
   }
-  if (typeof obj.image === "string" && obj.image.length > 0) {
+  if (typeof spec.image === "string" && spec.image.length > 0) {
     return "oci-image";
   }
   return undefined;
