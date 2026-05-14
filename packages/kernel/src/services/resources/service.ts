@@ -8,7 +8,6 @@ import { objectAddress } from "takosumi-contract";
 import type {
   BindingSetRevision,
   BindingSetRevisionStore,
-  MigrationCheckpoint,
   MigrationLedgerEntry,
   MigrationLedgerStore,
   ResourceBinding,
@@ -33,8 +32,21 @@ import {
   assertRestoreAllowed,
   type RestoreResourceInput,
 } from "./_restore_guards.ts";
+import {
+  assertMigrationChecksumUnchanged,
+  compactJsonObject,
+  type MigrationCheckpointInput,
+  toLedgerCheckpoints,
+  upsertCondition,
+  type ValidateMigrationInput,
+  withMigrationChecksum,
+} from "./_migration_helpers.ts";
 
-export type { RestoreResourceInput };
+export type {
+  MigrationCheckpointInput,
+  RestoreResourceInput,
+  ValidateMigrationInput,
+};
 
 export interface ResourceOperationStores {
   readonly instances: ResourceInstanceStore;
@@ -105,19 +117,6 @@ export interface BindSecretInput {
 
 export interface BindSecretResult {
   readonly revision: BindingSetRevision;
-}
-
-export interface MigrationCheckpointInput {
-  readonly name: string;
-  readonly checksum?: string;
-  readonly metadata?: JsonObject;
-}
-
-export interface ValidateMigrationInput {
-  readonly resourceInstanceId: ResourceInstanceId;
-  readonly migrationRef: string;
-  readonly checksum?: string;
-  readonly checkpoints?: readonly MigrationCheckpointInput[];
 }
 
 export interface RecordMigrationInput extends ValidateMigrationInput {
@@ -706,86 +705,6 @@ function defaultBindingRole(instance: ResourceInstance): ResourceBindingRole {
   if (instance.origin === "imported-bind-only") return "bind-only";
   if (instance.sharingMode === "shared-readonly") return "readonly-consumer";
   return "owner";
-}
-
-function toLedgerCheckpoints(
-  checkpoints: readonly MigrationCheckpointInput[],
-  recordedAt: IsoTimestamp,
-): readonly MigrationCheckpoint[] {
-  return checkpoints.map((checkpoint) => ({
-    name: checkpoint.name,
-    checksum: checkpoint.checksum,
-    metadata: checkpoint.metadata,
-    recordedAt,
-  }));
-}
-
-function withMigrationChecksum(
-  metadata: JsonObject | undefined,
-  checksum: string | undefined,
-): JsonObject | undefined {
-  if (!checksum) return metadata;
-  return { ...(metadata ?? {}), checksum };
-}
-
-function assertMigrationChecksumUnchanged(
-  entry: MigrationLedgerEntry,
-  input: ValidateMigrationInput,
-): void {
-  const existingChecksum = stringValue(entry.metadata?.checksum) ??
-    stringValue(entry.metadata?.migrationChecksum);
-  if (
-    existingChecksum && input.checksum && existingChecksum !== input.checksum
-  ) {
-    throw conflict("Applied migration checksum changed", {
-      resourceInstanceId: input.resourceInstanceId,
-      migrationRef: input.migrationRef,
-      expectedChecksum: existingChecksum,
-      actualChecksum: input.checksum,
-    });
-  }
-  for (const checkpoint of input.checkpoints ?? []) {
-    if (!checkpoint.checksum) continue;
-    const existingCheckpoint = entry.checkpoints.find((item) =>
-      item.name === checkpoint.name && item.checksum !== undefined
-    );
-    if (
-      existingCheckpoint?.checksum &&
-      existingCheckpoint.checksum !== checkpoint.checksum
-    ) {
-      throw conflict("Applied migration checkpoint checksum changed", {
-        resourceInstanceId: input.resourceInstanceId,
-        migrationRef: input.migrationRef,
-        checkpoint: checkpoint.name,
-        expectedChecksum: existingCheckpoint.checksum,
-        actualChecksum: checkpoint.checksum,
-      });
-    }
-  }
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function compactJsonObject(
-  value: Record<string, string | undefined>,
-): JsonObject {
-  const result: Record<string, string> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (item !== undefined) result[key] = item;
-  }
-  return result;
-}
-
-function upsertCondition(
-  conditions: readonly Condition[] | undefined,
-  next: Condition,
-): readonly Condition[] {
-  return [
-    ...(conditions ?? []).filter((condition) => condition.type !== next.type),
-    next,
-  ];
 }
 
 async function structureDigest(
