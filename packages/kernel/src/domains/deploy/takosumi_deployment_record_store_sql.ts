@@ -4,6 +4,7 @@ import type {
   SqlParameters,
   SqlQueryResult,
 } from "../../adapters/storage/sql.ts";
+import { log } from "../../shared/log.ts";
 import type {
   TakosumiAppliedResourceRecord,
   TakosumiDeploymentRecord,
@@ -260,11 +261,11 @@ export class SqlTakosumiDeploymentRecordStore
   ): ReturnType<typeof setInterval> {
     return setInterval(() => {
       this.#renewSqlLease(tenantId, name, ownerToken).catch((error) => {
-        console.error(
-          `[takosumi-deploy] failed to renew SQL deploy lock tenant=${tenantId} name=${name}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        log.error("kernel.deploy.sql_lock_renew_failed", {
+          tenantId,
+          deploymentName: name,
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
     }, this.#lockHeartbeatMs);
   }

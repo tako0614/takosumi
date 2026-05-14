@@ -3,6 +3,7 @@ import type {
   SqlParameters,
   SqlQueryResult,
 } from "../../adapters/storage/sql.ts";
+import { log } from "../../shared/log.ts";
 import type {
   DeployPublicIdempotencyRecord,
   DeployPublicIdempotencySaveInput,
@@ -167,11 +168,11 @@ export class SqlDeployPublicIdempotencyStore
   ): ReturnType<typeof setInterval> {
     return setInterval(() => {
       this.#renewSqlLease(tenantId, key, ownerToken).catch((error) => {
-        console.error(
-          `[takosumi-deploy] failed to renew SQL deploy idempotency lock tenant=${tenantId}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        log.error("kernel.deploy.sql_idempotency_lock_renew_failed", {
+          tenantId,
+          key,
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
     }, this.#lockHeartbeatMs);
   }
