@@ -201,8 +201,8 @@ secret 値は audit log に出ません。 secret partition rotation、 secret a
 decision、 secret-bound approval はすべて value ではなく reference
 で記録します。
 
-- `secret-partition-rotated` は partition 識別子、 旧 / 新 partition digest、
-  actor を記録。 plaintext secret は持たない
+- `secret-partition-rotated` は partition 識別子、 previous / new partition
+  digest、 actor を記録。 plaintext secret は持たない
 - payload に secret 値が入りそうな event は、 secret reference
   (`secret://<partition>/<key>`) と access decision の digest を記録する
 - 書込時、 canonical payload に active secret-partition redaction set の

@@ -2,9 +2,10 @@
 
 > このページでわかること: Takosumi packages の current version alignment。
 
-pre-GA の public docs では、production 向けの移行手順や rollback 手順を公開
-runbook として固定しません。このページは package 間の current alignment と、
-release-specific operator runbook が満たすべき不変条件だけを記録します。
+Current public docs では、production 向けの schema-change 手順や rollback
+手順を公開 runbook として固定しません。このページは package 間の current
+alignment と、 release-specific operator runbook
+が満たすべき不変条件だけを記録します。
 
 ---
 
@@ -22,7 +23,7 @@ Takosumi は **6 つの package** を JSR で独立に publish します。 各 
 | `@takos/takosumi-cli`           | `takosumi` コマンド                          |
 | `@takos/takosumi`               | 上記 5 つの umbrella                         |
 
-pre-GA の package bump は release-specific private runbook と検証済み evidence
+Package bump は release-specific private runbook と検証済み evidence
 で扱います。public docs には production 操作手順を固定しません。
 
 ---

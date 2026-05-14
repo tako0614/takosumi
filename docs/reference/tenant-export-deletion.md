@@ -87,7 +87,8 @@ Space の export 履歴を cursor pagination で列挙する。
 
 `full` と `data-portability` は重複する内容を持つが、`data-portability` は
 import 想定の schema 安定性を保証する形式に正規化される。`full` は kernel 内部
-layout を反映し、import 互換は保証しない (debugging / forensic 用)。
+layout を反映し、import schema stability は保証しない (debugging / forensic
+用)。
 
 `manifest-only` は customer-recoverable な manifest 集合に絞った subset で、
 顧客が別環境で deploy をやり直す用途を想定している。

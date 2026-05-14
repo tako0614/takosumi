@@ -53,8 +53,8 @@ idle | preparing | canary-active | shadow-active
 | `canary-active` | traffic 一部 (closed split) を新 deployment へ流している。健全性監視中。                  |
 | `shadow-active` | production traffic を mirror して新 deployment に流す。production 結果は変えない。        |
 | `full-rollout`  | 全 traffic が新 deployment に乗った。`idle` 確定前の収束観察 window。                     |
-| `rolling-back`  | rollout の途中失敗で旧 pointer に戻している最中。compensate / abort 進行中。              |
-| `rolled-back`   | rollback が完了して旧 pointer に固定された terminal observation state。                   |
+| `rolling-back`  | rollout の途中失敗で previous pointer に戻している最中。compensate / abort 進行中。       |
+| `rolled-back`   | rollback が完了して previous pointer に固定された terminal observation state。            |
 
 ### Transition 規則
 
@@ -109,8 +109,8 @@ canary では traffic split を closed な比率列で進めます。
   で `blocked` になります。 operator policy が明示的に allow した mismatch
   だけがこの block を解除 できます。
 - canary 失敗時は **`rolling-back` に遷移**し、compensate operation を経由して
-  旧 pointer に戻します。途中段階で停止する「canary を保ったまま hold」 は v1
-  では state として持ちません。`canary-active` に留まったまま operator
+  previous pointer に戻します。途中段階で停止する「canary を保ったまま hold」 は
+  v1 では state として持ちません。`canary-active` に留まったまま operator
   が判断するか、`rolling-back` に進むかの 2 択です。
 
 ## Shadow state
@@ -119,7 +119,7 @@ shadow では production traffic を新 deployment にも複製送付し、produ
 側の挙動には影響しません。
 
 - production への request / response は `currentActivationSnapshotId` の前
-  pointer (旧 deployment) が処理し、結果は client に返ります。
+  pointer (previous deployment) が処理し、結果は client に返ります。
 - shadow 先 (新 deployment) に同じ request を mirror します。mirror 結果は
   ObservationSet に記録され、production 側の応答や副作用を変えません。
 - shadow 結果から drift が検出された場合は通常の

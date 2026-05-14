@@ -5,8 +5,8 @@
 
 Takosumi v1 における kernel process replacement、schema evolution の up / down
 semantics、rollback gate、kernel ↔ runtime-agent version alignment、
-runtime-agent drain protocol を定義する。これは pre-GA の current invariant
-であり、公開 docs には production 操作手順を固定しない。
+runtime-agent drain protocol を定義する。これは current invariant であり、公開
+docs には production 操作手順を固定しない。
 
 ## Kernel replacement invariants
 
@@ -95,22 +95,22 @@ fail-closed する。
 
 ## Rollback gate
 
-upgrade 失敗時に旧 binary に戻す場合、kernel は schema version compat range
-を宣言することで rollback の可否を判定する。
+upgrade 失敗時に previous binary に戻す場合、kernel は schema version supported
+range を宣言することで rollback の可否を判定する。
 
-| State                                                   | rollback                                    |
-| ------------------------------------------------------- | ------------------------------------------- |
-| `db-current` が old kernel の `code-supported-range` 内 | rollback 可。binary 入れ替えのみ            |
-| `db-current` が old kernel の range 外で同 minor        | rollback 前に down migration を要する       |
-| `db-current` が old kernel の range 外で cross minor    | rollback 不可 (forward-only invariant 違反) |
+| State                                                        | rollback                                    |
+| ------------------------------------------------------------ | ------------------------------------------- |
+| `db-current` が previous kernel の `code-supported-range` 内 | rollback 可。binary 入れ替えのみ            |
+| `db-current` が previous kernel の range 外で同 minor        | rollback 前に down migration を要する       |
+| `db-current` が previous kernel の range 外で cross minor    | rollback 不可 (forward-only invariant 違反) |
 
 new code が `code-required > db-current` のとき、kernel boot は
 `schema_required_higher_than_current` で fail-closed する。これにより rollback
 gate が **boot 段階で reject** される構造になっている。
 
 rollback は release-specific な operator 作業です。public reference は可否判定の
-invariant だけを定義し、production 向けの down-migration 手順や互換 window は
-公開しません。必要な操作は対象 release の private runbook と実証済み evidence
+invariant だけを定義し、production 向けの down-migration 手順や operator window
+は 公開しません。必要な操作は対象 release の private runbook と実証済み evidence
 で扱う。
 
 ## Kernel ↔ runtime-agent version alignment

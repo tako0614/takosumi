@@ -189,8 +189,8 @@ immutable で、 kernel は同じ論理 resource に再発行しません。
 
 ### UUID v4
 
-forward compatibility のため予約。 v1 で UUID v4 を使う kind は現状なし。
-canonical hyphen 区切り小文字形式で文書化。
+future extension のため予約。 v1 で UUID v4 を使う kind は現状なし。 canonical
+hyphen 区切り小文字形式で文書化。
 
 ### sha256 hex
 
@@ -276,7 +276,7 @@ owner + reason) から導出します。 projection を再実行しても同じ 
 を消すと ID も消え、 kernel は削除済 composite ID を別 resource に
 再利用しません。
 
-## 予約 kind と forward compatibility
+## 予約 kind と future extension
 
 上述の kind が v1 の **完全集合** です。 新 kind 追加 / 既存 kind の用途 変更 /
 alias には `CONVENTIONS.md` §6 RFC が必須。

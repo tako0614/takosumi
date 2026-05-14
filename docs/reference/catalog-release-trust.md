@@ -58,10 +58,10 @@ trusted publisher の identity は operator が明示的に enroll する。kern
   する。enroll は audit event `publisher-key-enrolled` を伴う。
 - **rotation**: publisher は新 key を CatalogRelease descriptor に embed して新
   release を出す。kernel は当該 descriptor を verify する際に新 key を採用する
-  (旧 key は revocation list に追加されるまで併存する)。
-- **revocation**: operator が rotation の完了に合わせて revocation list に 旧
-  key を載せる。kernel はこの list を即時反映し、revoked key で sign された
-  CatalogRelease descriptor を以後 verify failure として扱う。
+  (previous key は revocation list に追加されるまで併存する)。
+- **revocation**: operator が rotation の完了に合わせて revocation list に
+  previous key を載せる。kernel はこの list を即時反映し、revoked key で sign
+  された CatalogRelease descriptor を以後 verify failure として扱う。
 
 publisher key の rotation policy は CatalogRelease descriptor に embed する 形で
 publisher 側に主導権がある。kernel 側で rotation cadence を強制しないが、
@@ -128,8 +128,8 @@ CatalogRelease trust の operator surface は internal control-plane tooling で
 
 - **enroll**: publisher key enrollment 成功で `publisher-key-enrolled` audit
   event。
-- **rotate**: 新 publisher key の enroll は通常の `enroll` と同じ。旧 key の
-  retire は `revoke` 経路に移す。
+- **rotate**: 新 publisher key の enroll は通常の `enroll` と同じ。previous key
+  の retire は `revoke` 経路に移す。
 - **revoke**: publisher key を revocation list に追加。即時反映され、依存
   resolution が fail する。audit event `publisher-key-revoked`。
 - **adopt**: Space に CatalogRelease を adopt するときは、kernel が verify
