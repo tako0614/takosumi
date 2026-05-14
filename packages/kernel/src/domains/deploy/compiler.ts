@@ -17,6 +17,7 @@ import {
   isRecord,
   isSafeRepositoryRelativePath,
   isStringArray,
+  namedCollectionEntries,
   normalizedEnvNameSet,
   normalizeEnvName,
   PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR,
@@ -548,15 +549,6 @@ function deepMergeRecord(
   return output;
 }
 
-function namedCollectionEntries<T extends { id?: string; name?: string }>(
-  value: Record<string, T> | T[],
-  kind: "route" | "output",
-): [string, T][] {
-  return Array.isArray(value)
-    ? value.map((item, index) => [arrayEntryName(item, kind, index), item])
-    : Object.entries(value);
-}
-
 function normalizeNamedCollection(
   value: Record<string, PublicRouteSpec> | PublicRouteSpec[],
   kind: "route",
@@ -633,19 +625,6 @@ function normalizeNamedCollection(
       outputContractRef,
     } as AppSpecOutput;
   });
-}
-
-function arrayEntryName(
-  item: PublicRouteSpec | PublicOutputSpec,
-  kind: "route" | "output",
-  index: number,
-): string {
-  const explicitName = kind === "route"
-    ? (item as PublicRouteSpec).id
-    : (item as PublicOutputSpec).name;
-  return typeof explicitName === "string" && explicitName.length > 0
-    ? explicitName
-    : `${kind}-${index + 1}`;
 }
 
 function validateComputeCollection(

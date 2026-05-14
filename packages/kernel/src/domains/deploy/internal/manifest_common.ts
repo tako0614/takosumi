@@ -2,6 +2,8 @@
 // validate, and override-merge phases. Keeping them in one module avoids
 // circular imports between the validation phase and the override-merge phase.
 
+import type { PublicOutputSpec, PublicRouteSpec } from "../types.ts";
+
 export const PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR =
   "authoring.public-manifest-expansion@v1";
 
@@ -73,6 +75,30 @@ export function normalizedEnvNameSet(
 export function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) &&
     value.every((item) => typeof item === "string" && item.length > 0);
+}
+
+export function namedCollectionEntries<
+  T extends { id?: string; name?: string },
+>(
+  value: Record<string, T> | T[],
+  kind: "route" | "output",
+): [string, T][] {
+  return Array.isArray(value)
+    ? value.map((item, index) => [arrayEntryName(item, kind, index), item])
+    : Object.entries(value);
+}
+
+export function arrayEntryName(
+  item: PublicRouteSpec | PublicOutputSpec,
+  kind: "route" | "output",
+  index: number,
+): string {
+  const explicitName = kind === "route"
+    ? (item as PublicRouteSpec).id
+    : (item as PublicOutputSpec).name;
+  return typeof explicitName === "string" && explicitName.length > 0
+    ? explicitName
+    : `${kind}-${index + 1}`;
 }
 
 export function isSafeRepositoryRelativePath(value: string): boolean {
