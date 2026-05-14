@@ -1,64 +1,12 @@
 import type { AuditStore } from "../../domains/audit/store.ts";
-import type {
-  Deployment,
-  GroupHead,
-  ProviderObservation as CoreProviderObservation,
-} from "takosumi-contract";
-import type {
-  AuditEvent,
-  AuditEventId,
-  AuditEventQuery,
-} from "../../domains/audit/types.ts";
-import type {
-  AdvanceGroupHeadInput,
-  CommitAppliedDeploymentInput,
-  CommitAppliedDeploymentResult,
-  DeploymentFilter,
-  DeploymentStore,
-  GroupHeadRef,
-} from "../../domains/deploy/store.ts";
-import type {
-  BindingSetRevisionStore,
-  MigrationLedgerStore,
-  ResourceBindingStore,
-  ResourceInstanceStore,
-} from "../../domains/resources/stores.ts";
-import type {
-  BindingSetRevision,
-  BindingSetRevisionId,
-  GroupId,
-  MigrationLedgerEntry,
-  MigrationLedgerId,
-  ResourceBinding,
-  ResourceBindingId,
-  ResourceInstance,
-  ResourceInstanceId,
-} from "../../domains/resources/types.ts";
-import type {
-  ProviderObservationStore,
-  RuntimeDesiredStateStore,
-  RuntimeObservedStateStore,
-} from "../../domains/runtime/stores.ts";
-import type {
-  ProviderObservation,
-  RuntimeDesiredState,
-  RuntimeDesiredStateId,
-  RuntimeObservedStateId,
-  RuntimeObservedStateSnapshot,
-} from "../../domains/runtime/types.ts";
+import type { DeploymentStore } from "../../domains/deploy/store.ts";
 import type {
   BundledRegistry,
   PackageDescriptorStore,
   PackageResolutionStore,
   TrustRecordStore,
 } from "../../domains/registry/stores.ts";
-import type {
-  PackageDescriptor,
-  PackageKind,
-  PackageResolution,
-  ProviderSupportReport,
-  TrustRecord,
-} from "../../domains/registry/types.ts";
+import type { ProviderSupportReport } from "../../domains/registry/types.ts";
 import type {
   ServiceEndpointHealthUpdate,
   ServiceEndpointStore,
@@ -76,25 +24,7 @@ import type {
   ServiceTrustRecord,
   ServiceTrustRecordId,
 } from "../../domains/service-endpoints/types.ts";
-import {
-  aggregateKeyForEvent,
-  encodeAggregateId,
-  type UsageAggregateStore,
-} from "../../services/usage/store.ts";
-import type {
-  UsageAggregate,
-  UsageAggregateKey,
-  UsageEventDto,
-} from "../../services/usage/types.ts";
-import type {
-  RuntimeAgentId,
-  RuntimeAgentRecord,
-  RuntimeAgentWorkId,
-  RuntimeAgentWorkItem,
-  WorkLedger,
-  WorkLedgerMutation,
-  WorkLedgerSnapshot,
-} from "../../agents/mod.ts";
+import type { WorkLedger } from "../../agents/mod.ts";
 import type {
   CoreStorageStores,
   ResourceStorageStores,
@@ -105,20 +35,10 @@ import type {
   UsageStorageStores,
 } from "./driver.ts";
 import { storageStatementCatalog } from "./statements.ts";
-import {
-  assertDeploymentHeadScope,
-  groupHeadKey,
-  immutable,
-  matchesAuditQuery,
-  maxIso,
-  minIso,
-  normalizeDeploymentStatusFilter,
-  packageKey,
-} from "./memory/helpers.ts";
+import { immutable } from "./memory/helpers.ts";
 import {
   cloneState,
   createEmptyState,
-  type MemoryDeployState,
   type MemoryStorageSnapshot,
   type MemoryStorageState,
   snapshotState,
@@ -149,6 +69,11 @@ import {
 import { MemoryAuditStore } from "./memory/audit_store.ts";
 import { MemoryUsageAggregateStore } from "./memory/usage_store.ts";
 import { MemoryRuntimeAgentLedgerStore } from "./memory/runtime_agent_store.ts";
+import {
+  MemoryServiceEndpointStore,
+  MemoryServiceGrantStore,
+  MemoryServiceTrustRecordStore,
+} from "./memory/service_endpoint_stores.ts";
 
 export type { MemoryStorageSnapshot };
 
@@ -285,146 +210,3 @@ class MemoryStorageTransaction implements StorageTransaction {
   }
 }
 
-class MemoryServiceEndpointStore implements ServiceEndpointStore {
-  constructor(
-    private readonly endpoints: Map<ServiceEndpointId, ServiceEndpoint>,
-  ) {}
-
-  put(endpoint: ServiceEndpoint): Promise<ServiceEndpoint> {
-    const value = immutable(endpoint);
-    this.endpoints.set(value.id, value);
-    return Promise.resolve(value);
-  }
-
-  get(id: ServiceEndpointId): Promise<ServiceEndpoint | undefined> {
-    return Promise.resolve(this.endpoints.get(id));
-  }
-
-  listByService(serviceId: ServiceId): Promise<readonly ServiceEndpoint[]> {
-    return Promise.resolve(
-      [...this.endpoints.values()].filter((endpoint) =>
-        endpoint.serviceId === serviceId
-      ),
-    );
-  }
-
-  listByGroup(
-    spaceId: string,
-    groupId: string,
-  ): Promise<readonly ServiceEndpoint[]> {
-    return Promise.resolve(
-      [...this.endpoints.values()].filter((endpoint) =>
-        endpoint.spaceId === spaceId && endpoint.groupId === groupId
-      ),
-    );
-  }
-
-  updateHealth(
-    id: ServiceEndpointId,
-    update: ServiceEndpointHealthUpdate,
-  ): Promise<ServiceEndpoint | undefined> {
-    const existing = this.endpoints.get(id);
-    if (!existing) return Promise.resolve(undefined);
-    const health: ServiceEndpointHealth = {
-      status: update.status,
-      checkedAt: update.checkedAt,
-      ...(update.message === undefined ? {} : { message: update.message }),
-    };
-    const updated = immutable({
-      ...existing,
-      health,
-      updatedAt: update.updatedAt ?? update.checkedAt,
-    });
-    this.endpoints.set(id, updated);
-    return Promise.resolve(updated);
-  }
-}
-
-class MemoryServiceTrustRecordStore implements ServiceTrustRecordStore {
-  constructor(
-    private readonly records: Map<ServiceTrustRecordId, ServiceTrustRecord>,
-  ) {}
-
-  put(record: ServiceTrustRecord): Promise<ServiceTrustRecord> {
-    const value = immutable(record);
-    this.records.set(value.id, value);
-    return Promise.resolve(value);
-  }
-
-  get(id: ServiceTrustRecordId): Promise<ServiceTrustRecord | undefined> {
-    return Promise.resolve(this.records.get(id));
-  }
-
-  listByEndpoint(
-    endpointId: ServiceEndpointId,
-  ): Promise<readonly ServiceTrustRecord[]> {
-    return Promise.resolve(
-      [...this.records.values()].filter((record) =>
-        record.endpointId === endpointId
-      ),
-    );
-  }
-
-  listActiveByEndpoint(
-    endpointId: ServiceEndpointId,
-    now?: string,
-  ): Promise<readonly ServiceTrustRecord[]> {
-    return Promise.resolve(
-      [...this.records.values()].filter((record) =>
-        record.endpointId === endpointId && record.status === "active" &&
-        (now === undefined || record.expiresAt === undefined ||
-          record.expiresAt > now)
-      ),
-    );
-  }
-
-  revoke(
-    id: ServiceTrustRecordId,
-    input: ServiceTrustRevokeInput,
-  ): Promise<ServiceTrustRecord | undefined> {
-    const existing = this.records.get(id);
-    if (!existing) return Promise.resolve(undefined);
-    if (existing.status === "revoked") return Promise.resolve(existing);
-
-    const revoked = immutable({
-      ...existing,
-      status: "revoked" as const,
-      updatedAt: input.revokedAt,
-      revokedAt: input.revokedAt,
-      ...(input.revokedBy === undefined ? {} : { revokedBy: input.revokedBy }),
-      ...(input.reason === undefined ? {} : { revokeReason: input.reason }),
-    });
-    this.records.set(id, revoked);
-    return Promise.resolve(revoked);
-  }
-}
-
-class MemoryServiceGrantStore implements ServiceGrantStore {
-  constructor(private readonly grants: Map<ServiceGrantId, ServiceGrant>) {}
-
-  put(grant: ServiceGrant): Promise<ServiceGrant> {
-    const value = immutable(grant);
-    this.grants.set(value.id, value);
-    return Promise.resolve(value);
-  }
-
-  get(id: ServiceGrantId): Promise<ServiceGrant | undefined> {
-    return Promise.resolve(this.grants.get(id));
-  }
-
-  listByTrustRecord(
-    trustRecordId: ServiceTrustRecordId,
-  ): Promise<readonly ServiceGrant[]> {
-    return Promise.resolve(
-      [...this.grants.values()].filter((grant) =>
-        grant.trustRecordId === trustRecordId
-      ),
-    );
-  }
-
-  listBySubject(subject: string): Promise<readonly ServiceGrant[]> {
-    return Promise.resolve(
-      [...this.grants.values()].filter((grant) => grant.subject === subject),
-    );
-  }
-}
