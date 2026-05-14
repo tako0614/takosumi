@@ -4,6 +4,10 @@ import {
   TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
 import { TAKOSUMI_DEPLOY_PUBLIC_PATH } from "./deploy_public_routes.ts";
+import {
+  PROMETHEUS_CONTENT_TYPE,
+  TAKOSUMI_METRICS_PATH,
+} from "./metrics_routes.ts";
 import { TAKOSUMI_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
 import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
@@ -61,6 +65,17 @@ export interface CreatePaaSOpenApiDocumentOptions {
   readonly runtimeAgentRoutesMounted?: boolean;
   readonly readinessRoutesMounted?: boolean;
   /**
+   * Mounted when `registerMetricsRoutes` is enabled on `takosumi-api`
+   * (typically when `TAKOSUMI_METRICS_SCRAPE_TOKEN` is configured). Surfaces
+   * the Prometheus exposition `/metrics` endpoint in the OpenAPI document.
+   */
+  readonly metricsRoutesMounted?: boolean;
+  /**
+   * Mounted by default on `takosumi-api` so SDK pipelines can self-discover
+   * the API surface. Surfaces the OpenAPI document at `/openapi.json`.
+   */
+  readonly openApiRouteMounted?: boolean;
+  /**
    * Optional list of `servers[]` entries. Defaults to a single relative
    * `{ url: "/" }` so clients can resolve against the host they fetched the
    * document from. Operators that publish the document to an SDK pipeline
@@ -105,6 +120,58 @@ export function createPaaSOpenApiDocument(
           auth: "none",
           okSchema: "CapabilitiesResponse",
         }),
+      },
+      [TAKOSUMI_METRICS_PATH]: {
+        get: {
+          operationId: "getMetrics",
+          summary:
+            "Returns Prometheus exposition format metrics for kernel scrape pipelines.",
+          tags: ["metrics"],
+          security: [{ metricsBearer: [] }],
+          responses: {
+            "200": {
+              description: "Prometheus exposition document.",
+              content: {
+                [PROMETHEUS_CONTENT_TYPE]: {
+                  schema: {
+                    type: "string",
+                    description:
+                      "Prometheus text exposition format (one metric per line).",
+                  },
+                },
+              },
+            },
+            "401": errorResponse(),
+            "404": errorResponse(),
+          },
+          "x-takos-auth": "metrics-scrape",
+          "x-takos-mounted-path": TAKOSUMI_METRICS_PATH,
+        } satisfies OpenApiOperation,
+      },
+      "/openapi.json": {
+        get: {
+          operationId: "getOpenApi",
+          summary:
+            "Returns the OpenAPI 3.1 document describing the current kernel surface (this document).",
+          tags: ["openapi"],
+          responses: {
+            "200": {
+              description: "OpenAPI 3.1 document.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    description:
+                      "OpenAPI 3.1 document; clients should treat its shape as opaque except for the standard OpenAPI fields.",
+                    additionalProperties: true,
+                  },
+                },
+              },
+            },
+          },
+          "x-takos-auth": "none",
+          "x-takos-mounted-path": "/openapi.json",
+        } satisfies OpenApiOperation,
       },
       [TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities]: {
         get: operation({
@@ -550,6 +617,12 @@ export function createPaaSOpenApiDocument(
           name: "x-takos-internal-signature",
           description: "Signed internal service request headers.",
         },
+        metricsBearer: {
+          type: "http",
+          scheme: "bearer",
+          description:
+            "Prometheus scrape bearer from TAKOSUMI_METRICS_SCRAPE_TOKEN. Required for the Prometheus exposition `/metrics` endpoint.",
+        },
       },
       schemas: createSchemas(),
     },
@@ -569,6 +642,8 @@ function filterMountedRouteFamilies(
     ...(options.internalRoutesMounted ? ["internal"] : []),
     ...(options.runtimeAgentRoutesMounted ? ["runtime-agent"] : []),
     ...(options.readinessRoutesMounted ? ["readiness", "status"] : []),
+    ...(options.metricsRoutesMounted ? ["metrics"] : []),
+    ...(options.openApiRouteMounted ? ["openapi"] : []),
   ]);
   const paths = Object.fromEntries(
     Object.entries(document.paths)

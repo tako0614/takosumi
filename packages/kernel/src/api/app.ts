@@ -217,6 +217,8 @@ export async function createApiApp(
           artifactRoutesMounted,
           runtimeAgentRoutesMounted,
           readinessRoutesMounted,
+          metricsRoutesMounted,
+          openApiRouteMounted,
         }));
     app.get(
       "/openapi.json",

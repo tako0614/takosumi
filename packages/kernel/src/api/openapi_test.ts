@@ -187,6 +187,8 @@ Deno.test("createPaaSOpenApiDocument covers current route inventory", () => {
       ["get", TAKOSUMI_PAAS_READINESS_PATHS.ready],
       ["get", TAKOSUMI_PAAS_READINESS_PATHS.live],
       ["get", TAKOSUMI_PAAS_READINESS_PATHS.statusSummary],
+      ["get", "/metrics"],
+      ["get", "/openapi.json"],
     ];
 
   for (const [method, path] of expected) {
@@ -352,6 +354,8 @@ function allRoutesDoc() {
     internalRoutesMounted: true,
     runtimeAgentRoutesMounted: true,
     readinessRoutesMounted: true,
+    metricsRoutesMounted: true,
+    openApiRouteMounted: true,
   });
 }
 
@@ -374,6 +378,46 @@ Deno.test("createPaaSOpenApiDocument emits a servers[] array", () => {
   assert.ok(Array.isArray(doc.servers));
   assert.ok(doc.servers.length >= 1, "expected at least one server entry");
   assert.equal(doc.servers[0]?.url, "/");
+});
+
+Deno.test("createPaaSOpenApiDocument declares /metrics behind metricsRoutesMounted", () => {
+  const doc = allRoutesDoc();
+  const op = doc.paths["/metrics"]?.get;
+  assert.ok(op, "expected /metrics to be declared when metricsRoutesMounted");
+  assert.equal(op.operationId, "getMetrics");
+  assert.equal(op["x-takos-auth"], "metrics-scrape");
+  const ok = op.responses["200"] as { content?: Record<string, unknown> };
+  const contentTypes = Object.keys(ok.content ?? {});
+  assert.ok(
+    contentTypes.some((ct) => ct.startsWith("text/plain")),
+    `expected text/plain Prometheus content-type, got ${
+      contentTypes.join(",")
+    }`,
+  );
+  assert.ok(doc.components.securitySchemes.metricsBearer);
+});
+
+Deno.test("createPaaSOpenApiDocument omits /metrics when metricsRoutesMounted is false", () => {
+  const doc = createPaaSOpenApiDocument({ publicRoutesMounted: true });
+  assert.equal(doc.paths["/metrics"], undefined);
+});
+
+Deno.test("createPaaSOpenApiDocument declares /openapi.json behind openApiRouteMounted", () => {
+  const doc = allRoutesDoc();
+  const op = doc.paths["/openapi.json"]?.get;
+  assert.ok(
+    op,
+    "expected /openapi.json to be declared when openApiRouteMounted",
+  );
+  assert.equal(op.operationId, "getOpenApi");
+  assert.equal(op["x-takos-auth"], "none");
+  const ok = op.responses["200"] as { content?: Record<string, unknown> };
+  assert.ok(ok.content && "application/json" in ok.content);
+});
+
+Deno.test("createPaaSOpenApiDocument omits /openapi.json when openApiRouteMounted is false", () => {
+  const doc = createPaaSOpenApiDocument({ publicRoutesMounted: true });
+  assert.equal(doc.paths["/openapi.json"], undefined);
 });
 
 Deno.test("createPaaSOpenApiDocument lets callers override servers[]", () => {
