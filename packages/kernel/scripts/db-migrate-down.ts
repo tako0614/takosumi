@@ -35,6 +35,7 @@ import type {
   SqlQueryResult,
   SqlTransaction,
 } from "../src/adapters/storage/sql.ts";
+import { wrapPgResult } from "../src/adapters/storage/pg_result.ts";
 
 // ---------------------------------------------------------------------------
 // CLI option parsing
@@ -317,8 +318,7 @@ async function createPostgresClient(
     parameters?: SqlParameters,
   ): Promise<SqlQueryResult<Row>> => {
     const { sql: rendered, values } = renderNamedParams(sql, parameters);
-    const result = await pool.query(rendered, values);
-    return { rows: result.rows as Row[], rowCount: result.rows.length };
+    return wrapPgResult<Row>(await pool.query(rendered, values));
   };
 
   const client: SqlClient = {
@@ -332,8 +332,7 @@ async function createPostgresClient(
         parameters?: SqlParameters,
       ): Promise<SqlQueryResult<Row>> => {
         const { sql: rendered, values } = renderNamedParams(sql, parameters);
-        const result = await conn.query(rendered, values);
-        return { rows: result.rows as Row[], rowCount: result.rows.length };
+        return wrapPgResult<Row>(await conn.query(rendered, values));
       };
       try {
         await conn.query("begin");

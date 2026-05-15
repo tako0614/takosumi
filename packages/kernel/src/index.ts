@@ -7,6 +7,10 @@ import {
   warnIfDevMode,
 } from "./config/mod.ts";
 import { log } from "./shared/log.ts";
+import {
+  currentRuntime,
+  type ServeHttpHandle,
+} from "./shared/runtime/index.ts";
 import { StorageMigrationRunner } from "./adapters/storage/migration-runner/mod.ts";
 import {
   SecretEncryptionConfigurationError,
@@ -31,8 +35,10 @@ import type {
   SqlQueryResult,
   SqlTransaction,
 } from "./adapters/storage/sql.ts";
+import { wrapPgResult } from "./adapters/storage/pg_result.ts";
 
-const runtimeEnv: Record<string, string> = Deno.env.toObject();
+const runtime = currentRuntime();
+const runtimeEnv: Record<string, string> = runtime.env.toObject();
 warnIfDevMode(runtimeEnv);
 const runtimeConfig = await loadRuntimeConfigFromEnv({ env: runtimeEnv })
   .catch((error) => fatalStartupError(error));
@@ -57,28 +63,28 @@ const role: PaaSProcessRole = created.role;
 startHeartbeatIfConfigured();
 
 if (import.meta.main) {
-  const port = Number(Deno.env.get("PORT") ?? "8788");
-  const server = Deno.serve({ port }, app.fetch);
+  const port = Number(runtime.env.get("PORT") ?? "8788");
+  const server = runtime.serveHttp(app.fetch, { port });
   registerKernelShutdownHandlers(server);
 }
 
 export default app;
 
 /**
- * Capture SIGINT / SIGTERM and drain in-flight requests via
- * `Deno.HttpServer.shutdown()` before exiting. Without this, a SIGINT to
- * the kernel terminates connections mid-request and the CLI / clients
- * see truncated responses.
+ * Capture SIGINT / SIGTERM and drain in-flight requests via the
+ * RuntimeAdapter's `serveHttp` handle before exiting. Without this, a
+ * SIGINT to the kernel terminates connections mid-request and the CLI
+ * / clients see truncated responses.
  *
  * The CLI command (`packages/cli/src/commands/server.ts`) registers its
  * own SIGINT handler for the embedded runtime-agent. Both handlers fire
  * concurrently when the kernel is launched in-process; each one runs to
- * completion and `Deno.exit(0)` is called from this handler once the
- * server has finished draining.
+ * completion and the runtime exit hook is called from this handler once
+ * the server has finished draining.
  */
-function registerKernelShutdownHandlers(server: Deno.HttpServer): void {
+function registerKernelShutdownHandlers(server: ServeHttpHandle): void {
   let shuttingDown = false;
-  const handler = (signal: Deno.Signal) => {
+  const handler = (signal: "SIGINT" | "SIGTERM") => {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info("kernel.shutdown.draining", { signal });
@@ -86,20 +92,11 @@ function registerKernelShutdownHandlers(server: Deno.HttpServer): void {
       .catch((error) => log.error("kernel.shutdown.error", { error }))
       .finally(() => {
         log.info("kernel.shutdown.complete");
-        Deno.exit(0);
+        runtime.exit(0);
       });
   };
-  try {
-    Deno.addSignalListener("SIGINT", () => handler("SIGINT"));
-    // SIGTERM is not supported on Windows; ignore the registration failure.
-    if (Deno.build.os !== "windows") {
-      Deno.addSignalListener("SIGTERM", () => handler("SIGTERM"));
-    }
-  } catch (error) {
-    log.warn("kernel.shutdown.signal_register_failed", {
-      message: (error as Error).message,
-    });
-  }
+  runtime.onSignal("SIGINT", () => handler("SIGINT"));
+  runtime.onSignal("SIGTERM", () => handler("SIGTERM"));
 }
 
 function fatalStartupError(error: unknown): never {
@@ -113,7 +110,7 @@ function fatalStartupError(error: unknown): never {
       })),
       docs: ["docs/operator/self-host.md", "docs/reference/env-vars.md"],
     });
-    Deno.exit(1);
+    runtime.exit(1);
   }
   if (error instanceof SecretEncryptionConfigurationError) {
     log.error("kernel.boot.secret_encryption_required", {
@@ -123,7 +120,7 @@ function fatalStartupError(error: unknown): never {
         "docs/reference/secret-partitions.md for required " +
         "encryption-key configuration.",
     });
-    Deno.exit(1);
+    runtime.exit(1);
   }
   if (error instanceof DatabaseEncryptionConfigurationError) {
     log.error("kernel.boot.database_encryption_required", {
@@ -132,7 +129,7 @@ function fatalStartupError(error: unknown): never {
         "See docs/operator/self-host.md and docs/reference/env-vars.md " +
         "for database at-rest encryption configuration.",
     });
-    Deno.exit(1);
+    runtime.exit(1);
   }
   if (error instanceof AuditReplicationConfigurationError) {
     log.error("kernel.boot.audit_replication_required", {
@@ -143,7 +140,7 @@ function fatalStartupError(error: unknown): never {
         "docs/reference/env-vars.md for AuditExternalReplicationSink " +
         "configuration.",
     });
-    Deno.exit(1);
+    runtime.exit(1);
   }
   throw error;
 }
@@ -208,6 +205,7 @@ async function maybeApplyDatabaseMigrations(
   } catch (error) {
     log.error("kernel.boot.db_migrations_failed", {
       message: (error as Error).message,
+      stack: (error as Error).stack,
     });
   } finally {
     await client.close().catch(() => {});
@@ -385,8 +383,7 @@ async function tryCreatePostgresClient(
       parameters?: SqlParameters,
     ): Promise<SqlQueryResult<Row>> => {
       const { sql: rendered, values } = renderNamedParams(sql, parameters);
-      const result = await pool.query(rendered, values);
-      return { rows: result.rows as Row[], rowCount: result.rows.length };
+      return wrapPgResult<Row>(await pool.query(rendered, values));
     };
 
     const client: SqlClient = {
@@ -400,8 +397,7 @@ async function tryCreatePostgresClient(
           parameters?: SqlParameters,
         ): Promise<SqlQueryResult<Row>> => {
           const { sql: rendered, values } = renderNamedParams(sql, parameters);
-          const result = await conn.query(rendered, values);
-          return { rows: result.rows as Row[], rowCount: result.rows.length };
+          return wrapPgResult<Row>(await conn.query(rendered, values));
         };
         try {
           await conn.query("begin");
@@ -443,15 +439,19 @@ function renderNamedParams(
 }
 
 function startHeartbeatIfConfigured(): void {
-  const heartbeatFile = Deno.env.get("TAKOSUMI_PAAS_WORKER_HEARTBEAT_FILE");
+  const heartbeatFile = runtime.env.get("TAKOSUMI_PAAS_WORKER_HEARTBEAT_FILE");
   if (!heartbeatFile) return;
+  if (!runtime.fs.available) {
+    log.warn("kernel.heartbeat.unsupported_runtime", { runtime: runtime.kind });
+    return;
+  }
   const intervalMs = Number(
-    Deno.env.get("TAKOSUMI_PAAS_WORKER_POLL_INTERVAL_MS") ?? "250",
+    runtime.env.get("TAKOSUMI_PAAS_WORKER_POLL_INTERVAL_MS") ?? "250",
   );
   const write = async () => {
     const now = new Date().toISOString();
-    await Deno.mkdir(dirname(heartbeatFile), { recursive: true });
-    await Deno.writeTextFile(
+    await runtime.fs.mkdir(dirname(heartbeatFile), { recursive: true });
+    await runtime.fs.writeTextFile(
       heartbeatFile,
       `${JSON.stringify({ ok: true, service: "takosumi", role, now })}\n`,
     );
@@ -497,7 +497,7 @@ function assertSecretEncryptionConfigured(
           "docs/reference/secret-partitions.md for required " +
           "encryption-key configuration.",
       });
-      Deno.exit(1);
+      runtime.exit(1);
     }
     throw error;
   }
@@ -529,7 +529,7 @@ function assertDatabaseEncryptionConfigured(
           "See docs/operator/self-host.md and docs/reference/env-vars.md " +
           "for database at-rest encryption configuration.",
       });
-      Deno.exit(1);
+      runtime.exit(1);
     }
     throw error;
   }
@@ -561,7 +561,7 @@ function assertAuditReplicationConfigured(
           "docs/reference/env-vars.md for AuditExternalReplicationSink " +
           "configuration.",
       });
-      Deno.exit(1);
+      runtime.exit(1);
     }
     throw error;
   }
@@ -618,7 +618,7 @@ async function maybeVerifyAuditReplicationChain(
         hint: "Refusing to start: SQL audit chain disagrees with immutable " +
           "replica. Investigate possible DB tampering before resuming traffic.",
       });
-      Deno.exit(1);
+      runtime.exit(1);
     }
     log.warn("kernel.boot.audit_replication_chain_mismatch", inconsistency);
   } catch (error) {
