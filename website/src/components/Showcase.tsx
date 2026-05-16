@@ -1,9 +1,9 @@
 import { createSignal, For, Show } from "solid-js";
-import CodeBlock from "./CodeBlock";
 
 interface Tab {
   readonly key: string;
   readonly label: string;
+  readonly subtitle: string;
   readonly manifest: () => any;
   readonly output: () => any;
 }
@@ -11,10 +11,10 @@ interface Tab {
 const TABS: readonly Tab[] = [
   {
     key: "selfhost",
-    label: "selfhost-docker-compose",
+    label: "手元の docker",
+    subtitle: "@takos/selfhost-docker-compose",
     manifest: () => (
       <>
-        <span class="c">## manifest.yml</span>{"\n"}
         apiVersion: <span class="s">"1.0"</span>{"\n"}
         kind: Manifest{"\n"}
         metadata:{"\n"}
@@ -22,58 +22,52 @@ const TABS: readonly Tab[] = [
         resources:{"\n"}
         {"  "}- name: web{"\n"}
         {"    "}shape: <span class="s">"web-service@v1"</span>{"\n"}
-        {"    "}provider: <span class="s">"@takos/selfhost-docker-compose"</span>{"\n"}
+        {"    "}provider: <span class="k">"@takos/selfhost-docker-compose"</span>{"\n"}
         {"    "}spec:{"\n"}
         {"      "}image: nginx:alpine{"\n"}
-        {"      "}port: <span class="n">80</span>{"\n"}
-        {"      "}scale: {`{ min: `}<span class="n">1</span>, max: <span class="n">1</span> {`}`}
+        {"      "}port: <span class="n">80</span>
       </>
     ),
     output: () => (
       <>
         <span class="k">$</span> takosumi deploy ./manifest.yml{"\n"}
-        <span class="c">  ✓ applied web-service@v1#web</span>{"\n"}
-        <span class="c">  → http://localhost:18080</span>{"\n"}
-        {"\n"}
-        <span class="k">$</span> curl -I http://localhost:18080{"\n"}
-        HTTP/1.1 <span class="n">200</span> OK{"\n"}
-        server: nginx/1.27.3
+        <span class="c">  ✓ web → http://localhost:18080</span>
       </>
     ),
   },
   {
     key: "fargate",
-    label: "aws-fargate",
+    label: "AWS Fargate",
+    subtitle: "@takos/aws-fargate",
     manifest: () => (
       <>
-        <span class="c">## same shape, different provider</span>{"\n"}
+        <span class="c"># provider を 1 行変えるだけ</span>{"\n"}
         resources:{"\n"}
         {"  "}- name: web{"\n"}
         {"    "}shape: <span class="s">"web-service@v1"</span>{"\n"}
-        {"    "}provider: <span class="s">"@takos/aws-fargate"</span>{"\n"}
+        {"    "}provider: <span class="k">"@takos/aws-fargate"</span>{"\n"}
         {"    "}spec:{"\n"}
         {"      "}image: ghcr.io/your-org/web:abc123{"\n"}
-        {"      "}port: <span class="n">80</span>{"\n"}
-        {"      "}scale: {`{ min: `}<span class="n">2</span>, max: <span class="n">10</span> {`}`}
+        {"      "}port: <span class="n">80</span>
       </>
     ),
     output: () => (
       <>
         <span class="k">$</span> takosumi deploy ./manifest.yml{"\n"}
-        <span class="c">  ✓ applied web-service@v1#web via @takos/aws-fargate</span>{"\n"}
-        <span class="c">  → https://web-abc123.us-east-1.elb.amazonaws.com</span>
+        <span class="c">  ✓ web → https://web-abc.us-east-1.elb.amazonaws.com</span>
       </>
     ),
   },
   {
     key: "k8s",
-    label: "kubernetes-k3s",
+    label: "Kubernetes",
+    subtitle: "@takos/kubernetes-k3s-deployment",
     manifest: () => (
       <>
         resources:{"\n"}
         {"  "}- name: web{"\n"}
         {"    "}shape: <span class="s">"web-service@v1"</span>{"\n"}
-        {"    "}provider: <span class="s">"@takos/kubernetes-k3s-deployment"</span>{"\n"}
+        {"    "}provider: <span class="k">"@takos/kubernetes-k3s-deployment"</span>{"\n"}
         {"    "}spec:{"\n"}
         {"      "}image: ghcr.io/your-org/web:abc123{"\n"}
         {"      "}port: <span class="n">80</span>{"\n"}
@@ -83,8 +77,7 @@ const TABS: readonly Tab[] = [
     output: () => (
       <>
         <span class="k">$</span> takosumi deploy ./manifest.yml{"\n"}
-        <span class="c">  ✓ applied web-service@v1#web via @takos/kubernetes-k3s-deployment</span>{"\n"}
-        <span class="c">  → http://web.takos.svc.cluster.local</span>
+        <span class="c">  ✓ web → http://web.takos.svc.cluster.local</span>
       </>
     ),
   },
@@ -97,11 +90,11 @@ export default function Showcase() {
   return (
     <section id="showcase">
       <div class="container">
-        <span class="eyebrow">Showcase</span>
-        <h2>同じ shape、 違う substrate。</h2>
+        <span class="eyebrow">showcase</span>
+        <h2>同じ manifest で、 デプロイ先を選ぶ。</h2>
         <p class="lede">
-          provider 行を 1 つ変えるだけで AWS Fargate にも、 Kubernetes にも、
-          手元の docker にも同じ web-service が乗る。
+          タブを切り替えてみてください。 違うのは <code>provider</code> の
+          1 行だけ。 残りは全部同じです。
         </p>
         <div class="showcase">
           <div class="showcase-tabs" role="tablist">
@@ -121,13 +114,13 @@ export default function Showcase() {
           </div>
           <div class="showcase-body">
             <div>
-              <div class="label">manifest</div>
+              <div class="label">manifest.yml</div>
               <Show when={current()}>
                 {(t) => <div class="codeblock"><pre>{t().manifest()}</pre></div>}
               </Show>
             </div>
             <div>
-              <div class="label">apply output</div>
+              <div class="label">apply</div>
               <Show when={current()}>
                 {(t) => <div class="codeblock"><pre>{t().output()}</pre></div>}
               </Show>

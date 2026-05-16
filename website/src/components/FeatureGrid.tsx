@@ -5,9 +5,8 @@ export default function FeatureGrid() {
   return (
     <section id="features">
       <div class="container">
-        <span class="eyebrow">Features</span>
-        <h2>6 つの中核。</h2>
-        <p class="lede">docs の features array と同じ正本。 6 つを保てば「Takosumi らしさ」 が成立する。</p>
+        <span class="eyebrow">features</span>
+        <h2>面倒な「いつもの」 を全部吸収する。</h2>
         <div class="features">
           <For each={FEATURES}>
             {(f) => (

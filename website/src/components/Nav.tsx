@@ -8,9 +8,8 @@ export default function Nav() {
         <Wordmark variant="geometric" />
         <nav class="nav-links" aria-label="Primary">
           <a href="#why">Why</a>
-          <a href="#how">How it works</a>
-          <a href="#features">Features</a>
-          <a href="#architecture">Architecture</a>
+          <a href="#showcase">Showcase</a>
+          <a href="#comparison">vs.</a>
           <a href="/docs/">Docs</a>
           <a href="https://cloud.takosumi.com/" rel="noopener">Cloud</a>
         </nav>

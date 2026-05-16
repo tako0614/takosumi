@@ -273,7 +273,36 @@ section h2 + .lede {
 .feature h4 { margin: 0 0 var(--tg-s-2); font-size: var(--tg-fs-lg); }
 .feature p { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
 
-/* How-it-works diagram */
+/* Substrates strip */
+.substrates {
+  padding: var(--tg-s-7) 0;
+  border-top: none !important;
+}
+.substrates-label {
+  text-align: center;
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0 0 var(--tg-s-4);
+}
+.substrates-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--tg-s-2);
+}
+.substrate-chip {
+  padding: 6px 14px;
+  border-radius: var(--tg-r-full);
+  background: var(--tg-bg-subtle);
+  border: 1px solid var(--tg-line);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+}
+
+/* How-it-works diagram (deprecated, kept for fallback) */
 .howflow {
   display: grid;
   grid-template-columns: 1.2fr 0.8fr;
