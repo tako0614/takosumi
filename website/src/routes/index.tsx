@@ -2,12 +2,14 @@ import { Meta, Title } from "@solidjs/meta";
 import Nav from "~/components/Nav";
 import Hero from "~/components/Hero";
 import Substrates from "~/components/Substrates";
+import Stats from "~/components/Stats";
 import WhyPillars from "~/components/WhyPillars";
 import FeatureGrid from "~/components/FeatureGrid";
 import Showcase from "~/components/Showcase";
 import Comparison from "~/components/Comparison";
 import EndCTA from "~/components/EndCTA";
 import Footer from "~/components/Footer";
+import Divider from "~/components/Divider";
 
 export default function Home() {
   return (
@@ -24,6 +26,8 @@ export default function Home() {
       <main>
         <Hero />
         <Substrates />
+        <Stats />
+        <Divider />
         <WhyPillars />
         <FeatureGrid />
         <Showcase />
