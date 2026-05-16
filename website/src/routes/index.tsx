@@ -1,8 +1,6 @@
 import { Meta, Title } from "@solidjs/meta";
 import Nav from "~/components/Nav";
 import Hero from "~/components/Hero";
-import Substrates from "~/components/Substrates";
-import Stats from "~/components/Stats";
 import FeatureGrid from "~/components/FeatureGrid";
 import Showcase from "~/components/Showcase";
 import Comparison from "~/components/Comparison";
@@ -23,8 +21,6 @@ export default function Home() {
       <Nav />
       <main>
         <Hero />
-        <Substrates />
-        <Stats />
         <FeatureGrid />
         <Showcase />
         <Comparison />
