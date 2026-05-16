@@ -9,7 +9,7 @@ export default function Footer() {
           <span class="copy">© Takos / Takosumi contributors — MIT</span>
         </div>
         <nav aria-label="Footer">
-          <a href="/docs/">Docs</a>
+          <a href="/docs/" rel="external">Docs</a>
           <a href="https://github.com/tako0614/takosumi" rel="noopener">GitHub</a>
           <a href="https://jsr.io/@takos/takosumi" rel="noopener">JSR</a>
           <a href="https://cloud.takosumi.com/" rel="noopener">Cloud</a>

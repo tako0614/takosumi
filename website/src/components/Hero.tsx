@@ -19,7 +19,7 @@ export default function Hero() {
             引っ越しは manifest を 1 行変えるだけ。
           </p>
           <div class="cta-row">
-            <a class="btn btn-primary" href="/docs/getting-started/quickstart">
+            <a class="btn btn-primary" href="/docs/getting-started/quickstart" rel="external">
               5 分で動かす →
             </a>
             <a class="btn btn-secondary" href="https://github.com/tako0614/takosumi" rel="noopener">

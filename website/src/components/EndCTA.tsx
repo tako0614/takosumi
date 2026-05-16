@@ -14,10 +14,10 @@ export default function EndCTA() {
           <span class="k">$</span> takosumi deploy ./manifest.yml
         </CodeBlock>
         <div class="cta-row" style="justify-content: center;">
-          <a class="btn btn-primary" href="/docs/getting-started/quickstart">
+          <a class="btn btn-primary" href="/docs/getting-started/quickstart" rel="external">
             Quickstart →
           </a>
-          <a class="btn btn-secondary" href="/docs/">ドキュメント</a>
+          <a class="btn btn-secondary" href="/docs/" rel="external">ドキュメント</a>
         </div>
       </div>
     </section>
