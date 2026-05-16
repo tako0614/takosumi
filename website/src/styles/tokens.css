@@ -1,0 +1,126 @@
+:root {
+  color-scheme: light dark;
+
+  /* Color tokens — light defaults; dark overrides below. */
+  --tg-bg: #fdfdfd;
+  --tg-bg-elev: #ffffff;
+  --tg-bg-subtle: #f7f7f9;
+  --tg-fg: #0e0e12;
+  --tg-fg-muted: #5a5a64;
+  --tg-fg-subtle: #8a8a94;
+  --tg-line: #e6e6ea;
+  --tg-line-strong: #d0d0d6;
+  --tg-code-bg: #f3f3f6;
+  --tg-code-fg: #1a1a1f;
+
+  --tg-accent: #5d3afd;
+  --tg-accent-fg: #ffffff;
+  --tg-accent-soft: #ece7ff;
+  --tg-grad-from: #5d3afd;
+  --tg-grad-mid: #6a5cff;
+  --tg-grad-to: #00b1ff;
+
+  --tg-success: #0c9866;
+  --tg-warn: #c4651b;
+  --tg-danger: #d63a3a;
+
+  /* Spacing scale */
+  --tg-s-1: 4px;
+  --tg-s-2: 8px;
+  --tg-s-3: 12px;
+  --tg-s-4: 16px;
+  --tg-s-5: 24px;
+  --tg-s-6: 32px;
+  --tg-s-7: 48px;
+  --tg-s-8: 64px;
+  --tg-s-9: 96px;
+  --tg-s-10: 128px;
+
+  /* Typography */
+  --tg-font-body:
+    "Inter", -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN",
+    "Yu Gothic UI", "Segoe UI", Roboto, sans-serif;
+  --tg-font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --tg-font-display: var(--tg-font-body);
+
+  --tg-fs-xs: 0.78rem;
+  --tg-fs-sm: 0.88rem;
+  --tg-fs-base: 1rem;
+  --tg-fs-lg: 1.13rem;
+  --tg-fs-xl: 1.31rem;
+  --tg-fs-2xl: 1.6rem;
+  --tg-fs-3xl: 2rem;
+  --tg-fs-4xl: 2.6rem;
+  --tg-fs-5xl: 3.4rem;
+  --tg-fs-6xl: clamp(2.8rem, 6vw, 5rem);
+
+  --tg-lh-tight: 1.15;
+  --tg-lh-snug: 1.35;
+  --tg-lh-body: 1.7;
+
+  /* Shadows */
+  --tg-shadow-sm: 0 1px 2px rgba(20, 20, 30, 0.06);
+  --tg-shadow-md: 0 4px 14px rgba(20, 20, 30, 0.08);
+  --tg-shadow-lg: 0 16px 48px rgba(20, 20, 30, 0.12);
+
+  /* Radii */
+  --tg-r-sm: 6px;
+  --tg-r-md: 10px;
+  --tg-r-lg: 16px;
+  --tg-r-xl: 24px;
+  --tg-r-full: 999px;
+
+  /* Layout */
+  --tg-container: 1120px;
+  --tg-nav-h: 64px;
+}
+
+[data-theme="dark"],
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --tg-bg: #0a0a0e;
+    --tg-bg-elev: #11111a;
+    --tg-bg-subtle: #16161f;
+    --tg-fg: #f0f0f5;
+    --tg-fg-muted: #9a9aa6;
+    --tg-fg-subtle: #6e6e7a;
+    --tg-line: #22222c;
+    --tg-line-strong: #34343f;
+    --tg-code-bg: #14141d;
+    --tg-code-fg: #ececf3;
+
+    --tg-accent: #8c6cff;
+    --tg-accent-fg: #0a0a0e;
+    --tg-accent-soft: #1d1734;
+    --tg-grad-from: #8c6cff;
+    --tg-grad-mid: #6dabff;
+    --tg-grad-to: #41d3ff;
+
+    --tg-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --tg-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+    --tg-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+  }
+}
+
+[data-theme="dark"] {
+  --tg-bg: #0a0a0e;
+  --tg-bg-elev: #11111a;
+  --tg-bg-subtle: #16161f;
+  --tg-fg: #f0f0f5;
+  --tg-fg-muted: #9a9aa6;
+  --tg-fg-subtle: #6e6e7a;
+  --tg-line: #22222c;
+  --tg-line-strong: #34343f;
+  --tg-code-bg: #14141d;
+  --tg-code-fg: #ececf3;
+  --tg-accent: #8c6cff;
+  --tg-accent-fg: #0a0a0e;
+  --tg-accent-soft: #1d1734;
+  --tg-grad-from: #8c6cff;
+  --tg-grad-mid: #6dabff;
+  --tg-grad-to: #41d3ff;
+  --tg-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --tg-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --tg-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
