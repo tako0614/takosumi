@@ -308,10 +308,14 @@ export default defineConfig({
   title: "Takosumi",
   description:
     "Self-hostable PaaS toolkit — manifest-driven multi-cloud deploys",
+  // Served under /docs/ on takosumi.com (and takosumi.test mirror); the
+  // root path serves a separate marketing landing page. Override via
+  // VITEPRESS_BASE if a deploy needs the docs at "/".
+  base: process.env.VITEPRESS_BASE ?? "/docs/",
   cleanUrls: true,
   lastUpdated: true,
   sitemap: {
-    hostname: "https://docs.takosumi.com/",
+    hostname: "https://takosumi.com/docs/",
   },
   themeConfig: {
     socialLinks: [
