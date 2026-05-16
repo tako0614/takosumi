@@ -6,7 +6,7 @@ export default function FeatureGrid() {
     <section id="features">
       <div class="container">
         <span class="eyebrow">features</span>
-        <h2>面倒な「いつもの」 を全部吸収する。</h2>
+        <h2>Manifest 1 本でできること。</h2>
         <div class="features">
           <For each={FEATURES}>
             {(f) => (

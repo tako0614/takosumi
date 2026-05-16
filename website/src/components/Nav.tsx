@@ -20,7 +20,7 @@ export default function Nav() {
       <div class="nav-inner container">
         <Wordmark variant="geometric" />
         <nav class="nav-links" aria-label="Primary">
-          <a href="#why">Why</a>
+          <a href="#features">Features</a>
           <a href="#showcase">Showcase</a>
           <a href="#comparison">vs.</a>
           <a href="/docs/" rel="external">Docs</a>
