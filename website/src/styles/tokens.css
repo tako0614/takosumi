@@ -1,28 +1,34 @@
 :root {
   color-scheme: light dark;
 
-  /* Color tokens — light defaults; dark overrides below. */
-  --tg-bg: #fdfdfd;
+  /* ===== Palette — Pure neutral black + white + 朱 red accent =====
+   * No warm cream, no cool blue, no violet tint. Just black, white, red.
+   */
+
+  --tg-bg: #ffffff;
   --tg-bg-elev: #ffffff;
-  --tg-bg-subtle: #f7f7f9;
-  --tg-fg: #0e0e12;
-  --tg-fg-muted: #5a5a64;
-  --tg-fg-subtle: #8a8a94;
-  --tg-line: #e6e6ea;
-  --tg-line-strong: #d0d0d6;
-  --tg-code-bg: #f3f3f6;
-  --tg-code-fg: #1a1a1f;
+  --tg-bg-subtle: #f5f5f5;
+  --tg-fg: #0a0a0a;
+  --tg-fg-muted: #525252;
+  --tg-fg-subtle: #8a8a8a;
+  --tg-line: #e5e5e5;
+  --tg-line-strong: #cccccc;
+  --tg-code-bg: #f5f5f5;
+  --tg-code-fg: #0a0a0a;
 
-  --tg-accent: #5d3afd;
+  --tg-accent: #dc2626;          /* 朱 red */
+  --tg-accent-hover: #b91c1c;
   --tg-accent-fg: #ffffff;
-  --tg-accent-soft: #ece7ff;
-  --tg-grad-from: #5d3afd;
-  --tg-grad-mid: #6a5cff;
-  --tg-grad-to: #00b1ff;
+  --tg-accent-soft: #fef2f2;
 
-  --tg-success: #0c9866;
-  --tg-warn: #c4651b;
-  --tg-danger: #d63a3a;
+  /* Gradient — pure black to red, for text accents only */
+  --tg-grad-from: #0a0a0a;
+  --tg-grad-mid: #7c1010;
+  --tg-grad-to: #dc2626;
+
+  --tg-success: #16a34a;
+  --tg-warn: #ea580c;
+  --tg-danger: #dc2626;
 
   /* Spacing scale */
   --tg-s-1: 4px;
@@ -61,10 +67,10 @@
   --tg-lh-snug: 1.35;
   --tg-lh-body: 1.7;
 
-  /* Shadows */
-  --tg-shadow-sm: 0 1px 2px rgba(20, 20, 30, 0.06);
-  --tg-shadow-md: 0 4px 14px rgba(20, 20, 30, 0.08);
-  --tg-shadow-lg: 0 16px 48px rgba(20, 20, 30, 0.12);
+  /* Shadows — pure neutral, no tint */
+  --tg-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --tg-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.08);
+  --tg-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.12);
 
   /* Radii */
   --tg-r-sm: 6px;
@@ -78,51 +84,53 @@
   --tg-nav-h: 64px;
 }
 
-[data-theme="dark"],
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --tg-bg: #0a0a0e;
-    --tg-bg-elev: #11111a;
-    --tg-bg-subtle: #16161f;
-    --tg-fg: #f0f0f5;
-    --tg-fg-muted: #9a9aa6;
-    --tg-fg-subtle: #6e6e7a;
-    --tg-line: #22222c;
-    --tg-line-strong: #34343f;
-    --tg-code-bg: #14141d;
-    --tg-code-fg: #ececf3;
+    --tg-bg: #0a0a0a;
+    --tg-bg-elev: #141414;
+    --tg-bg-subtle: #1a1a1a;
+    --tg-fg: #fafafa;
+    --tg-fg-muted: #a3a3a3;
+    --tg-fg-subtle: #6b6b6b;
+    --tg-line: #262626;
+    --tg-line-strong: #3f3f3f;
+    --tg-code-bg: #141414;
+    --tg-code-fg: #fafafa;
 
-    --tg-accent: #8c6cff;
-    --tg-accent-fg: #0a0a0e;
-    --tg-accent-soft: #1d1734;
-    --tg-grad-from: #8c6cff;
-    --tg-grad-mid: #6dabff;
-    --tg-grad-to: #41d3ff;
+    --tg-accent: #ef4444;
+    --tg-accent-hover: #f87171;
+    --tg-accent-fg: #0a0a0a;
+    --tg-accent-soft: #2a0a0a;
 
-    --tg-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --tg-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
-    --tg-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+    --tg-grad-from: #fafafa;
+    --tg-grad-mid: #ef4444;
+    --tg-grad-to: #dc2626;
+
+    --tg-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --tg-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.55);
+    --tg-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.65);
   }
 }
 
 [data-theme="dark"] {
-  --tg-bg: #0a0a0e;
-  --tg-bg-elev: #11111a;
-  --tg-bg-subtle: #16161f;
-  --tg-fg: #f0f0f5;
-  --tg-fg-muted: #9a9aa6;
-  --tg-fg-subtle: #6e6e7a;
-  --tg-line: #22222c;
-  --tg-line-strong: #34343f;
-  --tg-code-bg: #14141d;
-  --tg-code-fg: #ececf3;
-  --tg-accent: #8c6cff;
-  --tg-accent-fg: #0a0a0e;
-  --tg-accent-soft: #1d1734;
-  --tg-grad-from: #8c6cff;
-  --tg-grad-mid: #6dabff;
-  --tg-grad-to: #41d3ff;
-  --tg-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --tg-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
-  --tg-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+  --tg-bg: #0a0a0a;
+  --tg-bg-elev: #141414;
+  --tg-bg-subtle: #1a1a1a;
+  --tg-fg: #fafafa;
+  --tg-fg-muted: #a3a3a3;
+  --tg-fg-subtle: #6b6b6b;
+  --tg-line: #262626;
+  --tg-line-strong: #3f3f3f;
+  --tg-code-bg: #141414;
+  --tg-code-fg: #fafafa;
+  --tg-accent: #ef4444;
+  --tg-accent-hover: #f87171;
+  --tg-accent-fg: #0a0a0a;
+  --tg-accent-soft: #2a0a0a;
+  --tg-grad-from: #fafafa;
+  --tg-grad-mid: #ef4444;
+  --tg-grad-to: #dc2626;
+  --tg-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --tg-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.55);
+  --tg-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.65);
 }
