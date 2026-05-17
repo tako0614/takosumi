@@ -6,8 +6,12 @@
 
 クライアントとサーバーの間で交わされる surface。
 
-- [Kernel HTTP API](./kernel-http-api) — public deploy / internal control plane
-  / artifact upload
+- [AppSpec (`.takosumi.yml`)](./app-spec) — source root に置く 1 ファイル
+- [Component Kind Catalog](./component-kind-catalog) — 5 種の kind schema
+- [Installer API](./installer-api) — 5 endpoint の wire spec (dry-run /
+  apply / rollback)
+- [Kernel HTTP API](./kernel-http-api) — public installer + internal control
+  plane + runtime-agent RPC の overview
 - [Runtime-Agent API](./runtime-agent-api) — kernel ↔ runtime-agent の lifecycle
   RPC
 - [CLI](./cli) — `takosumi` command surface

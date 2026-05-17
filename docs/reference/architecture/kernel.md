@@ -1,381 +1,194 @@
 # Kernel
 
-> このページでわかること: kernel の内部構造と主要コンポーネント。
+> このページでわかること: kernel の内部構造と installer pipeline の責務境界。
 
 > **Internal implementation**
 >
-> このページは kernel の internal 実装を説明する。public contract
-> ではない。実装は変更される可能性がある。public contract は
-> [manifest spec](/reference/manifest-spec) と
-> [API reference](https://github.com/tako0614/takos/blob/master/docs/reference/api.md)
+> このページは kernel の internal 実装を説明します。 public contract ではなく、
+> 実装は変更される可能性があります。 public contract は [AppSpec](../app-spec.md)
+> と [Installer API](../installer-api.md) を参照してください。
+
+> **kernel = source-to-runtime substrate**
+>
+> takosumi kernel は **`.takosumi.yml` を読んで Installation を作り、 apply ごと
+> に Deployment を記録する PaaS** です。 identity / billing / OAuth / workflow /
+> cron / consent screen / Stripe / app marketplace は kernel に **入れません**。
+> identity / billing は
+> [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
+> (account plane / operator-owned) の責務、 workflow / CI / cron は kernel scope
+> の外 (operator が別途 orchestrator で実装) です。 全体モデルは
+> [Installable App Model](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/installable-app-model.md)
 > を参照。
 
-> **kernel = compute substrate**
->
-> takosumi kernel は **manifest を apply するだけの compute substrate** です。
-> identity / billing / OAuth / workflow / cron / consent screen / Stripe / app
-> marketplace は kernel に **入れません**。これらは
-> [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
-> (account plane、operator namespace export / OIDC / BillingPort 経由で参照) と
-> [takosumi-git](https://github.com/tako0614/takosumi-git/blob/master/docs/architecture/installer-pipeline.md)
-> (canonical installer implementation) の責務です。 全体モデルは
-> [Installable App Model](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/installable-app-model.md)
-> を参照 (kernel 仕様は特定 distribution に依存せず、 Takos product は consumer
-> application の 1 reference example にすぎない)。
+kernel が serve する request は、 AppSpec を起点にした Installation lifecycle に
+従って routing / activation / resource wiring が解決される。 中核 record は
+3 つだけ:
 
-> **kernel-pure / no service registry**
->
-> kernel は service registry を持ちません。JSON-LD `@context` と Shape
-> `resources[]` を受け取り、descriptor closure と Deployment evidence
-> を記録します。 operator capability は namespace export / account API
-> で扱います。
+- **Installation** — Space に入った App
+- **Deployment** — 1 回の apply 結果
+- **(internal) Resource** — apply された component の runtime state
 
-kernel が serve する request は、compiled manifest を起点にした Deployment
-lifecycle に従って routing / activation / resource wiring が解決される。
-Deployment は input manifest、resource DAG、provider operation、conditions / WAL
-を 1 lifecycle として扱う中核 record です。現行の manifest surface は
-`apiVersion: "1.0"` + `kind: Manifest` + `resources[]` の Shape model です。
-Core の normative 定義は
-[`takosumi/core/01-core-contract-v1.0.md`](/reference/manifest-spec)
-を、用語表は
-[Glossary § Core meta-objects](https://github.com/tako0614/takos-ecosystem/blob/master/docs/reference/glossary.md)
-を参照。
+Public contract は AppSpec (`apiVersion: takosumi.dev/v1` + `kind: App` +
+`components[]`) と Installer API (5 endpoint) のみ。
 
 ## Consumer application と kernel の境界
 
-> kernel は **任意 application を deploy できる generic PaaS** であり、特定
-> distribution 専用 platform ではありません。本節は kernel から見た consumer
-> application との境界を説明します (Takos product は reference distribution
-> example の 1 つで、kernel 仕様自体はこの 1 distribution に依存しません)。
+> kernel は **任意 application を deploy できる generic PaaS** であり、 特定
+> distribution 専用 platform ではありません。 Takos product は reference
+> distribution example の 1 つで、 kernel 仕様自体はこの 1 distribution に依存
+> しません。
 
-consumer application 固有の feature (Agent / Chat、Git hosting、Storage、Store、
-public API gateway 等) は consumer application 側の service / app feature
-であり、takosumi kernel には入りません。kernel が持つのは compute manifest
-apply、routing projection、resource provisioning、provider reconciliation で、
-これは任意の InstallableApp に共通する責務です。
-
-`Auth` と `Billing` も kernel features に含めません。Auth/identity は operator
-account plane (reference implementation:
-[Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md))
-が OIDC issuer / upstream IdP broker として、Billing は operator BillingPort
-として責務を持ちます。consumer application は operator account plane の OIDC を
-(例えば `AUTH_DRIVER=oidc` のような) standard OIDC consumer として consume
-するだけで、kernel 自身は OAuth/OIDC を発行しません。
+consumer application 固有の feature (Agent / Chat、 Git hosting、 Storage、
+Store、 public API gateway 等) は consumer application 側の責務であり、 kernel
+には入りません。 kernel が持つのは AppSpec apply、 routing projection、
+resource provisioning、 provider reconciliation で、 これは任意の InstallableApp
+に共通する責務です。
 
 kernel が持たないもの (Installable App Model の不変条件):
 
 - user account / login / passkey
 - billing / Stripe / subscription / invoice
-- OAuth / OIDC issuer / consent screen
-- AppInstallation 台帳 / app marketplace
-- workflow / build pipeline / cron / scheduler
-- group 固有の UI
-- group 固有の DB schema
-- group 固有の queue や background job
+- OAuth / OIDC issuer / consent screen (= Takosumi Accounts 所有)
+- workflow / build pipeline / cron / scheduler (= scope 外)
+- group 固有の UI / DB schema / queue / background job
 
-kernel が compute に専念するため、上記は次の owner に集約されます。
+kernel が compute に専念するため、 上記は次の owner に集約されます。
 
 ```text
-identity / billing / OAuth / AppInstallation : Takosumi Accounts
-workflow / .takosumi/app.yml / build / install : takosumi-git
-chat / agent / memory / app-local profile     : consumer application runtime
+identity / billing / OIDC / Installation ledger : Takosumi Accounts
+.takosumi.yml parse / git fetch / install apply : kernel (= takosumi/packages/installer)
+chat / agent / memory / app-local profile       : consumer application runtime
                                                   (例: Installed Takos product)
 ```
 
 ## Space
 
-space は **Takosumi Account 配下の install scope** です。tenant (契約・billing
-主体) は **Takosumi Account** であり、Space はその下に並ぶ install scope
-です。Installable App Model の階層は次のとおり (glossary / 本書 / ROADMAP
-と整合):
+Space は **Takosumi Account 配下の install scope** です。 tenant (契約・billing
+主体) は **Takosumi Account** であり、 Space はその下に並ぶ install scope です。
 
 ```text
 Takosumi Account  (契約 / billing / identity owner)
   └── Space       (install scope, kind: personal / team / org)
-        └── AppInstallation  (Takos などの app の installation 単位)
+        └── Installation  (Takos などの App の installation 単位)
+              └── Deployment[]  (apply 履歴)
 ```
 
 - Takosumi Account = 契約・billing・identity の owner (tenant 主体)
-- Space は Takosumi Account 配下の **install scope** であり、`personal` / `team`
-  / `org` の kind を持つ
-- AppInstallation は Space に属し、Space は AppInstallation の親になる
+- Space は Takosumi Account 配下の **install scope** であり、 `personal` /
+  `team` / `org` の kind を持つ
+- Installation は Space に属し、 Space は Installation の親になる
 - compute / data / routing は Space 単位で分離される
-- user は Takosumi Account の identity を持ち、Space を通じて AppInstallation
-  にアクセスする
-- Space の切り替えは UI / session で行う (domain ではない)
+- user は Takosumi Account の identity を持ち、 Space を通じて Installation に
+  アクセスする
 
-## Resource と group
+## Component と Resource
 
-外部ワークロードは Shape resource の集合として apply される:
+AppSpec は `.takosumi.yml` の `components` に名前付き Component を宣言する。
+各 Component は `kind` を 1 つ持ち (catalog 5 種)、 kernel installer が apply
+時に provider plugin を解決して runtime state (= Resource) を作る。
 
-- **ManifestResource**: `shape` / `name` / `spec` と optional `provider` hint
-  を持つ apply 単位。例 `worker@v1` / `web-service@v1` / `database-postgres@v1`
-- **Group**: deployment history と current pointer を束ねる state scope。
-  GroupHead が `current_deployment_id` / `previous_deployment_id` を持つ
-- **Workload shape**: executable resource。`worker@v1` と `web-service@v1`
-  が現在の基本形
-- **Backing resource shape**: database / object-store / secret などの managed
-  capability。`database-postgres@v1` / `object-store@v1` など
-- **Entrypoint**: `worker@v1.spec.routes`、`web-service@v1.spec.domains`、
-  `custom-domain@v1` など、Shape spec から生成される routing projection
-- **Namespace export**: current v1 では operator が公開する capability。 account
-  plane、billing、dashboard、deploy API などは explicit grant / account API /
-  OIDC discovery / BillingPort で扱う。
+| 公開 概念  | 説明                                                              |
+| ---------- | ----------------------------------------------------------------- |
+| Component  | AppSpec が宣言する build / use / kind を持つ 1 unit               |
 
-Deployment が `applied` になると GroupHead の `current_deployment_id` がその
-Deployment を指し、kernel はそれを current として serve する。group に所属して
-いるかどうかで shape / provider の apply semantics は変わらない。
+| 内部 概念  | 説明                                                              |
+| ---------- | ----------------------------------------------------------------- |
+| Resource   | apply 後の provider-scope runtime state record                    |
+| Secret     | use edge で resolve された credential store                       |
+| Event      | hash-chain audit log (内部 audit、 public route 外)               |
 
-"app" は Store / UI 上の product label であり、kernel deploy model を説明
-するときは ManifestResource / Group / Deployment を使う。canonical authoring
-manifest は `.takosumi/manifest.yml` です。`.takosumi/app.yml` は takosumi-git /
-installer が読む install manifest で、kernel には渡りません。
+`Resource` / `Secret` / `Event` は実装内部 entity であり、 public API には登場
+しません。 Installation + Deployment + (内部 resources / secrets / events) で
+完全な lifecycle を扱います。
 
-### `.takosumi/manifest.yml`
+## Installer pipeline
 
-authoring compute manifest を書く YAML。compile 後の closed Shape manifest
-だけが kernel に届く。top-level envelope は closed set で、 `apiVersion: "1.0"`
-と `kind: Manifest` が必須です。
-
-```yaml
-apiVersion: "1.0"
-kind: Manifest
-metadata:
-  name: my-app
-resources:
-  - shape: worker@v1
-    name: web
-    provider: "@takos/cloudflare-workers"
-    spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:0123456789abcdef
-      compatibilityDate: "2026-05-09"
-      routes:
-        - my-app.example.com/*
+```text
+1. caller posts source { kind, url, ref } to POST /v1/installations/dry-run
+2. kernel fetches source (git / catalog / bundle), parses .takosumi.yml
+3. kernel runs 5-phase validation (syntax / schema / use-edge / kind-catalog / space)
+4. kernel computes changes[], estimatedCost, expected.{commit, manifestDigest}
+5. caller posts apply with same source + expected
+6. kernel re-fetches source, verifies expected (or accepts current)
+7. kernel runs each component.build (= command) to produce artifact
+8. kernel solves use-edge DAG, resolves secrets / env injection
+9. kernel calls provider plugin per component (topological order)
+10. kernel persists Installation + Deployment record with outputs
+11. kernel returns Deployment to caller
 ```
 
-current manifest は `resources[]` の Shape model です。resource 間 dependency は
-`${ref:<resource>.<field>}` / `${secret-ref:<resource>.<field>}` で表現します。
-installer-only placeholder (`${bindings.*}` / `${secrets.*}` / `${artifacts.*}`
-等) は current takosumi-git が Accounts materialization 後の deploy request
-build でも 未解決なら kernel request 前に失敗し、 `workflowRef` は kernel
-に渡す前に strip します。
+build / fetch / provider call は kernel が直接実行する。 workflow runner や CI
+pipeline は介在しない (= AppSpec の `component.build` は最小 recipe のみ表現可)。
 
-normative な field 仕様は [manifest spec](/reference/manifest-spec) を参照。
-
-### App distribution boundary
-
-bundled app distribution / default app set / preinstall は consumer distribution
-と Takosumi Accounts / takosumi-git の install-layer concern です (例えば Takos
-product が bundled app set を持つのは distribution 側の choice)。 kernel は
-default app list を持たず、preinstall queue も所有しません。default set
-に含まれる app でも、kernel から見ると通常の compiled Shape manifest /
-Deployment であり、resource や group は特権化されない。
-
-### Lifecycle
-
-install は operator account plane が所有する AppInstallation lifecycle
-で、takosumi-git は install/deploy step を実行する helper です。kernel は
-compiled manifest を `POST /v1/deployments` で受け取り、deploy → reconcile →
-rollback → uninstall の compute lifecycle を扱う。
-
-rollback / uninstall は GroupHead の current pointer と provider state を
-Deployment 単位で更新する。個別 resource の provider operation は Deployment
-apply の DAG の中で扱われる。
+実装は `takosumi/packages/installer/` package (旧 takosumi-git の有用部分を absorb)
+と `takosumi/packages/kernel/src/domains/{installer,binding}/` 配下。
 
 ## Routing
 
-kernel は `{KERNEL_DOMAIN}` で control API を serve する。group は routing layer
-で独自の hostname を持つ:
+kernel は `{KERNEL_DOMAIN}` で control API を serve する。 Installation 配下の
+worker component は routing layer で独自の hostname を持つ:
 
 ```text
 Kernel ({KERNEL_DOMAIN}):
-  /v1/deployments → compiled manifest apply API
-  /healthz        → health check
+  /v1/installations/*     → installer public API
+  /api/internal/v1/*      → internal control plane
+  /healthz                → health check
 
-Groups (routing layer で hostname 割り当て):
-  group は最大 3 つの hostname を持てる:
-
-  1. auto:          {space-slug}-{group-slug}.{TENANT_BASE_DOMAIN}（常に存在、衝突しない）
-  2. custom slug:   {custom-slug}.{TENANT_BASE_DOMAIN}（optional、globally unique）
-  3. custom domain: 任意のドメイン（optional、DNS 検証）
+Installation worker (routing layer で hostname 割り当て):
+  1. auto:          {space-slug}-{installation-slug}.{TENANT_BASE_DOMAIN}
+  2. custom slug:   {custom-slug}.{TENANT_BASE_DOMAIN} (optional, globally unique)
+  3. custom domain: 任意のドメイン (optional, DNS 検証, kind: custom-domain で宣言)
 ```
 
 OAuth / OIDC の login flow は kernel 内ではなく
 [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
-で扱われます。consumer は `operator.identity.oidc` などの namespace export /
-account API から issuer configuration を得て redirect します。kernel は
-`/auth/*` 系の OAuth issuer endpoint を **持ちません**。consumer application
-(例: Installed Takos product) は OIDC consumer として Takosumi Accounts に
-redirect し、callback path (`/auth/oidc/callback` 等) のみを受けます。
-
-consumer application 側で session cookie を発行する場合は host-only とし
-（`Domain` attribute なし）、kernel と group subdomain では cookie
-を共有しない。
-
-routing layer は GroupHead が指す current Deployment の Shape resources から
-導出される route projection を解決し、hostname で kernel か group に振り分ける。
-projection は `worker@v1.spec.routes`、`web-service@v1.spec.domains`、
-`custom-domain@v1` などから provider ごとに生成される。group 内に複数 entrypoint
-がある場合は hostname / path / method で適切な workload を選ぶ。
-
-routing の実装詳細と route projection の cache / dispatch process role は
-[Control Plane - Routing layer](https://github.com/tako0614/takosumi/blob/master/docs/reference/architecture/control-plane.md#routing-layer)
-を参照。
+が扱います。 AppSpec が `components.<name>.kind: oidc` を宣言すると、 kernel
+installer が Installation 作成時に Takosumi Accounts で per-Installation OIDC
+client を発行し、 `use: { mount: oidc }` した worker に `OIDC_ISSUER_URL` /
+`OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS` を inject します。
+kernel 自身は OAuth issuer endpoint を **持ちません**。
 
 ## Resource broker
 
-kernel は `resources[]` に宣言された ManifestResource を provider operation に
-解決する。
+kernel は `components[]` に宣言された Component を provider operation に解決
+する:
 
-- workload: `worker@v1` / `web-service@v1`
-- backing resource: `database-postgres@v1` / `object-store@v1` / secret /
-  provider-specific managed resource
-- entrypoint: `worker@v1.spec.routes` / `web-service@v1.spec.domains` /
-  `custom-domain@v1`
-- resource は space / group 単位で分離される
+- worker: `kind: worker` (= JS bundle / container)
+- backing resource: `kind: postgres` / `kind: object-store` / OIDC client
+- entrypoint: `worker.routes` / `kind: custom-domain`
+- resource は Space / Installation 単位で分離される
 
-resource は ResourceInstance として control plane が record し、Deployment や
-provider の lifecycle と independent な durable record を持つ。provider 側の
-observed state は ProviderObservation stream として記録され、canonical な
-desired state は compiled manifest の resource entry です。compute への接続は
-resource spec 内の env / binding / provider config に materialize される。
+Resource は internal record として control plane が persist し、 Installation や
+provider の lifecycle と independent な durable record を持つ。 provider 側の
+observed state は ProviderObservation stream として記録され、 canonical な
+desired state は AppSpec の component entry です。 compute への接続は
+`use:` edge から resolve された env / binding / provider config に materialize
+される。
 
 ```yaml
-resources:
-  - shape: database-postgres@v1
-    name: db
-    provider: "@takos/aws-rds"
+components:
+  db:
+    kind: postgres
     spec:
-      version: "16"
-      size: small
+      class: standard
 
-  - shape: web-service@v1
-    name: api
-    provider: "@takos/aws-fargate"
-    spec:
-      image: ghcr.io/example/api@sha256:0123456789abcdef
-      port: 8080
-      scale: { min: 1, max: 3 }
-      env:
-        DATABASE_URL: ${ref:db.connectionString}
-        DB_PASSWORD: ${secret-ref:db.passwordSecretRef}
+  web:
+    kind: worker
+    build:
+      command: npm ci && npm run build
+      output: dist/worker.mjs
+    use:
+      db:
+        env: DATABASE_URL
 ```
 
-kernel 自身の storage は kernel DB / object-store を使う（group とは別）。
+kernel 自身の storage (= installations / deployments / resources / secrets /
+events table) は kernel DB を使う。
 
-## Namespace exports / AppBinding / env materialization
+## Cross-references
 
-current compiled Shape manifest に top-level `publications[]` / `bindings[]`
-はありません。runtime env は Shape resource の `spec.env` などに materialize
-された値、 `${ref:...}` / `${secret-ref:...}` で表現する。
-
-External / operator-owned dependency は manifest import ではなく namespace
-export で表現します。例えば OIDC は `operator.identity.oidc`、billing は
-`operator.billing.default` を account plane が公開し、installer / app が
-explicit grant と account API / BillingPort で consume します。
-
-### AppBinding
-
-Installable App Model の `.takosumi/app.yml` の `bindings:` (`identity.oidc@v1`
-/ `database.postgres@v1` / `object-store.s3-compatible@v1` 等) は
-installer-bound です。current takosumi-git は unresolved `${bindings.*}` /
-`${secrets.*}` を kernel に渡さず、deploy request build 後も残る場合は kernel
-request 前に失敗します。OIDC client は `identity.oidc@v1` AppBinding 経由で
-installation 単位に発行されます
-([binding-catalog](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/binding-catalog.md#_1-identity-oidc-v1)
-参照)。
-
-consumer application 自身が公開する API への access (例: Takos product API)
-は当該 application の API surface / AppGrant の責務です。kernel は
-consumer-specific な api-key catalog metadata (例: `takos.api-key`) や top-level
-`bindings[]` env injection を current manifest contract として 扱いません。
-
-### Scope enforcement
-
-各 workload resource は独立した実行単位であり、kernel は workload 間の通信内容に
-介入しない。scope enforcement は受信側 service / product API の責務です。
-
-## Dashboard
-
-space 管理 UI は account plane (Takosumi Accounts) / consumer application (例:
-Installed Takos product) 側の product surface です。kernel は dashboard SPA
-を持たず、compiled manifest apply と provider reconciliation の API に
-専念する。group 一覧、install、billing、member 管理は account plane / consumer
-application の責務です。
-
-## Event bus
-
-kernel event は Deployment / provider lifecycle の internal stream として扱う。
-product app 向けの `/api/events` や group 間通知は consumer application 側の API
-surface (例: Installed Takos product) であり、kernel public contract では
-ありません。
-
-fire-and-forget。配信保証はない。
-
-kernel internal event の例:
-
-- `group.deployed`, `group.deleted`, `group.rollback`, `group.unhealthy`
-
-Event 処理の原則: idempotent, graceful, non-blocking。
-
-## Workers backend reference materialization
-
-::: details tracked reference Workers backend の実装詳細
-
-> このセクションは Cloudflare Workers backend に固有の materialization
-> detail。Core 用語との対応は
-> [Workers backend implementation note](../workers-backend.md) を参照。
-
-tracked reference Workers backend では、kernel は admin host と tenant hostname
-を分離した複数 worker / Container DO に展開される。
-
-- kernel host (`{KERNEL_DOMAIN}` に対応する `{ADMIN_DOMAIN}` 配備変数) は
-  control-web worker が serve する
-- session cookie は host-only `__Host-tp_session` として発行する。kernel と
-  tenant hostname で cookie を共有しない
-- tenant hostname (auto / custom slug / custom domain) は `takos-dispatch`
-  worker が受け取り、RoutingRecord の hostname → group worker / endpoint
-  解決を行う。RoutingRecord は GroupHead が指す Deployment の Shape resources
-  から導出した route projection の Workers backend 側 record
-- group 内に複数 worker がある場合、`takos-dispatch` が RoutingRecord の path
-  - method で適切な worker を選ぶ
-- route projection の解決は `RoutingDO` を底にした 3 階層 cache (L1 isolate Map
-  / L2 KV / L3 DO) を経由する
-- 配備設定は backend distribution の wrangler.toml ファイル (Takos product
-  reference では `takos/app/apps/control/wrangler.toml` 系) に 配置する
-
-詳細な実行コンポーネント / cache 構造 / dispatch namespace は
-[Control plane § Workers backend reference materialization](https://github.com/tako0614/takosumi/blob/master/docs/reference/architecture/control-plane.md#workers-backend-reference-materialization)
-を参照。
-
-:::
-
-## 関連ページ
-
-kernel が **持たない** 領域は次の正本で扱われる:
-
-- [Installable App Model](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/installable-app-model.md)
-  — consumer distribution が bundled / third-party apps を Takosumi Account に
-  install する全体モデル。kernel から見ると distribution は任意 application の 1
-  example にすぎず (Takos product はその reference example の 1 つ)、kernel
-  仕様は特定 distribution に依存しない。本ページの上位 canonical reference。
-- [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
-  — OAuth / OIDC issuer / billing / upstream IdP broker。OAuth provider /
-  consent screen / upstream IdP login の 正本。consumer application は
-  `/auth/login` を持たない (例: Takos product の `/auth/login` も公開 route
-  ではない)。
-- [AppInstallation 台帳](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/app-installation.md)
-  — 所有権の primitive。 AppInstallation / AppBinding / AppGrant /
-  RuntimeBinding / InstallationEvent。
-- [Installer Pipeline](https://github.com/tako0614/takosumi-git/blob/master/docs/architecture/installer-pipeline.md)
-  — `takosumi-git` (canonical installer implementation) の Git URL installer /
-  workflow runner / manifest compiler。 `.takosumi/app.yml` と
-  `.takosumi/workflows/*.yml` は kernel ではなく installer 側で解釈される。
-- [Runtime Modes](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/runtime-modes.md)
-  — shared-cell / dedicated / self-hosted の 3 mode 比較。kernel は同じ compiled
-  manifest を mode 越しに apply する。
-- [Control Plane](https://github.com/tako0614/takosumi/blob/master/docs/reference/architecture/control-plane.md)
-  — kernel control 面 (manifest apply / provider DAG / resource resolution)
-  の実装。account plane (Takosumi Accounts) とは別レイヤー。
+- [AppSpec](../app-spec.md)
+- [Installer API](../installer-api.md)
+- [Component Kind Catalog](../component-kind-catalog.md)
+- [Architecture: Manifest model](./manifest-model.md)
+- [Provider Resolution](../provider-resolution.md)

@@ -1,16 +1,16 @@
 # Manifest Model
 
-> このページでわかること: manifest のデータモデルと resource graph の構造。
+> このページでわかること: AppSpec (= `.takosumi.yml`) のデータモデルと
+> component graph の構造、 AppSpec → Installation → Deployment の lifecycle。
 
-manifest は closed な deploy surface である。desired な portable resource を
-宣言するもので、canonical state ではない。Space、tenant、actor、catalog
-release、 policy、quota、credential、approval、journal
-state、observation、GroupHead は manifest ではなく deploy context
-から供給される。
+AppSpec は closed な install surface である。 desired な portable component を
+宣言するもので、 canonical state ではない。 Space、 actor、 catalog
+release、 policy、 quota、 credential、 approval、 journal state、 observation
+は AppSpec ではなく install context から供給される。
 
-Public v1 は `POST /v1/deployments` と `takosumi deploy` が実装する **Shape +
-Provider** manifest モデルである。Authoring 用の shorthand は installer /
-compiler 層に属し、kernel に届く前に展開される。
+Public v1 は `POST /v1/installations` 系 5 endpoint と `takosumi install` CLI が
+実装する **Component + Kind** AppSpec モデルである。 authoring shorthand や
+compiled 中間形式は存在せず、 kernel が読むのは `.takosumi.yml` そのものである。
 
 ## Allowed Public Fields
 
@@ -20,161 +20,159 @@ Root fields:
 apiVersion
 kind
 metadata
-resources
+components
+interfaces
+permissions
 ```
 
-`apiVersion` は必須で `"1.0"` に固定。`kind` は必須で `Manifest` に固定。未知の
-top-level field は schema validation で失敗する。警告ではない。
+`apiVersion` は必須で `"takosumi.dev/v1"` に固定。 `kind` は必須で `"App"` に
+固定。 未知の top-level field は schema validation で失敗する (= warning
+ではない)。
 
 `metadata` fields:
 
 ```text
+id
 name
-labels
+description
+publisher
+homepage
 ```
 
-`resources[]` entry fields:
+`components` の各 entry fields:
 
 ```text
-shape
-name
-provider
-spec
-requires
-metadata
+kind | build | use | routes | spec | redirectPaths | scopes | name | target
 ```
 
-`spec` は target shape 固有で、選ばれた Shape の `validateSpec` で validate
-される。`spec` の外側の未知 envelope field は validation で失敗する。
+`build` は AppSpec が許可する **唯一の build 概念** で、 `{ command, output }`
+の最小 recipe のみ表現できる。 jobs / steps / matrix / triggers / pipeline は
+持たない (= CI workflow ではない)。
+
+`use` は component 間の構造的依存 edge。 文字列 placeholder
+(`${ref:...}` / `${secret-ref:...}` / `${bindings.*}` 等) は v1 AppSpec では
+廃止された。
 
 ## Space Context
 
-`Space` は manifest の外にある。同じ manifest が異なる Space で異なる resolve
-結果になることがある。namespace path、catalog release 選択、policy、secret、
-artifact、approval、journal、observation、GroupHead は Space scope である。
+`Space` は AppSpec の外にある。 同じ AppSpec が異なる Space で異なる resolve
+結果になることがある。 namespace path、 catalog release 選択、 policy、 secret、
+artifact、 approval、 journal、 observation は Space scope である。
 
 ```text
-manifest + space:acme-prod -> production catalog / policy / quotas
-manifest + space:acme-dev  -> development catalog / policy / quotas
+appspec + space:acme-prod -> production catalog / policy / quotas
+appspec + space:acme-dev  -> development catalog / policy / quotas
 ```
 
-public manifest は `space`、`tenant`、`org`、credential、namespace registry の
-構成 field を含んではならない。これらは deployment context / operator 設定で
-あり、authoring intent ではない。
+public AppSpec は `space` / `tenant` / `org` / credential / namespace registry の
+構成 field を含んではならない。 これらは Installation context / operator 設定
+であり、 authoring intent ではない。
 
-## Resources
+## Components
 
-各 `resources[]` entry は 1 つの portable Shape resource を宣言する。
+各 `components` entry は 1 つの portable Component を宣言する。
 
 ```yaml
-apiVersion: "1.0"
-kind: Manifest
+apiVersion: takosumi.dev/v1
+kind: App
 metadata:
-  name: my-app
-resources:
-  - shape: database-postgres@v1
-    name: db
-    provider: "@takos/aws-rds"
-    requires: [automated-backups]
+  id: com.example.notes
+  name: Example Notes
+components:
+  db:
+    kind: postgres
     spec:
-      version: "16"
-      size: small
-
-  - shape: web-service@v1
-    name: api
-    provider: "@takos/aws-fargate"
-    spec:
-      image: ghcr.io/example/api@sha256:...
-      port: 8080
-      bindings:
-        DATABASE_URL: ${ref:db.connectionString}
+      class: standard
+  web:
+    kind: worker
+    build:
+      command: npm ci && npm run build
+      output: dist/worker.mjs
+    routes:
+      - /
+    use:
+      db:
+        env: DATABASE_URL
 ```
 
-規則:
+`kind` が semantic contract。 catalog 5 種いずれか。 provider plugin が apply
+時に `kind` を解決する。 provider 選択 / 配置 / placement は AppSpec ではなく
+operator policy / Space context が決める。
 
-- `shape` は portable contract を指す (`web-service@v1`、
-  `database-postgres@v1`、`object-store@v1` 等)。
-- `provider` はその Shape に対して選ばれた implementation を指す
-  (`@takos/aws-fargate`、`@takos/cloudflare-workers`、自前 provider など)。
-- `name` は manifest 内の resource identity で、`${ref:<name>.<field>}` の
-  source namespace でもある。
-- `requires` は capability の subset 要件である。provider の capability が
-  superset でなければ validation はその resource を reject する。
+各 component の output (= apply 後の値) は kernel が persist し、 `use:` edge
+が解決して依存 component に inject する。
 
-## Templates
+## Use Edge Resolution
 
-top-level の `template` は kernel manifest の field ではない。authoring macro
-として template を使う場合は、`POST /v1/deployments` に到達する前に展開された
-`resources[]` 形に変換しておく必要がある。operator が template / compiler 層
-を保持する場合、それは `POST /v1/deployments` の前に走らせる。
-
-## References
-
-`spec` 値は reference token を使える。
+`use:` は component を node、 edge を依存関係とする DAG を作る。
 
 ```text
-${ref:<resource>.<field>}
-${secret-ref:<resource>.<field>}
+web --use:db--> db
+web --use:auth-> auth
+web --use:media-> media
 ```
 
-参照は resource 間に依存 edge を作る。kernel は文法を validate し、DAG を構築
-し、循環を reject し、トポロジカル順序で resource を適用する。`secret-ref` は
-secret-reference output 用で、プレーン output には使ってはならない。
+kernel は cycle を reject し、 topological order で provider apply を実行する。
+cycle 検出は graph DFS。
 
-## Data Inputs
+各 edge の semantics:
 
-artifact は top-level manifest の authority ではない。Shape `spec` の入力値で
-あり、Shape / provider contract と artifact policy に従う。
+| sub-key      | 解決                                                              |
+| ------------ | ----------------------------------------------------------------- |
+| `env`        | 依存先 connection string / primary output を単一 env var に inject |
+| `envPrefix`  | 依存先の全 output field を `${PREFIX}_*` で env に展開            |
+| `mount`      | reserved mount point (例: `oidc`) に bind し、 関連 env 一式を inject |
 
-```yaml
-resources:
-  - shape: worker@v1
-    name: worker
-    provider: "@takos/cloudflare-workers"
-    spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:...
-```
+## Installation lifecycle
 
-ローカル path は未解決の authoring 入力である。remote kernel が apply する前に
-content-addressed な artifact record にしておく必要がある。
-
-## Manifest to Intent Graph
+AppSpec は唯一の入力。 そこから kernel が次の 3 段階を実行する。
 
 ```text
-metadata.name:
-  Deployment record name inside the deploy context's Space
-
-resources[].shape:
-  Portable Shape contract intent
-
-resources[].provider:
-  Provider implementation selection intent
-
-resources[].spec:
-  Shape-specific desired input
-
-resources[].requires:
-  Capability constraint on provider selection
-
-${ref:...} / ${secret-ref:...}:
-  Link / dependency intent between resource outputs and inputs
+AppSpec (.takosumi.yml)
+   ↓ POST /v1/installations
+Installation (account + space + appId + currentDeployment + status)
+   ↓ POST /v1/installations/{id}/deployments
+Deployment (source.commit + manifestDigest + outputs + status + timestamps)
 ```
 
-OperationPlan と write-ahead journal のアーキテクチャはこの intent graph から
-導出される。public deploy route では、`mode: "plan"` は journal を書かずに
-決定的な OperationPlan preview (DesiredSnapshot digest、OperationPlan digest、
-計画 operation、WAL idempotency tuple preview) を出す。`mode: "apply"` /
-`mode: "destroy"` は内部で同じ public OperationPlan shape を導出し、public WAL
-stage record を `takosumi_operation_journal_entries` に書く。永続化された public
-deployment record は依然として `takosumi status` と destroy handle 解決で使う
-互換ステータス / handle state を保持する。public recovery は現在、副作用なしの
-`inspect`、same-digest を保証する `continue`、`activation-rollback` RevokeDebt
-を open する `compensate` を支援する。Connector-native compensate は destroy
-fallback と共に runtime-agent protocol で公開され、CatalogRelease の adopt /
-署名検証は registry domain に実装されている。public apply / destroy WAL は adopt
-済 release を fail-closed な pre/post-commit verification step として
-呼び出す。catalog 宣言の実行可能 hook package、manual reopen、clearance、
-connector backed cleanup、worker daemon スケジューリングは lifecycle primitive
-として実装される。
+`Installation` は 1 つの Space に対して 1 つの App が入っている状態を表す。
+所有 / 課金 / 権限 / 現在状態の単位。
+
+`Deployment` は 1 回の apply 結果。 source.commit、 manifestDigest、
+component ごとの build artifact、 provider が作った resource id を記録する。
+履歴 / audit / rollback の単位。
+
+## Provider Resolution
+
+各 component の `kind` は provider plugin が materialize する。 provider 選択は
+Space に bind された CatalogRelease に従う。
+
+Provider responsibilities:
+
+- `kind` 固有の input spec を validate
+- target runtime (Cloudflare Workers / Node + Postgres / AWS Fargate 等) に
+  対する provider operation を生成
+- apply 後の output fields (`url` / `connectionString` / `bucket` 等) を返す
+
+詳細: [Provider Resolution](../provider-resolution.md)。
+
+## 削除された旧概念
+
+| 旧概念                                    | 新位置                                            |
+| ----------------------------------------- | ------------------------------------------------- |
+| `.takosumi/app.yml` + `manifest.yml`      | `.takosumi.yml` 1 file に統合                     |
+| `.takosumi/workflows/*`                   | 廃止                                              |
+| compiled manifest (authoring vs compiled) | 単一 AppSpec モデル、 compile step なし           |
+| workflowRef                               | `component.build` の最小 recipe                   |
+| `${ref:...}` / `${secret-ref:...}`        | `use:` edge                                       |
+| `${bindings.*}` / `${secrets.*}`          | `use:` edge                                       |
+| Plan / Snapshot / Preview entity          | dry-run response (entity 化されない)              |
+| DeploymentPlan / DeploymentSnapshot       | Deployment record の outputs に統合               |
+
+## 関連ページ
+
+- [AppSpec](../app-spec.md)
+- [Component Kind Catalog](../component-kind-catalog.md)
+- [Installer API](../installer-api.md)
+- [Architecture: Kernel](./kernel.md)
+- [Provider Resolution](../provider-resolution.md)
