@@ -1,78 +1,70 @@
 # Lifecycle Protocol
 
-> このページでわかること: deployment lifecycle プロトコルの全体像。
+> このページでわかること: deployment lifecycle 6 phase と recovery mode の運用
+> 規則。
 
-Takosumi の deployment lifecycle
-(`apply / activate / destroy / rollback /
-recovery / observe`) を、kernel apply
-pipeline と runtime-agent dispatch の 両側から v1 確定形で整理する reference
-です。phase ごとの input / output snapshot・WAL stage
-対応・失敗時挙動・`LifecycleStatus` 5 値の trigger 別遷移は
-[Lifecycle Phases](/reference/lifecycle-phases) を参照してください。 WAL stage
-の意味論は [WAL Stages](/reference/wal-stages)、approval 失効規則は
-[Approval Invalidation Triggers](/reference/approval-invalidation) を
-参照してください。
+Takosumi の lifecycle は `apply / activate / destroy / rollback / recovery /
+observe` の 6 phase。 phase ごとの snapshot 対応や `LifecycleStatus` 遷移は
+[Lifecycle Phases](/reference/lifecycle-phases)、 WAL stage は
+[WAL Stages](/reference/wal-stages)、 approval 失効は
+[Approval Invalidation Triggers](/reference/approval-invalidation) 参照。
 
 ## Cross-process lock
 
-**Production 配置では SQL-backed `OperationPlanLockStore` の使用が必須です。**
-in-memory store は dev / unit test 専用で、複数 kernel pod が走る環境では lock
-を保証できません。
+::: warning Production では SQL-backed `OperationPlanLockStore` 必須 in-memory
+store は dev / unit test 専用。 複数 kernel pod 配置で lock 保証ができません。
+:::
 
-- 同一 OperationPlan に対する `apply / activate / destroy / rollback` は
-  `(spaceId, operationPlanDigest)` を key として **直列化** されます。
-- Lock holder が異常終了した場合、SQL-backed store は heartbeat の TTL で
-  自動失効します。失効した lock を取り直した kernel は WAL を `recovery` phase
-  経由で復帰させます。
-- in-memory store は単一プロセス内の per-key Promise chain しか持たず、
-  cross-process では race を起こします。production 配置で in-memory store を
-  inject すると、kernel boot 時に warning を出すよう実装されています
-  が、**warning を見て operator が SQL-backed に差し替える運用が前提** です。
+- 同一 OperationPlan の `apply / activate / destroy / rollback` は
+  `(spaceId, operationPlanDigest)` を key に直列化されます。
+- Lock holder が異常終了すると SQL-backed store は heartbeat TTL で自動失効。
+  取り直した kernel は `recovery` phase 経由で復帰します。
+- in-memory store は per-key Promise chain のみで cross-process race を起こし
+  ます。 production 配置で inject されると kernel boot 時に warning が出ます
+  が、 SQL-backed への差し替えは operator 運用で行います。
 
-現在の public deploy route (`POST /v1/deployments`) は `takosumi_deploy_locks`
-の SQL lease を使い、scope `(tenantId, deploymentName)` で同じ deployment への
-apply / destroy を複数 kernel pod 間で直列化します。この route は busy
-を即時返却せず、lease が空くまで wait します。
+public deploy route (`POST /v1/deployments`) は `takosumi_deploy_locks` の SQL
+lease を使い、 scope `(tenantId, deploymentName)` で同一 deployment への apply
+/ destroy を複数 pod 間で直列化します。 busy 即返却ではなく lease が空くまで
+wait します。
 
-public deploy の apply / destroy は、公開 OperationPlan preview から導出した
-`takosumi_operation_journal_entries` に WAL stage record を書きます。 `prepare`
-/ `pre-commit` / `commit` は provider side effect の前に記録され、 成功時は
-`post-commit` / `observe` / `finalize`、失敗時は `abort` が追記されます。 同じ
-`(spaceId, operationPlanDigest, journalEntryId, stage)` に対する同一 effect
-digest の replay は冪等で、異なる effect digest は hard-fail します。
+WAL 書込: public deploy の apply / destroy は OperationPlan preview から導出し
+た `takosumi_operation_journal_entries` に WAL stage record を書きます。
+provider side effect 前に `prepare` / `pre-commit` / `commit`、 成功で
+`post-commit` / `observe` / `finalize`、 失敗で `abort`。 同じ
+`(spaceId, operationPlanDigest, journalEntryId, stage)` + 同一 effect digest の
+replay は冪等、 異なる effect digest は hard-fail。
 
-CatalogRelease の publisher key enrollment、署名検証、Space adoption record、
-rotation audit は registry domain primitive として実装済みです。public route の
-WAL は `AppContext` から構成された場合、adopted CatalogRelease を
-pre/post-commit verification として呼びます。pre-commit verification failure は
-provider side effect 前に terminal `abort` へ進み、post-commit verification
-failure は verification failure を journal し、committed effect に対する
-RevokeDebt を enqueue して observe / finalize evidence を残します。runtime-agent
-protocol には connector-native `compensate` operation があり、専用 operation
-を持たない connector は handle-keyed `destroy` を compensation fallback
-とします。RevokeDebt store には retry attempt、 policy-controlled aging、manual
-reopen / clearance の lifecycle primitive が実装 されています。connector-backed
-RevokeDebt cleanup worker は deployment record から handle を解決して provider
-compensate / destroy fallback を呼び、成功時に debt を `cleared`
-へ進めます。この cleanup worker は `takosumi-worker` role の daemon task として
-open debt owner Space を列挙して周期実行されます。
+CatalogRelease verification: publisher key enrollment / 署名検証 / Space
+adoption record / rotation audit は registry domain primitive として実装済み。
+`AppContext` 構成時、 public WAL は adopted CatalogRelease を pre/post-commit
+verification として呼びます。 pre-commit 失敗は provider 呼出前に terminal
+`abort`。 post-commit 失敗は verification failure を journal し、 committed
+effect に対する RevokeDebt を enqueue して observe / finalize evidence を残し
+ます。
 
-public deploy route は latest WAL が terminal (`finalize` / `abort` / `skip`)
-でない deployment に対する新しい `apply` / `destroy` を fail-closed
-で拒否します。 この場合 provider は呼ばれず、新しい WAL entry
-も書かれません。operator は同じ `POST /v1/deployments` に
-`recoveryMode: "inspect"` を付けて、persist 済み public WAL entries と latest
-stage summary を取得します。同じ manifest / mode から同じ OperationPlan digest
-を再現できる場合のみ、`recoveryMode: "continue"` は provider fencing token
-付きで同じ OperationPlan を再実行します。digest / phase が一致しない場合は
-fail-closed です。`recoveryMode: "compensate"` は同じ digest / phase かつ
-`commit` 以降に到達した WAL だけを terminal `abort` に進め、provider を呼ばずに
-`activation-rollback` RevokeDebt を enqueue します。
+Compensation: runtime-agent protocol は connector-native `compensate` を持ち、
+専用 operation が無い connector は handle-keyed `destroy` を fallback。
+RevokeDebt store は retry attempt / policy-controlled aging / manual reopen /
+clearance を実装。 cleanup worker (`takosumi-worker` role daemon) が open debt
+owner Space を周期列挙し、 deployment record から handle を解決して provider
+compensate / destroy fallback を呼び、 成功時に debt を `cleared` に進めます。
 
-`apply` / `destroy` は lock 取得 → 実行 → release を `try { ... } finally`
-で囲みます。lock contention 時は client 側 timeout で諦めるか、operator
-側で「single-writer apply tier」（deploy 系 traffic を 1 pod に固定する
-deployment topology）を取るかのどちらかを選択します。
+Fail-closed の precondition: 最新 WAL が terminal でない deployment への新規
+`apply` / `destroy` は拒否します (provider 呼出なし、 WAL entry 追加なし)。
+recovery は同じ endpoint に `recoveryMode` を付けて駆動:
+
+- `inspect`: persist 済 WAL entries と latest stage summary を返す
+- `continue`: manifest / mode から再現した OperationPlan digest が一致する場合
+  のみ provider fencing token 付きで replay。 不一致は fail-closed
+- `compensate`: 同 digest / phase かつ `commit` 以降に到達した WAL を terminal
+  `abort` に進め、 provider を呼ばずに `activation-rollback` RevokeDebt を
+  enqueue
+
+`apply` / `destroy` は lock 取得 → 実行 → release を `try { ... } finally` で
+囲みます。 lock contention 時は client timeout で諦めるか、 operator が
+single-writer apply tier (deploy traffic を 1 pod に固定する topology) を取り
+ます。
 
 ## Lifecycle phases
 
@@ -88,22 +80,20 @@ v1 では 6 phase を 1:1 に区別します。各 phase は対応する Snapsho
 | `recovery` | WAL 復元状態                        | recovery mode に応じた終端 (continue / compensate / inspect)          | (resume from last stage)                       |
 | `observe`  | live runtime-agent describe results | Exposure health (`healthy / degraded / unhealthy`) と RevokeDebt 候補 | `observe` (long-lived)                         |
 
-- `apply` の `prepare` で OperationPlan が確定し、Idempotency key
-  `(spaceId, operationPlanDigest, journalEntryId)` が WAL の各 entry に
-  振られます。同じ key の retry は副作用を増やしません。
-- `activate` 直後の Exposure health は `unknown` から始まり、`observe` phase
-  が回るにつれて `observing → healthy / degraded / unhealthy` へ 遷移します。
-- `destroy` は `finalize` stage で managed / generated lifecycle class の object
-  を完全に消し、external / operator / imported は触りません。
-- `rollback` は WAL の `commit` 済み effect を逆再生するため `compensate`
-  operation を `pre-commit` で起動した上で `abort` 終端に進みます。
-- `recovery` は kernel restart 時に WAL を読み直して再開します。最後に
-  記録された stage の **次** から resume します。
-- `observe` phase の起動 / 維持は kernel readiness と連動します。kernel pod の
-  readiness DAG (storage / lock store / runtime-agent registry など) が
-  満たされていない間は observation worker が観測値を更新せず、`/readyz` も 503
-  を返します。詳細は [Readiness Probes](/reference/readiness-probes)
-  を参照してください。
+- `apply` の `prepare` で OperationPlan が確定。 idempotency key
+  `(spaceId, operationPlanDigest, journalEntryId)` が各 entry に振られ、 同じ
+  key の retry は副作用を増やしません。
+- `activate` 直後の Exposure health は `unknown` で始まり、 `observe` 進行で
+  `observing → healthy / degraded / unhealthy` へ遷移します。
+- `destroy` は `finalize` で managed / generated lifecycle class object を完全
+  削除。 external / operator / imported は触りません。
+- `rollback` は `compensate` operation を `pre-commit` で起動して `abort` 終端
+  へ進みます。
+- `recovery` は kernel restart 時に WAL を読み直し、 最後に記録された stage の
+  **次** から resume します。
+- `observe` 起動 / 維持は kernel readiness 連動。 readiness DAG が未充足の間は
+  observation worker が更新せず、 `/readyz` も 503。 詳細は
+  [Readiness Probes](/reference/readiness-probes)。
 
 WAL stage の意味論は
 [WAL Stages — Stage closed enum](/reference/wal-stages#stage-closed-enum-8-値)
@@ -114,23 +104,19 @@ finalize`、終端
 
 ## Verify trigger
 
-runtime-agent の `POST /v1/lifecycle/verify` は本 reference の lifecycle phase
-と以下のように対応します:
+`POST /v1/lifecycle/verify` は lifecycle phase に含まれない補助 trigger です。
+WAL stage を進めず、 Snapshot を materialize せず、 connector ごとの
+credential / network reachability の確認だけを行います。
 
-- `verify` は **どの phase にも含まれない補助 trigger** です。WAL stage を
-  進めず、Snapshot を materialize せず、connector ごとの credential / network
-  reachability を確認するためだけに動きます。
-- `apply` の前に operator が `verify` を投げて `connector_not_found` /
-  `connector-extended:*` を切り分けるのが推奨フローです。kernel apply pipeline
-  は `verify` の結果を直接消費しませんが、operator dashboard が `verify` 結果を
-  `pre-flight gate` として扱う運用が想定されています。
-- `verify` 中に connector が `connector_failed` を返した場合、kernel は 当該
-  connector に対する `apply` request を **送らず**、operator が 対処するまで
-  OperationPlan を `prepare` から先に進めない選択を取れます。
+推奨フロー: `apply` の前に `verify` を投げて `connector_not_found` /
+`connector-extended:*` を切り分けます。 kernel apply pipeline は結果を直接消費
+しませんが、 operator dashboard が pre-flight gate として扱う運用が想定です。
+`verify` で `connector_failed` を返した connector には `apply` request を送ら
+ず、 OperationPlan を `prepare` で止める選択を operator が取れます。
 
-`verify` request / response の field 仕様は
+field 仕様は
 [Runtime-Agent API — `POST /v1/lifecycle/verify`](/reference/runtime-agent-api#post-v1lifecycleverify)
-を参照してください。
+参照。
 
 ## Recovery modes
 
@@ -146,40 +132,34 @@ mode を選択します。
 
 選択ガイド:
 
-- 直前 phase が `apply` で WAL が `pre-commit` まで進んでいる: `normal` を
-  選ぶ。`commit` の retry が冪等性を保つ。
-- 直前 phase が `commit` 半ばで落ち、外部 side effect (cloud API call) が
-  実行済みの可能性が高い: `continue` で `commit` を最後まで走らせる。
-- `commit` まで終わったが `post-commit` で外部依存が壊れ続けて回復見込みが ない:
-  `compensate` を選び、`activation-rollback` reason の RevokeDebt を open v1 の
-  recovery mode では扱わない。
-- 状況不明 / 復旧前にまず差分を見たい: `inspect` を選び、WAL の journalEntryId
-  単位で `actual-effects-overflow` の有無を確認する。
+- 直前 phase が `apply` で WAL が `pre-commit` まで: `normal` を選ぶ。 `commit`
+  retry が冪等性を保つ。
+- `commit` 半ばで落ち、 外部 side effect が実行済みの可能性が高い: `continue`
+  で `commit` を最後まで走らせる。
+- `commit` 完了後 `post-commit` で外部依存が壊れ続けて回復見込みなし:
+  `compensate` で `activation-rollback` reason の RevokeDebt を open。
+- 状況不明 / 差分確認: `inspect` で journalEntryId 単位の
+  `actual-effects-overflow` を確認。
 
-`inspect` 以外の mode は WAL の **idempotency key** に基づいて副作用を再現
-しないように動作するため、同じ mode を繰り返し起動しても重複 effect は
-発生しません。
+`inspect` 以外の mode は WAL idempotency key により副作用を再現しないため、
+同じ mode を繰り返しても重複 effect は出ません。
 
-実装状態のまとめ:
+実装状態:
 
-- `recoveryMode: "inspect"` は副作用なしの WAL dump として動作し、 未完了 WAL
-  entry は新規 apply / destroy を block する
-- `recoveryMode: "continue"` は要求 phase と OperationPlan digest が未完了 WAL
-  と一致するときのみ resume する
-- `recoveryMode: "compensate"` は `commit` 以降に到達した public WAL entry に
-  対して `activation-rollback` の RevokeDebt を開き、 `abort` を追記する
+- `inspect`: 副作用なし WAL dump。 未完了 WAL は新規 apply / destroy を block。
+- `continue`: 要求 phase と OperationPlan digest が unfinished WAL と一致時の
+  み resume。
+- `compensate`: `commit` 以降到達の public WAL entry に
+  `activation-rollback` RevokeDebt を open し `abort` を追記。
 - runtime-agent protocol は connector-native `compensate` を destroy fallback
-  付きで公開し、 apply rollback は provider compensate operation が利用可能な
-  場合これを使う
-- RevokeDebt store の retry attempt、 policy-controlled aging、 manual reopen、
-  clearance 遷移、 connector-backed cleanup worker、 worker daemon 周期実行は
-  実装済み
-- CatalogRelease の adoption / 署名検証は registry domain に実装され、 public
-  apply / destroy WAL は adopted release を fail-closed な pre/post-commit
-  verification として呼ぶ
+  付きで公開。 apply rollback は provider compensate operation を優先。
+- RevokeDebt store: retry attempt / policy-controlled aging / manual reopen /
+  clearance / connector-backed cleanup worker / worker daemon 周期実行を実装
+  済み。
+- CatalogRelease adoption / 署名検証は registry domain に実装。 public WAL は
+  adopted release を fail-closed な pre/post-commit verification として呼ぶ。
 - apply / destroy commit 呼出には WAL idempotency tuple が
-  `PlatformContext.operation` と runtime-agent lifecycle `idempotencyKey` 経由
-  で渡る
+  `PlatformContext.operation` と runtime-agent `idempotencyKey` 経由で渡る。
 
 ## Cross-references
 

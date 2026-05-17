@@ -46,6 +46,12 @@ takosumi/
   で justify できない responsibility は kernel に持ち込んでよい
   (実際には現状ほぼ無いが、 原則として「持たないもの
   list」自体を絶対視はしない)。
+- **Runtime neutrality は `shared/runtime/` で集約**: kernel core から
+  `Deno.*` / `process.*` / `node:*` の直接呼び出しは排除済み。 全 runtime
+  primitive (env, exit, signal, fs, subprocess, serveHttp) は
+  `packages/kernel/src/shared/runtime/` の `RuntimeAdapter` 経由で呼ぶ。
+  Deno / Node / Workers / Bun の差分はそこだけで吸収する。 新規 code path で
+  `Deno.*` を直接呼ぶ PR は reject。
 - **Image-first model**: shape spec の `image` / `bundle` / `unit` は単なる URI
   文字列。 artifact 取得は provider 側の責務 (K8s が image pull するのと同じ)。
   manifest spec に `compute.build.fromWorkflow` 等の build

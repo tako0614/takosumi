@@ -1,0 +1,107 @@
+# Takosumi Kernel — selfhost reference distribution.
+#
+# Substrate-neutral counterpart to deploy/cloudflare/. Brings up the
+# full Takosumi PaaS kernel + runtime-agent + Postgres + MinIO (S3
+# compatible) + Caddy (TLS) on any Docker host. Use this on a single
+# VM, container host, or Kubernetes pod (via kompose) instead of
+# Cloudflare Workers.
+#
+# The kernel and runtime-agent here do NOT depend on Cloudflare D1 or
+# R2; they use Postgres + MinIO via the bundled selfhost provider.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: takosumi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: takosumi
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-takosumi-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U takosumi -d takosumi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-takosumi}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kernel:
+    build:
+      context: ../..
+      dockerfile: deploy/selfhosted/Dockerfile.kernel
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      TAKOSUMI_ENVIRONMENT: ${TAKOSUMI_ENVIRONMENT:-production}
+      TAKOSUMI_DATABASE_URL: postgres://takosumi:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/takosumi
+      TAKOSUMI_DEPLOY_TOKEN: ${TAKOSUMI_DEPLOY_TOKEN:?set TAKOSUMI_DEPLOY_TOKEN in .env}
+      TAKOSUMI_INTERNAL_API_SECRET: ${TAKOSUMI_INTERNAL_API_SECRET:?set TAKOSUMI_INTERNAL_API_SECRET in .env}
+      TAKOSUMI_AGENT_URL: http://runtime-agent:8789
+      TAKOSUMI_AGENT_TOKEN: ${TAKOSUMI_AGENT_TOKEN:?set TAKOSUMI_AGENT_TOKEN in .env}
+      TAKOSUMI_DB_AUTO_MIGRATE: "true"
+      PORT: "8788"
+    expose:
+      - "8788"
+
+  runtime-agent:
+    build:
+      context: ../..
+      dockerfile: deploy/selfhosted/Dockerfile.runtime-agent
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      TAKOSUMI_AGENT_TOKEN: ${TAKOSUMI_AGENT_TOKEN:?set TAKOSUMI_AGENT_TOKEN in .env}
+      TAKOSUMI_AGENT_PORT: "8789"
+      TAKOSUMI_S3_ENDPOINT: http://minio:9000
+      TAKOSUMI_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-takosumi}
+      TAKOSUMI_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    expose:
+      - "8789"
+    volumes:
+      # The selfhost connector shells out to docker / docker compose
+      # to manage user-deployed services. Mount the host docker socket
+      # so the runtime-agent can drive it.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - kernel
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.example:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres-data:
+  minio-data:
+  caddy-data:
+  caddy-config:

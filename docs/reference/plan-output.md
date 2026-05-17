@@ -2,14 +2,14 @@
 
 > このページでわかること: deploy plan の出力形式と読み方。
 
-本ページは、`takosumi plan` と `POST /v1/deployments` の `mode: "plan"` が返す
+本ページは、 `takosumi plan` と `POST /v1/deployments` の `mode: "plan"` が返す
 **current public** な plan response を定義する。
 
 current の public plan path は apply と同じ Shape + Provider 検証と reference
-DAG 解決を使うが、それを dry-run モードで実行する。public DesiredSnapshot
-digest、OperationPlan digest、WAL idempotency tuple preview を含む決定的な
-`operationPlanPreview` を返す。WAL を書き込まず、完全な内部 Risk / Approval
-ドキュメントもまだ公開しない。
+DAG 解決を使う。 ただしそれを dry-run モードで実行する。 public
+DesiredSnapshot digest、 OperationPlan digest、 WAL idempotency tuple preview を
+含む決定的な `operationPlanPreview` を返す。 WAL を書き込まず、 完全な内部
+Risk / Approval ドキュメントもまだ公開しない。
 
 ## Request
 
@@ -28,8 +28,7 @@ Remote `takosumi plan <manifest>` posts the same deploy public envelope as
 }
 ```
 
-manifest envelope と template / resource 検証ルールは `mode: "apply"` と同じ
-である。
+manifest envelope と template / resource 検証ルールは `mode: "apply"` と同じ。
 
 ## Success Shape
 
@@ -89,11 +88,11 @@ interface OperationPlanPreviewOperation {
 }
 ```
 
-`planned[]` is ordered by the reference DAG, so a producer resource appears
-before a consumer that references its outputs. `op` is currently always
-`"create"`; update / replace / no-op diffing is not exposed by the public plan
-surface yet. `operationPlanPreview.operations[]` uses the same DAG order and
-adds deterministic per-operation digests and WAL tuple keys.
+`planned[]` は reference DAG の順序を持つ。 producer resource は output を参照
+する consumer の前に並ぶ。 `op` は現状常に `"create"`。 update / replace / no-op
+diff は public plan surface でまだ公開していない。
+`operationPlanPreview.operations[]` も同じ DAG 順で、 さらに operation 単位の
+決定的 digest と WAL tuple key を持つ。
 
 Example:
 
@@ -167,8 +166,8 @@ interface ManifestIssue {
 }
 ```
 
-Malformed request bodies and envelope-level errors may instead use the common
-API error envelope documented in [Kernel HTTP API](/reference/kernel-http-api).
+不正な request body や envelope レベルの error は、 共通の API error envelope
+([Kernel HTTP API](/reference/kernel-http-api) 参照) を返すことがある。
 
 ## Side-Effect Boundary
 
@@ -190,16 +189,16 @@ It does perform the same structural checks that apply needs before side effects:
 
 ## CLI Rendering
 
-Remote `takosumi plan` prints the kernel response body as formatted JSON. Local
-`takosumi plan` runs the same dry-run apply pipeline in process and prints the
-same `{ status, outcome }` envelope. There is no current global `--json`,
-`--space`, or `--fixed-clock` flag for plan.
+Remote `takosumi plan` は kernel response body を整形済 JSON で表示する。 Local
+`takosumi plan` は in-process で同じ dry-run apply pipeline を走らせ、 同じ
+`{ status, outcome }` envelope を表示する。 plan に対する current の global
+`--json` / `--space` / `--fixed-clock` flag は無い。
 
 ## Internal-Only OperationPlan Fields
 
-public な `operationPlanPreview` は決定的な preview であって、実行 authority
-ではない。次のフィールドは依然として内部 OperationPlan / WAL アーキテクチャ
-モデルに属し、current public plan の出力には **含まれない**。
+public な `operationPlanPreview` は決定的な preview であって、 実行 authority
+ではない。 次のフィールドは依然として内部 OperationPlan / WAL アーキテクチャ
+モデルに属し、 current public plan の出力には **含まれない**。
 
 ```text
 predictedActualEffectsDigest
@@ -210,8 +209,8 @@ actualEffects[]
 journalCursor
 ```
 
-When these fields become public, this reference must be updated together with
-route tests, OpenAPI, CLI rendering tests, and migration notes.
+これらを public 化する際は、 本リファレンスを route test、 OpenAPI、 CLI
+rendering test、 migration note と同じ change set で更新する。
 
 ## Related architecture notes
 

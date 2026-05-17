@@ -24,6 +24,7 @@ import {
   type RevokeDebtStore,
 } from "../domains/deploy/revoke_debt_store.ts";
 import { log } from "../shared/log.ts";
+import { currentRuntime } from "../shared/runtime/index.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
 import { executeDeployPublicPost } from "./deploy_public_apply_handler.ts";
 import {
@@ -97,7 +98,7 @@ export function registerDeployPublicRoutes(
 ): void {
   registerApiErrorHandler(app);
   const getToken = options.getDeployToken ??
-    (() => Deno.env.get("TAKOSUMI_DEPLOY_TOKEN"));
+    (() => currentRuntime().env.get("TAKOSUMI_DEPLOY_TOKEN"));
   const initialToken = getToken();
   if (!initialToken) {
     log.warn("kernel.api.deploy_public_disabled_no_token", {

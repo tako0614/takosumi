@@ -1,0 +1,20 @@
+# Cloudflare Pages project configuration for the takosumi.com landing site.
+#
+# The build is trivial: `site:build` copies static assets into `dist/`.
+# Cloudflare Pages serves them on the apex `takosumi.com` (and
+# `www.takosumi.com` if attached). Custom domains are wired via the
+# Cloudflare Pages dashboard — `wrangler pages` does not own DNS.
+#
+# Operator-side prerequisites (not committed):
+#   - Cloudflare account with `takosumi.com` zone added
+#   - Pages project named `takosumi-site` (created via dashboard or
+#     `wrangler pages project create takosumi-site`)
+#   - Custom domains `takosumi.com` and `www.takosumi.com` attached
+#     to the Pages project
+#
+# Once active, the site is reachable at https://takosumi.com/. The
+# default `takosumi-site.pages.dev` host stays available for preview
+# deploys.
+name = "takosumi-site"
+compatibility_date = "2026-05-15"
+pages_build_output_dir = "./dist"

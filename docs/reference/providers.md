@@ -2,37 +2,21 @@
 
 > このページでわかること: bundled provider plugin の一覧と対応 shape。
 
-A **provider plugin** is the v1 unit that materializes a
-[Shape](/reference/shapes) on a concrete cloud or local backend. Each plugin
-declares the shape it implements, the capability vocabulary it supports, and the
-apply / destroy / status lifecycle that the kernel calls during an OperationPlan
-execution.
+**provider plugin** は v1 単位で [Shape](/reference/shapes) を具体的な cloud / local backend 上に materialize する。 各 plugin は実装する shape、サポートする capability vocabulary、 kernel が OperationPlan 実行中に呼ぶ apply / destroy / status lifecycle を宣言する。
 
-Takosumi ships **21 provider plugins** out of the box: 20 are wired by default
-and 1 (`@takos/deno-deploy`) is opt-in. Plugins are paper-thin lifecycle
-clients; all credentials, cloud SDK code, and side effects live behind the
-**runtime-agent**, identified at the manifest layer as `connector:<id>`.
-Operators install and control connectors on the agent, so they own which
-provider is reachable from a given deployment (operator-installed /
-operator-controlled intentionally).
+Takosumi は out of the box で **21 個の provider plugin** を ship する。 20 は default で配線され、1 個 (`@takos/deno-deploy`) は opt-in。 plugin は paper-thin な lifecycle client であり、 credential、cloud SDK code、副作用はすべて **runtime-agent** の背後に住む。 manifest 層では `connector:<id>` として識別する。 operator が agent 上で connector を install / control するため、 ある deployment から到達可能な provider は operator が所有する (operator-installed / operator-controlled は意図的)。
 
 Source roots:
 
-- `packages/contract/src/provider-plugin.ts` — the public `ProviderPlugin`
-  contract and the `registerProvider` registry.
-- `packages/plugins/src/shape-providers/<shape>/<provider>.ts` — individual
-  plugins.
-- `packages/plugins/src/shape-providers/factories.ts` — production wiring,
-  exposed as `createTakosumiProductionProviders(opts)`.
+- `packages/contract/src/provider-plugin.ts` — public `ProviderPlugin` contract と `registerProvider` registry。
+- `packages/plugins/src/shape-providers/<shape>/<provider>.ts` — 個別 plugin。
+- `packages/plugins/src/shape-providers/factories.ts` — production wiring、 `createTakosumiProductionProviders(opts)` として exposed。
 
 ## Capability vocabulary: open string + reserved prefix
 
-capability は **open string** である。provider は `capabilities` 配列に任意の
-kebab-case 識別子を宣言でき、manifest は任意の識別子を `requires` で参照できる。
-選択は subset の所属だけをチェックする: provider が選択可能なのは
-`requires ⊆ capabilities` の場合に限る。
+capability は **open string**。 provider は `capabilities` 配列に任意の kebab-case 識別子を宣言でき、 manifest は任意の識別子を `requires` で参照できる。 selection は subset 所属だけをチェックする: provider が selectable なのは `requires ⊆ capabilities` の場合に限る。
 
-To keep the global vocabulary coherent, three prefixes are **reserved**:
+global vocabulary を一貫させるため、3 prefix が **reserved**。
 
 | Prefix       | Owner                                                                                                            |
 | ------------ | ---------------------------------------------------------------------------------------------------------------- |
@@ -40,19 +24,11 @@ To keep the global vocabulary coherent, three prefixes are **reserved**:
 | `system.*`   | Takosumi kernel / runtime-agent / observation tier                                                               |
 | `operator.*` | Operator-defined deployment-local capabilities                                                                   |
 
-A bare identifier (no `.`) is a **general capability** that any provider may
-declare. Adding a new reserved prefix is governed by `CONVENTIONS.md` §6 RFC and
-requires kernel coordination. Within the existing reserved prefixes, adding a
-new identifier under `takos.*` or `system.*` also goes through the §6 RFC;
-`operator.*` is free for the operator to define within their own deployment.
+bare identifier (no `.`) は任意 provider が宣言できる **general capability**。 新 reserved prefix の追加は `CONVENTIONS.md` §6 RFC で governed され、 kernel coordination を要する。 既存 reserved prefix 内では、 `takos.*` / `system.*` 下の識別子追加も §6 RFC を通る。 `operator.*` は自 deployment 内で operator が自由に定義できる。
 
 ## Bundled provider catalog
 
-同梱されている 21 個の provider をクラウド別にグルーピング。Shape と capability
-集合は `packages/plugins/src/shape-providers/factories.ts` と完全に一致する。
-**extension policy** 列は、サードパーティが標準の provider PR フローで
-capability を追加してよいか (extensible)、あるいは in-tree provider 内で
-capability 集合が 閉じているか (closed-within-provider) を示す。
+同梱されている 21 個の provider をクラウド別にグルーピング。 すべて `@takos/<cloud>-*` 形式の id を持つ。 shape と capability 集合は `packages/plugins/src/shape-providers/factories.ts` と完全に一致する。 **extension policy** 列は、サードパーティが標準の provider PR フローで capability を追加してよいか (extensible)、 あるいは in-tree provider 内で capability 集合が閉じているか (closed-within-provider) を示す。
 
 ### AWS
 
@@ -112,38 +88,20 @@ capability 集合が 閉じているか (closed-within-provider) を示す。
 
 ## Selection rule
 
-For each manifest resource, the kernel picks the plugin whose `id` matches
-`provider:` (when set) and whose `capabilities` is a superset of `requires`. A
-request that names a provider whose declared set does not satisfy `requires` is
-rejected at validation time, before any apply lifecycle runs.
+manifest resource ごとに、kernel は `id` が `provider:` に一致 (set されているとき) し、 かつ `capabilities` が `requires` の superset である plugin を選ぶ。 宣言集合が `requires` を満たさない provider を指名する request は、 apply lifecycle が走る前の validation 時点で reject される。
 
 ## Deno Deploy opt-in flow
 
-`@takos/deno-deploy` is excluded from the default factory output. Bringing it
-online is a two-step opt-in.
+`@takos/deno-deploy` は default factory output から除外されている。 online 化は 2 ステップ。
 
-1. **Register the connector on the runtime-agent.** On the agent host set
-   `TAKOSUMI_AGENT_DENO_DEPLOY_TOKEN` (and optional
-   `TAKOSUMI_AGENT_DENO_DEPLOY_ORG`, `TAKOSUMI_AGENT_DENO_DEPLOY_PROJECT`) so
-   the agent's `ConnectorBootOptions` resolves a Deno Deploy connector at
-   startup. The credential is held by the agent only; the kernel never sees the
-   token.
-2. **Enable the kernel-side wrapper.** Pass `enableDenoDeploy: true` to
-   `createTakosumiProductionProviders(opts)`. The wrapper plugin is then
-   registered against `worker@v1` and selectable from manifests.
+1. **runtime-agent に connector を register**。 agent host で `TAKOSUMI_AGENT_DENO_DEPLOY_TOKEN` (および optional `TAKOSUMI_AGENT_DENO_DEPLOY_ORG`、`TAKOSUMI_AGENT_DENO_DEPLOY_PROJECT`) を set して、 agent の `ConnectorBootOptions` が起動時に Deno Deploy connector を resolve するようにする。 credential は agent だけが保持し、kernel は token を見ない。
+2. **kernel 側 wrapper を有効化**。 `createTakosumiProductionProviders(opts)` に `enableDenoDeploy: true` を渡す。 wrapper plugin は `worker@v1` に対して register され、 manifest から selectable になる。
 
-Verify the chain by issuing a `worker@v1` apply with
-`provider:
-"@takos/deno-deploy"`. The kernel records the apply lifecycle
-envelope, the agent forwards to the Deno Deploy API using the injected token,
-and the returned `WorkerOutputs` (`url`, `scriptName`, optional `version`) flow
-back through the apply result.
+検証は `provider: "@takos/deno-deploy"` の `worker@v1` apply を発行する。 kernel は apply lifecycle envelope を記録し、 agent は inject された token を使って Deno Deploy API に forward し、 返ってきた `WorkerOutputs` (`url`、`scriptName`、optional `version`) が apply result を通って戻る。
 
 ## Public API surface
 
-`registerProvider` エントリポイント (source は
-`packages/contract/src/provider-plugin.ts`) は、in-process registry に plugin を
-インストールする v1 の方法である。
+`registerProvider` エントリポイント (source は `packages/contract/src/provider-plugin.ts`) は、 in-process registry に plugin を install する v1 の方法。
 
 ```ts
 function registerProvider(
@@ -170,30 +128,15 @@ interface ProviderPlugin<Spec, Outputs, Capability extends string = string> {
 }
 ```
 
-Required fields: `id`, `version`, `implements`, `capabilities`, `apply`,
-`destroy`, `status`. `validate` is optional. `registerProvider` returns the
-prior registration when the same `id` is replaced; passing
-`{ allowOverride: true }` suppresses the collision warning. The
-`PlatformContext` carries the tenant-scoped secret store, KMS port, object
-storage port, observability sink, and the resolved-output map used by
-`${ref:...}` resolution.
+Required fields: `id`、`version`、`implements`、`capabilities`、`apply`、`destroy`、`status`。 `validate` は optional。 `registerProvider` は同じ `id` が置き換えられた場合に直前の登録を返す。 `{ allowOverride: true }` を渡すと collision warning が抑制される。 `PlatformContext` は tenant-scoped secret store、KMS port、object storage port、observability sink、 `${ref:...}` resolution で使われる resolved-output map を運ぶ。
 
 ## Cross-references
 
-- [Access Modes](/reference/access-modes) — closed v1 access mode enum (`read` /
-  `read-write` / `admin` / `invoke-only` / `observe-only`) governing how
-  provider-managed objects expose themselves to consumers.
-- [Artifact Kinds](/reference/artifact-kinds) — bundled DataAsset kinds
-  (`oci-image` / `js-bundle` / `lambda-zip` / `static-bundle` / `wasm`) and the
-  registry that providers receive at apply time.
-- [Connector Contract](/reference/connector-contract) — operator-installed
-  connector identity (`connector:<id>`), accepted-kind vector, Space visibility,
-  signing expectations, and envelope versioning that providers consume.
-- [Closed Enums](/reference/closed-enums) — object lifecycle classes and the
-  closed enums providers must respect when emitting outputs.
-- `CONVENTIONS.md` §6 RFC (at the takosumi repo root) — process for proposing
-  new reserved capability prefixes and for changes to the shape-level capability
-  union.
+- [Access Modes](/reference/access-modes) — provider 管理 object が consumer に自身を expose する仕方を支配する closed v1 access mode enum (`read` / `read-write` / `admin` / `invoke-only` / `observe-only`)。
+- [Artifact Kinds](/reference/artifact-kinds) — bundled DataAsset kinds (`oci-image` / `js-bundle` / `lambda-zip` / `static-bundle` / `wasm`) と provider が apply 時に受け取る registry。
+- [Connector Contract](/reference/connector-contract) — operator-installed connector identity (`connector:<id>`)、accepted-kind vector、Space visibility、signing expectations、provider が consume する envelope versioning。
+- [Closed Enums](/reference/closed-enums) — object lifecycle class と provider が output 発行時に尊重すべき closed enum。
+- `CONVENTIONS.md` §6 RFC (takosumi repo root) — 新 reserved capability prefix の提案プロセス、 shape-level capability union への変更プロセス。
 
 ## 関連ページ
 

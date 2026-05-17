@@ -4,6 +4,7 @@ import type {
   OperatorConfigPort,
   OperatorConfigSecretRef,
 } from "./types.ts";
+import { currentRuntime } from "../../shared/runtime/index.ts";
 
 export interface EnvOperatorConfigOptions {
   readonly env?: Record<string, string | undefined>;
@@ -26,7 +27,7 @@ export class EnvOperatorConfig extends LocalOperatorConfig
 function readEnvValues(
   options: EnvOperatorConfigOptions,
 ): Record<string, LocalOperatorConfigInputValue> {
-  const env = options.env ?? Deno.env.toObject();
+  const env = options.env ?? currentRuntime().env.toObject();
   const include = options.include ?? Object.keys(env).sort();
   const secretRefKeys = new Set(options.secretRefKeys ?? []);
   const values: Record<string, LocalOperatorConfigInputValue> = {};

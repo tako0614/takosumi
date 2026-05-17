@@ -1,11 +1,6 @@
 # Manifest Expand Semantics
 
-> このページでわかること: manifest の expand (参照解決) セマンティクス。
-
-本ページは manifest 内 `${ref:...}` 解決の v1 contract である: 文法、解決
-タイミング、解決順序、循環検出、未解決 ref 規則、コンポーネント間スコープ
-規則、Space 間参照の現状の拒否、template との相互作用、リテラル値と参照値の
-区別、エスケープ規則、bind 時の型強制規則を定める。
+> このページでわかること: manifest 内 `${ref:...}` 解決の v1 contract。 文法 / 解決タイミング / 循環検出 / 型強制までを定める。
 
 ## Grammar
 
@@ -94,8 +89,7 @@ Three failure modes exist for an otherwise-well-formed reference.
   replayed, not rejected; the apply pipeline drives the producing resource
   through its WAL stages before re-attempting the consumer.
 
-最初の 2 つは静的 manifest エラーで、operator に同期的に surface する。3 つ目 は
-kernel が operator に代わって解決する動的依存である。
+最初の 2 つは静的 manifest エラーで、operator に同期的に surface する。 3 つ目は kernel が operator に代わって解決する動的依存である。
 
 ## Cross-component references
 

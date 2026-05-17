@@ -31,6 +31,9 @@
     "types": ["node"]
   },
   "lint": {
+    "exclude": [
+      "site/dist"
+    ],
     "rules": {
       "exclude": [
         "no-import-prefix",
@@ -53,13 +56,18 @@
     "docs:install": "cd docs && npm install",
     "docs:dev": "cd docs && npx vitepress dev",
     "docs:build": "cd docs && npx vitepress build",
-    "docs:preview": "cd docs && npx vitepress preview"
+    "docs:preview": "cd docs && npx vitepress preview",
+    "docs:deploy": "cd docs && npx vitepress build && npx wrangler pages deploy .vitepress/dist --project-name=takosumi-docs",
+    "site:build": "bash site/build.sh",
+    "site:preview": "bash site/build.sh && npx wrangler pages dev site/dist --port 8788",
+    "site:deploy": "bash site/build.sh && npx wrangler pages deploy site/dist --project-name=takosumi-site"
   },
   "fmt": {
     "exclude": [
       "docs/.vitepress/cache",
       "docs/.vitepress/dist",
-      "docs/node_modules"
+      "docs/node_modules",
+      "site/dist"
     ]
   }
 }

@@ -1,12 +1,8 @@
 # Extending the Shape Model
 
-> このページでわかること: 新しい Shape / Provider plugin / Template
-> を追加する手順。
+> このページでわかること: 新しい Shape / Provider plugin / Template を追加する手順。
 
-このページは provider plugin / Shape / Template を **追加・拡張** する手順を
-日本語でまとめたものです。命名規則と最小コミットメントの詳細は
-[`takosumi/CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md)
-を参照してください。
+命名規則と最小コミットメントの詳細は [`takosumi/CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md) (canonical) 参照。
 
 ## 拡張の選び方
 
@@ -16,14 +12,11 @@
 | 既存 Shape の組み合わせで定型構成を作りたい               | [§ template を追加する](#新-template-の追加)     | 不要     |
 | 既存 Shape では足りない new portable resource type を作る | [§ Shape を RFC する](#新しい-shape-を-rfc-する) | 必要     |
 
-> **大原則**: Shape catalog は **Takosumi** が curate する (kernel が known
-> shape として扱える contract を維持するため)。第三者は **provider** か
-> **template** を増やす。Shape を増やす場合は ecosystem RFC が必要。
+Shape catalog は Takosumi が curate する (kernel が known shape として扱える contract を維持するため)。 第三者は provider か template を増やす。 Shape を増やす場合は ecosystem RFC が必要。
 
 ## 新 provider の追加
 
-新しいクラウド / ランタイムで既存 Shape を動かす場合のフロー (`CONVENTIONS.md`
-§4 と同期)。
+新しいクラウド / ランタイムで既存 Shape を動かす場合のフロー (`CONVENTIONS.md` §4 と同期)。
 
 ### 1. ファイルを作る
 
@@ -31,16 +24,11 @@
 packages/plugins/src/shape-providers/<shape-id>/<provider-id>.ts
 ```
 
-例: `web-service@v1` の Hetzner Cloud 実装なら
-`packages/plugins/src/shape-providers/web-service/hetzner-cloud.ts`。
+例: `web-service@v1` の Hetzner Cloud 実装なら `packages/plugins/src/shape-providers/web-service/hetzner-cloud.ts`。
 
 ### 2. ProviderPlugin factory を export する
 
-既存の
-[`object-store/aws-s3.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/object-store/aws-s3.ts)
-や
-[`web-service/gcp-cloud-run.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/web-service/gcp-cloud-run.ts)
-をテンプレに `ProviderPlugin<TSpec, TOutputs>` を返す factory を書きます。
+既存の [`object-store/aws-s3.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/object-store/aws-s3.ts) や [`web-service/gcp-cloud-run.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/web-service/gcp-cloud-run.ts) をテンプレに `ProviderPlugin<TSpec, TOutputs>` を返す factory を書く。
 
 ```ts
 import type { ProviderPlugin } from "takosumi-contract";
@@ -68,11 +56,7 @@ export function createHetznerCloudWebServiceProvider(
 
 ### 3. Lifecycle client interface を同居させる
 
-provider は **credential を直接持ちません**。同じファイル内で
-`<Provider>LifecycleClient` interface を declare
-し、`InMemory<Provider>Lifecycle` クラスをテスト用に export します。production
-の lifecycle 配線は [§ factories.ts](#factories-ts-に-production-配線を追加)
-で行います。
+provider は credential を直接持たない。 同じファイル内で `<Provider>LifecycleClient` interface を declare し、 `InMemory<Provider>Lifecycle` クラスをテスト用に export する。 production の lifecycle 配線は [§ factories.ts](#factories-ts-に-production-配線を追加) で行う。
 
 ### 4. Naming convention
 
@@ -106,11 +90,11 @@ export {
 
 `tests/shape_provider_hetzner_cloud_test.ts` に最低 3 ケース:
 
-1. `apply` が outputs を返し、`outputFields` を満たすこと。
+1. `apply` が outputs を返し、 `outputFields` を満たすこと。
 2. `status` が apply 直後に `kind: "ready"` を返すこと。
 3. `destroy` 後の `status` が `kind: "deleted"` を返すこと。
 
-`InMemory<Provider>Lifecycle` を inject して動かします。
+`InMemory<Provider>Lifecycle` を inject して動かす。
 
 ### 7. `factories.ts` に production 配線を追加 {#factories-ts-に-production-配線を追加}
 
@@ -127,18 +111,13 @@ if (opts.hetzner) {
 }
 ```
 
-`GatewayHetznerCloudLifecycle` は `JsonGateway` を使う thin HTTP adapter で、
-operator gateway 経由で Hetzner Cloud API を呼びます。
+`GatewayHetznerCloudLifecycle` は `JsonGateway` を使う thin HTTP adapter で、 operator gateway 経由で Hetzner Cloud API を呼ぶ。
 
-cf.
-[Operator Bootstrap § Gateway URL pattern](/operator/bootstrap#gateway-url-pattern)
+cf. [Operator Bootstrap § Gateway URL pattern](/operator/bootstrap#gateway-url-pattern)
 
 ## compiler template の追加
 
-template は **既存 Shape / Provider の合成** だけで作れます。新 Shape を
-増やしません。これは kernel `POST /v1/deployments` の入力ではなく、installer /
-compiler layer が deploy 前に `resources[]` へ展開するための authoring helper
-です。
+template は既存 Shape / Provider の合成だけで作れる (新 Shape は増やさない)。 これは kernel `POST /v1/deployments` の入力ではなく、 installer / compiler layer が deploy 前に `resources[]` へ展開するための authoring helper。
 
 ### 1. ファイルを作る
 
@@ -176,9 +155,8 @@ export const SelfhostedK3sClusterTemplate: Template<SelfhostedK3sClusterInputs> 
 
 ### 3. Naming convention
 
-- id: kebab-case、`<deployment-style>-<environment>` 形式が推奨
-  (`selfhosted-single-vm`, `web-app-on-cloudflare`)。
-- version: `vN`。breaking change で increment。
+- id: kebab-case、 `<deployment-style>-<environment>` 形式が推奨 (`selfhosted-single-vm`, `web-app-on-cloudflare`)。
+- version: `vN`。 breaking change で increment。
 
 ### 4. mod.ts に export
 
@@ -189,38 +167,26 @@ export { SelfhostedK3sClusterTemplate } from "./selfhosted-k3s-cluster.ts";
 
 ### 5. compiler registry へ register
 
-installer / compiler process で `registerTemplate(SelfhostedK3sClusterTemplate)`
-を呼ぶか、bundled template として `mod.ts` 一括 register に追加します。kernel
-boot path では template を register しません。
+installer / compiler process で `registerTemplate(SelfhostedK3sClusterTemplate)` を呼ぶか、 bundled template として `mod.ts` 一括 register に追加する。 kernel boot path では template を register しない。
 
 ### 6. 既存 docs を更新
 
-[Templates](/reference/templates) ページの bundled list に新 template を
-追記してください。
+[Templates](/reference/templates) ページの bundled list に新 template を追記する。
 
 ## 新しい Shape を RFC する
 
-新しい portable resource type を追加する場合は **ecosystem RFC** が必要です
-(`CONVENTIONS.md` §6)。
+新しい portable resource type を追加する場合は **ecosystem RFC** が必要 (`CONVENTIONS.md` §6)。
 
 ### Process
 
-1. **Issue を立てる** — github issue で motivating use case と既存 Shape では
-   足りない理由を提示。
-2. **Spec / Outputs / Capability 型を書く** — `src/shapes/<shape-id>.ts` に
-   `Shape<Spec, Outputs, Capability>` 実装 (`validateSpec` / `validateOutputs`
-   含む)。
+1. **Issue を立てる** — github issue で motivating use case と既存 Shape では足りない理由を提示。
+2. **Spec / Outputs / Capability 型を書く** — `src/shapes/<shape-id>.ts` に `Shape<Spec, Outputs, Capability>` 実装 (`validateSpec` / `validateOutputs` 含む)。
 3. **TAKOSUMI_BUNDLED_SHAPES に追加** — `src/shapes/mod.ts` に登録。
-4. **≥ 2 provider を実装** — portability 不変式: 1 shape = 最低 2 provider。 1
-   つの cloud に縛られた Shape は portable とは呼ばないため reject されます。
-5. **テスト** — `tests/shape_<shape-id>_test.ts` (validateSpec の境界ケース) と
-   `tests/shape_provider_<provider>_test.ts` を整備。
+4. **≥ 2 provider を実装** — portability 不変式: 1 shape = 最低 2 provider。 1 つの cloud に縛られた Shape は portable とは呼ばないため reject される。
+5. **テスト** — `tests/shape_<shape-id>_test.ts` (validateSpec の境界ケース) と `tests/shape_provider_<provider>_test.ts` を整備。
 6. **CONVENTIONS.md §1 表を更新**。
-7. **docs を更新** — [Shape Catalog](/reference/shapes) に解説 section
-   を追加し、 [Provider Plugins](/reference/providers) に 2 つ以上の provider
-   を追記。
-8. **upstream contract 影響範囲を PR description に記載** — `takosumi-contract`
-   側 API 変更が必要な場合は coordination を明示。
+7. **docs を更新** — [Shape Catalog](/reference/shapes) に解説 section を追加し、 [Provider Plugins](/reference/providers) に 2 つ以上の provider を追記。
+8. **upstream contract 影響範囲を PR description に記載** — `takosumi-contract` 側 API 変更が必要な場合は coordination を明示。
 
 ### Naming convention
 
@@ -232,8 +198,7 @@ boot path では template を register しません。
 
 ### Output schema convention
 
-複数 provider が同じ output shape を返すために、field 名と型は shape 全体で
-揃えます (`CONVENTIONS.md` §3 表):
+複数 provider が同じ output shape を返すために、 field 名と型は shape 全体で揃える (`CONVENTIONS.md` §3 表):
 
 | Suffix / form        | 用途                                       |
 | -------------------- | ------------------------------------------ |
@@ -244,23 +209,13 @@ boot path では template を register しません。
 | `internalPort`       | numeric port                               |
 | `bucket`, `database` | non-secret identifier                      |
 
-secret の raw value は **絶対に返しません**。`*Ref` field に
-`secret://<provider>/<scope>/<key>` を入れ、kernel 側 secret-store adapter が
-解決します。
+secret の raw value は絶対に返さない。 `*Ref` field に `secret://<provider>/<scope>/<key>` を入れ、 kernel 側 secret-store adapter が解決する。
 
 ## Workflow / cron / hook が必要な場合
 
-GitHub Actions に相当する workflow / cron / lifecycle hook 機能は current kernel
-extension path ではありません。kernel は trigger / execute-step /
-declarable-hook 等の workflow primitive を一切ホストしません。Git push / webhook
-/ build / schedule / deployment hook は `takosumi-git`、外部 CI、または
-operator-owned product が処理し、kernel には compiled Shape manifest だけを
-`POST /v1/deployments` で渡します。
+GitHub Actions に相当する workflow / cron / lifecycle hook 機能は current kernel extension path に存在しない。 kernel は trigger / execute-step / declarable-hook 等の workflow primitive を一切ホストしない。
 
-current v1 では、`cron-job@v1` / `workflow-job@v1` / `pre-apply-hook@v1` /
-`post-activate-hook@v1` のような shape を通常の `resources[]` として publish
-することも current extension recipe では ありません。これらは将来 RFC 用の
-reserved vocabulary として扱います。
+current v1 では、 `cron-job@v1` / `workflow-job@v1` / `pre-apply-hook@v1` / `post-activate-hook@v1` のような shape を `resources[]` として publish することも current extension recipe ではない。 これらは将来 RFC 用の reserved vocabulary。
 
 必要な場合の current placement:
 
@@ -271,12 +226,7 @@ reserved vocabulary として扱います。
 | deployment pre/post automation | upstream workflow before compiled manifest deploy  |
 | multi-step pipeline            | upstream workflow that emits one compiled manifest |
 
-kernel 側で追加できるのは desired-state resource shape と provider plugin
-までです。template expansion は installer/compiler layer、workflow runner や
-scheduler は above-kernel product の責務です。これらを kernel catalog extension
-として足さないでください。詳細は
-[Workflow Extension Design](/reference/architecture/workflow-extension-design)
-を参照。
+kernel 側で追加できるのは desired-state resource shape と provider plugin まで。 template expansion は installer/compiler layer、 workflow runner や scheduler は above-kernel product の責務。 詳細は [Workflow Extension Design](/reference/architecture/workflow-extension-design) 参照。
 
 ## 関連ページ
 
@@ -285,13 +235,8 @@ scheduler は above-kernel product の責務です。これらを kernel catalog
 - [Provider Plugins](/reference/providers)
 - [Templates](/reference/templates)
 - [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
-  — workflow / trigger / hook / execute-step を kernel から外し上位 product
-  へ寄せる設計 rationale
-- [Catalog Release Trust](/reference/catalog-release-trust) — publisher key /
-  signature chain
-- [Connector Contract](/reference/connector-contract) — connector identity /
-  acceptedKinds
+- [Catalog Release Trust](/reference/catalog-release-trust) — publisher key / signature chain
+- [Connector Contract](/reference/connector-contract) — connector identity / acceptedKinds
 - [Manifest](/manifest)
 - [Operator Bootstrap](/operator/bootstrap)
-- [`CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md)
-  (canonical)
+- [`CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md) (canonical)

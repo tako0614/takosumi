@@ -1,22 +1,19 @@
 # GroupHead Rollout
 
-> このページでわかること: GroupHead のロールアウト戦略と pointer move の仕様。
+> このページでわかること: GroupHead pointer / rollout state machine / canary
+> / shadow / audit event。
 
-GroupHead は Takosumi v1 で「ある group に対して現在 traffic が流れている
-deployment / activation」を pin する mutable pointer です。本 reference では
-GroupHead の identity、record schema、closed rollout state machine、各 state
-の意味と transition 条件、canary / shadow 規則、シリアライズ要件、audit event
-を固定します。
+GroupHead は「ある group に現在 traffic が流れている deployment / activation」
+を pin する mutable pointer。 pointer の前進 / 巻き戻しが rollout 本体です。
 
 ## Identity
 
-GroupHead の identity は `(spaceId, groupId)` の tuple で、Space-local です。
+identity は `(spaceId, groupId)` の tuple で Space-local。
 
-- `groupId` は同一 Space 内で一意。
-- 異なる Space に同じ `groupId` が存在することはあるが、それぞれは別 GroupHead
-  であり、cross-Space pointer 共有は起きない。
-- GroupHead は deployment / activation そのものではなく、それらを指す pointer
-  であり、pointer の前進 / 巻き戻しが「rollout」の本体になる。
+- `groupId` は同 Space 内で unique
+- 異 Space に同じ `groupId` があっても別 GroupHead で、 cross-Space pointer
+  共有は起きない
+- GroupHead は deployment / activation 自体ではなく pointer
 
 ## GroupHead record schema
 
@@ -31,13 +28,12 @@ GroupHead:
 ```
 
 `currentDeploymentId` / `currentActivationSnapshotId` は同時に更新されます。
-GroupHead pointer は ActivationSnapshot を介して Exposure / traffic 配分に
-反映され、これが「実際にユーザ traffic が向かう先」になります。
+pointer は ActivationSnapshot を介して Exposure / traffic 配分に反映され、
+ユーザ traffic の宛先になります。
 
 ## Rollout state machine (closed v1 enum, 7 値)
 
-`rolloutState` は閉じた 7 値 enum です。新 state 追加は `CONVENTIONS.md` §6 RFC
-を要します。
+新 state 追加は `CONVENTIONS.md` §6 RFC が必要です。
 
 ```text
 idle | preparing | canary-active | shadow-active
@@ -86,65 +82,60 @@ idle | preparing | canary-active | shadow-active
 | `rolling-back`  | 不可            | -                | 可           |
 | `rolled-back`   | 不可            | 不可             | 可           |
 
-新 rollout を開始できるのは `idle` のみで、他 state からの新規開始は拒否
-されます。多重 rollout の交差を防ぐためです。
+新 rollout を開始できるのは `idle` のみで、 多重 rollout 交差を防ぐため他
+state からの新規開始は拒否されます。
 
 ## Canary state
 
-canary では traffic split を closed な比率列で進めます。
+canary は traffic split を closed な比率列で進めます。
 
-- v1 default 比率は **5% → 25% → 100%** の 3 step です。policy pack で step 列を
-  override できますが、step 列は OperationPlan に焼き付き、 途中での比率 ad-hoc
-  編集は approval invalidation の effect-detail change trigger
-  を引きます。Rationale: 5% は典型的な production traffic 量で statistical
-  signal が観測可能、25% は実需要 traffic shape を経験させて saturation 系
-  regression を露出、100% は steady state 切り替え。3-step は operator review
-  burden を抑えつつ各 step で rollback opportunity を 保つ均衡点。
-- 各 step の昇格は readiness probe / observe 結果が pass したときのみ進み
-  ます。pass 条件は kernel が固定し、provider plugin は独自に override
-  できません。
-- candidate release が queue に新しい DataContract を出す一方で preview 先の
-  consumer が primary release のまま古い contract しか受理しない場合、event
-  subscription switch preview は `queue_data_contract_mismatch_requires_policy`
-  で `blocked` になります。 operator policy が明示的に allow した mismatch
-  だけがこの block を解除 できます。
-- canary 失敗時は **`rolling-back` に遷移**し、compensate operation を経由して
-  previous pointer に戻します。途中段階で停止する「canary を保ったまま hold」 は
-  v1 では state として持ちません。`canary-active` に留まったまま operator
-  が判断するか、`rolling-back` に進むかの 2 択です。
+- v1 default 比率は **5% → 25% → 100%** の 3 step。 policy pack で step 列を
+  override できますが、 step 列は OperationPlan に焼き付くため途中での ad-hoc
+  比率編集は approval invalidation の effect-detail change trigger を引きます。
+- 各 step 昇格は readiness probe / observe 結果が pass したときのみ進みます。
+  pass 条件は kernel が固定し provider plugin は override 不可。
+- candidate release が queue に新 DataContract を出し、 preview 先 consumer が
+  primary release のまま古い contract しか受理しない場合、 event subscription
+  switch preview は `queue_data_contract_mismatch_requires_policy` で
+  `blocked`。 operator policy が明示的 allow した mismatch のみ解除可。
+- canary 失敗時は `rolling-back` に遷移し compensate operation 経由で previous
+  pointer に戻します。 「canary を保ったまま hold」 は v1 では state として持
+  たず、 `canary-active` に留まるか `rolling-back` に進むかの 2 択。
+
+> Rationale: 5% は statistical signal が観測可能な production traffic 量、 25%
+> は実需要 traffic shape で saturation 系 regression を露出、 100% は steady
+> state 切替。 3-step は operator review burden と rollback opportunity の均衡
+> 点。
 
 ## Shadow state
 
-shadow では production traffic を新 deployment にも複製送付し、production
-側の挙動には影響しません。
+shadow は production traffic を新 deployment に複製送付しますが production 側
+挙動は変えません。
 
-- production への request / response は `currentActivationSnapshotId` の前
-  pointer (previous deployment) が処理し、結果は client に返ります。
-- shadow 先 (新 deployment) に同じ request を mirror します。mirror 結果は
-  ObservationSet に記録され、production 側の応答や副作用を変えません。
-- shadow 結果から drift が検出された場合は通常の
-  [Drift Detection](/reference/drift-detection) flow に乗ります。 drift severity
-  が `error` であれば operator gate で `rolling-back` に
-  遷移させる運用にします。
-- shadow rollout は副作用 surface を持つ manifest を受け付けません。
-  `outputs`、`queue` route、DB semantic write を含む shadow plan は
-  `shadow-side-effects:forbidden` で resolution 時に `deny` されます。 operator
-  approval では override できません。
-- shadow は read-side / invocation-side のいずれも mirror しますが、 shape
-  単位で mirror 適用範囲が異なる場合は OperationPlan が固定します。
+- production request / response は previous pointer (前 deployment) が処理し
+  client に返る
+- shadow 先 (新 deployment) に同 request を mirror。 結果は ObservationSet に
+  記録され、 production 側応答や副作用は変えない
+- drift 検出時は [Drift Detection](/reference/drift-detection) flow。 severity
+  `error` なら operator gate で `rolling-back` に遷移
+- shadow rollout は副作用 surface を持つ manifest を受け付けない。 `outputs` /
+  `queue` route / DB semantic write を含む shadow plan は
+  `shadow-side-effects:forbidden` で resolution 時に `deny` (operator approval
+  でも override 不可)
+- read-side / invocation-side いずれも mirror。 shape 単位で適用範囲が違う場
+  合は OperationPlan が固定
 
 ## GroupHead update のシリアライズ
 
-GroupHead pointer の前進 / 巻き戻し / state transition は同一
-`(spaceId,
-groupId)` で **直列化** されます。
+pointer 前進 / 巻き戻し / state transition は同 `(spaceId, groupId)` で直列化
+されます。
 
-- シリアライズは [Cross-Process Locks](/reference/cross-process-locks) の
-  `(spaceId, groupId)` key に従います。
-- 同 group に対する複数 OperationPlan の interleaving は許されません。 rollout
-  中の group には新 rollout を載せず、`idle` 確定後に開始します。
-- lock holder 異常終了時の TTL 失効・recovery 経路も
-  [Cross-Process Locks](/reference/cross-process-locks) の規則に従います。
+- 直列化は [Cross-Process Locks](/reference/cross-process-locks) の
+  `(spaceId, groupId)` key に従う
+- 同 group への複数 OperationPlan interleaving は不可。 rollout 中の group へ
+  は新 rollout を載せず `idle` 確定後に開始
+- lock holder 異常終了時の TTL 失効 / recovery 経路も
+  [Cross-Process Locks](/reference/cross-process-locks) の規則に従う
 
 ## Audit events
 
@@ -164,20 +155,19 @@ GroupHead 関連の audit event は以下を発行します
 
 ## v1 範囲外
 
-- **blue-green deploy** は v1 では独立 state として持ちません。代わりに
-  `canary-active` の最終 step (100% 切り替え) を replace-only mutation で
-  表現します。新 ActivationSnapshot に一気に切り替え、旧側は ObservationSet 上の
-  watcher として `observe` 経由で監視するだけに 留めます。
-- **複数 group の同時 coordinated rollout** は v1 範囲外。group 単位で
-  independent に rollout を進める運用が前提です。
+- blue-green deploy は独立 state として持ちません。 `canary-active` の最終
+  step (100% 切替) を replace-only mutation で表現し、 旧側は ObservationSet
+  上の watcher として `observe` 監視するだけに留めます。
+- 複数 group の同時 coordinated rollout は v1 範囲外。 group 単位で
+  independent に進めます。
 
 ## Risk との連携
 
-- `traffic-change` Risk は GroupHead pointer の前進 / canary 比率変更に 対して
-  `pre-commit` で発火する。詳細は [Risk Taxonomy](/reference/risk-taxonomy)
-  を参照。
-- `rollback-revalidation-required` Risk は `rolling-back` への遷移で compensate
-  path に乗るとき発火する。
+- `traffic-change`: pointer 前進 / canary 比率変更に対し `pre-commit` で発火
+- `rollback-revalidation-required`: `rolling-back` 遷移で compensate path に
+  乗るとき発火
+
+詳細は [Risk Taxonomy](/reference/risk-taxonomy) 参照。
 
 ## Related architecture notes
 

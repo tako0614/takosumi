@@ -1,28 +1,66 @@
 # Takos AWS Provider Runbook
 
-This directory documents the AWS operator shape for `operator.takos.aws`. The
-plugin package does not create AWS SDK clients or read credentials from the
-kernel. Operators either inject concrete adapter instances directly or run an
-operator-owned HTTP gateway and use `AwsHttpGatewayClient`.
+This directory documents the AWS surface as **operator-owned scope**:
+the kernel-side provider plugins
+(`packages/plugins/src/providers/aws/`) and runtime-agent connectors
+(`packages/runtime-agent/src/connectors/aws/{s3,rds,fargate,route53}.ts`)
+are production-grade and ship by default. The deploy artifact (the
+Terraform / CDK / Pulumi that lands the Takosumi kernel image and
+runtime-agent image on AWS infrastructure) is the operator's
+responsibility — Takosumi does not ship a reference IaC stack for AWS.
 
-## Required Runtime Shape
+## Why no reference deploy here
 
-- Storage: inject a transactional Takos `StorageDriver`; the generic HTTP
-  gateway client cannot carry callback-based storage transactions.
-- Object storage: S3-compatible client behind `AwsObjectStorageClient`.
-- Queue: SQS-compatible client behind `AwsQueueClient`.
-- KMS and secrets: KMS/Secrets Manager clients behind the typed interfaces.
-- Provider/router/observability/runtime-agent: operator gateway or direct
-  clients that satisfy the exported AWS interfaces.
+The two reference distributions Takosumi ships
+(`deploy/cloudflare/` and `deploy/selfhosted/`) cover the
+substrate-neutrality claim at spec level. AWS / GCP / Azure / k8s are
+spec-compliant — operators run the kernel image on whatever AWS
+compute they prefer (ECS / Fargate / EC2 / EKS) and point the kernel
+at a Postgres database (RDS / Aurora). Once the kernel is reachable,
+all 4 AWS provider plugins (`@takos/aws-s3`, `@takos/aws-fargate`,
+`@takos/aws-rds`, `@takos/aws-route53`) work without modification.
 
-## Gateway Smoke
+## Required runtime shape
 
-```sh
-TAKOSUMI_PLUGIN_LIVE_PROVIDER=aws \
-TAKOSUMI_PLUGIN_AWS_GATEWAY_URL=https://operator-gateway.example/aws \
-TAKOSUMI_PLUGIN_AWS_GATEWAY_BEARER_TOKEN=replace-me \
-deno task live-smoke
+The AWS connectors talk to the AWS API directly via SigV4-signed
+fetch calls (no AWS SDK dependency). They expect:
+
+- AWS credentials supplied via `TAKOSUMI_AWS_ACCESS_KEY_ID` /
+  `TAKOSUMI_AWS_SECRET_ACCESS_KEY` env vars on the runtime-agent
+  process, or via instance role / IRSA when running on AWS compute.
+- A Postgres database for kernel state (`TAKOSUMI_DATABASE_URL`).
+- Network reachability from the runtime-agent to the AWS API
+  endpoints in the relevant region.
+
+## Recommended topology
+
+```
+            Internet → ALB / CloudFront
+                          │
+                          ▼
+                    kernel (Fargate task)  ── Postgres (RDS)
+                          │
+                          ▼
+                runtime-agent (Fargate task)  ── AWS API (S3, RDS, ECS, Route53)
 ```
 
-The live smoke calls the provider operation list endpoint only. Full production
-boot still requires a `KernelPluginClientRegistry` with every selected port.
+Both kernel and runtime-agent are stateless; scale horizontally with
+Fargate service desired count. State lives in RDS.
+
+## Smoke check
+
+```sh
+TAKOSUMI_AWS_ACCESS_KEY_ID=... \
+TAKOSUMI_AWS_SECRET_ACCESS_KEY=... \
+deno task live-smoke --provider aws --shape object-store
+```
+
+The live smoke calls each provider's lifecycle once and tears down.
+
+## Substrate-neutral references
+
+If you want a reference Docker image to base your AWS task definitions
+on, copy `deploy/selfhosted/Dockerfile.kernel` and
+`deploy/selfhosted/Dockerfile.runtime-agent`. They are substrate-
+neutral and run unmodified on any container runtime, including AWS
+Fargate / ECS / EKS.

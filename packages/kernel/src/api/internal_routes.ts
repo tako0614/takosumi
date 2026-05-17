@@ -14,6 +14,7 @@ import type { createCoreDomainServices } from "../domains/core/mod.ts";
 import type { MutationBoundaryOperation } from "../services/entitlements/mod.ts";
 import type { WorkerAuthzService } from "../services/security/mod.ts";
 import { DomainError } from "../shared/errors.ts";
+import { currentRuntime } from "../shared/runtime/index.ts";
 import { findNonCatalogConditionReasons } from "./condition_reasons.ts";
 import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
 import { type InternalAuthResult, readInternalAuth } from "./internal_auth.ts";
@@ -85,7 +86,7 @@ export function registerInternalRoutes(
   registerApiErrorHandler(app);
   const { core, deployments } = options.services;
   const getInternalServiceSecret = options.getInternalServiceSecret ??
-    (() => Deno.env.get("TAKOSUMI_INTERNAL_API_SECRET"));
+    (() => currentRuntime().env.get("TAKOSUMI_INTERNAL_API_SECRET"));
 
   app.get(TAKOSUMI_INTERNAL_PATHS.spaces, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {

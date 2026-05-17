@@ -1,10 +1,6 @@
 # Approval Invalidation Triggers
 
-> このページでわかること: approval が無効化されるトリガー条件の一覧。
-
-Takosumi v1 で approval が `approved` 状態から `invalidated` に落ちる trigger を
-6 値の closed enum で定義し、各 trigger の発火条件 / 検出 timing / propagation
-rule / approver UX state を整理する reference です。
+> このページでわかること: approval を `approved` から `invalidated` に落とす 6 種の trigger と、 発火条件 / 検出 timing / propagation / approver UX state。
 
 ## Trigger 6 値
 
@@ -106,16 +102,12 @@ approval の lifecycle 上の状態:
 | `invalidated` | trigger 1-6 のいずれかで binding が崩れた               | server      |
 | `consumed`    | apply で正常消費され、対応する OperationPlan が完了した | server      |
 
-`reviewing` は client UX のためのソフト状態で、kernel は永続化しない。kernel 側
-state machine が永続化する terminal state は 6
-値で、`pending → approved
-| denied | expired | invalidated`、および
-`approved → consumed` の経路を 扱う。`consumed` は approval が apply pipeline
-で正常消費された後の終端で、 audit retention のために record を保持するが再 use
-はできない。`consumed` approval を再度 apply 起動に提示すると
-`failed_precondition` で reject される。`invalidated` が trigger 1-6
-由来の取り消し (binding 崩壊) を表す のに対し、`consumed` は binding が valid
-のまま正常消費された後の終端で ある点が異なる。
+`reviewing` は client UX のソフト状態で、 kernel は永続化しない。
+
+kernel 側 state machine が永続化する terminal state は 6 値で、 `pending → approved | denied | expired | invalidated` および `approved → consumed` の経路を扱う。
+
+- `consumed`: approval が apply pipeline で正常消費された後の終端。 audit retention のため record は保持するが再 use はできない。 再度 apply 起動に提示すると `failed_precondition` で reject される。
+- `invalidated`: trigger 1-6 由来の取り消し (binding 崩壊) を表す。 `consumed` は binding が valid のまま正常消費された終端である点が異なる。
 
 ## Approval record binding fields
 

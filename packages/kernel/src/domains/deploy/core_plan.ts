@@ -7,6 +7,7 @@
 
 import { createHash } from "node:crypto";
 import type { JsonObject } from "takosumi-contract";
+import { currentRuntime } from "../../shared/runtime/index.ts";
 
 const TAKOSUMI_CONTEXT_ID = "https://takosumi.com/contexts/deploy.jsonld";
 const PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR =
@@ -235,17 +236,18 @@ function readDescriptorJson(path: string): JsonObject {
     new URL(path, DOCS_DESCRIPTOR_ROOT_URL),
     new URL(path, PACKAGED_DESCRIPTOR_ROOT_URL),
   ];
+  const fs = currentRuntime().fs;
   const notFoundErrors: Error[] = [];
   for (const url of urls) {
     try {
-      const parsed = JSON.parse(Deno.readTextFileSync(url));
+      const parsed = JSON.parse(fs.readTextFileSync(url));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         throw new TypeError(`DescriptorDocsInvalid: ${path} is not an object`);
       }
       return parsed as JsonObject;
     } catch (error) {
-      if (error instanceof Deno.errors.NotFound) {
-        notFoundErrors.push(error);
+      if (fs.isNotFoundError(error)) {
+        notFoundErrors.push(error as Error);
         continue;
       }
       if (error instanceof SyntaxError) {

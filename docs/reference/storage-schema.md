@@ -1,16 +1,8 @@
 # Storage Schema
 
-> このページでわかること: kernel storage のスキーマ定義。
+> このページでわかること: kernel が永続化する record の論理 wire schema。 SQL DDL ではなく、 必須 / optional field、 primitive 型、 永続化セマンティクス、 immutability rule を record class 単位で定める。
 
-Takosumi kernel が永続化する record の論理 wire schema を定義します。 SQL dump
-や column 単位 DDL ではなく、 各 record class を relational table / key-value
-engine / log-structured store のいずれで保持しても構いません。 他 record
-から導出可能な field は実装側で省略 persist できます。
-
-schema は record class として表現し、 必須 / optional field、 primitive 型、
-永続化のセマンティクス、 immutability rule を持ちます。 field が別 record
-を参照する場合は識別子参照で、 由来 snapshot と read consistent と
-なるよう読みます。
+各 record class は relational table / key-value engine / log-structured store のいずれで保持してもよい。 他 record から導出可能な field は実装側で省略 persist できる。 別 record への参照は識別子で、 由来 snapshot と read consistent となるよう読む。
 
 primitive 型:
 

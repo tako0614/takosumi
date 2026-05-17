@@ -3,11 +3,11 @@
 > このページでわかること: resource ID の命名規則と生成ルール。
 
 Takosumi v1 の resource ID grammar、 v1 ID kind の閉じた一覧、 各 kind の suffix
-grammar、 kernel 境界での canonical / display 形式、 そして再生成可否 を決める
+grammar、 kernel 境界での canonical / display 形式、 そして再生成可否を決める
 stability rule を定義します。
 
-resource ID は kernel が persist する **唯一の** identity surface です。
-他の識別子 (operator 内部の数値 primary key、 runtime-agent ローカル handle、
+resource ID は kernel が persist する **唯一の** identity surface です。 他の
+識別子 (operator 内部の数値 primary key、 runtime-agent ローカル handle、
 connector handle) は kernel 再起動を跨いで安定ではありません。 本ページの
 surface が kernel API response、 audit event、 snapshot、 journal entry、 CLI
 output に露出します。
@@ -108,8 +108,8 @@ rule が同様に適用され、 各追加 kind は固定の suffix grammar と 
 には属しません。 詳細は account plane 側の docs を参照。 cross-product audit
 evidence には opaque な文字列としてのみ現れます。
 
-`actor:` には support-staff Actor のための sub-kind 識別子があり、 通常の Actor
-は `actor:<name>` / `actor:<uuid>` 形式を用います。 suffix に `:` は
+`actor:` には support-staff Actor のための sub-kind 識別子があります。 通常の
+Actor は `actor:<name>` / `actor:<uuid>` 形式を用います。 suffix に `:` は
 含められませんが、 Actor ID に限り `/` が sub-kind の区切りとして 1 つだけ
 許可されます。
 
@@ -130,7 +130,7 @@ evidence には opaque な文字列としてのみ現れます。
 この追加 table にも closure rule が適用されます。 1 kind は 1 suffix grammar
 に固定で、 ここで非 ULID は `tier:` のみ。 追加には `CONVENTIONS.md` §6 RFC
 が必須。 v1 grammar (`<kind>:<unique-suffix>`、 kebab-case `kind`、 suffix 内に
-`:` 禁止) は緩めません。 `actor:support-staff/<id>` sub-kind は唯一の 例外で、
+`:` 禁止) は緩めません。 `actor:support-staff/<id>` sub-kind は唯一の例外で、
 `actor:` kind 限定です。
 
 ### Examples
@@ -184,7 +184,7 @@ v1 で各 suffix grammar は閉じています。
 ### ULID
 
 26 文字 Crockford base32、 time-sortable。 ミリ秒解像度の timestamp prefix + 80
-bit 乱数で生成。 timestamp 解像度内で生成順と辞書順が一致。 ULID は発行 後
+bit 乱数で生成。 timestamp 解像度内で生成順と辞書順が一致。 ULID は発行後
 immutable で、 kernel は同じ論理 resource に再発行しません。
 
 ### UUID v4
@@ -241,9 +241,9 @@ informational で、 kernel 境界での source of truth は canonical 形式で
 
 Space A の resource が Space B の resource を参照する場面では tuple form を
 使います (例: `(space:b-prod, object:shared-config)`)。 将来 cross-Space surface
-(snapshot field、 audit event、 approval binding) では tuple form が
-必須になります。 bare `<kind>:<suffix>` は暗黙に Space-local で、 active Space
-context を指します。
+(snapshot field、 audit event、 approval binding) では tuple form が必須に
+なります。 bare `<kind>:<suffix>` は暗黙に Space-local で、 active Space context
+を指します。
 
 ## ID stability rule
 
@@ -259,15 +259,15 @@ cache / pin / share できます。
 ### Kernel-minted ULID (発行後 immutable)
 
 `deployment:` / `journal:` / `operation:` / `activation:` / `revoke-debt:` /
-`approval:` / `share:`。 発行された ID は resource lifetime にわたって不変 で、
+`approval:` / `share:`。 発行された ID は resource lifetime にわたって不変で、
 別 resource に再割当てしません。
 
 ### operator-controlled 名 (immutable、 rename 不可)
 
 `space:` / `object:` / `exposure:` / `connector:` / `external-participant:` /
-`group:`。 operator が作成時に名前を選び、 v1 では rename を サポートしませ ん。
-将来の rename API は `CONVENTIONS.md` §6 RFC で alias 追加型 (履歴参照
-を書き換えない) として導入する想定です。
+`group:`。 operator が作成時に名前を選び、 v1 では rename をサポートしません。
+将来の rename API は `CONVENTIONS.md` §6 RFC で alias 追加型 (履歴参照を
+書き換えない) として導入する想定です。
 
 ### Deterministic composite ID (source ごとに stable)
 
@@ -278,12 +278,12 @@ owner + reason) から導出します。 projection を再実行しても同じ 
 
 ## 予約 kind と future extension
 
-上述の kind が v1 の **完全集合** です。 新 kind 追加 / 既存 kind の用途 変更 /
+上述の kind が v1 の **完全集合** です。 新 kind 追加 / 既存 kind の用途変更 /
 alias には `CONVENTIONS.md` §6 RFC が必須。
 
 `<kind>:<suffix>` 形が kernel が認識する唯一の ID grammar です。 これに
-合わない文字列は ID として無効で、 ID を受け取る全 surface (apply 入力、 storage
-書込、 audit ingest、 CLI flag parse) で reject されます。
+合わない文字列は ID として無効で、 ID を受け取る全 surface (apply 入力、
+storage 書込、 audit ingest、 CLI flag parse) で reject されます。
 
 ## Related architecture notes
 

@@ -1,22 +1,10 @@
 # Manifest (Shape Model)
 
-> このページでわかること: Takosumi kernel manifest の書き方と resources[]
-> の構造。
+> このページでわかること: Takosumi kernel manifest の書き方と resources[] の構造。
 
-このページは **Shape + optional Provider hint** モデルにおける kernel manifest
-envelope の書き方をまとめます。`resources[]` に portable な
-[Shape](/reference/shapes) resource を並べ、`${ref:...}` 構文で resource 間の
-output を配線します。authoring shorthand は installer/compiler layer で
-展開してから `POST /v1/deployments` に送ります。
+`resources[]` に portable な [Shape](/reference/shapes) resource を並べ、`${ref:...}` で配線する。 authoring shorthand は installer/compiler layer で展開してから `POST /v1/deployments` に送る。
 
-Takosumi v1 の manifest envelope は **closed shape** で、top-level は
-`@context / apiVersion / kind / namespace / metadata / resources`
-のみを受理します。 `@context` は optional な JSON-LD
-context、`apiVersion: "1.0"` と `kind: Manifest` は固定値で、いずれも
-required。未知の top-level field を含む manifest は kernel の schema phase で
-reject されます ([Manifest Validation](/reference/manifest-validation))。
-本ページと [Manifest Validation](/reference/manifest-validation) が v1 envelope
-の canonical source です。
+Takosumi v1 の envelope は **closed shape**。 top-level は `@context / apiVersion / kind / namespace / metadata / resources` のみ受理し、 未知 field を含む manifest は schema phase で reject される。 詳細仕様は [Manifest Validation](/reference/manifest-validation) と本ページが canonical source。
 
 ## Envelope 概観
 
@@ -35,37 +23,25 @@ resources: # required: portable Shape resources
     spec: { name: app-assets }
 ```
 
-`apiVersion` と `kind` は **required** で、値もそれぞれ `"1.0"` / `Manifest`
-固定。これら 2 field を欠いた manifest は kernel (`POST /v1/deployments`) と CLI
-local mode の両方で **400 / envelope rejected** されます。`1.0` は manifest
-contract の major version です。
+### Required field
 
-`@context` は manifest を JSON-LD document として扱うための optional field
-です。 推奨値は `https://takosumi.com/contexts/manifest-v1.jsonld`。kernel は
-`@context` を deploy decision の入力として解釈せず、descriptor closure 側の
-JSON-LD と同じく external tooling / marketplace indexing / catalog publishing
-のための semantic hint として保持します。
+- `apiVersion` は `"1.0"` 固定。欠けると kernel / CLI local mode の両方で **400 / envelope rejected**。
+- `kind` は `Manifest` 固定。
+- `1.0` は manifest contract の major version。
 
-`template` を使う tool は kernel request 前に expanded `resources[]` へ compile
-してください。kernel public contract は `resources[]` です。
+### Optional field
 
-`namespace` は manifest-local / Space-scoped namespace の hint です。
-operator-owned capability (OIDC / billing / dashboard / deploy API など) は
-manifest top-level field ではなく namespace export / account API で接続します。
-kernel manifest には operator account-plane dependency を書きません。
+- `@context` は JSON-LD document として扱うための semantic hint。推奨値は `https://takosumi.com/contexts/manifest-v1.jsonld`。kernel は deploy decision には使わず、 external tooling / marketplace indexing 用に保持する。
+- `namespace` は manifest-local / Space-scoped namespace の hint。
+- `template` を使う tool は kernel request 前に expanded `resources[]` へ compile すること。kernel public contract は `resources[]`。
+
+operator-owned capability (OIDC / billing / dashboard / deploy API 等) は manifest top-level field ではなく namespace export / account API で接続する。
 
 ## Project layout は `takosumi-git` の責務
 
-Takosumi kernel / CLI は **manifest deploy engine 専念** の方針 (AGENTS.md)
-で、`takosumi deploy <path>` には manifest path を必ず明示します。
-`.takosumi/manifest.yml` のような repository-local project layout convention や
-`.takosumi/workflows/` 配下の workflow definition は、kernel ではなく上位
-sibling product [`takosumi-git`](https://github.com/tako0614/takosumi-git)
-が提供します。 `takosumi-git` が git push / webhook を受けて build pipeline
-を回し、生成した manifest を `POST /v1/deployments` (本 kernel) に投下します。
+Takosumi kernel / CLI は **manifest deploy engine 専念** の方針で、 `takosumi deploy <path>` には manifest path を必ず明示する。 `.takosumi/manifest.yml` / `.takosumi/workflows/` 等の repository-local convention は sibling product [`takosumi-git`](https://github.com/tako0614/takosumi-git) が提供する。
 
-3rd party software が独自 UI を持つ場合も同じで、最終的に manifest body を
-`POST /v1/deployments` に送ることで kernel と接続します。
+3rd party software が独自 UI を持つ場合も、 最終的に manifest body を `POST /v1/deployments` に送って kernel と接続する。
 
 ## `resources[]` field
 
@@ -82,17 +58,13 @@ interface ManifestResource {
 }
 ```
 
-- `name` は manifest 内で unique。`${ref:<name>.<field>}` で参照されます。
-- `spec` は `<shape>.validateSpec` で validate (`shape: object-store@v1` なら
-  `ObjectStoreShape.validateSpec`)。
-- `provider` が指定された場合、その provider の `implements` が `shape`
-  と一致しない と manifest reject。省略時は operator policy / provider registry
-  が resolved provider を決め、Deployment evidence に記録する。
+- `name` は manifest 内で unique。`${ref:<name>.<field>}` で参照される。
+- `spec` は `<shape>.validateSpec` で validate される (`shape: object-store@v1` なら `ObjectStoreShape.validateSpec`)。
+- `provider` 指定時、その provider の `implements` が `shape` と不一致なら reject。省略時は operator policy / provider registry が resolved provider を決定し、Deployment evidence に記録する。
 
 ## `${ref:...}` / `${secret-ref:...}` syntax {#ref-syntax}
 
-resource 間の配線は **string interpolation** で行います。kernel が DAG 解決後に
-`RefResolver` で展開します。
+resource 間の配線は string interpolation。 kernel は DAG 解決後に `RefResolver` で展開する。
 
 ```yaml
 resources:
@@ -113,24 +85,20 @@ resources:
         DB_PASSWORD: ${secret-ref:db.passwordSecretRef}
 ```
 
-Syntax 仕様 (cf.
-[`manifest-resource.ts`](https://github.com/takos-jp/takosumi/blob/main/src/sdk/manifest.ts)
-/ contract `parseRef` / `extractRefs`):
-
 | 記法                           | 意味                                                  |
 | ------------------------------ | ----------------------------------------------------- |
 | `${ref:<name>.<field>}`        | 別 resource の **non-secret** output field を埋め込む |
 | `${secret-ref:<name>.<field>}` | secret reference URI (`secret://...`) を埋め込む      |
 
 - `<name>` / `<field>` は `[A-Za-z_][\w-]*` パターン。
-- `<field>` が当該 Shape の `outputFields` に含まれていなければ reject。
-- 1 文字列内に複数 `${ref:...}` を混在可能。string concatenation 用途も OK。
+- `<field>` が当該 Shape の `outputFields` に無ければ reject。
+- 1 文字列内に複数 `${ref:...}` を混在可能 (string concatenation 用途も OK)。
+
+仕様 source は [`manifest-resource.ts`](https://github.com/takos-jp/takosumi/blob/main/src/sdk/manifest.ts) / contract `parseRef` / `extractRefs`。
 
 ## Capability `requires`
 
-`resources[].requires` は **そのリソースに対する capability 要件** です。
-provider が declare している `capabilities` が `requires` を superset で
-満たさないと selection で reject されます。
+`resources[].requires` はそのリソースに対する capability 要件。 provider の `capabilities` が `requires` の superset を満たさないと selection で reject される。
 
 ```yaml
 resources:
@@ -149,20 +117,14 @@ resources:
     spec: { name: app-archive }
 ```
 
-検証は contract `capabilitySubsetIssues(required, provided, path)` (cf.
-[provider-plugin.ts](https://github.com/takos-jp/takosumi/blob/main/src/operator/client_registry.ts))
-で行われます。
+検証は contract `capabilitySubsetIssues(required, provided, path)` (cf. [provider-plugin.ts](https://github.com/takos-jp/takosumi/blob/main/src/operator/client_registry.ts))。
 
-## DAG / topological apply order
+## DAG / topological apply order {#dag}
 
-`${ref:...}` は **依存 edge** を作ります。kernel は manifest を topological sort
-して以下の順で adapter を呼びます:
+`${ref:...}` は依存 edge を作る。 kernel は manifest を topological sort して以下の順で adapter を呼ぶ:
 
 1. **DAG build** — `extractRefsFromValue(spec)` で各 resource の参照先を抽出。
 2. **Cycle detection** — 自己ループ / 相互参照を検出した場合は reject。
-3. **Apply phase (topological order)** — 各 resource の resolved provider の
-   `apply(spec, ctx)` を順に実行。 `ctx.refResolver.resolve(...)` は既に apply
-   済み resource の outputs を 返します。
+3. **Apply phase (topological order)** — 各 resource の resolved provider の `apply(spec, ctx)` を順に実行。 `ctx.refResolver.resolve(...)` は既に apply 済み resource の outputs を返す。
 4. **Status phase** — apply 後に各 resource の `status(handle, ctx)` で確認。
-5. **Rollback on failure** — apply phase で失敗した時点までに作られた resource
-   は **逆順** に `destroy(handle, ctx)` されます (best effort)。
+5. **Rollback on failure** — apply phase で失敗した時点までに作られた resource は逆順に `destroy(handle, ctx)` される (best effort)。

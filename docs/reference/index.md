@@ -2,10 +2,6 @@
 
 > このページでわかること: Takosumi v1 リファレンスドキュメントの目次。
 
-Takosumi v1 の正式な API surface 仕様 / closed enum 定義 / wire schema / 運用
-protocol を集約する。各 doc は self-contained で、実装者・operator
-が直接参照できる粒度で書かれている。
-
 ## API surfaces
 
 クライアントとサーバーの間で交わされる surface。

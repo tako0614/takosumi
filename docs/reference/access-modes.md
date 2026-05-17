@@ -1,11 +1,8 @@
 # Access Modes
 
-> このページでわかること: deploy / plan / destroy 各アクセスモードの動作仕様。
+> このページでわかること: link consumer が export resource とどう関わるかを定める access mode enum (5 値) のセマンティクス。
 
-Takosumi v1 の access mode enum は、 link consumer が export の resource とどう
-やり取りするかを規定する閉じた語彙です。 grant を発行する export、 および
-consuming space に export を射影する link 宣言の両方で、 権限の正本フィールドと
-して用いられます。
+access mode は grant を発行する export と、 consuming Space に export を射影する link 宣言の両方で、 権限の正本フィールドとして用いる。
 
 ```text
 read | read-write | admin | invoke-only | observe-only
@@ -117,10 +114,7 @@ link projection の resolved access mode が変わると、 approval invalidatio
 - grant 発行 export が新たに operator policy review 越しでないと特定モードを
   許可しないように設定された
 
-approval invalidation trigger の全リストは
-[Closed Enums](/reference/closed-enums) を参照。 access mode
-変更は実運用上もっとも頻繁な `effect-detail change` の 原因であり、 `read-write`
-と `admin` を link 上で明示宣言させる理由でもあり ます。
+approval invalidation trigger の全リストは [Closed Enums](/reference/closed-enums) を参照。 access mode 変更は実運用上もっとも頻繁な `effect-detail change` の原因で、 `read-write` と `admin` を link 上で明示宣言させる理由でもある。
 
 ## 関連 architecture notes
 

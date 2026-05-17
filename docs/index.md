@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Takosumi
   text: Self-hostable PaaS toolkit
-  tagline: Manifest 1 本で AWS / GCP / Cloudflare / Azure / Kubernetes / Docker / systemd へ deploy する、Deno-native な PaaS kernel + runtime-agent + CLI。
+  tagline: Manifest 1 本でどのクラウドにも、self-hostable な PaaS kernel。
   image:
     src: /logo.svg
     alt: Takosumi
@@ -22,22 +22,16 @@ hero:
 features:
   - title: Manifest-driven
     details: |
-      portable な shape (`web-service@v1` / `database-postgres@v1` / `object-store@v1` / `custom-domain@v1` / `worker@v1`) を YAML / JSON-LD 互換 manifest で宣言。`takosumi deploy ./manifest.yml` で apply。project layout / `.takosumi/` convention は `takosumi-git` (sibling product) が提供する。
+      portable な shape を YAML / JSON-LD 互換 manifest で宣言し、`takosumi deploy ./manifest.yml` で apply。
   - title: Multi-cloud + selfhost
     details: |
-      20 個の default provider + 1 個の opt-in provider plugin で AWS / GCP / Cloudflare / Azure / Kubernetes / Deno Deploy / docker-compose / systemd / filesystem を同一 manifest spec で deploy。
+      AWS / GCP / Cloudflare / Azure / Kubernetes / Deno Deploy / docker-compose / systemd / filesystem を同一 manifest spec で deploy。
   - title: Self-hostable, JSR-distributed
     details: |
-      kernel と runtime-agent は JSR (`@takos/takosumi-kernel`, `@takos/takosumi-runtime-agent`) で配布。Deno 1 process で `takosumi server` を起動するだけで control plane + agent が立ち上がる。
+      Deno 1 process で `takosumi server` を起動すれば control plane + agent が立ち上がる。
   - title: Plugin / agent 分離
     details: |
-      kernel は cloud SDK を直接呼ばない。runtime-agent が SigV4 / OAuth / kubectl / docker を握り、credential は agent 側にだけ存在する。control plane と data plane の責務が明確。
-  - title: Artifact upload
-    details: |
-      OCI image URI だけでなく、`js-bundle` / `lambda-zip` / `static-bundle` / `wasm` の content-addressed artifact を `takosumi artifact push` で upload。manifest から hash で参照する。
-  - title: Operator-friendly
-    details: |
-      `~/.takosumi/config.yml` で remote / token を保存、`takosumi completions <shell>` で shell completion、`takosumi server --detach` で systemd / docker template を出力。
+      kernel は cloud SDK を呼ばず、 credential は runtime-agent 側にだけ存在する。
 ---
 
 ## 構成
@@ -53,27 +47,21 @@ Takosumi は **6 つの JSR package** で配布される:
 | [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi deploy` / `takosumi server` 等の CLI          |
 | [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | umbrella: 上記 5 つを再公開                             |
 
-`@takos/` scope は Takos が publish する **reference distribution** です。
-authority は contract (`@takos/takosumi-contract`) 側にあり、 publisher 側には
-ありません。 contract-compatible な alternative publisher (例:
-`@example/takosumi-kernel`) も spec 上可能で、 現状は untested ですが
-architectural privilege は持ちません。
+## はじめに読むもの
 
-詳細は [Concepts](/getting-started/concepts) を参照。
+- [Quickstart](/getting-started/quickstart) — `takosumi server` 1 コマンドで dev → cloud deploy まで
+- [Concepts](/getting-started/concepts) — Shape × Provider モデル
+- [Manifest (Shape Model)](/manifest) — `resources[]` / `${ref:...}` / `${secret-ref:...}` syntax
 
-## 関連 docs
+## 目的別 lookup
 
-- [Quickstart](/getting-started/quickstart) — `takosumi server` 1 コマンドで dev
-  → cloud deploy まで
-- [Manifest (Shape Model)](/manifest) — compiled `resources[]` manifest /
-  `${ref:...}` / `${secret-ref:...}` syntax
-- [Architecture Overview](/reference/architecture/) — manifest / deployment core
-  / execution / routing / artifact / operator boundary の設計 notes
-- [Manifest Model](/reference/architecture/manifest-model) — Shape / Provider の
-  closed manifest contract
-- [Shape Catalog](/reference/shapes) — 5 shapes の spec / outputs / capabilities
-- [Provider Plugins](/reference/providers) — 20 default providers + 1 opt-in
-  provider の cloud × shape matrix
-- [CLI Reference](/reference/cli) — 全 subcommand × flag × env
-- [Operator Bootstrap](/operator/bootstrap) —
-  `createTakosumiProductionProviders` の wire-in 例
+| 目的                                | ページ                                            |
+| ----------------------------------- | ------------------------------------------------- |
+| 設計 notes / layer 境界             | [Architecture Overview](/reference/architecture/) |
+| Shape / Provider の closed contract | [Manifest Model](/reference/architecture/manifest-model) |
+| 5 shapes の spec / outputs          | [Shape Catalog](/reference/shapes)                |
+| 20 default + 1 opt-in provider      | [Provider Plugins](/reference/providers)          |
+| 全 subcommand × flag × env          | [CLI Reference](/reference/cli)                   |
+| `createTakosumiProductionProviders` | [Operator Bootstrap](/operator/bootstrap)         |
+
+> 注: `@takos/` scope は Takos が publish する **reference distribution** であり、 authority は contract (`@takos/takosumi-contract`) 側にある。 contract-compatible な alternative publisher も spec 上可能で、 architectural privilege は持たない。

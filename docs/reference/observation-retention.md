@@ -1,11 +1,6 @@
 # Observation Retention
 
-> このページでわかること: observation データの保持期間と GC ポリシー。
-
-Takosumi v1 で kernel が保持する observed state には複数の retention 層が
-あり、それぞれ目的・寿命・operator 制御点が異なる。本 reference は
-ObservationSet / ObservationHistory / OperationJournal / AuditLog の 4 層と、
-ExportDeclaration freshness の propagation 規則を closed semantics で 定義する。
+> このページでわかること: observed state の 4 層 retention model (ObservationSet / ObservationHistory / OperationJournal / AuditLog) と、 ExportDeclaration freshness の propagation 規則を closed semantics で定める。
 
 ## 4-layer retention model
 
@@ -131,8 +126,7 @@ change** (trigger 4) の発火源だが、`refresh-required` と `stale` は別 
   `invalidated` に落ちる
   ([Approval Invalidation Triggers — external freshness change](/reference/approval-invalidation#_4-external-freshness-change))。
 
-history が enable / disable のどちらでも、この trigger 経路は同じ。 trigger は
-ObservationSet (latest) の遷移で発火するので、history は 不要。
+history の enable / disable によらずこの trigger 経路は同じ。 trigger は ObservationSet (latest) の遷移で発火するので、 history は不要。
 
 ## Observability flow
 

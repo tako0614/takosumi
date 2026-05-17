@@ -10,6 +10,11 @@ import {
   installKernelPluginMarketplacePackages,
   type InstallKernelPluginMarketplacePackagesResult,
 } from "./marketplace.ts";
+import { currentRuntime } from "../shared/runtime/index.ts";
+
+function defaultEnv(): Record<string, string | undefined> {
+  return currentRuntime().env.toObject();
+}
 
 export interface KernelPluginModule {
   readonly default?: TakosPaaSKernelPlugin | readonly TakosPaaSKernelPlugin[];
@@ -30,7 +35,7 @@ export async function loadKernelPluginsFromModules(
 }
 
 export async function loadKernelPluginsFromEnv(
-  env: Record<string, string | undefined> = Deno.env.toObject(),
+  env: Record<string, string | undefined> = defaultEnv(),
   options: {
     readonly availableTrustedPlugins?: readonly TakosPaaSKernelPlugin[];
   } = {},
@@ -55,7 +60,7 @@ export async function loadKernelPluginsFromEnv(
 }
 
 export async function loadKernelPluginMarketplacePackagesFromEnv(
-  env: Record<string, string | undefined> = Deno.env.toObject(),
+  env: Record<string, string | undefined> = defaultEnv(),
   options: {
     readonly fetch?: typeof fetch;
   } = {},

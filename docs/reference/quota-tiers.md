@@ -2,36 +2,21 @@
 
 > このページでわかること: quota tier の定義と各 tier の制限値。
 
-本リファレンスは v1 quota tier モデルを定義する。kernel は operator が Space に
-attach する **tier 属性** を公開する。tier が resolve する dimensional cap は
-operator 定義で、operator policy の中に完全に住む。kernel は price book、 free /
-pro / enterprise ラダー、組み込みの商用 semantics を同梱しない。
+v1 quota tier モデルを定義する。 kernel は operator が Space に attach する **tier 属性** を公開する。 tier が resolve する dimensional cap は operator 定義で、operator policy の中に完全に住む。 kernel は price book、 free / pro / enterprise ラダー、 組み込みの商用 semantics を同梱しない。
 
 ## Tier model
 
-quota tier は dimension cap の named bundle である。各 Space はちょうど 1 つの
-`quotaTierId` を持つ。kernel が Space の quota dimension を評価するとき、Space
-の tier record を通じて dimension cap を resolve し、
-[Quota / Rate Limit](/reference/quota-rate-limit) で定義された fail-closed-for-
-new-work / fail-open-for-inflight semantics を同様に適用する。
+quota tier は dimension cap の named bundle。 各 Space はちょうど 1 つの `quotaTierId` を持つ。 kernel が Space の quota dimension を評価するとき、 Space の tier record を通じて dimension cap を resolve し、 [Quota / Rate Limit](/reference/quota-rate-limit) で定義された fail-closed-for-new-work / fail-open-for-inflight semantics を同様に適用する。
 
-- `quotaTierId` is a string with the same kebab-case suffix grammar as other
-  operator-controlled IDs (see [Resource IDs](/reference/resource-ids)). The
-  suffix is operator-chosen, for example `tier:free`, `tier:pro`,
-  `tier:internal`. The kernel does not interpret the suffix.
-- The tier set is **flat in v1**: there is no inheritance, no parent tier, and
-  no tier composition. Each Space resolves to one tier and one tier only.
-- Tier records are persisted in the partition declared in
-  [Storage Schema](/reference/storage-schema) and survive kernel restart,
-  journal compaction, and restore from backup.
+- `quotaTierId` は operator-controlled ID と同じ kebab-case suffix 文法を持つ文字列 ([Resource IDs](/reference/resource-ids) 参照)。 suffix は operator が選ぶ (例: `tier:free`、`tier:pro`、`tier:internal`)。 kernel は suffix を解釈しない。
+- v1 で tier 集合は **flat**: 継承、parent tier、tier composition は無い。 各 Space は 1 つの tier に resolve する。
+- Tier record の永続化先は [Storage Schema](/reference/storage-schema) で宣言される partition。 kernel restart、journal compaction、restore from backup の across で生存する。
 
-kernel は **default tier を同梱しない**。operator は bootstrap で少なくとも 1
-つの tier を登録する。登録 tier がゼロの installation は boot 時に fail-closed
-して Space provisioning を拒否する。
+kernel は **default tier を同梱しない**。 operator は bootstrap で少なくとも 1 つの tier を登録する。 登録 tier が 0 の installation は boot 時に fail-closed し、Space provisioning を拒否する。
 
 ## Tier dimensions
 
-A tier carries a cap for each dimension in the closed v1 quota set:
+tier は v1 closed quota set の各 dimension について cap を持つ。
 
 | Dimension                         | Source                                             |
 | --------------------------------- | -------------------------------------------------- |
@@ -44,23 +29,15 @@ A tier carries a cap for each dimension in the closed v1 quota set:
 | `storage-bytes`                   | Usage projection: `resource.storage_bytes`.        |
 | `bandwidth-bytes`                 | Usage projection: `runtime.bandwidth_bytes`.       |
 
-A tier may additionally declare per-tier rate-limit overrides for the public and
-internal route classes. Rate-limit overrides are optional; when omitted, the
-Space resolves to the kernel-wide defaults from `TAKOSUMI_RATE_LIMIT_*`.
+tier は public / internal route class 単位の per-tier rate-limit 上書きも追加で宣言できる。 上書きは optional。省略時は `TAKOSUMI_RATE_LIMIT_*` の kernel-wide default が Space に適用される。
 
-embedded / self-hosted deployment が使うサービスレベルの `LocalUsageQuotaPolicy`
-は、usage が記録される前にこれら 3 つの usage dimension を Space ごとに resolve
-する。`UsageProjectionService.requireWithinQuota()` は tier cap を超える
-projected counter を reject するので、CPU / storage / bandwidth gate は下流の
-billing projection や provider スケジューリングの前に fail-closed できる。
+embedded / self-hosted deployment が使う `LocalUsageQuotaPolicy` サービスは、 usage が記録される前に上記 3 つの usage dimension を Space ごとに resolve する。 `UsageProjectionService.requireWithinQuota()` は tier cap を超える projected counter を reject するので、 CPU / storage / bandwidth gate は下流の billing projection や provider スケジューリングの前に fail-closed できる。
 
-A cap value of the literal string `unlimited` means the tier removes the cap for
-that dimension. A cap of `0` is rejected at registration time.
+cap 値が literal string `unlimited` のときはその dimension の cap を外す。 cap `0` は登録時点で reject される。
 
 ## Tier registration API
 
-tier 登録は内部 HTTP surface 経由で行う
-([Kernel HTTP API](/reference/kernel-http-api) 参照)。
+tier 登録は内部 HTTP surface 経由 ([Kernel HTTP API](/reference/kernel-http-api) 参照)。
 
 `POST /api/internal/v1/quota-tiers`
 
@@ -90,67 +67,44 @@ Response:
 { "tierId": "tier:pro", "createdAt": "2026-05-05T00:00:00.000Z" }
 ```
 
-Other endpoints:
+その他の endpoint:
 
-- `GET /api/internal/v1/quota-tiers` lists every registered tier.
-- `GET /api/internal/v1/quota-tiers/:tierId` returns one tier.
-- `PATCH /api/internal/v1/quota-tiers/:tierId` updates the dimension caps or the
-  rate-limit overrides. The `tierId` field is immutable.
-- `DELETE /api/internal/v1/quota-tiers/:tierId` removes a tier. The kernel
-  rejects deletion when any Space still references the tier; operators migrate
-  every referencing Space to another tier first.
+- `GET /api/internal/v1/quota-tiers` — 登録済み tier の一覧。
+- `GET /api/internal/v1/quota-tiers/:tierId` — 単一 tier。
+- `PATCH /api/internal/v1/quota-tiers/:tierId` — dimension cap または rate-limit override を更新。`tierId` は immutable。
+- `DELETE /api/internal/v1/quota-tiers/:tierId` — tier を削除。 いずれかの Space がその tier を参照していると kernel は削除を reject する。 operator は先に全 referencing Space を別 tier に移行する。
 
-All four mutating calls fail closed when the caller's auth context is not in the
-operator role.
+4 つの mutating call はいずれも、 caller の auth context が operator role でないと fail closed する。
 
 ## Tier assignment to Space
 
-A Space carries a `quotaTierId` field. The field is required at Space
-provisioning: a Space cannot exist without a resolved tier.
+Space は `quotaTierId` field を持つ。 Space provisioning 時点で必須: tier が resolve しない Space は存在できない。
 
-- Initial assignment happens at Space creation; the request must reference an
-  already-registered `tierId`.
-- Reassignment uses
-  `PATCH /api/internal/v1/spaces/:id { "quotaTierId": "tier:..." }`.
-- The kernel applies the new tier on the next quota evaluation; it does not
-  retroactively rewrite past audit counters or past ActivationSnapshots.
-- Reassignment that lowers a cap below the Space's current usage does not roll
-  back inflight work. New work that would push the Space past the new cap fails
-  closed under the standard quota path.
+- 初回割り当ては Space 生成時。 request は登録済みの `tierId` を参照する。
+- 再割り当ては `PATCH /api/internal/v1/spaces/:id { "quotaTierId": "tier:..." }`。
+- kernel は次回の quota 評価から新 tier を適用する。 過去の audit counter や ActivationSnapshot は retroactive に書き換えない。
+- cap を Space の現在使用量より下げる再割り当てでも inflight work は rollback されない。 新 cap を越える new work は標準の quota path で fail close する。
 
 ## Bootstrap requirement
 
-bootstrap protocol ([Bootstrap Protocol](/reference/bootstrap-protocol) 参照)
-は、 kernel が Space provisioning を受け付ける前に operator が少なくとも 1 つの
-tier を登録することを要求する。慣習として `tier:default` を登録し、operator が
-追加 tier を導入するまですべての Space をこれに bind する。suffix は強制
-されず、operator は任意の kebab-case 名を選べる。
+bootstrap protocol ([Bootstrap Protocol](/reference/bootstrap-protocol) 参照) は、 kernel が Space provisioning を受け付ける前に operator が少なくとも 1 つの tier を登録することを要求する。 慣習として `tier:default` を登録し、 operator が追加 tier を導入するまですべての Space をこれに bind する。 suffix は強制されず、operator は任意の kebab-case 名を選べる。
 
-`TAKOSUMI_QUOTA_TIER_BOOTSTRAP_REQUIRED` (default `true`) controls the boot-time
-check. Disabling it is permitted for local-mode operator testing only and is
-rejected at boot in `production`.
+`TAKOSUMI_QUOTA_TIER_BOOTSTRAP_REQUIRED` (default `true`) が boot-time check を制御する。 無効化は local-mode operator testing 限定で許容され、`production` では boot で reject される。
 
 ## Audit events
 
-Tier lifecycle emits the following audit events (see
-[Audit Events](/reference/audit-events)):
+Tier lifecycle が発行する audit event ([Audit Events](/reference/audit-events) 参照):
 
-- `quota-tier-registered` — payload carries `tierId` and the full dimension and
-  rate-limit cap snapshot.
-- `quota-tier-updated` — payload carries `tierId`, the previous cap snapshot,
-  and the new cap snapshot.
-- `quota-tier-removed` — payload carries `tierId` and the cap snapshot at
-  removal time.
-- `space-tier-changed` — payload carries `spaceId`, `previousTierId`,
-  `nextTierId`, and the actor that performed the change.
+- `quota-tier-registered` — `tierId` と全 dimension / rate-limit cap snapshot を payload に持つ。
+- `quota-tier-updated` — `tierId`、変更前 cap snapshot、変更後 cap snapshot を運ぶ。
+- `quota-tier-removed` — `tierId` と削除時点の cap snapshot を運ぶ。
+- `space-tier-changed` — `spaceId`、`previousTierId`、`nextTierId`、変更を行った actor を運ぶ。
 
-Tier-level events carry a null `spaceId`; `space-tier-changed` carries the
-affected Space.
+tier-level event は `spaceId` を null で運ぶ。`space-tier-changed` は影響を受けた Space を運ぶ。
 
 ## Storage
 
-Tier records persist as a dedicated record class consistent with
-[Storage Schema](/reference/storage-schema):
+Tier record は [Storage Schema](/reference/storage-schema) と整合する専用 record class として永続化される。
 
 | Field                | Type      | Required | Notes                                         |
 | -------------------- | --------- | -------- | --------------------------------------------- |
@@ -160,26 +114,17 @@ Tier records persist as a dedicated record class consistent with
 | `createdAt`          | timestamp | yes      | Set on registration.                          |
 | `updatedAt`          | timestamp | yes      | Updated on every `PATCH`.                     |
 
-Space record は `quotaTierId` を外部参照として持つ。quota counter 自体は Space
-record に残る。tier は counter と比較される cap を供給するだけである。
+Space record は `quotaTierId` を外部参照として持つ。 quota counter 自体は Space record に残る。 tier は counter と比較される cap を供給するだけ。
 
 ## Operator boundary
 
-本リファレンスは kernel 側 primitive を定義する: tier モデル、登録 API、
-割り当て surface、audit 形。tier を顧客プランに結びつける **商用 semantics** —
-任意通貨での価格設定、契約条項、督促 policy、free-to-paid アップグレードフロー、
-tier 比較のダッシュボード描画、tier 認識の billing export — は `takos-private/`
-のような operator distribution と kernel audit log を consume するサードパー
-ティ billing システムに住む。kernel はこれらの概念を一切エンコードしない。
+本リファレンスは kernel 側 primitive を定義する: tier モデル、登録 API、 割り当て surface、audit 形。 tier を顧客プランに結びつける **商用 semantics** — 任意通貨での価格設定、契約条項、督促 policy、free-to-paid アップグレードフロー、 tier 比較ダッシュボード描画、tier 認識の billing export — は `takos-private/` のような operator distribution と kernel audit log を consume するサードパーティ billing システムに住む。 kernel はこれらの概念を一切エンコードしない。
 
 ## Related architecture notes
 
-- `docs/reference/architecture/operator-boundaries.md` — operator policy layer
-  that consumes tier-resolved quota signals.
-- `docs/reference/architecture/space-model.md` — Space identity that scopes tier
-  assignment.
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  quota evaluation point against tier-resolved caps.
+- `docs/reference/architecture/operator-boundaries.md` — tier-resolved quota signal を consume する operator policy 層。
+- `docs/reference/architecture/space-model.md` — tier assignment を scope する Space identity。
+- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` — tier-resolved cap に対する quota evaluation point。
 
 ## 関連ページ
 

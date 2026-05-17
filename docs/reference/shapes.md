@@ -2,22 +2,15 @@
 
 > このページでわかること: Shape catalog の一覧と各 shape の spec フィールド。
 
-A **Shape** is the v1 abstract resource type that a manifest declares and a
-[provider plugin](/reference/providers) materializes. Each shape pins three
-things: an input `Spec` schema, a fixed `outputFields` set, and a capability
-vocabulary the provider must advertise to be selectable.
+**Shape** は v1 abstract resource type で、 manifest が宣言し [provider plugin](/reference/providers) が materialize する。 各 shape は 3 つを pin する: 入力 `Spec` schema、 固定 `outputFields` 集合、 provider が selectable になるために宣伝すべき capability vocabulary。
 
-Shape は Takosumi catalog が所有する。新 shape の追加はエコシステムへの破壊的
-変更であり、`CONVENTIONS.md` §6 RFC を要する。新しいクラウド対応は shape を fork
-するのではなく、既存 shape に **provider** を追加することで提供される。
+Shape は Takosumi catalog が所有する。 新 shape の追加はエコシステムへの破壊的変更で、 `CONVENTIONS.md` §6 RFC を要する。 新しいクラウド対応は shape を fork するのではなく、 既存 shape に **provider** を追加することで提供される。
 
-Source: `packages/contract/src/shape.ts` (the contract and registry),
-`packages/plugins/src/shapes/<shape>.ts` (the bundled five).
+Source: `packages/contract/src/shape.ts` (contract と registry)、 `packages/plugins/src/shapes/<shape>.ts` (bundled 5 種)。
 
 ## Capability extension guide
 
-capability は **open string** である。catalog は集合を closed enum に**ロック
-しない**。代わりに、v1 の規則は open string + reserved prefix である。
+capability は **open string**。 catalog は集合を closed enum に**ロックしない**。 v1 の規則は open string + reserved prefix。
 
 | Prefix       | Owner                                                                                                            |
 | ------------ | ---------------------------------------------------------------------------------------------------------------- |
@@ -25,20 +18,13 @@ capability は **open string** である。catalog は集合を closed enum に*
 | `system.*`   | Takosumi kernel / runtime-agent / observation tier                                                               |
 | `operator.*` | Operator-defined deployment-local capabilities                                                                   |
 
-A provider may declare any kebab-case identifier in `capabilities`. A manifest
-may reference any kebab-case identifier in `requires`. Selection verifies subset
-membership only. The closed `*Capability` union types exported alongside each
-bundled shape are convenience for compile-time checks, not a contract — the
-runtime treats `capabilities` as `readonly string[]`.
+provider は `capabilities` に任意の kebab-case 識別子を宣言できる。 manifest は `requires` で任意の kebab-case 識別子を参照できる。 selection は subset 所属だけを検証する。 bundled shape と並んで export される closed `*Capability` union 型は compile-time check の便宜であり、contract ではない — runtime は `capabilities` を `readonly string[]` として扱う。
 
-Adding a new reserved prefix, or adding identifiers under `takos.*` /
-`system.*`, requires the §6 RFC. `operator.*` is free for the operator to use
-within a single deployment.
+新 reserved prefix の追加、または `takos.*` / `system.*` 下の識別子追加は §6 RFC を要する。 `operator.*` は単一 deployment 内で operator が自由に使える。
 
 ## outputFields reserved names
 
-Five field names are **reserved** across the catalog so that consumer manifests
-can rely on stable semantics regardless of which provider runs:
+5 つの field 名は catalog 横断で **reserved** され、 consumer manifest はどの provider が走っても安定 semantics に依存できる。
 
 | reserved name | meaning                                                         |
 | ------------- | --------------------------------------------------------------- |
@@ -48,8 +34,7 @@ can rely on stable semantics regardless of which provider runs:
 | `id`          | provider-scope identifier                                       |
 | `version`     | provider-scope version / revision identifier                    |
 
-A new shape that exposes a field with one of these names must use the reserved
-meaning. Adding a new reserved name follows the §6 RFC.
+これらの名前の field を expose する新 shape は reserved meaning を使う。 新 reserved name の追加は §6 RFC。
 
 ## Catalog
 
@@ -61,10 +46,7 @@ meaning. Adding a new reserved name follows the §6 RFC.
 | `custom-domain`     | `v1`    | DNS + TLS-terminated public domain                                  |
 | `worker`            | `v1`    | Serverless JS function backed by a `js-bundle` artifact             |
 
-下記の lifecycle persistence 列の表記は、v1 object lifecycle class (managed /
-generated / external / operator / imported) を使う。同梱 shape では、すべての
-output field は **generated** である — provider が apply 中に値を書き、kernel
-はそれを `${ref:...}` consume 用の resolved output マップに永続化する。
+下記 lifecycle persistence 列の表記は、 v1 object lifecycle class (managed / generated / external / operator / imported) を使う。 同梱 shape では、すべての output field は **generated** — provider が apply 中に値を書き、 kernel はそれを `${ref:...}` consume 用の resolved output マップに永続化する。
 
 ## `object-store@v1`
 
@@ -85,8 +67,7 @@ interface ObjectStoreSpec {
 }
 ```
 
-`name` is required and non-empty. All other fields are optional; provider
-defaults apply when unset.
+`name` は必須かつ非空。他は optional で、未設定なら provider default が適用される。
 
 ### outputFields
 
@@ -100,13 +81,11 @@ defaults apply when unset.
 
 ### Declared capabilities (catalog vocabulary)
 
-`versioning`, `presigned-urls`, `server-side-encryption`, `public-access`,
-`event-notifications`, `lifecycle-rules`, `multipart-upload`.
+`versioning`, `presigned-urls`, `server-side-encryption`, `public-access`, `event-notifications`, `lifecycle-rules`, `multipart-upload`.
 
 ## `web-service@v1`
 
-Long-running HTTP service driven by an OCI image (or other artifact a provider
-accepts).
+OCI image (または provider が受け入れる他の artifact) で driven する長時間稼働 HTTP service。
 
 ### Spec summary
 
@@ -129,8 +108,7 @@ interface WebServiceSpec {
 }
 ```
 
-Either `image` or `artifact` must be set. `bindings` accepts `${ref:...}`
-expressions resolved against other resources' outputs; `env` is plain literal.
+`image` か `artifact` のどちらかを set する。 `bindings` は他 resource output に対して resolve される `${ref:...}` を受け入れる。 `env` は plain literal。
 
 ### outputFields
 
@@ -142,12 +120,11 @@ expressions resolved against other resources' outputs; `env` is plain literal.
 
 ### Declared capabilities
 
-`always-on`, `scale-to-zero`, `websocket`, `long-request`, `sticky-session`,
-`geo-routing`, `private-networking`.
+`always-on`, `scale-to-zero`, `websocket`, `long-request`, `sticky-session`, `geo-routing`, `private-networking`.
 
 ## `database-postgres@v1`
 
-Managed PostgreSQL with wire-protocol portability.
+wire-protocol portability のある managed PostgreSQL。
 
 ### Spec summary
 
@@ -175,14 +152,11 @@ interface DatabasePostgresSpec {
 
 ### Declared capabilities
 
-`pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`, `ipv6`,
-`extensions`.
+`pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`, `ipv6`, `extensions`.
 
 ## `custom-domain@v1`
 
-DNS record plus TLS termination for a public domain. The common pattern is
-`target: "${ref:<webservice>.url}"` to pin the domain to a `web-service@v1`
-output.
+DNS record と public domain の TLS termination。 典型 pattern は `target: "${ref:<webservice>.url}"` で `web-service@v1` output に pin する。
 
 ### Spec summary
 
@@ -216,9 +190,7 @@ interface CustomDomainSpec {
 
 ## `worker@v1`
 
-Serverless JS function backed by an uploaded `js-bundle` artifact. Unlike
-`web-service@v1`, `artifact.kind` must be exactly `js-bundle` and
-`artifact.hash` is required (no external `uri`).
+upload された `js-bundle` artifact で動く serverless JS function。 `web-service@v1` と異なり、 `artifact.kind` は exactly `js-bundle` で `artifact.hash` が必須 (外部 `uri` なし)。
 
 ### Spec summary
 
@@ -246,44 +218,22 @@ interface WorkerSpec {
 
 ## Catalog extension
 
-Adding a new shape, expanding the `outputFields` reserved-name set, or
-introducing a new reserved capability prefix all go through the same
-`CONVENTIONS.md` §6 RFC. Adding a new provider for an existing shape is the
-standard non-RFC path and is the right tool for new cloud support.
+新 shape の追加、 `outputFields` reserved-name 集合の拡張、 新 reserved capability prefix の導入は、 すべて同じ `CONVENTIONS.md` §6 RFC を通る。 既存 shape への新 provider 追加は標準 non-RFC path で、 新クラウド対応の正しい道具。
 
 ## Catalog scope と plugin extension
 
-Kernel curated catalog は v1 で 5 shape (`object-store@v1` / `web-service@v1` /
-`database-postgres@v1` / `custom-domain@v1` / `worker@v1`) に閉じます。 新 shape
-の追加は `CONVENTIONS.md` §6 RFC で coordinate されます。
+Kernel curated catalog は v1 で 5 shape (`object-store@v1` / `web-service@v1` / `database-postgres@v1` / `custom-domain@v1` / `worker@v1`) に閉じる。 新 shape の追加は `CONVENTIONS.md` §6 RFC で coordinate される。
 
-Workflow / cron / lifecycle hook 等の shape は current v1 catalog / plugin
-extension surface に含めません。`cron-job@v1` / `workflow-job@v1` / reserved
-vocabulary であり、current kernel は通常の `resources[]` として
-受け付けません。Git / webhook / build / schedule / deployment hook は
-`takosumi-git` 等の installer/helper surface の責務です。詳細な placement は
-[Extending the Shape Model](/extending) と
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
-を参照。
+Workflow / cron / lifecycle hook 等の shape は current v1 catalog / plugin extension surface に含めない。 `cron-job@v1` / `workflow-job@v1` は reserved vocabulary であり、 current kernel は通常の `resources[]` として受け付けない。 Git / webhook / build / schedule / deployment hook は `takosumi-git` 等の installer/helper surface の責務。 詳細な placement は [Extending the Shape Model](/extending) と [Workflow Placement Rationale](/reference/architecture/workflow-extension-design) を参照。
 
 ## Cross-references
 
-- [Access Modes](/reference/access-modes) — closed v1 access mode enum (`read` /
-  `read-write` / `admin` / `invoke-only` / `observe-only`) for shape outputs
-  that expose targets to consumers, and the `safeDefaultAccess` contract on
-  grant-producing exports.
-- [Closed Enums](/reference/closed-enums) — full v1 closed enum index (object
-  lifecycle classes, mutation constraints, link mutations) that shape outputs
-  are constrained by.
-- [Connector Contract](/reference/connector-contract) — `connector:<id>`
-  identity と shape outputs が連携する artifact 受け渡し境界。
-- `CONVENTIONS.md` §6 RFC (at the takosumi repo root) — shape catalog, reserved
-  outputField, and reserved capability-prefix RFC process.
-- [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
-  — workflow / trigger / hook / execute-step を kernel から外し上位 product
-  へ寄せる設計 rationale。
-- [Extending the Shape Model](/extending) — provider / template / new-shape
-  extension flow.
+- [Access Modes](/reference/access-modes) — consumer に target を expose する shape output 向けの closed v1 access mode enum (`read` / `read-write` / `admin` / `invoke-only` / `observe-only`)、 grant 生成 export の `safeDefaultAccess` contract。
+- [Closed Enums](/reference/closed-enums) — shape output を制約する完全な v1 closed enum index (object lifecycle class、mutation constraint、link mutation)。
+- [Connector Contract](/reference/connector-contract) — `connector:<id>` identity と shape output が連携する artifact 受け渡し境界。
+- `CONVENTIONS.md` §6 RFC (takosumi repo root) — shape catalog、 reserved outputField、 reserved capability prefix の RFC プロセス。
+- [Workflow Placement Rationale](/reference/architecture/workflow-extension-design) — workflow / trigger / hook / execute-step を kernel から外し上位 product に寄せる設計 rationale。
+- [Extending the Shape Model](/extending) — provider / template / new-shape extension flow。
 
 ## 関連ページ
 

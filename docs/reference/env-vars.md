@@ -1,21 +1,20 @@
 # Environment Variables
 
-> このページでわかること: kernel が読む環境変数の一覧。
+> このページでわかること: kernel / CLI / runtime-agent が読む `TAKOSUMI_*`
+> 環境変数のカタログ。
 
-v1 で kernel が読み取る `TAKOSUMI_*` 環境変数のカタログです。 各 entry に消費
-側、 parse 後の型、 既定値、 必須かどうか、 関連 spec concept を列挙します。
+各 entry の consumer / parse 型 / 既定値 / 必須要件 / 関連 spec concept を列挙
+します。
 
-::: info 実装範囲 本ページは現行 boot 系と spec 上の契約の両方を列挙してい
-ます。 role / environment / public-route / deploy-token / internal-secret /
-database / artifact / plugin-selection / audit-retention / observation-retention
-/ runtime-agent は kernel boot で確実に parse されます。 API key hashing / trial
-cleanup / SLA window / support impersonation / auth-provider JSON / quota-tier
-bootstrap などの domain 固有 entry は、 対応 route / worker が配線 されるまでは
-spec 上の契約として扱います。 :::
+::: info 実装範囲 現行 boot 系と spec 上の契約を併記します。 role / environment
+/ public-route / deploy-token / internal-secret / database / artifact /
+plugin-selection / audit-retention / observation-retention / runtime-agent は
+kernel boot で parse されます。 API key hashing / trial cleanup / SLA window /
+support impersonation / auth-provider JSON / quota-tier bootstrap 等の domain
+固有 entry は対応 route / worker が配線されるまで spec 上の契約として扱います。
+:::
 
 ## Precedence
-
-すべての consumer で次の順序で値を解決します。
 
 ```text
 1. process env                      # 最優先
@@ -23,19 +22,16 @@ spec 上の契約として扱います。 :::
 3. built-in default                 # 最低
 ```
 
-CLI が flag を提供する command では、 その flag が上記すべてを上書きします。 新
-`TAKOSUMI_*` を追加するには `CONVENTIONS.md` §6 RFC が必須で、 ad-hoc な
-追加は不可。
+CLI flag を持つ command では flag が上記全てを上書きします。 新 `TAKOSUMI_*`
+は `CONVENTIONS.md` §6 RFC 必須で、 ad-hoc 追加は不可。
 
-boolean 変数は `1 / true / yes / on / enabled` を真、
-`0 / false / no / off / disabled` を偽と解釈。 それ以外は fail closed です。
+boolean は `1 / true / yes / on / enabled` を真、
+`0 / false / no / off / disabled` を偽。 それ以外は fail closed。
 
 ## Kernel server
 
-kernel の process role は
-`takosumi-{api,worker,router,runtime-agent,log-worker}`。 role の選択は
-`TAKOSUMI_PROCESS_ROLE` で行い、 以下の他の変数は注記が無い限り role
-間で共有されます。
+process role は `takosumi-{api,worker,router,runtime-agent,log-worker}`。
+`TAKOSUMI_PROCESS_ROLE` で選択し、 注記が無い変数は role 間で共有されます。
 
 ### Connectivity and identity
 
@@ -70,8 +66,8 @@ kernel の process role は
 
 ### Boot timeouts
 
-kernel boot pipeline は各 substrate が ready になるまで待ってから `serving`
-に遷移します。 以下の各 timeout は 1 boot stage の待ち時間上限です。
+kernel boot pipeline は各 substrate が ready になるまで待って `serving` に遷
+移します。 各 timeout は 1 boot stage の待ち時間上限。
 
 | Variable                                           | Type              | Default | Required | Consumer                                        | Spec concept       |
 | -------------------------------------------------- | ----------------- | ------- | -------- | ----------------------------------------------- | ------------------ |
@@ -124,10 +120,10 @@ kernel boot pipeline は各 substrate が ready になるまで待ってから `
 
 ### Plugin selectors
 
-kernel は plugin port (`auth` / `coordination` / `notification` /
-`operator-config` / `storage` / `source` / `provider` / `queue` /
-`object-storage` / `kms` / `secret-store` / `router-config` / `observability` /
-`runtime-agent`) ごとに Implementation を選択します。
+plugin port (`auth` / `coordination` / `notification` / `operator-config` /
+`storage` / `source` / `provider` / `queue` / `object-storage` / `kms` /
+`secret-store` / `router-config` / `observability` / `runtime-agent`) ごとに
+Implementation を選択します。
 
 | Variable                                                                                 | Type        | Default          | Required                            | Consumer                                                       | Spec concept       |
 | ---------------------------------------------------------------------------------------- | ----------- | ---------------- | ----------------------------------- | -------------------------------------------------------------- | ------------------ |
@@ -143,13 +139,13 @@ kernel は plugin port (`auth` / `coordination` / `notification` /
 | `TAKOSUMI_ENABLE_REFERENCE_KERNEL_PLUGIN_LOADER`                                         | boolean     | `false`          | no                                  | enables the reference plugin loader                            | OperatorBoundaries |
 | `TAKOSUMI_ENABLE_DENO_DEPLOY_PROVIDER`                                                   | boolean     | `false`          | no                                  | opt-in registration of the Deno Deploy provider in stock boots | n/a                |
 
-kernel は marketplace URL / package selector や remote plugin install を
-サポートしません。 operator packaging が plugin module
-を持ち込むのは可能ですが、 marketplace 機構は持ちません。
+kernel は marketplace URL / package selector や remote plugin install をサポー
+トしません。 operator packaging が plugin module を持ち込むのは可能ですが、
+marketplace 機構はありません。
 
 ### Deploy Credentials
 
-account plane の auth provider と user API key は Takosumi Accounts が所有 し、
+account plane の auth provider と user API key は Takosumi Accounts 所有。
 kernel は operator の deploy / artifact credential と runtime-agent credential
 のみを所有します。
 
@@ -186,8 +182,8 @@ kernel は operator の deploy / artifact credential と runtime-agent credentia
 
 ## CLI
 
-`takosumi` CLI は以下の変数を読み、 remote URL / token / config file path を
-解決します。 解決順序は [CLI Reference](/reference/cli) を参照。
+`takosumi` CLI は次の変数を読んで remote URL / token / config file path を
+解決します。 解決順序は [CLI Reference](/reference/cli)。
 
 | Variable                | Type   | Default                  | Required                                | Consumer                                           | Spec concept            |
 | ----------------------- | ------ | ------------------------ | --------------------------------------- | -------------------------------------------------- | ----------------------- |
@@ -199,10 +195,10 @@ kernel は operator の deploy / artifact credential と runtime-agent credentia
 
 ## Runtime-Agent
 
-runtime-agent プロセスは cloud SDK の credential を保持します。 cloud credential
-は各 SDK の標準変数 (例: `AWS_*`、 `GOOGLE_APPLICATION_CREDENTIALS`、
-`CLOUDFLARE_API_TOKEN`、 `AZURE_*`) から 読み込み、 Takosumi catalog
-の対象外です。 kernel host には絶対に置きませ ん。
+runtime-agent process は cloud SDK credential を保持します。 各 SDK 標準変数
+(`AWS_*` / `GOOGLE_APPLICATION_CREDENTIALS` / `CLOUDFLARE_API_TOKEN` /
+`AZURE_*` 等) から読込み、 Takosumi catalog の対象外。 kernel host には絶対
+に置きません。
 
 | Variable                                    | Type   | Default           | Required                         | Consumer                                                                | Spec concept            |
 | ------------------------------------------- | ------ | ----------------- | -------------------------------- | ----------------------------------------------------------------------- | ----------------------- |
@@ -217,19 +213,18 @@ runtime-agent プロセスは cloud SDK の credential を保持します。 clo
 | `TAKOSUMI_SELFHOSTED_COREDNS_FILE`          | path   | unset             | no                               | coredns configuration file path                                         | runtime-agent lifecycle |
 | `TAKOSUMI_SELFHOSTED_POSTGRES_HOST`         | string | unset             | no                               | self-hosted postgres host                                               | runtime-agent lifecycle |
 
-runtime-agent の enrolment フロー: operator が agent host に token (env 設定
-または乱数生成) を渡し、 kernel host を `TAKOSUMI_AGENT_URL` +
-`TAKOSUMI_AGENT_TOKEN` で同じ token に揃え、 kernel は lifecycle envelope を
-送信する前に agent の `GET /v1/health` を検証します。
+enrolment フロー: operator が agent host に token (env 設定 or 乱数生成) を渡
+し、 kernel host を `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN` で同 token
+に揃え、 kernel は lifecycle envelope 送信前に agent の `GET /v1/health` を
+検証します。
 
 ## 拒否される selector key
 
-非 current plugin selector 形式 (`*_BACKEND` / `*_ADAPTER`、non-current
-bootstrap adapter family) は boot 時に reject されます。 current 形式は
-`TAKOSUMI_<PORT>_PLUGIN`。 これらの key が存在する構成は起動拒否され、fallback
+current 形式は `TAKOSUMI_<PORT>_PLUGIN`。 非 current 形式 (`*_BACKEND` /
+`*_ADAPTER` / 旧 bootstrap adapter family) は boot 時 reject で、 fallback
 layer はありません。
 
-拒否される名前の閉じた一覧:
+拒否名 closed list:
 
 ```text
 TAKOSUMI_STORAGE_BACKEND
@@ -259,22 +254,21 @@ TAKOSUMI_SECRET_STORE_NAMESPACE
 TAKOSUMI_BOOTSTRAP_*_ADAPTER
 ```
 
-これらが存在すると、 `loadRuntimeConfig` は `stale_runtime_selector` の
-diagnostic を出して起動を拒否します。
+これらが存在すると `loadRuntimeConfig` は `stale_runtime_selector` diagnostic
+を出して起動を拒否します。
 
 ## Host 配置
 
-上記変数は host 役割ごとに分割します。 同一 host で混在させると
-OperatorBoundaries trust model を弱めます。
+host 役割ごとに分割します。 同一 host 混在は OperatorBoundaries trust model
+を弱めます。
 
-- kernel host: state / storage 変数、 deploy / internal token、 artifact
-  policy、 plugin selector、 audit / observation retention、 runtime-agent URL /
-  bearer
+- kernel host: state / storage / deploy / internal token / artifact policy /
+  plugin selector / audit / observation retention / runtime-agent URL / bearer
 - runtime-agent host: agent bearer、 `TAKOSUMI_KUBERNETES_*` /
   `TAKOSUMI_SELFHOSTED_*`、 cloud SDK credential。 deploy bearer と internal
-  control-plane secret は kernel host から外に出さない
-- CLI host (operator workstation、 CI): remote URL、 deploy bearer、 必要に
-  応じて runtime-agent URL / bearer、 非デフォルト設定で `TAKOSUMI_CONFIG_FILE`
+  control-plane secret は kernel host から出さない
+- CLI host (operator workstation / CI): remote URL、 deploy bearer、 必要に応
+  じて runtime-agent URL / bearer、 非 default の `TAKOSUMI_CONFIG_FILE`
 
 ## 関連
 

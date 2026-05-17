@@ -1,11 +1,6 @@
 # Supply Chain Trust
 
-> このページでわかること: supply chain trust model の全体設計。
-
-このページは install / deploy 時に「何を信用しているか」を 1 本の chain of
-custody として固定します。ecosystem の trust model は **TLS + digest pin + 1
-つの signing domain (OIDC)** の組み合わせです。design-principles § 6 と
-整合します。
+> このページでわかること: install / deploy 時の chain of custody — TLS + digest pin + 1 signing domain (OIDC) の組み合わせ。design-principles §6 と整合する。
 
 ## 1. Trust Boundaries
 
@@ -24,7 +19,7 @@ custody として固定します。ecosystem の trust model は **TLS + digest 
 
 ## 2. Chain Of Custody
 
-Install path は次の順に evidence を pin します。
+Install path は次の順に evidence を pin する。
 
 1. Git URL と immutable ref を resolve し、 commit SHA を pin する。
 2. `.takosumi/app.yml` を parse し、 sha256 を計算する。
@@ -44,20 +39,16 @@ Install path は次の順に evidence を pin します。
       `/consume` 経由で redeem (TLS)
     - 以後の session: OIDC ID token (Accounts issuer 署名)。
 
-この chain の途中に mutable ref、unresolved placeholder、unverified catalog
-digest、unexplained provider decision が残っていてはいけません。
+この chain の途中に mutable ref / unresolved placeholder / unverified catalog
+digest / unexplained provider decision が残っていてはいけない。
 
 ## 3. Signing Domain (1 only)
 
-ecosystem で署名を発行する domain は **OIDC ID token のみ** に限定します。
+ecosystem で署名を発行する domain は **OIDC ID token のみ** に限定する。
 
 | Domain        | Signer                   | Verifier          | 用途         |
 | ------------- | ------------------------ | ----------------- | ------------ |
 | OIDC ID token | Takosumi Accounts issuer | app / API gateway | user session |
-
-OIDC を選んだ理由: 業界標準 (RFC 6749 / 8252 等) との互換性。 Keycloak / Auth0
-等を upstream IdP として組み込む path、 3rd party tool との interop、
-cross-domain federation 等が標準 tooling で動くこと。
 
 **署名で扱わない boundary** (TLS / digest pin で扱う):
 
@@ -65,19 +56,21 @@ cross-domain federation 等が標準 tooling で動くこと。
   code grant 相当)
 - catalog release: operator-pinned sha256 + TLS fetch
 - provider endpoint URL / webhook URL: 個別 signing なし
-- service descriptor / namespace export resolution: signing なし、 audit に
-  record
+- service descriptor / namespace export resolution: signing なし、 audit に record
 - 3rd party app distribution (future marketplace): default は marketplace API
-  trust (TLS)、 publisher direct signing は optional future extension
+  trust (TLS)。 publisher direct signing は optional future extension
 
-universal signing model (provider endpoint 署名 / service descriptor 署名 / 全
-package 署名等) は採用しません。 各 trust boundary は最小限の機構で成立させ、
-鍵管理と blast radius を縮小します。
+> OIDC を選んだ理由は業界標準 (RFC 6749 / 8252 等) との互換性。 Keycloak / Auth0
+> 等を upstream IdP として組み込む path、 3rd party tool との interop、
+> cross-domain federation 等が標準 tooling で動く。 universal signing model
+> (provider endpoint 署名 / service descriptor 署名 / 全 package 署名等) は
+> 採用しない。 各 trust boundary を最小限の機構で成立させ、 鍵管理と blast
+> radius を縮小する。
 
 ## 4. Launch Token (opaque token model)
 
 Install 直後の auto sign-in は OAuth authorization code grant 風の **one-time
-opaque token** を redirect carrier として 使い、 redeem を TLS で行います。
+opaque token** を redirect carrier として使い、 redeem を TLS で行う。
 
 ```text
 1. install ready → Accounts が 32-byte random token を発行:
@@ -113,18 +106,18 @@ audience claim 検証は不要。 OAuth 2.0 RFC 6749 の authorization code gran
 
 ### 4.1 セキュリティ性質
 
-- **one-time**: `used` flag が atomic 操作で flip するため、 同 token の二重
-  consume は確実に拒否される
-- **redirect_uri 拘束**: token は発行時に redirect_uri を bound、 別の URL に
-  redirect された token は consume 不可 (典型的な token theft + redirect attack
-  を防ぐ)
-- **短命**: TTL 5 分以下、 leak しても window が短い
+- **one-time**: `used` flag が atomic 操作で flip する。 同 token の二重 consume
+  は確実に拒否される
+- **redirect_uri 拘束**: token は発行時に redirect_uri に bound する。 別の URL
+  に redirect された token は consume 不可 (典型的な token theft + redirect
+  attack を防ぐ)
+- **短命**: TTL 5 分以下。 leak しても window が短い
 - **TLS 必須**: token を carry する URL も redeem call も TLS で保護
 
 ## 5. Digest Invariants
 
-次の digest は AppInstallation / Deployment evidence
-で説明可能である必要があります。
+次の digest は AppInstallation / Deployment evidence で説明可能でなければ
+ならない。
 
 - `appManifestDigest`: `.takosumi/app.yml` の sha256
 - `compiledManifestDigest`: kernel に渡した compiled Shape manifest の sha256
@@ -133,13 +126,13 @@ audience claim 検証は不要。 OAuth 2.0 RFC 6749 の authorization code gran
 - `catalogReleaseDigest`: operator が config に pin した catalog の sha256
 - policy / provider resolution input digest
 
-rollback は mutable tag を再解決しません。 保存済み compiled manifest digest と
-artifact digest を再 apply します。
+rollback は mutable tag を再解決しない。 保存済み compiled manifest digest と
+artifact digest を再 apply する。
 
 ## 6. Catalog Release Trust
 
 shape / provider / template の release (catalog) は operator-pinned sha256 で
-trust を取ります。
+trust を取る。
 
 ```text
 1. operator が deploy する kernel host の config に catalog digest を pin:
@@ -150,62 +143,56 @@ trust を取ります。
 4. AppInstallation / Deployment evidence に catalog digest を pin
 ```
 
-これは container image digest と同じ pattern。 operator が「どの version
-を信頼するか」 を明示し、 kernel は fetch 結果が digest と一致することだけを
-verify します。 publisher signing は不要。
+container image digest と同じ pattern。 operator が「どの version を信頼するか」
+を明示し、 kernel は fetch 結果が digest と一致することだけを verify する。
+publisher signing は不要。
 
 dynamic registry (operator が runtime に catalog version を切り替える) や
-multi-mirror が必要になった場合は、 future RFC で publisher signing domain
-を追加することは可能です。 v1 default は static operator pin。
+multi-mirror が必要になった場合は、 future RFC で publisher signing domain を
+追加することは可能。 v1 default は static operator pin。
 
 ### Operator-pinned trust の trade-off
 
-operator-pinned digest model は **operator が trust authority** であることを
-意味する。 container image digest と「同じ pattern」 と書きましたが、 OCI
+operator-pinned digest model は **operator が trust authority** である。 OCI
 registry には Notary / Cosign 等の signature verification path も並列に存在
-するのに対し、 current Takosumi は operator pin のみで publisher signature
-を持たない点が異なります。 具体的な trade-off:
+するのに対し、 current Takosumi は operator pin のみで publisher signature を
+持たない。 trade-off:
 
 - ✅ 鍵管理コスト 0、 publisher key registry なし、 setup 簡単
 - ✅ pin 値を operator が掌握できるので supply chain attack の blast radius が
-  operator の config boundary に閉じる (kernel が勝手に新 version を pull
-  しない)
+  operator の config boundary に閉じる (kernel が勝手に新 version を pull しない)
 - ❌ **operator monopoly on truth**: operator account / config storage が
   compromised なら attacker は任意 catalog digest に pin を変更可能。 publisher
   assertion が無いので「pin 値が genuine な release を指しているか」 は detect
   困難 (out-of-band verification が必要)
 - ❌ **cross-instance trust chain なし**: 2 Takosumi instance が異なる
   `CATALOG_DIGEST` 値を持つ場合、 chain of custody は instance ごとに isolated。
-  「同じ release を pin している」 ことを protocol level で 確認する手段は無い
+  「同じ release を pin している」 ことを protocol level で確認する手段は無い
 - ❌ **dynamic catalog discovery 不可**: marketplace 等で「最新 release を
-  fetch」 する flow には publisher signature か trusted registry index が 必要
+  fetch」 する flow には publisher signature か trusted registry index が必要
   (future RFC)
 
-これは **single-operator-trust model** であり、 publisher-direct-trust や
-federated trust を要求する use case には不十分です。 v1 default は「operator が
-catalog version を慎重に pin する」 を user expectation とし、 そのコスト
-(operator 側で release notes を読む、 hash を out-of-band verify する) を
-operator に課します。
+これは **single-operator-trust model**。 publisher-direct-trust や federated
+trust を要求する use case には不十分。 v1 default は「operator が catalog
+version を慎重に pin する」 を user expectation とし、 そのコスト (operator
+側で release notes を読む、 hash を out-of-band verify する) を operator に課す。
 
 ## 7. Marketplace Trust (future)
 
 3rd party publisher の app distribution (Phase 2.x の marketplace 機能) は
-default では **marketplace API を trusted authority とする TLS trust**
-で扱います:
+default では **marketplace API を trusted authority とする TLS trust** で扱う。
 
 - user が marketplace 上で「verified publisher」 を信頼する
-- marketplace は publisher metadata、 verified status、 takedown 状態を API
-  で公開
+- marketplace は publisher metadata、 verified status、 takedown 状態を API で公開
 - consumer は TLS で marketplace API を叩き、 install 可否を判断
 
 publisher direct signing (marketplace を bypass して publisher 鍵で verify) は
 **optional future extension**。 air-gapped install / cypherpunk 用途で必要なら
-RFC で追加します。 v1 default は marketplace trust。
+RFC で追加する。 v1 default は marketplace trust。
 
 ## 8. Current Gaps
 
-このページは trust chain の target contract です。実装には次の領域で gap が
-残り得ます。
+このページは trust chain の target contract。 実装には次の領域で gap が残り得る。
 
 - launch token: one-time opaque token + Accounts `/consume` で運用
 - third-party CI artifact provenance attestation: SLSA-level の attestation は
@@ -213,5 +200,4 @@ RFC で追加します。 v1 default は marketplace trust。
 - future marketplace の publisher direct signing path
 - export bundle の provider data restore integrity
 
-gap は chain を曖昧にする理由ではなく、 release gate で partial
-として扱う対象です。
+gap は chain を曖昧にする理由ではなく、 release gate で partial として扱う対象。

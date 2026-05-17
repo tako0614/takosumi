@@ -1,12 +1,8 @@
 # Audit Events
 
-> このページでわかること: kernel が emit する audit event の型と保存ルール。
+> このページでわかること: kernel が emit する audit event の v1 taxonomy。 共通 envelope、 closed event type enum、 indexed column、 redaction rule、 hash chain、 retention regime を定める。
 
-audit log は Takosumi installation 内の決定 / 状態遷移 / operator から見え
-る副作用を tamper-evident に記録するものです。 本ページは v1 の event taxonomy
-を定義します。 共通 envelope、 閉じた event type enum、 query 用 indexed
-column、 secret を audit store に残さない redaction rule、 tamper-evidence
-を担保する hash chain、 Space 毎に operator が選ぶ retention regime を扱います。
+audit log は Takosumi installation 内の決定 / 状態遷移 / operator から見える副作用を tamper-evident に記録する surface。
 
 ## 共通 event envelope
 
@@ -217,12 +213,11 @@ caller は検出され reject されます。
 
 audit log は per-Space chain と global chain で tamper-evidence を保ちます。
 
-Rationale: per-Space chain は tenant 内 audit integrity を Space operator 単独で
-verify 可能にし、Space 間で互いに信頼を要求しない。global chain は cross-Space
-event の total order を保証し、checkpoint で全 Space の chain head を bundle
-する。1 chain だけでは Space tenant の独立 audit と global ordering
-を両立できず、per-Space のみでは cross-Space 攻撃 (片側を 削除して別 Space
-で再生する等) を検出できない。
+Rationale:
+
+- per-Space chain は tenant 内 audit integrity を Space operator 単独で verify 可能にし、 Space 間で互いに信頼を要求しない。
+- global chain は cross-Space event の total order を保証し、 checkpoint で全 Space の chain head を bundle する。
+- 1 chain だけでは独立 audit と global ordering を両立できない。 per-Space のみでは cross-Space 攻撃 (片側を削除して別 Space で再生する等) を検出できない。
 
 - 各 event の `hash` は `prevHash` を含む canonical envelope bytes の digest。
   単一 event の改竄は、 genesis から chain を再導出すれば最初の差異 event

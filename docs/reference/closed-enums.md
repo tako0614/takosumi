@@ -1,11 +1,8 @@
 # Closed Enums
 
-> このページでわかること: kernel が使う closed enum の一覧と拡張ルール。
+> このページでわかること: kernel が使う closed enum / state machine の一覧と拡張ルール。
 
-本ページは Takosumi v1 が定める閉じた enum / state machine の一覧です。 各項目
-に値、 1 行のセマンティクス、 詳細リファレンスへのリンクを示します。 すべて
-**閉じた** enum であり、 拡張には `CONVENTIONS.md` §6 の RFC が必須です。
-provider / template / 第三者パッケージが単独で拡張することはできません。
+各項目は値・1 行セマンティクス・詳細リファレンスへのリンクを並べる。 すべて **閉じた** enum で、拡張には `CONVENTIONS.md` §6 の RFC が必須。 provider / template / 第三者パッケージが単独で拡張することはできない。
 
 ## v1 wire shape の対象
 

@@ -91,6 +91,7 @@ import {
 import type { Clock } from "./shared/time.ts";
 import type { IdGenerator } from "./shared/ids.ts";
 import { log } from "./shared/log.ts";
+import { currentRuntime } from "./shared/runtime/index.ts";
 import {
   type ActorContext,
   type Deployment,
@@ -636,7 +637,7 @@ async function importRuntimeConfigModule(): Promise<
   try {
     return await import("./config/mod.ts");
   } catch (error) {
-    if (error instanceof TypeError || error instanceof Deno.errors.NotFound) {
+    if (error instanceof TypeError || currentRuntime().fs.isNotFoundError(error)) {
       return undefined;
     }
     throw error;

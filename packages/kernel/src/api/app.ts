@@ -8,6 +8,7 @@ import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";
 import { createCoreDomainServices } from "../domains/core/mod.ts";
 import type { PublicDeployManifest } from "../domains/deploy/mod.ts";
 import { assertRoleCapability, type PaaSProcessRole } from "../process/mod.ts";
+import { currentRuntime } from "../shared/runtime/index.ts";
 import { createApiCapabilitiesDescription } from "./capabilities.ts";
 import { registerApiErrorHandler } from "./errors.ts";
 import { createPaaSOpenApiDocument, type OpenApiDocument } from "./openapi.ts";
@@ -654,7 +655,7 @@ function createRuntimeAgentRouteOptions(
 }
 
 function defaultInternalServiceSecret(): string | undefined {
-  return Deno.env.get("TAKOSUMI_INTERNAL_API_SECRET");
+  return currentRuntime().env.get("TAKOSUMI_INTERNAL_API_SECRET");
 }
 
 function createDefaultReadinessProbes(): ReadinessRouteProbes {

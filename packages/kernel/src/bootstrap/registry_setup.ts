@@ -4,6 +4,7 @@ import { createTakosumiProductionProviders } from "@takos/takosumi-plugins/shape
 import { registerBundledArtifactKinds } from "@takos/takosumi-plugins/shape-providers";
 import { detectRuntimeAgent } from "./agent_detection.ts";
 import { log } from "../shared/log.ts";
+import { currentRuntime } from "../shared/runtime/index.ts";
 
 let bundledShapesRegistered = false;
 
@@ -18,7 +19,8 @@ let bundledShapesRegistered = false;
  * an agent is configured).
  */
 export function registerBundledShapesAndProviders(
-  runtimeEnv: Record<string, string | undefined> = Deno.env.toObject(),
+  runtimeEnv: Record<string, string | undefined> = currentRuntime().env
+    .toObject(),
 ): void {
   if (!bundledShapesRegistered) {
     for (const shape of TAKOSUMI_BUNDLED_SHAPES) registerShape(shape);

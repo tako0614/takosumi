@@ -1,10 +1,10 @@
 # Public Spec Source Map
 
-> このページでわかること: 公開仕様とソースコードの対応マップ。
+> このページでわかること: public surface ごとの source of truth / 公開
+> reference / drift check の対応表。
 
-本ページは、各 public surface を真実の source、公開リファレンス、drift check
-にマップする。public shape が変わったら、所有 source と下記の行を同じ変更で
-更新する。wire / package surface ではドキュメントのみの更新では不十分である。
+public shape が変わったら、 所有 source と下記行を同じ変更で更新します。 wire
+/ package surface ではドキュメントのみの更新では不十分です。
 
 ## Map
 
@@ -20,21 +20,20 @@
 
 ## Boundary Rules
 
-- Takosumi kernel は manifest を明示的 path または HTTP body でのみ受け取る。
-  `.takosumi/` を discover せず、workflow ファイルを読まず、build を実行せず、
-  `workflowRef` を受け付けず、workflow trigger route を公開しない。
-- upstream client は `POST /v1/deployments` に不透明な deployment provenance を
-  attach できる。kernel はその JSON を public WAL entry と status 出力に記録
-  するが、provenance が kernel 所有の workflow / git 語彙を作ることはない。
-- `resources[i].workflowRef` は `takosumi-git` の私的プロジェクト convention で
-  ある。manifest を `POST /v1/deployments` に submit する前に strip しなければ
-  ならない。
-- public JSR package チェックは root workspace import map ではなく package の
-  `deno.json` ファイルを使う必要があり、これにより古い publish 済み依存 pin が
-  捕捉される。
-- 真実の source が本リポジトリ外にある行は、所有リポジトリとそこの test location
-  を名指しすること。本リポジトリの drift test は Takosumi 所有の path
-  と、このクロスリポジトリ所有レコードの存在を検証する。
+- kernel は manifest を明示的 path または HTTP body でのみ受け取り、
+  `.takosumi/` を discover せず、 workflow file を読まず、 build を実行せず、
+  `workflowRef` を受け付けず、 workflow trigger route を公開しません。
+- upstream client は `POST /v1/deployments` に opaque deployment provenance を
+  attach できます。 kernel は JSON を public WAL entry と status output に記録
+  しますが、 provenance が kernel 所有の workflow / git 語彙を作ることはあり
+  ません。
+- `resources[i].workflowRef` は `takosumi-git` の private convention で、
+  `POST /v1/deployments` 前に strip 必須です。
+- public JSR package check は root workspace import map ではなく package の
+  `deno.json` を使い、 古い publish 済依存 pin を捕捉します。
+- 真実の source が本 repo 外にある行は、 所有 repo とそこの test location を
+  名指しします。 本 repo の drift test は Takosumi 所有 path と cross-repo 所
+  有レコードの存在を検証します。
 
 ## 関連ページ
 

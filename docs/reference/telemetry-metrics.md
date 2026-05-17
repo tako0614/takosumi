@@ -1,43 +1,46 @@
 # Telemetry / Metrics
 
-> このページでわかること: テレメトリメトリクスの命名規則と emit ポイント。
-
-Takosumi installation の telemetry export に関する v1 contract です。 export
-protocol、 metric 命名規則、 operator が依存する閉じた v1 metric set、 trace
-export と span attribute、 sampling、 cardinality 制御、 export surface の認証、
-schema versioning rule を定義します。
+> このページでわかること: telemetry export の v1 contract — protocol / 命名 / closed metric set / trace / sampling / 認証 / schema versioning。
 
 ::: info 実装状況 metric schema、 observability sink record、 Prometheus
 `/metrics` HTTP route、 OTLP/HTTP JSON metric exporter、 kernel HTTP server
 span、 provider operation span、 runtime-agent loop span、 internal RPC client
-span は service contract として実装されています。 bootstrap path は
+span は service contract として実装済み。 bootstrap path は
 `TAKOSUMI_METRICS_SCRAPE_TOKEN` が設定されていれば API role に `/metrics` を
-mount し、 `TAKOSUMI_OTLP_METRICS_ENDPOINT` / `TAKOSUMI_OTLP_TRACES_ENDPOINT`
+mount する。 `TAKOSUMI_OTLP_METRICS_ENDPOINT` / `TAKOSUMI_OTLP_TRACES_ENDPOINT`
 または標準 `OTEL_EXPORTER_OTLP_*` endpoint env が設定されていれば、 構成済
-`ObservabilitySink` を native OTLP metric / trace export で wrap し ます。
+`ObservabilitySink` を native OTLP metric / trace export で wrap する。
 deploy overview Grafana dashboard は
 `deploy/observability/grafana/takosumi-deploy-overview.json` に公開済み。 :::
 
 ## Export protocol
 
-telemetry は 2 protocol で同時 export します。
+telemetry は 2 protocol で同時 export する。
 
-- **OpenTelemetry / OTLP (primary)** — push 型の OTLP/HTTP JSON exporter で、
-  metric、 kernel HTTP server span、 provider apply / destroy operation span、
-  runtime-agent loop span、 internal RPC client span を export。
-  `TAKOSUMI_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` /
-  `OTEL_EXPORTER_OTLP_ENDPOINT` のいずれかが設定されていれば metric を、
-  `TAKOSUMI_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` /
-  `OTEL_EXPORTER_OTLP_ENDPOINT` のいずれかが設定されていれば HTTP server span を
-  export する。 collector で attribute 拡充や vendor-neutral telemetry ingress
-  を行いたい operator はこちらを使う
-- **Prometheus pull endpoint (secondary)** — kernel HTTP server の `/metrics` を
-  Prometheus 互換 agent が scrape する。 記録された `ObservabilitySink` metric
-  event を Prometheus text format で公開する (trace は含まない)
+### OpenTelemetry / OTLP (primary)
 
-OTLP と Prometheus は排他ではありません。 両方を運用できます。 `/metrics` は
-local pull scrape を、 OTLP wrapper は記録した metric / trace event を collector
-に mirror します。
+push 型の OTLP/HTTP JSON exporter。 metric / kernel HTTP server span / provider
+apply / destroy operation span / runtime-agent loop span / internal RPC client
+span を export する。
+
+- metric export 起点: `TAKOSUMI_OTLP_METRICS_ENDPOINT` /
+  `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT`
+  のいずれかが設定されている
+- trace export 起点: `TAKOSUMI_OTLP_TRACES_ENDPOINT` /
+  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT`
+  のいずれかが設定されている
+- collector で attribute 拡充や vendor-neutral telemetry ingress を行いたい
+  operator はこちらを使う
+
+### Prometheus pull endpoint (secondary)
+
+kernel HTTP server の `/metrics` を Prometheus 互換 agent が scrape する。
+記録された `ObservabilitySink` metric event を Prometheus text format で公開する
+(trace は含まない)。
+
+OTLP と Prometheus は排他ではない。 両方運用できる。 `/metrics` は local pull
+scrape 用、 OTLP wrapper は記録した metric / trace event を collector に mirror
+する。
 
 OTLP exporter が読む kernel 環境変数:
 
@@ -58,7 +61,7 @@ OTEL_SERVICE_NAME                     standard service.name fallback
 
 ## Metric 命名
 
-Takosumi metric 名は次の形に統一します。
+Takosumi metric 名は次の形に統一する。
 
 ```text
 takosumi_<subsystem>_<metric>_<unit>
@@ -73,14 +76,17 @@ takosumi_<subsystem>_<metric>_<unit>
 - `<unit>`: SI / Prometheus canonical unit (`seconds` / `bytes` / `ratio`)。
   無次元 count では省略
 
-histogram は `_seconds` suffix、 counter は monotonic な `_count`、 OTLP の
-`Sum` semantics が必要な場合のみ `_total`、 gauge は unit 以外の suffix を
-付けません。
+suffix rule:
+
+- histogram → `_seconds`
+- counter → monotonic な `_count`
+- OTLP の `Sum` semantics が必要な場合のみ `_total`
+- gauge は unit 以外の suffix を付けない
 
 ## v1 closed metric set
 
-v1 metric set は **閉じ** ています。 operator は調整なしで名前 / label /
-型を当てにできます。 新規 metric は `CONVENTIONS.md` §6 RFC を通します。
+v1 metric set は **閉じ** ている。 operator は調整なしで名前 / label /
+型を当てにできる。 新規 metric は `CONVENTIONS.md` §6 RFC を通す。
 
 | Metric                                           | Type      | Labels                               |
 | ------------------------------------------------ | --------- | ------------------------------------ |
@@ -102,20 +108,19 @@ v1 metric set は **閉じ** ています。 operator は調整なしで名前 /
 | `takosumi_secret_partition_rotation_age_seconds` | gauge     | `partition`                          |
 
 OTLP metric exporter は記録した histogram event を 1 delta datapoint として
-mirror します。 Prometheus exposition は histogram event を bucket
-`[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]` 秒に集約し
-ます。
+mirror する。 Prometheus exposition は histogram event を bucket
+`[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]` 秒に集約する。
 
-`takosumi_wal_stage_duration_seconds` は 8 値 WAL stage enum (`prepare` /
-`pre-commit` / `commit` / `post-commit` / `observe` / `finalize` / `abort` /
-`skip`) を `stage` label に取ります。
+label 詳細:
 
-`takosumi_revoke_debt_count` は閉じた RevokeDebt `status` enum、
-`takosumi_quota_usage_ratio` は閉じた quota `dimension` enum を label に持
-ちます。
+- `takosumi_wal_stage_duration_seconds` の `stage` label は 8 値 WAL stage enum
+  (`prepare` / `pre-commit` / `commit` / `post-commit` / `observe` / `finalize`
+  / `abort` / `skip`)。
+- `takosumi_revoke_debt_count` は閉じた RevokeDebt `status` enum を label に持つ。
+- `takosumi_quota_usage_ratio` は閉じた quota `dimension` enum を label に持つ。
 
-deploy dashboard の query も v1 operator surface です。 同梱 Grafana dashboard
-が使う PromQL:
+deploy dashboard の query も v1 operator surface。 同梱 Grafana dashboard が使う
+PromQL:
 
 | Panel               | PromQL                                                                                                                                                             |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -125,11 +130,15 @@ deploy dashboard の query も v1 operator surface です。 同梱 Grafana dash
 
 ## Trace export
 
-OTLP trace は外部境界を跨ぐ全 operation で emit します。 API request の HTTP
-server span、 WAL-backed `applyV2` / `destroyV2` の provider apply / destroy
-span、 runtime-agent の work execution span、 runtime agent / internal RPC call
-の client span が対象で、 native OTLP traces endpoint 経由 で export されます。
-operation 単位 span は次の attribute set を持ちます。
+OTLP trace は外部境界を跨ぐ全 operation で emit する。 対象は次の span。
+
+- API request の HTTP server span
+- WAL-backed `applyV2` / `destroyV2` の provider apply / destroy span
+- runtime-agent の work execution span
+- runtime agent / internal RPC call の client span
+
+これらは native OTLP traces endpoint 経由で export される。 operation 単位 span
+は次の attribute set を持つ。
 
 ```text
 takosumi.space_id          spaceId
@@ -140,32 +149,32 @@ takosumi.idempotency_key   idempotency tuple digest
 takosumi.agent_id          runtime-agent identity (if applicable)
 ```
 
-span 名は version 間で安定し、 `takosumi.<subsystem>.<verb>` 形式に従いま す
+span 名は version 間で安定する。 形式は `takosumi.<subsystem>.<verb>`
 (例: `takosumi.apply.execute`、 `takosumi.runtime_agent.describe`)。
 
-histogram metric の trace exemplar は `trace_id` / `span_id` を持つため、 slow
-bucket から該当 trace に直接 pivot できます。
+histogram metric の trace exemplar は `trace_id` / `span_id` を持つ。 slow
+bucket から該当 trace に直接 pivot できる。
 
 ## Sampling
 
-既定の sampling は **head-based** で、 operator が調整できます。
+既定の sampling は **head-based**。 operator が調整できる。
 
-- 既定 head sampler は `local` / `development` で `1.0` (100%)、 `staging` /
+- 既定 head sampler は `local` / `development` で `1.0` (100%)。 `staging` /
   `production` では設定可能比率 (`TAKOSUMI_OTLP_TRACE_SAMPLE_RATIO`、 既定
   `0.05`)
 - 終了状態がエラーの operation は **常に sample** される。 kernel は
   `operation-failed` / `compensation-completed` で終わる operation を export
-  する前に sampling decision を `RECORD_AND_SAMPLED` に強制
+  する前に sampling decision を `RECORD_AND_SAMPLED` に強制する
 - tail sampling は collector 側の関心事。 kernel は実装しない
 
 ## Cardinality
 
-v1 closed set では高 cardinality な label を禁止します。
+v1 closed set では高 cardinality な label を禁止する。
 
 - `deploymentId` / `operationId` / `journalEntryId` 等の per-event 識別子は
-  label にはせず、 span attribute や exemplar field として扱う
-- `spaceId` は label として許可。 Space 数が大きい場合 (v1 では目安として 1000
-  超) は collector で storage 前に `spaceId` を aggregate する設定を 行う
+  label にしない。 span attribute や exemplar field として扱う
+- `spaceId` は label として許可する。 Space 数が大きい場合 (v1 では目安として
+  1000 超) は collector で storage 前に `spaceId` を aggregate する設定を行う
 - operator 名 / hostname / region などの自由 label を kernel は追加しない。
   必要なら OTLP collector の resource attribute 層で注入する
 
@@ -174,16 +183,16 @@ v1 closed set では高 cardinality な label を禁止します。
 両 export surface とも認証必須。
 
 - OTLP exporter は `TAKOSUMI_OTLP_HEADERS_JSON` または
-  `OTEL_EXPORTER_OTLP_HEADERS` で設定した header で collector に対し認証
+  `OTEL_EXPORTER_OTLP_HEADERS` で設定した header で collector に対し認証する
 - Prometheus `/metrics` は
   `Authorization: Bearer <TAKOSUMI_METRICS_SCRAPE_TOKEN>` で scrape token を
-  要求。 未認証 scrape は `401` で reject。 既知 Prometheus identity から
-  in-cluster scrape する想定で、 internet 公開は想定しない
+  要求する。 未認証 scrape は `401` で reject する。 既知 Prometheus identity
+  から in-cluster scrape する想定で、 internet 公開は想定しない
 
 ## Resource attribute
 
 OTLP export には installation / role で routing できるよう安定した resource
-attribute を付けます。
+attribute を付ける。
 
 ```text
 service.name              "takosumi"
@@ -194,10 +203,10 @@ takosumi.environment      local | development | test | staging | production
 takosumi.release          kernel package version
 ```
 
-resource attribute は export batch ごとに 1 回付き、 metric point ごとには
-付きません。 region / cluster などは OTLP collector の resource processor で
-operator 側が追加します。 kernel が region / cluster を自身の環境から
-読み取ることはありません。
+resource attribute は export batch ごとに 1 回付く。 metric point ごとには
+付かない。 region / cluster などは OTLP collector の resource processor で
+operator 側が追加する。 kernel が region / cluster を自身の環境から
+読み取ることはない。
 
 ## Pull endpoint contract
 
@@ -207,20 +216,19 @@ Prometheus `/metrics` の保証:
 - content type は `text/plain; version=0.0.4`
 - 1 scrape で `ObservabilitySink` が保持する metric event の一貫した snapshot
   を返す
-- 上記 v1 closed set を超える cardinality の label を含む metric は露出し ない
+- 上記 v1 closed set を超える cardinality の label を含む metric は露出しない
 
-kernel shutdown 中の scrape は `Retry-After: 1` を付けて `503` を返します。
+kernel shutdown 中の scrape は `Retry-After: 1` を付けて `503` を返す。
 
 ## Schema versioning
 
-上記 metric set / label set / span attribute set は **v1 closed schema** です。
-v1 名で dashboard / alert を組む consumer は、この current schema と同じ release
-set で検証します。
+上記 metric set / label set / span attribute set は **v1 closed schema** である。
+v1 名で dashboard / alert を組む consumer は、 この current schema と同じ
+release set で検証する。
 
-- rename は `CONVENTIONS.md` §6 RFC を通し、schema / implementation / dashboard
+- rename は `CONVENTIONS.md` §6 RFC を通す。 schema / implementation / dashboard
   docs / tests を同じ変更で更新する
-- RFC に基づく新規 metric 追加は許可。 未知 metric を無視する consumer は
-  動作する
+- RFC に基づく新規 metric 追加は許可。 未知 metric を無視する consumer は動作する
 - v1 中の削除は不可
 
 ## 関連 architecture notes

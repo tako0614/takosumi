@@ -2,19 +2,7 @@
 
 > このページでわかること: manifest を書いて最初のデプロイを行うまでの最短手順。
 
-このドキュメントは Takosumi で **manifest を 1 本書いて、selfhosted / AWS / GCP
-/ Cloudflare / Azure / Kubernetes に deploy する** までの最短経路を示します。
-
-Takosumi は 2 つのコンポーネントで構成されます:
-
-- **kernel**: HTTP API、apply pipeline、state DB を管理。manifest を受けて
-  resource lifecycle を orchestrate するが、cloud SDK は **直接呼ばない**
-- **runtime-agent**: cloud REST API (SigV4 / OAuth) や local OS (`docker`,
-  `systemd`, filesystem) と実際に通信する executor。**credential はここに
-  だけ存在する**
-
-dev では `takosumi server` 1 コマンドが両方を 1 process で立ち上げます。
-production では別ホストでも同居でも OK。
+kernel / runtime-agent の責務分離は [Concepts § Architecture](/getting-started/concepts#architecture-kernel--runtime-agent) を参照。 dev では `takosumi server` 1 コマンドが両方を 1 process で立ち上げる。
 
 ---
 
@@ -29,12 +17,7 @@ takosumi version
 
 ## 2. Local authoring (zero-config)
 
-まずは kernel server を起動せず、CLI の local mode で manifest を確認できます。
-状態は process 終了で消えるので、authoring と smoke test 向けです。
-
-`manifest.yml` は compiled Shape manifest として明示的に作ります。kernel に渡す
-manifest は `resources[]` だけを持ち、top-level `template` や `workflowRef`
-は含めません。
+`manifest.yml` は compiled Shape manifest として明示的に作る。 kernel に渡す manifest は `resources[]` だけを持ち、top-level `template` や `workflowRef` は含めない。
 
 ```yaml
 apiVersion: "1.0"
@@ -59,9 +42,9 @@ takosumi doctor --manifest ./manifest.yml
 takosumi deploy ./manifest.yml
 ```
 
-`doctor` は使う manifest、local / remote mode、token 有無を表示します。
+`doctor` は使う manifest、local / remote mode、token 有無を表示する。
 
-remote kernel に投げる dev loop は次のように URL/token を明示します。
+remote kernel に投げる dev loop は次のように URL/token を明示する。
 
 ```bash
 export TAKOSUMI_DEV_MODE=1
@@ -73,80 +56,15 @@ takosumi doctor --manifest ./manifest.yml
 takosumi deploy ./manifest.yml
 ```
 
-`TAKOSUMI_DEV_MODE=1` は dev 用の単一 opt-out flag。plaintext secret /
-unencrypted DB / unsafe defaults を許可。production / staging では fail-closed。
+`TAKOSUMI_DEV_MODE=1` は dev 用の単一 opt-out flag。 plaintext secret / unencrypted DB / unsafe defaults を許可する。 production / staging では fail-closed。
 
-この dev server mode では agent と kernel が同 process なので、env に置いた
-cloud credential はそのまま agent connector に届きます。
+dev server mode では agent と kernel が同 process なので、 env に置いた cloud credential はそのまま agent connector に届く。
 
 ---
 
-## 3. Self-hosted deploy (single VM、Docker / systemd)
+## 3. Cloud credential を env に置く
 
-VM 上に systemd / docker / filesystem / local Postgres / coredns で 1 台完結
-デプロイを構築する場合も、kernel に送る manifest は expanded `resources[]`
-です。
-
-`my-app.yml`:
-
-```yaml
-apiVersion: "1.0"
-kind: Manifest
-metadata:
-  name: my-app
-resources:
-  - shape: database-postgres@v1
-    name: db
-    provider: "@takos/selfhost-postgres"
-    spec:
-      version: "16"
-  - shape: web-service@v1
-    name: api
-    provider: "@takos/selfhost-docker-compose"
-    spec:
-      image: ghcr.io/me/api@sha256:0123456789abcdef
-      port: 8080
-      env:
-        DATABASE_URL: ${secret-ref:db.connectionString}
-  - shape: custom-domain@v1
-    name: api-domain
-    provider: "@takos/selfhost-coredns"
-    spec:
-      domain: api.example.com
-      target: ${ref:api.endpoint}
-```
-
-operator side (VM 上):
-
-```bash
-export TAKOSUMI_DATABASE_URL=postgresql://localhost/takosumi
-export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
-export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
-
-# selfhosted connector の置き場 (任意、defaults あり)
-export TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT=/var/lib/takosumi/objects
-export TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR=/etc/systemd/system
-
-takosumi server --port 8788 &
-takosumi deploy my-app.yml \
-  --remote http://localhost:8788 \
-  --token $TAKOSUMI_DEPLOY_TOKEN
-```
-
-deploy 完了後 (embedded agent が selfhost connector で実行):
-
-- web service が docker compose service として常駐
-- Postgres は `docker run postgres` で立ち上がる (local-docker-postgres
-  connector)
-- assets bucket は `/var/lib/takosumi/objects/assets/` に作成
-- domain は coredns local zone に登録
-
----
-
-## 4. Cloud deploy (AWS / GCP / Cloudflare / Azure / Kubernetes)
-
-cloud credential を **agent host の env** に置きます。dev では同 process なので
-そのまま `takosumi server` を起動した shell に export するだけ:
+cloud credential は **agent host の env** に置く。 dev では同 process なので `takosumi server` を起動した shell に export するだけ。
 
 ### AWS
 
@@ -160,8 +78,7 @@ export AWS_REGION=ap-northeast-1
 # export TAKOSUMI_AWS_FARGATE_SUBNET_IDS=subnet-aaa,subnet-bbb
 ```
 
-connector: `@takos/aws-fargate` / `@takos/aws-rds` / `@takos/aws-s3` /
-`@takos/aws-route53`
+connector: `@takos/aws-{fargate,rds,s3,route53}`
 
 ### GCP
 
@@ -171,8 +88,7 @@ export GOOGLE_CLOUD_REGION=asia-northeast1
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 ```
 
-connector: `@takos/gcp-cloud-run` / `@takos/gcp-cloud-sql` / `@takos/gcp-gcs` /
-`@takos/gcp-cloud-dns`
+connector: `@takos/gcp-{cloud-run,cloud-sql,gcs,cloud-dns}`
 
 ### Cloudflare
 
@@ -182,8 +98,7 @@ export CLOUDFLARE_API_TOKEN=...
 export CLOUDFLARE_ZONE_ID=...   # custom-domain 使う場合
 ```
 
-connector: `@takos/cloudflare-container` / `@takos/cloudflare-r2` /
-`@takos/cloudflare-dns`
+connector: `@takos/cloudflare-{container,r2,dns}`
 
 ### Azure
 
@@ -208,60 +123,7 @@ connector: `@takos/kubernetes-deployment`
 
 ---
 
-## 5. Production: kernel と agent を分離
-
-multi-host setup や credential 隔離が必要な場合、agent を別 host で立てて kernel
-から HTTP で叩きます:
-
-### Agent host (cloud credential を持つ host)
-
-```bash
-# AWS / GCP / Cloudflare / Azure / k8s の env を set
-export AWS_ACCESS_KEY_ID=... AWS_REGION=...
-
-takosumi runtime-agent serve --port 8789 --token mytoken
-# stdout:
-#   takosumi runtime-agent listening at http://127.0.0.1:8789
-#     TAKOSUMI_AGENT_URL=http://127.0.0.1:8789
-#     TAKOSUMI_AGENT_TOKEN=mytoken
-```
-
-`--env-file ./agent.env` で dotenv ファイルから env を流し込むこともできます。
-
-### Kernel host (credential を持たない)
-
-```bash
-export TAKOSUMI_ENVIRONMENT=production
-export TAKOSUMI_DATABASE_URL=postgresql://prod-db.internal/takosumi
-export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
-export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
-
-# agent への接続情報
-export TAKOSUMI_AGENT_URL=https://agent.internal:8789
-export TAKOSUMI_AGENT_TOKEN=mytoken
-
-# 監査の external replication sink
-export TAKOSUMI_AUDIT_REPLICATION_KIND=s3
-export TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET=my-audit-logs
-export TAKOSUMI_AUDIT_RETENTION_DAYS=365
-
-takosumi migrate
-takosumi server --no-agent --port 8788 &
-```
-
-`--no-agent` で kernel の embedded agent spawn を抑止 (production では agent
-を別途立てるので不要)。
-
-### credential 境界
-
-- kernel は `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN` のみ持つ
-- AWS / GCP / etc の credential は **agent host にのみ存在**
-- kernel が compromised しても cloud credential は漏れない
-- multi-tenant では cloud account ごとに agent を分離可能
-
----
-
-## 6. CLI コマンドリファレンス
+## 4. CLI コマンドリファレンス
 
 ```
 takosumi deploy <manifest>            # apply (manifest path is required)
@@ -280,14 +142,11 @@ takosumi migrate                      # DB migrations
 takosumi version
 ```
 
-`.takosumi/manifest.yml` を中心とした project layout / git 連携 / workflow
-runner が欲しい場合は、canonical installer implementation の
-[`takosumi-git`](https://github.com/tako0614/takosumi-git) を使う。本 CLI は
-manifest path を必ず明示する pure deploy engine。
+`.takosumi/manifest.yml` を中心とした project layout / git 連携 / workflow runner が欲しい場合は、 canonical installer implementation の [`takosumi-git`](https://github.com/tako0614/takosumi-git) を使う。 本 CLI は manifest path を必ず明示する pure deploy engine。
 
 ---
 
-## 7. troubleshooting
+## 5. troubleshooting
 
 | 症状                                                                      | 原因                                                                                                                 |
 | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -299,74 +158,6 @@ manifest path を必ず明示する pure deploy engine。
 | `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`       | agent host に該当 cloud の credential が無い → connector が register されてない                                      |
 | `runtime-agent /v1/lifecycle/apply failed: 401`                           | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない                                                             |
 
-### Artifact storage hygiene
-
-`takosumi artifact push` でアップロードした blob は object storage
-にcontent-addressed (`sha256:...`) で残ります。 Operator が定期的に GC を回す
-ことで、destroy された deployment が pin していた artifact をまとめて回収
-できます:
-
-```bash
-takosumi artifact gc --dry-run    # delete 対象を確認
-takosumi artifact gc              # 実削除
-```
-
-GC は kernel 側で persistent な `takosumi_deployments` record を mark+sweep
-し、どの deployment record (status が `applied` でも `destroyed` でも) からも
-参照されていない blob だけを削除します。 Idempotent なので何度 call しても
-害はありません。
-
-### Artifact upload size cap
-
-`POST /v1/artifacts` は現状 multipart body 全体を kernel プロセス memory に
-buffer してから object storage に書き込むため、 50MB+ の JS bundle や Lambda zip
-を素直に upload すると kernel の RAM 圧迫の原因になります。 これを
-ガードするため、 1 アップロードの body size に hard cap がかかっています:
-
-| Env / Option                             | Default             | 説明                                               |
-| ---------------------------------------- | ------------------- | -------------------------------------------------- |
-| `TAKOSUMI_ARTIFACT_MAX_BYTES`            | `52428800` (50 MiB) | kernel boot 時に env から読まれる upload byte 上限 |
-| `RegisterArtifactRoutesOptions.maxBytes` | (env と同じ既定)    | embedded host で programmatic に override 可能     |
-
-cap を超えた場合は `413 Payload Too Large` (`error.code:
-"resource_exhausted"`)
-で拒否されます。 `Content-Length` header が cap より大きい場合は body
-を読まずに即時 413 を返すので、 hostile client が任意の body を送りつけて kernel
-を OOM させる経路を塞ぎます。
-
-> 50 MiB を超える artifact (大きい bundle / zip / OCI layer) を流したい場合、
-> `TAKOSUMI_ARTIFACT_MAX_BYTES` を引き上げて RAM を確保するか、 R2 / S3 / GCS
-> 等の external object-storage backend を kernel の `objectStorage` adapter に
-> 配線して presigned upload で直接 backend に書き込むのが推奨です。
-> `ObjectStoragePort` interface は同じなので adapter を切り替えるだけで済み
-> ます。kernel 経由の multipart upload は cap 付き buffered path として扱い、
-> 大容量 artifact は storage backend へ直接流します。
-
-### Read-only artifact fetch token (agent ↔ kernel scope separation)
-
-production deploy で `kernel <-> runtime-agent` を別 host に分離している場合、
-agent host が compromised しても artifact upload / delete / GC を許さない
-ように、 read-only な artifact fetch token を別途発行できます:
-
-```bash
-# kernel host (deploy token と read-only fetch token を両方発行)
-export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
-export TAKOSUMI_ARTIFACT_FETCH_TOKEN=$(openssl rand -hex 32)
-```
-
-- `TAKOSUMI_DEPLOY_TOKEN` は CLI からの `takosumi deploy` /
-  `takosumi artifact push` / `takosumi artifact gc` 等の write 系を許可する
-  full-power token。
-- `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を agent host に渡すと、 agent の connector は
-  GET / HEAD `/v1/artifacts/:hash` で blob を fetch できますが、 POST (upload) /
-  DELETE / GC は kernel 側で 401 になります。
-- agent host は artifact 取得 URL に対して fetch token のみ持てば十分で、 deploy
-  token を保持する必要はありません。
-
-`TAKOSUMI_PUBLIC_BASE_URL` と組み合わせて kernel が runtime-agent に渡す
-artifact-store locator は、 fetch token が set されていればそちらを優先します
-(set されていなければ deploy token を渡します)。
-
 ---
 
 ## 関連 docs
@@ -375,4 +166,5 @@ artifact-store locator は、 fetch token が set されていればそちらを
 - [Shape catalog](/reference/shapes)
 - [Provider plugins](/reference/providers)
 - [Templates](/reference/templates)
-- [Operator bootstrap](/operator/bootstrap) (kernel ↔ agent 連携の詳細)
+- [Self-host deploy](/operator/self-host) — VM 単機 / multi-host 分離 / artifact GC / fetch token
+- [Operator bootstrap](/operator/bootstrap) — kernel ↔ agent 連携の詳細

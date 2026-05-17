@@ -2,12 +2,12 @@
 
 > このページでわかること: resource status の出力形式と conditions の読み方。
 
-本ページは、`GET /v1/deployments` と `GET /v1/deployments/:name` が返す current
-public な status response を定義する。`takosumi status` CLI はこの response
+本ページは、 `GET /v1/deployments` と `GET /v1/deployments/:name` が返す current
+public な status response を定義する。 `takosumi status` CLI はこの response
 を小さなテーブルとして描画する。
 
-Status queries are read-only. They do not write WAL entries, mutate deployment
-records, call runtime-agent lifecycle endpoints, or change artifact GC roots.
+Status query は read-only。 WAL entry を書かず、 deployment record を mutate
+せず、 runtime-agent lifecycle endpoint を呼ばず、 artifact GC root を変えない。
 
 ## List Shape
 
@@ -20,11 +20,11 @@ interface DeploymentListResponse {
 ```
 
 リストは deploy bearer に対して選ばれた public deploy Space / tenant で scope
-される。その scope は `TAKOSUMI_DEPLOY_SPACE_ID`、または env が未設定の場合
-`takosumi-deploy` となる。current public route は `--space`、`--group`、
-`--kind`、`--since`、`--cursor`、`--limit` の CLI filter を公開しない。
-より広範な operator status、activation history、drift、quota 使用、approval
-queue は、public route が実装・テストされるまで内部 control plane surface に
+される。 その scope は `TAKOSUMI_DEPLOY_SPACE_ID`、 または env が未設定の場合
+`takosumi-deploy` となる。 current public route は `--space`、 `--group`、
+`--kind`、 `--since`、 `--cursor`、 `--limit` の CLI filter を公開しない。
+より広範な operator status、 activation history、 drift、 quota 使用、 approval
+queue は、 public route が実装・テストされるまで内部 control plane surface に
 属する。
 
 ## Single Shape
@@ -81,24 +81,24 @@ interface DeploymentResourceSummary {
 }
 ```
 
-Destroyed records keep the deployment-level summary but return an empty
-`resources` array.
+Destroyed record は deployment-level summary を保ったまま、 空の `resources`
+配列を返す。
 
-`id` is the public deploy record id. The natural key remains `(tenantId, name)`,
-so existing status URLs continue to use `name`; `takosumi audit show <id>` uses
-the list endpoint to resolve the id back to `name` before fetching audit detail.
+`id` は public deploy record id。 natural key は `(tenantId, name)` のまま
+なので、 既存の status URL は引き続き `name` を使う。 `takosumi audit show <id>`
+は list endpoint で id を `name` に解決してから audit detail を fetch する。
 
-`provenance`, when present, is the latest opaque JSON object recorded in public
-deploy WAL entries. Upstream clients such as `takosumi-git` use it to expose the
-workflow run id, git commit SHA, artifact URI, and step log digest chain that
-produced the deployed manifest. The status route returns it for audit consumers;
-the `takosumi status` table renders only the deployment id and does not render
-the raw provenance JSON.
+`provenance` は、 存在する場合、 public deploy WAL entry に記録された最新の
+opaque JSON object。 `takosumi-git` のような upstream client は、 deploy された
+manifest を生んだ workflow run id、 git commit SHA、 artifact URI、 step log
+digest chain をこの field で見せる。 status route は audit consumer 向けに
+返すが、 `takosumi status` テーブルは deployment id のみを表示し、 生の
+provenance JSON は表示しない。
 
 ## CLI Rendering
 
-`takosumi status` is remote-only. Without a name, it calls
-`GET /v1/deployments`; with a name, it calls `GET /v1/deployments/:name`.
+`takosumi status` is remote-only. name 引数なしでは `GET /v1/deployments` を、
+name 引数ありでは `GET /v1/deployments/:name` を呼ぶ。
 
 テーブルの列は次の通り。
 
@@ -106,21 +106,20 @@ the raw provenance JSON.
 deployment | id | resource | shape | provider | status | journal
 ```
 
-When a deployment has no resources, the CLI still emits one row carrying the
-deployment-level status so destroyed or failed records remain visible. The
-`journal` column renders the latest public WAL summary as
-`<phase>:<latestStage>/<status>`, for example `apply:finalize/succeeded` or
-`destroy:abort/failed`. Older kernels that do not return `journal` render this
-column empty.
+deployment に resource が無い場合でも、 CLI は deployment-level status を運ぶ 1
+行を出力する。 destroyed / failed record も可視のままになる。 `journal` 列は
+最新の public WAL summary を `<phase>:<latestStage>/<status>` 形式で描画する。
+例: `apply:finalize/succeeded` / `destroy:abort/failed`。 `journal` を返さない
+古い kernel ではこの列が空になる。
 
 ## Error Behaviour
 
-| Condition                      | HTTP / CLI behaviour                                           |
-| ------------------------------ | -------------------------------------------------------------- |
-| Deploy token unset             | route returns `404 not_found`                                  |
-| Missing / wrong bearer         | route returns `401 unauthenticated`                            |
-| Deployment name does not exist | `GET /v1/deployments/:name` returns `404 not_found`            |
-| CLI has no remote URL          | `takosumi status` exits with a local-mode precondition message |
+- Deploy token unset: route returns `404 not_found`
+- Missing / wrong bearer: route returns `401 unauthenticated`
+- Deployment name does not exist: `GET /v1/deployments/:name` returns
+  `404 not_found`
+- CLI has no remote URL: `takosumi status` exits with a local-mode precondition
+  message
 
 ## Example
 

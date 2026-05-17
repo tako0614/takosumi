@@ -1,11 +1,6 @@
 # Drift Detection
 
-> このページでわかること: desired state と actual state のドリフト検知の仕組み。
-
-Drift detection は Takosumi v1 で「DesiredSnapshot が宣言した世界」と
-「ObservationSet が報告した実世界」の乖離を構造化する仕組みです。 DriftIndex の
-compute trigger、比較方法、entry schema、propagation path、 operator visibility
-surface、RevokeDebt との連動を本 reference で固定します。
+> このページでわかること: DesiredSnapshot と ObservationSet の乖離を構造化する DriftIndex の compute trigger、 比較方法、 entry schema、 propagation path、 operator visibility surface、 RevokeDebt 連動。
 
 ## DriftIndex
 
@@ -191,7 +186,7 @@ operator が手動で re-observe を要求する経路は internal control-plane
 
 ## Related architecture notes
 
-関連 architecture notes:��
+関連 architecture notes:
 
 - `docs/reference/architecture/observation-drift-revokedebt-model.md` —
   DriftIndex の compute trigger / 比較方法 / RevokeDebt 連動の設計議論

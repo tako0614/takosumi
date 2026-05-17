@@ -12,6 +12,8 @@
  *  - free of module-level side effects (no `Deno.env.get` at load time;
  *    the format is resolved lazily on first emit so tests that scope env
  *    via `Deno.env.set` are not racing module evaluation)
+ *  - runtime-neutral (reads env through the RuntimeAdapter, so the same
+ *    module works on Deno / Node / Cloudflare Workers without changes)
  *
  * Output shape (`json` format, one line per event):
  *
@@ -45,6 +47,8 @@
  * `log.info("kernel.boot.storage_migrations_up_to_date", { applied: 3 })`
  * — the prefix-style tag is encoded structurally instead of textually.
  */
+
+import { currentRuntime } from "./runtime/index.ts";
 
 export type KernelLogLevel = "info" | "warn" | "error";
 
@@ -110,13 +114,13 @@ function resolveDefaultFormat(
 }
 
 function safeEnv(): Readonly<Record<string, string | undefined>> {
-  // `Deno.env.toObject()` requires --allow-env. The kernel runs with
-  // --allow-all in production / tests, but library consumers that import
-  // this module from a sandboxed context (e.g. plugin unit tests) may
-  // not. Fall back to an empty object so the logger never throws during
-  // construction.
+  // Read env via the runtime adapter so this module compiles and runs
+  // on Deno, Node, Cloudflare Workers, or any Web-standard JS runtime.
+  // The adapter wraps the underlying API in try/catch, so a sandboxed
+  // context (e.g. plugin unit tests without --allow-env) gets an empty
+  // object instead of an exception.
   try {
-    return Deno.env.toObject();
+    return currentRuntime().env.toObject();
   } catch (_error) {
     return {};
   }

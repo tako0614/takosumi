@@ -2,26 +2,25 @@
 
 > このページでわかること: manifest / artifact の digest 計算方法。
 
-Takosumi v1 が snapshot / plan / approval / predicted effect を結びつけるため
-に使う digest 計算の規定です。 digest が persist される箇所、 および suffix が
+Takosumi v1 が snapshot / plan / approval / predicted effect を結びつけるために
+使う digest 計算の規定です。 digest が persist される箇所、 および suffix が
 content-addressed な resource ID すべてで同一アルゴリズムを用います。
 
 本仕様は normative であり、 本ページと異なる digest を生成する kernel は
 仮にレシピが大まかに合っていても非準拠とみなします。 replay / restore / catalog
-adoption など instance 間の相互運用は、 digest が byte 単位で一致す
-ることに依存します。
+adoption など instance 間の相互運用は、 digest が byte 単位で一致することに
+依存します。
 
 ## digest の用途
 
 v1 でこの仕様に従う digest:
 
-| Digest                         | 用途                                                             |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `desiredSnapshotDigest`        | `desired:sha256:...` snapshot の identity。                      |
-| `resolutionSnapshotDigest`     | `resolution:sha256:...` snapshot の identity。                   |
-| `operationPlanDigest`          | OperationPlan の identity。 WAL idempotency tuple を bind する。 |
-| `effectDetailsDigest`          | `actualEffects` / `approvedEffects` view の identity。           |
-| `predictedActualEffectsDigest` | dry-materialization 予測の identity。                            |
+- `desiredSnapshotDigest`: `desired:sha256:...` snapshot の identity。
+- `resolutionSnapshotDigest`: `resolution:sha256:...` snapshot の identity。
+- `operationPlanDigest`: OperationPlan の identity。 WAL idempotency tuple を
+  bind する。
+- `effectDetailsDigest`: `actualEffects` / `approvedEffects` view の identity。
+- `predictedActualEffectsDigest`: dry-materialization 予測の identity。
 
 [Resource IDs](/reference/resource-ids) の他の content-addressed ID
 (`export-snapshot:` / `catalog-release:` / `policy:`) も同アルゴリズム。 各 ID
@@ -41,7 +40,7 @@ digest = "sha256:" + lowercase_hex(SHA-256(canonical_encoding(input)))
 - hash への入力は次節の canonical encoding で得られる byte 列
 
 `sha256:` プレフィックスは digest algorithm を explicit にするために存在します。
-将来 `CONVENTIONS.md` §6 RFC で別 hash を採用する場合は、prefix / verifier /
+将来 `CONVENTIONS.md` §6 RFC で別 hash を採用する場合は、 prefix / verifier /
 docs / tests を同じ change set で current spec として更新します。
 
 ## Canonical encoding
@@ -68,8 +67,7 @@ canonical encoding は
 ## 各 digest の入力範囲
 
 各 digest は厳密な入力に対して計算します。 異なる field を含めたり、 必須 field
-を欠いたり、 ネスト配列を並べ替えたりすると別 digest になり、 非準拠
-になります。
+を欠いたり、 ネスト配列を並べ替えたりすると別 digest になり、 非準拠になります。
 
 ### `desiredSnapshotDigest`
 
@@ -107,15 +105,15 @@ canonical encoding は
 ### `effectDetailsDigest`
 
 input は effect set の closed-enum view。 approval record 上の `approvedEffects`
-でも OperationResult 上の `actualEffects` でも同一アルゴ リズムを適用します。
+でも OperationResult 上の `actualEffects` でも同一アルゴリズムを適用します。
 effect digest が同形状であることで、 成功 operation の result digest と approval
 の effect digest を bound rule
 ([Provider Implementation Contract — Effect bound rule](/reference/provider-implementation-contract#effect-bound-rule))
 の下で byte 単位比較できます。
 
 入力は source set の順序を保った closed-shape effect descriptor の列。 canonical
-encoder は各 descriptor 内部を JCS 規則で sort しますが、 外側の list
-を並べ替えることはしません。
+encoder は各 descriptor 内部を JCS 規則で sort しますが、 外側の list を
+並べ替えることはしません。
 
 ### `predictedActualEffectsDigest`
 
@@ -158,11 +156,11 @@ v1 では SHA-256 を衝突なしとして扱います。 kernel は運用上こ
 
 比較対象によって扱いが異なります。
 
-- **保存済 digest の等価性比較** は byte 単位。 両側はすでに canonical なの で、
+- **保存済 digest の等価性比較** は byte 単位。 両側はすでに canonical なので、
   比較時に prefix や hex case を正規化しない
 - **catalog release の署名検証** は
-  [Catalog Release Trust](/reference/catalog-release-trust) の署名 backend
-  を介した constant-time byte 比較。 timing-safe 比較が必要な のはここだけで、
+  [Catalog Release Trust](/reference/catalog-release-trust) の署名 backend を
+  介した constant-time byte 比較。 timing-safe 比較が必要なのはここだけで、
   通常の apply pipeline チェックでは不要
 
 kernel は digest を JSON に re-decode して構造比較することはありません。
@@ -182,8 +180,8 @@ kernel は digest を初回計算時に persist し、 再計算は元の immuta
   approval / result record に bind。 再計算は replay と audit verification
   でのみ使う
 
-入力 record が mutable な場合 (v1 では digest 計算の入力は mutable では
-ないが)、 再計算は無効で、 実装は persist された digest を使います。
+入力 record が mutable な場合 (v1 では digest 計算の入力は mutable ではないが)、
+再計算は無効で、 実装は persist された digest を使います。
 
 ## Related architecture notes
 

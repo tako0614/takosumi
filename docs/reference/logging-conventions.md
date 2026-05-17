@@ -1,20 +1,17 @@
 # Logging Conventions
 
-> このページでわかること: kernel のログ出力規約と structured logging の形式。
+> このページでわかること: Takosumi 全 process (kernel / runtime-agent / CLI / in-process plugin) のログ発行 v1 contract。 行フォーマット、 必須 / 禁止フィールド、 log-level enum、 出力 sink、 redaction、 audit との関係、 trace 相関、 operator 設定キーを定める。
 
-本ページは、すべての Takosumi process (kernel、runtime-agent、CLI、in-process
-plugin) のログ発行に関する v1 contract である。行フォーマット、必須フィールド、
-禁止フィールド、closed な log-level enum とその意味境界、出力 sink、redaction
-ルール、audit log との関係、trace 相関、operator 向けの設定キーを定義する。
+::: info Current implementation status
 
-::: info Current implementation status The kernel HTTP request correlation
-middleware is current: API responses echo `x-request-id` and `x-correlation-id`,
-or generate `req_<uuid>` when neither header is supplied. In staging and
-production, and in other environments when `TAKOSUMI_HTTP_REQUEST_LOGS=true`,
-the bootstrap path emits one JSON request log line with `requestId`,
-`correlationId`, `trace_id`, `span_id`, route, status, and duration. Public
-deploy metrics also carry the inbound request and correlation ids. Trace id /
-span id enrichment for non-HTTP logs remains the broader target contract. :::
+kernel HTTP request correlation middleware は current:
+
+- API response は `x-request-id` と `x-correlation-id` を echo。 どちらも無ければ `req_<uuid>` を生成。
+- staging / production と `TAKOSUMI_HTTP_REQUEST_LOGS=true` の他環境では、 bootstrap path が `requestId` / `correlationId` / `trace_id` / `span_id` / route / status / duration を持つ JSON request log を 1 行 emit。
+- public deploy metrics も inbound request / correlation id を carry。
+- 非 HTTP log への trace id / span id enrichment は今後の target contract。
+
+:::
 
 ## Line format
 

@@ -1,10 +1,9 @@
 # マニフェストリファレンス
 
-> このページでわかること: Takosumi v1 マニフェストの全フィールド仕様。
+> このページでわかること: kernel が受け取る compiled manifest の全 field 仕様。
 
-このページは takosumi kernel が受け取る **compiled manifest**
-の仕様を定義します。 `.takosumi/manifest.yml` は `takosumi-git` が所有する
-authoring convention で、kernel に届く前に compiled manifest へ変換されます。
+`.takosumi/manifest.yml` は `takosumi-git` 所有の authoring convention で、
+kernel に届く前に compiled manifest に変換されます。
 
 | ファイル                 | 用途                                                                          | 渡し先                                   |
 | ------------------------ | ----------------------------------------------------------------------------- | ---------------------------------------- |
@@ -12,23 +11,20 @@ authoring convention で、kernel に届く前に compiled manifest へ変換さ
 | `.takosumi/manifest.yml` | authoring compute manifest。Shape resource / compile-time extension           | takosumi-git / installer compiler        |
 | compiled manifest        | closed Shape manifest。`workflowRef` / installer placeholder strip 済み       | takosumi kernel `POST /v1/deployments`   |
 
-`.takosumi/app.yml` は kernel に渡しません。`.takosumi/manifest.yml` は
-`takosumi-git` が compile し、`workflowRef` を strip します。`install apply`
-では operator account plane が所有する AppInstallation の materialization result
-で `${bindings.*}` / `${secrets.*}` / `${installation.*}` を解決し、deploy
-request build 後も installer-only placeholder が残る場合は kernel request
-の前に失敗します。
+`.takosumi/app.yml` は kernel に渡しません。 `.takosumi/manifest.yml` は
+`takosumi-git` が compile して `workflowRef` を strip します。 `install apply`
+では operator account plane 所有の AppInstallation の materialization result で
+`${bindings.*}` / `${secrets.*}` / `${installation.*}` を解決し、 deploy request
+build 後に installer-only placeholder が残れば kernel request 前に失敗します。
 
-このページの **deploy** は kernel `POST /v1/deployments` への apply
-操作を指します。 **install** は operator account plane の AppInstallation ledger
-lifecycle であり、 owner / billing / binding / grant / launch token
-を扱います。kernel direct deploy は AppInstallation を作らない unmanaged
-deployment です。
+用語: 本ページの **deploy** は kernel `POST /v1/deployments` への apply 操作。
+**install** は operator account plane の AppInstallation ledger lifecycle で、
+owner / billing / binding / grant / launch token を扱います。 kernel direct
+deploy は AppInstallation を作らない unmanaged deployment です。
 
 ## Envelope
 
-Takosumi v1 manifest は closed envelope です。top-level field は次の集合だけを
-受理します。
+closed envelope。 top-level field は次の集合のみ受理:
 
 ```text
 @context | apiVersion | kind | namespace | metadata | resources
@@ -55,9 +51,9 @@ resources: []
 | `metadata`   | no       | object                  | `name` / `labels` / kernel audit metadata             |
 | `resources`  | yes      | array                   | portable Shape resources                              |
 
-`resources[]` が無い manifest、または resource が 0 件になる manifest は reject
-されます。`template` は current kernel public contract ではありません。必要なら
-installer/compiler layer が deploy 前に `resources[]` へ展開します。
+`resources[]` 不在 / 0 件は reject。 `template` は current kernel public
+contract ではありません。 必要なら installer/compiler 層が deploy 前に
+`resources[]` に展開します。
 
 ## Canonical minimal manifest {#canonical-minimal-manifest}
 
@@ -127,23 +123,22 @@ interface ManifestResource {
 | `requires` | no       | provider capability requirement                                  |
 | `metadata` | no       | resource-level metadata / audit pin                              |
 
-`shape` が semantic contract です。`provider` は authoring intent / placement
-hint であり、Shape-only model の必須 key ではありません。指定された場合は
-catalog / provider registry に対する constraint として検証され、provider が
-shape を実装して いない、または `requires[]` を満たせない場合は reject
-されます。省略された場合は operator policy / provider registry が deploy plan
-上の resolved provider を決め、 Deployment evidence に記録します。 provider
-resolution の入力、出力、失敗条件、audit evidence は
-[Provider Resolution](./provider-resolution.md) を参照してください。
+`shape` が semantic contract。 `provider` は authoring intent / placement hint
+で Shape-only model の必須 key ではありません。 指定時は catalog / provider
+registry に対する constraint として検証され、 provider が shape 未実装 /
+`requires[]` 未充足なら reject。 省略時は operator policy / provider registry
+が resolved provider を決め Deployment evidence に記録します。 入力 / 出力 /
+失敗条件 / audit evidence は [Provider Resolution](./provider-resolution.md)
+参照。
 
 ### Workflow ref resolution {#workflow-ref}
 
-`workflowRef` は takosumi-git の authoring extension です。kernel manifest
-仕様の field ではありません。`.takosumi/manifest.yml` 内では resource
-に併記できますが、`takosumi-git push` / `install apply` が workflow
-を実行し、artifact URI を `workflowRef.target` (省略時 `spec.image`)
-に書き込んでから `workflowRef` を strip します。kernel が受け取る manifest
-resource entry に `workflowRef` は存在してはいけません。
+`workflowRef` は takosumi-git の authoring extension で kernel manifest 仕様
+の field ではありません。 `.takosumi/manifest.yml` 内では resource に併記でき
+ますが、 `takosumi-git push` / `install apply` が workflow を実行し、 artifact
+URI を `workflowRef.target` (省略時 `spec.image`) に書込んでから `workflowRef`
+を strip します。 kernel が受け取る manifest resource entry に `workflowRef`
+が存在してはいけません。
 
 worker bundle の authoring 例:
 
@@ -194,7 +189,7 @@ resources:
         DB_PASSWORD: ${secret-ref:db.passwordSecretRef}
 ```
 
-参照は dependency edge を作ります。kernel は cycle を reject し、topological
+参照は dependency edge を作ります。 kernel は cycle を reject し、 topological
 order で provider apply を実行します。
 
 ## Templates
@@ -206,13 +201,11 @@ installer/compiler concern, not as `POST /v1/deployments` input.
 
 ## Compile-time placeholders {#compile-time-placeholders}
 
-Installable App Model の `.takosumi/manifest.yml` は、installer / account plane
-が materialize する reserved placeholder syntax を持ちます。current
-`takosumi-git install apply` は operator account plane が所有する
-AppInstallation の materialization result で supported placeholder
-を解決し、deploy request build 後も installer-only placeholder
-が残っている場合は kernel request の前に reject します。kernel に送る compiled
-Shape manifest には残してはいけません。
+Installable App Model の `.takosumi/manifest.yml` は installer / account plane
+が materialize する reserved placeholder syntax を持ちます。 `takosumi-git
+install apply` は AppInstallation の materialization result で解決し、 deploy
+request build 後も installer-only placeholder が残れば kernel request 前に
+reject します。 kernel に送る compiled Shape manifest には残してはいけません。
 
 | installer-only family       | 解決元                         | 例                             |
 | --------------------------- | ------------------------------ | ------------------------------ |
@@ -222,13 +215,13 @@ Shape manifest には残してはいけません。
 | `${bindings.<name>.<key>}`  | AppBinding resolved config     | `${bindings.auth.clientId}`    |
 | `${secrets.<name>.<key>}`   | AppBinding secret refs         | `${secrets.auth.clientSecret}` |
 
-`${env.*}` は kernel resolver ではありません。使う場合は operator-owned manifest
-generation で concrete value にしてから deploy します。
+`${env.*}` は kernel resolver ではありません。 使うなら operator-owned manifest
+generation で concrete value 化してから deploy します。
 
-`${bindings.*}` is reserved for AppBinding materialization and must be absent
-before the kernel sees the manifest. Current `takosumi-git` does not silently
-substitute unresolved installer-only placeholders; it fails before
-`POST /v1/deployments`.
+`${bindings.*}` は AppBinding materialization 用予約で、 kernel が manifest を
+見る前に absent でなければなりません。 `takosumi-git` は unresolved
+installer-only placeholder を silent 置換せず、 `POST /v1/deployments` 前に
+fail します。
 
 ## Validation
 
@@ -245,6 +238,6 @@ substitute unresolved installer-only placeholders; it fails before
 - `${ref:...}` / `${secret-ref:...}` が存在しない resource output を参照する
 
 validation order は本ページの **Envelope** / **Resources** / **Compile-time
-placeholders** section に従います (kernel 実装は順に: envelope schema → resource
-entry schema → unknown installer-only placeholder の reject → `${ref:...}` /
-`${secret-ref:...}` resolution check)。
+placeholders** section に従います (kernel 実装は: envelope schema → resource
+entry schema → unknown installer-only placeholder reject → `${ref:...}` /
+`${secret-ref:...}` resolution check の順)。

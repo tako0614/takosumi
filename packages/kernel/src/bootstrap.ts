@@ -23,6 +23,7 @@ import type { OperationJournalStore } from "./domains/deploy/operation_journal.t
 import type { RevokeDebtStore } from "./domains/deploy/revoke_debt_store.ts";
 import type { TakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store.ts";
 import { registerBundledShapesAndProviders } from "./bootstrap/registry_setup.ts";
+import { currentRuntime } from "./shared/runtime/index.ts";
 import {
   createRoleWorkerDaemon,
   createWorkerDaemonState,
@@ -80,7 +81,7 @@ export interface CreatedPaaSApp {
 export async function createPaaSApp(
   options: CreatePaaSAppOptions = {},
 ): Promise<CreatedPaaSApp> {
-  const runtimeEnv = options.runtimeEnv ?? Deno.env.toObject();
+  const runtimeEnv = options.runtimeEnv ?? currentRuntime().env.toObject();
   const runtimeConfig = options.runtimeConfig ??
     await loadRuntimeConfigFromEnv({ env: runtimeEnv });
   const role = options.role ?? processRoleFromRuntimeConfig(runtimeConfig);

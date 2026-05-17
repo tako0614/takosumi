@@ -1,11 +1,6 @@
 # RevokeDebt Model
 
-> このページでわかること: RevokeDebt モデルの仕組みと解消手順。
-
-Takosumi v1 で「commit 済みだが取り消しきれなかった external effect / generated
-material」を表現するための RevokeDebt record の正式仕様です。reason / status の
-closed enum、aging window、Multi-Space ownership、ActivationSnapshot propagation
-を整理します。
+> このページでわかること: commit 済みだが取り消しきれなかった external effect / generated material を追跡する RevokeDebt record の正式仕様 (reason / status enum、 aging window、 Multi-Space ownership、 ActivationSnapshot propagation)。
 
 ## RevokeDebt record schema
 
@@ -33,11 +28,13 @@ RevokeDebt:
 `generatedObjectId` は generated lifecycle class の object、external object、
 または link projection の対象を指す。`sourceExportSnapshotId` は debt 発生時
 
-`retryPolicy` は kernel 定数ではなく policy-controlled で、Space の policy pack
-から派生する。kernel が直接解釈する portable subset は `maxAttempts`,
-`backoffMs` / `backoffSeconds`, `agingWindowMs` / `agingWindowSeconds` /
-ISO-8601 duration の `agingWindow` です。これ以外の policy-controlled fields は
-operator policy engine が解釈してよい。
+`retryPolicy` は kernel 定数ではなく policy-controlled で、 Space の policy pack から派生する。 kernel が直接解釈する portable subset は次のみ:
+
+- `maxAttempts`
+- `backoffMs` / `backoffSeconds`
+- `agingWindowMs` / `agingWindowSeconds` / ISO-8601 duration の `agingWindow`
+
+これ以外の policy-controlled fields は operator policy engine が解釈してよい。
 
 ## reason 5 値
 
