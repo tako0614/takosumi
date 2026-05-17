@@ -75,7 +75,7 @@ const PUBLIC_MANIFEST_EXPANSION_ALIAS =
 
 /** Built-in alias → canonical URI mapping for descriptors that may be
  *  referenced by the manifest but are not present in the in-tree document
- *  registry (e.g. provider plugins shipped via `@takosumi/plugins`). */
+ *  registry (e.g. provider plugins shipped via `@takos/takosumi-plugins`). */
 const ALIAS_FALLBACK_URI: Record<string, string> = {
   // Providers — shipped by plugins; URIs follow the official-descriptor-set v1
   // naming. We accept either short alias or canonical URI from manifest input.
