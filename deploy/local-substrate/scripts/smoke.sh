@@ -305,6 +305,16 @@ else
 fi
 
 echo
+echo "==> takosumi-git canonical installer — workspace contract test"
+if run_script "takosumi-git.tests" "bash $SCRIPT_DIR/takosumi-git-smoke.sh"; then
+	echo "    PASS [takosumi-git.tests] deploy-client + workflow-runner + git-source + cli contract unit tests"
+	PASS=$((PASS + 1))
+else
+	echo "    FAIL [takosumi-git.tests] see scripts/takosumi-git-smoke.sh"
+	FAIL=$((FAIL + 1))
+fi
+
+echo
 echo "==> Worker-first mirrors (accounts worker + kernel worker on workerd + D1/R2/Queue/DO)"
 if run_script "workers.cli-smoke" "bash $SCRIPT_DIR/workers-cli-smoke.sh"; then
 	echo "    PASS [workers.cli-smoke] workers healthy via workerd + D1/R2/Queue/DO"
