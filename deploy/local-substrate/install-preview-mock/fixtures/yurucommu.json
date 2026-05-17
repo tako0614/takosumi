@@ -29,12 +29,12 @@
   ],
   "metadata": {
     "fixture": true,
-    "fromAppYml": "/home/tako/Desktop/takos/takos/deploy/local-substrate/../../../yurucommu/.takosumi/app.yml",
-    "generatedAt": "2026-05-16T15:39:00Z"
+    "fromAppYml": "/home/tako/Desktop/takos/takosumi/deploy/local-substrate/../../../yurucommu/.takosumi/app.yml",
+    "generatedAt": "2026-05-17T09:35:03Z"
   },
   "source": {
     "appManifestDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7",
-    "commit": "42dbc112a13be02a9696db18dba4f4c660d62ca4",
+    "commit": "53bec9b4097aee10b032445568d74a450dbc875a",
     "compiledManifestDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7",
     "gitUrl": "https://github.com/tako0614/yurucommu.git",
     "ref": "v1.2.6"

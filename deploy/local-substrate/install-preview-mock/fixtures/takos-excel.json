@@ -35,8 +35,8 @@
   ],
   "metadata": {
     "fixture": true,
-    "fromAppYml": "/home/tako/Desktop/takos/takos/deploy/local-substrate/../../../takos-apps/takos-excel/.takosumi/app.yml",
-    "generatedAt": "2026-05-16T15:39:00Z"
+    "fromAppYml": "/home/tako/Desktop/takos/takosumi/deploy/local-substrate/../../../takos-apps/takos-excel/.takosumi/app.yml",
+    "generatedAt": "2026-05-17T09:35:03Z"
   },
   "source": {
     "appManifestDigest": "sha256:1fdf35a6d731e0e5ad1b473bea6c98a8370314e403d881d8813a76246f0ac0ba",

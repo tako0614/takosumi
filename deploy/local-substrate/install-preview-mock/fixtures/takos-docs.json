@@ -35,8 +35,8 @@
   ],
   "metadata": {
     "fixture": true,
-    "fromAppYml": "/home/tako/Desktop/takos/takos/deploy/local-substrate/../../../takos-apps/takos-docs/.takosumi/app.yml",
-    "generatedAt": "2026-05-16T15:39:00Z"
+    "fromAppYml": "/home/tako/Desktop/takos/takosumi/deploy/local-substrate/../../../takos-apps/takos-docs/.takosumi/app.yml",
+    "generatedAt": "2026-05-17T09:35:03Z"
   },
   "source": {
     "appManifestDigest": "sha256:c8a08fbc25e5a0945035ec8c8758a22bd8359086adcf6a7a433cea4bc3c5eefc",
