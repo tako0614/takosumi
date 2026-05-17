@@ -62,13 +62,13 @@ GitOps intent** と **kernel deploy** は別の surface です。
 ## 1. Install path context (Accounts / takosumi-git owned)
 
 新規に bundled / third-party InstallableApp を Takosumi Account の Space に
-入れる経路。operator-selected install UI URL (managed example:
-`takosumi.cloud/install?git=...&ref=...`) の Git URL install 流入や
-`takosumi-git install <git-url>` CLI、`POST /v1/installations` API がここに集約
-されます。kernel から見ると、 distribution として ship される consumer
-application (例: Takos product のような reference distribution) も、 通常 path
-で install される third-party app も、 任意の application を deploy する 1
-example として等価に扱われます。
+入れる経路。operator-selected install UI URL
+(`https://<OPERATOR_INSTALL_HOST>/install?git=...&ref=...`) の Git URL install
+流入や `takosumi-git install <git-url>` CLI、`POST /v1/installations` API
+がここに集約されます。kernel から見ると、 distribution として ship される
+consumer application (例: Takos product のような reference distribution) も、
+通常 path で install される third-party app も、 任意の application を deploy
+する 1 example として等価に扱われます。
 
 ### 1.1 Install pipeline 13 step
 

@@ -63,8 +63,9 @@ up migration の規約:
   kernel が引き続き起動できる場合のみ minor bump 内で許される
 
 migration は [CLI](/reference/cli) (`takosumi migrate`) または kernel 自身が
-起動時に自動実行する。 kernel 自動実行は env `TAKOSUMI_MIGRATE_ON_BOOT=1` を
-要する (default off)。
+起動時に自動実行する。kernel 自動実行は env `TAKOSUMI_DB_AUTO_MIGRATE=true`
+で有効になり、production / staging は default true、local / dev は default
+false。
 
 ### Down migration
 

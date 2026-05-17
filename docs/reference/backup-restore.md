@@ -67,15 +67,16 @@ stream は人間可読な JSON で、1 行 1 record。 `chainRef` が常に stre
 record を後方参照するよう順序付けされる。 restore は stream を順次読み、chain
 を進みながら検証する。
 
-フォーマットは kernel major version 内で安定。 cross-major restore は migration
-を経由する ([Schema Evolution](/reference/migration-upgrade) 参照)。
+フォーマットは kernel major version 内で安定。public restore flow は cross-major
+restore を reject する。cross-major recovery が必要な場合は release-specific /
+private recovery tooling で same-major export を作ってから、この restore
+contract に渡す。
 
 > Rationale: format を major に bind することで restore path は logical import
 > のみで完結し、restore tool に migration logic を埋め込まずに済む。schema
 > 互換層を restore と migration
-> の両方に二重実装する保守コストを避け、cross-major recovery は明示的に
-> source-major restore → migration の 2 段階で operator
-> に意図させる設計にしている。
+> の両方に二重実装する保守コストを避け、cross-major recovery は明示的に public
+> restore contract の外側に置く設計にしている。
 
 ## Backup の invariant
 
@@ -125,8 +126,8 @@ restore は 6 ステップの sequence。 各ステップは hard gate
 
 ターゲット storage は空、または backup を生成した kernel と同じ schema version
 で初期化されている。 operator は restore 前に schema version を確認する。
-cross-major restore は migration が扱うため、このステップで reject される (下記
-boundary 節を参照)。
+cross-major restore はこのステップで reject される。target は backup
+生成元と同じ kernel major / schema range に属していなければならない。
 
 ### 2. Secret master key の注入
 
