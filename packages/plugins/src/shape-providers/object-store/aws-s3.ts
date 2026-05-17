@@ -3,7 +3,7 @@ import type {
   ObjectStoreCapability,
   ObjectStoreOutputs,
   ObjectStoreSpec,
-} from "../../shapes/object-store.ts";
+} from "../../kinds/object-store.ts";
 import {
   type AwsS3BucketCreateInput,
   type AwsS3BucketDeleteInput,

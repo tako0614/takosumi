@@ -77,7 +77,15 @@ const OUTPUT_FIELDS: readonly string[] = [
   "internalPort",
 ];
 
-export const WebServiceShape: Shape<
+/**
+ * `web-service@v1` component kind descriptor — long-running HTTP service
+ * backed by an OCI image. Materialized by a provider plugin at apply time.
+ *
+ * Note: not part of the v1 AppSpec frozen kind catalog
+ * (`worker / postgres / object-store / oidc / custom-domain`); kept here
+ * for the existing provider plugin contract.
+ */
+export const WebServiceKind: Shape<
   WebServiceSpec,
   WebServiceOutputs,
   WebServiceCapability

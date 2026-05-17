@@ -44,7 +44,11 @@ const CAPABILITIES: readonly WorkerCapability[] = [
 
 const OUTPUT_FIELDS: readonly string[] = ["url", "scriptName", "version"];
 
-export const WorkerShape: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
+/**
+ * `worker@v1` component kind descriptor. Materialized by a provider plugin
+ * (cloudflare-workers / deno-deploy / etc.) at apply time.
+ */
+export const WorkerKind: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
   id: "worker",
   version: "v1",
   description:

@@ -58,7 +58,11 @@ const OUTPUT_FIELDS: readonly string[] = [
 
 const REDIRECT_CODES: ReadonlySet<number> = new Set([301, 302, 307, 308]);
 
-export const CustomDomainShape: Shape<
+/**
+ * `custom-domain@v1` component kind descriptor. Materialized by a provider
+ * plugin (Cloudflare / managed DNS+TLS / etc.) at apply time.
+ */
+export const CustomDomainKind: Shape<
   CustomDomainSpec,
   CustomDomainOutputs,
   CustomDomainCapability

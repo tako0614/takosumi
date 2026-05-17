@@ -75,7 +75,16 @@ const SIZES: ReadonlySet<string> = new Set([
   "xlarge",
 ]);
 
-export const DatabasePostgresShape: Shape<
+/**
+ * `database-postgres@v1` component kind descriptor. Materialized by a
+ * provider plugin (managed Postgres or self-hosted) at apply time.
+ *
+ * The AppSpec public name for this kind is `postgres` (see
+ * `COMPONENT_KINDS` in `@takos/takosumi-contract/app-spec`); the registry
+ * id stays `database-postgres` for backwards-compat with the existing
+ * provider plugin contract.
+ */
+export const DatabasePostgresKind: Shape<
   DatabasePostgresSpec,
   DatabasePostgresOutputs,
   DatabasePostgresCapability

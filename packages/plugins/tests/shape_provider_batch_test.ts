@@ -5,7 +5,7 @@ import {
   registerShape,
   unregisterShape,
 } from "takosumi-contract";
-import { TAKOSUMI_BUNDLED_SHAPES } from "../src/shapes/mod.ts";
+import { TAKOSUMI_BUNDLED_SHAPES } from "../src/kinds/mod.ts";
 import { createInMemoryTakosumiProviders } from "../src/shape-providers/mod.ts";
 
 const ctx = {} as PlatformContext;

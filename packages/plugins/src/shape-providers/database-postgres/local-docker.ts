@@ -3,7 +3,7 @@ import type {
   DatabasePostgresCapability,
   DatabasePostgresOutputs,
   DatabasePostgresSpec,
-} from "../../shapes/database-postgres.ts";
+} from "../../kinds/database-postgres.ts";
 
 export interface LocalDockerPostgresDescriptor {
   readonly containerName: string;

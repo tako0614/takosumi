@@ -3,7 +3,7 @@ import type {
   WorkerCapability,
   WorkerOutputs,
   WorkerSpec,
-} from "../../shapes/worker.ts";
+} from "../../kinds/worker.ts";
 
 export interface CloudflareWorkersScriptDescriptor {
   readonly accountId: string;

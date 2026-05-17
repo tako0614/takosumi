@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { ShapeValidationIssue } from "takosumi-contract";
-import { ObjectStoreShape } from "../src/shapes/object-store.ts";
+import { ObjectStoreKind as ObjectStoreShape } from "../src/kinds/object-store.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];

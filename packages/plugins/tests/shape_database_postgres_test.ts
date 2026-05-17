@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { ShapeValidationIssue } from "takosumi-contract";
-import { DatabasePostgresShape } from "../src/shapes/database-postgres.ts";
+import { DatabasePostgresKind as DatabasePostgresShape } from "../src/kinds/database-postgres.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];

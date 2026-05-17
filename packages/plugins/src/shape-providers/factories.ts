@@ -29,7 +29,7 @@ import type {
   ObjectStoreCapability,
   WebServiceCapability,
   WorkerCapability,
-} from "../shapes/mod.ts";
+} from "../kinds/mod.ts";
 
 import { RuntimeAgentLifecycle } from "./_runtime_agent_lifecycle.ts";
 

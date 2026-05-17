@@ -1,4 +1,4 @@
-import type { WebServiceSpec } from "../../shapes/web-service.ts";
+import type { WebServiceSpec } from "../../kinds/web-service.ts";
 
 /**
  * Resolves the OCI image URI from either `spec.image` shorthand or the

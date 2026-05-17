@@ -7,7 +7,7 @@ import {
 import {
   registerTakosumiShapes,
   TAKOSUMI_BUNDLED_SHAPES,
-} from "../src/shapes/mod.ts";
+} from "../src/kinds/mod.ts";
 
 Deno.test("registerTakosumiShapes registers all bundled shapes", () => {
   for (const shape of TAKOSUMI_BUNDLED_SHAPES) {
@@ -36,6 +36,7 @@ Deno.test("TAKOSUMI_BUNDLED_SHAPES exposes the expected initial set", () => {
     "custom-domain@v1",
     "database-postgres@v1",
     "object-store@v1",
+    "oidc@v1",
     "web-service@v1",
     "worker@v1",
   ]);

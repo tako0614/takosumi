@@ -3,7 +3,7 @@ import type {
   ObjectStoreCapability,
   ObjectStoreOutputs,
   ObjectStoreSpec,
-} from "../../shapes/object-store.ts";
+} from "../../kinds/object-store.ts";
 
 export interface CloudflareR2BucketDescriptor {
   readonly accountId: string;

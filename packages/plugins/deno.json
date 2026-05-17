@@ -5,7 +5,8 @@
   "exports": {
     ".": "./src/mod.ts",
     "./gateway": "./src/gateway/mod.ts",
-    "./shapes": "./src/shapes/mod.ts",
+    "./kinds": "./src/kinds/mod.ts",
+    "./shapes": "./src/kinds/mod.ts",
     "./shape-providers": "./src/shape-providers/mod.ts",
     "./shape-providers/factories": "./src/shape-providers/factories.ts",
     "./shape-providers/worker/cloudflare-workers": "./src/shape-providers/worker/cloudflare-workers.ts",

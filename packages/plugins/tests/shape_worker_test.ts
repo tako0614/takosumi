@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { ShapeValidationIssue } from "takosumi-contract";
-import { WorkerShape } from "../src/shapes/worker.ts";
+import { WorkerKind as WorkerShape } from "../src/kinds/worker.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { ShapeValidationIssue } from "takosumi-contract";
-import { CustomDomainShape } from "../src/shapes/custom-domain.ts";
+import { CustomDomainKind as CustomDomainShape } from "../src/kinds/custom-domain.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { ShapeValidationIssue } from "takosumi-contract";
-import { WebServiceShape } from "../src/shapes/web-service.ts";
+import { WebServiceKind as WebServiceShape } from "../src/kinds/web-service.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];

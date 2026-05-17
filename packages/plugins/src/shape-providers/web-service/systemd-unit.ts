@@ -3,7 +3,7 @@ import type {
   WebServiceCapability,
   WebServiceOutputs,
   WebServiceSpec,
-} from "../../shapes/web-service.ts";
+} from "../../kinds/web-service.ts";
 import { resolveOciImage } from "./_artifact_image.ts";
 
 export interface SystemdUnitDescriptor {

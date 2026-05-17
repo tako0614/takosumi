@@ -3,7 +3,7 @@ import type {
   CustomDomainCapability,
   CustomDomainOutputs,
   CustomDomainSpec,
-} from "../../shapes/custom-domain.ts";
+} from "../../kinds/custom-domain.ts";
 
 export interface CoreDnsRecordDescriptor {
   readonly recordName: string;

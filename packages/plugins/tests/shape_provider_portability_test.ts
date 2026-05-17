@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { ObjectStoreShape } from "../src/shapes/object-store.ts";
+import { ObjectStoreKind as ObjectStoreShape } from "../src/kinds/object-store.ts";
 import {
   createAwsS3ObjectStoreProvider,
   InMemoryAwsS3Lifecycle,

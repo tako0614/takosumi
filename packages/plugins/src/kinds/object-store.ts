@@ -56,7 +56,11 @@ const OUTPUT_FIELDS: readonly string[] = [
   "secretKeyRef",
 ];
 
-export const ObjectStoreShape: Shape<
+/**
+ * `object-store@v1` component kind descriptor. Materialized by a provider
+ * plugin (S3-class API) at apply time.
+ */
+export const ObjectStoreKind: Shape<
   ObjectStoreSpec,
   ObjectStoreOutputs,
   ObjectStoreCapability
