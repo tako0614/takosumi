@@ -64,14 +64,14 @@ file handler などの app-facing metadata は consumer application / installer
 layer (例: reference Takos distribution の app gateway) で扱い、kernel control
 は compiled Shape manifest を apply します。
 
-PaaS Core 視点では、control plane は compiled Shape manifest を Deployment
-として record し、`applied` 遷移と GroupHead 進行で route projection を
-materialize する process role の集合。Group は primitive を任意に束ねる state
-scope であり、runtime backend や resource provider ではない。current manifest
-では workload / database / domain などを `resources[]` の `shape` / `name` /
-`provider` / `spec` で固定し、resource 間配線は `${ref:...}` /
-`${secret-ref:...}` で表現する。operator / account plane dependency は namespace
-export と account API / BillingPort で表現する。
+Takosumi kernel control の視点では、control plane は compiled Shape manifest
+を Deployment として record し、`applied` 遷移と GroupHead 進行で route
+projection を materialize する process role の集合。Group は primitive を任意に
+束ねる state scope であり、runtime backend や resource provider ではない。
+current manifest では workload / database / domain などを `resources[]` の
+`shape` / `name` / `provider` / `spec` で固定し、resource 間配線は
+`${ref:...}` / `${secret-ref:...}` で表現する。operator / account plane
+dependency は namespace export と account API / BillingPort で表現する。
 
 ## 役割
 
