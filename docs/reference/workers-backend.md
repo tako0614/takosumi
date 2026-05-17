@@ -2,8 +2,11 @@
 
 > このページでわかること: Cloudflare Workers backend の実装上の注意点。
 
-Cloudflare Workers / Cloudflare Containers / wrangler.toml は Takosumi の
-reference materialization detail です。
+Cloudflare Workers / D1 / R2 / Queues / Durable Objects / wrangler.toml と、
+必要な image-backed workload 用の optional Cloudflare Containers は Takosumi の
+reference materialization detail です。Cloudflare Containers は Worker-first
+control path の前提ではなく、provider/materializer が image-backed tenant
+workload を必要とする場合の substrate です。
 
 Core 用語は Resource / Deployment / ProviderObservation / GroupHead /
 RuntimeBinding を優先します。 これらは provider substrate に依存しない抽象で
