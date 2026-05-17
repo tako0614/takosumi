@@ -2,7 +2,9 @@
 
 > このページでわかること: manifest を書いて最初のデプロイを行うまでの最短手順。
 
-kernel / runtime-agent の責務分離は [Concepts § Architecture](/getting-started/concepts#architecture-kernel--runtime-agent) を参照。 dev では `takosumi server` 1 コマンドが両方を 1 process で立ち上げる。
+kernel / runtime-agent の責務分離は
+[Concepts § Architecture](/getting-started/concepts#architecture-kernel--runtime-agent)
+を参照。 dev では `takosumi server` 1 コマンドが両方を 1 process で立ち上げる。
 
 ---
 
@@ -17,7 +19,9 @@ takosumi version
 
 ## 2. Local authoring (zero-config)
 
-`manifest.yml` は compiled Shape manifest として明示的に作る。 kernel に渡す manifest は `resources[]` だけを持ち、top-level `template` や `workflowRef` は含めない。
+`manifest.yml` は compiled Shape manifest として明示的に作る。 kernel に渡す
+manifest は `resources[]` だけを持ち、top-level `template` や `workflowRef`
+は含めない。
 
 ```yaml
 apiVersion: "1.0"
@@ -56,15 +60,19 @@ takosumi doctor --manifest ./manifest.yml
 takosumi deploy ./manifest.yml
 ```
 
-`TAKOSUMI_DEV_MODE=1` は dev 用の単一 opt-out flag。 plaintext secret / unencrypted DB / unsafe defaults を許可する。 production / staging では fail-closed。
+`TAKOSUMI_DEV_MODE=1` は dev 用の単一 opt-out flag。 plaintext secret /
+unencrypted DB / unsafe defaults を許可する。 production / staging では
+fail-closed。
 
-dev server mode では agent と kernel が同 process なので、 env に置いた cloud credential はそのまま agent connector に届く。
+dev server mode では agent と kernel が同 process なので、 env に置いた cloud
+credential はそのまま agent connector に届く。
 
 ---
 
 ## 3. Cloud credential を env に置く
 
-cloud credential は **agent host の env** に置く。 dev では同 process なので `takosumi server` を起動した shell に export するだけ。
+cloud credential は **agent host の env** に置く。 dev では同 process なので
+`takosumi server` を起動した shell に export するだけ。
 
 ### AWS
 
@@ -142,7 +150,10 @@ takosumi migrate                      # DB migrations
 takosumi version
 ```
 
-`.takosumi/manifest.yml` を中心とした project layout / git 連携 / workflow runner が欲しい場合は、 canonical installer implementation の [`takosumi-git`](https://github.com/tako0614/takosumi-git) を使う。 本 CLI は manifest path を必ず明示する pure deploy engine。
+`.takosumi/manifest.yml` を中心とした project layout / git 連携 / workflow
+runner が欲しい場合は、 canonical installer implementation の
+[`takosumi-git`](https://github.com/tako0614/takosumi-git) を使う。 本 CLI は
+manifest path を必ず明示する pure deploy engine。
 
 ---
 
@@ -166,5 +177,6 @@ takosumi version
 - [Shape catalog](/reference/shapes)
 - [Provider plugins](/reference/providers)
 - [Templates](/reference/templates)
-- [Self-host deploy](/operator/self-host) — VM 単機 / multi-host 分離 / artifact GC / fetch token
+- [Self-host deploy](/operator/self-host) — VM 単機 / multi-host 分離 / artifact
+  GC / fetch token
 - [Operator bootstrap](/operator/bootstrap) — kernel ↔ agent 連携の詳細

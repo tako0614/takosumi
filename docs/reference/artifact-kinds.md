@@ -135,8 +135,9 @@ content は artifact upload route で再度チェックされる。
 
 `oci-image` は通常 `uri` を使うため、 `takosumi artifact push` は不要である。
 upload された各 kind は kernel object-storage アダプタ経由で
-`<bucket>/artifacts/<sha256-hex>` の下に保存される。 client 側の `expectedDigest`
-field の有無にかかわらず、 digest は server 側で計算・検証される。
+`<bucket>/artifacts/<sha256-hex>` の下に保存される。 client 側の
+`expectedDigest` field の有無にかかわらず、 digest は server
+側で計算・検証される。
 
 ## Upload Flow
 

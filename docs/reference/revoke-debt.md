@@ -1,6 +1,9 @@
 # RevokeDebt Model
 
-> このページでわかること: commit 済みだが取り消しきれなかった external effect / generated material を追跡する RevokeDebt record の正式仕様 (reason / status enum、 aging window、 Multi-Space ownership、 ActivationSnapshot propagation)。
+> このページでわかること: commit 済みだが取り消しきれなかった external effect /
+> generated material を追跡する RevokeDebt record の正式仕様 (reason / status
+> enum、 aging window、 Multi-Space ownership、 ActivationSnapshot
+> propagation)。
 
 ## RevokeDebt record schema
 
@@ -28,7 +31,8 @@ RevokeDebt:
 `generatedObjectId` は generated lifecycle class の object、external object、
 または link projection の対象を指す。`sourceExportSnapshotId` は debt 発生時
 
-`retryPolicy` は kernel 定数ではなく policy-controlled で、 Space の policy pack から派生する。 kernel が直接解釈する portable subset は次のみ:
+`retryPolicy` は kernel 定数ではなく policy-controlled で、 Space の policy pack
+から派生する。 kernel が直接解釈する portable subset は次のみ:
 
 - `maxAttempts`
 - `backoffMs` / `backoffSeconds`

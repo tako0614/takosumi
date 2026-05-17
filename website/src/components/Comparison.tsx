@@ -47,7 +47,9 @@ export default function Comparison() {
             <tbody>
               {ROWS.map((r) => (
                 <tr>
-                  <td><strong>{r.axis}</strong></td>
+                  <td>
+                    <strong>{r.axis}</strong>
+                  </td>
                   <td class="us">{r.us}</td>
                   <td>{r.vendor}</td>
                   <td>{r.cloud}</td>

@@ -1,6 +1,8 @@
 # Observability Stack Ownership
 
-> このページでわかること: observability の v1 所有モデル。 kernel が所有する signal contract と、 operator が所有する monitoring stack を分離し、 同梱 dashboard / alert policy 用の SLI / SLO を定める。
+> このページでわかること: observability の v1 所有モデル。 kernel が所有する
+> signal contract と、 operator が所有する monitoring stack を分離し、 同梱
+> dashboard / alert policy 用の SLI / SLO を定める。
 
 ::: info 実装状況
 
@@ -9,9 +11,12 @@ kernel が提供する signal:
 - readiness probe、 audit event、 JSON HTTP request log
 - Prometheus metric、 native OTLP metric push
 - SLA breach event、 同梱 deploy Grafana dashboard
-- native OTLP span (HTTP server / WAL 連携 provider operation / runtime-agent loop / internal RPC client)
+- native OTLP span (HTTP server / WAL 連携 provider operation / runtime-agent
+  loop / internal RPC client)
 
-operator は `requestId` / `correlationId` / `spaceId` / `groupId` / deployment identifier で HTTP log / trace / metric / audit event / deploy record を相関できます。
+operator は `requestId` / `correlationId` / `spaceId` / `groupId` / deployment
+identifier で HTTP log / trace / metric / audit event / deploy record
+を相関できます。
 
 :::
 

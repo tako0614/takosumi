@@ -6,10 +6,10 @@
 **current public** な plan response を定義する。
 
 current の public plan path は apply と同じ Shape + Provider 検証と reference
-DAG 解決を使う。 ただしそれを dry-run モードで実行する。 public
-DesiredSnapshot digest、 OperationPlan digest、 WAL idempotency tuple preview を
-含む決定的な `operationPlanPreview` を返す。 WAL を書き込まず、 完全な内部
-Risk / Approval ドキュメントもまだ公開しない。
+DAG 解決を使う。 ただしそれを dry-run モードで実行する。 public DesiredSnapshot
+digest、 OperationPlan digest、 WAL idempotency tuple preview を 含む決定的な
+`operationPlanPreview` を返す。 WAL を書き込まず、 完全な内部 Risk / Approval
+ドキュメントもまだ公開しない。
 
 ## Request
 

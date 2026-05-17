@@ -15,9 +15,15 @@ interface Props {
  */
 export default function Wordmark(props: Props): JSX.Element {
   const Mark = () =>
-    props.variant === "inkdrop" ? <InkdropMark size={props.size ?? 28} /> : <GeometricMark size={props.size ?? 28} />;
+    props.variant === "inkdrop"
+      ? <InkdropMark size={props.size ?? 28} />
+      : <GeometricMark size={props.size ?? 28} />;
   return (
-    <a href="/" class={`wordmark ${props.class ?? ""}`} aria-label="Takosumi home">
+    <a
+      href="/"
+      class={`wordmark ${props.class ?? ""}`}
+      aria-label="Takosumi home"
+    >
       <Mark />
       <span class="wordmark-text">Takosumi</span>
     </a>

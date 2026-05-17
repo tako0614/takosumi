@@ -25,7 +25,14 @@ export default function InkdropMark(props: Props): JSX.Element {
       class={props.class}
     >
       <defs>
-        <linearGradient id="tg-ink" x1="24" y1="4" x2="24" y2="44" gradientUnits="userSpaceOnUse">
+        <linearGradient
+          id="tg-ink"
+          x1="24"
+          y1="4"
+          x2="24"
+          y2="44"
+          gradientUnits="userSpaceOnUse"
+        >
           <stop offset="0" stop-color="var(--tg-grad-from, #5d3afd)" />
           <stop offset="1" stop-color="var(--tg-grad-to, #00b1ff)" />
         </linearGradient>

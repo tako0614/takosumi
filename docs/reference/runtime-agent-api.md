@@ -2,9 +2,9 @@
 
 > このページでわかること: runtime-agent process が公開する HTTP RPC v1 仕様。
 
-runtime-agent は operator が cloud / OS credential を握る host で起動し、
-kernel の下流 execution surface として `(shape, provider)` 単位の lifecycle
-envelope を受けます。
+runtime-agent は operator が cloud / OS credential を握る host で起動し、 kernel
+の下流 execution surface として `(shape, provider)` 単位の lifecycle envelope
+を受けます。
 
 逆方向の制御 (enroll / heartbeat / lease / drain / gateway-manifest 署名) は
 [Kernel HTTP API — Runtime-Agent control RPC](/reference/kernel-http-api#runtime-agent-control-rpc)
@@ -216,14 +216,14 @@ resilience wrapper で包みます。 retry 対象は次のみ:
 
 `HTTP 400` 等の provider validation error、 `retryable: false`、 permission
 denied 等の恒久 failure は retry せず。 retry は bounded exponential backoff
-で同じ envelope を再投入します。 connector は `idempotencyKey` /
-provider-native client token / handle-keyed delete で重複 side effect を抑止
-します。
+で同じ envelope を再投入します。 connector は `idempotencyKey` / provider-native
+client token / handle-keyed delete で重複 side effect を抑止 します。
 
-credential refresh は opt-in。 `ConnectorBootOptions.resilience.refreshCredentials`
-を渡した場合のみ、 wrapper は `HTTP 401` / expired token を検出して refresh を
-1 回呼び、 同じ operation を再試行します。 refresh 未設定なら credential
-error は通常の connector failure として返ります。
+credential refresh は opt-in。
+`ConnectorBootOptions.resilience.refreshCredentials` を渡した場合のみ、 wrapper
+は `HTTP 401` / expired token を検出して refresh を 1 回呼び、 同じ operation
+を再試行します。 refresh 未設定なら credential error は通常の connector failure
+として返ります。
 
 ## Lifecycle status state machine
 
@@ -264,8 +264,8 @@ apply ─────────────► running
 - `apply` 成功は `running` に遷移。 失敗は `connector_failed` を返し kernel 側
   で `error` projection。
 - `destroy` 成功は `missing` に遷移。 以降 `describe` も `missing` を返します。
-- `describe` は実体 API を毎回叩くので 5 値いずれにも遷移し得ます。 `unknown`
-  は rate limit / transient error 等で API が一時応答できない時の予備。
+- `describe` は実体 API を毎回叩くので 5 値いずれにも遷移し得ます。 `unknown` は
+  rate limit / transient error 等で API が一時応答できない時の予備。
 - `verify` は status を materialize しません。 connector credential / network
   reachability の health probe に専念し、 結果は
   `LifecycleVerifyResponse.results[].ok` に集約します。
@@ -284,8 +284,8 @@ interface LifecycleErrorBody {
 ```
 
 `code` は v1 closed enum。 `connector-extended:` prefix は connector 拡張用の
-予約で、 kernel は共通 error logic に載せず connector の string をそのまま
-actor に伝えます。
+予約で、 kernel は共通 error logic に載せず connector の string をそのまま actor
+に伝えます。
 
 | `code`                   | HTTP   | 発生条件                                                            |
 | ------------------------ | ------ | ------------------------------------------------------------------- |

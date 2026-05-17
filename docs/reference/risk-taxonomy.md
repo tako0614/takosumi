@@ -1,17 +1,23 @@
 # Risk Taxonomy
 
-> このページでわかること: plan / apply pipeline が発火しうる Risk の closed enum 19 値を stable id ベースで定義する。
+> このページでわかること: plan / apply pipeline が発火しうる Risk の closed enum
+> 19 値を stable id ベースで定義する。
 
-各 Risk は plan 出力上の判定点として働き、 operator が allow / deny / require-approval を判断する材料になる。 新 Risk kind の追加には `CONVENTIONS.md` §6 RFC が必要。
+各 Risk は plan 出力上の判定点として働き、 operator が allow / deny /
+require-approval を判断する材料になる。 新 Risk kind の追加には `CONVENTIONS.md`
+§6 RFC が必要。
 
 ## Risk vs Error
 
 両者は別 concept。
 
-- **Risk**: plan 出力時の判定点。 `allow` / `deny` / `require-approval` の 3 値で resolve され、 approve 可能。 binding が approval record に乗る。
-- **Error**: operation result の失敗理由 (DomainErrorCode / LifecycleErrorBody)。 approve 対象ではなく、 再 plan / 再 apply で解消する。
+- **Risk**: plan 出力時の判定点。 `allow` / `deny` / `require-approval` の 3
+  値で resolve され、 approve 可能。 binding が approval record に乗る。
+- **Error**: operation result の失敗理由 (DomainErrorCode /
+  LifecycleErrorBody)。 approve 対象ではなく、 再 plan / 再 apply で解消する。
 
-Risk が stage 進行中に再評価されて approval が崩れる経路は [Approval Invalidation Triggers](/reference/approval-invalidation) に従う。
+Risk が stage 進行中に再評価されて approval が崩れる経路は
+[Approval Invalidation Triggers](/reference/approval-invalidation) に従う。
 
 ## Closed enum (19 値)
 

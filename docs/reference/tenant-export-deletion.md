@@ -1,6 +1,7 @@
 # Tenant Export and Deletion
 
-> このページでわかること: tenant data export / Space deletion の wire-level API — export mode / 2-phase deletion / PII field redaction / audit 整合。
+> このページでわかること: tenant data export / Space deletion の wire-level API
+> — export mode / 2-phase deletion / PII field redaction / audit 整合。
 
 ## Data export API
 
@@ -62,8 +63,8 @@ interface SpaceExportStatus {
 
 完了 export は `artifact:<sha256>` 形式で kernel object storage に書かれる。
 `downloadUrl` は短い TTL の signed URL で発行される。 TTL は
-`TAKOSUMI_EXPORT_DOWNLOAD_URL_TTL_SECONDS` (default 3600) で operator が設定する。
-TTL 経過後は同 endpoint で再取得する。
+`TAKOSUMI_EXPORT_DOWNLOAD_URL_TTL_SECONDS` (default 3600) で operator
+が設定する。 TTL 経過後は同 endpoint で再取得する。
 
 ### `GET /api/internal/v1/spaces/:id/exports`
 
@@ -81,7 +82,8 @@ Space の export 履歴を cursor pagination で列挙する。
 
 `full` と `data-portability` は重複する内容を持つが、 `data-portability` は
 import 想定の schema 安定性を保証する形式に正規化される。 `full` は kernel 内部
-layout を反映し、 import schema stability は保証しない (debugging / forensic 用)。
+layout を反映し、 import schema stability は保証しない (debugging / forensic
+用)。
 
 `manifest-only` は customer-recoverable な manifest 集合に絞った subset。
 顧客が別環境で deploy をやり直す用途を想定する。
@@ -96,9 +98,9 @@ export は **point-in-time consistent** に作る。
 - export 開始時点で対象 partition に share lock を取得し、 export 中の write
   はそのまま進ませつつ snapshot isolation で読む。
 - `Idempotency-Key` 単位で 1 つの consistent snapshot を共有する。
-- secret partition は **encrypted reference** のみ含める。 raw value は含まない。
-  受け手が master key を別経路で保持している前提で、 master key 自体は本 export
-  に含めない。
+- secret partition は **encrypted reference** のみ含める。 raw value
+  は含まない。 受け手が master key を別経路で保持している前提で、 master key
+  自体は本 export に含めない。
 
 ## Space deletion
 
@@ -118,14 +120,15 @@ interface SpaceDeleteRequest {
 
 `confirmCode` は `GET /api/internal/v1/spaces/:id/deletion-confirm` で発行される
 single-use code で、 operator の意図確認を強制する。 code TTL は
-`TAKOSUMI_SPACE_DELETE_CONFIRM_TTL_SECONDS` (default 600) で operator が設定する。
+`TAKOSUMI_SPACE_DELETE_CONFIRM_TTL_SECONDS` (default 600) で operator
+が設定する。
 
 ### Soft-delete
 
 - Space を `frozen` 状態に置く。 write API はすべて HTTP `409 Conflict` で
   reject、 read API のみ通る。
-- soft-delete 期間は `TAKOSUMI_SPACE_SOFT_DELETE_RETENTION_DAYS` (default 30)
-  で operator が設定する。 期間内は **復活可能** で、 復活経路は
+- soft-delete 期間は `TAKOSUMI_SPACE_SOFT_DELETE_RETENTION_DAYS` (default 30) で
+  operator が設定する。 期間内は **復活可能** で、 復活経路は
   `POST /api/internal/v1/spaces/:id/restore`。
 - soft-delete 中の Space は quota counter から外される (新たな usage 集計を
   発生させない)。 artifact-storage-bytes は依然 occupy する。
@@ -141,9 +144,9 @@ hard-delete が走る。
   dedup で他 Space からも参照されていれば残る。
 - secret partition を revoke する。 secret partition の master key は destroyed
   scheduled で wipe され、 residual encrypted blob は読めなくなる。
-- audit log は **compliance retention に従い保持** する。 記録自体は残り、
-  raw artifact / journal payload は破棄される。 redaction policy 後の metadata
-  と chain hash が残る。 retention window は
+- audit log は **compliance retention に従い保持** する。 記録自体は残り、 raw
+  artifact / journal payload は破棄される。 redaction policy 後の metadata と
+  chain hash が残る。 retention window は
   [Compliance Retention](/reference/compliance-retention) の regime に従う。
 - hard-delete 後、 Space ID は再利用しない。
 
@@ -159,9 +162,9 @@ GDPR right-to-erasure 要求は通常の Space deletion と独立した経路を
 - audit chain hash は **維持** する。 redaction は payload bytes を変えるが、
   chain は redaction event 自体を新 entry として記録し、 `prevHash` の連続性は
   途切れない。 tamper-evidence と erasure 要求を両立させる。
-- redaction 対象 field は closed list。 追加は `CONVENTIONS.md` §6 RFC を要する。
-  詳細 field 集合は [Compliance Retention](/reference/compliance-retention) と
-  cross-link する。
+- redaction 対象 field は closed list。 追加は `CONVENTIONS.md` §6 RFC
+  を要する。 詳細 field 集合は
+  [Compliance Retention](/reference/compliance-retention) と cross-link する。
 
 redaction と Space hard-delete は独立。 両方の audit event が emit される。
 

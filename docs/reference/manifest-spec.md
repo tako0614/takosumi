@@ -126,15 +126,15 @@ interface ManifestResource {
 `shape` が semantic contract。 `provider` は authoring intent / placement hint
 で Shape-only model の必須 key ではありません。 指定時は catalog / provider
 registry に対する constraint として検証され、 provider が shape 未実装 /
-`requires[]` 未充足なら reject。 省略時は operator policy / provider registry
-が resolved provider を決め Deployment evidence に記録します。 入力 / 出力 /
+`requires[]` 未充足なら reject。 省略時は operator policy / provider registry が
+resolved provider を決め Deployment evidence に記録します。 入力 / 出力 /
 失敗条件 / audit evidence は [Provider Resolution](./provider-resolution.md)
 参照。
 
 ### Workflow ref resolution {#workflow-ref}
 
-`workflowRef` は takosumi-git の authoring extension で kernel manifest 仕様
-の field ではありません。 `.takosumi/manifest.yml` 内では resource に併記でき
+`workflowRef` は takosumi-git の authoring extension で kernel manifest 仕様 の
+field ではありません。 `.takosumi/manifest.yml` 内では resource に併記でき
 ますが、 `takosumi-git push` / `install apply` が workflow を実行し、 artifact
 URI を `workflowRef.target` (省略時 `spec.image`) に書込んでから `workflowRef`
 を strip します。 kernel が受け取る manifest resource entry に `workflowRef`
@@ -202,10 +202,12 @@ installer/compiler concern, not as `POST /v1/deployments` input.
 ## Compile-time placeholders {#compile-time-placeholders}
 
 Installable App Model の `.takosumi/manifest.yml` は installer / account plane
-が materialize する reserved placeholder syntax を持ちます。 `takosumi-git
-install apply` は AppInstallation の materialization result で解決し、 deploy
-request build 後も installer-only placeholder が残れば kernel request 前に
-reject します。 kernel に送る compiled Shape manifest には残してはいけません。
+が materialize する reserved placeholder syntax を持ちます。
+`takosumi-git
+install apply` は AppInstallation の materialization result
+で解決し、 deploy request build 後も installer-only placeholder が残れば kernel
+request 前に reject します。 kernel に送る compiled Shape manifest
+には残してはいけません。
 
 | installer-only family       | 解決元                         | 例                             |
 | --------------------------- | ------------------------------ | ------------------------------ |
@@ -220,8 +222,8 @@ generation で concrete value 化してから deploy します。
 
 `${bindings.*}` は AppBinding materialization 用予約で、 kernel が manifest を
 見る前に absent でなければなりません。 `takosumi-git` は unresolved
-installer-only placeholder を silent 置換せず、 `POST /v1/deployments` 前に
-fail します。
+installer-only placeholder を silent 置換せず、 `POST /v1/deployments` 前に fail
+します。
 
 ## Validation
 

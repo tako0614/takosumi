@@ -9,15 +9,22 @@ export default function EndCTA() {
           install して、 manifest を書いて、 deploy。 それだけ。
         </p>
         <CodeBlock terminal class="terminal">
-          <span class="k">$</span> deno install -gA -n takosumi jsr:@takos/takosumi-cli{"\n"}
+          <span class="k">$</span>{" "}
+          deno install -gA -n takosumi jsr:@takos/takosumi-cli{"\n"}
           <span class="k">$</span> takosumi init ./manifest.yml{"\n"}
           <span class="k">$</span> takosumi deploy ./manifest.yml
         </CodeBlock>
         <div class="cta-row" style="justify-content: center;">
-          <a class="btn btn-primary" href="/docs/getting-started/quickstart" rel="external">
+          <a
+            class="btn btn-primary"
+            href="/docs/getting-started/quickstart"
+            rel="external"
+          >
             Quickstart →
           </a>
-          <a class="btn btn-secondary" href="/docs/" rel="external">ドキュメント</a>
+          <a class="btn btn-secondary" href="/docs/" rel="external">
+            ドキュメント
+          </a>
         </div>
       </div>
     </section>

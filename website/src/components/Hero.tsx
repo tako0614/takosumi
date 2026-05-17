@@ -14,15 +14,23 @@ export default function Hero() {
             <span class="hero-line">deploy。</span>
           </h1>
           <p class="lede">
-            AWS、 Cloudflare、 Kubernetes、 docker、 自前 VM ——
-            全部に <code>takosumi deploy</code> 1 コマンドで届く。
-            引っ越しは manifest を 1 行変えるだけ。
+            AWS、 Cloudflare、 Kubernetes、 docker、 自前 VM —— 全部に{" "}
+            <code>takosumi deploy</code>{" "}
+            1 コマンドで届く。 引っ越しは manifest を 1 行変えるだけ。
           </p>
           <div class="cta-row">
-            <a class="btn btn-primary" href="/docs/getting-started/quickstart" rel="external">
+            <a
+              class="btn btn-primary"
+              href="/docs/getting-started/quickstart"
+              rel="external"
+            >
               5 分で動かす →
             </a>
-            <a class="btn btn-secondary" href="https://github.com/tako0614/takosumi" rel="noopener">
+            <a
+              class="btn btn-secondary"
+              href="https://github.com/tako0614/takosumi"
+              rel="noopener"
+            >
               GitHub
             </a>
           </div>
@@ -30,18 +38,31 @@ export default function Hero() {
         <div class="hero-terminal">
           <CodeBlock terminal>
             <span class="k">$</span> deno install -gA -n takosumi \{"\n"}
-            {"  "}jsr:@takos/takosumi-cli{"\n"}
+            {" ".repeat(2)}jsr:@takos/takosumi-cli{"\n"}
             <span class="k">$</span> takosumi deploy ./manifest.yml{"\n"}
-            <span class="c">  ✓ web → http://localhost:18080</span>{"\n"}
-            <span class="c">  ↳ swap "provider:" line to ship</span>{"\n"}
-            <span class="c">    the same thing on Fargate / k3s.</span>
+            <span class="c">{" ".repeat(2)}✓ web → http://localhost:18080</span>
+            {"\n"}
+            <span class="c">
+              {" ".repeat(2)}↳ swap "provider:" line to ship
+            </span>
+            {"\n"}
+            <span class="c">
+              {" ".repeat(4)}the same thing on Fargate / k3s.
+            </span>
           </CodeBlock>
         </div>
       </div>
       <div class="hero-scroll" aria-hidden="true">
         scroll
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M6 9l6 6 6-6"/>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M6 9l6 6 6-6" />
         </svg>
       </div>
     </section>

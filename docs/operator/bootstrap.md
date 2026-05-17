@@ -1,12 +1,18 @@
 # Operator Bootstrap
 
-> このページでわかること: kernel に bundled provider plugin を接続する初期設定の手順。
+> このページでわかること: kernel に bundled provider plugin
+> を接続する初期設定の手順。
 
-`createTakosumiProductionProviders(opts)` で **21 個の bundled provider plugin (default-on 20 + opt-in 1)** を kernel に wire する。
+`createTakosumiProductionProviders(opts)` で **21 個の bundled provider plugin
+(default-on 20 + opt-in 1)** を kernel に wire する。
 
-source: [`packages/plugins/src/shape-providers/factories.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/factories.ts)
+source:
+[`packages/plugins/src/shape-providers/factories.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/factories.ts)
 
-credential / SDK boundary は [Concepts § Architecture](/getting-started/concepts#architecture-kernel--runtime-agent) 参照。 factory 経由で wire された provider は runtime-agent に lifecycle envelope (apply / destroy / describe) を POST するだけ。
+credential / SDK boundary は
+[Concepts § Architecture](/getting-started/concepts#architecture-kernel--runtime-agent)
+参照。 factory 経由で wire された provider は runtime-agent に lifecycle
+envelope (apply / destroy / describe) を POST するだけ。
 
 ## API シグネチャ
 
@@ -29,7 +35,10 @@ for (const provider of providers) {
 }
 ```
 
-`agentUrl` と `token` が必須。 AWS / GCP / Cloudflare / Azure / Kubernetes / Selfhost は既定で有効。 Deno Deploy は `enableDenoDeploy: true` で追加される。 stock boot (`takosumi server` / `packages/kernel/src/index.ts`) では `TAKOSUMI_ENABLE_DENO_DEPLOY_PROVIDER=1` がこの opt-in に対応する。
+`agentUrl` と `token` が必須。 AWS / GCP / Cloudflare / Azure / Kubernetes /
+Selfhost は既定で有効。 Deno Deploy は `enableDenoDeploy: true` で追加される。
+stock boot (`takosumi server` / `packages/kernel/src/index.ts`) では
+`TAKOSUMI_ENABLE_DENO_DEPLOY_PROVIDER=1` がこの opt-in に対応する。
 
 ## `TakosumiProductionProviderOptions`
 
@@ -49,7 +58,8 @@ interface TakosumiProductionProviderOptions {
 }
 ```
 
-`enable*` は provider registry の公開範囲を絞る switch。 runtime-agent 側に該当 connector がない cloud は無効化する。
+`enable*` は provider registry の公開範囲を絞る switch。 runtime-agent 側に該当
+connector がない cloud は無効化する。
 
 ## Provider 数
 
@@ -65,7 +75,9 @@ interface TakosumiProductionProviderOptions {
 
 ## Runtime-agent との対応
 
-provider id は manifest に書く安定した id。 runtime-agent の connector 名は実装詳細で、 operator は agent boot 時に必要な connector credential / local path を設定する。
+provider id は manifest に書く安定した id。 runtime-agent の connector
+名は実装詳細で、 operator は agent boot 時に必要な connector credential / local
+path を設定する。
 
 | manifest provider id             | runtime-agent connector の例    |
 | -------------------------------- | ------------------------------- |
@@ -94,11 +106,13 @@ const providers = createTakosumiProductionProviders({
 // providers = @takos/selfhost-* の 6 provider
 ```
 
-この構成と相性が良い template が [`selfhosted-single-vm@v1`](/reference/templates#selfhosted-single-vm-v1)。
+この構成と相性が良い template が
+[`selfhosted-single-vm@v1`](/reference/templates#selfhosted-single-vm-v1)。
 
 ## 関連ページ
 
-- [Provider Plugins](/reference/providers) — 20 default + 1 opt-in provider の実装と capabilities
+- [Provider Plugins](/reference/providers) — 20 default + 1 opt-in provider
+  の実装と capabilities
 - [Runtime-agent API](/reference/runtime-agent-api) — agent lifecycle envelope
 - [Shape Catalog](/reference/shapes) — Shape ごとの outputs と capabilities
 - [Manifest](/manifest) — operator が apply する manifest の syntax

@@ -3,8 +3,8 @@
 > このページでわかること: artifact の GC ポリシーと activation history
 > の保持ルール。
 
-本リファレンスは v1 artifact ガベージコレクション contract と
-ActivationSnapshot history export surface を定義する。 両 surface は
+本リファレンスは v1 artifact ガベージコレクション contract と ActivationSnapshot
+history export surface を定義する。 両 surface は
 [Storage Schema](/reference/storage-schema) で宣言される永続レコード集合に対する
 mark-and-traverse パターンを共有する。
 
@@ -46,8 +46,8 @@ mark phase は closed な root 集合から live な参照を辿る。
 
 いずれかの root から到達可能な DataAsset は `live` と mark される。 どの root
 からも到達不能な DataAsset は `unreferenced` と mark される。 mark は
-[Storage Schema](/reference/storage-schema) で宣言された partition に書き込まれ、
-process 再起動を跨いで保持される。 次の phase がそれを読み戻す。
+[Storage Schema](/reference/storage-schema) で宣言された partition
+に書き込まれ、 process 再起動を跨いで保持される。 次の phase がそれを読み戻す。
 
 mark phase は **cursor** で進行する。 各 root class はその record 集合を通じて
 cursor を進めるので、 mark 中にクラッシュしても最後に commit された cursor から

@@ -282,8 +282,8 @@ owner + reason) から導出します。 projection を再実行しても同じ 
 alias には `CONVENTIONS.md` §6 RFC が必須。
 
 `<kind>:<suffix>` 形が kernel が認識する唯一の ID grammar です。 これに
-合わない文字列は ID として無効で、 ID を受け取る全 surface (apply 入力、
-storage 書込、 audit ingest、 CLI flag parse) で reject されます。
+合わない文字列は ID として無効で、 ID を受け取る全 surface (apply 入力、 storage
+書込、 audit ingest、 CLI flag parse) で reject されます。
 
 ## Related architecture notes
 

@@ -1,7 +1,7 @@
 # Readiness Probes
 
-> このページでわかること: `/readyz` の現行 response shape と、 将来の
-> port-level readiness architecture / liveness 分離。
+> このページでわかること: `/readyz` の現行 response shape と、 将来の port-level
+> readiness architecture / liveness 分離。
 
 ## 実装スコープ
 
@@ -13,16 +13,16 @@
 - `plugins`: production / staging では selected plugin が 1 つ以上あること
 - `internalApiSecret`: `takosumi-api` / `takosumi-runtime-agent` role では
   `TAKOSUMI_INTERNAL_API_SECRET` が設定されていること
-- `workerDaemon`: `takosumi-worker` role では worker daemon が起動済 + 初回
-  tick 完了。 起動済だが初回 tick 前は `state: "booting"`
+- `workerDaemon`: `takosumi-worker` role では worker daemon が起動済 + 初回 tick
+  完了。 起動済だが初回 tick 前は `state: "booting"`
 
-Port-level observation worker / flap suppression / boot timeout code /
-`ports[]` は未公開 contract。
+Port-level observation worker / flap suppression / boot timeout code / `ports[]`
+は未公開 contract。
 
 ## `/readyz` semantic
 
-`/readyz` は kernel が deploy traffic / lifecycle dispatch を受け付けられるか
-を boolean 通知する endpoint。
+`/readyz` は kernel が deploy traffic / lifecycle dispatch を受け付けられるか を
+boolean 通知する endpoint。
 
 | Status    | HTTP                      | 条件                       |
 | --------- | ------------------------- | -------------------------- |
@@ -37,9 +37,9 @@ response body には `checks` object が含まれます。 `200` は body をそ
 `503` 時の `error.code` は `readiness_probe_failed`
 ([Kernel HTTP API](/reference/kernel-http-api))。
 
-> port-level readiness 判定は依存 port の DAG を bottom-up 評価する設計で、
-> 現状 `/readyz` output ではなく将来 implementation 公開予定の model です。
-> cycle は不変条件として禁止。
+> port-level readiness 判定は依存 port の DAG を bottom-up 評価する設計で、 現状
+> `/readyz` output ではなく将来 implementation 公開予定の model です。 cycle
+> は不変条件として禁止。
 
 ### Bootstrap order
 
@@ -67,16 +67,16 @@ storage
 | `runtime-agent-registry` | embedded agent (有る場合) の self-enrollment 成功 / external agent registry sync 完了 |
 | `public-listener`        | TCP listener bind + TLS handshake (有効な場合) 成功                                   |
 
-port-level 実装では `public-listener` が ready になった時点で `/readyz` が
-`200` を返し load balancer に組み込まれます。
+port-level 実装では `public-listener` が ready になった時点で `/readyz` が `200`
+を返し load balancer に組み込まれます。
 
 ### Edge semantics
 
 - parent port が `not ready` に陥ると child は全て `not ready` (cascade)
 - parent が transient に flap した場合、 後述の flap detection で短期遷移を
   suppress
-- cycle は invariant として禁止。 新 port 追加は `CONVENTIONS.md` §6 RFC で
-  DAG 配置を明示
+- cycle は invariant として禁止。 新 port 追加は `CONVENTIONS.md` §6 RFC で DAG
+  配置を明示
 
 port-level readiness では observation worker が各 port 状態を定期更新します。
 現行は request 時 inline checks のみで、 次の env / worker semantics は未公開
@@ -89,8 +89,7 @@ contract です:
 
 ### Flap detection
 
-短期 transient による flap (1 周期 fail で次 ok) は `/readyz` に伝播させませ
-ん:
+短期 transient による flap (1 周期 fail で次 ok) は `/readyz` に伝播させませ ん:
 
 - 連続 fail >= 2 で `not ready` (default。 env
   `TAKOSUMI_READINESS_FAIL_THRESHOLD` 調整可)
@@ -194,17 +193,17 @@ Steady state failure cascade:
 
 ## Liveness との分離
 
-`/readyz` は readiness のみ。 kernel liveness は `/livez` で扱い、 本
-reference の対象外です。
+`/readyz` は readiness のみ。 kernel liveness は `/livez` で扱い、 本 reference
+の対象外です。
 
 | Endpoint  | 役割                     | 失敗時の supervisor 期待動作            |
 | --------- | ------------------------ | --------------------------------------- |
 | `/readyz` | traffic を受けてよいか   | load balancer から外す (process は維持) |
 | `/livez`  | process が生存しているか | process を再起動                        |
 
-::: warning `/readyz` を liveness 用途に使うと依存 port の transient failure
-で kernel が無限再起動 loop に陥るため禁止。 supervisor の liveness probe は
-必ず `/livez`。 :::
+::: warning `/readyz` を liveness 用途に使うと依存 port の transient failure で
+kernel が無限再起動 loop に陥るため禁止。 supervisor の liveness probe は 必ず
+`/livez`。 :::
 
 ## Related architecture notes
 

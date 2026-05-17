@@ -1,13 +1,12 @@
-import {
-  type EnvReader,
-  type FetchHandler,
-  type FsAdapter,
-  type RuntimeAdapter,
-  type ServeHttpHandle,
-  type ServeHttpOptions,
-  type Signal,
-  type SubprocessAdapter,
-  type SubprocessOutput,
+import type {
+  EnvReader,
+  FetchHandler,
+  FsAdapter,
+  RuntimeAdapter,
+  ServeHttpHandle,
+  ServeHttpOptions,
+  SubprocessAdapter,
+  SubprocessOutput,
 } from "./runtime.ts";
 
 interface NodeProcess {

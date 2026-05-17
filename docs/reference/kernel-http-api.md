@@ -110,8 +110,8 @@ string か、 のみ検証し、 workflow 実行 / file 読込 / build log parse
 `kind: "takosumi-git.deployment-provenance@v1"` で workflow run id、 git commit
 metadata、 artifact URI、 step log digest を入れます。
 
-> operator / account plane 依存は kernel deploy 前に namespace export /
-> account API / OIDC discovery / BillingPort contract で解決します。 kernel が
+> operator / account plane 依存は kernel deploy 前に namespace export / account
+> API / OIDC discovery / BillingPort contract で解決します。 kernel が
 > 受け取るのは compile 済 Shape manifest のみ。
 
 public deploy scope は single token。 `TAKOSUMI_DEPLOY_TOKEN` が 1 つの Space /
@@ -176,10 +176,10 @@ artifact-kind の `maxSize` を超えれば reject。 未登録 kind は
 
 WAL 書込 (`apply` / `destroy`): 内部で同じ public OperationPlan shape を導出
 し、 provider 副作用の前後で `takosumi_operation_journal_entries` を書きます。
-provider 呼出前に `prepare` / `pre-commit` / `commit`、 成功時に `post-commit`
-/ `observe` / `finalize`、 失敗時に `abort` を追記。 これらは public surface
-の durable な replay 証跡で、 provider 呼出には WAL idempotency tuple を
-fencing token として渡します。
+provider 呼出前に `prepare` / `pre-commit` / `commit`、 成功時に `post-commit` /
+`observe` / `finalize`、 失敗時に `abort` を追記。 これらは public surface の
+durable な replay 証跡で、 provider 呼出には WAL idempotency tuple を fencing
+token として渡します。
 
 Provenance binding: `provenance` が指定された場合、 OperationPlan digest を導
 出する前に各 resource に
@@ -290,8 +290,8 @@ Response body は [Status Output](/reference/status-output) の
 
 ### `GET /v1/deployments/:name/audit`
 
-`takosumi audit show <deployment-id-or-name>` の backing。 `name` は manifest
-の `metadata.name`。 CLI が deployment id を渡された場合は、 先に
+`takosumi audit show <deployment-id-or-name>` の backing。 `name` は manifest の
+`metadata.name`。 CLI が deployment id を渡された場合は、 先に
 `GET /v1/deployments` で id → name を解決してから呼びます。
 
 Response body:
@@ -382,8 +382,8 @@ public 経由 expose はしません。 public `takosumi` CLI に対応 `space` 
 | POST   | `/api/internal/v1/deployments`                     | internal manifest resolve / deployment 作成 |
 | POST   | `/api/internal/v1/deployments/:deploymentId/apply` | resolved deployment を apply                |
 
-すべて internal HMAC 署名 (`TAKOSUMI_INTERNAL_API_SECRET`) が必須。 署名失敗
-は 401 `unauthenticated`、 ServiceGrant / entitlement 拒否は 403
+すべて internal HMAC 署名 (`TAKOSUMI_INTERNAL_API_SECRET`) が必須。 署名失敗 は
+401 `unauthenticated`、 ServiceGrant / entitlement 拒否は 403
 `permission_denied`。
 
 ### Implemented Internal Shapes
@@ -490,6 +490,9 @@ kernel は workflow / trigger / schedule / declarable hook の HTTP route を持
 discovery を所有します。 resolve 後、 `takosumi-git` は `workflowRef` を strip
 して plain な v1 manifest を `POST /v1/deployments` に送ります。
 
+The current kernel exposes no workflow, trigger, schedule, or declarable hook
+HTTP route.
+
 WAL は CatalogRelease 署名再検証を行いますが、 実行可能な hook package は load
 しません。
 
@@ -503,7 +506,8 @@ WAL は CatalogRelease 署名再検証を行いますが、 実行可能な hook
 
 runtime-agent process の lifecycle / lease / drain を kernel が制御する internal
 RPC。 すべて `/api/internal/v1/runtime/agents/...` 配下で、 internal HMAC 必
-須。 詳細 schema / state machine は [Runtime-Agent API](/reference/runtime-agent-api)。
+須。 詳細 schema / state machine は
+[Runtime-Agent API](/reference/runtime-agent-api)。
 
 | Method | Path                                                        | Purpose                                                     |
 | ------ | ----------------------------------------------------------- | ----------------------------------------------------------- |
@@ -543,8 +547,8 @@ interface ApiErrorEnvelope {
 }
 ```
 
-`requestId` は常に存在。 caller が `X-Request-Id` を送らなければ kernel が
-ULID を生成し、 log と response 両方に同じ値を載せます。
+`requestId` は常に存在。 caller が `X-Request-Id` を送らなければ kernel が ULID
+を生成し、 log と response 両方に同じ値を載せます。
 
 `DomainErrorCode` は v1 で 9 個の closed enum です。
 

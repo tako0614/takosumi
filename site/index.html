@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -34,12 +34,17 @@
           --rule: #2a2c33;
         }
       }
-      * { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; }
+      * {
+        box-sizing: border-box;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+      }
       body {
         font-family:
-          ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
-          Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+          ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+          Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
         color: var(--fg);
         background: var(--bg);
         line-height: 1.6;
@@ -50,7 +55,9 @@
         margin: 0 auto;
         padding: 4rem 1.25rem 6rem;
       }
-      header { margin-bottom: 2.5rem; }
+      header {
+        margin-bottom: 2.5rem;
+      }
       h1 {
         font-size: 2.5rem;
         line-height: 1.15;
@@ -67,7 +74,9 @@
         margin: 2.5rem 0 0.5rem;
         letter-spacing: -0.005em;
       }
-      p { margin: 0 0 1rem; }
+      p {
+        margin: 0 0 1rem;
+      }
       code {
         font-family:
           ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
@@ -86,10 +95,19 @@
         padding: 0.55rem 0;
         border-bottom: 1px solid var(--rule);
       }
-      ul.links li:last-child { border-bottom: none; }
-      a { color: var(--accent); text-decoration: none; }
-      a:hover { text-decoration: underline; }
-      .arrow { color: var(--fg-muted); }
+      ul.links li:last-child {
+        border-bottom: none;
+      }
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .arrow {
+        color: var(--fg-muted);
+      }
       footer {
         margin-top: 4rem;
         color: var(--fg-muted);
@@ -104,26 +122,25 @@
       <header>
         <h1>Takosumi</h1>
         <p class="tagline">
-          Self-hostable PaaS substrate. JSON-LD manifest deploys on any
-          compute target.
+          Self-hostable PaaS substrate. JSON-LD manifest deploys on any compute
+          target.
         </p>
       </header>
 
       <section>
         <h2>What it is</h2>
         <p>
-          Takosumi is a manifest-driven deploy engine and account plane.
-          You write a JSON-LD <code>Manifest</code> describing what
-          resources you want; the kernel resolves the graph, picks
-          provider plugins, and applies on Cloudflare Workers, AWS,
-          GCP, Kubernetes, or self-hosted Docker — all from the same
-          contract.
+          Takosumi is a manifest-driven deploy engine and account plane. You
+          write a JSON-LD <code>Manifest</code> describing what resources you
+          want; the kernel resolves the graph, picks provider plugins, and
+          applies on Cloudflare Workers, AWS, GCP, Kubernetes, or self-hosted
+          Docker — all from the same contract.
         </p>
         <p>
-          Identity, billing, and AppInstallation ownership live in a
-          replaceable account plane (Takosumi Accounts). Provider
-          credentials live in a runtime-agent the operator owns. The
-          kernel itself stays substrate-neutral and stateless.
+          Identity, billing, and AppInstallation ownership live in a replaceable
+          account plane (Takosumi Accounts). Provider credentials live in a
+          runtime-agent the operator owns. The kernel itself stays
+          substrate-neutral and stateless.
         </p>
       </section>
 
@@ -166,7 +183,8 @@
           Install the CLI and deploy a manifest against a local kernel:
         </p>
         <p>
-          <code>deno install -gA -n takosumi jsr:@takos/takosumi-cli</code><br />
+          <code>deno install -gA -n takosumi
+            jsr:@takos/takosumi-cli</code><br />
           <code>takosumi server &amp;</code><br />
           <code>takosumi deploy ./manifest.yml</code>
         </p>
@@ -175,14 +193,14 @@
           <a href="https://docs.takosumi.com/getting-started/quickstart">
             Quickstart
           </a>
-          for the full path, including how to point at Cloudflare
-          Workers or a self-hosted Postgres + MinIO + Caddy stack.
+          for the full path, including how to point at Cloudflare Workers or a
+          self-hosted Postgres + MinIO + Caddy stack.
         </p>
       </section>
 
       <footer>
-        Takosumi is open source under the MIT license.
-        Hosted on Cloudflare Pages.
+        Takosumi is open source under the MIT license. Hosted on Cloudflare
+        Pages.
       </footer>
     </main>
   </body>

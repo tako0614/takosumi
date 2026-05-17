@@ -96,10 +96,11 @@ export function isWorkers(): boolean {
     return true;
   }
   // Workers expose `WebSocketPair` but not Deno / Node process.
-  const hasDeno = typeof (globalThis as { Deno?: unknown }).Deno !== "undefined";
+  const hasDeno =
+    typeof (globalThis as { Deno?: unknown }).Deno !== "undefined";
   const hasNodeProcess = typeof (globalThis as {
-      process?: { versions?: { node?: string } };
-    }).process?.versions?.node === "string";
+    process?: { versions?: { node?: string } };
+  }).process?.versions?.node === "string";
   const hasWebSocketPair =
     typeof (globalThis as { WebSocketPair?: unknown }).WebSocketPair !==
       "undefined";

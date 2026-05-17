@@ -1,6 +1,8 @@
 # Tenant Provisioning
 
-> このページでわかること: Space を tenant unit とする kernel-side onboarding primitive — internal API / closed 7 段階 / idempotency / rollback / 初期 state / rate limit / audit event。
+> このページでわかること: Space を tenant unit とする kernel-side onboarding
+> primitive — internal API / closed 7 段階 / idempotency / rollback / 初期 state
+> / rate limit / audit event。
 
 ::: info Current HTTP status This reference describes the full tenant
 provisioning spec surface. The current kernel HTTP router mounts
@@ -101,8 +103,8 @@ provisioning は以下の段階を **この順序** で実行する。 新段階
 
 - 段階 1 / 2: [Storage Schema](/reference/storage-schema) /
   [Secret Partitions](/reference/secret-partitions)
-- 段階 3: [Quota and Rate Limit](/reference/quota-rate-limit) の closed dimension
-  に caps を attach
+- 段階 3: [Quota and Rate Limit](/reference/quota-rate-limit) の closed
+  dimension に caps を attach
 - 段階 4: [Catalog Release Trust](/reference/catalog-release-trust) の adopt
   semantics
 
@@ -143,7 +145,8 @@ read-mostly な status query はすべて空集合を返す。
 
 Space provisioning は owner Organization 確定までを担当する。
 
-- owner Org は `organizationId` で固定する。 後から変更しない (transfer は別 API)。
+- owner Org は `organizationId` で固定する。 後から変更しない (transfer は別
+  API)。
 - Org member の Space への role 付与は別 internal API で行う。 provisioning API
   は default operator account 1 件しか作らない。
 - Org が存在しない / aware ではない `organizationId` は HTTP `409 Conflict` で
@@ -151,9 +154,9 @@ Space provisioning は owner Organization 確定までを担当する。
 
 ## Provisioning rate limit
 
-provisioning は新 Space を生む high-impact 操作なので独立した rate limit を持つ。
-詳細は [Quota and Rate Limit](/reference/quota-rate-limit) の internal route
-カテゴリに従う。 本 endpoint には以下の追加 cap が当たる。
+provisioning は新 Space を生む high-impact 操作なので独立した rate limit
+を持つ。 詳細は [Quota and Rate Limit](/reference/quota-rate-limit) の internal
+route カテゴリに従う。 本 endpoint には以下の追加 cap が当たる。
 
 - **per-Org**: 同一 Org 内での provisioning 件数 / 時間。
 - **per-actor**: 呼び出し HMAC actor あたりの件数 / 時間。
@@ -171,9 +174,9 @@ provisioning rate limit は読み取り系と独立。 `GET /api/internal/v1/spa
 | `TAKOSUMI_PROVISIONING_RATE_PER_ACTOR_PER_HOUR` | per-actor 1 時間あたり件数。 |
 | `TAKOSUMI_PROVISIONING_RATE_GLOBAL_PER_MINUTE`  | kernel 全体 1 分あたり件数。 |
 
-short window (per-minute) と long window (per-hour) を組合せ、 burst と sustained
-の両方を guard する設計。 short window 単独で reject された場合の `Retry-After`
-は短く、 long window で reject された場合は長くなる。
+short window (per-minute) と long window (per-hour) を組合せ、 burst と
+sustained の両方を guard する設計。 short window 単独で reject された場合の
+`Retry-After` は短く、 long window で reject された場合は長くなる。
 
 ## Audit events
 
@@ -192,7 +195,8 @@ provisioning lifecycle の audit event は [Audit Events](/reference/audit-event
 provisioning 中の段階単位の中間 event は v1 では emit しない。 provisioning が
 高頻度操作ではなく、 段階別の状況は status endpoint の polling で十分観測できる
 ため。 段階 fail-and-retry の trace を operator が必要とした場合は、 kernel の
-structured log ([Logging Conventions](/reference/logging-conventions)) を参照する。
+structured log ([Logging Conventions](/reference/logging-conventions))
+を参照する。
 
 ## Status query
 
@@ -224,10 +228,10 @@ head は前進する。
 
 本 reference は Space onboarding に必要な kernel-side primitive のみを定義する。
 顧客向け signup form / payment 確認 / TOS 同意 UI / organization billing /
-support escalation / welcome email 等の顧客 onboarding flow は takosumi の範囲外。
-operator が `takos-private/` 等の外側で実装する。 takosumi kernel は idempotent
-な internal API、 closed provisioning 段階、 audit primitive を提供することに
-専念する。
+support escalation / welcome email 等の顧客 onboarding flow は takosumi
+の範囲外。 operator が `takos-private/` 等の外側で実装する。 takosumi kernel は
+idempotent な internal API、 closed provisioning 段階、 audit primitive
+を提供することに 専念する。
 
 ## Related architecture notes
 

@@ -24,13 +24,36 @@ export default function GeometricMark(props: Props): JSX.Element {
       class={props.class}
     >
       <defs>
-        <linearGradient id="tg-geo" x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+        <linearGradient
+          id="tg-geo"
+          x1="4"
+          y1="4"
+          x2="44"
+          y2="44"
+          gradientUnits="userSpaceOnUse"
+        >
           <stop offset="0" stop-color="var(--tg-grad-from, #5d3afd)" />
           <stop offset="1" stop-color="var(--tg-grad-to, #00b1ff)" />
         </linearGradient>
       </defs>
-      <rect x="6" y="6" width="30" height="10" rx="2.5" fill="url(#tg-geo)" opacity="0.55" />
-      <rect x="9" y="19" width="30" height="10" rx="2.5" fill="url(#tg-geo)" opacity="0.78" />
+      <rect
+        x="6"
+        y="6"
+        width="30"
+        height="10"
+        rx="2.5"
+        fill="url(#tg-geo)"
+        opacity="0.55"
+      />
+      <rect
+        x="9"
+        y="19"
+        width="30"
+        height="10"
+        rx="2.5"
+        fill="url(#tg-geo)"
+        opacity="0.78"
+      />
       <rect x="12" y="32" width="30" height="10" rx="2.5" fill="url(#tg-geo)" />
     </svg>
   );

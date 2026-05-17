@@ -1,10 +1,17 @@
 # Manifest (Shape Model)
 
-> このページでわかること: Takosumi kernel manifest の書き方と resources[] の構造。
+> このページでわかること: Takosumi kernel manifest の書き方と resources[]
+> の構造。
 
-`resources[]` に portable な [Shape](/reference/shapes) resource を並べ、`${ref:...}` で配線する。 authoring shorthand は installer/compiler layer で展開してから `POST /v1/deployments` に送る。
+`resources[]` に portable な [Shape](/reference/shapes) resource
+を並べ、`${ref:...}` で配線する。 authoring shorthand は installer/compiler
+layer で展開してから `POST /v1/deployments` に送る。
 
-Takosumi v1 の envelope は **closed shape**。 top-level は `@context / apiVersion / kind / namespace / metadata / resources` のみ受理し、 未知 field を含む manifest は schema phase で reject される。 詳細仕様は [Manifest Validation](/reference/manifest-validation) と本ページが canonical source。
+Takosumi v1 の envelope は **closed shape**。 top-level は
+`@context / apiVersion / kind / namespace / metadata / resources` のみ受理し、
+未知 field を含む manifest は schema phase で reject される。 詳細仕様は
+[Manifest Validation](/reference/manifest-validation) と本ページが canonical
+source。
 
 ## Envelope 概観
 
@@ -25,23 +32,33 @@ resources: # required: portable Shape resources
 
 ### Required field
 
-- `apiVersion` は `"1.0"` 固定。欠けると kernel / CLI local mode の両方で **400 / envelope rejected**。
+- `apiVersion` は `"1.0"` 固定。欠けると kernel / CLI local mode の両方で **400
+  / envelope rejected**。
 - `kind` は `Manifest` 固定。
 - `1.0` は manifest contract の major version。
 
 ### Optional field
 
-- `@context` は JSON-LD document として扱うための semantic hint。推奨値は `https://takosumi.com/contexts/manifest-v1.jsonld`。kernel は deploy decision には使わず、 external tooling / marketplace indexing 用に保持する。
+- `@context` は JSON-LD document として扱うための semantic hint。推奨値は
+  `https://takosumi.com/contexts/manifest-v1.jsonld`。kernel は deploy decision
+  には使わず、 external tooling / marketplace indexing 用に保持する。
 - `namespace` は manifest-local / Space-scoped namespace の hint。
-- `template` を使う tool は kernel request 前に expanded `resources[]` へ compile すること。kernel public contract は `resources[]`。
+- `template` を使う tool は kernel request 前に expanded `resources[]` へ
+  compile すること。kernel public contract は `resources[]`。
 
-operator-owned capability (OIDC / billing / dashboard / deploy API 等) は manifest top-level field ではなく namespace export / account API で接続する。
+operator-owned capability (OIDC / billing / dashboard / deploy API 等) は
+manifest top-level field ではなく namespace export / account API で接続する。
 
 ## Project layout は `takosumi-git` の責務
 
-Takosumi kernel / CLI は **manifest deploy engine 専念** の方針で、 `takosumi deploy <path>` には manifest path を必ず明示する。 `.takosumi/manifest.yml` / `.takosumi/workflows/` 等の repository-local convention は sibling product [`takosumi-git`](https://github.com/tako0614/takosumi-git) が提供する。
+Takosumi kernel / CLI は **manifest deploy engine 専念** の方針で、
+`takosumi deploy <path>` には manifest path を必ず明示する。
+`.takosumi/manifest.yml` / `.takosumi/workflows/` 等の repository-local
+convention は sibling product
+[`takosumi-git`](https://github.com/tako0614/takosumi-git) が提供する。
 
-3rd party software が独自 UI を持つ場合も、 最終的に manifest body を `POST /v1/deployments` に送って kernel と接続する。
+3rd party software が独自 UI を持つ場合も、 最終的に manifest body を
+`POST /v1/deployments` に送って kernel と接続する。
 
 ## `resources[]` field
 
@@ -59,12 +76,16 @@ interface ManifestResource {
 ```
 
 - `name` は manifest 内で unique。`${ref:<name>.<field>}` で参照される。
-- `spec` は `<shape>.validateSpec` で validate される (`shape: object-store@v1` なら `ObjectStoreShape.validateSpec`)。
-- `provider` 指定時、その provider の `implements` が `shape` と不一致なら reject。省略時は operator policy / provider registry が resolved provider を決定し、Deployment evidence に記録する。
+- `spec` は `<shape>.validateSpec` で validate される (`shape: object-store@v1`
+  なら `ObjectStoreShape.validateSpec`)。
+- `provider` 指定時、その provider の `implements` が `shape` と不一致なら
+  reject。省略時は operator policy / provider registry が resolved provider
+  を決定し、Deployment evidence に記録する。
 
 ## `${ref:...}` / `${secret-ref:...}` syntax {#ref-syntax}
 
-resource 間の配線は string interpolation。 kernel は DAG 解決後に `RefResolver` で展開する。
+resource 間の配線は string interpolation。 kernel は DAG 解決後に `RefResolver`
+で展開する。
 
 ```yaml
 resources:
@@ -94,11 +115,15 @@ resources:
 - `<field>` が当該 Shape の `outputFields` に無ければ reject。
 - 1 文字列内に複数 `${ref:...}` を混在可能 (string concatenation 用途も OK)。
 
-仕様 source は [`manifest-resource.ts`](https://github.com/takos-jp/takosumi/blob/main/src/sdk/manifest.ts) / contract `parseRef` / `extractRefs`。
+仕様 source は
+[`manifest-resource.ts`](https://github.com/takos-jp/takosumi/blob/main/src/sdk/manifest.ts)
+/ contract `parseRef` / `extractRefs`。
 
 ## Capability `requires`
 
-`resources[].requires` はそのリソースに対する capability 要件。 provider の `capabilities` が `requires` の superset を満たさないと selection で reject される。
+`resources[].requires` はそのリソースに対する capability 要件。 provider の
+`capabilities` が `requires` の superset を満たさないと selection で reject
+される。
 
 ```yaml
 resources:
@@ -117,14 +142,19 @@ resources:
     spec: { name: app-archive }
 ```
 
-検証は contract `capabilitySubsetIssues(required, provided, path)` (cf. [provider-plugin.ts](https://github.com/takos-jp/takosumi/blob/main/src/operator/client_registry.ts))。
+検証は contract `capabilitySubsetIssues(required, provided, path)` (cf.
+[provider-plugin.ts](https://github.com/takos-jp/takosumi/blob/main/src/operator/client_registry.ts))。
 
 ## DAG / topological apply order {#dag}
 
-`${ref:...}` は依存 edge を作る。 kernel は manifest を topological sort して以下の順で adapter を呼ぶ:
+`${ref:...}` は依存 edge を作る。 kernel は manifest を topological sort
+して以下の順で adapter を呼ぶ:
 
 1. **DAG build** — `extractRefsFromValue(spec)` で各 resource の参照先を抽出。
 2. **Cycle detection** — 自己ループ / 相互参照を検出した場合は reject。
-3. **Apply phase (topological order)** — 各 resource の resolved provider の `apply(spec, ctx)` を順に実行。 `ctx.refResolver.resolve(...)` は既に apply 済み resource の outputs を返す。
+3. **Apply phase (topological order)** — 各 resource の resolved provider の
+   `apply(spec, ctx)` を順に実行。 `ctx.refResolver.resolve(...)` は既に apply
+   済み resource の outputs を返す。
 4. **Status phase** — apply 後に各 resource の `status(handle, ctx)` で確認。
-5. **Rollback on failure** — apply phase で失敗した時点までに作られた resource は逆順に `destroy(handle, ctx)` される (best effort)。
+5. **Rollback on failure** — apply phase で失敗した時点までに作られた resource
+   は逆順に `destroy(handle, ctx)` される (best effort)。

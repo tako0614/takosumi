@@ -1,6 +1,7 @@
 # Approval Invalidation Triggers
 
-> このページでわかること: approval を `approved` から `invalidated` に落とす 6 種の trigger と、 発火条件 / 検出 timing / propagation / approver UX state。
+> このページでわかること: approval を `approved` から `invalidated` に落とす 6
+> 種の trigger と、 発火条件 / 検出 timing / propagation / approver UX state。
 
 ## Trigger 6 値
 
@@ -104,10 +105,15 @@ approval の lifecycle 上の状態:
 
 `reviewing` は client UX のソフト状態で、 kernel は永続化しない。
 
-kernel 側 state machine が永続化する terminal state は 6 値で、 `pending → approved | denied | expired | invalidated` および `approved → consumed` の経路を扱う。
+kernel 側 state machine が永続化する terminal state は 6 値で、
+`pending → approved | denied | expired | invalidated` および
+`approved → consumed` の経路を扱う。
 
-- `consumed`: approval が apply pipeline で正常消費された後の終端。 audit retention のため record は保持するが再 use はできない。 再度 apply 起動に提示すると `failed_precondition` で reject される。
-- `invalidated`: trigger 1-6 由来の取り消し (binding 崩壊) を表す。 `consumed` は binding が valid のまま正常消費された終端である点が異なる。
+- `consumed`: approval が apply pipeline で正常消費された後の終端。 audit
+  retention のため record は保持するが再 use はできない。 再度 apply
+  起動に提示すると `failed_precondition` で reject される。
+- `invalidated`: trigger 1-6 由来の取り消し (binding 崩壊) を表す。 `consumed`
+  は binding が valid のまま正常消費された終端である点が異なる。
 
 ## Approval record binding fields
 

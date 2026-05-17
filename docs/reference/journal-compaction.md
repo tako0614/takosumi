@@ -1,8 +1,12 @@
 # Journal Compaction
 
-> このページでわかること: WAL journal の compaction trigger / retention 規則 / snapshotization ステップ / operator 制御点。
+> このページでわかること: WAL journal の compaction trigger / retention 規則 /
+> snapshotization ステップ / operator 制御点。
 
-WriteAheadOperationJournal は WAL stage 進行とともに単調増大する。 compaction なしでは journal は際限なく成長し replay が遅くなる。 compaction は audit log retention とは独立で、 audit 側の regime 駆動 retention は [Audit Events](/reference/audit-events) を参照。
+WriteAheadOperationJournal は WAL stage 進行とともに単調増大する。 compaction
+なしでは journal は際限なく成長し replay が遅くなる。 compaction は audit log
+retention とは独立で、 audit 側の regime 駆動 retention は
+[Audit Events](/reference/audit-events) を参照。
 
 ## Compaction triggers
 

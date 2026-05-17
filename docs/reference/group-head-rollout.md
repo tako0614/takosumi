@@ -1,7 +1,7 @@
 # GroupHead Rollout
 
-> このページでわかること: GroupHead pointer / rollout state machine / canary
-> / shadow / audit event。
+> このページでわかること: GroupHead pointer / rollout state machine / canary /
+> shadow / audit event。
 
 GroupHead は「ある group に現在 traffic が流れている deployment / activation」
 を pin する mutable pointer。 pointer の前進 / 巻き戻しが rollout 本体です。
@@ -82,8 +82,8 @@ idle | preparing | canary-active | shadow-active
 | `rolling-back`  | 不可            | -                | 可           |
 | `rolled-back`   | 不可            | 不可             | 可           |
 
-新 rollout を開始できるのは `idle` のみで、 多重 rollout 交差を防ぐため他
-state からの新規開始は拒否されます。
+新 rollout を開始できるのは `idle` のみで、 多重 rollout 交差を防ぐため他 state
+からの新規開始は拒否されます。
 
 ## Canary state
 
@@ -155,11 +155,11 @@ GroupHead 関連の audit event は以下を発行します
 
 ## v1 範囲外
 
-- blue-green deploy は独立 state として持ちません。 `canary-active` の最終
-  step (100% 切替) を replace-only mutation で表現し、 旧側は ObservationSet
-  上の watcher として `observe` 監視するだけに留めます。
-- 複数 group の同時 coordinated rollout は v1 範囲外。 group 単位で
-  independent に進めます。
+- blue-green deploy は独立 state として持ちません。 `canary-active` の最終 step
+  (100% 切替) を replace-only mutation で表現し、 旧側は ObservationSet 上の
+  watcher として `observe` 監視するだけに留めます。
+- 複数 group の同時 coordinated rollout は v1 範囲外。 group 単位で independent
+  に進めます。
 
 ## Risk との連携
 

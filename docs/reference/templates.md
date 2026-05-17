@@ -18,8 +18,8 @@ Shape manifest である。 Template の展開は installer / compiler の責務
 
 Installer が template を resources に compile した時点で、 生成された resources
 は Deployment に capture される。 後から template を変更しても既存 Deployment は
-書き換えられない。 workload を更新したい場合は新しい compiled manifest を
-submit する。
+書き換えられない。 workload を更新したい場合は新しい compiled manifest を submit
+する。
 
 ## Related
 

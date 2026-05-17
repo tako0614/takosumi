@@ -128,8 +128,8 @@ takosumi deploy [<manifest>] [--manifest <path>] [--remote <url>] [--token <t>] 
 挙動:
 
 - remote: `POST /v1/deployments` に `{ mode: "apply" | "plan", manifest }` を
-  送信。 各 write に fresh `X-Idempotency-Key` を付けるので、 transport retry
-  は apply 再実行ではなく初回 response の replay。
+  送信。 各 write に fresh `X-Idempotency-Key` を付けるので、 transport retry は
+  apply 再実行ではなく初回 response の replay。
 - local: 同梱の Shape / provider registry で compile 済 manifest を検証し
   in-process apply (`--dry-run` 時は plan)。 状態は終了時に破棄。
 
@@ -184,8 +184,8 @@ remote `plan` は `POST /v1/deployments` を `mode: "plan"` で送信し、 resp
 body をそのまま表示します。 副作用が無くても `deploy` 同様 fresh
 `X-Idempotency-Key` を伴います。 local mode は同梱 validator を in-process で
 走らせ、 `{ status, outcome }` を JSON 出力。 両 mode の
-`outcome.operationPlanPreview` に決定的な DesiredSnapshot / OperationPlan
-digest と WAL idempotency tuple preview が入り、 WAL entry は書きません。
+`outcome.operationPlanPreview` に決定的な DesiredSnapshot / OperationPlan digest
+と WAL idempotency tuple preview が入り、 WAL entry は書きません。
 
 Exit codes: `0` 成功、 `1` 失敗。
 
@@ -265,8 +265,8 @@ takosumi migrate [--env <name>] [--dry-run]
 | `--dry-run` | switch | off     | 適用せず planned migration を表示                                   |
 
 `--env` で env 固有 `*_DATABASE_URL` の優先順位が決まります
-([Environment Variables](/reference/env-vars))。 dry-run は staging /
-production でも URL を要求しません。
+([Environment Variables](/reference/env-vars))。 dry-run は staging / production
+でも URL を要求しません。
 
 Exit codes: `0` migration 完了 / dry-run 表示、 `1` migration error / kernel
 script 不在、 `2` non-dry-run の staging / production で必須 env 未設定。

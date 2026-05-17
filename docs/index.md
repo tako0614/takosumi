@@ -49,19 +49,24 @@ Takosumi は **6 つの JSR package** で配布される:
 
 ## はじめに読むもの
 
-- [Quickstart](/getting-started/quickstart) — `takosumi server` 1 コマンドで dev → cloud deploy まで
+- [Quickstart](/getting-started/quickstart) — `takosumi server` 1 コマンドで dev
+  → cloud deploy まで
 - [Concepts](/getting-started/concepts) — Shape × Provider モデル
-- [Manifest (Shape Model)](/manifest) — `resources[]` / `${ref:...}` / `${secret-ref:...}` syntax
+- [Manifest (Shape Model)](/manifest) — `resources[]` / `${ref:...}` /
+  `${secret-ref:...}` syntax
 
 ## 目的別 lookup
 
-| 目的                                | ページ                                            |
-| ----------------------------------- | ------------------------------------------------- |
-| 設計 notes / layer 境界             | [Architecture Overview](/reference/architecture/) |
+| 目的                                | ページ                                                   |
+| ----------------------------------- | -------------------------------------------------------- |
+| 設計 notes / layer 境界             | [Architecture Overview](/reference/architecture/)        |
 | Shape / Provider の closed contract | [Manifest Model](/reference/architecture/manifest-model) |
-| 5 shapes の spec / outputs          | [Shape Catalog](/reference/shapes)                |
-| 20 default + 1 opt-in provider      | [Provider Plugins](/reference/providers)          |
-| 全 subcommand × flag × env          | [CLI Reference](/reference/cli)                   |
-| `createTakosumiProductionProviders` | [Operator Bootstrap](/operator/bootstrap)         |
+| 5 shapes の spec / outputs          | [Shape Catalog](/reference/shapes)                       |
+| 20 default + 1 opt-in provider      | [Provider Plugins](/reference/providers)                 |
+| 全 subcommand × flag × env          | [CLI Reference](/reference/cli)                          |
+| `createTakosumiProductionProviders` | [Operator Bootstrap](/operator/bootstrap)                |
 
-> 注: `@takos/` scope は Takos が publish する **reference distribution** であり、 authority は contract (`@takos/takosumi-contract`) 側にある。 contract-compatible な alternative publisher も spec 上可能で、 architectural privilege は持たない。
+> 注: `@takos/` scope は Takos が publish する **reference distribution**
+> であり、 authority は contract (`@takos/takosumi-contract`) 側にある。
+> contract-compatible な alternative publisher も spec 上可能で、 architectural
+> privilege は持たない。

@@ -28,9 +28,9 @@ recovery ◄── (kernel restart / lock re-acquire,
               resumes from last persisted WAL stage)
 ```
 
-`observe` は長時間動作で、 同 Space の次 `apply` / `destroy` と重なっても
-block しません。 `rollback` / `recovery` は常に WAL replay で、 最後に persist
-された journal entry から再入します。
+`observe` は長時間動作で、 同 Space の次 `apply` / `destroy` と重なっても block
+しません。 `rollback` / `recovery` は常に WAL replay で、 最後に persist された
+journal entry から再入します。
 
 ### `apply`
 
@@ -40,9 +40,9 @@ block しません。 `rollback` / `recovery` は常に WAL replay で、 最後
 - **Journal cursor**: operation ごとに新 `journalEntryId` を割当て、
   `(spaceId, operationPlanDigest, journalEntryId)` を記録
 - **WAL stages**: `prepare` -> `pre-commit` -> `commit`
-- **Failure**: `prepare` 失敗は副作用なく plan を破棄。 `pre-commit` 失敗は
-  同 WAL entry の compensate を実行。 `commit` 失敗は entry を `commit-failed`
-  に marking し、 recovery が resume / compensate を決定
+- **Failure**: `prepare` 失敗は副作用なく plan を破棄。 `pre-commit` 失敗は 同
+  WAL entry の compensate を実行。 `commit` 失敗は entry を `commit-failed` に
+  marking し、 recovery が resume / compensate を決定
 - **Blocking**: 期間中 `(spaceId, operationPlanDigest)` lock を保持。 同 Space
   の他 intentional phase は queue
 - **Typical duration**: 数秒〜数分。 OCI image pull / Transform 含む plan は
@@ -56,9 +56,9 @@ block しません。 `rollback` / `recovery` は常に WAL replay で、 最後
 - **Journal cursor**: apply phase の entry を `commit` -> `post-commit` 遷移で
   継続使用
 - **WAL stages**: `commit` -> `post-commit`
-- **Failure**: `post-commit` 失敗は effect を rollback せず
-  `post-commit-failed` annotation を立てて observe loop が reconcile。
-  `compensate` recovery 選択時は `activation-rollback` `RevokeDebt` を emit
+- **Failure**: `post-commit` 失敗は effect を rollback せず `post-commit-failed`
+  annotation を立てて observe loop が reconcile。 `compensate` recovery 選択時は
+  `activation-rollback` `RevokeDebt` を emit
 - **Blocking**: 元 `apply` と同じ lock を保持
 - **Typical duration**: 1 分未満。 connector traffic flip / DNS / readiness 伝
   播が支配的
@@ -94,13 +94,12 @@ block しません。 `rollback` / `recovery` は常に WAL replay で、 最後
 
 - **Input**: persist 済 WAL state + Space の最新 `ResolutionSnapshot`
 - **Output**: recovery mode (`normal` / `continue` / `compensate` / `inspect`)
-  に依存。 詳細は
-  [Recovery modes](/reference/lifecycle#recovery-modes)
+  に依存。 詳細は [Recovery modes](/reference/lifecycle#recovery-modes)
 - **Journal cursor**: 最後に persist された entry の次 stage から resume。 新
   `journalEntryId` は割当てない
 - **WAL stages**: resume point 以降の残り stage
-- **Failure**: mode 依存。 `inspect` は副作用なし、 `compensate` は
-  `RevokeDebt` を emit する場合あり
+- **Failure**: mode 依存。 `inspect` は副作用なし、 `compensate` は `RevokeDebt`
+  を emit する場合あり
 - **Blocking**: resume 対象 phase と同じ lock
 - **Typical duration**: 元 phase に残っていた作業量に従う
 

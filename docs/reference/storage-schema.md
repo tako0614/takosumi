@@ -1,8 +1,13 @@
 # Storage Schema
 
-> このページでわかること: kernel が永続化する record の論理 wire schema。 SQL DDL ではなく、 必須 / optional field、 primitive 型、 永続化セマンティクス、 immutability rule を record class 単位で定める。
+> このページでわかること: kernel が永続化する record の論理 wire schema。 SQL
+> DDL ではなく、 必須 / optional field、 primitive 型、 永続化セマンティクス、
+> immutability rule を record class 単位で定める。
 
-各 record class は relational table / key-value engine / log-structured store のいずれで保持してもよい。 他 record から導出可能な field は実装側で省略 persist できる。 別 record への参照は識別子で、 由来 snapshot と read consistent となるよう読む。
+各 record class は relational table / key-value engine / log-structured store
+のいずれで保持してもよい。 他 record から導出可能な field は実装側で省略 persist
+できる。 別 record への参照は識別子で、 由来 snapshot と read consistent
+となるよう読む。
 
 primitive 型:
 

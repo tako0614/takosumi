@@ -96,9 +96,9 @@ ExportMaterial:
   grantHandles: [grant:inst_abc:oidc-client]
 ```
 
-Declaration には endpoint ref、 SDK config ref、 runtime handle、 grant-producing
-metadata を含められる。 raw secret 値は declaration にも audit event にも
-保存しない。
+Declaration には endpoint ref、 SDK config ref、 runtime handle、
+grant-producing metadata を含められる。 raw secret 値は declaration にも audit
+event にも 保存しない。
 
 ## Versioning
 

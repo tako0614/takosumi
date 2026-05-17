@@ -1,9 +1,11 @@
 # Trial Spaces
 
-> このページでわかること: trial / ephemeral Space の v1 仕様 — attribute / auto-expire / frozen grace / auto-cleanup / extension / paid conversion。
+> このページでわかること: trial / ephemeral Space の v1 仕様 — attribute /
+> auto-expire / frozen grace / auto-cleanup / extension / paid conversion。
 
 trial Space は通常 Space と同等の isolation invariant を保ったまま、 寿命が
-有限で低い quota tier が当たる Space。 kernel-side の enforcement のみを定義する。
+有限で低い quota tier が当たる Space。 kernel-side の enforcement
+のみを定義する。
 
 ## Trial Space attribute
 
@@ -46,8 +48,8 @@ active-trial | expiring-soon | frozen | cleaned-up | converted
 terminal は `cleaned-up` と `converted` の 2 値。
 
 `expiring-soon` への遷移 threshold は operator-controlled。 default は
-`trialExpiresAt - TAKOSUMI_TRIAL_EXPIRY_WARN_SECONDS` (default 86400、 24 時間前)。
-warning は audit event のみで、 Space の操作性は変えない。
+`trialExpiresAt - TAKOSUMI_TRIAL_EXPIRY_WARN_SECONDS` (default 86400、 24
+時間前)。 warning は audit event のみで、 Space の操作性は変えない。
 
 `frozen` 中は Space の write API がすべて HTTP `409 Conflict` で reject され、
 read API のみ通る。 grace duration は `TAKOSUMI_TRIAL_FROZEN_GRACE_SECONDS`
@@ -166,9 +168,10 @@ trial の挙動は環境変数で operator が制御する。
 ## Invariants
 
 - trial attribute は Space metadata の closed field 集合で表現する。
-- trial lifecycle state は 5 値 closed。 terminal は `cleaned-up` と `converted`。
-- `frozen` は read-only で操作が落とされる。 grace 経過後の auto-cleanup は Space
-  deletion API を経由する。
+- trial lifecycle state は 5 値 closed。 terminal は `cleaned-up` と
+  `converted`。
+- `frozen` は read-only で操作が落とされる。 grace 経過後の auto-cleanup は
+  Space deletion API を経由する。
 - trial Space は current v1 で cross-Space link 不可。
 - trial extension は operator-only。 actor self-service は v1 範囲外。
 

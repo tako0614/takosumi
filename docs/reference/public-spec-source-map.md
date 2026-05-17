@@ -1,10 +1,10 @@
 # Public Spec Source Map
 
-> このページでわかること: public surface ごとの source of truth / 公開
-> reference / drift check の対応表。
+> このページでわかること: public surface ごとの source of truth / 公開 reference
+> / drift check の対応表。
 
-public shape が変わったら、 所有 source と下記行を同じ変更で更新します。 wire
-/ package surface ではドキュメントのみの更新では不十分です。
+public shape が変わったら、 所有 source と下記行を同じ変更で更新します。 wire /
+package surface ではドキュメントのみの更新では不十分です。
 
 ## Map
 

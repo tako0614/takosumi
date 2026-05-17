@@ -637,7 +637,9 @@ async function importRuntimeConfigModule(): Promise<
   try {
     return await import("./config/mod.ts");
   } catch (error) {
-    if (error instanceof TypeError || currentRuntime().fs.isNotFoundError(error)) {
+    if (
+      error instanceof TypeError || currentRuntime().fs.isNotFoundError(error)
+    ) {
       return undefined;
     }
     throw error;

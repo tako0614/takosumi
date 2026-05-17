@@ -1,6 +1,8 @@
 # Drift Detection
 
-> このページでわかること: DesiredSnapshot と ObservationSet の乖離を構造化する DriftIndex の compute trigger、 比較方法、 entry schema、 propagation path、 operator visibility surface、 RevokeDebt 連動。
+> このページでわかること: DesiredSnapshot と ObservationSet の乖離を構造化する
+> DriftIndex の compute trigger、 比較方法、 entry schema、 propagation path、
+> operator visibility surface、 RevokeDebt 連動。
 
 ## DriftIndex
 

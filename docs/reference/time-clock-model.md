@@ -118,8 +118,8 @@ migration)。 kernel は最も破壊的なケースを検知する。
   入らない。 この間の TTL 評価は block され、 すでに expired な approval や
   share の un-expiry を防ぐ。
 - forward jump (clock が未来に動く) は許容するが、 5 分を超えた場合に
-  `clock_forward_jump` audit event を出す。 forward jump は TTL field を
-  早期 expire させる。 これは意図的な挙動である。
+  `clock_forward_jump` audit event を出す。 forward jump は TTL field を 早期
+  expire させる。 これは意図的な挙動である。
 
 ## Timezone handling
 
@@ -129,8 +129,8 @@ time を rendering してよい。
 - kernel storage、 audit event、 telemetry exemplar、 HTTP API response はすべて
   UTC 値を運ぶ。
 - operator UI と CLI 出力は、 operator が `TAKOSUMI_LOG_TIMEZONE` 等の
-  client-side flag で opt-in したときに local zone で表示してよい。 内側の値
-  は UTC のまま。
+  client-side flag で opt-in したときに local zone で表示してよい。 内側の値 は
+  UTC のまま。
 - manifest / plan / snapshot は local-zone timestamp を運ばない。 non-UTC
   timestamp を含む manifest は `invalid_argument` で reject される。
 
@@ -160,8 +160,8 @@ chain の最初の event (genesis または rotation 後の genesis) は wall cl
 
 fresh kernel install で host clock が未設定の場合は hard boot failure として
 扱う。 wall clock が kernel の release build date より前の Unix epoch を返す
-ときは、 kernel は genesis event の書き込みを拒否する。 operator は最初の
-kernel start 前に host clock と NTP source を設定する。
+ときは、 kernel は genesis event の書き込みを拒否する。 operator は最初の kernel
+start 前に host clock と NTP source を設定する。
 
 ## Operator-facing summary
 

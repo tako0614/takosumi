@@ -1,6 +1,8 @@
 # Observation Retention
 
-> このページでわかること: observed state の 4 層 retention model (ObservationSet / ObservationHistory / OperationJournal / AuditLog) と、 ExportDeclaration freshness の propagation 規則を closed semantics で定める。
+> このページでわかること: observed state の 4 層 retention model (ObservationSet
+> / ObservationHistory / OperationJournal / AuditLog) と、 ExportDeclaration
+> freshness の propagation 規則を closed semantics で定める。
 
 ## 4-layer retention model
 
@@ -126,7 +128,8 @@ change** (trigger 4) の発火源だが、`refresh-required` と `stale` は別 
   `invalidated` に落ちる
   ([Approval Invalidation Triggers — external freshness change](/reference/approval-invalidation#_4-external-freshness-change))。
 
-history の enable / disable によらずこの trigger 経路は同じ。 trigger は ObservationSet (latest) の遷移で発火するので、 history は不要。
+history の enable / disable によらずこの trigger 経路は同じ。 trigger は
+ObservationSet (latest) の遷移で発火するので、 history は不要。
 
 ## Observability flow
 

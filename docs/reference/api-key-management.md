@@ -1,6 +1,7 @@
 # API Key Management
 
-> このページでわかること: API key の owner 層と kernel が受け付ける credential 種別。
+> このページでわかること: API key の owner 層と kernel が受け付ける credential
+> 種別。
 
 end-user / account / installation / dashboard 向けの API key は operator の
 account plane が所有する (reference 実装: `takosumi-cloud/` の Takosumi

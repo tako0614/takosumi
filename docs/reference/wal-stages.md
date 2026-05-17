@@ -125,20 +125,20 @@ connector を operator が手動 resolve する必要があります。
 Public deploy route v1:
 
 - `continue`: requested phase と `operationPlanDigest` が unfinished WAL と
-  一致時のみ同 OperationPlan を再実行。 idempotency tuple が変わらず外部
-  request token も同じ。 digest 変化は recovery ではなく新 intent として
+  一致時のみ同 OperationPlan を再実行。 idempotency tuple が変わらず外部 request
+  token も同じ。 digest 変化は recovery ではなく新 intent として
   `failed_precondition`
-- `compensate`: 同 digest / phase の unfinished WAL が `commit` /
-  `post-commit` / `observe` まで進んでいる場合のみ terminal `abort` を追記し、
-  各 OperationPlan entry に `activation-rollback` RevokeDebt を enqueue。
-  `prepare` / `pre-commit` だけの WAL は actual effect が無いため compensate
-  対象外で `failed_precondition`
+- `compensate`: 同 digest / phase の unfinished WAL が `commit` / `post-commit`
+  / `observe` まで進んでいる場合のみ terminal `abort` を追記し、 各
+  OperationPlan entry に `activation-rollback` RevokeDebt を enqueue。 `prepare`
+  / `pre-commit` だけの WAL は actual effect が無いため compensate 対象外で
+  `failed_precondition`
 
 ## Public deploy provenance
 
 `POST /v1/deployments` は upstream client から top-level `provenance` を受け
-取ります。 kernel は opaque JSON として WAL evidence に永続化し、 workflow 実
-行 / build log parse / git field 解釈は行いません。
+取ります。 kernel は opaque JSON として WAL evidence に永続化し、 workflow 実 行
+/ build log parse / git field 解釈は行いません。
 
 - public WAL の effect detail に `provenance` object 全体を含める
 - resolved resource に `metadata.takosumiDeployProvenance` を付け、
@@ -148,19 +148,19 @@ Public deploy route v1:
 - status / recovery inspect response から audit consumer に記録済 provenance
   を返せる
 
-これで `takosumi-git` 等の client は artifact URI → workflow run id → git
-commit SHA → step log digest の traceability を、 kernel に workflow を持ち込
+これで `takosumi-git` 等の client は artifact URI → workflow run id → git commit
+SHA → step log digest の traceability を、 kernel に workflow を持ち込
 まずに永続化できます。
 
 ## Pre/post-commit verification lifecycle
 
 kernel contract には catalog 供給の実行可能 hook package runtime はありません。
 WAL stage は kernel 所有の validation / evidence collection を含むことはあり
-ますが、 marketplace hook code を load したり汎用の `pre-commit` /
-`post-commit` hook 実行を公開拡張点として露出することはしません。
+ますが、 marketplace hook code を load したり汎用の `pre-commit` / `post-commit`
+hook 実行を公開拡張点として露出することはしません。
 
-hook 的挙動が必要な workflow / repository automation は `takosumi-git` 等の
-上流 product 側で行い、 compile 済 Shape manifest を `POST /v1/deployments` に
+hook 的挙動が必要な workflow / repository automation は `takosumi-git` 等の 上流
+product 側で行い、 compile 済 Shape manifest を `POST /v1/deployments` に
 送る前に検査を済ませる前提です。
 
 `prepare` 詳細には manifest provenance / resource operation plan / kernel
@@ -179,9 +179,9 @@ RevokeDebt entry を生成します。 発生条件:
   generated material → `activation-rollback`
 - `finalize` 中: managed / generated cleanup が permanent fail → 該当 reason
 
-reason / status / aging は [RevokeDebt Model](/reference/revoke-debt) 参照。
-WAL stage 側は enqueue 責務のみで、 retry / aging semantics は RevokeDebt
-subsystem に委ねます。
+reason / status / aging は [RevokeDebt Model](/reference/revoke-debt) 参照。 WAL
+stage 側は enqueue 責務のみで、 retry / aging semantics は RevokeDebt subsystem
+に委ねます。
 
 ## Related architecture notes
 

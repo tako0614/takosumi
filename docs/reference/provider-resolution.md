@@ -77,8 +77,8 @@ catalog release digest sha256:... verified
 ```
 
 `constraints` は今後の drift / rollback / audit で再評価できる machine-readable
-条件です。 `risks` は approval UI / policy decision に出す warning または
-error です。
+条件です。 `risks` は approval UI / policy decision に出す warning または error
+です。
 
 ## 4. Algorithm
 

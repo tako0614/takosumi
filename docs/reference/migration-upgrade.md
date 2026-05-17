@@ -1,6 +1,9 @@
 # Schema Evolution Invariants
 
-> このページでわかること: kernel process replacement / schema evolution up / down semantics / rollback gate / kernel ↔ runtime-agent version alignment / runtime-agent drain protocol の current invariants。公開 docs には production 操作手順を固定しない。
+> このページでわかること: kernel process replacement / schema evolution up /
+> down semantics / rollback gate / kernel ↔ runtime-agent version alignment /
+> runtime-agent drain protocol の current invariants。公開 docs には production
+> 操作手順を固定しない。
 
 ## Kernel replacement invariants
 

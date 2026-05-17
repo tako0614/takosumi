@@ -53,7 +53,8 @@ Field semantics:
 - `acceptedKinds` (required): Artifact kind strings the Connector accepts.
 - `spaceVisibility` (required): `operator-policy-driven` (default) または closed
   Space-set descriptor。
-- `signingExpectations` (required): `none` / `optional` / `required` のいずれか。
+- `signingExpectations` (required): `none` / `optional` / `required`
+  のいずれか。
 - `envelopeVersion` (required): この Connector が喋る control envelope version。
   現状は `v1`。
 
@@ -145,8 +146,8 @@ HTTP API とは独立にバージョンが付く。
 
 v1 の apply / destroy envelope では、 呼び出しが public OperationJournal path
 から来るとき runtime-agent request は WAL 由来の `idempotencyKey` を運ぶ。 同じ
-operation tuple は `operationRequest` と `metadata.takosumiOperation`
-(`phase`、 `walStage`、 `operationId`、 `resourceName`、 `providerId`、
+operation tuple は `operationRequest` と `metadata.takosumiOperation` (`phase`、
+`walStage`、 `operationId`、 `resourceName`、 `providerId`、
 `operationPlanDigest`、 raw tuple) からも得られる。 Connector は同じキーでの
 繰り返し呼び出しを同一の論理 side effect として扱い、 request-token semantics
 を公開するクラウド API にキーを forward しなければならない。

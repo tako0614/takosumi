@@ -49,8 +49,8 @@ YAML / JSON parser layer。
 
 ## Step 2 — Schema (closed vocabulary)
 
-closed vocabulary。 列挙以外の top-level / nested key を含む manifest は
-reject (warning 降格なし)。
+closed vocabulary。 列挙以外の top-level / nested key を含む manifest は reject
+(warning 降格なし)。
 
 Top-level:
 
@@ -67,8 +67,8 @@ non-empty array。 空 array / null / number は reject。
 name | labels
 ```
 
-template 展開する tool があれば、 kernel request 前に expand した
-`resources[]` だけを送ります。
+template 展開する tool があれば、 kernel request 前に expand した `resources[]`
+だけを送ります。
 
 `resources[]` entry の closed key:
 
@@ -76,8 +76,8 @@ template 展開する tool があれば、 kernel request 前に expand した
 shape | name | provider | spec | requires | metadata
 ```
 
-Shape `spec` 内の closed vocabulary は当該 Shape の `validateSpec` で別途判
-定 (Shape Catalog reference)。 `spec` 内では `artifact` / `source` / `port` /
+Shape `spec` 内の closed vocabulary は当該 Shape の `validateSpec` で別途判 定
+(Shape Catalog reference)。 `spec` 内では `artifact` / `source` / `port` /
 `routes` 等 Shape 固有 field が許可されますが、 manifest envelope 共通 top-level
 にはなりません。
 
@@ -98,8 +98,8 @@ Schema phase が reject する条件:
 | closed enum 範囲外          | `access: super-admin` | reject                    |
 | 値域外 (port 0, methods=[]) | `port: 0`             | reject                    |
 
-`apiVersion` は `"1.0"` 固定、 `kind` は `"Manifest"` 固定。 両方とも値違反
-は reject。
+`apiVersion` は `"1.0"` 固定、 `kind` は `"Manifest"` 固定。 両方とも値違反 は
+reject。
 
 `details.validationPath` は `$.resources[2].spec.bindings.DB_PASSWORD` 形式の
 JSONPath。
@@ -127,8 +127,8 @@ Reject 条件:
 | `secret-ref:` を non-secret field に使う / その逆        | `invalid_argument` |
 | Cycle detected (`a → b → a`)                             | `invalid_argument` |
 
-Cycle detection は resource を node、 `${ref:...}` を edge とする graph に
-DFS。 発見 cycle は `details.cycle: ["a", "b", "a"]` に全 node を載せます。
+Cycle detection は resource を node、 `${ref:...}` を edge とする graph に DFS。
+発見 cycle は `details.cycle: ["a", "b", "a"]` に全 node を載せます。
 
 Resolution は purely structural で external lookup を伴いません。 output field
 実値は plan / apply step で初めて埋まり、 本 step は「埋まる予定があること」
@@ -212,11 +212,11 @@ loop で残りを発見します。
 
 ## Closed vocabulary 違反の扱い
 
-Schema phase の core invariant は「未知 field は warning ではなく reject」。
-新 field 導入は `apiVersion` bump で別 schema を発行します。
+Schema phase の core invariant は「未知 field は warning ではなく reject」。 新
+field 導入は `apiVersion` bump で別 schema を発行します。
 
-これで operator が誤って future manifest を current kernel に投げた場合の
-silent ignore を防ぎます。
+これで operator が誤って future manifest を current kernel に投げた場合の silent
+ignore を防ぎます。
 
 ## Schema versioning
 
@@ -226,8 +226,8 @@ silent ignore を防ぎます。
 | ------- | ---------------------------------------- |
 | `"1.0"` | Takosumi v1 で kernel が受理する唯一の値 |
 
-breaking change は `"2.0"` 等で発行し kernel が version ごとに routing。
-`"1.0"` 以外を v1 kernel に投げれば reject。
+breaking change は `"2.0"` 等で発行し kernel が version ごとに routing。 `"1.0"`
+以外を v1 kernel に投げれば reject。
 
 ## Idempotence
 

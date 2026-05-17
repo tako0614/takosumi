@@ -1,6 +1,7 @@
 # Manifest Expand Semantics
 
-> このページでわかること: manifest 内 `${ref:...}` 解決の v1 contract。 文法 / 解決タイミング / 循環検出 / 型強制までを定める。
+> このページでわかること: manifest 内 `${ref:...}` 解決の v1 contract。 文法 /
+> 解決タイミング / 循環検出 / 型強制までを定める。
 
 ## Grammar
 
@@ -89,7 +90,8 @@ Three failure modes exist for an otherwise-well-formed reference.
   replayed, not rejected; the apply pipeline drives the producing resource
   through its WAL stages before re-attempting the consumer.
 
-最初の 2 つは静的 manifest エラーで、operator に同期的に surface する。 3 つ目は kernel が operator に代わって解決する動的依存である。
+最初の 2 つは静的 manifest エラーで、operator に同期的に surface する。 3 つ目は
+kernel が operator に代わって解決する動的依存である。
 
 ## Cross-component references
 
