@@ -1,6 +1,9 @@
 export * from "./types.ts";
-export * from "./app-spec.ts";
-export * from "./installer-api.ts";
+// app-spec.ts and installer-api.ts are intentionally omitted from the
+// umbrella to avoid name collisions with legacy core-v1 types (AppSpec,
+// Deployment, etc.). Import via the explicit subpath:
+//   import { ... } from "@takos/takosumi-contract/app-spec";
+//   import { ... } from "@takos/takosumi-contract/installer-api";
 export * from "./core-v1.ts";
 export * from "./internal-api.ts";
 export {

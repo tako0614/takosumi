@@ -46,6 +46,10 @@ import {
   type RegisterDeployPublicRoutesOptions,
 } from "./deploy_public_routes.ts";
 import {
+  type InstallerPublicRouteDependencies,
+  mountInstallerPublicRoutes,
+} from "./installer_public_routes.ts";
+import {
   registerMetricsRoutes,
   type RegisterMetricsRoutesOptions,
 } from "./metrics_routes.ts";
@@ -82,6 +86,14 @@ export interface CreateApiAppOptions {
    */
   readonly registerDeployPublicRoutes?: boolean;
   readonly deployPublicRouteOptions?: RegisterDeployPublicRoutesOptions;
+  /**
+   * When set, mounts the v1 installer public surface (5 endpoints:
+   * /v1/installations[/dry-run] + /v1/installations/{id}/deployments[/dry-run]
+   * + /v1/installations/{id}/rollback). Routes return 501 not_implemented
+   * until the installer pipeline wiring (Wave 5 follow-up) lands.
+   */
+  readonly registerInstallerPublicRoutes?: boolean;
+  readonly installerPublicRouteOptions?: InstallerPublicRouteDependencies;
   readonly registerMetricsRoutes?: boolean;
   readonly metricsRouteOptions?: RegisterMetricsRoutesOptions;
   /**
@@ -136,6 +148,8 @@ export async function createApiApp(
   const deployPublicRoutesMounted = options.registerDeployPublicRoutes ??
     (role === "takosumi-api" &&
       options.deployPublicRouteOptions !== undefined);
+  const installerPublicRoutesMounted =
+    options.registerInstallerPublicRoutes ?? (role === "takosumi-api");
   const metricsRoutesMounted = options.registerMetricsRoutes ??
     (role === "takosumi-api" && options.metricsRouteOptions !== undefined);
 
@@ -190,6 +204,13 @@ export async function createApiApp(
 
   if (deployPublicRoutesMounted) {
     registerDeployPublicRoutes(app, options.deployPublicRouteOptions ?? {});
+  }
+
+  if (installerPublicRoutesMounted) {
+    mountInstallerPublicRoutes(
+      app,
+      options.installerPublicRouteOptions ?? {},
+    );
   }
 
   if (metricsRoutesMounted) {
