@@ -30,14 +30,24 @@ snapshot() {
 		echo "FAIL: no .sqlite under /data/d1 in the worker container" >&2
 		return 1
 	fi
-	docker cp "local-substrate-takosumi-cloud-worker-1:$sqlite_path" /tmp/d1-snap.sqlite >/dev/null
+	local tmpdir
+	tmpdir=$(mktemp -d)
+	trap 'rm -rf "$tmpdir" /tmp/d1-snap.sqlite' RETURN
+	docker cp "local-substrate-takosumi-cloud-worker-1:$sqlite_path" "$tmpdir/d1-snap.sqlite" >/dev/null
+	for suffix in -wal -shm; do
+		if docker exec local-substrate-takosumi-cloud-worker-1 test -f "${sqlite_path}${suffix}"; then
+			docker cp "local-substrate-takosumi-cloud-worker-1:${sqlite_path}${suffix}" \
+				"$tmpdir/d1-snap.sqlite${suffix}" >/dev/null
+		fi
+	done
 	python3 -c "
 import sqlite3
-con = sqlite3.connect('/tmp/d1-snap.sqlite')
+con = sqlite3.connect('$tmpdir/d1-snap.sqlite')
 rows = con.execute(\"SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name\").fetchall()
 print('\n'.join(r[0] for r in rows))
 " > "$out"
-	rm -f /tmp/d1-snap.sqlite
+	rm -rf "$tmpdir"
+	trap - RETURN
 }
 snapshot /tmp/schema-before.txt
 
