@@ -7,11 +7,13 @@
     "jsr:@cliffy/table@1.0.1": "1.0.1",
     "jsr:@std/assert@*": "1.0.19",
     "jsr:@std/assert@1": "1.0.19",
+    "jsr:@std/assert@^1.0.5": "1.0.19",
     "jsr:@std/fmt@^1.0.9": "1.0.10",
     "jsr:@std/internal@^1.0.12": "1.0.13",
     "jsr:@std/path@1": "1.1.4",
     "jsr:@std/text@^1.0.17": "1.0.18",
     "jsr:@std/yaml@1": "1.1.0",
+    "jsr:@std/yaml@^1.0.5": "1.1.0",
     "npm:hono@^4.12.4": "4.12.16",
     "npm:pg@^8.11.0": "8.20.0",
     "npm:yaml@^2.8.2": "2.8.3"
@@ -169,6 +171,12 @@
           "jsr:@takos/takosumi-contract@^2.5.0",
           "jsr:@takos/takosumi-kernel@0.14",
           "jsr:@takos/takosumi-runtime-agent@0.7"
+        ]
+      },
+      "packages/installer": {
+        "dependencies": [
+          "jsr:@std/yaml@^1.0.5",
+          "jsr:@takos/takosumi-contract@^2.5.0"
         ]
       },
       "packages/kernel": {

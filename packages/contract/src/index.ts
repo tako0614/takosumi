@@ -1,4 +1,6 @@
 export * from "./types.ts";
+export * from "./app-spec.ts";
+export * from "./installer-api.ts";
 export * from "./core-v1.ts";
 export * from "./internal-api.ts";
 export {

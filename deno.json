@@ -3,6 +3,7 @@
     "./packages/contract",
     "./packages/runtime-agent",
     "./packages/plugins",
+    "./packages/installer",
     "./packages/kernel",
     "./packages/cli",
     "./packages/all",
