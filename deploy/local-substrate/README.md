@@ -1,13 +1,15 @@
 # local-substrate
 
-`*.takos.test` の DNS / TLS / ingress / OIDC / kernel deploy / cloud emulator を すべて 1 つの docker network
-で完結させる cloud-independent test bed。
+`*.takos.test` の DNS / TLS / ingress / OIDC / kernel deploy / cloud emulator を
+すべて 1 つの docker network で完結させる cloud-independent test bed。
 
-既存 `takos/compose.local.yml` (postgres + redis + takos-app の軽量 dev) と `takos/deploy/{docker,helm,terraform,...}`
-(operator-owned distribution artifact) に並ぶ第 3 の deploy 形態で、 「public network 依存ゼロで full deploy path
-を踏む」 ことが唯一の存在意義。
+既存 `takos/compose.local.yml` (postgres + redis + takos-app の軽量 dev) と
+`takos/deploy/{docker,helm,terraform,...}` (operator-owned distribution
+artifact) に並ぶ第 3 の deploy 形態で、 「public network 依存ゼロで full deploy
+path を踏む」 ことが唯一の存在意義。
 
-Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native Windows は対象外。
+Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native
+Windows は対象外。
 
 ## Phases
 
@@ -18,12 +20,14 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 | 2     | LocalStack / k3d / fake-gcs / Azurite / miniflare を `compose.emulators.yml` 1 本で並行統合 | `scripts/smoke.sh` 全 cloud fixture が pass                                  |
 | 3     | factory で endpoint override + Caddy admin route registrar + 公開面 deny 多重防御           | dynamic subdomain が deploy 直後に hit する + `prove-no-public-leak.sh` pass |
 
-現在 Phase 0–3 まで実装済み。`scripts/smoke.sh` は canonical `POST /v1/deployments` path も含めて検証する。
+現在 Phase 0–3 まで実装済み。`scripts/smoke.sh` は canonical
+`POST /v1/deployments` path も含めて検証する。
 
 ## Current smoke coverage (38 checks)
 
-`scripts/smoke.sh` のチェック一覧 — 「smoke green = deploy しても 99% 動く」 を目標に、 honest pass のみを数える。 各
-ファイル詳細は [TODO-SMOKE.md](TODO-SMOKE.md) と script header を参照。
+`scripts/smoke.sh` のチェック一覧 — 「smoke green = deploy しても 99% 動く」
+を目標に、 honest pass のみを数える。 各 ファイル詳細は
+[TODO-SMOKE.md](TODO-SMOKE.md) と script header を参照。
 
 | 範疇            | 件数 | 代表 check                                                                                                  |
 | --------------- | ---: | ----------------------------------------------------------------------------------------------------------- |
@@ -48,12 +52,14 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 | stripe          |    1 | `stripe.webhook.e2e` (HMAC verify + idempotency + tolerance)                                                |
 | public-leak     |    1 | `prove-no-public-leak.sh` (separate script — DNS / ACME / network egress audit)                             |
 
-加えて vitest 4 case (COSE/JWK decode) + worker_test.ts 30 case (issuer policy + IPv6/CGNAT + fail-closed + R2
-route-level signed export / malformed URL / data-bearing refusal) + Playwright 2 spec (install wizard happy path + TLS
-trust regression) を CI で並列実行する。
+加えて vitest 4 case (COSE/JWK decode) + worker_test.ts 30 case (issuer policy +
+IPv6/CGNAT + fail-closed + R2 route-level signed export / malformed URL /
+data-bearing refusal) + Playwright 2 spec (install wizard happy path + TLS trust
+regression) を CI で並列実行する。
 
-CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml` を参照。 3 job (smoke / vitest /
-playwright) が submodule checkout 経由で takos + takosumi-cloud + yurucommu を同時に揃え、 ca-install.sh の sudo run +
+CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml`
+を参照。 3 job (smoke / vitest / playwright) が submodule checkout 経由で
+takos + takosumi-cloud + yurucommu を同時に揃え、 ca-install.sh の sudo run +
 Pebble root の NSS install を含めた full chain を毎 PR で再現する。
 
 ## Quick start
@@ -85,7 +91,8 @@ curl https://kernel-worker.takos.test/healthz  # postgres profile mirror
 curl https://kernel.takos.test/healthz         # workers profile
 ```
 
-詳細は [docs/root-ca-install.md](docs/root-ca-install.md) と [docs/operator-runbook.md](docs/operator-runbook.md)。
+詳細は [docs/root-ca-install.md](docs/root-ca-install.md) と
+[docs/operator-runbook.md](docs/operator-runbook.md)。
 
 ## ファイル layout
 
@@ -127,8 +134,9 @@ takos/deploy/local-substrate/
 
 ## Browser trust (Chrome / Firefox 上で `.test` を踏める状態にする)
 
-Pebble は毎回 root CA を再生成するので、 ホストの trust store にも、 Chrome / Firefox の NSS DB にも root
-を入れる必要がある。 `ca-install.sh` は両方を一括で処理する:
+Pebble は毎回 root CA を再生成するので、 ホストの trust store にも、 Chrome /
+Firefox の NSS DB にも root を入れる必要がある。 `ca-install.sh`
+は両方を一括で処理する:
 
 ```bash
 sudo bash deploy/local-substrate/scripts/ca-install.sh
@@ -136,14 +144,17 @@ sudo bash deploy/local-substrate/scripts/ca-install.sh
 
 実行後の手動確認 checklist:
 
-- [ ] Chromium / Chrome を完全終了 (タスクトレイ含む) → 再起動 → `https://takos.test/` で privacy error が出ないこと
+- [ ] Chromium / Chrome を完全終了 (タスクトレイ含む) → 再起動 →
+      `https://takos.test/` で privacy error が出ないこと
 - [ ] 同じく `https://cloud.takosumi.test/` が緑鍵で開くこと
 - [ ] Firefox (snap か deb どちらでも) を再起動 → 同様に確認
-- [ ] `scripts/up.sh` で Pebble を再起動した場合は root が rotation されているので、 `sudo bash scripts/ca-install.sh`
-      を再実行 + ブラウザ再起動
+- [ ] `scripts/up.sh` で Pebble を再起動した場合は root が rotation
+      されているので、 `sudo bash scripts/ca-install.sh` を再実行 +
+      ブラウザ再起動
 
-`certutil` が無い場合 `sudo` ありで実行すれば `libnss3-tools` を 自動 install する。 非 sudo で実行すると system trust
-は skip、 NSS DB のみ更新する (NSS は per-user)。
+`certutil` が無い場合 `sudo` ありで実行すれば `libnss3-tools` を 自動 install
+する。 非 sudo で実行すると system trust は skip、 NSS DB のみ更新する (NSS は
+per-user)。
 
 最後に手動 verification した日付を以下に記録:
 
@@ -154,18 +165,24 @@ sudo bash deploy/local-substrate/scripts/ca-install.sh
 CI で自動検証されるパス:
 
 - ecosystem-root の `.github/workflows/local-substrate-smoke.yml`
-  - `smoke` job: `up.sh → sudo bash scripts/ca-install.sh → bash scripts/smoke.sh`
-  - `dashboard-ui-playwright` job: 同 install + Playwright が **`ignoreHTTPSErrors=false`** で Chromium が Pebble 経由の
-    cert を NSS DB から validate するかを assert
+  - `smoke` job:
+    `up.sh → sudo bash scripts/ca-install.sh → bash scripts/smoke.sh`
+  - `dashboard-ui-playwright` job: 同 install + Playwright が
+    **`ignoreHTTPSErrors=false`** で Chromium が Pebble 経由の cert を NSS DB
+    から validate するかを assert
   - `dashboard-ui-vitest` job: COSE/JWK unit test
 
-ローカル目視は dev iteration の中で実行し、 上記 table に行追加して commit する。
+ローカル目視は dev iteration の中で実行し、 上記 table に行追加して commit
+する。
 
 ## 制約
 
-- **公開面は絶対に出さない**: ACME は Pebble 固定、 DNS は CoreDNS 固定、 emulator は内部 network。 Phase 3 で多重防御
-  guard と `prove-no-public-leak.sh` を追加
-- **実 cloud compute は credentials で叩いてよい**: emulator 無し compute (Fargate / Cloud Run / Container Apps /
-  Cloudflare Container) は `.env` に credentials を入れた場合に限り real cloud を呼ぶ。 default では factory が register
-  せず "provider not configured" で fail させる
-- **upstream `takosumi/` は変更しない**: connector の endpoint override は takos 側の factory wrapper で吸収する
+- **公開面は絶対に出さない**: ACME は Pebble 固定、 DNS は CoreDNS 固定、
+  emulator は内部 network。 Phase 3 で多重防御 guard と
+  `prove-no-public-leak.sh` を追加
+- **実 cloud compute は credentials で叩いてよい**: emulator 無し compute
+  (Fargate / Cloud Run / Container Apps / Cloudflare Container) は `.env` に
+  credentials を入れた場合に限り real cloud を呼ぶ。 default では factory が
+  register せず "provider not configured" で fail させる
+- **upstream `takosumi/` は変更しない**: connector の endpoint override は takos
+  側の factory wrapper で吸収する

@@ -19,7 +19,7 @@ services:
     volumes:
       - substrate-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U takos -d takos_app']
+      test: ["CMD-SHELL", "pg_isready -U takos -d takos_app"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -30,7 +30,7 @@ services:
 
   substrate-postgres-init:
     image: postgres:16-alpine
-    restart: 'no'
+    restart: "no"
     depends_on:
       substrate-postgres:
         condition: service_healthy
@@ -54,7 +54,7 @@ services:
     volumes:
       - substrate-redis-data:/data
     healthcheck:
-      test: ['CMD-SHELL', 'redis-cli ping | grep -q PONG']
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -73,7 +73,7 @@ services:
     volumes:
       - substrate-minio-data:/data
     healthcheck:
-      test: ['CMD-SHELL', 'test -f /data/.minio.sys/format.json']
+      test: ["CMD-SHELL", "test -f /data/.minio.sys/format.json"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -87,7 +87,7 @@ services:
     depends_on:
       substrate-minio:
         condition: service_healthy
-    restart: 'no'
+    restart: "no"
     entrypoint:
       - /bin/sh
       - -c
@@ -142,7 +142,7 @@ services:
   # The image is a thin overlay on denoland/deno that adds docker CLI so
   # the embedded selfhost-docker-compose connector can spawn `docker compose`.
   kernel:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     build:
       context: .
       dockerfile: wrappers/Dockerfile.kernel
@@ -191,9 +191,9 @@ services:
   # path without replacing the Deno+Postgres kernel used by the Takos product
   # stack.
   takosumi-kernel-worker-build:
-    profiles: ['postgres', 'workers']
+    profiles: ["postgres", "workers"]
     image: denoland/deno:2.7.10
-    restart: 'no'
+    restart: "no"
     working_dir: /work
     command:
       - sh
@@ -209,7 +209,7 @@ services:
       - ../../../takosumi:/work
 
   takosumi-kernel-worker:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     build:
       context: .
       dockerfile: wrappers/Dockerfile.takosumi-cloud-worker
@@ -218,7 +218,7 @@ services:
       takosumi-kernel-worker-build:
         condition: service_completed_successfully
     working_dir: /app
-    command: ['node', '/app/runner.mjs']
+    command: ["node", "/app/runner.mjs"]
     env_file:
       - ./env/takosumi-kernel-worker.env
     volumes:
@@ -241,7 +241,7 @@ services:
           - takosumi-kernel-worker
 
   kernel-workers:
-    profiles: ['workers']
+    profiles: ["workers"]
     build:
       context: .
       dockerfile: wrappers/Dockerfile.takosumi-cloud-worker
@@ -250,7 +250,7 @@ services:
       takosumi-kernel-worker-build:
         condition: service_completed_successfully
     working_dir: /app
-    command: ['node', '/app/runner.mjs']
+    command: ["node", "/app/runner.mjs"]
     env_file:
       - ./env/takosumi-kernel-worker.env
     volumes:
@@ -290,7 +290,7 @@ services:
       accounts:
         condition: service_healthy
     working_dir: /workspace/apps/control
-    command: ['deno', 'task', 'dev:local:web']
+    command: ["deno", "task", "dev:local:web"]
     env_file:
       - env/takos-app.env
     volumes:
@@ -321,16 +321,16 @@ services:
       substrate-postgres-init:
         condition: service_completed_successfully
     working_dir: /workspace
-    command: ['deno', 'task', 'dev']
+    command: ["deno", "task", "dev"]
     environment:
-      PORT: '8790'
+      PORT: "8790"
       TAKOS_GIT_INTERNAL_URL: http://takos-git:8790
       TAKOS_INTERNAL_SERVICE_SECRET: ${TAKOS_INTERNAL_SERVICE_SECRET:-local-dev-secret}
       TAKOS_GIT_REPOSITORY_ROOT: /var/lib/takos-git/repositories
       TAKOS_GIT_DATABASE_URL: sqlite:///var/lib/takos-git/repositories/.takos/git.sqlite
-      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
-      GIT_CONFIG_VALUE_0: '*'
+      GIT_CONFIG_VALUE_0: "*"
     volumes:
       # Test bed lives in takosumi/deploy/local-substrate; takos-git source
       # is the sibling takos submodule, so 3 levels up + takos/git.
@@ -344,9 +344,9 @@ services:
 
   # ---- takosumi landing (SolidStart, mirrors takosumi.com root) ----
   takosumi-website-build:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     image: node:22-slim
-    restart: 'no'
+    restart: "no"
     working_dir: /website
     command:
       - sh
@@ -361,11 +361,11 @@ services:
 
   # ---- takosumi docs (VitePress, mirrors takosumi.com/docs/) ----
   takosumi-docs-build:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     # Debian-based (not alpine) — vitepress / rollup pull glibc-flavored
     # native binaries; alpine + musl breaks the install.
     image: node:22-slim
-    restart: 'no'
+    restart: "no"
     working_dir: /docs
     command:
       - sh
@@ -388,9 +388,9 @@ services:
 
   # ---- takos landing (SolidStart, mirrors takos.jp root) ----
   takos-website-build:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     image: node:22-slim
-    restart: 'no'
+    restart: "no"
     working_dir: /website
     command:
       - sh
@@ -412,10 +412,16 @@ services:
   # install wizard can complete preview → install end-to-end without a real
   # git mirror behind it.
   install-preview-mock:
-    profiles: ['postgres', 'workers']
+    profiles: ["postgres", "workers"]
     image: denoland/deno:alpine-2.1.4
     restart: unless-stopped
-    command: ['run', '--allow-net', '--allow-env=PORT', '--allow-read=/srv', '/srv/main.ts']
+    command: [
+      "run",
+      "--allow-net",
+      "--allow-env=PORT",
+      "--allow-read=/srv",
+      "/srv/main.ts",
+    ]
     volumes:
       - ./install-preview-mock/main.ts:/srv/main.ts:ro
       - ./install-preview-mock/fixtures:/srv/fixtures:ro
@@ -433,21 +439,21 @@ services:
   #   2. collector forwards to Jaeger at jaeger:4317 (OTLP) / 14250 (jaeger)
   #   3. Jaeger UI at https://jaeger.takos.test/ shows the spans
   jaeger:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     image: jaegertracing/jaeger:2.4.0
     restart: unless-stopped
     environment:
-      COLLECTOR_OTLP_ENABLED: 'true'
+      COLLECTOR_OTLP_ENABLED: "true"
     networks:
       takos-local-internal:
         aliases:
           - jaeger
 
   otel-collector:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     image: otel/opentelemetry-collector-contrib:0.118.0
     restart: unless-stopped
-    command: ['--config=/etc/otelcol/config.yaml']
+    command: ["--config=/etc/otelcol/config.yaml"]
     depends_on:
       jaeger:
         condition: service_started
@@ -464,12 +470,12 @@ services:
   # the smoke can assert the bytes arrived. Web UI at
   # https://mailpit.takos.test/, SMTP at mailpit:1025 (in-network).
   mailpit:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     image: axllent/mailpit:latest
     restart: unless-stopped
     environment:
-      MP_SMTP_AUTH_ACCEPT_ANY: '1'
-      MP_SMTP_AUTH_ALLOW_INSECURE: '1'
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
     networks:
       takos-local-internal:
         aliases:
@@ -480,10 +486,10 @@ services:
   # cloud sign-in flow (Google / GitHub button) completes without external
   # network. Reachable from browser + worker via Caddy at oauth-mock.test.
   oauth-mock:
-    profiles: ['postgres', 'workers']
+    profiles: ["postgres", "workers"]
     image: denoland/deno:alpine-2.1.4
     restart: unless-stopped
-    command: ['run', '--allow-net', '--allow-env=PORT', '/srv/main.ts']
+    command: ["run", "--allow-net", "--allow-env=PORT", "/srv/main.ts"]
     volumes:
       - ./oauth-mock/main.ts:/srv/main.ts:ro
     networks:
@@ -497,7 +503,7 @@ services:
   # discovery and scripts/federation-follow.sh can exercise the strict
   # Follow → Accept path through yurucommu's Deno local delivery queue.
   yurucommu-a:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     image: denoland/deno:debian-2.7.10
     restart: unless-stopped
     working_dir: /workspace
@@ -532,7 +538,7 @@ services:
           - inst-a.takos.test
 
   yurucommu-b:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     image: denoland/deno:debian-2.7.10
     restart: unless-stopped
     working_dir: /workspace
@@ -569,18 +575,18 @@ services:
   # `docker compose up` shows yurucommu in the topology summary even
   # though no work runs.
   yurucommu-site-noop:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     image: alpine:3.20
-    restart: 'no'
-    command: ['sh', '-c', "echo 'yurucommu site is static — no build needed'"]
+    restart: "no"
+    command: ["sh", "-c", "echo 'yurucommu site is static — no build needed'"]
     volumes:
       - ../../../yurucommu/site:/site:ro
 
   # ---- takosumi-cloud dashboard SPA (mirrors cloud.takosumi.com root) ----
   takosumi-cloud-dashboard-build:
-    profiles: ['postgres', 'workers']
+    profiles: ["postgres", "workers"]
     image: node:22-slim
-    restart: 'no'
+    restart: "no"
     working_dir: /dashboard
     command:
       - sh
@@ -595,9 +601,9 @@ services:
 
   # ---- takosumi-cloud Worker (mirrors cloud.takosumi.com on Cloudflare Workers) ----
   takosumi-cloud-worker-build:
-    profiles: ['postgres', 'workers']
+    profiles: ["postgres", "workers"]
     image: denoland/deno:2.7.10
-    restart: 'no'
+    restart: "no"
     working_dir: /work
     command:
       - sh
@@ -613,7 +619,7 @@ services:
       - ../../../takosumi-cloud:/work
 
   takosumi-cloud-worker:
-    profiles: ['postgres', 'workers']
+    profiles: ["postgres", "workers"]
     build:
       context: .
       dockerfile: wrappers/Dockerfile.takosumi-cloud-worker
@@ -626,7 +632,7 @@ services:
       oauth-mock:
         condition: service_started
     working_dir: /app
-    command: ['node', '/app/runner.mjs']
+    command: ["node", "/app/runner.mjs"]
     # All ~30 env vars live in env/takosumi-cloud-worker.env so the compose
     # service block stays readable. Inline-only deltas would go here.
     env_file:
@@ -644,38 +650,38 @@ services:
   # Polls kernel for applied deployments and mirrors their routes into
   # Caddy admin API as dynamic reverse_proxy entries.
   route-registrar:
-    profiles: ['postgres']
+    profiles: ["postgres"]
     image: denoland/deno:2.7.10
     restart: unless-stopped
     depends_on:
       kernel:
         condition: service_healthy
     working_dir: /app
-    command: ['deno', 'task', 'start']
+    command: ["deno", "task", "start"]
     environment:
       KERNEL_URL: http://kernel:8788
       CADDY_ADMIN_URL: http://caddy:2019
       KERNEL_DEPLOY_TOKEN: ${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}
-      POLL_INTERVAL_MS: '5000'
+      POLL_INTERVAL_MS: "5000"
     volumes:
       - ./route-registrar:/app:ro
     networks:
       - takos-local-internal
 
   route-registrar-workers:
-    profiles: ['workers']
+    profiles: ["workers"]
     image: denoland/deno:2.7.10
     restart: unless-stopped
     depends_on:
       kernel-workers:
         condition: service_healthy
     working_dir: /app
-    command: ['deno', 'task', 'start']
+    command: ["deno", "task", "start"]
     environment:
       KERNEL_URL: http://kernel-workers:8788
       CADDY_ADMIN_URL: http://caddy:2019
       KERNEL_DEPLOY_TOKEN: ${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}
-      POLL_INTERVAL_MS: '5000'
+      POLL_INTERVAL_MS: "5000"
     volumes:
       - ./route-registrar:/app:ro
     networks:

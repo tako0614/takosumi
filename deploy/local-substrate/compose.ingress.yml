@@ -14,12 +14,12 @@ services:
       - -config
       - /pebble/pebble-config.json
     environment:
-      PEBBLE_VA_NOSLEEP: '1'
-      PEBBLE_WFE_NONCEREJECT: '0'
+      PEBBLE_VA_NOSLEEP: "1"
+      PEBBLE_WFE_NONCEREJECT: "0"
     volumes:
       - ./pebble/pebble-config.json:/pebble/pebble-config.json:ro
     ports:
-      - '127.0.0.1:15000:15000'
+      - "127.0.0.1:15000:15000"
     networks:
       takos-local-internal:
         aliases:
@@ -29,14 +29,14 @@ services:
     image: coredns/coredns:latest
     restart: unless-stopped
     command:
-      - '-conf'
-      - '/etc/coredns/Corefile'
+      - "-conf"
+      - "/etc/coredns/Corefile"
     volumes:
       - ./coredns/Corefile:/etc/coredns/Corefile:ro
       - ./coredns/zones:/etc/coredns/zones:ro
     ports:
-      - '127.0.0.1:53:53/udp'
-      - '127.0.0.1:53:53/tcp'
+      - "127.0.0.1:53:53/udp"
+      - "127.0.0.1:53:53/tcp"
     networks:
       takos-local-internal:
         aliases:
@@ -59,8 +59,8 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     ports:
-      - '80:80'
-      - '443:443'
+      - "80:80"
+      - "443:443"
       # Caddy admin API (2019) is intentionally NOT exposed to the host.
       # route-registrar talks to it over the internal docker network. To
       # poke it from the host ad-hoc, use:
