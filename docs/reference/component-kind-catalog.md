@@ -147,7 +147,7 @@ components:
 
 ## `oidc`
 
-OIDC consumer mount point。 旧 `identity.oidc@v1` AppBinding に相当する新 kind。
+OIDC consumer mount point。 旧 `identity.oidc@v1` use edge に相当する新 kind。
 
 `oidc` component を宣言すると、 Takosumi は Installation 作成時に Takosumi
 Accounts (= operator-owned identity plane) で per-Installation OIDC client を

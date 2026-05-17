@@ -2,7 +2,7 @@
 
 > このページでわかること: RBAC の owner 層と kernel の authorization 範囲。
 
-account / space / AppInstallation / AppBinding / AppGrant に対する RBAC は
+account / space / AppInstallation / use edge / permission grant に対する RBAC は
 operator の account plane が所有する (reference 実装: `takosumi-cloud/` の
 Takosumi Accounts)。
 

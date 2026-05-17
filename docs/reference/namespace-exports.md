@@ -133,7 +133,7 @@ export から issuer discovery URL を得て、 その後は OIDC discovery cont
 
 ## Grants
 
-Namespace export は default-deny です。 consumer は Link / AppGrant / account
+Namespace export は default-deny です。 consumer は Link / permission grant / account
 API operation のいずれかで explicit grant を得ます。
 
 - `read` は metadata / public config の読み取り。

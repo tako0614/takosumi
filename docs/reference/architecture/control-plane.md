@@ -39,7 +39,7 @@ projection を Deployment 単位で扱う。service import は top-level field
 
 | 層                 | service                                                                   | 持つもの                                                                                                                             | 持たないもの                                                                     |
 | ------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| **Account plane**  | Takosumi Accounts (`operator.identity.oidc` / `operator.billing.default`) | account / login / passkey / upstream IdP broker / OAuth / OIDC issuer / Stripe / billing / AppInstallation / AppBinding / AppGrant   | manifest apply / provider DAG / Deployment lifecycle / routing materialization   |
+| **Account plane**  | Takosumi Accounts (`operator.identity.oidc` / `operator.billing.default`) | account / login / passkey / upstream IdP broker / OAuth / OIDC issuer / Stripe / billing / AppInstallation / use edge / permission grant   | manifest apply / provider DAG / Deployment lifecycle / routing materialization   |
 | **Kernel control** | takosumi kernel control 面 (本ページ)                                     | manifest apply / provider DAG / outputs resolver / Deployment lifecycle / GroupHead / route projection / resource broker / event bus | account / login / billing / OAuth issuer / consent screen / AppInstallation 台帳 |
 
 kernel control は AppInstallation 台帳の record そのものを持たず、Takosumi
@@ -58,7 +58,7 @@ kernel features の正本記述は
 current compiled Shape manifest は top-level `publications[]` / `bindings[]` を
 持ちません。cross-product capability は **namespace exports**、installer-side
 metadata (MCP endpoint / file handler / app catalog) は Takosumi Accounts
-AppInstallation 配下の **AppBinding** が持ちます。canonical envelope 定義は
+AppInstallation 配下の **use edge** が持ちます。canonical envelope 定義は
 [Manifest Spec](../manifest-spec.md) を参照してください。app catalog / MCP /
 file handler などの app-facing metadata は consumer application / installer
 layer (例: reference Takos distribution の app gateway) で扱い、kernel control
@@ -210,7 +210,7 @@ account plane が所有する schema (本ページ対象外):
 | Accounts             | Takosumi Accounts | Takosumi Account, login, passkey, upstream IdP linkage                       |
 | OAuth / OIDC         | Takosumi Accounts | OIDC issuer state, OIDC client registration, consent, token, pairwise sub    |
 | Billing              | Takosumi Accounts | billing account, Stripe subscription, invoice, usage aggregate               |
-| AppInstallation 台帳 | Takosumi Accounts | AppInstallation / AppBinding / AppGrant / RuntimeBinding / InstallationEvent |
+| AppInstallation 台帳 | Takosumi Accounts | AppInstallation / use edge / permission grant / Installation runtime mode / InstallationEvent |
 
 ## Deploy pipeline
 
@@ -271,10 +271,10 @@ Accounts が AppInstallation を所有し、 consumer application / installer la
 - Accounts / installer / consumer application 側 (例: Takos app):
   AppInstallation owner record と MCP / file handler / catalog metadata を
   installation id で 紐づけて保存する
-- consumer 側: 必要な credential / endpoint は AppGrant / AppBinding / namespace
+- consumer 側: 必要な credential / endpoint は permission grant / use edge / namespace
   export / resource output から明示的に materialize する
 
-OIDC client は `identity.oidc@v1` AppBinding 経由で Takosumi Accounts が
+OIDC client は `identity.oidc@v1` use edge 経由で Takosumi Accounts が
 installation 単位に発行する
 ([binding-catalog](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/binding-catalog.md#_1-identity-oidc-v1)
 参照)。 Agent / Chat / Git / Storage / Store のような app-layer feature は、

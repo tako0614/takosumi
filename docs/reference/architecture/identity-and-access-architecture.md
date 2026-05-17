@@ -3,7 +3,7 @@
 > このページでわかること: identity / access の設計とアクセス制御モデル。
 
 user / account / organization / membership / billing / OIDC / launch token /
-AppInstallation / AppBinding / AppGrant に関する identity & access は operator
+AppInstallation / use edge / permission grant に関する identity & access は operator
 の account plane が所有する (reference 実装: `takosumi-cloud/` の Takosumi
 Accounts)。 takosumi kernel は generic manifest deploy engine として動作し、
 account-plane identity を所有しない。

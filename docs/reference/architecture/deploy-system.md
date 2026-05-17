@@ -88,7 +88,7 @@ consumer application (例: Takos product のような reference distribution) �
 7. user approve                   (preview を確認しないと進まない)
 8. workflow sandbox 実行          (build phase に runtime secrets を渡さない)
 9. artifact resolve               (image digest / asset URI を解決)
-10. AppBinding provisioning plan  (identity.oidc@v1, database.postgres@v1, ...)
+10. use edge provisioning plan  (identity.oidc@v1, database.postgres@v1, ...)
 11. manifest compile              (workflowRef strip / unresolved placeholder reject)
 12. kernel deploy                 (POST /v1/deployments で apply)
 13. AppInstallation ready         (status: ready, runtimeBindingId を確定)
@@ -595,7 +595,7 @@ Kernel deploy boundary:
 - [.takosumi/app.yml spec](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/app-yml-spec.md)
   — installer-bound manifest
 - [Binding Catalog](https://github.com/tako0614/takosumi-git/blob/master/docs/reference/binding-catalog.md)
-  — 6 種の installer-bound AppBinding type
+  — 6 種の installer-bound use edge type
 - [Install API](https://github.com/tako0614/takosumi-cloud/blob/master/docs/accounts-service.md)
   — `POST /v1/installations` 等
 - [Upgrade / Export](https://github.com/tako0614/takos/blob/master/docs/platform/upgrade-export.md)

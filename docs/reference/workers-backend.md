@@ -9,7 +9,7 @@ control path の前提ではなく、provider/materializer が image-backed tena
 workload を必要とする場合の substrate です。
 
 Core 用語は Resource / Deployment / ProviderObservation / GroupHead /
-RuntimeBinding を優先します。 これらは provider substrate に依存しない抽象で
+Installation runtime mode を優先します。 これらは provider substrate に依存しない抽象で
 あり、 Cloudflare 以外の compute substrate (Kubernetes / bare metal / 自前
 runtime) に substitutability を保ったまま展開できます。
 
