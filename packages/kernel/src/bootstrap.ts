@@ -37,6 +37,7 @@ import {
   resolveRevokeDebtStore,
   resolveTakosumiDeploymentRecordStore,
 } from "./bootstrap/deploy_record_store.ts";
+import { InstallerPipeline } from "./domains/installer/mod.ts";
 
 export { registerBundledShapesAndProviders };
 
@@ -183,6 +184,9 @@ export async function createPaaSApp(
       : undefined,
     registerDeployPublicRoutes: deployPublicRouteOptions !== undefined,
     deployPublicRouteOptions,
+    installerPublicRouteOptions: {
+      pipeline: new InstallerPipeline(),
+    },
     readinessRouteProbes: createRoleReadinessProbes({
       role,
       context,

@@ -24,6 +24,12 @@
     "takosumi-contract/shape": "./packages/contract/src/shape.ts",
     "takosumi-contract/template": "./packages/contract/src/template.ts",
     "takosumi-contract/types": "./packages/contract/src/types.ts",
+    "takosumi-contract/app-spec": "./packages/contract/src/app-spec.ts",
+    "takosumi-contract/installer-api": "./packages/contract/src/installer-api.ts",
+    "takosumi-installer": "./packages/installer/mod.ts",
+    "takosumi-installer/yaml-parser": "./packages/installer/src/yaml-parser.ts",
+    "takosumi-installer/git-fetch": "./packages/installer/src/git-fetch.ts",
+    "takosumi-installer/deploy-client": "./packages/installer/src/deploy-client.ts",
     "hono": "npm:hono@^4.12.4"
   },
   "compilerOptions": {

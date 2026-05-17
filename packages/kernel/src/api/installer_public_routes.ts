@@ -2,10 +2,9 @@
  * Public installer HTTP surface — 5 endpoints exposing the AppSpec /
  * Installation / Deployment public concept set.
  *
- * Wave 5 stub: route mounts return `not_implemented` until the kernel
- * installer pipeline (parse → resolve use edges → run component.build
- * → call provider plugins → persist Deployment) is wired in. The shape
- * matches `@takos/takosumi-contract/installer-api` 1:1.
+ * Wave 5 implementation: handlers delegate to `InstallerPipeline`. When
+ * no pipeline is injected, the routes fall back to 501 not_implemented so
+ * upstream tests that don't supply a pipeline still see a stable shape.
  *
  *   POST /v1/installations/dry-run
  *   POST /v1/installations
@@ -13,15 +12,24 @@
  *   POST /v1/installations/{id}/deployments
  *   POST /v1/installations/{id}/rollback
  *
- * Mounted in a follow-up commit alongside removal of the legacy
- * `deploy_public_routes.ts` `POST /v1/deployments` surface.
+ * Wire shape is the 1:1 mirror of `@takos/takosumi-contract/installer-api`.
  */
 
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import type {
+  DeploymentApplyRequest,
+  DeploymentDryRunRequest,
+  InstallationApplyRequest,
+  InstallationDryRunRequest,
   InstallerErrorCode,
   InstallerErrorEnvelope,
+  RollbackRequest,
 } from "takosumi-contract/installer-api";
+import {
+  InstallerPipeline,
+  InstallerPipelineError,
+  type InstallerPipelineErrorCode,
+} from "../domains/installer/mod.ts";
 
 export const INSTALLER_INSTALLATIONS_PATH = "/v1/installations" as const;
 export const INSTALLER_INSTALLATIONS_DRY_RUN_PATH =
@@ -33,6 +41,78 @@ export const INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH =
 export const INSTALLER_INSTALLATION_ROLLBACK_PATH =
   "/v1/installations/:installationId/rollback" as const;
 
+export interface InstallerPublicRouteDependencies {
+  /**
+   * Installer pipeline instance — when unset, every endpoint returns 501
+   * not_implemented (Wave 5 default until bootstrap wires one in).
+   */
+  readonly pipeline?: InstallerPipeline;
+}
+
+export function mountInstallerPublicRoutes(
+  app: Hono,
+  dependencies: InstallerPublicRouteDependencies = {},
+): void {
+  const pipeline = dependencies.pipeline;
+
+  if (!pipeline) {
+    app.post(INSTALLER_INSTALLATIONS_DRY_RUN_PATH, (c) =>
+      c.json(notImplemented("installer dry-run not yet implemented"), 501));
+    app.post(INSTALLER_INSTALLATIONS_PATH, (c) =>
+      c.json(notImplemented("installer apply not yet implemented"), 501));
+    app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH, (c) =>
+      c.json(notImplemented("deployment dry-run not yet implemented"), 501));
+    app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_PATH, (c) =>
+      c.json(notImplemented("deployment apply not yet implemented"), 501));
+    app.post(INSTALLER_INSTALLATION_ROLLBACK_PATH, (c) =>
+      c.json(notImplemented("rollback not yet implemented"), 501));
+    return;
+  }
+
+  app.post(INSTALLER_INSTALLATIONS_DRY_RUN_PATH, async (c) => {
+    return await runHandler(c, async () => {
+      const body = await readJsonBody<InstallationDryRunRequest>(c);
+      const response = await pipeline.installationDryRun(body);
+      return c.json(response, 200);
+    });
+  });
+
+  app.post(INSTALLER_INSTALLATIONS_PATH, async (c) => {
+    return await runHandler(c, async () => {
+      const body = await readJsonBody<InstallationApplyRequest>(c);
+      const response = await pipeline.installationApply(body);
+      return c.json(response, 201);
+    });
+  });
+
+  app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH, async (c) => {
+    return await runHandler(c, async () => {
+      const installationId = c.req.param("installationId");
+      const body = await readJsonBody<DeploymentDryRunRequest>(c);
+      const response = await pipeline.deploymentDryRun(installationId, body);
+      return c.json(response, 200);
+    });
+  });
+
+  app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_PATH, async (c) => {
+    return await runHandler(c, async () => {
+      const installationId = c.req.param("installationId");
+      const body = await readJsonBody<DeploymentApplyRequest>(c);
+      const response = await pipeline.deploymentApply(installationId, body);
+      return c.json(response, 201);
+    });
+  });
+
+  app.post(INSTALLER_INSTALLATION_ROLLBACK_PATH, async (c) => {
+    return await runHandler(c, async () => {
+      const installationId = c.req.param("installationId");
+      const body = await readJsonBody<RollbackRequest>(c);
+      const response = await pipeline.rollback(installationId, body);
+      return c.json(response, 201);
+    });
+  });
+}
+
 function notImplemented(message: string): InstallerErrorEnvelope {
   return {
     error: {
@@ -43,28 +123,62 @@ function notImplemented(message: string): InstallerErrorEnvelope {
   };
 }
 
-export interface InstallerPublicRouteDependencies {
-  // Wave 5 follow-up will populate these (token resolver, source fetcher,
-  // installer pipeline, persistence stores, observability sinks, etc.).
-  readonly _placeholder?: never;
+async function runHandler(
+  c: Context,
+  fn: () => Promise<Response>,
+): Promise<Response> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof InstallerPipelineError) {
+      return c.json(errorEnvelope(err.code, err.message), pipelineHttpStatus(err.code));
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return c.json(errorEnvelope("internal_error", message), 500);
+  }
 }
 
-export function mountInstallerPublicRoutes(
-  app: Hono,
-  _dependencies: InstallerPublicRouteDependencies = {},
-): void {
-  app.post(INSTALLER_INSTALLATIONS_DRY_RUN_PATH, (c) =>
-    c.json(notImplemented("installer dry-run not yet implemented"), 501));
+async function readJsonBody<T>(c: Context): Promise<T> {
+  try {
+    return (await c.req.json()) as T;
+  } catch {
+    throw new InstallerPipelineError(
+      "invalid_argument",
+      "request body must be valid JSON",
+    );
+  }
+}
 
-  app.post(INSTALLER_INSTALLATIONS_PATH, (c) =>
-    c.json(notImplemented("installer apply not yet implemented"), 501));
+function pipelineHttpStatus(code: InstallerPipelineErrorCode): 400 | 401 | 403 | 404 | 412 | 429 | 500 | 501 {
+  switch (code) {
+    case "invalid_argument":
+      return 400;
+    case "unauthenticated":
+      return 401;
+    case "permission_denied":
+      return 403;
+    case "not_found":
+      return 404;
+    case "failed_precondition":
+      return 412;
+    case "resource_exhausted":
+      return 429;
+    case "not_implemented":
+      return 501;
+    case "internal_error":
+      return 500;
+  }
+}
 
-  app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH, (c) =>
-    c.json(notImplemented("deployment dry-run not yet implemented"), 501));
-
-  app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_PATH, (c) =>
-    c.json(notImplemented("deployment apply not yet implemented"), 501));
-
-  app.post(INSTALLER_INSTALLATION_ROLLBACK_PATH, (c) =>
-    c.json(notImplemented("rollback not yet implemented"), 501));
+function errorEnvelope(
+  code: InstallerErrorCode,
+  message: string,
+): InstallerErrorEnvelope {
+  return {
+    error: {
+      code,
+      message,
+      requestId: crypto.randomUUID(),
+    },
+  };
 }
