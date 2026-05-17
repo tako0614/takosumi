@@ -4,11 +4,11 @@ Single entry point for deploying the three Takosumi-public properties to
 Cloudflare. Each section is self-contained: prerequisites, one-time setup,
 deploy command, smoke check.
 
-| Property             | Resource type          | Project / Worker name     | Source                              |
-| -------------------- | ---------------------- | ------------------------- | ----------------------------------- |
-| `takosumi.com`       | Cloudflare Pages       | `takosumi-site`           | `takosumi/site/`                    |
-| `docs.takosumi.com`  | Cloudflare Pages       | `takosumi-docs`           | `takosumi/docs/` (VitePress)        |
-| `cloud.takosumi.com` | Cloudflare Worker + D1 | `takosumi-cloud-accounts` | `takosumi-cloud/deploy/cloudflare/` |
+| Property             | Resource type               | Project / Worker name     | Source                              |
+| -------------------- | --------------------------- | ------------------------- | ----------------------------------- |
+| `takosumi.com`       | Cloudflare Pages            | `takosumi-site`           | `takosumi/site/`                    |
+| `docs.takosumi.com`  | Cloudflare Pages            | `takosumi-docs`           | `takosumi/docs/` (VitePress)        |
+| `cloud.takosumi.com` | Cloudflare Worker + D1 + R2 | `takosumi-cloud-accounts` | `takosumi-cloud/deploy/cloudflare/` |
 
 ## One-time operator prerequisites
 
@@ -93,7 +93,7 @@ curl https://docs.takosumi.com/reference/architecture/        # links resolve
 
 ---
 
-## 3. `cloud.takosumi.com` — Takosumi Accounts (Cloudflare Worker + D1)
+## 3. `cloud.takosumi.com` — Takosumi Accounts (Cloudflare Worker + D1 + R2)
 
 **Source**: `takosumi-cloud/deploy/cloudflare/` (worker + wrangler.toml).
 
@@ -106,12 +106,17 @@ npx wrangler d1 create takosumi-cloud-accounts
 # Copy the returned UUID into deploy/cloudflare/wrangler.toml's
 # `database_id` field (replacing the all-zeros placeholder).
 
+# Create the R2 bucket for metadata-only AppInstallation export artifacts.
+npx wrangler r2 bucket create takosumi-cloud-accounts-exports
+
 # Push secrets (replace each value with the real secret on prompt)
 npx wrangler secret put TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK \
   --config deploy/cloudflare/wrangler.toml
 npx wrangler secret put TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET \
   --config deploy/cloudflare/wrangler.toml
 npx wrangler secret put TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET \
+  --config deploy/cloudflare/wrangler.toml
+npx wrangler secret put TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET \
   --config deploy/cloudflare/wrangler.toml
 # Optional: Stripe / passkey / upstream OIDC / OIDC client secret
 
@@ -141,7 +146,7 @@ Smoke:
 
 ```sh
 curl https://cloud.takosumi.com/healthz
-# {"ok":true,"provider":"cloudflare","service":"takosumi-cloud-accounts","persistence":"d1"}
+# {"ok":true,"provider":"cloudflare","service":"takosumi-cloud-accounts","persistence":"d1+r2"}
 
 curl https://cloud.takosumi.com/.well-known/openid-configuration | jq .issuer
 # "https://cloud.takosumi.com"
