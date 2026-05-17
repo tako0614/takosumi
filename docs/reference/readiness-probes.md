@@ -1,7 +1,7 @@
 # Readiness Probes
 
-> このページでわかること: `/readyz` の現行 response shape と、 将来の port-level
-> readiness architecture / liveness 分離。
+> このページでわかること: `/readyz` の現行 response shape と、公開 contract
+> ではない port-level readiness design model。
 
 ## 実装スコープ
 
@@ -17,7 +17,8 @@
   完了。 起動済だが初回 tick 前は `state: "booting"`
 
 Port-level observation worker / flap suppression / boot timeout code / `ports[]`
-は未公開 contract。
+は公開 contract ではありません。`/readyz` の current wire contract は `checks`
+object と `readiness_probe_failed` error envelope です。
 
 ## `/readyz` semantic
 
@@ -37,14 +38,15 @@ response body には `checks` object が含まれます。 `200` は body をそ
 `503` 時の `error.code` は `readiness_probe_failed`
 ([Kernel HTTP API](/reference/kernel-http-api))。
 
-> port-level readiness 判定は依存 port の DAG を bottom-up 評価する設計で、 現状
-> `/readyz` output ではなく将来 implementation 公開予定の model です。 cycle
-> は不変条件として禁止。
+> port-level readiness 判定は依存 port の DAG を bottom-up 評価する design model
+> です。現在の `/readyz` output には `ports[]` を出さず、公開互換性は `checks`
+> object に限定します。cycle は不変条件として禁止。
 
-### Bootstrap order
+### Port-level Design Model
 
-将来の port-level readiness では、 kernel pod 起動時に次の順序で port を bring
-up します。
+port-level readiness model では、 kernel pod 起動時に次の順序で port を bring up
+します。この節は operator / contributor 向けの設計語彙であり、現行 `/readyz`
+response shape ではありません。
 
 ```
 storage
@@ -103,8 +105,9 @@ threshold は 1 以上の整数。 `0` 指定でも `1` に clamp。
 として `/readyz` 上 `not ready` に倒します (observation worker deadlock の
 安全弁)。
 
-port-level readiness では各 port bring up に max wait を持たせます。 現行は
-timeout table 未実装。
+port-level readiness model では各 port bring up に max wait を持たせます。 現行
+`/readyz` は request-time inline checks を返すため、次の timeout table は
+`ports[]` response field や per-port public error code としては公開しません。
 
 | Port                     | max wait | 超過時 error code               |
 | ------------------------ | -------- | ------------------------------- |
