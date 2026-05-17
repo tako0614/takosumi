@@ -1,42 +1,29 @@
 {
   "appId": "com.yurucommu.app",
-  "bindings": [
-    {
-      "kind": "identity.oidc@v1",
-      "name": "auth",
-      "required": true
-    },
-    {
-      "kind": "object-store.s3-compatible@v1",
-      "name": "media",
-      "required": true
-    },
-    {
-      "kind": "domain.http@v1",
-      "name": "domain",
-      "required": true
-    },
-    {
-      "kind": "install-launch-token@v1",
-      "name": "bootstrap",
-      "required": true
-    }
+  "source": {
+    "kind": "git",
+    "url": "https://github.com/tako0614/yurucommu.git",
+    "ref": "v1.2.6",
+    "commit": "53bec9b4097aee10b032445568d74a450dbc875a"
+  },
+  "manifestDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7",
+  "changes": [
+    { "op": "create", "component": "web", "kind": "worker" },
+    { "op": "create", "component": "db", "kind": "postgres" },
+    { "op": "create", "component": "media", "kind": "object-store" },
+    { "op": "create", "component": "auth", "kind": "oidc" }
   ],
-  "grants": [
-    {
-      "capability": "logs.read.own"
-    }
-  ],
+  "estimatedCost": {
+    "currency": "JPY",
+    "monthly": 0
+  },
+  "expected": {
+    "commit": "53bec9b4097aee10b032445568d74a450dbc875a",
+    "manifestDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7"
+  },
   "metadata": {
     "fixture": true,
-    "fromAppYml": "/home/tako/Desktop/takos/takosumi/deploy/local-substrate/../../../yurucommu/.takosumi/app.yml",
-    "generatedAt": "2026-05-17T09:35:03Z"
-  },
-  "source": {
-    "appManifestDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7",
-    "commit": "53bec9b4097aee10b032445568d74a450dbc875a",
-    "compiledManifestDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7",
-    "gitUrl": "https://github.com/tako0614/yurucommu.git",
-    "ref": "v1.2.6"
+    "fromAppSpec": "/home/tako/Desktop/takos/yurucommu/.takosumi.yml",
+    "generatedAt": "2026-05-18T00:00:00Z"
   }
 }
