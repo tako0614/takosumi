@@ -595,6 +595,7 @@ services:
           if [ ! -d node_modules ]; then
             npm install --no-fund --no-audit
           fi
+          export VITE_TAKOSUMI_DASHBOARD_DEV_SIGN_IN="true"
           npm run build
     volumes:
       - ../../../takosumi-cloud/packages/dashboard-ui:/dashboard
