@@ -3,7 +3,7 @@
 ## 起動 / 停止
 
 ```bash
-cd takos/deploy/local-substrate
+cd takosumi/deploy/local-substrate
 
 # 起動 (Pebble + CoreDNS + Caddy。 minica と issuance root を auto-capture)
 bash scripts/up.sh

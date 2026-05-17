@@ -65,7 +65,7 @@ Pebble root の NSS install を含めた full chain を毎 PR で再現する。
 ## Quick start
 
 ```bash
-cd takos/deploy/local-substrate
+cd takosumi/deploy/local-substrate
 
 # Phase 0: ingress only (Pebble + CoreDNS + Caddy)
 bash scripts/up.sh
@@ -97,7 +97,7 @@ curl https://kernel.takos.test/healthz         # workers profile
 ## ファイル layout
 
 ```
-takos/deploy/local-substrate/
+takosumi/deploy/local-substrate/
 ├── README.md
 ├── docs/
 │   ├── architecture.md

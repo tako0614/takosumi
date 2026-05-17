@@ -43,7 +43,7 @@ network only).
 ## How to regenerate the digest
 
 ```bash
-cd takos/deploy/local-substrate
+cd takosumi/deploy/local-substrate
 sha256sum docs/launch-readiness/p0-local-evidence.md
 # → <hash>  docs/launch-readiness/p0-local-evidence.md
 # Then update TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST in

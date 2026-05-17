@@ -7,7 +7,7 @@ scope for the current plan; this playbook is the audit trail.
 ## Prerequisites
 
 ```bash
-cd takos/deploy/local-substrate
+cd takosumi/deploy/local-substrate
 bash scripts/up.sh --profile postgres
 # Or use the Worker-first mirror where kernel.takos.test is the Takosumi
 # kernel Worker on D1/R2/Queue/DO:
