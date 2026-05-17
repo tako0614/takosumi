@@ -194,12 +194,12 @@ check_post() {
 }
 
 echo "==> Phase 0 — ingress"
-check "phase0.hello" "hello.takos.test" "/" "200"
+check "phase0.hello" "hello.takosumi.test" "/" "200"
 
 echo
 echo "==> Phase 1 — substrate"
-check "phase1.accounts.oidc-discovery" "accounts.takos.test" "/.well-known/openid-configuration" "200"
-check "phase1.kernel.health" "kernel.takos.test" "/health" "200"
+check "phase1.accounts.oidc-discovery" "accounts.takosumi.test" "/.well-known/openid-configuration" "200"
+check "phase1.kernel.health" "kernel.takosumi.test" "/health" "200"
 
 echo
 echo "==> Production mirror — takosumi.com / cloud.takosumi.com under .test"

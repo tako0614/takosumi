@@ -22,12 +22,12 @@ assert_factory_denies_public_dns() {
 	local resp
 	resp=$(curl -sk \
 		--cacert caddy/runtime/pebble-issuance-root.pem \
-		--resolve kernel.takos.test:443:127.0.0.1 \
+		--resolve kernel.takosumi.test:443:127.0.0.1 \
 		-H "Authorization: Bearer ${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}" \
 		-H "Content-Type: application/yaml" \
 		--data-binary @fixtures/manifest.fail-public-dns.yml \
 		-w "\n%{http_code}\n" \
-		https://kernel.takos.test/v1/deployments)
+		https://kernel.takosumi.test/v1/deployments)
 	local http_code
 	http_code=$(echo "$resp" | tail -1)
 	if [[ "$http_code" == "400" ]] || [[ "$http_code" == "404" ]] || \

@@ -194,7 +194,7 @@ services:
   # ---- Takosumi kernel (Cloudflare Worker profile) ----
   # Builds and runs takosumi/deploy/cloudflare's Worker-first scaffold under
   # Miniflare with D1/R2 bindings. The postgres profile also starts a mirror
-  # at kernel-worker.takos.test so default smoke can verify the Worker code
+  # at kernel-worker.takosumi.test so default smoke can verify the Worker code
   # path without replacing the Deno+Postgres kernel used by the Takos product
   # stack.
   takosumi-kernel-worker-build:
@@ -354,7 +354,7 @@ services:
   #   1. service exports OTLP → collector at otel-collector:4317 (gRPC) /
   #      4318 (HTTP)
   #   2. collector forwards to Jaeger at jaeger:4317 (OTLP) / 14250 (jaeger)
-  #   3. Jaeger UI at https://jaeger.takos.test/ shows the spans
+  #   3. Jaeger UI at https://jaeger.takosumi.test/ shows the spans
   jaeger:
     profiles: ["postgres"]
     image: jaegertracing/jaeger:2.4.0
@@ -385,7 +385,7 @@ services:
   # Backends don't send email today, but the infra is here so that the
   # moment they start (signup confirmation, billing alerts, invite mail)
   # the smoke can assert the bytes arrived. Web UI at
-  # https://mailpit.takos.test/, SMTP at mailpit:1025 (in-network).
+  # https://mailpit.takosumi.test/, SMTP at mailpit:1025 (in-network).
   mailpit:
     profiles: ["postgres"]
     image: axllent/mailpit:latest

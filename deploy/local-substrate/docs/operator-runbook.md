@@ -12,7 +12,7 @@ bash scripts/up.sh
 bash scripts/up.sh --profile postgres
 
 # Workers profile: Accounts Worker on D1/R2 + Takosumi kernel Worker on
-# D1/R2/Queue/DO. In this profile kernel.takos.test is the Worker endpoint.
+# D1/R2/Queue/DO. In this profile kernel.takosumi.test is the Worker endpoint.
 bash scripts/up.sh --profile workers
 
 # 停止 (volume は残る)
@@ -33,15 +33,15 @@ sudo bash scripts/configure-dns.sh      # systemd-resolved per-domain split
 
 ## よくある障害
 
-### `curl https://hello.takos.test/` が `SSL certificate problem` で失敗
+### `curl https://hello.takosumi.test/` が `SSL certificate problem` で失敗
 
 - `caddy/runtime/pebble-issuance-root.pem` が存在するか確認
 - `sudo bash scripts/ca-install.sh` を実行
 - Pebble を restart した直後は issuance root が変わるので再 install 必須
 
-### `curl: (6) Could not resolve host: hello.takos.test`
+### `curl: (6) Could not resolve host: hello.takosumi.test`
 
-- `dig hello.takos.test @127.0.0.1` で CoreDNS 自体が答えているか確認
+- `dig hello.takosumi.test @127.0.0.1` で CoreDNS 自体が答えているか確認
 - 答えていれば systemd-resolved の per-domain split 未設定 →
   `sudo bash scripts/configure-dns.sh`
 - 答えていなければ CoreDNS container が落ちている →
@@ -82,13 +82,13 @@ docker compose -f compose.ingress.yml ps
 curl -sk https://127.0.0.1:15000/dir
 
 # CoreDNS 経由の wildcard 解決
-dig random-name.takos.test @127.0.0.1 +short
+dig random-name.takosumi.test @127.0.0.1 +short
 
 # Postgres profile kernel + Worker mirror
-curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel.takos.test/health
-curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel-worker.takos.test/healthz
+curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel.takosumi.test/health
+curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel-worker.takosumi.test/healthz
 
 # Workers profile kernel Worker
-curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel.takos.test/healthz
-curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel.takos.test/storage/healthz
+curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel.takosumi.test/healthz
+curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel.takosumi.test/storage/healthz
 ```

@@ -11,9 +11,9 @@ Takosumi (kernel + Accounts + cloud worker + dashboard SPA) の integration test
 
 | 層                | 担当 container | 役割                                                                                                                              |
 | ----------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **ingress**       | `caddy`        | `*.takos.test` の TLS termination + reverse proxy。 Caddy admin API (`:2019`) で動的に route 追加可能                             |
+| **ingress**       | `caddy`        | `*.takosumi.test` の TLS termination + reverse proxy。 Caddy admin API (`:2019`) で動的に route 追加可能                             |
 | **TLS authority** | `pebble`       | ACME staging server。 Caddy に対して cert を issue。 ACME directory は `https://pebble:14000/dir`、 management API は `:15000`    |
-| **DNS**           | `coredns`      | `*.takos.test → 127.0.0.1` の wildcard zone。 `selfhost-coredns` provider が動的に zone file へ append 可能な形に揃える (Phase 3) |
+| **DNS**           | `coredns`      | `*.takosumi.test → 127.0.0.1` の wildcard zone。 `selfhost-coredns` provider が動的に zone file へ append 可能な形に揃える (Phase 3) |
 
 ## TLS chain of trust
 
@@ -36,10 +36,10 @@ host curl                     container (e.g. Pebble)
    │                                │
    ▼                                ▼
  systemd-resolved              docker embedded DNS (127.0.0.11)
-   │ ~takos.test                    │ hello.takos.test → caddy IP (alias)
+   │ ~takosumi.test                    │ hello.takosumi.test → caddy IP (alias)
    ▼                                ▼
  CoreDNS @127.0.0.1:53        (Phase 1+ で CoreDNS を upstream にもする)
-   │ takos.test zone
+   │ takosumi.test zone
    ▼
  127.0.0.1 → published port → caddy:443
 ```

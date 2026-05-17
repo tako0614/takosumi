@@ -1,10 +1,10 @@
-# Phase 0 baseline. Pebble (ACME staging) + CoreDNS (*.takos.test) + Caddy
+# Phase 0 baseline. Pebble (ACME staging) + CoreDNS (*.takosumi.test) + Caddy
 # (Pebble issuer) を host へ無線にせず docker network 内で完結させる。
 #
 # 検証の golden path:
 #   1. scripts/up.sh で起動
 #   2. scripts/ca-install.sh で Pebble issuance root を host trust store に追加
-#   3. curl https://hello.takos.test/ が Pebble-signed cert chain 付きで 200
+#   3. curl https://hello.takosumi.test/ が Pebble-signed cert chain 付きで 200
 
 services:
   pebble:
@@ -68,15 +68,15 @@ services:
       takos-local-internal:
         aliases:
           - caddy
-          - hello.takos.test
-          - accounts.takos.test
-          - kernel.takos.test
-          - kernel-worker.takos.test
+          - hello.takosumi.test
+          - accounts.takosumi.test
+          - kernel.takosumi.test
+          - kernel-worker.takosumi.test
           - takosumi.test
           - cloud.takosumi.test
           - oauth-mock.test
-          - mailpit.takos.test
-          - jaeger.takos.test
+          - mailpit.takosumi.test
+          - jaeger.takosumi.test
 
 networks:
   takos-local-internal:

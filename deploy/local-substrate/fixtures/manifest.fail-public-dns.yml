@@ -17,5 +17,5 @@ spec:
         version: v1
       provider: "@takos/aws-route53"
       spec:
-        name: leak-attempt.takos.test
+        name: leak-attempt.takosumi.test
         target: "127.0.0.1"

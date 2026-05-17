@@ -1,9 +1,3 @@
-takos.test:53 {
-    file /etc/coredns/zones/takos.test.zone
-    log
-    errors
-}
-
 takosumi.test:53 {
     file /etc/coredns/zones/takosumi.test.zone
     log

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configure systemd-resolved to send *.takos.test queries to CoreDNS on
+# Configure systemd-resolved to send *.takosumi.test queries to CoreDNS on
 # 127.0.0.1:53. Linux native (systemd-resolved) only.
 set -euo pipefail
 
@@ -16,12 +16,12 @@ fi
 CONF=/etc/systemd/resolved.conf.d/takos-local-substrate.conf
 mkdir -p "$(dirname "$CONF")"
 cat > "$CONF" <<'EOF'
-# Managed by takos/deploy/local-substrate/scripts/configure-dns.sh
+# Managed by takosumi/deploy/local-substrate/scripts/configure-dns.sh
 [Resolve]
 DNS=127.0.0.1
-Domains=~takos.test ~takosumi.test
+Domains=~takosumi.test
 EOF
 
 systemctl restart systemd-resolved
-echo "==> systemd-resolved configured for *.takos.test → 127.0.0.1"
+echo "==> systemd-resolved configured for *.takosumi.test → 127.0.0.1"
 echo "    Remove $CONF and restart systemd-resolved to revert."

@@ -62,17 +62,17 @@ The local-substrate now runs that same bundle under Miniflare:
 
 1. `takosumi-kernel-worker-build` bundles
    `takosumi/deploy/cloudflare/src/worker.ts`.
-2. `takosumi-kernel-worker` serves it at `kernel-worker.takos.test` during the
+2. `takosumi-kernel-worker` serves it at `kernel-worker.takosumi.test` during the
    default postgres-profile smoke so the Deno+Postgres kernel remains available
-   at `kernel.takos.test` for side-by-side parity checks.
+   at `kernel.takosumi.test` for side-by-side parity checks.
 3. `kernel-workers` is the replacement workers-profile service, aliasing itself
    as `kernel` when `--profile workers` is selected.
 4. `scripts/workers-cli-smoke.sh` now verifies both workerd code paths: the
    Accounts Worker on D1/R2 and the Takosumi kernel Worker on D1/R2/Queue/DO
    (`/healthz`, `/__takosumi/exports/*` signature rejection, `/storage/healthz`,
    `/coordination/healthz`, `/queue/test`, and `/health`). It uses
-   `kernel-worker.takos.test` for the postgres-profile mirror and
-   `kernel.takos.test` for the workers profile.
+   `kernel-worker.takosumi.test` for the postgres-profile mirror and
+   `kernel.takosumi.test` for the workers profile.
 
 ## Tenant isolation — LANDED (smoke strict as of 2026-05-17)
 
@@ -108,15 +108,19 @@ Then both takos/website and takosumi/website import from JSR. Out of scope of
 the test bed (publishing a new JSR scope + coordination with takosumi/website +
 landing PRs across multiple repos).
 
-## smoke.d/ full split (D17 — partial)
+## smoke.d/ full split (D17 — partial, EVALUATED + SKIPPED 2026-05-18)
 
 scripts/smoke.sh has a `run_script <label> <cmd>` helper that captures
 stdout+stderr to `$SMOKE_LOG_DIR/<label>.log` on failure. CI uploads that dir as
-an artifact. Today the helper is plumbed into a few key checks (OAuth replay,
-workers, registrar, MinIO, migrations, OTel, k6, mailpit, Stripe, and kernel
-deploy). The full refactor to per-script files under `scripts/smoke.d/*.sh` with
-auto-discovery is mechanical but bigger; not strictly necessary now that log
-capture works.
+an artifact. The helper is plumbed into ~all stanzas now (OAuth replay, workers,
+registrar, MinIO, migrations, OTel, k6, mailpit, Stripe, kernel deploy, docs
+link check, tenant isolation, takosumi-git tests).
+
+Refactoring smoke.sh stanzas into per-file `scripts/smoke.d/*.sh` with auto-
+discovery was evaluated and **skipped**: log capture already works, smoke.sh is
+~440 lines and readable, and a per-file split adds boilerplate (one wrapper per
+stanza) without functional benefit. Revisit only if smoke.sh grows past
+~700 lines or per-stanza CI parallelism becomes needed.
 
 ## wrangler dev --remote
 

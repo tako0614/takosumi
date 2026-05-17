@@ -14,14 +14,14 @@
 	file_server
 }
 
-# Reverse proxy + gzip — used by all the *.takos.test single-upstream sites.
+# Reverse proxy + gzip — used by all the *.takosumi.test single-upstream sites.
 (proxy_site) {
 	encode gzip
 	reverse_proxy {args[0]}
 }
 
 # ===== Phase 0 / hello =====================================================
-hello.takos.test {
+hello.takosumi.test {
 	respond "hello from local-substrate (Phase 0)" 200
 }
 
@@ -45,10 +45,10 @@ takosumi.test {
 oauth-mock.test {
 	import proxy_site oauth-mock:8789
 }
-mailpit.takos.test {
+mailpit.takosumi.test {
 	import proxy_site mailpit:8025
 }
-jaeger.takos.test {
+jaeger.takosumi.test {
 	import proxy_site jaeger:16686
 }
 
@@ -73,16 +73,16 @@ cloud.takosumi.test {
 }
 
 # ===== Phase 1 substrate ===================================================
-accounts.takos.test {
+accounts.takosumi.test {
 	reverse_proxy accounts:8787
 }
-kernel.takos.test {
+kernel.takosumi.test {
 	reverse_proxy kernel:8788
 }
-kernel-worker.takos.test {
+kernel-worker.takosumi.test {
 	reverse_proxy takosumi-kernel-worker:8788
 }
 
-# Phase 3 で route-registrar が *.app.takos.test に動的 route を追加する。
+# Phase 3 で route-registrar が *.app.takosumi.test に動的 route を追加する。
 # (これは Takosumi が deploy する app の dynamic subdomain。 Takos product
 # / yurucommu service direct ではない。)

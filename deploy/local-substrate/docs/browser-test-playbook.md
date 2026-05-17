@@ -9,27 +9,27 @@ scope for the current plan; this playbook is the audit trail.
 ```bash
 cd takosumi/deploy/local-substrate
 bash scripts/up.sh --profile postgres
-# Or use the Worker-first mirror where kernel.takos.test is the Takosumi
+# Or use the Worker-first mirror where kernel.takosumi.test is the Takosumi
 # kernel Worker on D1/R2/Queue/DO:
 # bash scripts/up.sh --profile workers
 sudo bash scripts/ca-install.sh         # trust Pebble issuance root
-sudo bash scripts/configure-dns.sh      # *.takos.test → 127.0.0.1
+sudo bash scripts/configure-dns.sh      # *.takosumi.test → 127.0.0.1
 ```
 
 After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock
-warning). After `configure-dns.sh` the host resolves `accounts.takos.test`,
-`kernel.takos.test`, `cloud.takosumi.test`, etc. via CoreDNS.
+warning). After `configure-dns.sh` the host resolves `accounts.takosumi.test`,
+`kernel.takosumi.test`, `cloud.takosumi.test`, etc. via CoreDNS.
 
 ## Smoke flow A — accounts OIDC discovery
 
-1. Navigate: `https://accounts.takos.test/.well-known/openid-configuration`
+1. Navigate: `https://accounts.takosumi.test/.well-known/openid-configuration`
 2. Expect: 200 with valid OIDC config JSON, `issuer` =
-   `https://accounts.takos.test`
+   `https://accounts.takosumi.test`
 3. Verify cert chain: chrome:lock → certificate → root = `Pebble Root CA`
 
 ## Smoke flow B — kernel admin probe
 
-1. Navigate: `https://kernel.takos.test/health`
+1. Navigate: `https://kernel.takosumi.test/health`
 2. Expect with `--profile postgres`: 200 with
    `{"ok":true,"service":"takosumi","domains":["core","deploy"]}`
 3. Expect with `--profile workers`: 200 from the Takosumi kernel Worker routed
@@ -38,8 +38,8 @@ warning). After `configure-dns.sh` the host resolves `accounts.takos.test`,
 ## Smoke flow C — Takosumi kernel Worker probe
 
 1. Navigate with `--profile postgres`:
-   `https://kernel-worker.takos.test/healthz`
-2. Navigate with `--profile workers`: `https://kernel.takos.test/healthz`
+   `https://kernel-worker.takosumi.test/healthz`
+2. Navigate with `--profile workers`: `https://kernel.takosumi.test/healthz`
 3. Expect: 200 with `{"ok":true,"provider":"cloudflare-worker"}`
 4. Navigate with the same host: `/storage/healthz`
 5. Expect: 200 with `{"ok":true,"storage":"cloudflare-d1-r2"}`
@@ -61,13 +61,13 @@ warning). After `configure-dns.sh` the host resolves `accounts.takos.test`,
 (Only after Phase 3 route-registrar is wired and a deployment with a route has
 been applied.)
 
-1. POST a manifest that allocates `<id>.app.takos.test`:
+1. POST a manifest that allocates `<id>.app.takosumi.test`:
    ```bash
    curl -k --cacert caddy/runtime/pebble-issuance-root.pem \
-     --resolve kernel.takos.test:443:127.0.0.1 \
+     --resolve kernel.takosumi.test:443:127.0.0.1 \
      -H "Authorization: Bearer local-substrate-deploy-token" \
      --data-binary @fixtures/manifest.hello-selfhost.yml \
-     https://kernel.takos.test/v1/deployments
+     https://kernel.takosumi.test/v1/deployments
    ```
 2. Wait ~5s for route-registrar to mirror the route into Caddy admin API
 3. Navigate to the assigned subdomain in Chrome

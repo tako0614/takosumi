@@ -1,11 +1,11 @@
 # Root CA install + DNS split (Linux native)
 
-`https://*.takos.test` を Pebble-issued cert で local termination するため、
+`https://*.takosumi.test` を Pebble-issued cert で local termination するため、
 host に 2 つの設定を一回だけ入れる:
 
 1. Pebble issuance root を host trust store に追加 (curl / chrome / firefox
    が緑鍵で verify するため)
-2. systemd-resolved を `*.takos.test → 127.0.0.1` で per-domain split (host から
+2. systemd-resolved を `*.takosumi.test → 127.0.0.1` で per-domain split (host から
    CoreDNS に流すため)
 
 両方とも対応 script があるので、 `up.sh` 後に下記を一回流せばよい:
@@ -39,13 +39,13 @@ Pebble は restart のたびに issuance root を regenerate するので、 sta
 sudo tee /etc/systemd/resolved.conf.d/takos-local-substrate.conf <<'EOF'
 [Resolve]
 DNS=127.0.0.1
-Domains=~takos.test
+Domains=~takosumi.test
 EOF
 
 sudo systemctl restart systemd-resolved
 ```
 
-`~takos.test` の leading tilde は 「`takos.test` で終わるクエリ **のみ** この
+`~takosumi.test` の leading tilde は 「`takosumi.test` で終わるクエリ **のみ** この
 DNS server に送る」 の意。 他の DNS 解決は通常の path を踏むので WAN
 解決が壊れない。
 
@@ -60,14 +60,14 @@ sudo systemctl restart systemd-resolved
 
 ```bash
 # CoreDNS が答えているか
-dig hello.takos.test @127.0.0.1 +short
+dig hello.takosumi.test @127.0.0.1 +short
 # → 127.0.0.1 が返る
 
 # Pebble-issued cert で TLS termination されているか
-curl -v https://hello.takos.test/ 2>&1 | grep "subject"
-# → CN=hello.takos.test とその chain が表示される
+curl -v https://hello.takosumi.test/ 2>&1 | grep "subject"
+# → CN=hello.takosumi.test とその chain が表示される
 
 # trust が通っているか (curl が -k 無しで成功するか)
-curl https://hello.takos.test/
+curl https://hello.takosumi.test/
 # → "hello from local-substrate (Phase 0)" が返る
 ```

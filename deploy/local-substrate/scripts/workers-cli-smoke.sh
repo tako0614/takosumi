@@ -4,8 +4,8 @@
 # What this script verifies:
 #   1. takosumi-cloud Accounts Worker runs on workerd with D1/R2.
 #   2. takosumi kernel Worker runs on workerd with D1/R2, Queue, and DO
-#      either as the postgres-profile mirror at kernel-worker.takos.test or
-#      as the workers-profile kernel at kernel.takos.test.
+#      either as the postgres-profile mirror at kernel-worker.takosumi.test or
+#      as the workers-profile kernel at kernel.takosumi.test.
 #   3. The Accounts install preview and OIDC discovery surfaces still answer.
 #   4. D1 binding semantics: the sqlite file underneath miniflare's D1
 #      emulator supports json_extract on the document column AND a
@@ -25,8 +25,8 @@ resolve_kernel_worker_host() {
 		candidates+=("$KERNEL_WORKER_HOST")
 	else
 		# postgres profile exposes the Worker mirror beside the Deno+Postgres
-		# kernel. workers profile replaces kernel.takos.test with the Worker.
-		candidates+=(kernel-worker.takos.test kernel.takos.test)
+		# kernel. workers profile replaces kernel.takosumi.test with the Worker.
+		candidates+=(kernel-worker.takosumi.test kernel.takosumi.test)
 	fi
 
 	local host body

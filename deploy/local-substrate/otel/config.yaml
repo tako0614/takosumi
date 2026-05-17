@@ -1,6 +1,6 @@
 # OTLP-in → Jaeger-out collector for local-substrate. Anything any service
 # exports via OTLP (gRPC :4317 or HTTP :4318) gets forwarded to the local
-# Jaeger UI at https://jaeger.takos.test/.
+# Jaeger UI at https://jaeger.takosumi.test/.
 
 receivers:
   otlp:

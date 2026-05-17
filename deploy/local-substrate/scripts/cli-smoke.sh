@@ -44,7 +44,7 @@ RESP=$(curl -sk --cacert "$CA" \
 	-H "Authorization: Bearer $TOKEN" \
 	-H "Content-Type: application/json" \
 	-d "$MANIFEST" \
-	"https://kernel.takos.test/v1/deployments")
+	"https://kernel.takosumi.test/v1/deployments")
 
 STATUS=$(echo "$RESP" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('status',''))")
 APPLY_STATUS=$(echo "$RESP" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('outcome',{}).get('status',''))")
@@ -62,7 +62,7 @@ echo "OK deploy=$DEPLOY_NAME status=$STATUS outcome.status=$APPLY_STATUS"
 # Kernel exposes DELETE /v1/deployments/<id>? If not, fall through silently.
 curl -sk --cacert "$CA" -X DELETE \
 	-H "Authorization: Bearer $TOKEN" \
-	"https://kernel.takos.test/v1/deployments/$DEPLOY_NAME" \
+	"https://kernel.takosumi.test/v1/deployments/$DEPLOY_NAME" \
 	>/dev/null 2>&1 || true
 
 # B6: also assert install-preview-mock returns real bindings (fixture-hit

@@ -119,8 +119,8 @@ if [[ -n "$PROFILE" ]]; then
 	for _ in $(seq 1 120); do
 		# Check OIDC discovery via Caddy as a proxy for full readiness.
 		if curl -sk --cacert caddy/runtime/pebble-issuance-root.pem \
-			--resolve accounts.takos.test:443:127.0.0.1 \
-			https://accounts.takos.test/.well-known/openid-configuration \
+			--resolve accounts.takosumi.test:443:127.0.0.1 \
+			https://accounts.takosumi.test/.well-known/openid-configuration \
 			>/dev/null 2>&1; then
 			break
 		fi
@@ -134,18 +134,18 @@ cat <<EOF
 
 Next steps (one-time per host):
    sudo bash scripts/ca-install.sh         # trust Pebble issuance root
-   sudo bash scripts/configure-dns.sh      # split-DNS for *.takos.test
+   sudo bash scripts/configure-dns.sh      # split-DNS for *.takosumi.test
 
 Verify (Phase 0):
-   curl https://hello.takos.test/
+   curl https://hello.takosumi.test/
 
 Verify (profile=postgres):
-   curl https://accounts.takos.test/.well-known/openid-configuration
-   curl https://kernel.takos.test/health
-   curl https://kernel-worker.takos.test/healthz
+   curl https://accounts.takosumi.test/.well-known/openid-configuration
+   curl https://kernel.takosumi.test/health
+   curl https://kernel-worker.takosumi.test/healthz
 
 Verify (profile=workers):
-   curl https://accounts.takos.test/.well-known/openid-configuration
-   curl https://kernel.takos.test/healthz
-   curl https://kernel.takos.test/storage/healthz
+   curl https://accounts.takosumi.test/.well-known/openid-configuration
+   curl https://kernel.takosumi.test/healthz
+   curl https://kernel.takosumi.test/storage/healthz
 EOF

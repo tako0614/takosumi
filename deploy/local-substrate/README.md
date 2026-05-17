@@ -1,6 +1,6 @@
 # local-substrate
 
-`*.takos.test` の DNS / TLS / ingress / OIDC / kernel deploy / cloud emulator を
+`*.takosumi.test` の DNS / TLS / ingress / OIDC / kernel deploy / cloud emulator を
 すべて 1 つの docker network で完結させる cloud-independent test bed。
 
 Takosumi の deploy / account-plane / cloud-worker surface を、 public network
@@ -15,7 +15,7 @@ Windows は対象外。
 
 | Phase | scope                                                                                       | DoD                                                                          |
 | ----- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| 0     | Pebble (ACME staging) + CoreDNS + Caddy で `*.takos.test` を local TLS termination          | `curl https://hello.takos.test/` が 200                                      |
+| 0     | Pebble (ACME staging) + CoreDNS + Caddy で `*.takosumi.test` を local TLS termination          | `curl https://hello.takosumi.test/` が 200                                      |
 | 1     | takosumi kernel + Accounts + cloud worker / dashboard を同 stack に統合                     | OIDC discovery 解決 + `POST /v1/deployments` 成功                            |
 | 2     | LocalStack / k3d / fake-gcs / Azurite / miniflare を `compose.emulators.yml` 1 本で並行統合 | `scripts/smoke.sh` 全 cloud fixture が pass                                  |
 | 3     | factory で endpoint override + Caddy admin route registrar + 公開面 deny 多重防御           | dynamic subdomain が deploy 直後に hit する + `prove-no-public-leak.sh` pass |
@@ -89,7 +89,7 @@ bash scripts/up.sh
 bash scripts/up.sh --profile postgres
 
 # Worker-first substrate mirror: Accounts Worker on D1/R2 plus Takosumi
-# kernel Worker on D1/R2/Queue/DO. Here kernel.takos.test is the Worker.
+# kernel Worker on D1/R2/Queue/DO. Here kernel.takosumi.test is the Worker.
 bash scripts/up.sh --profile workers
 
 # one-time per host
@@ -99,10 +99,10 @@ sudo bash scripts/configure-dns.sh
 # verify
 bash scripts/smoke.sh
 bash scripts/prove-no-public-leak.sh
-curl https://hello.takos.test/
-curl https://accounts.takos.test/.well-known/openid-configuration
-curl https://kernel-worker.takos.test/healthz  # postgres profile mirror
-curl https://kernel.takos.test/healthz         # workers profile
+curl https://hello.takosumi.test/
+curl https://accounts.takosumi.test/.well-known/openid-configuration
+curl https://kernel-worker.takosumi.test/healthz  # postgres profile mirror
+curl https://kernel.takosumi.test/healthz         # workers profile
 ```
 
 詳細は [docs/root-ca-install.md](docs/root-ca-install.md) と
@@ -126,7 +126,7 @@ takosumi/deploy/local-substrate/
 │   └── runtime/                 # up.sh が生成 (gitignored)
 ├── coredns/
 │   ├── Corefile
-│   └── zones/{takos.test.zone, deny-letsencrypt.zone}
+│   └── zones/{takosumi.test.zone, deny-letsencrypt.zone}
 ├── pebble/pebble-config.json
 ├── factories/
 │   └── local-substrate-factories.ts   # 公開 DNS provider import-time deny

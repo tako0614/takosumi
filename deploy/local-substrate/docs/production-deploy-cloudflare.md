@@ -6,7 +6,7 @@ The local-substrate mirrors production using `.test` TLDs:
 | ------------------------------------------ | ----------------------------------- | --------------------------------------------------------------------------- |
 | `https://takosumi.com/`                    | `https://takosumi.test/`            | Cloudflare Pages (prod) / Caddy file_server (local)                         |
 | `https://cloud.takosumi.com/`              | `https://cloud.takosumi.test/`      | Accounts Cloudflare Worker + D1 + R2 (prod) / Miniflare + SQLite/R2 (local) |
-| operator-selected Takosumi kernel hostname | `https://kernel-worker.takos.test/` | Takosumi kernel Worker + D1/R2/Queues/DO (prod) / Miniflare local binds     |
+| operator-selected Takosumi kernel hostname | `https://kernel-worker.takosumi.test/` | Takosumi kernel Worker + D1/R2/Queues/DO (prod) / Miniflare local binds     |
 
 Once the local mirror passes `scripts/smoke.sh`, follow this runbook to push the
 same artifacts to real Cloudflare. The Worker code is byte-for- byte identical;
@@ -87,8 +87,8 @@ wrangler deploy --config deploy/cloudflare/wrangler.toml
 
 Add the operator-owned route or custom domain for the kernel Worker in
 Cloudflare after choosing the public/private API hostname. The local-substrate
-intentionally exposes the mirror as `kernel-worker.takos.test` so it can be
-checked beside the default Deno+Postgres kernel at `kernel.takos.test`.
+intentionally exposes the mirror as `kernel-worker.takosumi.test` so it can be
+checked beside the default Deno+Postgres kernel at `kernel.takosumi.test`.
 
 Verify:
 
@@ -177,6 +177,6 @@ If `cloud.takosumi.test/.well-known/openid-configuration` returns 200 in
 local-substrate, the same Worker route should work on `cloud.takosumi.com` only
 after Cloudflare-side DNS/TLS, route, D1/R2 binding IDs, and secrets are
 validated and recorded as launch-readiness evidence. If
-`kernel-worker.takos.test/{healthz,storage/healthz,coordination/healthz,queue/test}`
+`kernel-worker.takosumi.test/{healthz,storage/healthz,coordination/healthz,queue/test}`
 passes locally, the kernel Worker bundle has booted with the same Cloudflare
 binding contract that production uses.

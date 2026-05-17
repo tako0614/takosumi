@@ -72,7 +72,7 @@ export function buildLocalSubstrateRegistry(
   reg.register(
     new CorednsLocalConnector({
       zoneFile: env.TAKOSUMI_SELFHOSTED_COREDNS_FILE ??
-        "/etc/coredns/zones/takos.test.zone",
+        "/etc/coredns/zones/takosumi.test.zone",
     }),
   );
   reg.register(
