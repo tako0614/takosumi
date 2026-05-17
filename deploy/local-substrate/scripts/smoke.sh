@@ -200,7 +200,6 @@ echo
 echo "==> Phase 1 — substrate"
 check "phase1.accounts.oidc-discovery" "accounts.takos.test" "/.well-known/openid-configuration" "200"
 check "phase1.kernel.health" "kernel.takos.test" "/health" "200"
-check "phase1.app.health" "app.takos.test" "/health" "200"
 
 echo
 echo "==> Production mirror — takosumi.com / cloud.takosumi.com under .test"
@@ -213,7 +212,7 @@ check "prod-mirror.docs.index" "takosumi.test" "/docs/" "200"
 echo
 echo "==> Docs surfaces — one-hop link check (catches renamed sections breaking nav)"
 if run_script "docs.link-check" "bash $SCRIPT_DIR/docs-link-check.sh"; then
-	echo "    PASS [docs.link-check] takos + takosumi + accounts + marketing one-hop deep"
+	echo "    PASS [docs.link-check] Takosumi docs + Accounts one-hop deep"
 	PASS=$((PASS + 1))
 else
 	FAIL=$((FAIL + 1))
@@ -226,17 +225,11 @@ check "prod-mirror.cloud.dashboard-signin" "cloud.takosumi.test" "/sign-in" "200
 check "prod-mirror.cloud.dashboard-deeplink" "cloud.takosumi.test" "/apps/abc" "200"
 
 echo
-echo "==> Product landings — takos.jp / yurucommu.com under .test"
-check "prod-mirror.takos.landing.index" "takos.test" "/" "200"
-check "prod-mirror.takos.landing.favicon" "takos.test" "/brand/favicon.svg" "200"
-check "prod-mirror.yurucommu.landing.index" "yurucommu.test" "/" "200"
-
-echo
 echo "==> Install flow — managed-offering bypass + install-preview mock"
 # managed-offering gate is flipped to 'open' for the local test bed, so the
 # preview endpoint should return 200 instead of 503 (launch_readiness_not_complete).
-check_post "install.preview.takos" "cloud.takosumi.test" "/v1/install/preview" \
-	'{"source":{"gitUrl":"https://github.com/tako0614/takos.git","ref":"main"}}' "200"
+check_post "install.preview.takos-docs" "cloud.takosumi.test" "/v1/install/preview" \
+	'{"source":{"gitUrl":"https://github.com/tako0614/takos-docs.git","ref":"main"}}' "200"
 # yurucommu through the same wizard
 check_post "install.preview.yurucommu" "cloud.takosumi.test" "/v1/install/preview" \
 	'{"source":{"gitUrl":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' "200"
@@ -312,26 +305,6 @@ else
 fi
 
 echo
-echo "==> yurucommu 2-instance federation infrastructure"
-if run_script "federation.infra" "bash $SCRIPT_DIR/federation-smoke.sh"; then
-	echo "    PASS [federation.infra] inst-a + inst-b nodeinfo + webfinger + cross-reach"
-	PASS=$((PASS + 1))
-else
-	echo "    FAIL [federation.infra] see scripts/federation-smoke.sh"
-	FAIL=$((FAIL + 1))
-fi
-
-echo
-echo "==> Federation Follow flow — login + Origin + Follow→Accept"
-if run_script "federation.follow" "bash $SCRIPT_DIR/federation-follow.sh"; then
-	echo "    PASS [federation.follow] strict Follow→Accept completed"
-	PASS=$((PASS + 1))
-else
-	echo "    FAIL [federation.follow] see scripts/federation-follow.sh"
-	FAIL=$((FAIL + 1))
-fi
-
-echo
 echo "==> Worker-first mirrors (accounts worker + kernel worker on workerd + D1/R2/Queue/DO)"
 if run_script "workers.cli-smoke" "bash $SCRIPT_DIR/workers-cli-smoke.sh"; then
 	echo "    PASS [workers.cli-smoke] workers healthy via workerd + D1/R2/Queue/DO"
@@ -352,32 +325,12 @@ else
 fi
 
 echo
-echo "==> takos-private manifest yaml/compose lint"
-if run_script "private.lint" "bash $SCRIPT_DIR/private-dryrun.sh"; then
-	echo "    PASS [private.lint] all yaml/compose files parse cleanly"
-	PASS=$((PASS + 1))
-else
-	echo "    FAIL [private.lint] see scripts/private-dryrun.sh"
-	FAIL=$((FAIL + 1))
-fi
-
-echo
 echo "==> MinIO object round-trip (R2-compatible backend for object-store@v1)"
 if run_script "minio.roundtrip" "bash $SCRIPT_DIR/minio-smoke.sh"; then
 	echo "    PASS [minio.roundtrip] mb → put → get → sha256 match → cleanup"
 	PASS=$((PASS + 1))
 else
 	echo "    FAIL [minio.roundtrip] see scripts/minio-smoke.sh"
-	FAIL=$((FAIL + 1))
-fi
-
-echo
-echo "==> Bundled apps .takosumi/ sanity (install link reachability)"
-if run_script "bundled.apps" "bash $SCRIPT_DIR/bundled-apps-smoke.sh"; then
-	echo "    PASS [bundled.apps] all 5 advertised apps have valid .takosumi/app.yml"
-	PASS=$((PASS + 1))
-else
-	echo "    FAIL [bundled.apps] see scripts/bundled-apps-smoke.sh"
 	FAIL=$((FAIL + 1))
 fi
 

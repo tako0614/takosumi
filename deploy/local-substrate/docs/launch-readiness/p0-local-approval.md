@@ -26,5 +26,5 @@ The local worker is reachable only from the docker network
 (`prove-no-public-leak.sh` enforces this). No user traffic is served by the
 local worker, so the fixture approval is acceptable for local smoke runs.
 Production deploys reject this fixture because the ref hostname
-(`github.com/tako0614/takos.git`) doesn't match the production approval repo and
-the digest sha256 doesn't match the production evidence file.
+(`github.com/tako0614/takosumi.git`) doesn't match the production approval repo
+and the digest sha256 doesn't match the production evidence file.

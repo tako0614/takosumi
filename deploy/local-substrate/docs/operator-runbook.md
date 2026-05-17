@@ -8,7 +8,7 @@ cd takosumi/deploy/local-substrate
 # 起動 (Pebble + CoreDNS + Caddy。 minica と issuance root を auto-capture)
 bash scripts/up.sh
 
-# Postgres profile: Deno+Postgres Takosumi kernel + Accounts + Takos product.
+# Postgres profile: Deno+Postgres Takosumi kernel + Accounts + cloud worker.
 bash scripts/up.sh --profile postgres
 
 # Workers profile: Accounts Worker on D1/R2 + Takosumi kernel Worker on

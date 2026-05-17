@@ -18,7 +18,7 @@ sudo bash scripts/configure-dns.sh      # *.takos.test → 127.0.0.1
 
 After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock
 warning). After `configure-dns.sh` the host resolves `accounts.takos.test`,
-`app.takos.test`, etc. via CoreDNS.
+`kernel.takos.test`, `cloud.takosumi.test`, etc. via CoreDNS.
 
 ## Smoke flow A — accounts OIDC discovery
 
@@ -46,15 +46,15 @@ warning). After `configure-dns.sh` the host resolves `accounts.takos.test`,
 6. Navigate with the same host: `/coordination/healthz`
 7. Expect: 200 with `{"ok":true,"role":"coordination"}`
 
-## Smoke flow D — takos-app login (the canonical UX path)
+## Smoke flow D — Takosumi Cloud upstream OAuth
 
-1. Navigate: `https://app.takos.test/admin` (or whichever path initiates OIDC)
-2. Expect: redirect to
-   `https://accounts.takos.test/oauth/authorize?client_id=takos-app&...`
-3. Complete login (use the test user seeded by accounts on first run, or create
-   one via the Accounts admin if available)
-4. Expect: redirect back to `https://app.takos.test/oauth/callback?code=...`
-5. Expect: app sets a session cookie and shows the admin dashboard
+1. Navigate: `https://cloud.takosumi.test/sign-in`
+2. Expect: redirect to `https://oauth-mock.test/{google|github}/authorize?...`
+   when a provider is selected.
+3. Complete the local mock provider flow.
+4. Expect: redirect back to
+   `https://cloud.takosumi.test/sign-in/callback?code=...`
+5. Expect: the dashboard session is established.
 
 ## Smoke flow E — dynamic deploy subdomain
 

@@ -73,11 +73,11 @@ EOF
 }
 
 assert_mocks_not_host_published() {
-	# The added mock + emulator services (install-preview-mock, oauth-mock,
-	# mailpit web UI, jaeger UI, otel-collector, yurucommu-a/b, minio,
-	# and the Miniflare worker mirrors) must
-	# stay on the internal docker network. If anyone accidentally adds a
-	# `ports:` entry that publishes them to 0.0.0.0, this catches it.
+	# The mock + emulator services (install-preview-mock, oauth-mock,
+	# mailpit web UI, jaeger UI, otel-collector, minio, and the
+	# Miniflare worker mirrors) must stay on the internal docker
+	# network. If anyone accidentally adds a `ports:` entry that
+	# publishes them to 0.0.0.0, this catches it.
 	echo "==> [docker] Verifying new mock/emulator containers do not bind 0.0.0.0"
 	local leaked=0
 	local services=(
@@ -86,8 +86,6 @@ assert_mocks_not_host_published() {
 		mailpit
 		jaeger
 		otel-collector
-		yurucommu-a
-		yurucommu-b
 		minio
 		takosumi-cloud-worker
 		takosumi-kernel-worker

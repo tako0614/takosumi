@@ -59,7 +59,7 @@ fi
 
 PREVIEW=$(curl -sk --cacert "$CA" -X POST \
 	-H "Content-Type: application/json" \
-	-d '{"source":{"gitUrl":"https://github.com/tako0614/takos.git","ref":"main"}}' \
+	-d '{"source":{"gitUrl":"https://github.com/tako0614/takos-docs.git","ref":"main"}}' \
 	"$BASE/v1/install/preview")
 APP_ID=$(echo "$PREVIEW" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('appId',''))")
 COMMIT=$(echo "$PREVIEW" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('source',{}).get('commit',''))")
@@ -71,7 +71,7 @@ INSTALL_PAYLOAD=$(cat <<JSON
   "spaceId": "space_iso_${SUB_A:0:8}",
   "appId": "$APP_ID",
   "source": {
-    "gitUrl": "https://github.com/tako0614/takos.git",
+    "gitUrl": "https://github.com/tako0614/takos-docs.git",
     "ref": "main",
     "commit": "$COMMIT",
     "appManifestDigest": "$DIGEST"

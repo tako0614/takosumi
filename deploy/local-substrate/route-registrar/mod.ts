@@ -7,11 +7,10 @@
  *
  * Static / dynamic partition strategy (no Caddy @id required):
  *
- *   - Static routes (owned by Caddyfile): hosts like accounts.takos.test,
- *     kernel.takos.test, app.takos.test, etc. — these never match
- *     `<x>.app.takos.test`, where x is non-empty.
+ *   - Static routes (owned by Caddyfile): hosts like accounts.takos.test and
+ *     kernel.takos.test — these do not use the dynamic app suffix.
  *   - Dynamic routes (owned by us): any route whose first matcher's host
- *     ends in `.app.takos.test` AND is not exactly `app.takos.test`.
+ *     ends in `.app.takos.test`.
  *
  * Each tick:
  *   1. GET current srv0 routes.

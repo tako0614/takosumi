@@ -1,5 +1,12 @@
 # local-substrate architecture
 
+## Scope
+
+Takosumi (kernel + Accounts + cloud worker + dashboard SPA) の integration test
+専用。 Takos product (`takos-app` / `takos-git`) と yurucommu の direct service
+は外してあり、 各 product の動作確認は各 repo 内の test に委ねる。 詳細は
+[README.md "Scope — Takosumi-only"](../README.md#scope--takosumi-only) を参照。
+
 ## 三層の責務
 
 | 層                | 担当 container | 役割                                                                                                                              |
@@ -46,8 +53,7 @@ subdomain を扱う際は CoreDNS を Docker network の upstream DNS にも 据
 Phase 0–2 では単一 bridge network `takos-local-internal`。 Phase 3 で:
 
 - `takos-local-internal` — emulator / Caddy / CoreDNS / Pebble / kernel /
-  accounts / takos-app / Miniflare Worker mirrors。 `internal: true`
-  で外向き禁止
+  accounts / Miniflare Worker mirrors。 `internal: true` で外向き禁止
 - `takos-local-egress` — 実 cloud compute (Fargate / Cloud Run / …) を呼ぶ
   runtime-agent のみ join。 default gateway 経由で外向き可
 

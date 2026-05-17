@@ -53,9 +53,9 @@ const bindings = Object.fromEntries(
 // Sensible defaults if the operator forgot to set the basics.
 bindings.TAKOSUMI_ACCOUNTS_ISSUER ??= "https://cloud.takosumi.test";
 bindings.TAKOSUMI_ACCOUNTS_SUBJECT ??= "tsub_takosumi_cloud_local";
-bindings.TAKOSUMI_ACCOUNTS_CLIENT_ID ??= "takos-app-local";
+bindings.TAKOSUMI_ACCOUNTS_CLIENT_ID ??= "takosumi-cloud-local";
 bindings.TAKOSUMI_ACCOUNTS_REDIRECT_URIS ??=
-  "https://app.takos.test/oauth/callback";
+  "https://cloud.takosumi.test/sign-in/callback";
 bindings.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS ??= "closed";
 bindings.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET ??=
   "local-substrate-export-download-secret-v1";

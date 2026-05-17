@@ -6,7 +6,7 @@
 # Jaeger's /api/services for the span's service name to land.
 #
 # No application is instrumented yet — when accounts-service / kernel /
-# takos-app start exporting OTLP they'll appear in the same Jaeger UI
+# kernel start exporting OTLP they'll appear in the same Jaeger UI
 # without further plumbing.
 set -euo pipefail
 

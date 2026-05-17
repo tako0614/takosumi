@@ -10,12 +10,6 @@ takosumi.test:53 {
     errors
 }
 
-yurucommu.test:53 {
-    file /etc/coredns/zones/yurucommu.test.zone
-    log
-    errors
-}
-
 oauth-mock.test:53 {
     file /etc/coredns/zones/oauth-mock.test.zone
     log

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Surface-level link check for the docs sites served via Caddy.
 #
-# Walks the 4 docs surfaces the substrate ships (takos / takosumi /
-# accounts / takos-marketing) one-hop deep and fails if any internal
-# link returns 4xx/5xx — typical breakage when a docs section is
-# renamed without updating its siblings' nav.
+# Walks the docs surfaces the substrate ships (Takosumi docs + Accounts)
+# one-hop deep and fails if any internal link returns 4xx/5xx — typical
+# breakage when a docs section is renamed without updating its siblings'
+# nav.
 #
 # Scope is intentionally narrow:
 #   - Only same-origin <a href> follows (no external link probing).
@@ -26,9 +26,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 ROOTS=(
 	"https://takosumi.test/docs/"
-	"https://takos.takos.test/docs/"
 	"https://accounts.takos.test/"
-	"https://takos.takos.test/"
 )
 
 errors=0

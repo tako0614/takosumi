@@ -36,7 +36,7 @@ fi
 # 3. Caddy admin reachable + static routes preserved.
 # Static routes are owned by the Caddyfile; the registrar must never drop
 # them. We count routes with at least one host whose suffix is NOT
-# '.app.takos.test' as static.
+# '.app.takos.test' as dynamic app routes.
 # The Caddy admin API is intentionally NOT exposed to the host (δ23) — exec
 # into the caddy container to talk to it via the docker network instead.
 STATIC_COUNT=$(docker exec local-substrate-caddy-1 \
@@ -45,7 +45,7 @@ STATIC_COUNT=$(docker exec local-substrate-caddy-1 \
 import json, sys
 routes = json.load(sys.stdin) or []
 def hosts(r): return sum((m.get("host") or [] for m in (r.get("match") or [])), [])
-static = [r for r in routes if not any(h.endswith(".app.takos.test") and h != "app.takos.test" for h in hosts(r))]
+static = [r for r in routes if not any(h.endswith(".app.takos.test") for h in hosts(r))]
 print(len(static))
 ')
 if [[ -z "$STATIC_COUNT" || "$STATIC_COUNT" -lt 6 ]]; then

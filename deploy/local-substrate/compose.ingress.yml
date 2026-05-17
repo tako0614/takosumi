@@ -54,8 +54,6 @@ services:
       - ../../../takosumi/website/.output/public:/srv/takosumi-marketing:ro
       - ../../../takosumi/docs/.vitepress/dist:/srv/takosumi-docs:ro
       - ../../../takosumi-cloud/packages/dashboard-ui/.output/public:/srv/takosumi-cloud-dashboard:ro
-      - ../../../takos/website/.output/public:/srv/takos-marketing:ro
-      - ../../../yurucommu/site:/srv/yurucommu-marketing:ro
       - caddy-data:/data
       - caddy-config:/config
     ports:
@@ -74,18 +72,11 @@ services:
           - accounts.takos.test
           - kernel.takos.test
           - kernel-worker.takos.test
-          - app.takos.test
-          - git.takos.test
-          - agent.takos.test
           - takosumi.test
           - cloud.takosumi.test
-          - takos.test
-          - yurucommu.test
           - oauth-mock.test
           - mailpit.takos.test
           - jaeger.takos.test
-          - inst-a.takos.test
-          - inst-b.takos.test
 
 networks:
   takos-local-internal:

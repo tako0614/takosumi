@@ -1,8 +1,55 @@
 # Local-substrate smoke TODO
 
-Remaining items after the false-confidence cleanup pass. Each needs either
-upstream product work or a coordination call (out of scope of the test bed
-itself).
+Remaining items after the Takosumi-only slim (2026-05-17). Each needs either
+upstream product work or a coordination call (out of scope of the Takosumi test
+bed itself).
+
+## 筆頭: yurucommu / bundled-app の Takosumi-install 経路 (FOLLOW-UP TO SLIM)
+
+Takosumi-only 化に伴い `yurucommu-a` / `yurucommu-b` の直起動 + federation smoke
+(federation-smoke.sh / federation-follow.sh) を削除した。 結果として
+**federation を再 verify するには「Takosumi が yurucommu を install して
+miniflare 上で 2 instance 動かす」 形に組み直すしかない**。
+
+必要な infra:
+
+1. **`@takos/local-miniflare-workers` connector** —
+   `factories/local-substrate-factories.ts` に register。 worker@v1 manifest
+   spec を受けて miniflare instance を spawn し、 manifest が要求する D1 / R2 /
+   KV / Queue / DO binding を動的 allocate する。 現状 hand-rolled な
+   `takosumi-cloud-worker` / `takosumi-kernel-worker` と同じ pattern を generic
+   化する。
+2. **bundle build pipeline** — yurucommu / takos-app の repo に対して
+   `deno task build` / `wrangler build` を connector が起動し、 manifest の
+   `artifact.hash` に sha256 を埋めて install を続行できるようにする。
+3. **install-preview-mock の本物化** — 今は fixture JSON を返してるだけ。 本物の
+   Takosumi kernel に preview させて connector の解決パスを通す。
+4. **federation 復活 smoke** —
+   `yurucommu install x2 → allocated subdomain x2
+   → Follow→Accept poll` を新
+   federation-follow.sh で実現。
+
+予想工数 1-2 day。 これが landed したら yurucommu の federation 系 2 smoke を新
+architecture で復活させる (= test bed が「Takosumi 1 個」 を verify するための 1
+example として yurucommu install が走る形)。
+
+## Takos product side test bed (separate, owned by takos repo) — PLACEHOLDER
+
+Takosumi-only 化に伴い `takos-app` / `takos-git` の直起動 + `phase1.app.health`
+/ `prod-mirror.takos.*` / `private.lint` 系 smoke を削除した。
+
+Takos product 側の integration test 責務は分離した:
+
+- 各 product の **ユニット / Playwright / vitest** は対応 repo 内で従来通り 動く
+  (今回の slim で touch していない)
+- **「Takos product as a whole が動く」 integration test** が必要なら takos repo
+  自身が独立 test bed (`takos/deploy/<name>/`) を持つべき。 Takosumi
+  側はこれを再現する責務を負わない (= identity 分離)
+
+cross-link placeholder: 将来 takos repo 側で integration test bed が できたら、
+ここから link を貼る (現状 entry なし)。
+
+yurucommu / road-to-me / takos-apps 同様の方針 (= 各 product owner が 持つ)。
 
 ## Workers-profile kernel — LANDED (local Miniflare smoke as of 2026-05-17)
 
@@ -16,8 +63,8 @@ The local-substrate now runs that same bundle under Miniflare:
 1. `takosumi-kernel-worker-build` bundles
    `takosumi/deploy/cloudflare/src/worker.ts`.
 2. `takosumi-kernel-worker` serves it at `kernel-worker.takos.test` during the
-   default postgres-profile smoke so the normal Takos product stack can keep
-   using the Deno+Postgres kernel at `kernel.takos.test`.
+   default postgres-profile smoke so the Deno+Postgres kernel remains available
+   at `kernel.takos.test` for side-by-side parity checks.
 3. `kernel-workers` is the replacement workers-profile service, aliasing itself
    as `kernel` when `--profile workers` is selected.
 4. `scripts/workers-cli-smoke.sh` now verifies both workerd code paths: the
@@ -37,40 +84,15 @@ subject A's installation must be non-200). The upstream fix lives in
 `account-session.ts`). CI runs the strict smoke directly, so any regression back
 to the open behavior is a hard FAIL.
 
-## Full ActivityPub Follow → Accept federation smoke — LANDED (strict as of 2026-05-17)
+## ActivityPub Follow → Accept federation smoke — RETIRED (slim 2026-05-17)
 
-`scripts/federation-smoke.sh` brings up `yurucommu-a` and `yurucommu-b` on
-inst-a.takos.test / inst-b.takos.test and verifies:
+旧 `scripts/federation-smoke.sh` + `scripts/federation-follow.sh` は yurucommu-a
+/ yurucommu-b の compose 直起動と一緒に削除済み。 過去 once LANDED していた full
+Follow → Accept smoke は git history ( `yurucommu local-substrate-only` 系
+commit) から参照可能。
 
-- both nodeinfo + webfinger respond
-- cross-instance reach through Caddy
-
-`scripts/federation-follow.sh` now covers the full happy path:
-
-1. **No public signup endpoint exists.** yurucommu is a single-user instance, so
-   `POST /api/auth/login` returns the pre-existing `owner` actor (or creates a
-   default "tako" owner the first time) gated on a PBKDF2-hashed
-   `AUTH_PASSWORD_HASH` env var. `POST /api/auth/accounts` creates sub-accounts
-   but requires an already-signed-in actor. So provisioning two distinct
-   subjects on inst-a vs inst-b means each instance gets the same "tako" owner
-   under a separate `APP_URL`, which is fine for federation testing (the actors
-   have different `ap_id`s).
-2. **`POST /api/auth/login` now has deterministic local-substrate fixtures** in
-   `env/yurucommu-{a,b}.env`, so the smoke can create / reuse each instance's
-   default owner actor with one known fixture password.
-3. **`POST /api/follow` is the internal create-Follow hook.** The strict smoke
-   reaches it with a valid session and body, and yurucommu's
-   local-substrate-only guard allows HTTPS `*.takos.test` actor fetches only
-   when `YURUCOMMU_ENABLE_LOCAL_SUBSTRATE_REMOTE_FETCHES=true` and local DNS
-   resolves to `127.0.0.1` or Docker bridge `172.16.0.0/12`.
-4. **Deno mode now has local delivery queue bindings.**
-   `YURUCOMMU_ENABLE_DENO_DELIVERY_QUEUE=true` attaches an in-memory
-   Queue-compatible drain in `src/backend/server.ts`, so the existing Worker
-   queue path runs locally without adding remote POSTs to request handlers.
-5. **The strict assertion polls accepted relations.** The script fails unless
-   inst-b's followers collection contains inst-a and inst-a's following
-   collection contains inst-b, proving Follow delivery, Accept emission, and
-   accepted-state finalization.
+復活 path は上記「筆頭: yurucommu / bundled-app の Takosumi-install 経路」
+の通り、 Takosumi-install 化が前提。
 
 ## brand-tokens JSR package (D13)
 
@@ -90,10 +112,11 @@ landing PRs across multiple repos).
 
 scripts/smoke.sh has a `run_script <label> <cmd>` helper that captures
 stdout+stderr to `$SMOKE_LOG_DIR/<label>.log` on failure. CI uploads that dir as
-an artifact. Today the helper is plumbed into a few key checks (oauth, passkey,
-stripe, federation, kernel-deploy). The full refactor to per-script files under
-`scripts/smoke.d/*.sh` with auto- discovery is mechanical but bigger; not
-strictly necessary now that log capture works.
+an artifact. Today the helper is plumbed into a few key checks (OAuth replay,
+workers, registrar, MinIO, migrations, OTel, k6, mailpit, Stripe, and kernel
+deploy). The full refactor to per-script files under `scripts/smoke.d/*.sh` with
+auto-discovery is mechanical but bigger; not strictly necessary now that log
+capture works.
 
 ## wrangler dev --remote
 

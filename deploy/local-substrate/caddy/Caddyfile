@@ -41,13 +41,6 @@ takosumi.test {
 	}
 }
 
-takos.test {
-	import static_site /srv/takos-marketing
-}
-yurucommu.test {
-	import static_site /srv/yurucommu-marketing
-}
-
 # ===== Tooling / observability =============================================
 oauth-mock.test {
 	import proxy_site oauth-mock:8789
@@ -57,14 +50,6 @@ mailpit.takos.test {
 }
 jaeger.takos.test {
 	import proxy_site jaeger:16686
-}
-
-# ===== yurucommu federation pair (inst-a / inst-b) =========================
-inst-a.takos.test {
-	import proxy_site yurucommu-a:8791
-}
-inst-b.takos.test {
-	import proxy_site yurucommu-b:8791
 }
 
 # ===== cloud.takosumi.com mirror — SPA + worker split ======================
@@ -97,11 +82,7 @@ kernel.takos.test {
 kernel-worker.takos.test {
 	reverse_proxy takosumi-kernel-worker:8788
 }
-app.takos.test {
-	reverse_proxy takos-app:8787
-}
-git.takos.test {
-	reverse_proxy takos-git:8790
-}
 
 # Phase 3 で route-registrar が *.app.takos.test に動的 route を追加する。
+# (これは Takosumi が deploy する app の dynamic subdomain。 Takos product
+# / yurucommu service direct ではない。)

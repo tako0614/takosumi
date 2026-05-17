@@ -56,7 +56,7 @@ export function installPreview() {
     PREVIEW_URL,
     JSON.stringify({
       source: {
-        gitUrl: "https://github.com/tako0614/takos.git",
+        gitUrl: "https://github.com/tako0614/takos-docs.git",
         ref: "main",
       },
     }),
