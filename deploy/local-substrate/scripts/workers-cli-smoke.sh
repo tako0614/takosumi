@@ -118,17 +118,29 @@ ISSUER=$(echo "$DISC" | python3 -c "import json,sys;print(json.loads(sys.stdin.r
 # 5. R2 export download route is worker-owned, not SPA fallback. A deliberately
 #    bad signature should be rejected by the Worker with JSON, proving Caddy
 #    forwards the signed export path to the Accounts Worker.
-EXPORT_ROUTE=$(curl -sk --cacert "$CA" -o /tmp/accounts-export-route-smoke.json -w "%{http_code}" \
-	"https://cloud.takosumi.test/__takosumi/exports/missing-object.json?expires=4102444800000&sig=bad")
-[[ "$EXPORT_ROUTE" == "403" ]] || {
-	echo "FAIL: /__takosumi/exports did not return Worker signature rejection (status=$EXPORT_ROUTE body=$(cat /tmp/accounts-export-route-smoke.json))" >&2
-	exit 1
-}
-python3 - /tmp/accounts-export-route-smoke.json <<'PY' || { echo "FAIL: /__takosumi/exports did not return JSON error" >&2; exit 1; }
+EXPORT_ROUTE_STATUS=""
+EXPORT_ROUTE_BODY="/tmp/accounts-export-route-smoke.json"
+probe_export_route() {
+	EXPORT_ROUTE_STATUS=$(curl -sk --cacert "$CA" -o "$EXPORT_ROUTE_BODY" -w "%{http_code}" \
+		"https://cloud.takosumi.test/__takosumi/exports/missing-object.json?expires=4102444800000&sig=bad")
+	[[ "$EXPORT_ROUTE_STATUS" == "403" ]] || return 1
+	python3 - "$EXPORT_ROUTE_BODY" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d.get("error") == "invalid_export_download_signature", d
 PY
+}
+
+if ! probe_export_route; then
+	echo "WARN: /__takosumi/exports did not hit the Accounts Worker; recreating Caddy once to load current routes" >&2
+	docker compose --project-directory "$SUBSTRATE_DIR" -f "$SUBSTRATE_DIR/compose.ingress.yml" \
+		up -d --force-recreate caddy >/dev/null
+	sleep 3
+fi
+if ! probe_export_route; then
+	echo "FAIL: /__takosumi/exports did not return Worker signature rejection (status=$EXPORT_ROUTE_STATUS body=$(cat "$EXPORT_ROUTE_BODY"))" >&2
+	exit 1
+fi
 
 # 6. D1 binding semantics — verify the sqlite file underneath miniflare's
 #    D1 emulator has the json1 extension AND that a real INSERT-then-
