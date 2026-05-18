@@ -7,7 +7,7 @@ import {
   createRoute53Provider,
   InMemoryRoute53Lifecycle,
   type Route53LifecycleClient,
-} from "../shape-providers/custom-domain/route53.ts";
+} from "@takos/takosumi-plugins/shape-providers/custom-domain/route53";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_CUSTOM_DOMAIN } from "./_kinds.ts";
 

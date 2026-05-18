@@ -1,0 +1,23 @@
+{
+  "name": "@takos/takosumi-aws-providers",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts",
+    "./worker": "./src/worker-aws-fargate.ts",
+    "./object-store": "./src/object-store-aws-s3.ts",
+    "./postgres": "./src/postgres-aws-rds.ts",
+    "./custom-domain": "./src/custom-domain-aws-route53.ts"
+  },
+  "imports": {
+    "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
+    "@takos/takosumi-plugins/shape-providers/web-service/aws-fargate": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/web-service/aws-fargate",
+    "@takos/takosumi-plugins/shape-providers/object-store/aws-s3": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/object-store/aws-s3",
+    "@takos/takosumi-plugins/shape-providers/database-postgres/aws-rds": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/database-postgres/aws-rds",
+    "@takos/takosumi-plugins/shape-providers/custom-domain/route53": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/custom-domain/route53"
+  },
+  "tasks": {
+    "check": "bash -lc 'find . -name \"*.ts\" ! -name \"*_test.ts\" -print0 | xargs -0 deno check'",
+    "test": "deno test --allow-all"
+  }
+}
