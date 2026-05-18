@@ -60,25 +60,26 @@ warning[slow-types]: exported function has slow types
   ]);
 });
 
-Deno.test("validateDryRunDiagnostics accepts the known kernel dynamic imports", () => {
+Deno.test("validateDryRunDiagnostics rejects dynamic imports from the kernel package after marketplace deletion", () => {
   const kernel = JSR_PUBLISH_PACKAGES.find((packageInfo) =>
     packageInfo.name === "@takos/takosumi-kernel"
   );
   assert.ok(kernel);
 
+  // Wave 9 Phase C deleted the plugin marketplace + dynamic loader paths.
+  // The kernel package no longer accepts any dynamic-import warnings; if a
+  // future change reintroduces one it must explicitly add the path back to
+  // `acceptedWarnings` in the publish spec.
   const diagnostics = validateDryRunDiagnostics(
     kernel,
     `
 warning[unanalyzable-dynamic-import]: unable to analyze dynamic import
   --> /workspace/packages/kernel/src/plugins/loader.ts:26:33
-
-warning[unanalyzable-dynamic-import]: unable to analyze dynamic import
-  --> /workspace/packages/kernel/src/plugins/marketplace.ts:175:23
 `,
   );
 
-  assert.equal(diagnostics.ok, true);
-  assert.deepEqual(diagnostics.errors, []);
+  assert.equal(diagnostics.ok, false);
+  assert.equal(diagnostics.errors.length, 1);
 });
 
 Deno.test("validateDryRunDiagnostics rejects unexpected publish warnings", () => {
