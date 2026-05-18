@@ -2,9 +2,9 @@
 
 This repository is **Takosumi**, a self-hostable PaaS. It reads `.takosumi.yml`
 from source, creates an Installation in a Space, and records each apply as a
-Deployment. It contains the type contract, the PaaS kernel, the shape / provider
-plugin host, the runtime-agent, the canonical installer, and the CLI as co-equal
-workspace packages, all consumable from JSR.
+Deployment. It contains the type contract, the PaaS kernel, the materializer
+host, the runtime-agent, the canonical installer, the CLI, and six per-cloud
+provider packages as co-equal workspace members, all consumable from JSR.
 
 Canonical contract:
 [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (本
@@ -16,13 +16,19 @@ workspace の `packages/contract/`)。
 takosumi/
 ├── deno.json                (workspace root, 自身は publish しない)
 ├── packages/
-│   ├── contract/            @takos/takosumi-contract — AppSpec / ProviderPlugin の型契約
-│   ├── kernel/              @takos/takosumi-kernel — HTTP server + installer pipeline + storage + workers
-│   ├── plugins/             @takos/takosumi-plugins — component kinds / providers / factories
-│   ├── installer/           @takos/takosumi-installer — .takosumi.yml parser + git fetch + deploy client
-│   ├── runtime-agent/       @takos/takosumi-runtime-agent — kernel ↔ tenant 間の gateway-manifest runtime
-│   ├── cli/                 @takos/takosumi-cli — `takosumi install` / `takosumi deploy` / `takosumi server` 等
-│   └── all/                 @takos/takosumi — umbrella (上記 6 つを re-export)
+│   ├── contract/             @takos/takosumi-contract       — AppSpec / KernelPlugin の型契約
+│   ├── kernel/               @takos/takosumi-kernel         — HTTP server + installer pipeline + storage + workers
+│   ├── plugins/              @takos/takosumi-plugins        — component kind catalog + materializer host + factories
+│   ├── installer/            @takos/takosumi-installer      — .takosumi.yml parser + git fetch + deploy client
+│   ├── runtime-agent/        @takos/takosumi-runtime-agent  — kernel ↔ tenant 間の gateway-manifest runtime
+│   ├── cli/                  @takos/takosumi-cli            — `takosumi install` / `takosumi deploy` / `takosumi server` 等
+│   ├── cloudflare-providers/ @takos/takosumi-cloudflare-providers   — Cloudflare 用 KernelPlugin factories
+│   ├── aws-providers/        @takos/takosumi-aws-providers          — AWS 用 KernelPlugin factories
+│   ├── gcp-providers/        @takos/takosumi-gcp-providers          — GCP 用 KernelPlugin factories
+│   ├── kubernetes-providers/ @takos/takosumi-kubernetes-providers   — Kubernetes 用 KernelPlugin factory
+│   ├── deno-deploy-providers/@takos/takosumi-deno-deploy-providers  — Deno Deploy 用 KernelPlugin factory
+│   ├── selfhost-providers/   @takos/takosumi-selfhost-providers     — Self-host (docker / systemd / filesystem) 用 KernelPlugin factories
+│   └── all/                  @takos/takosumi                — umbrella (上記 6 つを re-export、cloud provider 群は別 install)
 ├── docs/, deploy/, fixtures/
 └── README.md, CONVENTIONS.md, CHANGELOG.md
 ```
@@ -38,6 +44,18 @@ takosumi/
 これ以上の名詞は基本的に仕様 surface に出さない。 内部に `Resource` / `Secret` /
 `Event` table はあるが public concept ではない。
 
+## Component connection は publish / listen のみ
+
+AppSpec の各 component は 2 つの edge だけを持つ:
+
+- `publish: [<namespacePath>]` — 自分が出力する material を namespace registry
+  に登録する
+- `listen: { <namespacePath>: { as, prefix?, mount? } }` — 他 component の
+  material を受け取り、 env / mount 等の形で注入する
+
+旧 `use:` edge は廃止。 `${ref:...}` / `${secret-ref:...}` / `${bindings.*}`
+等の interpolation syntax も AppSpec / docs / kernel から完全除去された。
+
 ## 基本方針
 
 - **Source-to-runtime engine 専念**: kernel の責務は `.takosumi.yml` を読んで
@@ -51,7 +69,9 @@ takosumi/
 - **Public API surface は 5 endpoint だけ**: `POST /v1/installations/dry-run` /
   `POST /v1/installations` / `POST /v1/installations/{id}/deployments/dry-run` /
   `POST /v1/installations/{id}/deployments` /
-  `POST /v1/installations/{id}/rollback`。
+  `POST /v1/installations/{id}/rollback`。 HTTP status は `failed_precondition`
+  = **409**、 `resource_exhausted` = **413**。 Idempotency-Key header は
+  v1 surface に含まれない (廃止)。
 - **Substitutability で kernel pure を justify**:
   「持たないものリスト」(workflow / identity / billing / project convention)
   は、 kernel が Cloudflare Workers / Kubernetes / bare metal / 自前 runtime
@@ -70,30 +90,35 @@ takosumi/
   同じ)。 AppSpec の `component.build` は最小 recipe のみ表現可能。
 - **Takos 中立**: takos-git / Takos 固有 service ID への直接依存は kernel core
   から完全に除去済み。
-- **Component kind catalog は Takosumi 所有**: 新 kind は RFC ベース
-  (`CONVENTIONS.md` §6)。 第三者は新 kind を増やすのではなく既存 kind の
-  provider を追加する。 workflow / cron / hook を kernel-known kind として
-  追加することは行わない。
-- **Kind catalog は JSON-LD で公開**: 5 built-in kind の正本は
-  `spec/contexts/kinds/v1/*.jsonld` (= `https://takosumi.com/kinds/v1/<name>`)
-  で publish され、 AppSpec parser は short name (= `worker`) と full URI (=
-  `https://operator.example.com/kinds/lambda` 等の operator-defined kind)
-  の両方を受理する。 詳細は
-  [docs/reference/json-ld-kind-catalog.md](./docs/reference/json-ld-kind-catalog.md)。
-- **Plugin contract は plain array attach**: operator は
-  `createPaaSApp({ plugins: [...] })` に `KernelPlugin` を返す factory function
-  の plain array を渡す (= Vite plugin pattern)。 `KernelPlugin` interface は
-  `name` / `version` / `provides[]` (= kind URI) / `capabilities` / `apply` /
-  `destroy` / `onInstallStart` / `onInstallComplete` / `onDeploymentStart` /
-  `onDeploymentComplete` を持つ。 plugin marketplace / signed manifest /
-  trusted publisher key / port-based plugin host / `createAdapters()` /
-  `TakosumiKernelPluginManifest` は kernel に持たない。
-- **credential を kernel core に持たない**: `factories.ts` 経由で operator が
-  inject する。
+- **Component kind catalog は extensible**: 新 kind は JSON-LD で URI publish +
+  materializer 実装 で成立する (`CONVENTIONS.md` §6)。 catalog は 4 frozen kind
+  ではなく、 任意 operator が任意 domain で新 kind を発行できる。 各 kind の
+  JSON-LD document が **spec / publishes / listens / outputs を一体宣言** する。
+  Takosumi curated 4 kind の正本 URI は `https://takosumi.com/kinds/v1/<name>`
+  (= `worker` / `postgres` / `object-store` / `custom-domain`)。 `oidc` kind
+  は takosumi-cloud に移動し、 本 repo には JSON-LD も materializer も無い。
+- **Materializer = KernelPlugin | InlineMaterializer**: kind 実装は 2 形態を
+  受理する。 (1) `KernelPlugin` factory を返す plain array (= Vite plugin pattern,
+  cloud provider package が提供する形式) と (2) `createPaaSApp({ materializers:
+  [...] })` に inline 関数を渡す形式。 後者は operator が任意 JS で書ける小さい
+  recipe で十分なケース用。 plugin convention は実装の 1 形態に過ぎず、 inline
+  関数でも contract を満たせば成立する。
+- **Cloud provider plugins は別 package**: AWS / GCP / Cloudflare / Kubernetes /
+  Deno Deploy / Self-host の materializer 実装は
+  `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`
+  に分離して publish する。 takosumi core (kernel / plugins / cli) は cloud SDK
+  に依存しない。 operator は必要な provider package を import して `plugins:
+  [...]` に attach する。 plugin marketplace / signed manifest / trusted publisher
+  key / port-based plugin host / `createAdapters()` /
+  `TakosumiKernelPluginManifest` / `KernelPluginPortKind` は kernel に持たない。
+- **credential を kernel core に持たない**: provider package factory 経由で
+  operator が opts として inject する。
 - **identity / billing は kernel の外側**: per-Installation OIDC client 発行は
-  Takosumi Accounts (operator-owned identity plane) の責務。 AppSpec が
-  `components.<name>.kind: oidc` を宣言すると、 kernel installer が Installation
-  作成時に Takosumi Accounts に client を登録し、 worker に env で渡す。
+  Takosumi Accounts (operator-owned identity plane) の責務。 Takosumi Accounts
+  は `operator.identity.oidc` namespace path に OIDC client material を publish
+  し、 worker は `listen: { operator.identity.oidc: { as: env } }` で標準 env
+  (`OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` /
+  `OIDC_REDIRECT_URIS`) を受け取る。 kernel core 自身は OIDC client を発行しない。
 - **signing 機構を kernel が持たない**: ecosystem trust model は 「TLS + digest
   pin + 1 signing domain (OIDC)」 で、 OIDC ID token signing と install launch
   token signing は両方とも **Takosumi Accounts** が所有する。 kernel が直接
@@ -101,20 +126,26 @@ takosumi/
   publisher signing ではなく **operator-pinned sha256 digest** で fail-closed
   に検証する。 詳細は
   [docs/reference/supply-chain-trust.md](./docs/reference/supply-chain-trust.md)。
-- 設計語彙は contract (AppSpec / Component / kind / use / build / provider /
-  Installation / Deployment) をそのまま採用。
+- 設計語彙は contract (AppSpec / Component / kind / publish / listen / build /
+  materializer / Installation / Deployment) をそのまま採用。
 
 ## JSR publish layout
 
-| Package                         | Version | 内容                                                        |
-| ------------------------------- | ------- | ----------------------------------------------------------- |
-| `@takos/takosumi-contract`      | 3.0.0   | AppSpec / Component / ProviderPlugin / Installer API 型契約 |
-| `@takos/takosumi-kernel`        | 1.0.0   | HTTP server + installer pipeline + storage + workers        |
-| `@takos/takosumi-plugins`       | 1.0.0   | component kind catalog + provider plugins + factories       |
-| `@takos/takosumi-installer`     | 1.0.0   | .takosumi.yml parser + git fetch + deploy client            |
-| `@takos/takosumi-runtime-agent` | 1.0.0   | kernel ↔ tenant gateway-manifest runtime                    |
-| `@takos/takosumi-cli`           | 1.0.0   | CLI (`takosumi install` / `takosumi deploy` 等)             |
-| `@takos/takosumi`               | 1.0.0   | umbrella (上記 6 つを再公開)                                |
+| Package                                | Version | 内容                                                                  |
+| -------------------------------------- | ------- | --------------------------------------------------------------------- |
+| `@takos/takosumi-contract`             | 3.0.0   | AppSpec / Component / KernelPlugin / Installer API 型契約             |
+| `@takos/takosumi-kernel`               | 1.0.0   | HTTP server + installer pipeline + storage + workers                  |
+| `@takos/takosumi-plugins`              | 1.0.0   | component kind catalog + materializer host + factories                |
+| `@takos/takosumi-installer`            | 1.0.0   | .takosumi.yml parser + git fetch + deploy client                      |
+| `@takos/takosumi-runtime-agent`        | 1.0.0   | kernel ↔ tenant gateway-manifest runtime                              |
+| `@takos/takosumi-cli`                  | 1.0.0   | CLI (`takosumi install` / `takosumi deploy` 等)                       |
+| `@takos/takosumi-cloudflare-providers` | 1.0.0   | Cloudflare (Workers / R2 / DNS) `KernelPlugin` factories              |
+| `@takos/takosumi-aws-providers`        | 1.0.0   | AWS (Fargate / S3 / RDS / Route53) `KernelPlugin` factories           |
+| `@takos/takosumi-gcp-providers`        | 1.0.0   | GCP (Cloud Run / GCS / Cloud SQL) `KernelPlugin` factories            |
+| `@takos/takosumi-kubernetes-providers` | 1.0.0   | Kubernetes Deployment + Service `KernelPlugin` factory                |
+| `@takos/takosumi-deno-deploy-providers`| 1.0.0   | Deno Deploy `KernelPlugin` factory                                    |
+| `@takos/takosumi-selfhost-providers`   | 1.0.0   | Self-host (docker / systemd / filesystem / minio) factories           |
+| `@takos/takosumi`                      | 1.0.0   | umbrella (core 6 つを再公開、 provider packages は別 install)         |
 
 > Note: `@takos/` JSR scope は Takos が publish する **reference distribution**
 > であり、 authority は publisher ではなく contract (`@takos/takosumi-contract`)
@@ -144,6 +175,7 @@ takosumi install --remote https://kernel.example.com \
 - Format: `deno fmt`
 - Test: `deno test --allow-all` (workspace 全体)
 - Type check: `deno task check`
+- JSON-LD lint: `deno task lint:json-ld`
 - Per-package: `cd packages/<name> && deno task check / test`
 
 ## 依存関係
@@ -151,27 +183,30 @@ takosumi install --remote https://kernel.example.com \
 - **Upstream**: `@takos/takosumi-contract` (型契約のみ、本 workspace の
   `packages/contract/`)
 - **Downstream consumers**: 任意の operator が JSR から install して self-host
+- **Cloud provider packages**: `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,
+  deno-deploy,selfhost}-providers` は本 repo の workspace member であり、 各々
+  独立 JSR package として publish される。 operator は必要な cloud だけを import
+  する。
 - **Takosumi Accounts (`takosumi-cloud/`)**: identity / billing / OIDC issuer /
   Installation ledger を保有する operator account plane の reference 実装。
-  kernel installer は Installation 作成時に `components.<name>.kind: oidc` を
-  検出すると Takosumi Accounts API を呼んで per-Installation OIDC client を
-  発行する。
+  Takosumi Accounts が `operator.identity.oidc` namespace path に OIDC client
+  material を publish し、 worker は `listen` で受け取る。 kernel 側に
+  `kind: oidc` JSON-LD も materializer も持たない (= takosumi-cloud に移動)。
 - **Takos ecosystem**: Takos product distribution は本 repo の上に Takos 固有
   artifact (deploy/distributions/*.json 等) を被せる。 これは `takos/` に残る
   別レイヤー。
 
 ## 作業ルール
 
-- 新 provider 追加時は `CONVENTIONS.md` §4 の手順に従う
-  (`packages/plugins/src/providers/<kind>/<provider-id>.ts` 追加 +
-  `factories.ts` の production 配線 + fixture)。
+- 新 cloud provider 追加時は `CONVENTIONS.md` §4 の手順に従う
+  (`packages/<cloud>-providers/src/<kind>-<provider>.ts` 追加 + `mod.ts`
+  re-export + tests)。
 - 新 component kind を増やしたい場合は `CONVENTIONS.md` §6 の RFC プロセスに
-  従う (現在 catalog は 5 種 frozen: `worker` / `postgres` / `object-store` /
-  `oidc` / `custom-domain`)。
+  従う (= JSON-LD で URI publish + materializer 実装 の 2 段を踏む)。 catalog
+  は frozen ではなく、 operator-defined kind も受理する。
 - kernel 修正は `packages/kernel/` 内で完結させる。 Takos 固有 ID (`takos-app`
   等) は再導入しない。
-- contract 変更を要する change は upstream `takos/takosumi-contract` repo 側で
-  coordination する。
+- contract 変更を要する change は `packages/contract/` で coordination する。
 - process role 名は `takosumi-{api,worker,router,runtime-agent,log-worker}`
   で固定。
 - AppSpec の `component.build` は CI workflow ではない。 `jobs:` / `steps:` /

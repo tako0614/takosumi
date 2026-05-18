@@ -7,32 +7,38 @@ catalog** と **provider plugin**、 **template** の命名・形状規約を定
 
 ## 1. Component kind catalog principle
 
-- **Takosumi が component kind catalog を所有する。** Component kind (= portable
-  component contract) は Takosumi contract / kernel が ownership を持ち、
-  `takosumi-contract` の `ComponentKind<TSpec, TOutputs, TCapability>` を満たす
-  形で `packages/plugins/src/kinds/` に登録する。
-- **第三者は provider を拡張する (kind を増やすのではなく)。** 新しいクラウド /
-  ランタイム対応は **既存 kind の provider plugin** を増やすことで行う。 新 kind
-  そのものを増やすのは RFC が必要 (§6 参照)。
-- **Capability は advisory metadata。** provider plugin は `capabilities`
-  フィールドで自分が提供する optional な機能 (versioning / scale-to-zero など)
-  を宣言する。 AppSpec が要求する capability を満たせない provider は selection
-  から除外される。
+- **Component kind catalog は extensible である。** Component kind (= portable
+  component contract) は **JSON-LD document** で publish され、 AppSpec parser
+  は short alias (= `worker`) と full URI (= `https://operator.example.com/kinds/
+  lambda`) の両方を受理する。 Takosumi curated 4 kind の正本 URI は
+  `https://takosumi.com/kinds/v1/<name>`。 各 .jsonld は **spec /
+  publishes / listens / outputs を 1 document で一体宣言する**。
+- **Takosumi が curate するのは 4 kind だけ。** `worker` / `postgres` /
+  `object-store` / `custom-domain` の 4 種は本 repo の `spec/contexts/kinds/v1/
+  *.jsonld` に curated として ship される。 旧 `oidc` kind は takosumi-cloud
+  (operator account plane) に移動し、 本 repo には JSON-LD も materializer も
+  持たない。
+- **第三者は kind / provider のどちらでも拡張できる。** 新 cloud / runtime 対応
+  だけで済む場合は **既存 kind の provider package** を増やす方が軽い。 portable
+  resource type そのものが新規の場合は **新 kind を JSON-LD で publish + 任意の
+  materializer 形態で実装**する (§6 参照)。
+- **Capability は advisory metadata。** materializer は `capabilities` フィールド
+  で自分が提供する optional な機能 (versioning / scale-to-zero など) を宣言する。
+  AppSpec が要求する capability を満たせない materializer は selection から
+  除外される。
 
-現状の curated kind は **5 種で frozen**:
+Takosumi curated kind:
 
-| Kind            | description                                              |
-| --------------- | -------------------------------------------------------- |
-| `object-store`  | bucket-style object storage; S3-class API portable       |
-| `worker`        | serverless HTTP service backed by a JS bundle or image   |
-| `postgres`      | managed PostgreSQL instance                              |
-| `custom-domain` | DNS + TLS-terminated public domain                       |
-| `oidc`          | OIDC consumer mount point (Installation-scoped client)   |
+| Kind            | description                                                          |
+| --------------- | -------------------------------------------------------------------- |
+| `worker`        | serverless HTTP service backed by a JS bundle artifact or image URI  |
+| `postgres`      | managed PostgreSQL instance                                          |
+| `object-store`  | bucket-style object storage; S3-class API portable                   |
+| `custom-domain` | DNS + TLS-terminated public domain                                   |
 
 正本 URI は `https://takosumi.com/kinds/v1/<name>` (= JSON-LD で publish)。
-AppSpec parser は short name (= `worker`) と full URI (=
-`https://operator.example.com/kinds/lambda` 等の operator-defined kind)
-の両方を受理する。
+operator-defined kind は任意 domain で URI を発行できる (= `https://operator.
+example.com/kinds/lambda` 等)。
 
 ## 2. Naming conventions
 
@@ -51,10 +57,10 @@ AppSpec parser は short name (= `worker`) と full URI (=
 
 ### Component kind id
 
-- kebab-case short name (`object-store`, `worker`, `postgres`, `custom-domain`,
-  `oidc`)
-- canonical full URI is `https://takosumi.com/kinds/v1/<name>` (JSON-LD)
-- breaking change は新 URI (= v2) を新規発行する (= 同じ short name に v2 を被
+- kebab-case short alias (`worker`, `postgres`, `object-store`, `custom-domain`)
+- canonical full URI is `https://takosumi.com/kinds/v1/<name>` (JSON-LD) for
+  Takosumi curated kinds; operator-defined kind は任意 URI を選べる
+- breaking change は新 URI (= v2) を新規発行する (= 同じ short alias に v2 を被
   せない)。 backwards-compatible な capability 追加は同じ URI のまま (capability
   list が open enum であることを利用する)
 
@@ -84,8 +90,9 @@ AppSpec parser は short name (= `worker`) と full URI (=
 
 ## 3. Output schema convention
 
-`outputs` (apply の戻り値) は `use:` edge で他 component に注入されるので、
-フィールド名と型は kind 全体で揃える。
+`outputs` (apply の戻り値) は kind の JSON-LD `publishes[]` に登録された
+material として namespace registry に publish される。 フィールド名と型は kind
+全体で揃える (= 同 kind 内の provider 横断で stable)。
 
 | Suffix / form        | meaning                                                          |
 | -------------------- | ---------------------------------------------------------------- |
@@ -106,63 +113,80 @@ secret://aws/credentials/access-key
 secret://gcp/cloud-sql/<instance>/password
 ```
 
-Reference resolution は kernel 側 secret-store adapter が担当する。 provider
-plugin は output schema の `*Ref` フィールドに reference URI を入れる。 AppSpec
-側 (= `.takosumi.yml`) に raw secret 値も `${secret-ref:...}` interpolation も
-登場しない。
+Reference resolution は kernel 側 secret-store adapter が担当する。 materializer
+は output schema の `*Ref` フィールドに reference URI を入れる。 AppSpec 側
+(= `.takosumi.yml`) に raw secret 値も、 placeholder interpolation も登場しない。
 
 ## 4. How to add a new provider for an existing kind
 
-operator-facing entry は **`KernelPlugin` plain array** に統一されている。
-provider 追加は次の手順に従う:
+operator-facing entry は **`KernelPlugin` plain array** に統一されている。 cloud
+provider は独立 package として ship されるため、 新規 cloud / runtime 対応は
+対応する provider package の中に factory を追加する形になる:
 
-1. `packages/plugins/src/bundled/<kind>-<provider>.ts` に `KernelPlugin` を返す
-   factory function を書く。 既存ファイル (例 `worker-cloudflare.ts`) を参考に
-   すると良い。
+1. `packages/<cloud>-providers/src/<kind>-<provider>.ts` に `KernelPlugin` を
+   返す factory function を書く。 既存ファイル (例 `packages/cloudflare-
+   providers/src/worker-cloudflare.ts`) を参考にすると良い。
 2. その kind の `Spec` 型と `Outputs` 型を import し、 `ProviderPlugin` を生成
    する factory を書く。 capability は配列 literal に
    `satisfies readonly XxxCapability[]` を付けて compile-time check する。
 3. lifecycle interface (`<Provider>LifecycleClient`) を同じファイルに定義する。
    テスト用の `InMemory<Provider>Lifecycle` クラスを用意し、 real client は
    runtime-agent 経由で inject する。
-4. `packages/plugins/src/bundled/mod.ts` に新 provider factory を export として
+4. `packages/<cloud>-providers/mod.ts` に新 provider factory を export として
    追加する。
-5. `tests/bundled_<kind>_<provider>_test.ts` を追加する。 最低 3 ケース (apply /
-   status / destroy + lifecycle interaction)。
+5. `packages/<cloud>-providers/tests/<kind>_<provider>_test.ts` を追加する。
+   最低 3 ケース (apply / status / destroy + lifecycle interaction)。
 6. cloud 用 production lifecycle が必要なら provider factory の opts 引数で
    runtime-agent / cloud client を渡し、 operator が `createPaaSApp({ plugins:
    [...] })` で plain array に渡す形を保つ。
 
+新規 cloud ごと package を起こす場合 (例: 新 PaaS) は `packages/<cloud>-
+providers/` を workspace member として deno.json に追加し、 `@takos/takosumi-
+<cloud>-providers` で JSR publish する。
+
 ## 5. How to RFC a new component kind
 
-新 component kind の追加には ecosystem RFC が必要。 以下を 1 つの PR にまとめる:
+新 component kind の追加には ecosystem RFC が必要。 catalog は extensible で、
+任意 domain に publish できるが、 **Takosumi curated catalog** (=
+`https://takosumi.com/kinds/v1/<name>`) に取り込みたい場合は次の手順:
 
-1. `packages/plugins/src/kinds/<kind>.ts` に Spec / Outputs / Capability 型と
-   `validateSpec` / `validateOutputs` を実装する。
-2. `packages/plugins/src/kinds/mod.ts` の bundled kind registry に追加する。
-3. その kind を実装する provider を **最低 2 つ** 用意する (portability の
-   不変式: 1 kind = ≥ 2 providers)。
-4. `tests/component_kind_<kind>_test.ts`, `tests/bundled_<kind>_<provider>_test.ts`
-   を整備する。
-5. `CONVENTIONS.md` (本ドキュメント) の §1 表を更新する。
-6. `docs/reference/component-kind-catalog.md` のユーザー向け docs に kind 解説
+1. `spec/contexts/kinds/v1/<name>.jsonld` に JSON-LD document を書き、 **spec
+   (JSON Schema 2020-12) / publishes / listens / outputs** を一体宣言する。
+2. `packages/plugins/src/kinds/<kind>.ts` に Spec / Outputs / Capability 型と
+   `validateSpec` / `validateOutputs` を実装する (= JSON-LD spec の TS 等価)。
+3. `packages/plugins/src/kinds/mod.ts` の curated kind registry に追加する。
+4. その kind を実装する materializer を **最低 2 つ** 用意する (portability の
+   不変式: 1 kind = ≥ 2 materializer)。 KernelPlugin factory として該当 cloud
+   provider package に追加するか、 operator が inline materializer で書ける
+   recipe を提示する。
+5. `tests/component_kind_<kind>_test.ts` (spec validate の境界ケース) +
+   各 materializer の test を整備する。
+6. `CONVENTIONS.md` (本ドキュメント) の §1 表を更新する。
+7. `docs/reference/component-kind-catalog.md` のユーザー向け docs に kind 解説
    ページを追加する。
-7. JSON-LD kind catalog (`spec/contexts/kinds/v1/<name>.jsonld`) を publish する
-   (= `https://takosumi.com/kinds/v1/<name>` で fetch 可能にする)。
 
-kind 追加は contract 側 (`takosumi-contract`) との coordination が必要な
-場合があるため、 PR description に upstream 影響範囲を明記すること。
+operator-defined kind (= `https://operator.example.com/kinds/<name>`) は
+Takosumi curated catalog に取り込まずに任意 domain で publish できる。 この
+場合 JSON-LD document を operator が serve し、 materializer を operator 自身が
+attach すれば成立する。
 
 ## 6. RFC process summary
 
-- 新 component kind は **JSON-LD で URI publish + plugin で provider 実装** の
-  2 段を踏む。 kind 名前空間は `https://takosumi.com/kinds/v1/<name>` (Takosumi
-  curated) と operator-defined URI (= `https://operator.example.com/kinds/...`)
-  の 2 種で運用される。
-- AppSpec parser は short name (= `worker`) と full URI の両方を受理し、 short
-  name は bundled kind に reserve される。
+- **新 component kind の追加は 2 段で成立する**: (1) JSON-LD document を任意
+  domain で publish (= kind URI を発行) + (2) **materializer 実装** を operator
+  が attach する。 materializer は `KernelPlugin` factory (= cloud provider
+  package が export する形) または `createPaaSApp({ materializers: [...] })`
+  に渡す **inline 関数** のどちらでも良い。 plugin convention は実装の 1 形態
+  に過ぎず、 contract (= input spec validate / output 返却 / publishes register)
+  を満たせば形は任意。
+- kind 名前空間は `https://takosumi.com/kinds/v1/<name>` (Takosumi curated) と
+  operator-defined URI (= `https://operator.example.com/kinds/...`) の 2 種で
+  運用される。
+- AppSpec parser は short alias (= `worker`) と full URI の両方を受理し、 short
+  alias は curated kind に reserve される。
 - 既存 kind の breaking change は新 URI を発行する (= v2 として publish)。
-  short name に v2 を被せない。
+  short alias に v2 を被せない。 capability list は open enum なので追加は
+  backwards-compatible。
 - workflow / cron / hook は kernel-known kind として **追加しない**。 これらは
   upstream automation の責務 (詳細は
   [Workflow Extension Design](./docs/reference/architecture/workflow-extension-design.md))。
