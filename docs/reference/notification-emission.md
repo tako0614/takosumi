@@ -17,7 +17,7 @@ queue を consume し、自前の配信チャネルに fan out する。
 このモデルの 2 つの帰結:
 
 - kernel は SMTP / Slack / webhook の credential を保持しない。 配信を operator
-  の外側スタックに委ねることは、 shape provider と同じ credential 境界 (project
+  の外側スタックに委ねることは、 provider plugin と同じ credential 境界 (project
   AGENTS.md 参照) と一致する。
 - 顧客が見るすべての notification は対応する kernel audit event を持つ。
   operator の外側スタックは、 kernel が先に signal として emit

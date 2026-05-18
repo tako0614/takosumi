@@ -18,7 +18,7 @@ pre-1.0 で、 minor bump も breaking change を含む可能性がある。
 | `@takos/takosumi-contract`      | 型契約 (semver、SemVer 適用)           |
 | `@takos/takosumi-kernel`        | HTTP server + apply pipeline + storage |
 | `@takos/takosumi-runtime-agent` | cloud connector / OS connector         |
-| `@takos/takosumi-plugins`       | shape catalog + provider plugins       |
+| `@takos/takosumi-plugins`       | component kind catalog + provider plugins |
 | `@takos/takosumi-cli`           | `takosumi` コマンド                    |
 | `@takos/takosumi`               | 上記 5 つの umbrella                   |
 
