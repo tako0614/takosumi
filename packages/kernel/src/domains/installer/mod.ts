@@ -62,12 +62,21 @@ import {
  * canonical adapter, {@link installerProviderRegistryFromPlugins}, derives
  * one of these from each `Component` and forwards it to the plugin
  * resolved via `provides[]`.
+ *
+ * Phase B: `upstreamOutputs` is a compile-only placeholder retained for
+ * the legacy adapter shim until Phase C replaces the pipeline with the
+ * namespace pub/sub registry (`listenedMaterials`).
  */
 export interface ProviderApplyContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly component: Component;
   readonly buildOutput?: DeploymentBuildArtifact;
+  /**
+   * Outputs from previously-applied components, keyed by component name.
+   * Replaced by `listenedMaterials` in Phase C; retained as a placeholder
+   * so the kernel pipeline compiles against the new contract.
+   */
   readonly upstreamOutputs: Readonly<
     Record<string, Readonly<Record<string, string>>>
   >;
@@ -76,9 +85,8 @@ export interface ProviderApplyContext {
 export interface ProviderApplyResult {
   readonly resource: DeploymentResource;
   /**
-   * Outputs the plugin exposes to downstream `use:` edges. For an `oidc`
-   * component this is `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` etc.; for a
-   * `postgres` component this is `host` / `port` / `database` / etc.
+   * Outputs the plugin emits to the namespace pub/sub registry (Phase B
+   * model). Replaces the prior `use:` edge outputs.
    */
   readonly outputs: Readonly<Record<string, string>>;
 }
@@ -634,6 +642,10 @@ export function installerProviderRegistryFromPlugins(
           `no kernel plugin advertises kind ${kind} (component ${context.componentName})`,
         );
       }
+      // Phase B: the namespace pub/sub model replaces use-edge outputs with
+      // pre-resolved listened materials. The placeholder shim below maps
+      // `upstreamOutputs` into an empty `listenedMaterials` record; Phase C
+      // will resolve `Component.listen` against the registry properly.
       const result = await plugin.apply({
         installationId: context.installationId,
         componentName: context.componentName,
@@ -644,7 +656,7 @@ export function installerProviderRegistryFromPlugins(
             uri: context.buildOutput.uri,
           }
           : undefined,
-        upstreamOutputs: context.upstreamOutputs,
+        listenedMaterials: {},
       });
       return {
         resource: {
@@ -751,25 +763,37 @@ function topologicalOrder(appSpec: AppSpec): readonly string[] {
   const visited = new Set<string>();
   const visiting = new Set<string>();
 
+  // Phase B: build a publisher index so the topology walks publish/listen
+  // edges (listener → publisher). The yaml-parser has already rejected
+  // cycles and duplicate publishers, but we re-check here so the
+  // installer also surfaces a precise diagnostic if it is handed a
+  // pre-parsed AppSpec from a non-canonical source.
+  const publisherByPath = new Map<string, string>();
+  for (const [name, component] of Object.entries(appSpec.components)) {
+    if (!component.publish) continue;
+    for (const nsPath of component.publish) {
+      publisherByPath.set(nsPath, name);
+    }
+  }
+
   const visit = (node: string) => {
     if (visited.has(node)) return;
     if (visiting.has(node)) {
       throw new InstallerPipelineError(
         "failed_precondition",
-        `use-edge cycle detected at component ${node}`,
+        `publish/listen cycle detected at component ${node}`,
       );
     }
     visiting.add(node);
-    const use = appSpec.components[node]?.use;
-    if (use) {
-      for (const dependency of Object.keys(use)) {
-        if (!(dependency in appSpec.components)) {
-          throw new InstallerPipelineError(
-            "failed_precondition",
-            `component ${node} uses unknown target ${dependency}`,
-          );
-        }
-        visit(dependency);
+    const listen = appSpec.components[node]?.listen;
+    if (listen) {
+      for (const nsPath of Object.keys(listen)) {
+        const publisher = publisherByPath.get(nsPath);
+        // External publisher (= no AppSpec component owns this path) is
+        // a no-op edge in topology; Phase C resolves the listened
+        // material from the registry directly.
+        if (publisher === undefined) continue;
+        visit(publisher);
       }
     }
     visiting.delete(node);
