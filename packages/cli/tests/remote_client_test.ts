@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { callKernel } from "../src/remote_client.ts";
 
-Deno.test("callKernel sends X-Idempotency-Key on write requests", async () => {
+Deno.test("callKernel sends auth + JSON body on write requests", async () => {
   const originalFetch = globalThis.fetch;
   let observedHeaders: Headers | undefined;
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -20,20 +20,21 @@ Deno.test("callKernel sends X-Idempotency-Key on write requests", async () => {
       token: "installer-token",
       path: "/v1/installations",
       body: { spaceId: "space_1", source: { kind: "local", url: "./" } },
-      idempotencyKey: "idem-test",
     });
     assert.equal(result.status, 200);
     assert.equal(
       observedHeaders?.get("authorization"),
       "Bearer installer-token",
     );
-    assert.equal(observedHeaders?.get("x-idempotency-key"), "idem-test");
+    // Idempotency header was removed with the Phase A spec rewrite —
+    // installs are tracked by Installation id instead.
+    assert.equal(observedHeaders?.get("x-idempotency-key"), null);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-Deno.test("callKernel does not send X-Idempotency-Key on GET requests", async () => {
+Deno.test("callKernel passes through GET requests without idempotency residue", async () => {
   const originalFetch = globalThis.fetch;
   let observedHeaders: Headers | undefined;
   globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {

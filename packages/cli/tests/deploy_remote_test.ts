@@ -10,7 +10,6 @@ interface CapturedRequest {
   readonly method: string;
   readonly body: unknown;
   readonly authorization: string | null;
-  readonly idempotencyKey: string | null;
 }
 
 Deno.test("installer source parser maps supported source refs", () => {
@@ -54,7 +53,6 @@ Deno.test("install command posts source to /v1/installations", async () => {
     assert.equal(captured.method, "POST");
     assert.equal(captured.url, "https://kernel.example/v1/installations");
     assert.equal(captured.authorization, "Bearer installer-token");
-    assert.ok(captured.idempotencyKey);
     assert.deepEqual(captured.body, {
       spaceId: "space_personal",
       source: { kind: "git", url: "https://github.com/acme/app", ref: "main" },
@@ -220,7 +218,6 @@ async function runCommandAgainstFakeKernel(
       method: init?.method ?? "GET",
       body: parsed,
       authorization: headers.get("authorization"),
-      idempotencyKey: headers.get("x-idempotency-key"),
     });
     return Promise.resolve(
       new Response(JSON.stringify({ ok: true }), {
