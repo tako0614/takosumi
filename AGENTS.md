@@ -80,6 +80,14 @@ takosumi/
   `https://operator.example.com/kinds/lambda` 等の operator-defined kind)
   の両方を受理する。 詳細は
   [docs/reference/json-ld-kind-catalog.md](./docs/reference/json-ld-kind-catalog.md)。
+- **Plugin contract は plain array attach**: operator は
+  `createPaaSApp({ plugins: [...] })` に `KernelPlugin` を返す factory function
+  の plain array を渡す (= Vite plugin pattern)。 `KernelPlugin` interface は
+  `name` / `version` / `provides[]` (= kind URI) / `capabilities` / `apply` /
+  `destroy` / `onInstallStart` / `onInstallComplete` / `onDeploymentStart` /
+  `onDeploymentComplete` を持つ。 plugin marketplace / signed manifest /
+  trusted publisher key / port-based plugin host / `createAdapters()` /
+  `TakosumiKernelPluginManifest` は kernel に持たない。
 - **credential を kernel core に持たない**: `factories.ts` 経由で operator が
   inject する。
 - **identity / billing は kernel の外側**: per-Installation OIDC client 発行は
