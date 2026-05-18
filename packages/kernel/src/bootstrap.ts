@@ -88,6 +88,16 @@ function resolveRevokeDebtStore(input: {
 
 export { registerBundledShapesAndProviders };
 
+/**
+ * KernelPlugin instances bundled with the kernel distribution. Wave 9
+ * Phase B leaves this empty — Phase D will populate it with adapters for
+ * the existing shape-provider connectors. Operators that want a turnkey
+ * bootstrap can spread the result into `createPaaSApp({ plugins })`.
+ */
+export function defaultBundledPlugins(): readonly never[] {
+  return [];
+}
+
 export interface CreatePaaSAppOptions extends AppContextOptions {
   readonly role?: PaaSProcessRole;
   readonly runtimeEnv?: Record<string, string | undefined>;
@@ -195,7 +205,9 @@ export async function createPaaSApp(
       }
       : undefined,
     installerPublicRouteOptions: {
-      pipeline: new InstallerPipeline(),
+      pipeline: new InstallerPipeline({
+        ...(options.plugins ? { plugins: options.plugins } : {}),
+      }),
       ...(installerToken ? { getInstallerToken: () => installerToken } : {}),
     },
     readinessRouteProbes: createRoleReadinessProbes({

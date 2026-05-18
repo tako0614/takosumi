@@ -1,13 +1,18 @@
 /**
  * Installer domain — orchestrates Installation lifecycle.
  *
- * Wave 5 implementation. The pipeline:
+ * Wave 5 implementation, Wave 9 KernelPlugin integration. The pipeline:
  *   1. fetches source (git / local working tree)
  *   2. parses `.takosumi.yml` via @takos/takosumi-installer
  *   3. validates AppSpec (delegated to yaml-parser)
  *   4. computes change set + source pin
- *   5. on apply: runs component.build, materializes each component via
- *      the provider plugin registry, persists Installation + Deployment
+ *   5. on apply:
+ *        - fires `onInstallStart` / `onDeploymentStart` hooks
+ *        - runs component.build
+ *        - resolves each Component.kind to a `KernelPlugin` via the
+ *          registry and invokes `plugin.apply()`
+ *        - persists Installation + Deployment
+ *        - fires `onDeploymentComplete` / `onInstallComplete` hooks
  *
  * Returns the response shapes from `takosumi-contract/installer-api`.
  *
@@ -15,6 +20,7 @@
  * follow-up wave.
  */
 
+import type { KernelPlugin } from "takosumi-contract";
 import type { AppSpec, Component } from "takosumi-contract/app-spec";
 import type {
   ChangeEntry,
@@ -39,12 +45,24 @@ import type {
 } from "takosumi-contract/installer-api";
 import { fetchGitSource, parseAppSpec } from "takosumi-installer";
 import {
+  createKernelPluginRegistry,
+  findPluginForKind,
+  type KernelPluginRegistry,
+} from "../../plugins/mod.ts";
+import { log } from "../../shared/log.ts";
+import {
   type DeploymentStore,
   InMemoryDeploymentStore,
   InMemoryInstallationStore,
   type InstallationStore,
 } from "./store.ts";
 
+/**
+ * Apply context passed to {@link InstallerProviderRegistry.apply}. The
+ * canonical adapter, {@link installerProviderRegistryFromPlugins}, derives
+ * one of these from each `Component` and forwards it to the plugin
+ * resolved via `provides[]`.
+ */
 export interface ProviderApplyContext {
   readonly installationId: string;
   readonly componentName: string;
@@ -58,13 +76,19 @@ export interface ProviderApplyContext {
 export interface ProviderApplyResult {
   readonly resource: DeploymentResource;
   /**
-   * Outputs the provider plugin exposes to downstream `use:` edges. For an
-   * `oidc` component this is `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` etc.; for
-   * a `postgres` component this is `host` / `port` / `database` / etc.
+   * Outputs the plugin exposes to downstream `use:` edges. For an `oidc`
+   * component this is `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` etc.; for a
+   * `postgres` component this is `host` / `port` / `database` / etc.
    */
   readonly outputs: Readonly<Record<string, string>>;
 }
 
+/**
+ * Component-level apply boundary. Concrete implementations are derived
+ * either from a `KernelPlugin[]` registry (production / standard path,
+ * via {@link installerProviderRegistryFromPlugins}) or hand-rolled in
+ * tests.
+ */
 export interface InstallerProviderRegistry {
   apply(context: ProviderApplyContext): Promise<ProviderApplyResult>;
 }
@@ -72,7 +96,22 @@ export interface InstallerProviderRegistry {
 export interface InstallerPipelineDependencies {
   readonly installations?: InstallationStore;
   readonly deployments?: DeploymentStore;
+  /**
+   * Component apply boundary. When unset, `plugins` (or the default
+   * empty plugin registry) is consulted to materialize each component.
+   * If both are unset, the installer falls back to a noop provider that
+   * records resources without external side effects.
+   */
   readonly providers?: InstallerProviderRegistry;
+  /**
+   * Operator-supplied KernelPlugin set. When `providers` is omitted, the
+   * installer builds a registry from this list and resolves each
+   * `Component.kind` to the plugin whose `provides[]` contains it.
+   * Lifecycle hooks (`onInstallStart` / `onInstallComplete` /
+   * `onDeploymentStart` / `onDeploymentComplete`) are awaited serially
+   * across this array in registration order.
+   */
+  readonly plugins?: readonly KernelPlugin[];
   /** Defaults to `crypto.randomUUID()`-based id generation. */
   readonly newId?: (prefix: string) => string;
   /** Defaults to `Date.now()`. */
@@ -111,6 +150,7 @@ export class InstallerPipeline {
   readonly #installations: InstallationStore;
   readonly #deployments: DeploymentStore;
   readonly #providers: InstallerProviderRegistry;
+  readonly #plugins: readonly KernelPlugin[];
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #localSourceRoot?: string;
@@ -124,7 +164,11 @@ export class InstallerPipeline {
       new InMemoryInstallationStore();
     this.#deployments = dependencies.deployments ??
       new InMemoryDeploymentStore();
-    this.#providers = dependencies.providers ?? new NoopProviderRegistry();
+    this.#plugins = dependencies.plugins ?? [];
+    this.#providers = dependencies.providers ??
+      (dependencies.plugins && dependencies.plugins.length > 0
+        ? installerProviderRegistryFromPlugins(dependencies.plugins)
+        : new NoopProviderRegistry());
     this.#newId = dependencies.newId ??
       ((prefix: string) =>
         `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`);
@@ -189,6 +233,11 @@ export class InstallerPipeline {
       };
       await this.#installations.put(installation);
 
+      // Vite-style `onInstallStart` runs before the very first Deployment
+      // of this Installation. Errors here are fatal — Installation goes
+      // to `failed` status and the apply rejects.
+      await this.#fireInstallationHook("onInstallStart", { installation });
+
       deployment = await this.#runDeployment({
         installation,
         appSpec,
@@ -202,6 +251,17 @@ export class InstallerPipeline {
         status: deployment.status === "succeeded" ? "running" : "failed",
       });
       installation = patched ?? installation;
+
+      // After-the-fact installer-complete hook. Errors here are logged
+      // but do NOT roll the Installation back; the Deployment already
+      // succeeded so post-install cleanup failures should not destroy
+      // the user's app.
+      if (deployment.status === "succeeded") {
+        await this.#fireInstallationHook("onInstallComplete", {
+          installation,
+          deployment,
+        }, { swallowErrors: true });
+      }
     } finally {
       await fetched.cleanup();
     }
@@ -323,6 +383,24 @@ export class InstallerPipeline {
     const resources: DeploymentResource[] = [];
     const upstreamOutputs: Record<string, Record<string, string>> = {};
 
+    // Stable pre-apply Deployment snapshot used as the lifecycle hook
+    // context. Status is "running" pending materialization; the
+    // persisted final value is overwritten below with "succeeded" or
+    // "failed".
+    const provisionalDeployment: Deployment = {
+      id: deploymentId,
+      installationId: input.installation.id,
+      source: input.sourceSummary,
+      manifestDigest: input.manifestDigest,
+      status: "running",
+      outputs: {},
+      createdAt: now,
+    };
+    await this.#fireDeploymentHook("onDeploymentStart", {
+      installation: input.installation,
+      deployment: provisionalDeployment,
+    });
+
     try {
       const order = topologicalOrder(input.appSpec);
       for (const componentName of order) {
@@ -365,7 +443,13 @@ export class InstallerPipeline {
         outputs,
         createdAt: now,
       };
-      return await this.#deployments.put(deployment);
+      const persisted = await this.#deployments.put(deployment);
+      // After-apply hook: errors do not roll back the Deployment.
+      await this.#fireDeploymentHook("onDeploymentComplete", {
+        installation: input.installation,
+        deployment: persisted,
+      }, { swallowErrors: true });
+      return persisted;
     } catch (err) {
       const failed: Deployment = {
         id: deploymentId,
@@ -381,6 +465,65 @@ export class InstallerPipeline {
       };
       await this.#deployments.put(failed);
       throw err;
+    }
+  }
+
+  async #fireInstallationHook(
+    hook: "onInstallStart" | "onInstallComplete",
+    ctx: { installation: Installation; deployment?: Deployment },
+    options: { swallowErrors?: boolean } = {},
+  ): Promise<void> {
+    for (const plugin of this.#plugins) {
+      const fn = plugin[hook];
+      if (!fn) continue;
+      try {
+        await fn.call(plugin, ctx);
+      } catch (error) {
+        if (options.swallowErrors) {
+          log.warn(`installer.${hook}.error`, {
+            plugin: plugin.name,
+            installationId: ctx.installation.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
+        throw new InstallerPipelineError(
+          "internal_error",
+          `plugin ${plugin.name} ${hook} failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  }
+
+  async #fireDeploymentHook(
+    hook: "onDeploymentStart" | "onDeploymentComplete",
+    ctx: { installation: Installation; deployment: Deployment },
+    options: { swallowErrors?: boolean } = {},
+  ): Promise<void> {
+    for (const plugin of this.#plugins) {
+      const fn = plugin[hook];
+      if (!fn) continue;
+      try {
+        await fn.call(plugin, ctx);
+      } catch (error) {
+        if (options.swallowErrors) {
+          log.warn(`installer.${hook}.error`, {
+            plugin: plugin.name,
+            installationId: ctx.installation.id,
+            deploymentId: ctx.deployment.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
+        throw new InstallerPipelineError(
+          "internal_error",
+          `plugin ${plugin.name} ${hook} failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
   }
 
@@ -466,6 +609,54 @@ class NoopProviderRegistry implements InstallerProviderRegistry {
       outputs: {},
     });
   }
+}
+
+/**
+ * Build an {@link InstallerProviderRegistry} that delegates to operator-
+ * supplied `KernelPlugin` instances. For each component, the plugin whose
+ * `provides[]` matches the normalized `Component.kind` URI is invoked.
+ *
+ * Throws when no plugin advertises the kind URI — the installer treats
+ * this as a misconfiguration. Operators must either inject a plugin for
+ * every kind in their AppSpec or supply a custom `providers` override.
+ */
+export function installerProviderRegistryFromPlugins(
+  plugins: readonly KernelPlugin[],
+): InstallerProviderRegistry {
+  const registry: KernelPluginRegistry = createKernelPluginRegistry(plugins);
+  return {
+    async apply(context: ProviderApplyContext): Promise<ProviderApplyResult> {
+      const kind = context.component.kind;
+      const plugin = findPluginForKind(registry, kind);
+      if (!plugin) {
+        throw new InstallerPipelineError(
+          "failed_precondition",
+          `no kernel plugin advertises kind ${kind} (component ${context.componentName})`,
+        );
+      }
+      const result = await plugin.apply({
+        installationId: context.installationId,
+        componentName: context.componentName,
+        component: context.component,
+        buildOutput: context.buildOutput
+          ? {
+            digest: context.buildOutput.digest,
+            uri: context.buildOutput.uri,
+          }
+          : undefined,
+        upstreamOutputs: context.upstreamOutputs,
+      });
+      return {
+        resource: {
+          component: context.componentName,
+          kind: context.component.kind,
+          provider: plugin.name,
+          providerResourceId: result.providerResourceId,
+        },
+        outputs: result.outputs,
+      };
+    },
+  };
 }
 
 export type InstallerPipelineErrorCode =
