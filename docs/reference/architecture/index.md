@@ -99,7 +99,7 @@ policy、secret、journal、observation、activation は、明示的な Space ex
 | [Snapshot Model](./snapshot-model.md)                                                         | What is fixed before operation?                                                                |
 | [Object Model](./object-model.md)                                                             | What does the kernel lifecycle-own or observe?                                                 |
 | [Namespace Export Model](./namespace-export-model.md)                                         | How do objects and external systems publish usable surfaces?                                   |
-| [Link and Projection Model](./link-projection-model.md)                                       | How do Shape resource bindings and refs become links?                                          |
+| [Link and Projection Model](./link-projection-model.md)                                       | How do component resource bindings and refs become links?                                      |
 | [Exposure and Activation Model](./exposure-activation-model.md)                               | How do route-bearing resources become ingress and activation?                                  |
 | [DataAsset Model](./data-asset-model.md)                                                      | How are source and artifacts represented without becoming a build system?                      |
 | [Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md) | How is work executed and recovered?                                                            |
