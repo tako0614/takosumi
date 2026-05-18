@@ -50,9 +50,14 @@ export function createCloudDnsProvider(
     implements: { id: "custom-domain", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
+      // Phase B: `target` moved out of CustomDomainSpec — the AppSpec now
+      // declares it via `Component.listen[<worker-namespace>]`. Phase D
+      // will rewire the provider context to surface the listened target;
+      // for now the field is read defensively from any extended shape.
+      const target = (spec as { target?: string }).target ?? "";
       const desc = await lifecycle.createRecord({
         fqdn: spec.name,
-        target: spec.target,
+        target,
       });
       return { handle: desc.recordName, outputs: { fqdn: desc.fqdn } };
     },

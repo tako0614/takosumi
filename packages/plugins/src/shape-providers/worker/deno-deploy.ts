@@ -132,7 +132,7 @@ function outputsFromDescriptor(
 ): WorkerOutputs {
   return {
     url: desc.publicUrl,
-    scriptName: desc.scriptName,
+    id: desc.scriptName,
     version: desc.deploymentId,
   };
 }

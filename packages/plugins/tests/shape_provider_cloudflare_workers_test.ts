@@ -35,7 +35,7 @@ Deno.test("cloudflare-workers apply uploads script and returns worker outputs", 
   const result = await provider.apply(validSpec(), ctx);
   assert.ok(result.outputs.url.startsWith("https://worker-"));
   assert.ok(result.outputs.url.endsWith(".acct-1.workers.dev"));
-  assert.ok(result.outputs.scriptName.startsWith("worker-"));
+  assert.ok(result.outputs.id.startsWith("worker-"));
   assert.equal(lifecycle.size(), 1);
 });
 

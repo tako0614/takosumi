@@ -31,12 +31,16 @@ Deno.test("registerTakosumiKinds registers all bundled shapes", () => {
 });
 
 Deno.test("TAKOSUMI_BUNDLED_KINDS exposes the expected initial set", () => {
+  // Phase B: `oidc` is no longer a built-in kernel kind (moved to
+  // Takosumi Accounts). The remaining 5 bundled shapes are the 4
+  // built-in component kinds (worker / postgres / object-store /
+  // custom-domain) plus the legacy `web-service` shape (kept until
+  // a follow-up wave retires it).
   const ids = TAKOSUMI_BUNDLED_KINDS.map((s) => `${s.id}@${s.version}`).sort();
   assert.deepEqual(ids, [
     "custom-domain@v1",
     "database-postgres@v1",
     "object-store@v1",
-    "oidc@v1",
     "web-service@v1",
     "worker@v1",
   ]);

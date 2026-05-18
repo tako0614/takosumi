@@ -34,7 +34,7 @@ Deno.test("deno-deploy apply creates a deployment and returns worker outputs", a
   const { lifecycle, provider } = newProvider();
   const result = await provider.apply(validSpec(), ctx);
   assert.ok(result.outputs.url.endsWith(".deno.dev"));
-  assert.ok(result.outputs.scriptName.startsWith("worker-"));
+  assert.ok(result.outputs.id.startsWith("worker-"));
   assert.ok(result.outputs.version?.startsWith("dpl_"));
   assert.equal(lifecycle.size(), 1);
 });

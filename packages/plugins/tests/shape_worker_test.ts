@@ -33,7 +33,7 @@ Deno.test("Worker capabilities cover serverless traits", () => {
 Deno.test("Worker outputFields list is fixed", () => {
   assert.deepEqual([...WorkerKind.outputFields], [
     "url",
-    "scriptName",
+    "id",
     "version",
   ]);
 });
@@ -131,7 +131,7 @@ Deno.test("Worker validateOutputs accepts complete outputs", () => {
   assert.deepEqual(
     outputIssues({
       url: "https://api.script.acct.workers.dev",
-      scriptName: "api",
+      id: "api",
       version: "v1",
     }),
     [],
@@ -142,26 +142,26 @@ Deno.test("Worker validateOutputs accepts outputs without version", () => {
   assert.deepEqual(
     outputIssues({
       url: "https://api.script.acct.workers.dev",
-      scriptName: "api",
+      id: "api",
     }),
     [],
   );
 });
 
 Deno.test("Worker validateOutputs rejects missing url", () => {
-  const issues = outputIssues({ scriptName: "api" });
+  const issues = outputIssues({ id: "api" });
   assert.ok(issues.some((i) => i.path === "$.url"));
 });
 
-Deno.test("Worker validateOutputs rejects missing scriptName", () => {
+Deno.test("Worker validateOutputs rejects missing id", () => {
   const issues = outputIssues({ url: "https://x" });
-  assert.ok(issues.some((i) => i.path === "$.scriptName"));
+  assert.ok(issues.some((i) => i.path === "$.id"));
 });
 
 Deno.test("Worker validateOutputs rejects empty version when present", () => {
   const issues = outputIssues({
     url: "https://x",
-    scriptName: "api",
+    id: "api",
     version: "",
   });
   assert.ok(issues.some((i) => i.path === "$.version"));

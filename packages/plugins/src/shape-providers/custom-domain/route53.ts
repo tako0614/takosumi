@@ -51,16 +51,18 @@ export function createRoute53Provider(
     implements: { id: "custom-domain", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
+      // Phase B: see cloud-dns.ts — `target` moved to `Component.listen`.
+      const target = (spec as { target?: string }).target ?? "";
       const desc = await lifecycle.createRecord({
         fqdn: spec.name,
-        target: spec.target,
+        target,
         recordType: "CNAME",
       });
       return {
         handle: desc.recordSetId,
         outputs: {
           fqdn: desc.fqdn,
-          certificateArn: desc.certificateArn,
+          certificateId: desc.certificateArn,
         },
       };
     },
@@ -74,7 +76,7 @@ export function createRoute53Provider(
         kind: "ready",
         outputs: {
           fqdn: desc.fqdn,
-          certificateArn: desc.certificateArn,
+          certificateId: desc.certificateArn,
         },
         observedAt: clock().toISOString(),
       };
