@@ -85,35 +85,38 @@ Takosumi Account  (契約 / billing / identity owner)
 ## Component と Resource
 
 AppSpec は `.takosumi.yml` の `components` に名前付き Component を宣言する。 各
-Component は `kind` を 1 つ持ち (catalog 5 種)、 kernel installer が apply 時に
-provider plugin を解決して runtime state (= Resource) を作る。
+Component は `kind` を 1 つ持ち (= 短 alias または完全 JSON-LD URI)、 kernel
+installer が apply 時に **materializer** (= 実装層、 operator config で
+inject される) を解決して runtime state (= Resource) を作る。
 
-| 公開 概念 | 説明                                                |
-| --------- | --------------------------------------------------- |
-| Component | AppSpec が宣言する build / use / kind を持つ 1 unit |
+| 公開 概念 | 説明                                                              |
+| --------- | ----------------------------------------------------------------- |
+| Component | AppSpec が宣言する kind / build / publish / listen を持つ 1 unit |
 
-| 内部 概念 | 説明                                                |
-| --------- | --------------------------------------------------- |
-| Resource  | apply 後の provider-scope runtime state record      |
-| Secret    | use edge で resolve された credential store         |
-| Event     | hash-chain audit log (内部 audit、 public route 外) |
+| 内部 概念 | 説明                                                          |
+| --------- | ------------------------------------------------------------- |
+| Resource  | apply 後の materializer-scope runtime state record            |
+| Namespace | publish / listen の registry (= path → material map)          |
+| Secret    | listen 経由で resolve された credential store                 |
+| Event     | hash-chain audit log (内部 audit、 public route 外)           |
 
-`Resource` / `Secret` / `Event` は実装内部 entity であり、 public API には登場
-しません。 Installation + Deployment + (内部 resources / secrets / events) で
-完全な lifecycle を扱います。
+`Resource` / `Namespace` / `Secret` / `Event` は実装内部 entity であり、 public
+API には登場しません。 Installation + Deployment + (内部 resources / namespaces
+/ secrets / events) で完全な lifecycle を扱います。
 
 ## Installer pipeline
 
 ```text
 1. caller posts source { kind, url, ref } to POST /v1/installations/dry-run
 2. kernel fetches source (git / catalog / bundle), parses .takosumi.yml
-3. kernel runs 5-phase validation (syntax / schema / use-edge / kind-catalog / space)
+3. kernel runs 5-phase validation (syntax / schema / kind-resolve / namespace-graph / space)
 4. kernel computes changes[], estimatedCost, expected.{commit, manifestDigest}
 5. caller posts apply with same source + expected
 6. kernel re-fetches source, verifies expected (or accepts current)
 7. kernel runs each component.build (= command) to produce artifact
-8. kernel solves use-edge DAG, resolves secrets / env injection
-9. kernel calls provider plugin per component (topological order)
+8. kernel solves publish/listen DAG, resolves materials, prepares env injection
+9. kernel calls materializer per component (topological order, registers
+   published material to namespace registry, injects listened material)
 10. kernel persists Installation + Deployment record with outputs
 11. kernel returns Deployment to caller
 ```
@@ -144,43 +147,48 @@ Installation worker (routing layer で hostname 割り当て):
 
 OAuth / OIDC の login flow は kernel 内ではなく
 [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
-が扱います。 AppSpec が `components.<name>.kind: oidc` を宣言すると、 kernel
-installer が Installation 作成時に Takosumi Accounts で per-Installation OIDC
-client を発行し、 `use: { mount: oidc }` した worker に `OIDC_ISSUER_URL` /
-`OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS` を inject
-します。 kernel 自身は OAuth issuer endpoint を **持ちません**。
+が扱います。 Takosumi Accounts は `operator.identity.oidc` namespace path に
+OIDC client material を publish し、 worker は `listen.operator.identity.oidc`
+で `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` /
+`OIDC_REDIRECT_URIS` を受け取ります。 kernel core 自身は OAuth issuer endpoint
+も `kind: oidc` 解決も **持ちません** (= takosumi-cloud 側の materializer の責務)。
 
 ## Resource broker
 
-kernel は `components[]` に宣言された Component を provider operation に解決
-する:
+kernel は `components[]` に宣言された Component を materializer operation に
+解決する:
 
 - worker: `kind: worker` (= JS bundle / container)
-- backing resource: `kind: postgres` / `kind: object-store` / OIDC client
-- entrypoint: `worker.routes` / `kind: custom-domain`
+- backing resource: `kind: postgres` / `kind: object-store`
+- entrypoint: `worker.spec.routes` / `kind: custom-domain`
 - resource は Space / Installation 単位で分離される
 
 Resource は internal record として control plane が persist し、 Installation や
-provider の lifecycle と independent な durable record を持つ。 provider 側の
-observed state は ProviderObservation stream として記録され、 canonical な
-desired state は AppSpec の component entry です。 compute への接続は `use:`
-edge から resolve された env / binding / provider config に materialize される。
+materializer の lifecycle と independent な durable record を持つ。 materializer
+側の observed state は ProviderObservation stream として記録され、 canonical な
+desired state は AppSpec の component entry です。 compute への接続は
+`publish` / `listen` から resolve された material が namespace registry を
+経由して env / binding として materialize される。
 
 ```yaml
 components:
   db:
     kind: postgres
     spec:
-      class: standard
+      version: "16"
+      size: small
+    publish:
+      - com.example.notes.db
 
   web:
     kind: worker
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    use:
-      db:
-        env: DATABASE_URL
+    listen:
+      com.example.notes.db:
+        as: env
+        prefix: DB_
 ```
 
 kernel 自身の storage (= installations / deployments / resources / secrets /

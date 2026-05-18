@@ -4,46 +4,72 @@
   "@type": "ComponentKind",
   "name": "postgres",
   "version": "v1",
-  "description": "Managed PostgreSQL instance. Provider-portable via standard wire protocol.",
-  "spec": [
+  "aliases": ["postgres"],
+  "description": "Managed PostgreSQL instance. Provider-portable via standard wire protocol. Publishes connection material to the sibling namespace path.",
+  "x-ts": {
+    "fileBasename": "database-postgres",
+    "prefix": "DatabasePostgres",
+    "shapeId": "database-postgres"
+  },
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["version", "size"],
+    "additionalProperties": false,
+    "properties": {
+      "version": {
+        "type": "string",
+        "minLength": 1,
+        "description": "PostgreSQL major version string (e.g. `15`, `16`)."
+      },
+      "size": {
+        "type": "string",
+        "enum": ["small", "medium", "large", "xlarge"],
+        "description": "Instance size class."
+      },
+      "storage": {
+        "type": "object",
+        "required": ["sizeGiB"],
+        "description": "Persistent volume sizing.",
+        "properties": {
+          "sizeGiB": { "type": "integer", "minimum": 1 },
+          "type": { "type": "string", "enum": ["ssd", "hdd"] }
+        }
+      },
+      "backups": {
+        "type": "object",
+        "required": ["enabled"],
+        "description": "Managed backup policy.",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "retentionDays": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "highAvailability": {
+        "type": "boolean",
+        "description": "Enable provider-managed HA replica."
+      },
+      "extensions": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "description": "PostgreSQL extensions to enable (e.g. `pgvector`)."
+      }
+    }
+  },
+  "publishes": [
     {
-      "name": "version",
-      "type": "string",
-      "required": true,
-      "meaning": "PostgreSQL major version string (e.g. `15`, `16`)."
-    },
-    {
-      "name": "size",
-      "type": "enum",
-      "required": true,
-      "enum": ["small", "medium", "large", "xlarge"],
-      "meaning": "Instance size class."
-    },
-    {
-      "name": "storage",
-      "type": "object",
-      "required": false,
-      "meaning": "`{ sizeGiB: number, type?: 'ssd' | 'hdd' }`."
-    },
-    {
-      "name": "backups",
-      "type": "object",
-      "required": false,
-      "meaning": "`{ enabled: boolean, retentionDays?: number }`."
-    },
-    {
-      "name": "highAvailability",
-      "type": "boolean",
-      "required": false,
-      "meaning": "Enable provider-managed HA replica."
-    },
-    {
-      "name": "extensions",
-      "type": "string[]",
-      "required": false,
-      "meaning": "PostgreSQL extensions to enable (e.g. `pgvector`)."
+      "namespacePath": "<app-id>.<component-name>",
+      "material": {
+        "host": "$outputs.host",
+        "port": "$outputs.port",
+        "database": "$outputs.database",
+        "username": "$outputs.username",
+        "passwordSecretRef": "$outputs.passwordSecretRef",
+        "connectionString": "$outputs.connectionString"
+      }
     }
   ],
+  "listens": {},
   "outputs": [
     {
       "name": "host",

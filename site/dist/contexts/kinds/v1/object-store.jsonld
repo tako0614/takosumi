@@ -4,39 +4,60 @@
   "@type": "ComponentKind",
   "name": "object-store",
   "version": "v1",
-  "description": "Bucket-style object storage. Provider-portable across S3-class APIs.",
-  "spec": [
+  "aliases": ["object-store"],
+  "description": "Bucket-style object storage. Provider-portable across S3-class APIs. Publishes endpoint + credential refs to the sibling namespace path.",
+  "x-ts": {
+    "fileBasename": "object-store",
+    "prefix": "ObjectStore",
+    "shapeId": "object-store"
+  },
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["name"],
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Logical bucket name (provider applies its own scoping rules)."
+      },
+      "public": {
+        "type": "boolean",
+        "description": "Allow anonymous reads when true."
+      },
+      "versioning": {
+        "type": "boolean",
+        "description": "Enable object versioning when supported."
+      },
+      "region": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Provider region (when applicable)."
+      },
+      "lifecycle": {
+        "type": "object",
+        "description": "Lifecycle rules for stored objects.",
+        "properties": {
+          "expireAfterDays": { "type": "integer", "minimum": 0 },
+          "archiveAfterDays": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  },
+  "publishes": [
     {
-      "name": "name",
-      "type": "string",
-      "required": true,
-      "meaning": "Logical bucket name (provider applies its own scoping rules)."
-    },
-    {
-      "name": "public",
-      "type": "boolean",
-      "required": false,
-      "meaning": "Allow anonymous reads when true."
-    },
-    {
-      "name": "versioning",
-      "type": "boolean",
-      "required": false,
-      "meaning": "Enable object versioning when supported."
-    },
-    {
-      "name": "region",
-      "type": "string",
-      "required": false,
-      "meaning": "Provider region (when applicable)."
-    },
-    {
-      "name": "lifecycle",
-      "type": "object",
-      "required": false,
-      "meaning": "`{ expireAfterDays?: number, archiveAfterDays?: number }`."
+      "namespacePath": "<app-id>.<component-name>",
+      "material": {
+        "bucket": "$outputs.bucket",
+        "endpoint": "$outputs.endpoint",
+        "region": "$outputs.region",
+        "accessKeyRef": "$outputs.accessKeyRef",
+        "secretKeyRef": "$outputs.secretKeyRef"
+      }
     }
   ],
+  "listens": {},
   "outputs": [
     {
       "name": "bucket",

@@ -4,39 +4,71 @@
   "@type": "ComponentKind",
   "name": "worker",
   "version": "v1",
-  "description": "Serverless JS function backed by an uploaded `js-bundle` artifact.",
-  "spec": [
+  "aliases": ["worker"],
+  "description": "Serverless JS function backed by an uploaded `js-bundle` artifact. Publishes its allocated URL to the sibling namespace path and accepts listens that map declared materials into env vars or mount points.",
+  "x-ts": {
+    "fileBasename": "worker",
+    "prefix": "Worker",
+    "shapeId": "worker"
+  },
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["artifact", "compatibilityDate"],
+    "additionalProperties": false,
+    "properties": {
+      "artifact": {
+        "type": "object",
+        "description": "Artifact descriptor. `artifact.kind` must be `js-bundle`; `artifact.hash` is required (no external `uri`).",
+        "required": ["kind", "hash"],
+        "x-ts-type": {
+          "import": "takosumi-contract",
+          "name": "Artifact"
+        },
+        "properties": {
+          "kind": { "const": "js-bundle" },
+          "hash": { "type": "string", "minLength": 1 }
+        }
+      },
+      "compatibilityDate": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Cloudflare Workers compatibility date (e.g. `2025-01-01`)."
+      },
+      "compatibilityFlags": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "description": "Optional compatibility flags (e.g. `nodejs_compat`)."
+      },
+      "env": {
+        "type": "object",
+        "additionalProperties": { "type": "string" },
+        "description": "Optional env vars / bindings."
+      },
+      "routes": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "description": "Route patterns the worker handles (e.g. `/`, `/api/*`)."
+      }
+    }
+  },
+  "publishes": [
     {
-      "name": "artifact",
-      "type": "object",
-      "required": true,
-      "meaning": "Artifact descriptor. `artifact.kind` must be `js-bundle`; `artifact.hash` is required (no external `uri`)."
-    },
-    {
-      "name": "compatibilityDate",
-      "type": "string",
-      "required": true,
-      "meaning": "Cloudflare Workers compatibility date (e.g. `2025-01-01`)."
-    },
-    {
-      "name": "compatibilityFlags",
-      "type": "string[]",
-      "required": false,
-      "meaning": "Optional compatibility flags (e.g. `nodejs_compat`)."
-    },
-    {
-      "name": "env",
-      "type": "Record<string,string>",
-      "required": false,
-      "meaning": "Optional env vars / bindings."
-    },
-    {
-      "name": "routes",
-      "type": "string[]",
-      "required": false,
-      "meaning": "Route patterns the worker handles (e.g. `/`, `/api/*`)."
+      "namespacePath": "<app-id>.<component-name>",
+      "material": {
+        "url": "$outputs.url",
+        "id": "$outputs.id"
+      }
     }
   ],
+  "listens": {
+    "<sibling-namespace-path>": {
+      "shape": "env",
+      "envMap": {
+        "DESCRIPTION": "Accepts any sibling namespace material; AppSpec listen options declare `as: env` with optional `prefix:` to expand each material field into `${PREFIX}_*` env vars."
+      }
+    }
+  },
   "outputs": [
     {
       "name": "url",
@@ -45,7 +77,7 @@
       "meaning": "Allocated public URL (scheme-bearing)."
     },
     {
-      "name": "scriptName",
+      "name": "id",
       "type": "string",
       "required": true,
       "meaning": "Provider-scope worker identifier."
@@ -59,8 +91,11 @@
   ],
   "capabilities": [
     "scale-to-zero",
+    "always-on",
     "websocket",
     "long-request",
+    "sticky-session",
+    "private-networking",
     "geo-routing",
     "crons"
   ]

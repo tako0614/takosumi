@@ -326,26 +326,20 @@ interface ApiErrorEnvelope {
 }
 ```
 
-| code                  | HTTP | 主な発生要因                                             |
-| --------------------- | ---- | -------------------------------------------------------- |
-| `invalid_argument`    | 400  | AppSpec schema違反、 unknown kind、 cyclic `use:` edge   |
-| `unauthenticated`     | 401  | bearer 不足                                              |
-| `permission_denied`   | 403  | actor が Space に対する権限不足                          |
-| `not_found`           | 404  | Installation / Deployment 不在                           |
-| `failed_precondition` | 409  | `expected.commit` mismatch、 既存 Installation suspended |
-| `resource_exhausted`  | 413  | build artifact が provider quota 超過                    |
-| `internal_error`      | 500  | unhandled exception                                      |
-
-## Idempotency
-
-すべての write endpoint は `X-Idempotency-Key` header を受け付けます。 同一 key
-
-- 同一 body は同じ response を replay し、 同一 key + 異なる body は 409
-  `failed_precondition` を返します。
+| code                  | HTTP | 主な発生要因                                                                                |
+| --------------------- | ---- | ------------------------------------------------------------------------------------------- |
+| `invalid_argument`    | 400  | AppSpec schema違反、 unknown kind、 cyclic `publish` → `listen` graph                       |
+| `unauthenticated`     | 401  | bearer 不足                                                                                 |
+| `permission_denied`   | 403  | actor が Space に対する権限不足                                                             |
+| `not_found`           | 404  | Installation / Deployment 不在                                                              |
+| `failed_precondition` | 409  | `expected.commit` mismatch、 既存 Installation suspended、 listen 対象 namespace path が未 publish |
+| `resource_exhausted`  | 413  | build artifact / payload が provider quota / request size 上限超過                          |
+| `internal_error`      | 500  | unhandled exception                                                                         |
 
 ## Cross-references
 
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [Component Kind Catalog](./component-kind-catalog.md) — 5 kind の schema
+- [Component Kind Catalog](./component-kind-catalog.md) — 4 kind の schema /
+  publishes / listens
 - [Architecture: Kernel](./architecture/kernel.md) — installer pipeline
   の責務境界

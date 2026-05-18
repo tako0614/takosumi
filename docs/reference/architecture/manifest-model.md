@@ -42,15 +42,20 @@ homepage
 `components` の各 entry fields:
 
 ```text
-kind | build | use | routes | spec | redirectPaths | scopes | name | target
+kind | spec | build | publish | listen
 ```
+
+`kind` は **短い alias** (= `worker`) または **完全な JSON-LD URI**
+(= `https://takosumi.com/kinds/v1/worker`) の文字列。 alias は対応 JSON-LD の
+`aliases[]` に登録された名前のみ受理し、 parse 段階で full URI に正規化する。
 
 `build` は AppSpec が許可する **唯一の build 概念** で、 `{ command, output }`
 の最小 recipe のみ表現できる。 jobs / steps / matrix / triggers / pipeline は
 持たない (= CI workflow ではない)。
 
-`use` は component 間の構造的依存 edge。 文字列 interpolation (`${ref:...}` /
-`${secret-ref:...}` / `${bindings.*}` 等) は v1 AppSpec では 廃止された。
+`publish` / `listen` は component 間接続の **唯一の表現** である。 `use:` edge
+と文字列 interpolation (`${ref:...}` / `${secret-ref:...}` / `${bindings.*}`
+等) は v1 AppSpec では廃止された。
 
 ## Space Context
 
@@ -64,7 +69,7 @@ appspec + space:acme-dev  -> development catalog / policy / quotas
 ```
 
 public AppSpec は `space` / `tenant` / `org` / credential / namespace registry
-の 構成 field を含んではならない。 これらは Installation context / operator 設定
+の構成 field を含んではならない。 これらは Installation context / operator 設定
 であり、 authoring intent ではない。
 
 ## Components
@@ -81,46 +86,59 @@ components:
   db:
     kind: postgres
     spec:
-      class: standard
+      version: "16"
+      size: small
+    publish:
+      - com.example.notes.db
+
   web:
     kind: worker
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    routes:
-      - /
-    use:
-      db:
-        env: DATABASE_URL
+    spec:
+      routes: [/]
+    listen:
+      com.example.notes.db:
+        as: env
+        prefix: DB_
 ```
 
-`kind` が semantic contract。 catalog 5 種いずれか。 provider plugin が apply
-時に `kind` を解決する。 provider 選択 / 配置 / placement は AppSpec ではなく
-operator policy / Space context が決める。
+`kind` が semantic contract。 短 alias または完全 URI のいずれでもよい。
+**materializer (= 実装層)** は operator 側 `createPaaSApp({ materializers: [...] })`
+config で渡され、 manifest には現れない。 同じ kind URI に複数の materializer
+実装が存在しうる (= Cloudflare 実装 / AWS Fargate 実装等)、 operator が 1 つを
+選ぶ。 provider 選択 / 配置 / placement は AppSpec ではなく operator policy /
+Space context が決める。
 
-各 component の output (= apply 後の値) は kernel が persist し、 `use:` edge
-が解決して依存 component に inject する。
+各 component の output (= apply 後の値) は kernel が persist し、 publish 宣言
+された namespace path に material として register される。
 
-## Use Edge Resolution
+## Namespace Pub/Sub Graph
 
-`use:` は component を node、 edge を依存関係とする DAG を作る。
+`publish` / `listen` は component を node、 namespace path を edge label と
+する DAG を作る。
 
 ```text
-web --use:db--> db
-web --use:auth-> auth
-web --use:media-> media
+db ─publish─> com.example.notes.db ─listen──> web
+media ─publish─> com.example.notes.media ─listen──> web
+operator.identity.oidc ─(takosumi-cloud publish)──> web (listen)
 ```
 
-kernel は cycle を reject し、 topological order で provider apply を実行する。
-cycle 検出は graph DFS。
+kernel は publish → listen 解決時に cycle を reject し、 topological order で
+materializer apply を実行する。 cycle 検出は graph DFS。
 
-各 edge の semantics:
+各 listen entry の semantics:
 
-| sub-key     | 解決                                                                  |
-| ----------- | --------------------------------------------------------------------- |
-| `env`       | 依存先 connection string / primary output を単一 env var に inject    |
-| `envPrefix` | 依存先の全 output field を `${PREFIX}_*` で env に展開                |
-| `mount`     | reserved mount point (例: `oidc`) に bind し、 関連 env 一式を inject |
+| sub-key  | 解決                                                                  |
+| -------- | --------------------------------------------------------------------- |
+| `as`     | listen shape (= `env` / `target` / `mount` 等、 kind JSON-LD 規定) |
+| `prefix` | `as: env` で各 material field を `${PREFIX}_*` env var に展開      |
+| `mount`  | kind 固有 anchor name (= 意味的 mount point)                       |
+
+**Auto-namespacing**: component が `publish` を省略すると、 kernel が
+`<app-id>.<component-name>` を自動 publish する。 sibling component の参照は
+この path を `listen` するだけで完結する。
 
 ## Installation lifecycle
 
@@ -138,20 +156,24 @@ Deployment (source.commit + manifestDigest + outputs + status + timestamps)
 / 課金 / 権限 / 現在状態の単位。
 
 `Deployment` は 1 回の apply 結果。 source.commit、 manifestDigest、 component
-ごとの build artifact、 provider が作った resource id を記録する。 履歴 / audit
-/ rollback の単位。
+ごとの build artifact、 materializer が作った resource id を記録する。 履歴 /
+audit / rollback の単位。
 
-## Provider Resolution
+## Materializer Resolution
 
-各 component の `kind` は provider plugin が materialize する。 provider 選択は
-Space に bind された CatalogRelease に従う。
+各 component の `kind` は **materializer** (= 実装層) が解決する。 materializer
+は kind URI の registry に登録され、 operator が任意の形態 (= plugin object /
+inline function / 別 package import) で提供する。 manifest 側からは特定 impl
+を指定しない。
 
-Provider responsibilities:
+Materializer responsibilities:
 
 - `kind` 固有の input spec を validate
-- target runtime (Cloudflare Workers / Node + Postgres / AWS Fargate 等) に
-  対する provider operation を生成
+- target runtime (Cloudflare Workers / Kubernetes / AWS Fargate 等) に
+  対する provision を生成
 - apply 後の output fields (`url` / `connectionString` / `bucket` 等) を返す
+- kind JSON-LD が宣言した `publishes[]` material を namespace registry に
+  register する
 
 詳細: [Provider Resolution](../provider-resolution.md)。
 
@@ -163,8 +185,11 @@ Provider responsibilities:
 | `.takosumi/workflows/*`              | 廃止                                    |
 | authoring/runtime 中間 manifest      | 単一 AppSpec モデル、 compile step なし |
 | retired authoring extension          | `component.build` の最小 recipe         |
-| `${ref:...}` / `${secret-ref:...}`   | `use:` edge                             |
-| `${bindings.*}` / `${secrets.*}`     | `use:` edge                             |
+| `${ref:...}` / `${secret-ref:...}`   | `publish` / `listen`                    |
+| `${bindings.*}` / `${secrets.*}`     | `publish` / `listen`                    |
+| `use:` edge                          | `publish` / `listen` に統合             |
+| `kind: oidc`                         | takosumi-cloud の OIDC namespace publish |
+| `plugin:` in manifest                | materializer は operator config 側      |
 | Plan / Snapshot / Preview entity     | dry-run response (entity 化されない)    |
 | DeploymentPlan / DeploymentSnapshot  | Deployment record の outputs に統合     |
 
