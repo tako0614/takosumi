@@ -42,10 +42,6 @@ import {
   type RegisterArtifactRoutesOptions,
 } from "./artifact_routes.ts";
 import {
-  registerDeployPublicRoutes,
-  type RegisterDeployPublicRoutesOptions,
-} from "./deploy_public_routes.ts";
-import {
   type InstallerPublicRouteDependencies,
   mountInstallerPublicRoutes,
 } from "./installer_public_routes.ts";
@@ -79,18 +75,9 @@ export interface CreateApiAppOptions {
   readonly registerArtifactRoutes?: boolean;
   readonly artifactRouteOptions?: RegisterArtifactRoutesOptions;
   /**
-   * When set, mounts the public `POST /v1/deployments` route used by the
-   * Takosumi CLI. Bootstrap fills these in when `TAKOSUMI_DEPLOY_TOKEN`
-   * is configured; tests can pass their own options to override the
-   * platform context or the record store.
-   */
-  readonly registerDeployPublicRoutes?: boolean;
-  readonly deployPublicRouteOptions?: RegisterDeployPublicRoutesOptions;
-  /**
    * When set, mounts the v1 installer public surface (5 endpoints:
    * /v1/installations[/dry-run] + /v1/installations/{id}/deployments[/dry-run]
-   * + /v1/installations/{id}/rollback). Routes return 501 not_implemented
-   * until the installer pipeline wiring (Wave 5 follow-up) lands.
+   * + /v1/installations/{id}/rollback).
    */
   readonly registerInstallerPublicRoutes?: boolean;
   readonly installerPublicRouteOptions?: InstallerPublicRouteDependencies;
@@ -145,9 +132,6 @@ export async function createApiApp(
   const readinessRoutesMounted = options.registerReadinessRoutes ?? false;
   const artifactRoutesMounted = options.registerArtifactRoutes ??
     (role === "takosumi-api" && options.artifactRouteOptions !== undefined);
-  const deployPublicRoutesMounted = options.registerDeployPublicRoutes ??
-    (role === "takosumi-api" &&
-      options.deployPublicRouteOptions !== undefined);
   const installerPublicRoutesMounted =
     options.registerInstallerPublicRoutes ?? (role === "takosumi-api");
   const metricsRoutesMounted = options.registerMetricsRoutes ??
@@ -164,7 +148,7 @@ export async function createApiApp(
     return c.json(createApiCapabilitiesDescription(role, {
       internalRoutesMounted,
       publicRoutesMounted,
-      deployPublicRoutesMounted,
+      installerPublicRoutesMounted,
       artifactRoutesMounted,
       runtimeAgentRoutesMounted,
       openApiRouteMounted,
@@ -202,10 +186,6 @@ export async function createApiApp(
     registerArtifactRoutes(app, options.artifactRouteOptions);
   }
 
-  if (deployPublicRoutesMounted) {
-    registerDeployPublicRoutes(app, options.deployPublicRouteOptions ?? {});
-  }
-
   if (installerPublicRoutesMounted) {
     mountInstallerPublicRoutes(
       app,
@@ -235,7 +215,7 @@ export async function createApiApp(
         createPaaSOpenApiDocument({
           internalRoutesMounted,
           publicRoutesMounted,
-          deployPublicRoutesMounted,
+          installerPublicRoutesMounted,
           artifactRoutesMounted,
           runtimeAgentRoutesMounted,
           readinessRoutesMounted,

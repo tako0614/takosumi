@@ -7,7 +7,6 @@ Deno.test(
     const app = await createApiApp({
       registerInternalRoutes: false,
       registerPublicRoutes: false,
-      registerDeployPublicRoutes: false,
       registerInstallerPublicRoutes: true,
       requestCorrelation: false,
     });

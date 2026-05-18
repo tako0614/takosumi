@@ -7,7 +7,6 @@ import {
   ARTIFACTS_BASE_PATH,
   TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
-import { TAKOSUMI_DEPLOY_PUBLIC_PATH } from "./deploy_public_routes.ts";
 import { TAKOSUMI_METRICS_PATH } from "./metrics_routes.ts";
 import { TAKOSUMI_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
 import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
@@ -16,7 +15,7 @@ import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 export interface CreateApiCapabilitiesDescriptionOptions {
   readonly internalRoutesMounted?: boolean;
   readonly publicRoutesMounted?: boolean;
-  readonly deployPublicRoutesMounted?: boolean;
+  readonly installerPublicRoutesMounted?: boolean;
   readonly artifactRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
   readonly openApiRouteMounted?: boolean;
@@ -41,6 +40,7 @@ export interface ApiEndpointDescription {
     | "actor"
     | "deploy-token"
     | "artifact-read"
+    | "installer-token"
     | "metrics-token";
 }
 
@@ -73,8 +73,8 @@ export function createApiCapabilitiesDescription(
   }
   if (options.internalRoutesMounted) endpoints.push(...internalEndpoints());
   if (options.publicRoutesMounted) endpoints.push(...publicEndpoints());
-  if (options.deployPublicRoutesMounted) {
-    endpoints.push(...deployPublicEndpoints());
+  if (options.installerPublicRoutesMounted) {
+    endpoints.push(...installerPublicEndpoints());
   }
   if (options.artifactRoutesMounted) endpoints.push(...artifactEndpoints());
   if (options.runtimeAgentRoutesMounted) {
@@ -99,28 +99,38 @@ export function createApiCapabilitiesDescription(
   };
 }
 
-function deployPublicEndpoints(): ApiEndpointDescription[] {
+function installerPublicEndpoints(): ApiEndpointDescription[] {
   return [
     [
       "POST",
-      TAKOSUMI_DEPLOY_PUBLIC_PATH,
-      "Runs the operator deploy entrypoint in apply, plan, or destroy mode.",
+      "/v1/installations/dry-run",
+      "Plans a fresh AppSpec install without persisting state.",
     ],
     [
-      "GET",
-      TAKOSUMI_DEPLOY_PUBLIC_PATH,
-      "Lists deployment records from the operator deploy surface.",
+      "POST",
+      "/v1/installations",
+      "Creates an Installation from a posted AppSpec.",
     ],
     [
-      "GET",
-      `${TAKOSUMI_DEPLOY_PUBLIC_PATH}/:name`,
-      "Returns one deployment record by manifest metadata.name.",
+      "POST",
+      "/v1/installations/:id/deployments/dry-run",
+      "Plans a re-deploy against an existing Installation.",
+    ],
+    [
+      "POST",
+      "/v1/installations/:id/deployments",
+      "Applies a Deployment against an existing Installation.",
+    ],
+    [
+      "POST",
+      "/v1/installations/:id/rollback",
+      "Rolls an Installation back to a prior Deployment.",
     ],
   ].map(([method, path, summary]) => ({
     method: method as ApiEndpointDescription["method"],
     path,
     summary,
-    auth: "deploy-token" as const,
+    auth: "installer-token" as const,
   }));
 }
 

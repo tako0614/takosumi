@@ -43,6 +43,12 @@ export const INSTALLER_INSTALLATION_ROLLBACK_PATH =
 
 export interface InstallerPublicRouteDependencies {
   /**
+   * Installer bearer resolver. When unset or empty, installer routes are
+   * disabled and return 404 so public hosts do not leak an unconfigured
+   * surface.
+   */
+  readonly getInstallerToken?: () => string | undefined;
+  /**
    * Installer pipeline instance — when unset, every endpoint returns 501
    * not_implemented (Wave 5 default until bootstrap wires one in).
    */
@@ -57,19 +63,26 @@ export function mountInstallerPublicRoutes(
 
   if (!pipeline) {
     app.post(INSTALLER_INSTALLATIONS_DRY_RUN_PATH, (c) =>
-      c.json(notImplemented("installer dry-run not yet implemented"), 501));
+      authorizeInstaller(c, dependencies) ??
+        c.json(notImplemented("installer dry-run not yet implemented"), 501));
     app.post(INSTALLER_INSTALLATIONS_PATH, (c) =>
-      c.json(notImplemented("installer apply not yet implemented"), 501));
+      authorizeInstaller(c, dependencies) ??
+        c.json(notImplemented("installer apply not yet implemented"), 501));
     app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH, (c) =>
-      c.json(notImplemented("deployment dry-run not yet implemented"), 501));
+      authorizeInstaller(c, dependencies) ??
+        c.json(notImplemented("deployment dry-run not yet implemented"), 501));
     app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_PATH, (c) =>
-      c.json(notImplemented("deployment apply not yet implemented"), 501));
+      authorizeInstaller(c, dependencies) ??
+        c.json(notImplemented("deployment apply not yet implemented"), 501));
     app.post(INSTALLER_INSTALLATION_ROLLBACK_PATH, (c) =>
-      c.json(notImplemented("rollback not yet implemented"), 501));
+      authorizeInstaller(c, dependencies) ??
+        c.json(notImplemented("rollback not yet implemented"), 501));
     return;
   }
 
   app.post(INSTALLER_INSTALLATIONS_DRY_RUN_PATH, async (c) => {
+    const unauthorized = authorizeInstaller(c, dependencies);
+    if (unauthorized) return unauthorized;
     return await runHandler(c, async () => {
       const body = await readJsonBody<InstallationDryRunRequest>(c);
       const response = await pipeline.installationDryRun(body);
@@ -78,6 +91,8 @@ export function mountInstallerPublicRoutes(
   });
 
   app.post(INSTALLER_INSTALLATIONS_PATH, async (c) => {
+    const unauthorized = authorizeInstaller(c, dependencies);
+    if (unauthorized) return unauthorized;
     return await runHandler(c, async () => {
       const body = await readJsonBody<InstallationApplyRequest>(c);
       const response = await pipeline.installationApply(body);
@@ -86,6 +101,8 @@ export function mountInstallerPublicRoutes(
   });
 
   app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH, async (c) => {
+    const unauthorized = authorizeInstaller(c, dependencies);
+    if (unauthorized) return unauthorized;
     return await runHandler(c, async () => {
       const installationId = c.req.param("installationId");
       const body = await readJsonBody<DeploymentDryRunRequest>(c);
@@ -95,6 +112,8 @@ export function mountInstallerPublicRoutes(
   });
 
   app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_PATH, async (c) => {
+    const unauthorized = authorizeInstaller(c, dependencies);
+    if (unauthorized) return unauthorized;
     return await runHandler(c, async () => {
       const installationId = c.req.param("installationId");
       const body = await readJsonBody<DeploymentApplyRequest>(c);
@@ -104,6 +123,8 @@ export function mountInstallerPublicRoutes(
   });
 
   app.post(INSTALLER_INSTALLATION_ROLLBACK_PATH, async (c) => {
+    const unauthorized = authorizeInstaller(c, dependencies);
+    if (unauthorized) return unauthorized;
     return await runHandler(c, async () => {
       const installationId = c.req.param("installationId");
       const body = await readJsonBody<RollbackRequest>(c);
@@ -111,6 +132,24 @@ export function mountInstallerPublicRoutes(
       return c.json(response, 201);
     });
   });
+}
+
+function authorizeInstaller(
+  c: Context,
+  dependencies: InstallerPublicRouteDependencies,
+): Response | undefined {
+  const token = dependencies.getInstallerToken?.();
+  if (!token) {
+    return c.json(errorEnvelope("not_found", "installer routes disabled"), 404);
+  }
+  const header = c.req.header("authorization") ?? "";
+  if (header !== `Bearer ${token}`) {
+    return c.json(
+      errorEnvelope("unauthenticated", "invalid installer bearer"),
+      401,
+    );
+  }
+  return undefined;
 }
 
 function notImplemented(message: string): InstallerErrorEnvelope {
