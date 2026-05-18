@@ -465,60 +465,42 @@ mutation は不可。
 
 See also: [Audit Events](/reference/audit-events).
 
-## CatalogRelease Publisher Key
-
-CatalogRelease descriptor の verify に用いる operator enrollment 済 Ed25519 鍵。
-
-| Field             | Type      | Required | Notes                         |
-| ----------------- | --------- | -------- | ----------------------------- |
-| `keyId`           | string    | yes      | publisher key 識別子。        |
-| `publisherId`     | string    | yes      | trusted publisher owner。     |
-| `publicKeyBase64` | string    | yes      | raw Ed25519 公開鍵 (base64)。 |
-| `status`          | enum      | yes      | `active` / `revoked`。        |
-| `enrolledAt`      | timestamp | yes      | enrollment 完了時刻。         |
-| `revokedAt`       | timestamp | no       | revoke 完了時刻。             |
-| `reason`          | string    | no       | operator 記入の理由。         |
-
-Persistence: operator trust root。 `(publisherId)` と `(status)` で index。
-
 ## CatalogRelease Descriptor
 
-Space が adopt する署名付き descriptor 本体。
+Space が adopt する catalog descriptor 本体。 v1 では publisher signing は採用
+せず、 **operator-pinned sha256 digest + TLS fetch** で trust を取る (詳細:
+[Catalog Release Trust](/reference/catalog-release-trust))。
 
-| Field                | Type      | Required | Notes                                        |
-| -------------------- | --------- | -------- | -------------------------------------------- |
-| `releaseId`          | string    | yes      | CatalogRelease id。                          |
-| `publisherId`        | string    | yes      | descriptor 署名 publisher。                  |
-| `descriptorDigest`   | sha256    | yes      | canonical payload の sha256。                |
-| `descriptor`         | object    | yes      | pin を含む署名付き descriptor 本体。         |
-| `signatureAlgorithm` | string    | yes      | `Ed25519`。                                  |
-| `signatureKeyId`     | string    | yes      | verification に用いる鍵。                    |
-| `signatureValue`     | string    | yes      | canonical payload に対する base64 署名。     |
-| `createdAt`          | timestamp | yes      | descriptor 作成時刻。                        |
-| `activatedAt`        | timestamp | no       | publisher activation 時刻 (供給される場合)。 |
+| Field              | Type      | Required | Notes                                                          |
+| ------------------ | --------- | -------- | -------------------------------------------------------------- |
+| `releaseId`        | string    | yes      | CatalogRelease id。                                            |
+| `descriptorDigest` | sha256    | yes      | canonical payload の sha256 (= operator が pin する digest)。  |
+| `descriptor`       | object    | yes      | kind / materializer の release pin 本体。                      |
+| `createdAt`        | timestamp | yes      | descriptor 作成時刻。                                          |
+| `fetchedAt`        | timestamp | yes      | kernel が TLS で fetch / digest verify した時刻。              |
 
 Persistence: 当 release を参照する adoption がある間は immutable に保持。
-`(publisherId)` / `(descriptorDigest)` / `(createdAt)` で index。
+`(descriptorDigest)` / `(createdAt)` で index。
 
 ## CatalogReleaseAdoption
 
-catalog release に対する Space 単位の adoption record。
+catalog release に対する Space 単位の adoption record。 trust の root は
+**operator-pinned sha256 digest** (詳細: [Catalog Release Trust](/reference/
+catalog-release-trust))。
 
 | Field                         | Type      | Required | Notes                                |
 | ----------------------------- | --------- | -------- | ------------------------------------ |
 | `id`                          | string    | yes      | adoption record id。                 |
 | `catalogReleaseId`            | string    | yes      | adopt した release id。              |
 | `spaceId`                     | string    | yes      | adoption 対象 Space。                |
-| `publisherId`                 | string    | yes      | descriptor publisher。               |
-| `publisherKeyId`              | string    | yes      | adoption に使った publisher key id。 |
-| `descriptorDigest`            | sha256    | yes      | sha256 catalog descriptor digest。   |
+| `descriptorDigest`            | sha256    | yes      | sha256 catalog descriptor digest (= operator pin と一致)。 |
 | `adoptedAt`                   | timestamp | yes      | adoption 完了時刻。                  |
 | `rotatedFromCatalogReleaseId` | string    | no       | rotation 元 release。                |
-| `verification`                | object    | yes      | verifiedAt / algorithm / digest。    |
+| `verification`                | object    | yes      | verifiedAt / algorithm (= "sha256") / digest。 |
 
 Persistence: resolution が当 release を参照する間に加え、 audit retention window
-まで保持。 `(spaceId, adoptedAt)` / `(catalogReleaseId)` / `(publisherKeyId)` で
-index。 Immutability: operator のみ append 可能。
+まで保持。 `(spaceId, adoptedAt)` / `(catalogReleaseId)` で index。 Immutability:
+operator のみ append 可能。
 
 See also: [Catalog Release Trust](/reference/catalog-release-trust).
 

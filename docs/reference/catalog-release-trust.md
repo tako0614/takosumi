@@ -1,216 +1,116 @@
 # CatalogRelease Trust Model
 
-> このページでわかること: CatalogRelease / Connector / Implementation の 3-tier
-> trust chain と signature verify / publisher key enroll / rotate / revoke /
-> 失敗時挙動 / operator UX。
+> このページでわかること: CatalogRelease の trust model。 v1 では **operator-
+> pinned sha256 digest + TLS fetch** で fail-closed に検証する。 publisher
+> signing model は採用しない。
 
-CatalogRelease は Takosumi v1 で「shape / provider の release pin」 を Space に
-adopt する単位。
+CatalogRelease は Takosumi v1 で「kind / materializer の release pin」 を
+Space に adopt する単位。
 
-## 3-tier trust chain
+## Trust model summary
 
-| Tier           | 内容                                                  | Signer                               | Verifier      |
-| -------------- | ----------------------------------------------------- | ------------------------------------ | ------------- |
-| CatalogRelease | shape / provider の release pin descriptor 集合       | catalog publisher (operator-trusted) | kernel        |
-| Connector      | connector instance manifest (credential binding 付き) | operator                             | runtime-agent |
-| Implementation | provider plugin の particular implementation binding  | provider plugin author               | runtime-agent |
+ecosystem trust model は 「TLS + digest pin + 1 signing domain (OIDC)」 で、
+OIDC ID token signing と install launch token signing は両方とも **Takosumi
+Accounts** が所有する。 kernel が直接関わる signing は **CatalogRelease
+verification のみ** であり、 これも publisher signing ではなく **operator-
+pinned sha256 digest** で fail-closed に検証する。
 
-### CatalogRelease tier
+```text
+1. operator pins catalog digest in kernel host config (= CATALOG_DIGEST)
+2. kernel TLS-fetches catalog and computes sha256
+3. mismatch rejects boot/apply fail-closed
+4. Installation / Deployment evidence records catalog digest
+```
 
-- catalog publisher (Takosumi-operator が enroll した trusted entity) が release
-  を sign する。
-- kernel が adoption / resolution 時に signature を verify する。
-- CatalogRelease descriptor は Space に adopt されると、その Space の
-  ResolutionSnapshot が pin する shape / provider の release を 固定する。
+| Tier           | Verified by                            | Verifier      |
+| -------------- | -------------------------------------- | ------------- |
+| CatalogRelease | operator-pinned sha256 + TLS fetch     | kernel        |
+| Connector      | operator config + TLS                  | runtime-agent |
+| Implementation | digest pin (= artifact / image digest) | runtime-agent |
 
-### Connector tier
+## Why not publisher signing
 
-- connector instance は operator が sign する。 runtime-agent が boundary で
-  verify する。
-- verification 主体は **runtime-agent**。 kernel ではない。 詳細は
-  [Connector Contract](/reference/connector-contract) 参照。
+publisher signing model (= Ed25519 key enrollment / rotation / revocation list)
+は v1 default では不要。 reasons:
 
-### Implementation tier
+- **single signing domain**: ecosystem 全体で OIDC ID token signing 1 つに
+  集約することで、 verify path が複数になる cognitive cost を避ける。
+- **operator agency**: operator が pin する digest が trust の root。 publisher
+  side で signing key が rotate されても、 operator が digest を再 pin する
+  までは何も変わらない (= fail-closed)。
+- **simplicity**: kernel に key enrollment / rotation / revocation list 管理を
+  持たない。
 
-- provider plugin author が particular implementation を sign する。
-- runtime-agent が dispatch 直前に signature を verify する。
-- 同じ provider plugin に複数 implementation がある場合、 それぞれ独立に sign /
-  verify される。
+dynamic registry や multi-mirror catalog が必要になった場合は future RFC で
+publisher signing domain を追加できる。 v1 では採用しない。
 
-## Signature algorithm
+## Catalog digest workflow
 
-3 tier すべてで **Ed25519** を使う。 これは gateway-manifest signing と同じ
-algorithm で、 kernel / runtime-agent 双方が単一 verify path を持つ。
+### Enroll
 
-- 鍵 size / canonical encoding / signature header layout は kernel が固定する
-- 別 algorithm を adopt するには `CONVENTIONS.md` §6 RFC を要する
+```bash
+# operator が catalog の digest を取得して pin
+curl -fsSL https://example.com/catalog.json | sha256sum
+# → 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
 
-## Publisher key enrollment
+# kernel host config に pin
+export CATALOG_URL=https://example.com/catalog.json
+export CATALOG_DIGEST=sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+```
 
-trusted publisher の identity は operator が明示的に enroll する。 kernel は
-事前知識を持たない。 enroll されていない publisher の signature は verify
-できない。
+### Verify (= kernel boot / apply 時)
 
-- **enroll**: operator が publisher の Ed25519 public key を kernel に登録する。
-  enroll は audit event `publisher-key-enrolled` を伴う。
-- **rotation**: publisher は新 key を CatalogRelease descriptor に embed して 新
-  release を出す。 kernel は当該 descriptor を verify する際に新 key を 採用する
-  (previous key は revocation list に追加されるまで併存する)。
-- **revocation**: operator が rotation 完了に合わせて revocation list に
-  previous key を載せる。 kernel はこの list を即時反映し、 revoked key で sign
-  された CatalogRelease descriptor を以後 verify failure として扱う。
+kernel は TLS で `CATALOG_URL` から fetch し、 bytes の sha256 を計算する。
+`CATALOG_DIGEST` と mismatch なら boot / apply を fail-closed で reject する。
 
-publisher key の rotation policy は CatalogRelease descriptor に embed する形で
-publisher 側に主導権がある。 kernel 側で rotation cadence を強制しない。
-operator policy で minimum rotation interval を要求することはできる。
+### Rotate
 
-## CatalogRelease descriptor との関係
+新 catalog を fetch → 新 digest を operator が pin → kernel reload。 publisher
+側に「key rotation」 という概念は存在しない (= catalog 自体が版を持つ)。
 
-- CatalogRelease descriptor は shape / provider の release pin 集合と publisher
-  key set を含む。
-- descriptor digest が ResolutionSnapshot に記録され、 approval record の
-  binding にも乗る。
-- kernel は **resolution time に signature verification を実行**する。 verify は
-  idempotent で、 同じ descriptor digest
-  に対して何度走らせても結果は変わらない。
+### Revoke
 
-Current kernel primitive:
+operator が `CATALOG_DIGEST` を旧版に戻す (= rollback)、 または kernel host
+config から削除する。 publisher 側に「revocation list」 を kernel が問い合わせる
+仕組みは持たない。
 
-- `CatalogReleaseService` verifies Ed25519 signatures over the canonical
-  descriptor payload (the `signature` field is excluded from the signed bytes).
-- `enrollPublisherKey` / `revokePublisherKey` persist publisher keys and emit
-  `publisher-key-enrolled` / `publisher-key-revoked` audit events when an audit
-  store is supplied.
-- `adoptCatalogRelease` stores the signed descriptor, writes an append-only
-  per-Space adoption record with `descriptorDigest`, and emits
-  `catalog-release-adopted` or `catalog-release-rotated`.
-- `verifyCurrentReleaseForSpace` re-verifies the stored adopted descriptor and
-  fails closed with `implementation-unverified` risk metadata if the key is
-  missing, revoked, mismatched, or the signature no longer verifies.
-- The installer WAL invokes that verifier as kernel-owned CatalogRelease
-  re-verification during the matching WAL stages. Pre-commit verification
-  failure appends terminal `abort` before provider side effects. Post-commit
-  verification failure appends the failed verification result, enqueues
-  `approval-invalidated` RevokeDebt for committed operations, then records
-  observe/finalize evidence. contract. CatalogRelease Ed25519 verification is
-  the only current trust check described by this page.
+## CatalogRelease descriptor
 
-## Verify 失敗時の挙動
+Space が adopt する descriptor 本体 (= operator-pinned digest と一致する catalog
+body の中身):
 
-verify が失敗するケースと kernel の挙動:
+```json
+{
+  "catalog": {
+    "kinds": [
+      { "uri": "https://takosumi.com/kinds/v1/worker", "version": "1.0.0" },
+      { "uri": "https://takosumi.com/kinds/v1/postgres", "version": "1.0.0" }
+    ],
+    "materializers": [
+      { "kindUri": "https://takosumi.com/kinds/v1/worker", "providerId": "@takos/cloudflare-workers", "version": "1.0.0" },
+      { "kindUri": "https://takosumi.com/kinds/v1/worker", "providerId": "@takos/aws-fargate", "version": "1.0.0" }
+    ]
+  }
+}
+```
 
-- **signature verify failure** (descriptor の signature が publisher key で
-  verify できない): resolution は **fail-closed**。 当該 ResolutionSnapshot は
-  確定せず、 `implementation-unverified` Risk を emit する
-  ([Risk Taxonomy](/reference/risk-taxonomy) §13)。 approval があっても Risk
-  severity が `error` のため進めない。
-- **publisher key revoked** (verify は形式上通るが、 key が revocation list に
-  載っている): kernel は当該 publisher の CatalogRelease descriptor 全体を
-  invalid 扱いし、 依存する全 resolution を fail させる。 adopted Space 側の
-  approval は catalog release change trigger で `invalidated` に落ちる
-  ([Approval Invalidation Triggers](/reference/approval-invalidation) §5)。
-- **publisher 未 enroll** (signature 自体は付いているが publisher 鍵が未登録):
-  signature verify failure と同じ扱い。 `implementation-unverified` Risk。
-- **descriptor 改ざん検出** (digest が一致しない): hash 不一致で resolution
-  fail-closed。
+descriptor body そのものに署名は付かない。 trust の root は **operator が pin
+した sha256 digest** だけ。
 
-verify 失敗は ResolutionSnapshot を materialize しないため、
-副作用は発生しない。 operator は trust 失敗を解消するまで前進できない。
+## Failure UX
 
-## Operator UX
-
-CatalogRelease trust の operator surface は internal control-plane tooling で
-提供する。 current public `takosumi` CLI には catalog publisher subcommand は
-ない。
-
-- **enroll**: publisher key enrollment 成功で `publisher-key-enrolled` audit
-  event。
-- **rotate**: 新 publisher key の enroll は通常の `enroll` と同じ。 previous key
-  の retire は `revoke` 経路に移す。
-- **revoke**: publisher key を revocation list に追加。 即時反映され、 依存
-  resolution が fail する。 audit event `publisher-key-revoked`。
-- **adopt**: Space に CatalogRelease を adopt する際は kernel が verify
-  を走らせ、 結果を CLI に返す。 fail なら adopt しない。 成功で
-  `catalog-release-adopted` audit event。
-- **rotate adopted release**: 既 adopted Space に新 release を載せ替える操作は
-  `catalog-release-rotated` audit event を発行する。 approval は trigger 5
-  (catalog release change) で再評価される。
-
-## Audit events
-
-trust model に関連する主要 audit event:
-
-- `catalog-release-adopted` — Space が CatalogRelease を adopt した。
-- `catalog-release-rotated` — adopted Space の release が変わった。
-- `publisher-key-enrolled` — operator が publisher key を enroll した。
-- `publisher-key-revoked` — operator が publisher key を revocation list
-  に追加した。
-
-詳細 envelope / payload は [Audit Events](/reference/audit-events) を参照。
-
-## Trust 境界の責務分担
-
-- kernel は **CatalogRelease tier のみ** を verify する。 Connector /
-  Implementation tier には触らない。 これにより kernel が credential 値や
-  runtime-side material を扱わずに済む。
-- runtime-agent は **Connector tier と Implementation tier** を verify する。
-  kernel が記録した CatalogRelease descriptor digest と integrity 上の
-  rendezvous を取る。
-- 3 tier それぞれが独立した signer / verifier の組を持つ。 1 tier の compromise
-  が他 tier を即座に侵さない設計になる。
-
-## Multi-publisher coexistence
-
-operator は同一 kernel に複数 publisher を enroll できる。
-
-- それぞれの publisher は独立した key set を持つ。 CatalogRelease descriptor は
-  単一 publisher で sign される。
-- 異なる publisher が同じ shape / provider id について release を出しても、
-  Space ごとに adopt する publisher は 1 つに固定される。 同一 Space に複数
-  publisher の release を同時に adopt することはない。
-- publisher 切り替えは `catalog-release-rotated` event を伴い、 approval
-  invalidation の trigger 5 を引く。
-
-## Trust の境界での failure mode 整理
-
-| Failure                       | Tier           | 検出主体      | 結果                                                      |
-| ----------------------------- | -------------- | ------------- | --------------------------------------------------------- |
-| CatalogRelease signature 不正 | CatalogRelease | kernel        | resolution fail-closed / `implementation-unverified` Risk |
-| publisher key 未 enroll       | CatalogRelease | kernel        | resolution fail-closed / `implementation-unverified` Risk |
-| publisher key revoked         | CatalogRelease | kernel        | 全依存 resolution fail / approval invalidated             |
-| Connector signature 不正      | Connector      | runtime-agent | runtime-agent 側で dispatch 拒否                          |
-| Implementation signature 不正 | Implementation | runtime-agent | runtime-agent 側で dispatch 拒否                          |
-
-kernel と runtime-agent はそれぞれの tier で独立に verify する。 1 tier の
-failure を他 tier が暗黙に補正することはない。
-
-## Invariants
-
-- signature algorithm は Ed25519 で固定。
-- publisher key は operator が enroll しない限り trust されない。
-- verify 失敗は fail-closed。副作用なし。
-- CatalogRelease descriptor digest は ResolutionSnapshot に記録され、 approval
-  binding に乗る。
-- adopted release の rotation は approval の catalog release change trigger
-  を引く。
-- 1 Space に同時 adopt できる publisher は 1 つ。
+| Failure                                                                  | Behavior                                  |
+| ------------------------------------------------------------------------ | ----------------------------------------- |
+| `CATALOG_URL` fetch failure (DNS / TLS / 5xx)                            | boot / apply reject (`failed_precondition` HTTP 409) |
+| `CATALOG_DIGEST` mismatch                                                | boot / apply reject、 audit `catalog-digest-mismatch` |
+| `CATALOG_DIGEST` unset                                                   | boot reject in `TAKOSUMI_ENVIRONMENT=production`、 dev では warn |
+| catalog body schema invalid                                              | boot reject、 audit `catalog-body-invalid` |
 
 ## Related architecture notes
 
-- `docs/reference/architecture/catalog-release-descriptor-model.md` — 3-tier
-  trust chain と publisher key enroll / rotate / revoke の設計議論
-- `docs/reference/architecture/paas-provider-architecture.md` — provider plugin
-  author signing と runtime-agent verification の境界 rationale
-- `docs/reference/architecture/operator-boundaries.md` — operator が trusted
-  entity を enroll する surface と redaction trust boundary の議論
-
-## 関連ページ
-
-- [Connector Contract](/reference/connector-contract)
-- [Provider Plugins](/reference/providers)
-- [Risk Taxonomy](/reference/risk-taxonomy)
-- [Approval Invalidation Triggers](/reference/approval-invalidation)
-- [Audit Events](/reference/audit-events)
-- [CLI](/reference/cli)
-- [Kernel HTTP API](/reference/kernel-http-api)
-- [Closed Enums](/reference/closed-enums)
+- [Supply Chain Trust](/reference/supply-chain-trust) — ecosystem-wide
+  「TLS + digest pin + 1 signing domain (OIDC)」 narrative
+- [Storage Schema](/reference/storage-schema) — CatalogRelease descriptor の
+  persistence shape
+- [Catalog Release Descriptor Model](/reference/architecture/catalog-release-descriptor-model)
+- [Connector Contract](/reference/connector-contract) — runtime-agent 側 verify
