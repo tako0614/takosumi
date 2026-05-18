@@ -12,7 +12,6 @@
     "./kinds": "./kinds.ts",
     "./shape-providers": "./shape-providers.ts",
     "./shape-providers/factories": "./shape-providers-factories.ts",
-    "./templates": "./templates.ts",
     "./cli": "./cli.ts",
     "./server": "./server.ts",
     "./runtime-agent": "./runtime-agent.ts"

@@ -16,7 +16,6 @@
     "./runtime-agent": "./src/runtime-agent.ts",
     "./runtime-agent-lifecycle": "./src/runtime-agent-lifecycle.ts",
     "./shape": "./src/shape.ts",
-    "./template": "./src/template.ts",
     "./types": "./src/types.ts"
   },
   "tasks": {

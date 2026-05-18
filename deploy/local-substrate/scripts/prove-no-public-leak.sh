@@ -2,8 +2,8 @@
 # Defense-in-depth assertion that the local-substrate cannot leak to
 # public DNS / ACME endpoints. Three checks:
 #
-#   1. factory: a manifest requesting @takos/aws-route53 is rejected by the
-#      kernel because the connector is import-time denied.
+#   1. kernel: removed legacy public deploy routes return 404, so raw Manifest
+#      posts cannot bypass the installer contract.
 #   2. CoreDNS: any letsencrypt.org name returns NXDOMAIN.
 #   3. host firewall: the script *recommends* nftables / iptables egress
 #      filtering (we don't apply it here, since it requires root and varies
@@ -17,26 +17,33 @@ cd "$SUBSTRATE_DIR"
 PASS=0
 FAIL=0
 
-assert_factory_denies_public_dns() {
-	echo "==> [factory] Posting fail-public-dns manifest to kernel"
-	local resp
-	resp=$(curl -sk \
-		--cacert caddy/runtime/pebble-issuance-root.pem \
-		--resolve kernel.takosumi.test:443:127.0.0.1 \
-		-H "Authorization: Bearer ${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}" \
-		-H "Content-Type: application/yaml" \
-		--data-binary @fixtures/manifest.fail-public-dns.yml \
-		-w "\n%{http_code}\n" \
-		https://kernel.takosumi.test/v1/deployments)
-	local http_code
-	http_code=$(echo "$resp" | tail -1)
-	if [[ "$http_code" == "400" ]] || [[ "$http_code" == "404" ]] || \
-		echo "$resp" | grep -q "provider_not_registered\|provider_not_configured\|connector_not_found"; then
-		echo "    PASS http=$http_code (kernel rejected public-DNS provider)"
+assert_legacy_public_deploy_closed() {
+	echo "==> [kernel] Verifying legacy public deploy routes are closed"
+	local leaked=0
+	local paths=(
+		"/v1/deployments"
+		"/api/public/v1/deployments"
+	)
+	for path in "${paths[@]}"; do
+		local http_code
+		http_code=$(curl -sk \
+			--cacert caddy/runtime/pebble-issuance-root.pem \
+			--resolve kernel.takosumi.test:443:127.0.0.1 \
+			-H "Authorization: Bearer ${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}" \
+			-H "Content-Type: application/json" \
+			-d '{"manifest":{"kind":"Manifest","metadata":{"name":"legacy-route-probe"}}}' \
+			-o /dev/null \
+			-w "%{http_code}" \
+			"https://kernel.takosumi.test${path}")
+		if [[ "$http_code" != "404" ]]; then
+			echo "    FAIL $path returned http=$http_code (expected 404)"
+			leaked=$((leaked + 1))
+		fi
+	done
+	if [[ "$leaked" -eq 0 ]]; then
+		echo "    PASS legacy deploy routes are not mounted"
 		PASS=$((PASS + 1))
 	else
-		echo "    FAIL http=$http_code (kernel did not reject public-DNS provider)"
-		echo "    body: $resp"
 		FAIL=$((FAIL + 1))
 	fi
 }
@@ -73,7 +80,7 @@ EOF
 }
 
 assert_mocks_not_host_published() {
-	# The mock + emulator services (install-preview-mock, oauth-mock,
+	# The mock + emulator services (installer-mock, oauth-mock,
 	# mailpit web UI, jaeger UI, otel-collector, minio, and the
 	# Miniflare worker mirrors) must stay on the internal docker
 	# network. If anyone accidentally adds a `ports:` entry that
@@ -81,7 +88,7 @@ assert_mocks_not_host_published() {
 	echo "==> [docker] Verifying new mock/emulator containers do not bind 0.0.0.0"
 	local leaked=0
 	local services=(
-		install-preview-mock
+		installer-mock
 		oauth-mock
 		mailpit
 		jaeger
@@ -110,7 +117,7 @@ assert_mocks_not_host_published() {
 	fi
 }
 
-assert_factory_denies_public_dns
+assert_legacy_public_deploy_closed
 assert_coredns_nxdomain_letsencrypt
 assert_mocks_not_host_published
 recommend_egress_filter

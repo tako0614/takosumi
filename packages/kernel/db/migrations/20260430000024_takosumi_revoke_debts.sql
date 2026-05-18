@@ -4,7 +4,7 @@
 --            for a single generated object / WAL tuple.
 --
 -- Spec:      packages/kernel/src/domains/deploy/revoke_debt_store.ts
--- Phase:     public deploy recovery / RevokeDebt
+-- Phase:     deployment recovery / RevokeDebt
 -- Domain:    deploy
 
 create table if not exists takosumi_revoke_debts (

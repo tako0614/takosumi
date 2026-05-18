@@ -254,7 +254,10 @@ async function requireRemote(
   remote?: string,
   token?: string,
 ): Promise<RemoteTarget> {
-  const target = resolveMode({ remote, token }, await loadConfig());
+  const target = resolveMode(
+    { remote, token },
+    await loadConfig({ tokenEnv: "deploy" }),
+  );
   if (target.mode !== "remote" || !target.url || !target.token) {
     console.error(
       "artifact commands require a remote kernel: pass --remote and --token, " +

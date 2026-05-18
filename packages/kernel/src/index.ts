@@ -345,8 +345,8 @@ function logDeploymentRecordStoreBackend(sqlClientResolved: boolean): void {
 
 /**
  * Build a long-lived SqlClient that the kernel passes into
- * `createPaaSApp` so SQL-backed records (notably the public deploy
- * lifecycle behind `POST /v1/deployments`) survive process restart.
+ * `createPaaSApp` so SQL-backed deployment and installer lifecycle records
+ * survive process restart.
  *
  * Returns `undefined` when no `DATABASE_URL` is configured or the pg
  * driver is unavailable; the kernel then boots with the in-memory

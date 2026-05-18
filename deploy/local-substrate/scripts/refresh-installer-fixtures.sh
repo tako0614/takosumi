@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate install-preview-mock/fixtures/*.json from each bundled app's
+# Regenerate installer-mock/fixtures/*.json from each bundled app's
 # .takosumi.yml (AppSpec v1).
 #
 # The mock looks up these fixtures by git URL at request time, so the
@@ -11,7 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ECOSYSTEM="$SUBSTRATE_DIR/../../.."
-FIXTURE_DIR="$SUBSTRATE_DIR/install-preview-mock/fixtures"
+FIXTURE_DIR="$SUBSTRATE_DIR/installer-mock/fixtures"
 
 # Map: git URL (basename) -> local checkout path
 declare -A REPOS=(

@@ -8,6 +8,17 @@ Versions follow [Semantic Versioning](https://semver.org/) once each package
 crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes (documented per
 entry).
 
+## Unreleased — 2026-05-18
+
+- **Breaking**: public deploy/install contract is reset to three concepts:
+  AppSpec (`.takosumi.yml`), Installation, and Deployment. The public installer
+  HTTP surface is the 5 endpoint `/v1/installations*` API.
+- **Breaking**: legacy public deployment routes, including `/v1/deployments` and
+  `/api/public/v1/*`, are removed from the kernel route table and OpenAPI.
+- `takosumi install`, `takosumi deploy`, and `takosumi rollback` now use the
+  installer API with `TAKOSUMI_INSTALLER_TOKEN`. `TAKOSUMI_DEPLOY_TOKEN` remains
+  scoped to artifact write routes.
+
 ## takosumi-cli
 
 ### 0.15.0 — 2026-05-06
@@ -20,17 +31,17 @@ entry).
   `resolveManifestPath()` reject when the path is missing with
   `manifest path is required; pass <manifest> or --manifest <path>.` +
   `Project-layout discovery (.takosumi/manifest.yml) is provided by` +
-  `takosumi-git (sibling product), not this CLI.`. The
+  `standalone installer (sibling product), not this CLI.`. The
   `DEFAULT_MANIFEST_CANDIDATES` export is removed.
 - **Breaking**: `takosumi init --project` is removed. `init` now writes the
   rendered manifest to the explicit `<output>` path (or stdout when omitted) and
   never creates a `.takosumi/` directory.
 - The `.takosumi/` repository convention (project layout, workflow definitions,
   git push / webhook / build pipeline, cron / hook wiring) has moved to the
-  `takosumi-git` sibling product, which posts generated manifests back to the
-  kernel via `POST /v1/deployments`. Operators that want the old "drop a
-  `.takosumi/manifest.yml` and run `takosumi deploy`" UX should adopt
-  `takosumi-git`.
+  `standalone installer` sibling product, which posts generated manifests back
+  to the kernel via `legacy raw deploy route`. Operators that want the old "drop
+  a `.takosumi/manifest.yml` and run `takosumi deploy`" UX should adopt
+  `standalone installer`.
 - Published package imports now pin `@takos/takosumi-contract@^2.5.0`, matching
   the `TAKOSUMI_*` internal RPC naming policy.
 
@@ -126,7 +137,7 @@ entry).
 
 ### 0.15.0 — 2026-05-07
 
-- Public `POST /v1/deployments` now enforces manifest-declared
+- Public `legacy raw deploy route` now enforces manifest-declared
   `spec.artifact.size` before plan / apply side effects. Sizes must be
   non-negative integer byte counts and cannot exceed the registered
   artifact-kind `maxSize` (falling back to the kernel artifact cap for unknown
@@ -167,7 +178,7 @@ entry).
 - **Breaking**: kernel-side workflow primitive reservation withdrawn. The
   reserved `triggers` / `execute-step-operation` / `declarable-hooks` reference
   pages were removed; workflow / trigger / hook semantics are owned by
-  `takosumi-git` (upstream sibling product). See
+  `standalone installer` (upstream sibling product). See
   [Workflow Placement Rationale](./docs/reference/architecture/workflow-extension-design.md).
 - **Breaking**: `compute.<name>.build` field removed from the manifest schema.
   Manifests carrying `build` / `build.fromWorkflow` are now rejected with a
@@ -181,12 +192,12 @@ entry).
 - Published package imports now pin `@takos/takosumi-contract@^2.5.0`, matching
   the `TAKOSUMI_INTERNAL_PATHS` / internal RPC exports used by the kernel.
 - The Kernel HTTP API reference now separates implemented routes from
-  workflow-shaped concerns owned by `takosumi-git`, and the docs include a
-  public spec source map with drift tests.
+  workflow-shaped concerns owned by `standalone installer`, and the docs include
+  a public spec source map with drift tests.
 
 ### 0.13.0 — 2026-05-03
 
-- **Breaking**: `POST /v1/deployments` (deploy public route) now invokes
+- **Breaking**: `legacy raw deploy route` (deploy public route) now invokes
   `validateManifestEnvelope()` from contract 2.4.0 — manifests missing
   `apiVersion: "1.0"` / `kind: Manifest` are rejected with HTTP 400 and a
   path-prefixed error.
@@ -217,7 +228,7 @@ entry).
 
 - **Breaking**: `resource.workflow@v1` shape registration removed from the
   bundled shape catalog. Workflow / cron / hook resources are now plugin shapes
-  provided by upstream products such as `takosumi-git`.
+  provided by upstream products such as `standalone installer`.
 
 ### 0.11.0 — 2026-05-03
 
@@ -267,7 +278,7 @@ entry).
   `.takosumi/manifest.yml` / `manifest.yml`; pass the manifest path explicitly
   to every `deploy` / `plan` / `destroy` / `doctor` invocation.
   `takosumi init --project` is gone. The `.takosumi/` project-layout convention
-  has moved to the `takosumi-git` sibling product.
+  has moved to the `standalone installer` sibling product.
 
 ### 0.16.0 — 2026-05-06
 

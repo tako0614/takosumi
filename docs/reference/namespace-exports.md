@@ -2,10 +2,10 @@
 
 > このページでわかること: namespace export の仕組みと使い方。
 
-Namespace export は operator / account plane / billing / dashboard / deploy API
-など、 kernel Shape manifest の外にある usable surface を Space-scoped に公開
-する contract です。 kernel は namespace export を discover / grant / fetch
-せず、 compiled Shape manifest だけを受け取ります。
+Namespace export は operator / account plane / billing / dashboard / installer
+API など、 AppSpec の外にある usable surface を Space-scoped に公開する contract
+です。 kernel は namespace export を discover / grant / fetch せず、AppSpec
+installer lifecycle だけを扱います。
 
 ## Path Grammar
 
@@ -133,8 +133,8 @@ export から issuer discovery URL を得て、 その後は OIDC discovery cont
 
 ## Grants
 
-Namespace export は default-deny です。 consumer は Link / permission grant / account
-API operation のいずれかで explicit grant を得ます。
+Namespace export は default-deny です。 consumer は Link / permission grant /
+account API operation のいずれかで explicit grant を得ます。
 
 - `read` は metadata / public config の読み取り。
 - `call` は endpoint invocation。

@@ -16,17 +16,12 @@ export type RuntimePluginSelection = Partial<
   Record<KernelPluginPortKind, string>
 >;
 
-export interface RuntimeRoutesConfig {
-  readonly publicRoutesEnabled: boolean;
-}
-
 export interface RuntimeConfig {
   readonly environment: RuntimeEnvironment;
   readonly processRole: PaaSProcessRole;
   readonly allowUnsafeProductionDefaults: boolean;
   readonly plugins: RuntimePluginSelection;
   readonly pluginConfig: JsonObject;
-  readonly routes: RuntimeRoutesConfig;
   readonly diagnostics: readonly RuntimeConfigDiagnostic[];
 }
 
@@ -213,12 +208,6 @@ export async function loadRuntimeConfig(
     allowUnsafeProductionDefaults,
     plugins,
     pluginConfig,
-    routes: {
-      publicRoutesEnabled: parseBoolean(
-        await reader.firstPlain(["TAKOSUMI_PUBLIC_ROUTES_ENABLED"]),
-        false,
-      ),
-    },
     diagnostics,
   };
 

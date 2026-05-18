@@ -2,17 +2,15 @@
 # Verifies the Phase-3 route-registrar wiring is intact:
 #
 #   1. The route-registrar container is running.
-#   2. Its tick loop is producing 'synced N dynamic' log lines (proves both
-#      the kernel API call and the Caddy admin PATCH are succeeding).
+#   2. Its tick loop is producing 'synced N dynamic' log lines (proves Caddy
+#      admin PATCH is succeeding).
 #   3. Caddy admin srv0/routes is reachable and returns the expected count
 #      of static routes (proves the partition strategy isn't accidentally
 #      dropping Caddyfile-owned routes).
 #
-# Note: this does NOT exercise an actual <id>.app.takosumi.test route, because
-# the dynamic route count is normally 0 until a manifest with desired.routes
-# is applied (today that requires a web-service@v1 deploy that spawns a real
-# container). Adding that round-trip is on the P3+ TODO; this smoke is the
-# 'pipeline alive' guard.
+# Note: Takosumi v1's public installer API does not expose raw desired routes.
+# Dynamic <id>.app.takosumi.test projection is deferred until an operator-
+# internal route source lands; this smoke is the registrar wiring guard.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

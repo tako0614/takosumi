@@ -21,6 +21,44 @@ Deno.test("createApiApp exposes /openapi.json when enabled", async () => {
   assert.ok(body.paths["/health"]);
 });
 
+Deno.test("createApiApp does not mount legacy public deployment routes", async () => {
+  const app = await createApiApp({
+    registerInternalRoutes: false,
+    registerInstallerPublicRoutes: true,
+    registerOpenApiRoute: true,
+    installerPublicRouteOptions: {
+      getInstallerToken: () => "installer-token",
+    },
+  });
+
+  for (
+    const path of [
+      "/api/public/v1/capabilities",
+      "/api/public/v1/deployments",
+      "/v1/deployments",
+    ]
+  ) {
+    const response = await app.request(path, { method: "POST" });
+    assert.equal(response.status, 404, path);
+  }
+
+  const capabilities = await (await app.request("/capabilities")).json();
+  const endpointPaths = capabilities.endpoints.map((
+    endpoint: { path: string },
+  ) => endpoint.path);
+  assert.ok(endpointPaths.includes("/v1/installations"));
+  assert.equal(
+    endpointPaths.some((path: string) => path.includes("/api/public/v1")),
+    false,
+  );
+  assert.equal(endpointPaths.includes("/v1/deployments"), false);
+
+  const openapi = await (await app.request("/openapi.json")).json();
+  assert.ok(openapi.paths["/v1/installations"]);
+  assert.equal(openapi.paths["/api/public/v1/deployments"], undefined);
+  assert.equal(openapi.paths["/v1/deployments"], undefined);
+});
+
 Deno.test("createApiApp mounts runtime-agent routes fail-closed when enabled", async () => {
   const app = await createApiApp({
     registerInternalRoutes: false,

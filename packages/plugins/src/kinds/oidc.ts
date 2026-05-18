@@ -8,7 +8,6 @@ import {
 /**
  * `oidc@v1` component kind.
  *
- * Replaces the prior `identity.oidc@v1` AppBinding from the legacy contract.
  * The Takosumi installer pipeline detects `kind: oidc` components at
  * Installation creation, registers a per-Installation OIDC client at the
  * Takosumi Accounts API, and surfaces issuer / client_id / client_secret /
@@ -58,9 +57,7 @@ const OUTPUT_FIELDS: readonly string[] = [
 export const OidcKind: Shape<OidcSpec, OidcOutputs, OidcCapability> = {
   id: "oidc",
   version: "v1",
-  description:
-    "Per-Installation OIDC client issued by Takosumi Accounts. " +
-    "Replaces the legacy identity.oidc@v1 AppBinding.",
+  description: "Per-Installation OIDC client issued by Takosumi Accounts.",
   capabilities: CAPABILITIES,
   outputFields: OUTPUT_FIELDS,
   validateSpec(value, issues) {

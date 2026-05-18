@@ -8,8 +8,8 @@
 
 - [AppSpec (`.takosumi.yml`)](./app-spec) — source root に置く 1 ファイル
 - [Component Kind Catalog](./component-kind-catalog) — 5 種の kind schema
-- [Installer API](./installer-api) — 5 endpoint の wire spec (dry-run /
-  apply / rollback)
+- [Installer API](./installer-api) — 5 endpoint の wire spec (dry-run / apply /
+  rollback)
 - [Kernel HTTP API](./kernel-http-api) — public installer + internal control
   plane + runtime-agent RPC の overview
 - [Runtime-Agent API](./runtime-agent-api) — kernel ↔ runtime-agent の lifecycle
@@ -66,7 +66,7 @@ account-plane identity / billing / RBAC は Takosumi Accounts が所有する。
 - [Actor / Organization Model](./actor-organization-model) — actor /
   organization の責務境界
 - [RBAC Policy](./rbac-policy) — RBAC を所有する layer の整理
-- [API Key Management](./api-key-management) — kernel deploy credential のみ
+- [API Key Management](./api-key-management) — installer / artifact credentials
 - [Auth Providers](./auth-providers) — auth provider の責務境界
 
 ## Security & trust
@@ -130,11 +130,10 @@ multi-tenant PaaS provider 固有の運用 surface。
 
 ## Catalog & extension
 
-shape catalog / provider / template / artifact 拡張面。
+shape catalog / provider / artifact 拡張面。
 
 - [Shape Catalog](./shapes) — v1 shapes / outputFields / capability extension
 - [Provider Plugins](./providers) — v1 provider matrix / registerProvider
-- [Templates](./templates) — registerTemplate / expand immutability
 - [Artifact Kinds](./artifact-kinds) — DataAsset kind registry /
   registerArtifactKind
 - [Connector Contract](./connector-contract) — `connector:<id>` / acceptedKinds
@@ -147,11 +146,11 @@ shape catalog / provider / template / artifact 拡張面。
 
 - [Manifest Validation](./manifest-validation) — closed grammar / validation
   phase / error code
-- [Manifest Expand Semantics](./manifest-expand-semantics) — `${ref:...}` 解決 /
-  cycle detection
+- [AppSpec Dependency Semantics](./manifest-expand-semantics) — `use:` graph /
+  binding rules
 - [Plan Output Schema](./plan-output) — `takosumi plan` / `mode: "plan"` 出力
-- [Status Output Schema](./status-output) — `takosumi status` /
-  `/v1/deployments` 出力
+- [Status Output Schema](./status-output) — internal Installation / Deployment
+  ledger read boundary
 - [Resource IDs](./resource-ids) — kind grammar / suffix format / 安定性
 - [Digest Computation](./digest-computation) — JCS canonicalization / sha256 /
   各 digest の input scope

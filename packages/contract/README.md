@@ -20,4 +20,4 @@ New service-to-service callers should use `internal-rpc.ts`, which emits the
 body digest, actor context, caller, audience, capabilities, request id, nonce,
 and timestamp.
 
-Git hosting contracts belong to `takosumi-git-contract`, not this package.
+Git hosting contracts are intentionally outside this package.

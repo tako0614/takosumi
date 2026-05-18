@@ -9,7 +9,7 @@
  *   POST /v1/installations/{id}/deployments
  *   POST /v1/installations/{id}/rollback
  *
- * No `previewId` / `planId` / Plan / Snapshot / Preview entity — dry-run
+ * No persisted plan entity — dry-run
  * results are returned in the response and never persisted as entities.
  */
 

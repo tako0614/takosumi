@@ -158,7 +158,7 @@ export function formatPlatformOperationIdempotencyKey(
  * The `Capability` type parameter pins the capability vocabulary to the
  * shape's published union (e.g. `WebServiceCapability`). Plugins that
  * type-parameterize this generic catch capability typos at compile time;
- * untyped plugins fall back to `string` for back-compat.
+ * untyped plugins fall back to `string`.
  */
 export interface ProviderPlugin<
   Spec = JsonObject,

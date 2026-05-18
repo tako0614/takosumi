@@ -37,7 +37,7 @@ const bindings = Object.fromEntries(
 
 bindings.TAKOS_RUNTIME_MODE ??= "cloudflare-worker";
 bindings.TAKOSUMI_ENVIRONMENT ??= "development";
-bindings.TAKOSUMI_PUBLIC_ROUTES_ENABLED ??= "true";
+bindings.TAKOSUMI_INSTALLER_TOKEN ??= "local-substrate-installer-token";
 bindings.TAKOSUMI_DEPLOY_TOKEN ??= "local-substrate-deploy-token";
 bindings.TAKOSUMI_DEPLOY_SPACE_ID ??= "local-substrate-space";
 bindings.TAKOSUMI_INTERNAL_API_SECRET ??= "local-dev-secret";

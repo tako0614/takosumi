@@ -6,9 +6,8 @@
  * wants to drive installs / deploys / rollbacks without re-implementing
  * the request envelopes.
  *
- * This module replaces the prior `takosumi-git/packages/deploy-client/
- * src/mod.ts` `parseManifestEnvelope` / `postDeployment` flow with the
- * new 5-endpoint surface.
+ * This module replaces the prior external git-installer deploy client with
+ * the new 5-endpoint surface.
  */
 
 import {
@@ -19,12 +18,12 @@ import {
   INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
   INSTALLATION_DEPLOYMENTS_PATH,
   INSTALLATION_ROLLBACK_PATH,
-  INSTALLATIONS_DRY_RUN_PATH,
-  INSTALLATIONS_PATH,
   type InstallationApplyRequest,
   type InstallationApplyResponse,
   type InstallationDryRunRequest,
   type InstallationDryRunResponse,
+  INSTALLATIONS_DRY_RUN_PATH,
+  INSTALLATIONS_PATH,
   type InstallerErrorEnvelope,
   type RollbackRequest,
   type RollbackResponse,

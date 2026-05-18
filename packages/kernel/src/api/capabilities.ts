@@ -8,13 +8,11 @@ import {
   TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
 import { TAKOSUMI_METRICS_PATH } from "./metrics_routes.ts";
-import { TAKOSUMI_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
 import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 export interface CreateApiCapabilitiesDescriptionOptions {
   readonly internalRoutesMounted?: boolean;
-  readonly publicRoutesMounted?: boolean;
   readonly installerPublicRoutesMounted?: boolean;
   readonly artifactRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
@@ -37,7 +35,6 @@ export interface ApiEndpointDescription {
   readonly auth:
     | "none"
     | "internal-service"
-    | "actor"
     | "deploy-token"
     | "artifact-read"
     | "installer-token"
@@ -72,7 +69,6 @@ export function createApiCapabilitiesDescription(
     });
   }
   if (options.internalRoutesMounted) endpoints.push(...internalEndpoints());
-  if (options.publicRoutesMounted) endpoints.push(...publicEndpoints());
   if (options.installerPublicRoutesMounted) {
     endpoints.push(...installerPublicEndpoints());
   }
@@ -226,77 +222,6 @@ function internalEndpoints(): ApiEndpointDescription[] {
       auth: "internal-service",
     },
   ];
-}
-
-function publicEndpoints(): ApiEndpointDescription[] {
-  return [
-    [
-      "GET",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities,
-      "Returns public API route capabilities.",
-    ],
-    [
-      "GET",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.spaces,
-      "Lists spaces visible to the authenticated actor.",
-    ],
-    [
-      "POST",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.spaces,
-      "Creates a space for the authenticated actor.",
-    ],
-    [
-      "GET",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.groups,
-      "Lists groups for a space visible to the authenticated actor.",
-    ],
-    ["POST", TAKOSUMI_PAAS_PUBLIC_PATHS.groups, "Creates a group in a space."],
-    [
-      "POST",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
-      "Creates a Deployment with mode=preview|resolve|apply|rollback.",
-    ],
-    [
-      "GET",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
-      "Lists Deployments for a group / status filter.",
-    ],
-    [
-      "GET",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.deployment,
-      "Returns a Deployment by id.",
-    ],
-    [
-      "POST",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply,
-      "Applies a resolved Deployment.",
-    ],
-    [
-      "POST",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove,
-      "Attaches an approval to a Deployment.",
-    ],
-    [
-      "GET",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations,
-      "Streams provider observations for a Deployment.",
-    ],
-    [
-      "GET",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead,
-      "Returns the GroupHead pointer for a group.",
-    ],
-    [
-      "POST",
-      TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback,
-      "Rolls a GroupHead back to its previous Deployment.",
-    ],
-  ].map(([method, path, summary]) => ({
-    method: method as ApiEndpointDescription["method"],
-    path,
-    summary,
-    auth: "actor" as const,
-  }));
 }
 
 function runtimeAgentEndpoints(): ApiEndpointDescription[] {

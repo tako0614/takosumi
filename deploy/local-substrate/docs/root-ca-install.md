@@ -5,8 +5,8 @@ host に 2 つの設定を一回だけ入れる:
 
 1. Pebble issuance root を host trust store に追加 (curl / chrome / firefox
    が緑鍵で verify するため)
-2. systemd-resolved を `*.takosumi.test → 127.0.0.1` で per-domain split (host から
-   CoreDNS に流すため)
+2. systemd-resolved を `*.takosumi.test → 127.0.0.1` で per-domain split (host
+   から CoreDNS に流すため)
 
 両方とも対応 script があるので、 `up.sh` 後に下記を一回流せばよい:
 
@@ -45,8 +45,8 @@ EOF
 sudo systemctl restart systemd-resolved
 ```
 
-`~takosumi.test` の leading tilde は 「`takosumi.test` で終わるクエリ **のみ** この
-DNS server に送る」 の意。 他の DNS 解決は通常の path を踏むので WAN
+`~takosumi.test` の leading tilde は 「`takosumi.test` で終わるクエリ **のみ**
+この DNS server に送る」 の意。 他の DNS 解決は通常の path を踏むので WAN
 解決が壊れない。
 
 設定を解除する場合は config を消して resolved を再起動する:

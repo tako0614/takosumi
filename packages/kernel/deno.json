@@ -18,8 +18,7 @@
     "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
     "@takos/takosumi-plugins/kinds": "jsr:@takos/takosumi-plugins@^0.12.0/kinds",
     "@takos/takosumi-plugins/shape-providers": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers",
-    "@takos/takosumi-plugins/shape-providers/factories": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/factories",
-    "@takos/takosumi-plugins/templates": "jsr:@takos/takosumi-plugins@^0.12.0/templates"
+    "@takos/takosumi-plugins/shape-providers/factories": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/factories"
   },
   "tasks": {
     "check": "bash -lc 'find src -name \"*.ts\" ! -name \"*_test.ts\" -print0 | xargs -0 deno check'",

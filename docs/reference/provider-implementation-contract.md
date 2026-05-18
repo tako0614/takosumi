@@ -71,7 +71,7 @@ Field semantics:
   abort and return `failed` with a `retryable` error before the deadline
   elapses.
 
-> v1 bridge: public deploy route は WAL stage を記録後、 operation tuple を
+> v1 bridge: installer lifecycle は WAL stage を記録後、 operation tuple を
 > `PlatformContext.operation` として provider 呼出に渡します。 runtime-agent
 > backed provider は `LifecycleApplyRequest` /
 > `LifecycleDestroyRequest.idempotencyKey`、 `operationRequest`、

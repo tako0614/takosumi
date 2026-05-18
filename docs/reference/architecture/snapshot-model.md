@@ -14,8 +14,7 @@ It contains:
 ```text
 declared Shape resource intents
 provider ids
-template expansion provenance
-resource dependency refs
+AppSpec use-edge dependency provenance
 link intents derived from Shape-defined bindings
 exposure intents derived from route-bearing resources
 data asset intents from resource specs

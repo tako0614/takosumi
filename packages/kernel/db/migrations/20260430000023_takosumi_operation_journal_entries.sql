@@ -1,5 +1,5 @@
 -- Migration: 20260430000023_takosumi_operation_journal_entries
--- Purpose:   Persist public deploy OperationPlan WAL stage entries.
+-- Purpose:   Persist deployment OperationPlan WAL stage entries.
 --            Each row is one stage record keyed by
 --            (space_id, operation_plan_digest, journal_entry_id, stage).
 --            Replays with the same tuple and effect_digest are idempotent;
@@ -7,7 +7,7 @@
 --            a side-effecting stage.
 --
 -- Spec:      packages/kernel/src/domains/deploy/operation_journal.ts
--- Phase:     public deploy OperationPlan WAL
+-- Phase:     deployment OperationPlan WAL
 -- Domain:    deploy
 
 create table if not exists takosumi_operation_journal_entries (

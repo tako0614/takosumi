@@ -47,7 +47,7 @@ scope は `GET /v1/artifacts/:hash` のみ
 interface LifecycleApplyRequest {
   readonly shape: string; // 例: "object-store@v1"
   readonly provider: string; // 例: "aws-s3"
-  readonly resourceName: string; // ManifestResource.name と同じ
+  readonly resourceName: string; // component / internal resource name
   readonly spec: JsonValue; // shape spec (kernel 側で validate 済み)
   readonly tenantId?: string;
   readonly idempotencyKey?: string; // WAL 由来の外部 API request token

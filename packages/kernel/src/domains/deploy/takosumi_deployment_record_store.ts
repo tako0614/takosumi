@@ -1,32 +1,26 @@
-import type {
-  JsonObject,
-  JsonValue,
-  ManifestResource,
-  ResourceHandle,
-} from "takosumi-contract";
+import type { JsonObject, JsonValue, ResourceHandle } from "takosumi-contract";
+import type { ManifestResource } from "./_internal_manifest_types.ts";
 
 /**
- * Persisted state for a single `takosumi deploy` submission against the
- * public `/v1/deployments` endpoint.
+ * Persisted state for a single internal deploy-domain apply.
  *
  * The CLI re-issues the same manifest for `apply` and `destroy`. To make
  * `destroy` work against real provider handles (ARN, object id, …) the
  * kernel must remember what `applyV2` returned. This record carries that
- * state plus enough of the original submission to surface deployment status
- * via `GET /v1/deployments`.
+ * state plus enough of the original submission to surface internal status.
  *
  * Distinct from the kernel-internal `Deployment` (DeploymentService): that
- * tracks the control-plane deployment graph; this tracks the public-deploy
- * CLI lifecycle and is the read-side for `takosumi status`.
+ * tracks the control-plane deployment graph; this tracks apply state used by
+ * internal recovery paths.
  */
 export interface TakosumiDeploymentRecord {
   /** Surrogate uuid; (tenantId, name) is the natural key. */
   readonly id: string;
-  /** Tenant / Space scope selected for the public deploy route. */
+  /** Tenant / Space scope selected for the deployment operation. */
   readonly tenantId: string;
   /** Deployment name from `manifest.metadata.name` or fallback hash. */
   readonly name: string;
-  /** Full submitted manifest (resources[] or expanded template). */
+  /** Full submitted internal manifest. */
   readonly manifest: JsonObject;
   /** Per-resource state derived from `applyV2.outcome.applied[]`. */
   readonly appliedResources: readonly TakosumiAppliedResourceRecord[];
@@ -94,7 +88,7 @@ export interface TakosumiDeploymentRecordStore {
   /**
    * Acquire a deployment-scoped exclusive lock keyed by `(tenantId, name)`.
    * Waits if another caller already holds the lock and resolves only when
-   * its `releaseLock` call has run. Used by the public deploy route to
+   * its `releaseLock` call has run. Used by deployment apply paths to
    * serialise concurrent `apply` / `destroy` submissions of the same
    * deployment so two callers do not race on `provider.apply` and the
    * record store. The in-memory implementation backs the lock with a
@@ -137,7 +131,7 @@ interface LockEntry {
 }
 
 /**
- * In-memory implementation used by tests and any kernel deploy that has not
+ * In-memory implementation used by tests and any deployment path that has not
  * configured a SQL-backed store. Keys by `(tenantId, name)` so the natural
  * key is unique even though we expose a surrogate id.
  */

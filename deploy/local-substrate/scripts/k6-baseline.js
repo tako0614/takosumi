@@ -16,14 +16,14 @@ import { check } from "k6";
 
 export const options = {
   scenarios: {
-    install_preview: {
+    install_dry_run: {
       executor: "constant-arrival-rate",
       rate: 10,
       timeUnit: "1s",
       duration: "20s",
       preAllocatedVUs: 5,
       maxVUs: 20,
-      exec: "installPreview",
+      exec: "installationDryRun",
     },
     oidc_discovery: {
       executor: "constant-arrival-rate",
@@ -36,35 +36,38 @@ export const options = {
     },
   },
   thresholds: {
-    "http_req_failed{scenario:install_preview}": ["rate<0.01"],
+    "http_req_failed{scenario:install_dry_run}": ["rate<0.01"],
     "http_req_failed{scenario:oidc_discovery}": ["rate<0.01"],
     // Tight thresholds — actual measured p95 on the local-substrate
-    // (via Caddy + TLS) is ~8ms for install_preview and ~5ms for OIDC
+    // (via Caddy + TLS) is ~8ms for install dry-run and ~5ms for OIDC
     // discovery. Set to ~5× current baseline so a 5× regression fails
     // smoke. Previous values (3000ms / 1500ms) were ~400× looser and
     // wouldn't catch a real performance regression.
-    "http_req_duration{scenario:install_preview}": ["p(95)<50"],
+    "http_req_duration{scenario:install_dry_run}": ["p(95)<50"],
     "http_req_duration{scenario:oidc_discovery}": ["p(95)<30"],
   },
 };
 
-const PREVIEW_URL = "https://cloud.takosumi.test/v1/install/preview";
+const INSTALLATION_DRY_RUN_URL =
+  "https://cloud.takosumi.test/v1/installations/dry-run";
 const OIDC_URL = "https://cloud.takosumi.test/.well-known/openid-configuration";
 
-export function installPreview() {
+export function installationDryRun() {
   const res = http.post(
-    PREVIEW_URL,
+    INSTALLATION_DRY_RUN_URL,
     JSON.stringify({
+      spaceId: "space_local",
       source: {
-        gitUrl: "https://github.com/tako0614/takos-docs.git",
+        kind: "git",
+        url: "https://github.com/tako0614/takos-docs.git",
         ref: "main",
       },
     }),
     { headers: { "Content-Type": "application/json" } },
   );
   check(res, {
-    "preview status 200": (r) => r.status === 200,
-    "preview has appId": (r) => r.json("appId") !== undefined,
+    "dry-run status 200": (r) => r.status === 200,
+    "dry-run has appId": (r) => r.json("appId") !== undefined,
   });
 }
 

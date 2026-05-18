@@ -9,10 +9,10 @@ Takosumi (kernel + Accounts + cloud worker + dashboard SPA) の integration test
 
 ## 三層の責務
 
-| 層                | 担当 container | 役割                                                                                                                              |
-| ----------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 層                | 担当 container | 役割                                                                                                                                 |
+| ----------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | **ingress**       | `caddy`        | `*.takosumi.test` の TLS termination + reverse proxy。 Caddy admin API (`:2019`) で動的に route 追加可能                             |
-| **TLS authority** | `pebble`       | ACME staging server。 Caddy に対して cert を issue。 ACME directory は `https://pebble:14000/dir`、 management API は `:15000`    |
+| **TLS authority** | `pebble`       | ACME staging server。 Caddy に対して cert を issue。 ACME directory は `https://pebble:14000/dir`、 management API は `:15000`       |
 | **DNS**           | `coredns`      | `*.takosumi.test → 127.0.0.1` の wildcard zone。 `selfhost-coredns` provider が動的に zone file へ append 可能な形に揃える (Phase 3) |
 
 ## TLS chain of trust

@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Takosumi
   text: Self-hostable PaaS toolkit
-  tagline: A Deno-native PaaS kernel + runtime-agent + CLI that deploys to AWS / GCP / Cloudflare / Azure / Kubernetes / Docker / systemd from a single manifest.
+  tagline: A Deno-native PaaS kernel + runtime-agent + CLI that installs AppSpec sources to AWS / GCP / Cloudflare / Azure / Kubernetes / Docker / systemd.
   image:
     src: /logo.svg
     alt: Takosumi
@@ -13,19 +13,19 @@ hero:
       text: Quickstart
       link: /en/getting-started/quickstart
     - theme: alt
-      text: Write a manifest
-      link: /manifest
+      text: Write AppSpec
+      link: /reference/app-spec
     - theme: alt
       text: GitHub
       link: https://github.com/tako0614/takosumi
 
 features:
-  - title: Manifest-driven
+  - title: AppSpec-driven
     details: |
-      Declare portable shapes (`web-service@v1` / `database-postgres@v1` / `object-store@v1` / `custom-domain@v1` / `worker@v1`) in YAML / JSON-LD-compatible manifests. Apply with `takosumi deploy ./manifest.yml`. The project-layout convention (`.takosumi/`) lives in the `takosumi-git` sibling product, not in this kernel CLI.
+      Declare portable components (`worker` / `postgres` / `object-store` / `oidc` / `custom-domain`) in a root `.takosumi.yml` AppSpec. Install with `takosumi install --source . --space <space-id>`.
   - title: Multi-cloud + selfhost
     details: |
-      Deploy to AWS / GCP / Cloudflare / Azure / Kubernetes / Deno Deploy / docker-compose / systemd / filesystem from the same manifest spec, backed by 21 bundled provider plugins.
+      Deploy to AWS / GCP / Cloudflare / Azure / Kubernetes / Deno Deploy / docker-compose / systemd / filesystem from the same AppSpec, backed by bundled provider plugins.
   - title: Self-hostable, JSR-distributed
     details: |
       The kernel and runtime-agent ship via JSR (`@takos/takosumi-kernel`, `@takos/takosumi-runtime-agent`). Run `takosumi server` in a single Deno process to bring up both the control plane and the agent.
@@ -48,14 +48,15 @@ back to the JA versions. :::
 
 Takosumi is distributed as **6 JSR packages**:
 
-| Package                                                                         | Role                                                      |
-| ------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | Type contracts for Shape / Provider / Template            |
-| [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | HTTP server + apply pipeline + state DB + worker daemon   |
-| [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | Shape catalog + provider plugins + templates + factories  |
-| [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | Cloud SDK / OS executor (data plane)                      |
-| [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | CLI for `takosumi deploy` / `takosumi server` and friends |
-| [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | Umbrella that re-publishes the five packages above        |
+| Package                                                                         | Role                                                       |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | Type contracts for AppSpec / installer / provider APIs     |
+| [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | HTTP server + installer API + state DB + worker daemon     |
+| [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | Component catalog + provider plugins + factories           |
+| [`@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | `.takosumi.yml` parser + git fetch + deploy client         |
+| [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | Cloud SDK / OS executor (data plane)                       |
+| [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | CLI for `takosumi install` / `takosumi server` and friends |
+| [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | Umbrella that re-publishes the packages above              |
 
 The `@takos/` JSR scope is the **reference distribution** that Takos publishes;
 authority lives in the contract (`@takos/takosumi-contract`), not in the
@@ -69,8 +70,8 @@ See [Concepts (JA)](/getting-started/concepts) for details.
 
 - [Quickstart](/en/getting-started/quickstart) — from `takosumi server` to a
   cloud deploy in one command
-- [Manifest (Shape Model) (JA)](/manifest) — compiled `resources[]` manifest /
-  `${ref:...}` / `${secret-ref:...}` syntax
+- [Manifest / AppSpec (JA)](/manifest) — `.takosumi.yml` AppSpec and component
+  graph
 - [Shape Catalog (JA)](/reference/shapes) — spec / outputs / capabilities for
   all 5 shapes
 - [Provider Plugins (JA)](/reference/providers) — cloud × shape matrix for 20

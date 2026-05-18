@@ -2,21 +2,25 @@
 
 > このページでわかること: exposure と activation のモデル定義。
 
-route を持つ resource は 1 つの Space の中に Exposure intent を作成する。public
-manifest では、これは `custom-domain@v1` や `web-service@v1` の route フィールド
-などの Shape resource で表現され、別の top-level `expose` object で表現しない。
-Exposure は Link ではない。
+route を持つ component は 1 つの Space の中に Exposure intent を作成する。public
+AppSpec では、これは `custom-domain` や `worker` の route フィールド などの
+component で表現され、別の top-level `expose` object で表現しない。 Exposure は
+Link ではない。
 
 ## Exposure
 
 ```yaml
-resources:
-  - shape: custom-domain@v1
-    name: web
-    provider: "@takos/cloudflare-dns"
-    spec:
-      name: app.example.com
-      target: ${ref:api.url}
+components:
+  web:
+    kind: worker
+    routes:
+      - app.example.com/*
+  domain:
+    kind: custom-domain
+    name: app.example.com
+    use:
+      web:
+        target: url
 ```
 
 resolver はこれを `api` resource output を target にした `app.example.com` の

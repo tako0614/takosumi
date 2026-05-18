@@ -42,7 +42,6 @@ class_name = "TakosCoordinationObject"
 [vars]
 TAKOS_RUNTIME_MODE = "cloudflare-worker"
 TAKOSUMI_ENVIRONMENT = "staging"
-TAKOSUMI_PUBLIC_ROUTES_ENABLED = "true"
 
 [[migrations]]
 tag = "v1"

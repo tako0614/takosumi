@@ -33,8 +33,8 @@ Deno.test("Cloudflare Worker dispatches kernel control-plane routes in-process",
       "/readyz",
       "/status/summary",
       "/metrics",
-      "/v1/deployments",
-      "/v1/deployments/demo/audit?cursor=1",
+      "/v1/installations",
+      "/v1/installations/ins_demo/deployments/dry-run",
       "/v1/artifacts/kinds",
       "/api/internal/v1/spaces",
     ]
@@ -79,14 +79,14 @@ Deno.test("Cloudflare Worker preserves method, query, headers, and body", async 
     createKernelApp: () => Promise.resolve(createdApp("kernel", calls, 202)),
   });
   const body = JSON.stringify({
-    mode: "apply",
-    manifest: { kind: "Manifest" },
+    spaceId: "space_test",
+    source: { kind: "local", url: "." },
   });
   const response = await worker.fetch(
-    new Request("https://worker.example/v1/deployments?dryRun=1", {
+    new Request("https://worker.example/v1/installations/dry-run?trace=1", {
       method: "POST",
       headers: {
-        authorization: "Bearer deploy-token",
+        authorization: "Bearer installer-token",
         "content-type": "application/json",
         traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
         "x-correlation-id": "corr_1",
@@ -102,8 +102,11 @@ Deno.test("Cloudflare Worker preserves method, query, headers, and body", async 
   assert.equal(calls.length, 1);
   const call = calls[0];
   assert.equal(call.method, "POST");
-  assert.equal(call.url, "https://worker.example/v1/deployments?dryRun=1");
-  assert.equal(call.headers.get("authorization"), "Bearer deploy-token");
+  assert.equal(
+    call.url,
+    "https://worker.example/v1/installations/dry-run?trace=1",
+  );
+  assert.equal(call.headers.get("authorization"), "Bearer installer-token");
   assert.equal(call.headers.get("x-idempotency-key"), "deploy_1");
   assert.equal(
     call.headers.get("traceparent"),

@@ -1,5 +1,5 @@
 /**
- * Mock install_preview service for local-substrate.
+ * Mock installer service for local-substrate.
  *
  * Returns the v1 InstallationDryRunResponse shape (source + manifestDigest +
  * changes[] + estimatedCost + expected.{commit, manifestDigest}) per the
@@ -14,7 +14,7 @@
  * blind.
  *
  * Wire env (worker → mock):
- *   TAKOSUMI_ACCOUNTS_INSTALL_PREVIEW_URL=http://install-preview-mock:8788
+ *   TAKOSUMI_ACCOUNTS_INSTALLER_URL=http://installer-mock:8788
  */
 
 const PORT = Number(Deno.env.get("PORT") ?? "8788");
@@ -56,12 +56,7 @@ Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
   if (url.pathname === "/healthz") {
     return new Response("ok", { headers: { "content-type": "text/plain" } });
   }
-  // v1 installer surface: /v1/installations/dry-run (kept legacy
-  // /v1/install/preview alias for back-compat with current callers).
-  if (
-    url.pathname !== "/v1/installations/dry-run" &&
-    url.pathname !== "/v1/install/preview"
-  ) {
+  if (url.pathname !== "/v1/installations/dry-run") {
     return Response.json({ error: "not_found" }, { status: 404 });
   }
   if (req.method !== "POST") {
@@ -104,20 +99,20 @@ Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
     }
     const changes = ((fixture.changes ?? []) as unknown[]).length;
     console.log(
-      `[install-preview-mock] fixture-hit ${repoBasename} → appId=${fixture.appId} ` +
+      `[installer-mock] fixture-hit ${repoBasename} → appId=${fixture.appId} ` +
         `changes=${changes}`,
     );
     return Response.json(fixture);
   }
 
-  // Fallback: deterministic fake (preserves backwards compat for arbitrary
-  // git URLs). Loud-warn so operator knows the wizard is running blind.
+  // Fallback: deterministic fake for arbitrary git URLs. Loud-warn so operator
+  // knows the wizard is running blind.
   const fingerprint = await sha256Hex(`${gitUrl}@${ref}`);
   const commit = fingerprint.slice(0, 40);
   const digest = `sha256:${fingerprint}`;
   console.warn(
-    `[install-preview-mock] FALLBACK no fixture for ${repoBasename}; ` +
-      `returning empty changes[]. Run scripts/refresh-preview-fixtures.sh ` +
+    `[installer-mock] FALLBACK no fixture for ${repoBasename}; ` +
+      `returning empty changes[]. Run scripts/refresh-installer-fixtures.sh ` +
       `to add this repo to the fixture set.`,
   );
 
@@ -131,10 +126,10 @@ Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
     metadata: {
       mock: true,
       fixture: false,
-      service: "install-preview-mock (local-substrate)",
+      service: "installer-mock (local-substrate)",
       generatedAt: new Date().toISOString(),
     },
   });
 });
 
-console.log(`[install-preview-mock] listening on :${PORT}`);
+console.log(`[installer-mock] listening on :${PORT}`);

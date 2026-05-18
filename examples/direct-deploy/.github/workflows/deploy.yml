@@ -6,7 +6,7 @@ on:
     branches:
       - main
     paths:
-      - manifest.yml
+      - .takosumi.yml
       - .github/workflows/deploy.yml
 
 jobs:
@@ -16,6 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: tako0614/takosumi/actions/deploy@v1
         with:
-          manifest: manifest.yml
+          source: .
+          space: ${{ vars.TAKOSUMI_SPACE_ID }}
           remote-url: ${{ secrets.TAKOSUMI_REMOTE_URL }}
-          token: ${{ secrets.TAKOSUMI_DEPLOY_TOKEN }}
+          token: ${{ secrets.TAKOSUMI_INSTALLER_TOKEN }}

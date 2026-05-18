@@ -59,11 +59,11 @@ fi
 
 PREVIEW=$(curl -sk --cacert "$CA" -X POST \
 	-H "Content-Type: application/json" \
-	-d '{"source":{"gitUrl":"https://github.com/tako0614/takos-docs.git","ref":"main"}}' \
-	"$BASE/v1/install/preview")
+	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/takos-docs.git","ref":"main"}}' \
+	"$BASE/v1/installations/dry-run")
 APP_ID=$(echo "$PREVIEW" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('appId',''))")
 COMMIT=$(echo "$PREVIEW" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('source',{}).get('commit',''))")
-DIGEST=$(echo "$PREVIEW" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('source',{}).get('appManifestDigest',''))")
+DIGEST=$(echo "$PREVIEW" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('manifestDigest') or d.get('source',{}).get('appManifestDigest',''))")
 
 INSTALL_PAYLOAD=$(cat <<JSON
 {

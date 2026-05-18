@@ -45,11 +45,7 @@ export type {
   ObjectStoreOutputs,
   ObjectStoreSpec,
 } from "./object-store.ts";
-export type {
-  OidcCapability,
-  OidcOutputs,
-  OidcSpec,
-} from "./oidc.ts";
+export type { OidcCapability, OidcOutputs, OidcSpec } from "./oidc.ts";
 export type {
   WebServiceCapability,
   WebServiceHealth,

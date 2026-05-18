@@ -8,12 +8,12 @@ source root に置くだけで install + deploy + rollback まで動きます。
 
 仕様の正本は次のページにあります:
 
-- [AppSpec (`.takosumi.yml`)](/reference/app-spec) — envelope / components /
-  use edge / build recipe / interfaces / permissions の全 field 仕様
+- [AppSpec (`.takosumi.yml`)](/reference/app-spec) — envelope / components / use
+  edge / build recipe / interfaces / permissions の全 field 仕様
 - [Component Kind Catalog](/reference/component-kind-catalog) — 5 種の kind
   schema (`worker` / `postgres` / `object-store` / `oidc` / `custom-domain`)
-- [Installer API](/reference/installer-api) — 5 endpoint の wire spec
-  (dry-run / apply / rollback)
+- [Installer API](/reference/installer-api) — 5 endpoint の wire spec (dry-run /
+  apply / rollback)
 
 ## 最小例
 

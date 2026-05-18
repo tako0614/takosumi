@@ -16,13 +16,13 @@ import type { WorkerAuthzService } from "../services/security/mod.ts";
 import { DomainError } from "../shared/errors.ts";
 import { currentRuntime } from "../shared/runtime/index.ts";
 import { findNonCatalogConditionReasons } from "./condition_reasons.ts";
-import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
-import { type InternalAuthResult, readInternalAuth } from "./internal_auth.ts";
 import type {
   DeploymentEnvelope,
   DeploymentExpansionSummary,
-  DeploymentService,
-} from "./public_routes.ts";
+  DeploymentRouteService,
+} from "./deployment_route_types.ts";
+import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
+import { type InternalAuthResult, readInternalAuth } from "./internal_auth.ts";
 
 export interface MutationBoundaryEntitlementService {
   requireMutationBoundary(input: {
@@ -35,7 +35,7 @@ export interface MutationBoundaryEntitlementService {
 
 export interface InternalRouteServices {
   readonly core: ReturnType<typeof createCoreDomainServices>;
-  readonly deployments: DeploymentService;
+  readonly deployments: DeploymentRouteService;
   readonly planService: {
     createPlan(input: {
       spaceId: string;

@@ -1,34 +1,39 @@
 # Provider Plugins
 
-> このページでわかること: bundled provider plugin の一覧と対応 shape。
+> このページでわかること: bundled provider plugin の一覧と対応 component kind。
 
-**provider plugin** は v1 単位で [Shape](/reference/shapes) を具体的な cloud /
-local backend 上に materialize する。 各 plugin は実装する shape、サポートする
+**provider plugin** は AppSpec の
+[component kind](/reference/component-kind-catalog) を具体的な cloud / local
+backend 上に materialize する。 各 plugin は実装する kind、サポートする
 capability vocabulary、 kernel が OperationPlan 実行中に呼ぶ apply / destroy /
 status lifecycle を宣言する。
 
 Takosumi は out of the box で **21 個の provider plugin** を ship する。 20 は
 default で配線され、1 個 (`@takos/deno-deploy`) は opt-in。 plugin は paper-thin
 な lifecycle client であり、 credential、cloud SDK code、副作用はすべて
-**runtime-agent** の背後に住む。 manifest 層では `connector:<id>`
+**runtime-agent** の背後に住む。 provider identity は `connector:<id>`
 として識別する。 operator が agent 上で connector を install / control
-するため、 ある deployment から到達可能な provider は operator が所有する
+するため、ある deployment から到達可能な provider は operator が所有する
 (operator-installed / operator-controlled は意図的)。
 
 Source roots:
 
 - `packages/contract/src/provider-plugin.ts` — public `ProviderPlugin` contract
-  と `registerProvider` registry。
-- `packages/plugins/src/shape-providers/<shape>/<provider>.ts` — 個別 plugin。
+  と `registerProvider` registry。`ShapeRef` 型名は internal compatibility name
+  で、public docs では component kind として説明する。
+- `packages/plugins/src/kinds/<kind>.ts` — bundled component kind schema /
+  outputs。
+- `packages/plugins/src/providers/<cloud>/*.ts` — 個別 provider implementation。
 - `packages/plugins/src/shape-providers/factories.ts` — production wiring、
-  `createTakosumiProductionProviders(opts)` として exposed。
+  `createTakosumiProductionProviders(opts)` として exposed (旧 path 名を保持する
+  internal wrapper)。
 
 ## Capability vocabulary: open string + reserved prefix
 
 capability は **open string**。 provider は `capabilities` 配列に任意の
-kebab-case 識別子を宣言でき、 manifest は任意の識別子を `requires`
-で参照できる。 selection は subset 所属だけをチェックする: provider が
-selectable なのは `requires ⊆ capabilities` の場合に限る。
+kebab-case 識別子を宣言でき、 AppSpec は任意の識別子を `requires` で参照できる。
+selection は subset 所属だけをチェックする: provider が selectable なのは
+`requires ⊆ capabilities` の場合に限る。
 
 global vocabulary を一貫させるため、3 prefix が **reserved**。
 
@@ -47,7 +52,7 @@ coordination を要する。 既存 reserved prefix 内では、 `takos.*` / `sy
 ## Bundled provider catalog
 
 同梱されている 21 個の provider をクラウド別にグルーピング。 すべて
-`@takos/<cloud>-*` 形式の id を持つ。 shape と capability 集合は
+`@takos/<cloud>-*` 形式の id を持つ。 component kind と capability 集合は
 `packages/plugins/src/shape-providers/factories.ts` と完全に一致する。
 **extension policy** 列は、サードパーティが標準の provider PR フローで
 capability を追加してよいか (extensible)、 あるいは in-tree provider 内で
@@ -55,66 +60,66 @@ capability 集合が閉じているか (closed-within-provider) を示す。
 
 ### AWS
 
-| provider id          | shape                  | declared capabilities                                                                                                                   | extension policy |
-| -------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `@takos/aws-s3`      | `object-store@v1`      | `versioning`, `presigned-urls`, `server-side-encryption`, `public-access`, `event-notifications`, `lifecycle-rules`, `multipart-upload` | extensible       |
-| `@takos/aws-fargate` | `web-service@v1`       | `always-on`, `websocket`, `long-request`, `sticky-session`, `private-networking`                                                        | extensible       |
-| `@takos/aws-rds`     | `database-postgres@v1` | `pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`, `extensions`                                                   | extensible       |
-| `@takos/aws-route53` | `custom-domain@v1`     | `wildcard`, `auto-tls`, `sni`, `alpn-acme`                                                                                              | extensible       |
+| provider id          | component kind  | declared capabilities                                                                                                                   | extension policy |
+| -------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `@takos/aws-s3`      | `object-store`  | `versioning`, `presigned-urls`, `server-side-encryption`, `public-access`, `event-notifications`, `lifecycle-rules`, `multipart-upload` | extensible       |
+| `@takos/aws-fargate` | `worker`        | `always-on`, `websocket`, `long-request`, `sticky-session`, `private-networking`                                                        | extensible       |
+| `@takos/aws-rds`     | `postgres`      | `pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`, `extensions`                                                   | extensible       |
+| `@takos/aws-route53` | `custom-domain` | `wildcard`, `auto-tls`, `sni`, `alpn-acme`                                                                                              | extensible       |
 
 ### GCP
 
-| provider id            | shape                  | declared capabilities                                                                                                                   | extension policy |
-| ---------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `@takos/gcp-gcs`       | `object-store@v1`      | `versioning`, `presigned-urls`, `server-side-encryption`, `public-access`, `event-notifications`, `lifecycle-rules`, `multipart-upload` | extensible       |
-| `@takos/gcp-cloud-run` | `web-service@v1`       | `always-on`, `scale-to-zero`, `websocket`, `long-request`                                                                               | extensible       |
-| `@takos/gcp-cloud-sql` | `database-postgres@v1` | `pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`, `extensions`                                                   | extensible       |
-| `@takos/gcp-cloud-dns` | `custom-domain@v1`     | `wildcard`, `auto-tls`, `sni`                                                                                                           | extensible       |
+| provider id            | component kind  | declared capabilities                                                                                                                   | extension policy |
+| ---------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `@takos/gcp-gcs`       | `object-store`  | `versioning`, `presigned-urls`, `server-side-encryption`, `public-access`, `event-notifications`, `lifecycle-rules`, `multipart-upload` | extensible       |
+| `@takos/gcp-cloud-run` | `worker`        | `always-on`, `scale-to-zero`, `websocket`, `long-request`                                                                               | extensible       |
+| `@takos/gcp-cloud-sql` | `postgres`      | `pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`, `extensions`                                                   | extensible       |
+| `@takos/gcp-cloud-dns` | `custom-domain` | `wildcard`, `auto-tls`, `sni`                                                                                                           | extensible       |
 
 ### Cloudflare
 
-| provider id                   | shape              | declared capabilities                                       | extension policy |
-| ----------------------------- | ------------------ | ----------------------------------------------------------- | ---------------- |
-| `@takos/cloudflare-r2`        | `object-store@v1`  | `presigned-urls`, `public-access`, `multipart-upload`       | extensible       |
-| `@takos/cloudflare-container` | `web-service@v1`   | `scale-to-zero`, `geo-routing`                              | extensible       |
-| `@takos/cloudflare-workers`   | `worker@v1`        | `scale-to-zero`, `websocket`, `long-request`, `geo-routing` | extensible       |
-| `@takos/cloudflare-dns`       | `custom-domain@v1` | `wildcard`, `auto-tls`, `sni`, `http3`                      | extensible       |
+| provider id                   | component kind  | declared capabilities                                       | extension policy |
+| ----------------------------- | --------------- | ----------------------------------------------------------- | ---------------- |
+| `@takos/cloudflare-r2`        | `object-store`  | `presigned-urls`, `public-access`, `multipart-upload`       | extensible       |
+| `@takos/cloudflare-container` | `worker`        | `scale-to-zero`, `geo-routing`                              | extensible       |
+| `@takos/cloudflare-workers`   | `worker`        | `scale-to-zero`, `websocket`, `long-request`, `geo-routing` | extensible       |
+| `@takos/cloudflare-dns`       | `custom-domain` | `wildcard`, `auto-tls`, `sni`, `http3`                      | extensible       |
 
 ### Azure
 
-| provider id                   | shape            | declared capabilities                                     | extension policy |
-| ----------------------------- | ---------------- | --------------------------------------------------------- | ---------------- |
-| `@takos/azure-container-apps` | `web-service@v1` | `always-on`, `scale-to-zero`, `websocket`, `long-request` | extensible       |
+| provider id                   | component kind | declared capabilities                                     | extension policy |
+| ----------------------------- | -------------- | --------------------------------------------------------- | ---------------- |
+| `@takos/azure-container-apps` | `worker`       | `always-on`, `scale-to-zero`, `websocket`, `long-request` | extensible       |
 
 ### Kubernetes
 
-| provider id                    | shape            | declared capabilities                                          | extension policy |
-| ------------------------------ | ---------------- | -------------------------------------------------------------- | ---------------- |
-| `@takos/kubernetes-deployment` | `web-service@v1` | `always-on`, `websocket`, `long-request`, `private-networking` | extensible       |
+| provider id                    | component kind | declared capabilities                                          | extension policy |
+| ------------------------------ | -------------- | -------------------------------------------------------------- | ---------------- |
+| `@takos/kubernetes-deployment` | `worker`       | `always-on`, `websocket`, `long-request`, `private-networking` | extensible       |
 
 ### Deno Deploy (opt-in)
 
-| provider id          | shape       | declared capabilities                          | extension policy |
-| -------------------- | ----------- | ---------------------------------------------- | ---------------- |
-| `@takos/deno-deploy` | `worker@v1` | `scale-to-zero`, `long-request`, `geo-routing` | extensible       |
+| provider id          | component kind | declared capabilities                          | extension policy |
+| -------------------- | -------------- | ---------------------------------------------- | ---------------- |
+| `@takos/deno-deploy` | `worker`       | `scale-to-zero`, `long-request`, `geo-routing` | extensible       |
 
 ### Selfhost
 
-| provider id                      | shape                  | declared capabilities                                                                                            | extension policy       |
-| -------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| `@takos/selfhost-filesystem`     | `object-store@v1`      | `presigned-urls`                                                                                                 | closed-within-provider |
-| `@takos/selfhost-minio`          | `object-store@v1`      | `versioning`, `presigned-urls`, `server-side-encryption`, `public-access`, `lifecycle-rules`, `multipart-upload` | extensible             |
-| `@takos/selfhost-docker-compose` | `web-service@v1`       | `always-on`, `websocket`, `long-request`, `sticky-session`                                                       | extensible             |
-| `@takos/selfhost-systemd`        | `web-service@v1`       | `always-on`, `long-request`                                                                                      | closed-within-provider |
-| `@takos/selfhost-postgres`       | `database-postgres@v1` | `ssl-required`, `extensions`                                                                                     | closed-within-provider |
-| `@takos/selfhost-coredns`        | `custom-domain@v1`     | `wildcard`                                                                                                       | closed-within-provider |
+| provider id                      | component kind  | declared capabilities                                                                                            | extension policy       |
+| -------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `@takos/selfhost-filesystem`     | `object-store`  | `presigned-urls`                                                                                                 | closed-within-provider |
+| `@takos/selfhost-minio`          | `object-store`  | `versioning`, `presigned-urls`, `server-side-encryption`, `public-access`, `lifecycle-rules`, `multipart-upload` | extensible             |
+| `@takos/selfhost-docker-compose` | `worker`        | `always-on`, `websocket`, `long-request`, `sticky-session`                                                       | extensible             |
+| `@takos/selfhost-systemd`        | `worker`        | `always-on`, `long-request`                                                                                      | closed-within-provider |
+| `@takos/selfhost-postgres`       | `postgres`      | `ssl-required`, `extensions`                                                                                     | closed-within-provider |
+| `@takos/selfhost-coredns`        | `custom-domain` | `wildcard`                                                                                                       | closed-within-provider |
 
 ## Selection rule
 
-manifest resource ごとに、kernel は `id` が `provider:` に一致 (set
-されているとき) し、 かつ `capabilities` が `requires` の superset である plugin
-を選ぶ。 宣言集合が `requires` を満たさない provider を指名する request は、
-apply lifecycle が走る前の validation 時点で reject される。
+AppSpec component ごとに、kernel は provider hint が一致 (set されているとき)
+し、かつ `capabilities` が `requires` の superset である plugin を選ぶ。
+宣言集合が `requires` を満たさない provider を指名する request は、 apply
+lifecycle が走る前の validation 時点で reject される。
 
 ## Deno Deploy opt-in flow
 
@@ -128,12 +133,12 @@ apply lifecycle が走る前の validation 時点で reject される。
    を resolve するようにする。 credential は agent だけが保持し、kernel は token
    を見ない。
 2. **kernel 側 wrapper を有効化**。 `createTakosumiProductionProviders(opts)` に
-   `enableDenoDeploy: true` を渡す。 wrapper plugin は `worker@v1` に対して
-   register され、 manifest から selectable になる。
+   `enableDenoDeploy: true` を渡す。 wrapper plugin は `worker` に対して
+   register され、AppSpec から selectable になる。
 
-検証は `provider: "@takos/deno-deploy"` の `worker@v1` apply を発行する。 kernel
-は apply lifecycle envelope を記録し、 agent は inject された token を使って
-Deno Deploy API に forward し、 返ってきた `WorkerOutputs`
+検証は `worker` component の provider hint を `@takos/deno-deploy` にして apply
+を発行する。 kernel は apply lifecycle envelope を記録し、 agent は inject
+された token を使って Deno Deploy API に forward し、 返ってきた `WorkerOutputs`
 (`url`、`scriptName`、optional `version`) が apply result を通って戻る。
 
 ## Public API surface
@@ -155,7 +160,7 @@ function registerProvider(
 interface ProviderPlugin<Spec, Outputs, Capability extends string = string> {
   readonly id: string; // e.g. "@takos/aws-s3"
   readonly version: string; // semver
-  readonly implements: ShapeRef; // { id, version }
+  readonly implements: ShapeRef; // internal compatibility name for component kind ref
   readonly capabilities: readonly Capability[];
   validate?(spec: Spec, issues: ProviderValidationIssue[]): void;
   apply(spec: Spec, ctx: PlatformContext): Promise<ApplyResult<Outputs>>;
@@ -190,10 +195,10 @@ resolution で使われる resolved-output map を運ぶ。
 - [Closed Enums](/reference/closed-enums) — object lifecycle class と provider
   が output 発行時に尊重すべき closed enum。
 - `CONVENTIONS.md` §6 RFC (takosumi repo root) — 新 reserved capability prefix
-  の提案プロセス、 shape-level capability union への変更プロセス。
+  の提案プロセス、 component-kind capability union への変更プロセス。
 
 ## 関連ページ
 
-- [Shape Catalog](/reference/shapes)
+- [Component Kind Catalog](/reference/component-kind-catalog)
 - [Connector Contract](/reference/connector-contract)
 - [Access Modes](/reference/access-modes)

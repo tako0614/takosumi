@@ -1672,9 +1672,6 @@ export interface AppRuntimeConfig {
   readonly environment?: string;
   readonly processRole?: string;
   readonly allowUnsafeProductionDefaults?: boolean;
-  readonly routes?: {
-    readonly publicRoutesEnabled?: boolean;
-  };
 }
 
 export type KernelPluginAdapterOverrides = Partial<AppAdapters>;

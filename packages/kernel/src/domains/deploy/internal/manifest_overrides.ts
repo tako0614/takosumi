@@ -1,4 +1,4 @@
-// Override-merge phase for the public deploy manifest.
+// Override-merge phase for the internal deployment manifest.
 //
 // `preparePublicDeployManifest` runs first: it validates the top-level
 // envelope, then if an `envName` is selected, merges the matching
@@ -77,17 +77,23 @@ function validateTopLevelAndOverrides(manifest: PublicDeployManifest): void {
   for (const field of FORBIDDEN_PUBLIC_FIELDS) {
     if (field in candidate) {
       throw new TypeError(
-        `public deploy manifest must not include '${field}'`,
+        `internal deployment manifest must not include '${field}'`,
       );
     }
   }
-  assertKnownFields(candidate, TOP_LEVEL_FIELDS, "public deploy manifest");
+  assertKnownFields(
+    candidate,
+    TOP_LEVEL_FIELDS,
+    "internal deployment manifest",
+  );
   if (!manifest.name || typeof manifest.name !== "string") {
-    throw new TypeError("public deploy manifest requires string field 'name'");
+    throw new TypeError(
+      "internal deployment manifest requires string field 'name'",
+    );
   }
   if (manifest.overrides !== undefined && !isRecord(manifest.overrides)) {
     throw new TypeError(
-      "public deploy manifest field 'overrides' must be object",
+      "internal deployment manifest field 'overrides' must be object",
     );
   }
   for (const [name, value] of Object.entries(manifest.overrides ?? {})) {

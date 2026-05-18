@@ -1,8 +1,6 @@
 import { Hono, type Hono as HonoApp } from "hono";
 import type { ActorContext, Deployment } from "takosumi-contract";
 import type { AppContext } from "../app_context.ts";
-import type { AuthPort } from "../adapters/auth/mod.ts";
-import { LocalActorAdapter } from "../adapters/auth/local.ts";
 import type { SourcePort, SourceSnapshot } from "../adapters/source/mod.ts";
 import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";
 import { createCoreDomainServices } from "../domains/core/mod.ts";
@@ -16,19 +14,17 @@ import {
   type InternalRouteServices,
   registerInternalRoutes,
 } from "./internal_routes.ts";
-import {
-  type DeploymentEnvelope,
-  type DeploymentMutationResponse,
-  type DeploymentService,
-  type PublicDeploymentApproveInput,
-  type PublicDeploymentCreateInput,
-  type PublicDeploymentGetInput,
-  type PublicDeploymentListInput,
-  type PublicGroupRefInput,
-  type PublicGroupRollbackInput,
-  type PublicRouteServices,
-  registerPublicRoutes,
-} from "./public_routes.ts";
+import type {
+  DeploymentEnvelope,
+  DeploymentMutationResponse,
+  DeploymentRouteApproveInput,
+  DeploymentRouteCreateInput,
+  DeploymentRouteGetInput,
+  DeploymentRouteListInput,
+  DeploymentRouteService,
+  GroupRouteRefInput,
+  GroupRouteRollbackInput,
+} from "./deployment_route_types.ts";
 import {
   type ReadinessRouteProbes,
   registerReadinessRoutes,
@@ -54,16 +50,13 @@ import {
   type RegisterRequestCorrelationOptions,
 } from "./request_correlation.ts";
 import { DefaultGroupSummaryStatusProjector } from "../services/status/mod.ts";
-import { permissionDenied } from "../shared/errors.ts";
 
 export interface CreateApiAppOptions {
   readonly role?: PaaSProcessRole;
   readonly context?: AppContext;
   readonly internalRouteServices?: InternalRouteServices;
-  readonly publicRouteServices?: PublicRouteServices;
   readonly getInternalServiceSecret?: () => string | undefined;
   readonly registerInternalRoutes?: boolean;
-  readonly registerPublicRoutes?: boolean;
   readonly registerOpenApiRoute?: boolean;
   readonly registerReadinessRoutes?: boolean;
   readonly readinessRouteProbes?: ReadinessRouteProbes;
@@ -89,12 +82,12 @@ export interface CreateApiAppOptions {
    * behavior without kernel middleware.
    */
   readonly requestCorrelation?: RegisterRequestCorrelationOptions | false;
-  readonly sourceAdapters?: PublicDeploySourceAdapters;
+  readonly sourceAdapters?: DeploymentSourceAdapters;
   /** Optional extension point for mounting current/future route modules. */
   readonly configure?: (app: HonoApp) => void | Promise<void>;
 }
 
-export interface PublicDeploySourceAdapters {
+export interface DeploymentSourceAdapters {
   readonly snapshot?: SourcePort<unknown>;
 }
 
@@ -124,7 +117,6 @@ export async function createApiApp(
 
   const internalRoutesMounted = options.registerInternalRoutes ??
     role === "takosumi-api";
-  const publicRoutesMounted = options.registerPublicRoutes ?? false;
   const runtimeAgentRoutesMounted = options.registerRuntimeAgentRoutes ??
     role === "takosumi-runtime-agent";
   const openApiRouteMounted = options.registerOpenApiRoute ??
@@ -138,7 +130,6 @@ export async function createApiApp(
     (role === "takosumi-api" && options.metricsRouteOptions !== undefined);
 
   if (internalRoutesMounted) assertRoleCapability(role, "api.internal.host");
-  if (publicRoutesMounted) assertRoleCapability(role, "api.public.host");
   if (runtimeAgentRoutesMounted) {
     assertRoleCapability(role, "runtime.agent.lease");
     assertRoleCapability(role, "runtime.agent.observe");
@@ -147,7 +138,6 @@ export async function createApiApp(
   app.get("/capabilities", (c) => {
     return c.json(createApiCapabilitiesDescription(role, {
       internalRoutesMounted,
-      publicRoutesMounted,
       installerPublicRoutesMounted,
       artifactRoutesMounted,
       runtimeAgentRoutesMounted,
@@ -162,13 +152,6 @@ export async function createApiApp(
       services: options.internalRouteServices ??
         (await defaultRouteServices).internal,
       getInternalServiceSecret: options.getInternalServiceSecret,
-    });
-  }
-
-  if (publicRoutesMounted) {
-    registerPublicRoutes(app, {
-      services: options.publicRouteServices ??
-        (await defaultRouteServices).public,
     });
   }
 
@@ -214,7 +197,6 @@ export async function createApiApp(
       (() =>
         createPaaSOpenApiDocument({
           internalRoutesMounted,
-          publicRoutesMounted,
           installerPublicRoutesMounted,
           artifactRoutesMounted,
           runtimeAgentRoutesMounted,
@@ -237,7 +219,6 @@ async function createDefaultRouteServices(
   options: CreateApiAppOptions,
 ): Promise<{
   readonly internal: InternalRouteServices;
-  readonly public: PublicRouteServices;
 }> {
   const context = options.context;
   if (context) {
@@ -275,12 +256,6 @@ async function createDefaultRouteServices(
     };
     return {
       internal: internalWithDeployments,
-      public: createDefaultPublicRouteServices(
-        internalWithDeployments,
-        context.adapters.auth,
-        context.stores.deploy.deploys,
-        sourceAdapters,
-      ),
     };
   }
   const core = createCoreDomainServices();
@@ -305,93 +280,16 @@ async function createDefaultRouteServices(
   };
   return {
     internal: internalWithDeployments,
-    public: createDefaultPublicRouteServices(
-      internalWithDeployments,
-      undefined,
-      deployStore,
-      sourceAdapters,
-    ),
-  };
-}
-
-function createDefaultPublicRouteServices(
-  services: InternalRouteServices,
-  auth: AuthPort = new LocalActorAdapter(),
-  deployStore?: import("../domains/deploy/mod.ts").DeploymentStore,
-  sourceAdapters: PublicDeploySourceAdapters = {},
-): PublicRouteServices {
-  return {
-    authenticate: (request) => auth.authenticate(request),
-    spaces: {
-      async list(input) {
-        const spaces = await services.core.spaceQueries.listSpaces(input);
-        const visible = [];
-        for (const space of spaces) {
-          if (await actorCanAccessSpace(services, input.actor, space.id)) {
-            visible.push(space);
-          }
-        }
-        return visible;
-      },
-      async create(input) {
-        const requestedSpaceId = input.slug ?? input.actor.spaceId;
-        if (
-          input.actor.spaceId && requestedSpaceId &&
-          input.actor.spaceId !== requestedSpaceId
-        ) {
-          throw permissionDenied("actor cannot access requested space");
-        }
-        const result = await services.core.spaces.createSpace({
-          actor: input.actor,
-          spaceId: requestedSpaceId,
-          name: input.name,
-          metadata: input.metadata,
-        });
-        if (!result.ok) throw new Error(result.error.message);
-        return result.value;
-      },
-    },
-    groups: {
-      async list(input) {
-        if (!input.spaceId) return [];
-        if (!await actorCanAccessSpace(services, input.actor, input.spaceId)) {
-          return [];
-        }
-        return services.core.groupQueries.listGroups({
-          actor: input.actor,
-          spaceId: input.spaceId,
-        });
-      },
-      async create(input) {
-        if (!await actorCanAccessSpace(services, input.actor, input.spaceId)) {
-          throw permissionDenied("actor cannot access requested space");
-        }
-        const result = await services.core.groups.createGroup({
-          actor: input.actor,
-          spaceId: input.spaceId,
-          slug: input.envName ?? input.name ?? "default",
-          displayName: input.name ?? input.envName,
-          metadata: input.metadata,
-        });
-        if (!result.ok) throw new Error(result.error.message);
-        return result.value;
-      },
-    },
-    deployments: createDefaultDeploymentService(
-      services,
-      deployStore,
-      sourceAdapters,
-    ),
   };
 }
 
 function createDefaultDeploymentService(
   services: Pick<InternalRouteServices, "applyService" | "planService">,
   deployStore?: import("../domains/deploy/mod.ts").DeploymentStore,
-  sourceAdapters: PublicDeploySourceAdapters = {},
-): DeploymentService {
+  sourceAdapters: DeploymentSourceAdapters = {},
+): DeploymentRouteService {
   const manifestFrom = (
-    input: PublicDeploymentCreateInput,
+    input: DeploymentRouteCreateInput,
   ): PublicDeployManifest => {
     if (isPublicDeployManifest(input.manifest)) return input.manifest;
     return {
@@ -410,7 +308,7 @@ function createDefaultDeploymentService(
     },
   });
 
-  const getDeployment = async (input: PublicDeploymentGetInput) => {
+  const getDeployment = async (input: DeploymentRouteGetInput) => {
     if (services.planService.getDeployment) {
       return deploymentVisibleToActor(
         await services.planService.getDeployment(input.deploymentId),
@@ -427,7 +325,7 @@ function createDefaultDeploymentService(
   };
 
   return {
-    async resolveDeployment(input: PublicDeploymentCreateInput) {
+    async resolveDeployment(input: DeploymentRouteCreateInput) {
       const source = await snapshotPublicDeploySource(input, sourceAdapters);
       const manifest = source?.manifest ?? manifestFrom(input);
       const deployment = await services.planService.createPlan({
@@ -438,7 +336,7 @@ function createDefaultDeploymentService(
       });
       return envelopeOf(asDeployment(deployment));
     },
-    async applyDeployment(input: PublicDeploymentCreateInput) {
+    async applyDeployment(input: DeploymentRouteCreateInput) {
       const source = await snapshotPublicDeploySource(input, sourceAdapters);
       const manifest = source?.manifest ?? manifestFrom(input);
       const result = await services.applyService.applyManifest({
@@ -451,7 +349,7 @@ function createDefaultDeploymentService(
       return envelopeOf(asApplyResult(result).deployment);
     },
     previewDeployment(
-      input: PublicDeploymentCreateInput,
+      input: DeploymentRouteCreateInput,
     ): DeploymentMutationResponse {
       return {
         deployment_id: `preview:${input.group ?? "default"}`,
@@ -469,7 +367,7 @@ function createDefaultDeploymentService(
         },
       };
     },
-    async applyResolved(input: PublicDeploymentGetInput) {
+    async applyResolved(input: DeploymentRouteGetInput) {
       if (!services.applyService.applyDeployment) {
         throw new Error("applyDeployment is not wired");
       }
@@ -482,7 +380,7 @@ function createDefaultDeploymentService(
       });
       return envelopeOf(asApplyResult(result).deployment);
     },
-    async approveDeployment(input: PublicDeploymentApproveInput) {
+    async approveDeployment(input: DeploymentRouteApproveInput) {
       const deployment = await getDeployment(input);
       if (!deployment) {
         throw new Error(`unknown deployment: ${input.deploymentId}`);
@@ -494,12 +392,12 @@ function createDefaultDeploymentService(
           deployment.policy_decisions?.find((decision) =>
             decision.decision === "require-approval"
           )?.id ??
-          "public-api",
+          "internal-api",
       };
       const approved: Deployment = { ...deployment, approval };
       return envelopeOf(await deployStore?.putDeployment(approved) ?? approved);
     },
-    async rollbackGroup(input: PublicGroupRollbackInput) {
+    async rollbackGroup(input: GroupRouteRollbackInput) {
       const targetDeploymentId = input.target_id;
       if (!targetDeploymentId) {
         throw new Error("target_id is required for rollback");
@@ -511,12 +409,12 @@ function createDefaultDeploymentService(
         spaceId: input.space_id ?? input.actor.spaceId ?? "default",
         groupId: input.groupId,
         targetDeploymentId,
-        reason: "public API rollback",
+        reason: "internal API rollback",
       });
       return envelopeOf(asApplyResult(result).deployment);
     },
     getDeployment,
-    listDeployments(input: PublicDeploymentListInput) {
+    listDeployments(input: DeploymentRouteListInput) {
       const listed = services.planService.listDeployments?.({
         spaceId: input.space_id ?? input.actor.spaceId,
         groupId: input.group,
@@ -528,13 +426,13 @@ function createDefaultDeploymentService(
           .filter((deployment): deployment is Deployment => Boolean(deployment))
       );
     },
-    async getGroupHead(input: PublicGroupRefInput) {
+    async getGroupHead(input: GroupRouteRefInput) {
       return await deployStore?.getGroupHead({
         spaceId: input.space_id ?? input.actor.spaceId ?? "default",
         groupId: input.groupId,
       }) ?? null;
     },
-    listObservations(input: PublicDeploymentGetInput) {
+    listObservations(input: DeploymentRouteGetInput) {
       return deployStore?.listObservations?.({
         deploymentId: input.deploymentId,
       }) ?? [];
@@ -543,8 +441,8 @@ function createDefaultDeploymentService(
 }
 
 async function snapshotPublicDeploySource(
-  input: PublicDeploymentCreateInput,
-  adapters: PublicDeploySourceAdapters,
+  input: DeploymentRouteCreateInput,
+  adapters: DeploymentSourceAdapters,
 ): Promise<SourceSnapshot | undefined> {
   if (input.source === undefined || input.source === null) return undefined;
   if (!isRecord(input.source)) {
@@ -561,21 +459,6 @@ async function snapshotPublicDeploySource(
     actor: input.actor,
     ...(input.source as Record<string, unknown>),
   });
-}
-
-async function actorCanAccessSpace(
-  services: InternalRouteServices,
-  actor: ActorContext,
-  spaceId: string,
-): Promise<boolean> {
-  if (actor.spaceId && actor.spaceId !== spaceId) return false;
-  const memberships = await services.core.memberships.listSpaceMemberships(
-    spaceId,
-  );
-  return memberships.some((membership) =>
-    membership.accountId === actor.actorAccountId &&
-    membership.status === "active"
-  );
 }
 
 function deploymentVisibleToActor(
@@ -633,7 +516,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function createDefaultSourceAdapters(
   _options: CreateApiAppOptions,
-): PublicDeploySourceAdapters {
+): DeploymentSourceAdapters {
   return {};
 }
 

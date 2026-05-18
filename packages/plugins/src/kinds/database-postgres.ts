@@ -80,9 +80,8 @@ const SIZES: ReadonlySet<string> = new Set([
  * provider plugin (managed Postgres or self-hosted) at apply time.
  *
  * The AppSpec public name for this kind is `postgres` (see
- * `COMPONENT_KINDS` in `@takos/takosumi-contract/app-spec`); the registry
- * id stays `database-postgres` for backwards-compat with the existing
- * provider plugin contract.
+ * `COMPONENT_KINDS` in `@takos/takosumi-contract/app-spec`); the internal
+ * provider registry id is `database-postgres`.
  */
 export const DatabasePostgresKind: Shape<
   DatabasePostgresSpec,

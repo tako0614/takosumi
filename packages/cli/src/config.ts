@@ -3,7 +3,8 @@
  *
  * Resolution order for `--remote` / `--token` (highest priority first):
  *   1. CLI flag (`--remote`, `--token`) — explicit wins.
- *   2. Specific env: `TAKOSUMI_REMOTE_URL` / `TAKOSUMI_DEPLOY_TOKEN`.
+ *   2. Specific env: `TAKOSUMI_REMOTE_URL` /
+ *      `TAKOSUMI_INSTALLER_TOKEN`.
  *   3. `~/.takosumi/config.yml` — operator-managed defaults so common
  *      flags (`remote_url`, `token`) need not be re-typed per command.
  *
@@ -21,6 +22,12 @@ export interface CliConfig {
   readonly token?: string;
 }
 
+export type ConfigTokenEnv = "installer" | "deploy" | "auto";
+
+export interface LoadConfigOptions {
+  readonly tokenEnv?: ConfigTokenEnv;
+}
+
 /**
  * Persisted file shape under `~/.takosumi/config.yml`. We keep the schema
  * deliberately small for now (`remote_url`, `token`); future per-host or
@@ -34,11 +41,13 @@ export interface TakosumiConfigFile {
 
 let configFileCache: TakosumiConfigFile | null | undefined;
 
-export async function loadConfig(): Promise<CliConfig> {
+export async function loadConfig(
+  options: LoadConfigOptions = {},
+): Promise<CliConfig> {
   const file = await loadConfigFile();
   return {
     kernelUrl: resolveKernelUrl(file),
-    token: resolveToken(file),
+    token: resolveToken(file, options.tokenEnv ?? "installer"),
   };
 }
 
@@ -119,9 +128,16 @@ function resolveKernelUrl(
 
 function resolveToken(
   file: TakosumiConfigFile | undefined,
+  tokenEnv: ConfigTokenEnv,
 ): string | undefined {
-  const deployToken = Deno.env.get("TAKOSUMI_DEPLOY_TOKEN");
-  if (deployToken) return deployToken;
+  if (tokenEnv === "installer" || tokenEnv === "auto") {
+    const installerToken = Deno.env.get("TAKOSUMI_INSTALLER_TOKEN");
+    if (installerToken) return installerToken;
+  }
+  if (tokenEnv === "deploy" || tokenEnv === "auto") {
+    const deployToken = Deno.env.get("TAKOSUMI_DEPLOY_TOKEN");
+    if (deployToken) return deployToken;
+  }
   if (file?.token) return file.token;
   return undefined;
 }

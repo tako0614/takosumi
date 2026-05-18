@@ -14,7 +14,7 @@ kernel HTTP request correlation middleware は current:
 - staging / production と `TAKOSUMI_HTTP_REQUEST_LOGS=true` の他環境では、
   bootstrap path が `requestId` / `correlationId` / `trace_id` / `span_id` /
   route / status / duration を持つ JSON request log を 1 行 emit。
-- public deploy metrics も inbound request / correlation id を carry。
+- installer / artifact metrics も inbound request / correlation id を carry。
 - 非 HTTP log への trace id / span id enrichment は今後の target contract。
 
 :::

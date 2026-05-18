@@ -15,10 +15,7 @@
  * follow-up wave.
  */
 
-import {
-  type AppSpec,
-  type Component,
-} from "takosumi-contract/app-spec";
+import type { AppSpec, Component } from "takosumi-contract/app-spec";
 import type {
   ChangeEntry,
   Deployment,
@@ -40,15 +37,12 @@ import type {
   SourcePin,
   SourceSummary,
 } from "takosumi-contract/installer-api";
+import { fetchGitSource, parseAppSpec } from "takosumi-installer";
 import {
-  fetchGitSource,
-  parseAppSpec,
-} from "takosumi-installer";
-import {
-  DeploymentStore,
+  type DeploymentStore,
   InMemoryDeploymentStore,
   InMemoryInstallationStore,
-  InstallationStore,
+  type InstallationStore,
 } from "./store.ts";
 
 export interface ProviderApplyContext {
@@ -525,7 +519,10 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   }`;
 }
 
-function summarizeSource(source: Source, fetched: FetchedSource): SourceSummary {
+function summarizeSource(
+  source: Source,
+  fetched: FetchedSource,
+): SourceSummary {
   return {
     kind: source.kind,
     url: source.url,
@@ -543,7 +540,9 @@ function sourceFromSummary(summary: SourceSummary): Source {
   };
 }
 
-function computeFreshInstallChangeSet(appSpec: AppSpec): readonly ChangeEntry[] {
+function computeFreshInstallChangeSet(
+  appSpec: AppSpec,
+): readonly ChangeEntry[] {
   const entries: ChangeEntry[] = [];
   for (const [name, component] of Object.entries(appSpec.components)) {
     entries.push({
@@ -620,7 +619,10 @@ function checkExpectedPin(
   }
 }
 
-function requireNonEmptyString(value: unknown, field: string): asserts value is string {
+function requireNonEmptyString(
+  value: unknown,
+  field: string,
+): asserts value is string {
   if (typeof value !== "string" || value.length === 0) {
     throw new InstallerPipelineError(
       "invalid_argument",

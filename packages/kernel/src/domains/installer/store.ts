@@ -2,14 +2,9 @@
  * In-memory persistence for Installation + Deployment records.
  *
  * Wave 5 implementation — keeps things in process memory. A SQL-backed
- * variant is a follow-up wave concern (mirrors the
- * `takosumi_deployment_record_store_sql.ts` pattern used by the legacy
- * `/v1/deployments` route).
+ * variant is a follow-up wave concern.
  */
-import type {
-  Deployment,
-  Installation,
-} from "takosumi-contract/installer-api";
+import type { Deployment, Installation } from "takosumi-contract/installer-api";
 
 export interface InstallationStore {
   put(installation: Installation): Promise<Installation>;

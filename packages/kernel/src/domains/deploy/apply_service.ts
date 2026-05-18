@@ -187,14 +187,14 @@ export class ApplyService {
   /**
    * Resolve a manifest into a Deployment, then immediately apply it.
    *
-   * Current public manifests use the shape model (`resources` as an array) and
-   * dispatch through `apply_v2`. Top-level `template` is retired and must be
-   * expanded before this boundary.
+   * Internal shape-model manifests use `resources` as an array and dispatch
+   * through `apply_v2`. Top-level authoring shortcuts are retired and must not
+   * cross this boundary.
    */
   async applyManifest(
     input: ApplyDeployManifestInput,
   ): Promise<ApplyDeployResult> {
-    assertNoRetiredTemplateShorthand(input.manifest);
+    assertNoRetiredAuthoringShorthand(input.manifest);
     if (manifestUsesShapeModel(input.manifest)) {
       return await this.#applyManifestV2(input);
     }
@@ -336,14 +336,14 @@ function manifestUsesShapeModel(manifest: PublicDeployManifest): boolean {
   return false;
 }
 
-function assertNoRetiredTemplateShorthand(
+function assertNoRetiredAuthoringShorthand(
   manifest: PublicDeployManifest,
 ): void {
   const m = manifest as Record<string, unknown>;
   if (m.template !== undefined) {
     throw new Error(
-      "ApplyService.applyManifest: top-level `template` is retired; submit " +
-        "expanded `resources[]` instead",
+      "ApplyService.applyManifest: top-level authoring shortcut is retired; " +
+        "submit internal `resources[]` instead",
     );
   }
 }

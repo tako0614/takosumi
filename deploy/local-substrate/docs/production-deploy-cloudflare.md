@@ -2,10 +2,10 @@
 
 The local-substrate mirrors production using `.test` TLDs:
 
-| Production                                 | Local mirror                        | Backend                                                                     |
-| ------------------------------------------ | ----------------------------------- | --------------------------------------------------------------------------- |
-| `https://takosumi.com/`                    | `https://takosumi.test/`            | Cloudflare Pages (prod) / Caddy file_server (local)                         |
-| `https://cloud.takosumi.com/`              | `https://cloud.takosumi.test/`      | Accounts Cloudflare Worker + D1 + R2 (prod) / Miniflare + SQLite/R2 (local) |
+| Production                                 | Local mirror                           | Backend                                                                     |
+| ------------------------------------------ | -------------------------------------- | --------------------------------------------------------------------------- |
+| `https://takosumi.com/`                    | `https://takosumi.test/`               | Cloudflare Pages (prod) / Caddy file_server (local)                         |
+| `https://cloud.takosumi.com/`              | `https://cloud.takosumi.test/`         | Accounts Cloudflare Worker + D1 + R2 (prod) / Miniflare + SQLite/R2 (local) |
 | operator-selected Takosumi kernel hostname | `https://kernel-worker.takosumi.test/` | Takosumi kernel Worker + D1/R2/Queues/DO (prod) / Miniflare local binds     |
 
 Once the local mirror passes `scripts/smoke.sh`, follow this runbook to push the
@@ -61,8 +61,8 @@ curl https://cloud.takosumi.com/.well-known/openid-configuration
 
 The Takosumi kernel Worker is owned by `takosumi/deploy/cloudflare/`. It is
 Worker-first and uses Cloudflare bindings directly: D1 for kernel snapshots /
-public deployment stores, R2 for artifacts, Queues for enqueue, and Durable
-Objects for coordination.
+Installation and Deployment records, R2 for artifacts, Queues for enqueue, and
+Durable Objects for coordination.
 
 ```sh
 cd takosumi/
@@ -74,6 +74,7 @@ wrangler queues create takosumi-control-plane
 wrangler queues create takosumi-control-plane-dlq
 
 # Push operator secrets.
+wrangler secret put TAKOSUMI_INSTALLER_TOKEN --config deploy/cloudflare/wrangler.toml
 wrangler secret put TAKOSUMI_DEPLOY_TOKEN --config deploy/cloudflare/wrangler.toml
 wrangler secret put TAKOSUMI_INTERNAL_API_SECRET --config deploy/cloudflare/wrangler.toml
 wrangler secret put TAKOSUMI_SECRET_STORE_PASSPHRASE --config deploy/cloudflare/wrangler.toml

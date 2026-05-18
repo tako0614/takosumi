@@ -13,76 +13,61 @@ const TABS: readonly Tab[] = [
   {
     key: "selfhost",
     label: "手元の docker",
-    subtitle: "@takos/selfhost-docker-compose",
+    subtitle: "self-hosted runtime",
     manifest: () => (
       <>
-        apiVersion: <span class="s">"1.0"</span>
-        {"\n"}
-        kind: Manifest{"\n"}
-        metadata:{"\n"}{"  "}name: hello{"\n"}
-        resources:{"\n"}{"  "}- name: web{"\n"}{"    "}shape:{" "}
-        <span class="s">"web-service@v1"</span>
-        {"\n"}{"    "}provider:{" "}
-        <span class="k">"@takos/selfhost-docker-compose"</span>
-        {"\n"}{"    "}spec:{"\n"}{"      "}image: nginx:alpine{"\n"}{"      "}
-        port: <span class="n">80</span>
+        apiVersion: takosumi.dev/v1{"\n"}
+        kind: App{"\n"}
+        metadata:{"\n"}{"  "}id: com.example.hello{"\n"}{"  "}name: Hello{"\n"}
+        components:{"\n"}{"  "}web:{"\n"}{"    "}kind: worker{"\n"}{"    "}
+        build:{"\n"}{"      "}command: deno task build{"\n"}{"      "}output:
+        {" "}
+        dist/worker.mjs{"\n"}{"    "}routes:{"\n"}{"      "}- /
       </>
     ),
     output: () => (
       <>
-        <span class="k">$</span> takosumi deploy ./manifest.yml{"\n"}
-        <span class="c">{" ".repeat(2)}✓ web → http://localhost:18080</span>
+        <span class="k">$</span> takosumi install . --space personal{"\n"}
+        <span class="c">{" ".repeat(2)}✓ installed com.example.hello</span>
       </>
     ),
   },
   {
     key: "fargate",
-    label: "AWS Fargate",
-    subtitle: "@takos/aws-fargate",
+    label: "Workers",
+    subtitle: "Cloudflare D1 / R2 / Queue / DO",
     manifest: () => (
       <>
-        <span class="c"># provider を 1 行変えるだけ</span>
+        <span class="c"># AppSpec は同じ。 substrate は operator が選ぶ</span>
         {"\n"}
-        resources:{"\n"}{"  "}- name: web{"\n"}{"    "}shape:{" "}
-        <span class="s">"web-service@v1"</span>
-        {"\n"}{"    "}provider: <span class="k">"@takos/aws-fargate"</span>
-        {"\n"}{"    "}spec:{"\n"}{"      "}
-        image: ghcr.io/your-org/web:abc123{"\n"}{"      "}port:{" "}
-        <span class="n">80</span>
+        components:{"\n"}{"  "}web:{"\n"}{"    "}kind: worker{"\n"}{"    "}
+        use:{"\n"}{"      "}db: {`{ envPrefix: DB_ }`}
+        {"\n"}{"  "}db:{"\n"}{"    "}kind: postgres{"\n"}{"  "}assets:
+        {"\n"}{"    "}kind: object-store
       </>
     ),
     output: () => (
       <>
-        <span class="k">$</span> takosumi deploy ./manifest.yml{"\n"}
-        <span class="c">
-          {" ".repeat(2)}✓ web → https://web-abc.us-east-1.elb.amazonaws.com
-        </span>
+        <span class="k">$</span> takosumi deploy ins_abc123{"\n"}
+        <span class="c">{" ".repeat(2)}✓ deployment dep_abc123 succeeded</span>
       </>
     ),
   },
   {
     key: "k8s",
-    label: "Kubernetes",
-    subtitle: "@takos/kubernetes-k3s-deployment",
+    label: "Rollback",
+    subtitle: "Installation / Deployment ledger",
     manifest: () => (
       <>
-        resources:{"\n"}{"  "}- name: web{"\n"}{"    "}shape:{" "}
-        <span class="s">"web-service@v1"</span>
-        {"\n"}{"    "}provider:{" "}
-        <span class="k">"@takos/kubernetes-k3s-deployment"</span>
-        {"\n"}{"    "}spec:{"\n"}{"      "}
-        image: ghcr.io/your-org/web:abc123{"\n"}{"      "}port:{" "}
-        <span class="n">80</span>
-        {"\n"}{"      "}scale: {`{ min: `}
-        <span class="n">3</span>, max: <span class="n">3</span> {`}`}
+        interfaces:{"\n"}{"  "}launch:{"\n"}{"    "}target: web{"\n"}{"    "}
+        path: /{"\n"}
+        permissions:{"\n"}{"  "}requested:{"\n"}{"    "}- storage.object.read
       </>
     ),
     output: () => (
       <>
-        <span class="k">$</span> takosumi deploy ./manifest.yml{"\n"}
-        <span class="c">
-          {" ".repeat(2)}✓ web → http://web.takos.svc.cluster.local
-        </span>
+        <span class="k">$</span> takosumi rollback ins_abc123 dep_prev{"\n"}
+        <span class="c">{" ".repeat(2)}✓ rolled back to dep_prev</span>
       </>
     ),
   },
@@ -96,10 +81,11 @@ export default function Showcase() {
     <section id="showcase">
       <div class="container">
         <span class="eyebrow">showcase</span>
-        <h2>同じ manifest で、 デプロイ先を選ぶ。</h2>
+        <h2>同じ AppSpec で、 substrate を選ぶ。</h2>
         <p class="lede">
-          タブを切り替えてみてください。 違うのは <code>provider</code>{" "}
-          の 1 行だけ。 残りは全部同じです。
+          App は <code>.takosumi.yml</code>{" "}
+          に閉じ、 install / deploy / rollback は installer API の同じ lifecycle
+          を通ります。
         </p>
         <div class="showcase">
           <div class="showcase-tabs" role="tablist">
@@ -119,7 +105,7 @@ export default function Showcase() {
           </div>
           <div class="showcase-body">
             <div>
-              <div class="label">manifest.yml</div>
+              <div class="label">.takosumi.yml</div>
               <Show when={current()}>
                 {(t) => (
                   <div class="codeblock">

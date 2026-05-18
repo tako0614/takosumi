@@ -17,10 +17,9 @@ boot 時 fail-closed か silent な persistence loss / plaintext secret
 | --------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `TAKOSUMI_DATABASE_URL` (or `_PRODUCTION_*`)                          | Postgres URL                                 | deployment record store が in-memory に fall back、再起動で消える                  |
 | `TAKOSUMI_SECRET_STORE_PASSPHRASE` または `TAKOSUMI_SECRET_STORE_KEY` | 32+ byte 高 entropy 文字列                   | `environment: production` で `SecretEncryptionConfigurationError` を投げて起動拒否 |
-| `TAKOSUMI_DEPLOY_TOKEN`                                               | `openssl rand -hex 32`                       | `POST /v1/deployments` が無効化、CLI が 401                                        |
-| `TAKOSUMI_DEPLOY_SPACE_ID`                                            | `space:<org-or-env>`                         | 未設定時は `takosumi-deploy` scope に集約される                                    |
+| `TAKOSUMI_INSTALLER_TOKEN`                                            | `openssl rand -hex 32`                       | `/v1/installations/*` が無効化、CLI が 401                                         |
 | `TAKOSUMI_ARTIFACT_FETCH_TOKEN`                                       | `openssl rand -hex 32` (deploy とは別 token) | agent host 側に upload / delete 権限が漏れる                                       |
-| `TAKOSUMI_DEV_MODE`                                                   | **unset** にする                             | placeholder secret crypto / unencrypted DB が許可される                            |
+| `TAKOSUMI_DEV_MODE`                                                   | **unset** にする                             | unsafe secret crypto / unencrypted DB が許可される                                 |
 | `TAKOSUMI_ENVIRONMENT=production`                                     | (literal)                                    | これで `STRICT_RUNTIME_KERNEL_PORTS` が enforce される                             |
 
 各 env の意味は [Environment Variables](/reference/env-vars) 参照。
@@ -30,35 +29,38 @@ boot 時 fail-closed か silent な persistence loss / plaintext secret
 ## Single VM (selfhost connector)
 
 VM 1 台に systemd / docker / filesystem / local Postgres / coredns
-で完結デプロイを構築する例。 kernel に送る manifest は expanded `resources[]`。
+で完結デプロイを構築する例。 source root に置く public manifest は
+`.takosumi.yml` (= AppSpec)。
 
-`my-app.yml`:
+`.takosumi.yml`:
 
 ```yaml
-apiVersion: "1.0"
-kind: Manifest
+apiVersion: takosumi.dev/v1
+kind: App
 metadata:
+  id: com.example.my-app
   name: my-app
-resources:
-  - shape: database-postgres@v1
-    name: db
-    provider: "@takos/selfhost-postgres"
+components:
+  db:
+    kind: postgres
     spec:
       version: "16"
-  - shape: web-service@v1
-    name: api
-    provider: "@takos/selfhost-docker-compose"
-    spec:
-      image: ghcr.io/me/api@sha256:0123456789abcdef
-      port: 8080
-      env:
-        DATABASE_URL: ${secret-ref:db.connectionString}
-  - shape: custom-domain@v1
-    name: api-domain
-    provider: "@takos/selfhost-coredns"
-    spec:
-      domain: api.example.com
-      target: ${ref:api.endpoint}
+  api:
+    kind: worker
+    build:
+      command: npm ci && npm run build
+      output: dist/worker.mjs
+    use:
+      db:
+        env: DATABASE_URL
+    routes:
+      - /api/*
+  api-domain:
+    kind: custom-domain
+    use:
+      api:
+        target: url
+    name: api.example.com
 ```
 
 operator side (VM 上):
@@ -66,16 +68,16 @@ operator side (VM 上):
 ```bash
 export TAKOSUMI_DATABASE_URL=postgresql://localhost/takosumi
 export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
-export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 
 # selfhosted connector の置き場 (任意、defaults あり)
 export TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT=/var/lib/takosumi/objects
 export TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR=/etc/systemd/system
 
 takosumi server --port 8788 &
-takosumi deploy my-app.yml \
+takosumi install --space space_personal --source . \
   --remote http://localhost:8788 \
-  --token $TAKOSUMI_DEPLOY_TOKEN
+  --token $TAKOSUMI_INSTALLER_TOKEN
 ```
 
 deploy 完了後 (embedded agent が selfhost connector で実行):
@@ -114,7 +116,7 @@ takosumi runtime-agent serve --port 8789 --token mytoken
 export TAKOSUMI_ENVIRONMENT=production
 export TAKOSUMI_DATABASE_URL=postgresql://prod-db.internal/takosumi
 export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
-export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 
 # agent への接続情報
 export TAKOSUMI_AGENT_URL=https://agent.internal:8789
@@ -152,10 +154,9 @@ takosumi artifact gc --dry-run    # delete 対象を確認
 takosumi artifact gc              # 実削除
 ```
 
-GC は kernel 側で persistent な `takosumi_deployments` record を mark+sweep し、
-どの deployment record (status が `applied` でも `destroyed` でも)
-からも参照されていない blob だけを削除する。 Idempotent なので何度 call
-しても害はない。
+GC は kernel 側で persistent な Deployment artifact reference を mark+sweep し、
+どの Deployment からも参照されていない blob だけを削除する。 Idempotent なので
+何度 call しても害はない。
 
 ### Upload size cap
 
@@ -192,8 +193,9 @@ export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_ARTIFACT_FETCH_TOKEN=$(openssl rand -hex 32)
 ```
 
-- `TAKOSUMI_DEPLOY_TOKEN` は `takosumi deploy` / `takosumi artifact push` /
-  `takosumi artifact gc` 等の write 系を許可する full-power token。
+- `TAKOSUMI_DEPLOY_TOKEN` は `takosumi artifact push` / `takosumi artifact gc`
+  等の artifact write 系を許可する token。 Installation / Deployment API は
+  `TAKOSUMI_INSTALLER_TOKEN` を使う。
 - `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を agent host に渡すと、 connector は GET /
   HEAD `/v1/artifacts/:hash` で blob を fetch できるが、 POST (upload) / DELETE
   / GC は kernel 側で 401 になる。
@@ -270,20 +272,16 @@ describe() は status だけを返して outputs (URL / port) を空で返す。
 
 ## Cross-process apply lock
 
-`POST /v1/deployments` は **per-(tenant, name) lock** で同 deployment への並行
-apply を直列化する。
+installer apply は **per-(Space, Installation) lock** で同じ Installation への
+並行 apply を直列化する。
 
-| backend        | 保証                                                                                     |
-| -------------- | ---------------------------------------------------------------------------------------- |
-| **SQL-backed** | `takosumi_deploy_locks` の lease row で複数 kernel pod 間の同 key apply/destroy を fence |
-| **In-memory**  | per-(tenant, name) Promise chain で同 process 内の race だけを防ぐ。dev / test 専用      |
+| backend        | 保証                                                                              |
+| -------------- | --------------------------------------------------------------------------------- |
+| **SQL-backed** | lease row で複数 kernel pod 間の同じ Installation apply / rollback を fence       |
+| **In-memory**  | per-Installation Promise chain で同 process 内の race だけを防ぐ。dev / test 専用 |
 
 SQL backend は `TAKOSUMI_DATABASE_URL` (または `DATABASE_URL`) を設定した boot
-path で選択される。 migration `20260430000022_takosumi_deploy_locks.sql` と
-`20260430000023_takosumi_operation_journal_entries.sql` が必要。
-
-source:
-`packages/kernel/src/domains/deploy/takosumi_deployment_record_store_sql.ts`
+path で選択される。 installer lifecycle の永続化 migration が必要。
 
 lock acquire は `locked_until > now()` の既存 holder がいる間は待つ。 holder pod
 が落ちた場合は lease expiry 後に別 pod が取得できる。 release は `owner_token`
@@ -296,35 +294,33 @@ timing は次で調整できる:
 - `TAKOSUMI_LOCK_HEARTBEAT_MS` — renewal interval。 default は lease / 3
   (`30000` の場合 `10000`)。
 
-::: warning lock scope この lock は current public deploy route 用の apply
-fence。 apply / destroy は `takosumi_operation_journal_entries` に public
-OperationPlan WAL stage を記録するが、 下流 provider へ fencing token を渡す
-full OperationPlan / WAL protocol ではない。 pod freeze 等で holder が lease
-失効後も処理を続けると、 外部 provider side effect までは lock
-だけで取り消せない。 長時間 apply/destroy を行う provider では lease
-を最大実行時間より十分長くするか、 single-writer apply tier を使うこと。 :::
+::: warning lock scope この lock は installer apply / rollback の同一
+Installation fence。 下流 provider へ fencing token を渡す full OperationPlan /
+WAL protocol ではない。 pod freeze 等で holder が lease 失効後も処理を続けると、
+外部 provider side effect までは lock だけで取り消せない。 長時間 apply を行う
+provider では lease を最大実行時間より十分長くするか、 single-writer apply tier
+を使うこと。 :::
 
 ロック詳細は [Lifecycle Protocol](/reference/lifecycle) も参照。
 
 ---
 
-## Multi-tenancy の現状制限
+## Multi-tenancy の境界
 
-公開 deploy route (`POST /v1/deployments`) は **shared bearer token** モデル。
+public installer route (`/v1/installations/*`) は `TAKOSUMI_INSTALLER_TOKEN` の
+bearer で認証する。 Space / actor の解決は token issuer (= Takosumi Accounts)
+の責務。
 
-- token は `TAKOSUMI_DEPLOY_TOKEN` の 1 つだけ。
-- `tenant_id` / `spaceId` は `TAKOSUMI_DEPLOY_SPACE_ID` で設定する。 未設定時は
-  `"takosumi-deploy"`。
-- 1 つの token を共有する operator 同士は同じ public deploy scope を共有する。
+- token は installer API 用 (`TAKOSUMI_INSTALLER_TOKEN`) と artifact write 用
+  (`TAKOSUMI_DEPLOY_TOKEN`) を分ける。
+- AppSpec に Space / tenant / org は書かない。 install context / token claims が
+  Space を決める。
+- 複数 org / operator を扱う場合は token issuer と kernel instance の境界を
+  operator policy として明確に分離する。
 
 ::: warning 複数 operator / org 環境 独立した namespace が必要な場合は kernel
-instance を分離するか、 `TAKOSUMI_DEPLOY_TOKEN` と `TAKOSUMI_DEPLOY_SPACE_ID` を
-strict に運用 (1 org = 1 kernel / deploy scope) すること。 public route は当面
-single-token scope。 :::
-
-deployment record の tenant 列は将来の multi-tenant 拡張のため SQL schema
-に存在するが、 route 側ではまだ bearer ごとの actor-resolved Space routing
-は行わない。
+instance か token issuer の boundary を分離すること。 AppSpec field で namespace
+を切り替える public API は無い。 :::
 
 ---
 
@@ -427,5 +423,6 @@ native trace exporter は target contract。 :::
 - [Operator Bootstrap](/operator/bootstrap) — provider plugin の wire 手順
 - [Environment Variables](/reference/env-vars) — `TAKOSUMI_*` 一覧
 - [Lifecycle Protocol](/reference/lifecycle) — apply / destroy / lock 詳細
-- [Kernel HTTP API](/reference/kernel-http-api) — `/v1/deployments` 等の API
+- [Kernel HTTP API](/reference/kernel-http-api) — installer / artifact /
+  internal API
 - [Version Alignment](/operator/upgrade) — package alignment

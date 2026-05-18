@@ -220,27 +220,29 @@ Activation isolation invariant:
 
 ## Minimal example
 
-manifest は Space を言及しない。
+AppSpec は Space を言及しない。 Space は installer request の `spaceId`
+で決まる。
 
 ```yaml
-apiVersion: "1.0"
-kind: Manifest
-metadata:
-  name: api
-resources:
-  - shape: database-postgres@v1
-    name: db
-    provider: "@takos/aws-rds"
-    spec: { version: "16", size: small }
+apiVersion: takosumi.dev/v1
+kind: App
 
-  - shape: web-service@v1
-    name: api
-    provider: "@takos/aws-fargate"
-    spec:
-      image: ghcr.io/example/api@sha256:...
-      port: 8080
-      bindings:
-        DATABASE_URL: ${ref:db.connectionString}
+metadata:
+  id: com.example.api
+  name: API
+
+components:
+  api:
+    kind: worker
+    build:
+      command: npm ci && npm run build
+      output: dist/worker.mjs
+    use:
+      db:
+        env: DATABASE_URL
+
+  db:
+    kind: postgres
 ```
 
 `space:acme-prod` で apply すると、resource graph、選ばれた provider、output

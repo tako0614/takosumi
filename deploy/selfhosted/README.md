@@ -20,11 +20,18 @@ docker compose up -d
 # wait until kernel reports healthy
 curl -k https://localhost/healthz
 
-# deploy a manifest through the canonical entry point
-curl -X POST https://localhost/v1/deployments \
-  -H "Authorization: Bearer $TAKOSUMI_DEPLOY_TOKEN" \
+# install an AppSpec through the canonical installer entry point
+curl -X POST https://localhost/v1/installations \
+  -H "Authorization: Bearer $TAKOSUMI_INSTALLER_TOKEN" \
   -H "Content-Type: application/json" \
-  --data @../../fixtures/manifest.example.json
+  --data '{
+    "spaceId": "space_personal",
+    "source": {
+      "kind": "git",
+      "url": "https://github.com/example/app.git",
+      "ref": "main"
+    }
+  }'
 ```
 
 ## Required `.env`
@@ -34,7 +41,8 @@ Set strong, unique secrets for each of:
 ```
 POSTGRES_PASSWORD          # Postgres superuser passphrase
 MINIO_ROOT_PASSWORD        # MinIO admin passphrase
-TAKOSUMI_DEPLOY_TOKEN      # bearer token for POST /v1/deployments
+TAKOSUMI_INSTALLER_TOKEN   # bearer token for /v1/installations/*
+TAKOSUMI_DEPLOY_TOKEN      # bearer token for artifact write routes
 TAKOSUMI_INTERNAL_API_SECRET  # shared secret for kernel ↔ admin RPC
 TAKOSUMI_AGENT_TOKEN       # bearer token between kernel and runtime-agent
 TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
@@ -54,9 +62,9 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 
 ## Operator notes
 
-- The kernel exposes `POST /v1/deployments` as the canonical deploy entry point.
-  CLI / GitHub Actions / custom CI all hit this URL with a bearer token;
-  `takosumi-git` is one optional client among many.
+- The kernel exposes `/v1/installations*` as the canonical installer API. CLI /
+  GitHub Actions / custom CI all use that 5 endpoint surface with an installer
+  bearer token.
 - `runtime-agent` receives provider apply / destroy calls from the kernel and
   dispatches them to the bundled connector tree under
   `packages/runtime-agent/src/connectors/`. The selfhost connectors

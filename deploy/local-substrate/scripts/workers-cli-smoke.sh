@@ -6,7 +6,7 @@
 #   2. takosumi kernel Worker runs on workerd with D1/R2, Queue, and DO
 #      either as the postgres-profile mirror at kernel-worker.takosumi.test or
 #      as the workers-profile kernel at kernel.takosumi.test.
-#   3. The Accounts install preview and OIDC discovery surfaces still answer.
+#   3. The Accounts installation dry-run and OIDC discovery surfaces still answer.
 #   4. D1 binding semantics: the sqlite file underneath miniflare's D1
 #      emulator supports json_extract on the document column AND a
 #      multi-statement INSERT/SELECT round-trip — these are the two
@@ -102,13 +102,13 @@ KERNEL_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${KERNEL_HOST}:443:127.0.
 	exit 1
 }
 
-# 3. install preview (D1 + handler init still working from this stack)
-PREVIEW=$(curl -sk --cacert "$CA" -X POST \
+# 3. installer dry-run (D1 + handler init still working from this stack)
+DRY_RUN=$(curl -sk --cacert "$CA" -X POST \
 	-H "Content-Type: application/json" \
-	-d '{"source":{"gitUrl":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' \
-	https://cloud.takosumi.test/v1/install/preview)
-APP_ID=$(echo "$PREVIEW" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('appId',''))")
-[[ -n "$APP_ID" ]] || { echo "FAIL: /v1/install/preview did not return appId: $PREVIEW" >&2; exit 1; }
+	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' \
+	https://cloud.takosumi.test/v1/installations/dry-run)
+APP_ID=$(echo "$DRY_RUN" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('appId',''))")
+[[ -n "$APP_ID" ]] || { echo "FAIL: /v1/installations/dry-run did not return appId: $DRY_RUN" >&2; exit 1; }
 
 # 4. OIDC discovery shape
 DISC=$(curl -sk --cacert "$CA" https://cloud.takosumi.test/.well-known/openid-configuration)

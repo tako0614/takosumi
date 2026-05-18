@@ -26,7 +26,7 @@ import type {
   RollbackRequest,
 } from "takosumi-contract/installer-api";
 import {
-  InstallerPipeline,
+  type InstallerPipeline,
   InstallerPipelineError,
   type InstallerPipelineErrorCode,
 } from "../domains/installer/mod.ts";

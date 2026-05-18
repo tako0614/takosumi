@@ -5,7 +5,7 @@
 
 各項目は値・1 行セマンティクス・詳細リファレンスへのリンクを並べる。 すべて
 **閉じた** enum で、拡張には `CONVENTIONS.md` §6 の RFC が必須。 provider /
-template / 第三者パッケージが単独で拡張することはできない。
+第三者パッケージが単独で拡張することはできない。
 
 ## v1 wire shape の対象
 
@@ -455,7 +455,7 @@ connector は operator install で、 上述 object lifecycle class の `operato
 ## Workflow Primitive Enums
 
 kernel は trigger / declarable-hook / `execute-step` の enum 群を持ちません。
-workflow / cron / hook の実行は kernel の外 (例: `takosumi-git`) で扱います。
+workflow / cron / hook の実行は kernel の外の CI / operator product で扱います。
 詳細は
 [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
 を参照。

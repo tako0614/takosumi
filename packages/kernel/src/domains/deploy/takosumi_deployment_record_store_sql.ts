@@ -15,8 +15,7 @@ import type {
 
 /**
  * SQL-backed implementation of `TakosumiDeploymentRecordStore` so that the
- * public deploy lifecycle (`POST /v1/deployments` + `takosumi status`)
- * survives kernel restarts. Backs the
+ * legacy deployment record lifecycle survives kernel restarts. Backs the
  * `takosumi_deployments` table created by migration
  * `20260430000020_takosumi_deployments` and the
  * `takosumi_deploy_locks` table created by migration
@@ -41,7 +40,7 @@ export class SqlTakosumiDeploymentRecordStore
    * Per-key in-process lock chain. While a holder owns the entry, its
    * `tail` Promise blocks any same-process acquirer until the holder
    * calls `releaseLock`. Mirrors the in-memory store's lock chain so
-   * that the public deploy route's `acquireLock` ... `provider.apply`
+   * that the deployment apply path's `acquireLock` ... `provider.apply`
    * ... `recordStore.upsert` ... `releaseLock` sequence cannot interleave
    * against itself within one kernel process.
    */

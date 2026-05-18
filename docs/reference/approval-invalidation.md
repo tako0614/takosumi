@@ -62,8 +62,8 @@
 
 ### 5. catalog release change
 
-- **発火条件**: Space に adopted な CatalogRelease (shape / provider / template
-  の release pin) が変更された。
+- **発火条件**: Space に adopted な CatalogRelease (shape / provider の release
+  pin) が変更された。
 - **検出 timing**: Space adoption 操作の commit 完了直後。kernel は当該 Space
   に紐づく approval を resolve し直す。
 - **再評価範囲**: 新 release で binding が同一なら approval を保持、binding が

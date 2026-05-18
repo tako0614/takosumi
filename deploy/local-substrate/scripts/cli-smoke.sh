@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Exercises the canonical kernel deploy entry point (`POST /v1/deployments`).
-# This is the same path the takosumi CLI uses; without this smoke, a regression
-# in the kernel's apply pipeline would only be caught in production.
+# Exercises the canonical installer HTTP surface (`POST /v1/installations*`).
+# This is the same path the takosumi CLI uses for install / deploy / rollback;
+# without this smoke, a regression in the public installer pipeline would only
+# be caught in production.
 #
-#   1. POST a minimal Manifest (object-store@v1, selfhost-filesystem provider).
-#   2. Assert status == "ok" and outcome.status == "succeeded".
-#   3. GET /v1/deployments/<name> and assert the snapshot comes back.
+#   1. POST /v1/installations/dry-run for the mounted AppSpec fixture.
+#   2. POST /v1/installations and assert deployment.status == "succeeded".
+#   3. POST /v1/installations/{id}/deployments[/dry-run].
+#   4. POST /v1/installations/{id}/rollback.
 #
 # Run: bash scripts/cli-smoke.sh
 set -euo pipefail
@@ -13,70 +15,124 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
-TOKEN="${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}"
-DEPLOY_NAME="smoke-cli-$(date +%s)"
+TOKEN="${TAKOSUMI_INSTALLER_TOKEN:-local-substrate-installer-token}"
+SPACE_ID="${TAKOSUMI_INSTALLER_SPACE_ID:-local-substrate-space}"
+SOURCE_PATH="${TAKOSUMI_INSTALLER_SOURCE_PATH:-/workspace/examples/direct-deploy}"
+KERNEL_URL="${TAKOSUMI_KERNEL_URL:-https://kernel.takosumi.test}"
 
 if [[ ! -f "$CA" ]]; then
 	echo "Pebble CA not found at $CA — run scripts/up.sh first" >&2
 	exit 1
 fi
 
-MANIFEST=$(cat <<EOF
+INSTALL_REQUEST=$(cat <<EOF
 {
-  "manifest": {
-    "apiVersion": "1.0",
-    "kind": "Manifest",
-    "metadata": {"name": "$DEPLOY_NAME"},
-    "resources": [
-      {
-        "shape": "object-store@v1",
-        "name": "assets",
-        "provider": "@takos/selfhost-filesystem",
-        "spec": {"name": "$DEPLOY_NAME-bucket"}
-      }
-    ]
+  "spaceId": "$SPACE_ID",
+  "source": {
+    "kind": "local",
+    "url": "$SOURCE_PATH"
   }
 }
 EOF
 )
 
-RESP=$(curl -sk --cacert "$CA" \
-	-H "Authorization: Bearer $TOKEN" \
-	-H "Content-Type: application/json" \
-	-d "$MANIFEST" \
-	"https://kernel.takosumi.test/v1/deployments")
+post_json() {
+	local path="$1"
+	local body="$2"
+	curl -sk --cacert "$CA" \
+		-H "Authorization: Bearer $TOKEN" \
+		-H "Content-Type: application/json" \
+		-d "$body" \
+		-w "\n%{http_code}\n" \
+		"$KERNEL_URL$path"
+}
 
-STATUS=$(echo "$RESP" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('status',''))")
-APPLY_STATUS=$(echo "$RESP" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('outcome',{}).get('status',''))")
+response_body() {
+	printf '%s\n' "$1" | sed '$d'
+}
 
-if [[ "$STATUS" != "ok" || "$APPLY_STATUS" != "succeeded" ]]; then
-	echo "FAIL: kernel deploy did not succeed" >&2
-	echo "      status=$STATUS apply_status=$APPLY_STATUS" >&2
-	echo "      response: $RESP" >&2
+response_code() {
+	printf '%s\n' "$1" | tail -n 1
+}
+
+require_code() {
+	local label="$1"
+	local response="$2"
+	local expected="$3"
+	local actual
+	actual="$(response_code "$response")"
+	if [[ "$actual" != "$expected" ]]; then
+		echo "FAIL: $label returned HTTP $actual (expected $expected)" >&2
+		echo "      response: $(response_body "$response")" >&2
+		exit 1
+	fi
+}
+
+DRY_RESPONSE="$(post_json "/v1/installations/dry-run" "$INSTALL_REQUEST")"
+require_code "installation dry-run" "$DRY_RESPONSE" "200"
+DRY_BODY="$(response_body "$DRY_RESPONSE")"
+EXPECTED_PIN="$(printf '%s' "$DRY_BODY" | python3 -c '
+import json, sys
+body = json.load(sys.stdin)
+print(json.dumps(body["expected"], separators=(",", ":")))
+')"
+MANIFEST_DIGEST="$(printf '%s' "$DRY_BODY" | python3 -c '
+import json, sys
+print(json.load(sys.stdin).get("manifestDigest", ""))
+')"
+
+APPLY_REQUEST="$(printf '%s' "$INSTALL_REQUEST" | python3 -c '
+import json, sys
+body = json.load(sys.stdin)
+body["expected"] = json.loads(sys.argv[1])
+print(json.dumps(body, separators=(",", ":")))
+' "$EXPECTED_PIN")"
+
+APPLY_RESPONSE="$(post_json "/v1/installations" "$APPLY_REQUEST")"
+require_code "installation apply" "$APPLY_RESPONSE" "201"
+APPLY_BODY="$(response_body "$APPLY_RESPONSE")"
+INSTALLATION_ID="$(printf '%s' "$APPLY_BODY" | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["installation"]["id"])
+')"
+DEPLOYMENT_ID="$(printf '%s' "$APPLY_BODY" | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["deployment"]["id"])
+')"
+DEPLOYMENT_STATUS="$(printf '%s' "$APPLY_BODY" | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["deployment"]["status"])
+')"
+
+if [[ "$DEPLOYMENT_STATUS" != "succeeded" ]]; then
+	echo "FAIL: installation apply produced deployment.status=$DEPLOYMENT_STATUS" >&2
+	echo "      response: $APPLY_BODY" >&2
 	exit 1
 fi
 
-echo "OK deploy=$DEPLOY_NAME status=$STATUS outcome.status=$APPLY_STATUS"
+DEPLOY_DRY_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/deployments/dry-run" "{}")"
+require_code "deployment dry-run" "$DEPLOY_DRY_RESPONSE" "200"
 
-# Best-effort cleanup so we don't accumulate deployment records over time.
-# Kernel exposes DELETE /v1/deployments/<id>? If not, fall through silently.
-curl -sk --cacert "$CA" -X DELETE \
-	-H "Authorization: Bearer $TOKEN" \
-	"https://kernel.takosumi.test/v1/deployments/$DEPLOY_NAME" \
-	>/dev/null 2>&1 || true
+DEPLOY_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/deployments" "{}")"
+require_code "deployment apply" "$DEPLOY_RESPONSE" "201"
 
-# B6: also assert install-preview-mock returns real bindings (fixture-hit
-# path, not the empty fallback) — this is the install wizard's read of
-# the bundled apps' .takosumi/app.yml.
+ROLLBACK_REQUEST="{\"deploymentId\":\"$DEPLOYMENT_ID\"}"
+ROLLBACK_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/rollback" "$ROLLBACK_REQUEST")"
+require_code "rollback" "$ROLLBACK_RESPONSE" "201"
+
+echo "OK installer installation=$INSTALLATION_ID deployment=$DEPLOYMENT_ID status=$DEPLOYMENT_STATUS digest=$MANIFEST_DIGEST"
+
+# B6: also assert installer-mock returns real AppSpec-derived changes
+# (fixture-hit path, not the empty fallback).
 PREVIEW=$(curl -sk --cacert "$CA" \
 	-H "Content-Type: application/json" \
-	-d '{"source":{"gitUrl":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' \
-	"https://cloud.takosumi.test/v1/install/preview")
-BIND_COUNT=$(echo "$PREVIEW" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(len(d.get('bindings') or []))")
-if [[ "$BIND_COUNT" -lt 3 ]]; then
-	echo "FAIL: install-preview returned $BIND_COUNT bindings for yurucommu (expected >=3)" >&2
+	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' \
+	"https://cloud.takosumi.test/v1/installations/dry-run")
+CHANGE_COUNT=$(echo "$PREVIEW" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(len(d.get('changes') or []))")
+if [[ "$CHANGE_COUNT" -lt 3 ]]; then
+	echo "FAIL: installer dry-run returned $CHANGE_COUNT changes for yurucommu (expected >=3)" >&2
 	echo "      response: $PREVIEW" >&2
 	exit 1
 fi
 
-echo "OK install-preview yurucommu → $BIND_COUNT real bindings (fixture-hit)"
+echo "OK installer dry-run yurucommu → $CHANGE_COUNT AppSpec changes (fixture-hit)"

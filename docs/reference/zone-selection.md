@@ -63,22 +63,15 @@ Space record は `defaultZone` を永続化する。 Object / DataAsset / Connec
 record はそれぞれの zone field を [Storage Schema](/reference/storage-schema)
 に従って永続化する。
 
-## Manifest reference
+## AppSpec boundary
 
-manifest は [Manifest Expand Semantics](/reference/manifest-expand-semantics)
-で定義された標準 `${ref:...}` 展開を通じて zone を参照する。
+current AppSpec は zone placeholder や cross-Space zone reference を持たない。
+zone は Space default、operator policy、provider binding context
+から解決される。
 
-```yaml
-objects:
-  - id: object:web
-    zone: ${ref:space.defaultZone}
-  - id: object:cache
-    zone: az-1b
-```
-
-shape spec で `zoneAware: true` を宣言する target descriptor は、 binding
-context で resolved zone 文字列を受け取る。 zone awareness を宣言しない
-descriptor はこの field を無視する。 kernel は強制も drop もしない。
+shape spec で `zoneAware: true` を宣言する target descriptor は、binding context
+で resolved zone 文字列を受け取る。 zone awareness を宣言しない descriptor は
+この field を無視する。 kernel は強制も drop もしない。
 
 ## Cross-zone link policy
 
@@ -179,7 +172,7 @@ distribution に住む。 kernel は属性と audit signal を同梱してそこ
 - [Storage Schema](/reference/storage-schema)
 - [Audit Events](/reference/audit-events)
 - [Connector Contract](/reference/connector-contract)
-- [Manifest Expand Semantics](/reference/manifest-expand-semantics)
+- [AppSpec Dependency Semantics](/reference/manifest-expand-semantics)
 - [Drift Detection](/reference/drift-detection)
 - [Environment Variables](/reference/env-vars)
 - [Resource IDs](/reference/resource-ids)

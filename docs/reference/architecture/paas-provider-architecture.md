@@ -135,7 +135,8 @@ surface 一覧:
 | Connector registration      | yes      | yes          | optional         |
 
 internal API が canonical surface である。CLI と operator console はその API の
-client である。public deploy client は operator surface に直接アクセスしない。
+client である。public installer client は operator surface
+に直接アクセスしない。
 
 ## SLA 観測可能 surface
 

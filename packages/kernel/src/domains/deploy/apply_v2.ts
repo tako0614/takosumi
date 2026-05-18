@@ -58,7 +58,7 @@ export interface ApplyV2Outcome {
   /**
    * Number of resources that were skipped because their `(shape, providerId,
    * name, spec)` fingerprint matched a prior apply record. Always 0 when
-   * `priorApplied` is not supplied. Used by the public deploy route to log
+   * `priorApplied` is not supplied. Used by deployment apply paths to log
    * idempotent reuse for operators.
    */
   readonly reused?: number;

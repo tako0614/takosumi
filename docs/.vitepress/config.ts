@@ -96,7 +96,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "Manifest Spec", link: "/reference/manifest-spec" },
         { text: "Manifest Validation", link: "/reference/manifest-validation" },
         {
-          text: "Manifest Expand Semantics",
+          text: "AppSpec Dependency Semantics",
           link: "/reference/manifest-expand-semantics",
         },
         { text: "Plan Output Schema", link: "/reference/plan-output" },
@@ -236,7 +236,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Shape Catalog", link: "/reference/shapes" },
         { text: "Provider Plugins", link: "/reference/providers" },
-        { text: "Templates", link: "/reference/templates" },
         { text: "Artifact Kinds", link: "/reference/artifact-kinds" },
         { text: "Connector Contract", link: "/reference/connector-contract" },
         { text: "DataAsset Policy", link: "/reference/data-asset-policy" },

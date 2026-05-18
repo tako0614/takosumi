@@ -225,14 +225,14 @@ check "prod-mirror.cloud.dashboard-signin" "cloud.takosumi.test" "/sign-in" "200
 check "prod-mirror.cloud.dashboard-deeplink" "cloud.takosumi.test" "/apps/abc" "200"
 
 echo
-echo "==> Install flow — managed-offering bypass + install-preview mock"
+echo "==> Install flow — managed-offering bypass + installer dry-run mock"
 # managed-offering gate is flipped to 'open' for the local test bed, so the
-# preview endpoint should return 200 instead of 503 (launch_readiness_not_complete).
-check_post "install.preview.takos-docs" "cloud.takosumi.test" "/v1/install/preview" \
-	'{"source":{"gitUrl":"https://github.com/tako0614/takos-docs.git","ref":"main"}}' "200"
+# dry-run endpoint should return 200 instead of 503 (launch_readiness_not_complete).
+check_post "install.dry-run.takos-docs" "cloud.takosumi.test" "/v1/installations/dry-run" \
+	'{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/takos-docs.git","ref":"main"}}' "200"
 # yurucommu through the same wizard
-check_post "install.preview.yurucommu" "cloud.takosumi.test" "/v1/install/preview" \
-	'{"source":{"gitUrl":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' "200"
+check_post "install.dry-run.yurucommu" "cloud.takosumi.test" "/v1/installations/dry-run" \
+	'{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' "200"
 
 echo
 echo "==> OAuth flow — upstream mock (accounts.google.com / github.com)"
@@ -295,22 +295,12 @@ else
 fi
 
 echo
-echo "==> Kernel deploy (POST /v1/deployments — canonical entry point)"
-if bash "$SCRIPT_DIR/cli-smoke.sh"  >/dev/null 2>&1; then
-	echo "    PASS [kernel.deploy.e2e] manifest applied to kernel, outcome=succeeded"
+echo "==> Installer API (5 endpoint surface)"
+if run_script "installer.api.e2e" "bash $SCRIPT_DIR/cli-smoke.sh"; then
+	echo "    PASS [installer.api.e2e] install + deploy + rollback succeeded"
 	PASS=$((PASS + 1))
 else
-	echo "    FAIL [kernel.deploy.e2e] see scripts/cli-smoke.sh for the failure"
-	FAIL=$((FAIL + 1))
-fi
-
-echo
-echo "==> takosumi-git canonical installer — workspace contract test"
-if run_script "takosumi-git.tests" "bash $SCRIPT_DIR/takosumi-git-smoke.sh"; then
-	echo "    PASS [takosumi-git.tests] deploy-client + workflow-runner + git-source + cli contract unit tests"
-	PASS=$((PASS + 1))
-else
-	echo "    FAIL [takosumi-git.tests] see scripts/takosumi-git-smoke.sh"
+	echo "    FAIL [installer.api.e2e] see scripts/cli-smoke.sh for the failure"
 	FAIL=$((FAIL + 1))
 fi
 
@@ -367,7 +357,7 @@ fi
 echo
 echo "==> k6 load baseline via Caddy + TLS (20 RPS x 20s — regression watch only, NOT SLO)"
 if run_script "k6.baseline" "bash $SCRIPT_DIR/k6-baseline.sh"; then
-	echo "    PASS [k6.baseline] install/preview + oidc both within p95 + error-rate thresholds"
+	echo "    PASS [k6.baseline] install dry-run + oidc both within p95 + error-rate thresholds"
 	PASS=$((PASS + 1))
 else
 	echo "    FAIL [k6.baseline] see scripts/k6-baseline.sh --verbose"

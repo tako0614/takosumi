@@ -1,105 +1,109 @@
 import { Command } from "@cliffy/command";
-import { loadManifest, selectManifestPath } from "../manifest_loader.ts";
-import { loadConfig, resolveMode } from "../config.ts";
-import { callKernel } from "../remote_client.ts";
-import { applyLocal, expandManifestLocal, planLocal } from "../local_runner.ts";
+import {
+  callInstaller,
+  expectedPinFromOptions,
+  INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
+  INSTALLATION_DEPLOYMENTS_PATH,
+  parseSourceRef,
+  requireRemoteInstaller,
+} from "../installer_client.ts";
 
 function createDeployCommand() {
-  return new Command()
-    .description(
-      "Apply a Takosumi manifest (path is required; project-layout " +
-        "discovery is provided by takosumi-git)",
-    )
-    .arguments("[manifest:string]")
-    .option(
-      "--manifest <path:string>",
-      "Manifest path, same as [manifest] (required)",
-    )
+  const dryRun = new Command()
+    .description("Dry-run a Deployment for an existing Installation")
+    .arguments("<installationId:string>")
     .option("--remote <url:string>", "Remote kernel URL")
-    .option("--token <token:string>", "Auth token")
-    .option("--dry-run", "Validate only, do not apply")
+    .option("--token <token:string>", "Installer bearer token")
+    .option("--source <source:string>", "Optional replacement source")
     .action(
-      async (
-        { manifest: manifestFlag, remote, token, dryRun },
-        manifestPath,
-      ) => {
-        const manifest = await loadManifest(selectManifestPath({
-          argument: manifestPath,
-          flag: manifestFlag,
-        }));
-        console.log(
-          `loaded manifest from ${manifest.path} (${manifest.format})`,
-        );
-
-        const target = resolveMode({ remote, token }, await loadConfig());
-
-        if (target.mode === "remote") {
-          console.log(`submitting to remote kernel: ${target.url}`);
-          const { status, body } = await callKernel({
-            url: target.url,
-            token: target.token,
-            path: "/v1/deployments",
-            body: { mode: dryRun ? "plan" : "apply", manifest: manifest.value },
-          });
-          if (status >= 400) {
-            console.error(`kernel returned ${status}:`, body);
-            Deno.exit(1);
-          }
-          console.log(dryRun ? "plan accepted:" : "deployment accepted:", body);
-          return;
-        }
-
-        let resources;
-        try {
-          resources = expandManifestLocal(manifest.value);
-        } catch (error) {
-          const message = error instanceof Error
-            ? error.message
-            : String(error);
-          console.error(`error: ${message}`);
-          Deno.exit(1);
-        }
-        if (resources.length === 0) {
-          console.error(
-            "manifest expanded to zero resources; nothing to apply",
-          );
-          Deno.exit(1);
-        }
-
-        if (dryRun) {
-          console.log(
-            `local mode: planning ${resources.length} resource(s) in-process`,
-          );
-          const outcome = await planLocal(resources);
-          if (outcome.status !== "succeeded") {
-            console.error(`plan ${outcome.status}:`);
-            for (const issue of outcome.issues) {
-              console.error(`  - ${issue.path}: ${issue.message}`);
-            }
-            Deno.exit(1);
-          }
-          console.log(JSON.stringify({ status: "ok", outcome }, null, 2));
-          return;
-        }
-
-        console.log(
-          `local mode: applying ${resources.length} resource(s) in-process`,
-        );
-        const outcome = await applyLocal(resources);
-        if (outcome.status !== "succeeded") {
-          console.error(`apply ${outcome.status}:`);
-          for (const issue of outcome.issues) {
-            console.error(`  - ${issue.path}: ${issue.message}`);
-          }
-          Deno.exit(1);
-        }
-        for (const applied of outcome.applied) {
-          console.log(
-            `  ✓ ${applied.name} (${applied.providerId}) → ${applied.handle}`,
-          );
-        }
+      async ({ remote, token, source }, installationId) => {
+        await runDeploy({
+          installationId,
+          remote,
+          token,
+          source,
+          dryRun: true,
+        });
       },
     );
+
+  return new Command()
+    .description("Apply a Deployment for an existing Installation")
+    .arguments("<installationId:string>")
+    .option("--remote <url:string>", "Remote kernel URL")
+    .option("--token <token:string>", "Installer bearer token")
+    .option("--source <source:string>", "Optional replacement source")
+    .option(
+      "--expected-commit <commit:string>",
+      "Expected source commit pin",
+    )
+    .option(
+      "--expected-manifest-digest <digest:string>",
+      "Expected .takosumi.yml digest pin",
+    )
+    .option("--dry-run", "Alias for `takosumi deploy dry-run`")
+    .action(
+      async (
+        {
+          remote,
+          token,
+          source,
+          expectedCommit,
+          expectedManifestDigest,
+          dryRun: dryRunFlag,
+        },
+        installationId,
+      ) => {
+        await runDeploy({
+          installationId,
+          remote,
+          token,
+          source,
+          expectedCommit,
+          expectedManifestDigest,
+          dryRun: dryRunFlag === true,
+        });
+      },
+    )
+    .command("dry-run", dryRun);
+}
+
+async function runDeploy(input: {
+  readonly installationId: string;
+  readonly remote?: string;
+  readonly token?: string;
+  readonly source?: string;
+  readonly expectedCommit?: string;
+  readonly expectedManifestDigest?: string;
+  readonly dryRun: boolean;
+}): Promise<void> {
+  try {
+    const target = await requireRemoteInstaller(input.remote, input.token);
+    const body = {
+      ...(input.source ? { source: parseSourceRef(input.source) } : {}),
+      ...(input.dryRun ? {} : {
+        expected: expectedPinFromOptions({
+          expectedCommit: input.expectedCommit,
+          expectedManifestDigest: input.expectedManifestDigest,
+        }),
+      }),
+    };
+    const { status, body: responseBody } = await callInstaller(target, {
+      path: input.dryRun
+        ? INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH(input.installationId)
+        : INSTALLATION_DEPLOYMENTS_PATH(input.installationId),
+      body,
+    });
+    if (status >= 400) {
+      console.error(`kernel returned ${status}:`, responseBody);
+      Deno.exit(1);
+    }
+    console.log(JSON.stringify(responseBody, null, 2));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`error: ${message}`);
+    Deno.exit(1);
+  }
 }
 
 export const deployCommand: ReturnType<typeof createDeployCommand> =

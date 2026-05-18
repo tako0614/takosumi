@@ -1227,7 +1227,7 @@ drop table if exists internal_request_replay_log;`,
       version: 20,
       domain: "deploy",
       description:
-        "Persist takosumi public deploy state so destroy/status can read prior apply handles end-to-end (Task 1).",
+        "Persist legacy deployment state so recovery paths can read prior apply handles end-to-end (Task 1).",
       sql: `create table if not exists takosumi_deployments (
   id                     text        primary key,
   tenant_id              text        not null,
@@ -1253,7 +1253,7 @@ drop table if exists takosumi_deployments;`,
       version: 21,
       domain: "deploy",
       description:
-        "Persist public deploy idempotency responses so CLI retries replay the first outcome after kernel restarts.",
+        "Persist deployment idempotency responses so retries replay the first outcome after kernel restarts.",
       sql: `create table if not exists takosumi_deploy_idempotency_keys (
   id                 text        primary key,
   tenant_id          text        not null,
@@ -1278,7 +1278,7 @@ drop table if exists takosumi_deploy_idempotency_keys;`,
       version: 22,
       domain: "deploy",
       description:
-        "Persist public deploy lease locks so same deployment applies are fenced across kernel pods.",
+        "Persist deployment lease locks so same deployment applies are fenced across kernel pods.",
       sql: `create table if not exists takosumi_deploy_locks (
   tenant_id    text        not null,
   name         text        not null,
@@ -1298,7 +1298,7 @@ drop table if exists takosumi_deploy_locks;`,
       version: 23,
       domain: "deploy",
       description:
-        "Persist public deploy OperationPlan WAL stage entries for recovery and replay checks.",
+        "Persist deployment OperationPlan WAL stage entries for recovery and replay checks.",
       sql: `create table if not exists takosumi_operation_journal_entries (
   id                    text        primary key,
   space_id              text        not null,
@@ -1458,7 +1458,7 @@ drop table if exists registry_catalog_publisher_keys;`,
       version: 26,
       domain: "deploy",
       description:
-        "Persist public deploy idempotency lease locks so same idempotency keys are fenced across kernel pods.",
+        "Persist deployment idempotency lease locks so same idempotency keys are fenced across kernel pods.",
       sql: `create table if not exists takosumi_deploy_idempotency_locks (
   tenant_id       text        not null,
   idempotency_key text        not null,

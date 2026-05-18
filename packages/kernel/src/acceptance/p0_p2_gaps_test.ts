@@ -232,7 +232,6 @@ Deno.test("acceptance P1: route projection is derived from committed deployment"
 Deno.test("acceptance P2: app factory rejects unsigned internal routes", async () => {
   const app = await createApiApp({
     getInternalServiceSecret: () => "acceptance-secret",
-    registerPublicRoutes: false,
   });
   const actor = actorContext("acct_acceptance", "req_unsigned");
 

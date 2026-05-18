@@ -1,208 +1,78 @@
 # Supply Chain Trust
 
-> このページでわかること: install / deploy 時の chain of custody — TLS + digest
-> pin + 1 signing domain (OIDC) の組み合わせ。design-principles §6 と整合する。
+> このページでわかること: AppSpec install / deploy 時の chain of custody。
 
-## 1. Trust Boundaries
+## Trust Boundaries
 
 | Boundary               | Evidence                                           | 取得機構                     | Owner                            |
 | ---------------------- | -------------------------------------------------- | ---------------------------- | -------------------------------- |
 | source identity        | git URL / immutable ref / commit SHA               | digest pin                   | installer                        |
-| app metadata           | `.takosumi/app.yml` sha256                         | digest pin                   | installer / Accounts             |
+| AppSpec                | `.takosumi.yml` sha256                             | digest pin                   | installer                        |
 | publisher identity     | publisher id / homepage / optional verified status | TLS + policy                 | Accounts / install-source policy |
-| artifact build         | workflow run id / artifact URI / image digest      | digest pin                   | takosumi-git or external CI      |
-| compiled manifest      | compiled Shape manifest sha256                     | digest pin                   | installer                        |
+| artifact build         | workflow run id / artifact URI / image digest      | digest pin                   | external CI / installer          |
 | provider catalog       | CatalogRelease descriptor digest                   | digest pin (operator config) | operator / kernel                |
 | provider resolution    | ResolvedProviderDecision                           | kernel ledger                | kernel                           |
-| installation ownership | AppInstallation source / binding / grant records   | append-only ledger           | Accounts                         |
-| install bootstrap      | one-time opaque launch token (Accounts `/consume`) | TLS + ledger                 | Accounts + app                   |
-| runtime session        | OIDC ID token                                      | signed (1 domain)            | Accounts (issuer)                |
+| installation ownership | Installation source / binding / grant records      | append-only ledger           | Accounts / kernel                |
+| install bootstrap      | one-time opaque launch token                       | TLS + ledger                 | Accounts + app                   |
+| runtime session        | OIDC ID token                                      | signed                       | Accounts issuer                  |
 
-## 2. Chain Of Custody
+## Chain Of Custody
 
-Install path は次の順に evidence を pin する。
+1. Source URL / catalog entry / local source is selected.
+2. Installer resolves immutable source identity and reads `.takosumi.yml`.
+3. AppSpec schema and component graph are validated.
+4. Artifact references / build outputs are pinned by digest where applicable.
+5. Provider catalog digest and provider resolution are recorded.
+6. `POST /v1/installations` creates Installation + first Deployment, or
+   `POST /v1/installations/{id}/deployments` records a later Deployment.
+7. Runtime bootstrap uses the Accounts-owned launch-token / OIDC flow.
 
-1. Git URL と immutable ref を resolve し、 commit SHA を pin する。
-2. `.takosumi/app.yml` を parse し、 sha256 を計算する。
-3. publisher metadata を Accounts / install-source policy で評価する。
-4. `.takosumi/manifest.yml` を authoring compute manifest として parse する。
-5. workflow / external CI が artifact URI または image digest を生成する。
-6. installer-only placeholder (`${params.*}` / `${installation.*}` /
-   `${artifacts.*}` / `${bindings.*}` / `${secrets.*}`) を materialize する
-   (詳細順序は
-   [takosumi-git binding catalog](https://github.com/tako0614/takosumi-git/blob/main/docs/reference/binding-catalog.md))。
-7. compiled Shape manifest digest を計算する。
-8. AppInstallation ledger に source commit / app manifest digest / compiled
-   manifest digest / bindings / grants を保存する。
-9. kernel が CatalogRelease digest と provider resolution を記録する。
-10. runtime bootstrap を行う:
-    - install 直後: one-time opaque launch token を Accounts が発行 → app が
-      `/consume` 経由で redeem (TLS)
-    - 以後の session: OIDC ID token (Accounts issuer 署名)。
+The chain must not contain mutable source refs without a resolved commit,
+unexplained provider decisions, or unverified catalog digests.
 
-この chain の途中に mutable ref / unresolved placeholder / unverified catalog
-digest / unexplained provider decision が残っていてはいけない。
+## Signing Domain
 
-## 3. Signing Domain (1 only)
+ecosystem で署名を発行する domain は OIDC ID token を基本とする。 catalog /
+artifact / AppSpec evidence は TLS + digest pin で扱う。 universal signing model
+(provider endpoint 署名 / service descriptor 署名 / 全 package 署名等) は採用し
+ない。
 
-ecosystem で署名を発行する domain は **OIDC ID token のみ** に限定する。
+## Launch Token
 
-| Domain        | Signer                   | Verifier          | 用途         |
-| ------------- | ------------------------ | ----------------- | ------------ |
-| OIDC ID token | Takosumi Accounts issuer | app / API gateway | user session |
-
-**署名で扱わない boundary** (TLS / digest pin で扱う):
-
-- launch token: one-time opaque token + Accounts `/consume` (OAuth authorization
-  code grant 相当)
-- catalog release: operator-pinned sha256 + TLS fetch
-- provider endpoint URL / webhook URL: 個別 signing なし
-- service descriptor / namespace export resolution: signing なし、 audit に
-  record
-- 3rd party app distribution (future marketplace): default は marketplace API
-  trust (TLS)。 publisher direct signing は optional future extension
-
-> OIDC を選んだ理由は業界標準 (RFC 6749 / 8252 等) との互換性。 Keycloak / Auth0
-> 等を upstream IdP として組み込む path、 3rd party tool との interop、
-> cross-domain federation 等が標準 tooling で動く。 universal signing model
-> (provider endpoint 署名 / service descriptor 署名 / 全 package 署名等) は
-> 採用しない。 各 trust boundary を最小限の機構で成立させ、 鍵管理と blast
-> radius を縮小する。
-
-## 4. Launch Token (opaque token model)
-
-Install 直後の auto sign-in は OAuth authorization code grant 風の **one-time
-opaque token** を redirect carrier として使い、 redeem を TLS で行う。
+Install 直後の auto sign-in は one-time opaque token を redirect carrier として
+使い、 redeem を TLS で行う。
 
 ```text
-1. install ready → Accounts が 32-byte random token を発行:
-     { jti, installationId, accountId, sub, redirect_uri, expires_at, used: false }
-   TTL は 5 分、 1 installation あたり active token は 1 個に制限。
-
-2. takosumi-git / installer が user browser を app に redirect:
-     https://<app>/<install_redirect_uri>?launch_token=<opaque>
-
-3. app が launch_token を受領し、 Accounts に redeem:
-     POST <accounts-base>/v1/installations/<installationId>/launch-token/consume
-     Content-Type: application/json
-     { "token": "<opaque>", "redirect_uri": "<expected>" }
-   通信は TLS、 server cert で Accounts identity を確認。
-
-4. Accounts:
-   - token が存在し installationId と match するか
-   - redirect_uri が発行時の値と一致するか
-   - 有効期限内か
-   - used が false か → atomic に true に変更 (single transaction)
-   いずれか failure で 400 / 410 を返し、 token は無効化。
-
-5. Accounts が成功時に返す:
-     { consumed, installation_id, account_id, space_id, app_id,
-       sub, subject, role, jti, audience, scope, expires_at }
-   app は consume で確定した pairwise subject から local session を作成。
-   session JWT は返さない (通常 OIDC sign-in flow は app が別途実行)。
+1. install ready → Accounts issues opaque token
+2. user browser is redirected to the app with launch_token
+3. app redeems the token against Accounts
+4. Accounts atomically marks token as used and returns installation/account context
+5. app starts its local session or OIDC flow
 ```
 
-app は Accounts の TLS endpoint だけを trust すれば良い。 公開鍵 verify や
-audience claim 検証は不要。 OAuth 2.0 RFC 6749 の authorization code grant flow
-と本質的に同じ pattern。
+## Digest Invariants
 
-### 4.1 セキュリティ性質
+次の digest は Installation / Deployment evidence で説明可能でなければならない。
 
-- **one-time**: `used` flag が atomic 操作で flip する。 同 token の二重 consume
-  は確実に拒否される
-- **redirect_uri 拘束**: token は発行時に redirect_uri に bound する。 別の URL
-  に redirect された token は consume 不可 (典型的な token theft + redirect
-  attack を防ぐ)
-- **短命**: TTL 5 分以下。 leak しても window が短い
-- **TLS 必須**: token を carry する URL も redeem call も TLS で保護
-
-## 5. Digest Invariants
-
-次の digest は AppInstallation / Deployment evidence で説明可能でなければ
-ならない。
-
-- `appManifestDigest`: `.takosumi/app.yml` の sha256
-- `compiledManifestDigest`: kernel に渡した compiled Shape manifest の sha256
-- artifact digest: OCI image digest、 bundle hash、 または workflow artifact
-  hash
+- `appSpecDigest`: `.takosumi.yml` の sha256
+- artifact digest: OCI image digest、bundle hash、workflow artifact hash
 - `catalogReleaseDigest`: operator が config に pin した catalog の sha256
 - policy / provider resolution input digest
 
-rollback は mutable tag を再解決しない。 保存済み compiled manifest digest と
-artifact digest を再 apply する。
+rollback は mutable tag を再解決しない。保存済み Deployment evidence と artifact
+digest を使って新しい rollback Deployment を作る。
 
-## 6. Catalog Release Trust
+## Catalog Release Trust
 
-shape / provider / template の release (catalog) は operator-pinned sha256 で
-trust を取る。
+shape / provider の release (catalog) は operator-pinned sha256 で trust
+を取る。
 
 ```text
-1. operator が deploy する kernel host の config に catalog digest を pin:
-     CATALOG_DIGEST=sha256:abc123...
-     CATALOG_URL=https://jsr.io/@takos/takosumi-plugins/0.7.0
-2. kernel が catalog を TLS fetch、 sha256 を計算
-3. config digest と一致しなければ reject (fail-closed)
-4. AppInstallation / Deployment evidence に catalog digest を pin
+1. operator pins catalog digest in kernel host config
+2. kernel TLS-fetches catalog and computes sha256
+3. mismatch rejects boot/apply fail-closed
+4. Installation / Deployment evidence records catalog digest
 ```
 
-container image digest と同じ pattern。 operator が「どの version を信頼するか」
-を明示し、 kernel は fetch 結果が digest と一致することだけを verify する。
-publisher signing は不要。
-
-dynamic registry (operator が runtime に catalog version を切り替える) や
-multi-mirror が必要になった場合は、 future RFC で publisher signing domain を
-追加することは可能。 v1 default は static operator pin。
-
-### Operator-pinned trust の trade-off
-
-operator-pinned digest model は **operator が trust authority** である。 OCI
-registry には Notary / Cosign 等の signature verification path も並列に存在
-するのに対し、 current Takosumi は operator pin のみで publisher signature を
-持たない。 trade-off:
-
-- ✅ 鍵管理コスト 0、 publisher key registry なし、 setup 簡単
-- ✅ pin 値を operator が掌握できるので supply chain attack の blast radius が
-  operator の config boundary に閉じる (kernel が勝手に新 version を pull
-  しない)
-- ❌ **operator monopoly on truth**: operator account / config storage が
-  compromised なら attacker は任意 catalog digest に pin を変更可能。 publisher
-  assertion が無いので「pin 値が genuine な release を指しているか」 は detect
-  困難 (out-of-band verification が必要)
-- ❌ **cross-instance trust chain なし**: 2 Takosumi instance が異なる
-  `CATALOG_DIGEST` 値を持つ場合、 chain of custody は instance ごとに isolated。
-  「同じ release を pin している」 ことを protocol level で確認する手段は無い
-- ❌ **dynamic catalog discovery 不可**: marketplace 等で「最新 release を
-  fetch」 する flow には publisher signature か trusted registry index が必要
-  (future RFC)
-
-これは **single-operator-trust model**。 publisher-direct-trust や federated
-trust を要求する use case には不十分。 v1 default は「operator が catalog
-version を慎重に pin する」 を user expectation とし、 そのコスト (operator 側で
-release notes を読む、 hash を out-of-band verify する) を operator に課す。
-
-## 7. Marketplace Trust (future)
-
-3rd party publisher の app distribution (Phase 2.x の marketplace 機能) は
-default では **marketplace API を trusted authority とする TLS trust** で扱う。
-
-- user が marketplace 上で「verified publisher」 を信頼する
-- marketplace は publisher metadata、 verified status、 takedown 状態を API
-  で公開
-- consumer は TLS で marketplace API を叩き、 install 可否を判断
-
-publisher direct signing (marketplace を bypass して publisher 鍵で verify) は
-**optional future extension**。 air-gapped install / cypherpunk 用途で必要なら
-RFC で追加する。 v1 default は marketplace trust。
-
-## 8. Current Gaps
-
-このページは trust chain の target contract。 実装には次の領域で gap
-が残り得る。
-
-- launch token: one-time opaque token + Accounts `/consume` で運用
-- third-party CI artifact provenance attestation: SLSA-level の attestation は
-  v1 では digest pin のみ
-- future marketplace の publisher direct signing path
-- export bundle の provider data restore integrity
-
-gap は chain を曖昧にする理由ではなく、 release gate で partial として扱う対象。
+publisher signing は v1 default では不要。 dynamic registry や multi-mirror が
+必要になった場合は future RFC で signing domain を追加できる。

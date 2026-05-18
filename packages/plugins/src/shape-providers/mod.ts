@@ -4,7 +4,7 @@
  * The production-grade plugin set is built by
  * `createTakosumiProductionProviders` — every plugin posts lifecycle
  * envelopes to a runtime-agent (see `_runtime_agent_lifecycle.ts`). The
- * in-memory variant lives here too for templates and end-to-end tests
+ * in-memory variant lives here too for end-to-end tests
  * that want a self-contained workflow without spinning up an agent.
  */
 

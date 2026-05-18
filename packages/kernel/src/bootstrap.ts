@@ -183,8 +183,6 @@ export async function createPaaSApp(
     role,
     context,
     registerInternalRoutes: role === "takosumi-api",
-    registerPublicRoutes: role === "takosumi-api" &&
-      runtimeConfig.routes?.publicRoutesEnabled === true,
     registerRuntimeAgentRoutes: role === "takosumi-runtime-agent",
     registerReadinessRoutes: true,
     registerOpenApiRoute: role === "takosumi-api",

@@ -218,7 +218,7 @@ Deno.test("ApplyService rejects retired top-level template shorthand", async () 
           spaceId: "space_template",
           manifest,
         }),
-      /top-level `template` is retired/,
+      /top-level authoring shortcut is retired/,
     );
     assert.equal(applyLog.length, 0);
   } finally {

@@ -30,7 +30,7 @@ Properties:
 - support-staff Actor の lifecycle は operator-controlled: 作成 / 一時停止 /
   削除は operator 側に住む。
 
-kernel は support-staff Actor を mint しようとする public deploy bearer や
+kernel は support-staff Actor を mint しようとする installer bearer や
 runtime-agent enrollment を reject する。 発行 path は operator 内部 control
 plane のみ。
 

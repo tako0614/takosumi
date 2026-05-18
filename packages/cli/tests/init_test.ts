@@ -1,0 +1,41 @@
+import assert from "node:assert/strict";
+import { initCommand } from "../src/commands/init.ts";
+
+Deno.test("init command prints an AppSpec scaffold by default", async () => {
+  const output = await captureStdout(() => initCommand.parse([]));
+
+  assert.match(output, /apiVersion: takosumi\.dev\/v1/);
+  assert.match(output, /kind: App/);
+  assert.match(output, /components:/);
+  assert.equal(output.includes("kind: Manifest"), false);
+  assert.equal(output.includes("${ref:"), false);
+});
+
+Deno.test("init command writes the empty AppSpec template", async () => {
+  const tmp = await Deno.makeTempFile({ suffix: ".takosumi.yml" });
+  try {
+    await captureStdout(() => initCommand.parse(["--template", "empty", tmp]));
+
+    const text = await Deno.readTextFile(tmp);
+    assert.match(text, /apiVersion: takosumi\.dev\/v1/);
+    assert.match(text, /kind: App/);
+    assert.match(text, /components: \{\}/);
+    assert.equal(text.includes("kind: Manifest"), false);
+  } finally {
+    await Deno.remove(tmp);
+  }
+});
+
+async function captureStdout(run: () => Promise<unknown>): Promise<string> {
+  const originalLog = console.log;
+  const lines: string[] = [];
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  try {
+    await run();
+  } finally {
+    console.log = originalLog;
+  }
+  return lines.join("\n");
+}

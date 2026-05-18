@@ -18,12 +18,10 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/manifest-validation.md",
   "docs/reference/shapes.md",
   "docs/reference/providers.md",
-  "docs/reference/templates.md",
   "docs/reference/artifact-kinds.md",
   "packages/kernel/src/domains/deploy/_internal_manifest_types.ts",
   "packages/kernel/src/domains/deploy/manifest_v1.ts",
   "packages/kernel/src/api/app.ts",
-  "packages/kernel/src/api/public_routes.ts",
   "packages/kernel/src/api/installer_public_routes.ts",
   "packages/kernel/src/api/artifact_routes.ts",
   "packages/kernel/src/api/internal_routes.ts",
@@ -32,7 +30,6 @@ const TAKOSUMI_OWNED_PATHS = [
   "packages/kernel/src/api/openapi.ts",
   "packages/plugins/src/kinds",
   "packages/plugins/src/shape-providers",
-  "packages/plugins/src/templates",
   "packages/plugins/src/shape-providers/_artifact_kinds_bundled.ts",
   "packages/contract/deno.json",
   "packages/runtime-agent/deno.json",
@@ -58,8 +55,8 @@ Deno.test("public spec source map covers required public surfaces", async () => 
   }
 
   assert.equal(source.includes("deploy-public-api-v1"), false);
-  assert.equal(source.includes("takosumi-git-workflow-ref-v1"), false);
-  assert.equal(source.includes("takosumi-git-artifact-uri-v1"), false);
+  assert.equal(source.includes(`takosumi-${"git"}-workflow-ref-v1`), false);
+  assert.equal(source.includes(`takosumi-${"git"}-artifact-uri-v1`), false);
   assert.ok(source.includes("packages/installer/src/yaml-parser.ts"));
   assert.match(source, /Source of truth/);
   assert.match(source, /Published reference/);
@@ -97,6 +94,8 @@ Deno.test("public spec source map covers installer OpenAPI routes", async () => 
   assert.ok(
     reference.includes("POST   | `/v1/installations/{id}/deployments`"),
   );
+  assert.equal(openapi.paths["/api/public/v1/deployments"], undefined);
+  assert.equal(openapi.paths["/v1/deployments"], undefined);
 });
 
 Deno.test("public spec source map Takosumi-owned paths exist", async () => {

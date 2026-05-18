@@ -14,35 +14,30 @@ takosumi version
 
 ```bash
 export TAKOSUMI_DEV_MODE=1
-export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 
 # Boot kernel + embedded runtime-agent on the same machine
 takosumi server --port 8788 &
 
-# Scaffold + deploy
-takosumi init ./manifest.yml --template selfhosted-single-vm
-takosumi doctor --manifest ./manifest.yml
-takosumi deploy ./manifest.yml
-takosumi status
-takosumi audit show <deployment-id-or-name>
-takosumi destroy ./manifest.yml
+# Install + deploy
+takosumi install --source . --space space_personal
+takosumi deploy <installation-id>
+takosumi rollback <installation-id> <deployment-id>
 ```
 
-> Project-layout discovery (`.takosumi/manifest.yml` etc.) is **not** in this
-> CLI; it is owned by the `takosumi-git` sibling product. Pass the manifest path
-> explicitly to every `deploy` / `destroy` / `plan` / `doctor` call.
+> The public surface is AppSpec (`.takosumi.yml`), Installation, and Deployment.
+> The CLI calls the five installer endpoints under `/v1/installations/*`.
 
 ## Commands
 
 | Command                                                             | Purpose                                              |
 | ------------------------------------------------------------------- | ---------------------------------------------------- |
-| `takosumi deploy <manifest>`                                        | apply; manifest path is required                     |
-| `takosumi destroy <manifest> [--force]`                             | tear down a previously-applied manifest              |
-| `takosumi status [<name>]`                                          | query kernel for current deployment state            |
-| `takosumi audit show <deployment-id-or-name>`                       | show WAL / provenance / rollback cause chain         |
-| `takosumi plan <manifest>`                                          | dry-run (validate + DAG, no provider.apply)          |
-| `takosumi doctor --manifest <path>`                                 | show manifest / mode / token before deploy           |
+| `takosumi install <source>`                                         | create an Installation and first Deployment          |
+| `takosumi install dry-run <source>`                                 | dry-run a new Installation                           |
+| `takosumi deploy <installation-id> [--source <source>]`             | apply a new Deployment to an Installation            |
+| `takosumi deploy dry-run <installation-id> [--source <source>]`     | dry-run an Installation update                       |
+| `takosumi rollback <installation-id> <deployment-id>`               | create a rollback Deployment                         |
 | `takosumi server [--port] [--no-agent]`                             | boot kernel + embedded agent                         |
 | `takosumi runtime-agent serve`                                      | standalone agent (multi-host production)             |
 | `takosumi runtime-agent list`                                       | show registered connectors on an agent               |
@@ -51,7 +46,7 @@ takosumi destroy ./manifest.yml
 | `takosumi artifact list [--limit]` / `rm <hash>` / `gc [--dry-run]` | artifact store management                            |
 | `takosumi artifact kinds`                                           | list registered artifact kinds                       |
 | `takosumi migrate [--dry-run]`                                      | run kernel DB migrations                             |
-| `takosumi init [<output>] [--template]`                             | manifest scaffold (stdout if no `<output>`)          |
+| `takosumi init [<output>] [--template]`                             | AppSpec scaffold (stdout if no `<output>`)           |
 | `takosumi version`                                                  | print version                                        |
 
 ## Env vars
@@ -59,17 +54,18 @@ takosumi destroy ./manifest.yml
 Priority (highest first):
 
 1. CLI flag (`--remote` / `--token`)
-2. Command-specific env (`TAKOSUMI_DEPLOY_TOKEN`, `TAKOSUMI_AGENT_TOKEN`)
+2. Command-specific env (`TAKOSUMI_INSTALLER_TOKEN`, `TAKOSUMI_AGENT_TOKEN`)
 3. Remote URL env (`TAKOSUMI_REMOTE_URL`)
 4. Config file (`~/.takosumi/config.yml`)
 
-| Env var                                       | Used by                                                                   |
-| --------------------------------------------- | ------------------------------------------------------------------------- |
-| `TAKOSUMI_REMOTE_URL`                         | `takosumi {deploy,destroy,status,audit,plan,artifact}` default kernel URL |
-| `TAKOSUMI_DEPLOY_TOKEN`                       | bearer token for kernel deploy/artifact endpoints                         |
-| `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target                             |
-| `TAKOSUMI_DEV_MODE=1`                         | dev opt-out: plaintext secrets / unencrypted DB / unsafe defaults         |
-| `TAKOSUMI_LOG_LEVEL=warn`                     | suppress dev-mode in-memory fallback notices                              |
+| Env var                                       | Used by                                                           |
+| --------------------------------------------- | ----------------------------------------------------------------- |
+| `TAKOSUMI_REMOTE_URL`                         | `takosumi {install,deploy,rollback,artifact}` default kernel URL  |
+| `TAKOSUMI_INSTALLER_TOKEN`                    | bearer token for `/v1/installations/*`                            |
+| `TAKOSUMI_DEPLOY_TOKEN`                       | bearer token for artifact write endpoints                         |
+| `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target                     |
+| `TAKOSUMI_DEV_MODE=1`                         | dev opt-out: plaintext secrets / unencrypted DB / unsafe defaults |
+| `TAKOSUMI_LOG_LEVEL=warn`                     | suppress dev-mode in-memory fallback notices                      |
 
 See
 [`docs/getting-started/quickstart.md`](../../docs/getting-started/quickstart.md)

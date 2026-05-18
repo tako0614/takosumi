@@ -8,13 +8,13 @@ takosumi kernel が持たない。 これらは operator account plane が所有
 
 ## モデル
 
-- takosumi kernel は compiled Shape manifest を受け取り、 deploy evidence
+- takosumi kernel は AppSpec installer lifecycle を処理し、Deployment evidence
   を記録する。
 - operator account plane は account / billing / AppInstallation ledger / OIDC
   issuer / pairwise subject / use edge / permission grant / audit lifecycle
   を所有する。
-- `POST /v1/deployments` を直接叩いて作られた deploy は unmanaged deployment
-  となり、 AppInstallation ownership を持たない。
+- Deployment apply は `/v1/installations/*` の installer lifecycle 経由で行う。
+  ownership は Installation ledger に記録される。
 
 ## 関連ページ
 

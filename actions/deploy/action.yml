@@ -1,18 +1,22 @@
 name: Takosumi Deploy
-description: Deploy an explicit Takosumi manifest to a remote kernel.
+description: Submit an AppSpec source to the Takosumi installer API.
 
 inputs:
-  manifest:
-    description: Explicit manifest path to submit.
+  source:
+    description: AppSpec source (git:, catalog:, bundle:, or local path).
+    required: true
+    default: .
+  space:
+    description: Target Takosumi Space id.
     required: true
   remote-url:
     description: Base URL of the Takosumi kernel HTTP server.
     required: true
   token:
-    description: Deploy bearer for POST /v1/deployments.
+    description: Installer bearer for /v1/installations/*.
     required: true
   mode:
-    description: apply or plan.
+    description: apply or dry-run.
     required: false
     default: apply
   cli-version:
@@ -34,29 +38,30 @@ runs:
     - name: Deploy manifest
       shell: bash
       env:
-        TAKOSUMI_ACTION_MANIFEST: ${{ inputs.manifest }}
+        TAKOSUMI_ACTION_SOURCE: ${{ inputs.source }}
+        TAKOSUMI_ACTION_SPACE: ${{ inputs.space }}
         TAKOSUMI_ACTION_REMOTE_URL: ${{ inputs.remote-url }}
         TAKOSUMI_ACTION_MODE: ${{ inputs.mode }}
         TAKOSUMI_ACTION_CLI_VERSION: ${{ inputs.cli-version }}
-        TAKOSUMI_DEPLOY_TOKEN: ${{ inputs.token }}
+        TAKOSUMI_INSTALLER_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
 
         case "$TAKOSUMI_ACTION_MODE" in
           apply)
-            dry_run=()
+            subcommand=(install "$TAKOSUMI_ACTION_SOURCE")
             ;;
-          plan)
-            dry_run=(--dry-run)
+          dry-run)
+            subcommand=(install dry-run "$TAKOSUMI_ACTION_SOURCE")
             ;;
           *)
-            echo "::error::mode must be 'apply' or 'plan'"
+            echo "::error::mode must be 'apply' or 'dry-run'"
             exit 2
             ;;
         esac
 
         deno run -A "jsr:@takos/takosumi-cli@$TAKOSUMI_ACTION_CLI_VERSION" \
-          deploy "$TAKOSUMI_ACTION_MANIFEST" \
+          "${subcommand[@]}" \
+          --space "$TAKOSUMI_ACTION_SPACE" \
           --remote "$TAKOSUMI_ACTION_REMOTE_URL" \
-          --token "$TAKOSUMI_DEPLOY_TOKEN" \
-          "${dry_run[@]}"
+          --token "$TAKOSUMI_INSTALLER_TOKEN"

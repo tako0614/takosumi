@@ -26,10 +26,9 @@ lifecycle dispatcher は `spec.artifact.kind` を connector の
 
 ---
 
-kernel は current public deploy path でユーザー build ステップを実行せず、
-transform も実行しない。 source transform、 artifact signing policy、 cache
-warming に関する将来計画は、 対応する operator API と test が存在するまで
-アクティブな CLI / HTTP 動作として文書化しない。
+artifact routes は build / source transform を実行しない。 build は AppSpec の
+`component.build` と installer lifecycle の責務であり、 artifact routes は
+アップロード済み blob の保存・取得・GC だけを扱う。
 
 ## Size Policy
 
@@ -76,20 +75,20 @@ Failure mode:
 `Artifact.kind` は protocol 層では open だが、 各 connector は受け付けるものを
 宣言する。 例:
 
-- OCI-backed web-service connectors: `oci-image`
+- OCI-backed worker connectors: `oci-image`
 - Cloudflare Workers / Deno Deploy: `js-bundle`
 - Operator-installed custom connectors: 明示的に宣言した registered or custom
   kind
 
-runtime-agent は connector コードが動く前に mismatch を reject する。 Shape
-レベルの validation はより厳しいことがある: `worker@v1` は `hash` 付きの
-`js-bundle` のみを受け付ける。
+runtime-agent は connector コードが動く前に mismatch を reject する。Component
+kind レベルの validation はより厳しいことがある: `worker` は build output 由来の
+`js-bundle` を要求できる。
 
 ## Auth Policy
 
 artifact surface は意図的に write / read credential を分離する。
 
-- `TAKOSUMI_DEPLOY_TOKEN`: upload、 list、 delete、 GC、 read
+- `TAKOSUMI_DEPLOY_TOKEN`: artifact upload、 list、 delete、 GC、 read
 - `TAKOSUMI_ARTIFACT_FETCH_TOKEN`: runtime-agent host 向けの read-only `GET` /
   `HEAD /v1/artifacts/:hash`
 

@@ -1,8 +1,9 @@
-# Concepts — Shape × Provider
+# Concepts — AppSpec × Provider
 
-> このページでわかること: Shape と Provider のモデルを 5 分で理解する。
+> このページでわかること: AppSpec の component kind と provider implementation
+> の関係を 5 分で理解する。
 
-[Quickstart](/getting-started/quickstart) で `takosumi deploy` を 1
+[Quickstart](/getting-started/quickstart) で `takosumi install` を 1
 回通したあとに読むのがおすすめ。
 
 ---
@@ -11,67 +12,67 @@
 
 ```
 ┌────────────────────────────────────────────┐
-│ Manifest (YAML / JSON)                     │
-│  • resources[]:     ← Shape resources      │
+│ AppSpec (.takosumi.yml)                    │
+│  • components:     ← portable components   │
 └────────────┬───────────────────────────────┘
              │ validate
              ▼
 ┌────────────────────────────────────────────┐
-│ Shape catalog (5 種、Takosumi が curate)   │
-│   web-service / object-store / postgres /  │
-│   custom-domain / worker                   │
+│ Component kind catalog (5 種)              │
+│   worker / postgres / object-store / oidc /│
+│   custom-domain                            │
 └────────────┬───────────────────────────────┘
              │ selection (provider が implements)
              ▼
 ┌────────────────────────────────────────────┐
-│ Provider plugins (20 default + 1 opt-in)   │
+│ Provider plugins (operator が選ぶ実装)     │
 │   @takos/aws-fargate, @takos/cloudflare-r2,│
 │   @takos/selfhost-systemd, ...             │
 └────────────────────────────────────────────┘
 ```
 
-| Layer        | 何を表すか                                           | 誰が owner か            |
-| ------------ | ---------------------------------------------------- | ------------------------ |
-| **Shape**    | portable な resource 型 (S3-class bucket / HTTP svc) | Takosumi (RFC で追加)    |
-| **Provider** | Shape を実装する具体実装 (cloud-specific)            | operator / plugin author |
+| Layer              | 何を表すか                                              | 誰が owner か            |
+| ------------------ | ------------------------------------------------------- | ------------------------ |
+| **Component kind** | AppSpec が宣言する portable な runtime / resource 型    | Takosumi (RFC で追加)    |
+| **Provider**       | component kind を具体 substrate に materialize する実装 | operator / plugin author |
 
 ---
 
-## Shape
+## Component kind
 
-Shape は portable な resource 型。 manifest が宣言するのは「Postgres
-が欲しい」「object-store が欲しい」という抽象だけで、どの cloud で動くかは Shape
-には書かない。
+Component kind は portable な runtime / resource 型。 AppSpec が宣言するのは
+「worker が欲しい」「postgres が欲しい」「object-store
+が欲しい」という抽象だけで、どの cloud で動くかは AppSpec には書かない。
 
-公式 Shape は 5 種類:
+公式 component kind は 5 種類:
 
-| Shape                  | 用途                                                |
-| ---------------------- | --------------------------------------------------- |
-| `web-service@v1`       | OCI image を long-running HTTP service として起動   |
-| `object-store@v1`      | S3 互換の bucket (versioning / SSE / presigned URL) |
-| `database-postgres@v1` | managed PostgreSQL (wire-protocol portable)         |
-| `custom-domain@v1`     | DNS record + TLS termination で公開ドメインを構築   |
-| `worker@v1`            | `js-bundle` artifact を edge / serverless で実行    |
+| Component kind  | 用途                                              |
+| --------------- | ------------------------------------------------- |
+| `worker`        | `js-bundle` artifact を edge / serverless で実行  |
+| `postgres`      | managed PostgreSQL                                |
+| `object-store`  | S3 互換の bucket                                  |
+| `oidc`          | per-Installation OIDC client                      |
+| `custom-domain` | DNS record + TLS termination で公開ドメインを構築 |
 
-各 Shape は次を持つ:
+各 component kind は次を持つ:
 
-- **Spec** — manifest が書く field の型 (`image`, `port`, `version` 等)
+- **Spec** — AppSpec が書く field の型 (`build`, `routes`, `scopes` 等)
 - **Outputs** — apply 後に確定する値 (`url`, `connectionString` 等)
 - **Capabilities** — provider が optional で `versioning` / `auto-tls` 等を
   declare する
 
-新しい Shape の追加は breaking change で、RFC が必要 (cf.
-[Extending](/extending#新しい-shape-を-rfc-する))。
+新しい component kind の追加は breaking change で、RFC が必要 (cf.
+[Extending](/extending#新しい-component-kind-を-rfc-する))。
 
-詳細: [Shape Catalog](/reference/shapes)
+詳細: [Component Kind Catalog](/reference/component-kind-catalog)
 
 ---
 
 ## Provider
 
-Provider は Shape の具体実装。 同じ `web-service@v1` でも、 `@takos/aws-fargate`
-/ `@takos/cloudflare-container` / `@takos/kubernetes-deployment` /
-`@takos/selfhost-systemd` がそれぞれ違う cloud で同じ shape を提供する。
+Provider は component kind の具体実装。 同じ `worker` / `postgres` /
+`object-store` でも、Cloudflare / AWS / GCP / Kubernetes / self-host などの
+provider がそれぞれ違う substrate で同じ kind を materialize する。
 
 bundled provider は **20 default + 1 opt-in**、対応 cloud は AWS / GCP /
 Cloudflare / Azure / Deno Deploy / Kubernetes + selfhost の 7 系統:
@@ -85,47 +86,64 @@ Cloudflare / Azure / Deno Deploy / Kubernetes + selfhost の 7 系統:
 - **Selfhost** —
   `@takos/selfhost-{systemd,docker-compose,postgres,minio,filesystem,coredns}`
 
-Provider は manifest 側 `provider:` field で陽に指定する。 同 Shape の複数
-provider が register されていても、 selection は `provider:` と `requires:` を
-superset で満たすかで決まる。
+Provider selection は installer context と operator registry の責務。 AppSpec は
+portable component kind と要求だけを書く。
 
 詳細: [Provider Plugins](/reference/providers)
 
 ---
 
-## Template
+## Workflow placement
 
-kernel `POST /v1/deployments` は展開済みの `resources[]` だけを受け取る。
-template expansion は installer/compiler layer で kernel request 前に実行する。
+kernel は workflow / trigger / schedule の public route を持たない。 build は
+AppSpec の `components.<name>.build` に最小 recipe として宣言し、外部 CI /
+workflow runner は source ref を選んで installer API に渡す。
 
 ---
 
 ## Manifest 内での組み合わせ方
 
-current kernel manifest envelope は `resources[]` だけを受ける:
+current public manifest は `.takosumi.yml` (= AppSpec):
 
 ```yaml
-apiVersion: "1.0"
-kind: Manifest
+apiVersion: takosumi.dev/v1
+kind: App
 metadata:
+  id: com.example.my-app
   name: my-app
-resources:
-  - shape: web-service@v1
-    name: api
-    provider: "@takos/aws-fargate"
-    spec: { image: ghcr.io/me/api:v1, port: 8080, scale: { min: 1, max: 3 } }
+components:
+  api:
+    kind: worker
+    build:
+      command: npm ci && npm run build
+      output: dist/worker.mjs
+    routes:
+      - /api/*
 ```
 
-resource 間の配線は string interpolation で書く:
+component 間の構造的依存は `use:` で書く。文字列 interpolation は使わない。
 
-| 記法                           | 意味                                                  |
-| ------------------------------ | ----------------------------------------------------- |
-| `${ref:<name>.<field>}`        | 別 resource の **non-secret** output field を埋め込む |
-| `${secret-ref:<name>.<field>}` | secret reference URI (`secret://...`) を埋め込む      |
+```yaml
+components:
+  web:
+    kind: worker
+    build:
+      command: npm ci && npm run build
+      output: dist/worker.mjs
+    use:
+      db:
+        env: DATABASE_URL
+      assets:
+        envPrefix: ASSETS_
+  db:
+    kind: postgres
+  assets:
+    kind: object-store
+```
 
-`${ref:db.connectionString}` のような参照は kernel 側で DAG edge
-に変換され、topological order で apply される。DAG は [Manifest](/manifest#dag)
-参照。
+`use:` が DAG edge になり、provider output は env / mount などの明示的な binding
+として渡される。 `${ref:...}` / `${secret-ref:...}` の placeholder 文法は
+current AppSpec には存在しない。
 
 ---
 
@@ -134,11 +152,11 @@ resource 間の配線は string interpolation で書く:
 Takosumi は **2 process** から成る。
 
 ```
-┌─ takosumi deploy ───────┐
+┌─ takosumi install/deploy ┐
 │   CLI (local mode = in-process kernel,
 │        remote mode = HTTP)
 └─────────────┬───────────┘
-              │ POST /v1/deployments
+              │ POST /v1/installations/*
               ▼
 ┌─ takosumi-kernel ──────────────┐
 │   • HTTP API + apply pipeline  │
@@ -174,16 +192,15 @@ AWS / GCP / Cloudflare / k8s / OS
 
 ## Where to look next
 
-| 目的                                               | ページ                                            |
-| -------------------------------------------------- | ------------------------------------------------- |
-| manifest の YAML を書く                            | [Manifest (Shape Model)](/manifest)               |
-| Shape の spec / outputs を確認する                 | [Shape Catalog](/reference/shapes)                |
-| 20 default + 1 opt-in provider の対応 cloud と用途 | [Provider Plugins](/reference/providers)          |
-| template shorthand の仕様                          | [Templates](/reference/templates)                 |
-| `takosumi` CLI コマンド                            | [CLI Reference](/reference/cli)                   |
-| `POST /v1/deployments` 等の HTTP API               | [Kernel HTTP API](/reference/kernel-http-api)     |
-| kernel ↔ agent envelope                            | [Runtime-Agent API](/reference/runtime-agent-api) |
-| `TAKOSUMI_*` 環境変数                              | [Environment Variables](/reference/env-vars)      |
-| apply / destroy / rollback の挙動                  | [Lifecycle Protocol](/reference/lifecycle)        |
-| operator が provider を wire する手順              | [Operator Bootstrap](/operator/bootstrap)         |
-| 自前で provider / shape を増やす                   | [Extending Takosumi](/extending)                  |
+| 目的                                               | ページ                                                      |
+| -------------------------------------------------- | ----------------------------------------------------------- |
+| AppSpec の YAML を書く                             | [AppSpec](/reference/app-spec)                              |
+| component kind の spec / outputs を確認する        | [Component Kind Catalog](/reference/component-kind-catalog) |
+| 20 default + 1 opt-in provider の対応 cloud と用途 | [Provider Plugins](/reference/providers)                    |
+| `takosumi` CLI コマンド                            | [CLI Reference](/reference/cli)                             |
+| `/v1/installations/*` の HTTP API                  | [Kernel HTTP API](/reference/kernel-http-api)               |
+| kernel ↔ agent envelope                            | [Runtime-Agent API](/reference/runtime-agent-api)           |
+| `TAKOSUMI_*` 環境変数                              | [Environment Variables](/reference/env-vars)                |
+| apply / destroy / rollback の挙動                  | [Lifecycle Protocol](/reference/lifecycle)                  |
+| operator が provider を wire する手順              | [Operator Bootstrap](/operator/bootstrap)                   |
+| 自前で provider / component kind を増やす          | [Extending Takosumi](/extending)                            |

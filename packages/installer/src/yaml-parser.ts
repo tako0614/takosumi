@@ -5,19 +5,18 @@
  * `AppSpecParseError` with `validationPhase` / `validationPath` on
  * syntax / schema violations.
  *
- * This module replaces the prior `.takosumi/app.yml` +
- * `.takosumi/manifest.yml` parsing (formerly in `takosumi-git/packages/cli/
- * src/install-parse.ts`).
+ * This module replaces the prior multi-file project layout parser with the
+ * single-file AppSpec contract.
  */
 
 import { parse as parseYaml } from "jsr:@std/yaml@^1.0.5";
 import {
-  type AppSpec,
   APP_SPEC_API_VERSION,
   APP_SPEC_KIND,
+  type AppSpec,
   type Component,
-  type ComponentKind,
   COMPONENT_KINDS,
+  type ComponentKind,
   isComponentKind,
   isReservedMount,
   type UseEdge,
@@ -167,7 +166,9 @@ function validateMetadata(raw: unknown): AppSpec["metadata"] {
   if (m.publisher !== undefined) {
     requireString(m.publisher, "$.metadata.publisher");
   }
-  if (m.homepage !== undefined) requireString(m.homepage, "$.metadata.homepage");
+  if (m.homepage !== undefined) {
+    requireString(m.homepage, "$.metadata.homepage");
+  }
   return {
     id: m.id as string,
     name: m.name as string,
@@ -292,8 +293,10 @@ function validateInterfaces(raw: unknown): AppSpec["interfaces"] {
     );
   }
   const i = raw as Record<string, unknown>;
-  const result: Record<string, { target: string; path: string; required?: boolean }> =
-    {};
+  const result: Record<
+    string,
+    { target: string; path: string; required?: boolean }
+  > = {};
   for (const key of ["launch", "mcp", "health"] as const) {
     if (i[key] === undefined) continue;
     const entry = i[key];

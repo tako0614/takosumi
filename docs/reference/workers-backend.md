@@ -8,10 +8,10 @@ reference materialization detail です。Cloudflare Containers は Worker-first
 control path の前提ではなく、provider/materializer が image-backed tenant
 workload を必要とする場合の substrate です。
 
-Core 用語は Resource / Deployment / ProviderObservation / GroupHead /
-Installation runtime mode を優先します。 これらは provider substrate に依存しない抽象で
-あり、 Cloudflare 以外の compute substrate (Kubernetes / bare metal / 自前
-runtime) に substitutability を保ったまま展開できます。
+Core 用語は AppSpec / Installation / Deployment / ProviderObservation /
+GroupHead / runtime target metadata を優先します。 これらは provider substrate
+に依存しない抽象で あり、 Cloudflare 以外の compute substrate (Kubernetes / bare
+metal / 自前 runtime) に substitutability を保ったまま展開できます。
 
 `@takos/takosumi-plugins` の Cloudflare connector / `wrangler.toml` テンプレート
 / `@takos/takosumi-runtime-agent` の Cloudflare gateway は、 これら kernel 用語
@@ -22,8 +22,8 @@ kernel 契約は変わりません。
 
 ## 関連
 
-- [kernel.md](./architecture/kernel.md) — kernel が Shape manifest からどう
-  Deployment / ProviderObservation を作るか
+- [kernel.md](./architecture/kernel.md) — kernel が AppSpec からどう Deployment
+  / ProviderObservation を作るか
 - [tenant-runtime.md](./architecture/tenant-runtime.md) — tenant runtime の
   materialization 形態
 - [control-plane.md](./architecture/control-plane.md) — control plane が

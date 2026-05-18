@@ -156,11 +156,10 @@ compute path には参加しない。
 
 ## Operator surface
 
-- **status endpoint**: current public `takosumi status` is limited to deployment
-  summaries. Per-Space ObservationSet summary belongs to the operator internal
-  control plane until a public CLI flag is implemented.
+- **status endpoint**: Deployment and ObservationSet summaries belong to the
+  operator internal control plane until a public CLI flag is implemented.
 - **history toggle**: observation history enable / disable is an operator-only
-  operation. It is not exposed by the current public deploy CLI.
+  operation. It is not exposed by the public installer CLI.
 - **history dump**: enable された Space のみ history を operator tooling で
   取り出せる。default disable 時は empty を返す。
 - **freshness probe**: ExportDeclaration の freshness は operator internal

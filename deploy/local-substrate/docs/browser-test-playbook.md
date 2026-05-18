@@ -56,30 +56,28 @@ warning). After `configure-dns.sh` the host resolves `accounts.takosumi.test`,
    `https://cloud.takosumi.test/sign-in/callback?code=...`
 5. Expect: the dashboard session is established.
 
-## Smoke flow E — dynamic deploy subdomain
+## Smoke flow E — installer API
 
-(Only after Phase 3 route-registrar is wired and a deployment with a route has
-been applied.)
-
-1. POST a manifest that allocates `<id>.app.takosumi.test`:
+1. Run the installer smoke:
    ```bash
-   curl -k --cacert caddy/runtime/pebble-issuance-root.pem \
-     --resolve kernel.takosumi.test:443:127.0.0.1 \
-     -H "Authorization: Bearer local-substrate-deploy-token" \
-     --data-binary @fixtures/manifest.hello-selfhost.yml \
-     https://kernel.takosumi.test/v1/deployments
+   bash scripts/cli-smoke.sh
    ```
-2. Wait ~5s for route-registrar to mirror the route into Caddy admin API
-3. Navigate to the assigned subdomain in Chrome
-4. Expect: the deployed service responds (e.g., nginx default page)
+2. Expect: install dry-run/apply, deployment dry-run/apply, and rollback all
+   succeed through `/v1/installations*`.
 
-## Failure flow F — public-DNS deny
+Dynamic `<id>.app.takosumi.test` projection is deferred. Takosumi v1's public
+installer API does not expose raw desired-route listings; route projection must
+come from a future operator-internal source.
 
-1. POST `manifest.fail-public-dns.yml` (asks for Route53 record)
-2. Expect: HTTP 400 with `provider_not_registered` (the connector is not even
-   imported in the local-substrate factory)
-3. `tcpdump -i any port 443` on the host while POSTing — verify zero outbound
-   packets to `acme-v02.api.letsencrypt.org` or AWS Route53 endpoints
+## Failure flow F — public-deploy route closure
+
+1. Run:
+   ```bash
+   bash scripts/prove-no-public-leak.sh
+   ```
+2. Expect: legacy `/v1/deployments` and `/api/public/v1/deployments` return 404,
+   CoreDNS denies public ACME DNS lookups, and mock/emulator containers do not
+   publish host ports.
 
 ## Notes
 

@@ -1,9 +1,8 @@
 # @takos/takosumi-plugins
 
-Shape catalog, provider plugins, and compiler templates bundled with Takosumi.
-The kernel auto-registers Shape contracts, artifact kinds, and runtime-agent
-backed providers on boot. Templates are not kernel manifest input; installer /
-compiler layers expand them to `resources[]` before deploy.
+Shape catalog and provider plugins bundled with Takosumi. The kernel
+auto-registers Shape contracts, artifact kinds, and runtime-agent backed
+providers on boot.
 
 Plugins themselves are paper-thin HTTP wrappers around the runtime-agent (see
 [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)).
@@ -15,7 +14,6 @@ They contain no cloud SDK code.
 import {
   createTakosumiProductionProviders,
   TAKOSUMI_BUNDLED_SHAPES,
-  TAKOSUMI_BUNDLED_TEMPLATES,
 } from "@takos/takosumi-plugins/shape-providers/factories";
 
 const providers = createTakosumiProductionProviders({
@@ -29,8 +27,7 @@ const providers = createTakosumiProductionProviders({
 ```
 
 The kernel calls the Shape/provider registration path on boot via
-`registerBundledShapesAndProviders(env)`. Template registration is only for
-compiler processes that need authoring macros.
+`registerBundledShapesAndProviders(env)`.
 
 ## Shapes (5)
 
@@ -58,13 +55,6 @@ All provider IDs use the `@takos/<cloud>-<service>` namespace.
 
 Bare provider IDs (`aws-fargate`, `cloud-run`, etc.) are rejected. Use the
 namespaced IDs above.
-
-## Templates (2)
-
-| Template                   | Use case                                                                |
-| -------------------------- | ----------------------------------------------------------------------- |
-| `selfhosted-single-vm@v1`  | All-in-one VM: systemd + docker + filesystem + local Postgres + coredns |
-| `web-app-on-cloudflare@v1` | Web service on Cloudflare Container + R2 assets + DNS                   |
 
 ## Artifact kinds (5 bundled)
 

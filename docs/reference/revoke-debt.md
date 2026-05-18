@@ -152,10 +152,10 @@ production deployment では status 表示を必須とする:
 
 - WAL stage 側からの enqueue 経路:
   [WAL Stages — Orphaned debt 経路](/reference/wal-stages#orphaned-debt-経路)
-- Public deploy recovery: `/v1/deployments` の `recoveryMode: "compensate"`
-  は、同じ OperationPlan digest / phase の unfinished WAL が `commit` 以降に
-  到達している場合に `activation-rollback` RevokeDebt を `takosumi_revoke_debts`
-  へ enqueue し、WAL を terminal `abort` に進める。
+- Installer recovery: `/v1/installations/{id}/rollback` は、同じ OperationPlan
+  digest / phase の unfinished WAL が `commit` 以降に 到達している場合に
+  `activation-rollback` RevokeDebt を `takosumi_revoke_debts` へ enqueue し、WAL
+  を terminal `abort` に進める。
 - Approval invalidation との連動:
   [Approval Invalidation Triggers](/reference/approval-invalidation)
 - Recovery mode 中の `activation-rollback` 発生条件:

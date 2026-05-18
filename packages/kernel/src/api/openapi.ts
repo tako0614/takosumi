@@ -14,7 +14,6 @@ import {
   PROMETHEUS_CONTENT_TYPE,
   TAKOSUMI_METRICS_PATH,
 } from "./metrics_routes.ts";
-import { TAKOSUMI_PAAS_PUBLIC_PATHS } from "./public_routes.ts";
 import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
@@ -64,7 +63,6 @@ export interface OpenApiOperation {
 }
 
 export interface CreatePaaSOpenApiDocumentOptions {
-  readonly publicRoutesMounted?: boolean;
   readonly installerPublicRoutesMounted?: boolean;
   readonly artifactRoutesMounted?: boolean;
   readonly internalRoutesMounted?: boolean;
@@ -103,7 +101,7 @@ export function createPaaSOpenApiDocument(
       title: "Takosumi API",
       version: TAKOSUMI_OPENAPI_VERSION,
       description:
-        "Dependency-free OpenAPI-ish description for mounted Takosumi process, public, internal, runtime-agent, readiness, and status route families.",
+        "Dependency-free OpenAPI-ish description for mounted Takosumi process, installer, internal, runtime-agent, readiness, and status route families.",
     },
     servers,
     "x-takos-service": "takosumi",
@@ -178,154 +176,6 @@ export function createPaaSOpenApiDocument(
           "x-takos-auth": "none",
           "x-takos-mounted-path": "/openapi.json",
         } satisfies OpenApiOperation,
-      },
-      [TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities]: {
-        get: operation({
-          operationId: "getPublicCapabilities",
-          summary: "Returns public API route capabilities.",
-          tag: "public",
-          auth: "actor",
-          okSchema: "PublicCapabilitiesResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.capabilities,
-        }),
-      },
-      [TAKOSUMI_PAAS_PUBLIC_PATHS.spaces]: {
-        get: operation({
-          operationId: "listSpaces",
-          summary: "Lists spaces visible to the authenticated actor.",
-          tag: "public",
-          auth: "actor",
-          okSchema: "SpacesResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.spaces,
-        }),
-        post: operation({
-          operationId: "createSpace",
-          summary: "Creates a space for the authenticated actor.",
-          tag: "public",
-          auth: "actor",
-          requestSchema: "PublicSpaceCreateRequest",
-          okStatus: "201",
-          okSchema: "SpaceResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.spaces,
-        }),
-      },
-      [TAKOSUMI_PAAS_PUBLIC_PATHS.groups]: {
-        get: operation({
-          operationId: "listGroups",
-          summary:
-            "Lists groups for a space visible to the authenticated actor.",
-          tag: "public",
-          auth: "actor",
-          okSchema: "GroupsResponse",
-          query: ["spaceId"],
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.groups,
-        }),
-        post: operation({
-          operationId: "createGroup",
-          summary: "Creates a group in a space.",
-          tag: "public",
-          auth: "actor",
-          requestSchema: "PublicGroupCreateRequest",
-          okStatus: "201",
-          okSchema: "GroupResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.groups,
-        }),
-      },
-      [TAKOSUMI_PAAS_PUBLIC_PATHS.deployments]: {
-        post: operation({
-          operationId: "createDeployment",
-          summary:
-            "Creates a Deployment. mode chooses preview / resolve / apply / rollback (Core).",
-          tag: "public",
-          auth: "actor",
-          requestSchema: "DeploymentCreateRequest",
-          okStatus: "201",
-          okSchema: "DeploymentMutationResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
-        }),
-        get: operation({
-          operationId: "listDeployments",
-          summary:
-            "Lists Deployments visible to the authenticated actor, optionally filtered by group / status.",
-          tag: "public",
-          auth: "actor",
-          okSchema: "DeploymentsResponse",
-          query: ["group", "status", "space"],
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deployments,
-        }),
-      },
-      [TAKOSUMI_PAAS_PUBLIC_PATHS.deployment]: {
-        get: operation({
-          operationId: "getDeployment",
-          summary: "Returns a Deployment by id.",
-          tag: "public",
-          auth: "actor",
-          pathParams: ["deploymentId"],
-          okSchema: "DeploymentResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deployment,
-        }),
-      },
-      [TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply]: {
-        post: operation({
-          operationId: "applyDeployment",
-          summary: "Transitions a resolved Deployment to applying / applied.",
-          tag: "public",
-          auth: "actor",
-          pathParams: ["deploymentId"],
-          okStatus: "201",
-          okSchema: "DeploymentMutationResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApply,
-        }),
-      },
-      [TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove]: {
-        post: operation({
-          operationId: "approveDeployment",
-          summary: "Attaches an approval record to a Deployment.",
-          tag: "public",
-          auth: "actor",
-          pathParams: ["deploymentId"],
-          requestSchema: "DeploymentApproveRequest",
-          okSchema: "DeploymentMutationResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentApprove,
-        }),
-      },
-      [TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations]: {
-        get: operation({
-          operationId: "listDeploymentObservations",
-          summary: "Streams provider observations for a Deployment.",
-          tag: "public",
-          auth: "actor",
-          pathParams: ["deploymentId"],
-          okSchema: "ProviderObservationsResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.deploymentObservations,
-        }),
-      },
-      [TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead]: {
-        get: operation({
-          operationId: "getGroupHead",
-          summary: "Returns the GroupHead pointer for a group.",
-          tag: "public",
-          auth: "actor",
-          pathParams: ["groupId"],
-          query: ["spaceId"],
-          okSchema: "GroupHeadResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.groupHead,
-        }),
-      },
-      [TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback]: {
-        post: operation({
-          operationId: "rollbackGroup",
-          summary:
-            "Rolls a GroupHead back to its previous Deployment (or supplied target).",
-          tag: "public",
-          auth: "actor",
-          pathParams: ["groupId"],
-          query: ["spaceId"],
-          requestSchema: "GroupRollbackRequest",
-          okStatus: "201",
-          okSchema: "DeploymentMutationResponse",
-          mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback,
-        }),
       },
       [INSTALLER_INSTALLATIONS_DRY_RUN_PATH]: {
         post: operation({
@@ -616,16 +466,11 @@ export function createPaaSOpenApiDocument(
     },
     components: {
       securitySchemes: {
-        actorBearer: {
-          type: "http",
-          scheme: "bearer",
-          description: "Actor authentication for public PaaS API routes.",
-        },
         deployBearer: {
           type: "http",
           scheme: "bearer",
           description:
-            "Operator deploy bearer from TAKOSUMI_DEPLOY_TOKEN for /v1 deploy and artifact write routes.",
+            "Artifact write bearer from TAKOSUMI_DEPLOY_TOKEN for /v1/artifacts write routes.",
         },
         artifactFetchBearer: {
           type: "http",
@@ -664,7 +509,6 @@ function filterMountedRouteFamilies(
 ): OpenApiDocument {
   const mountedTags = new Set([
     "process",
-    ...(options.publicRoutesMounted ? ["public"] : []),
     ...(options.installerPublicRoutesMounted ? ["installer-public"] : []),
     ...(options.artifactRoutesMounted ? ["artifact"] : []),
     ...(options.internalRoutesMounted ? ["internal"] : []),
@@ -697,7 +541,6 @@ function operation(input: {
   readonly summary: string;
   readonly tag:
     | "process"
-    | "public"
     | "installer-public"
     | "artifact"
     | "internal"
@@ -706,7 +549,6 @@ function operation(input: {
     | "status";
   readonly auth:
     | "none"
-    | "actor"
     | "deploy-token"
     | "artifact-read"
     | "installer-token"
@@ -756,7 +598,6 @@ function securityRequirements(
     | "installer-token"
     | "internal-service",
 ): readonly Record<string, readonly string[]>[] {
-  if (auth === "actor") return [{ actorBearer: [] }];
   if (auth === "deploy-token") return [{ deployBearer: [] }];
   if (auth === "installer-token") return [{ installerBearer: [] }];
   if (auth === "artifact-read") {
@@ -852,13 +693,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
   const jsonObject = {
     type: "object",
     additionalProperties: true,
-  };
-  const jsonValue = {
-    description: "Any JSON value.",
-  };
-  const stringMap = {
-    type: "object",
-    additionalProperties: { type: "string" },
   };
   const condition = {
     type: "object",
@@ -985,7 +819,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
     },
     CapabilitiesResponse: jsonObject,
-    PublicCapabilitiesResponse: jsonObject,
     HealthProbeResponse: jsonObject,
     StatusSummaryResponse: {
       type: "object",
@@ -1079,23 +912,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     EmptyResponse: {
       description: "No response body.",
     },
-    PublicSpaceCreateRequest: {
-      type: "object",
-      properties: {
-        name: { type: "string" },
-        slug: { type: "string" },
-        metadata: jsonObject,
-      },
-    },
-    PublicGroupCreateRequest: {
-      type: "object",
-      properties: {
-        spaceId: { type: "string" },
-        name: { type: "string" },
-        envName: { type: "string" },
-        metadata: jsonObject,
-      },
-    },
     InternalSpaceRequest: {
       type: "object",
       properties: {
@@ -1114,37 +930,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         envName: { type: "string" },
         metadata: jsonObject,
       },
-    },
-    DeploymentCreateRequest: {
-      type: "object",
-      required: ["mode"],
-      properties: {
-        mode: { enum: ["preview", "resolve", "apply", "rollback"] },
-        manifest: jsonObject,
-        target_id: { type: "string" },
-        group: { type: "string" },
-        env: { type: "string" },
-        space_id: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    DeploymentApproveRequest: {
-      type: "object",
-      properties: {
-        policy_decision_id: { type: "string" },
-        space_id: { type: "string" },
-        spaceId: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    GroupRollbackRequest: {
-      type: "object",
-      properties: {
-        space_id: { type: "string" },
-        spaceId: { type: "string" },
-        target_id: { type: "string" },
-      },
-      additionalProperties: false,
     },
     InternalDeploymentRequest: {
       type: "object",
@@ -1184,38 +969,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         expansion_summary: jsonObject,
       },
       additionalProperties: true,
-    },
-    DeploymentResponse: {
-      type: "object",
-      required: ["deployment"],
-      properties: {
-        deployment: ref("Deployment"),
-      },
-      additionalProperties: false,
-    },
-    DeploymentsResponse: {
-      type: "object",
-      required: ["deployments"],
-      properties: {
-        deployments: { type: "array", items: ref("Deployment") },
-      },
-      additionalProperties: false,
-    },
-    GroupHeadResponse: {
-      type: "object",
-      required: ["head"],
-      properties: {
-        head: ref("GroupHead"),
-      },
-      additionalProperties: false,
-    },
-    ProviderObservationsResponse: {
-      type: "object",
-      required: ["observations"],
-      properties: {
-        observations: { type: "array", items: ref("ProviderObservation") },
-      },
-      additionalProperties: false,
     },
     SpacesResponse: jsonObject,
     SpaceResponse: jsonObject,

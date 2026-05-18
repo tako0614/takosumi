@@ -324,11 +324,11 @@ services:
     volumes:
       - ../../../takosumi/docs:/docs
 
-  # ---- install_preview mock (stands in for takosumi-git's preview API) ----
+  # ---- installer mock (local Accounts installer fixture API) ----
   # Returns deterministic fake {appId, source.commit, source.*Digest} so the
-  # install wizard can complete preview → install end-to-end without a real
+  # install wizard can complete dry-run → install end-to-end without a real
   # git mirror behind it.
-  install-preview-mock:
+  installer-mock:
     profiles: ["postgres", "workers"]
     image: denoland/deno:alpine-2.1.4
     restart: unless-stopped
@@ -340,12 +340,12 @@ services:
       "/srv/main.ts",
     ]
     volumes:
-      - ./install-preview-mock/main.ts:/srv/main.ts:ro
-      - ./install-preview-mock/fixtures:/srv/fixtures:ro
+      - ./installer-mock/main.ts:/srv/main.ts:ro
+      - ./installer-mock/fixtures:/srv/fixtures:ro
     networks:
       takos-local-internal:
         aliases:
-          - install-preview-mock
+          - installer-mock
 
   # ---- OpenTelemetry collector + Jaeger (trace + metric sink) ----
   # No service emits OTel today, but the collector + UI are sitting here so
@@ -460,7 +460,7 @@ services:
     depends_on:
       takosumi-cloud-worker-build:
         condition: service_completed_successfully
-      install-preview-mock:
+      installer-mock:
         condition: service_started
       oauth-mock:
         condition: service_started
@@ -480,8 +480,9 @@ services:
           - takosumi-cloud-worker
 
   # ---- Phase 3 route registrar ----
-  # Polls kernel for applied deployments and mirrors their routes into
-  # Caddy admin API as dynamic reverse_proxy entries.
+  # Maintains the dynamic route partition in Caddy admin. The v1 public
+  # installer surface does not expose deployment route listings, so dynamic
+  # app routes are deferred until an operator-internal projection source lands.
   route-registrar:
     profiles: ["postgres"]
     image: denoland/deno:2.7.10
@@ -494,7 +495,6 @@ services:
     environment:
       KERNEL_URL: http://kernel:8788
       CADDY_ADMIN_URL: http://caddy:2019
-      KERNEL_DEPLOY_TOKEN: ${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}
       POLL_INTERVAL_MS: "5000"
     volumes:
       - ./route-registrar:/app:ro
@@ -513,7 +513,6 @@ services:
     environment:
       KERNEL_URL: http://kernel-workers:8788
       CADDY_ADMIN_URL: http://caddy:2019
-      KERNEL_DEPLOY_TOKEN: ${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}
       POLL_INTERVAL_MS: "5000"
     volumes:
       - ./route-registrar:/app:ro

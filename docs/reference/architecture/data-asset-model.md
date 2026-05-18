@@ -71,7 +71,7 @@ Identity rule:
 takosumi artifact push ./worker.js --kind js-bundle
   -> { hash: sha256:..., kind: js-bundle }
 
-resources[].spec.artifact.hash
+components.<name>.build.output -> Deployment artifact digest
   -> DataAsset digest visible to the selected Space
 ```
 

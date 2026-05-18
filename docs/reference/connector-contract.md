@@ -30,8 +30,8 @@ Identity rules:
 - The same `<id>` value never points to a different Connector code path across
   versions; replacement always goes through the operator `replace` operation,
   which carries an explicit version vector and envelope guard.
-- `connector:` is a reserved prefix. No plugin, template, or user manifest may
-  mint identities under this prefix. Plan rejects manifests that attempt to.
+- `connector:` is a reserved prefix. No plugin or user AppSpec may mint
+  identities under this prefix. Plan rejects AppSpecs that attempt to.
 
 ## Connector record
 

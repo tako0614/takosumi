@@ -1,4 +1,4 @@
-// Authoring-surface validation phase for the public deploy manifest.
+// Validation phase for the internal deployment manifest.
 //
 // All `validate*` helpers live here. They throw `TypeError` with a
 // path-prefixed message on rejection, matching the existing behaviour

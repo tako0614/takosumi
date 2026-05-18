@@ -1,12 +1,13 @@
-# Direct Deploy Sample
+# Installer API Deploy Sample
 
-This sample shows the raw unmanaged deploy path. It submits an explicit Takosumi
-manifest to the kernel with `tako0614/takosumi/actions/deploy@v1`.
+This sample submits the current repository as an AppSpec source to the Takosumi
+installer API with `tako0614/takosumi/actions/deploy@v1`.
 
 Required GitHub Actions secrets:
 
 - `TAKOSUMI_REMOTE_URL`: Takosumi kernel base URL.
-- `TAKOSUMI_DEPLOY_TOKEN`: Bearer accepted by `POST /v1/deployments`.
+- `TAKOSUMI_INSTALLER_TOKEN`: Bearer accepted by `/v1/installations/*`.
 
-This path does not create AppInstallation ownership, billing, grants, or OIDC
-client records. Use `takosumi-git` and Takosumi Accounts for Git URL install.
+Required GitHub Actions variables:
+
+- `TAKOSUMI_SPACE_ID`: Space id that will own the Installation.

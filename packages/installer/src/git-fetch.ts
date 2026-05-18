@@ -6,7 +6,7 @@
  * responsible for cleanup after reading `.takosumi.yml` and building
  * artifacts.
  *
- * This module replaces the prior `takosumi-git/packages/git-source/`.
+ * This module replaces the prior external git-source helper.
  */
 
 export interface GitFetchOptions {

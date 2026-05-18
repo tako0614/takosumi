@@ -54,7 +54,7 @@ Deno.test("renderPrometheusMetrics aggregates counters and histograms", () => {
       name: "takosumi_rate_limit_throttle_count",
       kind: "counter",
       value: 2,
-      tags: { route: "/v1/deployments" },
+      tags: { route: "/v1/installations" },
       observedAt: "2026-05-04T00:00:00.000Z",
     },
     {
@@ -62,7 +62,7 @@ Deno.test("renderPrometheusMetrics aggregates counters and histograms", () => {
       name: "takosumi_rate_limit_throttle_count",
       kind: "counter",
       value: 3,
-      tags: { route: "/v1/deployments" },
+      tags: { route: "/v1/installations" },
       observedAt: "2026-05-04T00:00:01.000Z",
     },
     {
@@ -78,7 +78,7 @@ Deno.test("renderPrometheusMetrics aggregates counters and histograms", () => {
 
   assert.match(
     rendered,
-    /takosumi_rate_limit_throttle_count\{route="\/v1\/deployments"\} 5/,
+    /takosumi_rate_limit_throttle_count\{route="\/v1\/installations"\} 5/,
   );
   assert.match(
     rendered,

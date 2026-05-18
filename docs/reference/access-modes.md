@@ -11,7 +11,7 @@ read | read-write | admin | invoke-only | observe-only
 ```
 
 enum は閉じています。 新規モード追加には `CONVENTIONS.md` §6 の RFC が必須で、
-provider / connector / template が単独で拡張することはできません。
+provider / connector が単独で拡張することはできません。
 
 ## モードごとの意味
 
@@ -24,9 +24,9 @@ material は生成されず**、 mutation API は射影されません。
 
 - 許可: select / get / list / describe / subscribe
 - 不許可: resource を変更する全ての呼び出し
-- 典型例: `web-service` shape が `database` shape の `read` link で status
-  dashboard を構築する、 下流 space が外部 tenant の `bucket` shape を解析専用
-  で消費する
+- 典型例: `worker` component が `postgres` component の `read` link で status
+  dashboard を構築する、 下流 space が外部 tenant の `object-store` component
+  を解析専用 で消費する
 
 ### `read-write`
 
@@ -37,8 +37,8 @@ material は生成されず**、 mutation API は射影されません。
 - 許可: `read` の全権限に加え、 insert / update / upsert / delete
 - 不許可: resource の lifecycle 管理 (recreate / drop / re-shard / root
   credential rotation / container 自体の削除)
-- 典型例: backend `web-service` が自身の `database` shape に書き込む、 worker
-  shape が `object-store` shape へ push する
+- 典型例: backend `worker` が自身の `postgres` component に書き込む、 worker
+  component が `object-store` component へ push する
 
 ### `admin`
 
@@ -63,7 +63,7 @@ envelope を介してのみ可能です。
 - 許可: shape の invocation contract に基づく invoke / call / publish / submit
 - 不許可: 蓄積された state の read、 内部 queue の観測、 invocation envelope
   外での mutation
-- 典型例: `web-service` が他 `web-service` の公開 API を呼ぶ、 queue 自体の read
+- 典型例: `worker` が他 `worker` の公開 API を呼ぶ、 queue 自体の read
   権限を持たず producer として publish のみ行う
 
 ### `observe-only`

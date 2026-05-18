@@ -106,8 +106,8 @@ const providers = createTakosumiProductionProviders({
 // providers = @takos/selfhost-* の 6 provider
 ```
 
-この構成と相性が良い template が
-[`selfhosted-single-vm@v1`](/reference/templates#selfhosted-single-vm-v1)。
+この構成では AppSpec の portable component kind を self-host provider
+に解決する。
 
 ## 関連ページ
 

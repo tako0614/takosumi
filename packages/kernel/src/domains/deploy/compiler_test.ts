@@ -204,7 +204,7 @@ Deno.test(
   },
 );
 
-// Workflow/trigger authoring is owned above the kernel by takosumi-git.
+// Workflow/trigger authoring is owned above the kernel by installer clients.
 Deno.test("public manifest compiler rejects compute triggers", () => {
   assert.throws(
     () =>
@@ -489,7 +489,7 @@ Deno.test("public manifest compiler rejects invalid documented manifest fields",
         name: "bad",
         extra: true,
       } as never),
-    /public deploy manifest must not include 'extra'/,
+    /internal deployment manifest must not include 'extra'/,
   );
   assert.throws(
     () =>

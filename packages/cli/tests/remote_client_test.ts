@@ -6,7 +6,7 @@ Deno.test("callKernel sends X-Idempotency-Key on write requests", async () => {
   let observedHeaders: Headers | undefined;
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     observedHeaders = new Headers(init?.headers);
-    assert.equal(String(input), "https://kernel.example/v1/deployments");
+    assert.equal(String(input), "https://kernel.example/v1/installations");
     return Promise.resolve(
       new Response(JSON.stringify({ status: "ok" }), {
         status: 200,
@@ -17,15 +17,15 @@ Deno.test("callKernel sends X-Idempotency-Key on write requests", async () => {
   try {
     const result = await callKernel({
       url: "https://kernel.example/",
-      token: "deploy-token",
-      path: "/v1/deployments",
-      body: { mode: "plan", manifest: {} },
+      token: "installer-token",
+      path: "/v1/installations",
+      body: { spaceId: "space_1", source: { kind: "local", url: "./" } },
       idempotencyKey: "idem-test",
     });
     assert.equal(result.status, 200);
     assert.equal(
       observedHeaders?.get("authorization"),
-      "Bearer deploy-token",
+      "Bearer installer-token",
     );
     assert.equal(observedHeaders?.get("x-idempotency-key"), "idem-test");
   } finally {
@@ -39,7 +39,7 @@ Deno.test("callKernel does not send X-Idempotency-Key on GET requests", async ()
   globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
     observedHeaders = new Headers(init?.headers);
     return Promise.resolve(
-      new Response(JSON.stringify({ deployments: [] }), {
+      new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -48,9 +48,9 @@ Deno.test("callKernel does not send X-Idempotency-Key on GET requests", async ()
   try {
     const result = await callKernel({
       url: "https://kernel.example",
-      token: "deploy-token",
+      token: "installer-token",
       method: "GET",
-      path: "/v1/deployments",
+      path: "/health",
     });
     assert.equal(result.status, 200);
     assert.equal(observedHeaders?.get("x-idempotency-key"), null);

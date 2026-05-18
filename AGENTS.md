@@ -3,8 +3,8 @@
 This repository is **Takosumi**, a self-hostable PaaS. It reads `.takosumi.yml`
 from source, creates an Installation in a Space, and records each apply as a
 Deployment. It contains the type contract, the PaaS kernel, the shape / provider
-/ template plugin host, the runtime-agent, the canonical installer, and the CLI
-as co-equal workspace packages, all consumable from JSR.
+plugin host, the runtime-agent, the canonical installer, and the CLI as co-equal
+workspace packages, all consumable from JSR.
 
 Canonical contract:
 [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (本
@@ -16,9 +16,9 @@ workspace の `packages/contract/`)。
 takosumi/
 ├── deno.json                (workspace root, 自身は publish しない)
 ├── packages/
-│   ├── contract/            @takos/takosumi-contract — AppSpec / ProviderPlugin / Template の型契約
+│   ├── contract/            @takos/takosumi-contract — AppSpec / ProviderPlugin の型契約
 │   ├── kernel/              @takos/takosumi-kernel — HTTP server + installer pipeline + storage + workers
-│   ├── plugins/             @takos/takosumi-plugins — component kinds / providers / templates / factories
+│   ├── plugins/             @takos/takosumi-plugins — component kinds / providers / factories
 │   ├── installer/           @takos/takosumi-installer — .takosumi.yml parser + git fetch + deploy client
 │   ├── runtime-agent/       @takos/takosumi-runtime-agent — kernel ↔ tenant 間の gateway-manifest runtime
 │   ├── cli/                 @takos/takosumi-cli — `takosumi install` / `takosumi deploy` / `takosumi server` 等
@@ -33,10 +33,10 @@ takosumi/
 | ---------------- | ------------------------------------------------- |
 | **AppSpec**      | `.takosumi.yml` (= source root の 1 ファイル)     |
 | **Installation** | Space に入った AppSpec (= 所有 / 課金 / 現在状態) |
-| **Deployment**   | 1 回の apply 結果 (= 履歴 / audit / rollback)    |
+| **Deployment**   | 1 回の apply 結果 (= 履歴 / audit / rollback)     |
 
-これ以上の名詞は基本的に仕様 surface に出さない。 内部に `Resource` / `Secret`
-/ `Event` table はあるが public concept ではない。
+これ以上の名詞は基本的に仕様 surface に出さない。 内部に `Resource` / `Secret` /
+`Event` table はあるが public concept ではない。
 
 ## 基本方針
 
@@ -48,9 +48,8 @@ takosumi/
 - **`POST /v1/installations` is the canonical install entry point**: kernel は
   AppSpec を受ける first-class API を持ち、 CLI / GitHub Actions / 自前 CI /
   operator script はすべて 5 endpoint を直接叩く構成で動作する必要がある。
-- **Public API surface は 5 endpoint だけ**:
-  `POST /v1/installations/dry-run` / `POST /v1/installations` /
-  `POST /v1/installations/{id}/deployments/dry-run` /
+- **Public API surface は 5 endpoint だけ**: `POST /v1/installations/dry-run` /
+  `POST /v1/installations` / `POST /v1/installations/{id}/deployments/dry-run` /
   `POST /v1/installations/{id}/deployments` /
   `POST /v1/installations/{id}/rollback`。
 - **Substitutability で kernel pure を justify**:
@@ -93,15 +92,15 @@ takosumi/
 
 ## JSR publish layout
 
-| Package                         | Version | 内容                                                     |
-| ------------------------------- | ------- | -------------------------------------------------------- |
+| Package                         | Version | 内容                                                        |
+| ------------------------------- | ------- | ----------------------------------------------------------- |
 | `@takos/takosumi-contract`      | 3.0.0   | AppSpec / Component / ProviderPlugin / Installer API 型契約 |
-| `@takos/takosumi-kernel`        | 1.0.0   | HTTP server + installer pipeline + storage + workers     |
-| `@takos/takosumi-plugins`       | 1.0.0   | component kind catalog + provider plugins + factories    |
-| `@takos/takosumi-installer`     | 1.0.0   | .takosumi.yml parser + git fetch + deploy client         |
-| `@takos/takosumi-runtime-agent` | 1.0.0   | kernel ↔ tenant gateway-manifest runtime                 |
-| `@takos/takosumi-cli`           | 1.0.0   | CLI (`takosumi install` / `takosumi deploy` 等)          |
-| `@takos/takosumi`               | 1.0.0   | umbrella (上記 6 つを再公開)                             |
+| `@takos/takosumi-kernel`        | 1.0.0   | HTTP server + installer pipeline + storage + workers        |
+| `@takos/takosumi-plugins`       | 1.0.0   | component kind catalog + provider plugins + factories       |
+| `@takos/takosumi-installer`     | 1.0.0   | .takosumi.yml parser + git fetch + deploy client            |
+| `@takos/takosumi-runtime-agent` | 1.0.0   | kernel ↔ tenant gateway-manifest runtime                    |
+| `@takos/takosumi-cli`           | 1.0.0   | CLI (`takosumi install` / `takosumi deploy` 等)             |
+| `@takos/takosumi`               | 1.0.0   | umbrella (上記 6 つを再公開)                                |
 
 > Note: `@takos/` JSR scope は Takos が publish する **reference distribution**
 > であり、 authority は publisher ではなく contract (`@takos/takosumi-contract`)
@@ -151,7 +150,7 @@ takosumi install --remote https://kernel.example.com \
 
 - 新 provider 追加時は `CONVENTIONS.md` §4 の手順に従う
   (`packages/plugins/src/providers/<kind>/<provider-id>.ts` 追加 +
-  `factories.ts` の production 配線 + fixture + 必要なら template)。
+  `factories.ts` の production 配線 + fixture)。
 - 新 component kind を増やしたい場合は `CONVENTIONS.md` §6 の RFC プロセスに
   従う (現在 catalog は 5 種 frozen: `worker` / `postgres` / `object-store` /
   `oidc` / `custom-domain`)。

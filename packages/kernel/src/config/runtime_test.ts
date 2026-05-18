@@ -29,7 +29,6 @@ Deno.test("runtime config loader reads explicit plugin selection map", async () 
         provider: "takos.provider.test",
       }),
       TAKOSUMI_SOURCE_PLUGIN: "takos.source.manifest",
-      TAKOSUMI_PUBLIC_ROUTES_ENABLED: "true",
     },
   });
 
@@ -38,7 +37,6 @@ Deno.test("runtime config loader reads explicit plugin selection map", async () 
   assert.equal(config.plugins.storage, "takos.storage.memory");
   assert.equal(config.plugins.provider, "takos.provider.test");
   assert.equal(config.plugins.source, "takos.source.manifest");
-  assert.equal(config.routes.publicRoutesEnabled, true);
   assert.deepEqual(config.diagnostics, []);
 });
 
@@ -221,7 +219,6 @@ Deno.test("runtime config loader allows production when every kernel port select
   const config = await loadRuntimeConfigFromEnv({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
-      TAKOSUMI_PUBLIC_ROUTES_ENABLED: "1",
       ...Object.fromEntries(
         requiredPorts.map((port) => [
           envKeyForPort(port),
@@ -232,7 +229,6 @@ Deno.test("runtime config loader allows production when every kernel port select
   });
 
   assert.equal(config.environment, "production");
-  assert.equal(config.routes.publicRoutesEnabled, true);
   for (const port of requiredPorts) {
     assert.equal(config.plugins[port], `takos.${port}.cloud`);
   }

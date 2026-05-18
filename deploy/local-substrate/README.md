@@ -1,7 +1,7 @@
 # local-substrate
 
-`*.takosumi.test` の DNS / TLS / ingress / OIDC / kernel deploy / cloud emulator を
-すべて 1 つの docker network で完結させる cloud-independent test bed。
+`*.takosumi.test` の DNS / TLS / ingress / OIDC / installer API / cloud emulator
+を すべて 1 つの docker network で完結させる cloud-independent test bed。
 
 Takosumi の deploy / account-plane / cloud-worker surface を、 public network
 依存ゼロで踏むための integration test bed。Takos product の dev stack や product
@@ -15,13 +15,13 @@ Windows は対象外。
 
 | Phase | scope                                                                                       | DoD                                                                          |
 | ----- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| 0     | Pebble (ACME staging) + CoreDNS + Caddy で `*.takosumi.test` を local TLS termination          | `curl https://hello.takosumi.test/` が 200                                      |
-| 1     | takosumi kernel + Accounts + cloud worker / dashboard を同 stack に統合                     | OIDC discovery 解決 + `POST /v1/deployments` 成功                            |
+| 0     | Pebble (ACME staging) + CoreDNS + Caddy で `*.takosumi.test` を local TLS termination       | `curl https://hello.takosumi.test/` が 200                                   |
+| 1     | takosumi kernel + Accounts + cloud worker / dashboard を同 stack に統合                     | OIDC discovery 解決 + installer API 成功                                     |
 | 2     | LocalStack / k3d / fake-gcs / Azurite / miniflare を `compose.emulators.yml` 1 本で並行統合 | `scripts/smoke.sh` 全 cloud fixture が pass                                  |
 | 3     | factory で endpoint override + Caddy admin route registrar + 公開面 deny 多重防御           | dynamic subdomain が deploy 直後に hit する + `prove-no-public-leak.sh` pass |
 
-現在 Phase 0–3 まで実装済み。`scripts/smoke.sh` は canonical
-`POST /v1/deployments` path も含めて検証する。
+現在 Phase 0–3 まで実装済み。`scripts/smoke.sh` は canonical installer 5
+endpoint surface も含めて検証する。
 
 ## Scope — Takosumi-only
 
@@ -32,7 +32,7 @@ integration test 専用。 Takos product (`takos-app`) や bundled app (yurucomm
 - `takos/` — Takos product 固有の test (deno task test / Playwright 等)
 - `yurucommu/` — yurucommu 固有の test
 
-外部 app の `.takosumi/app.yml` 由来 fixture を install-preview mock で使う
+外部 app の `.takosumi.yml` 由来 fixture を installer mock で使う
 ことはあるが、それは Takosumi の install contract を検証するための入力 fixture
 であり、該当 product を local-substrate の service
 として直起動するものではない。 「Takosumi 経由で yurucommu / takos-app を
@@ -40,7 +40,7 @@ install して deploy する」 統合 シナリオは別タスク
 (`@takos/local-miniflare-workers` connector 実装が前提、 TODO-SMOKE.md
 筆頭参照)。
 
-## Current smoke coverage (30 checks)
+## Current smoke coverage (29 checks)
 
 `scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして
 deploy しても 99% 動く」 を目標に、 honest pass のみを数える。 各 ファイル詳細は
@@ -50,18 +50,18 @@ deploy しても 99% 動く」 を目標に、 honest pass のみを数える。
 | --------------- | ---: | --------------------------------------------------------------------------------------------------------- |
 | ingress         |    3 | `phase0.hello`, `accounts.oidc-discovery`, `kernel.health`                                                |
 | prod-mirror     |    9 | `prod-mirror.landing.*` (4) + `prod-mirror.docs.index` + `prod-mirror.cloud.*` (4)                        |
-| install flow    |    2 | `install.preview.{takos-docs,yurucommu}` (fixture data; Takosumi API)                                     |
+| install flow    |    2 | `install.dry-run.{takos-docs,yurucommu}` (fixture data; Takosumi API)                                     |
 | OAuth           |    4 | `oauth.e2e.{google,github}`, `oauth.tls-negative`, `oauth.csrf-replay`                                    |
 | tenant          |    1 | `tenant.isolation` (cross-subject installation read must fail)                                            |
 | docs            |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                               |
 | passkey         |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                                |
-| kernel deploy   |    1 | `kernel.deploy.e2e` (canonical POST /v1/deployments manifest path)                                        |
+| installer API   |    1 | `installer.api.e2e` (install dry-run/apply, deployment dry-run/apply, rollback)                           |
 | workers         |    1 | `workers.cli-smoke` (Accounts + kernel Worker on workerd with D1/R2/Queue/DO)                             |
 | route-registrar |    1 | `registrar.alive` (kernel → Caddy admin sync via internal network)                                        |
 | object store    |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                                    |
 | migrations      |    1 | `migration.idempotency` (Accounts Worker D1 restart preserves schema byte-identical)                      |
 | otel            |    1 | `otel.pipeline` (synthetic OTLP trace lands in Jaeger)                                                    |
-| k6 perf         |    1 | `k6.baseline` (20 RPS × 20s with `p(95)<50ms` install_preview + `<30ms` oidc — regression watch, NOT SLO) |
+| k6 perf         |    1 | `k6.baseline` (20 RPS × 20s with `p(95)<50ms` install dry-run + `<30ms` oidc — regression watch, NOT SLO) |
 | mailpit         |    1 | `mailpit` (SMTP catcher reachable + probe email delivered)                                                |
 | stripe          |    1 | `stripe.webhook.e2e` (HMAC verify + idempotency + tolerance)                                              |
 
@@ -135,8 +135,7 @@ takosumi/deploy/local-substrate/
 │   └── takosumi-kernel-worker-runner.mjs # local-only Miniflare D1/R2/Queue/DO runner
 ├── route-registrar/
 │   ├── deno.json
-│   └── mod.ts                   # poll kernel → patch Caddy admin API
-├── fixtures/manifest.*.yml
+│   └── mod.ts                   # preserve Caddy dynamic-route partition
 └── scripts/
     ├── up.sh
     ├── down.sh

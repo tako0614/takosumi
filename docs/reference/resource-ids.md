@@ -172,8 +172,8 @@ sla-observation:01HM9N7XK4QY8RT2P5JZF6V3WK
 
 kernel は `trigger:` / `trigger-registration:` / `hook-binding:` / `workflow:` /
 `workflow-run:` / `workflow-step-run:` prefix を予約していません。 workflow /
-cron / hook は `POST /v1/deployments` の上位 (例: `takosumi-git`) で扱い、
-識別子は kernel が管理する kind list の外で保持します。 詳細は
+cron / hook は `/v1/installations/*` の上位 automation で扱い、 識別子は kernel
+が管理する kind list の外で保持します。 詳細は
 [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
 を参照。
 

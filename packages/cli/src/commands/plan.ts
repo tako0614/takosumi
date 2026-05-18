@@ -1,64 +1,46 @@
 import { Command } from "@cliffy/command";
-import { loadConfig, resolveMode } from "../config.ts";
-import { expandManifestLocal, planLocal } from "../local_runner.ts";
-import { loadManifest, selectManifestPath } from "../manifest_loader.ts";
-import { callKernel } from "../remote_client.ts";
+import {
+  callInstaller,
+  INSTALLATIONS_DRY_RUN_PATH,
+  parseSourceRef,
+  requireRemoteInstaller,
+  resolveSourceArg,
+} from "../installer_client.ts";
 
 function createPlanCommand() {
   return new Command()
     .description(
-      "Validate a Takosumi manifest without applying (path is required; " +
-        "project-layout discovery is provided by takosumi-git)",
+      "Alias for `takosumi install dry-run`: preview a new Installation",
     )
-    .arguments("[manifest:string]")
+    .arguments("[source:string]")
     .option(
-      "--manifest <path:string>",
-      "Manifest path, same as [manifest] (required)",
+      "--source <source:string>",
+      "git:, catalog:, bundle:, or local path",
     )
+    .option("--space <spaceId:string>", "Target Space id", { required: true })
     .option("--remote <url:string>", "Remote kernel URL")
-    .option("--token <token:string>", "Auth token")
-    .action(async ({ manifest: manifestFlag, remote, token }, manifestPath) => {
-      const manifest = await loadManifest(selectManifestPath({
-        argument: manifestPath,
-        flag: manifestFlag,
-      }));
-      console.log(`loaded manifest from ${manifest.path} (${manifest.format})`);
-
-      const target = resolveMode({ remote, token }, await loadConfig());
-      if (target.mode === "remote") {
-        console.log(`requesting plan from remote kernel: ${target.url}`);
-        const { status, body } = await callKernel({
-          url: target.url,
-          token: target.token,
-          path: "/v1/deployments",
-          body: { mode: "plan", manifest: manifest.value },
+    .option("--token <token:string>", "Installer bearer token")
+    .action(async ({ source: sourceFlag, space, remote, token }, sourceArg) => {
+      try {
+        const sourceRef = resolveSourceArg({
+          argument: sourceArg,
+          flag: sourceFlag,
+        });
+        const target = await requireRemoteInstaller(remote, token);
+        const { status, body } = await callInstaller(target, {
+          path: INSTALLATIONS_DRY_RUN_PATH,
+          body: { spaceId: space, source: parseSourceRef(sourceRef) },
         });
         if (status >= 400) {
           console.error(`kernel returned ${status}:`, body);
           Deno.exit(1);
         }
         console.log(JSON.stringify(body, null, 2));
-        return;
-      }
-
-      let resources;
-      try {
-        resources = expandManifestLocal(manifest.value);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`error: ${message}`);
         Deno.exit(1);
       }
-
-      const outcome = await planLocal(resources);
-      if (outcome.status !== "succeeded") {
-        console.error(`plan ${outcome.status}:`);
-        for (const issue of outcome.issues) {
-          console.error(`  - ${issue.path}: ${issue.message}`);
-        }
-        Deno.exit(1);
-      }
-      console.log(JSON.stringify({ status: "ok", outcome }, null, 2));
     });
 }
 

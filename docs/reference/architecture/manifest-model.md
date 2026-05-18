@@ -1,16 +1,16 @@
 # Manifest Model
 
-> このページでわかること: AppSpec (= `.takosumi.yml`) のデータモデルと
-> component graph の構造、 AppSpec → Installation → Deployment の lifecycle。
+> このページでわかること: AppSpec (= `.takosumi.yml`) のデータモデルと component
+> graph の構造、 AppSpec → Installation → Deployment の lifecycle。
 
 AppSpec は closed な install surface である。 desired な portable component を
-宣言するもので、 canonical state ではない。 Space、 actor、 catalog
-release、 policy、 quota、 credential、 approval、 journal state、 observation
-は AppSpec ではなく install context から供給される。
+宣言するもので、 canonical state ではない。 Space、 actor、 catalog release、
+policy、 quota、 credential、 approval、 journal state、 observation は AppSpec
+ではなく install context から供給される。
 
 Public v1 は `POST /v1/installations` 系 5 endpoint と `takosumi install` CLI が
 実装する **Component + Kind** AppSpec モデルである。 authoring shorthand や
-compiled 中間形式は存在せず、 kernel が読むのは `.takosumi.yml` そのものである。
+runtime 中間形式は存在せず、 kernel が読むのは `.takosumi.yml` そのものである。
 
 ## Allowed Public Fields
 
@@ -49,9 +49,8 @@ kind | build | use | routes | spec | redirectPaths | scopes | name | target
 の最小 recipe のみ表現できる。 jobs / steps / matrix / triggers / pipeline は
 持たない (= CI workflow ではない)。
 
-`use` は component 間の構造的依存 edge。 文字列 placeholder
-(`${ref:...}` / `${secret-ref:...}` / `${bindings.*}` 等) は v1 AppSpec では
-廃止された。
+`use` は component 間の構造的依存 edge。 文字列 interpolation (`${ref:...}` /
+`${secret-ref:...}` / `${bindings.*}` 等) は v1 AppSpec では 廃止された。
 
 ## Space Context
 
@@ -64,8 +63,8 @@ appspec + space:acme-prod -> production catalog / policy / quotas
 appspec + space:acme-dev  -> development catalog / policy / quotas
 ```
 
-public AppSpec は `space` / `tenant` / `org` / credential / namespace registry の
-構成 field を含んではならない。 これらは Installation context / operator 設定
+public AppSpec は `space` / `tenant` / `org` / credential / namespace registry
+の 構成 field を含んではならない。 これらは Installation context / operator 設定
 であり、 authoring intent ではない。
 
 ## Components
@@ -117,11 +116,11 @@ cycle 検出は graph DFS。
 
 各 edge の semantics:
 
-| sub-key      | 解決                                                              |
-| ------------ | ----------------------------------------------------------------- |
-| `env`        | 依存先 connection string / primary output を単一 env var に inject |
-| `envPrefix`  | 依存先の全 output field を `${PREFIX}_*` で env に展開            |
-| `mount`      | reserved mount point (例: `oidc`) に bind し、 関連 env 一式を inject |
+| sub-key     | 解決                                                                  |
+| ----------- | --------------------------------------------------------------------- |
+| `env`       | 依存先 connection string / primary output を単一 env var に inject    |
+| `envPrefix` | 依存先の全 output field を `${PREFIX}_*` で env に展開                |
+| `mount`     | reserved mount point (例: `oidc`) に bind し、 関連 env 一式を inject |
 
 ## Installation lifecycle
 
@@ -135,12 +134,12 @@ Installation (account + space + appId + currentDeployment + status)
 Deployment (source.commit + manifestDigest + outputs + status + timestamps)
 ```
 
-`Installation` は 1 つの Space に対して 1 つの App が入っている状態を表す。
-所有 / 課金 / 権限 / 現在状態の単位。
+`Installation` は 1 つの Space に対して 1 つの App が入っている状態を表す。 所有
+/ 課金 / 権限 / 現在状態の単位。
 
-`Deployment` は 1 回の apply 結果。 source.commit、 manifestDigest、
-component ごとの build artifact、 provider が作った resource id を記録する。
-履歴 / audit / rollback の単位。
+`Deployment` は 1 回の apply 結果。 source.commit、 manifestDigest、 component
+ごとの build artifact、 provider が作った resource id を記録する。 履歴 / audit
+/ rollback の単位。
 
 ## Provider Resolution
 
@@ -158,16 +157,16 @@ Provider responsibilities:
 
 ## 削除された旧概念
 
-| 旧概念                                    | 新位置                                            |
-| ----------------------------------------- | ------------------------------------------------- |
-| `.takosumi/app.yml` + `manifest.yml`      | `.takosumi.yml` 1 file に統合                     |
-| `.takosumi/workflows/*`                   | 廃止                                              |
-| compiled manifest (authoring vs compiled) | 単一 AppSpec モデル、 compile step なし           |
-| workflowRef                               | `component.build` の最小 recipe                   |
-| `${ref:...}` / `${secret-ref:...}`        | `use:` edge                                       |
-| `${bindings.*}` / `${secrets.*}`          | `use:` edge                                       |
-| Plan / Snapshot / Preview entity          | dry-run response (entity 化されない)              |
-| DeploymentPlan / DeploymentSnapshot       | Deployment record の outputs に統合               |
+| 旧概念                               | 新位置                                  |
+| ------------------------------------ | --------------------------------------- |
+| `.takosumi/app.yml` + `manifest.yml` | `.takosumi.yml` 1 file に統合           |
+| `.takosumi/workflows/*`              | 廃止                                    |
+| authoring/runtime 中間 manifest      | 単一 AppSpec モデル、 compile step なし |
+| retired authoring extension          | `component.build` の最小 recipe         |
+| `${ref:...}` / `${secret-ref:...}`   | `use:` edge                             |
+| `${bindings.*}` / `${secrets.*}`     | `use:` edge                             |
+| Plan / Snapshot / Preview entity     | dry-run response (entity 化されない)    |
+| DeploymentPlan / DeploymentSnapshot  | Deployment record の outputs に統合     |
 
 ## 関連ページ
 

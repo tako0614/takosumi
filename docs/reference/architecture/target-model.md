@@ -5,24 +5,24 @@
 ObjectTarget は Object の surface と lifecycle 期待値を定義する。public な
 フィールドに分解されることはない。
 
-## Public resource target
+## Public component target
 
 ```yaml
-resources:
-  - shape: web-service@v1
-    name: api
-    provider: "@takos/cloudflare-workers"
-    spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:...
+components:
+  api:
+    kind: worker
+    build:
+      command: npm ci && npm run build
+      output: dist/worker.mjs
+    routes:
+      - /api/*
 ```
 
-public v1 は別の top-level `target` field を公開しない。resource target は
-`resources[].shape` と optional な `resources[].provider` hint から始まり、
-current Space に許可された catalog / provider registry / policy に対して
-解決される。解決された provider は Deployment の証拠であり、Shape の semantic
-identity ではない。
+public v1 は別の top-level `target` field を公開しない。component target は
+`components.<name>.kind` と optional provider hint から始まり、 current Space
+に許可された catalog / provider registry / policy に対して
+解決される。解決された provider は Deployment の証拠であり、component kind の
+semantic identity ではない。
 
 ## ObjectTarget descriptor
 
@@ -84,9 +84,9 @@ resolution は決定的で fail-closed な pipeline を使う。許可された 
 
 ## Input schema
 
-Target input 検証は `resources[].spec` を `resources[].shape` で選ばれた Shape
-contract に対して validate する。provider のサポートと capability 制約は
-provider resolution の段階でチェックされる。
+Target input 検証は `components.<name>` を `components.<name>.kind` で選ばれた
+component kind contract に対して validate する。provider のサポートと capability
+制約は provider resolution の段階でチェックされる。
 
 ```text
 JSON-LD / descriptor:

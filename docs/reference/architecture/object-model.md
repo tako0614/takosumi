@@ -3,8 +3,8 @@
 > このページでわかること: kernel の object model とエンティティ関係。
 
 Object は kernel graph の canonical entity である。すべての Object は厳密に 1
-つの Space に属する。public な `resources[]` entry は Object intent となり、
-その後 resolved な Object になる。
+つの Space に属する。public な AppSpec `components` entry は Object intent
+となり、 その後 resolved な Object になる。
 
 ## Space-qualified identity
 
@@ -53,7 +53,7 @@ Object:
   spaceId: space:acme-prod
   address: object:api
   lifecycleClass: managed
-  shape: web-service@v1
+  kind: worker
   provider: "@takos/cloudflare-workers"
   targetDescriptorDigest: sha256:...
   owner:

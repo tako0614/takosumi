@@ -6,7 +6,6 @@ Deno.test(
   async () => {
     const app = await createApiApp({
       registerInternalRoutes: false,
-      registerPublicRoutes: false,
       registerInstallerPublicRoutes: true,
       installerPublicRouteOptions: {
         getInstallerToken: () => "installer-token",
@@ -57,7 +56,6 @@ Deno.test(
   async () => {
     const app = await createApiApp({
       registerInternalRoutes: false,
-      registerPublicRoutes: false,
       registerInstallerPublicRoutes: true,
       requestCorrelation: false,
     });
@@ -75,7 +73,6 @@ Deno.test(
 Deno.test("installer_public_routes — rejects invalid bearer", async () => {
   const app = await createApiApp({
     registerInternalRoutes: false,
-    registerPublicRoutes: false,
     registerInstallerPublicRoutes: true,
     installerPublicRouteOptions: {
       getInstallerToken: () => "installer-token",

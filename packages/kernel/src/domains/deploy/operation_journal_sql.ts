@@ -17,7 +17,7 @@ import {
 } from "./operation_journal.ts";
 
 /**
- * SQL-backed operation journal for public deploy WAL stage records. The table
+ * SQL-backed operation journal for deployment WAL stage records. The table
  * is append-only per `(space, plan, journalEntryId, stage)` and idempotent for
  * exact effect replays; mismatching effect digests are rejected before callers
  * can advance a side-effecting stage.

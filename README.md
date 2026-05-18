@@ -1,8 +1,8 @@
 # Takosumi
 
 Self-hostable PaaS. **`.takosumi.yml` を読んで Space に Installation を作り、
-apply ごとに Deployment を記録する、 完全独立の PaaS**。 あらゆる cloud /
-docker / self-hosted 環境にデプロイできる。
+apply ごとに Deployment を記録する、 完全独立の PaaS**。 あらゆる cloud / docker
+/ self-hosted 環境にデプロイできる。
 
 📖 ドキュメント: <https://docs.takosumi.com/>
 
@@ -29,7 +29,7 @@ takosumi install --source git:https://github.com/example/notes#main \
 | ---------------- | ------------------------------------------------- |
 | **AppSpec**      | `.takosumi.yml` (= source root の 1 ファイル)     |
 | **Installation** | Space に入った AppSpec (= 所有 / 課金 / 現在状態) |
-| **Deployment**   | 1 回の apply 結果 (= 履歴 / audit / rollback)    |
+| **Deployment**   | 1 回の apply 結果 (= 履歴 / audit / rollback)     |
 
 これ以上の名詞は基本的に仕様 surface に出さない。
 
@@ -62,20 +62,18 @@ components:
     kind: postgres
 ```
 
-### Component kind × Provider × Template
+### Component kind × Provider
 
 - **Component kind** (5 つ frozen): `worker` / `postgres` / `object-store` /
   `oidc` / `custom-domain`
-- **Provider** (21 bundled): `@takos/cloudflare-workers` / `@takos/aws-fargate` /
-  `@takos/gcp-cloud-run` / `@takos/selfhost-docker-compose` /
+- **Provider** (21 bundled): `@takos/cloudflare-workers` / `@takos/aws-fargate`
+  / `@takos/gcp-cloud-run` / `@takos/selfhost-docker-compose` /
   `@takos/kubernetes-deployment` (worker) + `@takos/aws-s3` /
   `@takos/cloudflare-r2` / `@takos/gcp-gcs` / `@takos/selfhost-minio` /
   `@takos/selfhost-filesystem` (object-store) + ...
-- **Template** (2 bundled): `selfhosted-single-vm@v1` /
-  `web-app-on-cloudflare@v1`
 
-provider 差し替えで AppSpec portable (S3 ↔ R2、 Cloudflare Workers ↔ AWS
-Fargate 等)。
+provider 差し替えで AppSpec portable (S3 ↔ R2、 Cloudflare Workers ↔ AWS Fargate
+等)。
 
 詳細は [`CONVENTIONS.md`](./CONVENTIONS.md) と [`docs/`](./docs/) 参照。
 
@@ -108,15 +106,15 @@ takosumi install --source git:https://github.com/example/notes#main \
 
 ## JSR packages
 
-| Package                                                                             | 用途                                                                  |
-| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | turnkey: kernel + plugins + installer + cli を一括取得                |
-| [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | kernel only                                                           |
-| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | component kind catalog + provider + template + factories              |
-| [`jsr:@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | .takosumi.yml parser + git fetch + deploy client                      |
-| [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | runtime-agent (data plane: cloud SDK / OS executor)                   |
-| [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                                   |
-| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | 型契約 (上流)                                                         |
+| Package                                                                             | 用途                                                   |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | turnkey: kernel + plugins + installer + cli を一括取得 |
+| [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | kernel only                                            |
+| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | component kind catalog + provider + factories          |
+| [`jsr:@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | .takosumi.yml parser + git fetch + deploy client       |
+| [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | runtime-agent (data plane: cloud SDK / OS executor)    |
+| [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                    |
+| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | 型契約 (上流)                                          |
 
 <sub>Note: `@takos/` JSR scope で公開される reference Takosumi distribution で
 あり、 authority は publisher ではなく contract (`@takos/takosumi-contract`)
@@ -131,7 +129,7 @@ takosumi/
 ├── packages/
 │   ├── contract/        @takos/takosumi-contract       — AppSpec / Component / Provider の型契約
 │   ├── runtime-agent/   @takos/takosumi-runtime-agent  — cloud SDK / OS executor (data plane)
-│   ├── plugins/         @takos/takosumi-plugins        — component kinds / providers / templates / factories
+│   ├── plugins/         @takos/takosumi-plugins        — component kinds / providers / factories
 │   ├── installer/       @takos/takosumi-installer      — .takosumi.yml parser / git fetch / deploy client
 │   ├── kernel/          @takos/takosumi-kernel         — HTTP server + installer pipeline + storage + workers
 │   ├── cli/             @takos/takosumi-cli            — `takosumi install` / `takosumi deploy` 等

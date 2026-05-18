@@ -13,14 +13,14 @@ operator runbook が満たすべき不変条件だけを記録する。
 Takosumi は **6 つの package** を JSR で独立に publish する。 各 package はまだ
 pre-1.0 で、 minor bump も breaking change を含む可能性がある。
 
-| Package                         | 最新の方向                                   |
-| ------------------------------- | -------------------------------------------- |
-| `@takos/takosumi-contract`      | 型契約 (semver、SemVer 適用)                 |
-| `@takos/takosumi-kernel`        | HTTP server + apply pipeline + storage       |
-| `@takos/takosumi-runtime-agent` | cloud connector / OS connector               |
-| `@takos/takosumi-plugins`       | shape catalog + provider plugins + templates |
-| `@takos/takosumi-cli`           | `takosumi` コマンド                          |
-| `@takos/takosumi`               | 上記 5 つの umbrella                         |
+| Package                         | 最新の方向                             |
+| ------------------------------- | -------------------------------------- |
+| `@takos/takosumi-contract`      | 型契約 (semver、SemVer 適用)           |
+| `@takos/takosumi-kernel`        | HTTP server + apply pipeline + storage |
+| `@takos/takosumi-runtime-agent` | cloud connector / OS connector         |
+| `@takos/takosumi-plugins`       | shape catalog + provider plugins       |
+| `@takos/takosumi-cli`           | `takosumi` コマンド                    |
+| `@takos/takosumi`               | 上記 5 つの umbrella                   |
 
 Package bump は release-specific private runbook と検証済み evidence で扱う。
 

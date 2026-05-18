@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { deployCommand } from "../src/commands/deploy.ts";
+import { installCommand } from "../src/commands/install.ts";
+import { rollbackCommand } from "../src/commands/rollback.ts";
+import { parseSourceRef, resolveSourceArg } from "../src/installer_client.ts";
 import { __resetConfigFileCacheForTesting } from "../src/config.ts";
 
 interface CapturedRequest {
@@ -10,106 +13,189 @@ interface CapturedRequest {
   readonly idempotencyKey: string | null;
 }
 
-Deno.test(
-  "deploy command posts explicit manifests directly to /v1/deployments in remote mode",
-  async () => {
-    const manifestPath = await writeManifest();
-    const env = snapshotEnv();
-    try {
-      isolateConfig();
-      const captured = await runDeployAgainstFakeKernel([
-        manifestPath,
+Deno.test("installer source parser maps supported source refs", () => {
+  assert.deepEqual(parseSourceRef("./"), { kind: "local", url: "./" });
+  assert.deepEqual(
+    parseSourceRef("git:https://github.com/acme/app#main"),
+    { kind: "git", url: "https://github.com/acme/app", ref: "main" },
+  );
+  assert.deepEqual(parseSourceRef("catalog:com.acme.app@1"), {
+    kind: "catalog",
+    url: "com.acme.app@1",
+  });
+  assert.deepEqual(parseSourceRef("bundle:https://example.com/app.tgz"), {
+    kind: "bundle",
+    url: "https://example.com/app.tgz",
+  });
+  assert.equal(resolveSourceArg({ argument: "./app" }), "./app");
+  assert.throws(
+    () => resolveSourceArg({ argument: "./a", flag: "./b" }),
+    /either as an argument or with --source/,
+  );
+});
+
+Deno.test("install command posts source to /v1/installations", async () => {
+  const env = snapshotEnv();
+  try {
+    isolateConfig();
+    const captured = await runCommandAgainstFakeKernel(() =>
+      installCommand.parse([
+        "--space",
+        "space_personal",
+        "--source",
+        "git:https://github.com/acme/app#main",
         "--remote",
         "https://kernel.example",
         "--token",
-        "deploy-token",
-      ]);
+        "installer-token",
+      ])
+    );
 
-      assert.equal(captured.method, "POST");
-      assert.equal(captured.url, "https://kernel.example/v1/deployments");
-      assert.equal(captured.authorization, "Bearer deploy-token");
-      assert.ok(
-        captured.idempotencyKey,
-        "remote deploy must carry an idempotency key",
-      );
-      const body = captured.body as Record<string, unknown>;
-      assert.equal(body.mode, "apply");
-      assert.deepEqual(body.manifest, {
-        apiVersion: "1.0",
-        kind: "Manifest",
-        metadata: { name: "remote-cli-app" },
-        resources: [
-          {
-            shape: "object-store@v1",
-            name: "assets",
-            provider: "@takos/selfhost-filesystem",
-            spec: { name: "assets" },
-          },
-        ],
-      });
-    } finally {
-      restoreEnv(env);
-      __resetConfigFileCacheForTesting();
-      await Deno.remove(manifestPath);
-    }
-  },
-);
+    assert.equal(captured.method, "POST");
+    assert.equal(captured.url, "https://kernel.example/v1/installations");
+    assert.equal(captured.authorization, "Bearer installer-token");
+    assert.ok(captured.idempotencyKey);
+    assert.deepEqual(captured.body, {
+      spaceId: "space_personal",
+      source: { kind: "git", url: "https://github.com/acme/app", ref: "main" },
+    });
+  } finally {
+    restoreEnv(env);
+    __resetConfigFileCacheForTesting();
+  }
+});
 
-Deno.test(
-  "deploy command normalizes a trailing-slash remote URL",
-  async () => {
-    const manifestPath = await writeManifest();
-    const env = snapshotEnv();
-    try {
-      isolateConfig();
-      const captured = await runDeployAgainstFakeKernel([
-        manifestPath,
+Deno.test("install dry-run posts source to /v1/installations/dry-run", async () => {
+  const env = snapshotEnv();
+  try {
+    isolateConfig();
+    const captured = await runCommandAgainstFakeKernel(() =>
+      installCommand.parse([
+        "dry-run",
+        "--space",
+        "space_personal",
+        "--source",
+        "./",
         "--remote",
         "https://kernel.example/",
         "--token",
-        "deploy-token",
-      ]);
+        "installer-token",
+      ])
+    );
 
-      assert.equal(captured.url, "https://kernel.example/v1/deployments");
-    } finally {
-      restoreEnv(env);
-      __resetConfigFileCacheForTesting();
-      await Deno.remove(manifestPath);
-    }
-  },
-);
+    assert.equal(captured.method, "POST");
+    assert.equal(
+      captured.url,
+      "https://kernel.example/v1/installations/dry-run",
+    );
+    assert.deepEqual(captured.body, {
+      spaceId: "space_personal",
+      source: { kind: "local", url: "./" },
+    });
+  } finally {
+    restoreEnv(env);
+    __resetConfigFileCacheForTesting();
+  }
+});
 
-Deno.test(
-  "deploy command uses the same remote deployment route for dry-run plans",
-  async () => {
-    const manifestPath = await writeManifest();
-    const env = snapshotEnv();
-    try {
-      isolateConfig();
-      const captured = await runDeployAgainstFakeKernel([
-        manifestPath,
+Deno.test("deploy command posts to an installation deployment endpoint", async () => {
+  const env = snapshotEnv();
+  try {
+    isolateConfig();
+    const captured = await runCommandAgainstFakeKernel(() =>
+      deployCommand.parse([
+        "ins_123",
+        "--source",
+        "catalog:com.acme.app@1.0.0",
+        "--expected-commit",
+        "abc123",
+        "--expected-manifest-digest",
+        "sha256:manifest",
         "--remote",
         "https://kernel.example",
         "--token",
-        "deploy-token",
-        "--dry-run",
-      ]);
+        "installer-token",
+      ])
+    );
 
-      assert.equal(captured.method, "POST");
-      assert.equal(captured.url, "https://kernel.example/v1/deployments");
-      const body = captured.body as Record<string, unknown>;
-      assert.equal(body.mode, "plan");
-      assert.ok(body.manifest && typeof body.manifest === "object");
-    } finally {
-      restoreEnv(env);
-      __resetConfigFileCacheForTesting();
-      await Deno.remove(manifestPath);
-    }
-  },
-);
+    assert.equal(captured.method, "POST");
+    assert.equal(
+      captured.url,
+      "https://kernel.example/v1/installations/ins_123/deployments",
+    );
+    assert.deepEqual(captured.body, {
+      source: { kind: "catalog", url: "com.acme.app@1.0.0" },
+      expected: {
+        commit: "abc123",
+        manifestDigest: "sha256:manifest",
+      },
+    });
+  } finally {
+    restoreEnv(env);
+    __resetConfigFileCacheForTesting();
+  }
+});
 
-async function runDeployAgainstFakeKernel(
-  args: string[],
+Deno.test("deploy dry-run posts to the deployment dry-run endpoint", async () => {
+  const env = snapshotEnv();
+  try {
+    isolateConfig();
+    const captured = await runCommandAgainstFakeKernel(() =>
+      deployCommand.parse([
+        "dry-run",
+        "ins_123",
+        "--source",
+        "./",
+        "--remote",
+        "https://kernel.example",
+        "--token",
+        "installer-token",
+      ])
+    );
+
+    assert.equal(captured.method, "POST");
+    assert.equal(
+      captured.url,
+      "https://kernel.example/v1/installations/ins_123/deployments/dry-run",
+    );
+    assert.deepEqual(captured.body, {
+      source: { kind: "local", url: "./" },
+    });
+  } finally {
+    restoreEnv(env);
+    __resetConfigFileCacheForTesting();
+  }
+});
+
+Deno.test("rollback command posts deploymentId to rollback endpoint", async () => {
+  const env = snapshotEnv();
+  try {
+    isolateConfig();
+    const captured = await runCommandAgainstFakeKernel(() =>
+      rollbackCommand.parse([
+        "ins_123",
+        "dep_old",
+        "--remote",
+        "https://kernel.example",
+        "--token",
+        "installer-token",
+      ])
+    );
+
+    assert.equal(captured.method, "POST");
+    assert.equal(
+      captured.url,
+      "https://kernel.example/v1/installations/ins_123/rollback",
+    );
+    assert.deepEqual(captured.body, { deploymentId: "dep_old" });
+  } finally {
+    restoreEnv(env);
+    __resetConfigFileCacheForTesting();
+  }
+});
+
+async function runCommandAgainstFakeKernel(
+  run: () => Promise<unknown>,
 ): Promise<CapturedRequest> {
   const captured: CapturedRequest[] = [];
   const originalFetch = globalThis.fetch;
@@ -128,20 +214,16 @@ async function runDeployAgainstFakeKernel(
         parsed = init.body;
       }
     }
-    const auth = init?.headers
-      ? new Headers(init.headers).get("authorization")
-      : null;
+    const headers = new Headers(init?.headers);
     captured.push({
       url,
       method: init?.method ?? "GET",
       body: parsed,
-      authorization: auth,
-      idempotencyKey: init?.headers
-        ? new Headers(init.headers).get("x-idempotency-key")
-        : null,
+      authorization: headers.get("authorization"),
+      idempotencyKey: headers.get("x-idempotency-key"),
     });
     return Promise.resolve(
-      new Response(JSON.stringify({ status: "ok", outcome: {} }), {
+      new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -149,7 +231,7 @@ async function runDeployAgainstFakeKernel(
   };
   console.log = () => {};
   try {
-    await deployCommand.parse(args);
+    await run();
   } finally {
     globalThis.fetch = originalFetch;
     console.log = originalLog;
@@ -160,27 +242,6 @@ async function runDeployAgainstFakeKernel(
     );
   }
   return captured[0];
-}
-
-async function writeManifest(): Promise<string> {
-  const path = await Deno.makeTempFile({ suffix: ".json" });
-  await Deno.writeTextFile(
-    path,
-    JSON.stringify({
-      apiVersion: "1.0",
-      kind: "Manifest",
-      metadata: { name: "remote-cli-app" },
-      resources: [
-        {
-          shape: "object-store@v1",
-          name: "assets",
-          provider: "@takos/selfhost-filesystem",
-          spec: { name: "assets" },
-        },
-      ],
-    }),
-  );
-  return path;
 }
 
 function isolateConfig(): void {
@@ -204,5 +265,5 @@ function restoreEnv(
 const ENV_KEYS = [
   "TAKOSUMI_CONFIG_FILE",
   "TAKOSUMI_REMOTE_URL",
-  "TAKOSUMI_DEPLOY_TOKEN",
+  "TAKOSUMI_INSTALLER_TOKEN",
 ] as const;

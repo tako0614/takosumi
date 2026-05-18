@@ -38,45 +38,42 @@ takosumi version
 Start with CLI local mode. It does not need a kernel server and its state is
 ephemeral, so it is best for authoring and smoke tests:
 
-Create `manifest.yml` as an explicit compiled Shape manifest. Kernel manifests
-use `resources[]` only; top-level `template` and `workflowRef` must be resolved
-before the kernel request.
+Create `.takosumi.yml` as the AppSpec at the source root. The public installer
+API reads this AppSpec, creates an Installation, and records each apply as a
+Deployment.
 
 ```yaml
-apiVersion: "1.0"
-kind: Manifest
+apiVersion: takosumi.dev/v1
+kind: App
 metadata:
+  id: com.example.hello-worker
   name: hello-worker
-resources:
-  - shape: worker@v1
-    name: web
-    provider: "@takos/selfhost-systemd"
+components:
+  web:
+    kind: worker
+    build:
+      command: "npm run build"
+      output: "dist/worker.js"
     spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:0123456789abcdef
       compatibilityDate: "2026-05-09"
       routes:
         - hello.local/*
 ```
 
 ```bash
-takosumi doctor --manifest ./manifest.yml
-takosumi deploy ./manifest.yml
+takosumi install dry-run --space space_personal --source ./
+takosumi install --space space_personal --source ./
 ```
-
-`doctor` prints the manifest path, local / remote mode, and token state.
 
 For a remote-kernel dev loop, make the URL/token explicit:
 
 ```bash
 export TAKOSUMI_DEV_MODE=1
-export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 takosumi server --port 8788 &
 # stdout: "embedded runtime-agent listening at http://127.0.0.1:8789"
-takosumi doctor --manifest ./manifest.yml
-takosumi deploy ./manifest.yml
+takosumi install --space space_personal --source ./
 ```
 
 `TAKOSUMI_DEV_MODE=1` is the single dev opt-out flag. It permits plaintext
@@ -90,36 +87,37 @@ credentials exported into the env reach the agent connectors directly.
 
 ## 3. Self-hosted deploy (single VM, Docker / systemd)
 
-A single-VM self-hosted deployment is still expressed as expanded `resources[]`
-before it reaches the kernel.
+A single-VM self-hosted deployment is expressed as AppSpec components.
 
-`my-app.yml`:
+`.takosumi.yml`:
 
 ```yaml
-apiVersion: "1.0"
-kind: Manifest
+apiVersion: takosumi.dev/v1
+kind: App
 metadata:
+  id: com.example.my-app
   name: my-app
-resources:
-  - shape: database-postgres@v1
-    name: db
-    provider: "@takos/selfhost-postgres"
+components:
+  db:
+    kind: postgres
     spec:
       version: "16"
-  - shape: web-service@v1
-    name: api
-    provider: "@takos/selfhost-docker-compose"
-    spec:
-      image: ghcr.io/me/api@sha256:0123456789abcdef
-      port: 8080
-      env:
-        DATABASE_URL: ${secret-ref:db.connectionString}
-  - shape: custom-domain@v1
-    name: api-domain
-    provider: "@takos/selfhost-coredns"
-    spec:
-      domain: api.example.com
-      target: ${ref:api.endpoint}
+  api:
+    kind: worker
+    build:
+      command: npm ci && npm run build
+      output: dist/worker.mjs
+    use:
+      db:
+        env: DATABASE_URL
+    routes:
+      - /api/*
+  api-domain:
+    kind: custom-domain
+    use:
+      api:
+        target: url
+    name: api.example.com
 ```
 
 Operator side (on the VM):
@@ -127,16 +125,16 @@ Operator side (on the VM):
 ```bash
 export TAKOSUMI_DATABASE_URL=postgresql://localhost/takosumi
 export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
-export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 
 # Selfhosted connector storage locations (optional, defaults exist)
 export TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT=/var/lib/takosumi/objects
 export TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR=/etc/systemd/system
 
 takosumi server --port 8788 &
-takosumi deploy my-app.yml \
+takosumi install --space space_personal --source . \
   --remote http://localhost:8788 \
-  --token $TAKOSUMI_DEPLOY_TOKEN
+  --token $TAKOSUMI_INSTALLER_TOKEN
 ```
 
 After the deploy completes (the embedded agent runs the selfhost connectors):
@@ -240,7 +238,7 @@ takosumi runtime-agent serve --port 8789 --token mytoken
 export TAKOSUMI_ENVIRONMENT=production
 export TAKOSUMI_DATABASE_URL=postgresql://prod-db.internal/takosumi
 export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
-export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 
 # Connection info for the agent
 export TAKOSUMI_AGENT_URL=https://agent.internal:8789
@@ -270,11 +268,11 @@ separate host in production, so the embedded one is unnecessary).
 ## 6. CLI command reference
 
 ```
-takosumi deploy <manifest>            # apply (manifest path is required)
-takosumi destroy <manifest>           # destroy in reverse order
-takosumi status [<name>]              # current resource state
-takosumi plan <manifest>              # dry-run
-takosumi doctor --manifest <path>     # show manifest / mode / token
+takosumi install <source>             # create Installation + first Deployment
+takosumi install dry-run <source>     # dry-run a new install
+takosumi deploy <installation-id>      # apply to an existing Installation
+takosumi deploy dry-run <installation-id>
+takosumi rollback <installation-id> <deployment-id>
 takosumi server [--port 8788]         # start kernel + embedded agent
                 [--no-agent]          # suppress embedded agent (production)
                 [--agent-port 8789]   # set embedded agent port
@@ -286,25 +284,23 @@ takosumi migrate                      # DB migrations
 takosumi version
 ```
 
-For a `.takosumi/`-based project layout, git push hooks, and a workflow runner
-that builds artifacts and submits manifests, use the
-[`takosumi-git`](https://github.com/tako0614/takosumi-git) sibling product. This
-CLI stays a pure manifest deploy engine and always wants an explicit manifest
-path.
+The public contract is `.takosumi.yml` / Installation / Deployment plus the five
+`/v1/installations/*` endpoints. Workflow runners and webhooks live outside the
+kernel and pass AppSpec source to installer endpoints.
 
 ---
 
 ## 7. Troubleshooting
 
-| Symptom                                                                   | Cause                                                                                                                    |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `Refusing to start takosumi with plaintext secret storage`                | Production mode without `TAKOSUMI_SECRET_STORE_PASSPHRASE` set                                                           |
-| `Refusing to start takosumi against an unencrypted database`              | Production mode could not confirm DB at-rest encryption (dev can opt out via `TAKOSUMI_DEV_MODE=1`)                      |
-| `manifest.resources[] is required` / `manifest expands to zero resources` | No `resources[]`, or trying to apply only `resources: []`                                                                |
-| 401 from `/v1/deployments`                                                | `TAKOSUMI_DEPLOY_TOKEN` unset or token mismatch                                                                          |
-| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`                     | `takosumi server --no-agent` is in use but the external agent URL is not exported, or the embedded agent failed to start |
-| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found`       | The agent host is missing credentials for that cloud, so the connector is not registered                                 |
-| `runtime-agent /v1/lifecycle/apply failed: 401`                           | `TAKOSUMI_AGENT_TOKEN` does not match between agent and kernel                                                           |
+| Symptom                                                             | Cause                                                                                                                    |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `Refusing to start takosumi with plaintext secret storage`          | Production mode without `TAKOSUMI_SECRET_STORE_PASSPHRASE` set                                                           |
+| `Refusing to start takosumi against an unencrypted database`        | Production mode could not confirm DB at-rest encryption (dev can opt out via `TAKOSUMI_DEV_MODE=1`)                      |
+| AppSpec schema error                                                | `.takosumi.yml` does not match the AppSpec schema                                                                        |
+| 401 from `/v1/installations/*`                                      | `TAKOSUMI_INSTALLER_TOKEN` token mismatch                                                                                |
+| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`               | `takosumi server --no-agent` is in use but the external agent URL is not exported, or the embedded agent failed to start |
+| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found` | The agent host is missing credentials for that cloud, so the connector is not registered                                 |
+| `runtime-agent /v1/lifecycle/apply failed: 401`                     | `TAKOSUMI_AGENT_TOKEN` does not match between agent and kernel                                                           |
 
 Every bundled provider id is namespaced as `@takos/<cloud>-<service>`. The
 kernel rejects bare provider ids at resolve time and includes the namespaced id
@@ -331,10 +327,9 @@ takosumi artifact gc --dry-run    # show what would be deleted
 takosumi artifact gc              # actually delete
 ```
 
-The kernel runs a mark+sweep over the persistent `takosumi_deployments` records
-and only deletes blobs that no deployment record references (whether its status
-is `applied` or `destroyed`). The operation is idempotent, so running it
-repeatedly is harmless.
+The kernel runs a mark+sweep over persisted Deployment artifact references and
+only deletes blobs that no Deployment references. The operation is idempotent,
+so running it repeatedly is harmless.
 
 ### Artifact upload size cap
 
@@ -373,9 +368,8 @@ export TAKOSUMI_DEPLOY_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_ARTIFACT_FETCH_TOKEN=$(openssl rand -hex 32)
 ```
 
-- `TAKOSUMI_DEPLOY_TOKEN` is the full-power token that authorizes write
-  operations from the CLI: `takosumi deploy`, `takosumi artifact push`,
-  `takosumi artifact gc`, etc.
+- `TAKOSUMI_DEPLOY_TOKEN` is the artifact write token that authorizes
+  `takosumi artifact push`, `takosumi artifact gc`, etc.
 - Hand `TAKOSUMI_ARTIFACT_FETCH_TOKEN` to the agent host and the agent's
   connectors can fetch blobs via GET / HEAD `/v1/artifacts/:hash`, but POST
   (upload) / DELETE / GC return 401 from the kernel.
@@ -390,9 +384,8 @@ uses the deploy token when no fetch token is configured).
 
 ## Related docs
 
-- [Manifest spec (JA)](/manifest)
-- [Shape catalog (JA)](/reference/shapes)
+- [AppSpec (JA)](/reference/app-spec)
+- [Component kind catalog (JA)](/reference/component-kind-catalog)
 - [Provider plugins (JA)](/reference/providers)
-- [Templates (JA)](/reference/templates)
 - [Operator bootstrap (JA)](/operator/bootstrap) (kernel ↔ agent integration
   details)
