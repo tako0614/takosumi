@@ -19,14 +19,13 @@ default で配線され、1 個 (`@takos/deno-deploy`) は opt-in。 plugin は 
 Source roots:
 
 - `packages/contract/src/provider-plugin.ts` — public `ProviderPlugin` contract
-  と `registerProvider` registry。`ShapeRef` 型名は internal compatibility name
-  で、public docs では component kind として説明する。
+  と `KernelPlugin` interface (= `name` / `version` / `provides[]` (kind URI) /
+  `capabilities` / `apply` / `destroy` / install/deployment hook)。
 - `packages/plugins/src/kinds/<kind>.ts` — bundled component kind schema /
   outputs。
-- `packages/plugins/src/providers/<cloud>/*.ts` — 個別 provider implementation。
-- `packages/plugins/src/shape-providers/factories.ts` — production wiring、
-  `createTakosumiProductionProviders(opts)` として exposed (旧 path 名を保持する
-  internal wrapper)。
+- `packages/plugins/src/bundled/<kind>-<provider>.ts` — operator-facing
+  `KernelPlugin` factory (`createPaaSApp({ plugins: [...] })` に直接渡せる plain
+  function)。 operator は env から credential を読んで factory に渡す。
 
 ## Capability vocabulary: open string + reserved prefix
 
@@ -53,8 +52,8 @@ coordination を要する。 既存 reserved prefix 内では、 `takos.*` / `sy
 
 同梱されている 21 個の provider をクラウド別にグルーピング。 すべて
 `@takos/<cloud>-*` 形式の id を持つ。 component kind と capability 集合は
-`packages/plugins/src/shape-providers/factories.ts` と完全に一致する。
-**extension policy** 列は、サードパーティが標準の provider PR フローで
+`packages/plugins/src/bundled/<kind>-<provider>.ts` の各 factory と完全に一致
+する。 **extension policy** 列は、サードパーティが標準の provider PR フローで
 capability を追加してよいか (extensible)、 あるいは in-tree provider 内で
 capability 集合が閉じているか (closed-within-provider) を示す。
 
@@ -132,9 +131,10 @@ lifecycle が走る前の validation 時点で reject される。
    set して、 agent の `ConnectorBootOptions` が起動時に Deno Deploy connector
    を resolve するようにする。 credential は agent だけが保持し、kernel は token
    を見ない。
-2. **kernel 側 wrapper を有効化**。 `createTakosumiProductionProviders(opts)` に
-   `enableDenoDeploy: true` を渡す。 wrapper plugin は `worker` に対して
-   register され、AppSpec から selectable になる。
+2. **kernel 側で plugin を attach**。 operator は
+   `createPaaSApp({ plugins: [denoDeployWorkerProvider({ token, organizationId }), ...] })`
+   で `denoDeployWorkerProvider` factory を plain array に追加する。 plugin は
+   `worker` kind に対して register され、AppSpec から selectable になる。
 
 検証は `worker` component の provider hint を `@takos/deno-deploy` にして apply
 を発行する。 kernel は apply lifecycle envelope を記録し、 agent は inject
@@ -143,42 +143,47 @@ lifecycle が走る前の validation 時点で reject される。
 
 ## Public API surface
 
-`registerProvider` エントリポイント (source は
-`packages/contract/src/provider-plugin.ts`) は、 in-process registry に plugin
-を install する v1 の方法。
+operator-facing entry は **`createPaaSApp({ plugins })`** の plain array (= Vite
+plugin pattern)。 各 plugin は `KernelPlugin` を返す factory function で、
+provider lifecycle と install / deployment hook を 1 つの interface で表現する。
 
 ```ts
-function registerProvider(
-  provider: ProviderPlugin,
-  options?: RegisterProviderOptions,
-): ProviderPlugin | undefined;
+import { createPaaSApp } from "@takos/takosumi-kernel";
+import {
+  awsS3ObjectStoreProvider,
+  cloudflareWorkerProvider,
+} from "@takos/takosumi-plugins/bundled";
+
+const { app } = await createPaaSApp({
+  plugins: [
+    cloudflareWorkerProvider({ accountId, apiToken }),
+    awsS3ObjectStoreProvider({ region, accessKeyId, secretAccessKey }),
+  ],
+});
 ```
 
-`ProviderPlugin` の形:
+`KernelPlugin` interface (= `packages/contract/src/plugin.ts`):
 
 ```ts
-interface ProviderPlugin<Spec, Outputs, Capability extends string = string> {
-  readonly id: string; // e.g. "@takos/aws-s3"
+interface KernelPlugin {
+  readonly name: string; // e.g. "@takos/cloudflare-workers"
   readonly version: string; // semver
-  readonly implements: ShapeRef; // internal compatibility name for component kind ref
-  readonly capabilities: readonly Capability[];
-  validate?(spec: Spec, issues: ProviderValidationIssue[]): void;
-  apply(spec: Spec, ctx: PlatformContext): Promise<ApplyResult<Outputs>>;
-  destroy(handle: ResourceHandle, ctx: PlatformContext): Promise<void>;
-  status(
-    handle: ResourceHandle,
-    ctx: PlatformContext,
-  ): Promise<ResourceStatus<Outputs>>;
+  readonly provides: readonly string[]; // canonical kind URI(s)
+  readonly capabilities: readonly string[];
+  apply(spec, ctx): Promise<ApplyResult>;
+  destroy(handle, ctx): Promise<void>;
+  onInstallStart?(ctx): Promise<void>;
+  onInstallComplete?(ctx): Promise<void>;
+  onDeploymentStart?(ctx): Promise<void>;
+  onDeploymentComplete?(ctx): Promise<void>;
 }
 ```
 
-Required fields:
-`id`、`version`、`implements`、`capabilities`、`apply`、`destroy`、`status`。
-`validate` は optional。 `registerProvider` は同じ `id`
-が置き換えられた場合に直前の登録を返す。 `{ allowOverride: true }` を渡すと
-collision warning が抑制される。 `PlatformContext` は tenant-scoped secret
-store、KMS port、object storage port、observability sink、 `${ref:...}`
-resolution で使われる resolved-output map を運ぶ。
+bundled `kernelPluginFromProviderPlugin()` adapter は既存 `ProviderPlugin`
+factory を `KernelPlugin` に lift する helper。 `PlatformContext` は
+tenant-scoped secret store、 KMS port、 object storage port、 observability
+sink、 use-edge resolved-output map を運ぶ。 plain array attach は plugin
+marketplace / signed manifest fetch / port-based plugin host を必要としない。
 
 ## Cross-references
 
