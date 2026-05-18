@@ -43,6 +43,7 @@ import type {
   SourcePin,
   SourceSummary,
 } from "takosumi-contract/installer-api";
+import type { NamespaceMaterial } from "takosumi-contract/plugin";
 import { fetchGitSource, parseAppSpec } from "takosumi-installer";
 import {
   createKernelPluginRegistry,
@@ -50,6 +51,7 @@ import {
   type KernelPluginRegistry,
 } from "../../plugins/mod.ts";
 import { log } from "../../shared/log.ts";
+import { BindingResolver, type ResolvedBinding } from "../binding/mod.ts";
 import {
   type DeploymentStore,
   InMemoryDeploymentStore,
@@ -63,9 +65,9 @@ import {
  * one of these from each `Component` and forwards it to the plugin
  * resolved via `provides[]`.
  *
- * Phase B: `upstreamOutputs` is a compile-only placeholder retained for
- * the legacy adapter shim until Phase C replaces the pipeline with the
- * namespace pub/sub registry (`listenedMaterials`).
+ * Phase C: the namespace pub/sub registry is materialized at apply time;
+ * `listenedMaterials` carries the resolved upstream material payload for
+ * each path the component listens to.
  */
 export interface ProviderApplyContext {
   readonly installationId: string;
@@ -73,20 +75,30 @@ export interface ProviderApplyContext {
   readonly component: Component;
   readonly buildOutput?: DeploymentBuildArtifact;
   /**
-   * Outputs from previously-applied components, keyed by component name.
-   * Replaced by `listenedMaterials` in Phase C; retained as a placeholder
-   * so the kernel pipeline compiles against the new contract.
+   * Materials this component listens to, keyed by the namespace path as
+   * declared in `Component.listen`. Pre-resolved by the installer from
+   * the pub/sub registry; the listener's `applyListen` (or the kernel
+   * default) has already emitted env / mount / target descriptors before
+   * the plugin's `apply` is called.
    */
-  readonly upstreamOutputs: Readonly<
-    Record<string, Readonly<Record<string, string>>>
+  readonly listenedMaterials: Readonly<
+    Record<string, NamespaceMaterial>
   >;
+  /**
+   * Env / mount / target descriptors produced by `applyListen` for each
+   * listen edge. Plugins may inspect these to apply runtime injection;
+   * the descriptors are also persisted on the Deployment outputs.
+   */
+  readonly resolvedBindings: readonly ResolvedBinding[];
 }
 
 export interface ProviderApplyResult {
   readonly resource: DeploymentResource;
   /**
-   * Outputs the plugin emits to the namespace pub/sub registry (Phase B
-   * model). Replaces the prior `use:` edge outputs.
+   * Outputs the plugin emits — surfaced as the input to
+   * {@link NamespaceMaterial} construction in
+   * `KernelPlugin.publishMaterial` (or the kernel default that registers
+   * `outputs` verbatim).
    */
   readonly outputs: Readonly<Record<string, string>>;
 }
@@ -159,6 +171,7 @@ export class InstallerPipeline {
   readonly #deployments: DeploymentStore;
   readonly #providers: InstallerProviderRegistry;
   readonly #plugins: readonly KernelPlugin[];
+  readonly #pluginRegistry: KernelPluginRegistry;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #localSourceRoot?: string;
@@ -173,9 +186,10 @@ export class InstallerPipeline {
     this.#deployments = dependencies.deployments ??
       new InMemoryDeploymentStore();
     this.#plugins = dependencies.plugins ?? [];
+    this.#pluginRegistry = createKernelPluginRegistry(this.#plugins);
     this.#providers = dependencies.providers ??
       (dependencies.plugins && dependencies.plugins.length > 0
-        ? installerProviderRegistryFromPlugins(dependencies.plugins)
+        ? installerProviderRegistryFromPluginRegistry(this.#pluginRegistry)
         : new NoopProviderRegistry());
     this.#newId = dependencies.newId ??
       ((prefix: string) =>
@@ -185,6 +199,38 @@ export class InstallerPipeline {
     this.#runBuild = dependencies.runBuild ?? defaultRunBuild;
     this.#estimateCost = dependencies.estimateCost ??
       (() => ({ currency: "JPY", monthly: 0 }));
+  }
+
+  /**
+   * Compute the {@link NamespaceMaterial} for a single publish edge.
+   * Delegates to the plugin's `publishMaterial` hook when present;
+   * otherwise the kernel default registers the plugin's `outputs` map
+   * verbatim (every output value becomes a string-valued material
+   * field).
+   */
+  async #publishMaterial(ctx: {
+    readonly installationId: string;
+    readonly componentName: string;
+    readonly component: Component;
+    readonly namespacePath: string;
+    readonly outputs: Readonly<Record<string, string>>;
+  }): Promise<NamespaceMaterial> {
+    const plugin = findPluginForKind(this.#pluginRegistry, ctx.component.kind);
+    if (plugin && typeof plugin.publishMaterial === "function") {
+      return await plugin.publishMaterial({
+        installationId: ctx.installationId,
+        componentName: ctx.componentName,
+        component: ctx.component,
+        namespacePath: ctx.namespacePath,
+        outputs: ctx.outputs,
+      });
+    }
+    // Kernel default: surface plugin.outputs as the material payload.
+    const material: Record<string, string> = {};
+    for (const [key, value] of Object.entries(ctx.outputs)) {
+      material[key] = value;
+    }
+    return material;
   }
 
   async installationDryRun(
@@ -389,7 +435,18 @@ export class InstallerPipeline {
     const now = this.#now();
     const builds: DeploymentBuildArtifact[] = [];
     const resources: DeploymentResource[] = [];
-    const upstreamOutputs: Record<string, Record<string, string>> = {};
+
+    // Namespace registry — single Installation-scoped pub/sub store used
+    // for both publish (= component.publish + auto-namespace) and listen
+    // (= component.listen) flows. Built incrementally as each component
+    // applies in topological order.
+    const registry = new NamespaceRegistry();
+    const resolver = new BindingResolver({
+      findMaterializer: (kind) => {
+        if (!kind) return undefined;
+        return findPluginForKind(this.#pluginRegistry, kind);
+      },
+    });
 
     // Stable pre-apply Deployment snapshot used as the lifecycle hook
     // context. Status is "running" pending materialization; the
@@ -411,6 +468,7 @@ export class InstallerPipeline {
 
     try {
       const order = topologicalOrder(input.appSpec);
+      const appId = input.appSpec.metadata.id;
       for (const componentName of order) {
         const component = input.appSpec.components[componentName];
         let buildArtifact: DeploymentBuildArtifact | undefined;
@@ -428,15 +486,62 @@ export class InstallerPipeline {
           };
           builds.push(buildArtifact);
         }
+
+        // Resolve listen edges against the current registry. Listens to
+        // paths with no registered publisher are skipped here — they may
+        // be supplied by external systems and surfaced via the plugin's
+        // own machinery (e.g. an OIDC client provider that publishes to
+        // a takosumi-accounts.* namespace).
+        const listenedMaterials: Record<string, NamespaceMaterial> = {};
+        const resolvedBindings: ResolvedBinding[] = [];
+        if (component.listen) {
+          for (const [nsPath, options] of Object.entries(component.listen)) {
+            const material = registry.get(nsPath);
+            if (!material) continue;
+            const binding = await resolver.resolveEdge({
+              installationId: input.installation.id,
+              listenerComponent: componentName,
+              listenerKind: component.kind,
+              listenerComponentRef: component,
+              namespacePath: nsPath,
+              options,
+              material,
+            });
+            listenedMaterials[nsPath] = material;
+            resolvedBindings.push(binding);
+          }
+        }
+
         const applied = await this.#providers.apply({
           installationId: input.installation.id,
           componentName,
           component,
           buildOutput: buildArtifact,
-          upstreamOutputs: { ...upstreamOutputs },
+          listenedMaterials,
+          resolvedBindings,
         });
         resources.push(applied.resource);
-        upstreamOutputs[componentName] = { ...applied.outputs };
+
+        // Publish flow: register material to (a) the auto-namespace
+        // `<app-id>.<component-name>` and (b) any explicit `publish:`
+        // entries on the component. If a KernelPlugin exposes
+        // `publishMaterial`, call it once per path; otherwise the kernel
+        // default materializes the plugin's `outputs` map verbatim.
+        const publishPaths = collectPublishPaths(
+          appId,
+          componentName,
+          component,
+        );
+        for (const nsPath of publishPaths) {
+          const material = await this.#publishMaterial({
+            installationId: input.installation.id,
+            componentName,
+            component,
+            namespacePath: nsPath,
+            outputs: applied.outputs,
+          });
+          registry.publish(nsPath, componentName, material);
+        }
       }
       const outputs: DeploymentOutputs = {
         builds: builds.length === 0 ? undefined : builds,
@@ -631,7 +736,14 @@ class NoopProviderRegistry implements InstallerProviderRegistry {
 export function installerProviderRegistryFromPlugins(
   plugins: readonly KernelPlugin[],
 ): InstallerProviderRegistry {
-  const registry: KernelPluginRegistry = createKernelPluginRegistry(plugins);
+  return installerProviderRegistryFromPluginRegistry(
+    createKernelPluginRegistry(plugins),
+  );
+}
+
+function installerProviderRegistryFromPluginRegistry(
+  registry: KernelPluginRegistry,
+): InstallerProviderRegistry {
   return {
     async apply(context: ProviderApplyContext): Promise<ProviderApplyResult> {
       const kind = context.component.kind;
@@ -642,10 +754,6 @@ export function installerProviderRegistryFromPlugins(
           `no kernel plugin advertises kind ${kind} (component ${context.componentName})`,
         );
       }
-      // Phase B: the namespace pub/sub model replaces use-edge outputs with
-      // pre-resolved listened materials. The placeholder shim below maps
-      // `upstreamOutputs` into an empty `listenedMaterials` record; Phase C
-      // will resolve `Component.listen` against the registry properly.
       const result = await plugin.apply({
         installationId: context.installationId,
         componentName: context.componentName,
@@ -656,7 +764,7 @@ export function installerProviderRegistryFromPlugins(
             uri: context.buildOutput.uri,
           }
           : undefined,
-        listenedMaterials: {},
+        listenedMaterials: context.listenedMaterials,
       });
       return {
         resource: {
@@ -669,6 +777,67 @@ export function installerProviderRegistryFromPlugins(
       };
     },
   };
+}
+
+/**
+ * In-memory namespace registry — owns the (path → publisher / material)
+ * map for one Deployment apply. Single-publisher invariant is enforced by
+ * the AppSpec parser, but the registry guards against runtime duplicates
+ * (e.g. operator plugins that register additional paths via plugin-side
+ * publish hooks).
+ */
+class NamespaceRegistry {
+  readonly #materials = new Map<string, NamespaceMaterial>();
+  readonly #publishers = new Map<string, string>();
+
+  publish(
+    namespacePath: string,
+    publisher: string,
+    material: NamespaceMaterial,
+  ): void {
+    const existing = this.#publishers.get(namespacePath);
+    if (existing !== undefined && existing !== publisher) {
+      throw new InstallerPipelineError(
+        "failed_precondition",
+        `namespace path ${JSON.stringify(namespacePath)} is already ` +
+          `published by ${JSON.stringify(existing)}; cannot republish from ` +
+          JSON.stringify(publisher),
+      );
+    }
+    this.#publishers.set(namespacePath, publisher);
+    this.#materials.set(namespacePath, material);
+  }
+
+  get(namespacePath: string): NamespaceMaterial | undefined {
+    return this.#materials.get(namespacePath);
+  }
+
+  snapshot(): Readonly<Record<string, NamespaceMaterial>> {
+    return Object.fromEntries(this.#materials.entries());
+  }
+}
+
+/**
+ * Compute the set of namespace paths a component publishes to. The kernel
+ * always auto-registers `<app-id>.<component-name>` so sibling listeners
+ * can resolve the component without operator boilerplate, plus any
+ * explicit `Component.publish` entries (deduplicated).
+ */
+function collectPublishPaths(
+  appId: string,
+  componentName: string,
+  component: Component,
+): readonly string[] {
+  const autoPath = `${appId}.${componentName}`;
+  const explicit = component.publish ?? [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const path of [autoPath, ...explicit]) {
+    if (seen.has(path)) continue;
+    seen.add(path);
+    out.push(path);
+  }
+  return out;
 }
 
 export type InstallerPipelineErrorCode =
@@ -763,46 +932,73 @@ function topologicalOrder(appSpec: AppSpec): readonly string[] {
   const visited = new Set<string>();
   const visiting = new Set<string>();
 
-  // Phase B: build a publisher index so the topology walks publish/listen
-  // edges (listener → publisher). The yaml-parser has already rejected
-  // cycles and duplicate publishers, but we re-check here so the
-  // installer also surfaces a precise diagnostic if it is handed a
-  // pre-parsed AppSpec from a non-canonical source.
+  // Build a publisher index. Two publisher kinds resolve here:
+  //   1. Explicit `Component.publish` entries
+  //   2. Kernel auto-namespace `<app-id>.<component-name>` (so sibling
+  //      listens like `my-app.db` route to `my-app`'s `db` component
+  //      without operator boilerplate).
+  //
+  // The yaml-parser has already rejected cycles and duplicate publishers
+  // among explicit edges; the installer re-checks at runtime so a
+  // pre-parsed AppSpec from a non-canonical source still surfaces a
+  // precise diagnostic.
+  const appId = appSpec.metadata.id;
   const publisherByPath = new Map<string, string>();
   for (const [name, component] of Object.entries(appSpec.components)) {
+    publisherByPath.set(`${appId}.${name}`, name);
     if (!component.publish) continue;
     for (const nsPath of component.publish) {
+      const prior = publisherByPath.get(nsPath);
+      if (prior !== undefined && prior !== name) {
+        throw new InstallerPipelineError(
+          "failed_precondition",
+          `namespace path ${JSON.stringify(nsPath)} is published by both ` +
+            `${JSON.stringify(prior)} and ${JSON.stringify(name)}`,
+        );
+      }
       publisherByPath.set(nsPath, name);
     }
   }
 
-  const visit = (node: string) => {
+  const visit = (node: string, stack: string[]) => {
     if (visited.has(node)) return;
     if (visiting.has(node)) {
+      const cycleStart = stack.indexOf(node);
       throw new InstallerPipelineError(
         "failed_precondition",
-        `publish/listen cycle detected at component ${node}`,
+        `publish/listen cycle detected: ${
+          stack.slice(cycleStart).join(" → ")
+        } → ${node}`,
       );
     }
     visiting.add(node);
+    stack.push(node);
     const listen = appSpec.components[node]?.listen;
     if (listen) {
       for (const nsPath of Object.keys(listen)) {
         const publisher = publisherByPath.get(nsPath);
         // External publisher (= no AppSpec component owns this path) is
-        // a no-op edge in topology; Phase C resolves the listened
-        // material from the registry directly.
+        // a no-op edge in topology; the installer resolves such
+        // materials from the registry directly (or skips when absent).
         if (publisher === undefined) continue;
-        visit(publisher);
+        if (publisher === node) {
+          throw new InstallerPipelineError(
+            "failed_precondition",
+            `${node} listens to a namespace path it publishes itself ` +
+              `(${JSON.stringify(nsPath)}); self-loops are not permitted`,
+          );
+        }
+        visit(publisher, stack);
       }
     }
+    stack.pop();
     visiting.delete(node);
     visited.add(node);
     order.push(node);
   };
 
   for (const name of Object.keys(appSpec.components)) {
-    visit(name);
+    visit(name, []);
   }
   return order;
 }
