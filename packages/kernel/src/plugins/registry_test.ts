@@ -1,435 +1,141 @@
 import assert from "node:assert/strict";
-import {
-  type KernelPluginPortKind,
-  TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-} from "takosumi-contract";
-import type { ProviderMaterializer } from "../adapters/provider/mod.ts";
+import type { KernelPlugin } from "takosumi-contract";
 import {
   createKernelPluginRegistry,
-  createPluginAdapterOverrides,
+  findPluginForKind,
+  normalizeKindToUri,
 } from "./registry.ts";
-import { createReferenceKernelPlugin } from "./reference.ts";
-import type { TakosPaaSKernelPlugin } from "./types.ts";
 
-const allPorts = [
-  "auth",
-  "coordination",
-  "kms",
-  "notification",
-  "object-storage",
-  "operator-config",
-  "provider",
-  "queue",
-  "router-config",
-  "runtime-agent",
-  "secret-store",
-  "source",
-  "storage",
-  "observability",
-] as const satisfies readonly KernelPluginPortKind[];
+function buildPlugin(
+  name: string,
+  provides: readonly string[],
+): KernelPlugin {
+  return {
+    name,
+    version: "1.0.0",
+    provides,
+    apply: (ctx) =>
+      Promise.resolve({
+        providerResourceId: `${name}://${ctx.componentName}`,
+        outputs: {},
+      }),
+  };
+}
 
-Deno.test("kernel plugin registry exposes registered plugin manifests", () => {
-  const plugin = createReferenceKernelPlugin();
-  const registry = createKernelPluginRegistry([plugin]);
+Deno.test("registry exposes registered plugins in registration order", () => {
+  const a = buildPlugin("@example/a", ["https://example.test/kinds/v1/a"]);
+  const b = buildPlugin("@example/b", ["https://example.test/kinds/v1/b"]);
+  const registry = createKernelPluginRegistry([a, b]);
 
-  assert.equal(registry.get("takos.kernel.reference"), plugin);
   assert.deepEqual(
-    registry.list().map((item) => item.manifest.id),
-    ["takos.kernel.reference"],
+    registry.list().map((plugin) => plugin.name),
+    ["@example/a", "@example/b"],
   );
 });
 
-Deno.test("kernel plugin registry rejects duplicate plugin ids", () => {
-  const plugin = createReferenceKernelPlugin();
+Deno.test("registry resolves built-in short name to canonical URI lookup", () => {
+  const workerPlugin = buildPlugin(
+    "@takos/workers-reference",
+    ["https://takosumi.com/kinds/v1/worker"],
+  );
+  const registry = createKernelPluginRegistry([workerPlugin]);
+
+  assert.equal(
+    findPluginForKind(registry, "worker")?.name,
+    "@takos/workers-reference",
+  );
+  assert.equal(
+    findPluginForKind(registry, "https://takosumi.com/kinds/v1/worker")?.name,
+    "@takos/workers-reference",
+  );
+});
+
+Deno.test("registry resolves operator-defined kind URI without normalization", () => {
+  const operatorPlugin = buildPlugin(
+    "@operator/lambda",
+    ["https://operator.example.com/kinds/lambda"],
+  );
+  const registry = createKernelPluginRegistry([operatorPlugin]);
+
+  assert.equal(
+    findPluginForKind(registry, "https://operator.example.com/kinds/lambda")
+      ?.name,
+    "@operator/lambda",
+  );
+});
+
+Deno.test("registry rejects duplicate plugin name", () => {
+  const a = buildPlugin("@example/dup", ["https://example.test/kinds/v1/a"]);
+  const b = buildPlugin("@example/dup", ["https://example.test/kinds/v1/b"]);
 
   assert.throws(
-    () => createKernelPluginRegistry([plugin, plugin]),
-    /kernel plugin already registered: takos.kernel.reference/,
+    () => createKernelPluginRegistry([a, b]),
+    /kernel plugin already registered: @example\/dup/,
   );
 });
 
-Deno.test("kernel plugin registry has no bundled official provider plugins", () => {
-  const registry = createKernelPluginRegistry([createReferenceKernelPlugin()]);
-
-  assert.equal(registry.get("takos.kernel.self-hosted"), undefined);
-  assert.equal(registry.get("takos.kernel.cloudflare"), undefined);
-  assert.equal(registry.get("takos.kernel.kubernetes"), undefined);
-});
-
-Deno.test("production rejects reference plugin selection", () => {
-  const plugin = createReferenceKernelPlugin();
-  const registry = createKernelPluginRegistry([plugin]);
+Deno.test("registry rejects conflicting kind URI providers", () => {
+  const a = buildPlugin("@example/a", ["https://example.test/kinds/v1/x"]);
+  const b = buildPlugin("@example/b", ["https://example.test/kinds/v1/x"]);
 
   assert.throws(
-    () =>
-      createPluginAdapterOverrides({
-        registry,
-        selectedPluginIds: { provider: plugin.manifest.id },
-        context: createPluginContext({
-          environment: "production",
-          selectedPluginIds: { provider: plugin.manifest.id },
-        }),
-      }),
-    /production cannot select reference\/noop kernel plugin takos\.kernel\.reference/,
+    () => createKernelPluginRegistry([a, b]),
+    /kernel plugin @example\/b conflicts on kind https:\/\/example\.test\/kinds\/v1\/x; @example\/a already provides it/,
   );
 });
 
-Deno.test("production accepts explicitly registered external plugin for selected ports", async () => {
-  const plugin = createExternalReferenceBackedPlugin("external.kernel.test");
-  const registry = createKernelPluginRegistry([plugin]);
-  const overrides = createPluginAdapterOverrides({
-    registry,
-    selectedPluginIds: {
-      provider: plugin.manifest.id,
-      storage: plugin.manifest.id,
-      "object-storage": plugin.manifest.id,
-    },
-    context: createPluginContext({
-      environment: "production",
-      selectedPluginIds: {
-        provider: plugin.manifest.id,
-        storage: plugin.manifest.id,
-        "object-storage": plugin.manifest.id,
-      },
-    }),
-  });
-
-  assert.ok(overrides.provider);
-  assert.ok(overrides.storage);
-  assert.ok(overrides.objectStorage);
-  const plan = await overrides.provider.materialize({
-    id: "desired_1",
-    spaceId: "space_1",
-    groupId: "group_1",
-    activationId: "activation_1",
-    appName: "app",
-    materializedAt: "2026-04-29T00:00:00.000Z",
-    workloads: [],
-    resources: [],
-    routes: [],
-  });
-  assert.equal(plan.provider, "noop");
-});
-
-Deno.test("selected plugin must declare every selected port", () => {
-  const plugin = createExternalReferenceBackedPlugin("external.provider.only", [
-    "provider",
-  ]);
-  const registry = createKernelPluginRegistry([plugin]);
-
+Deno.test("registry refuses plugin with empty provides[]", () => {
   assert.throws(
     () =>
-      createPluginAdapterOverrides({
-        registry,
-        selectedPluginIds: {
-          provider: plugin.manifest.id,
-          storage: plugin.manifest.id,
-        },
-        context: createPluginContext({
-          environment: "production",
-          selectedPluginIds: {
-            provider: plugin.manifest.id,
-            storage: plugin.manifest.id,
-          },
-        }),
-      }),
-    /kernel plugin external\.provider\.only does not declare capability for selected port storage/,
-  );
-});
-
-Deno.test("selected plugin must return every selected adapter", () => {
-  const plugin: TakosPaaSKernelPlugin = {
-    manifest: {
-      id: "external.incomplete",
-      name: "Incomplete External Plugin",
-      version: "1.0.0",
-      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-      capabilities: [
+      createKernelPluginRegistry([
         {
-          port: "provider",
-          kind: "external-test",
-          externalIo: ["network"],
+          name: "@example/bad",
+          version: "1.0.0",
+          provides: [],
+          apply: () =>
+            Promise.resolve({ providerResourceId: "x", outputs: {} }),
         },
-      ],
-    },
-    createAdapters() {
-      return {};
-    },
-  };
-  const registry = createKernelPluginRegistry([plugin]);
-
-  assert.throws(
-    () =>
-      createPluginAdapterOverrides({
-        registry,
-        selectedPluginIds: { provider: plugin.manifest.id },
-        context: createPluginContext({
-          environment: "production",
-          selectedPluginIds: { provider: plugin.manifest.id },
-        }),
-      }),
-    /kernel plugin external\.incomplete did not provide adapter provider for selected port provider/,
+      ]),
+    /must advertise at least one kind URI/,
   );
 });
 
-Deno.test("selected plugin must not return adapters for unselected ports", () => {
-  const reference = createReferenceKernelPlugin();
-  const referenceAdapters = reference.createAdapters(createPluginContext({}));
-  const plugin: TakosPaaSKernelPlugin = {
-    manifest: {
-      id: "external.overbroad",
-      name: "Overbroad External Plugin",
-      version: "1.0.0",
-      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-      capabilities: [
+Deno.test("registry refuses plugin without apply()", () => {
+  assert.throws(
+    () =>
+      createKernelPluginRegistry([
         {
-          port: "provider",
-          kind: "external-test",
-          externalIo: ["network"],
+          name: "@example/no-apply",
+          version: "1.0.0",
+          provides: ["https://example.test/kinds/v1/x"],
+          // @ts-expect-error testing runtime guard
+          apply: undefined,
         },
-      ],
-    },
-    createAdapters() {
-      return {
-        provider: referenceAdapters.provider,
-        storage: referenceAdapters.storage,
-      };
-    },
-  };
-  const registry = createKernelPluginRegistry([plugin]);
-
-  assert.throws(
-    () =>
-      createPluginAdapterOverrides({
-        registry,
-        selectedPluginIds: { provider: plugin.manifest.id },
-        context: createPluginContext({
-          selectedPluginIds: { provider: plugin.manifest.id },
-        }),
-      }),
-    /kernel plugin external\.overbroad provided unselected adapter storage/,
+      ]),
+    /must define apply\(\)/,
   );
 });
 
-Deno.test("selected plugins cannot claim duplicate adapter ownership", () => {
-  const reference = createReferenceKernelPlugin();
-  const referenceAdapters = reference.createAdapters(createPluginContext({}));
-  const providerPlugin: TakosPaaSKernelPlugin = {
-    manifest: {
-      id: "external.provider.owner",
-      name: "Provider Owner",
-      version: "1.0.0",
-      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-      capabilities: [{
-        port: "provider",
-        kind: "external-test",
-        externalIo: ["network"],
-      }],
-    },
-    createAdapters() {
-      return { provider: referenceAdapters.provider };
-    },
-  };
-  const storagePlugin: TakosPaaSKernelPlugin = {
-    manifest: {
-      id: "external.storage.owner",
-      name: "Storage Owner",
-      version: "1.0.0",
-      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-      capabilities: [{
-        port: "storage",
-        kind: "external-test",
-        externalIo: ["network"],
-      }],
-    },
-    createAdapters() {
-      return {
-        provider: referenceAdapters.provider,
-        storage: referenceAdapters.storage,
-      };
-    },
-  };
-  const registry = createKernelPluginRegistry([providerPlugin, storagePlugin]);
-
-  assert.throws(
-    () =>
-      createPluginAdapterOverrides({
-        registry,
-        selectedPluginIds: {
-          provider: providerPlugin.manifest.id,
-          storage: storagePlugin.manifest.id,
-        },
-        context: createPluginContext({
-          selectedPluginIds: {
-            provider: providerPlugin.manifest.id,
-            storage: storagePlugin.manifest.id,
-          },
-        }),
-      }),
-    /kernel plugin external\.storage\.owner attempted duplicate ownership of adapter provider/,
+Deno.test("normalizeKindToUri short names resolve to canonical URI", () => {
+  assert.equal(
+    normalizeKindToUri("worker"),
+    "https://takosumi.com/kinds/v1/worker",
+  );
+  assert.equal(
+    normalizeKindToUri("https://takosumi.com/kinds/v1/postgres"),
+    "https://takosumi.com/kinds/v1/postgres",
+  );
+  assert.equal(
+    normalizeKindToUri("https://operator.example.com/kinds/lambda"),
+    "https://operator.example.com/kinds/lambda",
   );
 });
 
-Deno.test("external plugin can resolve operator-injected clients", async () => {
-  const injectedProvider: ProviderMaterializer = {
-    materialize(desiredState) {
-      return Promise.resolve({
-        id: "provider_plan_injected",
-        provider: "injected-provider",
-        desiredStateId: desiredState.id,
-        recordedAt: "2026-04-29T00:00:00.000Z",
-        operations: [],
-      });
-    },
-    listRecordedOperations: () => Promise.resolve([]),
-    clearRecordedOperations: () => Promise.resolve(),
-  };
-  const plugin: TakosPaaSKernelPlugin = {
-    manifest: {
-      id: "external.client-registry",
-      name: "External Client Registry Plugin",
-      version: "1.0.0",
-      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-      capabilities: [
-        {
-          port: "provider",
-          kind: "external-test",
-          externalIo: ["network", "provider-control-plane"],
-        },
-      ],
-    },
-    createAdapters(context) {
-      const config = context.operatorConfig?.[this.manifest.id];
-      const ref = isRecord(config) && isRecord(config.provider)
-        ? config.provider.operatorClientRef
-        : undefined;
-      if (typeof ref !== "string") {
-        throw new Error("external.client-registry requires provider ref");
-      }
-      const provider = context.clientRegistry?.get<ProviderMaterializer>(ref);
-      if (!provider) {
-        throw new Error(`missing injected provider client: ${ref}`);
-      }
-      return { provider };
-    },
-  };
-  const registry = createKernelPluginRegistry([plugin]);
-  const overrides = createPluginAdapterOverrides({
-    registry,
-    selectedPluginIds: { provider: plugin.manifest.id },
-    context: createPluginContext({
-      environment: "production",
-      selectedPluginIds: { provider: plugin.manifest.id },
-      operatorConfig: {
-        [plugin.manifest.id]: {
-          provider: { operatorClientRef: "provider-client" },
-        },
-      },
-      clientRegistry: {
-        get: <T = unknown>(ref: string) =>
-          ref === "provider-client" ? injectedProvider as T : undefined,
-      },
-    }),
-  });
-
-  const plan = await overrides.provider?.materialize({
-    id: "desired_1",
-    spaceId: "space_1",
-    groupId: "group_1",
-    activationId: "activation_1",
-    appName: "app",
-    materializedAt: "2026-04-29T00:00:00.000Z",
-    workloads: [],
-    resources: [],
-    routes: [],
-  });
-  assert.equal(plan?.id, "provider_plan_injected");
+Deno.test("findPluginForKind returns undefined when no plugin matches", () => {
+  const registry = createKernelPluginRegistry([]);
+  assert.equal(findPluginForKind(registry, "worker"), undefined);
+  assert.equal(
+    findPluginForKind(registry, "https://unknown.test/kinds/v1/x"),
+    undefined,
+  );
 });
-
-function createExternalReferenceBackedPlugin(
-  id: string,
-  ports: readonly KernelPluginPortKind[] = allPorts,
-): TakosPaaSKernelPlugin {
-  const reference = createReferenceKernelPlugin();
-  return {
-    manifest: {
-      id,
-      name: "External Reference Backed Test Plugin",
-      version: "1.0.0",
-      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-      capabilities: ports.map((port) => ({
-        port,
-        kind: "external-test",
-        externalIo: ["network"],
-      })),
-    },
-    createAdapters(context) {
-      const adapters = reference.createAdapters(context);
-      const selectedPorts = ports.filter((port) =>
-        context.selectedPluginIds[port] === id
-      );
-      return Object.fromEntries(
-        selectedPorts.flatMap((port) => {
-          const adapterKey = adapterKeyForPort(port);
-          return adapterKey ? [[adapterKey, adapters[adapterKey]]] : [];
-        }),
-      ) as ReturnType<TakosPaaSKernelPlugin["createAdapters"]>;
-    },
-  };
-}
-
-function adapterKeyForPort(
-  port: KernelPluginPortKind,
-): keyof ReturnType<TakosPaaSKernelPlugin["createAdapters"]> | undefined {
-  switch (port) {
-    case "auth":
-      return "auth";
-    case "coordination":
-      return "coordination";
-    case "kms":
-      return "kms";
-    case "notification":
-      return "notifications";
-    case "object-storage":
-      return "objectStorage";
-    case "operator-config":
-      return "operatorConfig";
-    case "provider":
-      return "provider";
-    case "queue":
-      return "queue";
-    case "router-config":
-      return "routerConfig";
-    case "secret-store":
-      return "secrets";
-    case "source":
-      return "source";
-    case "storage":
-      return "storage";
-    case "observability":
-      return "observability";
-    case "runtime-agent":
-      return "runtimeAgent";
-  }
-}
-
-function createPluginContext(
-  overrides: Partial<
-    Parameters<typeof createPluginAdapterOverrides>[0]["context"]
-  >,
-): Parameters<typeof createPluginAdapterOverrides>[0]["context"] {
-  return {
-    kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-    environment: "local",
-    processRole: "takosumi-api",
-    selectedPluginIds: {},
-    operatorConfig: {},
-    clock: () => new Date("2026-04-29T00:00:00.000Z"),
-    idGenerator: () => "id",
-    ...overrides,
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}

@@ -106,9 +106,7 @@ export function createAppStores(
 export function shouldUseStorageBackedStores(
   options: AppContextOptions,
 ): boolean {
-  return Boolean(
-    options.adapters?.storage || options.runtimeConfig?.plugins?.storage,
-  );
+  return Boolean(options.adapters?.storage);
 }
 
 function createStorageBackedAppStores(

@@ -1,37 +1,26 @@
 import assert from "node:assert/strict";
+import type { KernelPlugin } from "takosumi-contract";
 import {
+  type AppAdapters,
+  buildKernelPluginRegistry,
   createAppContext,
   createConfiguredAppContext,
   createInMemoryAppContext,
 } from "./app_context.ts";
-import {
-  type KernelPluginPortKind,
-  TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-} from "takosumi-contract";
+import { LocalActorAdapter } from "./adapters/auth/mod.ts";
+import { MemoryCoordinationAdapter } from "./adapters/coordination/mod.ts";
+import { NoopTestKms } from "./adapters/kms/mod.ts";
+import { MemoryNotificationSink } from "./adapters/notification/mod.ts";
+import { MemoryObjectStorage } from "./adapters/object-storage/mod.ts";
+import { LocalOperatorConfig } from "./adapters/operator-config/mod.ts";
 import { NoopProviderMaterializer } from "./adapters/provider/mod.ts";
+import { MemoryQueueAdapter } from "./adapters/queue/mod.ts";
+import { InMemoryRouterConfigAdapter } from "./adapters/router/mod.ts";
+import { MemoryEncryptedSecretStore } from "./adapters/secret-store/mod.ts";
 import { ImmutableManifestSourceAdapter } from "./adapters/source/mod.ts";
 import { MemoryStorageDriver } from "./adapters/storage/mod.ts";
-import {
-  createReferenceKernelPlugin,
-  type TakosPaaSKernelPlugin,
-} from "./plugins/mod.ts";
-
-const productionRequiredPorts = [
-  "auth",
-  "coordination",
-  "notification",
-  "operator-config",
-  "storage",
-  "source",
-  "provider",
-  "queue",
-  "object-storage",
-  "kms",
-  "secret-store",
-  "router-config",
-  "observability",
-  "runtime-agent",
-] as const satisfies readonly KernelPluginPortKind[];
+import { InMemoryRuntimeAgentRegistry } from "./agents/mod.ts";
+import { InMemoryObservabilitySink } from "./services/observability/mod.ts";
 
 Deno.test("createInMemoryAppContext keeps default in-memory skeleton wiring", () => {
   const context = createInMemoryAppContext();
@@ -63,13 +52,9 @@ Deno.test("createInMemoryAppContext backs default runtime-agent registry with st
   assert.equal(snapshot.runtimeAgentWorkItems[0].id, "work_w_1");
 });
 
-Deno.test("createConfiguredAppContext wires selected reference plugin adapters from runtime config env", async () => {
+Deno.test("createConfiguredAppContext returns in-memory adapters when no overrides are passed", async () => {
   const context = await createConfiguredAppContext({
-    runtimeEnv: {
-      TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_PROVIDER_PLUGIN: "takos.kernel.reference",
-      TAKOSUMI_SOURCE_PLUGIN: "takos.kernel.reference",
-    },
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
   });
 
   assert.ok(context.adapters.provider instanceof NoopProviderMaterializer);
@@ -77,335 +62,87 @@ Deno.test("createConfiguredAppContext wires selected reference plugin adapters f
   assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
 });
 
-Deno.test("createConfiguredAppContext wires selected kernel plugin adapters", async () => {
-  const context = await createConfiguredAppContext({
-    plugins: [createReferenceKernelPlugin()],
-    runtimeEnv: {
-      TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_STORAGE_PLUGIN: "takos.kernel.reference",
-      TAKOSUMI_PROVIDER_PLUGIN: "takos.kernel.reference",
-      TAKOSUMI_SOURCE_PLUGIN: "takos.kernel.reference",
-      TAKOSUMI_KMS_PLUGIN: "takos.kernel.reference",
-      TAKOSUMI_SECRET_STORE_PLUGIN: "takos.kernel.reference",
-    },
+Deno.test("createAppContext uses operator-injected adapters in production", async () => {
+  const customSource = new ImmutableManifestSourceAdapter({
+    clock: () => new Date("2026-04-29T00:00:00.000Z"),
+    idGenerator: () => "id",
+  });
+  const productionAdapters = buildProductionAdapters({ source: customSource });
+  const context = await createAppContext({
+    adapters: productionAdapters,
+    runtimeConfig: { environment: "production" },
   });
 
-  assert.ok(context.adapters.provider instanceof NoopProviderMaterializer);
-  assert.ok(context.adapters.source instanceof ImmutableManifestSourceAdapter);
-  assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
+  assert.equal(context.adapters.source, customSource);
 });
 
-Deno.test("createConfiguredAppContext uses selected storage plugin for canonical stores", async () => {
-  const context = await createConfiguredAppContext({
-    plugins: [createReferenceKernelPlugin()],
-    runtimeEnv: {
-      TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_STORAGE_PLUGIN: "takos.kernel.reference",
-      TAKOSUMI_PROVIDER_PLUGIN: "takos.kernel.reference",
-    },
-  });
-
-  await context.services.core.spaces.createSpace({
-    actor: { actorAccountId: "acct_1", roles: ["owner"], requestId: "req_1" },
-    spaceId: "space_from_storage_plugin",
-    name: "Storage backed space",
-  });
-
-  assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
-  assert.equal(
-    context.adapters.storage.snapshot().spaces.some((space) =>
-      space.id === "space_from_storage_plugin"
-    ),
-    true,
-  );
-});
-
-Deno.test("createConfiguredAppContext storage deploy store exposes only implemented optional methods", async () => {
-  const context = await createConfiguredAppContext({
-    plugins: [createReferenceKernelPlugin()],
-    runtimeEnv: {
-      TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_STORAGE_PLUGIN: "takos.kernel.reference",
-      TAKOSUMI_PROVIDER_PLUGIN: "takos.kernel.reference",
-    },
-  });
-
-  assert.equal(context.stores.deploy.deploys.getGroupHeadHistory, undefined);
-  assert.equal(
-    context.stores.deploy.deploys.getDefaultRollbackValidators,
-    undefined,
-  );
-  assert.equal(context.stores.deploy.deploys.listObservations, undefined);
-});
-
-Deno.test("createConfiguredAppContext storage plugin backs runtime usage and service endpoint stores", async () => {
-  const context = await createConfiguredAppContext({
-    plugins: [createReferenceKernelPlugin()],
-    runtimeEnv: {
-      TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_STORAGE_PLUGIN: "takos.kernel.reference",
-      TAKOSUMI_PROVIDER_PLUGIN: "takos.kernel.reference",
-    },
-  });
-
-  await context.stores.runtime.desiredStates.put({
-    id: "desired_storage_1",
-    spaceId: "space_storage_1",
-    groupId: "group_storage_1",
-    activationId: "activation_storage_1",
-    appName: "storage-backed-runtime",
-    materializedAt: "2026-04-29T00:00:00.000Z",
-    workloads: [],
-    resources: [],
-    routes: [],
-  });
-  await context.stores.runtime.observedStates.record({
-    id: "observed_storage_1",
-    spaceId: "space_storage_1",
-    groupId: "group_storage_1",
-    desiredStateId: "desired_storage_1",
-    observedAt: "2026-04-29T00:01:00.000Z",
-    workloads: [],
-    resources: [],
-    routes: [],
-    diagnostics: [],
-  });
-  await context.stores.runtime.providerObservations.record({
-    materializationId: "mat_storage_1",
-    observedState: "present",
-    observedAt: "2026-04-29T00:02:00.000Z",
-  });
-  await context.stores.usage.aggregates.recordEvent({
-    id: "usage_storage_1",
-    kind: "runtime",
-    metric: "runtime.worker_milliseconds",
-    runtimeId: "runtime_storage_1",
-    spaceId: "space_storage_1",
-    groupId: "group_storage_1",
-    occurredAt: "2026-04-29T00:03:00.000Z",
-    quantity: 10,
-    unit: "millisecond",
-  }, "2026-04-29T00:04:00.000Z");
-  await context.stores.serviceEndpoints.endpoints.put({
-    id: "endpoint_storage_1",
-    serviceId: "service_storage_1",
-    spaceId: "space_storage_1",
-    groupId: "group_storage_1",
-    name: "storage-backed-endpoint",
-    protocol: "https",
-    url: "https://service.example.test",
-    health: {
-      status: "unknown",
-      checkedAt: "2026-04-29T00:05:00.000Z",
-    },
-    createdAt: "2026-04-29T00:05:00.000Z",
-    updatedAt: "2026-04-29T00:05:00.000Z",
-  });
-
-  assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
-  const snapshot = context.adapters.storage.snapshot();
-  assert.equal(snapshot.runtimeDesiredStates.length, 1);
-  assert.equal(snapshot.runtimeObservedStates.length, 1);
-  assert.equal(snapshot.providerObservations.length, 1);
-  assert.equal(snapshot.usageAggregates.length, 1);
-  assert.equal(snapshot.serviceEndpoints.length, 1);
-});
-
-Deno.test("createConfiguredAppContext rejects missing selected kernel plugin", async () => {
-  await assert.rejects(
-    () =>
-      createConfiguredAppContext({
-        runtimeEnv: {
-          TAKOSUMI_PROVIDER_PLUGIN: "takos.provider.missing",
-        },
-      }),
-    /kernel plugin is not registered: takos.provider.missing/,
-  );
-});
-
-Deno.test("createAppContext rejects staging/production noop provider fallback", async () => {
-  const plugin = createExternalReferenceBackedKernelPlugin(
-    "external.kernel.missing-provider",
-  );
+Deno.test("createAppContext rejects production runtime without explicit adapters", async () => {
   await assert.rejects(
     () =>
       createAppContext({
-        plugins: [plugin],
-        runtimeConfig: {
-          environment: "staging",
-          plugins: pluginSelection(plugin.manifest.id, ["provider"]),
-        },
+        runtimeConfig: { environment: "production" },
       }),
-    /staging runtime requires an explicit provider adapter or provider kernel plugin; refusing noop provider fallback/,
+    /production runtime requires an explicit/,
   );
 });
 
-Deno.test("createInMemoryAppContext rejects strict direct runtime config fallback ports", () => {
-  const plugin = createExternalReferenceBackedKernelPlugin(
-    "external.kernel.strict-direct",
-  );
-  const strictPorts = [
-    "coordination",
-    "router-config",
-    "queue",
-    "object-storage",
-    "kms",
-    "secret-store",
-  ] as const satisfies readonly KernelPluginPortKind[];
-
-  for (const missingPort of strictPorts) {
-    assert.throws(
-      () =>
-        createInMemoryAppContext({
-          plugins: [plugin],
-          runtimeConfig: {
-            environment: "production",
-            plugins: pluginSelection(plugin.manifest.id, [missingPort]),
-          },
-        }),
-      (error) => {
-        assert.ok(error instanceof Error);
-        assert.equal(
-          error.message.includes(
-            `production runtime requires an explicit ${missingPort} adapter or ${missingPort} kernel plugin`,
-          ),
-          true,
-        );
-        return true;
-      },
-    );
-  }
-});
-
-Deno.test("createInMemoryAppContext allows strict runtime-agent default when storage is selected", async () => {
-  const plugin = createExternalReferenceBackedKernelPlugin(
-    "external.kernel.strict-runtime-agent-storage",
-  );
-
-  const context = createInMemoryAppContext({
-    plugins: [plugin],
-    runtimeConfig: {
-      environment: "production",
-      plugins: pluginSelection(plugin.manifest.id, ["runtime-agent"]),
-    },
-  });
-
-  assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
-  await context.adapters.runtimeAgent.register({
-    agentId: "agent_strict",
-    provider: "aws",
-  });
-  assert.equal(
-    context.adapters.storage.snapshot().runtimeAgents[0].id,
-    "agent_strict",
-  );
-});
-
-Deno.test("createInMemoryAppContext rejects strict direct reference plugin selection", () => {
-  assert.throws(
-    () =>
-      createInMemoryAppContext({
-        runtimeConfig: {
-          environment: "production",
-          plugins: pluginSelection("takos.kernel.reference"),
-        },
-      }),
-    /production cannot select reference\/noop kernel plugin takos\.kernel\.reference/,
-  );
-});
-
-Deno.test("createConfiguredAppContext wires explicitly injected external plugin", async () => {
-  const plugin = createExternalReferenceBackedKernelPlugin(
-    "external.kernel.local",
-  );
-  const context = await createConfiguredAppContext({
-    plugins: [plugin],
-    runtimeEnv: {
-      TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_PROVIDER_PLUGIN: plugin.manifest.id,
-      TAKOSUMI_STORAGE_PLUGIN: plugin.manifest.id,
-      TAKOSUMI_OBJECT_STORAGE_PLUGIN: plugin.manifest.id,
-    },
-  });
-
-  assert.ok(context.adapters.provider instanceof NoopProviderMaterializer);
-  assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
-});
-
-Deno.test("createConfiguredAppContext allows production external plugin selection", async () => {
-  const plugin = createExternalReferenceBackedKernelPlugin(
-    "external.kernel.production",
-  );
-  const context = await createConfiguredAppContext({
-    plugins: [plugin],
-    runtimeEnv: {
-      TAKOSUMI_ENVIRONMENT: "production",
-      TAKOSUMI_KERNEL_PLUGIN_SELECTIONS: JSON.stringify(
-        Object.fromEntries(
-          productionRequiredPorts.map((port) => [port, plugin.manifest.id]),
-        ),
-      ),
-    },
-  });
-
-  const plan = await context.adapters.provider.materialize({
-    id: "desired_1",
-    spaceId: "space_1",
-    groupId: "group_1",
-    activationId: "activation_1",
-    appName: "cloud-app",
-    materializedAt: "2026-04-29T00:00:00.000Z",
-    workloads: [],
-    resources: [],
-    routes: [],
-  });
-  assert.equal(plan.provider, "noop");
-});
-
-Deno.test("createConfiguredAppContext does not auto-register official cloud plugins", async () => {
+Deno.test("createAppContext rejects staging runtime without explicit adapters", async () => {
   await assert.rejects(
     () =>
-      createConfiguredAppContext({
-        runtimeEnv: {
-          TAKOSUMI_PROVIDER_PLUGIN: "operator.takosumi.cloudflare",
-        },
+      createAppContext({
+        runtimeConfig: { environment: "staging" },
       }),
-    /kernel plugin is not registered: operator\.takosumi\.cloudflare/,
+    /staging runtime requires an explicit/,
   );
 });
 
-function createExternalReferenceBackedKernelPlugin(
-  id: string,
-): TakosPaaSKernelPlugin {
-  const reference = createReferenceKernelPlugin();
+Deno.test("buildKernelPluginRegistry exposes operator-supplied plugins by kind URI", () => {
+  const plugin = buildExamplePlugin();
+  const registry = buildKernelPluginRegistry({ plugins: [plugin] });
+  assert.equal(
+    registry.findByKindUri("https://example.test/kinds/v1/test")?.name,
+    "@example/test",
+  );
+});
+
+function buildExamplePlugin(): KernelPlugin {
   return {
-    manifest: {
-      id,
-      name: "External Reference Backed Test Plugin",
-      version: "1.0.0",
-      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-      capabilities: productionRequiredPorts.map((port) => ({
-        port,
-        kind: "external-test",
-        externalIo: ["network"],
-      })),
-    },
-    createAdapters(context) {
-      return reference.createAdapters(context);
-    },
+    name: "@example/test",
+    version: "1.0.0",
+    provides: ["https://example.test/kinds/v1/test"],
+    apply: (ctx) =>
+      Promise.resolve({
+        providerResourceId: `test://${ctx.componentName}`,
+        outputs: {},
+      }),
   };
 }
 
-function pluginSelection(
-  pluginId: string,
-  omittedPorts: readonly KernelPluginPortKind[] = [],
-): Partial<Record<KernelPluginPortKind, string>> {
-  const omitted = new Set<KernelPluginPortKind>(omittedPorts);
-  return Object.fromEntries(
-    productionRequiredPorts
-      .filter((port) => !omitted.has(port))
-      .map((port) => [port, pluginId]),
-  ) as Partial<Record<KernelPluginPortKind, string>>;
+function buildProductionAdapters(
+  overrides: Partial<AppAdapters> = {},
+): AppAdapters {
+  const clock = () => new Date("2026-04-29T00:00:00.000Z");
+  const idGenerator = () => "id";
+  const localActor = new LocalActorAdapter();
+  const storage = new MemoryStorageDriver();
+  return {
+    actor: localActor,
+    auth: localActor,
+    coordination: new MemoryCoordinationAdapter({ clock, idGenerator }),
+    notifications: new MemoryNotificationSink({ clock, idGenerator }),
+    operatorConfig: new LocalOperatorConfig({ clock }),
+    provider: new NoopProviderMaterializer({ clock, idGenerator }),
+    secrets: new MemoryEncryptedSecretStore({ clock, idGenerator }),
+    source: new ImmutableManifestSourceAdapter({ clock, idGenerator }),
+    storage,
+    kms: new NoopTestKms({ clock, idGenerator }),
+    observability: new InMemoryObservabilitySink(),
+    routerConfig: new InMemoryRouterConfigAdapter({ clock }),
+    queue: new MemoryQueueAdapter({ clock, idGenerator }),
+    objectStorage: new MemoryObjectStorage({ clock }),
+    runtimeAgent: new InMemoryRuntimeAgentRegistry({ clock, idGenerator }),
+    ...overrides,
+  };
 }
 
 function sequenceIds(values: readonly string[]): () => string {

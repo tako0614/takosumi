@@ -92,17 +92,14 @@ import type { Clock } from "./shared/time.ts";
 import type { IdGenerator } from "./shared/ids.ts";
 import { log } from "./shared/log.ts";
 import { currentRuntime } from "./shared/runtime/index.ts";
-import {
-  type ActorContext,
-  type Deployment,
-  type DeploymentApproval,
-  type DeploymentInput,
-  type GroupHead,
-  type IsoTimestamp,
-  type JsonObject,
-  type KernelPluginClientRegistry,
-  type KernelPluginPortKind,
-  TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
+import type {
+  ActorContext,
+  Deployment,
+  DeploymentApproval,
+  DeploymentInput,
+  GroupHead,
+  IsoTimestamp,
+  KernelPlugin,
 } from "takosumi-contract";
 import {
   InMemoryRuntimeAgentRegistry,
@@ -122,10 +119,7 @@ import {
 } from "./services/usage/mod.ts";
 import {
   createKernelPluginRegistry,
-  createPluginAdapterOverrides,
-  createReferenceKernelPlugin,
   type KernelPluginRegistry,
-  type TakosPaaSKernelPlugin,
 } from "./plugins/mod.ts";
 
 export interface AppContextOptions {
@@ -144,14 +138,11 @@ export interface AppContextOptions {
     readonly baseUrl?: string;
     readonly secret?: string;
   };
-  readonly plugins?: readonly TakosPaaSKernelPlugin[];
+  readonly plugins?: readonly KernelPlugin[];
   readonly pluginRegistry?: KernelPluginRegistry;
-  readonly pluginClientRegistry?: KernelPluginClientRegistry;
 }
 
 export interface AppRuntimeConfig {
-  readonly plugins?: Partial<Record<KernelPluginPortKind, string>>;
-  readonly pluginConfig?: JsonObject;
   readonly environment?: string;
   readonly processRole?: string;
   readonly allowUnsafeProductionDefaults?: boolean;
@@ -227,61 +218,39 @@ export interface AppAdapters {
   readonly runtimeAgent: RuntimeAgentRegistry;
 }
 
-const STRICT_RUNTIME_KERNEL_PORTS = [
+const STRICT_RUNTIME_ADAPTERS: readonly (keyof AppAdapters)[] = [
   "auth",
   "coordination",
-  "notification",
-  "operator-config",
+  "notifications",
+  "operatorConfig",
   "storage",
   "source",
   "provider",
   "queue",
-  "object-storage",
+  "objectStorage",
   "kms",
-  "secret-store",
-  "router-config",
+  "secrets",
+  "routerConfig",
   "observability",
-  "runtime-agent",
-] as const satisfies readonly KernelPluginPortKind[];
+  "runtimeAgent",
+];
 
-const STRICT_RUNTIME_PORT_ADAPTERS: Record<
-  (typeof STRICT_RUNTIME_KERNEL_PORTS)[number],
-  keyof AppAdapters
-> = {
-  auth: "auth",
-  coordination: "coordination",
-  notification: "notifications",
-  "operator-config": "operatorConfig",
-  storage: "storage",
-  source: "source",
-  provider: "provider",
-  queue: "queue",
-  "object-storage": "objectStorage",
-  kms: "kms",
-  "secret-store": "secrets",
-  "router-config": "routerConfig",
-  observability: "observability",
-  "runtime-agent": "runtimeAgent",
-};
-
-const STRICT_RUNTIME_FALLBACK_LABELS: Record<
-  (typeof STRICT_RUNTIME_KERNEL_PORTS)[number],
-  string
-> = {
+const STRICT_RUNTIME_FALLBACK_LABELS: Record<keyof AppAdapters, string> = {
+  actor: "local actor",
   auth: "local auth",
   coordination: "in-memory coordination",
-  notification: "in-memory notification",
-  "operator-config": "local operator config",
+  notifications: "in-memory notification",
+  operatorConfig: "local operator config",
   storage: "in-memory canonical storage",
   source: "inline manifest source",
   provider: "noop provider",
   queue: "in-memory queue",
-  "object-storage": "in-memory object storage",
+  objectStorage: "in-memory object storage",
   kms: "noop KMS",
-  "secret-store": "in-memory secret store",
-  "router-config": "in-memory router config",
+  secrets: "in-memory secret store",
+  routerConfig: "in-memory router config",
   observability: "in-memory observability",
-  "runtime-agent": "in-memory runtime-agent registry",
+  runtimeAgent: "in-memory runtime-agent registry",
 };
 
 export interface DeployServices {
@@ -522,26 +491,16 @@ export function createDefaultAppAdapters(
 ): AppAdapters {
   const dateClock = options.dateClock ?? (() => new Date());
   const uuidFactory = options.uuidFactory ?? (() => crypto.randomUUID());
-  const pluginAdapters = createConfiguredPluginAdapters({
-    ...options,
-    dateClock,
-    uuidFactory,
-  });
   assertNoStrictRuntimeAdapterFallbacks(options);
   warnAboutDevAdapterFallbacks(options);
   const localActor = new LocalActorAdapter();
-  const actor = options.adapters?.actor ?? pluginAdapters.actor ?? localActor;
-  const storage = options.adapters?.storage ??
-    pluginAdapters.storage ??
-    new MemoryStorageDriver();
+  const actor = options.adapters?.actor ?? localActor;
+  const storage = options.adapters?.storage ?? new MemoryStorageDriver();
   const observability = wrapObservabilitySinkWithOtlpMetrics(
-    options.adapters?.observability ??
-      pluginAdapters.observability ??
-      new InMemoryObservabilitySink(),
+    options.adapters?.observability ?? new InMemoryObservabilitySink(),
     options.runtimeEnv,
   );
   const runtimeAgent = options.adapters?.runtimeAgent ??
-    pluginAdapters.runtimeAgent ??
     new InMemoryRuntimeAgentRegistry({
       clock: dateClock,
       idGenerator: uuidFactory,
@@ -549,30 +508,25 @@ export function createDefaultAppAdapters(
     });
   return {
     actor,
-    auth: options.adapters?.auth ?? pluginAdapters.auth ?? localActor,
+    auth: options.adapters?.auth ?? localActor,
     coordination: options.adapters?.coordination ??
-      pluginAdapters.coordination ??
       new MemoryCoordinationAdapter({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
     notifications: options.adapters?.notifications ??
-      pluginAdapters.notifications ??
       new MemoryNotificationSink({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
     operatorConfig: options.adapters?.operatorConfig ??
-      pluginAdapters.operatorConfig ??
       new LocalOperatorConfig({ clock: dateClock }),
     provider: options.adapters?.provider ??
-      pluginAdapters.provider ??
       new NoopProviderMaterializer({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
     secrets: options.adapters?.secrets ??
-      pluginAdapters.secrets ??
       new MemoryEncryptedSecretStore({
         clock: dateClock,
         idGenerator: uuidFactory,
@@ -582,30 +536,25 @@ export function createDefaultAppAdapters(
         ...(options.runtimeEnv ? { env: options.runtimeEnv } : {}),
       }),
     source: options.adapters?.source ??
-      pluginAdapters.source ??
       new ImmutableManifestSourceAdapter({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
     storage,
     kms: options.adapters?.kms ??
-      pluginAdapters.kms ??
       new NoopTestKms({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
     observability,
     routerConfig: options.adapters?.routerConfig ??
-      pluginAdapters.routerConfig ??
       new InMemoryRouterConfigAdapter({ clock: dateClock }),
     queue: options.adapters?.queue ??
-      pluginAdapters.queue ??
       new MemoryQueueAdapter({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
     objectStorage: options.adapters?.objectStorage ??
-      pluginAdapters.objectStorage ??
       new MemoryObjectStorage({ clock: dateClock }),
     runtimeAgent,
   };
@@ -643,60 +592,16 @@ async function importRuntimeConfigModule(): Promise<
   }
 }
 
-function createConfiguredPluginAdapters(
-  options: AppContextOptions & {
-    readonly dateClock: () => Date;
-    readonly uuidFactory: () => string;
-  },
-): Partial<AppAdapters> {
-  const selectedPluginIds = selectedKernelPluginIds(options.runtimeConfig);
-  if (Object.keys(selectedPluginIds).length === 0) return {};
-  const registry = options.pluginRegistry ??
-    createKernelPluginRegistry(withReferencePlugin(options.plugins ?? []));
-  return createPluginAdapterOverrides({
-    registry,
-    selectedPluginIds,
-    context: {
-      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-      environment: options.runtimeConfig?.environment ?? "local",
-      processRole: options.runtimeConfig?.processRole ?? "takosumi-api",
-      selectedPluginIds,
-      operatorConfig: options.runtimeConfig?.pluginConfig,
-      clientRegistry: options.pluginClientRegistry,
-      clock: options.dateClock,
-      idGenerator: options.uuidFactory,
-    },
-  });
-}
-
-function withReferencePlugin(
-  plugins: readonly TakosPaaSKernelPlugin[],
-): readonly TakosPaaSKernelPlugin[] {
-  const externalPlugins = dedupePluginsById(plugins);
-  return externalPlugins.some((plugin) =>
-      plugin.manifest.id === "takos.kernel.reference"
-    )
-    ? externalPlugins
-    : [createReferenceKernelPlugin(), ...externalPlugins];
-}
-
-function dedupePluginsById(
-  plugins: readonly TakosPaaSKernelPlugin[],
-): readonly TakosPaaSKernelPlugin[] {
-  const seen = new Set<string>();
-  const out: TakosPaaSKernelPlugin[] = [];
-  for (const plugin of plugins) {
-    if (seen.has(plugin.manifest.id)) continue;
-    seen.add(plugin.manifest.id);
-    out.push(plugin);
-  }
-  return out;
-}
-
-function selectedKernelPluginIds(
-  config: AppRuntimeConfig | undefined,
-): Partial<Record<KernelPluginPortKind, string>> {
-  return { ...(config?.plugins ?? {}) };
+/**
+ * Build the canonical `KernelPluginRegistry` from the operator-supplied
+ * `options.plugins` array. The registry is consulted by `InstallerPipeline`
+ * to resolve `Component.kind` to a plugin that materializes it.
+ */
+export function buildKernelPluginRegistry(
+  options: AppContextOptions = {},
+): KernelPluginRegistry {
+  return options.pluginRegistry ??
+    createKernelPluginRegistry(options.plugins ?? []);
 }
 
 function assertNoStrictRuntimeAdapterFallbacks(
@@ -704,17 +609,12 @@ function assertNoStrictRuntimeAdapterFallbacks(
 ): void {
   const environment = options.runtimeConfig?.environment;
   if (environment !== "production" && environment !== "staging") return;
-  const selectedPluginIds = selectedKernelPluginIds(options.runtimeConfig);
-  for (const port of STRICT_RUNTIME_KERNEL_PORTS) {
-    const adapterKey = STRICT_RUNTIME_PORT_ADAPTERS[port];
-    if (options.adapters?.[adapterKey] || selectedPluginIds[port]) continue;
-    if (
-      port === "runtime-agent" &&
-      (options.adapters?.storage || selectedPluginIds.storage)
-    ) continue;
+  for (const adapterKey of STRICT_RUNTIME_ADAPTERS) {
+    if (options.adapters?.[adapterKey]) continue;
+    if (adapterKey === "runtimeAgent" && options.adapters?.storage) continue;
     throw new Error(
-      `${environment} runtime requires an explicit ${port} adapter or ${port} kernel plugin; refusing ${
-        STRICT_RUNTIME_FALLBACK_LABELS[port]
+      `${environment} runtime requires an explicit ${adapterKey} adapter; refusing ${
+        STRICT_RUNTIME_FALLBACK_LABELS[adapterKey]
       } fallback`,
     );
   }
@@ -722,15 +622,14 @@ function assertNoStrictRuntimeAdapterFallbacks(
 
 /**
  * Dev / local fallback warning. In non-strict environments the kernel will
- * silently activate in-memory implementations for any adapter port the
- * operator did not configure. That makes "git clone && takosumi server" Just
- * Work, but it also means an operator who forgot to wire Postgres won't
- * notice their state is volatile until first restart wipes the deployment
- * record store.
+ * silently activate in-memory implementations for any adapter the operator
+ * did not configure. That makes "git clone && takosumi server" Just Work,
+ * but it also means an operator who forgot to wire Postgres won't notice
+ * their state is volatile until first restart wipes the canonical store.
  *
- * Logs a single boot-time warning listing the strict-runtime ports that fell
- * back to in-memory, with `TAKOSUMI_LOG_LEVEL=warn` (or `error`) to suppress
- * if the operator deliberately wants the in-memory mode.
+ * Logs a single boot-time warning listing the strict-runtime adapters that
+ * fell back to in-memory; set `TAKOSUMI_LOG_LEVEL=warn` (or `error`) to
+ * suppress if the operator deliberately wants the in-memory mode.
  */
 function warnAboutDevAdapterFallbacks(options: AppContextOptions): void {
   const environment = options.runtimeConfig?.environment;
@@ -743,23 +642,17 @@ function warnAboutDevAdapterFallbacks(options: AppContextOptions): void {
   // explicitly inject some adapters (production-like setup) still see
   // warnings for the ones they missed.
   if (!options.adapters) return;
-  const selectedPluginIds = selectedKernelPluginIds(options.runtimeConfig);
   const fallbacks: string[] = [];
-  for (const port of STRICT_RUNTIME_KERNEL_PORTS) {
-    const adapterKey = STRICT_RUNTIME_PORT_ADAPTERS[port];
-    if (options.adapters?.[adapterKey] || selectedPluginIds[port]) continue;
-    if (
-      port === "runtime-agent" &&
-      (options.adapters?.storage || selectedPluginIds.storage)
-    ) continue;
-    fallbacks.push(port);
+  for (const adapterKey of STRICT_RUNTIME_ADAPTERS) {
+    if (options.adapters?.[adapterKey]) continue;
+    if (adapterKey === "runtimeAgent" && options.adapters?.storage) continue;
+    fallbacks.push(adapterKey);
   }
   if (fallbacks.length === 0) return;
   log.warn("kernel.boot.in_memory_fallbacks", {
-    ports: fallbacks,
-    hint: "set TAKOSUMI_* env adapters or pass `adapters` explicitly to " +
-      "persist state across restarts. Set TAKOSUMI_LOG_LEVEL=warn to " +
-      "suppress this notice.",
+    adapters: fallbacks,
+    hint: "pass `adapters` explicitly to persist state across restarts. " +
+      "Set TAKOSUMI_LOG_LEVEL=warn to suppress this notice.",
   });
 }
 

@@ -10,7 +10,6 @@ Deno.test("BootstrapMigrationService treats storage migrations as plugin-owned",
       clock: fixedClock,
       values: {
         TAKOSUMI_DEV_MODE: "1",
-        TAKOSUMI_STORAGE_PLUGIN: "takos.storage.test",
       },
     }),
     clock: fixedClock,

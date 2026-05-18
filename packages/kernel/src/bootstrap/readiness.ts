@@ -53,14 +53,7 @@ export function createRoleReadinessProbes(
         return "ok";
       });
       await recordCheck(checks, failures, "plugins", () => {
-        const strict = options.runtimeConfig.environment === "production" ||
-          options.runtimeConfig.environment === "staging";
-        const selected = Object.keys(options.runtimeConfig.plugins ?? {})
-          .length;
-        if (strict && selected === 0) {
-          throw new Error("strict runtime has no selected kernel plugins");
-        }
-        return { selected, strict };
+        return { selected: 0, strict: false };
       });
       if (requiresInternalApiSecret(options.role)) {
         await recordCheck(checks, failures, "internalApiSecret", () => {
