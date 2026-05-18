@@ -7,8 +7,18 @@ operator-facing entry は **`createPaaSApp({ plugins: [...] })`** の plain arra
 (= Vite plugin pattern)。 各 plugin factory は `KernelPlugin` を返し、 operator
 は env から credential を読んで factory に直接渡す。
 
-source:
-[`packages/plugins/src/bundled/`](https://github.com/takos-jp/takosumi/tree/main/packages/plugins/src/bundled)
+source: per-cloud provider package
+([`packages/cloudflare-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/cloudflare-providers/src)
+/
+[`packages/aws-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/aws-providers/src)
+/
+[`packages/gcp-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/gcp-providers/src)
+/
+[`packages/kubernetes-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/kubernetes-providers/src)
+/
+[`packages/deno-deploy-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/deno-deploy-providers/src)
+/
+[`packages/selfhost-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/selfhost-providers/src))
 — bundled `KernelPlugin` factory (`<kind>-<provider>.ts` per pair)。
 
 credential / SDK boundary は
@@ -20,11 +30,9 @@ destroy / describe) を POST するだけ。
 
 ```ts
 import { createPaaSApp } from "@takos/takosumi-kernel";
-import {
-  awsS3ObjectStoreProvider,
-  cloudflareWorkerProvider,
-  selfhostPostgresProvider,
-} from "@takos/takosumi-plugins/bundled";
+import { awsS3ObjectStoreProvider } from "@takos/takosumi-aws-providers";
+import { cloudflareWorkerProvider } from "@takos/takosumi-cloudflare-providers";
+import { selfhostPostgresProvider } from "@takos/takosumi-selfhost-providers";
 
 const { app } = await createPaaSApp({
   plugins: [

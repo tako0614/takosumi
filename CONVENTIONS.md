@@ -3,8 +3,9 @@
 このドキュメントは `@takos/takosumi` (本リポジトリ) における **component kind
 catalog** と **provider plugin**、 **template** の命名・形状規約を定義する RFC
 である。 既存の `packages/plugins/src/kinds/`、
-`packages/plugins/src/bundled/`、 `packages/plugins/src/templates/`
-はこの規約に準拠している。
+`packages/<cloud>-providers/src/`、 `packages/plugins/src/templates/`
+はこの規約に準拠している (= cloud provider plugin は Phase D 以降、 cloud 別 6
+package に分離されている)。
 
 ## 1. Component kind catalog principle
 
