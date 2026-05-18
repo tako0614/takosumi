@@ -1,5 +1,5 @@
 import { registerProvider, registerShape } from "takosumi-contract";
-import { TAKOSUMI_BUNDLED_SHAPES } from "@takos/takosumi-plugins/shapes";
+import { TAKOSUMI_BUNDLED_KINDS } from "@takos/takosumi-plugins/kinds";
 import { createTakosumiProductionProviders } from "@takos/takosumi-plugins/shape-providers/factories";
 import { registerBundledArtifactKinds } from "@takos/takosumi-plugins/shape-providers";
 import { detectRuntimeAgent } from "./agent_detection.ts";
@@ -23,7 +23,7 @@ export function registerBundledShapesAndProviders(
     .toObject(),
 ): void {
   if (!bundledShapesRegistered) {
-    for (const shape of TAKOSUMI_BUNDLED_SHAPES) registerShape(shape);
+    for (const shape of TAKOSUMI_BUNDLED_KINDS) registerShape(shape);
     registerBundledArtifactKinds();
     bundledShapesRegistered = true;
   }

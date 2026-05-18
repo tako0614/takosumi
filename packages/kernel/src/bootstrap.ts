@@ -33,9 +33,7 @@ import {
   InMemoryOperationJournalStore,
 } from "./domains/deploy/operation_journal.ts";
 import { SqlOperationJournalStore } from "./domains/deploy/operation_journal_sql.ts";
-import {
-  InMemoryRevokeDebtStore,
-} from "./domains/deploy/revoke_debt_store.ts";
+import { InMemoryRevokeDebtStore } from "./domains/deploy/revoke_debt_store.ts";
 import { SqlRevokeDebtStore } from "./domains/deploy/revoke_debt_store_sql.ts";
 import {
   InMemoryTakosumiDeploymentRecordStore,
@@ -214,9 +212,7 @@ export async function createPaaSApp(
       : undefined,
     installerPublicRouteOptions: {
       pipeline: new InstallerPipeline(),
-      ...(installerToken
-        ? { getInstallerToken: () => installerToken }
-        : {}),
+      ...(installerToken ? { getInstallerToken: () => installerToken } : {}),
     },
     readinessRouteProbes: createRoleReadinessProbes({
       role,

@@ -15,7 +15,7 @@ import {
   type DestroyV2Outcome,
 } from "@takos/takosumi-kernel/apply";
 import { expandManifestResourcesV1 } from "@takos/takosumi-kernel/manifest-v1";
-import { TAKOSUMI_BUNDLED_SHAPES } from "@takos/takosumi-plugins/shapes";
+import { TAKOSUMI_BUNDLED_KINDS } from "@takos/takosumi-plugins/kinds";
 import { createInMemoryTakosumiProviders } from "@takos/takosumi-plugins/shape-providers";
 
 export async function applyLocal(
@@ -65,7 +65,7 @@ export function expandManifestLocal(
 }
 
 function registerLocalRegistry(): void {
-  for (const shape of TAKOSUMI_BUNDLED_SHAPES) registerShape(shape);
+  for (const shape of TAKOSUMI_BUNDLED_KINDS) registerShape(shape);
   for (const provider of createInMemoryTakosumiProviders()) {
     registerProvider(provider, { allowOverride: true });
   }

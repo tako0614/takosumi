@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { ObjectStoreKind as ObjectStoreShape } from "../src/kinds/object-store.ts";
+import { ObjectStoreKind } from "../src/kinds/object-store.ts";
 import {
   createAwsS3ObjectStoreProvider,
   InMemoryAwsS3Lifecycle,
@@ -69,11 +69,11 @@ Deno.test("ObjectStore portability: outputs validate against ObjectStore shape o
   const r2Result = await r2.apply(SAME_SPEC, ctx);
 
   const s3Issues: ShapeValidationIssue[] = [];
-  ObjectStoreShape.validateOutputs(s3Result.outputs, s3Issues);
+  ObjectStoreKind.validateOutputs(s3Result.outputs, s3Issues);
   assert.deepEqual(s3Issues, [], "S3 outputs must satisfy ObjectStore shape");
 
   const r2Issues: ShapeValidationIssue[] = [];
-  ObjectStoreShape.validateOutputs(r2Result.outputs, r2Issues);
+  ObjectStoreKind.validateOutputs(r2Result.outputs, r2Issues);
   assert.deepEqual(r2Issues, [], "R2 outputs must satisfy ObjectStore shape");
 });
 

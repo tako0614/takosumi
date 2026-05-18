@@ -27,35 +27,36 @@ kernel が保持せず、 operator が env 経由で inject します。
 kernel は v1 で 2 種類の credential を区別し、 credential ごとに作用範囲を
 完全に分離します。
 
-| Credential                | Env var                         | 適用範囲                                                  | 認証方式                        |
-| ------------------------- | ------------------------------- | --------------------------------------------------------- | ------------------------------- |
-| Installer bearer          | `TAKOSUMI_INSTALLER_TOKEN`      | `/v1/installations/*`                                     | `Authorization: Bearer <token>` |
-| Internal HMAC secret      | `TAKOSUMI_INTERNAL_API_SECRET`  | `/api/internal/v1/*` 全体 (runtime-agent endpoint も含む) | HMAC-SHA256 + replay protection |
+| Credential           | Env var                        | 適用範囲                                                  | 認証方式                        |
+| -------------------- | ------------------------------ | --------------------------------------------------------- | ------------------------------- |
+| Installer bearer     | `TAKOSUMI_INSTALLER_TOKEN`     | `/v1/installations/*`                                     | `Authorization: Bearer <token>` |
+| Internal HMAC secret | `TAKOSUMI_INTERNAL_API_SECRET` | `/api/internal/v1/*` 全体 (runtime-agent endpoint も含む) | HMAC-SHA256 + replay protection |
 
 規則:
 
 - `TAKOSUMI_INSTALLER_TOKEN` が unset の間、 `/v1/installations/*` route は
   **404** を返します (401 で「token 未設定」を隠蔽しないため)。
-- Installer bearer の Space scope は token claims から resolve します。 actor 単位
-  の multi-Space auth / entitlement check は token issuer (= Takosumi Accounts)
-  の責務です。
+- Installer bearer の Space scope は token claims から resolve します。 actor
+  単位 の multi-Space auth / entitlement check は token issuer (= Takosumi
+  Accounts) の責務です。
 - Internal HMAC は `method` / `path` / `query` / `body digest` / `actor` を
   canonical 化して署名し、 `x-takosumi-internal-signature` /
   `x-takosumi-internal-timestamp` / `x-takosumi-request-id` で検証します。
 - timestamp skew は 5 分、 request id は replay protection store で TTL 5 分。
-- `/health` / `/livez` / `/readyz` / `/capabilities` / `/openapi.json` は無認証。
+- `/health` / `/livez` / `/readyz` / `/capabilities` / `/openapi.json`
+  は無認証。
 
 ## Public installer routes
 
 正本: [Installer API](./installer-api.md)。 5 endpoint 全て:
 
-| Method | Path                                                  | Purpose                                  |
-| ------ | ----------------------------------------------------- | ---------------------------------------- |
-| POST   | `/v1/installations/dry-run`                           | 新規 install の dry-run (= 変更差分予測) |
-| POST   | `/v1/installations`                                   | Installation 作成 + 最初の Deployment    |
-| POST   | `/v1/installations/{id}/deployments/dry-run`          | upgrade の dry-run                       |
-| POST   | `/v1/installations/{id}/deployments`                  | Installation に対する apply              |
-| POST   | `/v1/installations/{id}/rollback`                     | 過去 Deployment への巻き戻し             |
+| Method | Path                                         | Purpose                                  |
+| ------ | -------------------------------------------- | ---------------------------------------- |
+| POST   | `/v1/installations/dry-run`                  | 新規 install の dry-run (= 変更差分予測) |
+| POST   | `/v1/installations`                          | Installation 作成 + 最初の Deployment    |
+| POST   | `/v1/installations/{id}/deployments/dry-run` | upgrade の dry-run                       |
+| POST   | `/v1/installations/{id}/deployments`         | Installation に対する apply              |
+| POST   | `/v1/installations/{id}/rollback`            | 過去 Deployment への巻き戻し             |
 
 request / response shape は [Installer API](./installer-api.md) 参照。
 
@@ -66,14 +67,14 @@ public 経由 expose はしません。
 
 現在 mount される署名付き internal route:
 
-| Method | Path                                               | Purpose                                  |
-| ------ | -------------------------------------------------- | ---------------------------------------- |
-| GET    | `/api/internal/v1/spaces`                          | actor が見える Space summary 一覧        |
-| POST   | `/api/internal/v1/spaces`                          | Space 作成                               |
-| GET    | `/api/internal/v1/installations`                   | Space 内 Installation 一覧 (= ledger)   |
-| GET    | `/api/internal/v1/installations/{id}`              | 単一 Installation 詳細                   |
-| GET    | `/api/internal/v1/installations/{id}/deployments`  | Deployment 履歴                          |
-| GET    | `/api/internal/v1/installations/{id}/events`       | hash-chain audit log (= internal)        |
+| Method | Path                                              | Purpose                               |
+| ------ | ------------------------------------------------- | ------------------------------------- |
+| GET    | `/api/internal/v1/spaces`                         | actor が見える Space summary 一覧     |
+| POST   | `/api/internal/v1/spaces`                         | Space 作成                            |
+| GET    | `/api/internal/v1/installations`                  | Space 内 Installation 一覧 (= ledger) |
+| GET    | `/api/internal/v1/installations/{id}`             | 単一 Installation 詳細                |
+| GET    | `/api/internal/v1/installations/{id}/deployments` | Deployment 履歴                       |
+| GET    | `/api/internal/v1/installations/{id}/events`      | hash-chain audit log (= internal)     |
 
 すべて internal HMAC 署名 (`TAKOSUMI_INTERNAL_API_SECRET`) が必須。 署名失敗は
 401 `unauthenticated`、 actor 拒否は 403 `permission_denied`。
@@ -97,7 +98,8 @@ RPC。 すべて `/api/internal/v1/runtime/agents/...` 配下で、 internal HMA
 
 kernel は workflow / trigger / schedule / declarable hook の HTTP route を持ち
 ません。 build は AppSpec の `component.build` で最小 recipe として宣言し、
-kernel installer が apply 時に直接実行します。
+kernel installer が apply 時に直接実行します。 The current kernel exposes no
+workflow, trigger, schedule, or declarable hook HTTP route.
 
 CI / webhook / cron / declarable hook 等の運用機能は kernel scope の外。
 operator が別途 CI / orchestrator で実装します。
@@ -122,17 +124,17 @@ interface ApiErrorEnvelope {
 
 `DomainErrorCode` は v1 で 9 個の closed enum:
 
-| `code`                   | HTTP | 主な発生要因                                                        |
-| ------------------------ | ---- | ------------------------------------------------------------------- |
-| `invalid_argument`       | 400  | AppSpec schema / form input / use edge cycle                        |
-| `unauthenticated`        | 401  | bearer 不足、 internal HMAC 検証失敗                                |
-| `permission_denied`      | 403  | space 越境、 token claim 不足                                       |
-| `not_found`              | 404  | endpoint disabled (token unset)、 Installation / Deployment 不在    |
-| `failed_precondition`    | 409  | `expected.commit` mismatch、 collision-detected、 approval 失効     |
-| `resource_exhausted`     | 413  | build artifact が provider quota 超過、 quota 超過                  |
-| `not_implemented`        | 501  | issuer 未配線、 operator が opt-in していない機能                   |
-| `readiness_probe_failed` | 503  | `/livez` / `/readyz` / dependent port が ready でない               |
-| `internal_error`         | 500  | unhandled exception                                                 |
+| `code`                   | HTTP | 主な発生要因                                                     |
+| ------------------------ | ---- | ---------------------------------------------------------------- |
+| `invalid_argument`       | 400  | AppSpec schema / form input / use edge cycle                     |
+| `unauthenticated`        | 401  | bearer 不足、 internal HMAC 検証失敗                             |
+| `permission_denied`      | 403  | space 越境、 token claim 不足                                    |
+| `not_found`              | 404  | endpoint disabled (token unset)、 Installation / Deployment 不在 |
+| `failed_precondition`    | 409  | `expected.commit` mismatch、 collision-detected、 approval 失効  |
+| `resource_exhausted`     | 413  | build artifact が provider quota 超過、 quota 超過               |
+| `not_implemented`        | 501  | issuer 未配線、 operator が opt-in していない機能                |
+| `readiness_probe_failed` | 503  | `/livez` / `/readyz` / dependent port が ready でない            |
+| `internal_error`         | 500  | unhandled exception                                              |
 
 `details` に sensitive key (`authorization` / `cookie` / `token` / `secret` /
 `password` / `credential` / `api_key` / `private_key`) を含む field があれば

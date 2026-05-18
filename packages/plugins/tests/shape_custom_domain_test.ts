@@ -1,22 +1,22 @@
 import assert from "node:assert/strict";
 import type { ShapeValidationIssue } from "takosumi-contract";
-import { CustomDomainKind as CustomDomainShape } from "../src/kinds/custom-domain.ts";
+import { CustomDomainKind } from "../src/kinds/custom-domain.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];
-  CustomDomainShape.validateSpec(value, issues);
+  CustomDomainKind.validateSpec(value, issues);
   return issues;
 }
 
 function outputIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];
-  CustomDomainShape.validateOutputs(value, issues);
+  CustomDomainKind.validateOutputs(value, issues);
   return issues;
 }
 
 Deno.test("CustomDomain shape exposes id and version", () => {
-  assert.equal(CustomDomainShape.id, "custom-domain");
-  assert.equal(CustomDomainShape.version, "v1");
+  assert.equal(CustomDomainKind.id, "custom-domain");
+  assert.equal(CustomDomainKind.version, "v1");
 });
 
 Deno.test("CustomDomain validateSpec accepts minimal spec", () => {

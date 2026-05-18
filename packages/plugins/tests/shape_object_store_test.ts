@@ -1,26 +1,26 @@
 import assert from "node:assert/strict";
 import type { ShapeValidationIssue } from "takosumi-contract";
-import { ObjectStoreKind as ObjectStoreShape } from "../src/kinds/object-store.ts";
+import { ObjectStoreKind } from "../src/kinds/object-store.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];
-  ObjectStoreShape.validateSpec(value, issues);
+  ObjectStoreKind.validateSpec(value, issues);
   return issues;
 }
 
 function outputIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];
-  ObjectStoreShape.validateOutputs(value, issues);
+  ObjectStoreKind.validateOutputs(value, issues);
   return issues;
 }
 
 Deno.test("ObjectStore shape exposes id and version", () => {
-  assert.equal(ObjectStoreShape.id, "object-store");
-  assert.equal(ObjectStoreShape.version, "v1");
+  assert.equal(ObjectStoreKind.id, "object-store");
+  assert.equal(ObjectStoreKind.version, "v1");
 });
 
 Deno.test("ObjectStore output fields cover S3-class portability", () => {
-  assert.deepEqual([...ObjectStoreShape.outputFields], [
+  assert.deepEqual([...ObjectStoreKind.outputFields], [
     "bucket",
     "endpoint",
     "region",

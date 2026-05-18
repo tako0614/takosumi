@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { TAKOSUMI_DEPLOY_PUBLIC_PATH } from "../packages/kernel/src/api/deploy_public_routes.ts";
+import {
+  INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
+  INSTALLER_INSTALLATION_DEPLOYMENTS_PATH,
+  INSTALLER_INSTALLATION_ROLLBACK_PATH,
+  INSTALLER_INSTALLATIONS_DRY_RUN_PATH,
+  INSTALLER_INSTALLATIONS_PATH,
+} from "../packages/kernel/src/api/installer_public_routes.ts";
 import { createPaaSOpenApiDocument } from "../packages/kernel/src/api/openapi.ts";
 
 const root = new URL("../", import.meta.url);
@@ -18,13 +24,13 @@ const TAKOSUMI_OWNED_PATHS = [
   "packages/kernel/src/domains/deploy/manifest_v1.ts",
   "packages/kernel/src/api/app.ts",
   "packages/kernel/src/api/public_routes.ts",
-  "packages/kernel/src/api/deploy_public_routes.ts",
+  "packages/kernel/src/api/installer_public_routes.ts",
   "packages/kernel/src/api/artifact_routes.ts",
   "packages/kernel/src/api/internal_routes.ts",
   "packages/kernel/src/api/runtime_agent_routes.ts",
   "packages/kernel/src/api/readiness_routes.ts",
   "packages/kernel/src/api/openapi.ts",
-  "packages/plugins/src/shapes",
+  "packages/plugins/src/kinds",
   "packages/plugins/src/shape-providers",
   "packages/plugins/src/templates",
   "packages/plugins/src/shape-providers/_artifact_kinds_bundled.ts",
@@ -40,10 +46,8 @@ const REQUIRED_SPEC_KEYS = [
   "manifest-v1",
   "shape-catalog-v1",
   "kernel-http-api-v1",
-  "deploy-public-api-v1",
+  "installer-api-v1",
   "takosumi-jsr-packages",
-  "takosumi-git-workflow-ref-v1",
-  "takosumi-git-artifact-uri-v1",
 ];
 
 Deno.test("public spec source map covers required public surfaces", async () => {
@@ -53,38 +57,46 @@ Deno.test("public spec source map covers required public surfaces", async () => 
     assert.ok(source.includes(`\`${specKey}\``), `missing ${specKey}`);
   }
 
-  assert.equal(
-    source.includes("future `takosumi-git/docs/artifact-contract.md`"),
-    false,
-  );
-  assert.ok(source.includes("sibling repo `docs/artifact-contract_test.ts`"));
-  assert.ok(
-    source.includes("sibling repo `takosumi-git/docs/workflow-ref.md`"),
-  );
+  assert.equal(source.includes("deploy-public-api-v1"), false);
+  assert.equal(source.includes("takosumi-git-workflow-ref-v1"), false);
+  assert.equal(source.includes("takosumi-git-artifact-uri-v1"), false);
+  assert.ok(source.includes("packages/installer/src/yaml-parser.ts"));
   assert.match(source, /Source of truth/);
   assert.match(source, /Published reference/);
   assert.match(source, /Drift check/);
 });
 
-Deno.test("public spec source map covers deploy public OpenAPI route", async () => {
+Deno.test("public spec source map covers installer OpenAPI routes", async () => {
   const source = await read("docs/reference/public-spec-source-map.md");
   const reference = await read("docs/reference/kernel-http-api.md");
   const openapi = createPaaSOpenApiDocument({
-    deployPublicRoutesMounted: true,
+    installerPublicRoutesMounted: true,
   });
 
   assert.match(source, /`kernel-http-api-v1`/);
-  assert.match(source, /`deploy-public-api-v1`/);
+  assert.match(source, /`installer-api-v1`/);
   assert.ok(source.includes("packages/kernel/src/api/openapi.ts"));
-  assert.ok(source.includes("packages/kernel/src/api/deploy_public_routes.ts"));
-  assert.ok(source.includes("TAKOSUMI_DEPLOY_PUBLIC_PATH"));
-  assert.ok(source.includes("runDeployPublicDeployment"));
-  assert.ok(source.includes("packages/cli/src/commands/deploy.ts"));
-  assert.ok(source.includes("packages/cli/tests/deploy_remote_test.ts"));
-  assert.ok(source.includes("packages/all/tests/e2e_deploy_test.ts"));
-  assert.ok(openapi.paths[TAKOSUMI_DEPLOY_PUBLIC_PATH]?.post);
-  assert.ok(reference.includes("POST   | `/v1/deployments`"));
-  assert.ok(reference.includes("### `POST /v1/deployments`"));
+  assert.ok(
+    source.includes("packages/kernel/src/api/installer_public_routes.ts"),
+  );
+  assert.ok(source.includes("INSTALLER_INSTALLATIONS_PATH"));
+  assert.ok(source.includes("dryRunInstallation"));
+  assert.ok(
+    source.includes(
+      "packages/kernel/src/api/installer_public_routes_e2e_test.ts",
+    ),
+  );
+  assert.ok(openapi.paths[INSTALLER_INSTALLATIONS_DRY_RUN_PATH]?.post);
+  assert.ok(openapi.paths[INSTALLER_INSTALLATIONS_PATH]?.post);
+  assert.ok(
+    openapi.paths[INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH]?.post,
+  );
+  assert.ok(openapi.paths[INSTALLER_INSTALLATION_DEPLOYMENTS_PATH]?.post);
+  assert.ok(openapi.paths[INSTALLER_INSTALLATION_ROLLBACK_PATH]?.post);
+  assert.ok(reference.includes("POST   | `/v1/installations/dry-run`"));
+  assert.ok(
+    reference.includes("POST   | `/v1/installations/{id}/deployments`"),
+  );
 });
 
 Deno.test("public spec source map Takosumi-owned paths exist", async () => {

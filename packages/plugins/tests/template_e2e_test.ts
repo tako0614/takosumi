@@ -17,7 +17,7 @@ import {
   unregisterProvider,
   unregisterShape,
 } from "takosumi-contract";
-import { TAKOSUMI_BUNDLED_SHAPES } from "../src/kinds/mod.ts";
+import { TAKOSUMI_BUNDLED_KINDS } from "../src/kinds/mod.ts";
 import { createInMemoryTakosumiProviders } from "../src/shape-providers/mod.ts";
 import { SelfhostedSingleVmTemplate } from "../src/templates/selfhosted-single-vm.ts";
 
@@ -117,14 +117,14 @@ function resolveSingle(
 }
 
 function setUp() {
-  for (const shape of TAKOSUMI_BUNDLED_SHAPES) registerShape(shape);
+  for (const shape of TAKOSUMI_BUNDLED_KINDS) registerShape(shape);
   const providers = createInMemoryTakosumiProviders();
   for (const provider of providers) registerProvider(provider);
   return providers;
 }
 
 function tearDown(providers: readonly { id: string }[]) {
-  for (const shape of TAKOSUMI_BUNDLED_SHAPES) {
+  for (const shape of TAKOSUMI_BUNDLED_KINDS) {
     unregisterShape(shape.id, shape.version);
   }
   for (const provider of providers) unregisterProvider(provider.id);

@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import type { ShapeValidationIssue } from "takosumi-contract";
-import { WorkerKind as WorkerShape } from "../src/kinds/worker.ts";
+import { WorkerKind } from "../src/kinds/worker.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];
-  WorkerShape.validateSpec(value, issues);
+  WorkerKind.validateSpec(value, issues);
   return issues;
 }
 
 function outputIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];
-  WorkerShape.validateOutputs(value, issues);
+  WorkerKind.validateOutputs(value, issues);
   return issues;
 }
 
@@ -20,18 +20,18 @@ const validSpec = () => ({
 });
 
 Deno.test("Worker shape exposes id and version", () => {
-  assert.equal(WorkerShape.id, "worker");
-  assert.equal(WorkerShape.version, "v1");
+  assert.equal(WorkerKind.id, "worker");
+  assert.equal(WorkerKind.version, "v1");
 });
 
 Deno.test("Worker capabilities cover serverless traits", () => {
-  assert.ok(WorkerShape.capabilities.includes("scale-to-zero"));
-  assert.ok(WorkerShape.capabilities.includes("websocket"));
-  assert.ok(WorkerShape.capabilities.includes("crons"));
+  assert.ok(WorkerKind.capabilities.includes("scale-to-zero"));
+  assert.ok(WorkerKind.capabilities.includes("websocket"));
+  assert.ok(WorkerKind.capabilities.includes("crons"));
 });
 
 Deno.test("Worker outputFields list is fixed", () => {
-  assert.deepEqual([...WorkerShape.outputFields], [
+  assert.deepEqual([...WorkerKind.outputFields], [
     "url",
     "scriptName",
     "version",

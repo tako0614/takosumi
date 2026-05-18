@@ -5,7 +5,7 @@ import {
   registerShape,
   unregisterShape,
 } from "takosumi-contract";
-import { TAKOSUMI_BUNDLED_SHAPES } from "../src/kinds/mod.ts";
+import { TAKOSUMI_BUNDLED_KINDS } from "../src/kinds/mod.ts";
 import { createInMemoryTakosumiProviders } from "../src/shape-providers/mod.ts";
 
 const ctx = {} as PlatformContext;
@@ -29,7 +29,7 @@ const SAMPLE_SPECS: Record<string, JsonObject> = {
 };
 
 Deno.test("all bundled providers apply with a sample spec for their shape", async () => {
-  for (const shape of TAKOSUMI_BUNDLED_SHAPES) registerShape(shape);
+  for (const shape of TAKOSUMI_BUNDLED_KINDS) registerShape(shape);
   try {
     const providers = createInMemoryTakosumiProviders();
     assert.equal(providers.length, 20);
@@ -66,7 +66,7 @@ Deno.test("all bundled providers apply with a sample spec for their shape", asyn
       );
     }
   } finally {
-    for (const shape of TAKOSUMI_BUNDLED_SHAPES) {
+    for (const shape of TAKOSUMI_BUNDLED_KINDS) {
       unregisterShape(shape.id, shape.version);
     }
   }

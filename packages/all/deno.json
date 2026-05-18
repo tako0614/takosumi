@@ -9,7 +9,7 @@
     ".": "./mod.ts",
     "./kernel": "./kernel.ts",
     "./plugins": "./plugins.ts",
-    "./shapes": "./shapes.ts",
+    "./kinds": "./kinds.ts",
     "./shape-providers": "./shape-providers.ts",
     "./shape-providers/factories": "./shape-providers-factories.ts",
     "./templates": "./templates.ts",

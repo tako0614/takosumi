@@ -8,6 +8,9 @@ Deno.test(
       registerInternalRoutes: false,
       registerPublicRoutes: false,
       registerInstallerPublicRoutes: true,
+      installerPublicRouteOptions: {
+        getInstallerToken: () => "installer-token",
+      },
       requestCorrelation: false,
     });
 
@@ -22,7 +25,10 @@ Deno.test(
     for (const [path, body] of endpoints) {
       const response = await app.request(path, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "authorization": "Bearer installer-token",
+          "content-type": "application/json",
+        },
         body: JSON.stringify(body),
       });
       assertEquals(response.status, 501, `expected 501 for ${path}`);
@@ -45,3 +51,46 @@ Deno.test(
     }
   },
 );
+
+Deno.test(
+  "installer_public_routes — disabled without TAKOSUMI_INSTALLER_TOKEN",
+  async () => {
+    const app = await createApiApp({
+      registerInternalRoutes: false,
+      registerPublicRoutes: false,
+      registerInstallerPublicRoutes: true,
+      requestCorrelation: false,
+    });
+
+    const response = await app.request("/v1/installations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assertEquals(response.status, 404);
+    assertEquals((await response.json()).error.code, "not_found");
+  },
+);
+
+Deno.test("installer_public_routes — rejects invalid bearer", async () => {
+  const app = await createApiApp({
+    registerInternalRoutes: false,
+    registerPublicRoutes: false,
+    registerInstallerPublicRoutes: true,
+    installerPublicRouteOptions: {
+      getInstallerToken: () => "installer-token",
+    },
+    requestCorrelation: false,
+  });
+
+  const response = await app.request("/v1/installations", {
+    method: "POST",
+    headers: {
+      "authorization": "Bearer wrong-token",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({}),
+  });
+  assertEquals(response.status, 401);
+  assertEquals((await response.json()).error.code, "unauthenticated");
+});

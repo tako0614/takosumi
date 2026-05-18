@@ -5,17 +5,17 @@ import {
   unregisterShape,
 } from "takosumi-contract";
 import {
-  registerTakosumiShapes,
-  TAKOSUMI_BUNDLED_SHAPES,
+  registerTakosumiKinds,
+  TAKOSUMI_BUNDLED_KINDS,
 } from "../src/kinds/mod.ts";
 
-Deno.test("registerTakosumiShapes registers all bundled shapes", () => {
-  for (const shape of TAKOSUMI_BUNDLED_SHAPES) {
+Deno.test("registerTakosumiKinds registers all bundled shapes", () => {
+  for (const shape of TAKOSUMI_BUNDLED_KINDS) {
     unregisterShape(shape.id, shape.version);
   }
   try {
-    registerTakosumiShapes();
-    for (const shape of TAKOSUMI_BUNDLED_SHAPES) {
+    registerTakosumiKinds();
+    for (const shape of TAKOSUMI_BUNDLED_KINDS) {
       assert.equal(
         isShapeRegistered(shape.id, shape.version),
         true,
@@ -24,14 +24,14 @@ Deno.test("registerTakosumiShapes registers all bundled shapes", () => {
       assert.equal(getShape(shape.id, shape.version), shape);
     }
   } finally {
-    for (const shape of TAKOSUMI_BUNDLED_SHAPES) {
+    for (const shape of TAKOSUMI_BUNDLED_KINDS) {
       unregisterShape(shape.id, shape.version);
     }
   }
 });
 
-Deno.test("TAKOSUMI_BUNDLED_SHAPES exposes the expected initial set", () => {
-  const ids = TAKOSUMI_BUNDLED_SHAPES.map((s) => `${s.id}@${s.version}`).sort();
+Deno.test("TAKOSUMI_BUNDLED_KINDS exposes the expected initial set", () => {
+  const ids = TAKOSUMI_BUNDLED_KINDS.map((s) => `${s.id}@${s.version}`).sort();
   assert.deepEqual(ids, [
     "custom-domain@v1",
     "database-postgres@v1",

@@ -132,8 +132,8 @@ export async function createApiApp(
   const readinessRoutesMounted = options.registerReadinessRoutes ?? false;
   const artifactRoutesMounted = options.registerArtifactRoutes ??
     (role === "takosumi-api" && options.artifactRouteOptions !== undefined);
-  const installerPublicRoutesMounted =
-    options.registerInstallerPublicRoutes ?? (role === "takosumi-api");
+  const installerPublicRoutesMounted = options.registerInstallerPublicRoutes ??
+    (role === "takosumi-api");
   const metricsRoutesMounted = options.registerMetricsRoutes ??
     (role === "takosumi-api" && options.metricsRouteOptions !== undefined);
 

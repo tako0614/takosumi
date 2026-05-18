@@ -8,10 +8,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@^1.0.5";
 import { Hono } from "hono";
-import {
-  type Component,
-  COMPONENT_KINDS,
-} from "takosumi-contract/app-spec";
+import { type Component, COMPONENT_KINDS } from "takosumi-contract/app-spec";
 import type {
   Deployment,
   Installation,
@@ -46,6 +43,10 @@ components:
       oidc:
         mount: oidc
 `;
+const INSTALLER_AUTH_HEADERS = {
+  "authorization": "Bearer installer-token",
+  "content-type": "application/json",
+} as const;
 
 async function withTempSource<T>(
   fn: (workingDirectory: string) => Promise<T>,
@@ -88,7 +89,10 @@ class RecordingProviderRegistry implements InstallerProviderRegistry {
 
 function buildApp(pipeline: InstallerPipeline) {
   const app = new Hono();
-  mountInstallerPublicRoutes(app, { pipeline });
+  mountInstallerPublicRoutes(app, {
+    pipeline,
+    getInstallerToken: () => "installer-token",
+  });
   return app;
 }
 
@@ -100,7 +104,7 @@ Deno.test("installer e2e — dry-run + apply produce Installation + Deployment",
 
     const dryRunRes = await app.request("/v1/installations/dry-run", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: INSTALLER_AUTH_HEADERS,
       body: JSON.stringify({
         spaceId: "space_test",
         source: { kind: "local", url: workingDirectory },
@@ -115,7 +119,7 @@ Deno.test("installer e2e — dry-run + apply produce Installation + Deployment",
 
     const applyRes = await app.request("/v1/installations", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: INSTALLER_AUTH_HEADERS,
       body: JSON.stringify({
         spaceId: "space_test",
         source: { kind: "local", url: workingDirectory },
@@ -125,7 +129,11 @@ Deno.test("installer e2e — dry-run + apply produce Installation + Deployment",
     assertEquals(applyRes.status, 201);
     const apply = await applyRes.json() as InstallationApplyResponse;
     assertInstallation(apply.installation, "space_test", "example-notes");
-    assertDeployment(apply.deployment, apply.installation.id, dryRun.manifestDigest);
+    assertDeployment(
+      apply.deployment,
+      apply.installation.id,
+      dryRun.manifestDigest,
+    );
     assertEquals(apply.deployment.status, "succeeded");
     assertEquals(apply.deployment.outputs.resources?.length, 2);
 
@@ -149,7 +157,7 @@ Deno.test("installer e2e — apply with mismatched expected returns 412", async 
 
     const res = await app.request("/v1/installations", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: INSTALLER_AUTH_HEADERS,
       body: JSON.stringify({
         spaceId: "space_test",
         source: { kind: "local", url: workingDirectory },
@@ -163,7 +171,13 @@ Deno.test("installer e2e — apply with mismatched expected returns 412", async 
 });
 
 Deno.test("AppSpec frozen kind catalog includes oidc", () => {
-  const expected = ["worker", "postgres", "object-store", "oidc", "custom-domain"];
+  const expected = [
+    "worker",
+    "postgres",
+    "object-store",
+    "oidc",
+    "custom-domain",
+  ];
   for (const kind of expected) {
     assert(
       (COMPONENT_KINDS as readonly string[]).includes(kind),

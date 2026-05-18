@@ -170,6 +170,7 @@
           "jsr:@std/yaml@1",
           "jsr:@takos/takosumi-contract@^2.5.0",
           "jsr:@takos/takosumi-kernel@0.14",
+          "jsr:@takos/takosumi-plugins@0.12",
           "jsr:@takos/takosumi-runtime-agent@0.7"
         ]
       },

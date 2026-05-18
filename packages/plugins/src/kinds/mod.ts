@@ -4,8 +4,7 @@
  *
  * Each kind exports a `*Kind` descriptor; the v1 AppSpec installer
  * pipeline materializes components through provider plugins keyed off
- * `Component.kind`. Legacy `*Shape` aliases are kept until the rest of
- * the workspace flips to the new names in Phase C of the Wave 5 reset.
+ * `Component.kind`.
  */
 import { registerShape, type Shape } from "takosumi-contract";
 import { WebServiceKind } from "./web-service.ts";
@@ -22,15 +21,6 @@ export {
   OidcKind,
   WebServiceKind,
   WorkerKind,
-};
-
-/** Backwards-compat aliases — removed in Wave 5 Phase C. */
-export {
-  CustomDomainKind as CustomDomainShape,
-  DatabasePostgresKind as DatabasePostgresShape,
-  ObjectStoreKind as ObjectStoreShape,
-  WebServiceKind as WebServiceShape,
-  WorkerKind as WorkerShape,
 };
 
 export type {
@@ -79,14 +69,8 @@ export const TAKOSUMI_BUNDLED_KINDS: readonly Shape[] = [
   OidcKind as Shape,
 ];
 
-/** Backwards-compat alias — removed in Wave 5 Phase C. */
-export const TAKOSUMI_BUNDLED_SHAPES = TAKOSUMI_BUNDLED_KINDS;
-
 export function registerTakosumiKinds(): void {
   for (const kind of TAKOSUMI_BUNDLED_KINDS) {
     registerShape(kind);
   }
 }
-
-/** Backwards-compat alias — removed in Wave 5 Phase C. */
-export const registerTakosumiShapes = registerTakosumiKinds;

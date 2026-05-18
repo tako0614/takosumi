@@ -62,21 +62,36 @@ export function mountInstallerPublicRoutes(
   const pipeline = dependencies.pipeline;
 
   if (!pipeline) {
-    app.post(INSTALLER_INSTALLATIONS_DRY_RUN_PATH, (c) =>
-      authorizeInstaller(c, dependencies) ??
-        c.json(notImplemented("installer dry-run not yet implemented"), 501));
-    app.post(INSTALLER_INSTALLATIONS_PATH, (c) =>
-      authorizeInstaller(c, dependencies) ??
-        c.json(notImplemented("installer apply not yet implemented"), 501));
-    app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH, (c) =>
-      authorizeInstaller(c, dependencies) ??
-        c.json(notImplemented("deployment dry-run not yet implemented"), 501));
-    app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_PATH, (c) =>
-      authorizeInstaller(c, dependencies) ??
-        c.json(notImplemented("deployment apply not yet implemented"), 501));
-    app.post(INSTALLER_INSTALLATION_ROLLBACK_PATH, (c) =>
-      authorizeInstaller(c, dependencies) ??
-        c.json(notImplemented("rollback not yet implemented"), 501));
+    app.post(
+      INSTALLER_INSTALLATIONS_DRY_RUN_PATH,
+      (c) =>
+        authorizeInstaller(c, dependencies) ??
+          c.json(notImplemented("installer dry-run not yet implemented"), 501),
+    );
+    app.post(
+      INSTALLER_INSTALLATIONS_PATH,
+      (c) =>
+        authorizeInstaller(c, dependencies) ??
+          c.json(notImplemented("installer apply not yet implemented"), 501),
+    );
+    app.post(
+      INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
+      (c) =>
+        authorizeInstaller(c, dependencies) ??
+          c.json(notImplemented("deployment dry-run not yet implemented"), 501),
+    );
+    app.post(
+      INSTALLER_INSTALLATION_DEPLOYMENTS_PATH,
+      (c) =>
+        authorizeInstaller(c, dependencies) ??
+          c.json(notImplemented("deployment apply not yet implemented"), 501),
+    );
+    app.post(
+      INSTALLER_INSTALLATION_ROLLBACK_PATH,
+      (c) =>
+        authorizeInstaller(c, dependencies) ??
+          c.json(notImplemented("rollback not yet implemented"), 501),
+    );
     return;
   }
 
@@ -170,7 +185,10 @@ async function runHandler(
     return await fn();
   } catch (err) {
     if (err instanceof InstallerPipelineError) {
-      return c.json(errorEnvelope(err.code, err.message), pipelineHttpStatus(err.code));
+      return c.json(
+        errorEnvelope(err.code, err.message),
+        pipelineHttpStatus(err.code),
+      );
     }
     const message = err instanceof Error ? err.message : String(err);
     return c.json(errorEnvelope("internal_error", message), 500);
@@ -188,7 +206,9 @@ async function readJsonBody<T>(c: Context): Promise<T> {
   }
 }
 
-function pipelineHttpStatus(code: InstallerPipelineErrorCode): 400 | 401 | 403 | 404 | 412 | 429 | 500 | 501 {
+function pipelineHttpStatus(
+  code: InstallerPipelineErrorCode,
+): 400 | 401 | 403 | 404 | 412 | 429 | 500 | 501 {
   switch (code) {
     case "invalid_argument":
       return 400;

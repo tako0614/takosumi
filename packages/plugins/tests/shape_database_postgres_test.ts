@@ -1,26 +1,26 @@
 import assert from "node:assert/strict";
 import type { ShapeValidationIssue } from "takosumi-contract";
-import { DatabasePostgresKind as DatabasePostgresShape } from "../src/kinds/database-postgres.ts";
+import { DatabasePostgresKind } from "../src/kinds/database-postgres.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];
-  DatabasePostgresShape.validateSpec(value, issues);
+  DatabasePostgresKind.validateSpec(value, issues);
   return issues;
 }
 
 function outputIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];
-  DatabasePostgresShape.validateOutputs(value, issues);
+  DatabasePostgresKind.validateOutputs(value, issues);
   return issues;
 }
 
 Deno.test("DatabasePostgres shape exposes id and version", () => {
-  assert.equal(DatabasePostgresShape.id, "database-postgres");
-  assert.equal(DatabasePostgresShape.version, "v1");
+  assert.equal(DatabasePostgresKind.id, "database-postgres");
+  assert.equal(DatabasePostgresKind.version, "v1");
 });
 
 Deno.test("DatabasePostgres output fields produce a portable connection contract", () => {
-  assert.deepEqual([...DatabasePostgresShape.outputFields], [
+  assert.deepEqual([...DatabasePostgresKind.outputFields], [
     "host",
     "port",
     "database",

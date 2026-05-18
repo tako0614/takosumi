@@ -4,6 +4,13 @@ import {
   TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract";
 import {
+  INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
+  INSTALLER_INSTALLATION_DEPLOYMENTS_PATH,
+  INSTALLER_INSTALLATION_ROLLBACK_PATH,
+  INSTALLER_INSTALLATIONS_DRY_RUN_PATH,
+  INSTALLER_INSTALLATIONS_PATH,
+} from "./installer_public_routes.ts";
+import {
   PROMETHEUS_CONTENT_TYPE,
   TAKOSUMI_METRICS_PATH,
 } from "./metrics_routes.ts";
@@ -320,7 +327,7 @@ export function createPaaSOpenApiDocument(
           mountedPath: TAKOSUMI_PAAS_PUBLIC_PATHS.groupRollback,
         }),
       },
-      "/v1/installations/dry-run": {
+      [INSTALLER_INSTALLATIONS_DRY_RUN_PATH]: {
         post: operation({
           operationId: "dryRunInstallation",
           summary: "Plans a fresh AppSpec install without persisting state.",
@@ -328,10 +335,10 @@ export function createPaaSOpenApiDocument(
           auth: "installer-token",
           requestSchema: "InstallerAppSpecBody",
           okSchema: "InstallerDryRunResponse",
-          mountedPath: "/v1/installations/dry-run",
+          mountedPath: INSTALLER_INSTALLATIONS_DRY_RUN_PATH,
         }),
       },
-      "/v1/installations": {
+      [INSTALLER_INSTALLATIONS_PATH]: {
         post: operation({
           operationId: "createInstallation",
           summary: "Creates an Installation from a posted AppSpec.",
@@ -340,44 +347,44 @@ export function createPaaSOpenApiDocument(
           requestSchema: "InstallerAppSpecBody",
           okStatus: "201",
           okSchema: "InstallerInstallationResponse",
-          mountedPath: "/v1/installations",
+          mountedPath: INSTALLER_INSTALLATIONS_PATH,
         }),
       },
-      "/v1/installations/:id/deployments/dry-run": {
+      [INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH]: {
         post: operation({
           operationId: "dryRunInstallationDeployment",
           summary: "Plans a re-deploy against an existing Installation.",
           tag: "installer-public",
           auth: "installer-token",
-          pathParams: ["id"],
+          pathParams: ["installationId"],
           requestSchema: "InstallerAppSpecBody",
           okSchema: "InstallerDryRunResponse",
-          mountedPath: "/v1/installations/:id/deployments/dry-run",
+          mountedPath: INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
         }),
       },
-      "/v1/installations/:id/deployments": {
+      [INSTALLER_INSTALLATION_DEPLOYMENTS_PATH]: {
         post: operation({
           operationId: "applyInstallationDeployment",
           summary: "Applies a Deployment against an existing Installation.",
           tag: "installer-public",
           auth: "installer-token",
-          pathParams: ["id"],
+          pathParams: ["installationId"],
           requestSchema: "InstallerAppSpecBody",
           okStatus: "201",
           okSchema: "InstallerInstallationResponse",
-          mountedPath: "/v1/installations/:id/deployments",
+          mountedPath: INSTALLER_INSTALLATION_DEPLOYMENTS_PATH,
         }),
       },
-      "/v1/installations/:id/rollback": {
+      [INSTALLER_INSTALLATION_ROLLBACK_PATH]: {
         post: operation({
           operationId: "rollbackInstallation",
           summary: "Rolls an Installation back to a prior Deployment.",
           tag: "installer-public",
           auth: "installer-token",
-          pathParams: ["id"],
+          pathParams: ["installationId"],
           requestSchema: "InstallerRollbackRequest",
           okSchema: "InstallerInstallationResponse",
-          mountedPath: "/v1/installations/:id/rollback",
+          mountedPath: INSTALLER_INSTALLATION_ROLLBACK_PATH,
         }),
       },
       [ARTIFACTS_BASE_PATH]: {

@@ -1,32 +1,32 @@
 import assert from "node:assert/strict";
 import type { ShapeValidationIssue } from "takosumi-contract";
-import { WebServiceKind as WebServiceShape } from "../src/kinds/web-service.ts";
+import { WebServiceKind } from "../src/kinds/web-service.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];
-  WebServiceShape.validateSpec(value, issues);
+  WebServiceKind.validateSpec(value, issues);
   return issues;
 }
 
 function outputIssues(value: unknown): ShapeValidationIssue[] {
   const issues: ShapeValidationIssue[] = [];
-  WebServiceShape.validateOutputs(value, issues);
+  WebServiceKind.validateOutputs(value, issues);
   return issues;
 }
 
 Deno.test("WebService shape exposes id and version", () => {
-  assert.equal(WebServiceShape.id, "web-service");
-  assert.equal(WebServiceShape.version, "v1");
+  assert.equal(WebServiceKind.id, "web-service");
+  assert.equal(WebServiceKind.version, "v1");
 });
 
 Deno.test("WebService capabilities include common runtime traits", () => {
-  assert.ok(WebServiceShape.capabilities.includes("always-on"));
-  assert.ok(WebServiceShape.capabilities.includes("scale-to-zero"));
-  assert.ok(WebServiceShape.capabilities.includes("websocket"));
+  assert.ok(WebServiceKind.capabilities.includes("always-on"));
+  assert.ok(WebServiceKind.capabilities.includes("scale-to-zero"));
+  assert.ok(WebServiceKind.capabilities.includes("websocket"));
 });
 
 Deno.test("WebService outputFields list is fixed", () => {
-  assert.deepEqual([...WebServiceShape.outputFields], [
+  assert.deepEqual([...WebServiceKind.outputFields], [
     "url",
     "internalHost",
     "internalPort",
