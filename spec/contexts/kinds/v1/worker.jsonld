@@ -5,38 +5,52 @@
   "name": "worker",
   "version": "v1",
   "description": "Serverless JS function backed by an uploaded `js-bundle` artifact.",
-  "spec": [
-    {
-      "name": "artifact",
-      "type": "object",
-      "required": true,
-      "meaning": "Artifact descriptor. `artifact.kind` must be `js-bundle`; `artifact.hash` is required (no external `uri`)."
-    },
-    {
-      "name": "compatibilityDate",
-      "type": "string",
-      "required": true,
-      "meaning": "Cloudflare Workers compatibility date (e.g. `2025-01-01`)."
-    },
-    {
-      "name": "compatibilityFlags",
-      "type": "string[]",
-      "required": false,
-      "meaning": "Optional compatibility flags (e.g. `nodejs_compat`)."
-    },
-    {
-      "name": "env",
-      "type": "Record<string,string>",
-      "required": false,
-      "meaning": "Optional env vars / bindings."
-    },
-    {
-      "name": "routes",
-      "type": "string[]",
-      "required": false,
-      "meaning": "Route patterns the worker handles (e.g. `/`, `/api/*`)."
+  "x-ts": {
+    "fileBasename": "worker",
+    "prefix": "Worker",
+    "shapeId": "worker"
+  },
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["artifact", "compatibilityDate"],
+    "additionalProperties": false,
+    "properties": {
+      "artifact": {
+        "type": "object",
+        "description": "Artifact descriptor. `artifact.kind` must be `js-bundle`; `artifact.hash` is required (no external `uri`).",
+        "required": ["kind", "hash"],
+        "x-ts-type": {
+          "import": "takosumi-contract",
+          "name": "Artifact"
+        },
+        "properties": {
+          "kind": { "const": "js-bundle" },
+          "hash": { "type": "string", "minLength": 1 }
+        }
+      },
+      "compatibilityDate": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Cloudflare Workers compatibility date (e.g. `2025-01-01`)."
+      },
+      "compatibilityFlags": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "description": "Optional compatibility flags (e.g. `nodejs_compat`)."
+      },
+      "env": {
+        "type": "object",
+        "additionalProperties": { "type": "string" },
+        "description": "Optional env vars / bindings."
+      },
+      "routes": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "description": "Route patterns the worker handles (e.g. `/`, `/api/*`)."
+      }
     }
-  ],
+  },
   "outputs": [
     {
       "name": "url",

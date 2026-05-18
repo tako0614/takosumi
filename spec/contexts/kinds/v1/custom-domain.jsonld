@@ -5,32 +5,55 @@
   "name": "custom-domain",
   "version": "v1",
   "description": "DNS + TLS-terminated public domain pointing at a target URL.",
-  "spec": [
-    {
-      "name": "name",
-      "type": "string",
-      "required": true,
-      "meaning": "Fully-qualified domain name (e.g. `notes.example.com`)."
-    },
-    {
-      "name": "target",
-      "type": "string",
-      "required": true,
-      "meaning": "Component name whose `url` output this domain points at."
-    },
-    {
-      "name": "certificate",
-      "type": "object",
-      "required": false,
-      "meaning": "`{ kind: 'auto' | 'managed' | 'provided', secretRef?: string }`. `secretRef` is required when `kind: provided`."
-    },
-    {
-      "name": "redirects",
-      "type": "object[]",
-      "required": false,
-      "meaning": "Each entry: `{ from: string, to: string, code?: 301 | 302 | 307 | 308 }`."
+  "x-ts": {
+    "fileBasename": "custom-domain",
+    "prefix": "CustomDomain",
+    "shapeId": "custom-domain"
+  },
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["name", "target"],
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Fully-qualified domain name (e.g. `notes.example.com`)."
+      },
+      "target": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Component name whose `url` output this domain points at."
+      },
+      "certificate": {
+        "type": "object",
+        "required": ["kind"],
+        "description": "TLS certificate provisioning policy. `secretRef` is required when `kind: provided`.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["auto", "managed", "provided"]
+          },
+          "secretRef": { "type": "string", "minLength": 1 }
+        }
+      },
+      "redirects": {
+        "type": "array",
+        "description": "HTTP redirect rules served by the domain edge.",
+        "items": {
+          "type": "object",
+          "x-ts-name": "Redirect",
+          "required": ["from", "to"],
+          "properties": {
+            "from": { "type": "string", "minLength": 1 },
+            "to": { "type": "string", "minLength": 1 },
+            "code": { "type": "integer", "enum": [301, 302, 307, 308] }
+          }
+        }
+      }
     }
-  ],
+  },
   "outputs": [
     {
       "name": "fqdn",

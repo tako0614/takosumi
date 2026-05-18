@@ -29,7 +29,7 @@
     },
     "spec": {
       "@id": "takosumi:spec",
-      "@container": "@set"
+      "@type": "@json"
     },
     "outputs": {
       "@id": "takosumi:outputs",
@@ -44,8 +44,7 @@
       "@type": "xsd:string"
     },
     "required": {
-      "@id": "takosumi:required",
-      "@type": "xsd:boolean"
+      "@id": "takosumi:required"
     },
     "meaning": {
       "@id": "takosumi:meaning",
