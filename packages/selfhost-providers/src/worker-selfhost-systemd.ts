@@ -8,7 +8,7 @@ import {
   createSystemdUnitWebServiceProvider,
   InMemorySystemdUnitLifecycle,
   type SystemdUnitLifecycleClient,
-} from "../shape-providers/web-service/systemd-unit.ts";
+} from "@takos/takosumi-plugins/shape-providers/web-service/systemd-unit";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_WORKER } from "./_kinds.ts";
 

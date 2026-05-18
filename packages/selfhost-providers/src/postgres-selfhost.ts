@@ -8,7 +8,7 @@ import {
   createLocalDockerPostgresProvider,
   InMemoryLocalDockerPostgresLifecycle,
   type LocalDockerPostgresLifecycleClient,
-} from "../shape-providers/database-postgres/local-docker.ts";
+} from "@takos/takosumi-plugins/shape-providers/database-postgres/local-docker";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_POSTGRES } from "./_kinds.ts";
 

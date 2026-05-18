@@ -1,0 +1,25 @@
+{
+  "name": "@takos/takosumi-selfhost-providers",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts",
+    "./worker-docker-compose": "./src/worker-selfhost-docker-compose.ts",
+    "./worker-systemd": "./src/worker-selfhost-systemd.ts",
+    "./object-store-minio": "./src/object-store-selfhost-minio.ts",
+    "./object-store-filesystem": "./src/object-store-selfhost-filesystem.ts",
+    "./postgres": "./src/postgres-selfhost.ts"
+  },
+  "imports": {
+    "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
+    "@takos/takosumi-plugins/shape-providers/web-service/docker-compose": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/web-service/docker-compose",
+    "@takos/takosumi-plugins/shape-providers/web-service/systemd-unit": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/web-service/systemd-unit",
+    "@takos/takosumi-plugins/shape-providers/object-store/minio": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/object-store/minio",
+    "@takos/takosumi-plugins/shape-providers/object-store/filesystem": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/object-store/filesystem",
+    "@takos/takosumi-plugins/shape-providers/database-postgres/local-docker": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/database-postgres/local-docker"
+  },
+  "tasks": {
+    "check": "bash -lc 'find . -name \"*.ts\" ! -name \"*_test.ts\" -print0 | xargs -0 deno check'",
+    "test": "deno test --allow-all"
+  }
+}

@@ -8,7 +8,7 @@ import {
   createDockerComposeWebServiceProvider,
   type DockerComposeServiceLifecycleClient,
   InMemoryDockerComposeLifecycle,
-} from "../shape-providers/web-service/docker-compose.ts";
+} from "@takos/takosumi-plugins/shape-providers/web-service/docker-compose";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_WORKER } from "./_kinds.ts";
 

@@ -8,7 +8,7 @@ import {
   createFilesystemObjectStoreProvider,
   type FilesystemBucketLifecycleClient,
   InMemoryFilesystemLifecycle,
-} from "../shape-providers/object-store/filesystem.ts";
+} from "@takos/takosumi-plugins/shape-providers/object-store/filesystem";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_OBJECT_STORE } from "./_kinds.ts";
 
