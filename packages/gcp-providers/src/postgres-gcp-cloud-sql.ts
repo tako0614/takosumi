@@ -7,7 +7,7 @@ import {
   type CloudSqlLifecycleClient,
   createCloudSqlProvider,
   InMemoryCloudSqlLifecycle,
-} from "../shape-providers/database-postgres/cloud-sql.ts";
+} from "@takos/takosumi-plugins/shape-providers/database-postgres/cloud-sql";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_POSTGRES } from "./_kinds.ts";
 

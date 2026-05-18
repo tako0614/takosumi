@@ -7,7 +7,7 @@ import {
   createGcsObjectStoreProvider,
   type GcsLifecycleClient,
   InMemoryGcsLifecycle,
-} from "../shape-providers/object-store/gcp-gcs.ts";
+} from "@takos/takosumi-plugins/shape-providers/object-store/gcp-gcs";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_OBJECT_STORE } from "./_kinds.ts";
 

@@ -7,7 +7,7 @@ import {
   type CloudRunLifecycleClient,
   createCloudRunWebServiceProvider,
   InMemoryCloudRunLifecycle,
-} from "../shape-providers/web-service/cloud-run.ts";
+} from "@takos/takosumi-plugins/shape-providers/web-service/cloud-run";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_WORKER } from "./_kinds.ts";
 
