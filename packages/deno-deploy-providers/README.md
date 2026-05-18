@@ -2,8 +2,8 @@
 
 Deno Deploy-backed `KernelPlugin` factory for the canonical Takosumi `worker`
 component kind. Operators import this package explicitly when they want Deno
-Deploy coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud
-SDK code, so the operator chooses which provider packages to attach to
+Deploy coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK
+code, so the operator chooses which provider packages to attach to
 `createPaaSApp({ plugins: [...] })`.
 
 ## Install
@@ -21,9 +21,9 @@ const { app } = await createPaaSApp({
 
 ## Exports
 
-| Factory                      | Kind URI                               |
-| ---------------------------- | -------------------------------------- |
-| `denoDeployWorkerProvider`   | `https://takosumi.com/kinds/v1/worker` |
+| Factory                    | Kind URI                               |
+| -------------------------- | -------------------------------------- |
+| `denoDeployWorkerProvider` | `https://takosumi.com/kinds/v1/worker` |
 
 ## See also
 

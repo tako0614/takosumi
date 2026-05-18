@@ -86,19 +86,19 @@ Takosumi Account  (契約 / billing / identity owner)
 
 AppSpec は `.takosumi.yml` の `components` に名前付き Component を宣言する。 各
 Component は `kind` を 1 つ持ち (= 短 alias または完全 JSON-LD URI)、 kernel
-installer が apply 時に **materializer** (= 実装層、 operator config で
-inject される) を解決して runtime state (= Resource) を作る。
+installer が apply 時に **materializer** (= 実装層、 operator config で inject
+される) を解決して runtime state (= Resource) を作る。
 
-| 公開 概念 | 説明                                                              |
-| --------- | ----------------------------------------------------------------- |
+| 公開 概念 | 説明                                                             |
+| --------- | ---------------------------------------------------------------- |
 | Component | AppSpec が宣言する kind / build / publish / listen を持つ 1 unit |
 
-| 内部 概念 | 説明                                                          |
-| --------- | ------------------------------------------------------------- |
-| Resource  | apply 後の materializer-scope runtime state record            |
-| Namespace | publish / listen の registry (= path → material map)          |
-| Secret    | listen 経由で resolve された credential store                 |
-| Event     | hash-chain audit log (内部 audit、 public route 外)           |
+| 内部 概念 | 説明                                                 |
+| --------- | ---------------------------------------------------- |
+| Resource  | apply 後の materializer-scope runtime state record   |
+| Namespace | publish / listen の registry (= path → material map) |
+| Secret    | listen 経由で resolve された credential store        |
+| Event     | hash-chain audit log (内部 audit、 public route 外)  |
 
 `Resource` / `Namespace` / `Secret` / `Event` は実装内部 entity であり、 public
 API には登場しません。 Installation + Deployment + (内部 resources / namespaces
@@ -151,7 +151,8 @@ OAuth / OIDC の login flow は kernel 内ではなく
 OIDC client material を publish し、 worker は `listen.operator.identity.oidc`
 で `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` /
 `OIDC_REDIRECT_URIS` を受け取ります。 kernel core 自身は OAuth issuer endpoint
-も `kind: oidc` 解決も **持ちません** (= takosumi-cloud 側の materializer の責務)。
+も `kind: oidc` 解決も **持ちません** (= takosumi-cloud 側の materializer
+の責務)。
 
 ## Resource broker
 
@@ -166,9 +167,9 @@ kernel は `components[]` に宣言された Component を materializer operatio
 Resource は internal record として control plane が persist し、 Installation や
 materializer の lifecycle と independent な durable record を持つ。 materializer
 側の observed state は ProviderObservation stream として記録され、 canonical な
-desired state は AppSpec の component entry です。 compute への接続は
-`publish` / `listen` から resolve された material が namespace registry を
-経由して env / binding として materialize される。
+desired state は AppSpec の component entry です。 compute への接続は `publish`
+/ `listen` から resolve された material が namespace registry を 経由して env /
+binding として materialize される。
 
 ```yaml
 components:

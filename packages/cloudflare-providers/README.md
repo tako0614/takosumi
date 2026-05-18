@@ -27,11 +27,11 @@ const { app } = await createPaaSApp({
 
 ## Exports
 
-| Factory                            | Kind URI                                                 |
-| ---------------------------------- | -------------------------------------------------------- |
-| `cloudflareWorkerProvider`         | `https://takosumi.com/kinds/v1/worker`                   |
-| `cloudflareR2ObjectStoreProvider`  | `https://takosumi.com/kinds/v1/object-store`             |
-| `cloudflareCustomDomainProvider`   | `https://takosumi.com/kinds/v1/custom-domain`            |
+| Factory                           | Kind URI                                      |
+| --------------------------------- | --------------------------------------------- |
+| `cloudflareWorkerProvider`        | `https://takosumi.com/kinds/v1/worker`        |
+| `cloudflareR2ObjectStoreProvider` | `https://takosumi.com/kinds/v1/object-store`  |
+| `cloudflareCustomDomainProvider`  | `https://takosumi.com/kinds/v1/custom-domain` |
 
 Each factory returns a `KernelPlugin` (see
 [`@takos/takosumi-contract/plugin`](https://jsr.io/@takos/takosumi-contract)).

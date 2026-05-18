@@ -172,12 +172,12 @@ connector 側の dedupe ledger) に projection することでこれを実現す
 
 `connector:<id>` と `implementation` は runtime-agent 内で重ねられた role
 である。 `connector:<id>` は operator がインストールする adapter で、ある
-`(kind, provider)` ペアの DataAsset / handle shape を定義し、lifecycle
-operation を公開する。implementation は connector の上で OperationPlan の step
-を実行する operation-level のロジックである。両 role とも同じ runtime-agent
-プロセスに host されるが、責務は混ざらない: connector lifecycle は永続的で
-handle-key 付きの object であり、implementation は connector を借りて下層 SDK
-を駆動する per-operation の実行である。
+`(kind, provider)` ペアの DataAsset / handle shape を定義し、lifecycle operation
+を公開する。implementation は connector の上で OperationPlan の step を実行する
+operation-level のロジックである。両 role とも同じ runtime-agent プロセスに host
+されるが、責務は混ざらない: connector lifecycle は永続的で handle-key 付きの
+object であり、implementation は connector を借りて下層 SDK を駆動する
+per-operation の実行である。
 
 ## Verify semantics
 

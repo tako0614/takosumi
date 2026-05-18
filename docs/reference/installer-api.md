@@ -326,15 +326,15 @@ interface ApiErrorEnvelope {
 }
 ```
 
-| code                  | HTTP | 主な発生要因                                                                                |
-| --------------------- | ---- | ------------------------------------------------------------------------------------------- |
-| `invalid_argument`    | 400  | AppSpec schema違反、 unknown kind、 cyclic `publish` → `listen` graph                       |
-| `unauthenticated`     | 401  | bearer 不足                                                                                 |
-| `permission_denied`   | 403  | actor が Space に対する権限不足                                                             |
-| `not_found`           | 404  | Installation / Deployment 不在                                                              |
+| code                  | HTTP | 主な発生要因                                                                                       |
+| --------------------- | ---- | -------------------------------------------------------------------------------------------------- |
+| `invalid_argument`    | 400  | AppSpec schema違反、 unknown kind、 cyclic `publish` → `listen` graph                              |
+| `unauthenticated`     | 401  | bearer 不足                                                                                        |
+| `permission_denied`   | 403  | actor が Space に対する権限不足                                                                    |
+| `not_found`           | 404  | Installation / Deployment 不在                                                                     |
 | `failed_precondition` | 409  | `expected.commit` mismatch、 既存 Installation suspended、 listen 対象 namespace path が未 publish |
-| `resource_exhausted`  | 413  | build artifact / payload が provider quota / request size 上限超過                          |
-| `internal_error`      | 500  | unhandled exception                                                                         |
+| `resource_exhausted`  | 413  | build artifact / payload が provider quota / request size 上限超過                                 |
+| `internal_error`      | 500  | unhandled exception                                                                                |
 
 ## Cross-references
 

@@ -19,7 +19,10 @@ import {
 
 const { app } = await createPaaSApp({
   plugins: [
-    awsFargateWorkerProvider({ clusterName: env.ECS_CLUSTER, region: env.AWS_REGION }),
+    awsFargateWorkerProvider({
+      clusterName: env.ECS_CLUSTER,
+      region: env.AWS_REGION,
+    }),
     awsS3ObjectStoreProvider({ region: env.AWS_REGION }),
     awsRdsPostgresProvider({ region: env.AWS_REGION }),
     awsRoute53CustomDomainProvider({ hostedZoneId: env.ROUTE53_ZONE_ID }),
@@ -29,12 +32,12 @@ const { app } = await createPaaSApp({
 
 ## Exports
 
-| Factory                            | Kind URI                                       |
-| ---------------------------------- | ---------------------------------------------- |
-| `awsFargateWorkerProvider`         | `https://takosumi.com/kinds/v1/worker`         |
-| `awsS3ObjectStoreProvider`         | `https://takosumi.com/kinds/v1/object-store`   |
-| `awsRdsPostgresProvider`           | `https://takosumi.com/kinds/v1/postgres`       |
-| `awsRoute53CustomDomainProvider`   | `https://takosumi.com/kinds/v1/custom-domain`  |
+| Factory                          | Kind URI                                      |
+| -------------------------------- | --------------------------------------------- |
+| `awsFargateWorkerProvider`       | `https://takosumi.com/kinds/v1/worker`        |
+| `awsS3ObjectStoreProvider`       | `https://takosumi.com/kinds/v1/object-store`  |
+| `awsRdsPostgresProvider`         | `https://takosumi.com/kinds/v1/postgres`      |
+| `awsRoute53CustomDomainProvider` | `https://takosumi.com/kinds/v1/custom-domain` |
 
 ## See also
 

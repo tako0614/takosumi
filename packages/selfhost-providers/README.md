@@ -1,9 +1,9 @@
 # @takos/takosumi-selfhost-providers
 
-Self-host-backed `KernelPlugin` factories for the canonical Takosumi
-component kinds (`worker` / `object-store` / `postgres`). Provides a
-credential-free baseline for Takosumi operators who want to run the kernel
-without any cloud account.
+Self-host-backed `KernelPlugin` factories for the canonical Takosumi component
+kinds (`worker` / `object-store` / `postgres`). Provides a credential-free
+baseline for Takosumi operators who want to run the kernel without any cloud
+account.
 
 Operators import this package explicitly — Takosumi core
 (`@takos/takosumi-kernel`) ships zero cloud / self-host SDK code, so the
@@ -23,7 +23,9 @@ import {
 const { app } = await createPaaSApp({
   plugins: [
     selfhostDockerComposeWorkerProvider(),
-    selfhostFilesystemObjectStoreProvider({ rootDir: "/var/lib/takos/object-store" }),
+    selfhostFilesystemObjectStoreProvider({
+      rootDir: "/var/lib/takos/object-store",
+    }),
     selfhostPostgresProvider(),
   ],
 });
@@ -31,13 +33,13 @@ const { app } = await createPaaSApp({
 
 ## Exports
 
-| Factory                                  | Kind URI                                       |
-| ---------------------------------------- | ---------------------------------------------- |
-| `selfhostDockerComposeWorkerProvider`    | `https://takosumi.com/kinds/v1/worker`         |
-| `selfhostSystemdWorkerProvider`          | `https://takosumi.com/kinds/v1/worker`         |
-| `selfhostMinioObjectStoreProvider`       | `https://takosumi.com/kinds/v1/object-store`   |
-| `selfhostFilesystemObjectStoreProvider`  | `https://takosumi.com/kinds/v1/object-store`   |
-| `selfhostPostgresProvider`               | `https://takosumi.com/kinds/v1/postgres`       |
+| Factory                                 | Kind URI                                     |
+| --------------------------------------- | -------------------------------------------- |
+| `selfhostDockerComposeWorkerProvider`   | `https://takosumi.com/kinds/v1/worker`       |
+| `selfhostSystemdWorkerProvider`         | `https://takosumi.com/kinds/v1/worker`       |
+| `selfhostMinioObjectStoreProvider`      | `https://takosumi.com/kinds/v1/object-store` |
+| `selfhostFilesystemObjectStoreProvider` | `https://takosumi.com/kinds/v1/object-store` |
+| `selfhostPostgresProvider`              | `https://takosumi.com/kinds/v1/postgres`     |
 
 ## See also
 

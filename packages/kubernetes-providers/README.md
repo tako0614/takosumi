@@ -1,10 +1,10 @@
 # @takos/takosumi-kubernetes-providers
 
 Kubernetes-backed `KernelPlugin` factory for the canonical Takosumi `worker`
-component kind, targeting vanilla / k3s Deployment + Service. Operators
-import this package explicitly when they want Kubernetes coverage — Takosumi
-core (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator
-chooses which provider packages to attach to `createPaaSApp({ plugins: [...] })`.
+component kind, targeting vanilla / k3s Deployment + Service. Operators import
+this package explicitly when they want Kubernetes coverage — Takosumi core
+(`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses
+which provider packages to attach to `createPaaSApp({ plugins: [...] })`.
 
 ## Install
 
@@ -24,9 +24,9 @@ const { app } = await createPaaSApp({
 
 ## Exports
 
-| Factory                      | Kind URI                                |
-| ---------------------------- | --------------------------------------- |
-| `kubernetesWorkerProvider`   | `https://takosumi.com/kinds/v1/worker`  |
+| Factory                    | Kind URI                               |
+| -------------------------- | -------------------------------------- |
+| `kubernetesWorkerProvider` | `https://takosumi.com/kinds/v1/worker` |
 
 ## See also
 

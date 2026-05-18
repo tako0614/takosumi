@@ -224,11 +224,13 @@ function checkListens(
         message: `listens[${key}].shape must be a non-empty string`,
       });
     }
-    if (d["envMap"] !== undefined && (
-      d["envMap"] === null ||
-      typeof d["envMap"] !== "object" ||
-      Array.isArray(d["envMap"])
-    )) {
+    if (
+      d["envMap"] !== undefined && (
+        d["envMap"] === null ||
+        typeof d["envMap"] !== "object" ||
+        Array.isArray(d["envMap"])
+      )
+    ) {
       issues.push({
         path,
         message: `listens[${key}].envMap must be an object when present`,

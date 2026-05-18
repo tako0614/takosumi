@@ -4,8 +4,8 @@
 > pinned sha256 digest + TLS fetch** で fail-closed に検証する。 publisher
 > signing model は採用しない。
 
-CatalogRelease は Takosumi v1 で「kind / materializer の release pin」 を
-Space に adopt する単位。
+CatalogRelease は Takosumi v1 で「kind / materializer の release pin」 を Space
+に adopt する単位。
 
 ## Trust model summary
 
@@ -87,8 +87,16 @@ body の中身):
       { "uri": "https://takosumi.com/kinds/v1/postgres", "version": "1.0.0" }
     ],
     "materializers": [
-      { "kindUri": "https://takosumi.com/kinds/v1/worker", "providerId": "@takos/cloudflare-workers", "version": "1.0.0" },
-      { "kindUri": "https://takosumi.com/kinds/v1/worker", "providerId": "@takos/aws-fargate", "version": "1.0.0" }
+      {
+        "kindUri": "https://takosumi.com/kinds/v1/worker",
+        "providerId": "@takos/cloudflare-workers",
+        "version": "1.0.0"
+      },
+      {
+        "kindUri": "https://takosumi.com/kinds/v1/worker",
+        "providerId": "@takos/aws-fargate",
+        "version": "1.0.0"
+      }
     ]
   }
 }
@@ -99,17 +107,17 @@ descriptor body そのものに署名は付かない。 trust の root は **ope
 
 ## Failure UX
 
-| Failure                                                                  | Behavior                                  |
-| ------------------------------------------------------------------------ | ----------------------------------------- |
-| `CATALOG_URL` fetch failure (DNS / TLS / 5xx)                            | boot / apply reject (`failed_precondition` HTTP 409) |
-| `CATALOG_DIGEST` mismatch                                                | boot / apply reject、 audit `catalog-digest-mismatch` |
-| `CATALOG_DIGEST` unset                                                   | boot reject in `TAKOSUMI_ENVIRONMENT=production`、 dev では warn |
-| catalog body schema invalid                                              | boot reject、 audit `catalog-body-invalid` |
+| Failure                                       | Behavior                                                         |
+| --------------------------------------------- | ---------------------------------------------------------------- |
+| `CATALOG_URL` fetch failure (DNS / TLS / 5xx) | boot / apply reject (`failed_precondition` HTTP 409)             |
+| `CATALOG_DIGEST` mismatch                     | boot / apply reject、 audit `catalog-digest-mismatch`            |
+| `CATALOG_DIGEST` unset                        | boot reject in `TAKOSUMI_ENVIRONMENT=production`、 dev では warn |
+| catalog body schema invalid                   | boot reject、 audit `catalog-body-invalid`                       |
 
 ## Related architecture notes
 
-- [Supply Chain Trust](/reference/supply-chain-trust) — ecosystem-wide
-  「TLS + digest pin + 1 signing domain (OIDC)」 narrative
+- [Supply Chain Trust](/reference/supply-chain-trust) — ecosystem-wide 「TLS +
+  digest pin + 1 signing domain (OIDC)」 narrative
 - [Storage Schema](/reference/storage-schema) — CatalogRelease descriptor の
   persistence shape
 - [Catalog Release Descriptor Model](/reference/architecture/catalog-release-descriptor-model)

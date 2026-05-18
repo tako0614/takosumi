@@ -1,10 +1,10 @@
 # @takos/takosumi-plugins
 
-Component kind catalog and **materializer host** for Takosumi. Operators
-attach materializers as a **plain array** to `createPaaSApp({ plugins: [...] })`
-— the Vite plugin pattern — or as `materializers: [...]` for inline-function
-form. Each plugin returns a `KernelPlugin` that declares the kind URI(s) it
-provides and registers itself with the kernel on boot.
+Component kind catalog and **materializer host** for Takosumi. Operators attach
+materializers as a **plain array** to `createPaaSApp({ plugins: [...] })` — the
+Vite plugin pattern — or as `materializers: [...]` for inline-function form.
+Each plugin returns a `KernelPlugin` that declares the kind URI(s) it provides
+and registers itself with the kernel on boot.
 
 This package itself ships **no cloud SDK code**. Cloud-backed `KernelPlugin`
 factories live in six independent provider packages
@@ -42,7 +42,7 @@ const { app } = await createPaaSApp({
     {
       kindUri: "https://example.com/kinds/cache@v1",
       apply: async (spec, ctx) => ({ outputs: { endpoint: "redis://..." } }),
-      destroy: async (handle, ctx) => { /* ... */ },
+      destroy: async (handle, ctx) => {/* ... */},
     },
   ],
 });
@@ -55,15 +55,16 @@ factory.
 ## Component kinds (Takosumi curated 4)
 
 Catalog は **extensible**。 operator は任意 domain で新 kind を JSON-LD publish
-+ materializer 実装 で追加できる。 Takosumi curated 4 kind の正本 URI は
-`https://takosumi.com/kinds/v1/<name>` (JSON-LD で publish)。
 
-| Kind            | Description                                                  |
-| --------------- | ------------------------------------------------------------ |
-| `worker`        | Serverless HTTP service (JS bundle or container artifact)    |
-| `postgres`      | Managed PostgreSQL instance                                  |
-| `object-store`  | S3-compatible bucket                                         |
-| `custom-domain` | DNS record + TLS termination                                 |
+- materializer 実装 で追加できる。 Takosumi curated 4 kind の正本 URI は
+  `https://takosumi.com/kinds/v1/<name>` (JSON-LD で publish)。
+
+| Kind            | Description                                               |
+| --------------- | --------------------------------------------------------- |
+| `worker`        | Serverless HTTP service (JS bundle or container artifact) |
+| `postgres`      | Managed PostgreSQL instance                               |
+| `object-store`  | S3-compatible bucket                                      |
+| `custom-domain` | DNS record + TLS termination                              |
 
 旧 `oidc` kind は takosumi-cloud (= Takosumi Accounts operator distribution)
 に移動済。 worker 側は `listen.operator.identity.oidc` で標準 env を受け取る。
@@ -74,14 +75,14 @@ cloud-backed materializer は **独立 JSR package** として publish される
 package は paper-thin な lifecycle client を提供し、 cloud SDK code / credential
 / 副作用は **runtime-agent** の背後に住む。
 
-| Package                                       | Cloud / runtime               |
-| --------------------------------------------- | ----------------------------- |
-| `@takos/takosumi-cloudflare-providers`        | Cloudflare (Workers / R2 / DNS) |
-| `@takos/takosumi-aws-providers`               | AWS (Fargate / S3 / RDS / Route53) |
-| `@takos/takosumi-gcp-providers`               | GCP (Cloud Run / GCS / Cloud SQL / Cloud DNS) |
-| `@takos/takosumi-kubernetes-providers`        | Kubernetes Deployment + Service |
-| `@takos/takosumi-deno-deploy-providers`       | Deno Deploy                   |
-| `@takos/takosumi-selfhost-providers`          | Self-host (docker / systemd / filesystem / minio) |
+| Package                                 | Cloud / runtime                                   |
+| --------------------------------------- | ------------------------------------------------- |
+| `@takos/takosumi-cloudflare-providers`  | Cloudflare (Workers / R2 / DNS)                   |
+| `@takos/takosumi-aws-providers`         | AWS (Fargate / S3 / RDS / Route53)                |
+| `@takos/takosumi-gcp-providers`         | GCP (Cloud Run / GCS / Cloud SQL / Cloud DNS)     |
+| `@takos/takosumi-kubernetes-providers`  | Kubernetes Deployment + Service                   |
+| `@takos/takosumi-deno-deploy-providers` | Deno Deploy                                       |
+| `@takos/takosumi-selfhost-providers`    | Self-host (docker / systemd / filesystem / minio) |
 
 provider id namespace は `@takos/<cloud>-<service>` を使う (= `@takos/aws-s3`,
 `@takos/cloudflare-r2`, `@takos/gcp-cloud-run` 等)。 Bare provider IDs

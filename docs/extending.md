@@ -8,10 +8,10 @@
 
 ## 拡張の選び方
 
-| 目的                                                               | やること                                                           | RFC 必要 |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------ | -------- |
-| 既存 component kind を別 cloud / runtime で動かしたい              | [§ provider を追加する](#新-provider-の追加)                       | 不要     |
-| 既存 kind では足りない portable resource type を作りたい           | [§ 新 component kind を JSON-LD + materializer で追加する](#新しい-component-kind-を追加する) | curated catalog に取り込む場合のみ |
+| 目的                                                     | やること                                                                                      | RFC 必要                           |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------- |
+| 既存 component kind を別 cloud / runtime で動かしたい    | [§ provider を追加する](#新-provider-の追加)                                                  | 不要                               |
+| 既存 kind では足りない portable resource type を作りたい | [§ 新 component kind を JSON-LD + materializer で追加する](#新しい-component-kind-を追加する) | curated catalog に取り込む場合のみ |
 
 Component kind catalog は **extensible** です。 Takosumi curated は 4 kind
 (`worker` / `postgres` / `object-store` / `custom-domain`) ですが、 operator は
@@ -93,7 +93,8 @@ export {
 
 `packages/<cloud>-providers/tests/<kind>_<provider>_test.ts` に最低 3 ケース:
 
-1. `apply` が outputs を返し、 kind JSON-LD の `outputs[]` field set を満たすこと。
+1. `apply` が outputs を返し、 kind JSON-LD の `outputs[]` field set
+   を満たすこと。
 2. KernelPlugin が宣言する `kindUri` が canonical kind URI と一致すること。
 3. `destroy` が呼べること。
 
@@ -114,8 +115,8 @@ const { app } = await createPaaSApp({
 
 ## 新しい component kind を追加する
 
-新しい portable resource type は **JSON-LD で publish + materializer 実装** の
-2 段で成立します。 catalog は frozen ではなく、 operator は任意 domain で新 kind
+新しい portable resource type は **JSON-LD で publish + materializer 実装** の 2
+段で成立します。 catalog は frozen ではなく、 operator は任意 domain で新 kind
 を発行できます (`CONVENTIONS.md` §6)。
 
 ### 任意 domain で新 kind を発行する場合 (operator-owned)
@@ -150,8 +151,8 @@ ecosystem RFC が必要です:
 4. **curated kind registry に追加** — `packages/plugins/src/kinds/mod.ts`
    に登録。
 5. **≥ 2 materializer を実装** — portability 不変式: 1 kind = 最低 2
-   materializer。 cloud provider package の KernelPlugin factory + inline
-   recipe どちらでも可。
+   materializer。 cloud provider package の KernelPlugin factory + inline recipe
+   どちらでも可。
 6. **テスト** — `tests/component_kind_<kind-id>_test.ts` (JSON-LD spec 境界
    ケース) と各 materializer の test を整備。
 7. **CONVENTIONS.md §1 表を更新**。
@@ -174,7 +175,7 @@ const { app } = await createPaaSApp({
         // operator-owned 任意 JS。 outputs を返し、 publishes[] に登録される。
         return { outputs: { endpoint: "redis://...", port: 6379 } };
       },
-      destroy: async (handle, ctx) => { /* ... */ },
+      destroy: async (handle, ctx) => {/* ... */},
     },
   ],
 });
@@ -185,12 +186,12 @@ output 返却 / publishes register) を満たせば形は任意です。
 
 ### Naming convention
 
-| 対象            | rule                                             |
-| --------------- | ------------------------------------------------ |
-| Kind id         | kebab-case (`object-store`)、 curated は `https://takosumi.com/kinds/v1/<name>` |
-| Operator-owned URI | 任意 domain (`https://operator.example.com/kinds/<name>`) |
-| breaking change | 新 URI を発行 (`@v2`)、 short alias に v2 を被せない |
-| capability 追加 | 同じ URI のまま (capability list は open enum)   |
+| 対象               | rule                                                                            |
+| ------------------ | ------------------------------------------------------------------------------- |
+| Kind id            | kebab-case (`object-store`)、 curated は `https://takosumi.com/kinds/v1/<name>` |
+| Operator-owned URI | 任意 domain (`https://operator.example.com/kinds/<name>`)                       |
+| breaking change    | 新 URI を発行 (`@v2`)、 short alias に v2 を被せない                            |
+| capability 追加    | 同じ URI のまま (capability list は open enum)                                  |
 
 ### Output schema convention
 
@@ -213,8 +214,8 @@ secret の raw value は絶対に返さない。 `*Ref` field に
 ## Workflow / cron / hook が必要な場合
 
 GitHub Actions に相当する workflow / cron / lifecycle hook 機能は current kernel
-extension path に存在しません。 kernel は trigger / execute-step / declarable-hook
-等の workflow primitive を一切ホストしません。
+extension path に存在しません。 kernel は trigger / execute-step /
+declarable-hook 等の workflow primitive を一切ホストしません。
 
 current v1 では、 `cron-job` / `workflow-job` / `pre-apply-hook` /
 `post-activate-hook` のような component kind を AppSpec として publish

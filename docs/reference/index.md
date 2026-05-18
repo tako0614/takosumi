@@ -134,8 +134,9 @@ Component kind catalog / provider / artifact 拡張面。
 
 - [Component Kind Catalog](./component-kind-catalog) — 5 built-in kind の spec /
   outputs / use edge 仕様
-- [JSON-LD Kind Catalog](./json-ld-kind-catalog) — `https://takosumi.com/kinds/v1/*`
-  の JSON-LD 形式と operator-defined kind の publish 手順
+- [JSON-LD Kind Catalog](./json-ld-kind-catalog) —
+  `https://takosumi.com/kinds/v1/*` の JSON-LD 形式と operator-defined kind の
+  publish 手順
 - [Provider Plugins](./providers) — v1 provider matrix / KernelPlugin attach
 - [Artifact Kinds](./artifact-kinds) — DataAsset kind registry /
   registerArtifactKind

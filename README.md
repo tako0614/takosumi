@@ -66,8 +66,8 @@ publish されているので、 必要な cloud だけ import する:
 ```ts
 import { createPaaSApp } from "@takos/takosumi-kernel";
 import {
-  cloudflareWorkerProvider,
   cloudflareR2ObjectStoreProvider,
+  cloudflareWorkerProvider,
 } from "@takos/takosumi-cloudflare-providers";
 import { awsS3ObjectStoreProvider } from "@takos/takosumi-aws-providers";
 
@@ -124,14 +124,16 @@ materializer で runtime resource を materialize する。
 ### Component kind × Materializer
 
 - **Component kind** (Takosumi curated 4 kind): `worker` / `postgres` /
-  `object-store` / `custom-domain`。 旧 `oidc` kind は takosumi-cloud に移動
-  (= 本 repo には JSON-LD も materializer も無い)。
+  `object-store` / `custom-domain`。 旧 `oidc` kind は takosumi-cloud に移動 (=
+  本 repo には JSON-LD も materializer も無い)。
 - **Catalog は extensible**: operator は任意 domain で新 kind を JSON-LD 発行
-  + materializer 実装 で追加できる。
+  - materializer 実装 で追加できる。
 - **Materializer = KernelPlugin | InlineMaterializer**: cloud provider package
   (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`)
-  が `KernelPlugin` factory を export する形と、 operator が `createPaaSApp({
-  materializers: [...] })` に inline 関数を渡す形の 2 形態が受理される。
+  が `KernelPlugin` factory を export する形と、 operator が
+  `createPaaSApp({
+  materializers: [...] })` に inline 関数を渡す形の 2
+  形態が受理される。
 
 provider 差し替えで AppSpec portable (S3 ↔ R2、 Cloudflare Workers ↔ AWS Fargate
 等)。
@@ -169,26 +171,26 @@ takosumi install --source git:https://github.com/example/notes#main \
 
 core:
 
-| Package                                                                             | 用途                                                       |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | turnkey: kernel + plugins + installer + cli を一括取得     |
-| [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | kernel only                                                |
-| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | component kind catalog + materializer host + factories     |
-| [`jsr:@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | .takosumi.yml parser + git fetch + deploy client           |
-| [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | runtime-agent (data plane: cloud SDK / OS executor)        |
-| [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                        |
-| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | 型契約 (上流)                                              |
+| Package                                                                             | 用途                                                   |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | turnkey: kernel + plugins + installer + cli を一括取得 |
+| [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | kernel only                                            |
+| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | component kind catalog + materializer host + factories |
+| [`jsr:@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | .takosumi.yml parser + git fetch + deploy client       |
+| [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | runtime-agent (data plane: cloud SDK / OS executor)    |
+| [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                    |
+| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | 型契約 (上流)                                          |
 
 cloud provider packages (= 別 install、 必要な cloud だけ import):
 
-| Package                                                                                                 | 内容                                                       |
-| ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| [`jsr:@takos/takosumi-cloudflare-providers`](https://jsr.io/@takos/takosumi-cloudflare-providers)       | Cloudflare (Workers / R2 / DNS)                            |
-| [`jsr:@takos/takosumi-aws-providers`](https://jsr.io/@takos/takosumi-aws-providers)                     | AWS (Fargate / S3 / RDS / Route53)                         |
-| [`jsr:@takos/takosumi-gcp-providers`](https://jsr.io/@takos/takosumi-gcp-providers)                     | GCP (Cloud Run / GCS / Cloud SQL)                          |
-| [`jsr:@takos/takosumi-kubernetes-providers`](https://jsr.io/@takos/takosumi-kubernetes-providers)       | Kubernetes Deployment + Service                            |
-| [`jsr:@takos/takosumi-deno-deploy-providers`](https://jsr.io/@takos/takosumi-deno-deploy-providers)     | Deno Deploy                                                |
-| [`jsr:@takos/takosumi-selfhost-providers`](https://jsr.io/@takos/takosumi-selfhost-providers)           | Self-host (docker / systemd / filesystem / minio)          |
+| Package                                                                                             | 内容                                              |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| [`jsr:@takos/takosumi-cloudflare-providers`](https://jsr.io/@takos/takosumi-cloudflare-providers)   | Cloudflare (Workers / R2 / DNS)                   |
+| [`jsr:@takos/takosumi-aws-providers`](https://jsr.io/@takos/takosumi-aws-providers)                 | AWS (Fargate / S3 / RDS / Route53)                |
+| [`jsr:@takos/takosumi-gcp-providers`](https://jsr.io/@takos/takosumi-gcp-providers)                 | GCP (Cloud Run / GCS / Cloud SQL)                 |
+| [`jsr:@takos/takosumi-kubernetes-providers`](https://jsr.io/@takos/takosumi-kubernetes-providers)   | Kubernetes Deployment + Service                   |
+| [`jsr:@takos/takosumi-deno-deploy-providers`](https://jsr.io/@takos/takosumi-deno-deploy-providers) | Deno Deploy                                       |
+| [`jsr:@takos/takosumi-selfhost-providers`](https://jsr.io/@takos/takosumi-selfhost-providers)       | Self-host (docker / systemd / filesystem / minio) |
 
 <sub>Note: `@takos/` JSR scope で公開される reference Takosumi distribution で
 あり、 authority は publisher ではなく contract (`@takos/takosumi-contract`)
@@ -243,10 +245,10 @@ cd packages/kernel && deno task db:migrate:dry-run
 ## Release
 
 Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks
-the workspace, runs tests, performs a JSR dry-run, publishes the 13 JSR
-packages (core 7 + provider 6) with GitHub OIDC, and builds/pushes the
-`takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the
-explicit `publish` input is set.
+the workspace, runs tests, performs a JSR dry-run, publishes the 13 JSR packages
+(core 7 + provider 6) with GitHub OIDC, and builds/pushes the `takosumi` OCI
+image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish`
+input is set.
 
 ## Docs site (VitePress)
 

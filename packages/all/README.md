@@ -2,7 +2,8 @@
 
 Takosumi の turnkey umbrella package。 core 6 つ (contract / kernel / plugins /
 installer / runtime-agent / cli) を 1 つの import で利用可能。 cloud-backed
-provider は **別 install** (= `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,
+provider は **別 install** (=
+`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,
 deno-deploy,selfhost}-providers`)。
 
 ## Self-host
@@ -18,9 +19,10 @@ takosumi install --source . --space space_personal
 - `jsr:@takos/takosumi` — core plugins (kinds / materializer host) を re-export
 - `jsr:@takos/takosumi/kernel` — kernel programmatic API (`createPaaSApp`)
 - `jsr:@takos/takosumi/server` — kernel HTTP server entry (deno run で起動)
-- `jsr:@takos/takosumi/plugins` — plugins entry (kind catalog + materializer host)
-- `jsr:@takos/takosumi/kinds` — Takosumi curated component kind catalog
-  (worker / postgres / object-store / custom-domain)
+- `jsr:@takos/takosumi/plugins` — plugins entry (kind catalog + materializer
+  host)
+- `jsr:@takos/takosumi/kinds` — Takosumi curated component kind catalog (worker
+  / postgres / object-store / custom-domain)
 - `jsr:@takos/takosumi/cli` — CLI module entry
 
 cloud-backed `KernelPlugin` factory は **別 package** に分離されているため、
@@ -40,8 +42,8 @@ core:
 - `jsr:@takos/takosumi-kernel` — kernel only (server + apply pipeline)
 - `jsr:@takos/takosumi-plugins` — plugins only (kinds / materializer host /
   factories)
-- `jsr:@takos/takosumi-installer` — `.takosumi.yml` parser + git fetch +
-  deploy client
+- `jsr:@takos/takosumi-installer` — `.takosumi.yml` parser + git fetch + deploy
+  client
 - `jsr:@takos/takosumi-runtime-agent` — runtime-agent (data plane)
 - `jsr:@takos/takosumi-cli` — CLI only
 

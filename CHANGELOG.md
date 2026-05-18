@@ -13,32 +13,36 @@ entry).
 Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 
 - **Breaking — AppSpec connection edge を `publish` / `listen` に統合**: 旧
-  `use:` edge は AppSpec から廃止。 component 間の接続は (1) `publish:
-  [<namespacePath>]` で material を namespace registry に登録、 (2) `listen:
-  { <namespacePath>: { as, prefix?, mount? } }` で他 component の material を
-  env / mount として受け取る、 の 2 つに集約。 旧 `${ref:...}` /
-  `${secret-ref:...}` / `${bindings.*}` / `${secrets.*}` / `${installation.*}`
-  / `${artifacts.*}` / `${params.*}` placeholder interpolation は parser から
+  `use:` edge は AppSpec から廃止。 component 間の接続は (1)
+  `publish:
+  [<namespacePath>]` で material を namespace registry に登録、 (2)
+  `listen:
+  { <namespacePath>: { as, prefix?, mount? } }` で他 component の
+  material を env / mount として受け取る、 の 2 つに集約。 旧 `${ref:...}` /
+  `${secret-ref:...}` / `${bindings.*}` / `${secrets.*}` / `${installation.*}` /
+  `${artifacts.*}` / `${params.*}` placeholder interpolation は parser から
   完全削除。 "compiled manifest" / `workflowRef` 中間 entity も廃止。
 - **Breaking — `kind: oidc` を takosumi-cloud に移動**: 旧 frozen 5 kind 構造を
   廃止し、 `oidc` を本 repo から削除。 Takosumi Accounts (= takosumi-cloud) が
   `operator.identity.oidc` namespace path に OIDC client material を publish
-  し、 worker は `listen.operator.identity.oidc` で標準 env (`OIDC_ISSUER_URL`
-  / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS`) を受け取る
+  し、 worker は `listen.operator.identity.oidc` で標準 env (`OIDC_ISSUER_URL` /
+  `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS`) を受け取る
   形に変更。 本 repo には `spec/contexts/kinds/v1/oidc.jsonld` も `oidc`
   materializer (旧 `oidc-takosumi-accounts.ts`) も無い。
 - **Breaking — Component kind catalog は extensible**: 旧 "5 frozen" model を
-  撤回し、 Takosumi curated は 4 kind (`worker` / `postgres` / `object-store`
-  / `custom-domain`) に縮小。 新 kind は **任意 domain で JSON-LD publish +
+  撤回し、 Takosumi curated は 4 kind (`worker` / `postgres` / `object-store` /
+  `custom-domain`) に縮小。 新 kind は **任意 domain で JSON-LD publish +
   materializer 実装** で追加可能。 各 kind の JSON-LD document が **spec /
-  publishes / listens / outputs を一体宣言** する。 旧 5 shape 名 (`worker@v1`
-  / `web-service@v1` / `worker@v1` / `database-postgres@v1` 等) は AppSpec /
-  docs / kernel から完全除去。
-- **Breaking — Materializer = KernelPlugin | InlineMaterializer**: kind 実装は
-  2 形態を受理する。 (1) `KernelPlugin` factory を返す plain array (= Vite
-  plugin pattern, cloud provider package が提供する形式) と (2) `createPaaSApp
-  ({ materializers: [...] })` に inline 関数を渡す形式。 plugin convention は
-  実装の 1 形態に過ぎず、 inline 関数でも contract を満たせば成立する。
+  publishes / listens / outputs を一体宣言** する。 旧 5 shape 名 (`worker@v1` /
+  `web-service@v1` / `worker@v1` / `database-postgres@v1` 等) は AppSpec / docs
+  / kernel から完全除去。
+- **Breaking — Materializer = KernelPlugin | InlineMaterializer**: kind 実装は 2
+  形態を受理する。 (1) `KernelPlugin` factory を返す plain array (= Vite plugin
+  pattern, cloud provider package が提供する形式) と (2)
+  `createPaaSApp
+  ({ materializers: [...] })` に inline 関数を渡す形式。 plugin
+  convention は 実装の 1 形態に過ぎず、 inline 関数でも contract
+  を満たせば成立する。
 - **Breaking — Cloud provider plugins を別 package に分離**: AWS / GCP /
   Cloudflare / Kubernetes / Deno Deploy / Self-host の materializer 実装は
   `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`
@@ -54,8 +58,8 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
   Installation/Deployment id で deterministic に成立し、 別途 header は不要。
 - `KernelPlugin` plain-array attach (Wave 9 で導入) は維持。 旧
   `createAdapters()` / port-based plugin host / `KernelPluginPortKind` /
-  `TakosumiKernelPluginManifest` / plugin marketplace / signed manifest fetch
-  / trusted publisher key registry は kernel に持たない (= 全削除済)。
+  `TakosumiKernelPluginManifest` / plugin marketplace / signed manifest fetch /
+  trusted publisher key registry は kernel に持たない (= 全削除済)。
 - public deploy/install contract is reset to three concepts: AppSpec
   (`.takosumi.yml`), Installation, and Deployment. The public installer HTTP
   surface is the 5 endpoint `/v1/installations*` API.

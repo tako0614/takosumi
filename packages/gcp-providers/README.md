@@ -18,20 +18,26 @@ import {
 
 const { app } = await createPaaSApp({
   plugins: [
-    gcpCloudRunWorkerProvider({ project: env.GCP_PROJECT, region: env.GCP_REGION }),
+    gcpCloudRunWorkerProvider({
+      project: env.GCP_PROJECT,
+      region: env.GCP_REGION,
+    }),
     gcpGcsObjectStoreProvider({ project: env.GCP_PROJECT }),
-    gcpCloudSqlPostgresProvider({ project: env.GCP_PROJECT, region: env.GCP_REGION }),
+    gcpCloudSqlPostgresProvider({
+      project: env.GCP_PROJECT,
+      region: env.GCP_REGION,
+    }),
   ],
 });
 ```
 
 ## Exports
 
-| Factory                          | Kind URI                                       |
-| -------------------------------- | ---------------------------------------------- |
-| `gcpCloudRunWorkerProvider`      | `https://takosumi.com/kinds/v1/worker`         |
-| `gcpGcsObjectStoreProvider`      | `https://takosumi.com/kinds/v1/object-store`   |
-| `gcpCloudSqlPostgresProvider`    | `https://takosumi.com/kinds/v1/postgres`       |
+| Factory                       | Kind URI                                     |
+| ----------------------------- | -------------------------------------------- |
+| `gcpCloudRunWorkerProvider`   | `https://takosumi.com/kinds/v1/worker`       |
+| `gcpGcsObjectStoreProvider`   | `https://takosumi.com/kinds/v1/object-store` |
+| `gcpCloudSqlPostgresProvider` | `https://takosumi.com/kinds/v1/postgres`     |
 
 ## See also
 

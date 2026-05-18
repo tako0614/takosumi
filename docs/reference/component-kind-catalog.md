@@ -1,11 +1,11 @@
 # Component Kind Catalog
 
-> このページでわかること: `.takosumi.yml` の `components[*].kind` で使える 4 kind
-> の spec / publishes / listens / outputs。 各 kind の JSON-LD document が
+> このページでわかること: `.takosumi.yml` の `components[*].kind` で使える 4
+> kind の spec / publishes / listens / outputs。 各 kind の JSON-LD document が
 > **これら 4 項目を一体宣言** します。
 
-Takosumi catalog の 4 built-in kind は `spec/contexts/kinds/v1/<name>.jsonld`
-が canonical source です。 各 .jsonld は次を 1 つの document で宣言します:
+Takosumi catalog の 4 built-in kind は `spec/contexts/kinds/v1/<name>.jsonld` が
+canonical source です。 各 .jsonld は次を 1 つの document で宣言します:
 
 1. **`spec`** (= JSON Schema 2020-12) — AppSpec の `components.<name>.spec`
    に書ける構造。
@@ -21,23 +21,24 @@ Takosumi catalog の 4 built-in kind は `spec/contexts/kinds/v1/<name>.jsonld`
 渡せば成立します。 catalog は 4 種「frozen」 ではなく、 任意の operator が
 拡張可能です。
 
-| `kind` (alias) | URI                                            | 用途                                              |
-| -------------- | ---------------------------------------------- | ------------------------------------------------- |
-| `worker`        | `https://takosumi.com/kinds/v1/worker`         | Serverless HTTP service (= JS bundle artifact)    |
-| `postgres`      | `https://takosumi.com/kinds/v1/postgres`       | Managed PostgreSQL                                |
-| `object-store`  | `https://takosumi.com/kinds/v1/object-store`   | S3-compatible bucket                              |
-| `custom-domain` | `https://takosumi.com/kinds/v1/custom-domain`  | Public domain + TLS termination                   |
+| `kind` (alias)  | URI                                           | 用途                                           |
+| --------------- | --------------------------------------------- | ---------------------------------------------- |
+| `worker`        | `https://takosumi.com/kinds/v1/worker`        | Serverless HTTP service (= JS bundle artifact) |
+| `postgres`      | `https://takosumi.com/kinds/v1/postgres`      | Managed PostgreSQL                             |
+| `object-store`  | `https://takosumi.com/kinds/v1/object-store`  | S3-compatible bucket                           |
+| `custom-domain` | `https://takosumi.com/kinds/v1/custom-domain` | Public domain + TLS termination                |
 
 ## `oidc` kind は takosumi-cloud に移動
 
-旧 `kind: oidc` は takosumi core の責務外として削除しました。 takosumi-cloud
-(= Takosumi Accounts operator distribution) が `operator.identity.oidc`
-namespace path に OIDC client material を publish します。 worker は
-`listen.operator.identity.oidc` で標準 env (`OIDC_ISSUER_URL` /
-`OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS`) を受け取ります。
+旧 `kind: oidc` は takosumi core の責務外として削除しました。 takosumi-cloud (=
+Takosumi Accounts operator distribution) が `operator.identity.oidc` namespace
+path に OIDC client material を publish します。 worker は
+`listen.operator.identity.oidc` で標準 env (`OIDC_ISSUER_URL` / `OIDC_CLIENT_ID`
+/ `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS`) を受け取ります。
 
-詳細は takosumi-cloud の対応 docs (= 同 repo `spec/contexts/kinds/v1/oidc.jsonld`
-予定) を参照してください。 takosumi kernel は OIDC client を発行しません。
+詳細は takosumi-cloud の対応 docs (= 同 repo
+`spec/contexts/kinds/v1/oidc.jsonld` 予定) を参照してください。 takosumi kernel
+は OIDC client を発行しません。
 
 ## `outputs` の reserved 名前
 
@@ -55,7 +56,8 @@ provider 差分に関係なく安定 semantics に依存できます。
 
 ## `worker`
 
-Serverless HTTP service。 JS bundle (`build.output`) を artifact として動きます。
+Serverless HTTP service。 JS bundle (`build.output`) を artifact
+として動きます。
 
 ### Spec
 
@@ -78,12 +80,12 @@ components:
         as: env
 ```
 
-| field                  | required | 説明                                           |
-| ---------------------- | -------- | ---------------------------------------------- |
-| `build`                | yes      | `{ command, output }` (= artifact 生成 recipe) |
-| `spec.routes`          | no       | route pattern list (= `/`, `/api/*`)           |
-| `spec.compatibilityDate` | yes (for direct artifact) | Cloudflare 互換 date |
-| `listen`               | no       | listen 対象 namespace path                     |
+| field                    | required                  | 説明                                           |
+| ------------------------ | ------------------------- | ---------------------------------------------- |
+| `build`                  | yes                       | `{ command, output }` (= artifact 生成 recipe) |
+| `spec.routes`            | no                        | route pattern list (= `/`, `/api/*`)           |
+| `spec.compatibilityDate` | yes (for direct artifact) | Cloudflare 互換 date                           |
+| `listen`                 | no                        | listen 対象 namespace path                     |
 
 ### Publishes
 
@@ -97,8 +99,8 @@ publish します:
 ### Listens
 
 `worker` は任意の sibling namespace path を `as: env` で listen し、 受信した
-material を `${PREFIX}_*` env var として注入します (`prefix` option で
-PREFIX を選択)。 詳細な envMap は AppSpec listen options が決定します。
+material を `${PREFIX}_*` env var として注入します (`prefix` option で PREFIX
+を選択)。 詳細な envMap は AppSpec listen options が決定します。
 
 ### Outputs
 
@@ -195,13 +197,13 @@ components:
       - com.example.notes.media
 ```
 
-| field             | required | 説明                                         |
-| ----------------- | -------- | -------------------------------------------- |
-| `spec.name`       | yes      | logical bucket name                          |
-| `spec.public`     | no       | anonymous read 許可                          |
-| `spec.versioning` | no       | versioning enable                            |
-| `spec.region`     | no       | provider region                              |
-| `spec.lifecycle`  | no       | `{ expireAfterDays, archiveAfterDays }`      |
+| field             | required | 説明                                    |
+| ----------------- | -------- | --------------------------------------- |
+| `spec.name`       | yes      | logical bucket name                     |
+| `spec.public`     | no       | anonymous read 許可                     |
+| `spec.versioning` | no       | versioning enable                       |
+| `spec.region`     | no       | provider region                         |
+| `spec.lifecycle`  | no       | `{ expireAfterDays, archiveAfterDays }` |
 
 ### Publishes
 
@@ -217,13 +219,13 @@ components:
 
 ### Outputs
 
-| field          | 意味                                       |
-| -------------- | ------------------------------------------ |
-| `bucket`       | bucket name                                |
-| `endpoint`     | S3 endpoint URL                            |
-| `region`       | bucket region                              |
-| `accessKeyRef` | access key id 用 secret store reference    |
-| `secretKeyRef` | secret access key 用 secret store reference|
+| field          | 意味                                        |
+| -------------- | ------------------------------------------- |
+| `bucket`       | bucket name                                 |
+| `endpoint`     | S3 endpoint URL                             |
+| `region`       | bucket region                               |
+| `accessKeyRef` | access key id 用 secret store reference     |
+| `secretKeyRef` | secret access key 用 secret store reference |
 
 ### 接続例 (= listen 側)
 
@@ -258,12 +260,12 @@ components:
         as: target
 ```
 
-| field               | required | 説明                                      |
-| ------------------- | -------- | ----------------------------------------- |
-| `spec.name`         | yes      | FQDN (e.g. `notes.example.com`)           |
-| `spec.certificate`  | no       | `{ kind: auto / managed / provided, secretRef? }` |
-| `spec.redirects`    | no       | HTTP redirect rule list                   |
-| `listen.<worker>`   | yes      | `as: target` で upstream worker namespace |
+| field              | required | 説明                                              |
+| ------------------ | -------- | ------------------------------------------------- |
+| `spec.name`        | yes      | FQDN (e.g. `notes.example.com`)                   |
+| `spec.certificate` | no       | `{ kind: auto / managed / provided, secretRef? }` |
+| `spec.redirects`   | no       | HTTP redirect rule list                           |
+| `listen.<worker>`  | yes      | `as: target` で upstream worker namespace         |
 
 ### Publishes
 
@@ -275,16 +277,16 @@ components:
 
 ### Listens
 
-`custom-domain` は任意の sibling worker namespace を `as: target` で listen
-し、 publish material の `url` を upstream として使用します。
+`custom-domain` は任意の sibling worker namespace を `as: target` で listen し、
+publish material の `url` を upstream として使用します。
 
 ### Outputs
 
-| field           | 意味                                |
-| --------------- | ----------------------------------- |
-| `fqdn`          | resolved FQDN                       |
-| `certificateId` | provider-scope TLS certificate id   |
-| `nameservers`   | (optional) DNS nameserver list      |
+| field           | 意味                              |
+| --------------- | --------------------------------- |
+| `fqdn`          | resolved FQDN                     |
+| `certificateId` | provider-scope TLS certificate id |
+| `nameservers`   | (optional) DNS nameserver list    |
 
 ## Cross-references
 

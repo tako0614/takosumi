@@ -130,9 +130,9 @@ operator が直接 env から読みます — kernel は plugin config 用 env s
 `TAKOSUMI_KERNEL_PLUGIN_TRUST_KEYS` / `TAKOSUMI_KERNEL_PLUGIN_SELECTIONS` /
 `TAKOSUMI_KERNEL_PLUGIN_CONFIG` 等) は撤回済で、 kernel に存在しません。
 
-| Variable                               | Type    | Default          | Required | Consumer                                                       | Spec concept       |
-| -------------------------------------- | ------- | ---------------- | -------- | -------------------------------------------------------------- | ------------------ |
-| `TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON`   | JSON    | provider default | no       | registry trust roots                                           | OperatorBoundaries |
+| Variable                             | Type | Default          | Required | Consumer             | Spec concept       |
+| ------------------------------------ | ---- | ---------------- | -------- | -------------------- | ------------------ |
+| `TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON` | JSON | provider default | no       | registry trust roots | OperatorBoundaries |
 
 cloud SDK / 各 provider 用 env (`AWS_*`, `CLOUDFLARE_*`, `GCP_*`, etc.) は cloud
 provider package 側 (`@takos/takosumi-{aws,gcp,cloudflare,...}-providers`) が

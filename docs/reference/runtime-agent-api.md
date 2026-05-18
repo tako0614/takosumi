@@ -29,15 +29,15 @@ scope は `GET /v1/artifacts/:hash` のみ
 
 ## Endpoints
 
-| Method | Path                       | Auth        | Purpose                                                            |
-| ------ | -------------------------- | ----------- | ------------------------------------------------------------------ |
-| GET    | `/v1/health`               | -           | `{ status: "ok", connectors: <count> }`                            |
-| GET    | `/v1/connectors`           | Agent token | 起動時に登録された `(kind, provider, acceptedArtifactKinds)` 一覧  |
-| POST   | `/v1/lifecycle/apply`      | Agent token | resource を作成 / 更新                                             |
-| POST   | `/v1/lifecycle/destroy`    | Agent token | handle 指定で resource を削除                                      |
-| POST   | `/v1/lifecycle/compensate` | Agent token | WAL recovery 用に commit 済み effect を逆再生                      |
-| POST   | `/v1/lifecycle/describe`   | Agent token | handle 指定で実体の状態を取得                                      |
-| POST   | `/v1/lifecycle/verify`     | Agent token | connector ごとに `verify` operation を smoke test                  |
+| Method | Path                       | Auth        | Purpose                                                           |
+| ------ | -------------------------- | ----------- | ----------------------------------------------------------------- |
+| GET    | `/v1/health`               | -           | `{ status: "ok", connectors: <count> }`                           |
+| GET    | `/v1/connectors`           | Agent token | 起動時に登録された `(kind, provider, acceptedArtifactKinds)` 一覧 |
+| POST   | `/v1/lifecycle/apply`      | Agent token | resource を作成 / 更新                                            |
+| POST   | `/v1/lifecycle/destroy`    | Agent token | handle 指定で resource を削除                                     |
+| POST   | `/v1/lifecycle/compensate` | Agent token | WAL recovery 用に commit 済み effect を逆再生                     |
+| POST   | `/v1/lifecycle/describe`   | Agent token | handle 指定で実体の状態を取得                                     |
+| POST   | `/v1/lifecycle/verify`     | Agent token | connector ごとに `verify` operation を smoke test                 |
 
 ### `POST /v1/lifecycle/apply`
 

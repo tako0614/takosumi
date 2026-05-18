@@ -121,10 +121,10 @@ components:
       - /api/*
 ```
 
-component 間の構造的依存は **`publish` / `listen`** で書く。 文字列 interpolation
-は使わない。 producer 側が `publish: [<namespacePath>]` で material を namespace
-registry に登録し、 consumer 側が `listen: { <path>: { as, prefix? } }` で
-受け取る。
+component 間の構造的依存は **`publish` / `listen`** で書く。 文字列
+interpolation は使わない。 producer 側が `publish: [<namespacePath>]` で
+material を namespace registry に登録し、 consumer 側が
+`listen: { <path>: { as, prefix? } }` で 受け取る。
 
 ```yaml
 components:
