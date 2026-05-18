@@ -72,7 +72,7 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 5. `network-egress`
 
-- **意味**: 新 outbound network egress を許可する shape が含まれる。
+- **意味**: 新 outbound network egress を許可する component が含まれる。
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 2

@@ -530,7 +530,7 @@ provider 実装の operator 管理 registry。
 | --------------------- | --------------- | -------- | -------------------------------------------------- |
 | `id`                  | string          | yes      | `implementation:<id>` 形式。                       |
 | `providerKind`        | string          | yes      | namespace 付き provider id (例: `@takos/aws-s3`)。 |
-| `acceptedShapes`      | `array<string>` | yes      | `shape@version` の一覧。                           |
+| `acceptedKinds`       | `array<string>` | yes      | `kind@version` の一覧 (= component kind id list)。 |
 | `signingExpectations` | enum            | yes      | `none` / `optional` / `required`。                 |
 | `publicKey`           | string          | no       | 任意。 署名付き実装の verify 用。                  |
 | `installedAt`         | timestamp       | yes      | install 時刻。                                     |
