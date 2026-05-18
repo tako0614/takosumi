@@ -16,17 +16,23 @@ components:
       output: dist/worker.mjs
     routes:
       - /
-    use:
-      db:
-        env: DATABASE_URL
-      assets:
-        envPrefix: ASSETS_
+    listen:
+      com.example.my-app.db:
+        as: env
+        prefix: DATABASE_
+      com.example.my-app.assets:
+        as: env
+        prefix: ASSETS_
 
   db:
     kind: postgres
+    publish:
+      - com.example.my-app.db
 
   assets:
     kind: object-store
+    publish:
+      - com.example.my-app.assets
 `,
   empty: `apiVersion: takosumi.dev/v1
 kind: App
