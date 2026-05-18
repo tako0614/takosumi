@@ -6,6 +6,17 @@ Deployment. It contains the type contract, the PaaS kernel, the materializer
 host, the runtime-agent, the canonical installer, the CLI, and six per-cloud
 provider packages as co-equal workspace members, all consumable from JSR.
 
+**Spec status (= Phase I 完遂、 2026-05-19)**: Takosumi の仕様は単一 spec
+で閉じている。 構成要素は namespace pub/sub model、 curated 4-kind catalog
+(extensible)、 5-endpoint installer API、 6 別 cloud provider package、
+materializer = `KernelPlugin | InlineMaterializer` union。 contract / impl /
+docs / 6 consumer apps / takosumi-cloud reference distribution はすべて 同じ 1
+spec を指す。 旧 `use:` edge、 placeholder syntax、 中間 manifest compile 形式、
+workflow-reference field、 publisher-trust scheme、 operator namespace
+special-case は物理削除済。 production deployable (= bare core と full-feature
+両 smoke green)。 これ以降の spec 変更は CHANGELOG / RFC ベース の個別 evolution
+として扱う。
+
 Canonical contract:
 [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (本
 workspace の `packages/contract/`)。
