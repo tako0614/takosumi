@@ -70,8 +70,12 @@ Deno.serve({ port: 8788 }, app.fetch);
 `createPaaSApp` does:
 
 1. Loads runtime config from env
-2. `registerBundledShapesAndProviders` — auto-registers 5 bundled shapes and 21
-   production providers (HTTP wrappers to runtime-agent)
+2. Registers Takosumi curated 4 component kinds (`worker` / `postgres` /
+   `object-store` / `custom-domain`) and the materializer host. No cloud SDK
+   code ships with the kernel; cloud-backed `KernelPlugin` factories are
+   imported separately from `@takos/takosumi-<cloud>-providers` packages and
+   attached via `plugins: [...]`. Operators can also pass inline-function
+   materializers via `materializers: [...]`.
 3. Builds `AppContext` with adapter ports (auth / kms / secrets / queue /
    storage / observability / objectStorage / runtimeAgentRegistry / etc)
 4. Mounts the route modules that match the configured process role:

@@ -1,22 +1,23 @@
 # @takos/takosumi-plugins
 
-Component kind catalog and provider plugins bundled with Takosumi. Operators
-attach plugins as a **plain array** to `createPaaSApp({ plugins: [...] })` — the
-Vite plugin pattern. Each plugin returns a `KernelPlugin` that declares the kind
-URI(s) it provides and registers itself with the kernel on boot.
+Component kind catalog and **materializer host** for Takosumi. Operators
+attach materializers as a **plain array** to `createPaaSApp({ plugins: [...] })`
+— the Vite plugin pattern — or as `materializers: [...]` for inline-function
+form. Each plugin returns a `KernelPlugin` that declares the kind URI(s) it
+provides and registers itself with the kernel on boot.
 
-Plugins are paper-thin HTTP wrappers around the runtime-agent (see
-[`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)).
-They contain no cloud SDK code.
+This package itself ships **no cloud SDK code**. Cloud-backed `KernelPlugin`
+factories live in six independent provider packages
+(`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`),
+each importable on its own. The materializer host plus kind catalog stays
+core-only.
 
-## Install
+## Install (cloud provider package 経由)
 
 ```typescript
 import { createPaaSApp } from "@takos/takosumi-kernel";
-import {
-  awsS3ObjectStoreProvider,
-  cloudflareWorkerProvider,
-} from "@takos/takosumi-plugins/bundled";
+import { cloudflareWorkerProvider } from "@takos/takosumi-cloudflare-providers";
+import { awsS3ObjectStoreProvider } from "@takos/takosumi-aws-providers";
 
 const { app } = await createPaaSApp({
   plugins: [
@@ -33,14 +34,29 @@ const { app } = await createPaaSApp({
 });
 ```
 
-Each provider factory is a separate `KernelPlugin` export under
-`@takos/takosumi-plugins/bundled`. Old `enableAws: true` /
-`createTakosumiProductionProviders(opts)` style switches are retired —
-operators choose the providers they need and pass credentials per factory.
+## Inline materializer (operator-owned 任意 JS)
 
-## Component kinds (5 frozen)
+```typescript
+const { app } = await createPaaSApp({
+  materializers: [
+    {
+      kindUri: "https://example.com/kinds/cache@v1",
+      apply: async (spec, ctx) => ({ outputs: { endpoint: "redis://..." } }),
+      destroy: async (handle, ctx) => { /* ... */ },
+    },
+  ],
+});
+```
 
-正本 URI は `https://takosumi.com/kinds/v1/<name>` (JSON-LD で publish)。
+Old `enableAws: true` / `createTakosumiProductionProviders(opts)` style switches
+are retired — operators choose the providers they need and pass credentials per
+factory.
+
+## Component kinds (Takosumi curated 4)
+
+Catalog は **extensible**。 operator は任意 domain で新 kind を JSON-LD publish
++ materializer 実装 で追加できる。 Takosumi curated 4 kind の正本 URI は
+`https://takosumi.com/kinds/v1/<name>` (JSON-LD で publish)。
 
 | Kind            | Description                                                  |
 | --------------- | ------------------------------------------------------------ |
@@ -48,24 +64,28 @@ operators choose the providers they need and pass credentials per factory.
 | `postgres`      | Managed PostgreSQL instance                                  |
 | `object-store`  | S3-compatible bucket                                         |
 | `custom-domain` | DNS record + TLS termination                                 |
-| `oidc`          | OIDC consumer mount point (Installation-scoped client)       |
 
-## Providers (21)
+旧 `oidc` kind は takosumi-cloud (= Takosumi Accounts operator distribution)
+に移動済。 worker 側は `listen.operator.identity.oidc` で標準 env を受け取る。
 
-All provider IDs use the `@takos/<cloud>-<service>` namespace.
+## Providers (= 別 package、 6 cloud)
 
-| Cloud      | Providers                                                                                                                                                                 |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AWS        | `@takos/aws-s3`, `@takos/aws-fargate`, `@takos/aws-rds`, `@takos/aws-route53`                                                                                             |
-| GCP        | `@takos/gcp-gcs`, `@takos/gcp-cloud-run`, `@takos/gcp-cloud-sql`, `@takos/gcp-cloud-dns`                                                                                  |
-| Cloudflare | `@takos/cloudflare-r2`, `@takos/cloudflare-container`, `@takos/cloudflare-workers`, `@takos/cloudflare-dns`                                                               |
-| Azure      | `@takos/azure-container-apps`                                                                                                                                             |
-| Kubernetes | `@takos/kubernetes-deployment`                                                                                                                                            |
-| Deno       | `@takos/deno-deploy`                                                                                                                                                      |
-| Self-host  | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres`, `@takos/selfhost-coredns` |
+cloud-backed materializer は **独立 JSR package** として publish される。 各
+package は paper-thin な lifecycle client を提供し、 cloud SDK code / credential
+/ 副作用は **runtime-agent** の背後に住む。
 
-Bare provider IDs (`aws-fargate`, `cloud-run`, etc.) are rejected. Use the
-namespaced IDs above.
+| Package                                       | Cloud / runtime               |
+| --------------------------------------------- | ----------------------------- |
+| `@takos/takosumi-cloudflare-providers`        | Cloudflare (Workers / R2 / DNS) |
+| `@takos/takosumi-aws-providers`               | AWS (Fargate / S3 / RDS / Route53) |
+| `@takos/takosumi-gcp-providers`               | GCP (Cloud Run / GCS / Cloud SQL / Cloud DNS) |
+| `@takos/takosumi-kubernetes-providers`        | Kubernetes Deployment + Service |
+| `@takos/takosumi-deno-deploy-providers`       | Deno Deploy                   |
+| `@takos/takosumi-selfhost-providers`          | Self-host (docker / systemd / filesystem / minio) |
+
+provider id namespace は `@takos/<cloud>-<service>` を使う (= `@takos/aws-s3`,
+`@takos/cloudflare-r2`, `@takos/gcp-cloud-run` 等)。 Bare provider IDs
+(`aws-fargate`, `cloud-run`, etc.) は reject される。
 
 ## Artifact kinds (5 bundled)
 
