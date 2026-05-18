@@ -23,4 +23,15 @@ if [ -d "${SITE_DIR}/static" ]; then
   cp -R "${SITE_DIR}/static/." "${DIST}/"
 fi
 
+# Publish the JSON-LD kind catalog under /contexts/. The shape is
+# spec/contexts/v1.jsonld + spec/contexts/kinds/v1/<name>.jsonld and
+# the wire URLs are https://takosumi.com/contexts/v1.jsonld and
+# https://takosumi.com/contexts/kinds/v1/<name>.jsonld.
+REPO_ROOT="$(cd "${SITE_DIR}/.." && pwd)"
+SPEC_CONTEXTS="${REPO_ROOT}/spec/contexts"
+if [ -d "${SPEC_CONTEXTS}" ]; then
+  mkdir -p "${DIST}/contexts"
+  cp -R "${SPEC_CONTEXTS}/." "${DIST}/contexts/"
+fi
+
 echo "[takosumi/site] built ${DIST}/"

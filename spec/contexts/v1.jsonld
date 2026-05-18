@@ -1,0 +1,62 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@vocab": "https://takosumi.com/vocab/v1#",
+    "takosumi": "https://takosumi.com/vocab/v1#",
+    "schema": "https://schema.org/",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+
+    "ComponentKind": "takosumi:ComponentKind",
+    "AppSpec": "takosumi:AppSpec",
+    "Component": "takosumi:Component",
+    "Installation": "takosumi:Installation",
+    "Deployment": "takosumi:Deployment",
+    "Capability": "takosumi:Capability",
+    "OutputField": "takosumi:OutputField",
+    "SpecField": "takosumi:SpecField",
+
+    "name": {
+      "@id": "schema:name",
+      "@type": "xsd:string"
+    },
+    "version": {
+      "@id": "takosumi:version",
+      "@type": "xsd:string"
+    },
+    "description": {
+      "@id": "schema:description",
+      "@type": "xsd:string"
+    },
+    "spec": {
+      "@id": "takosumi:spec",
+      "@container": "@set"
+    },
+    "outputs": {
+      "@id": "takosumi:outputs",
+      "@container": "@set"
+    },
+    "capabilities": {
+      "@id": "takosumi:capabilities",
+      "@container": "@set"
+    },
+    "type": {
+      "@id": "takosumi:fieldType",
+      "@type": "xsd:string"
+    },
+    "required": {
+      "@id": "takosumi:required",
+      "@type": "xsd:boolean"
+    },
+    "meaning": {
+      "@id": "takosumi:meaning",
+      "@type": "xsd:string"
+    },
+    "enum": {
+      "@id": "takosumi:enum",
+      "@container": "@set"
+    },
+    "default": {
+      "@id": "takosumi:default"
+    }
+  }
+}

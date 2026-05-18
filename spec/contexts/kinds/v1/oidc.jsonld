@@ -1,0 +1,54 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/oidc",
+  "@type": "ComponentKind",
+  "name": "oidc",
+  "version": "v1",
+  "description": "Per-Installation OIDC client issued by Takosumi Accounts.",
+  "spec": [
+    {
+      "name": "redirectPaths",
+      "type": "string[]",
+      "required": true,
+      "meaning": "Absolute redirect paths (must start with `/`)."
+    },
+    {
+      "name": "scopes",
+      "type": "string[]",
+      "required": true,
+      "meaning": "OIDC / OAuth2 scopes requested (e.g. `openid`, `email`)."
+    }
+  ],
+  "outputs": [
+    {
+      "name": "OIDC_ISSUER_URL",
+      "type": "string",
+      "required": true,
+      "meaning": "Takosumi Accounts issuer URL."
+    },
+    {
+      "name": "OIDC_CLIENT_ID",
+      "type": "string",
+      "required": true,
+      "meaning": "Installation-scoped client id."
+    },
+    {
+      "name": "OIDC_CLIENT_SECRET",
+      "type": "string",
+      "required": true,
+      "meaning": "Installation-scoped client secret (secret-bearing)."
+    },
+    {
+      "name": "OIDC_REDIRECT_URIS",
+      "type": "string",
+      "required": true,
+      "meaning": "Comma-separated full redirect URI list."
+    }
+  ],
+  "capabilities": [
+    "authorization-code-pkce",
+    "client-credentials",
+    "refresh-token",
+    "id-token-signing"
+  ]
+}

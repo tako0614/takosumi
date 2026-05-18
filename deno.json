@@ -58,6 +58,8 @@
     "fmt": "deno fmt",
     "fmt:check": "deno fmt --check",
     "lint": "deno lint",
+    "lint:json-ld": "deno run --allow-read scripts/lint-json-ld.ts",
+    "spec:build": "bash -c 'mkdir -p site/dist/contexts && cp -R spec/contexts/. site/dist/contexts/ && echo \"[takosumi/spec] published spec/contexts → site/dist/contexts/\"'",
     "docs:install": "cd docs && npm install",
     "docs:dev": "cd docs && npx vitepress dev",
     "docs:build": "cd docs && npx vitepress build",
