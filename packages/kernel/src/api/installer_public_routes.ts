@@ -208,7 +208,7 @@ async function readJsonBody<T>(c: Context): Promise<T> {
 
 function pipelineHttpStatus(
   code: InstallerPipelineErrorCode,
-): 400 | 401 | 403 | 404 | 412 | 429 | 500 | 501 {
+): 400 | 401 | 403 | 404 | 409 | 413 | 500 | 501 {
   switch (code) {
     case "invalid_argument":
       return 400;
@@ -218,10 +218,16 @@ function pipelineHttpStatus(
       return 403;
     case "not_found":
       return 404;
+    // Phase A docs flip: failed_precondition surfaces as 409 Conflict (the
+    // expected pin / publisher topology / source-drift conflicts with the
+    // server's current state) and resource_exhausted surfaces as 413
+    // Payload Too Large (the request would exceed an operator-configured
+    // quota). The earlier 412 / 429 mapping was retired with the
+    // idempotency / If-Match removal.
     case "failed_precondition":
-      return 412;
+      return 409;
     case "resource_exhausted":
-      return 429;
+      return 413;
     case "not_implemented":
       return 501;
     case "internal_error":
