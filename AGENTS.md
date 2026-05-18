@@ -74,6 +74,12 @@ takosumi/
   (`CONVENTIONS.md` §6)。 第三者は新 kind を増やすのではなく既存 kind の
   provider を追加する。 workflow / cron / hook を kernel-known kind として
   追加することは行わない。
+- **Kind catalog は JSON-LD で公開**: 5 built-in kind の正本は
+  `spec/contexts/kinds/v1/*.jsonld` (= `https://takosumi.com/kinds/v1/<name>`)
+  で publish され、 AppSpec parser は short name (= `worker`) と full URI (=
+  `https://operator.example.com/kinds/lambda` 等の operator-defined kind)
+  の両方を受理する。 詳細は
+  [docs/reference/json-ld-kind-catalog.md](./docs/reference/json-ld-kind-catalog.md)。
 - **credential を kernel core に持たない**: `factories.ts` 経由で operator が
   inject する。
 - **identity / billing は kernel の外側**: per-Installation OIDC client 発行は
