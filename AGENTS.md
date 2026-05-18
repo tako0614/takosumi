@@ -134,21 +134,24 @@ AppSpec の各 component は 2 つの edge だけを持つ:
 
 ## JSR publish layout
 
+> 仕様策定中につき、 version は per-package deno.json と同期する pre-1.0
+> 値で運用する。 「ecosystem 一律 1.0 GA」 は宣言しない。
+
 | Package                                 | Version | 内容                                                          |
 | --------------------------------------- | ------- | ------------------------------------------------------------- |
-| `@takos/takosumi-contract`              | 3.0.0   | AppSpec / Component / KernelPlugin / Installer API 型契約     |
-| `@takos/takosumi-kernel`                | 1.0.0   | HTTP server + installer pipeline + storage + workers          |
-| `@takos/takosumi-plugins`               | 1.0.0   | component kind catalog + materializer host + factories        |
-| `@takos/takosumi-installer`             | 1.0.0   | .takosumi.yml parser + git fetch + deploy client              |
-| `@takos/takosumi-runtime-agent`         | 1.0.0   | kernel ↔ tenant gateway-manifest runtime                      |
-| `@takos/takosumi-cli`                   | 1.0.0   | CLI (`takosumi install` / `takosumi deploy` 等)               |
-| `@takos/takosumi-cloudflare-providers`  | 1.0.0   | Cloudflare (Workers / R2 / DNS) `KernelPlugin` factories      |
-| `@takos/takosumi-aws-providers`         | 1.0.0   | AWS (Fargate / S3 / RDS / Route53) `KernelPlugin` factories   |
-| `@takos/takosumi-gcp-providers`         | 1.0.0   | GCP (Cloud Run / GCS / Cloud SQL) `KernelPlugin` factories    |
-| `@takos/takosumi-kubernetes-providers`  | 1.0.0   | Kubernetes Deployment + Service `KernelPlugin` factory        |
-| `@takos/takosumi-deno-deploy-providers` | 1.0.0   | Deno Deploy `KernelPlugin` factory                            |
-| `@takos/takosumi-selfhost-providers`    | 1.0.0   | Self-host (docker / systemd / filesystem / minio) factories   |
-| `@takos/takosumi`                       | 1.0.0   | umbrella (core 6 つを再公開、 provider packages は別 install) |
+| `@takos/takosumi-contract`              | 2.5.0   | AppSpec / Component / KernelPlugin / Installer API 型契約     |
+| `@takos/takosumi-kernel`                | 0.14.0  | HTTP server + installer pipeline + storage + workers          |
+| `@takos/takosumi-plugins`               | 0.12.0  | component kind catalog + materializer host + factories        |
+| `@takos/takosumi-installer`             | 0.1.0   | .takosumi.yml parser + git fetch + deploy client              |
+| `@takos/takosumi-runtime-agent`         | 0.7.0   | kernel ↔ tenant gateway-manifest runtime                      |
+| `@takos/takosumi-cli`                   | 0.15.0  | CLI (`takosumi install` / `takosumi deploy` 等)               |
+| `@takos/takosumi-cloudflare-providers`  | 0.1.0   | Cloudflare (Workers / R2 / DNS) `KernelPlugin` factories      |
+| `@takos/takosumi-aws-providers`         | 0.1.0   | AWS (Fargate / S3 / RDS / Route53) `KernelPlugin` factories   |
+| `@takos/takosumi-gcp-providers`         | 0.1.0   | GCP (Cloud Run / GCS / Cloud SQL) `KernelPlugin` factories    |
+| `@takos/takosumi-kubernetes-providers`  | 0.1.0   | Kubernetes Deployment + Service `KernelPlugin` factory        |
+| `@takos/takosumi-deno-deploy-providers` | 0.1.0   | Deno Deploy `KernelPlugin` factory                            |
+| `@takos/takosumi-selfhost-providers`    | 0.1.0   | Self-host (docker / systemd / filesystem / minio) factories   |
+| `@takos/takosumi`                       | 0.17.0  | umbrella (core 6 つを再公開、 provider packages は別 install) |
 
 > Note: `@takos/` JSR scope は Takos が publish する **reference distribution**
 > であり、 authority は publisher ではなく contract (`@takos/takosumi-contract`)
