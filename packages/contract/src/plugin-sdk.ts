@@ -2,15 +2,7 @@
 import type { ActorContext, Digest, JsonObject } from "./types.ts";
 import type { ObjectAddress } from "./core-v1.ts";
 import type { TakosumiActorContext } from "./internal-api.ts";
-import type {
-  KernelPluginClientRegistry,
-  KernelPluginInitContext,
-  KernelPluginPortKind,
-} from "./plugin.ts";
-import {
-  TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-  type TakosumiKernelPluginManifest,
-} from "./plugin.ts";
+import type { KernelPlugin } from "./plugin.ts";
 import {
   RUNTIME_AGENT_RPC_PATHS,
   type SignedGatewayManifest,
@@ -1666,164 +1658,9 @@ export interface AppAdapters {
 }
 
 export interface AppRuntimeConfig {
-  readonly plugins?: Partial<Record<KernelPluginPortKind, string>>;
-  readonly pluginConfig?: JsonObject;
   readonly environment?: string;
   readonly processRole?: string;
   readonly allowUnsafeProductionDefaults?: boolean;
-}
-
-export type KernelPluginAdapterOverrides = Partial<AppAdapters>;
-
-export interface KernelPluginCreateAdaptersContext
-  extends KernelPluginInitContext {
-  readonly clock: () => Date;
-  readonly idGenerator: () => string;
-}
-
-export interface TakosumiKernelPlugin {
-  readonly manifest: TakosumiKernelPluginManifest;
-  createAdapters(
-    context: KernelPluginCreateAdaptersContext,
-  ): KernelPluginAdapterOverrides;
-}
-
-export interface KernelPluginRegistry {
-  list(): readonly TakosumiKernelPlugin[];
-  get(id: string): TakosumiKernelPlugin | undefined;
-}
-
-export class InMemoryKernelPluginRegistry implements KernelPluginRegistry {
-  readonly #plugins = new Map<string, TakosumiKernelPlugin>();
-
-  constructor(plugins: readonly TakosumiKernelPlugin[] = []) {
-    for (const plugin of plugins) this.register(plugin);
-  }
-
-  register(plugin: TakosumiKernelPlugin): void {
-    assertValidPluginManifest(plugin.manifest);
-    if (this.#plugins.has(plugin.manifest.id)) {
-      throw new Error(
-        `kernel plugin already registered: ${plugin.manifest.id}`,
-      );
-    }
-    this.#plugins.set(plugin.manifest.id, plugin);
-  }
-
-  list(): readonly TakosumiKernelPlugin[] {
-    return Object.freeze([...this.#plugins.values()]);
-  }
-
-  get(id: string): TakosumiKernelPlugin | undefined {
-    return this.#plugins.get(id);
-  }
-}
-
-export function createKernelPluginRegistry(
-  plugins: readonly TakosumiKernelPlugin[] = [],
-): KernelPluginRegistry {
-  return new InMemoryKernelPluginRegistry(plugins);
-}
-
-export function createPluginAdapterOverrides(input: {
-  readonly registry: KernelPluginRegistry;
-  readonly selectedPluginIds: Partial<Record<KernelPluginPortKind, string>>;
-  readonly context: KernelPluginCreateAdaptersContext;
-}): KernelPluginAdapterOverrides {
-  const overrides: KernelPluginAdapterOverrides = {};
-  const initialized = new Set<string>();
-  const selectedPorts = selectedPortsByPluginId(input.selectedPluginIds);
-  for (const pluginId of Object.values(input.selectedPluginIds)) {
-    if (!pluginId || initialized.has(pluginId)) continue;
-    const plugin = input.registry.get(pluginId);
-    if (!plugin) {
-      throw new Error(`kernel plugin is not registered: ${pluginId}`);
-    }
-    const ports = selectedPorts.get(pluginId) ?? [];
-    assertPluginSupportsSelectedPorts(plugin.manifest, ports);
-    assertPluginAllowedForEnvironment(
-      plugin.manifest,
-      ports,
-      input.context.environment,
-    );
-    const pluginOverrides = plugin.createAdapters(input.context);
-    assertPluginProvidesSelectedAdapters(
-      plugin.manifest,
-      pluginOverrides,
-      ports,
-    );
-    const selectedPluginOverrides = selectedAdapterOverrides(
-      plugin.manifest,
-      pluginOverrides,
-      ports,
-      overrides,
-    );
-    assertPluginDoesNotOverrideExistingAdapters(
-      plugin.manifest,
-      overrides,
-      selectedPluginOverrides,
-    );
-    assignPluginOverrides(
-      overrides,
-      plugin.manifest.id,
-      selectedPluginOverrides,
-    );
-    initialized.add(pluginId);
-  }
-  return overrides;
-}
-
-export function assertValidPluginManifest(
-  manifest: TakosumiKernelPluginManifest,
-): void {
-  if (!manifest.id.trim()) throw new Error("kernel plugin id is required");
-  if (!manifest.version.trim()) {
-    throw new Error(`kernel plugin version is required: ${manifest.id}`);
-  }
-  if (!manifest.kernelApiVersion.trim()) {
-    throw new Error(
-      `kernel plugin kernelApiVersion is required: ${manifest.id}`,
-    );
-  }
-  if (manifest.kernelApiVersion !== TAKOSUMI_KERNEL_PLUGIN_API_VERSION) {
-    throw new Error(
-      `kernel plugin ${manifest.id} targets unsupported kernel API ${manifest.kernelApiVersion}; expected ${TAKOSUMI_KERNEL_PLUGIN_API_VERSION}`,
-    );
-  }
-}
-
-export function assertPluginAllowedForEnvironment(
-  manifest: TakosumiKernelPluginManifest,
-  ports: readonly KernelPluginPortKind[],
-  environment: string,
-): void {
-  if (environment !== "production" && environment !== "staging") return;
-  const normalizedId = manifest.id.toLowerCase();
-  if (
-    normalizedId === "takosumi.kernel.reference" ||
-    /(^|[._-])noop([._-]|$)/.test(normalizedId) ||
-    /(^|[._-])reference([._-]|$)/.test(normalizedId)
-  ) {
-    throw new Error(
-      `${environment} cannot select reference/noop kernel plugin ${manifest.id}`,
-    );
-  }
-  for (const port of ports) {
-    const capabilities = manifest.capabilities.filter((capability) =>
-      capability.port === port
-    );
-    if (
-      capabilities.length > 0 &&
-      capabilities.every((capability) =>
-        capability.externalIo.length === 0 ||
-        capability.externalIo.every((boundary) => boundary === "none")
-      )
-    ) {
-      throw new Error(
-        `${environment} plugin ${manifest.id} declares no external I/O for selected port ${port}`,
-      );
-    }
-  }
 }
 
 export interface RuntimeAgentCapabilities {
@@ -2364,9 +2201,7 @@ export interface CreatePaaSAppOptions {
   readonly role?: TakosumiProcessRole;
   readonly runtimeEnv?: Record<string, string | undefined>;
   readonly runtimeConfig?: AppRuntimeConfig;
-  readonly plugins?: readonly TakosumiKernelPlugin[];
-  readonly pluginRegistry?: KernelPluginRegistry;
-  readonly pluginClientRegistry?: KernelPluginClientRegistry;
+  readonly plugins?: readonly KernelPlugin[];
   readonly dateClock?: () => Date;
   readonly uuidFactory?: () => string;
   readonly context?: AppContext;
@@ -2388,27 +2223,7 @@ export function createPaaSApp(
   const runtimeConfig = options.runtimeConfig ?? {};
   const clock = options.dateClock ?? (() => new Date());
   const idGenerator = options.uuidFactory ?? (() => crypto.randomUUID());
-  const pluginRegistry = options.pluginRegistry ??
-    createKernelPluginRegistry(options.plugins ?? []);
-  const selectedPluginIds = runtimeConfig.plugins ?? {};
-  const overrides = createPluginAdapterOverrides({
-    registry: pluginRegistry,
-    selectedPluginIds,
-    context: {
-      kernelApiVersion: TAKOSUMI_KERNEL_PLUGIN_API_VERSION,
-      environment: runtimeConfig.environment ?? "local",
-      processRole: runtimeConfig.processRole ?? role,
-      selectedPluginIds,
-      operatorConfig: runtimeConfig.pluginConfig,
-      clientRegistry: options.pluginClientRegistry,
-      clock,
-      idGenerator,
-    },
-  });
-  const adapters = {
-    ...createDefaultAppAdapters({ clock, idGenerator }),
-    ...overrides,
-  };
+  const adapters = createDefaultAppAdapters({ clock, idGenerator });
   return Promise.resolve({
     app: undefined,
     context: { adapters, runtimeConfig },
@@ -2814,168 +2629,6 @@ function toRuntimeAgentRpcLease(
       queuedAt: lease.work.queuedAt,
     },
   };
-}
-
-function selectedPortsByPluginId(
-  selectedPluginIds: Partial<Record<KernelPluginPortKind, string>>,
-): Map<string, KernelPluginPortKind[]> {
-  const portsByPlugin = new Map<string, KernelPluginPortKind[]>();
-  for (const [rawPort, pluginId] of Object.entries(selectedPluginIds)) {
-    if (!pluginId) continue;
-    const port = rawPort as KernelPluginPortKind;
-    portsByPlugin.set(pluginId, [...(portsByPlugin.get(pluginId) ?? []), port]);
-  }
-  return portsByPlugin;
-}
-
-function assertPluginSupportsSelectedPorts(
-  manifest: TakosumiKernelPluginManifest,
-  ports: readonly KernelPluginPortKind[],
-): void {
-  const supportedPorts = new Set(
-    manifest.capabilities.map((capability) => capability.port),
-  );
-  for (const port of ports) {
-    if (supportedPorts.has(port)) continue;
-    throw new Error(
-      `kernel plugin ${manifest.id} does not declare capability for selected port ${port}`,
-    );
-  }
-}
-
-function assertPluginProvidesSelectedAdapters(
-  manifest: TakosumiKernelPluginManifest,
-  overrides: KernelPluginAdapterOverrides,
-  ports: readonly KernelPluginPortKind[],
-): void {
-  for (const port of ports) {
-    const adapterKey = adapterKeyForPort(port);
-    if (!adapterKey) continue;
-    if (overrides[adapterKey]) continue;
-    throw new Error(
-      `kernel plugin ${manifest.id} did not provide adapter ${adapterKey} for selected port ${port}`,
-    );
-  }
-}
-
-function selectedAdapterOverrides(
-  manifest: TakosumiKernelPluginManifest,
-  overrides: KernelPluginAdapterOverrides,
-  ports: readonly KernelPluginPortKind[],
-  existing: KernelPluginAdapterOverrides,
-): KernelPluginAdapterOverrides {
-  const selectedOverrides: KernelPluginAdapterOverrides = {};
-  const mutableSelected =
-    selectedOverrides as MutableKernelPluginAdapterOverrides;
-  const selectedAdapterKeys = new Set<AdapterOverrideKey>();
-  for (const port of ports) {
-    for (const key of adapterKeysForPort(port)) selectedAdapterKeys.add(key);
-  }
-  const supportedAdapterKeys = new Set<AdapterOverrideKey>();
-  for (const capability of manifest.capabilities) {
-    for (const key of adapterKeysForPort(capability.port)) {
-      supportedAdapterKeys.add(key);
-    }
-  }
-  for (const adapterKey of Object.keys(overrides) as AdapterOverrideKey[]) {
-    const adapter = overrides[adapterKey];
-    if (adapter === undefined) continue;
-    if (selectedAdapterKeys.has(adapterKey)) {
-      mutableSelected[adapterKey] = adapter as never;
-      continue;
-    }
-    if (existing[adapterKey] !== undefined) {
-      throw new Error(
-        `kernel plugin ${manifest.id} attempted duplicate ownership of adapter ${adapterKey}`,
-      );
-    }
-    if (supportedAdapterKeys.has(adapterKey)) continue;
-    throw new Error(
-      `kernel plugin ${manifest.id} provided unselected adapter ${adapterKey}`,
-    );
-  }
-  return selectedOverrides;
-}
-
-function assertPluginDoesNotOverrideExistingAdapters(
-  manifest: TakosumiKernelPluginManifest,
-  existing: KernelPluginAdapterOverrides,
-  overrides: KernelPluginAdapterOverrides,
-): void {
-  for (const adapterKey of Object.keys(overrides) as AdapterOverrideKey[]) {
-    if (overrides[adapterKey] === undefined) continue;
-    if (existing[adapterKey] === undefined) continue;
-    throw new Error(
-      `kernel plugin ${manifest.id} attempted duplicate ownership of adapter ${adapterKey}`,
-    );
-  }
-}
-
-function assignPluginOverrides(
-  target: KernelPluginAdapterOverrides,
-  pluginId: string,
-  overrides: KernelPluginAdapterOverrides,
-): void {
-  const mutableTarget = target as MutableKernelPluginAdapterOverrides;
-  for (const adapterKey of Object.keys(overrides) as AdapterOverrideKey[]) {
-    const adapter = overrides[adapterKey];
-    if (adapter === undefined) continue;
-    if (target[adapterKey] !== undefined) {
-      throw new Error(
-        `kernel plugin ${pluginId} attempted duplicate ownership of adapter ${adapterKey}`,
-      );
-    }
-    mutableTarget[adapterKey] = adapter as never;
-  }
-}
-
-type AdapterOverrideKey = keyof KernelPluginAdapterOverrides;
-type MutableKernelPluginAdapterOverrides = {
-  -readonly [K in keyof KernelPluginAdapterOverrides]:
-    KernelPluginAdapterOverrides[K];
-};
-
-function adapterKeysForPort(
-  port: KernelPluginPortKind,
-): readonly AdapterOverrideKey[] {
-  if (port === "auth") return ["auth", "actor"];
-  const single = adapterKeyForPort(port);
-  return single === undefined ? [] : [single];
-}
-
-function adapterKeyForPort(
-  port: KernelPluginPortKind,
-): keyof KernelPluginAdapterOverrides | undefined {
-  switch (port) {
-    case "auth":
-      return "auth";
-    case "coordination":
-      return "coordination";
-    case "kms":
-      return "kms";
-    case "notification":
-      return "notifications";
-    case "object-storage":
-      return "objectStorage";
-    case "operator-config":
-      return "operatorConfig";
-    case "provider":
-      return "provider";
-    case "queue":
-      return "queue";
-    case "router-config":
-      return "routerConfig";
-    case "secret-store":
-      return "secrets";
-    case "source":
-      return "source";
-    case "storage":
-      return "storage";
-    case "observability":
-      return "observability";
-    case "runtime-agent":
-      return "runtimeAgent";
-  }
 }
 
 function clone<T>(value: T): T {
