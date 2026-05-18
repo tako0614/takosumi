@@ -8,7 +8,7 @@ import {
   createDenoDeployProvider,
   type DenoDeployLifecycleClient,
   InMemoryDenoDeployLifecycle,
-} from "../shape-providers/worker/deno-deploy.ts";
+} from "@takos/takosumi-plugins/shape-providers/worker/deno-deploy";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_WORKER } from "./_kinds.ts";
 
