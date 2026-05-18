@@ -230,29 +230,6 @@ Mutation rule: `(tenantId, name)` で upsert。 destroy は行を残し
 `status = destroyed` を設定して `appliedResources` を空にし、 status / audit
 read が継続できるようにする。
 
-## InstallerIdempotencyRecord
-
-installer write surface の replay cache。 write が 深い OperationJournal model
-に入る前段で `X-Idempotency-Key` を支える storage level の backing。
-
-| Field            | Type      | Required | Notes                                  |
-| ---------------- | --------- | -------- | -------------------------------------- |
-| `id`             | string    | yes      | 行識別子。                             |
-| `tenantId`       | string    | yes      | installer-resolved Space scope。       |
-| `idempotencyKey` | string    | yes      | caller が指定する operation key。      |
-| `requestDigest`  | sha256    | yes      | 実 request body bytes の digest。      |
-| `responseStatus` | integer   | yes      | 初回 JSON response の HTTP status。    |
-| `responseBody`   | object    | yes      | replay に使う初回 JSON response body。 |
-| `createdAt`      | timestamp | yes      | 初回観測時刻。                         |
-
-Persistence: 少なくとも installer write の retry window まで保持。
-`(tenantId, idempotencyKey)` unique と `(createdAt)` で index (後者は retention
-sweep 用)。
-
-Mutation rule: first writer wins。 同一 key かつ同一 `requestDigest` の後続
-request は格納済 response を replay する。 同一 key で異なる digest は
-`failed_precondition` で拒否する。
-
 ## InstallerLeaseLock
 
 installer lifecycle 向けの cross-process lease 行。 `takosumi_deploy_locks`
