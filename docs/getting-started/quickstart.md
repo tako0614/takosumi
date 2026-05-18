@@ -169,7 +169,7 @@ public contract は `.takosumi.yml` / Installation / Deployment と
 ## 関連 docs
 
 - [Manifest spec](/manifest)
-- [Shape catalog](/reference/shapes)
+- [Component Kind Catalog](/reference/component-kind-catalog)
 - [Provider plugins](/reference/providers)
 - [Self-host deploy](/operator/self-host) — VM 単機 / multi-host 分離 / artifact
   GC / fetch token
