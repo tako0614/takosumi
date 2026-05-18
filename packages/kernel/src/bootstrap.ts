@@ -36,6 +36,11 @@ import {
 } from "./domains/deploy/takosumi_deployment_record_store.ts";
 import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store_sql.ts";
 import { InstallerPipeline } from "./domains/installer/mod.ts";
+import {
+  defaultBundledPlugins as bundledPluginsFromPlugins,
+  type DefaultBundledPluginsOptions,
+} from "@takos/takosumi-plugins/bundled";
+import type { KernelPlugin } from "takosumi-contract/plugin";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -89,13 +94,22 @@ function resolveRevokeDebtStore(input: {
 export { registerBundledShapesAndProviders };
 
 /**
- * KernelPlugin instances bundled with the kernel distribution. Wave 9
- * Phase B leaves this empty — Phase D will populate it with adapters for
- * the existing shape-provider connectors. Operators that want a turnkey
- * bootstrap can spread the result into `createPaaSApp({ plugins })`.
+ * KernelPlugin instances bundled with the kernel distribution.
+ *
+ * Returns the operator-facing default plugin array sourced from
+ * `@takos/takosumi-plugins/bundled`. By default the self-hosted set
+ * (docker-compose worker / local-docker postgres / filesystem object-store
+ * / takosumi-accounts oidc / cloudflare-dns custom-domain) is included;
+ * cloud providers are opt-in via the same `enable*` switches the bundled
+ * factory exposes.
+ *
+ * Operators that want a fully custom plugin set should not call this —
+ * pass `plugins: [myProvider(), ...]` to `createPaaSApp()` directly.
  */
-export function defaultBundledPlugins(): readonly never[] {
-  return [];
+export function defaultBundledPlugins(
+  opts?: DefaultBundledPluginsOptions,
+): readonly KernelPlugin[] {
+  return bundledPluginsFromPlugins(opts ?? {});
 }
 
 export interface CreatePaaSAppOptions extends AppContextOptions {
