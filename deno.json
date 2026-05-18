@@ -48,7 +48,7 @@
     }
   },
   "tasks": {
-    "check": "deno check packages/plugins/src/mod.ts packages/kernel/src/index.ts scripts/live-provisioning-smoke.ts scripts/jsr-publish-dry-run.ts scripts/public-spec-source-map_test.ts",
+    "check": "deno check packages/plugins/src/mod.ts packages/kernel/src/index.ts scripts/live-provisioning-smoke.ts scripts/jsr-publish-dry-run.ts scripts/public-spec-source-map_test.ts scripts/spec-generate-ts.ts scripts/spec-check-drift.ts scripts/spec-check-drift_test.ts",
     "check:cloudflare": "deno check --config deploy/cloudflare/deno.json deploy/cloudflare/src/worker.ts deploy/cloudflare/src/worker_test.ts deploy/cloudflare/src/scaffold_test.ts",
     "test": "deno test --allow-all",
     "publish:dry-run": "deno run --allow-run --allow-read scripts/jsr-publish-dry-run.ts",
@@ -59,6 +59,8 @@
     "fmt:check": "deno fmt --check",
     "lint": "deno lint",
     "lint:json-ld": "deno run --allow-read scripts/lint-json-ld.ts",
+    "spec:generate-ts": "deno run --allow-read --allow-write --allow-run scripts/spec-generate-ts.ts",
+    "spec:check-drift": "deno run --allow-read --allow-write --allow-run scripts/spec-check-drift.ts",
     "spec:build": "bash -c 'mkdir -p site/dist/contexts && cp -R spec/contexts/. site/dist/contexts/ && echo \"[takosumi/spec] published spec/contexts → site/dist/contexts/\"'",
     "docs:install": "cd docs && npm install",
     "docs:dev": "cd docs && npx vitepress dev",
