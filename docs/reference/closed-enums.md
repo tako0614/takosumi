@@ -480,7 +480,7 @@ workflow / cron / hook の実行は kernel の外の CI / operator product で�
 
 - [Access Modes](/reference/access-modes)
 - [Lifecycle Phases](/reference/lifecycle-phases)
-- [Shape Catalog](/reference/shapes)
+- [Component Kind Catalog](/reference/component-kind-catalog)
 - [Provider Plugins](/reference/providers)
 - [Auth Providers](/reference/auth-providers)
 - [RBAC Policy](/reference/rbac-policy)

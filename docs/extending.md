@@ -142,7 +142,7 @@ const { app } = await createPaaSApp({
 4. **≥ 2 provider を実装** — portability 不変式: 1 kind = 最低 2 provider。 1
    つの cloud に縛られた kind は portable とは呼ばないため reject される。
 5. **テスト** — `tests/component_kind_<kind-id>_test.ts` (schema の境界ケース)
-   と `tests/shape_provider_<provider>_test.ts` を整備。
+   と `tests/bundled_<kind>_<provider>_test.ts` を整備。
 6. **CONVENTIONS.md §1 表を更新**。
 7. **docs を更新** — [Component Kind Catalog](/reference/component-kind-catalog)
    に解説 section を追加し、 [Provider Plugins](/reference/providers) に 2

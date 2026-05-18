@@ -133,5 +133,5 @@ approval invalidation trigger の全リストは
 ## 関連ページ
 
 - [Closed Enums](/reference/closed-enums)
-- [Shape Catalog](/reference/shapes)
+- [Component Kind Catalog](/reference/component-kind-catalog)
 - [Provider Plugins](/reference/providers)
