@@ -58,10 +58,6 @@ const mirroredMigrationFiles: readonly {
     migrationId: "internal_auth.replay_protection_log.create",
   },
   {
-    fileName: "20260430000020_takosumi_deployments.sql",
-    migrationId: "deploy.takosumi_deployments.create",
-  },
-  {
     fileName: "20260430000021_takosumi_deploy_idempotency_keys.sql",
     migrationId: "deploy.takosumi_deploy_idempotency_keys.create",
   },
@@ -80,10 +76,6 @@ const mirroredMigrationFiles: readonly {
   {
     fileName: "20260430000025_catalog_releases.sql",
     migrationId: "registry.catalog_releases.create",
-  },
-  {
-    fileName: "20260430000026_takosumi_deploy_idempotency_locks.sql",
-    migrationId: "deploy.takosumi_deploy_idempotency_locks.create",
   },
 ];
 

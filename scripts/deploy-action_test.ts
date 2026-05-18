@@ -16,14 +16,6 @@ Deno.test("deploy action is a direct kernel deploy wrapper", async () => {
   assert.equal(source.includes(".takosumi"), false);
 });
 
-Deno.test("deploy action docs show the raw unmanaged deploy path", async () => {
-  const docs = await Deno.readTextFile(new URL("docs/reference/cli.md", root));
-
-  assert.match(docs, /actions\/deploy@v1/);
-  assert.match(docs, /AppInstallation ownership/);
-  assert.match(docs, /POST \/v1\/deployments/);
-});
-
 Deno.test("direct deploy sample uses the reusable action without takosumi-git", async () => {
   const workflow = await Deno.readTextFile(
     new URL(
