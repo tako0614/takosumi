@@ -1,12 +1,11 @@
+import type { JsonObject, JsonValue } from "takosumi-contract";
 import {
   extractRefs,
   extractRefsFromValue,
-  type JsonObject,
-  type JsonValue,
   type ManifestResource,
   parseRef,
   type ResolvedRef,
-} from "takosumi-contract";
+} from "./_internal_manifest_types.ts";
 
 export interface RefResolutionIssue {
   readonly path: string;

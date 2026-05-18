@@ -121,7 +121,6 @@ async function createWorkerPaaSApp(
     adapters,
     startWorkerDaemon: false,
     takosumiDeploymentRecordStore: deployStores.deploymentRecordStore,
-    takosumiDeployIdempotencyStore: deployStores.idempotencyStore,
     takosumiOperationJournalStore: deployStores.operationJournalStore,
     takosumiRevokeDebtStore: deployStores.revokeDebtStore,
   });

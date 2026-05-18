@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {
   type ApplyResult,
   type JsonObject,
-  type ManifestResource,
   type PlatformContext,
   type ProviderPlugin,
   registerProvider,
@@ -11,6 +10,7 @@ import {
   unregisterProvider,
   unregisterShape,
 } from "takosumi-contract";
+import type { ManifestResource } from "./_internal_manifest_types.ts";
 import {
   applyV2,
   computeSpecFingerprint,

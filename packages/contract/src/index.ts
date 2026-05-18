@@ -23,6 +23,5 @@ export * from "./runtime-agent.ts";
 export * from "./runtime-agent-lifecycle.ts";
 export * from "./error-category.ts";
 export * from "./shape.ts";
-export * from "./manifest-resource.ts";
 export * from "./provider-plugin.ts";
 export * from "./template.ts";

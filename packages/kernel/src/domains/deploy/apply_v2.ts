@@ -2,12 +2,12 @@ import { createHash } from "node:crypto";
 import {
   formatPlatformOperationIdempotencyKey,
   type JsonObject,
-  type ManifestResource,
   type PlatformContext,
   type PlatformOperationContext,
   type PlatformOperationRecoveryMode,
   type ResourceHandle,
 } from "takosumi-contract";
+import type { ManifestResource } from "./_internal_manifest_types.ts";
 import {
   type ResolvedResourceV2,
   resolveResourcesV2,

@@ -3,11 +3,11 @@ import {
   getProvider,
   getShapeByRef,
   listProvidersForShape,
-  type ManifestResource,
   parseShapeRef,
   type ProviderPlugin,
   type Shape,
 } from "takosumi-contract";
+import type { ManifestResource } from "./_internal_manifest_types.ts";
 
 export interface ResolvedResourceV2 {
   readonly resource: ManifestResource;

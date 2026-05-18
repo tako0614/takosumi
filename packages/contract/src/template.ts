@@ -1,5 +1,22 @@
-import type { JsonObject } from "./types.ts";
-import type { ManifestResource } from "./manifest-resource.ts";
+import type { JsonObject, JsonValue } from "./types.ts";
+
+/**
+ * Minimal compiled-Manifest resource the Template.expand() return type
+ * uses. Mirrors the kernel-internal v1 envelope (apiVersion / kind +
+ * resources[]) at the resource granularity, intentionally narrow so the
+ * contract layer does not re-publish the legacy v1 envelope.
+ *
+ * `provider` is optional so templates can leave provider selection to
+ * the operator's deploy policy / provider resolver.
+ */
+export interface ManifestResource {
+  readonly shape: string;
+  readonly name: string;
+  readonly provider?: string;
+  readonly spec: JsonValue;
+  readonly requires?: readonly string[];
+  readonly metadata?: JsonObject;
+}
 
 export interface TemplateValidationIssue {
   readonly path: string;

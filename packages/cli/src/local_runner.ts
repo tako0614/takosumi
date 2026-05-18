@@ -1,7 +1,6 @@
 import {
   InMemoryObservabilitySink,
   kms,
-  type ManifestResource,
   objectStorage,
   type PlatformContext,
   registerProvider,
@@ -14,7 +13,10 @@ import {
   destroyV2,
   type DestroyV2Outcome,
 } from "@takos/takosumi-kernel/apply";
-import { expandManifestResourcesV1 } from "@takos/takosumi-kernel/manifest-v1";
+import {
+  expandManifestResourcesV1,
+  type ManifestResource,
+} from "@takos/takosumi-kernel/manifest-v1";
 import { TAKOSUMI_BUNDLED_KINDS } from "@takos/takosumi-plugins/kinds";
 import { createInMemoryTakosumiProviders } from "@takos/takosumi-plugins/shape-providers";
 

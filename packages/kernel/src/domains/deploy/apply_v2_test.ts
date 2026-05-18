@@ -3,7 +3,6 @@ import {
   type ApplyResult,
   formatPlatformOperationIdempotencyKey,
   type JsonObject,
-  type ManifestResource,
   type PlatformContext,
   type PlatformOperationContext,
   type ProviderPlugin,
@@ -13,6 +12,7 @@ import {
   unregisterProvider,
   unregisterShape,
 } from "takosumi-contract";
+import type { ManifestResource } from "./_internal_manifest_types.ts";
 import { applyV2 } from "./apply_v2.ts";
 import { InMemoryObservabilitySink } from "../../services/observability/mod.ts";
 

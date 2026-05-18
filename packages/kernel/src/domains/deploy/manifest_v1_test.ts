@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { ManifestResource } from "takosumi-contract";
+import type { ManifestResource } from "./_internal_manifest_types.ts";
 import {
   readDeploymentNameV1,
   resolveManifestResourcesV1,

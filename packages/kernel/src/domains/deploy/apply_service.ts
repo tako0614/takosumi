@@ -26,11 +26,11 @@ import type {
   GroupHead,
   IsoTimestamp,
   JsonObject,
-  ManifestResource,
   PlatformContext,
   RefResolver,
 } from "takosumi-contract";
 import { objectAddress } from "takosumi-contract";
+import type { ManifestResource } from "./_internal_manifest_types.ts";
 import { applyV2, type ApplyV2Outcome } from "./apply_v2.ts";
 import {
   type DeploymentFilter,

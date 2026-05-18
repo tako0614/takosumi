@@ -1,9 +1,4 @@
 import type { JsonValue } from "takosumi-contract";
-import type {
-  DeployPublicIdempotencyRecord,
-  DeployPublicIdempotencySaveInput,
-  DeployPublicIdempotencyStore,
-} from "../../../packages/kernel/src/domains/deploy/deploy_public_idempotency_store.ts";
 import {
   assertReplayCompatible,
   compareJournalEntries,
@@ -36,14 +31,12 @@ import type {
 import type { D1Database } from "./bindings.ts";
 
 const DEPLOYMENT_NAMESPACE = "takosumi-deployment";
-const IDEMPOTENCY_NAMESPACE = "takosumi-idempotency";
 const JOURNAL_NAMESPACE = "takosumi-operation-journal";
 const REVOKE_DEBT_NAMESPACE = "takosumi-revoke-debt";
 const ARTIFACT_HASH_REGEX = /^sha256:[0-9a-f]{64}$/;
 
 export interface CloudflareD1DeployStores {
   readonly deploymentRecordStore: TakosumiDeploymentRecordStore;
-  readonly idempotencyStore: DeployPublicIdempotencyStore;
   readonly operationJournalStore: OperationJournalStore;
   readonly revokeDebtStore: RevokeDebtStore;
 }
@@ -54,7 +47,6 @@ export function createCloudflareD1DeployStores(
   const records = new D1RecordTable(db);
   return {
     deploymentRecordStore: new D1TakosumiDeploymentRecordStore(records),
-    idempotencyStore: new D1DeployPublicIdempotencyStore(records),
     operationJournalStore: new D1OperationJournalStore(records),
     revokeDebtStore: new D1RevokeDebtStore(records),
   };
@@ -163,62 +155,6 @@ class D1TakosumiDeploymentRecordStore implements TakosumiDeploymentRecordStore {
       }
     }
     return hashes;
-  }
-}
-
-class D1DeployPublicIdempotencyStore implements DeployPublicIdempotencyStore {
-  readonly #locks: D1LeaseTable;
-
-  constructor(private readonly records: D1RecordTable) {
-    this.#locks = new D1LeaseTable(records, "idempotency-lock");
-  }
-
-  get(
-    tenantId: string,
-    key: string,
-  ): Promise<DeployPublicIdempotencyRecord | undefined> {
-    return this.records.get<DeployPublicIdempotencyRecord>(
-      IDEMPOTENCY_NAMESPACE,
-      naturalKey(tenantId, key),
-    );
-  }
-
-  async save(
-    input: DeployPublicIdempotencySaveInput,
-  ): Promise<DeployPublicIdempotencyRecord> {
-    const key = naturalKey(input.tenantId, input.key);
-    const existing = await this.records.get<DeployPublicIdempotencyRecord>(
-      IDEMPOTENCY_NAMESPACE,
-      key,
-    );
-    if (existing) return existing;
-    const record: DeployPublicIdempotencyRecord = {
-      id: crypto.randomUUID(),
-      tenantId: input.tenantId,
-      key: input.key,
-      requestDigest: input.requestDigest,
-      responseStatus: input.responseStatus,
-      responseBody: input.responseBody,
-      createdAt: input.now,
-    };
-    await this.records.putIfAbsent({
-      namespace: IDEMPOTENCY_NAMESPACE,
-      key,
-      tenantId: input.tenantId,
-      name: input.key,
-      createdAt: input.now,
-      updatedAt: input.now,
-      record,
-    });
-    return await this.get(input.tenantId, input.key) ?? record;
-  }
-
-  acquireLock(tenantId: string, key: string): Promise<void> {
-    return this.#locks.acquire(naturalKey(tenantId, key));
-  }
-
-  releaseLock(tenantId: string, key: string): Promise<void> {
-    return this.#locks.release(naturalKey(tenantId, key));
   }
 }
 

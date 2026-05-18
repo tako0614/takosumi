@@ -20,7 +20,7 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/providers.md",
   "docs/reference/templates.md",
   "docs/reference/artifact-kinds.md",
-  "packages/contract/src/manifest-resource.ts",
+  "packages/kernel/src/domains/deploy/_internal_manifest_types.ts",
   "packages/kernel/src/domains/deploy/manifest_v1.ts",
   "packages/kernel/src/api/app.ts",
   "packages/kernel/src/api/public_routes.ts",

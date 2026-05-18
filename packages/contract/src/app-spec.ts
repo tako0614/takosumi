@@ -2,8 +2,8 @@
  * AppSpec — the canonical Takosumi manifest (`.takosumi.yml`).
  *
  * v1 contract per user-confirmed clean-cut design. The previous
- * `Manifest` / `ManifestResource` (see `manifest-resource.ts`) is being
- * retired alongside this introduction; AppSpec is the single public
+ * `Manifest` / `ManifestResource` is being retired from the public contract
+ * alongside this introduction; AppSpec is the single public
  * manifest shape going forward. Public concepts are limited to:
  *   1. AppSpec       (= `.takosumi.yml`)
  *   2. Installation  (= a Space-scoped App)

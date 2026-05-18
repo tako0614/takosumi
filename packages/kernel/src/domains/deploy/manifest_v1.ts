@@ -1,9 +1,11 @@
+import type { JsonObject } from "takosumi-contract";
 import type {
-  JsonObject,
   ManifestEnvelopeIssue,
   ManifestResource,
-} from "takosumi-contract";
-import { validateManifestEnvelope } from "takosumi-contract";
+} from "./_internal_manifest_types.ts";
+import { validateManifestEnvelope } from "./_internal_manifest_types.ts";
+
+export type { ManifestResource } from "./_internal_manifest_types.ts";
 
 export type ManifestV1Resolution =
   | { readonly ok: true; readonly value: readonly ManifestResource[] }

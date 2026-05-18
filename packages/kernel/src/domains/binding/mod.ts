@@ -12,7 +12,7 @@
  * Replaces the prior placeholder resolver
  * (`${ref:...}` / `${secret-ref:...}` / `${bindings.*}` / `${secrets.*}` /
  * `${installation.*}` / `${artifacts.*}` / `${params.*}` substitution),
- * which is removed alongside `manifest-resource.ts`.
+ * which is removed alongside the retired public ManifestResource contract.
  */
 
 import type { AppSpec, UseEdge } from "takosumi-contract/app-spec";
@@ -21,7 +21,9 @@ export interface ResolvedBinding {
   readonly fromComponent: string;
   readonly toComponent: string;
   readonly edgeName: string;
-  readonly envInjections: Readonly<Record<string, string | { secretRef: string }>>;
+  readonly envInjections: Readonly<
+    Record<string, string | { secretRef: string }>
+  >;
   readonly mountedAs?: string;
 }
 

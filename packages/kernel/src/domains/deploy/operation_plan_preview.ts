@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ManifestResource } from "takosumi-contract";
+import type { ManifestResource } from "./_internal_manifest_types.ts";
 import type { DependencyEdge } from "./ref_resolver_v2.ts";
 import type { PlannedResource } from "./apply_v2.ts";
 

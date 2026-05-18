@@ -1,18 +1,14 @@
 import assert from "node:assert/strict";
 import {
   capabilitySubsetIssues,
-  extractRefs,
-  extractRefsFromValue,
   getProvider,
   getShapeByRef,
   type JsonObject,
   type JsonValue,
   type ManifestResource,
-  parseRef,
   type PlatformContext,
   registerProvider,
   registerShape,
-  type ResolvedRef,
   type ShapeValidationIssue,
   unregisterProvider,
   unregisterShape,
@@ -22,6 +18,67 @@ import { createInMemoryTakosumiProviders } from "../src/shape-providers/mod.ts";
 import { SelfhostedSingleVmTemplate } from "../src/templates/selfhosted-single-vm.ts";
 
 const ctx = {} as PlatformContext;
+
+type ResolvedRefKind = "ref" | "secret-ref";
+
+interface ResolvedRef {
+  readonly kind: ResolvedRefKind;
+  readonly source: string;
+  readonly field: string;
+}
+
+const REF_NAME = "[A-Za-z_][\\w-]*";
+const REF_FULL_PATTERN = new RegExp(
+  `^\\$\\{(ref|secret-ref):(${REF_NAME})\\.(${REF_NAME})\\}$`,
+);
+const REF_GLOBAL_PATTERN = new RegExp(
+  `\\$\\{(ref|secret-ref):(${REF_NAME})\\.(${REF_NAME})\\}`,
+  "g",
+);
+
+function parseRef(expression: string): ResolvedRef | undefined {
+  const match = REF_FULL_PATTERN.exec(expression);
+  if (!match) return undefined;
+  return {
+    kind: match[1] === "secret-ref" ? "secret-ref" : "ref",
+    source: match[2],
+    field: match[3],
+  };
+}
+
+function extractRefs(value: string): readonly ResolvedRef[] {
+  const refs: ResolvedRef[] = [];
+  let match: RegExpExecArray | null;
+  REF_GLOBAL_PATTERN.lastIndex = 0;
+  while ((match = REF_GLOBAL_PATTERN.exec(value)) !== null) {
+    refs.push({
+      kind: match[1] === "secret-ref" ? "secret-ref" : "ref",
+      source: match[2],
+      field: match[3],
+    });
+  }
+  return refs;
+}
+
+function extractRefsFromValue(value: JsonValue): readonly ResolvedRef[] {
+  const refs: ResolvedRef[] = [];
+  walkRefs(value, refs);
+  return refs;
+}
+
+function walkRefs(value: JsonValue, refs: ResolvedRef[]): void {
+  if (typeof value === "string") {
+    for (const ref of extractRefs(value)) refs.push(ref);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) walkRefs(entry, refs);
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const entry of Object.values(value)) walkRefs(entry, refs);
+  }
+}
 
 interface AppliedRecord {
   readonly name: string;

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import {
-  type ManifestResource,
   type ProviderPlugin,
   registerProvider,
   registerShape,
@@ -9,6 +8,7 @@ import {
   unregisterProvider,
   unregisterShape,
 } from "takosumi-contract";
+import type { ManifestResource } from "./_internal_manifest_types.ts";
 import { resolveResourcesV2 } from "./resource_resolver_v2.ts";
 
 function fakeShape(id: string, version = "v1"): Shape {

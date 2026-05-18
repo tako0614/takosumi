@@ -10,7 +10,6 @@
     "./internal-rpc": "./src/internal-rpc.ts",
     "./app-spec": "./src/app-spec.ts",
     "./installer-api": "./src/installer-api.ts",
-    "./manifest-resource": "./src/manifest-resource.ts",
     "./plugin": "./src/plugin.ts",
     "./plugin-sdk": "./src/plugin-sdk.ts",
     "./provider-plugin": "./src/provider-plugin.ts",
