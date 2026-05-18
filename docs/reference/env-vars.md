@@ -124,18 +124,18 @@ plugin port (`auth` / `coordination` / `notification` / `operator-config` /
 `secret-store` / `router-config` / `observability` / `runtime-agent`) ごとに
 Implementation を選択します。
 
-| Variable                                                               | Type        | Default          | Required                            | Consumer                                                       | Spec concept       |
-| ---------------------------------------------------------------------- | ----------- | ---------------- | ----------------------------------- | -------------------------------------------------------------- | ------------------ |
-| `TAKOSUMI_<PORT>_PLUGIN` / `TAKOSUMI_<PORT>_PLUGIN_ID`                 | string      | unset            | yes per port (production / staging) | plugin id selector for the named port                          | OperatorBoundaries |
-| `TAKOSUMI_KERNEL_PLUGIN_SELECTIONS` / `TAKOSUMI_KERNEL_PLUGIN_MAP`     | JSON object | unset            | no                                  | bulk port-to-id map                                            | OperatorBoundaries |
-| `TAKOSUMI_KERNEL_PLUGIN_CONFIG` / `TAKOSUMI_KERNEL_PLUGIN_CONFIG_JSON` | JSON object | `{}`             | no                                  | merged plugin configuration                                    | OperatorBoundaries |
-| `TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON`                                   | JSON object | provider default | no                                  | registry trust roots                                           | OperatorBoundaries |
-| `TAKOSUMI_ENABLE_DENO_DEPLOY_PROVIDER`                                 | boolean     | `false`          | no                                  | opt-in registration of the Deno Deploy provider in stock boots | n/a                |
+| Variable                             | Type    | Default          | Required | Consumer                                                       | Spec concept       |
+| ------------------------------------ | ------- | ---------------- | -------- | -------------------------------------------------------------- | ------------------ |
+| `TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON` | JSON    | provider default | no       | registry trust roots                                           | OperatorBoundaries |
+| `TAKOSUMI_ENABLE_DENO_DEPLOY_PROVIDER` | boolean | `false`        | no       | opt-in registration of the Deno Deploy provider in stock boots | n/a                |
 
-kernel は plugin marketplace / remote plugin install / signed manifest install
-をサポートしません。 operator は `createPaaSApp({ plugins: [...] })` に plugin
-の plain array を直接渡すことで kernel plugin を注入します。 marketplace 機構や
-signing infrastructure は存在しません。
+Plugin injection は operator-supplied JS のみ。 kernel は plugin marketplace /
+remote plugin install / signed manifest install / port-based plugin selection
+env var をサポートしません。 operator は `createPaaSApp({ plugins: [...] })` に
+plugin の plain array を直接渡します (= Vite plugin と同じ pattern)。 plugin が
+必要とする credential / config (= cloud API key 等) は plugin factory の opts
+引数で渡し、 operator が直接 env から読みます — kernel は plugin config 用 env
+schema を持ちません。
 
 ### Installer and Artifact Credentials
 
