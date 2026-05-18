@@ -3,7 +3,7 @@
 > このページでわかること: runtime-agent process が公開する HTTP RPC v1 仕様。
 
 runtime-agent は operator が cloud / OS credential を握る host で起動し、 kernel
-の下流 execution surface として `(shape, provider)` 単位の lifecycle envelope
+の下流 execution surface として `(kind, provider)` 単位の lifecycle envelope
 を受けます。
 
 逆方向の制御 (enroll / heartbeat / lease / drain / gateway-manifest 署名) は
@@ -32,7 +32,7 @@ scope は `GET /v1/artifacts/:hash` のみ
 | Method | Path                       | Auth        | Purpose                                                            |
 | ------ | -------------------------- | ----------- | ------------------------------------------------------------------ |
 | GET    | `/v1/health`               | -           | `{ status: "ok", connectors: <count> }`                            |
-| GET    | `/v1/connectors`           | Agent token | 起動時に登録された `(shape, provider, acceptedArtifactKinds)` 一覧 |
+| GET    | `/v1/connectors`           | Agent token | 起動時に登録された `(kind, provider, acceptedArtifactKinds)` 一覧  |
 | POST   | `/v1/lifecycle/apply`      | Agent token | resource を作成 / 更新                                             |
 | POST   | `/v1/lifecycle/destroy`    | Agent token | handle 指定で resource を削除                                      |
 | POST   | `/v1/lifecycle/compensate` | Agent token | WAL recovery 用に commit 済み effect を逆再生                      |
@@ -45,10 +45,10 @@ scope は `GET /v1/artifacts/:hash` のみ
 
 ```ts
 interface LifecycleApplyRequest {
-  readonly shape: string; // 例: "object-store@v1"
+  readonly kind: string; // 例: "object-store" (short name) or "https://takosumi.com/kinds/v1/object-store" (URI)
   readonly provider: string; // 例: "aws-s3"
   readonly resourceName: string; // component / internal resource name
-  readonly spec: JsonValue; // shape spec (kernel 側で validate 済み)
+  readonly spec: JsonValue; // component kind spec (kernel 側で validate 済み)
   readonly tenantId?: string;
   readonly idempotencyKey?: string; // WAL 由来の外部 API request token
   readonly operationRequest?: PlatformOperationRequest;
@@ -65,7 +65,7 @@ interface LifecycleApplyRequest {
 ```ts
 interface LifecycleApplyResponse {
   readonly handle: string; // 例: "arn:aws:s3:::blog-assets"
-  readonly outputs: JsonObject; // shape が宣言した outputs
+  readonly outputs: JsonObject; // component kind が宣言した outputs
 }
 ```
 
@@ -83,7 +83,7 @@ WAL-backed public apply では kernel が `PlatformContext.operation` から
 
 ```ts
 interface LifecycleDestroyRequest {
-  readonly shape: string;
+  readonly kind: string;
   readonly provider: string;
   readonly handle: string;
   readonly tenantId?: string;
@@ -115,7 +115,7 @@ external request token が無い provider は、 connector 内部の local ledge
 
 ```ts
 interface LifecycleCompensateRequest {
-  readonly shape: string;
+  readonly kind: string;
   readonly provider: string;
   readonly handle: string;
   readonly tenantId?: string;
@@ -148,7 +148,7 @@ RevokeDebt として保持します。
 
 ```ts
 interface LifecycleDescribeRequest {
-  readonly shape: string;
+  readonly kind: string;
   readonly provider: string;
   readonly handle: string;
   readonly tenantId?: string;
@@ -177,7 +177,7 @@ connector の `verify` operation を smoke test します。Request:
 ```ts
 interface LifecycleVerifyRequest {
   readonly targets?: readonly {
-    readonly shape: string;
+    readonly kind: string;
     readonly provider: string;
   }[];
   readonly options?: JsonObject; // connector ごとに解釈
@@ -192,7 +192,7 @@ interface LifecycleVerifyResponse {
 }
 
 interface LifecycleVerifyResult {
-  readonly shape: string; // verify 対象の shape
+  readonly kind: string; // verify 対象の component kind
   readonly provider: string; // verify 対象の provider id
   readonly ok: boolean; // smoke test 結果 (true = 健全)
   readonly code?: string; // ok=false 時に設定される LifecycleErrorCode
@@ -203,7 +203,7 @@ interface LifecycleVerifyResult {
 }
 ```
 
-`results[]` は順序保証なし。 caller は `(shape, provider)` で集計します。
+`results[]` は順序保証なし。 caller は `(kind, provider)` で集計します。
 
 ## Connector retry / credential refresh
 
@@ -291,7 +291,7 @@ interface LifecycleErrorBody {
 | ------------------------ | ------ | ------------------------------------------------------------------- |
 | `unauthorized`           | 401    | bearer 不足 / mismatch                                              |
 | `bad_request`            | 400    | request body の shape validation 失敗                               |
-| `connector_not_found`    | 404    | `(shape, provider)` に対応する connector が registry にいない       |
+| `connector_not_found`    | 404    | `(kind, provider)` に対応する connector が registry にいない        |
 | `artifact_kind_mismatch` | 400    | `spec.artifact.kind` が connector の `acceptedArtifactKinds` に無い |
 | `connector_failed`       | 500    | connector が throw した想定外エラー                                 |
 | `connector-extended:*`   | (任意) | connector 拡張用の予約 prefix                                       |
