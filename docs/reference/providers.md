@@ -182,8 +182,9 @@ interface KernelPlugin {
 bundled `kernelPluginFromProviderPlugin()` adapter は既存 `ProviderPlugin`
 factory を `KernelPlugin` に lift する helper。 `PlatformContext` は
 tenant-scoped secret store、 KMS port、 object storage port、 observability
-sink、 use-edge resolved-output map を運ぶ。 plain array attach は plugin
-marketplace / signed manifest fetch / port-based plugin host を必要としない。
+sink、 publish / listen で resolve された material map を運ぶ。 plain array
+attach は plugin marketplace / signed manifest fetch / port-based plugin host
+を必要としない。
 
 ## Cross-references
 

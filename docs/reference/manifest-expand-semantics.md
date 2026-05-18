@@ -1,71 +1,108 @@
 # AppSpec Dependency Semantics
 
 > このページでわかること: current AppSpec の component dependency / binding
-> semantics。旧 compiled Manifest の `${ref:...}` placeholder 文法は current
-> public AppSpec には存在しない。
+> semantics。 component 間の接続は **`publish` / `listen` edge のみ** で表現する。
+> 旧 `use:` edge / `${ref:...}` placeholder 文法は current public AppSpec
+> には存在しない。
 
 ## Source form
 
 AppSpec は `.takosumi.yml` の `components` map だけを public dependency source
-として扱う。component 間の依存は `use:` edge で明示する。
+として扱う。 component 間の依存は **`publish` (= 自分が出す material) と
+`listen` (= 他 component の material を受け取る)** の 2 つの edge で明示する。
 
 ```yaml
 components:
+  db:
+    kind: postgres
+    spec:
+      version: "16"
+      size: small
+    publish:
+      - com.example.notes.db
+
+  assets:
+    kind: object-store
+    spec:
+      name: notes-assets
+    publish:
+      - com.example.notes.assets
+
   web:
     kind: worker
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    use:
-      db:
-        env: DATABASE_URL
-      assets:
-        envPrefix: ASSETS_
-  db:
-    kind: postgres
-  assets:
-    kind: object-store
+    listen:
+      com.example.notes.db:
+        as: env
+        prefix: DATABASE_
+      com.example.notes.assets:
+        as: env
+        prefix: ASSETS_
 ```
 
-`use:` の key は同じ AppSpec 内の component 名。value は producer output を
-consumer に渡す binding rule で、current v1 は次を持つ。
+### `publish`
 
-| Field       | Meaning                                                  |
-| ----------- | -------------------------------------------------------- |
-| `env`       | producer の primary output を 1 つの environment へ渡す  |
-| `envPrefix` | producer outputs を prefix 付き environment set へ渡す   |
-| `mount`     | reserved mount point。current v1 は `oidc` のみ          |
-| `target`    | 同 kind の複数 target を区別する operator-owned selector |
+`publish` value は namespace registry に登録する path の **配列** で、 component
+が apply 後に返す `outputs` (= kind JSON-LD の `publishes[]` で宣言された
+material) がその path に publish される。 同 AppSpec 内の他 component から
+listen することも、 cross-installation で operator account plane (= Takosumi
+Accounts) から listen することも、 同じ path 表現で扱える。
+
+### `listen`
+
+`listen` の key は publish 側の namespace path。 value は consumer 側の binding
+rule で、 current v1 は次を持つ:
+
+| Field    | Meaning                                                                |
+| -------- | ---------------------------------------------------------------------- |
+| `as`     | `env` / `mount` / `target` のいずれか (= projection 形式)              |
+| `prefix` | `as: env` のとき、 env 名を `${PREFIX}<FIELD>` に変換する文字列        |
+| `mount`  | reserved mount point identifier (= kind 側で reserve した short name)  |
+
+`as: env` は producer の outputs map を `${PREFIX}<FIELD>` env vars として
+注入する。 `as: target` は upstream worker の URL を custom-domain の target
+として使う形 (= ingress projection)。
 
 ## Validation
 
-installer / kernel は AppSpec parse 時に dependency graph を作る。
+installer / kernel は AppSpec parse 時に publish / listen graph を作る。
 
-- `use:` target は同じ `components` map に存在しなければならない。
-- self-reference は禁止。
-- cycle は禁止。
-- `mount: oidc` は `kind: oidc` component にだけ使える。
-- `${ref:...}` / `${secret-ref:...}` / `${bindings.*}` / `${secrets.*}` /
-  `${installation.*}` / `${artifacts.*}` / `${params.*}` は current AppSpec では
-  invalid syntax。
+- `listen` の path は **同じ AppSpec の `publish` にあるか、 operator plane の
+  reserved path** に一致しなければならない。
+- self-reference (= 同 component の publish path を listen) は禁止。
+- cycle は禁止 (= component を node、 publish → listen を edge とする DAG)。
+- `listen.<path>.mount` は kind の reserved mount short name にのみ使える。
+- 旧 `use:` edge / `${ref:...}` / `${secret-ref:...}` / `${bindings.*}` /
+  `${secrets.*}` / `${installation.*}` / `${artifacts.*}` / `${params.*}` は
+  current AppSpec では invalid syntax (= parser が reject)。
 
-validation error は apply 前に surface し、resource は materialize されない。
+validation error は apply 前に surface し、 resource は materialize されない。
 
 ## Apply order
 
-apply pipeline は `use:` graph から topological order を決める。独立 component
-は並行実行できるが、consumer component は producer outputs が確定した後に
-materialize される。
+apply pipeline は publish / listen graph から topological order を決める。 独立
+component は並行実行できるが、 listen 側 component は publish 側 outputs が
+確定した後に materialize される。
 
-provider output は raw string interpolation ではなく、binding rule に従って
-runtime desired state に注入される。secret raw value は AppSpec に戻さない。
-provider が secret を出す場合は secret-store boundary を通した reference として
-扱う。
+provider output は raw string interpolation ではなく、 listen binding rule に
+従って runtime desired state に注入される。 secret raw value は AppSpec に
+戻さない。 provider が secret を出す場合は secret-store boundary を通した
+reference (= `secret://...`) として扱い、 worker runtime 側で adapter が
+解決する。
 
-## Cross-space boundary
+## Cross-space / operator plane
 
-current AppSpec の `use:` は同じ AppSpec 内の component に閉じる。Space 間共有は
-AppSpec placeholder ではなく、Namespace Export / Binding contract の責務。
+current AppSpec の listen path は同 AppSpec の publish path に閉じる必要はなく、
+**operator account plane が publish する reserved path** (= `operator.identity.
+oidc` 等) も listen できる。 例えば Takosumi Accounts (takosumi-cloud) が
+`operator.identity.oidc` namespace path に OIDC client material を publish し、
+worker は `listen.operator.identity.oidc` で `OIDC_ISSUER_URL` /
+`OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS` を受け取る。
+
+Space 間共有は AppSpec placeholder ではなく、 Namespace Export / Binding
+contract の責務。
 
 ## Related architecture notes
 

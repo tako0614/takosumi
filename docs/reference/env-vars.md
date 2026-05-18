@@ -117,25 +117,28 @@ kernel boot pipeline は各 substrate が ready になるまで待って `servin
 | `TAKOSUMI_REVOKE_DEBT_CLEANUP_INTERVAL_MS` | integer (ms) | apply poll interval | no       | RevokeDebt cleanup worker cadence              | RevokeDebt                 |
 | `TAKOSUMI_REVOKE_DEBT_CLEANUP_LIMIT`       | integer      | `50`                | no       | per-owner-Space cleanup batch limit            | RevokeDebt                 |
 
-### Plugin selectors
+### Plugin / Materializer attach
 
-plugin port (`auth` / `coordination` / `notification` / `operator-config` /
-`storage` / `source` / `provider` / `queue` / `object-storage` / `kms` /
-`secret-store` / `router-config` / `observability` / `runtime-agent`) ごとに
-Implementation を選択します。
+operator は `createPaaSApp({ plugins: [...] })` に **KernelPlugin の plain
+array** を直接渡します (= Vite plugin と同じ pattern)。 plugin が必要とする
+credential / config (= cloud API key 等) は plugin factory の opts 引数で渡し、
+operator が直接 env から読みます — kernel は plugin config 用 env schema を
+持ちません。 inline materializer (`createPaaSApp({ materializers: [...] })`)
+を使う場合も同じく operator-owned JS が直接 env を読みます。
 
-| Variable                             | Type    | Default          | Required | Consumer                                                       | Spec concept       |
-| ------------------------------------ | ------- | ---------------- | -------- | -------------------------------------------------------------- | ------------------ |
-| `TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON` | JSON    | provider default | no       | registry trust roots                                           | OperatorBoundaries |
-| `TAKOSUMI_ENABLE_DENO_DEPLOY_PROVIDER` | boolean | `false`        | no       | opt-in registration of the Deno Deploy provider in stock boots | n/a                |
+旧 plugin port selection env var (`TAKOSUMI_KERNEL_PLUGIN_MARKETPLACE` /
+`TAKOSUMI_KERNEL_PLUGIN_TRUST_KEYS` / `TAKOSUMI_KERNEL_PLUGIN_SELECTIONS` /
+`TAKOSUMI_KERNEL_PLUGIN_CONFIG` 等) は撤回済で、 kernel に存在しません。
 
-Plugin injection は operator-supplied JS のみ。 kernel は plugin marketplace /
-remote plugin install / signed manifest install / port-based plugin selection
-env var をサポートしません。 operator は `createPaaSApp({ plugins: [...] })` に
-plugin の plain array を直接渡します (= Vite plugin と同じ pattern)。 plugin が
-必要とする credential / config (= cloud API key 等) は plugin factory の opts
-引数で渡し、 operator が直接 env から読みます — kernel は plugin config 用 env
-schema を持ちません。
+| Variable                               | Type    | Default          | Required | Consumer                                                       | Spec concept       |
+| -------------------------------------- | ------- | ---------------- | -------- | -------------------------------------------------------------- | ------------------ |
+| `TAKOSUMI_REGISTRY_TRUST_ROOTS_JSON`   | JSON    | provider default | no       | registry trust roots                                           | OperatorBoundaries |
+
+cloud SDK / 各 provider 用 env (`AWS_*`, `CLOUDFLARE_*`, `GCP_*`, etc.) は cloud
+provider package 側 (`@takos/takosumi-{aws,gcp,cloudflare,...}-providers`) が
+読みます。 kernel は cloud SDK を直接 import しません。 kernel は plugin
+marketplace / remote plugin install / signed manifest install / port-based
+plugin selection env var をサポートしません。
 
 ### Installer and Artifact Credentials
 
