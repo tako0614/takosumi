@@ -21,48 +21,58 @@ provider。component kind を増やす場合は ecosystem RFC が必要。
 ## 新 provider の追加
 
 新しいクラウド / ランタイムで既存 component kind を動かす場合のフロー
-(`CONVENTIONS.md` §4 と同期)。
+(`CONVENTIONS.md` §4 と同期)。 Wave 9 Phase D で operator-facing entry が
+`KernelPlugin` plain-array に統一されたため、 provider 追加は次の 2 ステップに
+集約された:
+
+1. `packages/plugins/src/bundled/<kind>-<provider>.ts` に `KernelPlugin` を返す
+   factory function を書く。
+2. operator は `createPaaSApp({ plugins: [myProvider(opts), ...] })` で plain
+   array に渡す。
+
+旧 `enableAws: true` / `createTakosumiProductionProviders(opts)` 形式の switch
+は廃止された。 各 provider は独立した factory として `bundled/` から export
+される。
 
 ### 1. ファイルを作る
 
 ```
-packages/plugins/src/shape-providers/<kind-id>/<provider-id>.ts
+packages/plugins/src/bundled/<kind>-<provider>.ts
 ```
 
 例: `worker` の Hetzner Cloud 実装なら
-`packages/plugins/src/shape-providers/worker/hetzner-cloud.ts`。ディレクトリ名に
-`shape-providers` が残っているのは package の実装名であり、public concept は
-component kind です。
+`packages/plugins/src/bundled/worker-hetzner-cloud.ts`。 filename は
+`<kind>-<provider>.ts` パターンで、 `<kind>` は canonical kind の short name
+(`worker` / `postgres` / `object-store` / `oidc` / `custom-domain`) を使う。
 
-### 2. ProviderPlugin factory を export する
+### 2. KernelPlugin factory を export する
 
 既存の
-[`object-store/aws-s3.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/object-store/aws-s3.ts)
+[`bundled/worker-cloudflare.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/bundled/worker-cloudflare.ts)
 や
-[`worker/cloudflare-workers.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/shape-providers/worker/cloudflare-workers.ts)
-をテンプレに `ProviderPlugin<TSpec, TOutputs>` を返す factory を書く。
+[`bundled/object-store-aws-s3.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/plugins/src/bundled/object-store-aws-s3.ts)
+をテンプレに `KernelPlugin` を返す factory を書く。
 
 ```ts
-import type { ProviderPlugin } from "takosumi-contract";
-import type {
-  WorkerCapability,
-  WorkerOutputs,
-  WorkerSpec,
-} from "../../kinds/worker.ts";
-
-const SUPPORTED_CAPABILITIES: readonly WorkerCapability[] = [
-  "always-on",
-  "long-request",
-];
+import type { KernelPlugin } from "takosumi-contract/plugin";
+import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
+import { KIND_URI_WORKER } from "./_kinds.ts";
 
 export interface HetznerCloudWorkerProviderOptions {
-  readonly lifecycle: HetznerCloudLifecycleClient;
+  readonly token?: string;
+  readonly lifecycle?: HetznerCloudLifecycleClient;
 }
 
-export function createHetznerCloudWorkerProvider(
-  options: HetznerCloudWorkerProviderOptions,
-): ProviderPlugin<WorkerSpec, WorkerOutputs> {
-  // ...
+export function hetznerCloudWorkerProvider(
+  opts: HetznerCloudWorkerProviderOptions = {},
+): KernelPlugin {
+  const lifecycle = opts.lifecycle ?? new InMemoryHetznerCloudLifecycle();
+  const provider = createHetznerCloudWorkerProvider({ lifecycle });
+  return kernelPluginFromProviderPlugin({
+    provider,
+    kindUri: KIND_URI_WORKER,
+    capabilities: ["always-on", "long-request"],
+  });
 }
 ```
 
@@ -70,68 +80,51 @@ export function createHetznerCloudWorkerProvider(
 
 provider は credential を直接持たない。 同じファイル内で
 `<Provider>LifecycleClient` interface を declare し、
-`InMemory<Provider>Lifecycle` クラスをテスト用に export する。 production の
-lifecycle 配線は [§ factories.ts](#factories-ts-に-production-配線を追加)
-で行う。
+`InMemory<Provider>Lifecycle` クラスをテスト用に export する。 production
+lifecycle (runtime-agent 経由) は別途 inject する。
 
 ### 4. Naming convention
 
-| 対象             | rule                                                         |
-| ---------------- | ------------------------------------------------------------ |
-| Provider id      | kebab-case、cloud / runtime を最初の token (`hetzner-cloud`) |
-| Provider version | semver (`1.0.0`)。id にバージョンを含めない                  |
-| Capability       | lowercase kebab-case、namespace prefix なし                  |
-| Output field     | component kind の `outputFields` と完全一致                  |
+| 対象             | rule                                                                |
+| ---------------- | ------------------------------------------------------------------- |
+| Factory name     | camelCase、 `<provider><Kind>Provider` (`cloudflareWorkerProvider`) |
+| Provider id      | kebab-case、cloud / runtime を最初の token (`hetzner-cloud`)        |
+| Provider version | semver (`1.0.0`)。 id にバージョンを含めない                        |
+| Capability       | lowercase kebab-case、 namespace prefix なし                        |
+| Output field     | component kind の `outputFields` と完全一致                         |
 
-### 5. mod.ts と deno.json を更新
+### 5. `bundled/mod.ts` に re-export を追加
 
 ```ts
-// packages/plugins/src/shape-providers/mod.ts
+// packages/plugins/src/bundled/mod.ts
 export {
-  createHetznerCloudWorkerProvider,
+  hetznerCloudWorkerProvider,
   type HetznerCloudWorkerProviderOptions,
-} from "./worker/hetzner-cloud.ts";
-```
-
-```jsonc
-// deno.json
-{
-  "exports": {
-    "./shape-providers/worker/hetzner-cloud": "./packages/plugins/src/shape-providers/worker/hetzner-cloud.ts"
-  }
-}
+} from "./worker-hetzner-cloud.ts";
 ```
 
 ### 6. テスト
 
-`tests/shape_provider_hetzner_cloud_test.ts` に最低 3 ケース:
+`tests/bundled_worker_hetzner_cloud_test.ts` に最低 3 ケース:
 
 1. `apply` が outputs を返し、 `outputFields` を満たすこと。
-2. `status` が apply 直後に `kind: "ready"` を返すこと。
-3. `destroy` 後の `status` が `kind: "deleted"` を返すこと。
+2. `provides[]` が canonical kind URI を宣言していること。
+3. `destroy` が呼べること。
 
-`InMemory<Provider>Lifecycle` を inject して動かす。
+### 7. operator 配線
 
-### 7. `factories.ts` に production 配線を追加 {#factories-ts-に-production-配線を追加}
+operator は `createPaaSApp({ plugins })` の plain array に渡すだけ:
 
 ```ts
-// packages/plugins/src/shape-providers/factories.ts
-if (opts.hetzner) {
-  out.push(
-    asPlugin<HetznerCloudWebServiceProviderOptions>(
-      createHetznerCloudWebServiceProvider({
-        lifecycle: new GatewayHetznerCloudLifecycle(opts.hetzner),
-      }),
-    ),
-  );
-}
+import { hetznerCloudWorkerProvider } from "@takos/takosumi-plugins/bundled";
+import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
+
+const { app } = await createPaaSApp({
+  plugins: [
+    hetznerCloudWorkerProvider({ token: process.env.HETZNER_TOKEN }),
+  ],
+});
 ```
-
-`GatewayHetznerCloudLifecycle` は `JsonGateway` を使う thin HTTP adapter で、
-operator gateway 経由で Hetzner Cloud API を呼ぶ。
-
-cf.
-[Operator Bootstrap § Gateway URL pattern](/operator/bootstrap#gateway-url-pattern)
 
 ## 新しい component kind を RFC する
 
