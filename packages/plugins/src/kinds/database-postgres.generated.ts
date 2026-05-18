@@ -50,6 +50,10 @@ export type DatabasePostgresCapability =
   | "ipv6"
   | "extensions";
 
+export type DatabasePostgresPublishesTo = "<app-id>.<component-name>";
+
+export type DatabasePostgresListensFrom = never;
+
 export const DATABASE_POSTGRES_CAPABILITIES:
   readonly DatabasePostgresCapability[] = [
     "pitr",
@@ -70,7 +74,19 @@ export const DATABASE_POSTGRES_OUTPUT_FIELDS: readonly string[] = [
   "connectionString",
 ];
 
+export const DATABASE_POSTGRES_ALIASES: readonly string[] = [
+  "postgres",
+];
+
+export const DATABASE_POSTGRES_PUBLISHES_TO:
+  readonly DatabasePostgresPublishesTo[] = [
+    "<app-id>.<component-name>",
+  ];
+
+export const DATABASE_POSTGRES_LISTENS_FROM:
+  readonly DatabasePostgresListensFrom[] = [];
+
 export const DATABASE_POSTGRES_KIND_ID = "database-postgres";
 export const DATABASE_POSTGRES_KIND_VERSION = "v1";
 export const DATABASE_POSTGRES_DESCRIPTION =
-  "Managed PostgreSQL instance. Provider-portable via standard wire protocol.";
+  "Managed PostgreSQL instance. Provider-portable via standard wire protocol. Publishes connection material to the sibling namespace path.";

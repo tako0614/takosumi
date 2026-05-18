@@ -1,10 +1,14 @@
 /**
  * Bundled component kind catalog (`worker / postgres / object-store /
- * oidc / custom-domain`).
+ * custom-domain`).
  *
  * Each kind exports a `*Kind` descriptor; the v1 AppSpec installer
  * pipeline materializes components through provider plugins keyed off
  * `Component.kind`.
+ *
+ * `oidc` is no longer a built-in kernel kind — it moved to Takosumi
+ * Accounts (operator account plane) along with the per-Installation
+ * OIDC client issuance flow.
  */
 import { registerShape, type Shape } from "takosumi-contract";
 import { WebServiceKind } from "./web-service.ts";
@@ -12,13 +16,11 @@ import { ObjectStoreKind } from "./object-store.ts";
 import { DatabasePostgresKind } from "./database-postgres.ts";
 import { CustomDomainKind } from "./custom-domain.ts";
 import { WorkerKind } from "./worker.ts";
-import { OidcKind } from "./oidc.ts";
 
 export {
   CustomDomainKind,
   DatabasePostgresKind,
   ObjectStoreKind,
-  OidcKind,
   WebServiceKind,
   WorkerKind,
 };
@@ -45,7 +47,6 @@ export type {
   ObjectStoreOutputs,
   ObjectStoreSpec,
 } from "./object-store.ts";
-export type { OidcCapability, OidcOutputs, OidcSpec } from "./oidc.ts";
 export type {
   WebServiceCapability,
   WebServiceHealth,
@@ -62,7 +63,6 @@ export const TAKOSUMI_BUNDLED_KINDS: readonly Shape[] = [
   DatabasePostgresKind as Shape,
   CustomDomainKind as Shape,
   WorkerKind as Shape,
-  OidcKind as Shape,
 ];
 
 export function registerTakosumiKinds(): void {

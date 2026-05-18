@@ -41,6 +41,10 @@ export type ObjectStoreCapability =
   | "lifecycle-rules"
   | "multipart-upload";
 
+export type ObjectStorePublishesTo = "<app-id>.<component-name>";
+
+export type ObjectStoreListensFrom = never;
+
 export const OBJECT_STORE_CAPABILITIES: readonly ObjectStoreCapability[] = [
   "versioning",
   "presigned-urls",
@@ -59,7 +63,17 @@ export const OBJECT_STORE_OUTPUT_FIELDS: readonly string[] = [
   "secretKeyRef",
 ];
 
+export const OBJECT_STORE_ALIASES: readonly string[] = [
+  "object-store",
+];
+
+export const OBJECT_STORE_PUBLISHES_TO: readonly ObjectStorePublishesTo[] = [
+  "<app-id>.<component-name>",
+];
+
+export const OBJECT_STORE_LISTENS_FROM: readonly ObjectStoreListensFrom[] = [];
+
 export const OBJECT_STORE_KIND_ID = "object-store";
 export const OBJECT_STORE_KIND_VERSION = "v1";
 export const OBJECT_STORE_DESCRIPTION =
-  "Bucket-style object storage. Provider-portable across S3-class APIs.";
+  "Bucket-style object storage. Provider-portable across S3-class APIs. Publishes endpoint + credential refs to the sibling namespace path.";

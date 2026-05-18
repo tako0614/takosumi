@@ -54,7 +54,6 @@ export const CustomDomainKind: Shape<
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
     requireNonEmptyString(value.name, "$.name", issues);
-    requireNonEmptyString(value.target, "$.target", issues);
     if (value.certificate !== undefined) {
       validateCertificate(value.certificate, issues);
     }
@@ -65,7 +64,7 @@ export const CustomDomainKind: Shape<
   validateOutputs(value, issues) {
     if (!requireRoot(value, issues)) return;
     requireNonEmptyString(value.fqdn, "$.fqdn", issues);
-    optionalNonEmptyString(value.certificateArn, "$.certificateArn", issues);
+    optionalNonEmptyString(value.certificateId, "$.certificateId", issues);
     if (value.nameservers !== undefined) {
       if (!Array.isArray(value.nameservers)) {
         issues.push({ path: "$.nameservers", message: "must be an array" });

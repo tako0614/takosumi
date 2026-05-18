@@ -53,7 +53,7 @@ export const WorkerKind: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
   validateOutputs(value, issues) {
     if (!requireRoot(value, issues)) return;
     requireNonEmptyString(value.url, "$.url", issues);
-    requireNonEmptyString(value.scriptName, "$.scriptName", issues);
+    requireNonEmptyString(value.id, "$.id", issues);
     optionalNonEmptyString(value.version, "$.version", issues);
   },
 };

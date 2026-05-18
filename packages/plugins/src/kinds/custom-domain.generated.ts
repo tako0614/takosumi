@@ -15,8 +15,6 @@ export interface CustomDomainRedirect {
 export interface CustomDomainSpec {
   /** Fully-qualified domain name (e.g. `notes.example.com`). */
   readonly name: string;
-  /** Component name whose `url` output this domain points at. */
-  readonly target: string;
   /** TLS certificate provisioning policy. `secretRef` is required when `kind: provided`. */
   readonly certificate?: CustomDomainCertificate;
   /** HTTP redirect rules served by the domain edge. */
@@ -27,7 +25,7 @@ export interface CustomDomainOutputs {
   /** Resolved fully-qualified domain name. */
   readonly fqdn: string;
   /** Provider-scope TLS certificate identifier. */
-  readonly certificateArn?: string;
+  readonly certificateId?: string;
   /** DNS nameserver list (when delegated). */
   readonly nameservers?: readonly string[];
 }
@@ -40,6 +38,10 @@ export type CustomDomainCapability =
   | "alpn-acme"
   | "redirects";
 
+export type CustomDomainPublishesTo = "<app-id>.<component-name>";
+
+export type CustomDomainListensFrom = "<sibling-worker-namespace>";
+
 export const CUSTOM_DOMAIN_CAPABILITIES: readonly CustomDomainCapability[] = [
   "wildcard",
   "auto-tls",
@@ -51,11 +53,23 @@ export const CUSTOM_DOMAIN_CAPABILITIES: readonly CustomDomainCapability[] = [
 
 export const CUSTOM_DOMAIN_OUTPUT_FIELDS: readonly string[] = [
   "fqdn",
-  "certificateArn",
+  "certificateId",
   "nameservers",
+];
+
+export const CUSTOM_DOMAIN_ALIASES: readonly string[] = [
+  "custom-domain",
+];
+
+export const CUSTOM_DOMAIN_PUBLISHES_TO: readonly CustomDomainPublishesTo[] = [
+  "<app-id>.<component-name>",
+];
+
+export const CUSTOM_DOMAIN_LISTENS_FROM: readonly CustomDomainListensFrom[] = [
+  "<sibling-worker-namespace>",
 ];
 
 export const CUSTOM_DOMAIN_KIND_ID = "custom-domain";
 export const CUSTOM_DOMAIN_KIND_VERSION = "v1";
 export const CUSTOM_DOMAIN_DESCRIPTION =
-  "DNS + TLS-terminated public domain pointing at a target URL.";
+  "DNS + TLS-terminated public domain pointing at a target URL. Listens on a sibling worker namespace to obtain its allocated URL, then publishes its FQDN to the sibling namespace path.";
