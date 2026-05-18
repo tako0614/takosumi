@@ -12,10 +12,10 @@ IntentGraph is parsed authoring intent plus deploy context. It carries
 It contains:
 
 ```text
-declared Shape resource intents
+declared component resource intents (= AppSpec components[*].kind)
 provider ids
 AppSpec use-edge dependency provenance
-link intents derived from Shape-defined bindings
+link intents derived from component kind use-edge bindings
 exposure intents derived from route-bearing resources
 data asset intents from resource specs
 space id from deploy context

@@ -172,7 +172,7 @@ connector 側の dedupe ledger) に projection することでこれを実現す
 
 `connector:<id>` と `implementation` は runtime-agent 内で重ねられた role
 である。 `connector:<id>` は operator がインストールする adapter で、ある
-`(shape, provider)` ペアの DataAsset / handle shape を定義し、lifecycle
+`(kind, provider)` ペアの DataAsset / handle shape を定義し、lifecycle
 operation を公開する。implementation は connector の上で OperationPlan の step
 を実行する operation-level のロジックである。両 role とも同じ runtime-agent
 プロセスに host されるが、責務は混ざらない: connector lifecycle は永続的で
@@ -193,7 +193,7 @@ stage に触れる前に surface するようにする。
 ## Signature chain
 
 kernel → runtime-agent 方向は Ed25519 gateway-manifest 署名で認証される。kernel
-は runtime-agent が host を許される `(shape, provider)` ペアを記述する manifest
+は runtime-agent が host を許される `(kind, provider)` ペアを記述する manifest
 に署名し、runtime-agent は enrollment 時と各 manifest refresh で署名を検証する。
 これにより、runtime-agent の能力が operator が承認した kernel identity に bind
 される。
