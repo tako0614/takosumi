@@ -29,14 +29,14 @@ takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 
 ## HTTP API
 
-| Method | Path                     | Description                                                                                |
-| ------ | ------------------------ | ------------------------------------------------------------------------------------------ |
-| `GET`  | `/v1/health`             | health probe                                                                               |
-| `GET`  | `/v1/connectors`         | bearer-auth: list registered `(shape, provider)`                                           |
-| `POST` | `/v1/lifecycle/apply`    | bearer-auth: apply one resource                                                            |
-| `POST` | `/v1/lifecycle/destroy`  | bearer-auth: destroy by handle                                                             |
-| `POST` | `/v1/lifecycle/describe` | bearer-auth: query resource state                                                          |
-| `POST` | `/v1/lifecycle/verify`   | bearer-auth: read-only credential check per connector (or filtered by `?shape=&provider=`) |
+| Method | Path                     | Description                                                                               |
+| ------ | ------------------------ | ----------------------------------------------------------------------------------------- |
+| `GET`  | `/v1/health`             | health probe                                                                              |
+| `GET`  | `/v1/connectors`         | bearer-auth: list registered `(kind, provider)`                                           |
+| `POST` | `/v1/lifecycle/apply`    | bearer-auth: apply one resource                                                           |
+| `POST` | `/v1/lifecycle/destroy`  | bearer-auth: destroy by handle                                                            |
+| `POST` | `/v1/lifecycle/describe` | bearer-auth: query resource state                                                         |
+| `POST` | `/v1/lifecycle/verify`   | bearer-auth: read-only credential check per connector (or filtered by `?kind=&provider=`) |
 
 Auth is a single bearer token, shared with the kernel via
 `TAKOSUMI_AGENT_TOKEN`.
@@ -60,7 +60,7 @@ Each connector implements:
 ```typescript
 interface Connector {
   readonly provider: string;
-  readonly shape: string;
+  readonly kind: string;
   readonly acceptedArtifactKinds: readonly string[];
   apply(req, ctx): Promise<{ handle; outputs }>;
   destroy(req, ctx): Promise<{ ok }>;

@@ -1,43 +1,54 @@
 # @takos/takosumi-plugins
 
-Shape catalog and provider plugins bundled with Takosumi. The kernel
-auto-registers Shape contracts, artifact kinds, and runtime-agent backed
-providers on boot.
+Component kind catalog and provider plugins bundled with Takosumi. Operators
+attach plugins as a **plain array** to `createPaaSApp({ plugins: [...] })` — the
+Vite plugin pattern. Each plugin returns a `KernelPlugin` that declares the kind
+URI(s) it provides and registers itself with the kernel on boot.
 
-Plugins themselves are paper-thin HTTP wrappers around the runtime-agent (see
+Plugins are paper-thin HTTP wrappers around the runtime-agent (see
 [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)).
 They contain no cloud SDK code.
 
 ## Install
 
 ```typescript
+import { createPaaSApp } from "@takos/takosumi-kernel";
 import {
-  createTakosumiProductionProviders,
-  TAKOSUMI_BUNDLED_SHAPES,
-} from "@takos/takosumi-plugins/shape-providers/factories";
+  awsS3ObjectStoreProvider,
+  cloudflareWorkerProvider,
+} from "@takos/takosumi-plugins/bundled";
 
-const providers = createTakosumiProductionProviders({
-  agentUrl: "http://agent.internal:8789",
-  token: "<TAKOSUMI_AGENT_TOKEN>",
-  artifactStore: {
-    baseUrl: "http://kernel.internal:8788/v1/artifacts",
-    token: "...",
-  },
+const { app } = await createPaaSApp({
+  plugins: [
+    cloudflareWorkerProvider({
+      accountId: env.CLOUDFLARE_ACCOUNT_ID,
+      apiToken: env.CLOUDFLARE_API_TOKEN,
+    }),
+    awsS3ObjectStoreProvider({
+      region: env.AWS_REGION,
+      accessKeyId: env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+    }),
+  ],
 });
 ```
 
-The kernel calls the Shape/provider registration path on boot via
-`registerBundledShapesAndProviders(env)`.
+Each provider factory is a separate `KernelPlugin` export under
+`@takos/takosumi-plugins/bundled`. Old `enableAws: true` /
+`createTakosumiProductionProviders(opts)` style switches are retired —
+operators choose the providers they need and pass credentials per factory.
 
-## Shapes (5)
+## Component kinds (5 frozen)
 
-| Shape                  | Description                                                  |
-| ---------------------- | ------------------------------------------------------------ |
-| `web-service@v1`       | Long-running HTTP service from an OCI image                  |
-| `object-store@v1`      | S3-compatible bucket                                         |
-| `database-postgres@v1` | Managed Postgres instance                                    |
-| `custom-domain@v1`     | DNS record + TLS termination                                 |
-| `worker@v1`            | Serverless JS function from an uploaded `js-bundle` artifact |
+正本 URI は `https://takosumi.com/kinds/v1/<name>` (JSON-LD で publish)。
+
+| Kind            | Description                                                  |
+| --------------- | ------------------------------------------------------------ |
+| `worker`        | Serverless HTTP service (JS bundle or container artifact)    |
+| `postgres`      | Managed PostgreSQL instance                                  |
+| `object-store`  | S3-compatible bucket                                         |
+| `custom-domain` | DNS record + TLS termination                                 |
+| `oidc`          | OIDC consumer mount point (Installation-scoped client)       |
 
 ## Providers (21)
 
