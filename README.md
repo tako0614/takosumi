@@ -23,6 +23,28 @@ takosumi install --source git:https://github.com/example/notes#main \
   --space space_personal
 ```
 
+embedded kernel を programmatic に起動する場合は plugin を **plain array** で
+渡す (= Vite plugin と同じ pattern):
+
+```ts
+import { createPaaSApp } from "@takos/takosumi-kernel";
+import {
+  cloudflareWorkerProvider,
+  awsS3ObjectStoreProvider,
+} from "@takos/takosumi-plugins/bundled";
+
+const { app } = await createPaaSApp({
+  plugins: [
+    cloudflareWorkerProvider({ accountId, apiToken }),
+    awsS3ObjectStoreProvider({ region, accessKeyId, secretAccessKey }),
+  ],
+});
+```
+
+plugin factory に渡す credential / config は operator が直接 env から読む。
+kernel は plugin marketplace / plugin index fetch / signed manifest / port-based
+plugin selection env var を持たない。
+
 ## 中核概念 (= public concept は 3 つだけ)
 
 | 概念             | 表現                                              |
