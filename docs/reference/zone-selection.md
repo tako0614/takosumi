@@ -69,9 +69,9 @@ current AppSpec は zone placeholder や cross-Space zone reference を持たな
 zone は Space default、operator policy、provider binding context
 から解決される。
 
-shape spec で `zoneAware: true` を宣言する target descriptor は、binding context
-で resolved zone 文字列を受け取る。 zone awareness を宣言しない descriptor は
-この field を無視する。 kernel は強制も drop もしない。
+component kind spec で `zoneAware: true` を宣言する target descriptor は、
+binding context で resolved zone 文字列を受け取る。 zone awareness を宣言しない
+descriptor はこの field を無視する。 kernel は強制も drop もしない。
 
 ## Cross-zone link policy
 

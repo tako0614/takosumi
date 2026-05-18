@@ -96,13 +96,13 @@ contract:
 ## link 側で `access` 明示が必須となる条件
 
 - export の `safeDefaultAccess` が `null` のとき
-- link が grant 発行 export を射影し、 consuming shape spec が当該 slot に grant
-  detail を要求しているとき
-- operator の policy pack が暗黙アクセスを禁止する shape のとき (`prod/strict`
-  と `enterprise/catalog-approved-only` で有効)
+- link が grant 発行 export を射影し、 consuming component kind spec が当該 slot
+  に grant detail を要求しているとき
+- operator の policy pack が暗黙アクセスを禁止する component kind のとき
+  (`prod/strict` と `enterprise/catalog-approved-only` で有効)
 
-`access` を明示した場合、 shape の `outputFields` が unsupported と宣言する
-モードは kernel validation で reject されます。
+`access` を明示した場合、 component kind の `outputFields` が unsupported と宣言
+するモードは kernel validation で reject されます。
 
 ## 承認 (approval) 無効化との関係
 

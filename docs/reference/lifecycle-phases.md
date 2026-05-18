@@ -170,8 +170,8 @@ verify trigger:
 runtime-agent は describe ごと、 および `apply` / `destroy` の lifecycle
 response で `LifecycleStatus` を返します。 ルール:
 
-- shape contract に従い connector が live と確認したときのみ `running` (accept
-  されただけでは不可)
+- component kind contract に従い connector が live と確認したときのみ `running`
+  (accept されただけでは不可)
 - connector が応答しない / 未知 state を返したら推測せず `unknown`
 - connector が「object 不在」を権威的に保証した場合のみ `missing` (沈黙は
   missing としない)
