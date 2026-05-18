@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import type {
+  ApplyListenContext,
+  EnvInjection,
+  InlineMaterializer,
   KernelPlugin,
   KernelPluginApplyContext,
   KernelPluginApplyResult,
   KernelPluginDeploymentContext,
   KernelPluginDestroyContext,
   KernelPluginInstallationContext,
+  Materializer,
+  NamespaceMaterial,
+  PublishMaterialContext,
 } from "./plugin.ts";
 import type { Component } from "./app-spec.ts";
 import type { Deployment, Installation } from "./installer-api.ts";
@@ -28,6 +34,8 @@ Deno.test("KernelPlugin is a plain-array shape: name + provides + apply suffice"
   ]);
   assert.equal(plugin.destroy, undefined);
   assert.equal(plugin.onInstallStart, undefined);
+  assert.equal(plugin.publishMaterial, undefined);
+  assert.equal(plugin.applyListen, undefined);
 });
 
 Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployment", async () => {
@@ -98,10 +106,13 @@ Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployme
   ]);
 });
 
-Deno.test("KernelPlugin.apply receives Component + buildOutput + upstreamOutputs", async () => {
+Deno.test("KernelPlugin.apply receives Component + buildOutput + listenedMaterials", async () => {
   const component: Component = {
     kind: "worker",
-    use: { oidc: { mount: "oidc" } },
+    publish: ["com.example.app.web"],
+    listen: {
+      "com.example.app.db": { as: "env", prefix: "DB" },
+    },
   };
   const seen: KernelPluginApplyContext[] = [];
   const plugin: KernelPlugin = {
@@ -117,15 +128,119 @@ Deno.test("KernelPlugin.apply receives Component + buildOutput + upstreamOutputs
     },
   };
 
+  const dbMaterial: NamespaceMaterial = {
+    host: "db.internal",
+    port: "5432",
+    passwordSecretRef: "secret://db/password",
+  };
+
   const result = await plugin.apply({
     installationId: "ins_1",
     componentName: "web",
     component,
     buildOutput: { digest: "sha256:abc", uri: "file:///out" },
-    upstreamOutputs: { oidc: { OIDC_CLIENT_ID: "c1" } },
+    listenedMaterials: { "com.example.app.db": dbMaterial },
   });
 
   assert.equal(result.providerResourceId, "rec://web");
-  assert.deepEqual(seen[0].upstreamOutputs.oidc, { OIDC_CLIENT_ID: "c1" });
+  assert.deepEqual(seen[0].listenedMaterials["com.example.app.db"], dbMaterial);
   assert.equal(seen[0].buildOutput?.digest, "sha256:abc");
+});
+
+Deno.test("KernelPlugin.publishMaterial emits a NamespaceMaterial", async () => {
+  const component: Component = {
+    kind: "worker",
+    publish: ["com.example.app.web"],
+  };
+  const plugin: KernelPlugin = {
+    name: "@example/worker",
+    version: "0.0.0",
+    provides: ["worker"],
+    apply: () =>
+      Promise.resolve({
+        providerResourceId: "worker://web",
+        outputs: { url: "https://web.example.test", id: "w_1" },
+      }),
+    publishMaterial: (ctx: PublishMaterialContext) =>
+      Promise.resolve({
+        url: ctx.outputs.url,
+        id: ctx.outputs.id,
+      }),
+  };
+
+  const material = await plugin.publishMaterial!({
+    installationId: "ins_1",
+    componentName: "web",
+    component,
+    namespacePath: "com.example.app.web",
+    outputs: { url: "https://web.example.test", id: "w_1" },
+  });
+
+  assert.equal(material.url, "https://web.example.test");
+  assert.equal(material.id, "w_1");
+});
+
+Deno.test("KernelPlugin.applyListen returns an EnvInjection", async () => {
+  const component: Component = {
+    kind: "worker",
+    listen: {
+      "com.example.app.db": { as: "env", prefix: "DB" },
+    },
+  };
+  const plugin: KernelPlugin = {
+    name: "@example/worker",
+    version: "0.0.0",
+    provides: ["worker"],
+    apply: () =>
+      Promise.resolve({ providerResourceId: "worker://web", outputs: {} }),
+    applyListen: (ctx: ApplyListenContext): Promise<EnvInjection> => {
+      const prefix = ctx.options.prefix ?? "";
+      const env: Record<string, string | { secretRef: string }> = {};
+      for (const [field, value] of Object.entries(ctx.material)) {
+        const key = prefix
+          ? `${prefix}_${field.toUpperCase()}`
+          : field.toUpperCase();
+        env[key] = value;
+      }
+      return Promise.resolve({ env });
+    },
+  };
+
+  const injection = await plugin.applyListen!({
+    installationId: "ins_1",
+    componentName: "web",
+    component,
+    namespacePath: "com.example.app.db",
+    options: { as: "env", prefix: "DB" },
+    material: {
+      host: "db.internal",
+      port: "5432",
+    },
+  });
+
+  assert.deepEqual(injection.env, {
+    DB_HOST: "db.internal",
+    DB_PORT: "5432",
+  });
+});
+
+Deno.test("InlineMaterializer is the minimal Materializer packaging", () => {
+  // `Materializer = KernelPlugin | InlineMaterializer` — both attach to
+  // the same installer surface; this test exercises the inline form to
+  // pin the type contract.
+  const inline: InlineMaterializer = {
+    provides: ["https://operator.example.com/kinds/lambda"],
+    aliases: ["lambda"],
+    apply: (ctx) =>
+      Promise.resolve({
+        providerResourceId: `lambda://${ctx.componentName}`,
+        outputs: { arn: "arn:fake:lambda:web" },
+      }),
+  };
+
+  const materializer: Materializer = inline;
+  assert.deepEqual([...materializer.provides], [
+    "https://operator.example.com/kinds/lambda",
+  ]);
+  assert.deepEqual([...(materializer.aliases ?? [])], ["lambda"]);
 });
