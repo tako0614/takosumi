@@ -5,7 +5,6 @@ import type { TakosumiActorContext } from "./internal-api.ts";
 import type {
   KernelPluginClientRegistry,
   KernelPluginInitContext,
-  KernelPluginIoBoundary,
   KernelPluginPortKind,
 } from "./plugin.ts";
 import {
@@ -1682,27 +1681,8 @@ export interface KernelPluginCreateAdaptersContext
   readonly idGenerator: () => string;
 }
 
-export interface TrustedKernelPluginSelectionMetadata {
-  readonly source: "trusted-signed-manifest";
-  readonly keyId: string;
-  readonly publisherId: string;
-  readonly signatureAlgorithm: string;
-}
-
-export interface TrustedKernelPluginImplementationProvenance {
-  readonly artifactDigest?: string;
-  readonly moduleSpecifier?: string;
-  readonly provenanceRef?: string;
-  readonly artifact?: Record<string, unknown>;
-  readonly module?: Record<string, unknown>;
-  readonly [key: string]: unknown;
-}
-
 export interface TakosumiKernelPlugin {
   readonly manifest: TakosumiKernelPluginManifest;
-  readonly trustedInstall?: TrustedKernelPluginSelectionMetadata;
-  readonly implementationProvenance?:
-    TrustedKernelPluginImplementationProvenance;
   createAdapters(
     context: KernelPluginCreateAdaptersContext,
   ): KernelPluginAdapterOverrides;
@@ -1766,7 +1746,6 @@ export function createPluginAdapterOverrides(input: {
       ports,
       input.context.environment,
     );
-    assertPluginTrustedForEnvironment(plugin, input.context.environment);
     const pluginOverrides = plugin.createAdapters(input.context);
     assertPluginProvidesSelectedAdapters(
       plugin.manifest,
@@ -1846,134 +1825,6 @@ export function assertPluginAllowedForEnvironment(
     }
   }
 }
-
-export function assertPluginTrustedForEnvironment(
-  plugin: TakosumiKernelPlugin,
-  environment: string,
-): void {
-  if (environment !== "production" && environment !== "staging") return;
-  if (hasTrustedKernelPluginInstall(plugin)) return;
-  throw new Error(
-    `${environment} requires trusted install metadata for kernel plugin ${plugin.manifest.id}`,
-  );
-}
-
-export const TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM =
-  "ECDSA-P256-SHA256" as const;
-
-export interface TrustedKernelPluginEnvelope {
-  readonly manifest: TakosumiKernelPluginManifest;
-  readonly signature: {
-    readonly alg: typeof TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM;
-    readonly keyId: string;
-    readonly value: string;
-  };
-}
-
-export interface TrustedKernelPluginKey {
-  readonly keyId: string;
-  readonly publisherId: string;
-  readonly publicKeyJwk: JsonWebKey;
-}
-
-export interface TrustedKernelPluginInstallPolicy {
-  readonly enabledPluginIds: readonly string[];
-  readonly trustedKeyIds?: readonly string[];
-  readonly allowedPublisherIds?: readonly string[];
-  readonly allowedPorts?: readonly KernelPluginPortKind[];
-  readonly allowedExternalIo?: readonly KernelPluginIoBoundary[];
-  readonly requireImplementationProvenance?: boolean;
-}
-
-export function canonicalTrustedKernelPluginManifest(
-  manifest: TakosumiKernelPluginManifest,
-): string {
-  return [
-    "takosumi-kernel-plugin-manifest-v1",
-    stableStringify(manifest),
-  ].join("\n");
-}
-
-export async function installTrustedKernelPlugins(input: {
-  readonly envelopes: readonly TrustedKernelPluginEnvelope[];
-  readonly availablePlugins: readonly TakosumiKernelPlugin[];
-  readonly trustedKeys: readonly TrustedKernelPluginKey[];
-  readonly policy: TrustedKernelPluginInstallPolicy;
-  readonly environment: string;
-}): Promise<readonly TakosumiKernelPlugin[]> {
-  const installed: TakosumiKernelPlugin[] = [];
-  const available = new Map(
-    input.availablePlugins.map((plugin) => [plugin.manifest.id, plugin]),
-  );
-  const seen = new Set<string>();
-  for (const envelope of input.envelopes) {
-    assertValidPluginManifest(envelope.manifest);
-    assertTrustedPluginInstallPolicy(envelope, input.policy);
-    const plugin = available.get(envelope.manifest.id);
-    if (!plugin) {
-      throw new Error(
-        `trusted kernel plugin implementation is not available: ${envelope.manifest.id}`,
-      );
-    }
-    if (
-      stableStringify(plugin.manifest) !== stableStringify(envelope.manifest)
-    ) {
-      throw new Error(
-        `trusted kernel plugin manifest does not match available implementation: ${envelope.manifest.id}`,
-      );
-    }
-    assertImplementationProvenance(envelope, plugin, input.policy);
-    const trustedKey = trustedKeyForEnvelope(
-      envelope,
-      input.trustedKeys,
-      input.policy,
-    );
-    const ok = await verifyTrustedManifestSignature(envelope, trustedKey);
-    if (!ok) {
-      throw new Error(
-        `trusted kernel plugin manifest signature is invalid: ${envelope.manifest.id}`,
-      );
-    }
-    const selectedPorts = envelope.manifest.capabilities.map((capability) =>
-      capability.port
-    );
-    assertPluginAllowedForEnvironment(
-      envelope.manifest,
-      selectedPorts,
-      input.environment,
-    );
-    if (seen.has(plugin.manifest.id)) continue;
-    const wrapped = Object.freeze({
-      ...plugin,
-      trustedInstall: {
-        source: "trusted-signed-manifest" as const,
-        keyId: trustedKey.keyId,
-        publisherId: trustedKey.publisherId,
-        signatureAlgorithm: envelope.signature.alg,
-      },
-    });
-    markTrustedKernelPlugin(wrapped);
-    installed.push(wrapped);
-    seen.add(plugin.manifest.id);
-  }
-  return Object.freeze(installed);
-}
-
-export function markTrustedKernelPlugin<T extends TakosumiKernelPlugin>(
-  plugin: T,
-): T {
-  trustedInstalledPlugins.add(plugin);
-  return plugin;
-}
-
-export function hasTrustedKernelPluginInstall(
-  plugin: TakosumiKernelPlugin,
-): boolean {
-  return plugin.trustedInstall?.source === "trusted-signed-manifest" &&
-    trustedInstalledPlugins.has(plugin);
-}
-
-const trustedInstalledPlugins = new WeakSet<TakosumiKernelPlugin>();
 
 export interface RuntimeAgentCapabilities {
   readonly providers: readonly string[];
@@ -3127,214 +2978,6 @@ function adapterKeyForPort(
   }
 }
 
-async function verifyTrustedManifestSignature(
-  envelope: TrustedKernelPluginEnvelope,
-  trustedKey: TrustedKernelPluginKey,
-): Promise<boolean> {
-  if (envelope.signature.alg !== TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM) {
-    throw new Error(
-      `trusted kernel plugin manifest uses unsupported signature algorithm: ${envelope.signature.alg}`,
-    );
-  }
-  const publicKey = await crypto.subtle.importKey(
-    "jwk",
-    trustedKey.publicKeyJwk,
-    { name: "ECDSA", namedCurve: "P-256" },
-    false,
-    ["verify"],
-  );
-  return await crypto.subtle.verify(
-    { name: "ECDSA", hash: "SHA-256" },
-    publicKey,
-    toArrayBuffer(base64UrlToBytes(envelope.signature.value)),
-    toArrayBuffer(
-      new TextEncoder().encode(
-        canonicalTrustedKernelPluginManifest(envelope.manifest),
-      ),
-    ),
-  );
-}
-
-function assertTrustedPluginInstallPolicy(
-  envelope: TrustedKernelPluginEnvelope,
-  policy: TrustedKernelPluginInstallPolicy,
-): void {
-  const manifest = envelope.manifest;
-  if (!policy.enabledPluginIds.includes(manifest.id)) {
-    throw new Error(
-      `trusted kernel plugin is not enabled by install policy: ${manifest.id}`,
-    );
-  }
-
-  if (policy.allowedPorts) {
-    const allowed = new Set(policy.allowedPorts);
-    const denied = manifest.capabilities.find((capability) =>
-      !allowed.has(capability.port)
-    );
-    if (denied) {
-      throw new Error(
-        `trusted kernel plugin ${manifest.id} declares port outside install policy: ${denied.port}`,
-      );
-    }
-  }
-
-  if (policy.allowedExternalIo) {
-    const allowed = new Set(policy.allowedExternalIo);
-    const denied = manifest.capabilities.find((capability) =>
-      capability.externalIo.some((boundary) => !allowed.has(boundary))
-    );
-    if (denied) {
-      throw new Error(
-        `trusted kernel plugin ${manifest.id} declares external I/O outside install policy: ${denied.port}`,
-      );
-    }
-  }
-}
-
-function assertImplementationProvenance(
-  envelope: TrustedKernelPluginEnvelope,
-  plugin: TakosumiKernelPlugin,
-  policy: TrustedKernelPluginInstallPolicy,
-): void {
-  const signed = implementationProvenanceFromManifest(envelope.manifest);
-  const implementation = plugin.implementationProvenance ??
-    implementationProvenanceFromManifest(plugin.manifest);
-
-  if (policy.requireImplementationProvenance && !signed && !implementation) {
-    throw new Error(
-      `trusted kernel plugin ${envelope.manifest.id} requires implementation provenance metadata`,
-    );
-  }
-  if (!signed && !implementation) return;
-  if (!signed) {
-    throw new Error(
-      `trusted kernel plugin ${envelope.manifest.id} implementation provenance is not covered by signed manifest`,
-    );
-  }
-  assertImplementationProvenanceBindsArtifactOrModule(
-    envelope.manifest.id,
-    signed,
-  );
-  if (!implementation) {
-    throw new Error(
-      `trusted kernel plugin ${envelope.manifest.id} signed manifest declares implementation provenance that is missing from implementation`,
-    );
-  }
-  assertImplementationProvenanceBindsArtifactOrModule(
-    envelope.manifest.id,
-    implementation,
-  );
-  if (stableStringify(implementation) !== stableStringify(signed)) {
-    throw new Error(
-      `trusted kernel plugin ${envelope.manifest.id} implementation provenance does not match signed manifest`,
-    );
-  }
-}
-
-function implementationProvenanceFromManifest(
-  manifest: TakosumiKernelPluginManifest,
-): TrustedKernelPluginImplementationProvenance | undefined {
-  const metadata = manifest.metadata;
-  if (!metadata) return undefined;
-  const direct = metadata.implementationProvenance;
-  if (direct !== undefined) {
-    return assertImplementationProvenanceRecord(manifest.id, direct);
-  }
-  const trustedInstall = metadata.trustedInstall;
-  if (trustedInstall === undefined) return undefined;
-  if (!isRecord(trustedInstall)) {
-    throw new Error(
-      `trusted kernel plugin ${manifest.id} trustedInstall metadata must be an object`,
-    );
-  }
-  const nested = trustedInstall.implementationProvenance;
-  if (nested === undefined) return undefined;
-  return assertImplementationProvenanceRecord(manifest.id, nested);
-}
-
-function assertImplementationProvenanceRecord(
-  pluginId: string,
-  value: unknown,
-): TrustedKernelPluginImplementationProvenance {
-  if (!isRecord(value)) {
-    throw new Error(
-      `trusted kernel plugin ${pluginId} implementation provenance metadata must be an object`,
-    );
-  }
-  return value;
-}
-
-function assertImplementationProvenanceBindsArtifactOrModule(
-  pluginId: string,
-  provenance: TrustedKernelPluginImplementationProvenance,
-): void {
-  if (
-    nonEmptyString(provenance.artifactDigest) ||
-    nonEmptyString(provenance.moduleSpecifier) ||
-    isRecord(provenance.artifact) ||
-    isRecord(provenance.module)
-  ) {
-    return;
-  }
-  throw new Error(
-    `trusted kernel plugin ${pluginId} implementation provenance must bind an artifact or module`,
-  );
-}
-
-function nonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function trustedKeyForEnvelope(
-  envelope: TrustedKernelPluginEnvelope,
-  keys: readonly TrustedKernelPluginKey[],
-  policy: TrustedKernelPluginInstallPolicy,
-): TrustedKernelPluginKey {
-  const key = keys.find((item) => item.keyId === envelope.signature.keyId);
-  if (!key) {
-    throw new Error(
-      `trusted kernel plugin manifest key is not configured: ${envelope.signature.keyId}`,
-    );
-  }
-  if (
-    policy.trustedKeyIds &&
-    !policy.trustedKeyIds.includes(envelope.signature.keyId)
-  ) {
-    throw new Error(
-      `trusted kernel plugin manifest key is not allowed by install policy: ${envelope.signature.keyId}`,
-    );
-  }
-  if (
-    policy.allowedPublisherIds &&
-    !policy.allowedPublisherIds.includes(key.publisherId)
-  ) {
-    throw new Error(
-      `trusted kernel plugin publisher is not allowed by install policy: ${key.publisherId}`,
-    );
-  }
-  return key;
-}
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${
-      Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
-        a.localeCompare(b)
-      ).map(([key, nested]) =>
-        `${JSON.stringify(key)}:${stableStringify(nested)}`
-      ).join(",")
-    }}`;
-  }
-  return JSON.stringify(value);
-}
-
 function clone<T>(value: T): T {
   return value === undefined ? value : structuredClone(value);
 }
@@ -3373,19 +3016,4 @@ function base64ToBytes(value: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
-}
-
-function base64UrlToBytes(value: string): Uint8Array {
-  const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
-  const padded = normalized.padEnd(
-    Math.ceil(normalized.length / 4) * 4,
-    "=",
-  );
-  return base64ToBytes(padded);
-}
-
-function toArrayBuffer(view: Uint8Array): ArrayBuffer {
-  const out = new ArrayBuffer(view.byteLength);
-  new Uint8Array(out).set(view);
-  return out;
 }
