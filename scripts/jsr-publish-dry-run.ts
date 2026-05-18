@@ -40,6 +40,36 @@ export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
       directory: "packages/plugins",
     },
     {
+      name: "@takos/takosumi-cloudflare-providers",
+      version: "0.1.0",
+      directory: "packages/cloudflare-providers",
+    },
+    {
+      name: "@takos/takosumi-deno-deploy-providers",
+      version: "0.1.0",
+      directory: "packages/deno-deploy-providers",
+    },
+    {
+      name: "@takos/takosumi-aws-providers",
+      version: "0.1.0",
+      directory: "packages/aws-providers",
+    },
+    {
+      name: "@takos/takosumi-gcp-providers",
+      version: "0.1.0",
+      directory: "packages/gcp-providers",
+    },
+    {
+      name: "@takos/takosumi-kubernetes-providers",
+      version: "0.1.0",
+      directory: "packages/kubernetes-providers",
+    },
+    {
+      name: "@takos/takosumi-selfhost-providers",
+      version: "0.1.0",
+      directory: "packages/selfhost-providers",
+    },
+    {
       name: "@takos/takosumi-kernel",
       version: "0.14.0",
       directory: "packages/kernel",
