@@ -14,6 +14,8 @@
     "Capability": "takosumi:Capability",
     "OutputField": "takosumi:OutputField",
     "SpecField": "takosumi:SpecField",
+    "PublishDeclaration": "takosumi:PublishDeclaration",
+    "ListenDeclaration": "takosumi:ListenDeclaration",
 
     "name": {
       "@id": "schema:name",
@@ -38,6 +40,34 @@
     "capabilities": {
       "@id": "takosumi:capabilities",
       "@container": "@set"
+    },
+    "aliases": {
+      "@id": "takosumi:aliases",
+      "@container": "@set"
+    },
+    "publishes": {
+      "@id": "takosumi:publishes",
+      "@container": "@set"
+    },
+    "listens": {
+      "@id": "takosumi:listens",
+      "@type": "@json"
+    },
+    "namespacePath": {
+      "@id": "takosumi:namespacePath",
+      "@type": "xsd:string"
+    },
+    "material": {
+      "@id": "takosumi:material",
+      "@type": "@json"
+    },
+    "shape": {
+      "@id": "takosumi:shape",
+      "@type": "xsd:string"
+    },
+    "envMap": {
+      "@id": "takosumi:envMap",
+      "@type": "@json"
     },
     "type": {
       "@id": "takosumi:fieldType",

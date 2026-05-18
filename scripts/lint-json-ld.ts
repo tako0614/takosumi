@@ -7,12 +7,16 @@
  *    top-level key `@context` whose value is a JSON-LD context object.
  *    `@id` / `@type` / `name` are NOT required.
  * 2. **Kind document** (= e.g. `spec/contexts/kinds/v1/<name>.jsonld`).
- *    Must include `@context` / `@id` / `@type` / `name`.
+ *    Must include `@context` / `@id` / `@type` / `name` / `aliases` /
+ *    `publishes` / `listens`. `publishes` is an array of
+ *    `{ namespacePath, material }` entries; `listens` is an object
+ *    keyed by namespace path with `{ shape, envMap }` values.
  *
  * The lint is intentionally shallow: kernel does not perform JSON-LD
- * semantic expand, so we only assert the envelope. Schema field checks
- * (= `spec` / `outputs` / `capabilities`) are intentionally not enforced
- * here so operators can publish narrower kind variants if they wish.
+ * semantic expand, so we only assert the envelope and the namespace
+ * pub/sub shape. Schema field checks (= `spec` / `outputs` /
+ * `capabilities`) are not enforced here so operators can publish
+ * narrower kind variants if they wish.
  */
 import { walk } from "jsr:@std/fs@^1.0.5/walk";
 import { fromFileUrl } from "jsr:@std/path@^1.0.6";
@@ -67,6 +71,9 @@ async function main(): Promise<void> {
     requireNonEmptyString(obj["@id"], "@id", entry.path, issues);
     requireNonEmptyString(obj["@type"], "@type", entry.path, issues);
     requireNonEmptyString(obj["name"], "name", entry.path, issues);
+    checkAliases(obj["aliases"], entry.path, issues);
+    checkPublishes(obj["publishes"], entry.path, issues);
+    checkListens(obj["listens"], entry.path, issues);
   }
 
   if (issues.length > 0) {
@@ -92,6 +99,141 @@ function requireNonEmptyString(
       path,
       message: `${fieldName} must be a non-empty string`,
     });
+  }
+}
+
+function checkAliases(
+  value: unknown,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) {
+    issues.push({
+      path,
+      message: "missing `aliases` (declare short-name array, may be empty)",
+    });
+    return;
+  }
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: "`aliases` must be an array of strings" });
+    return;
+  }
+  for (const [index, alias] of value.entries()) {
+    if (typeof alias !== "string" || alias.length === 0) {
+      issues.push({
+        path,
+        message: `aliases[${index}] must be a non-empty string`,
+      });
+    }
+  }
+}
+
+function checkPublishes(
+  value: unknown,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) {
+    issues.push({
+      path,
+      message:
+        "missing `publishes` (declare what this kind emits to the namespace registry)",
+    });
+    return;
+  }
+  if (!Array.isArray(value)) {
+    issues.push({
+      path,
+      message: "`publishes` must be an array of { namespacePath, material }",
+    });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      issues.push({
+        path,
+        message: `publishes[${index}] must be an object`,
+      });
+      continue;
+    }
+    const e = entry as Record<string, unknown>;
+    if (typeof e["namespacePath"] !== "string" || e["namespacePath"] === "") {
+      issues.push({
+        path,
+        message: `publishes[${index}].namespacePath must be a non-empty string`,
+      });
+    }
+    if (
+      e["material"] === undefined ||
+      e["material"] === null ||
+      typeof e["material"] !== "object" ||
+      Array.isArray(e["material"])
+    ) {
+      issues.push({
+        path,
+        message: `publishes[${index}].material must be an object`,
+      });
+    }
+  }
+}
+
+function checkListens(
+  value: unknown,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) {
+    issues.push({
+      path,
+      message:
+        "missing `listens` (declare which namespace paths this kind can listen to, may be empty {})",
+    });
+    return;
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    issues.push({
+      path,
+      message: "`listens` must be an object keyed by namespace path",
+    });
+    return;
+  }
+  const obj = value as Record<string, unknown>;
+  for (const [key, descriptor] of Object.entries(obj)) {
+    if (typeof key !== "string" || key.length === 0) {
+      issues.push({
+        path,
+        message: "listens entry keys must be non-empty namespace paths",
+      });
+      continue;
+    }
+    if (
+      descriptor === null ||
+      typeof descriptor !== "object" ||
+      Array.isArray(descriptor)
+    ) {
+      issues.push({
+        path,
+        message: `listens[${key}] must be an object { shape, envMap }`,
+      });
+      continue;
+    }
+    const d = descriptor as Record<string, unknown>;
+    if (typeof d["shape"] !== "string" || d["shape"] === "") {
+      issues.push({
+        path,
+        message: `listens[${key}].shape must be a non-empty string`,
+      });
+    }
+    if (d["envMap"] !== undefined && (
+      d["envMap"] === null ||
+      typeof d["envMap"] !== "object" ||
+      Array.isArray(d["envMap"])
+    )) {
+      issues.push({
+        path,
+        message: `listens[${key}].envMap must be an object when present`,
+      });
+    }
   }
 }
 

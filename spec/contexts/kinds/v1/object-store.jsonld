@@ -4,7 +4,8 @@
   "@type": "ComponentKind",
   "name": "object-store",
   "version": "v1",
-  "description": "Bucket-style object storage. Provider-portable across S3-class APIs.",
+  "aliases": ["object-store"],
+  "description": "Bucket-style object storage. Provider-portable across S3-class APIs. Publishes endpoint + credential refs to the sibling namespace path.",
   "x-ts": {
     "fileBasename": "object-store",
     "prefix": "ObjectStore",
@@ -44,6 +45,19 @@
       }
     }
   },
+  "publishes": [
+    {
+      "namespacePath": "<app-id>.<component-name>",
+      "material": {
+        "bucket": "$outputs.bucket",
+        "endpoint": "$outputs.endpoint",
+        "region": "$outputs.region",
+        "accessKeyRef": "$outputs.accessKeyRef",
+        "secretKeyRef": "$outputs.secretKeyRef"
+      }
+    }
+  ],
+  "listens": {},
   "outputs": [
     {
       "name": "bucket",

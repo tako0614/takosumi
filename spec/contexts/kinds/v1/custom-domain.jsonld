@@ -4,7 +4,8 @@
   "@type": "ComponentKind",
   "name": "custom-domain",
   "version": "v1",
-  "description": "DNS + TLS-terminated public domain pointing at a target URL.",
+  "aliases": ["custom-domain"],
+  "description": "DNS + TLS-terminated public domain pointing at a target URL. Listens on a sibling worker namespace to obtain its allocated URL, then publishes its FQDN to the sibling namespace path.",
   "x-ts": {
     "fileBasename": "custom-domain",
     "prefix": "CustomDomain",
@@ -13,18 +14,13 @@
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "required": ["name", "target"],
+    "required": ["name"],
     "additionalProperties": false,
     "properties": {
       "name": {
         "type": "string",
         "minLength": 1,
         "description": "Fully-qualified domain name (e.g. `notes.example.com`)."
-      },
-      "target": {
-        "type": "string",
-        "minLength": 1,
-        "description": "Component name whose `url` output this domain points at."
       },
       "certificate": {
         "type": "object",
@@ -54,6 +50,23 @@
       }
     }
   },
+  "publishes": [
+    {
+      "namespacePath": "<app-id>.<component-name>",
+      "material": {
+        "fqdn": "$outputs.fqdn",
+        "certificateId": "$outputs.certificateId"
+      }
+    }
+  ],
+  "listens": {
+    "<sibling-worker-namespace>": {
+      "shape": "target",
+      "envMap": {
+        "DESCRIPTION": "Reads the `url` field from the listened worker material to determine the upstream target. AppSpec listen options declare `as: target`."
+      }
+    }
+  },
   "outputs": [
     {
       "name": "fqdn",
@@ -62,7 +75,7 @@
       "meaning": "Resolved fully-qualified domain name."
     },
     {
-      "name": "certificateArn",
+      "name": "certificateId",
       "type": "string",
       "required": false,
       "meaning": "Provider-scope TLS certificate identifier."
