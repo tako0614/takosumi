@@ -1,4 +1,4 @@
-import type { Artifact, Shape, ShapeValidationIssue } from "takosumi-contract";
+import type { Shape, ShapeValidationIssue } from "takosumi-contract";
 import {
   isNonEmptyString,
   isRecord,
@@ -7,54 +7,33 @@ import {
   requireNonEmptyString,
   requireRoot,
 } from "./_validators.ts";
+import {
+  WORKER_CAPABILITIES,
+  WORKER_DESCRIPTION,
+  WORKER_KIND_ID,
+  WORKER_KIND_VERSION,
+  WORKER_OUTPUT_FIELDS,
+  type WorkerCapability,
+  type WorkerOutputs,
+  type WorkerSpec,
+} from "./worker.generated.ts";
 
-export type WorkerCapability =
-  | "scale-to-zero"
-  | "websocket"
-  | "long-request"
-  | "geo-routing"
-  | "crons";
-
-export interface WorkerSpec {
-  /** Required: artifact descriptor. `kind` must be `"js-bundle"`. */
-  readonly artifact: Artifact;
-  /** Cloudflare Workers compatibility date (e.g. `"2025-01-01"`). */
-  readonly compatibilityDate: string;
-  /** Optional: compatibility flags (e.g. `["nodejs_compat"]`). */
-  readonly compatibilityFlags?: readonly string[];
-  /** Optional: env vars / bindings. */
-  readonly env?: Readonly<Record<string, string>>;
-  /** Optional: routes / triggers. */
-  readonly routes?: readonly string[];
-}
-
-export interface WorkerOutputs {
-  readonly url: string;
-  readonly scriptName: string;
-  readonly version?: string;
-}
-
-const CAPABILITIES: readonly WorkerCapability[] = [
-  "scale-to-zero",
-  "websocket",
-  "long-request",
-  "geo-routing",
-  "crons",
-];
-
-const OUTPUT_FIELDS: readonly string[] = ["url", "scriptName", "version"];
+export type { WorkerCapability, WorkerOutputs, WorkerSpec };
 
 /**
  * `worker@v1` component kind descriptor. Materialized by a provider plugin
  * (cloudflare-workers / deno-deploy / etc.) at apply time.
+ *
+ * Spec / outputs / capabilities are derived from
+ * `spec/contexts/kinds/v1/worker.jsonld` via `worker.generated.ts`;
+ * validation diagnostics are hand-written below.
  */
 export const WorkerKind: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
-  id: "worker",
-  version: "v1",
-  description:
-    "Serverless JS function backed by an uploaded `js-bundle` artifact.",
-  capabilities: CAPABILITIES,
-  outputFields: OUTPUT_FIELDS,
+  id: WORKER_KIND_ID,
+  version: WORKER_KIND_VERSION,
+  description: WORKER_DESCRIPTION,
+  capabilities: WORKER_CAPABILITIES,
+  outputFields: WORKER_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
     validateArtifact(value.artifact, issues);

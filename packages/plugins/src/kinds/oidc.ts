@@ -4,62 +4,35 @@ import {
   requireNonEmptyString,
   requireRoot,
 } from "./_validators.ts";
+import {
+  OIDC_CAPABILITIES,
+  OIDC_DESCRIPTION,
+  OIDC_KIND_ID,
+  OIDC_KIND_VERSION,
+  OIDC_OUTPUT_FIELDS,
+  type OidcCapability,
+  type OidcOutputs,
+  type OidcSpec,
+} from "./oidc.generated.ts";
 
-/**
- * `oidc@v1` component kind.
- *
- * The Takosumi installer pipeline detects `kind: oidc` components at
- * Installation creation, registers a per-Installation OIDC client at the
- * Takosumi Accounts API, and surfaces issuer / client_id / client_secret /
- * redirect_uris as outputs that downstream `use:` edges with `mount: oidc`
- * (or env injection) consume.
- */
-export type OidcCapability =
-  | "authorization-code-pkce"
-  | "client-credentials"
-  | "refresh-token"
-  | "id-token-signing";
-
-export interface OidcSpec {
-  /** Absolute redirect paths (e.g. `["/oidc/callback"]`). */
-  readonly redirectPaths: readonly string[];
-  /** OIDC / OAuth2 scopes requested (e.g. `["openid", "email"]`). */
-  readonly scopes: readonly string[];
-}
-
-export interface OidcOutputs {
-  readonly OIDC_ISSUER_URL: string;
-  readonly OIDC_CLIENT_ID: string;
-  readonly OIDC_CLIENT_SECRET: string;
-  readonly OIDC_REDIRECT_URIS: string;
-}
-
-const CAPABILITIES: readonly OidcCapability[] = [
-  "authorization-code-pkce",
-  "client-credentials",
-  "refresh-token",
-  "id-token-signing",
-];
-
-const OUTPUT_FIELDS: readonly string[] = [
-  "OIDC_ISSUER_URL",
-  "OIDC_CLIENT_ID",
-  "OIDC_CLIENT_SECRET",
-  "OIDC_REDIRECT_URIS",
-];
+export type { OidcCapability, OidcOutputs, OidcSpec };
 
 /**
  * `oidc@v1` component kind descriptor. Materialized by the Takosumi
  * Accounts provider plugin which issues a per-Installation OIDC client
  * at Installation creation and exposes issuer / client / secret /
  * redirect_uris as outputs.
+ *
+ * Spec / outputs / capabilities are derived from
+ * `spec/contexts/kinds/v1/oidc.jsonld` via `oidc.generated.ts`;
+ * validation diagnostics are hand-written below.
  */
 export const OidcKind: Shape<OidcSpec, OidcOutputs, OidcCapability> = {
-  id: "oidc",
-  version: "v1",
-  description: "Per-Installation OIDC client issued by Takosumi Accounts.",
-  capabilities: CAPABILITIES,
-  outputFields: OUTPUT_FIELDS,
+  id: OIDC_KIND_ID,
+  version: OIDC_KIND_VERSION,
+  description: OIDC_DESCRIPTION,
+  capabilities: OIDC_CAPABILITIES,
+  outputFields: OIDC_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
     if (!Array.isArray(value.redirectPaths)) {

@@ -6,72 +6,51 @@ import {
   requireNonEmptyString,
   requireRoot,
 } from "./_validators.ts";
+import {
+  CUSTOM_DOMAIN_CAPABILITIES,
+  CUSTOM_DOMAIN_DESCRIPTION,
+  CUSTOM_DOMAIN_KIND_ID,
+  CUSTOM_DOMAIN_KIND_VERSION,
+  CUSTOM_DOMAIN_OUTPUT_FIELDS,
+  type CustomDomainCapability,
+  type CustomDomainCertificate,
+  type CustomDomainOutputs,
+  type CustomDomainRedirect,
+  type CustomDomainSpec,
+} from "./custom-domain.generated.ts";
 
-export type CustomDomainCapability =
-  | "wildcard"
-  | "auto-tls"
-  | "sni"
-  | "http3"
-  | "alpn-acme"
-  | "redirects";
+export type {
+  CustomDomainCapability,
+  CustomDomainCertificate,
+  CustomDomainOutputs,
+  CustomDomainRedirect,
+  CustomDomainSpec,
+};
 
-export type CustomDomainCertificateKind = "auto" | "managed" | "provided";
-
-export interface CustomDomainCertificate {
-  readonly kind: CustomDomainCertificateKind;
-  readonly secretRef?: string;
-}
-
-export interface CustomDomainRedirect {
-  readonly from: string;
-  readonly to: string;
-  readonly code?: 301 | 302 | 307 | 308;
-}
-
-export interface CustomDomainSpec {
-  readonly name: string;
-  readonly target: string;
-  readonly certificate?: CustomDomainCertificate;
-  readonly redirects?: readonly CustomDomainRedirect[];
-}
-
-export interface CustomDomainOutputs {
-  readonly fqdn: string;
-  readonly certificateArn?: string;
-  readonly nameservers?: readonly string[];
-}
-
-const CAPABILITIES: readonly CustomDomainCapability[] = [
-  "wildcard",
-  "auto-tls",
-  "sni",
-  "http3",
-  "alpn-acme",
-  "redirects",
-];
-
-const OUTPUT_FIELDS: readonly string[] = [
-  "fqdn",
-  "certificateArn",
-  "nameservers",
-];
+/** Certificate provisioning policy derived from the generated nested type. */
+export type CustomDomainCertificateKind = CustomDomainCertificate["kind"];
 
 const REDIRECT_CODES: ReadonlySet<number> = new Set([301, 302, 307, 308]);
 
 /**
  * `custom-domain@v1` component kind descriptor. Materialized by a provider
  * plugin (Cloudflare / managed DNS+TLS / etc.) at apply time.
+ *
+ * Spec / outputs / capabilities are derived from
+ * `spec/contexts/kinds/v1/custom-domain.jsonld` via
+ * `custom-domain.generated.ts`; validation diagnostics are hand-written
+ * below.
  */
 export const CustomDomainKind: Shape<
   CustomDomainSpec,
   CustomDomainOutputs,
   CustomDomainCapability
 > = {
-  id: "custom-domain",
-  version: "v1",
-  description: "DNS + TLS-terminated public domain pointing at a target URL.",
-  capabilities: CAPABILITIES,
-  outputFields: OUTPUT_FIELDS,
+  id: CUSTOM_DOMAIN_KIND_ID,
+  version: CUSTOM_DOMAIN_KIND_VERSION,
+  description: CUSTOM_DOMAIN_DESCRIPTION,
+  capabilities: CUSTOM_DOMAIN_CAPABILITIES,
+  outputFields: CUSTOM_DOMAIN_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
     requireNonEmptyString(value.name, "$.name", issues);

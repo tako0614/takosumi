@@ -9,71 +9,38 @@ import {
   requirePositiveInteger,
   requireRoot,
 } from "./_validators.ts";
+import {
+  DATABASE_POSTGRES_CAPABILITIES,
+  DATABASE_POSTGRES_DESCRIPTION,
+  DATABASE_POSTGRES_KIND_ID,
+  DATABASE_POSTGRES_KIND_VERSION,
+  DATABASE_POSTGRES_OUTPUT_FIELDS,
+  type DatabasePostgresBackups,
+  type DatabasePostgresCapability,
+  type DatabasePostgresOutputs,
+  type DatabasePostgresSpec,
+  type DatabasePostgresStorage,
+} from "./database-postgres.generated.ts";
 
-export type DatabasePostgresCapability =
-  | "pitr"
-  | "read-replicas"
-  | "high-availability"
-  | "backups"
-  | "ssl-required"
-  | "ipv6"
-  | "extensions";
+export type {
+  DatabasePostgresBackups,
+  DatabasePostgresCapability,
+  DatabasePostgresOutputs,
+  DatabasePostgresSpec,
+  DatabasePostgresStorage,
+};
 
-export type DatabasePostgresSize = "small" | "medium" | "large" | "xlarge";
+/** Size class union derived from the generated spec interface. */
+export type DatabasePostgresSize = DatabasePostgresSpec["size"];
 
-export interface DatabasePostgresStorage {
-  readonly sizeGiB: number;
-  readonly type?: "ssd" | "hdd";
-}
-
-export interface DatabasePostgresBackups {
-  readonly enabled: boolean;
-  readonly retentionDays?: number;
-}
-
-export interface DatabasePostgresSpec {
-  readonly version: string;
-  readonly size: DatabasePostgresSize;
-  readonly storage?: DatabasePostgresStorage;
-  readonly backups?: DatabasePostgresBackups;
-  readonly highAvailability?: boolean;
-  readonly extensions?: readonly string[];
-}
-
-export interface DatabasePostgresOutputs {
-  readonly host: string;
-  readonly port: number;
-  readonly database: string;
-  readonly username: string;
-  readonly passwordSecretRef: string;
-  readonly connectionString: string;
-}
-
-const CAPABILITIES: readonly DatabasePostgresCapability[] = [
-  "pitr",
-  "read-replicas",
-  "high-availability",
-  "backups",
-  "ssl-required",
-  "ipv6",
-  "extensions",
-];
-
-const OUTPUT_FIELDS: readonly string[] = [
-  "host",
-  "port",
-  "database",
-  "username",
-  "passwordSecretRef",
-  "connectionString",
-];
-
-const SIZES: ReadonlySet<string> = new Set([
-  "small",
-  "medium",
-  "large",
-  "xlarge",
-]);
+const SIZES: ReadonlySet<string> = new Set(
+  [
+    "small",
+    "medium",
+    "large",
+    "xlarge",
+  ] satisfies DatabasePostgresSize[],
+);
 
 /**
  * `database-postgres@v1` component kind descriptor. Materialized by a
@@ -82,18 +49,22 @@ const SIZES: ReadonlySet<string> = new Set([
  * The AppSpec public name for this kind is `postgres` (see
  * `COMPONENT_KINDS` in `@takos/takosumi-contract/app-spec`); the internal
  * provider registry id is `database-postgres`.
+ *
+ * Spec / outputs / capabilities are derived from
+ * `spec/contexts/kinds/v1/postgres.jsonld` via
+ * `database-postgres.generated.ts`; validation diagnostics are
+ * hand-written below.
  */
 export const DatabasePostgresKind: Shape<
   DatabasePostgresSpec,
   DatabasePostgresOutputs,
   DatabasePostgresCapability
 > = {
-  id: "database-postgres",
-  version: "v1",
-  description:
-    "Managed PostgreSQL instance. Provider-portable via standard wire protocol.",
-  capabilities: CAPABILITIES,
-  outputFields: OUTPUT_FIELDS,
+  id: DATABASE_POSTGRES_KIND_ID,
+  version: DATABASE_POSTGRES_KIND_VERSION,
+  description: DATABASE_POSTGRES_DESCRIPTION,
+  capabilities: DATABASE_POSTGRES_CAPABILITIES,
+  outputFields: DATABASE_POSTGRES_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
     requireNonEmptyString(value.version, "$.version", issues);
