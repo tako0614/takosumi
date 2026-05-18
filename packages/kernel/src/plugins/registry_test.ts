@@ -9,11 +9,6 @@ import {
   createPluginAdapterOverrides,
 } from "./registry.ts";
 import { createReferenceKernelPlugin } from "./reference.ts";
-import {
-  canonicalTrustedKernelPluginManifest,
-  installTrustedKernelPlugins,
-  TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM,
-} from "./trusted_install.ts";
 import type { TakosPaaSKernelPlugin } from "./types.ts";
 
 const allPorts = [
@@ -80,9 +75,7 @@ Deno.test("production rejects reference plugin selection", () => {
 });
 
 Deno.test("production accepts explicitly registered external plugin for selected ports", async () => {
-  const plugin = await trustedPlugin(
-    createExternalReferenceBackedPlugin("external.kernel.test"),
-  );
+  const plugin = createExternalReferenceBackedPlugin("external.kernel.test");
   const registry = createKernelPluginRegistry([plugin]);
   const overrides = createPluginAdapterOverrides({
     registry,
@@ -144,7 +137,7 @@ Deno.test("selected plugin must declare every selected port", () => {
   );
 });
 
-Deno.test("selected plugin must return every selected adapter", async () => {
+Deno.test("selected plugin must return every selected adapter", () => {
   const plugin: TakosPaaSKernelPlugin = {
     manifest: {
       id: "external.incomplete",
@@ -163,17 +156,16 @@ Deno.test("selected plugin must return every selected adapter", async () => {
       return {};
     },
   };
-  const trusted = await trustedPlugin(plugin);
-  const registry = createKernelPluginRegistry([trusted]);
+  const registry = createKernelPluginRegistry([plugin]);
 
   assert.throws(
     () =>
       createPluginAdapterOverrides({
         registry,
-        selectedPluginIds: { provider: trusted.manifest.id },
+        selectedPluginIds: { provider: plugin.manifest.id },
         context: createPluginContext({
           environment: "production",
-          selectedPluginIds: { provider: trusted.manifest.id },
+          selectedPluginIds: { provider: plugin.manifest.id },
         }),
       }),
     /kernel plugin external\.incomplete did not provide adapter provider for selected port provider/,
@@ -321,16 +313,15 @@ Deno.test("external plugin can resolve operator-injected clients", async () => {
       return { provider };
     },
   };
-  const trusted = await trustedPlugin(plugin);
-  const registry = createKernelPluginRegistry([trusted]);
+  const registry = createKernelPluginRegistry([plugin]);
   const overrides = createPluginAdapterOverrides({
     registry,
-    selectedPluginIds: { provider: trusted.manifest.id },
+    selectedPluginIds: { provider: plugin.manifest.id },
     context: createPluginContext({
       environment: "production",
-      selectedPluginIds: { provider: trusted.manifest.id },
+      selectedPluginIds: { provider: plugin.manifest.id },
       operatorConfig: {
-        [trusted.manifest.id]: {
+        [plugin.manifest.id]: {
           provider: { operatorClientRef: "provider-client" },
         },
       },
@@ -353,24 +344,6 @@ Deno.test("external plugin can resolve operator-injected clients", async () => {
     routes: [],
   });
   assert.equal(plan?.id, "provider_plan_injected");
-});
-
-Deno.test("production rejects untrusted external plugin selection", () => {
-  const plugin = createExternalReferenceBackedPlugin("external.kernel.raw");
-  const registry = createKernelPluginRegistry([plugin]);
-
-  assert.throws(
-    () =>
-      createPluginAdapterOverrides({
-        registry,
-        selectedPluginIds: { provider: plugin.manifest.id },
-        context: createPluginContext({
-          environment: "production",
-          selectedPluginIds: { provider: plugin.manifest.id },
-        }),
-      }),
-    /production requires trusted install metadata for kernel plugin external\.kernel\.raw/,
-  );
 });
 
 function createExternalReferenceBackedPlugin(
@@ -459,55 +432,4 @@ function createPluginContext(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-async function trustedPlugin(
-  plugin: TakosPaaSKernelPlugin,
-): Promise<TakosPaaSKernelPlugin> {
-  const keyPair = await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    true,
-    ["sign", "verify"],
-  );
-  const publicKeyJwk = await crypto.subtle.exportKey(
-    "jwk",
-    keyPair.publicKey,
-  );
-  const signature = await crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" },
-    keyPair.privateKey,
-    new TextEncoder().encode(
-      canonicalTrustedKernelPluginManifest(plugin.manifest),
-    ),
-  );
-  const [installed] = await installTrustedKernelPlugins({
-    envelopes: [{
-      manifest: plugin.manifest,
-      signature: {
-        alg: TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM,
-        keyId: "test-key",
-        value: encodeBase64Url(new Uint8Array(signature)),
-      },
-    }],
-    availablePlugins: [plugin],
-    trustedKeys: [{
-      keyId: "test-key",
-      publisherId: "test-publisher",
-      publicKeyJwk,
-    }],
-    policy: {
-      enabledPluginIds: [plugin.manifest.id],
-    },
-    environment: "production",
-  });
-  return installed;
-}
-
-function encodeBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll(
-    "=",
-    "",
-  );
 }

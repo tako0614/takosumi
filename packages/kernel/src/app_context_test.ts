@@ -12,11 +12,8 @@ import { NoopProviderMaterializer } from "./adapters/provider/mod.ts";
 import { ImmutableManifestSourceAdapter } from "./adapters/source/mod.ts";
 import { MemoryStorageDriver } from "./adapters/storage/mod.ts";
 import {
-  canonicalTrustedKernelPluginManifest,
   createReferenceKernelPlugin,
-  installTrustedKernelPlugins,
   type TakosPaaSKernelPlugin,
-  TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM,
 } from "./plugins/mod.ts";
 
 const productionRequiredPorts = [
@@ -230,25 +227,23 @@ Deno.test("createAppContext rejects staging/production noop provider fallback", 
   const plugin = createExternalReferenceBackedKernelPlugin(
     "external.kernel.missing-provider",
   );
-  const trusted = await trustedPlugin(plugin);
   await assert.rejects(
     () =>
       createAppContext({
-        plugins: [trusted],
+        plugins: [plugin],
         runtimeConfig: {
           environment: "staging",
-          plugins: pluginSelection(trusted.manifest.id, ["provider"]),
+          plugins: pluginSelection(plugin.manifest.id, ["provider"]),
         },
       }),
     /staging runtime requires an explicit provider adapter or provider kernel plugin; refusing noop provider fallback/,
   );
 });
 
-Deno.test("createInMemoryAppContext rejects strict direct runtime config fallback ports", async () => {
+Deno.test("createInMemoryAppContext rejects strict direct runtime config fallback ports", () => {
   const plugin = createExternalReferenceBackedKernelPlugin(
     "external.kernel.strict-direct",
   );
-  const trusted = await trustedPlugin(plugin);
   const strictPorts = [
     "coordination",
     "router-config",
@@ -262,10 +257,10 @@ Deno.test("createInMemoryAppContext rejects strict direct runtime config fallbac
     assert.throws(
       () =>
         createInMemoryAppContext({
-          plugins: [trusted],
+          plugins: [plugin],
           runtimeConfig: {
             environment: "production",
-            plugins: pluginSelection(trusted.manifest.id, [missingPort]),
+            plugins: pluginSelection(plugin.manifest.id, [missingPort]),
           },
         }),
       (error) => {
@@ -286,13 +281,12 @@ Deno.test("createInMemoryAppContext allows strict runtime-agent default when sto
   const plugin = createExternalReferenceBackedKernelPlugin(
     "external.kernel.strict-runtime-agent-storage",
   );
-  const trusted = await trustedPlugin(plugin);
 
   const context = createInMemoryAppContext({
-    plugins: [trusted],
+    plugins: [plugin],
     runtimeConfig: {
       environment: "production",
-      plugins: pluginSelection(trusted.manifest.id, ["runtime-agent"]),
+      plugins: pluginSelection(plugin.manifest.id, ["runtime-agent"]),
     },
   });
 
@@ -342,14 +336,13 @@ Deno.test("createConfiguredAppContext allows production external plugin selectio
   const plugin = createExternalReferenceBackedKernelPlugin(
     "external.kernel.production",
   );
-  const trusted = await trustedPlugin(plugin);
   const context = await createConfiguredAppContext({
-    plugins: [trusted],
+    plugins: [plugin],
     runtimeEnv: {
       TAKOSUMI_ENVIRONMENT: "production",
       TAKOSUMI_KERNEL_PLUGIN_SELECTIONS: JSON.stringify(
         Object.fromEntries(
-          productionRequiredPorts.map((port) => [port, trusted.manifest.id]),
+          productionRequiredPorts.map((port) => [port, plugin.manifest.id]),
         ),
       ),
     },
@@ -423,55 +416,4 @@ function sequenceIds(values: readonly string[]): () => string {
     index += 1;
     return value;
   };
-}
-
-async function trustedPlugin(
-  plugin: TakosPaaSKernelPlugin,
-): Promise<TakosPaaSKernelPlugin> {
-  const keyPair = await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    true,
-    ["sign", "verify"],
-  );
-  const publicKeyJwk = await crypto.subtle.exportKey(
-    "jwk",
-    keyPair.publicKey,
-  );
-  const signature = await crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" },
-    keyPair.privateKey,
-    new TextEncoder().encode(
-      canonicalTrustedKernelPluginManifest(plugin.manifest),
-    ),
-  );
-  const [installed] = await installTrustedKernelPlugins({
-    envelopes: [{
-      manifest: plugin.manifest,
-      signature: {
-        alg: TRUSTED_KERNEL_PLUGIN_MANIFEST_ALGORITHM,
-        keyId: "test-key",
-        value: encodeBase64Url(new Uint8Array(signature)),
-      },
-    }],
-    availablePlugins: [plugin],
-    trustedKeys: [{
-      keyId: "test-key",
-      publisherId: "test-publisher",
-      publicKeyJwk,
-    }],
-    policy: {
-      enabledPluginIds: [plugin.manifest.id],
-    },
-    environment: "production",
-  });
-  return installed;
-}
-
-function encodeBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll(
-    "=",
-    "",
-  );
 }

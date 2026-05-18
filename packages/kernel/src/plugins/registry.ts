@@ -9,7 +9,6 @@ import type {
   KernelPluginRegistry,
   TakosPaaSKernelPlugin,
 } from "./types.ts";
-import { hasTrustedKernelPluginInstall } from "./trust_marker.ts";
 
 export class InMemoryKernelPluginRegistry implements KernelPluginRegistry {
   readonly #plugins = new Map<string, TakosPaaSKernelPlugin>();
@@ -67,7 +66,6 @@ export function createPluginAdapterOverrides(input: {
       selectedPorts,
       input.context.environment,
     );
-    assertPluginTrustedForEnvironment(plugin, input.context.environment);
     const pluginOverrides = plugin.createAdapters(input.context);
     assertPluginProvidesSelectedAdapters(
       plugin.manifest,
@@ -93,17 +91,6 @@ export function createPluginAdapterOverrides(input: {
     initialized.add(pluginId);
   }
   return overrides;
-}
-
-export function assertPluginTrustedForEnvironment(
-  plugin: TakosPaaSKernelPlugin,
-  environment: string,
-): void {
-  if (environment !== "production" && environment !== "staging") return;
-  if (hasTrustedKernelPluginInstall(plugin)) return;
-  throw new Error(
-    `${environment} requires trusted install metadata for kernel plugin ${plugin.manifest.id}`,
-  );
 }
 
 export function assertPluginAllowedForEnvironment(

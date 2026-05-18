@@ -14,17 +14,9 @@ export interface KernelPluginCreateAdaptersContext
 
 export interface TakosPaaSKernelPlugin {
   readonly manifest: TakosumiKernelPluginManifest;
-  readonly trustedInstall?: TrustedKernelPluginSelectionMetadata;
   createAdapters(
     context: KernelPluginCreateAdaptersContext,
   ): KernelPluginAdapterOverrides;
-}
-
-export interface TrustedKernelPluginSelectionMetadata {
-  readonly source: "trusted-signed-manifest";
-  readonly keyId: string;
-  readonly publisherId: string;
-  readonly signatureAlgorithm: string;
 }
 
 export interface KernelPluginRegistry {

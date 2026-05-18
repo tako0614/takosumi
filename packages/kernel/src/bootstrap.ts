@@ -11,10 +11,6 @@ import {
   createAppContext,
 } from "./app_context.ts";
 import { loadRuntimeConfigFromEnv } from "./config/mod.ts";
-import {
-  loadKernelPluginMarketplacePackagesFromEnv,
-  loadKernelPluginsFromEnv,
-} from "./plugins/mod.ts";
 import { isPaaSProcessRole, type PaaSProcessRole } from "./process/mod.ts";
 import type { WorkerDaemonHandle } from "./workers/daemon.ts";
 import type { SqlClient } from "./adapters/storage/sql.ts";
@@ -128,18 +124,11 @@ export async function createPaaSApp(
     await loadRuntimeConfigFromEnv({ env: runtimeEnv });
   const role = options.role ?? processRoleFromRuntimeConfig(runtimeConfig);
   registerBundledShapesAndProviders(runtimeEnv);
-  const marketplaceInstall = await loadKernelPluginMarketplacePackagesFromEnv(
-    runtimeEnv,
-  );
   const context = options.context ?? await createAppContext({
     ...options,
     runtimeEnv,
     runtimeConfig,
-    plugins: options.plugins ??
-      [
-        ...marketplaceInstall.plugins,
-        ...await loadKernelPluginsFromEnv(runtimeEnv),
-      ],
+    plugins: options.plugins ?? [],
   });
   const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
   const installerToken = runtimeEnv.TAKOSUMI_INSTALLER_TOKEN;
@@ -176,9 +165,6 @@ export async function createPaaSApp(
       onTick: workerDaemonState.onTick,
     }).start()
     : undefined;
-  // marketplaceInstall.hookPackages is reserved for installer-pipeline
-  // catalog hooks (Wave 5 follow-up). Currently unused on the v1 surface.
-  void marketplaceInstall;
   const app = await createApiApp({
     role,
     context,
