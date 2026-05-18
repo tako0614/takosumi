@@ -10,7 +10,6 @@ import { initCommand } from "./commands/init.ts";
 import { versionCommand } from "./commands/version.ts";
 import { runtimeAgentCommand } from "./commands/runtime_agent.ts";
 import { artifactCommand } from "./commands/artifact.ts";
-import { pluginCommand } from "./commands/plugin.ts";
 import { TAKOSUMI_CLI_VERSION } from "./version.ts";
 
 // deno-lint-ignore no-explicit-any
@@ -29,7 +28,6 @@ function createTakosumi(): TakosumiCommand {
     .command("migrate", migrateCommand)
     .command("init", initCommand)
     .command("artifact", artifactCommand)
-    .command("plugin", pluginCommand)
     .command("runtime-agent", runtimeAgentCommand)
     .command("version", versionCommand)
     // Cliffy ships shell completion generators for bash / zsh / fish; wiring

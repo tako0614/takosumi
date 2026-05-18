@@ -11,7 +11,6 @@
     "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
     "takosumi-contract/installer-api": "jsr:@takos/takosumi-contract@^2.5.0/installer-api",
     "@takos/takosumi-kernel": "jsr:@takos/takosumi-kernel@^0.14.0",
-    "@takos/takosumi-kernel/plugins": "jsr:@takos/takosumi-kernel@^0.14.0/plugins",
     "@takos/takosumi-runtime-agent/embed": "jsr:@takos/takosumi-runtime-agent@^0.7.0/embed"
   },
   "tasks": {
