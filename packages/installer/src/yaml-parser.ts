@@ -16,9 +16,11 @@ import {
   type AppSpec,
   type Component,
   COMPONENT_KINDS,
-  type ComponentKind,
+  type ComponentKindRef,
   isComponentKind,
+  isKindUri,
   isReservedMount,
+  normalizeComponentKind,
   type UseEdge,
 } from "@takos/takosumi-contract/app-spec";
 
@@ -209,14 +211,7 @@ function validateComponent(name: string, raw: unknown): Component {
   }
   const c = raw as Record<string, unknown>;
   rejectUnknownKeys(c, COMPONENT_KEYS, path);
-  if (typeof c.kind !== "string" || !isComponentKind(c.kind)) {
-    throw new AppSpecParseError(
-      `${path}.kind must be one of ${COMPONENT_KINDS.join(", ")}`,
-      "kind-catalog",
-      `${path}.kind`,
-    );
-  }
-  const kind = c.kind as ComponentKind;
+  const kind = validateComponentKind(c.kind, `${path}.kind`);
   const component: Component = {
     kind,
     build: c.build === undefined
@@ -237,6 +232,35 @@ function validateComponent(name: string, raw: unknown): Component {
     target: c.target as string | undefined,
   };
   return component;
+}
+
+/**
+ * Validate the `kind` field of a component. Accepts either:
+ *   - a built-in short name (`worker` / `postgres` / ...);
+ *   - the canonical URI of a built-in kind
+ *     (e.g. `https://takosumi.com/kinds/v1/worker`); or
+ *   - an operator-defined kind URI (any `https://` / `http://` URI).
+ *
+ * Returns the original authoring form (= preserves short name vs URI as
+ * written). Use `normalizeComponentKind()` to map built-in URIs back to
+ * the short name when downstream logic needs identity checks.
+ */
+function validateComponentKind(value: unknown, path: string): ComponentKindRef {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new AppSpecParseError(
+      `${path} must be a non-empty string (built-in short name or kind URI)`,
+      "kind-catalog",
+      path,
+    );
+  }
+  if (isComponentKind(value)) return value;
+  if (isKindUri(value)) return value;
+  throw new AppSpecParseError(
+    `${path} must be one of ${COMPONENT_KINDS.join(", ")} or a kind URI ` +
+      `(https://... or http://...); got ${JSON.stringify(value)}`,
+    "kind-catalog",
+    path,
+  );
 }
 
 function validateBuild(raw: unknown, path: string) {
@@ -349,14 +373,17 @@ function validateUseEdges(
           `$.components.${name}.use.${edgeName}`,
         );
       }
-      if (edge.mount === "oidc" && components[target].kind !== "oidc") {
-        throw new AppSpecParseError(
-          `components.${name}.use.${edgeName} requests mount=oidc but target component is kind=${
-            components[target].kind
-          }`,
-          "use-edge",
-          `$.components.${name}.use.${edgeName}.mount`,
-        );
+      if (edge.mount === "oidc") {
+        const targetKind = normalizeComponentKind(components[target].kind);
+        if (targetKind !== "oidc") {
+          throw new AppSpecParseError(
+            `components.${name}.use.${edgeName} requests mount=oidc but target component is kind=${
+              components[target].kind
+            }`,
+            "use-edge",
+            `$.components.${name}.use.${edgeName}.mount`,
+          );
+        }
       }
     }
   }

@@ -167,3 +167,99 @@ components:
   );
   assertEquals(err.validationPhase, "use-edge");
 });
+
+Deno.test("parseAppSpec accepts built-in kind canonical URI", () => {
+  const spec = parseAppSpec(`
+apiVersion: takosumi.dev/v1
+kind: App
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: https://takosumi.com/kinds/v1/worker
+    build: { command: x, output: y }
+`);
+  assertEquals(
+    spec.components.web.kind,
+    "https://takosumi.com/kinds/v1/worker",
+  );
+});
+
+Deno.test("parseAppSpec accepts operator-defined kind URI", () => {
+  const spec = parseAppSpec(`
+apiVersion: takosumi.dev/v1
+kind: App
+metadata: { id: x, name: y }
+components:
+  fn:
+    kind: https://operator.example.com/kinds/lambda
+    spec:
+      handler: index.handler
+`);
+  assertEquals(
+    spec.components.fn.kind,
+    "https://operator.example.com/kinds/lambda",
+  );
+});
+
+Deno.test("parseAppSpec preserves mount=oidc check via canonical URI", () => {
+  // The target component declares `kind` via the canonical URI of the
+  // built-in `oidc` kind; mount=oidc must still resolve.
+  const spec = parseAppSpec(`
+apiVersion: takosumi.dev/v1
+kind: App
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    build: { command: x, output: y }
+    use:
+      auth:
+        mount: oidc
+  auth:
+    kind: https://takosumi.com/kinds/v1/oidc
+    redirectPaths: [/cb]
+    scopes: [openid]
+`);
+  assertEquals(
+    spec.components.auth.kind,
+    "https://takosumi.com/kinds/v1/oidc",
+  );
+});
+
+Deno.test("parseAppSpec rejects mount=oidc on operator-defined non-oidc kind", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: takosumi.dev/v1
+kind: App
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    build: { command: x, output: y }
+    use:
+      auth:
+        mount: oidc
+  auth:
+    kind: https://operator.example.com/kinds/not-oidc
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "use-edge");
+});
+
+Deno.test("parseAppSpec rejects non-URI / non-short-name kind", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: takosumi.dev/v1
+kind: App
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: not-a-kind-and-not-a-uri
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "kind-catalog");
+});
