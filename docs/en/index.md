@@ -72,10 +72,10 @@ See [Concepts (JA)](/getting-started/concepts) for details.
   cloud deploy in one command
 - [Manifest / AppSpec (JA)](/manifest) — `.takosumi.yml` AppSpec and component
   graph
-- [Shape Catalog (JA)](/reference/shapes) — spec / outputs / capabilities for
-  all 5 shapes
-- [Provider Plugins (JA)](/reference/providers) — cloud × shape matrix for 20
+- [Component Kind Catalog (JA)](/reference/component-kind-catalog) — spec /
+  outputs / capabilities for all 5 kinds
+- [Provider Plugins (JA)](/reference/providers) — cloud × kind matrix for 20
   default providers plus 1 opt-in provider
 - [CLI Reference (JA)](/reference/cli) — every subcommand, flag, and env
 - [Operator Bootstrap (JA)](/operator/bootstrap) — wire-in example for
-  `createTakosumiProductionProviders`
+  `createPaaSApp({ plugins })` plain-array attach

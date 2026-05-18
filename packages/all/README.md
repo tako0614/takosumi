@@ -13,22 +13,23 @@ takosumi install --source . --space space_personal
 
 ## Sub-exports
 
-- `jsr:@takos/takosumi` — plugins (shapes / providers) の全部 re-export
-- `jsr:@takos/takosumi/kernel` — kernel programmatic API
+- `jsr:@takos/takosumi` — plugins (kinds / providers) の全部 re-export
+- `jsr:@takos/takosumi/kernel` — kernel programmatic API (`createPaaSApp`)
 - `jsr:@takos/takosumi/server` — kernel HTTP server entry (deno run で起動)
 - `jsr:@takos/takosumi/plugins` — plugins entry
-- `jsr:@takos/takosumi/shapes` — component catalog (worker / postgres /
+- `jsr:@takos/takosumi/kinds` — component kind catalog (worker / postgres /
   object-store / oidc / custom-domain)
-- `jsr:@takos/takosumi/shape-providers` — provider plugins
-- `jsr:@takos/takosumi/shape-providers/factories` — production wiring
-  (`createTakosumiProductionProviders(opts)`)
+- `jsr:@takos/takosumi/bundled` — bundled `KernelPlugin` factories
+  (`createPaaSApp({ plugins: [cloudflareWorkerProvider(...)] })` の attach 対象)
 - `jsr:@takos/takosumi/cli` — CLI module entry
 
 ## Sister packages
 
-- `jsr:@takos/takosumi-contract` — canonical types (Shape / Provider)
+- `jsr:@takos/takosumi-contract` — canonical types (AppSpec / ComponentKind /
+  ProviderPlugin / KernelPlugin)
 - `jsr:@takos/takosumi-kernel` — kernel only (server + apply pipeline)
-- `jsr:@takos/takosumi-plugins` — plugins only (shapes / providers)
+- `jsr:@takos/takosumi-plugins` — plugins only (kinds / providers / bundled
+  `KernelPlugin` factories)
 - `jsr:@takos/takosumi-cli` — CLI only
 
 ## Scope note
