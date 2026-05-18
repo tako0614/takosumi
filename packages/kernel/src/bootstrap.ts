@@ -36,10 +36,6 @@ import {
 } from "./domains/deploy/takosumi_deployment_record_store.ts";
 import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store_sql.ts";
 import { InstallerPipeline } from "./domains/installer/mod.ts";
-import {
-  defaultBundledPlugins as bundledPluginsFromPlugins,
-  type DefaultBundledPluginsOptions,
-} from "@takos/takosumi-plugins/bundled";
 import type { KernelPlugin } from "takosumi-contract/plugin";
 
 function resolveTakosumiDeploymentRecordStore(input: {
@@ -96,20 +92,21 @@ export { registerBundledShapesAndProviders };
 /**
  * KernelPlugin instances bundled with the kernel distribution.
  *
- * Returns the operator-facing default plugin array sourced from
- * `@takos/takosumi-plugins/bundled`. By default the self-hosted set
- * (docker-compose worker / local-docker postgres / filesystem object-store
- * / takosumi-accounts oidc / cloudflare-dns custom-domain) is included;
- * cloud providers are opt-in via the same `enable*` switches the bundled
- * factory exposes.
+ * Phase D extracted every cloud / self-host provider factory out of the
+ * Takosumi kernel distribution into dedicated provider packages
+ * (`@takos/takosumi-cloudflare-providers`, `@takos/takosumi-aws-providers`,
+ * `@takos/takosumi-gcp-providers`, `@takos/takosumi-kubernetes-providers`,
+ * `@takos/takosumi-deno-deploy-providers`,
+ * `@takos/takosumi-selfhost-providers`). Takosumi core no longer carries
+ * any cloud SDK import, so this function intentionally returns an empty
+ * array: operators explicitly `import` the provider packages they want and
+ * pass them to `createPaaSApp({ plugins: [...] })`.
  *
- * Operators that want a fully custom plugin set should not call this —
- * pass `plugins: [myProvider(), ...]` to `createPaaSApp()` directly.
+ * The function is retained as a no-op so existing callers don't break, but
+ * its return value is `readonly []`. Future major versions may remove it.
  */
-export function defaultBundledPlugins(
-  opts?: DefaultBundledPluginsOptions,
-): readonly KernelPlugin[] {
-  return bundledPluginsFromPlugins(opts ?? {});
+export function defaultBundledPlugins(): readonly KernelPlugin[] {
+  return [];
 }
 
 export interface CreatePaaSAppOptions extends AppContextOptions {
