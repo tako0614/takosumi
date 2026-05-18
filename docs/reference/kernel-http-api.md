@@ -128,7 +128,7 @@ interface ApiErrorEnvelope {
 
 | `code`                   | HTTP | 主な発生要因                                                     |
 | ------------------------ | ---- | ---------------------------------------------------------------- |
-| `invalid_argument`       | 400  | AppSpec schema / form input / use edge cycle                     |
+| `invalid_argument`       | 400  | AppSpec schema / form input / publish-listen cycle               |
 | `unauthenticated`        | 401  | bearer 不足、 internal HMAC 検証失敗                             |
 | `permission_denied`      | 403  | space 越境、 token claim 不足                                    |
 | `not_found`              | 404  | endpoint disabled (token unset)、 Installation / Deployment 不在 |
@@ -146,6 +146,7 @@ interface ApiErrorEnvelope {
 
 - [Installer API](./installer-api.md) — 5 endpoint の完全 spec
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [Component Kind Catalog](./component-kind-catalog.md) — 5 kind
+- [Component Kind Catalog](./component-kind-catalog.md) — curated 4 kind +
+  operator-defined kind
 - [Runtime-Agent API](./runtime-agent-api.md)
 - [Closed Enums](./closed-enums.md)

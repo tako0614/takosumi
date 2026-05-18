@@ -4,14 +4,15 @@
 > を JSON-LD で公開する正本の仕様。 operator が自前 kind を publish する手順
 > もここに記載されます。
 
-Takosumi は 5 種類の built-in component kind (`worker` / `postgres` /
-`object-store` / `oidc` / `custom-domain`) を持ちます。 これらの kind は
-**JSON-LD 文書として公開** され、 `@id` (= 完全 URI) で一意に識別されます。
+Takosumi は curated 4 種の built-in component kind (`worker` / `postgres` /
+`object-store` / `custom-domain`) を持ちます (= `oidc` kind は takosumi-cloud の
+`operator.identity.oidc` namespace pub に移動)。 これらの kind は **JSON-LD
+文書として公開** され、 `@id` (= 完全 URI) で一意に識別されます。
 
-operator は自前 domain で同じ shape の `.jsonld` を publish するだけで新 kind
-を追加でき、 これが Takosumi が掲げる「ソフトウェアの民主化」 の
-土台となります。 (= 第三者は kernel に手を入れずに自分の vocabulary を
-立ち上げられる)
+catalog は frozen ではなく、 operator は自前 domain で同じ shape の `.jsonld` を
+publish するだけで新 kind を追加できます。 これが Takosumi が掲げる
+「ソフトウェアの民主化」 の土台です (= 第三者は kernel に手を入れずに自分の
+vocabulary を立ち上げられる)。
 
 ## URL convention
 
@@ -92,6 +93,6 @@ identifier として** だけ扱います。
 
 - [AppSpec](./app-spec.md) — `.takosumi.yml` の `kind` field が short name と
   full URI の両方を受理する仕様
-- [Component Kind Catalog](./component-kind-catalog.md) — 5 built-in kind の
-  詳細 schema
+- [Component Kind Catalog](./component-kind-catalog.md) — curated 4 built-in
+  kind の詳細 schema
 - [Plugins extending](../extending.md) — 新 kind / provider 登録の手順

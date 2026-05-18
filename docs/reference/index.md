@@ -7,7 +7,8 @@
 クライアントとサーバーの間で交わされる surface。
 
 - [AppSpec (`.takosumi.yml`)](./app-spec) — source root に置く 1 ファイル
-- [Component Kind Catalog](./component-kind-catalog) — 5 種の kind schema
+- [Component Kind Catalog](./component-kind-catalog) — curated 4 種 +
+  operator-defined kind schema
 - [Installer API](./installer-api) — 5 endpoint の wire spec (dry-run / apply /
   rollback)
 - [Kernel HTTP API](./kernel-http-api) — public installer + internal control
@@ -132,8 +133,8 @@ multi-tenant PaaS provider 固有の運用 surface。
 
 Component kind catalog / provider / artifact 拡張面。
 
-- [Component Kind Catalog](./component-kind-catalog) — 5 built-in kind の spec /
-  outputs / use edge 仕様
+- [Component Kind Catalog](./component-kind-catalog) — curated 4 built-in kind +
+  operator-defined kind の spec / outputs / publish / listen 仕様
 - [JSON-LD Kind Catalog](./json-ld-kind-catalog) —
   `https://takosumi.com/kinds/v1/*` の JSON-LD 形式と operator-defined kind の
   publish 手順
@@ -150,8 +151,8 @@ Component kind catalog / provider / artifact 拡張面。
 
 - [Manifest Validation](./manifest-validation) — closed grammar / validation
   phase / error code
-- [AppSpec Dependency Semantics](./manifest-expand-semantics) — `use:` graph /
-  binding rules
+- [AppSpec Dependency Semantics](./manifest-expand-semantics) — `publish` /
+  `listen` namespace graph / binding rules
 - [Plan Output Schema](./plan-output) — `takosumi plan` / `mode: "plan"` 出力
 - [Status Output Schema](./status-output) — internal Installation / Deployment
   ledger read boundary

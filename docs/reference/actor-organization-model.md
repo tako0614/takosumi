@@ -11,8 +11,8 @@ takosumi kernel が持たない。 これらは operator account plane が所有
 - takosumi kernel は AppSpec installer lifecycle を処理し、Deployment evidence
   を記録する。
 - operator account plane は account / billing / AppInstallation ledger / OIDC
-  issuer / pairwise subject / use edge / permission grant / audit lifecycle
-  を所有する。
+  issuer / pairwise subject / namespace publish-listen / permission grant /
+  audit lifecycle を所有する。
 - Deployment apply は `/v1/installations/*` の installer lifecycle 経由で行う。
   ownership は Installation ledger に記録される。
 

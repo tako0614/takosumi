@@ -22,7 +22,7 @@ hero:
 features:
   - title: AppSpec-driven
     details: |
-      Declare portable components (`worker` / `postgres` / `object-store` / `oidc` / `custom-domain`) in a root `.takosumi.yml` AppSpec. Install with `takosumi install --source . --space <space-id>`.
+      Declare portable components (`worker` / `postgres` / `object-store` / `custom-domain`) in a root `.takosumi.yml` AppSpec, plus operator-defined kinds via JSON-LD. Install with `takosumi install --source . --space <space-id>`. (`oidc` issuance lives in takosumi-cloud as a namespace pub.)
   - title: Multi-cloud + selfhost
     details: |
       Deploy to AWS / GCP / Cloudflare / Azure / Kubernetes / Deno Deploy / docker-compose / systemd / filesystem from the same AppSpec, backed by bundled provider plugins.
@@ -73,7 +73,8 @@ See [Concepts (JA)](/getting-started/concepts) for details.
 - [Manifest / AppSpec (JA)](/manifest) — `.takosumi.yml` AppSpec and component
   graph
 - [Component Kind Catalog (JA)](/reference/component-kind-catalog) — spec /
-  outputs / capabilities for all 5 kinds
+  outputs / capabilities for the 4 curated kinds, extensible via
+  operator-defined kinds
 - [Provider Plugins (JA)](/reference/providers) — cloud × kind matrix for 20
   default providers plus 1 opt-in provider
 - [CLI Reference (JA)](/reference/cli) — every subcommand, flag, and env
