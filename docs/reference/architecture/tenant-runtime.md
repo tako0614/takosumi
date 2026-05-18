@@ -20,12 +20,16 @@ materialization snapshot です。
   `compatibilityDate`、optional `routes`
 - `postgres`: provider が materialize する stateful database
 - `object-store`: S3-compatible object store
-- `oidc`: per-Installation OIDC client
 - `custom-domain`: route / endpoint output への domain projection
 
-resource 間の依存は AppSpec の `use:` edge で表現します。 operator / account
-plane dependency は namespace export と account API / BillingPort で扱います。
-AppSpec surface は component graph に閉じます。
+per-Installation OIDC client は本 kernel の `kind` には無く、 Takosumi Accounts
+(= takosumi-cloud) が `operator.identity.oidc` namespace path に material を
+publish する形に移動済みです (worker が `listen.operator.identity.oidc` で
+受け取る)。
+
+resource 間の依存は AppSpec の `publish` / `listen` edge で表現します。 operator
+/ account plane dependency は namespace export と account API / BillingPort で
+扱います。 AppSpec surface は component graph に閉じます。
 
 ## Worker Runtime
 
@@ -76,22 +80,29 @@ components:
       - api.example.com/*
 ```
 
-他 component の output は `${ref:...}` ではなく `use:` edge で worker に渡しま
-す。
+他 component の output は **`publish` / `listen`** edge で worker に渡します。
+旧 `${ref:...}` interpolation や `use:` edge は廃止されました。
 
 ```yaml
 components:
+  db:
+    kind: postgres
+    spec:
+      version: "16"
+      size: small
+    publish:
+      - com.example.edge.db
+
   edge:
     kind: worker
     build:
       command: npm ci && npm run build
       output: dist/edge.mjs
-    use:
-      db:
-        env: DATABASE_URL
-
-  db:
-    kind: postgres
+    listen:
+      com.example.edge.db:
+        as: env
+        prefix: DATABASE_
+        # → DATABASE_HOST / DATABASE_CONNECTIONSTRING 等が env に注入される
 ```
 
 ## Dispatch

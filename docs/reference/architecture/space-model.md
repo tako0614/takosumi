@@ -232,17 +232,20 @@ metadata:
   name: API
 
 components:
+  db:
+    kind: postgres
+    publish:
+      - com.example.api.db
+
   api:
     kind: worker
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    use:
-      db:
-        env: DATABASE_URL
-
-  db:
-    kind: postgres
+    listen:
+      com.example.api.db:
+        as: env
+        prefix: DATABASE_
 ```
 
 `space:acme-prod` で apply すると、resource graph、選ばれた provider、output

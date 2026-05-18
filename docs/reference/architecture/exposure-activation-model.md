@@ -13,17 +13,20 @@ Link ではない。
 components:
   web:
     kind: worker
-    routes:
-      - app.example.com/*
+    spec:
+      routes: ["app.example.com/*"]
+    publish:
+      - com.example.app.web
   domain:
     kind: custom-domain
-    name: app.example.com
-    use:
-      web:
-        target: url
+    spec:
+      name: app.example.com
+    listen:
+      com.example.app.web:
+        as: target
 ```
 
-resolver はこれを `api` resource output を target にした `app.example.com` の
+resolver はこれを `web` resource output を target にした `app.example.com` の
 Exposure record に変換する。Exposure は外部 ingress を準備するが、それだけで
 deployment を current にはしない。
 

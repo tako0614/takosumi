@@ -129,27 +129,36 @@ metadata:
   name: Example API
 
 components:
+  db:
+    kind: postgres
+    spec:
+      version: "16"
+      size: small
+    publish:
+      - com.example.api.db
+
   api:
     kind: worker
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    routes:
-      - /
-    use:
-      db:
-        env: DATABASE_URL
-      domain:
-        mount: route
-
-  db:
-    kind: postgres
+    spec:
+      routes: ["/"]
+    listen:
+      com.example.api.db:
+        as: env
+        prefix: DATABASE_
 
   domain:
     kind: custom-domain
-    name: app.example.com
+    spec:
+      name: app.example.com
+    listen:
+      com.example.api.api:
+        as: target
 ```
 
 `api`、`db`、`domain` は 1 つの Space scope graph の中で component intent
-となる。component 間の関係は `use:` edge で表現し、apply 時に installer pipeline
-が provider output を接続する。
+となる。 component 間の関係は `publish` / `listen` edge で表現し、 apply 時に
+installer pipeline が materializer output を namespace registry に publish し、
+listen 側 component に env / mount として注入する。
