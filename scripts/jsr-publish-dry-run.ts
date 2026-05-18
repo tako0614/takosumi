@@ -22,9 +22,6 @@ export interface DryRunDiagnostics {
   readonly errors: readonly string[];
 }
 
-const KERNEL_DYNAMIC_IMPORT_WARNING =
-  "kernel runtime plugin loading uses operator-provided module specifiers and verified data URLs; these imports are expected to resolve at runtime without JSR rewriting";
-
 export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
   [
     {
@@ -46,18 +43,6 @@ export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
       name: "@takos/takosumi-kernel",
       version: "0.14.0",
       directory: "packages/kernel",
-      acceptedWarnings: Object.freeze([
-        {
-          code: "unanalyzable-dynamic-import",
-          pathSuffix: "src/plugins/loader.ts",
-          reason: KERNEL_DYNAMIC_IMPORT_WARNING,
-        },
-        {
-          code: "unanalyzable-dynamic-import",
-          pathSuffix: "src/plugins/marketplace.ts",
-          reason: KERNEL_DYNAMIC_IMPORT_WARNING,
-        },
-      ]),
     },
     {
       name: "@takos/takosumi-cli",

@@ -1,0 +1,81 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/object-store",
+  "@type": "ComponentKind",
+  "name": "object-store",
+  "version": "v1",
+  "description": "Bucket-style object storage. Provider-portable across S3-class APIs.",
+  "spec": [
+    {
+      "name": "name",
+      "type": "string",
+      "required": true,
+      "meaning": "Logical bucket name (provider applies its own scoping rules)."
+    },
+    {
+      "name": "public",
+      "type": "boolean",
+      "required": false,
+      "meaning": "Allow anonymous reads when true."
+    },
+    {
+      "name": "versioning",
+      "type": "boolean",
+      "required": false,
+      "meaning": "Enable object versioning when supported."
+    },
+    {
+      "name": "region",
+      "type": "string",
+      "required": false,
+      "meaning": "Provider region (when applicable)."
+    },
+    {
+      "name": "lifecycle",
+      "type": "object",
+      "required": false,
+      "meaning": "`{ expireAfterDays?: number, archiveAfterDays?: number }`."
+    }
+  ],
+  "outputs": [
+    {
+      "name": "bucket",
+      "type": "string",
+      "required": true,
+      "meaning": "Provider-scope bucket name."
+    },
+    {
+      "name": "endpoint",
+      "type": "string",
+      "required": true,
+      "meaning": "S3-class endpoint URL."
+    },
+    {
+      "name": "region",
+      "type": "string",
+      "required": true,
+      "meaning": "Bucket region."
+    },
+    {
+      "name": "accessKeyRef",
+      "type": "string",
+      "required": true,
+      "meaning": "Reference to secret store entry holding access key id."
+    },
+    {
+      "name": "secretKeyRef",
+      "type": "string",
+      "required": true,
+      "meaning": "Reference to secret store entry holding secret access key."
+    }
+  ],
+  "capabilities": [
+    "versioning",
+    "presigned-urls",
+    "server-side-encryption",
+    "public-access",
+    "event-notifications",
+    "lifecycle-rules",
+    "multipart-upload"
+  ]
+}

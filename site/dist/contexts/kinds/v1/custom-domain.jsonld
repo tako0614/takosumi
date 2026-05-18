@@ -1,0 +1,62 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/custom-domain",
+  "@type": "ComponentKind",
+  "name": "custom-domain",
+  "version": "v1",
+  "description": "DNS + TLS-terminated public domain pointing at a target URL.",
+  "spec": [
+    {
+      "name": "name",
+      "type": "string",
+      "required": true,
+      "meaning": "Fully-qualified domain name (e.g. `notes.example.com`)."
+    },
+    {
+      "name": "target",
+      "type": "string",
+      "required": true,
+      "meaning": "Component name whose `url` output this domain points at."
+    },
+    {
+      "name": "certificate",
+      "type": "object",
+      "required": false,
+      "meaning": "`{ kind: 'auto' | 'managed' | 'provided', secretRef?: string }`. `secretRef` is required when `kind: provided`."
+    },
+    {
+      "name": "redirects",
+      "type": "object[]",
+      "required": false,
+      "meaning": "Each entry: `{ from: string, to: string, code?: 301 | 302 | 307 | 308 }`."
+    }
+  ],
+  "outputs": [
+    {
+      "name": "fqdn",
+      "type": "string",
+      "required": true,
+      "meaning": "Resolved fully-qualified domain name."
+    },
+    {
+      "name": "certificateArn",
+      "type": "string",
+      "required": false,
+      "meaning": "Provider-scope TLS certificate identifier."
+    },
+    {
+      "name": "nameservers",
+      "type": "string[]",
+      "required": false,
+      "meaning": "DNS nameserver list (when delegated)."
+    }
+  ],
+  "capabilities": [
+    "wildcard",
+    "auto-tls",
+    "sni",
+    "http3",
+    "alpn-acme",
+    "redirects"
+  ]
+}

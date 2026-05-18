@@ -1,0 +1,94 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/postgres",
+  "@type": "ComponentKind",
+  "name": "postgres",
+  "version": "v1",
+  "description": "Managed PostgreSQL instance. Provider-portable via standard wire protocol.",
+  "spec": [
+    {
+      "name": "version",
+      "type": "string",
+      "required": true,
+      "meaning": "PostgreSQL major version string (e.g. `15`, `16`)."
+    },
+    {
+      "name": "size",
+      "type": "enum",
+      "required": true,
+      "enum": ["small", "medium", "large", "xlarge"],
+      "meaning": "Instance size class."
+    },
+    {
+      "name": "storage",
+      "type": "object",
+      "required": false,
+      "meaning": "`{ sizeGiB: number, type?: 'ssd' | 'hdd' }`."
+    },
+    {
+      "name": "backups",
+      "type": "object",
+      "required": false,
+      "meaning": "`{ enabled: boolean, retentionDays?: number }`."
+    },
+    {
+      "name": "highAvailability",
+      "type": "boolean",
+      "required": false,
+      "meaning": "Enable provider-managed HA replica."
+    },
+    {
+      "name": "extensions",
+      "type": "string[]",
+      "required": false,
+      "meaning": "PostgreSQL extensions to enable (e.g. `pgvector`)."
+    }
+  ],
+  "outputs": [
+    {
+      "name": "host",
+      "type": "string",
+      "required": true,
+      "meaning": "Database hostname."
+    },
+    {
+      "name": "port",
+      "type": "integer",
+      "required": true,
+      "meaning": "TCP port (typically 5432)."
+    },
+    {
+      "name": "database",
+      "type": "string",
+      "required": true,
+      "meaning": "Database name."
+    },
+    {
+      "name": "username",
+      "type": "string",
+      "required": true,
+      "meaning": "Connection username (role name)."
+    },
+    {
+      "name": "passwordSecretRef",
+      "type": "string",
+      "required": true,
+      "meaning": "Reference to secret store entry holding password."
+    },
+    {
+      "name": "connectionString",
+      "type": "string",
+      "required": true,
+      "meaning": "Full client connection URL (secret-bearing)."
+    }
+  ],
+  "capabilities": [
+    "pitr",
+    "read-replicas",
+    "high-availability",
+    "backups",
+    "ssl-required",
+    "ipv6",
+    "extensions"
+  ]
+}
