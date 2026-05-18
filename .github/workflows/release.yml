@@ -45,6 +45,8 @@ jobs:
       - run: deno install
       - run: deno task fmt:check
       - run: deno task lint
+      - run: deno task lint:json-ld
+      - run: deno task spec:check-drift
       - run: deno task check
       - run: deno task test
       - run: deno task publish:dry-run
