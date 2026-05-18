@@ -8,8 +8,18 @@ Versions follow [Semantic Versioning](https://semver.org/) once each package
 crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes (documented per
 entry).
 
-## Unreleased — 2026-05-18
+## Unreleased — 2026-05-19
 
+- **Breaking (Wave 9)**: `KernelPlugin` plain-array attach. operator は
+  `createPaaSApp({ plugins: [...] })` で plugin factory を直接渡す (= Vite
+  plugin pattern)。 旧 `createAdapters()` / port-based plugin host /
+  `KernelPluginPortKind` / `TakosumiKernelPluginManifest` / plugin marketplace /
+  signed manifest fetch は全て削除。
+- **Breaking (Wave 9)**: AppSpec の component kind は **5 frozen** (`worker` /
+  `postgres` / `object-store` / `oidc` / `custom-domain`)。 正本 URI は
+  `https://takosumi.com/kinds/v1/<name>` (JSON-LD)、 short name と full URI
+  両方を受理。 旧 `worker@v1` / `web-service@v1` / `database-postgres@v1`
+  shape 名は AppSpec / docs / kernel から完全に除去。
 - **Breaking**: public deploy/install contract is reset to three concepts:
   AppSpec (`.takosumi.yml`), Installation, and Deployment. The public installer
   HTTP surface is the 5 endpoint `/v1/installations*` API.
