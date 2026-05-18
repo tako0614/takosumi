@@ -4,6 +4,7 @@
   "license": "MIT",
   "exports": {
     ".": "./src/mod.ts",
+    "./bundled": "./src/bundled/mod.ts",
     "./gateway": "./src/gateway/mod.ts",
     "./kinds": "./src/kinds/mod.ts",
     "./shape-providers": "./src/shape-providers/mod.ts",

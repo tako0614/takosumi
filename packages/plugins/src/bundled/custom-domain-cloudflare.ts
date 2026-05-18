@@ -1,0 +1,37 @@
+/**
+ * Bundled `custom-domain@v1` KernelPlugin factory backed by Cloudflare DNS.
+ */
+
+import type { KernelPlugin } from "takosumi-contract/plugin";
+import {
+  type CloudflareDnsLifecycleClient,
+  createCloudflareDnsProvider,
+  InMemoryCloudflareDnsLifecycle,
+} from "../shape-providers/custom-domain/cloudflare-dns.ts";
+import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
+import { KIND_URI_CUSTOM_DOMAIN } from "./_kinds.ts";
+
+export interface CloudflareCustomDomainProviderOptions {
+  readonly zoneId?: string;
+  readonly accountId?: string;
+  readonly lifecycle?: CloudflareDnsLifecycleClient;
+}
+
+export function cloudflareCustomDomainProvider(
+  opts: CloudflareCustomDomainProviderOptions = {},
+): KernelPlugin {
+  const zoneId = opts.zoneId ?? "default-zone";
+  const accountId = opts.accountId ?? "default-account";
+  const lifecycle = opts.lifecycle ??
+    new InMemoryCloudflareDnsLifecycle(zoneId);
+  const provider = createCloudflareDnsProvider({
+    lifecycle,
+    zoneId,
+    accountId,
+  });
+  return kernelPluginFromProviderPlugin({
+    provider,
+    kindUri: KIND_URI_CUSTOM_DOMAIN,
+    capabilities: ["wildcard", "auto-tls", "sni", "http3"],
+  });
+}
