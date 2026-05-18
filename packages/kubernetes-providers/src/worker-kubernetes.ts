@@ -8,7 +8,7 @@ import {
   createK3sDeploymentWebServiceProvider,
   InMemoryK3sDeploymentLifecycle,
   type K3sDeploymentLifecycleClient,
-} from "../shape-providers/web-service/k3s-deployment.ts";
+} from "@takos/takosumi-plugins/shape-providers/web-service/k3s-deployment";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_WORKER } from "./_kinds.ts";
 
