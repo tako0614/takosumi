@@ -1,41 +1,40 @@
 /**
- * E2E smoke for the v1 installer pipeline using the Wave 9 Phase D
- * plain-array `plugins[]` plugin API.
+ * E2E smoke for the v1 installer pipeline under the Phase C namespace
+ * pub/sub model.
  *
  * Drives the public 5-endpoint surface with a real `InstallerPipeline`
- * configured via `new InstallerPipeline({ plugins: [...] })`, exercising
- * the bundled KernelPlugin factories so the operator-facing entry path
- * is covered end-to-end. Covers:
- *   - dry-run + apply produce Installation + Deployment with the right
- *     use-edge topology (oidc materializes before worker, worker sees
- *     `OIDC_CLIENT_ID` etc. as upstream outputs)
- *   - the lifecycle hooks (`onInstallStart` / `onDeploymentStart` /
- *     `onDeploymentComplete` / `onInstallComplete`) fire in the
- *     documented order across the plugin array
- *   - the bundled `cloudflareWorkerProvider()` + Takosumi Accounts oidc
- *     factories install + apply against the public 5-endpoint surface
- *   - apply with a mismatched manifest digest returns 412
+ * configured via `new InstallerPipeline({ plugins: [...] })`. The
+ * pub/sub-flavoured AppSpec used here exercises:
+ *   - kernel auto-namespacing of `<app-id>.<component-name>`
+ *   - sibling `listen:` edges resolving from the registry into
+ *     `listenedMaterials` on the listener plugin's apply context
+ *   - HTTP 201 on apply + status flip to 409 for the
+ *     `failed_precondition` path (mismatched expected pin, pub/sub cycle)
  */
 
 import { assert, assertEquals } from "jsr:@std/assert@^1.0.5";
 import { Hono } from "hono";
 import { type Component, COMPONENT_KINDS } from "takosumi-contract/app-spec";
-import type { KernelPlugin } from "takosumi-contract/plugin";
+import type {
+  ApplyListenContext,
+  EnvInjection,
+  KernelPlugin,
+  NamespaceMaterial,
+  PublishMaterialContext,
+} from "takosumi-contract/plugin";
 import type {
   Deployment,
   Installation,
   InstallationApplyResponse,
   InstallationDryRunResponse,
 } from "takosumi-contract/installer-api";
-import {
-  cloudflareWorkerProvider,
-  InMemoryTakosumiAccountsOidcClient,
-  selfhostDockerComposeWorkerProvider,
-  takosumiAccountsOidcProvider,
-} from "@takos/takosumi-plugins/bundled";
 import { InstallerPipeline } from "../domains/installer/mod.ts";
 import { mountInstallerPublicRoutes } from "./installer_public_routes.ts";
 
+// Canonical pub/sub AppSpec: `db` publishes its connection material at
+// the auto-namespace `example-notes.db`; `web` listens with
+// `as: env, prefix: DB` so the kernel default expansion produces
+// DB_HOST / DB_PORT / ... env injections on the worker.
 const SAMPLE_APP_SPEC_YAML = `apiVersion: takosumi.dev/v1
 kind: App
 metadata:
@@ -43,19 +42,16 @@ metadata:
   name: Example Notes
   description: Sample app spec for e2e installer pipeline tests
 components:
-  oidc:
-    kind: oidc
-    redirectPaths:
-      - /oidc/callback
-    scopes:
-      - openid
-      - email
+  db:
+    kind: postgres
   web:
     kind: worker
-    use:
-      oidc:
-        mount: oidc
+    listen:
+      example-notes.db:
+        as: env
+        prefix: DB
 `;
+
 const INSTALLER_AUTH_HEADERS = {
   "authorization": "Bearer installer-token",
   "content-type": "application/json",
@@ -63,33 +59,40 @@ const INSTALLER_AUTH_HEADERS = {
 
 async function withTempSource<T>(
   fn: (workingDirectory: string) => Promise<T>,
+  spec: string = SAMPLE_APP_SPEC_YAML,
 ): Promise<T> {
   const dir = await Deno.makeTempDir({ prefix: "takosumi-installer-e2e-" });
   try {
-    await Deno.writeTextFile(`${dir}/.takosumi.yml`, SAMPLE_APP_SPEC_YAML);
+    await Deno.writeTextFile(`${dir}/.takosumi.yml`, spec);
     return await fn(dir);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
 }
 
+interface ApplyRecord {
+  readonly componentName: string;
+  readonly listenedMaterials: Readonly<Record<string, NamespaceMaterial>>;
+  readonly installationId: string;
+}
+
 /**
- * Build a recording test plugin for one of the bundled kind URIs. Captures
- * apply contexts (so we can assert use-edge topology + upstream outputs)
- * and lifecycle hook invocations (so we can assert the documented order).
+ * Build a recording test plugin under the new namespace pub/sub model.
+ * Captures `listenedMaterials` so the test can assert auto-namespace
+ * resolution and lifecycle hook invocations so we can assert ordering.
  */
 function buildRecordingPlugin(opts: {
   readonly name: string;
   readonly kindUri: string;
   readonly events: string[];
-  readonly applies: Array<{
-    readonly componentName: string;
-    readonly upstreamOutputs: Readonly<
-      Record<string, Readonly<Record<string, string>>>
-    >;
-    readonly installationId: string;
-  }>;
+  readonly applies: ApplyRecord[];
   readonly outputs?: Readonly<Record<string, string>>;
+  readonly publishMaterial?: (
+    ctx: PublishMaterialContext,
+  ) => Promise<NamespaceMaterial>;
+  readonly applyListen?: (
+    ctx: ApplyListenContext,
+  ) => Promise<EnvInjection>;
 }): KernelPlugin {
   return {
     name: opts.name,
@@ -98,7 +101,7 @@ function buildRecordingPlugin(opts: {
     apply: (ctx) => {
       opts.applies.push({
         componentName: ctx.componentName,
-        upstreamOutputs: ctx.upstreamOutputs,
+        listenedMaterials: ctx.listenedMaterials,
         installationId: ctx.installationId,
       });
       opts.events.push(`apply:${opts.name}:${ctx.componentName}`);
@@ -108,6 +111,8 @@ function buildRecordingPlugin(opts: {
         outputs: opts.outputs ?? {},
       });
     },
+    publishMaterial: opts.publishMaterial,
+    applyListen: opts.applyListen,
     destroy: (_ctx) => Promise.resolve(),
     onInstallStart: () => {
       opts.events.push(`onInstallStart:${opts.name}`);
@@ -137,27 +142,35 @@ function buildApp(pipeline: InstallerPipeline) {
   return app;
 }
 
-Deno.test("installer e2e — plain-array plugins drive dry-run + apply", async () => {
+Deno.test("installer e2e — plain-array plugins drive dry-run + apply with pub/sub auto-namespacing", async () => {
   await withTempSource(async (workingDirectory) => {
     const events: string[] = [];
-    const applies: Array<{
-      readonly componentName: string;
-      readonly upstreamOutputs: Readonly<
-        Record<string, Readonly<Record<string, string>>>
-      >;
-      readonly installationId: string;
-    }> = [];
-    const oidcPlugin = buildRecordingPlugin({
-      name: "@test/oidc",
-      kindUri: "https://takosumi.com/kinds/v1/oidc",
+    const applies: ApplyRecord[] = [];
+    const dbPlugin = buildRecordingPlugin({
+      name: "@test/postgres",
+      kindUri: "https://takosumi.com/kinds/v1/postgres",
       events,
       applies,
       outputs: {
-        OIDC_ISSUER_URL: "https://accounts.example/oidc/test",
-        OIDC_CLIENT_ID: "client_test",
-        OIDC_CLIENT_SECRET: "shh",
-        OIDC_REDIRECT_URIS: "/oidc/callback",
+        host: "db.local",
+        port: "5432",
+        database: "notes",
+        username: "notes",
+        passwordSecretRef: "secret://db-password",
+        connectionString: "postgres://notes:***@db.local:5432/notes",
       },
+      // Use the canonical postgres publish material shape (per the JSON-LD
+      // contract: host / port / database / username / passwordSecretRef /
+      // connectionString).
+      publishMaterial: (ctx: PublishMaterialContext) =>
+        Promise.resolve({
+          host: ctx.outputs.host,
+          port: ctx.outputs.port,
+          database: ctx.outputs.database,
+          username: ctx.outputs.username,
+          passwordSecretRef: ctx.outputs.passwordSecretRef,
+          connectionString: ctx.outputs.connectionString,
+        }),
     });
     const workerPlugin = buildRecordingPlugin({
       name: "@test/worker",
@@ -166,7 +179,7 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply", async (
       applies,
     });
     const pipeline = new InstallerPipeline({
-      plugins: [oidcPlugin, workerPlugin],
+      plugins: [dbPlugin, workerPlugin],
     });
     const app = buildApp(pipeline);
 
@@ -205,48 +218,105 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply", async (
     assertEquals(apply.deployment.status, "succeeded");
     assertEquals(apply.deployment.outputs.resources?.length, 2);
 
-    // Use-edge topology: oidc materializes before worker, and the worker
-    // sees the OIDC outputs on its upstreamOutputs map.
+    // Topology: db (publisher) → web (listener via auto-namespace).
     assertEquals(applies.length, 2);
-    assertEquals(applies[0].componentName, "oidc");
+    assertEquals(applies[0].componentName, "db");
     assertEquals(applies[1].componentName, "web");
-    assertEquals(
-      applies[1].upstreamOutputs.oidc?.OIDC_CLIENT_ID,
-      "client_test",
-    );
+    // The worker apply context surfaces the resolved db material at the
+    // auto-namespace path `example-notes.db`.
+    const dbMaterial = applies[1].listenedMaterials["example-notes.db"];
+    assert(dbMaterial, "worker should see db material on auto-namespace path");
+    assertEquals(dbMaterial.host, "db.local");
+    assertEquals(dbMaterial.port, "5432");
+    assertEquals(dbMaterial.database, "notes");
 
     // First-install lifecycle hook ordering: install hooks bracket
     // deployment hooks, deployment hooks bracket per-component applies.
     assertEquals(events, [
-      "onInstallStart:@test/oidc",
+      "onInstallStart:@test/postgres",
       "onInstallStart:@test/worker",
-      "onDeploymentStart:@test/oidc",
+      "onDeploymentStart:@test/postgres",
       "onDeploymentStart:@test/worker",
-      "apply:@test/oidc:oidc",
+      "apply:@test/postgres:db",
       "apply:@test/worker:web",
-      "onDeploymentComplete:@test/oidc",
+      "onDeploymentComplete:@test/postgres",
       "onDeploymentComplete:@test/worker",
-      "onInstallComplete:@test/oidc",
+      "onInstallComplete:@test/postgres",
       "onInstallComplete:@test/worker",
     ]);
   });
 });
 
-Deno.test("installer e2e — apply with mismatched expected returns 412", async () => {
+Deno.test("installer e2e — listener applyListen receives material with prefixed env", async () => {
   await withTempSource(async (workingDirectory) => {
     const events: string[] = [];
-    const applies: Array<{
-      readonly componentName: string;
-      readonly upstreamOutputs: Readonly<
-        Record<string, Readonly<Record<string, string>>>
-      >;
-      readonly installationId: string;
-    }> = [];
+    const applies: ApplyRecord[] = [];
+    const captured: ApplyListenContext[] = [];
+    const dbPlugin = buildRecordingPlugin({
+      name: "@test/postgres",
+      kindUri: "https://takosumi.com/kinds/v1/postgres",
+      events,
+      applies,
+      outputs: { host: "h", port: "5432" },
+    });
+    const workerPlugin = buildRecordingPlugin({
+      name: "@test/worker",
+      kindUri: "https://takosumi.com/kinds/v1/worker",
+      events,
+      applies,
+      applyListen: (ctx) => {
+        captured.push(ctx);
+        return Promise.resolve({
+          env: {
+            DB_HOST: ctx.material.host as string,
+            DB_PORT: ctx.material.port as string,
+          },
+        });
+      },
+    });
+    const pipeline = new InstallerPipeline({
+      plugins: [dbPlugin, workerPlugin],
+    });
+    const app = buildApp(pipeline);
+
+    const dryRun = await (await app.request("/v1/installations/dry-run", {
+      method: "POST",
+      headers: INSTALLER_AUTH_HEADERS,
+      body: JSON.stringify({
+        spaceId: "space_test",
+        source: { kind: "local", url: workingDirectory },
+      }),
+    })).json() as InstallationDryRunResponse;
+
+    const applyRes = await app.request("/v1/installations", {
+      method: "POST",
+      headers: INSTALLER_AUTH_HEADERS,
+      body: JSON.stringify({
+        spaceId: "space_test",
+        source: { kind: "local", url: workingDirectory },
+        expected: dryRun.expected,
+      }),
+    });
+    assertEquals(applyRes.status, 201);
+    // The listener plugin's applyListen hook saw exactly one edge for
+    // the auto-namespace path with the AppSpec listen options.
+    assertEquals(captured.length, 1);
+    assertEquals(captured[0].namespacePath, "example-notes.db");
+    assertEquals(captured[0].options.as, "env");
+    assertEquals(captured[0].options.prefix, "DB");
+    assertEquals(captured[0].material.host, "h");
+  });
+});
+
+Deno.test("installer e2e — apply with mismatched expected returns 409 (Phase A status flip)", async () => {
+  await withTempSource(async (workingDirectory) => {
+    const events: string[] = [];
+    const applies: ApplyRecord[] = [];
     const pipeline = new InstallerPipeline({
       plugins: [
         buildRecordingPlugin({
-          name: "@test/oidc",
-          kindUri: "https://takosumi.com/kinds/v1/oidc",
+          name: "@test/postgres",
+          kindUri: "https://takosumi.com/kinds/v1/postgres",
           events,
           applies,
         }),
@@ -269,60 +339,57 @@ Deno.test("installer e2e — apply with mismatched expected returns 412", async 
         expected: { commit: "", manifestDigest: "sha256:not-a-real-digest" },
       }),
     });
-    assertEquals(res.status, 412);
+    // Phase A docs flip: failed_precondition surfaces as 409 Conflict
+    // (the request's expected pin conflicts with the resolved source).
+    assertEquals(res.status, 409);
     const body = await res.json();
     assertEquals(body.error.code, "failed_precondition");
   });
 });
 
-Deno.test("installer e2e — bundled takosumiAccountsOidcProvider() materializes oidc end-to-end via public routes", async () => {
-  // Verifies that an operator-supplied bundled factory (here:
-  // `takosumiAccountsOidcProvider()`) integrates with the public 5-endpoint
-  // installer pipeline end-to-end, registers a client at the in-memory
-  // Takosumi Accounts client, and surfaces issuer / client_id / secret /
-  // redirect_uris as outputs to downstream `use:` edges.
+Deno.test("installer e2e — pub/sub cycle aborts apply with non-2xx error envelope", async () => {
+  // a publishes p1, b listens p1 and publishes p2, a listens p2 → cycle.
+  // The yaml-parser rejects this at parse time with validationPhase
+  // = publish-listen.
+  const cyclicSpec = `apiVersion: takosumi.dev/v1
+kind: App
+metadata:
+  id: cyclic-app
+  name: Cyclic App
+components:
+  a:
+    kind: worker
+    publish:
+      - com.example.p1
+    listen:
+      com.example.p2:
+        as: env
+        prefix: P2
+  b:
+    kind: worker
+    publish:
+      - com.example.p2
+    listen:
+      com.example.p1:
+        as: env
+        prefix: P1
+`;
   await withTempSource(async (workingDirectory) => {
-    const oidcClient = new InMemoryTakosumiAccountsOidcClient(
-      "https://accounts.example.test",
-    );
-    const applies: Array<{
-      readonly componentName: string;
-      readonly upstreamOutputs: Readonly<
-        Record<string, Readonly<Record<string, string>>>
-      >;
-      readonly installationId: string;
-    }> = [];
-    // Hand-rolled worker plugin so we don't need to satisfy
-    // cloudflare-workers' spec.artifact requirement in this test. The
-    // bundled oidc factory provides the OIDC outputs; the worker plugin
-    // verifies they flow through as upstreamOutputs.
-    const workerPlugin: KernelPlugin = {
-      name: "@test/worker",
-      version: "1.0.0",
-      provides: ["https://takosumi.com/kinds/v1/worker"],
-      apply: (ctx) => {
-        applies.push({
-          componentName: ctx.componentName,
-          upstreamOutputs: ctx.upstreamOutputs,
-          installationId: ctx.installationId,
-        });
-        return Promise.resolve({
-          providerResourceId:
-            `worker://${ctx.installationId}/${ctx.componentName}`,
-          outputs: {},
-        });
-      },
-      destroy: () => Promise.resolve(),
-    };
+    const events: string[] = [];
+    const applies: ApplyRecord[] = [];
     const pipeline = new InstallerPipeline({
       plugins: [
-        takosumiAccountsOidcProvider({ client: oidcClient }),
-        workerPlugin,
+        buildRecordingPlugin({
+          name: "@test/worker",
+          kindUri: "https://takosumi.com/kinds/v1/worker",
+          events,
+          applies,
+        }),
       ],
     });
     const app = buildApp(pipeline);
 
-    const dryRunRes = await app.request("/v1/installations/dry-run", {
+    const res = await app.request("/v1/installations", {
       method: "POST",
       headers: INSTALLER_AUTH_HEADERS,
       body: JSON.stringify({
@@ -330,8 +397,68 @@ Deno.test("installer e2e — bundled takosumiAccountsOidcProvider() materializes
         source: { kind: "local", url: workingDirectory },
       }),
     });
-    assertEquals(dryRunRes.status, 200);
-    const dryRun = await dryRunRes.json() as InstallationDryRunResponse;
+    // Parse-time cycle detection bubbles up via the route handler as a
+    // 4xx / 5xx error envelope with a typed error code.
+    assert(
+      res.status >= 400 && res.status < 600,
+      `expected error status, got ${res.status}`,
+    );
+    const body = await res.json();
+    assert(typeof body.error.code === "string");
+    // No applies ran — the parse rejected before topology computation.
+    assertEquals(applies.length, 0);
+  }, cyclicSpec);
+});
+
+Deno.test("installer e2e — auto-namespacing also exposes explicit publish paths", async () => {
+  // db publishes its material at both the auto path AND an explicit
+  // operator-defined path; worker listens on the explicit path.
+  const spec = `apiVersion: takosumi.dev/v1
+kind: App
+metadata:
+  id: explicit-pub
+  name: Explicit Pub
+components:
+  db:
+    kind: postgres
+    publish:
+      - operator.databases.primary
+  web:
+    kind: worker
+    listen:
+      operator.databases.primary:
+        as: env
+        prefix: DB
+`;
+  await withTempSource(async (workingDirectory) => {
+    const events: string[] = [];
+    const applies: ApplyRecord[] = [];
+    const dbPlugin = buildRecordingPlugin({
+      name: "@test/postgres",
+      kindUri: "https://takosumi.com/kinds/v1/postgres",
+      events,
+      applies,
+      outputs: { host: "db.local", port: "5432" },
+    });
+    const workerPlugin = buildRecordingPlugin({
+      name: "@test/worker",
+      kindUri: "https://takosumi.com/kinds/v1/worker",
+      events,
+      applies,
+    });
+    const pipeline = new InstallerPipeline({
+      plugins: [dbPlugin, workerPlugin],
+    });
+    const app = buildApp(pipeline);
+
+    const dryRun = await (await app.request("/v1/installations/dry-run", {
+      method: "POST",
+      headers: INSTALLER_AUTH_HEADERS,
+      body: JSON.stringify({
+        spaceId: "space_test",
+        source: { kind: "local", url: workingDirectory },
+      }),
+    })).json() as InstallationDryRunResponse;
 
     const applyRes = await app.request("/v1/installations", {
       method: "POST",
@@ -345,57 +472,29 @@ Deno.test("installer e2e — bundled takosumiAccountsOidcProvider() materializes
     assertEquals(applyRes.status, 201);
     const apply = await applyRes.json() as InstallationApplyResponse;
     assertEquals(apply.deployment.status, "succeeded");
-    assertEquals(apply.deployment.outputs.resources?.length, 2);
-    // Takosumi Accounts in-memory client registered exactly one client.
-    assertEquals(oidcClient.size(), 1);
-    // Worker saw the OIDC outputs as upstream env injection.
-    assertEquals(applies.length, 1);
-    assertEquals(applies[0].componentName, "web");
-    const oidcOutputs = applies[0].upstreamOutputs.oidc;
-    assert(oidcOutputs);
-    assertEquals(
-      oidcOutputs?.OIDC_CLIENT_ID,
-      `client_${apply.installation.id}`,
-    );
+    // Worker saw the db material via the explicit path it listens on.
+    const dbMaterial =
+      applies[1].listenedMaterials["operator.databases.primary"];
     assert(
-      oidcOutputs?.OIDC_ISSUER_URL?.startsWith(
-        "https://accounts.example.test/",
-      ),
+      dbMaterial,
+      "worker should see db material on the explicit publish path",
     );
-    assertEquals(oidcOutputs?.OIDC_REDIRECT_URIS, "/oidc/callback");
-  });
+    assertEquals(dbMaterial.host, "db.local");
+  }, spec);
 });
 
-Deno.test("installer e2e — bundled selfhostDockerComposeWorkerProvider() returns a KernelPlugin with the worker kind URI", () => {
-  // Minimal smoke for the bundled worker factory: verify shape without
-  // running it (an apply call requires spec.image / spec.artifact.uri).
-  const plugin = selfhostDockerComposeWorkerProvider();
-  assertEquals(plugin.provides, ["https://takosumi.com/kinds/v1/worker"]);
-  assertEquals(plugin.name, "@takos/selfhost-docker-compose");
-  assert(typeof plugin.apply === "function");
-  assert(typeof plugin.destroy === "function");
-});
-
-Deno.test("installer e2e — bundled cloudflareWorkerProvider() returns a KernelPlugin with the worker kind URI", () => {
-  const plugin = cloudflareWorkerProvider({ accountId: "test-account" });
-  assertEquals(plugin.provides, ["https://takosumi.com/kinds/v1/worker"]);
-  assertEquals(plugin.name, "@takos/cloudflare-workers");
-});
-
-Deno.test("AppSpec frozen kind catalog includes oidc", () => {
-  const expected = [
-    "worker",
-    "postgres",
-    "object-store",
-    "oidc",
-    "custom-domain",
-  ];
+Deno.test("AppSpec frozen kind catalog excludes oidc (moved to Takosumi Accounts)", () => {
+  const expected = ["worker", "postgres", "object-store", "custom-domain"];
   for (const kind of expected) {
     assert(
       (COMPONENT_KINDS as readonly string[]).includes(kind),
       `${kind} should be in COMPONENT_KINDS`,
     );
   }
+  assert(
+    !(COMPONENT_KINDS as readonly string[]).includes("oidc"),
+    "oidc should no longer be a built-in kernel kind",
+  );
 });
 
 function assertInstallation(
@@ -422,7 +521,7 @@ function assertDeployment(
   assert(
     deployment.outputs.resources?.every((resource) =>
       (COMPONENT_KINDS as readonly string[]).includes(resource.kind) ||
-      resource.kind === "worker" || resource.kind === "oidc"
+      resource.kind.startsWith("https://")
     ),
   );
   // Silence unused-import warning by referencing Component.
