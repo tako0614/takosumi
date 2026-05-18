@@ -26,19 +26,25 @@ metadata:
   name: Example Notes
 
 components:
+  db:
+    kind: postgres
+    spec:
+      version: "16"
+      size: small
+    publish:
+      - com.example.notes.db
+
   web:
     kind: worker
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    routes:
-      - /
-    use:
-      db:
-        env: DATABASE_URL
-
-  db:
-    kind: postgres
+    spec:
+      routes: ["/"]
+    listen:
+      com.example.notes.db:
+        as: env
+        prefix: DATABASE_
 ```
 
 これを `.takosumi.yml` として source root に置き、

@@ -121,29 +121,40 @@ components:
       - /api/*
 ```
 
-component 間の構造的依存は `use:` で書く。文字列 interpolation は使わない。
+component 間の構造的依存は **`publish` / `listen`** で書く。 文字列 interpolation
+は使わない。 producer 側が `publish: [<namespacePath>]` で material を namespace
+registry に登録し、 consumer 側が `listen: { <path>: { as, prefix? } }` で
+受け取る。
 
 ```yaml
 components:
+  db:
+    kind: postgres
+    publish:
+      - com.example.notes.db
+
+  assets:
+    kind: object-store
+    publish:
+      - com.example.notes.assets
+
   web:
     kind: worker
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    use:
-      db:
-        env: DATABASE_URL
-      assets:
-        envPrefix: ASSETS_
-  db:
-    kind: postgres
-  assets:
-    kind: object-store
+    listen:
+      com.example.notes.db:
+        as: env
+        prefix: DATABASE_
+      com.example.notes.assets:
+        as: env
+        prefix: ASSETS_
 ```
 
-`use:` が DAG edge になり、provider output は env / mount などの明示的な binding
-として渡される。 `${ref:...}` / `${secret-ref:...}` の placeholder 文法は
-current AppSpec には存在しない。
+`publish` / `listen` が DAG edge になり、 materializer output は env / mount /
+target などの明示的な binding として渡される。 旧 `use:` edge / `${ref:...}` /
+`${secret-ref:...}` の placeholder 文法は current AppSpec には存在しない。
 
 ---
 

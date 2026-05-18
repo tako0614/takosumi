@@ -102,22 +102,28 @@ components:
     kind: postgres
     spec:
       version: "16"
+    publish:
+      - com.example.my-app.db
   api:
     kind: worker
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    use:
-      db:
-        env: DATABASE_URL
-    routes:
-      - /api/*
+    spec:
+      routes: ["/api/*"]
+    listen:
+      com.example.my-app.db:
+        as: env
+        prefix: DATABASE_
+    publish:
+      - com.example.my-app.api
   api-domain:
     kind: custom-domain
-    use:
-      api:
-        target: url
-    name: api.example.com
+    spec:
+      name: api.example.com
+    listen:
+      com.example.my-app.api:
+        as: target
 ```
 
 Operator side (on the VM):
