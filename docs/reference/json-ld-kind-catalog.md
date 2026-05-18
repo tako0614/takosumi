@@ -69,8 +69,9 @@ identifier として** だけ扱います。
    [`spec/contexts/kinds/v1/worker.jsonld`](https://github.com/takos/takosumi/blob/main/spec/contexts/kinds/v1/worker.jsonld)
    を参考に)。
 2. **plugin で attach** — `packages/plugins/src/kinds/<your-kind>.ts` 相当の
-   実装を持つ Deno module を JSR (または npm) に publish し、 operator の
-   `factories.ts` から登録します (= 既存 plugin host の機構)。
+   実装を持つ Deno module を JSR (または npm) に publish し、 operator は
+   `createPaaSApp({ plugins: [yourKindPlugin(opts), ...] })` で plain array に
+   渡します (= Vite plugin pattern)。
 3. **AppSpec で参照** — App author は `.takosumi.yml` で
    `kind: https://operator.example.com/kinds/lambda` のように full URI を直接
    書けば、 kernel は parser 段階で「URI 形式の kind 名」を accept します。
