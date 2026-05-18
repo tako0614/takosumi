@@ -7,7 +7,7 @@ import {
   type CloudflareDnsLifecycleClient,
   createCloudflareDnsProvider,
   InMemoryCloudflareDnsLifecycle,
-} from "../shape-providers/custom-domain/cloudflare-dns.ts";
+} from "@takos/takosumi-plugins/shape-providers/custom-domain/cloudflare-dns";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_CUSTOM_DOMAIN } from "./_kinds.ts";
 

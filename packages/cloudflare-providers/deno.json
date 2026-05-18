@@ -1,0 +1,21 @@
+{
+  "name": "@takos/takosumi-cloudflare-providers",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts",
+    "./worker": "./src/worker-cloudflare.ts",
+    "./object-store": "./src/object-store-cloudflare-r2.ts",
+    "./custom-domain": "./src/custom-domain-cloudflare.ts"
+  },
+  "imports": {
+    "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
+    "@takos/takosumi-plugins/shape-providers/worker/cloudflare-workers": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/worker/cloudflare-workers",
+    "@takos/takosumi-plugins/shape-providers/object-store/cloudflare-r2": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/object-store/cloudflare-r2",
+    "@takos/takosumi-plugins/shape-providers/custom-domain/cloudflare-dns": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/custom-domain/cloudflare-dns"
+  },
+  "tasks": {
+    "check": "bash -lc 'find . -name \"*.ts\" ! -name \"*_test.ts\" -print0 | xargs -0 deno check'",
+    "test": "deno test --allow-all"
+  }
+}

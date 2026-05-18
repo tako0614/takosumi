@@ -7,7 +7,7 @@ import {
   type CloudflareR2BucketLifecycleClient,
   createCloudflareR2ObjectStoreProvider,
   InMemoryCloudflareR2Lifecycle,
-} from "../shape-providers/object-store/cloudflare-r2.ts";
+} from "@takos/takosumi-plugins/shape-providers/object-store/cloudflare-r2";
 import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
 import { KIND_URI_OBJECT_STORE } from "./_kinds.ts";
 
