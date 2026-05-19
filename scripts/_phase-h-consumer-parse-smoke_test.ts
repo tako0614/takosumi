@@ -7,13 +7,6 @@
  * This locks in the "Phase F flip" outcome: every consumer app is on the
  * namespace pub/sub AppSpec form (= no legacy `use:` / placeholder /
  * intermediate manifest fields).
- *
- * Wave K-A (2026-05-20) status: the takosumi/ parser dropped the
- * `kind: App` root field. The 6 consumer manifests still carry it and
- * are migrated under Wave K-B (= ecosystem-side wave outside the
- * takosumi/ submodule). Gating this assertion with `ignore: true` until
- * K-B re-enables it; the helper itself is still callable for manual
- * `deno run --allow-read scripts/_phase-h-consumer-parse-smoke.ts` runs.
  */
 
 import { assert, assertEquals } from "jsr:@std/assert@^1.0.6";
@@ -22,24 +15,20 @@ import {
   parseConsumerAppSpecs,
 } from "./_phase-h-consumer-parse-smoke.ts";
 
-Deno.test({
-  name: "phase-h: all 6 consumer .takosumi.yml manifests parse",
-  ignore: true, // Wave K-A: gated until K-B migrates consumer manifests.
-  fn: async () => {
-    const rows = await parseConsumerAppSpecs();
-    assertEquals(rows.length, CONSUMER_APP_SPEC_PATHS.length);
-    for (const row of rows) {
-      assert(row.ok, `expected ${row.path} to parse, got: ${row.error}`);
-      assert(
-        row.id && row.id.length > 0,
-        `expected ${row.path} to expose metadata.id`,
-      );
-      assert(
-        row.components.length > 0,
-        `expected ${row.path} (${row.id}) to declare at least one component`,
-      );
-    }
-  },
+Deno.test("phase-h: all 6 consumer .takosumi.yml manifests parse", async () => {
+  const rows = await parseConsumerAppSpecs();
+  assertEquals(rows.length, CONSUMER_APP_SPEC_PATHS.length);
+  for (const row of rows) {
+    assert(row.ok, `expected ${row.path} to parse, got: ${row.error}`);
+    assert(
+      row.id && row.id.length > 0,
+      `expected ${row.path} to expose metadata.id`,
+    );
+    assert(
+      row.components.length > 0,
+      `expected ${row.path} (${row.id}) to declare at least one component`,
+    );
+  }
 });
 
 Deno.test("phase-h: consumer manifest set covers expected 6 ecosystem apps", () => {
