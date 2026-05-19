@@ -107,12 +107,13 @@ AppSpec の各 component は 2 つの edge だけを持つ:
 - **Takos 中立**: takos-git / Takos 固有 service ID への直接依存は kernel core
   から完全に除去済み。
 - **Component kind catalog は extensible**: 新 kind は JSON-LD で URI publish +
-  materializer 実装 で成立する (`CONVENTIONS.md` §6)。 catalog は 4 frozen kind
-  ではなく、 任意 operator が任意 domain で新 kind を発行できる。 各 kind の
-  JSON-LD document が **spec / publishes / listens / outputs を一体宣言** する。
-  Takosumi curated 4 kind の正本 URI は `https://takosumi.com/kinds/v1/<name>`
-  (= `worker` / `postgres` / `object-store` / `custom-domain`)。 `oidc` kind は
-  takosumi-cloud に移動し、 本 repo には JSON-LD も materializer も無い。
+  materializer 実装 で成立する (`CONVENTIONS.md` §6)。 catalog は **curated 4
+  kind (= `worker` / `postgres` / `object-store` / `custom-domain`) +
+  operator-defined extensible** で、 任意 operator が任意 domain で新 kind を
+  発行できる。 各 kind の JSON-LD document が **spec / publishes / listens /
+  outputs を一体宣言** する。 Takosumi curated 4 kind の正本 URI は
+  `https://takosumi.com/kinds/v1/<name>`。 `oidc` kind は takosumi-cloud に移動
+  し、 本 repo には JSON-LD も materializer も無い。
 - **Materializer = KernelPlugin | InlineMaterializer**: kind 実装は 2 形態を
   受理する。 (1) `KernelPlugin` factory を返す plain array (= Vite plugin
   pattern, cloud provider package が提供する形式) と (2)
