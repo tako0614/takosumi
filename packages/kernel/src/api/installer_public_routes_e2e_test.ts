@@ -36,7 +36,6 @@ import { mountInstallerPublicRoutes } from "./installer_public_routes.ts";
 // `as: env, prefix: DB` so the kernel default expansion produces
 // DB_HOST / DB_PORT / ... env injections on the worker.
 const SAMPLE_APP_SPEC_YAML = `apiVersion: takosumi.dev/v1
-kind: App
 metadata:
   id: example-notes
   name: Example Notes
@@ -352,7 +351,6 @@ Deno.test("installer e2e — pub/sub cycle aborts apply with non-2xx error envel
   // The yaml-parser rejects this at parse time with validationPhase
   // = publish-listen.
   const cyclicSpec = `apiVersion: takosumi.dev/v1
-kind: App
 metadata:
   id: cyclic-app
   name: Cyclic App
@@ -414,7 +412,6 @@ Deno.test("installer e2e — auto-namespacing also exposes explicit publish path
   // db publishes its material at both the auto path AND an explicit
   // operator-defined path; worker listens on the explicit path.
   const spec = `apiVersion: takosumi.dev/v1
-kind: App
 metadata:
   id: explicit-pub
   name: Explicit Pub

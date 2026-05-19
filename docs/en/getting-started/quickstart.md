@@ -41,7 +41,6 @@ Deployment.
 
 ```yaml
 apiVersion: takosumi.dev/v1
-kind: App
 metadata:
   id: com.example.hello-worker
   name: hello-worker

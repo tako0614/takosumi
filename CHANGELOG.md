@@ -8,6 +8,44 @@ Versions follow [Semantic Versioning](https://semver.org/) once each package
 crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes (documented per
 entry).
 
+## Spec策定中 — Wave K AppSpec root envelope minimization (2026-05-20, Unreleased)
+
+Wave K (= K-A 段) で AppSpec root envelope を更に minimize した (Wave J
+Component contract minimization 2026-05-19 の延長、 user mandate: 「kind: App は
+k8s vestige、 root kind が 1 値しかなく apiVersion で schema 判別に十分、
+削除」)。 完全 kind-agnostic は Wave J で達成済、 本 wave は root envelope の
+minimization。
+
+- **Breaking — AppSpec root `kind: App` field 削除**: top-level AppSpec field
+  から物理削除。 `apiVersion: takosumi.dev/v1` 単独で schema を discriminate
+  する。 内部 Component の `kind:` field (= materializer 解決の discriminator)
+  は当然 keep。 AppSpec root は `{ apiVersion, metadata, components }` の 3
+  field に minimize された。
+- **Contract**: `@takos/takosumi-contract` の `AppSpec` interface から
+  `kind: typeof APP_SPEC_KIND` を削除、 `APP_SPEC_KIND` const も削除。
+- **Parser**: `@takos/takosumi-installer` の `yaml-parser.ts` で `ROOT_KEYS`
+  から `kind` を削除、 既存の `apiVersion` check の後の `kind` check を削除。
+  root に `kind:` を含む YAML は `unknown-key` reject (=
+  `validationPhase:
+  "schema"`, `validationPath: "$.kind"`) になる (= Phase B
+  legacy-use と同形 pattern)。
+- **Migration**: 旧 `kind: App` を含む `.takosumi.yml` は parser で reject
+  される。 consumer は `kind: App` 行を削除 (= `apiVersion: takosumi.dev/v1`
+  直下に `metadata:` を接続) で migration 完了。 6 consumer apps (yurucommu /
+  takos-apps/{docs,slide,excel,computer} / road-to-me) の `.takosumi.yml`
+  migration は K-B 段で実施 (= 本 wave は takosumi/ 内部 scope のみ)。
+- **Test coverage**: parser に新 regression test 2 件追加: (1) root に `kind:`
+  を含む入力を unknown-key reject、 (2) root に `kind:` を含まない最小 AppSpec
+  (`apiVersion + metadata + components`) を accept。 既存 parser / kernel /
+  acceptance / e2e fixture から `kind: App` 行を sweep 済。
+- **CLI scaffold**: `takosumi init` の `worker-postgres` / `empty` template が
+  新 envelope を emit。
+- **Docs**: `docs/reference/app-spec.md` 等の AppSpec envelope narrative を 「3
+  field (`apiVersion + metadata + components`)」 wording に更新、 YAML example
+  から `kind: App` 行を全 sweep。
+- **No version bump yet**: 策定中 phase のため deno.json の version は固定。
+  Wave K announcement 時に collective minor bump を実施予定。
+
 ## Spec策定中 — Wave J Component contract minimization (2026-05-19, Unreleased)
 
 Wave J で AppSpec contract surface を完全 kind-agnostic に minimize した

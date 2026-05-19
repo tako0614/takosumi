@@ -24,7 +24,6 @@ AppSpec を読み、 Installation を作り、 apply ごとに Deployment を記
 
 ```yaml
 apiVersion: takosumi.dev/v1
-kind: App
 metadata:
   id: com.example.hello-worker
   name: hello-worker

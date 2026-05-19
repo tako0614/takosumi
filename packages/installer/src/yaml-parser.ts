@@ -14,7 +14,6 @@
 import { parse as parseYaml } from "jsr:@std/yaml@^1.0.5";
 import {
   APP_SPEC_API_VERSION,
-  APP_SPEC_KIND,
   type AppSpec,
   type Component,
   COMPONENT_KINDS,
@@ -27,7 +26,6 @@ import {
 
 const ROOT_KEYS = new Set([
   "apiVersion",
-  "kind",
   "metadata",
   "components",
 ]);
@@ -127,21 +125,12 @@ function validateAppSpec(raw: unknown): AppSpec {
     );
   }
 
-  if (root.kind !== APP_SPEC_KIND) {
-    throw new AppSpecParseError(
-      `kind must be "${APP_SPEC_KIND}", got ${JSON.stringify(root.kind)}`,
-      "schema",
-      "$.kind",
-    );
-  }
-
   const metadata = validateMetadata(root.metadata);
   const components = validateComponents(root.components);
   validatePublishListenGraph(components);
 
   return {
     apiVersion: APP_SPEC_API_VERSION,
-    kind: APP_SPEC_KIND,
     metadata,
     components,
   };

@@ -29,7 +29,7 @@ kernel が serve する request は、 AppSpec を起点にした Installation l
 - **Deployment** — 1 回の apply 結果
 - **(internal) Resource** — apply された component の runtime state
 
-Public contract は AppSpec (`apiVersion: takosumi.dev/v1` + `kind: App` +
+Public contract は AppSpec (`apiVersion: takosumi.dev/v1` + `metadata` +
 `components[]`) と Installer API (5 endpoint) のみ。
 
 ## Consumer application と kernel の境界

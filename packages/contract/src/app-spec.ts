@@ -19,7 +19,6 @@
 import type { JsonObject } from "./types.ts";
 
 export const APP_SPEC_API_VERSION = "takosumi.dev/v1" as const;
-export const APP_SPEC_KIND = "App" as const;
 
 /**
  * The 4 built-in component kinds. `oidc` moved to Takosumi Accounts and is
@@ -110,7 +109,6 @@ export function isKindUri(value: string): boolean {
 
 export interface AppSpec {
   readonly apiVersion: typeof APP_SPEC_API_VERSION;
-  readonly kind: typeof APP_SPEC_KIND;
   readonly metadata: AppSpecMetadata;
   readonly components: Readonly<Record<string, Component>>;
 }

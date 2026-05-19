@@ -28,7 +28,6 @@ Takosumi の public concept は次の 3 つだけです。
 
 ```yaml
 apiVersion: takosumi.dev/v1
-kind: App
 
 metadata:
   id: com.example.notes
@@ -40,22 +39,26 @@ components:
 # ...
 ```
 
-> Wave J Component contract minimization 後の AppSpec root は `apiVersion` /
-> `kind` / `metadata` / `components` の 4 field のみ。 旧 top-level
-> `interfaces:` / `permissions:` block は物理削除済で、 launch / health /
-> capability-request 等の semantics は kind の open `spec:` field (または別 kind
-> の namespace pub/sub) を materializer が読む形で表現する (= 底は自由)。
+> Wave K AppSpec root envelope minimization 後の AppSpec root は `apiVersion` /
+> `metadata` / `components` の 3 field のみ。 `apiVersion: takosumi.dev/v1` 単独
+> で schema を discriminate するため、 旧 `kind: App` root field は物理削除済 (=
+> 入力に `kind:` を root に含む YAML は unknown-key reject)。 内部 Component の
+> `kind:` field (= materializer 解決の discriminator) は当然 keep。 Wave J で
+> 削除済の top-level `interfaces:` / `permissions:` も引き続き reject。 launch /
+> health / capability-request 等の semantics は kind の open `spec:` field
+> (または 別 kind の namespace pub/sub) を materializer が読む形で表現する (=
+> 底は自由)。
 
 | field        | required | 型     | 説明                                 |
 | ------------ | -------- | ------ | ------------------------------------ |
 | `apiVersion` | yes      | string | 固定値 `"takosumi.dev/v1"`           |
-| `kind`       | yes      | string | 固定値 `"App"`                       |
 | `metadata`   | yes      | object | App 識別子と display 用情報          |
 | `components` | yes      | object | コンポーネント定義 (= runtime parts) |
 
-unknown top-level field は reject。 `apiVersion` / `kind` は文字列で厳密一致。
-旧 `interfaces:` / `permissions:` block は Wave J で削除済 (= top-level field
-として宣言できない)。
+unknown top-level field は reject (= root に `kind:` を含む入力は Wave K 以降
+unknown-key として reject されます)。 `apiVersion` は文字列で厳密一致。 旧
+`interfaces:` / `permissions:` block は Wave J で、 旧 `kind: App` root field は
+Wave K で削除済 (= いずれも top-level field として宣言できない)。
 
 ## `metadata`
 

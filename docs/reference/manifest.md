@@ -343,7 +343,6 @@ public AppSpec は `space` / `tenant` / `org` / credential / namespace registry
 
 ```yaml
 apiVersion: takosumi.dev/v1
-kind: App
 metadata:
   id: com.example.notes
   name: Example Notes

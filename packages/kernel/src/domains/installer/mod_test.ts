@@ -30,7 +30,6 @@ import {
 // on the same path with `as: env` + `prefix: DB` so the kernel auto-
 // resolves env injections like `DB_HOST`, `DB_PORT`, ...
 const SAMPLE_YAML = `apiVersion: takosumi.dev/v1
-kind: App
 metadata:
   id: lifecycle-test
   name: Lifecycle Test

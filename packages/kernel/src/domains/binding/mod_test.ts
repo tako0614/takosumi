@@ -10,11 +10,7 @@
  */
 
 import assert from "node:assert/strict";
-import {
-  APP_SPEC_API_VERSION,
-  APP_SPEC_KIND,
-  type AppSpec,
-} from "takosumi-contract/app-spec";
+import { APP_SPEC_API_VERSION, type AppSpec } from "takosumi-contract/app-spec";
 import type {
   ApplyListenContext,
   EnvInjection,
@@ -115,7 +111,6 @@ Deno.test("BindingResolver.resolveAppSpec emits one binding per listen edge", as
   const resolver = new BindingResolver();
   const appSpec: AppSpec = {
     apiVersion: APP_SPEC_API_VERSION,
-    kind: APP_SPEC_KIND,
     metadata: { id: "demo", name: "Demo" },
     components: {
       db: { kind: "postgres" },
@@ -149,7 +144,6 @@ Deno.test("BindingResolver.resolveAppSpec silently skips listens to unknown path
   const resolver = new BindingResolver();
   const appSpec: AppSpec = {
     apiVersion: APP_SPEC_API_VERSION,
-    kind: APP_SPEC_KIND,
     metadata: { id: "demo", name: "Demo" },
     components: {
       web: {

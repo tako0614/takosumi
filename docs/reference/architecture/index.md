@@ -25,22 +25,23 @@ AppSpec + Space context
 
 ## Public v1 AppSpec の語彙 {#public-v1-appspec-words}
 
-public AppSpec の top-level 語彙は次の 4 field のみである。
+public AppSpec の top-level 語彙は次の 3 field のみである (= Wave K AppSpec root
+envelope minimization 後)。
 
 ```text
 apiVersion
-kind
 metadata
 components
 ```
 
 AppSpec は closed vocabulary である。未知の top-level field は validation で
-失敗する。Public v1 の deploy intent は component kind からなる `components`
-graph として表現される。component 内部の `kind` / `spec` / `publish` / `listen`
-/ `build` の 5 field が component contract を形作り、provider id、artifact
-reference、binding、route、custom domain は kind の open `spec:` 内 / 別 kind の
-namespace pub/sub / materializer convention のいずれかで解決される。任意の
-descriptor URL は public AppSpec の入力ではない。
+失敗する (= Wave K 以降、 旧 `kind: App` root field を含む入力も unknown-key
+として reject される)。Public v1 の deploy intent は component kind からなる
+`components` graph として表現される。component 内部の `kind` / `spec` /
+`publish` / `listen` / `build` の 5 field が component contract を形作り、
+provider id、artifact reference、binding、route、custom domain は kind の open
+`spec:` 内 / 別 kind の namespace pub/sub / materializer convention のいずれかで
+解決される。任意の descriptor URL は public AppSpec の入力ではない。
 
 `Space` は AppSpec field ではない。actor auth、API route、operator context、
 または client profile から供給される。同じ AppSpec を異なる Space で適用すると、
@@ -119,7 +120,6 @@ policy、secret、journal、observation、activation は、明示的な Space ex
 
 ```yaml
 apiVersion: takosumi.dev/v1
-kind: App
 
 metadata:
   id: com.example.api

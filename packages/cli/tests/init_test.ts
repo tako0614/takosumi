@@ -5,8 +5,10 @@ Deno.test("init command prints an AppSpec scaffold by default", async () => {
   const output = await captureStdout(() => initCommand.parse([]));
 
   assert.match(output, /apiVersion: takosumi\.dev\/v1/);
-  assert.match(output, /kind: App/);
   assert.match(output, /components:/);
+  // Wave K: AppSpec root no longer carries `kind: App` — the scaffold
+  // must not regress and re-introduce it.
+  assert.equal(/^kind: App$/m.test(output), false);
   assert.equal(output.includes("kind: Manifest"), false);
   assert.equal(output.includes("${ref:"), false);
 });
@@ -18,8 +20,9 @@ Deno.test("init command writes the empty AppSpec template", async () => {
 
     const text = await Deno.readTextFile(tmp);
     assert.match(text, /apiVersion: takosumi\.dev\/v1/);
-    assert.match(text, /kind: App/);
     assert.match(text, /components: \{\}/);
+    // Wave K: AppSpec root no longer carries `kind: App`.
+    assert.equal(/^kind: App$/m.test(text), false);
     assert.equal(text.includes("kind: Manifest"), false);
   } finally {
     await Deno.remove(tmp);

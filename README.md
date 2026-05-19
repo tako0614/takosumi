@@ -27,7 +27,6 @@ takosumi install --source git:https://github.com/example/notes#main \
 
 ```yaml
 apiVersion: takosumi.dev/v1
-kind: App
 metadata:
   id: com.example.notes
   name: Example Notes

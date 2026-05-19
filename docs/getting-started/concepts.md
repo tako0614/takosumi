@@ -111,7 +111,6 @@ current public manifest は `.takosumi.yml` (= AppSpec):
 
 ```yaml
 apiVersion: takosumi.dev/v1
-kind: App
 metadata:
   id: com.example.my-app
   name: my-app

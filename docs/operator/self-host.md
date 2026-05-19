@@ -36,7 +36,6 @@ VM 1 台に systemd / docker / filesystem / local Postgres / coredns
 
 ```yaml
 apiVersion: takosumi.dev/v1
-kind: App
 metadata:
   id: com.example.my-app
   name: my-app

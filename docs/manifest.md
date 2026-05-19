@@ -20,7 +20,6 @@ source root に置くだけで install + deploy + rollback まで動きます。
 
 ```yaml
 apiVersion: takosumi.dev/v1
-kind: App
 
 metadata:
   id: com.example.notes
