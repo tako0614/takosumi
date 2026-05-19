@@ -13,10 +13,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Manifest",
       items: [
         { text: "Manifest (Shape Model)", link: "/manifest" },
-        {
-          text: "Manifest Reference",
-          link: "/reference/manifest",
-        },
       ],
     },
     {
@@ -37,16 +33,56 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           link: "/reference/architecture/tenant-runtime",
         },
         {
-          text: "API Surface",
-          link: "/reference/architecture/api-surface-architecture",
+          text: "Runtime Deployment",
+          link: "/reference/architecture/runtime-deployment-model",
+        },
+        {
+          text: "Space Model",
+          link: "/reference/architecture/space-model",
+        },
+        {
+          text: "Catalog Release and Descriptor Model",
+          link: "/reference/architecture/catalog-release-descriptor-model",
+        },
+        {
+          text: "Snapshot Model",
+          link: "/reference/architecture/snapshot-model",
+        },
+        {
+          text: "Object Model",
+          link: "/reference/architecture/object-model",
+        },
+        {
+          text: "Namespace Export Model",
+          link: "/reference/architecture/namespace-export-model",
+        },
+        {
+          text: "Link and Projection Model",
+          link: "/reference/architecture/link-projection-model",
+        },
+        {
+          text: "Policy, Risk, Approval, and Error Model",
+          link: "/reference/architecture/policy-risk-approval-error-model",
+        },
+        {
+          text: "Target Model",
+          link: "/reference/architecture/target-model",
+        },
+        {
+          text: "Implementation and Runtime-Agent Boundary",
+          link: "/reference/architecture/implementation-operation-envelope",
         },
         {
           text: "Execution Lifecycle",
           link: "/reference/architecture/execution-lifecycle",
         },
         {
-          text: "Runtime Deployment",
-          link: "/reference/architecture/runtime-deployment-model",
+          text: "API Surface",
+          link: "/reference/architecture/api-surface-architecture",
+        },
+        {
+          text: "CLI Surface Architecture",
+          link: "/reference/architecture/cli-companion-architecture-note",
         },
         {
           text: "Operator Boundaries",
@@ -55,6 +91,22 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         {
           text: "Provider Architecture",
           link: "/reference/architecture/paas-provider-architecture",
+        },
+        {
+          text: "Identity and Access Architecture",
+          link: "/reference/architecture/identity-and-access-architecture",
+        },
+        {
+          text: "Tenant Lifecycle Architecture",
+          link: "/reference/architecture/tenant-lifecycle-architecture",
+        },
+        {
+          text: "PaaS Operations Architecture",
+          link: "/reference/architecture/paas-operations-architecture",
+        },
+        {
+          text: "Workflow Extension Design",
+          link: "/reference/architecture/workflow-extension-design",
         },
         {
           text: "Operational Hardening",
@@ -133,11 +185,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Reference / Identity & Access",
       items: [
-        {
-          text: "Actor / Organization Model",
-          link:
-            "/reference/architecture/identity-and-access-architecture#actor--organization-model",
-        },
         { text: "RBAC Policy", link: "/reference/rbac-policy" },
         { text: "API Key Management", link: "/reference/api-key-management" },
         { text: "Auth Providers", link: "/reference/auth-providers" },
