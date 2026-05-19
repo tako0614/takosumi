@@ -1,4 +1,4 @@
-# Runtime-Agent API
+# Runtime-Agent API {#runtime-agent-api}
 
 > このページでわかること: runtime-agent process が公開する HTTP RPC v1 仕様。
 
@@ -10,7 +10,7 @@ runtime-agent は operator が cloud / OS credential を握る host で起動し
 [Kernel HTTP API — Runtime-Agent control RPC](./kernel-http-api.md#runtime-agent-control-rpc)
 参照。
 
-## Authentication
+## 認証 {#authentication}
 
 | Credential   | Env var                | 適用範囲                            | 認証方式                        |
 | ------------ | ---------------------- | ----------------------------------- | ------------------------------- |
@@ -27,7 +27,7 @@ artifact bytes 取得が必要な connector には、 kernel が
 scope は `GET /v1/artifacts/:hash` のみ
 ([Authentication](./kernel-http-api.md#authentication))。
 
-## Endpoints
+## エンドポイント {#endpoints}
 
 | Method | Path                       | Auth        | Purpose                                                           |
 | ------ | -------------------------- | ----------- | ----------------------------------------------------------------- |
@@ -205,7 +205,7 @@ interface LifecycleVerifyResult {
 
 `results[]` は順序保証なし。 caller は `(kind, provider)` で集計します。
 
-## Connector retry / credential refresh
+## Connector retry / credential refresh {#connector-retry--credential-refresh}
 
 `buildConnectorRegistry()` は connector の lifecycle operation を共通の
 resilience wrapper で包みます。 retry 対象は次のみ:
@@ -225,7 +225,7 @@ credential refresh は opt-in。
 を再試行します。 refresh 未設定なら credential error は通常の connector failure
 として返ります。
 
-## Lifecycle status state machine
+## Lifecycle status の状態機械 {#lifecycle-status-state-machine}
 
 `LifecycleStatus` は v1 で 5 値の closed enum です。
 
@@ -270,7 +270,7 @@ apply ─────────────► running
   reachability の health probe に専念し、 結果は
   `LifecycleVerifyResponse.results[].ok` に集約します。
 
-## Error envelope
+## エラー envelope {#error-envelope}
 
 すべての failure は `LifecycleErrorBody` を 4xx / 5xx で返します。
 
@@ -300,7 +300,7 @@ interface LifecycleErrorBody {
 フラグ。 kernel は WAL の `pre-commit` / `commit` stage で再試行可否をこれで
 分岐します。
 
-## Cross-references
+## クロスリファレンス {#cross-references}
 
 - [Lifecycle Phases](./lifecycle-phases.md) — phase ごとの input / output
   snapshot 対応と `LifecycleStatus` 5 値の trigger 別 遷移。runtime-agent

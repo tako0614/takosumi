@@ -1,11 +1,11 @@
-# Operator Boundaries
+# オペレーター境界 {#operator-boundaries}
 
 > このページでわかること: operator の責務境界と kernel との接点。
 
 operator は採用した semantic world / implementation world / credential / Space
 構成 / 本番安全境界を制御する。
 
-## Operator-controlled areas
+## オペレーターが制御する領域 {#operator-controlled-areas}
 
 ```text
 Space creation, deletion, and membership
@@ -25,7 +25,7 @@ Audit and observability
 Production coordination
 ```
 
-## Space administration
+## Space 管理 {#space-administration}
 
 Space は operator が統治する isolation 境界である。operator は次を定義する。
 
@@ -41,19 +41,19 @@ which groups exist or may be created
 
 manifest は Space を作成・設定しない。
 
-## Public manifest does not install implementation code
+## Public manifest は implementation コードをインストールしない {#public-manifest-does-not-install-implementation-code}
 
 manifest はアクティブな Space で見える catalog alias と namespace path を参照
 する。implementation package を install することはない。
 
-## Credential boundary
+## Credential 境界 {#credential-boundary}
 
 core canonical state は reference と handle を保存し、raw secret
 値は保存しない。 外部 I/O と credential は implementation / connector / runtime
 境界の内側に 留まる。secret partition は operator policy で明示共有しない限り
 Space scope で ある。
 
-## Connector boundary
+## Connector 境界 {#connector-boundary}
 
 connector は operator がインストールし、operator が管理する。
 [Data Asset Model — Connector contract](./namespace-export-model.md#connector-contract)
@@ -61,19 +61,19 @@ connector は operator がインストールし、operator が管理する。
 を命名 することはない。connector の可視性、acceptedKinds、signing expectation は
 operator 統治で Space scope である。
 
-## Production mode
+## 本番モード {#production-mode}
 
 本番では、必要な operator port、信頼 implementation、Space policy、Space catalog
 割当てが欠けた場合 fail-closed しなければならない。本番で dev fallback
 を黙って受け入れてはならない。
 
-## Catalog release activation
+## Catalog release の activation {#catalog-release-activation}
 
 CatalogRelease の activation は直列化された operator operation である。Space
 への CatalogRelease 割当ても直列化される。deployment は自身の Space に許可
 された release id に対して resolve する。
 
-## Space export sharing
+## Space export の共有 {#space-export-sharing}
 
 Space を跨ぐ export sharing は予約語彙で、current v1 のデフォルトではない。
 source Space、destination Space、export path、export snapshot id、allowed

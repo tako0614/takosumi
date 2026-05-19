@@ -1,4 +1,4 @@
-# Public Spec Source Map
+# Public Spec ソースマップ {#public-spec-source-map}
 
 > このページでわかること: public surface ごとの source of truth / 公開 reference
 > / drift check の対応表。
@@ -6,7 +6,7 @@
 public shape が変わったら、 所有 source と下記行を同じ変更で更新します。 wire /
 package surface ではドキュメントのみの更新では不十分です。
 
-## Map
+## マップ {#map}
 
 | Spec key                | Public surface                                                                                 | Owner                       | Source of truth                                                                                                                                                                                                                                                                                                            | Published reference                                                                                                                                                                                                                                  | Drift check                                                                                                                                                                                                |
 | ----------------------- | ---------------------------------------------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -16,7 +16,7 @@ package surface ではドキュメントのみの更新では不十分です。
 | `installer-api-v1`      | Installer 5 endpoint API: Installation dry-run/apply, Deployment dry-run/apply, rollback       | takosumi kernel + installer | `packages/kernel/src/api/installer_public_routes.ts` (`INSTALLER_INSTALLATIONS_PATH`); `packages/kernel/src/api/openapi.ts` (`dryRunInstallation`); `packages/contract/src/installer-api.ts`; `packages/kernel/src/domains/installer/mod.ts`; `packages/installer/src/yaml-parser.ts`                                      | `https://docs.takosumi.com/reference/kernel-http-api`; `https://docs.takosumi.com/reference/installer-api`; `https://jsr.io/@takos/takosumi-contract`                                                                                                | `scripts/public-spec-source-map_test.ts`; `packages/kernel/src/api/installer_public_routes_test.ts`; `packages/kernel/src/api/installer_public_routes_e2e_test.ts`                                         |
 | `takosumi-jsr-packages` | JSR package exports and dependency pins                                                        | takosumi package owners     | `packages/*/deno.json`; package entrypoints under `packages/*/src/` or `packages/all/*.ts`                                                                                                                                                                                                                                 | `https://jsr.io/@takos/takosumi`; `https://jsr.io/@takos/takosumi-kernel`; `https://jsr.io/@takos/takosumi-plugins`; `https://jsr.io/@takos/takosumi-cli`; `https://jsr.io/@takos/takosumi-runtime-agent`; `https://jsr.io/@takos/takosumi-contract` | `deno task publish:dry-run`; `scripts/jsr-publish-dry-run_test.ts`                                                                                                                                         |
 
-## Boundary Rules
+## 境界ルール {#boundary-rules}
 
 - kernel は manifest を明示的 path または HTTP body でのみ受け取り、
   `.takosumi/` を discover せず、 workflow file を読まず、 build を実行せず、

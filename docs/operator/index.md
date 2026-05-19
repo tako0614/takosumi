@@ -1,4 +1,4 @@
-# Operator
+# オペレーター {#operator}
 
 > このページでわかること: Takosumi を operator として self-host する際の主要
 > docs index。
@@ -8,7 +8,7 @@ Takosumi は self-hostable な PaaS であり、 operator は kernel + runtime-a
 を維持する責務を持つ。 ここでは operator が辿るべき順序で 3 leaf page と関連
 reference をまとめる。
 
-## Operator leaf pages
+## オペレーター向け leaf ページ {#operator-leaf-pages}
 
 | ページ                                 | このページでわかること                                                                                 |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------ |

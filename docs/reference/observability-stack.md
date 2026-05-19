@@ -1,4 +1,4 @@
-# Observability Stack Ownership
+# Observability スタックの所有 {#observability-stack-ownership}
 
 > このページでわかること: observability の v1 所有モデル。 kernel が所有する
 > signal contract と、 operator が所有する monitoring stack を分離し、 同梱

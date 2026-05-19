@@ -1,4 +1,4 @@
-# RBAC Policy
+# RBAC ポリシー {#rbac-policy}
 
 > このページでわかること: RBAC の owner 層と kernel の authorization 範囲。
 

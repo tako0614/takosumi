@@ -1,4 +1,4 @@
-# Telemetry / Metrics
+# テレメトリ / メトリクス {#telemetry--metrics}
 
 > このページでわかること: telemetry export の v1 contract — protocol / 命名 /
 > closed metric set / trace / sampling / 認証 / schema versioning。
@@ -14,11 +14,11 @@ mount する。 `TAKOSUMI_OTLP_METRICS_ENDPOINT` / `TAKOSUMI_OTLP_TRACES_ENDPOIN
 overview Grafana dashboard は
 `deploy/observability/grafana/takosumi-deploy-overview.json` に公開済み。 :::
 
-## Export protocol
+## エクスポートプロトコル {#export-protocol}
 
 telemetry は 2 protocol で同時 export する。
 
-### OpenTelemetry / OTLP (primary)
+### OpenTelemetry / OTLP (primary) {#opentelemetry--otlp-primary}
 
 push 型の OTLP/HTTP JSON exporter。 metric / kernel HTTP server span / provider
 apply / destroy operation span / runtime-agent loop span / internal RPC client
@@ -33,7 +33,7 @@ span を export する。
 - collector で attribute 拡充や vendor-neutral telemetry ingress を行いたい
   operator はこちらを使う
 
-### Prometheus pull endpoint (secondary)
+### Prometheus pull endpoint (secondary) {#prometheus-pull-endpoint-secondary}
 
 kernel HTTP server の `/metrics` を Prometheus 互換 agent が scrape する。
 記録された `ObservabilitySink` metric event を Prometheus text format で公開する
@@ -84,7 +84,7 @@ suffix rule:
 - OTLP の `Sum` semantics が必要な場合のみ `_total`
 - gauge は unit 以外の suffix を付けない
 
-## v1 closed metric set
+## v1 closed metric セット {#v1-closed-metric-set}
 
 v1 metric set は **閉じ** ている。 operator は調整なしで名前 / label /
 型を当てにできる。 新規 metric は `CONVENTIONS.md` §6 RFC を通す。
@@ -130,7 +130,7 @@ PromQL:
 | Apply latency p95   | `histogram_quantile(0.95, sum(rate(takosumi_apply_duration_seconds_bucket{operationKind="apply"}[5m])) by (le))`                                                   |
 | Rollback rate       | `sum(rate(takosumi_deploy_operation_count{operationKind="rollback"}[5m]))`                                                                                         |
 
-## Trace export
+## トレースエクスポート {#trace-export}
 
 OTLP trace は外部境界を跨ぐ全 operation で emit する。 対象は次の span。
 
@@ -157,7 +157,7 @@ span 名は version 間で安定する。 形式は `takosumi.<subsystem>.<verb>
 histogram metric の trace exemplar は `trace_id` / `span_id` を持つ。 slow
 bucket から該当 trace に直接 pivot できる。
 
-## Sampling
+## サンプリング {#sampling}
 
 既定の sampling は **head-based**。 operator が調整できる。
 
@@ -169,7 +169,7 @@ bucket から該当 trace に直接 pivot できる。
   する前に sampling decision を `RECORD_AND_SAMPLED` に強制する
 - tail sampling は collector 側の関心事。 kernel は実装しない
 
-## Cardinality
+## カーディナリティ {#cardinality}
 
 v1 closed set では高 cardinality な label を禁止する。
 
@@ -191,7 +191,7 @@ v1 closed set では高 cardinality な label を禁止する。
   要求する。 未認証 scrape は `401` で reject する。 既知 Prometheus identity
   から in-cluster scrape する想定で、 internet 公開は想定しない
 
-## Resource attribute
+## リソース属性 {#resource-attribute}
 
 OTLP export には installation / role で routing できるよう安定した resource
 attribute を付ける。
@@ -210,7 +210,7 @@ resource attribute は export batch ごとに 1 回付く。 metric point ごと
 operator 側が追加する。 kernel が region / cluster を自身の環境から
 読み取ることはない。
 
-## Pull endpoint contract
+## Pull エンドポイント契約 {#pull-endpoint-contract}
 
 Prometheus `/metrics` の保証:
 
@@ -222,7 +222,7 @@ Prometheus `/metrics` の保証:
 
 kernel shutdown 中の scrape は `Retry-After: 1` を付けて `503` を返す。
 
-## Schema versioning
+## スキーマバージョニング {#schema-versioning}
 
 上記 metric set / label set / span attribute set は **v1 closed schema**
 である。 v1 名で dashboard / alert を組む consumer は、 この current schema

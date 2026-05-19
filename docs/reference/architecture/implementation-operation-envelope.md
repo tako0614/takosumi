@@ -1,4 +1,4 @@
-# Implementation and Runtime-Agent Boundary
+# Implementation と Runtime-Agent の境界 {#implementation-and-runtime-agent-boundary}
 
 > このページでわかること: implementation と runtime-agent の境界設計。
 

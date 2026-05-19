@@ -1,4 +1,4 @@
-# Object Model
+# Object モデル {#object-model}
 
 > このページでわかること: kernel の object model とエンティティ関係。
 
@@ -6,7 +6,7 @@ Object は kernel graph の canonical entity である。すべての Object は
 つの Space に属する。public な AppSpec `components` entry は Object intent
 となり、 その後 resolved な Object になる。
 
-## Space-qualified identity
+## Space で qualify された identity {#space-qualified-identity}
 
 Object のアドレスは Space 内で一意である。storage は identity を tuple として
 扱うべきである。
@@ -24,7 +24,7 @@ space:acme-prod/object:api
 ある Space の Object を別の Space の authority として更新・削除・observe する
 ことは決して許されない。
 
-## Object lifecycle classes
+## Object lifecycle クラス {#object-lifecycle-classes}
 
 ```text
 managed:
@@ -46,7 +46,7 @@ imported:
   Existing object registered by operator policy. Delete is denied unless explicitly approved.
 ```
 
-## Object record
+## Object レコード {#object-record}
 
 ```yaml
 Object:
@@ -63,7 +63,7 @@ Object:
   labels: {}
 ```
 
-## Generated object requirements
+## Generated object の要件 {#generated-object-requirements}
 
 すべての generated object は以下を持つ。
 
@@ -79,7 +79,7 @@ GeneratedObject:
 
 生成 object の identity は side effect が始まる前に記録される。
 
-## Object revoke flow
+## Object revoke フロー {#object-revoke-flow}
 
 Revoke は managed または generated object をその不在で置き換える lifecycle で、
 外部制約を尊重する。state machine は次の通り。
@@ -102,7 +102,7 @@ revoke 参加は lifecycle class で制限される。`external-source` と
 に従って `RevokeDebt` record を queue し、object は debt が clear されるまで
 `debt` state に入る。
 
-## Revoke participation matrix
+## Revoke 参加マトリクス {#revoke-participation-matrix}
 
 行は object の lifecycle class、列は object を tear down する際に関わる 4 つ の
 operation。`yes` は許可、`gen-only` は object 自身ではなく generated child
@@ -120,7 +120,7 @@ queue するかどうかを表す。
 `detach` は source object を変更せずに consumer 側の reference (Link または
 Exposure) を取り除く。policy で明示的に gate されない限り、常に合法である。
 
-## Operation restrictions
+## Operation の制限 {#operation-restrictions}
 
 lifecycle class は operation 種別を制限する。Space containment も operation
 種別を制限する。

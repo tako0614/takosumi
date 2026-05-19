@@ -1,4 +1,4 @@
-# Risk Taxonomy
+# Risk タクソノミ {#risk-taxonomy}
 
 > このページでわかること: plan / apply pipeline が発火しうる Risk の closed enum
 > 19 値を stable id ベースで定義する。
@@ -7,7 +7,7 @@
 require-approval を判断する材料になる。 新 Risk kind の追加には `CONVENTIONS.md`
 §6 RFC が必要。
 
-## Risk vs Error
+## Risk と Error {#risk-vs-error}
 
 両者は別 concept。
 
@@ -19,7 +19,7 @@ require-approval を判断する材料になる。 新 Risk kind の追加には
 Risk が stage 進行中に再評価されて approval が崩れる経路は
 [Approval Invalidation Triggers](./approval-invalidation.md) に従う。
 
-## Closed enum (19 値)
+## Closed enum (19 値) {#closed-enum-19-値}
 
 各 Risk は以下の attributes を持つ:
 
@@ -191,7 +191,7 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 - **invalidation trigger**: 2
 - **fix kind**: `requiresPolicyReview`
 
-## Severity と approval gate の関係
+## Severity と approval gate の関係 {#severity-と-approval-gate-の関係}
 
 - `error` severity の Risk は approval grant が無いと plan が `deny` される。
   approve すれば `allow` に転じる。
@@ -200,7 +200,7 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 - 1 つの plan に複数 Risk が同時に発火することは普通にあり、approval record
   はそれらをまとめて `approvedEffects` set として保持する。
 
-## Fix kind の意味
+## Fix kind の意味 {#fix-kind-の意味}
 
 - `safeFix`: kernel / CLI が automatically 提示できる修正案がある (例: literal
   を managed secret に置き換える、traffic 配分を rollback 互換に直す)。
@@ -209,12 +209,12 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 - `operatorFix`: operator の手動操作 (export refresh / catalog signature
   enrollment / collision resolution / RevokeDebt clearance) が要る。
 
-## RFC 要件
+## RFC 要件 {#rfc-要件}
 
 新 Risk kind の追加は plan / approval / WAL のすべてに影響するため、
 `CONVENTIONS.md` §6 の RFC を要する。stable id は付与後 rename しない。 削除も同
 
-## Related architecture notes
+## 関連アーキテクチャ {#related-architecture-notes}
 
 関連 architecture notes:
 

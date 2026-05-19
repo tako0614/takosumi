@@ -1,4 +1,4 @@
-# Concepts — AppSpec × Provider
+# コンセプト — AppSpec × Provider {#concepts--appspec--provider}
 
 > このページでわかること: AppSpec の component kind と provider implementation
 > の関係を 5 分で理解する。
@@ -40,7 +40,7 @@
 
 ---
 
-## Component kind
+## Component kind {#component-kind}
 
 Component kind は portable な runtime / resource 型。 AppSpec が宣言するのは
 「worker が欲しい」「postgres が欲しい」「object-store
@@ -74,7 +74,7 @@ curated な公式 component kind は 4 種類 (= catalog は extensible で、 o
 
 ---
 
-## Provider
+## Provider {#provider}
 
 Provider は component kind の具体実装。 同じ `worker` / `postgres` /
 `object-store` でも、Cloudflare / AWS / GCP / Kubernetes / self-host などの
@@ -99,7 +99,7 @@ portable component kind と要求だけを書く。
 
 ---
 
-## Workflow placement
+## Workflow の配置 {#workflow-placement}
 
 kernel は workflow / trigger / schedule の public route を持たない。 build は
 AppSpec の `components.<name>.build` に最小 recipe として宣言し、外部 CI /
@@ -212,7 +212,7 @@ AWS / GCP / Cloudflare / k8s / OS
 
 ---
 
-## Where to look next
+## 次に読む {#where-to-look-next}
 
 | 目的                                               | ページ                                                       |
 | -------------------------------------------------- | ------------------------------------------------------------ |

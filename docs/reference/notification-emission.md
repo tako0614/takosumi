@@ -1,4 +1,4 @@
-# Notification Emission
+# 通知エミッション {#notification-emission}
 
 > このページでわかること: kernel が emit する通知イベントの型と配信先。
 
@@ -8,7 +8,7 @@ enum、 recipient 解決規則、 pull-only な配信統合モデル、 重複 s
 idempotency 規則、 audit primitive。 kernel は signal を emit するだけで、
 具体的な email / Slack / SMS / in-app / digest 配信は kernel の外で動作する。
 
-## Notification model
+## 通知モデル {#notification-model}
 
 kernel は notification を配信しない。 kernel 側 event が closed な v1 category
 のいずれかの条件を満たすたびに、構造化 signal を記録する。 operator が signal
@@ -32,7 +32,7 @@ derive されたもので、それ自身は raw audit event ではない)。
 notification signal を emit する。 配信は引き続き pull-only で operator
 が所有する。
 
-## Signal categories
+## シグナルカテゴリ {#signal-categories}
 
 v1 category enum は closed。
 
@@ -69,7 +69,7 @@ Trigger detail:
 category enum は v1 で closed。 新規 category 追加は `CONVENTIONS.md` §6 RFC
 を要する。
 
-## Signal record
+## シグナルレコード {#signal-record}
 
 ```yaml
 NotificationSignal:
@@ -107,7 +107,7 @@ Field semantics:
 | `emittedAt`            | yes      | RFC 3339 UTC, millisecond precision.                                                                                                           |
 | `acknowledgedAt`       | no       | Set when the operator's outer stack acknowledges the signal through the API below.                                                             |
 
-## Recipient resolution
+## 受信者解決 {#recipient-resolution}
 
 kernel は emit 時に identity model
 ([Actor / Organization Model](./architecture/identity-and-access-architecture.md#actor--organization-model)
@@ -132,7 +132,7 @@ kernel は emit 時に identity model
 に遷移する直前に emit された signal は以前の `recipientActorIds` を運ぶ。 kernel
 は emit 後に再解決しない。
 
-## Pull-only delivery integration
+## Pull-only な配信統合 {#pull-only-delivery-integration}
 
 push surface ではなく、operator は signal queue を pull する。
 
@@ -157,7 +157,7 @@ pull-only モデル:
 webhook 風の push モードは **v1 では scope 外**。 kernel は notification
 配信のための outbound HTTP 呼び出しを開始しない。
 
-## Idempotency
+## 冪等性 {#idempotency}
 
 signal `id` は `(category, scope, trigger fingerprint)` tuple ごとに決定的。
 trigger fingerprint は category 固有。
@@ -179,7 +179,7 @@ trigger fingerprint は category 固有。
 record 上の `notification-emit-suppressed-duplicate` envelope として audit に
 surface する。
 
-## Audit events
+## 監査イベント {#audit-events}
 
 v1 notification audit event 分類は closed で、 [Audit Events](./audit-events.md)
 の closed enum に加わる。
@@ -193,7 +193,7 @@ payload を持つ。 audit chain は notification record を `relatedAuditEventI
 source event にリンクし、 任意の signal を根拠付けた chain を operator が replay
 できる。
 
-## Storage schema
+## ストレージスキーマ {#storage-schema}
 
 NotificationSignal は [Storage Schema](./storage-schema.md) を 1 つの record
 class で拡張する。
@@ -205,7 +205,7 @@ class で拡張する。
 実装は signal store を audit store と同居させてよいが、 上記 indexed
 カラムは保持しなければならない。
 
-## Scope boundary
+## スコープ境界 {#scope-boundary}
 
 Takosumi kernel は signal record、closed category enum、recipient 解決規則、
 pull-only operator endpoint、idempotency 規則、audit chain を同梱する。 具体的な
@@ -216,7 +216,7 @@ per-recipient 配信 throttling は **Takosumi の scope 外** であり、 oper
 が実装する。 kernel はそれら外側 surface が組み立てに使う signal / audit
 primitive を公開する。
 
-## Related architecture notes
+## 関連アーキテクチャ {#related-architecture-notes}
 
 - `docs/reference/architecture/operator-boundaries.md` — pull-only delivery を
   motivate する credential 境界。

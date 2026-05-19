@@ -1,4 +1,4 @@
-# Kernel
+# カーネル {#kernel}
 
 > このページでわかること: kernel の内部構造と installer pipeline の責務境界。
 
@@ -104,7 +104,7 @@ installer が apply 時に **materializer** (= 実装層、 operator config で 
 API には登場しません。 Installation + Deployment + (内部 resources / namespaces
 / secrets / events) で完全な lifecycle を扱います。
 
-## Installer pipeline
+## Installer パイプライン {#installer-pipeline}
 
 ```text
 1. caller posts source { kind, url, ref } to POST /v1/installations/dry-run
@@ -128,7 +128,7 @@ pipeline は介在しない (= AppSpec の `component.build` は最小 recipe
 実装は `takosumi/packages/installer/` package と
 `takosumi/packages/kernel/src/domains/{installer,binding}/` 配下。
 
-## Routing
+## ルーティング {#routing}
 
 kernel は `{KERNEL_DOMAIN}` で control API を serve する。 Installation 配下の
 worker component は routing layer で独自の hostname を持つ:
@@ -154,7 +154,7 @@ OIDC client material を publish し、 worker は `listen.operator.identity.oid
 も `kind: oidc` 解決も **持ちません** (= takosumi-cloud 側の materializer
 の責務)。
 
-## Resource broker
+## リソースブローカー {#resource-broker}
 
 kernel は `components[]` に宣言された Component を materializer operation に
 解決する:
@@ -195,7 +195,7 @@ components:
 kernel 自身の storage (= installations / deployments / resources / secrets /
 events table) は kernel DB を使う。
 
-## Cross-references
+## クロスリファレンス {#cross-references}
 
 - [AppSpec](../app-spec.md)
 - [Installer API](../installer-api.md)

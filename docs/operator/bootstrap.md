@@ -1,4 +1,4 @@
-# Operator Bootstrap
+# オペレーターブートストラップ {#operator-bootstrap}
 
 > このページでわかること: kernel に bundled materializer plugin (=
 > `KernelPlugin` plain array) を attach する初期設定の手順。
@@ -94,7 +94,7 @@ runtime-agent の connector 名 (右側) は実装詳細で、 operator は agen
 | `@takos/selfhost-postgres`                                 | local Docker Postgres connector |
 | `@takos/deno-deploy`                                       | Deno Deploy connector           |
 
-## Selfhosted-only な最小構成
+## Selfhosted のみの最小構成 {#selfhosted-only-な最小構成}
 
 開発機 1 台で全部 selfhosted で動かす最小例:
 

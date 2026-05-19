@@ -1,4 +1,4 @@
-# Operational Hardening Checklist
+# 運用 Hardening チェックリスト {#operational-hardening-checklist}
 
 > このページでわかること: 運用 hardening のチェックリスト。
 
@@ -6,7 +6,7 @@
 requirements の一覧です。各 requirement の実装状況は対応する reference docs /
 tests / release evidence で確認します。
 
-## Space isolation
+## Space 隔離 {#space-isolation}
 
 - Every Deployment, snapshot, journal, observation, approval, debt, activation,
   and GroupHead has a Space id.
@@ -18,7 +18,7 @@ tests / release evidence で確認します。
 - Reserved prefixes are operator-controlled and granted into Spaces.
 - GroupHead identity is `spaceId + groupId`.
 
-## Root invariants
+## Root 不変条件 {#root-invariants}
 
 - ResolutionSnapshot and DesiredSnapshot are immutable.
 - Apply uses recorded snapshots, not live descriptor URLs or live namespace
@@ -36,7 +36,7 @@ tests / release evidence で確認します。
 - Production serializes critical mutations, Space export sharing, and
   CatalogRelease assignment.
 
-## Catalog
+## Catalog {#catalog}
 
 - CatalogRelease has atomic registry digests including Space registry and Space
   policy digests.
@@ -45,7 +45,7 @@ tests / release evidence で確認します。
 - Descriptor documents are normalized before runtime use.
 - Input schemas are pinned.
 
-## Namespace exports
+## Namespace export {#namespace-exports}
 
 - Namespace path grammar is enforced inside each Space.
 - Shadowing is policy-gated, and production denies meaningful Space / operator /
@@ -55,7 +55,7 @@ tests / release evidence で確認します。
   declared.
 - ExportDeclaration and ExportMaterial are separated.
 
-## Journal and recovery
+## Journal と回復 {#journal-and-recovery}
 
 - Operation intent is recorded before external calls.
 - Generated object planned records are written before creation.
@@ -63,7 +63,7 @@ tests / release evidence で確認します。
 - RevokeDebt is created for failed cleanup.
 - Journal entries with unresolved debt are not compacted away.
 
-## Policy and approval
+## Policy と approval {#policy-and-approval}
 
 - Approvals bind to snapshot digest, operation plan digest, and effect details.
 - Approval invalidation triggers are implemented per the closed v1 set in
@@ -72,19 +72,19 @@ tests / release evidence で確認します。
   Risk enum.
 - Error hints are classified as safeFix, requiresPolicyReview, or operatorFix.
 
-## Secrets
+## シークレット {#secrets}
 
 - Secret exports cannot project to plain env.
 - Literal env secret scanning or policy is enabled.
 - Runtime secrets are not passed to transforms by default.
 
-## Activation
+## Activation {#activation}
 
 - Ingress reservation and traffic assignment are separated.
 - GroupHead update is serialized per Space.
 - Rollback modes are explicit.
 
-## Observability
+## Observability {#observability}
 
 - Audit events include catalog release, resolution, desired adoption, link
   selection, operation stages, generated objects, debts, approvals, activation,

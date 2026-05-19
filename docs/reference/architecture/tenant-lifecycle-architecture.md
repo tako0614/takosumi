@@ -1,4 +1,4 @@
-# Tenant Lifecycle Architecture
+# Tenant ライフサイクルアーキテクチャ {#tenant-lifecycle-architecture}
 
 > このページでわかること: tenant lifecycle の設計とステート管理。
 

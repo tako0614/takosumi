@@ -1,10 +1,10 @@
-# Snapshot Model
+# Snapshot モデル {#snapshot-model}
 
 > このページでわかること: snapshot モデルとバージョニングの仕組み。
 
 snapshot は Space scope の immutable な authority record である。
 
-## IntentGraph
+## IntentGraph {#intentgraph}
 
 IntentGraph is parsed authoring intent plus deploy context. It carries
 `spaceId`, but the manifest itself does not.
@@ -23,7 +23,7 @@ space id from deploy context
 
 IntentGraph is not authority for apply.
 
-## ResolutionSnapshot
+## ResolutionSnapshot {#resolutionsnapshot}
 
 ResolutionSnapshot records what the kernel believed.
 
@@ -57,7 +57,7 @@ ResolutionSnapshot includes:
 - policy decisions and approval bindings
 - data asset requirements
 
-## DesiredSnapshot
+## DesiredSnapshot {#desiredsnapshot}
 
 DesiredSnapshot records what the kernel intends to exist.
 
@@ -77,21 +77,21 @@ DesiredSnapshot:
 
 DesiredSnapshot is immutable.
 
-## OperationPlan
+## OperationPlan {#operationplan}
 
 OperationPlan is derived from DesiredSnapshot and current ObservationSet. It is
 not canonical desired state.
 
-## OperationJournal
+## OperationJournal {#operationjournal}
 
 OperationJournal records what was attempted, generated, failed, compensated, or
 left as debt.
 
-## ObservationSet
+## ObservationSet {#observationset}
 
 ObservationSet records current facts. It does not update snapshots.
 
-## ActivationSnapshot
+## ActivationSnapshot {#activationsnapshot}
 
 ActivationSnapshot records active traffic, rollout state, and current assignment
 inside one Space. GroupHead points to the current activation/deployment state

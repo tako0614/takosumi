@@ -8,7 +8,7 @@ kernel / runtime-agent の責務分離は
 
 ---
 
-## 1. CLI install
+## 1. CLI のインストール {#1-cli-install}
 
 ```bash
 deno install -gA -n takosumi jsr:@takos/takosumi-cli
@@ -17,7 +17,7 @@ takosumi version
 
 ---
 
-## 2. Local authoring (zero-config)
+## 2. ローカルでのオーサリング (zero-config) {#2-local-authoring-zero-config}
 
 source root に `.takosumi.yml` (= AppSpec) を置く。 public installer API は この
 AppSpec を読み、 Installation を作り、 apply ごとに Deployment を記録する。

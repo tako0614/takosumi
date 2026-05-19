@@ -1,4 +1,4 @@
-# Identity and Access Architecture
+# Identity と Access アーキテクチャ {#identity-and-access-architecture}
 
 > このページでわかること: identity / access の設計とアクセス制御モデル。
 
@@ -19,7 +19,7 @@ kernel 側の trust は次の範囲に限られる:
 - `takosumi-cloud/docs/architecture/takosumi-accounts.md`
 - `takosumi-cloud/docs/accounts-service.md`
 
-## Actor / Organization Model
+## Actor / Organization モデル {#actor--organization-model}
 
 Actor / Organization / membership / account ownership / billing ownership は
 takosumi kernel が持たない。 これらは operator account plane が所有する
@@ -35,7 +35,7 @@ takosumi kernel が持たない。 これらは operator account plane が所有
 - Deployment apply は `/v1/installations/*` の installer lifecycle 経由で行う。
   ownership は Installation ledger に記録される。
 
-### Actor / Organization Model — 関連ページ
+### Actor / Organization モデル — 関連ページ {#actor--organization-model--関連ページ}
 
 - `takosumi-cloud/docs/accounts-service.md`
 - `takosumi-cloud/docs/architecture/takosumi-accounts.md`

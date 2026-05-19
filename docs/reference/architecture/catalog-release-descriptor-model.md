@@ -1,4 +1,4 @@
-# Catalog Release and Descriptor Model
+# Catalog Release と Descriptor モデル {#catalog-release-and-descriptor-model}
 
 > このページでわかること: CatalogRelease と Descriptor のデータモデル。
 
@@ -6,7 +6,7 @@ Takosumi は分散 descriptor を使うが、生きた descriptor web は runtim
 ではない。runtime authority は operator が adopt し、 deployment を resolve する
 Space に許可された `CatalogRelease` から来る。
 
-## Descriptor source vs runtime authority
+## Descriptor source と runtime authority {#descriptor-source-vs-runtime-authority}
 
 ```text
 Descriptor documents:
@@ -61,7 +61,7 @@ registry / multi-mirror の用途には将来 RFC で publisher-signing domain
 [Supply Chain Trust § 6](../supply-chain-trust.md#catalog-release-trust))。
 catalog 宣言された実行可能 hook package。
 
-## Space assignment
+## Space への割り当て {#space-assignment}
 
 CatalogRelease は自動的にすべての Space から見えるわけではない。operator policy
 が release を Space に割り当てる。
@@ -77,7 +77,7 @@ SpaceCatalogAssignment:
 
 deployment は自身の Space に許可された release に対してのみ resolve できる。
 
-## Catalog registries
+## Catalog レジストリ {#catalog-registries}
 
 operator catalog は複数の registry に分割して実装される。
 
@@ -113,7 +113,7 @@ Artifact Policy:
   accepted data asset modes and limits
 ```
 
-## Descriptor documents
+## Descriptor ドキュメント {#descriptor-documents}
 
 Descriptor は semantic data のみを定義する。実行可能コードは持たない。
 
@@ -131,7 +131,7 @@ InputSchema
 
 Implementation packaging は descriptor identity の一部ではない。
 
-## Descriptor digest
+## Descriptor ダイジェスト {#descriptor-digest}
 
 snapshot で使う descriptor identity は次の組合せ:
 
@@ -139,7 +139,7 @@ snapshot で使う descriptor identity は次の組合せ:
 descriptor URL + normalized descriptor digest + normalized context digests
 ```
 
-## Production rule
+## 本番ルール {#production-rule}
 
 Public v1 manifest は catalog alias を参照する。self-host 開発や catalog
 ingestion で descriptor URL を直接参照することはあり得るが、 public v1

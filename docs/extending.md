@@ -1,4 +1,4 @@
-# Extending Component Kinds and Materializers
+# Component Kind / Materializer の拡張 {#extending-component-kinds-and-materializers}
 
 > このページでわかること: 新しい component kind / materializer を追加する手順。
 
@@ -69,7 +69,7 @@ provider は credential を直接持ちません。 同じファイル内で
 `InMemory<Provider>Lifecycle` クラスをテスト用に export します。 production
 lifecycle (runtime-agent 経由) は別途 inject します。
 
-### 3. Naming convention
+### 3. 命名規則 {#naming-convention}
 
 | 対象             | rule                                                                |
 | ---------------- | ------------------------------------------------------------------- |
@@ -159,7 +159,7 @@ ecosystem RFC が必要です:
 8. **docs を更新** — [Kind Catalog](./reference/kind-catalog.md#component-kinds)
    に解説 section を追加。
 
-### Materializer = KernelPlugin | InlineMaterializer
+### Materializer = KernelPlugin | InlineMaterializer {#materializer--kernelplugin--inlinematerializer}
 
 materializer は 2 形態を受理します。 cloud provider package は `KernelPlugin`
 factory を export しますが、 operator が **inline 関数** で書くこともできます:
@@ -184,7 +184,7 @@ const { app } = await createPaaSApp({
 plugin convention は実装の 1 形態に過ぎず、 contract (= input spec validate /
 output 返却 / publishes register) を満たせば形は任意です。
 
-### Naming convention
+### 命名規則 {#naming-convention-1}
 
 | 対象               | rule                                                                            |
 | ------------------ | ------------------------------------------------------------------------------- |
@@ -193,7 +193,7 @@ output 返却 / publishes register) を満たせば形は任意です。
 | breaking change    | 新 URI を発行 (`@v2`)、 short alias に v2 を被せない                            |
 | capability 追加    | 同じ URI のまま (capability list は open enum)                                  |
 
-### Output schema convention
+### 出力スキーマ規則 {#output-schema-convention}
 
 複数 materializer が同じ output shape を返すために、 field 名と型は kind
 全体で揃える (`CONVENTIONS.md` §3 表):

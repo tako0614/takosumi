@@ -1,4 +1,4 @@
-# Namespace Export Model
+# Namespace Export モデル {#namespace-export-model}
 
 > このページでわかること: namespace export のモデル定義と使い方。
 
@@ -9,7 +9,7 @@ Export は namespace アドレス可能な usable surface である。namespace 
 Space の中で解決される。producer は export declaration を publish し、link
 materialization は export material を生成する。
 
-## Namespace path grammar
+## Namespace path 文法 {#namespace-path-grammar}
 
 ```text
 segment = [a-z][a-z0-9-]{0,62}
@@ -34,9 +34,9 @@ operator
 system
 ```
 
-## ExportDeclaration vs ExportMaterial
+## ExportDeclaration と ExportMaterial {#exportdeclaration-vs-exportmaterial}
 
-### ExportDeclaration
+### ExportDeclaration {#exportdeclaration}
 
 declaration は何が使えるかを宣言する。
 
@@ -66,7 +66,7 @@ ExportDeclaration:
     observedAt: ...
 ```
 
-### ExportMaterial
+### ExportMaterial {#exportmaterial}
 
 material は link materialization によって生成される。
 
@@ -84,7 +84,7 @@ ExportMaterial:
 Resolution は declaration を保存する。OperationJournal と observation が
 material を追跡する。
 
-## Default export
+## デフォルト export {#default-export}
 
 bare な namespace path は default export が存在するときにのみ `.default` に
 展開される。
@@ -97,7 +97,7 @@ default export は admin access を意味してはいけない。grant を生む
 明示的な access なしに使うには `safeDefaultAccess` が必要である。`read-write` と
 `admin` は決して暗黙ではない。
 
-## Space-scoped namespace resolution
+## Space-scope namespace 解決 {#space-scoped-namespace-resolution}
 
 namespace resolution は常に Space の中で行われる。別 Space の同じ path は別の
 subject である。current v1 の依存は Space に許可された operator 所有の namespace
@@ -117,7 +117,7 @@ shadowing は policy で gate される。production では意味のある shado
 拒否するか承認を要求すべきである。特にローカル namespace が Space / operator /
 external namespace を shadow するケース。
 
-## Space export sharing
+## Space export の共有 {#space-export-sharing}
 
 Space を跨ぐ namespace 使用は default で拒否され、current v1 の機能ではない。
 
@@ -133,7 +133,7 @@ allowedAccess:
 
 share と plan 出力は Space を跨ぐ使用を risk として明示しなければならない。
 
-## Freshness
+## Freshness {#freshness}
 
 ```text
 fresh:
@@ -149,13 +149,13 @@ unknown:
   policy decides require-refresh or deny
 ```
 
-## Data Asset Model
+## Data Asset モデル {#data-asset-model}
 
 DataAsset は Object や Operation が使うコンテンツ・入力を表す。DataAsset の可
 視性は Space scope であり、operator の artifact policy が明示的に共有を許可し
 た場合のみ scope を超える。
 
-### v1 の対象範囲
+### v1 の対象範囲 {#v1-の対象範囲}
 
 Public v1 がサポートするもの:
 
@@ -168,7 +168,7 @@ operator-registered artifact kind discovery
 Public v1 では任意のユーザーシェル build や、operator API / 承認フロー /
 テストが整っていない状態での runtime 自動マッチングはサポートしない。
 
-### DataAsset kind
+### DataAsset kind {#dataasset-kind}
 
 ```yaml
 DataAsset:
@@ -184,7 +184,7 @@ DataAsset:
 `GET /v1/artifacts/kinds` から discover できる。同梱の registry は
 `oci-image`、`js-bundle`、`lambda-zip`、`static-bundle`、`wasm` で始まる。
 
-### Connector contract
+### Connector 契約 {#connector-contract}
 
 connector は、DataAsset の bytes を implementation の手の届く範囲に持ち込む、
 operator がインストールする binding である。connector は public manifest では
@@ -211,7 +211,7 @@ Identity rule:
 - connector は public manifest 経由でインストール・差し替え・revoke されること
   はなく、必ず operator surface から導入される。
 
-### Artifact resolution
+### Artifact 解決 {#artifact-resolution}
 
 ローカルファイルは path で kernel に送らない。operator はまず bytes を upload
 し、返ってきた digest を manifest に埋め込む。
@@ -248,7 +248,7 @@ transform を承認した approval を再検証する。
 transform が有効な承認なしに `pre-commit` に到達したときに surface される Risk
 は `transform-unapproved` である。
 
-### Accepted asset 検証
+### Accepted asset 検証 {#accepted-asset-検証}
 
 Plan は関連するすべての layer を検証しなければならない。
 
@@ -259,14 +259,14 @@ connector accepted data asset kinds
 artifact policy limits
 ```
 
-### Space 可視性
+### Space 可視性 {#space-可視性}
 
 DataAsset は global に保存されうるが、default で global に可視ではない。
 `ResolutionSnapshot` は Space に可視な DataAsset reference を記録する。Space
 を跨ぐ artifact 再利用は operator の artifact policy を必要とし、resolution に
 記録されなければならない。
 
-## Exposure Activation Model
+## Exposure Activation モデル {#exposure-activation-model}
 
 route を持つ component は 1 つの Space の中に Exposure intent を作成する。public
 AppSpec では、これは `custom-domain` や `worker` の route フィールド などの
@@ -296,7 +296,7 @@ resolver はこれを `web` resource output を target にした `app.example.co
 Exposure record に変換する。Exposure は外部 ingress を準備するが、それだけで
 deployment を current にはしない。
 
-### Apply vs activation
+### Apply と activation {#apply-vs-activation}
 
 ```text
 apply:
@@ -309,7 +309,7 @@ post-activate observe:
   verify route health and active assignment
 ```
 
-### Space rule
+### Space ルール {#space-rule}
 
 Exposure 所有権、ingress 予約、route の materialization、ActivationSnapshot、
 GroupHead は Space-local である。operator の route policy が shared ownership や
@@ -322,7 +322,7 @@ GroupHead identity = spaceId + groupId
 
 Space を跨ぐ traffic assignment は public v1 の一部ではない。
 
-### Exposure generated objects
+### Exposure が生成する object {#exposure-generated-objects}
 
 Exposure の materialization は generated object を作成しうる。
 
@@ -343,7 +343,7 @@ GeneratedObject:
   deletePolicy: delete-with-owner | retain-with-approval
 ```
 
-### ActivationSnapshot
+### ActivationSnapshot {#activationsnapshot}
 
 ```yaml
 ActivationSnapshot:
@@ -361,7 +361,7 @@ ActivationSnapshot:
 
 GroupHead は apply phase の再検証と activation policy の通過後にのみ動く。
 
-### Post-activate health state
+### Activate 後の health state {#post-activate-health-state}
 
 activation 後、exposure は closed v1 state machine を通じて runtime reality を
 追跡する。状態遷移は
