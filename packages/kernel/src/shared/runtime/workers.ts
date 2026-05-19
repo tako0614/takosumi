@@ -48,6 +48,9 @@ export function createWorkersRuntime(
     readTextFile() {
       throw new UnavailableInRuntimeError("fs.readTextFile", "workers");
     },
+    readFile(): Promise<Uint8Array> {
+      throw new UnavailableInRuntimeError("fs.readFile", "workers");
+    },
     readTextFileSync(): string {
       throw new UnavailableInRuntimeError("fs.readTextFileSync", "workers");
     },

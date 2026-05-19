@@ -55,6 +55,9 @@ function unknownRuntime(): RuntimeAdapter {
     readTextFile() {
       throw new UnavailableInRuntimeError("fs.readTextFile", "unknown");
     },
+    readFile(): Promise<Uint8Array> {
+      throw new UnavailableInRuntimeError("fs.readFile", "unknown");
+    },
     readTextFileSync(): string {
       throw new UnavailableInRuntimeError("fs.readTextFileSync", "unknown");
     },

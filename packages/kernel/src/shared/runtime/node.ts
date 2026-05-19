@@ -54,6 +54,11 @@ const fs: FsAdapter = {
     const mod = await import("node:fs/promises");
     return await mod.readFile(path as string | URL, "utf8");
   },
+  async readFile(path) {
+    const mod = await import("node:fs/promises");
+    const buf = await mod.readFile(path as string | URL);
+    return new Uint8Array(buf);
+  },
   readTextFileSync(path) {
     // Synchronous read: require the cached `node:fs` module if available.
     const required = nodeRequire("node:fs") as

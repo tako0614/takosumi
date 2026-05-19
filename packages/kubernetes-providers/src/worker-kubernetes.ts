@@ -9,7 +9,7 @@ import {
   InMemoryK3sDeploymentLifecycle,
   type K3sDeploymentLifecycleClient,
 } from "@takos/takosumi-plugins/shape-providers/web-service/k3s-deployment";
-import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
 import { KIND_URI_WORKER } from "./_kinds.ts";
 
 export interface KubernetesWorkerProviderOptions {

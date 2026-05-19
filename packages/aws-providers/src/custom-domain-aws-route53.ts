@@ -8,7 +8,7 @@ import {
   InMemoryRoute53Lifecycle,
   type Route53LifecycleClient,
 } from "@takos/takosumi-plugins/shape-providers/custom-domain/route53";
-import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
 import { KIND_URI_CUSTOM_DOMAIN } from "./_kinds.ts";
 
 export interface AwsRoute53ProviderOptions {

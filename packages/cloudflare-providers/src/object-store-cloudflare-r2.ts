@@ -8,7 +8,7 @@ import {
   createCloudflareR2ObjectStoreProvider,
   InMemoryCloudflareR2Lifecycle,
 } from "@takos/takosumi-plugins/shape-providers/object-store/cloudflare-r2";
-import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
 import { KIND_URI_OBJECT_STORE } from "./_kinds.ts";
 
 export interface CloudflareR2ProviderOptions {

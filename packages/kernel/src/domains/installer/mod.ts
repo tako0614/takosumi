@@ -51,6 +51,7 @@ import {
   type KernelPluginRegistry,
 } from "../../plugins/mod.ts";
 import { log } from "../../shared/log.ts";
+import { currentRuntime } from "../../shared/runtime/index.ts";
 import { BindingResolver, type ResolvedBinding } from "../binding/mod.ts";
 import {
   type DeploymentStore,
@@ -143,9 +144,11 @@ export interface InstallerPipelineDependencies {
   readonly localSourceRoot?: string;
   /**
    * Build runner — invoked when a component declares `component.build`.
-   * Defaults to spawning `Deno.Command` with the recipe `command` in the
-   * source working directory and pinning the resulting `output` artifact
-   * with a sha256 digest of its bytes.
+   * Defaults to spawning the recipe `command` via `RuntimeAdapter.subprocess`
+   * in the source working directory and pinning the resulting `output`
+   * artifact with a sha256 digest of its bytes (read via
+   * `RuntimeAdapter.fs.readFile`). Runtime selection (Deno / Node) is
+   * delegated to the adapter so this code path is portable.
    */
   readonly runBuild?: (input: BuildRunnerInput) => Promise<BuildRunnerResult>;
   /** Cost estimator — defaults to a placeholder `0 JPY/month` value. */
@@ -865,7 +868,7 @@ async function readAppSpec(
   const path = `${workingDirectory.replace(/\/+$/, "")}/.takosumi.yml`;
   let bytes: Uint8Array;
   try {
-    bytes = await Deno.readFile(path);
+    bytes = await currentRuntime().fs.readFile(path);
   } catch (err) {
     const cause = err instanceof Error ? err.message : String(err);
     throw new InstallerPipelineError(
@@ -1045,13 +1048,11 @@ function requireNonEmptyString(
 async function defaultRunBuild(
   input: BuildRunnerInput,
 ): Promise<BuildRunnerResult> {
-  const cmd = new Deno.Command("sh", {
+  const runtime = currentRuntime();
+  const { code, stderr } = await runtime.subprocess.run("sh", {
     args: ["-c", input.command],
     cwd: input.workingDirectory,
-    stdout: "piped",
-    stderr: "piped",
   });
-  const { code, stderr } = await cmd.output();
   if (code !== 0) {
     throw new InstallerPipelineError(
       "internal_error",
@@ -1065,7 +1066,7 @@ async function defaultRunBuild(
     : `${input.workingDirectory.replace(/\/+$/, "")}/${input.outputPath}`;
   let bytes: Uint8Array;
   try {
-    bytes = await Deno.readFile(outputPath);
+    bytes = await runtime.fs.readFile(outputPath);
   } catch (err) {
     const cause = err instanceof Error ? err.message : String(err);
     throw new InstallerPipelineError(

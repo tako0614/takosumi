@@ -9,7 +9,7 @@ import {
   InMemorySystemdUnitLifecycle,
   type SystemdUnitLifecycleClient,
 } from "@takos/takosumi-plugins/shape-providers/web-service/systemd-unit";
-import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
 import { KIND_URI_WORKER } from "./_kinds.ts";
 
 export interface SelfhostSystemdWorkerProviderOptions {

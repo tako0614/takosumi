@@ -29,6 +29,12 @@ export interface EnvReader {
 export interface FsAdapter {
   readonly available: boolean;
   readTextFile(path: string | URL): Promise<string>;
+  /**
+   * Read the file as raw bytes (no decoding). Used by the installer
+   * pipeline to compute artifact digests over binary build outputs.
+   * Available on Deno and Node; throws on Workers.
+   */
+  readFile(path: string | URL): Promise<Uint8Array>;
   writeTextFile(path: string, content: string): Promise<void>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   /**

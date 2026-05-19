@@ -58,6 +58,9 @@ export class DefaultRuntimeMaterializer implements RuntimeMaterializer {
           env: { ...input.appSpec.env, ...resource.env },
         })
       ),
+      // Post Wave J: kernel does not project routes (compiler emits
+      // empty `routes: []`). The materializer iterates the empty array
+      // so the projection result carries an empty `routes` slot.
       routes: input.appSpec.routes.map((route) =>
         Object.freeze<RuntimeRouteBindingSpec>({
           id: runtimeScopedId(input, "route", route.name),

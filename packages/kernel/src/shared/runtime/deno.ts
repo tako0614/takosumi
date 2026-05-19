@@ -19,6 +19,7 @@ declare const Deno: {
   build: { os: string };
   errors: { NotFound: ErrorConstructor };
   readTextFile(path: string | URL): Promise<string>;
+  readFile(path: string | URL): Promise<Uint8Array>;
   // deno-lint-ignore no-explicit-any
   readTextFileSync(path: any): string;
   writeTextFile(path: string, data: string): Promise<void>;
@@ -75,6 +76,9 @@ const fs: FsAdapter = {
   available: true,
   readTextFile(path) {
     return Deno.readTextFile(path);
+  },
+  readFile(path) {
+    return Deno.readFile(path);
   },
   readTextFileSync(path) {
     return Deno.readTextFileSync(path);

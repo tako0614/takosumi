@@ -9,7 +9,7 @@ import {
   type FilesystemBucketLifecycleClient,
   InMemoryFilesystemLifecycle,
 } from "@takos/takosumi-plugins/shape-providers/object-store/filesystem";
-import { kernelPluginFromProviderPlugin } from "./_kernel_plugin_adapter.ts";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
 import { KIND_URI_OBJECT_STORE } from "./_kinds.ts";
 
 export interface SelfhostFilesystemProviderOptions {

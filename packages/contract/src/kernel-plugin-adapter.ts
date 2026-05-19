@@ -7,18 +7,18 @@
  * provider's `apply()` / `destroy()`, and surfaces the resource handle as
  * `providerResourceId` for the kernel to record on the Deployment.
  *
- * This is a per-package copy (Phase D extracted the bundled wrappers out
- * of `@takos/takosumi-plugins`; each `@takos/takosumi-<cloud>-providers`
- * package ships its own copy so the takosumi-plugins package no longer
- * carries cloud-coupled code).
+ * Single-source-of-truth: this adapter lives in `@takos/takosumi-contract`
+ * (Phase K iteration 2 consolidation) so the 6 per-cloud provider packages
+ * (`@takos/takosumi-{cloudflare,aws,gcp,kubernetes,deno-deploy,selfhost}-
+ * providers`) import the same implementation instead of shipping byte-
+ * identical 140-line copies. The contract package remains the canonical
+ * `ProviderPlugin` / `KernelPlugin` definition site, so the adapter that
+ * bridges them is semantically at home here.
  */
 
-import type {
-  JsonObject,
-  PlatformContext,
-  ProviderPlugin,
-} from "takosumi-contract";
-import type { KernelPlugin } from "takosumi-contract/plugin";
+import type { JsonObject } from "./types.ts";
+import type { PlatformContext, ProviderPlugin } from "./provider-plugin.ts";
+import type { KernelPlugin } from "./plugin.ts";
 
 /**
  * Build a `KernelPlugin` that delegates `apply()` / `destroy()` to an
