@@ -3,7 +3,7 @@ import { AppSpecParseError, parseAppSpec } from "./yaml-parser.ts";
 
 Deno.test("parseAppSpec — canonical worker + db example with publish/listen", () => {
   const yaml = `
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 
 metadata:
   id: com.example.notes
@@ -32,7 +32,7 @@ components:
       - com.example.notes.db
 `;
   const spec = parseAppSpec(yaml);
-  assertEquals(spec.apiVersion, "takosumi.dev/v1");
+  assertEquals(spec.apiVersion, "v1");
   assertEquals(spec.metadata.id, "com.example.notes");
   assertEquals(Object.keys(spec.components).sort(), ["db", "web"]);
   assertEquals(spec.components.web.kind, "worker");
@@ -61,7 +61,7 @@ Deno.test("parseAppSpec rejects top-level Component `routes:` (= moved into spec
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -79,7 +79,7 @@ Deno.test("parseAppSpec rejects top-level `interfaces:` (= no longer in AppSpec 
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -98,7 +98,7 @@ Deno.test("parseAppSpec rejects top-level `permissions:` (= no longer in AppSpec
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -117,7 +117,7 @@ Deno.test("parseAppSpec rejects unknown top-level field", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components: { web: { kind: worker, build: { command: x, output: y } } }
 extraField: nope
@@ -144,7 +144,7 @@ Deno.test("parseAppSpec rejects unknown kind in component", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -160,7 +160,7 @@ Deno.test("parseAppSpec rejects legacy `use:` field with legacy-use phase", () =
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -182,7 +182,7 @@ Deno.test("parseAppSpec detects publish/listen cycle", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -212,7 +212,7 @@ Deno.test("parseAppSpec rejects self-loop in publish/listen", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -233,7 +233,7 @@ Deno.test("parseAppSpec rejects duplicate namespace publisher across components"
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   a:
@@ -256,7 +256,7 @@ Deno.test("parseAppSpec rejects malformed namespace path in publish", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -274,7 +274,7 @@ Deno.test("parseAppSpec rejects listen entry without `as` field", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -292,7 +292,7 @@ Deno.test("parseAppSpec rejects listen entry with unknown option key", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -310,7 +310,7 @@ components:
 
 Deno.test("parseAppSpec accepts built-in kind canonical URI", () => {
   const spec = parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -325,7 +325,7 @@ components:
 
 Deno.test("parseAppSpec accepts operator-defined kind URI", () => {
   const spec = parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   fn:
@@ -343,7 +343,7 @@ Deno.test("parseAppSpec accepts operator-defined listen shapes (forward compat)"
   // The parser MUST NOT enforce a closed set of `as` values — operator
   // materializers can declare their own shapes (e.g. "grpc-service").
   const spec = parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -363,7 +363,7 @@ Deno.test("parseAppSpec rejects non-URI / non-short-name kind", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -380,7 +380,7 @@ Deno.test("parseAppSpec allows listen to external publisher (no AppSpec edge)", 
   // path at install time. The parser does not enforce internal
   // publisher existence.
   const spec = parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
@@ -407,7 +407,7 @@ Deno.test("parseAppSpec rejects root `kind:` field (= Wave K AppSpec envelope mi
   const err = assertThrows(
     () =>
       parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 kind: App
 metadata: { id: x, name: y }
 components: { web: { kind: worker, build: { command: x, output: y } } }
@@ -421,14 +421,48 @@ components: { web: { kind: worker, build: { command: x, output: y } } }
 Deno.test("parseAppSpec accepts root without `kind:` field (= Wave K minimal envelope)", () => {
   // Wave K canonical envelope: `apiVersion` + `metadata` + `components`.
   const spec = parseAppSpec(`
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata: { id: com.example.minimal, name: Minimal }
 components:
   web:
     kind: worker
     build: { command: x, output: y }
 `);
-  assertEquals(spec.apiVersion, "takosumi.dev/v1");
+  assertEquals(spec.apiVersion, "v1");
+  assertEquals(spec.metadata.id, "com.example.minimal");
+  assertEquals(spec.components.web.kind, "worker");
+});
+
+Deno.test("parseAppSpec rejects legacy `apiVersion: takosumi.dev/v1` (= Wave L group prefix removal)", () => {
+  // Wave L: AppSpec `apiVersion` collapsed from `"takosumi.dev/v1"` to
+  // bare `"v1"`. The k8s-style group prefix is a vestige; Takosumi
+  // parser only handles `.takosumi.yml`, so the group is redundant.
+  // Authors who keep the legacy `takosumi.dev/v1` get a schema reject at
+  // `$.apiVersion` (= same fail-closed pattern as legacy-use).
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: takosumi.dev/v1
+metadata: { id: x, name: y }
+components: { web: { kind: worker, build: { command: x, output: y } } }
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "schema");
+  assertEquals(err.validationPath, "$.apiVersion");
+});
+
+Deno.test("parseAppSpec accepts bare `apiVersion: v1` (= Wave L canonical envelope)", () => {
+  // Wave L canonical envelope: bare `"v1"` apiVersion (no group prefix).
+  const spec = parseAppSpec(`
+apiVersion: v1
+metadata: { id: com.example.minimal, name: Minimal }
+components:
+  web:
+    kind: worker
+    build: { command: x, output: y }
+`);
+  assertEquals(spec.apiVersion, "v1");
   assertEquals(spec.metadata.id, "com.example.minimal");
   assertEquals(spec.components.web.kind, "worker");
 });

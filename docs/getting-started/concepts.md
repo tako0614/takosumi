@@ -110,7 +110,7 @@ workflow runner は source ref を選んで installer API に渡す。
 current public manifest は `.takosumi.yml` (= AppSpec):
 
 ```yaml
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata:
   id: com.example.my-app
   name: my-app

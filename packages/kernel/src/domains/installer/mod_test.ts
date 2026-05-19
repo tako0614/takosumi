@@ -29,7 +29,7 @@ import {
 // connection material at `lifecycle-test.db`; a `worker` component listens
 // on the same path with `as: env` + `prefix: DB` so the kernel auto-
 // resolves env injections like `DB_HOST`, `DB_PORT`, ...
-const SAMPLE_YAML = `apiVersion: takosumi.dev/v1
+const SAMPLE_YAML = `apiVersion: v1
 metadata:
   id: lifecycle-test
   name: Lifecycle Test

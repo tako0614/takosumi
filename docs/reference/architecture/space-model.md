@@ -224,7 +224,7 @@ AppSpec は Space を言及しない。 Space は installer request の `spaceId
 で決まる。
 
 ```yaml
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 
 metadata:
   id: com.example.api

@@ -8,6 +8,47 @@ Versions follow [Semantic Versioning](https://semver.org/) once each package
 crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes (documented per
 entry).
 
+## Spec策定中 — Wave L apiVersion group prefix removal (2026-05-20, Unreleased)
+
+Wave L (= L-A 段) で AppSpec の `apiVersion` から k8s 風 group prefix を削除した
+(Wave K AppSpec root envelope minimization 2026-05-20 の連続、 user mandate:
+「`takosumi.dev/v1` の group prefix は k8s convention の vestige、 Takosumi
+parser は `.takosumi.yml` のみ扱うので group は redundant、 `v1` のみに
+minimize」)。 「底は自由 + minimum surface」 原則の連続。
+
+- **Breaking — `apiVersion` group prefix 削除**: AppSpec root の `apiVersion`
+  literal を `"takosumi.dev/v1"` から bare `"v1"` に minimize。 group prefix は
+  Kubernetes API 風の vestige であり、 Takosumi parser は単一 ファイル
+  (`.takosumi.yml`) のみ扱うため redundant。
+- **Contract**: `@takos/takosumi-contract` の `APP_SPEC_API_VERSION` const を
+  `"takosumi.dev/v1"` → `"v1"` に更新、 `AppSpec.apiVersion` literal type も
+  追従。
+- **Parser**: `@takos/takosumi-installer` の `yaml-parser.ts` で expect する
+  apiVersion 文字列が自動的に `"v1"` に。 root に `apiVersion: takosumi.dev/v1`
+  を含む YAML は schema reject (= `validationPhase: "schema"`,
+  `validationPath: "$.apiVersion"`) になる (= Phase B legacy-use 同形 pattern、
+  fail-closed)。
+- **Migration**: 旧 `apiVersion: takosumi.dev/v1` を含む `.takosumi.yml` は
+  parser で reject される。 consumer は `apiVersion: v1` に書き換えで migration
+  完了。 6 consumer apps (yurucommu / takos-apps/{docs,slide,excel,computer} /
+  road-to-me) の `.takosumi.yml` migration は L-B 段で実施 (= 本 wave は
+  takosumi/ 内部 scope のみ)。
+- **Test coverage**: parser に新 regression test 2 件追加: (1) root に
+  `apiVersion: takosumi.dev/v1` を含む入力を schema reject、 (2) bare
+  `apiVersion: v1` を含む 最小 AppSpec を accept。 既存 parser / kernel /
+  acceptance / e2e fixture から `takosumi.dev/v1` 行を sweep 済。
+- **CLI scaffold**: `takosumi init` の `worker-postgres` / `empty` template が
+  bare `v1` を emit。
+- **Docs**: `docs/reference/app-spec.md` / `docs/reference/manifest.md` の
+  envelope narrative と version table を `"v1"` wording に更新、 YAML example
+  から `takosumi.dev/v1` 行を全 sweep。
+- **JSON-LD context は touch しない**: `spec/contexts/v1.jsonld` の canonical
+  URI (= `https://takosumi.com/contexts/v1.jsonld`、 `https://takosumi.com/`
+  vocab) は AppSpec の `apiVersion` value とは別概念。 JSON-LD URI structure は
+  keep、 apiVersion value のみ変更。
+- **No version bump yet**: 策定中 phase のため deno.json の version は固定。
+  Wave L announcement 時に collective minor bump を実施予定。
+
 ## Spec策定中 — Wave K AppSpec root envelope minimization (2026-05-20, Unreleased)
 
 Wave K (= K-A 段) で AppSpec root envelope を更に minimize した (Wave J

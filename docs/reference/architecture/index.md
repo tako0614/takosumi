@@ -119,7 +119,7 @@ policy、secret、journal、observation、activation は、明示的な Space ex
 ## 最小例 {#minimal-example}
 
 ```yaml
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 
 metadata:
   id: com.example.api

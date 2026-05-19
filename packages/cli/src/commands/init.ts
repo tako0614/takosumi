@@ -1,7 +1,7 @@
 import { Command } from "@cliffy/command";
 
 const TEMPLATES = {
-  "worker-postgres": `apiVersion: takosumi.dev/v1
+  "worker-postgres": `apiVersion: v1
 
 metadata:
   id: com.example.my-app
@@ -34,7 +34,7 @@ components:
     publish:
       - com.example.my-app.assets
 `,
-  empty: `apiVersion: takosumi.dev/v1
+  empty: `apiVersion: v1
 
 metadata:
   id: com.example.my-app

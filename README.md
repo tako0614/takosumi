@@ -26,7 +26,7 @@ takosumi install --source git:https://github.com/example/notes#main \
 ### AppSpec (= `.takosumi.yml`) の最小例
 
 ```yaml
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata:
   id: com.example.notes
   name: Example Notes

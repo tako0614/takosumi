@@ -19,7 +19,7 @@ source root に置くだけで install + deploy + rollback まで動きます。
 ## 最小例
 
 ```yaml
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 
 metadata:
   id: com.example.notes

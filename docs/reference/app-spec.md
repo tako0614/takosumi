@@ -27,7 +27,7 @@ Takosumi の public concept は次の 3 つだけです。
 ## エンベロープ {#envelope}
 
 ```yaml
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 
 metadata:
   id: com.example.notes
@@ -39,19 +39,19 @@ components:
 # ...
 ```
 
-> Wave K AppSpec root envelope minimization 後の AppSpec root は `apiVersion` /
-> `metadata` / `components` の 3 field のみ。 `apiVersion: takosumi.dev/v1` 単独
-> で schema を discriminate するため、 旧 `kind: App` root field は物理削除済 (=
-> 入力に `kind:` を root に含む YAML は unknown-key reject)。 内部 Component の
-> `kind:` field (= materializer 解決の discriminator) は当然 keep。 Wave J で
-> 削除済の top-level `interfaces:` / `permissions:` も引き続き reject。 launch /
-> health / capability-request 等の semantics は kind の open `spec:` field
-> (または 別 kind の namespace pub/sub) を materializer が読む形で表現する (=
-> 底は自由)。
+> Wave L AppSpec apiVersion group-prefix removal 後の AppSpec root は
+> `apiVersion` / `metadata` / `components` の 3 field のみ、 `apiVersion` は
+> bare `"v1"` 固定。 `apiVersion: v1` 単独 で schema を discriminate するため、
+> Wave K で削除した `kind: App` root field は引き続き unknown-key reject。 内部
+> Component の `kind:` field (= materializer 解決の discriminator) は当然 keep。
+> Wave J で 削除済の top-level `interfaces:` / `permissions:` も引き続き
+> reject。 launch / health / capability-request 等の semantics は kind の open
+> `spec:` field (または 別 kind の namespace pub/sub) を materializer
+> が読む形で表現する (= 底は自由)。
 
 | field        | required | 型     | 説明                                 |
 | ------------ | -------- | ------ | ------------------------------------ |
-| `apiVersion` | yes      | string | 固定値 `"takosumi.dev/v1"`           |
+| `apiVersion` | yes      | string | 固定値 `"v1"`                        |
 | `metadata`   | yes      | object | App 識別子と display 用情報          |
 | `components` | yes      | object | コンポーネント定義 (= runtime parts) |
 

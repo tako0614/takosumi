@@ -35,7 +35,7 @@ import { mountInstallerPublicRoutes } from "./installer_public_routes.ts";
 // the auto-namespace `example-notes.db`; `web` listens with
 // `as: env, prefix: DB` so the kernel default expansion produces
 // DB_HOST / DB_PORT / ... env injections on the worker.
-const SAMPLE_APP_SPEC_YAML = `apiVersion: takosumi.dev/v1
+const SAMPLE_APP_SPEC_YAML = `apiVersion: v1
 metadata:
   id: example-notes
   name: Example Notes
@@ -350,7 +350,7 @@ Deno.test("installer e2e — pub/sub cycle aborts apply with non-2xx error envel
   // a publishes p1, b listens p1 and publishes p2, a listens p2 → cycle.
   // The yaml-parser rejects this at parse time with validationPhase
   // = publish-listen.
-  const cyclicSpec = `apiVersion: takosumi.dev/v1
+  const cyclicSpec = `apiVersion: v1
 metadata:
   id: cyclic-app
   name: Cyclic App
@@ -411,7 +411,7 @@ components:
 Deno.test("installer e2e — auto-namespacing also exposes explicit publish paths", async () => {
   // db publishes its material at both the auto path AND an explicit
   // operator-defined path; worker listens on the explicit path.
-  const spec = `apiVersion: takosumi.dev/v1
+  const spec = `apiVersion: v1
 metadata:
   id: explicit-pub
   name: Explicit Pub

@@ -6,27 +6,30 @@ Deployment. It contains the type contract, the PaaS kernel, the materializer
 host, the runtime-agent, the canonical installer, the CLI, and six per-cloud
 provider packages as co-equal workspace members, all consumable from JSR.
 
-**Spec status (= Wave K AppSpec root envelope minimization 完遂、 2026-05-20、
-Wave J Component contract minimization 2026-05-19 の延長)**: Takosumi の AppSpec
+**Spec status (= Wave L AppSpec apiVersion group prefix removal 完遂、
+2026-05-20、 Wave K AppSpec root envelope minimization 2026-05-20 / Wave J
+Component contract minimization 2026-05-19 の延長)**: Takosumi の AppSpec
 contract は完全 kind-agnostic な単一 spec で閉じている。 AppSpec root は
 `{ apiVersion, metadata, components }` の 3 field、 Component は
-`{ kind, spec, publish, listen, build }` の 5 field のみ。
-`apiVersion: takosumi.dev/v1` 単独で schema を discriminate するため、 旧
-`kind: App` root field は Wave K で物理削除済 (= 入力に `kind:` を root に 含む
-YAML は unknown-key として reject)。 内部 Component の `kind:` field (=
-materializer 解決の discriminator) は当然 keep。 構成要素は namespace pub/sub
-model、 curated 4-kind catalog (extensible)、 5-endpoint installer API、 6 別
-cloud provider package、 materializer = `KernelPlugin | InlineMaterializer`
-union。 旧 `use:` edge、 placeholder syntax、 中間 manifest compile 形式、
-workflow-reference field、 publisher-trust scheme、 operator namespace
-special-case、 Wave J で削除した **Component.routes / AppSpec.interfaces /
-AppSpec.permissions**、 そして Wave K で削除した **AppSpec root の `kind: App`
-field** は 全て物理削除済。 routes / launch endpoint / capability request は
-kind の open `spec:` 内 または別 kind の namespace pub/sub で表現する (=
-「底は自由」 原則: 実装層の convention は spec contract の外)。 production
-deployable (= bare core と full-feature 両 smoke green、 kernel pipeline は
-routes を 処理しない)。 これ以降の spec 変更は CHANGELOG / RFC ベースの個別
-evolution として扱う。
+`{ kind, spec, publish, listen, build }` の 5 field のみ。 `apiVersion` は bare
+`"v1"` 固定 (Wave L 以降 k8s 風 group prefix `takosumi.dev/` は redundant な
+vestige として削除済、 Takosumi parser は `.takosumi.yml` のみ扱う)。
+`apiVersion: v1` 単独で schema を discriminate するため、 旧 `kind: App` root
+field は Wave K で物理削除済 (= 入力に `kind:` を root に 含む YAML は
+unknown-key として reject)。 内部 Component の `kind:` field (= materializer
+解決の discriminator) は当然 keep。 構成要素は namespace pub/sub model、 curated
+4-kind catalog (extensible)、 5-endpoint installer API、 6 別 cloud provider
+package、 materializer = `KernelPlugin | InlineMaterializer` union。 旧 `use:`
+edge、 placeholder syntax、 中間 manifest compile 形式、 workflow-reference
+field、 publisher-trust scheme、 operator namespace special-case、 Wave J で
+削除した **Component.routes / AppSpec.interfaces / AppSpec.permissions**、 Wave
+K で削除した **AppSpec root の `kind: App` field**、 そして Wave L で削除した
+**`apiVersion` の `takosumi.dev/` group prefix** は全て物理削除済。 routes /
+launch endpoint / capability request は kind の open `spec:` 内 または別 kind の
+namespace pub/sub で表現する (= 「底は自由」 原則: 実装層の convention は spec
+contract の外)。 production deployable (= bare core と full-feature 両 smoke
+green、 kernel pipeline は routes を 処理しない)。 これ以降の spec 変更は
+CHANGELOG / RFC ベースの個別 evolution として扱う。
 
 Canonical contract:
 [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (本

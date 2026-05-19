@@ -40,7 +40,7 @@ Deno.test("direct deploy sample uses the reusable installer action", async () =>
   // Wave K: AppSpec root no longer carries `kind: App` — assert
   // canonical envelope fields (apiVersion + components) and ensure the
   // legacy `kind: App` line is absent.
-  assert.match(manifest, /apiVersion: takosumi\.dev\/v1/);
+  assert.match(manifest, /apiVersion: v1/);
   assert.match(manifest, /components:/);
   assert.equal(/^kind: App$/m.test(manifest), false);
   assert.match(readme, /\/v1\/installations/);

@@ -40,7 +40,7 @@ API reads this AppSpec, creates an Installation, and records each apply as a
 Deployment.
 
 ```yaml
-apiVersion: takosumi.dev/v1
+apiVersion: v1
 metadata:
   id: com.example.hello-worker
   name: hello-worker
