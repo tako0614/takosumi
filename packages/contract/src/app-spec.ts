@@ -30,6 +30,14 @@ export const APP_SPEC_KIND = "App" as const;
  * `https://operator.example.com/kinds/lambda`) — see `KIND_URI_BY_NAME`
  * for the canonical URI of each built-in name and `resolveKindUri()` for
  * short-name → URI resolution.
+ *
+ * @generated-from spec/contexts/kinds/v1/*.jsonld aliases[0]
+ *   Each entry mirrors the primary alias (= `aliases[0]`) of a JSON-LD
+ *   kind document. Kept hand-written rather than generated to preserve
+ *   the dependency direction: the contract package is the root of the
+ *   package graph and must not depend on spec tooling. Drift is enforced
+ *   by `scripts/check-kind-uri-sync.ts`, which is invoked from
+ *   `deno task spec:check-drift`.
  */
 export const COMPONENT_KINDS = [
   "worker",
@@ -50,6 +58,13 @@ export const TAKOSUMI_KIND_URI_BASE = "https://takosumi.com/kinds/v1/" as const;
  * Built-in short name → canonical URI mapping. Authoring `.takosumi.yml`
  * may use either the short name (`worker`) or the full URI
  * (`https://takosumi.com/kinds/v1/worker`).
+ *
+ * @generated-from spec/contexts/kinds/v1/*.jsonld (@id + aliases[0])
+ *   Each entry mirrors the JSON-LD `@id` (= full canonical URI) keyed by
+ *   the JSON-LD `aliases[0]` (= short name) of a kind document. Kept
+ *   hand-written rather than generated; see `COMPONENT_KINDS` JSDoc for
+ *   the rationale. Drift is enforced by `scripts/check-kind-uri-sync.ts`
+ *   via `deno task spec:check-drift`.
  */
 export const KIND_URI_BY_NAME: Readonly<Record<ComponentKind, string>> = {
   worker: `${TAKOSUMI_KIND_URI_BASE}worker`,
