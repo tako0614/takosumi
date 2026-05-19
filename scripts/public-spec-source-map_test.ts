@@ -15,10 +15,14 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/kernel-http-api.md",
   "docs/reference/runtime-agent-api.md",
   "docs/manifest.md",
-  "docs/reference/manifest-validation.md",
-  "docs/reference/shapes.md",
+  // Phase M Wave 1: docs/reference/manifest-validation.md was merged into
+  // docs/reference/manifest.md.
+  "docs/reference/manifest.md",
   "docs/reference/providers.md",
-  "docs/reference/artifact-kinds.md",
+  // Phase M Wave 3 Group A: docs/reference/{shapes,artifact-kinds}.md were
+  // merged into docs/reference/kind-catalog.md (shapes + component-kind-catalog
+  // + json-ld-kind-catalog + artifact-kinds → kind-catalog.md).
+  "docs/reference/kind-catalog.md",
   "packages/kernel/src/domains/deploy/_internal_manifest_types.ts",
   "packages/kernel/src/domains/deploy/manifest_v1.ts",
   "packages/kernel/src/api/app.ts",
