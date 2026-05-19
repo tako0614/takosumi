@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import type { PublicDeployManifest } from "../domains/deploy/mod.ts";
 import {
   InMemoryRuntimeNetworkPolicyStore,
   InMemoryServiceGrantStore,
@@ -182,29 +181,8 @@ async function putWorkerIdentity(stores: WorkerAuthzStores): Promise<void> {
   });
 }
 
-function workerManifest(): PublicDeployManifest {
-  return {
-    name: "worker",
-    version: "1.0.0",
-    compute: {
-      handler: {
-        type: "container",
-        image:
-          "registry.example.test/worker@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        port: 8080,
-      },
-    },
-    routes: {
-      web: {
-        target: "handler",
-        protocol: "https",
-        host: "worker.example.test",
-        path: "/",
-      },
-      jobs: { target: "handler", protocol: "queue", source: "jobs" },
-    },
-  };
-}
+// `workerManifest()` removed alongside the queue-canary event-planner test
+// (Wave J Component contract minimization).
 
 function isPermissionDenied(error: unknown, message: string): boolean {
   return error instanceof DomainError && error.code === "permission_denied" &&

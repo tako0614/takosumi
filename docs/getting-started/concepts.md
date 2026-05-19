@@ -123,9 +123,14 @@ components:
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    routes:
-      - /api/*
+    spec:
+      routes:
+        - /api/*
 ```
+
+(`routes:` は worker kind の `spec:` 内部 field — Wave J Component contract
+minimization で AppSpec top-level からは削除されており、 worker materializer の
+convention として `spec.routes` を読む)
 
 component 間の構造的依存は **`publish` / `listen`** で書く。 文字列
 interpolation は使わない。 producer 側が `publish: [<namespacePath>]` で

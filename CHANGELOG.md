@@ -8,6 +8,38 @@ Versions follow [Semantic Versioning](https://semver.org/) once each package
 crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes (documented per
 entry).
 
+## Spec策定中 — Wave J Component contract minimization (2026-05-19, Unreleased)
+
+Wave J で AppSpec contract surface を完全 kind-agnostic に minimize した
+(post-Phase-I 継続 evolution、 user mandate: 「route は特別視するべき じゃない、
+底は自由だから仕様には含めない」):
+
+- **Breaking — `Component.routes` 削除**: top-level Component field から物理
+  削除。 worker materializer (= cloudflare-workers / deno-deploy shape provider)
+  は `spec.routes` を実装慣習として読み続ける。 worker.jsonld からも `routes`
+  宣言を削除 (= kind contract が routes を mandate しない)。
+- **Breaking — `AppSpec.interfaces` 削除**: top-level AppSpec field から
+  物理削除。 launch / mcp / health endpoint は kind の open `spec:` 内、
+  または別 kind の namespace pub/sub で表現する。
+- **Breaking — `AppSpec.permissions` 削除**: top-level AppSpec field から
+  物理削除。 capability request は namespace pub / consumer-defined kind で
+  model する。
+- **Breaking — kernel routes machinery 削除**: `event-planner` / `rollout`
+  services 完全削除 (= dormant、 installer pipeline から呼ばれ ていなかった)。
+  `compileManifestToAppSpec` が `routes: []` を常に emit (= manifest layer から
+  routes を drop、 kernel pipeline は routes を 処理しない)。 `AppSpecRoute` /
+  `DeploymentRoute` 型は type-level shim として retain (= 6 cloud provider
+  plugin の compile 互換のため)。
+- **Migration**: 旧 top-level `routes:` / `interfaces:` / `permissions:` を 含む
+  AppSpec は parser で `schema` phase + `unknown-key` で reject される。
+  consumer は (1) routes を worker kind の `spec.routes` に nest、 (2)
+  interfaces / permissions block を削除、 で migration 完了。 6 consumer apps
+  (yurucommu / takos-apps/{docs,slide,excel,computer} / road-to-me) は本 Wave で
+  migrate 済。 takosumi cli `init` scaffold template も 新 shape を emit。
+- **No version bump yet**: 策定中 phase のため deno.json の version は固定
+  (contract 2.5.0 / kernel 0.14.0 / plugins 0.12.0 / cli 0.15.0 / all 0.17.0)。
+  Wave J announcement 時に collective minor bump を実施予定。
+
 ## Spec策定中 — Phase A–F (2026-05-19, Unreleased)
 
 Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:

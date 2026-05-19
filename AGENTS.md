@@ -6,16 +6,21 @@ Deployment. It contains the type contract, the PaaS kernel, the materializer
 host, the runtime-agent, the canonical installer, the CLI, and six per-cloud
 provider packages as co-equal workspace members, all consumable from JSR.
 
-**Spec status (= Phase I 完遂、 2026-05-19)**: Takosumi の仕様は単一 spec
-で閉じている。 構成要素は namespace pub/sub model、 curated 4-kind catalog
-(extensible)、 5-endpoint installer API、 6 別 cloud provider package、
-materializer = `KernelPlugin | InlineMaterializer` union。 contract / impl /
-docs / 6 consumer apps / takosumi-cloud reference distribution はすべて 同じ 1
-spec を指す。 旧 `use:` edge、 placeholder syntax、 中間 manifest compile 形式、
-workflow-reference field、 publisher-trust scheme、 operator namespace
-special-case は物理削除済。 production deployable (= bare core と full-feature
-両 smoke green)。 これ以降の spec 変更は CHANGELOG / RFC ベース の個別 evolution
-として扱う。
+**Spec status (= Wave J Component contract minimization 完遂、 2026-05-19)**:
+Takosumi の AppSpec contract は完全 kind-agnostic な単一 spec で閉じている。
+AppSpec root は `{ apiVersion, kind, metadata, components }` の 4 field、
+Component は `{ kind, spec, publish, listen, build }` の 5 field のみ。 構成
+要素は namespace pub/sub model、 curated 4-kind catalog (extensible)、
+5-endpoint installer API、 6 別 cloud provider package、 materializer =
+`KernelPlugin | InlineMaterializer` union。 旧 `use:` edge、 placeholder
+syntax、 中間 manifest compile 形式、 workflow-reference field、 publisher-trust
+scheme、 operator namespace special-case、 そして Wave J で 削除した
+**Component.routes / AppSpec.interfaces / AppSpec.permissions** は
+全て物理削除済。 routes / launch endpoint / capability request は kind の open
+`spec:` 内 または別 kind の namespace pub/sub で表現する (= 「底は自由」 原則:
+実装層の convention は spec contract の外)。 production deployable (= bare core
+と full-feature 両 smoke green、 kernel pipeline は routes を 処理しない)。
+これ以降の spec 変更は CHANGELOG / RFC ベースの個別 evolution として扱う。
 
 Canonical contract:
 [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (本
@@ -163,6 +168,12 @@ AppSpec の各 component は 2 つの edge だけを持つ:
 | `@takos/takosumi-deno-deploy-providers` | 0.1.0   | Deno Deploy `KernelPlugin` factory                            |
 | `@takos/takosumi-selfhost-providers`    | 0.1.0   | Self-host (docker / systemd / filesystem / minio) factories   |
 | `@takos/takosumi`                       | 0.17.0  | umbrella (core 6 つを再公開、 provider packages は別 install) |
+
+> Wave J Component contract minimization は contract surface 削減 (= routes /
+> interfaces / permissions 削除) のため breaking だが、 策定中 phase なので
+> version bump は次回 publish 直前に collective minor bump として 行う (= 現状
+> deno.json の version は固定維持、 contract / kernel / plugins / cli / all の
+> minor bump を Wave J 完了の announcement 時に同時実施 予定)。
 
 > Note: `@takos/` JSR scope は Takos が publish する **reference distribution**
 > であり、 authority は publisher ではなく contract (`@takos/takosumi-contract`)

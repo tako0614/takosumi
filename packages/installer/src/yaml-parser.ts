@@ -498,22 +498,6 @@ function requireString(value: unknown, path: string): void {
   }
 }
 
-function validateStringArray(value: unknown, path: string): readonly string[] {
-  if (!Array.isArray(value)) {
-    throw new AppSpecParseError(`${path} must be an array`, "schema", path);
-  }
-  for (let i = 0; i < value.length; i++) {
-    if (typeof value[i] !== "string") {
-      throw new AppSpecParseError(
-        `${path}[${i}] must be a string`,
-        "schema",
-        `${path}[${i}]`,
-      );
-    }
-  }
-  return value as readonly string[];
-}
-
 /**
  * Namespace paths are dot-separated sequences of non-empty segments.
  * No segment may be empty (so `"a..b"` and `".x"` and `"x."` are

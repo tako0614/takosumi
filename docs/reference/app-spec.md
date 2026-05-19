@@ -38,14 +38,14 @@ metadata:
 
 components:
 # ...
-
-interfaces:
-# ...
-
-permissions:
-  requested:
-# ...
 ```
+
+> Post Wave J Component contract minimization: AppSpec root has only
+> `apiVersion` / `kind` / `metadata` / `components` (= 4 field). The prior
+> top-level `interfaces:` / `permissions:` blocks are removed; each kind's open
+> `spec:` field (or a separate kind on namespace pub/sub) carries whatever
+> launch / health / capability-request semantics the materializer chooses to
+> honor (= 底は自由).
 
 | field         | required | 型     | 説明                                          |
 | ------------- | -------- | ------ | --------------------------------------------- |
@@ -255,52 +255,27 @@ parser で実装予定の syntactic sugar)。 現状の正式 syntax は full pa
 
 詳細は [Component Kind Catalog](./component-kind-catalog.md)。
 
-## `interfaces` (optional)
+## launch / health / mcp endpoints, permission requests (実装層)
 
-Takos / OS / Agent layer が App を呼び出す entry point を宣言します。 component
-の path にマップします。
+Wave J Component contract minimization で AppSpec から **`interfaces:` /
+`permissions:` top-level field を物理削除** しました。 これらは kernel が
+処理しない (= "kernel は routes を知らない" 同じ原則)、 「底は自由」 な
+materializer 層 / consumer 層の責務です。
 
-```yaml
-interfaces:
-  launch:
-    target: web
-    path: /api/auth/launch
+実装上の表現方法 (= operator / kind 著者の任意選択):
 
-  mcp:
-    target: web
-    path: /mcp
-    required: false
-```
+- (option A) kind の open `spec:` field で表現。 例えば worker kind の
+  materializer が `spec.routes` / `spec.launchPath` / `spec.permissions` を
+  読んで実体化する。
+- (option B) 別 component / 別 kind を立てて namespace pub/sub で受け渡す。
+  例えば `kind: takos-store-listing` という consumer-defined kind を立てて Takos
+  product 側 (= store / launcher) が `listen:` する。
+- (option C) operator / consumer 層が AppSpec 外で management する (= 例:
+  Takosumi Accounts が capability grant を別 UI で管理)。
 
-| key      | 用途                                                             |
-| -------- | ---------------------------------------------------------------- |
-| `launch` | Takos space launcher が叩く path                                 |
-| `mcp`    | Agent layer が discover する MCP endpoint                        |
-| `health` | operator が叩く health probe path (default は kernel が用意する) |
-
-各 interface の field:
-
-| field      | required | 説明                                         |
-| ---------- | -------- | -------------------------------------------- |
-| `target`   | yes      | components の key (例: `web`)                |
-| `path`     | yes      | target component 内の URL path               |
-| `required` | no       | `false` のとき、 missing でも apply 成功扱い |
-
-## `permissions` (optional)
-
-Installation が Takos product API に対して要求する scope を宣言します。 具体的な
-scope は Takos product side で定義され、 Installation の materialize 時に
-Takosumi が user / operator に提示します。
-
-```yaml
-permissions:
-  requested:
-    - logs.read.own
-    - spaces:read
-```
-
-scope vocabulary は Takos / 上位 product が所有します。 Takosumi は文字列リスト
-として受理して Installation に記録するだけです。
+旧 `interfaces.launch` / `interfaces.mcp` / `interfaces.health` /
+`permissions.requested` に依存していた tooling は、 移行先の kind / namespace
+shape を consumer / operator 側で定義してください。
 
 ## 「plugin」 は spec 用語ではない
 
