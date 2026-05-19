@@ -14,8 +14,9 @@ components:
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    routes:
-      - /
+    spec:
+      routes:
+        - /
     listen:
       com.example.my-app.db:
         as: env
