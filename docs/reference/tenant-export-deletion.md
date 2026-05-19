@@ -224,7 +224,7 @@ primitive を提供する。
 
 - `docs/reference/architecture/space-model.md` — Space deletion semantics と
   soft-delete の復活窓に関する rationale
-- `docs/reference/architecture/observation-drift-revokedebt-model.md` — Space
+- `docs/reference/incident-model.md#observation-drift--revokedebt-model` — Space
   退役時の RevokeDebt 残処理と export の関係
 - `docs/reference/architecture/operator-boundaries.md` — kernel が公開する
   export / deletion primitive と operator policy 層の責務分担

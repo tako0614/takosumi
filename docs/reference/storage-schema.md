@@ -835,7 +835,7 @@ webhook / declarable-hook の record を生成・予約・永続化しない。 
 
 ## See also
 
-- [Actor / Organization Model](/reference/actor-organization-model)
+- [Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
 - [API Key Management](/reference/api-key-management)
 - [Auth Providers](/reference/auth-providers)
 - [RBAC Policy](/reference/rbac-policy)
@@ -872,9 +872,9 @@ kernel 実装に許されない事項:
 ## 関連 architecture note
 
 - `reference/architecture/snapshot-model` — immutable snapshot 分類。
-- `reference/architecture/operation-plan-write-ahead-journal-model` — WAL stage
-  enum と idempotency tuple。
-- `reference/architecture/observation-drift-revokedebt-model` — observation /
+- `reference/architecture/runtime-deployment-model#operation-plan--write-ahead-journal`
+  — WAL stage enum と idempotency tuple。
+- `reference/incident-model#observation-drift--revokedebt-model` — observation /
   drift / RevokeDebt のセマンティクス。
 - `reference/architecture/policy-risk-approval-error-model` — Approval
   invalidation trigger と risk enum。

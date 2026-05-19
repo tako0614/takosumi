@@ -64,8 +64,8 @@ allow / deny / approval を扱う closed vocabulary。
 account-plane identity / billing / RBAC は Takosumi Accounts が所有する。 kernel
 側から見たときの境界を次のページで説明する。
 
-- [Actor / Organization Model](./actor-organization-model) — actor /
-  organization の責務境界
+- [Actor / Organization Model](./architecture/identity-and-access-architecture#actor--organization-model)
+  — actor / organization の責務境界
 - [RBAC Policy](./rbac-policy) — RBAC を所有する layer の整理
 - [API Key Management](./api-key-management) — installer / artifact credentials
 - [Auth Providers](./auth-providers) — auth provider の責務境界

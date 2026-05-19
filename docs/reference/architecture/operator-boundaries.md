@@ -56,9 +56,9 @@ Space scope で ある。
 ## Connector boundary
 
 connector は operator がインストールし、operator が管理する。
-[DataAsset Model — Connector contract](./data-asset-model.md) に従って
-`connector:<id>` で addressing される。public manifest が connector を命名
-することはない。connector の可視性、acceptedKinds、signing expectation は
+[Data Asset Model — Connector contract](./namespace-export-model.md#connector-contract)
+に従って `connector:<id>` で addressing される。public manifest が connector
+を命名 することはない。connector の可視性、acceptedKinds、signing expectation は
 operator 統治で Space scope である。
 
 ## Production mode

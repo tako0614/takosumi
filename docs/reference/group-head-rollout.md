@@ -173,12 +173,13 @@ GroupHead 関連の audit event は以下を発行します
 
 関連 architecture notes:��
 
-- `docs/reference/architecture/exposure-activation-model.md` — GroupHead pointer
-  と ActivationSnapshot / Exposure の関係、canary / shadow split 規則の議論
+- `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`
+  — GroupHead pointer と ActivationSnapshot / Exposure の関係、canary / shadow
+  split 規則の議論
 - `docs/reference/architecture/execution-lifecycle.md` — rollout state machine
   の閉じ方と v1 範囲を blue-green に広げない判断
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  pointer 前進と WAL stage の対応、シリアライズ要件の rationale
+- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
+  — pointer 前進と WAL stage の対応、シリアライズ要件の rationale
 
 ## 関連ページ
 

@@ -291,7 +291,7 @@ alias には `CONVENTIONS.md` §6 RFC が必須。
 - docs/reference/architecture/space-model.md
 - docs/reference/architecture/snapshot-model.md
 - docs/reference/architecture/link-projection-model.md
-- docs/reference/architecture/data-asset-model.md
+- docs/reference/architecture/namespace-export-model.md#data-asset-model
 
 ## See also
 
@@ -303,7 +303,7 @@ alias には `CONVENTIONS.md` §6 RFC が必須。
 - [Connector Contract](/reference/connector-contract)
 - [Storage Schema](/reference/storage-schema)
 - [Digest Computation](/reference/digest-computation)
-- [Actor / Organization Model](/reference/actor-organization-model)
+- [Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
 - [API Key Management](/reference/api-key-management)
 - [Auth Providers](/reference/auth-providers)
 - [RBAC Policy](/reference/rbac-policy)

@@ -144,11 +144,11 @@ Inspection commands require the operator bearer.
 
 ## Related architecture notes
 
-- `reference/architecture/operation-plan-write-ahead-journal-model` — WAL stage
-  enum, idempotency tuple, replay rules.
+- `reference/architecture/runtime-deployment-model#operation-plan--write-ahead-journal`
+  — WAL stage enum, idempotency tuple, replay rules.
 - `reference/architecture/snapshot-model` — base snapshot semantics and snapshot
   garbage collection.
-- `reference/architecture/observation-drift-revokedebt-model` — RevokeDebt
+- `reference/incident-model#observation-drift--revokedebt-model` — RevokeDebt
   status rules referenced by retention.
 
 ## 関連ページ

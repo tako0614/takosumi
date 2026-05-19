@@ -22,7 +22,7 @@ Preview に副作用はない。
 ## Apply
 
 この phase は
-[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+[Operation Plan and Write-ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 で定義された WAL stage を進行する。
 
 ```text
@@ -108,7 +108,7 @@ Approval:
 の間に [Approval invalidation trigger](./policy-risk-approval-error-model.md) の
 いずれかが発火した場合、prediction digest は一致せず approval は無効化され、
 apply は
-[Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+[Operation Plan and Write-ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 の `pre-commit` stage で fail-closed する。新しい prediction で承認サイクルを
 やり直す必要がある。
 

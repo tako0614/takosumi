@@ -343,7 +343,8 @@ Actor record の closed enum (4 値)。
   principal
 
 type ごとの binding field と認証 contract は
-[Actor / Organization Model](/reference/actor-organization-model) を参照。
+[Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
+を参照。
 
 ## Roles
 
@@ -466,14 +467,14 @@ workflow / cron / hook の実行は kernel の外の CI / operator product で�
   constraint / object lifecycle class の closed-enum architecture
 - `docs/reference/architecture/execution-lifecycle.md` — phase enum の choice
   space と observe / recovery を別 phase に切り出した理由
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  WAL stage と idempotency tuple の rationale
+- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
+  — WAL stage と idempotency tuple の rationale
 - `docs/reference/architecture/policy-risk-approval-error-model.md` — Risk 19
   entries / approval invalidation triggers / DomainErrorCode の closure 理由
 - `docs/reference/architecture/link-projection-model.md` — link mutation / link
   materialization state の生成 algorithm
-- `docs/reference/architecture/data-asset-model.md` — DataAsset kind 5 値と
-  connector identity scheme
+- `docs/reference/architecture/namespace-export-model.md#data-asset-model` —
+  DataAsset kind 5 値と connector identity scheme
 - `docs/reference/architecture/namespace-export-model.md` — share lifecycle 5 値
 
 ## 関連ページ

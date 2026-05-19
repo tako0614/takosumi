@@ -206,10 +206,10 @@ operator distribution に住む。 kernel は detection と audit
 
 - `docs/reference/architecture/operator-boundaries.md` — breach signal で動く
   operator policy 層。
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  apply-latency observation を生む apply pipeline。
-- `docs/reference/architecture/exposure-activation-model.md` —
-  activation-latency observation を生む activation pipeline。
+- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
+  — apply-latency observation を生む apply pipeline。
+- `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`
+  — activation-latency observation を生む activation pipeline。
 
 ## 関連ページ
 

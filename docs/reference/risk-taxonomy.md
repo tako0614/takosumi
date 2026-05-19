@@ -220,10 +220,10 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 
 - `docs/reference/architecture/policy-risk-approval-error-model.md` — Risk vs
   Error の境界、 19 値 enum の選定理由、severity / fix kind の設計議論
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  `actual-effects-overflow` / `rollback-revalidation-required` の WAL 上での
+- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
+  — `actual-effects-overflow` / `rollback-revalidation-required` の WAL 上での
   位置付け
-- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
+- `docs/reference/incident-model.md#observation-drift--revokedebt-model` —
   `revoke-debt-created` と observe / finalize stage の連動
 
 ## 関連ページ

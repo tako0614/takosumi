@@ -45,9 +45,8 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           link: "/reference/architecture/execution-lifecycle",
         },
         {
-          text: "OperationPlan / WAL",
-          link:
-            "/reference/architecture/operation-plan-write-ahead-journal-model",
+          text: "Runtime Deployment",
+          link: "/reference/architecture/runtime-deployment-model",
         },
         {
           text: "Operator Boundaries",
@@ -140,7 +139,8 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         {
           text: "Actor / Organization Model",
-          link: "/reference/actor-organization-model",
+          link:
+            "/reference/architecture/identity-and-access-architecture#actor--organization-model",
         },
         { text: "RBAC Policy", link: "/reference/rbac-policy" },
         { text: "API Key Management", link: "/reference/api-key-management" },

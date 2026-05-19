@@ -471,5 +471,5 @@ Materializer responsibilities:
 - [Architecture: Kernel](./architecture/kernel.md)
 - [Provider Resolution](./provider-resolution.md)
 - [Namespace Exports](./namespace-exports.md)
-- [OperationPlan / WAL](./architecture/operation-plan-write-ahead-journal-model.md)
+- [OperationPlan / WAL](./architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal)
 - [Closed Enums](./closed-enums.md)

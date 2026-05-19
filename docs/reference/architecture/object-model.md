@@ -93,12 +93,12 @@ live → revoking → revoked
 revoke 参加は lifecycle class で制限される。`external-source` と
 `external-participant` (下表の `external` と `operator` 行) は revoke target と
 してこの flow に入ってはならず、その generated child だけが対象となる。これは
-[Invariant-first Root Model](./invariant-first-root-model.md) の external
-ownership invariant の再宣言である。
+[Invariant-First Root Model](./runtime-deployment-model.md#invariant-first-root-model)
+の external ownership invariant の再宣言である。
 
 外部 cleanup が必要で外部システムが revoke を reject または ack できなかった
 とき、link の owner は
-[Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
+[Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
 に従って `RevokeDebt` record を queue し、object は debt が clear されるまで
 `debt` state に入る。
 

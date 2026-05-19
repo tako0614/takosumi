@@ -192,8 +192,8 @@ current v1 で cross-Space lock を取る operation:
 
 ## Related architecture notes
 
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  lock と WAL stage の interplay、 idempotency tuple の derivation
+- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
+  — lock と WAL stage の interplay、 idempotency tuple の derivation
 - `docs/reference/architecture/execution-lifecycle.md` — lock 失効時の recovery
   mode 選定 rationale
 - `docs/reference/architecture/operator-boundaries.md` — lock store の trust

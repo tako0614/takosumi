@@ -170,8 +170,8 @@ API、audit 伝播、telemetry promotion contract。 **end-to-end な cost workf
   signal を consume する operator policy 層。
 - `docs/reference/architecture/space-model.md` — attribution を所有する Space
   identity。
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  attribution snapshot を捕捉する audit emission point。
+- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
+  — attribution snapshot を捕捉する audit emission point。
 
 ## 関連ページ
 

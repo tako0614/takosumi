@@ -190,8 +190,9 @@ flow / free-tier テンプレートカタログ / conversion CTA / support escal
   attribute の isolation invariant 議論
 - `docs/reference/architecture/operator-boundaries.md` — trial governance を
   operator policy に置く理由と kernel が emit する primitive の境界
-- `docs/reference/architecture/exposure-activation-model.md` — `frozen` 状態で
-  write を 落とし read を保つ fail-safe-not-fail-closed stance の整合
+- `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`
+  — `frozen` 状態で write を 落とし read を保つ fail-safe-not-fail-closed stance
+  の整合
 
 ## 関連ページ
 

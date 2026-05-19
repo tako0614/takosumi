@@ -228,8 +228,9 @@ lifecycle envelope の wire format と error code enum は
 
 ## Related architecture notes
 
-- `reference/architecture/data-asset-model` — the rationale for
-  operator-installed Connectors, accepted-kind vectors, and Space visibility.
+- `reference/architecture/namespace-export-model#data-asset-model` — the
+  rationale for operator-installed Connectors, accepted-kind vectors, and Space
+  visibility.
 - `reference/architecture/operator-boundaries` — the trust split that keeps
   Connector credentials in the runtime-agent host.
 - `reference/architecture/paas-provider-architecture` — Connector consumer

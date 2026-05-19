@@ -275,9 +275,9 @@ status enum / effect bound / idempotency 規則を満たす限り適合します
 
 - docs/reference/architecture/paas-provider-architecture.md
 - docs/reference/architecture/implementation-operation-envelope.md
-- docs/reference/architecture/operation-plan-write-ahead-journal-model.md
+- docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal
 - docs/reference/architecture/policy-risk-approval-error-model.md
-- docs/reference/architecture/data-asset-model.md
+- docs/reference/architecture/namespace-export-model.md#data-asset-model
 
 ## 関連ページ
 

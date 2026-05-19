@@ -110,9 +110,9 @@ Field semantics:
 ## Recipient resolution
 
 kernel は emit 時に identity model
-([Actor / Organization Model](/reference/actor-organization-model) 参照) と
-category 固有の recipient 規則から `recipientActorIds` を計算する。 規則は v1 で
-closed。
+([Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
+参照) と category 固有の recipient 規則から `recipientActorIds` を計算する。
+規則は v1 で closed。
 
 | Category                               | Recipient rule                                                                                                     |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -222,14 +222,14 @@ primitive を公開する。
   motivate する credential 境界。
 - `docs/reference/architecture/policy-risk-approval-error-model.md` — approval
   関連 category を根拠付ける approval / risk event。
-- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
+- `docs/reference/incident-model.md#observation-drift--revokedebt-model` —
   `revoke-debt-operator-action-required` category を根拠付ける RevokeDebt
   trigger。
 
 ## 関連ページ
 
 - [Audit Events](/reference/audit-events)
-- [Actor / Organization Model](/reference/actor-organization-model)
+- [Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
 - [Approval Invalidation Triggers](/reference/approval-invalidation)
 - [RevokeDebt Model](/reference/revoke-debt)
 - [Quota and Rate Limit](/reference/quota-rate-limit)

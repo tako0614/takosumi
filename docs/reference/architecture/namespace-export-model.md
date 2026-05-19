@@ -148,3 +148,250 @@ revoked:
 unknown:
   policy decides require-refresh or deny
 ```
+
+## Data Asset Model
+
+DataAsset は Object や Operation が使うコンテンツ・入力を表す。DataAsset の可
+視性は Space scope であり、operator の artifact policy が明示的に共有を許可し
+た場合のみ scope を超える。
+
+### v1 の対象範囲
+
+Public v1 がサポートするもの:
+
+```text
+prebuilt artifact reference
+content-addressed artifact upload
+operator-registered artifact kind discovery
+```
+
+Public v1 では任意のユーザーシェル build や、operator API / 承認フロー /
+テストが整っていない状態での runtime 自動マッチングはサポートしない。
+
+### DataAsset kind
+
+```yaml
+DataAsset:
+  spaceId: space:acme-prod
+  id: asset:...
+  kind: string # bundled: oci-image | js-bundle | lambda-zip | static-bundle | wasm
+  digest: sha256:...
+  uri: optional
+  source: optional
+```
+
+`kind` はプロトコル層では open で、`registerArtifactKind` /
+`GET /v1/artifacts/kinds` から discover できる。同梱の registry は
+`oci-image`、`js-bundle`、`lambda-zip`、`static-bundle`、`wasm` で始まる。
+
+### Connector contract
+
+connector は、DataAsset の bytes を implementation の手の届く範囲に持ち込む、
+operator がインストールする binding である。connector は public manifest では
+ユーザー命名されない。resolution 中に選ばれた implementation から参照される。
+
+```yaml
+Connector:
+  id: connector:cloudflare-workers-bundle # connector:<id>, operator-controlled
+  acceptedKinds: [js-bundle]
+  spaceVisibility: operator-policy-driven # which Spaces may use this connector
+  signingExpectations: optional # signature / digest requirements
+```
+
+Identity rule:
+
+- connector は `connector:<id>` の形でアドレッシングされる。id は operator が
+  管理し、ユーザー manifest からは決して選ばない。
+- 各 connector は上記 DataAsset kind enum から `acceptedKinds` ベクトルを宣言
+  する。Plan は connector の accepted vector に kind が含まれない Link /
+  DataAsset binding を reject しなければならない。
+- connector の可視性は operator policy 経由で Space scope である。ある Space で
+  見える connector が暗黙に別 Space で見えるわけではない。
+  [Operator Boundaries](./operator-boundaries.md) を参照。
+- connector は public manifest 経由でインストール・差し替え・revoke されること
+  はなく、必ず operator surface から導入される。
+
+### Artifact resolution
+
+ローカルファイルは path で kernel に送らない。operator はまず bytes を upload
+し、返ってきた digest を manifest に埋め込む。
+
+```text
+takosumi artifact push ./worker.js --kind js-bundle
+  -> { hash: sha256:..., kind: js-bundle }
+
+components.<name>.build.output -> Deployment artifact digest
+  -> DataAsset digest visible to the selected Space
+```
+
+Transform は operator が承認する operation で、将来の operator surface 用に予
+約されている。
+
+```text
+source archive -> js-bundle
+source archive -> static-bundle
+```
+
+Transform operation はポリシーで明示承認されていない限り、runtime secret を受
+け取ってはいけない。
+
+#### Transform approval enforcement
+
+Transform 承認は
+[Operation Plan and Write-ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
+の `pre-commit` ステージで強制される。pre-commit verification ステップは
+transform を承認した approval を再検証する。
+[Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md)
+の approval invalidation trigger のいずれかが発火した場合、外部 transform 呼び
+出しが始まる前に operation は fail-closed で失敗する。
+
+transform が有効な承認なしに `pre-commit` に到達したときに surface される Risk
+は `transform-unapproved` である。
+
+### Accepted asset 検証
+
+Plan は関連するすべての layer を検証しなければならない。
+
+```text
+ObjectTarget accepted data asset kinds
+selected implementation accepted data asset kinds
+connector accepted data asset kinds
+artifact policy limits
+```
+
+### Space 可視性
+
+DataAsset は global に保存されうるが、default で global に可視ではない。
+`ResolutionSnapshot` は Space に可視な DataAsset reference を記録する。Space
+を跨ぐ artifact 再利用は operator の artifact policy を必要とし、resolution に
+記録されなければならない。
+
+## Exposure Activation Model
+
+route を持つ component は 1 つの Space の中に Exposure intent を作成する。public
+AppSpec では、これは `custom-domain` や `worker` の route フィールド などの
+component で表現され、別の top-level `expose` object で表現しない。 Exposure は
+Link ではない。
+
+### Exposure
+
+```yaml
+components:
+  web:
+    kind: worker
+    spec:
+      routes: ["app.example.com/*"]
+    publish:
+      - com.example.app.web
+  domain:
+    kind: custom-domain
+    spec:
+      name: app.example.com
+    listen:
+      com.example.app.web:
+        as: target
+```
+
+resolver はこれを `web` resource output を target にした `app.example.com` の
+Exposure record に変換する。Exposure は外部 ingress を準備するが、それだけで
+deployment を current にはしない。
+
+### Apply vs activation
+
+```text
+apply:
+  prepare objects, links, generated grants, generated credentials, exposure material
+
+activate:
+  update traffic assignment, activation snapshot, and Space-local GroupHead
+
+post-activate observe:
+  verify route health and active assignment
+```
+
+### Space rule
+
+Exposure 所有権、ingress 予約、route の materialization、ActivationSnapshot、
+GroupHead は Space-local である。operator の route policy が shared ownership や
+delegation を許可しない限り、2 つの Space が同じ global ingress を主張する
+ことはできない。
+
+```text
+GroupHead identity = spaceId + groupId
+```
+
+Space を跨ぐ traffic assignment は public v1 の一部ではない。
+
+### Exposure generated objects
+
+Exposure の materialization は generated object を作成しうる。
+
+```text
+IngressReservation
+DnsMaterialization
+TlsMaterialization
+ProviderIngressObject
+TrafficAssignment
+```
+
+各 generated object は owner、reason、決定的 id、delete policy を持つ。
+
+```yaml
+GeneratedObject:
+  owner: exposure:web
+  reason: tls-materialization
+  deletePolicy: delete-with-owner | retain-with-approval
+```
+
+### ActivationSnapshot
+
+```yaml
+ActivationSnapshot:
+  id: activation:...
+  desiredSnapshotId: desired:...
+  assignments: []
+  activatedAt: ...
+  health: pending | healthy | degraded | failed
+  sourceObservationDigest: sha256:... # latest observation feeding `health`
+```
+
+`sourceObservationDigest` は現在の `health` 注記を生成した ObservationSet entry
+を記録する。これは runtime reality を snapshot に結びつける唯一の authoritative
+な link である。ObservationSet entry は `assignments` を変更しない。
+
+GroupHead は apply phase の再検証と activation policy の通過後にのみ動く。
+
+### Post-activate health state
+
+activation 後、exposure は closed v1 state machine を通じて runtime reality を
+追跡する。状態遷移は
+[Operation Plan and Write-ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
+の `observe` stage が ObservationSet に append する entry
+によってのみ駆動される。 どの状態遷移も DesiredSnapshot を変更しない。
+
+```text
+unknown → observing → healthy
+                 \ → degraded
+                 \ → unhealthy
+
+healthy   ↔ degraded ↔ unhealthy   (re-entry on observation change)
+```
+
+| state       | meaning                                               |
+| ----------- | ----------------------------------------------------- |
+| `unknown`   | no observation recorded yet (pre-first-probe)         |
+| `observing` | a probe is in flight                                  |
+| `healthy`   | latest observation confirms the desired assignment    |
+| `degraded`  | partial signal; some checks pass, some fail           |
+| `unhealthy` | latest observation contradicts the desired assignment |
+
+`unhealthy` の effect:
+
+- `unhealthy` は DesiredSnapshot を書き換えない。DriftIndex と
+  ActivationSnapshot 上の注記に流れるだけ。
+- `unhealthy` は将来の activation が開始する新規 traffic shift を block する
+  (approval で明示的に override されない限り)。既存の GroupHead pointer は
+  自動的には rollback されない (fail-safe-not-fail-closed)。
+- この state から drift entry がどう作られるかは
+  [Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
+  を参照。

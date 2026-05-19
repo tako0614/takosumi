@@ -182,8 +182,8 @@ response で `LifecycleStatus` を返します。 ルール:
 
 - `docs/reference/architecture/execution-lifecycle.md` — phase 数を 6
   に絞った理由と observe / recovery を独立 phase として残す decision
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  phase と WAL stage の対応関係、idempotency tuple の設計
+- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
+  — phase と WAL stage の対応関係、idempotency tuple の設計
 - `docs/reference/architecture/implementation-operation-envelope.md` —
   `LifecycleStatus` を 5 値に閉じる根拠と describe 報告 contract
 

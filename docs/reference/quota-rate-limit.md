@@ -178,12 +178,13 @@ operator は次を通じて quota 状況を可視化する。
 
 - `docs/reference/architecture/operator-boundaries.md` — quota signal を consume
   する operator policy 層。
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  journal volume の accounting と journal-volume quota dimension。
+- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
+  — journal volume の accounting と journal-volume quota dimension。
 - `docs/reference/architecture/space-model.md` — per-tenant metering を scope
   する Space identity。
-- `docs/reference/architecture/exposure-activation-model.md` — quota 枯渇下の
-  ActivationSnapshot 生成に適用される fail-safe-not-fail-closed stance。
+- `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`
+  — quota 枯渇下の ActivationSnapshot 生成に適用される fail-safe-not-fail-closed
+  stance。
 
 ## 関連ページ
 

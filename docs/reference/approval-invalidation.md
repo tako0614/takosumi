@@ -141,8 +141,8 @@ change として実装される。
 
 - `docs/reference/architecture/policy-risk-approval-error-model.md` — approval
   invalidation trigger の taxonomy と短絡 / propagation 設計の議論
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  approval binding が WAL stage と接続する境界の rationale
+- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
+  — approval binding が WAL stage と接続する境界の rationale
 - `docs/reference/architecture/space-model.md` — Cross-Space approval ownership
   の設計議論
 

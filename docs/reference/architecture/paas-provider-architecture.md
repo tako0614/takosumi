@@ -214,8 +214,8 @@ notification、チケットシステム、SLA credit 公式、admin エスカレ
 - [Identity and Access Architecture](./identity-and-access-architecture.md)
 - [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md)
 - [PaaS Operations Architecture](./paas-operations-architecture.md)
-- [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
-- [Operation Plan and Write-ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+- [Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
+- [Operation Plan and Write-ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 - [Operational Hardening Checklist](./operational-hardening-checklist.md)
 - Reference: [CLI](../cli.md), [Kernel HTTP API](../kernel-http-api.md),
   [Lifecycle](../lifecycle.md)

@@ -186,13 +186,13 @@ stage 側は enqueue 責務のみで、 retry / aging semantics は RevokeDebt s
 
 関連 architecture notes:
 
-- `docs/reference/architecture/operation-plan-write-ahead-journal-model.md` —
-  WAL stage 設計 の動機、idempotency tuple の derivation、catalog verification
+- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
+  — WAL stage 設計 の動機、idempotency tuple の derivation、catalog verification
   contract の議論
 - `docs/reference/architecture/execution-lifecycle.md` — phase ↔ stage
   マッピングの設計 rationale と recovery mode の選定背景
-- `docs/reference/architecture/observation-drift-revokedebt-model.md` — orphaned
-  debt の taxonomy と observe 経路の設計議論
+- `docs/reference/incident-model.md#observation-drift--revokedebt-model` —
+  orphaned debt の taxonomy と observe 経路の設計議論
 
 ## 関連ページ
 

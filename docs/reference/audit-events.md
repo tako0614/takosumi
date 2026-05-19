@@ -310,7 +310,8 @@ contract のみを定義し、 retention window はここに記録された even
 | `role-assignment-revoked`  | warning  | RoleAssignment が revoke された。                          | `assignmentId`, `actorId`, `scope`, `scopeId`, `revokedBy`, `reason` |
 | `role-assignment-expired`  | info     | RoleAssignment が `expiresAt` に到達し自動 revoke された。 | `assignmentId`, `actorId`, `scope`, `scopeId`, `expiresAt`           |
 
-See also: [Actor / Organization Model](/reference/actor-organization-model),
+See also:
+[Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model),
 [API Key Management](/reference/api-key-management),
 [Auth Providers](/reference/auth-providers),
 [RBAC Policy](/reference/rbac-policy).
@@ -416,7 +417,7 @@ event vocabulary; see
 
 ## See also
 
-- [Actor / Organization Model](/reference/actor-organization-model)
+- [Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
 - [API Key Management](/reference/api-key-management)
 - [Auth Providers](/reference/auth-providers)
 - [RBAC Policy](/reference/rbac-policy)
@@ -435,8 +436,8 @@ event vocabulary; see
 
 - `reference/architecture/policy-risk-approval-error-model` — closed risk and
   approval enums referenced by Approval events.
-- `reference/architecture/operation-plan-write-ahead-journal-model` — WAL stage
-  enum referenced by Operation events.
+- `reference/architecture/runtime-deployment-model#operation-plan--write-ahead-journal`
+  — WAL stage enum referenced by Operation events.
 - `reference/architecture/snapshot-model` — Snapshot semantics referenced by
   Activation events.
 - `reference/architecture/operator-boundaries` — actor identity model and
@@ -447,7 +448,7 @@ event vocabulary; see
 - [Storage Schema](/reference/storage-schema)
 - [Journal Compaction](/reference/journal-compaction)
 - [Connector Contract](/reference/connector-contract)
-- [Actor / Organization Model](/reference/actor-organization-model)
+- [Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
 - [API Key Management](/reference/api-key-management)
 - [Auth Providers](/reference/auth-providers)
 - [RBAC Policy](/reference/rbac-policy)

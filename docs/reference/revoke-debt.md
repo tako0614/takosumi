@@ -166,11 +166,11 @@ production deployment では status 表示を必須とする:
 
 関連 architecture notes:
 
-- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
+- `docs/reference/incident-model.md#observation-drift--revokedebt-model` —
   RevokeDebt taxonomy、 reason / status の選定理由、aging window が
   policy-controlled である根拠
-- `docs/reference/architecture/exposure-activation-model.md` —
-  ActivationSnapshot propagation と fail-safe-not-fail-closed スタンスの議論
+- `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`
+  — ActivationSnapshot propagation と fail-safe-not-fail-closed スタンスの議論
 - `docs/reference/architecture/space-model.md` — future Multi-Space ownership と
 
 ## 関連ページ

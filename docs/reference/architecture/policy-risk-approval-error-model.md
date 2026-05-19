@@ -89,10 +89,10 @@ transform-unapproved
 `collision-detected` is raised by
 [Link and Projection Model — Collision rules](./link-projection-model.md).
 `transform-unapproved` is raised by
-[DataAsset Model — Transform approval enforcement](./data-asset-model.md).
+[Data Asset Model — Transform approval enforcement](./namespace-export-model.md#transform-approval-enforcement).
 `stale-export` is raised when an operator-owned export becomes stale. raised
 when an operation queues a RevokeDebt record per
-[Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md).
+[Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model).
 
 ## Approval lifecycle
 
@@ -227,7 +227,7 @@ model の Error fix-hint 分類 (safeFix / requiresPolicyReview / operatorFix)
   (approval が要る昇格) が、`commit` / `post-commit` / `observe` / `finalize`
   stage で `operatorFix[]` (operator 介入が要る) が生成されます。 詳細 stage
   定義は
-  [OperationPlan / Write-Ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+  [OperationPlan / Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
   を参照してください。
 - access escalation / external link 拡張 / network egress 拡張は **safeFix
   に載せない** という invariant は API envelope の自動分類でも維持されます。
@@ -236,9 +236,9 @@ model の Error fix-hint 分類 (safeFix / requiresPolicyReview / operatorFix)
 
 - Architecture: [API Surface Architecture](./api-surface-architecture.md)
 - Architecture:
-  [OperationPlan / Write-Ahead Journal Model](./operation-plan-write-ahead-journal-model.md)
+  [OperationPlan / Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 - Architecture: [Space Model](./space-model.md)
 - Architecture:
-  [Observation, Drift, and RevokeDebt Model](./observation-drift-revokedebt-model.md)
+  [Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
 - Reference: [Kernel HTTP API](/reference/kernel-http-api)
 - Reference: [Runtime-Agent API](/reference/runtime-agent-api)

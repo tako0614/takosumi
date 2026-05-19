@@ -235,13 +235,14 @@ audit hash chain と offline で照合できるようにする。
 
 ## Related architecture notes
 
-- `docs/reference/architecture/data-asset-model.md` — DataAsset reachability
-  model and the rationale for the conservative mark phase.
+- `docs/reference/architecture/namespace-export-model.md#data-asset-model` —
+  DataAsset reachability model and the rationale for the conservative mark
+  phase.
 - `docs/reference/architecture/snapshot-model.md` — snapshot retention semantics
   that drive the snapshot-reachable mark class.
-- `docs/reference/architecture/exposure-activation-model.md` —
-  ActivationSnapshot shape that grounds the activation history projection.
-- `docs/reference/architecture/observation-drift-revokedebt-model.md` —
+- `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`
+  — ActivationSnapshot shape that grounds the activation history projection.
+- `docs/reference/incident-model.md#observation-drift--revokedebt-model` —
   RevokeDebt rows as a GC root, ensuring debt-pinned material is not swept while
   cleanup is in flight.
 

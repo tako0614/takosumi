@@ -186,10 +186,10 @@ kernel は digest を初回計算時に persist し、 再計算は元の immuta
 ## Related architecture notes
 
 - docs/reference/architecture/snapshot-model.md
-- docs/reference/architecture/operation-plan-write-ahead-journal-model.md
+- docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal
 - docs/reference/architecture/policy-risk-approval-error-model.md
 - docs/reference/architecture/catalog-release-descriptor-model.md
-- docs/reference/architecture/data-asset-model.md
+- docs/reference/architecture/namespace-export-model.md#data-asset-model
 
 ## 関連ページ
 

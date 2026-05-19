@@ -162,8 +162,8 @@ distribution に住む。 kernel は属性と audit signal を同梱してそこ
 
 - `docs/reference/architecture/operator-boundaries.md` — zone signal で動く
   operator policy 層。
-- `docs/reference/architecture/exposure-activation-model.md` — zone annotation
-  を持つ ActivationSnapshot shape。
+- `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`
+  — zone annotation を持つ ActivationSnapshot shape。
 - `docs/reference/architecture/space-model.md` — `defaultZone` を所有する Space
   identity。
 

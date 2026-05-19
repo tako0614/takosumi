@@ -181,8 +181,8 @@ operator の最小義務は次の通り。
 
 - `reference/architecture/operator-boundaries` — placement of NTP responsibility
   and the readiness contract.
-- `reference/architecture/operation-plan-write-ahead-journal-model` — clock
-  binding for WAL stage retry and idempotency window.
+- `reference/architecture/runtime-deployment-model#operation-plan--write-ahead-journal`
+  — clock binding for WAL stage retry and idempotency window.
 - `reference/architecture/policy-risk-approval-error-model` — approval
   `expiresAt` derivation and skew-related fail-closed rules.
 
