@@ -499,7 +499,7 @@ Persistence: `revokedAt` が null の間は保持。 `(id, providerKind)` で in
 Immutability: operator のみ mutate 可能。
 
 See also:
-[Provider Implementation Contract](/reference/provider-implementation-contract).
+[Provider Plugins — Implementation Contract](/reference/providers#implementation-contract).
 
 ## LockRecord
 

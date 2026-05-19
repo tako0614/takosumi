@@ -18,8 +18,8 @@
   RPC
 - [CLI](./cli) — `takosumi` command surface
 - [Lifecycle Protocol](./lifecycle) — phase 連携と cross-process lock
-- [Provider / Implementation Contract](./provider-implementation-contract) —
-  runtime-agent 側 Implementation の wire-level contract
+- [Provider Plugins — Implementation Contract](./providers#implementation-contract)
+  — runtime-agent 側 Implementation の wire-level contract
 - [Public Spec Source Map](./public-spec-source-map) — public surface ごとの
   source of truth / publish URL / drift check
 

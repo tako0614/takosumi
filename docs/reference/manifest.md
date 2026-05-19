@@ -444,7 +444,8 @@ Materializer responsibilities:
 - kind JSON-LD が宣言した `publishes[]` material を namespace registry に
   register する
 
-詳細: [Provider Resolution](./provider-resolution.md)。
+詳細:
+[Provider Plugins — Resolution Algorithm](./providers.md#resolution-algorithm)。
 
 ### 削除された旧概念
 
@@ -469,7 +470,7 @@ Materializer responsibilities:
 - [Installer API](./installer-api.md)
 - [Kernel HTTP API](./kernel-http-api.md)
 - [Architecture: Kernel](./architecture/kernel.md)
-- [Provider Resolution](./provider-resolution.md)
+- [Provider Plugins — Resolution Algorithm](./providers.md#resolution-algorithm)
 - [Namespace Exports](./namespace-exports.md)
 - [OperationPlan / WAL](./architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal)
 - [Closed Enums](./closed-enums.md)

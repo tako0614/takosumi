@@ -76,10 +76,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "CLI", link: "/reference/cli" },
         { text: "Lifecycle Protocol", link: "/reference/lifecycle" },
         {
-          text: "Provider / Implementation Contract",
-          link: "/reference/provider-implementation-contract",
-        },
-        {
           text: "Public Spec Source Map",
           link: "/reference/public-spec-source-map",
         },
@@ -168,10 +164,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         {
           text: "Namespace Exports",
           link: "/reference/namespace-exports",
-        },
-        {
-          text: "Provider Resolution",
-          link: "/reference/provider-resolution",
         },
       ],
     },

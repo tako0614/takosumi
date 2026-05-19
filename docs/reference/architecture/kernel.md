@@ -201,4 +201,4 @@ events table) は kernel DB を使う。
 - [Installer API](../installer-api.md)
 - [Kind Catalog](../kind-catalog.md#component-kinds)
 - [Manifest](../manifest.md#data-model)
-- [Provider Resolution](../provider-resolution.md)
+- [Provider Plugins — Resolution Algorithm](../providers.md#resolution-algorithm)

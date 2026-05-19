@@ -108,7 +108,7 @@ input は effect set の closed-enum view。 approval record 上の `approvedEff
 でも OperationResult 上の `actualEffects` でも同一アルゴリズムを適用します。
 effect digest が同形状であることで、 成功 operation の result digest と approval
 の effect digest を bound rule
-([Provider Implementation Contract — Effect bound rule](/reference/provider-implementation-contract#effect-bound-rule))
+([Provider Plugins — Effect bound rule](/reference/providers#effect-bound-rule))
 の下で byte 単位比較できます。
 
 入力は source set の順序を保った closed-shape effect descriptor の列。 canonical
@@ -118,7 +118,7 @@ encoder は各 descriptor 内部を JCS 規則で sort しますが、 外側の
 ### `predictedActualEffectsDigest`
 
 dry materialization で得られる予測 effect map が入力です
-([Provider Implementation Contract — Dry materialization phase](/reference/provider-implementation-contract#dry-materialization-phase))。
+([Provider Plugins — Dry materialization phase](/reference/providers#dry-materialization-phase))。
 形状は `effectDetailsDigest` と同じ。 digest は OperationPlan に bind され、
 `commit` / `post-commit` 時の `actual-effects-overflow` Risk 評価の参照値に
 なります。
@@ -194,7 +194,7 @@ kernel は digest を初回計算時に persist し、 再計算は元の immuta
 ## 関連ページ
 
 - [Resource IDs](/reference/resource-ids)
-- [Provider Implementation Contract](/reference/provider-implementation-contract)
+- [Provider Plugins — Implementation Contract](/reference/providers#implementation-contract)
 - [WAL Stages](/reference/wal-stages)
 - [Catalog Release Trust](/reference/catalog-release-trust)
 - [Storage Schema](/reference/storage-schema)

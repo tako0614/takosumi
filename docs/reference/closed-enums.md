@@ -98,7 +98,7 @@ operation kind を文字列で持ち、 `takosumi plan` では
 kind ごとの入出力 / WAL stage の対応は内部 OperationPlan architecture に記述。
 公開 plan shape は [Plan Output Schema](/reference/plan-output)、 provider
 dispatch contract は
-[Provider Implementation Contract](/reference/provider-implementation-contract)
+[Provider Plugins — Implementation Contract](/reference/providers#implementation-contract)
 を参照。
 
 ## WAL stages
