@@ -72,9 +72,8 @@ See [Concepts (JA)](/getting-started/concepts) for details.
   cloud deploy in one command
 - [Manifest / AppSpec (JA)](/manifest) — `.takosumi.yml` AppSpec and component
   graph
-- [Component Kind Catalog (JA)](/reference/component-kind-catalog) — spec /
-  outputs / capabilities for the 4 curated kinds, extensible via
-  operator-defined kinds
+- [Kind Catalog (JA)](/reference/kind-catalog#component-kinds) — spec / outputs
+  / capabilities for the 4 curated kinds, extensible via operator-defined kinds
 - [Provider Plugins (JA)](/reference/providers) — cloud × kind matrix for 20
   default providers plus 1 opt-in provider
 - [CLI Reference (JA)](/reference/cli) — every subcommand, flag, and env

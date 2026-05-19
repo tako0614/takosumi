@@ -111,7 +111,7 @@ test、 本リファレンスの更新が必要となる。
 
 ## 関連ページ
 
-- [DataAsset Kinds](/reference/artifact-kinds)
+- [DataAsset Kinds](/reference/kind-catalog#artifact-kinds)
 - [Connector Contract](/reference/connector-contract)
 - [Kernel HTTP API](/reference/kernel-http-api)
 - [Environment Variables](/reference/env-vars)

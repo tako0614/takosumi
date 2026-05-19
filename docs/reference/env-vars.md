@@ -270,7 +270,7 @@ host 役割ごとに分割します。 同一 host 混在は OperatorBoundaries 
 ## 関連
 
 - リファレンス: [CLI](/reference/cli)、
-  [DataAsset Kinds](/reference/artifact-kinds)、
+  [DataAsset Kinds](/reference/kind-catalog#artifact-kinds)、
   [DataAsset Policy](/reference/data-asset-policy)、
   [Secret Partitions](/reference/secret-partitions)、
   [Schema Evolution](/reference/migration-upgrade)、

@@ -75,7 +75,7 @@ oci-image | js-bundle | lambda-zip | static-bundle | wasm
 ```
 
 per-kind size cap、 registered metadata、 discovery API は
-[DataAsset Kinds](/reference/artifact-kinds) を参照。
+[DataAsset Kinds](/reference/kind-catalog#artifact-kinds) を参照。
 
 Plan-time enforcement:
 
@@ -239,7 +239,7 @@ lifecycle envelope の wire format と error code enum は
 
 ## 関連ページ
 
-- [DataAsset Kinds](/reference/artifact-kinds)
+- [DataAsset Kinds](/reference/kind-catalog#artifact-kinds)
 - [Providers](/reference/providers)
 - [Runtime-Agent API](/reference/runtime-agent-api)
 - [Audit Events](/reference/audit-events)

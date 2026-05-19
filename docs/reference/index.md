@@ -7,8 +7,9 @@
 クライアントとサーバーの間で交わされる surface。
 
 - [AppSpec (`.takosumi.yml`)](./app-spec) — source root に置く 1 ファイル
-- [Component Kind Catalog](./component-kind-catalog) — curated 4 種 +
-  operator-defined kind schema
+- [Kind Catalog](./kind-catalog) — curated 4 種 component kind +
+  operator-defined kind schema + JSON-LD source-of-truth + artifact kind
+  registry
 - [Installer API](./installer-api) — 5 endpoint の wire spec (dry-run / apply /
   rollback)
 - [Kernel HTTP API](./kernel-http-api) — public installer + internal control
@@ -133,14 +134,11 @@ multi-tenant PaaS provider 固有の運用 surface。
 
 Component kind catalog / provider / artifact 拡張面。
 
-- [Component Kind Catalog](./component-kind-catalog) — curated 4 built-in kind +
-  operator-defined kind の spec / outputs / publish / listen 仕様
-- [JSON-LD Kind Catalog](./json-ld-kind-catalog) —
+- [Kind Catalog](./kind-catalog) — curated 4 built-in component kind +
+  operator-defined kind の spec / outputs / publish / listen 仕様 +
   `https://takosumi.com/kinds/v1/*` の JSON-LD 形式と operator-defined kind の
-  publish 手順
+  publish 手順 + DataAsset kind registry / registerArtifactKind
 - [Provider Plugins](./providers) — v1 provider matrix / KernelPlugin attach
-- [Artifact Kinds](./artifact-kinds) — DataAsset kind registry /
-  registerArtifactKind
 - [Connector Contract](./connector-contract) — `connector:<id>` / acceptedKinds
   / envelope versioning
 - [DataAsset Policy](./data-asset-policy) — upload cap / accepted-kind

@@ -3,8 +3,8 @@
 > このページでわかること: bundled provider plugin の一覧と対応 component kind。
 
 **provider plugin** は AppSpec の
-[component kind](/reference/component-kind-catalog) を具体的な cloud / local
-backend 上に materialize する。 各 plugin は実装する kind、サポートする
+[component kind](/reference/kind-catalog#component-kinds) を具体的な cloud /
+local backend 上に materialize する。 各 plugin は実装する kind、サポートする
 capability vocabulary、 kernel が OperationPlan 実行中に呼ぶ apply / destroy /
 status lifecycle を宣言する。
 
@@ -192,8 +192,8 @@ attach は plugin marketplace / signed manifest fetch / port-based plugin host
 - [Access Modes](/reference/access-modes) — provider 管理 object が consumer
   に自身を expose する仕方を支配する closed v1 access mode enum (`read` /
   `read-write` / `admin` / `invoke-only` / `observe-only`)。
-- [Artifact Kinds](/reference/artifact-kinds) — bundled DataAsset kinds
-  (`oci-image` / `js-bundle` / `lambda-zip` / `static-bundle` / `wasm`) と
+- [Artifact Kinds](/reference/kind-catalog#artifact-kinds) — bundled DataAsset
+  kinds (`oci-image` / `js-bundle` / `lambda-zip` / `static-bundle` / `wasm`) と
   provider が apply 時に受け取る registry。
 - [Connector Contract](/reference/connector-contract) — operator-installed
   connector identity (`connector:<id>`)、accepted-kind vector、Space
@@ -206,6 +206,6 @@ attach は plugin marketplace / signed manifest fetch / port-based plugin host
 
 ## 関連ページ
 
-- [Component Kind Catalog](/reference/component-kind-catalog)
+- [Kind Catalog](/reference/kind-catalog#component-kinds)
 - [Connector Contract](/reference/connector-contract)
 - [Access Modes](/reference/access-modes)

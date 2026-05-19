@@ -214,9 +214,9 @@ install の Connector 経由で行います。
   (`acceptedKinds`, `signingExpectations`, `envelopeVersion`) but never the
   Connector's credentials.
 - DataAsset delivery to the Connector follows
-  [DataAsset Kinds — accepted-kind vector](/reference/artifact-kinds) and is
-  bound by the Connector's `acceptedKinds` vector. An Implementation that asks
-  the Connector to accept a kind outside that vector receives an
+  [DataAsset Kinds — accepted-kind vector](/reference/kind-catalog#artifact-kinds)
+  and is bound by the Connector's `acceptedKinds` vector. An Implementation that
+  asks the Connector to accept a kind outside that vector receives an
   `artifact_kind_mismatch` failure that surfaces as
   `errorCode = artifact_kind_mismatch` in the OperationResult.
 - Implementations consume artifact bytes by hash through the runtime-agent's

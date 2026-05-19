@@ -70,7 +70,7 @@ curated な公式 component kind は 4 種類 (= catalog は extensible で、 o
 新しい component kind の追加は breaking change で、RFC が必要 (cf.
 [Extending](/extending#新しい-component-kind-を-rfc-する))。
 
-詳細: [Component Kind Catalog](/reference/component-kind-catalog)
+詳細: [Kind Catalog](/reference/kind-catalog#component-kinds)
 
 ---
 
@@ -214,15 +214,15 @@ AWS / GCP / Cloudflare / k8s / OS
 
 ## Where to look next
 
-| 目的                                               | ページ                                                      |
-| -------------------------------------------------- | ----------------------------------------------------------- |
-| AppSpec の YAML を書く                             | [AppSpec](/reference/app-spec)                              |
-| component kind の spec / outputs を確認する        | [Component Kind Catalog](/reference/component-kind-catalog) |
-| 20 default + 1 opt-in provider の対応 cloud と用途 | [Provider Plugins](/reference/providers)                    |
-| `takosumi` CLI コマンド                            | [CLI Reference](/reference/cli)                             |
-| `/v1/installations/*` の HTTP API                  | [Kernel HTTP API](/reference/kernel-http-api)               |
-| kernel ↔ agent envelope                            | [Runtime-Agent API](/reference/runtime-agent-api)           |
-| `TAKOSUMI_*` 環境変数                              | [Environment Variables](/reference/env-vars)                |
-| apply / destroy / rollback の挙動                  | [Lifecycle Protocol](/reference/lifecycle)                  |
-| operator が provider を wire する手順              | [Operator Bootstrap](/operator/bootstrap)                   |
-| 自前で provider / component kind を増やす          | [Extending Takosumi](/extending)                            |
+| 目的                                               | ページ                                                  |
+| -------------------------------------------------- | ------------------------------------------------------- |
+| AppSpec の YAML を書く                             | [AppSpec](/reference/app-spec)                          |
+| component kind の spec / outputs を確認する        | [Kind Catalog](/reference/kind-catalog#component-kinds) |
+| 20 default + 1 opt-in provider の対応 cloud と用途 | [Provider Plugins](/reference/providers)                |
+| `takosumi` CLI コマンド                            | [CLI Reference](/reference/cli)                         |
+| `/v1/installations/*` の HTTP API                  | [Kernel HTTP API](/reference/kernel-http-api)           |
+| kernel ↔ agent envelope                            | [Runtime-Agent API](/reference/runtime-agent-api)       |
+| `TAKOSUMI_*` 環境変数                              | [Environment Variables](/reference/env-vars)            |
+| apply / destroy / rollback の挙動                  | [Lifecycle Protocol](/reference/lifecycle)              |
+| operator が provider を wire する手順              | [Operator Bootstrap](/operator/bootstrap)               |
+| 自前で provider / component kind を増やす          | [Extending Takosumi](/extending)                        |

@@ -339,7 +339,7 @@ interface ApiErrorEnvelope {
 ## Cross-references
 
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [Component Kind Catalog](./component-kind-catalog.md) — 4 kind の schema /
+- [Kind Catalog](./kind-catalog.md#component-kinds) — 4 kind の schema /
   publishes / listens
 - [Architecture: Kernel](./architecture/kernel.md) — installer pipeline
   の責務境界

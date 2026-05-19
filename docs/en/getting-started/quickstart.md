@@ -391,7 +391,7 @@ uses the deploy token when no fetch token is configured).
 ## Related docs
 
 - [AppSpec (JA)](/reference/app-spec)
-- [Component kind catalog (JA)](/reference/component-kind-catalog)
+- [Kind catalog (JA)](/reference/kind-catalog#component-kinds)
 - [Provider plugins (JA)](/reference/providers)
 - [Operator bootstrap (JA)](/operator/bootstrap) (kernel ↔ agent integration
   details)

@@ -225,9 +225,8 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Reference / Catalog & Extension",
       items: [
-        { text: "Shape Catalog", link: "/reference/shapes" },
+        { text: "Kind Catalog", link: "/reference/kind-catalog" },
         { text: "Provider Plugins", link: "/reference/providers" },
-        { text: "Artifact Kinds", link: "/reference/artifact-kinds" },
         { text: "Connector Contract", link: "/reference/connector-contract" },
         { text: "DataAsset Policy", link: "/reference/data-asset-policy" },
         { text: "Artifact GC", link: "/reference/artifact-gc" },
@@ -273,7 +272,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Reference (JA fallback)",
       items: [
-        { text: "Shape Catalog", link: "/reference/shapes" },
+        { text: "Kind Catalog", link: "/reference/kind-catalog" },
         { text: "Provider Plugins", link: "/reference/providers" },
         { text: "CLI", link: "/reference/cli" },
       ],
@@ -285,13 +284,13 @@ const jaNav: DefaultTheme.NavItem[] = [
   { text: "Quickstart", link: "/getting-started/quickstart" },
   { text: "Manifest", link: "/manifest" },
   { text: "Architecture", link: "/reference/architecture/" },
-  { text: "Reference", link: "/reference/shapes" },
+  { text: "Reference", link: "/reference/kind-catalog" },
   { text: "Operator", link: "/operator/bootstrap" },
 ];
 
 const enNav: DefaultTheme.NavItem[] = [
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
-  { text: "Reference (JA)", link: "/reference/shapes" },
+  { text: "Reference (JA)", link: "/reference/kind-catalog" },
 ];
 
 export default defineConfig({

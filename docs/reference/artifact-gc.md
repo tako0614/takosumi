@@ -10,8 +10,9 @@ mark-and-traverse パターンを共有する。
 
 ## Artifact GC scope
 
-GC は **DataAsset** レコード ([DataAsset Kinds](/reference/artifact-kinds) 参照)
-とその裏付け object bytes に対して動作する。 各 DataAsset は GC 時に次の 3 つの
+GC は **DataAsset** レコード
+([DataAsset Kinds](/reference/kind-catalog#artifact-kinds) 参照) とその裏付け
+object bytes に対して動作する。 各 DataAsset は GC 時に次の 3 つの
 到達性クラスのいずれかに割り当てられる。
 
 - **Generated-object reachable**: アクティブな Deployment の最新
@@ -248,7 +249,7 @@ audit hash chain と offline で照合できるようにする。
 
 ## 関連ページ
 
-- [DataAsset Kinds](/reference/artifact-kinds)
+- [DataAsset Kinds](/reference/kind-catalog#artifact-kinds)
 - [Storage Schema](/reference/storage-schema)
 - [Audit Events](/reference/audit-events)
 - [Kernel HTTP API](/reference/kernel-http-api)

@@ -156,7 +156,7 @@ ecosystem RFC が必要です:
 6. **テスト** — `tests/component_kind_<kind-id>_test.ts` (JSON-LD spec 境界
    ケース) と各 materializer の test を整備。
 7. **CONVENTIONS.md §1 表を更新**。
-8. **docs を更新** — [Component Kind Catalog](/reference/component-kind-catalog)
+8. **docs を更新** — [Kind Catalog](/reference/kind-catalog#component-kinds)
    に解説 section を追加。
 
 ### Materializer = KernelPlugin | InlineMaterializer
@@ -240,7 +240,7 @@ source preparation、 workflow runner、 scheduler は above-kernel product の
 ## 関連ページ
 
 - [Reference Index](/reference/) — 全 v1 仕様の索引
-- [Component Kind Catalog](/reference/component-kind-catalog)
+- [Kind Catalog](/reference/kind-catalog#component-kinds)
 - [Provider Plugins](/reference/providers)
 - [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
 - [Manifest](/manifest)

@@ -129,7 +129,7 @@ const { app } = await createPaaSApp({
 - [Provider Plugins](/reference/providers) — 20 default + 1 opt-in provider
   の実装と capabilities
 - [Runtime-agent API](/reference/runtime-agent-api) — agent lifecycle envelope
-- [Component Kind Catalog](/reference/component-kind-catalog) — kind ごとの
-  outputs と capabilities
+- [Kind Catalog](/reference/kind-catalog#component-kinds) — kind ごとの outputs
+  と capabilities
 - [Manifest](/manifest) — operator が apply する manifest の syntax
 - [Extending](/extending) — 新 provider 追加時の `KernelPlugin` 作り方

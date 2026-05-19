@@ -199,6 +199,6 @@ events table) は kernel DB を使う。
 
 - [AppSpec](../app-spec.md)
 - [Installer API](../installer-api.md)
-- [Component Kind Catalog](../component-kind-catalog.md)
+- [Kind Catalog](../kind-catalog.md#component-kinds)
 - [Manifest](../manifest.md#data-model)
 - [Provider Resolution](../provider-resolution.md)

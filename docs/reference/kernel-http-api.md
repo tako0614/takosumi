@@ -146,7 +146,7 @@ interface ApiErrorEnvelope {
 
 - [Installer API](./installer-api.md) — 5 endpoint の完全 spec
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [Component Kind Catalog](./component-kind-catalog.md) — curated 4 kind +
+- [Kind Catalog](./kind-catalog.md#component-kinds) — curated 4 kind +
   operator-defined kind
 - [Runtime-Agent API](./runtime-agent-api.md)
 - [Closed Enums](./closed-enums.md)
