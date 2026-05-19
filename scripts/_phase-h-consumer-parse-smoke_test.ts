@@ -17,13 +17,6 @@ import {
 
 Deno.test({
   name: "phase-h: all 6 consumer .takosumi.yml manifests parse",
-  // Wave L-A gate (2026-05-20): apiVersion を `takosumi.dev/v1` → `v1` に
-  // minimize した影響で、 6 consumer apps の `.takosumi.yml` が一時的に旧
-  // 形式 (`apiVersion: takosumi.dev/v1`) のまま残り parser reject される。
-  // L-B 段で yurucommu / takos-apps/{docs,slide,excel,computer} / road-to-me
-  // の `.takosumi.yml` を migrate した後、 本 ignore を除去する (= K-A の
-  // `kind: App` migration 前例と同形 pattern)。
-  ignore: true,
   fn: async () => {
     const rows = await parseConsumerAppSpecs();
     assertEquals(rows.length, CONSUMER_APP_SPEC_PATHS.length);
