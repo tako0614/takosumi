@@ -107,34 +107,50 @@ function unavailable(port: string): Promise<never> {
   );
 }
 
-const NOOP_SECRET_STORE = {
+/**
+ * Noop port stubs shared across the kernel and bundled provider
+ * wrappers. Centralized here (single source of truth) so per-package
+ * adapters and the kernel `apply_service.ts` fallback do not maintain
+ * byte-identical copies.
+ *
+ * The kernel's shape-model apply path builds a per-resource ref
+ * resolver before dispatch; these stubs are intentionally fail-loud /
+ * fail-quiet fallbacks for code paths that never exercise them.
+ */
+export const NOOP_SECRET_STORE = {
   get: () => unavailable("secret store"),
   put: () => unavailable("secret store"),
   delete: () => unavailable("secret store"),
   list: () => Promise.resolve([]),
 } as unknown as PlatformContext["secrets"];
 
-const NOOP_OBSERVABILITY = {
+export const NOOP_OBSERVABILITY = {
   emit() {},
   span() {
     return { end() {} };
   },
 } as unknown as PlatformContext["observability"];
 
-const NOOP_KMS = {
+export const NOOP_KMS = {
   encrypt: () => unavailable("kms"),
   decrypt: () => unavailable("kms"),
 } as unknown as PlatformContext["kms"];
 
-const NOOP_OBJECT_STORAGE = {
+export const NOOP_OBJECT_STORAGE = {
   put: () => unavailable("object storage"),
   get: () => unavailable("object storage"),
   delete: () => unavailable("object storage"),
   head: () => unavailable("object storage"),
 } as unknown as PlatformContext["objectStorage"];
 
-const NOOP_REF_RESOLVER = {
-  resolve() {
-    throw new Error("ref resolver unavailable in bundled wrapper context");
+/**
+ * Noop ref resolver. Returns `null` rather than throwing so a
+ * defensive caller that consults the resolver before falling through
+ * to its own resolution path keeps working; throwing variants should
+ * be inlined at call sites that genuinely require ref resolution.
+ */
+export const NOOP_REF_RESOLVER = {
+  resolve(_expression: string) {
+    return null;
   },
 } as unknown as PlatformContext["refResolver"];

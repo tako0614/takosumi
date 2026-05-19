@@ -24,6 +24,7 @@
     "takosumi-contract/plugin": "./packages/contract/src/plugin.ts",
     "takosumi-contract/plugin-sdk": "./packages/contract/src/plugin-sdk.ts",
     "takosumi-contract/provider-plugin": "./packages/contract/src/provider-plugin.ts",
+    "takosumi-contract/kernel-plugin-adapter": "./packages/contract/src/kernel-plugin-adapter.ts",
     "takosumi-contract/runtime-agent": "./packages/contract/src/runtime-agent.ts",
     "takosumi-contract/runtime-agent-lifecycle": "./packages/contract/src/runtime-agent-lifecycle.ts",
     "takosumi-contract/shape": "./packages/contract/src/shape.ts",
