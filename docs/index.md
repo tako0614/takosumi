@@ -61,7 +61,7 @@ Takosumi は **7 つの JSR package** で配布される:
 | 目的                                            | ページ                                                      |
 | ----------------------------------------------- | ----------------------------------------------------------- |
 | 設計 notes / layer 境界                         | [Architecture Overview](/reference/architecture/)           |
-| AppSpec / Installation / Deployment             | [Manifest Model](/reference/architecture/manifest-model)    |
+| AppSpec / Installation / Deployment             | [Manifest](/reference/manifest#data-model)                  |
 | curated 4 kind + extensible の spec / outputs   | [Component Kind Catalog](/reference/component-kind-catalog) |
 | Installer 5 endpoint の wire spec               | [Installer API](/reference/installer-api)                   |
 | 20 default + 1 opt-in provider                  | [Provider Plugins](/reference/providers)                    |

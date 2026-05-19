@@ -295,5 +295,4 @@ publish material の `url` を upstream として使用します。
 
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 全体仕様
 - [Installer API](./installer-api.md) — dry-run / apply / rollback の wire spec
-- [Architecture: Manifest model](./architecture/manifest-model.md) — kind と
-  namespace registry の関係
+- [Manifest](./manifest.md#data-model) — kind と namespace registry の関係

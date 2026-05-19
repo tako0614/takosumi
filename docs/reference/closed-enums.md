@@ -313,7 +313,7 @@ kernel の domain error response が返す 9 値 closed code enum。
 transport mapping (HTTP status、 gRPC code) は code 毎に固定で
 [Kernel HTTP API](/reference/kernel-http-api) に定義。 `invalid_argument` を
 発生させる manifest-time validation は
-[Manifest Validation](/reference/manifest-validation) を参照。
+[Manifest](/reference/manifest#validation-rules) を参照。
 
 ## LifecycleErrorBody codes
 

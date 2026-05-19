@@ -94,7 +94,7 @@ policy、secret、journal、observation、activation は、明示的な Space ex
 | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | [Invariant-first Root Model](./invariant-first-root-model.md)                                 | What must never be violated?                                                                   |
 | [Space Model](./space-model.md)                                                               | How are namespace, policy, secrets, artifacts, and deployment state isolated?                  |
-| [Manifest Model](./manifest-model.md)                                                         | What does the user write?                                                                      |
+| [Manifest](../manifest.md#data-model)                                                         | What does the user write?                                                                      |
 | [Catalog Release and Descriptor Model](./catalog-release-descriptor-model.md)                 | Which semantic world is adopted?                                                               |
 | [Snapshot Model](./snapshot-model.md)                                                         | What is fixed before operation?                                                                |
 | [Object Model](./object-model.md)                                                             | What does the kernel lifecycle-own or observe?                                                 |

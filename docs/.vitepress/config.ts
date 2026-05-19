@@ -14,8 +14,8 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Manifest (Shape Model)", link: "/manifest" },
         {
-          text: "Manifest Architecture",
-          link: "/reference/architecture/manifest-model",
+          text: "Manifest Reference",
+          link: "/reference/manifest",
         },
       ],
     },
@@ -39,10 +39,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         {
           text: "API Surface",
           link: "/reference/architecture/api-surface-architecture",
-        },
-        {
-          text: "Manifest Model",
-          link: "/reference/architecture/manifest-model",
         },
         {
           text: "Execution Lifecycle",
@@ -93,12 +89,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Reference / Manifest & Wire Formats",
       items: [
-        { text: "Manifest Spec", link: "/reference/manifest-spec" },
-        { text: "Manifest Validation", link: "/reference/manifest-validation" },
-        {
-          text: "AppSpec Dependency Semantics",
-          link: "/reference/manifest-expand-semantics",
-        },
+        { text: "Manifest", link: "/reference/manifest" },
         { text: "Plan Output Schema", link: "/reference/plan-output" },
         { text: "Status Output Schema", link: "/reference/status-output" },
         { text: "Resource IDs", link: "/reference/resource-ids" },

@@ -61,4 +61,4 @@ pre-AppSpec notes only.
 
 - [Installer API](../installer-api.md)
 - [Kernel HTTP API](../kernel-http-api.md)
-- [Manifest Model](./manifest-model.md)
+- [Manifest](../manifest.md#data-model)

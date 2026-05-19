@@ -172,7 +172,7 @@ distribution に住む。 kernel は属性と audit signal を同梱してそこ
 - [Storage Schema](/reference/storage-schema)
 - [Audit Events](/reference/audit-events)
 - [Connector Contract](/reference/connector-contract)
-- [AppSpec Dependency Semantics](/reference/manifest-expand-semantics)
+- [Manifest — Expand Semantics](/reference/manifest#expand-semantics)
 - [Drift Detection](/reference/drift-detection)
 - [Environment Variables](/reference/env-vars)
 - [Resource IDs](/reference/resource-ids)

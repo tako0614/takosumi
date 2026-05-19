@@ -149,10 +149,8 @@ Component kind catalog / provider / artifact 拡張面。
 
 ## Manifest & wire formats
 
-- [Manifest Validation](./manifest-validation) — closed grammar / validation
-  phase / error code
-- [AppSpec Dependency Semantics](./manifest-expand-semantics) — `publish` /
-  `listen` namespace graph / binding rules
+- [Manifest](./manifest) — spec / validation rules / expand semantics / data
+  model (= `.takosumi.yml` 正本)
 - [Plan Output Schema](./plan-output) — `takosumi plan` / `mode: "plan"` 出力
 - [Status Output Schema](./status-output) — internal Installation / Deployment
   ledger read boundary
