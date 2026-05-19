@@ -1,7 +1,7 @@
 # Operator Bootstrap
 
-> このページでわかること: kernel に bundled provider plugin を attach する初期
-> 設定の手順 (= `KernelPlugin` plain array)。
+> このページでわかること: kernel に bundled materializer plugin (=
+> `KernelPlugin` plain array) を attach する初期設定の手順。
 
 operator-facing entry は **`createPaaSApp({ plugins: [...] })`** の plain array
 (= Vite plugin pattern)。 各 plugin factory は `KernelPlugin` を返し、 operator
@@ -76,19 +76,23 @@ marketplace / plugin index fetch / signed manifest / port-based plugin host を
 
 ## Runtime-agent との対応
 
-provider id は manifest に書く安定した id。 runtime-agent の connector
-名は実装詳細で、 operator は agent boot 時に必要な connector credential / local
-path を設定する。
+下表の `manifest provider id` は kernel-side `KernelPlugin` (= 旧
+`ProviderPlugin` を `kernelPluginFromProviderPlugin` adapter で bridge した
+materializer factory) が `Component.kind` を materialize する際の安定 id。
+これは [connector-contract.md](/reference/connector-contract) で言う **Connector
+consumer plugin** (= Connector の下流 consumer) に相当する。 runtime-agent の
+connector 名 (右側) は実装詳細で、 operator は agent boot 時に必要な connector
+credential / local path を設定する。
 
-| manifest provider id             | runtime-agent connector の例    |
-| -------------------------------- | ------------------------------- |
-| `@takos/aws-fargate`             | AWS ECS / Fargate connector     |
-| `@takos/gcp-cloud-run`           | GCP Cloud Run connector         |
-| `@takos/cloudflare-container`    | Cloudflare Container connector  |
-| `@takos/kubernetes-deployment`   | Kubernetes deployment connector |
-| `@takos/selfhost-docker-compose` | docker-compose connector        |
-| `@takos/selfhost-postgres`       | local Docker Postgres connector |
-| `@takos/deno-deploy`             | Deno Deploy connector           |
+| manifest provider id (= KernelPlugin / Connector consumer) | runtime-agent connector の例    |
+| ---------------------------------------------------------- | ------------------------------- |
+| `@takos/aws-fargate`                                       | AWS ECS / Fargate connector     |
+| `@takos/gcp-cloud-run`                                     | GCP Cloud Run connector         |
+| `@takos/cloudflare-container`                              | Cloudflare Container connector  |
+| `@takos/kubernetes-deployment`                             | Kubernetes deployment connector |
+| `@takos/selfhost-docker-compose`                           | docker-compose connector        |
+| `@takos/selfhost-postgres`                                 | local Docker Postgres connector |
+| `@takos/deno-deploy`                                       | Deno Deploy connector           |
 
 ## Selfhosted-only な最小構成
 

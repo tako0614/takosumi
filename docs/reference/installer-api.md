@@ -254,11 +254,11 @@ data backup / restore は別 feature。
 ### `Installation`
 
 この status は takosumi kernel / installer の runtime status です。Takosumi
-Accounts の AppInstallation ledger が外部公開する `installing` / `ready` /
-`failed` / `suspended` / `exported` とは別 enum で、operator account plane は
-kernel の `running` を Accounts 側の `ready` に map します。export lifecycle は
-Accounts ledger が所有するため、この API の Installation status には `exported`
-は登場しません。
+operator account-plane の Installation ledger が外部公開する `installing` /
+`ready` / `failed` / `suspended` / `exported` とは別 enum で、 operator account
+plane は kernel の `running` を Accounts 側の `ready` に map します。 export
+lifecycle は operator Installation ledger が所有するため、この API の
+Installation status には `exported` は登場しません。
 
 ```ts
 interface Installation {

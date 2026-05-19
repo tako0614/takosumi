@@ -3,6 +3,13 @@
 > このページでわかること: AppSpec component から provider
 > を解決するアルゴリズム。
 
+> **Scope note**: 本ページは kernel-internal provider resolution algorithm
+> の記述です。 Takosumi の operator-facing public API surface は AppSpec /
+> Installation / Deployment の 3 概念に閉じています (AGENTS.md mandate)。
+> 以下に登場する「operator account-plane の Installation ledger」 等は
+> takosumi-cloud reference operator distribution が保有する内部 entity の
+> 振る舞いを説明するためのもので、 public concept ではありません。
+
 AppSpec component から concrete deployment plan を生成する **provider
 resolution** のアルゴリズムを定義します。AppSpec の `components.<name>.kind` と
 optional provider hint を元に、operator policy / provider registry
@@ -35,7 +42,8 @@ Resolution input は次に閉じます。
 - `requires[]` — provider capability constraint (例: `["presigned-urls"]`)
 - `providerHint` — optional authoring hint (例: `@takos/cloudflare-workers`)
 - `spaceId` — Space catalog / policy の lookup key (例: `space_acme_prod`)
-- `runtimeMode` — AppInstallation 経由の場合の mode (例: `shared-cell`)
+- `runtimeMode` — operator account-plane の Installation ledger entry 経由の
+  場合の mode (例: `shared-cell`)
 - `catalogRelease` — component kind / provider release pin (digest / release id)
 - `operatorPolicy` — placement / region / quota / compliance rule (policy pack
   id + version)
