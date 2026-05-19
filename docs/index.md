@@ -3,14 +3,14 @@ layout: home
 
 hero:
   name: Takosumi
-  text: Self-hostable PaaS
+  text: セルフホスト可能な PaaS
   tagline: source の `.takosumi.yml` を読んで、 Space に Installation を作り、 apply ごとに Deployment を記録する。
   image:
     src: /logo.svg
     alt: Takosumi
   actions:
     - theme: brand
-      text: Quickstart
+      text: クイックスタート
       link: /getting-started/quickstart
     - theme: alt
       text: AppSpec を書く
@@ -20,16 +20,16 @@ hero:
       link: https://github.com/tako0614/takosumi
 
 features:
-  - title: AppSpec-driven
+  - title: AppSpec ドリブン
     details: |
       source root の 1 ファイル `.takosumi.yml` を書くだけで install + deploy + rollback まで動く。
-  - title: 3 public concepts only
+  - title: 公開コンセプトは 3 つだけ
     details: |
       AppSpec / Installation / Deployment の 3 つだけで完結。 余計な名詞を作らない。
-  - title: Multi-cloud + selfhost
+  - title: マルチクラウド + セルフホスト
     details: |
       Cloudflare Workers / AWS / GCP / Azure / Kubernetes / docker-compose / systemd / filesystem を同一 AppSpec で deploy。
-  - title: Self-hostable, JSR-distributed
+  - title: セルフホスト可能、 JSR 配布
     details: |
       Deno 1 process で `takosumi server` を起動すれば control plane + agent が立ち上がる。
 ---
