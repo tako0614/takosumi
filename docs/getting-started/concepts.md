@@ -13,7 +13,8 @@
 ```
 ┌────────────────────────────────────────────┐
 │ AppSpec (.takosumi.yml)                    │
-│  • components:     ← portable components   │
+│  • components: ← portable な runtime /     │
+│                  resource の宣言            │
 └────────────┬───────────────────────────────┘
              │ validate
              ▼
@@ -56,9 +57,12 @@ curated な公式 component kind は 4 種類 (= catalog は extensible で、 o
 | `object-store`  | S3 互換の bucket                                  |
 | `custom-domain` | DNS record + TLS termination で公開ドメインを構築 |
 
-> `oidc` kind は takosumi-cloud に移動し、 worker が
-> `listen: { operator.identity.oidc: { as: env } }` で受け取る namespace pub
-> になりました (= takosumi core には JSON-LD も materializer もありません)。
+> **Historical note**: 以前 takosumi curated catalog は 5 種類 (上記 4 + `oidc`)
+> でしたが、 `oidc` kind は takosumi-cloud に移動し、 OIDC client material は
+> `operator.identity.oidc` namespace pub として worker が
+> `listen: { operator.identity.oidc: { as: env } }` で受け取る形に
+> 切り替わりました (= takosumi core には `oidc` の JSON-LD も materializer
+> もありません)。 現在 takosumi curated は 4 種です。
 
 各 component kind は次を持つ:
 
@@ -67,7 +71,10 @@ curated な公式 component kind は 4 種類 (= catalog は extensible で、 o
 - **Capabilities** — provider が optional で `versioning` / `auto-tls` 等を
   declare する
 
-新しい component kind の追加は breaking change で、RFC が必要 (cf.
+**Takosumi curated catalog** (= `https://takosumi.com/kinds/v1/<name>`) への
+追加は breaking change で RFC が必要ですが、 catalog 自体は **extensible** で、
+operator は自前の任意 domain (`https://operator.example.com/kinds/<name>`) で新
+kind を自由に発行できます (cf.
 [Extending](/extending#新しい-component-kind-を追加する))。
 
 詳細: [Kind Catalog](../reference/kind-catalog.md#component-kinds)
@@ -81,21 +88,12 @@ Provider は component kind の具体実装。 同じ `worker` / `postgres` /
 provider がそれぞれ違う substrate で同じ kind を materialize する。
 
 bundled provider は **20 default + 1 opt-in**、対応 cloud は AWS / GCP /
-Cloudflare / Azure / Deno Deploy / Kubernetes + selfhost の 7 系統:
-
-- **AWS** — `@takos/aws-{s3,fargate,rds,route53}`
-- **GCP** — `@takos/gcp-{gcs,cloud-run,cloud-sql,cloud-dns}`
-- **Cloudflare** — `@takos/cloudflare-{r2,container,workers,dns}`
-- **Azure** — `@takos/azure-container-apps`
-- **Deno Deploy** — `@takos/deno-deploy` (opt-in)
-- **Kubernetes** — `@takos/kubernetes-deployment`
-- **Selfhost** —
-  `@takos/selfhost-{systemd,docker-compose,postgres,minio,filesystem,coredns}`
+Cloudflare / Azure / Deno Deploy / Kubernetes + selfhost の 7 系統。 個別の
+provider id 一覧 / capabilities / connector 対応は
+[Provider Plugins](../reference/providers.md) に canonical list がある。
 
 Provider selection は installer context と operator registry の責務。 AppSpec は
 portable component kind と要求だけを書く。
-
-詳細: [Provider Plugins](../reference/providers.md)
 
 ---
 
@@ -128,9 +126,12 @@ components:
         - /api/*
 ```
 
-(`routes:` は worker kind の `spec:` 内部 field — Wave J Component contract
-minimization で AppSpec top-level からは削除されており、 worker materializer の
-convention として `spec.routes` を読む)
+::: info `routes:` は worker `spec:` の内部 field Wave J Component contract
+minimization 以降、 `routes:` は AppSpec top-level の 公開 contract field
+ではなく、 `worker` kind の `spec:` 内部 field です。 公開 contract =
+`{ kind, spec, publish, listen, build }` の 5 field のみで、 `spec.routes` は
+worker materializer (= 実装層の convention) が解釈します。 公開 contract と
+materializer convention の境界を読み違えないでください。 :::
 
 component 間の構造的依存は **`publish` / `listen`** で書く。 文字列
 interpolation は使わない。 producer 側が `publish: [<namespacePath>]` で

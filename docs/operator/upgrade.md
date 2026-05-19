@@ -10,17 +10,38 @@ operator runbook が満たすべき不変条件だけを記録する。
 
 ## バージョンポリシー {#version-policy}
 
-Takosumi は **6 つの package** を JSR で独立に publish する。 各 package はまだ
-pre-1.0 で、 minor bump も breaking change を含む可能性がある。
+Takosumi は **core 6 package + cloud provider 6 別 package = 計 13 package** を
+JSR で独立に publish する (詳細は AGENTS.md 参照)。 各 package はまだ pre-1.0
+で、 minor bump も breaking change を含む可能性がある。
 
-| Package                         | 最新の方向                                |
-| ------------------------------- | ----------------------------------------- |
-| `@takos/takosumi-contract`      | 型契約 (semver、SemVer 適用)              |
-| `@takos/takosumi-kernel`        | HTTP server + apply pipeline + storage    |
-| `@takos/takosumi-runtime-agent` | cloud connector / OS connector            |
-| `@takos/takosumi-plugins`       | component kind catalog + provider plugins |
-| `@takos/takosumi-cli`           | `takosumi` コマンド                       |
-| `@takos/takosumi`               | 上記 5 つの umbrella                      |
+### Core (publish order)
+
+下表は AGENTS.md に記録された publish 順 (= contract → kernel → plugins →
+installer → runtime-agent → cli → umbrella) と同期している。
+
+| Package                         | 最新の方向                                                       |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `@takos/takosumi-contract`      | 型契約 (semver、SemVer 適用)                                     |
+| `@takos/takosumi-kernel`        | HTTP server + apply pipeline + storage                           |
+| `@takos/takosumi-plugins`       | component kind catalog + materializer host + factories           |
+| `@takos/takosumi-installer`     | `.takosumi.yml` parser + git fetch + deploy client               |
+| `@takos/takosumi-runtime-agent` | cloud connector / OS connector                                   |
+| `@takos/takosumi-cli`           | `takosumi` コマンド                                              |
+| `@takos/takosumi`               | 上記 packages の umbrella (cloud provider packages は別 install) |
+
+### Cloud provider (別 install)
+
+operator は必要な cloud だけを別 install する。 6 packages すべて pre-1.0
+で運用される。
+
+| Package                                 | 最新の方向                                   |
+| --------------------------------------- | -------------------------------------------- |
+| `@takos/takosumi-cloudflare-providers`  | Cloudflare (Workers / R2 / DNS) factories    |
+| `@takos/takosumi-aws-providers`         | AWS (Fargate / S3 / RDS / Route53) factories |
+| `@takos/takosumi-gcp-providers`         | GCP (Cloud Run / GCS / Cloud SQL) factories  |
+| `@takos/takosumi-kubernetes-providers`  | Kubernetes Deployment + Service factory      |
+| `@takos/takosumi-deno-deploy-providers` | Deno Deploy factory                          |
+| `@takos/takosumi-selfhost-providers`    | Self-host (docker / systemd / filesystem) 用 |
 
 Package bump は release-specific private runbook と検証済み evidence で扱う。
 

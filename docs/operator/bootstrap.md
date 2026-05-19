@@ -8,17 +8,17 @@ operator-facing entry は **`createPaaSApp({ plugins: [...] })`** の plain arra
 は env から credential を読んで factory に直接渡す。
 
 source: per-cloud provider package
-([`packages/cloudflare-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/cloudflare-providers/src)
+([`packages/cloudflare-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/cloudflare-providers/src)
 /
-[`packages/aws-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/aws-providers/src)
+[`packages/aws-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/aws-providers/src)
 /
-[`packages/gcp-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/gcp-providers/src)
+[`packages/gcp-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/gcp-providers/src)
 /
-[`packages/kubernetes-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/kubernetes-providers/src)
+[`packages/kubernetes-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/kubernetes-providers/src)
 /
-[`packages/deno-deploy-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/deno-deploy-providers/src)
+[`packages/deno-deploy-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/deno-deploy-providers/src)
 /
-[`packages/selfhost-providers/src/`](https://github.com/takos-jp/takosumi/tree/main/packages/selfhost-providers/src))
+[`packages/selfhost-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/selfhost-providers/src))
 — bundled `KernelPlugin` factory (`<kind>-<provider>.ts` per pair)。
 
 credential / SDK boundary は
@@ -70,29 +70,35 @@ marketplace / plugin index fetch / signed manifest / port-based plugin host を
 | Selfhost    | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres`, `@takos/selfhost-coredns` |
 | Deno Deploy | `@takos/deno-deploy`                                                                                                                                                      |
 
-各 factory は `@takos/takosumi-plugins/bundled` から独立 named export で取得で
-きる (例: `cloudflareWorkerProvider`、 `awsFargateWorkerProvider`、
-`selfhostFilesystemObjectStoreProvider`)。
+各 factory は該当 cloud provider package
+(`@takos/takosumi-{cloudflare,aws,gcp,kubernetes,deno-deploy,selfhost}-providers`)
+の named export として取得する (例: `cloudflareWorkerProvider` は
+`@takos/takosumi-cloudflare-providers`、 `awsFargateWorkerProvider` は
+`@takos/takosumi-aws-providers`、 `selfhostFilesystemObjectStoreProvider` は
+`@takos/takosumi-selfhost-providers` から)。 operator は必要な cloud の package
+だけを別 install する。
 
 ## Runtime-agent との対応
 
-下表の `manifest provider id` は kernel-side `KernelPlugin` (= 旧
-`ProviderPlugin` を `kernelPluginFromProviderPlugin` adapter で bridge した
-materializer factory) が `Component.kind` を materialize する際の安定 id。
-これは [connector-contract.md](../reference/connector-contract.md) で言う
-**Connector consumer plugin** (= Connector の下流 consumer) に相当する。
-runtime-agent の connector 名 (右側) は実装詳細で、 operator は agent boot
-時に必要な connector credential / local path を設定する。
+下表の `provider id` は kernel-side `KernelPlugin` (= 旧 `ProviderPlugin` を
+`kernelPluginFromProviderPlugin` adapter で bridge した materializer factory) が
+`Component.kind` を materialize する際の安定 id で、 **operator wiring 由来** (=
+operator が `createPaaSApp({ plugins })` に attach した factory が宣言する id)
+であり、 AppSpec manifest 由来ではない。 これは
+[connector-contract.md](../reference/connector-contract.md) で言う **Connector
+consumer plugin** (= Connector の下流 consumer) に相当する。 runtime-agent の
+connector 名 (右側) は実装詳細で、 operator は agent boot 時に必要な connector
+credential / local path を設定する。
 
-| manifest provider id (= KernelPlugin / Connector consumer) | runtime-agent connector の例    |
-| ---------------------------------------------------------- | ------------------------------- |
-| `@takos/aws-fargate`                                       | AWS ECS / Fargate connector     |
-| `@takos/gcp-cloud-run`                                     | GCP Cloud Run connector         |
-| `@takos/cloudflare-container`                              | Cloudflare Container connector  |
-| `@takos/kubernetes-deployment`                             | Kubernetes deployment connector |
-| `@takos/selfhost-docker-compose`                           | docker-compose connector        |
-| `@takos/selfhost-postgres`                                 | local Docker Postgres connector |
-| `@takos/deno-deploy`                                       | Deno Deploy connector           |
+| provider id (operator wiring 由来、= KernelPlugin / Connector consumer) | runtime-agent connector の例    |
+| ----------------------------------------------------------------------- | ------------------------------- |
+| `@takos/aws-fargate`                                                    | AWS ECS / Fargate connector     |
+| `@takos/gcp-cloud-run`                                                  | GCP Cloud Run connector         |
+| `@takos/cloudflare-container`                                           | Cloudflare Container connector  |
+| `@takos/kubernetes-deployment`                                          | Kubernetes deployment connector |
+| `@takos/selfhost-docker-compose`                                        | docker-compose connector        |
+| `@takos/selfhost-postgres`                                              | local Docker Postgres connector |
+| `@takos/deno-deploy`                                                    | Deno Deploy connector           |
 
 ## Selfhosted のみの最小構成 {#selfhosted-only-な最小構成}
 
@@ -107,7 +113,7 @@ import {
   selfhostMinioObjectStoreProvider,
   selfhostPostgresProvider,
   selfhostSystemdWorkerProvider,
-} from "@takos/takosumi-plugins/bundled";
+} from "@takos/takosumi-selfhost-providers";
 
 const { app } = await createPaaSApp({
   plugins: [

@@ -9,11 +9,10 @@ source root に置くだけで install + deploy + rollback まで動きます。
 仕様の正本は次のページにあります:
 
 - [AppSpec (`.takosumi.yml`)](./reference/app-spec.md) — envelope / components /
-  publish / listen / build recipe / interfaces / permissions の全 field 仕様
+  publish / listen / build recipe の全 field 仕様
 - [Kind Catalog](./reference/kind-catalog.md#component-kinds) — curated 4 種の
   kind schema (`worker` / `postgres` / `object-store` / `custom-domain`) +
-  operator-defined kind の extension ルール (= `oidc` kind は takosumi-cloud
-  に移動)
+  operator-defined kind の extension ルール
 - [Installer API](./reference/installer-api.md) — 5 endpoint の wire spec
   (dry-run / apply / rollback)
 
@@ -52,7 +51,7 @@ components:
 これを `.takosumi.yml` として source root に置き、
 
 ```bash
-takosumi install --source ./ --space space_personal
+takosumi install --source . --space space_personal
 ```
 
 を実行すれば Installation + 最初の Deployment が作られます。

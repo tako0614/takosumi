@@ -1,11 +1,8 @@
 # Quickstart — from git clone to first deploy
 
 > このページでわかること: Write a manifest and run your first deploy (English
-> version).
-
-::: info Translation status Reference, operator, and extending docs remain in
-Japanese. See the original [Quickstart (JA)](/getting-started/quickstart) for
-cross-reference. :::
+> version). See [Quickstart (JA)](/getting-started/quickstart) for the JA
+> original.
 
 This document shows the shortest path through Takosumi: **write one manifest and
 deploy it to selfhosted / AWS / GCP / Cloudflare / Azure / Kubernetes**.
@@ -61,8 +58,8 @@ components:
 ```
 
 ```bash
-takosumi install dry-run --space space_personal --source ./
-takosumi install --space space_personal --source ./
+takosumi install dry-run --space space_personal --source .
+takosumi install --space space_personal --source .
 ```
 
 For a remote-kernel dev loop, make the URL/token explicit:
@@ -73,7 +70,7 @@ export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 takosumi server --port 8788 &
 # stdout: "embedded runtime-agent listening at http://127.0.0.1:8789"
-takosumi install --space space_personal --source ./
+takosumi install --space space_personal --source .
 ```
 
 `TAKOSUMI_DEV_MODE=1` is the single dev opt-out flag. It permits plaintext
@@ -87,68 +84,11 @@ credentials exported into the env reach the agent connectors directly.
 
 ## 3. Self-hosted deploy (single VM, Docker / systemd)
 
-A single-VM self-hosted deployment is expressed as AppSpec components.
-
-`.takosumi.yml`:
-
-```yaml
-apiVersion: takosumi.dev/v1
-kind: App
-metadata:
-  id: com.example.my-app
-  name: my-app
-components:
-  db:
-    kind: postgres
-    spec:
-      version: "16"
-    publish:
-      - com.example.my-app.db
-  api:
-    kind: worker
-    build:
-      command: npm ci && npm run build
-      output: dist/worker.mjs
-    spec:
-      routes: ["/api/*"]
-    listen:
-      com.example.my-app.db:
-        as: env
-        prefix: DATABASE_
-    publish:
-      - com.example.my-app.api
-  api-domain:
-    kind: custom-domain
-    spec:
-      name: api.example.com
-    listen:
-      com.example.my-app.api:
-        as: target
-```
-
-Operator side (on the VM):
-
-```bash
-export TAKOSUMI_DATABASE_URL=postgresql://localhost/takosumi
-export TAKOSUMI_SECRET_STORE_PASSPHRASE=$(openssl rand -base64 32)
-export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
-
-# Selfhosted connector storage locations (optional, defaults exist)
-export TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT=/var/lib/takosumi/objects
-export TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR=/etc/systemd/system
-
-takosumi server --port 8788 &
-takosumi install --space space_personal --source . \
-  --remote http://localhost:8788 \
-  --token $TAKOSUMI_INSTALLER_TOKEN
-```
-
-After the deploy completes (the embedded agent runs the selfhost connectors):
-
-- The web service runs as a docker compose service.
-- Postgres comes up via `docker run postgres` (local-docker-postgres connector).
-- The assets bucket is created at `/var/lib/takosumi/objects/assets/`.
-- The domain is registered in the local coredns zone.
+For a single-VM self-hosted setup (Docker / systemd / filesystem / local
+Postgres / coredns), the AppSpec component graph and the operator-side env
+checklist are canonical in [Self-host Notes (JA)](/operator/self-host). The EN
+quickstart only links here; the JA doc has the most current AppSpec snippet, env
+list, and connector behavior.
 
 ---
 
@@ -215,6 +155,22 @@ export TAKOSUMI_KUBERNETES_NAMESPACE=takosumi
 ```
 
 Connector: `@takos/kubernetes-deployment`
+
+### Bundled provider ids
+
+Every bundled provider id is namespaced as `@takos/<cloud>-<service>`. The
+kernel rejects bare provider ids at resolve time and includes the namespaced id
+in the error message when it can infer the intended provider.
+
+| Cloud      | Provider ids                                                                                                                                                              |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AWS        | `@takos/aws-s3`, `@takos/aws-fargate`, `@takos/aws-rds`, `@takos/aws-route53`                                                                                             |
+| GCP        | `@takos/gcp-gcs`, `@takos/gcp-cloud-run`, `@takos/gcp-cloud-sql`, `@takos/gcp-cloud-dns`                                                                                  |
+| Cloudflare | `@takos/cloudflare-r2`, `@takos/cloudflare-container`, `@takos/cloudflare-dns`                                                                                            |
+| Azure      | `@takos/azure-container-apps`                                                                                                                                             |
+| Kubernetes | `@takos/kubernetes-deployment`                                                                                                                                            |
+| Deno       | `@takos/deno-deploy`                                                                                                                                                      |
+| Self-host  | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres`, `@takos/selfhost-coredns` |
 
 ---
 
@@ -307,20 +263,6 @@ kernel and pass AppSpec source to installer endpoints.
 | `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`               | `takosumi server --no-agent` is in use but the external agent URL is not exported, or the embedded agent failed to start |
 | `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found` | The agent host is missing credentials for that cloud, so the connector is not registered                                 |
 | `runtime-agent /v1/lifecycle/apply failed: 401`                     | `TAKOSUMI_AGENT_TOKEN` does not match between agent and kernel                                                           |
-
-Every bundled provider id is namespaced as `@takos/<cloud>-<service>`. The
-kernel rejects bare provider ids at resolve time and includes the namespaced id
-in the error message when it can infer the intended provider.
-
-| Cloud      | Provider ids                                                                                                                                                              |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AWS        | `@takos/aws-s3`, `@takos/aws-fargate`, `@takos/aws-rds`, `@takos/aws-route53`                                                                                             |
-| GCP        | `@takos/gcp-gcs`, `@takos/gcp-cloud-run`, `@takos/gcp-cloud-sql`, `@takos/gcp-cloud-dns`                                                                                  |
-| Cloudflare | `@takos/cloudflare-r2`, `@takos/cloudflare-container`, `@takos/cloudflare-workers`, `@takos/cloudflare-dns`                                                               |
-| Azure      | `@takos/azure-container-apps`                                                                                                                                             |
-| Kubernetes | `@takos/kubernetes-deployment`                                                                                                                                            |
-| Deno       | `@takos/deno-deploy`                                                                                                                                                      |
-| Self-host  | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres`, `@takos/selfhost-coredns` |
 
 ### Artifact storage hygiene
 

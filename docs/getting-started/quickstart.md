@@ -41,8 +41,8 @@ components:
 ```
 
 ```bash
-takosumi install dry-run --space space_personal --source ./
-takosumi install --space space_personal --source ./
+takosumi install dry-run --space space_personal --source .
+takosumi install --space space_personal --source .
 ```
 
 remote kernel に投げる dev loop は次のように URL/token を明示する。
@@ -53,7 +53,7 @@ export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 takosumi server --port 8788 &
 # stdout: "embedded runtime-agent listening at http://127.0.0.1:8789"
-takosumi install --space space_personal --source ./
+takosumi install --space space_personal --source .
 ```
 
 `TAKOSUMI_DEV_MODE=1` は dev 用の単一 opt-out flag。 plaintext secret /
@@ -166,7 +166,7 @@ public contract は `.takosumi.yml` / Installation / Deployment と
 
 ---
 
-## 関連 docs
+## 関連ページ
 
 - [Manifest spec](/manifest)
 - [Kind Catalog](../reference/kind-catalog.md#component-kinds)
@@ -174,3 +174,15 @@ public contract は `.takosumi.yml` / Installation / Deployment と
 - [Self-host deploy](/operator/self-host) — VM 単機 / multi-host 分離 / artifact
   GC / fetch token
 - [Operator bootstrap](/operator/bootstrap) — kernel ↔ agent 連携の詳細
+
+## 次に読む
+
+- [Concepts](/getting-started/concepts) — AppSpec × Component × Kind モデルを 5
+  分で理解
+- [AppSpec](../reference/app-spec.md) — `.takosumi.yml` envelope / components の
+  全 field 仕様
+- [Self-host Notes](/operator/self-host) — production deploy 前の checklist (env
+  / secret / DB encryption)
+- [Operator Bootstrap](/operator/bootstrap) — `createPaaSApp({ plugins })` で
+  provider factory を attach する手順
+- [CLI Reference](../reference/cli.md) — 全 subcommand / flag / env

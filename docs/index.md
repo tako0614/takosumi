@@ -36,17 +36,40 @@ features:
 
 ## 構成
 
-Takosumi は **7 つの JSR package** で配布される:
+Takosumi は **core 6 package + umbrella + cloud provider 6 別 package = 計 13
+package** で配布される (cloud provider package は operator が必要な cloud
+だけを別 install する)。
 
-| Package                                                                         | Role                                                  |
-| ------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | AppSpec / Component / Provider 型契約                 |
-| [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | HTTP server + installer pipeline + state DB + worker  |
-| [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | component kind catalog + provider plugins + factories |
-| [`@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | .takosumi.yml parser + git fetch + deploy client      |
-| [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | cloud SDK / OS executor (data plane)                  |
-| [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi install` / `takosumi deploy` 等の CLI       |
-| [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | umbrella: 上記 6 つを再公開                           |
+### Core (6 package + umbrella)
+
+| Package                                                                         | Role                                                           |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | AppSpec / Component / Provider 型契約                          |
+| [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | HTTP server + installer pipeline + state DB + worker           |
+| [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | component kind catalog + materializer host + factories         |
+| [`@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | .takosumi.yml parser + git fetch + deploy client               |
+| [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | cloud SDK / OS executor (data plane)                           |
+| [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi install` / `takosumi deploy` 等の CLI                |
+| [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | umbrella: 上記 core 6 つを再公開 (cloud provider は別 install) |
+
+> 注: `@takos/` scope は Takos が publish する **reference distribution**
+> であり、 authority は contract (`@takos/takosumi-contract`) 側にある。
+> contract-compatible な alternative publisher も spec 上可能で、 architectural
+> privilege は持たない。
+
+### Cloud provider (6 別 package)
+
+operator は必要な cloud だけを別 install する。 詳細は
+[Provider Plugins](./reference/providers.md) 参照。
+
+| Package                                                                                         | Role                                         |
+| ----------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| [`@takos/takosumi-cloudflare-providers`](https://jsr.io/@takos/takosumi-cloudflare-providers)   | Cloudflare (Workers / R2 / DNS) 用 factories |
+| [`@takos/takosumi-aws-providers`](https://jsr.io/@takos/takosumi-aws-providers)                 | AWS (Fargate / S3 / RDS / Route53) factories |
+| [`@takos/takosumi-gcp-providers`](https://jsr.io/@takos/takosumi-gcp-providers)                 | GCP (Cloud Run / GCS / Cloud SQL) factories  |
+| [`@takos/takosumi-kubernetes-providers`](https://jsr.io/@takos/takosumi-kubernetes-providers)   | Kubernetes Deployment + Service factory      |
+| [`@takos/takosumi-deno-deploy-providers`](https://jsr.io/@takos/takosumi-deno-deploy-providers) | Deno Deploy factory                          |
+| [`@takos/takosumi-selfhost-providers`](https://jsr.io/@takos/takosumi-selfhost-providers)       | Self-host (docker / systemd / filesystem) 用 |
 
 ## はじめに読むもの
 
@@ -54,7 +77,7 @@ Takosumi は **7 つの JSR package** で配布される:
   → cloud install まで
 - [Concepts](/getting-started/concepts) — AppSpec × Component × Kind モデル
 - [AppSpec (`.takosumi.yml`)](./reference/app-spec.md) — envelope / components /
-  use edge / build recipe / interfaces / permissions
+  publish / listen / build recipe
 
 ## 目的別 lookup
 
@@ -64,11 +87,6 @@ Takosumi は **7 つの JSR package** で配布される:
 | AppSpec / Installation / Deployment             | [Manifest](./reference/manifest.md#data-model)              |
 | curated 4 kind + extensible の spec / outputs   | [Kind Catalog](./reference/kind-catalog.md#component-kinds) |
 | Installer 5 endpoint の wire spec               | [Installer API](./reference/installer-api.md)               |
-| 20 default + 1 opt-in provider                  | [Provider Plugins](./reference/providers.md)                |
+| 20 default + 1 opt-in provider (詳細 list)      | [Provider Plugins](./reference/providers.md)                |
 | 全 subcommand × flag × env                      | [CLI Reference](./reference/cli.md)                         |
 | `createPaaSApp({ plugins })` plain-array attach | [Operator Bootstrap](/operator/bootstrap)                   |
-
-> 注: `@takos/` scope は Takos が publish する **reference distribution**
-> であり、 authority は contract (`@takos/takosumi-contract`) 側にある。
-> contract-compatible な alternative publisher も spec 上可能で、 architectural
-> privilege は持たない。

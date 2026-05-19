@@ -3,7 +3,7 @@
 > このページでわかること: 新しい component kind / materializer を追加する手順。
 
 命名規則と最小コミットメントの詳細は
-[`takosumi/CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md)
+[`takosumi/CONVENTIONS.md`](https://github.com/tako0614/takosumi/blob/main/CONVENTIONS.md)
 (canonical) 参照。
 
 ## 拡張の選び方
@@ -34,15 +34,15 @@ package を起こすか、 既存の cloud-neutral package に置きます。
 ### 1. KernelPlugin factory を export する
 
 既存の
-[`packages/cloudflare-providers/src/worker-cloudflare.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/cloudflare-providers/src/worker-cloudflare.ts)
+[`packages/cloudflare-providers/src/worker-cloudflare.ts`](https://github.com/tako0614/takosumi/blob/main/packages/cloudflare-providers/src/worker-cloudflare.ts)
 や
-[`packages/aws-providers/src/object-store-aws-s3.ts`](https://github.com/takos-jp/takosumi/blob/main/packages/aws-providers/src/object-store-aws-s3.ts)
+[`packages/aws-providers/src/object-store-aws-s3.ts`](https://github.com/tako0614/takosumi/blob/main/packages/aws-providers/src/object-store-aws-s3.ts)
 をテンプレに `KernelPlugin` を返す factory を書きます。
 
 ```ts
-import type { KernelPlugin } from "takosumi-contract/plugin";
-import { kernelPluginFromProviderPlugin } from "takosumi-plugins/_kernel_plugin_adapter";
-import { KIND_URI_WORKER } from "takosumi-plugins/_kinds";
+import type { KernelPlugin } from "@takos/takosumi-contract/plugin";
+import { kernelPluginFromProviderPlugin } from "@takos/takosumi-contract/kernel-plugin-adapter";
+import { KIND_URI_BY_NAME } from "@takos/takosumi-contract/app-spec";
 
 export interface HetznerCloudWorkerProviderOptions {
   readonly token?: string;
@@ -56,7 +56,7 @@ export function hetznerCloudWorkerProvider(
   const provider = createHetznerCloudWorkerProvider({ lifecycle });
   return kernelPluginFromProviderPlugin({
     provider,
-    kindUri: KIND_URI_WORKER,
+    kindUri: KIND_URI_BY_NAME.worker,
     capabilities: ["always-on", "long-request"],
   });
 }
@@ -237,17 +237,6 @@ source preparation、 workflow runner、 scheduler は above-kernel product の
 [Workflow Extension Design](./reference/architecture/workflow-extension-design.md)
 参照。
 
-## 関連ページ
-
-- [Reference Index](./reference/index.md) — 全 v1 仕様の索引
-- [Kind Catalog](./reference/kind-catalog.md#component-kinds)
-- [Provider Plugins](./reference/providers.md)
-- [Workflow Placement Rationale](./reference/architecture/workflow-extension-design.md)
-- [Manifest](/manifest)
-- [Operator Bootstrap](/operator/bootstrap)
-- [`CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md)
-  (canonical)
-
 ## 次に読む
 
 - [Kind Catalog](./reference/kind-catalog.md#component-kinds) — curated 4 kind
@@ -260,3 +249,7 @@ source preparation、 workflow runner、 scheduler は above-kernel product の
   envelope 仕様
 - [Workflow Extension Design](./reference/architecture/workflow-extension-design.md)
   — kernel scope 外 (workflow / cron / hook) の境界判断
+- [Manifest](/manifest) — operator が apply する manifest の syntax
+- [Reference Index](./reference/index.md) — 全 v1 仕様の索引
+- [`CONVENTIONS.md`](https://github.com/tako0614/takosumi/blob/main/CONVENTIONS.md)
+  (canonical) — 命名規則と最小コミットメント詳細

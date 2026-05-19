@@ -23,8 +23,9 @@ reference をまとめる。
    factory を選ぶ
 2. [Self-host Notes](/operator/self-host) — production deploy 前に必要な env /
    secret / DB encryption / agent token などの fail-closed condition を確認
-3. [Version Alignment](/operator/upgrade) — 6 package の current alignment と
-   migration ledger の不変条件を確認し、 upgrade 手順の前提を揃える
+3. [Version Alignment](/operator/upgrade) — core 6 package + cloud provider 6 別
+   package の current alignment と migration ledger の不変条件を確認し、 upgrade
+   手順の前提を揃える
 
 ## 関連 reference
 

@@ -22,7 +22,7 @@ hero:
 features:
   - title: AppSpec-driven
     details: |
-      Declare portable components (`worker` / `postgres` / `object-store` / `custom-domain`) in a root `.takosumi.yml` AppSpec, plus operator-defined kinds via JSON-LD. Install with `takosumi install --source . --space <space-id>`. (`oidc` issuance lives in takosumi-cloud as a namespace pub.)
+      Declare portable components (`worker` / `postgres` / `object-store` / `custom-domain`) in a root `.takosumi.yml` AppSpec, plus operator-defined kinds via JSON-LD. Install with `takosumi install --source . --space <space-id>`. (Historical note: `oidc` issuance was an earlier 5th curated kind and has since moved to takosumi-cloud as a namespace pub; see the [Kind Catalog](../reference/kind-catalog.md#component-kinds) for the current 4-kind canonical list.)
   - title: Multi-cloud + selfhost
     details: |
       Deploy to AWS / GCP / Cloudflare / Azure / Kubernetes / Deno Deploy / docker-compose / systemd / filesystem from the same AppSpec, backed by bundled provider plugins.
@@ -46,23 +46,40 @@ back to the JA versions. :::
 
 ## Architecture
 
-Takosumi is distributed as **6 JSR packages**:
+Takosumi is distributed as **core 6 packages + umbrella + 6 separate cloud
+provider packages = 13 JSR packages total** (operators install only the cloud
+provider packages they need).
 
-| Package                                                                         | Role                                                       |
-| ------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | Type contracts for AppSpec / installer / provider APIs     |
-| [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | HTTP server + installer API + state DB + worker daemon     |
-| [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | Component catalog + provider plugins + factories           |
-| [`@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | `.takosumi.yml` parser + git fetch + deploy client         |
-| [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | Cloud SDK / OS executor (data plane)                       |
-| [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | CLI for `takosumi install` / `takosumi server` and friends |
-| [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | Umbrella that re-publishes the packages above              |
+### Core (6 packages + umbrella)
+
+| Package                                                                         | Role                                                                         |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | Type contracts for AppSpec / installer / provider APIs                       |
+| [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | HTTP server + installer API + state DB + worker daemon                       |
+| [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | Component kind catalog + materializer host + factories                       |
+| [`@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | `.takosumi.yml` parser + git fetch + deploy client                           |
+| [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | Cloud SDK / OS executor (data plane)                                         |
+| [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | CLI for `takosumi install` / `takosumi server` and friends                   |
+| [`@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | Umbrella re-publishing the core 6 (cloud providers are installed separately) |
 
 The `@takos/` JSR scope is the **reference distribution** that Takos publishes;
 authority lives in the contract (`@takos/takosumi-contract`), not in the
 publisher. Contract-compatible alternative publishers (e.g.,
 `@example/takosumi-kernel`) are spec-permitted — currently untested, but they
 hold no architectural privilege over the reference distribution.
+
+### Cloud provider (6 separate packages)
+
+Operators install only the providers they need.
+
+| Package                                                                                         | Role                                                |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| [`@takos/takosumi-cloudflare-providers`](https://jsr.io/@takos/takosumi-cloudflare-providers)   | Cloudflare (Workers / R2 / DNS) factories           |
+| [`@takos/takosumi-aws-providers`](https://jsr.io/@takos/takosumi-aws-providers)                 | AWS (Fargate / S3 / RDS / Route53) factories        |
+| [`@takos/takosumi-gcp-providers`](https://jsr.io/@takos/takosumi-gcp-providers)                 | GCP (Cloud Run / GCS / Cloud SQL) factories         |
+| [`@takos/takosumi-kubernetes-providers`](https://jsr.io/@takos/takosumi-kubernetes-providers)   | Kubernetes Deployment + Service factory             |
+| [`@takos/takosumi-deno-deploy-providers`](https://jsr.io/@takos/takosumi-deno-deploy-providers) | Deno Deploy factory                                 |
+| [`@takos/takosumi-selfhost-providers`](https://jsr.io/@takos/takosumi-selfhost-providers)       | Self-host (docker / systemd / filesystem) factories |
 
 See [Concepts (JA)](/getting-started/concepts) for details.
 
