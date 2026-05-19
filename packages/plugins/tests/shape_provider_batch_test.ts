@@ -3,10 +3,21 @@ import {
   type JsonObject,
   type PlatformContext,
   registerShape,
+  type Shape,
   unregisterShape,
 } from "takosumi-contract";
-import { TAKOSUMI_BUNDLED_KINDS } from "../src/kinds/mod.ts";
+import { TAKOSUMI_BUNDLED_KINDS, WebServiceKind } from "../src/kinds/mod.ts";
 import { createInMemoryTakosumiProviders } from "../src/shape-providers/mod.ts";
+
+// Phase L iter 2 (Finding 2): `web-service` is no longer in the curated
+// bundled catalog (no JSON-LD source), but the legacy `web-service`
+// provider plugins still exist as backward-compat. Tests register the
+// shape explicitly in addition to TAKOSUMI_BUNDLED_KINDS to keep those
+// providers exercising the in-memory lifecycle end-to-end.
+const TEST_BUNDLED_SHAPES: readonly Shape[] = [
+  ...TAKOSUMI_BUNDLED_KINDS,
+  WebServiceKind as Shape,
+];
 
 const ctx = {} as PlatformContext;
 
@@ -29,7 +40,7 @@ const SAMPLE_SPECS: Record<string, JsonObject> = {
 };
 
 Deno.test("all bundled providers apply with a sample spec for their shape", async () => {
-  for (const shape of TAKOSUMI_BUNDLED_KINDS) registerShape(shape);
+  for (const shape of TEST_BUNDLED_SHAPES) registerShape(shape);
   try {
     const providers = createInMemoryTakosumiProviders();
     assert.equal(providers.length, 20);
@@ -66,7 +77,7 @@ Deno.test("all bundled providers apply with a sample spec for their shape", asyn
       );
     }
   } finally {
-    for (const shape of TAKOSUMI_BUNDLED_KINDS) {
+    for (const shape of TEST_BUNDLED_SHAPES) {
       unregisterShape(shape.id, shape.version);
     }
   }

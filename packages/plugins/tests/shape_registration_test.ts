@@ -30,18 +30,19 @@ Deno.test("registerTakosumiKinds registers all bundled shapes", () => {
   }
 });
 
-Deno.test("TAKOSUMI_BUNDLED_KINDS exposes the expected initial set", () => {
-  // Phase B: `oidc` is no longer a built-in kernel kind (moved to
-  // Takosumi Accounts). The remaining 5 bundled shapes are the 4
-  // built-in component kinds (worker / postgres / object-store /
-  // custom-domain) plus the legacy `web-service` shape (kept until
-  // a follow-up wave retires it).
+Deno.test("TAKOSUMI_BUNDLED_KINDS exposes the curated 4-kind set", () => {
+  // Phase L iter 2 (Finding 2): the curated catalog matches the
+  // JSON-LD source-of-truth at `spec/contexts/kinds/v1/*.jsonld`,
+  // = the 4 built-in component kinds (worker / postgres /
+  // object-store / custom-domain). `oidc` moved to Takosumi Accounts
+  // (Phase B). `web-service` has no JSON-LD source and is excluded
+  // from the bundled catalog; it remains as a provider-plugin
+  // backward-compat export only.
   const ids = TAKOSUMI_BUNDLED_KINDS.map((s) => `${s.id}@${s.version}`).sort();
   assert.deepEqual(ids, [
     "custom-domain@v1",
     "database-postgres@v1",
     "object-store@v1",
-    "web-service@v1",
     "worker@v1",
   ]);
 });
