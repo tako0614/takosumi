@@ -23,7 +23,7 @@ queue を consume し、自前の配信チャネルに fan out する。
   operator の外側スタックは、 kernel が先に signal として emit
   していない顧客可視 notification を mint できない。
 
-signal は [Audit Events](/reference/audit-events) stream の精選 subset に少数の
+signal は [Audit Events](./audit-events.md) stream の精選 subset に少数の
 derived event を加えたもの (例: `approval-near-expiry` は approval TTL から
 derive されたもので、それ自身は raw audit event ではない)。
 
@@ -52,19 +52,19 @@ migration-rollback
 
 Trigger detail:
 
-| Category                               | Trigger                                                                                                      | Default severity |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------- |
-| `approval-pending`                     | Approval issued and not yet consumed; emitted at issue and re-emitted at TTL milestones.                     | notice           |
-| `approval-near-expiry`                 | Approval has consumed 50% and again at 90% of its TTL without being consumed.                                | warning          |
-| `revoke-debt-operator-action-required` | RevokeDebt aged into `operator-action-required` (see [RevokeDebt Model](/reference/revoke-debt)).            | warning          |
-| `quota-near-limit`                     | Quota counter reached 80% and again at 95% of cap (see [Quota and Rate Limit](/reference/quota-rate-limit)). | warning          |
-| `sla-breach-detected`                  | SLA breach with severity `medium` or higher.                                                                 | warning          |
-| `incident-acknowledged`                | An incident moved into `acknowledged` (see [Incident Model](/reference/incident-model)).                     | notice           |
-| `incident-resolved`                    | An incident moved into `resolved`.                                                                           | notice           |
-| `space-trial-expiring`                 | Trial Space at 7d, 1d, and 1h before expiry.                                                                 | notice           |
-| `api-key-expiring`                     | API key TTL approaching at operator-tunable thresholds.                                                      | notice           |
-| `migration-completed`                  | A kernel migration finished successfully (see [Schema Evolution](/reference/migration-upgrade)).             | info             |
-| `migration-rollback`                   | A kernel migration rolled back.                                                                              | warning          |
+| Category                               | Trigger                                                                                                | Default severity |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------- |
+| `approval-pending`                     | Approval issued and not yet consumed; emitted at issue and re-emitted at TTL milestones.               | notice           |
+| `approval-near-expiry`                 | Approval has consumed 50% and again at 90% of its TTL without being consumed.                          | warning          |
+| `revoke-debt-operator-action-required` | RevokeDebt aged into `operator-action-required` (see [RevokeDebt Model](./revoke-debt.md)).            | warning          |
+| `quota-near-limit`                     | Quota counter reached 80% and again at 95% of cap (see [Quota and Rate Limit](./quota-rate-limit.md)). | warning          |
+| `sla-breach-detected`                  | SLA breach with severity `medium` or higher.                                                           | warning          |
+| `incident-acknowledged`                | An incident moved into `acknowledged` (see [Incident Model](./incident-model.md)).                     | notice           |
+| `incident-resolved`                    | An incident moved into `resolved`.                                                                     | notice           |
+| `space-trial-expiring`                 | Trial Space at 7d, 1d, and 1h before expiry.                                                           | notice           |
+| `api-key-expiring`                     | API key TTL approaching at operator-tunable thresholds.                                                | notice           |
+| `migration-completed`                  | A kernel migration finished successfully (see [Schema Evolution](./migration-upgrade.md)).             | info             |
+| `migration-rollback`                   | A kernel migration rolled back.                                                                        | warning          |
 
 category enum は v1 で closed。 新規 category 追加は `CONVENTIONS.md` §6 RFC
 を要する。
@@ -110,7 +110,7 @@ Field semantics:
 ## Recipient resolution
 
 kernel は emit 時に identity model
-([Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
+([Actor / Organization Model](./architecture/identity-and-access-architecture.md#actor--organization-model)
 参照) と category 固有の recipient 規則から `recipientActorIds` を計算する。
 規則は v1 で closed。
 
@@ -181,8 +181,8 @@ surface する。
 
 ## Audit events
 
-v1 notification audit event 分類は closed で、
-[Audit Events](/reference/audit-events) の closed enum に加わる。
+v1 notification audit event 分類は closed で、 [Audit Events](./audit-events.md)
+の closed enum に加わる。
 
 - `notification-emitted`
 - `notification-acknowledged`
@@ -195,8 +195,8 @@ source event にリンクし、 任意の signal を根拠付けた chain を op
 
 ## Storage schema
 
-NotificationSignal は [Storage Schema](/reference/storage-schema) を 1 つの
-record class で拡張する。
+NotificationSignal は [Storage Schema](./storage-schema.md) を 1 つの record
+class で拡張する。
 
 | Record               | Indexed by                                                                                                 | Persistence                                                                        |
 | -------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
@@ -228,13 +228,13 @@ primitive を公開する。
 
 ## 関連ページ
 
-- [Audit Events](/reference/audit-events)
-- [Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
-- [Approval Invalidation Triggers](/reference/approval-invalidation)
-- [RevokeDebt Model](/reference/revoke-debt)
-- [Quota and Rate Limit](/reference/quota-rate-limit)
-- [Incident Model](/reference/incident-model)
-- [Schema Evolution](/reference/migration-upgrade)
-- [Kernel HTTP API](/reference/kernel-http-api)
-- [Storage Schema](/reference/storage-schema)
-- [Resource IDs](/reference/resource-ids)
+- [Audit Events](./audit-events.md)
+- [Actor / Organization Model](./architecture/identity-and-access-architecture.md#actor--organization-model)
+- [Approval Invalidation Triggers](./approval-invalidation.md)
+- [RevokeDebt Model](./revoke-debt.md)
+- [Quota and Rate Limit](./quota-rate-limit.md)
+- [Incident Model](./incident-model.md)
+- [Schema Evolution](./migration-upgrade.md)
+- [Kernel HTTP API](./kernel-http-api.md)
+- [Storage Schema](./storage-schema.md)
+- [Resource IDs](./resource-ids.md)

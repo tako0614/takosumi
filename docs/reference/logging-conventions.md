@@ -66,8 +66,8 @@ shutdown, and global periodic worker tick.
   set.
 - **Raw PII values.** Email, IP, actor names, and similar PII are redacted
   according to the active compliance regime (see
-  [Secret Partitions](/reference/secret-partitions) for the redaction surface).
-  Lines that need PII for debugging carry a digest, not the value.
+  [Secret Partitions](./secret-partitions.md) for the redaction surface). Lines
+  that need PII for debugging carry a digest, not the value.
 
 A line whose canonical bytes match a redaction substring is rejected at emit
 time and surfaces as a `severity: warn` line with `level: warn`,
@@ -116,7 +116,7 @@ log と audit event は異なる保証を持つ別の surface である。
 
 - **Audit events** are tamper-evident, hash-chained, indexed,
   retention-governed, and consumed for compliance evidence. Their taxonomy is
-  closed and lives in [Audit Events](/reference/audit-events).
+  closed and lives in [Audit Events](./audit-events.md).
 - **Logs** are operator debugging surface. They are not hash-chained, not
   retention-governed, and not part of the closed audit taxonomy. They may carry
   richer context than the corresponding audit event but never replace it.
@@ -194,8 +194,8 @@ subsystem の rate limit を受けうる。limiter は超過分の `debug` 行�
 
 ## 関連ページ
 
-- [Telemetry / Metrics](/reference/telemetry-metrics)
-- [Audit Events](/reference/audit-events)
-- [Time / Clock Model](/reference/time-clock-model)
-- [Secret Partitions](/reference/secret-partitions)
-- [Environment Variables](/reference/env-vars)
+- [Telemetry / Metrics](./telemetry-metrics.md)
+- [Audit Events](./audit-events.md)
+- [Time / Clock Model](./time-clock-model.md)
+- [Secret Partitions](./secret-partitions.md)
+- [Environment Variables](./env-vars.md)

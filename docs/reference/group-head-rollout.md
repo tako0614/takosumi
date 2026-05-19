@@ -116,8 +116,8 @@ shadow は production traffic を新 deployment に複製送付しますが prod
   client に返る
 - shadow 先 (新 deployment) に同 request を mirror。 結果は ObservationSet に
   記録され、 production 側応答や副作用は変えない
-- drift 検出時は [Drift Detection](/reference/drift-detection) flow。 severity
-  `error` なら operator gate で `rolling-back` に遷移
+- drift 検出時は [Drift Detection](./drift-detection.md) flow。 severity `error`
+  なら operator gate で `rolling-back` に遷移
 - shadow rollout は副作用 surface を持つ manifest を受け付けない。 `outputs` /
   `queue` route / DB semantic write を含む shadow plan は
   `shadow-side-effects:forbidden` で resolution 時に `deny` (operator approval
@@ -130,17 +130,17 @@ shadow は production traffic を新 deployment に複製送付しますが prod
 pointer 前進 / 巻き戻し / state transition は同 `(spaceId, groupId)` で直列化
 されます。
 
-- 直列化は [Cross-Process Locks](/reference/cross-process-locks) の
+- 直列化は [Cross-Process Locks](./cross-process-locks.md) の
   `(spaceId, groupId)` key に従う
 - 同 group への複数 OperationPlan interleaving は不可。 rollout 中の group へ
   は新 rollout を載せず `idle` 確定後に開始
 - lock holder 異常終了時の TTL 失効 / recovery 経路も
-  [Cross-Process Locks](/reference/cross-process-locks) の規則に従う
+  [Cross-Process Locks](./cross-process-locks.md) の規則に従う
 
 ## Audit events
 
 GroupHead 関連の audit event は以下を発行します
-([Audit Events](/reference/audit-events))。
+([Audit Events](./audit-events.md))。
 
 - `group-head-moved`: pointer が前進した (`currentDeploymentId` /
   `currentActivationSnapshotId` のいずれかが変わった) ときに記録。
@@ -167,7 +167,7 @@ GroupHead 関連の audit event は以下を発行します
 - `rollback-revalidation-required`: `rolling-back` 遷移で compensate path に
   乗るとき発火
 
-詳細は [Risk Taxonomy](/reference/risk-taxonomy) 参照。
+詳細は [Risk Taxonomy](./risk-taxonomy.md) 参照。
 
 ## Related architecture notes
 
@@ -183,9 +183,9 @@ GroupHead 関連の audit event は以下を発行します
 
 ## 関連ページ
 
-- [Lifecycle Protocol](/reference/lifecycle)
-- [Lifecycle Phases](/reference/lifecycle-phases)
-- [Cross-Process Locks](/reference/cross-process-locks)
-- [Audit Events](/reference/audit-events)
-- [Risk Taxonomy](/reference/risk-taxonomy)
-- [Drift Detection](/reference/drift-detection)
+- [Lifecycle Protocol](./lifecycle.md)
+- [Lifecycle Phases](./lifecycle-phases.md)
+- [Cross-Process Locks](./cross-process-locks.md)
+- [Audit Events](./audit-events.md)
+- [Risk Taxonomy](./risk-taxonomy.md)
+- [Drift Detection](./drift-detection.md)

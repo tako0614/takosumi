@@ -53,20 +53,20 @@ Takosumi は **7 つの JSR package** で配布される:
 - [Quickstart](/getting-started/quickstart) — `takosumi server` 1 コマンドで dev
   → cloud install まで
 - [Concepts](/getting-started/concepts) — AppSpec × Component × Kind モデル
-- [AppSpec (`.takosumi.yml`)](/reference/app-spec) — envelope / components / use
-  edge / build recipe / interfaces / permissions
+- [AppSpec (`.takosumi.yml`)](./reference/app-spec.md) — envelope / components /
+  use edge / build recipe / interfaces / permissions
 
 ## 目的別 lookup
 
-| 目的                                            | ページ                                                  |
-| ----------------------------------------------- | ------------------------------------------------------- |
-| 設計 notes / layer 境界                         | [Architecture Overview](/reference/architecture/)       |
-| AppSpec / Installation / Deployment             | [Manifest](/reference/manifest#data-model)              |
-| curated 4 kind + extensible の spec / outputs   | [Kind Catalog](/reference/kind-catalog#component-kinds) |
-| Installer 5 endpoint の wire spec               | [Installer API](/reference/installer-api)               |
-| 20 default + 1 opt-in provider                  | [Provider Plugins](/reference/providers)                |
-| 全 subcommand × flag × env                      | [CLI Reference](/reference/cli)                         |
-| `createPaaSApp({ plugins })` plain-array attach | [Operator Bootstrap](/operator/bootstrap)               |
+| 目的                                            | ページ                                                      |
+| ----------------------------------------------- | ----------------------------------------------------------- |
+| 設計 notes / layer 境界                         | [Architecture Overview](./reference/architecture/index.md)  |
+| AppSpec / Installation / Deployment             | [Manifest](./reference/manifest.md#data-model)              |
+| curated 4 kind + extensible の spec / outputs   | [Kind Catalog](./reference/kind-catalog.md#component-kinds) |
+| Installer 5 endpoint の wire spec               | [Installer API](./reference/installer-api.md)               |
+| 20 default + 1 opt-in provider                  | [Provider Plugins](./reference/providers.md)                |
+| 全 subcommand × flag × env                      | [CLI Reference](./reference/cli.md)                         |
+| `createPaaSApp({ plugins })` plain-array attach | [Operator Bootstrap](/operator/bootstrap)                   |
 
 > 注: `@takos/` scope は Takos が publish する **reference distribution**
 > であり、 authority は contract (`@takos/takosumi-contract`) 側にある。

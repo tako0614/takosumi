@@ -87,6 +87,6 @@ breaking note が直接書かれている。
 
 ## 関連ページ
 
-- [CLI Reference](/reference/cli) — current CLI command surface
+- [CLI Reference](../reference/cli.md) — current CLI command surface
 - [Self-host Notes](/operator/self-host) — production 配信前の checklist
 - [Operator Bootstrap](/operator/bootstrap) — provider 配線手順

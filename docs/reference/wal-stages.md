@@ -116,7 +116,7 @@ WAL を読み直すときの規則:
    `operationPlanDigest` も変わる invariant に依拠)
 3. tuple 一部欠損 (例: WAL header は読めるが entry body 破損) → recovery mode
    経由でしか進行不可。 mode 選択は
-   [Recovery modes](/reference/lifecycle#recovery-modes) 参照
+   [Recovery modes](./lifecycle.md#recovery-modes) 参照
 
 `actual-effects-overflow` Risk 発火 entry は replay 時必ず `inspect` mode で
 確認してから他 mode に進めます。 `continue` で進める前に overflow の origin
@@ -178,8 +178,8 @@ RevokeDebt entry を生成します。 発生条件:
   generated material → `activation-rollback`
 - `finalize` 中: managed / generated cleanup が permanent fail → 該当 reason
 
-reason / status / aging は [RevokeDebt Model](/reference/revoke-debt) 参照。 WAL
-stage 側は enqueue 責務のみで、 retry / aging semantics は RevokeDebt subsystem
+reason / status / aging は [RevokeDebt Model](./revoke-debt.md) 参照。 WAL stage
+側は enqueue 責務のみで、 retry / aging semantics は RevokeDebt subsystem
 に委ねます。
 
 ## Related architecture notes
@@ -196,6 +196,6 @@ stage 側は enqueue 責務のみで、 retry / aging semantics は RevokeDebt s
 
 ## 関連ページ
 
-- [Lifecycle Protocol](/reference/lifecycle)
-- [Approval Invalidation Triggers](/reference/approval-invalidation)
-- [RevokeDebt Model](/reference/revoke-debt)
+- [Lifecycle Protocol](./lifecycle.md)
+- [Approval Invalidation Triggers](./approval-invalidation.md)
+- [RevokeDebt Model](./revoke-debt.md)

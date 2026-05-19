@@ -5,7 +5,7 @@
 
 ## Data export API
 
-[Kernel HTTP API](/reference/kernel-http-api) の internal HMAC credential を
+[Kernel HTTP API](./kernel-http-api.md) の internal HMAC credential を
 保持する。
 
 ### `POST /api/internal/v1/spaces/:id/exports`
@@ -139,7 +139,7 @@ single-use code で、 operator の意図確認を強制する。 code TTL は
 soft-delete 期間経過後、 または operator が即時 hard-delete を要求したときに
 hard-delete が走る。
 
-- artifact / DataAsset を [Artifact GC](/reference/artifact-gc) の通常経路で GC
+- artifact / DataAsset を [Artifact GC](./artifact-gc.md) の通常経路で GC
   対象に積む。 当該 Space からのみ参照されている artifact は sweep で消える。
   dedup で他 Space からも参照されていれば残る。
 - secret partition を revoke する。 secret partition の master key は destroyed
@@ -147,7 +147,7 @@ hard-delete が走る。
 - audit log は **compliance retention に従い保持** する。 記録自体は残り、 raw
   artifact / journal payload は破棄される。 redaction policy 後の metadata と
   chain hash が残る。 retention window は
-  [Compliance Retention](/reference/compliance-retention) の regime に従う。
+  [Compliance Retention](./compliance-retention.md) の regime に従う。
 - hard-delete 後、 Space ID は再利用しない。
 
 ## Right-to-erasure (GDPR)
@@ -163,8 +163,8 @@ GDPR right-to-erasure 要求は通常の Space deletion と独立した経路を
   chain は redaction event 自体を新 entry として記録し、 `prevHash` の連続性は
   途切れない。 tamper-evidence と erasure 要求を両立させる。
 - redaction 対象 field は closed list。 追加は `CONVENTIONS.md` §6 RFC
-  を要する。 詳細 field 集合は
-  [Compliance Retention](/reference/compliance-retention) と cross-link する。
+  を要する。 詳細 field 集合は [Compliance Retention](./compliance-retention.md)
+  と cross-link する。
 
 redaction と Space hard-delete は独立。 両方の audit event が emit される。
 
@@ -188,7 +188,7 @@ window 通過後に自動 hard-delete を進める。 どちらの mode でも h
 ## Audit events
 
 export / deletion lifecycle に関連する audit event
-([Audit Events](/reference/audit-events)):
+([Audit Events](./audit-events.md)):
 
 - `space-export-started` — export request が queue / in-progress に入った。
 - `space-export-completed` — export artifact 発行完了。
@@ -231,11 +231,11 @@ primitive を提供する。
 
 ## 関連ページ
 
-- [Tenant Provisioning](/reference/tenant-provisioning)
-- [Storage Schema](/reference/storage-schema)
-- [Audit Events](/reference/audit-events)
-- [Compliance Retention](/reference/compliance-retention)
-- [Backup and Restore](/reference/backup-restore)
-- [Secret Partitions](/reference/secret-partitions)
-- [Artifact GC](/reference/artifact-gc)
-- [Kernel HTTP API](/reference/kernel-http-api)
+- [Tenant Provisioning](./tenant-provisioning.md)
+- [Storage Schema](./storage-schema.md)
+- [Audit Events](./audit-events.md)
+- [Compliance Retention](./compliance-retention.md)
+- [Backup and Restore](./backup-restore.md)
+- [Secret Partitions](./secret-partitions.md)
+- [Artifact GC](./artifact-gc.md)
+- [Kernel HTTP API](./kernel-http-api.md)

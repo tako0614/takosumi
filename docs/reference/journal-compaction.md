@@ -6,7 +6,7 @@
 WriteAheadOperationJournal は WAL stage 進行とともに単調増大する。 compaction
 なしでは journal は際限なく成長し replay が遅くなる。 compaction は audit log
 retention とは独立で、 audit 側の regime 駆動 retention は
-[Audit Events](/reference/audit-events) を参照。
+[Audit Events](./audit-events.md) を参照。
 
 ## Compaction triggers
 
@@ -55,7 +55,7 @@ pair.
 
 - The base snapshot pair is computed by folding the dropped entries against the
   previous base snapshot. The pair carries the same immutability rules as any
-  other snapshot in [Storage Schema](/reference/storage-schema).
+  other snapshot in [Storage Schema](./storage-schema.md).
 - After snapshotization, replay starts from the new base and reads only the
   post-base journal tail. Replay correctness is preserved because the base
   snapshot encodes every effect that compaction removed.
@@ -101,8 +101,8 @@ on its own retention rules and timer.
   configures `TAKOSUMI_JOURNAL_COMPACTION_OP_THRESHOLD` and friends to hold
   journal entries longer; the regime itself does not alter compaction semantics.
 
-See [Audit Events](/reference/audit-events) for the regime taxonomy and
-event-level retention rules.
+See [Audit Events](./audit-events.md) for the regime taxonomy and event-level
+retention rules.
 
 ## Operator controls
 
@@ -153,6 +153,6 @@ Inspection commands require the operator bearer.
 
 ## 関連ページ
 
-- [Storage Schema](/reference/storage-schema)
-- [Audit Events](/reference/audit-events)
-- [Lifecycle Protocol](/reference/lifecycle)
+- [Storage Schema](./storage-schema.md)
+- [Audit Events](./audit-events.md)
+- [Lifecycle Protocol](./lifecycle.md)

@@ -20,23 +20,23 @@ audit event を append し、 notification adapter が供給されていれば
 
 v1 計測集合は closed。 dimension 追加は `CONVENTIONS.md` §6 RFC を要する。
 
-| Dimension                   | Source                                            | Notes                                                               |
-| --------------------------- | ------------------------------------------------- | ------------------------------------------------------------------- |
-| `apply-latency-p50`         | `takosumi_apply_duration_seconds`                 | Median apply latency over the window.                               |
-| `apply-latency-p95`         | `takosumi_apply_duration_seconds`                 | 95th percentile.                                                    |
-| `apply-latency-p99`         | `takosumi_apply_duration_seconds`                 | 99th percentile.                                                    |
-| `activation-latency`        | activation pipeline                               | Time from `desired-recorded` to `activation-snapshot-created`.      |
-| `wal-stage-duration`        | [WAL Stages](/reference/wal-stages)               | One observation per stage; emitted per stage independently.         |
-| `drift-detection-latency`   | [Drift Detection](/reference/drift-detection)     | Time from drift cause to `drift-detected`.                          |
-| `revoke-debt-aging`         | [RevokeDebt](/reference/revoke-debt)              | Median age between `revoke-debt-created` and `revoke-debt-cleared`. |
-| `readiness-up-ratio`        | [Readiness Probes](/reference/readiness-probes)   | Fraction of probe samples reporting `ok`.                           |
-| `rate-limit-throttle-ratio` | [Quota / Rate Limit](/reference/quota-rate-limit) | Ratio of 429-rejected requests to total requests.                   |
-| `error-rate-5xx`            | HTTP edge                                         | Ratio of HTTP 5xx responses to total responses.                     |
-| `error-rate-4xx`            | HTTP edge                                         | Ratio of HTTP 4xx responses to total responses.                     |
+| Dimension                   | Source                                      | Notes                                                               |
+| --------------------------- | ------------------------------------------- | ------------------------------------------------------------------- |
+| `apply-latency-p50`         | `takosumi_apply_duration_seconds`           | Median apply latency over the window.                               |
+| `apply-latency-p95`         | `takosumi_apply_duration_seconds`           | 95th percentile.                                                    |
+| `apply-latency-p99`         | `takosumi_apply_duration_seconds`           | 99th percentile.                                                    |
+| `activation-latency`        | activation pipeline                         | Time from `desired-recorded` to `activation-snapshot-created`.      |
+| `wal-stage-duration`        | [WAL Stages](./wal-stages.md)               | One observation per stage; emitted per stage independently.         |
+| `drift-detection-latency`   | [Drift Detection](./drift-detection.md)     | Time from drift cause to `drift-detected`.                          |
+| `revoke-debt-aging`         | [RevokeDebt](./revoke-debt.md)              | Median age between `revoke-debt-created` and `revoke-debt-cleared`. |
+| `readiness-up-ratio`        | [Readiness Probes](./readiness-probes.md)   | Fraction of probe samples reporting `ok`.                           |
+| `rate-limit-throttle-ratio` | [Quota / Rate Limit](./quota-rate-limit.md) | Ratio of 429-rejected requests to total requests.                   |
+| `error-rate-5xx`            | HTTP edge                                   | Ratio of HTTP 5xx responses to total responses.                     |
+| `error-rate-4xx`            | HTTP edge                                   | Ratio of HTTP 4xx responses to total responses.                     |
 
 各 dimension は、対応する telemetry metric を既に発行している kernel HTTP edge
 または worker boundary で観測される
-([Telemetry / Metrics](/reference/telemetry-metrics) 参照)。 breach detection
+([Telemetry / Metrics](./telemetry-metrics.md) 参照)。 breach detection
 は同じ観測を再利用する。並行する計測 path は導入しない。
 
 ## Measurement window
@@ -48,7 +48,7 @@ v1 計測集合は closed。 dimension 追加は `CONVENTIONS.md` §6 RFC を要
   operator が tune できる。
 - 30 秒の sub-window が sliding aggregation bucket を作る。 評価は sub-window
   境界の終端で走る。
-- すべての window は [Time / Clock Model](/reference/time-clock-model) の kernel
+- すべての window は [Time / Clock Model](./time-clock-model.md) の kernel
   monotonic clock に align するので、 successive window が overlap したり clock
   skew で sample を落としたりしない。
 
@@ -83,7 +83,7 @@ operator は、それぞれ独立に設定する。
 - `windowSeconds` がこの閾値の default window を上書きする。
 
 変更系 endpoint `PATCH` と `DELETE` は `thresholdId` を key にした同じ body
-形を受け付ける。 kernel は閾値を [Storage Schema](/reference/storage-schema)
+形を受け付ける。 kernel は閾値を [Storage Schema](./storage-schema.md)
 に整合する audit partition に永続化する。
 
 ## State machine and hysteresis
@@ -157,7 +157,7 @@ filter は `dimension`、`scope`、`spaceId`、`orgId`、`state` の query param
 ## Audit events
 
 state machine 遷移は closed enum の audit event を発行する
-([Audit Events](/reference/audit-events) 参照)。
+([Audit Events](./audit-events.md) 参照)。
 
 - `sla-breach-detected` — `warning → breached` で emit。 payload に
   `thresholdId`、`dimension`、`scope`、`targetId`、`windowSeconds`、`observation`、`comparator`、`value`
@@ -175,8 +175,8 @@ kernel audit envelope の severity マッピングは現行の `AuditSeverity` e
 
 ## Storage
 
-SLA state は [Storage Schema](/reference/storage-schema) に整合する専用 record
-class として永続化される。
+SLA state は [Storage Schema](./storage-schema.md) に整合する専用 record class
+として永続化される。
 
 | Field         | Type      | Required | Notes                                         |
 | ------------- | --------- | -------- | --------------------------------------------- |
@@ -213,14 +213,14 @@ operator distribution に住む。 kernel は detection と audit
 
 ## 関連ページ
 
-- [Telemetry / Metrics](/reference/telemetry-metrics)
-- [Audit Events](/reference/audit-events)
-- [Storage Schema](/reference/storage-schema)
-- [Readiness Probes](/reference/readiness-probes)
-- [Quota / Rate Limit](/reference/quota-rate-limit)
-- [Drift Detection](/reference/drift-detection)
-- [RevokeDebt](/reference/revoke-debt)
-- [Time / Clock Model](/reference/time-clock-model)
-- [Environment Variables](/reference/env-vars)
-- [Kernel HTTP API](/reference/kernel-http-api)
-- [Closed Enums](/reference/closed-enums)
+- [Telemetry / Metrics](./telemetry-metrics.md)
+- [Audit Events](./audit-events.md)
+- [Storage Schema](./storage-schema.md)
+- [Readiness Probes](./readiness-probes.md)
+- [Quota / Rate Limit](./quota-rate-limit.md)
+- [Drift Detection](./drift-detection.md)
+- [RevokeDebt](./revoke-debt.md)
+- [Time / Clock Model](./time-clock-model.md)
+- [Environment Variables](./env-vars.md)
+- [Kernel HTTP API](./kernel-http-api.md)
+- [Closed Enums](./closed-enums.md)

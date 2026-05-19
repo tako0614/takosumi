@@ -28,12 +28,13 @@ reference をまとめる。
 
 ## 関連 reference
 
-- [Environment Variables](/reference/env-vars) — `TAKOSUMI_*` 一覧
-- [Kernel HTTP API](/reference/kernel-http-api) — installer / artifact /
+- [Environment Variables](../reference/env-vars.md) — `TAKOSUMI_*` 一覧
+- [Kernel HTTP API](../reference/kernel-http-api.md) — installer / artifact /
   internal API の wire spec
-- [Runtime-Agent API](/reference/runtime-agent-api) — kernel ↔ agent envelope
-- [Provider Plugins](/reference/providers) — 20 default + 1 opt-in provider
+- [Runtime-Agent API](../reference/runtime-agent-api.md) — kernel ↔ agent
+  envelope
+- [Provider Plugins](../reference/providers.md) — 20 default + 1 opt-in provider
   の実装と capabilities
-- [Lifecycle Protocol](/reference/lifecycle) — apply / destroy / lock 詳細
-- [Observability Stack](/reference/observability-stack) — SLI / SLO / alert
+- [Lifecycle Protocol](../reference/lifecycle.md) — apply / destroy / lock 詳細
+- [Observability Stack](../reference/observability-stack.md) — SLI / SLO / alert
   routing の初期 contract

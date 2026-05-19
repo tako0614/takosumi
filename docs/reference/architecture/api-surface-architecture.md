@@ -2,8 +2,8 @@
 
 > このページでわかること: kernel の API surface 設計と endpoint 分類。
 
-endpoint catalog は [Kernel HTTP API reference](/reference/kernel-http-api)
-が一次 資料。本ページは surface split の設計判断だけを扱う。
+endpoint catalog は [Kernel HTTP API reference](../kernel-http-api.md) が一次
+資料。本ページは surface split の設計判断だけを扱う。
 
 ## Surface Split
 
@@ -64,7 +64,7 @@ public OpenAPI の正本には含めない。
 
 ## Cross-references
 
-- [Kernel HTTP API](/reference/kernel-http-api)
-- [Installer API](/reference/installer-api)
-- [Runtime-Agent API](/reference/runtime-agent-api)
-- [Lifecycle Protocol](/reference/lifecycle)
+- [Kernel HTTP API](../kernel-http-api.md)
+- [Installer API](../installer-api.md)
+- [Runtime-Agent API](../runtime-agent-api.md)
+- [Lifecycle Protocol](../lifecycle.md)

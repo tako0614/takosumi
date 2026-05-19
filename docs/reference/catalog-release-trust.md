@@ -116,9 +116,9 @@ descriptor body そのものに署名は付かない。 trust の root は **ope
 
 ## Related architecture notes
 
-- [Supply Chain Trust](/reference/supply-chain-trust) — ecosystem-wide 「TLS +
-  digest pin + 1 signing domain (OIDC)」 narrative
-- [Storage Schema](/reference/storage-schema) — CatalogRelease descriptor の
+- [Supply Chain Trust](./supply-chain-trust.md) — ecosystem-wide 「TLS + digest
+  pin + 1 signing domain (OIDC)」 narrative
+- [Storage Schema](./storage-schema.md) — CatalogRelease descriptor の
   persistence shape
-- [Catalog Release Descriptor Model](/reference/architecture/catalog-release-descriptor-model)
-- [Connector Contract](/reference/connector-contract) — runtime-agent 側 verify
+- [Catalog Release Descriptor Model](./architecture/catalog-release-descriptor-model.md)
+- [Connector Contract](./connector-contract.md) — runtime-agent 側 verify

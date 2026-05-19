@@ -116,10 +116,9 @@ link projection の resolved access mode が変わると、 approval invalidatio
 - grant 発行 export が新たに operator policy review 越しでないと特定モードを
   許可しないように設定された
 
-approval invalidation trigger の全リストは
-[Closed Enums](/reference/closed-enums) を参照。 access mode
-変更は実運用上もっとも頻繁な `effect-detail change` の原因で、 `read-write` と
-`admin` を link 上で明示宣言させる理由でもある。
+approval invalidation trigger の全リストは [Closed Enums](./closed-enums.md)
+を参照。 access mode 変更は実運用上もっとも頻繁な `effect-detail change`
+の原因で、 `read-write` と `admin` を link 上で明示宣言させる理由でもある。
 
 ## 関連 architecture notes
 
@@ -132,6 +131,6 @@ approval invalidation trigger の全リストは
 
 ## 関連ページ
 
-- [Closed Enums](/reference/closed-enums)
-- [Kind Catalog](/reference/kind-catalog#component-kinds)
-- [Provider Plugins](/reference/providers)
+- [Closed Enums](./closed-enums.md)
+- [Kind Catalog](./kind-catalog.md#component-kinds)
+- [Provider Plugins](./providers.md)

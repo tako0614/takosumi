@@ -22,8 +22,8 @@ Takosumi は 3 種の clock source を区別する。 各 feature は 1 つの s
 - **Logical / Lamport-like ordering** — derived from the audit hash chain
   (`prevHash`, `hash`). Used to order events deterministically even when
   wall-clock skew between pods would make `ts` ambiguous. The per-Space and
-  global hash chains in [Audit Events](/reference/audit-events#hash-chain)
-  provide the order; `ts` is recorded for human reading, not for tie-breaking.
+  global hash chains in [Audit Events](./audit-events.md#hash-chain) provide the
+  order; `ts` is recorded for human reading, not for tie-breaking.
 
 ## Per-feature clock binding
 
@@ -188,7 +188,7 @@ operator の最小義務は次の通り。
 
 ## 関連ページ
 
-- [Audit Events](/reference/audit-events)
-- [Approval Invalidation Triggers](/reference/approval-invalidation)
-- [RevokeDebt Model](/reference/revoke-debt)
-- [Cross-Process Locks](/reference/cross-process-locks)
+- [Audit Events](./audit-events.md)
+- [Approval Invalidation Triggers](./approval-invalidation.md)
+- [RevokeDebt Model](./revoke-debt.md)
+- [Cross-Process Locks](./cross-process-locks.md)

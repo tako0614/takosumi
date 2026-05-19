@@ -156,7 +156,7 @@ ecosystem RFC が必要です:
 6. **テスト** — `tests/component_kind_<kind-id>_test.ts` (JSON-LD spec 境界
    ケース) と各 materializer の test を整備。
 7. **CONVENTIONS.md §1 表を更新**。
-8. **docs を更新** — [Kind Catalog](/reference/kind-catalog#component-kinds)
+8. **docs を更新** — [Kind Catalog](./reference/kind-catalog.md#component-kinds)
    に解説 section を追加。
 
 ### Materializer = KernelPlugin | InlineMaterializer
@@ -234,15 +234,15 @@ reserved vocabulary です。
 kernel 側で追加できるのは desired-state component kind と materializer まで。
 source preparation、 workflow runner、 scheduler は above-kernel product の
 責務です。 詳細は
-[Workflow Extension Design](/reference/architecture/workflow-extension-design)
+[Workflow Extension Design](./reference/architecture/workflow-extension-design.md)
 参照。
 
 ## 関連ページ
 
-- [Reference Index](/reference/) — 全 v1 仕様の索引
-- [Kind Catalog](/reference/kind-catalog#component-kinds)
-- [Provider Plugins](/reference/providers)
-- [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+- [Reference Index](./reference/index.md) — 全 v1 仕様の索引
+- [Kind Catalog](./reference/kind-catalog.md#component-kinds)
+- [Provider Plugins](./reference/providers.md)
+- [Workflow Placement Rationale](./reference/architecture/workflow-extension-design.md)
 - [Manifest](/manifest)
 - [Operator Bootstrap](/operator/bootstrap)
 - [`CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md)
@@ -250,13 +250,13 @@ source preparation、 workflow runner、 scheduler は above-kernel product の
 
 ## 次に読む
 
-- [Kind Catalog](/reference/kind-catalog#component-kinds) — curated 4 kind の
-  spec / publishes / listens / outputs を読み、 自前 kind との差分を決める
-- [Provider Plugins](/reference/providers) — 既存 provider の `KernelPlugin`
+- [Kind Catalog](./reference/kind-catalog.md#component-kinds) — curated 4 kind
+  の spec / publishes / listens / outputs を読み、 自前 kind との差分を決める
+- [Provider Plugins](./reference/providers.md) — 既存 provider の `KernelPlugin`
   実装例 (factory が返す lifecycle envelope の形)
 - [Operator Bootstrap](/operator/bootstrap) — 追加した factory を
   `createPaaSApp({ plugins: [...] })` に attach する手順
-- [AppSpec](/reference/app-spec) — 新 kind を AppSpec で declare するための
+- [AppSpec](./reference/app-spec.md) — 新 kind を AppSpec で declare するための
   envelope 仕様
-- [Workflow Extension Design](/reference/architecture/workflow-extension-design)
+- [Workflow Extension Design](./reference/architecture/workflow-extension-design.md)
   — kernel scope 外 (workflow / cron / hook) の境界判断

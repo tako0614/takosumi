@@ -13,7 +13,7 @@ engine、invoice surface、price book、attribution key
 ::: info Current HTTP status cost attribution field は model / service contract
 field。 現行 kernel HTTP router は `PATCH /api/internal/v1/spaces/:id` や
 `GET /api/internal/v1/spaces?costCenter=...` 等の filter を mount していない。
-[Kernel HTTP API — Internal control plane routes](/reference/kernel-http-api#internal-control-plane-routes)
+[Kernel HTTP API — Internal control plane routes](./kernel-http-api.md#internal-control-plane-routes)
 参照。 :::
 
 ## Attribution metadata model
@@ -38,9 +38,9 @@ provisioning 時に Space record にミラーするかは operator distribution 
 
 ## Storage
 
-attribution メタデータは [Storage Schema](/reference/storage-schema) に整合し、
-Space record 上に map field として永続化される。 `customLabels` の key は
-verbatim に保存される。 kernel は lower-case 化も正規化もしない。 安定した label
+attribution メタデータは [Storage Schema](./storage-schema.md) に整合し、 Space
+record 上に map field として永続化される。 `customLabels` の key は verbatim
+に保存される。 kernel は lower-case 化も正規化もしない。 安定した label
 namespace が欲しい operator は prefix convention (例:
 `cc:engineering`、`segment:enterprise`) を採用し、 operator policy
 層で適用する。
@@ -90,7 +90,7 @@ PATCH /api/internal/v1/spaces/:id
 ## Audit propagation
 
 envelope が `spaceId` を持つすべての audit event
-([Audit Events](/reference/audit-events) 参照) は、 Space の現在の `attribution`
+([Audit Events](./audit-events.md) 参照) は、 Space の現在の `attribution`
 snapshot を固定 key `attribution` 下で event payload に追加で持つ。 snapshot は
 event 書込み時に取られ、 audit hash chain に流れる canonical bytes
 の一部となる。
@@ -101,16 +101,16 @@ attribution の変更自体は次の event で追跡される。
   map、actor を運ぶ。
 
 attribution は Space の compliance regime
-([Compliance Retention](/reference/compliance-retention) 参照) が宣言する完全な
+([Compliance Retention](./compliance-retention.md) 参照) が宣言する完全な
 retention window の間、audit log に残る。 retention が audit row を drop
 するとき attribution も一緒に drop される。 kernel は out-of-band な attribution
 アーカイブを保持しない。
 
 ## Telemetry labels
 
-[Telemetry / Metrics](/reference/telemetry-metrics) が定義する OTLP と
-Prometheus exporter は、 attribution を Space scope のすべての metric / span に
-resource 属性 / label として attach する。
+[Telemetry / Metrics](./telemetry-metrics.md) が定義する OTLP と Prometheus
+exporter は、 attribution を Space scope のすべての metric / span に resource
+属性 / label として attach する。
 
 ```text
 takosumi_space_id          required
@@ -148,11 +148,10 @@ telemetry export に残る。 operator は個人識別情報を attribution
 に入れない責任を負う。 kernel は PII classifier を実行せず、読み取り時に
 attribution 値を redact しない。
 
-規制 regime が適用される場合
-([Compliance Retention](/reference/compliance-retention) 参照)、 operator policy
-層は ingest 時に email / 電話番号 / その他 PII に見える値を持つ attribution
-書込みを reject すべき。 kernel は policy がそこで動けるよう raw write path
-を公開する。
+規制 regime が適用される場合 ([Compliance Retention](./compliance-retention.md)
+参照)、 operator policy 層は ingest 時に email / 電話番号 / その他 PII
+に見える値を持つ attribution 書込みを reject すべき。 kernel は policy
+がそこで動けるよう raw write path を公開する。
 
 ## Operator boundary
 
@@ -175,11 +174,11 @@ API、audit 伝播、telemetry promotion contract。 **end-to-end な cost workf
 
 ## 関連ページ
 
-- [Storage Schema](/reference/storage-schema)
-- [Audit Events](/reference/audit-events)
-- [Telemetry / Metrics](/reference/telemetry-metrics)
-- [Compliance Retention](/reference/compliance-retention)
-- [Quota / Rate Limit](/reference/quota-rate-limit)
-- [Quota Tiers](/reference/quota-tiers)
-- [Kernel HTTP API](/reference/kernel-http-api)
-- [Closed Enums](/reference/closed-enums)
+- [Storage Schema](./storage-schema.md)
+- [Audit Events](./audit-events.md)
+- [Telemetry / Metrics](./telemetry-metrics.md)
+- [Compliance Retention](./compliance-retention.md)
+- [Quota / Rate Limit](./quota-rate-limit.md)
+- [Quota Tiers](./quota-tiers.md)
+- [Kernel HTTP API](./kernel-http-api.md)
+- [Closed Enums](./closed-enums.md)

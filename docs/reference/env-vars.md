@@ -180,7 +180,7 @@ kernel は installer bearer / artifact credential と runtime-agent credential
 ## CLI
 
 `takosumi` CLI は次の変数を読んで remote URL / token / config file path を
-解決します。 解決順序は [CLI Reference](/reference/cli)。
+解決します。 解決順序は [CLI Reference](./cli.md)。
 
 | Variable                   | Type   | Default                  | Required                              | Consumer                              | Spec concept            |
 | -------------------------- | ------ | ------------------------ | ------------------------------------- | ------------------------------------- | ----------------------- |
@@ -269,33 +269,33 @@ host 役割ごとに分割します。 同一 host 混在は OperatorBoundaries 
 
 ## 関連
 
-- リファレンス: [CLI](/reference/cli)、
-  [DataAsset Kinds](/reference/kind-catalog#artifact-kinds)、
-  [DataAsset Policy](/reference/data-asset-policy)、
-  [Secret Partitions](/reference/secret-partitions)、
-  [Schema Evolution](/reference/migration-upgrade)、
-  [Compliance Retention](/reference/compliance-retention)、
-  [Observation Retention](/reference/observation-retention)
+- リファレンス: [CLI](./cli.md)、
+  [DataAsset Kinds](./kind-catalog.md#artifact-kinds)、
+  [DataAsset Policy](./data-asset-policy.md)、
+  [Secret Partitions](./secret-partitions.md)、
+  [Schema Evolution](./migration-upgrade.md)、
+  [Compliance Retention](./compliance-retention.md)、
+  [Observation Retention](./observation-retention.md)
 
 ## 関連ページ
 
-- [Tenant Provisioning](/reference/tenant-provisioning)
-- [Tenant Export & Deletion](/reference/tenant-export-deletion)
-- [Trial Spaces](/reference/trial-spaces)
-- [Quota Tiers](/reference/quota-tiers)
-- [Cost Attribution](/reference/cost-attribution)
-- [Zone Selection](/reference/zone-selection)
-- [API Key Management](/reference/api-key-management)
-- [Auth Providers](/reference/auth-providers)
-- [RBAC Policy](/reference/rbac-policy)
-- [SLA Breach Detection](/reference/sla-breach-detection)
-- [Incident Model](/reference/incident-model)
-- [Support Impersonation](/reference/support-impersonation)
-- [Notification Emission](/reference/notification-emission)
-- [Kernel HTTP API](/reference/kernel-http-api)
+- [Tenant Provisioning](./tenant-provisioning.md)
+- [Tenant Export & Deletion](./tenant-export-deletion.md)
+- [Trial Spaces](./trial-spaces.md)
+- [Quota Tiers](./quota-tiers.md)
+- [Cost Attribution](./cost-attribution.md)
+- [Zone Selection](./zone-selection.md)
+- [API Key Management](./api-key-management.md)
+- [Auth Providers](./auth-providers.md)
+- [RBAC Policy](./rbac-policy.md)
+- [SLA Breach Detection](./sla-breach-detection.md)
+- [Incident Model](./incident-model.md)
+- [Support Impersonation](./support-impersonation.md)
+- [Notification Emission](./notification-emission.md)
+- [Kernel HTTP API](./kernel-http-api.md)
 
 ## 関連ページ
 
-- [Secret Partitions](/reference/secret-partitions)
-- [CLI Reference](/reference/cli)
-- [DataAsset Policy](/reference/data-asset-policy)
+- [Secret Partitions](./secret-partitions.md)
+- [CLI Reference](./cli.md)
+- [DataAsset Policy](./data-asset-policy.md)

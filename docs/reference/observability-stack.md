@@ -56,8 +56,8 @@ status page、 incident communication、 商用 SLA credit 計算を **所有
 self-hosted の install では、 同梱 dashboard と下記 PromQL を出発点として
 扱ってください (完成された incident 管理製品ではありません)。 managed
 distribution は collector で label / routing を拡張できますが、
-[Telemetry / Metrics](/reference/telemetry-metrics) で定義した kernel metric
-名と label は変更しません。
+[Telemetry / Metrics](./telemetry-metrics.md) で定義した kernel metric 名と
+label は変更しません。
 
 ## 参照 topology
 
@@ -141,8 +141,8 @@ Collector / PagerDuty integration / public status page / SLA credit calculator
 
 ## 関連ページ
 
-- [Telemetry / Metrics](/reference/telemetry-metrics)
-- [Logging Conventions](/reference/logging-conventions)
-- [SLA Breach Detection](/reference/sla-breach-detection)
-- [Incident Model](/reference/incident-model)
+- [Telemetry / Metrics](./telemetry-metrics.md)
+- [Logging Conventions](./logging-conventions.md)
+- [SLA Breach Detection](./sla-breach-detection.md)
+- [Incident Model](./incident-model.md)
 - [Self-hosting Operator Guide](/operator/self-host)

@@ -22,7 +22,7 @@ v1 でこの仕様に従う digest:
 - `effectDetailsDigest`: `actualEffects` / `approvedEffects` view の identity。
 - `predictedActualEffectsDigest`: dry-materialization 予測の identity。
 
-[Resource IDs](/reference/resource-ids) の他の content-addressed ID
+[Resource IDs](./resource-ids.md) の他の content-addressed ID
 (`export-snapshot:` / `catalog-release:` / `policy:`) も同アルゴリズム。 各 ID
 の入力形状はそれぞれの reference を参照。
 
@@ -108,7 +108,7 @@ input は effect set の closed-enum view。 approval record 上の `approvedEff
 でも OperationResult 上の `actualEffects` でも同一アルゴリズムを適用します。
 effect digest が同形状であることで、 成功 operation の result digest と approval
 の effect digest を bound rule
-([Provider Plugins — Effect bound rule](/reference/providers#effect-bound-rule))
+([Provider Plugins — Effect bound rule](./providers.md#effect-bound-rule))
 の下で byte 単位比較できます。
 
 入力は source set の順序を保った closed-shape effect descriptor の列。 canonical
@@ -118,7 +118,7 @@ encoder は各 descriptor 内部を JCS 規則で sort しますが、 外側の
 ### `predictedActualEffectsDigest`
 
 dry materialization で得られる予測 effect map が入力です
-([Provider Plugins — Dry materialization phase](/reference/providers#dry-materialization-phase))。
+([Provider Plugins — Dry materialization phase](./providers.md#dry-materialization-phase))。
 形状は `effectDetailsDigest` と同じ。 digest は OperationPlan に bind され、
 `commit` / `post-commit` 時の `actual-effects-overflow` Risk 評価の参照値に
 なります。
@@ -159,9 +159,9 @@ v1 では SHA-256 を衝突なしとして扱います。 kernel は運用上こ
 - **保存済 digest の等価性比較** は byte 単位。 両側はすでに canonical なので、
   比較時に prefix や hex case を正規化しない
 - **catalog release の署名検証** は
-  [Catalog Release Trust](/reference/catalog-release-trust) の署名 backend を
-  介した constant-time byte 比較。 timing-safe 比較が必要なのはここだけで、
-  通常の apply pipeline チェックでは不要
+  [Catalog Release Trust](./catalog-release-trust.md) の署名 backend を 介した
+  constant-time byte 比較。 timing-safe 比較が必要なのはここだけで、 通常の
+  apply pipeline チェックでは不要
 
 kernel は digest を JSON に re-decode して構造比較することはありません。
 canonical な byte 列そのものが identity です。
@@ -193,8 +193,8 @@ kernel は digest を初回計算時に persist し、 再計算は元の immuta
 
 ## 関連ページ
 
-- [Resource IDs](/reference/resource-ids)
-- [Provider Plugins — Implementation Contract](/reference/providers#implementation-contract)
-- [WAL Stages](/reference/wal-stages)
-- [Catalog Release Trust](/reference/catalog-release-trust)
-- [Storage Schema](/reference/storage-schema)
+- [Resource IDs](./resource-ids.md)
+- [Provider Plugins — Implementation Contract](./providers.md#implementation-contract)
+- [WAL Stages](./wal-stages.md)
+- [Catalog Release Trust](./catalog-release-trust.md)
+- [Storage Schema](./storage-schema.md)

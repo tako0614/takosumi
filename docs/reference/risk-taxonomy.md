@@ -17,7 +17,7 @@ require-approval を判断する材料になる。 新 Risk kind の追加には
   LifecycleErrorBody)。 approve 対象ではなく、 再 plan / 再 apply で解消する。
 
 Risk が stage 進行中に再評価されて approval が崩れる経路は
-[Approval Invalidation Triggers](/reference/approval-invalidation) に従う。
+[Approval Invalidation Triggers](./approval-invalidation.md) に従う。
 
 ## Closed enum (19 値)
 
@@ -29,7 +29,7 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 - **severity**: `warning` / `error`。`error` severity は approval 無しでは 必ず
   `deny` になる。
 - **invalidation trigger**: 当該 Risk に関連する approval invalidation trigger
-  番号 (1-6、詳細は [approval-invalidation](/reference/approval-invalidation))。
+  番号 (1-6、詳細は [approval-invalidation](./approval-invalidation.md))。
 - **fix kind**: `safeFix` / `requiresPolicyReview` / `operatorFix` のうち
   生成可能なもの。
 
@@ -228,6 +228,6 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 
 ## 関連ページ
 
-- [Approval Invalidation Triggers](/reference/approval-invalidation)
-- [WAL Stages](/reference/wal-stages)
-- [RevokeDebt Model](/reference/revoke-debt)
+- [Approval Invalidation Triggers](./approval-invalidation.md)
+- [WAL Stages](./wal-stages.md)
+- [RevokeDebt Model](./revoke-debt.md)

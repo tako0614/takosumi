@@ -275,7 +275,7 @@ contract のみを定義し、 retention window はここに記録された even
 ## Event payload の注意
 
 各 payload は `eventType` 固有の closed schema に従い、
-[Storage Schema](/reference/storage-schema) で定義する record を参照します。
+[Storage Schema](./storage-schema.md) で定義する record を参照します。
 
 - resolve / desired / operation / activation event は ResolutionSnapshot /
   DesiredSnapshot / OperationPlan / JournalEntry / ActivationSnapshot の id /
@@ -284,7 +284,7 @@ contract のみを定義し、 retention window はここに記録された even
 - drift / RevokeDebt event は DriftIndex / RevokeDebt の id と lifecycle 遷
   移を参照
 - catalog / connector event は `connector:<id>` 形式の Connector identity を参照
-  ([Connector Contract](/reference/connector-contract))
+  ([Connector Contract](./connector-contract.md))
 
 書込時、 audit store の referential view 上で resolve できない id を含む payload
 は reject されます。
@@ -311,10 +311,9 @@ contract のみを定義し、 retention window はここに記録された even
 | `role-assignment-expired`  | info     | RoleAssignment が `expiresAt` に到達し自動 revoke された。 | `assignmentId`, `actorId`, `scope`, `scopeId`, `expiresAt`           |
 
 See also:
-[Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model),
-[API Key Management](/reference/api-key-management),
-[Auth Providers](/reference/auth-providers),
-[RBAC Policy](/reference/rbac-policy).
+[Actor / Organization Model](./architecture/identity-and-access-architecture.md#actor--organization-model),
+[API Key Management](./api-key-management.md),
+[Auth Providers](./auth-providers.md), [RBAC Policy](./rbac-policy.md).
 
 ## Tenant events
 
@@ -330,8 +329,8 @@ See also:
 | `space-hard-deleted`        | critical | Space が hard-delete された。 tenant データは復元不能。         | `spaceId`, `requestedBy`, `hardDeletedAt`, `redactionDigest`               |
 | `space-redaction-applied`   | warning  | Space に対して right-to-erasure による redaction が適用された。 | `spaceId`, `requestedBy`, `redactionScope`, `redactionDigest`              |
 
-See also: [Tenant Provisioning](/reference/tenant-provisioning),
-[Tenant Export / Deletion](/reference/tenant-export-deletion).
+See also: [Tenant Provisioning](./tenant-provisioning.md),
+[Tenant Export / Deletion](./tenant-export-deletion.md).
 
 ## Trial events
 
@@ -343,7 +342,7 @@ See also: [Tenant Provisioning](/reference/tenant-provisioning),
 | `trial-converted`     | info     | trial Space が paid quota tier に conversion された。              | `spaceId`, `previousQuotaTierId`, `newQuotaTierId`, `convertedBy`                |
 | `trial-cleaned-up`    | warning  | 失効した trial Space が clean up された。                          | `spaceId`, `cleanedUpAt`, `redactionDigest`                                      |
 
-See also: [Trial Spaces](/reference/trial-spaces).
+See also: [Trial Spaces](./trial-spaces.md).
 
 ## Incident events
 
@@ -356,8 +355,8 @@ See also: [Trial Spaces](/reference/trial-spaces).
 | `incident-resolved`             | notice   | incident が resolve された。                             | `incidentId`, `resolvedBy`, `resolvedAt`, `rootCause`                    |
 | `incident-postmortem-published` | info     | incident に postmortem が紐付けられた。                  | `incidentId`, `postmortemDigest`, `publishedBy`                          |
 
-See also: [Incident Model](/reference/incident-model),
-[SLA Breach Detection](/reference/sla-breach-detection).
+See also: [Incident Model](./incident-model.md),
+[SLA Breach Detection](./sla-breach-detection.md).
 
 ## Support impersonation events
 
@@ -372,7 +371,7 @@ See also: [Incident Model](/reference/incident-model),
 | `support-impersonation-session-ended`         | notice   | support impersonation session が終了した。                             | `sessionId`, `grantId`, `endedAt`, `endReason`                 |
 | `support-impersonation-write-action-recorded` | warning  | read-write impersonation session 内で write action が実行された。      | `sessionId`, `grantId`, `actionDigest`, `targetResource`       |
 
-See also: [Support Impersonation](/reference/support-impersonation).
+See also: [Support Impersonation](./support-impersonation.md).
 
 ## Notification events
 
@@ -381,7 +380,7 @@ See also: [Support Impersonation](/reference/support-impersonation).
 | `notification-emitted`      | info     | NotificationSignal が pull-only delivery surface に emit された。 | `signalId`, `category`, `scope`, `scopeId`, `recipientActorIds` |
 | `notification-acknowledged` | info     | NotificationSignal が受信側 actor によって ack された。           | `signalId`, `actorId`, `acknowledgedAt`                         |
 
-See also: [Notification Emission](/reference/notification-emission).
+See also: [Notification Emission](./notification-emission.md).
 
 ## SLA events
 
@@ -393,7 +392,7 @@ See also: [Notification Emission](/reference/notification-emission).
 | `sla-recovered`         | info     | SLA dimension が nominal に回復した。                                 | `dimension`, `scope`, `scopeId`, `recoveredAt`, `thresholdId`                            |
 | `sla-threshold-changed` | info     | SLAThreshold レコードが登録または更新された。                         | `thresholdId`, `dimension`, `scope`, `scopeId`, `previousValue`, `newValue`, `changedBy` |
 
-See also: [SLA Breach Detection](/reference/sla-breach-detection).
+See also: [SLA Breach Detection](./sla-breach-detection.md).
 
 ## Cost / quota events
 
@@ -405,32 +404,32 @@ See also: [SLA Breach Detection](/reference/sla-breach-detection).
 | `quota-tier-removed`        | warning  | QuotaTier が registry から削除された。                            | `tierId`, `removedBy`, `reason`                                             |
 | `space-tier-changed`        | notice   | Space に割当てられた QuotaTier が変更された。                     | `spaceId`, `previousTierId`, `newTierId`, `changedBy`                       |
 
-See also: [Quota Tiers](/reference/quota-tiers),
-[Cost Attribution](/reference/cost-attribution).
+See also: [Quota Tiers](./quota-tiers.md),
+[Cost Attribution](./cost-attribution.md).
 
 ## Workflow Events
 
 The kernel does not reserve trigger, declarable-hook, or step-execution audit
 events. Workflow / cron / hook systems above the kernel own their own audit
 event vocabulary; see
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design).
+[Workflow Placement Rationale](./architecture/workflow-extension-design.md).
 
 ## See also
 
-- [Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
-- [API Key Management](/reference/api-key-management)
-- [Auth Providers](/reference/auth-providers)
-- [RBAC Policy](/reference/rbac-policy)
-- [Tenant Provisioning](/reference/tenant-provisioning)
-- [Tenant Export / Deletion](/reference/tenant-export-deletion)
-- [Trial Spaces](/reference/trial-spaces)
-- [Quota Tiers](/reference/quota-tiers)
-- [Cost Attribution](/reference/cost-attribution)
-- [SLA Breach Detection](/reference/sla-breach-detection)
-- [Incident Model](/reference/incident-model)
-- [Support Impersonation](/reference/support-impersonation)
-- [Notification Emission](/reference/notification-emission)
-- [Zone Selection](/reference/zone-selection)
+- [Actor / Organization Model](./architecture/identity-and-access-architecture.md#actor--organization-model)
+- [API Key Management](./api-key-management.md)
+- [Auth Providers](./auth-providers.md)
+- [RBAC Policy](./rbac-policy.md)
+- [Tenant Provisioning](./tenant-provisioning.md)
+- [Tenant Export / Deletion](./tenant-export-deletion.md)
+- [Trial Spaces](./trial-spaces.md)
+- [Quota Tiers](./quota-tiers.md)
+- [Cost Attribution](./cost-attribution.md)
+- [SLA Breach Detection](./sla-breach-detection.md)
+- [Incident Model](./incident-model.md)
+- [Support Impersonation](./support-impersonation.md)
+- [Notification Emission](./notification-emission.md)
+- [Zone Selection](./zone-selection.md)
 
 ## Related architecture notes
 
@@ -445,20 +444,20 @@ event vocabulary; see
 
 ## 関連ページ
 
-- [Storage Schema](/reference/storage-schema)
-- [Journal Compaction](/reference/journal-compaction)
-- [Connector Contract](/reference/connector-contract)
-- [Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
-- [API Key Management](/reference/api-key-management)
-- [Auth Providers](/reference/auth-providers)
-- [RBAC Policy](/reference/rbac-policy)
-- [Tenant Provisioning](/reference/tenant-provisioning)
-- [Tenant Export / Deletion](/reference/tenant-export-deletion)
-- [Trial Spaces](/reference/trial-spaces)
-- [Quota Tiers](/reference/quota-tiers)
-- [Cost Attribution](/reference/cost-attribution)
-- [SLA Breach Detection](/reference/sla-breach-detection)
-- [Incident Model](/reference/incident-model)
-- [Support Impersonation](/reference/support-impersonation)
-- [Notification Emission](/reference/notification-emission)
-- [Zone Selection](/reference/zone-selection)
+- [Storage Schema](./storage-schema.md)
+- [Journal Compaction](./journal-compaction.md)
+- [Connector Contract](./connector-contract.md)
+- [Actor / Organization Model](./architecture/identity-and-access-architecture.md#actor--organization-model)
+- [API Key Management](./api-key-management.md)
+- [Auth Providers](./auth-providers.md)
+- [RBAC Policy](./rbac-policy.md)
+- [Tenant Provisioning](./tenant-provisioning.md)
+- [Tenant Export / Deletion](./tenant-export-deletion.md)
+- [Trial Spaces](./trial-spaces.md)
+- [Quota Tiers](./quota-tiers.md)
+- [Cost Attribution](./cost-attribution.md)
+- [SLA Breach Detection](./sla-breach-detection.md)
+- [Incident Model](./incident-model.md)
+- [Support Impersonation](./support-impersonation.md)
+- [Notification Emission](./notification-emission.md)
+- [Zone Selection](./zone-selection.md)

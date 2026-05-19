@@ -38,6 +38,6 @@ package surface ではドキュメントのみの更新では不十分です。
 ## 関連ページ
 
 - [Manifest](/manifest)
-- [Kernel HTTP API](/reference/kernel-http-api)
-- [Installer API](/reference/installer-api)
-- [Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+- [Kernel HTTP API](./kernel-http-api.md)
+- [Installer API](./installer-api.md)
+- [Workflow Placement Rationale](./architecture/workflow-extension-design.md)

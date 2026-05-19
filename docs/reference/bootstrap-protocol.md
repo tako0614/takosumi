@@ -3,8 +3,8 @@
 > このページでわかること: kernel 初回起動時の bootstrap プロトコル。
 
 new install (初回起動) の bootstrap 手順をまとめる。 本ページは new install
-専用。 既存 install の upgrade は
-[Schema Evolution](/reference/migration-upgrade) を参照。
+専用。 既存 install の upgrade は [Schema Evolution](./migration-upgrade.md)
+を参照。
 
 Bootstrap が担うこと:
 
@@ -43,7 +43,7 @@ Backing store (file / object store / DB) に対し schema migration を up
 
 - Storage が空 (initial) の場合のみ bootstrap path に入る
 - Storage に既存 data がある場合は bootstrap を **skip** し、Schema Evolution
-  path に切り替わる ([Schema Evolution](/reference/migration-upgrade))
+  path に切り替わる ([Schema Evolution](./migration-upgrade.md))
 - Schema migration は idempotent な up step で構成される
 
 ## Stage 2 — secret-partition-init
@@ -62,7 +62,7 @@ sealed envelope に保存する。 Auto-generate は **explicit confirm flag**
 (`TAKOSUMI_BOOTSTRAP_ALLOW_AUTO_KEY=1`) がある場合のみ許可される。Default
 は禁止。
 
-詳細は [Secret Partitions](/reference/secret-partitions)。
+詳細は [Secret Partitions](./secret-partitions.md)。
 
 ## Stage 3 — lock-store-init
 
@@ -74,7 +74,7 @@ Cross-process lock backend を初期化する。 Bootstrap lock
 - 初期化後 `bootstrap` 名義で TTL 60s の lock を取得し、stage 5–7 を serialize
   する
 
-詳細は [Cross-Process Locks](/reference/cross-process-locks)。
+詳細は [Cross-Process Locks](./cross-process-locks.md)。
 
 ## Stage 4 — default-operator-account-init
 
@@ -103,8 +103,8 @@ Initial CatalogRelease を adopt する。
 3. Embedded default catalog (kernel binary に内蔵)
 
 Operator-supplied の場合、signature 検証は
-[Catalog Release Trust](/reference/catalog-release-trust) に従う。検証失敗で
-stage abort。
+[Catalog Release Trust](./catalog-release-trust.md) に従う。検証失敗で stage
+abort。
 
 Embedded default catalog は kernel build 時の signing key で署名済。 Trust
 anchor として default key が enrolled される。
@@ -140,7 +140,7 @@ kernel-bootstrap-completed
 ```
 
 各 event は kernel buildVersion / schemaVersion / hostname / pid を含む。 Event
-schema は [Audit Events](/reference/audit-events) に従う。
+schema は [Audit Events](./audit-events.md) に従う。
 
 ## Stage 8 — listener-open
 
@@ -187,7 +187,7 @@ public な `takosumi` CLI は manifest deploy engine であり、この bootstra
 protocol を **実行しない**。 bootstrap は現在、 kernel 起動 / operator
 管理のデプロイ自動化 / 内部サービスによって駆動される。
 
-現行 public CLI surface は [CLI](/reference/cli) に文書化されている。
+現行 public CLI surface は [CLI](./cli.md) に文書化されている。
 
 将来 operator 向け bootstrap CLI が追加される場合は、 サポートされる operator
 workflow として文書化する前に、 本リファレンスを正確なコマンド / flag / exit
@@ -236,7 +236,7 @@ or 続行)。
 
 Bootstrap は **new install 専用**。 Schema migration の cross-version
 semantics、 kernel ↔ runtime-agent skew、 rollback gate は
-[Schema Evolution](/reference/migration-upgrade) で扱う。
+[Schema Evolution](./migration-upgrade.md) で扱う。
 
 ## Related architecture notes
 
@@ -248,12 +248,12 @@ semantics、 kernel ↔ runtime-agent skew、 rollback gate は
 
 ## 関連ページ
 
-- [CLI](/reference/cli)
-- [Environment Variables](/reference/env-vars)
-- [Storage Schema](/reference/storage-schema)
-- [Secret Partitions](/reference/secret-partitions)
-- [Cross-Process Locks](/reference/cross-process-locks)
-- [Catalog Release Trust](/reference/catalog-release-trust)
-- [Audit Events](/reference/audit-events)
-- [Schema Evolution](/reference/migration-upgrade)
-- [Readiness Probes](/reference/readiness-probes)
+- [CLI](./cli.md)
+- [Environment Variables](./env-vars.md)
+- [Storage Schema](./storage-schema.md)
+- [Secret Partitions](./secret-partitions.md)
+- [Cross-Process Locks](./cross-process-locks.md)
+- [Catalog Release Trust](./catalog-release-trust.md)
+- [Audit Events](./audit-events.md)
+- [Schema Evolution](./migration-upgrade.md)
+- [Readiness Probes](./readiness-probes.md)

@@ -123,7 +123,7 @@ holder kernel pod が `kill -9` 等で消えた場合、 heartbeat が止まり
 1. lock entry の `holderId` / `epoch` から「前 holder が誰だったか」を確認
 2. 前 holder の WAL を読み、 当該 lock scope に紐づく in-flight operation の
    現在 stage を判定
-3. WAL stage に応じて recovery mode を選択 ([Lifecycle](/reference/lifecycle) の
+3. WAL stage に応じて recovery mode を選択 ([Lifecycle](./lifecycle.md) の
    `normal` / `continue` / `compensate` / `inspect`):
    - `prepare` で止まっていた → `normal` で resume (idempotency key で重複排除)
    - `commit` 半ばで止まっていた → `continue` で commit を最後まで進める
@@ -201,7 +201,7 @@ current v1 で cross-Space lock を取る operation:
 
 ## 関連ページ
 
-- [Lifecycle Protocol](/reference/lifecycle)
-- [WAL Stages](/reference/wal-stages)
-- [Storage Schema](/reference/storage-schema)
-- [Readiness Probes](/reference/readiness-probes)
+- [Lifecycle Protocol](./lifecycle.md)
+- [WAL Stages](./wal-stages.md)
+- [Storage Schema](./storage-schema.md)
+- [Readiness Probes](./readiness-probes.md)

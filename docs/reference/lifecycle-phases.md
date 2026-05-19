@@ -94,7 +94,7 @@ journal entry から再入します。
 
 - **Input**: persist 済 WAL state + Space の最新 `ResolutionSnapshot`
 - **Output**: recovery mode (`normal` / `continue` / `compensate` / `inspect`)
-  に依存。 詳細は [Recovery modes](/reference/lifecycle#recovery-modes)
+  に依存。 詳細は [Recovery modes](./lifecycle.md#recovery-modes)
 - **Journal cursor**: 最後に persist された entry の次 stage から resume。 新
   `journalEntryId` は割当てない
 - **WAL stages**: resume point 以降の残り stage
@@ -189,6 +189,6 @@ response で `LifecycleStatus` を返します。 ルール:
 
 ## 関連ページ
 
-- [Closed Enums](/reference/closed-enums)
-- [Lifecycle Protocol](/reference/lifecycle)
-- [Runtime-Agent API](/reference/runtime-agent-api)
+- [Closed Enums](./closed-enums.md)
+- [Lifecycle Protocol](./lifecycle.md)
+- [Runtime-Agent API](./runtime-agent-api.md)

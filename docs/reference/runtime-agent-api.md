@@ -7,7 +7,7 @@ runtime-agent は operator が cloud / OS credential を握る host で起動し
 を受けます。
 
 逆方向の制御 (enroll / heartbeat / lease / drain / gateway-manifest 署名) は
-[Kernel HTTP API — Runtime-Agent control RPC](/reference/kernel-http-api#runtime-agent-control-rpc)
+[Kernel HTTP API — Runtime-Agent control RPC](./kernel-http-api.md#runtime-agent-control-rpc)
 参照。
 
 ## Authentication
@@ -25,7 +25,7 @@ artifact bytes 取得が必要な connector には、 kernel が
 `LifecycleApplyRequest.artifactStore` に `baseUrl` と
 `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を載せて渡します。 agent token とは別物で、
 scope は `GET /v1/artifacts/:hash` のみ
-([Authentication](/reference/kernel-http-api#authentication))。
+([Authentication](./kernel-http-api.md#authentication))。
 
 ## Endpoints
 
@@ -302,20 +302,20 @@ interface LifecycleErrorBody {
 
 ## Cross-references
 
-- [Lifecycle Phases](/reference/lifecycle-phases) — phase ごとの input / output
+- [Lifecycle Phases](./lifecycle-phases.md) — phase ごとの input / output
   snapshot 対応と `LifecycleStatus` 5 値の trigger 別 遷移。runtime-agent
   describe が報告する条件はここに集約されている。
-- [Lifecycle Protocol](/reference/lifecycle) — cross-process lock と recovery
-  mode 選択を含む運用面。
-- [Closed Enums](/reference/closed-enums) — `LifecycleErrorBody` codes /
+- [Lifecycle Protocol](./lifecycle.md) — cross-process lock と recovery mode
+  選択を含む運用面。
+- [Closed Enums](./closed-enums.md) — `LifecycleErrorBody` codes /
   `LifecycleStatus` / DataAsset kinds 等の closed enum hub。
-- [Connector Contract](/reference/connector-contract) — `connector:<id>`
-  identity, accepted-kind vector, Space visibility, signing expectations,
-  envelope versioning that the runtime-agent hosts.
-- [Kernel HTTP API](/reference/kernel-http-api)
+- [Connector Contract](./connector-contract.md) — `connector:<id>` identity,
+  accepted-kind vector, Space visibility, signing expectations, envelope
+  versioning that the runtime-agent hosts.
+- [Kernel HTTP API](./kernel-http-api.md)
 
 ## 関連ページ
 
-- [Lifecycle Phases](/reference/lifecycle-phases)
-- [Provider Plugins — Implementation Contract](/reference/providers#implementation-contract)
-- [Closed Enums](/reference/closed-enums)
+- [Lifecycle Phases](./lifecycle-phases.md)
+- [Provider Plugins — Implementation Contract](./providers.md#implementation-contract)
+- [Closed Enums](./closed-enums.md)

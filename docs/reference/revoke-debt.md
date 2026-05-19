@@ -151,16 +151,16 @@ production deployment では status 表示を必須とする:
 ## Cross-references
 
 - WAL stage 側からの enqueue 経路:
-  [WAL Stages — Orphaned debt 経路](/reference/wal-stages#orphaned-debt-経路)
+  [WAL Stages — Orphaned debt 経路](./wal-stages.md#orphaned-debt-経路)
 - Installer recovery: `/v1/installations/{id}/rollback` は、同じ OperationPlan
   digest / phase の unfinished WAL が `commit` 以降に 到達している場合に
   `activation-rollback` RevokeDebt を `takosumi_revoke_debts` へ enqueue し、WAL
   を terminal `abort` に進める。
 - Approval invalidation との連動:
-  [Approval Invalidation Triggers](/reference/approval-invalidation)
+  [Approval Invalidation Triggers](./approval-invalidation.md)
 - Recovery mode 中の `activation-rollback` 発生条件:
-  [Lifecycle Protocol — Recovery modes](/reference/lifecycle#recovery-modes)
-- `revoke-debt-created` Risk: [Risk Taxonomy](/reference/risk-taxonomy)
+  [Lifecycle Protocol — Recovery modes](./lifecycle.md#recovery-modes)
+- `revoke-debt-created` Risk: [Risk Taxonomy](./risk-taxonomy.md)
 
 ## Related architecture notes
 
@@ -175,7 +175,7 @@ production deployment では status 表示を必須とする:
 
 ## 関連ページ
 
-- [WAL Stages](/reference/wal-stages)
-- [Approval Invalidation Triggers](/reference/approval-invalidation)
-- [Risk Taxonomy](/reference/risk-taxonomy)
-- [Lifecycle Protocol](/reference/lifecycle)
+- [WAL Stages](./wal-stages.md)
+- [Approval Invalidation Triggers](./approval-invalidation.md)
+- [Risk Taxonomy](./risk-taxonomy.md)
+- [Lifecycle Protocol](./lifecycle.md)

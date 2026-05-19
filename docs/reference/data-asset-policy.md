@@ -111,8 +111,8 @@ test、 本リファレンスの更新が必要となる。
 
 ## 関連ページ
 
-- [DataAsset Kinds](/reference/kind-catalog#artifact-kinds)
-- [Connector Contract](/reference/connector-contract)
-- [Kernel HTTP API](/reference/kernel-http-api)
-- [Environment Variables](/reference/env-vars)
-- [Audit Events](/reference/audit-events)
+- [DataAsset Kinds](./kind-catalog.md#artifact-kinds)
+- [Connector Contract](./connector-contract.md)
+- [Kernel HTTP API](./kernel-http-api.md)
+- [Environment Variables](./env-vars.md)
+- [Audit Events](./audit-events.md)

@@ -115,17 +115,17 @@ Actor は `actor:<name>` / `actor:<uuid>` 形式を用います。 suffix に `:
 
 ### PaaS operations の追加 kind
 
-| Kind                   | Suffix grammar | suffix の由来                                            | 参照                                                            |
-| ---------------------- | -------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
-| `tier`                 | kebab-case 名  | quota tier 登録時に operator が指定                      | [Quota Tiers](/reference/quota-tiers)                           |
-| `incident`             | ULID           | incident open 時に kernel が生成                         | [Incident Model](/reference/incident-model)                     |
-| `support-grant`        | ULID           | operator が grant 作成時に kernel が生成                 | [Support Impersonation](/reference/support-impersonation)       |
-| `support-session`      | ULID           | `approved` grant 下で session を開くときに kernel が生成 | [Support Impersonation](/reference/support-impersonation)       |
-| `notification-signal`  | ULID           | notification signal emit 時に kernel が生成              | [Notification Emission](/reference/notification-emission)       |
-| `provisioning-session` | ULID           | tenant provisioning session 開始時に kernel が生成       | [Tenant Provisioning](/reference/tenant-provisioning)           |
-| `export-job`           | ULID           | Space export request 時に kernel が生成                  | [Tenant Export and Deletion](/reference/tenant-export-deletion) |
-| `sla-threshold`        | ULID           | operator が SLA threshold 登録時に kernel が生成         | [SLA Breach Detection](/reference/sla-breach-detection)         |
-| `sla-observation`      | ULID           | SLA observation emit 時に kernel が生成                  | [SLA Breach Detection](/reference/sla-breach-detection)         |
+| Kind                   | Suffix grammar | suffix の由来                                            | 参照                                                      |
+| ---------------------- | -------------- | -------------------------------------------------------- | --------------------------------------------------------- |
+| `tier`                 | kebab-case 名  | quota tier 登録時に operator が指定                      | [Quota Tiers](./quota-tiers.md)                           |
+| `incident`             | ULID           | incident open 時に kernel が生成                         | [Incident Model](./incident-model.md)                     |
+| `support-grant`        | ULID           | operator が grant 作成時に kernel が生成                 | [Support Impersonation](./support-impersonation.md)       |
+| `support-session`      | ULID           | `approved` grant 下で session を開くときに kernel が生成 | [Support Impersonation](./support-impersonation.md)       |
+| `notification-signal`  | ULID           | notification signal emit 時に kernel が生成              | [Notification Emission](./notification-emission.md)       |
+| `provisioning-session` | ULID           | tenant provisioning session 開始時に kernel が生成       | [Tenant Provisioning](./tenant-provisioning.md)           |
+| `export-job`           | ULID           | Space export request 時に kernel が生成                  | [Tenant Export and Deletion](./tenant-export-deletion.md) |
+| `sla-threshold`        | ULID           | operator が SLA threshold 登録時に kernel が生成         | [SLA Breach Detection](./sla-breach-detection.md)         |
+| `sla-observation`      | ULID           | SLA observation emit 時に kernel が生成                  | [SLA Breach Detection](./sla-breach-detection.md)         |
 
 この追加 table にも closure rule が適用されます。 1 kind は 1 suffix grammar
 に固定で、 ここで非 ULID は `tier:` のみ。 追加には `CONVENTIONS.md` §6 RFC
@@ -174,7 +174,7 @@ kernel は `trigger:` / `trigger-registration:` / `hook-binding:` / `workflow:` 
 `workflow-run:` / `workflow-step-run:` prefix を予約していません。 workflow /
 cron / hook は `/v1/installations/*` の上位 automation で扱い、 識別子は kernel
 が管理する kind list の外で保持します。 詳細は
-[Workflow Placement Rationale](/reference/architecture/workflow-extension-design)
+[Workflow Placement Rationale](./architecture/workflow-extension-design.md)
 を参照。
 
 ## Suffix grammar
@@ -197,7 +197,7 @@ hyphen 区切り小文字形式で文書化。
 SHA-256 digest の小文字 hex (常に 64 文字)。 ID には先頭 `sha256:` token を
 付け、 将来 `CONVENTIONS.md` §6 RFC で別 hash に置換できる余地を残します。
 content-addressed kind の canonical encoding は
-[Digest Computation](/reference/digest-computation) を参照。
+[Digest Computation](./digest-computation.md) を参照。
 
 ### kebab-case 名
 
@@ -295,25 +295,25 @@ alias には `CONVENTIONS.md` §6 RFC が必須。
 
 ## See also
 
-- [Kernel HTTP API](/reference/kernel-http-api)
+- [Kernel HTTP API](./kernel-http-api.md)
 
 ## 関連ページ
 
-- [Closed Enums](/reference/closed-enums)
-- [Connector Contract](/reference/connector-contract)
-- [Storage Schema](/reference/storage-schema)
-- [Digest Computation](/reference/digest-computation)
-- [Actor / Organization Model](/reference/architecture/identity-and-access-architecture#actor--organization-model)
-- [API Key Management](/reference/api-key-management)
-- [Auth Providers](/reference/auth-providers)
-- [RBAC Policy](/reference/rbac-policy)
-- [Tenant Provisioning](/reference/tenant-provisioning)
-- [Tenant Export and Deletion](/reference/tenant-export-deletion)
-- [Trial Spaces](/reference/trial-spaces)
-- [Cost Attribution](/reference/cost-attribution)
-- [Quota Tiers](/reference/quota-tiers)
-- [SLA Breach Detection](/reference/sla-breach-detection)
-- [Incident Model](/reference/incident-model)
-- [Support Impersonation](/reference/support-impersonation)
-- [Notification Emission](/reference/notification-emission)
-- [Zone Selection](/reference/zone-selection)
+- [Closed Enums](./closed-enums.md)
+- [Connector Contract](./connector-contract.md)
+- [Storage Schema](./storage-schema.md)
+- [Digest Computation](./digest-computation.md)
+- [Actor / Organization Model](./architecture/identity-and-access-architecture.md#actor--organization-model)
+- [API Key Management](./api-key-management.md)
+- [Auth Providers](./auth-providers.md)
+- [RBAC Policy](./rbac-policy.md)
+- [Tenant Provisioning](./tenant-provisioning.md)
+- [Tenant Export and Deletion](./tenant-export-deletion.md)
+- [Trial Spaces](./trial-spaces.md)
+- [Cost Attribution](./cost-attribution.md)
+- [Quota Tiers](./quota-tiers.md)
+- [SLA Breach Detection](./sla-breach-detection.md)
+- [Incident Model](./incident-model.md)
+- [Support Impersonation](./support-impersonation.md)
+- [Notification Emission](./notification-emission.md)
+- [Zone Selection](./zone-selection.md)

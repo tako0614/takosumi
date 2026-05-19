@@ -240,5 +240,5 @@ model の Error fix-hint 分類 (safeFix / requiresPolicyReview / operatorFix)
 - Architecture: [Space Model](./space-model.md)
 - Architecture:
   [Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
-- Reference: [Kernel HTTP API](/reference/kernel-http-api)
-- Reference: [Runtime-Agent API](/reference/runtime-agent-api)
+- Reference: [Kernel HTTP API](../kernel-http-api.md)
+- Reference: [Runtime-Agent API](../runtime-agent-api.md)

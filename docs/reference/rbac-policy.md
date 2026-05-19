@@ -17,4 +17,4 @@ takosumi kernel の provider authorization は次の範囲に限られる。
 
 - `takosumi-cloud/docs/accounts-service.md`
 - `docs/platform/app-installation.md`
-- [Namespace Exports](/reference/namespace-exports)
+- [Namespace Exports](./namespace-exports.md)

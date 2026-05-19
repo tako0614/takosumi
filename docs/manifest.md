@@ -8,14 +8,14 @@ source root に置くだけで install + deploy + rollback まで動きます。
 
 仕様の正本は次のページにあります:
 
-- [AppSpec (`.takosumi.yml`)](/reference/app-spec) — envelope / components /
+- [AppSpec (`.takosumi.yml`)](./reference/app-spec.md) — envelope / components /
   publish / listen / build recipe / interfaces / permissions の全 field 仕様
-- [Kind Catalog](/reference/kind-catalog#component-kinds) — curated 4 種の kind
-  schema (`worker` / `postgres` / `object-store` / `custom-domain`) +
+- [Kind Catalog](./reference/kind-catalog.md#component-kinds) — curated 4 種の
+  kind schema (`worker` / `postgres` / `object-store` / `custom-domain`) +
   operator-defined kind の extension ルール (= `oidc` kind は takosumi-cloud
   に移動)
-- [Installer API](/reference/installer-api) — 5 endpoint の wire spec (dry-run /
-  apply / rollback)
+- [Installer API](./reference/installer-api.md) — 5 endpoint の wire spec
+  (dry-run / apply / rollback)
 
 ## 最小例
 
@@ -59,11 +59,11 @@ takosumi install --source ./ --space space_personal
 
 ## 次に読む
 
-- [AppSpec (`.takosumi.yml`)](/reference/app-spec) — envelope / components の 全
-  field 仕様
-- [Kind Catalog](/reference/kind-catalog#component-kinds) — kind ごとの spec /
-  publishes / listens / outputs
-- [Installer API](/reference/installer-api) — 5 endpoint の wire spec
+- [AppSpec (`.takosumi.yml`)](./reference/app-spec.md) — envelope / components
+  の 全 field 仕様
+- [Kind Catalog](./reference/kind-catalog.md#component-kinds) — kind ごとの spec
+  / publishes / listens / outputs
+- [Installer API](./reference/installer-api.md) — 5 endpoint の wire spec
 - [Quickstart](/getting-started/quickstart) — git clone から first deploy まで
-- [Provider Plugins](/reference/providers) — operator が attach する provider
-  factory 一覧
+- [Provider Plugins](./reference/providers.md) — operator が attach する
+  provider factory 一覧

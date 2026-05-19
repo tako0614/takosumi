@@ -163,9 +163,9 @@ rotation の各 step は audit event として記録される:
 - `secret-partition-rotation-aborted` (operator が中止した場合 / 致命エラー
   で停止した場合)
 
-audit chain は [Audit Events](/reference/audit-events) の hash chain に
-連結される。 rotation 中は同 partition への新規 rotation 開始を fail-closed で
-reject する (`cross_process_lock_busy`)。
+audit chain は [Audit Events](./audit-events.md) の hash chain に 連結される。
+rotation 中は同 partition への新規 rotation 開始を fail-closed で reject する
+(`cross_process_lock_busy`)。
 
 ## Operator workflow
 
@@ -206,8 +206,8 @@ rotation flow を経由すること。 :::
 
 ## 関連ページ
 
-- [Environment Variables](/reference/env-vars)
-- [CLI](/reference/cli)
-- [Cross-Process Locks](/reference/cross-process-locks)
-- [Schema Evolution](/reference/migration-upgrade)
-- [Audit Events](/reference/audit-events)
+- [Environment Variables](./env-vars.md)
+- [CLI](./cli.md)
+- [Cross-Process Locks](./cross-process-locks.md)
+- [Schema Evolution](./migration-upgrade.md)
+- [Audit Events](./audit-events.md)

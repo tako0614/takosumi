@@ -79,10 +79,10 @@ marketplace / plugin index fetch / signed manifest / port-based plugin host を
 下表の `manifest provider id` は kernel-side `KernelPlugin` (= 旧
 `ProviderPlugin` を `kernelPluginFromProviderPlugin` adapter で bridge した
 materializer factory) が `Component.kind` を materialize する際の安定 id。
-これは [connector-contract.md](/reference/connector-contract) で言う **Connector
-consumer plugin** (= Connector の下流 consumer) に相当する。 runtime-agent の
-connector 名 (右側) は実装詳細で、 operator は agent boot 時に必要な connector
-credential / local path を設定する。
+これは [connector-contract.md](../reference/connector-contract.md) で言う
+**Connector consumer plugin** (= Connector の下流 consumer) に相当する。
+runtime-agent の connector 名 (右側) は実装詳細で、 operator は agent boot
+時に必要な connector credential / local path を設定する。
 
 | manifest provider id (= KernelPlugin / Connector consumer) | runtime-agent connector の例    |
 | ---------------------------------------------------------- | ------------------------------- |
@@ -126,10 +126,11 @@ const { app } = await createPaaSApp({
 
 ## 関連ページ
 
-- [Provider Plugins](/reference/providers) — 20 default + 1 opt-in provider
+- [Provider Plugins](../reference/providers.md) — 20 default + 1 opt-in provider
   の実装と capabilities
-- [Runtime-agent API](/reference/runtime-agent-api) — agent lifecycle envelope
-- [Kind Catalog](/reference/kind-catalog#component-kinds) — kind ごとの outputs
-  と capabilities
+- [Runtime-agent API](../reference/runtime-agent-api.md) — agent lifecycle
+  envelope
+- [Kind Catalog](../reference/kind-catalog.md#component-kinds) — kind ごとの
+  outputs と capabilities
 - [Manifest](/manifest) — operator が apply する manifest の syntax
 - [Extending](/extending) — 新 provider 追加時の `KernelPlugin` 作り方

@@ -36,7 +36,7 @@ response body には `checks` object が含まれます。 `200` は body をそ
 として埋めて返します。
 
 `503` 時の `error.code` は `readiness_probe_failed`
-([Kernel HTTP API](/reference/kernel-http-api))。
+([Kernel HTTP API](./kernel-http-api.md))。
 
 > port-level readiness 判定は依存 port の DAG を bottom-up 評価する design model
 > です。現在の `/readyz` output には `ports[]` を出さず、公開互換性は `checks`
@@ -221,7 +221,7 @@ kernel が無限再起動 loop に陥るため禁止。 supervisor の liveness 
 
 ## 関連ページ
 
-- [Kernel HTTP API](/reference/kernel-http-api)
-- [Lifecycle Protocol](/reference/lifecycle)
-- [Cross-Process Locks](/reference/cross-process-locks)
-- [Schema Evolution](/reference/migration-upgrade)
+- [Kernel HTTP API](./kernel-http-api.md)
+- [Lifecycle Protocol](./lifecycle.md)
+- [Cross-Process Locks](./cross-process-locks.md)
+- [Schema Evolution](./migration-upgrade.md)

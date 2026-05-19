@@ -245,9 +245,9 @@ kernel shutdown 中の scrape は `Retry-After: 1` を付けて `503` を返す�
 
 ## 関連ページ
 
-- [Logging Conventions](/reference/logging-conventions)
-- [Observability Stack](/reference/observability-stack)
-- [Time / Clock Model](/reference/time-clock-model)
-- [Audit Events](/reference/audit-events)
-- [Quota / Rate Limit](/reference/quota-rate-limit)
-- [Environment Variables](/reference/env-vars)
+- [Logging Conventions](./logging-conventions.md)
+- [Observability Stack](./observability-stack.md)
+- [Time / Clock Model](./time-clock-model.md)
+- [Audit Events](./audit-events.md)
+- [Quota / Rate Limit](./quota-rate-limit.md)
+- [Environment Variables](./env-vars.md)

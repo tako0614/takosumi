@@ -169,8 +169,8 @@ public contract は `.takosumi.yml` / Installation / Deployment と
 ## 関連 docs
 
 - [Manifest spec](/manifest)
-- [Kind Catalog](/reference/kind-catalog#component-kinds)
-- [Provider plugins](/reference/providers)
+- [Kind Catalog](../reference/kind-catalog.md#component-kinds)
+- [Provider plugins](../reference/providers.md)
 - [Self-host deploy](/operator/self-host) — VM 単機 / multi-host 分離 / artifact
   GC / fetch token
 - [Operator bootstrap](/operator/bootstrap) — kernel ↔ agent 連携の詳細

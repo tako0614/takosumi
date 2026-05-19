@@ -14,6 +14,6 @@ takosumi kernel が受け付ける credential は次の 2 種類のみ。
 
 ## 関連ページ
 
-- [Environment Variables](/reference/env-vars)
-- [Kernel HTTP API](/reference/kernel-http-api)
+- [Environment Variables](./env-vars.md)
+- [Kernel HTTP API](./kernel-http-api.md)
 - `takosumi-cloud/docs/accounts-service.md`

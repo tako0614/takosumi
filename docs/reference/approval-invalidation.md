@@ -53,7 +53,7 @@
   から `stale` または `revoked` に遷移。`fresh → refresh-required` は warning
   相当 (Risk emit のみ) で trigger 4 を **発火させない** — approval は
   `approved` のまま保持される
-  ([Observation Retention — Approval invalidation との関係](/reference/observation-retention#approval-invalidation-との関係))。
+  ([Observation Retention — Approval invalidation との関係](./observation-retention.md#approval-invalidation-との関係))。
 - **検出 timing**: external freshness は kernel observe loop が継続的に監視
   し、`stale` / `revoked` への遷移を検出した瞬間に対応 approval を再評価
   する。`prepare` stage 起動時の最初の確認も含む。
@@ -87,7 +87,7 @@
   approval set に絞って propagate** する。Space 全体や全 plan を巻き込まない。
 - propagation 中の approval re-validation は WAL stage を進めず、`prepare`
   への巻き戻し経路でのみ stage に作用する (詳細は
-  [WAL Stages — Pre/post-commit verification lifecycle](/reference/wal-stages#prepost-commit-verification-lifecycle))。
+  [WAL Stages — Pre/post-commit verification lifecycle](./wal-stages.md#prepost-commit-verification-lifecycle))。
 
 ## Approver UX states
 
@@ -148,6 +148,6 @@ change として実装される。
 
 ## 関連ページ
 
-- [WAL Stages](/reference/wal-stages)
-- [Risk Taxonomy](/reference/risk-taxonomy)
-- [Lifecycle Protocol](/reference/lifecycle)
+- [WAL Stages](./wal-stages.md)
+- [Risk Taxonomy](./risk-taxonomy.md)
+- [Lifecycle Protocol](./lifecycle.md)

@@ -57,7 +57,7 @@ logical export は kernel 内部 JSON の単一 multi-record stream として生
 
 - `spaceId` — 所有 Space ID。 Space を跨ぐ record (audit chain global、catalog
   adoption) は予約値 `space:_global` を使う。
-- `id` — [Resource IDs](/reference/resource-ids) に従う resource ID。
+- `id` — [Resource IDs](./resource-ids.md) に従う resource ID。
 - `kind` — record の kind (例: `resolution-snapshot`、`journal-entry`)。
 - `body` — record の中身。
 - `chainRef` — audit chain に乗る record は、直前の chained record を指す hash
@@ -197,7 +197,7 @@ window を見込むべき。
 in-flight operation はステップ 5 で記録された recovery mode を通じて resume
 する。 各 Implementation が `recoveryMode = continue` と
 `recoveryMode = compensate` をどう扱うかは
-[Provider Plugins — Implementation Contract](/reference/providers#implementation-contract)
+[Provider Plugins — Implementation Contract](./providers.md#implementation-contract)
 が定める。
 
 ### GroupHead と canary の状態
@@ -218,8 +218,8 @@ restore を拒否し、 release-specific private runbook と検証済み evidenc
 
 現行の public `takosumi` CLI は backup / restore コマンドを公開していない。
 backup と restore は operator 限定の workflow であり、 public operator CLI
-surface が実装され [CLI](/reference/cli) で文書化されるまでは、 内部 control
-plane ツールや deployment 自動化を通じて駆動する必要がある。
+surface が実装され [CLI](./cli.md) で文書化されるまでは、 内部 control plane
+ツールや deployment 自動化を通じて駆動する必要がある。
 
 - backup は上述の point-in-time lock 下で export stream を生成する。
 - restore は上記 6 ステップのフローを、初期化された空 storage に対して実行する。
@@ -253,10 +253,10 @@ backup と restore は runtime kernel event と同じ hash chain に専用 audit
 
 ## 関連ページ
 
-- [Storage Schema](/reference/storage-schema)
-- [Audit Events](/reference/audit-events)
-- [Secret Partitions](/reference/secret-partitions)
-- [Schema Evolution](/reference/migration-upgrade)
-- [CLI](/reference/cli)
-- [Kernel HTTP API](/reference/kernel-http-api)
-- [Closed Enums](/reference/closed-enums)
+- [Storage Schema](./storage-schema.md)
+- [Audit Events](./audit-events.md)
+- [Secret Partitions](./secret-partitions.md)
+- [Schema Evolution](./migration-upgrade.md)
+- [CLI](./cli.md)
+- [Kernel HTTP API](./kernel-http-api.md)
+- [Closed Enums](./closed-enums.md)

@@ -390,8 +390,8 @@ uses the deploy token when no fetch token is configured).
 
 ## Related docs
 
-- [AppSpec (JA)](/reference/app-spec)
-- [Kind catalog (JA)](/reference/kind-catalog#component-kinds)
-- [Provider plugins (JA)](/reference/providers)
+- [AppSpec (JA)](../../reference/app-spec.md)
+- [Kind catalog (JA)](../../reference/kind-catalog.md#component-kinds)
+- [Provider plugins (JA)](../../reference/providers.md)
 - [Operator bootstrap (JA)](/operator/bootstrap) (kernel ↔ agent integration
   details)

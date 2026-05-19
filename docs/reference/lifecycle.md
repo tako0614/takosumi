@@ -7,9 +7,9 @@ Takosumi の lifecycle は
 `apply / activate / destroy / rollback / recovery /
 observe` の 6 phase。 phase
 ごとの snapshot 対応や `LifecycleStatus` 遷移は
-[Lifecycle Phases](/reference/lifecycle-phases)、 WAL stage は
-[WAL Stages](/reference/wal-stages)、 approval 失効は
-[Approval Invalidation Triggers](/reference/approval-invalidation) 参照。
+[Lifecycle Phases](./lifecycle-phases.md)、 WAL stage は
+[WAL Stages](./wal-stages.md)、 approval 失効は
+[Approval Invalidation Triggers](./approval-invalidation.md) 参照。
 
 ## Cross-process lock
 
@@ -92,10 +92,10 @@ v1 では 6 phase を 1:1 に区別します。各 phase は対応する Snapsho
   **次** から resume します。
 - `observe` 起動 / 維持は kernel readiness 連動。 readiness DAG が未充足の間は
   observation worker が更新せず、 `/readyz` も 503。 詳細は
-  [Readiness Probes](/reference/readiness-probes)。
+  [Readiness Probes](./readiness-probes.md)。
 
 WAL stage の意味論は
-[WAL Stages — Stage closed enum](/reference/wal-stages#stage-closed-enum-8-値)
+[WAL Stages — Stage closed enum](./wal-stages.md#stage-closed-enum-8-値)
 に対応します
 (`prepare → pre-commit → commit → post-commit → observe →
 finalize`、終端
@@ -114,7 +114,7 @@ WAL stage を進めず、 Snapshot を materialize せず、 connector ごとの
 ず、 OperationPlan を `prepare` で止める選択を operator が取れます。
 
 field 仕様は
-[Runtime-Agent API — `POST /v1/lifecycle/verify`](/reference/runtime-agent-api#post-v1lifecycleverify)
+[Runtime-Agent API — `POST /v1/lifecycle/verify`](./runtime-agent-api.md#post-v1lifecycleverify)
 参照。
 
 ## Recovery modes
@@ -162,19 +162,19 @@ mode を繰り返しても重複 effect は出ません。
 
 ## Cross-references
 
-- [Lifecycle Phases](/reference/lifecycle-phases)
-- [WAL Stages](/reference/wal-stages)
-- [Approval Invalidation Triggers](/reference/approval-invalidation)
-- [RevokeDebt Model](/reference/revoke-debt)
-- [Closed Enums](/reference/closed-enums)
-- [Kernel HTTP API](/reference/kernel-http-api)
-- [Runtime-Agent API](/reference/runtime-agent-api)
-- [Readiness Probes](/reference/readiness-probes)
-- [Cross-Process Locks](/reference/cross-process-locks)
+- [Lifecycle Phases](./lifecycle-phases.md)
+- [WAL Stages](./wal-stages.md)
+- [Approval Invalidation Triggers](./approval-invalidation.md)
+- [RevokeDebt Model](./revoke-debt.md)
+- [Closed Enums](./closed-enums.md)
+- [Kernel HTTP API](./kernel-http-api.md)
+- [Runtime-Agent API](./runtime-agent-api.md)
+- [Readiness Probes](./readiness-probes.md)
+- [Cross-Process Locks](./cross-process-locks.md)
 
 ## 関連ページ
 
-- [Lifecycle Phases](/reference/lifecycle-phases)
-- [WAL Stages](/reference/wal-stages)
-- [Cross-Process Locks](/reference/cross-process-locks)
-- [Approval Invalidation](/reference/approval-invalidation)
+- [Lifecycle Phases](./lifecycle-phases.md)
+- [WAL Stages](./wal-stages.md)
+- [Cross-Process Locks](./cross-process-locks.md)
+- [Approval Invalidation](./approval-invalidation.md)

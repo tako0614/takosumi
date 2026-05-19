@@ -6,8 +6,8 @@ Takosumi v1 における compliance regime ごとの audit retention 仕様。 P
 HIPAA / SOX / regulated / default の 5 値 closed enum を採用する。 各 regime
 の最小保持期間、PII / secret 取り扱い、archive sink 連携、GDPR right-to-erasure
 対応を operator-actionable に定義する。 event-shape contract は
-[Audit Events](/reference/audit-events) が定義し、本 reference はそれに
-retention window を attach する関係。
+[Audit Events](./audit-events.md) が定義し、本 reference はそれに retention
+window を attach する関係。
 
 ## Compliance regime closed enum (v1)
 
@@ -49,8 +49,7 @@ regime 横断のルールと regime 固有のルールに分かれる。
 ### 全 regime 共通
 
 - secret raw value は **どの audit event にも書かれない**
-  ([Audit Events](/reference/audit-events) redaction rule)。regime
-  によらず不変。
+  ([Audit Events](./audit-events.md) redaction rule)。regime によらず不変。
 - secret reference (`${secret:...}` 形式) は payload に含めてよい。
 - audit envelope の hash chain は redact してはいけない。
 
@@ -93,8 +92,7 @@ global default regime:
 TAKOSUMI_AUDIT_RETENTION_REGIME=default | pci-dss | hipaa | sox | regulated
 ```
 
-未指定なら `default`。env 詳細は [Environment Variables](/reference/env-vars)
-を参照。
+未指定なら `default`。env 詳細は [Environment Variables](./env-vars.md) を参照。
 
 ### Per-Space override
 
@@ -178,9 +176,9 @@ retention は層ごとに独立。混同を避ける。
 
 journal compaction は audit retention とは別機構で、recovery-critical
 な範囲を保つことに最適化されている
-([Journal Compaction](/reference/journal-compaction))。 ObservationHistory は
+([Journal Compaction](./journal-compaction.md))。 ObservationHistory は
 authoritative ではないため compliance 対象外
-([Observation Retention](/reference/observation-retention))。
+([Observation Retention](./observation-retention.md))。
 
 ## Right-to-erasure (GDPR)
 
@@ -200,7 +198,7 @@ regime に関係なく、data subject の erasure 要求への応答が必要な
 ### 制約
 
 - secret partition の rotation 由来 entry は redaction 対象外
-  ([Secret Partitions](/reference/secret-partitions))。
+  ([Secret Partitions](./secret-partitions.md))。
 - compliance regime minimum window 内にある entry でも、PII field の redaction
   は許容される (entry 全体の削除ではないため)。
 - entry 全体の削除 (full deletion) は compliance regime minimum 内では禁止。
@@ -241,8 +239,8 @@ erasure 操作自体が audit event として記録される。
 
 ## 関連ページ
 
-- [Audit Events](/reference/audit-events)
-- [Observation Retention](/reference/observation-retention)
-- [Journal Compaction](/reference/journal-compaction)
-- [Secret Partitions](/reference/secret-partitions)
-- [Environment Variables](/reference/env-vars)
+- [Audit Events](./audit-events.md)
+- [Observation Retention](./observation-retention.md)
+- [Journal Compaction](./journal-compaction.md)
+- [Secret Partitions](./secret-partitions.md)
+- [Environment Variables](./env-vars.md)

@@ -58,7 +58,7 @@ provider side effect の前に fail-closed で失敗し、post-commit verificati
 の失敗は commit 済み effect に対して RevokeDebt 付きで journal される。動的
 registry / multi-mirror の用途には将来 RFC で publisher-signing domain
 が追加されうるが、v1 の一部ではない (詳細は
-[Supply Chain Trust § 6](../supply-chain-trust.md#_6-catalog-release-trust))。
+[Supply Chain Trust § 6](../supply-chain-trust.md#catalog-release-trust))。
 catalog 宣言された実行可能 hook package。
 
 ## Space assignment

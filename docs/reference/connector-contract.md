@@ -75,7 +75,7 @@ oci-image | js-bundle | lambda-zip | static-bundle | wasm
 ```
 
 per-kind size cap、 registered metadata、 discovery API は
-[DataAsset Kinds](/reference/kind-catalog#artifact-kinds) を参照。
+[DataAsset Kinds](./kind-catalog.md#artifact-kinds) を参照。
 
 Plan-time enforcement:
 
@@ -205,7 +205,7 @@ materializer plugin) である。
   `install` operation.
 
 kernel-side materializer (= `KernelPlugin`) の record schema と registration API
-は [Providers](/reference/providers) を参照。
+は [Providers](./providers.md) を参照。
 
 ## Runtime-Agent hosting
 
@@ -224,7 +224,7 @@ runtime-agent は Connector を in-process モジュールとして host する�
   by hash, never the deploy bearer.
 
 lifecycle envelope の wire format と error code enum は
-[Runtime-Agent API](/reference/runtime-agent-api) を参照。
+[Runtime-Agent API](./runtime-agent-api.md) を参照。
 
 ## Related architecture notes
 
@@ -239,7 +239,7 @@ lifecycle envelope の wire format と error code enum は
 
 ## 関連ページ
 
-- [DataAsset Kinds](/reference/kind-catalog#artifact-kinds)
-- [Providers](/reference/providers)
-- [Runtime-Agent API](/reference/runtime-agent-api)
-- [Audit Events](/reference/audit-events)
+- [DataAsset Kinds](./kind-catalog.md#artifact-kinds)
+- [Providers](./providers.md)
+- [Runtime-Agent API](./runtime-agent-api.md)
+- [Audit Events](./audit-events.md)
