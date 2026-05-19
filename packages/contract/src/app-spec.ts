@@ -184,8 +184,6 @@ export interface Component {
    */
   readonly listen?: Readonly<Record<NamespacePath, ListenOptions>>;
   readonly spec?: JsonObject;
-  readonly name?: string;
-  readonly target?: string;
 }
 
 /**

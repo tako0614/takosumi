@@ -160,6 +160,15 @@ export function formatPlatformOperationIdempotencyKey(
  * type-parameterize this generic catch capability typos at compile time;
  * untyped plugins fall back to `string`.
  */
+/**
+ * @deprecated Wave J Component contract minimization phase: the canonical
+ * materializer abstraction is `Materializer = KernelPlugin |
+ * InlineMaterializer` (= `packages/contract/src/plugin.ts`). `ProviderPlugin`
+ * remains as a transitional adapter wrapped by
+ * `kernelPluginFromProviderPlugin()`; new code should implement KernelPlugin
+ * directly. The plugin-sdk re-exports of ProviderPlugin are kept until the
+ * 6 cloud provider packages migrate to the KernelPlugin shape natively.
+ */
 export interface ProviderPlugin<
   Spec = JsonObject,
   Outputs = JsonObject,

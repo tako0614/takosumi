@@ -69,9 +69,7 @@ components:
       command: npm ci && npm run build
       output: dist/worker.mjs
     spec:
-      routes:
-        - /
-        - /api/*
+      compatibilityDate: "2026-01-01"
     listen:
       com.example.notes.db:
         as: env
@@ -83,9 +81,14 @@ components:
 | field                    | required                  | 説明                                           |
 | ------------------------ | ------------------------- | ---------------------------------------------- |
 | `build`                  | yes                       | `{ command, output }` (= artifact 生成 recipe) |
-| `spec.routes`            | no                        | route pattern list (= `/`, `/api/*`)           |
 | `spec.compatibilityDate` | yes (for direct artifact) | Cloudflare 互換 date                           |
 | `listen`                 | no                        | listen 対象 namespace path                     |
+
+> Wave J で worker.jsonld から `routes` 宣言を削除しました。 worker materializer
+> (= `@takos/takosumi-cloudflare-providers` 等の shape provider) は
+> `spec.routes` (string array) を実装慣習として読みますが、 worker kind contract
+> には宣言されません (= 「底は自由」 原則)。 別の materializer 実装は routes
+> を別の表現 (= 別 kind の namespace pub 等) で扱っても構いません。
 
 ### Publishes
 

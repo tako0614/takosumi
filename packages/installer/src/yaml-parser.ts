@@ -46,8 +46,6 @@ const COMPONENT_KEYS = new Set([
   "publish",
   "listen",
   "spec",
-  "name",
-  "target",
 ]);
 
 const BUILD_KEYS = new Set(["command", "output"]);
@@ -234,8 +232,6 @@ function validateComponent(name: string, raw: unknown): Component {
       ? undefined
       : validateListen(c.listen, `${path}.listen`),
     spec: c.spec as Component["spec"],
-    name: c.name as string | undefined,
-    target: c.target as string | undefined,
   };
   return component;
 }

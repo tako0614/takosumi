@@ -67,7 +67,15 @@ export interface LifecycleApplyRequest {
   readonly resourceName: string;
   readonly spec: JsonValue;
   readonly tenantId?: string;
-  /** WAL-derived request token. Connectors forward it to external APIs when supported. */
+  /**
+   * @internal kernel ↔ runtime-agent RPC only. WAL-derived request token
+   * forwarded to external cloud APIs that accept their own idempotency
+   * keys (= AWS S3 / GCP / etc). This is NOT the deprecated public
+   * `X-Idempotency-Key` HTTP header (= retired Phase A): public installer
+   * API has no idempotency surface; replay protection is via source pin
+   * + expected digest. Connector-level idempotency is implementation
+   * detail, not part of the public AppSpec / installer contract.
+   */
   readonly idempotencyKey?: string;
   /** WAL / recovery envelope projected from the kernel OperationPlan. */
   readonly operationRequest?: PlatformOperationRequest;
@@ -90,7 +98,15 @@ export interface LifecycleDestroyRequest {
   readonly provider: string;
   readonly handle: string;
   readonly tenantId?: string;
-  /** WAL-derived request token. Connectors forward it to external APIs when supported. */
+  /**
+   * @internal kernel ↔ runtime-agent RPC only. WAL-derived request token
+   * forwarded to external cloud APIs that accept their own idempotency
+   * keys (= AWS S3 / GCP / etc). This is NOT the deprecated public
+   * `X-Idempotency-Key` HTTP header (= retired Phase A): public installer
+   * API has no idempotency surface; replay protection is via source pin
+   * + expected digest. Connector-level idempotency is implementation
+   * detail, not part of the public AppSpec / installer contract.
+   */
   readonly idempotencyKey?: string;
   /** WAL / recovery envelope projected from the kernel OperationPlan. */
   readonly operationRequest?: PlatformOperationRequest;

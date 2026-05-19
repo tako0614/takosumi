@@ -47,16 +47,16 @@ components:
 > launch / health / capability-request semantics the materializer chooses to
 > honor (= 底は自由).
 
-| field         | required | 型     | 説明                                          |
-| ------------- | -------- | ------ | --------------------------------------------- |
-| `apiVersion`  | yes      | string | 固定値 `"takosumi.dev/v1"`                    |
-| `kind`        | yes      | string | 固定値 `"App"`                                |
-| `metadata`    | yes      | object | App 識別子と display 用情報                   |
-| `components`  | yes      | object | コンポーネント定義 (= runtime parts)          |
-| `interfaces`  | no       | object | Takos / OS / Agent 等が利用する公開 interface |
-| `permissions` | no       | object | Installation が要求する Takos API scope       |
+| field        | required | 型     | 説明                                 |
+| ------------ | -------- | ------ | ------------------------------------ |
+| `apiVersion` | yes      | string | 固定値 `"takosumi.dev/v1"`           |
+| `kind`       | yes      | string | 固定値 `"App"`                       |
+| `metadata`   | yes      | object | App 識別子と display 用情報          |
+| `components` | yes      | object | コンポーネント定義 (= runtime parts) |
 
 unknown top-level field は reject。 `apiVersion` / `kind` は文字列で厳密一致。
+旧 `interfaces:` / `permissions:` block は Wave J で削除済 (= top-level field
+として宣言できない)。
 
 ## `metadata`
 

@@ -44,11 +44,6 @@
         "type": "object",
         "additionalProperties": { "type": "string" },
         "description": "Optional env vars / bindings."
-      },
-      "routes": {
-        "type": "array",
-        "items": { "type": "string", "minLength": 1 },
-        "description": "Route patterns the worker handles (e.g. `/`, `/api/*`)."
       }
     }
   },
