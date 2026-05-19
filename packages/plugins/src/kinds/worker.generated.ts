@@ -12,8 +12,6 @@ export interface WorkerSpec {
   readonly compatibilityFlags?: readonly string[];
   /** Optional env vars / bindings. */
   readonly env?: Readonly<Record<string, string>>;
-  /** Route patterns the worker handles (e.g. `/`, `/api/*`). */
-  readonly routes?: readonly string[];
 }
 
 export interface WorkerOutputs {

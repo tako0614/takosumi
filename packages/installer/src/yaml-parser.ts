@@ -30,8 +30,6 @@ const ROOT_KEYS = new Set([
   "kind",
   "metadata",
   "components",
-  "interfaces",
-  "permissions",
 ]);
 
 const METADATA_KEYS = new Set([
@@ -47,7 +45,6 @@ const COMPONENT_KEYS = new Set([
   "build",
   "publish",
   "listen",
-  "routes",
   "spec",
   "name",
   "target",
@@ -55,7 +52,6 @@ const COMPONENT_KEYS = new Set([
 
 const BUILD_KEYS = new Set(["command", "output"]);
 const LISTEN_OPTIONS_KEYS = new Set(["as", "prefix", "mount"]);
-const INTERFACE_KEYS = new Set(["target", "path", "required"]);
 
 /**
  * Built-in {@link ListenOptions} `as` values the parser knows about. The
@@ -145,20 +141,11 @@ function validateAppSpec(raw: unknown): AppSpec {
   const components = validateComponents(root.components);
   validatePublishListenGraph(components);
 
-  const interfaces = root.interfaces === undefined
-    ? undefined
-    : validateInterfaces(root.interfaces);
-  const permissions = root.permissions === undefined
-    ? undefined
-    : validatePermissions(root.permissions);
-
   return {
     apiVersion: APP_SPEC_API_VERSION,
     kind: APP_SPEC_KIND,
     metadata,
     components,
-    interfaces,
-    permissions,
   };
 }
 
@@ -246,9 +233,6 @@ function validateComponent(name: string, raw: unknown): Component {
     listen: c.listen === undefined
       ? undefined
       : validateListen(c.listen, `${path}.listen`),
-    routes: c.routes === undefined
-      ? undefined
-      : validateStringArray(c.routes, `${path}.routes`),
     spec: c.spec as Component["spec"],
     name: c.name as string | undefined,
     target: c.target as string | undefined,
@@ -398,57 +382,6 @@ function validateListen(
     };
   }
   return result;
-}
-
-function validateInterfaces(raw: unknown): AppSpec["interfaces"] {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new AppSpecParseError(
-      "interfaces must be a mapping",
-      "schema",
-      "$.interfaces",
-    );
-  }
-  const i = raw as Record<string, unknown>;
-  const result: Record<
-    string,
-    { target: string; path: string; required?: boolean }
-  > = {};
-  for (const key of ["launch", "mcp", "health"] as const) {
-    if (i[key] === undefined) continue;
-    const entry = i[key];
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new AppSpecParseError(
-        `interfaces.${key} must be a mapping`,
-        "schema",
-        `$.interfaces.${key}`,
-      );
-    }
-    const e = entry as Record<string, unknown>;
-    rejectUnknownKeys(e, INTERFACE_KEYS, `$.interfaces.${key}`);
-    requireString(e.target, `$.interfaces.${key}.target`);
-    requireString(e.path, `$.interfaces.${key}.path`);
-    result[key] = {
-      target: e.target as string,
-      path: e.path as string,
-      required: e.required as boolean | undefined,
-    };
-  }
-  return result as AppSpec["interfaces"];
-}
-
-function validatePermissions(raw: unknown): AppSpec["permissions"] {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new AppSpecParseError(
-      "permissions must be a mapping",
-      "schema",
-      "$.permissions",
-    );
-  }
-  const p = raw as Record<string, unknown>;
-  if (p.requested === undefined) return { requested: [] };
-  return {
-    requested: validateStringArray(p.requested, "$.permissions.requested"),
-  };
 }
 
 /**

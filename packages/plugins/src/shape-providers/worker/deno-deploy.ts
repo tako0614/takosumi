@@ -80,7 +80,10 @@ export function createDenoDeployProvider(
         compatibilityDate: spec.compatibilityDate,
         compatibilityFlags: spec.compatibilityFlags,
         env: spec.env,
-        routes: spec.routes,
+        // `routes` is no longer a formal worker-kind field (= dropped from
+        // worker.jsonld). The materializer keeps reading `spec.routes` as
+        // an implementation-level convention.
+        routes: (spec as { routes?: readonly string[] }).routes,
       });
       return {
         handle: deployHandle(desc.projectId, desc.scriptName),

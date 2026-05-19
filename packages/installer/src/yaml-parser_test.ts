@@ -17,8 +17,9 @@ components:
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    routes:
-      - /
+    spec:
+      routes:
+        - /
     publish:
       - com.example.notes.web
     listen:
@@ -30,15 +31,6 @@ components:
     kind: postgres
     publish:
       - com.example.notes.db
-
-interfaces:
-  launch:
-    target: web
-    path: /api/auth/launch
-
-permissions:
-  requested:
-    - logs.read.own
 `;
   const spec = parseAppSpec(yaml);
   assertEquals(spec.apiVersion, "takosumi.dev/v1");
@@ -56,10 +48,74 @@ permissions:
     spec.components.web.listen?.["com.example.notes.db"]?.prefix,
     "DB",
   );
+  // routes lives inside the worker kind's open `spec` field — not a
+  // top-level Component field. The materializer reads `spec.routes`
+  // by convention; the AppSpec contract stays kind-agnostic.
+  assertEquals(
+    (spec.components.web.spec as { routes?: readonly string[] }).routes,
+    ["/"],
+  );
   assertEquals(spec.components.db.kind, "postgres");
   assertEquals(spec.components.db.publish, ["com.example.notes.db"]);
-  assertEquals(spec.interfaces?.launch?.path, "/api/auth/launch");
-  assertEquals(spec.permissions?.requested, ["logs.read.own"]);
+});
+
+Deno.test("parseAppSpec rejects top-level Component `routes:` (= moved into spec.routes)", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: takosumi.dev/v1
+kind: App
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    build: { command: x, output: y }
+    routes: ["/"]
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "schema");
+  assertEquals(err.validationPath, "$.components.web.routes");
+});
+
+Deno.test("parseAppSpec rejects top-level `interfaces:` (= no longer in AppSpec contract)", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: takosumi.dev/v1
+kind: App
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    build: { command: x, output: y }
+interfaces:
+  launch: { target: web, path: / }
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "schema");
+  assertEquals(err.validationPath, "$.interfaces");
+});
+
+Deno.test("parseAppSpec rejects top-level `permissions:` (= no longer in AppSpec contract)", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: takosumi.dev/v1
+kind: App
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    build: { command: x, output: y }
+permissions:
+  requested: ["logs.read.own"]
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "schema");
+  assertEquals(err.validationPath, "$.permissions");
 });
 
 Deno.test("parseAppSpec rejects unknown top-level field", () => {

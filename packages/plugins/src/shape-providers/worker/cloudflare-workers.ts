@@ -67,7 +67,11 @@ export function createCloudflareWorkersProvider(
         compatibilityDate: spec.compatibilityDate,
         compatibilityFlags: spec.compatibilityFlags,
         env: spec.env,
-        routes: spec.routes,
+        // `routes` is no longer a formal worker-kind field (= dropped from
+        // worker.jsonld). The materializer keeps reading `spec.routes` as
+        // an implementation-level convention so authors can carry HTTP
+        // route patterns inside the worker component's open spec.
+        routes: (spec as { routes?: readonly string[] }).routes,
       });
       return {
         handle: workersHandle(desc.accountId, desc.scriptName),

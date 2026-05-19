@@ -48,7 +48,6 @@ export const WorkerKind: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
       issues,
     );
     optionalStringRecord(value.env, "$.env", issues);
-    validateStringArray(value.routes, "$.routes", issues);
   },
   validateOutputs(value, issues) {
     if (!requireRoot(value, issues)) return;

@@ -98,8 +98,6 @@ export interface AppSpec {
   readonly kind: typeof APP_SPEC_KIND;
   readonly metadata: AppSpecMetadata;
   readonly components: Readonly<Record<string, Component>>;
-  readonly interfaces?: AppSpecInterfaces;
-  readonly permissions?: AppSpecPermissions;
 }
 
 export interface AppSpecMetadata {
@@ -185,7 +183,6 @@ export interface Component {
    * runtime (env / mount / target / operator-defined).
    */
   readonly listen?: Readonly<Record<NamespacePath, ListenOptions>>;
-  readonly routes?: readonly string[];
   readonly spec?: JsonObject;
   readonly name?: string;
   readonly target?: string;
@@ -199,22 +196,6 @@ export interface Component {
 export interface ComponentBuild {
   readonly command: string;
   readonly output: string;
-}
-
-export interface AppSpecInterfaces {
-  readonly launch?: InterfaceEntry;
-  readonly mcp?: InterfaceEntry;
-  readonly health?: InterfaceEntry;
-}
-
-export interface InterfaceEntry {
-  readonly target: string;
-  readonly path: string;
-  readonly required?: boolean;
-}
-
-export interface AppSpecPermissions {
-  readonly requested: readonly string[];
 }
 
 /**
