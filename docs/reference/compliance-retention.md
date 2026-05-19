@@ -1,4 +1,4 @@
-# Compliance Retention
+# コンプライアンス保持 {#compliance-retention}
 
 > このページでわかること: コンプライアンス要件に基づくデータ保持ポリシー。
 
@@ -9,7 +9,7 @@ HIPAA / SOX / regulated / default の 5 値 closed enum を採用する。 各 r
 [Audit Events](./audit-events.md) が定義し、本 reference はそれに retention
 window を attach する関係。
 
-## Compliance regime closed enum (v1)
+## Compliance regime closed enum (v1) {#compliance-regime-closed-enum-v1}
 
 regime 値は closed enum で、追加には `CONVENTIONS.md` §6 RFC を要する。
 
@@ -25,7 +25,7 @@ regime は **per-Space** で固定する。 global default は
 `TAKOSUMI_AUDIT_RETENTION_REGIME` で指示し、 Space 個別 override は operator
 policy で書く。
 
-## Retention windows (audit log)
+## 保持期間 (audit log) {#retention-windows-audit-log}
 
 各 regime の **minimum** 保持期間。 operator は minimum を超える保持を policy
 で延ばせるが、短縮はできない。
@@ -42,49 +42,49 @@ window の起点は audit event の `ts`。 primary store には少なくとも 
 分は読める形で残す。 window を超えた entry は archive sink delivery
 を確認した上で primary から drop してよい。
 
-## Data field treatment
+## データフィールドの取り扱い {#data-field-treatment}
 
 regime 横断のルールと regime 固有のルールに分かれる。
 
-### 全 regime 共通
+### 全 regime 共通 {#all-regime-common}
 
 - secret raw value は **どの audit event にも書かれない**
   ([Audit Events](./audit-events.md) redaction rule)。regime によらず不変。
 - secret reference (`${secret:...}` 形式) は payload に含めてよい。
 - audit envelope の hash chain は redact してはいけない。
 
-### `pci-dss`
+### `pci-dss` {#pci-dss}
 
 - カード会員データ (PAN / CVV / expiry) は **storage 全域で禁止**。 payload
   に混入し得る field は redaction 対象。
 - actor identity は full retention 期間中、queryable に保つ。
 
-### `hipaa`
+### `hipaa` {#hipaa}
 
 - PHI を含み得る payload field は kernel が field-level redaction を実施する。
   hash chain の canonical bytes には redacted form が入る。
 - PHI を resolve した access log は actor identity を 6 年間 queryable に保つ。
 
-### `sox`
+### `sox` {#sox}
 
 - 財務関連 mutation (deployment-applied / approval-granted / share-created など)
   は payload digest を含めて 7 年間 immutable に保つ。 改ざん検出は audit hash
   chain で証明する。
 - archive sink への transfer は WORM (Write Once Read Many) を要件とする。
 
-### `regulated`
+### `regulated` {#regulated}
 
 - field 取り扱いは operator policy が指定する。 kernel は field-level redaction
   の policy point を提供し、operator が regulation ごとに rule を書く。
 
-### `default`
+### `default` {#default}
 
 - field redaction は operator policy 次第。 secret redaction は強制。
 - 保持 window は 90 日を minimum に operator が tune する。
 
-## Configuration
+## 設定 {#configuration}
 
-### Environment variable
+### 環境変数 {#environment-variable}
 
 global default regime:
 
@@ -94,7 +94,7 @@ TAKOSUMI_AUDIT_RETENTION_REGIME=default | pci-dss | hipaa | sox | regulated
 
 未指定なら `default`。env 詳細は [Environment Variables](./env-vars.md) を参照。
 
-### Per-Space override
+### Per-Space override {#per-space-override}
 
 global default を上書きする per-Space regime は operator policy で書く。
 
@@ -110,7 +110,7 @@ spaces:
 `minimumDays` が regime minimum 未満の policy は kernel boot で reject される
 (`audit-retention-window-too-short`)。
 
-### Regime change
+### Regime 変更 {#regime-change}
 
 regime 変更は `regime-changed` audit event として記録される。
 
@@ -119,12 +119,12 @@ regime 変更は `regime-changed` audit event として記録される。
 - 変更直後から新 regime の minimum window が適用される。 既存 entry は当時の
   regime に従って保持する (retroactive 削減はしない)。
 
-## Archive sink
+## Archive sink {#archive-sink}
 
 長期保持を primary audit store に置きっぱなしにすると I/O cost が膨らむ。
 operator は archive sink を設定して長期 entry を逃がせる。
 
-### Sink targets
+### Sink ターゲット {#sink-targets}
 
 - S3 Object Lock (compliance mode / governance mode)
 - GCS Bucket Lock
@@ -143,7 +143,7 @@ retention cutoff を超えた entry は、設定された `AuditReplicationSink`
 Object Lock / GCS Bucket Lock / R2 / MinIO 等の immutability は adapter 側の運用
 policy として満たす。
 
-### Delivery contract
+### 配送契約 {#delivery-contract}
 
 - delivery は audit hash chain の連続性を維持する。 chunk ごとに `from-eventId`
   / `to-eventId` / chunk hash を sink に書き込む。
@@ -152,7 +152,7 @@ policy として満たす。
 - delivery 失敗時は **primary 保持を継続** する。 primary drop を delivery
   成功条件にしないと chain 切断のリスクが出る。
 
-### Audit events
+### 監査イベント {#audit-events}
 
 archive 経路の event:
 
@@ -163,7 +163,7 @@ archive 経路の event:
 
 すべて actor=`system` / severity=`info`〜`error` で記録される。
 
-## Retention vs other layers
+## 他レイヤーとの保持比較 {#retention-vs-other-layers}
 
 retention は層ごとに独立。混同を避ける。
 
@@ -180,12 +180,12 @@ journal compaction は audit retention とは別機構で、recovery-critical
 authoritative ではないため compliance 対象外
 ([Observation Retention](./observation-retention.md))。
 
-## Right-to-erasure (GDPR)
+## 忘れられる権利 (GDPR) {#right-to-erasure-gdpr}
 
 regime に関係なく、data subject の erasure 要求への応答が必要な operator
 は以下の運用を取る。
 
-### Field-level redaction
+### Field-level redaction {#field-level-redaction}
 
 - 該当 audit event の payload 内、PII を含む field を redacted form に置換する。
 - audit hash chain は **維持** する。 redaction は payload field
@@ -195,7 +195,7 @@ regime に関係なく、data subject の erasure 要求への応答が必要な
   redact する。 sink の immutability 要件と整合させるため、 原則 archive 側は
   append-only な redaction marker を追加する形を取る。
 
-### 制約
+### 制約 {#constraints}
 
 - secret partition の rotation 由来 entry は redaction 対象外
   ([Secret Partitions](./secret-partitions.md))。
@@ -204,13 +204,13 @@ regime に関係なく、data subject の erasure 要求への応答が必要な
 - entry 全体の削除 (full deletion) は compliance regime minimum 内では禁止。
   erasure 要求は redaction で応答する。
 
-### Audit
+### 監査 {#audit}
 
 erasure 操作自体が audit event として記録される。
 
 - `audit-pii-redacted` — eventId / field path / actor / reason
 
-## Operator surface
+## オペレーター surface {#operator-surface}
 
 - regime 設定 / 変更は operator-only operation。 deploy bearer では実行不可。
 - regime change と archive sink delivery は operator internal tooling
@@ -219,7 +219,7 @@ erasure 操作自体が audit event として記録される。
 - regime minimum window より短い retention を要求する operator policy は kernel
   boot で reject される。
 
-## Failure modes
+## 失敗モード {#failure-modes}
 
 | 状況                                         | error code                         | 復旧                                |
 | -------------------------------------------- | ---------------------------------- | ----------------------------------- |
@@ -228,7 +228,7 @@ erasure 操作自体が audit event として記録される。
 | primary drop が delivery 未確認 entry を含む | `audit-primary-drop-blocked`       | delivery 完了を待つ                 |
 | regime 値が enum 外                          | `audit-retention-regime-unknown`   | enum 5 値のいずれかに修正           |
 
-## Related architecture notes
+## 関連アーキテクチャ {#related-architecture-notes}
 
 - `docs/reference/architecture/operator-boundaries.md` — operator-only な regime
   control の trust 境界。

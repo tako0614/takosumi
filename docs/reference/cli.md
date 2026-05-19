@@ -1,4 +1,4 @@
-# CLI Reference
+# CLI リファレンス {#cli-reference}
 
 > このページでわかること: Takosumi CLI のコマンド一覧とオプション。
 
@@ -49,7 +49,7 @@ token は次の順序で resolve します。
 remote URL は `--remote https://kernel.example.com` か `TAKOSUMI_REMOTE_URL`
 env、 config file の `remote.url` から resolve します。
 
-## Subcommand
+## サブコマンド {#subcommand}
 
 ### `takosumi install <source>`
 
@@ -133,7 +133,7 @@ artifact store の upload / list / delete / GC。 write 系は
 
 CLI version を表示。
 
-## Global flags
+## グローバルフラグ {#global-flags}
 
 | Flag             | 説明                                     |
 | ---------------- | ---------------------------------------- |
@@ -141,7 +141,7 @@ CLI version を表示。
 | `--token <t>`    | installer bearer token                   |
 | `--space <id>`   | 対象 Space id (install で必須)           |
 
-## Config file
+## 設定ファイル {#config-file}
 
 `~/.takosumi/config.yml` :
 

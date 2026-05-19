@@ -1,4 +1,4 @@
-# Audit Events
+# 監査イベント {#audit-events}
 
 > このページでわかること: kernel が emit する audit event の v1 taxonomy。 共通
 > envelope、 closed event type enum、 indexed column、 redaction rule、 hash
@@ -27,7 +27,7 @@ envelope は event type 固有の `payload` object も持ちます。 schema は
 ごとに固定で、 未知 payload field は書込時に reject されます (RFC なし の
 envelope 拡張は不可)。
 
-## 閉じた event type enum (v1)
+## 閉じた event type enum (v1) {#closed-event-type-enum-v1}
 
 v1 の audit event taxonomy は閉じています。 kernel / identity / tenant / PaaS
 operations / workflow ドメインで 88 以上の event type を含みます。 追加には
@@ -182,7 +182,7 @@ Cost / quota:
 上記がすべての v1 enum 値です。 これ以外の値は書込時に reject され、 audit store
 integrity failure として表面化します。
 
-## Indexed column
+## インデックス列 {#indexed-column}
 
 audit store は以下を index します。
 
@@ -194,7 +194,7 @@ audit store は以下を index します。
 実装は他列 (`severity` 等) の index 追加可ですが、 caller に追加 index を
 要求してはいけません。
 
-## Redaction rule
+## Redaction ルール {#redaction-rule}
 
 secret 値は audit log に出ません。 secret partition rotation、 secret access
 decision、 secret-bound approval はすべて value ではなく reference
@@ -212,7 +212,7 @@ decision、 secret-bound approval はすべて value ではなく reference
 redaction rule は caller ではなく audit writer 側で enforce され、 不備の ある
 caller は検出され reject されます。
 
-## Hash chain
+## ハッシュチェーン {#hash-chain}
 
 audit log は per-Space chain と global chain で tamper-evidence を保ちます。
 
@@ -244,7 +244,7 @@ integrity を検証します (公開 `takosumi` CLI に `audit verify` はあり
 検証は genesis から chain を辿り、 各 hash を再計算して最初の差異 event を
 報告します。 検証は audit store を変更せず、 kernel の停止も要求しません。
 
-## Retention regime
+## 保持レジーム {#retention-regime}
 
 audit retention は Space 単位の regime で制御します。 各 regime は既定 retention
 window と、 期間中 query 可能であるべき field 集合を固定します。
@@ -272,7 +272,7 @@ contract のみを定義し、 retention window はここに記録された even
   されているときのみ受理。 delivery 確認が無ければ primary row は SQL audit
   store に残る
 
-## Event payload の注意
+## Event payload の注意 {#event-payload}
 
 各 payload は `eventType` 固有の closed schema に従い、
 [Storage Schema](./storage-schema.md) で定義する record を参照します。
@@ -289,7 +289,7 @@ contract のみを定義し、 retention window はここに記録された even
 書込時、 audit store の referential view 上で resolve できない id を含む payload
 は reject されます。
 
-## Identity events
+## Identity イベント {#identity-events}
 
 | Event                      | Severity | Description                                                | Payload fields                                                       |
 | -------------------------- | -------- | ---------------------------------------------------------- | -------------------------------------------------------------------- |
@@ -315,7 +315,7 @@ See also:
 [API Key Management](./api-key-management.md),
 [Auth Providers](./auth-providers.md), [RBAC Policy](./rbac-policy.md).
 
-## Tenant events
+## Tenant イベント {#tenant-events}
 
 | Event                       | Severity | Description                                                     | Payload fields                                                             |
 | --------------------------- | -------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -332,7 +332,7 @@ See also:
 See also: [Tenant Provisioning](./tenant-provisioning.md),
 [Tenant Export / Deletion](./tenant-export-deletion.md).
 
-## Trial events
+## Trial イベント {#trial-events}
 
 | Event                 | Severity | Description                                                        | Payload fields                                                                   |
 | --------------------- | -------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
@@ -344,7 +344,7 @@ See also: [Tenant Provisioning](./tenant-provisioning.md),
 
 See also: [Trial Spaces](./trial-spaces.md).
 
-## Incident events
+## Incident イベント {#incident-events}
 
 | Event                           | Severity | Description                                              | Payload fields                                                           |
 | ------------------------------- | -------- | -------------------------------------------------------- | ------------------------------------------------------------------------ |
@@ -358,7 +358,7 @@ See also: [Trial Spaces](./trial-spaces.md).
 See also: [Incident Model](./incident-model.md),
 [SLA Breach Detection](./sla-breach-detection.md).
 
-## Support impersonation events
+## Support impersonation イベント {#support-impersonation-events}
 
 | Event                                         | Severity | Description                                                            | Payload fields                                                 |
 | --------------------------------------------- | -------- | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
@@ -373,7 +373,7 @@ See also: [Incident Model](./incident-model.md),
 
 See also: [Support Impersonation](./support-impersonation.md).
 
-## Notification events
+## Notification イベント {#notification-events}
 
 | Event                       | Severity | Description                                                       | Payload fields                                                  |
 | --------------------------- | -------- | ----------------------------------------------------------------- | --------------------------------------------------------------- |
@@ -382,7 +382,7 @@ See also: [Support Impersonation](./support-impersonation.md).
 
 See also: [Notification Emission](./notification-emission.md).
 
-## SLA events
+## SLA イベント {#sla-events}
 
 | Event                   | Severity | Description                                                           | Payload fields                                                                           |
 | ----------------------- | -------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -394,7 +394,7 @@ See also: [Notification Emission](./notification-emission.md).
 
 See also: [SLA Breach Detection](./sla-breach-detection.md).
 
-## Cost / quota events
+## Cost / quota イベント {#cost-quota-events}
 
 | Event                       | Severity | Description                                                       | Payload fields                                                              |
 | --------------------------- | -------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -407,14 +407,14 @@ See also: [SLA Breach Detection](./sla-breach-detection.md).
 See also: [Quota Tiers](./quota-tiers.md),
 [Cost Attribution](./cost-attribution.md).
 
-## Workflow Events
+## Workflow イベント {#workflow-events}
 
 The kernel does not reserve trigger, declarable-hook, or step-execution audit
 events. Workflow / cron / hook systems above the kernel own their own audit
 event vocabulary; see
 [Workflow Placement Rationale](./architecture/workflow-extension-design.md).
 
-## See also
+## 関連項目 {#see-also}
 
 - [Actor / Organization Model](./architecture/identity-and-access-architecture.md#actor--organization-model)
 - [API Key Management](./api-key-management.md)
@@ -431,7 +431,7 @@ event vocabulary; see
 - [Notification Emission](./notification-emission.md)
 - [Zone Selection](./zone-selection.md)
 
-## Related architecture notes
+## 関連アーキテクチャ {#related-architecture-notes}
 
 - `reference/architecture/policy-risk-approval-error-model` — closed risk and
   approval enums referenced by Approval events.

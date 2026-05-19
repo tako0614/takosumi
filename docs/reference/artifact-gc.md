@@ -1,4 +1,4 @@
-# Artifact GC and Activation History
+# Artifact GC と Activation History {#artifact-gc-and-activation-history}
 
 > このページでわかること: artifact の GC ポリシーと activation history
 > の保持ルール。
@@ -8,7 +8,7 @@ history export surface を定義する。 両 surface は
 [Storage Schema](./storage-schema.md) で宣言される永続レコード集合に対する
 mark-and-traverse パターンを共有する。
 
-## Artifact GC scope
+## Artifact GC のスコープ {#artifact-gc-scope}
 
 GC は **DataAsset** レコード
 ([DataAsset Kinds](./kind-catalog.md#artifact-kinds) 参照) とその裏付け object
@@ -30,12 +30,12 @@ bytes に対して動作する。 各 DataAsset は GC 時に次の 3 つの
 参照されていれば DataAsset は保持される。 これにより rollback 時や
 ActivationSnapshot history クエリ中の GC 起因の参照破損を回避する。
 
-## GC process
+## GC プロセス {#gc-process}
 
 GC は **mark-then-sweep** の sequence として実行される。 2 つの phase の間に
 grace window を持つ。
 
-### Mark phase
+### Mark フェーズ {#mark-phase}
 
 mark phase は closed な root 集合から live な参照を辿る。
 
@@ -54,7 +54,7 @@ mark phase は **cursor** で進行する。 各 root class はその record 集
 cursor を進めるので、 mark 中にクラッシュしても最後に commit された cursor から
 再開する。 cursor は audit ordering に合わせて `eventId` で単調である。
 
-### Sweep phase
+### Sweep フェーズ {#sweep-phase}
 
 sweep phase は DataAsset が少なくとも **grace window** の間 `unreferenced` と
 mark されている場合に限り削除する。
@@ -76,21 +76,21 @@ Sweep は cycle ごとに 1 件の `artifact-gc-completed` audit event を発行
 ([Audit Events](./audit-events.md) 参照)。 payload には `markedLive`、
 `markedUnreferenced`、 `swept`、 `bytesReclaimed`、 cursor head が含まれる。
 
-## GC trigger
+## GC トリガー {#gc-trigger}
 
 GC cycle を生む trigger は 3 種類。
 
-### Periodic
+### 定期実行 {#periodic}
 
 - Source: Worker daemon timer
 - Cadence: `TAKOSUMI_ARTIFACT_GC_PERIODIC_HOURS` (default `24`)。 `0` で off。
 
-### Manual
+### 手動実行 {#manual}
 
 - Source: `takosumi artifact gc` CLI / `POST /v1/artifacts/gc`
 - Operator 駆動。 sweep せず mark だけ行う `--dry-run` をサポート。
 
-### Storage threshold
+### ストレージ閾値 {#storage-threshold}
 
 - Source: `artifact-storage-bytes` quota signal
 - kernel-global の storage 使用率が `TAKOSUMI_ARTIFACT_GC_PRESSURE_FRACTION`
@@ -110,7 +110,7 @@ Rationale (0.85 pressure): 0.85 は steady-state における burst write buffer
 後続の enqueue を吸収する。 `artifact-gc-completed` audit event は cycle を
 起こした trigger の和集合を記録する。
 
-## Atomicity
+## アトミック性 {#atomicity}
 
 GC は **idempotent でクラッシュ安全** である。
 
@@ -135,7 +135,7 @@ marker を信頼して sweep に進める短さと、 stale marker を捨てて 
 コストが許容できる長さの均衡点。 grace window (7 日) より短く取り、 marker
 再生成が必ず先行する関係を保つ。
 
-## ActivationSnapshot history export
+## ActivationSnapshot 履歴エクスポート {#activationsnapshot-history-export}
 
 ActivationSnapshot history は Space 単位の activation 状態を operator 向けに
 監査するもの ([Storage Schema](./storage-schema.md) および
@@ -144,7 +144,7 @@ ActivationSnapshot history は Space 単位の activation 状態を operator 向
 コンプライアンスダッシュボード、 外部分析向けにこの history の query 可能 /
 resume 可能な projection を生成する。
 
-### Format
+### フォーマット {#format}
 
 export は **monotonic event id** と **time bucket** で key 付けされた順序付き
 レコード stream である。
@@ -171,7 +171,7 @@ ActivationHistoryEvent:
 v1 export の bucket key は 1 時間に固定される。 より細かい粒度が必要な operator
 は基となる audit event を直接 consume する。
 
-### Resume cursor
+### Resume カーソル {#resume-cursor}
 
 cursor を受け取り、 その id より厳密に後ろの結果を返す。 pagination は forward
 のみで monotonic。 client は最後に見た `eventId` を永続化してそこから resume
@@ -185,7 +185,7 @@ response には `nextEventId` (このページ内の最大 id) と `hasMore` が
 `hasMore: false` の response は応答時点の kernel serialization clock までの
 audit log と整合する。 それ以降の event は次の呼び出しで現れる。
 
-### Filters
+### フィルター {#filters}
 
 - `spaceId`: Path-bound。 この surface から cross-Space export は無い。
 - `groupId`: optional。 GroupHead で結果を絞る。
@@ -196,7 +196,7 @@ Filter の組み合わせは論理積。 `afterEventId` cursor は filter の後
 `afterEventId` は filter 除外された event をスキップするのではなく、 基底の
 event id 空間上を進む。
 
-### Edge cases
+### エッジケース {#edge-cases}
 
 - **Group transition**: a GroupHead pointer move emits exactly one
   `group-head-moved` event with the prior and new ActivationSnapshot ids. A
@@ -209,7 +209,7 @@ event id 空間上を進む。
   distinguish rollback from forward shift. does not root assets through
   cross-Space share records.
 
-### Audit linkage
+### 監査ログ連携 {#audit-linkage}
 
 すべての history record は closed な event-type enum の audit event と 1:1 に
 対応する ([Audit Events](./audit-events.md) 参照)。 history export は新規 event
@@ -217,7 +217,7 @@ event id 空間上を進む。
 これにより audit log を唯一の真実とし、 operator が history export を audit hash
 chain と offline で照合できるようにする。
 
-## Audit events
+## 監査イベント {#audit-events}
 
 2 つの surface は次を発行する。
 
@@ -234,7 +234,7 @@ chain と offline で照合できるようにする。
 は cycle が全 Space をカバーする場合 `null` (kernel-global)、 operator が cycle
 を scope したときは所有 Space の id となる。
 
-## Related architecture notes
+## 関連アーキテクチャ {#related-architecture-notes}
 
 - `docs/reference/architecture/namespace-export-model.md#data-asset-model` —
   DataAsset reachability model and the rationale for the conservative mark

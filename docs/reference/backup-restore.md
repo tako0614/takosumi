@@ -1,4 +1,4 @@
-# Backup and Restore
+# バックアップとリストア {#backup-and-restore}
 
 > このページでわかること: kernel state のバックアップとリストアの手順。
 
@@ -12,13 +12,13 @@ protocol は logical であり physical ではない。 snapshot は kernel の 
 operator は冗長性のために物理 backup を下に重ねてよいが、 Takosumi 適合な
 restore は常にここで定義する logical path を通る。
 
-## Backup の scope
+## Backup のスコープ {#backup-scope}
 
 storage record は 2 クラスに分割される: kernel を回復するために **backup 必須**
 な critical record と、 restore 後に kernel が再構成する **regenerable** な
 record。
 
-### Critical (backup 必須)
+### Critical (backup 必須) {#critical-backup-required}
 
 | Record                       | Why critical                                                          |
 | ---------------------------- | --------------------------------------------------------------------- |
@@ -36,7 +36,7 @@ record。
 backup は非適合。 reserved な将来の record は、対応する RFC
 が受理されたときにのみ必須となる。
 
-### Regenerable (backup 不要)
+### Regenerable (backup 不要) {#regenerable-backup-not-required}
 
 | Record                           | How regenerated                                                            |
 | -------------------------------- | -------------------------------------------------------------------------- |
@@ -50,7 +50,7 @@ operator は restore 後の warm-up を速めるために regenerable record を
 に含めて **もよい** が、 適合な restore
 はそれらが無くても成功しなければならない。
 
-## Backup フォーマット
+## Backup フォーマット {#backup-format}
 
 logical export は kernel 内部 JSON の単一 multi-record stream として生成される。
 各 record は次を含む。
@@ -78,12 +78,12 @@ contract に渡す。
 > の両方に二重実装する保守コストを避け、cross-major recovery は明示的に public
 > restore contract の外側に置く設計にしている。
 
-## Backup の invariant
+## Backup の不変条件 {#backup-invariant}
 
 backup は 3 つの invariant を満たさなければならない。 operator backup
 ツールは構造的にこれらを満たすこと。
 
-### Point-in-time 整合性
+### Point-in-time 整合性 {#point-in-time-integrity}
 
 backup はすべての Space と critical record store に対する backup mode lock
 を取得する。 lock 下で:
@@ -99,7 +99,7 @@ backup duration は per-Space lock TTL で範囲が決まる。 operator が TTL
 を調整する。 default は現実の backup window が単一 TTL
 に収まるよう保守的に設定してある。
 
-### Secret partition の non-re-encryption
+### Secret partition の non-re-encryption {#secret-partition-non-re-encryption}
 
 secret partition record は **そのまま** 、 operator の master key
 で暗号化されたままで export される。 backup ツールは secret material
@@ -110,32 +110,32 @@ secret partition record は **そのまま** 、 operator の master key
   を派生ツリー内に持つ master key) を供給する必要がある。 master key
   が一致しないと secret partition の読み込みステップで restore が失敗する。
 
-### Space 横断の順序保存
+### Space 横断の順序保存 {#cross-space-order-preservation}
 
 audit chain は per-Space ではなく global に rotate する。 backup は global chain
 の順序を保つ: 異なる Space の record が同じ chain segment を共有するとき、
 export stream 内での相対的な emission 順序は chain hash linkage と一致する。
 restore は ingest 中に global chain を検証する。順序外の ingest は早期失敗する。
 
-## Restore のフロー
+## Restore のフロー {#restore-flow}
 
 restore は 6 ステップの sequence。 各ステップは hard gate
 であり、前のステップが検証されるまで次のステップは始められない。
 
-### 1. Storage の初期化
+### 1. ストレージの初期化 {#1-storage-initialization}
 
 ターゲット storage は空、または backup を生成した kernel と同じ schema version
 で初期化されている。 operator は restore 前に schema version を確認する。
 cross-major restore はこのステップで reject される。target は backup
 生成元と同じ kernel major / schema range に属していなければならない。
 
-### 2. Secret master key の注入
+### 2. Secret master key の注入 {#2-secret-master-key-injection}
 
 operator は record ingest の前に master key (または master key 派生材料)
 を供給する。 鍵は operator の secret backend が保持し、 restore ツールは kernel
 が runtime で使うのと同じ factory 経由で読み込む。
 
-### 3. Logical import
+### 3. Logical import {#3-logical-import}
 
 restore ツールは export stream を依存順にトランザクションで ingest する。
 
@@ -152,14 +152,14 @@ restore ツールは export stream を依存順にトランザクションで in
 各 record の identity と内容は ingest 時に encode 済みの形と照合される。
 identity 衝突は restore を abort する。
 
-### 4. Audit chain の検証
+### 4. Audit chain の検証 {#4-audit-chain-verification}
 
 `AuditLog` の ingest が終わったら、restore ツールは chain を genesis から walk
 して各 hash link を検証する。 chain が壊れていれば、何の record も commit せずに
 restore が abort される (失敗時にステップ 3 のトランザクションは rollback
 される)。
 
-### 5. Lock store の再構築
+### 5. Lock store の再構築 {#5-lock-store-reconstruction}
 
 WAL に記録された in-flight operation を reconcile する。 terminal stage
 に達していない各 operation について:
@@ -173,7 +173,7 @@ WAL に記録された in-flight operation を reconcile する。 terminal stag
 cross-process lock store は in-flight operation の metadata から再構築される。
 再構築が完了するまで新規 operation は dispatch されない。
 
-### 6. ActivationSnapshot の再評価
+### 6. ActivationSnapshot の再評価 {#6-activationsnapshot-reevaluation}
 
 backup の activation state は authoritative な intent として復元されるが、
 object ごとの health (`observe` 出力) は backup から復元 **されない** (これは
@@ -184,15 +184,15 @@ regenerable)。 restore 後の最初の observe tick が runtime-agent describe 
 `unknown` として報告される。 operator は復元する object 数に比例した warm-up
 window を見込むべき。
 
-## Restore 後の挙動
+## Restore 後の挙動 {#post-restore-behavior}
 
-### DesiredSnapshot の immutability
+### DesiredSnapshot の immutability {#desiredsnapshot-immutability}
 
 `DesiredSnapshot` record は restore 上で immutable。 backup 時点でまだ snapshot
 化されていなかった desired state 変更は保存されない。 operator は再 authoring
 し再 deploy する。
 
-### In-flight operation の解決
+### In-flight operation の解決 {#in-flight-operation-resolution}
 
 in-flight operation はステップ 5 で記録された recovery mode を通じて resume
 する。 各 Implementation が `recoveryMode = continue` と
@@ -200,21 +200,21 @@ in-flight operation はステップ 5 で記録された recovery mode を通じ
 [Provider Plugins — Implementation Contract](./providers.md#implementation-contract)
 が定める。
 
-### GroupHead と canary の状態
+### GroupHead と canary の状態 {#grouphead-and-canary-state}
 
 `GroupHead` pointer と canary / shadow rollout state は `ActivationSnapshot`
 の一部で、 backup 時点の通りに復元される。 30% で rollout 中だった canary は
 restore 後も 30% 状態のままで、 rollout state machine は次の deploy
 でその点から続行する。
 
-## Restore boundary
+## Restore の境界 {#restore-boundary}
 
 restore は **同じ kernel major version 内でのみ保証される**。 cross-major
 restore は public restore contract ではない。 restore ツールは cross-major 直接
 restore を拒否し、 release-specific private runbook と検証済み evidence
 を要求する closed な `failed_precondition` エラーを発行する。
 
-## Operator surface
+## オペレーター surface {#operator-surface}
 
 現行の public `takosumi` CLI は backup / restore コマンドを公開していない。
 backup と restore は operator 限定の workflow であり、 public operator CLI
@@ -227,7 +227,7 @@ surface が実装され [CLI](./cli.md) で文書化されるまでは、 内部
 両コマンドとも deploy bearer ではなく operator bearer 認証を要求する。
 両コマンドとも下記 audit event を通じて進捗を記録する。
 
-## Audit event
+## 監査イベント {#audit-event}
 
 backup と restore は runtime kernel event と同じ hash chain に専用 audit event
 を発行する。

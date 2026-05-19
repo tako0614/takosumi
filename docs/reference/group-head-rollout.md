@@ -1,4 +1,4 @@
-# GroupHead Rollout
+# GroupHead ロールアウト {#grouphead-rollout}
 
 > このページでわかること: GroupHead pointer / rollout state machine / canary /
 > shadow / audit event。
@@ -6,7 +6,7 @@
 GroupHead は「ある group に現在 traffic が流れている deployment / activation」
 を pin する mutable pointer。 pointer の前進 / 巻き戻しが rollout 本体です。
 
-## Identity
+## アイデンティティ {#identity}
 
 identity は `(spaceId, groupId)` の tuple で Space-local。
 
@@ -15,7 +15,7 @@ identity は `(spaceId, groupId)` の tuple で Space-local。
   共有は起きない
 - GroupHead は deployment / activation 自体ではなく pointer
 
-## GroupHead record schema
+## GroupHead レコードスキーマ {#grouphead-record-schema}
 
 ```yaml
 GroupHead:
@@ -31,7 +31,7 @@ GroupHead:
 pointer は ActivationSnapshot を介して Exposure / traffic 配分に反映され、
 ユーザ traffic の宛先になります。
 
-## Rollout state machine (closed v1 enum, 7 値)
+## Rollout 状態機械 (closed v1 enum, 7 値) {#rollout-state-machine-closed-v1-enum-7}
 
 新 state 追加は `CONVENTIONS.md` §6 RFC が必要です。
 
@@ -40,7 +40,7 @@ idle | preparing | canary-active | shadow-active
      | full-rollout | rolling-back | rolled-back
 ```
 
-### State 意味
+### 各 State の意味 {#state-meaning}
 
 | State           | 意味                                                                                      |
 | --------------- | ----------------------------------------------------------------------------------------- |
@@ -52,7 +52,7 @@ idle | preparing | canary-active | shadow-active
 | `rolling-back`  | rollout の途中失敗で previous pointer に戻している最中。compensate / abort 進行中。       |
 | `rolled-back`   | rollback が完了して previous pointer に固定された terminal observation state。            |
 
-### Transition 規則
+### 遷移規則 {#transition-rules}
 
 - `idle → preparing`: 新 deployment が approve されて apply phase が
   `pre-commit` に到達したとき。
@@ -70,7 +70,7 @@ idle | preparing | canary-active | shadow-active
 - `rolled-back → idle`: operator が状態を ack して新 rollout を許す段階に戻
   したとき (新 deployment が再選択されると `preparing` に進む)。
 
-### 各 state で許可される operation
+### 各 state で許可される operation {#allowed-operations-per-state}
 
 | State           | 新 rollout 開始 | abort / rollback | observe 継続 |
 | --------------- | --------------- | ---------------- | ------------ |
@@ -85,7 +85,7 @@ idle | preparing | canary-active | shadow-active
 新 rollout を開始できるのは `idle` のみで、 多重 rollout 交差を防ぐため他 state
 からの新規開始は拒否されます。
 
-## Canary state
+## Canary 状態 {#canary-state}
 
 canary は traffic split を closed な比率列で進めます。
 
@@ -107,7 +107,7 @@ canary は traffic split を closed な比率列で進めます。
 > state 切替。 3-step は operator review burden と rollback opportunity の均衡
 > 点。
 
-## Shadow state
+## Shadow 状態 {#shadow-state}
 
 shadow は production traffic を新 deployment に複製送付しますが production 側
 挙動は変えません。
@@ -125,7 +125,7 @@ shadow は production traffic を新 deployment に複製送付しますが prod
 - read-side / invocation-side いずれも mirror。 shape 単位で適用範囲が違う場
   合は OperationPlan が固定
 
-## GroupHead update のシリアライズ
+## GroupHead 更新のシリアライズ {#grouphead-update-serialization}
 
 pointer 前進 / 巻き戻し / state transition は同 `(spaceId, groupId)` で直列化
 されます。
@@ -137,7 +137,7 @@ pointer 前進 / 巻き戻し / state transition は同 `(spaceId, groupId)` で
 - lock holder 異常終了時の TTL 失効 / recovery 経路も
   [Cross-Process Locks](./cross-process-locks.md) の規則に従う
 
-## Audit events
+## 監査イベント {#audit-events}
 
 GroupHead 関連の audit event は以下を発行します
 ([Audit Events](./audit-events.md))。
@@ -153,7 +153,7 @@ GroupHead 関連の audit event は以下を発行します
 各 event payload は `groupId` / 旧新 deploymentId / 旧新 ActivationSnapshotId /
 `rolloutState` 旧新を保持します。
 
-## v1 範囲外
+## v1 範囲外 {#out-of-v1-scope}
 
 - blue-green deploy は独立 state として持ちません。 `canary-active` の最終 step
   (100% 切替) を replace-only mutation で表現し、 旧側は ObservationSet 上の
@@ -161,7 +161,7 @@ GroupHead 関連の audit event は以下を発行します
 - 複数 group の同時 coordinated rollout は v1 範囲外。 group 単位で independent
   に進めます。
 
-## Risk との連携
+## Risk との連携 {#risk-integration}
 
 - `traffic-change`: pointer 前進 / canary 比率変更に対し `pre-commit` で発火
 - `rollback-revalidation-required`: `rolling-back` 遷移で compensate path に
@@ -169,7 +169,7 @@ GroupHead 関連の audit event は以下を発行します
 
 詳細は [Risk Taxonomy](./risk-taxonomy.md) 参照。
 
-## Related architecture notes
+## 関連アーキテクチャ {#related-architecture-notes}
 
 関連 architecture notes:��
 

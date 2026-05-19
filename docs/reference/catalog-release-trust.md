@@ -1,4 +1,4 @@
-# CatalogRelease Trust Model
+# CatalogRelease Trust モデル {#catalogrelease-trust-model}
 
 > このページでわかること: CatalogRelease の trust model。 v1 では **operator-
 > pinned sha256 digest + TLS fetch** で fail-closed に検証する。 publisher
@@ -7,7 +7,7 @@
 CatalogRelease は Takosumi v1 で「kind / materializer の release pin」 を Space
 に adopt する単位。
 
-## Trust model summary
+## Trust モデル要約 {#trust-model-summary}
 
 ecosystem trust model は 「TLS + digest pin + 1 signing domain (OIDC)」 で、
 OIDC ID token signing と install launch token signing は両方とも **Takosumi
@@ -28,7 +28,7 @@ pinned sha256 digest** で fail-closed に検証する。
 | Connector      | operator config + TLS                  | runtime-agent |
 | Implementation | digest pin (= artifact / image digest) | runtime-agent |
 
-## Why not publisher signing
+## publisher signing を採用しない理由 {#why-not-publisher-signing}
 
 publisher signing model (= Ed25519 key enrollment / rotation / revocation list)
 は v1 default では不要。 reasons:
@@ -44,9 +44,9 @@ publisher signing model (= Ed25519 key enrollment / rotation / revocation list)
 dynamic registry や multi-mirror catalog が必要になった場合は future RFC で
 publisher signing domain を追加できる。 v1 では採用しない。
 
-## Catalog digest workflow
+## Catalog digest ワークフロー {#catalog-digest-workflow}
 
-### Enroll
+### 登録 {#enroll}
 
 ```bash
 # operator が catalog の digest を取得して pin
@@ -58,23 +58,23 @@ export CATALOG_URL=https://example.com/catalog.json
 export CATALOG_DIGEST=sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
 ```
 
-### Verify (= kernel boot / apply 時)
+### 検証 (= kernel boot / apply 時) {#verify-kernel-boot-apply}
 
 kernel は TLS で `CATALOG_URL` から fetch し、 bytes の sha256 を計算する。
 `CATALOG_DIGEST` と mismatch なら boot / apply を fail-closed で reject する。
 
-### Rotate
+### ローテーション {#rotate}
 
 新 catalog を fetch → 新 digest を operator が pin → kernel reload。 publisher
 側に「key rotation」 という概念は存在しない (= catalog 自体が版を持つ)。
 
-### Revoke
+### 失効 {#revoke}
 
 operator が `CATALOG_DIGEST` を旧版に戻す (= rollback)、 または kernel host
 config から削除する。 publisher 側に「revocation list」 を kernel が問い合わせる
 仕組みは持たない。
 
-## CatalogRelease descriptor
+## CatalogRelease descriptor {#catalogrelease-descriptor}
 
 Space が adopt する descriptor 本体 (= operator-pinned digest と一致する catalog
 body の中身):
@@ -105,7 +105,7 @@ body の中身):
 descriptor body そのものに署名は付かない。 trust の root は **operator が pin
 した sha256 digest** だけ。
 
-## Failure UX
+## 失敗時の UX {#failure-ux}
 
 | Failure                                       | Behavior                                                         |
 | --------------------------------------------- | ---------------------------------------------------------------- |
@@ -114,7 +114,7 @@ descriptor body そのものに署名は付かない。 trust の root は **ope
 | `CATALOG_DIGEST` unset                        | boot reject in `TAKOSUMI_ENVIRONMENT=production`、 dev では warn |
 | catalog body schema invalid                   | boot reject、 audit `catalog-body-invalid`                       |
 
-## Related architecture notes
+## 関連アーキテクチャ {#related-architecture-notes}
 
 - [Supply Chain Trust](./supply-chain-trust.md) — ecosystem-wide 「TLS + digest
   pin + 1 signing domain (OIDC)」 narrative

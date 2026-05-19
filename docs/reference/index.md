@@ -1,8 +1,8 @@
-# Reference
+# リファレンス {#reference}
 
 > このページでわかること: Takosumi v1 リファレンスドキュメントの目次。
 
-## API surfaces
+## API surface {#api-surfaces}
 
 クライアントとサーバーの間で交わされる surface。
 
@@ -23,7 +23,7 @@
 - [Public Spec Source Map](./public-spec-source-map.md) — public surface ごとの
   source of truth / publish URL / drift check
 
-## Lifecycle & execution
+## Lifecycle と実行 {#lifecycle-execution}
 
 phase 進行と実行モデル。
 
@@ -36,7 +36,7 @@ phase 進行と実行モデル。
 - [Readiness Probes](./readiness-probes.md) — readiness DAG and dependency
   propagation
 
-## Policy / Risk / Approval
+## Policy / Risk / Approval {#policy-risk-approval}
 
 allow / deny / approval を扱う closed vocabulary。
 
@@ -48,7 +48,7 @@ allow / deny / approval を扱う closed vocabulary。
 - [Risk Taxonomy](./risk-taxonomy.md) — closed risk enum と stable id
 - [RevokeDebt Model](./revoke-debt.md) — reason / status / aging window
 
-## Storage & observability
+## ストレージと可観測性 {#storage-observability}
 
 永続化レイヤと観測レイヤ。
 
@@ -61,7 +61,7 @@ allow / deny / approval を扱う closed vocabulary。
 - [Drift Detection](./drift-detection.md) — DriftIndex compute / annotation /
   RevokeDebt linkage
 
-## Identity & Access
+## アイデンティティとアクセス {#identity-access}
 
 account-plane identity / billing / RBAC は Takosumi Accounts が所有する。 kernel
 側から見たときの境界を次のページで説明する。
@@ -73,7 +73,7 @@ account-plane identity / billing / RBAC は Takosumi Accounts が所有する。
   credentials
 - [Auth Providers](./auth-providers.md) — auth provider の責務境界
 
-## Security & trust
+## セキュリティと trust {#security-trust}
 
 operator が production 運用するための trust 境界。
 
@@ -83,7 +83,7 @@ operator が production 運用するための trust 境界。
 - [Catalog Release Trust](./catalog-release-trust.md) — signature / publisher
   key enrollment
 
-## Tenant lifecycle
+## Tenant lifecycle {#tenant-lifecycle}
 
 Space provisioning / trial / export / deletion の手順。
 
@@ -94,7 +94,7 @@ Space provisioning / trial / export / deletion の手順。
 - [Tenant Export and Deletion](./tenant-export-deletion.md) — data export /
   Space deletion / hard-delete window
 
-## Operations
+## 運用 {#operations}
 
 運用タスクと制限。
 
@@ -114,7 +114,7 @@ Space provisioning / trial / export / deletion の手順。
 - [Observability Stack](./observability-stack.md) — managed vs self-hosted
   ownership and SLI / SLO targets
 
-## PaaS operations
+## PaaS 運用 {#paas-operations}
 
 multi-tenant PaaS provider 固有の運用 surface。
 
@@ -133,7 +133,7 @@ multi-tenant PaaS provider 固有の運用 surface。
 - [Notification Emission](./notification-emission.md) — channel / delivery /
   dedup / retention
 
-## Catalog & extension
+## Catalog と拡張 {#catalog-extension}
 
 Component kind catalog / provider / artifact 拡張面。
 
@@ -149,7 +149,7 @@ Component kind catalog / provider / artifact 拡張面。
 - [Artifact GC](./artifact-gc.md) — artifact GC / ActivationSnapshot history
   export
 
-## Manifest & wire formats
+## Manifest と wire 形式 {#manifest-wire-formats}
 
 - [Manifest](./manifest.md) — spec / validation rules / expand semantics / data
   model (= `.takosumi.yml` 正本)
@@ -162,12 +162,12 @@ Component kind catalog / provider / artifact 拡張面。
 - [Time and Clock Model](./time-clock-model.md) — wall / monotonic / Lamport /
   clock skew
 
-## Configuration
+## 設定 {#configuration}
 
 - [Environment Variables](./env-vars.md) — kernel / CLI / runtime-agent の v1
   env catalog
 
-## Stability
+## 安定性 {#stability}
 
 reference doc が freeze する v1 wire shape の対象:
 

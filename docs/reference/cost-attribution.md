@@ -1,4 +1,4 @@
-# Cost Attribution
+# コスト帰属 {#cost-attribution}
 
 > このページでわかること: リソースコストの帰属先ルール。
 
@@ -16,7 +16,7 @@ field。 現行 kernel HTTP router は `PATCH /api/internal/v1/spaces/:id` や
 [Kernel HTTP API — Internal control plane routes](./kernel-http-api.md#internal-control-plane-routes)
 参照。 :::
 
-## Attribution metadata model
+## Attribution メタデータモデル {#attribution-metadata-model}
 
 各 Space は optional な `attribution` map を持つ。
 
@@ -36,7 +36,7 @@ operator distribution が kernel 上に Organization を公開するとき、
 形を持ち、 組織内の Space は何も自動継承しない。 組織レベル attribution を
 provisioning 時に Space record にミラーするかは operator distribution が決める。
 
-## Storage
+## ストレージ {#storage}
 
 attribution メタデータは [Storage Schema](./storage-schema.md) に整合し、 Space
 record 上に map field として永続化される。 `customLabels` の key は verbatim
@@ -56,7 +56,7 @@ Per-key value caps:
 上限を超えた値は HTTP `400 Bad Request` で write 時に reject される。 kernel
 は黙って切り詰めない。
 
-## Update API
+## 更新 API {#update-api}
 
 attribution は次の PATCH で更新する。
 
@@ -87,7 +87,7 @@ PATCH /api/internal/v1/spaces/:id
   audit row と telemetry サンプルは、emit 時点で現在だった attribution
   を保持する。 書き換え path は無い。
 
-## Audit propagation
+## 監査ログ伝播 {#audit-propagation}
 
 envelope が `spaceId` を持つすべての audit event
 ([Audit Events](./audit-events.md) 参照) は、 Space の現在の `attribution`
@@ -106,7 +106,7 @@ retention window の間、audit log に残る。 retention が audit row を dro
 するとき attribution も一緒に drop される。 kernel は out-of-band な attribution
 アーカイブを保持しない。
 
-## Telemetry labels
+## テレメトリラベル {#telemetry-labels}
 
 [Telemetry / Metrics](./telemetry-metrics.md) が定義する OTLP と Prometheus
 exporter は、 attribution を Space scope のすべての metric / span に resource
@@ -131,7 +131,7 @@ promote 済み key が閾値を超えたとき、 kernel は `severity: warning`
 event `telemetry-cardinality-warning` を emit し、 operator が閾値を上げるか key
 を promote list から外すまでその key の promotion を停止する。
 
-## Reporting query
+## レポートクエリ {#reporting-query}
 
 - `GET /api/internal/v1/spaces?costCenter=cc:platform`
 - `GET /api/internal/v1/spaces?customerSegment=enterprise`
@@ -141,7 +141,7 @@ kernel は一致する Space record を返す。
 **集約、グルーピング、合計、チャート描画は scope 外**: operator
 は下流パイプラインで audit log を query した Space 集合と join する。
 
-## Privacy
+## プライバシー {#privacy}
 
 attribution メタデータは各 surface の retention window 中、 audit log と
 telemetry export に残る。 operator は個人識別情報を attribution
@@ -153,7 +153,7 @@ attribution 値を redact しない。
 に見える値を持つ attribution 書込みを reject すべき。 kernel は policy
 がそこで動けるよう raw write path を公開する。
 
-## Operator boundary
+## オペレーター境界 {#operator-boundary}
 
 本リファレンスは kernel 側 primitive を定義する: メタデータ field、update
 API、audit 伝播、telemetry promotion contract。 **end-to-end な cost workflow**
@@ -163,7 +163,7 @@ API、audit 伝播、telemetry promotion contract。 **end-to-end な cost workf
 `takos-private/` のような operator distribution と operator が組む billing
 パイプラインに住む。 kernel はメタデータ surface を同梱してそこで止まる。
 
-## Related architecture notes
+## 関連アーキテクチャ {#related-architecture-notes}
 
 - `docs/reference/architecture/operator-boundaries.md` — attribution-tagged
   signal を consume する operator policy 層。

@@ -1,4 +1,4 @@
-# Access Modes
+# アクセスモード {#access-modes}
 
 > このページでわかること: link consumer が export resource
 > とどう関わるかを定める access mode enum (5 値) のセマンティクス。
@@ -93,7 +93,7 @@ contract:
 - 解決後の access mode は、 link 上の明示値か default 由来かにかかわらず
   `ResolutionSnapshot.linkProjections[].access` に記録される
 
-## link 側で `access` 明示が必須となる条件
+## link 側で `access` 明示が必須となる条件 {#link-access}
 
 - export の `safeDefaultAccess` が `null` のとき
 - link が grant 発行 export を射影し、 consuming component kind spec が当該 slot
@@ -104,7 +104,7 @@ contract:
 `access` を明示した場合、 component kind の `outputFields` が unsupported と宣言
 するモードは kernel validation で reject されます。
 
-## 承認 (approval) 無効化との関係
+## 承認 (approval) 無効化との関係 {#approval-invalidation}
 
 link projection の resolved access mode が変わると、 approval invalidation enum
 の **effect-detail change** trigger に該当します。 既存 approval が
@@ -120,7 +120,7 @@ approval invalidation trigger の全リストは [Closed Enums](./closed-enums.m
 を参照。 access mode 変更は実運用上もっとも頻繁な `effect-detail change`
 の原因で、 `read-write` と `admin` を link 上で明示宣言させる理由でもある。
 
-## 関連 architecture notes
+## 関連アーキテクチャ {#related-architecture-notes}
 
 - `docs/reference/architecture/target-model.md` — access mode enum を閉じる
   根拠と `safeDefaultAccess` の選択肢
@@ -129,7 +129,7 @@ approval invalidation trigger の全リストは [Closed Enums](./closed-enums.m
 - `docs/reference/architecture/namespace-export-model.md` — grant 発行 default
   が `admin` を取れない理由と export 側 enforcement
 
-## 関連ページ
+## 関連ページ {#related-pages}
 
 - [Closed Enums](./closed-enums.md)
 - [Kind Catalog](./kind-catalog.md#component-kinds)

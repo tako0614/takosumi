@@ -1,4 +1,4 @@
-# Kernel HTTP API
+# Kernel HTTP API {#kernel-http-api}
 
 > このページでわかること: kernel HTTP surface の全 endpoint と認証境界。
 
@@ -10,7 +10,7 @@ surface (public installer / internal control plane / runtime-agent control RPC)
 > [`packages/kernel/src/api/`](https://github.com/tako0614/takosumi/tree/master/packages/kernel/src/api)
 > の Hono router 群。 role ごとに mount される route 集合が変わります。
 
-## Overview
+## 概要 {#overview}
 
 | Surface           | Path prefix                                                      | 想定 caller                                  |
 | ----------------- | ---------------------------------------------------------------- | -------------------------------------------- |
@@ -22,7 +22,7 @@ surface (public installer / internal control plane / runtime-agent control RPC)
 すべての endpoint は kernel の base URL に対する相対 path です。 credential は
 kernel が保持せず、 operator が env 経由で inject します。
 
-## Authentication
+## 認証 {#authentication}
 
 kernel は v1 で 2 種類の credential を区別し、 credential ごとに作用範囲を
 完全に分離します。
@@ -46,7 +46,7 @@ kernel は v1 で 2 種類の credential を区別し、 credential ごとに作
 - `/health` / `/livez` / `/readyz` / `/capabilities` / `/openapi.json`
   は無認証。
 
-## Public installer routes
+## Public installer routes {#public-installer-routes}
 
 正本: [Installer API](./installer-api.md)。 5 endpoint 全て:
 
@@ -60,7 +60,7 @@ kernel は v1 で 2 種類の credential を区別し、 credential ごとに作
 
 request / response shape は [Installer API](./installer-api.md) 参照。
 
-## Internal control plane routes
+## Internal control plane routes {#internal-control-plane-routes}
 
 `/api/internal/v1/*` は operator-only。 dashboard / automation が caller で、
 public 経由 expose はしません。
@@ -79,7 +79,7 @@ public 経由 expose はしません。
 すべて internal HMAC 署名 (`TAKOSUMI_INTERNAL_API_SECRET`) が必須。 署名失敗は
 401 `unauthenticated`、 actor 拒否は 403 `permission_denied`。
 
-## Runtime-Agent control RPC
+## Runtime-Agent control RPC {#runtime-agent-control-rpc}
 
 runtime-agent process の lifecycle / lease / drain を kernel が制御する internal
 RPC。 すべて `/api/internal/v1/runtime/agents/...` 配下で、 internal HMAC 必須。
@@ -94,7 +94,7 @@ RPC。 すべて `/api/internal/v1/runtime/agents/...` 配下で、 internal HMA
 | POST   | `/api/internal/v1/runtime/agents/:agentId/drain`            | drain を要求                                                |
 | POST   | `/api/internal/v1/runtime/agents/:agentId/gateway-manifest` | gateway URL を Ed25519 で署名してから返す                   |
 
-## Workflow / trigger / hook の境界
+## Workflow / trigger / hook の境界 {#workflow-trigger-hook-boundary}
 
 kernel は workflow / trigger / schedule / declarable hook の HTTP route を持ち
 ません。 build は AppSpec の `component.build` で最小 recipe として宣言し、
@@ -106,7 +106,7 @@ HTTP route.
 CI / webhook / cron / declarable hook 等の運用機能は kernel scope の外。
 operator が別途 CI / orchestrator で実装します。
 
-## Error envelope
+## エラーエンベロープ {#error-envelope}
 
 v1 error envelope は closed shape です。
 
@@ -142,7 +142,7 @@ interface ApiErrorEnvelope {
 `password` / `credential` / `api_key` / `private_key`) を含む field があれば
 自動で `[redacted]` に置換されます。
 
-## Cross-references
+## クロスリファレンス {#cross-references}
 
 - [Installer API](./installer-api.md) — 5 endpoint の完全 spec
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様

@@ -1,4 +1,4 @@
-# Lifecycle Protocol
+# Lifecycle プロトコル {#lifecycle-protocol}
 
 > このページでわかること: deployment lifecycle 6 phase と recovery mode の運用
 > 規則。
@@ -11,7 +11,7 @@ observe` の 6 phase。 phase
 [WAL Stages](./wal-stages.md)、 approval 失効は
 [Approval Invalidation Triggers](./approval-invalidation.md) 参照。
 
-## Cross-process lock
+## クロスプロセスロック {#cross-process-lock}
 
 ::: warning Production では SQL-backed `OperationPlanLockStore` 必須 in-memory
 store は dev / unit test 専用。 複数 kernel pod 配置で lock 保証ができません。
@@ -65,7 +65,7 @@ recovery は internal lifecycle orchestration で駆動:
 single-writer apply tier (deploy traffic を 1 pod に固定する topology) を取り
 ます。
 
-## Lifecycle phases
+## Lifecycle フェーズ {#lifecycle-phases}
 
 v1 では 6 phase を 1:1 に区別します。各 phase は対応する Snapshot を入力 /
 出力として動き、WAL は phase ごとに stage を進めます。
@@ -101,7 +101,7 @@ WAL stage の意味論は
 finalize`、終端
 `abort / skip`)。
 
-## Verify trigger
+## Verify トリガー {#verify-trigger}
 
 `POST /v1/lifecycle/verify` は lifecycle phase に含まれない補助 trigger です。
 WAL stage を進めず、 Snapshot を materialize せず、 connector ごとの credential
@@ -117,7 +117,7 @@ field 仕様は
 [Runtime-Agent API — `POST /v1/lifecycle/verify`](./runtime-agent-api.md#post-v1lifecycleverify)
 参照。
 
-## Recovery modes
+## 回復モード {#recovery-modes}
 
 kernel restart や lock 失効後に `recovery` phase が走るとき、operator は 4 つの
 mode を選択します。
@@ -160,7 +160,7 @@ mode を繰り返しても重複 effect は出ません。
 - apply / destroy commit 呼出には WAL idempotency tuple が
   `PlatformContext.operation` と runtime-agent `idempotencyKey` 経由で渡る。
 
-## Cross-references
+## クロスリファレンス {#cross-references}
 
 - [Lifecycle Phases](./lifecycle-phases.md)
 - [WAL Stages](./wal-stages.md)

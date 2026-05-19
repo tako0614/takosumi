@@ -1,4 +1,4 @@
-# Installer API (`/v1/installations/*`)
+# Installer API (`/v1/installations/*`) {#installer-api-v1-installations}
 
 > このページでわかること: Takosumi の public 5 endpoint の wire spec (= dry-run
 > / apply / rollback)。
@@ -18,7 +18,7 @@ POST /v1/installations/{id}/rollback
 dry-run の結果は response でその場で返り、 apply の結果は Deployment record
 として保存されます。
 
-## Authentication
+## 認証 {#authentication}
 
 | Credential       | Header                          | 適用範囲                   |
 | ---------------- | ------------------------------- | -------------------------- |
@@ -27,11 +27,11 @@ dry-run の結果は response でその場で返り、 apply の結果は Deploy
 token は Takosumi Accounts が actor 単位に発行する scoped credential です。
 Space scope, capability scope は token claims に含まれます。
 
-## `POST /v1/installations/dry-run`
+## `POST /v1/installations/dry-run` {#post-v1-installations-dry-run}
 
 新規 Installation を **作らず** に AppSpec を検証し、 推定変更と費用を返します。
 
-### Request
+### リクエスト
 
 ```json
 {
@@ -51,7 +51,7 @@ Space scope, capability scope は token claims に含まれます。
 | `source.url`  | conditional | `git` 時に required                    |
 | `source.ref`  | conditional | `git` 時に branch / tag / commit       |
 
-### Response
+### レスポンス
 
 ```json
 {
@@ -77,11 +77,11 @@ Space scope, capability scope は token claims に含まれます。
 `expected.commit` / `expected.manifestDigest` を次の apply に渡せば、 source が
 変わっていたら 409 で reject されます (= TOCTOU 防止)。
 
-## `POST /v1/installations`
+## `POST /v1/installations` {#post-v1-installations}
 
 Installation を作成し、 最初の Deployment を実行します。
 
-### Request
+### リクエスト
 
 ```json
 {
@@ -102,7 +102,7 @@ Installation を作成し、 最初の Deployment を実行します。
 し、 そのまま実行します (= 弱保証)。 `expected` を渡すと、 source が変わって
 いれば 409 `failed_precondition`。
 
-### Response
+### レスポンス
 
 ```json
 {
@@ -147,12 +147,12 @@ Installation を作成し、 最初の Deployment を実行します。
 }
 ```
 
-## `POST /v1/installations/{id}/deployments/dry-run`
+## `POST /v1/installations/{id}/deployments/dry-run` {#post-v1-installations-id-deployments-dry-run}
 
 既存 Installation に新 source を当てた場合の変更差分を返します。 新 Deployment
 は **作りません**。
 
-### Request
+### リクエスト
 
 ```json
 {
@@ -166,17 +166,17 @@ Installation を作成し、 最初の Deployment を実行します。
 
 source omit 時は Installation に紐づく前回 source を再 fetch します。
 
-### Response
+### レスポンス
 
 `POST /v1/installations/dry-run` と同じ shape。 加えて `changes[]` に
 `op: update` / `op: delete` も登場します。
 
-## `POST /v1/installations/{id}/deployments`
+## `POST /v1/installations/{id}/deployments` {#post-v1-installations-id-deployments}
 
 既存 Installation に対して新 Deployment を実行します。 build artifact 再生成、
 resource update / create / delete を伴います。
 
-### Request
+### リクエスト
 
 ```json
 {
@@ -192,7 +192,7 @@ resource update / create / delete を伴います。
 }
 ```
 
-### Response
+### レスポンス
 
 ```json
 {
@@ -212,12 +212,12 @@ resource update / create / delete を伴います。
 }
 ```
 
-## `POST /v1/installations/{id}/rollback`
+## `POST /v1/installations/{id}/rollback` {#post-v1-installations-id-rollback}
 
 過去 Deployment を元に **新しい Deployment を作って** 巻き戻します。 historical
 record を改竄せず、 forward-only な monotonic 履歴を維持します。
 
-### Request
+### リクエスト
 
 ```json
 {
@@ -225,7 +225,7 @@ record を改竄せず、 forward-only な monotonic 履歴を維持します。
 }
 ```
 
-### Response
+### レスポンス
 
 ```json
 {
@@ -249,9 +249,9 @@ record を改竄せず、 forward-only な monotonic 履歴を維持します。
 の巻き戻しのみで、 DB の row state / object-store の object 内容 は対象外です。
 data backup / restore は別 feature。
 
-## Entity shapes
+## エンティティ shape {#entity-shapes}
 
-### `Installation`
+### `Installation` {#installation}
 
 この status は takosumi kernel / installer の runtime status です。Takosumi
 operator account-plane の Installation ledger が外部公開する `installing` /
@@ -272,7 +272,7 @@ interface Installation {
 }
 ```
 
-### `Deployment`
+### `Deployment` {#deployment}
 
 ```ts
 interface Deployment {
@@ -305,7 +305,7 @@ interface Deployment {
 }
 ```
 
-## Error envelope
+## エラーエンベロープ {#error-envelope}
 
 ```ts
 interface ApiErrorEnvelope {
@@ -336,7 +336,7 @@ interface ApiErrorEnvelope {
 | `resource_exhausted`  | 413  | build artifact / payload が provider quota / request size 上限超過                                 |
 | `internal_error`      | 500  | unhandled exception                                                                                |
 
-## Cross-references
+## クロスリファレンス {#cross-references}
 
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
 - [Kind Catalog](./kind-catalog.md#component-kinds) — 4 kind の schema /
