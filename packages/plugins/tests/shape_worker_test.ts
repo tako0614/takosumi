@@ -119,13 +119,10 @@ Deno.test("Worker validateSpec rejects non-string env value", () => {
   assert.ok(issues.some((i) => i.path === "$.env"));
 });
 
-Deno.test("Worker validateSpec rejects non-array routes", () => {
-  const issues = specIssues({
-    ...validSpec(),
-    routes: "api.example.com/*",
-  });
-  assert.ok(issues.some((i) => i.path === "$.routes"));
-});
+// `Worker validateSpec rejects non-array routes` removed: routes were
+// dropped from worker.jsonld (Wave J Component contract minimization);
+// the kind validator no longer constrains routes since materializers
+// decide whether to read `spec.routes` as an implementation convention.
 
 Deno.test("Worker validateOutputs accepts complete outputs", () => {
   assert.deepEqual(

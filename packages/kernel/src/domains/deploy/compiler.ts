@@ -115,12 +115,12 @@ export function compileManifestToAppSpec(
         resourceContractRef,
       };
     }),
-    routes: normalizeNamedCollection(
-      expandedManifest.routes ?? {},
-      "route",
-      expansionDescriptors,
-      expandedManifest.compute ?? {},
-    ),
+    // Post Wave J Component contract minimization: kernel does not
+    // compile, iterate, or project routes. Each worker materializer reads
+    // its own `spec.routes` convention if it cares. The AppSpec route
+    // array is always empty so descriptor closure / resolved graph /
+    // provider materializers all see no routes.
+    routes: [],
     outputs: normalizeNamedCollection(
       outputs,
       "output",

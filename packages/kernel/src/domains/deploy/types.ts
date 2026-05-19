@@ -104,6 +104,13 @@ export interface PublicDeployManifest extends Record<string, unknown> {
   version?: string;
   compute?: Record<string, PublicComputeSpec>;
   resources?: Record<string, PublicResourceSpec>;
+  /**
+   * Routes field — retained as a type-level vestige for legacy override
+   * tooling, but the kernel pipeline drops it at `compileManifestToAppSpec`
+   * (= post Wave J Component contract minimization, the AppSpec / kernel
+   * layer doesn't process routes; each worker materializer reads its own
+   * `spec.routes` convention if it cares).
+   */
   routes?: Record<string, PublicRouteSpec> | PublicRouteSpec[];
   /** App-level Output declarations. */
   outputs?: Record<string, PublicOutputSpec> | PublicOutputSpec[];
@@ -133,15 +140,22 @@ export interface AppSpecResource {
   raw: PublicResourceSpec;
 }
 
+/**
+ * Vestigial route record — the kernel pipeline no longer compiles or
+ * iterates routes (= post Wave J Component contract minimization,
+ * routes are a worker-materializer convention, not a kernel concern).
+ * Retained as a type only so downstream provider consumers continue to
+ * compile against `DesiredState.routes` and `DeploymentRoute`. The
+ * compiler always emits an empty `AppSpec.routes`, so this type is
+ * never instantiated in practice.
+ */
 export interface AppSpecRoute {
   name: string;
   to: string;
   host?: string;
   path?: string;
   protocol: string;
-  /** Listener port for protocols that route by port instead of HTTP path. */
   port?: number;
-  /** Runtime target port on the destination component. */
   targetPort?: number;
   methods?: string[];
   source?: string;
@@ -165,6 +179,12 @@ export interface AppSpec {
   source: DeploySourceRef;
   components: AppSpecComponent[];
   resources: AppSpecResource[];
+  /**
+   * Always empty after Wave J Component contract minimization — kernel
+   * does not compile or iterate routes. Retained for type-level
+   * compatibility with descriptor closure / resolved graph / provider
+   * materializers (which all see empty arrays).
+   */
   routes: AppSpecRoute[];
   outputs: AppSpecOutput[];
   env: Record<string, string>;

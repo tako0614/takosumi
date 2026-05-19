@@ -11,7 +11,6 @@ import {
   InMemoryResourceBindingStore,
   InMemoryResourceInstanceStore,
 } from "../domains/resources/mod.ts";
-import { buildEventSubscriptionSwitchPreview } from "../services/event-planner/mod.ts";
 import {
   ResourceOperationService,
   type ResourceOperationStores,
@@ -133,25 +132,10 @@ Deno.test("acceptance P3: private resource egress is denied when runtime policy 
   assert.equal(decision.policy?.id, "policy_worker_deny_private");
 });
 
-Deno.test("acceptance P3: queue event targets stay primary during canary", () => {
-  const preview = buildEventSubscriptionSwitchPreview({
-    spaceId: "space_security",
-    groupId: "worker",
-    manifest: workerManifest(),
-    primaryAppReleaseId: "release_primary",
-    candidateAppReleaseId: "release_canary",
-  });
-
-  const queue = preview.subscriptions.find((subscription) =>
-    subscription.subscriptionId === "jobs"
-  );
-
-  assert.equal(preview.policy.canaryHttpAutoSwitchesQueueConsumers, false);
-  assert.equal(preview.status, "switch-plan-required");
-  assert.equal(queue?.previewTargetAppReleaseId, "release_primary");
-  assert.equal(queue?.requiresExplicitSwitchPlan, true);
-  assert.equal(queue?.reason, "queue-consumer-pinned-during-http-canary");
-});
+// `acceptance P3: queue event targets stay primary during canary` removed
+// alongside the dormant event-planner service (Wave J Component contract
+// minimization). Queue subscription canary semantics are no longer kernel
+// concerns; they belong to the materializer layer if needed.
 
 function createRuntimeSecurityAcceptanceHarness(options?: {
   readonly ids?: readonly string[];

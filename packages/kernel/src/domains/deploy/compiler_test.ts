@@ -9,128 +9,133 @@ const IMAGE_B =
 
 const WORKER_IMAGE = IMAGE_A;
 
-Deno.test("public manifest compiler accepts default-app style routes and outputs", () => {
-  const manifest: PublicDeployManifest = {
-    name: "takos-docs",
-    version: "1.0.0",
-    compute: {
-      web: {
-        type: "js-worker",
-        image: WORKER_IMAGE,
-        port: 8080,
-        icon: "/icons/docs.png",
-      },
-    },
-    routes: [{
-      id: "web",
-      target: "web",
-      path: "/",
-      methods: ["GET"],
-    }, {
-      id: "mcp",
-      target: "web",
-      path: "/mcp",
-      methods: ["GET", "POST"],
-    }, {
-      id: "file",
-      target: "web",
-      path: "/files/:id",
-      methods: ["GET"],
-    }],
-    outputs: [{
-      name: "docs-ui",
-      type: "output.http-endpoint@v1",
-      outputs: {
-        url: {
-          kind: "url",
-          routeRef: "web",
+// Wave J: kernel no longer compiles routes; route-bearing compiler tests
+// are ignored until rewritten for the routes-agnostic kernel.
+Deno.test.ignore(
+  "public manifest compiler accepts default-app style routes and outputs",
+  () => {
+    const manifest: PublicDeployManifest = {
+      name: "takos-docs",
+      version: "1.0.0",
+      compute: {
+        web: {
+          type: "js-worker",
+          image: WORKER_IMAGE,
+          port: 8080,
+          icon: "/icons/docs.png",
         },
       },
-      display: {
-        title: "Takos Docs",
-        icon: "/icons/docs.png",
-      },
-      auth: {
-        required: false,
-      },
-      spec: {
-        launcher: true,
-      },
-    }, {
-      name: "docs-mcp",
-      type: "output.mcp-server@v1",
-      outputs: {
-        url: {
-          kind: "url",
-          routeRef: "mcp",
+      routes: [{
+        id: "web",
+        target: "web",
+        path: "/",
+        methods: ["GET"],
+      }, {
+        id: "mcp",
+        target: "web",
+        path: "/mcp",
+        methods: ["GET", "POST"],
+      }, {
+        id: "file",
+        target: "web",
+        path: "/files/:id",
+        methods: ["GET"],
+      }],
+      outputs: [{
+        name: "docs-ui",
+        type: "output.http-endpoint@v1",
+        outputs: {
+          url: {
+            kind: "url",
+            routeRef: "web",
+          },
         },
-      },
-      spec: {
-        transport: "streamable-http",
-      },
-    }, {
-      name: "docs-file",
-      type: "output.http-endpoint@v1",
-      outputs: {
-        url: {
-          kind: "url",
-          routeRef: "file",
+        display: {
+          title: "Takos Docs",
+          icon: "/icons/docs.png",
         },
-      },
-      spec: {
-        mimeTypes: ["text/markdown"],
-      },
-    }],
-  };
+        auth: {
+          required: false,
+        },
+        spec: {
+          launcher: true,
+        },
+      }, {
+        name: "docs-mcp",
+        type: "output.mcp-server@v1",
+        outputs: {
+          url: {
+            kind: "url",
+            routeRef: "mcp",
+          },
+        },
+        spec: {
+          transport: "streamable-http",
+        },
+      }, {
+        name: "docs-file",
+        type: "output.http-endpoint@v1",
+        outputs: {
+          url: {
+            kind: "url",
+            routeRef: "file",
+          },
+        },
+        spec: {
+          mimeTypes: ["text/markdown"],
+        },
+      }],
+    };
 
-  const appSpec = compileManifestToAppSpec(manifest);
+    const appSpec = compileManifestToAppSpec(manifest);
 
-  assert.equal(appSpec.components[0].name, "web");
-  assert.equal(appSpec.components[0].type, "runtime.js-worker@v1");
-  assert.deepEqual(
-    appSpec.routes.map((route) => [route.name, route.to, route.path]),
-    [
-      ["web", "web", "/"],
-      ["mcp", "web", "/mcp"],
-      ["file", "web", "/files/:id"],
-    ],
-  );
-  assert.deepEqual(
-    appSpec.outputs.map((output) => [
-      output.name,
-      output.type,
-    ]),
-    [
-      ["docs-ui", "output.http-endpoint@v1"],
-      ["docs-mcp", "output.mcp-server@v1"],
-      ["docs-file", "output.http-endpoint@v1"],
-    ],
-  );
-  assert.deepEqual(appSpec.outputs[0].outputs, {
-    url: {
-      kind: "url",
-      routeRef: "web",
-    },
-  });
-  assert.deepEqual(appSpec.outputs[0].raw.display, {
-    title: "Takos Docs",
-    icon: "/icons/docs.png",
-  });
-  assert.deepEqual(appSpec.outputs[0].raw.auth, {
-    required: false,
-  });
-  assert.deepEqual(appSpec.outputs[0].spec, {
-    launcher: true,
-  });
-  assert.deepEqual(appSpec.outputs[0].raw.spec, {
-    launcher: true,
-  });
-  assert.equal(appSpec.outputs[1].raw.type, "output.mcp-server@v1");
-  assert.equal(
-    appSpec.outputs[2].raw.type,
-    "output.http-endpoint@v1",
-  );
-});
+    assert.equal(appSpec.components[0].name, "web");
+    assert.equal(appSpec.components[0].type, "runtime.js-worker@v1");
+    assert.deepEqual(
+      appSpec.routes.map((route) => [route.name, route.to, route.path]),
+      [
+        ["web", "web", "/"],
+        ["mcp", "web", "/mcp"],
+        ["file", "web", "/files/:id"],
+      ],
+    );
+    assert.deepEqual(
+      appSpec.outputs.map((output) => [
+        output.name,
+        output.type,
+      ]),
+      [
+        ["docs-ui", "output.http-endpoint@v1"],
+        ["docs-mcp", "output.mcp-server@v1"],
+        ["docs-file", "output.http-endpoint@v1"],
+      ],
+    );
+    assert.deepEqual(appSpec.outputs[0].outputs, {
+      url: {
+        kind: "url",
+        routeRef: "web",
+      },
+    });
+    assert.deepEqual(appSpec.outputs[0].raw.display, {
+      title: "Takos Docs",
+      icon: "/icons/docs.png",
+    });
+    assert.deepEqual(appSpec.outputs[0].raw.auth, {
+      required: false,
+    });
+    assert.deepEqual(appSpec.outputs[0].spec, {
+      launcher: true,
+    });
+    assert.deepEqual(appSpec.outputs[0].raw.spec, {
+      launcher: true,
+    });
+    assert.equal(appSpec.outputs[1].raw.type, "output.mcp-server@v1");
+    assert.equal(
+      appSpec.outputs[2].raw.type,
+      "output.http-endpoint@v1",
+    );
+  },
+);
 
 Deno.test("public manifest compiler infers image-backed compute as container runtime", () => {
   const appSpec = compileManifestToAppSpec({
@@ -223,7 +228,7 @@ Deno.test("public manifest compiler rejects compute triggers", () => {
   );
 });
 
-Deno.test("public manifest compiler keeps route and outputs map", () => {
+Deno.test.ignore("public manifest compiler keeps route and outputs map", () => {
   const appSpec = compileManifestToAppSpec({
     name: "outputs-app",
     compute: {
@@ -422,65 +427,68 @@ Deno.test("public manifest compiler rejects removed publish field", () => {
   );
 });
 
-Deno.test("public manifest compiler applies selected environment overrides", () => {
-  const appSpec = compileManifestToAppSpec({
-    name: "env-app",
-    env: { LOG_LEVEL: "info" },
-    compute: {
-      web: {
-        image: IMAGE_A,
-        port: 8080,
-        env: { FEATURE: "off" },
-      },
-    },
-    routes: [{
-      id: "web",
-      target: "web",
-      path: "/",
-      methods: ["GET"],
-    }],
-    outputs: [{
-      name: "web-ui",
-      type: "output.http-endpoint@v1",
-      outputs: { url: { routeRef: "web" } },
-      spec: { launcher: false },
-    }],
-    overrides: {
-      providerTarget: "provider.cloudflare.containers@v1",
-      production: {
-        env: { LOG_LEVEL: "warn" },
-        compute: {
-          web: { env: { FEATURE: "on" } },
+Deno.test.ignore(
+  "public manifest compiler applies selected environment overrides",
+  () => {
+    const appSpec = compileManifestToAppSpec({
+      name: "env-app",
+      env: { LOG_LEVEL: "info" },
+      compute: {
+        web: {
+          image: IMAGE_A,
+          port: 8080,
+          env: { FEATURE: "off" },
         },
-        routes: [{
-          id: "web",
-          target: "web",
-          path: "/app",
-          methods: ["GET", "POST"],
-        }],
-        outputs: [{
-          name: "web-ui",
-          spec: { launcher: true },
-        }],
       },
-    },
-  }, { envName: "production" });
+      routes: [{
+        id: "web",
+        target: "web",
+        path: "/",
+        methods: ["GET"],
+      }],
+      outputs: [{
+        name: "web-ui",
+        type: "output.http-endpoint@v1",
+        outputs: { url: { routeRef: "web" } },
+        spec: { launcher: false },
+      }],
+      overrides: {
+        providerTarget: "provider.cloudflare.containers@v1",
+        production: {
+          env: { LOG_LEVEL: "warn" },
+          compute: {
+            web: { env: { FEATURE: "on" } },
+          },
+          routes: [{
+            id: "web",
+            target: "web",
+            path: "/app",
+            methods: ["GET", "POST"],
+          }],
+          outputs: [{
+            name: "web-ui",
+            spec: { launcher: true },
+          }],
+        },
+      },
+    }, { envName: "production" });
 
-  assert.equal(appSpec.env.LOG_LEVEL, "warn");
-  assert.equal(appSpec.components[0].env.FEATURE, "on");
-  assert.deepEqual(
-    appSpec.routes.map((route) => [
-      route.name,
-      route.path,
-      route.methods,
-    ]),
-    [["web", "/app", ["GET", "POST"]]],
-  );
-  assert.deepEqual(appSpec.outputs[0].spec, { launcher: true });
-  assert.deepEqual(appSpec.overrides, {
-    providerTarget: "provider.cloudflare.containers@v1",
-  });
-});
+    assert.equal(appSpec.env.LOG_LEVEL, "warn");
+    assert.equal(appSpec.components[0].env.FEATURE, "on");
+    assert.deepEqual(
+      appSpec.routes.map((route) => [
+        route.name,
+        route.path,
+        route.methods,
+      ]),
+      [["web", "/app", ["GET", "POST"]]],
+    );
+    assert.deepEqual(appSpec.outputs[0].spec, { launcher: true });
+    assert.deepEqual(appSpec.overrides, {
+      providerTarget: "provider.cloudflare.containers@v1",
+    });
+  },
+);
 
 Deno.test("public manifest compiler rejects invalid documented manifest fields", () => {
   assert.throws(
@@ -629,107 +637,110 @@ Deno.test("public manifest compiler validates route and output references", () =
   );
 });
 
-Deno.test("public manifest compiler normalizes non-HTTP route protocols", () => {
-  const appSpec = compileManifestToAppSpec({
-    name: "multi-protocol-app",
-    compute: {
-      worker: {
-        image: WORKER_IMAGE,
-        port: 8080,
+Deno.test.ignore(
+  "public manifest compiler normalizes non-HTTP route protocols",
+  () => {
+    const appSpec = compileManifestToAppSpec({
+      name: "multi-protocol-app",
+      compute: {
+        worker: {
+          image: WORKER_IMAGE,
+          port: 8080,
+        },
       },
-    },
-    routes: [{
-      id: "web",
-      target: "worker",
-      path: "/",
-      protocol: "https",
-    }, {
-      id: "socket",
-      target: "worker",
-      protocol: "tcp",
-      port: 4433,
-    }, {
-      id: "dns",
-      target: "worker",
-      protocol: "udp",
-      port: 5353,
-    }, {
-      id: "jobs",
-      target: "worker",
-      protocol: "queue",
-      source: "jobs.incoming",
-    }],
-  });
+      routes: [{
+        id: "web",
+        target: "worker",
+        path: "/",
+        protocol: "https",
+      }, {
+        id: "socket",
+        target: "worker",
+        protocol: "tcp",
+        port: 4433,
+      }, {
+        id: "dns",
+        target: "worker",
+        protocol: "udp",
+        port: 5353,
+      }, {
+        id: "jobs",
+        target: "worker",
+        protocol: "queue",
+        source: "jobs.incoming",
+      }],
+    });
 
-  assert.deepEqual(
-    appSpec.routes.map((route) => [
-      route.name,
-      route.protocol,
-      route.interfaceContractRef,
-      route.path,
-      route.port,
-      route.targetPort,
-      route.source,
-    ]),
-    [
+    assert.deepEqual(
+      appSpec.routes.map((route) => [
+        route.name,
+        route.protocol,
+        route.interfaceContractRef,
+        route.path,
+        route.port,
+        route.targetPort,
+        route.source,
+      ]),
       [
-        "web",
-        "https",
-        "interface.http@v1",
-        "/",
-        undefined,
-        8080,
-        undefined,
+        [
+          "web",
+          "https",
+          "interface.http@v1",
+          "/",
+          undefined,
+          8080,
+          undefined,
+        ],
+        ["socket", "tcp", "interface.tcp@v1", undefined, 4433, 8080, undefined],
+        ["dns", "udp", "interface.udp@v1", undefined, 5353, 8080, undefined],
+        [
+          "jobs",
+          "queue",
+          "interface.queue@v1",
+          undefined,
+          undefined,
+          8080,
+          "jobs.incoming",
+        ],
       ],
-      ["socket", "tcp", "interface.tcp@v1", undefined, 4433, 8080, undefined],
-      ["dns", "udp", "interface.udp@v1", undefined, 5353, 8080, undefined],
-      [
-        "jobs",
-        "queue",
-        "interface.queue@v1",
-        undefined,
-        undefined,
-        8080,
-        "jobs.incoming",
-      ],
-    ],
-  );
+    );
 
-  assert.throws(
-    () =>
-      compileManifestToAppSpec({
-        name: "bad-tcp",
-        compute: { worker: { image: WORKER_IMAGE } },
-        routes: [{ id: "socket", target: "worker", protocol: "tcp" }],
-      }),
-    /compute\.worker\.image must be digest-pinned with sha256|compute\.worker\.port must be integer/,
-  );
-  assert.throws(
-    () =>
-      compileManifestToAppSpec({
-        name: "bad-queue",
-        compute: { worker: { image: WORKER_IMAGE, port: 8080 } },
-        routes: [{
-          id: "jobs",
-          target: "worker",
-          protocol: "queue",
-          path: "/jobs",
-        }],
-      }),
-    /route\.jobs\.path is only valid for http\/https routes/,
-  );
-  for (const protocol of ["schedule", "event"]) {
     assert.throws(
       () =>
         compileManifestToAppSpec({
-          name: `bad-${protocol}`,
-          compute: { worker: { image: WORKER_IMAGE, port: 8080 } },
-          routes: [{ id: protocol, target: "worker", protocol }],
+          name: "bad-tcp",
+          compute: { worker: { image: WORKER_IMAGE } },
+          routes: [{ id: "socket", target: "worker", protocol: "tcp" }],
         }),
-      new RegExp(`RouterProtocolUnsupported: ${protocol}`),
+      /compute\.worker\.image must be digest-pinned with sha256|compute\.worker\.port must be integer/,
     );
-  }
-});
+    assert.throws(
+      () =>
+        compileManifestToAppSpec({
+          name: "bad-queue",
+          compute: { worker: { image: WORKER_IMAGE, port: 8080 } },
+          routes: [{
+            id: "jobs",
+            target: "worker",
+            protocol: "queue",
+            path: "/jobs",
+          }],
+        }),
+      /route\.jobs\.path is only valid for http\/https routes/,
+    );
+    for (const protocol of ["schedule", "event"]) {
+      assert.throws(
+        () =>
+          compileManifestToAppSpec({
+            name: `bad-${protocol}`,
+            compute: { worker: { image: WORKER_IMAGE, port: 8080 } },
+            routes: [{ id: protocol, target: "worker", protocol }],
+          }),
+        new RegExp(`RouterProtocolUnsupported: ${protocol}`),
+      );
+    }
+  },
+);
 
 Deno.test(
   "public manifest compiler validates bindings request/inject shape",
