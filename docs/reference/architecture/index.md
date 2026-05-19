@@ -25,24 +25,21 @@ AppSpec + Space context
 
 ## Public v1 AppSpec の語彙 {#public-v1-appspec-words}
 
-public AppSpec の語彙に属するのは次の語のみである。
+public AppSpec の top-level 語彙は次の 4 field のみである。
 
 ```text
 apiVersion
 kind
 metadata
 components
-interfaces
-permissions
-build
-use
-routes
 ```
 
 AppSpec は closed vocabulary である。未知の top-level field は validation で
 失敗する。Public v1 の deploy intent は component kind からなる `components`
-graph として表現される。provider id、artifact reference、binding、route、 custom
-domain は contract package と operator policy を通じて解決される。 任意の
+graph として表現される。component 内部の `kind` / `spec` / `publish` / `listen`
+/ `build` の 5 field が component contract を形作り、provider id、artifact
+reference、binding、route、custom domain は kind の open `spec:` 内 / 別 kind の
+namespace pub/sub / materializer convention のいずれかで解決される。任意の
 descriptor URL は public AppSpec の入力ではない。
 
 `Space` は AppSpec field ではない。actor auth、API route、operator context、

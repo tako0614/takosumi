@@ -49,8 +49,9 @@ components:
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    routes:
-      - web.example.com/*
+    spec:
+      routes:
+        - web.example.com/*
 ```
 
 workflow / cron / hook は tenant runtime snapshot に含めません。必要な
@@ -76,8 +77,9 @@ components:
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs
-    routes:
-      - api.example.com/*
+    spec:
+      routes:
+        - api.example.com/*
 ```
 
 他 component の output は **`publish` / `listen`** edge で worker に渡します。
@@ -155,10 +157,8 @@ capability の詳細は target ごとに異なります。 reference Takos distr
 
 ## Workers バックエンドのリファレンス materialization {#workers-backend-reference-materialization}
 
-::: details tracked reference Workers backend の実装詳細
-
-このセクションは Cloudflare Workers backend に固有の materialization detail
-です。Core 用語との対応は
+このセクションは Cloudflare Workers backend に固有の materialization detail です
+(= tracked reference Workers backend の実装詳細)。Core 用語との対応は
 [Workers backend implementation note](../workers-backend.md) を参照。
 
 - `worker` は Cloudflare Workers runtime で materialize される
@@ -167,5 +167,3 @@ capability の詳細は target ごとに異なります。 reference Takos distr
 - tenant routing は dispatch worker と route projection cache に従う
 - provider operation の進捗は `Deployment.conditions[]` と ProviderObservation
   stream に記録される
-
-:::

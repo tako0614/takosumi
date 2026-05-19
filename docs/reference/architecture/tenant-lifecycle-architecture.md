@@ -59,8 +59,11 @@ journal される。
   kernel は「半端な Space を放置する方が安全」とは仮定しない。partial
   provisioning でも顧客データ (audit chain genesis、secret partition) を保持
   しうるからである。
-- **`Idempotency-Key` は必須。** これは client 側 retry が同じ intent 下で別の
-  id で 2 番目の Space を mint することを防ぐ。
+- **replay 抑制は source pin + expected digest。** client 側 retry が同じ intent
+  下で別の id で 2 番目の Space を mint することを防ぐため、kernel は
+  `source.commit` (= 期待 commit SHA) と `expectedDigest` (= 期待 manifest
+  digest) を required input として受け取り、不一致は 409 で fail-closed する (=
+  AppSpec installer surface に `Idempotency-Key` header は持たない)。
 
 この分解は v1 で closed である。新規ステージを追加するには `CONVENTIONS.md` §6
 RFC を要する。ステージを追加すると、operator が既に考慮している failure surface
@@ -157,19 +160,16 @@ kernel が同梱しないもの:
 
 これらは kernel primitive の上に組み立てられるが operator の関心事である。
 
-## 関連 reference ドキュメント
-
-- [Tenant Provisioning](../tenant-provisioning.md)
-- [Trial Spaces](../trial-spaces.md)
-- [Tenant Export and Deletion](../tenant-export-deletion.md)
-- [Compliance Retention](../compliance-retention.md)
-- [Storage Schema](../storage-schema.md)
-- [Backup and Restore](../backup-restore.md)
-
-## クロスリファレンス
+## クロスリファレンス {#cross-references}
 
 - [Space Model](./space-model.md)
 - [Operator Boundaries](./operator-boundaries.md)
 - [PaaS Provider Architecture](./paas-provider-architecture.md)
 - [Identity and Access Architecture](./identity-and-access-architecture.md)
 - [PaaS Operations Architecture](./paas-operations-architecture.md)
+- [Tenant Provisioning](../tenant-provisioning.md)
+- [Trial Spaces](../trial-spaces.md)
+- [Tenant Export and Deletion](../tenant-export-deletion.md)
+- [Compliance Retention](../compliance-retention.md)
+- [Storage Schema](../storage-schema.md)
+- [Backup and Restore](../backup-restore.md)

@@ -137,7 +137,7 @@ worker component は routing layer で独自の hostname を持つ:
 Kernel ({KERNEL_DOMAIN}):
   /v1/installations/*     → installer public API
   /api/internal/v1/*      → internal control plane
-  /healthz                → health check
+  /health                 → health probe (/livez, /readyz と同層、unauthenticated)
 
 Installation worker (routing layer で hostname 割り当て):
   1. auto:          {space-slug}-{installation-slug}.{TENANT_BASE_DOMAIN}
@@ -203,7 +203,7 @@ events table) は kernel DB を使う。
 - [Manifest](../manifest.md#data-model)
 - [Provider Plugins — Resolution Algorithm](../providers.md#resolution-algorithm)
 
-## 次に読む
+## 次に読む {#whats-next}
 
 - [Control Plane](./control-plane.md) — kernel が serve する control API と
   Installation lifecycle の境界

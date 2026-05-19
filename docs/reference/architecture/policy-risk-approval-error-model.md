@@ -51,6 +51,7 @@ namespace-scope-resolution:
   Is the export visible inside this Space?
 
 cross-space-link:
+  May this Link cross Space boundaries via an operator-approved share?
 
 space-secret-projection:
   May this Space receive the secret projection?
@@ -90,8 +91,9 @@ transform-unapproved
 [Link and Projection Model — Collision rules](./link-projection-model.md).
 `transform-unapproved` is raised by
 [Data Asset Model — Transform approval enforcement](./namespace-export-model.md#transform-approval-enforcement).
-`stale-export` is raised when an operator-owned export becomes stale. raised
-when an operation queues a RevokeDebt record per
+`stale-export` is raised when an operator-owned export becomes stale and a
+deployment still depends on it. `revoke-debt-created` is raised when an
+operation queues a RevokeDebt record per
 [Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model).
 
 ## Approval ライフサイクル {#approval-lifecycle}
@@ -199,7 +201,7 @@ expired     expiresAt 経過。再 propose で新規 approval が必要
 approval を発行** し、`riskItemIds[]` に該当 Risk を列挙します。Risk ごと に
 individual approval を切らない理由は、approver が Risk 同士の relation
 (secret-projection と grant が同 component に属する 等) を横断的に判断
-する必要があるためです。closed enum 19 entries の Risk はすべてこの batching
+する必要があるためです。closed enum 18 entries の Risk はすべてこの batching
 で処理されます。
 
 ### 無効化の伝播 {#invalidation-propagation}
@@ -227,7 +229,7 @@ model の Error fix-hint 分類 (safeFix / requiresPolicyReview / operatorFix)
   (approval が要る昇格) が、`commit` / `post-commit` / `observe` / `finalize`
   stage で `operatorFix[]` (operator 介入が要る) が生成されます。 詳細 stage
   定義は
-  [OperationPlan / Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
+  [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
   を参照してください。
 - access escalation / external link 拡張 / network egress 拡張は **safeFix
   に載せない** という invariant は API envelope の自動分類でも維持されます。
@@ -236,7 +238,7 @@ model の Error fix-hint 分類 (safeFix / requiresPolicyReview / operatorFix)
 
 - Architecture: [API Surface Architecture](./api-surface-architecture.md)
 - Architecture:
-  [OperationPlan / Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
+  [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 - Architecture: [Space Model](./space-model.md)
 - Architecture:
   [Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)

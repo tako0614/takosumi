@@ -14,18 +14,13 @@ kernel 側の trust は次の範囲に限られる:
 - ProviderPlugin / runtime-agent contract
 - Deployment evidence / WAL / audit / observation 記録
 
-## 関連ページ
-
-- `takosumi-cloud/docs/architecture/takosumi-accounts.md`
-- `takosumi-cloud/docs/accounts-service.md`
-
 ## Actor / Organization モデル {#actor--organization-model}
 
 Actor / Organization / membership / account ownership / billing ownership は
 takosumi kernel が持たない。 これらは operator account plane が所有する
 (reference 実装は `takosumi-cloud/` の Takosumi Accounts)。
 
-### モデル
+責務分割:
 
 - takosumi kernel は AppSpec installer lifecycle を処理し、Deployment evidence
   を記録する。
@@ -35,8 +30,8 @@ takosumi kernel が持たない。 これらは operator account plane が所有
 - Deployment apply は `/v1/installations/*` の installer lifecycle 経由で行う。
   ownership は Installation ledger に記録される。
 
-### Actor / Organization モデル — 関連ページ {#actor--organization-model--関連ページ}
+## クロスリファレンス {#cross-references}
 
-- `takosumi-cloud/docs/accounts-service.md`
 - `takosumi-cloud/docs/architecture/takosumi-accounts.md`
+- `takosumi-cloud/docs/accounts-service.md`
 - `docs/platform/app-installation.md`

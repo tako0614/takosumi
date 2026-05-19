@@ -14,8 +14,8 @@ It contains:
 ```text
 declared component resource intents (= AppSpec components[*].kind)
 provider ids
-AppSpec use-edge dependency provenance
-link intents derived from component kind use-edge bindings
+AppSpec publish/listen edge dependency provenance
+link intents derived from component kind publish/listen bindings
 exposure intents derived from route-bearing resources
 data asset intents from resource specs
 space id from deploy context

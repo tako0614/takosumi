@@ -189,8 +189,14 @@ kernel が同梱しないもの:
 - メールテンプレート、Slack bot、SMS レンダリング、in-app バナーコンポーネント。
 - incident / notification の顧客側 acknowledge / mute UI。
 
-## 関連 reference ドキュメント
+## クロスリファレンス {#cross-references}
 
+- [Space Model](./space-model.md)
+- [Operator Boundaries](./operator-boundaries.md)
+- [PaaS Provider Architecture](./paas-provider-architecture.md)
+- [Identity and Access Architecture](./identity-and-access-architecture.md)
+- [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md)
+- [Operational Hardening Checklist](./operational-hardening-checklist.md)
 - [Quota Tiers](../quota-tiers.md)
 - [Quota and Rate Limit](../quota-rate-limit.md)
 - [Cost Attribution](../cost-attribution.md)
@@ -201,12 +207,3 @@ kernel が同梱しないもの:
 - [Notification Emission](../notification-emission.md)
 - [Audit Events](../audit-events.md)
 - [Telemetry / Metrics](../telemetry-metrics.md)
-
-## クロスリファレンス
-
-- [Space Model](./space-model.md)
-- [Operator Boundaries](./operator-boundaries.md)
-- [PaaS Provider Architecture](./paas-provider-architecture.md)
-- [Identity and Access Architecture](./identity-and-access-architecture.md)
-- [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md)
-- [Operational Hardening Checklist](./operational-hardening-checklist.md)

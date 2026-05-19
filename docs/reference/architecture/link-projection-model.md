@@ -3,7 +3,7 @@
 > このページでわかること: link と projection のモデル定義。
 
 Component kind が定義する resource 配線は Link intent を作る。current AppSpec
-では `components.<name>.use` edge から発生する。Link は 1 つの Space の中で
+では `components.<name>.listen` edge から発生する。Link は 1 つの Space の中で
 consumer slot を producer output または ExportDeclaration snapshot に接続する。
 
 ## Link レコード {#link-record}

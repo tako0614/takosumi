@@ -54,7 +54,7 @@ Object:
   address: object:api
   lifecycleClass: managed
   kind: worker
-  provider: "@takos/cloudflare-workers"
+  provider: "@takos/takosumi-cloudflare-providers"
   targetDescriptorDigest: sha256:...
   owner:
     kind: deployment

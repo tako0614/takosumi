@@ -59,7 +59,9 @@ provider side effect の前に fail-closed で失敗し、post-commit verificati
 registry / multi-mirror の用途には将来 RFC で publisher-signing domain
 が追加されうるが、v1 の一部ではない (詳細は
 [Supply Chain Trust § 6](../supply-chain-trust.md#catalog-release-trust))。
-catalog 宣言された実行可能 hook package。
+CatalogRelease は宣言メタデータと digest のみを運び、kernel は catalog 宣言の
+中に実行可能 hook package を含めても **実行しない** (= 実行可能 hook は
+runtime-agent / operator orchestrator 側の責務)。
 
 ## Space への割り当て {#space-assignment}
 

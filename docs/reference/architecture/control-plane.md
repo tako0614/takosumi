@@ -57,7 +57,7 @@ interpolation materialization contract, and public Deployment status route are
 not current control-plane surfaces. Historical references should be read as
 pre-AppSpec notes only.
 
-## 関連 {#related}
+## クロスリファレンス {#cross-references}
 
 - [Installer API](../installer-api.md)
 - [Kernel HTTP API](../kernel-http-api.md)

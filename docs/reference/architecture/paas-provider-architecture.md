@@ -92,11 +92,11 @@ kernel 自身は universal signing model を運用せず、各境界が必要最
 canonical な chain of custody は [Supply Chain Trust](../supply-chain-trust.md)
 を参照。下表は kernel が触れる step を要約する。
 
-```text
-CatalogRelease       operator-pinned sha256 digest (CATALOG_DIGEST), TLS fetch + digest verify
-Connector            operator-installed, identified by operator config, kernel verifies registration via deploy token
-Implementation       provider/runtime-agent contract, registration is operator-policy-gated (no kernel-side signing)
-```
+| step           | trust mechanism                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------------- |
+| CatalogRelease | operator-pinned sha256 digest (`CATALOG_DIGEST`), TLS fetch + digest verify                       |
+| Connector      | operator-installed, identified by operator config, kernel verifies registration via deploy token  |
+| Implementation | provider / runtime-agent contract, registration is operator-policy-gated (no kernel-side signing) |
 
 trust 規則:
 
@@ -207,7 +207,18 @@ notification、チケットシステム、SLA credit 公式、admin エスカレ
 はこれらの primitive の上に組み立てられるが、Takosumi の外側 (典型 的には
 `takos-private/` または別の operator 所有 distribution) に住む。
 
-## クロスリファレンス
+## Materializer 形式 {#materializer-forms}
+
+Materializer は `KernelPlugin | InlineMaterializer` の union form。 cloud
+provider package は `KernelPlugin` factory を export し、 operator は
+`createPaaSApp({ plugins: [...] })` の plain array に attach する (= Vite plugin
+pattern)。 operator が inline 関数で書くこともでき、その場合は
+`createPaaSApp({ materializers: [...] })` で渡す。 plugin convention は実装の 1
+形態に過ぎず、 contract (= `provides[]` で kind URI を宣言、 `apply` / `destroy`
+
+- lifecycle hooks を実装) を満たせば形は任意である。
+
+## クロスリファレンス {#cross-references}
 
 - [Operator Boundaries](./operator-boundaries.md)
 - [Space Model](./space-model.md)
@@ -215,7 +226,7 @@ notification、チケットシステム、SLA credit 公式、admin エスカレ
 - [Tenant Lifecycle Architecture](./tenant-lifecycle-architecture.md)
 - [PaaS Operations Architecture](./paas-operations-architecture.md)
 - [Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
-- [Operation Plan and Write-ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
+- [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 - [Operational Hardening Checklist](./operational-hardening-checklist.md)
 - Reference: [CLI](../cli.md), [Kernel HTTP API](../kernel-http-api.md),
   [Lifecycle](../lifecycle.md)
