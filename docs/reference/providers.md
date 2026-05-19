@@ -2,11 +2,24 @@
 
 > このページでわかること: bundled provider plugin の一覧と対応 component kind。
 
-**provider plugin** は AppSpec の
-[component kind](./kind-catalog.md#component-kinds) を具体的な cloud / local
-backend 上に materialize する。 各 plugin は実装する kind、サポートする
-capability vocabulary、 kernel が OperationPlan 実行中に呼ぶ apply / destroy /
+**provider plugin** (= `KernelPlugin` materializer、
+[Connector Contract](./connector-contract.md) の Connector consumer plugin
+と同形態の factory) は AppSpec の
+[component kind](./kind-catalog.md#component-kinds) を 具体的な cloud / local
+backend 上に materialize する。 各 plugin は実装する kind、 サポートする
+capability vocabulary、 kernel が OperationPlan 実行中に 呼ぶ apply / destroy /
 status lifecycle を宣言する。
+
+> **用語の区別**: 本ページは **provider id** と **package id** を別概念として
+> 扱う。
+>
+> - **provider id** (= 各 `KernelPlugin` factory が宣言する安定 id、 例:
+>   `@takos/aws-s3` / `@takos/cloudflare-workers`) は AppSpec の provider hint /
+>   Deployment evidence / audit に乗る factory 内部識別子。
+> - **package id** (= JSR install path、 例: `@takos/takosumi-aws-providers`) は
+>   operator が `import` で取り込む JSR scope。 1 package が複数 provider id を
+>   export する (= AWS package が `@takos/aws-s3` / `@takos/aws-fargate` /
+>   `@takos/aws-rds` / `@takos/aws-route53` を export する 等)。
 
 Takosumi は out of the box で **21 個の provider plugin** を ship する。 20 は
 default で配線され、1 個 (`@takos/deno-deploy`) は opt-in。 plugin は paper-thin
@@ -53,10 +66,12 @@ coordination を要する。 既存 reserved prefix 内では、 `takos.*` / `sy
 
 ## Bundled provider カタログ {#bundled-provider-catalog}
 
-同梱されている 21 個の provider をクラウド別にグルーピング。 すべて
-`@takos/<cloud>-*` 形式の id を持つ。 component kind と capability 集合は
-`packages/<cloud>-providers/src/<kind>-<provider>.ts` の各 factory と完全に
-一致する。 **extension policy** 列は、サードパーティが標準の provider PR
+同梱されている 21 個の provider をクラウド別にグルーピング。 表内の **provider
+id** 列は各 `KernelPlugin` factory が宣言する安定 id (= `@takos/<cloud>-<kind>`
+形式) で、 該当 factory を export する package id (=
+`@takos/takosumi-<cloud>-providers`) と区別する。 component kind と capability
+集合は `packages/<cloud>-providers/src/<kind>-<provider>.ts` の各 factory と
+完全に一致する。 **extension policy** 列は、サードパーティが標準の provider PR
 フローで capability を追加してよいか (extensible)、 あるいは in-tree provider
 内で capability 集合が閉じているか (closed-within-provider) を示す。
 
@@ -633,8 +648,11 @@ status enum / effect bound / idempotency 規則を満たす限り適合します
 - `CONVENTIONS.md` §6 RFC (takosumi repo root) — 新 reserved capability prefix
   の提案プロセス、 component-kind capability union への変更プロセス。
 
-## 関連ページ
+## 次に読む {#next-steps}
 
-- [Kind Catalog](./kind-catalog.md#component-kinds)
-- [Connector Contract](./connector-contract.md)
-- [Access Modes](./access-modes.md)
+- [Kind Catalog](./kind-catalog.md#component-kinds) — provider が materialize
+  する 4 kind の spec / publishes / listens / outputs
+- [Connector Contract](./connector-contract.md) — provider が `connector:<id>`
+  に lifecycle dispatch する際の wire envelope
+- [Extending Takosumi](../extending.md) — 自前 provider package を JSR publish
+  する手順

@@ -37,7 +37,8 @@ interface SpaceExportResponse {
 }
 ```
 
-`Idempotency-Key` header は必須。同 key の再送は同 response を返す。
+replay 抑制は source pin + expected digest で行う (= public installer API と
+同じ方針)。 `Idempotency-Key` header は v1 surface に含まれない。
 
 ### `GET /api/internal/v1/spaces/:id/exports/:exportId`
 
@@ -97,7 +98,8 @@ export は **point-in-time consistent** に作る。
 
 - export 開始時点で対象 partition に share lock を取得し、 export 中の write
   はそのまま進ませつつ snapshot isolation で読む。
-- `Idempotency-Key` 単位で 1 つの consistent snapshot を共有する。
+- source pin + expected digest で同一論理 export を replay-safe にし、 1 つの
+  consistent snapshot を共有する。
 - secret partition は **encrypted reference** のみ含める。 raw value
   は含まない。 受け手が master key を別経路で保持している前提で、 master key
   自体は本 export に含めない。

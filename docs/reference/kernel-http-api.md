@@ -7,7 +7,7 @@ surface (public installer / internal control plane / runtime-agent control RPC)
 を一括で定義します。
 
 > 実装は
-> [`packages/kernel/src/api/`](https://github.com/tako0614/takosumi/tree/master/packages/kernel/src/api)
+> [`packages/kernel/src/api/`](https://github.com/tako0614/takosumi/tree/main/packages/kernel/src/api)
 > の Hono router 群。 role ごとに mount される route 集合が変わります。
 
 ## 概要 {#overview}

@@ -153,21 +153,22 @@ state ではなく persist されません。 遷移 contract と binding field 
 
 ## Risk 分類 {#risk-taxonomy}
 
+Risk enum の canonical source は [Risk Taxonomy](./risk-taxonomy.md) を参照。
+stable ID を持つ 18 値の closed enum。
+
 ```text
-collision-detected | transform-unapproved | stale-export
-revoke-debt-created | secret-projection | grant-escalation
-network-egress-expansion | cross-space-import (reserved)
-external-implementation | catalog-release-bump
-policy-pack-bump | space-context-change
-artifact-policy-override | post-commit-failed
-recovery-compensate-required | drift-detected
-data-asset-kind-mismatch | approval-binding-stale
-implementation-change
+secret-projection | external-export | generated-credential
+generated-grant | network-egress | traffic-change
+stale-export | revoked-export | cross-scope-link
+cross-space-link | shadowed-namespace | implementation-unverified
+actual-effects-overflow | rollback-revalidation-required
+revoke-debt-created | raw-secret-literal | collision-detected
+transform-unapproved
 ```
 
-stable ID を持つ 19 値の closed Risk enum。 kernel は `OperationPlan` 1 件あた
-り 1 approval を発行し、 発火した Risk を `riskItemIds[]` で列挙します。 Risk
-個別のセマンティクスと operator の対処フローは
+kernel は `OperationPlan` 1 件あたり 1 approval を発行し、 発火した Risk を
+`riskItemIds[]` で列挙します。 entry 番号は historical (entry 15 は欠番)、 各
+Risk の severity / invalidation trigger / fix kind / 詳細セマンティクスは
 [Risk Taxonomy](./risk-taxonomy.md) を参照。
 
 ## RevokeDebt reason {#revokedebt-reason}
@@ -206,12 +207,13 @@ managed | generated | external | operator | imported
 
 kernel が管理する object の closed 分類 5 値。
 
-| Class       | 意味                                                                                                |
-| ----------- | --------------------------------------------------------------------------------------------------- |
-| `managed`   | 現在 Space の apply pipeline が作成・所有し、 `destroy` phase で削除される。                        |
-| `generated` | managed object を projection / link rendering して materialize したもの。 source が消えれば消える。 |
-| `external`  | connector 上で既に存在するもの。 kernel は読み取り / grant 発行はするが削除はしない。               |
-| `operator`  | operator が install (例: `connector:<id>`)。 tenant Space lifecycle の対象外。                      |
+| Class       | 意味                                                                                                                         |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `managed`   | 現在 Space の apply pipeline が作成・所有し、 `destroy` phase で削除される。                                                 |
+| `generated` | managed object を projection / link rendering して materialize したもの。 source が消えれば消える。                          |
+| `external`  | connector 上で既に存在するもの。 kernel は読み取り / grant 発行はするが削除はしない。                                        |
+| `operator`  | operator が install (例: `connector:<id>`)。 tenant Space lifecycle の対象外。                                               |
+| `imported`  | 他 Space の `managed` / `generated` を share record 経由で当該 Space に投影したもの。 owner Space で source が消えれば失効。 |
 
 `destroy` で削除されるのは `managed` と `generated` のみ。
 
@@ -348,13 +350,10 @@ type ごとの binding field と認証 contract は
 
 ## ロール {#roles}
 
-```text
-org-owner | org-admin | org-billing | space-admin
-space-deployer | space-viewer | support-staff
-```
-
-この role matrix は kernel が persist / enforce しません (Takosumi Accounts
-側で扱う)。
+Roles の closed enum は kernel が persist / enforce しません (= operator account
+plane の Takosumi Accounts 側で扱う internal entity であり、 本 kernel-managed
+closed enum hub の対象外)。 詳細は [RBAC Policy](./rbac-policy.md) と
+takosumi-cloud reference distribution の対応 docs を参照。
 
 ## API キータイプ {#api-key-types}
 

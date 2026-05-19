@@ -2,7 +2,9 @@
 
 > このページでわかること: RBAC の owner 層と kernel の authorization 範囲。
 
-account / space / AppInstallation / namespace publish-listen / permission grant
+account / space / Installation ledger entry (= operator account plane が所有する
+internal entity、 takosumi-cloud reference distribution における Takosumi
+Accounts の Installation ledger) / namespace publish-listen / permission grant
 に対する RBAC は operator の account plane が所有する (reference 実装:
 `takosumi-cloud/` の Takosumi Accounts)。
 

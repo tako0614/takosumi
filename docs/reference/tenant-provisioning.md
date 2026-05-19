@@ -10,6 +10,8 @@ provisioning spec surface. The current kernel HTTP router mounts
 current `POST` body is the lightweight Space-create shape documented in
 [Kernel HTTP API — Internal control plane routes](./kernel-http-api.md#internal-control-plane-routes),
 not the full provisioning request below. `GET /api/internal/v1/spaces/:id` and
+the polling / status surface described later are spec-level; their wire shape
+will land in a later kernel release. :::
 
 ## Tenant の単位
 
@@ -71,9 +73,10 @@ interface SpaceProvisionResponse {
 `status: "in-progress"` を返したうえで `GET /api/internal/v1/spaces/:id` で
 polling する。
 
-`Idempotency-Key` header は **必須**。 同じ key の再送は同じ response を返す。
-新しい key で同じ `spaceId` を二重 provisioning すると、 kernel は既存 Space と
-一致するなら同じ response を返し、 不一致なら HTTP `409 Conflict` で reject
+replay 抑制は `spaceId` pin + request body の content digest で行う (= public
+installer API と同じ方針、 `Idempotency-Key` header は v1 surface
+に含まれない)。 同じ `spaceId` を二重 provisioning すると、 kernel は既存 Space
+と一致するなら 同じ response を返し、 不一致なら HTTP `409 Conflict` で reject
 する。
 
 ### `GET /api/internal/v1/spaces/:id`
@@ -219,7 +222,8 @@ head は前進する。
 - tenant unit は Space。 Space は単一 Org に所属する。
 - provisioning は closed 7 段階を順序実行し、 各段階は idempotent。
 - 失敗時は逆順 rollback。 部分失敗は `operator-action-required` で hold。
-- `Idempotency-Key` header は必須で、 同 key の再送は同 response を返す。
+- replay 抑制は `spaceId` pin + request body の content digest で行う (=
+  `Idempotency-Key` header は v1 surface に含まれない)。
 - provisioning rate limit は per-Org / per-actor / global の 3 scope。
 
 ## kernel 範囲と外側の境界

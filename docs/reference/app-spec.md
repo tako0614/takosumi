@@ -40,12 +40,11 @@ components:
 # ...
 ```
 
-> Post Wave J Component contract minimization: AppSpec root has only
-> `apiVersion` / `kind` / `metadata` / `components` (= 4 field). The prior
-> top-level `interfaces:` / `permissions:` blocks are removed; each kind's open
-> `spec:` field (or a separate kind on namespace pub/sub) carries whatever
-> launch / health / capability-request semantics the materializer chooses to
-> honor (= 底は自由).
+> Wave J Component contract minimization 後の AppSpec root は `apiVersion` /
+> `kind` / `metadata` / `components` の 4 field のみ。 旧 top-level
+> `interfaces:` / `permissions:` block は物理削除済で、 launch / health /
+> capability-request 等の semantics は kind の open `spec:` field (または別 kind
+> の namespace pub/sub) を materializer が読む形で表現する (= 底は自由)。
 
 | field        | required | 型     | 説明                                 |
 | ------------ | -------- | ------ | ------------------------------------ |
@@ -119,6 +118,11 @@ components:
       com.example.notes.web:
         as: target
 ```
+
+> Note: 上記の `web.spec.routes` は worker materializer の慣習 field で、 worker
+> kind contract には declare されません (= 「底は自由」 原則、 後述
+> [launch / health / mcp endpoints, permission requests](#launch-health-mcp-endpoints-permission-requests)
+> 節参照)。 別 materializer 実装は routes を別の表現で扱っても構いません。
 
 > URI 直書きの例:
 >
@@ -233,8 +237,8 @@ block を参照してください。
 #### Auto-namespacing と sibling listen {#auto-namespacing-and-sibling-listen}
 
 `listen` 側でも、 同じ Installation 内の sibling component は
-`<app-id>.<component>` を書く代わりに短い alias を書けます (Phase B 以降の
-parser で実装予定の syntactic sugar)。 現状の正式 syntax は full path です。
+`<app-id>.<component>` を書く代わりに短い alias を書けます (将来 release で
+実装予定の syntactic sugar)。 現状の正式 syntax は full path です。
 
 #### Cycle の検出 {#cycle-detection}
 

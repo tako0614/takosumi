@@ -206,8 +206,9 @@ event id 空間上を進む。
 - **Rollback**: a recovery-mode rollback emits one `group-head-rolled-back`
   event followed by zero or more `group-head-moved` events for re-pinning. The
   `payload.cause` field carries the `recoveryMode` discriminator so analytics
-  distinguish rollback from forward shift. does not root assets through
-  cross-Space share records.
+  distinguish rollback from forward shift. The rollback path does not root
+  assets through cross-Space share records (= mark phase does not extend
+  reachability through imported share entries for this case).
 
 ### 監査ログ連携 {#audit-linkage}
 

@@ -62,8 +62,10 @@ reason ごとの典型ケース:
   material。`abort` 経路で enqueue。
 - `approval-invalidated`: approval が `invalidated` に落ちたが既に materialize
   済みの retain 物。新規 approval の granting までは debt として可視化する。
-  lifecycle が expiry に達し、importing Space 側で materialize された material
-  が exporting Space 側の retention 範囲を超える。
+- `cross-space-share-expired` (reserved): cross-Space share lifecycle が expiry
+  に達し、importing Space 側で materialize された material が exporting Space
+  側の retention 範囲を超えるケース (= v1 では reserved、 enqueue path
+  は未配線)。
 
 ## status 3 値
 

@@ -1,11 +1,12 @@
 # Risk タクソノミ {#risk-taxonomy}
 
 > このページでわかること: plan / apply pipeline が発火しうる Risk の closed enum
-> 19 値を stable id ベースで定義する。
+> 18 値を stable id ベースで定義する。
 
 各 Risk は plan 出力上の判定点として働き、 operator が allow / deny /
 require-approval を判断する材料になる。 新 Risk kind の追加には `CONVENTIONS.md`
-§6 RFC が必要。
+§6 RFC が必要。 entry 番号は historical で安定 ID として扱う (= 番号は renumber
+せず、 過去 audit / docs cross-ref の連続性を保つ。 entry 15 は欠番)。
 
 ## Risk と Error {#risk-vs-error}
 
@@ -19,7 +20,7 @@ require-approval を判断する材料になる。 新 Risk kind の追加には
 Risk が stage 進行中に再評価されて approval が崩れる経路は
 [Approval Invalidation Triggers](./approval-invalidation.md) に従う。
 
-## Closed enum (19 値) {#closed-enum-19-値}
+## Closed enum (18 値) {#closed-enum-18-values}
 
 各 Risk は以下の attributes を持つ:
 
@@ -88,7 +89,9 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 7. `stale-export`
 
-- **意味**: 消費する operator-owned ExportDeclaration freshness が
+- **意味**: 消費する operator-owned ExportDeclaration の freshness が policy
+  許容 window を超えており、 plan は最新化されない export snapshot に bind さ
+  れている。
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 4
@@ -96,7 +99,8 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 8. `revoked-export`
 
-- **意味**: 消費する operator-owned ExportDeclaration が
+- **意味**: 消費する operator-owned ExportDeclaration が revoke 済 (= generated
+  material は残るが新規 link projection は許可されない状態)。
 - **発火 stage**: `prepare`
 - **severity**: `error`
 - **invalidation trigger**: 4
@@ -184,8 +188,8 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 
 ### 19. `transform-unapproved`
 
-している。
-
+- **意味**: 当該 plan が approval を得ていない DataAsset transform を実行しよう
+  としている。
 - **発火 stage**: `pre-commit`
 - **severity**: `error`
 - **invalidation trigger**: 2
@@ -212,7 +216,9 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 ## RFC 要件 {#rfc-要件}
 
 新 Risk kind の追加は plan / approval / WAL のすべてに影響するため、
-`CONVENTIONS.md` §6 の RFC を要する。stable id は付与後 rename しない。 削除も同
+`CONVENTIONS.md` §6 の RFC を要する。 stable id は付与後 rename しない。 削除も
+同様に RFC を経由し、 stable id は欠番として保持する (= 過去 audit の再評価で ID
+が解決可能であることを保証する)。
 
 ## 関連アーキテクチャ {#related-architecture-notes}
 

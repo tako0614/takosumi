@@ -110,7 +110,7 @@ components:
 | `listen`                 | no                        | listen 対象 namespace path                     |
 
 > Wave J で worker.jsonld から `routes` 宣言を削除しました。 worker materializer
-> (= `@takos/takosumi-cloudflare-providers` 等の shape provider) は
+> (= `@takos/takosumi-cloudflare-providers` 等の materializer factory) は
 > `spec.routes` (string array) を実装慣習として読みますが、 worker kind contract
 > には宣言されません (= 「底は自由」 原則)。 別の materializer 実装は routes
 > を別の表現 (= 別 kind の namespace pub 等) で扱っても構いません。
@@ -375,16 +375,15 @@ identifier として** だけ扱います。
 - `meaning` : human-readable 意味付け
 - `enum` : enum 型の場合の許容値リスト (optional)
 
-ここに書かれた shape は **正本** であり、 `packages/contract/src/app-spec.ts` の
-`COMPONENT_KINDS` 配列および `packages/plugins/src/kinds/*.ts` の TS schema
-はこの正本に追従します。
+ここに書かれた shape は **正本** であり、 `packages/plugins/src/kinds/*.ts` の
+TS schema はこの正本に追従します (= 型契約は plugins package 側で実装する)。
 
 ### operator-defined kind の publish 手順 {#operator-defined-kind-publish}
 
 1. **`.jsonld` を立てる** — 自分の domain で
    `https://operator.example.com/kinds/lambda` 等の URL から JSON-LD 文書を返す
    HTTPS endpoint を publish します。 shape は 上記の通り (例として
-   [`spec/contexts/kinds/v1/worker.jsonld`](https://github.com/takos/takosumi/blob/main/spec/contexts/kinds/v1/worker.jsonld)
+   [`spec/contexts/kinds/v1/worker.jsonld`](https://github.com/tako0614/takosumi/blob/main/spec/contexts/kinds/v1/worker.jsonld)
    を参考に)。
 2. **plugin で attach** — `packages/plugins/src/kinds/<your-kind>.ts` 相当の
    実装を持つ Deno module を JSR (または npm) に publish し、 operator は

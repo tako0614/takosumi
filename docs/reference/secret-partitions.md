@@ -27,10 +27,10 @@ derive するだけで動く。
   runtime-agent) が secret hygiene を負う。
 - partition の cross 参照は禁止。 reference (`${secret:...}`) は許される。 raw
   value を Space 間で運ぶ運用は不可。
-- ProviderPackage / connector 実行に渡せる credential ref は
+- `KernelPlugin` (= materializer) / connector 実行に渡せる credential ref は
   `secret://providers/<provider>` scope に限定される。 tenant runtime secret
   (`secret://runtime/...` など) や他 provider の credential ref は
-  materialization 前に fail-closed し、 provider 実装には渡らない。
+  materialization 前に fail-closed し、 materializer 実装には渡らない。
 
 ## Encryption scheme
 

@@ -147,6 +147,12 @@ Installation を作成し、 最初の Deployment を実行します。
 }
 ```
 
+> Note: `outputs.resources[].provider` の値 (例: `@takos/cloudflare-workers` /
+> `@takos/aws-rds`) は **provider id** (= 各 `KernelPlugin` factory が宣言する
+> 安定 id) で、 operator が import する **package id** (=
+> `@takos/takosumi-cloudflare-providers` / `@takos/takosumi-aws-providers`) とは
+> 別概念。 詳細は [Provider Plugins](./providers.md) を参照。
+
 ## `POST /v1/installations/{id}/deployments/dry-run` {#post-v1-installations-id-deployments-dry-run}
 
 既存 Installation に新 source を当てた場合の変更差分を返します。 新 Deployment

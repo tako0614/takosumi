@@ -102,12 +102,14 @@ Initial CatalogRelease を adopt する。
 2. `TAKOSUMI_BOOTSTRAP_CATALOG_PATH` env で同様に渡す
 3. Embedded default catalog (kernel binary に内蔵)
 
-Operator-supplied の場合、signature 検証は
-[Catalog Release Trust](./catalog-release-trust.md) に従う。検証失敗で stage
-abort。
+Operator-supplied の場合、検証は **operator-pinned sha256 digest pin** に従う (=
+publisher signing は持たず、 operator が `CATALOG_DIGEST` env / config で
+expected digest を固定する [Catalog Release Trust](./catalog-release-trust.md)
+参照)。 digest mismatch で stage abort。
 
-Embedded default catalog は kernel build 時の signing key で署名済。 Trust
-anchor として default key が enrolled される。
+Embedded default catalog は kernel build 時に sha256 digest が固定され、
+operator-pinned digest との一致で fail-closed に検証される (= publisher signing
+ではない)。
 
 ## Stage 6 — default-space-create
 

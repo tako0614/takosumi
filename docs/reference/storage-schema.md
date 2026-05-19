@@ -208,6 +208,11 @@ append-only。 同一 tuple を同一 `effectDigest` で再 append するのは 
 
 ## TakosumiDeploymentRecord (廃止された内部テーブル) {#takosumideploymentrecord-retired-internal-table}
 
+::: warning **廃止された内部テーブル** — current public contract は
+`/v1/installations/*` の Installation / Deployment ledger が正本。 本 section は
+legacy reference (= 既存 migration script / 旧 internal tooling が参照する場合)
+の docs として残置している。 新規実装は本 schema に依存しない。 :::
+
 raw deploy 実装時代の internal record。現行 public contract では
 `/v1/installations/*` の Installation / Deployment ledger が正本であり、
 `takosumi_deployments` は public surface から参照しない。
@@ -326,6 +331,12 @@ error model における 6 種類の invalidation trigger を担う。
 
 install や deploy ではこのテーブルを必須としない。 consumer contract は
 operator-owned namespace export だけに依存してよい。
+
+## Cross-Space Share Records {#cross-space-share-records}
+
+cross-Space namespace export を import 側 Space に投影する際の share record
+schema。 share は producer / consumer 双方の audit に対応し、 import 側 Space が
+link projection を解決するための binding を提供する。
 
 | Field                | Type            | Required | Notes                                                                  |
 | -------------------- | --------------- | -------- | ---------------------------------------------------------------------- |
