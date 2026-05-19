@@ -49,7 +49,7 @@ immutability を強制する設計で、 修正したい場合は新しい migra
 `down` clause が定義されていない migration は **forward-only** で、
 `db:migrate:down` がそこに到達した時点で `StorageMigrationDownNotSupportedError`
 を投げて停止する。 実装側は
-[`packages/kernel/src/adapters/storage/migrations.ts`](https://github.com/tako0614/takosumi/blob/master/packages/kernel/src/adapters/storage/migrations.ts)
+[`packages/kernel/src/adapters/storage/migrations.ts`](https://github.com/tako0614/takosumi/blob/main/packages/kernel/src/adapters/storage/migrations.ts)
 で各 migration の `down:` field を確認できる。
 
 ---
@@ -78,7 +78,7 @@ production traffic 移行前に検証すること。
 
 各 package の minor 単位の変更点は CHANGELOG にまとまっている:
 
-- [CHANGELOG.md](https://github.com/tako0614/takosumi/blob/master/CHANGELOG.md)
+- [CHANGELOG.md](https://github.com/tako0614/takosumi/blob/main/CHANGELOG.md)
 
 upgrade 前に該当 minor の entry を必ず確認すること。 大きな behavior 変更には
 breaking note が直接書かれている。

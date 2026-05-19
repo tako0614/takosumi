@@ -311,9 +311,31 @@ const enSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Reference (JA fallback)",
       items: [
+        { text: "AppSpec (.takosumi.yml)", link: "/reference/app-spec" },
+        { text: "Manifest (Shape Model)", link: "/manifest" },
+        { text: "Installer API", link: "/reference/installer-api" },
         { text: "Kind Catalog", link: "/reference/kind-catalog" },
         { text: "Provider Plugins", link: "/reference/providers" },
+        { text: "Runtime-Agent API", link: "/reference/runtime-agent-api" },
         { text: "CLI", link: "/reference/cli" },
+        {
+          text: "Architecture: Kernel",
+          link: "/reference/architecture/kernel",
+        },
+      ],
+    },
+    {
+      text: "Operator (JA fallback)",
+      items: [
+        { text: "Bootstrap", link: "/operator/bootstrap" },
+        { text: "Self-host Notes", link: "/operator/self-host" },
+        { text: "Version Alignment", link: "/operator/upgrade" },
+      ],
+    },
+    {
+      text: "Extending (JA fallback)",
+      items: [
+        { text: "Extending Takosumi", link: "/extending" },
       ],
     },
   ],

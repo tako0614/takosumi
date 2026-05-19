@@ -150,7 +150,7 @@ Takosumi kernel は backend-neutral な tenant contract を提供します。各
 は同じ component kind contract を受け取りつつ、runtime behavior や provider
 capability の詳細は target ごとに異なります。 reference Takos distribution が
 観測する 環境ごとの差異は
-[Takos hosting differences](https://github.com/tako0614/takos/blob/master/docs/hosting/differences.md)
+[Takos hosting differences](https://github.com/tako0614/takos/blob/main/docs/hosting/differences.md)
 を参照 (他の InstallableApp も同様の backend parity を扱う必要があります)。
 
 ## Workers Backend Reference Materialization

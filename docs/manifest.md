@@ -56,3 +56,14 @@ takosumi install --source ./ --space space_personal
 ```
 
 を実行すれば Installation + 最初の Deployment が作られます。
+
+## 次に読む
+
+- [AppSpec (`.takosumi.yml`)](/reference/app-spec) — envelope / components の 全
+  field 仕様
+- [Kind Catalog](/reference/kind-catalog#component-kinds) — kind ごとの spec /
+  publishes / listens / outputs
+- [Installer API](/reference/installer-api) — 5 endpoint の wire spec
+- [Quickstart](/getting-started/quickstart) — git clone から first deploy まで
+- [Provider Plugins](/reference/providers) — operator が attach する provider
+  factory 一覧

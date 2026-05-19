@@ -247,3 +247,16 @@ source preparation、 workflow runner、 scheduler は above-kernel product の
 - [Operator Bootstrap](/operator/bootstrap)
 - [`CONVENTIONS.md`](https://github.com/takos-jp/takosumi/blob/main/CONVENTIONS.md)
   (canonical)
+
+## 次に読む
+
+- [Kind Catalog](/reference/kind-catalog#component-kinds) — curated 4 kind の
+  spec / publishes / listens / outputs を読み、 自前 kind との差分を決める
+- [Provider Plugins](/reference/providers) — 既存 provider の `KernelPlugin`
+  実装例 (factory が返す lifecycle envelope の形)
+- [Operator Bootstrap](/operator/bootstrap) — 追加した factory を
+  `createPaaSApp({ plugins: [...] })` に attach する手順
+- [AppSpec](/reference/app-spec) — 新 kind を AppSpec で declare するための
+  envelope 仕様
+- [Workflow Extension Design](/reference/architecture/workflow-extension-design)
+  — kernel scope 外 (workflow / cron / hook) の境界判断

@@ -3,7 +3,7 @@
 > このページでわかること: namespace export のモデル定義と使い方。
 
 Root-level canonical spec:
-[Namespace Exports](https://github.com/tako0614/takosumi/blob/master/docs/reference/namespace-exports.md).
+[Namespace Exports](https://github.com/tako0614/takosumi/blob/main/docs/reference/namespace-exports.md).
 
 Export は namespace アドレス可能な usable surface である。namespace path は
 Space の中で解決される。producer は export declaration を publish し、link

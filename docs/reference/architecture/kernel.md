@@ -15,10 +15,10 @@
 > に Deployment を記録する PaaS** です。 identity / billing / OAuth / workflow /
 > cron / consent screen / Stripe / app marketplace は kernel に **入れません**。
 > identity / billing は
-> [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
+> [Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/main/docs/architecture/takosumi-accounts.md)
 > (account plane / operator-owned) の責務、 workflow / CI / cron は kernel scope
 > の外 (operator が別途 orchestrator で実装) です。 全体モデルは
-> [Installable App Model](https://github.com/tako0614/takos-ecosystem/blob/master/docs/platform/installable-app-model.md)
+> [Installable App Model](https://github.com/tako0614/takos-ecosystem/blob/main/docs/platform/installable-app-model.md)
 > を参照。
 
 kernel が serve する request は、 AppSpec を起点にした Installation lifecycle に
@@ -146,7 +146,7 @@ Installation worker (routing layer で hostname 割り当て):
 ```
 
 OAuth / OIDC の login flow は kernel 内ではなく
-[Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/master/docs/architecture/takosumi-accounts.md)
+[Takosumi Accounts](https://github.com/tako0614/takosumi-cloud/blob/main/docs/architecture/takosumi-accounts.md)
 が扱います。 Takosumi Accounts は `operator.identity.oidc` namespace path に
 OIDC client material を publish し、 worker は `listen.operator.identity.oidc`
 で `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` /
@@ -202,3 +202,16 @@ events table) は kernel DB を使う。
 - [Kind Catalog](../kind-catalog.md#component-kinds)
 - [Manifest](../manifest.md#data-model)
 - [Provider Plugins — Resolution Algorithm](../providers.md#resolution-algorithm)
+
+## 次に読む
+
+- [Control Plane](./control-plane.md) — kernel が serve する control API と
+  Installation lifecycle の境界
+- [Deploy System](./deploy-system.md) — Deployment record / apply pipeline の
+  内部構造
+- [Tenant Runtime](./tenant-runtime.md) — Installation worker の routing layer
+  と backend parity
+- [Operator Boundaries](./operator-boundaries.md) — operator が kernel に attach
+  する provider plugin の境界
+- [Provider Architecture](./paas-provider-architecture.md) — materializer /
+  provider plugin の構造

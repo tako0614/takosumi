@@ -343,3 +343,13 @@ interface ApiErrorEnvelope {
   publishes / listens
 - [Architecture: Kernel](./architecture/kernel.md) — installer pipeline
   の責務境界
+
+## 次に読む
+
+- [AppSpec](./app-spec.md) — request body の中身 (`.takosumi.yml` envelope)
+- [Architecture: Kernel](./architecture/kernel.md) — 5 endpoint を実装する
+  installer pipeline の責務境界
+- [Operator Bootstrap](../operator/bootstrap.md) — kernel を起動して 5 endpoint
+  を expose するまでの手順
+- [CLI Reference](./cli.md) — 5 endpoint を叩く `takosumi` コマンド surface
+- [Closed Enums](./closed-enums.md) — error code / status enum の正本

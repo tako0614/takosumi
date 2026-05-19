@@ -597,3 +597,15 @@ snapshot を反映する。 registry を変更することはない。
   identity / accepted-kind vector
 - [DataAsset Policy](./data-asset-policy.md) — DataAsset class policy
 - [Closed Enums](./closed-enums.md) — object lifecycle class / size cap enum
+
+## 次に読む
+
+- [Provider Plugins](./providers.md) — curated 4 kind を 実 cloud / on-prem
+  provider に解決する factory 一覧
+- [Extending Takosumi](../extending.md) — 自前 kind を JSON-LD + materializer で
+  publish する手順
+- [AppSpec](./app-spec.md) — 各 component に kind を書く envelope 仕様
+- [Operator Bootstrap](../operator/bootstrap.md) — kind に対応する materializer
+  を kernel に attach する手順
+- [Namespace Exports](./namespace-exports.md) — publish / listen の path grammar
+  と registry semantics
