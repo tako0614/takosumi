@@ -16,13 +16,13 @@ const TABS: readonly Tab[] = [
     subtitle: "self-hosted runtime",
     manifest: () => (
       <>
-        apiVersion: takosumi.dev/v1{"\n"}
-        kind: App{"\n"}
+        apiVersion: v1{"\n"}
         metadata:{"\n"}{"  "}id: com.example.hello{"\n"}{"  "}name: Hello{"\n"}
         components:{"\n"}{"  "}web:{"\n"}{"    "}kind: worker{"\n"}{"    "}
+        spec:{"\n"}{"      "}routes:{"\n"}{"        "}- /{"\n"}{"    "}
         build:{"\n"}{"      "}command: deno task build{"\n"}{"      "}output:
         {" "}
-        dist/worker.mjs{"\n"}{"    "}routes:{"\n"}{"      "}- /
+        dist/worker.mjs
       </>
     ),
     output: () => (
@@ -41,8 +41,9 @@ const TABS: readonly Tab[] = [
         <span class="c"># AppSpec は同じ。 substrate は operator が選ぶ</span>
         {"\n"}
         components:{"\n"}{"  "}web:{"\n"}{"    "}kind: worker{"\n"}{"    "}
-        use:{"\n"}{"      "}db: {`{ envPrefix: DB_ }`}
-        {"\n"}{"  "}db:{"\n"}{"    "}kind: postgres{"\n"}{"  "}assets:
+        listen:{"\n"}{"      "}com.example.hello.db: {`{ as: env, prefix: DB_ }`}
+        {"\n"}{"  "}db:{"\n"}{"    "}kind: postgres{"\n"}{"    "}publish:
+        {"\n"}{"      "}- com.example.hello.db{"\n"}{"  "}assets:
         {"\n"}{"    "}kind: object-store
       </>
     ),
@@ -59,9 +60,11 @@ const TABS: readonly Tab[] = [
     subtitle: "Installation / Deployment ledger",
     manifest: () => (
       <>
-        interfaces:{"\n"}{"  "}launch:{"\n"}{"    "}target: web{"\n"}{"    "}
-        path: /{"\n"}
-        permissions:{"\n"}{"  "}requested:{"\n"}{"    "}- storage.object.read
+        <span class="c"># 任意の Deployment に rollback、 ledger は monotonic</span>
+        {"\n"}
+        <span class="c"># に積み上がる (= apply / rollback / failed が全部</span>
+        {"\n"}
+        <span class="c"># Deployment record として残る)</span>
       </>
     ),
     output: () => (
