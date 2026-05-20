@@ -1,3 +1,7 @@
+; このファイルは scripts/dns-zone-render.sh の source template。 A record
+; target は env TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_IP (default 127.0.0.1) で
+; substitute され zones-rendered/ に書き出される。 CoreDNS は zones-rendered/
+; を mount する。
 $ORIGIN takosumi.test.
 $TTL 60
 @       IN  SOA  ns.takosumi.test. admin.takosumi.test. (
@@ -8,6 +12,6 @@ $TTL 60
             60
         )
 @       IN  NS   ns.takosumi.test.
-ns      IN  A    127.0.0.1
-@       IN  A    127.0.0.1
-*       IN  A    127.0.0.1
+ns      IN  A    {{INGRESS_IP}}
+@       IN  A    {{INGRESS_IP}}
+*       IN  A    {{INGRESS_IP}}

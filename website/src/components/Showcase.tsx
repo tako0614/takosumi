@@ -41,7 +41,8 @@ const TABS: readonly Tab[] = [
         <span class="c"># AppSpec は同じ。 substrate は operator が選ぶ</span>
         {"\n"}
         components:{"\n"}{"  "}web:{"\n"}{"    "}kind: worker{"\n"}{"    "}
-        listen:{"\n"}{"      "}com.example.hello.db: {`{ as: env, prefix: DB_ }`}
+        listen:{"\n"}{"      "}com.example.hello.db:{" "}
+        {`{ as: env, prefix: DB_ }`}
         {"\n"}{"  "}db:{"\n"}{"    "}kind: postgres{"\n"}{"    "}publish:
         {"\n"}{"      "}- com.example.hello.db{"\n"}{"  "}assets:
         {"\n"}{"    "}kind: object-store
@@ -60,9 +61,13 @@ const TABS: readonly Tab[] = [
     subtitle: "Installation / Deployment ledger",
     manifest: () => (
       <>
-        <span class="c"># 任意の Deployment に rollback、 ledger は monotonic</span>
+        <span class="c">
+          # 任意の Deployment に rollback、 ledger は monotonic
+        </span>
         {"\n"}
-        <span class="c"># に積み上がる (= apply / rollback / failed が全部</span>
+        <span class="c">
+          # に積み上がる (= apply / rollback / failed が全部
+        </span>
         {"\n"}
         <span class="c"># Deployment record として残る)</span>
       </>

@@ -1,0 +1,2 @@
+# dns-zone-render.sh の render 先 directory placeholder。
+# 実体 *.zone file は generated artifact で gitignore 対象。

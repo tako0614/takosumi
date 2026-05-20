@@ -1,2 +1,4 @@
 caddy/runtime/
 .env
+# dns-zone-render.sh で生成される rendered zone files (= source は coredns/zones/)
+coredns/zones-rendered/*.zone

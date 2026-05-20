@@ -73,7 +73,18 @@ wait_for_completed_service() {
 
 mkdir -p caddy/runtime
 
-echo "==> Starting Pebble and CoreDNS"
+# LAN mode 起動: TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_IP / DNS_HOST_BIND を export
+# 済の caller (= dev マシンの shell profile に export 済) はそのまま通す。
+# 未設定なら single-machine default (127.0.0.1) で render。
+INGRESS_IP="${TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_IP:-127.0.0.1}"
+DNS_HOST_BIND="${TAKOSUMI_LOCAL_SUBSTRATE_DNS_HOST_BIND:-127.0.0.1}"
+export TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_IP="$INGRESS_IP"
+export TAKOSUMI_LOCAL_SUBSTRATE_DNS_HOST_BIND="$DNS_HOST_BIND"
+
+echo "==> Rendering CoreDNS zone files (INGRESS_IP=$INGRESS_IP)"
+bash "$SCRIPT_DIR/dns-zone-render.sh"
+
+echo "==> Starting Pebble and CoreDNS (DNS host bind=$DNS_HOST_BIND:53)"
 docker compose -f compose.ingress.yml up -d pebble coredns
 
 echo "==> Waiting for Pebble management API to respond"
@@ -131,10 +142,16 @@ fi
 cat <<EOF
 
 ==> local-substrate is up (profile: ${PROFILE:-none/ingress-only}).
+==> INGRESS_IP=$INGRESS_IP, DNS_HOST_BIND=$DNS_HOST_BIND
 
 Next steps (one-time per host):
    sudo bash scripts/ca-install.sh         # trust Pebble issuance root
    sudo bash scripts/configure-dns.sh      # split-DNS for *.takosumi.test
+                                           # LAN mode: pass --dns <dev-LAN-IP>
+
+LAN mode (LAN client browser からアクセスする):
+   docs/lan-host.md を参照。 LAN client は別途 ca-install.sh と
+   configure-dns.sh --dns <dev-LAN-IP> 相当の手順が必要。
 
 Verify (Phase 0):
    curl https://hello.takosumi.test/

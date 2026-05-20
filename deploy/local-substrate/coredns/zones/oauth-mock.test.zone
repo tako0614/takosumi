@@ -1,3 +1,6 @@
+; このファイルは scripts/dns-zone-render.sh の source template。 A record
+; target は env TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_IP (default 127.0.0.1) で
+; substitute され zones-rendered/ に書き出される。
 $ORIGIN oauth-mock.test.
 $TTL 60
 @       IN  SOA  ns.oauth-mock.test. admin.oauth-mock.test. (
@@ -8,6 +11,6 @@ $TTL 60
             60
         )
 @       IN  NS   ns.oauth-mock.test.
-ns      IN  A    127.0.0.1
-@       IN  A    127.0.0.1
-*       IN  A    127.0.0.1
+ns      IN  A    {{INGRESS_IP}}
+@       IN  A    {{INGRESS_IP}}
+*       IN  A    {{INGRESS_IP}}

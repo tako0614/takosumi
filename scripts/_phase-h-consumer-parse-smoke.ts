@@ -13,15 +13,22 @@
  * standard `deno test` count.
  */
 
+import { fromFileUrl, join } from "jsr:@std/path@^1.0.6";
 import { parseAppSpec } from "../packages/installer/src/yaml-parser.ts";
 
+// Ecosystem root は本 file (= takosumi/scripts/_phase-h-consumer-parse-smoke.ts)
+// から 2 階層上。 import.meta.url 起点なので developer 個人 path や clone 先
+// (= ~/Desktop/takos / /root/dev/takos / /home/<user>/<workdir>/takos 等) に
+// 依存しない portable な解決。
+const ECOSYSTEM_ROOT = fromFileUrl(new URL("../../", import.meta.url));
+
 export const CONSUMER_APP_SPEC_PATHS: readonly string[] = [
-  "/home/tako/Desktop/takos/yurucommu/.takosumi.yml",
-  "/home/tako/Desktop/takos/takos-apps/takos-docs/.takosumi.yml",
-  "/home/tako/Desktop/takos/takos-apps/takos-slide/.takosumi.yml",
-  "/home/tako/Desktop/takos/takos-apps/takos-excel/.takosumi.yml",
-  "/home/tako/Desktop/takos/takos-apps/takos-computer/.takosumi.yml",
-  "/home/tako/Desktop/takos/road-to-me/.takosumi.yml",
+  join(ECOSYSTEM_ROOT, "yurucommu", ".takosumi.yml"),
+  join(ECOSYSTEM_ROOT, "takos-apps", "takos-docs", ".takosumi.yml"),
+  join(ECOSYSTEM_ROOT, "takos-apps", "takos-slide", ".takosumi.yml"),
+  join(ECOSYSTEM_ROOT, "takos-apps", "takos-excel", ".takosumi.yml"),
+  join(ECOSYSTEM_ROOT, "takos-apps", "takos-computer", ".takosumi.yml"),
+  join(ECOSYSTEM_ROOT, "road-to-me", ".takosumi.yml"),
 ] as const;
 
 export interface ConsumerParseRow {

@@ -33,10 +33,19 @@ services:
       - "/etc/coredns/Corefile"
     volumes:
       - ./coredns/Corefile:/etc/coredns/Corefile:ro
-      - ./coredns/zones:/etc/coredns/zones:ro
+      # zones-rendered/ は scripts/dns-zone-render.sh が source coredns/zones/
+      # から {{INGRESS_IP}} を render して書き出す generated artifact。
+      # default は 127.0.0.1 (= single-machine mode、 backward compat)。
+      # LAN mode は TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_IP=<dev-LAN-IP> で起動。
+      - ./coredns/zones-rendered:/etc/coredns/zones:ro
     ports:
-      - "127.0.0.1:53:53/udp"
-      - "127.0.0.1:53:53/tcp"
+      # default の host bind は 127.0.0.1 で backward compat。
+      # LAN client が dev マシンの CoreDNS を聞くには
+      # TAKOSUMI_LOCAL_SUBSTRATE_DNS_HOST_BIND=0.0.0.0 (or <dev-LAN-IP>) で起動。
+      # dev マシン側 systemd-resolved が :53 を占有している場合は
+      # docs/lan-host.md の DNSStubListener=no 手順を参照。
+      - "${TAKOSUMI_LOCAL_SUBSTRATE_DNS_HOST_BIND:-127.0.0.1}:53:53/udp"
+      - "${TAKOSUMI_LOCAL_SUBSTRATE_DNS_HOST_BIND:-127.0.0.1}:53:53/tcp"
     networks:
       takos-local-internal:
         aliases:
