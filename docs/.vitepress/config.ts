@@ -382,6 +382,19 @@ export default defineConfig({
   base: process.env.VITEPRESS_BASE ?? "/docs/",
   cleanUrls: true,
   lastUpdated: true,
+  vite: {
+    server: {
+      // Wave M LAN dev: dev hostname (= `*.takosumi.test` / `*.takos.test` /
+      // `yurucommu.test`) を Caddy reverse_proxy 経由で踏むため Host header
+      // 検証を緩める。 production build には影響しない (= dev server only)。
+      allowedHosts: [
+        ".takosumi.test",
+        ".takos.test",
+        ".yurucommu.test",
+        "yurucommu.test",
+      ],
+    },
+  },
   sitemap: {
     hostname: "https://takosumi.com/docs/",
   },

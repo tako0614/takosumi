@@ -87,35 +87,37 @@ kernel-worker.takosumi.test {
 # (これは Takosumi が deploy する app の dynamic subdomain。 Takos product
 # / yurucommu service direct ではない。)
 
-# ===== Ecosystem dev hostname reverse proxy (= Wave M-C LAN dev integration)
+# ===== Ecosystem dev hostname reverse proxy (Wave M-C → M-F 訂正後)
 #
-# 各 product の Vite dev server (= host で `deno task dev` で起動) を
-# Caddy 経由で TLS 終端 + dev hostname access する route。 *.takos.test 系は
-# production *.takos.jp / yurucommu.test 系は production yurucommu.com の
-# dev mirror。 host.docker.internal は compose.ingress.yml で
-# extra_hosts injection 済 (Linux Docker は host-gateway 要)。
+# production hostname 構造の正確な mirror。 Takos product / yurucommu の Vite
+# dev server を Caddy 経由で TLS 終端 + dev hostname access する route。
+# host.docker.internal は compose.ingress.yml で extra_hosts injection 済
+# (Linux Docker は host-gateway 要)。
 #
-# Vite default port が衝突する場合は env で port override し、 ここの
-# upstream:PORT を合わせて書き換える。 multiple product を同時起動する場合は
-# 各 vite.config.ts で port を分離する必要がある。
-app.takos.test {
+# 訂正方針 (Wave M-F): production に存在しない invented subdomain
+# (= app.takos.test / docs.takos.test / slide.takos.test / excel.takos.test /
+# computer.takos.test / control.takos.test) は削除。 production hostname 構造
+# は:
+#   takos.jp           → admin / Takos product UI (= takos.test で mirror)
+#   *.app.takos.jp     → tenant deploy (= Takosumi が dispatch、 動的 subdomain)
+#   road.takos.jp      → road-to-me (= road.takos.test で mirror)
+#   yurucommu.com      → yurucommu (= yurucommu.test で mirror)
+# bundled apps (takos-docs / takos-slide / takos-excel / takos-computer) は
+# **Takos space 内に install されて *.app.takos.jp tenant subdomain で
+# serve** されるため、 専用 dev hostname は持たない (= 各 Vite dev server を
+# localhost で直起動して Takos UI 内から iframe / launch する model)。
+
+# Takos product UI mirror (= production takos.jp と 1:1)
+takos.test {
 	import proxy_site host.docker.internal:5173
 }
-docs.takos.test {
-	import proxy_site host.docker.internal:3001
-}
-slide.takos.test {
-	import proxy_site host.docker.internal:3002
-}
-excel.takos.test {
-	import proxy_site host.docker.internal:3003
-}
+
+# road-to-me mirror (= production road.takos.jp と 1:1)
 road.takos.test {
 	import proxy_site host.docker.internal:1420
 }
-control.takos.test {
-	import proxy_site host.docker.internal:5173
-}
+
+# yurucommu mirror (= production yurucommu.com と 1:1)
 yurucommu.test {
 	import proxy_site host.docker.internal:5173
 }

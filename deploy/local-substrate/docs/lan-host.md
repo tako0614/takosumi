@@ -129,31 +129,102 @@ sudo bash scripts/configure-dns.sh    # default 127.0.0.1
 bash scripts/down.sh && bash scripts/up.sh
 ```
 
-## Ecosystem product dev hostname (= Wave M-C 統合分)
+## Ecosystem product dev hostname (Wave M-C → M-F 訂正後)
 
-Wave M-C で `*.takos.test` / `yurucommu.test` zone を追加し、 Caddy が host
-で起動する各 product の Vite dev server を host.docker.internal 経由で reverse
-proxy するようになった。 dev マシンで Vite dev server を起動すると、 LAN client
-browser から TLS 終端 + dev hostname access できる。
+production hostname 構造を正確に mirror する dev hostname のみを Caddy が
+reverse_proxy する。 host.docker.internal 経由で host で起動した Vite dev server
+を覆う構成。
 
-| dev hostname                  | upstream (host で起動)      | 起動コマンド (= 該当 product root で)                |
-| ----------------------------- | --------------------------- | ---------------------------------------------------- |
-| `https://app.takos.test/`     | `host.docker.internal:5173` | `cd takos/app/apps/web && deno task dev`             |
-| `https://docs.takos.test/`    | `host.docker.internal:3001` | `cd takos-apps/takos-docs && deno task dev`          |
-| `https://slide.takos.test/`   | `host.docker.internal:3002` | `cd takos-apps/takos-slide && deno task dev`         |
-| `https://excel.takos.test/`   | `host.docker.internal:3003` | `cd takos-apps/takos-excel && deno task dev`         |
-| `https://road.takos.test/`    | `host.docker.internal:1420` | `cd road-to-me/app && deno task dev`                 |
-| `https://control.takos.test/` | `host.docker.internal:5173` | `cd takos-private/apps/control/web && deno task dev` |
-| `https://yurucommu.test/`     | `host.docker.internal:5173` | `cd yurucommu/web && deno task dev`                  |
+| dev hostname (= production の mirror)          | upstream (host で起動)      | 起動コマンド (= 該当 product root で)    |
+| ---------------------------------------------- | --------------------------- | ---------------------------------------- |
+| `https://takos.test/` (= `takos.jp`)           | `host.docker.internal:5173` | `cd takos/app/apps/web && deno task dev` |
+| `https://road.takos.test/` (= `road.takos.jp`) | `host.docker.internal:1420` | `cd road-to-me/app && deno task dev`     |
+| `https://yurucommu.test/` (= `yurucommu.com`)  | `host.docker.internal:5173` | `cd yurucommu/web && deno task dev`      |
 
-複数 product を同時起動する場合は port 衝突 (= 5173) が起きるため、 各
-vite.config.ts の `server.port` を別 port にずらして、 Caddyfile の該当 entry の
-port も同期する必要がある。
+bundled apps (= `takos-docs` / `takos-slide` / `takos-excel` / `takos-computer`)
+は **Takos space 内に install されて `*.app.takos.jp` tenant subdomain で serve
+される** model なので、 専用 dev hostname を持たない。 dev では各 Vite dev
+server を localhost (= `:3001` / `:3002` / `:3003` / etc.) で直起動し、 Takos UI
+内から iframe / launch する。
+
+複数 product を同時起動する場合 default 5173 が衝突するため、 各 vite.config.ts
+の `server.port` を別 port にずらし、 Caddyfile の該当 entry の port
+も同期する必要がある。
 
 各 product の vite.config.ts は Wave M-C で `server.host = true` 化済 (= LAN
-binding 有効)、 Caddy 経由でなくとも `http://<dev-LAN-IP>:5173` 等で直接 access
-も可能。 ただし TLS 終端 + CORS / CSRF / OAuth allowlist (= Wave M-D)
-を経由する場合は dev hostname (= https) access が必要。
+binding 有効)、 Caddy 経由でなくとも `http://<dev-LAN-IP>:<port>` で直接 access
+も可能。 ただし TLS 終端 + production-equivalent CORS / CSRF / OAuth allowlist
+(= Wave M-D) を経由する場合は dev hostname (= https) access が必要。
+
+## Binary-native variant (= docker compose を使わない quick setup)
+
+Docker compose が未 install な dev マシンでも、 host 上に `dnsmasq` + `caddy` を
+native binary install するだけで同じ dev hostname access を提供できる (=
+Pebble + CoreDNS を省略する代わりに Caddy の `tls internal` で self-signed CA
+を発行)。 production deploy 手順とは別で、 「**docs を 詰める** ためだけ の最速
+path」。
+
+```bash
+# 1. install
+sudo apt install -y dnsmasq caddy
+
+# 2. dnsmasq config
+sudo tee /etc/dnsmasq.d/takos-local-substrate.conf <<EOF
+bind-interfaces
+listen-address=<DEV_LAN_IP>          # 例: 192.168.0.122
+no-resolv
+no-hosts
+address=/takosumi.test/<DEV_LAN_IP>
+address=/takos.test/<DEV_LAN_IP>
+address=/yurucommu.test/<DEV_LAN_IP>
+server=1.1.1.1
+server=8.8.8.8
+EOF
+
+# 3. Caddyfile (= production と同 path 構造、 単一 host で / + /docs/*)
+sudo tee /etc/caddy/Caddyfile <<'EOF'
+{ auto_https disable_redirects }
+
+takosumi.test {
+  tls internal
+  encode gzip
+  handle_path /docs/* {
+    root * /path/to/takosumi/docs/.vitepress/dist
+    try_files {path} {path}.html {path}/index.html /404.html
+    file_server
+  }
+  handle {
+    root * /path/to/takosumi/website/.output/public
+    try_files {path} {path}/index.html /index.html
+    file_server
+  }
+}
+EOF
+
+# 4. systemd-resolved の :53 stub listener を空ける (= dnsmasq と衝突回避)
+sudo tee /etc/systemd/resolved.conf.d/disable-stub-listener.conf <<'EOF'
+[Resolve]
+DNSStubListener=no
+EOF
+sudo systemctl restart systemd-resolved caddy dnsmasq
+
+# 5. Caddy internal root CA を取得 (LAN client へ distribute する用)
+sudo cp /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt \
+  /tmp/takos-caddy-root.crt
+
+# 6. takosumi を build (= file_server は build 出力を都度 read)
+cd <repo-root>/takosumi && deno task docs:build
+cd <repo-root>/takosumi/website && npx vinxi build
+```
+
+LAN client (= browser PC) 側は
+[`takos-private/docs/operations/lan-dev-setup.md`](../../../../takos-private/docs/operations/lan-dev-setup.md)
+の手順を実行 (= root CA install + systemd-resolved per-domain split)。
+
+docs を編集 → `deno task docs:build` を再実行 → ブラウザ refresh で反映 (= Caddy
+reload 不要、 file_server は file system 直読)。 production deploy が **static
+file_server** なので、 dev も同 method で揃え、 dev-only HMR layer
+を入れない方針。
 
 ## 既知の制約
 

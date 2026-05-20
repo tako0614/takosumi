@@ -92,13 +92,10 @@ services:
           - oauth-mock.test
           - mailpit.takosumi.test
           - jaeger.takosumi.test
-          # Wave M-C ecosystem dev hostnames (= 各 product Vite dev server)
-          - app.takos.test
-          - docs.takos.test
-          - slide.takos.test
-          - excel.takos.test
+          # Ecosystem dev hostnames (Wave M-C → M-F 訂正後)
+          # production hostname 構造を正確に mirror (= invented subdomain 削除)
+          - takos.test
           - road.takos.test
-          - control.takos.test
           - yurucommu.test
 
 networks:
