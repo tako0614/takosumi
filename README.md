@@ -4,7 +4,7 @@ Self-hostable PaaS. **`.takosumi.yml` を読んで Space に Installation を作
 apply ごとに Deployment を記録する、 完全独立の PaaS**。 あらゆる cloud / docker
 / self-hosted 環境にデプロイできる。
 
-ドキュメント: <https://docs.takosumi.com/>
+ドキュメント: <https://takosumi.com/docs/>
 
 ## Quickstart
 
@@ -251,13 +251,26 @@ input is set.
 
 ## Docs site (VitePress)
 
+`takosumi/docs/` は VitePress site (`base: "/docs/"`)、 `takosumi/website/` は
+Solid Start landing。 Wave M-G (= 2026-05-20) で両者と `takosumi/spec/contexts/`
+を **単一 Cloudflare Pages project (`takosumi-website`)** に統合し、
+`takosumi.com/` (landing) + `takosumi.com/docs/*` (docs) +
+`takosumi.com/contexts/*` (JSON-LD vocab) を 1 つの build artifact で serve
+する形に整理した (旧 `docs.takosumi.com` subdomain は廃止)。
+
 ```bash
-deno task docs:install   # cd docs && npm install (vitepress を pin)
-deno task docs:dev       # http://localhost:5173 でプレビュー
-deno task docs:build     # docs/.vitepress/dist へ build (CF Pages 公開対象)
+deno task docs:install      # cd docs && npm install (vitepress を pin)
+deno task docs:dev          # http://localhost:5173 で VitePress 単独プレビュー
+deno task docs:build        # docs/.vitepress/dist へ build (内部 step)
+
+deno task website:build     # landing + /docs/ + /contexts/ を website/.output/public/ に統合
+deno task website:preview   # 同 artifact を wrangler pages dev で確認
+deno task website:deploy    # Cloudflare Pages project `takosumi-website` にデプロイ
 ```
 
-publish: `master` への push で `.github/workflows/docs-deploy.yml` が Cloudflare
-Pages project `takosumi-docs` にデプロイ。 custom domain は `docs.takosumi.com`
-(Cloudflare Pages dashboard の Custom domains 設定で wire)。 CI には GitHub
-secrets `CLOUDFLARE_API_TOKEN` と `CLOUDFLARE_ACCOUNT_ID` が必要。
+publish: `master` への push で `.github/workflows/website-deploy.yml` が
+Cloudflare Pages project `takosumi-website` にデプロイ。 custom domain は
+`takosumi.com` / `www.takosumi.com` (Cloudflare Pages dashboard の Custom
+domains 設定で wire)。 CI には GitHub secrets `CLOUDFLARE_API_TOKEN` と
+`CLOUDFLARE_ACCOUNT_ID` が必要。 詳細は [`DEPLOY.md`](./DEPLOY.md) と
+[`website/README.md`](./website/README.md) を参照。

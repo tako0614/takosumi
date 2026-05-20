@@ -18,7 +18,9 @@ only DNS / binding IDs / secrets differ.
    nameservers.
 2. **Cloudflare account** with the `takosumi.com` zone added.
 3. **API token** with: `Workers Scripts:Edit`, `Workers Routes:Edit`, `D1:Edit`,
-   `R2:Edit`, `Queues:Edit`, `Pages:Edit`, `DNS:Edit` for `takosumi.com`.
+   `R2:Edit`, `Queues:Edit`, `Pages:Edit`, `DNS:Edit` for `takosumi.com`. The
+   Pages permission must cover writes to the single `takosumi-website` project
+   (post Wave M-G consolidation; see §Step 3).
 4. **wrangler** installed (`npm install -g wrangler` or `npx wrangler`).
 5. **Logged in**: `wrangler login` once.
 
@@ -102,35 +104,45 @@ curl -X POST -H "Content-Type: application/json" \
   https://<kernel-host>/queue/test
 ```
 
-## Step 3 — takosumi docs (takosumi.com via Cloudflare Pages)
+## Step 3 — takosumi.com website (landing + /docs/ + /contexts/, Cloudflare Pages)
 
-The VitePress site at `takosumi/docs/` builds to `.vitepress/dist/`. Cloudflare
-Pages serves static files cheaply.
+Wave M-G (= 2026-05-20) consolidated the apex landing, the VitePress reference
+docs, and the JSON-LD context catalog into a **single** Cloudflare Pages project
+(`takosumi-website`). The build script `takosumi/website/build.sh` produces one
+merged `.output/public/` artifact with `index.html` at the apex, the VitePress
+build overlaid under `/docs/`, and `spec/contexts/` overlaid under `/contexts/`.
+The legacy split (`takosumi-site` for the landing + `takosumi-docs` for
+`docs.takosumi.com`) is superseded; see
+[`takosumi/DEPLOY.md`](../../../DEPLOY.md) §"Cleanup of legacy Pages projects"
+for the one-time dashboard cleanup steps.
 
 Option A — connect Pages to the takosumi repo (recommended for CI):
 
 1. Cloudflare dashboard → Pages → Create Project → Connect to Git.
 2. Build settings:
-   - Build command: `npm run build`
-   - Build output directory: `docs/.vitepress/dist`
-   - Root directory: `docs/`
-3. Custom domain: `takosumi.com` (apex). Pages provisions cert.
+   - Build command: `bash website/build.sh`
+   - Build output directory: `website/.output/public`
+   - Root directory: (repo root)
+3. Custom domain: `takosumi.com` (apex), optionally `www.takosumi.com`. Pages
+   provisions cert.
 
 Option B — `wrangler pages deploy` (one-shot from your laptop):
 
 ```sh
-cd takosumi/docs
-npm install
-npm run build
-wrangler pages deploy .vitepress/dist --project-name takosumi-docs
-# Then in dashboard, add takosumi.com as custom domain.
+cd takosumi
+deno task docs:install               # installs vitepress
+(cd website && npm install)           # installs solid start + vinxi
+deno task website:deploy              # runs build.sh + wrangler pages deploy
+# Then in dashboard, add takosumi.com (and optionally www.takosumi.com)
+# as custom domains on the takosumi-website project.
 ```
 
 Verify:
 
 ```sh
-curl -I https://takosumi.com/
-# 200 OK, content-type: text/html
+curl -I https://takosumi.com/                  # 200 (landing)
+curl -I https://takosumi.com/docs/             # 200 (VitePress)
+curl https://takosumi.com/contexts/v1.jsonld   # JSON-LD vocab
 ```
 
 ## Step 4 — DNS sanity

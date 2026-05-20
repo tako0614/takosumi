@@ -1,0 +1,71 @@
+name: Deploy takosumi.com website to Cloudflare Pages
+
+# Wave M-G (= 2026-05-20) collapsed the previous 2-project split
+# (`takosumi-site` minimal HTML landing + `takosumi-docs` VitePress at
+# `docs.takosumi.com`) into a single `takosumi-website` Pages project
+# that serves the whole property:
+#
+#   https://takosumi.com/                       (landing, Solid Start)
+#   https://takosumi.com/docs/                  (VitePress reference docs)
+#   https://takosumi.com/contexts/v1.jsonld     (JSON-LD vocab)
+#   https://takosumi.com/contexts/kinds/v1/<name>.jsonld
+#
+# `website/build.sh` runs `vinxi build` for the landing, `vitepress
+# build` for the docs (overlaid onto `.output/public/docs/`), and copies
+# `spec/contexts/` (overlaid onto `.output/public/contexts/`).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "website/**"
+      - "docs/**"
+      - "spec/contexts/**"
+      - ".github/workflows/website-deploy.yml"
+      - "deno.json"
+      - "CHANGELOG.md"
+  pull_request:
+    branches: [master]
+    paths:
+      - "website/**"
+      - "docs/**"
+      - "spec/contexts/**"
+      - ".github/workflows/website-deploy.yml"
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install website dependencies (Solid Start)
+        working-directory: website
+        run: npm install --no-audit --no-fund
+
+      - name: Install docs dependencies (VitePress)
+        working-directory: docs
+        run: npm install --no-audit --no-fund
+
+      - name: Build merged Pages artifact (landing + /docs/ + /contexts/)
+        run: bash website/build.sh
+
+      - name: Deploy to Cloudflare Pages
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: takosumi-website
+          directory: website/.output/public
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}

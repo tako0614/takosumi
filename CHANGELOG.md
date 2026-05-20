@@ -8,6 +8,85 @@ Versions follow [Semantic Versioning](https://semver.org/) once each package
 crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes (documented per
 entry).
 
+## Spec策定中 — Wave M-G takosumi.com 単一 Pages project 統合 (2026-05-20, Unreleased)
+
+Wave M-G で takosumi の public deploy 構造を `docs.takosumi.com` subdomain +
+apex 2-project 構成から **takosumi.com 単一 Pages project** に統合した (user
+mandate: 「メインのページに /docs いったら表示みたいな感じじゃなかったっけ」 +
+「docs.takosumi.test は廃止」 + 「実際にデプロイするのと同じ方式にしてね」)。
+Wave M-F (= 2026-05-20、 hostname 構造訂正、 user 確認待ち defer されていた
+takosumi/docs/ deploy 先決定) の延長であり、 production deploy 構造と
+local-substrate mirror が同形になる architectural restructure。 spec contract /
+JSR package surface には一切触らない (docs / deploy / wrangler / workflow 層
+のみ):
+
+- **Architectural restructure — `takosumi/website/` を Pages 正本に**:
+  `takosumi/website/` (= Solid Start landing) を Cloudflare Pages project
+  `takosumi-website` の build root に昇格。 `takosumi/site/` (= minimal HTML
+  landing + `takosumi-site` Pages project) と `takosumi/docs/` の standalone
+  Pages config (= `takosumi-docs` project + `docs.takosumi.com` subdomain) は
+  superseded。 build artifact は **1 つの `website/.output/public/`** に統合
+  された:
+  - `/` → Solid Start landing (= `vinxi build` 出力をそのまま root に配置)
+  - `/docs/*` → VitePress build (= `docs/.vitepress/dist/` を overlay。 既存
+    `docs/.vitepress/config.ts` の `base: "/docs/"` 設定が production / local
+    の両 mount で kept)
+  - `/contexts/*` → JSON-LD vocab + kind catalog (= `spec/contexts/` を
+    overlay。 wire URL `https://takosumi.com/contexts/v1.jsonld` /
+    `https://takosumi.com/contexts/kinds/v1/<name>.jsonld` が resolve)
+- **Files**:
+  - **新規**: `website/build.sh` (= 3-step merge build、 fail-closed)、
+    `website/wrangler.toml` (= `name = takosumi-website`,
+    `pages_build_output_dir = ./.output/public`)、
+    `.github/workflows/
+    website-deploy.yml` (= 旧 `docs-deploy.yml` を
+    rename + 全 path trigger 拡張 + merged build step 化)。
+  - **削除**: `takosumi/site/` (= `index.html`, `build.sh`, `README.md`,
+    `wrangler.toml`, tracked `dist/*` artifacts)、 `takosumi/docs/wrangler.toml`
+    (= `takosumi-docs` Pages project config)、
+    `.github/workflows/docs-deploy.yml` (= renamed to `website-deploy.yml`)。
+  - **更新**: `deno.json` (= `site:*` 3 task → `website:*` 3 task に rename、
+    `spec:build` の copy target `site/dist/contexts/` →
+    `website/.output/
+    public/contexts/` に追従、 lint/fmt exclude を
+    `site/dist` → `website/
+    .output` + `website/.vinxi` に置換、
+    `docs:deploy` task は website に 統合済のため削除)、 `DEPLOY.md` (=
+    3-section → 2-section に集約 + operator-side cleanup section 新規 + smoke /
+    rollback narrative 更新)、 `README.md` (= docs URL `docs.takosumi.com/` →
+    `takosumi.com/docs/`、 "Docs site (VitePress)" section を website-merged
+    narrative に rewrite)、 `website/README.md` (= 新責務 = 単一 Pages artifact
+    説明)、 `docs/reference/public-spec-source-map.md` (= inline URL 5 hit を
+    `docs.takosumi.com` → `takosumi.com/docs/` 置換)、
+    `deploy/local-substrate/docs/production-deploy-cloudflare.md` (= Step 3
+    narrative を merged Pages 構造 + dashboard cleanup banner に置換)。
+- **Operator-side dashboard cleanup (= NOT in this commit、 manual action)**:
+  `wrangler pages` は project / custom domain 削除を 支持しないため、
+  `takosumi-docs` project + `docs.takosumi.com` custom domain と (=fresh deploy
+  なら N/A の) `takosumi-site` project は Cloudflare dashboard で 手動削除する。
+  手順は `DEPLOY.md` §"Cleanup of legacy Pages projects" に明記。 順序は
+  「`takosumi-website` を deploy + apex DNS attach → `takosumi-docs` の
+  `docs.takosumi.com` を detach + project 削除 → 旧 `takosumi-site` (存在すれば)
+  apex detach + project 削除」。
+- **Local-substrate (= `takosumi/deploy/local-substrate/`) は変更なし**:
+  Caddyfile の `takosumi.test` block (= `handle_path /docs/*` + `handle` apex)
+  は既に Wave M-F で「単一 host /docs/」 構造に整合済のため、 production
+  consolidation 後はそのまま使える。 compose.substrate.yml の
+  `takosumi-website-build` + `takosumi-docs-build` 2 service は kept (= 各々
+  `.output/public/` と `.vitepress/dist/` を生成し、 Caddy が両 mount を
+  serve)。 production の `website/build.sh` が両 step を sequential に実行する
+  形と、 local-substrate が parallel container で実行する形の違いはあるが、 生成
+  artifact の path / 内容は identical。
+- **Spec contract / JSR / kernel / contract / installer / provider / runtime
+  には一切触らない**: 完全に docs + deploy + wrangler + workflow scope。 AppSpec
+  3-field root (Wave K)、 Component 5-field (Wave J)、 bare `apiVersion: v1`
+  (Wave L) 等の contract end-state は不変。 `deno task check` / `lint` /
+  `fmt:check` / `lint:json-ld` / `spec:check-drift` / `deno test --allow-all` 全
+  PASS で landing build (`bash website/build.sh`) も local verify 済。
+- **No version bump**: 策定中 phase かつ docs / deploy scope のみのため publish
+  version は固定。 announcement 時の collective minor bump (= Wave J/K/L と同時)
+  に同梱予定。
+
 ## Spec策定中 — Wave L apiVersion group prefix removal (2026-05-20, Unreleased)
 
 Wave L (= L-A 段) で AppSpec の `apiVersion` から k8s 風 group prefix を削除した

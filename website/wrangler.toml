@@ -1,0 +1,43 @@
+# Cloudflare Pages project configuration for the takosumi.com property.
+#
+# Wave M-G (= ecosystem 2026-05-20、 architectural restructure):
+# This is the SINGLE Pages project that serves the entire takosumi.com
+# property — landing at `/`, VitePress docs at `/docs/*`, and the
+# JSON-LD context catalog at `/contexts/*`. The legacy `takosumi-site`
+# Pages project (vanilla HTML at `takosumi/site/`) and the legacy
+# `takosumi-docs` Pages project (`docs.takosumi.com` subdomain) are
+# both superseded.
+#
+# `website/build.sh` produces the merged `.output/public/` artifact
+# (Solid Start landing + VitePress dist overlaid under `/docs/` +
+# spec/contexts/ overlaid under `/contexts/`). Cloudflare Pages serves
+# them on the apex `takosumi.com` (and `www.takosumi.com` if attached).
+# Custom domains are wired via the Cloudflare Pages dashboard — `wrangler
+# pages` does not own DNS.
+#
+# Operator-side prerequisites (not committed):
+#   - Cloudflare account with the `takosumi.com` zone added.
+#   - Pages project named `takosumi-website` (created via dashboard or
+#     `wrangler pages project create takosumi-website`).
+#   - Custom domains `takosumi.com` and `www.takosumi.com` attached
+#     to the Pages project.
+#
+# Operator-side cleanup of superseded resources (= one-time, after this
+# wave is deployed; see DEPLOY.md §"Cleanup of legacy Pages projects"):
+#   - Detach `docs.takosumi.com` custom domain from the legacy
+#     `takosumi-docs` Pages project and delete the project.
+#   - Detach `takosumi.com` / `www.takosumi.com` from the legacy
+#     `takosumi-site` Pages project (if previously deployed) and
+#     delete the project. Re-attach the custom domains to the new
+#     `takosumi-website` Pages project.
+#
+# Once active, the property is reachable at:
+#   - https://takosumi.com/                      (landing)
+#   - https://takosumi.com/docs/                 (VitePress docs)
+#   - https://takosumi.com/contexts/v1.jsonld    (JSON-LD vocab)
+#   - https://takosumi.com/contexts/kinds/v1/<name>.jsonld (kind docs)
+# The default `takosumi-website.pages.dev` host stays available for
+# preview deploys.
+name = "takosumi-website"
+compatibility_date = "2026-05-20"
+pages_build_output_dir = "./.output/public"

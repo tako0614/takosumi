@@ -1,28 +1,65 @@
 # takosumi/website
 
-Marketing landing for `takosumi.com`. Vanilla HTML + CSS, no build step, no
-runtime dependencies. Ships as a Cloudflare Pages project alongside the docs
-(which mount under `/docs/`).
+Source for the `takosumi.com` Cloudflare Pages property. Solid Start landing
+(static prerender), overlaid with the VitePress reference docs (under `/docs/`)
+and the JSON-LD context catalog (under `/contexts/`). Single Pages project
+serves the apex `takosumi.com` and both sub-paths.
+
+Wave M-G (= 2026-05-20) consolidated the previous 2-project layout into this
+single `takosumi.com/` plus `/docs/*` plus `/contexts/*` build. The legacy
+`takosumi-site` Pages project (= minimal HTML landing under `takosumi/site/`)
+and the legacy `takosumi-docs` Pages project (= VitePress under the
+`docs.takosumi.com` subdomain) are both superseded by this single
+`takosumi-website` deploy. See [`takosumi/DEPLOY.md`](../DEPLOY.md) for the
+operator-side dashboard cleanup steps.
+
+## Build
+
+```sh
+bash takosumi/website/build.sh
+# or, from the repo root:
+deno task website:build
+```
+
+`build.sh` runs three steps in order:
+
+1. `vinxi build` → `website/.output/public/` (= landing).
+2. `vitepress build` → `docs/.vitepress/dist/` → overlaid onto
+   `website/.output/public/docs/` (= reference docs).
+3. `spec/contexts/` → overlaid onto `website/.output/public/contexts/` (=
+   JSON-LD vocab + kind catalog).
+
+The merged `.output/public/` is the `pages_build_output_dir` declared in
+`wrangler.toml`.
 
 ## Deploy
 
+Operator one-time setup:
+
 ```sh
-wrangler pages deploy takosumi/website --project-name takosumi-landing
+wrangler pages project create takosumi-website
+# Then in the Cloudflare dashboard:
+#   Workers & Pages → takosumi-website → Custom domains
+#   Add `takosumi.com`
+#   Add `www.takosumi.com` (optional)
 ```
 
-Then in the Cloudflare dashboard, add `takosumi.com` (apex) as a custom domain.
-The docs Pages project (`takosumi-docs`) attaches at `takosumi.com/docs/` via
-Pages' base-path routing or via a separate project with the same custom domain
-and different path matcher.
+Per-deploy:
 
-For a single-project deploy, copy `takosumi/docs/.vitepress/dist/` under
-`takosumi/website/docs/` before `wrangler pages deploy
-takosumi/website` so
-Pages serves both from one project.
+```sh
+deno task website:build
+wrangler pages deploy website/.output/public --project-name=takosumi-website
+# or:
+deno task website:deploy
+```
+
+The default Pages host `takosumi-website.pages.dev` stays available for preview
+deploys. See [`DEPLOY.md`](../DEPLOY.md) for full prerequisites and smoke
+checks.
 
 ## Local mirror
 
-In the local-substrate (`takosumi/deploy/local-substrate/`), Caddy serves this
-directory at `https://takosumi.test/` and the docs at
+In the local-substrate (`takosumi/deploy/local-substrate/`), Caddy serves the
+website artifact at `https://takosumi.test/` and the same docs at
 `https://takosumi.test/docs/`. See
-`takosumi/deploy/local-substrate/docs/production-deploy-cloudflare.md`.
+[`takosumi/deploy/local-substrate/docs/production-deploy-cloudflare.md`](../deploy/local-substrate/docs/production-deploy-cloudflare.md).
