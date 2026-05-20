@@ -4,6 +4,22 @@ takosumi.test:53 {
     errors
 }
 
+# Takos product 群 (app / docs / slide / excel / road / etc.) の dev mirror。
+# production の *.takos.jp と 1:1 対応。
+takos.test:53 {
+    file /etc/coredns/zones/takos.test.zone
+    log
+    errors
+}
+
+# yurucommu (web + backend) の dev mirror。 production の yurucommu.com と
+# 1:1 対応。
+yurucommu.test:53 {
+    file /etc/coredns/zones/yurucommu.test.zone
+    log
+    errors
+}
+
 oauth-mock.test:53 {
     file /etc/coredns/zones/oauth-mock.test.zone
     log

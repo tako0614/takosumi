@@ -129,6 +129,32 @@ sudo bash scripts/configure-dns.sh    # default 127.0.0.1
 bash scripts/down.sh && bash scripts/up.sh
 ```
 
+## Ecosystem product dev hostname (= Wave M-C 統合分)
+
+Wave M-C で `*.takos.test` / `yurucommu.test` zone を追加し、 Caddy が host
+で起動する各 product の Vite dev server を host.docker.internal 経由で reverse
+proxy するようになった。 dev マシンで Vite dev server を起動すると、 LAN client
+browser から TLS 終端 + dev hostname access できる。
+
+| dev hostname                  | upstream (host で起動)      | 起動コマンド (= 該当 product root で)                |
+| ----------------------------- | --------------------------- | ---------------------------------------------------- |
+| `https://app.takos.test/`     | `host.docker.internal:5173` | `cd takos/app/apps/web && deno task dev`             |
+| `https://docs.takos.test/`    | `host.docker.internal:3001` | `cd takos-apps/takos-docs && deno task dev`          |
+| `https://slide.takos.test/`   | `host.docker.internal:3002` | `cd takos-apps/takos-slide && deno task dev`         |
+| `https://excel.takos.test/`   | `host.docker.internal:3003` | `cd takos-apps/takos-excel && deno task dev`         |
+| `https://road.takos.test/`    | `host.docker.internal:1420` | `cd road-to-me/app && deno task dev`                 |
+| `https://control.takos.test/` | `host.docker.internal:5173` | `cd takos-private/apps/control/web && deno task dev` |
+| `https://yurucommu.test/`     | `host.docker.internal:5173` | `cd yurucommu/web && deno task dev`                  |
+
+複数 product を同時起動する場合は port 衝突 (= 5173) が起きるため、 各
+vite.config.ts の `server.port` を別 port にずらして、 Caddyfile の該当 entry の
+port も同期する必要がある。
+
+各 product の vite.config.ts は Wave M-C で `server.host = true` 化済 (= LAN
+binding 有効)、 Caddy 経由でなくとも `http://<dev-LAN-IP>:5173` 等で直接 access
+も可能。 ただし TLS 終端 + CORS / CSRF / OAuth allowlist (= Wave M-D)
+を経由する場合は dev hostname (= https) access が必要。
+
 ## 既知の制約
 
 - **Pebble root CA は restart 毎に regenerate**: stack を
@@ -140,3 +166,5 @@ bash scripts/down.sh && bash scripts/up.sh
   運用は scope 外 (= 各 stack が `*.takosumi.test` を奪い合う)。
 - **LAN client OS**: 本 runbook + LAN client 側 runbook は Linux +
   systemd-resolved のみ。 macOS / Windows は別タスク。
+- **Vite default port 衝突**: takos product UI / yurucommu / control が default
+  5173 を使う。 同時起動する場合は別 port を割り当てる。

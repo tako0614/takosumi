@@ -1,0 +1,19 @@
+; このファイルは scripts/dns-zone-render.sh の source template。 A record
+; target は env TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_IP (default 127.0.0.1) で
+; substitute され zones-rendered/ に書き出される。
+;
+; yurucommu.test は yurucommu (web + backend) の dev mirror zone。
+; production の yurucommu.com と 1:1 対応。
+$ORIGIN yurucommu.test.
+$TTL 60
+@       IN  SOA  ns.yurucommu.test. admin.yurucommu.test. (
+            1
+            60
+            60
+            60
+            60
+        )
+@       IN  NS   ns.yurucommu.test.
+ns      IN  A    {{INGRESS_IP}}
+@       IN  A    {{INGRESS_IP}}
+*       IN  A    {{INGRESS_IP}}

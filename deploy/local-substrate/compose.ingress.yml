@@ -73,6 +73,12 @@ services:
       # poke it from the host ad-hoc, use:
       #   docker exec local-substrate-caddy-1 caddy reload --config /etc/caddy/Caddyfile
       # or `docker compose exec caddy curl -s localhost:2019/config/`.
+    # host.docker.internal injection — Wave M-C で ecosystem product の Vite
+    # dev server (host で起動、 *.takos.test / yurucommu.test reverse proxy)
+    # を Caddy 経由で TLS 終端する際の host-gateway 解決に必要。 Linux Docker
+    # では default で host.docker.internal が解決しないので、 明示 inject。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       takos-local-internal:
         aliases:
@@ -86,6 +92,14 @@ services:
           - oauth-mock.test
           - mailpit.takosumi.test
           - jaeger.takosumi.test
+          # Wave M-C ecosystem dev hostnames (= 各 product Vite dev server)
+          - app.takos.test
+          - docs.takos.test
+          - slide.takos.test
+          - excel.takos.test
+          - road.takos.test
+          - control.takos.test
+          - yurucommu.test
 
 networks:
   takos-local-internal:

@@ -1,0 +1,20 @@
+; このファイルは scripts/dns-zone-render.sh の source template。 A record
+; target は env TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_IP (default 127.0.0.1) で
+; substitute され zones-rendered/ に書き出される。
+;
+; takos.test は Takos product 群 (app.takos.test / docs.takos.test /
+; slide.takos.test / excel.takos.test / road.takos.test 等) を覆う dev
+; mirror zone。 production の *.takos.jp と 1:1 対応。
+$ORIGIN takos.test.
+$TTL 60
+@       IN  SOA  ns.takos.test. admin.takos.test. (
+            1
+            60
+            60
+            60
+            60
+        )
+@       IN  NS   ns.takos.test.
+ns      IN  A    {{INGRESS_IP}}
+@       IN  A    {{INGRESS_IP}}
+*       IN  A    {{INGRESS_IP}}

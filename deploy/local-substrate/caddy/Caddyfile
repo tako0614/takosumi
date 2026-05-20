@@ -86,3 +86,36 @@ kernel-worker.takosumi.test {
 # Phase 3 で route-registrar が *.app.takosumi.test に動的 route を追加する。
 # (これは Takosumi が deploy する app の dynamic subdomain。 Takos product
 # / yurucommu service direct ではない。)
+
+# ===== Ecosystem dev hostname reverse proxy (= Wave M-C LAN dev integration)
+#
+# 各 product の Vite dev server (= host で `deno task dev` で起動) を
+# Caddy 経由で TLS 終端 + dev hostname access する route。 *.takos.test 系は
+# production *.takos.jp / yurucommu.test 系は production yurucommu.com の
+# dev mirror。 host.docker.internal は compose.ingress.yml で
+# extra_hosts injection 済 (Linux Docker は host-gateway 要)。
+#
+# Vite default port が衝突する場合は env で port override し、 ここの
+# upstream:PORT を合わせて書き換える。 multiple product を同時起動する場合は
+# 各 vite.config.ts で port を分離する必要がある。
+app.takos.test {
+	import proxy_site host.docker.internal:5173
+}
+docs.takos.test {
+	import proxy_site host.docker.internal:3001
+}
+slide.takos.test {
+	import proxy_site host.docker.internal:3002
+}
+excel.takos.test {
+	import proxy_site host.docker.internal:3003
+}
+road.takos.test {
+	import proxy_site host.docker.internal:1420
+}
+control.takos.test {
+	import proxy_site host.docker.internal:5173
+}
+yurucommu.test {
+	import proxy_site host.docker.internal:5173
+}
