@@ -29,7 +29,7 @@ boot 時 fail-closed か silent な persistence loss / plaintext secret
 ## 単一 VM (selfhost connector) {#single-vm-selfhost-connector}
 
 VM 1 台に systemd / docker / filesystem / local Postgres / coredns
-で完結デプロイを構築する例。 source root に置く public manifest は
+で完結デプロイを構築する例。 source root に置く public AppSpec は
 `.takosumi.yml` (= AppSpec)。
 
 `.takosumi.yml`:

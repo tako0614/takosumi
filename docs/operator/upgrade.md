@@ -86,7 +86,7 @@ production では kernel と runtime-agent を同じ release bundle から更新
 | -------------------------------- | --------------------------------------------------- |
 | package versions                 | `deno info jsr:@takos/takosumi-kernel`              |
 | runtime-agent reported version   | runtime-agent health endpoint / startup log         |
-| kernel public API smoke          | `takosumi deploy <manifest> --remote ... --dry-run` |
+| kernel public API smoke          | `takosumi install dry-run --source . --remote ...` |
 | schema ledger state              | release-specific operator evidence                  |
 | provider live smoke when enabled | provider-specific live provisioning task            |
 

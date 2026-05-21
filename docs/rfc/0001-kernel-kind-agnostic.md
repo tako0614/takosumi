@@ -299,7 +299,7 @@ deno.json に追加するだけで標準セット取得 + cloud provider package
 
 `https://cloud.takosumi.com/kinds/v1/build`:
 
-```jsonld
+```json
 {
   "@context": "https://takosumi.com/contexts/v1.jsonld",
   "@id": "https://cloud.takosumi.com/kinds/v1/build",
