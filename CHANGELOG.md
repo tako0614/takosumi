@@ -8,6 +8,27 @@ Versions follow [Semantic Versioning](https://semver.org/) once each package
 crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes (documented per
 entry).
 
+## Spec策定中 — Wave N planned: kernel kind-agnostic 化 + Component.build 削除 + curated catalog 廃止 (2026-05-21, RFC stage)
+
+Wave J → K → L の minimization sequence の自然な終点として、 takosumi kernel を
+**pure contract executor** に純化する計画。 主要 motion:
+
+- `Component.build` field 削除 (= Component 5 → 4 field)
+- `spec/contexts/kinds/v1/*.jsonld` + `packages/plugins/src/kinds/*` 物理削除
+- `packages/contract/src/app-spec.ts` の `COMPONENT_KINDS` / `KIND_URI_BY_NAME`
+  / `kindNameFromUri()` / `TAKOSUMI_KIND_URI_BASE` 削除
+- takosumi-cloud に新 JSR package `@takos/takosumi-cloud-kinds` を新設、 worker
+  / postgres / object-store / custom-domain / build / oidc の 6 kind を
+  `https://cloud.takosumi.com/kinds/v1/` 系で publish
+
+詳細 design + worked example + open questions は
+[RFC 0001](docs/rfc/0001-kernel-kind-agnostic.md) を参照。
+
+**現状 = RFC stage** (= 設計 dialogue 中、 code implementation は未着手)。 直近
+の Wave N-A code agent dispatch (= 2026-05-21) は 70 file 修正まで進行 後 user
+判断で中断し、 `git stash@{0}` に "Wave N-A code changes WIP" として保全。
+future wave で `git stash apply` から 再開可能。
+
 ## Spec策定中 — Wave M-G takosumi.com 単一 Pages project 統合 (2026-05-20, Unreleased)
 
 Wave M-G で takosumi の public deploy 構造を `docs.takosumi.com` subdomain +

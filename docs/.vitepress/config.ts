@@ -315,6 +315,15 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "Takosumi を拡張する", link: "/extending" },
       ],
     },
+    {
+      text: "RFC",
+      items: [
+        {
+          text: "0001 — Kernel kind-agnostic 化 (planned)",
+          link: "/rfc/0001-kernel-kind-agnostic",
+        },
+      ],
+    },
   ],
 };
 
@@ -354,6 +363,15 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Extending (JA fallback)",
       items: [
         { text: "Extending Takosumi", link: "/extending" },
+      ],
+    },
+    {
+      text: "RFC (JA fallback)",
+      items: [
+        {
+          text: "0001 — Kernel kind-agnostic (planned)",
+          link: "/rfc/0001-kernel-kind-agnostic",
+        },
       ],
     },
   ],

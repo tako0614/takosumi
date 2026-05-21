@@ -7,6 +7,14 @@ catalog** と **provider plugin**、 **template** の命名・形状規約を定
 はこの規約に準拠している (= cloud provider plugin は Phase D 以降、 cloud 別 6
 package に分離されている)。
 
+> **Wave N planned**: 本ドキュメントが規定する **curated 4-kind catalog 自体を
+> 廃止** + `Component.build` 削除 + kernel を pure contract executor に純化 する
+> Wave N が planned。 specific kind は operator distribution (= takosumi-cloud
+> 等) が JSON-LD + plugin で持ち込む model に移行予定。 詳細 design は
+> [`docs/rfc/0001-kernel-kind-agnostic.md`](docs/rfc/0001-kernel-kind-agnostic.md)。
+> code implementation 後、 本 CONVENTIONS.md は 「現状の規約」 から 「operator
+> が自分の catalog を作るときの reference convention」 にreframe される予定。
+
 ## 1. Component kind catalog principle
 
 - **Component kind catalog は extensible である。** Component kind (= portable

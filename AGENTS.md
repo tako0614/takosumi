@@ -81,6 +81,17 @@ AppSpec の各 component は 2 つの edge だけを持つ:
 旧 `use:` edge は廃止。 `${ref:...}` / `${secret-ref:...}` / `${bindings.*}`
 等の interpolation syntax も AppSpec / docs / kernel から完全除去された。
 
+## Wave N planned (= kernel kind-agnostic 化)
+
+Wave J / K / L の minimization sequence を継承し、 **`Component.build` 削除 +
+curated 4-kind catalog 完全廃止 + kernel を pure contract executor に純化** する
+Wave N が planned。 specific な kind (= worker / postgres / etc.) は operator
+distribution (= takosumi-cloud 等) が JSON-LD + plugin で持ち込む model に移行。
+詳細 design は
+[`docs/rfc/0001-kernel-kind-agnostic.md`](docs/rfc/0001-kernel-kind-agnostic.md)。
+code implementation は別 wave / 後日 (= 直近 dispatch した code agent の WIP 70
+file 修正は `git stash@{0}` で保全済、 `git stash apply` で再開可能)。
+
 ## 基本方針
 
 - **Source-to-runtime engine 専念**: kernel の責務は `.takosumi.yml` を読んで
