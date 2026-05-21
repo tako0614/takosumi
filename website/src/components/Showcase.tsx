@@ -11,71 +11,84 @@ interface Tab {
 
 const TABS: readonly Tab[] = [
   {
-    key: "selfhost",
-    label: "手元の docker",
-    subtitle: "self-hosted runtime",
+    key: "space",
+    label: "1. Space を作る",
+    subtitle: "bundled apps が auto-install",
     manifest: () => (
       <>
+        <span class="c"># 新しい Space を作るだけで、 bundled apps が立つ</span>
+        {"\n"}
+        <span class="k">$</span> takosumi space create my-home{"\n"}
+        <span class="c">{" ".repeat(2)}✓ chat (takos)</span>
+        {"\n"}
+        <span class="c">{" ".repeat(2)}✓ docs (takos-docs)</span>
+        {"\n"}
+        <span class="c">{" ".repeat(2)}✓ slides (takos-slide)</span>
+        {"\n"}
+        <span class="c">{" ".repeat(2)}✓ spreadsheet (takos-excel)</span>
+        {"\n"}
+        <span class="c">{" ".repeat(2)}✓ AI agent (takos-agent)</span>
+      </>
+    ),
+    output: () => (
+      <>
+        <span class="c">空 → 必要なもの 全部 揃った Space。</span>
+        {"\n"}
+        <span class="c">Notion / Slack / Docs を 個別契約する代わりに</span>
+        {"\n"}
+        <span class="c">1 つの Takosumi 上で 全部。</span>
+      </>
+    ),
+  },
+  {
+    key: "app",
+    label: "2. 自分の app を 1 つ追加",
+    subtitle: "manifest 1 本",
+    manifest: () => (
+      <>
+        <span class="c"># 1 つの .takosumi.yml で 自分の app を追加</span>
+        {"\n"}
         apiVersion: v1{"\n"}
-        metadata:{"\n"}{"  "}id: com.example.hello{"\n"}{"  "}name: Hello{"\n"}
+        metadata:{"\n"}{"  "}id: com.example.diary{"\n"}
         components:{"\n"}{"  "}web:{"\n"}{"    "}kind: worker{"\n"}{"    "}
-        spec:{"\n"}{"      "}routes:{"\n"}{"        "}- /{"\n"}{"    "}
-        build:{"\n"}{"      "}command: deno task build{"\n"}{"      "}output:
-        {" "}
-        dist/worker.mjs
+        spec:{"\n"}{"      "}routes: [/]{"\n"}{"  "}db:{"\n"}{"    "}
+        kind: postgres{"\n"}{"    "}publish: [my-app.db]
       </>
     ),
     output: () => (
       <>
-        <span class="k">$</span> takosumi install . --space personal{"\n"}
-        <span class="c">{" ".repeat(2)}✓ installed com.example.hello</span>
+        <span class="k">$</span> takosumi install . --space my-home{"\n"}
+        <span class="c">{" ".repeat(2)}✓ installed com.example.diary</span>
+        {"\n"}
+        <span class="c">{" ".repeat(2)}→ my Space に 並んだ。</span>
       </>
     ),
   },
   {
-    key: "fargate",
-    label: "Workers",
-    subtitle: "Cloudflare D1 / R2 / Queue / DO",
+    key: "deploy",
+    label: "3. deploy 先を切り替える",
+    subtitle: "cloud でも 自宅 VM でも",
     manifest: () => (
       <>
-        <span class="c"># AppSpec は同じ。 substrate は operator が選ぶ</span>
+        <span class="c"># provider を 1 行差し替えるだけ</span>
         {"\n"}
-        components:{"\n"}{"  "}web:{"\n"}{"    "}kind: worker{"\n"}{"    "}
-        listen:{"\n"}{"      "}com.example.hello.db:{" "}
-        {`{ as: env, prefix: DB_ }`}
-        {"\n"}{"  "}db:{"\n"}{"    "}kind: postgres{"\n"}{"    "}publish:
-        {"\n"}{"      "}- com.example.hello.db{"\n"}{"  "}assets:
-        {"\n"}{"    "}kind: object-store
+        <span class="k">$</span> takosumi deploy my-home --provider cloudflare
+        {"\n"}
+        <span class="c">{" ".repeat(2)}✓ deployed to Cloudflare Workers</span>
+        {"\n"}
+        {"\n"}
+        <span class="k">$</span> takosumi deploy my-home --provider selfhost
+        {"\n"}
+        <span class="c">{" ".repeat(2)}✓ deployed to your docker host</span>
       </>
     ),
     output: () => (
       <>
-        <span class="k">$</span> takosumi deploy ins_abc123{"\n"}
-        <span class="c">{" ".repeat(2)}✓ deployment dep_abc123 succeeded</span>
-      </>
-    ),
-  },
-  {
-    key: "k8s",
-    label: "Rollback",
-    subtitle: "Installation / Deployment ledger",
-    manifest: () => (
-      <>
-        <span class="c">
-          # 任意の Deployment に rollback、 ledger は monotonic
-        </span>
+        <span class="c">同じ Space が、 同じ manifest で。</span>
         {"\n"}
-        <span class="c">
-          # に積み上がる (= apply / rollback / failed が全部
-        </span>
+        <span class="c">cloud に出しても、 自宅 VM に戻しても、</span>
         {"\n"}
-        <span class="c"># Deployment record として残る)</span>
-      </>
-    ),
-    output: () => (
-      <>
-        <span class="k">$</span> takosumi rollback ins_abc123 dep_prev{"\n"}
-        <span class="c">{" ".repeat(2)}✓ rolled back to dep_prev</span>
+        <span class="c">中身は変わらない。 引っ越せる。</span>
       </>
     ),
   },
@@ -88,12 +101,11 @@ export default function Showcase() {
   return (
     <section id="showcase">
       <div class="container">
-        <span class="eyebrow">showcase</span>
-        <h2>同じ AppSpec で、 substrate を選ぶ。</h2>
+        <span class="eyebrow">how it works</span>
+        <h2>Space を 1 つ作ると、 必要なもの 全部 揃う。</h2>
         <p class="lede">
-          App は <code>.takosumi.yml</code>{" "}
-          に閉じ、 install / deploy / rollback は installer API の同じ lifecycle
-          を通ります。
+          Space を作る → 自分の app を 1 つ足す → deploy 先を選ぶ。 3 step、
+          同じ <code>.takosumi.yml</code> が cloud でも 自宅 VM でも 動きます。
         </p>
         <div class="showcase">
           <div class="showcase-tabs" role="tablist">

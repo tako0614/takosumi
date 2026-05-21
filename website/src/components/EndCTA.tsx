@@ -6,21 +6,29 @@ export default function EndCTA() {
       <div class="container">
         <h2>5 分で始める。</h2>
         <p class="lede" style="margin-left: auto; margin-right: auto;">
-          install して、 manifest を書いて、 deploy。 それだけ。
+          Space を作って、 必要なものを入れて、 deploy。 cloud でも、 自宅
+          サーバーでも、 同じ 1 行で。
         </p>
         <CodeBlock terminal class="terminal">
           <span class="k">$</span>{" "}
           deno install -gA -n takosumi jsr:@takos/takosumi-cli{"\n"}
-          <span class="k">$</span> takosumi init ./manifest.yml{"\n"}
-          <span class="k">$</span> takosumi deploy ./manifest.yml
+          <span class="k">$</span> takosumi space create my-home{"\n"}
+          <span class="k">$</span> takosumi deploy my-home
         </CodeBlock>
         <div class="cta-row" style="justify-content: center;">
           <a
             class="btn btn-primary"
+            href="https://cloud.takosumi.com/"
+            rel="noopener"
+          >
+            Cloud で 試す →
+          </a>
+          <a
+            class="btn btn-secondary"
             href="/docs/getting-started/quickstart"
             rel="external"
           >
-            Quickstart →
+            自宅サーバーで 動かす
           </a>
           <a class="btn btn-secondary" href="/docs/" rel="external">
             ドキュメント

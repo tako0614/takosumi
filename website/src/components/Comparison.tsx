@@ -1,29 +1,39 @@
 /**
- * 3 軸だけの軽い比較表。 「他と何が違うか」 を秒で伝える用途。
- * vendor PaaS = Heroku/Render 等、 raw cloud = AWS console を直接、
- * Terraform = TF + Helm + 自前 wrapper の組み合わせ。
+ * 3 列 audience-aware comparison (Wave M-H3 訂正後)。
+ * SaaS = Notion / Slack / Google Docs 等 (= 非技術者にも届く対比軸)、
+ * Vendor PaaS = Heroku / Render 等。 旧「素の cloud」「Terraform」 列は
+ * 削除 (= 非技術者には伝わらない + WhySelfHost で本質は語り済)。
  */
 const ROWS = [
   {
-    axis: "移植",
+    axis: "データの所在",
+    us: "あなたの host の中",
+    saas: "vendor の cloud の中",
+    paas: "PaaS の中",
+  },
+  {
+    axis: "サービスが止まったら",
+    us: "自分で動かし続けられる",
+    saas: "使えなくなる、 値上げも",
+    paas: "PaaS が止まれば止まる",
+  },
+  {
+    axis: "中身の透明性",
+    us: "open source、 全部見える",
+    saas: "ブラックボックス",
+    paas: "PaaS のコードは非公開",
+  },
+  {
+    axis: "引っ越し",
     us: "manifest 1 行で別 cloud へ",
-    vendor: "不可、 lock-in",
-    cloud: "自分で書き直す",
-    tf: "provider 毎に別 module",
+    saas: "原則 不可、 export しても 互換性なし",
+    paas: "不可、 lock-in",
   },
   {
-    axis: "self-host",
-    us: "deno install で OK",
-    vendor: "不可",
-    cloud: "—",
-    tf: "TF state backend を別途",
-  },
-  {
-    axis: "credential",
-    us: "自分の VM の中だけ",
-    vendor: "vendor 側に預ける",
-    cloud: "ローカル設定散在",
-    tf: "TF state に残ることも",
+    axis: "拡張 / 自作",
+    us: "JSON-LD で 新 kind を 追加",
+    saas: "vendor が出した plugin のみ",
+    paas: "vendor の SDK の範囲内",
   },
 ];
 
@@ -32,16 +42,15 @@ export default function Comparison() {
     <section id="comparison">
       <div class="container">
         <span class="eyebrow">vs. others</span>
-        <h2>他と何が違うか。</h2>
+        <h2>ほかの選択肢と、 何が違うか。</h2>
         <div class="comparison">
           <table>
             <thead>
               <tr>
                 <th></th>
                 <th>Takosumi</th>
+                <th>典型的な SaaS</th>
                 <th>Vendor PaaS</th>
-                <th>素の cloud</th>
-                <th>Terraform</th>
               </tr>
             </thead>
             <tbody>
@@ -51,9 +60,8 @@ export default function Comparison() {
                     <strong>{r.axis}</strong>
                   </td>
                   <td class="us">{r.us}</td>
-                  <td>{r.vendor}</td>
-                  <td>{r.cloud}</td>
-                  <td>{r.tf}</td>
+                  <td>{r.saas}</td>
+                  <td>{r.paas}</td>
                 </tr>
               ))}
             </tbody>
