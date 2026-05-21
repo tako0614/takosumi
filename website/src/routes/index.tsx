@@ -1,7 +1,7 @@
 import { Meta, Title } from "@solidjs/meta";
 import Nav from "~/components/Nav";
 import Hero from "~/components/Hero";
-import FeatureGrid from "~/components/FeatureGrid";
+import WhySelfHost from "~/components/WhySelfHost";
 import Showcase from "~/components/Showcase";
 import Comparison from "~/components/Comparison";
 import EndCTA from "~/components/EndCTA";
@@ -10,18 +10,20 @@ import Footer from "~/components/Footer";
 export default function Home() {
   return (
     <>
-      <Title>Takosumi — どこの cloud にも同じ 1 行で deploy</Title>
+      <Title>
+        Takosumi — An Open Source, Self-Hostable Platform for Everything
+      </Title>
       <Meta
         name="description"
-        content="AWS、 Cloudflare、 Kubernetes、 docker、 自前 VM — 全部に takosumi deploy 1 コマンドで届く。 引っ越しは manifest を 1 行変えるだけ。"
+        content="chat も docs も agent も SNS も、 自分の DB も —— 1 つの Takosumi の上で、 自分の host に。 cloud でも自宅の docker でも、 同じ Space が動く。 Takosumi は open source な self-host platform、 全ての人のために。"
       />
       <Meta
         property="og:title"
-        content="Takosumi — どこの cloud にも同じ 1 行で deploy"
+        content="Takosumi — An Open Source, Self-Hostable Platform for Everything"
       />
       <Meta
         property="og:description"
-        content="AWS, Cloudflare, Kubernetes, docker, 自前 VM。 一度書いたら全部に届く self-host PaaS。"
+        content="chat / docs / agent / SNS / DB を 1 つの Takosumi の上で、 自分の host に。 open source な self-host platform、 全ての人のために。"
       />
       <Meta property="og:url" content="https://takosumi.com/" />
       <Meta property="og:type" content="website" />
@@ -33,7 +35,7 @@ export default function Home() {
       <Nav />
       <main>
         <Hero />
-        <FeatureGrid />
+        <WhySelfHost />
         <Showcase />
         <Comparison />
         <EndCTA />

@@ -7,16 +7,18 @@ export default function Hero() {
       <InkSplash class="hero-splash" variant={1} />
       <div class="container hero-grid">
         <div class="hero-copy">
-          <span class="eyebrow">墨 · open source · v0.17</span>
+          <span class="eyebrow">
+            墨 · open source · self-hostable · for everyone
+          </span>
           <h1>
-            <span class="hero-line">どこの cloud にも</span>
-            <span class="hero-line grad-text">同じ 1 行で</span>
-            <span class="hero-line">deploy。</span>
+            <span class="hero-line">全部、 ひとつに。</span>
+            <span class="hero-line grad-text">全部、 自分のサーバーに。</span>
+            <span class="hero-line">誰でも、 含めて。</span>
           </h1>
           <p class="lede">
-            AWS、 Cloudflare、 Kubernetes、 docker、 自前 VM —— 全部に{" "}
-            <code>takosumi deploy</code>{" "}
-            1 コマンドで届く。 引っ越しは manifest を 1 行変えるだけ。
+            chat も、 docs も、 agent も、 SNS も、 自分の DB も —— 1 つの{" "}
+            Takosumi の上で、 自分の host に。 cloud でも、 自宅の docker でも、
+            同じ Space が動きます。
           </p>
           <div class="cta-row">
             <a
@@ -37,18 +39,20 @@ export default function Hero() {
         </div>
         <div class="hero-terminal">
           <CodeBlock terminal>
-            <span class="k">$</span> deno install -gA -n takosumi \{"\n"}
-            {" ".repeat(2)}jsr:@takos/takosumi-cli{"\n"}
-            <span class="k">$</span> takosumi deploy ./manifest.yml{"\n"}
-            <span class="c">{" ".repeat(2)}✓ web → http://localhost:18080</span>
+            <span class="k">$</span> takosumi space create my-home{"\n"}
+            <span class="c">{" ".repeat(2)}✓ chat (takos)</span>
+            {"\n"}
+            <span class="c">{" ".repeat(2)}✓ docs (takos-docs)</span>
+            {"\n"}
+            <span class="c">{" ".repeat(2)}✓ agent (takos-agent)</span>
+            {"\n"}
+            <span class="c">{" ".repeat(2)}✓ files (object-store)</span>
             {"\n"}
             <span class="c">
-              {" ".repeat(2)}↳ swap "provider:" line to ship
+              {" ".repeat(2)}↳ on Cloudflare / on docker / on bare metal
             </span>
             {"\n"}
-            <span class="c">
-              {" ".repeat(4)}the same thing on Fargate / k3s.
-            </span>
+            <span class="c">{" ".repeat(4)}— same Space, your host.</span>
           </CodeBlock>
         </div>
       </div>

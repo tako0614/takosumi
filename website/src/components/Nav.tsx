@@ -20,8 +20,8 @@ export default function Nav() {
       <div class="nav-inner container">
         <Wordmark variant="geometric" />
         <nav class="nav-links" aria-label="Primary">
-          <a href="#features">Features</a>
-          <a href="#showcase">Showcase</a>
+          <a href="#why">Why</a>
+          <a href="#showcase">How</a>
           <a href="#comparison">vs.</a>
           <a href="/docs/" rel="external">Docs</a>
           <a href="https://cloud.takosumi.com/" rel="noopener">Cloud</a>
