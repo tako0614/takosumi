@@ -3,6 +3,14 @@
 > このページでわかること: Takosumi manifest = `.takosumi.yml` (AppSpec) の
 > 参照先。
 
+> **Wave N planned (2026-05-21 RFC stage)**: 本 teaser が示す curated 4 kind
+> 名 + `build:` field は Wave N で削除予定 (= kernel pure contract executor 化、
+> build は別 `kind: build` component に移管、 kind は operator distribution が
+> JSON-LD
+>
+> - plugin で持ち込む)。 詳細 design は
+>   [RFC 0001](./rfc/0001-kernel-kind-agnostic.md) を参照。
+
 Takosumi の manifest は **`.takosumi.yml`** (= AppSpec) という 1 ファイルです。
 source root に置くだけで install + deploy + rollback まで動きます。
 

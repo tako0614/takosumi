@@ -28,7 +28,9 @@ package surface ではドキュメントのみの更新では不十分です。
   ません。
 - `retired authoring extension` / `.takosumi/workflows/*` / `${artifacts.*}` は
   current AppSpec には存在しません。 artifact build は `component.build` の最小
-  recipe と provider output で表現します。
+  recipe と provider output で表現します。 (= Wave N planned: `component.build`
+  も削除予定、 build は別 `kind: build` component に移管。 詳細
+  [RFC 0001](../rfc/0001-kernel-kind-agnostic.md)。)
 - public JSR package check は root workspace import map ではなく package の
   `deno.json` を使い、 古い publish 済依存 pin を捕捉します。
 - 真実の source が本 repo 外にある行は、 所有 repo とそこの test location を

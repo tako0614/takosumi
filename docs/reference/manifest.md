@@ -3,6 +3,14 @@
 > このページでわかること: AppSpec manifest (= `.takosumi.yml`) の spec /
 > validation / expand semantics / data model。
 
+> **Wave N planned (2026-05-21 RFC stage)**: 本ドキュメントが説明する curated 4
+> kind catalog と `Component.build` field は Wave N で **削除予定** (= kernel
+> pure contract executor 化、 build は別 `kind: build` component に移管、
+> specific kind は operator distribution が JSON-LD + plugin で持ち込む model に
+> 移行)。 詳細 design は [RFC 0001](../rfc/0001-kernel-kind-agnostic.md)
+> を参照。 現状の code 動作は本ドキュメント通り、 RFC 完了後に narrative sweep
+> 予定。
+
 ## スペック {#spec}
 
 Takosumi の manifest は **`.takosumi.yml`** (= AppSpec) という 1 ファイルです。

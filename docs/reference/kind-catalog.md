@@ -5,6 +5,17 @@
 > の spec / publishes / listens / outputs、 JSON-LD で kind を publish
 > する手順、 artifact (= DataAsset) kind registry の仕様。
 
+> **Wave N planned (2026-05-21 RFC stage)**: 本ドキュメントの説明する curated 4
+> kind catalog (= `worker` / `postgres` / `object-store` / `custom-domain`) は
+> Wave N で **完全廃止予定** (= kernel pure contract executor 化、 specific kind
+> は **operator distribution が JSON-LD + plugin で持ち込む** model に移行)。
+> `Component.build` も削除され、 build は別 `kind: build` component
+> に移管します。 詳細 design は [RFC 0001](../rfc/0001-kernel-kind-agnostic.md)
+> を参照。 現状の code 動作は本ドキュメント通り curated catalog ベース、 RFC
+> 完了後に takosumi-cloud が `https://cloud.takosumi.com/kinds/v1/` 系で 6 kind
+> (= worker / postgres / object-store / custom-domain / build / oidc) を
+> **reference operator distribution** として publish 予定。
+
 ## 概要 {#overview}
 
 v1 manifest (= `.takosumi.yml`) では各 component が `kind` を持ち、 catalog

@@ -98,7 +98,9 @@ RPC。 すべて `/api/internal/v1/runtime/agents/...` 配下で、 internal HMA
 
 kernel は workflow / trigger / schedule / declarable hook の HTTP route を持ち
 ません。 build は AppSpec の `component.build` で最小 recipe として宣言し、
-kernel installer が apply 時に直接実行します。
+kernel installer が apply 時に直接実行します。 (= Wave N planned:
+`component.build` は削除予定、 build は別 `kind: build` component に移管。 詳細
+[RFC 0001](../rfc/0001-kernel-kind-agnostic.md)。)
 
 The current kernel exposes no workflow, trigger, schedule, or declarable hook
 HTTP route.

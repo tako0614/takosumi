@@ -2,6 +2,12 @@
 
 > このページでわかること: Takosumi v1 リファレンスドキュメントの目次。
 
+> **Wave N planned (2026-05-21 RFC stage)**: 本リファレンスが説明する curated 4
+> kind catalog と `Component.build` field は Wave N で削除予定 (= kernel pure
+> contract executor 化、 specific kind は operator distribution が JSON-LD +
+> plugin で持ち込む model に移行)。 詳細 design は
+> [RFC 0001](../rfc/0001-kernel-kind-agnostic.md) を参照。
+
 ## API surface {#api-surfaces}
 
 クライアントとサーバーの間で交わされる surface。

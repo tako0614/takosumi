@@ -150,6 +150,13 @@ components:
 
 ### `build` (= 最小 build recipe) {#build-minimum-build-recipe}
 
+> **Wave N planned (2026-05-21 RFC stage)**: `Component.build` field は Wave N
+> で **削除予定** (= Component は 4 field に minimize、 build recipe は別
+> `kind: build` component に移管、 artifact は namespace pub/sub 経由で consumer
+> に届く)。 詳細 design は [RFC 0001](../rfc/0001-kernel-kind-agnostic.md)
+> を参照。 現状 code は本 section 通り `build:` を受理します、 RFC 完了後に
+> narrative sweep 予定。
+
 `build` は **artifact を得る最小条件** を表現します。 CI workflow
 ではありません。
 
@@ -157,6 +164,7 @@ components:
 components:
   web:
     kind: worker
+    # Wave N (planned): `build:` field は別 `kind: build` component に移管予定。 詳細 RFC 0001。
     build:
       command: npm ci && npm run build
       output: dist/worker.mjs

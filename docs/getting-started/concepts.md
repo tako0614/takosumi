@@ -3,6 +3,13 @@
 > このページでわかること: AppSpec の component kind と provider implementation
 > の関係を 5 分で理解する。
 
+> **Wave N planned (2026-05-21 RFC stage)**: 本ドキュメントが説明する curated 4
+> kind と `build:` field は Wave N で削除予定 (= kernel pure contract executor
+> 化、 全 kind は operator distribution が JSON-LD + plugin で持ち込む model
+> に移行、 build は別 `kind: build` component に移管)。 詳細 design は
+> [RFC 0001](../rfc/0001-kernel-kind-agnostic.md) を参照。 現状の code 動作は本
+> ドキュメント通り、 RFC 完了後に narrative sweep 予定。
+
 [Quickstart](/getting-started/quickstart) で `takosumi install` を 1
 回通したあとに読むのがおすすめ。
 

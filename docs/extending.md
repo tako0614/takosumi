@@ -2,6 +2,16 @@
 
 > このページでわかること: 新しい component kind / materializer を追加する手順。
 
+> **Wave N planned (2026-05-21 RFC stage)**: 本ドキュメントが説明する「curated 4
+> kind + operator-defined extensible」 model は Wave N で **「全 kind が
+> operator-defined」 model に進化予定** (= curated catalog 完全廃止、 kernel は
+> kind 名を一切知らない pure contract executor に純化、 specific kind は全て
+> operator distribution が JSON-LD + plugin で持ち込む)。 takosumi-cloud が
+> reference distribution として `https://cloud.takosumi.com/kinds/v1/` 系で 6
+> kind (= worker / postgres / object-store / custom-domain / build / oidc) を
+> publish。 詳細 design は [RFC 0001](./rfc/0001-kernel-kind-agnostic.md)
+> を参照。 現状の拡張手順 (= JSON-LD + materializer) は変わりません。
+
 命名規則と最小コミットメントの詳細は
 [`takosumi/CONVENTIONS.md`](https://github.com/tako0614/takosumi/blob/main/CONVENTIONS.md)
 (canonical) 参照。
