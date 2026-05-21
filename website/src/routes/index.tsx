@@ -1,7 +1,10 @@
 import { Meta, Title } from "@solidjs/meta";
 import Nav from "~/components/Nav";
 import Hero from "~/components/Hero";
+import WhatYouCanHost from "~/components/WhatYouCanHost";
 import WhySelfHost from "~/components/WhySelfHost";
+import EcosystemMap from "~/components/EcosystemMap";
+import ForEveryone from "~/components/ForEveryone";
 import Showcase from "~/components/Showcase";
 import Comparison from "~/components/Comparison";
 import EndCTA from "~/components/EndCTA";
@@ -35,7 +38,10 @@ export default function Home() {
       <Nav />
       <main>
         <Hero />
+        <WhatYouCanHost />
         <WhySelfHost />
+        <EcosystemMap />
+        <ForEveryone />
         <Showcase />
         <Comparison />
         <EndCTA />
