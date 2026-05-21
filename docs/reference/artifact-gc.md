@@ -244,7 +244,7 @@ chain と offline で照合できるようにする。
   that drive the snapshot-reachable mark class.
 - `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`
   — ActivationSnapshot shape that grounds the activation history projection.
-- `docs/reference/incident-model.md#observation-drift--revokedebt-model` —
+- `docs/reference/drift-detection.md` —
   RevokeDebt rows as a GC root, ensuring debt-pinned material is not swept while
   cleanup is in flight.
 
@@ -255,5 +255,4 @@ chain と offline で照合できるようにする。
 - [Audit Events](./audit-events.md)
 - [Kernel HTTP API](./kernel-http-api.md)
 - [CLI](./cli.md)
-- [Quota and Rate Limit](./quota-rate-limit.md)
 - [Revoke Debt](./revoke-debt.md)

@@ -191,8 +191,7 @@ reason / status / aging は [RevokeDebt Model](./revoke-debt.md) 参照。 WAL s
   contract の議論
 - `docs/reference/architecture/execution-lifecycle.md` — phase ↔ stage
   マッピングの設計 rationale と recovery mode の選定背景
-- `docs/reference/incident-model.md#observation-drift--revokedebt-model` —
-  orphaned debt の taxonomy と observe 経路の設計議論
+- `docs/reference/drift-detection.md` — orphaned debt と observe 経路の設計議論
 
 ## 関連ページ
 

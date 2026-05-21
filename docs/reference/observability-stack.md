@@ -143,6 +143,6 @@ Collector / PagerDuty integration / public status page / SLA credit calculator
 
 - [Telemetry / Metrics](./telemetry-metrics.md)
 - [Logging Conventions](./logging-conventions.md)
-- [SLA Breach Detection](./sla-breach-detection.md)
-- [Incident Model](./incident-model.md)
+- [Drift Detection](./drift-detection.md)
+- [RevokeDebt Model](./revoke-debt.md)
 - [Self-hosting Operator Guide](/operator/self-host)

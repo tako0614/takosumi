@@ -152,7 +152,7 @@ Refresh / TTL 規則:
   近づくと `active → refresh-required` に遷移する。
 - refresh 成功は share を `active` に戻す。refresh 失敗は `stale` に遷移する。
 - `stale` と `revoked` はいずれも
-  [Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
+  [Drift Detection](../drift-detection.md)
   に従って依存する生成 material の cleanup を queue する。cleanup 失敗は
   `reason: cross-space-share-expired` の RevokeDebt を生成する。
 - `stale-export` と `revoke-debt-created` は

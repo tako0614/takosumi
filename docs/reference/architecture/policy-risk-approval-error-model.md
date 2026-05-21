@@ -94,7 +94,7 @@ transform-unapproved
 `stale-export` is raised when an operator-owned export becomes stale and a
 deployment still depends on it. `revoke-debt-created` is raised when an
 operation queues a RevokeDebt record per
-[Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model).
+[Drift Detection](../drift-detection.md).
 
 ## Approval ライフサイクル {#approval-lifecycle}
 
@@ -241,6 +241,6 @@ model の Error fix-hint 分類 (safeFix / requiresPolicyReview / operatorFix)
   [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 - Architecture: [Space Model](./space-model.md)
 - Architecture:
-  [Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
+  [Drift Detection](../drift-detection.md)
 - Reference: [Kernel HTTP API](../kernel-http-api.md)
 - Reference: [Runtime-Agent API](../runtime-agent-api.md)

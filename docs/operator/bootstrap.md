@@ -138,5 +138,6 @@ const { app } = await createPaaSApp({
   envelope
 - [Kind Catalog](../reference/kind-catalog.md#component-kinds) — kind ごとの
   outputs と capabilities
-- [Manifest](/manifest) — operator が apply する manifest の syntax
+- [AppSpec](../reference/app-spec.md) — operator が apply する `.takosumi.yml`
+  の syntax
 - [Extending](/extending) — 新 provider 追加時の `KernelPlugin` 作り方

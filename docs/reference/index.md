@@ -1,201 +1,84 @@
 # リファレンス {#reference}
 
-> このページでわかること: Takosumi v1 リファレンスドキュメントの目次。
+Takosumi docs の reference は、kernel と installer contract を調べるための索引
+です。初めて読む場合は [クイックスタート](/getting-started/quickstart) と
+[コンセプト](/getting-started/concepts) から始めてください。
 
-> **Wave N planned (2026-05-21 RFC stage)**: 本リファレンスが説明する curated 4
-> kind catalog と `Component.build` field は Wave N で削除予定 (= kernel pure
-> contract executor 化、 specific kind は operator distribution が JSON-LD +
-> plugin で持ち込む model に移行)。 詳細 design は
-> [RFC 0001](../rfc/0001-kernel-kind-agnostic.md) を参照。
+## Public contract
 
-> **用語の整理**: AppSpec / Installation / Deployment / Component / Kind /
-> Materializer / Provider plugin / KernelPlugin / Namespace pub/sub / Artifact /
-> Reference operator distribution / Wave J — N narrative の定義 + cross-link は
-> [用語集 (Glossary)](./glossary.md) に集約しています。
+- [AppSpec (`.takosumi.yml`)](./app-spec.md) — ユーザーが source root に置く
+  declarative spec。
+- [Installer API](./installer-api.md) — Installation / Deployment / rollback の
+  5 endpoint。
+- [Kernel HTTP API](./kernel-http-api.md) — public installer API、internal API、
+  runtime-agent RPC の境界。
+- [Runtime-Agent API](./runtime-agent-api.md) — kernel から agent に送る
+  lifecycle RPC。
+- [CLI](./cli.md) — `takosumi` command surface。
+- [Environment Variables](./env-vars.md) — kernel / CLI / runtime-agent の env。
 
-## API surface {#api-surfaces}
+## Component と provider
 
-クライアントとサーバーの間で交わされる surface。
+- [Kind Catalog](./kind-catalog.md) — component kind、spec、outputs、JSON-LD
+  source-of-truth。
+- [Provider Plugins](./providers.md) — provider plugin の attach、capability、
+  resolution、implementation contract。
+- [Connector Contract](./connector-contract.md) — runtime-agent connector の
+  envelope と accepted kind。
+- [DataAsset Policy](./data-asset-policy.md) — artifact / data asset の扱い。
+- [Artifact GC](./artifact-gc.md) — artifact retention と activation history。
 
-- [AppSpec (`.takosumi.yml`)](./app-spec.md) — source root に置く 1 ファイル
-- [Kind Catalog](./kind-catalog.md) — curated 4 種 component kind +
-  operator-defined kind schema + JSON-LD source-of-truth + artifact kind
-  registry
-- [Installer API](./installer-api.md) — 5 endpoint の wire spec (dry-run / apply
-  / rollback)
-- [Kernel HTTP API](./kernel-http-api.md) — public installer + internal control
-  plane + runtime-agent RPC の overview
-- [Runtime-Agent API](./runtime-agent-api.md) — kernel ↔ runtime-agent の
-  lifecycle RPC
-- [CLI](./cli.md) — `takosumi` command surface
-- [Lifecycle Protocol](./lifecycle.md) — phase 連携と cross-process lock
-- [Provider Plugins — Implementation Contract](./providers.md#implementation-contract)
-  — runtime-agent 側 Implementation の wire-level contract
-- [Public Spec Source Map](./public-spec-source-map.md) — public surface ごとの
-  source of truth / publish URL / drift check
+## Lifecycle と実行
 
-## Lifecycle と実行 {#lifecycle-execution}
+- [Lifecycle Protocol](./lifecycle.md)
+- [Lifecycle Phases](./lifecycle-phases.md)
+- [WAL Stages](./wal-stages.md)
+- [GroupHead Rollout](./group-head-rollout.md)
+- [Readiness Probes](./readiness-probes.md)
+- [Plan Output](./plan-output.md)
+- [Status Output](./status-output.md)
 
-phase 進行と実行モデル。
+## Storage、policy、observability
 
-- [Lifecycle Phases](./lifecycle-phases.md) — apply / activate / destroy /
-  rollback / recovery / observe + `LifecycleStatus`
-- [WAL Stages](./wal-stages.md) — write-ahead journal stage / idempotency /
-  replay
-- [GroupHead and Rollout](./group-head-rollout.md) — canary / shadow / rollout
-  state machine
-- [Readiness Probes](./readiness-probes.md) — readiness DAG and dependency
-  propagation
+- [Storage Schema](./storage-schema.md)
+- [Audit Events](./audit-events.md)
+- [Closed Enums](./closed-enums.md)
+- [Risk Taxonomy](./risk-taxonomy.md)
+- [Approval Invalidation](./approval-invalidation.md)
+- [Access Modes](./access-modes.md)
+- [RevokeDebt Model](./revoke-debt.md)
+- [Observation Retention](./observation-retention.md)
+- [Drift Detection](./drift-detection.md)
+- [Telemetry / Metrics](./telemetry-metrics.md)
+- [Logging Conventions](./logging-conventions.md)
+- [Observability Stack](./observability-stack.md)
 
-## Policy / Risk / Approval {#policy-risk-approval}
+## Security と operation
 
-allow / deny / approval を扱う closed vocabulary。
+- [Secret Partitions](./secret-partitions.md)
+- [Cross-Process Locks](./cross-process-locks.md)
+- [Catalog Release Trust](./catalog-release-trust.md)
+- [Supply Chain Trust](./supply-chain-trust.md)
+- [Backup and Restore](./backup-restore.md)
+- [Migration / Upgrade](./migration-upgrade.md)
+- [Bootstrap Protocol](./bootstrap-protocol.md)
+- [Workers Backend](./workers-backend.md)
 
-- [Closed Enums](./closed-enums.md) — 全 closed enum と state machine の hub
-- [Access Modes](./access-modes.md) — `read` / `read-write` / `admin` /
-  `invoke-only` / `observe-only`
-- [Approval Invalidation Triggers](./approval-invalidation.md) — 6 trigger と
-  propagation
-- [Risk Taxonomy](./risk-taxonomy.md) — closed risk enum と stable id
-- [RevokeDebt Model](./revoke-debt.md) — reason / status / aging window
+## Architecture notes
 
-## ストレージと可観測性 {#storage-observability}
+Architecture notes は内部設計を追うための奥の資料です。通常の authoring には
+不要です。
 
-永続化レイヤと観測レイヤ。
+- [Architecture Overview](./architecture/index.md)
+- [Kernel](./architecture/kernel.md)
+- [Deploy System](./architecture/deploy-system.md)
+- [Runtime Deployment](./architecture/runtime-deployment-model.md)
+- [Namespace Export Model](./architecture/namespace-export-model.md)
+- [Operator Boundaries](./architecture/operator-boundaries.md)
 
-- [Storage Schema](./storage-schema.md) — Snapshot / Journal / RevokeDebt /
-  Approval の論理 wire schema
-- [Journal Compaction](./journal-compaction.md) — compaction policy / retention
-- [Audit Events](./audit-events.md) — event taxonomy / hash chain
-- [Observation Retention](./observation-retention.md) — ObservationSet retention
-  / ObservationHistory opt-in / freshness propagation
-- [Drift Detection](./drift-detection.md) — DriftIndex compute / annotation /
-  RevokeDebt linkage
+## Docs boundary
 
-## アイデンティティとアクセス {#identity-access}
-
-account-plane identity / billing / RBAC は Takosumi Accounts が所有する。 kernel
-側から見たときの境界を次のページで説明する。
-
-- [Actor / Organization Model](./architecture/identity-and-access-architecture.md#actor--organization-model)
-  — actor / organization の責務境界
-- [RBAC Policy](./rbac-policy.md) — RBAC を所有する layer の整理
-- [API Key Management](./api-key-management.md) — installer / artifact
-  credentials
-- [Auth Providers](./auth-providers.md) — auth provider の責務境界
-
-## セキュリティと trust {#security-trust}
-
-operator が production 運用するための trust 境界。
-
-- [Secret Partitions](./secret-partitions.md) — AES-GCM partition / HKDF salt /
-  multi-cloud override
-- [Cross-Process Locks](./cross-process-locks.md) — heartbeat / TTL / recovery
-- [Catalog Release Trust](./catalog-release-trust.md) — signature / publisher
-  key enrollment
-
-## Tenant lifecycle {#tenant-lifecycle}
-
-Space provisioning / trial / export / deletion の手順。
-
-- [Tenant Provisioning](./tenant-provisioning.md) — Space onboarding / initial
-  CatalogRelease binding
-- [Trial Spaces](./trial-spaces.md) — trial lifecycle 5-state / auto-expire /
-  conversion
-- [Tenant Export and Deletion](./tenant-export-deletion.md) — data export /
-  Space deletion / hard-delete window
-
-## 運用 {#operations}
-
-運用タスクと制限。
-
-- [Schema Evolution](./migration-upgrade.md) — rolling upgrade / rollback /
-  kernel ↔ runtime-agent skew
-- [Quota / Rate Limit](./quota-rate-limit.md) — per-tenant metering / rate limit
-  policy
-- [Compliance Retention](./compliance-retention.md) — PCI-DSS / HIPAA / SOX
-  retention map
-- [Bootstrap Protocol](./bootstrap-protocol.md) — kernel 初回起動 / default
-  Space / initial CatalogRelease
-- [Backup and Restore](./backup-restore.md) — backup / restore protocol と境界
-- [Telemetry and Metrics](./telemetry-metrics.md) — OpenTelemetry / Prometheus
-  export 規約
-- [Logging Conventions](./logging-conventions.md) — structured log / level / PII
-  redaction
-- [Observability Stack](./observability-stack.md) — managed vs self-hosted
-  ownership and SLI / SLO targets
-
-## PaaS 運用 {#paas-operations}
-
-multi-tenant PaaS provider 固有の運用 surface。
-
-- [Quota Tiers](./quota-tiers.md) — tier catalog / quota envelope / tier
-  transition
-- [Cost Attribution](./cost-attribution.md) — usage event / per-Space
-  attribution / billing export
-- [SLA Breach Detection](./sla-breach-detection.md) — SLA 5-state / breach
-  detection / recovery
-- [Zone Selection](./zone-selection.md) — zone catalog / placement policy /
-  failover
-- [Incident Model](./incident-model.md) — incident state 6-value / severity
-  4-value / postmortem
-- [Support Impersonation](./support-impersonation.md) — grant lifecycle /
-  approval / scope and audit
-- [Notification Emission](./notification-emission.md) — channel / delivery /
-  dedup / retention
-
-## Catalog と拡張 {#catalog-extension}
-
-Component kind catalog / provider / artifact 拡張面。
-
-- [Kind Catalog](./kind-catalog.md) — curated 4 built-in component kind +
-  operator-defined kind の spec / outputs / publish / listen 仕様 +
-  `https://takosumi.com/kinds/v1/*` の JSON-LD 形式と operator-defined kind の
-  publish 手順 + DataAsset kind registry / registerArtifactKind
-- [Provider Plugins](./providers.md) — v1 provider matrix / KernelPlugin attach
-- [Connector Contract](./connector-contract.md) — `connector:<id>` /
-  acceptedKinds / envelope versioning
-- [DataAsset Policy](./data-asset-policy.md) — upload cap / accepted-kind
-  enforcement / artifact auth boundaries
-- [Artifact GC](./artifact-gc.md) — artifact GC / ActivationSnapshot history
-  export
-
-## Manifest と wire 形式 {#manifest-wire-formats}
-
-- [Manifest](./manifest.md) — spec / validation rules / expand semantics / data
-  model (= `.takosumi.yml` 正本)
-- [Plan Output Schema](./plan-output.md) — `takosumi plan` / `mode: "plan"` 出力
-- [Status Output Schema](./status-output.md) — internal Installation /
-  Deployment ledger read boundary
-- [Resource IDs](./resource-ids.md) — kind grammar / suffix format / 安定性
-- [Digest Computation](./digest-computation.md) — JCS canonicalization / sha256
-  / 各 digest の input scope
-- [Time and Clock Model](./time-clock-model.md) — wall / monotonic / Lamport /
-  clock skew
-
-## 設定 {#configuration}
-
-- [Environment Variables](./env-vars.md) — kernel / CLI / runtime-agent の v1
-  env catalog
-
-## 安定性 {#stability}
-
-reference doc が freeze する v1 wire shape の対象:
-
-- closed enum 値 / state machine の状態名と遷移
-- record schema の field 名と型
-- HTTP endpoint path と request / response の field 名
-- CLI subcommand 名と flag 名
-- audit event 名と payload field 名
-- environment variable 名
-- resource ID prefix と format
-
-これらの breaking 変更には `CONVENTIONS.md` §6 RFC が必須。
-
-operator-tunable な default 値 (TTL / grace window / threshold / batch size /
-quota tier cap / polling interval 等) は wire shape ではないため、 stability
-とは独立。 default 値変更は CHANGELOG への記載のみで足りる。
-
-doc 内で "operator-tunable" / "operator-decided" / "policy-controlled"
-と書かれた値は operator policy で tuning できる対象であり、 wire shape の
-stability とは独立に評価する。
+Takosumi kernel docs は account、billing、OIDC issuer、customer onboarding、
+managed offering support workflow を説明しません。それらは operator
+account-plane の責務であり、reference implementation は `takosumi-cloud/` 側の
+docs で扱います。

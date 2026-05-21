@@ -1,195 +1,106 @@
-# Quickstart — git clone から first deploy まで
+# Quickstart — first install まで
 
-> このページでわかること: manifest を書いて最初のデプロイを行うまでの最短手順。
+このページでは、CLI を入れて `.takosumi.yml` を作り、最初の Installation を作る
+ところまで進めます。Takosumi の概念を先に読みたい場合は
+[コンセプト](./concepts.md) を参照してください。
 
-kernel / runtime-agent の責務分離は
-[Concepts § Architecture](/getting-started/concepts#architecture-kernel--runtime-agent)
-を参照。 dev では `takosumi server` 1 コマンドが両方を 1 process で立ち上げる。
-
----
-
-## 1. CLI のインストール {#1-cli-install}
+## 1. CLI を入れる
 
 ```bash
 deno install -gA -n takosumi jsr:@takos/takosumi-cli
 takosumi version
 ```
 
----
+## 2. AppSpec を置く
 
-## 2. ローカルでのオーサリング (zero-config) {#2-local-authoring-zero-config}
-
-source root に `.takosumi.yml` (= AppSpec) を置く。 public installer API は この
-AppSpec を読み、 Installation を作り、 apply ごとに Deployment を記録する。
+source root に `.takosumi.yml` を作ります。AppSpec root は
+`apiVersion`、`metadata`、`components` の 3 field だけです。
 
 ```yaml
 apiVersion: v1
 metadata:
-  id: com.example.hello-worker
-  name: hello-worker
+  id: com.example.hello
+  name: hello
 components:
   web:
     kind: worker
     build:
-      command: "npm run build"
-      output: "dist/worker.js"
+      command: npm run build
+      output: dist/worker.js
     spec:
-      compatibilityDate: "2026-05-09"
       routes:
         - hello.local/*
 ```
 
+`kind: worker` の `spec.routes` は worker kind の convention です。AppSpec
+contract 自体が持つ component field は `kind`、`spec`、`publish`、`listen`、
+`build` です。
+
+## 3. local install を試す
+
+まず dry-run で AppSpec と source を検証します。
+
 ```bash
 takosumi install dry-run --space space_personal --source .
+```
+
+問題がなければ Installation を作ります。
+
+```bash
 takosumi install --space space_personal --source .
 ```
 
-remote kernel に投げる dev loop は次のように URL/token を明示する。
+local mode では CLI が in-process kernel を使います。remote kernel に投げる場合
+は URL と token を明示します。
 
 ```bash
-export TAKOSUMI_DEV_MODE=1
-export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
-takosumi server --port 8788 &
-# stdout: "embedded runtime-agent listening at http://127.0.0.1:8789"
+export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
+
+TAKOSUMI_DEV_MODE=1 takosumi server --port 8788 &
 takosumi install --space space_personal --source .
 ```
 
-`TAKOSUMI_DEV_MODE=1` は dev 用の単一 opt-out flag。 plaintext secret /
-unencrypted DB / unsafe defaults を許可する。 production / staging では
-fail-closed。
+`TAKOSUMI_DEV_MODE=1` は dev 専用です。plaintext secret storage や unsafe
+default を許可するため、production / staging では使いません。
 
-dev server mode では agent と kernel が同 process なので、 env に置いた cloud
-credential はそのまま agent connector に届く。
+## 4. component を接続する
 
----
+component 間の依存は `publish` と `listen` で書きます。文字列 interpolation や
+旧 `use:` edge は使いません。
 
-## 3. Cloud credential を env に置く
+```yaml
+apiVersion: v1
+metadata:
+  id: com.example.notes
+  name: notes
+components:
+  db:
+    kind: postgres
+    publish:
+      - com.example.notes.db
 
-cloud credential は **agent host の env** に置く。 dev では同 process なので
-`takosumi server` を起動した shell に export するだけ。
-
-### AWS
-
-```bash
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_REGION=ap-northeast-1
-# optional: export AWS_SESSION_TOKEN=...
-# optional Fargate / RDS / Route53 knobs:
-# export TAKOSUMI_AWS_FARGATE_CLUSTER=my-cluster
-# export TAKOSUMI_AWS_FARGATE_SUBNET_IDS=subnet-aaa,subnet-bbb
+  web:
+    kind: worker
+    build:
+      command: npm run build
+      output: dist/worker.js
+    listen:
+      com.example.notes.db:
+        as: env
+        prefix: DB_
+    spec:
+      routes:
+        - notes.local/*
 ```
 
-connector: `@takos/aws-{fargate,rds,s3,route53}`
-
-### GCP
-
-```bash
-export GOOGLE_CLOUD_PROJECT=my-project
-export GOOGLE_CLOUD_REGION=asia-northeast1
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
-```
-
-connector: `@takos/gcp-{cloud-run,cloud-sql,gcs,cloud-dns}`
-
-### Cloudflare
-
-```bash
-export CLOUDFLARE_ACCOUNT_ID=...
-export CLOUDFLARE_API_TOKEN=...
-export CLOUDFLARE_ZONE_ID=...   # custom-domain 使う場合
-```
-
-connector (= component kind 別 provider id):
-
-- `worker` kind: `@takos/cloudflare-workers` (= default Workers backend) または
-  alternative の `@takos/cloudflare-container` (= Container backend)
-- `object-store` kind: `@takos/cloudflare-r2`
-- `custom-domain` kind: `@takos/cloudflare-dns`
-
-詳細 capability matrix は
-[Providers § Cloudflare](../reference/providers.md#cloudflare) を参照。
-
-### Azure
-
-```bash
-export AZURE_SUBSCRIPTION_ID=...
-export AZURE_RESOURCE_GROUP=my-rg
-export AZURE_LOCATION=eastus
-export AZURE_BEARER_TOKEN=$(az account get-access-token --query accessToken -o tsv)
-```
-
-connector: `@takos/azure-container-apps`
-
-### Kubernetes (k3s 等)
-
-```bash
-export TAKOSUMI_KUBERNETES_API_SERVER_URL=https://k8s.example/
-export TAKOSUMI_KUBERNETES_BEARER_TOKEN=$(cat /var/run/secrets/.../token)
-export TAKOSUMI_KUBERNETES_NAMESPACE=takosumi
-```
-
-connector: `@takos/kubernetes-deployment`
-
----
-
-## 4. CLI コマンドリファレンス
-
-```
-takosumi install <source>             # Installation 作成 + 初回 Deployment
-takosumi install dry-run <source>     # 新規 install dry-run
-takosumi deploy <installation-id>      # 既存 Installation に apply
-takosumi deploy dry-run <installation-id>
-takosumi rollback <installation-id> <deployment-id>
-takosumi server [--port 8788]         # kernel + embedded agent 起動
-                [--no-agent]          # embedded agent 抑止 (production)
-                [--agent-port 8789]   # embedded agent の port 指定
-takosumi runtime-agent serve          # standalone agent 起動 (multi-host)
-                [--port 8789]
-                [--token <token>]
-                [--env-file <path>]
-takosumi migrate                      # DB migrations
-takosumi version
-```
-
-public contract は `.takosumi.yml` / Installation / Deployment と
-`/v1/installations/*` の 5 endpoint。 workflow runner や webhook は kernel の
-外で AppSpec source を渡す upstream automation として実装する。
-
----
-
-## 5. troubleshooting
-
-| 症状                                                                | 原因                                                                                                                 |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `Refusing to start takosumi with plaintext secret storage`          | production mode で `TAKOSUMI_SECRET_STORE_PASSPHRASE` 未設定                                                         |
-| `Refusing to start takosumi against an unencrypted database`        | production mode で DB at-rest encryption 未確認 (dev は `TAKOSUMI_DEV_MODE=1` で opt-out 可)                         |
-| AppSpec schema error                                                | `.takosumi.yml` が AppSpec schema に合っていない                                                                     |
-| 401 from `/v1/installations/*`                                      | `TAKOSUMI_INSTALLER_TOKEN` token mismatch                                                                            |
-| `[takosumi-bootstrap] TAKOSUMI_AGENT_URL ... not set`               | `takosumi server --no-agent` を使ったが external agent の URL を export してない、または embedded agent の起動に失敗 |
-| `runtime-agent /v1/lifecycle/apply failed: 404 connector_not_found` | agent host に該当 cloud の credential が無い → connector が register されてない                                      |
-| `runtime-agent /v1/lifecycle/apply failed: 401`                     | agent と kernel で `TAKOSUMI_AGENT_TOKEN` が一致してない                                                             |
-
----
-
-## 関連ページ
-
-- [Manifest spec](/manifest)
-- [Kind Catalog](../reference/kind-catalog.md#component-kinds)
-- [Provider plugins](../reference/providers.md)
-- [Self-host deploy](/operator/self-host) — VM 単機 / multi-host 分離 / artifact
-  GC / fetch token
-- [Operator bootstrap](/operator/bootstrap) — kernel ↔ agent 連携の詳細
+`db` が namespace path に material を publish し、`web` が同じ path を listen
+します。material を env / mount / target のどれで注入するかは `listen` 側で
+明示します。
 
 ## 次に読む
 
-- [Concepts](/getting-started/concepts) — AppSpec × Component × Kind モデルを 5
-  分で理解
-- [AppSpec](../reference/app-spec.md) — `.takosumi.yml` envelope / components の
-  全 field 仕様
-- [Self-host Notes](/operator/self-host) — production deploy 前の checklist (env
-  / secret / DB encryption)
-- [Operator Bootstrap](/operator/bootstrap) — `createPaaSApp({ plugins })` で
-  provider factory を attach する手順
-- [CLI Reference](../reference/cli.md) — 全 subcommand / flag / env
+- [コンセプト](./concepts.md)
+- [AppSpec リファレンス](/reference/app-spec)
+- [Provider Plugins](/reference/providers)
+- [Operator Bootstrap](/operator/bootstrap)

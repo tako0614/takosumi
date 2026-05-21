@@ -274,24 +274,10 @@ host 役割ごとに分割します。 同一 host 混在は OperatorBoundaries 
   [DataAsset Policy](./data-asset-policy.md)、
   [Secret Partitions](./secret-partitions.md)、
   [Schema Evolution](./migration-upgrade.md)、
-  [Compliance Retention](./compliance-retention.md)、
   [Observation Retention](./observation-retention.md)
 
 ## 関連ページ
 
-- [Tenant Provisioning](./tenant-provisioning.md)
-- [Tenant Export & Deletion](./tenant-export-deletion.md)
-- [Trial Spaces](./trial-spaces.md)
-- [Quota Tiers](./quota-tiers.md)
-- [Cost Attribution](./cost-attribution.md)
-- [Zone Selection](./zone-selection.md)
-- [API Key Management](./api-key-management.md)
-- [Auth Providers](./auth-providers.md)
-- [RBAC Policy](./rbac-policy.md)
-- [SLA Breach Detection](./sla-breach-detection.md)
-- [Incident Model](./incident-model.md)
-- [Support Impersonation](./support-impersonation.md)
-- [Notification Emission](./notification-emission.md)
 - [Kernel HTTP API](./kernel-http-api.md)
 
 ## 関連ページ

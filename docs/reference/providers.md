@@ -626,7 +626,7 @@ status enum / effect bound / idempotency 規則を満たす限り適合します
 
 ### 関連アーキテクチャ {#related-architecture-notes}
 
-- docs/reference/architecture/paas-provider-architecture.md
+- docs/reference/architecture/operator-boundaries.md
 - docs/reference/architecture/implementation-operation-envelope.md
 - docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal
 - docs/reference/architecture/policy-risk-approval-error-model.md

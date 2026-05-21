@@ -28,10 +28,7 @@ lifecycle dispatcher は `spec.artifact.kind` を connector の
 
 artifact routes は build / source transform を実行しない。 build は AppSpec の
 `component.build` と installer lifecycle の責務であり、 artifact routes は
-アップロード済み blob の保存・取得・GC だけを扱う。 (= Wave N planned:
-`component.build` は削除予定、 build 責務は別 `kind: build` component (=
-operator distribution が JSON-LD + plugin で持ち込む) に移管。 詳細
-[RFC 0001](../rfc/0001-kernel-kind-agnostic.md)。)
+アップロード済み blob の保存・取得・GC だけを扱う。
 
 ## サイズポリシー {#size-policy}
 

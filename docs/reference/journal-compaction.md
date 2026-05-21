@@ -148,7 +148,7 @@ Inspection commands require the operator bearer.
   — WAL stage enum, idempotency tuple, replay rules.
 - `reference/architecture/snapshot-model` — base snapshot semantics and snapshot
   garbage collection.
-- `reference/incident-model#observation-drift--revokedebt-model` — RevokeDebt
+- `reference/drift-detection` — RevokeDebt
   status rules referenced by retention.
 
 ## 関連ページ

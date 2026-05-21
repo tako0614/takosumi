@@ -110,7 +110,7 @@ RFC (CONVENTIONS.md §6) なしに新規 mutation 種別を追加しない。
 行は mutation、列は link の current state。各セルは mutation を適用したときの
 next state を記録する。`—` は mutation がその state で違法であることを意味する
 (resolution / plan は reject しなければならない)。`debt!` は mutation が
-[Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
+[Drift Detection](../drift-detection.md)
 に従って `RevokeDebt` レコードを queue しうることを意味する。
 
 | mutation \\ state | pending       | materializing | materialized    | stale           | rematerializing | revoking | revoked | failed           | debt             |

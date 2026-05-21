@@ -229,8 +229,8 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 - `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
   — `actual-effects-overflow` / `rollback-revalidation-required` の WAL 上での
   位置付け
-- `docs/reference/incident-model.md#observation-drift--revokedebt-model` —
-  `revoke-debt-created` と observe / finalize stage の連動
+- `docs/reference/drift-detection.md` — `revoke-debt-created` と observe /
+  finalize stage の連動
 
 ## 関連ページ
 

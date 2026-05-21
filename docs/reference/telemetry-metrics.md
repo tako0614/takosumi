@@ -236,7 +236,7 @@ kernel shutdown 中の scrape は `Retry-After: 1` を付けて `503` を返す�
 
 ## 関連 architecture notes
 
-- `reference/incident-model#observation-drift--revokedebt-model` — drift / debt
+- `reference/drift-detection` — drift / debt
   / observation gauge の導出
 - `reference/architecture/runtime-deployment-model#operation-plan--write-ahead-journal`
   — WAL stage histogram label の根拠
@@ -249,5 +249,4 @@ kernel shutdown 中の scrape は `Retry-After: 1` を付けて `503` を返す�
 - [Observability Stack](./observability-stack.md)
 - [Time / Clock Model](./time-clock-model.md)
 - [Audit Events](./audit-events.md)
-- [Quota / Rate Limit](./quota-rate-limit.md)
 - [Environment Variables](./env-vars.md)

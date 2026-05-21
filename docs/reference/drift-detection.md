@@ -190,7 +190,7 @@ operator が手動で re-observe を要求する経路は internal control-plane
 
 関連 architecture notes:
 
-- `docs/reference/incident-model.md#observation-drift--revokedebt-model` —
+- `docs/reference/revoke-debt.md` —
   DriftIndex の compute trigger / 比較方法 / RevokeDebt 連動の設計議論
 - `docs/reference/architecture/snapshot-model.md` — DesiredSnapshot /
   ObservationSet / ActivationSnapshot の関係と DriftIndex の位置付け

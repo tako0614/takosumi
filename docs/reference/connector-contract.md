@@ -233,7 +233,7 @@ lifecycle envelope の wire format と error code enum は
   visibility.
 - `reference/architecture/operator-boundaries` — the trust split that keeps
   Connector credentials in the runtime-agent host.
-- `reference/architecture/paas-provider-architecture` — Connector consumer
+- `reference/architecture/operator-boundaries` — Connector consumer
   plugin (= `KernelPlugin` materializer) authoring patterns that consume
   Connectors.
 

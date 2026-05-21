@@ -1,502 +1,120 @@
 # 閉じた enum {#closed-enums}
 
-> このページでわかること: kernel が使う closed enum / state machine
-> の一覧と拡張ルール。
+このページは Takosumi kernel contract で値集合を閉じる enum の索引です。operator
+account-plane が所有する role、billing、trial、support、incident などの enum は
+ここに含めません。
 
-各項目は値・1 行セマンティクス・詳細リファレンスへのリンクを並べる。 すべて
-**閉じた** enum で、拡張には `CONVENTIONS.md` §6 の RFC が必須。 provider /
-第三者パッケージが単独で拡張することはできない。
+## Lifecycle
 
-## v1 wire shape の対象 {#v1-wire-shape-scope}
+### Lifecycle phase
 
-reference doc が freeze する v1 wire shape の対象:
+```txt
+validate | plan | prepare | apply | verify | activate | observe | rollback | destroy | recover
+```
 
-- closed enum 値 (本 doc に列挙されたすべての enum)
-- state machine の状態名と遷移
-- record schema の field 名と型
-- HTTP endpoint path と request / response の field 名
-  ([Kernel HTTP API](./kernel-http-api.md))
-- CLI subcommand 名と flag 名 ([CLI](./cli.md))
-- audit event 名と payload field 名 ([Audit Events](./audit-events.md))
-- environment variable 名 ([Environment Variables](./env-vars.md))
-- resource ID prefix と format ([Resource IDs](./resource-ids.md))
+### Lifecycle status
 
-breaking 変更には `CONVENTIONS.md` §6 RFC が必須。
+```txt
+pending | running | succeeded | failed | skipped | cancelled
+```
 
-operator-tunable な default 値 (TTL / grace / threshold / quota cap 等) は wire
-shape ではないため、 stability とは独立。 default 値変更は CHANGELOG
-への記載のみで足りる ([Stability](./index.md#stability) 参照)。
+### Operation kind
 
-## アクセスモード {#access-modes}
+```txt
+create | update | replace | delete | no-op | rollback
+```
 
-```text
+## WAL stage
+
+```txt
+planned | prepared | pre-commit | committed | verified | activated | compensated | failed
+```
+
+WAL stage の意味は [WAL Stages](./wal-stages.md) を参照してください。
+
+## Access mode
+
+```txt
 read | read-write | admin | invoke-only | observe-only
 ```
 
-link consumer が export の resource とどう関わるかを規定する 5 値の語彙。
-`read-write` と `admin` は `safeDefaultAccess` の default にはなりません。
-詳細セマンティクス、 `safeDefaultAccess` の contract、 承認無効化との関係は
-[Access Modes](./access-modes.md) を参照。
+詳細は [Access Modes](./access-modes.md) を参照してください。
 
-## Lifecycle フェーズ {#lifecycle-phases}
+## Approval lifecycle
 
-```text
-apply | activate | destroy | rollback | recovery | observe
+```txt
+not-required | pending | approved | rejected | invalidated | expired
 ```
 
-OperationPlan 単位で適用される 6 phase enum。
+approval が無効化される条件は
+[Approval Invalidation](./approval-invalidation.md) にあります。
 
-- `apply`: `OperationPlan` と `ResolutionSnapshot` を生成
-- `activate`: traffic を切り替える
-- `destroy`: managed / generated object を削除
-- `rollback`: 直前の `ResolutionSnapshot` を再適用
-- `recovery`: kernel restart や lock loss の後、 WAL から再開
-- `observe`: runtime-agent describe に対して長時間動作する
+## Risk
 
-phase ごとの入出力、 WAL stage、 失敗時の挙動、 定常状態の遷移図は
-[Lifecycle Phases](./lifecycle-phases.md) を参照。
+Risk enum は [Risk Taxonomy](./risk-taxonomy.md) が canonical source です。代表的な
+category は次の通りです。
 
-## LifecycleStatus {#lifecyclestatus}
-
-```text
-running | stopped | missing | error | unknown
+```txt
+destructive-change | credential-exposure | network-exposure | quota-exhaustion |
+provider-drift | approval-required | unsupported-capability
 ```
 
-runtime-agent が managed object ごとに報告する 5 値 state。 backing connector
-上の観測 state であり、 control-plane phase ではありません。 `apply` /
-`describe` / `destroy` / `verify` ごとの遷移は
-[Lifecycle Phases — LifecycleStatus enum](./lifecycle-phases.md#lifecyclestatus-enum)
-を参照。
+## RevokeDebt
 
-## operationKind {#operationkind}
+### reason
 
-```text
-apply-object | delete-object | verify-object
-materialize-link | rematerialize-link | revoke-link
-prepare-exposure | activate-exposure
-transform-data-asset | observe | compensate
+```txt
+permission-drift | secret-rotation | provider-delete-failed | link-detach-failed | policy-revoked
 ```
 
-内部 `OperationRecord.operationKind` 用の 11 値予約 enum。 公開 apply code は
-operation kind を文字列で持ち、 `takosumi plan` では
-`planned[].op = "create" | "update" | "delete"` のみを露出します。
+### status
 
-| 値                     | 意味                                                                                         |
-| ---------------------- | -------------------------------------------------------------------------------------------- |
-| `apply-object`         | connector 上で managed object を作成または更新する。                                         |
-| `delete-object`        | `destroy` / `rollback` の中で managed object を削除する。                                    |
-| `verify-object`        | 解決済み spec と一致するか再読込で確認。 mutation は emit しない。                           |
-| `materialize-link`     | link source から generated object を初回 render する。                                       |
-| `rematerialize-link`   | source export digest 変更後に generated object を再 render する。                            |
-| `revoke-link`          | link 削除に伴って generated object を tear down する。 `RevokeDebt` を emit することがある。 |
-| `prepare-exposure`     | traffic flip 前に新規 Exposure (routing surface) を stage する。                             |
-| `activate-exposure`    | `activate` phase で準備済み Exposure に traffic を切り替える。                               |
-| `transform-data-asset` | DataAsset transformer を走らせて derived artifact を作る。                                   |
-| `observe`              | `observe` phase で動作する長時間動作の runtime-agent describe。                              |
-| `compensate`           | `rollback` / `recovery` で部分 commit された effect を取り消す recovery operation。          |
-
-kind ごとの入出力 / WAL stage の対応は内部 OperationPlan architecture に記述。
-公開 plan shape は [Plan Output Schema](./plan-output.md)、 provider dispatch
-contract は
-[Provider Plugins — Implementation Contract](./providers.md#implementation-contract)
-を参照。
-
-## WAL ステージ {#wal-stages}
-
-```text
-prepare | pre-commit | commit | post-commit | observe | finalize
-        | abort | skip                                  (terminal)
+```txt
+open | retrying | resolved
 ```
 
-write-ahead operation journal 用の 8 値 enum。 `prepare` / `pre-commit` /
-`commit` / `post-commit` / `observe` / `finalize` が forward stage、 `abort` /
-`skip` が terminal stage。 idempotency tuple は
-`(spaceId, operationPlanDigest, journalEntryId)` で、 forward stage のどこから
-replay しても同じ結果になります。 stage セマンティクスと replay rule は
-[WAL Stages](./wal-stages.md) を参照。
+詳細は [RevokeDebt Model](./revoke-debt.md) を参照してください。
 
-## Approval lifecycle 状態 {#approval-lifecycle-states}
+## DataAsset kind
 
-```text
-pending | approved | denied | expired | invalidated | consumed
+```txt
+source-archive | build-output | runtime-bundle | static-asset | export-archive
 ```
 
-approval record の server-side state machine 6 値。
+artifact の扱いは [DataAsset Policy](./data-asset-policy.md) と
+[Artifact GC](./artifact-gc.md) を参照してください。
 
-- `pending`: 発行時の初期状態
-- `approved`: 発行後で唯一の非 terminal 状態。 apply pipeline が消費すると
-  `consumed`、 後述 6 trigger のいずれかが発火すると `invalidated` に遷移
-- `denied` / `expired` / `invalidated` / `consumed`: terminal
+## Health
 
-`consumed` record は audit のため保持されますが再利用不可で、 これを提示すると
-`failed_precondition` になります。 client UX hint の `reviewing` は server-side
-state ではなく persist されません。 遷移 contract と binding field は
-[Approval Invalidation Triggers](./approval-invalidation.md#approver-ux-states)
-を参照。
-
-## Approval 無効化トリガー {#approval-invalidation-triggers}
-
-```text
-1. digest change
-2. effect-detail change
-3. implementation change
-4. external freshness change
-5. catalog release change
-6. Space-context change
+```txt
+unknown | healthy | degraded | unhealthy
 ```
 
-6 種の独立した trigger があり、 いずれか 1 つが発火すると approval は無効化さ
-れます。 `digest change` と `effect-detail change` は他 binding を再評価せず短
-絡無効化します (digest 変更は完全 re-resolve を強制するため)。 trigger contract
-と伝搬規則は [Approval Invalidation Triggers](./approval-invalidation.md)
-を参照。
+connector / runtime observation の health value です。
 
-## Risk 分類 {#risk-taxonomy}
+## Domain error code
 
-Risk enum の canonical source は [Risk Taxonomy](./risk-taxonomy.md) を参照。
-stable ID を持つ 18 値の closed enum。
-
-```text
-secret-projection | external-export | generated-credential
-generated-grant | network-egress | traffic-change
-stale-export | revoked-export | cross-scope-link
-cross-space-link | shadowed-namespace | implementation-unverified
-actual-effects-overflow | rollback-revalidation-required
-revoke-debt-created | raw-secret-literal | collision-detected
-transform-unapproved
+```txt
+invalid_argument | unauthenticated | permission_denied | not_found |
+already_exists | conflict | failed_precondition | resource_exhausted |
+cancelled | unavailable | internal
 ```
 
-kernel は `OperationPlan` 1 件あたり 1 approval を発行し、 発火した Risk を
-`riskItemIds[]` で列挙します。 entry 番号は historical (entry 15 は欠番)、 各
-Risk の severity / invalidation trigger / fix kind / 詳細セマンティクスは
-[Risk Taxonomy](./risk-taxonomy.md) を参照。
+HTTP status への対応は [Kernel HTTP API](./kernel-http-api.md) にあります。
 
-## RevokeDebt reason {#revokedebt-reason}
+## Connector identity
 
-```text
-external-revoke | link-revoke | activation-rollback
-approval-invalidated | cross-space-share-expired (reserved)
+```txt
+connector:<provider-id>
 ```
 
-`RevokeDebt` の closed reason enum (5 値)。 `external-revoke` は managed
-`destroy` を伴わず connector が object 消失を報告したときに emit され、
-`link-revoke` は明示的な projection 削除を、 `activation-rollback` は
-`compensate` recovery を表します。 詳細は [RevokeDebt Model](./revoke-debt.md)
-を参照。
-
-## RevokeDebt status {#revokedebt-status}
-
-```text
-open | operator-action-required | cleared
-```
-
-`RevokeDebt` entry の lifecycle status (3 値)。
-
-- `open`: emission 時の default
-- `operator-action-required`: 自動 clear に失敗し、 aging window が operator
-  threshold を超えたときに設定される
-- `cleared`: terminal
-
-aging window と clear 条件は [RevokeDebt Model](./revoke-debt.md) を参 照。
-
-## Object lifecycle クラス {#object-lifecycle-classes}
-
-```text
-managed | generated | external | operator | imported
-```
-
-kernel が管理する object の closed 分類 5 値。
-
-| Class       | 意味                                                                                                                         |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `managed`   | 現在 Space の apply pipeline が作成・所有し、 `destroy` phase で削除される。                                                 |
-| `generated` | managed object を projection / link rendering して materialize したもの。 source が消えれば消える。                          |
-| `external`  | connector 上で既に存在するもの。 kernel は読み取り / grant 発行はするが削除はしない。                                        |
-| `operator`  | operator が install (例: `connector:<id>`)。 tenant Space lifecycle の対象外。                                               |
-| `imported`  | 他 Space の `managed` / `generated` を share record 経由で当該 Space に投影したもの。 owner Space で source が消えれば失効。 |
-
-`destroy` で削除されるのは `managed` と `generated` のみ。
-
-## Mutation 制約 {#mutation-constraints}
-
-```text
-immutable | replace-only | in-place | append-only
-ordered-replace | reroute-only
-```
-
-`outputField` が宣言する、 apply 間で provider が field をどう mutation できる
-かを定める 6 値の closed enum。
-
-| Constraint        | 許可される apply 動作                                                |
-| ----------------- | -------------------------------------------------------------------- |
-| `immutable`       | 初回 apply で値が固定。 以後の変更は planning で失敗する。           |
-| `replace-only`    | 値を変えるには provider が resource を drop & 再作成する必要がある。 |
-| `in-place`        | 再作成せずに live resource 上で field を mutation してよい。         |
-| `append-only`     | 既存 entry を増やせるが、 削除や順序変更はできない。                 |
-| `ordered-replace` | entry の置換は可。 ただし宣言順序を保たなければならない。            |
-| `reroute-only`    | resource 自体には触れず、 前段の routing surface のみを変更できる。  |
-
-## Link mutation {#link-mutations}
-
-```text
-rematerialize | reproject | regrant | rewire | revoke
-retain-generated | no-op | repair
-```
-
-apply pipeline が OperationPlan に出す per-link diff の 8 値 closed enum。
-
-| Mutation           | 発火条件                                                                                         |
-| ------------------ | ------------------------------------------------------------------------------------------------ |
-| `rematerialize`    | source export digest が変更。 新 export から generated object を再導出。                         |
-| `reproject`        | source は不変だが projection rule が変更。 generated identity のみ再 render。                    |
-| `regrant`          | grant detail (例: access mode) が変更。 backing object は維持。                                  |
-| `rewire`           | routing target が変更。 managed object は維持し、 exposure を rebuild。                          |
-| `revoke`           | link 削除。 generated object を tear down。 `link-revoke` の `RevokeDebt` を emit する場合あり。 |
-| `retain-generated` | link 削除だが operator policy で generated object を保持 (例: audit のため)。                    |
-| `no-op`            | 両 snapshot で link が存在し materialization も一致。                                            |
-| `repair`           | drift 検出。 generated state を resolved link に合わせる。                                       |
-
-## Link materialization 状態 {#link-materialization-states}
-
-```text
-pending | materializing | materialized | stale | rematerializing
-revoking | revoked | failed | debt
-```
-
-`ResolutionSnapshot` 内の各 link projection に付く 9 値 closed state。
-`materialized` が定常成功、 `stale` は export freshness の問題があるが
-再実行未着手、 `debt` は link に紐付く `RevokeDebt` が open であることを表す。
-
-## 同梱 DataAsset kind {#bundled-dataasset-kinds}
-
-```text
-oci-image | js-bundle | lambda-zip | static-bundle | wasm
-```
-
-`Artifact.kind` の初期登録語彙。 protocol field は operator install の connector
-に対して開かれていますが、 bundle される kernel は discovery のため この 5
-種を登録します。 kind ごとの必須 metadata、 サイズ上限、 connector 側
-enforcement は [Kind Catalog — Artifact Kinds](./kind-catalog.md#artifact-kinds)
-を参照。
-
-## ヘルス状態 {#health-states}
-
-```text
-unknown | observing | healthy | degraded | unhealthy
-```
-
-observe loop が報告する Exposure health enum (5 値)。 activate 直後の Exposure
-は `unknown` から始まり、 `observing` を経て `healthy` / `degraded` /
-`unhealthy` に落ち着きます。 遷移詳細は
-[Lifecycle Phases — `observe`](./lifecycle-phases.md#observe) を参照。
-
-## DomainErrorCode {#domainerrorcode}
-
-```text
-invalid_argument | permission_denied | not_found
-failed_precondition | resource_exhausted | not_implemented
-unauthenticated | readiness_probe_failed | internal_error
-```
-
-kernel の domain error response が返す 9 値 closed code enum。
-
-| Code                     | 意味                                                                     |
-| ------------------------ | ------------------------------------------------------------------------ |
-| `invalid_argument`       | manifest schema、 form input、 digest 不一致など。                       |
-| `permission_denied`      | space 越境、 entitlement 拒否、 policy gate 拒否。                       |
-| `not_found`              | endpoint 無効化 (token 未設定) や deployment / artifact / Space の不在。 |
-| `failed_precondition`    | record なしの destroy、 collision 検出、 approval invalidated など。     |
-| `resource_exhausted`     | quota 超過、 `TAKOSUMI_ARTIFACT_MAX_BYTES` を超える artifact upload。    |
-| `not_implemented`        | issuer 未配線、 operator gate 機能が未有効。                             |
-| `unauthenticated`        | bearer 欠落、 内部 HMAC 検証失敗。                                       |
-| `readiness_probe_failed` | `/livez` / `/readyz` または依存 port が ready でない。                   |
-| `internal_error`         | kernel 内部の未処理例外。                                                |
-
-transport mapping (HTTP status、 gRPC code) は code 毎に固定で
-[Kernel HTTP API](./kernel-http-api.md) に定義。 `invalid_argument` を
-発生させる manifest-time validation は
-[Manifest](./manifest.md#validation-rules) を参照。
-
-## LifecycleErrorBody コード {#lifecycleerrorbody-codes}
-
-```text
-unauthorized | bad_request | connector_not_found
-artifact_kind_mismatch | connector_failed
-```
-
-runtime-agent の `/v1/lifecycle/*` response が返す 5 値 closed code enum。
-`connector-extended:*` prefix は connector 拡張用に予約されており、
-runtime-agent はその値をそのまま転送します。 詳細は
-[Runtime-Agent API — Error envelope](./runtime-agent-api.md#error-envelope)
-を参照。
-
-## Actor タイプ {#actor-types}
-
-```text
-human | service-account | runtime-agent | support-staff
-```
-
-Actor record の closed enum (4 値)。
-
-- `human`: operator が onboard した user
-- `service-account`: API key に bind された non-interactive caller
-- `runtime-agent`: enroll 済み runtime-agent プロセス
-- `support-staff`: impersonation grant の対象となる operator 側 support
-  principal
-
-type ごとの binding field と認証 contract は
-[Actor / Organization Model](./architecture/identity-and-access-architecture.md#actor--organization-model)
-を参照。
-
-## ロール {#roles}
-
-Roles の closed enum は kernel が persist / enforce しません (= operator account
-plane の Takosumi Accounts 側で扱う internal entity であり、 本 kernel-managed
-closed enum hub の対象外)。 詳細は [RBAC Policy](./rbac-policy.md) と
-takosumi-cloud reference distribution の対応 docs を参照。
-
-## API キータイプ {#api-key-types}
-
-```text
-deploy-token | read-token | admin-token | support-token
-```
-
-operator が設定する deploy / artifact credential。 account API key は Takosumi
-Accounts の所有。
-
-## Auth provider タイプ {#auth-provider-types}
-
-```text
-bearer-token | oidc | mtls | runtime-agent-enrollment
-```
-
-user 認証の brokering は Takosumi Accounts 側で扱う。 runtime-agent enrollment
-は kernel / operator の trust 関心事で、 user auth provider ではない。
-
-## Trial Space lifecycle {#trial-space-lifecycle}
-
-```text
-active-trial | expiring-soon | frozen | cleaned-up | converted
-```
-
-Trial Space record の lifecycle closed enum (5 値)。
-
-- `active-trial`: 発行後の定常状態
-- `expiring-soon`: auto-expire 前の window を示す
-- `frozen`: データを保持したまま apply / activate を停止
-- `cleaned-up`: hard delete 後の terminal
-- `converted`: 通常 Space への upgrade 後の terminal
-
-遷移 contract と quota envelope は [Trial Spaces](./trial-spaces.md) を 参照。
-
-## Incident 状態 {#incident-state}
-
-```text
-detecting | acknowledged | mitigating | monitoring | resolved | postmortem
-```
-
-Incident の closed state machine (6 値)。
-
-- `detecting`: emit 時の初期状態
-- `acknowledged`: operator が認知したことを記録
-- `mitigating`: 対処実施中
-- `monitoring`: 復旧後の経過観察
-- `resolved`: 運用上の terminal
-- `postmortem`: 記録上の terminal
-
-状態遷移詳細は [Incident Model](./incident-model.md) を参照。
-
-## Incident severity {#incident-severity}
-
-```text
-low | medium | high | critical
-```
-
-Incident の severity (4 値)。 notification emission や SLA-breach の連動を制御
-します。 severity ごとの policy は [Incident Model](./incident-model.md)
-を参照。
-
-## Support impersonation grant lifecycle {#support-impersonation-grant-lifecycle}
-
-```text
-requested | approved | rejected | revoked | expired
-```
-
-grant lifecycle の closed enum (5 値)。 `requested` が発行時の初期状態。
-`support-token` が使えるのは `approved` のときのみで、 `rejected` / `revoked` /
-`expired` は terminal。 state ごとの binding と audit contract は
-[Support Impersonation](./support-impersonation.md) を参照。
-
-## SLA 状態 {#sla-state}
-
-```text
-ok | warning | breached | recovering | ok-recovered
-```
-
-SLA 評価の closed state (5 値)。
-
-- `ok`: 定常状態
-- `warning`: threshold 接近
-- `breached`: SLO threshold 超過時に記録
-- `recovering`: 閾値以下に戻ったが cooldown window 内
-- `ok-recovered`: cooldown 成功後の terminal
-
-検出と cooldown rule は [SLA Breach Detection](./sla-breach-detection.md)
-を参照。
-
-## Connector identity {#connector-identity}
-
-connector identity は closed prefix `connector:<id>` を用います。 すべての
-connector は operator install で、 上述 object lifecycle class の `operator`
-に該当します。 identity scheme は closed で、 v1 で connector を表す prefix
-は他にありません。
-
-## Workflow primitive enum {#workflow-primitive-enums}
-
-kernel は trigger / declarable-hook / `execute-step` の enum 群を持ちません。
-workflow / cron / hook の実行は kernel の外の CI / operator product で扱います。
-詳細は
-[Workflow Placement Rationale](./architecture/workflow-extension-design.md)
-を参照。
-
-## 関連アーキテクチャ {#related-architecture-notes}
-
-- `docs/reference/architecture/target-model.md` — access mode / mutation
-  constraint / object lifecycle class の closed-enum architecture
-- `docs/reference/architecture/execution-lifecycle.md` — phase enum の choice
-  space と observe / recovery を別 phase に切り出した理由
-- `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
-  — WAL stage と idempotency tuple の rationale
-- `docs/reference/architecture/policy-risk-approval-error-model.md` — Risk 19
-  entries / approval invalidation triggers / DomainErrorCode の closure 理由
-- `docs/reference/architecture/link-projection-model.md` — link mutation / link
-  materialization state の生成 algorithm
-- `docs/reference/architecture/namespace-export-model.md#data-asset-model` —
-  DataAsset kind 5 値と connector identity scheme
-- `docs/reference/architecture/namespace-export-model.md` — share lifecycle 5 値
+connector id は runtime-agent connector を識別します。詳細は
+[Connector Contract](./connector-contract.md) を参照してください。
 
 ## 関連ページ
 
-- [Access Modes](./access-modes.md)
-- [Lifecycle Phases](./lifecycle-phases.md)
-- [Kind Catalog](./kind-catalog.md#component-kinds)
-- [Provider Plugins](./providers.md)
-- [Auth Providers](./auth-providers.md)
-- [RBAC Policy](./rbac-policy.md)
-- [API Key Management](./api-key-management.md)
-- [Tenant Provisioning](./tenant-provisioning.md)
-- [Tenant Export & Deletion](./tenant-export-deletion.md)
-- [Trial Spaces](./trial-spaces.md)
-- [Quota Tiers](./quota-tiers.md)
-- [Incident Model](./incident-model.md)
-- [Notification Emission](./notification-emission.md)
-- [SLA Breach Detection](./sla-breach-detection.md)
-- [Support Impersonation](./support-impersonation.md)
-- [Cost Attribution](./cost-attribution.md)
-- [Backup / Restore](./backup-restore.md)
-- [Schema Evolution](./migration-upgrade.md)
-- [Catalog Release Trust](./catalog-release-trust.md)
+- [Lifecycle Protocol](./lifecycle.md)
+- [WAL Stages](./wal-stages.md)
 - [Kernel HTTP API](./kernel-http-api.md)
-- [Audit Events](./audit-events.md)
-- [Environment Variables](./env-vars.md)
-- [Resource IDs](./resource-ids.md)
+- [Risk Taxonomy](./risk-taxonomy.md)
+- [Connector Contract](./connector-contract.md)

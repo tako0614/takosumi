@@ -392,5 +392,5 @@ healthy   ↔ degraded ↔ unhealthy   (re-entry on observation change)
   (approval で明示的に override されない限り)。既存の GroupHead pointer は
   自動的には rollback されない (fail-safe-not-fail-closed)。
 - この state から drift entry がどう作られるかは
-  [Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
+  [Drift Detection](../drift-detection.md)
   を参照。

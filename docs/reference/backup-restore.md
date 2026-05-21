@@ -247,7 +247,7 @@ backup と restore は runtime kernel event と同じ hash chain に専用 audit
 
 - docs/reference/architecture/snapshot-model.md
 - docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal
-- docs/reference/incident-model.md#observation-drift--revokedebt-model
+- docs/reference/drift-detection.md
 - docs/reference/architecture/operational-hardening-checklist.md
 - docs/reference/architecture/operator-boundaries.md
 

@@ -98,7 +98,7 @@ revoke 参加は lifecycle class で制限される。`external-source` と
 
 外部 cleanup が必要で外部システムが revoke を reject または ack できなかった
 とき、link の owner は
-[Observation Drift & RevokeDebt Model](../incident-model.md#observation-drift--revokedebt-model)
+[Drift Detection](../drift-detection.md)
 に従って `RevokeDebt` record を queue し、object は debt が clear されるまで
 `debt` state に入る。
 
