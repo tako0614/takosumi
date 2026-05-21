@@ -2,15 +2,19 @@
 
 > このページでわかること: 新しい component kind / materializer を追加する手順。
 
-> **Wave N planned (2026-05-21 RFC stage)**: 本ドキュメントが説明する「curated 4
-> kind + operator-defined extensible」 model は Wave N で **「全 kind が
-> operator-defined」 model に進化予定** (= curated catalog 完全廃止、 kernel は
-> kind 名を一切知らない pure contract executor に純化、 specific kind は全て
-> operator distribution が JSON-LD + plugin で持ち込む)。 takosumi-cloud が
-> reference distribution として `https://cloud.takosumi.com/kinds/v1/` 系で 6
-> kind (= worker / postgres / object-store / custom-domain / build / oidc) を
-> publish。 詳細 design は [RFC 0001](./rfc/0001-kernel-kind-agnostic.md)
-> を参照。 現状の拡張手順 (= JSON-LD + materializer) は変わりません。
+> **Wave N planned (2026-05-21 RFC stage、 RFC-4 multi-agent synthesis 後)**:
+> 本ドキュメントが説明する「curated 4 kind + operator-defined extensible」 model
+> は Wave N で **「全 kind が operator-defined」 model に進化予定** (= curated
+> catalog 完全廃止、 kernel は kind 名を一切知らない pure contract executor
+> に純化、 specific kind は全て operator distribution が JSON-LD + plugin
+> で持ち込む)。 takosumi-cloud が **1 つの reference operator distribution**
+> として `https://cloud.takosumi.com/kinds/v1/` 系で 6 kind (= worker / postgres
+> / object-store / custom-domain / build / oidc) を publish 予定 (= 「公式 /
+> blessed」 ではなく alternative も 同 contract で 同列、 RFC 0001 §4.6)。 詳細
+> design は [RFC 0001](./rfc/0001-kernel-kind-agnostic.md) を参照。
+> 現状の拡張手順 (= JSON-LD + materializer) は変わりません。 alias 解決は
+> **operator-injected alias map** 経由 (= `createPaaSApp({ aliases })` で
+> inject、 RFC 0001 §4.4)。
 
 命名規則と最小コミットメントの詳細は
 [`takosumi/CONVENTIONS.md`](https://github.com/tako0614/takosumi/blob/main/CONVENTIONS.md)
@@ -52,11 +56,16 @@ package を起こすか、 既存の cloud-neutral package に置きます。
 ```ts
 import type { KernelPlugin } from "@takos/takosumi-contract/plugin";
 import { kernelPluginFromProviderPlugin } from "@takos/takosumi-contract/kernel-plugin-adapter";
+// 現状 (Wave L まで): KIND_URI_BY_NAME を import して curated kind の URI を 参照
+// Wave N planned: KIND_URI_BY_NAME 物理削除、 operator が kindUri を直接渡す or
+//                  operator-injected alias map で resolve (= RFC 0001 §4.4)
 import { KIND_URI_BY_NAME } from "@takos/takosumi-contract/app-spec";
 
 export interface HetznerCloudWorkerProviderOptions {
   readonly token?: string;
   readonly lifecycle?: HetznerCloudLifecycleClient;
+  // Wave N planned: operator が kindUri を直接 inject できる factory option を 追加
+  // readonly kindUri?: string; // = "https://cloud.takosumi.com/kinds/v1/worker" 等
 }
 
 export function hetznerCloudWorkerProvider(
@@ -66,6 +75,9 @@ export function hetznerCloudWorkerProvider(
   const provider = createHetznerCloudWorkerProvider({ lifecycle });
   return kernelPluginFromProviderPlugin({
     provider,
+    // 現状 (Wave L まで): KIND_URI_BY_NAME 経由で参照 (= takosumi.com/kinds/v1/worker)
+    // Wave N planned: takosumi-cloud reference は cloud.takosumi.com/kinds/v1/worker、
+    //                  alternative operator distribution は独自 URI を渡せる
     kindUri: KIND_URI_BY_NAME.worker,
     capabilities: ["always-on", "long-request"],
   });

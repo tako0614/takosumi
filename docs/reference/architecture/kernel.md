@@ -9,14 +9,24 @@
 > [AppSpec](../app-spec.md) と [Installer API](../installer-api.md)
 > を参照してください。
 
-> **Wave N planned (2026-05-21 RFC stage)**: 本ドキュメントが説明する kernel の
-> curated 4 kind catalog 認識 (= `COMPONENT_KINDS` / `KIND_URI_BY_NAME` /
-> `kindNameFromUri()` / `TAKOSUMI_KIND_URI_BASE`) と `Component.build`
-> 取り扱いは Wave N で **削除予定** (= kernel pure contract executor 化、
-> specific kind は operator distribution が JSON-LD + plugin で持ち込む model)。
-> kernel core は kind 名を一切知らず、 plugin の `provides` list で URI →
-> materializer lookup を作るだけになります。 詳細 design は
-> [RFC 0001](../../rfc/0001-kernel-kind-agnostic.md) を参照。
+> **Wave N planned (2026-05-21 RFC stage、 RFC-4 multi-agent synthesis 後)**:
+>
+> - **現状 (Wave L まで)**: 本ドキュメントが下記 section で説明する通り、 kernel
+>   は `COMPONENT_KINDS` / `KIND_URI_BY_NAME` / `kindNameFromUri()` /
+>   `TAKOSUMI_KIND_URI_BASE` constant を hardcoded export しており、 curated 4
+>   kind catalog (= `worker` / `postgres` / `object-store` / `custom-domain`) を
+>   認識する。 `Component.build` field も AppSpec contract に存在し、 kernel が
+>   `defaultRunBuild()` で 実行する。
+> - **Wave N planned**: 上記 constant を **全削除**、 `Component.build` field も
+>   **削除** (= AppSpec parser が `validationPhase: "schema"` で reject 化)、
+>   kernel は kind 名を一切知らない pure contract executor に純化する。 specific
+>   kind は operator distribution (= takosumi-cloud reference) が JSON-LD +
+>   plugin で持ち込み、 kernel は plugin の `provides` list で URI →
+>   materializer lookup を作るだけになる。 alias resolution は
+>   **operator-injected alias map** (= `createPaaSApp({ aliases })`) 経由で
+>   解決される (= RFC 0001 §4.4)。
+>
+> 詳細 design は [RFC 0001](../../rfc/0001-kernel-kind-agnostic.md) を参照。
 
 > **kernel = source-to-runtime substrate**
 >

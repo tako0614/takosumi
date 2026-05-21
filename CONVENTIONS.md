@@ -7,11 +7,23 @@ catalog** と **provider plugin**、 **template** の命名・形状規約を定
 はこの規約に準拠している (= cloud provider plugin は Phase D 以降、 cloud 別 6
 package に分離されている)。
 
-> **Wave N planned**: 本ドキュメントが規定する **curated 4-kind catalog 自体を
-> 廃止** + `Component.build` 削除 + kernel を pure contract executor に純化 する
-> Wave N が planned。 specific kind は operator distribution (= takosumi-cloud
-> 等) が JSON-LD + plugin で持ち込む model に移行予定。 詳細 design は
-> [`docs/rfc/0001-kernel-kind-agnostic.md`](docs/rfc/0001-kernel-kind-agnostic.md)。
+> **Wave N planned (2026-05-21 RFC stage、 RFC-4 multi-agent synthesis 後)**:
+> 本ドキュメントが規定する curated 4-kind catalog 自体が Wave N で **廃止予定**
+> — RFC 0001 参照。
+>
+> - **現状 (Wave L まで)**: 本 CONVENTIONS.md が規定する curated 4-kind catalog
+>   (= `worker` / `postgres` / `object-store` / `custom-domain` を
+>   `https://takosumi.com/kinds/v1/` で publish) + `Component.build` field +
+>   任意 domain で operator-defined kind を 追加できる extensible model が
+>   canonical。
+> - **Wave N planned**: curated 4-kind catalog の物理削除 + `Component.build`
+>   field 削除 + kernel を pure contract executor に純化。 specific kind は
+>   operator distribution (= takosumi-cloud reference は
+>   `https://cloud.takosumi.com/kinds/v1/` 系で publish) が JSON-LD + plugin で
+>   持ち込む model に移行。 alias resolution は **operator-injected alias map**
+>   経由。 詳細 design は
+>   [`docs/rfc/0001-kernel-kind-agnostic.md`](docs/rfc/0001-kernel-kind-agnostic.md)。
+>
 > code implementation 後、 本 CONVENTIONS.md は 「現状の規約」 から 「operator
 > が自分の catalog を作るときの reference convention」 にreframe される予定。
 

@@ -81,12 +81,30 @@ AppSpec の各 component は 2 つの edge だけを持つ:
 旧 `use:` edge は廃止。 `${ref:...}` / `${secret-ref:...}` / `${bindings.*}`
 等の interpolation syntax も AppSpec / docs / kernel から完全除去された。
 
-## Wave N planned (= kernel kind-agnostic 化)
+## Worldview / Wave N planned (= kernel kind-agnostic 化)
 
 Wave J / K / L の minimization sequence を継承し、 **`Component.build` 削除 +
 curated 4-kind catalog 完全廃止 + kernel を pure contract executor に純化** する
-Wave N が planned。 specific な kind (= worker / postgres / etc.) は operator
-distribution (= takosumi-cloud 等) が JSON-LD + plugin で持ち込む model に移行。
+Wave N が planned (= 2026-05-21 RFC-4 multi-agent synthesis 後、 6 open
+questions が decision として 確定済)。 specific な kind (= worker / postgres /
+etc.) は operator distribution (= takosumi-cloud 等) が JSON-LD + plugin で
+持ち込む model に移行。
+
+主要 decision (= RFC 0001 §7 resolved):
+
+- **Alias resolution**: operator-injected alias map (=
+  `createPaaSApp({ aliases })`) + fail-closed reject on unresolved short alias
+- **worker.spec.artifact**: Wave N で inline + listen の oneOf keep、 完全
+  listen-only 純化は別 wave (= 想定 RFC 0004)
+- **Build sandbox**: operator 責務 (= default)、 3rd party plugin で wrap 可能
+- **Curated catalog wording**: takosumi-cloud は **「1 つの reference
+  implementation」** (= 「公式 / blessed」 ではなく alternative も 同 contract
+  で 同列)
+- **JSR package architecture**: `@takos/takosumi-plugins` keep + narrow re-scope
+  (= URL stability 維持、 plugin factory adapter / SDK helper へ scope narrow)
+- **runtime-agent kernel-decouple**: Wave N scope 外、 別 RFC 0002 (= 想定) で
+  扱う
+
 詳細 design は
 [`docs/rfc/0001-kernel-kind-agnostic.md`](docs/rfc/0001-kernel-kind-agnostic.md)。
 code implementation は別 wave / 後日 (= 直近 dispatch した code agent の WIP 70
@@ -127,13 +145,18 @@ file 修正は `git stash@{0}` で保全済、 `git stash apply` で再開可能
 - **Takos 中立**: takos-git / Takos 固有 service ID への直接依存は kernel core
   から完全に除去済み。
 - **Component kind catalog は extensible**: 新 kind は JSON-LD で URI publish +
-  materializer 実装 で成立する (`CONVENTIONS.md` §6)。 catalog は **curated 4
-  kind (= `worker` / `postgres` / `object-store` / `custom-domain`) +
-  operator-defined extensible** で、 任意 operator が任意 domain で新 kind を
-  発行できる。 各 kind の JSON-LD document が **spec / publishes / listens /
-  outputs を一体宣言** する。 Takosumi curated 4 kind の正本 URI は
-  `https://takosumi.com/kinds/v1/<name>`。 `oidc` kind は takosumi-cloud に移動
-  し、 本 repo には JSON-LD も materializer も無い。
+  materializer 実装 で成立する (`CONVENTIONS.md` §6)。 catalog は **現状 (Wave L
+  まで)** curated 4 kind (= `worker` / `postgres` / `object-store` /
+  `custom-domain`) + operator-defined extensible で、 任意 operator が任意
+  domain で新 kind を発行できる。 各 kind の JSON-LD document が **spec /
+  publishes / listens / outputs を一体宣言** する。 Takosumi curated 4 kind の
+  正本 URI は **現状 (Wave L まで)** `https://takosumi.com/kinds/v1/<name>`。
+  **Wave N planned** では curated catalog 自体が物理削除され、 takosumi-cloud
+  reference distribution が `https://cloud.takosumi.com/kinds/v1/<name>` で
+  publish (= 「公式 / blessed」 ではなく **1 つの reference operator
+  distribution**、 alternative も 同 contract で 置き換え可能、 RFC 0001 §4.6)。
+  `oidc` kind は takosumi-cloud に移動 し、 本 repo には JSON-LD も materializer
+  も無い。
 - **Materializer = KernelPlugin | InlineMaterializer**: kind 実装は 2 形態を
   受理する。 (1) `KernelPlugin` factory を返す plain array (= Vite plugin
   pattern, cloud provider package が提供する形式) と (2)
