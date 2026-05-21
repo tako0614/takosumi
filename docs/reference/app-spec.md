@@ -124,7 +124,7 @@ components:
 
 > Note: 上記の `web.spec.routes` は worker materializer の慣習 field で、 worker
 > kind contract には declare されません (= 「底は自由」 原則、 後述
-> [launch / health / mcp endpoints, permission requests](#launch-health-mcp-endpoints-permission-requests)
+> [Launch / Health / MCP endpoints 等の配置](#launch-health-mcp-endpoints)
 > 節参照)。 別 materializer 実装は routes を別の表現で扱っても構いません。
 
 > URI 直書きの例:
@@ -270,7 +270,7 @@ block を参照してください。
 
 詳細は [Kind Catalog](./kind-catalog.md#component-kinds)。
 
-## launch / health / mcp endpoints, permission requests (実装層) {#launch-health-mcp-endpoints-permission-requests}
+## Launch / Health / MCP endpoints 等の配置 — 実装層の責務 {#launch-health-mcp-endpoints}
 
 Wave J Component contract minimization で AppSpec から **`interfaces:` /
 `permissions:` top-level field を物理削除** しました。 これらは kernel が

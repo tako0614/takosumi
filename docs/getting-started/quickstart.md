@@ -101,7 +101,15 @@ export CLOUDFLARE_API_TOKEN=...
 export CLOUDFLARE_ZONE_ID=...   # custom-domain 使う場合
 ```
 
-connector: `@takos/cloudflare-{container,r2,dns}`
+connector (= component kind 別 provider id):
+
+- `worker` kind: `@takos/cloudflare-workers` (= default Workers backend) または
+  alternative の `@takos/cloudflare-container` (= Container backend)
+- `object-store` kind: `@takos/cloudflare-r2`
+- `custom-domain` kind: `@takos/cloudflare-dns`
+
+詳細 capability matrix は
+[Providers § Cloudflare](../reference/providers.md#cloudflare) を参照。
 
 ### Azure
 

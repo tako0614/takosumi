@@ -8,6 +8,11 @@
 > plugin で持ち込む model に移行)。 詳細 design は
 > [RFC 0001](../rfc/0001-kernel-kind-agnostic.md) を参照。
 
+> **用語の整理**: AppSpec / Installation / Deployment / Component / Kind /
+> Materializer / Provider plugin / KernelPlugin / Namespace pub/sub / Artifact /
+> Reference operator distribution / Wave J — N narrative の定義 + cross-link は
+> [用語集 (Glossary)](./glossary.md) に集約しています。
+
 ## API surface {#api-surfaces}
 
 クライアントとサーバーの間で交わされる surface。

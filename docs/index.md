@@ -87,6 +87,15 @@ operator は必要な cloud だけを別 install する。 詳細は
 | AppSpec / Installation / Deployment             | [Manifest](./reference/manifest.md#data-model)              |
 | curated 4 kind + extensible の spec / outputs   | [Kind Catalog](./reference/kind-catalog.md#component-kinds) |
 | Installer 5 endpoint の wire spec               | [Installer API](./reference/installer-api.md)               |
-| 20 default + 1 opt-in provider (詳細 list)      | [Provider Plugins](./reference/providers.md)                |
+| 20 default + 1 opt-in provider (詳細 list) [^1] | [Provider Plugins](./reference/providers.md)                |
 | 全 subcommand × flag × env                      | [CLI Reference](./reference/cli.md)                         |
 | `createPaaSApp({ plugins })` plain-array attach | [Operator Bootstrap](/operator/bootstrap)                   |
+
+[^1]: 内訳: AWS 4 (`s3` / `fargate` / `rds` / `route53`) + GCP 4 (`gcs` /
+    `cloud-run` / `cloud-sql` / `cloud-dns`) + Cloudflare 4 (`r2` / `container`
+    / `workers` / `dns`) + Azure 1 (`container-apps`) + Kubernetes 1
+    (`deployment`) + Selfhost 6 (`filesystem` / `minio` / `docker-compose` /
+    `systemd` / `postgres` / `coredns`) = **20 default**、 Deno Deploy 1
+    (`deno-deploy`、 opt-in / 個別 import) = **計 21**。 詳細は
+    [Provider Plugins § Bundled provider カタログ](./reference/providers.md#bundled-provider-catalog)
+    を参照。

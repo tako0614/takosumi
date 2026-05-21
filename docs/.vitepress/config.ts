@@ -118,6 +118,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "リファレンス",
       items: [
         { text: "インデックス", link: "/reference/" },
+        { text: "用語集", link: "/reference/glossary" },
       ],
     },
     {

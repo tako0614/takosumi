@@ -324,9 +324,16 @@ kind | spec | build | publish | listen
 `https://takosumi.com/kinds/v1/worker`) の文字列。 alias は対応 JSON-LD の
 `aliases[]` に登録された名前のみ受理し、 parse 段階で full URI に正規化する。
 
-`build` は AppSpec が許可する **唯一の build 概念** で、 `{ command, output }`
-の最小 recipe のみ表現できる。 jobs / steps / matrix / triggers / pipeline は
-持たない (= CI workflow ではない)。
+**現状 (Wave L まで)**: `build` は AppSpec が許可する **唯一の build 概念** で、
+`{ command, output }` の最小 recipe のみ表現できる。 jobs / steps / matrix /
+triggers / pipeline は持たない (= CI workflow ではない)。
+
+> **Wave N planned**: `Component.build` field は AppSpec contract から
+> **物理削除**、 build は別 `kind: build` component に移管予定 (= materializer
+> が artifact を生成し、 `worker` 等は `listen` で artifact URL を受け取る
+> model)。 詳細 design は
+> [RFC 0001 §5](../rfc/0001-kernel-kind-agnostic.md#5-build-kind-details-第-3-軸-detail)
+> を参照。
 
 `publish` / `listen` は component 間接続の **唯一の表現** である。 `use:` edge
 と文字列 interpolation (`${ref:...}` / `${secret-ref:...}` / `${bindings.*}` 等)
@@ -380,7 +387,7 @@ components:
 
 > Note: `spec.routes` は worker materializer の慣習 field で、 worker kind
 > contract には declare されません (= 「底は自由」 原則。 詳細は
-> [AppSpec § launch / health / mcp endpoints, permission requests](./app-spec.md#launch-health-mcp-endpoints-permission-requests)
+> [AppSpec § Launch / Health / MCP endpoints 等の配置](./app-spec.md#launch-health-mcp-endpoints)
 > 参照)。 別 materializer 実装は routes を別表現で扱っても構いません。
 
 `kind` が semantic contract。 短 alias または完全 URI のいずれでもよい。
