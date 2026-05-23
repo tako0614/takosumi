@@ -25,7 +25,7 @@ export type { WorkerCapability, WorkerOutputs, WorkerSpec };
  * (cloudflare-workers / deno-deploy / etc.) at apply time.
  *
  * Spec / outputs / capabilities are derived from
- * `spec/contexts/kinds/v1/worker.jsonld` via `worker.generated.ts`;
+ * `packages/plugins/spec/kinds/v1/worker.jsonld` via `worker.generated.ts`;
  * validation diagnostics are hand-written below.
  */
 export const WorkerKind: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
@@ -58,15 +58,27 @@ export const WorkerKind: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
 };
 
 /**
- * `worker@v1` only accepts uploaded `js-bundle` artifacts: `kind` must be
- * exactly `"js-bundle"` and `hash` is required (no external `uri`).
+ * `worker@v1` provider input only accepts uploaded `js-bundle` artifacts.
+ * Build services may accept source-root-relative output paths, but those paths
+ * must be resolved before the provider sees the component spec.
  */
 function validateArtifact(
   value: unknown,
   issues: ShapeValidationIssue[],
 ): void {
+  if (isNonEmptyString(value)) {
+    issues.push({
+      path: "$.artifact",
+      message:
+        "must be a resolved artifact object; source paths are build-service input only",
+    });
+    return;
+  }
   if (!isRecord(value)) {
-    issues.push({ path: "$.artifact", message: "must be an object" });
+    issues.push({
+      path: "$.artifact",
+      message: "must be a resolved artifact object",
+    });
     return;
   }
   if (!isNonEmptyString(value.kind)) {

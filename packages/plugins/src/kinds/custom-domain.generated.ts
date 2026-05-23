@@ -1,24 +1,10 @@
-// AUTO-GENERATED FROM spec/contexts/kinds/v1/custom-domain.jsonld — DO NOT EDIT.
+// AUTO-GENERATED FROM packages/plugins/spec/kinds/v1/custom-domain.jsonld — DO NOT EDIT.
 // Run `deno task spec:generate-ts` to refresh.
-
-export interface CustomDomainCertificate {
-  readonly kind: "auto" | "managed" | "provided";
-  readonly secretRef?: string;
-}
-
-export interface CustomDomainRedirect {
-  readonly from: string;
-  readonly to: string;
-  readonly code?: 301 | 302 | 307 | 308;
-}
 
 export interface CustomDomainSpec {
   /** Fully-qualified domain name (e.g. `notes.example.com`). */
   readonly name: string;
-  /** TLS certificate provisioning policy. `secretRef` is required when `kind: provided`. */
-  readonly certificate?: CustomDomainCertificate;
-  /** HTTP redirect rules served by the domain edge. */
-  readonly redirects?: readonly CustomDomainRedirect[];
+  readonly [extension: string]: unknown;
 }
 
 export interface CustomDomainOutputs {

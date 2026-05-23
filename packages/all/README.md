@@ -16,13 +16,13 @@ takosumi install --source . --space space_personal
 
 ## Sub-exports
 
-- `jsr:@takos/takosumi` — core plugins (kinds / materializer host) を re-export
+- `jsr:@takos/takosumi` — reference plugins / materializer host を re-export
 - `jsr:@takos/takosumi/kernel` — kernel programmatic API (`createPaaSApp`)
 - `jsr:@takos/takosumi/server` — kernel HTTP server entry (deno run で起動)
-- `jsr:@takos/takosumi/plugins` — plugins entry (kind catalog + materializer
-  host)
-- `jsr:@takos/takosumi/kinds` — Takosumi curated component kind catalog (worker
-  / postgres / object-store / custom-domain)
+- `jsr:@takos/takosumi/plugins` — plugins entry (reference kind registry +
+  materializer host)
+- `jsr:@takos/takosumi/kinds` — Takos reference component kind registry
+  (`worker` / `postgres` / `object-store` / `custom-domain`)
 - `jsr:@takos/takosumi/cli` — CLI module entry
 
 cloud-backed `KernelPlugin` factory は **別 package** に分離されているため、
@@ -37,8 +37,8 @@ import { awsS3ObjectStoreProvider } from "@takos/takosumi-aws-providers";
 
 core:
 
-- `jsr:@takos/takosumi-contract` — canonical types (AppSpec / ComponentKind /
-  ProviderPlugin / KernelPlugin)
+- `jsr:@takos/takosumi-contract` — canonical types (AppSpec / ProviderPlugin /
+  KernelPlugin)
 - `jsr:@takos/takosumi-kernel` — kernel only (server + apply pipeline)
 - `jsr:@takos/takosumi-plugins` — plugins only (kinds / materializer host /
   factories)

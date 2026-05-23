@@ -142,8 +142,8 @@ RevokeDebt の status は ActivationSnapshot に伝播し、traffic shift の挙
 
 production deployment では status 表示を必須とする:
 
-- operator dashboard / CLI status は `open` / `operator-action-required` /
-  `cleared` の件数を Space 単位で表示する。
+- operator UI / CLI status は `open` / `operator-action-required` / `cleared`
+  の件数を Space 単位で表示する。
 - `operator-action-required` 1 件以上の状態を **production readiness check
   失敗** として扱い、kernel の `/readyz` に直接は反映しないが、operator gate で
   deploy を止める運用にする。

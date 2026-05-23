@@ -84,6 +84,10 @@ body の中身):
   "catalog": {
     "kinds": [
       { "uri": "https://takosumi.com/kinds/v1/worker", "version": "1.0.0" },
+      {
+        "uri": "https://takosumi.com/kinds/v1/web-service",
+        "version": "1.0.0"
+      },
       { "uri": "https://takosumi.com/kinds/v1/postgres", "version": "1.0.0" }
     ],
     "materializers": [
@@ -93,7 +97,7 @@ body の中身):
         "version": "1.0.0"
       },
       {
-        "kindUri": "https://takosumi.com/kinds/v1/worker",
+        "kindUri": "https://takosumi.com/kinds/v1/web-service",
         "providerId": "@takos/aws-fargate",
         "version": "1.0.0"
       }

@@ -1,780 +1,218 @@
-# RFC 0001 — Kernel kind-agnostic 化 + Component.build 削除 + curated catalog 廃止
+# RFC 0001: Kernel kind-agnostic 化 {#rfc-0001-kernel-kind-agnostic}
 
-> **Status**: Draft (= 2026-05-21、 Wave N RFC-4 multi-agent synthesis 後 6 open
-> questions を resolved decision に格上げ + RFC internal gap fix + ecosystem
-> cross-doc contradiction sweep) **Wave**: N (= planned、 code implementation
-> は別 wave / 後日) **Supersedes**: なし **Related**: Wave J (Component contract
-> minimization)、 Wave K (AppSpec root envelope minimization)、 Wave L
-> (apiVersion group prefix removal)
+> **Status**: Draft\
+> **Date**: 2026-05-21\
+> **Wave**: N\
+> **Implementation**: component kind externalization implemented; build/source
+> snapshot redesign pending
 
-## 1. Summary
+この RFC は Takosumi kernel をさらに小さくし、specific kind の catalog を
+operator distribution 側へ移すための設計です。current implementation の正本は
+[AppSpec](../reference/app-spec.md)、[Installer API](../reference/installer-api.md)、
+[Reference Kind Registry](../reference/kind-catalog.md) です。
 
-Takosumi kernel を **pure contract executor** に純化し、 specific な kind 概念
-(= worker / postgres / object-store / custom-domain / build / oidc / etc.) を
-**全て operator distribution が JSON-LD + plugin で 持ち込む** model
-に移行する。 具体的には:
+この文書では、`manifestDigest` など既存 wire field の名前を除き、source root の
+`.takosumi.yml` を **AppSpec** と呼びます。
 
-- `Component.build` field を削除 (= Component は 4 field に minimize)
-- `spec/contexts/kinds/v1/*.jsonld` (= curated 4-kind catalog) を物理削除
-- `packages/plugins/src/kinds/*` (= curated kind plugins) を物理削除
-- `packages/contract/src/app-spec.ts` の `COMPONENT_KINDS` / `KIND_URI_BY_NAME`
-  等 hardcoded kind list を全削除
-- takosumi-cloud に新 JSR package `@takos/takosumi-cloud-kinds` を新設し、
-  worker / postgres / object-store / custom-domain / build / oidc の 6 kind を
-  `https://cloud.takosumi.com/kinds/v1/` 系で publish (= **1 つの reference
-  operator distribution として** publish — `cloud.takosumi.com` を「公式 /
-  blessed」 とは扱わず、 alternative operator distribution が同 contract で
-  置き換え可能 / §4.6 + §7.4 参照)
-- 6 consumer apps の `.takosumi.yml` を新 contract に migration
+## Summary {#summary}
 
-これは Wave J → K → L 系列の **「底は自由」 minimization sequence の自然な
-終点**。 sovereignty model (= 「kernel は publisher-neutral / 同 contract を
-満たす alternative implementation は 同列」) との一貫性を最優先する。
+Wave J / K / L で AppSpec contract は次の形まで縮小されました。
 
-## 2. Motivation
-
-直近 Wave J / K / L で AppSpec contract を minimize した結果、 現状:
-
-```typescript
-interface AppSpec {
+```ts
+type AppSpec = {
   apiVersion: "v1";
-  metadata;
-  components;
-} // 3 field
-interface Component {
-  kind;
-  spec?;
-  publish?;
-  listen?;
-  build?;
-} // 5 field
-```
-
-このうち `Component.build` は **唯一の non-kind-agnostic field** であり、 「全
-kind が build を持ちうる」 という暗黙の前提と固定 shape (`{ command, output }`)
-が contract に embed されている。
-
-更に、 takosumi kernel は
-`COMPONENT_KINDS = ["worker", "postgres",
-"object-store", "custom-domain"]`
-という curated 4-kind list を hardcoded で 持ち、 `KIND_URI_BY_NAME` 等で alias
-解決を行う。 これは「kernel が specific kind を知っている」 という最後の特権で、
-「底は自由」 原則 (= 「実装層の convention は spec contract の外」) に反する。
-
-これらを取り除けば AppSpec は完全に kind-agnostic な接続 primitive (= namespace
-pub/sub + Installation lifecycle) のみで構成され、 kernel は「contract
-executor」 として specific な意味論を持たない。 全ての kind 意味論は operator
-distribution の domain に。
-
-User mandate (= 直近対話で確認):
-
-- 「buildをコンポーネントから外していっぺんにやるべきだと思うし再現性があって今の
-  コンポーネントと同じぐらい平等な仕組みにしたい」
-- 「そもそも公式 kind 自体廃止したいかも → 本気 完全廃止」
-- 「型をそれぞれ jsonld で定義して plugin 作って運用するだけじゃないの」
-
-> **Note (= Wave N scope 外)**: kernel runtime ↔ tenant 間の `WorkerSpec` 等
-> hardcoded type は **本 RFC scope 外** であり、 別 wave で扱う (= RFC 0002 で
-> runtime-agent kernel-decouple として分離、 §9 参照)。 本 RFC は AppSpec
-> contract minimization の自然な終点だけを 担当する。
-
-## 3. Contract end-state (= Wave N target、 POST-removal)
-
-**AppSpec root** (= 3 field、 不変):
-
-```typescript
-interface AppSpec {
-  apiVersion: "v1";
-  metadata: AppSpecMetadata;
+  metadata: Metadata;
   components: Record<string, Component>;
-}
+};
+
+type Component = {
+  kind: string;
+  spec?: unknown;
+  publish?: string[];
+  listen?: Record<string, ListenTarget>;
+};
 ```
 
-**Component** (= 4 field、 `build` 削除):
+Wave N は、この縮小の次段階として次を目標にします。
 
-```typescript
-interface Component {
-  kind: string; // URI or short alias
-  spec?: JsonObject; // kind-defined, open
-  publish?: readonly NamespacePath[]; // namespace edge out
-  listen?: Record<NamespacePath, ListenOptions>; // namespace edge in
-  // build?: ← 削除
-}
-```
+- kernel / contract から former 4-kind catalog を外す。
+- `Component.build` を kernel contract から外し、BuildSpec / build service に
+  分離する。
+- specific kind は operator distribution が JSON-LD descriptor と provider
+  plugin で持ち込む。
+- kernel は kind URI、namespace graph、provider lifecycle を実行する pure
+  contract executor に近づける。
 
-**`kind` field の値**:
+## Non-goals {#non-goals}
 
-- 完全 URI: `https://<operator-domain>/kinds/<version>/<name>` (= 例
-  `https://cloud.takosumi.com/kinds/v1/worker`)
-- short alias: `worker` / `build` / etc. (= operator-injected alias map で
-  resolve、 §4.4 参照。 parser が AppSpec を parse する際に operator が
-  `createPaaSApp({ aliases: {...} })` で 渡した alias map を 使って URI に
-  normalize する; 未解決の short alias は `validationPhase: "schema"` で
-  fail-closed reject)
+Wave N は次を扱いません。
 
-**`Component.build` 削除に伴う migration**:
+- runtime-agent の hardcoded worker types を完全分離すること。
+- workflow runner、cron、scheduler を kernel に入れること。
+- account-plane、billing、OIDC issuer、customer onboarding を kernel に入れる
+  こと。
+- existing Installer API の endpoint を増やすこと。
 
-- build recipe は別 component (= `kind: build`) に移管
-- artifact は **namespace pub/sub** 経由で consumer component に届く (= build
-  component が `publish: [<app-id>.<component-name>]` で artifact descriptor を
-  namespace に置き、 consumer (= worker 等) が `listen: { ... }` で受ける)
-- `Component.build` を含む YAML は parser が `validationPhase: "schema"` で
-  fail-closed reject (= Wave J/K/L 同形 pattern、 Phase 1 で 即時 reject 化)
+runtime-agent の完全 kernel-decouple は別 RFC で扱います。
 
-**worker.spec.artifact 等の既存 spec field**:
+## End state {#end-state}
 
-- **Decision (= §7.2 resolution)**: Wave N は inline + listen の oneOf を keep
-  する (= safer migration、 consumer apps の breaking surface を最小化)
-- worker plugin の materializer が
-  `spec.artifact: { kind: "js-bundle", hash:
-  "sha256:..." }` の inline
-  形式と、 `spec.artifact: { listen:
-  "<namespace-path>" }` の listen
-  形式の両方を accept する
-- worker.jsonld の spec schema は oneOf で declare (= §5.4 末尾の updated schema
-  参照)
-- 完全 listen-only に純化するのは別 wave (= 想定 RFC 0004 で扱う、 §9 参照)
+Wave N 後の kernel は、kind の意味を contract-owned catalog
+で知りません。operator が 起動時に alias map と provider plugin を渡します。kind
+descriptor は operator tooling / docs / validation layer が持てますが、kernel
+contract の一部 ではありません。
 
-## 4. Kind catalog architecture (= 第 2 軸 detail)
-
-### 4.1 Pure contract executor 化
-
-takosumi kernel (= `@takos/takosumi-kernel` + `@takos/takosumi-installer` +
-`@takos/takosumi-contract`) は **specific kind を一切 ship しない**:
-
-- `packages/contract/src/app-spec.ts` から `COMPONENT_KINDS`、
-  `KIND_URI_BY_NAME`、 `KIND_NAME_BY_URI`、 `kindNameFromUri()`、
-  `TAKOSUMI_KIND_URI_BASE` を削除
-- `packages/installer/src/yaml-parser.ts` の kind validation を「URI 形式 check
-  のみ + operator-injected alias map で short alias を resolve」 に simplify (=
-  hardcoded list 参照削除)
-- `packages/plugins/src/kinds/` ディレクトリ完全削除 (= worker / postgres /
-  object-store / custom-domain の `.ts` + `.generated.ts` 8 file)
-- `spec/contexts/kinds/v1/` ディレクトリ完全削除 (= 4 jsonld file)
-- `scripts/check-kind-uri-sync.ts` 削除 (= 同期チェック対象が無くなる)
-
-`@takos/takosumi-plugins` package: **Decision (= §7.5 resolution)** —
-**deprecation も physical removal もしない、 keep + narrow scope**:
-
-- 旧 curated kind plugins (= `packages/plugins/src/kinds/`) は物理削除し、 新
-  `@takos/takosumi-cloud-kinds` package に移植
-- 残る export は `kernelPluginFromProviderPlugin` adapter + factory machinery +
-  SDK helpers のみ (= 「plugin factory adapter / SDK helper」 package へ scope
-  narrow)
-- package URL stability を維持 (= 6 cloud provider package + 3rd party plugin
-  author の import 文を破壊しない)
-- JSDoc / README に scope narrowing を明示、 deprecation banner は付けない
-
-### 4.2 Operator distribution が kind catalog を持ち込む
-
-各 operator (= takosumi-cloud / 3rd party operator / self-host operator) が:
-
-1. **JSON-LD で kind を publish**: 自分の domain 配下に
-   `https://<operator-domain>/kinds/<version>/<name>.jsonld` を 配備
-2. **Materializer plugin を実装**: `KernelPlugin` interface を満たす TypeScript
-   plugin、 `provides: ["https://<operator-domain>/kinds/<version>/<name>"]` で
-   自分が materialize できる kind URI を declare
-3. **operator が `createPaaSApp({ plugins: [...] })` で kernel に attach**
-
-kernel は plugin の `provides` list を見て kind URI → plugin の lookup table を
-作る。 unknown kind (= 何 plugin も provide していない URI) は **dry-run また は
-apply 時に** `validationPhase: "kind-catalog"` で fail-closed reject (=
-仕様策定中 phase の慣習として backward compat なし)。 reject timing は dry-run
-段階で発生するため、 operator は apply 前に検出できる。
-
-### 4.3 Kind URI scheme
-
-`https://<operator-domain>/kinds/<version>/<name>`:
-
-- URI は **operator domain の identity** = 誰が責任を持つ kind catalog かを URI
-  自体が示す
-- 例:
-  - `https://cloud.takosumi.com/kinds/v1/worker` (= takosumi-cloud が ship する
-    worker、 = **1 つの reference implementation**)
-  - `https://example.com/kinds/v1/my-custom-resource` (= 3rd party operator が
-    定義する custom kind)
-- version segment (`v1`) は kind 進化のための namespace、 operator が独自に
-  version bump 管理
-- name segment は operator domain 内で unique、 各 operator が自由に命名
-
-#### 4.3.1 Version management
-
-- **Operator-defined kind versions は operator domain 内 独立**: 各 operator が
-  自分の domain 配下で 自由に kind を version bump できる (= 他 operator の
-  version policy に縛られない)
-- **Multiple version 同時 publish 可能**: 1 operator が同じ kind name の複数
-  version を 別 URI として ship 可能 (= 例:
-  `https://cloud.takosumi.com/kinds/v1/worker` と
-  `https://cloud.takosumi.com/kinds/v2/worker` を 並行 ship、 既存 installation
-  は v1 を 使い続け、 新規 installation は v2 を選べる)
-- **Short alias は ambiguous 場合 operator が alias map で disambiguate**: 例:
-  `aliases: { "worker-v1": "https://cloud.takosumi.com/kinds/v1/worker",
-  "worker-v2": "https://cloud.takosumi.com/kinds/v2/worker" }`
-  のように alias を 分けて declare する。 default `aliases: { "worker": "..." }`
-  は 1 つだけ point すべき (= operator policy)
-
-### 4.4 Alias resolution
-
-AppSpec の `kind: worker` (= short alias) は kernel 単独では URI に resolve
-できない (= kernel は specific kind を知らない)。 解決は **operator** が 担当。
-
-**Decision (= §7.1 resolution)**: **Option A (= operator-injected alias map) +
-fail-closed reject on unresolved short alias**
-
-- alias map は `createPaaSApp({ aliases: {...} })` で operator が inject (=
-  AppSpec metadata に kindCatalog field は **追加しない**、 contract surface 増
-  加なし)
-- kernel parser は AppSpec parse 時に alias map を 使って short alias を URI に
-  normalize する
-- 未 inject alias (= operator alias map に存在しない short name) は
-  `validationPhase: "schema"` で fail-closed reject (= Wave J/K/L 同形 pattern)
-- reject timing は dry-run / apply の両方 (= dry-run で 事前 detect 可能)
-
-**Rejected option** (= 議論経緯の保全):
-
-- **Option B: AppSpec metadata で kindCatalog declare** — AppSpec root に
-  `metadata.kindCatalog: "https://cloud.takosumi.com/kinds/v1/"` を追加する案。
-  **Considered but rejected** — `metadata.kindCatalog` field を contract に
-  追加することは「kernel が kind-catalog awareness を 持つ」 形になり、 本 RFC
-  の core motion (= 「kernel pure contract executor 化」) と矛盾する。 同
-  AppSpec が portable になる pro は認めるが、 operator が alias map を inject
-  すれば 同等の portability は 実現可能であり、 contract surface 増加の cost が
-  prevail。
-
-### 4.5 Multi-operator app
-
-1 AppSpec が **複数 operator の kind を mix** できる:
-
-```yaml
-apiVersion: v1
-metadata: { id: com.example.app }
-components:
-  web:
-    kind: https://cloud.takosumi.com/kinds/v1/worker # = takosumi-cloud
-  custom:
-    kind: https://example.com/kinds/v1/my-resource # = 3rd party
-```
-
-各 operator の plugin が `createPaaSApp({ plugins: [...] })` で attached されて
-いれば kernel が DAG 解決 + materialize。 alias は必要に応じて operator が 全
-catalog 分の map を 1 つに merge して inject。
-
-### 4.6 Reference distribution: takosumi-cloud (= 1 つの reference implementation)
-
-**Decision (= §7.4 resolution)**: takosumi-cloud は **「1 つの reference
-operator distribution」** として 6 kind を
-`https://cloud.takosumi.com/kinds/v1/` 系で publish:
-
-- `worker` (= 既存 curated kind を移植 + 「artifact は inline / listen 両方 OK」
-  shape 拡張)
-- `postgres` (= 既存 curated kind を移植)
-- `object-store` (= 既存 curated kind を移植)
-- `custom-domain` (= 既存 curated kind を移植)
-- `build` (= 新規、 §5 参照)
-- `oidc` (= 既存 Wave I の oidc.jsonld を移植 + URI re-anchor)
-
-「公式 = blessed」 とは扱わず **「1 つの reference implementation、 alternative
-operator distribution が 同 contract (= 同じ kind JSON-LD shape + materializer
-interface) を満たして置き換え可能」**。 sovereignty model (= 「kernel は
-publisher-neutral、 contract-compatible alternative は同列」) との一貫性を
-最優先する。
-
-**Rejected option** (= 議論経緯の保全):
-
-- **Option A: 「公式 reference」 narrative** — takosumi-cloud を「公式 / blessed
-  reference」 と narrative する案。 **Considered but rejected** — sovereignty
-  model (= ecosystem-root `docs/reference/design-principles.md` で defined、
-  「kernel は publisher-neutral / 同 contract を 満たす alternative
-  implementation は 同列」 が core principle) と矛盾する。 同 contract を 満たす
-  alternative distribution が 「2nd-class」 扱いに なる narrative は ecosystem
-  の core principle に反する。
-
-self-host operator は典型的に `import "@takos/takosumi-cloud-kinds"` を
-deno.json に追加するだけで標準セット取得 + cloud provider package を attach する
-だけで動く形に (= migration の摩擦を最小化)。
-
-## 5. Build kind details (= 第 3 軸 detail)
-
-### 5.1 JSON-LD design
-
-`https://cloud.takosumi.com/kinds/v1/build`:
-
-```json
-{
-  "@context": "https://takosumi.com/contexts/v1.jsonld",
-  "@id": "https://cloud.takosumi.com/kinds/v1/build",
-  "@type": "ComponentKind",
-  "name": "build",
-  "version": "v1",
-  "aliases": ["build"],
-  "description": "Artifact production recipe — shell command が source root で 走り、 output path の bytes を sha256-digest して namespace に publish する。 sandbox の有無は operator 責務。",
-  "spec": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object",
-    "required": ["command", "output"],
-    "additionalProperties": false,
-    "properties": {
-      "command": {
-        "type": "string",
-        "description": "shell command (= sh -c で実行される)"
-      },
-      "output": {
-        "type": "string",
-        "description": "artifact path relative to source root + spec.source"
-      },
-      "source": {
-        "type": "string",
-        "default": ".",
-        "description": "sub-path within AppSpec source tree (= monorepo 用)"
-      }
-    }
+```ts
+const { app } = await createPaaSApp({
+  kindAliases: {
+    worker: "https://takosumi.com/kinds/v1/worker",
+    postgres: "https://takosumi.com/kinds/v1/postgres",
   },
-  "publishes": [
-    {
-      "namespacePath": "<app-id>.<component-name>",
-      "material": {
-        "artifact": {
-          "url": "$outputs.url",
-          "digest": "$outputs.digest",
-          "kind": "$outputs.kind"
-        }
-      }
-    }
+  plugins: [
+    cloudflareWorkerProvider(...),
+    cloudflareR2Provider(...),
   ],
-  "listens": {},
-  "outputs": [
-    {
-      "name": "url",
-      "type": "string",
-      "required": true,
-      "meaning": "digest-pinned artifact URL (= kernel artifact store の content-addressed locator)"
-    },
-    {
-      "name": "digest",
-      "type": "string",
-      "required": true,
-      "meaning": "sha256:<hex>"
-    },
-    {
-      "name": "kind",
-      "type": "string",
-      "required": true,
-      "meaning": "artifact kind: js-bundle / oci-image / tarball / etc."
-    }
-  ]
-}
+});
 ```
 
-> **Field naming note**: `material.artifact` を 採用することで、 consumer (=
-> worker) 側で `listen` 経由で受けた material を `spec.artifact` に bind
-> しやすくなる (= 同じ wording で reasoning 可能、 §5.4 worker.jsonld の updated
-> oneOf schema 参照)。
+AppSpec author は short alias を使えます。未解決 alias は plugin lookup miss と
+なり、provider operation の前に reject されます。ここでいう **fail-closed** は、
+kernel が不明な入力を黙って fallback せず、副作用の前に明示的に失敗すること
+です。
 
-### 5.2 Materializer logic
+## Decisions {#decisions}
 
-既存 `defaultRunBuild()` (=
-`packages/kernel/src/domains/installer/mod.ts:1048-1079`) 同等の logic を
-operator が plugin として実装する:
+### 1. Alias resolution {#alias-resolution}
 
-1. AppSpec source root + `spec.source` で working directory 解決
-2. `sh -c <spec.command>` で shell spawn (= 同期実行)
-3. `spec.output` path の bytes を読む
-4. sha256 hash を計算
-5. kernel artifact store に upload (= 既存 store API: `POST /v1/artifacts`)
-6. namespace material を `{ artifact: { url, digest, kind } }` の shape で
-   publish
+Decision: operator-injected alias map を採用します。
 
-#### 5.2.1 Location and responsibility
+- `worker` のような short alias は operator が完全 URI に解決する。
+- unresolved alias は provider operation 前に fail-closed。
+- AppSpec は完全 URI を直接書くこともできる。
 
-- **Wave N Phase 1 で kernel から `defaultRunBuild()` + `Component.build`
-  削除**: kernel 側に build materializer は ship されない
-- **Phase 2 で takosumi-cloud package が `BuildMaterializer` (= `KernelPlugin`
-  interface) を 実装**: `@takos/takosumi-cloud-kinds` package が
-  `https://cloud.takosumi.com/kinds/v1/build` を `provides` で declare する
-  `KernelPlugin` factory を export する
-- **Operator は `createPaaSApp({ plugins: [buildMaterializer, ...] })` で
-  attach**: build kind の materializer も他 kind と 同列に plain array に渡す
-- **`KernelPluginApplyContext` の data flow**: kernel が apply 時に
-  `ctx.component.spec.command` / `ctx.component.spec.output` /
-  `ctx.component.spec.source` を materializer に渡す。 materializer は同等の
-  outcome を 提供 (= shell command 実行、 sha256 compute、 kernel artifact store
-  upload、 namespace publish)、 implementation は operator が自由
-- **Sandbox の有無は operator 責務** (= §7.3 resolution): takosumi-cloud
-  reference implementation では unsandboxed (= host で直 shell spawn)、 sandbox
-  化したい operator は 3rd party plugin で wrap 可能 (= 例: Firecracker / gVisor
-  / Docker rootless 等の sandbox layer を経由する alternative `kind:
-  build`
-  materializer を ship する distribution が存在しうる)。 Sandboxing alternative
-  implementations は 3rd party plugin として独立 ship 可能であり、 sovereignty
-  model に整合する
+kernel は `https://takosumi.com/kinds/v1/worker` のような contract-owned URI
+を特別扱い しません。
 
-### 5.3 Polyglot
+### 2. Worker artifact shape {#worker-artifact-shape}
 
-1 AppSpec に **複数 `kind: build` component** を置ける:
+Decision: Wave N では inline artifact と `listen` 由来 artifact の oneOf を維持
+します。public artifact concept の削除は source snapshot model として別 wave
+に送ります。
 
-```yaml
-components:
-  web-bundle:
-    kind: build
-    spec: {
-      command: deno task build:web,
-      output: dist/web.js,
-      source: ./packages/web,
-    }
-    publish: [com.example.app.web-bundle]
-  worker-bundle:
-    kind: build
-    spec: {
-      command: deno task build:worker,
-      output: dist/worker.js,
-      source: ./packages/worker,
-    }
-    publish: [com.example.app.worker-bundle]
-  migration-script:
-    kind: build
-    spec: {
-      command: cargo build --release --bin migrate,
-      output: target/release/migrate,
-      source: ./services/db,
-    }
-    publish: [com.example.app.migration]
+理由:
+
+- migration の破壊を抑える。
+- build sandbox の責務移動と同時に worker artifact shape まで変えると review
+  surface が大きくなりすぎる。
+- provider plugin は現行 shape を受け取り、後続 RFC で source snapshot locator
+  を読む model に寄せられる。
+
+### 3. Build sandbox {#build-sandbox}
+
+Decision: build sandbox は operator responsibility に移し、`.takosumi.build.yml`
+を build service input として定義します。
+
+Wave N 後の AppSpec component は `kind` / `spec` / `publish` / `listen` の 4
+field だけです。source から artifact を作る recipe は BuildSpec に書きます。
+build service は `.takosumi.yml` と `.takosumi.build.yml` を読み、Linux
+container などの build kind を batch 実行し、AppSpec の `spec.artifact` path を
+`/v1/artifacts` に upload してから `spec.artifact` が digest descriptor に解決済
+みの AppSpec bundle を作ります。kernel はその bundle を `source.kind=bundle`
+として受け取り、artifact material の digest と provenance を Deployment に記録
+します。
+
+reference build kind は次の URI です。
+
+```text
+https://takosumi.com/build-kinds/v1/linux-container
 ```
 
-#### 5.3.1 DAG semantics
-
-Builds participate in the existing DAG resolution: if build B `listen` に build
-A の output を含むなら、 kernel は A → B の topological order で 実行する (=
-既存 namespace pub/sub model の resolution algorithm と同形)。 Independent
-builds (= 互いに listen edge を持たない) は kernel implementation が並列実行可能
-(= operator が選んだ kernel が thread pool / Worker pool / etc. で 並列化する
-かは implementation detail)。
-
-consumer (= web / worker / db migrations) が個別に listen で 受ける。
-
-### 5.4 Worked example: yurucommu の build flow 変換
-
-**Before (= Wave J/K/L 時点、 現状)**:
-
-```yaml
-apiVersion: v1
-metadata: { id: jp.yurucommu.test }
-components:
-  web:
-    kind: worker
-    build:
-      command: deno task build:worker
-      output: dist/worker.js
-    spec:
-      artifact: { kind: js-bundle, hash: "{{ build.digest }}" }
-      # ... 他 worker config
-```
-
-**After Wave N**:
-
-```yaml
-apiVersion: v1
-metadata: { id: jp.yurucommu.test }
-components:
-  web-bundle:
-    kind: build # = aliases ["build"] → resolved by operator to https://cloud.takosumi.com/kinds/v1/build
-    spec:
-      command: deno task build:worker
-      output: dist/worker.js
-    publish:
-      - jp.yurucommu.test.web-bundle
-  web:
-    kind: worker # = aliases ["worker"] → resolved by operator to https://cloud.takosumi.com/kinds/v1/worker
-    listen:
-      jp.yurucommu.test.web-bundle:
-        as: artifact
-    spec:
-      artifact:
-        listen: jp.yurucommu.test.web-bundle # listen-based reference
-      # ... 他 worker config
-```
-
-OR worker.spec.artifact を inline で keep する場合 (= Decision §7.2 で keep):
-
-```yaml
-web:
-  kind: worker
-  spec:
-    artifact: {
-      kind: js-bundle,
-      hash: "...",
-    } # = inline (= operator が事前 build 済)
-    # ... 他 worker config
-```
-
-(= worker plugin の materializer が両方の shape を accept、 oneOf で declare)
-
-#### Updated worker.jsonld spec.artifact schema (= Wave N target)
-
-```json
-"artifact": {
-  "oneOf": [
-    {
-      "type": "object",
-      "required": ["kind", "hash"],
-      "properties": {
-        "kind": { "const": "js-bundle" },
-        "hash": { "type": "string", "minLength": 1 }
-      }
-    },
-    {
-      "type": "object",
-      "required": ["listen"],
-      "properties": {
-        "listen": { "type": "string", "description": "namespace path of build material" }
-      }
-    }
-  ]
-}
-```
-
-(= Wave N で worker plugin / takosumi-cloud-kinds の TS schema も oneOf shape
-で実装、 listen 形式の case で materializer は namespace registry から
-`{ url,
-digest, kind }` material を resolve して
-`{ kind: <kind>, hash: <digest> }` 等価形に内部 normalize する)
-
-## 6. Migration path (= 第 4 軸 detail)
-
-### 6.1 Phase ordering
-
-旧 Wave N-A〜F sub-wave に対応する 6 phase:
-
-| Phase       | Scope                                                                      | 主 touch point                                     |
-| ----------- | -------------------------------------------------------------------------- | -------------------------------------------------- |
-| **Phase 1** | takosumi kernel kind-agnostic 化 + Component.build 削除 + parser reject 化 | takosumi 単一 commit、 60-80 file 修正             |
-| **Phase 2** | takosumi-cloud に kind catalog 新設 + JSON-LD CDN publish                  | takosumi-cloud / packages/kinds/ 新設、 25-30 file |
-| **Phase 3** | 6 cloud provider package `provides` URI re-anchor                          | takosumi の 6 provider package、 24 ts file        |
-| **Phase 4** | 6 consumer apps `.takosumi.yml` migration                                  | yurucommu / road-to-me / takos-apps × 4            |
-| **Phase 5** | cross-product docs / cli scaffold sweep                                    | takos / takos-cli / takosumi-cloud docs            |
-| **Phase 6** | ecosystem-root pointer bump + ROADMAP / CHANGELOG                          | ecosystem-root 単一 commit                         |
-
-Phase 1 scope に含まれる **明示的 motion**:
-
-- AppSpec parser が `Component.build` を含む YAML を `validationPhase: "schema"`
-  で reject 化
-- `defaultRunBuild()` + `Component.build` field 物理削除
-- kernel kind URI hardcoded list (= `COMPONENT_KINDS` 等) 物理削除
-- alias resolution は `createPaaSApp({ aliases })` 経由のみ (= unresolved short
-  alias は `validationPhase: "schema"` で fail-closed reject)
-
-### 6.2 Rejection policy
-
-Wave J / K / L 同形 **fail-closed reject**:
-
-- 旧 `Component.build` 含む YAML は parser が `validationPhase: "schema"` で
-  reject + migration message を返す (= dry-run 段階で 即時 detect、 install
-  時点ではなく **dry-run または apply 時に** parser が AppSpec を parse する
-  際に reject)
-- 旧 hardcoded short alias (= `kind: worker` で alias map が未 inject の case)
-  は `validationPhase: "schema"` で fail-closed reject、 fail-closed 原則に より
-  dry-run 段階で `validationPhase: "kind-catalog"` として reject する variation
-  も possible (= operator alias map に entry あるが対応 plugin 未 inject の
-  case)
-
-backward compat なし (= 仕様策定中 phase の慣習)。
-
-### 6.3 JSR package architecture
-
-**Decision (= §7.5 resolution)** との整合:
-
-- **Phase 1 で `@takos/takosumi-plugins` package の `src/kinds/` ディレクトリ
-  完全削除**、 ただし **package 自体は keep + scope narrow**
-- remaining export: `kernelPluginFromProviderPlugin` adapter + factory helpers
-  - SDK helpers
-- JSDoc / README に scope narrowing を明示 (= 「plugin factory adapter / SDK
-  helper」 package へ narrow)、 **deprecation banner は付けない** (= URL
-  stability、 既存 import 文 が壊れない)
-- 新 `@takos/takosumi-cloud-kinds` JSR package: 6 kind 全 ship する
-  takosumi-cloud 由来 package
-- 6 cloud provider package (=
-  `@takos/takosumi-{cloudflare,aws,gcp,kubernetes,deno-deploy,selfhost}-providers`)
-  は `provides: [URI]` を `cloud.takosumi.com` 系に re-anchor、 alternative
-  として `createXProvider({ kindUri?: string })` factory で operator 自身が URI
-  inject する形も提供 (= alternative operator distribution が 独自 URI を 注入
-  できる sovereignty 確保)
-
-### 6.4 Reference distribution の継続性
-
-self-host operator は 1 行追加で 現状互換:
-
-```jsonc
-// deno.json
-{
-  "imports": {
-    "@takos/takosumi-kernel": "jsr:@takos/takosumi-kernel",
-    "@takos/takosumi-cloud-kinds": "jsr:@takos/takosumi-cloud-kinds", // ← NEW
-    "@takos/takosumi-cloudflare-providers": "jsr:@takos/takosumi-cloudflare-providers"
-  }
-}
-```
-
-`createPaaSApp({
-  plugins: [...cloudKinds, ...cloudflareProviders],
-  aliases: cloudKindAliases,
-})`
-の形で 標準 catalog + cloud provider + alias map を 1 まとめに attach。
-
-### 6.5 Code state preservation
-
-直近 (= 2026-05-21) に dispatch した Wave N-A code agent が **70 file 修正まで
-進行 後 user 判断で中断**。 修正内容は `git stash@{0}` に "Wave N-A code changes
-WIP" として保全:
-
-```bash
-# Wave N code implementation 再開時の手順
-cd /root/dev/takos/takosumi
-git stash list   # = stash@{0} を 確認
-git stash apply stash@{0}   # = 70 file 修正を tree に戻す
-# 以降 Phase 1〜6 を 連続実行
-```
-
-(= `git stash pop` ではなく `apply` を使えば、 万一の 失敗時に stash 自体は残る)
-
-### 6.6 Validation gates evolution
-
-- **Phase 1 完了後 `spec:check-drift` task は disable / rewrite される**:
-  curated kinds が物理削除されるため、 現在の `spec:check-drift` (= curated
-  jsonld ↔ generated TS の drift check) は対象が無くなり 無意味化する
-- **新 task `operator:check-drift` を 各 operator distribution (=
-  takosumi-cloud) 側に追加**: takosumi-cloud の `@takos/takosumi-cloud-kinds`
-  package 内で 6 kind の JSON-LD ↔ generated TS drift を verify する
-  operator-owned task (= kernel から operator へ責務移譲)
-- **各 phase transition で
-  `deno task check / lint / fmt:check / deno test
-  --allow-all` PASS は不変**、
-  ただし `spec:check-drift` は Phase 1 中に rewrite される (= 当面 no-op に置換
-  → 削除 → 新 task が operator side で 追加 の順)
-
-## 7. Resolved (Wave N RFC-4 decision)
-
-> **Wave N RFC-4 (= 2026-05-21 multi-agent synthesis 後)** で 全 6 open question
-> が decision として 確定した。 議論経緯は section ごとに「Considered but
-> rejected」 として残してある。
-
-### 7.1 Kind alias resolution — Decision: Option A (operator-injected alias map) + fail-closed reject on unresolved short alias
-
-| Option                                         | Pros                                                        | Cons                                                                      | Status                                                                                                           |
-| ---------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **A. operator-injected alias map**             | kernel surface 増加なし、 alias 解決を operator に delegate | alias 来歴が implicit、 同じ AppSpec が operator によって意味変わる可能性 | **Decision**                                                                                                     |
-| **B. AppSpec metadata で kindCatalog declare** | explicit、 同 AppSpec が portable                           | contract surface 増加、 多 catalog mix が冗長                             | Considered but rejected — kindCatalog metadata field would re-introduce kind-catalog awareness into the contract |
-
-Detail は §4.4。
-
-### 7.2 worker.spec.artifact inline mode 廃止のタイミング — Decision: Wave N で inline + listen oneOf keep、 完全 listen-only 純化は別 wave (= 想定 RFC 0004)
-
-| Option                                            | Trade-off                                                     | Status               |
-| ------------------------------------------------- | ------------------------------------------------------------- | -------------------- |
-| **Wave N で keep** (= safer migration)            | inline + listen の oneOf shape、 plugin が両方 accept         | **Decision**         |
-| **別 wave で remove** (= 完全 listen-only に純化) | より orthogonal だが consumer apps の migration cost が増える | Deferred to RFC 0004 |
-
-Detail は §3 末尾 + §5.4 末尾の updated oneOf schema。
-
-### 7.3 Build kind sandbox — Decision: operator 責務 (= default)
-
-| Option                        | 責務                                                                                 | Status                                                          |
-| ----------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| **operator 責務** (= default) | takosumi-cloud reference は unsandboxed、 自前 plugin で wrap したければ operator が | **Decision**                                                    |
-| **kernel 責務** (= 仕様 強制) | kernel が container / VM 内 で build を run、 reproducibility 強化だが complexity 増 | Rejected — kernel 責務化は AppSpec contract minimization と矛盾 |
-
-Detail は §5.2.1。 Sandboxing alternative implementations は 3rd party plugin
-として ship 可能 (= sovereignty model 整合)。
-
-### 7.4 Curated catalog wording — Decision: 「1 つの reference implementation」 (Option B)
-
-| Option                                     | Wording                                                                    | Status                                             |
-| ------------------------------------------ | -------------------------------------------------------------------------- | -------------------------------------------------- |
-| **A. 「公式 reference」**                  | takosumi-cloud が ship する kind catalog を「公式 / blessed」 と narrative | Rejected — sovereignty model と矛盾するため reject |
-| **B. 「1 つの reference implementation」** | takosumi-cloud は「単なる 1 operator distribution」、 alternative が同列   | **Decision**                                       |
-
-Detail は §1 + §4.6。
-
-### 7.5 JSR package architecture — Decision: `@takos/takosumi-plugins` keep + narrow re-scope
-
-| Option                                                       | `@takos/takosumi-plugins` package の 扱い                                                                         | Status                                         |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| **A. keep + scope narrow** (= URL 安定性 + narrow narrative) | 既存 import 文が壊れない、 plugin adapter / SDK helper package へ scope narrow narrative を JSDoc / README で明示 | **Decision**                                   |
-| **B. deprecate + remove**                                    | clean、 ただし migration cost                                                                                     | Rejected — URL stability を破壊するため reject |
-
-Detail は §4.1 + §6.3。 decision は keep as 'plugin factory adapter / SDK
-helper' package; no deprecation, no removal。
-
-### 7.6 runtime-agent の WorkerSpec etc 完全 kernel-decouple — Decision: Wave N narrative では §9 で 1 sentence 言及、 完全分離は別 RFC で扱う
-
-Wave N scope に **含めない** — runtime-agent の hardcoded type (= `WorkerSpec`
-等) の kernel-decouple は **AppSpec contract minimization と orthogonal な
-runtime-axis minimization** であり、 別 wave で扱う (= 想定 RFC 0002 で
-runtime-agent kernel-decouple として独立分離)。 Detail は §9。
-
-## 8. Kernel API (= installer-facing)
-
-Wave N target の `createPaaSApp()` signature を documented (= operator が plugin
-/ alias map を 1 まとめに inject する canonical entry point):
-
-```typescript
-interface CreatePaaSAppOptions {
-  // 全 operator-attached materializer (= cloud kinds + cloud provider plugin
-  // + 3rd party plugin の plain array)
-  plugins: readonly KernelPlugin[];
-
-  // short alias → URI map (operator-injected)
-  // 例: { worker: "https://cloud.takosumi.com/kinds/v1/worker", build: "..." }
-  // parser が AppSpec parse 時にこの map で short alias を URI に normalize
-  // する。 未解決 short alias は validationPhase: "schema" で fail-closed
-  // reject される。
-  aliases?: Record<string, string>;
-
-  // (other existing options — runtime adapter / storage / etc.)
-  // ※ 具体 list は kernel package 側の deno.json + mod.ts に従う、 本 RFC
-  //   scope では plugins + aliases を canonical entry として documented
-}
-
-function createPaaSApp(opts: CreatePaaSAppOptions): PaaSApp;
-```
-
-**Resolution flow**:
-
-1. operator が `createPaaSApp({ plugins, aliases })` で kernel を init
-2. kernel が plugin の `provides[]` list を 走査して `URI → KernelPlugin` の
-   lookup table を 作る
-3. AppSpec を parse する際に `Component.kind` を 解決:
-   - URI 形式 (`https://.../kinds/v1/<name>`) → そのまま lookup table で plugin
-     を resolve、 plugin が無ければ `validationPhase: "kind-catalog"` で reject
-   - short alias 形式 (`worker` 等) → operator-injected alias map で URI に
-     normalize、 alias map に entry が無ければ `validationPhase: "schema"` で
-     reject、 alias map に entry あるが対応 plugin が無ければ
-     `validationPhase: "kind-catalog"` で reject
-
-(= kernel は AppSpec contract surface に kind-catalog field を 追加しないが、
-runtime レベルで alias map を 経由して 解決する形)
-
-## 9. Related RFCs / future work
-
-- **RFC 0002 (= 想定、 未起票)**: runtime-agent kernel-decouple (= `_spec.ts` の
-  hardcoded WorkerSpec / 他 spec types を完全 kernel-independent に) — Wave N の
-  AppSpec contract minimization と orthogonal な runtime-axis minimization、 別
-  wave で扱う
-- **RFC 0003 (= 想定、 未起票)**: takos-cli app-manifest contract rework (= 既に
-  `build:` を reject 済の現状から、 .takosumi.yml format との関係を整理)
-- **RFC 0004 (= 想定、 未起票)**: worker.spec.artifact full listen-only
-  purification — Wave N で keep した inline + listen の oneOf を 完全
-  listen-only に純化する後続 wave、 consumer apps の migration cost が prevail
-  だが orthogonality を最終的に獲得する
-- **Future docs**: operator が独自 kind catalog で運用する end-to-end tutorial
-  (= reference distribution narrative 確定後)
-
-## 10. Acknowledgements
-
-- Wave J / K / L (= 直近の minimization sequence) で確立した「底は自由」 原則 +
-  fail-closed reject pattern を本 RFC が継承
-- 直近の dialogue で user が示した design intuition (= 「公式 kind 自体廃止」 +
-  「型をそれぞれ jsonld で定義して plugin 作って運用するだけ」) が本 RFC の core
-- 直近 Wave N-A の code agent dispatch + 中断 + stash preserve workflow が本 RFC
-  の implementation reference を 残してくれた
-- Wave N RFC-4 multi-agent synthesis (= 2026-05-21) で 6 open questions / RFC
-  internal gap / ecosystem cross-doc contradiction を parallel audit + synthesis
-  で resolve する workflow を 確立 (= 本 RFC update が その成果物)
+short alias `linux-container` は operator / build service distribution がこの
+URI に解決できます。
+
+BuildSpec component も AppSpec component と同じく `kind` / `spec` / `publish` /
+`listen` を持ちますが、BuildSpec namespace は build-only であり AppSpec runtime
+namespace とは混ぜません。
+
+### 4. Source snapshot follow-up {#source-snapshot-follow-up}
+
+Decision: artifact / build の最終形は別 wave で source snapshot model
+に寄せます。
+
+- public AppSpec / BuildSpec から generic `artifact` concept を消す。
+- build service は build 後 source tree / git state を digest-pinned snapshot と
+  して固定する。
+- provider plugin は lifecycle apply 時に source snapshot locator を受け取り、
+  自分の kind contract に従って必要な file / path / metadata を読む。
+- `spec` 内の parameter は Takosumi が意味解釈しない plugin-owned variables と
+  して扱う。
+- kernel が Deployment evidence として記録するのは source snapshot digest /
+  provenance / plugin output であり、`js-bundle` などの artifact kind は
+  Takosumi spec から外す候補にする。
+
+### 5. Reference distribution wording {#reference-distribution-wording}
+
+Decision: takosumi-cloud は official / blessed distribution ではなく、1 つの
+reference operator distribution として扱います。
+
+別 distribution も同じ contract を満たせば置き換え可能です。docs では「current
+kernel contract」と「reference distribution の実装例」を混ぜません。
+
+### 6. Package architecture {#package-architecture}
+
+Decision: `@takos/takosumi-plugins` は残し、scope を narrow します。
+
+package URL stability を保ちつつ、contract-owned catalog ではなく reference
+descriptor helper、adapter、test fixture の置き場へ縮小します。
+
+### 7. Runtime-agent decoupling {#runtime-agent-decoupling}
+
+Decision: Wave N narrative では scope 外として明記します。
+
+runtime-agent が持つ worker-specific type の完全分離は別 RFC で扱います。Wave N
+の実装は kernel catalog と build responsibility の切り離しに集中します。
+
+## Migration outline {#migration-outline}
+
+1. operator config に alias map を追加する。
+2. current reference kind を reference distribution 側の descriptor として移す。
+3. kernel validation を alias map + plugin lookup に切り替える。
+4. provider plugin が完全 URI の `provides[]` を宣言するようにする。
+5. `Component.build` の kernel-owned execution を削除し、BuildSpec / build
+   service / artifact upload path へ移す。
+6. `.takosumi.build.yml` の parser と build service handoff を追加する。
+7. source snapshot locator model を導入し、public artifact concept を縮小する。
+8. current short alias を operator compatibility map として保持し、unresolved
+   alias は fail-closed にする。
+
+## Compatibility {#compatibility}
+
+Wave N implementation は breaking change です。ただし migration 中は operator が
+compatibility alias map と build migration tool を提供すれば、既存 AppSpec の
+short alias と旧 build recipe は移行できます。最終状態では
+`components.<name>.build` は fail-closed で reject されます。
+
+`manifestDigest` は Installer API の existing wire field name として残ります。
+docs 上では AppSpec digest と説明します。
+
+## Open follow-up RFCs {#open-follow-up-rfcs}
+
+- RFC 0002: runtime-agent hardcoded worker spec の完全分離。
+- RFC 0003: Takos CLI app packaging contract の再整理。
+- RFC 0004: worker artifact input を source snapshot locator に純化。
+- RFC 0005: build service provenance / cache / remote execution policy。
+
+## Implementation notes {#implementation-notes}
+
+2026-05-21 時点で、component kind registry の contract 外部化は実装済みです。
+`Component.build` と artifact/source snapshot model の完全移行は follow-up
+implementation として残っています。
+
+## History {#history}
+
+- Wave J: `Component.routes`、`AppSpec.interfaces`、`AppSpec.permissions`
+  を削除。
+- Wave K: AppSpec root の `kind: "App"` を削除。
+- Wave L: `apiVersion: "takosumi.dev/v1"` を `apiVersion: "v1"` に変更。
+- Wave N: kernel kind-agnostic 化、reference catalog の operator distribution
+  化、 `Component.build` / artifact model の follow-up 移行を提案。

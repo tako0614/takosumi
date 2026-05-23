@@ -7,7 +7,7 @@ snapshot は Space scope の immutable な authority record である。
 ## IntentGraph {#intentgraph}
 
 IntentGraph is parsed authoring intent plus deploy context. It carries
-`spaceId`, but the manifest itself does not.
+`spaceId`, but the AppSpec itself does not.
 
 It contains:
 

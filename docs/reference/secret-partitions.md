@@ -28,7 +28,7 @@ derive するだけで動く。
 - partition の cross 参照は禁止。 reference (`${secret:...}`) は許される。 raw
   value を Space 間で運ぶ運用は不可。
 - `KernelPlugin` (= materializer) / connector 実行に渡せる credential ref は
-  `secret://providers/<provider>` scope に限定される。 tenant runtime secret
+  `secret://providers/<provider>` scope に限定される。 runtime secret
   (`secret://runtime/...` など) や他 provider の credential ref は
   materialization 前に fail-closed し、 materializer 実装には渡らない。
 
@@ -122,8 +122,8 @@ cross-partition 参照ルール:
   (kernel が解決時に対応 partition を decrypt する)
 - raw value を別 partition の entry として複製するのは禁止 (operator policy
   違反として audit に記録される)
-- runtime-agent には decrypt 済み value がそのまま渡る。 agent 側は
-  `manifest digest` 単位で短命 buffer に置くだけで永続化しない
+- runtime-agent には decrypt 済み value がそのまま渡る。agent 側は AppSpec
+  digest 単位で短命 buffer に置くだけで永続化しない
 
 ## Partition rotation
 

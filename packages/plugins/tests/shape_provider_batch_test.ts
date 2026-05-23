@@ -6,17 +6,13 @@ import {
   type Shape,
   unregisterShape,
 } from "takosumi-contract";
-import { TAKOSUMI_BUNDLED_KINDS, WebServiceKind } from "../src/kinds/mod.ts";
+import { TAKOSUMI_REFERENCE_KINDS } from "../src/kinds/mod.ts";
 import { createInMemoryTakosumiProviders } from "../src/shape-providers/mod.ts";
 
-// Phase L iter 2 (Finding 2): `web-service` is no longer in the curated
-// bundled catalog (no JSON-LD source), but the legacy `web-service`
-// provider plugins still exist as backward-compat. Tests register the
-// shape explicitly in addition to TAKOSUMI_BUNDLED_KINDS to keep those
-// providers exercising the in-memory lifecycle end-to-end.
+// `web-service` is now part of the external reference catalog. Keep this
+// local list explicit so the provider batch test also protects that export.
 const TEST_BUNDLED_SHAPES: readonly Shape[] = [
-  ...TAKOSUMI_BUNDLED_KINDS,
-  WebServiceKind as Shape,
+  ...TAKOSUMI_REFERENCE_KINDS,
 ];
 
 const ctx = {} as PlatformContext;

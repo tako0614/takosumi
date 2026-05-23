@@ -1,7 +1,7 @@
 /**
  * Phase H test — all 6 cloud provider workspace packages export factory
  * functions whose return value is a structurally valid `KernelPlugin`
- * suitable for `createPaaSApp({ plugins: [...] })`.
+ * suitable for `createPaaSApp({ kindAliases, plugins: [...] })`.
  *
  * This locks in the "Phase D extraction" outcome: provider materializers
  * live in `@takos/takosumi-{cloudflare,aws,gcp,kubernetes,deno-deploy,
@@ -41,9 +41,10 @@ Deno.test("phase-h: 6 cloud provider packages are covered (no missing publisher)
   );
 });
 
-Deno.test("phase-h: each KernelPlugin advertises a Takosumi-curated kind URI", () => {
+Deno.test("phase-h: each KernelPlugin advertises a Takos reference kind URI", () => {
   const allowedKindUris = new Set([
     "https://takosumi.com/kinds/v1/worker",
+    "https://takosumi.com/kinds/v1/web-service",
     "https://takosumi.com/kinds/v1/object-store",
     "https://takosumi.com/kinds/v1/postgres",
     "https://takosumi.com/kinds/v1/custom-domain",

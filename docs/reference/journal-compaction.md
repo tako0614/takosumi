@@ -73,8 +73,8 @@ Compaction must be crash-safe. A crash mid-pass must not lose journal entries
 and must not leave the base snapshot pair in a partially written state.
 
 - The kernel writes the new base snapshot pair before truncating the compacted
-  prefix. The two writes are coupled by a manifest that names both the new base
-  and the truncated prefix range.
+  prefix. The two writes are coupled by a compacted-journal descriptor that
+  names both the new base and the truncated prefix range.
 - The journal cursor that names the active base snapshot pair is advanced
   atomically: readers either see the previous base with the full journal, or the
   new base with the truncated tail, never an intermediate state.
@@ -148,8 +148,7 @@ Inspection commands require the operator bearer.
   — WAL stage enum, idempotency tuple, replay rules.
 - `reference/architecture/snapshot-model` — base snapshot semantics and snapshot
   garbage collection.
-- `reference/drift-detection` — RevokeDebt
-  status rules referenced by retention.
+- `reference/drift-detection` — RevokeDebt status rules referenced by retention.
 
 ## 関連ページ
 

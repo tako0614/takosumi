@@ -1,7 +1,7 @@
 /**
  * Phase H import smoke — verify each cloud provider package re-exports a
  * `KernelPlugin` factory that satisfies the public contract surface and is
- * attachable to `createPaaSApp({ plugins })`.
+ * attachable to `createPaaSApp({ kindAliases, plugins })`.
  *
  * Goal: kernel core (`packages/kernel/`) has no cloud SDK import, but the 6
  * provider packages exist as separate workspace members and the factories
@@ -23,24 +23,24 @@ import {
   cloudflareWorkerProvider,
 } from "../packages/cloudflare-providers/mod.ts";
 import {
-  awsFargateWorkerProvider,
+  awsFargateWebServiceProvider,
   awsRdsPostgresProvider,
   awsRoute53CustomDomainProvider,
   awsS3ObjectStoreProvider,
 } from "../packages/aws-providers/mod.ts";
 import {
-  gcpCloudRunWorkerProvider,
+  gcpCloudRunWebServiceProvider,
   gcpCloudSqlPostgresProvider,
   gcpGcsObjectStoreProvider,
 } from "../packages/gcp-providers/mod.ts";
-import { kubernetesWorkerProvider } from "../packages/kubernetes-providers/mod.ts";
+import { kubernetesWebServiceProvider } from "../packages/kubernetes-providers/mod.ts";
 import { denoDeployWorkerProvider } from "../packages/deno-deploy-providers/mod.ts";
 import {
-  selfhostDockerComposeWorkerProvider,
+  selfhostDockerComposeWebServiceProvider,
   selfhostFilesystemObjectStoreProvider,
   selfhostMinioObjectStoreProvider,
   selfhostPostgresProvider,
-  selfhostSystemdWorkerProvider,
+  selfhostSystemdWebServiceProvider,
 } from "../packages/selfhost-providers/mod.ts";
 
 import type { KernelPlugin } from "../packages/contract/src/plugin.ts";
@@ -69,8 +69,8 @@ export const CLOUD_PROVIDER_ROWS: readonly CloudProviderRow[] = [
   },
   {
     pkg: "aws",
-    factory: "awsFargateWorkerProvider",
-    plugin: awsFargateWorkerProvider(),
+    factory: "awsFargateWebServiceProvider",
+    plugin: awsFargateWebServiceProvider(),
   },
   {
     pkg: "aws",
@@ -89,8 +89,8 @@ export const CLOUD_PROVIDER_ROWS: readonly CloudProviderRow[] = [
   },
   {
     pkg: "gcp",
-    factory: "gcpCloudRunWorkerProvider",
-    plugin: gcpCloudRunWorkerProvider(),
+    factory: "gcpCloudRunWebServiceProvider",
+    plugin: gcpCloudRunWebServiceProvider(),
   },
   {
     pkg: "gcp",
@@ -104,8 +104,8 @@ export const CLOUD_PROVIDER_ROWS: readonly CloudProviderRow[] = [
   },
   {
     pkg: "kubernetes",
-    factory: "kubernetesWorkerProvider",
-    plugin: kubernetesWorkerProvider(),
+    factory: "kubernetesWebServiceProvider",
+    plugin: kubernetesWebServiceProvider(),
   },
   {
     pkg: "deno-deploy",
@@ -114,13 +114,13 @@ export const CLOUD_PROVIDER_ROWS: readonly CloudProviderRow[] = [
   },
   {
     pkg: "selfhost",
-    factory: "selfhostDockerComposeWorkerProvider",
-    plugin: selfhostDockerComposeWorkerProvider(),
+    factory: "selfhostDockerComposeWebServiceProvider",
+    plugin: selfhostDockerComposeWebServiceProvider(),
   },
   {
     pkg: "selfhost",
-    factory: "selfhostSystemdWorkerProvider",
-    plugin: selfhostSystemdWorkerProvider(),
+    factory: "selfhostSystemdWebServiceProvider",
+    plugin: selfhostSystemdWebServiceProvider(),
   },
   {
     pkg: "selfhost",

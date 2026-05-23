@@ -45,18 +45,9 @@ Deno.test("ObjectStore validateSpec accepts full spec", () => {
       public: true,
       versioning: true,
       region: "us-east-1",
-      lifecycle: { expireAfterDays: 30, archiveAfterDays: 90 },
     }),
     [],
   );
-});
-
-Deno.test("ObjectStore validateSpec rejects negative lifecycle days", () => {
-  const issues = specIssues({
-    name: "my-bucket",
-    lifecycle: { expireAfterDays: -1 },
-  });
-  assert.ok(issues.some((i) => i.path === "$.lifecycle.expireAfterDays"));
 });
 
 Deno.test("ObjectStore validateOutputs requires all fields", () => {

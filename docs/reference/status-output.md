@@ -19,6 +19,6 @@ GET /api/internal/v1/installations/{id}/events
 これらは `TAKOSUMI_INTERNAL_API_SECRET` による internal HMAC 署名が必要で、
 public installer bearer では呼ばない。
 
-CLI / dashboard が表示する status shape は、この internal ledger を読む operator
-tooling の責務。 public contract の entity 名は Installation / Deployment
-のまま維持する。
+CLI / operator UI が表示する status shape は、この internal ledger を読む
+operator tooling の責務。 public contract の entity 名は Installation /
+Deployment のまま維持する。

@@ -1,26 +1,30 @@
 /**
  * `@takos/takosumi-selfhost-providers` — Self-host-backed `KernelPlugin`
- * factories for the canonical Takosumi component kinds.
+ * factories for the Takos reference component kinds.
  *
- * Phase D extracted these factories out of `@takos/takosumi-plugins/bundled`
+ * Phase D extracted these factories out of `@takos/takosumi-plugins` reference registry
  * so Takosumi core no longer carries cloud / self-host coupled imports.
  * Operators that want a credential-free self-hosted Takosumi stack import
  * this package explicitly and pass the factory results into
- * `createPaaSApp({ plugins: [...] })`.
+ * `createPaaSApp({ kindAliases, plugins: [...] })`.
  *
  * Exports:
- *   - `selfhostDockerComposeWorkerProvider`   → `worker@v1` (Docker Compose)
- *   - `selfhostSystemdWorkerProvider`         → `worker@v1` (systemd unit)
+ *   - `selfhostDockerComposeWebServiceProvider` → `web-service@v1` (Docker Compose)
+ *   - `selfhostSystemdWebServiceProvider`       → `web-service@v1` (systemd unit)
  *   - `selfhostMinioObjectStoreProvider`      → `object-store@v1` (MinIO)
  *   - `selfhostFilesystemObjectStoreProvider` → `object-store@v1` (local fs)
  *   - `selfhostPostgresProvider`              → `postgres@v1` (local Docker)
  */
 
 export {
+  selfhostDockerComposeWebServiceProvider,
+  type SelfhostDockerComposeWebServiceProviderOptions,
   selfhostDockerComposeWorkerProvider,
   type SelfhostDockerComposeWorkerProviderOptions,
 } from "./src/worker-selfhost-docker-compose.ts";
 export {
+  selfhostSystemdWebServiceProvider,
+  type SelfhostSystemdWebServiceProviderOptions,
   selfhostSystemdWorkerProvider,
   type SelfhostSystemdWorkerProviderOptions,
 } from "./src/worker-selfhost-systemd.ts";

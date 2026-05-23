@@ -317,5 +317,5 @@ interface LifecycleErrorBody {
 ## 関連ページ
 
 - [Lifecycle Phases](./lifecycle-phases.md)
-- [Provider Plugins — Implementation Contract](./providers.md#implementation-contract)
+- [Provider plugin](./providers.md)
 - [Closed Enums](./closed-enums.md)

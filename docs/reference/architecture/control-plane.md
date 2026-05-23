@@ -31,14 +31,14 @@ auth は `TAKOSUMI_INSTALLER_TOKEN` bearer。
 
 ## 担わない責務 {#not-owned}
 
-- account / billing / OIDC issuer ownership (Takosumi Accounts)
+- account / subscription / identity issuer ownership
 - workflow runner / webhook / cron execution
 - cloud SDK credentials (runtime-agent host)
 - app runtime sessions beyond launch-token / OIDC integration boundaries
 
 ## 内部 surface {#internal-surfaces}
 
-operator dashboard / automation uses internal HMAC routes for ledger reads:
+operator automation uses internal HMAC routes for ledger reads:
 
 ```text
 GET /api/internal/v1/installations
@@ -52,10 +52,10 @@ of the public installer contract.
 
 ## 削除されたレガシーモデル {#removed-legacy-model}
 
-The old raw deploy API, authoring-vs-runtime manifest split, string
-interpolation materialization contract, and public Deployment status route are
-not current control-plane surfaces. Historical references should be read as
-pre-AppSpec notes only.
+The old raw deploy API, authoring-vs-runtime AppSpec split, string interpolation
+materialization contract, and public Deployment status route are not current
+control-plane surfaces. Historical references should be read as pre-AppSpec
+notes only.
 
 ## クロスリファレンス {#cross-references}
 

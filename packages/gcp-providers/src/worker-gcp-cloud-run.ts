@@ -1,5 +1,5 @@
 /**
- * Bundled `worker@v1` KernelPlugin factory backed by GCP Cloud Run.
+ * Bundled `web-service@v1` KernelPlugin factory backed by GCP Cloud Run.
  */
 
 import type { KernelPlugin } from "takosumi-contract/plugin";
@@ -9,7 +9,7 @@ import {
   InMemoryCloudRunLifecycle,
 } from "@takos/takosumi-plugins/shape-providers/web-service/cloud-run";
 import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
-import { KIND_URI_WORKER } from "./_kinds.ts";
+import { KIND_URI_WEB_SERVICE } from "./_kinds.ts";
 
 export interface GcpCloudRunWorkerProviderOptions {
   readonly project?: string;
@@ -17,7 +17,10 @@ export interface GcpCloudRunWorkerProviderOptions {
   readonly lifecycle?: CloudRunLifecycleClient;
 }
 
-export function gcpCloudRunWorkerProvider(
+export type GcpCloudRunWebServiceProviderOptions =
+  GcpCloudRunWorkerProviderOptions;
+
+export function gcpCloudRunWebServiceProvider(
   opts: GcpCloudRunWorkerProviderOptions = {},
 ): KernelPlugin {
   const project = opts.project ?? "default";
@@ -31,7 +34,10 @@ export function gcpCloudRunWorkerProvider(
   });
   return kernelPluginFromProviderPlugin({
     provider,
-    kindUri: KIND_URI_WORKER,
+    kindUri: KIND_URI_WEB_SERVICE,
     capabilities: ["always-on", "scale-to-zero", "websocket", "long-request"],
   });
 }
+
+/** @deprecated Use `gcpCloudRunWebServiceProvider`; this provides web-service. */
+export const gcpCloudRunWorkerProvider = gcpCloudRunWebServiceProvider;

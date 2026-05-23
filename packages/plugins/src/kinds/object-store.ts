@@ -1,7 +1,5 @@
-import type { Shape, ShapeValidationIssue } from "takosumi-contract";
+import type { Shape } from "takosumi-contract";
 import {
-  isNonNegativeInteger,
-  isRecord,
   optionalBoolean,
   optionalNonEmptyString,
   requireNonEmptyString,
@@ -14,24 +12,18 @@ import {
   OBJECT_STORE_KIND_VERSION,
   OBJECT_STORE_OUTPUT_FIELDS,
   type ObjectStoreCapability,
-  type ObjectStoreLifecycle,
   type ObjectStoreOutputs,
   type ObjectStoreSpec,
 } from "./object-store.generated.ts";
 
-export type {
-  ObjectStoreCapability,
-  ObjectStoreLifecycle,
-  ObjectStoreOutputs,
-  ObjectStoreSpec,
-};
+export type { ObjectStoreCapability, ObjectStoreOutputs, ObjectStoreSpec };
 
 /**
  * `object-store@v1` component kind descriptor. Materialized by a provider
  * plugin (S3-class API) at apply time.
  *
  * Spec / outputs / capabilities are derived from
- * `spec/contexts/kinds/v1/object-store.jsonld` via
+ * `packages/plugins/spec/kinds/v1/object-store.jsonld` via
  * `object-store.generated.ts`; validation diagnostics are hand-written
  * below.
  */
@@ -51,9 +43,6 @@ export const ObjectStoreKind: Shape<
     optionalBoolean(value.public, "$.public", issues);
     optionalBoolean(value.versioning, "$.versioning", issues);
     optionalNonEmptyString(value.region, "$.region", issues);
-    if (value.lifecycle !== undefined) {
-      validateLifecycle(value.lifecycle, issues);
-    }
   },
   validateOutputs(value, issues) {
     if (!requireRoot(value, issues)) return;
@@ -64,31 +53,3 @@ export const ObjectStoreKind: Shape<
     requireNonEmptyString(value.secretKeyRef, "$.secretKeyRef", issues);
   },
 };
-
-function validateLifecycle(
-  value: unknown,
-  issues: ShapeValidationIssue[],
-): void {
-  if (!isRecord(value)) {
-    issues.push({ path: "$.lifecycle", message: "must be an object" });
-    return;
-  }
-  if (
-    value.expireAfterDays !== undefined &&
-    !isNonNegativeInteger(value.expireAfterDays)
-  ) {
-    issues.push({
-      path: "$.lifecycle.expireAfterDays",
-      message: "must be a non-negative integer",
-    });
-  }
-  if (
-    value.archiveAfterDays !== undefined &&
-    !isNonNegativeInteger(value.archiveAfterDays)
-  ) {
-    issues.push({
-      path: "$.lifecycle.archiveAfterDays",
-      message: "must be a non-negative integer",
-    });
-  }
-}

@@ -34,7 +34,7 @@ journal entry から再入します。
 
 ### `apply`
 
-- **Input**: manifest 由来 DesiredSnapshot + 既存 Space の前回
+- **Input**: AppSpec 由来 DesiredSnapshot + 既存 Space の前回
   `ResolutionSnapshot` (あれば)
 - **Output**: 新 `ResolutionSnapshot` と bind 済 `OperationPlan`
 - **Journal cursor**: operation ごとに新 `journalEntryId` を割当て、

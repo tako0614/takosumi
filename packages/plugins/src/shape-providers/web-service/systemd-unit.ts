@@ -64,7 +64,7 @@ export function createSystemdUnitWebServiceProvider(
         hostPort,
         internalPort: spec.port,
         env: { ...(spec.env ?? {}), ...(spec.bindings ?? {}) },
-        command: spec.command,
+        command: commandExtension(spec),
       });
       return {
         handle: unitName,
@@ -92,6 +92,18 @@ export function createSystemdUnitWebServiceProvider(
       };
     },
   };
+}
+
+function commandExtension(spec: WebServiceSpec): readonly string[] | undefined {
+  const command = spec.command;
+  if (command === undefined) return undefined;
+  if (!Array.isArray(command)) {
+    throw new Error("web-service extension $.command must be an array");
+  }
+  if (!command.every((entry) => typeof entry === "string")) {
+    throw new Error("web-service extension $.command must contain strings");
+  }
+  return command;
 }
 
 function nameOf(image: string): string {

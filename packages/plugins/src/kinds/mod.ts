@@ -1,22 +1,16 @@
 /**
- * Bundled component kind catalog. The curated 4 kinds (`worker /
- * postgres / object-store / custom-domain`) are defined under
- * `spec/contexts/kinds/v1/*.jsonld` and surfaced here as runtime
- * `Shape` descriptors for `registerTakosumiKinds()`.
+ * Reference component kind registry. The `worker / web-service / postgres /
+ * object-store / custom-domain` descriptors are distributed by
+ * `@takos/takosumi-plugins`,
+ * not by the Takosumi AppSpec contract. Operators opt into these aliases and
+ * descriptors explicitly when they want the Takos-published reference set.
  *
- * `WebServiceKind` is **NOT** part of the curated bundled catalog. It
- * is retained as a backward-compat export for existing provider plugin
- * code paths that still reference the legacy `web-service` shape, but
- * intentionally excluded from `TAKOSUMI_BUNDLED_KINDS` so the runtime
- * catalog matches the JSON-LD source-of-truth.
+ * Each reference kind exports a `*Kind` descriptor; the v1 AppSpec installer
+ * pipeline materializes components through provider plugins keyed off the
+ * operator-resolved `Component.kind` URI.
  *
- * Each curated kind exports a `*Kind` descriptor; the v1 AppSpec
- * installer pipeline materializes components through provider plugins
- * keyed off `Component.kind`.
- *
- * `oidc` is no longer a built-in kernel kind — it moved to Takosumi
- * Accounts (operator account plane) along with the per-Installation
- * OIDC client issuance flow.
+ * `oidc` is supplied by Takosumi Accounts (operator account plane) rather
+ * than by the Takosumi AppSpec contract.
  */
 import { registerShape, type Shape } from "takosumi-contract";
 import { WebServiceKind } from "./web-service.ts";
@@ -35,14 +29,10 @@ export {
 
 export type {
   CustomDomainCapability,
-  CustomDomainCertificate,
-  CustomDomainCertificateKind,
   CustomDomainOutputs,
-  CustomDomainRedirect,
   CustomDomainSpec,
 } from "./custom-domain.ts";
 export type {
-  DatabasePostgresBackups,
   DatabasePostgresCapability,
   DatabasePostgresOutputs,
   DatabasePostgresSize,
@@ -51,13 +41,11 @@ export type {
 } from "./database-postgres.ts";
 export type {
   ObjectStoreCapability,
-  ObjectStoreLifecycle,
   ObjectStoreOutputs,
   ObjectStoreSpec,
 } from "./object-store.ts";
 export type {
   WebServiceCapability,
-  WebServiceHealth,
   WebServiceOutputs,
   WebServiceResources,
   WebServiceScale,
@@ -65,21 +53,47 @@ export type {
 } from "./web-service.ts";
 export type { WorkerCapability, WorkerOutputs, WorkerSpec } from "./worker.ts";
 
+export type TakosumiReferenceKindName =
+  | "worker"
+  | "web-service"
+  | "postgres"
+  | "object-store"
+  | "custom-domain";
+
 /**
- * The curated bundled catalog: the 4 kinds backed by JSON-LD in
- * `spec/contexts/kinds/v1/*.jsonld`. `WebServiceKind` is intentionally
- * excluded — it has no JSON-LD source and is only retained as a
- * provider-plugin backward-compat export.
+ * Reference component kind URI aliases published by Takos on takosumi.com.
+ * These URLs are external registry descriptors, not contract-owned definitions in the
+ * Takosumi AppSpec contract.
  */
-export const TAKOSUMI_BUNDLED_KINDS: readonly Shape[] = [
+export const TAKOSUMI_REFERENCE_KIND_URIS: Readonly<
+  Record<TakosumiReferenceKindName, string>
+> = Object.freeze(
+  {
+    worker: "https://takosumi.com/kinds/v1/worker",
+    "web-service": "https://takosumi.com/kinds/v1/web-service",
+    postgres: "https://takosumi.com/kinds/v1/postgres",
+    "object-store": "https://takosumi.com/kinds/v1/object-store",
+    "custom-domain": "https://takosumi.com/kinds/v1/custom-domain",
+  } as const,
+);
+
+export const TAKOSUMI_REFERENCE_KIND_ALIASES: Readonly<Record<string, string>> =
+  TAKOSUMI_REFERENCE_KIND_URIS;
+
+/**
+ * The reference catalog: external kinds backed by JSON-LD in
+ * `packages/plugins/spec/kinds/v1/*.jsonld`.
+ */
+export const TAKOSUMI_REFERENCE_KINDS: readonly Shape[] = [
   ObjectStoreKind as Shape,
   DatabasePostgresKind as Shape,
   CustomDomainKind as Shape,
   WorkerKind as Shape,
+  WebServiceKind as Shape,
 ];
 
-export function registerTakosumiKinds(): void {
-  for (const kind of TAKOSUMI_BUNDLED_KINDS) {
+export function registerTakosumiReferenceKinds(): void {
+  for (const kind of TAKOSUMI_REFERENCE_KINDS) {
     registerShape(kind);
   }
 }

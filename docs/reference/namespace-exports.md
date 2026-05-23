@@ -1,13 +1,18 @@
-# Namespace Exports
+# Namespace exports {#namespace-exports}
 
-> このページでわかること: namespace export の仕組みと使い方。
+> このページでわかること: AppSpec の component graph の外にある operator-owned
+> material を、Space-scoped に公開する model。
 
-Namespace export は operator / account plane / billing / dashboard / installer
-API など、 AppSpec の外にある usable surface を Space-scoped に公開する contract
-です。 kernel は namespace export を discover / grant / fetch せず、AppSpec
-installer lifecycle だけを扱います。
+Namespace export は、AppSpec component ではない外部 surface を `publish` /
+`listen` と同じ namespace vocabulary で参照できるようにするための内部 model で
+す。kernel は AppSpec installer lifecycle を扱い、export の発行元そのものは
+operator distribution が所有します。
 
-## Path Grammar
+代表例は `operator.identity.oidc` です。kernel は OIDC client を発行しませんが、
+operator が issuer material を namespace に publish すれば、worker component は
+`listen` でそれを受け取れます。
+
+## Path grammar {#path-grammar}
 
 ```text
 segment = [a-z][a-z0-9-]{0,62}
@@ -16,55 +21,31 @@ path    = segment("." segment)*
 
 Rules:
 
-- 最大 8 segments、 最大 255 chars。
+- 最大 8 segments、最大 255 chars。
 - empty segment は invalid。
 - `@v1` のような version suffix は path に含めない。
-- `default` は leaf segment としてだけ使える。
+- `default` は leaf segment としてだけ使う。
 - `operator` prefix は operator が Space-visible export として publish する
   surface に使う。
 
-Current v1 examples:
+Current examples:
 
 ```text
 operator.identity.oidc
-operator.billing.default
-operator.dashboard.web
 operator.platform.deploy
+operator.observability.default
 ```
 
-### v1 maturity
+## Owner model {#owner-model}
 
-本 grammar は「将来の cross-space / external participant / namespace import
-を見据えた future-proof spec」 として定義されている。 v1 実 usage は 4
-operator-owned path のみ: `operator.identity.oidc` / `operator.billing.default`
-/ `operator.dashboard.web` / `operator.platform.deploy`。 8 segments / 255 chars
-/ leaf segment 限定等の strict grammar は v1 では over-spec 寄りだが、 future
-RFC で path namespace 拡張時の breaking change を避けるため early に固定
-している。
+current v1 で有効な owner は `operator` だけです。application component は
+`operator.*` を shadow できません。Space-owned、external participant、
+cross-space share は将来 RFC 用の reserved vocabulary であり、current docs の
+contract ではありません。
 
-v1 contributor は次に従う。
+## Declaration and material {#declaration-and-material}
 
-1. operator-owned path のみ追加する
-2. 新 path 追加時は spec を update する
-3. Space-owned / external-participant / cross-space share の path は future RFC
-   まで使わない
-
-## Owner Model
-
-Current v1 の namespace export owner は **`operator` のみ** です。 app は
-`operator.*` を shadow できません。 Space-owned / external-participant /
-app-installation / cross-space share owner kind は reserved vocabulary であり、
-future RFC + acceptance gate で enable されるまで使えません (§v1 maturity
-参照)。
-
-`operator`:
-
-- 例: `operator.identity.oidc`
-- 責務: Takosumi Accounts / billing / dashboard / deploy API
-
-## Declaration And Material
-
-`ExportDeclaration` は「何を使ってよいか」 を表す immutable snapshot です。
+`ExportDeclaration` は「何を使ってよいか」を表す immutable snapshot です。
 `ExportMaterial` は link / grant materialization の結果です。
 
 ```yaml
@@ -74,8 +55,8 @@ ExportDeclaration:
   spaceId: space:acme-prod
   owner:
     kind: operator
-    id: takosumi-accounts
-  contractRef: takosumi.accounts.oidc-issuer@v1
+    id: reference-operator
+  contractRef: operator.identity.oidc@v1
   contractVersion: v1
   descriptorDigest: sha256:...
   sensitivity: restricted
@@ -96,26 +77,26 @@ ExportMaterial:
   grantHandles: [grant:inst_abc:oidc-client]
 ```
 
-Declaration には endpoint ref、 SDK config ref、 runtime handle、
-grant-producing metadata を含められる。 raw secret 値は declaration にも audit
-event にも 保存しない。
+Declaration は endpoint ref、SDK config ref、runtime handle、grant-producing
+metadata を持てます。raw secret value は declaration、audit event、AppSpec に
+保存しません。
 
-## Versioning
+## Versioning {#versioning}
 
-Path は human-stable name であり version carrier ではありません。 version は
-`contractRef` / `contractVersion` / immutable `snapshotId` / `descriptorDigest`
+Path は human-stable name であり version carrier ではありません。version は
+`contractRef`、`contractVersion`、immutable `snapshotId`、`descriptorDigest`
 で扱います。
 
 - Non-breaking change: same `namespacePath`, new `snapshotId`, compatible
   `contractVersion`。
 - Breaking change: new `contractVersion` and explicit migration policy or new
   leaf path。
-- Snapshot は immutable。 既存 grant / link は materialize 時点の
+- Snapshot は immutable。既存 grant / link は materialize 時点の
   `exportSnapshotId` を audit に残します。
 
-## Discovery
+## Discovery {#discovery}
 
-Discovery は Space-scoped です。 同じ path でも別 Space では別 subject です。
+Discovery は Space-scoped です。同じ path でも別 Space では別 subject です。
 
 Resolution order:
 
@@ -126,22 +107,24 @@ Resolution order:
 5. space namespace
 6. operator namespace granted to the Space
 
-Consumer は Accounts API / operator dashboard / install context から namespace
-export declaration を discover します。 OIDC の場合、 `operator.identity.oidc`
-export から issuer discovery URL を得て、 その後は OIDC discovery contract を
-使います。 特定 hostname は contract ではありません。
+consumer は install context または operator API から namespace export
+declaration を discover します。OIDC の場合、`operator.identity.oidc` export
+から issuer discovery URL を得て、その後は OIDC discovery contract
+を使います。特定 hostname は namespace export contract ではありません。
 
-## Grants
+## Grants {#grants}
 
-Namespace export は default-deny です。 consumer は Link / permission grant /
-account API operation のいずれかで explicit grant を得ます。
+Namespace export は default-deny です。consumer は Link、permission grant、
+operator API operation のいずれかで explicit grant を得ます。
 
-- `read` は metadata / public config の読み取り。
-- `call` は endpoint invocation。
-- `read-write` は producer が許可した mutable operation。
-- `admin` は implicit になりません。 必ず explicit approval を要求します。
+| Access mode  | 意味                          |
+| ------------ | ----------------------------- |
+| `read`       | metadata / public config 読み |
+| `call`       | endpoint invocation           |
+| `read-write` | producer が許可した mutation  |
+| `admin`      | explicit approval が必要      |
 
-## Audit
+## Audit {#audit}
 
 Namespace export lifecycle は append-only audit に残します。
 
@@ -154,6 +137,6 @@ namespace_export.grant_issued
 namespace_export.grant_revoked
 ```
 
-Audit payload には actor、 Space、 `namespacePath`、 `exportSnapshotId`、
-`descriptorDigest`、 grant id、 installation id を記録します。 raw secret、
-token、 OIDC client secret は audit payload に入れません。
+Audit payload には actor、Space、`namespacePath`、`exportSnapshotId`、
+`descriptorDigest`、grant id、installation id を記録します。raw secret や token
+は audit payload に入れません。

@@ -24,17 +24,22 @@ metadata:
 components:
   web:
     kind: worker
-    build:
-      command: npm run build
-      output: dist/worker.js
     spec:
-      routes:
-        - hello.local/*
+      artifact:
+        kind: js-bundle
+        hash: sha256:...
+      compatibilityDate: "2025-01-01"
 ```
 
-`kind: worker` の `spec.routes` は worker kind の convention です。AppSpec
-contract 自体が持つ component field は `kind`、`spec`、`publish`、`listen`、
-`build` です。
+`kind: worker` は Takos reference registry の alias 例です。Takosumi spec
+自体は公式 component kind を定義せず、operator が alias map で URI に解決した
+場合だけ意味を持ちます。AppSpec contract 自体が持つ component field は
+`kind`、`spec`、 `publish`、`listen` です。source から artifact
+を作る場合は、AppSpec ではなく [BuildSpec](/reference/build-spec) と build
+service に置きます。
+
+上の `sha256:...` は build service / CI が artifact upload 後に resolved bundle
+へ記録する digest です。
 
 ## 3. local install を試す
 
@@ -77,21 +82,23 @@ metadata:
 components:
   db:
     kind: postgres
+    spec:
+      version: "16"
+      size: small
     publish:
       - com.example.notes.db
 
   web:
     kind: worker
-    build:
-      command: npm run build
-      output: dist/worker.js
     listen:
       com.example.notes.db:
         as: env
-        prefix: DB_
+        prefix: DB
     spec:
-      routes:
-        - notes.local/*
+      artifact:
+        kind: js-bundle
+        hash: sha256:...
+      compatibilityDate: "2025-01-01"
 ```
 
 `db` が namespace path に material を publish し、`web` が同じ path を listen
@@ -102,5 +109,6 @@ components:
 
 - [コンセプト](./concepts.md)
 - [AppSpec リファレンス](/reference/app-spec)
-- [Provider Plugins](/reference/providers)
+- [BuildSpec リファレンス](/reference/build-spec)
+- [Provider plugin](/reference/providers)
 - [Operator Bootstrap](/operator/bootstrap)

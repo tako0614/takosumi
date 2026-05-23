@@ -162,7 +162,7 @@ hook 実行を公開拡張点として露出することはしません。
 hook 的挙動が必要な workflow / repository automation は上流 product 側で行い、
 installer API に source を渡す前に検査を済ませる前提です。
 
-`prepare` 詳細には manifest provenance / resource operation plan / kernel
+`prepare` 詳細には AppSpec provenance / resource operation plan / kernel
 validation evidence のみが含まれます。
 
 ## Orphaned debt 経路

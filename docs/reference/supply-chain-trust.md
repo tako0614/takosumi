@@ -9,7 +9,7 @@
 | source identity        | git URL / immutable ref / commit SHA               | digest pin                   | installer                        |
 | AppSpec                | `.takosumi.yml` sha256                             | digest pin                   | installer                        |
 | publisher identity     | publisher id / homepage / optional verified status | TLS + policy                 | Accounts / install-source policy |
-| artifact build         | workflow run id / artifact URI / image digest      | digest pin                   | external CI / installer          |
+| artifact build         | workflow run id / artifact URI / image digest      | digest pin                   | build service / external CI      |
 | provider catalog       | CatalogRelease descriptor digest                   | digest pin (operator config) | operator / kernel                |
 | provider resolution    | ResolvedProviderDecision                           | kernel ledger                | kernel                           |
 | installation ownership | Installation source / binding / grant records      | append-only ledger           | Accounts / kernel                |
@@ -21,7 +21,8 @@
 1. Source URL / catalog entry / local source is selected.
 2. Installer resolves immutable source identity and reads `.takosumi.yml`.
 3. AppSpec schema and component graph are validated.
-4. Artifact references / build outputs are pinned by digest where applicable.
+4. Artifact references / build service outputs are pinned by digest where
+   applicable.
 5. Provider catalog digest and provider resolution are recorded.
 6. `POST /v1/installations` creates Installation + first Deployment, or
    `POST /v1/installations/{id}/deployments` records a later Deployment.

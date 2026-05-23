@@ -1,17 +1,19 @@
 /**
  * `@takos/takosumi-kubernetes-providers` — Kubernetes-backed `KernelPlugin`
- * factories for the `worker` component kind (k3s / vanilla deployment).
+ * factories for the `web-service` component kind (k3s / vanilla deployment).
  *
- * Phase D extracted this factory out of `@takos/takosumi-plugins/bundled`
+ * Phase D extracted this factory out of `@takos/takosumi-plugins` reference registry
  * so Takosumi core no longer carries cloud-coupled imports. Operators that
- * want Kubernetes worker coverage explicitly import this package and pass
- * the factory result into `createPaaSApp({ plugins: [...] })`.
+ * want Kubernetes web-service coverage explicitly import this package and pass
+ * the factory result into `createPaaSApp({ kindAliases, plugins: [...] })`.
  *
  * Exports:
- *   - `kubernetesWorkerProvider` → `worker@v1` (Kubernetes Deployment)
+ *   - `kubernetesWebServiceProvider` → `web-service@v1` (Kubernetes Deployment)
  */
 
 export {
+  kubernetesWebServiceProvider,
+  type KubernetesWebServiceProviderOptions,
   kubernetesWorkerProvider,
   type KubernetesWorkerProviderOptions,
 } from "./src/worker-kubernetes.ts";

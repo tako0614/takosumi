@@ -2,39 +2,42 @@
 
 Takosumi の拡張は 2 種類あります。
 
-| やりたいこと | 追加するもの |
-| --- | --- |
-| 既存 kind を別 cloud / runtime で動かす | provider plugin |
-| 新しい runtime / resource contract を作る | kind descriptor + materializer |
+| やりたいこと                                            | 追加するもの                   |
+| ------------------------------------------------------- | ------------------------------ |
+| reference / operator kind を別 cloud / runtime で動かす | provider plugin                |
+| 新しい runtime / resource contract を作る               | kind descriptor + materializer |
 
 AppSpec に `plugin:` field はありません。operator が `createPaaSApp()` で plugin
 や inline materializer を attach します。
 
 ## Provider plugin を追加する
 
-provider plugin は既存 kind を具体 substrate に materialize する実装です。
+provider plugin は reference / operator kind を具体 substrate に materialize
+する実装 です。
 
 ```ts
 import { kernelPluginFromProviderPlugin } from "@takos/takosumi-contract/kernel-plugin-adapter";
 
-export function hetznerCloudWorkerProvider(opts: HetznerCloudWorkerOptions) {
-  const provider = createHetznerCloudWorkerProvider({ token: opts.token });
+export function hetznerCloudWebServiceProvider(
+  opts: HetznerCloudWebServiceOptions,
+) {
+  const provider = createHetznerCloudWebServiceProvider({ token: opts.token });
 
   return kernelPluginFromProviderPlugin({
     provider,
-    provides: ["https://takosumi.com/kinds/v1/worker"],
+    kindUri: "https://takosumi.com/kinds/v1/web-service",
   });
 }
 ```
 
 命名は次の形に揃えます。
 
-| 対象 | ルール |
-| --- | --- |
-| Factory name | camelCase、`<provider><Kind>Provider` |
-| Provider id | kebab-case、cloud / runtime を先頭に置く |
-| Package | cloud / runtime owner を持つ provider package |
-| Credential | factory option または runtime-agent host env で注入 |
+| 対象         | ルール                                              |
+| ------------ | --------------------------------------------------- |
+| Factory name | camelCase、`<provider><Kind>Provider`               |
+| Provider id  | kebab-case、cloud / runtime を先頭に置く            |
+| Package      | cloud / runtime owner を持つ provider package       |
+| Credential   | factory option または runtime-agent host env で注入 |
 
 provider は credential を AppSpec から読みません。credential と region / account
 などの operator 設定は plugin factory option または runtime-agent 側の config で
@@ -48,6 +51,9 @@ provider は credential を AppSpec から読みません。credential と regio
 import { createPaaSApp } from "@takos/takosumi-kernel";
 
 const { app } = await createPaaSApp({
+  kindAliases: {
+    cache: "https://operator.example.com/kinds/cache",
+  },
   materializers: [
     {
       kindUri: "https://operator.example.com/kinds/cache",
@@ -74,7 +80,7 @@ boundary を守る必要があります。
 
 ```json
 {
-  "@context": "https://takosumi.com/contexts/kinds/v1",
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
   "@id": "https://operator.example.com/kinds/cache",
   "name": "cache",
   "spec": {
@@ -115,7 +121,7 @@ components:
 ## 関連ページ
 
 - [AppSpec](./reference/app-spec.md)
-- [Kind Catalog](./reference/kind-catalog.md)
-- [Provider Plugins](./reference/providers.md)
+- [Reference Kind Registry](./reference/kind-catalog.md)
+- [Provider plugin](./reference/providers.md)
 - [Operator Bootstrap](./operator/bootstrap.md)
 - [Runtime-Agent API](./reference/runtime-agent-api.md)

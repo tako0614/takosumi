@@ -118,7 +118,7 @@ shadow は production traffic を新 deployment に複製送付しますが prod
   記録され、 production 側応答や副作用は変えない
 - drift 検出時は [Drift Detection](./drift-detection.md) flow。 severity `error`
   なら operator gate で `rolling-back` に遷移
-- shadow rollout は副作用 surface を持つ manifest を受け付けない。 `outputs` /
+- shadow rollout は副作用 surface を持つ AppSpec を受け付けない。 `outputs` /
   `queue` route / DB semantic write を含む shadow plan は
   `shadow-side-effects:forbidden` で resolution 時に `deny` (operator approval
   でも override 不可)

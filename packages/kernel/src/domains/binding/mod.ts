@@ -21,22 +21,10 @@ import type {
   InlineMaterializer,
   KernelPlugin,
   NamespaceMaterial,
+  ResolvedListenBinding,
 } from "takosumi-contract/plugin";
 
-export interface ResolvedBinding {
-  readonly listenerComponent: string;
-  readonly namespacePath: string;
-  readonly options: ListenOptions;
-  readonly envInjections: Readonly<
-    Record<string, string | { readonly secretRef: string }>
-  >;
-  readonly mounts?: Readonly<
-    Record<string, string | { readonly secretRef: string }>
-  >;
-  readonly target?: NamespaceMaterial;
-  /** The raw material payload as published to the namespace path. */
-  readonly material: NamespaceMaterial;
-}
+export type ResolvedBinding = ResolvedListenBinding;
 
 /**
  * Look up the materializer (KernelPlugin or InlineMaterializer) responsible

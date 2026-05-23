@@ -12,12 +12,12 @@ surface (public installer / internal control plane / runtime-agent control RPC)
 
 ## 概要 {#overview}
 
-| Surface           | Path prefix                                                      | 想定 caller                                  |
-| ----------------- | ---------------------------------------------------------------- | -------------------------------------------- |
-| Public installer  | `/v1/installations/*`                                            | Operator / actor の Takosumi CLI / dashboard |
-| Internal control  | `/api/internal/v1/*`                                             | Operator が運営する CLI / dashboard / agent  |
-| Runtime-Agent RPC | `/api/internal/v1/runtime/agents/*`                              | Operator-installed runtime-agent process     |
-| Discovery / probe | `/health`, `/livez`, `/readyz`, `/openapi.json`, `/capabilities` | Operator orchestrator                        |
+| Surface           | Path prefix                                                      | 想定 caller                                   |
+| ----------------- | ---------------------------------------------------------------- | --------------------------------------------- |
+| Public installer  | `/v1/installations/*`                                            | Operator / actor の Takosumi CLI / automation |
+| Internal control  | `/api/internal/v1/*`                                             | Operator が運営する CLI / automation / agent  |
+| Runtime-Agent RPC | `/api/internal/v1/runtime/agents/*`                              | Operator-installed runtime-agent process      |
+| Discovery / probe | `/health`, `/livez`, `/readyz`, `/openapi.json`, `/capabilities` | Operator orchestrator                         |
 
 すべての endpoint は kernel の base URL に対する相対 path です。 credential は
 kernel が保持せず、 operator が env 経由で inject します。
@@ -62,8 +62,8 @@ request / response shape は [Installer API](./installer-api.md) 参照。
 
 ## Internal control plane routes {#internal-control-plane-routes}
 
-`/api/internal/v1/*` は operator-only。 dashboard / automation が caller で、
-public 経由 expose はしません。
+`/api/internal/v1/*` は operator-only。 automation が caller で、 public 経由
+expose はしません。
 
 現在 mount される署名付き internal route:
 
@@ -97,14 +97,15 @@ RPC。 すべて `/api/internal/v1/runtime/agents/...` 配下で、 internal HMA
 ## Workflow / trigger / hook の境界 {#workflow-trigger-hook-boundary}
 
 kernel は workflow / trigger / schedule / declarable hook の HTTP route を持ち
-ません。 build は AppSpec の `component.build` で最小 recipe として宣言し、
-kernel installer が apply 時に直接実行します。
+ません。build は BuildSpec を読む build service または CI の責務で、kernel
+installer は shell / container command を直接実行しません。
 
 The current kernel exposes no workflow, trigger, schedule, or declarable hook
 HTTP route.
 
-CI / webhook / cron / declarable hook 等の運用機能は kernel scope の外。
-operator が別途 CI / orchestrator で実装します。
+CI / webhook / cron / declarable hook 等の運用機能は kernel scope の外です。
+operator が別途 build service / CI / orchestrator で実装し、resolved AppSpec
+bundle を `source.kind=bundle` として Installer API に渡します。
 
 ## エラーエンベロープ {#error-envelope}
 
@@ -133,7 +134,7 @@ interface ApiErrorEnvelope {
 | `permission_denied`      | 403  | space 越境、 token claim 不足                                    |
 | `not_found`              | 404  | endpoint disabled (token unset)、 Installation / Deployment 不在 |
 | `failed_precondition`    | 409  | `expected.commit` mismatch、 collision-detected、 approval 失効  |
-| `resource_exhausted`     | 413  | build artifact が provider quota 超過、 quota 超過               |
+| `resource_exhausted`     | 413  | artifact payload / provider quota / request size 上限超過        |
 | `not_implemented`        | 501  | issuer 未配線、 operator が opt-in していない機能                |
 | `readiness_probe_failed` | 503  | `/livez` / `/readyz` / dependent port が ready でない            |
 | `internal_error`         | 500  | unhandled exception                                              |
@@ -146,7 +147,8 @@ interface ApiErrorEnvelope {
 
 - [Installer API](./installer-api.md) — 5 endpoint の完全 spec
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [Kind Catalog](./kind-catalog.md#component-kinds) — curated 4 kind +
-  operator-defined kind
+- [BuildSpec](./build-spec.md) — build service と resolved bundle の handoff
+- [Reference Kind Registry](./kind-catalog.md#reference-component-kinds) — Takos
+  reference kind + operator-defined kind
 - [Runtime-Agent API](./runtime-agent-api.md)
 - [Closed Enums](./closed-enums.md)

@@ -20,9 +20,9 @@ hero:
       link: /reference/app-spec
 
 features:
-  - title: 1 ファイルで宣言
+  - title: AppSpec は小さく保つ
     details: |
-      AppSpec は source root の `.takosumi.yml` だけ。runtime、resource、component 間接続を同じファイルで表す。
+      `.takosumi.yml` は runtime、resource、component 間接続だけを書く。build recipe は任意の `.takosumi.build.yml` に分ける。
   - title: 3 つの公開概念
     details: |
       AppSpec / Installation / Deployment を公開概念の中心に置き、内部 ledger や実装詳細を入口に出さない。
@@ -40,15 +40,18 @@ features:
    first install まで通す。
 2. [コンセプト](/getting-started/concepts) — AppSpec、Component、Kind、
    Materializer、publish/listen の関係を読む。
-3. [AppSpec リファレンス](/reference/app-spec) — `.takosumi.yml` の全体 shape
-   と validation rule を確認する。
+3. [AppSpec リファレンス](/reference/app-spec) — `.takosumi.yml` の全体 shape と
+   validation rule を確認する。
+4. [BuildSpec リファレンス](/reference/build-spec) — source build と resolved
+   bundle の handoff を確認する。
 
 ## 何をするものか
 
 Takosumi は source-to-runtime の installer kernel です。ユーザーは source root
-に AppSpec を置き、operator は provider plugin と runtime-agent を用意します。
-kernel は AppSpec を検証し、Installation を Space に作り、apply / rollback の
-たびに Deployment record を残します。
+に AppSpec を置き、必要なら BuildSpec で artifact build を外出しします。
+operator は provider plugin と runtime-agent を用意します。kernel は resolved
+AppSpec を検証し、Installation を Space に作り、apply / rollback のたびに
+Deployment record を残します。
 
 Takosumi kernel は account、billing、OIDC issuer、customer onboarding UI を所有
 しません。それらは operator account-plane の責務です。Takosumi docs では kernel
@@ -56,11 +59,12 @@ Takosumi kernel は account、billing、OIDC issuer、customer onboarding UI を
 
 ## よく参照するページ
 
-| 目的 | ページ |
-| --- | --- |
-| `.takosumi.yml` を書く | [AppSpec](/reference/app-spec) |
-| install / deploy / rollback API を叩く | [Installer API](/reference/installer-api) |
-| CLI の subcommand と env を見る | [CLI](/reference/cli) |
-| provider plugin の attach / 選択を見る | [Provider Plugins](/reference/providers) |
-| production 起動の前提を見る | [Operator](/operator/) |
-| 内部設計を追う | [Architecture Overview](/reference/architecture/) |
+| 目的                                   | ページ                                     |
+| -------------------------------------- | ------------------------------------------ |
+| `.takosumi.yml` を書く                 | [AppSpec](/reference/app-spec)             |
+| `.takosumi.build.yml` を書く           | [BuildSpec](/reference/build-spec)         |
+| install / deploy / rollback API を叩く | [Installer API](/reference/installer-api)  |
+| CLI の subcommand と env を見る        | [CLI](/reference/cli)                      |
+| provider plugin の attach / 選択を見る | [Provider plugin](/reference/providers)    |
+| production 起動の前提を見る            | [Operator](/operator/)                     |
+| 内部設計を追う                         | [内部設計の概要](/reference/architecture/) |

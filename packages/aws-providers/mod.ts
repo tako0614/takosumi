@@ -1,20 +1,22 @@
 /**
  * `@takos/takosumi-aws-providers` — AWS-backed `KernelPlugin` factories
- * for the canonical Takosumi component kinds.
+ * for the Takos reference component kinds.
  *
- * Phase D extracted these factories out of `@takos/takosumi-plugins/bundled`
+ * Phase D extracted these factories out of `@takos/takosumi-plugins` reference registry
  * so Takosumi core no longer carries cloud-coupled imports. Operators that
  * want AWS provider coverage explicitly import this package and pass the
- * factory results into `createPaaSApp({ plugins: [...] })`.
+ * factory results into `createPaaSApp({ kindAliases, plugins: [...] })`.
  *
  * Exports:
- *   - `awsFargateWorkerProvider`        → `worker@v1` (AWS Fargate)
+ *   - `awsFargateWebServiceProvider`    → `web-service@v1` (AWS Fargate)
  *   - `awsS3ObjectStoreProvider`        → `object-store@v1` (AWS S3)
  *   - `awsRdsPostgresProvider`          → `postgres@v1` (AWS RDS)
  *   - `awsRoute53CustomDomainProvider`  → `custom-domain@v1` (AWS Route53)
  */
 
 export {
+  awsFargateWebServiceProvider,
+  type AwsFargateWebServiceProviderOptions,
   awsFargateWorkerProvider,
   type AwsFargateWorkerProviderOptions,
 } from "./src/worker-aws-fargate.ts";

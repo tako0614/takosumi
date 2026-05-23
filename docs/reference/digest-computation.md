@@ -1,6 +1,6 @@
 # Digest 計算 {#digest-computation}
 
-> このページでわかること: manifest / artifact の digest 計算方法。
+> このページでわかること: AppSpec / artifact の digest 計算方法。
 
 Takosumi v1 が snapshot / plan / approval / predicted effect を結びつけるために
 使う digest 計算の規定です。 digest が persist される箇所、 および suffix が
@@ -107,9 +107,8 @@ canonical encoding は
 input は effect set の closed-enum view。 approval record 上の `approvedEffects`
 でも OperationResult 上の `actualEffects` でも同一アルゴリズムを適用します。
 effect digest が同形状であることで、 成功 operation の result digest と approval
-の effect digest を bound rule
-([Provider Plugins — Effect bound rule](./providers.md#effect-bound-rule))
-の下で byte 単位比較できます。
+の effect digest を bound rule ([Provider plugin](./providers.md)) の下で byte
+単位比較できます。
 
 入力は source set の順序を保った closed-shape effect descriptor の列。 canonical
 encoder は各 descriptor 内部を JCS 規則で sort しますが、 外側の list を
@@ -118,10 +117,9 @@ encoder は各 descriptor 内部を JCS 規則で sort しますが、 外側の
 ### `predictedActualEffectsDigest` {#predictedactualeffectsdigest}
 
 dry materialization で得られる予測 effect map が入力です
-([Provider Plugins — Dry materialization phase](./providers.md#dry-materialization-phase))。
-形状は `effectDetailsDigest` と同じ。 digest は OperationPlan に bind され、
-`commit` / `post-commit` 時の `actual-effects-overflow` Risk 評価の参照値に
-なります。
+([Provider plugin](./providers.md))。 形状は `effectDetailsDigest` と同じ。
+digest は OperationPlan に bind され、 `commit` / `post-commit` 時の
+`actual-effects-overflow` Risk 評価の参照値に なります。
 
 ### `resolutionSnapshotDigest` {#resolutionsnapshotdigest}
 
@@ -194,7 +192,7 @@ kernel は digest を初回計算時に persist し、 再計算は元の immuta
 ## 関連ページ
 
 - [Resource IDs](./resource-ids.md)
-- [Provider Plugins — Implementation Contract](./providers.md#implementation-contract)
+- [Provider plugin](./providers.md)
 - [WAL Stages](./wal-stages.md)
 - [Catalog Release Trust](./catalog-release-trust.md)
 - [Storage Schema](./storage-schema.md)

@@ -8,7 +8,7 @@ Execution は Space scope であり、snapshot に裏付けられ、journal さ�
 
 ```text
 1. determine Space from actor auth / API path / operator context
-2. parse manifest into IntentGraph
+2. parse AppSpec into IntentGraph
 3. select a CatalogRelease allowed for the Space
 4. resolve targets, Space-scoped namespace exports, data asset requirements
 5. create ResolutionSnapshot

@@ -14,7 +14,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@^1.0.5";
 import { Hono } from "hono";
-import { type Component, COMPONENT_KINDS } from "takosumi-contract/app-spec";
+import type { Component } from "takosumi-contract/app-spec";
 import type {
   ApplyListenContext,
   EnvInjection,
@@ -54,6 +54,11 @@ components:
 const INSTALLER_AUTH_HEADERS = {
   "authorization": "Bearer installer-token",
   "content-type": "application/json",
+} as const;
+
+const TEST_KIND_ALIASES = {
+  postgres: "https://takosumi.com/kinds/v1/postgres",
+  worker: "https://takosumi.com/kinds/v1/worker",
 } as const;
 
 async function withTempSource<T>(
@@ -178,6 +183,7 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with pub/
       applies,
     });
     const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
       plugins: [dbPlugin, workerPlugin],
     });
     const app = buildApp(pipeline);
@@ -274,6 +280,7 @@ Deno.test("installer e2e — listener applyListen receives material with prefixe
       },
     });
     const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
       plugins: [dbPlugin, workerPlugin],
     });
     const app = buildApp(pipeline);
@@ -312,6 +319,7 @@ Deno.test("installer e2e — apply with mismatched expected returns 409 (Phase A
     const events: string[] = [];
     const applies: ApplyRecord[] = [];
     const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
       plugins: [
         buildRecordingPlugin({
           name: "@test/postgres",
@@ -376,6 +384,7 @@ components:
     const events: string[] = [];
     const applies: ApplyRecord[] = [];
     const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
       plugins: [
         buildRecordingPlugin({
           name: "@test/worker",
@@ -444,6 +453,7 @@ components:
       applies,
     });
     const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
       plugins: [dbPlugin, workerPlugin],
     });
     const app = buildApp(pipeline);
@@ -480,20 +490,6 @@ components:
   }, spec);
 });
 
-Deno.test("AppSpec frozen kind catalog excludes oidc (moved to Takosumi Accounts)", () => {
-  const expected = ["worker", "postgres", "object-store", "custom-domain"];
-  for (const kind of expected) {
-    assert(
-      (COMPONENT_KINDS as readonly string[]).includes(kind),
-      `${kind} should be in COMPONENT_KINDS`,
-    );
-  }
-  assert(
-    !(COMPONENT_KINDS as readonly string[]).includes("oidc"),
-    "oidc should no longer be a built-in kernel kind",
-  );
-});
-
 function assertInstallation(
   installation: Installation,
   spaceId: string,
@@ -517,8 +513,7 @@ function assertDeployment(
   assert(typeof deployment.createdAt === "number");
   assert(
     deployment.outputs.resources?.every((resource) =>
-      (COMPONENT_KINDS as readonly string[]).includes(resource.kind) ||
-      resource.kind.startsWith("https://")
+      typeof resource.kind === "string" && resource.kind.length > 0
     ),
   );
   // Silence unused-import warning by referencing Component.

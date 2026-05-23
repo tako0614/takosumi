@@ -4,19 +4,24 @@
  * that materializes them.
  */
 import type { KernelPlugin } from "takosumi-contract";
-import {
-  isComponentKind,
-  isKindUri,
-  resolveKindUri,
-} from "takosumi-contract/app-spec";
-import type { KernelPluginRegistry } from "./types.ts";
+import { isKindUri } from "takosumi-contract/app-spec";
+import type { KernelPluginRegistry, KindAliasMap } from "./types.ts";
+
+export interface KernelPluginRegistryOptions {
+  readonly kindAliases?: KindAliasMap;
+}
 
 export class InMemoryKernelPluginRegistry implements KernelPluginRegistry {
   readonly #plugins: KernelPlugin[] = [];
   readonly #byKindUri = new Map<string, KernelPlugin>();
   readonly #byName = new Map<string, KernelPlugin>();
+  readonly #kindAliases: KindAliasMap;
 
-  constructor(plugins: readonly KernelPlugin[] = []) {
+  constructor(
+    plugins: readonly KernelPlugin[] = [],
+    options: KernelPluginRegistryOptions = {},
+  ) {
+    this.#kindAliases = validateKindAliases(options.kindAliases ?? {});
     for (const plugin of plugins) this.register(plugin);
   }
 
@@ -48,6 +53,10 @@ export class InMemoryKernelPluginRegistry implements KernelPluginRegistry {
     return this.#byKindUri.get(kindUri);
   }
 
+  findByKindRef(kind: string): KernelPlugin | undefined {
+    return this.findByKindUri(normalizeKindToUri(kind, this.#kindAliases));
+  }
+
   getByName(name: string): KernelPlugin | undefined {
     return this.#byName.get(name);
   }
@@ -55,18 +64,23 @@ export class InMemoryKernelPluginRegistry implements KernelPluginRegistry {
 
 export function createKernelPluginRegistry(
   plugins: readonly KernelPlugin[] = [],
+  options: KernelPluginRegistryOptions = {},
 ): KernelPluginRegistry {
-  return new InMemoryKernelPluginRegistry(plugins);
+  return new InMemoryKernelPluginRegistry(plugins, options);
 }
 
 /**
  * Normalize a `Component.kind` value (short name or canonical URI) to the
- * canonical URI used for plugin lookup. Built-in short names resolve via
- * `KIND_URI_BY_NAME`; operator-defined HTTPS URIs pass through unchanged.
+ * URI used for plugin lookup. Full `http(s)` URIs pass through unchanged.
+ * Bare aliases resolve only when the operator supplied a matching alias.
  */
-export function normalizeKindToUri(kind: string): string {
+export function normalizeKindToUri(
+  kind: string,
+  aliases: KindAliasMap = {},
+): string {
   if (isKindUri(kind)) return kind;
-  if (isComponentKind(kind)) return resolveKindUri(kind);
+  const aliased = aliases[kind];
+  if (aliased) return aliased;
   // Unknown bare token — return as-is so the lookup miss surfaces a clean
   // "no plugin provides kind X" error downstream.
   return kind;
@@ -74,13 +88,25 @@ export function normalizeKindToUri(kind: string): string {
 
 /**
  * Find the plugin that should materialize a given component kind. Accepts
- * either a built-in short name or a full kind URI on the AppSpec side.
+ * either an operator alias or a full kind URI on the AppSpec side.
  */
 export function findPluginForKind(
   registry: KernelPluginRegistry,
   kind: string,
 ): KernelPlugin | undefined {
-  return registry.findByKindUri(normalizeKindToUri(kind));
+  return registry.findByKindRef(kind);
+}
+
+function validateKindAliases(aliases: KindAliasMap): KindAliasMap {
+  for (const [alias, uri] of Object.entries(aliases)) {
+    if (alias.length === 0) {
+      throw new Error("kind alias name must be non-empty");
+    }
+    if (typeof uri !== "string" || !isKindUri(uri)) {
+      throw new Error(`kind alias ${alias} must resolve to an http(s) URI`);
+    }
+  }
+  return Object.freeze({ ...aliases });
 }
 
 function assertValidPlugin(plugin: KernelPlugin): void {

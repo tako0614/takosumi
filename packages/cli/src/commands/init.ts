@@ -10,27 +10,31 @@ metadata:
 components:
   web:
     kind: worker
-    build:
-      command: npm ci && npm run build
-      output: dist/worker.mjs
     spec:
-      routes:
-        - /
+      artifact:
+        kind: js-bundle
+        hash: sha256:...
+      compatibilityDate: "2025-01-01"
     listen:
       com.example.my-app.db:
         as: env
-        prefix: DATABASE_
+        prefix: DATABASE
       com.example.my-app.assets:
         as: env
-        prefix: ASSETS_
+        prefix: ASSETS
 
   db:
     kind: postgres
+    spec:
+      version: "16"
+      size: small
     publish:
       - com.example.my-app.db
 
   assets:
     kind: object-store
+    spec:
+      name: my-app-assets
     publish:
       - com.example.my-app.assets
 `,

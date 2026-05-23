@@ -15,7 +15,7 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "required": ["version", "size"],
-    "additionalProperties": false,
+    "additionalProperties": true,
     "properties": {
       "version": {
         "type": "string",
@@ -32,27 +32,12 @@
         "required": ["sizeGiB"],
         "description": "Persistent volume sizing.",
         "properties": {
-          "sizeGiB": { "type": "integer", "minimum": 1 },
-          "type": { "type": "string", "enum": ["ssd", "hdd"] }
-        }
-      },
-      "backups": {
-        "type": "object",
-        "required": ["enabled"],
-        "description": "Managed backup policy.",
-        "properties": {
-          "enabled": { "type": "boolean" },
-          "retentionDays": { "type": "integer", "minimum": 1 }
+          "sizeGiB": { "type": "integer", "minimum": 1 }
         }
       },
       "highAvailability": {
         "type": "boolean",
         "description": "Enable provider-managed HA replica."
-      },
-      "extensions": {
-        "type": "array",
-        "items": { "type": "string", "minLength": 1 },
-        "description": "PostgreSQL extensions to enable (e.g. `pgvector`)."
       }
     }
   },

@@ -1,5 +1,5 @@
 /**
- * Bundled `worker@v1` KernelPlugin factory backed by a Kubernetes /
+ * Bundled `web-service@v1` KernelPlugin factory backed by a Kubernetes /
  * k3s deployment.
  */
 
@@ -10,7 +10,7 @@ import {
   type K3sDeploymentLifecycleClient,
 } from "@takos/takosumi-plugins/shape-providers/web-service/k3s-deployment";
 import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
-import { KIND_URI_WORKER } from "./_kinds.ts";
+import { KIND_URI_WEB_SERVICE } from "./_kinds.ts";
 
 export interface KubernetesWorkerProviderOptions {
   readonly namespace?: string;
@@ -18,7 +18,10 @@ export interface KubernetesWorkerProviderOptions {
   readonly lifecycle?: K3sDeploymentLifecycleClient;
 }
 
-export function kubernetesWorkerProvider(
+export type KubernetesWebServiceProviderOptions =
+  KubernetesWorkerProviderOptions;
+
+export function kubernetesWebServiceProvider(
   opts: KubernetesWorkerProviderOptions = {},
 ): KernelPlugin {
   const namespace = opts.namespace ?? "takos";
@@ -30,7 +33,7 @@ export function kubernetesWorkerProvider(
   });
   return kernelPluginFromProviderPlugin({
     provider,
-    kindUri: KIND_URI_WORKER,
+    kindUri: KIND_URI_WEB_SERVICE,
     capabilities: [
       "always-on",
       "websocket",
@@ -39,3 +42,6 @@ export function kubernetesWorkerProvider(
     ],
   });
 }
+
+/** @deprecated Use `kubernetesWebServiceProvider`; this provides web-service. */
+export const kubernetesWorkerProvider = kubernetesWebServiceProvider;

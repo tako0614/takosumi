@@ -3,7 +3,7 @@
  *
  * Provides Deno Deploy as a second provider for the `worker@v1` shape
  * alongside `cloudflare-workers`, satisfying the §5 portability invariant
- * (≥ 2 providers per curated shape). The thin shape-provider posts apply /
+ * (≥ 2 providers per reference shape). The thin shape-provider posts apply /
  * destroy / describe envelopes to a runtime-agent connector that drives the
  * Deno Deploy REST API; in-memory mode here is for local CLI runs and tests.
  *
@@ -74,7 +74,7 @@ export function createDenoDeployProvider(
     implements: { id: "worker", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
-      const scriptName = scriptNameFromArtifactHash(spec);
+      const scriptName = scriptNameFromArtifactRef(spec);
       const desc = await lifecycle.putScript({
         scriptName,
         compatibilityDate: spec.compatibilityDate,
@@ -123,7 +123,7 @@ function scriptNameFromHandle(handle: ResourceHandle): string {
   return parts.at(-1) ?? handle;
 }
 
-function scriptNameFromArtifactHash(spec: WorkerSpec): string {
+function scriptNameFromArtifactRef(spec: WorkerSpec): string {
   const hash = spec.artifact.hash ?? "worker";
   const tail = hash.split(":").at(-1) ?? hash;
   const token = tail.toLowerCase().replace(/[^a-z0-9-]+/g, "").slice(0, 24);

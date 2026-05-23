@@ -3,12 +3,12 @@
  * namespace pub/sub material model.
  *
  * A `KernelPlugin` advertises one or more component kind URIs in `provides`,
- * declares short-name `aliases` for AppSpec authoring convenience,
+ * may expose short-name `aliases` for operator tooling,
  * materializes those components via `apply()`, publishes the resulting
  * material to the pub/sub registry via `publishMaterial()`, and surfaces
  * listened materials into the component runtime via `applyListen()`.
  *
- * Operators supply plugins as a plain array to `createPaaSApp({ plugins })`,
+ * Operators supply plugins as a plain array to `createPaaSApp({ kindAliases, plugins })`,
  * matching the Vite plugin authoring experience: no class hierarchy, no
  * manifest discovery file, no port catalog. The kind URI is the only
  * coupling point between AppSpec and plugin, which preserves Takosumi's
@@ -37,17 +37,15 @@ export interface KernelPlugin {
    * the plugin for each component during `apply`.
    *
    * Examples:
-   *   - `["https://takosumi.com/kinds/v1/worker"]` (built-in)
+   *   - `["https://takosumi.com/kinds/v1/worker"]` (Takos reference registry)
    *   - `["https://operator.example.com/kinds/lambda"]` (operator-defined)
    */
   readonly provides: readonly string[];
 
   /**
-   * Short-name aliases recognized for `Component.kind` in addition to the
-   * canonical URIs in `provides[]`. For built-in kinds this typically
-   * mirrors the JSON-LD `aliases` array (e.g. `["worker"]` for the
-   * `https://takosumi.com/kinds/v1/worker` plugin). Operator plugins may
-   * add aliases or omit this field if URI-only authoring is required.
+   * Short-name aliases a distribution may expose for `Component.kind` in
+   * addition to the canonical URIs in `provides[]`. Alias resolution is
+   * operator-owned; the Takosumi contract does not define contract-owned aliases.
    */
   readonly aliases?: readonly string[];
 
@@ -174,6 +172,21 @@ export interface EnvInjection {
   readonly target?: NamespaceMaterial;
 }
 
+export interface ResolvedListenBinding {
+  readonly listenerComponent: string;
+  readonly namespacePath: NamespacePath;
+  readonly options: ListenOptions;
+  readonly envInjections: Readonly<
+    Record<string, string | { readonly secretRef: string }>
+  >;
+  readonly mounts?: Readonly<
+    Record<string, string | { readonly secretRef: string }>
+  >;
+  readonly target?: NamespaceMaterial;
+  /** The raw material payload as published to the namespace path. */
+  readonly material: NamespaceMaterial;
+}
+
 export interface KernelPluginApplyContext {
   readonly installationId: string;
   readonly componentName: string;
@@ -195,6 +208,12 @@ export interface KernelPluginApplyContext {
   readonly listenedMaterials: Readonly<
     Record<NamespacePath, NamespaceMaterial>
   >;
+  /**
+   * Env / mount / target descriptors produced by `applyListen` for each
+   * listen edge. Native KernelPlugin implementations should use this field
+   * when they need the actual runtime injection plan instead of raw materials.
+   */
+  readonly resolvedBindings: readonly ResolvedListenBinding[];
 }
 
 export interface KernelPluginApplyResult {

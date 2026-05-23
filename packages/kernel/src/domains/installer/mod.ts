@@ -49,6 +49,7 @@ import {
   createKernelPluginRegistry,
   findPluginForKind,
   type KernelPluginRegistry,
+  type KindAliasMap,
 } from "../../plugins/mod.ts";
 import { log } from "../../shared/log.ts";
 import { currentRuntime } from "../../shared/runtime/index.ts";
@@ -133,6 +134,11 @@ export interface InstallerPipelineDependencies {
    * across this array in registration order.
    */
   readonly plugins?: readonly KernelPlugin[];
+  /**
+   * Operator-owned short-name aliases for component kinds. Takosumi does not
+   * define contract-owned component kinds; aliases are resolved before plugin lookup.
+   */
+  readonly kindAliases?: KindAliasMap;
   /** Defaults to `crypto.randomUUID()`-based id generation. */
   readonly newId?: (prefix: string) => string;
   /** Defaults to `Date.now()`. */
@@ -189,7 +195,9 @@ export class InstallerPipeline {
     this.#deployments = dependencies.deployments ??
       new InMemoryDeploymentStore();
     this.#plugins = dependencies.plugins ?? [];
-    this.#pluginRegistry = createKernelPluginRegistry(this.#plugins);
+    this.#pluginRegistry = createKernelPluginRegistry(this.#plugins, {
+      kindAliases: dependencies.kindAliases,
+    });
     this.#providers = dependencies.providers ??
       (dependencies.plugins && dependencies.plugins.length > 0
         ? installerProviderRegistryFromPluginRegistry(this.#pluginRegistry)
@@ -738,9 +746,10 @@ class NoopProviderRegistry implements InstallerProviderRegistry {
  */
 export function installerProviderRegistryFromPlugins(
   plugins: readonly KernelPlugin[],
+  kindAliases?: KindAliasMap,
 ): InstallerProviderRegistry {
   return installerProviderRegistryFromPluginRegistry(
-    createKernelPluginRegistry(plugins),
+    createKernelPluginRegistry(plugins, { kindAliases }),
   );
 }
 
@@ -768,6 +777,7 @@ function installerProviderRegistryFromPluginRegistry(
           }
           : undefined,
         listenedMaterials: context.listenedMaterials,
+        resolvedBindings: context.resolvedBindings,
       });
       return {
         resource: {

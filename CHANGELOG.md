@@ -8,26 +8,42 @@ Versions follow [Semantic Versioning](https://semver.org/) once each package
 crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes (documented per
 entry).
 
-## Spec策定中 — Wave N planned: kernel kind-agnostic 化 + Component.build 削除 + curated catalog 廃止 (2026-05-21, RFC stage)
+## Spec策定中 — Wave N-A component kind externalization (2026-05-21, Unreleased)
 
 Wave J → K → L の minimization sequence の自然な終点として、 takosumi kernel を
-**pure contract executor** に純化する計画。 主要 motion:
+**pure contract executor** に近づけるため、component kind list を contract
+から外した。
 
-- `Component.build` field 削除 (= Component 5 → 4 field)
-- `spec/contexts/kinds/v1/*.jsonld` + `packages/plugins/src/kinds/*` 物理削除
-- `packages/contract/src/app-spec.ts` の `COMPONENT_KINDS` / `KIND_URI_BY_NAME`
-  / `kindNameFromUri()` / `TAKOSUMI_KIND_URI_BASE` 削除
-- takosumi-cloud に新 JSR package `@takos/takosumi-cloud-kinds` を新設、 worker
-  / postgres / object-store / custom-domain / build / oidc の 6 kind を
-  `https://cloud.takosumi.com/kinds/v1/` 系で publish
+- **Breaking — official component kind list is zero**:
+  `@takos/takosumi-contract` から `COMPONENT_KINDS` / `KIND_URI_BY_NAME` /
+  `KIND_NAME_BY_URI` / `TAKOSUMI_KIND_URI_BASE` / `resolveKindUri()` /
+  `kindNameFromUri()` / `isComponentKind()` / `normalizeComponentKind()`
+  を削除。 `Component.kind` は opaque non-empty string。
+- **Parser**: `.takosumi.yml` parser は kind を catalog validate せず、authoring
+  form を保持する。empty / non-string kind は従来通り reject。
+- **Kernel plugin lookup**: `createPaaSApp({ kindAliases, plugins })` で
+  operator-owned alias map を受け取り、short alias を provider lookup 前に URI
+  解決する。URI はそのまま使われ、未解決 alias は provider operation 前に lookup
+  miss として fail-closed。
+- **Reference registry**: Takos reference descriptors は
+  `packages/plugins/spec/kinds/v1/*.jsonld` と `packages/plugins/src/kinds/` に
+  移動 / rescope。`https://takosumi.com/kinds/v1/*` は external reference
+  registry であり、Takosumi AppSpec spec の official kind list ではない。
+  `@takos/takosumi-plugins/kinds` は `TAKOSUMI_REFERENCE_KIND_URIS` /
+  `TAKOSUMI_REFERENCE_KIND_ALIASES` / `TAKOSUMI_REFERENCE_KINDS` を export。
+- **Provider packages**: 6 provider package は contract の removed kind helpers
+  ではなく `@takos/takosumi-plugins/kinds` の reference URI helper を参照する。
+- **Docs / RFC**: AppSpec、provider、reference registry、BuildSpec、RFC 0001、
+  README / CONVENTIONS / AGENTS を更新し、official kind = 0 と external
+  reference registry の境界を明記。
 
-詳細 design + worked example + open questions は
-[RFC 0001](docs/rfc/0001-kernel-kind-agnostic.md) を参照。
+Remaining follow-up:
 
-**現状 = RFC stage** (= 設計 dialogue 中、 code implementation は未着手)。 直近
-の Wave N-A code agent dispatch (= 2026-05-21) は 70 file 修正まで進行 後 user
-判断で中断し、 `git stash@{0}` に "Wave N-A code changes WIP" として保全。
-future wave で `git stash apply` から 再開可能。
+- `Component.build` field 削除 (= Component 5 → 4 field)。
+- BuildSpec / Linux container build service の実装。
+- public artifact concept を source snapshot locator model に寄せる redesign。
+
+詳細 design は [RFC 0001](docs/rfc/0001-kernel-kind-agnostic.md) を参照。
 
 ## Spec策定中 — Wave M-G takosumi.com 単一 Pages project 統合 (2026-05-20, Unreleased)
 
@@ -52,9 +68,10 @@ JSR package surface には一切触らない (docs / deploy / wrangler / workflo
   - `/docs/*` → VitePress build (= `docs/.vitepress/dist/` を overlay。 既存
     `docs/.vitepress/config.ts` の `base: "/docs/"` 設定が production / local
     の両 mount で kept)
-  - `/contexts/*` → JSON-LD vocab + kind catalog (= `spec/contexts/` を
-    overlay。 wire URL `https://takosumi.com/contexts/v1.jsonld` /
-    `https://takosumi.com/contexts/kinds/v1/<name>.jsonld` が resolve)
+  - `/contexts/*` → JSON-LD vocab (= `spec/contexts/` を overlay。 wire URL
+    `https://takosumi.com/contexts/v1.jsonld` / related context documents が
+    resolve。component kind descriptors は後続 Wave N-A で
+    `packages/plugins/spec/kinds/` に移動)
 - **Files**:
   - **新規**: `website/build.sh` (= 3-step merge build、 fail-closed)、
     `website/wrangler.toml` (= `name = takosumi-website`,

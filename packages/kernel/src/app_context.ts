@@ -120,6 +120,7 @@ import {
 import {
   createKernelPluginRegistry,
   type KernelPluginRegistry,
+  type KindAliasMap,
 } from "./plugins/mod.ts";
 
 export interface AppContextOptions {
@@ -139,6 +140,7 @@ export interface AppContextOptions {
     readonly secret?: string;
   };
   readonly plugins?: readonly KernelPlugin[];
+  readonly kindAliases?: KindAliasMap;
   readonly pluginRegistry?: KernelPluginRegistry;
 }
 
@@ -601,7 +603,9 @@ export function buildKernelPluginRegistry(
   options: AppContextOptions = {},
 ): KernelPluginRegistry {
   return options.pluginRegistry ??
-    createKernelPluginRegistry(options.plugins ?? []);
+    createKernelPluginRegistry(options.plugins ?? [], {
+      kindAliases: options.kindAliases,
+    });
 }
 
 function assertNoStrictRuntimeAdapterFallbacks(

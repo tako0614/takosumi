@@ -3,7 +3,7 @@
  * connector on the runtime-agent.
  *
  * Operators register this plugin by spreading it into the plain-array
- * `plugins` option of `createPaaSApp({ plugins: [cloudflareWorkerProvider(...)] })`.
+ * `plugins` option of `createPaaSApp({ kindAliases, plugins: [cloudflareWorkerProvider(...)] })`.
  * The underlying lifecycle / connector wiring is unchanged; this file is a
  * thin KernelPlugin adapter around the existing
  * `createCloudflareWorkersProvider()` factory.

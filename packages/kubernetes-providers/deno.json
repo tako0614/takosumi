@@ -4,10 +4,12 @@
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
+    "./web-service": "./src/worker-kubernetes.ts",
     "./worker": "./src/worker-kubernetes.ts"
   },
   "imports": {
     "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
+    "@takos/takosumi-plugins/kinds": "jsr:@takos/takosumi-plugins@^0.12.0/kinds",
     "@takos/takosumi-plugins/shape-providers/web-service/k3s-deployment": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/web-service/k3s-deployment"
   },
   "tasks": {

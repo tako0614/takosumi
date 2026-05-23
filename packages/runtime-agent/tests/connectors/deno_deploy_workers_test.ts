@@ -151,7 +151,7 @@ Deno.test(
     assert.deepEqual(requestedHashes, ["sha256:abc"]);
     assert.equal(result.handle, "org-1/fn");
     assert.equal(result.outputs.url, "https://fn.deno.dev");
-    assert.equal(result.outputs.scriptName, "fn");
+    assert.equal(result.outputs.id, "fn");
     assert.equal(result.outputs.version, "dpl-001");
     // GET list, POST create project, POST deployment
     assert.equal(calls.length, 3);

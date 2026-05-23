@@ -187,8 +187,8 @@ subsystem の rate limit を受けうる。limiter は超過分の `debug` 行�
 
 - `reference/architecture/operator-boundaries` — placement of the log sink in
   the operator trust model and the redaction trust boundary.
-- `reference/drift-detection` — relationship
-  between observation logs and the RevokeDebt taxonomy.
+- `reference/drift-detection` — relationship between observation logs and the
+  RevokeDebt taxonomy.
 - `reference/architecture/policy-risk-approval-error-model` — error / fatal
   mapping to the closed DomainErrorCode enum.
 

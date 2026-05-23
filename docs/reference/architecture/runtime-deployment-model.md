@@ -190,7 +190,7 @@ Takosumi v1 is an invariant-first, space-isolated, snapshot-backed,
 graph-shaped, write-ahead-operation-journaled PaaS operation kernel.
 ```
 
-manifest は authoring 入力である。deployment は Space の中で resolve される。
+AppSpec は authoring 入力である。deployment は Space の中で resolve される。
 deployment は immutable な snapshot 群、operation journal、observation の
 集合である。
 

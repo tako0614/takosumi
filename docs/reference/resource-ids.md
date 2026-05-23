@@ -18,27 +18,27 @@ organization / billing ID はこの一覧に含めません。
 
 ## Kernel-owned ID kind
 
-| Kind | Suffix | 説明 |
-| --- | --- | --- |
-| `space` | kebab-case | operator が指定する Space id。 |
-| `installation` | ULID or stable name | Space 内の Installation。 |
-| `deployment` | ULID | apply / rollback ごとに kernel が生成。 |
-| `journal` | ULID | WAL entry。 |
-| `operation` | ULID | OperationPlan entry。 |
-| `resolution` | sha256 hex | ResolutionSnapshot の content address。 |
-| `desired` | sha256 hex | DesiredSnapshot の content address。 |
-| `activation` | ULID | ActivationSnapshot。 |
-| `object` | kebab-case | materialized object の logical id。 |
-| `link` | `<consumer>.<slot>` | namespace / binding link。 |
-| `generated` | `<owner-kind>:<owner-id>/<reason>` | kernel 生成 object。 |
-| `exposure` | kebab-case | route / ingress exposure。 |
-| `revoke-debt` | ULID | RevokeDebt entry。 |
-| `approval` | ULID | approval record。 |
-| `connector` | kebab-case | runtime-agent connector id。 |
-| `artifact` | sha256 hex | artifact content digest。 |
-| `catalog-release` | sha256 hex or kebab-case tag | catalog release descriptor。 |
-| `policy` | sha256 hex | policy bundle digest。 |
-| `group` | kebab-case | rollout / activation group。 |
+| Kind              | Suffix                             | 説明                                    |
+| ----------------- | ---------------------------------- | --------------------------------------- |
+| `space`           | kebab-case                         | operator が指定する Space id。          |
+| `installation`    | ULID or stable name                | Space 内の Installation。               |
+| `deployment`      | ULID                               | apply / rollback ごとに kernel が生成。 |
+| `journal`         | ULID                               | WAL entry。                             |
+| `operation`       | ULID                               | OperationPlan entry。                   |
+| `resolution`      | sha256 hex                         | ResolutionSnapshot の content address。 |
+| `desired`         | sha256 hex                         | DesiredSnapshot の content address。    |
+| `activation`      | ULID                               | ActivationSnapshot。                    |
+| `object`          | kebab-case                         | materialized object の logical id。     |
+| `link`            | `<consumer>.<slot>`                | namespace / binding link。              |
+| `generated`       | `<owner-kind>:<owner-id>/<reason>` | kernel 生成 object。                    |
+| `exposure`        | kebab-case                         | route / ingress exposure。              |
+| `revoke-debt`     | ULID                               | RevokeDebt entry。                      |
+| `approval`        | ULID                               | approval record。                       |
+| `connector`       | kebab-case                         | runtime-agent connector id。            |
+| `artifact`        | sha256 hex                         | artifact content digest。               |
+| `catalog-release` | sha256 hex or kebab-case tag       | catalog release descriptor。            |
+| `policy`          | sha256 hex                         | policy bundle digest。                  |
+| `group`           | kebab-case                         | rollout / activation group。            |
 
 ## Examples
 

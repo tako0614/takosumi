@@ -147,7 +147,11 @@ export function optionalStringRecord(
 
 export interface WebServiceSpec {
   readonly image?: string;
-  readonly artifact?: { readonly kind: string; readonly uri?: string };
+  readonly artifact?: {
+    readonly kind: string;
+    readonly uri?: string;
+    readonly hash?: string;
+  };
   readonly port: number;
   readonly scale: { readonly min: number; readonly max: number };
   readonly resources?: {
@@ -169,6 +173,7 @@ export function parseWebServiceSpec(value: JsonValue): WebServiceSpec {
     artifact: artifactRaw === undefined ? undefined : {
       kind: requireString(artifactRaw, "kind", `${shape}.artifact`),
       uri: optionalString(artifactRaw, "uri", `${shape}.artifact`),
+      hash: optionalString(artifactRaw, "hash", `${shape}.artifact`),
     },
     port: requireNumber(obj, "port", shape),
     scale: {
@@ -251,7 +256,11 @@ export function parsePostgresVersionSpec(
 
 export interface SelfhostWebServiceSpec {
   readonly image?: string;
-  readonly artifact?: { readonly kind: string; readonly uri?: string };
+  readonly artifact?: {
+    readonly kind: string;
+    readonly uri?: string;
+    readonly hash?: string;
+  };
   readonly port: number;
   readonly env?: Record<string, string>;
   readonly bindings?: Record<string, string>;
@@ -290,6 +299,7 @@ export function parseSelfhostWebServiceSpec(
     artifact: artifactRaw === undefined ? undefined : {
       kind: requireString(artifactRaw, "kind", `${shape}.artifact`),
       uri: optionalString(artifactRaw, "uri", `${shape}.artifact`),
+      hash: optionalString(artifactRaw, "hash", `${shape}.artifact`),
     },
     port: requireNumber(obj, "port", shape),
     env: optionalStringRecord(obj, "env", shape),
@@ -313,7 +323,6 @@ export interface WorkerSpec {
   readonly compatibilityDate: string;
   readonly compatibilityFlags?: readonly string[];
   readonly env?: Readonly<Record<string, string>>;
-  readonly routes?: readonly string[];
 }
 
 function parseArtifact(value: JsonValue, shape: string): Artifact {
@@ -347,11 +356,14 @@ export function parseWorkerSpec(value: JsonValue): WorkerSpec {
   if (artifactRaw === undefined) {
     throw new Error(`${shape}.artifact is required`);
   }
+  const artifact = parseArtifact(artifactRaw, shape);
+  if (artifact.kind !== "js-bundle") {
+    throw new Error(`${shape}.artifact.kind must be js-bundle`);
+  }
   return {
-    artifact: parseArtifact(artifactRaw, shape),
+    artifact,
     compatibilityDate: requireString(obj, "compatibilityDate", shape),
     compatibilityFlags: optionalStringArray(obj, "compatibilityFlags", shape),
     env: optionalStringRecord(obj, "env", shape),
-    routes: optionalStringArray(obj, "routes", shape),
   };
 }

@@ -26,8 +26,8 @@ Deno.test("Worker shape exposes id and version", () => {
 
 Deno.test("Worker capabilities cover serverless traits", () => {
   assert.ok(WorkerKind.capabilities.includes("scale-to-zero"));
-  assert.ok(WorkerKind.capabilities.includes("websocket"));
-  assert.ok(WorkerKind.capabilities.includes("crons"));
+  assert.ok(WorkerKind.capabilities.includes("long-request"));
+  assert.ok(WorkerKind.capabilities.includes("geo-routing"));
 });
 
 Deno.test("Worker outputFields list is fixed", () => {
@@ -38,8 +38,26 @@ Deno.test("Worker outputFields list is fixed", () => {
   ]);
 });
 
-Deno.test("Worker validateSpec accepts a minimal spec", () => {
-  assert.deepEqual(specIssues(validSpec()), []);
+Deno.test("Worker validateSpec accepts a resolved uploaded artifact", () => {
+  assert.deepEqual(
+    specIssues({
+      artifact: { kind: "js-bundle", hash: "sha256:abc" },
+      compatibilityDate: "2025-01-01",
+    }),
+    [],
+  );
+});
+
+Deno.test("Worker validateSpec rejects source artifact paths", () => {
+  const issues = specIssues({
+    artifact: "dist/worker.mjs",
+    compatibilityDate: "2025-01-01",
+  });
+  assert.ok(
+    issues.some((i) =>
+      i.path === "$.artifact" && i.message.includes("resolved artifact object")
+    ),
+  );
 });
 
 Deno.test("Worker validateSpec accepts optional fields", () => {
@@ -48,7 +66,6 @@ Deno.test("Worker validateSpec accepts optional fields", () => {
       ...validSpec(),
       compatibilityFlags: ["nodejs_compat"],
       env: { LOG_LEVEL: "info" },
-      routes: ["api.example.com/*"],
     }),
     [],
   );

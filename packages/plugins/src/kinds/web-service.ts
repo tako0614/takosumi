@@ -1,101 +1,50 @@
-import type { Artifact, Shape, ShapeValidationIssue } from "takosumi-contract";
+import type { Shape, ShapeValidationIssue } from "takosumi-contract";
 import {
   isNonEmptyString,
+  isNonNegativeInteger,
   isPositiveInteger,
   isRecord,
   optionalNonEmptyString,
-  optionalPositiveInteger,
   optionalStringRecord,
   requireNonEmptyString,
   requirePositiveInteger,
   requireRoot,
 } from "./_validators.ts";
+import {
+  WEB_SERVICE_CAPABILITIES,
+  WEB_SERVICE_DESCRIPTION,
+  WEB_SERVICE_KIND_ID,
+  WEB_SERVICE_KIND_VERSION,
+  WEB_SERVICE_OUTPUT_FIELDS,
+  type WebServiceCapability,
+  type WebServiceOutputs,
+  type WebServiceResources,
+  type WebServiceScale,
+  type WebServiceSpec,
+} from "./web-service.generated.ts";
 
-export type WebServiceCapability =
-  | "always-on"
-  | "scale-to-zero"
-  | "websocket"
-  | "long-request"
-  | "sticky-session"
-  | "geo-routing"
-  | "crons"
-  | "private-networking";
-
-export interface WebServiceScale {
-  readonly min: number;
-  readonly max: number;
-  readonly idleSeconds?: number;
-}
-
-export interface WebServiceHealth {
-  readonly path: string;
-  readonly intervalSeconds?: number;
-  readonly timeoutSeconds?: number;
-}
-
-export interface WebServiceResources {
-  readonly cpu?: string;
-  readonly memory?: string;
-}
-
-export interface WebServiceSpec {
-  /** OCI image shorthand for `artifact: { kind: "oci-image", uri: image }`. */
-  readonly image?: string;
-  /** Full Artifact descriptor. `kind` is typically `"oci-image"` for this
-   *  shape. Connectors may declare other accepted kinds. */
-  readonly artifact?: Artifact;
-  readonly port: number;
-  readonly scale: WebServiceScale;
-  readonly env?: Readonly<Record<string, string>>;
-  readonly bindings?: Readonly<Record<string, string>>;
-  readonly health?: WebServiceHealth;
-  readonly resources?: WebServiceResources;
-  readonly command?: readonly string[];
-  readonly domains?: readonly string[];
-}
-
-export interface WebServiceOutputs {
-  readonly url: string;
-  readonly internalHost: string;
-  readonly internalPort: number;
-}
-
-const CAPABILITIES: readonly WebServiceCapability[] = [
-  "always-on",
-  "scale-to-zero",
-  "websocket",
-  "long-request",
-  "sticky-session",
-  "geo-routing",
-  "crons",
-  "private-networking",
-];
-
-const OUTPUT_FIELDS: readonly string[] = [
-  "url",
-  "internalHost",
-  "internalPort",
-];
+export type {
+  WebServiceCapability,
+  WebServiceOutputs,
+  WebServiceResources,
+  WebServiceScale,
+  WebServiceSpec,
+};
 
 /**
- * `web-service@v1` component kind descriptor — long-running HTTP service
- * backed by an OCI image. Materialized by a provider plugin at apply time.
- *
- * Note: not part of the v1 AppSpec frozen kind catalog
- * (`worker / postgres / object-store / oidc / custom-domain`); kept here
- * for the existing provider plugin contract.
+ * `web-service@v1` component kind descriptor. Materialized by a provider
+ * plugin at apply time.
  */
 export const WebServiceKind: Shape<
   WebServiceSpec,
   WebServiceOutputs,
   WebServiceCapability
 > = {
-  id: "web-service",
-  version: "v1",
-  description:
-    "Long-running HTTP service backed by an OCI image or equivalent.",
-  capabilities: CAPABILITIES,
-  outputFields: OUTPUT_FIELDS,
+  id: WEB_SERVICE_KIND_ID,
+  version: WEB_SERVICE_KIND_VERSION,
+  description: WEB_SERVICE_DESCRIPTION,
+  capabilities: WEB_SERVICE_CAPABILITIES,
+  outputFields: WEB_SERVICE_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
     validateArtifactSource(value, issues);
@@ -103,29 +52,8 @@ export const WebServiceKind: Shape<
     validateScale(value.scale, issues);
     optionalStringRecord(value.env, "$.env", issues);
     optionalStringRecord(value.bindings, "$.bindings", issues);
-    if (value.health !== undefined) validateHealth(value.health, issues);
     if (value.resources !== undefined) {
       validateResources(value.resources, issues);
-    }
-    if (value.command !== undefined) {
-      if (!Array.isArray(value.command)) {
-        issues.push({ path: "$.command", message: "must be an array" });
-      } else if (!value.command.every(isNonEmptyString)) {
-        issues.push({
-          path: "$.command",
-          message: "must contain only non-empty strings",
-        });
-      }
-    }
-    if (value.domains !== undefined) {
-      if (!Array.isArray(value.domains)) {
-        issues.push({ path: "$.domains", message: "must be an array" });
-      } else if (!value.domains.every(isNonEmptyString)) {
-        issues.push({
-          path: "$.domains",
-          message: "must contain only non-empty strings",
-        });
-      }
     }
   },
   validateOutputs(value, issues) {
@@ -176,10 +104,15 @@ function validateScale(value: unknown, issues: ShapeValidationIssue[]): void {
     issues.push({ path: "$.scale", message: "must be an object" });
     return;
   }
-  requirePositiveInteger(value.min, "$.scale.min", issues);
+  if (!isNonNegativeInteger(value.min)) {
+    issues.push({
+      path: "$.scale.min",
+      message: "must be a non-negative integer",
+    });
+  }
   requirePositiveInteger(value.max, "$.scale.max", issues);
   if (
-    isPositiveInteger(value.min) && isPositiveInteger(value.max) &&
+    isNonNegativeInteger(value.min) && isPositiveInteger(value.max) &&
     value.min > value.max
   ) {
     issues.push({
@@ -187,30 +120,6 @@ function validateScale(value: unknown, issues: ShapeValidationIssue[]): void {
       message: "scale.min must be less than or equal to scale.max",
     });
   }
-  optionalPositiveInteger(value.idleSeconds, "$.scale.idleSeconds", issues);
-}
-
-function validateHealth(value: unknown, issues: ShapeValidationIssue[]): void {
-  if (!isRecord(value)) {
-    issues.push({ path: "$.health", message: "must be an object" });
-    return;
-  }
-  if (!isNonEmptyString(value.path) || !value.path.startsWith("/")) {
-    issues.push({
-      path: "$.health.path",
-      message: "must be an absolute URL path",
-    });
-  }
-  optionalPositiveInteger(
-    value.intervalSeconds,
-    "$.health.intervalSeconds",
-    issues,
-  );
-  optionalPositiveInteger(
-    value.timeoutSeconds,
-    "$.health.timeoutSeconds",
-    issues,
-  );
 }
 
 function validateResources(

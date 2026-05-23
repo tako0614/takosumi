@@ -70,12 +70,12 @@ Deno.serve({ port: 8788 }, app.fetch);
 `createPaaSApp` does:
 
 1. Loads runtime config from env
-2. Registers Takosumi curated 4 component kinds (`worker` / `postgres` /
-   `object-store` / `custom-domain`) and the materializer host. No cloud SDK
-   code ships with the kernel; cloud-backed `KernelPlugin` factories are
+2. Registers artifact kind metadata used by the artifact routes. Component kind
+   descriptors and providers are operator-supplied; the kernel does not define
+   contract-owned component kinds. Cloud-backed `KernelPlugin` factories are
    imported separately from `@takos/takosumi-<cloud>-providers` packages and
-   attached via `plugins: [...]`. Operators can also pass inline-function
-   materializers via `materializers: [...]`.
+   attached via `plugins: [...]` plus an operator `kindAliases` map when short
+   aliases are desired.
 3. Builds `AppContext` with adapter ports (auth / kms / secrets / queue /
    storage / observability / objectStorage / runtimeAgentRegistry / etc)
 4. Mounts the route modules that match the configured process role:
@@ -98,8 +98,8 @@ list.
 
 - [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)
   — executor / data plane
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — shape
-  catalog + provider plugins
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
+  reference kind descriptors + provider helpers
 - [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — operator CLI
 - [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) — type
   contract

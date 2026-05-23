@@ -1,5 +1,5 @@
 /**
- * Production factory for the curated set of shape-providers.
+ * Production factory for the Takos reference set of shape-providers.
  *
  * Every provider is a paper-thin HTTP wrapper around a runtime-agent: the
  * kernel posts lifecycle envelopes (apply / destroy / describe) to the
@@ -28,7 +28,6 @@ import type {
   DatabasePostgresCapability,
   ObjectStoreCapability,
   WebServiceCapability,
-  WorkerCapability,
 } from "../kinds/mod.ts";
 
 import { RuntimeAgentLifecycle } from "./_runtime_agent_lifecycle.ts";
@@ -226,7 +225,7 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
       "long-request",
       "geo-routing",
       "crons",
-    ] satisfies readonly WorkerCapability[],
+    ] satisfies readonly string[],
   },
   {
     id: "@takos/cloudflare-dns",
@@ -274,7 +273,7 @@ const DENO_DEPLOY_PROVIDERS: readonly ProviderEntry[] = [
       "scale-to-zero",
       "long-request",
       "geo-routing",
-    ] satisfies readonly WorkerCapability[],
+    ] satisfies readonly string[],
   },
 ];
 

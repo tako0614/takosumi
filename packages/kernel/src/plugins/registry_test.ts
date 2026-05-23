@@ -33,12 +33,16 @@ Deno.test("registry exposes registered plugins in registration order", () => {
   );
 });
 
-Deno.test("registry resolves built-in short name to canonical URI lookup", () => {
+Deno.test("registry resolves operator alias to kind URI lookup", () => {
   const workerPlugin = buildPlugin(
     "@takos/workers-reference",
     ["https://takosumi.com/kinds/v1/worker"],
   );
-  const registry = createKernelPluginRegistry([workerPlugin]);
+  const registry = createKernelPluginRegistry([workerPlugin], {
+    kindAliases: {
+      worker: "https://takosumi.com/kinds/v1/worker",
+    },
+  });
 
   assert.equal(
     findPluginForKind(registry, "worker")?.name,
@@ -116,11 +120,14 @@ Deno.test("registry refuses plugin without apply()", () => {
   );
 });
 
-Deno.test("normalizeKindToUri short names resolve to canonical URI", () => {
+Deno.test("normalizeKindToUri resolves only operator-provided aliases", () => {
   assert.equal(
-    normalizeKindToUri("worker"),
+    normalizeKindToUri("worker", {
+      worker: "https://takosumi.com/kinds/v1/worker",
+    }),
     "https://takosumi.com/kinds/v1/worker",
   );
+  assert.equal(normalizeKindToUri("worker"), "worker");
   assert.equal(
     normalizeKindToUri("https://takosumi.com/kinds/v1/postgres"),
     "https://takosumi.com/kinds/v1/postgres",

@@ -124,7 +124,7 @@ Deno.test(
       result.outputs.url,
       "https://my-script.my-team.workers.dev",
     );
-    assert.equal(result.outputs.scriptName, "my-script");
+    assert.equal(result.outputs.id, "my-script");
     assert.equal(calls.length, 2);
     const [subdomainCall, putCall] = calls;
     assert.equal(subdomainCall.method, "GET");

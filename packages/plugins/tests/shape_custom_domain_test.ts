@@ -23,66 +23,14 @@ Deno.test("CustomDomain validateSpec accepts minimal spec", () => {
   assert.deepEqual(
     specIssues({
       name: "api.example.com",
-      target: "https://internal.example.com",
     }),
     [],
   );
 });
 
 Deno.test("CustomDomain validateSpec rejects missing name", () => {
-  const issues = specIssues({ target: "https://internal.example.com" });
+  const issues = specIssues({});
   assert.ok(issues.some((i) => i.path === "$.name"));
-});
-
-Deno.test("CustomDomain validateSpec accepts auto certificate", () => {
-  assert.deepEqual(
-    specIssues({
-      name: "api.example.com",
-      target: "https://internal.example.com",
-      certificate: { kind: "auto" },
-    }),
-    [],
-  );
-});
-
-Deno.test("CustomDomain validateSpec requires secretRef when kind=provided", () => {
-  const issues = specIssues({
-    name: "api.example.com",
-    target: "https://internal.example.com",
-    certificate: { kind: "provided" },
-  });
-  assert.ok(issues.some((i) => i.path === "$.certificate.secretRef"));
-});
-
-Deno.test("CustomDomain validateSpec rejects unknown certificate kind", () => {
-  const issues = specIssues({
-    name: "api.example.com",
-    target: "https://internal.example.com",
-    certificate: { kind: "byo-only" },
-  });
-  assert.ok(issues.some((i) => i.path === "$.certificate.kind"));
-});
-
-Deno.test("CustomDomain validateSpec accepts redirect entries", () => {
-  assert.deepEqual(
-    specIssues({
-      name: "api.example.com",
-      target: "https://internal.example.com",
-      redirects: [
-        { from: "/old", to: "/new", code: 301 },
-      ],
-    }),
-    [],
-  );
-});
-
-Deno.test("CustomDomain validateSpec rejects bad redirect code", () => {
-  const issues = specIssues({
-    name: "api.example.com",
-    target: "https://internal.example.com",
-    redirects: [{ from: "/old", to: "/new", code: 400 }],
-  });
-  assert.ok(issues.some((i) => i.path === "$.redirects[0].code"));
 });
 
 Deno.test("CustomDomain validateOutputs accepts minimal outputs", () => {

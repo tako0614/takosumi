@@ -49,10 +49,8 @@ Deno.test("DatabasePostgres validateSpec accepts full spec", () => {
     specIssues({
       version: "16",
       size: "medium",
-      storage: { sizeGiB: 100, type: "ssd" },
-      backups: { enabled: true, retentionDays: 14 },
+      storage: { sizeGiB: 100 },
       highAvailability: true,
-      extensions: ["pgcrypto", "uuid-ossp"],
     }),
     [],
   );
@@ -65,15 +63,6 @@ Deno.test("DatabasePostgres validateSpec rejects invalid storage size", () => {
     storage: { sizeGiB: 0 },
   });
   assert.ok(issues.some((i) => i.path === "$.storage.sizeGiB"));
-});
-
-Deno.test("DatabasePostgres validateSpec rejects bad backups.enabled type", () => {
-  const issues = specIssues({
-    version: "16",
-    size: "small",
-    backups: { enabled: "yes" },
-  });
-  assert.ok(issues.some((i) => i.path === "$.backups.enabled"));
 });
 
 Deno.test("DatabasePostgres validateOutputs requires connection string", () => {

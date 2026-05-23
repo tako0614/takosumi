@@ -51,8 +51,8 @@ approval が無効化される条件は
 
 ## Risk
 
-Risk enum は [Risk Taxonomy](./risk-taxonomy.md) が canonical source です。代表的な
-category は次の通りです。
+Risk enum は [Risk Taxonomy](./risk-taxonomy.md) が canonical source
+です。代表的な category は次の通りです。
 
 ```txt
 destructive-change | credential-exposure | network-exposure | quota-exhaustion |

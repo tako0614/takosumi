@@ -24,8 +24,8 @@ dry-run の結果は response でその場で返り、 apply の結果は Deploy
 | ---------------- | ------------------------------- | -------------------------- |
 | Installer bearer | `Authorization: Bearer <token>` | `/v1/installations/*` 全体 |
 
-token は Takosumi Accounts が actor 単位に発行する scoped credential です。
-Space scope, capability scope は token claims に含まれます。
+token は operator が actor 単位に発行する scoped credential です。 Space scope,
+capability scope は token claims に含まれます。
 
 ## `POST /v1/installations/dry-run` {#post-v1-installations-dry-run}
 
@@ -44,12 +44,20 @@ Space scope, capability scope は token claims に含まれます。
 }
 ```
 
-| field         | required    | 説明                                   |
-| ------------- | ----------- | -------------------------------------- |
-| `spaceId`     | yes         | 対象 Space                             |
-| `source.kind` | yes         | `git` / `local` / `catalog` / `bundle` |
-| `source.url`  | conditional | `git` 時に required                    |
-| `source.ref`  | conditional | `git` 時に branch / tag / commit       |
+| field           | required    | 説明                                                 |
+| --------------- | ----------- | ---------------------------------------------------- |
+| `spaceId`       | yes         | 対象 Space                                           |
+| `source.kind`   | yes         | `git` / `local` / `catalog` / `bundle`               |
+| `source.url`    | conditional | `git` 時に required                                  |
+| `source.ref`    | conditional | `git` 時に branch / tag / commit                     |
+| `source.uri`    | conditional | `bundle` / `catalog` 時の resolved source URI        |
+| `source.digest` | conditional | `bundle` 時の bundle digest。TOCTOU 防止にも使える。 |
+
+`source.kind: "bundle"` は build service が作った resolved AppSpec bundle の
+handoff です。
+
+bundle 内の AppSpec は artifact path が `kind` と `hash` を持つ descriptor に
+解決済みです。component `build` field や overlay field は含みません。
 
 ### レスポンス
 
@@ -124,9 +132,6 @@ Installation を作成し、 最初の Deployment を実行します。
     "manifestDigest": "sha256:...",
     "status": "succeeded",
     "outputs": {
-      "builds": [
-        { "component": "web", "digest": "sha256:...", "uri": "..." }
-      ],
       "resources": [
         {
           "component": "web",
@@ -151,7 +156,7 @@ Installation を作成し、 最初の Deployment を実行します。
 > `@takos/aws-rds`) は **provider id** (= 各 `KernelPlugin` factory が宣言する
 > 安定 id) で、 operator が import する **package id** (=
 > `@takos/takosumi-cloudflare-providers` / `@takos/takosumi-aws-providers`) とは
-> 別概念。 詳細は [Provider Plugins](./providers.md) を参照。
+> 別概念。 詳細は [Provider plugin](./providers.md) を参照。
 
 ## `POST /v1/installations/{id}/deployments/dry-run` {#post-v1-installations-id-deployments-dry-run}
 
@@ -179,8 +184,9 @@ source omit 時は Installation に紐づく前回 source を再 fetch します
 
 ## `POST /v1/installations/{id}/deployments` {#post-v1-installations-id-deployments}
 
-既存 Installation に対して新 Deployment を実行します。 build artifact 再生成、
-resource update / create / delete を伴います。
+既存 Installation に対して新 Deployment を実行します。resolved source の検証と
+resource update / create / delete を伴います。source から artifact を作る処理は
+Installer API の外側で行います。
 
 ### リクエスト
 
@@ -259,12 +265,10 @@ data backup / restore は別 feature。
 
 ### `Installation` {#installation}
 
-この status は takosumi kernel / installer の runtime status です。Takosumi
-operator account-plane の Installation ledger が外部公開する `installing` /
-`ready` / `failed` / `suspended` / `exported` とは別 enum で、 operator account
-plane は kernel の `running` を Accounts 側の `ready` に map します。 export
-lifecycle は operator Installation ledger が所有するため、この API の
-Installation status には `exported` は登場しません。
+この status は takosumi kernel / installer の runtime status です。operator が
+別の public ledger を公開する場合、その status enum とは別物です。外部 ledger の
+export lifecycle は operator 側が所有するため、この API の Installation status
+には `exported` は登場しません。
 
 ```ts
 interface Installation {
@@ -287,17 +291,14 @@ interface Deployment {
   readonly source: {
     readonly kind: "git" | "local" | "catalog" | "bundle";
     readonly url?: string;
+    readonly uri?: string;
     readonly ref?: string;
     readonly commit?: string;
+    readonly digest?: string;
   };
   readonly manifestDigest: string;
   readonly status: "running" | "succeeded" | "failed" | "rolled_back";
   readonly outputs: {
-    readonly builds?: ReadonlyArray<{
-      readonly component: string;
-      readonly digest: string;
-      readonly uri: string;
-    }>;
     readonly resources?: ReadonlyArray<{
       readonly component: string;
       readonly kind: string;
@@ -339,20 +340,22 @@ interface ApiErrorEnvelope {
 | `permission_denied`   | 403  | actor が Space に対する権限不足                                                                    |
 | `not_found`           | 404  | Installation / Deployment 不在                                                                     |
 | `failed_precondition` | 409  | `expected.commit` mismatch、 既存 Installation suspended、 listen 対象 namespace path が未 publish |
-| `resource_exhausted`  | 413  | build artifact / payload が provider quota / request size 上限超過                                 |
+| `resource_exhausted`  | 413  | artifact payload / provider quota / request size 上限超過                                          |
 | `internal_error`      | 500  | unhandled exception                                                                                |
 
 ## クロスリファレンス {#cross-references}
 
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [Kind Catalog](./kind-catalog.md#component-kinds) — 4 kind の schema /
-  publishes / listens
+- [BuildSpec](./build-spec.md) — `source.kind=bundle` を作る build service input
+- [Reference Kind Registry](./kind-catalog.md#reference-component-kinds) — Takos
+  reference kind の schema / publishes / listens
 - [Architecture: Kernel](./architecture/kernel.md) — installer pipeline
   の責務境界
 
 ## 次に読む
 
 - [AppSpec](./app-spec.md) — request body の中身 (`.takosumi.yml` envelope)
+- [BuildSpec](./build-spec.md) — build service と resolved bundle の handoff
 - [Architecture: Kernel](./architecture/kernel.md) — 5 endpoint を実装する
   installer pipeline の責務境界
 - [Operator Bootstrap](../operator/bootstrap.md) — kernel を起動して 5 endpoint

@@ -4,6 +4,7 @@
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
+    "./web-service": "./src/worker-aws-fargate.ts",
     "./worker": "./src/worker-aws-fargate.ts",
     "./object-store": "./src/object-store-aws-s3.ts",
     "./postgres": "./src/postgres-aws-rds.ts",
@@ -11,6 +12,7 @@
   },
   "imports": {
     "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
+    "@takos/takosumi-plugins/kinds": "jsr:@takos/takosumi-plugins@^0.12.0/kinds",
     "@takos/takosumi-plugins/shape-providers/web-service/aws-fargate": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/web-service/aws-fargate",
     "@takos/takosumi-plugins/shape-providers/object-store/aws-s3": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/object-store/aws-s3",
     "@takos/takosumi-plugins/shape-providers/database-postgres/aws-rds": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/database-postgres/aws-rds",

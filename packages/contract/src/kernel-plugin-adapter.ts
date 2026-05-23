@@ -18,12 +18,16 @@
 
 import type { JsonObject } from "./types.ts";
 import type { PlatformContext, ProviderPlugin } from "./provider-plugin.ts";
-import type { KernelPlugin } from "./plugin.ts";
+import type {
+  KernelPlugin,
+  NamespaceMaterial,
+  ResolvedListenBinding,
+} from "./plugin.ts";
 
 /**
  * Build a `KernelPlugin` that delegates `apply()` / `destroy()` to an
- * underlying `ProviderPlugin`. The kind URI must match the canonical
- * Takosumi kind catalog entry the underlying provider materializes.
+ * underlying `ProviderPlugin`. The kind URI must match the descriptor URI
+ * the underlying provider materializes.
  *
  * `ProviderPlugin` is generic over `Spec` / `Outputs` types; we erase to
  * the generic JsonObject form so each bundled wrapper can pass its
@@ -46,8 +50,12 @@ export function kernelPluginFromProviderPlugin(
     provides: [opts.kindUri],
     capabilities,
     async apply(ctx) {
-      const result = await provider.apply(
+      const spec = mergeResolvedBindingsIntoSpec(
         (ctx.component.spec ?? {}) as JsonObject,
+        ctx.resolvedBindings,
+      );
+      const result = await provider.apply(
+        spec,
         synthesizePlatformContext(ctx.installationId),
       );
       return {
@@ -62,6 +70,119 @@ export function kernelPluginFromProviderPlugin(
       );
     },
   };
+}
+
+function mergeResolvedBindingsIntoSpec(
+  spec: JsonObject,
+  bindings: readonly ResolvedListenBinding[],
+): JsonObject {
+  if (bindings.length === 0) return spec;
+  const out: Record<string, unknown> = { ...spec };
+  const env = collectEnvBindings(bindings);
+  if (Object.keys(env).length > 0) {
+    const existing = readStringRecord(out.env, "$.env");
+    out.env = mergeWithoutConflict(existing, env, "$.env");
+  }
+  const target = collectTarget(bindings);
+  if (target !== undefined) {
+    const existingTarget = out.target;
+    if (existingTarget !== undefined && existingTarget !== target) {
+      throw new Error(
+        "listen-derived target conflicts with explicit $.target in component spec",
+      );
+    }
+    out.target = target;
+  }
+  return out as JsonObject;
+}
+
+function collectEnvBindings(
+  bindings: readonly ResolvedListenBinding[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const binding of bindings) {
+    for (const [key, value] of Object.entries(binding.envInjections)) {
+      const stringValue = envValueToString(value);
+      if (out[key] !== undefined && out[key] !== stringValue) {
+        throw new Error(`listen-derived env ${key} is defined more than once`);
+      }
+      out[key] = stringValue;
+    }
+  }
+  return out;
+}
+
+function collectTarget(
+  bindings: readonly ResolvedListenBinding[],
+): string | undefined {
+  let out: string | undefined;
+  for (const binding of bindings) {
+    if (!binding.target) continue;
+    const target = targetMaterialToString(
+      binding.target,
+      binding.namespacePath,
+    );
+    if (out !== undefined && out !== target) {
+      throw new Error("listen-derived target is defined more than once");
+    }
+    out = target;
+  }
+  return out;
+}
+
+function targetMaterialToString(
+  material: NamespaceMaterial,
+  namespacePath: string,
+): string {
+  const url = material.url;
+  if (typeof url === "string" && url.length > 0) return url;
+  const target = material.target;
+  if (typeof target === "string" && target.length > 0) return target;
+  throw new Error(
+    `listen target ${namespacePath} must publish a string url or target field`,
+  );
+}
+
+function envValueToString(
+  value: string | { readonly secretRef: string },
+): string {
+  return typeof value === "string" ? value : value.secretRef;
+}
+
+function readStringRecord(
+  value: unknown,
+  path: string,
+): Record<string, string> {
+  if (value === undefined) return {};
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${path} must be a string-valued object`);
+  }
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string") {
+      throw new Error(`${path}.${key} must be a string`);
+    }
+    out[key] = entry;
+  }
+  return out;
+}
+
+function mergeWithoutConflict(
+  explicit: Record<string, string>,
+  injected: Record<string, string>,
+  path: string,
+): Record<string, string> {
+  const out: Record<string, string> = { ...explicit };
+  for (const [key, value] of Object.entries(injected)) {
+    const existing = out[key];
+    if (existing !== undefined && existing !== value) {
+      throw new Error(
+        `listen-derived ${path}.${key} conflicts with explicit spec`,
+      );
+    }
+    out[key] = value;
+  }
+  return out;
 }
 
 /**

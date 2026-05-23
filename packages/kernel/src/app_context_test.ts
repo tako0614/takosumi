@@ -105,6 +105,15 @@ Deno.test("buildKernelPluginRegistry exposes operator-supplied plugins by kind U
   );
 });
 
+Deno.test("buildKernelPluginRegistry resolves operator kind aliases", () => {
+  const plugin = buildExamplePlugin();
+  const registry = buildKernelPluginRegistry({
+    kindAliases: { test: "https://example.test/kinds/v1/test" },
+    plugins: [plugin],
+  });
+  assert.equal(registry.findByKindRef("test")?.name, "@example/test");
+});
+
 function buildExamplePlugin(): KernelPlugin {
   return {
     name: "@example/test",

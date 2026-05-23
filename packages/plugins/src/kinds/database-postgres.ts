@@ -1,10 +1,8 @@
 import type { Shape, ShapeValidationIssue } from "takosumi-contract";
 import {
-  isNonEmptyString,
   isPositiveInteger,
   isRecord,
   optionalBoolean,
-  optionalPositiveInteger,
   requireNonEmptyString,
   requirePositiveInteger,
   requireRoot,
@@ -15,7 +13,6 @@ import {
   DATABASE_POSTGRES_KIND_ID,
   DATABASE_POSTGRES_KIND_VERSION,
   DATABASE_POSTGRES_OUTPUT_FIELDS,
-  type DatabasePostgresBackups,
   type DatabasePostgresCapability,
   type DatabasePostgresOutputs,
   type DatabasePostgresSpec,
@@ -23,7 +20,6 @@ import {
 } from "./database-postgres.generated.ts";
 
 export type {
-  DatabasePostgresBackups,
   DatabasePostgresCapability,
   DatabasePostgresOutputs,
   DatabasePostgresSpec,
@@ -46,12 +42,11 @@ const SIZES: ReadonlySet<string> = new Set(
  * `database-postgres@v1` component kind descriptor. Materialized by a
  * provider plugin (managed Postgres or self-hosted) at apply time.
  *
- * The AppSpec public name for this kind is `postgres` (see
- * `COMPONENT_KINDS` in `@takos/takosumi-contract/app-spec`); the internal
+ * The Takos reference alias for this kind is `postgres`; the internal
  * provider registry id is `database-postgres`.
  *
  * Spec / outputs / capabilities are derived from
- * `spec/contexts/kinds/v1/postgres.jsonld` via
+ * `packages/plugins/spec/kinds/v1/postgres.jsonld` via
  * `database-postgres.generated.ts`; validation diagnostics are
  * hand-written below.
  */
@@ -75,18 +70,7 @@ export const DatabasePostgresKind: Shape<
       });
     }
     if (value.storage !== undefined) validateStorage(value.storage, issues);
-    if (value.backups !== undefined) validateBackups(value.backups, issues);
     optionalBoolean(value.highAvailability, "$.highAvailability", issues);
-    if (value.extensions !== undefined) {
-      if (!Array.isArray(value.extensions)) {
-        issues.push({ path: "$.extensions", message: "must be an array" });
-      } else if (!value.extensions.every(isNonEmptyString)) {
-        issues.push({
-          path: "$.extensions",
-          message: "must contain only non-empty strings",
-        });
-      }
-    }
   },
   validateOutputs(value, issues) {
     if (!requireRoot(value, issues)) return;
@@ -118,27 +102,4 @@ function validateStorage(value: unknown, issues: ShapeValidationIssue[]): void {
       message: "must be a positive integer",
     });
   }
-  if (
-    value.type !== undefined && value.type !== "ssd" && value.type !== "hdd"
-  ) {
-    issues.push({ path: "$.storage.type", message: "must be 'ssd' or 'hdd'" });
-  }
-}
-
-function validateBackups(value: unknown, issues: ShapeValidationIssue[]): void {
-  if (!isRecord(value)) {
-    issues.push({ path: "$.backups", message: "must be an object" });
-    return;
-  }
-  if (typeof value.enabled !== "boolean") {
-    issues.push({
-      path: "$.backups.enabled",
-      message: "must be a boolean",
-    });
-  }
-  optionalPositiveInteger(
-    value.retentionDays,
-    "$.backups.retentionDays",
-    issues,
-  );
 }

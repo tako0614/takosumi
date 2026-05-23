@@ -64,6 +64,7 @@ publish されているので、 必要な cloud だけ import する:
 
 ```ts
 import { createPaaSApp } from "@takos/takosumi-kernel";
+import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import {
   cloudflareR2ObjectStoreProvider,
   cloudflareWorkerProvider,
@@ -71,6 +72,7 @@ import {
 import { awsS3ObjectStoreProvider } from "@takos/takosumi-aws-providers";
 
 const { app } = await createPaaSApp({
+  kindAliases: TAKOSUMI_REFERENCE_KIND_ALIASES,
   plugins: [
     cloudflareWorkerProvider({ accountId, apiToken }),
     cloudflareR2ObjectStoreProvider({ accountId, apiToken }),
@@ -122,11 +124,12 @@ materializer で runtime resource を materialize する。
 
 ### Component kind × Materializer
 
-- **Component kind** (Takosumi curated 4 kind): `worker` / `postgres` /
-  `object-store` / `custom-domain`。 旧 `oidc` kind は takosumi-cloud に移動 (=
-  本 repo には JSON-LD も materializer も無い)。
-- **Catalog は extensible**: operator は任意 domain で新 kind を JSON-LD 発行
-  - materializer 実装 で追加できる。
+- **Official component kind は 0**: Takosumi AppSpec は `kind` を opaque string
+  として扱い、`worker` / `postgres` などを仕様語彙として定義しない。
+- **Reference registry は外部定義**: Takos は `https://takosumi.com/kinds/v1/*`
+  で 4 kind の reference descriptor と alias map helper を publish
+  する。operator は `kindAliases` でそれを採用してもよい し、任意 domain の kind
+  URI を使ってもよい。
 - **Materializer = KernelPlugin | InlineMaterializer**: cloud provider package
   (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`)
   が `KernelPlugin` factory を export する形と、 operator が
@@ -174,7 +177,7 @@ core:
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | turnkey: kernel + plugins + installer + cli を一括取得 |
 | [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | kernel only                                            |
-| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | component kind catalog + materializer host + factories |
+| [`jsr:@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins)             | reference kind descriptors + materializer helpers      |
 | [`jsr:@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | .takosumi.yml parser + git fetch + deploy client       |
 | [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | runtime-agent (data plane: cloud SDK / OS executor)    |
 | [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                    |
@@ -204,7 +207,7 @@ takosumi/
 ├── packages/
 │   ├── contract/                @takos/takosumi-contract        — AppSpec / Component / Provider の型契約
 │   ├── runtime-agent/           @takos/takosumi-runtime-agent   — cloud SDK / OS executor (data plane)
-│   ├── plugins/                 @takos/takosumi-plugins         — component kind catalog + materializer host + factories
+│   ├── plugins/                 @takos/takosumi-plugins         — reference kind descriptors + materializer helpers
 │   ├── installer/               @takos/takosumi-installer       — .takosumi.yml parser / git fetch / deploy client
 │   ├── kernel/                  @takos/takosumi-kernel          — HTTP server + installer pipeline + storage + workers
 │   ├── cli/                     @takos/takosumi-cli             — `takosumi install` / `takosumi deploy` 等
@@ -230,7 +233,7 @@ deno test --allow-all           # workspace 全 test
 deno task check                 # 全 package type-check
 deno task fmt:check
 deno task lint
-deno task lint:json-ld          # JSON-LD kind catalog lint
+deno task lint:json-ld          # JSON-LD reference descriptor lint
 deno task publish:dry-run       # JSR package publish gate
 ```
 

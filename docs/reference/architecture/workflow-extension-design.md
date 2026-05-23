@@ -9,10 +9,10 @@ Installation / Deployment の installer lifecycle だけで、 endpoint は
 
 ## 境界 {#boundary}
 
-- build は AppSpec の `components.<name>.build` に最小 recipe として宣言する。
+- build は AppSpec ではなく BuildSpec / build service / CI に置く。
 - webhook / cron / CI trigger / pre-post automation は kernel scope 外。
 - upstream automation は source ref を選び、必要なら artifact を用意し、
-  installer API に AppSpec source を渡す。
+  installer API に AppSpec source または resolved bundle を渡す。
 - kernel は workflow-specific endpoint、trigger registration endpoint、event
   signature verification endpoint を公開しない。
 
@@ -21,7 +21,8 @@ Installation / Deployment の installer lifecycle だけで、 endpoint は
 ```text
 external trigger / CI / scheduler
   ↓ choose source ref
-  ↓ optional artifact upload
+  ↓ optional BuildSpec batch + artifact upload
+  ↓ optional source.kind=bundle handoff
 POST /v1/installations/{id}/deployments
 ```
 
@@ -30,7 +31,7 @@ endpoint を使う。 auth は `TAKOSUMI_INSTALLER_TOKEN`。
 
 ## 削除されたレガシーモデル {#removed-legacy-model}
 
-過去の raw deploy route、中間 manifest submit、retired authoring extension strip
+過去の raw deploy route、中間 AppSpec submit、retired authoring extension strip
 / string interpolation materialization は current public contract では使わない。
 AppSpec が public source of truth で、Deployment は installer lifecycle
 の結果として記録 される。

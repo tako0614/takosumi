@@ -136,7 +136,7 @@ function pickMainModule(artifact: Artifact): string {
 function outputsFor(desc: DenoDeployDescriptor): JsonObject {
   return {
     url: desc.publicUrl,
-    scriptName: desc.scriptName,
+    id: desc.scriptName,
     version: desc.deploymentId,
   };
 }

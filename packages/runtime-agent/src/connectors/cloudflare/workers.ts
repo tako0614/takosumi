@@ -130,7 +130,7 @@ function pickMainModule(artifact: Artifact): string {
 }
 
 function outputsFor(desc: CloudflareWorkersDescriptor): JsonObject {
-  return { url: desc.publicUrl, scriptName: desc.scriptName };
+  return { url: desc.publicUrl, id: desc.scriptName };
 }
 
 function handleFor(desc: CloudflareWorkersDescriptor): string {

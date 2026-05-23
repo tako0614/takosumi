@@ -224,7 +224,7 @@ model の Error fix-hint 分類 (safeFix / requiresPolicyReview / operatorFix)
   に分岐させる data)。Error は operation result の失敗理由 (resolution / apply /
   destroy が走り終わった後の outcome)。Risk は approve で吸収可能、 Error は再
   plan / 再 apply で解消する性質を持ちます。
-- **fix-hint 生成 stage**: WAL の `prepare` stage で `safeFix[]` (manifest 上
+- **fix-hint 生成 stage**: WAL の `prepare` stage で `safeFix[]` (AppSpec 上
   自動補正可能な提案) が、`pre-commit` stage で `requiresPolicyReview[]`
   (approval が要る昇格) が、`commit` / `post-commit` / `observe` / `finalize`
   stage で `operatorFix[]` (operator 介入が要る) が生成されます。 詳細 stage
@@ -240,7 +240,6 @@ model の Error fix-hint 分類 (safeFix / requiresPolicyReview / operatorFix)
 - Architecture:
   [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 - Architecture: [Space Model](./space-model.md)
-- Architecture:
-  [Drift Detection](../drift-detection.md)
+- Architecture: [Drift Detection](../drift-detection.md)
 - Reference: [Kernel HTTP API](../kernel-http-api.md)
 - Reference: [Runtime-Agent API](../runtime-agent-api.md)

@@ -15,38 +15,12 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "required": ["name"],
-    "additionalProperties": false,
+    "additionalProperties": true,
     "properties": {
       "name": {
         "type": "string",
         "minLength": 1,
         "description": "Fully-qualified domain name (e.g. `notes.example.com`)."
-      },
-      "certificate": {
-        "type": "object",
-        "required": ["kind"],
-        "description": "TLS certificate provisioning policy. `secretRef` is required when `kind: provided`.",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": ["auto", "managed", "provided"]
-          },
-          "secretRef": { "type": "string", "minLength": 1 }
-        }
-      },
-      "redirects": {
-        "type": "array",
-        "description": "HTTP redirect rules served by the domain edge.",
-        "items": {
-          "type": "object",
-          "x-ts-name": "Redirect",
-          "required": ["from", "to"],
-          "properties": {
-            "from": { "type": "string", "minLength": 1 },
-            "to": { "type": "string", "minLength": 1 },
-            "code": { "type": "integer", "enum": [301, 302, 307, 308] }
-          }
-        }
       }
     }
   },

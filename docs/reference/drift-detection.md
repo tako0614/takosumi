@@ -87,8 +87,8 @@ approval invalidation (binding が崩れた場合)
 
 - DriftIndex は ActivationSnapshot に annotation として伝播し、当該
   ActivationSnapshot が運ぶ traffic 配分の前提が崩れたかを記録します。
-- status surface (operator dashboard / CLI status / readiness check) は この
-  annotation を読んで drift 件数 / severity を表示します。
+- status surface (operator UI / CLI status / readiness check) は この annotation
+  を読んで drift 件数 / severity を表示します。
 - 影響する binding がある場合、approval invalidation の対応 trigger に 従って
   approval が `invalidated` 状態に落ちます。drift 自体が直接 invalidation
   を起こすのではなく、drift によって binding 前提が崩れた 際に
@@ -190,8 +190,8 @@ operator が手動で re-observe を要求する経路は internal control-plane
 
 関連 architecture notes:
 
-- `docs/reference/revoke-debt.md` —
-  DriftIndex の compute trigger / 比較方法 / RevokeDebt 連動の設計議論
+- `docs/reference/revoke-debt.md` — DriftIndex の compute trigger / 比較方法 /
+  RevokeDebt 連動の設計議論
 - `docs/reference/architecture/snapshot-model.md` — DesiredSnapshot /
   ObservationSet / ActivationSnapshot の関係と DriftIndex の位置付け
 - `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`

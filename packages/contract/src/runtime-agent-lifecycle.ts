@@ -39,6 +39,15 @@ export interface Artifact {
   readonly metadata?: JsonObject;
 }
 
+/**
+ * Artifact reference in a component spec.
+ *
+ * Source AppSpec authoring may use a source-root-relative build output path.
+ * Resolved specs passed to providers/runtime-agents use the content-addressed
+ * Artifact object produced by the build service.
+ */
+export type ArtifactReference = string | Artifact;
+
 /** Response shape for `POST /v1/artifacts` and inspect endpoints. */
 export interface ArtifactStored {
   readonly hash: string;

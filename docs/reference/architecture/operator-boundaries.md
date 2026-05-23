@@ -39,11 +39,11 @@ which secrets and artifacts are visible
 which groups exist or may be created
 ```
 
-manifest は Space を作成・設定しない。
+AppSpec は Space を作成・設定しない。
 
-## Public manifest は implementation コードをインストールしない {#public-manifest-does-not-install-implementation-code}
+## AppSpec は implementation コードをインストールしない {#appspec-does-not-install-implementation-code}
 
-manifest はアクティブな Space で見える catalog alias と namespace path を参照
+AppSpec はアクティブな Space で見える catalog alias と namespace path を参照
 する。implementation package を install することはない。
 
 ## Credential 境界 {#credential-boundary}
@@ -57,8 +57,8 @@ Space scope で ある。
 
 connector は operator がインストールし、operator が管理する。
 [Data Asset Model — Connector contract](./namespace-export-model.md#connector-contract)
-に従って `connector:<id>` で addressing される。public manifest が connector
-を命名 することはない。connector の可視性、acceptedKinds、signing expectation は
+に従って `connector:<id>` で addressing される。AppSpec が connector を命名
+することはない。connector の可視性、acceptedKinds、signing expectation は
 operator 統治で Space scope である。
 
 ## 本番モード {#production-mode}

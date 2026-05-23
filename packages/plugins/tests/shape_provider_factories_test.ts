@@ -104,7 +104,7 @@ const ALL_PROVIDER_IDS = [
   "@takos/selfhost-systemd",
 ];
 
-Deno.test("default opts returns the full curated set of providers", () => {
+Deno.test("default opts returns the full reference set of providers", () => {
   const providers = createTakosumiProductionProviders({
     agentUrl: "http://agent.test",
     token: "t",
@@ -165,7 +165,7 @@ Deno.test("disabling selfhost leaves only cloud providers", () => {
   }
 });
 
-Deno.test("each provider declares a curated shape@v1 and at least one capability", () => {
+Deno.test("each provider declares a reference shape@v1 and at least one capability", () => {
   const providers = createTakosumiProductionProviders({
     agentUrl: "http://agent.test",
     token: "t",

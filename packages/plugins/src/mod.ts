@@ -6,10 +6,10 @@
  * the Takosumi core distribution boots with zero cloud SDK dependency.
  * Operators import provider factories directly from those packages
  * (`@takos/takosumi-cloudflare-providers`, `@takos/takosumi-aws-providers`,
- * etc.) and pass the results to `createPaaSApp({ plugins: [...] })`.
+ * etc.) and pass the results to `createPaaSApp({ kindAliases, plugins })`.
  *
  * What `@takos/takosumi-plugins` still ships:
- *   - the kind catalog + JSON-LD bindings (`./kinds`)
+ *   - the Takos reference kind registry + JSON-LD bindings (`./kinds`)
  *   - the gateway-side request normalization helpers (`./gateway`)
  *   - the shape-provider host that the provider packages delegate to
  *     (`./shape-providers/*`)

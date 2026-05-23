@@ -46,8 +46,7 @@ export function createCoreDnsLocalProvider(
     implements: { id: "custom-domain", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
-      // Phase B: see cloud-dns.ts — `target` moved to `Component.listen`.
-      const target = (spec as { target?: string }).target ?? "";
+      const target = requireInjectedTarget(spec);
       const desc = await lifecycle.createRecord({
         fqdn: spec.name,
         target,
@@ -104,4 +103,12 @@ export class InMemoryCoreDnsLifecycle implements CoreDnsLifecycleClient {
   }): Promise<boolean> {
     return Promise.resolve(this.#records.delete(input.recordName));
   }
+}
+
+function requireInjectedTarget(spec: CustomDomainSpec): string {
+  const target = (spec as { target?: unknown }).target;
+  if (typeof target !== "string" || target.length === 0) {
+    throw new Error("custom-domain requires listen-derived target");
+  }
+  return target;
 }

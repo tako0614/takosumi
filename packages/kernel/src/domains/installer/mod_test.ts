@@ -44,6 +44,11 @@ components:
         prefix: DB
 `;
 
+const TEST_KIND_ALIASES = {
+  postgres: "https://takosumi.com/kinds/v1/postgres",
+  worker: "https://takosumi.com/kinds/v1/worker",
+} as const;
+
 async function withTempSource<T>(
   fn: (dir: string) => Promise<T>,
 ): Promise<T> {
@@ -131,6 +136,7 @@ Deno.test("installer lifecycle hooks fire onInstallStart -> onDeploymentStart ->
       recorder: events,
     });
     const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
       plugins: [dbPlugin, workerPlugin],
     });
 
@@ -173,6 +179,7 @@ Deno.test("installer lifecycle hooks fire on subsequent deployments without re-r
       recorder: events,
     });
     const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
       plugins: [dbPlugin, workerPlugin],
     });
 
@@ -210,7 +217,10 @@ Deno.test("installer onInstallStart error aborts apply and surfaces InstallerPip
       provides: ["https://takosumi.com/kinds/v1/worker"],
       recorder: [],
     });
-    const pipeline = new InstallerPipeline({ plugins: [db, worker] });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [db, worker],
+    });
 
     await assert.rejects(
       pipeline.installationApply({
@@ -246,7 +256,10 @@ Deno.test("installer onDeploymentComplete error is swallowed (post-apply hook is
           outputs: {},
         }),
     };
-    const pipeline = new InstallerPipeline({ plugins: [db, worker] });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [db, worker],
+    });
 
     const { deployment } = await pipeline.installationApply({
       spaceId: "space_test",
@@ -257,13 +270,15 @@ Deno.test("installer onDeploymentComplete error is swallowed (post-apply hook is
   });
 });
 
-Deno.test("installerProviderRegistryFromPlugins resolves built-in short name kind via canonical URI", async () => {
+Deno.test("installerProviderRegistryFromPlugins resolves operator alias via kind URI", async () => {
   const plugin = buildRecordingPlugin({
     name: "@example/worker",
     provides: ["https://takosumi.com/kinds/v1/worker"],
     recorder: [],
   });
-  const registry = installerProviderRegistryFromPlugins([plugin]);
+  const registry = installerProviderRegistryFromPlugins([plugin], {
+    worker: "https://takosumi.com/kinds/v1/worker",
+  });
 
   const result = await registry.apply({
     installationId: "ins_1",

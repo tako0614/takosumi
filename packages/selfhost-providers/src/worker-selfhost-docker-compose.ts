@@ -1,5 +1,5 @@
 /**
- * Bundled `worker@v1` KernelPlugin factory backed by a self-hosted Docker
+ * Bundled `web-service@v1` KernelPlugin factory backed by a self-hosted Docker
  * Compose stack.
  */
 
@@ -10,7 +10,7 @@ import {
   InMemoryDockerComposeLifecycle,
 } from "@takos/takosumi-plugins/shape-providers/web-service/docker-compose";
 import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
-import { KIND_URI_WORKER } from "./_kinds.ts";
+import { KIND_URI_WEB_SERVICE } from "./_kinds.ts";
 
 export interface SelfhostDockerComposeWorkerProviderOptions {
   readonly hostBinding?: string;
@@ -18,7 +18,10 @@ export interface SelfhostDockerComposeWorkerProviderOptions {
   readonly lifecycle?: DockerComposeServiceLifecycleClient;
 }
 
-export function selfhostDockerComposeWorkerProvider(
+export type SelfhostDockerComposeWebServiceProviderOptions =
+  SelfhostDockerComposeWorkerProviderOptions;
+
+export function selfhostDockerComposeWebServiceProvider(
   opts: SelfhostDockerComposeWorkerProviderOptions = {},
 ): KernelPlugin {
   const lifecycle = opts.lifecycle ?? new InMemoryDockerComposeLifecycle();
@@ -31,7 +34,11 @@ export function selfhostDockerComposeWorkerProvider(
   });
   return kernelPluginFromProviderPlugin({
     provider,
-    kindUri: KIND_URI_WORKER,
+    kindUri: KIND_URI_WEB_SERVICE,
     capabilities: ["always-on", "websocket", "long-request", "sticky-session"],
   });
 }
+
+/** @deprecated Use `selfhostDockerComposeWebServiceProvider`; this provides web-service. */
+export const selfhostDockerComposeWorkerProvider =
+  selfhostDockerComposeWebServiceProvider;

@@ -1,7 +1,7 @@
 /**
- * Generate TypeScript types from `spec/contexts/kinds/v1/*.jsonld`.
+ * Generate TypeScript types from `packages/plugins/spec/kinds/v1/*.jsonld`.
  *
- * Each kind document is the **canonical source of truth** for its
+ * Each reference kind document is the source of truth for its
  * `spec` shape (= JSON Schema 2020-12 form), `outputs` list,
  * `capabilities` enum, and the namespace pub/sub envelope
  * (`aliases` / `publishes[]` / `listens{}`). The generator emits a
@@ -106,12 +106,12 @@ interface GeneratorContext {
 }
 
 const SPEC_ROOT = fromFileUrl(
-  new URL("../spec/contexts/kinds/v1", import.meta.url),
+  new URL("../packages/plugins/spec/kinds/v1", import.meta.url),
 );
 const OUTPUT_DIR = fromFileUrl(
   new URL("../packages/plugins/src/kinds", import.meta.url),
 );
-const HEADER = "// AUTO-GENERATED FROM spec/contexts/kinds/v1/" +
+const HEADER = "// AUTO-GENERATED FROM packages/plugins/spec/kinds/v1/" +
   "<basename>.jsonld — DO NOT EDIT.\n" +
   "// Run `deno task spec:generate-ts` to refresh.\n";
 
@@ -410,6 +410,9 @@ function renderObject(
       lines.push(`  /** ${propSchema.description} */`);
     }
     lines.push(`  readonly ${propName}${optional}: ${tsType};`);
+  }
+  if (schema.additionalProperties === true) {
+    lines.push("  readonly [extension: string]: unknown;");
   }
   return `{\n${lines.join("\n")}\n}`;
 }

@@ -8,6 +8,7 @@
   },
   "imports": {
     "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
+    "@takos/takosumi-plugins/kinds": "jsr:@takos/takosumi-plugins@^0.12.0/kinds",
     "@takos/takosumi-plugins/shape-providers/worker/deno-deploy": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/worker/deno-deploy"
   },
   "tasks": {

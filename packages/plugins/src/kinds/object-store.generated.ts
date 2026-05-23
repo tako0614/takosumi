@@ -1,22 +1,16 @@
-// AUTO-GENERATED FROM spec/contexts/kinds/v1/object-store.jsonld — DO NOT EDIT.
+// AUTO-GENERATED FROM packages/plugins/spec/kinds/v1/object-store.jsonld — DO NOT EDIT.
 // Run `deno task spec:generate-ts` to refresh.
-
-export interface ObjectStoreLifecycle {
-  readonly archiveAfterDays?: number;
-  readonly expireAfterDays?: number;
-}
 
 export interface ObjectStoreSpec {
   /** Logical bucket name (provider applies its own scoping rules). */
   readonly name: string;
-  /** Lifecycle rules for stored objects. */
-  readonly lifecycle?: ObjectStoreLifecycle;
   /** Allow anonymous reads when true. */
   readonly public?: boolean;
   /** Provider region (when applicable). */
   readonly region?: string;
   /** Enable object versioning when supported. */
   readonly versioning?: boolean;
+  readonly [extension: string]: unknown;
 }
 
 export interface ObjectStoreOutputs {

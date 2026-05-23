@@ -140,20 +140,16 @@ components: { web: { kind: worker, build: { command: x, output: y } } }
   assertEquals(err.validationPath, "$.apiVersion");
 });
 
-Deno.test("parseAppSpec rejects unknown kind in component", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
+Deno.test("parseAppSpec accepts arbitrary bare component kind alias", () => {
+  const spec = parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
     kind: not-a-kind
     build: { command: x, output: y }
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "kind-catalog");
+`);
+  assertEquals(spec.components.web.kind, "not-a-kind");
 });
 
 Deno.test("parseAppSpec rejects legacy `use:` field with legacy-use phase", () => {
@@ -308,7 +304,7 @@ components:
   assertEquals(err.validationPhase, "schema");
 });
 
-Deno.test("parseAppSpec accepts built-in kind canonical URI", () => {
+Deno.test("parseAppSpec accepts reference kind URI as opaque string", () => {
   const spec = parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
@@ -359,7 +355,18 @@ components:
   );
 });
 
-Deno.test("parseAppSpec rejects non-URI / non-short-name kind", () => {
+Deno.test("parseAppSpec accepts non-URI bare kind as operator alias", () => {
+  const spec = parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: not-a-kind-and-not-a-uri
+`);
+  assertEquals(spec.components.web.kind, "not-a-kind-and-not-a-uri");
+});
+
+Deno.test("parseAppSpec rejects empty component kind", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -367,7 +374,7 @@ apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
-    kind: not-a-kind-and-not-a-uri
+    kind: ""
 `),
     AppSpecParseError,
   );

@@ -17,7 +17,7 @@ import type { SqlClient } from "./adapters/storage/sql.ts";
 import type { OperationJournalStore } from "./domains/deploy/operation_journal.ts";
 import type { RevokeDebtStore } from "./domains/deploy/revoke_debt_store.ts";
 import type { TakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store.ts";
-import { registerBundledShapesAndProviders } from "./bootstrap/registry_setup.ts";
+import { registerDefaultArtifactKinds } from "./bootstrap/registry_setup.ts";
 import { currentRuntime } from "./shared/runtime/index.ts";
 import {
   createRoleWorkerDaemon,
@@ -87,7 +87,7 @@ function resolveRevokeDebtStore(input: {
   return new InMemoryRevokeDebtStore();
 }
 
-export { registerBundledShapesAndProviders };
+export { registerDefaultArtifactKinds };
 
 /**
  * KernelPlugin instances bundled with the kernel distribution.
@@ -100,7 +100,7 @@ export { registerBundledShapesAndProviders };
  * `@takos/takosumi-selfhost-providers`). Takosumi core no longer carries
  * any cloud SDK import, so this function intentionally returns an empty
  * array: operators explicitly `import` the provider packages they want and
- * pass them to `createPaaSApp({ plugins: [...] })`.
+ * pass them to `createPaaSApp({ kindAliases, plugins: [...] })`.
  *
  * The function is retained as a no-op so existing callers don't break, but
  * its return value is `readonly []`. Future major versions may remove it.
@@ -144,7 +144,7 @@ export async function createPaaSApp(
   const runtimeConfig = options.runtimeConfig ??
     await loadRuntimeConfigFromEnv({ env: runtimeEnv });
   const role = options.role ?? processRoleFromRuntimeConfig(runtimeConfig);
-  registerBundledShapesAndProviders(runtimeEnv);
+  registerDefaultArtifactKinds();
   const context = options.context ?? await createAppContext({
     ...options,
     runtimeEnv,
@@ -218,6 +218,7 @@ export async function createPaaSApp(
     installerPublicRouteOptions: {
       pipeline: new InstallerPipeline({
         ...(options.plugins ? { plugins: options.plugins } : {}),
+        ...(options.kindAliases ? { kindAliases: options.kindAliases } : {}),
       }),
       ...(installerToken ? { getInstallerToken: () => installerToken } : {}),
     },

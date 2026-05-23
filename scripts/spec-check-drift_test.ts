@@ -1,9 +1,9 @@
 /**
  * Self-test for `spec-check-drift.ts`.
  *
- * Verifies that the drift detector:
+ * Verifies that the reference kind descriptor drift detector:
  *   1. Reports zero drift when the on-disk `.generated.ts` files match
- *      the canonical `.jsonld` sources.
+ *      the reference `.jsonld` sources.
  *   2. Reports drift when one `.jsonld` is mutated relative to its
  *      generated TS (we mutate the description field to a different
  *      string).
@@ -24,7 +24,7 @@ import { fromFileUrl } from "jsr:@std/path@^1.0.6";
 import { checkDrift } from "./spec-check-drift.ts";
 
 const WORKER_JSONLD = fromFileUrl(
-  new URL("../spec/contexts/kinds/v1/worker.jsonld", import.meta.url),
+  new URL("../packages/plugins/spec/kinds/v1/worker.jsonld", import.meta.url),
 );
 
 Deno.test("spec-check-drift reports no drift on the committed source", async () => {

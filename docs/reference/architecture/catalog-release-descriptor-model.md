@@ -143,6 +143,6 @@ descriptor URL + normalized descriptor digest + normalized context digests
 
 ## 本番ルール {#production-rule}
 
-Public v1 manifest は catalog alias を参照する。self-host 開発や catalog
+Public v1 AppSpec は catalog alias を参照する。self-host 開発や catalog
 ingestion で descriptor URL を直接参照することはあり得るが、 public v1
 のデフォルト構文ではない。

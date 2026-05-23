@@ -140,10 +140,21 @@ Deno.test("KernelPlugin.apply receives Component + buildOutput + listenedMateria
     component,
     buildOutput: { digest: "sha256:abc", uri: "file:///out" },
     listenedMaterials: { "com.example.app.db": dbMaterial },
+    resolvedBindings: [{
+      listenerComponent: "web",
+      namespacePath: "com.example.app.db",
+      options: { as: "env", prefix: "DB" },
+      envInjections: { DB_HOST: "db.internal" },
+      material: dbMaterial,
+    }],
   });
 
   assert.equal(result.providerResourceId, "rec://web");
   assert.deepEqual(seen[0].listenedMaterials["com.example.app.db"], dbMaterial);
+  assert.equal(
+    seen[0].resolvedBindings[0]?.envInjections.DB_HOST,
+    "db.internal",
+  );
   assert.equal(seen[0].buildOutput?.digest, "sha256:abc");
 });
 

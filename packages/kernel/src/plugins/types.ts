@@ -15,6 +15,8 @@ export type {
 } from "takosumi-contract";
 import type { KernelPlugin } from "takosumi-contract";
 
+export type KindAliasMap = Readonly<Record<string, string>>;
+
 export interface KernelPluginRegistry {
   /** All registered plugins, in registration order. */
   list(): readonly KernelPlugin[];
@@ -25,6 +27,11 @@ export interface KernelPluginRegistry {
    * at construction time.
    */
   findByKindUri(kindUri: string): KernelPlugin | undefined;
+  /**
+   * Resolve an AppSpec `Component.kind` value through the operator alias map
+   * and find the plugin that advertises the resulting kind URI.
+   */
+  findByKindRef(kind: string): KernelPlugin | undefined;
   /** Lookup by `name`. Returns `undefined` if not registered. */
   getByName(name: string): KernelPlugin | undefined;
 }

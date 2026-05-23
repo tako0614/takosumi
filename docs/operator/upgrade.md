@@ -23,7 +23,7 @@ installer → runtime-agent → cli → umbrella) と同期している。
 | ------------------------------- | ---------------------------------------------------------------- |
 | `@takos/takosumi-contract`      | 型契約 (semver、SemVer 適用)                                     |
 | `@takos/takosumi-kernel`        | HTTP server + apply pipeline + storage                           |
-| `@takos/takosumi-plugins`       | component kind catalog + materializer host + factories           |
+| `@takos/takosumi-plugins`       | reference kind registry + materializer host + factories          |
 | `@takos/takosumi-installer`     | `.takosumi.yml` parser + git fetch + deploy client               |
 | `@takos/takosumi-runtime-agent` | cloud connector / OS connector                                   |
 | `@takos/takosumi-cli`           | `takosumi` コマンド                                              |
@@ -82,15 +82,15 @@ production では kernel と runtime-agent を同じ release bundle から更新
 `@takos/takosumi-cli` を個別に bump する場合も、 release note の同じ bundle
 で検証された組み合わせを採用すること。
 
-| check                            | command / source                                    |
-| -------------------------------- | --------------------------------------------------- |
-| package versions                 | `deno info jsr:@takos/takosumi-kernel`              |
-| runtime-agent reported version   | runtime-agent health endpoint / startup log         |
+| check                            | command / source                                   |
+| -------------------------------- | -------------------------------------------------- |
+| package versions                 | `deno info jsr:@takos/takosumi-kernel`             |
+| runtime-agent reported version   | runtime-agent health endpoint / startup log        |
 | kernel public API smoke          | `takosumi install dry-run --source . --remote ...` |
-| schema ledger state              | release-specific operator evidence                  |
-| provider live smoke when enabled | provider-specific live provisioning task            |
+| schema ledger state              | release-specific operator evidence                 |
+| provider live smoke when enabled | provider-specific live provisioning task           |
 
-self-host connector behavior は [Self-host Notes](/operator/self-host) を
+self-host connector behavior は [セルフホスト運用](/operator/self-host) を
 production traffic 移行前に検証すること。
 
 ---
@@ -109,5 +109,5 @@ breaking note が直接書かれている。
 ## 関連ページ
 
 - [CLI Reference](../reference/cli.md) — current CLI command surface
-- [Self-host Notes](/operator/self-host) — production 配信前の checklist
+- [セルフホスト運用](/operator/self-host) — production 配信前の checklist
 - [Operator Bootstrap](/operator/bootstrap) — provider 配線手順

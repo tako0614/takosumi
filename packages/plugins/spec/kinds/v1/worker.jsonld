@@ -5,7 +5,7 @@
   "name": "worker",
   "version": "v1",
   "aliases": ["worker"],
-  "description": "Serverless JS function backed by an uploaded `js-bundle` artifact. Publishes its allocated URL to the sibling namespace path and accepts listens that map declared materials into env vars or mount points.",
+  "description": "Serverless JS function backed by an uploaded `js-bundle` artifact descriptor.",
   "x-ts": {
     "fileBasename": "worker",
     "prefix": "Worker",
@@ -15,19 +15,13 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "required": ["artifact", "compatibilityDate"],
-    "additionalProperties": false,
+    "additionalProperties": true,
     "properties": {
       "artifact": {
-        "type": "object",
-        "description": "Artifact descriptor. `artifact.kind` must be `js-bundle`; `artifact.hash` is required (no external `uri`).",
-        "required": ["kind", "hash"],
+        "description": "Resolved uploaded artifact descriptor. `kind` must be `js-bundle` and `hash` is required.",
         "x-ts-type": {
           "import": "takosumi-contract",
           "name": "Artifact"
-        },
-        "properties": {
-          "kind": { "const": "js-bundle" },
-          "hash": { "type": "string", "minLength": 1 }
         }
       },
       "compatibilityDate": {
@@ -86,12 +80,7 @@
   ],
   "capabilities": [
     "scale-to-zero",
-    "always-on",
-    "websocket",
     "long-request",
-    "sticky-session",
-    "private-networking",
-    "geo-routing",
-    "crons"
+    "geo-routing"
   ]
 }

@@ -1,14 +1,8 @@
-// AUTO-GENERATED FROM spec/contexts/kinds/v1/database-postgres.jsonld — DO NOT EDIT.
+// AUTO-GENERATED FROM packages/plugins/spec/kinds/v1/database-postgres.jsonld — DO NOT EDIT.
 // Run `deno task spec:generate-ts` to refresh.
-
-export interface DatabasePostgresBackups {
-  readonly enabled: boolean;
-  readonly retentionDays?: number;
-}
 
 export interface DatabasePostgresStorage {
   readonly sizeGiB: number;
-  readonly type?: "ssd" | "hdd";
 }
 
 export interface DatabasePostgresSpec {
@@ -16,14 +10,11 @@ export interface DatabasePostgresSpec {
   readonly size: "small" | "medium" | "large" | "xlarge";
   /** PostgreSQL major version string (e.g. `15`, `16`). */
   readonly version: string;
-  /** Managed backup policy. */
-  readonly backups?: DatabasePostgresBackups;
-  /** PostgreSQL extensions to enable (e.g. `pgvector`). */
-  readonly extensions?: readonly string[];
   /** Enable provider-managed HA replica. */
   readonly highAvailability?: boolean;
   /** Persistent volume sizing. */
   readonly storage?: DatabasePostgresStorage;
+  readonly [extension: string]: unknown;
 }
 
 export interface DatabasePostgresOutputs {

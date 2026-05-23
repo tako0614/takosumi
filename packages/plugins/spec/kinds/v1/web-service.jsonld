@@ -1,0 +1,114 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/web-service",
+  "@type": "ComponentKind",
+  "name": "web-service",
+  "version": "v1",
+  "aliases": ["web-service"],
+  "description": "Long-running HTTP service backed by an OCI image or equivalent artifact.",
+  "x-ts": {
+    "fileBasename": "web-service",
+    "prefix": "WebService",
+    "shapeId": "web-service"
+  },
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["port", "scale"],
+    "additionalProperties": true,
+    "properties": {
+      "image": {
+        "type": "string",
+        "minLength": 1,
+        "description": "OCI image shorthand for `artifact: { kind: \"oci-image\", uri: image }`."
+      },
+      "artifact": {
+        "description": "Resolved artifact descriptor. `oci-image` artifacts typically use `uri`; other provider-supported kinds may use `hash`.",
+        "x-ts-type": {
+          "import": "takosumi-contract",
+          "name": "Artifact"
+        }
+      },
+      "port": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Container listen port exposed by the service."
+      },
+      "scale": {
+        "type": "object",
+        "required": ["min", "max"],
+        "description": "Replica bounds. `min: 0` requests scale-to-zero when the chosen provider supports it.",
+        "properties": {
+          "min": { "type": "integer", "minimum": 0 },
+          "max": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "bindings": {
+        "type": "object",
+        "additionalProperties": { "type": "string" },
+        "description": "Provider-specific binding references."
+      },
+      "env": {
+        "type": "object",
+        "additionalProperties": { "type": "string" },
+        "description": "Environment variables passed to the service."
+      },
+      "resources": {
+        "type": "object",
+        "description": "Provider-portable CPU / memory hints.",
+        "properties": {
+          "cpu": { "type": "string", "minLength": 1 },
+          "memory": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "publishes": [
+    {
+      "namespacePath": "<app-id>.<component-name>",
+      "material": {
+        "url": "$outputs.url",
+        "internalHost": "$outputs.internalHost",
+        "internalPort": "$outputs.internalPort"
+      }
+    }
+  ],
+  "listens": {
+    "<sibling-namespace-path>": {
+      "shape": "env",
+      "envMap": {
+        "DESCRIPTION": "Accepts any sibling namespace material; AppSpec listen options declare `as: env` with optional `prefix:` to expand each material field into `${PREFIX}_*` env vars."
+      }
+    }
+  },
+  "outputs": [
+    {
+      "name": "url",
+      "type": "string",
+      "required": true,
+      "meaning": "Allocated public URL (scheme-bearing)."
+    },
+    {
+      "name": "internalHost",
+      "type": "string",
+      "required": true,
+      "meaning": "Provider-local service host."
+    },
+    {
+      "name": "internalPort",
+      "type": "integer",
+      "required": true,
+      "meaning": "Provider-local service port."
+    }
+  ],
+  "capabilities": [
+    "always-on",
+    "scale-to-zero",
+    "websocket",
+    "long-request",
+    "sticky-session",
+    "geo-routing",
+    "crons",
+    "private-networking"
+  ]
+}

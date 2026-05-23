@@ -19,8 +19,8 @@ A Connector identity has the closed shape:
 connector:<id>
 ```
 
-`<id>` segment は operator が管理する。 ユーザーが命名することはない。 manifest
-入力から導出されず、 ユーザー作成 manifest に現れることもない。 ユーザーは
+`<id>` segment は operator が管理する。ユーザーが命名することはない。AppSpec
+入力から導出されず、ユーザー作成 AppSpec に現れることもない。ユーザーは
 Implementation を選ぶだけで、 resolver が Implementation の accepted-kind vector
 と Space visibility に bound された Connector を選ぶ。
 
@@ -105,7 +105,7 @@ Connector はグローバルに addressing できない。 可視性は operator
 
 Resolver behaviour:
 
-- A manifest that references an Implementation whose only candidate Connector is
+- An AppSpec that references an Implementation whose only candidate Connector is
   invisible to the active Space fails resolution with a closed plan error.
 - The set of Connectors visible to a Space is recorded in the ResolutionSnapshot
   for replay; replay against a different visibility state surfaces a
@@ -160,7 +160,7 @@ upgrade path は `replace` operation で、 以前と新規の envelope version 
 ## オペレーター専用オペレーション {#operator-only-operations}
 
 次の Connector operation は operator surface に予約されている。 ユーザー作成
-manifest から address できず、 public CLI deploy path にも公開されない。
+AppSpec から address できず、 public CLI deploy path にも公開されない。
 
 - `install`: register a new `connector:<id>` with its initial record. Records
   the install in the audit log under `catalog-release-adopted`.
@@ -233,9 +233,8 @@ lifecycle envelope の wire format と error code enum は
   visibility.
 - `reference/architecture/operator-boundaries` — the trust split that keeps
   Connector credentials in the runtime-agent host.
-- `reference/architecture/operator-boundaries` — Connector consumer
-  plugin (= `KernelPlugin` materializer) authoring patterns that consume
-  Connectors.
+- `reference/architecture/operator-boundaries` — Connector consumer plugin (=
+  `KernelPlugin` materializer) authoring patterns that consume Connectors.
 
 ## 関連ページ
 

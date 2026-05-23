@@ -4,6 +4,8 @@
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
+    "./web-service-docker-compose": "./src/worker-selfhost-docker-compose.ts",
+    "./web-service-systemd": "./src/worker-selfhost-systemd.ts",
     "./worker-docker-compose": "./src/worker-selfhost-docker-compose.ts",
     "./worker-systemd": "./src/worker-selfhost-systemd.ts",
     "./object-store-minio": "./src/object-store-selfhost-minio.ts",
@@ -12,6 +14,7 @@
   },
   "imports": {
     "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
+    "@takos/takosumi-plugins/kinds": "jsr:@takos/takosumi-plugins@^0.12.0/kinds",
     "@takos/takosumi-plugins/shape-providers/web-service/docker-compose": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/web-service/docker-compose",
     "@takos/takosumi-plugins/shape-providers/web-service/systemd-unit": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/web-service/systemd-unit",
     "@takos/takosumi-plugins/shape-providers/object-store/minio": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/object-store/minio",

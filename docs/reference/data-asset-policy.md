@@ -5,6 +5,11 @@
 本リファレンスは、 current v1 実装で Takosumi が DataAsset アップロードと
 runtime-agent consume について強制する policy を記録する。
 
+DataAsset / Artifact は current implementation の operational surface です。
+Takosumi AppSpec の component kind contract には含めません。follow-up wave では
+build 後 source snapshot / git state を plugin が読む model へ寄せ、public
+artifact concept を縮小します。
+
 ## 現行の強制ポイント {#current-enforcement-points}
 
 Takosumi v1 は DataAsset policy を 3 箇所で強制する。
@@ -21,14 +26,14 @@ bearer のいずれかを受け付ける。
 
 ### Runtime-agent apply {#runtime-agent-apply}
 
-lifecycle dispatcher は `spec.artifact.kind` を connector の
+lifecycle dispatcher は resolved spec の `spec.artifact.kind` を connector の
 `acceptedArtifactKinds` と照合する。
 
 ---
 
-artifact routes は build / source transform を実行しない。 build は AppSpec の
-`component.build` と installer lifecycle の責務であり、 artifact routes は
-アップロード済み blob の保存・取得・GC だけを扱う。
+artifact routes は build / source transform を実行しない。build は BuildSpec を
+読む build service、CI、または operator automation の責務であり、artifact routes
+はアップロード済み blob の保存・取得・GC だけを扱う。
 
 ## サイズポリシー {#size-policy}
 
@@ -75,14 +80,15 @@ Failure mode:
 `Artifact.kind` は protocol 層では open だが、 各 connector は受け付けるものを
 宣言する。 例:
 
-- OCI-backed worker connectors: `oci-image`
+- OCI-backed web-service connectors: `oci-image`
 - Cloudflare Workers / Deno Deploy: `js-bundle`
 - Operator-installed custom connectors: 明示的に宣言した registered or custom
   kind
 
-runtime-agent は connector コードが動く前に mismatch を reject する。Component
-kind レベルの validation はより厳しいことがある: `worker` は build output 由来の
-`js-bundle` を要求できる。
+runtime-agent は connector コードが動く前に mismatch を reject する。reference
+component kind レベルの validation はより厳しいことがある: Takos reference
+`worker` は current resolved spec の `spec.artifact.kind: js-bundle`
+を要求できる。
 
 ## 認証ポリシー {#auth-policy}
 
@@ -112,6 +118,7 @@ test、 本リファレンスの更新が必要となる。
 ## 関連ページ
 
 - [DataAsset Kinds](./kind-catalog.md#artifact-kinds)
+- [BuildSpec](./build-spec.md)
 - [Connector Contract](./connector-contract.md)
 - [Kernel HTTP API](./kernel-http-api.md)
 - [Environment Variables](./env-vars.md)

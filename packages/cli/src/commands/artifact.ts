@@ -4,9 +4,8 @@ import { loadConfig, resolveMode } from "../config.ts";
 
 /**
  * `takosumi artifact push <file> --kind <kind>` — upload a file to the
- * kernel's content-addressed artifact store and print the resulting hash. The
- * operator typically embeds the printed hash into a manifest under
- * `artifact: { kind, hash }` and then runs `takosumi deploy`.
+ * kernel's content-addressed artifact store and print the resulting hash.
+ * Build services use the hash when producing a resolved AppSpec bundle.
  */
 
 function createPushCmd() {

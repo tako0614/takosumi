@@ -131,8 +131,8 @@ time を rendering してよい。
 - operator UI と CLI 出力は、 operator が `TAKOSUMI_LOG_TIMEZONE` 等の
   client-side flag で opt-in したときに local zone で表示してよい。 内側の値 は
   UTC のまま。
-- manifest / plan / snapshot は local-zone timestamp を運ばない。 non-UTC
-  timestamp を含む manifest は `invalid_argument` で reject される。
+- AppSpec / plan / snapshot は local-zone timestamp を運ばない。non-UTC
+  timestamp を含む AppSpec は `invalid_argument` で reject される。
 
 ## Clock and the audit chain
 

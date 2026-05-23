@@ -12,16 +12,14 @@ const root = new URL("../", import.meta.url);
 
 const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/public-spec-source-map.md",
+  "docs/reference/app-spec.md",
+  "docs/reference/build-spec.md",
+  "docs/reference/installer-api.md",
   "docs/reference/kernel-http-api.md",
   "docs/reference/runtime-agent-api.md",
-  "docs/manifest.md",
-  // Phase M Wave 1: docs/reference/manifest-validation.md was merged into
-  // docs/reference/manifest.md.
-  "docs/reference/manifest.md",
   "docs/reference/providers.md",
-  // Phase M Wave 3 Group A: docs/reference/{shapes,artifact-kinds}.md were
-  // merged into docs/reference/kind-catalog.md (shapes + component-kind-catalog
-  // + json-ld-kind-catalog + artifact-kinds → kind-catalog.md).
+  // Reference kind descriptors live in @takos/takosumi-plugins rather than
+  // the Takosumi AppSpec contract.
   "docs/reference/kind-catalog.md",
   "packages/kernel/src/domains/deploy/_internal_manifest_types.ts",
   "packages/kernel/src/domains/deploy/manifest_v1.ts",
@@ -32,6 +30,7 @@ const TAKOSUMI_OWNED_PATHS = [
   "packages/kernel/src/api/runtime_agent_routes.ts",
   "packages/kernel/src/api/readiness_routes.ts",
   "packages/kernel/src/api/openapi.ts",
+  "packages/plugins/spec/kinds",
   "packages/plugins/src/kinds",
   "packages/plugins/src/shape-providers",
   "packages/plugins/src/shape-providers/_artifact_kinds_bundled.ts",
@@ -44,10 +43,13 @@ const TAKOSUMI_OWNED_PATHS = [
 ];
 
 const REQUIRED_SPEC_KEYS = [
-  "manifest-v1",
-  "shape-catalog-v1",
+  "appspec-v1",
+  "buildspec-v1",
+  "reference-kinds-v1",
   "kernel-http-api-v1",
   "installer-api-v1",
+  "runtime-agent-api-v1",
+  "provider-plugins-v1",
   "takosumi-jsr-packages",
 ];
 

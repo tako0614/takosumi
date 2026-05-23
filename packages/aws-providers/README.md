@@ -1,25 +1,28 @@
 # @takos/takosumi-aws-providers
 
-AWS-backed `KernelPlugin` factories for the canonical Takosumi component kinds
-(`worker` / `object-store` / `postgres` / `custom-domain`). Operators import
-this package explicitly when they want AWS coverage — Takosumi core
+AWS-backed `KernelPlugin` factories for the Takos reference component kinds
+(`web-service` / `object-store` / `postgres` / `custom-domain`). Operators
+import this package explicitly when they want AWS coverage — Takosumi core
 (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses
-which provider packages to attach to `createPaaSApp({ plugins: [...] })`.
+which provider packages to attach to
+`createPaaSApp({ kindAliases, plugins: [...] })`.
 
 ## Install
 
 ```typescript
 import { createPaaSApp } from "@takos/takosumi-kernel";
+import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import {
-  awsFargateWorkerProvider,
+  awsFargateWebServiceProvider,
   awsRdsPostgresProvider,
   awsRoute53CustomDomainProvider,
   awsS3ObjectStoreProvider,
 } from "@takos/takosumi-aws-providers";
 
 const { app } = await createPaaSApp({
+  kindAliases: TAKOSUMI_REFERENCE_KIND_ALIASES,
   plugins: [
-    awsFargateWorkerProvider({
+    awsFargateWebServiceProvider({
       clusterName: env.ECS_CLUSTER,
       region: env.AWS_REGION,
     }),
@@ -34,10 +37,13 @@ const { app } = await createPaaSApp({
 
 | Factory                          | Kind URI                                      |
 | -------------------------------- | --------------------------------------------- |
-| `awsFargateWorkerProvider`       | `https://takosumi.com/kinds/v1/worker`        |
+| `awsFargateWebServiceProvider`   | `https://takosumi.com/kinds/v1/web-service`   |
 | `awsS3ObjectStoreProvider`       | `https://takosumi.com/kinds/v1/object-store`  |
 | `awsRdsPostgresProvider`         | `https://takosumi.com/kinds/v1/postgres`      |
 | `awsRoute53CustomDomainProvider` | `https://takosumi.com/kinds/v1/custom-domain` |
+
+`awsFargateWorkerProvider` remains as a deprecated compatibility alias for
+`awsFargateWebServiceProvider`.
 
 ## See also
 

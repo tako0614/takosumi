@@ -196,8 +196,7 @@ window を見込むべき。
 
 in-flight operation はステップ 5 で記録された recovery mode を通じて resume
 する。 各 Implementation が `recoveryMode = continue` と
-`recoveryMode = compensate` をどう扱うかは
-[Provider Plugins — Implementation Contract](./providers.md#implementation-contract)
+`recoveryMode = compensate` をどう扱うかは [Provider plugin](./providers.md)
 が定める。
 
 ### GroupHead と canary の状態 {#grouphead-and-canary-state}

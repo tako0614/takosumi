@@ -11,12 +11,11 @@ ObjectTarget は Object の surface と lifecycle 期待値を定義する。pub
 components:
   api:
     kind: worker
-    build:
-      command: npm ci && npm run build
-      output: dist/worker.mjs
     spec:
-      routes:
-        - /api/*
+      artifact:
+        kind: js-bundle
+        hash: sha256:...
+      compatibilityDate: "2025-01-01"
 ```
 
 public v1 は別の top-level `target` field を公開しない。component target は
@@ -60,7 +59,7 @@ resolution は決定的で fail-closed な pipeline を使う。許可された 
 
 ```text
 1. Catalog alias lookup
-   The public manifest value (e.g. `cloudflare-workers`) must resolve to
+   The public AppSpec value (e.g. `cloudflare-workers`) must resolve to
    exactly one descriptor in the CatalogRelease adopted by the current
    Space.
 

@@ -185,7 +185,7 @@ per-operation の実行である。
 reachability の smoke test である。WAL を進めず、Snapshot を materialize せず、
 `LifecycleStatus` を変えない。`describe` は「この handle の live state は何か」
 に答え、`verify` は「この connector は backend に到達できるか」に答える。 health
-は `LifecycleVerifyResult.ok` をもとに kernel / operator dashboard で
+は `LifecycleVerifyResult.ok` をもとに kernel / operator UI で
 判定され、runtime-agent は報告するだけである。意図される配置は pre-flight、
 `apply` の前であり、`connector_not_found` や `connector-extended:*` の失敗が WAL
 stage に触れる前に surface するようにする。
@@ -193,10 +193,10 @@ stage に触れる前に surface するようにする。
 ## Signature chain
 
 kernel → runtime-agent 方向は Ed25519 gateway-manifest 署名で認証される。kernel
-は runtime-agent が host を許される `(kind, provider)` ペアを記述する manifest
-に署名し、runtime-agent は enrollment 時と各 manifest refresh で署名を検証する。
-これにより、runtime-agent の能力が operator が承認した kernel identity に bind
-される。
+は runtime-agent が host を許される `(kind, provider)` ペアを記述する
+gateway-manifest に署名し、runtime-agent は enrollment 時と各 gateway-manifest
+refresh で署名を検証する。 これにより、runtime-agent の能力が operator
+が承認した kernel identity に bind される。
 
 runtime-agent → kernel 方向は別の auth path である: enrollment token が identity
 を確立し、heartbeat / lease token で runtime-agent を attach し続け、agent

@@ -1,9 +1,5 @@
 import type { ProviderPlugin, ResourceHandle } from "takosumi-contract";
-import type {
-  WorkerCapability,
-  WorkerOutputs,
-  WorkerSpec,
-} from "../../kinds/worker.ts";
+import type { WorkerOutputs, WorkerSpec } from "../../kinds/worker.ts";
 
 export interface CloudflareWorkersScriptDescriptor {
   readonly accountId: string;
@@ -37,7 +33,7 @@ export interface CloudflareWorkersProviderOptions {
   readonly clock?: () => Date;
 }
 
-const SUPPORTED_CAPABILITIES: readonly WorkerCapability[] = [
+const SUPPORTED_CAPABILITIES: readonly string[] = [
   "scale-to-zero",
   "websocket",
   "long-request",
@@ -61,7 +57,7 @@ export function createCloudflareWorkersProvider(
     implements: { id: "worker", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
-      const scriptName = scriptNameFromArtifactHash(spec);
+      const scriptName = scriptNameFromArtifactRef(spec);
       const desc = await lifecycle.putScript({
         scriptName,
         compatibilityDate: spec.compatibilityDate,
@@ -111,7 +107,7 @@ function scriptNameFromHandle(handle: ResourceHandle): string {
   return parts.at(-1) ?? handle;
 }
 
-function scriptNameFromArtifactHash(spec: WorkerSpec): string {
+function scriptNameFromArtifactRef(spec: WorkerSpec): string {
   const hash = spec.artifact.hash ?? "worker";
   // Strip `sha256:` etc. and use a kebab-cased token from the digest.
   const tail = hash.split(":").at(-1) ?? hash;

@@ -1,10 +1,9 @@
 /**
- * Bundled `worker@v1` KernelPlugin factory backed by AWS Fargate.
+ * Reference `web-service` KernelPlugin factory backed by AWS Fargate.
  *
- * Maps the canonical `worker` kind URI to an always-on container running
- * on Fargate. The wrapper passes the AppSpec component.spec through to
- * the underlying shape-provider; operators authoring the AppSpec keep the
- * shape compatible with the underlying provider (image / port / etc.).
+ * The historical `awsFargateWorkerProvider` export is retained as a
+ * compatibility alias, but it now provides the `web-service` kind URI because
+ * the underlying shape is an OCI container service rather than a JS worker.
  */
 
 import type { KernelPlugin } from "takosumi-contract/plugin";
@@ -14,7 +13,7 @@ import {
   InMemoryAwsFargateLifecycle,
 } from "@takos/takosumi-plugins/shape-providers/web-service/aws-fargate";
 import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
-import { KIND_URI_WORKER } from "./_kinds.ts";
+import { KIND_URI_WEB_SERVICE } from "./_kinds.ts";
 
 export interface AwsFargateWorkerProviderOptions {
   readonly clusterName?: string;
@@ -22,7 +21,10 @@ export interface AwsFargateWorkerProviderOptions {
   readonly lifecycle?: AwsFargateLifecycleClient;
 }
 
-export function awsFargateWorkerProvider(
+export type AwsFargateWebServiceProviderOptions =
+  AwsFargateWorkerProviderOptions;
+
+export function awsFargateWebServiceProvider(
   opts: AwsFargateWorkerProviderOptions = {},
 ): KernelPlugin {
   const clusterName = opts.clusterName ?? "takos-cluster";
@@ -36,7 +38,7 @@ export function awsFargateWorkerProvider(
   });
   return kernelPluginFromProviderPlugin({
     provider,
-    kindUri: KIND_URI_WORKER,
+    kindUri: KIND_URI_WEB_SERVICE,
     capabilities: [
       "always-on",
       "websocket",
@@ -46,3 +48,6 @@ export function awsFargateWorkerProvider(
     ],
   });
 }
+
+/** @deprecated Use `awsFargateWebServiceProvider`; this provides web-service. */
+export const awsFargateWorkerProvider = awsFargateWebServiceProvider;

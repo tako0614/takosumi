@@ -37,7 +37,7 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 ### 1. `secret-projection`
 
 - **意味**: managed secret が DesiredSnapshot から projection される際、 raw
-  値が manifest / output / log 上に露出する可能性を示す。projection を approve
+  値が AppSpec / output / log 上に露出する可能性を示す。projection を approve
   しない限り secret は materialize されない。
 - **発火 stage**: `prepare`
 - **severity**: `error`
@@ -170,7 +170,7 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 
 ### 17. `raw-secret-literal`
 
-- **意味**: manifest / DesiredSnapshot 中に raw secret literal が混入している
+- **意味**: AppSpec / DesiredSnapshot 中に raw secret literal が混入している
   疑い。kernel は値を保存しない方針でも、Risk として可視化する。
 - **発火 stage**: `prepare`
 - **severity**: `error`

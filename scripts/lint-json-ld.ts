@@ -1,12 +1,13 @@
 /**
- * Lint `spec/contexts/**\/*.jsonld` files.
+ * Lint Takosumi JSON-LD files.
  *
  * Two file shapes are accepted:
  *
  * 1. **Vocabulary root** (= e.g. `spec/contexts/v1.jsonld`). Single
  *    top-level key `@context` whose value is a JSON-LD context object.
  *    `@id` / `@type` / `name` are NOT required.
- * 2. **Kind document** (= e.g. `spec/contexts/kinds/v1/<name>.jsonld`).
+ * 2. **Reference kind document** (= e.g.
+ *    `packages/plugins/spec/kinds/v1/<name>.jsonld`).
  *    Must include `@context` / `@id` / `@type` / `name` / `aliases` /
  *    `publishes` / `listens`. `publishes` is an array of
  *    `{ namespacePath, material }` entries; `listens` is an object
@@ -26,54 +27,59 @@ interface LintIssue {
   readonly message: string;
 }
 
-const ROOT = fromFileUrl(new URL("../spec/contexts", import.meta.url));
+const ROOTS = [
+  fromFileUrl(new URL("../spec/contexts", import.meta.url)),
+  fromFileUrl(new URL("../packages/plugins/spec/kinds", import.meta.url)),
+] as const;
 
 async function main(): Promise<void> {
   const issues: LintIssue[] = [];
   let fileCount = 0;
-  try {
-    const stat = await Deno.stat(ROOT);
-    if (!stat.isDirectory) {
-      console.error(`[lint:json-ld] not a directory: ${ROOT}`);
+  for (const root of ROOTS) {
+    try {
+      const stat = await Deno.stat(root);
+      if (!stat.isDirectory) {
+        console.error(`[lint:json-ld] not a directory: ${root}`);
+        Deno.exit(2);
+      }
+    } catch (_err) {
+      console.error(`[lint:json-ld] missing directory: ${root}`);
       Deno.exit(2);
     }
-  } catch (_err) {
-    console.error(`[lint:json-ld] missing directory: ${ROOT}`);
-    Deno.exit(2);
-  }
 
-  for await (
-    const entry of walk(ROOT, { includeDirs: false, exts: [".jsonld"] })
-  ) {
-    fileCount++;
-    const text = await Deno.readTextFile(entry.path);
-    let doc: unknown;
-    try {
-      doc = JSON.parse(text);
-    } catch (err) {
-      const cause = err instanceof Error ? err.message : String(err);
-      issues.push({ path: entry.path, message: `invalid JSON: ${cause}` });
-      continue;
+    for await (
+      const entry of walk(root, { includeDirs: false, exts: [".jsonld"] })
+    ) {
+      fileCount++;
+      const text = await Deno.readTextFile(entry.path);
+      let doc: unknown;
+      try {
+        doc = JSON.parse(text);
+      } catch (err) {
+        const cause = err instanceof Error ? err.message : String(err);
+        issues.push({ path: entry.path, message: `invalid JSON: ${cause}` });
+        continue;
+      }
+      if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
+        issues.push({
+          path: entry.path,
+          message: "top-level document must be an object",
+        });
+        continue;
+      }
+      const obj = doc as Record<string, unknown>;
+      if (obj["@context"] === undefined) {
+        issues.push({ path: entry.path, message: "missing @context" });
+        continue;
+      }
+      if (isVocabularyRoot(obj)) continue;
+      requireNonEmptyString(obj["@id"], "@id", entry.path, issues);
+      requireNonEmptyString(obj["@type"], "@type", entry.path, issues);
+      requireNonEmptyString(obj["name"], "name", entry.path, issues);
+      checkAliases(obj["aliases"], entry.path, issues);
+      checkPublishes(obj["publishes"], entry.path, issues);
+      checkListens(obj["listens"], entry.path, issues);
     }
-    if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
-      issues.push({
-        path: entry.path,
-        message: "top-level document must be an object",
-      });
-      continue;
-    }
-    const obj = doc as Record<string, unknown>;
-    if (obj["@context"] === undefined) {
-      issues.push({ path: entry.path, message: "missing @context" });
-      continue;
-    }
-    if (isVocabularyRoot(obj)) continue;
-    requireNonEmptyString(obj["@id"], "@id", entry.path, issues);
-    requireNonEmptyString(obj["@type"], "@type", entry.path, issues);
-    requireNonEmptyString(obj["name"], "name", entry.path, issues);
-    checkAliases(obj["aliases"], entry.path, issues);
-    checkPublishes(obj["publishes"], entry.path, issues);
-    checkListens(obj["listens"], entry.path, issues);
   }
 
   if (issues.length > 0) {

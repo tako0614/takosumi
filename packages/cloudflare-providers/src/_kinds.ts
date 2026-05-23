@@ -1,17 +1,15 @@
 /**
- * Canonical kind URIs of the 4 built-in Takosumi component kinds, re-
- * exported from the contract so the provider wrappers reference them by
- * name instead of repeating the literal URI in each file.
- *
- * This is a per-package copy (Phase D extracted the bundled wrappers out
- * of `@takos/takosumi-plugins`; each `@takos/takosumi-<cloud>-providers`
- * package keeps its own copy so the kind URI binding lives next to the
- * factory it parameterises).
+ * Reference Takos-published component kind URIs. These are registry
+ * descriptors supplied by `@takos/takosumi-plugins`, not contract-owned definitions in the
+ * Takosumi AppSpec contract.
  */
 
-import { KIND_URI_BY_NAME } from "takosumi-contract/app-spec";
+import { TAKOSUMI_REFERENCE_KIND_URIS } from "@takos/takosumi-plugins/kinds";
 
-export const KIND_URI_WORKER = KIND_URI_BY_NAME.worker;
-export const KIND_URI_POSTGRES = KIND_URI_BY_NAME.postgres;
-export const KIND_URI_OBJECT_STORE = KIND_URI_BY_NAME["object-store"];
-export const KIND_URI_CUSTOM_DOMAIN = KIND_URI_BY_NAME["custom-domain"];
+export const KIND_URI_WORKER = TAKOSUMI_REFERENCE_KIND_URIS.worker;
+export const KIND_URI_WEB_SERVICE = TAKOSUMI_REFERENCE_KIND_URIS["web-service"];
+export const KIND_URI_POSTGRES = TAKOSUMI_REFERENCE_KIND_URIS.postgres;
+export const KIND_URI_OBJECT_STORE =
+  TAKOSUMI_REFERENCE_KIND_URIS["object-store"];
+export const KIND_URI_CUSTOM_DOMAIN =
+  TAKOSUMI_REFERENCE_KIND_URIS["custom-domain"];

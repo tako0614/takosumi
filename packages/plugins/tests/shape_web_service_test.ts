@@ -44,6 +44,17 @@ Deno.test("WebService validateSpec accepts a minimal spec", () => {
   );
 });
 
+Deno.test("WebService validateSpec accepts scale-to-zero minimum", () => {
+  assert.deepEqual(
+    specIssues({
+      image: "oci://ghcr.io/me/api:latest",
+      port: 8080,
+      scale: { min: 0, max: 3 },
+    }),
+    [],
+  );
+});
+
 Deno.test("WebService validateSpec rejects missing image and artifact", () => {
   const issues = specIssues({ port: 8080, scale: { min: 1, max: 3 } });
   assert.ok(
@@ -110,26 +121,13 @@ Deno.test("WebService validateSpec accepts optional fields", () => {
     specIssues({
       image: "oci://x",
       port: 8080,
-      scale: { min: 1, max: 3, idleSeconds: 60 },
+      scale: { min: 1, max: 3 },
       env: { LOG_LEVEL: "info" },
       bindings: { DB_URL: "${ref:db.connectionString}" },
-      health: { path: "/healthz", intervalSeconds: 10 },
       resources: { cpu: "256m", memory: "512Mi" },
-      command: ["node", "server.js"],
-      domains: ["api.example.com"],
     }),
     [],
   );
-});
-
-Deno.test("WebService validateSpec rejects non-absolute health path", () => {
-  const issues = specIssues({
-    image: "oci://x",
-    port: 8080,
-    scale: { min: 1, max: 3 },
-    health: { path: "healthz" },
-  });
-  assert.ok(issues.some((i) => i.path === "$.health.path"));
 });
 
 Deno.test("WebService validateOutputs accepts a complete outputs", () => {

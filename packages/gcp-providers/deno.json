@@ -4,12 +4,14 @@
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
+    "./web-service": "./src/worker-gcp-cloud-run.ts",
     "./worker": "./src/worker-gcp-cloud-run.ts",
     "./object-store": "./src/object-store-gcp-gcs.ts",
     "./postgres": "./src/postgres-gcp-cloud-sql.ts"
   },
   "imports": {
     "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
+    "@takos/takosumi-plugins/kinds": "jsr:@takos/takosumi-plugins@^0.12.0/kinds",
     "@takos/takosumi-plugins/shape-providers/web-service/cloud-run": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/web-service/cloud-run",
     "@takos/takosumi-plugins/shape-providers/object-store/gcp-gcs": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/object-store/gcp-gcs",
     "@takos/takosumi-plugins/shape-providers/database-postgres/cloud-sql": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/database-postgres/cloud-sql"

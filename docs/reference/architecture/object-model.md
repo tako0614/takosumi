@@ -97,10 +97,9 @@ revoke 参加は lifecycle class で制限される。`external-source` と
 の external ownership invariant の再宣言である。
 
 外部 cleanup が必要で外部システムが revoke を reject または ack できなかった
-とき、link の owner は
-[Drift Detection](../drift-detection.md)
-に従って `RevokeDebt` record を queue し、object は debt が clear されるまで
-`debt` state に入る。
+とき、link の owner は [Drift Detection](../drift-detection.md) に従って
+`RevokeDebt` record を queue し、object は debt が clear されるまで `debt` state
+に入る。
 
 ## Revoke 参加マトリクス {#revoke-participation-matrix}
 

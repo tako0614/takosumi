@@ -89,8 +89,8 @@ Bootstrap 完了後に operator が kernel を操作するための初期 creden
   (re-init 防止)
 
 将来 operator bootstrap CLI を追加する場合は、token を CLI 側にも copy して
-scrolloff 後に取り戻せるようにしてよい。 現在の public `takosumi` CLI は
-manifest deploy engine であり、この bootstrap protocol を直接実行しない。
+scrolloff 後に取り戻せるようにしてよい。 現在の public `takosumi` CLI は AppSpec
+deploy engine であり、この bootstrap protocol を直接実行しない。
 
 ## Stage 5 — catalog-release-adopt
 
@@ -185,7 +185,7 @@ Bootstrap は再起動で重複実行されない。
 
 ## CLI Exposure
 
-public な `takosumi` CLI は manifest deploy engine であり、この bootstrap
+public な `takosumi` CLI は AppSpec deploy engine であり、この bootstrap
 protocol を **実行しない**。 bootstrap は現在、 kernel 起動 / operator
 管理のデプロイ自動化 / 内部サービスによって駆動される。
 

@@ -176,8 +176,8 @@ hash chain に連結される。
 | `kernel-upgrade-completed` | 全 pod が new binary で steady state に達した時        |
 | `agent-skew-rejected`      | enrollment / heartbeat で skew check が reject した時  |
 
-audit event は migration の各 phase で emit され、 operator dashboard が
-tracking に使う。
+audit event は migration の各 phase で emit され、 operator UI が tracking
+に使う。
 
 ## Failure modes
 

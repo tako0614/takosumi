@@ -25,7 +25,7 @@ material は生成されず**、 mutation API は射影されません。
 - 許可: select / get / list / describe / subscribe
 - 不許可: resource を変更する全ての呼び出し
 - 典型例: `worker` component が `postgres` component の `read` link で status
-  dashboard を構築する、 下流 space が外部 tenant の `object-store` component
+  view を構築する、下流 Space が外部 Space の `object-store` component
   を解析専用 で消費する
 
 ### `read-write`
@@ -51,8 +51,8 @@ operation (credential rotation、 recreate、 re-shard、 drop) を provider 境
   export が発行した link の revoke など) は kernel の grant model 経由
 - 既定では `admin` にはなりません。 admin を含む default は link 上で明示宣言
   が必要で、 `safeDefaultAccess` からは導出されません
-- 典型例: tenant の database を管理する operator 向け control plane space
-  (tenant space では稀)
+- 典型例: database を管理する operator 向け control plane Space (application
+  Space では稀)
 
 ### `invoke-only`
 
@@ -132,5 +132,5 @@ approval invalidation trigger の全リストは [Closed Enums](./closed-enums.m
 ## 関連ページ {#related-pages}
 
 - [Closed Enums](./closed-enums.md)
-- [Kind Catalog](./kind-catalog.md#component-kinds)
-- [Provider Plugins](./providers.md)
+- [Reference Kind Registry](./kind-catalog.md#reference-component-kinds)
+- [Provider plugin](./providers.md)

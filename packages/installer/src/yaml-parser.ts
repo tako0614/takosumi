@@ -16,10 +16,7 @@ import {
   APP_SPEC_API_VERSION,
   type AppSpec,
   type Component,
-  COMPONENT_KINDS,
   type ComponentKindRef,
-  isComponentKind,
-  isKindUri,
   type ListenOptions,
   type NamespacePath,
 } from "@takos/takosumi-contract/app-spec";
@@ -226,32 +223,20 @@ function validateComponent(name: string, raw: unknown): Component {
 }
 
 /**
- * Validate the `kind` field of a component. Accepts either:
- *   - a built-in short name (`worker` / `postgres` / ...);
- *   - the canonical URI of a built-in kind
- *     (e.g. `https://takosumi.com/kinds/v1/worker`); or
- *   - an operator-defined kind URI (any `https://` / `http://` URI).
- *
- * Returns the original authoring form (= preserves short name vs URI as
- * written). Use `normalizeComponentKind()` to map built-in URIs back to
- * the short name when downstream logic needs identity checks.
+ * Validate the `kind` field of a component. The AppSpec parser only requires
+ * a non-empty string and preserves the authoring form. Short aliases and URI
+ * meanings are resolved by the operator distribution, not by the Takosumi
+ * contract or parser.
  */
 function validateComponentKind(value: unknown, path: string): ComponentKindRef {
   if (typeof value !== "string" || value.length === 0) {
     throw new AppSpecParseError(
-      `${path} must be a non-empty string (built-in short name or kind URI)`,
+      `${path} must be a non-empty string`,
       "kind-catalog",
       path,
     );
   }
-  if (isComponentKind(value)) return value;
-  if (isKindUri(value)) return value;
-  throw new AppSpecParseError(
-    `${path} must be one of ${COMPONENT_KINDS.join(", ")} or a kind URI ` +
-      `(https://... or http://...); got ${JSON.stringify(value)}`,
-    "kind-catalog",
-    path,
-  );
+  return value;
 }
 
 function validateBuild(raw: unknown, path: string) {

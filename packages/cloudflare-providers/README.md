@@ -1,15 +1,17 @@
 # @takos/takosumi-cloudflare-providers
 
-Cloudflare-backed `KernelPlugin` factories for the canonical Takosumi component
+Cloudflare-backed `KernelPlugin` factories for the Takos reference component
 kinds (`worker` / `object-store` / `custom-domain`). Operators import this
 package explicitly when they want Cloudflare coverage — Takosumi core
 (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses
-which provider packages to attach to `createPaaSApp({ plugins: [...] })`.
+which provider packages to attach to
+`createPaaSApp({ kindAliases, plugins: [...] })`.
 
 ## Install
 
 ```typescript
 import { createPaaSApp } from "@takos/takosumi-kernel";
+import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import {
   cloudflareCustomDomainProvider,
   cloudflareR2ObjectStoreProvider,
@@ -17,6 +19,7 @@ import {
 } from "@takos/takosumi-cloudflare-providers";
 
 const { app } = await createPaaSApp({
+  kindAliases: TAKOSUMI_REFERENCE_KIND_ALIASES,
   plugins: [
     cloudflareWorkerProvider({ accountId: env.CLOUDFLARE_ACCOUNT_ID }),
     cloudflareR2ObjectStoreProvider({ accountId: env.CLOUDFLARE_ACCOUNT_ID }),
