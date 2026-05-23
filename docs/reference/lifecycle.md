@@ -34,13 +34,13 @@ stage record を書きます。provider side effect 前に `prepare` / `pre-comm
 `(spaceId, operationPlanDigest, journalEntryId, stage)` + 同一 effect digest の
 replay は冪等、 異なる effect digest は hard-fail。
 
-CatalogRelease verification: publisher key enrollment / 署名検証 / Space
-adoption record / rotation audit は registry domain primitive として実装済み。
-`AppContext` 構成時、 WAL は adopted CatalogRelease を pre/post-commit
-verification として呼びます。 pre-commit 失敗は provider 呼出前に terminal
-`abort`。 post-commit 失敗は verification failure を journal し、 committed
-effect に対する RevokeDebt を enqueue して observe / finalize evidence を残し
-ます。
+Operator implementation verification: `AppContext` は operator-provided
+`kindAliases`、 provider implementations、runtime-agent connector inventory
+から構成されます。WAL は provider / connector resolution input を
+pre/post-commit verification として扱い ます。pre-commit 失敗は provider
+呼出前に terminal `abort`。post-commit 失敗は verification failure を journal
+し、committed effect に対する RevokeDebt を enqueue して observe / finalize
+evidence を残します。
 
 Compensation: runtime-agent protocol は connector-native `compensate` を持ち、
 専用 operation が無い connector は handle-keyed `destroy` を fallback。
@@ -56,9 +56,10 @@ recovery は internal lifecycle orchestration で駆動:
 - `inspect`: persist 済 WAL entries と latest stage summary を返す
 - `continue`: AppSpec / mode から再現した OperationPlan digest が一致する場合
   のみ provider fencing token 付きで replay。 不一致は fail-closed
-- `compensate`: 同 digest / phase かつ `commit` 以降に到達した WAL を terminal
-  `abort` に進め、 provider を呼ばずに `activation-rollback` RevokeDebt を
-  enqueue
+- `compensate`: `commit` 未到達の WAL は provider を呼ばず terminal `abort` に
+  進める。`commit` 以降に到達した WAL は `activation-rollback` RevokeDebt を
+  enqueue し、cleanup worker が connector-native `compensate` または
+  handle-keyed `destroy` fallback を呼ぶ
 
 `apply` / `destroy` は lock 取得 → 実行 → release を `try { ... } finally` で
 囲みます。 lock contention 時は client timeout で諦めるか、 operator が
@@ -70,20 +71,24 @@ single-writer apply tier (deploy traffic を 1 pod に固定する topology) を
 v1 では 6 phase を 1:1 に区別します。各 phase は対応する Snapshot を入力 /
 出力として動き、WAL は phase ごとに stage を進めます。
 
-| Phase      | 入力 Snapshot                       | 出力 Snapshot / 副作用                                                | 触る WAL stage                                 |
-| ---------- | ----------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------- |
-| `apply`    | DesiredSnapshot                     | OperationPlan + ResolutionSnapshot                                    | `prepare` → `pre-commit` → `commit`            |
-| `activate` | ResolutionSnapshot                  | post-activate Exposure health (`unknown / observing`)                 | `commit` → `post-commit`                       |
-| `destroy`  | ResolutionSnapshot                  | DesiredSnapshot 上で managed/generated を削除しきった状態             | `pre-commit` → `commit` → `finalize`           |
-| `rollback` | 直前 ResolutionSnapshot             | prior ResolutionSnapshot を再 materialize したスナップショット        | `pre-commit` (compensate) → `commit` → `abort` |
-| `recovery` | WAL 復元状態                        | recovery mode に応じた終端 (continue / compensate / inspect)          | (resume from last stage)                       |
-| `observe`  | live runtime-agent describe results | Exposure health (`healthy / degraded / unhealthy`) と RevokeDebt 候補 | `observe` (long-lived)                         |
+| Phase      | 入力 Snapshot                       | 出力 Snapshot / 副作用                                                | 触る WAL stage                                                   |
+| ---------- | ----------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `apply`    | DesiredSnapshot                     | OperationPlan + ResolutionSnapshot + provider resources               | `prepare` → `pre-commit` → `commit` → `post-commit` → `finalize` |
+| `activate` | ResolutionSnapshot                  | ActivationSnapshot / GroupHead update + initial Exposure health       | `post-commit` → `observe`                                        |
+| `destroy`  | ResolutionSnapshot                  | DesiredSnapshot 上で managed/generated を削除しきった状態             | `pre-commit` → `commit` → `finalize`                             |
+| `rollback` | 直前 ResolutionSnapshot             | prior ResolutionSnapshot を再 materialize したスナップショット        | `pre-commit` (compensate) → `commit` → `abort`                   |
+| `recovery` | WAL 復元状態                        | recovery mode に応じた終端 (continue / compensate / inspect)          | (resume from last stage)                                         |
+| `observe`  | live runtime-agent describe results | Exposure health (`healthy / degraded / unhealthy`) と RevokeDebt 候補 | `observe` (long-lived)                                           |
 
+- installer apply endpoint の `Deployment.status: "succeeded"` は、その
+  Deployment を current として使うために必要な `apply` と `activate`
+  の同期部分が 完了したことを表す。`observe` worker による health
+  更新はその後も継続する。
 - `apply` の `prepare` で OperationPlan が確定。 idempotency key
   `(spaceId, operationPlanDigest, journalEntryId)` が各 entry に振られ、 同じ
   key の retry は副作用を増やしません。
 - `activate` 直後の Exposure health は `unknown` で始まり、 `observe` 進行で
-  `observing → healthy / degraded / unhealthy` へ遷移します。
+  `healthy / degraded / unhealthy` へ遷移します。
 - `destroy` は `finalize` で managed / generated lifecycle class object を完全
   削除。 external / operator / imported は触りません。
 - `rollback` は `compensate` operation を `pre-commit` で起動して `abort` 終端
@@ -114,7 +119,7 @@ WAL stage を進めず、 Snapshot を materialize せず、 connector ごとの
 ず、 OperationPlan を `prepare` で止める選択を operator が取れます。
 
 field 仕様は
-[Runtime-Agent API — `POST /v1/lifecycle/verify`](./runtime-agent-api.md#post-v1lifecycleverify)
+[Runtime-Agent API — `POST /v1/lifecycle/verify`](./runtime-agent-api.md#post-v1-lifecycle-verify)
 参照。
 
 ## 回復モード {#recovery-modes}
@@ -148,15 +153,16 @@ mode を繰り返しても重複 effect は出ません。
 - `inspect`: 副作用なし WAL dump。 未完了 WAL は新規 apply / destroy を block。
 - `continue`: 要求 phase と OperationPlan digest が unfinished WAL と一致時の み
   resume。
-- `compensate`: `commit` 以降到達の WAL entry に `activation-rollback`
-  RevokeDebt を open し `abort` を追記。
+- `compensate`: `commit` 未到達なら副作用なしで `abort` を追記。`commit`
+  以降到達の WAL entry は `activation-rollback` RevokeDebt を open し、 cleanup
+  worker が connector compensate / destroy fallback を実行。
 - runtime-agent protocol は connector-native `compensate` を destroy fallback
   付きで公開。 apply rollback は provider compensate operation を優先。
 - RevokeDebt store: retry attempt / policy-controlled aging / manual reopen /
   clearance / connector-backed cleanup worker / worker daemon 周期実行を実装
   済み。
-- CatalogRelease adoption / 署名検証は registry domain に実装。 WAL は adopted
-  release を fail-closed な pre/post-commit verification として呼ぶ。
+- operator implementation config / provider / connector resolution は
+  fail-closed な pre/post-commit verification として扱う。
 - apply / destroy commit 呼出には WAL idempotency tuple が
   `PlatformContext.operation` と runtime-agent `idempotencyKey` 経由で渡る。
 

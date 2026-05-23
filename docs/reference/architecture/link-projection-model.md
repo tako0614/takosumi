@@ -29,7 +29,7 @@ Link:
   policyDecisionRefs: []
 ```
 
-ProjectionSelection は Link field であり、public AppSpec object ではない。
+ProjectionSelection は Link field として扱う internal selection record です。
 
 ## Space ルール {#space-rule}
 
@@ -55,7 +55,7 @@ Secret export はプレーンな `env` に projection してはならない。
 
 grant を生み出す export は、export が `safeDefaultAccess` を宣言していない限り
 明示的な `access` を必要とする。closed な v1 access mode 語彙は
-[Target Model — Access mode enum](./target-model.md) にある。
+[Kind Resolution Model — Access mode enum](./kind-resolution-model.md) にある。
 
 ```yaml
 components:

@@ -11,7 +11,7 @@ CLI の役割:
   - dry-run を表示する
   - rollback を呼ぶ
   - kernel server を起動する
-  - artifact / migration / runtime-agent helper を提供する
+  - migration / runtime-agent helper を提供する
 ```
 
 ## モード
@@ -28,8 +28,7 @@ deno install -gA -n takosumi jsr:@takos/takosumi-cli
 takosumi version
 ```
 
-サポート runtime は Deno 2.x。 CLI 単体で動き、 kernel / runtime-agent の
-install は不要です。
+サポート runtime は Deno 2.x。CLI 単体で動きます。
 
 ## 認証
 
@@ -53,23 +52,19 @@ env、 config file の `remote.url` から resolve します。
 
 ### `takosumi install <source>`
 
-新規 Installation を作成。 source は git URL / local path / catalog id を受理。
+新規 Installation を作成。remote Installer API に送る source は `git` または
+`prepared` です。
 
 ```bash
 # git source
 takosumi install --remote https://kernel.example.com \
-  --space space_personal \
+  --space space:personal \
   --source git:https://github.com/example/notes#main
 
-# local source
+# prepared source from an external build service
 takosumi install --remote https://kernel.example.com \
-  --space space_personal \
-  --source ./
-
-# catalog id
-takosumi install --remote https://kernel.example.com \
-  --space space_personal \
-  --source catalog:com.example.notes@1.0.0
+  --space space:personal \
+  --source prepared:https://build.example.com/snapshots/app-123.tar#sha256:...
 ```
 
 `--space <id>` は必須。 dry-run は次の subcommand で表示。
@@ -77,12 +72,12 @@ takosumi install --remote https://kernel.example.com \
 ### `takosumi install dry-run <source>`
 
 ```bash
-takosumi install dry-run --space space_personal \
+takosumi install dry-run --space space:personal \
   --source git:https://github.com/example/notes#main
 ```
 
 response (`changes[]` / `estimatedCost` / `expected.commit` /
-`expected.manifestDigest`) を JSON で表示。
+`expected.manifestDigest` / `expected.sourceDigest`) を JSON で表示。
 
 ### `takosumi deploy <installation-id> [--source <source>]`
 
@@ -90,7 +85,7 @@ response (`changes[]` / `estimatedCost` / `expected.commit` /
 を再 fetch。
 
 ```bash
-takosumi deploy ins_abc123 --source git:https://github.com/example/notes#main
+takosumi deploy installation:01HM9N7XK4QY8RT2P5JZF6V3W9 --source git:https://github.com/example/notes#main
 ```
 
 ### `takosumi deploy dry-run <installation-id> [--source <source>]`
@@ -102,7 +97,7 @@ takosumi deploy ins_abc123 --source git:https://github.com/example/notes#main
 過去 Deployment を元に新 Deployment を作って巻き戻す。
 
 ```bash
-takosumi rollback ins_abc123 dep_previous
+takosumi rollback installation:01HM9N7XK4QY8RT2P5JZF6V3W9 deployment:01HM9N7XK4QY8RT2P5JZF6V3WA
 ```
 
 ### `takosumi server`
@@ -126,8 +121,9 @@ takosumi init --template empty
 
 ### `takosumi artifact ...`
 
-artifact store の upload / list / delete / GC。 write 系は
-`TAKOSUMI_DEPLOY_TOKEN` を使う。 installer token とは分離する。
+operator が DataAsset extension を有効化した場合だけ使う optional helper。
+upload / list / delete / GC の write 系は `TAKOSUMI_DEPLOY_TOKEN` を使う。
+installer token とは分離する。
 
 ### `takosumi version`
 

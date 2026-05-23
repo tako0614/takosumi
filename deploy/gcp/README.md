@@ -1,23 +1,22 @@
 # Takos GCP Provider Runbook
 
 This directory documents the GCP surface as **operator-owned scope**: the
-kernel-side provider plugins (`packages/plugins/src/providers/gcp/`) and
-runtime-agent connectors
-(`packages/runtime-agent/src/connectors/gcp/{gcs,cloud_run,cloud_sql}.ts`) are
-production-grade and ship by default. The deploy artifact (the Terraform /
-Pulumi / Deployment Manager that lands the Takosumi kernel image and
-runtime-agent image on GCP infrastructure) is the operator's responsibility —
-Takosumi does not ship a reference IaC stack for GCP.
+operator-attached provider package (`packages/gcp-providers/`) and runtime-agent
+connectors (`packages/runtime-agent/src/connectors/gcp/`) provide GCP lifecycle
+coverage when the operator wires them into their distribution. The deploy
+artifact (the Terraform / Pulumi / Deployment Manager that lands the Takosumi
+kernel image and runtime-agent image on GCP infrastructure) is also the
+operator's responsibility. Operators provide the production-grade GCP IaC stack
+for their distribution.
 
 ## Why no reference deploy here
 
 The two reference distributions Takosumi ships (`deploy/cloudflare/` and
 `deploy/selfhosted/`) cover the substrate-neutrality claim at spec level. GCP /
-AWS / Azure / k8s are spec-compliant — operators run the kernel image on
-whatever GCP compute they prefer (Cloud Run / GKE / GCE) and point the kernel at
-a Postgres database (Cloud SQL). Once the kernel is reachable, all 4 GCP
-provider plugins (`@takos/gcp-gcs`, `@takos/gcp-cloud-run`,
-`@takos/gcp-cloud-sql`, `@takos/gcp-cloud-dns`) work without modification.
+AWS / Azure / k8s are operator-owned targets: operators run the kernel image on
+whatever GCP compute they prefer (Cloud Run / GKE / GCE), point the kernel at a
+Postgres database (Cloud SQL), and attach the GCP provider factories from
+`@takos/takosumi-gcp-providers` plus matching runtime-agent credentials.
 
 ## Required runtime shape
 

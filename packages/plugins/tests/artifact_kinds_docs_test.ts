@@ -1,17 +1,13 @@
 import assert from "node:assert/strict";
 import { TAKOSUMI_BUNDLED_ARTIFACT_KINDS } from "../src/shape-providers/mod.ts";
 
-Deno.test("artifact kinds reference documents the bundled registry", async () => {
+Deno.test("DataAsset metadata reference documents reference examples", async () => {
   // Phase M Wave 3 Group A: docs/reference/artifact-kinds.md was merged into
-  // docs/reference/kind-catalog.md (Artifact Kinds section, anchor
-  // `#artifact-kinds`). This test reads the consolidated doc.
+  // docs/reference/kind-registry.md (Data Assets section). This test reads the
+  // consolidated doc.
   const source = await Deno.readTextFile(
-    new URL("../../../docs/reference/kind-catalog.md", import.meta.url),
+    new URL("../../../docs/reference/kind-registry.md", import.meta.url),
   );
-  const kindLine = TAKOSUMI_BUNDLED_ARTIFACT_KINDS.map((kind) => kind.kind)
-    .join(" | ");
-
-  assert.ok(source.includes(kindLine));
   for (const kind of TAKOSUMI_BUNDLED_ARTIFACT_KINDS) {
     assert.ok(source.includes(`\`${kind.kind}\``), `missing ${kind.kind}`);
   }

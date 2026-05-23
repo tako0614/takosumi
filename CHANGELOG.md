@@ -14,7 +14,7 @@ Wave J → K → L の minimization sequence の自然な終点として、 tako
 **pure contract executor** に近づけるため、component kind list を contract
 から外した。
 
-- **Breaking — official component kind list is zero**:
+- **Breaking — component kind resolution is operator-owned**:
   `@takos/takosumi-contract` から `COMPONENT_KINDS` / `KIND_URI_BY_NAME` /
   `KIND_NAME_BY_URI` / `TAKOSUMI_KIND_URI_BASE` / `resolveKindUri()` /
   `kindNameFromUri()` / `isComponentKind()` / `normalizeComponentKind()`
@@ -25,23 +25,22 @@ Wave J → K → L の minimization sequence の自然な終点として、 tako
   operator-owned alias map を受け取り、short alias を provider lookup 前に URI
   解決する。URI はそのまま使われ、未解決 alias は provider operation 前に lookup
   miss として fail-closed。
-- **Reference registry**: Takos reference descriptors は
+- **Reference descriptors**: takosumi.com reference descriptors は
   `packages/plugins/spec/kinds/v1/*.jsonld` と `packages/plugins/src/kinds/` に
   移動 / rescope。`https://takosumi.com/kinds/v1/*` は external reference
-  registry であり、Takosumi AppSpec spec の official kind list ではない。
-  `@takos/takosumi-plugins/kinds` は `TAKOSUMI_REFERENCE_KIND_URIS` /
-  `TAKOSUMI_REFERENCE_KIND_ALIASES` / `TAKOSUMI_REFERENCE_KINDS` を export。
+  descriptor examples。 `@takos/takosumi-plugins/kinds` は
+  `TAKOSUMI_REFERENCE_KIND_URIS` / `TAKOSUMI_REFERENCE_KIND_ALIASES` /
+  `TAKOSUMI_REFERENCE_KINDS` を export。
 - **Provider packages**: 6 provider package は contract の removed kind helpers
   ではなく `@takos/takosumi-plugins/kinds` の reference URI helper を参照する。
-- **Docs / RFC**: AppSpec、provider、reference registry、BuildSpec、RFC 0001、
-  README / CONVENTIONS / AGENTS を更新し、official kind = 0 と external
-  reference registry の境界を明記。
+- **Docs / RFC**: AppSpec、provider、reference descriptors、BuildSpec、RFC
+  0001、 README / CONVENTIONS / AGENTS を更新し、official kind = 0 と external
+  reference descriptors の境界を明記。
 
 Remaining follow-up:
 
-- `Component.build` field 削除 (= Component 5 → 4 field)。
 - BuildSpec / Linux container build service の実装。
-- public artifact concept を source snapshot locator model に寄せる redesign。
+- operator DataAsset extension の実装面整理。
 
 詳細 design は [RFC 0001](docs/rfc/0001-kernel-kind-agnostic.md) を参照。
 
@@ -117,10 +116,11 @@ JSR package surface には一切触らない (docs / deploy / wrangler / workflo
   artifact の path / 内容は identical。
 - **Spec contract / JSR / kernel / contract / installer / provider / runtime
   には一切触らない**: 完全に docs + deploy + wrangler + workflow scope。 AppSpec
-  3-field root (Wave K)、 Component 5-field (Wave J)、 bare `apiVersion: v1`
-  (Wave L) 等の contract end-state は不変。 `deno task check` / `lint` /
-  `fmt:check` / `lint:json-ld` / `spec:check-drift` / `deno test --allow-all` 全
-  PASS で landing build (`bash website/build.sh`) も local verify 済。
+  3-field root (Wave K)、 Component 4-field (kind / spec / publish / listen)、
+  bare `apiVersion: v1` (Wave L) 等の contract end-state は不変。
+  `deno task check` / `lint` / `fmt:check` / `lint:json-ld` / `spec:check-drift`
+  / `deno test --allow-all` 全 PASS で landing build (`bash website/build.sh`)
+  も local verify 済。
 - **No version bump**: 策定中 phase かつ docs / deploy scope のみのため publish
   version は固定。 announcement 時の collective minor bump (= Wave J/K/L と同時)
   に同梱予定。
@@ -207,8 +207,8 @@ minimization。
 ## Spec策定中 — Wave J Component contract minimization (2026-05-19, Unreleased)
 
 Wave J で AppSpec contract surface を完全 kind-agnostic に minimize した
-(post-Phase-I 継続 evolution、 user mandate: 「route は特別視するべき じゃない、
-底は自由だから仕様には含めない」):
+(post-Phase-I 継続 evolution、 user mandate: route を kind-specific `spec` /
+materializer convention 側に置く):
 
 - **Breaking — `Component.routes` 削除**: top-level Component field から物理
   削除。 worker materializer (= cloudflare-workers / deno-deploy shape provider)
@@ -222,11 +222,10 @@ Wave J で AppSpec contract surface を完全 kind-agnostic に minimize した
   model する。
 - **Breaking — kernel routes machinery 削除**: `event-planner` / `rollout`
   services 完全削除 (= dormant、 installer pipeline から呼ばれ ていなかった)。
-  `compileManifestToAppSpec` が `routes: []` を常に emit (= manifest layer から
-  routes を drop、 kernel pipeline は routes を 処理しない)。 `AppSpecRoute` /
-  `DeploymentRoute` 型は type-level shim として retain (= 6 cloud provider
-  plugin の compile 互換のため)。
-- **Migration**: 旧 top-level `routes:` / `interfaces:` / `permissions:` を 含む
+  old compile layer が route declarations を drop し、kernel pipeline は route
+  declarations を処理しない。 `AppSpecRoute` / `DeploymentRoute` 型は type-level
+  shim として retain (= 6 cloud provider plugin の compile 互換のため)。
+- **Migration**: old top-level route / interface / permission fields を含む
   AppSpec は parser で `schema` phase + `unknown-key` で reject される。
   consumer は (1) routes を worker kind の `spec.routes` に nest、 (2)
   interfaces / permissions block を削除、 で migration 完了。 6 consumer apps
@@ -249,28 +248,21 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
   material を env / mount として受け取る、 の 2 つに集約。 旧 `${ref:...}` /
   `${secret-ref:...}` / `${bindings.*}` / `${secrets.*}` / `${installation.*}` /
   `${artifacts.*}` / `${params.*}` placeholder interpolation は parser から
-  完全削除。 "compiled manifest" / `workflowRef` 中間 entity も廃止。
-- **Breaking — `kind: oidc` を takosumi-cloud に移動**: 旧 frozen 5 kind 構造を
+  完全削除。 compiled intermediate / `workflowRef` 中間 entity も廃止。
+- **Breaking — `kind: oidc` を takosumi-cloud に移動**: 旧 frozen kind 構造を
   廃止し、 `oidc` を本 repo から削除。 Takosumi Accounts (= takosumi-cloud) が
   `operator.identity.oidc` namespace path に OIDC client material を publish
   し、 worker は `listen.operator.identity.oidc` で標準 env (`OIDC_ISSUER_URL` /
   `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS`) を受け取る
   形に変更。 本 repo には `spec/contexts/kinds/v1/oidc.jsonld` も `oidc`
   materializer (旧 `oidc-takosumi-accounts.ts`) も無い。
-- **Breaking — Component kind catalog は extensible**: 旧 "5 frozen" model を
-  撤回し、 Takosumi curated は 4 kind (`worker` / `postgres` / `object-store` /
-  `custom-domain`) に縮小。 新 kind は **任意 domain で JSON-LD publish +
-  materializer 実装** で追加可能。 各 kind の JSON-LD document が **spec /
-  publishes / listens / outputs を一体宣言** する。 旧 5 shape 名 (`worker@v1` /
-  `web-service@v1` / `worker@v1` / `database-postgres@v1` 等) は AppSpec / docs
-  / kernel から完全除去。
-- **Breaking — Materializer = KernelPlugin | InlineMaterializer**: kind 実装は 2
-  形態を受理する。 (1) `KernelPlugin` factory を返す plain array (= Vite plugin
-  pattern, cloud provider package が提供する形式) と (2)
-  `createPaaSApp
-  ({ materializers: [...] })` に inline 関数を渡す形式。 plugin
-  convention は 実装の 1 形態に過ぎず、 inline 関数でも contract
-  を満たせば成立する。
+- **Breaking — Component kind は external**: `worker` / `postgres` /
+  `object-store` / `custom-domain` / `web-service` は takosumi.com reference
+  descriptors が publish する external descriptor 例として扱う。新 kind は任意
+  domain の URI + optional JSON-LD descriptor + `KernelPlugin` で追加可能。
+- **Breaking — Materializer = KernelPlugin**: kind 実装は `KernelPlugin` factory
+  を返す plain array (= Vite plugin pattern, cloud provider package が提供する
+  形式) として `createPaaSApp({ plugins: [...] })` に attach する。
 - **Breaking — Cloud provider plugins を別 package に分離**: AWS / GCP /
   Cloudflare / Kubernetes / Deno Deploy / Self-host の materializer 実装は
   `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`
@@ -284,10 +276,8 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 - **Breaking — Idempotency-Key header 廃止**: 旧 `Idempotency-Key` HTTP header
   ベースの retry semantics を撤回。 idempotency は AppSpec digest +
   Installation/Deployment id で deterministic に成立し、 別途 header は不要。
-- `KernelPlugin` plain-array attach (Wave 9 で導入) は維持。 旧
-  `createAdapters()` / port-based plugin host / `KernelPluginPortKind` /
-  `TakosumiKernelPluginManifest` / plugin marketplace / signed manifest fetch /
-  trusted publisher key registry は kernel に持たない (= 全削除済)。
+- `KernelPlugin` plain-array attach (Wave 9 で導入) は維持。provider plugin は
+  operator distribution が普通の TypeScript module として import する。
 - public deploy/install contract is reset to three concepts: AppSpec
   (`.takosumi.yml`), Installation, and Deployment. The public installer HTTP
   surface is the 5 endpoint `/v1/installations*` API.
@@ -317,8 +307,8 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 - The `.takosumi/` repository convention (project layout, workflow definitions,
   git push / webhook / build pipeline, cron / hook wiring) has moved to the
   `standalone installer` sibling product, which posts generated manifests back
-  to the kernel via `legacy raw deploy route`. Operators that want the old "drop
-  a `.takosumi/manifest.yml` and run `takosumi deploy`" UX should adopt
+  to the kernel via the deploy public route. Operators that want the old "drop a
+  `.takosumi/manifest.yml` and run `takosumi deploy`" UX should adopt
   `standalone installer`.
 - Published package imports now pin `@takos/takosumi-contract@^2.5.0`, matching
   the `TAKOSUMI_*` internal RPC naming policy.
@@ -403,23 +393,21 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 
 ### Unreleased — docs-only (trust model simplification)
 
-- **Docs-only**: CatalogRelease trust is documented as operator-pinned sha256
-  digest (`CATALOG_DIGEST`) + TLS fetch, not publisher signing. Aligns the
-  kernel docs with the ecosystem-wide "TLS + digest pin + 1 signing domain
-  (OIDC)" model (ecosystem Wave 11/12). No kernel runtime code change in this
-  changelog entry; the kernel itself still has no OIDC ID token signing and no
-  launch token signing — both belong to Takosumi Accounts. Reference:
-  [Supply Chain Trust](./docs/reference/supply-chain-trust.md),
-  [paas-provider-architecture § Supply chain trust](./docs/reference/architecture/paas-provider-architecture.md#supply-chain-trust),
-  [catalog-release-descriptor-model](./docs/reference/architecture/catalog-release-descriptor-model.md).
+- **Docs-only**: plugin loading is documented as Vite-style operator imports and
+  `createPaaSApp({ plugins })`; plugin package retrieval / verification stays
+  operator-owned. No kernel runtime code change in this changelog entry; OIDC ID
+  token signing and launch token issuance belong to Takosumi Accounts.
+  Reference: [Supply Chain Trust](./docs/reference/supply-chain-trust.md),
+  [Plugin Loading](./docs/reference/plugin-loading.md),
+  [external-descriptor-registry-model](./docs/reference/architecture/external-descriptor-registry-model.md).
 
 ### 0.15.0 — 2026-05-07
 
-- Public `legacy raw deploy route` now enforces manifest-declared
-  `spec.artifact.size` before plan / apply side effects. Sizes must be
-  non-negative integer byte counts and cannot exceed the registered
-  artifact-kind `maxSize` (falling back to the kernel artifact cap for unknown
-  kinds); oversized artifacts return 413 `resource_exhausted`.
+- Public deploy route now enforces operator DataAsset metadata size before plan
+  / apply side effects. Sizes must be non-negative integer byte counts and
+  cannot exceed the registered DataAsset metadata `maxSize` (falling back to the
+  kernel DataAsset cap for unknown metadata kinds); oversized DataAssets return
+  413 `resource_exhausted`.
 - `UsageProjectionService` now supports per-Space CPU / storage / bandwidth
   quota tiers through `LocalUsageQuotaPolicy`, including `requireWithinQuota()`
   for fail-closed usage recording.
@@ -475,10 +463,9 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 
 ### 0.13.0 — 2026-05-03
 
-- **Breaking**: `legacy raw deploy route` (deploy public route) now invokes
-  `validateManifestEnvelope()` from contract 2.4.0 — manifests missing
-  `apiVersion: "1.0"` / `kind: Manifest` are rejected with HTTP 400 and a
-  path-prefixed error.
+- **Breaking**: deploy public route now invokes `validateManifestEnvelope()`
+  from contract 2.4.0 — manifests missing `apiVersion: "1.0"` / `kind: Manifest`
+  are rejected with HTTP 400 and a path-prefixed error.
 - **Breaking**: bare provider ids (`aws-fargate`, `cloud-run`, `local-docker`,
   etc.) are now **rejected** at the resource resolver with a
   namespaced-replacement suggestion. Current manifests must write every
@@ -510,7 +497,7 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 
 ### 0.11.0 — 2026-05-03
 
-- Bundled provider catalog (`shape-providers/factories.ts`) now uses
+- Bundled shape provider registry (`shape-providers/factories.ts`) now uses
   `satisfies readonly XxxCapability[]` on each entry's `capabilities` array.
   Capability typos in the catalog are caught at compile time (TypeScript
   `TS2820` "Did you mean ..." suggestion). The runtime shape remains a
@@ -520,9 +507,9 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 
 - 21 production providers under `@takos/<cloud>-<service>` namespacing. Current
   manifests use namespaced provider ids.
-- Bundled artifact-kind registry: `oci-image`, `js-bundle`, `lambda-zip`,
-  `static-bundle`, `wasm`. `GET /v1/artifacts/kinds` lists registered kinds; CLI
-  `takosumi artifact kinds` queries it.
+- Bundled DataAsset metadata discovery: `oci-image`, `js-bundle`, `lambda-zip`,
+  `static-bundle`, `wasm`. `GET /v1/artifacts/kinds` lists registered metadata
+  kinds; CLI `takosumi artifact kinds` queries it.
 
 ## takosumi-contract
 
@@ -543,8 +530,8 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 
 ### 2.3.0 — 2026-05-02
 
-- Artifact-kind registry exports (`registerArtifactKind`, `listArtifactKinds`,
-  `getArtifactKind`).
+- DataAsset metadata kind discovery exports (`registerArtifactKind`,
+  `listArtifactKinds`, `getArtifactKind`).
 - `registerProvider` collision warning + `allowOverride` opt-out.
 
 ## takosumi (umbrella)

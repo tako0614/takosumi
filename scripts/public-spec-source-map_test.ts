@@ -20,7 +20,7 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/providers.md",
   // Reference kind descriptors live in @takos/takosumi-plugins rather than
   // the Takosumi AppSpec contract.
-  "docs/reference/kind-catalog.md",
+  "docs/reference/kind-registry.md",
   "packages/kernel/src/domains/deploy/_internal_manifest_types.ts",
   "packages/kernel/src/domains/deploy/manifest_v1.ts",
   "packages/kernel/src/api/app.ts",

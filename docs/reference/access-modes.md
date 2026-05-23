@@ -99,7 +99,7 @@ contract:
 - link が grant 発行 export を射影し、 consuming component kind spec が当該 slot
   に grant detail を要求しているとき
 - operator の policy pack が暗黙アクセスを禁止する component kind のとき
-  (`prod/strict` と `enterprise/catalog-approved-only` で有効)
+  (`prod/strict` と `enterprise/descriptor-approved-only` で有効)
 
 `access` を明示した場合、 component kind の `outputFields` が unsupported と宣言
 するモードは kernel validation で reject されます。
@@ -122,8 +122,8 @@ approval invalidation trigger の全リストは [Closed Enums](./closed-enums.m
 
 ## 関連アーキテクチャ {#related-architecture-notes}
 
-- `docs/reference/architecture/target-model.md` — access mode enum を閉じる
-  根拠と `safeDefaultAccess` の選択肢
+- `docs/reference/architecture/kind-resolution-model.md` — access mode enum
+  を閉じる 根拠と `safeDefaultAccess` の選択肢
 - `docs/reference/architecture/link-projection-model.md` — link projection が
   access mode を `listen` resolver に通す経路と effect-detail への影響
 - `docs/reference/architecture/namespace-export-model.md` — grant 発行 default
@@ -132,5 +132,5 @@ approval invalidation trigger の全リストは [Closed Enums](./closed-enums.m
 ## 関連ページ {#related-pages}
 
 - [Closed Enums](./closed-enums.md)
-- [Reference Kind Registry](./kind-catalog.md#reference-component-kinds)
-- [Provider plugin](./providers.md)
+- [Reference Kind Descriptors](./kind-registry.md#reference-component-kinds)
+- [Provider Implementations](./providers.md)

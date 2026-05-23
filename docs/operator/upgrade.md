@@ -10,11 +10,12 @@ operator runbook が満たすべき不変条件だけを記録する。
 
 ## バージョンポリシー {#version-policy}
 
-Takosumi は **core 6 package + cloud provider 6 別 package = 計 13 package** を
-JSR で独立に publish する (詳細は AGENTS.md 参照)。 各 package はまだ pre-1.0
-で、 minor bump も breaking change を含む可能性がある。
+Takosumi は **core/base 7 package (umbrella `@takos/takosumi` を含む) + provider
+6 別 package = 計 13 package** を JSR で独立に publish する (詳細は AGENTS.md
+参照)。 各 package はまだ pre-1.0 で、 minor bump も breaking change
+を含む可能性がある。
 
-### Core (publish order)
+### Core/base (publish order)
 
 下表は AGENTS.md に記録された publish 順 (= contract → kernel → plugins →
 installer → runtime-agent → cli → umbrella) と同期している。
@@ -23,7 +24,7 @@ installer → runtime-agent → cli → umbrella) と同期している。
 | ------------------------------- | ---------------------------------------------------------------- |
 | `@takos/takosumi-contract`      | 型契約 (semver、SemVer 適用)                                     |
 | `@takos/takosumi-kernel`        | HTTP server + apply pipeline + storage                           |
-| `@takos/takosumi-plugins`       | reference kind registry + materializer host + factories          |
+| `@takos/takosumi-plugins`       | reference descriptors + adapter helpers                          |
 | `@takos/takosumi-installer`     | `.takosumi.yml` parser + git fetch + deploy client               |
 | `@takos/takosumi-runtime-agent` | cloud connector / OS connector                                   |
 | `@takos/takosumi-cli`           | `takosumi` コマンド                                              |
@@ -58,7 +59,7 @@ kernel の SQL state は `storage_migrations` ledger で管理される。 produ
 各 migration entry には次が記録される:
 
 - **id** (`<domain>.<seq>.<description>`)
-- **version** (整数、catalog 順)
+- **version** (整数、apply 順)
 - **checksum** (SHA-256 hex digest of the migration body + down clause)
 - **down clause** (optional; 無い migration は forward-only)
 

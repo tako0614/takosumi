@@ -35,7 +35,7 @@ capability scope は token claims に含まれます。
 
 ```json
 {
-  "spaceId": "space_personal",
+  "spaceId": "space:personal",
   "source": {
     "kind": "git",
     "url": "https://github.com/example/notes",
@@ -44,25 +44,32 @@ capability scope は token claims に含まれます。
 }
 ```
 
-| field           | required    | 説明                                                |
-| --------------- | ----------- | --------------------------------------------------- |
-| `spaceId`       | yes         | 対象 Space                                          |
-| `source.kind`   | yes         | `git` / `local` / `catalog` / `bundle` / `prepared` |
-| `source.url`    | conditional | `git` 時に required                                 |
-| `source.ref`    | conditional | `git` 時に branch / tag / commit                    |
-| `source.uri`    | conditional | `bundle` / `catalog` 時の resolved source URI       |
-| `source.digest` | conditional | `prepared` 時の source snapshot digest。            |
+| field           | required    | 説明                                       |
+| --------------- | ----------- | ------------------------------------------ |
+| `spaceId`       | yes         | 対象 Space                                 |
+| `source.kind`   | yes         | `git` / `prepared`                         |
+| `source.url`    | yes         | git repository URL または prepared tar URL |
+| `source.ref`    | conditional | `git` 時の branch / tag / commit           |
+| `source.digest` | conditional | `prepared` 時の source snapshot digest     |
 
 `source.kind: "prepared"` は build service が作った prepared source snapshot の
-handoff です。snapshot は `.takosumi.yml` を含む tar で、kernel は
-`source.digest` を検証してから AppSpec を読みます。component `build` field や
-build recipe は含みません。
+handoff です。`source.url` は `.takosumi.yml` を含む tar snapshot を指し、
+`source.digest` はその tar payload の `sha256:<hex>` です。kernel は tar digest
+を検証してから展開し、AppSpec を読みます。component `build` field や build
+recipe は含みません。
+
+Installer API の public source kind は `git` と `prepared` だけです。CLI / build
+service / operator automation が必要に応じて source tree を取得し、remote kernel
+へはどちらかの形で渡します。
 
 ### レスポンス
 
 ```json
 {
   "source": {
+    "kind": "git",
+    "url": "https://github.com/example/notes",
+    "ref": "main",
     "commit": "abc123"
   },
   "manifestDigest": "sha256:...",
@@ -76,15 +83,35 @@ build recipe は含みません。
   },
   "expected": {
     "commit": "abc123",
+    "manifestDigest": "sha256:..."
+  }
+}
+```
+
+`expected` は resolved source kind に対応する guard です。git source では
+`expected.commit` / `expected.manifestDigest`、prepared source では
+`expected.sourceDigest` / `expected.manifestDigest` を次の apply
+に渡せば、source が変わっていたら 409 で reject されます (= TOCTOU 防止)。
+
+prepared source の dry-run response では `source.digest` と
+`expected.sourceDigest` が同じ値になります。prepared source には git commit が
+無いので `expected.commit` は出しません。
+
+```json
+{
+  "source": {
+    "kind": "prepared",
+    "url": "https://build.example.com/snapshots/app-123.tar",
+    "digest": "sha256:..."
+  },
+  "manifestDigest": "sha256:...",
+  "changes": [],
+  "expected": {
     "manifestDigest": "sha256:...",
     "sourceDigest": "sha256:..."
   }
 }
 ```
-
-`expected.commit` / `expected.manifestDigest` / `expected.sourceDigest` を次の
-apply に渡せば、 source が変わっていたら 409 で reject されます (= TOCTOU
-防止)。`sourceDigest` は prepared source の場合だけ返ります。
 
 ## `POST /v1/installations` {#post-v1-installations}
 
@@ -94,7 +121,7 @@ Installation を作成し、 最初の Deployment を実行します。
 
 ```json
 {
-  "spaceId": "space_personal",
+  "spaceId": "space:personal",
   "source": {
     "kind": "git",
     "url": "https://github.com/example/notes",
@@ -111,19 +138,36 @@ Installation を作成し、 最初の Deployment を実行します。
 し、 そのまま実行します (= 弱保証)。 `expected` を渡すと、 source が変わって
 いれば 409 `failed_precondition`。
 
+prepared source を apply する場合は `expected.sourceDigest` を渡します。
+
+```json
+{
+  "spaceId": "space:personal",
+  "source": {
+    "kind": "prepared",
+    "url": "https://build.example.com/snapshots/app-123.tar",
+    "digest": "sha256:..."
+  },
+  "expected": {
+    "manifestDigest": "sha256:...",
+    "sourceDigest": "sha256:..."
+  }
+}
+```
+
 ### レスポンス
 
 ```json
 {
   "installation": {
-    "id": "ins_abc123",
-    "spaceId": "space_personal",
+    "id": "installation:01HM9N7XK4QY8RT2P5JZF6V3W9",
+    "spaceId": "space:personal",
     "appId": "com.example.notes",
     "status": "running"
   },
   "deployment": {
-    "id": "dep_first",
-    "installationId": "ins_abc123",
+    "id": "deployment:01HM9N7XK4QY8RT2P5JZF6V3WA",
+    "installationId": "installation:01HM9N7XK4QY8RT2P5JZF6V3W9",
     "source": {
       "kind": "git",
       "url": "https://github.com/example/notes",
@@ -157,7 +201,13 @@ Installation を作成し、 最初の Deployment を実行します。
 > `@takos/aws-rds`) は **provider id** (= 各 `KernelPlugin` factory が宣言する
 > 安定 id) で、 operator が import する **package id** (=
 > `@takos/takosumi-cloudflare-providers` / `@takos/takosumi-aws-providers`) とは
-> 別概念。 詳細は [Provider plugin](./providers.md) を参照。
+> 別概念。 詳細は [Provider Implementations](./providers.md) を参照。
+
+`Deployment.status: "succeeded"` は、Deployment を current
+として使うために必要な apply / activate
+の同期部分が完了したことを表します。health observation は `observe` worker
+により後続で更新されます。rollback は historical record を `rolled_back`
+に書き換えず、新しい rollback Deployment を作ります。
 
 ## `POST /v1/installations/{id}/deployments/dry-run` {#post-v1-installations-id-deployments-dry-run}
 
@@ -187,7 +237,7 @@ source omit 時は Installation に紐づく前回 source を再 fetch します
 
 既存 Installation に対して新 Deployment を実行します。resolved source の検証と
 resource update / create / delete を伴います。source を build / prepare
-する処理は Installer API の外側で行います。
+する処理は BuildSpec / build service が先に行います。
 
 ### リクエスト
 
@@ -205,13 +255,16 @@ resource update / create / delete を伴います。source を build / prepare
 }
 ```
 
+prepared source の場合は install と同じく `source.digest` と
+`expected.sourceDigest` を渡します。
+
 ### レスポンス
 
 ```json
 {
   "deployment": {
-    "id": "dep_next",
-    "installationId": "ins_abc123",
+    "id": "deployment:01HM9N7XK4QY8RT2P5JZF6V3WB",
+    "installationId": "installation:01HM9N7XK4QY8RT2P5JZF6V3W9",
     "source": {
       "kind": "git",
       "ref": "main",
@@ -234,7 +287,7 @@ record を改竄せず、 forward-only な monotonic 履歴を維持します。
 
 ```json
 {
-  "deploymentId": "dep_previous"
+  "deploymentId": "deployment:01HM9N7XK4QY8RT2P5JZF6V3WA"
 }
 ```
 
@@ -243,8 +296,8 @@ record を改竄せず、 forward-only な monotonic 履歴を維持します。
 ```json
 {
   "deployment": {
-    "id": "dep_rollback_001",
-    "installationId": "ins_abc123",
+    "id": "deployment:01HM9N7XK4QY8RT2P5JZF6V3WC",
+    "installationId": "installation:01HM9N7XK4QY8RT2P5JZF6V3W9",
     "source": {
       "kind": "git",
       "ref": "main",
@@ -252,15 +305,16 @@ record を改竄せず、 forward-only な monotonic 履歴を維持します。
     },
     "manifestDigest": "sha256:...",
     "status": "succeeded",
-    "rolledBackFrom": "dep_next",
-    "rolledBackTo": "dep_previous"
+    "rolledBackFrom": "deployment:01HM9N7XK4QY8RT2P5JZF6V3WB",
+    "rolledBackTo": "deployment:01HM9N7XK4QY8RT2P5JZF6V3WA"
   }
 }
 ```
 
-**rollback の限界**: rollback は worker bundle / resource state
-の巻き戻しのみで、 DB の row state / object-store の object 内容 は対象外です。
-data backup / restore は別 feature。
+**rollback の限界**: rollback は過去 Deployment の AppSpec source pin と
+provider resource handle を元に、新しい Deployment を作る操作です。DB の row
+state / object-store の object 内容 は対象外です。data backup / restore は別
+feature。
 
 ## エンティティ shape {#entity-shapes}
 
@@ -290,15 +344,14 @@ interface Deployment {
   readonly id: string;
   readonly installationId: string;
   readonly source: {
-    readonly kind: "git" | "local" | "catalog" | "bundle" | "prepared";
+    readonly kind: "git" | "prepared";
     readonly url?: string;
-    readonly uri?: string;
     readonly ref?: string;
     readonly commit?: string;
     readonly digest?: string;
   };
   readonly manifestDigest: string;
-  readonly status: "running" | "succeeded" | "failed" | "rolled_back";
+  readonly status: "running" | "succeeded" | "failed";
   readonly outputs: {
     readonly resources?: ReadonlyArray<{
       readonly component: string;
@@ -334,23 +387,24 @@ interface ApiErrorEnvelope {
 }
 ```
 
-| code                  | HTTP | 主な発生要因                                                                                       |
-| --------------------- | ---- | -------------------------------------------------------------------------------------------------- |
-| `invalid_argument`    | 400  | AppSpec schema違反、 unknown kind、 cyclic `publish` → `listen` graph                              |
-| `unauthenticated`     | 401  | bearer 不足                                                                                        |
-| `permission_denied`   | 403  | actor が Space に対する権限不足                                                                    |
-| `not_found`           | 404  | Installation / Deployment 不在                                                                     |
-| `failed_precondition` | 409  | `expected.commit` mismatch、 既存 Installation suspended、 listen 対象 namespace path が未 publish |
-| `resource_exhausted`  | 413  | source snapshot / provider quota / request size 上限超過                                           |
-| `internal_error`      | 500  | unhandled exception                                                                                |
+| code                  | HTTP | 主な発生要因                                                                                 |
+| --------------------- | ---- | -------------------------------------------------------------------------------------------- |
+| `invalid_argument`    | 400  | AppSpec schema違反、 malformed source、 cyclic `publish` → `listen` graph                    |
+| `unauthenticated`     | 401  | bearer 不足                                                                                  |
+| `permission_denied`   | 403  | actor が Space に対する権限不足                                                              |
+| `not_found`           | 404  | Installation / Deployment 不在                                                               |
+| `failed_precondition` | 409  | expected pin mismatch、 unresolved component kind/provider、 listen 対象 namespace path 不在 |
+| `resource_exhausted`  | 413  | source snapshot / provider quota / request size 上限超過                                     |
+| `not_implemented`     | 501  | operator が installer feature を opt-in していない                                           |
+| `internal_error`      | 500  | unhandled exception                                                                          |
 
 ## クロスリファレンス {#cross-references}
 
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
 - [BuildSpec](./build-spec.md) — `source.kind=prepared` を作る build service
   input
-- [Reference Kind Registry](./kind-catalog.md#reference-component-kinds) — Takos
-  reference kind の schema / publishes / listens
+- [Reference Kind Descriptors](./kind-registry.md#reference-component-kinds) —
+  takosumi.com reference kind examples の schema / publishes / listens
 - [Architecture: Kernel](./architecture/kernel.md) — installer pipeline
   の責務境界
 

@@ -144,8 +144,8 @@ audit chain は整合性と clock 真値を切り離す。
 - Tamper detection runs on the chain hash, not on `ts`. A backdated `ts` (an
   event whose `ts` is older than its predecessor) is permitted by the chain
   rules but is surfaced by internal operator audit verification as a
-  `non-monotonic-ts` warning. The current public `takosumi` CLI does not expose
-  an `audit verify` command.
+  `non-monotonic-ts` warning. Audit verification is an internal operator
+  workflow.
 - Genesis events at chain rotation read the wall clock once; every later event
   in the rotation derives ordering from the chain.
 - Cross-Space ordering is not implied by `ts`. Operators who need a cross-Space

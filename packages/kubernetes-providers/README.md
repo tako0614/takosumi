@@ -1,16 +1,16 @@
 # @takos/takosumi-kubernetes-providers
 
-Kubernetes-backed `KernelPlugin` factory for the Takos reference `web-service`
-component kind, targeting vanilla / k3s Deployment + Service. Operators import
-this package explicitly when they want Kubernetes coverage — Takosumi core
-(`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses
-which provider packages to attach to
+Kubernetes-backed reference `KernelPlugin` adapter factory for the takosumi.com
+reference `web-service` example component kind, targeting vanilla / k3s
+Deployment + Service. Operators import this package explicitly when they want
+Kubernetes coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud
+SDK code, so the operator chooses which provider packages to attach to
 `createPaaSApp({ kindAliases, plugins: [...] })`.
 
 ## Install
 
 ```typescript
-import { createPaaSApp } from "@takos/takosumi-kernel";
+import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import { kubernetesWebServiceProvider } from "@takos/takosumi-kubernetes-providers";
 
@@ -25,13 +25,17 @@ const { app } = await createPaaSApp({
 });
 ```
 
+Kubernetes credentials and kubeconfig are configured on the runtime-agent
+connector environment or operator host. Provider factory arguments stay limited
+to non-secret selector settings such as namespace or cluster domain.
+
 ## Exports
 
 | Factory                        | Kind URI                                    |
 | ------------------------------ | ------------------------------------------- |
 | `kubernetesWebServiceProvider` | `https://takosumi.com/kinds/v1/web-service` |
 
-`kubernetesWorkerProvider` remains as a deprecated compatibility alias for
+`kubernetesWorkerProvider` remains available as a compatibility alias for
 `kubernetesWebServiceProvider`.
 
 ## See also

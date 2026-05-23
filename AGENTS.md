@@ -17,23 +17,21 @@ contract は完全 kind-agnostic な単一 spec で閉じている。 AppSpec ro
 単独で schema を discriminate するため、 旧 `kind: App` root field は Wave K
 で物理削除済 (= 入力に `kind:` を root に 含む YAML は unknown-key として
 reject)。 内部 Component の `kind:` field (= materializer 解決の discriminator)
-は当然 keep だが、Takosumi AppSpec は公式 component kind を 1
-つも定義しない。構成要素は namespace pub/sub model、operator-injected
-`kindAliases`、5-endpoint installer API、6 別 cloud provider package、
-materializer = `KernelPlugin | InlineMaterializer` union。旧 `use:` edge、
-placeholder syntax、 中間 manifest compile 形式、 workflow-reference field、
-publisher-trust scheme、 operator namespace special-case、 Wave J で 削除した
-**Component.routes / AppSpec.interfaces / AppSpec.permissions**、 Wave K
-で削除した **AppSpec root の `kind: App` field**、 そして Wave L で削除した
+は当然 keep。kind の意味は operator-injected `kindAliases`、5-endpoint installer
+API、6 別 cloud provider package、 operator-attached `KernelPlugin`。旧 `use:`
+edge、placeholder syntax、中間 manifest compile 形式、 workflow-reference
+field、publisher-trust scheme、 operator namespace special-case、 Wave J で
+削除した **Component.routes / AppSpec.interfaces / AppSpec.permissions**、 Wave
+K で削除した **AppSpec root の `kind: App` field**、 そして Wave L で削除した
 **`apiVersion` の `takosumi.dev/` group prefix** は全て物理削除済。 routes /
 launch endpoint / capability request は kind の open `spec:` 内 または別 kind の
 namespace pub/sub で表現する (= 「底は自由」 原則: 実装層の convention は spec
-contract の外)。Takos reference kind descriptors は
+contract の外)。takosumi.com reference descriptors は
 `packages/plugins/spec/kinds/` と `https://takosumi.com/kinds/v1/*` で publish
-される external reference registry であり、contract-owned catalog ではない。
-production deployable (= bare core と full-feature 両 smoke green、 kernel
-pipeline は routes を 処理しない)。これ以降の spec 変更は CHANGELOG / RFC
-ベースの個別 evolution として扱う。
+される external reference descriptor examples。 production deployable (= bare
+core と full-feature 両 smoke green、 kernel pipeline は routes を
+処理しない)。これ以降の spec 変更は CHANGELOG / RFC ベースの個別 evolution
+として扱う。
 
 Canonical contract:
 [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (本
@@ -70,8 +68,8 @@ takosumi/
 | **Installation** | Space に入った AppSpec (= 所有 / 課金 / 現在状態) |
 | **Deployment**   | 1 回の apply 結果 (= 履歴 / audit / rollback)     |
 
-これ以上の名詞は基本的に仕様 surface に出さない。 内部に `Resource` / `Secret` /
-`Event` table はあるが public concept ではない。
+仕様 surface の名詞はこの 3 つに閉じる。内部 table は `Resource` / `Secret` /
+`Event` などとして実装側に置く。
 
 ## Component connection は publish / listen のみ
 
@@ -87,8 +85,8 @@ AppSpec の各 component は 2 つの edge だけを持つ:
 
 ## Worldview / Wave N (= kernel kind-agnostic 化)
 
-Wave J / K / L の minimization sequence を継承し、Wave N は **contract-owned
-component kind list の廃止 + kernel を pure contract executor に近づける**
+Wave J / K / L の minimization sequence を継承し、Wave N は **built-in component
+kind definitions の廃止 + kernel を pure contract executor に近づける**
 方向へ進んでいる。component kind externalization は 2026-05-21 に実装済み:
 `Component.kind` は opaque string、official kind は 0、 short alias resolution
 は operator が `kindAliases` で注入する。`Component.build` は削除済みで、 build
@@ -101,16 +99,14 @@ Installer API に `source.kind: prepared` として渡す。
   `createPaaSApp({ kindAliases })`) + provider operation 前の fail-closed lookup
   miss on unresolved short alias
 - **worker.spec.entrypoint**: reference worker kind は prepared source snapshot
-  内の source-root-relative entrypoint を読む。`spec.artifact` は worker
-  contract ではない。
+  内の source-root-relative entrypoint を読む。DataAsset は別 workflow で扱う。
 - **Build sandbox**: operator 責務 (= default)、 3rd party plugin で wrap 可能
-- **Reference registry wording**: `https://takosumi.com/kinds/v1/*` は Takos が
-  publish する external reference registry (= 「公式 / blessed」 ではなく
-  alternative も 同 contract で同列)
+- **Reference descriptor wording**: `https://takosumi.com/kinds/v1/*` は
+  takosumi.com reference descriptor examples (= 「公式 / blessed」 ではなく
+  alternative も同 contract で同列)
 - **JSR package architecture**: `@takos/takosumi-plugins` keep + narrow re-scope
   (= URL stability 維持、 plugin factory adapter / SDK helper へ scope narrow)
-- **runtime-agent kernel-decouple**: Wave N scope 外、 別 RFC 0002 (= 想定) で
-  扱う
+- **runtime-agent kernel-decouple**: 別 RFC 0002 (= 想定) で扱う
 
 詳細 design は
 [`docs/rfc/0001-kernel-kind-agnostic.md`](docs/rfc/0001-kernel-kind-agnostic.md)。
@@ -131,13 +127,11 @@ Installer API に `source.kind: prepared` として渡す。
   `POST /v1/installations/{id}/rollback`。 HTTP status は `failed_precondition`
   = **409**、 `resource_exhausted` = **413**。 Idempotency-Key header は v1
   surface に含まれない (廃止)。
-- **Substitutability で kernel pure を justify**:
-  「持たないものリスト」(workflow / identity / billing / project convention)
-  は、 kernel が Cloudflare Workers / Kubernetes / bare metal / 自前 runtime
-  を越えて移植可能であるための **必要 条件** として保持する。 substitutability
-  で justify できない responsibility は kernel に持ち込んでよい
-  (実際には現状ほぼ無いが、 原則として「持たないもの list」自体を絶対視
-  はしない)。
+- **Substitutability で kernel pure を justify**: workflow / identity / billing
+  / project convention は operator / application 側の responsibility
+  として扱い、kernel が Cloudflare Workers / Kubernetes / bare metal / 自前
+  runtime を越えて移植可能な形を保つ。substitutability で justify できる
+  responsibility だけを kernel に入れる。
 - **Runtime neutrality は `shared/runtime/` で集約**: kernel core から `Deno.*`
   / `process.*` / `node:*` の直接呼び出しは排除済み。 全 runtime primitive (env,
   exit, signal, fs, subprocess, serveHttp) は
@@ -149,48 +143,40 @@ Installer API に `source.kind: prepared` として渡す。
   file path は `worker.spec.entrypoint` のように kind-specific `spec` に置く。
 - **Takos 中立**: takos-git / Takos 固有 service ID への直接依存は kernel core
   から完全に除去済み。
-- **Component kind は外部定義**: Takosumi AppSpec は公式 component kind を
-  定義しない。新 kind は任意 domain の URI + JSON-LD descriptor + materializer
-  実装で成立する (`CONVENTIONS.md` §6)。Takos が
-  `https://takosumi.com/kinds/v1/<name>` で publish する `worker` / `postgres` /
-  `object-store` / `custom-domain` は external reference registry であり、
-  spec-owned catalog ではない。short alias は operator が `kindAliases` で
-  opt-in した場合だけ解決される。`oidc` kind は takosumi-cloud に移動し、 本
-  repo には JSON-LD も materializer も無い。
-- **Materializer = KernelPlugin | InlineMaterializer**: kind 実装は 2 形態を
-  受理する。 (1) `KernelPlugin` factory を返す plain array (= Vite plugin
-  pattern, cloud provider package が提供する形式) と (2)
-  `createPaaSApp({ materializers:
-  [...] })` に inline 関数を渡す形式。 後者は
-  operator が任意 JS で書ける小さい recipe で十分なケース用。 plugin convention
-  は実装の 1 形態に過ぎず、 inline 関数でも contract を満たせば成立する。
+- **Component kind は外部定義**: 新 kind は任意 domain の URI + JSON-LD
+  descriptor + materializer 実装で成立する (`CONVENTIONS.md` §6)。takosumi.com
+  が `https://takosumi.com/kinds/v1/<name>` で publish する `worker` /
+  `postgres` / `object-store` / `custom-domain` は external reference descriptor
+  examples。 short alias は operator が `kindAliases` で opt-in
+  した場合だけ解決される。`oidc` kind は takosumi-cloud に移動し、 本 repo には
+  JSON-LD も materializer も無い。
+- **Materializer = operator-attached KernelPlugin**: kind 実装は `KernelPlugin`
+  factory を返す plain array (= Vite plugin pattern, cloud provider package
+  が提供する形式) として attach する。
 - **Cloud provider plugins は別 package**: AWS / GCP / Cloudflare / Kubernetes /
   Deno Deploy / Self-host の materializer 実装は
   `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`
   に分離して publish する。 takosumi core (kernel / plugins / cli) は cloud SDK
   に依存しない。 operator は必要な provider package を import して
   `plugins:
-  [...]` に attach する。 plugin marketplace / signed manifest /
-  trusted publisher key / port-based plugin host / `createAdapters()` /
-  `TakosumiKernelPluginManifest` / `KernelPluginPortKind` は kernel に持たない。
-- **credential を kernel core に持たない**: provider package factory 経由で
-  operator が opts として inject する。
-- **identity / billing は kernel の外側**: per-Installation OIDC client 発行は
-  Takosumi Accounts (operator-owned identity plane) の責務。 Takosumi Accounts
-  は `operator.identity.oidc` namespace path に OIDC client material を publish
-  し、 worker は `listen: { operator.identity.oidc: { as: env } }` で標準 env
-  (`OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` /
-  `OIDC_REDIRECT_URIS`) を受け取る。 kernel core 自身は OIDC client
-  を発行しない。
-- **signing 機構を kernel が持たない**: ecosystem trust model は 「TLS + digest
-  pin + 1 signing domain (OIDC)」 で、 OIDC ID token signing と install launch
-  token signing は両方とも **Takosumi Accounts** が所有する。 kernel が直接
-  関わる signing は **CatalogRelease verification のみ** であり、 これも
-  publisher signing ではなく **operator-pinned sha256 digest** で fail-closed
-  に検証する。 詳細は
+  [...]` に attach する。
+- **credential は operator/runtime-agent 側**: cloud credential / SDK code は
+  runtime-agent host または operator host 側に置き、kernel には `kindAliases` と
+  provider `plugins` だけを渡す。
+- **identity / billing は account-plane 側**: per-Installation OIDC client
+  発行は Takosumi Accounts (operator-owned identity plane) の責務。 Takosumi
+  Accounts は `operator.identity.oidc` namespace path に OIDC client material を
+  publish し、 worker は `listen: { operator.identity.oidc: { as: env } }`
+  で標準 env (`OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` /
+  `OIDC_REDIRECT_URIS`) を受け取る。
+- **plugin loading は operator import**: ecosystem trust model は OIDC ID token
+  issuance / signing と opaque install launch token issuance を **Takosumi
+  Accounts** が所有する。 provider plugin は Vite と同じく operator distribution
+  が TypeScript module として import し、`createPaaSApp({ plugins })` に attach
+  する。plugin package の取得・検証は operator policy で扱う。 詳細は
   [docs/reference/supply-chain-trust.md](./docs/reference/supply-chain-trust.md)。
-- 設計語彙は contract (AppSpec / Component / kind / publish / listen / build /
-  materializer / Installation / Deployment) をそのまま採用。
+- 設計語彙は contract (AppSpec / Component / kind / publish / listen /
+  KernelPlugin / Installation / Deployment) をそのまま採用。
 
 ## JSR publish layout
 
@@ -219,11 +205,10 @@ Installer API に `source.kind: prepared` として渡す。
 > deno.json の version は固定維持、 contract / kernel / plugins / cli / all の
 > minor bump を Wave J 完了の announcement 時に同時実施 予定)。
 
-> Note: `@takos/` JSR scope は Takos が publish する **reference distribution**
+> Note: `@takos/` JSR scope は current package distribution の publish scope
 > であり、 authority は publisher ではなく contract (`@takos/takosumi-contract`)
 > の側にある。 contract-compatible な alternative publisher (例:
-> `@example/takosumi-kernel`) は spec 上可能 — 現状は untested だが
-> architectural privilege は持たない。
+> `@example/takosumi-kernel`) は spec 上可能。
 
 ## Self-host 起点
 
@@ -237,7 +222,7 @@ takosumi server                                  # in-process kernel
 takosumi install --source ./                     # local source
 takosumi install --remote https://kernel.example.com \
   --source git:https://github.com/example/notes#main \
-  --space space_personal \
+  --space space:personal \
   --token $TAKOSUMI_INSTALLER_TOKEN
 ```
 
@@ -263,11 +248,11 @@ takosumi install --remote https://kernel.example.com \
 - **Takosumi Accounts (`takosumi-cloud/`)**: identity / billing / OIDC issuer /
   Installation ledger を保有する operator account plane の reference 実装。
   Takosumi Accounts が `operator.identity.oidc` namespace path に OIDC client
-  material を publish し、 worker は `listen` で受け取る。 kernel 側に
-  `kind: oidc` JSON-LD も materializer も持たない (= takosumi-cloud に移動)。
+  material を publish し、 worker は `listen` で受け取る。`kind: oidc` は
+  takosumi-cloud 側の account-plane convention として扱う。
 - **Takos ecosystem**: Takos product distribution は本 repo の上に Takos 固有
-  artifact (deploy/distributions/*.json 等) を被せる。 これは `takos/` に残る
-  別レイヤー。
+  deploy package (deploy/distributions/*.json 等) を被せる。 これは `takos/` に
+  残る別レイヤー。
 
 ## 作業ルール
 
@@ -275,8 +260,8 @@ takosumi install --remote https://kernel.example.com \
   (`packages/<cloud>-providers/src/<kind>-<provider>.ts` 追加 + `mod.ts`
   re-export + tests)。
 - 新 component kind を増やしたい場合は `CONVENTIONS.md` §6 の RFC プロセスに
-  従う (= JSON-LD で URI publish + materializer 実装 の 2 段を踏む)。 catalog は
-  frozen ではなく、 operator-defined kind も受理する。
+  従う (= JSON-LD で URI publish + materializer 実装 の 2 段を踏む)。registry は
+  external であり、 operator-defined kind も受理する。
 - kernel 修正は `packages/kernel/` 内で完結させる。 Takos 固有 ID (`takos-app`
   等) は再導入しない。
 - contract 変更を要する change は `packages/contract/` で coordination する。

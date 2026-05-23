@@ -28,19 +28,17 @@ components:
       compatibilityDate: "2025-01-01"
 ```
 
-`kind` は component が何であるかを表す opaque string です。Takosumi spec は公式
-component kind
-を定義しません。`worker`、`web-service`、`postgres`、`object-store`、
-`custom-domain` は Takos reference registry の alias で、operator が alias map
-で URI に解決した場合だけ意味を持ちます。`spec` の中身は kind ごとの convention
-で、AppSpec root の公開 field ではありません。
+`kind` は component が何であるかを表す opaque string です。`worker`、
+`web-service`、`postgres`、`object-store`、`custom-domain` は takosumi.com
+reference descriptor の alias 例で、operator が alias map で URI に解決します。
+`spec` の中身は kind ごとの convention です。
 
 ## BuildSpec と Prepared Source
 
-AppSpec は apply できる intent を書く file で、source を container 内で build
-する手順は持ちません。build が必要な source は optional `.takosumi.build.yml`
-を置きます。build service は build component を batch 実行し、build 後の source
-tree を prepared source snapshot として固定します。
+AppSpec は apply できる intent を書く file です。source を container 内で build
+する手順は `.takosumi.build.yml` に書きます。build service は build component を
+batch 実行し、build 後の source tree を prepared source snapshot
+として固定します。
 
 ```
 .takosumi.build.yml
@@ -50,8 +48,8 @@ tree を prepared source snapshot として固定します。
 ```
 
 この分離により、kernel は shell / container 実行を持たず、Deployment では
-digest-pinned prepared source を読むだけになります。runtime が読む file path は
-各 kind の `spec` に置きます。
+content-addressed prepared source を読むだけになります。runtime が読む file path
+は各 kind の `spec` に置きます。
 
 ## publish / listen
 
@@ -82,7 +80,7 @@ producer は namespace path に material を publish します。consumer は同
 を listen し、env / mount / target などの形で受け取ります。AppSpec には
 `${ref:...}` のような文字列 interpolation はありません。
 
-## Kernel、Materializer、Runtime-Agent
+## Kernel、Implementation、Runtime-Agent {#architecture-kernel-runtime-agent}
 
 Takosumi kernel は AppSpec を検証し、Deployment の apply pipeline を進めます。
 実際に cloud API や OS を触る処理は materializer / runtime-agent
@@ -101,17 +99,18 @@ dev では `takosumi server` が kernel と embedded runtime-agent を同じ pro
 
 ## Operator の責務
 
-operator は provider plugin、credential、runtime-agent 配置、外部 identity
-surface との接続を決めます。Takosumi kernel 自身は user account、OIDC issuer、
-signup UI を所有しません。
+operator は provider implementation、credential、runtime-agent 配置、user
+account、OIDC issuer、signup UI との接続を決めます。
 
 AppSpec は portable な intent です。同じ AppSpec をどの provider で実行するかは
-operator policy と plugin registry で決まります。
+operator policy と implementation binding / alias config で決まります。Takosumi
+reference kernel では implementation binding を adapter array
+として起動時に渡しま す。
 
 ## 次に読む
 
 - [AppSpec リファレンス](/reference/app-spec)
 - [BuildSpec リファレンス](/reference/build-spec)
 - [Installer API](/reference/installer-api)
-- [Provider plugin](/reference/providers)
+- [Provider Implementations](/reference/providers)
 - [Operator Bootstrap](/operator/bootstrap)

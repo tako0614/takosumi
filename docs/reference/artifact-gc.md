@@ -1,11 +1,12 @@
-# Artifact GC {#artifact-gc}
+# DataAsset GC (`/v1/artifacts`) {#artifact-gc}
 
-Artifact GC は uploaded / built DataAsset と、その裏付け object bytes を保守的に
-削除する kernel worker です。rollback、audit、RevokeDebt の根拠になる artifact
+DataAsset GC は optional DataAsset extension の uploaded DataAsset
+と、その裏付け object bytes を保守的に削除する kernel worker
+です。rollback、audit、 RevokeDebt の根拠になる DataAsset
 を消さないことを優先します。
 
-これは current implementation の operational surface であり、Takosumi AppSpec
-が公式 component kind や artifact kind を定義するという意味ではありません。
+これは current implementation の operational surface です。component kind と
+DataAsset metadata kind は operator distribution / connector policy で扱います。
 
 ## Reachability
 
@@ -36,11 +37,11 @@ grace window は `TAKOSUMI_ARTIFACT_GC_GRACE_DAYS` で調整できます。
 
 ## Triggers
 
-| Trigger  | 説明                                                                         |
-| -------- | ---------------------------------------------------------------------------- |
-| periodic | `TAKOSUMI_ARTIFACT_GC_PERIODIC_HOURS` cadence。`0` で off。                  |
-| manual   | `takosumi artifact gc` または internal operator route。                      |
-| pressure | artifact storage usage が operator-defined pressure threshold を超えたとき。 |
+| Trigger  | 説明                                                                          |
+| -------- | ----------------------------------------------------------------------------- |
+| periodic | `TAKOSUMI_ARTIFACT_GC_PERIODIC_HOURS` cadence。`0` で off。                   |
+| manual   | `takosumi artifact gc` または internal operator route。                       |
+| pressure | DataAsset storage usage が operator-defined pressure threshold を超えたとき。 |
 
 同時に複数 trigger が発生した場合、1 つの cycle に合流します。
 
@@ -60,7 +61,7 @@ sweep count、reclaimed bytes、trigger list、duration を含みます。詳細
 ## 関連ページ
 
 - [DataAsset Policy](./data-asset-policy.md)
-- [Reference Kind Registry § Data Assets](./kind-catalog.md#data-assets)
+- [Reference Kind Descriptors § Data Assets](./kind-registry.md#data-assets)
 - [Storage Schema](./storage-schema.md)
 - [Audit Events](./audit-events.md)
 - [RevokeDebt Model](./revoke-debt.md)

@@ -1,7 +1,7 @@
 # Readiness Probes
 
-> このページでわかること: `/readyz` の現行 response shape と、公開 contract
-> ではない port-level readiness design model。
+> このページでわかること: `/readyz` の現行 response shape と、port-level
+> readiness design model。
 
 ## 実装スコープ
 
@@ -10,15 +10,17 @@
 
 - `role`: runtime config role と process role の一致
 - `storage`: storage adapter transaction の成功
-- `plugins`: production / staging では selected plugin が 1 つ以上あること
+- `plugins`: reference kernel の adapter array が production / staging で 1
+  つ以上あること
 - `internalApiSecret`: `takosumi-api` / `takosumi-runtime-agent` role では
   `TAKOSUMI_INTERNAL_API_SECRET` が設定されていること
 - `workerDaemon`: `takosumi-worker` role では worker daemon が起動済 + 初回 tick
   完了。 起動済だが初回 tick 前は `state: "booting"`
 
-Port-level observation worker / flap suppression / boot timeout code / `ports[]`
-は公開 contract ではありません。`/readyz` の current wire contract は `checks`
-object と `readiness_probe_failed` error envelope です。
+`/readyz` の current wire contract は `checks` object と
+`readiness_probe_failed` error envelope です。Port-level observation worker /
+flap suppression / boot timeout code / `ports[]` は operator-facing design model
+として 扱います。
 
 ## `/readyz` semantic
 
@@ -45,14 +47,13 @@ response body には `checks` object が含まれます。 `200` は body をそ
 ### Port-level Design Model
 
 port-level readiness model では、 kernel pod 起動時に次の順序で port を bring up
-します。この節は operator / contributor 向けの設計語彙であり、現行 `/readyz`
-response shape ではありません。
+します。この節は operator / contributor 向けの設計語彙です。
 
 ```
 storage
   └─> lock-store
         └─> secret-partition
-              └─> catalog-release
+              └─> plugin-bootstrap
                     └─> runtime-agent-registry
                           └─> public-listener
 ```
@@ -65,7 +66,7 @@ storage
 | `storage`                | SQL ping (`SELECT 1`) 成功 / migration version が compat range 内                     |
 | `lock-store`             | lock store backend に書き込み + 読み戻し成功                                          |
 | `secret-partition`       | global / cloud-specific master passphrase resolver の derive 成功                     |
-| `catalog-release`        | 直近 active CatalogRelease の signature verify 成功                                   |
+| `plugin-bootstrap`       | operator-provided `kindAliases` / reference adapter array の parse と重複検査が成功   |
 | `runtime-agent-registry` | embedded agent (有る場合) の self-enrollment 成功 / external agent registry sync 完了 |
 | `public-listener`        | TCP listener bind + TLS handshake (有効な場合) 成功                                   |
 
@@ -106,15 +107,15 @@ threshold は 1 以上の整数。 `0` 指定でも `1` に clamp。
 安全弁)。
 
 port-level readiness model では各 port bring up に max wait を持たせます。 現行
-`/readyz` は request-time inline checks を返すため、次の timeout table は
-`ports[]` response field や per-port public error code としては公開しません。
+`/readyz` は request-time inline checks を返します。次の timeout table は
+port-level design model の値です。
 
 | Port                     | max wait | 超過時 error code               |
 | ------------------------ | -------- | ------------------------------- |
 | `storage`                | `30s`    | `boot_timeout_storage`          |
 | `lock-store`             | `30s`    | `boot_timeout_lock_store`       |
 | `secret-partition`       | `15s`    | `boot_timeout_secret_partition` |
-| `catalog-release`        | `60s`    | `boot_timeout_catalog_release`  |
+| `plugin-bootstrap`       | `30s`    | `boot_timeout_plugin_bootstrap` |
 | `runtime-agent-registry` | `60s`    | `boot_timeout_runtime_agent`    |
 | `public-listener`        | `15s`    | `boot_timeout_public_listener`  |
 
@@ -129,10 +130,10 @@ Steady state failure cascade:
 - `storage` 失敗 → 全下流 `not ready` (storage 復旧で自動回復)
 - `lock-store` 失敗 → mutation 系 endpoint は `cross_process_lock_busy` で
   fail-closed、 `/readyz` は `not ready`
-- `secret-partition` 失敗 (master passphrase derive 失敗) → catalog-release 以
+- `secret-partition` 失敗 (master passphrase derive 失敗) → plugin-bootstrap 以
   下が cascade
-- `catalog-release` 失敗 (signature verify 失敗) → runtime-agent-registry 以下
-  cascade。 dispatch 停止
+- `plugin-bootstrap` 失敗 (reference adapter array parse / duplicate provider /
+  alias 解決設定不正) → runtime-agent-registry 以下 cascade。 dispatch 停止
 - `runtime-agent-registry` 失敗 → public-listener が `not ready`
 - `public-listener` 失敗 → kernel pod が load balancer から外れる
 

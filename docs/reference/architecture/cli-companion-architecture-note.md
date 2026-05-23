@@ -46,5 +46,5 @@ current public lifecycle command は Installer API に対応する。
 3. config file
 4. built-in default
 
-config file は remote URL / token の locator であり、Space routing や operator
-policy を表現する場所ではない。
+config file は remote URL / token の locator です。Space routing や operator
+policy は operator config / install context で扱います。

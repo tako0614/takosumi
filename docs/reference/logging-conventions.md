@@ -104,11 +104,10 @@ kernel はログを **stdout** に書く (`error` と `fatal` は **stderr**)。
 - 12-factor: the operator's container runtime captures stdout / stderr and
   forwards to a structured collector (Loki, Fluentd, OpenSearch, CloudWatch,
   etc.).
-- Rotation is the sink's responsibility, not the kernel's. The kernel produces
-  an unbounded stream; sinks rotate.
-- The kernel does not write to files. A v1 deployment that needs file output
-  configures its container runtime to redirect stdout to a file outside the
-  kernel.
+- Rotation belongs to the sink. The kernel produces an unbounded stream; sinks
+  rotate.
+- File output is configured by the operator's container runtime by redirecting
+  stdout / stderr.
 
 ## Relationship to audit events
 
@@ -117,9 +116,8 @@ log と audit event は異なる保証を持つ別の surface である。
 - **Audit events** are tamper-evident, hash-chained, indexed,
   retention-governed, and consumed for compliance evidence. Their taxonomy is
   closed and lives in [Audit Events](./audit-events.md).
-- **Logs** are operator debugging surface. They are not hash-chained, not
-  retention-governed, and not part of the closed audit taxonomy. They may carry
-  richer context than the corresponding audit event but never replace it.
+- **Logs** are operator debugging surface. They may carry richer context than
+  the corresponding audit event but never replace it.
 
 監査可能な kernel の決定は必ず最初に audit event を生成し、対応するログ行は
 情報目的である。incident を調査する operator は `operationId` や `eventId` を
@@ -168,8 +166,8 @@ runtime-agent も同じ環境変数を読み、`subsystem: runtime-agent` を発
 - **cli** — every line carries `command` (the dotted CLI command path, e.g.
   `deploy.run`, `audit.verify`) and `argvDigest` (a digest of the post-redaction
   argument vector, never the raw argv).
-- **plugin** — every line carries `pluginId` and `port` (the plugin port name
-  from the closed plugin port set).
+- **plugin** — every line emitted by operator-attached plugin code carries
+  `pluginId` and, when relevant, the resolved kind URI / connector id.
 
 これらのフィールドは付加的: HTTP `requestId` を既に持つ行も、kernel から発行
 される際は `route` と `status` を持つ。

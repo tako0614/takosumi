@@ -11,10 +11,11 @@
    変更。
 2. **effect-detail change** — `approvedEffects` / `effectDetailsDigest` / grant
    access / network egress shape の変更。
-3. **implementation change** — 選択された Implementation (provider plugin の
-   particular binding) の変更。
+3. **implementation change** — 選択された provider implementation / connector
+   binding の変更。
 4. **external freshness change** — operator-owned ExportDeclaration の freshness
-5. **catalog release change** — Space に adopted な CatalogRelease の変更。
+5. **operator implementation config change** — Space に visible な kind alias /
+   provider implementation / connector visibility の変更。
 6. **Space-context change** — Space membership / policy pack の変更。
 
 ### 1. digest change
@@ -39,9 +40,9 @@
 
 ### 3. implementation change
 
-- **発火条件**: provider plugin の selected Implementation (registerProvider で
-  binding された particular implementation) が approval bind 時と異なる。
-  provider matrix を operator が swap した場合や catalog release 切替で 起きる。
+- **発火条件**: provider implementation / connector binding が approval bind
+  時と異なる。 provider implementation、connector visibility、operator policy を
+  operator が swap した 場合に起きる。
 - **検出 timing**: `prepare` stage の resolve、および `pre-commit` verification
   の直前。
 - **再評価範囲**: plan を保ったまま `invalidated`。kernel は影響範囲を **当該
@@ -53,21 +54,22 @@
   から `stale` または `revoked` に遷移。`fresh → refresh-required` は warning
   相当 (Risk emit のみ) で trigger 4 を **発火させない** — approval は
   `approved` のまま保持される
-  ([Observation Retention — Approval invalidation との関係](./observation-retention.md#approval-invalidation-との関係))。
+  ([Observation Retention — Approval invalidation との関係](./observation-retention.md#approval-invalidation-relationship))。
 - **検出 timing**: external freshness は kernel observe loop が継続的に監視
   し、`stale` / `revoked` への遷移を検出した瞬間に対応 approval を再評価
   する。`prepare` stage 起動時の最初の確認も含む。
 - **再評価範囲**: 当該 export を消費する binding subset に絞って propagate。
   監視しない。
 
-### 5. catalog release change
+### 5. operator implementation config change
 
-- **発火条件**: Space に adopted な CatalogRelease (shape / provider の release
-  pin) が変更された。
-- **検出 timing**: Space adoption 操作の commit 完了直後。kernel は当該 Space
-  に紐づく approval を resolve し直す。
-- **再評価範囲**: 新 release で binding が同一なら approval を保持、binding が
-  変わるなら影響 binding subset を `invalidated`。
+- **発火条件**: Space に visible な `kindAliases`、provider implementation、
+  runtime-agent connector inventory、または operator policy による visibility が
+  変更された。
+- **検出 timing**: operator implementation config / Space visibility 操作の
+  commit 完了直後。kernel は当該 Space に紐づく approval を resolve し直す。
+- **再評価範囲**: 新 implementation config で binding が同一なら approval
+  を保持、binding が変わるなら影響 binding subset を `invalidated`。
 
 ### 6. Space-context change
 
@@ -105,9 +107,10 @@ approval の lifecycle 上の状態:
 
 `reviewing` は client UX のソフト状態で、 kernel は永続化しない。
 
-kernel 側 state machine が永続化する terminal state は 6 値で、
-`pending → approved | denied | expired | invalidated` および
-`approved → consumed` の経路を扱う。
+kernel 側 state machine が永続化する server state は
+`pending | approved | denied | expired | invalidated | consumed` の 6 値です。
+terminal subset は `denied | expired | invalidated | consumed` で、`approved` は
+apply に消費されるまで再検証対象として残ります。
 
 - `consumed`: approval が apply pipeline で正常消費された後の終端。 audit
   retention のため record は保持するが再 use はできない。 再度 apply
@@ -120,16 +123,18 @@ kernel 側 state machine が永続化する terminal state は 6 値で、
 approval record は以下 binding field を持ち、trigger 1-6 はそれぞれ対応 field の
 change として実装される。
 
-| Field                          | Bound from                            | 関連 trigger    |
-| ------------------------------ | ------------------------------------- | --------------- |
-| `operationPlanDigest`          | OperationPlan content digest          | 1               |
-| `desiredSnapshotDigest`        | DesiredSnapshot content digest        | 1               |
-| `effectDetailsDigest`          | resolved effect detail set            | 2               |
-| `predictedActualEffectsDigest` | prepare 時の predicted actual-effects | 2               |
-| `approvedEffects`              | risk-by-risk approval grant set       | 2               |
-| `actor`                        | approve した actor identity           | 6               |
-| `policyVersion`                | binding 時の policy pack version      | 5, 6            |
-| `expiresAt`                    | approval expiry deadline              | (state expired) |
+| Field                                 | Bound from                                    | 関連 trigger    |
+| ------------------------------------- | --------------------------------------------- | --------------- |
+| `operationPlanDigest`                 | OperationPlan content digest                  | 1               |
+| `desiredSnapshotDigest`               | DesiredSnapshot content digest                | 1               |
+| `effectDetailsDigest`                 | resolved effect detail set                    | 2               |
+| `predictedActualEffectsDigest`        | prepare 時の predicted actual-effects         | 2               |
+| `approvedEffects`                     | risk-by-risk approval grant set               | 2               |
+| `implementationBindingDigest`         | provider implementation / connector binding   | 3               |
+| `operatorImplementationConfigVersion` | operator implementation / alias config marker | 5               |
+| `actor`                               | approve した actor identity                   | 6               |
+| `policyVersion`                       | binding 時の policy pack version              | 5, 6            |
+| `expiresAt`                           | approval expiry deadline                      | (state expired) |
 
 これらの field は approval grant 時に固定され、勝手に書き換わらない。binding
 が崩れたら approval は `invalidated` に落ちる、という invariant が trigger 6

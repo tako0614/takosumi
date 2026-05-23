@@ -10,30 +10,31 @@ invalidation / RevokeDebt 生成は本ページの規則に従います。
 
 新 stage 追加は `CONVENTIONS.md` §6 RFC が必要です。
 
-| Stage         | actual-effects 書き込み | RevokeDebt キュー | approval re-validation     | 失敗時の遷移先                      |
-| ------------- | ----------------------- | ----------------- | -------------------------- | ----------------------------------- |
-| `prepare`     | no                      | no                | yes (entry 起動時)         | `abort`                             |
-| `pre-commit`  | no                      | no                | yes (catalog verification) | `abort`                             |
-| `commit`      | yes                     | no                | no                         | `abort` / `commit` retry            |
-| `post-commit` | yes (補助 effect)       | yes               | no                         | `observe` 続行 / RevokeDebt enqueue |
-| `observe`     | no (read-only)          | yes               | no                         | `finalize` / `observe` 継続         |
-| `finalize`    | no (cleanup のみ)       | yes (cleanup 残)  | no                         | terminal                            |
-| `abort`       | no                      | yes (compensate)  | no                         | terminal                            |
-| `skip`        | no                      | no                | no                         | terminal                            |
+| Stage         | actual-effects 書き込み         | RevokeDebt キュー | approval re-validation                  | 失敗時の遷移先                      |
+| ------------- | ------------------------------- | ----------------- | --------------------------------------- | ----------------------------------- |
+| `prepare`     | no                              | no                | yes (entry 起動時)                      | `abort`                             |
+| `pre-commit`  | no                              | no                | yes (provider / connector verification) | `abort`                             |
+| `commit`      | yes                             | no                | no                                      | `abort` / `commit` retry            |
+| `post-commit` | no (evidence / projection only) | yes               | no                                      | `observe` 続行 / RevokeDebt enqueue |
+| `observe`     | no (read-only)                  | yes               | no                                      | `finalize` / `observe` 継続         |
+| `finalize`    | no (cleanup のみ)               | yes (cleanup 残)  | no                                      | terminal                            |
+| `abort`       | no                              | yes (compensate)  | no                                      | terminal                            |
+| `skip`        | no                              | no                | no                                      | terminal                            |
 
 stage 意味:
 
 - `prepare`: OperationPlan 確定 / idempotency key 割当 / approval binding 再評
   価。 actual-effects 書込なし。 失敗は `abort`。
-- `pre-commit`: catalog / provider verification と external precondition
+- `pre-commit`: provider / connector verification と external precondition
   (credential reachability / collision check / freshness re-confirm) を
   fail-closed で確認。 actual-effects 書込なし。 失敗は `abort`。
 - `commit`: connector / runtime-agent 経由で external system を実際に変更。
   actual-effects はこの stage のみで書込。 retry は idempotency key 一致前提で
   冪等。 回復不能失敗は `abort`。
-- `post-commit`: commit 後の補助 effect (link projection / metadata sync /
-  generated material materialize)。 external 失敗時は RevokeDebt を
-  `external-revoke` / `link-revoke` reason で enqueue。
+- `post-commit`: commit 後の evidence / projection / metadata sync を記録する。
+  provider side effect は新規に実行しない。 external cleanup
+  が完了できないときは RevokeDebt を `external-revoke` / `link-revoke` reason で
+  enqueue。
 - `observe`: long-lived な read-only stage。 runtime-agent describe を吸って
   Exposure health / DriftIndex / RevokeDebt 候補を更新。 stage 自身は
   actual-effects を変更しません。
@@ -143,21 +144,20 @@ workflow 実行 / build log parse / git field 解釈は行いません。
 - WAL の effect detail に `provenance` object 全体を含める
 - resolved resource に `metadata.takosumiDeployProvenance` を付け、
   `kind: "takosumi.deploy-provenance-digest@v1"` と provenance digest を記録
-- 当該 metadata は OperationPlan digest に参加する (同 AppSpec source で も
-  artifact provenance が違えば別 operation intent)
+- 当該 metadata は OperationPlan digest に参加する (同 AppSpec source でも
+  upstream provenance が違えば別 operation intent)
 - status / recovery inspect response から audit consumer に記録済 provenance
   を返せる
 
-これで upstream automation は artifact URI → workflow run id → git commit SHA →
-step log digest の traceability を、 kernel に workflow を持ち込
+これで upstream automation は prepared source digest → workflow run id → git
+commit SHA → step log digest の traceability を、kernel に workflow を持ち込
 まずに永続化できます。
 
-## Pre/post-commit verification lifecycle
+## Pre/post-commit verification lifecycle {#prepost-commit-verification-lifecycle}
 
-kernel contract には catalog 供給の実行可能 hook package runtime はありません。
-WAL stage は kernel 所有の validation / evidence collection を含むことはあり
-ますが、 marketplace hook code を load したり汎用の `pre-commit` / `post-commit`
-hook 実行を公開拡張点として露出することはしません。
+WAL stage は kernel 所有の validation / evidence collection を含みます。汎用の
+`pre-commit` / `post-commit` hook 的挙動は upstream product / repository
+automation に置きます。
 
 hook 的挙動が必要な workflow / repository automation は上流 product 側で行い、
 installer API に source を渡す前に検査を済ませる前提です。
@@ -187,8 +187,8 @@ reason / status / aging は [RevokeDebt Model](./revoke-debt.md) 参照。 WAL s
 関連 architecture notes:
 
 - `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
-  — WAL stage 設計 の動機、idempotency tuple の derivation、catalog verification
-  contract の議論
+  — WAL stage 設計 の動機、idempotency tuple の derivation、descriptor
+  verification contract の議論
 - `docs/reference/architecture/execution-lifecycle.md` — phase ↔ stage
   マッピングの設計 rationale と recovery mode の選定背景
 - `docs/reference/drift-detection.md` — orphaned debt と observe 経路の設計議論

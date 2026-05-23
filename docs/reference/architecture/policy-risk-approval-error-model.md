@@ -56,7 +56,7 @@ cross-space-link:
 space-secret-projection:
   May this Space receive the secret projection?
 
-space-artifact-use:
+space-data-asset-use:
   May this Space read the DataAsset?
 ```
 
@@ -142,8 +142,8 @@ approval が無効化されます。
 4. external freshness change
    snapshot が参照する operator 所有の ExportDeclaration が最新でなくなった
 
-5. catalog release change
-   The CatalogRelease adopted by the Space has changed.
+5. operator implementation config change
+   The operator-provided kind alias / plugin visibility used by the Space has changed.
 
 6. Space-context change
    Space id, Space membership, or Space policy pack governing this resolution
@@ -175,7 +175,7 @@ dev/open
 selfhost/simple
 prod/default
 prod/strict
-enterprise/catalog-approved-only
+enterprise/descriptor-approved-only
 ```
 
 ## Approval フローアーキテクチャ {#approval-flow-architecture}

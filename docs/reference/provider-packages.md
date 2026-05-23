@@ -1,12 +1,15 @@
-# Provider catalog {#provider-catalog}
+# Provider package examples {#provider-packages}
 
-> このページでわかること: Takosumi に同梱される provider id、対応 kind、主な
-> capability。
+> このページでわかること: reference distribution が publish している provider
+> adapter package 例と、それぞれが返す provider id / capability metadata。
 
-provider plugin の仕組みは [Provider plugin](./providers.md)
-を参照してください。 このページは一覧性を優先した catalog です。
+reference kernel の provider adapter 方式は
+[Provider Implementations](./providers.md) を参照してください。このページは
+reference distribution の実装例です。operator が必要な package を import して
+`createPaaSApp({ plugins })` に attach したものが provider inventory
+になります。
 
-## Package mapping {#package-mapping}
+## Reference package mapping {#package-mapping}
 
 | Package id                              | Provider group |
 | --------------------------------------- | -------------- |
@@ -17,7 +20,7 @@ provider plugin の仕組みは [Provider plugin](./providers.md)
 | `@takos/takosumi-deno-deploy-providers` | Deno Deploy    |
 | `@takos/takosumi-selfhost-providers`    | Self-host      |
 
-## AWS {#aws}
+## AWS examples {#aws}
 
 | provider id          | component kind  | declared capabilities                                                                                                                   |
 | -------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -26,7 +29,7 @@ provider plugin の仕組みは [Provider plugin](./providers.md)
 | `@takos/aws-rds`     | `postgres`      | `pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`, `extensions`                                                   |
 | `@takos/aws-route53` | `custom-domain` | `wildcard`, `auto-tls`, `sni`, `alpn-acme`                                                                                              |
 
-## GCP {#gcp}
+## GCP examples {#gcp}
 
 | provider id            | component kind  | declared capabilities                                                                                                                   |
 | ---------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -35,7 +38,7 @@ provider plugin の仕組みは [Provider plugin](./providers.md)
 | `@takos/gcp-cloud-sql` | `postgres`      | `pitr`, `read-replicas`, `high-availability`, `backups`, `ssl-required`, `extensions`                                                   |
 | `@takos/gcp-cloud-dns` | `custom-domain` | `wildcard`, `auto-tls`, `sni`                                                                                                           |
 
-## Cloudflare {#cloudflare}
+## Cloudflare examples {#cloudflare}
 
 | provider id                   | component kind  | declared capabilities                                       |
 | ----------------------------- | --------------- | ----------------------------------------------------------- |
@@ -44,19 +47,21 @@ provider plugin の仕組みは [Provider plugin](./providers.md)
 | `@takos/cloudflare-workers`   | `worker`        | `scale-to-zero`, `websocket`, `long-request`, `geo-routing` |
 | `@takos/cloudflare-dns`       | `custom-domain` | `wildcard`, `auto-tls`, `sni`, `http3`                      |
 
-## Azure {#azure}
+## Azure connector example {#azure}
+
+Azure は external connector example です。
 
 | provider id                   | component kind | declared capabilities                                     |
 | ----------------------------- | -------------- | --------------------------------------------------------- |
 | `@takos/azure-container-apps` | `web-service`  | `always-on`, `scale-to-zero`, `websocket`, `long-request` |
 
-## Kubernetes {#kubernetes}
+## Kubernetes examples {#kubernetes}
 
 | provider id                    | component kind | declared capabilities                                          |
 | ------------------------------ | -------------- | -------------------------------------------------------------- |
 | `@takos/kubernetes-deployment` | `web-service`  | `always-on`, `websocket`, `long-request`, `private-networking` |
 
-## Deno Deploy {#deno-deploy}
+## Deno Deploy examples {#deno-deploy}
 
 | provider id          | component kind | declared capabilities                          |
 | -------------------- | -------------- | ---------------------------------------------- |
@@ -65,7 +70,7 @@ provider plugin の仕組みは [Provider plugin](./providers.md)
 `@takos/deno-deploy` は operator が明示的に package と connector credential を
 用意したときだけ selectable にします。
 
-## Self-host {#self-host}
+## Self-host examples {#self-host}
 
 | provider id                      | component kind  | declared capabilities                                                                                            |
 | -------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------- |

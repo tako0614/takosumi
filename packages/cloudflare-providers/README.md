@@ -1,16 +1,16 @@
 # @takos/takosumi-cloudflare-providers
 
-Cloudflare-backed `KernelPlugin` factories for the Takos reference component
-kinds (`worker` / `object-store` / `custom-domain`). Operators import this
-package explicitly when they want Cloudflare coverage — Takosumi core
-(`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses
-which provider packages to attach to
+Cloudflare-backed reference `KernelPlugin` adapter factories for takosumi.com
+reference component kinds (`worker` / `object-store` / `custom-domain`).
+Operators import this package explicitly when they want Cloudflare coverage —
+Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the
+operator chooses which provider packages to attach to
 `createPaaSApp({ kindAliases, plugins: [...] })`.
 
 ## Install
 
 ```typescript
-import { createPaaSApp } from "@takos/takosumi-kernel";
+import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import {
   cloudflareCustomDomainProvider,
@@ -28,6 +28,10 @@ const { app } = await createPaaSApp({
 });
 ```
 
+Cloudflare API tokens are configured on the runtime-agent connector environment
+or operator host. Provider factory arguments stay limited to non-secret selector
+settings such as account id or zone id.
+
 ## Exports
 
 | Factory                           | Kind URI                                      |
@@ -36,7 +40,7 @@ const { app } = await createPaaSApp({
 | `cloudflareR2ObjectStoreProvider` | `https://takosumi.com/kinds/v1/object-store`  |
 | `cloudflareCustomDomainProvider`  | `https://takosumi.com/kinds/v1/custom-domain` |
 
-Each factory returns a `KernelPlugin` (see
+Each factory returns a reference `KernelPlugin` adapter (see
 [`@takos/takosumi-contract/plugin`](https://jsr.io/@takos/takosumi-contract)).
 Default options pick an in-memory lifecycle client suitable for tests; pass
 `{ lifecycle: ... }` in production to wire the runtime-agent-backed client.

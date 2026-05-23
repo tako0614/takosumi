@@ -10,11 +10,10 @@ tests / release evidence で確認します。
 
 - Every Deployment, snapshot, journal, observation, approval, debt, activation,
   and GroupHead has a Space id.
-- Manifest does not declare Space; Space comes from deploy context / auth / API
-  / operator profile.
+- Space comes from deploy context / auth / API / operator profile.
 - Namespace paths are Space-scoped.
-- Secrets, artifacts, journals, approvals, observations, and audit events are
-  Space-scoped.
+- Secrets, optional DataAssets, journals, approvals, observations, and audit
+  events are Space-scoped.
 - Reserved prefixes are operator-controlled and granted into Spaces.
 - GroupHead identity is `spaceId + groupId`.
 
@@ -25,25 +24,27 @@ tests / release evidence で確認します。
   registry.
 - All graph entities have stable addresses.
 - Lifecycle class restricts operation kinds.
-- Raw secret values are not stored in core canonical state.
+- Core canonical state stores secret references, not raw secret values.
 - Actual effects cannot exceed approved effects without pause / compensation /
   approval.
 - Side-effecting operations are write-ahead journaled.
 - Generated object ids are deterministic where possible.
 - Apply and activation are separated.
-- Observations do not mutate desired state.
-- External source objects are not destroyed by deployment destroy.
-- Production serializes critical mutations, Space export sharing, and
-  CatalogRelease assignment.
+- Observations append facts; desired state changes through new snapshots.
+- Deployment destroy handles Takosumi-managed objects according to lifecycle
+  policy.
+- Production serializes critical mutations, Space export sharing, and kind alias
+  / descriptor / plugin set updates.
 
-## Catalog {#catalog}
+## Component kind resolution {#component-kind-resolution}
 
-- CatalogRelease has atomic registry digests including Space registry and Space
-  policy digests.
-- CatalogRelease is assigned to Spaces explicitly.
-- Public targets are catalog aliases.
-- Descriptor documents are normalized before runtime use.
-- Input schemas are pinned.
+- Takosumi public concepts remain AppSpec, Installation, and Deployment.
+- AppSpec root is only `apiVersion`, `metadata`, and `components`.
+- Component public fields are only `kind`, `spec`, `publish`, and `listen`.
+- Short kind aliases are operator-injected and fail closed when unresolved.
+- Descriptor documents and kind-specific input schemas are resolved and recorded
+  before runtime use.
+- Provider targets come from the operator plugin set.
 
 ## Namespace export {#namespace-exports}
 
@@ -86,7 +87,7 @@ tests / release evidence で確認します。
 
 ## Observability {#observability}
 
-- Audit events include catalog release, resolution, desired adoption, link
-  selection, operation stages, generated objects, debts, approvals, activation,
-  and GroupHead.
+- Audit events include kind descriptor selections, resolution, desired adoption,
+  link selection, operation stages, generated objects, debts, approvals,
+  activation, and GroupHead.
 - RevokeDebt is visible in status and readiness checks.

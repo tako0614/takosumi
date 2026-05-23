@@ -25,7 +25,7 @@ curl -X POST https://localhost/v1/installations \
   -H "Authorization: Bearer $TAKOSUMI_INSTALLER_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{
-    "spaceId": "space_personal",
+    "spaceId": "space:personal",
     "source": {
       "kind": "git",
       "url": "https://github.com/example/app.git",
@@ -42,7 +42,7 @@ Set strong, unique secrets for each of:
 POSTGRES_PASSWORD          # Postgres superuser passphrase
 MINIO_ROOT_PASSWORD        # MinIO admin passphrase
 TAKOSUMI_INSTALLER_TOKEN   # bearer token for /v1/installations/*
-TAKOSUMI_DEPLOY_TOKEN      # bearer token for artifact write routes
+TAKOSUMI_DEPLOY_TOKEN      # optional bearer token for DataAsset write routes
 TAKOSUMI_INTERNAL_API_SECRET  # shared secret for kernel ↔ admin RPC
 TAKOSUMI_AGENT_TOKEN       # bearer token between kernel and runtime-agent
 TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
@@ -70,8 +70,9 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
   `packages/runtime-agent/src/connectors/`. The selfhost connectors
   (`docker_compose`, `local_docker_postgres`, `filesystem`, `minio`,
   `coredns_local`, `systemd_unit`) are wired by default; AWS / GCP / Azure / k8s
-  connectors are also bundled and activate when the matching provider plugin is
-  selected by a manifest.
+  connectors are available for operator-attached provider packages and activate
+  only when the operator wires the matching provider package into the kernel and
+  supplies the matching runtime-agent credentials.
 - The runtime-agent needs `/var/run/docker.sock` mounted to drive user-deployed
   containers via the `selfhost-docker-compose` provider. Lock this down with
   rootless Docker or Podman in production.
@@ -90,17 +91,19 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 | AWS (ECS / Fargate + RDS + S3)    | n/a                             | spec-compliant, operator-owned |
 | GCP (Cloud Run + Cloud SQL + GCS) | n/a                             | spec-compliant, operator-owned |
 
-The provider plugins and runtime-agent connectors for AWS / GCP / Azure /
-Kubernetes are production-grade (see
-`packages/runtime-agent/src/connectors/{aws,gcp,azure,kubernetes}/`) but no
-reference deploy artifact for the kernel itself ships there. Operators bring
-their own Terraform / Helm / Pulumi to land the kernel image and runtime-agent
-image on those substrates.
+Provider packages for AWS / GCP / Kubernetes and runtime-agent connectors for
+AWS / GCP / Azure / Kubernetes are available for operator-attached distributions
+(see `packages/aws-providers/`, `packages/gcp-providers/`,
+`packages/kubernetes-providers/`, and
+`packages/runtime-agent/src/connectors/{aws,gcp,azure,kubernetes}/`), but no
+production-grade default reference deploy package for the kernel itself ships
+there. Operators bring their own Terraform / Helm / Pulumi to land the kernel
+image and runtime-agent image on those substrates.
 
 ## Why two reference distributions
 
 The architectural claim that the Takosumi kernel is substrate-neutral needs a
 second working deployment to be more than a spec promise. This distribution is
 that second working deployment. See
-`docs/reference/architecture/paas-provider-architecture.md` and the
-ecosystem-level `ARCHITECTURE.md` for the substitutability table.
+`docs/reference/architecture/operator-boundaries.md` and the ecosystem-level
+`ARCHITECTURE.md` for the substitutability table.

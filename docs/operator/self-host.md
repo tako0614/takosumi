@@ -15,7 +15,7 @@
 | ----------------- | ----------------------------------------------------------- |
 | kernel            | `takosumi server`                                           |
 | metadata store    | Postgres                                                    |
-| artifact storage  | local filesystem または object store                        |
+| DataAsset storage | local filesystem または object store。optional extension 用 |
 | runtime execution | embedded self-host connector または別 host の runtime-agent |
 
 開発用途では in-memory store や local filesystem で十分です。本番では Postgres
@@ -23,14 +23,14 @@
 
 ## 本番必須設定 {#production-required-settings}
 
-| 設定                                                                  | 目的                                                    |
-| --------------------------------------------------------------------- | ------------------------------------------------------- |
-| `TAKOSUMI_ENVIRONMENT=production`                                     | production guard を有効化する                           |
-| `TAKOSUMI_DATABASE_URL`                                               | Installation / Deployment record を永続化する           |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE` または `TAKOSUMI_SECRET_STORE_KEY` | secret material を暗号化する                            |
-| `TAKOSUMI_INSTALLER_TOKEN`                                            | `/v1/installations/*` を呼ぶ actor を認証する           |
-| `TAKOSUMI_ARTIFACT_FETCH_TOKEN`                                       | artifact fetch / delete route を installer token と分離 |
-| `TAKOSUMI_DEV_MODE` を unset                                          | 開発用の緩い secret / storage fallback を無効化する     |
+| 設定                                                                  | 目的                                                              |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `TAKOSUMI_ENVIRONMENT=production`                                     | production guard を有効化する                                     |
+| `TAKOSUMI_DATABASE_URL`                                               | Installation / Deployment record を永続化する                     |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE` または `TAKOSUMI_SECRET_STORE_KEY` | secret material を暗号化する                                      |
+| `TAKOSUMI_INSTALLER_TOKEN`                                            | `/v1/installations/*` を呼ぶ actor を認証する                     |
+| `TAKOSUMI_ARTIFACT_FETCH_TOKEN`                                       | optional DataAsset fetch / delete route を installer token と分離 |
+| `TAKOSUMI_DEV_MODE` を unset                                          | 開発用の緩い secret / storage fallback を無効化する               |
 
 各 env の詳細は [環境変数](../reference/env-vars.md) を参照してください。
 
@@ -87,7 +87,7 @@ takosumi server --port 8788
 別 shell から apply します。
 
 ```bash
-takosumi install --space space_personal --source . \
+takosumi install --space space:personal --source . \
   --remote http://localhost:8788 \
   --token "$TAKOSUMI_INSTALLER_TOKEN"
 ```
@@ -97,22 +97,23 @@ takosumi install --space space_personal --source . \
 単一 VM は動作確認に向いています。本番では次を分けると、credential の到達範囲と
 障害の切り分けが明確になります。
 
-| 分離対象                | 理由                                                       |
-| ----------------------- | ---------------------------------------------------------- |
-| kernel と Postgres      | metadata store の backup / upgrade を独立させる            |
-| kernel と runtime-agent | cloud credential や OS executor を kernel process から離す |
-| artifact storage        | 大きい artifact upload / retention を kernel disk と分ける |
-| ingress / TLS           | public hostname、CORS、CSRF、OAuth callback を一元管理する |
+| 分離対象                | 理由                                                                 |
+| ----------------------- | -------------------------------------------------------------------- |
+| kernel と Postgres      | metadata store の backup / upgrade を独立させる                      |
+| kernel と runtime-agent | cloud credential や OS executor を kernel process から離す           |
+| DataAsset storage       | 大きい optional DataAsset upload / retention を kernel disk と分ける |
+| ingress / TLS           | public hostname、CORS、CSRF、OAuth callback を一元管理する           |
 
 runtime-agent を別 host に置く手順は [runtime-agent 分離](./runtime-agent.md)
 を参照してください。
 
-## Artifact と upload 上限 {#artifact-limits}
+## DataAsset と upload 上限 {#artifact-limits}
 
-kernel は artifact upload を memory に載せすぎないように size guard を持ちます。
-大きい artifact を扱う operator は、次を固定してください。
+operator が `/v1/artifacts` を有効化する場合、kernel は upload を memory に載せ
+すぎないように size guard を持ちます。大きい DataAsset を扱う operator は、次を
+固定してください。
 
-- artifact storage を local temporary disk ではなく永続 store に置く。
+- DataAsset storage を local temporary disk ではなく永続 store に置く。
 - `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を installer token と別にする。
 - CI からの upload size が provider / reverse proxy の request size 上限に収まる
   ことを確認する。
@@ -123,7 +124,7 @@ kernel は artifact upload を memory に載せすぎないように size guard 
 
 - Postgres database
 - secret store key または passphrase
-- artifact storage
+- DataAsset storage (optional route を有効化している場合)
 - operator が runtime-agent / provider に渡す credential の保管場所
 
 restore 手順と retention は [Backup / Restore](../reference/backup-restore.md)

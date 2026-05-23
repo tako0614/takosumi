@@ -12,7 +12,7 @@ Bootstrap が担うこと:
 - Secret partition と master key を init する
 - Cross-process lock store を init する
 - Default operator account を発行し token を operator に渡す
-- Initial CatalogRelease を adopt する
+- Operator implementation / kind alias / connector inventory を確認する
 - Default Space (`space:default`) を生成する
 - Audit chain の genesis event を書く
 - Listener を open する
@@ -28,12 +28,12 @@ chain の genesis event を確認し、bootstrap stage を skip する。
 | 2  | secret-partition-init         | exit + supervisor restart   |
 | 3  | lock-store-init               | exit + supervisor restart   |
 | 4  | default-operator-account-init | exit (token 発行前で abort) |
-| 5  | catalog-release-adopt         | exit + supervisor restart   |
+| 5  | operator-implementation-load  | exit + supervisor restart   |
 | 6  | default-space-create          | exit + supervisor restart   |
 | 7  | audit-genesis                 | exit + supervisor restart   |
 | 8  | listener-open                 | exit + supervisor restart   |
 
-各 stage 完了で audit event を書く (後述)。Stage 5–7 は単一の cross-process lock
+各 stage 完了で audit event を書く (後述)。Stage 4–7 は単一の cross-process lock
 下で直列化される (multi-pod bootstrap 参照)。
 
 ## Stage 1 — storage-init
@@ -71,7 +71,7 @@ Cross-process lock backend を初期化する。 Bootstrap lock
 
 - Default backend は kernel storage backend と同じ
 - Operator が `TAKOSUMI_LOCK_BACKEND` で別 store を指定可能
-- 初期化後 `bootstrap` 名義で TTL 60s の lock を取得し、stage 5–7 を serialize
+- 初期化後 `bootstrap` 名義で TTL 60s の lock を取得し、stage 4–7 を serialize
   する
 
 詳細は [Cross-Process Locks](./cross-process-locks.md)。
@@ -85,31 +85,26 @@ Bootstrap 完了後に operator が kernel を操作するための初期 creden
 - Token は 32 byte ランダム + Base64URL encoding
 - Token の **平文** は kernel stdout に **1 度だけ** 出力する
 - Token hash のみが storage に永続化される
-- 既に default operator account が存在する場合は bootstrap 全体が abort される
-  (re-init 防止)
+- 既に default operator account が存在する場合は stage 4 を skip し、 token
+  平文は再出力しない (re-init 防止)
 
 将来 operator bootstrap CLI を追加する場合は、token を CLI 側にも copy して
 scrolloff 後に取り戻せるようにしてよい。 現在の public `takosumi` CLI は AppSpec
-deploy engine であり、この bootstrap protocol を直接実行しない。
+deploy engine であり、operator bootstrap は operator distribution の init flow
+として扱う。
 
-## Stage 5 — catalog-release-adopt
+## Stage 5 — operator-implementation-load
 
-Initial CatalogRelease を adopt する。
+operator distribution が kernel 起動時に渡した `kindAliases`、provider
+implementation、 runtime-agent connector inventory を検証する。
 
-優先順:
+- production / staging では selected implementation が 1 つ以上必要
+- short alias は operator-provided `kindAliases` にあるものだけ解決される
+- 同じ kind URI を複数 reference adapter が提供する場合は stage abort
 
-1. operator-managed bootstrap config で operator-supplied CatalogRelease を渡す
-2. `TAKOSUMI_BOOTSTRAP_CATALOG_PATH` env で同様に渡す
-3. Embedded default catalog (kernel binary に内蔵)
-
-Operator-supplied の場合、検証は **operator-pinned sha256 digest pin** に従う (=
-publisher signing は持たず、 operator が `CATALOG_DIGEST` env / config で
-expected digest を固定する [Catalog Release Trust](./catalog-release-trust.md)
-参照)。 digest mismatch で stage abort。
-
-Embedded default catalog は kernel build 時に sha256 digest が固定され、
-operator-pinned digest との一致で fail-closed に検証される (= publisher signing
-ではない)。
+operator distribution が通常の TypeScript module として provider package を
+import し、`plugins: [...]` に渡す。詳細は
+[Plugin Loading](./plugin-loading.md)。
 
 ## Stage 6 — default-space-create
 
@@ -117,9 +112,8 @@ Default Space `space:default` を生成する。
 
 - Operator が `--no-default-space` で opt out 可能
 - Opt out の場合 stage 6 は skip され、 operator が後で internal Space API
-  または operator automation で Space を作成する必要がある。 現行 public
-  `takosumi` CLI は `space create` command を公開していない。
-- Generate された Space は initial CatalogRelease に bind される
+  または operator automation で Space を作成する。
+- Generate された Space は operator policy の default visibility を使う
 - Default Space の name policy は permissive (operator 後で締める)
 
 ## Stage 7 — audit-genesis
@@ -136,7 +130,7 @@ storage-initialized
 secret-partition-initialized
 lock-store-initialized
 default-operator-account-created
-catalog-release-adopted
+operator-implementations-loaded
 default-space-created               (opt out 時は省略)
 kernel-bootstrap-completed
 ```
@@ -161,7 +155,7 @@ Public deploy / internal control / runtime-agent / discovery ports を open
 | secret-partition-init         | 30s             |
 | lock-store-init               | 30s             |
 | default-operator-account-init | 5s              |
-| catalog-release-adopt         | 60s             |
+| operator-implementation-load  | 30s             |
 | default-space-create          | 5s              |
 | audit-genesis                 | 5s              |
 | listener-open                 | 10s             |
@@ -180,8 +174,8 @@ Bootstrap は再起動で重複実行されない。
   に `kernel-bootstrap-completed` が無いので bootstrap が再走する
 - Stage 1–6 は個別に idempotent: storage migration は up step が再走しても
   no-op、 secret partition は既存 envelope を尊重、 lock store は既存 row を
-  upsert、 default operator account / catalog release / default space は
-  existence check で skip
+  upsert、 default operator account / operator plugin evidence / default space
+  は existence check で skip
 
 ## CLI Exposure
 
@@ -221,7 +215,7 @@ or 続行)。
 | `secret-partition-initialized`     | 2 完了                    |
 | `lock-store-initialized`           | 3 完了                    |
 | `default-operator-account-created` | 4 完了                    |
-| `catalog-release-adopted`          | 5 完了                    |
+| `operator-implementations-loaded`  | 5 完了                    |
 | `default-space-created`            | 6 完了 (opt out 時は省略) |
 | `kernel-bootstrap-completed`       | 7 完了                    |
 
@@ -244,7 +238,6 @@ semantics、 kernel ↔ runtime-agent skew、 rollback gate は
 
 - `docs/reference/architecture/operator-boundaries.md`
 - `docs/reference/architecture/snapshot-model.md`
-- `docs/reference/architecture/catalog-release-descriptor-model.md`
 - `docs/reference/architecture/space-model.md`
 - `docs/reference/architecture/operational-hardening-checklist.md`
 
@@ -255,7 +248,7 @@ semantics、 kernel ↔ runtime-agent skew、 rollback gate は
 - [Storage Schema](./storage-schema.md)
 - [Secret Partitions](./secret-partitions.md)
 - [Cross-Process Locks](./cross-process-locks.md)
-- [Catalog Release Trust](./catalog-release-trust.md)
+- [Plugin Loading](./plugin-loading.md)
 - [Audit Events](./audit-events.md)
 - [Schema Evolution](./migration-upgrade.md)
 - [Readiness Probes](./readiness-probes.md)

@@ -36,8 +36,8 @@ metadata:
   name: Example Notes
 ```
 
-`metadata.id` は AppSpec の stable id です。Space や install source は AppSpec
-field ではなく、Installer API / CLI の input として渡します。
+`metadata.id` は AppSpec の stable id です。Space や install source は Installer
+API / CLI の input として渡します。
 
 ## `components`
 
@@ -51,19 +51,15 @@ component は名前付き map entry です。各 component が使える公開 fi
 | `publish` | no       | component output を namespace path に登録する。                        |
 | `listen`  | no       | namespace path から material を受け取る。                              |
 
-Takosumi AppSpec v1 は公式 component kind を 1 つも定義しません。`worker`、
-`web-service`、`postgres`、`object-store`、`custom-domain` は Takos reference
-registry が公開する alias であり、Takosumi spec の contract-owned kind
-ではありません。operator が alias map を 渡した場合だけ short alias が URI
-に解決されます。
+`kind` は operator が解決する component type です。`worker`、`web-service`、
+`postgres`、`object-store`、`custom-domain` は takosumi.com reference
+descriptors が提供する common alias で、operator の alias map により URI へ
+解決されます。
 
-`spec` の中身は kind ごとの convention です。AppSpec contract は `spec` の内部
-field を増やしません。
-
-component の `build` field は AppSpec v1 の公開 field ではありません。
+`spec` の中身は selected kind / materializer の convention です。
 
 source を build / prepare する手順は [BuildSpec](./build-spec.md) と build
-service に置きます。
+service に書きます。
 
 AppSpec には apply できる intent だけを書きます。
 
@@ -81,8 +77,9 @@ components:
       compatibilityDate: "2025-01-01"
 ```
 
-`spec.entrypoint` は AppSpec root の field ではなく、Takos reference worker kind
-の convention です。Takosumi AppSpec contract は path の意味を解釈しません。
+`spec.entrypoint` は takosumi.com reference worker descriptor の convention
+です。selected worker materializer が prepared source snapshot 内の path として
+読みます。
 
 build が必要な場合、build service は先に source tree を準備し、prepared source
 snapshot として Installer API に渡します。AppSpec 側には build 後 snapshot 内で
@@ -103,8 +100,10 @@ components:
       - com.example.notes.db
 ```
 
-publish された material の shape は kind と materializer が決めます。consumer は
-path を直接参照せず、`listen` で受け取ります。
+string list の `publish` は component の default output を namespace path に
+bind します。named output や複数 output の shape は kind-specific `spec` または
+materializer convention が定義します。consumer は path を直接参照せず、`listen`
+で受け取ります。
 
 ## `listen`
 
@@ -122,6 +121,10 @@ components:
 
 `as` は注入方法です。一般的には `env`、`mount`、`target` のような値を使います。
 `prefix` や `mount` の扱いは kind / materializer convention に従います。
+`access` を指定しない場合、required access mode は consumer kind / materializer
+convention から解決されます。AppSpec author が指定できる distribution では、
+`access: read | read-write | admin | invoke-only | observe-only` のいずれかに
+制限されます。
 
 `publish` / `listen` が作る依存 graph に cycle がある場合、Installation 作成や
 Deployment apply は fail-closed で失敗します。
@@ -130,18 +133,18 @@ Deployment apply は fail-closed で失敗します。
 
 AppSpec は small contract です。次の情報は AppSpec に書きません。
 
-| 書かないもの                      | 置き場所                                                       |
-| --------------------------------- | -------------------------------------------------------------- |
-| Space / organization / actor      | Installer API / token claims / operator-owned context          |
-| Git URL / source pin              | Installer API / CLI input / Deployment record                  |
-| provider credential               | operator config / runtime-agent host                           |
-| plugin selection                  | operator bootstrap / `createPaaSApp({ kindAliases, plugins })` |
-| build recipe / container command  | BuildSpec / build service / CI                                 |
-| billing / OIDC issuer / signup UI | operator-owned external surface                                |
-| workflow / schedule / webhook     | upstream automation that submits AppSpec source                |
+| 書かないもの                      | 置き場所                                                                 |
+| --------------------------------- | ------------------------------------------------------------------------ |
+| Space / organization / actor      | Installer API / token claims / operator-owned context                    |
+| Git URL / source pin              | Installer API / CLI input / Deployment record                            |
+| provider credential               | operator config / runtime-agent host                                     |
+| implementation selection          | operator bootstrap / reference `createPaaSApp({ kindAliases, plugins })` |
+| build recipe / container command  | BuildSpec / build service / CI                                           |
+| billing / OIDC issuer / signup UI | operator-owned external surface                                          |
+| workflow / schedule / webhook     | upstream automation that submits AppSpec source                          |
 
-過去の design にあった `use:`、root `kind: App`、top-level `interfaces`、
-top-level `permissions`、top-level `routes` は current AppSpec では使いません。
+current AppSpec は `apiVersion`、`metadata`、`components` を root field とし、
+component connection は `publish` / `listen` で表現します。
 
 ## 完全な例
 
@@ -184,6 +187,6 @@ components:
 
 - [Installer API](./installer-api.md)
 - [BuildSpec](./build-spec.md)
-- [Provider plugin](./providers.md)
-- [Reference Kind Registry](./kind-catalog.md)
+- [Provider Implementations](./providers.md)
+- [Reference Kind Descriptors](./kind-registry.md)
 - [Runtime-Agent API](./runtime-agent-api.md)

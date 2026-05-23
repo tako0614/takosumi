@@ -1,10 +1,11 @@
 # Kernel HTTP API {#kernel-http-api}
 
-> このページでわかること: kernel HTTP surface の全 endpoint と認証境界。
+> このページでわかること: kernel HTTP surface の endpoint と認証境界。
 
-本ページは `takosumi-api` role で全 surface を mount した状態を前提に、 3 つの
-surface (public installer / internal control plane / runtime-agent control RPC)
-を一括で定義します。
+本ページは `takosumi-api` role が mount する Takosumi kernel endpoint を説明し
+ます。Takosumi の public spec surface は Installer API の 5 endpoint だけです。
+internal control plane と runtime-agent control RPC は operator-owned runtime
+surface です。
 
 > 実装は
 > [`packages/kernel/src/api/`](https://github.com/tako0614/takosumi/tree/main/packages/kernel/src/api)
@@ -62,8 +63,8 @@ request / response shape は [Installer API](./installer-api.md) 参照。
 
 ## Internal control plane routes {#internal-control-plane-routes}
 
-`/api/internal/v1/*` は operator-only。 automation が caller で、 public 経由
-expose はしません。
+`/api/internal/v1/*` は operator-only。automation が caller で、internal route
+boundary に置きます。
 
 現在 mount される署名付き internal route:
 
@@ -96,9 +97,9 @@ RPC。 すべて `/api/internal/v1/runtime/agents/...` 配下で、 internal HMA
 
 ## Workflow / trigger / hook の境界 {#workflow-trigger-hook-boundary}
 
-kernel は workflow / trigger / schedule / declarable hook の HTTP route を持ち
-ません。build は BuildSpec を読む build service または CI の責務で、kernel
-installer は shell / container command を直接実行しません。
+workflow / trigger / schedule / declarable hook は upstream automation として
+installer API の前段に置きます。build は BuildSpec を読む build service または
+CI が実行します。
 
 The current kernel exposes no workflow, trigger, schedule, or declarable hook
 HTTP route.
@@ -127,17 +128,17 @@ interface ApiErrorEnvelope {
 
 `DomainErrorCode` は v1 で 9 個の closed enum:
 
-| `code`                   | HTTP | 主な発生要因                                                     |
-| ------------------------ | ---- | ---------------------------------------------------------------- |
-| `invalid_argument`       | 400  | AppSpec schema / form input / publish-listen cycle               |
-| `unauthenticated`        | 401  | bearer 不足、 internal HMAC 検証失敗                             |
-| `permission_denied`      | 403  | space 越境、 token claim 不足                                    |
-| `not_found`              | 404  | endpoint disabled (token unset)、 Installation / Deployment 不在 |
-| `failed_precondition`    | 409  | `expected.commit` mismatch、 collision-detected、 approval 失効  |
-| `resource_exhausted`     | 413  | artifact payload / provider quota / request size 上限超過        |
-| `not_implemented`        | 501  | issuer 未配線、 operator が opt-in していない機能                |
-| `readiness_probe_failed` | 503  | `/livez` / `/readyz` / dependent port が ready でない            |
-| `internal_error`         | 500  | unhandled exception                                              |
+| `code`                   | HTTP | 主な発生要因                                                             |
+| ------------------------ | ---- | ------------------------------------------------------------------------ |
+| `invalid_argument`       | 400  | AppSpec schema / form input / publish-listen cycle                       |
+| `unauthenticated`        | 401  | bearer 不足、 internal HMAC 検証失敗                                     |
+| `permission_denied`      | 403  | space 越境、 token claim 不足                                            |
+| `not_found`              | 404  | endpoint disabled (token unset)、 Installation / Deployment 不在         |
+| `failed_precondition`    | 409  | expected source / manifest mismatch、 collision-detected、 approval 失効 |
+| `resource_exhausted`     | 413  | source snapshot / provider quota / request size 上限超過                 |
+| `not_implemented`        | 501  | issuer 未配線、 operator が opt-in していない機能                        |
+| `readiness_probe_failed` | 503  | `/livez` / `/readyz` / dependent port が ready でない                    |
+| `internal_error`         | 500  | unhandled exception                                                      |
 
 `details` に sensitive key (`authorization` / `cookie` / `token` / `secret` /
 `password` / `credential` / `api_key` / `private_key`) を含む field があれば
@@ -148,7 +149,7 @@ interface ApiErrorEnvelope {
 - [Installer API](./installer-api.md) — 5 endpoint の完全 spec
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
 - [BuildSpec](./build-spec.md) — build service と prepared source の handoff
-- [Reference Kind Registry](./kind-catalog.md#reference-component-kinds) — Takos
-  reference kind + operator-defined kind
+- [Reference Kind Descriptors](./kind-registry.md#reference-component-kinds) —
+  takosumi.com reference kind examples + operator-defined kind
 - [Runtime-Agent API](./runtime-agent-api.md)
 - [Closed Enums](./closed-enums.md)

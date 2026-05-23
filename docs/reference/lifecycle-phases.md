@@ -36,13 +36,14 @@ journal entry から再入します。
 
 - **Input**: AppSpec 由来 DesiredSnapshot + 既存 Space の前回
   `ResolutionSnapshot` (あれば)
-- **Output**: 新 `ResolutionSnapshot` と bind 済 `OperationPlan`
+- **Output**: 新 `ResolutionSnapshot` と bind 済 `OperationPlan`、provider side
+  effect evidence
 - **Journal cursor**: operation ごとに新 `journalEntryId` を割当て、
   `(spaceId, operationPlanDigest, journalEntryId)` を記録
-- **WAL stages**: `prepare` -> `pre-commit` -> `commit`
-- **Failure**: `prepare` 失敗は副作用なく plan を破棄。 `pre-commit` 失敗は 同
-  WAL entry の compensate を実行。 `commit` 失敗は entry を `commit-failed` に
-  marking し、 recovery が resume / compensate を決定
+- **WAL stages**: `prepare` -> `pre-commit` -> `commit` -> `post-commit` ->
+  `finalize`
+- **Failure**: `prepare` / `pre-commit` 失敗は副作用なく `abort`。`commit`
+  失敗は同じ idempotency key で retry するか、operator が recovery mode を選ぶ
 - **Blocking**: 期間中 `(spaceId, operationPlanDigest)` lock を保持。 同 Space
   の他 intentional phase は queue
 - **Typical duration**: 数秒〜数分。 OCI image pull / Transform 含む plan は
@@ -51,14 +52,14 @@ journal entry から再入します。
 ### `activate`
 
 - **Input**: `apply` が生成した `ResolutionSnapshot`
-- **Output**: connector 側 activation 副作用。 Exposure health は `unknown` で
-  初期化。 新 `ResolutionSnapshot` は生成しない
+- **Output**: ActivationSnapshot / GroupHead update。Exposure health は
+  `unknown` で 初期化。 新 `ResolutionSnapshot` は生成しない
 - **Journal cursor**: apply phase の entry を `commit` -> `post-commit` 遷移で
   継続使用
-- **WAL stages**: `commit` -> `post-commit`
-- **Failure**: `post-commit` 失敗は effect を rollback せず `post-commit-failed`
-  annotation を立てて observe loop が reconcile。 `compensate` recovery 選択時は
-  `activation-rollback` `RevokeDebt` を emit
+- **WAL stages**: `post-commit` -> `observe`
+- **Failure**: `post-commit` 失敗は provider side effect を rollback せず
+  RevokeDebt を enqueue し、observe loop が reconcile。`compensate` recovery
+  選択時は `activation-rollback` RevokeDebt を emit
 - **Blocking**: 元 `apply` と同じ lock を保持
 - **Typical duration**: 1 分未満。 connector traffic flip / DNS / readiness 伝
   播が支配的
@@ -106,9 +107,9 @@ journal entry から再入します。
 ### `observe`
 
 - **Input**: live runtime-agent describe 結果 + 現行 `ResolutionSnapshot`
-- **Output**: Exposure health 遷移 (`unknown` -> `observing` -> `healthy` /
-  `degraded` / `unhealthy`)、 ObservationSet entry、 drift / external revoke
-  検出時の `RevokeDebt` 候補
+- **Output**: Exposure health 遷移 (`unknown` -> `healthy` / `degraded` /
+  `unhealthy`)、 ObservationSet entry、 drift / external revoke 検出時の
+  `RevokeDebt` 候補
 - **Journal cursor**: Space ごとに長時間 observe entry を再利用。 新 operation
   plan digest は割当てない
 - **WAL stages**: `observe` (long-lived、 terminal にならない)
@@ -120,7 +121,8 @@ journal entry から再入します。
 ## `LifecycleStatus` enum
 
 `LifecycleStatus` は runtime-agent が backing connector 上の managed object に
-ついて報告する 5 値の観測 state で、 control plane phase ではありません。
+ついて報告する 5 値の観測 state です。control plane phase は上記 Lifecycle Phase
+で扱います。
 
 ```text
 running | stopped | missing | error | unknown

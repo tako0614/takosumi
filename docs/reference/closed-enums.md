@@ -2,21 +2,26 @@
 
 このページは Takosumi kernel contract で値集合を閉じる enum の索引です。operator
 account-plane が所有する role、billing、trial、support、incident などの enum は
-ここに含めません。
+account-plane docs に置きます。
 
 ## Lifecycle
 
 ### Lifecycle phase
 
 ```txt
-validate | plan | prepare | apply | verify | activate | observe | rollback | destroy | recover
+apply | activate | destroy | rollback | recovery | observe
 ```
 
-### Lifecycle status
+`verify` は lifecycle phase ではなく runtime-agent の補助 trigger です。
+
+### Managed object LifecycleStatus
 
 ```txt
-pending | running | succeeded | failed | skipped | cancelled
+running | stopped | missing | error | unknown
 ```
+
+Deployment / Installation status は
+[Installer API](./installer-api.md#entity-shapes) が正本です。
 
 ### Operation kind
 
@@ -27,7 +32,7 @@ create | update | replace | delete | no-op | rollback
 ## WAL stage
 
 ```txt
-planned | prepared | pre-commit | committed | verified | activated | compensated | failed
+prepare | pre-commit | commit | post-commit | observe | finalize | abort | skip
 ```
 
 WAL stage の意味は [WAL Stages](./wal-stages.md) を参照してください。
@@ -43,11 +48,12 @@ read | read-write | admin | invoke-only | observe-only
 ## Approval lifecycle
 
 ```txt
-not-required | pending | approved | rejected | invalidated | expired
+pending | approved | denied | expired | invalidated | consumed
 ```
 
 approval が無効化される条件は
-[Approval Invalidation](./approval-invalidation.md) にあります。
+[Approval Invalidation](./approval-invalidation.md) にあります。 `reviewing` は
+client-only UX hint として UI 側で扱います。
 
 ## Risk
 
@@ -75,14 +81,14 @@ open | retrying | resolved
 
 詳細は [RevokeDebt Model](./revoke-debt.md) を参照してください。
 
-## DataAsset kind
+## DataAsset metadata kind
 
-```txt
-source-archive | build-output | runtime-bundle | static-asset | export-archive
-```
+DataAsset metadata `kind` は operator が optional DataAsset extension の
+metadata として登録する open value です。connector は `acceptedArtifactKinds`
+で受け付ける metadata value を宣言します。
 
-artifact の扱いは [DataAsset Policy](./data-asset-policy.md) と
-[Artifact GC](./artifact-gc.md) を参照してください。
+DataAsset の扱いは [DataAsset Policy](./data-asset-policy.md) と
+[DataAsset GC](./artifact-gc.md) を参照してください。
 
 ## Health
 
@@ -96,19 +102,22 @@ connector / runtime observation の health value です。
 
 ```txt
 invalid_argument | unauthenticated | permission_denied | not_found |
-already_exists | conflict | failed_precondition | resource_exhausted |
-cancelled | unavailable | internal
+failed_precondition | resource_exhausted | not_implemented |
+readiness_probe_failed | internal_error
 ```
 
 HTTP status への対応は [Kernel HTTP API](./kernel-http-api.md) にあります。
+Installer API が返す public error code subset は
+[Installer API](./installer-api.md#error-envelope) が正本です。
 
 ## Connector identity
 
 ```txt
-connector:<provider-id>
+connector:<id>
 ```
 
-connector id は runtime-agent connector を識別します。詳細は
+connector id は operator inventory identity です。runtime-agent lifecycle
+dispatch key は `connector:<id>` ではなく `(shape, provider)` です。詳細は
 [Connector Contract](./connector-contract.md) を参照してください。
 
 ## 関連ページ

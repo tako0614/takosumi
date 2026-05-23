@@ -44,8 +44,7 @@ that satisfies none of these conditions is eligible for compaction.
   `consumed` and whose audit retention window has not elapsed.
 - Operator hold: an operator has placed an explicit hold on the journal range.
 
-An entry that satisfies any of these conditions is kept verbatim; compaction
-does not summarize, redact, or rewrite a kept entry.
+An entry that satisfies any of these conditions is kept verbatim.
 
 ## Snapshotization
 
@@ -63,9 +62,8 @@ pair.
   DriftIndex, or ObservationSet refers to it. Garbage collection of superseded
   base snapshots is a separate pass that runs after audit retention windows
   clear.
-- The snapshotization step writes a single audit event under the
-  `catalog-release-rotated` envelope to record the new base snapshot digest
-  pair.
+- The snapshotization step writes a single `journal-compacted` audit event to
+  record the new base snapshot digest pair.
 
 ## Atomicity
 
@@ -95,11 +93,11 @@ on its own retention rules and timer.
 
 - An AuditLog event referencing a journal entry survives compaction: the audit
   event records the operation outcome, not the journal entry bytes.
-- A regime that forces longer audit retention does not extend journal retention.
-  The JournalEntry can be compacted while the audit event remains live.
+- A regime that forces longer audit retention keeps the audit event live while
+  journal retention follows journal policy.
 - A regime that requires journal-grade replay (e.g. for forensic reconstruction)
   configures `TAKOSUMI_JOURNAL_COMPACTION_OP_THRESHOLD` and friends to hold
-  journal entries longer; the regime itself does not alter compaction semantics.
+  journal entries longer; compaction semantics stay the same.
 
 See [Audit Events](./audit-events.md) for the regime taxonomy and event-level
 retention rules.

@@ -23,9 +23,14 @@ interface AuditLogEvent {
 ```
 
 `payload` は event type ごとの object です。secret value、raw token、 provider
-credential は payload に含めません。
+credential は reference / redacted form で扱います。
 
 ## Event type
+
+この表は frequently consumed event type の索引です。Bootstrap と backup /
+restore の stage-specific event はそれぞれ
+[Bootstrap Protocol](./bootstrap-protocol.md) と
+[Backup and Restore](./backup-restore.md) が正本です。
 
 ### Installation / Deployment
 
@@ -61,16 +66,18 @@ credential は payload に含めません。
 | `revoke-debt-resolved` | notice   | RevokeDebt が解消された。                               |
 | `drift-detected`       | warning  | observed state と desired state の drift が検出された。 |
 
-### Artifact / catalog / connector
+### DataAsset / connector
 
-| Type                       | Severity | 説明                                     |
-| -------------------------- | -------- | ---------------------------------------- |
-| `artifact-uploaded`        | info     | artifact が受け付けられた。              |
-| `artifact-gc-marked`       | info     | artifact GC が live set を mark した。   |
-| `artifact-gc-swept`        | notice   | artifact GC が不要 artifact を削除した。 |
-| `catalog-release-adopted`  | notice   | catalog release が採用された。           |
-| `connector-registered`     | notice   | runtime-agent connector が登録された。   |
-| `connector-health-changed` | warning  | connector health が変化した。            |
+| Type                       | Severity | 説明                                                |
+| -------------------------- | -------- | --------------------------------------------------- |
+| `artifact-uploaded`        | info     | optional DataAsset が受け付けられた。               |
+| `artifact-gc-marked`       | info     | DataAsset GC が live set を mark した。             |
+| `artifact-gc-swept`        | notice   | DataAsset GC が unreferenced DataAsset を削除した。 |
+| `connector-registered`     | notice   | runtime-agent connector が登録された。              |
+| `connector-replaced`       | notice   | runtime-agent connector record が置換された。       |
+| `connector-revoked`        | notice   | runtime-agent connector が無効化された。            |
+| `connector-health-changed` | warning  | connector health が変化した。                       |
+| `journal-compacted`        | info     | WAL base snapshot digest pair が更新された。        |
 
 ## Redaction
 
@@ -89,6 +96,6 @@ implementation は backend に合わせて構いませんが、operator が chai
 
 - [Storage Schema](./storage-schema.md)
 - [Lifecycle Protocol](./lifecycle.md)
-- [Artifact GC](./artifact-gc.md)
+- [DataAsset GC](./artifact-gc.md)
 - [Risk Taxonomy](./risk-taxonomy.md)
 - [Approval Invalidation](./approval-invalidation.md)

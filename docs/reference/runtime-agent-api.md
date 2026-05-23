@@ -6,7 +6,7 @@ runtime-agent は operator が cloud / OS credential を握る host で起動し
 の下流 execution surface として `(shape, provider)` 単位の lifecycle envelope
 を受けます。
 
-逆方向の制御 (enroll / heartbeat / lease / drain / gateway-manifest 署名) は
+逆方向の制御 (enroll / heartbeat / lease / drain / gateway manifest) は
 [Kernel HTTP API — Runtime-Agent control RPC](./kernel-http-api.md#runtime-agent-control-rpc)
 参照。
 
@@ -23,10 +23,11 @@ runtime-agent は operator が cloud / OS credential を握る host で起動し
 
 prepared source を読む connector には、kernel が
 `LifecycleApplyRequest.preparedSource` に source snapshot locator
-を載せて渡します。 artifact bytes 取得が必要な connector には、kernel が
-`LifecycleApplyRequest.artifactStore` に `baseUrl` と
+を載せて渡します。 operator が optional DataAsset extension として
+`/v1/artifacts` を mount しており、DataAsset bytes 取得が必要な connector には、
+kernel が `LifecycleApplyRequest.artifactStore` に `baseUrl` と
 `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を載せて渡します。 agent token とは別物で、
-scope は `GET /v1/artifacts/:hash` のみ
+scope は optional DataAsset extension の `GET /v1/artifacts/:hash` のみ
 ([Authentication](./kernel-http-api.md#authentication))。
 
 ## エンドポイント {#endpoints}
@@ -50,8 +51,8 @@ interface LifecycleApplyRequest {
   readonly shape: string; // 例: "object-store@v1"
   readonly provider: string; // 例: "aws-s3"
   readonly resourceName: string; // component / internal resource name
-  readonly spec: JsonValue; // component kind spec (kernel 側で validate 済み)
-  readonly tenantId?: string;
+  readonly spec: JsonValue; // component kind spec (selected implementation convention)
+  readonly spaceId: string;
   readonly idempotencyKey?: string; // WAL 由来の外部 API request token
   readonly operationRequest?: PlatformOperationRequest;
   readonly metadata?: JsonObject; // request id, audit trail 等
@@ -59,11 +60,13 @@ interface LifecycleApplyRequest {
     readonly baseUrl: string; // 例: "https://kernel.example.com"
     readonly token: string; // TAKOSUMI_ARTIFACT_FETCH_TOKEN
   };
-  readonly preparedSource?: {
-    readonly url?: string;
-    readonly digest?: string;
-    readonly workingDirectory?: string;
-  };
+  readonly preparedSource?:
+    | { readonly kind: "localDirectory"; readonly path: string }
+    | {
+      readonly kind: "remoteTar";
+      readonly url: string;
+      readonly digest: string;
+    };
 }
 ```
 
@@ -79,6 +82,11 @@ interface LifecycleApplyResponse {
 `handle` は kernel 側 deployment record に persist され、 以降の `destroy` /
 `describe` の key になります。
 
+`spaceId` は caller Installation の Space を表します。runtime-agent connector は
+この値を cloud tag、namespace、resource name prefix、audit metadata などの Space
+isolation boundary として扱います。別 Space の request で同じ handle を
+再利用してはいけません。
+
 WAL-backed public apply では kernel が `PlatformContext.operation` から
 `idempotencyKey` / `operationRequest` / `metadata.takosumiOperation` を envelope
 に転送します。 connector は外部 API が idempotency / client request token を
@@ -93,7 +101,7 @@ interface LifecycleDestroyRequest {
   readonly shape: string;
   readonly provider: string;
   readonly handle: string;
-  readonly tenantId?: string;
+  readonly spaceId: string;
   readonly idempotencyKey?: string; // WAL 由来の外部 API request token
   readonly operationRequest?: PlatformOperationRequest;
   readonly metadata?: JsonObject;
@@ -122,10 +130,10 @@ external request token が無い provider は、 connector 内部の local ledge
 
 ```ts
 interface LifecycleCompensateRequest {
-  readonly kind: string;
+  readonly shape: string;
   readonly provider: string;
   readonly handle: string;
-  readonly tenantId?: string;
+  readonly spaceId: string;
   readonly idempotencyKey?: string;
   readonly operationRequest?: PlatformOperationRequest;
   readonly metadata?: JsonObject;
@@ -155,10 +163,10 @@ RevokeDebt として保持します。
 
 ```ts
 interface LifecycleDescribeRequest {
-  readonly kind: string;
+  readonly shape: string;
   readonly provider: string;
   readonly handle: string;
-  readonly tenantId?: string;
+  readonly spaceId: string;
 }
 ```
 
@@ -177,14 +185,14 @@ interface LifecycleDescribeResponse {
 kernel apply 時の outputs に依存しないので、 runtime-agent restart 後も同じ結
 果を返せる必要があります。
 
-### `POST /v1/lifecycle/verify`
+### `POST /v1/lifecycle/verify` {#post-v1-lifecycle-verify}
 
 connector の `verify` operation を smoke test します。Request:
 
 ```ts
 interface LifecycleVerifyRequest {
   readonly targets?: readonly {
-    readonly kind: string;
+    readonly shape: string;
     readonly provider: string;
   }[];
   readonly options?: JsonObject; // connector ごとに解釈
@@ -199,7 +207,7 @@ interface LifecycleVerifyResponse {
 }
 
 interface LifecycleVerifyResult {
-  readonly kind: string; // verify 対象の component kind
+  readonly shape: string; // verify 対象の lifecycle shape
   readonly provider: string; // verify 対象の provider id
   readonly ok: boolean; // smoke test 結果 (true = 健全)
   readonly code?: string; // ok=false 時に設定される LifecycleErrorCode
@@ -210,7 +218,7 @@ interface LifecycleVerifyResult {
 }
 ```
 
-`results[]` は順序保証なし。 caller は `(kind, provider)` で集計します。
+`results[]` は順序保証なし。 caller は `(shape, provider)` で集計します。
 
 ## Connector retry / credential refresh {#connector-retry--credential-refresh}
 
@@ -294,14 +302,14 @@ interface LifecycleErrorBody {
 予約で、 kernel は共通 error logic に載せず connector の string をそのまま actor
 に伝えます。
 
-| `code`                   | HTTP   | 発生条件                                                      |
-| ------------------------ | ------ | ------------------------------------------------------------- |
-| `unauthorized`           | 401    | bearer 不足 / mismatch                                        |
-| `bad_request`            | 400    | request body の shape validation 失敗                         |
-| `connector_not_found`    | 404    | `(shape, provider)` に対応する connector が registry にいない |
-| `artifact_kind_mismatch` | 400    | artifact-backed connector の accepted kind と spec が合わない |
-| `connector_failed`       | 500    | connector が throw した想定外エラー                           |
-| `connector-extended:*`   | (任意) | connector 拡張用の予約 prefix                                 |
+| `code`                   | HTTP   | 発生条件                                                                     |
+| ------------------------ | ------ | ---------------------------------------------------------------------------- |
+| `unauthorized`           | 401    | bearer 不足 / mismatch                                                       |
+| `bad_request`            | 400    | request body の shape validation 失敗                                        |
+| `connector_not_found`    | 404    | `(shape, provider)` に対応する connector が registry にいない                |
+| `artifact_kind_mismatch` | 400    | DataAsset-backed connector の operator DataAsset metadata と spec が合わない |
+| `connector_failed`       | 500    | connector が throw した想定外エラー                                          |
+| `connector-extended:*`   | (任意) | connector 拡張用の予約 prefix                                                |
 
 `retryable: true` は network / rate limit / transient cloud failure を表す
 フラグ。 kernel は WAL の `pre-commit` / `commit` stage で再試行可否をこれで
@@ -315,14 +323,15 @@ interface LifecycleErrorBody {
 - [Lifecycle Protocol](./lifecycle.md) — cross-process lock と recovery mode
   選択を含む運用面。
 - [Closed Enums](./closed-enums.md) — `LifecycleErrorBody` codes /
-  `LifecycleStatus` / DataAsset kinds 等の closed enum hub。
-- [Connector Contract](./connector-contract.md) — `connector:<id>` identity,
-  accepted-kind vector, Space visibility, signing expectations, envelope
-  versioning that the runtime-agent hosts.
+  `LifecycleStatus` 等の closed enum hub。
+- [Connector Contract](./connector-contract.md) — `connector:<id>` inventory
+  identity, `(shape, provider)` lifecycle addressing, accepted DataAsset
+  metadata vector, Space visibility, and envelope versioning that the
+  runtime-agent hosts.
 - [Kernel HTTP API](./kernel-http-api.md)
 
 ## 関連ページ
 
 - [Lifecycle Phases](./lifecycle-phases.md)
-- [Provider plugin](./providers.md)
+- [Provider Implementations](./providers.md)
 - [Closed Enums](./closed-enums.md)

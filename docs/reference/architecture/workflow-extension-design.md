@@ -1,20 +1,22 @@
 # Workflow 拡張設計 {#workflow-extension-design}
 
-> このページでわかること: workflow / webhook / cron を current installer
-> contract の外側に置く理由。
+> このページでわかること: workflow / webhook / cron を installer lifecycle の
+> 前段に置く理由。
 
-Takosumi kernel は workflow runner ではない。 public HTTP surface は AppSpec /
-Installation / Deployment の installer lifecycle だけで、 endpoint は
-`/v1/installations/*` の 5 つに閉じる。
+Workflow runner は installer API の前段で source ref を選び、必要なら prepared
+source snapshot を作ります。kernel の public HTTP surface は AppSpec /
+Installation / Deployment の installer lifecycle を扱う `/v1/installations/*` の
+5 endpoint です。
 
 ## 境界 {#boundary}
 
-- build は AppSpec ではなく BuildSpec / build service / CI に置く。
-- webhook / cron / CI trigger / pre-post automation は kernel scope 外。
+- build は BuildSpec / build service / CI に置く。
+- webhook / cron / CI trigger / pre-post automation は upstream automation
+  に置く。
 - upstream automation は source ref を選び、必要なら prepared source snapshot を
   用意し、installer API に AppSpec source または prepared source を渡す。
-- kernel は workflow-specific endpoint、trigger registration endpoint、event
-  signature verification endpoint を公開しない。
+- upstream automation は workflow-specific endpoint、trigger registration
+  endpoint、 event signature verification endpoint を持てる。
 
 ## 現行 統合ポイント {#current-integration-point}
 
@@ -32,6 +34,6 @@ endpoint を使う。 auth は `TAKOSUMI_INSTALLER_TOKEN`。
 ## 削除されたレガシーモデル {#removed-legacy-model}
 
 過去の raw deploy route、中間 AppSpec submit、retired authoring extension strip
-/ string interpolation materialization は current public contract では使わない。
-AppSpec が public source of truth で、Deployment は installer lifecycle
-の結果として記録 される。
+/ string interpolation materialization は current flow から外れている。 AppSpec
+が public source of truth で、Deployment は installer lifecycle の結果として記録
+される。

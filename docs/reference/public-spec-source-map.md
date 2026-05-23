@@ -1,32 +1,41 @@
 # Public Spec ソースマップ {#public-spec-source-map}
 
-public surface ごとの source of truth と reference の対応表です。wire / package
-surface を変えるときは、実装 source、test、docs を同じ変更で更新します。
+Takosumi public spec の source of truth と reference の対応表です。public spec
+concept は AppSpec / Installation / Deployment と installer endpoint
+に閉じます。wire surface を変えるときは、実装 source、test、docs を同じ変更で
+更新します。
 
-## Map
+## Public spec map
 
-| Spec key                | Public surface                                  | Owner                         | Source of truth                                                                                                                      | Published reference                          |
-| ----------------------- | ----------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
-| `appspec-v1`            | `.takosumi.yml` envelope / validation           | takosumi installer + contract | `packages/installer/src/yaml-parser.ts`, `packages/contract/`                                                                        | [AppSpec](./app-spec.md)                     |
-| `buildspec-v1`          | `.takosumi.build.yml` build service input       | build service distribution    | `docs/reference/build-spec.md`; parser/service are operator distribution scope                                                       | [BuildSpec](./build-spec.md)                 |
-| `installer-api-v1`      | Installation / Deployment / rollback 5 endpoint | takosumi kernel + installer   | `packages/kernel/src/api/installer_public_routes.ts`, `packages/contract/src/installer-api.ts`, `packages/kernel/src/api/openapi.ts` | [Installer API](./installer-api.md)          |
-| `kernel-http-api-v1`    | public / internal / runtime-agent HTTP boundary | takosumi kernel               | `packages/kernel/src/api/`, `packages/kernel/src/api/openapi.ts`                                                                     | [Kernel HTTP API](./kernel-http-api.md)      |
-| `runtime-agent-api-v1`  | lifecycle RPC envelope                          | takosumi runtime-agent        | `packages/runtime-agent/`, `packages/contract/`                                                                                      | [Runtime-Agent API](./runtime-agent-api.md)  |
-| `reference-kinds-v1`    | Takos reference component kind descriptors      | takosumi plugins              | `packages/plugins/spec/kinds/`, `packages/plugins/src/kinds/`                                                                        | [Reference Kind Registry](./kind-catalog.md) |
-| `provider-plugins-v1`   | provider plugin contract and matrix             | takosumi provider packages    | `packages/*-providers/`, `packages/plugins/`                                                                                         | [Provider plugin](./providers.md)            |
-| `takosumi-jsr-packages` | JSR package exports and dependency pins         | package owners                | `packages/*/deno.json`, `packages/*/mod.ts`                                                                                          | `https://jsr.io/@takos/takosumi`             |
+| Spec key           | Public surface                                  | Owner                         | Source of truth                                                                                                                      | Published reference                 |
+| ------------------ | ----------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
+| `appspec-v1`       | `.takosumi.yml` envelope / validation           | takosumi installer + contract | `packages/installer/src/yaml-parser.ts`, `packages/contract/`                                                                        | [AppSpec](./app-spec.md)            |
+| `installer-api-v1` | Installation / Deployment / rollback 5 endpoint | takosumi kernel + installer   | `packages/kernel/src/api/installer_public_routes.ts`, `packages/contract/src/installer-api.ts`, `packages/kernel/src/api/openapi.ts` | [Installer API](./installer-api.md) |
+
+## Adjacent references
+
+| Key                      | Surface                                       | Owner                              | Source / reference                                                                                              |
+| ------------------------ | --------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `buildspec-v1`           | `.takosumi.build.yml` build service input     | build service distribution         | [BuildSpec](./build-spec.md); parser/service are operator distribution scope                                    |
+| `kernel-http-api-v1`     | internal / runtime-agent HTTP boundary        | takosumi kernel                    | [Kernel HTTP API](./kernel-http-api.md)                                                                         |
+| `runtime-agent-api-v1`   | lifecycle RPC envelope                        | takosumi runtime-agent             | [Runtime-Agent API](./runtime-agent-api.md)                                                                     |
+| `reference-kinds-v1`     | external reference component kind descriptors | takosumi.com reference descriptors | `packages/plugins/spec/kinds/`, `packages/plugins/src/kinds/`, [Reference Kind Descriptors](./kind-registry.md) |
+| `reference-providers-v1` | reference provider adapter API and matrix     | takosumi provider packages         | [Provider Implementations](./providers.md)                                                                      |
+| `takosumi-jsr-packages`  | JSR package exports and dependency pins       | package owners                     | `packages/*/deno.json`, `packages/*/mod.ts`, `https://jsr.io/@takos/takosumi`                                   |
 
 ## Boundary rules
 
 - AppSpec source is `.takosumi.yml`; build input, when used, is
-  `.takosumi.build.yml`.
-- Component kind descriptors under `packages/plugins/spec/kinds/` are Takos
-  reference registry inputs, not Takosumi AppSpec contract fields.
+  `.takosumi.build.yml` and belongs to operator build service scope.
+- Component kind descriptors under `packages/plugins/spec/kinds/` and
+  `https://takosumi.com/kinds/v1/*` are external reference descriptor examples.
 - Installer clients submit source / expected pin to the installer endpoints.
 - Build services submit prepared source snapshots with `source.kind=prepared`;
-  they do not submit overlay fields or build recipes to the Installer API.
+  build recipes stay in BuildSpec / build service scope.
+- DataAsset routes such as `/v1/artifacts` are operator extension routes with
+  separate credentials.
 - Workflow runner, scheduler, webhook, account-plane, billing, and OIDC issuer
-  are outside the kernel public surface.
+  live in operator / account-plane surfaces.
 - Public JSR package checks use each package's `deno.json`, not only the root
   workspace import map.
 

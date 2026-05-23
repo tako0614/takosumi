@@ -16,7 +16,7 @@ source root の optional `.takosumi.build.yml`。
 build service が source tree を準備し、prepared source snapshot を作るための入力
 です。
 
-kernel の public entity ではありません。詳細は [BuildSpec](./build-spec.md)。
+詳細は [BuildSpec](./build-spec.md)。
 
 ## Installation
 
@@ -36,32 +36,30 @@ AppSpec の `components` map の entry。公開 field は `kind`、`spec`、`pub
 
 ## Kind
 
-component の opaque type discriminator。Takosumi spec は公式 component kind を
-定義しません。`worker`、`postgres`、`object-store`、`custom-domain` などは Takos
-reference registry の alias 例です。詳細は
-[Reference Kind Registry](./kind-catalog.md)。
+component の opaque type discriminator。`worker`、`postgres`、`object-store`、
+`custom-domain` などは takosumi.com reference descriptor examples の alias
+例です。詳細は [Reference Kind Descriptors](./kind-registry.md)。
 
 ## Materializer
 
-kind と `spec` を具体 runtime / resource に変換する apply 実装です。operator は
-provider package の `KernelPlugin` factory か inline materializer を attach し
-ます。
+kind と `spec` を具体 runtime / resource に変換する apply 実装です。Takosumi
+reference kernel では provider package の `KernelPlugin` factory を attach
+します。
 
-## Provider plugin
+## Provider implementation
 
 Cloudflare / AWS / GCP / Kubernetes / self-host など、具体 substrate 向けの
-materializer 実装です。詳細は [Provider plugin](./providers.md)。
+materializer 実装です。詳細は [Provider Implementations](./providers.md)。
 
 ## KernelPlugin
 
-provider plugin が返す contract shape です。`provides[]`、capability、apply /
-destroy、optional lifecycle hook を持ちます。
+Takosumi reference kernel が使う provider implementation adapter shape です。
+`provides[]`、capability、apply / destroy、optional lifecycle hook を持ちます。
 
 ## Namespace pub/sub
 
 component 間接続の model です。producer は `publish` で namespace path に
-material を登録し、consumer は `listen` で受け取ります。旧 `use:` edge や
-`${ref:...}` interpolation は使いません。
+material を登録し、consumer は `listen` で受け取ります。
 
 ## Namespace export
 
@@ -72,16 +70,17 @@ model です。例として `operator.identity.oidc` があります。詳細は
 ## Connector
 
 runtime-agent 側で provider operation を実行する adapter です。kernel は
-`KernelPlugin` contract を通じて provider lifecycle を呼び、connector は cloud
-API や OS executor を操作します。詳細は
+selected implementation binding を通じて provider lifecycle を呼び、connector は
+cloud API や OS executor を操作します。Takosumi reference kernel ではこの
+binding を `KernelPlugin` で表します。詳細は
 [Connector Contract](./connector-contract.md)。
 
 ## Artifact
 
-uploaded blob の digest-pinned data asset です。artifact route は 保存・取得・GC
-を扱い、workflow runner 自体にはなりません。AppSpec の component kind contract
-ではありません。詳細は [DataAsset Policy](./data-asset-policy.md) と
-[Artifact GC](./artifact-gc.md)。
+route / CLI 名に残る historical term です。canonical concept は DataAsset
+で、operator DataAsset extension が扱う content-addressed blob を指します。
+artifact route は保存・取得・GC を扱います。詳細は
+[DataAsset Policy](./data-asset-policy.md) と [DataAsset GC](./artifact-gc.md)。
 
 ## Prepared Source
 
@@ -90,10 +89,8 @@ Installer API では `source.kind: "prepared"` として渡します。
 
 ## manifestDigest
 
-Installer API に残っている wire field name です。current docs では AppSpec
-digest を指します。
-
-歴史的な `manifest` 語を public concept として増やすものではありません。
+Installer API に残っている wire field name です。current docs では
+`.takosumi.yml` file bytes の byte-stream digest を指します。
 
 ## Runtime-Agent
 
@@ -108,8 +105,9 @@ wire contract は [Runtime-Agent API](./runtime-agent-api.md)。
 
 ## Operator
 
-Takosumi kernel を起動し、provider plugin、credential、runtime-agent、storage、
-account-plane 連携を選ぶ主体です。operator 向け導線は [Operator](../operator/)。
+Takosumi kernel を起動し、provider
+implementation、credential、runtime-agent、storage、 account-plane
+連携を選ぶ主体です。operator 向け導線は [Operator](../operator/)。
 
 ## Account-Plane
 

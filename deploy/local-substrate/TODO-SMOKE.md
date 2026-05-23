@@ -19,9 +19,10 @@ miniflare 上で 2 instance 動かす」 形に組み直すしかない**。
    D1 / R2 / KV / Queue / DO binding を動的 allocate する。 現状 hand-rolled な
    `takosumi-cloud-worker` / `takosumi-kernel-worker` と同じ pattern を generic
    化する。
-2. **bundle build pipeline** — yurucommu / takos-app の repo に対して
-   `deno task build` / `wrangler build` を connector が起動し、Deployment の
-   build artifact digest に sha256 を埋めて install を続行できるようにする。
+2. **prepared source pipeline** — yurucommu / takos-app の repo に対して build
+   service / CI が `.takosumi.build.yml` を実行し、build 後の source tree を
+   `source.kind: prepared` として installer に渡す。connector は build command
+   を起動しない。
 3. **installer-mock の本物化** — 今は fixture JSON を返してるだけ。 本物の
    Takosumi kernel の installer dry-run に寄せて connector の解決パスを通す。
 4. **federation 復活 smoke** —
@@ -46,14 +47,14 @@ miniflare 上で 2 instance 動かす」 形に組み直すしかない**。
 
 **必要な新規 module + 工数見積もり**:
 
-| Sub-task                            | 内容                                                                                                                                                                                                                                                                                                                                        |                 工数 |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------: |
-| (1) `local-miniflare` provider 実装 | `packages/plugins/src/shape-providers/worker/local-miniflare.ts` 新規: `MiniflareLifecycleClient` impl — putScript で miniflare subprocess を spawn + manifest の D1/R2/KV/Queue/DO bindings を flag 解釈 + Caddy admin API で `<scriptName>.app.takosumi.test` route 追加。 bundle は `spec.artifact.uri` から fetch して miniflare に渡す |                 4-6h |
-| (2) factory wire                    | kernel bootstrap で `packages/plugins/src/shape-providers/factories.ts` 経由で provider register。 local mode (= TAKOSUMI_DEV_MODE=1) なら cloudflare-workers の代わりに local-miniflare を inject する分岐を追加                                                                                                                           |                   1h |
-| (3) installer-mock の本物化         | 現状 `installer-mock/main.ts` は fixture JSON 返すだけ。 kernel installer dry-run を呼ぶ shim に refactor、または Accounts 側の dry-run contract を `/v1/installations/dry-run` と統合                                                                                                                                                      |                 2-4h |
-| (4) bundle build pipeline (簡易版)  | yurucommu repo で `deno task build` を事前に走らせて `.wrangler/dist/yurucommu.mjs` 生成 → AppSpec `worker.build` / Deployment artifact として pin する shim service は follow-up                                                                                                                                                           |                 1-2h |
-| (5) federation 復活 smoke           | 新 `scripts/yurucommu-install-federation.sh`: yurucommu AppSpec を 2 つ複製 (metadata.id + route 差別化) → POST /v1/installations x 2 → allocated subdomain 2 個取得 → 旧 federation-follow.sh のロジックで Follow → Accept poll                                                                                                            |                 2-3h |
-| **計**                              |                                                                                                                                                                                                                                                                                                                                             | **10-16h = 1-2 day** |
+| Sub-task                              | 内容                                                                                                                                                                                                                                                                                                                 |                 工数 |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------: |
+| (1) `local-miniflare` provider 実装   | `packages/plugins/src/shape-providers/worker/local-miniflare.ts` 新規: `MiniflareLifecycleClient` impl — prepared source の `spec.entrypoint` を読み、miniflare subprocess を spawn + component `spec` の D1/R2/KV/Queue/DO bindings を flag 解釈 + Caddy admin API で `<scriptName>.app.takosumi.test` route 追加。 |                 4-6h |
+| (2) factory wire                      | kernel bootstrap で `packages/plugins/src/shape-providers/factories.ts` 経由で provider register。 local mode (= TAKOSUMI_DEV_MODE=1) なら cloudflare-workers の代わりに local-miniflare を inject する分岐を追加                                                                                                    |                   1h |
+| (3) installer-mock の本物化           | 現状 `installer-mock/main.ts` は fixture JSON 返すだけ。 kernel installer dry-run を呼ぶ shim に refactor、または Accounts 側の dry-run contract を `/v1/installations/dry-run` と統合                                                                                                                               |                 2-4h |
+| (4) prepared source pipeline (簡易版) | yurucommu repo で `.takosumi.build.yml` を事前に実行し、生成済み source tree を prepared source snapshot として pin する shim service は follow-up                                                                                                                                                                   |                 1-2h |
+| (5) federation 復活 smoke             | 新 `scripts/yurucommu-install-federation.sh`: yurucommu AppSpec を 2 つ複製 (metadata.id + route 差別化) → POST /v1/installations x 2 → allocated subdomain 2 個取得 → 旧 federation-follow.sh のロジックで Follow → Accept poll                                                                                     |                 2-3h |
+| **計**                                |                                                                                                                                                                                                                                                                                                                      | **10-16h = 1-2 day** |
 
 session 内 complete は非現実的なため deferred。 着手時はこの sub-plan を
 コピーして個別 PR にする (1 PR = 1 sub-task)。 着手順は
@@ -85,8 +86,8 @@ yurucommu / road-to-me / takos-apps 同様の方針 (= 各 product owner が 持
 
 `takosumi/deploy/cloudflare/` is the Worker-first kernel scaffold. It bundles
 `deploy/cloudflare/src/worker.ts`, runs the kernel in-process through
-`createPaaSApp`, persists kernel snapshots / installer records in D1, and stores
-artifacts in R2. It has no Cloudflare Container binding.
+`createPaaSApp`, persists kernel snapshots / installer records in D1, and can
+store optional DataAsset objects in R2. It has no Cloudflare Container binding.
 
 The local-substrate now runs that same bundle under Miniflare:
 
@@ -142,9 +143,9 @@ landing PRs across multiple repos).
 
 scripts/smoke.sh has a `run_script <label> <cmd>` helper that captures
 stdout+stderr to `$SMOKE_LOG_DIR/<label>.log` on failure. CI uploads that dir as
-an artifact. The helper is plumbed into ~all stanzas now (OAuth replay, workers,
-registrar, MinIO, migrations, OTel, k6, mailpit, Stripe, installer API, docs
-link check, tenant isolation).
+a CI log bundle. The helper is plumbed into ~all stanzas now (OAuth replay,
+workers, registrar, MinIO, migrations, OTel, k6, mailpit, Stripe, installer API,
+docs link check, tenant isolation).
 
 Refactoring smoke.sh stanzas into per-file `scripts/smoke.d/*.sh` with auto-
 discovery was evaluated and **skipped**: log capture already works, smoke.sh is

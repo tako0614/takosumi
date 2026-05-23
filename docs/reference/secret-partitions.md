@@ -27,7 +27,7 @@ derive するだけで動く。
   runtime-agent) が secret hygiene を負う。
 - partition の cross 参照は禁止。 reference (`${secret:...}`) は許される。 raw
   value を Space 間で運ぶ運用は不可。
-- `KernelPlugin` (= materializer) / connector 実行に渡せる credential ref は
+- provider implementation / connector 実行に渡せる credential ref は
   `secret://providers/<provider>` scope に限定される。 runtime secret
   (`secret://runtime/...` など) や他 provider の credential ref は
   materialization 前に fail-closed し、 materializer 実装には渡らない。
@@ -77,7 +77,7 @@ GCM nonce は 96-bit ランダムを entry ごとに生成する。 同 partitio
 nonce 再利用は **記録ごとに禁止**。 kernel は nonce を ciphertext header
 に保存し、 decrypt 時にそのまま読み戻す。
 
-## Env override catalog
+## Env override registry
 
 master passphrase は env から取得される。 優先順位は **cloud-specific >
 global**。 partition tag が `aws` の partition は AWS 専用 env
@@ -198,7 +198,7 @@ rotation flow を経由すること。 :::
 ## Related architecture notes
 
 - `docs/reference/architecture/operator-boundaries.md` — kernel core が raw
-  secret を持たない trust 境界の rationale
+  secret reference で扱う trust 境界の rationale
 - `docs/reference/architecture/space-model.md` — partition の scope owner が
   Space である理由と Space 削除時の partition lifecycle
 - `docs/reference/architecture/policy-risk-approval-error-model.md` — secret

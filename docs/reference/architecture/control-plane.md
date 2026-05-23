@@ -1,6 +1,7 @@
 # コントロールプレーンアーキテクチャ {#control-plane-architecture}
 
-> このページでわかること: current kernel control-plane の責務境界。
+> このページでわかること: current kernel control-plane と operator surface
+> の関係。
 
 Takosumi kernel control plane は AppSpec installer lifecycle を処理し、
 Installation / Deployment / runtime dispatch evidence を永続化する。 public
@@ -19,7 +20,7 @@ POST /v1/installations/{id}/rollback
 
 auth は `TAKOSUMI_INSTALLER_TOKEN` bearer。
 
-## 担う責務 {#owned-responsibilities}
+## Kernel の責務 {#owned-responsibilities}
 
 - parse / validate `.takosumi.yml`
 - create and update Installation records
@@ -27,9 +28,9 @@ auth は `TAKOSUMI_INSTALLER_TOKEN` bearer。
 - resolve component kind / provider decisions through operator registry
 - dispatch lifecycle work to runtime-agent
 - record audit / WAL / observation evidence
-- expose internal ledger reads to operator backplane
+- expose internal ledger reads for the operator backplane
 
-## 担わない責務 {#not-owned}
+## Operator / runtime の責務 {#operator-runtime-responsibilities}
 
 - account / subscription / identity issuer ownership
 - workflow runner / webhook / cron execution
@@ -38,7 +39,7 @@ auth は `TAKOSUMI_INSTALLER_TOKEN` bearer。
 
 ## 内部 surface {#internal-surfaces}
 
-operator automation uses internal HMAC routes for ledger reads:
+operator automation は internal HMAC routes で ledger を読む:
 
 ```text
 GET /api/internal/v1/installations
@@ -47,15 +48,15 @@ GET /api/internal/v1/installations/{id}/deployments
 GET /api/internal/v1/installations/{id}/events
 ```
 
-runtime-agent control RPC stays under internal route boundaries and is not part
-of the public installer contract.
+runtime-agent control RPC は internal route boundary に置かれ、public installer
+contract は source install / deploy / rollback の 5 endpoint を提供する。
 
-## 削除されたレガシーモデル {#removed-legacy-model}
+## Current surface {#current-surface}
 
-The old raw deploy API, authoring-vs-runtime AppSpec split, string interpolation
-materialization contract, and public Deployment status route are not current
-control-plane surfaces. Historical references should be read as pre-AppSpec
-notes only.
+current control-plane surface は source install / deploy /
+rollback、Installation ledger、Deployment history、runtime-agent dispatch
+evidence で構成される。AppSpec は authoring / runtime に分けず、namespace
+publish / listen と kind-specific `spec` で materialization input を表す。
 
 ## クロスリファレンス {#cross-references}
 

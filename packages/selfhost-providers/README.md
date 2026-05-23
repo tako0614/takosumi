@@ -1,9 +1,9 @@
 # @takos/takosumi-selfhost-providers
 
-Self-host-backed `KernelPlugin` factories for the Takos reference component
-kinds (`web-service` / `object-store` / `postgres`). Provides a credential-free
-baseline for Takosumi operators who want to run the kernel without any cloud
-account.
+Self-host-backed reference `KernelPlugin` adapter factories for takosumi.com
+reference component kinds (`web-service` / `object-store` / `postgres`).
+Provides a credential-free baseline for Takosumi operators who want to run the
+kernel without any cloud account.
 
 Operators import this package explicitly — Takosumi core
 (`@takos/takosumi-kernel`) ships zero cloud / self-host SDK code, so the
@@ -13,7 +13,7 @@ operator chooses which provider packages to attach to
 ## Install
 
 ```typescript
-import { createPaaSApp } from "@takos/takosumi-kernel";
+import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import {
   selfhostDockerComposeWebServiceProvider,
@@ -44,7 +44,7 @@ const { app } = await createPaaSApp({
 | `selfhostPostgresProvider`                | `https://takosumi.com/kinds/v1/postgres`     |
 
 `selfhostDockerComposeWorkerProvider` and `selfhostSystemdWorkerProvider` remain
-as deprecated compatibility aliases for the web-service factories.
+available as compatibility aliases for the web-service factories.
 
 ## See also
 

@@ -48,23 +48,22 @@ features:
 ## 何をするものか
 
 Takosumi は source-to-runtime の installer kernel です。ユーザーは source root
-に AppSpec を置き、必要なら BuildSpec で artifact build を外出しします。
-operator は provider plugin と runtime-agent を用意します。kernel は resolved
-AppSpec を検証し、Installation を Space に作り、apply / rollback のたびに
-Deployment record を残します。
+に AppSpec を置き、必要なら BuildSpec と build service で prepared source
+snapshot を作ります。 operator は provider implementation と runtime-agent
+を用意します。kernel は resolved AppSpec を検証し、Installation を Space
+に作り、apply / rollback のたびに Deployment record を残します。
 
-Takosumi kernel は account、billing、OIDC issuer、customer onboarding UI を所有
-しません。それらは operator account-plane の責務です。Takosumi docs では kernel
-と installer contract を説明し、managed offering 固有の話は扱いません。
+Takosumi docs は kernel と installer contract に集中します。account、billing、
+OIDC issuer、customer onboarding UI は operator account-plane が接続します。
 
 ## よく参照するページ
 
-| 目的                                   | ページ                                     |
-| -------------------------------------- | ------------------------------------------ |
-| `.takosumi.yml` を書く                 | [AppSpec](/reference/app-spec)             |
-| `.takosumi.build.yml` を書く           | [BuildSpec](/reference/build-spec)         |
-| install / deploy / rollback API を叩く | [Installer API](/reference/installer-api)  |
-| CLI の subcommand と env を見る        | [CLI](/reference/cli)                      |
-| provider plugin の attach / 選択を見る | [Provider plugin](/reference/providers)    |
-| production 起動の前提を見る            | [Operator](/operator/)                     |
-| 内部設計を追う                         | [内部設計の概要](/reference/architecture/) |
+| 目的                                   | ページ                                           |
+| -------------------------------------- | ------------------------------------------------ |
+| `.takosumi.yml` を書く                 | [AppSpec](/reference/app-spec)                   |
+| `.takosumi.build.yml` を書く           | [BuildSpec](/reference/build-spec)               |
+| install / deploy / rollback API を叩く | [Installer API](/reference/installer-api)        |
+| CLI の subcommand と env を見る        | [CLI](/reference/cli)                            |
+| provider 実装の attach / 選択を見る    | [Provider Implementations](/reference/providers) |
+| production 起動の前提を見る            | [Operator](/operator/)                           |
+| 内部設計を追う                         | [内部設計の概要](/reference/architecture/)       |

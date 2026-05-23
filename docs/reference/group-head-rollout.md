@@ -93,7 +93,7 @@ canary は traffic split を closed な比率列で進めます。
   override できますが、 step 列は OperationPlan に焼き付くため途中での ad-hoc
   比率編集は approval invalidation の effect-detail change trigger を引きます。
 - 各 step 昇格は readiness probe / observe 結果が pass したときのみ進みます。
-  pass 条件は kernel が固定し provider plugin は override 不可。
+  pass 条件は kernel が固定し provider implementation は override 不可。
 - candidate release が queue に新 DataContract を出し、 preview 先 consumer が
   primary release のまま古い contract しか受理しない場合、 event subscription
   switch preview は `queue_data_contract_mismatch_requires_policy` で
@@ -153,13 +153,13 @@ GroupHead 関連の audit event は以下を発行します
 各 event payload は `groupId` / 旧新 deploymentId / 旧新 ActivationSnapshotId /
 `rolloutState` 旧新を保持します。
 
-## v1 範囲外 {#out-of-v1-scope}
+## Future scope {#out-of-v1-scope}
 
-- blue-green deploy は独立 state として持ちません。 `canary-active` の最終 step
-  (100% 切替) を replace-only mutation で表現し、 旧側は ObservationSet 上の
-  watcher として `observe` 監視するだけに留めます。
-- 複数 group の同時 coordinated rollout は v1 範囲外。 group 単位で independent
-  に進めます。
+- blue-green deploy は `canary-active` の最終 step (100% 切替) を replace-only
+  mutation で表現し、旧側は ObservationSet 上の watcher として `observe`
+  監視する。
+- 複数 group の同時 coordinated rollout は future scope。current v1 は group
+  単位で independent に進める。
 
 ## Risk との連携 {#risk-integration}
 

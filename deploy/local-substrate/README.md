@@ -27,15 +27,15 @@ endpoint surface も含めて検証する。
 
 この test bed は **Takosumi (kernel + Accounts + cloud worker + dashboard)** の
 integration test 専用。 Takos product (`takos-app`) や bundled app (yurucommu)
-は scope 外で、 各 product の動作確認は各 repo 内の test に 任せる:
+の動作確認は各 repo 内の test に任せる:
 
 - `takos/` — Takos product 固有の test (deno task test / Playwright 等)
 - `yurucommu/` — yurucommu 固有の test
 
 外部 app の `.takosumi.yml` 由来 fixture を installer mock で使う
 ことはあるが、それは Takosumi の install contract を検証するための入力 fixture
-であり、該当 product を local-substrate の service
-として直起動するものではない。 「Takosumi 経由で yurucommu / takos-app を
+です。該当 product を local-substrate の service
+として直起動する運用は扱わない。 「Takosumi 経由で yurucommu / takos-app を
 install して deploy する」 統合 シナリオは別タスク
 (`@takos/local-miniflare-workers` connector 実装が前提、 TODO-SMOKE.md
 筆頭参照)。

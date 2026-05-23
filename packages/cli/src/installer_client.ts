@@ -33,11 +33,10 @@ export function parseSourceRef(ref: string): Source {
     }
     return { kind: "git", url: rest };
   }
-  if (ref.startsWith("catalog:")) {
-    return { kind: "catalog", url: ref.slice("catalog:".length) };
-  }
-  if (ref.startsWith("bundle:")) {
-    return { kind: "bundle", url: ref.slice("bundle:".length) };
+  if (ref.startsWith("catalog:") || ref.startsWith("bundle:")) {
+    throw new Error(
+      "catalog: and bundle: installer sources are not part of the current public installer API; use git:, prepared:, or a local path",
+    );
   }
   if (ref.startsWith("prepared:")) {
     const rest = ref.slice("prepared:".length);
@@ -59,14 +58,15 @@ export function expectedPinFromOptions(
 ): SourcePin | undefined {
   const hasCommit = options.expectedCommit !== undefined;
   const hasDigest = options.expectedManifestDigest !== undefined;
-  if (!hasCommit && !hasDigest) return undefined;
-  if (!hasCommit || !hasDigest) {
+  const hasSourceDigest = options.expectedSourceDigest !== undefined;
+  if (!hasCommit && !hasDigest && !hasSourceDigest) return undefined;
+  if (!hasDigest) {
     throw new Error(
-      "--expected-commit and --expected-manifest-digest must be passed together",
+      "--expected-manifest-digest is required when passing expected pins",
     );
   }
   return {
-    commit: options.expectedCommit!,
+    ...(options.expectedCommit ? { commit: options.expectedCommit } : {}),
     manifestDigest: options.expectedManifestDigest!,
     ...(options.expectedSourceDigest
       ? { sourceDigest: options.expectedSourceDigest }

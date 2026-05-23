@@ -1,7 +1,7 @@
 # Risk タクソノミ {#risk-taxonomy}
 
 > このページでわかること: plan / apply pipeline が発火しうる Risk の closed enum
-> 18 値を stable id ベースで定義する。
+> 18 active 値を stable id ベースで定義する。
 
 各 Risk は plan 出力上の判定点として働き、 operator が allow / deny /
 require-approval を判断する材料になる。 新 Risk kind の追加には `CONVENTIONS.md`
@@ -20,7 +20,7 @@ require-approval を判断する材料になる。 新 Risk kind の追加には
 Risk が stage 進行中に再評価されて approval が崩れる経路は
 [Approval Invalidation Triggers](./approval-invalidation.md) に従う。
 
-## Closed enum (18 値) {#closed-enum-18-values}
+## Closed enum (18 active values, stable ids 1-19) {#closed-enum-18-values}
 
 各 Risk は以下の attributes を持つ:
 
@@ -135,8 +135,8 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 
 ### 12. `implementation-unverified`
 
-- **意味**: 選択された Implementation が catalog signature 未検証 / publisher
-  key 未 enroll の状態で binding されようとしている。
+- **意味**: 選択された Implementation が operator の visible implementation
+  config に存在し ない状態で binding されようとしている。
 - **発火 stage**: `prepare`
 - **severity**: `error`
 - **invalidation trigger**: 3, 5
@@ -210,8 +210,8 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
   を managed secret に置き換える、traffic 配分を rollback 互換に直す)。
 - `requiresPolicyReview`: policy pack / approval flow を経由しないと進めない。
   operator 単独では解消しない。
-- `operatorFix`: operator の手動操作 (export refresh / catalog signature
-  enrollment / collision resolution / RevokeDebt clearance) が要る。
+- `operatorFix`: operator の手動操作 (export refresh / implementation config
+  update / collision resolution / RevokeDebt clearance) が要る。
 
 ## RFC 要件 {#rfc-要件}
 
@@ -225,7 +225,8 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 関連 architecture notes:
 
 - `docs/reference/architecture/policy-risk-approval-error-model.md` — Risk vs
-  Error の境界、 19 値 enum の選定理由、severity / fix kind の設計議論
+  Error の境界、 stable id 1-19 (15 reserved) の選定理由、severity / fix kind
+  の設計議論
 - `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
   — `actual-effects-overflow` / `rollback-revalidation-required` の WAL 上での
   位置付け

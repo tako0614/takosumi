@@ -20,7 +20,7 @@ endpoint が 404 を返す。
 ## ライフサイクル {#lifecycle}
 
 ```text
-source repo / catalog / local source
+git source / prepared source snapshot
   └─ .takosumi.yml (= AppSpec)
       ↓ POST /v1/installations[/dry-run]
     Installation
@@ -36,14 +36,13 @@ source repo / catalog / local source
 - rollback は `POST /v1/installations/{id}/rollback` で過去 Deployment を入力に
   新しい Deployment を作る。
 
-## 非ゴール {#non-goals}
+## Workflow placement {#non-goals}
 
-kernel は workflow / webhook / cron / CI runner の public route を持たない。
-これらは upstream automation が AppSpec source を installer API に渡す形で実装
-する。
+workflow / webhook / cron / CI runner は upstream automation として AppSpec
+source を installer API に渡す。
 
 過去 docs の `.takosumi/app.yml`、中間 deployment document、 public raw deploy
-endpoint は廃止済み。 current public contract では登場しない。
+endpoint は retired model として扱う。
 
 ## クロスリファレンス {#cross-references}
 

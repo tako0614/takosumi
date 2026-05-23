@@ -1,8 +1,8 @@
 # @takos/takosumi-gcp-providers
 
-GCP-backed `KernelPlugin` factories for the Takos reference component kinds
-(`web-service` / `object-store` / `postgres`). Operators import this package
-explicitly when they want GCP coverage — Takosumi core
+GCP-backed reference `KernelPlugin` adapter factories for takosumi.com reference
+component kind examples (`web-service` / `object-store` / `postgres`). Operators
+import this package explicitly when they want GCP coverage — Takosumi core
 (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses
 which provider packages to attach to
 `createPaaSApp({ kindAliases, plugins: [...] })`.
@@ -10,7 +10,7 @@ which provider packages to attach to
 ## Install
 
 ```typescript
-import { createPaaSApp } from "@takos/takosumi-kernel";
+import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import {
   gcpCloudRunWebServiceProvider,
@@ -34,6 +34,10 @@ const { app } = await createPaaSApp({
 });
 ```
 
+GCP credentials are configured on the runtime-agent connector environment or
+operator host. Provider factory arguments stay limited to non-secret selector
+settings such as project id or region.
+
 ## Exports
 
 | Factory                         | Kind URI                                     |
@@ -42,7 +46,7 @@ const { app } = await createPaaSApp({
 | `gcpGcsObjectStoreProvider`     | `https://takosumi.com/kinds/v1/object-store` |
 | `gcpCloudSqlPostgresProvider`   | `https://takosumi.com/kinds/v1/postgres`     |
 
-`gcpCloudRunWorkerProvider` remains as a deprecated compatibility alias for
+`gcpCloudRunWorkerProvider` remains available as a compatibility alias for
 `gcpCloudRunWebServiceProvider`.
 
 ## See also

@@ -6,10 +6,11 @@
 > **Implementation**: component kind externalization implemented; build/source
 > snapshot redesign pending
 
-この RFC は Takosumi kernel をさらに小さくし、specific kind の catalog を
-operator distribution 側へ移すための設計です。current implementation の正本は
+この RFC は Takosumi kernel をさらに小さくし、specific kind の descriptor
+ownership を operator distribution 側へ移すための設計です。current
+implementation の正本は
 [AppSpec](../reference/app-spec.md)、[Installer API](../reference/installer-api.md)、
-[Reference Kind Registry](../reference/kind-catalog.md) です。
+[Reference Kind Descriptors](../reference/kind-registry.md) です。
 
 この文書では、`manifestDigest` など既存 wire field の名前を除き、source root の
 `.takosumi.yml` を **AppSpec** と呼びます。
@@ -35,7 +36,7 @@ type Component = {
 
 Wave N は、この縮小の次段階として次を目標にします。
 
-- kernel / contract から former 4-kind catalog を外す。
+- component kind resolution を operator distribution に移す。
 - `Component.build` を kernel contract から外し、BuildSpec / build service に
   分離する。
 - specific kind は operator distribution が JSON-LD descriptor と provider
@@ -57,10 +58,10 @@ runtime-agent の完全 kernel-decouple は別 RFC で扱います。
 
 ## End state {#end-state}
 
-Wave N 後の kernel は、kind の意味を contract-owned catalog
-で知りません。operator が 起動時に alias map と provider plugin を渡します。kind
-descriptor は operator tooling / docs / validation layer が持てますが、kernel
-contract の一部 ではありません。
+Wave N 後の kernel は、operator が起動時に渡す alias map と implementation
+binding で kind を解決します。kind descriptor は operator tooling / docs /
+validation layer が持ちます。Takosumi reference kernel では implementation
+binding を reference adapter array で渡します。
 
 ```ts
 const { app } = await createPaaSApp({
@@ -75,10 +76,9 @@ const { app } = await createPaaSApp({
 });
 ```
 
-AppSpec author は short alias を使えます。未解決 alias は plugin lookup miss と
-なり、provider operation の前に reject されます。ここでいう **fail-closed** は、
-kernel が不明な入力を黙って fallback せず、副作用の前に明示的に失敗すること
-です。
+AppSpec author は short alias を使えます。未解決 alias は provider operation
+の前 に reject されます。ここでいう **fail-closed** は、kernel
+が不明な入力を黙って fallback せず、副作用の前に明示的に失敗することです。
 
 ## Decisions {#decisions}
 
@@ -90,7 +90,7 @@ Decision: operator-injected alias map を採用します。
 - unresolved alias は provider operation 前に fail-closed。
 - AppSpec は完全 URI を直接書くこともできる。
 
-kernel は `https://takosumi.com/kinds/v1/worker` のような contract-owned URI
+kernel は `https://takosumi.com/kinds/v1/worker` のような reference URI
 を特別扱い しません。
 
 ### 2. Worker source shape {#worker-artifact-shape}
@@ -100,12 +100,12 @@ Decision: reference worker kind は `spec.entrypoint` を prepared source snapsh
 
 理由:
 
-- AppSpec 上に artifact kind / hash を要求すると build service の出力形式が kind
-  contract に漏れる。
+- AppSpec 上に DataAsset metadata kind / hash を要求すると build service
+  の出力形式が kind contract に漏れる。
 - build 後 file path は worker kind の `spec` に置く方が、image / env / route 等
   と同じ system で扱える。
-- provider plugin / runtime-agent は prepared source locator を受け取り、必要な
-  file だけを読む。
+- provider implementation / runtime-agent は prepared source locator
+  を受け取り、必要な file だけを読む。
 
 ### 3. Build sandbox {#build-sandbox}
 
@@ -137,20 +137,21 @@ namespace とは混ぜません。
 Decision: artifact / build の最終形は source snapshot model に寄せます。
 
 - public AppSpec / BuildSpec から generic `artifact` concept を消す。
-- build service は build 後 source tree / git state を digest-pinned snapshot と
-  して固定する。
-- provider plugin は lifecycle apply 時に source snapshot locator を受け取り、
-  自分の kind contract に従って必要な file / path / metadata を読む。
-- `spec` 内の parameter は Takosumi が意味解釈しない plugin-owned variables と
-  して扱う。
+- build service は build 後 source tree / git state を content-addressed
+  snapshot として固定する。
+- provider implementation は lifecycle apply 時に source snapshot locator
+  を受け取り、 自分の kind contract に従って必要な file / path / metadata
+  を読む。
+- `spec` 内の parameter は Takosumi が意味解釈しない implementation-owned
+  variables と して扱う。
 - kernel が Deployment evidence として記録するのは source snapshot digest /
-  provenance / plugin output であり、`js-bundle` などの artifact kind は
-  Takosumi spec には含めない。
+  provenance / implementation output。DataAsset extension を使う provider
+  は、その metadata value を operator / connector policy として扱う。
 
 ### 5. Reference distribution wording {#reference-distribution-wording}
 
-Decision: takosumi-cloud は official / blessed distribution ではなく、1 つの
-reference operator distribution として扱います。
+Decision: takosumi-cloud は 1 つの reference operator distribution
+として扱います。
 
 別 distribution も同じ contract を満たせば置き換え可能です。docs では「current
 kernel contract」と「reference distribution の実装例」を混ぜません。
@@ -159,22 +160,22 @@ kernel contract」と「reference distribution の実装例」を混ぜません
 
 Decision: `@takos/takosumi-plugins` は残し、scope を narrow します。
 
-package URL stability を保ちつつ、contract-owned catalog ではなく reference
-descriptor helper、adapter、test fixture の置き場へ縮小します。
+package URL stability を保ちつつ、reference descriptor helper、adapter、test
+fixture の置き場へ縮小します。
 
 ### 7. Runtime-agent decoupling {#runtime-agent-decoupling}
 
-Decision: Wave N narrative では scope 外として明記します。
+Decision: runtime-agent decoupling は別 RFC で扱います。
 
 runtime-agent が持つ worker-specific type の完全分離は別 RFC で扱います。Wave N
-の実装は kernel catalog と build responsibility の切り離しに集中します。
+の実装は kernel registry と build responsibility の切り離しに集中します。
 
 ## Migration outline {#migration-outline}
 
 1. operator config に alias map を追加する。
 2. current reference kind を reference distribution 側の descriptor として移す。
-3. kernel validation を alias map + plugin lookup に切り替える。
-4. provider plugin が完全 URI の `provides[]` を宣言するようにする。
+3. kernel validation を alias map + implementation binding lookup に切り替える。
+4. reference provider adapter が完全 URI の `provides[]` を宣言するようにする。
 5. `Component.build` の kernel-owned execution を削除し、BuildSpec / build
    service / prepared source handoff へ移す。
 6. `.takosumi.build.yml` の parser と build service handoff を追加する。
@@ -201,10 +202,10 @@ docs 上では AppSpec digest と説明します。
 
 ## Implementation notes {#implementation-notes}
 
-2026-05-23 時点で、component kind registry の contract 外部化、`Component.build`
-削除、prepared source handoff、reference worker の `spec.entrypoint`
-化は実装済み です。BuildSpec parser / remote build service の production
-implementation は operator distribution の follow-up です。
+2026-05-23 時点で、component kind definitions の contract
+外部化、`Component.build` 削除、prepared source handoff、reference worker の
+`spec.entrypoint` 化は実装済み です。BuildSpec parser / remote build service の
+production implementation は operator distribution の follow-up です。
 
 ## History {#history}
 
@@ -212,6 +213,6 @@ implementation は operator distribution の follow-up です。
   を削除。
 - Wave K: AppSpec root の `kind: "App"` を削除。
 - Wave L: `apiVersion: "takosumi.dev/v1"` を `apiVersion: "v1"` に変更。
-- Wave N: kernel kind-agnostic 化、reference catalog の operator distribution
-  化、 `Component.build` 削除、prepared source / worker entrypoint model
-  へ移行。
+- Wave N: kernel kind-agnostic 化、reference descriptor ownership の operator
+  distribution 化、 `Component.build` 削除、prepared source / worker entrypoint
+  model へ移行。

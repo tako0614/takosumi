@@ -11,22 +11,22 @@ deno-deploy,selfhost}-providers`)。
 ```bash
 deno run -A jsr:@takos/takosumi/server   # kernel HTTP server
 deno install -gA -n takosumi jsr:@takos/takosumi-cli   # CLI
-takosumi install --source . --space space_personal
+takosumi install --source . --space space:personal
 ```
 
 ## Sub-exports
 
-- `jsr:@takos/takosumi` — reference plugins / materializer host を re-export
+- `jsr:@takos/takosumi` — reference adapters / descriptor helpers を re-export
 - `jsr:@takos/takosumi/kernel` — kernel programmatic API (`createPaaSApp`)
 - `jsr:@takos/takosumi/server` — kernel HTTP server entry (deno run で起動)
-- `jsr:@takos/takosumi/plugins` — plugins entry (reference kind registry +
-  materializer host)
-- `jsr:@takos/takosumi/kinds` — Takos reference component kind registry
+- `jsr:@takos/takosumi/plugins` — reference adapter entry (reference
+  descriptors + descriptor helpers)
+- `jsr:@takos/takosumi/kinds` — takosumi.com reference component kind examples
   (`worker` / `postgres` / `object-store` / `custom-domain`)
 - `jsr:@takos/takosumi/cli` — CLI module entry
 
-cloud-backed `KernelPlugin` factory は **別 package** に分離されているため、
-attach 時は対応 cloud package を直接 import する:
+cloud-backed reference `KernelPlugin` adapter factory は **別 package**
+に分離されているため、 attach 時は対応 cloud package を直接 import する:
 
 ```ts
 import { cloudflareWorkerProvider } from "@takos/takosumi-cloudflare-providers";
@@ -37,11 +37,10 @@ import { awsS3ObjectStoreProvider } from "@takos/takosumi-aws-providers";
 
 core:
 
-- `jsr:@takos/takosumi-contract` — canonical types (AppSpec / ProviderPlugin /
-  KernelPlugin)
+- `jsr:@takos/takosumi-contract` — canonical wire types (AppSpec / Installer
+  API) and reference adapter types (`KernelPlugin`)
 - `jsr:@takos/takosumi-kernel` — kernel only (server + apply pipeline)
-- `jsr:@takos/takosumi-plugins` — plugins only (kinds / materializer host /
-  factories)
+- `jsr:@takos/takosumi-plugins` — reference descriptors and adapter helpers
 - `jsr:@takos/takosumi-installer` — `.takosumi.yml` parser + git fetch + deploy
   client
 - `jsr:@takos/takosumi-runtime-agent` — runtime-agent (data plane)

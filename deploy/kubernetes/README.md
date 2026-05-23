@@ -1,22 +1,23 @@
 # Takos Kubernetes Provider Runbook
 
 This directory documents the Kubernetes surface as **operator-owned scope**: the
-kernel-side provider plugin (`packages/plugins/src/providers/k8s/`) and
+operator-attached provider package (`packages/kubernetes-providers/`) and
 runtime-agent connectors (`packages/runtime-agent/src/connectors/kubernetes/`)
-are production-grade. The deploy artifact (the Helm chart / kustomize overlay /
-Argo CD manifests that land the Takosumi kernel image and runtime-agent image on
-a Kubernetes cluster) is the operator's responsibility — Takosumi does not ship
-a reference Helm chart.
+provide Kubernetes lifecycle coverage when the operator wires them into their
+distribution. The deploy artifact (the Helm chart / kustomize overlay / Argo CD
+manifests that land the Takosumi kernel image and runtime-agent image on a
+Kubernetes cluster) is also the operator's responsibility. Operators provide the
+production-grade Kubernetes deploy artifact for their distribution.
 
 ## Why no reference Helm chart
 
 The two reference distributions Takosumi ships (`deploy/cloudflare/` and
 `deploy/selfhosted/`) cover the substrate-neutrality claim at spec level.
-Kubernetes is spec-compliant — operators deploy the kernel image (from
+Kubernetes is an operator-owned target: operators deploy the kernel image (from
 `deploy/selfhosted/Dockerfile.kernel`) and the runtime-agent image (from
 `deploy/selfhosted/Dockerfile.runtime-agent`) using their existing GitOps / Helm
-/ kustomize tooling. Once the kernel pod is reachable, the
-`@takos/kubernetes-deployment` provider plugin works without modification.
+/ kustomize tooling, then attach the Kubernetes provider factory from
+`@takos/takosumi-kubernetes-providers` plus matching runtime-agent credentials.
 
 ## Required runtime shape
 
@@ -58,6 +59,6 @@ kubectl exec -it takosumi-smoke -- curl http://localhost:8788/healthz
 
 The kernel and runtime-agent images in `deploy/selfhosted/` are
 substrate-neutral and ready to run on any Kubernetes distribution. The kernel
-reads env via the `RuntimeAdapter` so it does not require Deno-specific cluster
-configuration — the only requirement is that the image base is the Deno runtime
-(or a Node image once the Node bundle path is wired through CI).
+reads env via the `RuntimeAdapter`; cluster configuration stays runtime-neutral.
+The image base is the Deno runtime today, or a Node image once the Node bundle
+path is wired through CI.

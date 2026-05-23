@@ -2,60 +2,63 @@
 
 > このページでわかること: DataAsset のアクセスポリシーとライフサイクル。
 
-本リファレンスは、 current v1 実装で Takosumi が DataAsset アップロードと
-runtime-agent consume について強制する policy を記録する。
+本リファレンスは、 current v1 実装で operator が DataAsset extension を mount
+する場合の、DataAsset アップロードと runtime-agent consume policy を記録する。
 
-DataAsset / Artifact は current implementation の operational surface です。
-Takosumi AppSpec の component kind contract には含めません。build 後 source は
-prepared source snapshot として Installer API に渡し、runtime-agent connector は
-必要な file を `preparedSource` から読みます。
+DataAsset は operator extension の operational surface です。route / CLI 名には
+historical に `artifact` が残ります。build 後 source は prepared source snapshot
+として Installer API に渡し、runtime-agent connector は必要な file を
+`preparedSource` から読みます。
 
 ## 現行の強制ポイント {#current-enforcement-points}
 
-Takosumi v1 は DataAsset policy を 3 箇所で強制する。
+operator が DataAsset extension を mount した場合、その extension は DataAsset
+policy を 3 箇所で強制する。
 
-### Artifact アップロード {#artifact-upload}
+### DataAsset アップロード {#artifact-upload}
 
-`POST /v1/artifacts` は deploy bearer を要求する。 `sha256` を計算し、
-`expectedDigest` を verify し、 size cap を強制する。
+operator が `/v1/artifacts` を有効化した場合、`POST /v1/artifacts` は deploy
+bearer を要求する。 `sha256` を計算し、`expectedDigest` を verify し、 size cap
+を強制する。
 
-### Artifact フェッチ {#artifact-fetch}
+### DataAsset フェッチ {#artifact-fetch}
 
-`GET` / `HEAD /v1/artifacts/:hash` は deploy bearer と read-only artifact-fetch
-bearer のいずれかを受け付ける。
+operator が `/v1/artifacts` を有効化した場合、`GET` または `HEAD` の
+`/v1/artifacts/:hash` は deploy bearer と read-only artifact-fetch bearer の
+いずれかを受け付ける。
 
 ### Runtime-agent apply {#runtime-agent-apply}
 
-artifact-backed lifecycle request では dispatcher が accepted kind を照合する。
-source-backed connector は `preparedSource` と kind-specific `spec` を読む。
+DataAsset-backed lifecycle request では dispatcher が operator DataAsset
+metadata を connector の `acceptedArtifactKinds` と照合する。source-backed
+connector は `preparedSource` と kind-specific `spec` を読む。
 
 ---
 
-artifact routes は build / source transform を実行しない。build は BuildSpec を
-読む build service、CI、または operator automation の責務であり、artifact routes
-は任意のアップロード済み blob の保存・取得・GC だけを扱う。
+build / prepare は build service、CI、または operator automation が実行する。
+DataAsset routes はアップロード済み blob の保存・取得・GC を扱う。
 
 ## サイズポリシー {#size-policy}
 
 global upload cap は `TAKOSUMI_ARTIFACT_MAX_BYTES` で default は `52428800`
-バイト。 operator は env を設定するか、 artifact route をマウントするときに
+バイト。 operator は env を設定するか、 DataAsset route をマウントするときに
 `maxBytes` を渡せる。
 
-登録済み artifact kind は `maxSize` を持ちうる。 存在する場合、 その `maxSize`
-はその kind について route default を上書きする。
+登録済み DataAsset metadata kind は `maxSize` を持ちうる。 存在する場合、 その
+`maxSize` はその metadata kind について route default を上書きする。
 
 ```ts
 registerArtifactKind({
   kind: "operator.example/log-bundle",
   description: "Operator-owned diagnostic bundle",
-  contentTypeHint: "application/javascript",
+  contentTypeHint: "application/gzip",
   maxSize: 50 * 1024 * 1024,
 });
 ```
 
-未知 / 未登録の kind は global cap を使う。 content-length プリフライトは既知の
-最大 cap を使い、 post-parse body チェックが submit された kind に対して厳密な
-cap を強制する。
+未知 / 未登録の metadata kind は global cap を使う。 content-length
+プリフライトは既知の最大 cap を使い、 post-parse body チェックが submit された
+metadata kind に対して厳密な cap を強制する。
 
 Failure mode:
 
@@ -63,7 +66,7 @@ Failure mode:
 
 - HTTP / code: `413 resource_exhausted`
 - Recovery: `TAKOSUMI_ARTIFACT_MAX_BYTES` を上げる、 より大きい `maxSize` を
-  register する、 artifact を圧縮する、 R2 / S3 / GCS へ storage を移す
+  register する、 DataAsset を圧縮する、 R2 / S3 / GCS へ storage を移す
 
 ### Digest 不一致 {#digest-mismatch}
 
@@ -75,50 +78,49 @@ Failure mode:
 - HTTP / code: `401 unauthenticated` または public token 未設定時は route `404`
 - Recovery: `TAKOSUMI_DEPLOY_TOKEN` を設定
 
-## Accepted-Kind ポリシー {#accepted-kind-policy}
+## Accepted DataAsset metadata ポリシー {#accepted-kind-policy}
 
-`Artifact.kind` は protocol 層では open だが、 各 connector は受け付けるものを
-宣言する。 例:
+DataAsset metadata `kind` は operator-owned open metadata です。各 connector は
+受け付けるものを宣言します。例:
 
 - OCI-backed web-service connectors: `oci-image`
 - Cloudflare Workers / Deno Deploy worker connector: `acceptedArtifactKinds: []`
-  and `preparedSource`
+  and `preparedSource` + `spec.entrypoint`
 - Operator-installed custom connectors: 明示的に宣言した registered or custom
-  kind
+  metadata kind
 
 runtime-agent は connector コードが動く前に mismatch を reject する。reference
-component kind レベルの validation はより厳しいことがある。Takos reference
-`worker` は `spec.entrypoint` を要求し、artifact descriptor は要求しない。
+component kind レベルの validation はより厳しいことがある。takosumi.com
+reference `worker` は `spec.entrypoint` を要求し、DataAsset descriptor
+は要求しない。
 
 ## 認証ポリシー {#auth-policy}
 
-artifact surface は意図的に write / read credential を分離する。
+DataAsset surface は write / read credential を分離する。
 
 - `TAKOSUMI_DEPLOY_TOKEN`: artifact upload、 list、 delete、 GC、 read
 - `TAKOSUMI_ARTIFACT_FETCH_TOKEN`: runtime-agent host 向けの read-only `GET` /
   `HEAD /v1/artifacts/:hash`
 
-runtime-agent は apply のために upload された bytes を fetch するだけで済む
-場合、 read-only token を受け取る。 deploy bearer は不要であるべきだ。
+runtime-agent が apply のために upload された bytes を fetch する場合、read-only
+token を受け取る。
 
 ## オペレーター surface {#operator-surface}
 
-current の operator コントロール:
+DataAsset extension を有効化した operator のコントロール:
 
 - `TAKOSUMI_ARTIFACT_MAX_BYTES`: global upload cap
 - `registerArtifactKind(..., { allowOverride })`: operator-controlled bootstrap
   / plugin loading 時の discovery metadata と optional per-kind size 登録
-- `takosumi artifact kinds`: read-only discovery
+- `takosumi artifact kinds`: read-only discovery for operator metadata
 - `takosumi artifact gc`: unreferenced blob の mark-and-sweep cleanup
 
-現在 `takosumi policy artifact ...` コマンドは無い。 policy reload command、
-transform 承認 workflow、 署名検証 backend を追加するには、 対応する実装、
-test、 本リファレンスの更新が必要となる。
+policy reload command や transform 承認 workflow を追加する場合は、 対応する
+docs/spec と CLI surface を一緒に更新する。
 
 ## 関連ページ
 
-- [Data Assets](./kind-catalog.md#data-assets)
-- [BuildSpec](./build-spec.md)
+- [Data Assets](./kind-registry.md#data-assets)
 - [Connector Contract](./connector-contract.md)
 - [Kernel HTTP API](./kernel-http-api.md)
 - [Environment Variables](./env-vars.md)

@@ -21,7 +21,7 @@ export TAKOSUMI_REMOTE_URL=http://localhost:8788
 takosumi server --port 8788 &
 
 # Install + deploy
-takosumi install --source . --space space_personal
+takosumi install --source . --space space:personal
 takosumi deploy <installation-id>
 takosumi rollback <installation-id> <deployment-id>
 ```
@@ -42,9 +42,9 @@ takosumi rollback <installation-id> <deployment-id>
 | `takosumi runtime-agent serve`                                      | standalone agent (multi-host production)             |
 | `takosumi runtime-agent list`                                       | show registered connectors on an agent               |
 | `takosumi runtime-agent verify`                                     | smoke-test connectors (read-only API call per cloud) |
-| `takosumi artifact push <file> --kind <kind>`                       | content-addressed artifact upload                    |
-| `takosumi artifact list [--limit]` / `rm <hash>` / `gc [--dry-run]` | artifact store management                            |
-| `takosumi artifact kinds`                                           | list registered artifact kinds                       |
+| `takosumi artifact push <file> --kind <kind>`                       | optional DataAsset upload                            |
+| `takosumi artifact list [--limit]` / `rm <hash>` / `gc [--dry-run]` | optional DataAsset store management                  |
+| `takosumi artifact kinds`                                           | list operator DataAsset metadata kinds               |
 | `takosumi migrate [--dry-run]`                                      | run kernel DB migrations                             |
 | `takosumi init [<output>] [--template]`                             | AppSpec scaffold (stdout if no `<output>`)           |
 | `takosumi version`                                                  | print version                                        |
@@ -60,9 +60,9 @@ Priority (highest first):
 
 | Env var                                       | Used by                                                           |
 | --------------------------------------------- | ----------------------------------------------------------------- |
-| `TAKOSUMI_REMOTE_URL`                         | `takosumi {install,deploy,rollback,artifact}` default kernel URL  |
+| `TAKOSUMI_REMOTE_URL`                         | default kernel URL for remote CLI commands                        |
 | `TAKOSUMI_INSTALLER_TOKEN`                    | bearer token for `/v1/installations/*`                            |
-| `TAKOSUMI_DEPLOY_TOKEN`                       | bearer token for artifact write endpoints                         |
+| `TAKOSUMI_DEPLOY_TOKEN`                       | bearer token for optional DataAsset write endpoints               |
 | `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target                     |
 | `TAKOSUMI_DEV_MODE=1`                         | dev opt-out: plaintext secrets / unencrypted DB / unsafe defaults |
 | `TAKOSUMI_LOG_LEVEL=warn`                     | suppress dev-mode in-memory fallback notices                      |

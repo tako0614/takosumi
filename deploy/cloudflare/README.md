@@ -3,8 +3,8 @@
 This directory is the Worker-first deployment scaffold for running the Takosumi
 control plane on Cloudflare without a container runtime. The Worker builds the
 kernel in-process with `createPaaSApp`, uses D1 for Worker-side kernel
-persistence and installer lifecycle records, and uses R2 for artifact object
-storage.
+persistence and installer lifecycle records, and can use R2 for the optional
+operator DataAsset object store.
 
 ## Files
 
@@ -17,14 +17,17 @@ storage.
 - `src/d1_storage.ts`: D1-backed snapshot storage driver for kernel stores.
 - `src/d1_deploy_stores.ts`: D1-backed installer/deployment record, idempotency,
   operation journal, and revoke-debt stores.
-- `src/r2_object_storage.ts`: R2-backed `ObjectStoragePort` for artifacts.
+- `src/r2_object_storage.ts`: R2-backed `ObjectStoragePort` used when the
+  operator enables DataAsset routes.
 
 ## Routing Shape
 
 The Worker directly handles the kernel control-plane paths. Method, path, query,
 body, and auth headers are preserved:
 
-- `/v1/*` for installer and artifact APIs.
+- `/v1/installations/*` for the five public installer endpoints.
+- optional `/v1/artifacts*` routes when the operator enables the DataAsset
+  extension.
 - `/api/internal/v1/*` for operator/internal APIs.
 - `/api/internal/v1/runtime/agents/*` for runtime-agent RPC, dispatched to an
   in-process `takosumi-runtime-agent` app.
@@ -51,19 +54,19 @@ D1 is used in two places:
   replay responses, WAL stage journal entries, deploy locks, and revoke-debt
   records.
 
-R2 is used by the artifact routes through `CloudflareR2ObjectStorage`. The
-adapter stores Takosumi digests in R2 custom metadata and verifies digests on
-read.
+R2 is used only by the optional DataAsset routes through
+`CloudflareR2ObjectStorage`. The adapter stores Takosumi digests in R2 custom
+metadata and verifies digests on read. AppSpec, Installation, and Deployment do
+not require R2.
 
 ## Operator Steps
 
 1. Replace placeholder D1/R2/Queue identifiers in `wrangler.toml`.
 2. Configure Worker secrets/vars such as `TAKOSUMI_INSTALLER_TOKEN`,
-   `TAKOSUMI_DEPLOY_TOKEN` (artifact writes), `TAKOSUMI_INTERNAL_API_SECRET`,
-   `TAKOSUMI_SECRET_STORE_PASSPHRASE`, and optional
-   `TAKOSUMI_METRICS_SCRAPE_TOKEN`.
-3. Keep `TAKOS_RUNTIME_MODE=cloudflare-worker`.
-4. Deploy with either `wrangler deploy --config deploy/cloudflare/wrangler.toml`
+   `TAKOSUMI_INTERNAL_API_SECRET`, `TAKOSUMI_SECRET_STORE_PASSPHRASE`, and
+   optional `TAKOSUMI_METRICS_SCRAPE_TOKEN`. Add `TAKOSUMI_DEPLOY_TOKEN` only
+   when this operator distribution mounts DataAsset write routes.
+3. Deploy with either `wrangler deploy --config deploy/cloudflare/wrangler.toml`
    from the product root or `wrangler deploy` from this directory.
 
 Do not replace kernel `/readyz` with a Worker-local response. Kernel readiness

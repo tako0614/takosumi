@@ -23,18 +23,16 @@ Most operators run the kernel via the CLI:
 - `POST /v1/installations/{id}/deployments/dry-run` — update dry-run
 - `POST /v1/installations/{id}/deployments` — apply a new Deployment
 - `POST /v1/installations/{id}/rollback` — rollback to a prior Deployment
-- `POST /v1/artifacts` (multipart upload) + GET / HEAD / DELETE / list / GC /
-  kinds — optional operator data-asset store
+- Optional `/v1/artifacts*` routes — operator DataAsset store
 - `POST /v1/runtime-agent/*` — runtime-agent fleet enrollment / lease /
   heartbeat
 - `applyV2` — DAG topological apply with idempotency (spec fingerprint),
   rollback on partial failure, concurrency lock per `(tenant, deployment)`
 - `destroyV2` — reverse-order teardown with persisted handle resolution
-- `TakosumiDeploymentRecordStore` — persists `(manifest, applied[],
-  status)`.
-  SQL backend via `TAKOSUMI_DATABASE_URL` also persists installer lifecycle
-  state and OperationPlan WAL stage records; in-memory fallback is dev / test
-  only.
+- `TakosumiDeploymentRecordStore` — persists Deployment evidence: AppSpec digest
+  / source summary, applied resources, and status. SQL backend via
+  `TAKOSUMI_DATABASE_URL` also persists installer lifecycle state and
+  OperationPlan WAL stage records; in-memory fallback is dev / test only.
 
 ## Required env (production)
 
@@ -43,7 +41,7 @@ Most operators run the kernel via the CLI:
 | `TAKOSUMI_DATABASE_URL`                         | Postgres URL for state / record store       |
 | `TAKOSUMI_SECRET_STORE_PASSPHRASE`              | Symmetric key for at-rest secret encryption |
 | `TAKOSUMI_INSTALLER_TOKEN`                      | Bearer for `/v1/installations/*`            |
-| `TAKOSUMI_DEPLOY_TOKEN`                         | Bearer for artifact write routes            |
+| `TAKOSUMI_DEPLOY_TOKEN`                         | Bearer for optional DataAsset write routes  |
 | `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN`   | runtime-agent locator                       |
 | `TAKOSUMI_AUDIT_REPLICATION_KIND` + sink config | external audit replica                      |
 | `TAKOSUMI_ENVIRONMENT=production`               | gates strict-runtime adapter check          |
@@ -70,16 +68,17 @@ Deno.serve({ port: 8788 }, app.fetch);
 `createPaaSApp` does:
 
 1. Loads runtime config from env
-2. Registers optional data-asset metadata used by the artifact routes. Component
-   kind descriptors and providers are operator-supplied; the kernel does not
-   define contract-owned component kinds. Cloud-backed `KernelPlugin` factories
-   are imported separately from `@takos/takosumi-<cloud>-providers` packages and
-   attached via `plugins: [...]` plus an operator `kindAliases` map when short
-   aliases are desired.
+2. Registers optional data-asset metadata used by DataAsset routes. Component
+   kind descriptors and providers are operator-supplied. Cloud-backed reference
+   `KernelPlugin` adapter factories are imported separately from
+   `@takos/takosumi-<cloud>-providers` packages and attached via
+   `plugins: [...]` plus an operator `kindAliases` map when short aliases are
+   desired.
 3. Builds `AppContext` with adapter ports (auth / kms / secrets / queue /
    storage / observability / objectStorage / runtimeAgentRegistry / etc)
 4. Mounts the route modules that match the configured process role:
-   - `takosumi-api` → internal + installer + readiness + openapi + artifact
+   - `takosumi-api` → internal + installer + readiness + openapi; DataAsset
+     routes are mounted only when the operator enables that extension
    - `takosumi-worker` → readiness + worker daemon
    - `takosumi-runtime-agent` → runtime-agent fleet routes
 5. Returns the Hono app
@@ -99,12 +98,12 @@ list.
 - [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)
   — executor / data plane
 - [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
-  reference kind descriptors + provider helpers
+  reference kind descriptors + adapter helpers
 - [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — operator CLI
 - [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) — type
   contract
 
 > The `@takos/` JSR scope is the reference Takosumi distribution published by
-> Takos; authority lives in the contract, not in the publisher — alternative
-> publishers (e.g., `@example/takosumi-kernel`) are spec-permitted, currently
-> untested, and hold no architectural privilege.
+> Takos. Authority lives in the contract. Alternative publishers (e.g.,
+> `@example/takosumi-kernel`) are spec-permitted, currently untested, and hold
+> the same architectural position.

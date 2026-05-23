@@ -1,16 +1,17 @@
-# Namespace exports {#namespace-exports}
+# Operator namespace exports {#namespace-exports}
 
 > このページでわかること: AppSpec の component graph の外にある operator-owned
 > material を、Space-scoped に公開する model。
 
-Namespace export は、AppSpec component ではない外部 surface を `publish` /
-`listen` と同じ namespace vocabulary で参照できるようにするための内部 model で
-す。kernel は AppSpec installer lifecycle を扱い、export の発行元そのものは
-operator distribution が所有します。
+このページの Namespace export は、operator-owned external surface を `publish` /
+`listen` と同じ namespace vocabulary で参照するための model です。component
+自身が `publish` する namespace material の 統合モデルは
+[Namespace Export Model](./architecture/namespace-export-model.md)
+を参照してください。 kernel は AppSpec installer lifecycle を扱い、operator
+export の発行元そのものは operator distribution が所有します。
 
-代表例は `operator.identity.oidc` です。kernel は OIDC client を発行しませんが、
-operator が issuer material を namespace に publish すれば、worker component は
-`listen` でそれを受け取れます。
+代表例は `operator.identity.oidc` です。operator が issuer material を namespace
+に publish し、worker component は `listen` でそれを受け取れます。
 
 ## Path grammar {#path-grammar}
 
@@ -23,7 +24,7 @@ Rules:
 
 - 最大 8 segments、最大 255 chars。
 - empty segment は invalid。
-- `@v1` のような version suffix は path に含めない。
+- version は `contractVersion` / `snapshotId` で扱う。
 - `default` は leaf segment としてだけ使う。
 - `operator` prefix は operator が Space-visible export として publish する
   surface に使う。
@@ -38,10 +39,9 @@ operator.observability.default
 
 ## Owner model {#owner-model}
 
-current v1 で有効な owner は `operator` だけです。application component は
-`operator.*` を shadow できません。Space-owned、external participant、
-cross-space share は将来 RFC 用の reserved vocabulary であり、current docs の
-contract ではありません。
+current v1 の owner は `operator` です。application component は `operator.*` を
+shadow できません。Space-owned、external participant、cross-space share は将来
+RFC 用の reserved vocabulary です。
 
 ## Declaration and material {#declaration-and-material}
 
@@ -60,7 +60,7 @@ ExportDeclaration:
   contractVersion: v1
   descriptorDigest: sha256:...
   sensitivity: restricted
-  accessModes: [read, call]
+  accessModes: [read, invoke-only]
   safeDefaultAccess: read
   freshness:
     state: fresh
@@ -83,9 +83,8 @@ metadata を持てます。raw secret value は declaration、audit event、AppS
 
 ## Versioning {#versioning}
 
-Path は human-stable name であり version carrier ではありません。version は
-`contractRef`、`contractVersion`、immutable `snapshotId`、`descriptorDigest`
-で扱います。
+Path は human-stable name です。version は `contractRef`、`contractVersion`、
+immutable `snapshotId`、`descriptorDigest` で扱います。
 
 - Non-breaking change: same `namespacePath`, new `snapshotId`, compatible
   `contractVersion`。
@@ -109,20 +108,19 @@ Resolution order:
 
 consumer は install context または operator API から namespace export
 declaration を discover します。OIDC の場合、`operator.identity.oidc` export
-から issuer discovery URL を得て、その後は OIDC discovery contract
-を使います。特定 hostname は namespace export contract ではありません。
+から issuer discovery URL を得て、その後は OIDC discovery contract を使います。
 
 ## Grants {#grants}
 
-Namespace export は default-deny です。consumer は Link、permission grant、
+Namespace export は default-deny です。consumer は Link、operator access grant、
 operator API operation のいずれかで explicit grant を得ます。
 
-| Access mode  | 意味                          |
-| ------------ | ----------------------------- |
-| `read`       | metadata / public config 読み |
-| `call`       | endpoint invocation           |
-| `read-write` | producer が許可した mutation  |
-| `admin`      | explicit approval が必要      |
+| Access mode   | 意味                          |
+| ------------- | ----------------------------- |
+| `read`        | metadata / public config 読み |
+| `invoke-only` | endpoint invocation           |
+| `read-write`  | producer が許可した mutation  |
+| `admin`       | explicit approval が必要      |
 
 ## Audit {#audit}
 

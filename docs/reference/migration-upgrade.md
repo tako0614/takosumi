@@ -116,10 +116,10 @@ invariant だけを定義し、 production 向けの down-migration 手順や op
 kernel と runtime-agent は **同 major 内 / 最大 2 minor の release-set
 alignment** だけを current invariant として許容する。
 
-> Rationale: alignment 範囲を 2 minor 以内に縛ることで provider plugin の wire
-> shape 検証を bounded に保つ。 3 minor 以上を許すと N×M version pair の testing
-> matrix が現実的でなくなり、 kernel 側 dispatcher が抱える release-set 分岐が
-> 線形に増える。
+> Rationale: alignment 範囲を 2 minor 以内に縛ることで provider implementation
+> の wire shape 検証を bounded に保つ。 3 minor 以上を許すと N×M version pair の
+> testing matrix が現実的でなくなり、 kernel 側 dispatcher が抱える release-set
+> 分岐が 線形に増える。
 
 | Alignment       | 許容                                                        |
 | --------------- | ----------------------------------------------------------- |

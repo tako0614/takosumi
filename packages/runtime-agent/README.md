@@ -29,14 +29,15 @@ takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 
 ## HTTP API
 
-| Method | Path                     | Description                                                                               |
-| ------ | ------------------------ | ----------------------------------------------------------------------------------------- |
-| `GET`  | `/v1/health`             | health probe                                                                              |
-| `GET`  | `/v1/connectors`         | bearer-auth: list registered `(shape, provider)`                                          |
-| `POST` | `/v1/lifecycle/apply`    | bearer-auth: apply one resource                                                           |
-| `POST` | `/v1/lifecycle/destroy`  | bearer-auth: destroy by handle                                                            |
-| `POST` | `/v1/lifecycle/describe` | bearer-auth: query resource state                                                         |
-| `POST` | `/v1/lifecycle/verify`   | bearer-auth: read-only credential check per connector (or filtered by `?kind=&provider=`) |
+| Method | Path                       | Description                                                                         |
+| ------ | -------------------------- | ----------------------------------------------------------------------------------- |
+| `GET`  | `/v1/health`               | health probe                                                                        |
+| `GET`  | `/v1/connectors`           | bearer-auth: list registered `(shape, provider)`                                    |
+| `POST` | `/v1/lifecycle/apply`      | bearer-auth: apply one resource                                                     |
+| `POST` | `/v1/lifecycle/destroy`    | bearer-auth: destroy by handle                                                      |
+| `POST` | `/v1/lifecycle/compensate` | bearer-auth: compensate a recorded partial effect during WAL recovery               |
+| `POST` | `/v1/lifecycle/describe`   | bearer-auth: query resource state                                                   |
+| `POST` | `/v1/lifecycle/verify`     | bearer-auth: read-only credential check per connector (optionally filtered by body) |
 
 Auth is a single bearer token, shared with the kernel via
 `TAKOSUMI_AGENT_TOKEN`.
@@ -64,15 +65,27 @@ interface Connector {
   readonly acceptedArtifactKinds: readonly string[];
   apply(req, ctx): Promise<{ handle; outputs }>;
   destroy(req, ctx): Promise<{ ok }>;
+  compensate?(req, ctx): Promise<{
+    ok;
+    note?;
+    revokeDebtRequired?;
+    detail?;
+  }>;
   describe(req, ctx): Promise<{ status; outputs? }>;
   verify?(ctx): Promise<{ ok; code?; note? }>;
 }
 ```
 
 Source-backed connectors, such as `worker@v1`, read files from
-`LifecycleApplyRequest.preparedSource` through `ctx.source`. Artifact-backed
-connectors may still use `ctx.fetcher`, but artifact kinds are connector-owned
-metadata rather than Takosumi AppSpec concepts.
+`LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset-backed
+connectors may still use `ctx.fetcher`, but DataAsset metadata kinds are
+connector-owned metadata rather than Takosumi AppSpec concepts.
+
+`compensate` is the recovery hook for partially applied effects recorded in the
+kernel WAL. Connectors that can reverse an effect more precisely than
+handle-keyed deletion should implement it. When the hook is absent, the
+dispatcher falls back to `destroy`; if cleanup cannot be completed, the response
+can set `revokeDebtRequired` so the kernel keeps operator-visible cleanup debt.
 
 ## Cloud credentials (per connector)
 

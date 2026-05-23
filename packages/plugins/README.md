@@ -1,23 +1,22 @@
 # @takos/takosumi-plugins
 
-Reference component kind registry and **materializer host** for Takosumi.
-Operators attach materializers as a **plain array** to
-`createPaaSApp({ kindAliases, plugins: [...] })` — the Vite plugin pattern — or
-as `materializers: [...]` for inline-function form. Each plugin returns a
-`KernelPlugin` that declares the kind URI(s) it provides. Operators attach
-plugins and alias maps explicitly; the Takosumi contract does not define
-component kinds.
+Reference component kind descriptors and provider helper package for the
+takosumi.com reference implementation. JSON-LD descriptors carry kind semantics;
+provider adapters are the reference kernel's TypeScript adapter API. Operators
+attach reference provider adapters as a **plain array** to
+`createPaaSApp({ kindAliases, plugins: [...] })` — the Vite plugin pattern. Each
+plugin returns a `KernelPlugin` that declares the kind URI(s) it provides.
 
-This package itself ships **no cloud SDK code**. Cloud-backed `KernelPlugin`
-factories live in six independent provider packages
+This package itself ships **no cloud SDK code**. Cloud-backed reference
+`KernelPlugin` factories live in six independent provider packages
 (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`),
-each importable on its own. The materializer host plus Takos reference kind
-registry stays core-only.
+each importable on its own. The takosumi.com reference kind examples stay
+core-only.
 
 ## Install (cloud provider package 経由)
 
 ```typescript
-import { createPaaSApp } from "@takos/takosumi-kernel";
+import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import { cloudflareWorkerProvider } from "@takos/takosumi-cloudflare-providers";
 import { awsS3ObjectStoreProvider } from "@takos/takosumi-aws-providers";
@@ -27,41 +26,23 @@ const { app } = await createPaaSApp({
   plugins: [
     cloudflareWorkerProvider({
       accountId: env.CLOUDFLARE_ACCOUNT_ID,
-      apiToken: env.CLOUDFLARE_API_TOKEN,
     }),
     awsS3ObjectStoreProvider({
       region: env.AWS_REGION,
-      accessKeyId: env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
     }),
   ],
 });
 ```
 
-## Inline materializer (operator-owned 任意 JS)
-
-```typescript
-const { app } = await createPaaSApp({
-  materializers: [
-    {
-      kindUri: "https://example.com/kinds/cache@v1",
-      apply: async (spec, ctx) => ({ outputs: { endpoint: "redis://..." } }),
-      destroy: async (handle, ctx) => {/* ... */},
-    },
-  ],
-});
-```
-
-Old `enableAws: true` / `createTakosumiProductionProviders(opts)` style switches
-are retired — operators choose the providers they need and pass credentials per
-factory.
+Operators choose the providers they need and attach them as `plugins` in the
+reference kernel. Cloud credentials live on the runtime-agent environment or
+operator host, not in public bootstrap factory arguments.
 
 ## Reference component kinds
 
-Takos publishes a reference registry for five common component kinds. These
-descriptors live outside the Takosumi AppSpec contract; operators opt into them
-by importing this package and passing aliases such as
-`{ web: "https://takosumi.com/kinds/v1/web-service" }`.
+This package includes takosumi.com reference descriptor examples for five common
+component kinds. Operators opt into them by importing this package and passing
+aliases such as `{ web: "https://takosumi.com/kinds/v1/web-service" }`.
 
 Operator distributions can publish their own JSON-LD descriptors on any domain
 and map short aliases to those URIs.
@@ -74,14 +55,15 @@ and map short aliases to those URIs.
 | `object-store`  | S3-compatible bucket                                   |
 | `custom-domain` | DNS record + TLS termination                           |
 
-旧 `oidc` kind は takosumi-cloud (= Takosumi Accounts operator distribution)
-に移動済。 worker 側は `listen.operator.identity.oidc` で標準 env を受け取る。
+Takosumi Accounts operator distribution は OIDC issuer を
+`operator.identity.oidc` namespace で publish する。worker 側は
+`listen.operator.identity.oidc` で標準 env を受け取る。
 
 ## Providers (= 別 package、 6 cloud)
 
-cloud-backed materializer は **独立 JSR package** として publish される。 各
-package は paper-thin な lifecycle client を提供し、 cloud SDK code / credential
-/ 副作用は **runtime-agent** の背後に住む。
+cloud-backed reference provider adapter は **独立 JSR package** として publish
+される。 各 package は paper-thin な lifecycle client を提供し、 cloud SDK code
+/ credential / 副作用は **runtime-agent** の背後に住む。
 
 | Package                                 | Cloud / runtime                                   |
 | --------------------------------------- | ------------------------------------------------- |
@@ -98,12 +80,13 @@ provider id namespace は `@takos/<cloud>-<service>` を使う (= `@takos/aws-s3
 
 ## Data assets
 
-Takosumi AppSpec does not define artifact kinds. The optional artifact routes
-can still store operator-owned blobs, but `kind` there is external metadata
-owned by the operator / connector distribution.
+DataAsset metadata kinds are operator metadata. The optional DataAsset routes
+store operator-owned blobs, and `kind` is owned by the operator / connector
+distribution.
 
-Operators can register discoverable data-asset kinds via `registerArtifactKind`
-from [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract).
+Reference operators can register discoverable data-asset kinds via
+`registerArtifactKind` from
+[`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract).
 
 ## See also
 

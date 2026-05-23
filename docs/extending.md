@@ -4,16 +4,18 @@ Takosumi の拡張は 2 種類あります。
 
 | やりたいこと                                            | 追加するもの                   |
 | ------------------------------------------------------- | ------------------------------ |
-| reference / operator kind を別 cloud / runtime で動かす | provider plugin                |
+| reference / operator kind を別 cloud / runtime で動かす | implementation binding         |
 | 新しい runtime / resource contract を作る               | kind descriptor + materializer |
 
-AppSpec に `plugin:` field はありません。operator が `createPaaSApp()` で plugin
-や inline materializer を attach します。
+AppSpec は `kind` URI と `spec` を書きます。JSON-LD descriptor が kind
+の型・意味 を表し、operator がその kind URI に implementation binding
+を用意します。Takosumi reference kernel では `createPaaSApp()` で `KernelPlugin`
+を attach します。
 
-## Provider plugin を追加する
+## Reference provider adapter を追加する
 
-provider plugin は reference / operator kind を具体 substrate に materialize
-する実装 です。
+Takosumi reference kernel で provider を追加する場合は、reference / operator
+kind を具体 substrate に materialize する `KernelPlugin` adapter を用意します。
 
 ```ts
 import { kernelPluginFromProviderPlugin } from "@takos/takosumi-contract/kernel-plugin-adapter";
@@ -21,7 +23,10 @@ import { kernelPluginFromProviderPlugin } from "@takos/takosumi-contract/kernel-
 export function hetznerCloudWebServiceProvider(
   opts: HetznerCloudWebServiceOptions,
 ) {
-  const provider = createHetznerCloudWebServiceProvider({ token: opts.token });
+  const provider = createHetznerCloudWebServiceProvider({
+    region: opts.region,
+    lifecycleClient: opts.lifecycleClient,
+  });
 
   return kernelPluginFromProviderPlugin({
     provider,
@@ -32,51 +37,21 @@ export function hetznerCloudWebServiceProvider(
 
 命名は次の形に揃えます。
 
-| 対象         | ルール                                              |
-| ------------ | --------------------------------------------------- |
-| Factory name | camelCase、`<provider><Kind>Provider`               |
-| Provider id  | kebab-case、cloud / runtime を先頭に置く            |
-| Package      | cloud / runtime owner を持つ provider package       |
-| Credential   | factory option または runtime-agent host env で注入 |
+| 対象         | ルール                                             |
+| ------------ | -------------------------------------------------- |
+| Factory name | camelCase、`<provider><Kind>Provider`              |
+| Provider id  | kebab-case、cloud / runtime を先頭に置く           |
+| Package      | cloud / runtime owner を持つ provider package      |
+| Credential   | runtime-agent host env または operator host で注入 |
 
-provider は credential を AppSpec から読みません。credential と region / account
-などの operator 設定は plugin factory option または runtime-agent 側の config で
-渡します。
-
-## Inline materializer を追加する
-
-小さい operator-local recipe は inline materializer で十分です。
-
-```ts
-import { createPaaSApp } from "@takos/takosumi-kernel";
-
-const { app } = await createPaaSApp({
-  kindAliases: {
-    cache: "https://operator.example.com/kinds/cache",
-  },
-  materializers: [
-    {
-      kindUri: "https://operator.example.com/kinds/cache",
-      apply: async (spec, ctx) => {
-        return {
-          handle: `cache:${ctx.componentName}`,
-          outputs: {
-            endpoint: "redis://cache.internal:6379",
-          },
-        };
-      },
-      destroy: async () => {},
-    },
-  ],
-});
-```
-
-inline materializer も provider plugin と同じく、outputs を返し、lifecycle
-boundary を守る必要があります。
+provider credential は runtime-agent host または operator host 側に置きます。
+region / account などの non-secret selector は plugin factory option
+に置けます。
 
 ## 新しい kind を追加する
 
-新しい kind は JSON-LD descriptor と materializer をセットで用意します。
+新しい kind は JSON-LD descriptor と implementation binding
+をセットで用意します。
 
 ```json
 {
@@ -121,7 +96,7 @@ components:
 ## 関連ページ
 
 - [AppSpec](./reference/app-spec.md)
-- [Reference Kind Registry](./reference/kind-catalog.md)
-- [Provider plugin](./reference/providers.md)
+- [Reference Kind Descriptors](./reference/kind-registry.md)
+- [Provider Implementations](./reference/providers.md)
 - [Operator Bootstrap](./operator/bootstrap.md)
 - [Runtime-Agent API](./reference/runtime-agent-api.md)

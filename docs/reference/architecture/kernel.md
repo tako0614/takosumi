@@ -21,12 +21,12 @@ kernel が public concept として扱う名詞は 3 つです。
 | Installation | Space に入った AppSpec の current state  |
 | Deployment   | 1 回の dry-run / apply / rollback の結果 |
 
-内部には Resource、Namespace、Secret、Event などの record がありますが、public
-authoring surface には出しません。
+内部 record には Resource、Namespace、Secret、Event などがあり、public authoring
+surface は AppSpec / Installation / Deployment を入口にします。
 
-## Kernel が持たないもの {#not-owned-by-kernel}
+## Operator / application responsibilities {#not-owned-by-kernel}
 
-kernel は次を所有しません。
+operator distribution または consumer application は次を扱います。
 
 - user account / login / passkey
 - billing / subscription / invoice
@@ -35,9 +35,8 @@ kernel は次を所有しません。
 - workflow runner / cron / scheduler
 - application-specific UI / DB schema / queue
 
-これらは operator distribution または consumer application
-が持つ責務です。kernel docs では、外部 surface が AppSpec component
-と接続する必要がある場合だけ namespace export として扱います。
+kernel docs では、これらの外部 surface が AppSpec component と接続する必要がある
+場合に namespace export として扱います。
 
 ## Space {#space}
 
@@ -51,8 +50,8 @@ Space
         └── Deployment[]
 ```
 
-Space は account-plane の詳細を含みません。kernel は request token から解決され
-た `spaceId` を受け取り、その Space の中で AppSpec を apply します。
+Space ID は request token / installer context から解決されます。kernel は
+`spaceId` を受け取り、その Space の中で AppSpec を apply します。
 
 ## Component と Resource {#component-and-resource}
 
@@ -78,7 +77,7 @@ Component を宣言します。
 ```text
 1. caller or build service posts source to POST /v1/installations/dry-run
 2. kernel fetches source and parses resolved .takosumi.yml
-3. kernel validates syntax / schema / kind / namespace graph / Space context
+3. kernel validates syntax / schema / namespace graph / Space context
 4. kernel computes changes[] and expected.{commit, manifestDigest, sourceDigest?}
 5. caller posts apply with the same source and expected values
 6. kernel re-fetches source and verifies expected values
@@ -90,18 +89,18 @@ Component を宣言します。
 `manifestDigest` は Installer API の wire field name です。current docs では
 AppSpec digest を指します。
 
-source を build / prepare する step はこの pipeline の外側です。BuildSpec を
-使う場合、build service が先に prepared source snapshot を作り、
-`source.kind=prepared` として渡します。
+source を build / prepare する場合、build service が pipeline の前に prepared
+source snapshot を作り、`source.kind=prepared` として渡します。
 
 ## Provider materialization {#provider-materialization}
 
-kernel は provider plugin を operator config から受け取ります。provider
-selection は component `kind`、provider hint、capability requirement から決まり
-ます。決定不能なら、副作用の前に失敗します。
+kernel は kind alias map と provider implementation set を operator config から
+受け取ります。component `kind` は opaque string で、operator が URI
+に解決します。 Takosumi reference kernel の provider materialization
+では、解決した kind URI を `provides[]` に含む `KernelPlugin` adapter
+を選びます。決定不能なら、副作用の前 に失敗します。
 
-詳細は [Provider plugin](../providers.md) と
-[Provider catalog](../provider-catalog.md) を参照してください。
+詳細は [Provider Implementations](../providers.md) を参照してください。
 
 ## Runtime routing {#runtime-routing}
 
@@ -113,8 +112,8 @@ resource を選びます。routing の詳細は [Runtime routing](./runtime-rout
 ## Internal APIs {#internal-apis}
 
 kernel の public installer API は `/v1/installations/*` です。operator
-automation や runtime-agent 向けの internal route はありますが、AppSpec
-authoring contract ではありません。
+automation や runtime-agent 向けの internal route は、operator runtime surface
+として扱います。
 
 関連資料:
 

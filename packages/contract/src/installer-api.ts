@@ -28,7 +28,7 @@ export const INSTALLATION_ROLLBACK_PATH = (id: string): string =>
 // Source descriptors
 // ──────────────────────────────────────────────
 
-export type SourceKind = "git" | "local" | "catalog" | "bundle" | "prepared";
+export type SourceKind = "git" | "local" | "prepared";
 
 export interface Source {
   readonly kind: SourceKind;
@@ -46,7 +46,7 @@ export interface Source {
 }
 
 export interface SourcePin {
-  readonly commit: string;
+  readonly commit?: string;
   readonly manifestDigest: string;
   readonly sourceDigest?: string;
 }

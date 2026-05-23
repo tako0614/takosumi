@@ -1,16 +1,17 @@
-# Reference Kind Registry {#kind-catalog}
+# Reference Kind Descriptors {#kind-registry}
 
-Takosumi AppSpec contract は公式 component kind を定義しません。
-`components.<name>.kind` は opaque string で、意味は operator distribution が
-attach する alias map、JSON-LD descriptor、provider plugin で決まります。
+`components.<name>.kind` は operator distribution が解決する component type
+です。JSON-LD descriptor が kind の型・意味・入出力を与え、operator の
+implementation binding が runtime behavior を与えます。Takosumi reference kernel
+では implementation binding を reference provider adapter として attach します。
 
-このページは Takos が `https://takosumi.com/kinds/v1/*` で公開する **reference
-registry** の説明です。takosumi.com が publish していても、これらは Takosumi
-spec の contract-owned kind ではありません。
+このページは `https://takosumi.com/kinds/v1/*` で公開される **reference
+descriptor examples** の説明です。operator は必要な descriptor を alias map と
+plugin set に取り込みます。
 
 ## Reference component kinds
 
-Takos reference distribution が扱う common kind は次の 5 つです。
+takosumi.com reference descriptors が扱う common kind examples は次の 5 つです。
 
 | Kind            | 用途                           | 代表 outputs                                   |
 | --------------- | ------------------------------ | ---------------------------------------------- |
@@ -20,10 +21,9 @@ Takos reference distribution が扱う common kind は次の 5 つです。
 | `object-store`  | S3-compatible bucket           | `bucket`, `endpoint`, `region`                 |
 | `custom-domain` | DNS record + TLS termination   | `fqdn`, `certificateId`, `nameservers`         |
 
-AppSpec author は `worker` のような short alias を使えますが、alias は
-operator-owned です。operator が `worker` を
-`https://takosumi.com/kinds/v1/worker` に解決する設定を持たない場合、kernel は
-provider operation 前に fail-closed します。完全 URI を直接書くこともできます。
+AppSpec author は `worker` のような short alias を使えます。operator は `worker`
+を `https://takosumi.com/kinds/v1/worker` に解決し、対応する provider
+implementation を選びます。完全 URI を直接書くこともできます。
 
 operator-defined kind は任意 domain の JSON-LD descriptor と materializer を
 operator が用意します。
@@ -40,9 +40,9 @@ components:
 ```
 
 `worker` の provider input は prepared source snapshot 内の `entrypoint` path
-です。source 側の build service / CI は bundle
-を作っても構いませんが、その結果は prepared source の file
-として置きます。AppSpec には artifact kind や hash を 書きません。
+です。source 側の build service / CI が bundle を作る場合、その結果を prepared
+source の file として置きます。DataAsset metadata や hash は DataAsset workflow
+側で扱います。
 
 ```yaml
 spec:
@@ -50,8 +50,7 @@ spec:
   compatibilityDate: "2025-01-01"
 ```
 
-`routes` は portable worker contract ではありません。必要な provider は `spec`
-の open extension として独自に読めます。
+provider-specific routing は `spec` の open extension として表現できます。
 
 ## `web-service`
 
@@ -68,7 +67,7 @@ components:
 ```
 
 `web-service` は Fargate / Cloud Run / Kubernetes / Docker Compose / systemd
-などの container runtime 向けです。`worker` と同じ URI ではありません。
+などの container runtime 向けの kind URI を使います。
 
 ## `postgres`
 
@@ -120,9 +119,10 @@ redirect などは provider extension です。
 ## JSON-LD descriptor
 
 operator-defined kind は JSON-LD descriptor で `spec`、`publishes`、`listens`、
-`outputs` を宣言できます。kernel は descriptor の意味を contract-owned
-definition として持たず、 operator が attach した plugin が `provides[]`
-で宣言する kind URI と AppSpec component を照合します。
+`outputs` を宣言できます。operator は descriptor の kind URI に対して
+implementation binding を用意し、AppSpec component に runtime behavior
+を与えます。 Takosumi reference implementation では、その binding を
+`KernelPlugin.provides[]` で表します。
 
 ```json
 {
@@ -143,30 +143,22 @@ definition として持たず、 operator が attach した plugin が `provides
 
 ## Data Assets
 
-Takosumi AppSpec は artifact kind catalog を持ちません。`/v1/artifacts` は
-operator が data blob を保管するための optional API で、そこに付く `kind` は
-operator / connector distribution が定義する外部 metadata です。
+`/v1/artifacts` は operator が data blob を保管するための DataAsset API です。
+そこに付く `kind` は operator / connector distribution が定義する metadata
+です。
 
-bundled connector compatibility のため、reference distribution は data asset
-metadata として次の `kind` を登録します。これは AppSpec の component kind でも
-worker contract でもありません。
-
-`oci-image | js-bundle | lambda-zip | static-bundle | wasm`
-
-- `oci-image`
-- `js-bundle`
-- `lambda-zip`
-- `static-bundle`
-- `wasm`
+operator は必要に応じて `registerArtifactKind` で discovery metadata と size cap
+を登録できます。connector は `acceptedArtifactKinds` で consume できる metadata
+value を宣言します。runtime が source tree の file を読む場合は DataAsset
+metadata ではなく prepared source snapshot と kind-specific `spec` を使います。
 
 Reference worker kind は data asset API を使わず、prepared source の
 `spec.entrypoint` を読みます。詳細は [DataAsset Policy](./data-asset-policy.md)
-と [Artifact GC](./artifact-gc.md) を参照してください。
+と [DataAsset GC](./artifact-gc.md) を参照してください。
 
 ## 関連ページ
 
 - [AppSpec](./app-spec.md)
-- [BuildSpec](./build-spec.md)
-- [Provider plugin](./providers.md)
+- [Provider Implementations](./providers.md)
 - [Connector Contract](./connector-contract.md)
 - [Extending Takosumi](../extending.md)

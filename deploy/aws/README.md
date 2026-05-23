@@ -1,23 +1,22 @@
 # Takos AWS Provider Runbook
 
 This directory documents the AWS surface as **operator-owned scope**: the
-kernel-side provider plugins (`packages/plugins/src/providers/aws/`) and
-runtime-agent connectors
-(`packages/runtime-agent/src/connectors/aws/{s3,rds,fargate,route53}.ts`) are
-production-grade and ship by default. The deploy artifact (the Terraform / CDK /
-Pulumi that lands the Takosumi kernel image and runtime-agent image on AWS
-infrastructure) is the operator's responsibility — Takosumi does not ship a
-reference IaC stack for AWS.
+operator-attached provider package (`packages/aws-providers/`) and runtime-agent
+connectors (`packages/runtime-agent/src/connectors/aws/`) provide AWS lifecycle
+coverage when the operator wires them into their distribution. The deploy
+artifact (the Terraform / CDK / Pulumi that lands the Takosumi kernel image and
+runtime-agent image on AWS infrastructure) is also the operator's
+responsibility. Operators provide the production-grade AWS IaC stack for their
+distribution.
 
 ## Why no reference deploy here
 
 The two reference distributions Takosumi ships (`deploy/cloudflare/` and
 `deploy/selfhosted/`) cover the substrate-neutrality claim at spec level. AWS /
-GCP / Azure / k8s are spec-compliant — operators run the kernel image on
-whatever AWS compute they prefer (ECS / Fargate / EC2 / EKS) and point the
-kernel at a Postgres database (RDS / Aurora). Once the kernel is reachable, all
-4 AWS provider plugins (`@takos/aws-s3`, `@takos/aws-fargate`, `@takos/aws-rds`,
-`@takos/aws-route53`) work without modification.
+GCP / Azure / k8s are operator-owned targets: operators run the kernel image on
+whatever AWS compute they prefer (ECS / Fargate / EC2 / EKS), point the kernel
+at a Postgres database (RDS / Aurora), and attach the AWS provider factories
+from `@takos/takosumi-aws-providers` plus matching runtime-agent credentials.
 
 ## Required runtime shape
 

@@ -1,16 +1,16 @@
 # @takos/takosumi-aws-providers
 
-AWS-backed `KernelPlugin` factories for the Takos reference component kinds
-(`web-service` / `object-store` / `postgres` / `custom-domain`). Operators
-import this package explicitly when they want AWS coverage — Takosumi core
-(`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses
-which provider packages to attach to
+AWS-backed reference `KernelPlugin` adapter factories for takosumi.com reference
+component kind examples (`web-service` / `object-store` / `postgres` /
+`custom-domain`). Operators import this package explicitly when they want AWS
+coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK code,
+so the operator chooses which provider packages to attach to
 `createPaaSApp({ kindAliases, plugins: [...] })`.
 
 ## Install
 
 ```typescript
-import { createPaaSApp } from "@takos/takosumi-kernel";
+import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import {
   awsFargateWebServiceProvider,
@@ -33,6 +33,10 @@ const { app } = await createPaaSApp({
 });
 ```
 
+AWS credentials are configured on the runtime-agent connector environment or
+operator host. Provider factory arguments stay limited to non-secret selector
+settings such as region, cluster name, or hosted zone id.
+
 ## Exports
 
 | Factory                          | Kind URI                                      |
@@ -42,7 +46,7 @@ const { app } = await createPaaSApp({
 | `awsRdsPostgresProvider`         | `https://takosumi.com/kinds/v1/postgres`      |
 | `awsRoute53CustomDomainProvider` | `https://takosumi.com/kinds/v1/custom-domain` |
 
-`awsFargateWorkerProvider` remains as a deprecated compatibility alias for
+`awsFargateWorkerProvider` remains available as a compatibility alias for
 `awsFargateWebServiceProvider`.
 
 ## See also

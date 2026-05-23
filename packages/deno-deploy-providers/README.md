@@ -1,15 +1,16 @@
 # @takos/takosumi-deno-deploy-providers
 
-Deno Deploy-backed `KernelPlugin` factory for the Takos reference `worker`
-component kind. Operators import this package explicitly when they want Deno
-Deploy coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK
-code, so the operator chooses which provider packages to attach to
+Deno Deploy-backed reference `KernelPlugin` adapter factory for the takosumi.com
+reference `worker` example component kind. Operators import this package
+explicitly when they want Deno Deploy coverage — Takosumi core
+(`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses
+which provider packages to attach to
 `createPaaSApp({ kindAliases, plugins: [...] })`.
 
 ## Install
 
 ```typescript
-import { createPaaSApp } from "@takos/takosumi-kernel";
+import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import { denoDeployWorkerProvider } from "@takos/takosumi-deno-deploy-providers";
 
@@ -20,6 +21,10 @@ const { app } = await createPaaSApp({
   ],
 });
 ```
+
+Deno Deploy credentials are configured on the runtime-agent connector
+environment or operator host. Provider factory arguments stay limited to
+non-secret selector settings such as organization id.
 
 ## Exports
 

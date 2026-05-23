@@ -9,7 +9,7 @@ import {
 import { TAKOSUMI_REFERENCE_KINDS } from "../src/kinds/mod.ts";
 import { createInMemoryTakosumiProviders } from "../src/shape-providers/mod.ts";
 
-// `web-service` is now part of the external reference catalog. Keep this
+// `web-service` is now part of the external reference registry. Keep this
 // local list explicit so the provider batch test also protects that export.
 const TEST_BUNDLED_SHAPES: readonly Shape[] = [
   ...TAKOSUMI_REFERENCE_KINDS,

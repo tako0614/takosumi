@@ -26,7 +26,7 @@ const sidebar: DefaultTheme.SidebarMulti = {
         { text: "Runtime-Agent API", link: "/reference/runtime-agent-api" },
         { text: "CLI", link: "/reference/cli" },
         { text: "Provider plugin", link: "/reference/providers" },
-        { text: "Reference kinds", link: "/reference/kind-catalog" },
+        { text: "Reference descriptors", link: "/reference/kind-registry" },
         { text: "環境変数", link: "/reference/env-vars" },
         { text: "用語集", link: "/reference/glossary" },
       ],
@@ -82,7 +82,10 @@ const sidebar: DefaultTheme.SidebarMulti = {
           text: "Snapshot model",
           link: "/reference/architecture/snapshot-model",
         },
-        { text: "Target model", link: "/reference/architecture/target-model" },
+        {
+          text: "Kind resolution model",
+          link: "/reference/architecture/kind-resolution-model",
+        },
         {
           text: "Policy / risk / approval / error",
           link: "/reference/architecture/policy-risk-approval-error-model",
@@ -108,8 +111,8 @@ const sidebar: DefaultTheme.SidebarMulti = {
           link: "/reference/architecture/operator-boundaries",
         },
         {
-          text: "Catalog release descriptor",
-          link: "/reference/architecture/catalog-release-descriptor-model",
+          text: "External descriptor intake",
+          link: "/reference/architecture/external-descriptor-registry-model",
         },
         {
           text: "Workflow placement",
@@ -125,7 +128,7 @@ const sidebar: DefaultTheme.SidebarMulti = {
       text: "高度な参照",
       collapsed: true,
       items: [
-        { text: "Provider catalog", link: "/reference/provider-catalog" },
+        { text: "Provider packages", link: "/reference/provider-packages" },
         { text: "Lifecycle protocol", link: "/reference/lifecycle" },
         { text: "Lifecycle phases", link: "/reference/lifecycle-phases" },
         { text: "WAL stages", link: "/reference/wal-stages" },
@@ -159,12 +162,12 @@ const sidebar: DefaultTheme.SidebarMulti = {
         { text: "Namespace exports", link: "/reference/namespace-exports" },
         { text: "Connector contract", link: "/reference/connector-contract" },
         { text: "DataAsset policy", link: "/reference/data-asset-policy" },
-        { text: "Artifact GC", link: "/reference/artifact-gc" },
+        { text: "DataAsset GC", link: "/reference/artifact-gc" },
         { text: "Secret partitions", link: "/reference/secret-partitions" },
         { text: "Cross-process locks", link: "/reference/cross-process-locks" },
         {
-          text: "Catalog release trust",
-          link: "/reference/catalog-release-trust",
+          text: "Plugin loading",
+          link: "/reference/plugin-loading",
         },
         { text: "Supply chain trust", link: "/reference/supply-chain-trust" },
         { text: "Workers backend", link: "/reference/workers-backend" },

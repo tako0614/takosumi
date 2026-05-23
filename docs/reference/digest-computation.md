@@ -1,19 +1,20 @@
 # Digest 計算 {#digest-computation}
 
-> このページでわかること: AppSpec / artifact の digest 計算方法。
+> このページでわかること: AppSpec manifest / structured snapshot / source
+> snapshot / operator DataAsset の digest 計算方法。
 
-Takosumi v1 が snapshot / plan / approval / predicted effect を結びつけるために
-使う digest 計算の規定です。 digest が persist される箇所、 および suffix が
-content-addressed な resource ID すべてで同一アルゴリズムを用います。
+Takosumi v1 が manifest / snapshot / plan / approval / predicted effect / source
+/ DataAsset を結びつけるために使う digest 計算の規定です。digest は **structured
+JSON digest** と **byte-stream digest** の 2 family に分かれます。
 
 本仕様は normative であり、 本ページと異なる digest を生成する kernel は
-仮にレシピが大まかに合っていても非準拠とみなします。 replay / restore / catalog
-adoption など instance 間の相互運用は、 digest が byte 単位で一致することに
-依存します。
+仮にレシピが大まかに合っていても非準拠とみなします。 replay / restore /
+source・DataAsset verification など instance 間の相互運用は、 digest が byte
+単位で一致することに依存します。
 
 ## digest の用途 {#digest-usage}
 
-v1 でこの仕様に従う digest:
+v1 でこの仕様に従う structured JSON digest:
 
 - `desiredSnapshotDigest`: `desired:sha256:...` snapshot の identity。
 - `resolutionSnapshotDigest`: `resolution:sha256:...` snapshot の identity。
@@ -22,22 +23,34 @@ v1 でこの仕様に従う digest:
 - `effectDetailsDigest`: `actualEffects` / `approvedEffects` view の identity。
 - `predictedActualEffectsDigest`: dry-materialization 予測の identity。
 
-[Resource IDs](./resource-ids.md) の他の content-addressed ID
-(`export-snapshot:` / `catalog-release:` / `policy:`) も同アルゴリズム。 各 ID
-の入力形状はそれぞれの reference を参照。
+v1 でこの仕様に従う byte-stream digest:
+
+- `manifestDigest`: installer が選択した `.takosumi.yml` file bytes の
+  identity。
+- `source.digest` / `expected.sourceDigest`: prepared source tar payload bytes
+  の identity。
+- DataAsset digest: optional operator DataAsset extension が保存する blob bytes
+  の identity。
+
+[Resource IDs](./resource-ids.md) の content-addressed ID は、structured JSON
+record なら JCS digest、raw bytes なら byte-stream digest を使います。各 ID の
+入力形状はそれぞれの reference を参照。
 
 ## アルゴリズム {#algorithm}
 
-v1 で digest アルゴリズムは固定です。
+v1 で hash algorithm は固定です。
 
 ```text
-digest = "sha256:" + lowercase_hex(SHA-256(canonical_encoding(input)))
+digest = "sha256:" + lowercase_hex(SHA-256(input_bytes))
 ```
 
 - hash 関数は FIPS 180-4 の **SHA-256**。 v1 で他の hash は使えない
 - digest 出力は常に文字列 `sha256:` プレフィックス + 32 byte hash の小文字 hex。
   `sha256:` プレフィックスは digest の一部で、 byte 単位比較に含まれる
-- hash への入力は次節の canonical encoding で得られる byte 列
+- structured JSON digest の `input_bytes` は次節の canonical encoding で得られる
+  byte 列
+- byte-stream digest の `input_bytes` は file / tar / blob の raw byte stream
+  そのもの。YAML parse result や JSON canonical form へ変換しない
 
 `sha256:` プレフィックスは digest algorithm を explicit にするために存在します。
 将来 `CONVENTIONS.md` §6 RFC で別 hash を採用する場合は、 prefix / verifier /
@@ -69,6 +82,25 @@ canonical encoding は
 各 digest は厳密な入力に対して計算します。 異なる field を含めたり、 必須 field
 を欠いたり、 ネスト配列を並べ替えたりすると別 digest になり、 非準拠になります。
 
+### `manifestDigest` {#manifestdigest}
+
+入力は installer が source root から選択した `.takosumi.yml` の raw UTF-8 file
+bytes。line ending、comment、key order も file bytes の一部として digest に参加
+します。`manifestDigest` は AppSpec parse 後の normalized object digest ではあり
+ません。
+
+### `source.digest` / `expected.sourceDigest` {#sourcedigest}
+
+prepared source の入力は build service が Installer API に渡す tar payload
+bytes。 kernel は payload を展開する前に `source.digest` を検証し、dry-run/apply
+gate では `expected.sourceDigest` と byte-for-byte で比較します。
+
+### DataAsset digest {#dataasset-digest}
+
+optional DataAsset extension の入力は operator が保存する blob bytes。DataAsset
+metadata (`kind`, `contentTypeHint`, retention policy など) は blob digest には
+含めず、別 record として audit / retention に参加します。
+
 ### `desiredSnapshotDigest` {#desiredsnapshotdigest}
 
 含む:
@@ -79,11 +111,11 @@ canonical encoding は
 - `dataAssets` — 宣言順の DataAsset binding
 - `desiredGeneration` — 単調増加する generation counter
 
-含まない:
+Identity から外すもの:
 
 - `spaceId` — snapshot は Space 間で identity portable。 Space binding は
   snapshot envelope 側で記録
-- `createdAt` — wall-clock timestamp は identity に含めない
+- `createdAt` — wall-clock timestamp は envelope metadata
 - operator 専用 annotation (audit note、 deploy bearer 識別子)
 
 ### `operationPlanDigest` {#operationplandigest}
@@ -95,11 +127,10 @@ canonical encoding は
 - 各 operation の resolved `connector:<id>`
 - 対象 `desired:sha256:...` と `resolution:sha256:...` の ID
 
-含まない:
+Identity から外すもの:
 
-- `idempotencyKey` — `operationPlanDigest` から **derive** される。 入力では
-  ない
-- `journalCursor` — runtime の WAL 状態は plan identity に含めない
+- `idempotencyKey` — `operationPlanDigest` から **derive** される
+- `journalCursor` — runtime の WAL 状態
 - per-attempt counter (`operationAttempt`)
 
 ### `effectDetailsDigest` {#effectdetailsdigest}
@@ -107,8 +138,8 @@ canonical encoding は
 input は effect set の closed-enum view。 approval record 上の `approvedEffects`
 でも OperationResult 上の `actualEffects` でも同一アルゴリズムを適用します。
 effect digest が同形状であることで、 成功 operation の result digest と approval
-の effect digest を bound rule ([Provider plugin](./providers.md)) の下で byte
-単位比較できます。
+の effect digest を bound rule ([Provider Implementations](./providers.md))
+の下で byte 単位比較できます。
 
 入力は source set の順序を保った closed-shape effect descriptor の列。 canonical
 encoder は各 descriptor 内部を JCS 規則で sort しますが、 外側の list を
@@ -117,15 +148,20 @@ encoder は各 descriptor 内部を JCS 規則で sort しますが、 外側の
 ### `predictedActualEffectsDigest` {#predictedactualeffectsdigest}
 
 dry materialization で得られる予測 effect map が入力です
-([Provider plugin](./providers.md))。 形状は `effectDetailsDigest` と同じ。
-digest は OperationPlan に bind され、 `commit` / `post-commit` 時の
+([Provider Implementations](./providers.md))。 形状は `effectDetailsDigest`
+と同じ。 digest は OperationPlan に bind され、 `commit` / `post-commit` 時の
 `actual-effects-overflow` Risk 評価の参照値に なります。
 
 ### `resolutionSnapshotDigest` {#resolutionsnapshotdigest}
 
 含む:
 
-- `catalogReleaseId` — 解決時に active な closed `catalog-release:<...>` ID
+- `operatorImplementationConfigVersion` — operator が起動時に expose した kind
+  alias / provider implementation / connector inventory の marker。これは
+  ResolutionSnapshot record に保存された opaque string。導出規則は operator
+  distribution が所有する
+- `providerResolution` — component ごとの resolved kind URI / provider
+  implementation / connector binding
 - `exportSnapshotIds` — 宣言順の解決済 `export-snapshot:<sha256>` ID
 - `importedShares` — 解決依存先の `share:<ulid>` ID と解決済 freshness state
 - resolved target — resolver が選んだ component ごとの closed-shape target
@@ -156,10 +192,8 @@ v1 では SHA-256 を衝突なしとして扱います。 kernel は運用上こ
 
 - **保存済 digest の等価性比較** は byte 単位。 両側はすでに canonical なので、
   比較時に prefix や hex case を正規化しない
-- **catalog release の署名検証** は
-  [Catalog Release Trust](./catalog-release-trust.md) の署名 backend を 介した
-  constant-time byte 比較。 timing-safe 比較が必要なのはここだけで、 通常の
-  apply pipeline チェックでは不要
+- operator implementation config は通常の解決入力であり、reference adapter
+  package の取得・検証は operator policy で扱う
 
 kernel は digest を JSON に re-decode して構造比較することはありません。
 canonical な byte 列そのものが identity です。
@@ -170,29 +204,28 @@ kernel は digest を初回計算時に persist し、 再計算は元の immuta
 に対してのみ許可します。
 
 - `desired:sha256:...` / `resolution:sha256:...` / `export-snapshot:sha256:...`
-  / `catalog-release:sha256:...` / `policy:sha256:...` はいずれも immutable
-  record に backed。 record から再計算すれば永遠に同じ値が得られる
+  / `policy:sha256:...` はいずれも immutable record に backed。 record から
+  再計算すれば永遠に同じ値が得られる
 - `operationPlanDigest` は OperationPlan emit 時に 1 度計算し、 WAL header に
   persist。 replay 時は保存済 record から再計算し、 一致を確認した後で進行
 - `effectDetailsDigest` と `predictedActualEffectsDigest` は immutable な plan /
   approval / result record に bind。 再計算は replay と audit verification
   でのみ使う
 
-入力 record が mutable な場合 (v1 では digest 計算の入力は mutable ではないが)、
-再計算は無効で、 実装は persist された digest を使います。
+digest 計算の入力 record は immutable として扱います。実装は persist された
+digest を replay / audit verification で使います。
 
 ## 関連アーキテクチャ {#related-architecture-notes}
 
 - docs/reference/architecture/snapshot-model.md
 - docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal
 - docs/reference/architecture/policy-risk-approval-error-model.md
-- docs/reference/architecture/catalog-release-descriptor-model.md
 - docs/reference/architecture/namespace-export-model.md#data-asset-model
 
 ## 関連ページ
 
 - [Resource IDs](./resource-ids.md)
-- [Provider plugin](./providers.md)
+- [Provider Implementations](./providers.md)
 - [WAL Stages](./wal-stages.md)
-- [Catalog Release Trust](./catalog-release-trust.md)
+- [Plugin Loading](./plugin-loading.md)
 - [Storage Schema](./storage-schema.md)

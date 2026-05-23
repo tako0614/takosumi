@@ -6,22 +6,22 @@ snapshot は Space scope の immutable な authority record である。
 
 ## IntentGraph {#intentgraph}
 
-IntentGraph is parsed authoring intent plus deploy context. It carries
-`spaceId`, but the AppSpec itself does not.
+IntentGraph is parsed authoring intent plus deploy context. It carries `spaceId`
+from the deploy context.
 
 It contains:
 
 ```text
-declared component resource intents (= AppSpec components[*].kind)
-provider ids
+declared component intents (= AppSpec components[*].kind)
+Space-visible kind alias / descriptor provenance
 AppSpec publish/listen edge dependency provenance
 link intents derived from component kind publish/listen bindings
-exposure intents derived from route-bearing resources
-data asset intents from resource specs
+exposure intents derived from kind-specific specs
+optional operator DataAsset extension intents from kind-specific specs
 space id from deploy context
 ```
 
-IntentGraph is not authority for apply.
+ResolutionSnapshot is the apply authority.
 
 ## ResolutionSnapshot {#resolutionsnapshot}
 
@@ -31,31 +31,29 @@ ResolutionSnapshot records what the kernel believed.
 ResolutionSnapshot:
   id: resolution:...
   spaceId: space:...
-  catalogReleaseId: catalog-release-...
-  descriptorClosureDigest: sha256:...
+  kindDescriptorClosureDigest: sha256:...
   namespaceSnapshotDigest: sha256:...
   namespaceScopeStackDigest: sha256:...
-  selectedTargets: []
+  selectedKindDescriptors: []
+  selectedAdapters: []
   selectedExports: []
   selectedProjections: []
   selectedImplementations: []
   spaceExportShares: []
   policyDecisions: []
   approvals: []
-  dataAssetRequirements: []
+  dataAssetExtensionRequirements: []
 ```
 
 ResolutionSnapshot includes:
 
 - Space id and namespace scope stack
-- CatalogRelease id and registry digests
-- descriptor closure and input schema digests
+- kind alias resolution, descriptor closure, and input schema digests
 - ExportDeclaration snapshots with Space scope and provenance
-- selected ObjectTargets
+- selected provider implementations
 - selected projections and access surfaces
-- selected implementations
 - policy decisions and approval bindings
-- data asset requirements
+- optional operator DataAsset extension requirements
 
 ## DesiredSnapshot {#desiredsnapshot}
 
@@ -72,7 +70,7 @@ DesiredSnapshot:
   exposures: []
   runtimePolicies: []
   activationRequirements: []
-  dataAssetRefs: []
+  dataAssetExtensionRefs: []
 ```
 
 DesiredSnapshot is immutable.
@@ -89,7 +87,8 @@ left as debt.
 
 ## ObservationSet {#observationset}
 
-ObservationSet records current facts. It does not update snapshots.
+ObservationSet records current facts. Snapshot updates flow through new
+ResolutionSnapshot / ActivationSnapshot records.
 
 ## ActivationSnapshot {#activationsnapshot}
 
