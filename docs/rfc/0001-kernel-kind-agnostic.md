@@ -93,19 +93,19 @@ Decision: operator-injected alias map を採用します。
 kernel は `https://takosumi.com/kinds/v1/worker` のような contract-owned URI
 を特別扱い しません。
 
-### 2. Worker artifact shape {#worker-artifact-shape}
+### 2. Worker source shape {#worker-artifact-shape}
 
-Decision: Wave N では inline artifact と `listen` 由来 artifact の oneOf を維持
-します。public artifact concept の削除は source snapshot model として別 wave
-に送ります。
+Decision: reference worker kind は `spec.entrypoint` を prepared source snapshot
+内の source-root-relative path として読む。
 
 理由:
 
-- migration の破壊を抑える。
-- build sandbox の責務移動と同時に worker artifact shape まで変えると review
-  surface が大きくなりすぎる。
-- provider plugin は現行 shape を受け取り、後続 RFC で source snapshot locator
-  を読む model に寄せられる。
+- AppSpec 上に artifact kind / hash を要求すると build service の出力形式が kind
+  contract に漏れる。
+- build 後 file path は worker kind の `spec` に置く方が、image / env / route 等
+  と同じ system で扱える。
+- provider plugin / runtime-agent は prepared source locator を受け取り、必要な
+  file だけを読む。
 
 ### 3. Build sandbox {#build-sandbox}
 
@@ -113,13 +113,11 @@ Decision: build sandbox は operator responsibility に移し、`.takosumi.build
 を build service input として定義します。
 
 Wave N 後の AppSpec component は `kind` / `spec` / `publish` / `listen` の 4
-field だけです。source から artifact を作る recipe は BuildSpec に書きます。
-build service は `.takosumi.yml` と `.takosumi.build.yml` を読み、Linux
-container などの build kind を batch 実行し、AppSpec の `spec.artifact` path を
-`/v1/artifacts` に upload してから `spec.artifact` が digest descriptor に解決済
-みの AppSpec bundle を作ります。kernel はその bundle を `source.kind=bundle`
-として受け取り、artifact material の digest と provenance を Deployment に記録
-します。
+field だけです。source を準備する recipe は BuildSpec に書きます。build service
+は `.takosumi.yml` と `.takosumi.build.yml` を読み、Linux container などの build
+kind を batch 実行し、build 後 source tree を tar + sha256 の prepared source
+snapshot として固定します。kernel はその snapshot を `source.kind=prepared` と
+して受け取り、AppSpec digest と source digest を Deployment に記録します。
 
 reference build kind は次の URI です。
 
@@ -134,10 +132,9 @@ BuildSpec component も AppSpec component と同じく `kind` / `spec` / `publis
 `listen` を持ちますが、BuildSpec namespace は build-only であり AppSpec runtime
 namespace とは混ぜません。
 
-### 4. Source snapshot follow-up {#source-snapshot-follow-up}
+### 4. Source snapshot model {#source-snapshot-follow-up}
 
-Decision: artifact / build の最終形は別 wave で source snapshot model
-に寄せます。
+Decision: artifact / build の最終形は source snapshot model に寄せます。
 
 - public AppSpec / BuildSpec から generic `artifact` concept を消す。
 - build service は build 後 source tree / git state を digest-pinned snapshot と
@@ -148,7 +145,7 @@ Decision: artifact / build の最終形は別 wave で source snapshot model
   して扱う。
 - kernel が Deployment evidence として記録するのは source snapshot digest /
   provenance / plugin output であり、`js-bundle` などの artifact kind は
-  Takosumi spec から外す候補にする。
+  Takosumi spec には含めない。
 
 ### 5. Reference distribution wording {#reference-distribution-wording}
 
@@ -179,9 +176,9 @@ runtime-agent が持つ worker-specific type の完全分離は別 RFC で扱い
 3. kernel validation を alias map + plugin lookup に切り替える。
 4. provider plugin が完全 URI の `provides[]` を宣言するようにする。
 5. `Component.build` の kernel-owned execution を削除し、BuildSpec / build
-   service / artifact upload path へ移す。
+   service / prepared source handoff へ移す。
 6. `.takosumi.build.yml` の parser と build service handoff を追加する。
-7. source snapshot locator model を導入し、public artifact concept を縮小する。
+7. source snapshot locator model を導入し、worker artifact input を削除する。
 8. current short alias を operator compatibility map として保持し、unresolved
    alias は fail-closed にする。
 
@@ -199,14 +196,15 @@ docs 上では AppSpec digest と説明します。
 
 - RFC 0002: runtime-agent hardcoded worker spec の完全分離。
 - RFC 0003: Takos CLI app packaging contract の再整理。
-- RFC 0004: worker artifact input を source snapshot locator に純化。
+- RFC 0004: worker source inputs の richer bundle / multi-file contract。
 - RFC 0005: build service provenance / cache / remote execution policy。
 
 ## Implementation notes {#implementation-notes}
 
-2026-05-21 時点で、component kind registry の contract 外部化は実装済みです。
-`Component.build` と artifact/source snapshot model の完全移行は follow-up
-implementation として残っています。
+2026-05-23 時点で、component kind registry の contract 外部化、`Component.build`
+削除、prepared source handoff、reference worker の `spec.entrypoint`
+化は実装済み です。BuildSpec parser / remote build service の production
+implementation は operator distribution の follow-up です。
 
 ## History {#history}
 
@@ -215,4 +213,5 @@ implementation として残っています。
 - Wave K: AppSpec root の `kind: "App"` を削除。
 - Wave L: `apiVersion: "takosumi.dev/v1"` を `apiVersion: "v1"` に変更。
 - Wave N: kernel kind-agnostic 化、reference catalog の operator distribution
-  化、 `Component.build` / artifact model の follow-up 移行を提案。
+  化、 `Component.build` 削除、prepared source / worker entrypoint model
+  へ移行。

@@ -24,6 +24,7 @@ import {
   type LifecycleDescribeResponse,
   type LifecycleDestroyRequest,
   type LifecycleDestroyResponse,
+  type PreparedSourceLocator,
 } from "takosumi-contract";
 
 export interface RuntimeAgentClientOptions {
@@ -36,6 +37,8 @@ export interface RuntimeAgentClientOptions {
   /** When set, every apply request carries an `artifactStore` field so
    *  connectors that need to fetch uploaded bundles by hash can do so. */
   readonly artifactStore?: ArtifactStoreLocator;
+  /** Optional default prepared source locator for source-backed connectors. */
+  readonly preparedSource?: PreparedSourceLocator;
 }
 
 /**
@@ -48,18 +51,26 @@ export class RuntimeAgentLifecycle {
   readonly #token: string;
   readonly #fetch: typeof fetch;
   readonly #artifactStore?: ArtifactStoreLocator;
+  readonly #preparedSource?: PreparedSourceLocator;
 
   constructor(options: RuntimeAgentClientOptions) {
     this.#agentUrl = trimTrailingSlash(options.agentUrl);
     this.#token = options.token;
     this.#fetch = options.fetch ?? fetch;
     this.#artifactStore = options.artifactStore;
+    this.#preparedSource = options.preparedSource;
   }
 
   apply(req: LifecycleApplyRequest): Promise<LifecycleApplyResponse> {
-    const enriched = this.#artifactStore && req.artifactStore === undefined
-      ? { ...req, artifactStore: this.#artifactStore }
-      : req;
+    const enriched = {
+      ...req,
+      ...(this.#artifactStore && req.artifactStore === undefined
+        ? { artifactStore: this.#artifactStore }
+        : {}),
+      ...(this.#preparedSource && req.preparedSource === undefined
+        ? { preparedSource: this.#preparedSource }
+        : {}),
+    };
     return this.#post<LifecycleApplyResponse>(LIFECYCLE_APPLY_PATH, enriched);
   }
 

@@ -35,21 +35,18 @@ components:
   web:
     kind: worker
     spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:...
+      entrypoint: dist/worker.mjs
       compatibilityDate: "2025-01-01"
 ```
 
-`worker` の provider input は uploaded `js-bundle` artifact descriptor です。
-source 側の build service / CI は path を受け取っても構いませんが、provider
-に渡る resolved bundle では次の形に変換済みである必要があります。
+`worker` の provider input は prepared source snapshot 内の `entrypoint` path
+です。source 側の build service / CI は bundle
+を作っても構いませんが、その結果は prepared source の file
+として置きます。AppSpec には artifact kind や hash を 書きません。
 
 ```yaml
 spec:
-  artifact:
-    kind: js-bundle
-    hash: sha256:...
+  entrypoint: dist/worker.mjs
   compatibilityDate: "2025-01-01"
 ```
 
@@ -144,28 +141,27 @@ definition として持たず、 operator が attach した plugin が `provides
 }
 ```
 
-## Artifact kinds
+## Data Assets
 
-Artifact kind は uploaded / build-service-produced data asset の type
-です。runtime-agent connector は受け付ける artifact kind を宣言し、mismatch を
-apply 前に reject します。
+Takosumi AppSpec は artifact kind catalog を持ちません。`/v1/artifacts` は
+operator が data blob を保管するための optional API で、そこに付く `kind` は
+operator / connector distribution が定義する外部 metadata です。
 
-Bundled artifact kinds:
+bundled connector compatibility のため、reference distribution は data asset
+metadata として次の `kind` を登録します。これは AppSpec の component kind でも
+worker contract でもありません。
 
-```text
-oci-image | js-bundle | lambda-zip | static-bundle | wasm
-```
+`oci-image | js-bundle | lambda-zip | static-bundle | wasm`
 
-| Artifact kind   | 用途                                  |
-| --------------- | ------------------------------------- |
-| `oci-image`     | OCI / Docker image reference          |
-| `js-bundle`     | JavaScript / TypeScript worker bundle |
-| `lambda-zip`    | AWS Lambda deployment zip             |
-| `static-bundle` | static site tarball                   |
-| `wasm`          | WebAssembly module                    |
+- `oci-image`
+- `js-bundle`
+- `lambda-zip`
+- `static-bundle`
+- `wasm`
 
-詳細は [DataAsset Policy](./data-asset-policy.md) と
-[Artifact GC](./artifact-gc.md) を参照してください。
+Reference worker kind は data asset API を使わず、prepared source の
+`spec.entrypoint` を読みます。詳細は [DataAsset Policy](./data-asset-policy.md)
+と [Artifact GC](./artifact-gc.md) を参照してください。
 
 ## 関連ページ
 

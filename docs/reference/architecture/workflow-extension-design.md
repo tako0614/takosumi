@@ -11,8 +11,8 @@ Installation / Deployment の installer lifecycle だけで、 endpoint は
 
 - build は AppSpec ではなく BuildSpec / build service / CI に置く。
 - webhook / cron / CI trigger / pre-post automation は kernel scope 外。
-- upstream automation は source ref を選び、必要なら artifact を用意し、
-  installer API に AppSpec source または resolved bundle を渡す。
+- upstream automation は source ref を選び、必要なら prepared source snapshot を
+  用意し、installer API に AppSpec source または prepared source を渡す。
 - kernel は workflow-specific endpoint、trigger registration endpoint、event
   signature verification endpoint を公開しない。
 
@@ -21,8 +21,8 @@ Installation / Deployment の installer lifecycle だけで、 endpoint は
 ```text
 external trigger / CI / scheduler
   ↓ choose source ref
-  ↓ optional BuildSpec batch + artifact upload
-  ↓ optional source.kind=bundle handoff
+  ↓ optional BuildSpec batch + prepared source snapshot
+  ↓ optional source.kind=prepared handoff
 POST /v1/installations/{id}/deployments
 ```
 

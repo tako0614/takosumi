@@ -15,7 +15,7 @@ function outputIssues(value: unknown): ShapeValidationIssue[] {
 }
 
 const validSpec = () => ({
-  artifact: { kind: "js-bundle", hash: "sha256:abc" },
+  entrypoint: "dist/worker.mjs",
   compatibilityDate: "2025-01-01",
 });
 
@@ -38,24 +38,24 @@ Deno.test("Worker outputFields list is fixed", () => {
   ]);
 });
 
-Deno.test("Worker validateSpec accepts a resolved uploaded artifact", () => {
+Deno.test("Worker validateSpec accepts a source-root-relative entrypoint", () => {
   assert.deepEqual(
     specIssues({
-      artifact: { kind: "js-bundle", hash: "sha256:abc" },
+      entrypoint: "dist/worker.mjs",
       compatibilityDate: "2025-01-01",
     }),
     [],
   );
 });
 
-Deno.test("Worker validateSpec rejects source artifact paths", () => {
+Deno.test("Worker validateSpec rejects absolute entrypoint paths", () => {
   const issues = specIssues({
-    artifact: "dist/worker.mjs",
+    entrypoint: "/dist/worker.mjs",
     compatibilityDate: "2025-01-01",
   });
   assert.ok(
     issues.some((i) =>
-      i.path === "$.artifact" && i.message.includes("resolved artifact object")
+      i.path === "$.entrypoint" && i.message.includes("source root")
     ),
   );
 });
@@ -71,42 +71,22 @@ Deno.test("Worker validateSpec accepts optional fields", () => {
   );
 });
 
-Deno.test("Worker validateSpec rejects missing artifact", () => {
+Deno.test("Worker validateSpec rejects missing entrypoint", () => {
   const issues = specIssues({ compatibilityDate: "2025-01-01" });
-  assert.ok(issues.some((i) => i.path === "$.artifact"));
+  assert.ok(issues.some((i) => i.path === "$.entrypoint"));
 });
 
-Deno.test("Worker validateSpec rejects non-js-bundle artifact kind", () => {
+Deno.test("Worker validateSpec rejects escaping entrypoint paths", () => {
   const issues = specIssues({
-    artifact: { kind: "oci-image", hash: "sha256:abc" },
+    entrypoint: "../worker.mjs",
     compatibilityDate: "2025-01-01",
   });
-  assert.ok(
-    issues.some((i) =>
-      i.path === "$.artifact.kind" && i.message.includes("js-bundle")
-    ),
-  );
-});
-
-Deno.test("Worker validateSpec rejects empty artifact.kind", () => {
-  const issues = specIssues({
-    artifact: { kind: "", hash: "sha256:abc" },
-    compatibilityDate: "2025-01-01",
-  });
-  assert.ok(issues.some((i) => i.path === "$.artifact.kind"));
-});
-
-Deno.test("Worker validateSpec rejects missing artifact.hash", () => {
-  const issues = specIssues({
-    artifact: { kind: "js-bundle" },
-    compatibilityDate: "2025-01-01",
-  });
-  assert.ok(issues.some((i) => i.path === "$.artifact.hash"));
+  assert.ok(issues.some((i) => i.path === "$.entrypoint"));
 });
 
 Deno.test("Worker validateSpec rejects empty compatibilityDate", () => {
   const issues = specIssues({
-    artifact: { kind: "js-bundle", hash: "sha256:abc" },
+    entrypoint: "dist/worker.mjs",
     compatibilityDate: "",
   });
   assert.ok(issues.some((i) => i.path === "$.compatibilityDate"));

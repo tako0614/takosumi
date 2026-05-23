@@ -5,7 +5,7 @@
   "name": "web-service",
   "version": "v1",
   "aliases": ["web-service"],
-  "description": "Long-running HTTP service backed by an OCI image or equivalent artifact.",
+  "description": "Long-running HTTP service backed by an OCI image.",
   "x-ts": {
     "fileBasename": "web-service",
     "prefix": "WebService",
@@ -20,14 +20,7 @@
       "image": {
         "type": "string",
         "minLength": 1,
-        "description": "OCI image shorthand for `artifact: { kind: \"oci-image\", uri: image }`."
-      },
-      "artifact": {
-        "description": "Resolved artifact descriptor. `oci-image` artifacts typically use `uri`; other provider-supported kinds may use `hash`.",
-        "x-ts-type": {
-          "import": "takosumi-contract",
-          "name": "Artifact"
-        }
+        "description": "OCI image reference."
       },
       "port": {
         "type": "integer",

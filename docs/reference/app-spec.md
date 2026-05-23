@@ -62,34 +62,31 @@ field を増やしません。
 
 component の `build` field は AppSpec v1 の公開 field ではありません。
 
-source から artifact を作る手順は [BuildSpec](./build-spec.md) と build service
-に置きます。
+source を build / prepare する手順は [BuildSpec](./build-spec.md) と build
+service に置きます。
 
 AppSpec には apply できる intent だけを書きます。
 
-## Artifact reference
+## Source File References
 
-worker や static asset のように runtime artifact を必要とする kind は、
-kind-specific な `spec` の中で artifact descriptor を受け取ります。
+worker や static asset のように source 内の file を必要とする kind は、
+kind-specific な `spec` の中で source-root-relative path を受け取ります。
 
 ```yaml
 components:
   web:
     kind: worker
     spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:...
+      entrypoint: dist/worker.mjs
       compatibilityDate: "2025-01-01"
 ```
 
-`spec.artifact` は AppSpec root の field ではなく、Takos reference worker kind
-の convention です。provider に渡る resolved AppSpec bundle では uploaded
-artifact の `kind` / `hash` を持つ descriptor でなければなりません。
+`spec.entrypoint` は AppSpec root の field ではなく、Takos reference worker kind
+の convention です。Takosumi AppSpec contract は path の意味を解釈しません。
 
-artifact の生成、upload、provenance 記録は build service / CI / operator
-automation の責務です。source 側で build output path を扱う場合も、Installer API
-に渡す resolved bundle では digest descriptor に変換します。
+build が必要な場合、build service は先に source tree を準備し、prepared source
+snapshot として Installer API に渡します。AppSpec 側には build 後 snapshot 内で
+runtime / materializer が読む path をそのまま書きます。
 
 ## `publish`
 
@@ -179,9 +176,7 @@ components:
         as: env
         prefix: ASSETS
     spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:...
+      entrypoint: dist/worker.mjs
       compatibilityDate: "2025-01-01"
 ```
 

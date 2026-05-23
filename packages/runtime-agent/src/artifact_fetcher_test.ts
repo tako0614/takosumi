@@ -68,14 +68,14 @@ Deno.test("HttpArtifactFetcher.head returns kind+size from headers", async () =>
       new Response(null, {
         status: 200,
         headers: {
-          "x-takosumi-artifact-kind": "js-bundle",
+          "x-takosumi-artifact-kind": "operator.example/test-bundle",
           "x-takosumi-artifact-size": "256",
         },
       })
     ),
   });
   const got = await fetcher.head("sha256:abc");
-  assert.deepEqual(got, { kind: "js-bundle", size: 256 });
+  assert.deepEqual(got, { kind: "operator.example/test-bundle", size: 256 });
 });
 
 Deno.test("HttpArtifactFetcher.head returns undefined on 404", async () => {

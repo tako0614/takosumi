@@ -42,8 +42,8 @@ features:
    Materializer、publish/listen の関係を読む。
 3. [AppSpec リファレンス](/reference/app-spec) — `.takosumi.yml` の全体 shape と
    validation rule を確認する。
-4. [BuildSpec リファレンス](/reference/build-spec) — source build と resolved
-   bundle の handoff を確認する。
+4. [BuildSpec リファレンス](/reference/build-spec) — source build と prepared
+   source handoff を確認する。
 
 ## 何をするものか
 

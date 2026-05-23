@@ -65,9 +65,9 @@ components:
         max: 2
 ```
 
-source から artifact を作る場合は、同じ source root に `.takosumi.build.yml`
-を置きます。build service / CI で先に resolved bundle を作ります。kernel は VM
-上で build command を直接実行しません。
+source を build / prepare する場合は、同じ source root に `.takosumi.build.yml`
+を置きます。build service / CI で先に prepared source snapshot
+を作ります。kernel は VM 上で build command を直接実行しません。
 
 VM 側では kernel と self-host provider が使う storage path を固定します。
 

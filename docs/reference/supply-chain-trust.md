@@ -9,7 +9,7 @@
 | source identity        | git URL / immutable ref / commit SHA               | digest pin                   | installer                        |
 | AppSpec                | `.takosumi.yml` sha256                             | digest pin                   | installer                        |
 | publisher identity     | publisher id / homepage / optional verified status | TLS + policy                 | Accounts / install-source policy |
-| artifact build         | workflow run id / artifact URI / image digest      | digest pin                   | build service / external CI      |
+| prepared source build  | workflow run id / source snapshot digest           | digest pin                   | build service / external CI      |
 | provider catalog       | CatalogRelease descriptor digest                   | digest pin (operator config) | operator / kernel                |
 | provider resolution    | ResolvedProviderDecision                           | kernel ledger                | kernel                           |
 | installation ownership | Installation source / binding / grant records      | append-only ledger           | Accounts / kernel                |
@@ -21,7 +21,7 @@
 1. Source URL / catalog entry / local source is selected.
 2. Installer resolves immutable source identity and reads `.takosumi.yml`.
 3. AppSpec schema and component graph are validated.
-4. Artifact references / build service outputs are pinned by digest where
+4. Prepared source snapshot / build service outputs are pinned by digest where
    applicable.
 5. Provider catalog digest and provider resolution are recorded.
 6. `POST /v1/installations` creates Installation + first Deployment, or
@@ -34,9 +34,9 @@ unexplained provider decisions, or unverified catalog digests.
 ## 署名ドメイン {#signing-domain}
 
 ecosystem で署名を発行する domain は OIDC ID token を基本とする。 catalog /
-artifact / AppSpec evidence は TLS + digest pin で扱う。 universal signing model
-(provider endpoint 署名 / service descriptor 署名 / 全 package 署名等) は採用し
-ない。
+prepared source / artifact / AppSpec evidence は TLS + digest pin で扱う。
+universal signing model (provider endpoint 署名 / service descriptor 署名 / 全
+package 署名等) は採用し ない。
 
 ## Launch トークン {#launch-token}
 
@@ -56,11 +56,12 @@ Install 直後の auto sign-in は one-time opaque token を redirect carrier �
 次の digest は Installation / Deployment evidence で説明可能でなければならない。
 
 - `appSpecDigest`: `.takosumi.yml` の sha256
-- artifact digest: OCI image digest、bundle hash、workflow artifact hash
+- source digest: prepared source snapshot sha256
+- artifact digest: optional operator-owned data asset digest
 - `catalogReleaseDigest`: operator が config に pin した catalog の sha256
 - policy / provider resolution input digest
 
-rollback は mutable tag を再解決しない。保存済み Deployment evidence と artifact
+rollback は mutable tag を再解決しない。保存済み Deployment evidence と source
 digest を使って新しい rollback Deployment を作る。
 
 ## Catalog Release の信頼 {#catalog-release-trust}

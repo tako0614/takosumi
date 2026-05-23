@@ -24,7 +24,7 @@ Most operators run the kernel via the CLI:
 - `POST /v1/installations/{id}/deployments` — apply a new Deployment
 - `POST /v1/installations/{id}/rollback` — rollback to a prior Deployment
 - `POST /v1/artifacts` (multipart upload) + GET / HEAD / DELETE / list / GC /
-  kinds — artifact store
+  kinds — optional operator data-asset store
 - `POST /v1/runtime-agent/*` — runtime-agent fleet enrollment / lease /
   heartbeat
 - `applyV2` — DAG topological apply with idempotency (spec fingerprint),
@@ -70,10 +70,10 @@ Deno.serve({ port: 8788 }, app.fetch);
 `createPaaSApp` does:
 
 1. Loads runtime config from env
-2. Registers artifact kind metadata used by the artifact routes. Component kind
-   descriptors and providers are operator-supplied; the kernel does not define
-   contract-owned component kinds. Cloud-backed `KernelPlugin` factories are
-   imported separately from `@takos/takosumi-<cloud>-providers` packages and
+2. Registers optional data-asset metadata used by the artifact routes. Component
+   kind descriptors and providers are operator-supplied; the kernel does not
+   define contract-owned component kinds. Cloud-backed `KernelPlugin` factories
+   are imported separately from `@takos/takosumi-<cloud>-providers` packages and
    attached via `plugins: [...]` plus an operator `kindAliases` map when short
    aliases are desired.
 3. Builds `AppContext` with adapter ports (auth / kms / secrets / queue /

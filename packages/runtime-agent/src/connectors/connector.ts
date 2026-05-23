@@ -17,14 +17,16 @@ import type {
   LifecycleDestroyResponse,
 } from "takosumi-contract";
 import type { ArtifactFetcher } from "../artifact_fetcher.ts";
+import type { PreparedSourceReader } from "../prepared_source_reader.ts";
 
 /**
  * Per-request context the dispatcher hands to a connector. Currently carries
- * an optional `ArtifactFetcher` materialised from the request's
- * `artifactStore` locator. Connectors that don't fetch bytes can ignore it.
+ * optional readers materialised from request locators. Connectors that don't
+ * fetch bytes can ignore them.
  */
 export interface ConnectorContext {
   readonly fetcher?: ArtifactFetcher;
+  readonly source?: PreparedSourceReader;
 }
 
 /**
@@ -47,12 +49,11 @@ export interface Connector {
   /** Shape this connector implements (e.g. `object-store@v1`). */
   readonly shape: string;
   /**
-   * Artifact kinds this connector accepts (e.g. `["oci-image"]`,
-   * `["js-bundle"]`). Empty array means the connector does not consume an
-   * artifact at all (managed services, DNS, raw object-store buckets).
+   * Artifact kinds this connector accepts (e.g. `["oci-image"]`). Empty array
+   * means the connector does not consume a resolved artifact descriptor.
    *
-   * The dispatcher validates `spec.artifact.kind` (or `spec.image` shorthand
-   * treated as `oci-image`) against this list before invoking `apply`.
+   * The dispatcher validates artifact-backed specs against this list before
+   * invoking `apply`.
    */
   readonly acceptedArtifactKinds: readonly string[];
 

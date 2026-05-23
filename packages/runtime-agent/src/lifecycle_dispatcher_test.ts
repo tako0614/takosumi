@@ -25,7 +25,7 @@ Deno.test("dispatcher rejects request whose artifact.kind is not accepted", () =
   reg.register({
     provider: "lambda",
     shape: "function@v1",
-    acceptedArtifactKinds: ["js-bundle"],
+    acceptedArtifactKinds: ["operator.example/function-bundle"],
     apply: () => Promise.resolve({ handle: "h", outputs: {} }),
     destroy: () => Promise.resolve({ ok: true }),
     describe: () => Promise.resolve({ status: "running" as const }),
@@ -43,7 +43,7 @@ Deno.test("dispatcher rejects request whose artifact.kind is not accepted", () =
       assert.ok(err instanceof ArtifactKindMismatchError);
       assert.equal(err.shape, "function@v1");
       assert.equal(err.provider, "lambda");
-      assert.deepEqual([...err.expected], ["js-bundle"]);
+      assert.deepEqual([...err.expected], ["operator.example/function-bundle"]);
       assert.equal(err.got, "oci-image");
       return true;
     },
@@ -87,7 +87,7 @@ Deno.test("dispatcher accepts new artifact.kind matching accepted list", async (
   reg.register({
     provider: "static-host",
     shape: "web-service@v1",
-    acceptedArtifactKinds: ["js-bundle"],
+    acceptedArtifactKinds: ["operator.example/static-bundle"],
     apply: () => Promise.resolve({ handle: "h", outputs: {} }),
     destroy: () => Promise.resolve({ ok: true }),
     describe: () => Promise.resolve({ status: "running" as const }),
@@ -98,7 +98,7 @@ Deno.test("dispatcher accepts new artifact.kind matching accepted list", async (
     provider: "static-host",
     resourceName: "svc",
     spec: {
-      artifact: { kind: "js-bundle", hash: "sha256:abc" },
+      artifact: { kind: "operator.example/static-bundle", hash: "sha256:abc" },
       port: 8080,
       scale: { min: 1, max: 1 },
     },

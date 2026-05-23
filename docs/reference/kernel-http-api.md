@@ -105,7 +105,7 @@ HTTP route.
 
 CI / webhook / cron / declarable hook 等の運用機能は kernel scope の外です。
 operator が別途 build service / CI / orchestrator で実装し、resolved AppSpec
-bundle を `source.kind=bundle` として Installer API に渡します。
+source snapshot を `source.kind=prepared` として Installer API に渡します。
 
 ## エラーエンベロープ {#error-envelope}
 
@@ -147,7 +147,7 @@ interface ApiErrorEnvelope {
 
 - [Installer API](./installer-api.md) — 5 endpoint の完全 spec
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [BuildSpec](./build-spec.md) — build service と resolved bundle の handoff
+- [BuildSpec](./build-spec.md) — build service と prepared source の handoff
 - [Reference Kind Registry](./kind-catalog.md#reference-component-kinds) — Takos
   reference kind + operator-defined kind
 - [Runtime-Agent API](./runtime-agent-api.md)

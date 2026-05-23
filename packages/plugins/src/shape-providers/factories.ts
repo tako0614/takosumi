@@ -18,6 +18,7 @@ import type {
   JsonObject,
   PlatformOperationContext,
   PlatformOperationRequest,
+  PreparedSourceLocator,
   ProviderPlugin,
   ResourceHandle,
   ResourceStatus,
@@ -75,13 +76,14 @@ export interface TakosumiProductionProviderOptions {
   readonly clock?: () => Date;
   /**
    * When set, every apply request the kernel sends to the agent carries this
-   * `artifactStore` field so connectors with `acceptedArtifactKinds` other than
-   * `oci-image` (e.g. `js-bundle` for cloudflare-workers) can fetch the
-   * uploaded bytes by hash. Operator-side `TAKOSUMI_PUBLIC_BASE_URL` should
+   * `artifactStore` field so artifact-backed connectors can fetch uploaded
+   * bytes by hash. Operator-side `TAKOSUMI_PUBLIC_BASE_URL` should
    * resolve to the kernel's externally-reachable base URL (typically
    * `http://kernel.internal:8788/v1/artifacts`).
    */
   readonly artifactStore?: ArtifactStoreLocator;
+  /** Optional default prepared source locator for source-backed connectors. */
+  readonly preparedSource?: PreparedSourceLocator;
 }
 
 interface ProviderEntry {
@@ -344,6 +346,7 @@ export function createTakosumiProductionProviders(
     token: opts.token,
     fetch: opts.fetch,
     ...(opts.artifactStore ? { artifactStore: opts.artifactStore } : {}),
+    ...(opts.preparedSource ? { preparedSource: opts.preparedSource } : {}),
   });
   const clock = opts.clock ?? (() => new Date());
 
@@ -392,6 +395,7 @@ function buildProvider(
           : {}),
         ...(operationRequest ? { operationRequest } : {}),
         ...(operationMetadata ? { metadata: operationMetadata } : {}),
+        ...(ctx.preparedSource ? { preparedSource: ctx.preparedSource } : {}),
       });
       return {
         handle: result.handle,

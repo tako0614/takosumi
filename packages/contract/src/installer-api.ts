@@ -28,18 +28,27 @@ export const INSTALLATION_ROLLBACK_PATH = (id: string): string =>
 // Source descriptors
 // ──────────────────────────────────────────────
 
-export type SourceKind = "git" | "local" | "catalog" | "bundle";
+export type SourceKind = "git" | "local" | "catalog" | "bundle" | "prepared";
 
 export interface Source {
   readonly kind: SourceKind;
   readonly url?: string;
   readonly ref?: string;
   readonly commit?: string;
+  /**
+   * Digest of the source payload when `kind: "prepared"`.
+   *
+   * Prepared sources are immutable source snapshots (typically tar archives)
+   * produced by an operator-owned build/preparation service. The kernel
+   * verifies this digest before reading `.takosumi.yml`.
+   */
+  readonly digest?: string;
 }
 
 export interface SourcePin {
   readonly commit: string;
   readonly manifestDigest: string;
+  readonly sourceDigest?: string;
 }
 
 // ──────────────────────────────────────────────
@@ -79,6 +88,7 @@ export interface SourceSummary {
   readonly url?: string;
   readonly ref?: string;
   readonly commit?: string;
+  readonly digest?: string;
 }
 
 // ──────────────────────────────────────────────
@@ -166,14 +176,7 @@ export interface Deployment {
 }
 
 export interface DeploymentOutputs {
-  readonly builds?: readonly DeploymentBuildArtifact[];
   readonly resources?: readonly DeploymentResource[];
-}
-
-export interface DeploymentBuildArtifact {
-  readonly component: string;
-  readonly digest: string;
-  readonly uri: string;
 }
 
 export interface DeploymentResource {

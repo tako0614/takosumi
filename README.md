@@ -119,8 +119,9 @@ plugin selection env var を持たない。
 ### Source-to-runtime model
 
 `.takosumi.yml` を source root に置くだけ。 Takosumi は git URL / local path /
-catalog id から source を取得し、 `component.build` を実行して artifact を作り、
-materializer で runtime resource を materialize する。
+catalog id / prepared source snapshot から source を取得し、materializer で
+runtime resource を materialize する。build / prepare は kernel 外の build
+service / CI が担当し、`source.kind: prepared` として渡す。
 
 ### Component kind × Materializer
 
@@ -258,7 +259,7 @@ input is set.
 Solid Start landing。 Wave M-G (= 2026-05-20) で両者と `takosumi/spec/contexts/`
 を **単一 Cloudflare Pages project (`takosumi-website`)** に統合し、
 `takosumi.com/` (landing) + `takosumi.com/docs/*` (docs) +
-`takosumi.com/contexts/*` (JSON-LD vocab) を 1 つの build artifact で serve
+`takosumi.com/contexts/*` (JSON-LD vocab) を 1 つの Pages output で serve
 する形に整理した (旧 `docs.takosumi.com` subdomain は廃止)。
 
 ```bash

@@ -19,7 +19,7 @@ function newProvider() {
 }
 
 const validSpec = () => ({
-  artifact: { kind: "js-bundle", hash: "sha256:abcdef0123" },
+  entrypoint: "dist/worker.mjs",
   compatibilityDate: "2025-01-01",
 });
 

@@ -44,20 +44,19 @@ capability scope は token claims に含まれます。
 }
 ```
 
-| field           | required    | 説明                                                 |
-| --------------- | ----------- | ---------------------------------------------------- |
-| `spaceId`       | yes         | 対象 Space                                           |
-| `source.kind`   | yes         | `git` / `local` / `catalog` / `bundle`               |
-| `source.url`    | conditional | `git` 時に required                                  |
-| `source.ref`    | conditional | `git` 時に branch / tag / commit                     |
-| `source.uri`    | conditional | `bundle` / `catalog` 時の resolved source URI        |
-| `source.digest` | conditional | `bundle` 時の bundle digest。TOCTOU 防止にも使える。 |
+| field           | required    | 説明                                                |
+| --------------- | ----------- | --------------------------------------------------- |
+| `spaceId`       | yes         | 対象 Space                                          |
+| `source.kind`   | yes         | `git` / `local` / `catalog` / `bundle` / `prepared` |
+| `source.url`    | conditional | `git` 時に required                                 |
+| `source.ref`    | conditional | `git` 時に branch / tag / commit                    |
+| `source.uri`    | conditional | `bundle` / `catalog` 時の resolved source URI       |
+| `source.digest` | conditional | `prepared` 時の source snapshot digest。            |
 
-`source.kind: "bundle"` は build service が作った resolved AppSpec bundle の
-handoff です。
-
-bundle 内の AppSpec は artifact path が `kind` と `hash` を持つ descriptor に
-解決済みです。component `build` field や overlay field は含みません。
+`source.kind: "prepared"` は build service が作った prepared source snapshot の
+handoff です。snapshot は `.takosumi.yml` を含む tar で、kernel は
+`source.digest` を検証してから AppSpec を読みます。component `build` field や
+build recipe は含みません。
 
 ### レスポンス
 
@@ -77,13 +76,15 @@ bundle 内の AppSpec は artifact path が `kind` と `hash` を持つ descript
   },
   "expected": {
     "commit": "abc123",
-    "manifestDigest": "sha256:..."
+    "manifestDigest": "sha256:...",
+    "sourceDigest": "sha256:..."
   }
 }
 ```
 
-`expected.commit` / `expected.manifestDigest` を次の apply に渡せば、 source が
-変わっていたら 409 で reject されます (= TOCTOU 防止)。
+`expected.commit` / `expected.manifestDigest` / `expected.sourceDigest` を次の
+apply に渡せば、 source が変わっていたら 409 で reject されます (= TOCTOU
+防止)。`sourceDigest` は prepared source の場合だけ返ります。
 
 ## `POST /v1/installations` {#post-v1-installations}
 
@@ -185,8 +186,8 @@ source omit 時は Installation に紐づく前回 source を再 fetch します
 ## `POST /v1/installations/{id}/deployments` {#post-v1-installations-id-deployments}
 
 既存 Installation に対して新 Deployment を実行します。resolved source の検証と
-resource update / create / delete を伴います。source から artifact を作る処理は
-Installer API の外側で行います。
+resource update / create / delete を伴います。source を build / prepare
+する処理は Installer API の外側で行います。
 
 ### リクエスト
 
@@ -289,7 +290,7 @@ interface Deployment {
   readonly id: string;
   readonly installationId: string;
   readonly source: {
-    readonly kind: "git" | "local" | "catalog" | "bundle";
+    readonly kind: "git" | "local" | "catalog" | "bundle" | "prepared";
     readonly url?: string;
     readonly uri?: string;
     readonly ref?: string;
@@ -340,13 +341,14 @@ interface ApiErrorEnvelope {
 | `permission_denied`   | 403  | actor が Space に対する権限不足                                                                    |
 | `not_found`           | 404  | Installation / Deployment 不在                                                                     |
 | `failed_precondition` | 409  | `expected.commit` mismatch、 既存 Installation suspended、 listen 対象 namespace path が未 publish |
-| `resource_exhausted`  | 413  | artifact payload / provider quota / request size 上限超過                                          |
+| `resource_exhausted`  | 413  | source snapshot / provider quota / request size 上限超過                                           |
 | `internal_error`      | 500  | unhandled exception                                                                                |
 
 ## クロスリファレンス {#cross-references}
 
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [BuildSpec](./build-spec.md) — `source.kind=bundle` を作る build service input
+- [BuildSpec](./build-spec.md) — `source.kind=prepared` を作る build service
+  input
 - [Reference Kind Registry](./kind-catalog.md#reference-component-kinds) — Takos
   reference kind の schema / publishes / listens
 - [Architecture: Kernel](./architecture/kernel.md) — installer pipeline
@@ -355,7 +357,7 @@ interface ApiErrorEnvelope {
 ## 次に読む
 
 - [AppSpec](./app-spec.md) — request body の中身 (`.takosumi.yml` envelope)
-- [BuildSpec](./build-spec.md) — build service と resolved bundle の handoff
+- [BuildSpec](./build-spec.md) — build service と prepared source の handoff
 - [Architecture: Kernel](./architecture/kernel.md) — 5 endpoint を実装する
   installer pipeline の責務境界
 - [Operator Bootstrap](../operator/bootstrap.md) — kernel を起動して 5 endpoint

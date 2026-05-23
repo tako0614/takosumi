@@ -101,7 +101,6 @@ export interface ListenOptions {
 
 export interface Component {
   readonly kind: ComponentKindRef;
-  readonly build?: ComponentBuild;
   /**
    * Namespace paths this component publishes materials to. Each path
    * names a key in the global pub/sub registry; the publisher's
@@ -116,14 +115,4 @@ export interface Component {
    */
   readonly listen?: Readonly<Record<NamespacePath, ListenOptions>>;
   readonly spec?: JsonObject;
-}
-
-/**
- * Minimum build recipe — explicitly NOT a CI workflow. No `jobs:`,
- * `steps:`, `matrix:`, `triggers:`, or pipeline DSL. Just the smallest
- * recipe required to produce an artifact.
- */
-export interface ComponentBuild {
-  readonly command: string;
-  readonly output: string;
 }

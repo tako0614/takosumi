@@ -62,7 +62,7 @@ export class DockerComposeConnector implements Connector {
     _ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
     const spec = parseSelfhostWebServiceSpec(req.spec);
-    const image = spec.image ?? spec.artifact?.uri;
+    const image = spec.image;
     if (!image) {
       throw new Error("web-service spec requires `image` or `artifact.uri`");
     }

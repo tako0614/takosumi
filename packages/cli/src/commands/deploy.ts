@@ -41,6 +41,10 @@ function createDeployCommand() {
       "--expected-manifest-digest <digest:string>",
       "Expected .takosumi.yml digest pin",
     )
+    .option(
+      "--expected-source-digest <digest:string>",
+      "Expected prepared source digest pin",
+    )
     .option("--dry-run", "Alias for `takosumi deploy dry-run`")
     .action(
       async (
@@ -50,6 +54,7 @@ function createDeployCommand() {
           source,
           expectedCommit,
           expectedManifestDigest,
+          expectedSourceDigest,
           dryRun: dryRunFlag,
         },
         installationId,
@@ -61,6 +66,7 @@ function createDeployCommand() {
           source,
           expectedCommit,
           expectedManifestDigest,
+          expectedSourceDigest,
           dryRun: dryRunFlag === true,
         });
       },
@@ -75,6 +81,7 @@ async function runDeploy(input: {
   readonly source?: string;
   readonly expectedCommit?: string;
   readonly expectedManifestDigest?: string;
+  readonly expectedSourceDigest?: string;
   readonly dryRun: boolean;
 }): Promise<void> {
   try {
@@ -85,6 +92,7 @@ async function runDeploy(input: {
         expected: expectedPinFromOptions({
           expectedCommit: input.expectedCommit,
           expectedManifestDigest: input.expectedManifestDigest,
+          expectedSourceDigest: input.expectedSourceDigest,
         }),
       }),
     };

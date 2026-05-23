@@ -6,9 +6,9 @@
 runtime-agent consume について強制する policy を記録する。
 
 DataAsset / Artifact は current implementation の operational surface です。
-Takosumi AppSpec の component kind contract には含めません。follow-up wave では
-build 後 source snapshot / git state を plugin が読む model へ寄せ、public
-artifact concept を縮小します。
+Takosumi AppSpec の component kind contract には含めません。build 後 source は
+prepared source snapshot として Installer API に渡し、runtime-agent connector は
+必要な file を `preparedSource` から読みます。
 
 ## 現行の強制ポイント {#current-enforcement-points}
 
@@ -26,14 +26,14 @@ bearer のいずれかを受け付ける。
 
 ### Runtime-agent apply {#runtime-agent-apply}
 
-lifecycle dispatcher は resolved spec の `spec.artifact.kind` を connector の
-`acceptedArtifactKinds` と照合する。
+artifact-backed lifecycle request では dispatcher が accepted kind を照合する。
+source-backed connector は `preparedSource` と kind-specific `spec` を読む。
 
 ---
 
 artifact routes は build / source transform を実行しない。build は BuildSpec を
 読む build service、CI、または operator automation の責務であり、artifact routes
-はアップロード済み blob の保存・取得・GC だけを扱う。
+は任意のアップロード済み blob の保存・取得・GC だけを扱う。
 
 ## サイズポリシー {#size-policy}
 
@@ -46,8 +46,8 @@ global upload cap は `TAKOSUMI_ARTIFACT_MAX_BYTES` で default は `52428800`
 
 ```ts
 registerArtifactKind({
-  kind: "js-bundle",
-  description: "ESM JavaScript bundle",
+  kind: "operator.example/log-bundle",
+  description: "Operator-owned diagnostic bundle",
   contentTypeHint: "application/javascript",
   maxSize: 50 * 1024 * 1024,
 });
@@ -81,14 +81,14 @@ Failure mode:
 宣言する。 例:
 
 - OCI-backed web-service connectors: `oci-image`
-- Cloudflare Workers / Deno Deploy: `js-bundle`
+- Cloudflare Workers / Deno Deploy worker connector: `acceptedArtifactKinds: []`
+  and `preparedSource`
 - Operator-installed custom connectors: 明示的に宣言した registered or custom
   kind
 
 runtime-agent は connector コードが動く前に mismatch を reject する。reference
-component kind レベルの validation はより厳しいことがある: Takos reference
-`worker` は current resolved spec の `spec.artifact.kind: js-bundle`
-を要求できる。
+component kind レベルの validation はより厳しいことがある。Takos reference
+`worker` は `spec.entrypoint` を要求し、artifact descriptor は要求しない。
 
 ## 認証ポリシー {#auth-policy}
 
@@ -117,7 +117,7 @@ test、 本リファレンスの更新が必要となる。
 
 ## 関連ページ
 
-- [DataAsset Kinds](./kind-catalog.md#artifact-kinds)
+- [Data Assets](./kind-catalog.md#data-assets)
 - [BuildSpec](./build-spec.md)
 - [Connector Contract](./connector-contract.md)
 - [Kernel HTTP API](./kernel-http-api.md)

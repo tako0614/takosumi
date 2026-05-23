@@ -24,7 +24,11 @@
  * full plugins via {@link InlineMaterializer}.
  */
 import type { Component, ListenOptions, NamespacePath } from "./app-spec.ts";
-import type { Deployment, Installation } from "./installer-api.ts";
+import type {
+  Deployment,
+  Installation,
+  SourceSummary,
+} from "./installer-api.ts";
 
 export interface KernelPlugin {
   /** Plugin id, e.g. `"@takos/cloudflare-workers"`. */
@@ -191,10 +195,10 @@ export interface KernelPluginApplyContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly component: Component;
-  readonly buildOutput?: {
-    readonly digest: string;
-    readonly uri: string;
-  };
+  /** Source summary for this Deployment, including prepared source digest when available. */
+  readonly source: SourceSummary;
+  /** Local directory containing the already-prepared source snapshot. */
+  readonly sourceDirectory: string;
   /**
    * Materials this component listens to, keyed by the namespace path as
    * declared in `Component.listen`. Pre-resolved by the installer from

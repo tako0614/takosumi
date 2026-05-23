@@ -1,6 +1,5 @@
 import type { Shape, ShapeValidationIssue } from "takosumi-contract";
 import {
-  isNonEmptyString,
   isNonNegativeInteger,
   isPositiveInteger,
   isRecord,
@@ -47,7 +46,7 @@ export const WebServiceKind: Shape<
   outputFields: WEB_SERVICE_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
-    validateArtifactSource(value, issues);
+    requireNonEmptyString(value.image, "$.image", issues);
     requirePositiveInteger(value.port, "$.port", issues);
     validateScale(value.scale, issues);
     optionalStringRecord(value.env, "$.env", issues);
@@ -63,41 +62,6 @@ export const WebServiceKind: Shape<
     requirePositiveInteger(value.internalPort, "$.internalPort", issues);
   },
 };
-
-/**
- * `image: string` and `artifact: { kind, uri | hash }` are both current
- * authoring forms. Either must be present and non-empty. If `artifact` is
- * supplied its `kind` is required and either `uri` or `hash` must be set.
- */
-function validateArtifactSource(
-  value: Record<string, unknown>,
-  issues: ShapeValidationIssue[],
-): void {
-  const hasImage = isNonEmptyString(value.image);
-  const hasArtifact = isRecord(value.artifact);
-  if (!hasImage && !hasArtifact) {
-    issues.push({
-      path: "$",
-      message: "either $.image or $.artifact must be set",
-    });
-    return;
-  }
-  if (hasImage) {
-    requireNonEmptyString(value.image, "$.image", issues);
-  }
-  if (hasArtifact) {
-    const artifact = value.artifact as Record<string, unknown>;
-    requireNonEmptyString(artifact.kind, "$.artifact.kind", issues);
-    const hasUri = isNonEmptyString(artifact.uri);
-    const hasHash = isNonEmptyString(artifact.hash);
-    if (!hasUri && !hasHash) {
-      issues.push({
-        path: "$.artifact",
-        message: "either $.artifact.uri or $.artifact.hash must be set",
-      });
-    }
-  }
-}
 
 function validateScale(value: unknown, issues: ShapeValidationIssue[]): void {
   if (!isRecord(value)) {

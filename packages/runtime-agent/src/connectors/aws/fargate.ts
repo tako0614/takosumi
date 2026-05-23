@@ -119,9 +119,9 @@ export class AwsFargateConnector implements Connector {
 }
 
 function imageOf(spec: WebServiceSpec): string {
-  const image = spec.image ?? spec.artifact?.uri;
+  const image = spec.image;
   if (!image) {
-    throw new Error("web-service spec requires `image` or `artifact.uri`");
+    throw new Error("web-service spec requires `image`");
   }
   return image;
 }

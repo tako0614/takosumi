@@ -15,7 +15,7 @@ function createInstallCommand() {
     .arguments("[source:string]")
     .option(
       "--source <source:string>",
-      "git:, catalog:, bundle:, or local path",
+      "git:, catalog:, bundle:, prepared:, or local path",
     )
     .option("--space <spaceId:string>", "Target Space id", { required: true })
     .option("--remote <url:string>", "Remote kernel URL")
@@ -35,7 +35,7 @@ function createInstallCommand() {
     .arguments("[source:string]")
     .option(
       "--source <source:string>",
-      "git:, catalog:, bundle:, or local path",
+      "git:, catalog:, bundle:, prepared:, or local path",
     )
     .option("--space <spaceId:string>", "Target Space id", { required: true })
     .option("--remote <url:string>", "Remote kernel URL")
@@ -48,6 +48,10 @@ function createInstallCommand() {
       "--expected-manifest-digest <digest:string>",
       "Expected .takosumi.yml digest pin",
     )
+    .option(
+      "--expected-source-digest <digest:string>",
+      "Expected prepared source digest pin",
+    )
     .option("--dry-run", "Alias for `takosumi install dry-run`")
     .action(
       async (
@@ -58,6 +62,7 @@ function createInstallCommand() {
           token,
           expectedCommit,
           expectedManifestDigest,
+          expectedSourceDigest,
           dryRun: dryRunFlag,
         },
         sourceArg,
@@ -72,6 +77,7 @@ function createInstallCommand() {
           token,
           expectedCommit,
           expectedManifestDigest,
+          expectedSourceDigest,
           dryRun: dryRunFlag === true,
         });
       },
@@ -86,6 +92,7 @@ async function runInstall(input: {
   readonly token?: string;
   readonly expectedCommit?: string;
   readonly expectedManifestDigest?: string;
+  readonly expectedSourceDigest?: string;
   readonly dryRun: boolean;
 }): Promise<void> {
   try {
@@ -97,6 +104,7 @@ async function runInstall(input: {
       expected: expectedPinFromOptions({
         expectedCommit: input.expectedCommit,
         expectedManifestDigest: input.expectedManifestDigest,
+        expectedSourceDigest: input.expectedSourceDigest,
       }),
     };
     const { status, body: responseBody } = await callInstaller(target, {

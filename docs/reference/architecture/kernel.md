@@ -79,7 +79,7 @@ Component を宣言します。
 1. caller or build service posts source to POST /v1/installations/dry-run
 2. kernel fetches source and parses resolved .takosumi.yml
 3. kernel validates syntax / schema / kind / namespace graph / Space context
-4. kernel computes changes[] and expected.{commit, manifestDigest}
+4. kernel computes changes[] and expected.{commit, manifestDigest, sourceDigest?}
 5. caller posts apply with the same source and expected values
 6. kernel re-fetches source and verifies expected values
 7. kernel resolves publish/listen DAG
@@ -90,9 +90,9 @@ Component を宣言します。
 `manifestDigest` は Installer API の wire field name です。current docs では
 AppSpec digest を指します。
 
-source から artifact を作る build step はこの pipeline の外側です。BuildSpec を
-使う場合、build service が先に artifact を upload し、`spec.artifact` が解決済み
-の bundle を `source.kind=bundle` として渡します。
+source を build / prepare する step はこの pipeline の外側です。BuildSpec を
+使う場合、build service が先に prepared source snapshot を作り、
+`source.kind=prepared` として渡します。
 
 ## Provider materialization {#provider-materialization}
 

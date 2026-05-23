@@ -18,8 +18,10 @@
 
 import type { JsonObject } from "./types.ts";
 import type { PlatformContext, ProviderPlugin } from "./provider-plugin.ts";
+import type { PreparedSourceLocator } from "./runtime-agent-lifecycle.ts";
 import type {
   KernelPlugin,
+  KernelPluginApplyContext,
   NamespaceMaterial,
   ResolvedListenBinding,
 } from "./plugin.ts";
@@ -56,7 +58,7 @@ export function kernelPluginFromProviderPlugin(
       );
       const result = await provider.apply(
         spec,
-        synthesizePlatformContext(ctx.installationId),
+        synthesizePlatformContext(ctx),
       );
       return {
         providerResourceId: result.handle,
@@ -66,7 +68,7 @@ export function kernelPluginFromProviderPlugin(
     async destroy(ctx) {
       await provider.destroy(
         ctx.providerResourceId,
-        synthesizePlatformContext(ctx.installationId),
+        synthesizePlatformContext({ installationId: ctx.installationId }),
       );
     },
   };
@@ -191,17 +193,38 @@ function mergeWithoutConflict(
  * we pass typed stubs for the SDK ports — none of them are exercised by
  * the wrappers in this directory.
  */
-function synthesizePlatformContext(installationId: string): PlatformContext {
+function synthesizePlatformContext(input: {
+  readonly installationId: string;
+  readonly source?: KernelPluginApplyContext["source"];
+  readonly sourceDirectory?: string;
+}): PlatformContext {
   return {
-    tenantId: installationId,
-    spaceId: installationId,
+    tenantId: input.installationId,
+    spaceId: input.installationId,
     secrets: NOOP_SECRET_STORE,
     observability: NOOP_OBSERVABILITY,
     kms: NOOP_KMS,
     objectStorage: NOOP_OBJECT_STORAGE,
     refResolver: NOOP_REF_RESOLVER,
     resolvedOutputs: new Map(),
+    preparedSource: preparedSourceLocator(input),
   };
+}
+
+function preparedSourceLocator(input: {
+  readonly source?: KernelPluginApplyContext["source"];
+  readonly sourceDirectory?: string;
+}): PreparedSourceLocator | undefined {
+  if (input.source?.kind === "prepared" && input.source.url) {
+    return {
+      url: input.source.url,
+      ...(input.source.digest ? { digest: input.source.digest } : {}),
+    };
+  }
+  if (input.sourceDirectory) {
+    return { workingDirectory: input.sourceDirectory };
+  }
+  return undefined;
 }
 
 /**

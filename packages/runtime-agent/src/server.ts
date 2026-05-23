@@ -29,6 +29,10 @@ import {
   ConnectorNotFoundError,
   LifecycleDispatcher,
 } from "./lifecycle_dispatcher.ts";
+import {
+  type PreparedSourceReader,
+  sourceContextFromLocator,
+} from "./prepared_source_reader.ts";
 
 export interface RuntimeAgentServerOptions {
   readonly registry: ConnectorRegistry;
@@ -80,12 +84,18 @@ export function createRuntimeAgentApp(
   app.post(LIFECYCLE_APPLY_PATH, async (c) => {
     const body: unknown = await c.req.json();
     if (!validApply(body)) return c.json(errorBody("bad_request"), 400);
+    let sourceContext: Awaited<
+      ReturnType<typeof sourceContextFromLocator>
+    >;
     try {
-      const ctx = buildContext(body.artifactStore);
+      sourceContext = await sourceContextFromLocator(body.preparedSource);
+      const ctx = buildContext(body.artifactStore, sourceContext?.reader);
       const result = await dispatcher.apply(body, ctx);
       return c.json(result, 200);
     } catch (err) {
       return errorResponse(c, err);
+    } finally {
+      await sourceContext?.cleanup();
     }
   });
 
@@ -198,13 +208,18 @@ async function safeVerify(
 
 function buildContext(
   artifactStore: { baseUrl: string; token: string } | undefined,
+  source: PreparedSourceReader | undefined,
 ): ConnectorContext {
-  if (!artifactStore) return {};
   return {
-    fetcher: new HttpArtifactFetcher({
-      baseUrl: artifactStore.baseUrl,
-      token: artifactStore.token,
-    }),
+    ...(artifactStore
+      ? {
+        fetcher: new HttpArtifactFetcher({
+          baseUrl: artifactStore.baseUrl,
+          token: artifactStore.token,
+        }),
+      }
+      : {}),
+    ...(source ? { source } : {}),
   };
 }
 

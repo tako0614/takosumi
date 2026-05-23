@@ -15,7 +15,7 @@
  * `undefined` when absent, throws when present with the wrong type.
  */
 
-import type { Artifact, JsonObject, JsonValue } from "takosumi-contract";
+import type { JsonObject, JsonValue } from "takosumi-contract";
 
 export type SpecObject = JsonObject;
 
@@ -147,11 +147,6 @@ export function optionalStringRecord(
 
 export interface WebServiceSpec {
   readonly image?: string;
-  readonly artifact?: {
-    readonly kind: string;
-    readonly uri?: string;
-    readonly hash?: string;
-  };
   readonly port: number;
   readonly scale: { readonly min: number; readonly max: number };
   readonly resources?: {
@@ -166,15 +161,9 @@ export function parseWebServiceSpec(value: JsonValue): WebServiceSpec {
   const shape = "web-service@v1";
   const obj = asSpecObject(value, shape);
   const scale = requireObject(obj, "scale", shape);
-  const artifactRaw = optionalObject(obj, "artifact", shape);
   const resourcesRaw = optionalObject(obj, "resources", shape);
   return {
-    image: optionalString(obj, "image", shape),
-    artifact: artifactRaw === undefined ? undefined : {
-      kind: requireString(artifactRaw, "kind", `${shape}.artifact`),
-      uri: optionalString(artifactRaw, "uri", `${shape}.artifact`),
-      hash: optionalString(artifactRaw, "hash", `${shape}.artifact`),
-    },
+    image: requireString(obj, "image", shape),
     port: requireNumber(obj, "port", shape),
     scale: {
       min: requireNumber(scale, "min", `${shape}.scale`),
@@ -255,12 +244,7 @@ export function parsePostgresVersionSpec(
 }
 
 export interface SelfhostWebServiceSpec {
-  readonly image?: string;
-  readonly artifact?: {
-    readonly kind: string;
-    readonly uri?: string;
-    readonly hash?: string;
-  };
+  readonly image: string;
   readonly port: number;
   readonly env?: Record<string, string>;
   readonly bindings?: Record<string, string>;
@@ -293,14 +277,8 @@ export function parseSelfhostWebServiceSpec(
 ): SelfhostWebServiceSpec {
   const shape = "web-service@v1";
   const obj = asSpecObject(value, shape);
-  const artifactRaw = optionalObject(obj, "artifact", shape);
   return {
-    image: optionalString(obj, "image", shape),
-    artifact: artifactRaw === undefined ? undefined : {
-      kind: requireString(artifactRaw, "kind", `${shape}.artifact`),
-      uri: optionalString(artifactRaw, "uri", `${shape}.artifact`),
-      hash: optionalString(artifactRaw, "hash", `${shape}.artifact`),
-    },
+    image: requireString(obj, "image", shape),
     port: requireNumber(obj, "port", shape),
     env: optionalStringRecord(obj, "env", shape),
     bindings: optionalStringRecord(obj, "bindings", shape),
@@ -319,49 +297,17 @@ export function parseNamedBucketSpec(value: JsonValue): NamedBucketSpec {
 }
 
 export interface WorkerSpec {
-  readonly artifact: Artifact;
+  readonly entrypoint: string;
   readonly compatibilityDate: string;
   readonly compatibilityFlags?: readonly string[];
   readonly env?: Readonly<Record<string, string>>;
 }
 
-function parseArtifact(value: JsonValue, shape: string): Artifact {
-  const path = `${shape}.artifact`;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${path} must be a JSON object`);
-  }
-  const obj = value;
-  const metadataRaw = obj.metadata;
-  let metadata: JsonObject | undefined;
-  if (metadataRaw !== undefined && metadataRaw !== null) {
-    if (
-      typeof metadataRaw !== "object" || Array.isArray(metadataRaw)
-    ) {
-      throw new Error(`${path}.metadata must be a JSON object when present`);
-    }
-    metadata = metadataRaw;
-  }
-  return {
-    kind: requireString(obj, "kind", path),
-    hash: optionalString(obj, "hash", path),
-    uri: optionalString(obj, "uri", path),
-    metadata,
-  };
-}
-
 export function parseWorkerSpec(value: JsonValue): WorkerSpec {
   const shape = "worker@v1";
   const obj = asSpecObject(value, shape);
-  const artifactRaw = obj.artifact;
-  if (artifactRaw === undefined) {
-    throw new Error(`${shape}.artifact is required`);
-  }
-  const artifact = parseArtifact(artifactRaw, shape);
-  if (artifact.kind !== "js-bundle") {
-    throw new Error(`${shape}.artifact.kind must be js-bundle`);
-  }
   return {
-    artifact,
+    entrypoint: requireString(obj, "entrypoint", shape),
     compatibilityDate: requireString(obj, "compatibilityDate", shape),
     compatibilityFlags: optionalStringArray(obj, "compatibilityFlags", shape),
     env: optionalStringRecord(obj, "env", shape),

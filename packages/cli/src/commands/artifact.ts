@@ -5,7 +5,8 @@ import { loadConfig, resolveMode } from "../config.ts";
 /**
  * `takosumi artifact push <file> --kind <kind>` — upload a file to the
  * kernel's content-addressed artifact store and print the resulting hash.
- * Build services use the hash when producing a resolved AppSpec bundle.
+ * This is an optional operator data-asset store; AppSpec does not require
+ * artifact kinds.
  */
 
 function createPushCmd() {
@@ -14,7 +15,7 @@ function createPushCmd() {
     .arguments("<file:string>")
     .option(
       "--kind <kind:string>",
-      "Artifact kind (e.g. js-bundle, lambda-zip, oci-image)",
+      "Operator-defined artifact kind",
       { required: true },
     )
     .option(

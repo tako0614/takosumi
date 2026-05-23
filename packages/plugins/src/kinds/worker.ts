@@ -1,7 +1,6 @@
 import type { Shape, ShapeValidationIssue } from "takosumi-contract";
 import {
   isNonEmptyString,
-  isRecord,
   optionalNonEmptyString,
   optionalStringRecord,
   requireNonEmptyString,
@@ -36,7 +35,7 @@ export const WorkerKind: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
   outputFields: WORKER_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
-    validateArtifact(value.artifact, issues);
+    validateEntrypoint(value.entrypoint, issues);
     requireNonEmptyString(
       value.compatibilityDate,
       "$.compatibilityDate",
@@ -57,45 +56,21 @@ export const WorkerKind: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
   },
 };
 
-/**
- * `worker@v1` provider input only accepts uploaded `js-bundle` artifacts.
- * Build services may accept source-root-relative output paths, but those paths
- * must be resolved before the provider sees the component spec.
- */
-function validateArtifact(
+function validateEntrypoint(
   value: unknown,
   issues: ShapeValidationIssue[],
 ): void {
-  if (isNonEmptyString(value)) {
+  if (!isNonEmptyString(value)) {
     issues.push({
-      path: "$.artifact",
-      message:
-        "must be a resolved artifact object; source paths are build-service input only",
+      path: "$.entrypoint",
+      message: "must be a non-empty source-root-relative path",
     });
     return;
   }
-  if (!isRecord(value)) {
+  if (value.startsWith("/") || value.split("/").includes("..")) {
     issues.push({
-      path: "$.artifact",
-      message: "must be a resolved artifact object",
-    });
-    return;
-  }
-  if (!isNonEmptyString(value.kind)) {
-    issues.push({
-      path: "$.artifact.kind",
-      message: "must be a non-empty string",
-    });
-  } else if (value.kind !== "js-bundle") {
-    issues.push({
-      path: "$.artifact.kind",
-      message: "must be `js-bundle` for worker@v1",
-    });
-  }
-  if (!isNonEmptyString(value.hash)) {
-    issues.push({
-      path: "$.artifact.hash",
-      message: "must be a non-empty string (js-bundle requires upload hash)",
+      path: "$.entrypoint",
+      message: "must not be absolute or escape the source root",
     });
   }
 }

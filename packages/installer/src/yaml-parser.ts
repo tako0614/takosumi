@@ -37,13 +37,11 @@ const METADATA_KEYS = new Set([
 
 const COMPONENT_KEYS = new Set([
   "kind",
-  "build",
   "publish",
   "listen",
   "spec",
 ]);
 
-const BUILD_KEYS = new Set(["command", "output"]);
 const LISTEN_OPTIONS_KEYS = new Set(["as", "prefix", "mount"]);
 
 /**
@@ -208,9 +206,6 @@ function validateComponent(name: string, raw: unknown): Component {
   const kind = validateComponentKind(c.kind, `${path}.kind`);
   const component: Component = {
     kind,
-    build: c.build === undefined
-      ? undefined
-      : validateBuild(c.build, `${path}.build`),
     publish: c.publish === undefined
       ? undefined
       : validatePublish(c.publish, `${path}.publish`),
@@ -237,17 +232,6 @@ function validateComponentKind(value: unknown, path: string): ComponentKindRef {
     );
   }
   return value;
-}
-
-function validateBuild(raw: unknown, path: string) {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new AppSpecParseError(`${path} must be a mapping`, "schema", path);
-  }
-  const b = raw as Record<string, unknown>;
-  rejectUnknownKeys(b, BUILD_KEYS, path);
-  requireString(b.command, `${path}.command`);
-  requireString(b.output, `${path}.output`);
-  return { command: b.command as string, output: b.output as string };
 }
 
 function validatePublish(

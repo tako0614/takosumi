@@ -2,10 +2,8 @@
  * `DenoDeployWorkersConnector` — wraps `DirectDenoDeployWorkersLifecycle`
  * for `worker@v1`.
  *
- * Consumes uploaded `js-bundle` artifacts via `ConnectorContext.fetcher` and
- * pushes the bytes to Deno Deploy's deployment endpoint. The kernel attaches
- * the artifact-store locator to every `LifecycleApplyRequest` for shapes
- * declaring `acceptedArtifactKinds: ["js-bundle"]`.
+ * Reads the declared `entrypoint` from `ConnectorContext.source` and pushes
+ * the bytes to Deno Deploy's deployment endpoint.
  *
  * v0 limitation: this connector treats the kernel-supplied `resourceName` as
  * the canonical Deno Deploy *project* name and creates one project per
@@ -14,7 +12,6 @@
  */
 
 import type {
-  Artifact,
   JsonObject,
   LifecycleApplyRequest,
   LifecycleApplyResponse,
@@ -38,8 +35,6 @@ import {
   DirectDenoDeployWorkersLifecycle,
 } from "./_workers_lifecycle.ts";
 
-const DEFAULT_MAIN_MODULE = "worker.js";
-
 export interface DenoDeployWorkersConnectorOptions {
   readonly accessToken: string;
   readonly organizationId?: string;
@@ -49,7 +44,7 @@ export interface DenoDeployWorkersConnectorOptions {
 export class DenoDeployWorkersConnector implements Connector {
   readonly provider = "@takos/deno-deploy";
   readonly shape = "worker@v1";
-  readonly acceptedArtifactKinds: readonly string[] = ["js-bundle"];
+  readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectDenoDeployWorkersLifecycle;
 
   constructor(opts: DenoDeployWorkersConnectorOptions) {
@@ -64,22 +59,17 @@ export class DenoDeployWorkersConnector implements Connector {
     req: LifecycleApplyRequest,
     ctx: ConnectorContext,
   ): Promise<LifecycleApplyResponse> {
-    if (!ctx.fetcher) {
+    if (!ctx.source) {
       throw new Error(
-        "deno-deploy requires artifactStore to fetch js-bundle",
+        "deno-deploy requires preparedSource to read worker entrypoint",
       );
     }
     const spec = parseWorkerSpec(req.spec);
-    if (!spec.artifact?.hash) {
-      throw new Error(
-        "deno-deploy spec.artifact.hash is required for js-bundle",
-      );
-    }
-    const fetched = await ctx.fetcher.fetch(spec.artifact.hash);
-    const mainModule = pickMainModule(spec.artifact);
+    const bundle = await ctx.source.readFile(spec.entrypoint);
+    const mainModule = pickMainModule(spec.entrypoint);
     const desc = await this.#lifecycle.putScript({
       scriptName: req.resourceName,
-      bundle: fetched.bytes,
+      bundle,
       compatibilityDate: spec.compatibilityDate,
       compatibilityFlags: spec.compatibilityFlags,
       env: spec.env,
@@ -127,10 +117,8 @@ export class DenoDeployWorkersConnector implements Connector {
   }
 }
 
-function pickMainModule(artifact: Artifact): string {
-  const entry = artifact.metadata?.entrypoint;
-  if (typeof entry === "string" && entry.length > 0) return entry;
-  return DEFAULT_MAIN_MODULE;
+function pickMainModule(entrypoint: string): string {
+  return entrypoint.split("/").at(-1) ?? entrypoint;
 }
 
 function outputsFor(desc: DenoDeployDescriptor): JsonObject {

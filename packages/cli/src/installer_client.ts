@@ -17,6 +17,7 @@ export interface RemoteInstallerTarget {
 export interface ExpectedPinOptions {
   readonly expectedCommit?: string;
   readonly expectedManifestDigest?: string;
+  readonly expectedSourceDigest?: string;
 }
 
 export function parseSourceRef(ref: string): Source {
@@ -38,6 +39,18 @@ export function parseSourceRef(ref: string): Source {
   if (ref.startsWith("bundle:")) {
     return { kind: "bundle", url: ref.slice("bundle:".length) };
   }
+  if (ref.startsWith("prepared:")) {
+    const rest = ref.slice("prepared:".length);
+    const hash = rest.lastIndexOf("#");
+    if (hash >= 0) {
+      return {
+        kind: "prepared",
+        url: rest.slice(0, hash),
+        digest: rest.slice(hash + 1),
+      };
+    }
+    return { kind: "prepared", url: rest };
+  }
   return { kind: "local", url: ref };
 }
 
@@ -55,6 +68,9 @@ export function expectedPinFromOptions(
   return {
     commit: options.expectedCommit!,
     manifestDigest: options.expectedManifestDigest!,
+    ...(options.expectedSourceDigest
+      ? { sourceDigest: options.expectedSourceDigest }
+      : {}),
   };
 }
 

@@ -11,14 +11,14 @@ provider packages as co-equal workspace members, all consumable from JSR.
 Component contract minimization 2026-05-19 の延長)**: Takosumi の AppSpec
 contract は完全 kind-agnostic な単一 spec で閉じている。 AppSpec root は
 `{ apiVersion, metadata, components }` の 3 field、 Component は
-`{ kind, spec, publish, listen, build }` の 5 field のみ。 `apiVersion` は bare
-`"v1"` 固定 (Wave L 以降 k8s 風 group prefix `takosumi.dev/` は redundant な
-vestige として削除済、 Takosumi parser は `.takosumi.yml` のみ扱う)。
-`apiVersion: v1` 単独で schema を discriminate するため、 旧 `kind: App` root
-field は Wave K で物理削除済 (= 入力に `kind:` を root に 含む YAML は
-unknown-key として reject)。 内部 Component の `kind:` field (= materializer
-解決の discriminator) は当然 keep だが、Takosumi AppSpec は公式 component kind
-を 1 つも定義しない。構成要素は namespace pub/sub model、operator-injected
+`{ kind, spec, publish, listen }` の 4 field のみ。 `apiVersion` は bare `"v1"`
+固定 (Wave L 以降 k8s 風 group prefix `takosumi.dev/` は redundant な vestige
+として削除済、 Takosumi parser は `.takosumi.yml` のみ扱う)。 `apiVersion: v1`
+単独で schema を discriminate するため、 旧 `kind: App` root field は Wave K
+で物理削除済 (= 入力に `kind:` を root に 含む YAML は unknown-key として
+reject)。 内部 Component の `kind:` field (= materializer 解決の discriminator)
+は当然 keep だが、Takosumi AppSpec は公式 component kind を 1
+つも定義しない。構成要素は namespace pub/sub model、operator-injected
 `kindAliases`、5-endpoint installer API、6 別 cloud provider package、
 materializer = `KernelPlugin | InlineMaterializer` union。旧 `use:` edge、
 placeholder syntax、 中間 manifest compile 形式、 workflow-reference field、
@@ -91,16 +91,18 @@ Wave J / K / L の minimization sequence を継承し、Wave N は **contract-ow
 component kind list の廃止 + kernel を pure contract executor に近づける**
 方向へ進んでいる。component kind externalization は 2026-05-21 に実装済み:
 `Component.kind` は opaque string、official kind は 0、 short alias resolution
-は operator が `kindAliases` で注入する。`Component.build` 削除と source
-snapshot model は follow-up implementation として残っている。
+は operator が `kindAliases` で注入する。`Component.build` は削除済みで、 build
+/ prepare は operator-owned build service が prepared source snapshot を 作って
+Installer API に `source.kind: prepared` として渡す。
 
 主要 decision (= RFC 0001 §7 resolved):
 
 - **Alias resolution**: operator-injected alias map (=
   `createPaaSApp({ kindAliases })`) + provider operation 前の fail-closed lookup
   miss on unresolved short alias
-- **worker.spec.artifact**: Wave N で inline + listen の oneOf keep、 完全
-  listen-only 純化は別 wave (= 想定 RFC 0004)
+- **worker.spec.entrypoint**: reference worker kind は prepared source snapshot
+  内の source-root-relative entrypoint を読む。`spec.artifact` は worker
+  contract ではない。
 - **Build sandbox**: operator 責務 (= default)、 3rd party plugin で wrap 可能
 - **Reference registry wording**: `https://takosumi.com/kinds/v1/*` は Takos が
   publish する external reference registry (= 「公式 / blessed」 ではなく
@@ -118,8 +120,8 @@ snapshot model は follow-up implementation として残っている。
 - **Source-to-runtime engine 専念**: kernel の責務は `.takosumi.yml` を読んで
   Installation を作り、 apply ごとに Deployment を記録することに限定する。
   workflow / CI / build pipeline / cron / hook は kernel の責務外であり、
-  operator が別途 orchestrator で実装する。 AppSpec の `component.build` は
-  artifact を得る最小 recipe (= `{ command, output }`) のみ表現可能。
+  operator が別途 orchestrator / build service で実装する。 AppSpec に
+  `component.build` は存在しない。
 - **`POST /v1/installations` is the canonical install entry point**: kernel は
   AppSpec を受ける first-class API を持ち、 CLI / GitHub Actions / 自前 CI /
   operator script はすべて 5 endpoint を直接叩く構成で動作する必要がある。
@@ -142,9 +144,9 @@ snapshot model は follow-up implementation として残っている。
   `packages/kernel/src/shared/runtime/` の `RuntimeAdapter` 経由で呼ぶ。 Deno /
   Node / Workers / Bun の差分はそこだけで吸収する。 新規 code path で `Deno.*`
   を直接呼ぶ PR は reject。
-- **Image-first model**: component spec の `image` / `bundle` / `unit` は単なる
-  URI 文字列。 artifact 取得は provider 側の責務 (K8s が image pull するのと
-  同じ)。 AppSpec の `component.build` は最小 recipe のみ表現可能。
+- **Prepared source model**: build service は command を実行して source tree を
+  準備し、tar + sha256 の prepared source snapshot を Installer API に渡す。
+  file path は `worker.spec.entrypoint` のように kind-specific `spec` に置く。
 - **Takos 中立**: takos-git / Takos 固有 service ID への直接依存は kernel core
   から完全に除去済み。
 - **Component kind は外部定義**: Takosumi AppSpec は公式 component kind を
@@ -280,5 +282,5 @@ takosumi install --remote https://kernel.example.com \
 - contract 変更を要する change は `packages/contract/` で coordination する。
 - process role 名は `takosumi-{api,worker,router,runtime-agent,log-worker}`
   で固定。
-- AppSpec の `component.build` は CI workflow ではない。 `jobs:` / `steps:` /
-  `matrix:` / `triggers:` / pipeline DSL を導入してはいけない。
+- AppSpec に `component.build` を再導入しない。 `jobs:` / `steps:` / `matrix:` /
+  `triggers:` / pipeline DSL は BuildSpec / build service / CI の責務。

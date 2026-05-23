@@ -3,7 +3,7 @@
 > このページでわかること: runtime-agent process が公開する HTTP RPC v1 仕様。
 
 runtime-agent は operator が cloud / OS credential を握る host で起動し、 kernel
-の下流 execution surface として `(kind, provider)` 単位の lifecycle envelope
+の下流 execution surface として `(shape, provider)` 単位の lifecycle envelope
 を受けます。
 
 逆方向の制御 (enroll / heartbeat / lease / drain / gateway-manifest 署名) は
@@ -21,7 +21,9 @@ runtime-agent は operator が cloud / OS credential を握る host で起動し
 のみ無認証で orchestrator probe (Kubernetes / Nomad / docker healthcheck) を想
 定。
 
-artifact bytes 取得が必要な connector には、 kernel が
+prepared source を読む connector には、kernel が
+`LifecycleApplyRequest.preparedSource` に source snapshot locator
+を載せて渡します。 artifact bytes 取得が必要な connector には、kernel が
 `LifecycleApplyRequest.artifactStore` に `baseUrl` と
 `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を載せて渡します。 agent token とは別物で、
 scope は `GET /v1/artifacts/:hash` のみ
@@ -29,15 +31,15 @@ scope は `GET /v1/artifacts/:hash` のみ
 
 ## エンドポイント {#endpoints}
 
-| Method | Path                       | Auth        | Purpose                                                           |
-| ------ | -------------------------- | ----------- | ----------------------------------------------------------------- |
-| GET    | `/v1/health`               | -           | `{ status: "ok", connectors: <count> }`                           |
-| GET    | `/v1/connectors`           | Agent token | 起動時に登録された `(kind, provider, acceptedArtifactKinds)` 一覧 |
-| POST   | `/v1/lifecycle/apply`      | Agent token | resource を作成 / 更新                                            |
-| POST   | `/v1/lifecycle/destroy`    | Agent token | handle 指定で resource を削除                                     |
-| POST   | `/v1/lifecycle/compensate` | Agent token | WAL recovery 用に commit 済み effect を逆再生                     |
-| POST   | `/v1/lifecycle/describe`   | Agent token | handle 指定で実体の状態を取得                                     |
-| POST   | `/v1/lifecycle/verify`     | Agent token | connector ごとに `verify` operation を smoke test                 |
+| Method | Path                       | Auth        | Purpose                                                            |
+| ------ | -------------------------- | ----------- | ------------------------------------------------------------------ |
+| GET    | `/v1/health`               | -           | `{ status: "ok", connectors: <count> }`                            |
+| GET    | `/v1/connectors`           | Agent token | 起動時に登録された `(shape, provider, acceptedArtifactKinds)` 一覧 |
+| POST   | `/v1/lifecycle/apply`      | Agent token | resource を作成 / 更新                                             |
+| POST   | `/v1/lifecycle/destroy`    | Agent token | handle 指定で resource を削除                                      |
+| POST   | `/v1/lifecycle/compensate` | Agent token | WAL recovery 用に commit 済み effect を逆再生                      |
+| POST   | `/v1/lifecycle/describe`   | Agent token | handle 指定で実体の状態を取得                                      |
+| POST   | `/v1/lifecycle/verify`     | Agent token | connector ごとに `verify` operation を smoke test                  |
 
 ### `POST /v1/lifecycle/apply`
 
@@ -45,7 +47,7 @@ scope は `GET /v1/artifacts/:hash` のみ
 
 ```ts
 interface LifecycleApplyRequest {
-  readonly kind: string; // 例: "object-store" (short name) or "https://takosumi.com/kinds/v1/object-store" (URI)
+  readonly shape: string; // 例: "object-store@v1"
   readonly provider: string; // 例: "aws-s3"
   readonly resourceName: string; // component / internal resource name
   readonly spec: JsonValue; // component kind spec (kernel 側で validate 済み)
@@ -56,6 +58,11 @@ interface LifecycleApplyRequest {
   readonly artifactStore?: {
     readonly baseUrl: string; // 例: "https://kernel.example.com"
     readonly token: string; // TAKOSUMI_ARTIFACT_FETCH_TOKEN
+  };
+  readonly preparedSource?: {
+    readonly url?: string;
+    readonly digest?: string;
+    readonly workingDirectory?: string;
   };
 }
 ```
@@ -83,7 +90,7 @@ WAL-backed public apply では kernel が `PlatformContext.operation` から
 
 ```ts
 interface LifecycleDestroyRequest {
-  readonly kind: string;
+  readonly shape: string;
   readonly provider: string;
   readonly handle: string;
   readonly tenantId?: string;
@@ -287,14 +294,14 @@ interface LifecycleErrorBody {
 予約で、 kernel は共通 error logic に載せず connector の string をそのまま actor
 に伝えます。
 
-| `code`                   | HTTP   | 発生条件                                                            |
-| ------------------------ | ------ | ------------------------------------------------------------------- |
-| `unauthorized`           | 401    | bearer 不足 / mismatch                                              |
-| `bad_request`            | 400    | request body の shape validation 失敗                               |
-| `connector_not_found`    | 404    | `(kind, provider)` に対応する connector が registry にいない        |
-| `artifact_kind_mismatch` | 400    | `spec.artifact.kind` が connector の `acceptedArtifactKinds` に無い |
-| `connector_failed`       | 500    | connector が throw した想定外エラー                                 |
-| `connector-extended:*`   | (任意) | connector 拡張用の予約 prefix                                       |
+| `code`                   | HTTP   | 発生条件                                                      |
+| ------------------------ | ------ | ------------------------------------------------------------- |
+| `unauthorized`           | 401    | bearer 不足 / mismatch                                        |
+| `bad_request`            | 400    | request body の shape validation 失敗                         |
+| `connector_not_found`    | 404    | `(shape, provider)` に対応する connector が registry にいない |
+| `artifact_kind_mismatch` | 400    | artifact-backed connector の accepted kind と spec が合わない |
+| `connector_failed`       | 500    | connector が throw した想定外エラー                           |
+| `connector-extended:*`   | (任意) | connector 拡張用の予約 prefix                                 |
 
 `retryable: true` は network / rate limit / transient cloud failure を表す
 フラグ。 kernel は WAL の `pre-commit` / `commit` stage で再試行可否をこれで

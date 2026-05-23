@@ -13,10 +13,8 @@ metadata:
 components:
   web:
     kind: worker
-    build:
-      command: npm ci && npm run build
-      output: dist/worker.mjs
     spec:
+      entrypoint: dist/worker.mjs
       routes:
         - /
     publish:
@@ -36,7 +34,6 @@ components:
   assertEquals(spec.metadata.id, "com.example.notes");
   assertEquals(Object.keys(spec.components).sort(), ["db", "web"]);
   assertEquals(spec.components.web.kind, "worker");
-  assertEquals(spec.components.web.build?.command, "npm ci && npm run build");
   assertEquals(spec.components.web.publish, ["com.example.notes.web"]);
   assertEquals(
     spec.components.web.listen?.["com.example.notes.db"]?.as,
@@ -66,13 +63,29 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
     routes: ["/"]
 `),
     AppSpecParseError,
   );
   assertEquals(err.validationPhase, "schema");
   assertEquals(err.validationPath, "$.components.web.routes");
+});
+
+Deno.test("parseAppSpec rejects Component `build:` (= build lives outside AppSpec)", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    build: { command: x, output: y }
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "schema");
+  assertEquals(err.validationPath, "$.components.web.build");
 });
 
 Deno.test("parseAppSpec rejects top-level `interfaces:` (= no longer in AppSpec contract)", () => {
@@ -84,7 +97,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
 interfaces:
   launch: { target: web, path: / }
 `),
@@ -103,7 +115,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
 permissions:
   requested: ["logs.read.own"]
 `),
@@ -119,7 +130,7 @@ Deno.test("parseAppSpec rejects unknown top-level field", () => {
       parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
-components: { web: { kind: worker, build: { command: x, output: y } } }
+components: { web: { kind: worker } }
 extraField: nope
 `),
     AppSpecParseError,
@@ -133,7 +144,7 @@ Deno.test("parseAppSpec rejects invalid apiVersion", () => {
       parseAppSpec(`
 apiVersion: "1.0"
 metadata: { id: x, name: y }
-components: { web: { kind: worker, build: { command: x, output: y } } }
+components: { web: { kind: worker } }
 `),
     AppSpecParseError,
   );
@@ -147,7 +158,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: not-a-kind
-    build: { command: x, output: y }
 `);
   assertEquals(spec.components.web.kind, "not-a-kind");
 });
@@ -161,7 +171,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
     use:
       db: { env: DATABASE_URL }
   db:
@@ -183,7 +192,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
     publish:
       - com.example.notes.web
     listen:
@@ -213,7 +221,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
     publish:
       - com.example.notes.web
     listen:
@@ -234,12 +241,10 @@ metadata: { id: x, name: y }
 components:
   a:
     kind: worker
-    build: { command: x, output: y }
     publish:
       - com.example.shared
   b:
     kind: worker
-    build: { command: x, output: y }
     publish:
       - com.example.shared
 `),
@@ -257,7 +262,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
     publish:
       - "com..example.bad"
 `),
@@ -275,7 +279,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
     listen:
       com.example.x: {}
 `),
@@ -293,7 +296,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
     listen:
       com.example.x:
         as: env
@@ -311,7 +313,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: https://takosumi.com/kinds/v1/worker
-    build: { command: x, output: y }
 `);
   assertEquals(
     spec.components.web.kind,
@@ -344,7 +345,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
     listen:
       com.example.svc:
         as: grpc-service
@@ -392,7 +392,6 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
     listen:
       takosumi-accounts.com.example.notes.oidc:
         as: env
@@ -417,7 +416,7 @@ Deno.test("parseAppSpec rejects root `kind:` field (= Wave K AppSpec envelope mi
 apiVersion: v1
 kind: App
 metadata: { id: x, name: y }
-components: { web: { kind: worker, build: { command: x, output: y } } }
+components: { web: { kind: worker } }
 `),
     AppSpecParseError,
   );
@@ -433,7 +432,6 @@ metadata: { id: com.example.minimal, name: Minimal }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
 `);
   assertEquals(spec.apiVersion, "v1");
   assertEquals(spec.metadata.id, "com.example.minimal");
@@ -451,7 +449,7 @@ Deno.test("parseAppSpec rejects legacy `apiVersion: takosumi.dev/v1` (= Wave L g
       parseAppSpec(`
 apiVersion: takosumi.dev/v1
 metadata: { id: x, name: y }
-components: { web: { kind: worker, build: { command: x, output: y } } }
+components: { web: { kind: worker } }
 `),
     AppSpecParseError,
   );
@@ -467,7 +465,6 @@ metadata: { id: com.example.minimal, name: Minimal }
 components:
   web:
     kind: worker
-    build: { command: x, output: y }
 `);
   assertEquals(spec.apiVersion, "v1");
   assertEquals(spec.metadata.id, "com.example.minimal");

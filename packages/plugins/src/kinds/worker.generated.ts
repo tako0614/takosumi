@@ -1,13 +1,11 @@
 // AUTO-GENERATED FROM packages/plugins/spec/kinds/v1/worker.jsonld — DO NOT EDIT.
 // Run `deno task spec:generate-ts` to refresh.
 
-import type { Artifact } from "takosumi-contract";
-
 export interface WorkerSpec {
-  /** Resolved uploaded artifact descriptor. `kind` must be `js-bundle` and `hash` is required. */
-  readonly artifact: Artifact;
   /** Cloudflare Workers compatibility date (e.g. `2025-01-01`). */
   readonly compatibilityDate: string;
+  /** Source-root-relative worker module path inside the prepared source snapshot. */
+  readonly entrypoint: string;
   /** Optional compatibility flags (e.g. `nodejs_compat`). */
   readonly compatibilityFlags?: readonly string[];
   /** Optional env vars / bindings. */
@@ -60,4 +58,4 @@ export const WORKER_LISTENS_FROM: readonly WorkerListensFrom[] = [
 export const WORKER_KIND_ID = "worker";
 export const WORKER_KIND_VERSION = "v1";
 export const WORKER_DESCRIPTION =
-  "Serverless JS function backed by an uploaded `js-bundle` artifact descriptor.";
+  "Serverless JS function whose entrypoint is read from the prepared source snapshot.";

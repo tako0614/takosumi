@@ -284,6 +284,8 @@ Deno.test("installerProviderRegistryFromPlugins resolves operator alias via kind
     installationId: "ins_1",
     componentName: "web",
     component: { kind: "worker" },
+    source: { kind: "local", url: "/tmp/src" },
+    sourceDirectory: "/tmp/src",
     listenedMaterials: {},
     resolvedBindings: [],
   });
@@ -307,6 +309,8 @@ Deno.test("installerProviderRegistryFromPlugins accepts operator-defined kind UR
     installationId: "ins_1",
     componentName: "fn",
     component: { kind: "https://operator.example.com/kinds/lambda" },
+    source: { kind: "local", url: "/tmp/src" },
+    sourceDirectory: "/tmp/src",
     listenedMaterials: {},
     resolvedBindings: [],
   });
@@ -322,6 +326,8 @@ Deno.test("installerProviderRegistryFromPlugins throws when no plugin provides t
       installationId: "ins_1",
       componentName: "web",
       component: { kind: "worker" },
+      source: { kind: "local", url: "/tmp/src" },
+      sourceDirectory: "/tmp/src",
       listenedMaterials: {},
       resolvedBindings: [],
     }),
@@ -370,3 +376,91 @@ Deno.test("InstallerPipeline lets test code override providers directly without 
     assert.equal(recorded.length, 2);
   });
 });
+
+Deno.test("InstallerPipeline accepts prepared source tar with source digest pin", async () => {
+  const prepared = await makePreparedSource();
+  try {
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+        }),
+        buildRecordingPlugin({
+          name: "@example/worker",
+          provides: ["https://takosumi.com/kinds/v1/worker"],
+          recorder: [],
+        }),
+      ],
+    });
+
+    const dryRun = await pipeline.installationDryRun({
+      spaceId: "space_test",
+      source: {
+        kind: "prepared",
+        url: prepared.archive,
+        digest: prepared.digest,
+      },
+    });
+    assert.equal(dryRun.source.digest, prepared.digest);
+    assert.equal(dryRun.expected.sourceDigest, prepared.digest);
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: {
+        kind: "prepared",
+        url: prepared.archive,
+        digest: prepared.digest,
+      },
+      expected: dryRun.expected,
+    });
+    assert.equal(deployment.status, "succeeded");
+    assert.equal(deployment.source.digest, prepared.digest);
+  } finally {
+    await prepared.cleanup();
+  }
+});
+
+async function makePreparedSource(): Promise<{
+  readonly archive: string;
+  readonly digest: string;
+  readonly cleanup: () => Promise<void>;
+}> {
+  const sourceDir = await Deno.makeTempDir({
+    prefix: "takosumi-installer-prepared-src-",
+  });
+  const archive = await Deno.makeTempFile({
+    prefix: "takosumi-installer-prepared-",
+    suffix: ".tar",
+  });
+  await Deno.writeTextFile(`${sourceDir}/.takosumi.yml`, SAMPLE_YAML);
+  const { code, stderr } = await new Deno.Command("tar", {
+    args: ["-c", "-f", archive, "-C", sourceDir, "."],
+    stderr: "piped",
+  }).output();
+  if (code !== 0) {
+    throw new Error(new TextDecoder().decode(stderr));
+  }
+  const digest = await sha256Hex(await Deno.readFile(archive));
+  return {
+    archive,
+    digest,
+    cleanup: async () => {
+      await Deno.remove(sourceDir, { recursive: true });
+      await Deno.remove(archive);
+    },
+  };
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  const hash = await crypto.subtle.digest("SHA-256", buffer);
+  return `sha256:${
+    Array.from(new Uint8Array(hash))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+  }`;
+}

@@ -30,7 +30,7 @@ const SAMPLE_SPECS: Record<string, JsonObject> = {
     target: "https://internal.example.com",
   },
   "worker@v1": {
-    artifact: { kind: "js-bundle", hash: "sha256:abc" },
+    entrypoint: "dist/worker.mjs",
     compatibilityDate: "2025-01-01",
   },
 };

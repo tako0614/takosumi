@@ -27,7 +27,7 @@ Deno.test("artifact push posts multipart with kind + body", async () => {
     return new Response(
       JSON.stringify({
         hash: "sha256:abc",
-        kind: "js-bundle",
+        kind: "operator.example/test-bundle",
         size: 16,
         uploadedAt: "2026-05-02T00:00:00.000Z",
       }),
@@ -42,11 +42,15 @@ Deno.test("artifact push posts multipart with kind + body", async () => {
     const { artifactCommand } = await import(
       `../src/commands/artifact.ts?${crypto.randomUUID()}`
     );
-    await artifactCommand.parse(["push", tmp, "--kind=js-bundle"]);
+    await artifactCommand.parse([
+      "push",
+      tmp,
+      "--kind=operator.example/test-bundle",
+    ]);
     assert.equal(observed.method, "POST");
     assert.equal(observed.url, "http://example.test/v1/artifacts");
     assert.equal(observed.auth, "Bearer T");
-    assert.equal(observed.form!.get("kind"), "js-bundle");
+    assert.equal(observed.form!.get("kind"), "operator.example/test-bundle");
     const file = observed.form!.get("body");
     assert.ok(file instanceof File);
   } finally {

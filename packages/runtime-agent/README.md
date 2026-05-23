@@ -32,7 +32,7 @@ takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 | Method | Path                     | Description                                                                               |
 | ------ | ------------------------ | ----------------------------------------------------------------------------------------- |
 | `GET`  | `/v1/health`             | health probe                                                                              |
-| `GET`  | `/v1/connectors`         | bearer-auth: list registered `(kind, provider)`                                           |
+| `GET`  | `/v1/connectors`         | bearer-auth: list registered `(shape, provider)`                                          |
 | `POST` | `/v1/lifecycle/apply`    | bearer-auth: apply one resource                                                           |
 | `POST` | `/v1/lifecycle/destroy`  | bearer-auth: destroy by handle                                                            |
 | `POST` | `/v1/lifecycle/describe` | bearer-auth: query resource state                                                         |
@@ -60,7 +60,7 @@ Each connector implements:
 ```typescript
 interface Connector {
   readonly provider: string;
-  readonly kind: string;
+  readonly shape: string;
   readonly acceptedArtifactKinds: readonly string[];
   apply(req, ctx): Promise<{ handle; outputs }>;
   destroy(req, ctx): Promise<{ ok }>;
@@ -68,6 +68,11 @@ interface Connector {
   verify?(ctx): Promise<{ ok; code?; note? }>;
 }
 ```
+
+Source-backed connectors, such as `worker@v1`, read files from
+`LifecycleApplyRequest.preparedSource` through `ctx.source`. Artifact-backed
+connectors may still use `ctx.fetcher`, but artifact kinds are connector-owned
+metadata rather than Takosumi AppSpec concepts.
 
 ## Cloud credentials (per connector)
 

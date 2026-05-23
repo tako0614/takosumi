@@ -45,14 +45,14 @@ Deployment を作ります。
 
 ## Catalog、connector、artifact
 
-| Record                     | 役割                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| `CatalogReleaseDescriptor` | 採用する kind / provider descriptor set の digest と source。                   |
-| `CatalogReleaseAdoption`   | Space / operator context が採用した catalog release。                           |
-| `ImplementationRegistry`   | operator が attach した materializer / connector の registry view。             |
-| `Connector`                | runtime-agent connector の id、accepted kinds、health。                         |
-| `ArtifactRecord`           | build service output や uploaded artifact の digest、size、retention metadata。 |
-| `SecretPartitionReference` | secret store partition の logical reference。secret value は含まない。          |
+| Record                     | 役割                                                                   |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `CatalogReleaseDescriptor` | 採用する kind / provider descriptor set の digest と source。          |
+| `CatalogReleaseAdoption`   | Space / operator context が採用した catalog release。                  |
+| `ImplementationRegistry`   | operator が attach した materializer / connector の registry view。    |
+| `Connector`                | runtime-agent connector の id、accepted kinds、health。                |
+| `ArtifactRecord`           | optional uploaded data asset の digest、size、retention metadata。     |
+| `SecretPartitionReference` | secret store partition の logical reference。secret value は含まない。 |
 
 artifact retention は [Artifact GC](./artifact-gc.md)、connector envelope は
 [Connector Contract](./connector-contract.md) を参照してください。

@@ -38,6 +38,8 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into l
         env: { EXISTING: "1" },
       },
     },
+    source: { kind: "local", url: "/tmp/src" },
+    sourceDirectory: "/tmp/src",
     listenedMaterials: {
       "app.web": { url: "https://web.example.com" },
       "app.db": { host: "db.internal" },
@@ -100,6 +102,8 @@ Deno.test("kernelPluginFromProviderPlugin rejects explicit env collision", async
           kind: "web-service",
           spec: { env: { DB_HOST: "explicit" } },
         },
+        source: { kind: "local", url: "/tmp/src" },
+        sourceDirectory: "/tmp/src",
         listenedMaterials: { "app.db": { host: "db.internal" } },
         resolvedBindings: [{
           listenerComponent: "web",

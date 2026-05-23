@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import type { ArtifactFetcher } from "../../src/artifact_fetcher.ts";
 import { DenoDeployWorkersConnector } from "../../src/connectors/deno_deploy/workers.ts";
+import type { PreparedSourceReader } from "../../src/prepared_source_reader.ts";
 
 interface CapturedCall {
   readonly url: string;
@@ -42,21 +42,14 @@ function recordingFetch(
   return { fetch: fetchImpl, calls };
 }
 
-function fakeFetcher(
+function fakeSource(
   bytes: Uint8Array,
-  requestedHashes: string[],
-): ArtifactFetcher {
+  requestedPaths: string[],
+): PreparedSourceReader {
   return {
-    async fetch(hash: string) {
-      requestedHashes.push(hash);
-      return await Promise.resolve({
-        bytes,
-        kind: "js-bundle",
-        contentType: "application/javascript+module",
-      });
-    },
-    async head(_hash: string) {
-      return await Promise.resolve({ kind: "js-bundle", size: bytes.length });
+    async readFile(path: string) {
+      requestedPaths.push(path);
+      return await Promise.resolve(bytes);
     },
   };
 }
@@ -113,8 +106,8 @@ Deno.test(
     const bundleBytes = new TextEncoder().encode(
       "export default { fetch() {} }",
     );
-    const requestedHashes: string[] = [];
-    const fetcher = fakeFetcher(bundleBytes, requestedHashes);
+    const requestedPaths: string[] = [];
+    const source = fakeSource(bundleBytes, requestedPaths);
     const { fetch: mockFetch, calls } = recordingFetch((call) => {
       if (
         call.method === "GET" && call.url.includes("/organizations/") &&
@@ -142,13 +135,13 @@ Deno.test(
       provider: "@takos/deno-deploy",
       resourceName: "fn",
       spec: {
-        artifact: { kind: "js-bundle", hash: "sha256:abc" },
+        entrypoint: "src/worker.js",
         compatibilityDate: "2025-01-01",
         env: { LOG_LEVEL: "info" },
       },
-    }, { fetcher });
+    }, { source });
 
-    assert.deepEqual(requestedHashes, ["sha256:abc"]);
+    assert.deepEqual(requestedPaths, ["src/worker.js"]);
     assert.equal(result.handle, "org-1/fn");
     assert.equal(result.outputs.url, "https://fn.deno.dev");
     assert.equal(result.outputs.id, "fn");
@@ -181,7 +174,7 @@ Deno.test(
 Deno.test(
   "DenoDeployWorkersConnector.apply reuses existing project when found",
   async () => {
-    const fetcher = fakeFetcher(new Uint8Array([1]), []);
+    const source = fakeSource(new Uint8Array([1]), []);
     const { fetch: mockFetch, calls } = recordingFetch((call) => {
       if (call.method === "GET" && call.url.includes("/projects?")) {
         return jsonResponse([{ id: "existing-id", name: "fn" }]);
@@ -201,10 +194,10 @@ Deno.test(
       provider: "@takos/deno-deploy",
       resourceName: "fn",
       spec: {
-        artifact: { kind: "js-bundle", hash: "sha256:abc" },
+        entrypoint: "worker.js",
         compatibilityDate: "2025-01-01",
       },
-    }, { fetcher });
+    }, { source });
     // Should NOT have created a new project — only list + deployment.
     assert.equal(calls.length, 2);
     assert.equal(calls[0].method, "GET");
@@ -214,7 +207,7 @@ Deno.test(
 );
 
 Deno.test(
-  "DenoDeployWorkersConnector.apply rejects when ctx.fetcher is undefined",
+  "DenoDeployWorkersConnector.apply rejects when ctx.source is undefined",
   async () => {
     const { fetch: mockFetch } = recordingFetch(() =>
       new Response("", { status: 200 })
@@ -230,13 +223,13 @@ Deno.test(
         provider: "@takos/deno-deploy",
         resourceName: "fn",
         spec: {
-          artifact: { kind: "js-bundle", hash: "sha256:abc" },
+          entrypoint: "worker.js",
           compatibilityDate: "2025-01-01",
         },
       }, {});
     } catch (error) {
       threw = true;
-      assert.match(String((error as Error).message), /artifactStore/);
+      assert.match(String((error as Error).message), /preparedSource/);
     }
     assert.ok(threw);
   },

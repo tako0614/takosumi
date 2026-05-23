@@ -25,8 +25,8 @@ projection が作られます。
 
 ## HTTP endpoint {#http-endpoint}
 
-`worker` は JS bundle を request-driven runtime に渡す workload です。container
-runtime は `web-service` を使います。
+`worker` は prepared source の entrypoint を request-driven runtime に渡す
+workload です。container runtime は `web-service` を使います。
 
 ```yaml
 apiVersion: v1
@@ -37,9 +37,7 @@ components:
   web:
     kind: worker
     spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:...
+      entrypoint: dist/worker.mjs
       compatibilityDate: "2025-01-01"
     publish:
       - com.example.edge.web
@@ -73,9 +71,7 @@ components:
   edge:
     kind: worker
     spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:...
+      entrypoint: dist/worker.mjs
       compatibilityDate: "2025-01-01"
     listen:
       com.example.edge.db:

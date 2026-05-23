@@ -26,6 +26,14 @@ Deno.test("installer source parser maps supported source refs", () => {
     kind: "bundle",
     url: "https://example.com/app.tgz",
   });
+  assert.deepEqual(
+    parseSourceRef("prepared:https://example.com/app.tar#sha256:abc"),
+    {
+      kind: "prepared",
+      url: "https://example.com/app.tar",
+      digest: "sha256:abc",
+    },
+  );
   assert.equal(resolveSourceArg({ argument: "./app" }), "./app");
   assert.throws(
     () => resolveSourceArg({ argument: "./a", flag: "./b" }),
@@ -109,6 +117,8 @@ Deno.test("deploy command posts to an installation deployment endpoint", async (
         "abc123",
         "--expected-manifest-digest",
         "sha256:manifest",
+        "--expected-source-digest",
+        "sha256:source",
         "--remote",
         "https://kernel.example",
         "--token",
@@ -126,6 +136,7 @@ Deno.test("deploy command posts to an installation deployment endpoint", async (
       expected: {
         commit: "abc123",
         manifestDigest: "sha256:manifest",
+        sourceDigest: "sha256:source",
       },
     });
   } finally {

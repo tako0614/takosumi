@@ -29,9 +29,8 @@ export class ConnectorNotFoundError extends Error {
 }
 
 /**
- * Thrown when a request's `spec.artifact.kind` (or `spec.image` shorthand
- * treated as `oci-image`) is not in the connector's `acceptedArtifactKinds`
- * list.
+ * Thrown when an artifact-backed request's kind is not in the connector's
+ * `acceptedArtifactKinds` list.
  */
 export class ArtifactKindMismatchError extends Error {
   readonly shape: string;

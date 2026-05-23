@@ -5,7 +5,7 @@
   "name": "worker",
   "version": "v1",
   "aliases": ["worker"],
-  "description": "Serverless JS function backed by an uploaded `js-bundle` artifact descriptor.",
+  "description": "Serverless JS function whose entrypoint is read from the prepared source snapshot.",
   "x-ts": {
     "fileBasename": "worker",
     "prefix": "Worker",
@@ -14,15 +14,13 @@
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "required": ["artifact", "compatibilityDate"],
+    "required": ["entrypoint", "compatibilityDate"],
     "additionalProperties": true,
     "properties": {
-      "artifact": {
-        "description": "Resolved uploaded artifact descriptor. `kind` must be `js-bundle` and `hash` is required.",
-        "x-ts-type": {
-          "import": "takosumi-contract",
-          "name": "Artifact"
-        }
+      "entrypoint": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Source-root-relative worker module path inside the prepared source snapshot."
       },
       "compatibilityDate": {
         "type": "string",

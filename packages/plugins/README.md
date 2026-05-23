@@ -66,13 +66,13 @@ by importing this package and passing aliases such as
 Operator distributions can publish their own JSON-LD descriptors on any domain
 and map short aliases to those URIs.
 
-| Kind            | Description                                        |
-| --------------- | -------------------------------------------------- |
-| `worker`        | JavaScript edge worker from a `js-bundle` artifact |
-| `web-service`   | OCI/container web service with an HTTP port        |
-| `postgres`      | Managed PostgreSQL instance                        |
-| `object-store`  | S3-compatible bucket                               |
-| `custom-domain` | DNS record + TLS termination                       |
+| Kind            | Description                                            |
+| --------------- | ------------------------------------------------------ |
+| `worker`        | JavaScript edge worker from prepared source entrypoint |
+| `web-service`   | OCI/container web service with an HTTP port            |
+| `postgres`      | Managed PostgreSQL instance                            |
+| `object-store`  | S3-compatible bucket                                   |
+| `custom-domain` | DNS record + TLS termination                           |
 
 旧 `oidc` kind は takosumi-cloud (= Takosumi Accounts operator distribution)
 に移動済。 worker 側は `listen.operator.identity.oidc` で標準 env を受け取る。
@@ -96,19 +96,14 @@ provider id namespace は `@takos/<cloud>-<service>` を使う (= `@takos/aws-s3
 `@takos/cloudflare-r2`, `@takos/gcp-cloud-run` 等)。 Bare provider IDs
 (`aws-fargate`, `cloud-run`, etc.) は reject される。
 
-## Artifact kinds (5 bundled)
+## Data assets
 
-The runtime-agent connectors advertise which artifact kinds they accept. Bundled
-kinds:
+Takosumi AppSpec does not define artifact kinds. The optional artifact routes
+can still store operator-owned blobs, but `kind` there is external metadata
+owned by the operator / connector distribution.
 
-- `oci-image` (URI ref, no upload)
-- `js-bundle` (Cloudflare Workers / Deno Deploy)
-- `lambda-zip` (future AWS Lambda)
-- `static-bundle` (future static site)
-- `wasm` (future WASM module)
-
-Operators register additional kinds via `registerArtifactKind` from
-[`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract).
+Operators can register discoverable data-asset kinds via `registerArtifactKind`
+from [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract).
 
 ## See also
 

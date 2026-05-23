@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import type { ArtifactFetcher } from "../../src/artifact_fetcher.ts";
 import { CloudflareWorkersConnector } from "../../src/connectors/cloudflare/workers.ts";
+import type { PreparedSourceReader } from "../../src/prepared_source_reader.ts";
 
 interface CapturedCall {
   readonly url: string;
@@ -43,21 +43,14 @@ function recordingFetch(
   return { fetch: fetchImpl, calls };
 }
 
-function fakeFetcher(
+function fakeSource(
   bytes: Uint8Array,
-  requestedHashes: string[],
-): ArtifactFetcher {
+  requestedPaths: string[],
+): PreparedSourceReader {
   return {
-    async fetch(hash: string) {
-      requestedHashes.push(hash);
-      return await Promise.resolve({
-        bytes,
-        kind: "js-bundle",
-        contentType: "application/javascript+module",
-      });
-    },
-    async head(_hash: string) {
-      return await Promise.resolve({ kind: "js-bundle", size: bytes.length });
+    async readFile(path: string) {
+      requestedPaths.push(path);
+      return await Promise.resolve(bytes);
     },
   };
 }
@@ -97,8 +90,8 @@ Deno.test(
     const bundleBytes = new TextEncoder().encode(
       "export default { fetch() {} }",
     );
-    const requestedHashes: string[] = [];
-    const fetcher = fakeFetcher(bundleBytes, requestedHashes);
+    const requestedPaths: string[] = [];
+    const source = fakeSource(bundleBytes, requestedPaths);
     const { fetch: mockFetch, calls } = recordingFetchWithSubdomain("my-team");
     const connector = new CloudflareWorkersConnector({
       accountId: "acct-1",
@@ -111,14 +104,14 @@ Deno.test(
       provider: "@takos/cloudflare-workers",
       resourceName: "my-script",
       spec: {
-        artifact: { kind: "js-bundle", hash: "sha256:abc" },
+        entrypoint: "src/worker.js",
         compatibilityDate: "2025-01-01",
         compatibilityFlags: ["nodejs_compat"],
         env: { LOG_LEVEL: "info" },
       },
-    }, { fetcher });
+    }, { source });
 
-    assert.deepEqual(requestedHashes, ["sha256:abc"]);
+    assert.deepEqual(requestedPaths, ["src/worker.js"]);
     assert.equal(result.handle, "acct-1/my-script");
     assert.equal(
       result.outputs.url,
@@ -164,9 +157,9 @@ Deno.test(
 );
 
 Deno.test(
-  "CloudflareWorkersConnector.apply uses artifact.metadata.entrypoint when present",
+  "CloudflareWorkersConnector.apply uses spec.entrypoint basename as main module",
   async () => {
-    const fetcher = fakeFetcher(new Uint8Array([1, 2, 3]), []);
+    const source = fakeSource(new Uint8Array([1, 2, 3]), []);
     const { fetch: mockFetch, calls } = recordingFetchWithSubdomain("teams");
     const connector = new CloudflareWorkersConnector({
       accountId: "acct",
@@ -178,14 +171,10 @@ Deno.test(
       provider: "@takos/cloudflare-workers",
       resourceName: "fn",
       spec: {
-        artifact: {
-          kind: "js-bundle",
-          hash: "sha256:abc",
-          metadata: { entrypoint: "main.mjs" },
-        },
+        entrypoint: "dist/main.mjs",
         compatibilityDate: "2025-01-01",
       },
-    }, { fetcher });
+    }, { source });
 
     // [0]=GET subdomain, [1]=PUT script
     const putCall = calls[1];
@@ -197,7 +186,7 @@ Deno.test(
 );
 
 Deno.test(
-  "CloudflareWorkersConnector.apply rejects when ctx.fetcher is undefined",
+  "CloudflareWorkersConnector.apply rejects when ctx.source is undefined",
   async () => {
     const { fetch: mockFetch } = recordingFetchWithSubdomain("teams");
     const connector = new CloudflareWorkersConnector({
@@ -212,22 +201,22 @@ Deno.test(
         provider: "@takos/cloudflare-workers",
         resourceName: "fn",
         spec: {
-          artifact: { kind: "js-bundle", hash: "sha256:abc" },
+          entrypoint: "worker.js",
           compatibilityDate: "2025-01-01",
         },
       }, {});
     } catch (error) {
       threw = true;
-      assert.match(String((error as Error).message), /artifactStore/);
+      assert.match(String((error as Error).message), /preparedSource/);
     }
-    assert.ok(threw, "expected apply to throw without fetcher");
+    assert.ok(threw, "expected apply to throw without source");
   },
 );
 
 Deno.test(
-  "CloudflareWorkersConnector.apply rejects when artifact.hash is missing",
+  "CloudflareWorkersConnector.apply rejects when entrypoint is missing",
   async () => {
-    const fetcher = fakeFetcher(new Uint8Array(), []);
+    const source = fakeSource(new Uint8Array(), []);
     const { fetch: mockFetch } = recordingFetchWithSubdomain("teams");
     const connector = new CloudflareWorkersConnector({
       accountId: "acct",
@@ -241,13 +230,12 @@ Deno.test(
         provider: "@takos/cloudflare-workers",
         resourceName: "fn",
         spec: {
-          artifact: { kind: "js-bundle" },
           compatibilityDate: "2025-01-01",
         },
-      }, { fetcher });
+      }, { source });
     } catch (error) {
       threw = true;
-      assert.match(String((error as Error).message), /hash/);
+      assert.match(String((error as Error).message), /entrypoint/);
     }
     assert.ok(threw);
   },
@@ -345,7 +333,7 @@ Deno.test(
 Deno.test(
   "CloudflareWorkersConnector.apply falls back to accountId.workers.dev when subdomain returns 404",
   async () => {
-    const fetcher = fakeFetcher(new Uint8Array([42]), []);
+    const source = fakeSource(new Uint8Array([42]), []);
     const { fetch: mockFetch } = recordingFetch((call) => {
       if (call.method === "GET" && call.url.endsWith("/workers/subdomain")) {
         return new Response("", { status: 404 });
@@ -369,10 +357,10 @@ Deno.test(
         provider: "@takos/cloudflare-workers",
         resourceName: "fn",
         spec: {
-          artifact: { kind: "js-bundle", hash: "sha256:abc" },
+          entrypoint: "worker.js",
           compatibilityDate: "2025-01-01",
         },
-      }, { fetcher });
+      }, { source });
     } finally {
       console.warn = originalWarn;
     }
@@ -442,7 +430,7 @@ Deno.test(
 Deno.test(
   "CloudflareWorkersConnector caches the subdomain across calls",
   async () => {
-    const fetcher = fakeFetcher(new Uint8Array([1]), []);
+    const source = fakeSource(new Uint8Array([1]), []);
     let subdomainHits = 0;
     const { fetch: mockFetch } = recordingFetch((call) => {
       if (call.method === "GET" && call.url.endsWith("/workers/subdomain")) {
@@ -462,19 +450,19 @@ Deno.test(
       provider: "@takos/cloudflare-workers",
       resourceName: "fn",
       spec: {
-        artifact: { kind: "js-bundle", hash: "sha256:abc" },
+        entrypoint: "worker.js",
         compatibilityDate: "2025-01-01",
       },
-    }, { fetcher });
+    }, { source });
     await connector.apply({
       shape: "worker@v1",
       provider: "@takos/cloudflare-workers",
       resourceName: "fn2",
       spec: {
-        artifact: { kind: "js-bundle", hash: "sha256:def" },
+        entrypoint: "worker.js",
         compatibilityDate: "2025-01-01",
       },
-    }, { fetcher });
+    }, { source });
 
     assert.equal(subdomainHits, 1);
   },

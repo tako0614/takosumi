@@ -106,7 +106,7 @@ Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployme
   ]);
 });
 
-Deno.test("KernelPlugin.apply receives Component + buildOutput + listenedMaterials", async () => {
+Deno.test("KernelPlugin.apply receives Component + source + listenedMaterials", async () => {
   const component: Component = {
     kind: "worker",
     publish: ["com.example.app.web"],
@@ -138,7 +138,8 @@ Deno.test("KernelPlugin.apply receives Component + buildOutput + listenedMateria
     installationId: "ins_1",
     componentName: "web",
     component,
-    buildOutput: { digest: "sha256:abc", uri: "file:///out" },
+    source: { kind: "prepared", url: "file:///src.tar", digest: "sha256:abc" },
+    sourceDirectory: "/tmp/prepared-source",
     listenedMaterials: { "com.example.app.db": dbMaterial },
     resolvedBindings: [{
       listenerComponent: "web",
@@ -155,7 +156,8 @@ Deno.test("KernelPlugin.apply receives Component + buildOutput + listenedMateria
     seen[0].resolvedBindings[0]?.envInjections.DB_HOST,
     "db.internal",
   );
-  assert.equal(seen[0].buildOutput?.digest, "sha256:abc");
+  assert.equal(seen[0].source.digest, "sha256:abc");
+  assert.equal(seen[0].sourceDirectory, "/tmp/prepared-source");
 });
 
 Deno.test("KernelPlugin.publishMaterial emits a NamespaceMaterial", async () => {

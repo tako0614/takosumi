@@ -74,7 +74,7 @@ export function createDenoDeployProvider(
     implements: { id: "worker", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
-      const scriptName = scriptNameFromArtifactRef(spec);
+      const scriptName = scriptNameFromEntrypoint(spec);
       const desc = await lifecycle.putScript({
         scriptName,
         compatibilityDate: spec.compatibilityDate,
@@ -123,10 +123,12 @@ function scriptNameFromHandle(handle: ResourceHandle): string {
   return parts.at(-1) ?? handle;
 }
 
-function scriptNameFromArtifactRef(spec: WorkerSpec): string {
-  const hash = spec.artifact.hash ?? "worker";
-  const tail = hash.split(":").at(-1) ?? hash;
-  const token = tail.toLowerCase().replace(/[^a-z0-9-]+/g, "").slice(0, 24);
+function scriptNameFromEntrypoint(spec: WorkerSpec): string {
+  const token = spec.entrypoint
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24);
   return token.length > 0 ? `worker-${token}` : "worker";
 }
 

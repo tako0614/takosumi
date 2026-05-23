@@ -8,7 +8,6 @@
  *   4. computes change set + source pin
  *   5. on apply:
  *        - fires `onInstallStart` / `onDeploymentStart` hooks
- *        - runs component.build
  *        - resolves each Component.kind to a `KernelPlugin` via the
  *          registry and invokes `plugin.apply()`
  *        - persists Installation + Deployment
@@ -27,7 +26,6 @@ import type {
   Deployment,
   DeploymentApplyRequest,
   DeploymentApplyResponse,
-  DeploymentBuildArtifact,
   DeploymentDryRunRequest,
   DeploymentDryRunResponse,
   DeploymentOutputs,
@@ -44,7 +42,11 @@ import type {
   SourceSummary,
 } from "takosumi-contract/installer-api";
 import type { NamespaceMaterial } from "takosumi-contract/plugin";
-import { fetchGitSource, parseAppSpec } from "takosumi-installer";
+import {
+  fetchGitSource,
+  fetchPreparedSource,
+  parseAppSpec,
+} from "takosumi-installer";
 import {
   createKernelPluginRegistry,
   findPluginForKind,
@@ -75,7 +77,8 @@ export interface ProviderApplyContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly component: Component;
-  readonly buildOutput?: DeploymentBuildArtifact;
+  readonly source: SourceSummary;
+  readonly sourceDirectory: string;
   /**
    * Materials this component listens to, keyed by the namespace path as
    * declared in `Component.listen`. Pre-resolved by the installer from
@@ -148,31 +151,10 @@ export interface InstallerPipelineDependencies {
    * must supply `source.url` as an absolute path.
    */
   readonly localSourceRoot?: string;
-  /**
-   * Build runner — invoked when a component declares `component.build`.
-   * Defaults to spawning the recipe `command` via `RuntimeAdapter.subprocess`
-   * in the source working directory and pinning the resulting `output`
-   * artifact with a sha256 digest of its bytes (read via
-   * `RuntimeAdapter.fs.readFile`). Runtime selection (Deno / Node) is
-   * delegated to the adapter so this code path is portable.
-   */
-  readonly runBuild?: (input: BuildRunnerInput) => Promise<BuildRunnerResult>;
   /** Cost estimator — defaults to a placeholder `0 JPY/month` value. */
   readonly estimateCost?: (
     appSpec: AppSpec,
   ) => { readonly currency: string; readonly monthly: number };
-}
-
-export interface BuildRunnerInput {
-  readonly workingDirectory: string;
-  readonly componentName: string;
-  readonly command: string;
-  readonly outputPath: string;
-}
-
-export interface BuildRunnerResult {
-  readonly digest: string;
-  readonly uri: string;
 }
 
 export class InstallerPipeline {
@@ -184,7 +166,6 @@ export class InstallerPipeline {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #localSourceRoot?: string;
-  readonly #runBuild: (input: BuildRunnerInput) => Promise<BuildRunnerResult>;
   readonly #estimateCost: (
     appSpec: AppSpec,
   ) => { readonly currency: string; readonly monthly: number };
@@ -207,7 +188,6 @@ export class InstallerPipeline {
         `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`);
     this.#now = dependencies.now ?? (() => Date.now());
     this.#localSourceRoot = dependencies.localSourceRoot;
-    this.#runBuild = dependencies.runBuild ?? defaultRunBuild;
     this.#estimateCost = dependencies.estimateCost ??
       (() => ({ currency: "JPY", monthly: 0 }));
   }
@@ -264,6 +244,9 @@ export class InstallerPipeline {
         expected: {
           commit: sourceSummary.commit ?? "",
           manifestDigest,
+          ...(sourceSummary.digest
+            ? { sourceDigest: sourceSummary.digest }
+            : {}),
         },
       };
     } finally {
@@ -444,7 +427,6 @@ export class InstallerPipeline {
   }): Promise<Deployment> {
     const deploymentId = this.#newId("dep");
     const now = this.#now();
-    const builds: DeploymentBuildArtifact[] = [];
     const resources: DeploymentResource[] = [];
 
     // Namespace registry — single Installation-scoped pub/sub store used
@@ -482,22 +464,6 @@ export class InstallerPipeline {
       const appId = input.appSpec.metadata.id;
       for (const componentName of order) {
         const component = input.appSpec.components[componentName];
-        let buildArtifact: DeploymentBuildArtifact | undefined;
-        if (component.build) {
-          const built = await this.#runBuild({
-            workingDirectory: input.workingDirectory,
-            componentName,
-            command: component.build.command,
-            outputPath: component.build.output,
-          });
-          buildArtifact = {
-            component: componentName,
-            digest: built.digest,
-            uri: built.uri,
-          };
-          builds.push(buildArtifact);
-        }
-
         // Resolve listen edges against the current registry. Listens to
         // paths with no registered publisher are skipped here — they may
         // be supplied by external systems and surfaced via the plugin's
@@ -527,7 +493,8 @@ export class InstallerPipeline {
           installationId: input.installation.id,
           componentName,
           component,
-          buildOutput: buildArtifact,
+          source: input.sourceSummary,
+          sourceDirectory: input.workingDirectory,
           listenedMaterials,
           resolvedBindings,
         });
@@ -555,7 +522,6 @@ export class InstallerPipeline {
         }
       }
       const outputs: DeploymentOutputs = {
-        builds: builds.length === 0 ? undefined : builds,
         resources: resources.length === 0 ? undefined : resources,
       };
       const deployment: Deployment = {
@@ -582,7 +548,6 @@ export class InstallerPipeline {
         manifestDigest: input.manifestDigest,
         status: "failed",
         outputs: {
-          builds: builds.length === 0 ? undefined : builds,
           resources: resources.length === 0 ? undefined : resources,
         },
         createdAt: now,
@@ -707,6 +672,38 @@ export class InstallerPipeline {
         cleanup: result.cleanup,
       };
     }
+    if (source.kind === "prepared") {
+      if (!source.url) {
+        throw new InstallerPipelineError(
+          "invalid_argument",
+          "prepared source requires source.url",
+        );
+      }
+      if (!source.digest) {
+        throw new InstallerPipelineError(
+          "invalid_argument",
+          "prepared source requires source.digest",
+        );
+      }
+      try {
+        const result = await fetchPreparedSource({
+          url: source.url,
+          digest: source.digest,
+        });
+        return {
+          workingDirectory: result.workingDirectory,
+          commit: source.commit ?? "",
+          sourceDigest: result.digest,
+          cleanup: result.cleanup,
+        };
+      } catch (err) {
+        const cause = err instanceof Error ? err.message : String(err);
+        throw new InstallerPipelineError(
+          "failed_precondition",
+          `failed to fetch prepared source: ${cause}`,
+        );
+      }
+    }
     throw new InstallerPipelineError(
       "not_implemented",
       `source.kind=${source.kind} is not yet supported`,
@@ -717,6 +714,7 @@ export class InstallerPipeline {
 interface FetchedSource {
   readonly workingDirectory: string;
   readonly commit: string;
+  readonly sourceDigest?: string;
   readonly cleanup: () => Promise<void>;
 }
 
@@ -770,12 +768,8 @@ function installerProviderRegistryFromPluginRegistry(
         installationId: context.installationId,
         componentName: context.componentName,
         component: context.component,
-        buildOutput: context.buildOutput
-          ? {
-            digest: context.buildOutput.digest,
-            uri: context.buildOutput.uri,
-          }
-          : undefined,
+        source: context.source,
+        sourceDirectory: context.sourceDirectory,
         listenedMaterials: context.listenedMaterials,
         resolvedBindings: context.resolvedBindings,
       });
@@ -913,6 +907,7 @@ function summarizeSource(
     url: source.url,
     ref: source.ref,
     commit: fetched.commit || source.commit,
+    digest: fetched.sourceDigest ?? source.digest,
   };
 }
 
@@ -922,6 +917,7 @@ function sourceFromSummary(summary: SourceSummary): Source {
     url: summary.url,
     ref: summary.ref,
     commit: summary.commit,
+    digest: summary.digest,
   };
 }
 
@@ -1041,6 +1037,14 @@ function checkExpectedPin(
       `expected commit ${expected.commit} but source resolved to ${source.commit}`,
     );
   }
+  if (expected.sourceDigest && expected.sourceDigest !== source.digest) {
+    throw new InstallerPipelineError(
+      "failed_precondition",
+      `expected sourceDigest ${expected.sourceDigest} but source resolved to ${
+        source.digest ?? "<none>"
+      }`,
+    );
+  }
 }
 
 function requireNonEmptyString(
@@ -1053,37 +1057,4 @@ function requireNonEmptyString(
       `${field} must be a non-empty string`,
     );
   }
-}
-
-async function defaultRunBuild(
-  input: BuildRunnerInput,
-): Promise<BuildRunnerResult> {
-  const runtime = currentRuntime();
-  const { code, stderr } = await runtime.subprocess.run("sh", {
-    args: ["-c", input.command],
-    cwd: input.workingDirectory,
-  });
-  if (code !== 0) {
-    throw new InstallerPipelineError(
-      "internal_error",
-      `build command for component ${input.componentName} failed: ${
-        new TextDecoder().decode(stderr)
-      }`,
-    );
-  }
-  const outputPath = input.outputPath.startsWith("/")
-    ? input.outputPath
-    : `${input.workingDirectory.replace(/\/+$/, "")}/${input.outputPath}`;
-  let bytes: Uint8Array;
-  try {
-    bytes = await runtime.fs.readFile(outputPath);
-  } catch (err) {
-    const cause = err instanceof Error ? err.message : String(err);
-    throw new InstallerPipelineError(
-      "internal_error",
-      `build output ${outputPath} for component ${input.componentName} was not produced: ${cause}`,
-    );
-  }
-  const digest = await sha256Hex(bytes);
-  return { digest, uri: `file://${outputPath}` };
 }

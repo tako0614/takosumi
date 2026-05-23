@@ -12,9 +12,7 @@ components:
   api:
     kind: worker
     spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:...
+      entrypoint: dist/worker.mjs
       compatibilityDate: "2025-01-01"
 ```
 

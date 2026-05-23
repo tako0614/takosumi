@@ -13,7 +13,8 @@ source root の `.takosumi.yml`。root は `apiVersion`、`metadata`、 `compone
 
 source root の optional `.takosumi.build.yml`。
 
-build service が artifact を作り、解決済み AppSpec bundle を作るための入力です。
+build service が source tree を準備し、prepared source snapshot を作るための入力
+です。
 
 kernel の public entity ではありません。詳細は [BuildSpec](./build-spec.md)。
 
@@ -77,9 +78,15 @@ API や OS executor を操作します。詳細は
 
 ## Artifact
 
-build service output や uploaded blob の digest-pinned data asset です。artifact
-route は 保存・取得・GC を扱い、workflow runner 自体にはなりません。詳細は
-[DataAsset Policy](./data-asset-policy.md) と [Artifact GC](./artifact-gc.md)。
+uploaded blob の digest-pinned data asset です。artifact route は 保存・取得・GC
+を扱い、workflow runner 自体にはなりません。AppSpec の component kind contract
+ではありません。詳細は [DataAsset Policy](./data-asset-policy.md) と
+[Artifact GC](./artifact-gc.md)。
+
+## Prepared Source
+
+build / prepare 後の source tree を tar + sha256 で固定した snapshot です。
+Installer API では `source.kind: "prepared"` として渡します。
 
 ## manifestDigest
 

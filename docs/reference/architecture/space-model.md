@@ -245,15 +245,13 @@ components:
         as: env
         prefix: DATABASE
     spec:
-      artifact:
-        kind: js-bundle
-        hash: sha256:...
+      entrypoint: dist/worker.mjs
       compatibilityDate: "2025-01-01"
 ```
 
 `space:acme-prod` で apply すると、resource graph、選ばれた provider、output
-ref、policy、secret、artifact、GroupHead はすべて production Space に対して
-resolve される。
+ref、policy、secret、prepared source、GroupHead はすべて production Space
+に対して resolve される。
 
 ```text
 space:acme-prod/takos.database.primary

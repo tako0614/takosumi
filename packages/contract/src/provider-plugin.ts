@@ -1,4 +1,5 @@
 import type { JsonObject, JsonValue } from "./types.ts";
+import type { PreparedSourceLocator } from "./runtime-agent-lifecycle.ts";
 import type {
   kms,
   objectStorage,
@@ -129,6 +130,12 @@ export interface PlatformContext {
   readonly objectStorage: objectStorage.ObjectStoragePort;
   readonly refResolver: RefResolver;
   readonly resolvedOutputs: ReadonlyMap<string, JsonObject>;
+  /**
+   * Prepared source snapshot for source-backed providers. Present when the
+   * kernel can expose the Deployment source tree to a materializer or
+   * runtime-agent connector.
+   */
+  readonly preparedSource?: PreparedSourceLocator;
   /**
    * Operation metadata attached by the kernel while executing a public WAL
    * commit. Providers should forward `idempotencyKeyString` to external APIs

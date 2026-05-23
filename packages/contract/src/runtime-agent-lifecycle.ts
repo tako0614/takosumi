@@ -23,7 +23,7 @@ import type { PlatformOperationRequest } from "./provider-plugin.ts";
  * Artifact descriptor — a discriminated union over `kind` (open string).
  *
  * - `kind: "oci-image"` typically uses `uri` (e.g. `ghcr.io/me/api:v1`)
- * - `kind: "js-bundle"` / `"lambda-zip"` / `"tarball"` / etc. use `hash`
+ * - operator-owned bundle kinds may use `hash`
  *   pointing at a `takosumi artifact push`-uploaded blob
  *
  * `kind` is intentionally open: 3rd-party connectors can introduce new kinds
@@ -68,6 +68,17 @@ export interface ArtifactStoreLocator {
   readonly token: string;
 }
 
+/**
+ * Locator for the already-prepared source snapshot used by source-backed
+ * connectors. `workingDirectory` is for co-located kernel/agent setups;
+ * `url` + `digest` is the portable form for remote agents.
+ */
+export interface PreparedSourceLocator {
+  readonly url?: string;
+  readonly digest?: string;
+  readonly workingDirectory?: string;
+}
+
 export interface LifecycleApplyRequest {
   /** Shape ref (e.g. `object-store@v1`). */
   readonly shape: string;
@@ -93,6 +104,8 @@ export interface LifecycleApplyRequest {
   /** Where the connector can fetch artifact bytes by hash, when spec carries
    *  `artifact.hash`. Absent for pure pointer-based deploys. */
   readonly artifactStore?: ArtifactStoreLocator;
+  /** Prepared source snapshot locator for source-backed connectors. */
+  readonly preparedSource?: PreparedSourceLocator;
 }
 
 export interface LifecycleApplyResponse {
