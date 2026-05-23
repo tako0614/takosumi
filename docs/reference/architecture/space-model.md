@@ -248,9 +248,8 @@ components:
       com.example.api.db:
         as: env
         prefix: DATABASE
-    spec:
-      entrypoint: dist/worker.mjs
-      compatibilityDate: "2025-01-01"
+	    spec:
+	      entrypoint: dist/worker.mjs
 ```
 
 `space:acme-prod` で apply すると、resource graph、選ばれた provider、output

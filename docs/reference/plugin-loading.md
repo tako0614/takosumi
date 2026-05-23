@@ -11,7 +11,7 @@ JSON-LD kind descriptor は kind の型・意味・入出力を表す semantic c
 同じ descriptor を扱う別の Takosumi-compatible implementation は、native
 controller、static registry、SaaS adapter、workflow engine など別の仕組みで
 implementation binding を持てます。takosumi.com reference implementation では
-その組み込み方を plugin API として提供します。
+その組み込み方を reference adapter API として提供します。
 
 ## 基本モデル {#model}
 
@@ -36,8 +36,8 @@ operator distribution の policy です。
 
 ## 起動時検査 {#boot-validation}
 
-reference kernel が見るのは、起動時に渡された `kindAliases` と `plugins`
-だけです。
+reference kernel が見るのは、起動時に渡された `kindAliases` と reference adapter
+array (`plugins` option) です。
 
 - short alias は operator-provided `kindAliases` にあるものだけ解決される
 - reference implementation adapter は `provides[]` で kind URI を宣言する
@@ -53,17 +53,17 @@ operator extension の content-addressed bytes を consume します。
 
 ## 失敗時の UX {#failure-ux}
 
-| Failure                       | Behavior                                           |
-| ----------------------------- | -------------------------------------------------- |
-| unresolved kind alias         | dry-run / apply reject before provider side effect |
-| no plugin provides a kind URI | dry-run / apply reject before provider side effect |
-| duplicate plugin provider     | boot reject                                        |
-| connector not visible         | apply reject before runtime-agent dispatch         |
+| Failure                            | Behavior                                           |
+| ---------------------------------- | -------------------------------------------------- |
+| unresolved kind alias              | dry-run / apply reject before provider side effect |
+| no adapter provides a kind URI     | dry-run / apply reject before provider side effect |
+| duplicate adapter for one kind URI | boot reject                                        |
+| connector not visible              | apply reject before runtime-agent dispatch         |
 
 ## 関連ページ {#related-pages}
 
 - [Supply Chain Trust](./supply-chain-trust.md)
 - [Provider Implementations](./providers.md)
-- [Connector Contract](./connector-contract.md)
+- [Connector Guide](./connector-contract.md)
 - [DataAsset Policy](./data-asset-policy.md)
 - [Storage Schema](./storage-schema.md)

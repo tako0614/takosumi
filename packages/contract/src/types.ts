@@ -217,7 +217,6 @@ export interface ResourceInstance {
   name: string;
   type: string;
   provider: string;
-  providerResourceId?: string;
   status: "pending" | "ready" | "degraded" | "failed" | "deleted";
   properties?: JsonObject;
   conditions?: Condition[];

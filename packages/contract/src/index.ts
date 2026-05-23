@@ -1,7 +1,8 @@
 export * from "./types.ts";
-// app-spec.ts and installer-api.ts are intentionally omitted from the
-// umbrella to avoid name collisions with legacy core-v1 types (AppSpec,
-// Deployment, etc.). Import via the explicit subpath:
+// app-spec.ts and installer-api.ts are intentionally omitted from this
+// compatibility umbrella to avoid name collisions with legacy deploy-core
+// projections (AppSpec, Deployment, etc.). Import current v1 spec DTOs via the
+// explicit subpaths:
 //   import { ... } from "@takos/takosumi-contract/app-spec";
 //   import { ... } from "@takos/takosumi-contract/installer-api";
 export * from "./core-v1.ts";
@@ -22,5 +23,8 @@ export * from "./plugin-sdk.ts";
 export * from "./runtime-agent.ts";
 export * from "./runtime-agent-lifecycle.ts";
 export * from "./error-category.ts";
+// Legacy connector-local shape/provider registries. Current reference
+// materializers should implement KernelPlugin from ./plugin.ts directly; these
+// exports remain for older provider packages and adapter bridges.
 export * from "./shape.ts";
 export * from "./provider-plugin.ts";

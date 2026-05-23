@@ -8,13 +8,12 @@
   "description": "Long-running HTTP service backed by an OCI image.",
   "x-ts": {
     "fileBasename": "web-service",
-    "prefix": "WebService",
-    "shapeId": "web-service"
+    "prefix": "WebService"
   },
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "required": ["port", "scale"],
+    "required": ["image", "port", "scale"],
     "additionalProperties": true,
     "properties": {
       "image": {
@@ -30,6 +29,7 @@
       "scale": {
         "type": "object",
         "required": ["min", "max"],
+        "additionalProperties": false,
         "description": "Replica bounds. `min: 0` requests scale-to-zero when the chosen provider supports it.",
         "properties": {
           "min": { "type": "integer", "minimum": 0 },
@@ -48,6 +48,7 @@
       },
       "resources": {
         "type": "object",
+        "additionalProperties": false,
         "description": "Provider-portable CPU / memory hints.",
         "properties": {
           "cpu": { "type": "string", "minLength": 1 },

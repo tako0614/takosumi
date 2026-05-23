@@ -20,7 +20,7 @@ Deno.test("manifestToProofFixture maps bundled manifests to runtime desired stat
   assert.equal(fixture.desiredState.routes.length, 1);
   assert.deepEqual(fixture.expectedDescriptors, [
     "object-store@v1:aws-s3:artifacts",
-    "database-postgres@v1:aws-rds:db",
+    "postgres@v1:aws-rds:db",
     "web-service@v1:aws-fargate:web",
     "custom-domain@v1:route53:primary",
   ]);

@@ -8,7 +8,7 @@ export type PackageKind =
   | "output-contract-package"
   | "native-schema"
   | "capability-profile";
-export type TrustLevel = "official" | "verified" | "local" | "untrusted";
+export type TrustLevel = "reference" | "verified" | "local" | "untrusted";
 export type TrustStatus = "active" | "revoked" | "superseded";
 export type ConformanceTier = "unknown" | "declared" | "tested" | "certified";
 

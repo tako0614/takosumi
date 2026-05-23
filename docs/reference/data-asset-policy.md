@@ -1,4 +1,4 @@
-# DataAsset ポリシー {#dataasset-policy}
+# Operator DataAsset Extension Policy {#dataasset-policy}
 
 > このページでわかること: DataAsset のアクセスポリシーとライフサイクル。
 
@@ -83,11 +83,10 @@ Failure mode:
 DataAsset metadata `kind` は operator-owned open metadata です。各 connector は
 受け付けるものを宣言します。例:
 
-- OCI-backed web-service connectors: `oci-image`
-- Cloudflare Workers / Deno Deploy worker connector: `acceptedArtifactKinds: []`
-  and `preparedSource` + `spec.entrypoint`
-- Operator-installed custom connectors: 明示的に宣言した registered or custom
-  metadata kind
+- DataAsset-backed custom connectors: explicitly registered operator-owned
+  metadata kinds
+- Source-backed worker / web-service connectors: `acceptedArtifactKinds: []` and
+  `preparedSource` + kind-specific `spec`
 
 runtime-agent は connector コードが動く前に mismatch を reject する。reference
 component kind レベルの validation はより厳しいことがある。takosumi.com
@@ -111,17 +110,18 @@ DataAsset extension を有効化した operator のコントロール:
 
 - `TAKOSUMI_ARTIFACT_MAX_BYTES`: global upload cap
 - `registerArtifactKind(..., { allowOverride })`: operator-controlled bootstrap
-  / plugin loading 時の discovery metadata と optional per-kind size 登録
+  / implementation loading 時の discovery metadata と optional per-kind size
+  登録
 - `takosumi artifact kinds`: read-only discovery for operator metadata
 - `takosumi artifact gc`: unreferenced blob の mark-and-sweep cleanup
 
 policy reload command や transform 承認 workflow を追加する場合は、 対応する
-docs/spec と CLI surface を一緒に更新する。
+対応する reference docs と CLI surface を一緒に更新する。
 
 ## 関連ページ
 
-- [Data Assets](./kind-registry.md#data-assets)
-- [Connector Contract](./connector-contract.md)
+- [Data Assets](./kind-registry.md#source-files-and-data-assets)
+- [Connector Guide](./connector-contract.md)
 - [Kernel HTTP API](./kernel-http-api.md)
 - [Environment Variables](./env-vars.md)
 - [Audit Events](./audit-events.md)

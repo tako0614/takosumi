@@ -78,6 +78,6 @@ troubleshooting.
 - [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)
 
 > The `@takos/` JSR scope is the reference Takosumi distribution published by
-> Takos; the contract is the authority, and alternative publishers (e.g.,
-> `@example/takosumi-cli`) are spec-permitted — currently untested, with no
-> architectural privilege.
+> Takos. The contract is the authority. Alternative publishers such as
+> `@example/takosumi-cli` can ship compatible CLI implementations; current
+> verification covers the reference distribution.

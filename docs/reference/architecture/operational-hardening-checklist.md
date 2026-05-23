@@ -34,7 +34,7 @@ tests / release evidence で確認します。
 - Deployment destroy handles Takosumi-managed objects according to lifecycle
   policy.
 - Production serializes critical mutations, Space export sharing, and kind alias
-  / descriptor / plugin set updates.
+  / descriptor / implementation binding set updates.
 
 ## Component kind resolution {#component-kind-resolution}
 
@@ -44,7 +44,7 @@ tests / release evidence で確認します。
 - Short kind aliases are operator-injected and fail closed when unresolved.
 - Descriptor documents and kind-specific input schemas are resolved and recorded
   before runtime use.
-- Provider targets come from the operator plugin set.
+- Provider targets come from the operator implementation binding set.
 
 ## Namespace export {#namespace-exports}
 

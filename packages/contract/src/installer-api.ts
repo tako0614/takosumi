@@ -176,14 +176,10 @@ export interface Deployment {
 }
 
 export interface DeploymentOutputs {
-  readonly resources?: readonly DeploymentResource[];
-}
-
-export interface DeploymentResource {
-  readonly component: string;
-  readonly kind: string;
-  readonly provider: string;
-  readonly providerResourceId: string;
+  readonly components?: Readonly<
+    Record<string, Readonly<Record<string, string>>>
+  >;
+  readonly [key: string]: unknown;
 }
 
 // ──────────────────────────────────────────────

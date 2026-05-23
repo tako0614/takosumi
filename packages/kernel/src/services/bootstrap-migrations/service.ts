@@ -56,7 +56,7 @@ export class BootstrapMigrationService {
       dryRun,
       storageBackend: "plugin",
       skipped: true,
-      skipReason: "plugin-owned",
+      skipReason: "adapter-owned",
       diagnostics,
       bootstrap,
       runtimeConfig,

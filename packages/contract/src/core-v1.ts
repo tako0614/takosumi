@@ -1,9 +1,14 @@
-// Takosumi Deploy Core Contract — TypeScript canonical types.
+// Takosumi deploy-core compatibility projection.
 //
-// Canonical spec: /docs/core/01-core-contract-v1.0.md.
+// This file is not the current AppSpec / Installer API contract. It is kept as
+// an internal deploy-domain DTO set for older core-planning code and historical
+// docs. New code should import AppSpec / Installer API DTOs from their explicit
+// subpaths and implement materializers through KernelPlugin.
+//
+// Historical spec: /docs/core/01-core-contract-v1.0.md.
 // Core is organized around three records:
 //   - Deployment            (input + resolution + desired state + status)
-//   - ProviderObservation   (observed provider state, never canonical)
+//   - ProviderObservation   (observed provider state, never authoritative)
 //   - GroupHead             (space/group-scoped pointer to the current Deployment)
 // Every other deploy meta-record is collapsed onto a field of `Deployment`,
 // or onto one of the other two records.
@@ -191,7 +196,7 @@ export interface CorePolicySpec {
 export interface CoreComponentSpec {
   contracts: Record<string, CoreContractInstanceSpec>;
   /**
-   * Canonical authoring surface for explicitly requesting that a typed source
+   * Legacy authoring surface for explicitly requesting that a typed source
    * field be injected into a component.
    */
   bindings?: Record<string, CoreComponentBindingSpec>;
@@ -222,7 +227,7 @@ export interface CoreInjectionTarget {
 }
 
 /**
- * Component-level binding declaration — the canonical authoring shape for
+ * Component-level binding declaration — the legacy authoring shape for
  * explicitly requesting that a selected source field be injected into a
  * component. Compiles to a CoreBindingDeclaration.
  */
@@ -373,7 +378,7 @@ export interface CoreResourceAccessPath {
 }
 
 // ---------------------------------------------------------------------------
-// 13. Deployment record (the canonical core record)
+// 13. Deployment record (legacy deploy-core record)
 // ---------------------------------------------------------------------------
 
 export type DeploymentStatus =
@@ -627,7 +632,7 @@ export interface Deployment {
 }
 
 // ---------------------------------------------------------------------------
-// 14. ProviderObservation (observed-side stream, never canonical)
+// 14. ProviderObservation (observed-side stream, never authoritative)
 // ---------------------------------------------------------------------------
 
 export type ProviderObservationState =
@@ -751,7 +756,7 @@ export interface CoreOutputDeclaration {
   /** `output:<group>/<name>` */
   address: ObjectAddress;
   producerGroupId: string;
-  /** Canonical id of the Output contract (e.g. output.mcp-server@v1). */
+  /** Output contract id (e.g. output.mcp-server@v1). */
   contract: DescriptorId;
   /** Descriptor-defined source projection, e.g. exposure / path / lookup. */
   source: unknown;
@@ -770,7 +775,7 @@ export type CoreOutputValueType =
 export interface CoreOutputValue {
   valueType: CoreOutputValueType;
   sensitivity: CoreSensitivity;
-  /** Public-by-value payload; absent for secret / credential outputs. */
+  /** Plain by-value payload; absent for secret / credential outputs. */
   value?: unknown;
   /**
    * Address of the secret material backing this output. Required when
@@ -830,7 +835,7 @@ export type CoreBindingSourceRef =
   };
 
 /**
- * Consumer-side explicit injection request — the canonical Core record for
+ * Consumer-side explicit injection request — the legacy Core record for
  * "this component requests source field X be injected into target Y".
  *
  * Binding does not imply raw env. Raw env injection of secret / credential
@@ -882,7 +887,7 @@ export interface CoreBindingResolution {
  * a new BindingSetRevision is produced for a rebind plan.
  *
  * - `inputs` carries the per-binding {@link CoreBindingResolutionInput} surface.
- * - `bindingDeclarations` records the canonical declared shape per binding.
+ * - `bindingDeclarations` records the declared legacy shape per binding.
  * - `bindingResolutions` records the resolved + authorized binding state.
  * - `bindingValueResolutions` retains value-level resolution (secret version
  *   etc.) and remains the per-value snapshot.

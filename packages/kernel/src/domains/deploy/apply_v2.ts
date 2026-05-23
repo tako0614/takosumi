@@ -166,7 +166,7 @@ export interface DestroyV2Options {
    * pass the actual provider handle to `provider.destroy`. Without it,
    * `destroyV2` falls back to the resource name as the handle, which
    * matches the convention used by in-memory / filesystem providers in
-   * the bundled plugin set.
+   * the bundled adapter set.
    */
   readonly handleFor?: (resource: ManifestResource) => ResourceHandle;
 }
@@ -466,7 +466,7 @@ async function rollback(
  * that `provider.apply` returned at deploy time. `destroyV2` therefore relies
  * on `handleFor(resource)` to map a resource back to its handle. The default
  * handle is the resource name, which matches the in-memory and filesystem
- * provider conventions used by the bundled plugin set; production callers
+ * provider conventions used by the bundled adapter set; production callers
  * that persist deployment state should pass an explicit `handleFor` that
  * looks up the prior apply outputs.
  */

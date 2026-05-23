@@ -111,7 +111,7 @@ Deno.test("acceptance P1: revoked registry trust degrades group and blocks secur
     packageKind: descriptor.kind,
     packageRef: descriptor.ref,
     packageDigest: descriptor.digest,
-    trustLevel: "official",
+    trustLevel: "reference",
     status: "revoked",
     conformanceTier: "tested",
     verifiedBy: "takos",

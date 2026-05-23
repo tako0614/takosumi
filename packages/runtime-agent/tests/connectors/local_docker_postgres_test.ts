@@ -66,7 +66,7 @@ Deno.test("LocalDockerPostgresConnector.apply runs `docker run postgres:<version
     passwordGenerator: () => "fixed-pass",
   });
   const res = await connector.apply({
-    shape: "database-postgres@v1",
+    shape: "postgres@v1",
     provider: "@takos/selfhost-postgres",
     resourceName: "rs",
     spec: { version: "16" },
@@ -96,7 +96,7 @@ Deno.test("LocalDockerPostgresConnector.apply retries on port-allocation collisi
     passwordGenerator: () => "fixed-pass",
   });
   const res = await connector.apply({
-    shape: "database-postgres@v1",
+    shape: "postgres@v1",
     provider: "@takos/selfhost-postgres",
     resourceName: "rs",
     spec: { version: "16" },
@@ -118,7 +118,7 @@ Deno.test("LocalDockerPostgresConnector.apply throws on non-port docker errors w
   await assert.rejects(
     () =>
       connector.apply({
-        shape: "database-postgres@v1",
+        shape: "postgres@v1",
         provider: "@takos/selfhost-postgres",
         resourceName: "rs",
         spec: { version: "16" },
@@ -149,7 +149,7 @@ Deno.test("LocalDockerPostgresConnector.describe queries `docker inspect` and re
   ]);
   const connector = new LocalDockerPostgresConnector({ command });
   const res = await connector.describe({
-    shape: "database-postgres@v1",
+    shape: "postgres@v1",
     provider: "@takos/selfhost-postgres",
     handle: "pg-app-abc123",
   }, {});
@@ -172,7 +172,7 @@ Deno.test("LocalDockerPostgresConnector.describe returns missing when docker ins
   ]);
   const connector = new LocalDockerPostgresConnector({ command });
   const res = await connector.describe({
-    shape: "database-postgres@v1",
+    shape: "postgres@v1",
     provider: "@takos/selfhost-postgres",
     handle: "pg-app-missing",
   }, {});
@@ -188,7 +188,7 @@ Deno.test("LocalDockerPostgresConnector.describe survives without prior apply (r
   const { command } = makeMockCommand([{ code: 0, stdout: inspectJson }]);
   const connector = new LocalDockerPostgresConnector({ command });
   const res = await connector.describe({
-    shape: "database-postgres@v1",
+    shape: "postgres@v1",
     provider: "@takos/selfhost-postgres",
     handle: "pg-app-fromdisk",
   }, {});
@@ -196,6 +196,6 @@ Deno.test("LocalDockerPostgresConnector.describe survives without prior apply (r
   assert.equal(res.outputs?.port, 15999);
   assert.equal(
     res.outputs?.passwordSecretRef,
-    "secret://selfhosted/database-postgres/pg-app-fromdisk/password",
+    "secret://selfhosted/postgres/pg-app-fromdisk/password",
   );
 });

@@ -71,7 +71,7 @@ export function createAwsRdsProvider(
   return {
     id: "@takos/aws-rds",
     version: "1.0.0",
-    implements: { id: "database-postgres", version: "v1" },
+    implements: { id: "postgres", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
       const instanceId = `pg-${dbName}-${randomId()}`;

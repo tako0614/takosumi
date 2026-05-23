@@ -1,7 +1,7 @@
 # Logging Conventions
 
 > このページでわかること: Takosumi 全 process (kernel / runtime-agent / CLI /
-> in-process plugin) のログ発行 v1 contract。 行フォーマット、 必須 /
+> reference adapter) のログ発行 v1 contract。 行フォーマット、 必須 /
 > 禁止フィールド、 log-level enum、 出力 sink、 redaction、 audit との関係、
 > trace 相関、 operator 設定キーを定める。
 
@@ -36,12 +36,12 @@ kernel は process 終了を跨いでログ行を buffer しない。kernel が 
 
 Every line carries the following fields.
 
-| Field       | Type   | Notes                                                           |
-| ----------- | ------ | --------------------------------------------------------------- |
-| `ts`        | string | RFC 3339 UTC, millisecond precision (see Time / Clock Model).   |
-| `level`     | string | Closed enum: `debug`, `info`, `warn`, `error`, `fatal`.         |
-| `msg`       | string | Human-readable summary of the event. Imperative, present tense. |
-| `subsystem` | string | Closed enum: `kernel`, `runtime-agent`, `cli`, `plugin`.        |
+| Field       | Type   | Notes                                                                                                       |
+| ----------- | ------ | ----------------------------------------------------------------------------------------------------------- |
+| `ts`        | string | RFC 3339 UTC, millisecond precision (see Time / Clock Model).                                               |
+| `level`     | string | Closed enum: `debug`, `info`, `warn`, `error`, `fatal`.                                                     |
+| `msg`       | string | Human-readable summary of the event. Imperative, present tense.                                             |
+| `subsystem` | string | Closed enum: `kernel`, `runtime-agent`, `cli`, `plugin`. `plugin` is the reference adapter subsystem value. |
 
 In addition, lines carry **at least one** of the following correlation fields
 whenever the line is associated with an operation:
@@ -166,8 +166,8 @@ runtime-agent も同じ環境変数を読み、`subsystem: runtime-agent` を発
 - **cli** — every line carries `command` (the dotted CLI command path, e.g.
   `deploy.run`, `audit.verify`) and `argvDigest` (a digest of the post-redaction
   argument vector, never the raw argv).
-- **plugin** — every line emitted by operator-attached plugin code carries
-  `pluginId` and, when relevant, the resolved kind URI / connector id.
+- **plugin** — every line emitted by operator-attached reference adapter code
+  carries `pluginId` and, when relevant, the resolved kind URI / connector id.
 
 これらのフィールドは付加的: HTTP `requestId` を既に持つ行も、kernel から発行
 される際は `route` と `status` を持つ。

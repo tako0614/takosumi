@@ -2,10 +2,10 @@
 // Run `deno task spec:generate-ts` to refresh.
 
 export interface WorkerSpec {
-  /** Cloudflare Workers compatibility date (e.g. `2025-01-01`). */
-  readonly compatibilityDate: string;
   /** Source-root-relative worker module path inside the prepared source snapshot. */
   readonly entrypoint: string;
+  /** Optional provider compatibility date for runtimes that use one (for example Cloudflare Workers). */
+  readonly compatibilityDate?: string;
   /** Optional compatibility flags (e.g. `nodejs_compat`). */
   readonly compatibilityFlags?: readonly string[];
   /** Optional env vars / bindings. */
@@ -18,7 +18,7 @@ export interface WorkerOutputs {
   readonly url: string;
   /** Provider-scope worker identifier. */
   readonly id: string;
-  /** Current deployed bundle version. */
+  /** Current deployed worker version. */
   readonly version?: string;
 }
 
@@ -56,6 +56,8 @@ export const WORKER_LISTENS_FROM: readonly WorkerListensFrom[] = [
 ];
 
 export const WORKER_KIND_ID = "worker";
+export const WORKER_KIND_NAME = "worker";
+export const WORKER_KIND_URI = "https://takosumi.com/kinds/v1/worker";
 export const WORKER_KIND_VERSION = "v1";
 export const WORKER_DESCRIPTION =
   "Serverless JS function whose entrypoint is read from the prepared source snapshot.";

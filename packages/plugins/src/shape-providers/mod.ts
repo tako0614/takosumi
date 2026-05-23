@@ -1,7 +1,7 @@
 /**
  * Shape-provider package entry point.
  *
- * The production-grade plugin set is built by
+ * The production-grade adapter set is built by
  * `createTakosumiProductionProviders` — every plugin posts lifecycle
  * envelopes to a runtime-agent (see `_runtime_agent_lifecycle.ts`). The
  * in-memory variant lives here too for end-to-end tests
@@ -120,7 +120,7 @@ function asGenericProvider<S, O, C extends string>(
 }
 
 /**
- * Build the full set of in-memory shape-provider plugins. Used by tests and
+ * Build the full set of in-memory shape-provider adapters. Used by tests and
  * by the CLI's local-runner mode where deploys execute in-process without
  * cloud credentials.
  */

@@ -24,7 +24,7 @@ const SAMPLE_SPECS: Record<string, JsonObject> = {
     port: 8080,
     scale: { min: 1, max: 1 },
   },
-  "database-postgres@v1": { version: "16", size: "small" },
+  "postgres@v1": { version: "16", size: "small" },
   "custom-domain@v1": {
     name: "api.example.com",
     target: "https://internal.example.com",
@@ -86,8 +86,8 @@ Deno.test("bundled provider set covers all 5 shapes", () => {
     Array.from(shapeIds).sort(),
     [
       "custom-domain",
-      "database-postgres",
       "object-store",
+      "postgres",
       "web-service",
       "worker",
     ],

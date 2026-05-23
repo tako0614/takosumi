@@ -1,9 +1,9 @@
 {
   "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/contracts/artifact/js-bundle/v1",
-  "@type": "ArtifactContractDescriptor",
-  "shortRef": "artifact.js-bundle@v1",
-  "domain": "artifact",
+  "@id": "https://takosumi.com/contracts/source/js-module/v1",
+  "@type": "SourceInputDescriptor",
+  "shortRef": "source.js-module@v1",
+  "domain": "source",
   "lifecycleDomain": "revisioned-runtime",
   "changeEffect": "app-release",
   "configSchema": {
@@ -17,7 +17,7 @@
       "entrypoint": {
         "type": "string"
       },
-      "artifactDigest": {
+      "sourceDigest": {
         "type": "string"
       }
     }

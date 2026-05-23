@@ -186,14 +186,24 @@ function buildCoreComponent(
     lifecycleDomain: "runtime",
   });
   const instances: CoreContractInstance[] = [runtime];
+  if (usesSourceJsModule(component)) {
+    instances.push(contractInstanceFor({
+      componentName: component.name,
+      localName: "source",
+      descriptorRef: "source.js-module@v1",
+      closure,
+      config: sourceJsModuleConfigFor(component),
+      lifecycleDomain: "source",
+    }));
+  }
   if (component.image) {
     instances.push(contractInstanceFor({
       componentName: component.name,
-      localName: "artifact",
-      descriptorRef: "artifact.oci-image@v1",
+      localName: "runtime-input",
+      descriptorRef: "runtime-input.oci-image@v1",
       closure,
-      config: { image: component.image },
-      lifecycleDomain: "artifact",
+      config: runtimeInputOciImageConfigFor(component.image),
+      lifecycleDomain: "runtime-input",
     }));
   }
   for (const route of routes.filter((route) => route.to === component.name)) {
@@ -242,6 +252,30 @@ function contractInstanceFor(input: {
     configDigest: digestOf(input.config),
     lifecycleDomain: input.lifecycleDomain,
   };
+}
+
+function usesSourceJsModule(component: AppSpecComponent): boolean {
+  return component.type === "runtime.js-worker@v1" && !component.image;
+}
+
+function sourceJsModuleConfigFor(component: AppSpecComponent): JsonObject {
+  return {
+    bundleFormat: "esm",
+    ...(component.entrypoint ? { entrypoint: component.entrypoint } : {}),
+  };
+}
+
+function runtimeInputOciImageConfigFor(image: string): JsonObject {
+  const digest = ociImageDigest(image);
+  return {
+    image,
+    ...(digest ? { digest } : {}),
+  };
+}
+
+function ociImageDigest(image: string): string | undefined {
+  const match = /@([A-Za-z][A-Za-z0-9_+.-]*:[0-9A-Fa-f]+)$/.exec(image);
+  return match?.[1];
 }
 
 function routeInterfaceLocalName(route: AppSpecRoute): string {

@@ -10,23 +10,18 @@ const sidebar: DefaultTheme.SidebarMulti = {
         { text: "コンセプト", link: "/getting-started/concepts" },
         { text: "AppSpec (.takosumi.yml)", link: "/reference/app-spec" },
         {
-          text: "BuildSpec (.takosumi.build.yml)",
+          text: "Build service handoff",
           link: "/reference/build-spec",
         },
       ],
     },
     {
-      text: "契約リファレンス",
+      text: "公開契約",
       items: [
         { text: "リファレンス索引", link: "/reference/" },
         { text: "AppSpec", link: "/reference/app-spec" },
-        { text: "BuildSpec", link: "/reference/build-spec" },
         { text: "Installer API", link: "/reference/installer-api" },
-        { text: "Kernel HTTP API", link: "/reference/kernel-http-api" },
-        { text: "Runtime-Agent API", link: "/reference/runtime-agent-api" },
         { text: "CLI", link: "/reference/cli" },
-        { text: "Provider plugin", link: "/reference/providers" },
-        { text: "Reference descriptors", link: "/reference/kind-registry" },
         { text: "環境変数", link: "/reference/env-vars" },
         { text: "用語集", link: "/reference/glossary" },
       ],
@@ -36,6 +31,7 @@ const sidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "運用概要", link: "/operator/" },
         { text: "Bootstrap", link: "/operator/bootstrap" },
+        { text: "Build service handoff", link: "/reference/build-spec" },
         { text: "セルフホスト運用", link: "/operator/self-host" },
         { text: "runtime-agent 分離", link: "/operator/runtime-agent" },
         { text: "バージョン整合", link: "/operator/upgrade" },
@@ -111,7 +107,7 @@ const sidebar: DefaultTheme.SidebarMulti = {
           link: "/reference/architecture/operator-boundaries",
         },
         {
-          text: "External descriptor intake",
+          text: "External catalog intake",
           link: "/reference/architecture/external-descriptor-registry-model",
         },
         {
@@ -128,7 +124,11 @@ const sidebar: DefaultTheme.SidebarMulti = {
       text: "高度な参照",
       collapsed: true,
       items: [
+        { text: "Provider implementations", link: "/reference/providers" },
         { text: "Provider packages", link: "/reference/provider-packages" },
+        { text: "Reference kind examples", link: "/reference/kind-registry" },
+        { text: "Kernel HTTP API", link: "/reference/kernel-http-api" },
+        { text: "Runtime-Agent API", link: "/reference/runtime-agent-api" },
         { text: "Lifecycle protocol", link: "/reference/lifecycle" },
         { text: "Lifecycle phases", link: "/reference/lifecycle-phases" },
         { text: "WAL stages", link: "/reference/wal-stages" },
@@ -160,9 +160,12 @@ const sidebar: DefaultTheme.SidebarMulti = {
           link: "/reference/public-spec-source-map",
         },
         { text: "Namespace exports", link: "/reference/namespace-exports" },
-        { text: "Connector contract", link: "/reference/connector-contract" },
-        { text: "DataAsset policy", link: "/reference/data-asset-policy" },
-        { text: "DataAsset GC", link: "/reference/artifact-gc" },
+        { text: "Connector guide", link: "/reference/connector-contract" },
+        {
+          text: "Operator DataAsset policy",
+          link: "/reference/data-asset-policy",
+        },
+        { text: "Operator DataAsset GC", link: "/reference/artifact-gc" },
         { text: "Secret partitions", link: "/reference/secret-partitions" },
         { text: "Cross-process locks", link: "/reference/cross-process-locks" },
         {
@@ -202,8 +205,7 @@ const nav: DefaultTheme.NavItem[] = [
 
 export default defineConfig({
   title: "Takosumi",
-  description:
-    "Self-hostable PaaS toolkit — AppSpec-driven multi-cloud deploys",
+  description: "Self-hostable PaaS toolkit — AppSpec, Installation, Deployment",
   lang: "ja",
   // Served under /docs/ on takosumi.com (and takosumi.test mirror); the
   // root path serves a separate marketing landing page. Override via

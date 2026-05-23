@@ -20,7 +20,7 @@ export type { CustomDomainCapability, CustomDomainOutputs, CustomDomainSpec };
 
 /**
  * `custom-domain@v1` component kind descriptor. Materialized by a provider
- * plugin (Cloudflare / managed DNS+TLS / etc.) at apply time.
+ * adapter (Cloudflare / managed DNS+TLS / etc.) at apply time.
  *
  * Spec / outputs / capabilities are derived from
  * `packages/plugins/spec/kinds/v1/custom-domain.jsonld` via

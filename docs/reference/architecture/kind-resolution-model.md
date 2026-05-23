@@ -14,9 +14,8 @@ descriptor が表し、provider mapping と Space policy は operator distributi
 components:
   api:
     kind: worker
-    spec:
-      entrypoint: dist/worker.mjs
-      compatibilityDate: "2025-01-01"
+	    spec:
+	      entrypoint: dist/worker.mjs
 ```
 
 kind resolution は `components.<name>.kind` から始まる。short alias を使う場合は
@@ -50,10 +49,13 @@ AppSpec を受け、Installation に紐づく Deployment として resolution ev
 1. Read `components.<name>.kind`.
 2. If the value is a short alias, resolve it through operator-injected
    `kindAliases`; unresolved aliases fail before provider side effects.
-3. Select an implementation binding visible to the Space.
-4. Validate `spec` against the selected kind/provider contract.
-5. Apply Space policy and provider capability checks.
-6. Record the chosen materializer/provider evidence in Deployment output.
+3. Select the kind descriptor for the resolved URI.
+4. Validate `spec` against the selected kind descriptor input schema.
+5. Select an implementation binding visible to the Space, then apply provider
+   support, capability, and Space policy checks.
+6. Record the chosen materializer/provider evidence in the internal Deployment
+   ledger, and expose only component JSON outputs through public Deployment
+   outputs.
 ```
 
 `https://takosumi.com/kinds/v1/*` reference descriptors may be one input to this
@@ -70,7 +72,7 @@ JSON-LD / descriptor:
   identity and semantic relations
 
 Input schema:
-  shape validation for `spec`
+  component `spec` validation
 
 Policy:
   allow / deny / approval

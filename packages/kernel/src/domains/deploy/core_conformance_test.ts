@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { CORE_CONDITION_REASONS } from "takosumi-contract";
 import { InMemoryProviderObservationStore } from "../runtime/mod.ts";
-import { OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS } from "./core_plan.ts";
+import { REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS } from "./core_plan.ts";
 import {
   DeploymentService,
   InMemoryDeploymentStore,
@@ -14,6 +14,8 @@ import type { PublicDeployManifest } from "./types.ts";
 
 const DEMO_IMAGE =
   "registry.example.test/demo@sha256:1111111111111111111111111111111111111111111111111111111111111111";
+const SOURCE_JS_MODULE_DESCRIPTOR_ID =
+  "https://takosumi.com/contracts/source/js-module/v1";
 
 function fixedClock(iso: string): () => Date {
   return () => new Date(iso);
@@ -64,6 +66,75 @@ function manifestWithExternalResource(
     },
     ...overrides,
   };
+}
+
+const DESCRIPTOR_REF_PATTERN =
+  /^(authoring|composite|interface|output|provider|resource|runtime|runtime-input|source)\.[A-Za-z0-9_.-]+@v\d+(?:\.\d+)?$/;
+
+function collectDescriptorRefs(
+  body: Record<string, unknown>,
+): readonly string[] {
+  const refs = new Set<string>();
+  collectExpandsToRefs(body["expandsTo"], refs);
+  collectMaterializationProfileRefs(body["materializationProfiles"], refs);
+  collectResourceContractRefs(body["resourceContracts"], refs);
+  collectResourceAccessPathRefs(body["resourceAccessPaths"], refs);
+  return [...refs].sort();
+}
+
+function collectExpandsToRefs(value: unknown, refs: Set<string>): void {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    if (typeof item === "string") {
+      addDescriptorRef(item, refs);
+      continue;
+    }
+    if (isRecord(item)) addDescriptorRef(item.ref, refs);
+  }
+}
+
+function collectMaterializationProfileRefs(
+  value: unknown,
+  refs: Set<string>,
+): void {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    if (!isRecord(item) || !isRecord(item.contracts)) continue;
+    for (const contractRef of Object.values(item.contracts)) {
+      if (Array.isArray(contractRef)) {
+        for (const ref of contractRef) addDescriptorRef(ref, refs);
+      } else {
+        addDescriptorRef(contractRef, refs);
+      }
+    }
+  }
+}
+
+function collectResourceContractRefs(value: unknown, refs: Set<string>): void {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    if (isRecord(item)) addDescriptorRef(item.contract, refs);
+  }
+}
+
+function collectResourceAccessPathRefs(
+  value: unknown,
+  refs: Set<string>,
+): void {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    if (isRecord(item)) addDescriptorRef(item.resourceContract, refs);
+  }
+}
+
+function addDescriptorRef(value: unknown, refs: Set<string>): void {
+  if (typeof value === "string" && DESCRIPTOR_REF_PATTERN.test(value)) {
+    refs.add(value);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 Deno.test("core conformance: resolveDeployment pins descriptor closure and resolved graph", async () => {
@@ -118,20 +189,75 @@ Deno.test("core conformance: descriptor closure uses docs JSON-LD body digests",
   }
 });
 
-Deno.test("core conformance: artifact descriptors use current bundled kind names", () => {
+Deno.test("core conformance: source/runtime-input descriptors use current bundled kind names", () => {
   const aliases = new Set(
-    OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS.map((record) => record.alias),
+    REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS.map((record) => record.alias),
   );
-  assert.equal(aliases.has("artifact.js-bundle@v1"), true);
-  assert.equal(aliases.has("artifact.js-module@v1"), false);
+  assert.equal(aliases.has("source.js-module@v1"), true);
+  assert.equal(aliases.has("runtime-input.oci-image@v1"), true);
 
-  const workers = OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS.find((record) =>
+  const workers = REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS.find((record) =>
     record.alias === "provider.cloudflare.workers@v1"
   );
   assert.ok(workers);
   const body = JSON.stringify(workers.body);
-  assert.match(body, /artifact\.js-bundle@v1/);
-  assert.doesNotMatch(body, /artifact\.js-module@v1/);
+  assert.match(body, /source\.js-module@v1/);
+});
+
+Deno.test("core conformance: reference descriptor refs resolve in-tree", () => {
+  const knownRefs = new Set<string>();
+  for (const record of REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS) {
+    knownRefs.add(record.alias);
+    knownRefs.add(record.id);
+  }
+
+  for (const record of REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS) {
+    for (const ref of collectDescriptorRefs(record.body)) {
+      assert.equal(
+        knownRefs.has(ref),
+        true,
+        `${record.alias} references missing descriptor ${ref}`,
+      );
+    }
+  }
+});
+
+Deno.test("core conformance: source-backed worker pins source descriptor in closure and graph", async () => {
+  const store = new InMemoryDeploymentStore();
+  const service = new DeploymentService({
+    store,
+    idFactory: () => "deployment_source_worker_1",
+    clock: fixedClock("2026-04-27T00:00:00.000Z"),
+  });
+
+  const resolved = await service.resolveDeployment({
+    spaceId: "space_conformance",
+    manifest: {
+      name: "source-worker",
+      compute: {
+        worker: {
+          type: "js-worker",
+          entrypoint: "src/worker.ts",
+        },
+      },
+    },
+  });
+
+  const aliases = new Set(
+    resolved.resolution.descriptor_closure.resolutions.map((resolution) =>
+      resolution.alias ?? resolution.id
+    ),
+  );
+  assert.equal(aliases.has("source.js-module@v1"), true);
+
+  const component = resolved.resolution.resolved_graph.components.find(
+    (entry) => entry.address === "component:worker",
+  );
+  const sourceInstance = component?.contractInstances.find((instance) =>
+    instance.localName === "source"
+  );
+  assert.ok(sourceInstance);
+  assert.equal(sourceInstance.descriptorId, SOURCE_JS_MODULE_DESCRIPTOR_ID);
 });
 
 Deno.test("core conformance: public shorthand expansion is descriptor-traced", async () => {
@@ -487,7 +613,7 @@ Deno.test("core conformance: unsupported runtime type is rejected at resolution 
 Deno.test("core conformance: provider capabilities reject unsupported runtime capability requirements", async () => {
   // Phase 17D — provider capability rejection. The compiler accepts the
   // `runtimeCapabilities` requirement, but the resolved-graph's runtime
-  // claim projection carries the capability list. A live provider plugin
+  // claim projection carries the capability list. A live provider adapter
   // contract translates an unsupported capability into a deny policy
   // decision at provider-selection time.
   //
@@ -1580,10 +1706,10 @@ Deno.test("core conformance: condition reasons are exposed from the catalog", ()
   }
 });
 
-// Surviving smoke test: official descriptor conformance dataset still loads.
-Deno.test("core conformance: official descriptor conformance dataset is exposed", () => {
-  assert.equal(OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS.length > 0, true);
-  for (const record of OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS) {
+// Surviving smoke test: reference descriptor conformance dataset still loads.
+Deno.test("core conformance: reference descriptor conformance dataset is exposed", () => {
+  assert.equal(REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS.length > 0, true);
+  for (const record of REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS) {
     assert.match(record.digest, /^sha256:/);
     assert.equal(typeof record.alias, "string");
     assert.equal(typeof record.documentPath, "string");

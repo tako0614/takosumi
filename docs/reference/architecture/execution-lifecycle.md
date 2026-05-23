@@ -9,7 +9,7 @@ Execution は Space scope であり、snapshot に裏付けられ、journal さ�
 ```text
 1. determine Space from actor auth / API path / operator context
 2. parse AppSpec into IntentGraph
-3. resolve component kinds through Space-visible aliases, descriptors, and plugins
+3. resolve component kinds through Space-visible aliases, descriptors, and implementation bindings
 4. resolve Space-scoped namespace exports and optional operator DataAsset extension requirements
 5. create ResolutionSnapshot
 6. create DesiredSnapshot
@@ -17,7 +17,9 @@ Execution は Space scope であり、snapshot に裏付けられ、journal さ�
 8. show summary / risk / details
 ```
 
-Preview に副作用はない。
+Preview は provider / resource / materialization side effect を持たず、
+Installation / Deployment record も作りません。audit、telemetry、rate-limit
+accounting event は emit できます。
 
 ## Apply {#apply}
 
@@ -28,7 +30,7 @@ Preview に副作用はない。
 ```text
 prepare      load immutable ResolutionSnapshot and DesiredSnapshot;
              derive OperationPlan from current ObservationSet
-pre-commit   revalidate Space membership, kind descriptor/plugin availability,
+	pre-commit   revalidate Space membership, kind descriptor / implementation binding availability,
              export freshness, approvals (including the predicted effect
              digest), optional DataAsset extension availability; raise Risks;
              fail closed on any invalidation
@@ -72,8 +74,8 @@ strict rollback:
 revalidated rollback:
   use old DesiredSnapshot; revalidate external exports, prepared source/image inputs, implementations, ingress ownership
 
-re-resolved recovery:
-  re-resolve old intent against current Space-visible kind descriptor/plugin set; not called rollback
+	re-resolved recovery:
+	  re-resolve old intent against current Space-visible kind descriptor / implementation binding set; not called rollback
 ```
 
 ## Dry materialization と approval キャリー {#dry-materialization--approval-carry}
@@ -125,5 +127,5 @@ generated credential mutation
 generated grant mutation
 namespace registry writes
 Space export sharing
-kind alias / descriptor / plugin set updates
+kind alias / descriptor / implementation binding set updates
 ```

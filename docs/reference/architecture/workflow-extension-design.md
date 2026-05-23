@@ -31,9 +31,9 @@ POST /v1/installations/{id}/deployments
 新規 install では `POST /v1/installations`、 dry-run では対応する dry-run
 endpoint を使う。 auth は `TAKOSUMI_INSTALLER_TOKEN`。
 
-## 削除されたレガシーモデル {#removed-legacy-model}
+## Current Flow Boundary {#current-flow-boundary}
 
-過去の raw deploy route、中間 AppSpec submit、retired authoring extension strip
-/ string interpolation materialization は current flow から外れている。 AppSpec
-が public source of truth で、Deployment は installer lifecycle の結果として記録
+raw deploy route、中間 AppSpec submit、retired authoring extension strip /
+string interpolation materialization は current flow から外れている。 AppSpec が
+public source of truth で、Deployment は installer lifecycle の結果として記録
 される。

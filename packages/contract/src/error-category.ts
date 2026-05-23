@@ -14,7 +14,7 @@
  *   bodies.
  *
  * Rather than hard-coding a provider-specific switch in every retry / fail-closed
- * code path, the kernel and provider plugins MUST normalise their native error
+ * code path, the kernel and provider adapters MUST normalise their native error
  * shape onto this enum. Retry policy is then expressed in terms of the
  * normalised category, not the provider dialect, so a "retry on transient"
  * rule applies uniformly across all four clouds.
@@ -24,9 +24,9 @@
  * haven't explicitly mapped; it is treated as non-retryable so unknown errors
  * fail-closed.
  *
- * Provider plugins expose a `classifyXxxError(err) → ProviderErrorCategory`
- * helper alongside their native classifier so kernel-side code that doesn't
- * know which cloud it's talking to can still take a retry decision via
+ * Provider adapters expose a `classifyXxxError(err) → ProviderErrorCategory`
+ * helper alongside their native classifier so kernel-side code that does not
+ * know which cloud it is talking to can still take a retry decision via
  * {@link isRetryableErrorCategory}.
  */
 export type ProviderErrorCategory =
@@ -82,7 +82,7 @@ export function isFailClosedErrorCategory(
 }
 
 /**
- * A normalised provider error envelope. Provider plugins SHOULD populate this
+ * A normalised provider error envelope. Provider adapters SHOULD populate this
  * shape on `Deployment.conditions[]` so the deployment service can render a
  * provider-agnostic UI without sniffing native error codes.
  */
@@ -103,22 +103,22 @@ export interface NormalisedProviderError {
 
 /**
  * Phase 18.2 / H6 — Provider-agnostic classifier registry. Each provider
- * plugin registers its `classifyXxxErrorAsProviderCategory` adapter under its
- * canonical provider name (`aws` / `gcp` / `k8s` / `cloudflare`). Kernel-side
+ * adapter registers its `classifyXxxErrorAsProviderCategory` adapter under its
+ * provider key (`aws` / `gcp` / `k8s` / `cloudflare`). Kernel-side
  * code that holds an error + a provider name (e.g. an apply orchestrator
- * routing operations through multiple plugins) can then call
+ * routing operations through multiple adapters) can then call
  * {@link normalizeProviderError} once, without sniffing error shapes.
  *
- * The registry is mutated at plugin-load time and read by {@link
+ * The registry is mutated at adapter-load time and read by {@link
  * normalizeProviderError}; no runtime mutation is expected after the kernel
- * has finished loading plugins. Callers that want a snapshot should copy the
+ * has finished loading adapters. Callers that want a snapshot should copy the
  * result of {@link listRegisteredProviders}.
  */
 type Classifier = (error: unknown) => ProviderErrorCategory;
 const CLASSIFIER_REGISTRY = new Map<string, Classifier>();
 
 /**
- * Register a provider error classifier under a canonical provider name.
+ * Register a provider error classifier under a provider key.
  * Idempotent: re-registering with the same name overwrites the previous
  * entry (used by tests that swap stubs in/out).
  */
@@ -142,7 +142,7 @@ export function listRegisteredProviders(): readonly string[] {
  * non-retryable).
  *
  * This is the single entry point that kernel code SHOULD use; provider
- * plugins continue to expose their native classifier for tests / debugging.
+ * adapters continue to expose their native classifier for tests / debugging.
  */
 export function normalizeProviderError(
   error: unknown,

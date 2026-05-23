@@ -110,7 +110,7 @@ function buildRecordingPlugin(opts: {
       });
       opts.events.push(`apply:${opts.name}:${ctx.componentName}`);
       return Promise.resolve({
-        providerResourceId:
+        resourceHandle:
           `${opts.name}://${ctx.installationId}/${ctx.componentName}`,
         outputs: opts.outputs ?? {},
       });
@@ -221,7 +221,21 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with pub/
       dryRun.manifestDigest,
     );
     assertEquals(apply.deployment.status, "succeeded");
-    assertEquals(apply.deployment.outputs.resources?.length, 2);
+    assertEquals(Object.keys(apply.deployment.outputs.components ?? {}), [
+      "db",
+      "web",
+    ]);
+    assertEquals(
+      apply.deployment.outputs.components?.db,
+      {
+        host: "db.local",
+        port: "5432",
+        database: "notes",
+        username: "notes",
+        passwordSecretRef: "secret://db-password",
+        connectionString: "postgres://notes:***@db.local:5432/notes",
+      },
+    );
 
     // Topology: db (publisher) → web (listener via auto-namespace).
     assertEquals(applies.length, 2);
@@ -512,9 +526,8 @@ function assertDeployment(
   assertEquals(deployment.manifestDigest, manifestDigest);
   assert(typeof deployment.createdAt === "number");
   assert(
-    deployment.outputs.resources?.every((resource) =>
-      typeof resource.kind === "string" && resource.kind.length > 0
-    ),
+    deployment.outputs.components === undefined ||
+      typeof deployment.outputs.components === "object",
   );
   // Silence unused-import warning by referencing Component.
   const _component: Component | undefined = undefined;

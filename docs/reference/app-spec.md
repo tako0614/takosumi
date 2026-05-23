@@ -3,7 +3,7 @@
 AppSpec は Takosumi が読む source root の 1 ファイルです。Takosumi は AppSpec
 を検証し、Space に Installation を作り、apply ごとに Deployment を記録します。
 
-## Root shape
+## Root Fields
 
 AppSpec root は 3 field だけです。
 
@@ -26,7 +26,7 @@ components:
 | `metadata`   | yes      | AppSpec 自体の id / name / labels。             |
 | `components` | yes      | runtime / resource / connection intent の map。 |
 
-unknown root field は reject されます。root に `kind:` は書きません。
+root field はこの 3 つです。component type は各 component の `kind` に書きます。
 
 ## `metadata`
 
@@ -52,14 +52,14 @@ component は名前付き map entry です。各 component が使える公開 fi
 | `listen`  | no       | namespace path から material を受け取る。                              |
 
 `kind` は operator が解決する component type です。`worker`、`web-service`、
-`postgres`、`object-store`、`custom-domain` は takosumi.com reference
-descriptors が提供する common alias で、operator の alias map により URI へ
-解決されます。
+`postgres`、`object-store`、`custom-domain` などの alias は operator の alias
+map により URI へ解決されます。takosumi.com の例は
+[Reference Kind Examples](./kind-registry.md) にまとめています。
 
 `spec` の中身は selected kind / materializer の convention です。
 
-source を build / prepare する手順は [BuildSpec](./build-spec.md) と build
-service に書きます。
+source を build / prepare する手順は operator build service 側の handoff
+convention に置きます。例は [Build service handoff](./build-spec.md) を参照。
 
 AppSpec には apply できる intent だけを書きます。
 
@@ -74,12 +74,10 @@ components:
     kind: worker
     spec:
       entrypoint: dist/worker.mjs
-      compatibilityDate: "2025-01-01"
 ```
 
-`spec.entrypoint` は takosumi.com reference worker descriptor の convention
-です。selected worker materializer が prepared source snapshot 内の path として
-読みます。
+`spec.entrypoint` は worker kind convention の例です。selected worker
+implementation が prepared source snapshot 内の path として読みます。
 
 build が必要な場合、build service は先に source tree を準備し、prepared source
 snapshot として Installer API に渡します。AppSpec 側には build 後 snapshot 内で
@@ -101,7 +99,7 @@ components:
 ```
 
 string list の `publish` は component の default output を namespace path に
-bind します。named output や複数 output の shape は kind-specific `spec` または
+bind します。named output や複数 output は kind-specific `spec` または
 materializer convention が定義します。consumer は path を直接参照せず、`listen`
 で受け取ります。
 
@@ -129,19 +127,19 @@ convention から解決されます。AppSpec author が指定できる distribu
 `publish` / `listen` が作る依存 graph に cycle がある場合、Installation 作成や
 Deployment apply は fail-closed で失敗します。
 
-## 書かないもの
+## 周辺情報の置き場所
 
-AppSpec は small contract です。次の情報は AppSpec に書きません。
+AppSpec は apply intent に集中します。周辺情報は次の surface で渡します。
 
-| 書かないもの                      | 置き場所                                                                 |
-| --------------------------------- | ------------------------------------------------------------------------ |
-| Space / organization / actor      | Installer API / token claims / operator-owned context                    |
-| Git URL / source pin              | Installer API / CLI input / Deployment record                            |
-| provider credential               | operator config / runtime-agent host                                     |
-| implementation selection          | operator bootstrap / reference `createPaaSApp({ kindAliases, plugins })` |
-| build recipe / container command  | BuildSpec / build service / CI                                           |
-| billing / OIDC issuer / signup UI | operator-owned external surface                                          |
-| workflow / schedule / webhook     | upstream automation that submits AppSpec source                          |
+| 情報                              | Surface                                            |
+| --------------------------------- | -------------------------------------------------- |
+| Space / organization / actor      | Installer API / token claims / operator context    |
+| Git URL / source pin              | Installer API / CLI input / Deployment record      |
+| provider credential               | operator config / runtime-agent host               |
+| implementation selection          | operator bootstrap / implementation binding config |
+| build recipe / container command  | operator build service / CI                        |
+| billing / OIDC issuer / signup UI | operator account-plane                             |
+| workflow / schedule / webhook     | automation that submits source to Installer API    |
 
 current AppSpec は `apiVersion`、`metadata`、`components` を root field とし、
 component connection は `publish` / `listen` で表現します。
@@ -180,13 +178,12 @@ components:
         prefix: ASSETS
     spec:
       entrypoint: dist/worker.mjs
-      compatibilityDate: "2025-01-01"
 ```
 
 ## 次に読む
 
 - [Installer API](./installer-api.md)
-- [BuildSpec](./build-spec.md)
+- [Build service handoff](./build-spec.md)
 - [Provider Implementations](./providers.md)
-- [Reference Kind Descriptors](./kind-registry.md)
+- [Reference Kind Examples](./kind-registry.md)
 - [Runtime-Agent API](./runtime-agent-api.md)

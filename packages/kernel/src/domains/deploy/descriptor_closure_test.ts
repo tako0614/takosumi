@@ -3,9 +3,9 @@
 // The retained closure on `Deployment.resolution.descriptor_closure` pins
 // every descriptor (alias + raw digest) the deployment was resolved against.
 // Apply re-uses the closure verbatim and never re-fetches descriptor URLs.
-// Between resolve and apply, an operator might upgrade a provider plugin
+// Between resolve and apply, an operator might upgrade a provider adapter
 // from `provider.aws.rds@v1` to `provider.aws.rds@v2` — the closure still
-// pins v1 but the live plugin now consumes v2. We MUST detect this and
+// pins v1 but the live adapter now consumes v2. We MUST detect this and
 // fail-closed at the apply preflight rather than silently apply with a
 // stale pin.
 
@@ -91,7 +91,7 @@ Deno.test("H9: closure incompatible on major version mismatch (v1 pinned, v2 liv
   const closure = buildClosure([
     { alias: "provider.aws.rds@v1", rawDigest: "sha256:aws-rds-v1" },
   ]);
-  // The live plugin upgraded to v2 between resolve and apply.
+  // The live adapter upgraded to v2 between resolve and apply.
   const live = liveMap([
     [
       "provider.aws.rds@v1",

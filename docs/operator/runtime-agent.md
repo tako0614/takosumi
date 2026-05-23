@@ -59,9 +59,9 @@ mutual TLS を通した endpoint にしてください。
 
 ## Failure mode {#failure-mode}
 
-agent が unreachable の場合、kernel は provider lifecycle を実行できないため
-Deployment は失敗します。provider 側の副作用が出る前に失敗した operation はその
-まま再試行できます。副作用後の失敗は WAL / provider observation / Deployment
+agent が unreachable の場合、kernel は operation envelope を dispatch できない
+ため Deployment は失敗します。provider 側の副作用が出る前に失敗した operation は
+そのまま再試行できます。副作用後の失敗は WAL / provider observation / Deployment
 condition を見て、同じ OperationPlan を continue するか、新しい Deployment
 として reconcile します。
 

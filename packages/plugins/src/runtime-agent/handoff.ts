@@ -1,6 +1,6 @@
 /**
  * Provider handoff bridge — converts a kernel-side {@link RuntimeAgentRegistry}
- * into the per-provider `runtimeAgentHandoff` hook shape each provider plugin
+ * into the per-provider `runtimeAgentHandoff` hook shape each provider adapter
  * (AWS / GCP / k8s) consumes.
  *
  * Provider plugins use a small `enqueue(input)` hook to push long-running

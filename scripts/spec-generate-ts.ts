@@ -19,7 +19,9 @@
  *   - `<UPPER>_CAPABILITIES` / `<UPPER>_OUTPUT_FIELDS` /
  *     `<UPPER>_ALIASES` / `<UPPER>_PUBLISHES_TO` /
  *     `<UPPER>_LISTENS_FROM` const arrays
- *   - `<UPPER>_KIND_ID` / `<UPPER>_KIND_VERSION` / `<UPPER>_DESCRIPTION`
+ *   - `<UPPER>_KIND_ID` / `<UPPER>_KIND_NAME` /
+ *     `<UPPER>_KIND_URI` / `<UPPER>_KIND_VERSION` /
+ *     `<UPPER>_DESCRIPTION`
  *
  * Hand-written sibling `<basename>.ts` re-exports the generated types and
  * adds the `Shape` descriptor + runtime validators (which are NOT
@@ -27,9 +29,10 @@
  *
  * Extension keywords used in the JSON Schema:
  *
- *   - `x-ts` (top-level): `{ fileBasename, prefix, shapeId }` — controls
- *     TS naming. `prefix` is used for all derived interface names;
- *     `fileBasename` is the generated TS file basename.
+ *   - `x-ts` (top-level): `{ fileBasename, prefix }` — controls TS naming.
+ *     `prefix` is used for all derived interface names; `fileBasename` is
+ *     the generated TS file basename. Kind identity is derived from
+ *     JSON-LD `@id` and `name`, never from `x-ts`.
  *   - `x-ts-name` (per nested schema): explicit interface name suffix
  *     (e.g. `Redirect` → `CustomDomainRedirect`).
  *   - `x-ts-type` (per schema): `{ import: <module>, name: <type> }`
@@ -69,7 +72,7 @@ interface ListensDescriptor {
 
 interface KindDoc {
   readonly "@context"?: unknown;
-  readonly "@id"?: string;
+  readonly "@id": string;
   readonly "@type"?: string;
   readonly name: string;
   readonly version: string;
@@ -80,7 +83,6 @@ interface KindDoc {
   readonly "x-ts": {
     readonly fileBasename: string;
     readonly prefix: string;
-    readonly shapeId: string;
   };
   readonly spec: JsonSchema;
   readonly outputs: readonly OutputField[];
@@ -127,15 +129,15 @@ async function main(): Promise<number> {
     return 2;
   }
   const written: string[] = [];
-  for (const { doc } of docs) {
-    const ts = generateTs(doc);
+  for (const { doc, sourceBasename } of docs) {
+    const ts = generateTs(doc, sourceBasename);
     const outPath = `${OUTPUT_DIR}/${doc["x-ts"].fileBasename}.generated.ts`;
     await Deno.writeTextFile(outPath, ts);
     written.push(outPath);
     console.log(
-      `[spec:generate-ts] wrote ${outPath} (${
-        doc["x-ts"].shapeId
-      }@${doc.version})`,
+      `[spec:generate-ts] wrote ${outPath} (${doc.name}@${doc.version}, ${
+        doc["@id"]
+      })`,
     );
   }
   // Normalize output through `deno fmt` so it is byte-stable across runs
@@ -171,8 +173,8 @@ export async function generateAllToTemp(): Promise<
     const docs = await loadKindDocs();
     const paths: string[] = [];
     const map = new Map<string, string>();
-    for (const { doc } of docs) {
-      const ts = generateTs(doc);
+    for (const { doc, sourceBasename } of docs) {
+      const ts = generateTs(doc, sourceBasename);
       const outPath = `${tmpDir}/${doc["x-ts"].fileBasename}.generated.ts`;
       await Deno.writeTextFile(outPath, ts);
       paths.push(outPath);
@@ -195,6 +197,7 @@ export function outputDir(): string {
 
 export interface LoadedKindDoc {
   readonly path: string;
+  readonly sourceBasename: string;
   readonly doc: KindDoc;
 }
 
@@ -205,17 +208,18 @@ export async function loadKindDocs(): Promise<readonly LoadedKindDoc[]> {
   ) {
     const text = await Deno.readTextFile(entry.path);
     const doc = JSON.parse(text) as KindDoc;
-    if (!doc.name || !doc["x-ts"]) {
-      console.error(`[spec:generate-ts] ${entry.path}: missing name or x-ts`);
-      Deno.exit(1);
-    }
-    out.push({ path: entry.path, doc });
+    validateKindDoc(entry.path, doc);
+    out.push({
+      path: entry.path,
+      sourceBasename: jsonLdBasename(entry.path),
+      doc,
+    });
   }
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
 }
 
-export function generateTs(doc: KindDoc): string {
+export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   const ctx: GeneratorContext = {
     prefix: doc["x-ts"].prefix,
     nested: [],
@@ -271,7 +275,7 @@ export function generateTs(doc: KindDoc): string {
     .map((n) => renderNestedInterface(n, ctx))
     .join("\n");
 
-  const basename = doc["x-ts"].fileBasename;
+  const basename = sourceBasename ?? doc["x-ts"].fileBasename;
   const header = HEADER.replace("<basename>", basename);
 
   const parts: string[] = [header];
@@ -329,7 +333,13 @@ export function generateTs(doc: KindDoc): string {
   }
   parts.push("");
   parts.push(
-    `export const ${upper}_KIND_ID = ${JSON.stringify(doc["x-ts"].shapeId)};`,
+    `export const ${upper}_KIND_ID = ${JSON.stringify(doc.name)};`,
+  );
+  parts.push(
+    `export const ${upper}_KIND_NAME = ${JSON.stringify(doc.name)};`,
+  );
+  parts.push(
+    `export const ${upper}_KIND_URI = ${JSON.stringify(doc["@id"])};`,
   );
   parts.push(
     `export const ${upper}_KIND_VERSION = ${JSON.stringify(doc.version)};`,
@@ -341,6 +351,50 @@ export function generateTs(doc: KindDoc): string {
   }
   parts.push("");
   return parts.join("\n");
+}
+
+function validateKindDoc(path: string, doc: KindDoc): void {
+  if (!doc.name || !doc["@id"] || !doc["x-ts"]) {
+    console.error(`[spec:generate-ts] ${path}: missing @id, name, or x-ts`);
+    Deno.exit(1);
+  }
+  if (!doc["x-ts"].fileBasename || !doc["x-ts"].prefix) {
+    console.error(
+      `[spec:generate-ts] ${path}: x-ts must contain fileBasename and prefix`,
+    );
+    Deno.exit(1);
+  }
+  const xTs = doc["x-ts"] as { readonly shapeId?: unknown };
+  if ("shapeId" in xTs) {
+    console.error(
+      `[spec:generate-ts] ${path}: x-ts.shapeId is obsolete; use JSON-LD @id/name for kind identity`,
+    );
+    Deno.exit(1);
+  }
+  const uriName = kindNameFromUri(doc["@id"]);
+  if (uriName !== doc.name) {
+    console.error(
+      `[spec:generate-ts] ${path}: @id last segment (${uriName}) must match name (${doc.name})`,
+    );
+    Deno.exit(1);
+  }
+}
+
+function kindNameFromUri(uri: string): string {
+  try {
+    const url = new URL(uri);
+    const segments = url.pathname.split("/").filter((s) => s.length > 0);
+    return segments.at(-1) ?? "";
+  } catch {
+    return uri.split("/").filter((s) => s.length > 0).at(-1) ?? "";
+  }
+}
+
+function jsonLdBasename(path: string): string {
+  const filename = path.split(/[\\/]/).at(-1) ?? path;
+  return filename.endsWith(".jsonld")
+    ? filename.slice(0, -".jsonld".length)
+    : filename;
 }
 
 function renderImports(imports: Map<string, Set<string>>): string {

@@ -171,7 +171,7 @@ export interface RuntimeAgentTerminalWorkReporter {
 }
 
 /**
- * Long-running operation queue helper — descriptor a provider plugin enqueues
+ * Long-running operation queue helper — descriptor a provider adapter enqueues
  * when its inline materialize() exceeded the threshold.
  */
 export interface EnqueueLongRunningOperationInput {

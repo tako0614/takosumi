@@ -1,31 +1,32 @@
-# Reference Kind Descriptors {#kind-registry}
+# Reference Kind Examples {#kind-registry}
 
 `components.<name>.kind` は operator distribution が解決する component type
-です。JSON-LD descriptor が kind の型・意味・入出力を与え、operator の
-implementation binding が runtime behavior を与えます。Takosumi reference kernel
-では implementation binding を reference provider adapter として attach します。
+です。AppSpec は kind string と kind-specific `spec` を運び、operator の
+implementation binding が runtime behavior を与えます。
 
-このページは `https://takosumi.com/kinds/v1/*` で公開される **reference
-descriptor examples** の説明です。operator は必要な descriptor を alias map と
-plugin set に取り込みます。
+このページは `https://takosumi.com/kinds/v1/*` で公開される takosumi.com
+reference kind descriptor examples です。operator は必要な descriptor example を
+alias map と implementation binding set に取り込みます。
 
 ## Reference component kinds
 
-takosumi.com reference descriptors が扱う common kind examples は次の 5 つです。
+takosumi.com reference descriptor examples が扱う common kind examples は次の 5
+つです。
 
-| Kind            | 用途                           | 代表 outputs                                   |
-| --------------- | ------------------------------ | ---------------------------------------------- |
-| `worker`        | JS worker / serverless runtime | `url`, `id`, `version`                         |
-| `web-service`   | OCI container HTTP service     | `url`, `internalHost`, `internalPort`          |
-| `postgres`      | PostgreSQL database            | `host`, `port`, `database`, `connectionString` |
-| `object-store`  | S3-compatible bucket           | `bucket`, `endpoint`, `region`                 |
-| `custom-domain` | DNS record + TLS termination   | `fqdn`, `certificateId`, `nameservers`         |
+| Kind            | 用途                           | 代表 outputs                                    |
+| --------------- | ------------------------------ | ----------------------------------------------- |
+| `worker`        | JS worker / serverless runtime | `url`, `id`, `version`                          |
+| `web-service`   | OCI container HTTP service     | `url`, `internalHost`, `internalPort`           |
+| `postgres`      | PostgreSQL database            | `host`, `port`, `database`, `passwordSecretRef` |
+| `object-store`  | S3-compatible bucket           | `bucket`, `endpoint`, `region`                  |
+| `custom-domain` | DNS record + TLS termination   | `fqdn`, `certificateId`, `nameservers`          |
 
-AppSpec author は `worker` のような short alias を使えます。operator は `worker`
-を `https://takosumi.com/kinds/v1/worker` に解決し、対応する provider
+operator が alias map に opt-in している場合、AppSpec author は `worker`
+のような short alias を使えます。operator はその alias を
+`https://takosumi.com/kinds/v1/worker` に解決し、対応する provider
 implementation を選びます。完全 URI を直接書くこともできます。
 
-operator-defined kind は任意 domain の JSON-LD descriptor と materializer を
+operator-defined kind は任意 domain の kind URI と implementation binding を
 operator が用意します。
 
 ## `worker`
@@ -36,18 +37,16 @@ components:
     kind: worker
     spec:
       entrypoint: dist/worker.mjs
-      compatibilityDate: "2025-01-01"
 ```
 
-`worker` の provider input は prepared source snapshot 内の `entrypoint` path
-です。source 側の build service / CI が bundle を作る場合、その結果を prepared
-source の file として置きます。DataAsset metadata や hash は DataAsset workflow
-側で扱います。
+`worker` の implementation input は prepared source snapshot 内の `entrypoint`
+path です。source 側の build service / CI が bundle を作る場合、 その結果を
+prepared source の file として置きます。
 
 ```yaml
 spec:
   entrypoint: dist/worker.mjs
-  compatibilityDate: "2025-01-01"
+  compatibilityDate: "2025-01-01" # optional provider extension
 ```
 
 provider-specific routing は `spec` の open extension として表現できます。
@@ -116,13 +115,12 @@ components:
 target は `listen` した material の `url` から解決します。DNS、certificate、
 redirect などは provider extension です。
 
-## JSON-LD descriptor
+## JSON-LD descriptor metadata
 
-operator-defined kind は JSON-LD descriptor で `spec`、`publishes`、`listens`、
-`outputs` を宣言できます。operator は descriptor の kind URI に対して
-implementation binding を用意し、AppSpec component に runtime behavior
-を与えます。 Takosumi reference implementation では、その binding を
-`KernelPlugin.provides[]` で表します。
+JSON-LD descriptor は kind identity、input schema、publish / listen contract、
+outputs を定義します。runtime behavior は operator distribution が kind URI に
+bind する implementation が持ちます。Takosumi reference kernel では、その
+binding を `KernelPlugin.provides[]` で表します。
 
 ```json
 {
@@ -141,24 +139,19 @@ implementation binding を用意し、AppSpec component に runtime behavior
 }
 ```
 
-## Data Assets
+## Source files and data assets
 
-`/v1/artifacts` は operator が data blob を保管するための DataAsset API です。
-そこに付く `kind` は operator / connector distribution が定義する metadata
-です。
+source tree の file を読む kind は、prepared source snapshot 内の path を
+kind-specific `spec` に置きます。Reference worker kind は prepared source の
+`spec.entrypoint` を読みます。
 
-operator は必要に応じて `registerArtifactKind` で discovery metadata と size cap
-を登録できます。connector は `acceptedArtifactKinds` で consume できる metadata
-value を宣言します。runtime が source tree の file を読む場合は DataAsset
-metadata ではなく prepared source snapshot と kind-specific `spec` を使います。
-
-Reference worker kind は data asset API を使わず、prepared source の
-`spec.entrypoint` を読みます。詳細は [DataAsset Policy](./data-asset-policy.md)
-と [DataAsset GC](./artifact-gc.md) を参照してください。
+operator distribution が data blob upload / discovery を提供する場合は、AppSpec
+とは別の DataAsset extension として扱います。参照先:
+[DataAsset Policy](./data-asset-policy.md) と [DataAsset GC](./artifact-gc.md)。
 
 ## 関連ページ
 
 - [AppSpec](./app-spec.md)
 - [Provider Implementations](./providers.md)
-- [Connector Contract](./connector-contract.md)
+- [Connector Guide](./connector-contract.md)
 - [Extending Takosumi](../extending.md)

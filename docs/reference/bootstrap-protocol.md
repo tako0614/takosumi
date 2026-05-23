@@ -11,7 +11,7 @@ Bootstrap が担うこと:
 - Storage の schema migration を初期化状態まで進める
 - Secret partition と master key を init する
 - Cross-process lock store を init する
-- Default operator account を発行し token を operator に渡す
+- Bootstrap operator credential を発行し token を operator に渡す
 - Operator implementation / kind alias / connector inventory を確認する
 - Default Space (`space:default`) を生成する
 - Audit chain の genesis event を書く
@@ -22,16 +22,16 @@ chain の genesis event を確認し、bootstrap stage を skip する。
 
 ## Bootstrap stage 順序
 
-| 順 | Stage                         | 失敗時挙動                  |
-| -- | ----------------------------- | --------------------------- |
-| 1  | storage-init                  | exit + supervisor restart   |
-| 2  | secret-partition-init         | exit + supervisor restart   |
-| 3  | lock-store-init               | exit + supervisor restart   |
-| 4  | default-operator-account-init | exit (token 発行前で abort) |
-| 5  | operator-implementation-load  | exit + supervisor restart   |
-| 6  | default-space-create          | exit + supervisor restart   |
-| 7  | audit-genesis                 | exit + supervisor restart   |
-| 8  | listener-open                 | exit + supervisor restart   |
+| 順 | Stage                              | 失敗時挙動                  |
+| -- | ---------------------------------- | --------------------------- |
+| 1  | storage-init                       | exit + supervisor restart   |
+| 2  | secret-partition-init              | exit + supervisor restart   |
+| 3  | lock-store-init                    | exit + supervisor restart   |
+| 4  | bootstrap-operator-credential-init | exit (token 発行前で abort) |
+| 5  | operator-implementation-load       | exit + supervisor restart   |
+| 6  | default-space-create               | exit + supervisor restart   |
+| 7  | audit-genesis                      | exit + supervisor restart   |
+| 8  | listener-open                      | exit + supervisor restart   |
 
 各 stage 完了で audit event を書く (後述)。Stage 4–7 は単一の cross-process lock
 下で直列化される (multi-pod bootstrap 参照)。
@@ -76,7 +76,7 @@ Cross-process lock backend を初期化する。 Bootstrap lock
 
 詳細は [Cross-Process Locks](./cross-process-locks.md)。
 
-## Stage 4 — default-operator-account-init
+## Stage 4 — bootstrap-operator-credential-init
 
 Bootstrap 完了後に operator が kernel を操作するための初期 credential
 を発行する。
@@ -85,7 +85,7 @@ Bootstrap 完了後に operator が kernel を操作するための初期 creden
 - Token は 32 byte ランダム + Base64URL encoding
 - Token の **平文** は kernel stdout に **1 度だけ** 出力する
 - Token hash のみが storage に永続化される
-- 既に default operator account が存在する場合は stage 4 を skip し、 token
+- 既に bootstrap operator credential が存在する場合は stage 4 を skip し、 token
   平文は再出力しない (re-init 防止)
 
 将来 operator bootstrap CLI を追加する場合は、token を CLI 側にも copy して
@@ -103,8 +103,8 @@ implementation、 runtime-agent connector inventory を検証する。
 - 同じ kind URI を複数 reference adapter が提供する場合は stage abort
 
 operator distribution が通常の TypeScript module として provider package を
-import し、`plugins: [...]` に渡す。詳細は
-[Plugin Loading](./plugin-loading.md)。
+import し、reference kernel では `plugins: [...]` に渡す。詳細は
+[Reference Plugin Loading](./plugin-loading.md)。
 
 ## Stage 6 — default-space-create
 
@@ -129,7 +129,7 @@ kernel-bootstrap-started
 storage-initialized
 secret-partition-initialized
 lock-store-initialized
-default-operator-account-created
+bootstrap-operator-credential-created
 operator-implementations-loaded
 default-space-created               (opt out 時は省略)
 kernel-bootstrap-completed
@@ -149,16 +149,16 @@ Public deploy / internal control / runtime-agent / discovery ports を open
 
 各 stage には timeout が設定されている。
 
-| Stage                         | Default timeout |
-| ----------------------------- | --------------- |
-| storage-init                  | 120s            |
-| secret-partition-init         | 30s             |
-| lock-store-init               | 30s             |
-| default-operator-account-init | 5s              |
-| operator-implementation-load  | 30s             |
-| default-space-create          | 5s              |
-| audit-genesis                 | 5s              |
-| listener-open                 | 10s             |
+| Stage                              | Default timeout |
+| ---------------------------------- | --------------- |
+| storage-init                       | 120s            |
+| secret-partition-init              | 30s             |
+| lock-store-init                    | 30s             |
+| bootstrap-operator-credential-init | 5s              |
+| operator-implementation-load       | 30s             |
+| default-space-create               | 5s              |
+| audit-genesis                      | 5s              |
+| listener-open                      | 10s             |
 
 Timeout 超過は当該 stage を abort し、process exit code 71
 (`bootstrap-stage-timeout`)。 Supervisor が再起動するが、partial
@@ -174,8 +174,8 @@ Bootstrap は再起動で重複実行されない。
   に `kernel-bootstrap-completed` が無いので bootstrap が再走する
 - Stage 1–6 は個別に idempotent: storage migration は up step が再走しても
   no-op、 secret partition は既存 envelope を尊重、 lock store は既存 row を
-  upsert、 default operator account / operator plugin evidence / default space
-  は existence check で skip
+  upsert、 bootstrap operator credential / operator implementation evidence /
+  default space は existence check で skip
 
 ## CLI Exposure
 
@@ -208,16 +208,16 @@ or 続行)。
 
 ## Bootstrap audit events
 
-| Event id                           | Stage                     |
-| ---------------------------------- | ------------------------- |
-| `kernel-bootstrap-started`         | 1 開始                    |
-| `storage-initialized`              | 1 完了                    |
-| `secret-partition-initialized`     | 2 完了                    |
-| `lock-store-initialized`           | 3 完了                    |
-| `default-operator-account-created` | 4 完了                    |
-| `operator-implementations-loaded`  | 5 完了                    |
-| `default-space-created`            | 6 完了 (opt out 時は省略) |
-| `kernel-bootstrap-completed`       | 7 完了                    |
+| Event id                                | Stage                     |
+| --------------------------------------- | ------------------------- |
+| `kernel-bootstrap-started`              | 1 開始                    |
+| `storage-initialized`                   | 1 完了                    |
+| `secret-partition-initialized`          | 2 完了                    |
+| `lock-store-initialized`                | 3 完了                    |
+| `bootstrap-operator-credential-created` | 4 完了                    |
+| `operator-implementations-loaded`       | 5 完了                    |
+| `default-space-created`                 | 6 完了 (opt out 時は省略) |
+| `kernel-bootstrap-completed`            | 7 完了                    |
 
 `kernel-bootstrap-completed` の payload に bootstrap 完了 wall clock / duration
 を含める。
@@ -248,7 +248,7 @@ semantics、 kernel ↔ runtime-agent skew、 rollback gate は
 - [Storage Schema](./storage-schema.md)
 - [Secret Partitions](./secret-partitions.md)
 - [Cross-Process Locks](./cross-process-locks.md)
-- [Plugin Loading](./plugin-loading.md)
+- [Reference Plugin Loading](./plugin-loading.md)
 - [Audit Events](./audit-events.md)
 - [Schema Evolution](./migration-upgrade.md)
 - [Readiness Probes](./readiness-probes.md)

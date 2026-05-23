@@ -1,4 +1,4 @@
-// AUTO-GENERATED FROM packages/plugins/spec/kinds/v1/database-postgres.jsonld — DO NOT EDIT.
+// AUTO-GENERATED FROM packages/plugins/spec/kinds/v1/postgres.jsonld — DO NOT EDIT.
 // Run `deno task spec:generate-ts` to refresh.
 
 export interface DatabasePostgresStorage {
@@ -28,7 +28,7 @@ export interface DatabasePostgresOutputs {
   readonly username: string;
   /** Reference to secret store entry holding password. */
   readonly passwordSecretRef: string;
-  /** Full client connection URL (secret-bearing). */
+  /** Passwordless client connection URL. Credentials are supplied through passwordSecretRef. */
   readonly connectionString: string;
 }
 
@@ -77,7 +77,10 @@ export const DATABASE_POSTGRES_PUBLISHES_TO:
 export const DATABASE_POSTGRES_LISTENS_FROM:
   readonly DatabasePostgresListensFrom[] = [];
 
-export const DATABASE_POSTGRES_KIND_ID = "database-postgres";
+export const DATABASE_POSTGRES_KIND_ID = "postgres";
+export const DATABASE_POSTGRES_KIND_NAME = "postgres";
+export const DATABASE_POSTGRES_KIND_URI =
+  "https://takosumi.com/kinds/v1/postgres";
 export const DATABASE_POSTGRES_KIND_VERSION = "v1";
 export const DATABASE_POSTGRES_DESCRIPTION =
   "Managed PostgreSQL instance. Provider-portable via standard wire protocol. Publishes connection material to the sibling namespace path.";

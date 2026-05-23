@@ -1,5 +1,5 @@
 /**
- * Universal runtime-agent HTTP client used by every shape-provider plugin.
+ * Universal runtime-agent HTTP client used by every shape-provider adapter.
  *
  * Plugins post lifecycle envelopes (apply / destroy / describe) to a
  * runtime-agent service which holds the actual cloud SDK / Deno.Command

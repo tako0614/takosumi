@@ -139,7 +139,7 @@ Deno.test("dispatcher skips kind validation when spec has no artifact and no ima
   const reg = new ConnectorRegistry();
   reg.register({
     provider: "no-artifact",
-    shape: "database-postgres@v1",
+    shape: "postgres@v1",
     acceptedArtifactKinds: [],
     apply: () => Promise.resolve({ handle: "h", outputs: {} }),
     destroy: () => Promise.resolve({ ok: true }),
@@ -147,7 +147,7 @@ Deno.test("dispatcher skips kind validation when spec has no artifact and no ima
   });
   const dispatcher = new LifecycleDispatcher(reg);
   const res = await dispatcher.apply({
-    shape: "database-postgres@v1",
+    shape: "postgres@v1",
     provider: "no-artifact",
     resourceName: "db",
     spec: { version: "16", size: "small" },

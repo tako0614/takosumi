@@ -16,23 +16,27 @@ deno run -A jsr:@takos/takosumi-kernel
 Most operators run the kernel via the CLI:
 [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) (`takosumi server`).
 
-## What it owns
+## Public installer endpoints
 
 - `POST /v1/installations/dry-run` — new Installation dry-run
 - `POST /v1/installations` — Installation create + first Deployment
 - `POST /v1/installations/{id}/deployments/dry-run` — update dry-run
 - `POST /v1/installations/{id}/deployments` — apply a new Deployment
 - `POST /v1/installations/{id}/rollback` — rollback to a prior Deployment
-- Optional `/v1/artifacts*` routes — operator DataAsset store
-- `POST /v1/runtime-agent/*` — runtime-agent fleet enrollment / lease /
+
+## Operator / internal extensions
+
+- Optional `/v1/artifacts*` routes — operator DataAsset extension
+- `/api/internal/v1/runtime/agents/*` — runtime-agent fleet enrollment / lease /
   heartbeat
 - `applyV2` — DAG topological apply with idempotency (spec fingerprint),
   rollback on partial failure, concurrency lock per `(tenant, deployment)`
 - `destroyV2` — reverse-order teardown with persisted handle resolution
-- `TakosumiDeploymentRecordStore` — persists Deployment evidence: AppSpec digest
-  / source summary, applied resources, and status. SQL backend via
-  `TAKOSUMI_DATABASE_URL` also persists installer lifecycle state and
-  OperationPlan WAL stage records; in-memory fallback is dev / test only.
+- `TakosumiDeploymentRecordStore` — persists internal apply evidence: AppSpec
+  digest / source summary, component JSON outputs, internal operation/resource
+  evidence, and status. SQL backend via `TAKOSUMI_DATABASE_URL` also persists
+  installer lifecycle state and OperationPlan WAL stage records; in-memory
+  fallback is dev / test only.
 
 ## Required env (production)
 
@@ -68,9 +72,9 @@ Deno.serve({ port: 8788 }, app.fetch);
 `createPaaSApp` does:
 
 1. Loads runtime config from env
-2. Registers optional data-asset metadata used by DataAsset routes. Component
-   kind descriptors and providers are operator-supplied. Cloud-backed reference
-   `KernelPlugin` adapter factories are imported separately from
+2. Registers optional DataAsset metadata used by DataAsset extension routes.
+   Component kind descriptors and providers are operator-supplied. Cloud-backed
+   reference `KernelPlugin` adapter factories are imported separately from
    `@takos/takosumi-<cloud>-providers` packages and attached via
    `plugins: [...]` plus an operator `kindAliases` map when short aliases are
    desired.
@@ -100,10 +104,10 @@ list.
 - [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
   reference kind descriptors + adapter helpers
 - [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — operator CLI
-- [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) — type
-  contract
+- [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) —
+  AppSpec / Installer API wire types
 
 > The `@takos/` JSR scope is the reference Takosumi distribution published by
-> Takos. Authority lives in the contract. Alternative publishers (e.g.,
-> `@example/takosumi-kernel`) are spec-permitted, currently untested, and hold
-> the same architectural position.
+> Takos. Authority lives in the contract. Alternative publishers such as
+> `@example/takosumi-kernel` can ship compatible kernel implementations; current
+> verification covers the reference distribution.

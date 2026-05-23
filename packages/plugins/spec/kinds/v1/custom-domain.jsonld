@@ -5,11 +5,10 @@
   "name": "custom-domain",
   "version": "v1",
   "aliases": ["custom-domain"],
-  "description": "DNS + TLS-terminated public domain pointing at a target URL. Listens on a sibling worker namespace to obtain its allocated URL, then publishes its FQDN to the sibling namespace path.",
+  "description": "DNS + TLS-terminated public domain pointing at a target URL. Listens on a target namespace path to obtain its allocated URL, then publishes its FQDN to this component's namespace path.",
   "x-ts": {
     "fileBasename": "custom-domain",
-    "prefix": "CustomDomain",
-    "shapeId": "custom-domain"
+    "prefix": "CustomDomain"
   },
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -34,10 +33,10 @@
     }
   ],
   "listens": {
-    "<sibling-worker-namespace>": {
+    "<target-namespace-path>": {
       "shape": "target",
-      "envMap": {
-        "DESCRIPTION": "Reads the `url` field from the listened worker material to determine the upstream target. AppSpec listen options declare `as: target`."
+      "target": {
+        "DESCRIPTION": "Reads the `url` field from the listened material to determine the upstream target. AppSpec listen options declare `as: target`."
       }
     }
   },

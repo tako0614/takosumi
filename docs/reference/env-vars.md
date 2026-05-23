@@ -128,9 +128,9 @@ kernel host には置きません。
 ## Implementation / materializer config
 
 reference operator は `createPaaSApp({ kindAliases, plugins })` に kind alias
-map と `KernelPlugin` adapter の配列を渡します。adapter が必要とする credential
-/ config は factory option か runtime-agent host env から読みます。provider
-package の取得方法は operator distribution の責務です。
+map と reference adapter array (`plugins` option) を渡します。adapter
+が必要とする credential / config は factory option か runtime-agent host env
+から読みます。provider package の取得方法は operator distribution の責務です。
 
 ## 関連ページ
 

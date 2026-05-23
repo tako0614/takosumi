@@ -57,8 +57,7 @@ export function createLocalDockerPostgresProvider(
   const lifecycle = options.lifecycle;
   const hostBinding = options.hostBinding ?? "localhost";
   const portAllocator = createPortAllocator(options.hostPortStart ?? 15432);
-  const secretBase = options.secretRefBase ??
-    "secret://selfhosted/database-postgres";
+  const secretBase = options.secretRefBase ?? "secret://selfhosted/postgres";
   const defaultDb = options.databaseName ?? "app";
   const defaultUser = options.username ?? "app";
   const generatePassword = options.passwordGenerator ??
@@ -68,7 +67,7 @@ export function createLocalDockerPostgresProvider(
   return {
     id: "@takos/selfhost-postgres",
     version: "1.0.0",
-    implements: { id: "database-postgres", version: "v1" },
+    implements: { id: "postgres", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
       const containerName = `pg-${defaultDb}-${randomSuffix()}`;

@@ -19,7 +19,7 @@
       }
     },
     {
-      "shape": "database-postgres@v1",
+      "shape": "postgres@v1",
       "name": "db",
       "provider": "local-docker",
       "spec": {

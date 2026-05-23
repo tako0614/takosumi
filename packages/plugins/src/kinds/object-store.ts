@@ -20,7 +20,7 @@ export type { ObjectStoreCapability, ObjectStoreOutputs, ObjectStoreSpec };
 
 /**
  * `object-store@v1` component kind descriptor. Materialized by a provider
- * plugin (S3-class API) at apply time.
+ * adapter (S3-class API) at apply time.
  *
  * Spec / outputs / capabilities are derived from
  * `packages/plugins/spec/kinds/v1/object-store.jsonld` via

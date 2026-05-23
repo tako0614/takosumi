@@ -8,8 +8,7 @@
   "description": "Managed PostgreSQL instance. Provider-portable via standard wire protocol. Publishes connection material to the sibling namespace path.",
   "x-ts": {
     "fileBasename": "database-postgres",
-    "prefix": "DatabasePostgres",
-    "shapeId": "database-postgres"
+    "prefix": "DatabasePostgres"
   },
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -30,6 +29,7 @@
       "storage": {
         "type": "object",
         "required": ["sizeGiB"],
+        "additionalProperties": false,
         "description": "Persistent volume sizing.",
         "properties": {
           "sizeGiB": { "type": "integer", "minimum": 1 }
@@ -90,7 +90,7 @@
       "name": "connectionString",
       "type": "string",
       "required": true,
-      "meaning": "Full client connection URL (secret-bearing)."
+      "meaning": "Passwordless client connection URL. Credentials are supplied through passwordSecretRef."
     }
   ],
   "capabilities": [

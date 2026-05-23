@@ -368,7 +368,7 @@ function defaultUnsupportedExecutor(
 }
 
 /**
- * Convenience helper: build an executor that delegates to a provider plugin
+ * Convenience helper: build an executor that delegates to a provider adapter
  * call (e.g. `aws.rds.create`) and returns the resulting JSON-safe payload.
  */
 export function executorFromProviderCall<TResult extends JsonObject>(

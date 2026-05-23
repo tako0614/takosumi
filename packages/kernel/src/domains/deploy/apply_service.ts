@@ -82,7 +82,7 @@ export interface ApplyDeployResult {
 /**
  * Subset of {@link PlatformContext} ports needed to construct the context
  * passed to `applyV2`. `refResolver` and `resolvedOutputs` are filled in by
- * `apply_v2` itself per resource so they are not part of this options bag.
+ * `apply_v2` itself per resource; this options bag carries the shared ports.
  */
 export interface PlatformContextAdapters {
   readonly secrets: PlatformContext["secrets"];

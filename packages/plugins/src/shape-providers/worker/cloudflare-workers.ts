@@ -9,7 +9,7 @@ export interface CloudflareWorkersScriptDescriptor {
 
 export interface CloudflareWorkersScriptCreateInput {
   readonly scriptName: string;
-  readonly compatibilityDate: string;
+  readonly compatibilityDate?: string;
   readonly compatibilityFlags?: readonly string[];
   readonly env?: Readonly<Record<string, string>>;
   readonly routes?: readonly string[];

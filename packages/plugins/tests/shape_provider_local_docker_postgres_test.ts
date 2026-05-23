@@ -20,11 +20,11 @@ function newProvider() {
   };
 }
 
-Deno.test("local-docker provider declares database-postgres@v1", () => {
+Deno.test("local-docker provider declares postgres@v1", () => {
   const { provider } = newProvider();
   assert.equal(provider.id, "@takos/selfhost-postgres");
   assert.deepEqual(provider.implements, {
-    id: "database-postgres",
+    id: "postgres",
     version: "v1",
   });
 });

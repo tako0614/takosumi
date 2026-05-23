@@ -7,10 +7,10 @@ Takosumi の拡張は 2 種類あります。
 | reference / operator kind を別 cloud / runtime で動かす | implementation binding         |
 | 新しい runtime / resource contract を作る               | kind descriptor + materializer |
 
-AppSpec は `kind` URI と `spec` を書きます。JSON-LD descriptor が kind
-の型・意味 を表し、operator がその kind URI に implementation binding
-を用意します。Takosumi reference kernel では `createPaaSApp()` で `KernelPlugin`
-を attach します。
+AppSpec は opaque な component kind string と `spec` を書きます。kind は
+operator が opt-in した short alias でも、直接 URI でもよく、operator が kind
+URI / descriptor / implementation binding に解決します。Takosumi reference
+kernel では `createPaaSApp()` で `KernelPlugin` adapter を attach します。
 
 ## Reference provider adapter を追加する
 
@@ -18,20 +18,34 @@ Takosumi reference kernel で provider を追加する場合は、reference / op
 kind を具体 substrate に materialize する `KernelPlugin` adapter を用意します。
 
 ```ts
-import { kernelPluginFromProviderPlugin } from "@takos/takosumi-contract/kernel-plugin-adapter";
+import type { KernelPlugin } from "@takos/takosumi-contract/plugin";
 
 export function hetznerCloudWebServiceProvider(
   opts: HetznerCloudWebServiceOptions,
-) {
-  const provider = createHetznerCloudWebServiceProvider({
-    region: opts.region,
-    lifecycleClient: opts.lifecycleClient,
-  });
-
-  return kernelPluginFromProviderPlugin({
-    provider,
-    kindUri: "https://takosumi.com/kinds/v1/web-service",
-  });
+): KernelPlugin {
+  return {
+    name: "hetzner-cloud-web-service",
+    version: "1.0.0",
+    provides: ["https://takosumi.com/kinds/v1/web-service"],
+    async apply(ctx) {
+      const service = await opts.client.createService({
+        region: opts.region,
+        name: `${ctx.installationId}-${ctx.componentName}`,
+        spec: ctx.component.spec ?? {},
+        bindings: ctx.resolvedBindings,
+      });
+      return {
+        resourceHandle: service.id,
+        outputs: {
+          id: service.id,
+          url: service.url,
+        },
+      };
+    },
+    async destroy(ctx) {
+      await opts.client.deleteService(ctx.resourceHandle);
+    },
+  };
 }
 ```
 
@@ -45,7 +59,7 @@ export function hetznerCloudWebServiceProvider(
 | Credential   | runtime-agent host env または operator host で注入 |
 
 provider credential は runtime-agent host または operator host 側に置きます。
-region / account などの non-secret selector は plugin factory option
+region / account などの non-secret selector は adapter factory option
 に置けます。
 
 ## 新しい kind を追加する
@@ -88,9 +102,9 @@ components:
 ## Test checklist
 
 - spec validation failure が provider side effect 前に止まる。
-- dry-run が outputs / risk / plan を返す。
+- dry-run が changes[] / estimatedCost / expected digest を返す。
 - apply が idempotent に成功する。
-- destroy / rollback が handle を使って対象 resource だけを処理する。
+- destroy / rollback が対象 resource だけを処理する。
 - secret value を log / audit / Deployment record に出さない。
 
 ## 関連ページ

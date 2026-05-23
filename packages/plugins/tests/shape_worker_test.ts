@@ -16,7 +16,6 @@ function outputIssues(value: unknown): ShapeValidationIssue[] {
 
 const validSpec = () => ({
   entrypoint: "dist/worker.mjs",
-  compatibilityDate: "2025-01-01",
 });
 
 Deno.test("Worker shape exposes id and version", () => {
@@ -42,7 +41,6 @@ Deno.test("Worker validateSpec accepts a source-root-relative entrypoint", () =>
   assert.deepEqual(
     specIssues({
       entrypoint: "dist/worker.mjs",
-      compatibilityDate: "2025-01-01",
     }),
     [],
   );
@@ -51,7 +49,6 @@ Deno.test("Worker validateSpec accepts a source-root-relative entrypoint", () =>
 Deno.test("Worker validateSpec rejects absolute entrypoint paths", () => {
   const issues = specIssues({
     entrypoint: "/dist/worker.mjs",
-    compatibilityDate: "2025-01-01",
   });
   assert.ok(
     issues.some((i) =>
@@ -72,19 +69,18 @@ Deno.test("Worker validateSpec accepts optional fields", () => {
 });
 
 Deno.test("Worker validateSpec rejects missing entrypoint", () => {
-  const issues = specIssues({ compatibilityDate: "2025-01-01" });
+  const issues = specIssues({});
   assert.ok(issues.some((i) => i.path === "$.entrypoint"));
 });
 
 Deno.test("Worker validateSpec rejects escaping entrypoint paths", () => {
   const issues = specIssues({
     entrypoint: "../worker.mjs",
-    compatibilityDate: "2025-01-01",
   });
   assert.ok(issues.some((i) => i.path === "$.entrypoint"));
 });
 
-Deno.test("Worker validateSpec rejects empty compatibilityDate", () => {
+Deno.test("Worker validateSpec rejects empty compatibilityDate when present", () => {
   const issues = specIssues({
     entrypoint: "dist/worker.mjs",
     compatibilityDate: "",

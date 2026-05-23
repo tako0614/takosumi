@@ -3,9 +3,9 @@
 > このページでわかること: kernel HTTP surface の endpoint と認証境界。
 
 本ページは `takosumi-api` role が mount する Takosumi kernel endpoint を説明し
-ます。Takosumi の public spec surface は Installer API の 5 endpoint だけです。
-internal control plane と runtime-agent control RPC は operator-owned runtime
-surface です。
+ます。公開 lifecycle は Installer API の 5 endpoint と AppSpec / Installation /
+Deployment で表します。internal control plane と runtime-agent control RPC は
+operator runtime surface です。
 
 > 実装は
 > [`packages/kernel/src/api/`](https://github.com/tako0614/takosumi/tree/main/packages/kernel/src/api)
@@ -37,9 +37,9 @@ kernel は v1 で 2 種類の credential を区別し、 credential ごとに作
 
 - `TAKOSUMI_INSTALLER_TOKEN` が unset の間、 `/v1/installations/*` route は
   **404** を返します (401 で「token 未設定」を隠蔽しないため)。
-- Installer bearer の Space scope は token claims から resolve します。 actor
-  単位 の multi-Space auth / entitlement check は token issuer (= Takosumi
-  Accounts) の責務です。
+- Installer bearer の Space scope は token claims から resolve します。actor
+  単位の multi-Space auth / entitlement check は operator token issuer
+  の責務です。
 - Internal HMAC は `method` / `path` / `query` / `body digest` / `actor` を
   canonical 化して署名し、 `x-takosumi-internal-signature` /
   `x-takosumi-internal-timestamp` / `x-takosumi-request-id` で検証します。
@@ -98,15 +98,8 @@ RPC。 すべて `/api/internal/v1/runtime/agents/...` 配下で、 internal HMA
 ## Workflow / trigger / hook の境界 {#workflow-trigger-hook-boundary}
 
 workflow / trigger / schedule / declarable hook は upstream automation として
-installer API の前段に置きます。build は BuildSpec を読む build service または
-CI が実行します。
-
-The current kernel exposes no workflow, trigger, schedule, or declarable hook
-HTTP route.
-
-CI / webhook / cron / declarable hook 等の運用機能は kernel scope の外です。
-operator が別途 build service / CI / orchestrator で実装し、resolved AppSpec
-source snapshot を `source.kind=prepared` として Installer API に渡します。
+installer API の前段に置きます。build service / CI / orchestrator が git source
+または prepared source snapshot を用意し、Installer API に渡します。
 
 ## エラーエンベロープ {#error-envelope}
 
@@ -148,8 +141,9 @@ interface ApiErrorEnvelope {
 
 - [Installer API](./installer-api.md) — 5 endpoint の完全 spec
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [BuildSpec](./build-spec.md) — build service と prepared source の handoff
-- [Reference Kind Descriptors](./kind-registry.md#reference-component-kinds) —
+- [Build service handoff](./build-spec.md) — build service と prepared source の
+  handoff
+- [Reference Kind Examples](./kind-registry.md#reference-component-kinds) —
   takosumi.com reference kind examples + operator-defined kind
 - [Runtime-Agent API](./runtime-agent-api.md)
 - [Closed Enums](./closed-enums.md)

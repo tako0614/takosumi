@@ -7,10 +7,10 @@
 > snapshot redesign pending
 
 この RFC は Takosumi kernel をさらに小さくし、specific kind の descriptor
-ownership を operator distribution 側へ移すための設計です。current
-implementation の正本は
-[AppSpec](../reference/app-spec.md)、[Installer API](../reference/installer-api.md)、
-[Reference Kind Descriptors](../reference/kind-registry.md) です。
+ownership を operator distribution 側へ移すための設計です。current public
+contract の正本は [AppSpec](../reference/app-spec.md) と
+[Installer API](../reference/installer-api.md) です。takosumi.com reference kind
+descriptors は operator distribution が opt-in する reference examples です。
 
 この文書では、`manifestDigest` など既存 wire field の名前を除き、source root の
 `.takosumi.yml` を **AppSpec** と呼びます。
@@ -39,10 +39,10 @@ Wave N は、この縮小の次段階として次を目標にします。
 - component kind resolution を operator distribution に移す。
 - `Component.build` を kernel contract から外し、BuildSpec / build service に
   分離する。
-- specific kind は operator distribution が JSON-LD descriptor と provider
-  plugin で持ち込む。
-- kernel は kind URI、namespace graph、provider lifecycle を実行する pure
-  contract executor に近づける。
+- specific kind は operator distribution が JSON-LD descriptor と implementation
+  binding で持ち込む。
+- kernel は kind URI、namespace graph、operator implementation binding dispatch
+  を扱う pure contract executor に近づける。
 
 ## Non-goals {#non-goals}
 
@@ -93,7 +93,7 @@ Decision: operator-injected alias map を採用します。
 kernel は `https://takosumi.com/kinds/v1/worker` のような reference URI
 を特別扱い しません。
 
-### 2. Worker source shape {#worker-artifact-shape}
+### 2. Worker source shape {#worker-source-shape}
 
 Decision: reference worker kind は `spec.entrypoint` を prepared source snapshot
 内の source-root-relative path として読む。
@@ -136,7 +136,8 @@ namespace とは混ぜません。
 
 Decision: artifact / build の最終形は source snapshot model に寄せます。
 
-- public AppSpec / BuildSpec から generic `artifact` concept を消す。
+- AppSpec public contract and build-service input docs から generic `artifact`
+  concept を消す。
 - build service は build 後 source tree / git state を content-addressed
   snapshot として固定する。
 - provider implementation は lifecycle apply 時に source snapshot locator
@@ -179,15 +180,16 @@ runtime-agent が持つ worker-specific type の完全分離は別 RFC で扱い
 5. `Component.build` の kernel-owned execution を削除し、BuildSpec / build
    service / prepared source handoff へ移す。
 6. `.takosumi.build.yml` の parser と build service handoff を追加する。
-7. source snapshot locator model を導入し、worker artifact input を削除する。
-8. current short alias を operator compatibility map として保持し、unresolved
+7. source snapshot locator model を導入し、worker source input を
+   `spec.entrypoint` に統一する。
+8. current short alias を operator migration alias map として保持し、unresolved
    alias は fail-closed にする。
 
-## Compatibility {#compatibility}
+## Migration {#migration}
 
 Wave N implementation は breaking change です。ただし migration 中は operator が
-compatibility alias map と build migration tool を提供すれば、既存 AppSpec の
-short alias と旧 build recipe は移行できます。最終状態では
+migration alias map と build migration tool を提供すれば、既存 AppSpec の short
+alias と previous build recipe は移行できます。最終状態では
 `components.<name>.build` は fail-closed で reject されます。
 
 `manifestDigest` は Installer API の existing wire field name として残ります。

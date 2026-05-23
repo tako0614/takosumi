@@ -16,7 +16,7 @@ function buildPlugin(
     provides,
     apply: (ctx) =>
       Promise.resolve({
-        providerResourceId: `${name}://${ctx.componentName}`,
+        resourceHandle: `${name}://${ctx.componentName}`,
         outputs: {},
       }),
   };
@@ -96,8 +96,7 @@ Deno.test("registry refuses plugin with empty provides[]", () => {
           name: "@example/bad",
           version: "1.0.0",
           provides: [],
-          apply: () =>
-            Promise.resolve({ providerResourceId: "x", outputs: {} }),
+          apply: () => Promise.resolve({ resourceHandle: "x", outputs: {} }),
         },
       ]),
     /must advertise at least one kind URI/,

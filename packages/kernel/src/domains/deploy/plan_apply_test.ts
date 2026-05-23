@@ -495,7 +495,7 @@ Deno.test("deploy: listDeployments filters by space, group and status", async ()
 // `Deployment.resolution`, `Deployment.desired`, `Deployment.conditions`,
 // and `GroupHead`. A handful that depended on persistence-level
 // must-replan / read-set re-validation hooks remain ignored with a
-// `phase-12` reference (those need the live provider plugin contract).
+// `phase-12` reference (those need the live provider adapter contract).
 
 Deno.test("deploy: resolveDeployment is non-mutating and pins manifest_snapshot", async () => {
   const store = new InMemoryDeploymentStore();

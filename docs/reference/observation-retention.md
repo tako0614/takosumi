@@ -73,8 +73,8 @@ history は **read-only な observability source** として扱う。
 
 - resolution は ObservationSet (latest only) を参照する。
 - approval invalidation の external freshness change trigger は ObservationSet
-  の freshness 遷移を見る。history を遡って trigger を 生成することはない。
-- planning も history を input にしない。
+  の freshness 遷移を見る。trigger 生成は latest state を入力にする。
+- planning も latest state を入力にする。
 
 ### ストレージ / 破棄 {#storage--drop}
 

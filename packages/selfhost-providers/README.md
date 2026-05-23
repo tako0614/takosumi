@@ -7,8 +7,8 @@ kernel without any cloud account.
 
 Operators import this package explicitly — Takosumi core
 (`@takos/takosumi-kernel`) ships zero cloud / self-host SDK code, so the
-operator chooses which provider packages to attach to
-`createPaaSApp({ kindAliases, plugins: [...] })`.
+operator chooses which provider packages to attach to the reference adapter
+array (`createPaaSApp({ kindAliases, plugins: [...] })`).
 
 ## Install
 
@@ -43,11 +43,11 @@ const { app } = await createPaaSApp({
 | `selfhostFilesystemObjectStoreProvider`   | `https://takosumi.com/kinds/v1/object-store` |
 | `selfhostPostgresProvider`                | `https://takosumi.com/kinds/v1/postgres`     |
 
-`selfhostDockerComposeWorkerProvider` and `selfhostSystemdWorkerProvider` remain
-available as compatibility aliases for the web-service factories.
+`selfhostDockerComposeWorkerProvider` and `selfhostSystemdWorkerProvider` are
+alternate exports for the web-service factories.
 
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — shape
-  provider host the factories delegate to.
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
+  reference kind descriptors and adapter helpers.

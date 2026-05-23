@@ -116,6 +116,7 @@ Approval:
   operationPlanDigest: sha256:...
   riskItemIds: []
   approvedEffects: {}
+  predictedActualEffectsDigest: sha256:...
   effectDetailsDigest: sha256:...
   actor: ...
   policyVersion: ...
@@ -130,6 +131,7 @@ approval が無効化されます。
 ```text
 1. digest change
    DesiredSnapshot digest or OperationPlan digest no longer matches
+   predictedActualEffectsDigest no longer matches
    the value the approval bound to.
 
 2. effect-detail change
@@ -143,7 +145,7 @@ approval が無効化されます。
    snapshot が参照する operator 所有の ExportDeclaration が最新でなくなった
 
 5. operator implementation config change
-   The operator-provided kind alias / plugin visibility used by the Space has changed.
+   The operator-provided kind alias / implementation binding visibility used by the Space has changed.
 
 6. Space-context change
    Space id, Space membership, or Space policy pack governing this resolution

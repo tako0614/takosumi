@@ -35,8 +35,8 @@ Deno.test("TAKOSUMI_REFERENCE_KINDS exposes the external reference kind set", ()
     .sort();
   assert.deepEqual(ids, [
     "custom-domain@v1",
-    "database-postgres@v1",
     "object-store@v1",
+    "postgres@v1",
     "web-service@v1",
     "worker@v1",
   ]);

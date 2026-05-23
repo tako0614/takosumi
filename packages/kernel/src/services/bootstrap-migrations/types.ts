@@ -21,7 +21,7 @@ export interface BootstrapMigrationReport {
   readonly dryRun: boolean;
   readonly storageBackend?: BootstrapMigrationStorageBackend;
   readonly skipped: boolean;
-  readonly skipReason?: "plugin-owned";
+  readonly skipReason?: "adapter-owned";
   readonly diagnostics: readonly BootstrapMigrationDiagnostic[];
   readonly bootstrap: BootstrapReport;
   readonly runtimeConfig?: RuntimeConfig;

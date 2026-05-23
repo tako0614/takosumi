@@ -7,6 +7,15 @@ import type {
   secretStore,
 } from "./plugin-sdk.ts";
 
+/**
+ * Legacy connector-local selector for shape-based provider adapters.
+ *
+ * Runtime-agent lifecycle envelopes still carry `(shape, provider)` so older
+ * connectors can dispatch work locally. Current operator distributions derive
+ * those selectors from their kind/materializer mapping; AppSpec components
+ * remain keyed by `Component.kind`, and new reference adapters should implement
+ * `KernelPlugin` directly.
+ */
 export interface ShapeRef {
   readonly id: string;
   readonly version: string;
@@ -137,7 +146,7 @@ export interface PlatformContext {
    */
   readonly preparedSource?: PreparedSourceLocator;
   /**
-   * Operation metadata attached by the kernel while executing a public WAL
+   * Operation metadata attached by the kernel while executing a WAL
    * commit. Providers should forward `idempotencyKeyString` to external APIs
    * that support request tokens and use the tuple to dedupe local side effects.
    * Absent outside WAL-backed apply / destroy paths.
@@ -157,24 +166,24 @@ export function formatPlatformOperationIdempotencyKey(
 }
 
 /**
- * A provider plugin implements one shape (`implements`) with a chosen
- * cloud / runtime backend. Operators register plugins via
- * {@link registerProvider} and reference them from manifest `provider:`
- * fields by `id`.
+ * A legacy provider adapter implements one shape (`implements`) with a chosen
+ * cloud / runtime backend. Operators register adapters via
+ * {@link registerProvider} and reference them from implementation-specific
+ * `provider:` fields by `id`.
  *
  * The `Capability` type parameter pins the capability vocabulary to the
- * shape's published union (e.g. `WebServiceCapability`). Plugins that
+ * shape's published union (e.g. `WebServiceCapability`). Adapters that
  * type-parameterize this generic catch capability typos at compile time;
- * untyped plugins fall back to `string`.
- */
-/**
- * @deprecated Wave J Component contract minimization phase: the canonical
- * materializer abstraction is `Materializer = KernelPlugin |
- * InlineMaterializer` (= `packages/contract/src/plugin.ts`). `ProviderPlugin`
- * remains as a transitional adapter wrapped by
- * `kernelPluginFromProviderPlugin()`; new code should implement KernelPlugin
- * directly. The plugin-sdk re-exports of ProviderPlugin are kept until the
- * 6 cloud provider packages migrate to the KernelPlugin shape natively.
+ * untyped adapters fall back to `string`.
+ *
+ * @deprecated Compatibility bridge for the pre-KernelPlugin provider surface.
+ * The current reference adapter API is `KernelPlugin` (or the
+ * `Materializer = KernelPlugin | InlineMaterializer` union) from
+ * `packages/contract/src/plugin.ts`. `ProviderPlugin` remains as a transitional
+ * adapter wrapped by `kernelPluginFromProviderPlugin()`; new code should
+ * implement `KernelPlugin` directly. The plugin-sdk re-exports of
+ * `ProviderPlugin` are kept until the cloud provider packages migrate to the
+ * KernelPlugin shape natively.
  */
 export interface ProviderPlugin<
   Spec = JsonObject,
@@ -216,7 +225,7 @@ export function registerProvider(
   const previous = PROVIDER_REGISTRY.get(provider.id);
   // Same-value re-registration (idempotent boot) is silent — only warn
   // when the new entry differs from the prior. Reference equality is the
-  // cheapest comparison and good enough: the bundled-shapes path passes
+  // cheapest comparison and good enough: the legacy shape/provider path passes
   // the same `Shape` / `ProviderPlugin` instance every time.
   if (
     previous !== undefined &&

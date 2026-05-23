@@ -130,7 +130,7 @@ running | stopped | missing | error | unknown
 
 | 値        | 意味                                                                                               |
 | --------- | -------------------------------------------------------------------------------------------------- |
-| `running` | object が存在し、 shape の contract に従って connector の「live」状態にある。                      |
+| `running` | object が存在し、 component kind の contract に従って connector の「live」状態にある。             |
 | `stopped` | object は存在するが意図的に動作していない (例: paused worker、 drained gateway)。                  |
 | `missing` | connector 視点で object が不在。 未 apply か、 外部から削除されたかのいずれか。                    |
 | `error`   | object は存在するが connector が通常動作不能の fault を報告している。                              |

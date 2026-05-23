@@ -37,7 +37,7 @@ span を export する。
 
 kernel HTTP server の `/metrics` を Prometheus 互換 agent が scrape する。
 記録された `ObservabilitySink` metric event を Prometheus text format で公開する
-(trace は含まない)。
+(trace は OTLP 側で扱う)。
 
 OTLP と Prometheus は併用できる。 `/metrics` は local pull scrape 用、 OTLP
 wrapper は記録した metric / trace event を collector に mirror する。
@@ -205,10 +205,8 @@ takosumi.environment      local | development | test | staging | production
 takosumi.release          kernel package version
 ```
 
-resource attribute は export batch ごとに 1 回付く。 metric point ごとには
-付かない。 region / cluster などは OTLP collector の resource processor で
-operator 側が追加する。 kernel が region / cluster を自身の環境から
-読み取ることはない。
+resource attribute は export batch ごとに 1 回付く。 metric point 単位の region
+/ cluster 付与は OTLP collector の resource processor で operator 側が行う。
 
 ## Pull エンドポイント契約 {#pull-endpoint-contract}
 

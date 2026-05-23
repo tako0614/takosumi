@@ -13,7 +13,7 @@
  * manifest discovery file, no port catalog. The kind URI is the only
  * coupling point between AppSpec and plugin, which preserves Takosumi's
  * "ソフトウェアの民主化" property — operators publish a JSON-LD kind and a
- * matching plugin, and they own the rest.
+ * matching reference adapter, and they own the rest.
  *
  * # Materializer abstraction
  *
@@ -48,14 +48,15 @@ export interface KernelPlugin {
 
   /**
    * Short-name aliases a distribution may expose for `Component.kind` in
-   * addition to the canonical URIs in `provides[]`. Alias resolution is
-   * operator-owned; the Takosumi contract does not define contract-owned aliases.
+   * addition to the canonical URIs in `provides[]`. Alias resolution is an
+   * operator-owned map from author-friendly names to kind URIs.
    */
   readonly aliases?: readonly string[];
 
   /**
    * Free-form capability tags for operator introspection. Not interpreted
-   * by the kernel — surface them via tooling / dashboards if useful.
+   * by the reference adapter API — surface them via tooling / dashboards if
+   * useful.
    */
   readonly capabilities?: readonly string[];
 
@@ -222,11 +223,10 @@ export interface KernelPluginApplyContext {
 
 export interface KernelPluginApplyResult {
   /**
-   * Provider-side resource identifier. Stored on the Deployment record so
-   * the kernel can call `destroy()` later. Treated as opaque by the
-   * kernel; format is plugin-defined.
+   * Provider-side resource handle. The kernel treats it as opaque
+   * implementation evidence and passes it back to `destroy()` when needed.
    */
-  readonly providerResourceId: string;
+  readonly resourceHandle: string;
   /**
    * Outputs surfaced to the namespace pub/sub registry via subsequent
    * `publishMaterial()` calls. Plugins MAY return any string-valued
@@ -261,7 +261,7 @@ export interface ApplyListenContext {
 export interface KernelPluginDestroyContext {
   readonly installationId: string;
   readonly componentName: string;
-  readonly providerResourceId: string;
+  readonly resourceHandle: string;
 }
 
 export interface KernelPluginInstallationContext {

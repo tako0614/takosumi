@@ -259,7 +259,7 @@ function isPackageKind(value: unknown): value is PackageKind {
 }
 
 function isTrustLevel(value: unknown): value is TrustLevel {
-  return value === "official" || value === "verified" || value === "local" ||
+  return value === "reference" || value === "verified" || value === "local" ||
     value === "untrusted";
 }
 
@@ -381,7 +381,7 @@ async function executePlan(plan: BootstrapPlan): Promise<BootstrapOutcome> {
       packageRef: root.packageRef,
       packageDigest: root.packageDigest,
       packageKind: root.packageKind ?? "provider-package",
-      trustLevel: root.trustLevel ?? "official",
+      trustLevel: root.trustLevel ?? "reference",
       status: "active",
       conformanceTier: root.conformanceTier ?? "declared",
       verifiedBy: root.verifiedBy ?? "takos",

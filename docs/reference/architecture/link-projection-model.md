@@ -69,9 +69,8 @@ components:
 
   api:
     kind: worker
-    spec:
-      entrypoint: dist/worker.mjs
-      compatibilityDate: "2025-01-01"
+	    spec:
+	      entrypoint: dist/worker.mjs
     listen:
       com.example.api.db:
         as: env

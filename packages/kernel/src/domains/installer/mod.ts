@@ -29,7 +29,6 @@ import type {
   DeploymentDryRunRequest,
   DeploymentDryRunResponse,
   DeploymentOutputs,
-  DeploymentResource,
   Installation,
   InstallationApplyRequest,
   InstallationApplyResponse,
@@ -98,7 +97,7 @@ export interface ProviderApplyContext {
 }
 
 export interface ProviderApplyResult {
-  readonly resource: DeploymentResource;
+  readonly resource: ProviderResourceEvidence;
   /**
    * Outputs the plugin emits — surfaced as the input to
    * {@link NamespaceMaterial} construction in
@@ -106,6 +105,13 @@ export interface ProviderApplyResult {
    * `outputs` verbatim).
    */
   readonly outputs: Readonly<Record<string, string>>;
+}
+
+interface ProviderResourceEvidence {
+  readonly component: string;
+  readonly kind: string;
+  readonly provider: string;
+  readonly resourceHandle: string;
 }
 
 /**
@@ -427,7 +433,8 @@ export class InstallerPipeline {
   }): Promise<Deployment> {
     const deploymentId = this.#newId("dep");
     const now = this.#now();
-    const resources: DeploymentResource[] = [];
+    const componentOutputs: Record<string, Readonly<Record<string, string>>> =
+      {};
 
     // Namespace registry — single Installation-scoped pub/sub store used
     // for both publish (= component.publish + auto-namespace) and listen
@@ -498,7 +505,7 @@ export class InstallerPipeline {
           listenedMaterials,
           resolvedBindings,
         });
-        resources.push(applied.resource);
+        componentOutputs[componentName] = applied.outputs;
 
         // Publish flow: register material to (a) the auto-namespace
         // `<app-id>.<component-name>` and (b) any explicit `publish:`
@@ -522,7 +529,9 @@ export class InstallerPipeline {
         }
       }
       const outputs: DeploymentOutputs = {
-        resources: resources.length === 0 ? undefined : resources,
+        components: Object.keys(componentOutputs).length === 0
+          ? undefined
+          : componentOutputs,
       };
       const deployment: Deployment = {
         id: deploymentId,
@@ -548,7 +557,9 @@ export class InstallerPipeline {
         manifestDigest: input.manifestDigest,
         status: "failed",
         outputs: {
-          resources: resources.length === 0 ? undefined : resources,
+          components: Object.keys(componentOutputs).length === 0
+            ? undefined
+            : componentOutputs,
         },
         createdAt: now,
       };
@@ -725,7 +736,7 @@ class NoopProviderRegistry implements InstallerProviderRegistry {
         component: context.componentName,
         kind: context.component.kind,
         provider: "noop",
-        providerResourceId:
+        resourceHandle:
           `noop://${context.installationId}/${context.componentName}`,
       },
       outputs: {},
@@ -778,7 +789,7 @@ function installerProviderRegistryFromPluginRegistry(
           component: context.componentName,
           kind: context.component.kind,
           provider: plugin.name,
-          providerResourceId: result.providerResourceId,
+          resourceHandle: result.resourceHandle,
         },
         outputs: result.outputs,
       };

@@ -20,7 +20,7 @@ import {
 export type { WorkerCapability, WorkerOutputs, WorkerSpec };
 
 /**
- * `worker@v1` component kind descriptor. Materialized by a provider plugin
+ * `worker@v1` component kind descriptor. Materialized by a provider adapter
  * (cloudflare-workers / deno-deploy / etc.) at apply time.
  *
  * Spec / outputs / capabilities are derived from
@@ -36,7 +36,7 @@ export const WorkerKind: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
     validateEntrypoint(value.entrypoint, issues);
-    requireNonEmptyString(
+    optionalNonEmptyString(
       value.compatibilityDate,
       "$.compatibilityDate",
       issues,

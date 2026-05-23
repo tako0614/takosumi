@@ -119,11 +119,16 @@ takosumi init .takosumi.yml
 takosumi init --template empty
 ```
 
+## Operator extension helpers {#operator-extension-helpers}
+
 ### `takosumi artifact ...`
 
-operator が DataAsset extension を有効化した場合だけ使う optional helper。
+operator が DataAsset extension を有効化した場合だけ使う optional helper です。
 upload / list / delete / GC の write 系は `TAKOSUMI_DEPLOY_TOKEN` を使う。
 installer token とは分離する。
+
+`artifact` は operator DataAsset record を扱う helper command です。prepared
+source snapshot の作成や build handoff は build-service 側で扱います。
 
 ### `takosumi version`
 

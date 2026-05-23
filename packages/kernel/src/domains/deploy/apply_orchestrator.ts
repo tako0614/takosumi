@@ -2,7 +2,7 @@
 //
 // This module sequences provider operations for a resolved Deployment using
 // the projection records pinned in `Deployment.resolution.resolved_graph`.
-// It is intentionally decoupled from any specific provider plugin: the
+// It is intentionally decoupled from any specific provider adapter: the
 // orchestrator emits an ordered, deterministic list of `PlannedOperation`
 // records which a `DeploymentProviderAdapter` materializes one by one.
 //
@@ -72,7 +72,7 @@ export interface OperationOutcome {
 }
 
 /** Adapter that materializes a single planned operation. Implementations
- *  delegate to provider plugins (e.g. cloudflare / aws / k8s). The orchestrator
+ *  delegate to provider adapters (e.g. cloudflare / aws / k8s). The orchestrator
  *  is unaware of the underlying provider — it only consumes the success/fail
  *  signal and records a condition per operation.
  *

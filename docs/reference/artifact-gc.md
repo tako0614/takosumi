@@ -61,7 +61,7 @@ sweep count、reclaimed bytes、trigger list、duration を含みます。詳細
 ## 関連ページ
 
 - [DataAsset Policy](./data-asset-policy.md)
-- [Reference Kind Descriptors § Data Assets](./kind-registry.md#data-assets)
+- [Reference Kind Descriptors § Data Assets](./kind-registry.md#source-files-and-data-assets)
 - [Storage Schema](./storage-schema.md)
 - [Audit Events](./audit-events.md)
 - [RevokeDebt Model](./revoke-debt.md)

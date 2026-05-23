@@ -218,7 +218,7 @@ export interface PostgresSpec {
 }
 
 export function parsePostgresSpec(value: JsonValue): PostgresSpec {
-  const shape = "database-postgres@v1";
+  const shape = "postgres@v1";
   const obj = asSpecObject(value, shape);
   const storageRaw = optionalObject(obj, "storage", shape);
   return {
@@ -238,7 +238,7 @@ export interface PostgresVersionSpec {
 export function parsePostgresVersionSpec(
   value: JsonValue,
 ): PostgresVersionSpec {
-  const shape = "database-postgres@v1";
+  const shape = "postgres@v1";
   const obj = asSpecObject(value, shape);
   return { version: requireString(obj, "version", shape) };
 }

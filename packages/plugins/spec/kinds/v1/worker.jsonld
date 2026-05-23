@@ -8,13 +8,12 @@
   "description": "Serverless JS function whose entrypoint is read from the prepared source snapshot.",
   "x-ts": {
     "fileBasename": "worker",
-    "prefix": "Worker",
-    "shapeId": "worker"
+    "prefix": "Worker"
   },
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "required": ["entrypoint", "compatibilityDate"],
+    "required": ["entrypoint"],
     "additionalProperties": true,
     "properties": {
       "entrypoint": {
@@ -25,7 +24,7 @@
       "compatibilityDate": {
         "type": "string",
         "minLength": 1,
-        "description": "Cloudflare Workers compatibility date (e.g. `2025-01-01`)."
+        "description": "Optional provider compatibility date for runtimes that use one (for example Cloudflare Workers)."
       },
       "compatibilityFlags": {
         "type": "array",
@@ -73,7 +72,7 @@
       "name": "version",
       "type": "string",
       "required": false,
-      "meaning": "Current deployed bundle version."
+      "meaning": "Current deployed worker version."
     }
   ],
   "capabilities": [

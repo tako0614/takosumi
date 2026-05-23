@@ -1,7 +1,7 @@
 {
   "@context": "https://takosumi.com/contexts/deploy.jsonld",
   "@id": "https://takosumi.com/descriptors/authoring/public-manifest-expansion/v1",
-  "@type": "takos:AuthoringExpansionDescriptor",
+  "@type": "takosumi:AuthoringExpansionDescriptor",
   "shortRef": "authoring.public-manifest-expansion@v1",
   "domain": "authoring",
   "lifecycleDomain": "shape-derivation",

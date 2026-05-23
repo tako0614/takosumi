@@ -31,7 +31,7 @@ const BUILT_IN_PACKAGE_SEEDS: readonly BuiltInPackageSeed[] = [
     digest:
       "sha256:de84b65e51c4b3ff4d1a91359f47114ccfb58378cfded8c8a6f65abed69b8a01",
     version: "1.0.0",
-    trustLevel: "official",
+    trustLevel: "reference",
     conformanceTier: "declared",
     body: {
       schemaVersion: "takos.registry.package/v1",
@@ -48,7 +48,7 @@ const BUILT_IN_PACKAGE_SEEDS: readonly BuiltInPackageSeed[] = [
     digest:
       "sha256:75a737d7f795cf6b2f9d49e315d3d61a1f0c6c8d76b0ab94a2ebcfad64a433e4",
     version: "1.0.0",
-    trustLevel: "official",
+    trustLevel: "reference",
     conformanceTier: "declared",
     body: {
       schemaVersion: "takos.registry.package/v1",
@@ -65,7 +65,7 @@ const BUILT_IN_PACKAGE_SEEDS: readonly BuiltInPackageSeed[] = [
     digest:
       "sha256:4f4881ad8747ad039d587479e4d1b8e11d9f8b39a5d4e6b88af9fa0f95734c56",
     version: "1.0.0",
-    trustLevel: "official",
+    trustLevel: "reference",
     conformanceTier: "tested",
     body: {
       schemaVersion: "takos.registry.package/v1",
@@ -124,7 +124,7 @@ const BUILT_IN_PACKAGE_SEEDS: readonly BuiltInPackageSeed[] = [
     digest:
       "sha256:369636f60f08c2aa1a745dc24700ca6a87939b782ca241f4c8cde602ac9797fe",
     version: "1.0.0",
-    trustLevel: "official",
+    trustLevel: "reference",
     conformanceTier: "declared",
     body: {
       schemaVersion: "takos.registry.package/v1",
@@ -141,7 +141,7 @@ const BUILT_IN_PACKAGE_SEEDS: readonly BuiltInPackageSeed[] = [
     digest:
       "sha256:34d8729672c6c7224f82f2ddb9d374cb3d015f42ef4747a486cbe95d951d130e",
     version: "1.0.0",
-    trustLevel: "official",
+    trustLevel: "reference",
     conformanceTier: "declared",
     body: {
       schemaVersion: "takos.registry.package/v1",

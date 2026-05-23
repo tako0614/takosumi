@@ -12,6 +12,8 @@ export interface WebServiceResources {
 }
 
 export interface WebServiceSpec {
+  /** OCI image reference. */
+  readonly image: string;
   /** Container listen port exposed by the service. */
   readonly port: number;
   /** Replica bounds. `min: 0` requests scale-to-zero when the chosen provider supports it. */
@@ -20,8 +22,6 @@ export interface WebServiceSpec {
   readonly bindings?: Readonly<Record<string, string>>;
   /** Environment variables passed to the service. */
   readonly env?: Readonly<Record<string, string>>;
-  /** OCI image reference. */
-  readonly image?: string;
   /** Provider-portable CPU / memory hints. */
   readonly resources?: WebServiceResources;
   readonly [extension: string]: unknown;
@@ -80,6 +80,8 @@ export const WEB_SERVICE_LISTENS_FROM: readonly WebServiceListensFrom[] = [
 ];
 
 export const WEB_SERVICE_KIND_ID = "web-service";
+export const WEB_SERVICE_KIND_NAME = "web-service";
+export const WEB_SERVICE_KIND_URI = "https://takosumi.com/kinds/v1/web-service";
 export const WEB_SERVICE_KIND_VERSION = "v1";
 export const WEB_SERVICE_DESCRIPTION =
   "Long-running HTTP service backed by an OCI image.";

@@ -1,5 +1,5 @@
 /**
- * `LocalDockerPostgresConnector` — selfhost `database-postgres@v1` backed by
+ * `LocalDockerPostgresConnector` — selfhost `postgres@v1` backed by
  * a local docker-managed Postgres container.
  *
  * `describe()` queries the docker daemon via `docker inspect` so the connector
@@ -47,7 +47,7 @@ const PORT_RETRY_LIMIT = 50;
 
 export class LocalDockerPostgresConnector implements Connector {
   readonly provider = "@takos/selfhost-postgres";
-  readonly shape = "database-postgres@v1";
+  readonly shape = "postgres@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #hostBinding: string;
   readonly #portAlloc: () => number;
@@ -64,7 +64,7 @@ export class LocalDockerPostgresConnector implements Connector {
     this.#dbName = opts.databaseName ?? "app";
     this.#user = opts.username ?? "app";
     this.#secretBase = opts.secretRefBase ??
-      "secret://selfhosted/database-postgres";
+      "secret://selfhosted/postgres";
     this.#generatePassword = opts.passwordGenerator ?? randomPassword;
     this.#command = opts.command ?? Deno.Command;
   }

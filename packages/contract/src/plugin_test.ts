@@ -23,7 +23,7 @@ Deno.test("KernelPlugin is a plain-array shape: name + provides + apply suffice"
     provides: ["https://takosumi.com/kinds/v1/worker"],
     apply: (ctx: KernelPluginApplyContext) =>
       Promise.resolve<KernelPluginApplyResult>({
-        providerResourceId: `cf-worker:${ctx.componentName}`,
+        resourceHandle: `cf-worker:${ctx.componentName}`,
         outputs: { workerUrl: "https://app.example.test" },
       }),
   };
@@ -63,8 +63,7 @@ Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployme
     name: "@example/test",
     version: "0.0.0",
     provides: ["https://example.test/kinds/v1/test"],
-    apply: () =>
-      Promise.resolve({ providerResourceId: "test://x", outputs: {} }),
+    apply: () => Promise.resolve({ resourceHandle: "test://x", outputs: {} }),
     destroy: (_ctx: KernelPluginDestroyContext) => {
       calls.push("destroy");
       return Promise.resolve();
@@ -94,7 +93,7 @@ Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployme
   await plugin.destroy?.({
     installationId: "ins_1",
     componentName: "web",
-    providerResourceId: "test://x",
+    resourceHandle: "test://x",
   });
 
   assert.deepEqual(calls, [
@@ -122,7 +121,7 @@ Deno.test("KernelPlugin.apply receives Component + source + listenedMaterials", 
     apply: (ctx) => {
       seen.push(ctx);
       return Promise.resolve({
-        providerResourceId: "rec://" + ctx.componentName,
+        resourceHandle: "rec://" + ctx.componentName,
         outputs: { ok: "1" },
       });
     },
@@ -150,7 +149,7 @@ Deno.test("KernelPlugin.apply receives Component + source + listenedMaterials", 
     }],
   });
 
-  assert.equal(result.providerResourceId, "rec://web");
+  assert.equal(result.resourceHandle, "rec://web");
   assert.deepEqual(seen[0].listenedMaterials["com.example.app.db"], dbMaterial);
   assert.equal(
     seen[0].resolvedBindings[0]?.envInjections.DB_HOST,
@@ -171,7 +170,7 @@ Deno.test("KernelPlugin.publishMaterial emits a NamespaceMaterial", async () => 
     provides: ["worker"],
     apply: () =>
       Promise.resolve({
-        providerResourceId: "worker://web",
+        resourceHandle: "worker://web",
         outputs: { url: "https://web.example.test", id: "w_1" },
       }),
     publishMaterial: (ctx: PublishMaterialContext) =>
@@ -205,7 +204,7 @@ Deno.test("KernelPlugin.applyListen returns an EnvInjection", async () => {
     version: "0.0.0",
     provides: ["worker"],
     apply: () =>
-      Promise.resolve({ providerResourceId: "worker://web", outputs: {} }),
+      Promise.resolve({ resourceHandle: "worker://web", outputs: {} }),
     applyListen: (ctx: ApplyListenContext): Promise<EnvInjection> => {
       const prefix = ctx.options.prefix ?? "";
       const env: Record<string, string | { secretRef: string }> = {};
@@ -246,7 +245,7 @@ Deno.test("InlineMaterializer is the minimal Materializer packaging", () => {
     aliases: ["lambda"],
     apply: (ctx) =>
       Promise.resolve({
-        providerResourceId: `lambda://${ctx.componentName}`,
+        resourceHandle: `lambda://${ctx.componentName}`,
         outputs: { arn: "arn:fake:lambda:web" },
       }),
   };

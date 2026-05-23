@@ -57,7 +57,7 @@ Deno.test("CloudSqlConnector.apply creates instance and emits descriptor", async
     fetch: mockFetch,
   });
   const res = await connector.apply({
-    shape: "database-postgres@v1",
+    shape: "postgres@v1",
     provider: "@takos/gcp-cloud-sql",
     resourceName: "rs",
     spec: {

@@ -75,7 +75,7 @@ export function createCloudSqlProvider(
   return {
     id: "@takos/gcp-cloud-sql",
     version: "1.0.0",
-    implements: { id: "database-postgres", version: "v1" },
+    implements: { id: "postgres", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
       const instanceName = `pg-${dbName}-${randomId()}`;

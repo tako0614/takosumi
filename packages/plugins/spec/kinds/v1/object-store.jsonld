@@ -8,8 +8,7 @@
   "description": "Bucket-style object storage. Provider-portable across S3-class APIs. Publishes endpoint + credential refs to the sibling namespace path.",
   "x-ts": {
     "fileBasename": "object-store",
-    "prefix": "ObjectStore",
-    "shapeId": "object-store"
+    "prefix": "ObjectStore"
   },
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

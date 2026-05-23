@@ -26,7 +26,7 @@ export type CustomDomainCapability =
 
 export type CustomDomainPublishesTo = "<app-id>.<component-name>";
 
-export type CustomDomainListensFrom = "<sibling-worker-namespace>";
+export type CustomDomainListensFrom = "<target-namespace-path>";
 
 export const CUSTOM_DOMAIN_CAPABILITIES: readonly CustomDomainCapability[] = [
   "wildcard",
@@ -52,10 +52,13 @@ export const CUSTOM_DOMAIN_PUBLISHES_TO: readonly CustomDomainPublishesTo[] = [
 ];
 
 export const CUSTOM_DOMAIN_LISTENS_FROM: readonly CustomDomainListensFrom[] = [
-  "<sibling-worker-namespace>",
+  "<target-namespace-path>",
 ];
 
 export const CUSTOM_DOMAIN_KIND_ID = "custom-domain";
+export const CUSTOM_DOMAIN_KIND_NAME = "custom-domain";
+export const CUSTOM_DOMAIN_KIND_URI =
+  "https://takosumi.com/kinds/v1/custom-domain";
 export const CUSTOM_DOMAIN_KIND_VERSION = "v1";
 export const CUSTOM_DOMAIN_DESCRIPTION =
-  "DNS + TLS-terminated public domain pointing at a target URL. Listens on a sibling worker namespace to obtain its allocated URL, then publishes its FQDN to the sibling namespace path.";
+  "DNS + TLS-terminated public domain pointing at a target URL. Listens on a target namespace path to obtain its allocated URL, then publishes its FQDN to this component's namespace path.";

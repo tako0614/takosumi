@@ -17,7 +17,7 @@ Space-visible kind alias / descriptor provenance
 AppSpec publish/listen edge dependency provenance
 link intents derived from component kind publish/listen bindings
 exposure intents derived from kind-specific specs
-optional operator DataAsset extension intents from kind-specific specs
+optional operator DataAsset extension requirements / refs resolved by operator policy, kind descriptor, provider binding, or connector binding
 space id from deploy context
 ```
 

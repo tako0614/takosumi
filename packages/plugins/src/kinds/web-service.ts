@@ -32,7 +32,7 @@ export type {
 
 /**
  * `web-service@v1` component kind descriptor. Materialized by a provider
- * plugin at apply time.
+ * adapter at apply time.
  */
 export const WebServiceKind: Shape<
   WebServiceSpec,

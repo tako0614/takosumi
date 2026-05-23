@@ -12,8 +12,9 @@
 //      a canonical `runtime.*` / `resource.*` / `interface.*` / `output.*`
 //      contract instance shape. (Core spec § 5.)
 //   2. Runtime contract descriptors for every component (`runtime.js-worker@v1`,
-//      `runtime.oci-container@v1`, etc.) plus the `artifact.oci-image@v1`
-//      descriptor when the component pulls from a registry image.
+//      `runtime.oci-container@v1`, etc.) plus the
+//      `runtime-input.oci-image@v1` descriptor when the component pulls from a
+//      registry image.
 //   3. Resource contract descriptors for every declared resource.
 //   4. Interface contract descriptors for every route protocol.
 //   5. Output contract descriptors for every outputs entry.
@@ -32,11 +33,11 @@
 //   - `resolvedAt`     — Deployment resolution timestamp
 //
 // Implementation notes:
-//   - The reference resolver (`OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS` in
+//   - The reference resolver (`REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS` in
 //     `core_plan.ts`) seeds the URI ↔ alias ↔ raw-digest mapping at startup by
 //     reading the in-tree JSON-LD descriptor documents. The closure builder
 //     consumes that record set and never re-fetches remote URLs.
-//   - Aliases not present in the official set (e.g. provider plugins shipped
+//   - Aliases not present in the reference set (e.g. provider adapters shipped
 //     out-of-tree, future composite descriptors) fall back to a synthetic
 //     resolution whose digest is derived from the alias itself; this preserves
 //     determinism without claiming bit-exact knowledge of the descriptor body.
@@ -52,15 +53,15 @@ import type {
   IsoTimestamp,
 } from "takosumi-contract";
 import {
-  OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS,
-  type OfficialDescriptorConformanceRecord,
+  REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS,
+  type ReferenceDescriptorConformanceRecord,
 } from "./core_plan.ts";
 import type { AppSpec, AppSpecRoute } from "./types.ts";
 
-/** Canonical JSON-LD context URI shared by every official descriptor. */
+/** Canonical JSON-LD context URI shared by every reference descriptor. */
 const TAKOSUMI_CONTEXT_ID = "https://takosumi.com/contexts/deploy.jsonld";
 
-/** MIME type used by every JSON-LD descriptor in the official set. */
+/** MIME type used by every JSON-LD descriptor in the reference set. */
 const DESCRIPTOR_MEDIA_TYPE = "application/ld+json";
 
 /** Canonicalization algorithm + version stamped onto each resolution. */
@@ -75,9 +76,9 @@ const PUBLIC_MANIFEST_EXPANSION_ALIAS =
 
 /** Built-in alias → canonical URI mapping for descriptors that may be
  *  referenced by the manifest but are not present in the in-tree document
- *  registry (e.g. provider plugins shipped via `@takos/takosumi-plugins`). */
+ *  registry (e.g. provider adapters shipped via `@takos/takosumi-plugins`). */
 const ALIAS_FALLBACK_URI: Record<string, string> = {
-  // Providers — shipped by plugins; URIs follow the official-descriptor-set v1
+  // Providers — shipped by plugins; URIs follow the reference descriptor v1
   // naming. We accept either short alias or canonical URI from manifest input.
 };
 
@@ -111,7 +112,7 @@ const REGISTRY_BY_URI = new Map<string, RegistryEntry>();
 
 function ensureRegistryLoaded(): void {
   if (REGISTRY_BY_ALIAS.size > 0) return;
-  for (const record of OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS) {
+  for (const record of REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS) {
     const entry: RegistryEntry = {
       id: record.id,
       alias: record.alias,
@@ -125,7 +126,7 @@ function ensureRegistryLoaded(): void {
   // Synthesise a registry entry for the shared JSON-LD context so it can be
   // emitted as a `jsonld-context` dependency without bespoke handling.
   if (!REGISTRY_BY_URI.has(TAKOSUMI_CONTEXT_ID)) {
-    const contextRecord = OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS.find(
+    const contextRecord = REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS.find(
       (record) => record.id === TAKOSUMI_CONTEXT_ID,
     );
     if (contextRecord) {
@@ -143,7 +144,7 @@ function ensureRegistryLoaded(): void {
 }
 
 function contextIdsOf(
-  record: OfficialDescriptorConformanceRecord,
+  record: ReferenceDescriptorConformanceRecord,
 ): readonly string[] {
   const body = record.body as Record<string, unknown>;
   const value = body["@context"];
@@ -154,8 +155,8 @@ function contextIdsOf(
   return [];
 }
 
-/** Resolve an alias-or-URI to a canonical registry entry, or undefined when
- *  the descriptor is not part of the official set (e.g. plugin descriptor). */
+/** Resolve an alias-or-URI to a canonical registry entry. Unknown descriptors
+ *  use the synthetic fallback path in `canonicalUriFor`. */
 function resolveRef(ref: string): RegistryEntry | undefined {
   ensureRegistryLoaded();
   return REGISTRY_BY_ALIAS.get(ref) ?? REGISTRY_BY_URI.get(ref);
@@ -323,11 +324,14 @@ function collectSeeds(
   for (const alias of authoringExpansionDescriptors(appSpec)) {
     seeds.push({ ref: alias });
   }
-  // Component runtimes + image artifacts.
+  // Component runtimes + immutable source/runtime inputs.
   for (const component of appSpec.components) {
     seeds.push({ ref: component.type });
+    if (usesSourceJsModule(component)) {
+      seeds.push({ ref: "source.js-module@v1" });
+    }
     if (component.image) {
-      seeds.push({ ref: "artifact.oci-image@v1" });
+      seeds.push({ ref: "runtime-input.oci-image@v1" });
     }
   }
   // Declared resources.
@@ -353,6 +357,12 @@ function authoringExpansionDescriptors(appSpec: AppSpec): readonly string[] {
     authoringExpansionDescriptors?: readonly string[];
   }).authoringExpansionDescriptors;
   return Array.isArray(maybe) ? maybe : [];
+}
+
+function usesSourceJsModule(
+  component: AppSpec["components"][number],
+): boolean {
+  return component.type === "runtime.js-worker@v1" && !component.image;
 }
 
 /**
@@ -428,31 +438,31 @@ export { canonicalUriFor as canonicaliseDescriptorRef };
  *
  * Risk: between resolve and apply, an operator might upgrade a provider
  * plugin from `provider.aws.rds@v1` to `provider.aws.rds@v2`. The closure
- * still pins the v1 alias and v1 raw digest, but the live plugin now consumes
+ * still pins the v1 alias and v1 raw digest, but the live adapter now consumes
  * a v2 descriptor. If apply silently uses the v1-pinned digest against a v2
  * plugin, the deployment ends up with the wrong artifact pinned and may
  * exhibit subtle behavioural drift.
  *
  * The verification function below compares the closure's pinned descriptors
- * against the descriptors the live plugin claims to consume. It rejects two
+ * against the descriptors the live adapter claims to consume. It rejects two
  * conditions:
  *
- *   1. Major version mismatch — the closure pins `@v1` but the live plugin
+ *   1. Major version mismatch — the closure pins `@v1` but the live adapter
  *      consumes `@v2` (or vice versa). Major version bumps signal a breaking
  *      contract change; we MUST fail-closed and require the user to redeploy
  *      so a fresh closure is built.
  *   2. Raw digest mismatch on the same major version — the closure pins a
- *      digest the live plugin no longer claims to know about. This catches
+ *      digest the live adapter no longer claims to know about. This catches
  *      `apiVersion` field changes that don't bump the alias version.
  */
 export interface LiveDescriptorState {
   /**
-   * Canonical alias the live plugin currently consumes (e.g.
+   * Canonical alias the live adapter currently consumes (e.g.
    * `provider.aws.rds@v2`).
    */
   readonly alias: string;
   /**
-   * Raw digest of the descriptor the live plugin is bound to. The closure's
+   * Raw digest of the descriptor the live adapter is bound to. The closure's
    * `rawDigest` for the same alias must match.
    */
   readonly rawDigest: string;
@@ -491,13 +501,13 @@ export interface ClosureVersionCompatibilityReport {
 
 /**
  * Verify that every descriptor pinned in `closure` is still compatible with
- * the live plugin set described by `liveDescriptors` (alias → live state).
+ * the live adapter set described by `liveDescriptors` (alias → live state).
  *
  * Apply MUST call this BEFORE consuming the closure. When `compatible` is
  * false, apply MUST fail-closed with the rendered upgrade guide rather
  * than proceeding with stale pins.
  *
- * Aliases the live plugin set does not know about are reported as
+ * Aliases the live adapter set does not know about are reported as
  * `alias-not-loaded` — typical when an operator disables a plugin between
  * resolve and apply. The closure still pins the alias; we cannot proceed
  * without the plugin so we fail-closed and ask the user to either re-enable
@@ -511,7 +521,7 @@ export function verifyClosureVersionCompatibility(
   for (const resolution of closure.resolutions) {
     const alias = resolution.alias ?? resolution.id;
     // Only verify provider / runtime / resource / output / interface
-    // descriptors the live plugin set is expected to know about. The shared
+    // descriptors the live adapter set is expected to know about. The shared
     // JSON-LD context, authoring expansion descriptors, and synthetic
     // unknown descriptors are not provider-supplied and thus not checked.
     if (!isPluginOwnedDescriptorAlias(alias)) continue;
@@ -527,9 +537,9 @@ export function verifyClosureVersionCompatibility(
           pinnedDigest: resolution.rawDigest,
           upgradeGuide:
             `Descriptor '${alias}' is pinned in the deployment closure but ` +
-            `no loaded provider plugin currently consumes it. Either re-enable ` +
+            `no loaded provider adapter currently consumes it. Either re-enable ` +
             `the plugin that supplies '${alias}', or redeploy the manifest so a ` +
-            `fresh closure is built against the currently loaded plugin set.`,
+            `fresh closure is built against the currently loaded adapter set.`,
         });
         continue;
       }
@@ -565,7 +575,7 @@ function verifyAliasMatch(
       liveDigest: live.rawDigest,
       upgradeGuide:
         `Descriptor '${alias}' was pinned at major version v${pinnedMajor} ` +
-        `but the live plugin now consumes '${live.alias}' (major v${liveMajor}). ` +
+        `but the live adapter now consumes '${live.alias}' (major v${liveMajor}). ` +
         `Major version bumps signal a breaking contract change and the closure ` +
         `cannot be safely reused. Run \`takos deploy plan --refresh\` against ` +
         `the manifest to rebuild the descriptor closure against v${liveMajor}, ` +
@@ -634,9 +644,9 @@ export function verifyDescriptorClosureCompatibility(
 }
 
 /**
- * Heuristic: only descriptor aliases the provider plugin layer is expected
+ * Heuristic: only descriptor aliases the provider adapter layer is expected
  * to consume should be verified. Authoring-expansion descriptors and the
- * shared JSON-LD context are kernel-owned, not plugin-owned.
+ * shared JSON-LD context are kernel-owned.
  */
 function isPluginOwnedDescriptorAlias(alias: string): boolean {
   if (alias === TAKOSUMI_CONTEXT_ID) return false;
@@ -645,8 +655,9 @@ function isPluginOwnedDescriptorAlias(alias: string): boolean {
   if (alias.startsWith("https://takosumi.com/descriptors/unknown/")) {
     return false;
   }
-  // runtime / resource / interface / output / provider aliases are
-  // plugin-owned. URIs that resolve to a registry entry are also covered.
-  return /^(runtime|resource|interface|output|provider|artifact)\./
+  // runtime / source / runtime-input / resource / interface / output /
+  // provider aliases are adapter-bound. URIs that resolve to a registry entry
+  // are also covered.
+  return /^(runtime|source|runtime-input|resource|interface|output|provider)\./
     .test(alias) || /^https?:\/\//.test(alias);
 }

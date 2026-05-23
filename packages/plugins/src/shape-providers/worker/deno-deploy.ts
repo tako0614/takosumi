@@ -30,7 +30,7 @@ export interface DenoDeployScriptDescriptor {
 
 export interface DenoDeployScriptCreateInput {
   readonly scriptName: string;
-  readonly compatibilityDate: string;
+  readonly compatibilityDate?: string;
   readonly compatibilityFlags?: readonly string[];
   readonly env?: Readonly<Record<string, string>>;
   readonly routes?: readonly string[];

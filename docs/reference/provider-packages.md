@@ -6,8 +6,8 @@
 reference kernel の provider adapter 方式は
 [Provider Implementations](./providers.md) を参照してください。このページは
 reference distribution の実装例です。operator が必要な package を import して
-`createPaaSApp({ plugins })` に attach したものが provider inventory
-になります。
+reference adapter array (`createPaaSApp({ plugins })`) に attach したものが
+provider inventory になります。
 
 ## Reference package mapping {#package-mapping}
 

@@ -302,7 +302,7 @@ export function isDirectDeployGeneratedManifest(
  * Detects the `takosumi.directDeploy.generated: true` marker on the serialized
  * manifest snapshot stored in `Deployment.input.manifest_snapshot`. We accept
  * either a JSON-encoded string snapshot or a YAML one that contains the
- * marker text, since the snapshot encoding is not part of this contract.
+ * marker text; direct-deploy owns this snapshot marker convention.
  */
 export function isDirectDeployGeneratedManifestSnapshot(
   snapshot: string,

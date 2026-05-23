@@ -4,8 +4,8 @@ GCP-backed reference `KernelPlugin` adapter factories for takosumi.com reference
 component kind examples (`web-service` / `object-store` / `postgres`). Operators
 import this package explicitly when they want GCP coverage — Takosumi core
 (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses
-which provider packages to attach to
-`createPaaSApp({ kindAliases, plugins: [...] })`.
+which provider packages to attach to the reference adapter array
+(`createPaaSApp({ kindAliases, plugins: [...] })`).
 
 ## Install
 
@@ -46,11 +46,11 @@ settings such as project id or region.
 | `gcpGcsObjectStoreProvider`     | `https://takosumi.com/kinds/v1/object-store` |
 | `gcpCloudSqlPostgresProvider`   | `https://takosumi.com/kinds/v1/postgres`     |
 
-`gcpCloudRunWorkerProvider` remains available as a compatibility alias for
+`gcpCloudRunWorkerProvider` is an alternate export for
 `gcpCloudRunWebServiceProvider`.
 
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — shape
-  provider host the factories delegate to.
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
+  reference kind descriptors and adapter helpers.

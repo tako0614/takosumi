@@ -32,7 +32,7 @@ takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 | Method | Path                       | Description                                                                         |
 | ------ | -------------------------- | ----------------------------------------------------------------------------------- |
 | `GET`  | `/v1/health`               | health probe                                                                        |
-| `GET`  | `/v1/connectors`           | bearer-auth: list registered `(shape, provider)`                                    |
+| `GET`  | `/v1/connectors`           | bearer-auth: list registered connector-local `(shape, provider)` selectors          |
 | `POST` | `/v1/lifecycle/apply`      | bearer-auth: apply one resource                                                     |
 | `POST` | `/v1/lifecycle/destroy`    | bearer-auth: destroy by handle                                                      |
 | `POST` | `/v1/lifecycle/compensate` | bearer-auth: compensate a recorded partial effect during WAL recovery               |
@@ -42,19 +42,24 @@ takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 Auth is a single bearer token, shared with the kernel via
 `TAKOSUMI_AGENT_TOKEN`.
 
-## Connectors (21)
+## Reference connector examples
 
-Bundled (auto-registered when the matching cloud env is present):
+The takosumi.com reference runtime-agent ships connector examples for common
+provider families. A connector is registered when the operator enables it and
+provides the required env / boot config.
 
 | Group      | Connectors                                                                                                                                                                |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | AWS        | `@takos/aws-s3`, `@takos/aws-fargate`, `@takos/aws-rds`, `@takos/aws-route53`                                                                                             |
 | GCP        | `@takos/gcp-gcs`, `@takos/gcp-cloud-run`, `@takos/gcp-cloud-sql`, `@takos/gcp-cloud-dns`                                                                                  |
 | Cloudflare | `@takos/cloudflare-r2`, `@takos/cloudflare-container`, `@takos/cloudflare-workers`, `@takos/cloudflare-dns`                                                               |
-| Azure      | `@takos/azure-container-apps`                                                                                                                                             |
 | Kubernetes | `@takos/kubernetes-deployment`                                                                                                                                            |
 | Deno       | `@takos/deno-deploy`                                                                                                                                                      |
 | Self-host  | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres`, `@takos/selfhost-coredns` |
+
+External connector examples may use the same lifecycle envelope. For example,
+`@takos/azure-container-apps` can implement `web-service@v1` outside the current
+reference provider package set.
 
 Each connector implements:
 
@@ -76,10 +81,16 @@ interface Connector {
 }
 ```
 
+The `shape` and `provider` fields are connector-local wire selectors. The
+operator's `KernelPlugin` adapter derives them from the kind/materializer
+mapping before sending a lifecycle request.
+
 Source-backed connectors, such as `worker@v1`, read files from
-`LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset-backed
-connectors may still use `ctx.fetcher`, but DataAsset metadata kinds are
-connector-owned metadata rather than Takosumi AppSpec concepts.
+`LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset/artifact
+handling is an optional operator extension: connectors may use `ctx.fetcher`
+when their implementation-specific selector expects uploaded or external asset
+metadata, but DataAsset metadata kinds are connector-owned metadata rather than
+Takosumi AppSpec concepts.
 
 `compensate` is the recovery hook for partially applied effects recorded in the
 kernel WAL. Connectors that can reverse an effect more precisely than
@@ -135,6 +146,6 @@ surface small.
   defines `LifecycleApplyRequest` etc.
 
 > The `@takos/` JSR scope is the reference Takosumi distribution published by
-> Takos; the contract is the authority, and contract-compatible alternative
-> publishers (e.g., `@example/takosumi-runtime-agent`) are spec-permitted —
-> currently untested, with no architectural privilege.
+> Takos. The contract is the authority. Contract-compatible publishers such as
+> `@example/takosumi-runtime-agent` can ship their own runtime-agent
+> implementations; current verification covers the reference distribution.

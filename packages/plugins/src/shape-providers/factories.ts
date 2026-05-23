@@ -94,13 +94,13 @@ interface ProviderEntry {
 
 /**
  * Catalog of every (shape, provider) pair Takosumi ships out of the box.
- * Capability sets mirror the per-provider plugin definitions in
+ * Capability sets mirror the per-provider adapter definitions in
  * `shape-providers/<shape>/<provider>.ts` (and the runtime-agent connector
  * in `runtime-agent/src/connectors/<cloud>/<service>.ts`).
  */
 const OBJECT_STORE: ShapeRef = { id: "object-store", version: "v1" };
 const WEB_SERVICE: ShapeRef = { id: "web-service", version: "v1" };
-const DATABASE_POSTGRES: ShapeRef = { id: "database-postgres", version: "v1" };
+const DATABASE_POSTGRES: ShapeRef = { id: "postgres", version: "v1" };
 const CUSTOM_DOMAIN: ShapeRef = { id: "custom-domain", version: "v1" };
 const WORKER: ShapeRef = { id: "worker", version: "v1" };
 
@@ -331,7 +331,7 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
 ];
 
 /**
- * Build the production-ready set of shape-provider plugins.
+ * Build the production-ready set of shape-provider adapters.
  *
  * Each returned plugin posts lifecycle envelopes to the runtime-agent at
  * `opts.agentUrl`. The agent must have a connector registered for the

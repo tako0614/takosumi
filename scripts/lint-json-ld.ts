@@ -11,7 +11,7 @@
  *    Must include `@context` / `@id` / `@type` / `name` / `aliases` /
  *    `publishes` / `listens`. `publishes` is an array of
  *    `{ namespacePath, material }` entries; `listens` is an object
- *    keyed by namespace path with `{ shape, envMap }` values.
+ *    keyed by namespace path with `{ shape, ...projectionMetadata }` values.
  *
  * The lint is intentionally shallow: kernel does not perform JSON-LD
  * semantic expand, so we only assert the envelope and the namespace
@@ -219,7 +219,7 @@ function checkListens(
     ) {
       issues.push({
         path,
-        message: `listens[${key}] must be an object { shape, envMap }`,
+        message: `listens[${key}] must be an object with shape metadata`,
       });
       continue;
     }

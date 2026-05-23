@@ -45,13 +45,14 @@ world view から read-only で動く。
 合わない claim は fail-closed で reject される。
 
 > Implementation note: installer apply / rollback は同一 Installation の
-> mutation を直列化する fence として lock store を使う。 legacy compatibility
-> path では `takosumi_deploy_locks` が残る。 この table は `(tenant_id, name)`
-> を primary key とし、 `owner_token` と `locked_until` で lease を管理する
-> compact shape。 release は `owner_token` 一致時だけ row を削除するため、 lease
-> takeover 後の新 holder を stale holder が消すことはできない。 side-effecting
-> stage 自体は `takosumi_operation_journal_entries` に記録されるが、 この apply
-> lock はまだ provider fencing token を下流へ渡さない。
+> mutation を直列化する fence として lock store を使う。 `takosumi_deploy_locks`
+> は compact installer lock table で、`(tenant_id,
+> name)` を primary key
+> とし、 `owner_token` と `locked_until` で lease を管理 する。 release は
+> `owner_token` 一致時だけ row を削除するため、 lease takeover 後の新 holder を
+> stale holder が消すことはできない。 side-effecting stage 自体 は
+> `takosumi_operation_journal_entries` に記録されるが、 この apply lock はまだ
+> provider fencing token を下流へ渡さない。
 
 ## Acquisition protocol
 
@@ -94,10 +95,10 @@ WHERE lockId = ? AND holderId = ? AND epoch = ?
 operation を `cross_process_lock_lost` で fail-closed させ、 当該 OperationPlan
 を recovery 経路に渡す。
 
-installer compatibility lock は `locked_until` を holder token 条件で renew する
-compact lease。 下流 provider へ fencing token は渡さない。 長時間の operation
-では `TAKOSUMI_LOCK_LEASE_MS` / `TAKOSUMI_LOCK_HEARTBEAT_MS` を provider
-実行時間 に合わせて調整する。
+installer compact lock は `locked_until` を holder token 条件で renew する
+lease。 下流 provider へ fencing token は渡さない。 長時間の operation では
+`TAKOSUMI_LOCK_LEASE_MS` / `TAKOSUMI_LOCK_HEARTBEAT_MS` を provider 実行時間
+に合わせて調整する。
 
 ## TTL recommendations
 

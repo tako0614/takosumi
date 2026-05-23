@@ -89,9 +89,10 @@ export function resolveRuntimeAgentRpcPath(
  * Capabilities a runtime-agent exposes at enrollment time. The kernel uses
  * these to filter work leases:
  *
- *   - `providers` is the list of provider plugin ids the agent can execute
- *     (e.g. `aws`, `gcp`, `k8s`). A queued work item without an explicit
- *     provider is leasable by any agent.
+ *   - `providers` is the list of legacy connector-local provider selectors the
+ *     agent can execute (e.g. `aws`, `gcp`, `k8s`). Operator adapters derive
+ *     these from the current kind/materializer mapping. A queued work item
+ *     without an explicit provider is leasable by any agent.
  *   - `maxConcurrentLeases` (optional) caps in-flight leases per agent. The
  *     kernel never grants more than this many active leases at once.
  *   - `labels` are operator-defined tags (region, instance class, ...) used
@@ -114,7 +115,7 @@ export interface RuntimeAgentCapabilitiesPayload {
 export interface RuntimeAgentRegistration {
   /** Agent identifier — stable across restarts of the same process. */
   readonly agentId: string;
-  /** Provider this agent primarily serves. */
+  /** Legacy connector-local provider selector this agent primarily serves. */
   readonly provider: string;
   /** Optional public callback URL the kernel could later push work to. */
   readonly endpoint?: string;
@@ -336,7 +337,7 @@ export interface GatewayManifest {
   /** ISO-8601 timestamp after which the manifest is invalid. */
   readonly expiresAt: string;
   /**
-   * Provider plugin kinds the gateway is allowed to broker for. The agent
+   * Legacy provider selectors the gateway is allowed to broker for. The agent
    * will refuse to lease work whose `provider` is not in this list.
    */
   readonly allowedProviderKinds: readonly string[];
@@ -615,13 +616,13 @@ function bytesToBase64(bytes: Uint8Array): string {
  * handed off to a remote agent.
  */
 export interface LongRunningOperationEnqueue {
-  /** Provider plugin id the agent must speak (`aws`, `gcp`, `k8s`). */
+  /** Legacy connector-local provider selector the agent must speak (`aws`, `gcp`, `k8s`). */
   readonly provider: string;
   /** Component / action descriptor (e.g. `aws.rds.create`). */
   readonly descriptor: string;
   readonly desiredStateId: string;
   readonly targetId?: string;
-  /** Arbitrary, JSON-safe payload the provider plugin understands. */
+  /** Arbitrary, JSON-safe payload the connector-local provider adapter understands. */
   readonly payload: JsonObject;
   /** Operator priority (higher first). Default 0. */
   readonly priority?: number;

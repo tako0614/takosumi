@@ -29,7 +29,7 @@ Deno.test("registry resolves package descriptors and exposes trust records", asy
     packageRef: resolution.ref,
     packageKind: resolution.kind,
     packageDigest: resolution.digest,
-    trustLevel: "official",
+    trustLevel: "reference",
     status: "active",
     conformanceTier: "tested",
     verifiedBy: "takos",
@@ -65,7 +65,7 @@ Deno.test("registry resolves package descriptors and exposes trust records", asy
       "providers/postgres",
       "sha256:new",
     ))?.trustLevel,
-    "official",
+    "reference",
   );
   assert.deepEqual(await registry.getTrustRecord("trust_new"), trust);
 });
@@ -99,7 +99,7 @@ Deno.test("registry resolves resource contract packages through PackageResolutio
     packageRef: resolution.ref,
     packageKind: resolution.kind,
     packageDigest: resolution.digest,
-    trustLevel: "official",
+    trustLevel: "reference",
     status: "active",
     conformanceTier: "tested",
     verifiedBy: "takos",

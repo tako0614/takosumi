@@ -4,8 +4,9 @@ Reference component kind descriptors and provider helper package for the
 takosumi.com reference implementation. JSON-LD descriptors carry kind semantics;
 provider adapters are the reference kernel's TypeScript adapter API. Operators
 attach reference provider adapters as a **plain array** to
-`createPaaSApp({ kindAliases, plugins: [...] })` — the Vite plugin pattern. Each
-plugin returns a `KernelPlugin` that declares the kind URI(s) it provides.
+`createPaaSApp({ kindAliases, plugins: [...] })` — the Vite plugin pattern in
+the reference kernel. Each adapter returns a `KernelPlugin` that declares the
+kind URI(s) it provides.
 
 This package itself ships **no cloud SDK code**. Cloud-backed reference
 `KernelPlugin` factories live in six independent provider packages
@@ -34,9 +35,10 @@ const { app } = await createPaaSApp({
 });
 ```
 
-Operators choose the providers they need and attach them as `plugins` in the
-reference kernel. Cloud credentials live on the runtime-agent environment or
-operator host, not in public bootstrap factory arguments.
+Operators choose the providers they need and attach them as the reference
+adapter array (`plugins` option) in the reference kernel. Cloud credentials live
+on the runtime-agent environment or operator host, not in public bootstrap
+factory arguments.
 
 ## Reference component kinds
 
@@ -55,8 +57,8 @@ and map short aliases to those URIs.
 | `object-store`  | S3-compatible bucket                                   |
 | `custom-domain` | DNS record + TLS termination                           |
 
-Takosumi Accounts operator distribution は OIDC issuer を
-`operator.identity.oidc` namespace で publish する。worker 側は
+An operator account-plane distribution can publish OIDC issuer material through
+the `operator.identity.oidc` namespace. worker 側は
 `listen.operator.identity.oidc` で標準 env を受け取る。
 
 ## Providers (= 別 package、 6 cloud)
@@ -95,6 +97,6 @@ Reference operators can register discoverable data-asset kinds via
 - [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)
 
 > The `@takos/` JSR scope is the reference Takosumi distribution published by
-> Takos; the contract is the authority, and contract-compatible alternative
-> publishers (e.g., `@example/takosumi-plugins`) are spec-permitted — currently
-> untested, with no architectural privilege.
+> Takos. Contract-compatible publishers such as `@example/takosumi-plugins` can
+> publish their own descriptors and adapters; current verification covers the
+> reference distribution.

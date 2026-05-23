@@ -1,5 +1,14 @@
 import type { JsonObject } from "./types.ts";
 
+/**
+ * Legacy connector-local shape registry.
+ *
+ * `Shape` is retained as a compatibility wire selector used by older
+ * runtime-agent connectors and `ProviderPlugin` adapters. It is derived from
+ * the operator's kind/materializer mapping; it is not the AppSpec component
+ * contract. New reference adapters should key off `Component.kind` through
+ * `KernelPlugin.provides[]`.
+ */
 export interface ShapeValidationIssue {
   readonly path: string;
   readonly message: string;

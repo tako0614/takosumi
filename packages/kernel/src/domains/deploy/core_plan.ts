@@ -1,7 +1,7 @@
 // core_plan — descriptor-conformance metadata only.
 //
 // Canonical resolution / planning / apply work lives in
-// `deployment_service.ts`. This module exposes the official
+// `deployment_service.ts`. This module exposes the reference in-tree
 // descriptor-conformance dataset consumed by docs-validation scripts and
 // `core_conformance_test.ts`.
 
@@ -13,7 +13,7 @@ const TAKOSUMI_CONTEXT_ID = "https://takosumi.com/contexts/deploy.jsonld";
 const PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR =
   "authoring.public-manifest-expansion@v1";
 
-interface OfficialDescriptor {
+interface ReferenceDescriptor {
   readonly id: string;
   readonly alias: string;
   readonly documentPath?: string;
@@ -23,7 +23,7 @@ interface OfficialDescriptor {
   readonly digest?: string;
 }
 
-export interface OfficialDescriptorConformanceRecord {
+export interface ReferenceDescriptorConformanceRecord {
   readonly id: string;
   readonly alias: string;
   readonly documentPath: string;
@@ -49,12 +49,12 @@ const DOC_DESCRIPTOR_SOURCES: readonly { alias: string; path: string }[] = [
     path: "descriptors/composites/composite-web-app-with-cdn-v1.jsonld",
   },
   {
-    alias: "artifact.js-bundle@v1",
-    path: "descriptors/contracts/artifact-js-bundle-v1.jsonld",
+    alias: "source.js-module@v1",
+    path: "descriptors/contracts/source-js-module-v1.jsonld",
   },
   {
-    alias: "artifact.oci-image@v1",
-    path: "descriptors/contracts/artifact-oci-image-v1.jsonld",
+    alias: "runtime-input.oci-image@v1",
+    path: "descriptors/contracts/runtime-input-oci-image-v1.jsonld",
   },
   {
     alias: "interface.http@v1",
@@ -174,19 +174,19 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
   readonly context?: string | JsonObject;
 }[] = [
   {
-    alias: "artifact.js-bundle@v1",
-    path: "descriptors/contracts/artifact-js-bundle-v1.jsonld",
-    id: "https://takosumi.com/contracts/artifact/js-bundle/v1",
+    alias: "source.js-module@v1",
+    path: "descriptors/contracts/source-js-module-v1.jsonld",
+    id: "https://takosumi.com/contracts/source/js-module/v1",
     digest:
-      "sha256:8b889bb13895343b24442af2592c7a235a1b4adebf65a983da47bb5ca13a6b20",
+      "sha256:9bc6d5b0689e33489b03626fd111455eb5b203c6b9cf7831af1a78fa950855ac",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
-    alias: "artifact.oci-image@v1",
-    path: "descriptors/contracts/artifact-oci-image-v1.jsonld",
-    id: "https://takosumi.com/contracts/artifact/oci-image/v1",
+    alias: "runtime-input.oci-image@v1",
+    path: "descriptors/contracts/runtime-input-oci-image-v1.jsonld",
+    id: "https://takosumi.com/contracts/runtime-input/oci-image/v1",
     digest:
-      "sha256:07da35e19e3bc939a995f580f5b3b6dcf0d255d661629b28c69db009044b23da",
+      "sha256:e2d8d3a94a089f5139b51c3ac3f00fde4a22676cf658734b89791244dd57b095",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
@@ -194,7 +194,7 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
     path: "descriptors/authoring/composite-expansion-v1.jsonld",
     id: "https://takosumi.com/descriptors/authoring/composite-expansion/v1",
     digest:
-      "sha256:dacae6fccc6ba7f7c4324f21e0bd11c18b019582f7199a05b8e32f4bf0721c55",
+      "sha256:663ae832756f40f2a6240a15a1ce35cd60075cb001a44daa93f281c5ef31b129",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
@@ -203,7 +203,7 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
     id:
       "https://takosumi.com/descriptors/authoring/public-manifest-expansion/v1",
     digest:
-      "sha256:20fac22daf113f6f9e55dfc3c5a63b7cd6fadd5322871c1e9b7b91657e59412c",
+      "sha256:0caa8377427a1238aadacb21c3d661ea28c3183d351654df3402cf0f6900d3eb",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
@@ -224,34 +224,35 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
   },
   {
     alias: TAKOSUMI_CONTEXT_ID,
-    path: "descriptors/contexts/takos-deploy-context.jsonld",
+    path: "descriptors/contexts/takosumi-deploy-context.jsonld",
     id: TAKOSUMI_CONTEXT_ID,
     digest:
-      "sha256:1a246e542e9282327ead7d1cddef45de6020a4c0cd98c5c5f62a2c76bc52af04",
+      "sha256:3990413b7462b310de23610a05757bd36451eb692b6e232b682f92e5dd75f8c0",
     context: {
-      takos: "https://takosumi.com/vocab/deploy#",
+      takosumi: "https://takosumi.com/vocab/deploy#",
       id: "@id",
       type: "@type",
-      shortRef: "takos:shortRef",
-      domain: "takos:domain",
-      lifecycleDomain: "takos:lifecycleDomain",
-      changeEffect: "takos:changeEffect",
-      configSchema: "takos:configSchema",
-      contracts: "takos:contracts",
-      materializationProfiles: "takos:materializationProfiles",
-      resourceAccessPaths: "takos:resourceAccessPaths",
-      limitations: "takos:limitations",
-      providerNativeSchemas: "takos:providerNativeSchemas",
-      supports: "takos:supports",
-      requires: "takos:requires",
-      runtime: "takos:runtime",
-      artifact: "takos:artifact",
-      interfaces: "takos:interfaces",
-      resources: "takos:resources",
-      accessModes: "takos:accessModes",
-      injectionModes: "takos:injectionModes",
-      pathStages: "takos:pathStages",
-      enforcement: "takos:enforcement",
+      shortRef: "takosumi:shortRef",
+      domain: "takosumi:domain",
+      lifecycleDomain: "takosumi:lifecycleDomain",
+      changeEffect: "takosumi:changeEffect",
+      configSchema: "takosumi:configSchema",
+      contracts: "takosumi:contracts",
+      materializationProfiles: "takosumi:materializationProfiles",
+      resourceAccessPaths: "takosumi:resourceAccessPaths",
+      limitations: "takosumi:limitations",
+      providerNativeSchemas: "takosumi:providerNativeSchemas",
+      supports: "takosumi:supports",
+      requires: "takosumi:requires",
+      runtime: "takosumi:runtime",
+      source: "takosumi:source",
+      runtimeInput: "takosumi:runtimeInput",
+      interfaces: "takosumi:interfaces",
+      resources: "takosumi:resources",
+      accessModes: "takosumi:accessModes",
+      injectionModes: "takosumi:injectionModes",
+      pathStages: "takosumi:pathStages",
+      enforcement: "takosumi:enforcement",
     },
   },
   {
@@ -315,7 +316,7 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
     path: "descriptors/providers/aws-ecs-fargate-v1.jsonld",
     id: "https://takosumi.com/providers/aws/ecs-fargate/v1",
     digest:
-      "sha256:3d7f519370124b386da48ebf2c0a8afd9266906fa47075283975b8f307e21435",
+      "sha256:768c6059232a1699b0fad8d0f6d20c01fac9a0b1c02721bfe9ba83743b7721c5",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
@@ -331,7 +332,7 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
     path: "descriptors/providers/cloudflare-containers-v1.jsonld",
     id: "https://takosumi.com/providers/cloudflare/containers/v1",
     digest:
-      "sha256:ace839787a1ab4bec1f37adff8a5b616ef4eae0247e9a7eacd72eb31fbe28728",
+      "sha256:01082a81f0fed5af4517088a3f03b1f79c5fd4a2cadf4c0da14799248a2bc23d",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
@@ -355,7 +356,7 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
     path: "descriptors/providers/cloudflare-workers-v1.jsonld",
     id: "https://takosumi.com/providers/cloudflare/workers/v1",
     digest:
-      "sha256:b8cc4b6f80b3f8cb9b41f26176f84db208198b69f12adec85549ff13274f3737",
+      "sha256:9cdaa4f1b8c49580ad32b1f2dd9b23adca4a180725e82e5dd3cfa996f7813313",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
@@ -363,7 +364,7 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
     path: "descriptors/providers/google-cloud-run-v1.jsonld",
     id: "https://takosumi.com/providers/google/cloud-run/v1",
     digest:
-      "sha256:9a4ba765efa974ff58cadd6af810e25bb24eaba700557cc4289dc595e04596cf",
+      "sha256:ae24d22dd09961bb9a5b3dbf9619f193f84661837a9fba04ec835c85f22ecb78",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
@@ -371,7 +372,7 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
     path: "descriptors/providers/kubernetes-generic-v1.jsonld",
     id: "https://takosumi.com/providers/kubernetes/generic/v1",
     digest:
-      "sha256:71c44d01515931eb99647862923b87d74e0e76ac97a986a986cbc4c1aee5ad5d",
+      "sha256:a77b0c88ca83aa0a6e9fe60f77e3b33da5bf79865d9deee6ff91c1a964864159",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
@@ -472,11 +473,11 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
   },
 ];
 
-const OFFICIAL_DESCRIPTORS: readonly OfficialDescriptor[] =
-  loadOfficialDescriptors();
+const REFERENCE_DESCRIPTORS: readonly ReferenceDescriptor[] =
+  loadReferenceDescriptors();
 
-export const OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS:
-  readonly OfficialDescriptorConformanceRecord[] = OFFICIAL_DESCRIPTORS
+export const REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS:
+  readonly ReferenceDescriptorConformanceRecord[] = REFERENCE_DESCRIPTORS
     .filter((descriptor) => descriptor.documentPath)
     .map((descriptor) => ({
       id: descriptor.id,
@@ -486,12 +487,12 @@ export const OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS:
       digest: descriptor.digest ?? digestOf(descriptor.body),
     })).sort((left, right) => left.alias.localeCompare(right.alias));
 
-export const OFFICIAL_DESCRIPTOR_ALIASES: readonly string[] =
-  OFFICIAL_DESCRIPTOR_CONFORMANCE_RECORDS.map((descriptor) => descriptor.alias)
+export const REFERENCE_DESCRIPTOR_ALIASES: readonly string[] =
+  REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS.map((descriptor) => descriptor.alias)
     .sort();
 
-function loadContextDescriptor(): OfficialDescriptor {
-  const documentPath = "descriptors/contexts/takos-deploy-context.jsonld";
+function loadContextDescriptor(): ReferenceDescriptor {
+  const documentPath = "descriptors/contexts/takosumi-deploy-context.jsonld";
   const body = readDescriptorJson(documentPath);
   return {
     id: TAKOSUMI_CONTEXT_ID,
@@ -503,7 +504,7 @@ function loadContextDescriptor(): OfficialDescriptor {
   };
 }
 
-function loadOfficialDescriptors(): readonly OfficialDescriptor[] {
+function loadReferenceDescriptors(): readonly ReferenceDescriptor[] {
   if (!currentRuntime().fs.available) {
     return loadCompactDescriptors();
   }
@@ -513,7 +514,7 @@ function loadOfficialDescriptors(): readonly OfficialDescriptor[] {
   ];
 }
 
-function loadCompactDescriptors(): readonly OfficialDescriptor[] {
+function loadCompactDescriptors(): readonly ReferenceDescriptor[] {
   return COMPACT_DESCRIPTOR_RECORDS.map((record) => ({
     id: record.id,
     alias: record.alias,
@@ -536,7 +537,7 @@ function compactDescriptorBody(
   return body;
 }
 
-function loadDocDescriptors(): readonly OfficialDescriptor[] {
+function loadDocDescriptors(): readonly ReferenceDescriptor[] {
   return DOC_DESCRIPTOR_SOURCES.map(({ alias, path }) => {
     const body = readDescriptorJson(path);
     const id = stringField(body, "@id");

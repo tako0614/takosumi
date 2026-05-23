@@ -1,6 +1,6 @@
 /**
  * `AwsRdsConnector` — wraps `DirectAwsRdsLifecycle` for the
- * `database-postgres@v1` shape.
+ * `postgres@v1` shape.
  */
 
 import type {
@@ -52,7 +52,7 @@ const SIZE_TO_CLASS: Readonly<Record<string, string>> = {
 
 export class AwsRdsConnector implements Connector {
   readonly provider = "@takos/aws-rds";
-  readonly shape = "database-postgres@v1";
+  readonly shape = "postgres@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectAwsRdsLifecycle;
   readonly #dbName: string;

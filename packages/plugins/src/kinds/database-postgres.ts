@@ -39,11 +39,12 @@ const SIZES: ReadonlySet<string> = new Set(
 );
 
 /**
- * `database-postgres@v1` component kind descriptor. Materialized by a
- * provider plugin (managed Postgres or self-hosted) at apply time.
+ * `postgres@v1` component kind descriptor. Materialized by a provider
+ * adapter (managed Postgres or self-hosted) at apply time.
  *
- * The Takos reference alias for this kind is `postgres`; the internal
- * provider registry id is `database-postgres`.
+ * The TypeScript filename and interface prefix retain `DatabasePostgres` to
+ * keep the implementation unambiguous, but the reader-facing kind name is
+ * derived from `packages/plugins/spec/kinds/v1/postgres.jsonld`.
  *
  * Spec / outputs / capabilities are derived from
  * `packages/plugins/spec/kinds/v1/postgres.jsonld` via

@@ -90,7 +90,7 @@ function buildRecordingPlugin(opts: {
         listenedMaterials: ctx.listenedMaterials,
       });
       return Promise.resolve({
-        providerResourceId:
+        resourceHandle:
           `${opts.name}://${ctx.installationId}/${ctx.componentName}`,
         outputs: opts.outputs ?? {},
       });
@@ -209,7 +209,7 @@ Deno.test("installer onInstallStart error aborts apply and surfaces InstallerPip
       name: "@example/postgres",
       version: "1.0.0",
       provides: ["https://takosumi.com/kinds/v1/postgres"],
-      apply: () => Promise.resolve({ providerResourceId: "x", outputs: {} }),
+      apply: () => Promise.resolve({ resourceHandle: "x", outputs: {} }),
       onInstallStart: () => Promise.reject(new Error("boom")),
     };
     const worker = buildRecordingPlugin({
@@ -240,7 +240,7 @@ Deno.test("installer onDeploymentComplete error is swallowed (post-apply hook is
       provides: ["https://takosumi.com/kinds/v1/postgres"],
       apply: () =>
         Promise.resolve({
-          providerResourceId: "postgres://x",
+          resourceHandle: "postgres://x",
           outputs: { host: "db.local", port: "5432" },
         }),
       onDeploymentComplete: () =>
@@ -252,7 +252,7 @@ Deno.test("installer onDeploymentComplete error is swallowed (post-apply hook is
       provides: ["https://takosumi.com/kinds/v1/worker"],
       apply: () =>
         Promise.resolve({
-          providerResourceId: "worker://x",
+          resourceHandle: "worker://x",
           outputs: {},
         }),
     };
@@ -292,7 +292,7 @@ Deno.test("installerProviderRegistryFromPlugins resolves operator alias via kind
 
   assert.equal(result.resource.provider, "@example/worker");
   assert.equal(
-    result.resource.providerResourceId,
+    result.resource.resourceHandle,
     "@example/worker://ins_1/web",
   );
 });
@@ -343,10 +343,10 @@ Deno.test("InstallerPipeline falls back to noop provider when no plugins / provi
       source: { kind: "local", url: dir },
     });
     assert.equal(deployment.status, "succeeded");
-    assert.equal(deployment.outputs.resources?.length, 2);
-    assert.ok(
-      deployment.outputs.resources?.every((r) => r.provider === "noop"),
-    );
+    assert.deepEqual(Object.keys(deployment.outputs.components ?? {}), [
+      "db",
+      "web",
+    ]);
   });
 });
 
@@ -361,7 +361,7 @@ Deno.test("InstallerPipeline lets test code override providers directly without 
             component: ctx.componentName,
             kind: ctx.component.kind,
             provider: "test-direct",
-            providerResourceId: `test://${ctx.componentName}`,
+            resourceHandle: `test://${ctx.componentName}`,
           },
           outputs: {},
         });

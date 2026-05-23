@@ -30,7 +30,7 @@ runtime-agent は実行を所有する。connector code を host し、自身が
 
 ## Packaging の自由度
 
-runtime-agent は固定 protocol で定義され、固定 packaging では定義されない。
+runtime-agent の固定点は protocol です。packaging は operator が選びます。
 connector 実装は Deno バイナリ、in-process module、HTTP service、WASM module、
 コンテナ、SaaS をラップする外部 gateway、operator-private daemon のいずれでも
 よい。lifecycle / connectors RPC surface と operation envelope の shape だけが
@@ -202,7 +202,7 @@ lifecycle request を受けます。
 runtime-agent → kernel 方向は別の auth path である: enrollment token が identity
 を確立し、heartbeat / lease token で runtime-agent を attach し続け、agent
 bearer (`TAKOSUMI_AGENT_TOKEN`) が lifecycle / connectors RPC を保護する。両方向
-は鍵素材を共有せず、片方の侵害でもう片方が崩れることはない。
+は鍵素材を分け、blast radius を片側の auth path に閉じる。
 
 ## Space 隔離
 

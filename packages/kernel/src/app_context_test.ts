@@ -121,7 +121,7 @@ function buildExamplePlugin(): KernelPlugin {
     provides: ["https://example.test/kinds/v1/test"],
     apply: (ctx) =>
       Promise.resolve({
-        providerResourceId: `test://${ctx.componentName}`,
+        resourceHandle: `test://${ctx.componentName}`,
         outputs: {},
       }),
   };

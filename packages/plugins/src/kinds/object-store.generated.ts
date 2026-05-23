@@ -68,6 +68,9 @@ export const OBJECT_STORE_PUBLISHES_TO: readonly ObjectStorePublishesTo[] = [
 export const OBJECT_STORE_LISTENS_FROM: readonly ObjectStoreListensFrom[] = [];
 
 export const OBJECT_STORE_KIND_ID = "object-store";
+export const OBJECT_STORE_KIND_NAME = "object-store";
+export const OBJECT_STORE_KIND_URI =
+  "https://takosumi.com/kinds/v1/object-store";
 export const OBJECT_STORE_KIND_VERSION = "v1";
 export const OBJECT_STORE_DESCRIPTION =
   "Bucket-style object storage. Provider-portable across S3-class APIs. Publishes endpoint + credential refs to the sibling namespace path.";

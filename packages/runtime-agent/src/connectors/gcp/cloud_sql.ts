@@ -1,6 +1,6 @@
 /**
  * `CloudSqlConnector` — wraps `DirectCloudSqlLifecycle` for
- * `database-postgres@v1`.
+ * `postgres@v1`.
  */
 
 import type {
@@ -48,7 +48,7 @@ const SIZE_TO_TIER: Readonly<Record<string, string>> = {
 
 export class CloudSqlConnector implements Connector {
   readonly provider = "@takos/gcp-cloud-sql";
-  readonly shape = "database-postgres@v1";
+  readonly shape = "postgres@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudSqlLifecycle;
   readonly #dbName: string;

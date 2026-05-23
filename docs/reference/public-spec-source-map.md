@@ -12,30 +12,33 @@ concept は AppSpec / Installation / Deployment と installer endpoint
 | `appspec-v1`       | `.takosumi.yml` envelope / validation           | takosumi installer + contract | `packages/installer/src/yaml-parser.ts`, `packages/contract/`                                                                        | [AppSpec](./app-spec.md)            |
 | `installer-api-v1` | Installation / Deployment / rollback 5 endpoint | takosumi kernel + installer   | `packages/kernel/src/api/installer_public_routes.ts`, `packages/contract/src/installer-api.ts`, `packages/kernel/src/api/openapi.ts` | [Installer API](./installer-api.md) |
 
-## Adjacent references
+## Adjacent operator references
 
-| Key                      | Surface                                       | Owner                              | Source / reference                                                                                              |
-| ------------------------ | --------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `buildspec-v1`           | `.takosumi.build.yml` build service input     | build service distribution         | [BuildSpec](./build-spec.md); parser/service are operator distribution scope                                    |
-| `kernel-http-api-v1`     | internal / runtime-agent HTTP boundary        | takosumi kernel                    | [Kernel HTTP API](./kernel-http-api.md)                                                                         |
-| `runtime-agent-api-v1`   | lifecycle RPC envelope                        | takosumi runtime-agent             | [Runtime-Agent API](./runtime-agent-api.md)                                                                     |
-| `reference-kinds-v1`     | external reference component kind descriptors | takosumi.com reference descriptors | `packages/plugins/spec/kinds/`, `packages/plugins/src/kinds/`, [Reference Kind Descriptors](./kind-registry.md) |
-| `reference-providers-v1` | reference provider adapter API and matrix     | takosumi provider packages         | [Provider Implementations](./providers.md)                                                                      |
-| `takosumi-jsr-packages`  | JSR package exports and dependency pins       | package owners                     | `packages/*/deno.json`, `packages/*/mod.ts`, `https://jsr.io/@takos/takosumi`                                   |
+The following surfaces help operators run or extend the takosumi.com reference
+distribution.
 
-## Boundary rules
+| Key                          | Surface                                          | Owner                               | Source / reference                                                                                           |
+| ---------------------------- | ------------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `build-service-input-v1`     | `.takosumi.build.yml` build service input        | build service distribution          | [Build service handoff](./build-spec.md); parser/service are operator distribution scope                     |
+| `kernel-http-api-v1`         | internal / runtime-agent HTTP boundary           | takosumi kernel                     | [Kernel HTTP API](./kernel-http-api.md)                                                                      |
+| `runtime-agent-api-v1`       | lifecycle RPC envelope                           | takosumi runtime-agent              | [Runtime-Agent API](./runtime-agent-api.md)                                                                  |
+| `reference-kind-examples-v1` | non-normative reference kind descriptor examples | takosumi.com reference distribution | `packages/plugins/spec/kinds/`, `packages/plugins/src/kinds/`, [Reference Kind Examples](./kind-registry.md) |
+| `reference-providers-v1`     | provider binding guide and matrix                | takosumi provider packages          | [Provider Implementations](./providers.md)                                                                   |
+| `takosumi-jsr-packages`      | JSR package exports and dependency pins          | package owners                      | `packages/*/deno.json`, `packages/*/mod.ts`, `https://jsr.io/@takos/takosumi`                                |
+
+## Placement rules
 
 - AppSpec source is `.takosumi.yml`; build input, when used, is
   `.takosumi.build.yml` and belongs to operator build service scope.
-- Component kind descriptors under `packages/plugins/spec/kinds/` and
-  `https://takosumi.com/kinds/v1/*` are external reference descriptor examples.
+- Component kind descriptor examples under `packages/plugins/spec/kinds/` and
+  `https://takosumi.com/kinds/v1/*` feed operator alias / binding config.
 - Installer clients submit source / expected pin to the installer endpoints.
 - Build services submit prepared source snapshots with `source.kind=prepared`;
-  build recipes stay in BuildSpec / build service scope.
-- DataAsset routes such as `/v1/artifacts` are operator extension routes with
-  separate credentials.
+  build recipes stay in `.takosumi.build.yml` / build service scope.
+- DataAsset upload / discovery docs describe an operator extension with separate
+  credentials.
 - Workflow runner, scheduler, webhook, account-plane, billing, and OIDC issuer
-  live in operator / account-plane surfaces.
+  are operator / account-plane surfaces that submit source to the Installer API.
 - Public JSR package checks use each package's `deno.json`, not only the root
   workspace import map.
 
@@ -64,7 +67,7 @@ The dry-run handler remains `dryRunInstallation`; route behavior is covered by
 ## 関連ページ
 
 - [AppSpec](./app-spec.md)
-- [BuildSpec](./build-spec.md)
+- [Build service handoff](./build-spec.md)
 - [Kernel HTTP API](./kernel-http-api.md)
 - [Installer API](./installer-api.md)
 - [Workflow Placement Rationale](./architecture/workflow-extension-design.md)

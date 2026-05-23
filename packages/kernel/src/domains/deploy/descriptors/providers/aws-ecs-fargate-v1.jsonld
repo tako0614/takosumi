@@ -8,7 +8,7 @@
       "ref": "materialize.ecs-fargate-container-service@v1",
       "contracts": {
         "runtime": "runtime.oci-container@v1",
-        "artifact": "artifact.oci-image@v1",
+        "runtimeInput": "runtime-input.oci-image@v1",
         "interfaces": [
           "interface.http@v1"
         ]

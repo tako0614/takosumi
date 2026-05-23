@@ -173,7 +173,7 @@ Deno.test("each provider declares a reference shape@v1 and at least one capabili
   const allowedShapes = new Set([
     "object-store",
     "web-service",
-    "database-postgres",
+    "postgres",
     "custom-domain",
     "worker",
   ]);

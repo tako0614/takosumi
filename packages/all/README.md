@@ -22,7 +22,7 @@ takosumi install --source . --space space:personal
 - `jsr:@takos/takosumi/plugins` — reference adapter entry (reference
   descriptors + descriptor helpers)
 - `jsr:@takos/takosumi/kinds` — takosumi.com reference component kind examples
-  (`worker` / `postgres` / `object-store` / `custom-domain`)
+  (`worker` / `web-service` / `postgres` / `object-store` / `custom-domain`)
 - `jsr:@takos/takosumi/cli` — CLI module entry
 
 cloud-backed reference `KernelPlugin` adapter factory は **別 package**
@@ -37,8 +37,8 @@ import { awsS3ObjectStoreProvider } from "@takos/takosumi-aws-providers";
 
 core:
 
-- `jsr:@takos/takosumi-contract` — canonical wire types (AppSpec / Installer
-  API) and reference adapter types (`KernelPlugin`)
+- `jsr:@takos/takosumi-contract` — current wire types (AppSpec / Installer API)
+  and reference adapter types (`KernelPlugin`)
 - `jsr:@takos/takosumi-kernel` — kernel only (server + apply pipeline)
 - `jsr:@takos/takosumi-plugins` — reference descriptors and adapter helpers
 - `jsr:@takos/takosumi-installer` — `.takosumi.yml` parser + git fetch + deploy
@@ -61,6 +61,6 @@ cloud provider packages (= 別 install):
 The `@takos/` JSR scope is the **reference distribution** that Takos publishes
 for Takosumi. Authority lives in the contract (`@takos/takosumi-contract`), not
 in the publisher: this umbrella package only re-exports a specific reference
-implementation of that contract. Contract-compatible alternative publishers
-(e.g., `@example/takosumi-kernel`) are spec-permitted — currently untested, but
-they hold no architectural privilege over this reference distribution.
+implementation of that contract. Contract-compatible alternative publishers such
+as `@example/takosumi-kernel` can ship their own implementations; current
+verification covers the reference distribution.

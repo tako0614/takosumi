@@ -86,10 +86,9 @@ export interface ProviderMaterializationPlan {
  * Kernel-internal materializer bound to kernel-domain `RuntimeDesiredState`.
  * Semantically pairs with `provider.ProviderMaterializer` in
  * `takosumi-contract/plugin-sdk` (= public contract surface), but kernel
- * uses the in-process domain type for the desired state input. Both
- * interfaces share the same role (= "materialize a desired state into a
- * plan + recorded operations"); the kernel-side variant exists because
- * `RuntimeDesiredState` is not part of the public contract.
+ * uses the in-process domain type for the desired state input. Both interfaces
+ * share the same role (= "materialize a desired state into a plan + recorded
+ * operations"); `RuntimeDesiredState` belongs to this kernel domain.
  */
 export interface ProviderMaterializer {
   materialize(

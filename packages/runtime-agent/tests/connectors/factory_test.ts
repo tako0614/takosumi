@@ -11,7 +11,7 @@ Deno.test("buildConnectorRegistry({}) registers the 6 selfhost connectors", () =
   assert.ok(reg.get("web-service@v1", "@takos/selfhost-docker-compose"));
   assert.ok(reg.get("web-service@v1", "@takos/selfhost-systemd"));
   assert.ok(reg.get("custom-domain@v1", "@takos/selfhost-coredns"));
-  assert.ok(reg.get("database-postgres@v1", "@takos/selfhost-postgres"));
+  assert.ok(reg.get("postgres@v1", "@takos/selfhost-postgres"));
 });
 
 Deno.test("buildConnectorRegistry with AWS opts adds 4 cloud connectors when route53HostedZoneId set", () => {
@@ -28,7 +28,7 @@ Deno.test("buildConnectorRegistry with AWS opts adds 4 cloud connectors when rou
   assert.equal(reg.size(), 10);
   assert.ok(reg.get("object-store@v1", "@takos/aws-s3"));
   assert.ok(reg.get("web-service@v1", "@takos/aws-fargate"));
-  assert.ok(reg.get("database-postgres@v1", "@takos/aws-rds"));
+  assert.ok(reg.get("postgres@v1", "@takos/aws-rds"));
   assert.ok(reg.get("custom-domain@v1", "@takos/aws-route53"));
 });
 
@@ -44,7 +44,7 @@ Deno.test("buildConnectorRegistry with GCP opts adds GCS / Cloud Run / Cloud SQL
   assert.equal(reg.size(), 9);
   assert.ok(reg.get("object-store@v1", "@takos/gcp-gcs"));
   assert.ok(reg.get("web-service@v1", "@takos/gcp-cloud-run"));
-  assert.ok(reg.get("database-postgres@v1", "@takos/gcp-cloud-sql"));
+  assert.ok(reg.get("postgres@v1", "@takos/gcp-cloud-sql"));
 });
 
 Deno.test("buildConnectorRegistry with Cloudflare opts adds R2 / containers / workers / dns when zoneId set", () => {

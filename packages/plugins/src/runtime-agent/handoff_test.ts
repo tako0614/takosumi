@@ -175,7 +175,7 @@ async function runProviderHandoffE2e(
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
   });
 
-  // 1. provider plugin hits its long-running threshold and hands off.
+  // 1. provider adapter hits its long-running threshold and hands off.
   const handoff = createProviderHandoff({ registry, provider: input.provider });
   const workId = await handoff.enqueue({
     descriptor: input.descriptor,

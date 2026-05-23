@@ -42,7 +42,7 @@ Deployment を作ります。
 これらは kernel が apply / observe / recovery を fail-safe に進めるための record
 です。顧客向け approval UI や account role model は含みません。
 
-## Plugin、connector、DataAsset
+## Implementation、connector、DataAsset
 
 | Record                         | 役割                                                                                 |
 | ------------------------------ | ------------------------------------------------------------------------------------ |
@@ -50,10 +50,10 @@ Deployment を作ります。
 | `ImplementationRegistry`       | operator が attach した provider implementation / connector の registry view。       |
 | `ConnectorDescriptor`          | runtime-agent connector の id、accepted DataAsset metadata、health。                 |
 | `DataAssetRecord`              | optional operator DataAsset extension の digest、size、retention metadata。          |
-| `SecretPartitionReference`     | secret store partition の logical reference。secret value は含まない。               |
+| `SecretPartitionReference`     | secret store partition の logical reference。secret value は secret backend に置く。 |
 
 DataAsset retention は [DataAsset GC](./artifact-gc.md)、connector envelope は
-[Connector Contract](./connector-contract.md) を参照してください。
+[Connector Guide](./connector-contract.md) を参照してください。
 
 ## Audit
 

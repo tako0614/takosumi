@@ -4,8 +4,8 @@ Cloudflare-backed reference `KernelPlugin` adapter factories for takosumi.com
 reference component kinds (`worker` / `object-store` / `custom-domain`).
 Operators import this package explicitly when they want Cloudflare coverage —
 Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the
-operator chooses which provider packages to attach to
-`createPaaSApp({ kindAliases, plugins: [...] })`.
+operator chooses which provider packages to attach to the reference adapter
+array (`createPaaSApp({ kindAliases, plugins: [...] })`).
 
 ## Install
 
@@ -48,5 +48,5 @@ Default options pick an in-memory lifecycle client suitable for tests; pass
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — shape
-  provider host the factories delegate to.
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
+  reference kind descriptors and adapter helpers.

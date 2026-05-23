@@ -14,5 +14,5 @@ response には `changes[]` (= create / update / delete の予定変更)、
 `estimatedCost`、 `expected.commit` または `expected.sourceDigest`、
 `expected.manifestDigest` (= TOCTOU gate) が含まれます。
 
-apply で実際に起きたことは [Deployment](./installer-api.md#entity-shapes) record
+apply で実際に起きたことは [Deployment](./installer-api.md#entity-fields) record
 として恒久保存されます。

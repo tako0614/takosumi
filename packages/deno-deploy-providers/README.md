@@ -4,8 +4,8 @@ Deno Deploy-backed reference `KernelPlugin` adapter factory for the takosumi.com
 reference `worker` example component kind. Operators import this package
 explicitly when they want Deno Deploy coverage — Takosumi core
 (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses
-which provider packages to attach to
-`createPaaSApp({ kindAliases, plugins: [...] })`.
+which provider packages to attach to the reference adapter array
+(`createPaaSApp({ kindAliases, plugins: [...] })`).
 
 ## Install
 
@@ -35,5 +35,5 @@ non-secret selector settings such as organization id.
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — shape
-  provider host the factory delegates to.
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
+  reference kind descriptors and adapter helpers.

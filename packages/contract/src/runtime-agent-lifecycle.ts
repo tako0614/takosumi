@@ -1,10 +1,10 @@
 /**
  * Runtime-agent lifecycle protocol.
  *
- * Plugins (kernel-side) are paper-thin HTTP clients. They post these envelopes
- * to a runtime-agent service which dispatches to a per-provider connector
- * (cloud SDK call or local OS call). Credentials live ONLY on the runtime-agent
- * host.
+ * Kernel-side reference adapters are paper-thin HTTP clients. They post these
+ * envelopes to a runtime-agent service which dispatches to a per-provider
+ * connector (cloud SDK call or local OS call). Credentials live ONLY on the
+ * runtime-agent host.
  *
  * Endpoints (runtime-agent HTTP API):
  *   POST /v1/lifecycle/apply
@@ -20,14 +20,16 @@ import type { JsonObject, JsonValue } from "./types.ts";
 import type { PlatformOperationRequest } from "./provider-plugin.ts";
 
 /**
- * Artifact descriptor — a discriminated union over `kind` (open string).
+ * DataAsset descriptor carried over the compatibility `artifact` wire
+ * namespace — a discriminated union over `kind` (open string).
  *
  * - `kind: "oci-image"` typically uses `uri` (e.g. `ghcr.io/me/api:v1`)
  * - operator-owned bundle kinds may use `hash`
  *   pointing at a `takosumi artifact push`-uploaded blob
  *
- * `kind` is intentionally open: 3rd-party connectors can introduce new kinds
- * without changing the contract package.
+ * DataAsset / artifact handling is an optional operator extension, not an
+ * AppSpec concept. `kind` is intentionally open: operator connectors can
+ * introduce new DataAsset metadata kinds while keeping the same wire shape.
  */
 export interface Artifact {
   readonly kind: string;
@@ -40,15 +42,15 @@ export interface Artifact {
 }
 
 /**
- * Artifact reference in a component spec.
+ * DataAsset reference in implementation-specific specs.
  *
- * Source AppSpec authoring may use a source-root-relative build output path.
- * Resolved specs passed to providers/runtime-agents use the content-addressed
- * Artifact object produced by the build service.
+ * Source-backed AppSpec components receive a prepared source snapshot.
+ * DataAsset-backed implementations can carry an external pointer or a
+ * content-addressed object through this compatibility alias.
  */
 export type ArtifactReference = string | Artifact;
 
-/** Response shape for `POST /v1/artifacts` and inspect endpoints. */
+/** Response shape for optional DataAsset upload / inspect endpoints. */
 export interface ArtifactStored {
   readonly hash: string;
   readonly kind: string;
@@ -58,10 +60,10 @@ export interface ArtifactStored {
 }
 
 /**
- * Locator for the kernel-side artifact store. The kernel embeds this in every
+ * Locator for the kernel-side DataAsset store. The kernel embeds this in every
  * `LifecycleApplyRequest` so connectors can fetch uploaded bytes when their
- * spec carries `artifact.hash`. Token is short-lived and scoped to read-only
- * artifact access.
+ * implementation-specific spec carries `artifact.hash`. Token is short-lived
+ * and scoped to read-only DataAsset access.
  */
 export interface ArtifactStoreLocator {
   readonly baseUrl: string;
@@ -80,9 +82,15 @@ export interface PreparedSourceLocator {
 }
 
 export interface LifecycleApplyRequest {
-  /** Shape ref (e.g. `object-store@v1`). */
+  /**
+   * Legacy connector-local shape selector (e.g. `object-store@v1`), derived by
+   * the operator adapter from the component kind/materializer mapping.
+   */
   readonly shape: string;
-  /** Provider id (e.g. `aws-s3`, `filesystem`). */
+  /**
+   * Legacy connector-local provider selector (e.g. `aws-s3`, `filesystem`).
+   * This is runtime-agent dispatch metadata, not an AppSpec field.
+   */
   readonly provider: string;
   readonly resourceName: string;
   readonly spec: JsonValue;
@@ -90,18 +98,17 @@ export interface LifecycleApplyRequest {
   /**
    * @internal kernel ↔ runtime-agent RPC only. WAL-derived request token
    * forwarded to external cloud APIs that accept their own idempotency
-   * keys (= AWS S3 / GCP / etc). This is NOT the deprecated public
-   * `X-Idempotency-Key` HTTP header (= retired Phase A): public installer
-   * API has no idempotency surface; replay protection is via source pin
-   * + expected digest. Connector-level idempotency is implementation
-   * detail, not part of the public AppSpec / installer contract.
+   * keys (= AWS S3 / GCP / etc). This is separate from the retired public
+   * `X-Idempotency-Key` HTTP header: installer replay protection is via source
+   * pin + expected digest, while connector-level idempotency belongs to this
+   * kernel ↔ runtime-agent RPC envelope.
    */
   readonly idempotencyKey?: string;
   /** WAL / recovery envelope projected from the kernel OperationPlan. */
   readonly operationRequest?: PlatformOperationRequest;
   /** Optional metadata forwarded by kernel (audit trail, request id). */
   readonly metadata?: JsonObject;
-  /** Where the connector can fetch artifact bytes by hash, when spec carries
+  /** Where the connector can fetch DataAsset bytes by hash, when spec carries
    *  `artifact.hash`. Absent for pure pointer-based deploys. */
   readonly artifactStore?: ArtifactStoreLocator;
   /** Prepared source snapshot locator for source-backed connectors. */
@@ -116,18 +123,19 @@ export interface LifecycleApplyResponse {
 }
 
 export interface LifecycleDestroyRequest {
+  /** Legacy connector-local shape selector for runtime-agent dispatch. */
   readonly shape: string;
+  /** Legacy connector-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
   readonly tenantId?: string;
   /**
    * @internal kernel ↔ runtime-agent RPC only. WAL-derived request token
    * forwarded to external cloud APIs that accept their own idempotency
-   * keys (= AWS S3 / GCP / etc). This is NOT the deprecated public
-   * `X-Idempotency-Key` HTTP header (= retired Phase A): public installer
-   * API has no idempotency surface; replay protection is via source pin
-   * + expected digest. Connector-level idempotency is implementation
-   * detail, not part of the public AppSpec / installer contract.
+   * keys (= AWS S3 / GCP / etc). This is separate from the retired public
+   * `X-Idempotency-Key` HTTP header: installer replay protection is via source
+   * pin + expected digest, while connector-level idempotency belongs to this
+   * kernel ↔ runtime-agent RPC envelope.
    */
   readonly idempotencyKey?: string;
   /** WAL / recovery envelope projected from the kernel OperationPlan. */
@@ -142,7 +150,9 @@ export interface LifecycleDestroyResponse {
 }
 
 export interface LifecycleCompensateRequest {
+  /** Legacy connector-local shape selector for runtime-agent dispatch. */
   readonly shape: string;
+  /** Legacy connector-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
   readonly tenantId?: string;
@@ -167,7 +177,9 @@ export interface LifecycleCompensateResponse {
 }
 
 export interface LifecycleDescribeRequest {
+  /** Legacy connector-local shape selector for runtime-agent dispatch. */
   readonly shape: string;
+  /** Legacy connector-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
   readonly tenantId?: string;
@@ -201,7 +213,7 @@ export const LIFECYCLE_COMPENSATE_PATH = "/v1/lifecycle/compensate" as const;
 export const LIFECYCLE_DESCRIBE_PATH = "/v1/lifecycle/describe" as const;
 export const LIFECYCLE_HEALTH_PATH = "/v1/health" as const;
 
-/** Kernel-side artifact endpoints. */
+/** Optional operator DataAsset/artifact extension endpoint base path. */
 export const ARTIFACTS_BASE_PATH = "/v1/artifacts" as const;
 
 /** Auth header convention (Bearer <token>). Token is shared via TAKOSUMI_AGENT_TOKEN env. */
@@ -210,9 +222,10 @@ export const LIFECYCLE_AGENT_TOKEN_ENV = "TAKOSUMI_AGENT_TOKEN" as const;
 export const LIFECYCLE_AGENT_URL_ENV = "TAKOSUMI_AGENT_URL" as const;
 
 /**
- * Central registry for {@link Artifact.kind} values. The kernel exposes
- * the resulting set on `GET /v1/artifacts/kinds` so CLIs and operators
- * can discover which kinds the deployed kernel understands.
+ * Central registry for {@link Artifact.kind} DataAsset metadata values. The
+ * optional operator artifact extension can expose the resulting set on
+ * `GET /v1/artifacts/kinds` so CLIs and operators can discover which kinds the
+ * deployed distribution understands.
  *
  * `kind` is intentionally an open string at the protocol level; this
  * registry is purely a discovery / documentation layer. Connectors do
@@ -247,8 +260,7 @@ export function registerArtifactKind(
   // Same-instance re-registration is silent. We also treat
   // structurally-identical metadata as silent because
   // `registerBundledArtifactKinds` rebuilds its objects on every
-  // call; unlike the bundled `Shape` / `ProviderPlugin` set, the
-  // kind list is short and shape-cheap to deep-compare.
+  // call; the kind list is short and shape-cheap to deep-compare.
   if (
     previous !== undefined &&
     previous !== kind &&

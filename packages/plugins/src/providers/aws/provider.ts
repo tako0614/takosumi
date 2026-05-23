@@ -15,7 +15,7 @@ import {
 import { AwsSqsProvider, type AwsSqsProviderOptions } from "./sqs.ts";
 
 /**
- * Aggregates the AWS provider plugins behind a single entry point. The kernel
+ * Aggregates the AWS provider adapters behind a single entry point. The kernel
  * only consumes the {@link provider.ProviderMaterializer} surface; the rest of
  * the providers are read by the resource subsystem which already addresses
  * them via descriptor IDs (see `provider.aws.<service>@v1`).

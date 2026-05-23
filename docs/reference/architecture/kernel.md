@@ -15,16 +15,16 @@ Takosumi kernel は source-to-runtime substrate です。source root の
 
 kernel が public concept として扱う名詞は 3 つです。
 
-| Concept      | 説明                                     |
-| ------------ | ---------------------------------------- |
-| AppSpec      | source root に置く `.takosumi.yml`       |
-| Installation | Space に入った AppSpec の current state  |
-| Deployment   | 1 回の dry-run / apply / rollback の結果 |
+| Concept      | 説明                                    |
+| ------------ | --------------------------------------- |
+| AppSpec      | source root に置く `.takosumi.yml`      |
+| Installation | Space に入った AppSpec の current state |
+| Deployment   | 1 回の apply / rollback の結果          |
 
 内部 record には Resource、Namespace、Secret、Event などがあり、public authoring
 surface は AppSpec / Installation / Deployment を入口にします。
 
-## Operator / application responsibilities {#not-owned-by-kernel}
+## Operator / application responsibilities {#operator-application-responsibilities}
 
 operator distribution または consumer application は次を扱います。
 
@@ -58,9 +58,9 @@ Space ID は request token / installer context から解決されます。kernel
 AppSpec の `components` は名前付き Component map です。Component は `kind` を
 持ち、kind ごとの `spec`、`publish`、`listen` を宣言します。
 
-| 公開概念  | 説明                                              |
-| --------- | ------------------------------------------------- |
-| Component | AppSpec が宣言する kind / spec / publish / listen |
+| AppSpec 内の公開構造 | 説明                                              |
+| -------------------- | ------------------------------------------------- |
+| Component            | AppSpec が宣言する kind / spec / publish / listen |
 
 | 内部概念  | 説明                                                 |
 | --------- | ---------------------------------------------------- |
@@ -82,7 +82,7 @@ Component を宣言します。
 5. caller posts apply with the same source and expected values
 6. kernel re-fetches source and verifies expected values
 7. kernel resolves publish/listen DAG
-8. kernel calls provider materializer per component
+8. reference kernel dispatches the operator-selected implementation binding for each component
 9. kernel persists Installation and Deployment records
 ```
 
@@ -94,7 +94,7 @@ source snapshot を作り、`source.kind=prepared` として渡します。
 
 ## Provider materialization {#provider-materialization}
 
-kernel は kind alias map と provider implementation set を operator config から
+kernel は kind alias map と implementation binding array を operator config から
 受け取ります。component `kind` は opaque string で、operator が URI
 に解決します。 Takosumi reference kernel の provider materialization
 では、解決した kind URI を `provides[]` に含む `KernelPlugin` adapter

@@ -82,7 +82,7 @@ Deno.test("BindingResolver invokes plugin.applyListen when present", async () =>
     name: "@test/worker",
     version: "1.0.0",
     provides: ["https://takosumi.com/kinds/v1/worker"],
-    apply: () => Promise.resolve({ providerResourceId: "x", outputs: {} }),
+    apply: () => Promise.resolve({ resourceHandle: "x", outputs: {} }),
     applyListen: (ctx): Promise<EnvInjection> => {
       captured.push(ctx);
       return Promise.resolve({

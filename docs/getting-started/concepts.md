@@ -25,20 +25,18 @@ components:
     kind: worker
     spec:
       entrypoint: dist/worker.mjs
-      compatibilityDate: "2025-01-01"
 ```
 
 `kind` は component が何であるかを表す opaque string です。`worker`、
 `web-service`、`postgres`、`object-store`、`custom-domain` は takosumi.com
-reference descriptor の alias 例で、operator が alias map で URI に解決します。
-`spec` の中身は kind ごとの convention です。
+reference kind alias の例で、operator が alias map で URI に解決します。 `spec`
+の中身は kind ごとの convention です。
 
-## BuildSpec と Prepared Source
+## Build service handoff と Prepared Source
 
-AppSpec は apply できる intent を書く file です。source を container 内で build
-する手順は `.takosumi.build.yml` に書きます。build service は build component を
-batch 実行し、build 後の source tree を prepared source snapshot
-として固定します。
+AppSpec は apply できる intent を書く file です。source を build する operator
+は `.takosumi.build.yml` のような handoff file を build service に読ませ、
+prepared source snapshot を作って Installer API に渡せます。
 
 ```
 .takosumi.build.yml
@@ -47,9 +45,8 @@ batch 実行し、build 後の source tree を prepared source snapshot
   -> Installer API
 ```
 
-この分離により、kernel は shell / container 実行を持たず、Deployment では
-content-addressed prepared source を読むだけになります。runtime が読む file path
-は各 kind の `spec` に置きます。
+この分離により、Deployment は content-addressed prepared source と AppSpec を
+元に記録されます。runtime が読む file path は各 kind の `spec` に置きます。
 
 ## publish / listen
 
@@ -69,7 +66,6 @@ components:
     kind: worker
     spec:
       entrypoint: dist/worker.mjs
-      compatibilityDate: "2025-01-01"
     listen:
       com.example.notes.db:
         as: env
@@ -104,13 +100,13 @@ account、OIDC issuer、signup UI との接続を決めます。
 
 AppSpec は portable な intent です。同じ AppSpec をどの provider で実行するかは
 operator policy と implementation binding / alias config で決まります。Takosumi
-reference kernel では implementation binding を adapter array
-として起動時に渡しま す。
+reference kernel では implementation binding array を `plugins` option として
+起動時に渡します。
 
 ## 次に読む
 
 - [AppSpec リファレンス](/reference/app-spec)
-- [BuildSpec リファレンス](/reference/build-spec)
+- [Build service handoff](/reference/build-spec)
 - [Installer API](/reference/installer-api)
 - [Provider Implementations](/reference/providers)
 - [Operator Bootstrap](/operator/bootstrap)

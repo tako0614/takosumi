@@ -19,29 +19,29 @@ organization / billing ID は account-plane docs で扱います。
   prefix を含めてよく、`generated` は owner resource ID を prefix として含めて
   よい。
 
-## Kernel-owned ID kind
+## Kernel-Owned And Operator-Extension ID Kinds
 
-| Kind                             | Suffix                             | 説明                                              |
-| -------------------------------- | ---------------------------------- | ------------------------------------------------- |
-| `space`                          | kebab-case                         | operator が指定する Space id。                    |
-| `installation`                   | ULID or stable name                | Space 内の Installation。                         |
-| `deployment`                     | ULID                               | apply / rollback ごとに kernel が生成。           |
-| `journal`                        | ULID                               | WAL entry。                                       |
-| `operation`                      | ULID                               | OperationPlan entry。                             |
-| `resolution`                     | `sha256:<hex>`                     | ResolutionSnapshot の content address。           |
-| `desired`                        | `sha256:<hex>`                     | DesiredSnapshot の content address。              |
-| `activation`                     | ULID                               | ActivationSnapshot。                              |
-| `object`                         | kebab-case                         | materialized object の logical id。               |
-| `link`                           | `<consumer>.<slot>`                | namespace / binding link。                        |
-| `generated`                      | `<owner-kind>:<owner-id>/<reason>` | kernel 生成 object。                              |
-| `exposure`                       | kebab-case                         | route / ingress exposure。                        |
-| `revoke-debt`                    | ULID                               | RevokeDebt entry。                                |
-| `approval`                       | ULID                               | approval record。                                 |
-| `connector`                      | kebab-case                         | runtime-agent connector id。                      |
-| `artifact`                       | `sha256:<hex>`                     | optional operator DataAsset digest。              |
-| `policy`                         | `sha256:<hex>`                     | policy bundle digest。                            |
-| `group`                          | kebab-case                         | rollout / activation group。                      |
-| `operator-implementation-config` | kebab-case or ULID                 | operator implementation / alias config evidence。 |
+| Kind                             | Suffix                             | 説明                                                        |
+| -------------------------------- | ---------------------------------- | ----------------------------------------------------------- |
+| `space`                          | kebab-case                         | operator が指定する Space id。                              |
+| `installation`                   | ULID or stable name                | Space 内の Installation。                                   |
+| `deployment`                     | ULID                               | apply / rollback ごとに kernel が生成。                     |
+| `journal`                        | ULID                               | WAL entry。                                                 |
+| `operation`                      | ULID                               | OperationPlan entry。                                       |
+| `resolution`                     | `sha256:<hex>`                     | ResolutionSnapshot の content address。                     |
+| `desired`                        | `sha256:<hex>`                     | DesiredSnapshot の content address。                        |
+| `activation`                     | ULID                               | ActivationSnapshot。                                        |
+| `object`                         | kebab-case                         | materialized object の logical id。                         |
+| `link`                           | `<consumer>.<slot>`                | namespace / binding link。                                  |
+| `generated`                      | `<owner-kind>:<owner-id>/<reason>` | kernel 生成 object。                                        |
+| `exposure`                       | kebab-case                         | route / ingress exposure。                                  |
+| `revoke-debt`                    | ULID                               | RevokeDebt entry。                                          |
+| `approval`                       | ULID                               | approval record。                                           |
+| `connector`                      | kebab-case                         | runtime-agent connector id。                                |
+| `artifact`                       | `sha256:<hex>`                     | wire prefix for optional operator DataAsset record digest。 |
+| `policy`                         | `sha256:<hex>`                     | policy bundle digest。                                      |
+| `group`                          | kebab-case                         | rollout / activation group。                                |
+| `operator-implementation-config` | kebab-case or ULID                 | operator implementation / alias config evidence。           |
 
 ## Examples
 
@@ -68,4 +68,4 @@ grammar, or delimiter is a breaking change and requires an RFC.
 - [Closed Enums](./closed-enums.md)
 - [Storage Schema](./storage-schema.md)
 - [Digest Computation](./digest-computation.md)
-- [Connector Contract](./connector-contract.md)
+- [Connector Guide](./connector-contract.md)

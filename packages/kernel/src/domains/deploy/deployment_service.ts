@@ -123,7 +123,7 @@ export interface ApplyDeploymentInput {
    * Read-set re-validation hook. Phase 17D extension: invoked just before the
    * `resolved → applying` transition. Returning `ok=false` aborts apply
    * without mutating any committed state. Use for must-replan signals
-   * surfaced by the live provider plugin contract.
+   * surfaced by the live provider adapter contract.
    */
   readonly readSetValidator?: ApplyPreflightValidator;
   /**

@@ -35,7 +35,7 @@ export function parseSourceRef(ref: string): Source {
   }
   if (ref.startsWith("catalog:") || ref.startsWith("bundle:")) {
     throw new Error(
-      "catalog: and bundle: installer sources are not part of the current public installer API; use git:, prepared:, or a local path",
+      "catalog: and bundle: are operator catalog sources; installer sources use git:, prepared:, or a local path",
     );
   }
   if (ref.startsWith("prepared:")) {
