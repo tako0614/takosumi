@@ -5,7 +5,7 @@
   "name": "postgres",
   "version": "v1",
   "aliases": ["postgres"],
-  "description": "Managed PostgreSQL instance. Provider-portable via standard wire protocol. Publishes connection material to the sibling namespace path.",
+  "description": "Managed PostgreSQL instance. Provider-portable via standard wire protocol. Publishes connection material as a local publication.",
   "x-ts": {
     "fileBasename": "database-postgres",
     "prefix": "DatabasePostgres"
@@ -41,9 +41,9 @@
       }
     }
   },
-  "publishes": [
-    {
-      "namespacePath": "<app-id>.<component-name>",
+  "publications": {
+    "connection": {
+      "contract": "service-binding",
       "material": {
         "host": "$outputs.host",
         "port": "$outputs.port",
@@ -53,7 +53,7 @@
         "connectionString": "$outputs.connectionString"
       }
     }
-  ],
+  },
   "listens": {},
   "outputs": [
     {

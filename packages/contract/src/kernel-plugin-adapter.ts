@@ -123,7 +123,7 @@ function collectTarget(
     if (!binding.target) continue;
     const target = targetMaterialToString(
       binding.target,
-      binding.namespacePath,
+      binding.sourceRef,
     );
     if (out !== undefined && out !== target) {
       throw new Error("listen-derived target is defined more than once");
@@ -135,14 +135,14 @@ function collectTarget(
 
 function targetMaterialToString(
   material: NamespaceMaterial,
-  namespacePath: string,
+  sourceRef: string,
 ): string {
   const url = material.url;
   if (typeof url === "string" && url.length > 0) return url;
   const target = material.target;
   if (typeof target === "string" && target.length > 0) return target;
   throw new Error(
-    `listen target ${namespacePath} must publish a string url or target field`,
+    `listen target ${sourceRef} must publish a string url or target field`,
   );
 }
 

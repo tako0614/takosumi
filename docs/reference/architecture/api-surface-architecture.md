@@ -2,8 +2,8 @@
 
 > このページでわかること: kernel の API surface 設計と endpoint 分類。
 
-endpoint reference は [Kernel HTTP API reference](../kernel-http-api.md) が一次
-資料。本ページは surface split の設計判断だけを扱う。Takosumi public spec
+endpoint reference は [Reference Kernel Route Inventory](../kernel-http-api.md)
+が一次 資料。本ページは surface split の設計判断だけを扱う。Takosumi public spec
 surface は AppSpec / Installation / Deployment と 5 つの installer endpoint
 です。
 
@@ -51,7 +51,10 @@ installer writes は client retry が発生しうる。 v1 surface は
 digest** に閉じる: git source では caller が `expected.commit` と
 `expected.manifestDigest` を送り、prepared source では `expected.sourceDigest`
 と `expected.manifestDigest` を送る。kernel は素材が更新済なら
-`409 failed_precondition`、 サイズ超過なら `413 resource_exhausted` を返す。
+`409 failed_precondition`、サイズ超過なら `413 resource_exhausted` を返す。
+unresolved kind / provider / listen は source race ではないため、
+`400 invalid_argument` または、operator がその機能を提供しない場合の
+`501 not_implemented` として扱う。
 
 ## ページネーション {#pagination}
 
@@ -67,7 +70,7 @@ reference に置く。
 
 ## クロスリファレンス {#cross-references}
 
-- [Kernel HTTP API](../kernel-http-api.md)
+- [Reference Kernel Route Inventory](../kernel-http-api.md)
 - [Installer API](../installer-api.md)
 - [Runtime-Agent API](../runtime-agent-api.md)
 - [Lifecycle Protocol](../lifecycle.md)

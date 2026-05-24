@@ -41,9 +41,9 @@ export type DatabasePostgresCapability =
   | "ipv6"
   | "extensions";
 
-export type DatabasePostgresPublishesTo = "<app-id>.<component-name>";
+export type DatabasePostgresPublicationName = "connection";
 
-export type DatabasePostgresListensFrom = never;
+export type DatabasePostgresListenBindingName = never;
 
 export const DATABASE_POSTGRES_CAPABILITIES:
   readonly DatabasePostgresCapability[] = [
@@ -69,13 +69,13 @@ export const DATABASE_POSTGRES_ALIASES: readonly string[] = [
   "postgres",
 ];
 
-export const DATABASE_POSTGRES_PUBLISHES_TO:
-  readonly DatabasePostgresPublishesTo[] = [
-    "<app-id>.<component-name>",
+export const DATABASE_POSTGRES_PUBLICATIONS:
+  readonly DatabasePostgresPublicationName[] = [
+    "connection",
   ];
 
-export const DATABASE_POSTGRES_LISTENS_FROM:
-  readonly DatabasePostgresListensFrom[] = [];
+export const DATABASE_POSTGRES_LISTEN_BINDINGS:
+  readonly DatabasePostgresListenBindingName[] = [];
 
 export const DATABASE_POSTGRES_KIND_ID = "postgres";
 export const DATABASE_POSTGRES_KIND_NAME = "postgres";
@@ -83,4 +83,4 @@ export const DATABASE_POSTGRES_KIND_URI =
   "https://takosumi.com/kinds/v1/postgres";
 export const DATABASE_POSTGRES_KIND_VERSION = "v1";
 export const DATABASE_POSTGRES_DESCRIPTION =
-  "Managed PostgreSQL instance. Provider-portable via standard wire protocol. Publishes connection material to the sibling namespace path.";
+  "Managed PostgreSQL instance. Provider-portable via standard wire protocol. Publishes connection material as a local publication.";

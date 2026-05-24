@@ -108,9 +108,9 @@ Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployme
 Deno.test("KernelPlugin.apply receives Component + source + listenedMaterials", async () => {
   const component: Component = {
     kind: "worker",
-    publish: ["com.example.app.web"],
+    publish: { http: { as: "http-endpoint" } },
     listen: {
-      "com.example.app.db": { as: "env", prefix: "DB" },
+      db: { from: "database.connection", as: "env", prefix: "DB" },
     },
   };
   const seen: KernelPluginApplyContext[] = [];
@@ -139,18 +139,19 @@ Deno.test("KernelPlugin.apply receives Component + source + listenedMaterials", 
     component,
     source: { kind: "prepared", url: "file:///src.tar", digest: "sha256:abc" },
     sourceDirectory: "/tmp/prepared-source",
-    listenedMaterials: { "com.example.app.db": dbMaterial },
+    listenedMaterials: { db: dbMaterial },
     resolvedBindings: [{
       listenerComponent: "web",
-      namespacePath: "com.example.app.db",
-      options: { as: "env", prefix: "DB" },
+      bindingName: "db",
+      sourceRef: "database.connection",
+      options: { from: "database.connection", as: "env", prefix: "DB" },
       envInjections: { DB_HOST: "db.internal" },
       material: dbMaterial,
     }],
   });
 
   assert.equal(result.resourceHandle, "rec://web");
-  assert.deepEqual(seen[0].listenedMaterials["com.example.app.db"], dbMaterial);
+  assert.deepEqual(seen[0].listenedMaterials.db, dbMaterial);
   assert.equal(
     seen[0].resolvedBindings[0]?.envInjections.DB_HOST,
     "db.internal",
@@ -162,7 +163,7 @@ Deno.test("KernelPlugin.apply receives Component + source + listenedMaterials", 
 Deno.test("KernelPlugin.publishMaterial emits a NamespaceMaterial", async () => {
   const component: Component = {
     kind: "worker",
-    publish: ["com.example.app.web"],
+    publish: { http: { as: "http-endpoint" } },
   };
   const plugin: KernelPlugin = {
     name: "@example/worker",
@@ -184,7 +185,8 @@ Deno.test("KernelPlugin.publishMaterial emits a NamespaceMaterial", async () => 
     installationId: "ins_1",
     componentName: "web",
     component,
-    namespacePath: "com.example.app.web",
+    publicationName: "http",
+    options: { as: "http-endpoint" },
     outputs: { url: "https://web.example.test", id: "w_1" },
   });
 
@@ -196,7 +198,7 @@ Deno.test("KernelPlugin.applyListen returns an EnvInjection", async () => {
   const component: Component = {
     kind: "worker",
     listen: {
-      "com.example.app.db": { as: "env", prefix: "DB" },
+      db: { from: "database.connection", as: "env", prefix: "DB" },
     },
   };
   const plugin: KernelPlugin = {
@@ -222,8 +224,9 @@ Deno.test("KernelPlugin.applyListen returns an EnvInjection", async () => {
     installationId: "ins_1",
     componentName: "web",
     component,
-    namespacePath: "com.example.app.db",
-    options: { as: "env", prefix: "DB" },
+    bindingName: "db",
+    sourceRef: "database.connection",
+    options: { from: "database.connection", as: "env", prefix: "DB" },
     material: {
       host: "db.internal",
       port: "5432",

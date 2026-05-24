@@ -40,17 +40,16 @@ Space:
 namespace path は Space scope の namespace テーブル内の名前である。
 
 ```text
-operator.identity.oauth
 operator.identity.oidc
-com.example.database.primary
+operator.database.primary
 ```
 
 2 つの Space にある同じ namespace path は、両方の Space が同じ export snapshot
 を明示的に import / share したときに同じ ExportDeclaration として扱う。
 
 ```text
-space:acme-prod / com.example.database.primary
-space:acme-dev  / com.example.database.primary
+space:acme-prod / operator.database.primary
+space:acme-dev  / operator.database.primary
 ```
 
 これらは別個の resolution subject である。
@@ -71,36 +70,45 @@ event で有用である。
 
 ## Namespace スコープスタック {#namespace-scope-stack}
 
-resolution は Space の中で行われる。resolver は次の順で scope をチェックする。
+public AppSpec v1 の `namespace:<path>` resolution は Space の中で行われ、Space
+に可視化された operator-owned export declaration を exact match で見る。以下の
+scope は reference implementation が内部 record を整理するために使える
+vocabulary であり、AppSpec author が `namespace:<path>` で選ぶ public source
+ではありません。
 
 ```text
-1. deployment-local object namespace
-2. deployment-local generated namespace
-3. group namespace
-4. environment namespace, if the Space defines environments
-5. space namespace
-6. operator namespace granted to this Space
-7. reserved: explicitly shared namespace imports from another Space
+public:
+  operator namespace granted to this Space
+
+internal / future:
+  deployment-local object namespace
+  deployment-local generated namespace
+  group namespace
+  environment namespace
+  space namespace
+  explicitly shared namespace imports from another Space
 ```
 
-namespace path が複数 scope に存在する場合、shadowing policy が許可するときに
-限り最初の一致 scope が勝つ。本番 policy は意味のある shadowing を拒否するか
-approval を要求すべきである。
+current public v1 では operator namespace の exact match が正本です。内部
+namespace を導入する場合も public `operator.*` export を shadow しないよう
+policy で fail-closed にします。
 
 ## 予約 prefix {#reserved-prefixes}
 
-予約 prefix はグローバル名だが、可視性は依然として Space scope である。
+public v1 の予約 prefix は `operator` です。名前はグローバルに見えても、
+可視性は Space scope です。reference implementation が内部整理に `system` などの
+prefix を使う場合も、AppSpec author が選ぶ public namespace source
+ではありません。
 
 ```text
 operator
-system
 ```
 
 これらの prefix を publish できるのは operator
-だけである。`operator.identity.oauth` のような予約 export も、resolution
-で使う前にその Space に grant されるか可視に される必要がある。`takos.*`
-のような product-specific prefix は operator distribution の通常 namespace
-例である。
+だけである。`operator.identity.oidc` のような予約 export も、resolution
+で使う前にその Space に grant されるか可視にされる必要がある。product-specific
+prefix は internal / future scope として扱い、current public v1 の
+`namespace:<path>` source にはしません。
 
 predefined な operator-owned namespace は Space に明示的に grant される。
 
@@ -116,17 +124,19 @@ ExternalNamespaceRegistration:
     state: fresh
 ```
 
-v1 の依存は Space-local namespace と operator-owned namespace を基本にする。
+public v1 の依存は、同じ AppSpec 内の `component.publication` と、対象 Space に
+可視化された operator-owned `ExportDeclaration.namespacePath` を exact match
+で解決する `namespace:<path>` です。
 
 ## Space 跨ぎ link {#cross-space-links}
 
-Space 跨ぎ link は reserved sharing model です。current v1 の依存は Space-local
-link を基本にする。
+Space 跨ぎ link は reserved sharing model です。current v1 の AppSpec authoring
+surface からは作れません。
 
 ```yaml
 fromSpaceId: space:platform
 toSpaceId: space:acme-prod
-exportPath: operator.identity.oauth
+exportPath: operator.identity.oidc
 exportSnapshotId: export-snapshot:...
 allowedAccess:
   - read
@@ -240,16 +250,18 @@ components:
       version: "16"
       size: small
     publish:
-      - com.example.api.db
+      connection:
+        as: service-binding
 
   api:
     kind: worker
     listen:
-      com.example.api.db:
+      database:
+        from: db.connection
         as: env
         prefix: DATABASE
-	    spec:
-	      entrypoint: dist/worker.mjs
+    spec:
+      entrypoint: dist/worker.mjs
 ```
 
 `space:acme-prod` で apply すると、resource graph、選ばれた provider、output
@@ -257,12 +269,12 @@ ref、policy、secret、prepared source、GroupHead はすべて production Spac
 に対して resolve される。
 
 ```text
-space:acme-prod/com.example.api.db
+space:acme-prod/db.connection
 ```
 
 `space:acme-dev` で apply すると、同じ AppSpec が development Space に対して
 resolve される。
 
 ```text
-space:acme-dev/com.example.api.db
+space:acme-dev/db.connection
 ```

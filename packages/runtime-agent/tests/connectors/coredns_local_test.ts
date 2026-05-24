@@ -35,16 +35,26 @@ Deno.test("CorednsLocalConnector.apply appends record to zone file", async () =>
     await Deno.writeTextFile(zoneFile, "");
     const connector = new CorednsLocalConnector({ zoneFile });
     const res = await connector.apply({
-      shape: "custom-domain@v1",
+      shape: "gateway@v1",
       provider: "@takos/selfhost-coredns",
       resourceName: "rs",
-      spec: { name: "app.example.com", target: "10.0.0.5" },
+      spec: gatewaySpec("app.example.com", "10.0.0.5"),
     }, {});
     assert.match(res.handle, /^coredns-/);
-    assert.equal(res.outputs.fqdn, "app.example.com");
+    assert.equal(res.outputs.host, "app.example.com");
     const text = await Deno.readTextFile(zoneFile);
     assert.match(text, /app\.example\.com\. IN A 10\.0\.0\.5/);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+function gatewaySpec(host: string, target: string) {
+  return {
+    listeners: {
+      public: { protocol: "https", host, tls: "auto" },
+    },
+    routes: [{ listener: "public", path: "/", to: "upstream" }],
+    target,
+  };
+}

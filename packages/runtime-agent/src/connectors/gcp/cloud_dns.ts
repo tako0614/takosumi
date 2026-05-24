@@ -1,5 +1,5 @@
 /**
- * `CloudDnsConnector` — wraps `DirectCloudDnsLifecycle` for `custom-domain@v1`.
+ * `CloudDnsConnector` — wraps `DirectCloudDnsLifecycle` for `gateway@v1`.
  */
 
 import type {
@@ -37,7 +37,7 @@ export interface CloudDnsConnectorOptions {
 
 export class CloudDnsConnector implements Connector {
   readonly provider = "@takos/gcp-cloud-dns";
-  readonly shape = "custom-domain@v1";
+  readonly shape = "gateway@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudDnsLifecycle;
 
@@ -100,5 +100,9 @@ export class CloudDnsConnector implements Connector {
 }
 
 function outputsFor(desc: CloudDnsRecordDescriptor): JsonObject {
-  return { fqdn: desc.fqdn };
+  return {
+    url: `https://${desc.fqdn}`,
+    host: desc.fqdn,
+    scheme: "https",
+  };
 }

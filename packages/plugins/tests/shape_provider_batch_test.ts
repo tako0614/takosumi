@@ -25,8 +25,11 @@ const SAMPLE_SPECS: Record<string, JsonObject> = {
     scale: { min: 1, max: 1 },
   },
   "postgres@v1": { version: "16", size: "small" },
-  "custom-domain@v1": {
-    name: "api.example.com",
+  "gateway@v1": {
+    listeners: {
+      public: { protocol: "https", host: "api.example.com", tls: "auto" },
+    },
+    routes: [{ listener: "public", path: "/", to: "upstream" }],
     target: "https://internal.example.com",
   },
   "worker@v1": {
@@ -85,7 +88,7 @@ Deno.test("bundled provider set covers all 5 shapes", () => {
   assert.deepEqual(
     Array.from(shapeIds).sort(),
     [
-      "custom-domain",
+      "gateway",
       "object-store",
       "postgres",
       "web-service",

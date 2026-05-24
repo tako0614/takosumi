@@ -46,13 +46,19 @@
       }
     },
     {
-      "shape": "custom-domain@v1",
+      "shape": "gateway@v1",
       "name": "primary",
       "provider": "cloud-dns",
       "spec": {
-        "name": "gcp-live-smoke.example.test",
-        "target": "${ref:web.url}",
-        "certificate": { "kind": "managed" }
+        "listeners": {
+          "public": {
+            "protocol": "https",
+            "host": "gcp-live-smoke.example.test",
+            "tls": "auto"
+          }
+        },
+        "routes": [{ "listener": "public", "path": "/", "to": "upstream" }],
+        "target": "${ref:web.url}"
       }
     }
   ]

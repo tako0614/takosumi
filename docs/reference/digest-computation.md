@@ -3,18 +3,21 @@
 > このページでわかること: AppSpec file / structured snapshot / source snapshot /
 > operator DataAsset の digest 計算方法。
 
-Takosumi v1 が AppSpec file / snapshot / plan / approval / predicted effect /
-source / DataAsset を結びつけるために使う digest 計算の規定です。digest は
-**structured JSON digest** と **byte-stream digest** の 2 family に分かれます。
+Takosumi v1 が AppSpec file / source / DataAsset と、reference kernel 内部の
+snapshot / plan / approval / predicted effect を結びつけるために使う digest 計算
+です。digest は **structured JSON digest** と **byte-stream digest** の 2 family
+に分かれます。
 
-本仕様は normative であり、 本ページと異なる digest を生成する kernel は
-仮にレシピが大まかに合っていても非準拠とみなします。 replay / restore /
-source・DataAsset verification など instance 間の相互運用は、 digest が byte
-単位で一致することに依存します。
+public wire interoperability で必要なのは `manifestDigest`、prepared source
+digest、 optional DataAsset digest などの byte-stream digest です。structured
+JSON digest は reference kernel の replay / restore / evidence 用であり、別
+implementation が同じ内部 snapshot 形状を持つことを Takosumi public spec
+は要求しません。ただし reference kernel と互換の evidence を読む implementation
+は、このページの canonical encoding に従います。
 
 ## digest の用途 {#digest-usage}
 
-v1 でこの仕様に従う structured JSON digest:
+reference kernel がこの仕様に従う structured JSON digest:
 
 - `desiredSnapshotDigest`: `desired:sha256:...` snapshot の identity。
 - `resolutionSnapshotDigest`: `resolution:sha256:...` snapshot の identity。
@@ -23,7 +26,7 @@ v1 でこの仕様に従う structured JSON digest:
 - `effectDetailsDigest`: `actualEffects` / `approvedEffects` view の identity。
 - `predictedActualEffectsDigest`: dry-materialization 予測の identity。
 
-v1 でこの仕様に従う byte-stream digest:
+public wire / operator extension がこの仕様に従う byte-stream digest:
 
 - `manifestDigest`: installer が選択した `.takosumi.yml` file bytes の
   identity。

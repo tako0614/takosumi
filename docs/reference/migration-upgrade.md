@@ -203,5 +203,5 @@ audit event は migration の各 phase で emit され、 operator UI が tracki
 - [Cross-Process Locks](./cross-process-locks.md)
 - [Audit Events](./audit-events.md)
 - [Readiness Probes](./readiness-probes.md)
-- [Kernel HTTP API](./kernel-http-api.md)
+- [Reference Kernel Route Inventory](./kernel-http-api.md)
 - [Closed Enums](./closed-enums.md)

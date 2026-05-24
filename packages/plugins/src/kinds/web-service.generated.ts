@@ -46,9 +46,9 @@ export type WebServiceCapability =
   | "crons"
   | "private-networking";
 
-export type WebServicePublishesTo = "<app-id>.<component-name>";
+export type WebServicePublicationName = "http";
 
-export type WebServiceListensFrom = "<sibling-namespace-path>";
+export type WebServiceListenBindingName = "binding";
 
 export const WEB_SERVICE_CAPABILITIES: readonly WebServiceCapability[] = [
   "always-on",
@@ -71,13 +71,14 @@ export const WEB_SERVICE_ALIASES: readonly string[] = [
   "web-service",
 ];
 
-export const WEB_SERVICE_PUBLISHES_TO: readonly WebServicePublishesTo[] = [
-  "<app-id>.<component-name>",
+export const WEB_SERVICE_PUBLICATIONS: readonly WebServicePublicationName[] = [
+  "http",
 ];
 
-export const WEB_SERVICE_LISTENS_FROM: readonly WebServiceListensFrom[] = [
-  "<sibling-namespace-path>",
-];
+export const WEB_SERVICE_LISTEN_BINDINGS:
+  readonly WebServiceListenBindingName[] = [
+    "binding",
+  ];
 
 export const WEB_SERVICE_KIND_ID = "web-service";
 export const WEB_SERVICE_KIND_NAME = "web-service";

@@ -33,7 +33,10 @@ current public lifecycle command は Installer API に対応する。
 - `deploy`
 - `deploy dry-run`
 - `rollback`
-- Installation / Deployment ledger reads
+
+Installation / Deployment ledger reads は public lifecycle command ではなく、
+operator/internal helper command です。reference kernel では internal
+control-plane route を使う operator tooling として扱います。
 
 `artifact` と `runtime-agent` は別 surface を扱うため grouped command
 として残る。

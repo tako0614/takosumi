@@ -36,7 +36,7 @@ stage 意味:
   が完了できないときは RevokeDebt を `external-revoke` / `link-revoke` reason で
   enqueue。
 - `observe`: long-lived な read-only stage。 runtime-agent describe を吸って
-  Exposure health / DriftIndex / RevokeDebt 候補を更新。 stage 自身は
+  health observation / DriftIndex / RevokeDebt 候補を更新。 stage 自身は
   actual-effects を変更しません。
 - `finalize`: managed / generated lifecycle class の cleanup 完了。 external /
   operator / imported は触らず、 cleanup 不能な generated material は RevokeDebt
@@ -137,17 +137,16 @@ Public deploy route v1:
 
 ## Deployment provenance
 
-installer deployment endpoints may receive source / provenance evidence from
-upstream automation. kernel は opaque JSON として WAL evidence に永続化し、
-workflow 実行 / build log parse / git field 解釈は行いません。
+operator automation may supply source / provenance evidence to the reference
+kernel. kernel は opaque JSON として internal Deployment / WAL evidence に永続化
+し、workflow 実行 / build log parse / git field 解釈は行いません。この evidence
+は public Installer API の必須 field ではありません。
 
-- WAL の effect detail に `provenance` object 全体を含める
-- resolved resource に `metadata.takosumiDeployProvenance` を付け、
-  `kind: "takosumi.deploy-provenance-digest@v1"` と provenance digest を記録
-- 当該 metadata は OperationPlan digest に参加する (同 AppSpec source でも
-  upstream provenance が違えば別 operation intent)
-- status / recovery inspect response から audit consumer に記録済 provenance
-  を返せる
+- WAL evidence に provenance object または `provenanceDigest` を含められる
+- operator が provenance を operation identity に含めたい場合は
+  `operationPlanDigest` の入力 evidence として記録する
+- status / recovery inspect response は audit consumer 向けに記録済 provenance
+  digest を返せる
 
 これで upstream automation は prepared source digest → workflow run id → git
 commit SHA → step log digest の traceability を、kernel に workflow を持ち込

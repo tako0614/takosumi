@@ -1,7 +1,7 @@
 # @takos/takosumi-cloudflare-providers
 
 Cloudflare-backed reference `KernelPlugin` adapter factories for takosumi.com
-reference component kinds (`worker` / `object-store` / `custom-domain`).
+reference component kinds (`worker` / `object-store` / `gateway`).
 Operators import this package explicitly when they want Cloudflare coverage —
 Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the
 operator chooses which provider packages to attach to the reference adapter
@@ -38,7 +38,7 @@ settings such as account id or zone id.
 | --------------------------------- | --------------------------------------------- |
 | `cloudflareWorkerProvider`        | `https://takosumi.com/kinds/v1/worker`        |
 | `cloudflareR2ObjectStoreProvider` | `https://takosumi.com/kinds/v1/object-store`  |
-| `cloudflareCustomDomainProvider`  | `https://takosumi.com/kinds/v1/custom-domain` |
+| `cloudflareCustomDomainProvider`  | `https://takosumi.com/kinds/v1/gateway` |
 
 Each factory returns a reference `KernelPlugin` adapter (see
 [`@takos/takosumi-contract/plugin`](https://jsr.io/@takos/takosumi-contract)).

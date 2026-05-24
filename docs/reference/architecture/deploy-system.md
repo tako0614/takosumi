@@ -48,5 +48,5 @@ endpoint は retired model として扱う。
 
 - [Installer API](../installer-api.md)
 - [AppSpec](../app-spec.md)
-- [Kernel HTTP API](../kernel-http-api.md)
+- [Reference Kernel Route Inventory](../kernel-http-api.md)
 - [AppSpec](../app-spec.md)

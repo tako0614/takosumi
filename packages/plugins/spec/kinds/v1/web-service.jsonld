@@ -57,21 +57,21 @@
       }
     }
   },
-  "publishes": [
-    {
-      "namespacePath": "<app-id>.<component-name>",
+  "publications": {
+    "http": {
+      "contract": "http-endpoint",
       "material": {
         "url": "$outputs.url",
         "internalHost": "$outputs.internalHost",
         "internalPort": "$outputs.internalPort"
       }
     }
-  ],
+  },
   "listens": {
-    "<sibling-namespace-path>": {
+    "binding": {
       "shape": "env",
       "envMap": {
-        "DESCRIPTION": "Accepts any sibling namespace material; AppSpec listen options declare `as: env` with optional `prefix:` to expand each material field into `${PREFIX}_*` env vars."
+        "DESCRIPTION": "Accepts any listened material; AppSpec listen options declare `from`, `as: env`, and optional `prefix:` to expand each material field into `${PREFIX}_*` env vars."
       }
     }
   },

@@ -108,8 +108,8 @@ failed_precondition | resource_exhausted | not_implemented |
 readiness_probe_failed | internal_error
 ```
 
-HTTP status への対応は [Kernel HTTP API](./kernel-http-api.md) にあります。
-Installer API が返す public error code subset は
+HTTP status への対応は [Reference Kernel Route Inventory](./kernel-http-api.md)
+にあります。 Installer API が返す public error code subset は
 [Installer API](./installer-api.md#error-envelope) が正本です。
 
 ## Connector identity
@@ -126,6 +126,6 @@ dispatch key は `(shape, provider)` です。詳細は
 
 - [Lifecycle Protocol](./lifecycle.md)
 - [WAL Stages](./wal-stages.md)
-- [Kernel HTTP API](./kernel-http-api.md)
+- [Reference Kernel Route Inventory](./kernel-http-api.md)
 - [Risk Taxonomy](./risk-taxonomy.md)
 - [Connector Guide](./connector-contract.md)

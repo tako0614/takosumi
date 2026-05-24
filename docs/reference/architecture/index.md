@@ -29,7 +29,7 @@ components
 ```
 
 component の公開 field は `kind`、`spec`、`publish`、`listen` です。
-entrypoint、image、route、custom domain などの詳細は kind の `spec` または
+entrypoint、image、gateway route などの詳細は kind の `spec` または
 operator-provided descriptor / implementation convention
 に置きます。kernel-owned release bundle や provider target list はありません。
 

@@ -9,13 +9,14 @@
  * 2. **Reference kind document** (= e.g.
  *    `packages/plugins/spec/kinds/v1/<name>.jsonld`).
  *    Must include `@context` / `@id` / `@type` / `name` / `aliases` /
- *    `publishes` / `listens`. `publishes` is an array of
- *    `{ namespacePath, material }` entries; `listens` is an object
- *    keyed by namespace path with `{ shape, ...projectionMetadata }` values.
+ *    `publications` / `listens`. `publications` is an object keyed by local
+ *    publication name with `{ contract, material }` values; `listens` is an
+ *    object keyed by local binding name with `{ shape, ...projectionMetadata }`
+ *    values.
  *
  * The lint is intentionally shallow: kernel does not perform JSON-LD
- * semantic expand, so we only assert the envelope and the namespace
- * pub/sub shape. Schema field checks (= `spec` / `outputs` /
+ * semantic expand, so we only assert the envelope and the publication/listen
+ * shape. Schema field checks (= `spec` / `outputs` /
  * `capabilities`) are not enforced here so operators can publish
  * narrower kind variants if they wish.
  */
@@ -77,7 +78,7 @@ async function main(): Promise<void> {
       requireNonEmptyString(obj["@type"], "@type", entry.path, issues);
       requireNonEmptyString(obj["name"], "name", entry.path, issues);
       checkAliases(obj["aliases"], entry.path, issues);
-      checkPublishes(obj["publishes"], entry.path, issues);
+      checkPublications(obj["publications"], entry.path, issues);
       checkListens(obj["listens"], entry.path, issues);
     }
   }
@@ -134,7 +135,7 @@ function checkAliases(
   }
 }
 
-function checkPublishes(
+function checkPublications(
   value: unknown,
   path: string,
   issues: LintIssue[],
@@ -143,41 +144,56 @@ function checkPublishes(
     issues.push({
       path,
       message:
-        "missing `publishes` (declare what this kind emits to the namespace registry)",
+        "missing `publications` (declare local publications this kind can emit)",
     });
     return;
   }
-  if (!Array.isArray(value)) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
     issues.push({
       path,
-      message: "`publishes` must be an array of { namespacePath, material }",
+      message:
+        "`publications` must be an object keyed by local publication name",
     });
     return;
   }
-  for (const [index, entry] of value.entries()) {
+  for (const [key, entry] of Object.entries(value)) {
+    if (!isLocalName(key)) {
+      issues.push({
+        path,
+        message: "publication keys must be local names",
+      });
+      continue;
+    }
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       issues.push({
         path,
-        message: `publishes[${index}] must be an object`,
+        message: `publications[${key}] must be an object`,
       });
       continue;
     }
     const e = entry as Record<string, unknown>;
-    if (typeof e["namespacePath"] !== "string" || e["namespacePath"] === "") {
+    if (typeof e["contract"] !== "string" || e["contract"] === "") {
       issues.push({
         path,
-        message: `publishes[${index}].namespacePath must be a non-empty string`,
+        message: `publications[${key}].contract must be a non-empty string`,
+      });
+    }
+    if ("from" in e) {
+      issues.push({
+        path,
+        message:
+          `publications[${key}].from is obsolete; use material projection metadata`,
       });
     }
     if (
-      e["material"] === undefined ||
-      e["material"] === null ||
-      typeof e["material"] !== "object" ||
-      Array.isArray(e["material"])
+      e["material"] !== undefined &&
+      (e["material"] === null ||
+        typeof e["material"] !== "object" ||
+        Array.isArray(e["material"]))
     ) {
       issues.push({
         path,
-        message: `publishes[${index}].material must be an object`,
+        message: `publications[${key}].material must be an object when present`,
       });
     }
   }
@@ -192,23 +208,23 @@ function checkListens(
     issues.push({
       path,
       message:
-        "missing `listens` (declare which namespace paths this kind can listen to, may be empty {})",
+        "missing `listens` (declare local binding shapes this kind can listen through, may be empty {})",
     });
     return;
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     issues.push({
       path,
-      message: "`listens` must be an object keyed by namespace path",
+      message: "`listens` must be an object keyed by local binding name",
     });
     return;
   }
   const obj = value as Record<string, unknown>;
   for (const [key, descriptor] of Object.entries(obj)) {
-    if (typeof key !== "string" || key.length === 0) {
+    if (!isLocalName(key)) {
       issues.push({
         path,
-        message: "listens entry keys must be non-empty namespace paths",
+        message: "listens entry keys must be local names",
       });
       continue;
     }
@@ -243,6 +259,10 @@ function checkListens(
       });
     }
   }
+}
+
+function isLocalName(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
 /**

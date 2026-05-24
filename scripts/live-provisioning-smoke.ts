@@ -793,17 +793,30 @@ function resourceToRuntimeRoute(
 ): RuntimeDesiredState["routes"][number] {
   const name = stringValue(resource.name, "resource.name");
   const spec = record(resource.spec ?? {}, "resource.spec");
+  const listener = firstGatewayListener(spec);
   return {
     id: `${base.activationId}:route:${name}`,
     spaceId: base.spaceId,
     groupId: base.groupId,
     activationId: base.activationId,
     routeName: name,
-    host: typeof spec.name === "string" ? spec.name : undefined,
+    host: typeof listener?.host === "string" ? listener.host : undefined,
     targetComponentName: targetComponentName(spec.target),
-    protocol: "https",
+    protocol: typeof listener?.protocol === "string"
+      ? listener.protocol
+      : "https",
     source: stringValue(resource.provider, "resource.provider"),
   };
+}
+
+function firstGatewayListener(
+  spec: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!isRecord(spec.listeners)) return undefined;
+  for (const listener of Object.values(spec.listeners)) {
+    if (isRecord(listener)) return listener;
+  }
+  return undefined;
 }
 
 type RuntimeDesiredStateBase = Pick<
@@ -843,7 +856,7 @@ function isWorkloadShape(value: unknown): boolean {
 }
 
 function isRouteShape(value: unknown): boolean {
-  return typeof value === "string" && value.startsWith("custom-domain@");
+  return typeof value === "string" && value.startsWith("gateway@");
 }
 
 function specString(

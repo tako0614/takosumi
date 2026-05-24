@@ -1,6 +1,6 @@
 /**
  * Reference component kind registry. The `worker / web-service / postgres /
- * object-store / custom-domain` descriptors are distributed by
+ * object-store / gateway` descriptors are distributed by
  * `@takos/takosumi-plugins`,
  * not by the Takosumi AppSpec contract. Operators opt into these aliases and
  * descriptors explicitly when they want the Takos-published reference set.
@@ -16,12 +16,9 @@ import { registerShape, type Shape } from "takosumi-contract";
 import { WebServiceKind } from "./web-service.ts";
 import { ObjectStoreKind } from "./object-store.ts";
 import { DatabasePostgresKind } from "./database-postgres.ts";
-import { CustomDomainKind } from "./custom-domain.ts";
+import { GatewayKind } from "./gateway.ts";
 import { WorkerKind } from "./worker.ts";
-import {
-  CUSTOM_DOMAIN_KIND_ID,
-  CUSTOM_DOMAIN_KIND_URI,
-} from "./custom-domain.generated.ts";
+import { GATEWAY_KIND_ID, GATEWAY_KIND_URI } from "./gateway.generated.ts";
 import {
   DATABASE_POSTGRES_KIND_ID,
   DATABASE_POSTGRES_KIND_URI,
@@ -37,18 +34,18 @@ import {
 import { WORKER_KIND_ID, WORKER_KIND_URI } from "./worker.generated.ts";
 
 export {
-  CustomDomainKind,
   DatabasePostgresKind,
+  GatewayKind,
   ObjectStoreKind,
   WebServiceKind,
   WorkerKind,
 };
 
 export type {
-  CustomDomainCapability,
-  CustomDomainOutputs,
-  CustomDomainSpec,
-} from "./custom-domain.ts";
+  GatewayCapability,
+  GatewayOutputs,
+  GatewaySpec,
+} from "./gateway.ts";
 export type {
   DatabasePostgresCapability,
   DatabasePostgresOutputs,
@@ -75,7 +72,7 @@ export type TakosumiReferenceKindName =
   | typeof WEB_SERVICE_KIND_ID
   | typeof DATABASE_POSTGRES_KIND_ID
   | typeof OBJECT_STORE_KIND_ID
-  | typeof CUSTOM_DOMAIN_KIND_ID;
+  | typeof GATEWAY_KIND_ID;
 
 /**
  * Reference component kind URI aliases published by Takos on takosumi.com.
@@ -90,7 +87,7 @@ export const TAKOSUMI_REFERENCE_KIND_URIS: Readonly<
     [WEB_SERVICE_KIND_ID]: WEB_SERVICE_KIND_URI,
     [DATABASE_POSTGRES_KIND_ID]: DATABASE_POSTGRES_KIND_URI,
     [OBJECT_STORE_KIND_ID]: OBJECT_STORE_KIND_URI,
-    [CUSTOM_DOMAIN_KIND_ID]: CUSTOM_DOMAIN_KIND_URI,
+    [GATEWAY_KIND_ID]: GATEWAY_KIND_URI,
   } as const,
 );
 
@@ -104,7 +101,7 @@ export const TAKOSUMI_REFERENCE_KIND_ALIASES: Readonly<Record<string, string>> =
 export const TAKOSUMI_REFERENCE_KINDS: readonly Shape[] = [
   ObjectStoreKind as Shape,
   DatabasePostgresKind as Shape,
-  CustomDomainKind as Shape,
+  GatewayKind as Shape,
   WorkerKind as Shape,
   WebServiceKind as Shape,
 ];

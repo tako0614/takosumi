@@ -22,13 +22,19 @@
       }
     },
     {
-      "shape": "custom-domain@v1",
+      "shape": "gateway@v1",
       "name": "primary",
       "provider": "route53",
       "spec": {
-        "name": "azure-live-smoke.example.test",
-        "target": "${ref:web.url}",
-        "certificate": { "kind": "auto" }
+        "listeners": {
+          "public": {
+            "protocol": "https",
+            "host": "azure-live-smoke.example.test",
+            "tls": "auto"
+          }
+        },
+        "routes": [{ "listener": "public", "path": "/", "to": "upstream" }],
+        "target": "${ref:web.url}"
       }
     }
   ]

@@ -47,7 +47,7 @@ Deno.test("phase-h: each KernelPlugin advertises a Takos reference kind URI", ()
     "https://takosumi.com/kinds/v1/web-service",
     "https://takosumi.com/kinds/v1/object-store",
     "https://takosumi.com/kinds/v1/postgres",
-    "https://takosumi.com/kinds/v1/custom-domain",
+    "https://takosumi.com/kinds/v1/gateway",
   ]);
   for (const row of CLOUD_PROVIDER_ROWS) {
     const provides = (row.plugin as { provides: readonly string[] }).provides ??

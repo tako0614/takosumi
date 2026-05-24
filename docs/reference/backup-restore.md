@@ -264,5 +264,5 @@ restore 後の current chain head は当然別の値になる。
 - [Secret Partitions](./secret-partitions.md)
 - [Schema Evolution](./migration-upgrade.md)
 - [CLI](./cli.md)
-- [Kernel HTTP API](./kernel-http-api.md)
+- [Reference Kernel Route Inventory](./kernel-http-api.md)
 - [Closed Enums](./closed-enums.md)

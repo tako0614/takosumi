@@ -4,9 +4,9 @@
  *
  * Drives the public 5-endpoint surface with a real `InstallerPipeline`
  * configured via `new InstallerPipeline({ plugins: [...] })`. The
- * pub/sub-flavoured AppSpec used here exercises:
- *   - kernel auto-namespacing of `<app-id>.<component-name>`
- *   - sibling `listen:` edges resolving from the registry into
+ * publication/listen AppSpec used here exercises:
+ *   - explicit local publications such as `db.connection`
+ *   - sibling `listen:` bindings resolving from the registry into
  *     `listenedMaterials` on the listener plugin's apply context
  *   - HTTP 201 on apply + status flip to 409 for the
  *     `failed_precondition` path (mismatched expected pin, pub/sub cycle)
@@ -31,10 +31,9 @@ import type {
 import { InstallerPipeline } from "../domains/installer/mod.ts";
 import { mountInstallerPublicRoutes } from "./installer_public_routes.ts";
 
-// Canonical pub/sub AppSpec: `db` publishes its connection material at
-// the auto-namespace `example-notes.db`; `web` listens with
-// `as: env, prefix: DB` so the kernel default expansion produces
-// DB_HOST / DB_PORT / ... env injections on the worker.
+// Canonical AppSpec: `db` publishes `db.connection`; `web` listens with
+// `as: env, prefix: DB` so the kernel default expansion produces DB_HOST /
+// DB_PORT / ... env injections on the worker.
 const SAMPLE_APP_SPEC_YAML = `apiVersion: v1
 metadata:
   id: example-notes
@@ -43,10 +42,14 @@ metadata:
 components:
   db:
     kind: postgres
+    publish:
+      connection:
+        as: service-binding
   web:
     kind: worker
     listen:
-      example-notes.db:
+      db:
+        from: db.connection
         as: env
         prefix: DB
 `;
@@ -81,8 +84,8 @@ interface ApplyRecord {
 }
 
 /**
- * Build a recording test plugin under the new namespace pub/sub model.
- * Captures `listenedMaterials` so the test can assert auto-namespace
+ * Build a recording test plugin under the publication/listen model.
+ * Captures `listenedMaterials` so the test can assert local publication
  * resolution and lifecycle hook invocations so we can assert ordering.
  */
 function buildRecordingPlugin(opts: {
@@ -115,7 +118,8 @@ function buildRecordingPlugin(opts: {
         outputs: opts.outputs ?? {},
       });
     },
-    publishMaterial: opts.publishMaterial,
+    publishMaterial: opts.publishMaterial ??
+      ((ctx) => Promise.resolve(ctx.outputs)),
     applyListen: opts.applyListen,
     destroy: (_ctx) => Promise.resolve(),
     onInstallStart: () => {
@@ -146,7 +150,7 @@ function buildApp(pipeline: InstallerPipeline) {
   return app;
 }
 
-Deno.test("installer e2e — plain-array plugins drive dry-run + apply with pub/sub auto-namespacing", async () => {
+Deno.test("installer e2e — plain-array plugins drive dry-run + apply with local publications", async () => {
   await withTempSource(async (workingDirectory) => {
     const events: string[] = [];
     const applies: ApplyRecord[] = [];
@@ -237,14 +241,12 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with pub/
       },
     );
 
-    // Topology: db (publisher) → web (listener via auto-namespace).
+    // Topology: db (publisher) -> web (listener via db.connection).
     assertEquals(applies.length, 2);
     assertEquals(applies[0].componentName, "db");
     assertEquals(applies[1].componentName, "web");
-    // The worker apply context surfaces the resolved db material at the
-    // auto-namespace path `example-notes.db`.
-    const dbMaterial = applies[1].listenedMaterials["example-notes.db"];
-    assert(dbMaterial, "worker should see db material on auto-namespace path");
+    const dbMaterial = applies[1].listenedMaterials.db;
+    assert(dbMaterial, "worker should see db material on the db binding");
     assertEquals(dbMaterial.host, "db.local");
     assertEquals(dbMaterial.port, "5432");
     assertEquals(dbMaterial.database, "notes");
@@ -318,10 +320,11 @@ Deno.test("installer e2e — listener applyListen receives material with prefixe
       }),
     });
     assertEquals(applyRes.status, 201);
-    // The listener plugin's applyListen hook saw exactly one edge for
-    // the auto-namespace path with the AppSpec listen options.
+    // The listener plugin's applyListen hook saw exactly one binding with
+    // the AppSpec listen options.
     assertEquals(captured.length, 1);
-    assertEquals(captured[0].namespacePath, "example-notes.db");
+    assertEquals(captured[0].bindingName, "db");
+    assertEquals(captured[0].sourceRef, "db.connection");
     assertEquals(captured[0].options.as, "env");
     assertEquals(captured[0].options.prefix, "DB");
     assertEquals(captured[0].material.host, "h");
@@ -368,8 +371,8 @@ Deno.test("installer e2e — apply with mismatched expected returns 409 (Phase A
   });
 });
 
-Deno.test("installer e2e — pub/sub cycle aborts apply with non-2xx error envelope", async () => {
-  // a publishes p1, b listens p1 and publishes p2, a listens p2 → cycle.
+Deno.test("installer e2e — publish/listen cycle aborts apply with non-2xx error envelope", async () => {
+  // a publishes a.out, b listens a.out and publishes b.out, a listens b.out.
   // The yaml-parser rejects this at parse time with validationPhase
   // = publish-listen.
   const cyclicSpec = `apiVersion: v1
@@ -380,17 +383,21 @@ components:
   a:
     kind: worker
     publish:
-      - com.example.p1
+      out:
+        as: http-endpoint
     listen:
-      com.example.p2:
+      peer:
+        from: b.out
         as: env
         prefix: P2
   b:
     kind: worker
     publish:
-      - com.example.p2
+      out:
+        as: http-endpoint
     listen:
-      com.example.p1:
+      peer:
+        from: a.out
         as: env
         prefix: P1
 `;
@@ -431,9 +438,9 @@ components:
   }, cyclicSpec);
 });
 
-Deno.test("installer e2e — auto-namespacing also exposes explicit publish paths", async () => {
-  // db publishes its material at both the auto path AND an explicit
-  // operator-defined path; worker listens on the explicit path.
+Deno.test("installer e2e — declared local publication name resolves", async () => {
+  // db publishes a local `db.primary` material; worker listens through a
+  // local binding named `database`.
   const spec = `apiVersion: v1
 metadata:
   id: explicit-pub
@@ -442,11 +449,13 @@ components:
   db:
     kind: postgres
     publish:
-      - operator.databases.primary
+      primary:
+        as: service-binding
   web:
     kind: worker
     listen:
-      operator.databases.primary:
+      database:
+        from: db.primary
         as: env
         prefix: DB
 `;
@@ -493,12 +502,11 @@ components:
     assertEquals(applyRes.status, 201);
     const apply = await applyRes.json() as InstallationApplyResponse;
     assertEquals(apply.deployment.status, "succeeded");
-    // Worker saw the db material via the explicit path it listens on.
-    const dbMaterial =
-      applies[1].listenedMaterials["operator.databases.primary"];
+    // Worker saw the db material via the declared local binding.
+    const dbMaterial = applies[1].listenedMaterials.database;
     assert(
       dbMaterial,
-      "worker should see db material on the explicit publish path",
+      "worker should see db material on the database binding",
     );
     assertEquals(dbMaterial.host, "db.local");
   }, spec);

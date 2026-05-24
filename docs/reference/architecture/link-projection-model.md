@@ -3,8 +3,10 @@
 > このページでわかること: link と projection のモデル定義。
 
 Component kind が定義する resource 配線は Link intent を作る。current AppSpec
-では `components.<name>.listen` edge から発生する。Link は 1 つの Space の中で
-consumer slot を producer output または ExportDeclaration snapshot に接続する。
+では `components.<name>.listen` edge から発生する。AppSpec v1 の `listen` には
+`access` property は無く、access mode は operator policy と export declaration
+から resolution 中に決まる。Link は 1 つの Space の中で consumer slot を
+producer output または ExportDeclaration snapshot に接続する。
 
 ## Link レコード {#link-record}
 
@@ -14,7 +16,7 @@ Link:
   id: link:api.DATABASE_URL
   consumer: object:api
   slot: DATABASE_URL
-  sourceExportSnapshotId: export-snapshot:takos.database.primary@...
+  sourceExportSnapshotId: export-snapshot:operator.database.primary@...
   sourceSpaceId: space:acme-prod
   access: read-write
   selectedProjection:
@@ -33,8 +35,9 @@ ProjectionSelection は Link field として扱う internal selection record で
 
 ## Space ルール {#space-rule}
 
-Link は通常、consumer Object を同じ Space の ExportDeclaration に接続する。
-Space を跨ぐ Link は明示的な Space export 共有と approval binding を要求する。
+current public AppSpec の Link は、consumer Object を同じ Space の
+ExportDeclaration に接続する。Space を跨ぐ Link は operator-internal / future
+sharing model であり、AppSpec v1 から直接作る construct ではない。
 
 ## Projection ファミリ {#projection-families}
 
@@ -45,7 +48,7 @@ file-secret
 runtime-capability
 sdk-config
 http-client-config
-service-endpoint
+http-endpoint
 volume-mount
 ```
 
@@ -54,7 +57,8 @@ Secret export はプレーンな `env` に projection してはならない。
 ## Access の既定値 {#access-defaults}
 
 grant を生み出す export は、export が `safeDefaultAccess` を宣言していない限り
-明示的な `access` を必要とする。closed な v1 access mode 語彙は
+operator policy による明示的な access mode 選択を必要とする。closed な v1 access
+mode 語彙は
 [Kind Resolution Model — Access mode enum](./kind-resolution-model.md) にある。
 
 ```yaml
@@ -65,14 +69,16 @@ components:
       version: "16"
       size: small
     publish:
-      - com.example.api.db
+      connection:
+        as: service-binding
 
   api:
     kind: worker
-	    spec:
-	      entrypoint: dist/worker.mjs
+    spec:
+      entrypoint: dist/worker.mjs
     listen:
-      com.example.api.db:
+      database:
+        from: db.connection
         as: env
         prefix: DATABASE
 ```

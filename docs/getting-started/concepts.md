@@ -1,19 +1,26 @@
-# コンセプト — AppSpec から Deployment まで
+# コンセプト — AppSpec から Deployment まで {#concepts}
 
-Takosumi の公開概念は **AppSpec / Installation / Deployment** の 3 つを中心に
-考えると読みやすくなります。細かい ledger や provider の実装詳細は、必要に
-なってから reference を読む前提です。
+Takosumi は **AppSpec / Installation / Deployment** の 3 つを中心に読むと分かり
+やすくなります。provider、runtime-agent、plugin などの実装語彙は、運用や拡張が
+必要になってから読めば十分です。
 
 ## 3 つの公開概念
 
-| 概念         | 意味                                                                             |
-| ------------ | -------------------------------------------------------------------------------- |
-| AppSpec      | source root の `.takosumi.yml`。アプリが欲しい runtime / resource / 接続を書く。 |
-| Installation | Space に入った AppSpec。現在状態、所有、apply 対象になる単位。                   |
-| Deployment   | 1 回の apply / rollback の結果。履歴、audit、rollback の根拠になる。             |
+| 概念         | 意味                                                                              |
+| ------------ | --------------------------------------------------------------------------------- |
+| AppSpec      | source root の `.takosumi.yml`。アプリが欲しい runtime / resource / 接続を書く。  |
+| Installation | Space に入った AppSpec。Space は operator/account-plane が所有する install 境界。 |
+| Deployment   | 1 回の apply / rollback の結果。履歴、audit、rollback の根拠になる。              |
 
-Takosumi は AppSpec を読み、Installation を作り、apply ごとに Deployment を記録
-します。
+流れは単純です。
+
+```text
+source root + AppSpec
+  -> install
+  -> Installation
+  -> apply / rollback
+  -> Deployment history
+```
 
 ## Component と Kind
 
@@ -27,26 +34,14 @@ components:
       entrypoint: dist/worker.mjs
 ```
 
-`kind` は component が何であるかを表す opaque string です。`worker`、
-`web-service`、`postgres`、`object-store`、`custom-domain` は takosumi.com
-reference kind alias の例で、operator が alias map で URI に解決します。 `spec`
-の中身は kind ごとの convention です。
+`kind` は component が何であるかを表す string です。`worker`、`web-service`、
+`postgres`、`object-store`、`gateway` は takosumi.com が公開する reference kind
+descriptor example の short alias です。operator は alias または URI
+を解決し、対応する実行先を選びます。
 
-## Build service handoff と Prepared Source
-
-AppSpec は apply できる intent を書く file です。source を build する operator
-は `.takosumi.build.yml` のような handoff file を build service に読ませ、
-prepared source snapshot を作って Installer API に渡せます。
-
-```
-.takosumi.build.yml
-  -> build service
-  -> prepared source tar + sha256
-  -> Installer API
-```
-
-この分離により、Deployment は content-addressed prepared source と AppSpec を
-元に記録されます。runtime が読む file path は各 kind の `spec` に置きます。
+`spec` の中身は kind ごとの入力です。たとえば worker は source snapshot 内の
+`entrypoint` path を読み、web-service は container image や port を読む、という
+形になります。
 
 ## publish / listen
 
@@ -60,53 +55,77 @@ components:
       version: "16"
       size: small
     publish:
-      - com.example.notes.db
+      connection:
+        as: service-binding
 
   web:
     kind: worker
     spec:
       entrypoint: dist/worker.mjs
     listen:
-      com.example.notes.db:
+      db:
+        from: db.connection
         as: env
         prefix: DB
 ```
 
-producer は namespace path に material を publish します。consumer は同じ path
-を listen し、env / mount / target などの形で受け取ります。AppSpec には
-`${ref:...}` のような文字列 interpolation はありません。
+producer は local publication を publish します。consumer は
+`listen.<name>.from` で `component.publication` を参照し、env / mount / upstream
+などの形で受け取ります。AppSpec には `${ref:...}` のような文字列 interpolation
+はありません。
 
-## Kernel、Implementation、Runtime-Agent {#architecture-kernel-runtime-agent}
+operator が Space に公開する外部 material は `namespace:<path>` で参照します。
+たとえば OIDC issuer は `namespace:operator.identity.oidc` のように listen
+できます。
+
+## Source と prepared source
+
+Takosumi は source root から AppSpec を読みます。Installer API に渡す source は
+次の形です。
+
+| Source     | 使いどころ                                                        |
+| ---------- | ----------------------------------------------------------------- |
+| `git`      | remote operator が git repository を fetch する。                 |
+| `prepared` | build service / CI が source tree を tar + sha256 で固定する。    |
+| `local`    | dev / operator-local。kernel process から同じ path が見える場合。 |
+
+AppSpec は apply したい intent を書く file です。source を build する場合、build
+service / CI / operator automation が先に command を実行し、runtime が読む file
+も入れた prepared source snapshot を作ります。
+
+```text
+.takosumi.yml
+  + optional .takosumi.build.yml
+  -> build service / CI
+  -> prepared source tar + sha256
+  -> Installer API
+```
+
+runtime が読む file path は AppSpec の kind-specific `spec` に置きます。build
+command や cache、provenance は build service 側の record です。
+
+## Operator implementation は別レイヤ
 
 Takosumi kernel は AppSpec を検証し、Deployment の apply pipeline を進めます。
-実際に cloud API や OS を触る処理は materializer / runtime-agent
-側に分かれます。
+実際に cloud API や OS を触る処理は operator が用意した implementation に分かれ
+ます。
 
-```
-AppSpec source or prepared source snapshot
+```text
+AppSpec source or resolved source snapshot
   -> kernel: validate / plan / record Deployment
-  -> materializer: kind を具体 runtime/resource に変換
-  -> runtime-agent: cloud API / OS executor
+  -> operator implementation: kind を具体 runtime/resource に変換
 ```
 
-dev では `takosumi server` が kernel と embedded runtime-agent を同じ process で
-起動できます。production では runtime-agent を別 host に分け、cloud credential
-を kernel から離せます。
-
-## Operator の責務
-
-operator は provider implementation、credential、runtime-agent 配置、user
-account、OIDC issuer、signup UI との接続を決めます。
-
-AppSpec は portable な intent です。同じ AppSpec をどの provider で実行するかは
-operator policy と implementation binding / alias config で決まります。Takosumi
-reference kernel では implementation binding array を `plugins` option として
-起動時に渡します。
+Kinds are supplied by the operator. AppSpec author は `kind` / `spec` /
+`publish` / `listen` を書き、kind-specific な validation と runtime behavior は
+operator が選ぶ descriptor metadata と implementation binding 側で扱います。
+JSON-LD descriptor や plugin 配線は、provider / extension を作る段階で読めば十分
+です。
 
 ## 次に読む
 
-- [AppSpec リファレンス](/reference/app-spec)
-- [Build service handoff](/reference/build-spec)
-- [Installer API](/reference/installer-api)
-- [Provider Implementations](/reference/providers)
-- [Operator Bootstrap](/operator/bootstrap)
+- [読む順序](./reading-paths.md)
+- [AppSpec リファレンス](../reference/app-spec.md)
+- [Build service handoff](../reference/build-spec.md)
+- [Installer API](../reference/installer-api.md)
+- [Provider Implementations](../reference/providers.md)

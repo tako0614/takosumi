@@ -44,12 +44,12 @@ const TAKOSUMI_OWNED_PATHS = [
 
 const REQUIRED_SPEC_KEYS = [
   "appspec-v1",
-  "buildspec-v1",
-  "reference-kinds-v1",
+  "build-service-input-v1",
+  "reference-kind-examples-v1",
   "kernel-http-api-v1",
   "installer-api-v1",
   "runtime-agent-api-v1",
-  "provider-plugins-v1",
+  "reference-providers-v1",
   "takosumi-jsr-packages",
 ];
 
@@ -137,10 +137,8 @@ Deno.test("kernel HTTP API does not reintroduce workflow trigger endpoint specs"
     assert.equal(source.includes(snippet), false, `unexpected ${snippet}`);
   }
 
-  assert.match(
-    source,
-    /The current kernel exposes no workflow, trigger, schedule, or declarable hook\s+HTTP route\./,
-  );
+  assert.match(source, /workflow \/ trigger \/ schedule \/ declarable hook/);
+  assert.match(source, /Installer API に渡します/);
 });
 
 async function read(path: string): Promise<string> {

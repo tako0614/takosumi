@@ -18,14 +18,14 @@ Deno.test("installer source parser maps supported source refs", () => {
     parseSourceRef("git:https://github.com/acme/app#main"),
     { kind: "git", url: "https://github.com/acme/app", ref: "main" },
   );
-  assert.deepEqual(parseSourceRef("catalog:com.acme.app@1"), {
-    kind: "catalog",
-    url: "com.acme.app@1",
-  });
-  assert.deepEqual(parseSourceRef("bundle:https://example.com/app.tgz"), {
-    kind: "bundle",
-    url: "https://example.com/app.tgz",
-  });
+  assert.throws(
+    () => parseSourceRef("catalog:com.acme.app@1"),
+    /operator catalog sources/,
+  );
+  assert.throws(
+    () => parseSourceRef("bundle:https://example.com/app.tgz"),
+    /operator catalog sources/,
+  );
   assert.deepEqual(
     parseSourceRef("prepared:https://example.com/app.tar#sha256:abc"),
     {
@@ -112,7 +112,7 @@ Deno.test("deploy command posts to an installation deployment endpoint", async (
       deployCommand.parse([
         "ins_123",
         "--source",
-        "catalog:com.acme.app@1.0.0",
+        "git:https://github.com/acme/app#v1.0.0",
         "--expected-commit",
         "abc123",
         "--expected-manifest-digest",
@@ -132,7 +132,11 @@ Deno.test("deploy command posts to an installation deployment endpoint", async (
       "https://kernel.example/v1/installations/ins_123/deployments",
     );
     assert.deepEqual(captured.body, {
-      source: { kind: "catalog", url: "com.acme.app@1.0.0" },
+      source: {
+        kind: "git",
+        url: "https://github.com/acme/app",
+        ref: "v1.0.0",
+      },
       expected: {
         commit: "abc123",
         manifestDigest: "sha256:manifest",

@@ -202,10 +202,34 @@ export interface DnsRecordSpec {
 }
 
 export function parseDnsRecordSpec(value: JsonValue): DnsRecordSpec {
-  const shape = "custom-domain@v1";
+  const shape = "gateway@v1";
   const obj = asSpecObject(value, shape);
+  const listeners = requireObject(obj, "listeners", shape);
+  let name: string | undefined;
+  for (const [listenerName, listenerValue] of Object.entries(listeners)) {
+    if (
+      typeof listenerValue !== "object" || listenerValue === null ||
+      Array.isArray(listenerValue)
+    ) {
+      throw new Error(
+        `${shape}.listeners.${listenerName} must be a JSON object`,
+      );
+    }
+    const host = optionalString(
+      listenerValue as SpecObject,
+      "host",
+      `${shape}.listeners.${listenerName}`,
+    );
+    if (host !== undefined) {
+      name = host;
+      break;
+    }
+  }
+  if (name === undefined) {
+    throw new Error(`${shape}.listeners must include a listener.host`);
+  }
   return {
-    name: requireString(obj, "name", shape),
+    name,
     target: requireString(obj, "target", shape),
   };
 }

@@ -34,7 +34,7 @@ Deno.test("TAKOSUMI_REFERENCE_KINDS exposes the external reference kind set", ()
   const ids = TAKOSUMI_REFERENCE_KINDS.map((s) => `${s.id}@${s.version}`)
     .sort();
   assert.deepEqual(ids, [
-    "custom-domain@v1",
+    "gateway@v1",
     "object-store@v1",
     "postgres@v1",
     "web-service@v1",

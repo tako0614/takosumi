@@ -174,7 +174,7 @@ Deno.test("each provider declares a reference shape@v1 and at least one capabili
     "object-store",
     "web-service",
     "postgres",
-    "custom-domain",
+    "gateway",
     "worker",
   ]);
   for (const provider of providers) {

@@ -1,23 +1,25 @@
 # DataAsset GC (`/v1/artifacts`) {#artifact-gc}
 
 DataAsset GC は optional DataAsset extension の uploaded DataAsset
-と、その裏付け object bytes を保守的に削除する kernel worker
-です。rollback、audit、 RevokeDebt の根拠になる DataAsset
+と、その裏付け object bytes を保守的に削除する operator extension worker
+です。rollback、audit、RevokeDebt の根拠になる DataAsset
 を消さないことを優先します。
 
-これは current implementation の operational surface です。component kind と
-DataAsset metadata kind は operator distribution / connector policy で扱います。
+これは current implementation の operational surface です。`/v1/artifacts` route
+と `takosumi artifact` command は historical name を残していますが、概念名は
+DataAsset です。component kind と DataAsset metadata kind は operator
+distribution / connector policy で扱います。
 
 ## Reachability
 
 DataAsset は GC 時に次のいずれかに分類されます。
 
-| Class                | 意味                                                                  |
-| -------------------- | --------------------------------------------------------------------- |
-| `live`               | current Deployment / ActivationSnapshot から参照されている。          |
-| `snapshot-reachable` | retained ResolutionSnapshot / ActivationSnapshot から参照されている。 |
-| `debt-pinned`        | open RevokeDebt が cleanup 完了まで保持を要求している。               |
-| `unreferenced`       | どの root からも到達できない。                                        |
+| Class                | 意味                                                                   |
+| -------------------- | ---------------------------------------------------------------------- |
+| `live`               | current Deployment evidence から参照されている。                       |
+| `snapshot-reachable` | retained Deployment evidence / activation history から参照されている。 |
+| `debt-pinned`        | open RevokeDebt が cleanup 完了まで保持を要求している。                |
+| `unreferenced`       | どの root からも到達できない。                                         |
 
 到達性チェックは保守的です。保持済み snapshot のどれかから参照されていれば、
 current Deployment で使われていなくても sweep しません。
@@ -26,7 +28,7 @@ current Deployment で使われていなくても sweep しません。
 
 GC は mark-then-sweep です。
 
-1. retained Deployment snapshots、ActivationSnapshot、open RevokeDebt を root
+1. retained Deployment evidence、activation history、open RevokeDebt を root
    として参照を辿る。
 2. 到達可能な DataAsset を `live`、到達不能なものを `unreferenced` と mark
    する。
@@ -34,6 +36,10 @@ GC は mark-then-sweep です。
 4. sweep 結果を audit event として記録する。
 
 grace window は `TAKOSUMI_ARTIFACT_GC_GRACE_DAYS` で調整できます。
+
+DataAsset は optional operator extension の概念名です。`artifact*` env / command
+/ event / field 名は existing wire compatibility のため残る名前で、prose では
+DataAsset を使います。
 
 ## Triggers
 
@@ -61,7 +67,7 @@ sweep count、reclaimed bytes、trigger list、duration を含みます。詳細
 ## 関連ページ
 
 - [DataAsset Policy](./data-asset-policy.md)
-- [Reference Kind Descriptors § Data Assets](./kind-registry.md#source-files-and-data-assets)
+- [Kind Descriptor Examples § Source files and DataAssets](./kind-registry.md#source-files-and-dataassets)
 - [Storage Schema](./storage-schema.md)
 - [Audit Events](./audit-events.md)
 - [RevokeDebt Model](./revoke-debt.md)

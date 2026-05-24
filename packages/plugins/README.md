@@ -55,7 +55,7 @@ and map short aliases to those URIs.
 | `web-service`   | OCI/container web service with an HTTP port            |
 | `postgres`      | Managed PostgreSQL instance                            |
 | `object-store`  | S3-compatible bucket                                   |
-| `custom-domain` | DNS record + TLS termination                           |
+| `gateway`       | HTTP listener, routing, host, and TLS policy           |
 
 An operator account-plane distribution can publish OIDC issuer material through
 the `operator.identity.oidc` namespace. worker 側は

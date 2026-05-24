@@ -4,14 +4,15 @@
 > backend に materialize するかを operator implementation がどう決めるか。
 
 Takosumi reference kernel は AppSpec を読み、component ごとに operator alias map
-で `kind` を URI に解決し、operator-attached implementation binding を選びます。
+で `kind` を URI に解決し、operator が渡した implementation binding を選びます。
 その binding は operation envelope を runtime-agent / connector、または
 operator-owned execution host に渡します。in-process adapter code は validation
 / plan / envelope 生成を担えますが、side-effecting provider I/O と cloud / OS
 credential は kernel process の外に置きます。
 
-AppSpec author は `kind`、`spec`、`publish`、`listen` を宣言します。operator は
-implementation binding array を持ち、各 component の実行先を決めます。
+AppSpec author は `kind`、`spec`、local `publish`、local `listen` を宣言します。
+operator は implementation binding array を持ち、各 component の実行先を決めま
+す。
 
 ```yaml
 components:
@@ -26,10 +27,10 @@ components:
       versioning: true
 ```
 
-この例では operator が `worker` alias を reference worker URI へ解決し、
-Cloudflare Workers や Deno Deploy の JS worker provider で実行します。container
-runtime は `web-service` kind を使います。`object-store` も R2、S3、GCS、MinIO、
-local filesystem などへ解決できます。
+この例では operator が `worker` alias を reference worker URI へ解決し、選択した
+JS worker provider で実行します。reference distribution では Cloudflare Workers
+や Deno Deploy を選べます。container runtime は `web-service` kind を使います。
+`object-store` も R2、S3、GCS、MinIO、local filesystem などへ解決できます。
 
 ## 読み方 {#reading-order}
 
@@ -64,9 +65,10 @@ const { app } = await createPaaSApp({
 ```
 
 各 reference provider package は `KernelPlugin` を返す factory を export
-します。factory は region / account id / lifecycle client など operator-owned の
-non-secret 設定を受け取り、kernel が dispatch できる implementation binding を
-登録します。cloud credential は runtime-agent の connector env または operator
+します。 `KernelPlugin` は reference kernel の implementation binding shape
+です。factory は region / account id / lifecycle client など operator-owned の
+non-secret 設定 を受け取り、kernel が dispatch できる binding
+を登録します。cloud credential は runtime-agent の connector env または operator
 host 側に置きます。
 
 ## 選択ルール {#selection-rule}
@@ -76,7 +78,8 @@ component ごとに、operator distribution は次の順で implementation bindi
 provider adapter です。
 
 1. `kindAliases` で short alias を URI に解決する。URI はそのまま使う。
-2. 解決した kind URI の JSON-LD descriptor を選ぶ。
+2. operator distribution が descriptor metadata を使う場合は、解決した kind URI
+   の descriptor を選ぶ。takosumi.com reference descriptors は JSON-LD。
 3. component `spec` を descriptor の input schema に対して検証する。
 4. Space に見える implementation binding を選ぶ。reference kernel では
    `provides[]` に kind URI を含む reference provider adapter を選ぶ。
@@ -89,11 +92,12 @@ provider adapter です。
 capability は open string です。provider は任意の kebab-case 識別子を宣言し、
 dashboard や operator tooling の introspection に使います。
 
-予約 prefix は次の 3 つです。
+provider capability / descriptor metadata の予約 prefix は次の通りです。これは
+public AppSpec `namespace:<path>` の prefix 一覧ではありません。product-specific
+prefix は、その product / operator profile の docs で定義します。
 
 | Prefix       | Owner                                       |
 | ------------ | ------------------------------------------- |
-| `takos.*`    | Takos など consumer application 側の語彙    |
 | `system.*`   | Takosumi kernel / runtime-agent 側の語彙    |
 | `operator.*` | operator が自分の deployment で定義する語彙 |
 

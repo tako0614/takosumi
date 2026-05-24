@@ -22,7 +22,7 @@ takosumi install --source . --space space:personal
 - `jsr:@takos/takosumi/plugins` — reference adapter entry (reference
   descriptors + descriptor helpers)
 - `jsr:@takos/takosumi/kinds` — takosumi.com reference component kind examples
-  (`worker` / `web-service` / `postgres` / `object-store` / `custom-domain`)
+  (`worker` / `web-service` / `postgres` / `object-store` / `gateway`)
 - `jsr:@takos/takosumi/cli` — CLI module entry
 
 cloud-backed reference `KernelPlugin` adapter factory は **別 package**

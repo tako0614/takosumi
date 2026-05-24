@@ -1,17 +1,17 @@
-# Reference Plugin Loading モデル {#plugin-loading}
+# Reference Plugin Loading {#plugin-loading}
 
 > このページでわかること: Takosumi reference kernel が provider implementation
 > を Vite 風に attach する方法。
 
-JSON-LD kind descriptor は kind の型・意味・入出力を表す semantic contract
+JSON-LD kind descriptor は kind の型・意味・入出力を表す semantic metadata
 です。 provider implementation はその descriptor を具体 runtime / resource
 に変換する operator-owned 実装です。Takosumi reference kernel では、この実装を
 `KernelPlugin` として attach します。
 
 同じ descriptor を扱う別の Takosumi-compatible implementation は、native
 controller、static registry、SaaS adapter、workflow engine など別の仕組みで
-implementation binding を持てます。takosumi.com reference implementation では
-その組み込み方を reference adapter API として提供します。
+implementation binding を持てます。plugin loading は reference kernel の実装手段
+であり、Takosumi spec の必須 runtime mechanism ではありません。
 
 ## 基本モデル {#model}
 
@@ -31,8 +31,8 @@ const { app } = await createPaaSApp({
 });
 ```
 
-package の取得方法、lockfile、HTTPS、private registry、vendoring は reference
-operator distribution の policy です。
+package の取得方法、lockfile、HTTPS、private registry、vendoring は operator
+distribution の policy です。
 
 ## 起動時検査 {#boot-validation}
 

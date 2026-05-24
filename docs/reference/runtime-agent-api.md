@@ -7,7 +7,7 @@ runtime-agent は operator が cloud / OS credential を握る host で起動し
 envelope を受けます。
 
 逆方向の制御 (enroll / heartbeat / lease / drain / gateway manifest) は
-[Kernel HTTP API — Runtime-Agent control RPC](./kernel-http-api.md#runtime-agent-control-rpc)
+[Reference Kernel Route Inventory — Runtime-Agent control RPC](./kernel-http-api.md#runtime-agent-control-rpc)
 参照。
 
 ## 認証 {#authentication}
@@ -330,7 +330,7 @@ interface LifecycleErrorBody {
   identity, connector-local lifecycle addressing, accepted DataAsset metadata
   vector, Space visibility, and envelope versioning that the runtime-agent
   hosts.
-- [Kernel HTTP API](./kernel-http-api.md)
+- [Reference Kernel Route Inventory](./kernel-http-api.md)
 
 ## 関連ページ
 

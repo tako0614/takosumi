@@ -51,16 +51,26 @@ Deno.test("CloudDnsConnector.apply POSTs CNAME RRSet to managed zone", async () 
     fetch: mockFetch,
   });
   const res = await connector.apply({
-    shape: "custom-domain@v1",
+    shape: "gateway@v1",
     provider: "@takos/gcp-cloud-dns",
     resourceName: "rs",
-    spec: { name: "app.example.com", target: "lb.example.com" },
+    spec: gatewaySpec("app.example.com", "lb.example.com"),
   }, {});
   assert.equal(res.handle, "tenant-zone|app.example.com|lb.example.com");
-  assert.equal(res.outputs.fqdn, "app.example.com");
+  assert.equal(res.outputs.host, "app.example.com");
   assert.match(
     calls[0].url,
     /\/projects\/my-proj\/managedZones\/tenant-zone\/rrsets/,
   );
   assert.match(calls[0].body ?? "", /"type":"CNAME"/);
 });
+
+function gatewaySpec(host: string, target: string) {
+  return {
+    listeners: {
+      public: { protocol: "https", host, tls: "auto" },
+    },
+    routes: [{ listener: "public", path: "/", to: "upstream" }],
+    target,
+  };
+}

@@ -120,8 +120,9 @@ metadata に 閉じます。Verification lifecycle:
 ```
 
 Verification は policy または approval 再検証を bypass してはならない。
-RevokeDebt を発行できるのは `post-commit` または `observe` stage からのみで
-ある。
+RevokeDebt は `post-commit` / `observe` / `finalize` / `abort` stage から発行
+できる。`commit` 前に actual effect が無い entry は RevokeDebt ではなく abort
+evidence として終端する。
 
 ### Journal エントリ {#journal-entries}
 
@@ -197,9 +198,9 @@ Takosumi v1 is an invariant-first, space-isolated, snapshot-backed,
 graph-shaped, write-ahead-operation-journaled PaaS operation kernel.
 ```
 
-AppSpec は authoring 入力である。deployment は Space の中で resolve される。
-deployment は immutable な snapshot 群、operation journal、observation の
-集合である。
+AppSpec は authoring 入力である。Deployment record は Space の中で resolve
+された結果を記録し、reference kernel では内部 snapshot 群、operation journal、
+observation evidence を参照する。
 
 ### Root パイプライン {#root-pipeline}
 
@@ -317,10 +318,11 @@ escape hatch によってのみ例外が許される。
 
 #### 14. Namespace isolation invariant
 
-namespace path は Space scope である。2 つの Space の同じ path は、共有された
-ExportDeclaration snapshot に解決された場合だけ同一 material として扱う。`takos`
-のような予約 prefix は operator 管理だが、可視性は依然として Space scope
-である。
+namespace path は Space scope である。current public v1 で `namespace:<path>`
+として解決できる外部 source は、Space に可視化された operator-owned `operator.*`
+export declaration の exact match である。2 つの Space の同じ path
+は、共有された ExportDeclaration snapshot に解決された場合だけ同一 material
+として 扱う。
 
 #### 15. Space data-boundary invariant
 

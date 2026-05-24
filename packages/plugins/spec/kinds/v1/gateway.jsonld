@@ -1,0 +1,131 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/gateway",
+  "@type": "ComponentKind",
+  "name": "gateway",
+  "version": "v1",
+  "aliases": ["gateway"],
+  "description": "HTTP listener, TLS, and routing component. A gateway listens to local upstream bindings, owns listener/domain policy in spec, and publishes the public HTTP endpoint it materializes.",
+  "x-ts": {
+    "fileBasename": "gateway",
+    "prefix": "Gateway"
+  },
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["listeners", "routes"],
+    "additionalProperties": true,
+    "properties": {
+      "listeners": {
+        "type": "object",
+        "description": "Named HTTP listeners. A listener may request an operator-managed host and TLS policy.",
+        "additionalProperties": {
+          "type": "object",
+          "x-ts-name": "Listener",
+          "required": ["protocol"],
+          "additionalProperties": true,
+          "properties": {
+            "protocol": {
+              "type": "string",
+              "enum": ["http", "https"],
+              "description": "Listener protocol."
+            },
+            "host": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Optional requested hostname, such as `notes.example.com`."
+            },
+            "tls": {
+              "type": "string",
+              "enum": ["auto", "manual", "off"],
+              "description": "TLS policy for this listener."
+            }
+          }
+        }
+      },
+      "routes": {
+        "type": "array",
+        "minItems": 1,
+        "description": "Path routing rules. Each route sends requests from a listener to one listen binding name.",
+        "items": {
+          "type": "object",
+          "x-ts-name": "Route",
+          "required": ["listener", "path", "to"],
+          "additionalProperties": true,
+          "properties": {
+            "listener": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Listener name from `listeners`."
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "HTTP path prefix, such as `/` or `/api`."
+            },
+            "to": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Local listen binding name that supplies the upstream endpoint."
+            }
+          }
+        }
+      }
+    }
+  },
+  "publications": {
+    "public": {
+      "contract": "http-endpoint",
+      "material": {
+        "url": "$outputs.url",
+        "host": "$outputs.host",
+        "scheme": "$outputs.scheme",
+        "certificateId": "$outputs.certificateId"
+      }
+    }
+  },
+  "listens": {
+    "upstream": {
+      "shape": "upstream",
+      "target": {
+        "DESCRIPTION": "Reads the `url` field from listened material as an upstream target. AppSpec listen options declare `from` and `as: upstream`."
+      }
+    }
+  },
+  "outputs": [
+    {
+      "name": "url",
+      "type": "string",
+      "required": true,
+      "meaning": "Public URL including scheme."
+    },
+    {
+      "name": "host",
+      "type": "string",
+      "required": true,
+      "meaning": "Resolved public hostname."
+    },
+    {
+      "name": "scheme",
+      "type": "string",
+      "required": true,
+      "meaning": "Resolved public scheme (`http` or `https`)."
+    },
+    {
+      "name": "certificateId",
+      "type": "string",
+      "required": false,
+      "meaning": "Provider-scope TLS certificate identifier when TLS is managed."
+    }
+  ],
+  "capabilities": [
+    "host-routing",
+    "path-routing",
+    "wildcard",
+    "auto-tls",
+    "sni",
+    "alpn-acme",
+    "http3",
+    "redirects"
+  ]
+}

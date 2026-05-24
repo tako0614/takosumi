@@ -5,7 +5,7 @@
  * and each AppSpec exposes at least one component.
  *
  * This locks in the "Phase F flip" outcome: every consumer app is on the
- * namespace pub/sub AppSpec form (= no legacy `use:` / placeholder /
+ * publication/listen AppSpec form (= no legacy `use:` / placeholder /
  * intermediate manifest fields).
  */
 

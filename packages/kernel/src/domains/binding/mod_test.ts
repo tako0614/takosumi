@@ -5,7 +5,7 @@
  *   - kernel default env expansion (`as: env` + `prefix: DB` →
  *     `DB_HOST` / `DB_PORT` style env keys)
  *   - operator-defined applyListen hook override
- *   - `as: target` / `as: mount` shape handling
+ *   - `as: upstream` / `as: mount` shape handling
  *   - end-to-end `resolveAppSpec` against a multi-component AppSpec
  */
 
@@ -25,7 +25,10 @@ Deno.test("defaultEnvInjection expands env-shape material with a prefix", () => 
     port: "5432",
     passwordSecretRef: { secretRef: "secret://db-password" },
   };
-  const injection = defaultEnvInjection({ as: "env", prefix: "DB" }, material);
+  const injection = defaultEnvInjection(
+    { from: "db.connection", as: "env", prefix: "DB" },
+    material,
+  );
   assert.deepEqual(injection.env, {
     DB_HOST: "db.local",
     DB_PORT: "5432",
@@ -35,13 +38,19 @@ Deno.test("defaultEnvInjection expands env-shape material with a prefix", () => 
 
 Deno.test("defaultEnvInjection without prefix emits bare upper-snake keys", () => {
   const material: NamespaceMaterial = { url: "https://w.example/" };
-  const injection = defaultEnvInjection({ as: "env" }, material);
+  const injection = defaultEnvInjection(
+    { from: "web.http", as: "env" },
+    material,
+  );
   assert.deepEqual(injection.env, { URL: "https://w.example/" });
 });
 
-Deno.test("defaultEnvInjection as: target surfaces material verbatim", () => {
+Deno.test("defaultEnvInjection as: upstream surfaces material verbatim", () => {
   const material: NamespaceMaterial = { url: "https://w.example/" };
-  const injection = defaultEnvInjection({ as: "target" }, material);
+  const injection = defaultEnvInjection(
+    { from: "web.http", as: "upstream" },
+    material,
+  );
   assert.deepEqual(injection.target, material);
 });
 
@@ -51,7 +60,7 @@ Deno.test("defaultEnvInjection as: mount writes deterministic mount descriptor",
     certificateId: "cert_123",
   };
   const injection = defaultEnvInjection(
-    { as: "mount", mount: "/srv" },
+    { from: "domain.tls", as: "mount", mount: "/srv" },
     material,
   );
   assert.deepEqual(Object.keys(injection.mounts ?? {}), ["/srv"]);
@@ -64,11 +73,13 @@ Deno.test("BindingResolver falls back to kernel default when no materializer fou
     listenerComponent: "web",
     listenerKind: "worker",
     listenerComponentRef: { kind: "worker" },
-    namespacePath: "app.db",
-    options: { as: "env", prefix: "DB" },
+    bindingName: "db",
+    sourceRef: "database.connection",
+    options: { from: "database.connection", as: "env", prefix: "DB" },
     material: { host: "db.local", port: "5432" },
   });
-  assert.equal(binding.namespacePath, "app.db");
+  assert.equal(binding.bindingName, "db");
+  assert.equal(binding.sourceRef, "database.connection");
   assert.equal(binding.listenerComponent, "web");
   assert.deepEqual(binding.envInjections, {
     DB_HOST: "db.local",
@@ -98,12 +109,14 @@ Deno.test("BindingResolver invokes plugin.applyListen when present", async () =>
     listenerComponent: "web",
     listenerKind: "worker",
     listenerComponentRef: { kind: "worker" },
-    namespacePath: "app.db",
-    options: { as: "env", prefix: "DB" },
+    bindingName: "db",
+    sourceRef: "database.connection",
+    options: { from: "database.connection", as: "env", prefix: "DB" },
     material: { host: "db.local", port: "5432" },
   });
   assert.equal(captured.length, 1);
-  assert.equal(captured[0].namespacePath, "app.db");
+  assert.equal(captured[0].bindingName, "db");
+  assert.equal(captured[0].sourceRef, "database.connection");
   assert.deepEqual(binding.envInjections, { CUSTOM_HOST: "db.local" });
 });
 
@@ -116,17 +129,20 @@ Deno.test("BindingResolver.resolveAppSpec emits one binding per listen edge", as
       db: { kind: "postgres" },
       web: {
         kind: "worker",
-        listen: { "demo.db": { as: "env", prefix: "DB" } },
+        publish: { http: { as: "http-endpoint" } },
+        listen: {
+          db: { from: "db.connection", as: "env", prefix: "DB" },
+        },
       },
       router: {
-        kind: "custom-domain",
-        listen: { "demo.web": { as: "target" } },
+        kind: "gateway",
+        listen: { app: { from: "web.http", as: "upstream" } },
       },
     },
   };
   const materials: Record<string, NamespaceMaterial> = {
-    "demo.db": { host: "db.local", port: "5432" },
-    "demo.web": { url: "https://web.local/" },
+    "db.connection": { host: "db.local", port: "5432" },
+    "web.http": { url: "https://web.local/" },
   };
   const bindings = await resolver.resolveAppSpec(appSpec, materials);
   assert.equal(bindings.length, 2);
@@ -148,7 +164,9 @@ Deno.test("BindingResolver.resolveAppSpec silently skips listens to unknown path
     components: {
       web: {
         kind: "worker",
-        listen: { "external.path": { as: "env" } },
+        listen: {
+          oidc: { from: "namespace:operator.identity.oidc", as: "env" },
+        },
       },
     },
   };

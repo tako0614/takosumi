@@ -1,17 +1,17 @@
-# Operator namespace exports {#namespace-exports}
+# Operator Namespace Exports {#namespace-exports}
 
 > このページでわかること: AppSpec の component graph の外にある operator-owned
 > material を、Space-scoped に公開する model。
 
-このページの Namespace export は、operator-owned external surface を `publish` /
-`listen` と同じ namespace vocabulary で参照するための model です。component
-自身が `publish` する namespace material の 統合モデルは
-[Namespace Export Model](./architecture/namespace-export-model.md)
-を参照してください。 kernel は AppSpec installer lifecycle を扱い、operator
-export の発行元そのものは operator distribution が所有します。
+このページの Namespace export は、operator-owned external surface を AppSpec の
+`listen.<binding>.from: namespace:<path>` から参照するための model です。AppSpec
+の `publish:` は component-local publication を宣言し、 external namespace path
+は書きません。kernel は AppSpec installer lifecycle を扱い、operator export
+の発行元そのものは operator distribution が所有します。
 
 代表例は `operator.identity.oidc` です。operator が issuer material を namespace
-に publish し、worker component は `listen` でそれを受け取れます。
+に offer し、worker component は `namespace:operator.identity.oidc` を `listen`
+で受け取れます。
 
 ## Path grammar {#path-grammar}
 
@@ -97,14 +97,19 @@ immutable `snapshotId`、`descriptorDigest` で扱います。
 
 Discovery は Space-scoped です。同じ path でも別 Space では別 subject です。
 
-Resolution order:
+Public v1 の `listen.<binding>.from: namespace:<path>` は、対象 Space に可視化
+された operator-owned `ExportDeclaration.namespacePath` を exact match で解決
+します。deployment-local、group、environment、cross-space sharing などの richer
+scope は内部設計または将来 RFC の領域であり、AppSpec author が
+`namespace:<path>` で選ぶ public source ではありません。
 
-1. deployment-local object namespace
-2. deployment-local generated namespace
-3. group namespace
-4. environment namespace
-5. space namespace
-6. operator namespace granted to the Space
+Resolution rule:
+
+1. Space-visible operator export declarations から exact `namespacePath`
+   を探す。
+2. 見つかれば、その immutable `snapshotId` を Deployment evidence に記録する。
+3. 見つからず `listen.required: true` なら apply を失敗させる。
+4. 見つからず optional listen なら binding を absent として扱う。
 
 consumer は install context または operator API から namespace export
 declaration を discover します。OIDC の場合、`operator.identity.oidc` export
@@ -115,12 +120,13 @@ declaration を discover します。OIDC の場合、`operator.identity.oidc` e
 Namespace export は default-deny です。consumer は Link、operator access grant、
 operator API operation のいずれかで explicit grant を得ます。
 
-| Access mode   | 意味                          |
-| ------------- | ----------------------------- |
-| `read`        | metadata / public config 読み |
-| `invoke-only` | endpoint invocation           |
-| `read-write`  | producer が許可した mutation  |
-| `admin`       | explicit approval が必要      |
+| Access mode    | 意味                          |
+| -------------- | ----------------------------- |
+| `read`         | metadata / public config 読み |
+| `invoke-only`  | endpoint invocation           |
+| `observe-only` | health / status observation   |
+| `read-write`   | producer が許可した mutation  |
+| `admin`        | explicit approval が必要      |
 
 ## Audit {#audit}
 

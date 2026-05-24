@@ -1,8 +1,8 @@
 /**
- * Binding domain — resolves namespace pub/sub listen edges into runtime
+ * Binding domain — resolves AppSpec listen bindings into runtime
  * injection.
  *
- * Phase C implementation. For each `Component.listen[<namespacePath>]`,
+ * For each `Component.listen[<bindingName>]`,
  * the resolver fetches the published material from the registry, asks the
  * listener plugin's optional `applyListen` hook for an `EnvInjection`
  * descriptor, and otherwise falls back to a kernel default that expands
@@ -48,11 +48,10 @@ export class BindingResolver {
   }
 
   /**
-   * Resolve every listen edge in `appSpec` against the supplied namespace
-   * registry. Returns one {@link ResolvedBinding} per listener / path pair.
-   * Listen entries whose namespace path is missing from `materials` are
-   * silently skipped — the installer treats absent publishers as
-   * "external" and lets the listener decide whether to fail.
+   * Resolve every listen binding in `appSpec` against the supplied material
+   * registry. Returns one {@link ResolvedBinding} per listener / binding
+   * pair. Entries whose source ref is missing from `materials` are silently
+   * skipped; callers decide whether a missing local source is fatal.
    */
   async resolveAppSpec(
     appSpec: AppSpec,
@@ -64,15 +63,16 @@ export class BindingResolver {
     ) {
       const listen = component.listen;
       if (!listen) continue;
-      for (const [nsPath, options] of Object.entries(listen)) {
-        const material = materials[nsPath];
+      for (const [bindingName, options] of Object.entries(listen)) {
+        const material = materials[options.from];
         if (!material) continue;
         const binding = await this.resolveEdge({
           installationId: "",
           listenerComponent: componentName,
           listenerKind: component.kind,
           listenerComponentRef: component,
-          namespacePath: nsPath,
+          bindingName,
+          sourceRef: options.from,
           options,
           material,
         });
@@ -92,7 +92,8 @@ export class BindingResolver {
     readonly listenerComponent: string;
     readonly listenerKind: string;
     readonly listenerComponentRef: AppSpec["components"][string];
-    readonly namespacePath: string;
+    readonly bindingName: string;
+    readonly sourceRef: string;
     readonly options: ListenOptions;
     readonly material: NamespaceMaterial;
   }): Promise<ResolvedBinding> {
@@ -103,7 +104,8 @@ export class BindingResolver {
         installationId: input.installationId,
         componentName: input.listenerComponent,
         component: input.listenerComponentRef,
-        namespacePath: input.namespacePath,
+        bindingName: input.bindingName,
+        sourceRef: input.sourceRef,
         options: input.options,
         material: input.material,
       });
@@ -112,7 +114,8 @@ export class BindingResolver {
     }
     return {
       listenerComponent: input.listenerComponent,
-      namespacePath: input.namespacePath,
+      bindingName: input.bindingName,
+      sourceRef: input.sourceRef,
       options: input.options,
       envInjections: injection.env ?? {},
       mounts: injection.mounts,
@@ -123,16 +126,17 @@ export class BindingResolver {
 }
 
 /**
- * Kernel default {@link EnvInjection} for a listen edge. Implements the
+ * Kernel default {@link EnvInjection} for a listen binding. Implements the
  * `as: env` shape declared in the kind JSON-LD `envMap`:
  *
  *   - `as: env`    → expand every material field into `${PREFIX}_${FIELD}`
- *                    (PREFIX = `options.prefix` or upper-cased namespace
- *                    leaf when `prefix` is omitted; FIELD = upper-snake
+ *                    (PREFIX = `options.prefix` or upper-cased binding
+ *                    name when `prefix` is omitted; FIELD = upper-snake
  *                    of the material key).
  *   - `as: mount`  → return the material as a mount descriptor under
- *                    `options.mount` (or the namespace path when absent).
- *   - `as: target` → return the material as a target descriptor.
+ *                    `options.mount` (or `/` when absent).
+ *   - `as: upstream` / `as: target` → return the material as an upstream
+ *                    target descriptor.
  *   - operator-defined shape → fall back to env expansion.
  */
 export function defaultEnvInjection(
@@ -147,6 +151,7 @@ export function defaultEnvInjection(
       };
     }
     case "target":
+    case "upstream":
       return { target: material };
     case "env":
     default:

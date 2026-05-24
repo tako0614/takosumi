@@ -24,8 +24,9 @@ Audit and observability
 Production coordination
 ```
 
-Kernel apply writes deployment-local component `publish` entries under that
-operator namespace policy.
+Kernel apply records deployment-local component `publish` entries as local
+publications in ResolutionSnapshot / Deployment evidence. Public
+`namespace:<path>` resolution is a separate operator-owned export surface.
 
 ## Space 管理 {#space-administration}
 
@@ -45,10 +46,11 @@ AppSpec は Space を作成・設定しない。
 
 ## AppSpec と implementation code {#appspec-and-implementation-code}
 
-AppSpec は `Component.kind` と namespace path を参照する。short kind alias と
-implementation binding は operator が Space policy で与える。AppSpec が
-component contract を宣言し、operator が対応する implementation package を Space
-に見せる。
+AppSpec は `Component.kind`、local publication、local binding を参照する。外部
+material が必要な場合だけ `namespace:<path>` で operator-owned namespace export
+を listen する。short kind alias と implementation binding は operator が Space
+policy で与える。AppSpec が component contract を宣言し、operator が対応する
+implementation package を Space に見せる。
 
 ## Credential 境界 {#credential-boundary}
 
@@ -62,8 +64,8 @@ Space scope で ある。
 connector は operator がインストールし、operator が管理する。
 [Data Asset Model — Connector Guide](./namespace-export-model.md#connector-contract)
 に従って `connector:<id>` で addressing される。AppSpec が connector を命名
-する代わりに、kind URI と namespace path を宣言する。connector の可視性と
-accepted DataAsset metadata は operator 統治で Space scope である。
+する代わりに、kind URI と publication / binding を宣言する。connector の可視性
+と accepted DataAsset metadata は operator 統治で Space scope である。
 
 ## 本番モード {#production-mode}
 

@@ -10,7 +10,7 @@
  * Exports:
  *   - `cloudflareWorkerProvider`         → `worker@v1` (Cloudflare Workers)
  *   - `cloudflareR2ObjectStoreProvider`  → `object-store@v1` (Cloudflare R2)
- *   - `cloudflareCustomDomainProvider`   → `custom-domain@v1` (Cloudflare DNS)
+ *   - `cloudflareCustomDomainProvider`   → `gateway@v1` (Cloudflare DNS)
  */
 
 export {

@@ -27,9 +27,9 @@ export type WorkerCapability =
   | "long-request"
   | "geo-routing";
 
-export type WorkerPublishesTo = "<app-id>.<component-name>";
+export type WorkerPublicationName = "http";
 
-export type WorkerListensFrom = "<sibling-namespace-path>";
+export type WorkerListenBindingName = "binding";
 
 export const WORKER_CAPABILITIES: readonly WorkerCapability[] = [
   "scale-to-zero",
@@ -47,12 +47,12 @@ export const WORKER_ALIASES: readonly string[] = [
   "worker",
 ];
 
-export const WORKER_PUBLISHES_TO: readonly WorkerPublishesTo[] = [
-  "<app-id>.<component-name>",
+export const WORKER_PUBLICATIONS: readonly WorkerPublicationName[] = [
+  "http",
 ];
 
-export const WORKER_LISTENS_FROM: readonly WorkerListensFrom[] = [
-  "<sibling-namespace-path>",
+export const WORKER_LISTEN_BINDINGS: readonly WorkerListenBindingName[] = [
+  "binding",
 ];
 
 export const WORKER_KIND_ID = "worker";

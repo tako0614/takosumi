@@ -55,10 +55,10 @@ Deno.test("CloudflareDnsConnector.apply rejects malformed result.id in API respo
   await assert.rejects(
     () =>
       connector.apply({
-        shape: "custom-domain@v1",
+        shape: "gateway@v1",
         provider: "@takos/cloudflare-dns",
         resourceName: "rs",
-        spec: { name: "app.example.com", target: "lb.example.com" },
+        spec: gatewaySpec("app.example.com", "lb.example.com"),
       }, {}),
     /\$\.result\.id/,
   );
@@ -80,14 +80,24 @@ Deno.test("CloudflareDnsConnector.apply creates record and returns id handle", a
     fetch: mockFetch,
   });
   const res = await connector.apply({
-    shape: "custom-domain@v1",
+    shape: "gateway@v1",
     provider: "@takos/cloudflare-dns",
     resourceName: "rs",
-    spec: { name: "app.example.com", target: "lb.example.com" },
+    spec: gatewaySpec("app.example.com", "lb.example.com"),
   }, {});
   assert.equal(res.handle, "rec-123");
-  assert.equal(res.outputs.fqdn, "app.example.com");
+  assert.equal(res.outputs.host, "app.example.com");
   assert.match(calls[0].url, /\/zones\/zone-1\/dns_records$/);
   assert.match(calls[0].body ?? "", /"type":"CNAME"/);
   assert.match(calls[0].body ?? "", /"proxied":true/);
 });
+
+function gatewaySpec(host: string, target: string) {
+  return {
+    listeners: {
+      public: { protocol: "https", host, tls: "auto" },
+    },
+    routes: [{ listener: "public", path: "/", to: "upstream" }],
+    target,
+  };
+}

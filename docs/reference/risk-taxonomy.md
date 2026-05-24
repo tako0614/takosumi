@@ -36,9 +36,10 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 1. `secret-projection`
 
-- **意味**: managed secret が DesiredSnapshot から projection される際、 raw
-  値が AppSpec / output / log 上に露出する可能性を示す。projection を approve
-  しない限り secret は materialize されない。
+- **意味**: managed secret projection の plan / input で raw 値が AppSpec /
+  output / log 上に露出する可能性を示す。DesiredSnapshot には secret reference
+  または redacted sentinel だけを保存し、raw secret value は保存しない。
+  projection を approve しない限り secret は materialize されない。
 - **発火 stage**: `prepare`
 - **severity**: `error`
 - **invalidation trigger**: 2
@@ -46,7 +47,9 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 2. `external-export`
 
-外部 Space に export する宣言が含まれる場合の候補 Risk。
+operator-internal share model や future extension で、外部 Space へ export
+する操作を扱う場合の候補 Risk です。current public AppSpec v1 は external export
+を直接宣言しません。
 
 - **発火 stage**: `prepare`
 - **severity**: `warning`
@@ -117,7 +120,9 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 10. `cross-space-link`
 
-link を貼る場合の候補 Risk。current v1 は cross-Space link を reject する。
+operator-internal share model や future extension で cross-Space link
+を扱う場合の候補 Risk です。current public AppSpec v1 は cross-Space link
+を宣言できず、kernel は reject します。
 
 - **発火 stage**: `prepare`
 - **severity**: `warning`
@@ -126,8 +131,10 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 
 ### 11. `shadowed-namespace`
 
-- **意味**: namespace export 上で同名 export が複数 source から提供され、 どれを
-  bind するか policy 解決が要る。
+- **意味**: reserved / future sharing model で、同じ namespace path が複数
+  source から見える可能性を示す。current public v1 は Space-visible operator
+  export の exact match だけを解決し、duplicate / shadow は policy choice
+  ではなく invalid resolution として fail-closed する。
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 4, 5
@@ -153,8 +160,8 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 
 ### 14. `rollback-revalidation-required`
 
-- **意味**: rollback / compensate recovery が走った際、prior ResolutionSnapshot
-  に戻すために改めて approval が要る。
+- **意味**: rollback / compensate recovery が走った際、target Deployment の
+  recorded evidence に沿った復元に改めて approval が要る。
 - **発火 stage**: `pre-commit` (compensate path)
 - **severity**: `error`
 - **invalidation trigger**: 1, 2
@@ -170,8 +177,9 @@ link を貼る場合の候補 Risk。current v1 は cross-Space link を reject 
 
 ### 17. `raw-secret-literal`
 
-- **意味**: AppSpec / DesiredSnapshot 中に raw secret literal が混入している
-  疑い。kernel は値を保存しない方針でも、Risk として可視化する。
+- **意味**: AppSpec または projection input に raw secret literal が混入している
+  疑い。kernel は値を DesiredSnapshot に保存せず、保存前の validation /
+  projection planning で Risk として可視化する。
 - **発火 stage**: `prepare`
 - **severity**: `error`
 - **invalidation trigger**: 2

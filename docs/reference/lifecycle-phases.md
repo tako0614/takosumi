@@ -23,7 +23,7 @@ apply  ──►  activate  ──►  observe   (steady state)
                 │
                 └──►  destroy
                 │
-rollback ◄──────┘     (re-materialize prior ResolutionSnapshot)
+rollback ◄──────┘     (new Deployment from recorded evidence)
 recovery ◄── (kernel restart / lock re-acquire,
               resumes from last persisted WAL stage)
 ```
@@ -52,8 +52,8 @@ journal entry から再入します。
 ### `activate`
 
 - **Input**: `apply` が生成した `ResolutionSnapshot`
-- **Output**: ActivationSnapshot / GroupHead update。Exposure health は
-  `unknown` で 初期化。 新 `ResolutionSnapshot` は生成しない
+- **Output**: ActivationSnapshot / GroupHead update。health は observe が
+  append-only observation として記録する。 新 `ResolutionSnapshot` は生成しない
 - **Journal cursor**: apply phase の entry を `commit` -> `post-commit` 遷移で
   継続使用
 - **WAL stages**: `post-commit` -> `observe`
@@ -66,9 +66,11 @@ journal entry から再入します。
 
 ### `destroy`
 
-- **Input**: 現行 `ResolutionSnapshot`
-- **Output**: managed / generated lifecycle-class object を削除した
-  `ResolutionSnapshot`。 external / operator / imported は不変
+- **Input**: 現行 Deployment の recorded `ResolutionSnapshot` / operation
+  evidence
+- **Output**: 新しい destroy Deployment evidence / WAL cleanup result /
+  activation state。旧 `ResolutionSnapshot` は変更しない。external / operator /
+  imported は不変
 - **Journal cursor**: destroy plan digest の下で新 `journalEntryId` を割当て
 - **WAL stages**: `pre-commit` -> `commit` -> `finalize`
 - **Failure**: `commit` 失敗で部分削除が残り、 recovery は resume (idempotent)
@@ -80,8 +82,9 @@ journal entry から再入します。
 
 ### `rollback`
 
-- **Input**: 巻き戻し対象の 1 つ前の `ResolutionSnapshot`
-- **Output**: その以前 snapshot を connector 上に再 materialize
+- **Input**: 巻き戻し対象 Deployment の recorded source / snapshot / evidence
+- **Output**: その evidence から作られる新しい rollback Deployment。過去
+  snapshot は入力として使い、出力 identity として再利用しない
 - **Journal cursor**: 新 `journalEntryId`。 rollback plan は独自の
   `operationPlanDigest` を持つ
 - **WAL stages**: `pre-commit` (compensate replay) -> `commit` -> `abort`
@@ -93,7 +96,8 @@ journal entry から再入します。
 
 ### `recovery`
 
-- **Input**: persist 済 WAL state + Space の最新 `ResolutionSnapshot`
+- **Input**: persist 済 WAL state + unfinished journal entry に記録された
+  snapshot / Deployment evidence ids
 - **Output**: recovery mode (`normal` / `continue` / `compensate` / `inspect`)
   に依存。 詳細は [Recovery modes](./lifecycle.md#recovery-modes)
 - **Journal cursor**: 最後に persist された entry の次 stage から resume。 新
@@ -107,9 +111,8 @@ journal entry から再入します。
 ### `observe`
 
 - **Input**: live runtime-agent describe 結果 + 現行 `ResolutionSnapshot`
-- **Output**: Exposure health 遷移 (`unknown` -> `healthy` / `degraded` /
-  `unhealthy`)、 ObservationSet entry、 drift / external revoke 検出時の
-  `RevokeDebt` 候補
+- **Output**: health observation (`healthy` / `degraded` / `unhealthy`)、
+  ObservationSet entry、 drift / external revoke 検出時の `RevokeDebt` 候補
 - **Journal cursor**: Space ごとに長時間 observe entry を再利用。 新 operation
   plan digest は割当てない
 - **WAL stages**: `observe` (long-lived、 terminal にならない)

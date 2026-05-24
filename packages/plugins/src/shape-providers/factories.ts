@@ -25,8 +25,8 @@ import type {
   ShapeRef,
 } from "takosumi-contract";
 import type {
-  CustomDomainCapability,
   DatabasePostgresCapability,
+  GatewayCapability,
   ObjectStoreCapability,
   WebServiceCapability,
 } from "../kinds/mod.ts";
@@ -101,7 +101,7 @@ interface ProviderEntry {
 const OBJECT_STORE: ShapeRef = { id: "object-store", version: "v1" };
 const WEB_SERVICE: ShapeRef = { id: "web-service", version: "v1" };
 const DATABASE_POSTGRES: ShapeRef = { id: "postgres", version: "v1" };
-const CUSTOM_DOMAIN: ShapeRef = { id: "custom-domain", version: "v1" };
+const GATEWAY: ShapeRef = { id: "gateway", version: "v1" };
 const WORKER: ShapeRef = { id: "worker", version: "v1" };
 
 const AWS_PROVIDERS: readonly ProviderEntry[] = [
@@ -143,13 +143,13 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
   },
   {
     id: "@takos/aws-route53",
-    shape: CUSTOM_DOMAIN,
+    shape: GATEWAY,
     capabilities: [
       "wildcard",
       "auto-tls",
       "sni",
       "alpn-acme",
-    ] satisfies readonly CustomDomainCapability[],
+    ] satisfies readonly GatewayCapability[],
   },
 ];
 
@@ -191,12 +191,12 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
   },
   {
     id: "@takos/gcp-cloud-dns",
-    shape: CUSTOM_DOMAIN,
+    shape: GATEWAY,
     capabilities: [
       "wildcard",
       "auto-tls",
       "sni",
-    ] satisfies readonly CustomDomainCapability[],
+    ] satisfies readonly GatewayCapability[],
   },
 ];
 
@@ -231,13 +231,13 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
   },
   {
     id: "@takos/cloudflare-dns",
-    shape: CUSTOM_DOMAIN,
+    shape: GATEWAY,
     capabilities: [
       "wildcard",
       "auto-tls",
       "sni",
       "http3",
-    ] satisfies readonly CustomDomainCapability[],
+    ] satisfies readonly GatewayCapability[],
   },
 ];
 
@@ -325,8 +325,8 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
   },
   {
     id: "@takos/selfhost-coredns",
-    shape: CUSTOM_DOMAIN,
-    capabilities: ["wildcard"] satisfies readonly CustomDomainCapability[],
+    shape: GATEWAY,
+    capabilities: ["wildcard"] satisfies readonly GatewayCapability[],
   },
 ];
 

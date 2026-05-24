@@ -22,7 +22,7 @@ Deno.test("manifestToProofFixture maps bundled manifests to runtime desired stat
     "object-store@v1:aws-s3:artifacts",
     "postgres@v1:aws-rds:db",
     "web-service@v1:aws-fargate:web",
-    "custom-domain@v1:route53:primary",
+    "gateway@v1:route53:primary",
   ]);
 });
 

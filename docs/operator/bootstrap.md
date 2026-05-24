@@ -1,62 +1,58 @@
 # オペレーターブートストラップ {#operator-bootstrap}
 
-> このページでわかること: Takosumi reference kernel に provider implementation
-> adapter と kind alias map を attach する初期設定の手順。
+> このページでわかること: Takosumi reference kernel に kind alias map と
+> provider implementation を渡す方法。
 
-reference operator-facing entry は **`createPaaSApp({ kindAliases, plugins })`**
-です。各 provider adapter factory は `KernelPlugin` を返します。cloud credential
-/ SDK code は runtime-agent の env または operator host 側に置き、reference
-bootstrap では `kindAliases` と reference adapter array (`plugins` option) を
-kernel に渡します。 `worker` などの short alias も operator config で渡します。
+Takosumi の public spec は AppSpec / Installation / Deployment と Installer API
+です。`createPaaSApp({ kindAliases, plugins })` は Takosumi reference kernel の
+起動 API で、operator distribution が採用する implementation wiring です。
 
-source: per-cloud provider package
-([`packages/cloudflare-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/cloudflare-providers/src)
-/
-[`packages/aws-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/aws-providers/src)
-/
-[`packages/gcp-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/gcp-providers/src)
-/
-[`packages/kubernetes-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/kubernetes-providers/src)
-/
-[`packages/deno-deploy-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/deno-deploy-providers/src)
-/
-[`packages/selfhost-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/selfhost-providers/src))
-— reference provider adapter factory (`<kind>-<provider>.ts` per pair)。
+reference kernel では、operator は次を起動時に渡します。
 
-credential / SDK boundary は
-[Concepts § Architecture](/getting-started/concepts#architecture-kernel-runtime-agent)
-参照。 factory から得た reference adapter は runtime-agent に lifecycle envelope
-(apply / destroy / describe) を POST するだけ。
+- `kindAliases`: `worker` などの short alias を kind URI に解決する map。
+- `plugins`: provider adapter factory が返す implementation binding の plain
+  array。
+
+cloud credential / SDK code は runtime-agent の env、connector、または operator
+host 側に置きます。kernel が見るのは alias map と implementation binding です。
 
 ## 最小例
 
 ```ts
 import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
-import { awsS3ObjectStoreProvider } from "@takos/takosumi-aws-providers";
-import { cloudflareWorkerProvider } from "@takos/takosumi-cloudflare-providers";
-import { selfhostPostgresProvider } from "@takos/takosumi-selfhost-providers";
+import {
+  selfhostDockerComposeWebServiceProvider,
+  selfhostPostgresProvider,
+} from "@takos/takosumi-selfhost-providers";
 
 const { app } = await createPaaSApp({
   kindAliases: TAKOSUMI_REFERENCE_KIND_ALIASES,
   plugins: [
-    cloudflareWorkerProvider({
-      accountId: Deno.env.get("CLOUDFLARE_ACCOUNT_ID")!,
-    }),
-    awsS3ObjectStoreProvider({
-      region: Deno.env.get("AWS_REGION")!,
-    }),
     selfhostPostgresProvider({
-      dockerSocket: "/var/run/docker.sock",
+      hostBinding: "127.0.0.1",
+    }),
+    selfhostDockerComposeWebServiceProvider({
+      hostBinding: "127.0.0.1",
     }),
   ],
 });
 ```
 
-operator は必要な provider adapter factory だけを array に並べて attach し、
-cloud credential は runtime-agent の connector env または operator host
-側で管理する。 reference kernel が見るのは起動時に渡された `kindAliases` と
-reference adapter array (`plugins` option) だけです。
+operator は必要な provider adapter factory だけを array に並べます。`plugins`
+という名前は reference kernel の Vite-like wiring API の名前であり、別の
+Takosumi-compatible implementation が同じ仕組みを使う必要はありません。
+
+## Implementation source map
+
+reference provider adapter factories live in per-cloud provider packages:
+
+- [`packages/cloudflare-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/cloudflare-providers/src)
+- [`packages/aws-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/aws-providers/src)
+- [`packages/gcp-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/gcp-providers/src)
+- [`packages/kubernetes-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/kubernetes-providers/src)
+- [`packages/deno-deploy-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/deno-deploy-providers/src)
+- [`packages/selfhost-providers/src/`](https://github.com/tako0614/takosumi/tree/main/packages/selfhost-providers/src)
 
 ## Reference provider 数
 
@@ -71,45 +67,35 @@ reference adapter array (`plugins` option) だけです。
 
 各 factory は該当 cloud provider package
 (`@takos/takosumi-{cloudflare,aws,gcp,kubernetes,deno-deploy,selfhost}-providers`)
-の named export として取得する (例: `cloudflareWorkerProvider` は
-`@takos/takosumi-cloudflare-providers`、 `awsFargateWebServiceProvider` は
-`@takos/takosumi-aws-providers`、 `selfhostFilesystemObjectStoreProvider` は
-`@takos/takosumi-selfhost-providers` から)。 operator は必要な cloud の package
-だけを別 install する。
+の named export として取得します。operator は必要な cloud の package だけを別
+install します。
 
 ## Runtime-agent との対応
 
-下表の `provider id` は reference kernel-side adapter が `Component.kind` を
-materialize する際の安定 id で、 **operator wiring 由来** (= operator が
-`createPaaSApp({ kindAliases, plugins })` に attach した adapter factory
-が宣言する id) です。これは
-[connector-contract.md](../reference/connector-contract.md) で言う **Connector
-consumer adapter** (= Connector の下流 consumer) に相当する。 runtime-agent の
-connector 名 (右側) は実装詳細で、 operator は agent boot 時に必要な connector
-credential / local path を設定する。
+下表の `provider id` は operator wiring 由来の安定 id です。runtime-agent の
+connector 名は実行側の実装詳細で、operator は agent boot 時に必要な credential /
+local path を設定します。
 
-| provider id (operator wiring 由来、= reference adapter / Connector consumer) | runtime-agent connector の例    |
-| ---------------------------------------------------------------------------- | ------------------------------- |
-| `@takos/aws-fargate`                                                         | AWS ECS / Fargate connector     |
-| `@takos/gcp-cloud-run`                                                       | GCP Cloud Run connector         |
-| `@takos/cloudflare-container`                                                | Cloudflare Container connector  |
-| `@takos/kubernetes-deployment`                                               | Kubernetes deployment connector |
-| `@takos/selfhost-docker-compose`                                             | docker-compose connector        |
-| `@takos/selfhost-postgres`                                                   | local Docker Postgres connector |
-| `@takos/deno-deploy`                                                         | Deno Deploy connector           |
+| provider id                      | runtime-agent connector の例    |
+| -------------------------------- | ------------------------------- |
+| `@takos/aws-fargate`             | AWS ECS / Fargate connector     |
+| `@takos/gcp-cloud-run`           | GCP Cloud Run connector         |
+| `@takos/cloudflare-container`    | Cloudflare Container connector  |
+| `@takos/kubernetes-deployment`   | Kubernetes deployment connector |
+| `@takos/selfhost-docker-compose` | docker-compose connector        |
+| `@takos/selfhost-postgres`       | local Docker Postgres connector |
+| `@takos/deno-deploy`             | Deno Deploy connector           |
 
-## Selfhosted のみの最小構成 {#selfhosted-only-な最小構成}
+## Selfhosted のみの最小構成 {#selfhosted-only-minimal}
 
-開発機 1 台で全部 selfhosted で動かす最小例:
+開発機 1 台で全部 selfhosted に寄せる最小例:
 
 ```ts
 import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import {
-  selfhostCoreDnsCustomDomainProvider,
   selfhostDockerComposeWebServiceProvider,
   selfhostFilesystemObjectStoreProvider,
-  selfhostMinioObjectStoreProvider,
   selfhostPostgresProvider,
   selfhostSystemdWebServiceProvider,
 } from "@takos/takosumi-selfhost-providers";
@@ -118,27 +104,23 @@ const { app } = await createPaaSApp({
   kindAliases: TAKOSUMI_REFERENCE_KIND_ALIASES,
   plugins: [
     selfhostFilesystemObjectStoreProvider({}),
-    selfhostMinioObjectStoreProvider({ endpoint: "http://localhost:9000" }),
     selfhostDockerComposeWebServiceProvider({}),
     selfhostSystemdWebServiceProvider({}),
     selfhostPostgresProvider({}),
-    selfhostCoreDnsCustomDomainProvider({}),
   ],
 });
 ```
 
-この構成では AppSpec の reference component kind alias を self-host provider
-に解決する。
+この構成では AppSpec の reference component kind alias を self-host provider に
+解決します。public ingress を扱う distribution は、`gateway` kind を提供する
+provider adapter を同じ `plugins` array に追加します。
 
 ## 関連ページ
 
+- [セルフホスト運用](./self-host.md)
 - [Provider Implementations](../reference/providers.md)
-- [Provider package examples](../reference/provider-packages.md) — reference
-  provider package と capability metadata の例
-- [Runtime-agent API](../reference/runtime-agent-api.md) — agent lifecycle
-  envelope
-- [Reference Kind Descriptors](../reference/kind-registry.md#reference-component-kinds)
-  — reference kind ごとの outputs と capabilities
-- [AppSpec](../reference/app-spec.md) — operator が apply する `.takosumi.yml`
-  の syntax
-- [Extending](/extending) — 新 provider 追加時の reference adapter 作り方
+- [Provider package examples](../reference/provider-packages.md)
+- [Reference Plugin Loading](../reference/plugin-loading.md)
+- [Runtime-Agent API](../reference/runtime-agent-api.md)
+- [Kind Descriptor Examples](../reference/kind-registry.md)
+- [AppSpec](../reference/app-spec.md)

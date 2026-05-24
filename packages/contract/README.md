@@ -16,7 +16,7 @@ Use explicit subpath imports for the current v1 public spec surfaces:
 
 | Subpath                                  | Owns                                                                                     |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `@takos/takosumi-contract/app-spec`      | `AppSpec`, `Component`, namespace `publish` / `listen` declarations                      |
+| `@takos/takosumi-contract/app-spec`      | `AppSpec`, `Component`, local `publish` / `listen` declarations                          |
 | `@takos/takosumi-contract/installer-api` | 5 endpoint Installer API DTOs, `Installation`, `Deployment`, source pins, error envelope |
 
 The root export also carries deploy-core projection types, so `AppSpec` and
@@ -32,7 +32,7 @@ the AppSpec and Installer API wire shapes above.
 
 | Subpath                                            | Owns                                                                                         |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `@takos/takosumi-contract/plugin`                  | reference `KernelPlugin` adapter, namespace material publish / listen hooks                  |
+| `@takos/takosumi-contract/plugin`                  | reference `KernelPlugin` adapter, material publish / listen hooks                            |
 | `@takos/takosumi-contract/runtime-agent-lifecycle` | kernel to runtime-agent lifecycle envelopes for `apply`, `destroy`, `compensate`, `describe` |
 
 ## Implementation Bridge Subpaths
@@ -62,8 +62,20 @@ interface AppSpec {
 interface Component {
   readonly kind: string;
   readonly spec?: JsonObject;
-  readonly publish?: readonly string[];
+  readonly publish?: Readonly<Record<string, PublishOptions>>;
   readonly listen?: Readonly<Record<string, ListenOptions>>;
+}
+
+interface PublishOptions {
+  readonly as: string;
+}
+
+interface ListenOptions {
+  readonly from: string;
+  readonly as: string;
+  readonly prefix?: string;
+  readonly mount?: string;
+  readonly required?: boolean;
 }
 ```
 
@@ -71,9 +83,12 @@ interface Component {
 aliases such as `web-service` to full kind URIs, but alias resolution and kind
 descriptor selection belong to the operator distribution. Component-specific
 routes, launch endpoints, permissions, and provider details live inside the
-component's open `spec` or in the operator's materializer conventions. Build
-recipes live in build-service input such as `.takosumi.build.yml`; the AppSpec
-component does not carry build steps.
+component's open `spec` or in the operator's materializer conventions. `publish`
+declares local publications such as `web.http`; `listen` declares local bindings
+whose `from` is either `component.publication` or `namespace:<operator.export>`.
+Publication material projection is owned by the kind descriptor/materializer,
+not by AppSpec output selectors. Build recipes live in build-service input such
+as `.takosumi.build.yml`; the AppSpec component does not carry build steps.
 
 ## Installer API
 
@@ -85,18 +100,18 @@ The Installer API is the public HTTP surface for moving source into Takosumi:
 - `POST /v1/installations/{id}/deployments`
 - `POST /v1/installations/{id}/rollback`
 
-Requests carry a `Source` (`git` or `prepared`) and optional expected source
-pin. Responses return Installation / Deployment records and Deployment evidence:
-AppSpec digest (serialized as `manifestDigest`), source, status, and
-materialized component outputs. Dry-runs return changes and expected digests
-without persisting a plan entity.
+Requests carry a `Source` (`git`, `prepared`, or dev/operator-local `local`) and
+an optional expected source pin. Responses return Installation / Deployment
+records and Deployment evidence: AppSpec digest (serialized as
+`manifestDigest`), source, status, and materialized component outputs. Dry-runs
+return changes and expected digests without persisting a plan entity.
 
 ## Reference KernelPlugin
 
 `KernelPlugin` is the current takosumi.com reference kernel adapter API. An
 operator-attached adapter declares the kind URIs it provides, applies a
-component, optionally destroys it, publishes namespace material, and adapts
-listened material into env / mount / target runtime inputs.
+component, optionally destroys it, publishes local publication material, and
+adapts listened material into env / mount / upstream runtime inputs.
 
 Reference operators attach adapters as plain arrays:
 

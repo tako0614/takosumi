@@ -3,22 +3,19 @@
  *
  * Each reference kind document is the source of truth for its
  * `spec` shape (= JSON Schema 2020-12 form), `outputs` list,
- * `capabilities` enum, and the namespace pub/sub envelope
- * (`aliases` / `publishes[]` / `listens{}`). The generator emits a
+ * `capabilities` enum, and the publication/listen envelope
+ * (`aliases` / `publications{}` / `listens{}`). The generator emits a
  * sibling `packages/plugins/src/kinds/<basename>.generated.ts`
  * containing:
  *
  *   - `<Prefix>Spec` interface (derived from JSON Schema)
  *   - `<Prefix>Outputs` interface (derived from `outputs` array)
  *   - `<Prefix>Capability` string union (derived from `capabilities` array)
- *   - `<Prefix>PublishesTo` string union (= namespace paths the kind
- *     declares it publishes to; templated paths like `<app-id>` are
- *     emitted verbatim as string literals)
- *   - `<Prefix>ListensFrom` string union (= namespace paths the kind
- *     declares it can listen to; same templating rule)
+ *   - `<Prefix>PublicationName` string union (= local publication names)
+ *   - `<Prefix>ListenBindingName` string union (= local listen binding names)
  *   - `<UPPER>_CAPABILITIES` / `<UPPER>_OUTPUT_FIELDS` /
- *     `<UPPER>_ALIASES` / `<UPPER>_PUBLISHES_TO` /
- *     `<UPPER>_LISTENS_FROM` const arrays
+ *     `<UPPER>_ALIASES` / `<UPPER>_PUBLICATIONS` /
+ *     `<UPPER>_LISTEN_BINDINGS` const arrays
  *   - `<UPPER>_KIND_ID` / `<UPPER>_KIND_NAME` /
  *     `<UPPER>_KIND_URI` / `<UPPER>_KIND_VERSION` /
  *     `<UPPER>_DESCRIPTION`
@@ -34,7 +31,7 @@
  *     the generated TS file basename. Kind identity is derived from
  *     JSON-LD `@id` and `name`, never from `x-ts`.
  *   - `x-ts-name` (per nested schema): explicit interface name suffix
- *     (e.g. `Redirect` → `CustomDomainRedirect`).
+ *     (e.g. `Redirect` → `GatewayRedirect`).
  *   - `x-ts-type` (per schema): `{ import: <module>, name: <type> }`
  *     overrides the auto-generated type with an imported one.
  */
@@ -60,8 +57,8 @@ interface JsonSchema {
   readonly $schema?: string;
 }
 
-interface PublishesEntry {
-  readonly namespacePath: string;
+interface PublicationDescriptor {
+  readonly contract: string;
   readonly material?: Record<string, unknown>;
 }
 
@@ -78,7 +75,7 @@ interface KindDoc {
   readonly version: string;
   readonly description?: string;
   readonly aliases?: readonly string[];
-  readonly publishes?: readonly PublishesEntry[];
+  readonly publications?: Record<string, PublicationDescriptor>;
   readonly listens?: Record<string, ListensDescriptor>;
   readonly "x-ts": {
     readonly fileBasename: string;
@@ -229,8 +226,8 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   const specInterfaceName = `${doc["x-ts"].prefix}Spec`;
   const outputsInterfaceName = `${doc["x-ts"].prefix}Outputs`;
   const capabilityTypeName = `${doc["x-ts"].prefix}Capability`;
-  const publishesTypeName = `${doc["x-ts"].prefix}PublishesTo`;
-  const listensTypeName = `${doc["x-ts"].prefix}ListensFrom`;
+  const publicationsTypeName = `${doc["x-ts"].prefix}PublicationName`;
+  const listenBindingTypeName = `${doc["x-ts"].prefix}ListenBindingName`;
 
   // First pass: collect nested types from spec schema (also generates
   // their inline forms so we know what to emit at top level).
@@ -254,21 +251,21 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
     ? ""
     : aliases.map((a) => JSON.stringify(a)).join(",\n  ");
 
-  const publishesPaths = (doc.publishes ?? []).map((p) => p.namespacePath);
-  const publishesUnion = publishesPaths.length === 0
+  const publicationNames = Object.keys(doc.publications ?? {});
+  const publicationsUnion = publicationNames.length === 0
     ? "never"
-    : publishesPaths.map((p) => JSON.stringify(p)).join("\n  | ");
-  const publishesArrayLiteral = publishesPaths.length === 0
+    : publicationNames.map((p) => JSON.stringify(p)).join("\n  | ");
+  const publicationsArrayLiteral = publicationNames.length === 0
     ? ""
-    : publishesPaths.map((p) => JSON.stringify(p)).join(",\n  ");
+    : publicationNames.map((p) => JSON.stringify(p)).join(",\n  ");
 
-  const listenPaths = Object.keys(doc.listens ?? {});
-  const listensUnion = listenPaths.length === 0
+  const listenBindingNames = Object.keys(doc.listens ?? {});
+  const listenBindingsUnion = listenBindingNames.length === 0
     ? "never"
-    : listenPaths.map((p) => JSON.stringify(p)).join("\n  | ");
-  const listensArrayLiteral = listenPaths.length === 0
+    : listenBindingNames.map((p) => JSON.stringify(p)).join("\n  | ");
+  const listenBindingsArrayLiteral = listenBindingNames.length === 0
     ? ""
-    : listenPaths.map((p) => JSON.stringify(p)).join(",\n  ");
+    : listenBindingNames.map((p) => JSON.stringify(p)).join(",\n  ");
 
   const importLines = renderImports(ctx.imports);
   const nestedBlocks = ctx.nested
@@ -292,9 +289,13 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   parts.push("");
   parts.push(`export type ${capabilityTypeName} =\n  | ${capabilityUnion};`);
   parts.push("");
-  parts.push(`export type ${publishesTypeName} =\n  | ${publishesUnion};`);
+  parts.push(
+    `export type ${publicationsTypeName} =\n  | ${publicationsUnion};`,
+  );
   parts.push("");
-  parts.push(`export type ${listensTypeName} =\n  | ${listensUnion};`);
+  parts.push(
+    `export type ${listenBindingTypeName} =\n  | ${listenBindingsUnion};`,
+  );
   parts.push("");
   parts.push(
     `export const ${upper}_CAPABILITIES: readonly ${capabilityTypeName}[] = [\n  ${capabilityArrayLiteral},\n];`,
@@ -312,23 +313,23 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
     );
   }
   parts.push("");
-  if (publishesPaths.length === 0) {
+  if (publicationNames.length === 0) {
     parts.push(
-      `export const ${upper}_PUBLISHES_TO: readonly ${publishesTypeName}[] = [];`,
+      `export const ${upper}_PUBLICATIONS: readonly ${publicationsTypeName}[] = [];`,
     );
   } else {
     parts.push(
-      `export const ${upper}_PUBLISHES_TO: readonly ${publishesTypeName}[] = [\n  ${publishesArrayLiteral},\n];`,
+      `export const ${upper}_PUBLICATIONS: readonly ${publicationsTypeName}[] = [\n  ${publicationsArrayLiteral},\n];`,
     );
   }
   parts.push("");
-  if (listenPaths.length === 0) {
+  if (listenBindingNames.length === 0) {
     parts.push(
-      `export const ${upper}_LISTENS_FROM: readonly ${listensTypeName}[] = [];`,
+      `export const ${upper}_LISTEN_BINDINGS: readonly ${listenBindingTypeName}[] = [];`,
     );
   } else {
     parts.push(
-      `export const ${upper}_LISTENS_FROM: readonly ${listensTypeName}[] = [\n  ${listensArrayLiteral},\n];`,
+      `export const ${upper}_LISTEN_BINDINGS: readonly ${listenBindingTypeName}[] = [\n  ${listenBindingsArrayLiteral},\n];`,
     );
   }
   parts.push("");
@@ -377,6 +378,14 @@ function validateKindDoc(path: string, doc: KindDoc): void {
       `[spec:generate-ts] ${path}: @id last segment (${uriName}) must match name (${doc.name})`,
     );
     Deno.exit(1);
+  }
+  for (const [name, publication] of Object.entries(doc.publications ?? {})) {
+    if ("from" in publication) {
+      console.error(
+        `[spec:generate-ts] ${path}: publications.${name}.from is obsolete; use publications.${name}.material`,
+      );
+      Deno.exit(1);
+    }
   }
 }
 

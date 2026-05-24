@@ -1,11 +1,11 @@
-# Kernel HTTP API {#kernel-http-api}
+# Reference Kernel Route Inventory {#kernel-http-api}
 
-> このページでわかること: kernel HTTP surface の endpoint と認証境界。
+> このページでわかること: reference kernel が mount する route と認証境界。
 
-本ページは `takosumi-api` role が mount する Takosumi kernel endpoint を説明し
-ます。公開 lifecycle は Installer API の 5 endpoint と AppSpec / Installation /
-Deployment で表します。internal control plane と runtime-agent control RPC は
-operator runtime surface です。
+本ページは `takosumi-api` role が mount する reference kernel route inventory
+です。Takosumi public lifecycle は Installer API の 5 endpoint と AppSpec /
+Installation / Deployment で表します。internal control plane、runtime-agent
+control RPC、probe route は operator runtime surface です。
 
 > 実装は
 > [`packages/kernel/src/api/`](https://github.com/tako0614/takosumi/tree/main/packages/kernel/src/api)
@@ -119,19 +119,21 @@ interface ApiErrorEnvelope {
 `requestId` は常に存在。 caller が `X-Request-Id` を送らなければ kernel が ULID
 を生成し、 log と response 両方に同じ値を載せます。
 
-`DomainErrorCode` は v1 で 9 個の closed enum:
+public installer error envelope の正本は [Installer API](./installer-api.md)
+です。 reference kernel の internal / probe route は同じ envelope を使い、route
+種別に 応じて次の code を返します。
 
-| `code`                   | HTTP | 主な発生要因                                                             |
-| ------------------------ | ---- | ------------------------------------------------------------------------ |
-| `invalid_argument`       | 400  | AppSpec schema / form input / publish-listen cycle                       |
-| `unauthenticated`        | 401  | bearer 不足、 internal HMAC 検証失敗                                     |
-| `permission_denied`      | 403  | space 越境、 token claim 不足                                            |
-| `not_found`              | 404  | endpoint disabled (token unset)、 Installation / Deployment 不在         |
-| `failed_precondition`    | 409  | expected source / manifest mismatch、 collision-detected、 approval 失効 |
-| `resource_exhausted`     | 413  | source snapshot / provider quota / request size 上限超過                 |
-| `not_implemented`        | 501  | issuer 未配線、 operator が opt-in していない機能                        |
-| `readiness_probe_failed` | 503  | `/livez` / `/readyz` / dependent port が ready でない                    |
-| `internal_error`         | 500  | unhandled exception                                                      |
+| `code`                   | HTTP | 主な発生要因                                                                                               |
+| ------------------------ | ---- | ---------------------------------------------------------------------------------------------------------- |
+| `invalid_argument`       | 400  | AppSpec schema / form input / operator catalog/policy で解決できない kind or listen / publish-listen cycle |
+| `unauthenticated`        | 401  | bearer 不足、 internal HMAC 検証失敗                                                                       |
+| `permission_denied`      | 403  | space 越境、token claim 不足、operator policy による拒否                                                   |
+| `not_found`              | 404  | endpoint disabled (token unset)、 Installation / Deployment 不在                                           |
+| `failed_precondition`    | 409  | expected source / manifest mismatch                                                                        |
+| `resource_exhausted`     | 413  | source snapshot / request body / manifest size 上限超過                                                    |
+| `not_implemented`        | 501  | endpoint / optional extension / mounted implementation contract がこの operator binary に実装されていない  |
+| `readiness_probe_failed` | 503  | `/livez` / `/readyz` / dependent port が ready でない                                                      |
+| `internal_error`         | 500  | unhandled exception                                                                                        |
 
 `details` に sensitive key (`authorization` / `cookie` / `token` / `secret` /
 `password` / `credential` / `api_key` / `private_key`) を含む field があれば
@@ -143,7 +145,7 @@ interface ApiErrorEnvelope {
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
 - [Build service handoff](./build-spec.md) — build service と prepared source の
   handoff
-- [Reference Kind Examples](./kind-registry.md#reference-component-kinds) —
-  takosumi.com reference kind examples + operator-defined kind
+- [Kind Descriptor Examples](./kind-registry.md) — takosumi.com reference kind
+  examples + operator-defined kind
 - [Runtime-Agent API](./runtime-agent-api.md)
 - [Closed Enums](./closed-enums.md)

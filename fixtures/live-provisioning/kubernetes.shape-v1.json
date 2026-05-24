@@ -23,11 +23,18 @@
       }
     },
     {
-      "shape": "custom-domain@v1",
+      "shape": "gateway@v1",
       "name": "primary",
       "provider": "coredns-local",
       "spec": {
-        "name": "kubernetes-live-smoke.example.test",
+        "listeners": {
+          "public": {
+            "protocol": "https",
+            "host": "kubernetes-live-smoke.example.test",
+            "tls": "auto"
+          }
+        },
+        "routes": [{ "listener": "public", "path": "/", "to": "upstream" }],
         "target": "${ref:web.url}"
       }
     }

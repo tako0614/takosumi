@@ -1,9 +1,9 @@
 import type { ProviderPlugin } from "takosumi-contract";
 import type {
-  CustomDomainCapability,
-  CustomDomainOutputs,
-  CustomDomainSpec,
-} from "../../kinds/custom-domain.ts";
+  GatewayCapability,
+  GatewayOutputs,
+  GatewaySpec,
+} from "../../kinds/gateway.ts";
 
 export interface CoreDnsRecordDescriptor {
   readonly recordName: string;
@@ -31,27 +31,27 @@ export interface CoreDnsLocalProviderOptions {
   readonly clock?: () => Date;
 }
 
-const SUPPORTED_CAPABILITIES: readonly CustomDomainCapability[] = [
+const SUPPORTED_CAPABILITIES: readonly GatewayCapability[] = [
   "wildcard",
 ];
 
 export function createCoreDnsLocalProvider(
   options: CoreDnsLocalProviderOptions,
-): ProviderPlugin<CustomDomainSpec, CustomDomainOutputs> {
+): ProviderPlugin<GatewaySpec, GatewayOutputs> {
   const lifecycle = options.lifecycle;
   const clock = options.clock ?? (() => new Date());
   return {
     id: "@takos/selfhost-coredns",
     version: "1.0.0",
-    implements: { id: "custom-domain", version: "v1" },
+    implements: { id: "gateway", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
       const target = requireInjectedTarget(spec);
       const desc = await lifecycle.createRecord({
-        fqdn: spec.name,
+        fqdn: requireRequestedHost(spec),
         target,
       });
-      return { handle: desc.recordName, outputs: { fqdn: desc.fqdn } };
+      return { handle: desc.recordName, outputs: endpointOutputs(desc.fqdn) };
     },
     async destroy(handle, _ctx) {
       await lifecycle.deleteRecord({ recordName: handle });
@@ -61,7 +61,7 @@ export function createCoreDnsLocalProvider(
       if (!desc) return { kind: "deleted", observedAt: clock().toISOString() };
       return {
         kind: "ready",
-        outputs: { fqdn: desc.fqdn },
+        outputs: endpointOutputs(desc.fqdn),
         observedAt: clock().toISOString(),
       };
     },
@@ -105,10 +105,27 @@ export class InMemoryCoreDnsLifecycle implements CoreDnsLifecycleClient {
   }
 }
 
-function requireInjectedTarget(spec: CustomDomainSpec): string {
+function requireInjectedTarget(spec: GatewaySpec): string {
   const target = (spec as { target?: unknown }).target;
   if (typeof target !== "string" || target.length === 0) {
-    throw new Error("custom-domain requires listen-derived target");
+    throw new Error("gateway requires listen-derived target");
   }
   return target;
+}
+
+function requireRequestedHost(spec: GatewaySpec): string {
+  for (const listener of Object.values(spec.listeners)) {
+    if (typeof listener.host === "string" && listener.host.length > 0) {
+      return listener.host;
+    }
+  }
+  throw new Error("gateway requires at least one listener host");
+}
+
+function endpointOutputs(host: string): GatewayOutputs {
+  return {
+    url: `https://${host}`,
+    host,
+    scheme: "https",
+  };
 }

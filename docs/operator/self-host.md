@@ -39,7 +39,10 @@ DataAsset upload / discovery extension を有効化する operator distribution 
 
 ## 単一 VM で動かす {#single-vm}
 
-source root には AppSpec として `.takosumi.yml` を置きます。
+source root には AppSpec として `.takosumi.yml` を置きます。この例は self-host
+provider / alias set を operator bootstrap で attach した distribution を前提に
+しています。plain kernel binary だけでは `postgres` や `web-service` alias は
+解決されません。
 
 ```yaml
 apiVersion: v1
@@ -53,11 +56,13 @@ components:
       version: "16"
       size: small
     publish:
-      - com.example.api.db
+      connection:
+        as: service-binding
   api:
     kind: web-service
     listen:
-      com.example.api.db:
+      db:
+        from: db.connection
         as: env
         prefix: DATABASE
     spec:
@@ -86,6 +91,10 @@ export TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR=/etc/systemd/system
 takosumi server --port 8788
 ```
 
+`takosumi server` は、起動した distribution/profile に attach された provider
+だけを使えます。production では operator bootstrap で alias map と provider
+implementation を明示してください。
+
 別 shell から apply します。
 
 ```bash
@@ -93,6 +102,10 @@ takosumi install --space space:personal --source . \
   --remote http://localhost:8788 \
   --token "$TAKOSUMI_INSTALLER_TOKEN"
 ```
+
+`--source .` は kernel process から同じ filesystem path が見える単一 VM /
+operator local 構成で使います。kernel と source checkout が分かれる構成では、git
+source または build service が作った prepared source を渡します。
 
 ## 本番で分離するもの {#production-split}
 

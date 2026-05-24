@@ -1,7 +1,7 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert@^1.0.5";
 import { AppSpecParseError, parseAppSpec } from "./yaml-parser.ts";
 
-Deno.test("parseAppSpec — canonical worker + db example with publish/listen", () => {
+Deno.test("parseAppSpec accepts canonical worker + db + gateway example", () => {
   const yaml = `
 apiVersion: v1
 
@@ -11,50 +11,53 @@ metadata:
   publisher: example
 
 components:
+  db:
+    kind: postgres
+    publish:
+      connection:
+        as: service-binding
+
   web:
     kind: worker
     spec:
       entrypoint: dist/worker.mjs
-      routes:
-        - /
-    publish:
-      - com.example.notes.web
     listen:
-      com.example.notes.db:
+      db:
+        from: db.connection
         as: env
         prefix: DB
-
-  db:
-    kind: postgres
     publish:
-      - com.example.notes.db
+      http:
+        as: http-endpoint
+
+  public:
+    kind: gateway
+    listen:
+      app:
+        from: web.http
+        as: upstream
+    spec:
+      listeners:
+        public:
+          protocol: https
+          host: notes.example.com
+          tls: auto
+      routes:
+        - listener: public
+          path: /
+          to: app
 `;
   const spec = parseAppSpec(yaml);
   assertEquals(spec.apiVersion, "v1");
   assertEquals(spec.metadata.id, "com.example.notes");
-  assertEquals(Object.keys(spec.components).sort(), ["db", "web"]);
-  assertEquals(spec.components.web.kind, "worker");
-  assertEquals(spec.components.web.publish, ["com.example.notes.web"]);
-  assertEquals(
-    spec.components.web.listen?.["com.example.notes.db"]?.as,
-    "env",
-  );
-  assertEquals(
-    spec.components.web.listen?.["com.example.notes.db"]?.prefix,
-    "DB",
-  );
-  // routes lives inside the worker kind's open `spec` field — not a
-  // top-level Component field. The materializer reads `spec.routes`
-  // by convention; the AppSpec contract stays kind-agnostic.
-  assertEquals(
-    (spec.components.web.spec as { routes?: readonly string[] }).routes,
-    ["/"],
-  );
-  assertEquals(spec.components.db.kind, "postgres");
-  assertEquals(spec.components.db.publish, ["com.example.notes.db"]);
+  assertEquals(Object.keys(spec.components).sort(), ["db", "public", "web"]);
+  assertEquals(spec.components.db.publish?.connection?.as, "service-binding");
+  assertEquals(spec.components.web.listen?.db?.from, "db.connection");
+  assertEquals(spec.components.web.publish?.http?.as, "http-endpoint");
+  assertEquals(spec.components.public.listen?.app?.as, "upstream");
 });
 
-Deno.test("parseAppSpec rejects top-level Component `routes:` (= moved into spec.routes)", () => {
+Deno.test("parseAppSpec rejects top-level Component `routes:` (= routes live in kind spec)", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -88,7 +91,7 @@ components:
   assertEquals(err.validationPath, "$.components.web.build");
 });
 
-Deno.test("parseAppSpec rejects top-level `interfaces:` (= no longer in AppSpec contract)", () => {
+Deno.test("parseAppSpec rejects removed root fields", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -104,24 +107,6 @@ interfaces:
   );
   assertEquals(err.validationPhase, "schema");
   assertEquals(err.validationPath, "$.interfaces");
-});
-
-Deno.test("parseAppSpec rejects top-level `permissions:` (= no longer in AppSpec contract)", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-permissions:
-  requested: ["logs.read.own"]
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, "$.permissions");
 });
 
 Deno.test("parseAppSpec rejects unknown top-level field", () => {
@@ -183,7 +168,6 @@ components:
 });
 
 Deno.test("parseAppSpec detects publish/listen cycle", () => {
-  // web publishes X, db listens X and publishes Y, web listens Y → cycle.
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -193,17 +177,21 @@ components:
   web:
     kind: worker
     publish:
-      - com.example.notes.web
+      http:
+        as: http-endpoint
     listen:
-      com.example.notes.db:
+      db:
+        from: db.connection
         as: env
         prefix: DB
   db:
     kind: postgres
     publish:
-      - com.example.notes.db
+      connection:
+        as: service-binding
     listen:
-      com.example.notes.web:
+      web:
+        from: web.http
         as: env
         prefix: WEB
 `),
@@ -222,9 +210,11 @@ components:
   web:
     kind: worker
     publish:
-      - com.example.notes.web
+      http:
+        as: http-endpoint
     listen:
-      com.example.notes.web:
+      self:
+        from: web.http
         as: env
 `),
     AppSpecParseError,
@@ -232,28 +222,7 @@ components:
   assertEquals(err.validationPhase, "publish-listen");
 });
 
-Deno.test("parseAppSpec rejects duplicate namespace publisher across components", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  a:
-    kind: worker
-    publish:
-      - com.example.shared
-  b:
-    kind: worker
-    publish:
-      - com.example.shared
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "publish-listen");
-});
-
-Deno.test("parseAppSpec rejects malformed namespace path in publish", () => {
+Deno.test("parseAppSpec rejects old string-list publish", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -263,7 +232,64 @@ components:
   web:
     kind: worker
     publish:
-      - "com..example.bad"
+      - com.example.shared
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "schema");
+  assertEquals(err.validationPath, "$.components.web.publish");
+});
+
+Deno.test("parseAppSpec rejects malformed publication name", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    publish:
+      "bad.name":
+        as: http-endpoint
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "schema");
+});
+
+Deno.test("parseAppSpec rejects publish output selectors", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    publish:
+      http:
+        as: http-endpoint
+        from: url
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "schema");
+  assertEquals(err.validationPath, '$.components.web.publish."http".from');
+});
+
+Deno.test("parseAppSpec rejects listen entry without `from` field", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    listen:
+      db:
+        as: env
 `),
     AppSpecParseError,
   );
@@ -280,7 +306,8 @@ components:
   web:
     kind: worker
     listen:
-      com.example.x: {}
+      db:
+        from: database.connection
 `),
     AppSpecParseError,
   );
@@ -297,13 +324,130 @@ components:
   web:
     kind: worker
     listen:
-      com.example.x:
+      db:
+        from: database.connection
         as: env
         unexpected: true
 `),
     AppSpecParseError,
   );
   assertEquals(err.validationPhase, "schema");
+});
+
+Deno.test("parseAppSpec rejects unknown local listen source", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    listen:
+      db:
+        from: db.connection
+        as: env
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "publish-listen");
+});
+
+Deno.test("parseAppSpec rejects bare external namespace path in listen source", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    listen:
+      oidc:
+        from: operator.identity.oidc
+        as: env
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "publish-listen");
+});
+
+Deno.test("parseAppSpec accepts optional external namespace source", () => {
+  const spec = parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    listen:
+      oidc:
+        from: namespace:operator.identity.oidc
+        as: env
+        prefix: OIDC
+`);
+  assertEquals(
+    spec.components.web.listen?.oidc?.from,
+    "namespace:operator.identity.oidc",
+  );
+  assertEquals(spec.components.web.listen?.oidc?.required, undefined);
+});
+
+Deno.test("parseAppSpec accepts required external namespace source", () => {
+  const spec = parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    listen:
+      oidc:
+        from: namespace:operator.identity.oidc
+        as: env
+        prefix: OIDC
+        required: true
+`);
+  assertEquals(spec.components.web.listen?.oidc?.required, true);
+});
+
+Deno.test("parseAppSpec rejects non-boolean listen required", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    listen:
+      oidc:
+        from: namespace:operator.identity.oidc
+        as: env
+        required: "yes"
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "publish-listen");
+  assertEquals(err.validationPath, '$.components.web.listen."oidc".required');
+});
+
+Deno.test("parseAppSpec accepts operator-defined listen shapes", () => {
+  const spec = parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  svc:
+    kind: service
+    publish:
+      grpc:
+        as: grpc-service
+  web:
+    kind: worker
+    listen:
+      api:
+        from: svc.grpc
+        as: grpc-client
+`);
+  assertEquals(spec.components.web.listen?.api?.as, "grpc-client");
 });
 
 Deno.test("parseAppSpec accepts reference kind URI as opaque string", () => {
@@ -336,34 +480,39 @@ components:
   );
 });
 
-Deno.test("parseAppSpec accepts operator-defined listen shapes (forward compat)", () => {
-  // The parser MUST NOT enforce a closed set of `as` values — operator
-  // materializers can declare their own shapes (e.g. "grpc-service").
-  const spec = parseAppSpec(`
+Deno.test("parseAppSpec rejects scalar component spec", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
 components:
-  web:
-    kind: worker
-    listen:
-      com.example.svc:
-        as: grpc-service
-`);
-  assertEquals(
-    spec.components.web.listen?.["com.example.svc"]?.as,
-    "grpc-service",
+  fn:
+    kind: https://operator.example.com/kinds/lambda
+    spec: index.handler
+`),
+    AppSpecParseError,
   );
+  assertEquals(err.validationPhase, "schema");
+  assertEquals(err.validationPath, "$.components.fn.spec");
 });
 
-Deno.test("parseAppSpec accepts non-URI bare kind as operator alias", () => {
-  const spec = parseAppSpec(`
+Deno.test("parseAppSpec rejects array component spec", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
 components:
-  web:
-    kind: not-a-kind-and-not-a-uri
-`);
-  assertEquals(spec.components.web.kind, "not-a-kind-and-not-a-uri");
+  fn:
+    kind: https://operator.example.com/kinds/lambda
+    spec:
+      - handler: index.handler
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "schema");
+  assertEquals(err.validationPath, "$.components.fn.spec");
 });
 
 Deno.test("parseAppSpec rejects empty component kind", () => {
@@ -381,35 +530,7 @@ components:
   assertEquals(err.validationPhase, "kind-catalog");
 });
 
-Deno.test("parseAppSpec allows listen to external publisher (no AppSpec edge)", () => {
-  // Listening to a path no AppSpec component publishes is permitted —
-  // an external system (e.g. Takosumi Accounts) may publish to that
-  // path at install time. The parser does not enforce internal
-  // publisher existence.
-  const spec = parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    listen:
-      takosumi-accounts.com.example.notes.oidc:
-        as: env
-        prefix: OIDC
-`);
-  assertEquals(
-    spec.components.web.listen?.["takosumi-accounts.com.example.notes.oidc"]
-      ?.as,
-    "env",
-  );
-});
-
-Deno.test("parseAppSpec rejects root `kind:` field (= Wave K AppSpec envelope minimization)", () => {
-  // Wave K: AppSpec root collapsed from 4 fields to 3
-  // (`{ apiVersion, metadata, components }`). The `kind: App` field at
-  // the root is no longer accepted — apiVersion alone discriminates the
-  // schema. Authors who keep `kind:` get an unknown-key reject
-  // (`validationPhase: "schema"`, `$.kind`).
+Deno.test("parseAppSpec rejects root `kind:` field (= minimal envelope)", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -424,26 +545,7 @@ components: { web: { kind: worker } }
   assertEquals(err.validationPath, "$.kind");
 });
 
-Deno.test("parseAppSpec accepts root without `kind:` field (= Wave K minimal envelope)", () => {
-  // Wave K canonical envelope: `apiVersion` + `metadata` + `components`.
-  const spec = parseAppSpec(`
-apiVersion: v1
-metadata: { id: com.example.minimal, name: Minimal }
-components:
-  web:
-    kind: worker
-`);
-  assertEquals(spec.apiVersion, "v1");
-  assertEquals(spec.metadata.id, "com.example.minimal");
-  assertEquals(spec.components.web.kind, "worker");
-});
-
-Deno.test("parseAppSpec rejects legacy `apiVersion: takosumi.dev/v1` (= Wave L group prefix removal)", () => {
-  // Wave L: AppSpec `apiVersion` collapsed from `"takosumi.dev/v1"` to
-  // bare `"v1"`. The k8s-style group prefix is a vestige; Takosumi
-  // parser only handles `.takosumi.yml`, so the group is redundant.
-  // Authors who keep the legacy `takosumi.dev/v1` get a schema reject at
-  // `$.apiVersion` (= same fail-closed pattern as legacy-use).
+Deno.test("parseAppSpec rejects legacy `apiVersion: takosumi.dev/v1`", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -455,18 +557,4 @@ components: { web: { kind: worker } }
   );
   assertEquals(err.validationPhase, "schema");
   assertEquals(err.validationPath, "$.apiVersion");
-});
-
-Deno.test("parseAppSpec accepts bare `apiVersion: v1` (= Wave L canonical envelope)", () => {
-  // Wave L canonical envelope: bare `"v1"` apiVersion (no group prefix).
-  const spec = parseAppSpec(`
-apiVersion: v1
-metadata: { id: com.example.minimal, name: Minimal }
-components:
-  web:
-    kind: worker
-`);
-  assertEquals(spec.apiVersion, "v1");
-  assertEquals(spec.metadata.id, "com.example.minimal");
-  assertEquals(spec.components.web.kind, "worker");
 });

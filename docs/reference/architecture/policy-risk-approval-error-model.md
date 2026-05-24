@@ -30,7 +30,7 @@ effectDetails:
     updateBehavior: restart-required
   grant:
     access: read-write
-    target: takos.database.primary
+    target: operator.database.primary
     credentialTtlSeconds: 3600
   network:
     egress:
@@ -243,5 +243,5 @@ model の Error fix-hint 分類 (safeFix / requiresPolicyReview / operatorFix)
   [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 - Architecture: [Space Model](./space-model.md)
 - Architecture: [Drift Detection](../drift-detection.md)
-- Reference: [Kernel HTTP API](../kernel-http-api.md)
+- Reference: [Reference Kernel Route Inventory](../kernel-http-api.md)
 - Reference: [Runtime-Agent API](../runtime-agent-api.md)

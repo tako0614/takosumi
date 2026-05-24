@@ -5,20 +5,24 @@
  * `AppSpecParseError` with `validationPhase` / `validationPath` on
  * syntax / schema violations.
  *
- * Phase B: the public AppSpec contract uses the namespace pub/sub model.
- * Components declare what they `publish` to the namespace registry and
- * which paths they `listen` to. The prior `use:` edge model is removed;
- * encountering `use:` is rejected with `AppSpecParseError`.
+ * Components declare local publications (`publish.<name>`) and local
+ * bindings (`listen.<name>`). A binding's `from` field points at either a
+ * same-AppSpec publication (`component.publication`) or an operator-owned
+ * namespace export (`namespace:<path>`). The prior `use:` edge model is
+ * removed; encountering `use:` is rejected with `AppSpecParseError`.
  */
 
 import { parse as parseYaml } from "jsr:@std/yaml@^1.0.5";
 import {
   APP_SPEC_API_VERSION,
   type AppSpec,
+  type BindingName,
   type Component,
   type ComponentKindRef,
   type ListenOptions,
-  type NamespacePath,
+  type ListenSourceRef,
+  type PublicationName,
+  type PublishOptions,
 } from "@takos/takosumi-contract/app-spec";
 
 const ROOT_KEYS = new Set([
@@ -42,7 +46,14 @@ const COMPONENT_KEYS = new Set([
   "spec",
 ]);
 
-const LISTEN_OPTIONS_KEYS = new Set(["as", "prefix", "mount"]);
+const PUBLISH_OPTIONS_KEYS = new Set(["as"]);
+const LISTEN_OPTIONS_KEYS = new Set([
+  "from",
+  "as",
+  "prefix",
+  "mount",
+  "required",
+]);
 
 /**
  * Built-in {@link ListenOptions} `as` values the parser knows about. The
@@ -52,6 +63,7 @@ const LISTEN_OPTIONS_KEYS = new Set(["as", "prefix", "mount"]);
 const KNOWN_LISTEN_SHAPES: ReadonlySet<string> = new Set([
   "env",
   "mount",
+  "upstream",
   "target",
 ]);
 
@@ -173,6 +185,7 @@ function validateComponents(
   }
   const result: Record<string, Component> = {};
   for (const [name, value] of Object.entries(raw)) {
+    validateLocalName(name, `$.components.${JSON.stringify(name)}`);
     result[name] = validateComponent(name, value);
   }
   if (Object.keys(result).length === 0) {
@@ -196,7 +209,7 @@ function validateComponent(name: string, raw: unknown): Component {
   if ("use" in c) {
     throw new AppSpecParseError(
       `${path}.use is no longer supported — the AppSpec model now uses ` +
-        `\`publish:\` and \`listen:\` for namespace pub/sub. See ` +
+        `\`publish:\` and \`listen:\` for publication/listen bindings. See ` +
         `https://takosumi.com/docs/reference/app-spec.`,
       "legacy-use",
       `${path}.use`,
@@ -212,7 +225,9 @@ function validateComponent(name: string, raw: unknown): Component {
     listen: c.listen === undefined
       ? undefined
       : validateListen(c.listen, `${path}.listen`),
-    spec: c.spec as Component["spec"],
+    spec: c.spec === undefined
+      ? undefined
+      : validateSpecObject(c.spec, `${path}.spec`),
   };
   return component;
 }
@@ -237,80 +252,86 @@ function validateComponentKind(value: unknown, path: string): ComponentKindRef {
 function validatePublish(
   raw: unknown,
   path: string,
-): readonly NamespacePath[] {
-  if (!Array.isArray(raw)) {
+): Readonly<Record<PublicationName, PublishOptions>> {
+  if (Array.isArray(raw)) {
     throw new AppSpecParseError(
-      `${path} must be an array of namespace paths`,
+      `${path} must be a mapping of publication name → options object; ` +
+        `namespace path arrays are no longer accepted`,
       "schema",
       path,
     );
   }
-  const seen = new Set<string>();
-  for (let i = 0; i < raw.length; i++) {
-    const entry = raw[i];
-    if (typeof entry !== "string" || entry.length === 0) {
-      throw new AppSpecParseError(
-        `${path}[${i}] must be a non-empty namespace path`,
-        "publish-listen",
-        `${path}[${i}]`,
-      );
-    }
-    if (!isValidNamespacePath(entry)) {
-      throw new AppSpecParseError(
-        `${path}[${i}] is not a well-formed namespace path ` +
-          `(dot-separated non-empty segments); got ${JSON.stringify(entry)}`,
-        "publish-listen",
-        `${path}[${i}]`,
-      );
-    }
-    if (seen.has(entry)) {
-      throw new AppSpecParseError(
-        `${path}[${i}] duplicates a previously declared namespace path: ` +
-          JSON.stringify(entry),
-        "publish-listen",
-        `${path}[${i}]`,
-      );
-    }
-    seen.add(entry);
+  if (raw === null || typeof raw !== "object") {
+    throw new AppSpecParseError(
+      `${path} must be a mapping of publication name → options object`,
+      "schema",
+      path,
+    );
   }
-  return raw as readonly string[];
+  const result: Record<string, PublishOptions> = {};
+  for (const [publicationName, value] of Object.entries(raw)) {
+    const entryPath = `${path}.${JSON.stringify(publicationName)}`;
+    validateLocalName(publicationName, entryPath);
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new AppSpecParseError(
+        `${entryPath} must be an options object { as }`,
+        "schema",
+        entryPath,
+      );
+    }
+    const opts = value as Record<string, unknown>;
+    rejectUnknownKeys(opts, PUBLISH_OPTIONS_KEYS, entryPath);
+    if (typeof opts.as !== "string" || opts.as.length === 0) {
+      throw new AppSpecParseError(
+        `${entryPath}.as must be a non-empty material contract alias or URI`,
+        "publish-listen",
+        `${entryPath}.as`,
+      );
+    }
+    result[publicationName] = {
+      as: opts.as,
+    };
+  }
+  return result;
 }
 
 function validateListen(
   raw: unknown,
   path: string,
-): Readonly<Record<NamespacePath, ListenOptions>> {
+): Readonly<Record<BindingName, ListenOptions>> {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new AppSpecParseError(
-      `${path} must be a mapping of namespace path → options object`,
+      `${path} must be a mapping of binding name → options object`,
       "schema",
       path,
     );
   }
   const result: Record<string, ListenOptions> = {};
-  for (const [nsPath, value] of Object.entries(raw)) {
-    const entryPath = `${path}.${JSON.stringify(nsPath)}`;
-    if (!isValidNamespacePath(nsPath)) {
-      throw new AppSpecParseError(
-        `${entryPath} is not a well-formed namespace path ` +
-          `(dot-separated non-empty segments)`,
-        "publish-listen",
-        entryPath,
-      );
-    }
+  for (const [bindingName, value] of Object.entries(raw)) {
+    const entryPath = `${path}.${JSON.stringify(bindingName)}`;
+    validateLocalName(bindingName, entryPath);
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
       throw new AppSpecParseError(
-        `${entryPath} must be an options object { as, prefix?, mount? }`,
+        `${entryPath} must be an options object { from, as, prefix?, mount? }`,
         "schema",
         entryPath,
       );
     }
     const opts = value as Record<string, unknown>;
     rejectUnknownKeys(opts, LISTEN_OPTIONS_KEYS, entryPath);
+    if (typeof opts.from !== "string" || opts.from.length === 0) {
+      throw new AppSpecParseError(
+        `${entryPath}.from must be a non-empty source ref ` +
+          `(<component>.<publication> or namespace:<path>)`,
+        "publish-listen",
+        `${entryPath}.from`,
+      );
+    }
+    const from = validateListenSourceRef(opts.from, `${entryPath}.from`);
     if (typeof opts.as !== "string" || opts.as.length === 0) {
       throw new AppSpecParseError(
         `${entryPath}.as must be a non-empty string ` +
-          `(e.g. "env", "mount", "target", or an operator-defined shape)`,
+          `(e.g. "env", "mount", "upstream", or an operator-defined shape)`,
         "publish-listen",
         `${entryPath}.as`,
       );
@@ -329,46 +350,54 @@ function validateListen(
         `${entryPath}.mount`,
       );
     }
-    result[nsPath] = {
+    if (opts.required !== undefined && typeof opts.required !== "boolean") {
+      throw new AppSpecParseError(
+        `${entryPath}.required must be a boolean when present`,
+        "publish-listen",
+        `${entryPath}.required`,
+      );
+    }
+    result[bindingName] = {
+      from,
       as: opts.as,
       prefix: opts.prefix as string | undefined,
       mount: opts.mount as string | undefined,
+      required: opts.required as boolean | undefined,
     };
   }
   return result;
 }
 
+function validateSpecObject(
+  raw: unknown,
+  path: string,
+): NonNullable<Component["spec"]> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new AppSpecParseError(
+      `${path} must be a YAML mapping`,
+      "schema",
+      path,
+    );
+  }
+  return raw as NonNullable<Component["spec"]>;
+}
+
 /**
- * Validate publish / listen edges and detect cycles.
+ * Validate local publish / listen edges and detect cycles.
  *
- * Each namespace path is owned by at most one publisher; multiple
- * components cannot publish to the same path (the registry has no
- * conflict-resolution policy at the AppSpec layer). A listen edge with
- * no publisher is permitted in this layer — it is conceivable for an
- * external system (e.g. Takosumi Accounts emitting an OIDC material)
- * to publish to a path the AppSpec does not own. Cycle detection
- * therefore operates on **AppSpec-internal** edges only: A publishes X,
- * B listens X and publishes Y, A listens Y → cycle.
+ * Same-AppSpec refs use `<component>.<publication>` and must resolve inside
+ * this AppSpec. External namespace refs use `namespace:<path>` and do not
+ * create AppSpec-internal graph edges.
  */
 function validatePublishListenGraph(
   components: Readonly<Record<string, Component>>,
 ): void {
-  // Build publisher index: namespace path → publisher component name.
-  const publisherByPath = new Map<NamespacePath, string>();
+  // Build publisher index: component.publication → publisher component name.
+  const publisherByRef = new Map<string, string>();
   for (const [name, component] of Object.entries(components)) {
     if (!component.publish) continue;
-    for (const nsPath of component.publish) {
-      const prior = publisherByPath.get(nsPath);
-      if (prior !== undefined && prior !== name) {
-        throw new AppSpecParseError(
-          `namespace path ${JSON.stringify(nsPath)} is published by both ` +
-            `${JSON.stringify(prior)} and ${JSON.stringify(name)}; ` +
-            `each path may be owned by at most one component`,
-          "publish-listen",
-          `$.components.${name}.publish`,
-        );
-      }
-      publisherByPath.set(nsPath, name);
+    for (const publicationName of Object.keys(component.publish)) {
+      publisherByRef.set(`${name}.${publicationName}`, name);
     }
   }
 
@@ -377,17 +406,24 @@ function validatePublishListenGraph(
   for (const name of Object.keys(components)) adjacency.set(name, []);
   for (const [name, component] of Object.entries(components)) {
     if (!component.listen) continue;
-    for (const nsPath of Object.keys(component.listen)) {
-      const publisher = publisherByPath.get(nsPath);
-      // External publisher (= no AppSpec component owns this path) is
-      // not an AppSpec-internal edge for cycle purposes.
-      if (publisher === undefined) continue;
+    for (const [bindingName, options] of Object.entries(component.listen)) {
+      const from = options.from;
+      if (isExternalNamespaceRef(from)) continue;
+      const publisher = publisherByRef.get(from);
+      if (publisher === undefined) {
+        throw new AppSpecParseError(
+          `${name}.listen.${bindingName}.from refers to unknown publication ` +
+            JSON.stringify(from),
+          "publish-listen",
+          `$.components.${name}.listen.${bindingName}.from`,
+        );
+      }
       if (publisher === name) {
         throw new AppSpecParseError(
-          `${name} listens to a namespace path it publishes itself ` +
-            `(${JSON.stringify(nsPath)}); self-loops are not permitted`,
+          `${name} listens to its own publication ` +
+            `(${JSON.stringify(from)}); self-loops are not permitted`,
           "publish-listen",
-          `$.components.${name}.listen`,
+          `$.components.${name}.listen.${bindingName}.from`,
         );
       }
       adjacency.get(name)!.push(publisher);
@@ -450,6 +486,50 @@ function requireString(value: unknown, path: string): void {
       path,
     );
   }
+}
+
+function validateLocalName(value: string, path: string): void {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new AppSpecParseError(
+      `${path} must be a local name using letters, numbers, "_" or "-"`,
+      "schema",
+      path,
+    );
+  }
+}
+
+function validateListenSourceRef(
+  value: string,
+  path: string,
+): ListenSourceRef {
+  if (isExternalNamespaceRef(value)) {
+    const nsPath = value.slice("namespace:".length);
+    if (!isValidNamespacePath(nsPath)) {
+      throw new AppSpecParseError(
+        `${path} must use namespace:<dot-separated non-empty path>`,
+        "publish-listen",
+        path,
+      );
+    }
+    return value as ListenSourceRef;
+  }
+  const parts = value.split(".");
+  if (parts.length !== 2 || parts.some((part) => !isValidLocalName(part))) {
+    throw new AppSpecParseError(
+      `${path} must be <component>.<publication> or namespace:<path>`,
+      "publish-listen",
+      path,
+    );
+  }
+  return value as ListenSourceRef;
+}
+
+function isExternalNamespaceRef(value: string): boolean {
+  return value.startsWith("namespace:");
+}
+
+function isValidLocalName(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
 /**

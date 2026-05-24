@@ -1,6 +1,6 @@
 /**
  * `CloudflareDnsConnector` — wraps `DirectCloudflareDnsLifecycle` for
- * `custom-domain@v1`.
+ * `gateway@v1`.
  */
 
 import type {
@@ -37,7 +37,7 @@ export interface CloudflareDnsConnectorOptions {
 
 export class CloudflareDnsConnector implements Connector {
   readonly provider = "@takos/cloudflare-dns";
-  readonly shape = "custom-domain@v1";
+  readonly shape = "gateway@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectCloudflareDnsLifecycle;
 
@@ -101,7 +101,8 @@ export class CloudflareDnsConnector implements Connector {
 
 function outputsFor(desc: CloudflareDnsRecordDescriptor): JsonObject {
   return {
-    fqdn: desc.fqdn,
-    nameservers: ["ns1.cloudflare.com", "ns2.cloudflare.com"],
+    url: `https://${desc.fqdn}`,
+    host: desc.fqdn,
+    scheme: "https",
   };
 }

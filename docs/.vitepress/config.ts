@@ -8,11 +8,16 @@ const sidebar: DefaultTheme.SidebarMulti = {
         { text: "概要", link: "/" },
         { text: "クイックスタート", link: "/getting-started/quickstart" },
         { text: "コンセプト", link: "/getting-started/concepts" },
-        { text: "AppSpec (.takosumi.yml)", link: "/reference/app-spec" },
-        {
-          text: "Build service handoff",
-          link: "/reference/build-spec",
-        },
+        { text: "読む順序", link: "/getting-started/reading-paths" },
+      ],
+    },
+    {
+      text: "役割別",
+      items: [
+        { text: "AppSpec を書く", link: "/reference/app-spec" },
+        { text: "Operator として動かす", link: "/operator/" },
+        { text: "Takosumi を拡張する", link: "/extending" },
+        { text: "内部設計を追う", link: "/reference/architecture/" },
       ],
     },
     {
@@ -22,6 +27,8 @@ const sidebar: DefaultTheme.SidebarMulti = {
         { text: "AppSpec", link: "/reference/app-spec" },
         { text: "Installer API", link: "/reference/installer-api" },
         { text: "CLI", link: "/reference/cli" },
+        { text: "Build service handoff", link: "/reference/build-spec" },
+        { text: "Reference kind examples", link: "/reference/kind-registry" },
         { text: "環境変数", link: "/reference/env-vars" },
         { text: "用語集", link: "/reference/glossary" },
       ],
@@ -30,9 +37,8 @@ const sidebar: DefaultTheme.SidebarMulti = {
       text: "運用",
       items: [
         { text: "運用概要", link: "/operator/" },
-        { text: "Bootstrap", link: "/operator/bootstrap" },
-        { text: "Build service handoff", link: "/reference/build-spec" },
         { text: "セルフホスト運用", link: "/operator/self-host" },
+        { text: "Bootstrap", link: "/operator/bootstrap" },
         { text: "runtime-agent 分離", link: "/operator/runtime-agent" },
         { text: "バージョン整合", link: "/operator/upgrade" },
         { text: "Migration / Upgrade", link: "/reference/migration-upgrade" },
@@ -40,6 +46,17 @@ const sidebar: DefaultTheme.SidebarMulti = {
         { text: "Observability", link: "/reference/observability-stack" },
         { text: "Telemetry / Metrics", link: "/reference/telemetry-metrics" },
         { text: "Logging", link: "/reference/logging-conventions" },
+      ],
+    },
+    {
+      text: "拡張",
+      items: [
+        { text: "Takosumi を拡張する", link: "/extending" },
+        { text: "Provider implementations", link: "/reference/providers" },
+        { text: "Provider packages", link: "/reference/provider-packages" },
+        { text: "Plugin loading", link: "/reference/plugin-loading" },
+        { text: "Connector guide", link: "/reference/connector-contract" },
+        { text: "Runtime-Agent API", link: "/reference/runtime-agent-api" },
       ],
     },
     {
@@ -124,11 +141,7 @@ const sidebar: DefaultTheme.SidebarMulti = {
       text: "高度な参照",
       collapsed: true,
       items: [
-        { text: "Provider implementations", link: "/reference/providers" },
-        { text: "Provider packages", link: "/reference/provider-packages" },
-        { text: "Reference kind examples", link: "/reference/kind-registry" },
         { text: "Kernel HTTP API", link: "/reference/kernel-http-api" },
-        { text: "Runtime-Agent API", link: "/reference/runtime-agent-api" },
         { text: "Lifecycle protocol", link: "/reference/lifecycle" },
         { text: "Lifecycle phases", link: "/reference/lifecycle-phases" },
         { text: "WAL stages", link: "/reference/wal-stages" },
@@ -168,22 +181,14 @@ const sidebar: DefaultTheme.SidebarMulti = {
         { text: "Operator DataAsset GC", link: "/reference/artifact-gc" },
         { text: "Secret partitions", link: "/reference/secret-partitions" },
         { text: "Cross-process locks", link: "/reference/cross-process-locks" },
-        {
-          text: "Plugin loading",
-          link: "/reference/plugin-loading",
-        },
+        { text: "Bootstrap protocol", link: "/reference/bootstrap-protocol" },
         { text: "Supply chain trust", link: "/reference/supply-chain-trust" },
         { text: "Workers backend", link: "/reference/workers-backend" },
       ],
     },
     {
-      text: "拡張",
-      items: [
-        { text: "Takosumi を拡張する", link: "/extending" },
-      ],
-    },
-    {
-      text: "RFC",
+      text: "RFC / design record",
+      collapsed: true,
       items: [
         {
           text: "0001 — Kernel kind-agnostic 化",
@@ -197,7 +202,7 @@ const sidebar: DefaultTheme.SidebarMulti = {
 const nav: DefaultTheme.NavItem[] = [
   { text: "概要", link: "/" },
   { text: "クイックスタート", link: "/getting-started/quickstart" },
-  { text: "コンセプト", link: "/getting-started/concepts" },
+  { text: "読む順序", link: "/getting-started/reading-paths" },
   { text: "AppSpec", link: "/reference/app-spec" },
   { text: "リファレンス", link: "/reference/" },
   { text: "運用", link: "/operator/" },

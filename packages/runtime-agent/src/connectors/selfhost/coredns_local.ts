@@ -33,7 +33,7 @@ interface RecordDescriptor {
 
 export class CorednsLocalConnector implements Connector {
   readonly provider = "@takos/selfhost-coredns";
-  readonly shape = "custom-domain@v1";
+  readonly shape = "gateway@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #zoneFile: string;
   readonly #records = new Map<string, RecordDescriptor>();
@@ -126,5 +126,9 @@ export class CorednsLocalConnector implements Connector {
 }
 
 function outputsFor(desc: RecordDescriptor): JsonObject {
-  return { fqdn: desc.fqdn };
+  return {
+    url: `https://${desc.fqdn}`,
+    host: desc.fqdn,
+    scheme: "https",
+  };
 }

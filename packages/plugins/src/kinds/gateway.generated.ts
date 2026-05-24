@@ -1,0 +1,92 @@
+// AUTO-GENERATED FROM packages/plugins/spec/kinds/v1/gateway.jsonld — DO NOT EDIT.
+// Run `deno task spec:generate-ts` to refresh.
+
+export interface GatewayListener {
+  /** Listener protocol. */
+  readonly protocol: "http" | "https";
+  /** Optional requested hostname, such as `notes.example.com`. */
+  readonly host?: string;
+  /** TLS policy for this listener. */
+  readonly tls?: "auto" | "manual" | "off";
+  readonly [extension: string]: unknown;
+}
+
+export interface GatewayRoute {
+  /** Listener name from `listeners`. */
+  readonly listener: string;
+  /** HTTP path prefix, such as `/` or `/api`. */
+  readonly path: string;
+  /** Local listen binding name that supplies the upstream endpoint. */
+  readonly to: string;
+  readonly [extension: string]: unknown;
+}
+
+export interface GatewaySpec {
+  /** Named HTTP listeners. A listener may request an operator-managed host and TLS policy. */
+  readonly listeners: Readonly<Record<string, GatewayListener>>;
+  /** Path routing rules. Each route sends requests from a listener to one listen binding name. */
+  readonly routes: readonly GatewayRoute[];
+  readonly [extension: string]: unknown;
+}
+
+export interface GatewayOutputs {
+  /** Public URL including scheme. */
+  readonly url: string;
+  /** Resolved public hostname. */
+  readonly host: string;
+  /** Resolved public scheme (`http` or `https`). */
+  readonly scheme: string;
+  /** Provider-scope TLS certificate identifier when TLS is managed. */
+  readonly certificateId?: string;
+}
+
+export type GatewayCapability =
+  | "host-routing"
+  | "path-routing"
+  | "wildcard"
+  | "auto-tls"
+  | "sni"
+  | "alpn-acme"
+  | "http3"
+  | "redirects";
+
+export type GatewayPublicationName = "public";
+
+export type GatewayListenBindingName = "upstream";
+
+export const GATEWAY_CAPABILITIES: readonly GatewayCapability[] = [
+  "host-routing",
+  "path-routing",
+  "wildcard",
+  "auto-tls",
+  "sni",
+  "alpn-acme",
+  "http3",
+  "redirects",
+];
+
+export const GATEWAY_OUTPUT_FIELDS: readonly string[] = [
+  "url",
+  "host",
+  "scheme",
+  "certificateId",
+];
+
+export const GATEWAY_ALIASES: readonly string[] = [
+  "gateway",
+];
+
+export const GATEWAY_PUBLICATIONS: readonly GatewayPublicationName[] = [
+  "public",
+];
+
+export const GATEWAY_LISTEN_BINDINGS: readonly GatewayListenBindingName[] = [
+  "upstream",
+];
+
+export const GATEWAY_KIND_ID = "gateway";
+export const GATEWAY_KIND_NAME = "gateway";
+export const GATEWAY_KIND_URI = "https://takosumi.com/kinds/v1/gateway";
+export const GATEWAY_KIND_VERSION = "v1";
+export const GATEWAY_DESCRIPTION =
+  "HTTP listener, TLS, and routing component. A gateway listens to local upstream bindings, owns listener/domain policy in spec, and publishes the public HTTP endpoint it materializes.";

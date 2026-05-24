@@ -1,21 +1,23 @@
-# Component Kind / Materializer の拡張 {#extending}
+# Component Kind / Provider の拡張 {#extending}
 
 Takosumi の拡張は 2 種類あります。
 
-| やりたいこと                                            | 追加するもの                   |
-| ------------------------------------------------------- | ------------------------------ |
-| reference / operator kind を別 cloud / runtime で動かす | implementation binding         |
-| 新しい runtime / resource contract を作る               | kind descriptor + materializer |
+| やりたいこと                                            | 追加するもの                     |
+| ------------------------------------------------------- | -------------------------------- |
+| reference / operator kind を別 cloud / runtime で動かす | implementation binding           |
+| 新しい runtime / resource contract を作る               | kind descriptor + implementation |
 
 AppSpec は opaque な component kind string と `spec` を書きます。kind は
 operator が opt-in した short alias でも、直接 URI でもよく、operator が kind
 URI / descriptor / implementation binding に解決します。Takosumi reference
-kernel では `createPaaSApp()` で `KernelPlugin` adapter を attach します。
+kernel では `createPaaSApp()` で `KernelPlugin` adapter を attach します。これは
+reference implementation の配線方法であり、Takosumi-compatible implementation は
+別の仕組みで同じ kind URI を実行しても構いません。
 
 ## Reference provider adapter を追加する
 
 Takosumi reference kernel で provider を追加する場合は、reference / operator
-kind を具体 substrate に materialize する `KernelPlugin` adapter を用意します。
+kind を具体 substrate に変換する `KernelPlugin` adapter を用意します。
 
 ```ts
 import type { KernelPlugin } from "@takos/takosumi-contract/plugin";
@@ -64,8 +66,10 @@ region / account などの non-secret selector は adapter factory option
 
 ## 新しい kind を追加する
 
-新しい kind は JSON-LD descriptor と implementation binding
-をセットで用意します。
+新しい kind は URI、descriptor metadata、implementation binding をセットで用意
+します。takosumi.com reference catalog で共有する descriptor は JSON-LD
+を使います。descriptor は型・入出力 metadata
+で、実行方法そのものではありません。
 
 ```json
 {
@@ -96,13 +100,15 @@ components:
       engine: valkey
       size: small
     publish:
-      - com.example.app.cache
+      endpoint:
+        as: http-endpoint
 ```
 
 ## Test checklist
 
 - spec validation failure が provider side effect 前に止まる。
-- dry-run が changes[] / estimatedCost / expected digest を返す。
+- dry-run が changes[] / expected digest を返す。cost estimate は operator
+  extension として追加できる。
 - apply が idempotent に成功する。
 - destroy / rollback が対象 resource だけを処理する。
 - secret value を log / audit / Deployment record に出さない。

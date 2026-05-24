@@ -11,7 +11,7 @@
  *   - `awsFargateWebServiceProvider`    → `web-service@v1` (AWS Fargate)
  *   - `awsS3ObjectStoreProvider`        → `object-store@v1` (AWS S3)
  *   - `awsRdsPostgresProvider`          → `postgres@v1` (AWS RDS)
- *   - `awsRoute53CustomDomainProvider`  → `custom-domain@v1` (AWS Route53)
+ *   - `awsRoute53CustomDomainProvider`  → `gateway@v1` (AWS Route53)
  */
 
 export {

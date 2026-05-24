@@ -47,18 +47,28 @@ Deno.test("Route53Connector.apply UPSERTs CNAME via ChangeResourceRecordSets", a
     fetch: mockFetch,
   });
   const res = await connector.apply({
-    shape: "custom-domain@v1",
+    shape: "gateway@v1",
     provider: "@takos/aws-route53",
     resourceName: "rs",
-    spec: { name: "app.example.com", target: "lb.example.com" },
+    spec: gatewaySpec("app.example.com", "lb.example.com"),
   }, {});
   assert.equal(
     res.handle,
     "ZONE-1|CNAME|app.example.com|lb.example.com",
   );
-  assert.equal(res.outputs.fqdn, "app.example.com");
+  assert.equal(res.outputs.host, "app.example.com");
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /\/hostedzone\/ZONE-1\/rrset/);
   assert.match(calls[0].body ?? "", /<Action>UPSERT<\/Action>/);
   assert.match(calls[0].body ?? "", /<Name>app\.example\.com<\/Name>/);
 });
+
+function gatewaySpec(host: string, target: string) {
+  return {
+    listeners: {
+      public: { protocol: "https", host, tls: "auto" },
+    },
+    routes: [{ listener: "public", path: "/", to: "upstream" }],
+    target,
+  };
+}

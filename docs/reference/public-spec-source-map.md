@@ -17,14 +17,14 @@ concept は AppSpec / Installation / Deployment と installer endpoint
 The following surfaces help operators run or extend the takosumi.com reference
 distribution.
 
-| Key                          | Surface                                          | Owner                               | Source / reference                                                                                           |
-| ---------------------------- | ------------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `build-service-input-v1`     | `.takosumi.build.yml` build service input        | build service distribution          | [Build service handoff](./build-spec.md); parser/service are operator distribution scope                     |
-| `kernel-http-api-v1`         | internal / runtime-agent HTTP boundary           | takosumi kernel                     | [Kernel HTTP API](./kernel-http-api.md)                                                                      |
-| `runtime-agent-api-v1`       | lifecycle RPC envelope                           | takosumi runtime-agent              | [Runtime-Agent API](./runtime-agent-api.md)                                                                  |
-| `reference-kind-examples-v1` | non-normative reference kind descriptor examples | takosumi.com reference distribution | `packages/plugins/spec/kinds/`, `packages/plugins/src/kinds/`, [Reference Kind Examples](./kind-registry.md) |
-| `reference-providers-v1`     | provider binding guide and matrix                | takosumi provider packages          | [Provider Implementations](./providers.md)                                                                   |
-| `takosumi-jsr-packages`      | JSR package exports and dependency pins          | package owners                      | `packages/*/deno.json`, `packages/*/mod.ts`, `https://jsr.io/@takos/takosumi`                                |
+| Key                          | Surface                                          | Owner                               | Source / reference                                                                                            |
+| ---------------------------- | ------------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `build-service-input-v1`     | `.takosumi.build.yml` build service input        | build service distribution          | [Build service handoff](./build-spec.md); parser/service are operator distribution scope                      |
+| `kernel-http-api-v1`         | internal / runtime-agent HTTP boundary           | takosumi kernel                     | [Reference Kernel Route Inventory](./kernel-http-api.md)                                                      |
+| `runtime-agent-api-v1`       | lifecycle RPC envelope                           | takosumi runtime-agent              | [Runtime-Agent API](./runtime-agent-api.md)                                                                   |
+| `reference-kind-examples-v1` | non-normative reference kind descriptor examples | takosumi.com reference distribution | `packages/plugins/spec/kinds/`, `packages/plugins/src/kinds/`, [Kind Descriptor Examples](./kind-registry.md) |
+| `reference-providers-v1`     | provider binding guide and matrix                | takosumi provider packages          | [Provider Implementations](./providers.md)                                                                    |
+| `takosumi-jsr-packages`      | JSR package exports and dependency pins          | package owners                      | `packages/*/deno.json`, `packages/*/mod.ts`, `https://jsr.io/@takos/takosumi`                                 |
 
 ## Placement rules
 
@@ -32,7 +32,8 @@ distribution.
   `.takosumi.build.yml` and belongs to operator build service scope.
 - Component kind descriptor examples under `packages/plugins/spec/kinds/` and
   `https://takosumi.com/kinds/v1/*` feed operator alias / binding config.
-- Installer clients submit source / expected pin to the installer endpoints.
+- Installer clients submit source / expected digest guards to the installer
+  endpoints.
 - Build services submit prepared source snapshots with `source.kind=prepared`;
   build recipes stay in `.takosumi.build.yml` / build service scope.
 - DataAsset upload / discovery docs describe an operator extension with separate
@@ -68,6 +69,6 @@ The dry-run handler remains `dryRunInstallation`; route behavior is covered by
 
 - [AppSpec](./app-spec.md)
 - [Build service handoff](./build-spec.md)
-- [Kernel HTTP API](./kernel-http-api.md)
+- [Reference Kernel Route Inventory](./kernel-http-api.md)
 - [Installer API](./installer-api.md)
 - [Workflow Placement Rationale](./architecture/workflow-extension-design.md)

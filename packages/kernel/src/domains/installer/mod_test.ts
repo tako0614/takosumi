@@ -2,10 +2,9 @@
  * InstallerPipeline lifecycle hook + KernelPlugin integration tests.
  *
  * Phase C rewrite: the legacy `use:` edges and `upstreamOutputs` placeholder
- * have been replaced by the namespace pub/sub model. Each Component
- * publishes to (a) the auto-namespace `<app-id>.<component-name>` and any
- * explicit `publish:` paths, and (b) listens to declared namespace paths
- * via `Component.listen[<path>]`. The installer pipeline drives the
+ * have been replaced by local publications and listen bindings. Each
+ * component publishes declared `publish.<name>` materials and listens via
+ * `listen.<binding>.from`. The installer pipeline drives the
  * `KernelPlugin.publishMaterial` / `applyListen` hooks and exposes the
  * resolved materials to plugin.apply via `listenedMaterials`.
  */
@@ -25,10 +24,9 @@ import {
   type ProviderApplyResult,
 } from "./mod.ts";
 
-// Canonical AppSpec for the pub/sub flow: a `postgres` component publishes
-// connection material at `lifecycle-test.db`; a `worker` component listens
-// on the same path with `as: env` + `prefix: DB` so the kernel auto-
-// resolves env injections like `DB_HOST`, `DB_PORT`, ...
+// Canonical AppSpec: a `postgres` component publishes `db.connection`; a
+// `worker` component listens to it with `as: env` + `prefix: DB` so the
+// kernel resolves env injections like `DB_HOST`, `DB_PORT`, ...
 const SAMPLE_YAML = `apiVersion: v1
 metadata:
   id: lifecycle-test
@@ -36,10 +34,14 @@ metadata:
 components:
   db:
     kind: postgres
+    publish:
+      connection:
+        as: service-binding
   web:
     kind: worker
     listen:
-      lifecycle-test.db:
+      db:
+        from: db.connection
         as: env
         prefix: DB
 `;
@@ -51,12 +53,13 @@ const TEST_KIND_ALIASES = {
 
 async function withTempSource<T>(
   fn: (dir: string) => Promise<T>,
+  yaml = SAMPLE_YAML,
 ): Promise<T> {
   const dir = await Deno.makeTempDir({
     prefix: "takosumi-installer-mod-test-",
   });
   try {
-    await Deno.writeTextFile(`${dir}/.takosumi.yml`, SAMPLE_YAML);
+    await Deno.writeTextFile(`${dir}/.takosumi.yml`, yaml);
     return await fn(dir);
   } finally {
     await Deno.remove(dir, { recursive: true });
@@ -95,7 +98,8 @@ function buildRecordingPlugin(opts: {
         outputs: opts.outputs ?? {},
       });
     },
-    publishMaterial: opts.publishMaterial,
+    publishMaterial: opts.publishMaterial ??
+      ((ctx) => Promise.resolve(ctx.outputs)),
     applyListen: opts.applyListen,
     onInstallStart: () => {
       opts.recorder.push(`onInstallStart:${opts.name}`);
@@ -243,6 +247,7 @@ Deno.test("installer onDeploymentComplete error is swallowed (post-apply hook is
           resourceHandle: "postgres://x",
           outputs: { host: "db.local", port: "5432" },
         }),
+      publishMaterial: (ctx) => Promise.resolve(ctx.outputs),
       onDeploymentComplete: () =>
         Promise.reject(new Error("post-deploy hook failed")),
     };
@@ -374,6 +379,111 @@ Deno.test("InstallerPipeline lets test code override providers directly without 
     });
     assert.equal(deployment.status, "succeeded");
     assert.equal(recorded.length, 2);
+  });
+});
+
+Deno.test("InstallerPipeline skips missing external namespace refs by default", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: optional-namespace-test
+  name: Optional Namespace Test
+components:
+  web:
+    kind: worker
+    listen:
+      oidc:
+        from: namespace:operator.identity.oidc
+        as: env
+        prefix: OIDC
+`;
+  await withTempSource(async (dir) => {
+    const captures: Array<Readonly<Record<string, NamespaceMaterial>>> = [];
+    const workerPlugin = buildRecordingPlugin({
+      name: "@example/worker",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      recorder: [],
+      captureApply: (ctx) => captures.push(ctx.listenedMaterials),
+    });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [workerPlugin],
+    });
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    assert.equal(deployment.status, "succeeded");
+    assert.deepEqual(captures, [{}]);
+  }, yaml);
+});
+
+Deno.test("InstallerPipeline fails required missing external namespace refs", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: required-namespace-test
+  name: Required Namespace Test
+components:
+  web:
+    kind: worker
+    listen:
+      oidc:
+        from: namespace:operator.identity.oidc
+        as: env
+        prefix: OIDC
+        required: true
+`;
+  await withTempSource(async (dir) => {
+    const workerPlugin = buildRecordingPlugin({
+      name: "@example/worker",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      recorder: [],
+    });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [workerPlugin],
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /web\.listen\.oidc\.from refers to unresolved publication "namespace:operator\.identity\.oidc"/,
+    );
+  }, yaml);
+});
+
+Deno.test("InstallerPipeline rejects unmapped provider outputs for declared publish", async () => {
+  await withTempSource(async (dir) => {
+    const dbPlugin: KernelPlugin = {
+      name: "@example/postgres",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/postgres"],
+      apply: () =>
+        Promise.resolve({
+          resourceHandle: "postgres://x",
+          outputs: { host: "db.local", port: "5432" },
+        }),
+    };
+    const workerPlugin = buildRecordingPlugin({
+      name: "@example/worker",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      recorder: [],
+    });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [dbPlugin, workerPlugin],
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /publish\.connection requires the component materializer/,
+    );
   });
 });
 

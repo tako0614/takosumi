@@ -1,29 +1,35 @@
 /**
- * KernelPlugin contract — Vite-style plain-array plugin API for the
- * namespace pub/sub material model.
+ * KernelPlugin — the reference Takosumi kernel's Vite-style plain-array
+ * materializer API for the local publication / listen material model.
  *
  * A `KernelPlugin` advertises one or more component kind URIs in `provides`,
  * may expose short-name `aliases` for operator tooling,
  * materializes those components via `apply()`, publishes the resulting
- * material to the pub/sub registry via `publishMaterial()`, and surfaces
+ * material to the publication registry via `publishMaterial()`, and surfaces
  * listened materials into the component runtime via `applyListen()`.
  *
- * Operators supply plugins as a plain array to `createPaaSApp({ kindAliases, plugins })`,
- * matching the Vite plugin authoring experience: no class hierarchy, no
- * manifest discovery file, no port catalog. The kind URI is the only
- * coupling point between AppSpec and plugin, which preserves Takosumi's
- * "ソフトウェアの民主化" property — operators publish a JSON-LD kind and a
- * matching reference adapter, and they own the rest.
+ * The reference implementation wires plugins as a plain array to
+ * `createPaaSApp({ kindAliases, plugins })`, matching the Vite plugin
+ * authoring experience. A Takosumi-compatible implementation can bind the
+ * same kind URI to materialization code through another mechanism. The kind
+ * URI remains the coupling point between AppSpec and implementation.
  *
  * # Materializer abstraction
  *
  * A `KernelPlugin` is one packaging of a more general concept: a
  * **Materializer** is any code that turns a kind URI into a concrete
- * resource and emits / consumes namespace materials. Inline functions and
+ * resource and emits / consumes materials. Inline functions and
  * operator-defined raw code can attach to the same kernel surface as
  * full plugins via {@link InlineMaterializer}.
  */
-import type { Component, ListenOptions, NamespacePath } from "./app-spec.ts";
+import type {
+  BindingName,
+  Component,
+  ListenOptions,
+  ListenSourceRef,
+  PublicationName,
+  PublishOptions,
+} from "./app-spec.ts";
 import type {
   Deployment,
   Installation,
@@ -76,10 +82,10 @@ export interface KernelPlugin {
   destroy?(ctx: KernelPluginDestroyContext): Promise<void>;
 
   /**
-   * Compute the {@link NamespaceMaterial} this component publishes to a
-   * declared namespace path. Invoked once per entry in
-   * `Component.publish` after `apply()` succeeds; the returned material
-   * is registered with the pub/sub registry under that path.
+   * Compute the {@link NamespaceMaterial} this component publishes through a
+   * declared local publication. Invoked once per entry in `Component.publish`
+   * after `apply()` succeeds; the returned material is registered under
+   * `<componentName>.<publicationName>`.
    *
    * Optional — kinds that do not publish any material (e.g. pure
    * consumers) may omit this hook.
@@ -142,14 +148,14 @@ export interface InlineMaterializer {
 }
 
 /**
- * Payload published to the namespace pub/sub registry. Keys are
+ * Payload published through a local publication. Keys are
  * material field names (e.g. `url`, `host`, `port`) and values are
  * either literal strings or `{ secretRef }` references to entries in
  * the operator secret store.
  *
  * Treated as opaque by the kernel; consumers (= listening plugins'
- * `applyListen`) interpret the payload according to the listened kind's
- * JSON-LD `publishes[].material` declaration.
+ * `applyListen`) interpret the payload according to the source kind's
+ * JSON-LD publication contract.
  */
 export type NamespaceMaterial = Readonly<
   Record<string, string | { readonly secretRef: string }>
@@ -162,7 +168,7 @@ export type NamespaceMaterial = Readonly<
  *   - `env`    — env-var injections (literal strings or secretRefs).
  *   - `mounts` — filesystem-mount descriptors keyed by mount path.
  *   - `target` — free-form target descriptor used by router-style kinds
- *                (e.g. `custom-domain` reads the worker's `url` field).
+ *                (e.g. gateway-style materializers read an upstream `url`).
  *
  * All fields are optional; an empty `EnvInjection` is a valid no-op
  * (the installer will treat it as "this listener took no action").
@@ -179,7 +185,8 @@ export interface EnvInjection {
 
 export interface ResolvedListenBinding {
   readonly listenerComponent: string;
-  readonly namespacePath: NamespacePath;
+  readonly bindingName: BindingName;
+  readonly sourceRef: ListenSourceRef;
   readonly options: ListenOptions;
   readonly envInjections: Readonly<
     Record<string, string | { readonly secretRef: string }>
@@ -188,7 +195,7 @@ export interface ResolvedListenBinding {
     Record<string, string | { readonly secretRef: string }>
   >;
   readonly target?: NamespaceMaterial;
-  /** The raw material payload as published to the namespace path. */
+  /** The raw material payload resolved from the source reference. */
   readonly material: NamespaceMaterial;
 }
 
@@ -201,9 +208,10 @@ export interface KernelPluginApplyContext {
   /** Local directory containing the already-prepared source snapshot. */
   readonly sourceDirectory: string;
   /**
-   * Materials this component listens to, keyed by the namespace path as
+   * Materials this component listens to, keyed by the local binding name as
    * declared in `Component.listen`. Pre-resolved by the installer from
-   * the pub/sub registry; the listening plugin's `applyListen` has
+   * local publications or external namespace exports; the listening plugin's
+   * `applyListen` has
    * already been invoked and the resulting env / mount / target
    * descriptors are merged into the runtime environment.
    *
@@ -211,7 +219,7 @@ export interface KernelPluginApplyContext {
    * (e.g. to inspect specific fields beyond what `applyListen` emitted).
    */
   readonly listenedMaterials: Readonly<
-    Record<NamespacePath, NamespaceMaterial>
+    Record<BindingName, NamespaceMaterial>
   >;
   /**
    * Env / mount / target descriptors produced by `applyListen` for each
@@ -228,7 +236,7 @@ export interface KernelPluginApplyResult {
    */
   readonly resourceHandle: string;
   /**
-   * Outputs surfaced to the namespace pub/sub registry via subsequent
+   * Outputs surfaced to the material registry via subsequent
    * `publishMaterial()` calls. Plugins MAY return any string-valued
    * map; the keys typically match the kind's JSON-LD `outputs[].name`.
    */
@@ -239,8 +247,10 @@ export interface PublishMaterialContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly component: Component;
-  /** Namespace path this material is being published to. */
-  readonly namespacePath: NamespacePath;
+  /** Local publication this material is being published through. */
+  readonly publicationName: PublicationName;
+  /** Per-publication options as declared in AppSpec. */
+  readonly options: PublishOptions;
   /** Outputs from the preceding `apply()` call for this component. */
   readonly outputs: Readonly<Record<string, string>>;
 }
@@ -250,11 +260,13 @@ export interface ApplyListenContext {
   /** Name of the listening component (= the consumer). */
   readonly componentName: string;
   readonly component: Component;
-  /** Namespace path being listened to. */
-  readonly namespacePath: NamespacePath;
+  /** Local binding name being resolved. */
+  readonly bindingName: BindingName;
+  /** Source publication or external namespace export being listened to. */
+  readonly sourceRef: ListenSourceRef;
   /** Per-listen options as declared in AppSpec. */
   readonly options: ListenOptions;
-  /** Material payload as published to the namespace path. */
+  /** Material payload resolved from the source reference. */
   readonly material: NamespaceMaterial;
 }
 

@@ -71,14 +71,14 @@ single-writer apply tier (deploy traffic を 1 pod に固定する topology) を
 v1 では 6 phase を 1:1 に区別します。各 phase は対応する Snapshot を入力 /
 出力として動き、WAL は phase ごとに stage を進めます。
 
-| Phase      | 入力 Snapshot                       | 出力 Snapshot / 副作用                                                | 触る WAL stage                                                   |
-| ---------- | ----------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `apply`    | DesiredSnapshot                     | OperationPlan + ResolutionSnapshot + provider resources               | `prepare` → `pre-commit` → `commit` → `post-commit` → `finalize` |
-| `activate` | ResolutionSnapshot                  | ActivationSnapshot / GroupHead update + initial Exposure health       | `post-commit` → `observe`                                        |
-| `destroy`  | ResolutionSnapshot                  | DesiredSnapshot 上で managed/generated を削除しきった状態             | `pre-commit` → `commit` → `finalize`                             |
-| `rollback` | 直前 ResolutionSnapshot             | prior ResolutionSnapshot を再 materialize したスナップショット        | `pre-commit` (compensate) → `commit` → `abort`                   |
-| `recovery` | WAL 復元状態                        | recovery mode に応じた終端 (continue / compensate / inspect)          | (resume from last stage)                                         |
-| `observe`  | live runtime-agent describe results | Exposure health (`healthy / degraded / unhealthy`) と RevokeDebt 候補 | `observe` (long-lived)                                           |
+| Phase      | 入力 Snapshot                                                    | 出力 Snapshot / 副作用                                                     | 触る WAL stage                                                   |
+| ---------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `apply`    | DesiredSnapshot                                                  | OperationPlan + ResolutionSnapshot + provider resources                    | `prepare` → `pre-commit` → `commit` → `post-commit` → `finalize` |
+| `activate` | ResolutionSnapshot                                               | ActivationSnapshot / GroupHead traffic assignment + initial observation    | `post-commit` → `observe`                                        |
+| `destroy`  | 現行 Deployment の recorded snapshot / evidence                  | destroy Deployment evidence + WAL cleanup result。旧 snapshot は変更しない | `pre-commit` → `commit` → `finalize`                             |
+| `rollback` | 巻き戻し対象 Deployment の recorded source / snapshot / evidence | 新しい rollback Deployment。過去 snapshot は入力 evidence として使う       | `pre-commit` (compensate) → `commit` → `abort`                   |
+| `recovery` | WAL 復元状態                                                     | recovery mode に応じた終端 (continue / compensate / inspect)               | (resume from last stage)                                         |
+| `observe`  | live runtime-agent describe results                              | append-only ObservationSet / health evidence と RevokeDebt 候補            | `observe` (long-lived)                                           |
 
 - installer apply endpoint の `Deployment.status: "succeeded"` は、その
   Deployment を current として使うために必要な `apply` と `activate`
@@ -87,12 +87,18 @@ v1 では 6 phase を 1:1 に区別します。各 phase は対応する Snapsho
 - `apply` の `prepare` で OperationPlan が確定。 idempotency key
   `(spaceId, operationPlanDigest, journalEntryId)` が各 entry に振られ、 同じ
   key の retry は副作用を増やしません。
-- `activate` 直後の Exposure health は `unknown` で始まり、 `observe` 進行で
-  `healthy / degraded / unhealthy` へ遷移します。
-- `destroy` は `finalize` で managed / generated lifecycle class object を完全
-  削除。 external / operator / imported は触りません。
-- `rollback` は `compensate` operation を `pre-commit` で起動して `abort` 終端
-  へ進みます。
+- `activate` は traffic assignment を immutable evidence
+  として記録します。health は `observe` が append-only observation
+  として追記し、`healthy / degraded /
+  unhealthy` を判定します。
+- `destroy` は現行 Deployment の recorded evidence を authority として managed /
+  generated lifecycle class object を削除します。cleanup 結果は新しい destroy
+  Deployment evidence / WAL / activation state に記録し、既存
+  `ResolutionSnapshot` は編集しません。external / operator / imported
+  は触りません。
+- `rollback` は巻き戻し対象 Deployment の source pin、snapshot、internal
+  evidence から新しい rollback Deployment を作り、その Deployment を materialize
+  します。過去 snapshot は入力 evidence であり、出力 identity ではありません。
 - `recovery` は kernel restart 時に WAL を読み直し、 最後に記録された stage の
   **次** から resume します。
 - `observe` 起動 / 維持は kernel readiness 連動。 readiness DAG が未充足の間は
@@ -108,9 +114,9 @@ finalize`、終端
 
 ## Verify トリガー {#verify-trigger}
 
-`POST /v1/lifecycle/verify` は lifecycle phase に含まれない補助 trigger です。
-WAL stage を進めず、 Snapshot を materialize せず、 connector ごとの credential
-/ network reachability の確認だけを行います。
+reference runtime-agent の `verify` request は lifecycle phase に含まれない
+operator preflight です。WAL stage を進めず、 Snapshot を materialize せず、
+connector ごとの credential / network reachability の確認だけを行います。
 
 推奨フロー: `apply` の前に `verify` を投げて `connector_not_found` /
 `connector-extended:*` を切り分けます。 kernel apply pipeline は結果を直接消費
@@ -127,12 +133,12 @@ field 仕様は
 kernel restart や lock 失効後に `recovery` phase が走るとき、operator は 4 つの
 mode を選択します。
 
-| Mode         | 用途                                                                     | 終端                                                 |
-| ------------ | ------------------------------------------------------------------------ | ---------------------------------------------------- |
-| `normal`     | デフォルト。WAL を読み直して `commit` 後の `post-commit` から自動 resume | 通常 phase 終端 (`apply` / `activate` / `destroy`)   |
-| `continue`   | `pre-commit` まで進んでいたが `commit` で落ちた entry を強制続行         | `commit` → `post-commit` → 通常終端                  |
-| `compensate` | `commit` 済み effect を逆再生し、prior ResolutionSnapshot に戻す         | `abort` (RevokeDebt が `activation-rollback` で発行) |
-| `inspect`    | 何も実行せず、WAL と live state の差分だけを report                      | (副作用なし、operator 用 dump)                       |
+| Mode         | 用途                                                                                 | 終端                                                 |
+| ------------ | ------------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| `normal`     | デフォルト。WAL を読み直して `commit` 後の `post-commit` から自動 resume             | 通常 phase 終端 (`apply` / `activate` / `destroy`)   |
+| `continue`   | `pre-commit` まで進んでいたが `commit` で落ちた entry を強制続行                     | `commit` → `post-commit` → 通常終端                  |
+| `compensate` | `commit` 済み effect を逆再生し、target Deployment の recorded evidence に沿って戻す | `abort` (RevokeDebt が `activation-rollback` で発行) |
+| `inspect`    | 何も実行せず、WAL と live state の差分だけを report                                  | (副作用なし、operator 用 dump)                       |
 
 選択ガイド:
 
@@ -173,7 +179,7 @@ mode を繰り返しても重複 effect は出ません。
 - [Approval Invalidation Triggers](./approval-invalidation.md)
 - [RevokeDebt Model](./revoke-debt.md)
 - [Closed Enums](./closed-enums.md)
-- [Kernel HTTP API](./kernel-http-api.md)
+- [Reference Kernel Route Inventory](./kernel-http-api.md)
 - [Runtime-Agent API](./runtime-agent-api.md)
 - [Readiness Probes](./readiness-probes.md)
 - [Cross-Process Locks](./cross-process-locks.md)

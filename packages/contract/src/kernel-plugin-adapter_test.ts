@@ -5,9 +5,9 @@ import type { ProviderPlugin } from "./provider-plugin.ts";
 Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into legacy spec", async () => {
   let seenSpec: unknown;
   const provider: ProviderPlugin = {
-    id: "@test/custom-domain",
+    id: "@test/gateway",
     version: "1.0.0",
-    implements: { id: "custom-domain", version: "v1" },
+    implements: { id: "gateway", version: "v1" },
     capabilities: [],
     apply: (spec) => {
       seenSpec = spec;
@@ -25,14 +25,14 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into l
   };
   const plugin = kernelPluginFromProviderPlugin({
     provider,
-    kindUri: "https://takosumi.com/kinds/v1/custom-domain",
+    kindUri: "https://takosumi.com/kinds/v1/gateway",
   });
 
   await plugin.apply({
     installationId: "ins_1",
     componentName: "domain",
     component: {
-      kind: "custom-domain",
+      kind: "gateway",
       spec: {
         name: "api.example.com",
         env: { EXISTING: "1" },
@@ -41,21 +41,23 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into l
     source: { kind: "local", url: "/tmp/src" },
     sourceDirectory: "/tmp/src",
     listenedMaterials: {
-      "app.web": { url: "https://web.example.com" },
-      "app.db": { host: "db.internal" },
+      app: { url: "https://web.example.com" },
+      db: { host: "db.internal" },
     },
     resolvedBindings: [
       {
         listenerComponent: "domain",
-        namespacePath: "app.db",
-        options: { as: "env", prefix: "DB" },
+        bindingName: "db",
+        sourceRef: "database.connection",
+        options: { from: "database.connection", as: "env", prefix: "DB" },
         envInjections: { DB_HOST: "db.internal" },
         material: { host: "db.internal" },
       },
       {
         listenerComponent: "domain",
-        namespacePath: "app.web",
-        options: { as: "target" },
+        bindingName: "app",
+        sourceRef: "web.http",
+        options: { from: "web.http", as: "upstream" },
         envInjections: {},
         target: { url: "https://web.example.com" },
         material: { url: "https://web.example.com" },
@@ -104,11 +106,12 @@ Deno.test("kernelPluginFromProviderPlugin rejects explicit env collision", async
         },
         source: { kind: "local", url: "/tmp/src" },
         sourceDirectory: "/tmp/src",
-        listenedMaterials: { "app.db": { host: "db.internal" } },
+        listenedMaterials: { db: { host: "db.internal" } },
         resolvedBindings: [{
           listenerComponent: "web",
-          namespacePath: "app.db",
-          options: { as: "env", prefix: "DB" },
+          bindingName: "db",
+          sourceRef: "database.connection",
+          options: { from: "database.connection", as: "env", prefix: "DB" },
           envInjections: { DB_HOST: "db.internal" },
           material: { host: "db.internal" },
         }],

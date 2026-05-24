@@ -46,14 +46,14 @@ token は次の順序で resolve します。
 3. config file の `token` field
 
 remote URL は `--remote https://kernel.example.com` か `TAKOSUMI_REMOTE_URL`
-env、 config file の `remote.url` から resolve します。
+env、 config file の `remote_url` から resolve します。
 
 ## サブコマンド {#subcommand}
 
-### `takosumi install <source>`
+### `takosumi install --source <source>`
 
-新規 Installation を作成。remote Installer API に送る source は `git` または
-`prepared` です。
+新規 Installation を作成。Installer API に送る source は `git`、`prepared`、
+または dev / operator-local の `local` です。
 
 ```bash
 # git source
@@ -65,24 +65,53 @@ takosumi install --remote https://kernel.example.com \
 takosumi install --remote https://kernel.example.com \
   --space space:personal \
   --source prepared:https://build.example.com/snapshots/app-123.tar#sha256:...
+
+# local path visible to the kernel process
+takosumi install --remote http://localhost:8788 \
+  --space space:personal \
+  --source .
 ```
 
-`--space <id>` は必須。 dry-run は次の subcommand で表示。
+`--space <id>` は必須。`--source .` は kernel process から同じ path が見える
+local dev / operator-local 起動で使います。managed remote operator では `git:`
+または `prepared:` を使います。dry-run は次の subcommand で表示。
 
-### `takosumi install dry-run <source>`
+`--source` の文字列 grammar:
+
+```text
+git:<url>[#<ref>]
+prepared:<url>#<sha256:hex>
+<local-path>
+```
+
+`#` は最後の separator だけを source ref / digest として扱います。URL 自体に
+fragment が必要な場合は encode してください。`prepared:` は build service / CI
+が作った tar snapshot と digest を渡す形式です。
+
+dry-run の expected digest guard を apply に渡す場合は次の flag を使います。
+
+| Flag                         | 対象 source                  |
+| ---------------------------- | ---------------------------- |
+| `--expected-manifest-digest` | `git` / `prepared` / `local` |
+| `--expected-commit`          | `git`                        |
+| `--expected-source-digest`   | `prepared`                   |
+
+### `takosumi install dry-run --source <source>`
 
 ```bash
 takosumi install dry-run --space space:personal \
-  --source git:https://github.com/example/notes#main
+  --remote http://localhost:8788 \
+  --source .
 ```
 
-response (`changes[]` / `estimatedCost` / `expected.commit` /
-`expected.manifestDigest` / `expected.sourceDigest`) を JSON で表示。
+response (`changes[]` / `expected.commit` / `expected.manifestDigest` /
+`expected.sourceDigest`、および operator extension field) を JSON で表示。
 
 ### `takosumi deploy <installation-id> [--source <source>]`
 
 既存 Installation に対する apply。 `--source` 省略時は Installation 元の source
-を再 fetch。
+を再 fetch。dry-run から apply へ進む場合は `install` と同じ expected digest
+guard flag を渡します。
 
 ```bash
 takosumi deploy installation:01HM9N7XK4QY8RT2P5JZF6V3W9 --source git:https://github.com/example/notes#main
@@ -157,4 +186,4 @@ CLI flag > env > config file の優先順位。
 
 - [Installer API](./installer-api.md) — CLI が呼ぶ HTTP endpoint
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [Kernel HTTP API](./kernel-http-api.md) — 全 HTTP surface
+- [Reference Kernel Route Inventory](./kernel-http-api.md) — 全 HTTP surface

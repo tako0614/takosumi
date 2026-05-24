@@ -69,19 +69,19 @@ import {
 import {
   createCloudflareDnsProvider,
   InMemoryCloudflareDnsLifecycle,
-} from "./custom-domain/cloudflare-dns.ts";
+} from "./gateway/cloudflare-dns.ts";
 import {
   createRoute53Provider,
   InMemoryRoute53Lifecycle,
-} from "./custom-domain/route53.ts";
+} from "./gateway/route53.ts";
 import {
   createCloudDnsProvider,
   InMemoryCloudDnsLifecycle,
-} from "./custom-domain/cloud-dns.ts";
+} from "./gateway/cloud-dns.ts";
 import {
   createCoreDnsLocalProvider,
   InMemoryCoreDnsLifecycle,
-} from "./custom-domain/coredns-local.ts";
+} from "./gateway/coredns-local.ts";
 import {
   createCloudflareWorkersProvider,
   InMemoryCloudflareWorkersLifecycle,

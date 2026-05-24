@@ -34,13 +34,19 @@
       }
     },
     {
-      "shape": "custom-domain@v1",
+      "shape": "gateway@v1",
       "name": "primary",
       "provider": "cloudflare-dns",
       "spec": {
-        "name": "cloudflare-live-smoke.example.test",
-        "target": "${ref:worker.url}",
-        "certificate": { "kind": "auto" }
+        "listeners": {
+          "public": {
+            "protocol": "https",
+            "host": "cloudflare-live-smoke.example.test",
+            "tls": "auto"
+          }
+        },
+        "routes": [{ "listener": "public", "path": "/", "to": "upstream" }],
+        "target": "${ref:worker.url}"
       }
     }
   ]

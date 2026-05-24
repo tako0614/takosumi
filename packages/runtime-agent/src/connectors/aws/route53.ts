@@ -1,5 +1,5 @@
 /**
- * `Route53Connector` — wraps `DirectRoute53Lifecycle` for `custom-domain@v1`.
+ * `Route53Connector` — wraps `DirectRoute53Lifecycle` for `gateway@v1`.
  */
 
 import type {
@@ -39,7 +39,7 @@ export interface Route53ConnectorOptions {
 
 export class Route53Connector implements Connector {
   readonly provider = "@takos/aws-route53";
-  readonly shape = "custom-domain@v1";
+  readonly shape = "gateway@v1";
   readonly acceptedArtifactKinds: readonly string[] = [];
   readonly #lifecycle: DirectRoute53Lifecycle;
 
@@ -102,7 +102,11 @@ export class Route53Connector implements Connector {
 }
 
 function outputsFor(desc: Route53RecordDescriptor): JsonObject {
-  const out: JsonObject = { fqdn: desc.fqdn };
-  if (desc.certificateArn) out.certificateArn = desc.certificateArn;
+  const out: JsonObject = {
+    url: `https://${desc.fqdn}`,
+    host: desc.fqdn,
+    scheme: "https",
+  };
+  if (desc.certificateArn) out.certificateId = desc.certificateArn;
   return out;
 }

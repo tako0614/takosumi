@@ -2,7 +2,7 @@
 
 AWS-backed reference `KernelPlugin` adapter factories for takosumi.com reference
 component kind examples (`web-service` / `object-store` / `postgres` /
-`custom-domain`). Operators import this package explicitly when they want AWS
+`gateway`). Operators import this package explicitly when they want AWS
 coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK code,
 so the operator chooses which provider packages to attach to the reference
 adapter array (`createPaaSApp({ kindAliases, plugins: [...] })`).
@@ -44,7 +44,7 @@ settings such as region, cluster name, or hosted zone id.
 | `awsFargateWebServiceProvider`   | `https://takosumi.com/kinds/v1/web-service`   |
 | `awsS3ObjectStoreProvider`       | `https://takosumi.com/kinds/v1/object-store`  |
 | `awsRdsPostgresProvider`         | `https://takosumi.com/kinds/v1/postgres`      |
-| `awsRoute53CustomDomainProvider` | `https://takosumi.com/kinds/v1/custom-domain` |
+| `awsRoute53CustomDomainProvider` | `https://takosumi.com/kinds/v1/gateway` |
 
 `awsFargateWorkerProvider` is an alternate export for
 `awsFargateWebServiceProvider`.

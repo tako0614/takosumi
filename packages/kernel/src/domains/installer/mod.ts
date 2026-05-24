@@ -20,7 +20,13 @@
  */
 
 import type { KernelPlugin } from "takosumi-contract";
-import type { AppSpec, Component } from "takosumi-contract/app-spec";
+import type {
+  AppSpec,
+  Component,
+  ListenSourceRef,
+  PublicationName,
+  PublishOptions,
+} from "takosumi-contract/app-spec";
 import type {
   ChangeEntry,
   Deployment,
@@ -68,9 +74,9 @@ import {
  * one of these from each `Component` and forwards it to the plugin
  * resolved via `provides[]`.
  *
- * Phase C: the namespace pub/sub registry is materialized at apply time;
+ * The local publication registry is materialized at apply time;
  * `listenedMaterials` carries the resolved upstream material payload for
- * each path the component listens to.
+ * each binding the component listens to.
  */
 export interface ProviderApplyContext {
   readonly installationId: string;
@@ -79,9 +85,10 @@ export interface ProviderApplyContext {
   readonly source: SourceSummary;
   readonly sourceDirectory: string;
   /**
-   * Materials this component listens to, keyed by the namespace path as
+   * Materials this component listens to, keyed by the local binding name as
    * declared in `Component.listen`. Pre-resolved by the installer from
-   * the pub/sub registry; the listener's `applyListen` (or the kernel
+   * local publications or external namespace exports; the listener's
+   * `applyListen` (or the kernel
    * default) has already emitted env / mount / target descriptors before
    * the plugin's `apply` is called.
    */
@@ -99,10 +106,8 @@ export interface ProviderApplyContext {
 export interface ProviderApplyResult {
   readonly resource: ProviderResourceEvidence;
   /**
-   * Outputs the plugin emits — surfaced as the input to
-   * {@link NamespaceMaterial} construction in
-   * `KernelPlugin.publishMaterial` (or the kernel default that registers
-   * `outputs` verbatim).
+   * Outputs the plugin emits. Declared publications are projected into
+   * namespace material by the component kind's materializer.
    */
   readonly outputs: Readonly<Record<string, string>>;
 }
@@ -199,17 +204,16 @@ export class InstallerPipeline {
   }
 
   /**
-   * Compute the {@link NamespaceMaterial} for a single publish edge.
-   * Delegates to the plugin's `publishMaterial` hook when present;
-   * otherwise the kernel default registers the plugin's `outputs` map
-   * verbatim (every output value becomes a string-valued material
-   * field).
+   * Compute the {@link NamespaceMaterial} for a single local publication.
+   * Delegates to the plugin's `publishMaterial` hook when present; the
+   * fallback is intentionally narrow and never selects arbitrary output paths.
    */
   async #publishMaterial(ctx: {
     readonly installationId: string;
     readonly componentName: string;
     readonly component: Component;
-    readonly namespacePath: string;
+    readonly publicationName: PublicationName;
+    readonly options: PublishOptions;
     readonly outputs: Readonly<Record<string, string>>;
   }): Promise<NamespaceMaterial> {
     const plugin = findPluginForKind(this.#pluginRegistry, ctx.component.kind);
@@ -218,16 +222,15 @@ export class InstallerPipeline {
         installationId: ctx.installationId,
         componentName: ctx.componentName,
         component: ctx.component,
-        namespacePath: ctx.namespacePath,
+        publicationName: ctx.publicationName,
+        options: ctx.options,
         outputs: ctx.outputs,
       });
     }
-    // Kernel default: surface plugin.outputs as the material payload.
-    const material: Record<string, string> = {};
-    for (const [key, value] of Object.entries(ctx.outputs)) {
-      material[key] = value;
-    }
-    return material;
+    return defaultPublishedMaterial(
+      ctx.publicationName,
+      ctx.outputs,
+    );
   }
 
   async installationDryRun(
@@ -436,11 +439,11 @@ export class InstallerPipeline {
     const componentOutputs: Record<string, Readonly<Record<string, string>>> =
       {};
 
-    // Namespace registry — single Installation-scoped pub/sub store used
-    // for both publish (= component.publish + auto-namespace) and listen
-    // (= component.listen) flows. Built incrementally as each component
-    // applies in topological order.
-    const registry = new NamespaceRegistry();
+    // Material registry — single Installation-scoped store used for local
+    // publications (`component.publication`) and external namespace refs
+    // (`namespace:<path>`). Built incrementally as each component applies in
+    // topological order.
+    const registry = new MaterialRegistry();
     const resolver = new BindingResolver({
       findMaterializer: (kind) => {
         if (!kind) return undefined;
@@ -468,30 +471,43 @@ export class InstallerPipeline {
 
     try {
       const order = topologicalOrder(input.appSpec);
-      const appId = input.appSpec.metadata.id;
       for (const componentName of order) {
         const component = input.appSpec.components[componentName];
-        // Resolve listen edges against the current registry. Listens to
-        // paths with no registered publisher are skipped here — they may
-        // be supplied by external systems and surfaced via the plugin's
-        // own machinery (e.g. an OIDC client provider that publishes to
-        // a takosumi-accounts.* namespace).
+        // Resolve listen bindings against the current registry. External
+        // namespace refs with no registered material are skipped unless the
+        // AppSpec marks that binding as required; local refs are parser-
+        // validated and must be present by topology.
         const listenedMaterials: Record<string, NamespaceMaterial> = {};
         const resolvedBindings: ResolvedBinding[] = [];
         if (component.listen) {
-          for (const [nsPath, options] of Object.entries(component.listen)) {
-            const material = registry.get(nsPath);
-            if (!material) continue;
+          for (
+            const [bindingName, options] of Object.entries(component.listen)
+          ) {
+            const sourceRef = options.from;
+            const material = registry.get(sourceRef);
+            if (!material) {
+              if (
+                isExternalNamespaceRef(sourceRef) && options.required !== true
+              ) {
+                continue;
+              }
+              throw new InstallerPipelineError(
+                "failed_precondition",
+                `${componentName}.listen.${bindingName}.from refers to ` +
+                  `unresolved publication ${JSON.stringify(sourceRef)}`,
+              );
+            }
             const binding = await resolver.resolveEdge({
               installationId: input.installation.id,
               listenerComponent: componentName,
               listenerKind: component.kind,
               listenerComponentRef: component,
-              namespacePath: nsPath,
+              bindingName,
+              sourceRef,
               options,
               material,
             });
-            listenedMaterials[nsPath] = material;
+            listenedMaterials[bindingName] = material;
             resolvedBindings.push(binding);
           }
         }
@@ -507,25 +523,27 @@ export class InstallerPipeline {
         });
         componentOutputs[componentName] = applied.outputs;
 
-        // Publish flow: register material to (a) the auto-namespace
-        // `<app-id>.<component-name>` and (b) any explicit `publish:`
-        // entries on the component. If a KernelPlugin exposes
-        // `publishMaterial`, call it once per path; otherwise the kernel
-        // default materializes the plugin's `outputs` map verbatim.
-        const publishPaths = collectPublishPaths(
-          appId,
-          componentName,
-          component,
-        );
-        for (const nsPath of publishPaths) {
+        // Publish flow: register material only for declared local
+        // publications. There is no automatic `<app-id>.<component-name>`
+        // namespace export.
+        for (
+          const [publicationName, publishOptions] of Object.entries(
+            component.publish ?? {},
+          )
+        ) {
+          const publicationRef = localPublicationRef(
+            componentName,
+            publicationName,
+          );
           const material = await this.#publishMaterial({
             installationId: input.installation.id,
             componentName,
             component,
-            namespacePath: nsPath,
+            publicationName,
+            options: publishOptions,
             outputs: applied.outputs,
           });
-          registry.publish(nsPath, componentName, material);
+          registry.publish(publicationRef, componentName, material);
         }
       }
       const outputs: DeploymentOutputs = {
@@ -798,36 +816,35 @@ function installerProviderRegistryFromPluginRegistry(
 }
 
 /**
- * In-memory namespace registry — owns the (path → publisher / material)
- * map for one Deployment apply. Single-publisher invariant is enforced by
- * the AppSpec parser, but the registry guards against runtime duplicates
- * (e.g. operator plugins that register additional paths via plugin-side
- * publish hooks).
+ * In-memory material registry — owns the (source ref → publisher / material)
+ * map for one Deployment apply. Local publications use
+ * `component.publication`; external namespace exports use `namespace:<path>`
+ * when an operator pre-populates them.
  */
-class NamespaceRegistry {
+class MaterialRegistry {
   readonly #materials = new Map<string, NamespaceMaterial>();
   readonly #publishers = new Map<string, string>();
 
   publish(
-    namespacePath: string,
+    sourceRef: string,
     publisher: string,
     material: NamespaceMaterial,
   ): void {
-    const existing = this.#publishers.get(namespacePath);
+    const existing = this.#publishers.get(sourceRef);
     if (existing !== undefined && existing !== publisher) {
       throw new InstallerPipelineError(
         "failed_precondition",
-        `namespace path ${JSON.stringify(namespacePath)} is already ` +
+        `publication ${JSON.stringify(sourceRef)} is already ` +
           `published by ${JSON.stringify(existing)}; cannot republish from ` +
           JSON.stringify(publisher),
       );
     }
-    this.#publishers.set(namespacePath, publisher);
-    this.#materials.set(namespacePath, material);
+    this.#publishers.set(sourceRef, publisher);
+    this.#materials.set(sourceRef, material);
   }
 
-  get(namespacePath: string): NamespaceMaterial | undefined {
-    return this.#materials.get(namespacePath);
+  get(sourceRef: string): NamespaceMaterial | undefined {
+    return this.#materials.get(sourceRef);
   }
 
   snapshot(): Readonly<Record<string, NamespaceMaterial>> {
@@ -835,27 +852,31 @@ class NamespaceRegistry {
   }
 }
 
-/**
- * Compute the set of namespace paths a component publishes to. The kernel
- * always auto-registers `<app-id>.<component-name>` so sibling listeners
- * can resolve the component without operator boilerplate, plus any
- * explicit `Component.publish` entries (deduplicated).
- */
-function collectPublishPaths(
-  appId: string,
+function localPublicationRef(
   componentName: string,
-  component: Component,
-): readonly string[] {
-  const autoPath = `${appId}.${componentName}`;
-  const explicit = component.publish ?? [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const path of [autoPath, ...explicit]) {
-    if (seen.has(path)) continue;
-    seen.add(path);
-    out.push(path);
+  publicationName: string,
+): string {
+  return `${componentName}.${publicationName}`;
+}
+
+function defaultPublishedMaterial(
+  publicationName: PublicationName,
+  outputs: Readonly<Record<string, string>>,
+): NamespaceMaterial {
+  if (Object.keys(outputs).length === 0) return {};
+  const selected = outputs[publicationName];
+  if (selected !== undefined) {
+    return { [publicationName]: selected };
   }
-  return out;
+  throw new InstallerPipelineError(
+    "failed_precondition",
+    `publish.${publicationName} requires the component materializer to ` +
+      `project provider outputs into namespace material`,
+  );
+}
+
+function isExternalNamespaceRef(value: ListenSourceRef): boolean {
+  return value.startsWith("namespace:");
 }
 
 export type InstallerPipelineErrorCode =
@@ -952,31 +973,15 @@ function topologicalOrder(appSpec: AppSpec): readonly string[] {
   const visited = new Set<string>();
   const visiting = new Set<string>();
 
-  // Build a publisher index. Two publisher kinds resolve here:
-  //   1. Explicit `Component.publish` entries
-  //   2. Kernel auto-namespace `<app-id>.<component-name>` (so sibling
-  //      listens like `my-app.db` route to `my-app`'s `db` component
-  //      without operator boilerplate).
-  //
-  // The yaml-parser has already rejected cycles and duplicate publishers
-  // among explicit edges; the installer re-checks at runtime so a
-  // pre-parsed AppSpec from a non-canonical source still surfaces a
-  // precise diagnostic.
-  const appId = appSpec.metadata.id;
-  const publisherByPath = new Map<string, string>();
+  // Build a publisher index. The yaml-parser has already rejected cycles
+  // and unknown local refs; the installer re-checks at runtime so a
+  // pre-parsed AppSpec from a non-canonical source still surfaces a precise
+  // diagnostic.
+  const publisherByRef = new Map<string, string>();
   for (const [name, component] of Object.entries(appSpec.components)) {
-    publisherByPath.set(`${appId}.${name}`, name);
     if (!component.publish) continue;
-    for (const nsPath of component.publish) {
-      const prior = publisherByPath.get(nsPath);
-      if (prior !== undefined && prior !== name) {
-        throw new InstallerPipelineError(
-          "failed_precondition",
-          `namespace path ${JSON.stringify(nsPath)} is published by both ` +
-            `${JSON.stringify(prior)} and ${JSON.stringify(name)}`,
-        );
-      }
-      publisherByPath.set(nsPath, name);
+    for (const publicationName of Object.keys(component.publish)) {
+      publisherByRef.set(localPublicationRef(name, publicationName), name);
     }
   }
 
@@ -995,17 +1000,22 @@ function topologicalOrder(appSpec: AppSpec): readonly string[] {
     stack.push(node);
     const listen = appSpec.components[node]?.listen;
     if (listen) {
-      for (const nsPath of Object.keys(listen)) {
-        const publisher = publisherByPath.get(nsPath);
-        // External publisher (= no AppSpec component owns this path) is
-        // a no-op edge in topology; the installer resolves such
-        // materials from the registry directly (or skips when absent).
-        if (publisher === undefined) continue;
+      for (const [bindingName, options] of Object.entries(listen)) {
+        const from = options.from;
+        if (isExternalNamespaceRef(from)) continue;
+        const publisher = publisherByRef.get(from);
+        if (publisher === undefined) {
+          throw new InstallerPipelineError(
+            "failed_precondition",
+            `${node}.listen.${bindingName}.from refers to unknown ` +
+              `publication ${JSON.stringify(from)}`,
+          );
+        }
         if (publisher === node) {
           throw new InstallerPipelineError(
             "failed_precondition",
-            `${node} listens to a namespace path it publishes itself ` +
-              `(${JSON.stringify(nsPath)}); self-loops are not permitted`,
+            `${node} listens to its own publication ` +
+              `(${JSON.stringify(from)}); self-loops are not permitted`,
           );
         }
         visit(publisher, stack);
