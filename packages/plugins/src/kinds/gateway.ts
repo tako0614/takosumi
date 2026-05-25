@@ -21,6 +21,8 @@ export type { GatewayCapabilityTerm, GatewayOutputs, GatewaySpec };
 
 const PROTOCOLS = new Set(["http", "https"]);
 const TLS_POLICIES = new Set(["auto", "manual", "off"]);
+const IDENTIFIER_RE = /^[a-z][a-z0-9-]{0,62}$/;
+const ROUTE_PATH_RE = /^\/[^?#]*$/;
 
 /**
  * `gateway@v1` component kind descriptor. It models HTTP listeners, TLS
@@ -86,12 +88,25 @@ export const GatewayKind: Shape<
           issues.push({ path, message: "must be an object" });
           return;
         }
-        requireNonEmptyString(route.listener, `${path}.listener`, issues);
-        requireNonEmptyString(route.to, `${path}.to`, issues);
-        if (!isNonEmptyString(route.path) || !route.path.startsWith("/")) {
+        if (
+          !isNonEmptyString(route.listener) ||
+          !IDENTIFIER_RE.test(route.listener)
+        ) {
+          issues.push({
+            path: `${path}.listener`,
+            message: "must match ^[a-z][a-z0-9-]{0,62}$",
+          });
+        }
+        if (!isNonEmptyString(route.to) || !IDENTIFIER_RE.test(route.to)) {
+          issues.push({
+            path: `${path}.to`,
+            message: "must match ^[a-z][a-z0-9-]{0,62}$",
+          });
+        }
+        if (!isNonEmptyString(route.path) || !ROUTE_PATH_RE.test(route.path)) {
           issues.push({
             path: `${path}.path`,
-            message: 'must be a path beginning with "/"',
+            message: 'must be a path beginning with "/" and contain no ? or #',
           });
         }
       });

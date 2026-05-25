@@ -12,17 +12,14 @@ response には `changes[]` (= create / update / delete の予定変更) と、
 `expected.commit` または `expected.sourceDigest`、`expected.manifestDigest` (=
 reviewed-source guard) が含まれます。既存 Installation の deploy dry-run では
 `expected.currentDeploymentId` も含まれ、apply 時に base current pointer を
-guard します。Cost estimate や billing quote は operator account-plane response
+guard します。Cost estimate や billing quote は operator account layer response
 として扱います。
 
-Risk summaries, approval prompts, prediction digests, and approval tokens are
-operator/account-plane extensions around this preview. They are carried through
-documented operator fields or account-plane records, not through additional core
-AppSpec fields.
+Risk サマリー、approval プロンプト、prediction digest、approval token はこの preview を囲む operator/account layer の拡張です。これらは operator フィールドまたは account layer record を通じて運ばれ、core manifest のフィールドは追加しません。
 
 apply で実際に起きたことは [Deployment](./installer-api.md#entity-fields) record
 として恒久保存されます。
 
 ## Compatibility note
 
-Takosumi v1 keeps preview as a response shape, not a separate Plan entity.
+Takosumi v1 は preview を response shape として保持し、独立した Plan entity は作りません。

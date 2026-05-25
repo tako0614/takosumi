@@ -2,7 +2,7 @@
 // Run `deno task spec:generate-ts` to refresh.
 
 export interface WorkerSpec {
-  /** Source-root-relative worker module path inside the resolved source snapshot. */
+  /** Source-root-relative worker module path inside the resolved source view. */
   readonly entrypoint: string;
   /** Optional env vars / bindings. */
   readonly env?: Readonly<Record<string, string>>;
@@ -54,4 +54,4 @@ export const WORKER_KIND_NAME = "worker";
 export const WORKER_KIND_URI = "https://takosumi.com/kinds/v1/worker";
 export const WORKER_KIND_VERSION = "v1";
 export const WORKER_DESCRIPTION =
-  "Serverless JS function whose entrypoint is read from the resolved source snapshot.";
+  "Serverless JS function whose entrypoint is read from the resolved source view.";

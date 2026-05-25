@@ -1,104 +1,98 @@
-# Digest Computation {#digest-computation}
+# ダイジェスト計算 {#digest-computation}
 
-Takosumi public Installer API uses two byte-stream digest fields:
+Takosumi の public Installer API は、byte stream の digest として次の 2 種類を
+使います。
 
-| Field                                     | Input bytes                                   | Surface                         |
-| ----------------------------------------- | --------------------------------------------- | ------------------------------- |
-| `manifestDigest`                          | raw `.takosumi.yml` file bytes                | dry-run / apply / Deployment    |
-| `source.digest` / `expected.sourceDigest` | fetched prepared source archive payload bytes | prepared source dry-run / apply |
+| Field                                     | 入力 bytes                            | Surface                         |
+| ----------------------------------------- | ------------------------------------- | ------------------------------- |
+| `manifestDigest`                          | raw `.takosumi.yml` file bytes        | dry-run / apply / Deployment    |
+| `source.digest` / `expected.sourceDigest` | fetched prepared source payload bytes | prepared source dry-run / apply |
 
-Git source identity is the resolved commit SHA. It is a source identity, not a
-Takosumi digest field. `local` source has no portable source byte identity; it
-uses only `manifestDigest` as the reviewed-source guard.
+git source の identity は resolved commit SHA です。これは source identity であ
+り、Takosumi digest field ではありません。`local` source は portable source byte
+identity を持たないため、reviewed-source guard は `manifestDigest` だけです。
 
-Build graph digests, build cache keys, container image digests, DataAsset blob
-digests, and retained implementation/operator evidence digests are separate
-operator or implementation records.
+build graph digest、build cache key、container image digest、operator の
+Deployment の記録用 digest は、operator または implementation が別 record として
+扱います。
 
-## Public Byte Digests {#public-byte-digests}
+## 公開 byte digest {#public-byte-digests}
 
-Takosumi v1 public byte digests use SHA-256:
+Takosumi v1 の public byte digest は SHA-256 を使います。
 
 ```text
 digest = "sha256:" + lowercase_hex(SHA-256(input_bytes))
 ```
 
-Rules:
+ルール:
 
-- The hash function is SHA-256.
-- The string form is `sha256:` followed by 64 lowercase hex characters.
-- The `sha256:` prefix is part of the compared value.
-- Comparison is byte-for-byte string equality after validation. Implementations
-  do not normalize case at comparison time.
-- The input bytes are the exact file or archive payload bytes. YAML parse
-  result, JSON canonical form, comments removal, key ordering, and line-ending
-  normalization are not applied.
+- hash function は SHA-256。
+- string form は `sha256:` + 64 文字の lowercase hex。
+- `sha256:` prefix は比較対象の一部。
+- validation 後は byte-for-byte の string equality で比較する。比較時に case
+  normalize しない。
+- input bytes は対象 file または archive payload の exact bytes。YAML parse
+  result、JSON canonical form、comment removal、key ordering、line-ending
+  normalization は適用しない。
 
 ### `manifestDigest` {#manifestdigest}
 
-`manifestDigest` is the SHA-256 digest of the `.takosumi.yml` bytes selected
-from the resolved source root. Line endings, comments, whitespace, and YAML key
-order participate in the digest.
+`manifestDigest` は、resolved source root から選ばれた `.takosumi.yml` bytes の
+SHA-256 digest です。line ending、comment、whitespace、YAML key order は digest
+に含まれます。
 
-The selected `.takosumi.yml` bytes must decode as UTF-8 before YAML parsing.
-Invalid UTF-8 is rejected before AppSpec validation. Duplicate YAML mapping keys
-are invalid. These parse rules do not change `manifestDigest`: the digest is
-still computed over the raw selected bytes, not over decoded text or parsed
-YAML.
+選ばれた `.takosumi.yml` bytes は YAML parse の前に UTF-8 として decode できる必
+要があります。invalid UTF-8 は manifest validation の前に拒否します。duplicate
+YAML mapping key も invalid です。これらの parse rule は `manifestDigest` を変え
+ません。digest は decoded text や parsed YAML ではなく、選ばれた raw bytes から
+計算します。
 
-`manifestDigest` guards the AppSpec bytes reviewed by dry-run. It does not guard
-the entire source tree for `local` source.
+`manifestDigest` は dry-run で review した manifest bytes を guard します。
+`local` source の source tree 全体を guard するものではありません。
 
-### Prepared Source Digest {#sourcedigest}
+### Prepared source の digest {#sourcedigest}
 
-For `source.kind: "prepared"`, `source.digest` is the caller-supplied digest of
-the archive payload bytes. The Installer API fetches `source.url`, computes the
-digest of the bytes it actually received, and compares that value with
-`source.digest`.
+`source.kind: "prepared"` では、`source.digest` は caller が渡す archive payload
+bytes の digest です。Installer API は `source.url` を取得し、実際に受け取った
+bytes の digest を計算し、その値を `source.digest` と比較します。
 
-Dry-run and apply responses use `expected.sourceDigest` as the reviewed-source
-guard for the same resolved prepared source identity. `expected.sourceDigest`
-does not replace `source.digest`; apply checks both when both are present.
+dry-run と apply response は、同じ resolved prepared source identity の
+reviewed-source guard として `expected.sourceDigest` を返します。
+`expected.sourceDigest` は `source.digest`
+の代替ではありません。両方がある場合、apply は両方を確認します。
 
-### Expected Guard {#expected-guard}
+### Expected guard {#expected-guard}
 
-`expected` binds apply to the source reviewed by dry-run:
+`expected` は apply を dry-run で review した source に固定します。
 
-| Source kind | Required expected fields         |
+| Source kind | 必須 expected field              |
 | ----------- | -------------------------------- |
 | `git`       | `manifestDigest`, `commit`       |
 | `prepared`  | `manifestDigest`, `sourceDigest` |
 | `local`     | `manifestDigest`                 |
 
-If a well-shaped guard does not match the resolved source, apply returns 409
-`failed_precondition`. If a guard carries a field that does not apply to the
-source kind, apply returns 400 `invalid_argument`.
+deploy apply では、上の source guard に加えて `expected.currentDeploymentId`
+を照合します。これは dry-run が review した current Deployment pointer の guard
+です。
 
-## Reference Evidence Digests {#reference-evidence-digests}
+well-shaped guard が resolved source と一致しない場合、apply は 409
+`failed_precondition` を返します。source kind に適用できない field を guard が
+持つ場合、apply は 400 `invalid_argument` を返します。
 
-Reference implementations can persist additional structured digests for replay,
-approval, audit, rollout, and provider-operation recovery. Those names,
-canonicalization rules, and input fields belong to the implementation or
-operator ledger that defines the retained evidence records. They are not public
-Installer API fields.
+## Operator の Deployment の記録用 digest {#operator-evidence-digests}
 
-## DataAsset Digest {#dataasset-digest}
+operator profile は、replay、approval、audit、rollout、リソースの作成・更新の
+recovery のために追加の structured digest を保存できます。名前、canonicalization
+rule、input field は、その Deployment の記録を定義する operator ledger に属し
+ます。public Installer API field ではありません。
 
-DataAsset is an optional operator extension for content-addressed blobs. The
-current reference DataAsset extension uses a byte-stream digest of the blob
-bytes and stores metadata such as `kind`, `contentTypeHint`, and retention
-policy separately. This digest is extension evidence, not an Installer API
-source identity.
+## Algorithm migration {#algorithm-migration}
 
-## Algorithm Migration {#algorithm-migration}
+Takosumi v1 の public Installer API は `sha256:` digest だけを使います。将来の
+spec が別 algorithm を採用する場合、prefix、verifier、docs、tests、public wire
+validation を同じ compatibility update で変更します。
 
-Takosumi v1 uses only `sha256:` digests for the public Installer API. If a
-future spec adopts another algorithm, the prefix, verifier, docs, tests, and
-public wire validation must change in the same compatibility update.
-
-## Related Pages {#related-pages}
+## 関連ページ {#related-pages}
 
 - [Installer API](./installer-api.md)
-- [Build service handoff](./build-spec.md)
-- [DataAsset Policy](./data-asset-policy.md)
-- [Resource IDs](./resource-ids.md)
+- [ビルドサービス境界](./build-spec.md)

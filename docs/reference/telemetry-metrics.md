@@ -1,8 +1,8 @@
 # テレメトリ / メトリクス {#telemetry--metrics}
 
 ::: info 実装状況 metric schema、 observability sink record、 Prometheus
-`/metrics` HTTP route、 OTLP/HTTP JSON metric exporter、 kernel HTTP server
-span、 provider operation span、 runtime-agent loop span、 internal RPC client
+`/metrics` HTTP route、 OTLP/HTTP JSON metric exporter、 Takosumi HTTP server
+span、 リソースの作成・更新 span、 runtime-agent loop span、 internal RPC client
 span は service contract として実装済み。 bootstrap path は
 `TAKOSUMI_METRICS_SCRAPE_TOKEN` が設定されていれば API role に `/metrics` を
 mount する。 `TAKOSUMI_OTLP_METRICS_ENDPOINT` / `TAKOSUMI_OTLP_TRACES_ENDPOINT`
@@ -17,9 +17,9 @@ telemetry は 2 protocol で同時 export する。
 
 ### OpenTelemetry / OTLP (primary) {#opentelemetry--otlp-primary}
 
-push 型の OTLP/HTTP JSON exporter。 metric / kernel HTTP server span / provider
-apply / destroy operation span / runtime-agent loop span / internal RPC client
-span を export する。
+push 型の OTLP/HTTP JSON exporter。 metric / Takosumi HTTP server span / provider
+apply / destroy span / runtime-agent loop span / internal RPC client span を
+export する。
 
 - metric export 起点: `TAKOSUMI_OTLP_METRICS_ENDPOINT` /
   `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT`
@@ -32,14 +32,14 @@ span を export する。
 
 ### Prometheus pull endpoint (secondary) {#prometheus-pull-endpoint-secondary}
 
-kernel HTTP server の `/metrics` を Prometheus 互換 agent が scrape する。
+Takosumi HTTP server の `/metrics` を Prometheus 互換 agent が scrape する。
 記録された `ObservabilitySink` metric event を Prometheus text format で公開する
 (trace は OTLP 側で扱う)。
 
 OTLP と Prometheus は併用できる。 `/metrics` は local pull scrape 用、 OTLP
 wrapper は記録した metric / trace event を collector に mirror する。
 
-OTLP exporter が読む kernel 環境変数:
+OTLP exporter が読む Takosumi 環境変数:
 
 ```text
 TAKOSUMI_OTLP_METRICS_ENDPOINT        URL of the collector /v1/metrics endpoint
@@ -66,10 +66,10 @@ takosumi_<subsystem>_<metric>_<unit>
 例: takosumi_apply_duration_seconds
 ```
 
-- `<subsystem>`: 閉じた lowercase 識別子 (`apply` / `wal` / `revoke_debt` /
+- `<subsystem>`: 閉じた lowercase 識別子 (`apply` / `wal` / `cleanup_backlog` /
   `approval` / `drift` / `artifact` / `journal` / `lock` / `runtime_agent` /
   `http` / `rate_limit` / `quota` / `secret_partition`)。`artifact` は optional
-  DataAsset extension の metric namespace。
+  asset extension の metric namespace。
 - `<metric>`: 短い記述子 (`duration` / `count` / `bytes` / `ratio` / `age`)
 - `<unit>`: SI / Prometheus canonical unit (`seconds` / `bytes` / `ratio`)。
   無次元 count では省略
@@ -93,7 +93,7 @@ v1 metric set は **閉じ** ている。 operator は調整なしで名前 / la
 | `takosumi_rollback_duration_seconds`             | histogram | `spaceId`, `operationKind`, `status` |
 | `takosumi_activate_duration_seconds`             | histogram | `spaceId`, `operationKind`           |
 | `takosumi_wal_stage_duration_seconds`            | histogram | `stage`                              |
-| `takosumi_revoke_debt_count`                     | gauge     | `spaceId`, `status`                  |
+| `takosumi_cleanup_backlog_count`                     | gauge     | `spaceId`, `status`                  |
 | `takosumi_approval_pending_count`                | gauge     | `spaceId`                            |
 | `takosumi_drift_detected_count`                  | counter   | `spaceId`, `severity`                |
 | `takosumi_artifact_storage_bytes`                | gauge     | `spaceId`                            |
@@ -114,7 +114,7 @@ label 詳細:
 - `takosumi_wal_stage_duration_seconds` の `stage` label は 8 値 WAL stage enum
   (`prepare` / `pre-commit` / `commit` / `post-commit` / `observe` / `finalize`
   / `abort` / `skip`)。
-- `takosumi_revoke_debt_count` は閉じた RevokeDebt `status` enum を label
+- `takosumi_cleanup_backlog_count` は閉じた CleanupBacklog `status` enum を label
   に持つ。
 - `takosumi_quota_usage_ratio` は閉じた quota `dimension` enum を label に持つ。
 
@@ -132,7 +132,7 @@ PromQL:
 OTLP trace は外部境界を跨ぐ全 operation で emit する。対象は次の span。
 
 - API request の HTTP server span
-- WAL-backed `applyV2` / `destroyV2` の provider apply / destroy span
+- WAL-backed `applyV2` / `destroyV2` のリソースの作成・更新 / destroy span
 - runtime-agent の work execution span
 - runtime agent / internal RPC call の client span
 
@@ -161,10 +161,10 @@ bucket から該当 trace に直接 pivot できる。
 - 既定 head sampler は `local` / `development` で `1.0` (100%)。 `staging` /
   `production` では設定可能比率 (`TAKOSUMI_OTLP_TRACE_SAMPLE_RATIO`、既定
   `0.05`)
-- 終了状態がエラーの operation は **常に sample** される。 kernel は
+- 終了状態がエラーの operation は **常に sample** される。 Takosumi は
   `operation-failed` / `compensation-completed` で終わる operation を export
   する前に sampling decision を `RECORD_AND_SAMPLED` に強制する
-- tail sampling は collector 側の関心事。 kernel は実装しない
+- tail sampling は collector 側の関心事。 Takosumi は実装しない
 
 ## カーディナリティ {#cardinality}
 
@@ -174,7 +174,7 @@ v1 closed set では高 cardinality な label を禁止する。
   label にしない。 span attribute や exemplar field として扱う
 - `spaceId` は label として許可する。 Space 数が大きい場合 (v1 では目安として
   1000 超) は collector で storage 前に `spaceId` を aggregate する設定を行う
-- operator 名 / hostname / region などの自由 label を kernel は追加しない。
+- operator 名 / hostname / region などの自由 label を Takosumi は追加しない。
   必要なら OTLP collector の resource attribute 層で注入する
 
 ## 認証
@@ -209,13 +209,13 @@ resource attribute は export batch ごとに 1 回付く。 metric point 単位
 
 Prometheus `/metrics` の保証:
 
-- kernel HTTP server 稼働中は `200` を返す
+- Takosumi HTTP server 稼働中は `200` を返す
 - content type は `text/plain; version=0.0.4`
 - 1 scrape で `ObservabilitySink` が保持する metric event の一貫した snapshot
   を返す
 - 上記 v1 closed set を超える cardinality の label を含む metric は露出しない
 
-kernel shutdown 中の scrape は `Retry-After: 1` を付けて `503` を返す。
+Takosumi shutdown 中の scrape は `Retry-After: 1` を付けて `503` を返す。
 
 ## スキーマバージョニング {#schema-versioning}
 
@@ -233,8 +233,8 @@ release set で検証する。
 - `reference/drift-detection` — drift / debt / observation gauge の導出
 - `reference/architecture/runtime-deployment-model#operation-plan--write-ahead-journal`
   — WAL stage histogram label の根拠
-- `reference/architecture/operator-boundaries` — kernel host trust 境界における
-  export surface の配置
+- `reference/architecture/operator-boundaries` — Takosumi host trust 境界に
+  おける export surface の配置
 
 ## 関連ページ
 

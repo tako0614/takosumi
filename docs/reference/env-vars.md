@@ -17,16 +17,16 @@ boolean は `1 / true / yes / on / enabled` を真、
 `0 / false / no / off / disabled` を偽として扱います。それ以外は fail closed
 です。
 
-## Reference kernel server
+## Reference Takosumi server
 
 | Variable                       | Type    | Default | Required                       | 説明                                                                  |
 | ------------------------------ | ------- | ------- | ------------------------------ | --------------------------------------------------------------------- |
 | `TAKOSUMI_ENVIRONMENT`         | enum    | `local` | no                             | `local` / `development` / `test` / `staging` / `production`。         |
 | `TAKOSUMI_DEV_MODE`            | boolean | `false` | no                             | dev 専用 unsafe defaults opt-out。production では使わない。           |
-| `PORT`                         | number  | `8788`  | no                             | kernel HTTP server port。CLI は `takosumi server --port` で設定。     |
-| `TAKOSUMI_PUBLIC_BASE_URL`     | URL     | unset   | DataAsset routes 使用時        | DataAsset URL synthesis 用の public base URL。                        |
-| `TAKOSUMI_INSTALLER_TOKEN`     | secret  | unset   | public installer routes 使用時 | 5 endpoint Installer API bearer。                                     |
-| `TAKOSUMI_DEPLOY_TOKEN`        | secret  | unset   | DataAsset write routes 使用時  | optional DataAsset upload / write bearer。                            |
+| `PORT`                         | number  | `8788`  | no                             | Takosumi HTTP server port。CLI は `takosumi server --port` で設定。   |
+| `TAKOSUMI_PUBLIC_BASE_URL`     | URL     | unset   | asset routes 使用時        | asset URL synthesis 用の public base URL。                        |
+| `TAKOSUMI_INSTALLER_TOKEN`     | secret  | unset   | public installer routes 使用時 | Installer API bearer。                                                |
+| `TAKOSUMI_DEPLOY_TOKEN`        | secret  | unset   | asset write routes 使用時  | optional asset upload / write bearer。                            |
 | `TAKOSUMI_INTERNAL_API_SECRET` | secret  | unset   | production                     | internal control-plane RPC bearer。                                   |
 | `TAKOSUMI_AGENT_URL`           | URL     | unset   | remote agent topology          | runtime-agent base URL。unset 時は embedded execution role を使える。 |
 | `TAKOSUMI_AGENT_TOKEN`         | secret  | unset   | remote agent topology          | runtime-agent call bearer。                                           |
@@ -44,14 +44,14 @@ boolean は `1 / true / yes / on / enabled` を真、
 | `TAKOSUMI_LOCK_LEASE_MS`           | integer ms | `30000`            | no                      | cross-process lock lease。       |
 | `TAKOSUMI_LOCK_HEARTBEAT_MS`       | integer ms | `10000`            | no                      | lock heartbeat interval。        |
 
-## Optional DataAsset Routes
+## Optional asset Routes
 
 | Variable                              | Type          | Default    | Required              | 説明                                                            |
 | ------------------------------------- | ------------- | ---------- | --------------------- | --------------------------------------------------------------- |
-| `TAKOSUMI_ARTIFACT_FETCH_TOKEN`       | secret        | unset      | remote agent topology | optional DataAsset GET / HEAD read bearer。                     |
-| `TAKOSUMI_ARTIFACT_MAX_BYTES`         | bytes         | `52428800` | no                    | optional DataAsset upload cap。operator metadata が上書き可能。 |
-| `TAKOSUMI_ARTIFACT_GC_GRACE_DAYS`     | integer days  | `7`        | no                    | optional DataAsset GC sweep grace window。                      |
-| `TAKOSUMI_ARTIFACT_GC_PERIODIC_HOURS` | integer hours | `24`       | no                    | periodic DataAsset GC cadence。`0` で off。                     |
+| `TAKOSUMI_ARTIFACT_FETCH_TOKEN`       | secret        | unset      | remote agent topology | optional asset GET / HEAD read bearer。                     |
+| `TAKOSUMI_ARTIFACT_MAX_BYTES`         | bytes         | `52428800` | no                    | optional asset upload cap。operator metadata が上書き可能。 |
+| `TAKOSUMI_ARTIFACT_GC_GRACE_DAYS`     | integer days  | `7`        | no                    | optional asset GC sweep grace window。                      |
+| `TAKOSUMI_ARTIFACT_GC_PERIODIC_HOURS` | integer hours | `24`       | no                    | periodic asset GC cadence。`0` で off。                     |
 
 ## Boot timeouts
 
@@ -61,7 +61,7 @@ boolean は `1 / true / yes / on / enabled` を真、
 | `TAKOSUMI_BOOT_TIMEOUT_LOCK_STORE_SEC`             | seconds | `30`    | no       | lock store readiness timeout。                                     |
 | `TAKOSUMI_BOOT_TIMEOUT_SECRET_PARTITION_SEC`       | seconds | `15`    | no       | secret partition readiness timeout。                               |
 | `TAKOSUMI_BOOT_TIMEOUT_PUBLIC_LISTENER_SEC`        | seconds | `15`    | no       | kernel control-plane listener bind timeout (historical env name)。 |
-| `TAKOSUMI_BOOT_TIMEOUT_PLUGIN_BOOTSTRAP_SEC`       | seconds | `60`    | no       | implementation binding bootstrap timeout (historical env name)。   |
+| `TAKOSUMI_BOOT_TIMEOUT_PLUGIN_BOOTSTRAP_SEC`       | seconds | `60`    | no       | binding bootstrap timeout (historical env name)。   |
 | `TAKOSUMI_BOOT_TIMEOUT_RUNTIME_AGENT_REGISTRY_SEC` | seconds | `60`    | no       | runtime-agent registry timeout。                                   |
 
 ## Observability
@@ -93,16 +93,16 @@ boolean は `1 / true / yes / on / enabled` を真、
 | `TAKOSUMI_WORKER_POLL_INTERVAL_MS`         | integer ms | provider default    | no       | apply worker poll interval。     |
 | `TAKOSUMI_WORKER_VISIBILITY_TIMEOUT_MS`    | integer ms | provider default    | no       | apply queue visibility timeout。 |
 | `TAKOSUMI_OUTBOX_DISPATCH_LIMIT`           | integer    | provider default    | no       | outbox dispatcher batch limit。  |
-| `TAKOSUMI_REVOKE_DEBT_CLEANUP_INTERVAL_MS` | integer ms | apply poll interval | no       | RevokeDebt cleanup cadence。     |
-| `TAKOSUMI_REVOKE_DEBT_CLEANUP_LIMIT`       | integer    | `50`                | no       | RevokeDebt cleanup batch limit。 |
+| `TAKOSUMI_REVOKE_DEBT_CLEANUP_INTERVAL_MS` | integer ms | apply poll interval | no       | CleanupBacklog cleanup cadence。     |
+| `TAKOSUMI_REVOKE_DEBT_CLEANUP_LIMIT`       | integer    | `50`                | no       | CleanupBacklog cleanup batch limit。 |
 
 ## CLI
 
 | Variable                   | Type   | Default                  | Required                 | 説明                              |
 | -------------------------- | ------ | ------------------------ | ------------------------ | --------------------------------- |
-| `TAKOSUMI_REMOTE_URL`      | URL    | unset                    | remote commands          | kernel HTTP server URL。          |
+| `TAKOSUMI_REMOTE_URL`      | URL    | unset                    | remote commands          | Takosumi HTTP server URL。        |
 | `TAKOSUMI_INSTALLER_TOKEN` | secret | unset                    | installer commands       | installer bearer。                |
-| `TAKOSUMI_DEPLOY_TOKEN`    | secret | unset                    | DataAsset write commands | optional DataAsset write bearer。 |
+| `TAKOSUMI_DEPLOY_TOKEN`    | secret | unset                    | asset write commands | optional asset write bearer。 |
 | `TAKOSUMI_AGENT_URL`       | URL    | unset                    | agent commands           | runtime-agent URL。               |
 | `TAKOSUMI_AGENT_TOKEN`     | secret | unset                    | agent commands           | runtime-agent bearer。            |
 | `TAKOSUMI_CONFIG_FILE`     | path   | `~/.takosumi/config.yml` | no                       | CLI config file override。        |
@@ -127,19 +127,19 @@ kernel host には置きません。
 | `TAKOSUMI_SELFHOSTED_COREDNS_FILE`          | path   | unset             | no                   | CoreDNS config path。            |
 | `TAKOSUMI_SELFHOSTED_POSTGRES_HOST`         | string | unset             | no                   | self-hosted Postgres host。      |
 
-## Implementation Binding Config
+## Binding Config
 
 An operator using the reference kernel passes the kind alias map and reference
 adapter array (`plugins` option) to `createPaaSApp({ kindAliases, plugins })`.
 adapter が必要とする credential / config は factory option か runtime-agent host
-env から読みます。provider package の取得方法は operator distribution
+env から読みます。provider package の取得方法は operator profile
 の責務です。
 
 ## 関連ページ
 
 - [Operator Bootstrap](../operator/bootstrap.md)
 - [セルフホスト運用](../operator/self-host.md)
-- [DataAsset Policy](./data-asset-policy.md)
+- [asset Policy](./data-asset-policy.md)
 - [Secret Partitions](./secret-partitions.md)
 - [Telemetry / Metrics](./telemetry-metrics.md)
 - [Reference Runtime-Agent Execution Surface](./runtime-agent-api.md)

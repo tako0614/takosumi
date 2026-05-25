@@ -1,8 +1,8 @@
 # Journal Compaction
 
-WriteAheadOperationJournal は WAL stage 進行とともに単調増大する。 compaction
-なしでは journal は際限なく成長し replay が遅くなる。 compaction は audit log
-retention とは独立で、 audit 側の regime 駆動 retention は
+WriteAheadOperationJournal は WAL stage 進行とともに単調増大する。compaction
+なしでは journal は際限なく成長し replay が遅くなる。compaction は audit log
+retention とは独立で、audit 側の regime 駆動 retention は
 [Audit Events](./audit-events.md) を参照。
 
 ## Compaction triggers
@@ -30,23 +30,23 @@ A JournalEntry is retained when any of the following conditions hold. An entry
 that satisfies none of these conditions is eligible for compaction.
 
 - Active generated objects: the entry's `generatedObjectIds` include any object
-  that is part of the current ActivationSnapshot.
+  that is part of the current TrafficSnapshot.
 - Unresolved compensation: the entry belongs to an operation whose compensation
   chain has not reached `compensation-completed`.
-- Unresolved revoke debt: the entry references an objectId that has an open
-  RevokeDebt with `status` other than `cleared`.
+- Unresolved cleanup backlog: the entry references an objectId that has an open
+  CleanupBacklog with `status` other than `cleared`.
 - Current activation support: the entry is required to reconstruct the current
-  ActivationSnapshot from the latest base snapshot.
+  TrafficSnapshot from the latest base snapshot.
 - Approval-bound: the entry references an Approval whose status is `issued` or
   `consumed` and whose audit retention window has not elapsed.
 - Operator hold: an operator has placed an explicit hold on the journal range.
 
 An entry that satisfies any of these conditions is kept verbatim.
 
-## Snapshotization
+## snapshot creation
 
 A compaction pass that drops a contiguous prefix of journal entries must record
-the dropped range as the base of a new ResolutionSnapshot / DesiredSnapshot
+the dropped range as the base of a new ResolvedPlan / TargetState
 pair.
 
 - The base snapshot pair is computed by folding the dropped entries against the
@@ -55,8 +55,8 @@ pair.
 - After snapshotization, replay starts from the new base and reads only the
   post-base journal tail. Replay correctness is preserved because the base
   snapshot encodes every effect that compaction removed.
-- The previous base snapshot remains addressable until no ActivationSnapshot,
-  DriftIndex, or ObservationSet refers to it. Garbage collection of superseded
+- The previous base snapshot remains addressable until no TrafficSnapshot,
+  DriftIndex, or ObservationState refers to it. Garbage collection of superseded
   base snapshots is a separate pass that runs after audit retention windows
   clear.
 - The snapshotization step writes a single `journal-compacted` audit event to
@@ -143,7 +143,7 @@ Inspection commands require the operator bearer.
   — WAL stage enum, idempotency tuple, replay rules.
 - [Snapshot Model](./architecture/snapshot-model.md) — base snapshot semantics
   and snapshot garbage collection.
-- [Drift Detection](./drift-detection.md) — RevokeDebt status rules referenced
+- [Drift Detection](./drift-detection.md) — CleanupBacklog status rules referenced
   by retention.
 
 ## 関連ページ

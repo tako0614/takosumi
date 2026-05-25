@@ -1,25 +1,31 @@
 # Risk タクソノミ {#risk-taxonomy}
 
-各 Risk は plan 出力上の判定点として働き、 operator が allow / deny /
-require-approval を判断する材料になる。新 Risk kind の追加には `CONVENTIONS.md`
-§6 RFC が必要。 entry 番号は historical で安定 ID として扱う (= 番号は renumber
-せず、過去 audit / docs cross-ref の連続性を保つ。 entry 15 は欠番)。
+::: info 内部設計メモ
+public contract は [Installer API](./installer-api.md) を参照。
+:::
+
+各 Risk は reference/operator plan 出力上の判定点として働き、operator が allow /
+deny / require-approval を判断する材料になる。新 Risk kind の追加には
+`CONVENTIONS.md` §6 RFC が必要。entry 番号は historical で安定 ID として扱う (=
+番号は renumber せず、過去 audit / docs cross-ref の連続性を保つ。entry 15
+は欠番)。
 
 ## Risk と Error {#risk-vs-error}
 
 両者は別 concept。
 
-- **Risk**: plan 出力時の判定点。 `allow` / `deny` / `require-approval` の 3
-  値で resolve され、 approve 可能。 binding が approval record に乗る。
+- **Risk**: reference/operator plan 出力時の判定点。 `allow` / `deny` /
+  `require-approval` の 3 値で resolve され、 approve 可能。binding が operator
+  approval profile の approval record に乗る。
 - **Error**: operation result の失敗理由 (DomainErrorCode /
   LifecycleErrorBody)。 approve 対象ではなく、再 plan / 再 apply で解消する。
 
-Risk が stage 進行中に再評価されて approval が崩れる経路は
+Risk が reference lifecycle stage 進行中に再評価されて approval が崩れる経路は
 [Approval Invalidation Triggers](./approval-invalidation.md) に従う。
 
 ## Closed enum (18 active values, stable ids 1-19) {#closed-enum-18-values}
 
-各 Risk は以下の attributes を持つ:
+この reference vocabulary の各 Risk は以下の attributes を持つ:
 
 - **stable id**: enum の wire 値。永続化される。
 - **発火 stage**: `prepare` / `pre-commit` / `commit` / `post-commit` /
@@ -33,20 +39,20 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 
 ### 1. `secret-projection`
 
-- **意味**: managed secret projection の plan / input で raw 値が AppSpec /
-  output / log 上に露出する可能性を示す。DesiredSnapshot には secret reference
+- **意味**: managed secret projection の plan / input で raw 値が manifest /
+  output / log 上に露出する可能性を示す。TargetState には secret reference
   または redacted sentinel だけを保存し、raw secret value は保存しない。
-  projection を approve しない限り secret は materialize されない。
+  projection を approve しない限り secret は実体化されない。
 - **発火 stage**: `prepare`
 - **severity**: `error`
 - **invalidation trigger**: 2
 - **fix kind**: `requiresPolicyReview`
 
-### 2. `external-publication`
+### 2. `platform-service`
 
-operator-internal share model や future extension で、外部 Space へ publication
-する操作を扱う場合の候補 Risk です。current public AppSpec v1 は external publication
-を直接宣言しません。
+operator-internal share model や future extension で、外部 Space へ publish の出力
+をする操作を扱う場合の候補 Risk です。current public manifest v1 は external な
+publish の出力を直接宣言しません。
 
 - **発火 stage**: `prepare`
 - **severity**: `warning`
@@ -56,7 +62,7 @@ operator-internal share model や future extension で、外部 Space へ public
 ### 3. `generated-credential`
 
 - **意味**: provider / connector が新 credential を生成して return する。
-  approve すると ownership は materialize した Space に固定される。
+  approve すると scope は実体化した Space に固定される。
 - **発火 stage**: `pre-commit`
 - **severity**: `error`
 - **invalidation trigger**: 2, 3
@@ -64,8 +70,9 @@ operator-internal share model や future extension で、外部 Space へ public
 
 ### 4. `generated-grant`
 
-- **意味**: 既存 principal に新 grant (IAM role / policy attach 等) を付与
-  する。
+- **意味**: 既存 principal に新しい access authorization (IAM role / policy
+  attach 等) を付与する。wire 値は historical stable id として `generated-grant`
+  のまま保持する。
 - **発火 stage**: `pre-commit`
 - **severity**: `error`
 - **invalidation trigger**: 2, 3
@@ -81,7 +88,7 @@ operator-internal share model や future extension で、外部 Space へ public
 
 ### 6. `traffic-change`
 
-- **意味**: GroupHead pointer / canary / shadow traffic 配分が変わる。
+- **意味**: RoutingPointer pointer / canary / shadow traffic 配分が変わる。
 - **発火 stage**: `pre-commit`
 - **severity**: `warning`
 - **invalidation trigger**: 2, 3
@@ -89,9 +96,9 @@ operator-internal share model や future extension で、外部 Space へ public
 
 ### 7. `stale-publication`
 
-- **意味**: 消費する operator-owned ExternalPublicationDeclaration の freshness が policy
-  許容 window を超えており、 plan は最新化されない publication snapshot に bind さ
-  れている。
+- **意味**: 消費する operator-owned PlatformServiceDeclaration の freshness
+  が policy 許容 window を超えており、 plan は最新化されない publish の出力の
+  snapshot に bind されている。
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 4
@@ -99,8 +106,8 @@ operator-internal share model や future extension で、外部 Space へ public
 
 ### 8. `revoked-publication`
 
-- **意味**: 消費する operator-owned ExternalPublicationDeclaration が revoke 済 (= generated
-  material は残るが新規 link projection は許可されない状態)。
+- **意味**: 消費する operator-owned PlatformServiceDeclaration が revoke 済
+  (= generated な出力データは残るが新規 link projection は許可されない状態)。
 - **発火 stage**: `prepare`
 - **severity**: `error`
 - **invalidation trigger**: 4
@@ -118,7 +125,7 @@ operator-internal share model や future extension で、外部 Space へ public
 ### Future extension: `cross-space-link`
 
 operator-internal share model や future extension で cross-Space link
-を扱う場合の候補 Risk です。current public AppSpec v1 の Risk enum ではなく、
+を扱う場合の候補 Risk です。current public manifest v1 の Risk enum ではなく、
 Space を跨ぐ sharing RFC が導入されるまで発火しません。
 
 - **発火 stage**: `prepare`
@@ -128,10 +135,10 @@ Space を跨ぐ sharing RFC が導入されるまで発火しません。
 
 ### 11. `shadowed-publication`
 
-- **意味**: reserved / future sharing model で、同じ external publication path が複数
-  source から見える可能性を示す。current public v1 は Space-visible operator
-  publication の exact match だけを解決し、duplicate / shadow は policy choice
-  ではなく invalid resolution として fail-closed する。
+- **意味**: reserved / future sharing model で、同じ platform service path
+  が複数 source から見える可能性を示す。current public v1 は Space-visible な
+  operator の publish の出力の exact match だけを解決し、duplicate / shadow は
+  policy choice ではなく invalid resolution として fail-closed する。
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 4, 5
@@ -149,7 +156,7 @@ Space を跨ぐ sharing RFC が導入されるまで発火しません。
 ### 13. `actual-effects-overflow`
 
 - **意味**: connector が `commit` / `post-commit` で報告した actual-effects が
-  `predictedActualEffectsDigest` を超過した。
+  `expectedEffectsDigest` を超過した。
 - **発火 stage**: `commit`, `post-commit`
 - **severity**: `error`
 - **invalidation trigger**: 2
@@ -164,9 +171,9 @@ Space を跨ぐ sharing RFC が導入されるまで発火しません。
 - **invalidation trigger**: 1, 2
 - **fix kind**: `requiresPolicyReview`
 
-### 16. `revoke-debt-created`
+### 16. `cleanup-backlog-created`
 
-- **意味**: 当該 entry の進行が新 RevokeDebt を生む見込みがある。
+- **意味**: 当該 entry の進行が新 CleanupBacklog を生む見込みがある。
 - **発火 stage**: `post-commit`, `observe`, `finalize`, `abort`
 - **severity**: `warning`
 - **invalidation trigger**: 4
@@ -174,8 +181,8 @@ Space を跨ぐ sharing RFC が導入されるまで発火しません。
 
 ### 17. `raw-secret-literal`
 
-- **意味**: AppSpec または projection input に raw secret literal が混入している
-  疑い。kernel は値を DesiredSnapshot に保存せず、保存前の validation /
+- **意味**: manifest または projection input に raw secret literal が混入している
+  疑い。Takosumi は値を TargetState に保存せず、保存前の validation /
   projection planning で Risk として可視化する。
 - **発火 stage**: `prepare`
 - **severity**: `error`
@@ -194,13 +201,13 @@ Space を跨ぐ sharing RFC が導入されるまで発火しません。
 ### External pre-submission: `transform-unapproved`
 
 `transform-unapproved` は build service / operator pre-submission policy が返す
-external error です。source transform / build は
-Installer API submission 前に解決され、kernel plan / WAL の `pre-commit` Risk
-として DataAsset transform 実行判断を戻しません。
+external error です。source transform / build は Installer API submission
+前に解決され、Takosumi plan / WAL の `pre-commit` Risk として asset transform
+実行判断を戻しません。
 
 ## Severity と approval gate の関係 {#severity-と-approval-gate-の関係}
 
-- `error` severity の Risk は approval grant が無いと plan が `deny` される。
+- `error` severity の Risk は approval record が無いと plan が `deny` される。
   approve すれば `allow` に転じる。
 - `warning` severity の Risk は default policy 次第で `allow` /
   `require-approval` のどちらにもなる。policy pack で fine-tune する。
@@ -209,12 +216,12 @@ Installer API submission 前に解決され、kernel plan / WAL の `pre-commit`
 
 ## Fix kind の意味 {#fix-kind-の意味}
 
-- `safeFix`: kernel / CLI が automatically 提示できる修正案がある (例: literal
+- `safeFix`: Takosumi / CLI が automatically 提示できる修正案がある (例: literal
   を managed secret に置き換える、traffic 配分を rollback 互換に直す)。
 - `requiresPolicyReview`: policy pack / approval flow を経由しないと進めない。
   operator 単独では解消しない。
-- `operatorFix`: operator の手動操作 (publication refresh / implementation config
-  update / collision resolution / RevokeDebt clearance) が要る。
+- `operatorFix`: operator の手動操作 (publication refresh / implementation
+  config update / collision resolution / CleanupBacklog clearance) が要る。
 
 ## RFC 要件 {#rfc-要件}
 
@@ -227,17 +234,17 @@ Installer API submission 前に解決され、kernel plan / WAL の `pre-commit`
 
 関連 architecture notes:
 
-- `docs/reference/architecture/policy-risk-approval-error-model.md` — Risk vs
+- `docs/reference/architecture/approval-model.md` — Risk vs
   Error の境界、 stable id 1-19 (15 reserved) の選定理由、severity / fix kind
   の設計議論
 - `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
   — `actual-effects-overflow` / `rollback-revalidation-required` の WAL 上での
   位置付け
-- `docs/reference/drift-detection.md` — `revoke-debt-created` と observe /
+- `docs/reference/drift-detection.md` — `cleanup-backlog-created` と observe /
   finalize stage の連動
 
 ## 関連ページ
 
 - [Approval Invalidation Triggers](./approval-invalidation.md)
 - [WAL Stages](./wal-stages.md)
-- [RevokeDebt Model](./revoke-debt.md)
+- [CleanupBacklog Model](./revoke-debt.md)

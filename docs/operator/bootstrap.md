@@ -1,14 +1,18 @@
-# Reference Kernel Bootstrap {#operator-bootstrap}
+# Reference Bootstrap {#operator-bootstrap}
 
-このページは reference Takosumi kernel implementation の bootstrap
-を設定します。この implementation では provider binding を `kindAliases` と
+::: info 内部設計メモ
+public contract は [Installer API](../reference/installer-api.md) を参照。[Operator Overview](./index.md) から始めてください。
+:::
+
+このページは reference Takosumi 実装の bootstrap
+を設定します。この実装では kind を実行環境に接続する設定を `kindAliases` と
 reference adapter array (`plugins` option) として `createPaaSApp()` に渡します。
 
 - `kindAliases`: short alias → kind URI の解決 map
 - `plugins`: reference adapter factory の plain array
 
-credential は runtime-agent / operator host 側に置く。 Takosumi-compatible
-implementation は別の implementation binding mechanism を使えます。
+credential は runtime-agent / operator host 側に置く。 Takosumi 互換の
+実装は別の接続方式を使えます。
 
 ## 最小例
 
@@ -39,12 +43,12 @@ const { app } = await createPaaSApp({
 Deno.serve({ port: 8788 }, app.fetch);
 ```
 
-CLI (`takosumi server`) は stock dev/reference-kernel entrypoint です。カスタム
+CLI (`takosumi server`) は stock dev/reference entrypoint です。カスタム
 provider を使うなら TypeScript bootstrap を直接書く。
 
 ## Provider package entrypoints
 
-reference provider adapter factory は per-cloud provider package の named export
+reference provider adapter factory は cloud ごとの provider package の named export
 として公開されます。operator は必要な cloud の package だけを install します。
 
 - `@takos/takosumi-cloudflare-providers`
@@ -109,12 +113,12 @@ const { app } = await createPaaSApp({
 });
 ```
 
-この構成では AppSpec の reference component kind alias を self-host provider に
+この構成では Manifest の reference component kind alias を self-host provider に
 解決します。public ingress を扱う distribution は、`gateway` kind を提供する
 provider adapter を同じ reference adapter array (`plugins` option)
 に追加します。 `selfhostDockerComposeWebServiceProvider` と
 `selfhostSystemdWebServiceProvider` はどちらも `web-service` kind
-を提供します。1 つの operator profile で両方を 有効にする場合は、Space policy /
+を提供します。1 つの operator の設定で両方を有効にする場合は、Space policy /
 provider selector で一意に解決できるようにし
 ます。最小構成では片方だけを選びます。
 

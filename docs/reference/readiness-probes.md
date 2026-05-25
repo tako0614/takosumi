@@ -2,7 +2,7 @@
 
 ## `/readyz` semantic
 
-`/readyz` は kernel control plane が installer / internal lifecycle request と
+`/readyz` は Takosumi control plane が installer / internal lifecycle request と
 runtime-agent dispatch を受け付けられるかを boolean 通知する endpoint。workload
 の public ingress readiness は Exposure health / provider observation 側で扱い、
 `/readyz` の対象ではありません。
@@ -14,11 +14,11 @@ runtime-agent dispatch を受け付けられるかを boolean 通知する endpo
 | `booting`   | `503 Service Unavailable` | 起動中 check のみが未完了  |
 
 response body には `checks` object が含まれます。 `200` は body をそのまま返
-し、 `503` は kernel HTTP API error envelope に probe result を `error.details`
-として埋めて返します。
+し、 `503` は Takosumi HTTP API のエラーレスポンスに probe result を
+`error.details` として埋めて返します。
 
 `503` 時の `error.code` は `readiness_probe_failed`
-([Reference Kernel Route Inventory](./kernel-http-api.md))。
+([Reference Route Inventory](./kernel-http-api.md))。
 
 ## Current operator visibility
 
@@ -44,7 +44,7 @@ response body には `checks` object が含まれます。 `200` は body をそ
 `{ "ok": false, "error": "<message>" }` になり、 top-level result に `reason`
 が追加されます。
 
-`not-ready` 時は `503` で次の error envelope:
+`not-ready` 時は `503` で次のエラーレスポンス:
 
 ```json
 {
@@ -75,7 +75,7 @@ response body には `checks` object が含まれます。 `200` は body をそ
 
 ## Liveness との分離
 
-`/readyz` は readiness のみ。 kernel liveness は `/livez` で扱います。
+`/readyz` は readiness のみ。 Takosumi liveness は `/livez` で扱います。
 
 | Endpoint  | 役割                                 | 失敗時の supervisor 期待動作                               |
 | --------- | ------------------------------------ | ---------------------------------------------------------- |
@@ -83,7 +83,7 @@ response body には `checks` object が含まれます。 `200` は body をそ
 | `/livez`  | process が生存しているか             | process を再起動                                           |
 
 ::: warning `/readyz` を liveness 用途に使うと依存 port の transient failure で
-kernel が無限再起動 loop に陥るため禁止。 supervisor の liveness probe は必ず
+Takosumi が無限再起動 loop に陥るため禁止。 supervisor の liveness probe は必ず
 `/livez`。 :::
 
 ## Reference implementation checks
@@ -93,15 +93,16 @@ kernel が無限再起動 loop に陥るため禁止。 supervisor の liveness 
 
 - `role`: runtime config role と process role の一致
 - `storage`: storage adapter transaction の成功
-- `implementationBindings`: selected implementation binding status。reference
-  kernel では reference adapter count と strict mode を implementation detail として表示する
+- `implementationBindings`: selected binding status。Takosumi reference 実装
+  では reference adapter count と strict mode を implementation detail として
+  表示する
 - `internalApiSecret`: `takosumi-api` / `takosumi-runtime-agent` role では
   `TAKOSUMI_INTERNAL_API_SECRET` が設定されていること
 - `workerDaemon`: `takosumi-worker` role では worker daemon が起動済 + 初回 tick
   完了。起動済だが初回 tick 前は `state: "booting"`
 
 `/readyz` の current wire contract は `checks` object と
-`readiness_probe_failed` error envelope です。Port-level observation worker /
+`readiness_probe_failed` エラーレスポンスです。Port-level observation worker /
 flap suppression / boot timeout code / `ports[]` は operator-facing design model
 として扱います。
 
@@ -111,7 +112,7 @@ flap suppression / boot timeout code / `ports[]` は operator-facing design mode
 
 ### Port-level Design Model
 
-port-level readiness model では、 kernel control-plane process
+port-level readiness model では、 Takosumi control-plane process
 起動時に次の順序で port を bring up します。この節は operator / contributor
 向けの設計語彙です。
 
@@ -127,17 +128,17 @@ storage
 各 port は直前 port が ready に達するまで待機し、自身の ready criterion を
 満たしたら次 port を起こします。
 
-| Port                       | ready criterion                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------------- |
-| `storage`                  | SQL ping (`SELECT 1`) 成功 / migration version が compat range 内                     |
-| `lock-store`               | lock store backend に書き込み + 読み戻し成功                                          |
-| `secret-partition`         | global / tag-specific master passphrase resolver の derive 成功                       |
-| `implementation-bootstrap` | operator-provided `kindAliases` / implementation binding set の parse と重複検査が成功 |
-| `runtime-agent-registry`   | embedded agent (有る場合) の self-enrollment 成功 / external agent registry sync 完了 |
-| `control-plane-listener`   | kernel API listener bind + TLS handshake (有効な場合) 成功                            |
+| Port                       | ready criterion                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------- |
+| `storage`                  | SQL ping (`SELECT 1`) 成功 / migration version が compat range 内                      |
+| `lock-store`               | lock store backend に書き込み + 読み戻し成功                                           |
+| `secret-partition`         | global / tag-specific master passphrase resolver の derive 成功                        |
+| `implementation-bootstrap` | operator-provided `kindAliases` / binding set の parse と重複検査が成功 |
+| `runtime-agent-registry`   | embedded agent (有る場合) の self-enrollment 成功 / external agent registry sync 完了  |
+| `control-plane-listener`   | Takosumi API listener bind + TLS handshake (有効な場合) 成功                           |
 
 port-level 実装では `control-plane-listener` が ready になった時点で `/readyz`
-が `200` を返し、kernel control-plane endpoint が operator ingress / load
+が `200` を返し、Takosumi control-plane endpoint が operator ingress / load
 balancer に組み込まれます。
 
 ### Edge semantics
@@ -189,8 +190,8 @@ port-level design model の値です。
 operator は env (`TAKOSUMI_BOOT_TIMEOUT_<PORT>_MS`) で max wait を伸ばせます
 が、 MTTR が悪化するため default 近傍推奨。
 
-boot timeout で kernel exit する時、 exit code `1` を返し、 stderr に失敗 port
-と最終 `lastError` を書き出します。
+boot timeout で Takosumi exit する時、 exit code `1` を返し、 stderr に失敗
+port と最終 `lastError` を書き出します。
 
 Steady state failure cascade:
 
@@ -199,11 +200,11 @@ Steady state failure cascade:
   fail-closed、 `/readyz` は `not-ready`
 - `secret-partition` 失敗 (master passphrase derive 失敗) →
   implementation-bootstrap 以下が cascade
-- `implementation-bootstrap` 失敗 (implementation binding set parse / duplicate
+- `implementation-bootstrap` 失敗 (binding set parse / duplicate
   provider / alias 解決設定不正) → runtime-agent-registry 以下 cascade。
   dispatch 停止
 - `runtime-agent-registry` 失敗→ control-plane-listener が `not-ready`
-- `control-plane-listener` 失敗→ kernel control-plane endpoint が operator
+- `control-plane-listener` 失敗→ Takosumi control-plane endpoint が operator
   ingress / load balancer から外れる
 
 不変条件:
@@ -216,8 +217,9 @@ Steady state failure cascade:
 
 関連 architecture notes:
 
-- `docs/reference/architecture/operator-boundaries.md` — readiness DAG が kernel
-  core / runtime-agent / control-plane-listener の trust 境界に沿う rationale
+- `docs/reference/architecture/operator-boundaries.md` — readiness DAG が
+  Takosumi core / runtime-agent / control-plane-listener の trust 境界に沿う
+  rationale
 - `docs/reference/architecture/execution-lifecycle.md` — readiness と lifecycle
   phase の interplay、boot recovery 経路の選定背景
 - `docs/reference/architecture/operational-hardening-checklist.md` — readiness

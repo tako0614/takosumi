@@ -1,14 +1,14 @@
-# Operator Build-Service Profile Example {#operator-build-service-profile}
+# ビルドサービス例 {#operator-build-service-profile}
 
-This page is a non-normative operator profile example. It shows one way for an
-operator build service to produce the prepared source handoff described in
-[Prepared Source Handoff](../reference/build-spec.md).
+このページは非規定の operator 設定例です。
+[ビルドサービス境界](../reference/build-spec.md) で説明したビルド済みアーカイブの
+受け渡しを、operator build service がどのように作れるかを示します。
 
-Operators can use this profile when they want a shared, source-level build
-service that feels similar to Takosumi AppSpec authoring. Takosumi core receives
-the prepared source URL and digest produced by the build service.
+operator は、Takosumi Manifest と近い書き味の source-level build service を
+持ちたい場合にこの設定例を採用できます。Takosumi が受け取るのは、build
+service が作ったビルド済みアーカイブの URL と digest だけです。
 
-## Example Input Shape
+## 入力形の例
 
 ```yaml
 apiVersion: v1
@@ -25,57 +25,57 @@ nodes:
     dependsOn: []
 ```
 
-| Field        | Required | Meaning                                      |
-| ------------ | -------- | -------------------------------------------- |
-| `apiVersion` | yes      | Build-service profile version.               |
-| `metadata`   | yes      | Metadata for this build-service input.       |
-| `nodes`      | yes      | Build graph nodes understood by the profile. |
+| Field        | Required | 意味                                     |
+| ------------ | -------- | ---------------------------------------- |
+| `apiVersion` | yes      | build-service profile version。          |
+| `metadata`   | yes      | build-service input の metadata。        |
+| `nodes`      | yes      | profile が解釈する build graph の node。 |
 
-Build node fields are `kind`, `spec`, and `dependsOn`. This `kind` is
-build-service-local vocabulary, not an AppSpec component kind and not a Takosumi
-official type catalog descriptor.
+build node field は `kind`、`spec`、`dependsOn` です。この `kind` は build
+service 内の語彙であり、Manifest の component kind でも対応 kind 一覧の
+定義でもありません。
 
-## Linux Container Node Example
+## Linux container node の例
 
-`linux-container` is an example build node kind. It runs a command inside a
-Linux container image.
+`linux-container` は build node kind の例です。Linux container image の中で
+command を実行します。
 
-| Field        | Required | Meaning                                                      |
-| ------------ | -------- | ------------------------------------------------------------ |
-| `image`      | yes      | Linux container image; immutable references are recommended. |
-| `command`    | yes      | Command string or argv vector run inside the container.      |
-| `workingDir` | no       | Source-root-relative working directory.                      |
-| `env`        | no       | Non-secret env allowed by build-service policy.              |
-| `network`    | no       | Network mode allowed by build-service policy.                |
+| Field        | Required | 意味                                                       |
+| ------------ | -------- | ---------------------------------------------------------- |
+| `image`      | yes      | Linux container image。immutable reference を推奨。        |
+| `command`    | yes      | container 内で実行する command string または argv vector。 |
+| `workingDir` | no       | source-root-relative working directory。                   |
+| `env`        | no       | build-service policy が許可する non-secret env。           |
+| `network`    | no       | build-service policy が許可する network mode。             |
 
-`workingDir` uses build-service path grammar, not AppSpec source-file-reference
-grammar. Omit it or set it to `.` to run from the source root. Otherwise it is a
-POSIX relative directory path under the source root: it must not start with `/`,
-must not contain NUL, empty segments, `.`, or `..`, and its resolved realpath
-must stay under the source root.
+`workingDir` は build-service path grammar を使います。Manifest の
+source-file-reference grammar ではありません。省略するか `.` にすると source
+root で実行します。それ以外は source root 配下の POSIX relative directory path
+です。`/` で始まらず、NUL、空 segment、`.`、`..` を含まず、resolved realpath が
+source root 内に残る必要があります。
 
-The profile can define whether command strings are shell commands, argv vectors,
-or both; which environment variables are allowed; whether network is available;
-how cache mounts work; and what provenance is retained.
+profile は、command string を shell command として扱うか argv vector として扱う
+か、許可する environment variable、network の有無、cache mount、保持する
+provenance を定義できます。
 
-## Handoff Responsibility
+## Handoff の責務
 
-A build service using this profile:
+この profile を使う build service は次を行います。
 
-- reads the source-root `.takosumi.yml` as immutable input
-- runs build nodes in dependency order
-- ensures the prepared source archive still contains the same `.takosumi.yml`
-  bytes at the archive root
-- includes runtime files referenced by AppSpec kind-specific `spec` fields
-- computes the prepared archive payload digest
-- calls the Installer API with `source.kind: "prepared"`
+- source-root の `.takosumi.yml` を immutable input として読む。
+- build node を dependency order で実行する。
+- ビルド済みアーカイブの root に同じ `.takosumi.yml` bytes が残るようにす
+  る。
+- Manifest の kind 固有 `spec` field が参照する runtime file を含める。
+- ビルド済みアーカイブの payload digest を計算する。
+- `source.kind: "prepared"` で Installer API を呼ぶ。
 
-Build failure, cache invalidation, container image verification, secret mounts,
-network policy, and provenance records are build-service responsibilities.
-Installer apply still validates AppSpec, descriptor-selected source file paths,
-prepared archive safety, and `source.digest` before provider side effects.
+build failure、cache invalidation、container image verification、secret mount、
+network policy、provenance record は build service の責務です。Installer apply
+はリソースの作成・更新前に Manifest、kind の定義が指定する source file path、
+ビルド済みアーカイブの安全性、`source.digest` を検証します。
 
-## Example
+## 例
 
 ```yaml
 # .takosumi.yml
@@ -105,6 +105,6 @@ nodes:
     dependsOn: []
 ```
 
-The build service turns the resulting source tree into a prepared source payload
-and submits it to the Installer API as described in
-[Prepared Source Handoff](../reference/build-spec.md).
+build service は結果の source tree をビルド済みアーカイブにし、
+[ビルドサービス境界](../reference/build-spec.md) の通り Installer API
+に渡します。

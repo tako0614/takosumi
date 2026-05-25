@@ -1,12 +1,13 @@
-# Reference GroupHead Rollout {#grouphead-rollout}
+# Reference RoutingPointer Rollout {#grouphead-rollout}
 
-This page describes reference routing implementation evidence. Public Takosumi
-rollback authority remains Installation `currentDeploymentId`; GroupHead and
-ActivationSnapshot are not public core entities.
+このページは reference routing implementation の Deployment の記録を説明します。
+public な Takosumi rollback authority は Installation の `currentDeploymentId`
+に留まります。RoutingPointer と TrafficSnapshot は public core entity ではありま
+せん。
 
-GroupHead は「ある group の current ActivationSnapshot」を pin する
-control-plane pointer です。provider data plane に同期された ActivationSnapshot
-assignments が runtime request の宛先になり、GroupHead 自体は request-time
+RoutingPointer は「ある group の current TrafficSnapshot」を pin する
+control-plane pointer です。provider data plane に同期された TrafficSnapshot
+assignments が runtime request の宛先になり、RoutingPointer 自体は request-time
 router ではありません。`currentDeploymentId` は steady state / full rollout の
 primary Deployment projection で、canary / shadow の split routing authority
 ではありません。pointer の前進 / 巻き戻しが rollout 本体です。
@@ -16,29 +17,29 @@ primary Deployment projection で、canary / shadow の split routing authority
 identity は `(spaceId, groupId)` の tuple で Space-local。
 
 - `groupId` は同 Space 内で unique
-- 異 Space に同じ `groupId` があっても別 GroupHead で、 cross-Space pointer
+- 異 Space に同じ `groupId` があっても別 RoutingPointer で、 cross-Space pointer
   共有は起きない
-- GroupHead は deployment / activation 自体ではなく pointer
+- RoutingPointer は deployment / activation 自体ではなく pointer
 
-## GroupHead レコードスキーマ {#grouphead-record-schema}
+## RoutingPointer レコードスキーマ {#grouphead-record-schema}
 
 ```yaml
-GroupHead:
+RoutingPointer:
   spaceId: space:... # 所属 Space
   groupId: group_... # Space 内で unique
   currentDeploymentId: dep_... # primary/full-rollout deployment projection
-  currentActivationSnapshotId: act_... # reference routing evidence
+  currentTrafficSnapshotId: act_... # reference routing evidence
   rolloutState: <enum: 7 値> # 後述
     movedAt: 2026-... # 最後に pointer が動いた時刻
 ```
 
-`currentActivationSnapshotId` が指す ActivationSnapshot の assignments が
+`currentTrafficSnapshotId` が指す TrafficSnapshot の assignments が
 provider data plane の Exposure / traffic assignment に反映されます。
-`currentDeploymentId` は UI、account-plane projection、rollback target のための
+`currentDeploymentId` は UI、account layer projection、rollback target のための
 primary Deployment pointer です。canary / shadow 中は previous / candidate /
-mirror の deployment ids が ActivationSnapshot assignments に現れるため、
+mirror の deployment ids が TrafficSnapshot assignments に現れるため、
 `currentDeploymentId` 単体を routing authority として扱いません。full rollout
-確定時は `currentDeploymentId` と `currentActivationSnapshotId` が同じ primary
+確定時は `currentDeploymentId` と `currentTrafficSnapshotId` が同じ primary
 Deployment を表すように収束します。
 
 ## Rollout 状態機械 (closed v1 enum, 7 値) {#rollout-state-machine-closed-v1-enum-7}
@@ -67,7 +68,7 @@ idle | preparing | canary-active | shadow-active
 - `idle → preparing`: 新 deployment が approve されて apply phase が
   `pre-commit` に到達したとき。
 - `preparing → canary-active`: canary 配分の 1 段階目を開始したとき。
-  `currentActivationSnapshotId` は split assignment を持つ新 ActivationSnapshot
+  `currentTrafficSnapshotId` は split assignment を持つ新 TrafficSnapshot
   に切り替わる。`currentDeploymentId` は full rollout 確定まで primary
   projection として残り、candidate は assignments に記録する。
 - `preparing → shadow-active`: shadow rollout を選択したとき。
@@ -103,9 +104,9 @@ canary は traffic split を closed な比率列で進めます。
 - v1 default 比率は **5% → 25% → 100%** の 3 step。 policy pack で step 列を
   override できますが、 step 列は OperationPlan に焼き付くため途中での ad-hoc
   比率編集は approval invalidation の effect-detail change trigger を引きます。
-- 各 step 昇格は ExposureHealth / ActivationObservation が pass したときのみ進
+- 各 step 昇格は IngressHealth / TrafficObservation が pass したときのみ進
   みます。kernel は closed health enum と policy evaluation を固定し、具体的な
-  probe は provider / operator / kind descriptor 側が定義します。
+  probe は provider / operator / kind schema 側が定義します。
 - candidate release が queue に新 DataContract を出し、 preview 先 consumer が
   primary release のまま古い contract しか受理しない場合、 event subscription
   switch preview は `queue_data_contract_mismatch_requires_policy` で
@@ -126,18 +127,18 @@ shadow は production traffic を新 deployment に複製送付しますが prod
 
 - production request / response は previous pointer から同期された provider data
   plane assignment (前 deployment) が処理し、client に返る
-- shadow 先 (新 deployment) に同 request を mirror。結果は ObservationSet に
+- shadow 先 (新 deployment) に同 request を mirror。結果は ObservationState に
   記録され、 production 側応答や副作用は変えない
 - drift 検出時は [Drift Detection](./drift-detection.md) flow。 severity `error`
   なら operator gate で `rolling-back` に遷移
-- shadow rollout は副作用 surface を持つ AppSpec を受け付けない。 `outputs` /
+- shadow rollout は副作用 surface を持つ manifest を受け付けない。 `outputs` /
   `queue` delivery path / DB semantic write を含む shadow plan は
   `shadow-side-effects:forbidden` で resolution 時に `deny` (operator approval
   でも override 不可)
 - read-side / invocation-side いずれも mirror。 shape 単位で適用範囲が違う場
   合は OperationPlan が固定
 
-## GroupHead 更新のシリアライズ {#grouphead-update-serialization}
+## RoutingPointer 更新のシリアライズ {#grouphead-update-serialization}
 
 pointer 前進 / 巻き戻し / state transition は同 `(spaceId, groupId)` で直列化
 されます。
@@ -151,24 +152,24 @@ pointer 前進 / 巻き戻し / state transition は同 `(spaceId, groupId)` で
 
 ## 監査イベント {#audit-events}
 
-GroupHead 関連の audit event は以下を発行します
+RoutingPointer 関連の audit event は以下を発行します
 ([Audit Events](./audit-events.md))。
 
-- `group-head-moved`: pointer が前進した (`currentDeploymentId` または
-  `currentActivationSnapshotId` が変わった) ときに記録。
+- `routing-pointer-moved`: pointer が前進した (`currentDeploymentId` または
+  `currentTrafficSnapshotId` が変わった) ときに記録。
 - `rollout-started`: `idle → preparing` または
   `preparing → canary-active /
   shadow-active` の遷移時。
 - `rollout-completed`: `full-rollout → idle` の遷移時。
 - `rollout-rolled-back`: `rolling-back → rolled-back` の遷移時。
 
-各 event payload は `groupId` / 旧新 deploymentId / 旧新 ActivationSnapshotId /
+各 event payload は `groupId` / 旧新 deploymentId / 旧新 TrafficSnapshotId /
 `rolloutState` 旧新を保持します。
 
 ## Future scope {#out-of-v1-scope}
 
 - blue-green deploy は `canary-active` の最終 step (100% 切替) を replace-only
-  mutation で表現し、旧側は ObservationSet 上の watcher として `observe`
+  mutation で表現し、旧側は ObservationState 上の watcher として `observe`
   監視する。
 - 複数 group の同時 coordinated rollout は future scope。current v1 は group
   単位で independent に進める。
@@ -183,8 +184,8 @@ GroupHead 関連の audit event は以下を発行します
 
 ## 関連アーキテクチャ {#related-architecture-notes}
 
-- `docs/reference/architecture/exposure-activation-model.md` — GroupHead pointer
-  と ActivationSnapshot / Exposure の関係、canary / shadow split 規則の議論
+- `docs/reference/architecture/ingress-routing.md` — RoutingPointer pointer
+  と TrafficSnapshot / Exposure の関係、canary / shadow split 規則の議論
 - `docs/reference/architecture/execution-lifecycle.md` — rollout state machine
   の閉じ方と v1 範囲を blue-green に広げない判断
 - `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`

@@ -14,7 +14,7 @@ export interface GatewayListener {
 export interface GatewayRoute {
   /** Listener name from `listeners`. */
   readonly listener: string;
-  /** HTTP path prefix, such as `/` or `/api`. */
+  /** HTTP path prefix, such as `/` or `/api`. Duplicate route and segment-boundary checks are descriptor semantic validation. */
   readonly path: string;
   /** Local listen binding name that supplies the upstream endpoint. */
   readonly to: string;

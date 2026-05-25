@@ -1,12 +1,11 @@
 # Object モデル {#object-model}
 
-This page describes the reference implementation internal graph. Portable
-Takosumi compatibility remains AppSpec / Installation / Deployment plus the
-Installer API. Object records are retained implementation evidence, not public
-core entities.
+::: info 内部設計メモ
+public contract は [Installer API](../installer-api.md) を参照。
+:::
 
-Object は reference kernel graph の internal entity である。すべての Object は
-厳密に 1 つの Space に属する。public な AppSpec `components` entry は Object
+Object は reference Takosumi graph の internal entity である。すべての Object は
+厳密に 1 つの Space に属する。public な manifest `components` entry は Object
 intent となり、その後 resolved な Object になる。
 
 ## Space で qualify された identity {#space-qualified-identity}
@@ -34,11 +33,11 @@ managed:
   Takosumi may create, update, replace, delete.
 
 generated:
-  Created by a Link, Exposure, DataAsset transform, composite target, or operation.
+  Created by a Link, Exposure, asset transform, composite target, or operation.
   Must carry owner, reason, delete policy, and deterministic identity.
 
 external:
-  Owned outside Takosumi. Takosumi may verify, observe, link, and request grants.
+  Owned outside Takosumi. Takosumi may verify, observe, link, and request access.
   Takosumi must not create or delete it.
 
 operator:
@@ -72,7 +71,7 @@ Object:
 
 ```yaml
 GeneratedObject:
-  address: generated:link_api_DATABASE_URL/grant
+  address: generated:link_api_DATABASE_URL/authorization
   owner: link_api_DATABASE_URL
   reason: link-materialization
   deterministicId: sha256:...
@@ -101,14 +100,14 @@ revoke 参加は lifecycle class で制限される。`external-source` と
 
 外部 cleanup が必要で外部システムが revoke を reject または ack できなかった
 とき、link の owner は [Drift Detection](../drift-detection.md) に従って
-`RevokeDebt` record を queue し、object は debt が clear されるまで `debt` state
+`CleanupBacklog` record を queue し、object は debt が clear されるまで `debt` state
 に入る。
 
 ## Revoke 参加マトリクス {#revoke-participation-matrix}
 
 行は object の lifecycle class、列は object を tear down する際に関わる 4 つの
 operation。`yes` は許可、`gen-only` は object 自身ではなく generated child
-にのみ許可、`no` は禁止、`debt-on-fail` は外部 cleanup の失敗が `RevokeDebt` を
+にのみ許可、`no` は禁止、`debt-on-fail` は外部 cleanup の失敗が `CleanupBacklog` を
 queue するかどうかを表す。
 
 | Lifecycle class | delete             | revoke             | detach       | debt-on-fail |

@@ -93,10 +93,10 @@ export type ListenSourceRef = ComponentPublicationRef | ExternalPublicationRef;
  *               (so `{ url, id }` becomes `${PREFIX}_URL`, `${PREFIX}_ID`);
  *   - `"secret-env"` — expand the material into env vars whose sensitive
  *               values remain secretRef-mediated;
- *   - `"mount"` — mount the material at the declared filesystem path
- *               (used for secret bundles, etc.);
- *   - `"upstream"` / `"target"` — pass the material to the implementation as an
- *               upstream target descriptor.
+ *   - `"config-mount"` — mount the material at the declared filesystem path
+ *               or expose it as a config object;
+ *   - `"upstream"` — pass HTTP endpoint material as an upstream target
+ *               descriptor.
  *
  * Operators may publish additional projection families in descriptor metadata;
  * the parser accepts any non-empty string here so operator-defined shapes are
@@ -107,9 +107,8 @@ export type ListenSourceRef = ComponentPublicationRef | ExternalPublicationRef;
 export type MaterialShape =
   | "env"
   | "secret-env"
-  | "mount"
+  | "config-mount"
   | "upstream"
-  | "target"
   | (string & Record<never, never>);
 
 /**
@@ -132,11 +131,13 @@ export interface PublishOptions {
  *                Space-visible external publication path
  *                (`publisher.area.name`).
  *   - `as`     — the shape the material should take in this component's
- *                runtime (env / mount / upstream / operator-defined).
+ *                runtime (env / secret-env / config-mount / upstream /
+ *                operator-defined).
  *   - `prefix` — for `as: env`, the prefix used to derive env var names
  *                (e.g. `prefix: DB` + `{ url }` → `DB_URL`).
- *   - `mount`  — for `as: mount`, the filesystem path inside the
- *                component runtime where the material is mounted.
+ *   - `mount`  — for path-based projections such as `as: config-mount`, the
+ *                filesystem path inside the component runtime where the material
+ *                is mounted.
  *   - `required` — for external publication refs, fail apply when the
  *                  publication path is absent. Same-AppSpec refs are always
  *                  required by parser/topology validation.
@@ -160,7 +161,7 @@ export interface Component {
   /**
    * Local bindings this component consumes. Each binding names its source
    * with `from` and controls how the material is surfaced to this component's
-   * runtime (env / mount / upstream / operator-defined).
+   * runtime (env / secret-env / config-mount / upstream / operator-defined).
    */
   readonly listen?: Readonly<Record<BindingName, ListenOptions>>;
   readonly spec?: JsonObject;

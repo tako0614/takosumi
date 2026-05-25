@@ -1,51 +1,53 @@
 # バックアップとリストア {#backup-and-restore}
 
-operator self-host deployment 向け Takosumi v1 backup / restore プロトコル。
-backup 必須の storage record、regenerable で skip 可能な record、on-disk な
-backup フォーマット、point-in-time 整合性 invariant、audit chain
-整合性を保つ順序付き restore 手順を定義する。
+operator self-host deployment 向けの reference backup / restore profile。
+Takosumi core の portable portability surface は Installation / Deployment、
+source identity、`manifestDigest`、non-secret outputs、Deployment の記録
+の可用性で説明します。このページは current reference operator がその surface
+を復元する ために保存する logical record set、backup フォーマット、point-in-time
+整合性 invariant、audit chain 整合性を保つ順序付き restore 手順を説明します。
 
-protocol は logical record stream を扱う。snapshot は kernel の storage
-抽象から取得する。operator は冗長性のために SQL / object store / filesystem
+protocol は logical record stream を扱う。snapshot は Takosumi の storage 抽象
+から取得する。operator は冗長性のために SQL / object store / filesystem
 level の物理 backup を下に重ねてよいが、Takosumi 適合な restore はここで定義する
 logical path を通る。
 
 ## Backup のスコープ {#backup-scope}
 
-storage record は 2 クラスに分割される: kernel を回復するために **backup 必須**
-な critical record と、 restore 後に kernel が再構成する **regenerable** な
-record。
+reference storage record は 2 クラスに分割される: reference operator が復元に
+必要とする critical record と、 restore 後に再構成する **regenerable** な
+record。compatible operator は同じ table / record names を使う必要はありません。
 
 ### Critical (backup 必須) {#critical-backup-required}
 
 | Record                         | Why critical                                                                      |
 | ------------------------------ | --------------------------------------------------------------------------------- |
-| `ResolutionSnapshot`           | Immutable plan input; required to replay the WAL.                                 |
-| `DesiredSnapshot`              | Operator-authored intent; cannot be reconstructed from runtime state.             |
-| `ActivationSnapshot`           | Records which Resolution is currently active per Space.                           |
+| `ResolvedPlan`           | Immutable plan input; required to replay the WAL.                                 |
+| `TargetState`              | Operator-authored intent; cannot be reconstructed from runtime state.             |
+| `TrafficSnapshot`           | Records which Resolution is currently active per Space.                           |
 | `OperationJournal` (WAL)       | Idempotency tuples and effect digests; without this, replay diverges.             |
-| `RevokeDebt`                   | Outstanding rollback obligations; loss leaks effects.                             |
+| `CleanupBacklog`                   | Outstanding rollback obligations; loss leaks effects.                             |
 | `Approval`                     | Bound `approvedEffects` for in-flight and historical operations.                  |
 | `AuditLog`                     | Hash-chained event log; loss breaks chain verification.                           |
 | Secret partition (encrypted)   | Operator-managed master-key-encrypted secret material.                            |
 | Operator implementation config | Which kind aliases / provider implementations / connector inventory were visible. |
-| `DataAssetRecord` metadata     | Optional DataAsset extension metadata needed for retention / replay.              |
+| `assetRecord` metadata     | Optional asset extension metadata needed for retention / replay.              |
 
-これらが集合として v1 の **backup set** を構成する。いずれかの行を省略する v1
-backup は非適合。 reserved な将来の record は、対応する RFC
-が受理されたときにのみ必須となる。
+これらが集合として current reference profile の **backup set** を構成する。 別
+operator profile は、同等の Installation / Deployment restore semantics
+を満たす別の storage layout と backup set を定義できます。
 
-operator が DataAsset extension を mount する場合、logical backup は
-`DataAssetRecord` metadata を含む。object store bytes は同じ backup point に対応
+operator が asset extension を mount する場合、logical backup は
+`assetRecord` metadata を含む。object store bytes は同じ backup point に対応
 する physical backup または content-addressed export で保全する。
 
 ### Regenerable records {#regenerable-backup-not-required}
 
 | Record                             | How regenerated                                                            |
 | ---------------------------------- | -------------------------------------------------------------------------- |
-| `ObservationSet` (current state)   | Recomputed by the next observe phase against runtime-agent describe.       |
-| `DriftIndex`                       | Recomputed from `ObservationSet` and the active `ResolutionSnapshot`.      |
-| `PublicationMaterialization` cache | Re-derived from `ResolutionSnapshot` and managed objects.                  |
+| `ObservationState` (current state)   | Recomputed by the next observe phase against runtime-agent describe.       |
+| `DriftIndex`                       | Recomputed from `ObservationState` and the active `ResolvedPlan`.      |
+| `PublicationMaterialization` cache | Re-derived from `ResolvedPlan` and managed objects.                  |
 | Generated object cache             | Re-rendered from link projection rules and source publications.            |
 | `ObservationHistory` (opt-in)      | Operator-configurable; treated as regenerable unless the operator pins it. |
 
@@ -55,10 +57,10 @@ operator は restore 後の warm-up を速めるために regenerable record を
 
 ## Backup フォーマット {#backup-format}
 
-logical export は kernel 内部 JSON の単一 multi-record stream として生成される。
+logical export は Takosumi 内部 JSON の単一 multi-record stream として生成される。
 各 record は次を含む。
 
-- `spaceId` —所有 Space ID。 Space を跨ぐ record (audit chain global、operator
+- `spaceId` — 対象 Space ID。Space を跨ぐ record (audit chain global、operator
   implementation config evidence) は予約値 `space:_global` を使う。
 - `id` — [Resource IDs](./resource-ids.md) に従う resource ID。
 - `kind` — record の kind (例: `resolution-snapshot`、`journal-entry`)。
@@ -70,8 +72,8 @@ stream は人間可読な JSON で、1 行 1 record。 `chainRef` が常に stre
 record を後方参照するよう順序付けされる。 restore は stream を順次読み、chain
 を進みながら検証する。
 
-フォーマットは kernel major version 内で安定。public restore flow は cross-major
-restore を reject する。cross-major recovery が必要な場合は release-specific /
+フォーマットは Takosumi major version 内で安定。public restore flow は
+cross-major restore を reject する。cross-major recovery が必要な場合は release-specific /
 private recovery tooling で same-major export を作ってから、この restore
 contract に渡す。
 
@@ -127,15 +129,15 @@ restore は 6 ステップの sequence。各ステップは hard gate
 
 ### 1. ストレージの初期化 {#1-storage-initialization}
 
-ターゲット storage は空、または backup を生成した kernel と同じ schema version
-で初期化されている。 operator は restore 前に schema version を確認する。
-cross-major restore はこのステップで reject される。target は backup
-生成元と同じ kernel major / schema range に属していなければならない。
+ターゲット storage は空、または backup を生成した Takosumi と同じ schema version
+で初期化されている。operator は restore 前に schema version を確認する。
+cross-major restore はこのステップで reject される。target は backup 生成元と
+同じ Takosumi major / schema range に属していなければならない。
 
 ### 2. Secret master key の注入 {#2-secret-master-key-injection}
 
 operator は record ingest の前に master key (または master key 派生材料)
-を供給する。鍵は operator の secret backend が保持し、 restore ツールは kernel
+を供給する。鍵は operator の secret backend が保持し、restore ツールは Takosumi
 が runtime で使うのと同じ factory 経由で読み込む。
 
 ### 3. Logical import {#3-logical-import}
@@ -144,12 +146,12 @@ restore ツールは export stream を依存順にトランザクションで in
 
 1. operator implementation config evidence。
 2. `Approval` record。
-3. `DesiredSnapshot` record。
-4. `ResolutionSnapshot` record。
-5. `ActivationSnapshot` record。
+3. `TargetState` record。
+4. `ResolvedPlan` record。
+5. `TrafficSnapshot` record。
 6. `OperationJournal` (WAL) entry、per-Space WAL cursor 順。
-7. `RevokeDebt` record。
-8. `DataAssetRecord` metadata。
+7. `CleanupBacklog` record。
+8. `assetRecord` metadata。
 9. `AuditLog` entry。
 10. secret partition entry (暗号化 blob)。
 
@@ -177,12 +179,12 @@ WAL に記録された in-flight operation を reconcile する。 terminal stag
 cross-process lock store は in-flight operation の metadata から再構築される。
 再構築が完了するまで新規 operation は dispatch されない。
 
-### 6. ActivationSnapshot の再評価 {#6-activationsnapshot-reevaluation}
+### 6. TrafficSnapshot の再評価 {#6-activationsnapshot-reevaluation}
 
 backup の activation state は authoritative な intent として復元されるが、
 object ごとの health (`observe` 出力) は backup から復元 **されない** (これは
 regenerable)。 restore 後の最初の observe tick が runtime-agent describe から
-`ObservationSet` と `DriftIndex` を再構築する。
+`ObservationState` と `DriftIndex` を再構築する。
 
 最初の observe tick が完了するまで、復元された object の `LifecycleStatus` は
 `unknown` として報告される。 operator は復元する object 数に比例した warm-up
@@ -190,9 +192,9 @@ window を見込むべき。
 
 ## Restore 後の挙動 {#post-restore-behavior}
 
-### DesiredSnapshot の immutability {#desiredsnapshot-immutability}
+### TargetState の immutability {#desiredsnapshot-immutability}
 
-`DesiredSnapshot` record は restore 上で immutable。 backup 時点でまだ snapshot
+`TargetState` record は restore 上で immutable。 backup 時点でまだ snapshot
 化されていなかった desired state 変更は保存されない。 operator は再 authoring
 し再 deploy する。
 
@@ -203,18 +205,19 @@ in-flight operation はステップ 5 で記録された recovery mode を通じ
 `recoveryMode = compensate` をどう扱うかは
 [Provider Implementations](./providers.md) が定める。
 
-### GroupHead と canary の状態 {#grouphead-and-canary-state}
+### RoutingPointer と canary の状態 {#grouphead-and-canary-state}
 
-`GroupHead` pointer と canary / shadow rollout state は `ActivationSnapshot`
+`RoutingPointer` pointer と canary / shadow rollout state は `TrafficSnapshot`
 の一部で、 backup 時点の通りに復元される。 30% で rollout 中だった canary は
 restore 後も 30% 状態のままで、 rollout state machine は次の deploy
 でその点から続行する。
 
 ## Restore の境界 {#restore-boundary}
 
-restore は **同じ kernel major version 内で保証される**。cross-major restore は
-release-specific private runbook と検証済み evidence を要求する。restore
-ツールは直接 restore を止め、closed な `failed_precondition` エラーを発行する。
+restore は **同じ Takosumi major version 内で保証される**。cross-major restore
+は release-specific private runbook と検証済みの記録を要求する。restore ツール
+は直接 restore を止め、closed な `failed_precondition` エラーレスポンスを発行
+する。
 
 ## オペレーター surface {#operator-surface}
 
@@ -226,12 +229,12 @@ surface が実装され [CLI](./cli.md) で文書化されるまでは、内部 
 - backup は上述の point-in-time lock 下で export stream を生成する。
 - restore は上記 6 ステップのフローを、初期化された空 storage に対して実行する。
 
-両コマンドとも Installer bearer や DataAsset writer token ではなく operator
+両コマンドとも Installer bearer や asset writer token ではなく operator
 bearer 認証を要求する。 両コマンドとも下記 audit event を通じて進捗を記録する。
 
 ## 監査イベント {#audit-event}
 
-backup と restore は runtime kernel event と同じ hash chain に専用 audit event
+backup と restore は runtime Takosumi event と同じ hash chain に専用 audit event
 を発行する。
 
 | Event               | Emitted at                                                      |

@@ -1,13 +1,14 @@
 # Reference Runtime-Agent Execution Surface {#runtime-agent-api}
 
 runtime-agent は reference Takosumi topology で使う execution host です。
-operator が cloud / OS credential を握る host で起動し、kernel の下流 execution
-surface として connector-local selector 単位の lifecycle envelope を受けます。
+operator が cloud / OS credential を握る host で起動し、Takosumi の下流
+execution surface として connector-local selector 単位の lifecycle リクエストを
+受けます。
 
 このページは reference runtime-agent topology の HTTP surface を記述します。
-Takosumi public conformance surface は AppSpec / Installation / Deployment と
-Installer API です。別 implementation はこの route set ではなく、同じ AppSpec
-resolution、retained evidence、lifecycle outcome を満たす別の execution boundary
+Takosumi public conformance surface は manifest / Installation / Deployment と
+Installer API です。別 implementation はこの route set ではなく、同じ manifest
+resolution、Deployment の記録、lifecycle outcome を満たす別の execution boundary
 を持てます。
 
 逆方向の制御 (enroll / heartbeat / lease / drain / gateway manifest) は
@@ -20,29 +21,30 @@ resolution、retained evidence、lifecycle outcome を満たす別の execution 
 | ------------ | ---------------------- | ----------------------------------- | ------------------------------- |
 | Agent bearer | `TAKOSUMI_AGENT_TOKEN` | `/v1/lifecycle/*`、`/v1/connectors` | `Authorization: Bearer <token>` |
 
-`TAKOSUMI_AGENT_TOKEN` は kernel と runtime-agent が共有する shared secret。
+`TAKOSUMI_AGENT_TOKEN` は Takosumi と runtime-agent が共有する shared secret。
 未設定起動の agent は lifecycle / connectors request 全部に 401。 `/v1/health`
 のみ無認証で orchestrator probe (Kubernetes / Nomad / docker healthcheck) を想
 定。
 
 prepared source を読む connector には、reference dispatcher /
-operator-configured kernel が `LifecycleApplyRequest.preparedSource` に resolved
-source snapshot の runtime-agent transport locator を載せて渡す場合があります。
+operator-configured Takosumi が `LifecycleApplyRequest.preparedSource` に
+resolved source view の runtime-agent transport locator を載せて渡す場合があり
+ます。
 `workingDirectory` は co-located / operator-local dispatch 用の transport
 locator で、Installer API の `source.kind: "local"` ではありません。portable
 remote agent には `url` + `digest` を渡します。prepared handoff では Installer
 API は引き続き `source.kind: "prepared"` を受け取ります。runtime file path
-は常に AppSpec の kind-specific `spec` にある source-root-relative path です。
+は常に manifest の kind-specific `spec` にある source-root-relative path です。
 
-operator が optional DataAsset extension として `/v1/artifacts` を mount
-しており、DataAsset bytes 取得が必要な connector には、 reference dispatcher /
-operator-configured kernel が `LifecycleApplyRequest.artifactStore` に `baseUrl`
+operator が optional asset extension として `/v1/artifacts` を mount
+しており、asset bytes 取得が必要な connector には、 reference dispatcher /
+operator-configured Takosumi が `LifecycleApplyRequest.artifactStore` に `baseUrl`
 と `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を載せて渡す場合があります。この
-operator-mounted DataAsset extension は agent token と別の credential family を
-使い、scope は optional DataAsset extension の `GET /v1/artifacts/:hash` のみ
+operator-mounted asset extension は agent token と別の credential family を
+使い、scope は optional asset extension の `GET /v1/artifacts/:hash` のみ
 ([Authentication](./kernel-http-api.md#authentication))。
-`artifactStore.baseUrl` は operator-owned artifact endpoint を指してよく、kernel
-Installer API process が blob data plane になることを要求しません。
+`artifactStore.baseUrl` は operator-owned artifact endpoint を指してよく、
+Takosumi Installer API process が blob data plane になることを要求しません。
 
 ## エンドポイント {#endpoints}
 
@@ -76,8 +78,8 @@ interface LifecycleApplyRequest {
   readonly operationRequest?: PlatformOperationRequest;
   readonly metadata?: JsonObject; // request id, audit trail 等
   readonly artifactStore?: {
-    // Optional DataAsset fetch endpoint (`/v1/artifacts`) when the operator
-    // enables the DataAsset extension.
+    // Optional asset fetch endpoint (`/v1/artifacts`) when the operator
+    // enables the asset extension.
     readonly baseUrl: string; // 例: "https://artifacts.operator.example.com/v1/artifacts"
     readonly token: string; // TAKOSUMI_ARTIFACT_FETCH_TOKEN
   };
@@ -98,7 +100,7 @@ interface LifecycleApplyResponse {
 }
 ```
 
-`handle` は reference kernel の retained implementation state に Deployment
+`handle` は Takosumi reference 実装の deploy record state に Deployment
 と紐づけて persist され、以降の `destroy` / `describe` の key になります。
 
 `spaceId` は caller Installation の Space を表します。runtime-agent connector は
@@ -106,9 +108,9 @@ interface LifecycleApplyResponse {
 isolation boundary として扱います。別 Space の request で同じ handle を
 再利用してはいけません。
 
-WAL-backed lifecycle apply では kernel が internal `PlatformContext.operation`
+WAL-backed lifecycle apply では Takosumi が internal `PlatformContext.operation`
 から `idempotencyKey` / `operationRequest` / `metadata.takosumiOperation` を
-envelope に転送します。connector は外部 API が idempotency / client request
+リクエストに転送します。connector は外部 API が idempotency / client request
 token を受け付ける場合、この internal WAL-derived `idempotencyKey` をそのまま
 渡します。Installer API には caller-supplied idempotency header はなく、caller
 は `expected` guard だけを使います。
@@ -175,8 +177,8 @@ interface LifecycleCompensateResponse {
 
 `compensate` は commit 済み effect を逆再生する connector-native operation で
 す。専用 operation が無い connector は handle-keyed `destroy` に fallback。
-完全に逆再生できない場合は `revokeDebtRequired: true` を返し、 kernel が
-RevokeDebt として保持します。
+完全に逆再生できない場合は `revokeDebtRequired: true` を返し、 Takosumi が
+CleanupBacklog として保持します。
 
 ### `POST /v1/lifecycle/describe`
 
@@ -203,7 +205,7 @@ interface LifecycleDescribeResponse {
 
 `describe` は connector の read-only API (`HeadBucket` / `DescribeService` /
 `docker inspect` / `systemctl is-active` 等) で実体を毎回問い合わせる方式。
-kernel apply 時の outputs に依存しないので、 runtime-agent restart 後も同じ結
+Takosumi apply 時の outputs に依存しないので、 runtime-agent restart 後も同じ結
 果を返せる必要があります。
 
 ### `POST /v1/lifecycle/verify` {#post-v1-lifecycle-verify}
@@ -263,7 +265,7 @@ credential refresh は opt-in。
 
 ## Lifecycle status の状態機械 {#lifecycle-status-state-machine}
 
-`LifecycleStatus` は reference runtime-agent envelope v1 の中で 5 値の closed
+`LifecycleStatus` は reference runtime-agent レスポンス v1 の中で 5 値の closed
 enum です。public Installation / Deployment status は
 [Installer API](./installer-api.md#entity-fields) が正本です。
 
@@ -299,7 +301,7 @@ apply ─────────────► running
                    unknown
 ```
 
-- `apply` 成功は `running` に遷移。失敗は `connector_failed` を返し kernel 側で
+- `apply` 成功は `running` に遷移。失敗は `connector_failed` を返し Takosumi 側で
   `error` projection。
 - `destroy` 成功は `missing` に遷移。以降 `describe` も `missing` を返します。
 - `describe` は実体 API を毎回叩くので 5 値いずれにも遷移し得ます。 `unknown` は
@@ -308,10 +310,10 @@ apply ─────────────► running
   reachability の health probe に専念し、結果は
   `LifecycleVerifyResponse.results[].ok` に集約します。
 
-## エラー envelope {#error-envelope}
+## エラーレスポンス {#error-envelope}
 
-reference runtime-agent envelope の failure は `LifecycleErrorBody` を 4xx / 5xx
-で返します。public Installer API の error envelope は
+reference runtime-agent のエラーレスポンスは `LifecycleErrorBody` を 4xx / 5xx
+で返します。public Installer API のエラーレスポンスは
 [Installer API](./installer-api.md#error-envelope) が正本です。
 
 ```ts
@@ -323,22 +325,22 @@ interface LifecycleErrorBody {
 }
 ```
 
-`code` は reference runtime-agent envelope v1 の closed enum。current reference
-implementation では `connector-extended:` prefix を connector 拡張用に予約し、
-kernel は共通 error logic に載せず connector の string をそのまま actor に伝え
-ます。
+`code` は reference runtime-agent レスポンス v1 の closed enum。current
+reference implementation では `connector-extended:` prefix を connector 拡張用
+に予約し、Takosumi は共通 error logic に載せず connector の string をそのまま
+actor に伝えます。
 
 | `code`                   | HTTP   | 発生条件                                                                     |
 | ------------------------ | ------ | ---------------------------------------------------------------------------- |
 | `unauthorized`           | 401    | bearer 不足 / mismatch                                                       |
 | `bad_request`            | 400    | request body validation 失敗                                                 |
 | `connector_not_found`    | 404    | selector に対応する connector が registry にいない                           |
-| `artifact_kind_mismatch` | 400    | DataAsset-backed connector の operator DataAsset metadata と spec が合わない |
+| `artifact_kind_mismatch` | 400    | asset-backed connector の operator asset metadata と spec が合わない |
 | `connector_failed`       | 500    | connector が throw した想定外エラー                                          |
 | `connector-extended:*`   | (任意) | connector 拡張用の予約 prefix                                                |
 
 `retryable: true` は network / rate limit / transient cloud failure を表す
-フラグ。 kernel は WAL の `pre-commit` / `commit` stage で再試行可否をこれで
+フラグ。 Takosumi は WAL の `pre-commit` / `commit` stage で再試行可否をこれで
 分岐します。
 
 ## 関連ページ

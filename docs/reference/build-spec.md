@@ -1,99 +1,87 @@
-# Prepared Source Handoff {#build-service-handoff}
+# ビルドサービス境界 {#build-service-handoff}
 
-Takosumi core does not run builds. A build service, CI system, or operator
-automation can prepare a source tree before calling the Installer API by
-submitting `source.kind: "prepared"`.
+build service、CI、operator automation は、Installer API を呼ぶ前に source
+を準備できます。Takosumi core は build を実行しません。core が受け取るのは
+`source.kind: "prepared"` として渡された source input です。
 
-The core Installer API owns the handoff contract: source URL, declared digest,
-resolved digest, archive-root `.takosumi.yml`, size limits, path-safety rules,
-and Deployment source identity. The build service owns build recipes, command
-execution, cache metadata, provenance, package format, and concrete parser
-choice.
+Takosumi core は source handoff contract と Deployment source identity を定義し
+ます。build service は build recipe、command 実行、cache metadata、provenance、
+payload の作り方を定義します。
 
-## Handoff Flow
+このページは Takosumi core と build service / CI の責務境界を説明します。
+Installer API の wire field は [Installer API](./installer-api.md) を正本にしま
+す。
+
+## Handoff の流れ
 
 ```text
 source root
-  -> build service / CI prepares source tree
-  -> build service creates a prepared source archive payload
-  -> build service computes archive payload sha256
-  -> caller invokes Installer API with source.kind: "prepared" + source.digest
-  -> Installer fetches the payload, verifies digest and archive safety
-  -> Installer reads archive-root .takosumi.yml and records Deployment source identity
+  -> build service / CI が source を準備する
+  -> build service が prepared source payload を作る
+  -> build service が payload digest を計算する
+  -> caller が prepared source URL + digest を Installer API に渡す
+  -> Installer が payload を検証し、.takosumi.yml を読む
+  -> Installer が Deployment source identity を記録する
 ```
 
-```json
-{
-  "spaceId": "space_personal",
-  "source": {
-    "kind": "prepared",
-    "url": "https://build.example.com/snapshots/app-123.archive",
-    "digest": "sha256:..."
-  }
-}
-```
+`source.digest` は Installer が取得した payload bytes の sha256 です。build
+graph digest、tree canonicality digest、package manager lock digest、cache key、
+provenance digest ではありません。
 
-`source.digest` is the sha256 of the payload bytes fetched by the Installer. It
-is not a build graph digest, tree canonicality digest, package manager lock
-digest, or provenance digest.
+## Core handoff ルール
 
-## Prepared source archive contract {#prepared-source-archive-contract}
+prepared source は build service、CI、operator automation が作る source handoff
+payload です。 Takosumi core が見るのは build の中身ではなく、Installer API
+に渡された source input です。
 
-prepared source archive は operator build service が作る handoff payload です。
-Installer API core は URL、payload digest、archive root、portable POSIX tar
-payload profile、size cap、path-safety requirements を定義します。compatible
-operators must accept the portable tar profile. Operator build-service profiles
-can publish additional accepted media types or parser profiles as distribution
-extensions. Portable handoff requirements:
+core handoff rules:
 
-- `.takosumi.yml` は archive root に置く。
-- AppSpec 内の runtime file path は archive root からの POSIX relative path。
-- path は `/` で始まらず、NUL、空 segment、`.`、`..` を含めない。
-- symlink / hardlink が archive root の外へ escape する場合は reject。
-- 同じ normalized path を複数 entry が指す archive は duplicate ambiguity として
-  reject。
-- Installer API が response / Deployment record に残す `source.digest` は実際に
-  fetch した archive payload bytes の `sha256:<hex>`。portable tar/profile
-  parser、digest、entry safety policy で検証する。
+- payload は `.takosumi.yml` を含む resolved source root を表す。
+- manifest 内の runtime file path は resolved source root からの relative path。
+- Installer API は payload digest、source path safety、size cap、manifest parse
+  を provider side effect 前に検証する。
+- Installer API が response / Deployment record に残す source identity は、build
+  service の recipe や cache key ではなく Installer が検証した source input。
 
-Operator build-service profiles publish additional supported media types,
-parser extensions, size limits, path-safety behavior, and error behavior for
-their prepared source payloads. Takosumi core remains the Installer API contract
-around URL, digest, portable tar payload profile, archive root, and path safety;
-build recipe, cache metadata, and provenance stay in the build-service profile.
+concrete wire fields、portable payload profile、error mapping は
+[Installer API](./installer-api.md) の一部です。Portable Installer API v1 の
+prepared source payload は uncompressed POSIX tar です。build recipe、cache
+metadata、provenance は build-service profile に残します。 operator-local
+profile が別 archive encoding を受け付ける場合でも、それは portable v1
+の互換条件ではありません。
 
-component kind descriptor metadata が source path field として扱う値は、prepared
-archive 内に存在し、archive root から escape せず、projection policy に反しない
-必要があります。dry-run は side effect なしで決定できる schema / descriptor /
-source path validation を返し、apply は provider side effect 前に selected
-implementation binding で同じ validation を繰り返します。build service が path
-を preflight しても、Installer API apply 前の validation を省略しません。
+component kind schema metadata が source path field として扱う値は、resolved
+source root 内に存在し、source root から escape せず、注入 policy に反しない
+必要があります。dry-run は side effect なしで決定できる schema / kind の定義 /
+source path のバリデーションを返し、apply はリソースの作成・更新前に selected
+binding で同じバリデーションを繰り返します。
 
-## AppSpec Relationship
+## Manifest との関係
 
-AppSpec keeps runtime/install intent. Runtime file paths stay in kind-specific
-`spec` fields, such as `worker.spec.entrypoint`. Build commands, build nodes,
-container images, dependency caches, generated intermediate artifacts, and
-provenance records stay outside AppSpec.
+manifest は runtime / install intent を持ちます。runtime file path は
+`worker.spec.entrypoint` のような kind-specific `spec` field に置きます。build
+command、build node、container image、dependency cache、generated intermediate
+output、provenance record は manifest の外に置きます。
 
-`.takosumi.build.yml` is not a Takosumi core manifest. A build-service
-distribution can define that file, another filename, a hosted CI workflow, or no
-file at all. Takosumi core only receives the resulting prepared source input.
+build-service distribution は `.takosumi.build.yml`、別の filename、hosted CI
+workflow、または recipe file なしの workflow を定義できます。Takosumi core は
+その結果として作られた prepared source input だけを Installer API 経由で受け取り
+ます。
 
-## Placement
+## 置き場所
 
-| Content                         | Surface                                        |
+| 内容                            | Surface                                        |
 | ------------------------------- | ---------------------------------------------- |
-| runtime/install intent          | AppSpec                                        |
-| runtime file paths              | kind-specific `spec`                           |
+| runtime / install intent        | manifest                                        |
+| runtime file path               | kind-specific `spec`                           |
 | build recipe / build graph      | build-service profile / CI                     |
 | prepared source URL             | Installer API source input                     |
 | resolved prepared source digest | dry-run / apply response and Deployment record |
-| workflow / trigger / approval   | operator automation / account-plane workflow   |
+| workflow / trigger / approval   | operator automation / account layer workflow   |
 
-## Related Pages
+## 関連ページ
 
-- [AppSpec](./app-spec.md)
+- [manifest](./manifest.md)
 - [Installer API](./installer-api.md)
 - [Operator build-service profile example](../operator/build-service-profile.md)
-- [Takosumi Official Type Catalog Specification](./type-catalog.md)
+- [Takosumi Kind カタログ仕様](./type-catalog.md)

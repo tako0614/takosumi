@@ -29,7 +29,7 @@ printf 'export default { fetch() { return new Response("ok") } };\\n' > dist/wor
 
 # Install + deploy metadata through the Installer API.
 takosumi install --source . --space space:personal
-takosumi deploy <installation-id>
+takosumi deploy <installation-id> --source .
 takosumi rollback <installation-id> <deployment-id>
 ```
 
@@ -38,23 +38,23 @@ takosumi rollback <installation-id> <deployment-id>
 
 ## Commands
 
-| Command                                                             | Purpose                                              |
-| ------------------------------------------------------------------- | ---------------------------------------------------- |
-| `takosumi install <source>`                                         | create an Installation and first Deployment          |
-| `takosumi install dry-run <source>`                                 | dry-run a new Installation                           |
-| `takosumi deploy <installation-id> [--source <source>]`             | apply a new Deployment to an Installation            |
-| `takosumi deploy dry-run <installation-id> [--source <source>]`     | dry-run an Installation update                       |
-| `takosumi rollback <installation-id> <deployment-id>`               | move current pointer to a retained Deployment        |
-| `takosumi server [--port] [--no-agent]`                             | boot kernel + embedded agent                         |
-| `takosumi runtime-agent serve`                                      | standalone agent (multi-host production)             |
-| `takosumi runtime-agent list`                                       | show registered connectors on an agent               |
-| `takosumi runtime-agent verify`                                     | smoke-test connectors (read-only API call per cloud) |
-| `takosumi artifact push <file> --kind <kind>`                       | optional DataAsset upload                            |
-| `takosumi artifact list [--limit]` / `rm <hash>` / `gc [--dry-run]` | optional DataAsset store management                  |
-| `takosumi artifact kinds`                                           | list operator DataAsset metadata kinds               |
-| `takosumi migrate [--dry-run]`                                      | run kernel DB migrations                             |
-| `takosumi init [<output>] [--template]`                             | AppSpec scaffold (stdout if no `<output>`)           |
-| `takosumi version`                                                  | print version                                        |
+| Command                                                             | Purpose                                                          |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `takosumi install <source>`                                         | create an Installation and first Deployment                      |
+| `takosumi install dry-run <source>`                                 | dry-run a new Installation                                       |
+| `takosumi deploy <installation-id> [--source <source>]`             | apply a new Deployment to an Installation                        |
+| `takosumi deploy dry-run <installation-id> [--source <source>]`     | dry-run an Installation update                                   |
+| `takosumi rollback <installation-id> <deployment-id>`               | move current pointer to a retained Deployment                    |
+| `takosumi server [--port] [--no-agent]`                             | boot kernel + embedded agent                                     |
+| `takosumi runtime-agent serve`                                      | standalone agent (multi-host production)                         |
+| `takosumi runtime-agent list`                                       | show registered connectors on an agent                           |
+| `takosumi runtime-agent verify`                                     | smoke-test connectors (read-only API call per cloud)             |
+| `takosumi artifact push <file> --kind <kind>`                       | optional DataAsset upload                                        |
+| `takosumi artifact list [--limit]` / `rm <hash>` / `gc [--dry-run]` | optional DataAsset store management                              |
+| `takosumi artifact kinds`                                           | compatibility command listing operator DataAsset metadata values |
+| `takosumi migrate [--dry-run]`                                      | run kernel DB migrations                                         |
+| `takosumi init [<output>] [--template]`                             | AppSpec scaffold (stdout if no `<output>`)                       |
+| `takosumi version`                                                  | print version                                                    |
 
 ## Env vars
 

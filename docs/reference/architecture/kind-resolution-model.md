@@ -1,10 +1,10 @@
 # Kind Resolution モデル {#kind-resolution-model}
 
-public AppSpec は `components.<name>.kind` と kind-specific な open `spec` から
+public manifest は `components.<name>.kind` と kind-specific な open `spec` から
 runtime intent を表す。component kind の意味と input schema は operator が選ぶ
-descriptor / catalog metadata が表し、provider mapping と Space policy は
-operator distribution が定義する。Takosumi official type catalog の descriptors
-は JSON-LD で公開される official catalog descriptor documents です。
+kind の定義 / catalog metadata が表し、provider mapping と Space policy は
+operator の設定が定義する。Takosumi Kind Catalog の kind の定義
+は JSON-LD で公開される official catalog documents です。
 
 ## Public な component kind {#public-component-kind}
 
@@ -20,14 +20,14 @@ kind resolution は `components.<name>.kind` から始まる。値が absolute U
 parse できる場合、その URI が resolved kind URI です。それ以外の値は short alias
 として operator-provided alias map / profile で exact match 解決する。未解決
 alias は provider side effect 前に fail-closed で拒否される。解決された
-operator-selected implementation binding は retained implementation/operator
+operator-selected binding は deploy
 evidence として Deployment に紐づき、component kind の semantic identity
 とは別に 記録される。
 
-## External kind descriptor {#external-kind-descriptor}
+## External kind schema {#external-kind-descriptor}
 
-external kind descriptor は operator / registry が必要に応じて採用する semantic
-data です。descriptor は例えば次を定義できます。
+external kind schema は operator / registry が必要に応じて採用する semantic
+data です。kind の定義は例えば次を定義できます。
 
 ```text
 input schema
@@ -38,12 +38,12 @@ mutation constraints
 compatibility hints
 ```
 
-DataAsset を扱う場合、operator extension の policy として扱います。
+asset を扱う場合、operator extension の policy として扱います。
 
 ## Kind / provider resolution {#kind-provider-resolution}
 
-resolution は operator-owned で、決定的かつ fail-closed にする。kernel は
-AppSpec を受け、Installation に紐づく Deployment として resolution evidence
+resolution は operator-owned で、決定的かつ fail-closed にする。Takosumi は
+manifest を受け、Installation に紐づく Deployment として resolution evidence
 を記録する。
 
 ```text
@@ -51,17 +51,17 @@ AppSpec を受け、Installation に紐づく Deployment として resolution ev
 2. If the value parses as an absolute URI, use it as the resolved kind URI.
 3. Otherwise resolve it through the operator-provided alias map / profile;
    unresolved aliases fail before provider side effects.
-4. If the operator uses descriptor metadata, select the descriptor for the
+4. If the operator uses kind definition metadata, select the definition for the
    resolved URI.
-5. If descriptor input schema is present, validate `spec` against that schema.
+5. If kind definition input schema is present, validate `spec` against that schema.
 6. Check that the operator has an execution binding visible to the Space and
    apply provider support metadata and Space policy checks.
 7. Link the operator-selected implementation evidence to the Deployment as
-   retained implementation/operator evidence, and expose only component JSON outputs
+   deploy record, and expose only component JSON outputs
    through public Deployment outputs.
 ```
 
-`https://takosumi.com/kinds/v1/*` official catalog descriptors may be one input
+`https://takosumi.com/kinds/v1/*` official catalog の kind の定義 may be one input
 to this process. Operators can adopt those documents or publish their own
 catalog.
 
@@ -72,7 +72,7 @@ Component input 検証は `components.<name>` を `components.<name>.kind`
 metadata は provider resolution の段階でチェックされる。
 
 ```text
-JSON-LD / descriptor:
+JSON-LD / kind の定義:
   identity and semantic relations
 
 Input schema:
@@ -81,14 +81,14 @@ Input schema:
 Policy:
   allow / deny / approval
 
-Implementation binding:
+Binding:
   external consistency and smoke checks
 ```
 
 ## Mutation 制約 {#mutation-constraints}
 
 mutation 動作は external component kind / provider contract が定義する。下記は
-official catalog descriptor で使える vocabulary の例です。
+official catalog の kind の定義で使える vocabulary の例です。
 
 | mutation-constraint | semantics                                                            | allowed lifecycle classes    |
 | ------------------- | -------------------------------------------------------------------- | ---------------------------- |
@@ -102,26 +102,26 @@ official catalog descriptor で使える vocabulary の例です。
 `external` と `operator` lifecycle class は external identity を参照するため、
 `reroute-only` mutation を取る。
 
-Mutation 制約は descriptor のメタデータである。operator-selected implementation
+Mutation 制約は kind の定義のメタデータである。operator-selected implementation
 binding は planning / apply 中にその制約を enforce します。 runtime operation
 planning は
 [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 に記録され、[Object Model — Revoke participation matrix](./object-model.md) に
-従います。JSON-LD descriptor は runtime operation mechanism ではありません。
+従います。JSON-LD の kind の定義は runtime operation mechanism ではありません。
 
 ## Access mode enum {#access-mode-enum}
 
 resolved link access は official catalog の [Access modes](../access-modes.md)
-で定義された closed v1 モードのいずれかである。AppSpec v1 の `listen` には
-`access` property は無く、operator policy、publication declaration の
+で定義された closed v1 モードのいずれかである。manifest v1 の `listen` には
+`access` property は無く、operator policy、publish の出力の declaration の
 `safeDefaultAccess`、selected component kind の slot policy から resolution 中に
 決まる。このページは access mode が resolution に参加する位置を説明する。
-[Link and Projection Model](./link-projection-model.md) と
-[External Publication Model](./external-publication-model.md) は access mode
+[バインディングモデル](./binding-model.md) と
+[Platform Service Model](./platform-service-model.md) は access mode
 vocabulary を再定義せずに [Access modes](../access-modes.md) を参照する。
 
 ```text
-read         observation only; no grant material is generated
+read         observation only; no authorization material is generated
 read-write   read plus mutation rights on the publication's resource
 admin        full management of the publication's resource
 invoke-only  may call the resource but cannot read or mutate underlying state
@@ -129,7 +129,7 @@ observe-only may only receive notifications / metrics; no resource access
 ```
 
 operator policy が明示的に access mode を選ぶ場合は、この閉じた集合から選ぶ。
-publication declaration の `safeDefaultAccess` はそのうち
+publish の出力の declaration の `safeDefaultAccess` はそのうち
 `null | read | invoke-only | observe-only` だけを default にできる。
 `read-write` と `admin` は default にできず、operator policy / approval が
 resolution 時に明示選択する。新規の access mode は RFC (CONVENTIONS.md §6)

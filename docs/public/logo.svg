@@ -1,0 +1,26 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 256 256"
+  role="img"
+  aria-labelledby="title desc"
+>
+  <title id="title">Takosumi</title>
+  <desc id="desc">A geometric Takosumi mark.</desc>
+  <defs>
+    <linearGradient
+      id="g"
+      x1="36"
+      y1="32"
+      x2="220"
+      y2="224"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#1D4ED8" />
+      <stop offset="0.5" stop-color="#059669" />
+      <stop offset="1" stop-color="#F59E0B" />
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="208" height="208" rx="44" fill="#0F172A" />
+  <path d="M76 74h104v24h-40v94h-24V98H76z" fill="url(#g)" />
+  <path d="M80 168h96v24H80z" fill="url(#g)" opacity="0.88" />
+</svg>

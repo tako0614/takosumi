@@ -46,6 +46,16 @@ Deno.test("Gateway validateSpec rejects invalid route path", () => {
   assert.ok(issues.some((i) => i.path === "$.routes[0].path"));
 });
 
+Deno.test("Gateway validateSpec enforces route syntax from descriptor", () => {
+  const issues = specIssues({
+    listeners: { public: { protocol: "https" } },
+    routes: [{ listener: "Public", path: "/api?x=1", to: "upstream_api" }],
+  });
+  assert.ok(issues.some((i) => i.path === "$.routes[0].listener"));
+  assert.ok(issues.some((i) => i.path === "$.routes[0].path"));
+  assert.ok(issues.some((i) => i.path === "$.routes[0].to"));
+});
+
 Deno.test("Gateway validateOutputs accepts public endpoint output", () => {
   assert.deepEqual(
     outputIssues({

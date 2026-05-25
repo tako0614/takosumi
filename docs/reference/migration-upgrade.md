@@ -1,8 +1,8 @@
 # Schema Evolution Invariants
 
-## Kernel replacement invariants
+## Takosumi replacement invariants
 
-kernel pod の process replacement は SIGTERM → graceful drain → restart の順で
+Takosumi pod の process replacement は SIGTERM → graceful drain → restart の順で
 安全に停止できなければならない。
 
 | Change scope      | serving invariant        | constraint                                  |
@@ -19,32 +19,32 @@ rejection される。
 
 ### Graceful drain
 
-kernel pod は SIGTERM を受け取ると以下を行う。
+Takosumi pod は SIGTERM を受け取���と以下を行う。
 
-1. `/readyz` を 503 に切り替え (kernel control-plane load balancer から外れる)
+1. `/readyz` を 503 に切り替え (control-plane load balancer から外れる)
 2. 現在 hold している lock を release できる operation は release
 3. in-flight `apply` / `activate` / `destroy` / `rollback` は WAL stage の
    切れ目まで進めて停止 (heartbeat は最後まで打つ)
 4. observation worker / log worker は work queue を flush
-5. 全 worker idle で kernel exit (`0`)
+5. 全 worker idle で process exit (`0`)
 
 drain timeout は default `60s`。超過は `SIGKILL` で強制終了し、 recovery 経路
 に渡す ([Lifecycle](./lifecycle.md))。
 
 ## Schema migration
 
-kernel boot 時に schema version を確認し、必要に応じて migration を実行する。
+Takosumi boot 時に schema version を確認し、必要に応じて migration を実行する。
 
 ### Version vector
 
-schema version は `(major, minor)` の 2-tuple。 kernel は以下を持つ:
+schema version は `(major, minor)` の 2-tuple。 Takosumi は以下を持つ:
 
-- `code-required`: 当該 kernel binary が要求する schema version
-- `code-supported-range`: kernel が読める schema version の closed range
+- `code-required`: 当該 Takosumi binary が要求す�� schema version
+- `code-supported-range`: Takosumi が読める schema version の closed range
   (`[low, high]`、両端含む)
 - `db-current`: SQL store に書き込まれた現 schema version
 
-不変条件: `db-current` ∈ `code-supported-range` でなければ kernel boot を
+不変条件: `db-current` ∈ `code-supported-range` でなければ Takosumi boot を
 fail-closed する (`schema_incompatible`)。
 
 ### Up migration
@@ -55,10 +55,10 @@ up migration の規約:
 - **transactional**: `BEGIN; ... COMMIT;` で wrap し、途中失敗で partial state
   を残さない (DDL を含む store では migration ごとに savepoint を切る)
 - **forward-compatible**: schema 変更後も `code-supported-range.low` 以下の
-  kernel が引き続き起動できる場合のみ minor bump 内で許される
+  Takosumi が引き続き起動できる場合のみ minor bump 内で許される
 
-migration は [CLI](./cli.md) (`takosumi migrate`) または kernel 自身が
-起動時に自動実行する。kernel 自動実行は env `TAKOSUMI_DB_AUTO_MIGRATE=true`
+migration は [CLI](./cli.md) (`takosumi migrate`) または Takosumi 自身が
+起動時に自動実行する。自動実行は env `TAKOSUMI_DB_AUTO_MIGRATE=true`
 で有効になり、production / staging は default true、local / dev は default
 false。
 
@@ -76,7 +76,7 @@ down migration の規約:
 
 ### Schema-change mutation pause invariant
 
-schema change を伴う release-private operation の間、 kernel は以下を満たす。
+schema change ���伴う release-private operation の間、 Takosumi は以下を満たす。
 
 - 全 pod を 503 にして mutation 系 endpoint を停止
 - `apply` / `activate` / `destroy` / `rollback` は WAL stage の切れ目で停止し
@@ -88,16 +88,16 @@ fail-closed する。
 
 ## Rollback gate
 
-upgrade 失敗時に previous binary に戻す場合、 kernel は schema version supported
-range を宣言することで rollback の可否を判定する。
+upgrade 失敗時に previous binary に戻す場合、 Takosumi は schema version
+supported range を宣言することで rollback の可否を判定する。
 
 | State                                                        | rollback                                    |
 | ------------------------------------------------------------ | ------------------------------------------- |
-| `db-current` が previous kernel の `code-supported-range` 内 | rollback 可。binary 入れ替えのみ            |
-| `db-current` が previous kernel の range 外で同 minor        | rollback 前に down migration を要する       |
-| `db-current` が previous kernel の range 外で cross minor    | rollback 不可 (forward-only invariant 違反) |
+| `db-current` が previous Takosumi の `code-supported-range` 内 | rollback 可。binary 入れ替えのみ            |
+| `db-current` が previous Takosumi の range 外で同 minor        | rollback 前に down migration を要する       |
+| `db-current` が previous Takosumi の range 外で cross minor    | rollback 不可 (forward-only invariant 違反) |
 
-new code が `code-required > db-current` のとき、 kernel boot は
+new code が `code-required > db-current` のとき、 Takosumi boot は
 `schema_required_higher_than_current` で fail-closed する。これにより rollback
 gate が **boot 段階で reject** される構造になっている。
 
@@ -106,25 +106,25 @@ invariant だけを定義し、 production 向けの down-migration 手順や op
 は公開しない。必要な操作は対象 release の private runbook と実証済み evidence
 で扱う。
 
-## Kernel ↔ runtime-agent version alignment
+## Takosumi ↔ runtime-agent version alignment
 
-kernel と runtime-agent は **同 major 内 / 最大 2 minor の release-set
+Takosumi と runtime-agent は **同 major 内 / 最大 2 minor の release-set
 alignment** だけを current invariant として許容する。
 
 > Rationale: alignment 範囲を 2 minor 以内に縛ることで provider implementation
 > の wire shape 検証を bounded に保つ。 3 minor 以上を許すと N×M version pair の
-> testing matrix が現実的でなくなり、 kernel 側 dispatcher が抱える release-set
-> 分岐が線形に増える。
+> testing matrix が現実的でなくなり、 dispatcher が抱える release-set 分岐が線形
+> に増える。
 
 | Alignment       | 許容                                                        |
 | --------------- | ----------------------------------------------------------- |
 | same minor      | yes                                                         |
 | 1 minor         | yes                                                         |
 | 2 minor         | yes (boundary 警告のみ)                                     |
-| 3 minor 以上    | no — kernel が agent を `agent_skew_out_of_range` で reject |
+| 3 minor 以上    | no — Takosumi が agent を `agent_skew_out_of_range` で reject |
 | different major | no — describe / verify / apply すべて reject                |
 
-alignment は kernel が agent enrollment 時 / heartbeat 時に検査する。 reject
+alignment は Takosumi が agent enrollment 時 / heartbeat 時に検査する。 reject
 された agent は registry に乗らず、当該 agent への dispatch は fail-closed
 される。
 
@@ -133,10 +133,10 @@ operator 向けの package 更新順は public docs には固定しない。 3 m
 
 ## Runtime-Agent drain invariants
 
-agent process replacement は kernel-driven drain を通る。
+agent process replacement は Takosumi-driven drain を通る。
 
-- new agent が起動し kernel に enroll を request する
-- kernel は alignment check を行い OK なら registry に追加する。 NG なら reject
+- new agent が起動し Takosumi に enroll を request する
+- Takosumi は alignment check を行い OK なら registry に追加する。 NG なら reject
   して dispatch 対象にしない
 - `POST /api/internal/v1/runtime/agents/:id/drain` は既存 agent を drain mode
   に切り替える
@@ -145,13 +145,13 @@ agent process replacement は kernel-driven drain を通る。
 - idle 後の process 停止は release-specific automation の責任
 
 drain endpoint の呼び出しは internal control plane 経由。 operator か deploy
-automation が呼ぶ。 kernel は drain 中の agent を heartbeat 維持の範囲で監視し、
-dispatch を別 agent に逃がす。
+automation が呼ぶ。 Takosumi は drain 中の agent を heartbeat 維持の範囲で監視
+し、dispatch を別 agent に逃がす。
 
 ## Operator workflow boundary
 
-remote mode の kernel に対しては operator が deploy automation 側で binary を
-入れ替える。 CLI 単体では remote kernel binary は触らない。 schema evolution の
+remote mode の Takosumi に対しては operator が deploy automation 側で binary を
+入れ替える。 CLI 単体では remote Takosumi binary は触らない。 schema evolution の
 実行コマンドは release ごとの private operator runbook に閉じる。 public
 reference では current invariant だけを扱う。
 
@@ -186,8 +186,9 @@ audit event は migration の各 phase で emit され、 operator UI が tracki
 
 ## Related architecture notes
 
-- `docs/reference/architecture/operator-boundaries.md` — kernel と runtime-agent
-  の trust 境界、 skew tolerance の選定 rationale recovery mode の interplay
+- `docs/reference/architecture/operator-boundaries.md` — Takosumi と
+  runtime-agent の trust 境界、 skew tolerance の選定 rationale recovery mode の
+  interplay
 - `docs/reference/architecture/operational-hardening-checklist.md` — production
   process replacement の private evidence checklist
 

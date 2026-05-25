@@ -1,60 +1,58 @@
-# Takosumi Official Type Catalog Specification {#type-catalog}
+# Takosumi Kind カタログ仕様 {#type-catalog}
 
-Takosumi publishes a reusable catalog of descriptor and material contract types
-from `takosumi.com`. This catalog is official Takosumi vocabulary and sits next
-to the Takosumi core specification and Takosumi Cloud distribution spec.
-Operators can adopt these descriptors as-is, map short aliases to them, extend
-them through provider policy, or publish their own catalogs on another domain.
+Takosumi は `takosumi.com` から reusable な kind の定義 / output type の語彙を
+公開します。Kind カタログは core 仕様に隣接する別章です。Takosumi Cloud などの
+operator profile は、自分の docs で catalog vocabulary を採用します。operator は
+これらの kind の定義をそのまま採用したり、short alias を対応付けたり、provider
+policy で拡張したり、別 domain の catalog を採用したりできます。
 
-This page is the catalog specification. It defines Takosumi-owned type
-vocabulary: descriptor identities, material contract names, projection-family
-names, and the JSON-LD publication format for the official catalog.
+このページは catalog specification です。Takosumi type vocabulary、kind の定義
+identity、output type name、projection-family name、公式カタログの JSON-LD
+publish format を定義します。
 
-## Normative Scope
+## 規定範囲
 
-The official type catalog owns:
+Kind カタログの範囲:
 
-- descriptor identities under `https://takosumi.com/kinds/v1/*`
-- descriptor metadata fields that describe `spec`, publication slots,
-  publication vocabulary, and expected material shapes
-- material contract names such as `http-endpoint`, `service-binding`,
-  `object-store`, `identity.oidc@v1`, and `billing.port@v1`
-- projection-family names such as `env`, `secret-env`, `upstream`,
-  `config-mount`, and future catalog-published projection families
-- access metadata vocabulary such as access mode enum, sensitivity classes, and
-  safe default access
-- JSON-LD kind descriptor documents under `https://takosumi.com/kinds/v1/*` and
-  the context document at `https://takosumi.com/contexts/v1.jsonld`
+- `https://takosumi.com/kinds/v1/*` 配下の kind の定義 identity
+- `spec`、publish slot、publish vocabulary、expected な出力の型を説明する kind
+  の定義 metadata field
+- `http-endpoint`、`service-binding`、`object-store`、`identity.oidc@v1`、
+  `billing.port@v1` などの output type name
+- `env`、`secret-env`、`upstream`、`config-mount` などの projection-family name
+- access mode enum、sensitivity class、safe default access などの access
+  metadata vocabulary
+- `https://takosumi.com/kinds/v1/*` の JSON-LD kind schema document と
+  `https://takosumi.com/contexts/v1.jsonld` の context document
 
-The catalog owns reusable material shape vocabulary. Operator distribution specs
-own concrete external publication paths, OIDC issuer operation, billing
-behavior, account-plane records, provider provisioning, and dashboard APIs when
-they adopt the catalog vocabulary.
+catalog は reusable な出力データの型の vocabulary を定義します。concrete
+external publish の出力 path、OIDC issuer operation、billing behavior、account
+layer record、provider provisioning、dashboard API は、その vocabulary を採用す
+る operator profile spec に置きます。
 
-Operator distributions own catalog adoption. They decide which catalog entries
-are visible in a Space, which aliases are active, which provider or local
-runtime implements each descriptor, and which external publication paths they
-offer.
+operator profile は kind の有効化を管理します。Space で見える catalog entry、
+active alias、kind の定義を実装する provider / local runtime、operator が offer
+する platform service path を operator profile が決めます。
 
-## Catalog Roles
+## Catalog の役割
 
-| Role                       | Example                                         | Meaning                                              |
-| -------------------------- | ----------------------------------------------- | ---------------------------------------------------- |
-| Kind descriptor            | `https://takosumi.com/kinds/v1/worker`          | Component `kind` schema and publication vocabulary.  |
-| Material contract          | `http-endpoint`                                 | Type of material offered by `publish.<name>.as`.     |
-| Projection family          | `env`, `secret-env`, `upstream`, `config-mount` | How listened material is projected into a consumer.  |
-| External material contract | `identity.oidc@v1`                              | Reusable material type for external publications.    |
-| Access metadata            | `invoke-only`, `restricted`                     | Grant and projection metadata for external material. |
+| Role                       | Example                                         | 意味                                                |
+| -------------------------- | ----------------------------------------------- | --------------------------------------------------- |
+| Kind schema            | `https://takosumi.com/kinds/v1/worker`          | component `kind` schema と publish vocabulary。     |
+| Output type          | `http-endpoint`                                 | `publish.<name>.as` が offer する出力の型。         |
+| Injection mode          | `env`, `secret-env`, `upstream`, `config-mount` | listened な出力データを consumer に渡す形式。       |
+| External output type | `identity.oidc@v1`                              | platform service 用の reusable な出力の型。         |
+| Access metadata            | `invoke-only`, `restricted`                     | external material の access / projection metadata。 |
 
-AppSpec records catalog references as strings such as `kind`,
-`publish.<name>.as`, and `listen.<binding>.as`. Operator resolution attaches
-descriptor semantics, chooses which catalog entries are visible in a Space, and
-selects the implementation binding that materializes them.
+manifest は `kind`、`publish.<name>.as`、`listen.<binding>.as` などの catalog
+reference を string として記録します。operator resolution が kind の定義
+semantics を接続し、Space で見える catalog entry を選び、それを実現する binding
+を選びます。
 
-## Official Catalog Kind Descriptors
+## 公式 catalog kind schema
 
-These are the current `takosumi.com` v1 catalog descriptors. They are not a
-closed built-in kind set; an operator can adopt other descriptor URIs.
+現在の `takosumi.com` v1 catalog descriptor です。これは closed built-in kind
+set ではありません。operator は別の descriptor URI も採用できます。
 
 | Suggested alias | Kind URI                                     | Typical publication               |
 | --------------- | -------------------------------------------- | --------------------------------- |
@@ -64,32 +62,32 @@ closed built-in kind set; an operator can adopt other descriptor URIs.
 | `object-store`  | `https://takosumi.com/kinds/v1/object-store` | `bucket` as `object-store`        |
 | `gateway`       | `https://takosumi.com/kinds/v1/gateway`      | `public` as `http-endpoint`       |
 
-Kind short aliases are operator-selected conveniences. The URI is the descriptor
-identity; the alias exists only when an operator profile maps it. Descriptor
-documents may publish `referenceAliases` as suggestions for operator profiles;
-an operator profile activates aliases by mapping them explicitly.
+kind short alias は operator-selected convenience です。URI が descriptor
+identity です。descriptor document は `referenceAliases` を suggestion として
+publish できますが、alias を有効にするのは operator profile です。
 
-## Material Contracts
+## Output type
 
-Material contracts define the portable shape of material offered by
-`publish.<name>.as` or an external publication declaration. Publisher paths,
-provider resources, dashboard routes, and account-plane lifecycle live in the
-operator or product distribution spec that offers the material.
+Output type は `publish.<name>.as` または platform service declaration
+が offer する出力データの portable shape を定義します。publisher path、provider
+resource、dashboard route、account layer lifecycle は、その出力データを offer す
+る operator / product distribution spec に置きます。
 
-| Contract           | Public / non-secret fields                                                                                                                                                | Secret refs                                                  | Typical projections               |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------- |
-| `http-endpoint`    | `targets[]` for callable upstreams and optional public `endpoints[]` with `url`, `scheme`, `host`, `listener`, `visibility`, and optional `routes[]` (`pathPrefix`, `to`) | none                                                         | `upstream`, `env`, `config-mount` |
-| `service-binding`  | `service`, `protocol`, `host`, `port`, `database`, optional `caCertRef`                                                                                                   | `usernameRef`, `passwordRef`, `connectionUrlRef`, token refs | `secret-env`, `config-mount`      |
-| `object-store`     | `bucket`, `endpoint`, `region`, `pathStyle`, optional `publicBaseUrl`, policy refs                                                                                        | `accessKeyIdRef`, `secretAccessKeyRef`, `sessionTokenRef`    | `secret-env`, `config-mount`      |
-| `event-channel`    | `channel`, `protocol`, endpoint/topic/queue/stream identity, delivery policy refs                                                                                         | producer/consumer credential refs                            | `secret-env`, `config-mount`      |
-| `identity.oidc@v1` | issuer URL, discovery URL, client id, redirect/callback origin policy, optional public JWKS/discovery refs                                                                | `clientSecretRef`, refresh-token policy refs                 | `secret-env`, `config-mount`      |
-| `billing.port@v1`  | billing portal URL, usage report endpoint, billing owner ref, account/install billing policy refs                                                                         | metering credential refs                                     | `secret-env`, `config-mount`      |
+| Contract           | Public / non-secret fields                                                                                                                                                                                                                             | Secret refs                                               | Typical projections               |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | --------------------------------- |
+| `http-endpoint`    | callable upstream の `targets[]` と optional public `endpoints[]`。target は `url` または `protocol` / `host` / `port` / `basePath` を持てる。endpoint は `url`, `scheme`, `host`, `listener`, `visibility`, `primary`, optional `routes[]` を持てる。 | none                                                      | `upstream`, `env`, `config-mount` |
+| `service-binding`  | `service`, `protocol`, `host`, `port`, `database`, optional `username`, `connectionUrl`, `caCertRef`                                                                                                                                                   | `passwordRef`, token refs                                 | `secret-env`, `config-mount`      |
+| `object-store`     | `bucket`, `endpoint`, `region`, `pathStyle`, optional `publicBaseUrl`, policy refs                                                                                                                                                                     | `accessKeyIdRef`, `secretAccessKeyRef`, `sessionTokenRef` | `secret-env`, `config-mount`      |
+| `event-channel`    | `channel`, `protocol`, endpoint / topic / queue / stream identity, delivery policy refs                                                                                                                                                                | producer / consumer credential refs                       | `secret-env`, `config-mount`      |
+| `identity.oidc@v1` | issuer URL, discovery URL, client id, redirect / callback origin, optional public JWKS / discovery refs                                                                                                                                                | `clientSecretRef`                                         | `secret-env`, `config-mount`      |
+| `billing.port@v1`  | billing portal URL, usage report endpoint, billing subject ref                                                                                                                                                                                         | `meteringCredentialRef`                                   | `secret-env`, `config-mount`      |
 
-`http-endpoint` describes callable HTTP material. A workload upstream and a
-public ingress output can both use this contract. Public reachability is a
-property of the publisher and materialization result. For example, `web.http`
-can be an upstream HTTP material, while `public.public` can be a materialized
-public endpoint produced by a gateway/ingress component.
+`http-endpoint` は callable HTTP material を表します。workload publication は
+通常 `targets[]` を出し、gateway / ingress publication は通常 `endpoints[]` を出
+します。1 つの material には `targets[]` または `endpoints[]` の少なくとも一方が
+必要です。public reachability は publisher と materialization result の property
+です。たとえば `web.http` は upstream HTTP material、`public.public` は gateway
+/ ingress component が作る public endpoint material になれます。
 
 Compact schema:
 
@@ -97,17 +95,18 @@ Compact schema:
 http-endpoint:
   publicFields:
     targets[]:
-      required: true
-      fields: { name, protocol, host, port, basePath, visibility }
+      required: false
+      fields: { name, url, protocol, host, port, basePath, visibility }
     endpoints[]:
       required: false
       fields: { url, scheme, host, listener, visibility, primary, routes[] }
+  requires: at least one of targets[] or endpoints[]
   secretRefs: []
   allowedProjections: [upstream, env, config-mount]
 
 service-binding:
-  publicFields: { service, protocol, host, port, database, caCertRef }
-  secretRefs: [usernameRef, passwordRef, connectionUrlRef, tokenRef]
+  publicFields: { service, protocol, host, port, database, username, connectionUrl, caCertRef }
+  secretRefs: [passwordRef, tokenRef]
   allowedProjections: [secret-env, config-mount]
 
 object-store:
@@ -121,182 +120,168 @@ event-channel:
   allowedProjections: [secret-env, config-mount]
 
 identity.oidc@v1:
-  publicFields: { issuerUrl, discoveryUrl, clientId, redirectOriginPolicy, jwksRef }
-  secretRefs: [clientSecretRef, refreshTokenPolicyRef]
+  publicFields: { issuerUrl, discoveryUrl, clientId, redirectOrigin, jwksRef }
+  secretRefs: [clientSecretRef]
   allowedProjections: [secret-env, config-mount]
 
 billing.port@v1:
-  publicFields: { portalUrl, usageReportEndpoint, billingOwnerRef, policyRefs }
+  publicFields: { portalUrl, usageReportEndpoint, billingSubjectRef }
   secretRefs: [meteringCredentialRef]
   allowedProjections: [secret-env, config-mount]
 ```
 
-`ref` fields are operator-owned reference strings. They are stable enough for
-the operator read projection and runtime injection mechanism, but they are not
-raw secret values.
+`identity.oidc@v1` と `billing.port@v1` は platform service 用の neutral な出力
+の型です。catalog は workload が受け取れる field を名付けます。issuer operation、
+client lifecycle、redirect policy、billing account lifecycle、usage
+authorization、payment-provider integration、concrete publish の出力 path は、
+その出力データを offer する operator / product distribution が定義します。
 
-Public Deployment outputs and inspect responses expose non-secret fields plus
-refs. Raw passwords, client secrets, payment-provider credentials, bearer
-tokens, and generated private keys are represented by refs and are delivered
-only through operator-approved runtime secret mechanisms.
+`ref` field は operator-owned reference string です。operator projection や
+retained evidence の stable handle であり、raw secret value ではありません。
 
-Material contract and projection-family names such as `http-endpoint`,
-`service-binding`, `env`, `secret-env`, `upstream`, and `config-mount` are
-compact official catalog terms. Operators decide whether a Space may use a term.
-An adopted compact term keeps the catalog meaning. Absolute URI identities are
-also valid when an operator profile accepts them.
+Public Deployment output と operator の参照 API は non-secret field と refs
+だけを公開します。raw password、client secret、payment-provider
+credential、bearer token、 generated private key は ref
+で表し、operator-approved runtime secret mechanism だけで delivery します。
 
-## Projection Families
+## Injection mode
 
-Projection families define how a listened material contract is presented to the
-consumer component. AppSpec stores the selected family in `listen.<binding>.as`;
-the selected descriptor and operator policy validate compatibility before
-provider side effects.
+Injection mode は listened output type を consumer component に提示する形式です。
+manifest は selected family を `listen.<binding>.as` に記録し、selected な kind
+の定義と operator policy が compatibility をリソースの作成・更新前に検証します。
 
-| Projection family | Meaning                                                                                                 | Safety rule                                                                                              |
-| ----------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `env`             | Project non-secret public config into environment variables using the binding `prefix`.                 | Valid only for public/non-secret fields. Material with required secret refs must use another projection. |
-| `secret-env`      | Project public config plus secret refs into runtime environment through the operator secret backend.    | Public records keep refs; raw secret values are injected only at workload runtime.                       |
-| `upstream`        | Connect an HTTP endpoint material to an ingress/router/upstream binding without turning it into config. | Valid for `http-endpoint` consumer slots that accept upstream routing material.                          |
-| `config-mount`    | Project public config and refs into a mounted config file, volume, or SDK config object.                | Mount path and file shape are descriptor-owned and validated by the selected binding.                    |
+| Injection mode | Meaning                                                                                    | Safety rule                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `env`             | public / non-secret config を binding `prefix` 付き environment variable として渡す。      | public / non-secret field だけに有効。required secret ref を持つ material には使わない。     |
+| `secret-env`      | public config と secret ref を operator secret backend 経由で runtime environment に渡す。 | public record には ref だけを残し、raw secret value は workload runtime だけに inject する。 |
+| `upstream`        | HTTP endpoint material を ingress / router / upstream binding に接続する。                 | upstream routing material を受け入れる `http-endpoint` consumer slot に有効。                |
+| `config-mount`    | public config と refs を mounted config file、volume、SDK config object として渡す。       | mount path と file shape は descriptor-owned で、selected binding が検証する。               |
 
 Projection compatibility:
 
-| Material contract  | `env`                                     | `secret-env` | `upstream`                       | `config-mount` |
-| ------------------ | ----------------------------------------- | ------------ | -------------------------------- | -------------- |
-| `http-endpoint`    | valid for public/non-secret endpoint data | invalid      | valid for upstream-capable slots | valid          |
-| `service-binding`  | invalid                                   | valid        | invalid                          | valid          |
-| `object-store`     | invalid                                   | valid        | invalid                          | valid          |
-| `event-channel`    | invalid                                   | valid        | invalid                          | valid          |
-| `identity.oidc@v1` | invalid                                   | valid        | invalid                          | valid          |
-| `billing.port@v1`  | invalid                                   | valid        | invalid                          | valid          |
+| Output type  | `env`                                      | `secret-env` | `upstream`                     | `config-mount` |
+| ------------------ | ------------------------------------------ | ------------ | ------------------------------ | -------------- |
+| `http-endpoint`    | public / non-secret endpoint data なら有効 | invalid      | upstream-capable slot なら有効 | valid          |
+| `service-binding`  | invalid                                    | valid        | invalid                        | valid          |
+| `object-store`     | invalid                                    | valid        | invalid                        | valid          |
+| `event-channel`    | invalid                                    | valid        | invalid                        | valid          |
+| `identity.oidc@v1` | invalid                                    | valid        | invalid                        | valid          |
+| `billing.port@v1`  | invalid                                    | valid        | invalid                        | valid          |
 
-Consumer slot metadata and operator policy can make a syntactically valid cell
-invalid for a particular component. For example, `http-endpoint` + `upstream`
-requires a consumer slot that accepts provider/private upstream routing.
-Secret-bearing contracts default to `env: invalid`; a descriptor that wants a
-secretless public config env projection should define a separate env-safe
-material contract or an explicit operator profile extension.
+consumer slot metadata と operator policy は、syntactically valid な組み合わせを
+particular component では invalid にできます。secret-bearing な出力の型は
+default で `env: invalid` です。secretless public config を env projection
+したい場合は、別の env-safe output type または explicit operator profile
+extension を定義します。
 
-## Consumer Slot Metadata
+## Consumer slot metadata
 
-Kind descriptors can describe what a `listen` binding slot accepts without
-adding more AppSpec fields. This metadata is catalog vocabulary for validation,
-docs, and generated helper types.
+kind の定義は manifest field を増やさずに `listen` binding slot の受け入れ条件
+を説明できます。この metadata は validation と docs のための catalog vocabulary
+です。generated helpers は現在、spec/output/publication alias を中心
+に扱い、consumer slot metadata は catalog document の正本を参照します。
 
-| Descriptor metadata                 | Meaning                                                                              |
-| ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `listens.<slot>.accepts`            | Material contracts accepted by this consumer slot, such as `http-endpoint`.          |
-| `listens.<slot>.projectionFamilies` | Projection families accepted for that slot, such as `upstream` or `secret-env`.      |
-| `listens.<slot>.minimumAccess`      | Minimum access mode needed for the material, such as `read` or `invoke-only`.        |
-| `listens.<slot>.safeDefaultAccess`  | Default access before operator policy selects or approves a stronger grant.          |
-| `listens.<slot>.required`           | Whether the descriptor treats the binding as required when its `spec` references it. |
+| Descriptor metadata                       | Meaning                                                                       |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| `listens.<slot>.accepts`                  | `http-endpoint` など、この consumer slot が受け入れる output type。     |
+| `listens.<slot>.projectionFamilies`       | `upstream` や `secret-env` など、この slot が受け入れる injection mode。   |
+| `listens.<slot>.minimumAccess`            | `read` や `invoke-only` など、material に必要な minimum access mode。         |
+| `listens.<slot>.safeDefaultAccess`        | operator policy が stronger access mode を選ぶ前の default access。           |
+| `listens.<slot>.requiredWhenReferencedBy` | 指定された `spec` field が binding key を参照するとき required とみなす条件。 |
 
-Operators combine descriptor metadata with Space policy and external publication
-declarations. AppSpec does not carry an access-mode field: it selects
-`listen.from` and `listen.as`, then the operator resolves access from descriptor
-metadata, publication declaration, and policy. Unsupported material contracts,
-unsafe projections such as secret material through plain `env`, access-mode
-mismatches, and contract-version mismatches are rejected before implementation
-side effects. Operator profiles may restrict accepted projections; widening a
-slot requires descriptor or profile extension.
+operator は kind の定義 metadata、Space policy、platform service declaration
+を組み合わせます。manifest は access-mode field を持ちません。`listen.from` と
+`listen.as` を選び、kind の定義 metadata、publish の出力 declaration、policy
+から access を解決します。
 
-## Gateway Portable Subset
+## Gateway portable subset
 
-When an operator adopts the official `gateway` descriptor, that descriptor
-publishes the portable HTTP ingress vocabulary below. Its `spec.listeners` map
-declares named HTTP/HTTPS listeners. Its `spec.routes` array connects a listener
-to a local `listen` binding name.
+operator が official `gateway` kind の定義を採用する場合、その定義は portable
+HTTP ingress vocabulary を公開します。`spec.listeners` map は named
+HTTP / HTTPS listener を宣言し、`spec.routes` array は listener と local
+`listen` binding name を接続します。
 
 Portable v1 route semantics:
 
-- `routes[].to` is a local `listen` binding key, not a material contract or URL.
-- `routes[].path` is an HTTP path prefix. It is `/` or starts with `/`.
-- `routes[].path` is a configuration path string, not a full URL. It must not
-  contain `?`, `#`, NUL, an empty string, or a path segment escape that changes
-  the prefix into another path.
-- Matching uses only the URL path. Query strings and fragments are excluded.
-- Matching is case-sensitive and compares the URL path string before
-  percent-decoding or path normalization.
-- Percent-encoded octets are compared literally for routing. `%2F` is not
-  treated as `/` for prefix or segment-boundary matching.
-- `/` matches every path. `/api` matches `/api` and `/api/...`, but not
-  `/apiary`. `/api/` matches `/api/...`, but not `/api`.
-- Route matching is longest-prefix within the same listener, with the segment
-  boundary rule above. Two routes with the same listener and path are invalid
-  after exact string comparison unless an operator-specific extension defines a
-  stricter conflict rule.
-- Rewrite, strip-prefix, header matching, method matching, and CORS policy are
-  descriptor-specific extension fields when an operator profile offers them.
-- Provider/operator conformance docs describe how unsupported listener, host,
-  TLS, or path-routing requests are rejected before implementation side effects.
+- `routes[].to` は local `listen` binding key。output type や URL
+  ではない。
+- `routes[].path` は HTTP path prefix。`/` または `/` で始まる string。
+- `routes[].path` は configuration path string。full URL ではない。`?`、`#`、
+  NUL、empty string、別 path に変わる segment escape は invalid。
+- matching は URL path だけを使い、query string と fragment は除外する。
+- matching は case-sensitive。percent-decoding や path normalization の前の URL
+  path string を比較する。
+- percent-encoded octet は literal に比較する。`%2F` は `/` として扱わない。
+- `/` は全 path に match する。`/api` は `/api` と `/api/...` に match し、
+  `/apiary` には match しない。`/api/` は `/api/...` に match し、`/api` には
+  match しない。
+- 同じ listener 内では longest-prefix match。segment boundary rule を使う。
+- 同じ listener と path の route が複数ある場合は invalid。operator profile
+  はこれより厳しい conflict rule を持てる。
+- rewrite、strip-prefix、header matching、method matching、CORS policy は
+  operator profile が提供する descriptor-specific extension field。
+- unsupported listener、host、TLS、path-routing request の reject 方法は
+  provider / operator conformance docs が説明する。
 
-The gateway `public` publication uses the `http-endpoint` material contract. A
-materialized public output includes non-secret `endpoints[]`. Each endpoint
-records `url`, `scheme`, `host`, `listener`, `visibility`, `primary`, and
-optional `routes[]`. `routes[]` records the portable route summary (`pathPrefix`
-and `to`) so account-plane surfaces can show or launch the public endpoint
-without owning request routing. If multiple endpoints are present, exactly one
-has `primary: true`; account-plane launch surfaces use that endpoint as the
-default launch URL.
+JSON Schema は `routes[].path` の local syntax (`/` で始まり `?` / `#` を含まな
+いこと) と `routes[].listener` / `routes[].to` の identifier syntax を表します。
+duplicate route、segment-boundary conflict、unsupported extension field の扱い
+は descriptor semantic validation と operator conformance check で判定します。
 
-## Workload External Material Contracts
+gateway `public` publication は `http-endpoint` output type を使います。
+materialized public output は non-secret `endpoints[]` を含みます。各 endpoint
+は `url`、`scheme`、`host`、`listener`、`visibility`、`primary`、optional
+`routes[]` を記録します。`routes[]` は portable route summary (`pathPrefix`,
+`to`) を記録します。複数 endpoint がある場合、ちょうど 1 つが `primary: true`
+です。
 
-External publications use the same material contracts as component-local
-publications. `identity.oidc@v1` and `billing.port@v1` are official material
-contracts in this catalog. An operator or product distribution spec defines the
-concrete publication path that offers them in a Space.
+## Workload external output type
 
-## Access Metadata
+platform service は component-local な publish の出力と同じ output type
+を使います。`identity.oidc@v1` と `billing.port@v1` はこの catalog の official
+output type です。operator / product distribution spec が、それらを Space
+で offer する concrete publication path を定義します。
 
-External publication declarations and materialization evidence can use the
-official access metadata vocabulary.
+## Access metadata
 
-| Term                | Meaning                                                                                                       |
-| ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `accessModes`       | Allowed grant modes from the official enum: `read`, `read-write`, `admin`, `invoke-only`, and `observe-only`. |
-| `sensitivity`       | Material sensitivity class such as `public-config`, `restricted`, or operator-defined extensions.             |
-| `safeDefaultAccess` | Default access mode before operator policy selects or approves a stronger grant.                              |
+platform service declaration と materialization の記録は official access
+metadata vocabulary を使えます。
 
-The detailed access-mode semantics are in [Access Modes](./access-modes.md).
+| Term                | Meaning                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------ |
+| `accessModes`       | official enum: `read`, `read-write`, `admin`, `invoke-only`, `observe-only`。                    |
+| `sensitivity`       | `public-config`, `restricted` などの material sensitivity class。operator-defined extension 可。 |
+| `safeDefaultAccess` | operator policy が stronger access を選ぶ前の default access mode。                              |
 
-## Catalog Descriptor Metadata
+詳細な access-mode semantics は [アクセスモード](./access-modes.md) にあります。
 
-Catalog descriptor metadata is published as JSON-LD under
-`https://takosumi.com/contexts/v1.jsonld` and `https://takosumi.com/kinds/v1/*`.
-JSON-LD is a publication format for kind schema, vocabulary terms, and catalog
-metadata; runtime behavior lives in the operator-selected implementation
-binding. Material contracts, projection families, and access metadata are valid
-catalog terms through this specification and may be referenced from descriptor
-documents.
+## Catalog descriptor metadata
 
-`publications.<name>.contract` names the material contract used by
-`publish.<name>.as` and describes the fields a publication may expose.
-Descriptor documents can include provider-result field mapping metadata for
-generated helper types, examples, and documentation checks. Operator bindings
-decide how provider outputs are collected and recorded as
-implementation/operator evidence.
+Catalog の kind の定義 metadata は `https://takosumi.com/contexts/v1.jsonld` と
+`https://takosumi.com/kinds/v1/*` 配下に JSON-LD として publish します。JSON-LD
+は kind schema、vocabulary term、catalog metadata の publish format です。
+runtime behavior は operator-selected binding が決めます。
 
-`listens.<slot>.projectionFamilies` lists projection families accepted through a
-component-local `listen` binding slot. It is descriptor metadata for
-compatibility checks. Runtime injection details such as environment variable
-expansion, upstream target construction, sidecar mounts, or SDK config files
-belong to the operator-selected implementation binding.
+`publications.<name>.contract` は `publish.<name>.as` が使う output type を名付
+け、publish の出力が expose できる field を説明します。kind の定義 document は
+generated helper type、example、documentation check のために
+`exampleMaterialMapping` metadata を含められます。`$outputs.*` のような marker
+は non-executable な例示 metadata です。provider output の収集と記録は operator
+binding が決め、implementation / operator の記録として保持します。
 
-Descriptor `capabilityTerms` are common capability vocabulary terms for matching
-and docs. Provider availability, quotas, runtime limits, credentials, and
-concrete feature support are provider package / operator profile metadata.
+`listens.<slot>.projectionFamilies` は component-local `listen` binding slot
+が受け入れる injection mode を列挙します。runtime injection detail、environment
+variable expansion、upstream target construction、sidecar mount、SDK config file
+は operator-selected binding が決めます。
 
-Provider-specific capability descriptors, native provider schemas, and
-reference-kernel conformance metadata are documented in provider implementation
-docs and maintenance maps. The official catalog specification describes the
-portable vocabulary an AppSpec may reference.
+Kind の定義の `capabilityTerms` は matching と docs のための common capability
+vocabulary です。provider availability、quota、runtime
+limit、credential、concrete feature support は provider package / operator
+profile metadata です。
 
-The JSON-LD context may include semantic terms such as `AppSpec`,
-`Installation`, or `Deployment` so descriptors can link to the broader
-vocabulary. Those terms are semantic vocabulary, not the AppSpec or Installer
-API wire schema. Core wire shape remains defined by [AppSpec](./app-spec.md) and
-[Installer API](./installer-api.md).
+JSON-LD context は `manifest`、`Installation`、`Deployment` などの semantic term
+を含められます。これらは semantic vocabulary です。core wire shape は
+[manifest](./manifest.md) と [Installer API](./installer-api.md) が定義します。
 
 ```json
 {
@@ -318,32 +303,32 @@ API wire schema. Core wire shape remains defined by [AppSpec](./app-spec.md) and
 }
 ```
 
-## Source Of Truth
+## 正本
 
-The public catalog surface is the published `https://takosumi.com/kinds/v1/*`,
-`https://takosumi.com/kinds/v1/*.jsonld`, and
-`https://takosumi.com/contexts/v1.jsonld` documents plus this specification
-page. These documents publish vocabulary and descriptor metadata. Catalog
-compatibility is based on descriptor URI identity, material contract names,
-projection-family names, access vocabulary, and documented material field
-shapes. Runtime implementations may consume those documents directly or load an
-equivalent operator-adopted descriptor registry. Repository source paths for
-maintainers are tracked in [Spec Maintenance Map](./public-spec-source-map.md).
+public catalog surface は published
+`https://takosumi.com/kinds/v1/*`、`https://takosumi.com/kinds/v1/*.jsonld`、
+`https://takosumi.com/contexts/v1.jsonld` document と、この specification page
+です。これらの document は vocabulary と descriptor metadata を publish します。
 
-Conforming implementations may compile, mirror, or vendor the catalog. Runtime
-execution does not require JSON-LD processing, and JSON-LD documents do not
-select plugins, providers, or materializers.
+catalog compatibility は kind の定義 URI identity、output type name、
+projection-family name、access vocabulary、documented な出力データ field shape
+に基づきます。runtime implementation はこれらの document
+を直接読んでも、equivalent な operator-adopted descriptor registry を load
+しても構いません。
 
-Generated TypeScript helpers and reference-kernel adapters can live in
-`@takos/takosumi-plugins`, but those helpers are an implementation convenience.
-The catalog compatibility surface is the published vocabulary and JSON-LD
-documents.
+conforming implementation は catalog を compile、mirror、vendor できます。
+runtime execution は、operator-selected binding が provider /
+runtime binding を選びます。
 
-## Related Pages
+Generated TypeScript helper や descriptor registry は実装上の便宜として提供でき
+ます。catalog compatibility surface は published vocabulary と JSON-LD document
+です。
 
-- [Specification Boundaries](./spec-boundaries.md)
-- [Takosumi Core Specification](./core-spec.md)
-- [AppSpec](./app-spec.md)
-- [HTTP Exposure](./http-exposure.md)
-- [External Publications](./external-publications.md)
+## 関連ページ
+
+- [仕様境界](./spec-boundaries.md)
+- [Takosumi core 仕様](./core-spec.md)
+- [manifest](./manifest.md)
+- [HTTP 公開](./http-exposure.md)
+- [プラットフォームサービス](./external-publications.md)
 - [Takosumi Cloud](./takosumi-cloud.md)

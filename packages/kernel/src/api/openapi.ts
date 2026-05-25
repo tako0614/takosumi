@@ -998,6 +998,42 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         ref("InstallerLocalSourcePin"),
       ],
     },
+    InstallerDeploymentGitExpectedGuard: {
+      type: "object",
+      required: ["manifestDigest", "commit", "currentDeploymentId"],
+      properties: {
+        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        commit: { type: "string" },
+        currentDeploymentId: { type: "string", nullable: true },
+      },
+      additionalProperties: false,
+    },
+    InstallerDeploymentPreparedExpectedGuard: {
+      type: "object",
+      required: ["manifestDigest", "sourceDigest", "currentDeploymentId"],
+      properties: {
+        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        currentDeploymentId: { type: "string", nullable: true },
+      },
+      additionalProperties: false,
+    },
+    InstallerDeploymentLocalExpectedGuard: {
+      type: "object",
+      required: ["manifestDigest", "currentDeploymentId"],
+      properties: {
+        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        currentDeploymentId: { type: "string", nullable: true },
+      },
+      additionalProperties: false,
+    },
+    InstallerDeploymentExpectedGuard: {
+      oneOf: [
+        ref("InstallerDeploymentGitExpectedGuard"),
+        ref("InstallerDeploymentPreparedExpectedGuard"),
+        ref("InstallerDeploymentLocalExpectedGuard"),
+      ],
+    },
     InstallerInstallationDryRunRequest: {
       type: "object",
       required: ["spaceId", "source"],
@@ -1028,21 +1064,44 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       properties: {
         source: ref("InstallerSource"),
-        expected: ref("InstallerSourcePin"),
+        expected: ref("InstallerDeploymentExpectedGuard"),
       },
       additionalProperties: false,
     },
+    InstallerDryRunChange: {
+      type: "object",
+      required: ["op", "component", "kind"],
+      properties: {
+        op: { enum: ["create", "update", "delete", "noop"] },
+        component: { type: "string" },
+        kind: { type: "string" },
+        reason: { type: "string" },
+      },
+      additionalProperties: true,
+    },
     InstallerDryRunResponse: {
       type: "object",
+      required: ["source", "manifestDigest", "appSpec", "changes", "expected"],
+      properties: {
+        source: ref("InstallerSourceSummary"),
+        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        appSpec: jsonObject,
+        changes: { type: "array", items: ref("InstallerDryRunChange") },
+        expected: {
+          oneOf: [
+            ref("InstallerSourcePin"),
+            ref("InstallerDeploymentExpectedGuard"),
+          ],
+        },
+      },
       description:
-        "Installation dry-run plan. See takosumi-contract `installer-api.ts` `InstallationDryRunResponse`.",
+        "Installation or Deployment dry-run plan. Deploy dry-run expected guards include currentDeploymentId.",
       additionalProperties: true,
     },
     InstallerInstallation: {
       type: "object",
       required: [
         "id",
-        "accountId",
         "spaceId",
         "appId",
         "currentDeploymentId",
@@ -1051,7 +1110,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         id: { type: "string" },
-        accountId: { type: "string" },
         spaceId: { type: "string" },
         appId: { type: "string" },
         currentDeploymentId: { type: "string", nullable: true },

@@ -1,10 +1,10 @@
-# RevokeDebt Model
+# CleanupBacklog Model
 
-## RevokeDebt record schema
+## CleanupBacklog record schema
 
 ```yaml
-RevokeDebt:
-  id: revoke-debt:01HZ... # ULID-based ID
+CleanupBacklog:
+  id: cleanup-backlog:01HZ... # ULID-based ID
   generatedObjectId: generated:... # 対象 generated material / external object
   sourcePublicationSnapshotId: pubsnap_...
   externalParticipantId: external-participant:...
@@ -12,7 +12,7 @@ RevokeDebt:
     status: <enum: 3 値> # 後述
       ownerSpaceId: space:... # 現 ownership を持つ Space
       originatingSpaceId: space:... # debt を最初に生んだ Space
-      retryPolicy: {} # backoff / max attempts / aging window (policy-controlled)
+      retryPolicy: {} # backoff / max attempts / escalation timeout (policy-controlled)
       retryAttempts: 0
       lastRetryAt: optional
       nextRetryAt: optional
@@ -24,7 +24,7 @@ RevokeDebt:
 ```
 
 `generatedObjectId` は generated lifecycle class の object、external object、
-または link projection の対象を指す。`sourcePublicationSnapshotId` は debt 発生時
+または link projection の対象を指す。`sourcePublicationSnapshotId` は debt 発生時の publish の出力 snapshot を指す。
 
 `retryPolicy` は kernel 定数ではなく policy-controlled で、 Space の policy pack
 から派生する。 kernel が直接解釈する portable subset は次のみ:
@@ -45,7 +45,7 @@ RevokeDebt:
 | `external-revoke`      | 外部 system が revoke を ack せず、現実の外部状態が retain している          |
 | `link-revoke`          | link revoke (link projection の解除) が cleanup できなかった                 |
 | `activation-rollback`  | activation rollback / compensate recovery 後の cleanup 残り                  |
-| `approval-invalidated` | 前承認のもとで retain した material が、approval invalidation で根拠を失った |
+| `approval-invalidated` | 前承認のもとで保持した出力データが、approval invalidation で根拠を失った |
 
 reason ごとの典型ケース:
 
@@ -54,9 +54,9 @@ reason ごとの典型ケース:
 - `link-revoke`: link projection の片側 cleanup が success、もう片側が permanent
   fail。`post-commit` 失敗が典型源。
 - `activation-rollback`: `commit` 済み effect の逆再生で消しきれない generated
-  material。`abort` 経路で enqueue。
-- `approval-invalidated`: approval が `invalidated` に落ちたが既に materialize
-  済みの retain 物。新規 approval の granting までは debt として可視化する。
+  出力データ。`abort` 経路で enqueue。
+- `approval-invalidated`: approval が `invalidated` に落ちたが既に実体化済みの
+  保持データ。新規 approval decision までは debt として可視化する。
   cross-Space sharing の TTL / revocation / cleanup debt は current v1 の reason
   enum には含めず、sharing RFC でまとめて定義します。
 
@@ -83,8 +83,8 @@ Retry attempt の結果は次のように status に反映される:
 - `blocked`: policy block / permanent failure として即座に
   `operator-action-required` に進む。
 
-Kernel の connector-backed cleanup worker は `open` かつ `nextRetryAt <= now` の
-debt を対象にする。Public deploy 由来の debt は
+Takosumi の connector-backed cleanup worker は `open` かつ `nextRetryAt <= now`
+の debt を対象にする。Public deploy 由来の debt は
 `(ownerSpaceId,
 deploymentName, resourceName, providerId)` から persisted
 deployment record の handle を解決し、provider の `compensate` operation
@@ -93,37 +93,37 @@ deployment record の handle を解決し、provider の `compensate` operation
 provider が解決できない場合は `blocked` として `operator-action-required`
 に進む。
 
-`takosumi-worker` role の worker daemon は persistent `RevokeDebtStore` から
-open debt を持つ owner Space を列挙し、`revoke-debt-cleanup` task として cleanup
+`takosumi-worker` role の worker daemon は persistent `CleanupBacklogStore` から
+open debt を持つ owner Space を列挙し、`cleanup-backlog-cleanup` task として cleanup
 worker を周期実行する。cadence と batch size は
 `TAKOSUMI_REVOKE_DEBT_CLEANUP_INTERVAL_MS` /
 `TAKOSUMI_REVOKE_DEBT_CLEANUP_LIMIT` で調整する。
 
-## Aging window
+## Escalation timeout
 
 `open` 状態が一定時間経過した debt は自動で `operator-action-required` に
-遷移する。これを **aging window** と呼ぶ。
+遷移する。これを **escalation timeout** と呼ぶ。
 
-- aging window の長さは kernel 定数ではなく **policy-controlled** で、Space の
+- escalation timeout の長さは kernel 定数ではなく **policy-controlled** で、Space の
   policy pack 上で設定する。
 - 自動遷移は **idempotent / journaled**。重複 transition は WAL 同様の tuple
   で抑止し、journal entry が残る。
 - 自動遷移は `agedAt` timestamp を立てる。
-- **manual operator action は aging window を無視して**
+- **manual operator action は escalation timeout を無視して**
   `operator-action-required` に遷移できる。operator が status を直接 force
   した場合 `agedAt` は手動 transition 時刻になる。
-- `operator-action-required` から `open` に戻す path も aging window を消費
+- `operator-action-required` から `open` に戻す path も escalation timeout を消費
   しない (operator の判断で retry queue に戻す)。
 
-## ActivationSnapshot propagation (fail-safe-not-fail-closed)
+## TrafficSnapshot propagation (fail-safe-not-fail-closed)
 
-RevokeDebt の status は ActivationSnapshot に伝播し、traffic shift の挙動を gate
+CleanupBacklog の status は TrafficSnapshot に伝播し、traffic shift の挙動を gate
 する。Takosumi のスタンスは **fail-safe-not-fail-closed**:
 
 - `operator-action-required` の debt が ownerSpaceId 配下に 1 件でも存在
-  すると、**新規 traffic shift は block** される。GroupHead pointer の前進を
+  すると、**新規 traffic shift は block** される。RoutingPointer pointer の前進を
   停止する。
-- ただし **既存 GroupHead pointer は roll back しない**。既に流れている traffic
+- ただし **既存 RoutingPointer pointer は roll back しない**。既に流れている traffic
   は維持し、operator が状況を判断する時間を確保する。
 - `open` 状態の debt は traffic shift を block しない。retry が回っているうちは
   通常の lifecycle 操作を続ける。
@@ -149,7 +149,7 @@ production deployment では status 表示を必須とする:
   [WAL Stages — Orphaned debt 経路](./wal-stages.md#orphaned-debt-経路)
 - Internal recovery / compensate path: 同じ OperationPlan digest / phase の
   unfinished WAL が `commit` 以降に到達している場合に `activation-rollback`
-  RevokeDebt を `takosumi_revoke_debts` へ enqueue し、WAL を terminal `abort`
+  CleanupBacklog を `takosumi_cleanup_backlogs` へ enqueue し、WAL を terminal `abort`
   に進める。public rollback endpoint は retained `succeeded` Deployment へ
   current pointer を戻す操作であり、unfinished WAL recovery を直接 drive
   しない。
@@ -157,16 +157,16 @@ production deployment では status 表示を必須とする:
   [Approval Invalidation Triggers](./approval-invalidation.md)
 - Recovery mode 中の `activation-rollback` 発生条件:
   [Lifecycle Protocol — Recovery modes](./lifecycle.md#recovery-modes)
-- `revoke-debt-created` Risk: [Risk Taxonomy](./risk-taxonomy.md)
+- `cleanup-backlog-created` Risk: [Risk Taxonomy](./risk-taxonomy.md)
 
 ## Related architecture notes
 
 関連 architecture notes:
 
-- `docs/reference/drift-detection.md` — RevokeDebt と drift observation の連動
-- `docs/reference/architecture/exposure-activation-model.md` —
-  ActivationSnapshot propagation と fail-safe-not-fail-closed スタンスの議論
-- `docs/reference/architecture/space-model.md` — future Multi-Space ownership と
+- `docs/reference/drift-detection.md` — CleanupBacklog と drift observation の連動
+- `docs/reference/architecture/ingress-routing.md` —
+  TrafficSnapshot propagation と fail-safe-not-fail-closed スタンスの議論
+- `docs/reference/architecture/space-model.md` — future Multi-Space ownership と CleanupBacklog scope の設計議論
 
 ## 関連ページ
 

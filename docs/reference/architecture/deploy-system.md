@@ -1,22 +1,22 @@
 # Deploy システム {#deploy-system}
 
-Takosumi core の public concepts は **AppSpec (`.takosumi.yml`) / Installation /
-Deployment** の 3 entity です。public Installer API は
-[Installer API](../installer-api.md) の 5 endpoint に閉じます。
+::: info 内部設計メモ
+public contract は [Installer API](../installer-api.md) を参照。
+:::
 
 ## ライフサイクル {#lifecycle}
 
 ```text
 git source / prepared source archive
-  └─ .takosumi.yml (= AppSpec)
+  └─ .takosumi.yml (= manifest)
       ↓ POST /v1/installations[/dry-run]
     Installation
       ↓ POST /v1/installations/{id}/deployments[/dry-run]
     Deployment
 ```
 
-- AppSpec は source root の `.takosumi.yml` 1 file。
-- Installation は Space 内に install された AppSpec source と current state。
+- manifest は source root の `.takosumi.yml` 1 file。
+- Installation は Space 内に install された manifest source と current state。
 - Deployment は Installation に対する apply の履歴。
 - rollback は `POST /v1/installations/{id}/rollback` で過去 Deployment を入力に
   current pointer を戻す。
@@ -29,11 +29,11 @@ operator implementation の選択です。
 
 workflow / webhook / cron / CI runner は upstream automation として source ref
 または prepared source archive を選び、Installer API に渡します。
-`.takosumi.yml` が AppSpec の source of truth で、Deployment は Installer API
+`.takosumi.yml` が manifest の source of truth で、Deployment は Installer API
 lifecycle の結果として記録されます。
 
 ## クロスリファレンス {#cross-references}
 
 - [Installer API](../installer-api.md)
-- [AppSpec](../app-spec.md)
+- [manifest](../manifest.md)
 - [Reference Kernel Route Inventory](../kernel-http-api.md)

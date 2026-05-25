@@ -40,13 +40,15 @@
   "publications": {
     "connection": {
       "contract": "service-binding",
-      "material": {
+      "exampleMaterialMapping": {
+        "service": "$outputs.host",
+        "protocol": "postgresql",
         "host": "$outputs.host",
         "port": "$outputs.port",
         "database": "$outputs.database",
         "username": "$outputs.username",
-        "passwordSecretRef": "$outputs.passwordSecretRef",
-        "connectionString": "$outputs.connectionString"
+        "passwordRef": "$outputs.passwordSecretRef",
+        "connectionUrl": "$outputs.connectionString"
       }
     }
   },

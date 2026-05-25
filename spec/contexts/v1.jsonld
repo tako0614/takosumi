@@ -49,9 +49,9 @@
       "@id": "takosumi:publications",
       "@type": "@json"
     },
-    "acceptedProjectionFamilies": {
-      "@id": "takosumi:acceptedProjectionFamilies",
-      "@container": "@set"
+    "listens": {
+      "@id": "takosumi:listens",
+      "@type": "@json"
     },
     "publicationPath": {
       "@id": "takosumi:publicationPath",
@@ -61,9 +61,37 @@
       "@id": "takosumi:contract",
       "@type": "xsd:string"
     },
-    "material": {
-      "@id": "takosumi:material",
+    "exampleMaterialMapping": {
+      "@id": "takosumi:exampleMaterialMapping",
       "@type": "@json"
+    },
+    "accepts": {
+      "@id": "takosumi:accepts",
+      "@container": "@set"
+    },
+    "projectionFamilies": {
+      "@id": "takosumi:projectionFamilies",
+      "@container": "@set"
+    },
+    "minimumAccess": {
+      "@id": "takosumi:minimumAccess",
+      "@type": "xsd:string"
+    },
+    "safeDefaultAccess": {
+      "@id": "takosumi:safeDefaultAccess",
+      "@type": "xsd:string"
+    },
+    "accessModes": {
+      "@id": "takosumi:accessModes",
+      "@container": "@set"
+    },
+    "sensitivity": {
+      "@id": "takosumi:sensitivity",
+      "@type": "xsd:string"
+    },
+    "requiredWhenReferencedBy": {
+      "@id": "takosumi:requiredWhenReferencedBy",
+      "@type": "xsd:string"
     },
     "type": {
       "@id": "takosumi:fieldType",

@@ -1,30 +1,34 @@
 # ストレージスキーマ {#storage-schema}
 
+::: info 内部設計メモ
+public contract は [Installer API](./installer-api.md) を参照。
+:::
+
 このページは Takosumi core records と reference/operator extension records の
 索引です。実際の storage backend は Postgres / SQLite / D1 / in-memory など
-operator が選べますが、record の意味と lifecycle boundary はここで揃えます。
+operator が選べます。
 
 Account、billing、OIDC issuer、customer onboarding、support workflow の record
-は operator account-plane 側の storage schema に置きます。
+は operator account layer 側の storage schema に置きます。
 
 ## Core Records
 
 | Record         | 役割                                                                                                             |
 | -------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `Installation` | AppSpec が Space に installed された core record。current pointer を持つ。                                       |
+| `Installation` | manifest が Space に installed された core record。current pointer を持つ。                                       |
 | `Deployment`   | 1 回の apply / rollback target になる result record。source identity、status、public/non-secret outputs を持つ。 |
 
 ## Reference Kernel Retained Evidence Records
 
 | Record               | 役割                                                                                          |
 | -------------------- | --------------------------------------------------------------------------------------------- |
-| `ResolutionSnapshot` | AppSpec component、kind、provider、publication / binding の解決結果を固定する。               |
-| `DesiredSnapshot`    | apply で実現したい desired state。provider side effect の input になる。                      |
+| `ResolvedPlan` | manifest component、kind、provider、publish の出力 / binding の解決結果を固定する。               |
+| `TargetState`    | apply で実現したい desired state。provider side effect の input になる。                      |
 | `OperationPlan`      | Deployment で実行する operation の順序と依存関係。                                            |
-| `ActivationSnapshot` | active routing / traffic assignment。health は ObservationSet と retained evidence 側に残す。 |
+| `TrafficSnapshot` | active routing / traffic assignment。health は ObservationState と retained evidence 側に残す。 |
 
-snapshot は reference kernel が Deployment に紐づく implementation/operator
-evidence を説明するための内部 record です。public Deployment wire に portable な
+snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明するための
+内部 record です。public Deployment wire に portable な
 top-level `evidence` field はありません。rollback は retained Deployment を
 current pointer として再選択し、rollback metadata / audit を記録します。
 Deployment record は追加しません。
@@ -45,25 +49,25 @@ Deployment record は追加しません。
 | Record           | 役割                                              |
 | ---------------- | ------------------------------------------------- |
 | `Approval`       | operator approval が必要な operation の承認状態。 |
-| `RevokeDebt`     | revoke が必要だが即時反映できなかった状態の追跡。 |
+| `CleanupBacklog`     | revoke が必要だが即時反映できなかった状態の追跡。 |
 | `DriftIndex`     | observed state と desired state の drift index。  |
-| `ObservationSet` | provider / runtime observation の現在値。         |
+| `ObservationState` | provider / runtime observation の現在値。         |
 
 これらは reference implementation が apply / observe / recovery を fail-safe に
 進めるための record です。顧客向け approval UI や account role model は operator
-account plane が所有します。
+account layer に置きます。
 
-## Reference Implementation, Connector, And DataAsset Records
+## Reference Implementation, Connector, And asset Records
 
 | Record                         | 役割                                                                                 |
 | ------------------------------ | ------------------------------------------------------------------------------------ |
 | `OperatorImplementationConfig` | operator が attach した kind alias / provider implementation / connector inventory。 |
 | `ImplementationRegistry`       | operator が attach した provider implementation / connector の registry view。       |
-| `ConnectorDescriptor`          | runtime-agent connector の id、accepted DataAsset metadata、health。                 |
-| `DataAssetRecord`              | optional operator DataAsset extension の digest、size、retention metadata。          |
+| `ConnectorDescriptor`          | runtime-agent connector の id、accepted asset metadata、health。                 |
+| `assetRecord`              | optional operator asset extension の digest、size、retention metadata。          |
 | `SecretPartitionReference`     | secret store partition の logical reference。secret value は secret backend に置く。 |
 
-DataAsset retention は [DataAsset GC](./data-asset-gc.md)、connector envelope は
+asset retention は [asset GC](./data-asset-gc.md)、connector envelope は
 [Connector Guide](./connector-contract.md)。
 
 ## Audit
@@ -88,6 +92,6 @@ portable record は Installation と Deployment です。下の項目は referen
 - [Lifecycle Protocol](./lifecycle.md)
 - [WAL Stages](./wal-stages.md)
 - [Audit Events](./audit-events.md)
-- [DataAsset GC](./data-asset-gc.md)
+- [asset GC](./data-asset-gc.md)
 - [Secret Partitions](./secret-partitions.md)
 - [Drift Detection](./drift-detection.md)

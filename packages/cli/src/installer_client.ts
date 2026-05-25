@@ -1,4 +1,8 @@
-import type { Source, SourcePin } from "takosumi-contract/installer-api";
+import type {
+  DeploymentExpectedGuard,
+  Source,
+  SourcePin,
+} from "takosumi-contract/installer-api";
 import {
   INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
   INSTALLATION_DEPLOYMENTS_PATH,
@@ -20,18 +24,24 @@ export interface ExpectedPinOptions {
   readonly expectedSourceDigest?: string;
 }
 
+export interface DeploymentExpectedGuardOptions extends ExpectedPinOptions {
+  readonly expectedCurrentDeploymentId?: string;
+}
+
+const SHA256_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+
 export function parseSourceRef(ref: string): Source {
   if (ref.startsWith("git:")) {
     const rest = ref.slice("git:".length);
     const hash = rest.lastIndexOf("#");
-    if (hash >= 0) {
+    if (hash > 0 && hash < rest.length - 1) {
       return {
         kind: "git",
         url: rest.slice(0, hash),
         ref: rest.slice(hash + 1),
       };
     }
-    return { kind: "git", url: rest };
+    throw new Error("git source requires git:<url>#<ref>");
   }
   if (ref.startsWith("catalog:") || ref.startsWith("bundle:")) {
     throw new Error(
@@ -41,14 +51,20 @@ export function parseSourceRef(ref: string): Source {
   if (ref.startsWith("prepared:")) {
     const rest = ref.slice("prepared:".length);
     const hash = rest.lastIndexOf("#");
-    if (hash >= 0) {
+    if (hash > 0 && hash < rest.length - 1) {
+      const digest = rest.slice(hash + 1);
+      if (!SHA256_DIGEST_RE.test(digest)) {
+        throw new Error(
+          "prepared source digest must be sha256:<64 lowercase hex>",
+        );
+      }
       return {
         kind: "prepared",
         url: rest.slice(0, hash),
-        digest: rest.slice(hash + 1),
+        digest,
       };
     }
-    return { kind: "prepared", url: rest };
+    throw new Error("prepared source requires prepared:<url>#sha256:<hex>");
   }
   return { kind: "local", url: ref };
 }
@@ -60,18 +76,54 @@ export function expectedPinFromOptions(
   const hasDigest = options.expectedManifestDigest !== undefined;
   const hasSourceDigest = options.expectedSourceDigest !== undefined;
   if (!hasCommit && !hasDigest && !hasSourceDigest) return undefined;
+  if (hasCommit && hasSourceDigest) {
+    throw new Error(
+      "--expected-commit and --expected-source-digest describe different source kinds",
+    );
+  }
   if (!hasDigest) {
     throw new Error(
       "--expected-manifest-digest is required when passing expected pins",
     );
   }
+  if (hasCommit) {
+    return {
+      manifestDigest: options.expectedManifestDigest!,
+      commit: options.expectedCommit!,
+    };
+  }
+  if (hasSourceDigest) {
+    return {
+      manifestDigest: options.expectedManifestDigest!,
+      sourceDigest: options.expectedSourceDigest!,
+    };
+  }
+  return { manifestDigest: options.expectedManifestDigest! };
+}
+
+export function deploymentExpectedGuardFromOptions(
+  options: DeploymentExpectedGuardOptions,
+): DeploymentExpectedGuard | undefined {
+  const sourcePin = expectedPinFromOptions(options);
+  if (!sourcePin && options.expectedCurrentDeploymentId === undefined) {
+    return undefined;
+  }
+  if (!sourcePin) {
+    throw new Error(
+      "--expected-manifest-digest is required when passing expected deploy guards",
+    );
+  }
+  if (options.expectedCurrentDeploymentId === undefined) {
+    throw new Error(
+      "--expected-current-deployment-id is required when passing deploy expected guards",
+    );
+  }
   return {
-    ...(options.expectedCommit ? { commit: options.expectedCommit } : {}),
-    manifestDigest: options.expectedManifestDigest!,
-    ...(options.expectedSourceDigest
-      ? { sourceDigest: options.expectedSourceDigest }
-      : {}),
-  };
+    ...sourcePin,
+    currentDeploymentId: options.expectedCurrentDeploymentId === "null"
+      ? null
+      : options.expectedCurrentDeploymentId,
+  } as DeploymentExpectedGuard;
 }
 
 export function resolveSourceArg(input: {

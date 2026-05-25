@@ -1,24 +1,24 @@
-# Component Kind / Provider の拡張 {#extending}
+# Takosumi を拡張する {#extending}
 
 Takosumi の拡張は 2 種類あります。
 
-| やりたいこと                                            | 追加するもの                     |
-| ------------------------------------------------------- | -------------------------------- |
-| reference / operator kind を別 cloud / runtime で動かす | implementation binding           |
-| 新しい runtime / resource contract を作る               | kind descriptor + implementation |
+| やりたいこと                                | 追加するもの                     |
+| ------------------------------------------- | -------------------------------- |
+| 採用済み kind を別 cloud / runtime で動かす | kind を実行環境に接続する設定           |
+| 新しい runtime / resource の仕様を作る      | kind の定義 + 実装 |
 
-AppSpec は opaque な component kind string と `spec` を書きます。kind は
+Manifest には component の kind 名と `spec` を書きます。Takosumi は kind の値を解釈しません。kind は
 operator が opt-in した short alias でも、直接 URI でもよく、operator が kind
-URI / descriptor / implementation binding に解決します。Takosumi reference
-kernel では `createPaaSApp()` で `KernelPlugin` adapter を attach します。これは
-reference implementation の配線方法であり、Takosumi-compatible implementation は
-別の仕組みで同じ kind URI を実行しても構いません。
+URI から kind の定義と実行環境への接続を解決します。接続
+の渡し方は実装や operator の設定
+が選びます。Takosumi 互換の実装は、同じ kind URI と出力データの仕様
+を満たす限り、別の配線方式でも実行できます。
 
 ## 新しい kind を追加する
 
-reusable な kind は stable kind URI と descriptor metadata で意味を公開します。
-operator はその URI に implementation binding を別途 attach して runnable
-にします。 Takosumi official type catalog の descriptor は JSON-LD
+再利用可能な kind は安定した kind URI と kind の定義で意味を公開します。
+operator はその URI に実行環境への接続を別途追加して実行可能にします。
+対応 kind 一覧の定義は JSON-LD
 を公開形式として使います。
 
 ```json
@@ -37,11 +37,14 @@ operator はその URI に implementation binding を別途 attach して runnab
   "publications": {
     "endpoint": {
       "contract": "http-endpoint",
-      "material": {
-        "url": {
-          "source": "provider-result",
-          "field": "endpoint"
-        }
+      "exampleMaterialMapping": {
+        "targets": [
+          {
+            "name": "default",
+            "url": "$outputs.endpoint",
+            "visibility": "private"
+          }
+        ]
       }
     }
   },
@@ -51,13 +54,13 @@ operator はその URI に implementation binding を別途 attach して runnab
 }
 ```
 
-AppSpec 側では operator が解決できる `kind` を使います。
+Manifest 側では operator が解決できる `kind` を使います。
 
-`material` の provider-result field mapping は descriptor documents、generated
-helper types、examples、documentation checks が参照する metadata です。runtime
-projection は operator-selected implementation binding が行い、結果は
-implementation/operator evidence と public Deployment outputs
-に分けて記録します。
+`exampleMaterialMapping` は kind の定義ドキュメント、生成された型、
+例示、ドキュメントチェックが参照する例示データです。実行時の出力データ生成
+は operator が選んだ接続設定が行い、結果は
+実装側の記録と公開 Deployment の出力データに分けて記録しま
+す。
 
 ```yaml
 components:
@@ -71,80 +74,29 @@ components:
         as: http-endpoint
 ```
 
-## Reference provider adapter を追加する
+## 実行環境への接続を追加する
 
-Takosumi reference kernel で provider を追加する場合は、descriptor / material
-contract を具体 substrate に変換する `KernelPlugin` adapter を用意します。
+接続設定は、kind の定義と出力の型 (`service-binding` 等) を具体的な
+provider の runtime やリソースの作成・更新に結びつけます。公開仕様として共有されるの
+は、kind URI、kind の定義、出力の型、出力データの生成方法、Deployment に
+出す non-secret な出力データです。
 
-```ts
-import type { KernelPlugin } from "@takos/takosumi-contract/reference/plugin";
+接続設定の読み込み方法、別プロセス化、provider API への接続、credential 注入方法
+は実装や operator の設定が選びます。Manifest author
+が覚える語彙は `kind` / `spec` / `publish` / `listen` に閉じます。
 
-export function hetznerCloudWebServiceProvider(
-  opts: HetznerCloudWebServiceOptions,
-): KernelPlugin {
-  return {
-    name: "hetzner-cloud-web-service",
-    version: "1.0.0",
-    provides: ["https://takosumi.com/kinds/v1/web-service"],
-    async apply(ctx) {
-      const service = await opts.dispatcher.apply({
-        provider: "hetzner-cloud-web-service",
-        region: opts.region,
-        installationId: ctx.installationId,
-        componentName: ctx.componentName,
-        spec: ctx.component.spec ?? {},
-        bindings: ctx.resolvedBindings,
-      });
-      return {
-        resourceHandle: service.id,
-        outputs: {
-          id: service.id,
-          url: service.url,
-        },
-      };
-    },
-    async destroy(ctx) {
-      await opts.dispatcher.destroy({
-        provider: "hetzner-cloud-web-service",
-        resourceHandle: ctx.resourceHandle,
-      });
-    },
-  };
-}
-```
+## 確認項目
 
-`opts.dispatcher` は cloud SDK client ではなく、runtime-agent / connector /
-operator-owned execution host に operation envelope を渡す operator-side
-dispatcher です。side-effecting provider I/O と cloud / OS credential は kernel
-process の外に置きます。in-process adapter は validation、planning、envelope
-生成、opaque handle の受け渡しに留めます。
-
-命名は次の形に揃えます。
-
-| 対象         | ルール                                             |
-| ------------ | -------------------------------------------------- |
-| Factory name | camelCase、`<provider><Kind>Provider`              |
-| Provider id  | kebab-case、cloud / runtime を先頭に置く           |
-| Package      | cloud / runtime owner を持つ provider package      |
-| Credential   | runtime-agent host env または operator host で注入 |
-
-provider credential は runtime-agent host または operator host 側に置きます。
-region / account などの non-secret selector は adapter factory option
-に置けます。
-
-## Test checklist
-
-- spec validation failure が provider side effect 前に止まる。
-- dry-run が changes[] / expected guard を返す。cost estimate は operator
-  account-plane response として扱う。
+- spec のバリデーションエラーがリソースの作成・更新前に止まる。
+- dry-run が changes[] と dry-run 時のハッシュ照合値を返す。cost estimate は operator の
+  アカウント管理レスポンスとして扱う。
 - apply が idempotent に成功する。
 - destroy / rollback が対象 resource だけを処理する。
-- secret value を log / audit / Deployment record に出さない。
+- secret value を log / audit / Deployment の記録に出さない。
 
 ## 関連ページ
 
-- [AppSpec](./reference/app-spec.md)
-- [Takosumi Official Type Catalog Specification](./reference/type-catalog.md)
-- [Provider Implementations](./reference/providers.md)
-- [Operator Bootstrap](./operator/bootstrap.md)
-- [Reference Runtime-Agent Execution Surface](./reference/runtime-agent-api.md)
+- [Manifest](./reference/manifest.md)
+- [対応 kind 一覧](./reference/type-catalog.md)
+- [外部サービス](./reference/external-publications.md)
+- [ビルドサービス境界](./reference/build-spec.md)

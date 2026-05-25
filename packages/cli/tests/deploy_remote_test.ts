@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { deployCommand } from "../src/commands/deploy.ts";
 import { installCommand } from "../src/commands/install.ts";
 import { rollbackCommand } from "../src/commands/rollback.ts";
-import { parseSourceRef, resolveSourceArg } from "../src/installer_client.ts";
+import {
+  deploymentExpectedGuardFromOptions,
+  parseSourceRef,
+  resolveSourceArg,
+} from "../src/installer_client.ts";
 import { __resetConfigFileCacheForTesting } from "../src/config.ts";
 
 interface CapturedRequest {
@@ -27,17 +31,45 @@ Deno.test("installer source parser maps supported source refs", () => {
     /operator catalog sources/,
   );
   assert.deepEqual(
-    parseSourceRef("prepared:https://example.com/app.tar#sha256:abc"),
+    parseSourceRef(
+      "prepared:https://example.com/app.tar#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ),
     {
       kind: "prepared",
       url: "https://example.com/app.tar",
-      digest: "sha256:abc",
+      digest:
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     },
+  );
+  assert.throws(
+    () => parseSourceRef("prepared:https://example.com/app.tar#sha256:abc"),
+    /64 lowercase hex/,
+  );
+  assert.throws(
+    () => parseSourceRef("git:https://github.com/acme/app"),
+    /git source requires/,
+  );
+  assert.throws(
+    () => parseSourceRef("prepared:https://example.com/app.tar"),
+    /prepared source requires/,
   );
   assert.equal(resolveSourceArg({ argument: "./app" }), "./app");
   assert.throws(
     () => resolveSourceArg({ argument: "./a", flag: "./b" }),
     /either as an argument or with --source/,
+  );
+});
+
+Deno.test("deploy expected guard parses null current pointer", () => {
+  assert.deepEqual(
+    deploymentExpectedGuardFromOptions({
+      expectedManifestDigest: "sha256:manifest",
+      expectedCurrentDeploymentId: "null",
+    }),
+    {
+      manifestDigest: "sha256:manifest",
+      currentDeploymentId: null,
+    },
   );
 });
 
@@ -117,8 +149,8 @@ Deno.test("deploy command posts to an installation deployment endpoint", async (
         "abc123",
         "--expected-manifest-digest",
         "sha256:manifest",
-        "--expected-source-digest",
-        "sha256:source",
+        "--expected-current-deployment-id",
+        "dep_current",
         "--remote",
         "https://kernel.example",
         "--token",
@@ -140,7 +172,7 @@ Deno.test("deploy command posts to an installation deployment endpoint", async (
       expected: {
         commit: "abc123",
         manifestDigest: "sha256:manifest",
-        sourceDigest: "sha256:source",
+        currentDeploymentId: "dep_current",
       },
     });
   } finally {

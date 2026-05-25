@@ -1,26 +1,49 @@
-# Takosumi Core Specification {#core-spec}
+# Takosumi core 仕様 {#core-spec}
 
-Takosumi core specification is the portable contract for installing source into
-a Space and recording each apply as a Deployment. The public model has three
-entities:
+Takosumi core 仕様は、source を Space に install し、apply 結果を Deployment
+として記録するための portable contract です。公開 model は 3 つの entity に閉じ
+ます。
 
-| Entity       | Meaning                                                                                                 |
-| ------------ | ------------------------------------------------------------------------------------------------------- |
-| AppSpec      | `.takosumi.yml` in a source root. Authors declare components and connections.                           |
-| Installation | An AppSpec installed into a Space, with current state.                                                  |
-| Deployment   | One apply result for an Installation, including source identity, `manifestDigest`, status, and outputs. |
+| Entity       | 意味                                                                                                 |
+| ------------ | ---------------------------------------------------------------------------------------------------- |
+| manifest      | source root の `.takosumi.yml`。component と connection を宣言する。                                 |
+| Installation | Space に install された manifest の core record。current state を持つ。                               |
+| Deployment   | Installation に対する 1 回の apply 結果。source identity、`manifestDigest`、status、outputs を持つ。 |
 
-The core specification defines the AppSpec envelope, the Installer API, source
-input kinds, digest guards, and publish/listen reference grammar. It treats
-component kinds, material contracts, projection families, and external
-publication paths as resolvable strings. Catalogs own the vocabulary behind
-those strings. Operator distributions make catalog entries available in a Space,
-attach implementation bindings, and expose account-plane APIs such as billing,
-OIDC, dashboards, and deploy facades.
+core 仕様が定義するもの:
 
-## AppSpec
+- manifest の構造
+- Installer API
+- source input kind と digest guard
+- publish/listen reference grammar
 
-AppSpec root fields:
+component kind、出力の形式、注入モードは解決可能な vocabulary string として
+扱います。その語彙は型カタログが定義します。
+
+プラットフォームサービス path は operator または product distribution が公開する
+サービス一覧です。core は dotted grammar、exact-match resolution、Deployment の
+記録を定義します。
+
+operator profile は、Space で見える型カタログ entry とプラットフォームサービスの
+有効なサービス一覧を選び、binding を接続し、billing、OIDC、dashboard、deploy
+facade などの account layer API を提供します。
+
+## Installation から Deployment へのタイムライン
+
+```text
+1. source (git / prepared / local) を用意する
+2. POST /v1/installations/dry-run → 変更計画 + expected guard を取得
+3. POST /v1/installations         → Installation 作成 + 最初の Deployment
+   ─── ここから Installation が存在する ───
+4. source を更新する
+5. POST /v1/installations/{id}/deployments/dry-run → 差分確認
+6. POST /v1/installations/{id}/deployments         → 新しい Deployment
+7. 問題があれば POST /v1/installations/{id}/rollback → 過去の Deployment に戻る
+```
+
+## Manifest
+
+manifest root field:
 
 ```yaml
 apiVersion: v1
@@ -34,12 +57,9 @@ components:
       entrypoint: src/worker.ts
 ```
 
-`components` contains one or more named components.
+`components` は 1 つ以上の named component を持ちます。
 
-Component fields:
-
-The short kind below assumes an operator profile has activated an alias from the
-Takosumi official type catalog. A compatible operator can require a URI instead.
+Component field:
 
 ```yaml
 components:
@@ -50,22 +70,21 @@ components:
     listen: {}
 ```
 
-| Field     | Core meaning                                              |
-| --------- | --------------------------------------------------------- |
-| `kind`    | Opaque string resolved by the operator distribution.      |
-| `spec`    | Open object owned by the selected kind descriptor.        |
-| `publish` | Component-local publication names and material contracts. |
-| `listen`  | Component-local binding names and source references.      |
+| Field     | Core meaning                                            |
+| --------- | ------------------------------------------------------- |
+| `kind`    | operator profile が解決する文字列（Takosumi は値を解釈しない）。 |
+| `spec`    | 選択された kind の定義に従う open object。                        |
+| `publish` | component が外に出す出力名と出力の形式。                         |
+| `listen`  | component が受け取る binding 名と参照先。                        |
 
-## Publish / Listen
+上の short kind は、operator profile が Takosumi Kind カタログの alias
+を有効にしている場合の例です。compatible operator は alias ではなく URI
+を要求できます。
 
-`publish` declares material produced by a component. `listen` consumes material
-from another publication.
+## Publish / listen
 
-This example uses operator profile aliases for kind names (`postgres`, `worker`)
-and compact official catalog terms for material/projection names
-(`service-binding`, `secret-env`). The shape of `publish` and `listen` is core;
-the meanings of those catalog terms live in the official type catalog.
+`publish` は component が作る出力データを宣言します。`listen` は別の publish
+の出力データを受け取ります。
 
 ```yaml
 components:
@@ -83,27 +102,33 @@ components:
         as: secret-env
 ```
 
-`listen.<binding>.from` uses one plain dotted reference grammar:
+この例は、kind name (`postgres`, `worker`) と出力の形式 / 注入モード名
+(`service-binding`, `secret-env`) に operator profile の省略名と Kind カタログの
+省略名を使っています。`publish` と `listen` の構造は core が定義し、省略名の
+意味は Kind カタログが定義します。
 
-| Shape                        | Resolution                                                                                                            |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `component.publication`      | Same-AppSpec component publication. Exactly two segments.                                                             |
-| `publisher.area.name[.more]` | Space-visible external publication. Three to eight segments; see [External Publications](./external-publications.md). |
+`listen.<binding>.from` は 1 つの dotted reference grammar を使います。
 
-Map keys for component names, publication names, and listen binding names do not
-contain `.`, so the two forms are unambiguous at parse time. AppSpec uses plain
-dotted names for both forms.
+| Shape                        | Resolution                                                    |
+| ---------------------------- | ------------------------------------------------------------- |
+| `component.publication`      | 同一 manifest 内の component の publish 出力。ちょうど 2 segment。 |
+| `publisher.area.name[.more]` | Space で使えるプラットフォームサービス。3 から 8 segment。         |
 
-External publications participate in the same listen system as component
-publications. The core specification defines the path grammar and resolution
-semantics. External publication publisher roots and concrete paths are defined
-by operator or product distribution specs. The selected declaration's material
-contract is selected from the Takosumi official type catalog or another
-operator-adopted catalog.
+component name、publish 名、listen binding name は `.` を含めないため、2
+segment の local reference と 3 segment 以上のプラットフォームサービス path は
+parse 時点で区別できます。
+
+プラットフォームサービスは component-local な publish の出力と同じ listen の
+仕組みに参加します。core 仕様は path grammar と resolution semantics を定義
+します。
+
+publisher root と concrete path は operator または product distribution spec が
+定義します。選ばれた宣言の出力の形式は Takosumi Kind カタログ、または
+operator が採用した型カタログから選ばれます。
 
 ## Installer API
 
-The public Installer API is five Installation-centered endpoints:
+public Installer API は Installation を中心にした 5 endpoint です。
 
 ```text
 POST /v1/installations/dry-run
@@ -113,48 +138,55 @@ POST /v1/installations/{id}/deployments
 POST /v1/installations/{id}/rollback
 ```
 
-These five endpoints are the portable write lifecycle. A compatible operator
-also exposes the documented read projection needed for Installation
-list/inspect, Deployment history, async polling, and rollback target selection.
-That read projection belongs to the operator distribution or reference
-implementation profile and follows the minimum semantics in
-[Status And Read Surfaces](./status-output.md).
+この 5 endpoint が Takosumi core HTTP API です。dashboard、CLI、rollback target
+selection、support workflow のための read / list / history / poll surface は
+operator-owned read model です。追加の core Installer API endpoint ではありませ
+ん。
 
-Source input kinds:
+Source input kind:
 
-| Kind       | Meaning                                                                                     |
-| ---------- | ------------------------------------------------------------------------------------------- |
-| `git`      | Remote git source. Apply guard uses resolved commit + `manifestDigest`.                     |
-| `prepared` | Remote prepared source archive. Apply guard uses archive payload digest + `manifestDigest`. |
-| `local`    | Kernel-local source tree for dev/operator-local use. Apply guard uses `manifestDigest`.     |
+| Kind       | 意味                                                                                  |
+| ---------- | ------------------------------------------------------------------------------------- |
+| `git`      | remote git source。apply guard は resolved commit + `manifestDigest`。                |
+| `prepared` | remote prepared source。apply guard は source digest + `manifestDigest`。             |
+| `local`    | dev / operator-local 用の Takosumi-local source tree。apply guard は `manifestDigest`。 |
 
-`manifestDigest` is the sha256 of the raw `.takosumi.yml` bytes. For prepared
-source, the kernel computes the sha256 of the archive payload it fetched.
-Prepared source is a core source kind; the concrete archive payload format is an
-operator build-service capability, while archive root/path-safety rules and the
-payload digest guard are Installer API contract. `local` source has no portable
-source byte identity, so deploy dry-run / apply must provide `source` instead of
-omitting it. Build commands, build graph nodes, cache keys, and provenance
-records belong to the build service or operator automation, not the core
-Installer API.
+`manifestDigest` は raw `.takosumi.yml` bytes の sha256 です。prepared source
+では、Takosumi が取得した source payload の sha256 を計算します。
 
-## Layer Split
+prepared source は core source kind です。Installer API が所有する要素:
 
-| Layer                          | Defines                                                                                                                   |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| Takosumi core                  | AppSpec envelope, publish/listen grammar, Installation / Deployment, Installer API, source/digest guards.                 |
-| Takosumi official type catalog | Reusable kind descriptor documents, material contract shapes, projection-family names, and JSON-LD catalog metadata.      |
-| Operator distribution          | Which descriptors, material contracts, external publications, account-plane APIs, and providers are available in a Space. |
+- portable payload profile
+- source root / path-safety rule
+- size cap と payload digest guard
 
-Concrete workload external publication paths and account-plane API/facade
-identifiers belong to operator distribution specs. Start from the local
-[Takosumi Cloud](./takosumi-cloud.md) page for the Takosumi Cloud distribution.
+Portable v1 の prepared source payload は uncompressed POSIX tar です。
+operator-local profile が別 archive encoding を受け付ける場合でも、portable v1
+の互換条件ではありません。recipe、provenance、cache metadata は operator
+build-service profile が所有します。
 
-## Related Pages
+`local` source は portable source byte identity を持たないため、deploy dry-run /
+apply では `source` を省略せずに渡します。build command、build graph node、cache
+key、provenance record は build service または operator automation の責務であ
+り、core Installer API には入りません。
 
-- [AppSpec](./app-spec.md)
-- [Specification Boundaries](./spec-boundaries.md)
+## Layer split
+
+| Layer                   | Defines                                                                                                        |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Takosumi core           | manifest の構造、publish/listen grammar、Installation / Deployment、Installer API、source / digest guard。   |
+| Takosumi Kind カタログ | 再利用可能な kind の定義、出力の形式、注入モード名、JSON-LD catalog metadata。                                |
+| Operator profile   | Space で利用できる kind の定義、出力の形式、プラットフォームサービス、account layer API、provider。           |
+
+concrete workload 向けプラットフォームサービス path と account layer API /
+facade identifier は operator profile spec で定義します。Takosumi Cloud について
+は [Takosumi Cloud](./takosumi-cloud.md) から読みます。
+
+## 関連ページ
+
+- [manifest](./manifest.md)
+- [仕様境界](./spec-boundaries.md)
 - [Installer API](./installer-api.md)
-- [External publications](./external-publications.md)
-- [Takosumi Official Type Catalog Specification](./type-catalog.md)
+- [プラットフォームサービス](./external-publications.md)
+- [Takosumi Kind カタログ仕様](./type-catalog.md)
 - [Takosumi Cloud](./takosumi-cloud.md)

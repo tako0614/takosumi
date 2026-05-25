@@ -6,93 +6,95 @@
 
 ## Space 隔離 {#space-isolation}
 
-- Every Deployment, snapshot, journal, observation, approval, debt, activation,
-  and GroupHead has a Space id.
-- Space comes from deploy context / auth / API / operator profile.
-- External publication paths are Space-scoped.
-- Secrets, optional DataAssets, journals, approvals, observations, and audit
-  events are Space-scoped.
-- Publisher roots are defined by operator or product distributions, and concrete
-  external publication paths are granted into Spaces.
-- GroupHead identity is `spaceId + groupId`.
+- すべての Deployment、snapshot、journal、observation、approval、debt、activation、
+  RoutingPointer は Space id を持つ。
+- Space は deploy context / auth / API / operator profile から決まる。
+- platform service path は Space scope である。
+- secret、optional asset、journal、approval、observation、audit event は
+  Space scope である。
+- publisher root は operator または product distribution が定義し、具体的な
+  platform service path は operator policy によって Space 内に可視化される。
+- RoutingPointer の identity は `spaceId + groupId` である。
 
 ## Root 不変条件 {#root-invariants}
 
-- ResolutionSnapshot and DesiredSnapshot are immutable.
-- Apply uses recorded resolution evidence and snapshots instead of re-resolving
-  catalog documents or external publication registries during provider effects.
-- All graph entities have stable addresses.
-- Lifecycle class restricts operation kinds.
-- Core canonical state stores secret references, not raw secret values.
-- Actual effects cannot exceed approved effects without pause / compensation /
-  approval.
-- Side-effecting operations are write-ahead journaled.
-- Generated object ids are deterministic where possible.
-- Apply and activation are separated.
-- Observations append facts; desired state changes through new snapshots.
-- Deployment destroy handles Takosumi-managed objects according to lifecycle
-  policy.
-- Production serializes critical mutations, Space publication sharing, and kind
-  alias / descriptor / implementation binding set updates.
+- ResolvedPlan と TargetState は immutable である。
+- apply は provider effect 実行中に catalog document や platform service registry
+  を再解決せず、記録済みの resolution evidence と snapshot を使う。
+- すべての graph entity は安定したアドレスを持つ。
+- lifecycle class は operation 種別を制限する。
+- core canonical state は raw secret 値ではなく secret reference を保存する。
+- actual effect は pause / compensation / approval なしに approved effect を
+  超えてはならない。
+- side effect を持つ operation は write-ahead journal される。
+- 生成 object の id は可能な限り決定的である。
+- apply と activation は分離される。
+- observation は事実を追記する。desired state の変更は新しい snapshot を通じて
+  行う。
+- Deployment destroy は lifecycle policy に従って Takosumi が管理する object を
+  処理する。
+- 本番は critical mutation、Space の publish の出力の sharing、kind alias / kind の定義 /
+  binding set 更新を直列化する。
 
 ## Component kind resolution {#component-kind-resolution}
 
-- Takosumi public concepts remain AppSpec, Installation, and Deployment.
-- AppSpec root is only `apiVersion`, `metadata`, and `components`.
-- Component public fields are only `kind`, `spec`, `publish`, and `listen`.
-- Short kind aliases are operator-injected and fail closed when unresolved.
-- Catalog entries, kind-specific input schemas, and implementation bindings are
-  resolved and recorded before runtime use.
+- manifest root は `apiVersion`、`metadata`、`components` のみ。
+- Component の public field は `kind`、`spec`、`publish`、`listen` のみ。
+- short kind alias は operator が注入し、未解決の場合は fail-closed する。
+- catalog entry、kind 固有の input schema、binding は runtime 使用前に解決・
+  記録される。
 
-Reference / operator production profile:
+Reference / operator production の設定:
 
-- Execution targets come from the operator-selected binding set.
-- runtime-agent or provider inventory drift is recorded as operator evidence,
-  not as AppSpec vocabulary.
+- 実行ターゲットは operator が選択した binding set から決まる。
+- runtime-agent や provider inventory の drift は operator evidence として記録
+  され、manifest vocabulary としては扱わない。
 
-## External publication {#external-publications}
+## Platform service {#platform-services}
 
-- External publication path grammar is enforced inside each Space.
-- Shadowing is policy-gated, and production denies meaningful Space / operator /
-  external shadowing by default.
-- Default publications never imply admin access.
-- Grant-producing publications require explicit access unless safe default is
-  declared.
-- ExternalPublicationDeclaration and PublicationMaterialization are separated.
+- platform service path の grammar は各 Space 内で強制される。
+- shadowing は policy で gate され、本番では meaningful な Space / operator /
+  external shadowing をデフォルトで拒否する。
+- デフォルトの publication は admin access を暗示しない。
+- credential や authorization の出力データを生成する publish の出力は、safe default
+  が宣言されない限り明示的な access を要求する。
+- PlatformServiceDeclaration と PublicationMaterialization は分離される。
 
 ## Journal と回復 {#journal-and-recovery}
 
-- Operation intent is recorded before external calls.
-- Generated object planned records are written before creation.
-- External call start and observed handle are both journaled.
-- RevokeDebt is created for failed cleanup.
-- Journal entries with unresolved debt are not compacted away.
+- operation intent は外部呼び出しの前に記録される。
+- 生成 object の planned record は生成前に書き込まれる。
+- 外部呼び出しの開始と observed handle は両方 journal される。
+- cleanup の失敗時に CleanupBacklog が作成される。
+- 未解決の debt を持つ journal entry は compaction で消されない。
 
 ## Policy と approval {#policy-and-approval}
 
-- Approvals bind to snapshot digest, operation plan digest, and effect details.
-- Approval invalidation triggers are implemented per the closed v1 set in
-  [Policy, Risk, Approval, and Error Model](./policy-risk-approval-error-model.md).
-- Plan risks have stable risk ids and only emit kinds drawn from the closed v1
-  Risk enum.
-- Error hints are classified as safeFix, requiresPolicyReview, or operatorFix.
+- approval は snapshot digest、operation plan digest、effect details に bind
+  される。
+- approval invalidation trigger は
+  [承認モデル](./approval-model.md) の closed v1
+  set に従って実装される。
+- plan risk は安定した risk id を持ち、closed v1 Risk enum から引かれた kind
+  のみを emit する。
+- error hint は safeFix、requiresPolicyReview、operatorFix に分類される。
 
 ## シークレット {#secrets}
 
-- Secret-bearing publications cannot project to plain env.
-- Literal env secret scanning or policy is enabled.
-- Runtime secrets are not passed to transforms by default.
+- secret を含む publication は plain env に project できない。
+- literal env secret scanning または policy が有効である。
+- runtime secret はデフォルトで transform に渡されない。
 
 ## Activation {#activation}
 
-- Ingress reservation and traffic assignment are separated.
-- GroupHead update is serialized per Space.
-- Rollback modes are explicit.
+- ingress reservation と traffic assignment は分離される。
+- RoutingPointer 更新は Space ごとに直列化される。
+- rollback mode は明示的である。
 
 ## Observability {#observability}
 
-- Audit events include kind descriptor selections, resolution, desired adoption,
-  link selection, operation stages, generated objects, debts, approvals,
-  activation, and GroupHead.
-- RevokeDebt is visible in operator status views and deploy gates. `/readyz`
-  remains kernel control-plane readiness only.
+- audit event は kind schema selection、resolution、desired adoption、link
+  selection、operation stage、生成 object、debt、approval、activation、
+  RoutingPointer を含む。
+- CleanupBacklog は operator status view と deploy gate で可視である。`/readyz`
+  は Takosumi control-plane readiness のみに留まる。

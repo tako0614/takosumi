@@ -22,8 +22,10 @@ takosumi install --source . --space space:personal
 ```
 
 This stock server path records Installation / Deployment metadata and is useful
-for local smoke tests. Real provider materialization uses a bootstrap server
-that passes `kindAliases` and provider `plugins` to `createPaaSApp()`.
+for local smoke tests. In the reference kernel/server, provider materialization
+uses an operator bootstrap server that passes `kindAliases` and provider
+`plugins` to `createPaaSApp()`. Compatible implementations may use another
+registry, controller, or operator inventory.
 
 ## Sub-exports
 

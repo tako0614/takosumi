@@ -323,10 +323,17 @@ export class InstallerPipeline {
     const installation = await this.#requireInstallation(installationId);
     const source = request.source ??
       await this.#sourceFromInstallation(installation);
-    return await this.installationDryRun({
+    const dryRun = await this.installationDryRun({
       spaceId: installation.spaceId,
       source,
     });
+    return {
+      ...dryRun,
+      expected: {
+        ...dryRun.expected,
+        currentDeploymentId: installation.currentDeploymentId,
+      },
+    };
   }
 
   async deploymentApply(
@@ -334,6 +341,7 @@ export class InstallerPipeline {
     request: DeploymentApplyRequest,
   ): Promise<DeploymentApplyResponse> {
     const installation = await this.#requireInstallation(installationId);
+    checkExpectedCurrentDeploymentId(request.expected, installation);
     const source = request.source ??
       await this.#sourceFromInstallation(installation);
     const fetched = await this.#fetchSource(source);
@@ -1121,6 +1129,29 @@ function checkExpectedPin(
   }
 }
 
+function checkExpectedCurrentDeploymentId(
+  expected: DeploymentApplyRequest["expected"],
+  installation: Installation,
+): void {
+  if (!expected) return;
+  if (!("currentDeploymentId" in expected)) {
+    throw new InstallerPipelineError(
+      "invalid_argument",
+      "deploy expected guard must include expected.currentDeploymentId",
+    );
+  }
+  if (expected.currentDeploymentId !== installation.currentDeploymentId) {
+    throw new InstallerPipelineError(
+      "failed_precondition",
+      `expected currentDeploymentId ${
+        expected.currentDeploymentId ?? "<none>"
+      } but Installation current pointer is ${
+        installation.currentDeploymentId ?? "<none>"
+      }`,
+    );
+  }
+}
+
 function validateExpectedPinShape(
   expected: SourcePin,
   sourceKind: SourceSummary["kind"],
@@ -1153,6 +1184,12 @@ function validateExpectedPinShape(
 
 function validateSourceDescriptor(source: Source): void {
   if (source.kind === "git") {
+    if (source.ref === undefined || source.ref.length === 0) {
+      throw new InstallerPipelineError(
+        "invalid_argument",
+        "git source must include source.ref",
+      );
+    }
     if (source.digest !== undefined) {
       throw new InstallerPipelineError(
         "invalid_argument",
@@ -1167,11 +1204,19 @@ function validateSourceDescriptor(source: Source): void {
       `${source.kind} source must not include source.commit`,
     );
   }
-  if (source.kind === "prepared" && source.ref !== undefined) {
-    throw new InstallerPipelineError(
-      "invalid_argument",
-      "prepared source must not include source.ref",
-    );
+  if (source.kind === "prepared") {
+    if (source.digest === undefined || source.digest.length === 0) {
+      throw new InstallerPipelineError(
+        "invalid_argument",
+        "prepared source must include source.digest",
+      );
+    }
+    if (source.ref !== undefined) {
+      throw new InstallerPipelineError(
+        "invalid_argument",
+        "prepared source must not include source.ref",
+      );
+    }
   }
   if (source.kind === "local") {
     if (source.ref !== undefined) {

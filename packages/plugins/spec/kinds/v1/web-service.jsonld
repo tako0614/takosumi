@@ -51,14 +51,31 @@
   "publications": {
     "http": {
       "contract": "http-endpoint",
-      "material": {
-        "url": "$outputs.url",
-        "internalHost": "$outputs.internalHost",
-        "internalPort": "$outputs.internalPort"
+      "exampleMaterialMapping": {
+        "targets": [
+          {
+            "name": "default",
+            "url": "$outputs.url",
+            "host": "$outputs.internalHost",
+            "port": "$outputs.internalPort",
+            "visibility": "private"
+          }
+        ]
       }
     }
   },
-  "acceptedProjectionFamilies": ["env", "secret-env"],
+  "listens": {
+    "*": {
+      "accepts": [
+        "service-binding",
+        "object-store",
+        "event-channel",
+        "identity.oidc@v1",
+        "billing.port@v1"
+      ],
+      "projectionFamilies": ["secret-env", "config-mount"]
+    }
+  },
   "outputs": [
     {
       "name": "url",

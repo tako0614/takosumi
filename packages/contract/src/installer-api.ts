@@ -86,6 +86,12 @@ export interface LocalSourcePin {
 
 export type SourcePin = GitSourcePin | PreparedSourcePin | LocalSourcePin;
 
+export interface CurrentDeploymentGuard {
+  readonly currentDeploymentId: string | null;
+}
+
+export type DeploymentExpectedGuard = SourcePin & CurrentDeploymentGuard;
+
 // ──────────────────────────────────────────────
 // Dry-run (new install)
 // ──────────────────────────────────────────────
@@ -104,13 +110,15 @@ export interface ChangeEntry {
   readonly reason?: string;
 }
 
-export interface InstallationDryRunResponse {
+export interface DryRunResponse<TExpected extends SourcePin = SourcePin> {
   readonly source: SourceSummary;
   readonly manifestDigest: string;
   readonly appSpec: AppSpec;
   readonly changes: readonly ChangeEntry[];
-  readonly expected: SourcePin;
+  readonly expected: TExpected;
 }
+
+export type InstallationDryRunResponse = DryRunResponse<SourcePin>;
 
 export interface SourceSummary {
   readonly kind: SourceKind;
@@ -143,11 +151,11 @@ export interface DeploymentDryRunRequest {
   readonly source?: Source;
 }
 
-export type DeploymentDryRunResponse = InstallationDryRunResponse;
+export type DeploymentDryRunResponse = DryRunResponse<DeploymentExpectedGuard>;
 
 export interface DeploymentApplyRequest {
   readonly source?: Source;
-  readonly expected?: SourcePin;
+  readonly expected?: DeploymentExpectedGuard;
 }
 
 export interface DeploymentApplyResponse {

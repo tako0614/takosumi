@@ -1,6 +1,6 @@
 # Cross-Process Locks
 
-複数 kernel pod が並走する production 配置でも特定 resource 群への mutation を
+複数 Takosumi pod が並走する production 配置でも特定 resource 群への mutation を
 直列化する protocol を定義する。
 
 ## Use cases
@@ -8,16 +8,16 @@
 cross-process lock が要求される resource は v1 で固定列挙される。新しい lock
 scope を増やすには `CONVENTIONS.md` §6 の RFC を要する。
 
-| Lock scope                             | 用途                                                              |
-| -------------------------------------- | ----------------------------------------------------------------- |
-| `group-head:<spaceId>:<group>`         | GroupHead update のシリアライズ (canary / shadow / rollout)       |
-| `activation-snapshot:<spaceId>`        | ActivationSnapshot update のシリアライズ                          |
-| `generated-credential:<spaceId>:<ns>`  | generated credential mutation の Space-local serialization        |
-| `external-publication-registry:<spaceId>`         | External publication registry writes (external publication 設定の追加 / 削除)    |
-| `operator-implementation-config:<id>`  | operator implementation config / Space visibility assignment      |
-| `operation-plan:<spaceId>:<digest>`    | 同一 OperationPlan に対する apply / activate / destroy / rollback |
-| `installer:<spaceId>:<installationId>` | installer apply / rollback fence                                  |
-| `secret-partition:<spaceId>:<tag>`     | secret partition rotation                                         |
+| Lock scope                                | 用途                                                                          |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| `routing-pointer:<spaceId>:<group>`            | RoutingPointer update のシリアライズ (canary / shadow / rollout)                   |
+| `activation-snapshot:<spaceId>`           | TrafficSnapshot update のシリアライズ                                      |
+| `generated-credential:<spaceId>:<ns>`     | generated credential mutation の Space-local serialization                    |
+| `platform-service-registry:<spaceId>` | Platform service registry writes (platform service 設定の追加 / 削除) |
+| `operator-implementation-config:<id>`     | operator implementation config / Space visibility assignment                  |
+| `operation-plan:<spaceId>:<digest>`       | 同一 OperationPlan に対する apply / activate / destroy / rollback             |
+| `installer:<spaceId>:<installationId>`    | installer apply / rollback fence                                              |
+| `secret-partition:<spaceId>:<tag>`        | secret partition rotation                                                     |
 
 read path は **lock-free**。observe / status / describe は直近 commit 済みの
 world view から read-only で動く。
@@ -30,7 +30,7 @@ world view から read-only で動く。
 | Field            | 型             | 内容                                                                      |
 | ---------------- | -------------- | ------------------------------------------------------------------------- |
 | `lockId`         | string         | scope 名 + key (上表の表記)                                               |
-| `holderId`       | string         | 取得した kernel pod の identity (`hostname` + `pid` + UUID)               |
+| `holderId`       | string         | 取得した Takosumi pod の identity (`hostname` + `pid` + UUID)             |
 | `acquiredAt`     | timestamp (ms) | 初回 acquisition 時刻                                                     |
 | `leaseExpiresAt` | timestamp (ms) | 現在の lease 失効予定時刻                                                 |
 | `lastHeartbeat`  | timestamp (ms) | 直近 heartbeat 受領時刻                                                   |
@@ -62,8 +62,8 @@ acquire は以下の SQL 相当 atomic transaction で行う。
    `cross_process_lock_busy` を返す
 4. transaction commit
 
-acquire 成功後、 kernel は heartbeat を回し、 `try { ... } finally { release }`
-で release を保証する。 release は `holderId` と `epoch` の両方が一致する場合
+acquire 成功後、Takosumi は heartbeat を回し、`try { ... } finally { release }`
+で release を保証する。release は `holderId` と `epoch` の両方が一致する場合
 だけ row を消す。
 
 installer lock は同じ Installation への concurrent apply / rollback
@@ -88,7 +88,7 @@ SET leaseExpiresAt = now() + leaseMs, lastHeartbeat = now()
 WHERE lockId = ? AND holderId = ? AND epoch = ?
 ```
 
-返り行数が 0 の場合 (lock を別 holder が claim 済み)、 kernel は in-flight
+返り行数が 0 の場合 (lock を別 holder が claim 済み)、Takosumi は in-flight
 operation を `cross_process_lock_lost` で fail-closed させ、当該 OperationPlan
 を recovery 経路に渡す。
 
@@ -103,9 +103,9 @@ lease。下流 provider へ fencing token は渡さない。長時間の operati
 | ---------------------------------- | ---------- | -------------- | ------------------------------------------------ |
 | `operation-plan:*`                 | `30s`      | `10s`          | apply / commit に時間がかかるなら lease を伸ばす |
 | `activation-snapshot:*`            | `15s`      | `5s`           | 短時間の atomic write 用                         |
-| `group-head:*`                     | `15s`      | `5s`           | rollout state machine の 1 step 単位             |
+| `routing-pointer:*`                     | `15s`      | `5s`           | rollout state machine の 1 step 単位             |
 | `generated-credential:*`           | `30s`      | `10s`          | credential rotation 中は伸ばす                   |
-| `external-publication-registry:*`             | `15s`      | `5s`           | metadata write 用                                |
+| `platform-service-registry:*`  | `15s`      | `5s`           | metadata write 用                                |
 | `operator-implementation-config:*` | `30s`      | `10s`          | implementation config / Space visibility update  |
 | `secret-partition:*`               | `120s`     | `30s`          | rotation は entry 数に応じて長期化               |
 
@@ -114,9 +114,9 @@ operator が伸ばす場合の上限は `5min`。それを超えると recovery 
 
 ## Recovery (lock holder の突然死)
 
-holder kernel pod が `kill -9` 等で消えた場合、 heartbeat が止まり
+holder Takosumi pod が `kill -9` 等で消えた場合、heartbeat が止まり
 `leaseExpiresAt` が経過する。次の acquire 試行で **別 process が claim 可能**
-になる。 claim した kernel は以下を行う。
+になる。claim した Takosumi は以下を行う。
 
 1. lock entry の `holderId` / `epoch` から「前 holder が誰だったか」を確認
 2. 前 holder の WAL を読み、当該 lock scope に紐づく in-flight operation の現在
@@ -126,7 +126,7 @@ holder kernel pod が `kill -9` 等で消えた場合、 heartbeat が止まり
    - `prepare` で止まっていた→ `normal` で resume (idempotency key で重複排除)
    - `commit` 半ばで止まっていた→ `continue` で commit を最後まで進める
    - `commit` 完了 / `post-commit` 失敗→ `compensate` で `activation-rollback`
-     RevokeDebt を発行
+     CleanupBacklog を発行
    - 状況不明→ `inspect` で差分 dump のみ
 
 idempotency key は WAL の `(spaceId, operationPlanDigest, journalEntryId)` tuple
@@ -134,14 +134,14 @@ idempotency key は WAL の `(spaceId, operationPlanDigest, journalEntryId)` tup
 
 ## SQL backed store requirement
 
-production 配置 (kernel pod 数 >= 2) では SQL backed store が **必須**。
+production 配置 (Takosumi pod 数 >= 2) では SQL backed store が **必須**。
 
 - `OperationPlanLockStore` の SQL 実装は `SELECT ... FOR UPDATE` および atomic
-  `UPDATE ... WHERE epoch = ?` を使い、 cross-process serialization を保証する
+  `UPDATE ... WHERE epoch = ?` を使い、cross-process serialization を保証する
 - in-memory store は per-process Promise chain で直列化する。dev / unit test
   専用
-- in-memory store を production で inject すると kernel boot 時に warning
-  が出る。 warning を見逃さない運用が前提
+- in-memory store を production で inject すると Takosumi boot 時に warning
+  が出る。warning を見逃さない運用が前提
 
 複数 kernel pod が同 SQL store を share する constraint は読み取り
 strict-consistent であること。 read replica や eventual consistent store
@@ -149,8 +149,8 @@ strict-consistent であること。 read replica や eventual consistent store
 
 ## Lock 失効中の kernel 挙動
 
-lock 失効が検出されると、 kernel は当該 lock scope の **mutation 系 operation
-だけ** を pause / fail-closed する。 read path は影響を受けない。
+lock 失効が検出されると、Takosumi は当該 lock scope の **mutation 系 operation
+だけ** を pause / fail-closed する。read path は影響を受けない。
 
 | Path                              | lock 失効中の挙動                                                     |
 | --------------------------------- | --------------------------------------------------------------------- |
@@ -170,16 +170,16 @@ clients (CLI / operator UI) は `cross_process_lock_busy` を retry-after hint
 複数 lock を同時に保持する operation は **lock acquisition 順序を spaceId
 ascending → scope ascending → key ascending に固定** する。
 
-例: 2 つの Space `space-a` / `space-b` を跨ぐ external publication を更新する場合、
-acquire 順は
+例: 2 つの Space `space-a` / `space-b` を跨ぐプラットフォームサービスを更新する
+場合、acquire 順は
 
 ```
-external-publication-registry:space-a → external-publication-registry:space-b
+platform-service-registry:space-a → platform-service-registry:space-b
 ```
 
-逆順は禁止。 kernel core はこの順序を assertion で強制する。誤順序の acquire は
-`cross_process_lock_invariant_broken` で fail-closed する (kernel bug detector
-として動く)。
+逆順は禁止。Takosumi core はこの順序を assertion で強制する。誤順序の acquire は
+`cross_process_lock_invariant_broken` で fail-closed する (bug detector として
+動く)。
 
 current v1 で cross-Space lock を取る operation:
 

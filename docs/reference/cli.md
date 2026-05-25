@@ -1,23 +1,23 @@
 # CLI リファレンス {#cli-reference}
 
-`takosumi` CLI は **source を kernel に送る薄い client** です。 5 endpoint
-([Installer API](./installer-api.md)) に対応する subcommand を持ちます。
+`takosumi` CLI は **source を Takosumi server に送る薄い client** です。
+[Installer API](./installer-api.md) に対応する subcommand を持ちます。
 
 ```text
 CLI の役割:
   - source を送る (= POST /v1/installations / deployments)
   - dry-run を表示する
   - rollback を呼ぶ
-  - kernel server を起動する
-  - migration / runtime-agent helper を提供する
+  - Takosumi server を起動する
 ```
 
 ## モード
 
-installer command (`install` / `deploy` / `rollback`) は remote kernel を必須
-とします。 `--remote`、 `TAKOSUMI_REMOTE_URL`、または `~/.takosumi/config.yml`
-で kernel URL を渡します。ローカル開発時は `takosumi server` で kernel
-を起動して、その URL を installer command に渡します。
+installer command (`install` / `deploy` / `rollback`) は remote Takosumi server
+を必須とします。`--remote`、`TAKOSUMI_REMOTE_URL`、または
+`~/.takosumi/config.yml` で server URL を渡します。ローカル開発時は
+`takosumi server` で Takosumi server を起動して、その URL を installer command
+に渡します。
 
 ## インストール
 
@@ -30,12 +30,11 @@ takosumi version
 
 ## 認証
 
-remote command は bearer token で kernel に認証します。
+remote command は bearer token で Takosumi server に認証します。
 
-| Env                        | 用途                          |
-| -------------------------- | ----------------------------- |
-| `TAKOSUMI_INSTALLER_TOKEN` | 5 endpoint Installer API      |
-| `TAKOSUMI_AGENT_TOKEN`     | runtime-agent 系 internal RPC |
+| Env                        | 用途                     |
+| -------------------------- | ------------------------ |
+| `TAKOSUMI_INSTALLER_TOKEN` | Installer API |
 
 token は次の順序で resolve します。
 
@@ -62,7 +61,7 @@ takosumi install --remote https://kernel.example.com \
 # prepared source from an external build service
 takosumi install --remote https://kernel.example.com \
   --space space_personal \
-  --source prepared:https://build.example.com/snapshots/app-123.archive#sha256:...
+  --source prepared:https://source.example/prepared/notes.tar#sha256:...
 
 # local path visible to the kernel process
 takosumi install --remote http://localhost:8788 \
@@ -87,7 +86,7 @@ prepared:<url>#<sha256:hex>
 `#` は最後の separator だけを source ref / digest として扱います。URL 自体に
 fragment が必要な場合は encode してください。`prepared:` は build service / CI
 が作った prepared source archive URL と archive payload digest を渡す形式です。
-git source の ref と prepared source の digest は remote source identity の 必須
+git source の ref と prepared source の digest は remote source identity の必須
 guard です。CLI は `prepared:<url>` のように `#sha256:...` を欠く prepared
 source を client-side invalid として扱います。
 
@@ -108,22 +107,35 @@ takosumi install dry-run --space space_personal \
 ```
 
 response (`changes[]` / `expected.commit` / `expected.manifestDigest` /
-`expected.sourceDigest` / `expected.currentDeploymentId`、および operator
-extension field) を JSON で表示。
+`expected.sourceDigest`、および operator extension field) を JSON で表示。
 
 ### `takosumi deploy <installation-id> [--source <source>]`
 
 既存 Installation に対する apply。 `--source` 省略時は current Deployment に記録
-された source descriptor を使って次の Deployment を作ります。dry-run から apply
-へ進む場合は `install` と同じ expected guard flag を渡します。
+された immutable source descriptor を再利用します。対象は git source の resolved
+commit / ref と prepared source archive URL + digest です。`local` source は
+portable な source byte identity を持たないため、deploy dry-run / apply で
+`--source` を毎回渡します。dry-run から apply へ進む場合は `install` と同じ
+expected guard flag に加えて `--expected-current-deployment-id` を渡します。
+dry-run response の `expected.currentDeploymentId` が `null` の場合は、CLI では
+literal `null` を渡します。
 
 ```bash
 takosumi deploy inst_01HM9N7XK4QY8RT2P5JZF6V3W9 --source git:https://github.com/example/notes#v1.2.4
 ```
 
+deploy expected guard flag:
+
+| Flag                               | 対象                  |
+| ---------------------------------- | --------------------- |
+| `--expected-current-deployment-id` | deploy base pointer   |
+| `--expected-manifest-digest`       | source manifest digest |
+| `--expected-commit`                | git source            |
+| `--expected-source-digest`         | prepared source       |
+
 ### `takosumi deploy dry-run <installation-id> [--source <source>]`
 
-新 source の dry-run。
+新 source の dry-run。response は `expected.currentDeploymentId` を含みます。
 
 ### `takosumi rollback <installation-id> <deployment-id>`
 
@@ -135,7 +147,7 @@ takosumi rollback inst_01HM9N7XK4QY8RT2P5JZF6V3W9 dep_01HM9N7XK4QY8RT2P5JZF6V3WA
 
 ### `takosumi server`
 
-kernel server を foreground 起動。 remote installer command の接続先として
+Takosumi server を foreground 起動。remote installer command の接続先として
 使える。
 
 ```bash
@@ -145,7 +157,7 @@ takosumi server --port 9000
 
 ### `takosumi init [output]`
 
-`.takosumi.yml` AppSpec scaffold を生成。`init` は AppSpec だけを作ります。
+`.takosumi.yml` manifest scaffold を生成。`init` は manifest だけを作ります。
 
 生成しないもの:
 
@@ -160,17 +172,6 @@ takosumi init .takosumi.yml
 takosumi init --template empty
 ```
 
-## Operator extension helpers {#operator-extension-helpers}
-
-### DataAsset helper (`takosumi artifact ...`)
-
-operator が DataAsset extension を有効化した場合だけ使う optional helper です。
-upload / list / delete / GC の write 系は `TAKOSUMI_DEPLOY_TOKEN` を使う。
-installer token とは分離する。
-
-`artifact` は operator DataAsset record を扱う helper command です。prepared
-source archive の作成や build handoff は build-service 側で扱います。
-
 ### `takosumi version`
 
 CLI version を表示。
@@ -179,7 +180,7 @@ CLI version を表示。
 
 | Flag             | 説明                                     |
 | ---------------- | ---------------------------------------- |
-| `--remote <url>` | remote kernel URL (= remote mode に切替) |
+| `--remote <url>` | remote Takosumi server URL (= remote mode に切替) |
 | `--token <t>`    | installer bearer token                   |
 | `--space <id>`   | 対象 Space id (install で必須)           |
 
@@ -197,6 +198,5 @@ CLI flag > env > config file の優先順位。
 ## 関連ページ
 
 - [Installer API](./installer-api.md) — CLI が呼ぶ HTTP endpoint
-- [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [Reference Kernel Route Inventory](./kernel-http-api.md) — reference mounted
-  route inventory
+- [manifest](./manifest.md) — `.takosumi.yml` 仕様
+- [ビルドサービス境界](./build-spec.md) — prepared source handoff

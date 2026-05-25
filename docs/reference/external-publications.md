@@ -1,14 +1,20 @@
-# External Publications {#external-publications}
+# プラットフォームサービス {#platform-services}
 
-External publication is the core mechanism for letting material from outside the
-AppSpec participate in the same `publish` / `listen` system as component-local
-publications.
+## operator が提供するサービスとは
 
-An AppSpec author writes the publication path directly in
-`listen.<binding>.from`:
+プラットフォームサービスは、operator（Takosumi を運用する主体）が Space に
+公開するサービスです。OIDC 認証、billing API、shared database などが典型例
+です。manifest を書くアプリ開発者は、これらのサービスを component 間接続と
+同じ `listen.from` の仕組みで受け取れます。
 
-This example assumes an operator profile maps the short `worker` alias to an
-adopted descriptor.
+manifest `listen.from` はプラットフォームサービス path を扱えます。これにより、
+manifest 外の出力データも component-local な publish の出力と同じ依存関係の
+記法に参加できます。
+
+manifest author は path を `listen.<binding>.from` に直接書きます。
+
+次の例は、operator profile が `worker` という省略名を kind の定義に対応付けて
+いる前提です。
 
 ```yaml
 components:
@@ -22,108 +28,122 @@ components:
         required: true
 ```
 
-External publications use the same dependency language as component-local
-publications: a publisher makes a path visible to the Space, and a component
-listens to that path.
+プラットフォームサービスも component-local な publish の出力と同じ依存関係の記法
+を使います。publisher が Space に path を公開し、component がその path を listen
+します。
 
-## Reference Grammar
+### listen の YAML 例
 
-`listen.<binding>.from` uses one plain dotted reference grammar:
+```yaml
+components:
+  web:
+    kind: worker
+    listen:
+      # 同一 manifest 内の component から受け取る（2 segment）
+      db:
+        from: db.connection
+        as: secret-env
+        prefix: DB
+      # operator が提供するプラットフォームサービスから受け取る（3 segment 以上）
+      identity:
+        from: operator.identity.oidc
+        as: secret-env
+        prefix: OIDC
+        required: true
+```
 
-| Shape                        | Meaning                                                   |
-| ---------------------------- | --------------------------------------------------------- |
-| `component.publication`      | Same-AppSpec component publication. Exactly two segments. |
-| `publisher.area.name[.more]` | External publication path. Three or more segments.        |
+## 参照 grammar
 
-Component names and publication names cannot contain `.`, so a two-segment
-reference and a three-or-more-segment external publication path are unambiguous.
+`listen.<binding>.from` は 1 つの plain dotted reference grammar を使います。
 
-External publication path grammar:
+| Shape                        | 意味                                                          |
+| ---------------------------- | ------------------------------------------------------------- |
+| `component.publication`      | 同一 manifest 内の component の publish 出力。ちょうど 2 segment。 |
+| `publisher.area.name[.more]` | プラットフォームサービス path。3 segment 以上。                     |
+
+component name と publication name は `.` を含めないため、2 segment reference と
+3 segment 以上の platform service path は曖昧になりません。
+
+Platform service path grammar:
 
 ```text
 segment = [a-z][a-z0-9-]{0,62}
 path    = segment "." segment "." segment ("." segment)*
 ```
 
-Rules:
+ルール:
 
-- minimum 3 segments
-- maximum 8 segments
-- maximum 255 characters
-- empty segment is invalid
-- first segment is the publisher root
+- minimum 3 segments。
+- maximum 8 segments。
+- maximum 255 characters。
+- empty segment は invalid。
+- first segment は publisher root。
 
-## Publisher Roots
+## Publisher root
 
-The first segment names the distribution that offers the path. Core validates
-the grammar and resolves the exact path in the target Space; distribution specs
-own root naming and path inventory.
+first segment は、その path を提供する distribution を表します。Takosumi core
+は grammar と exact-match semantics を定義します。installer は target Space に
+見える operator 提供の有効なサービス一覧に対して valid path を解決します。
+root naming と path inventory は distribution spec で定義します。
 
-| Publisher root example | Owned by                         | Example path              |
+| Publisher root example | 提供元                           | Example path              |
 | ---------------------- | -------------------------------- | ------------------------- |
-| `operator`             | Operator distribution            | `operator.identity.main`  |
+| `operator`             | Operator profile                 | `operator.identity.main`  |
 | `takos`                | Product distribution catalog     | `takos.memory.default`    |
 | `acme`                 | Organization or private operator | `acme.database.reporting` |
 
-Roots are Space-scoped. A Space has one active visible declaration for a given
-publication path; duplicate visible declarations for the same path fail apply
-with `409 failed_precondition`. Product distributions should document the roots
-they publish and the material contracts behind those paths in their own
-distribution/catalog docs.
+root は Space-scoped です。1 つの Space では、path ごとに active visible な宣言
+は 1 つだけです。同じ path の duplicate visible な宣言がある場合、apply は 409
+`failed_precondition` で失敗します。Product distribution は、自分が publish する
+root と、その path の裏側にある出力の形式を自分の distribution / catalog docs
+に書きます。
 
-Root adoption is operator-profile state:
+root の有効化は operator-profile の状態です。
 
-- `operator` is the root owned by the active operator distribution for that
-  Space.
-- Product roots such as `takos` are visible only when the operator profile
-  adopts that product distribution/catalog for the Space.
-- Organization/private roots such as `acme` are owned by the account-plane or
-  private operator policy that declares them.
-- Two distributions cannot own the same root in one Space unless the operator
-  profile defines an explicit delegation rule; ambiguous root ownership is a 409
-  `failed_precondition` before materialization.
+- `operator` は、その Space の active operator profile が提供する root。
+- `takos` などの product root は、operator profile がその product distribution /
+  catalog を Space に有効化した場合だけ visible。
+- `acme` などの organization / private root は、account layer または private
+  operator policy が管理する。
+- 1 つの Space で 2 つの distribution が同じ root を使うことはできません。
+  operator profile が explicit delegation rule を持たない場合、曖昧な root
+  はリソースの作成・更新前に 409 `failed_precondition` です。
 
-## Resolution
+## 解決
 
-Resolution is Space-scoped. The same path in another Space can point to a
-different declaration.
+Resolution は Space-scoped です。同じ path でも別 Space では別の宣言を指せます。
 
-1. The operator gathers the external publication declarations visible to the
-   target Space.
-2. Active visible declarations must be unique by `(Space, publicationPath)`. If
-   more than one declaration is visible for the same path, apply fails before
-   provider side effects with `409 failed_precondition`; operator details may
-   include a conflict/risk reason such as `shadowed-publication`.
-3. A `listen.from` value with three or more segments is resolved by exact
-   `publicationPath` match.
-4. The selected declaration snapshot is recorded in retained
-   implementation/operator evidence.
-5. If the path is absent and `required: true`, apply fails before provider side
-   effects.
-6. If the path is absent and `required` is omitted or false, the binding is
-   absent.
-7. A kind-specific `spec` field that references an absent optional binding is
-   invalid unless the adopted descriptor explicitly defines degraded behavior
-   for that absent binding and records that degradation in retained
-   implementation/operator evidence.
+1. operator は target Space に visible なプラットフォームサービスの宣言を集める。
+2. active visible な宣言は `(Space, path)` で unique でなければならない。同じ
+   path に複数 visible な宣言があればリソースの作成・更新前に 409
+   `failed_precondition`。
+3. 3 segment 以上の `listen.from` value は path の exact match で解決する。
+4. 選択された宣言の snapshot は Deployment の記録に残す。
+5. path が absent で `required: true` の場合、リソースの作成・更新前に apply が
+   失敗する。
+6. path が absent で `required` が omitted または false の場合、その binding は
+   absent。
+7. kind-specific `spec` field が absent optional binding を参照する場合、採用
+   した kind の定義が degraded behavior を明示し、その degradation を実装 /
+   operator の Deployment の記録に残す場合だけ許容できる。
 
-## Declaration And Material
+## 宣言と出力データ
 
-Core resolves dotted `listen.from` paths: two segments for same-AppSpec
-publications, three or more segments for Space-visible external publications.
-Catalogs supply material vocabulary and access metadata. Operator or product
-distribution specs define publisher roots and concrete publication paths, and
-operator distributions materialize the selected declaration. Implementations
-usually split "what can be used" from "what was materialized". The following
-records are operator implementation examples, not additional Takosumi core
-public entities:
+Core は dotted `listen.from` path を解決します。2 segment は same-manifest の
+publish 出力、3 segment 以上は Space で使えるプラットフォームサービスです。
+型カタログは出力データの語彙と access metadata を提供します。operator または
+product distribution spec は publisher root と concrete path を定義し、operator
+profile が選択された宣言を実体化します。
+
+実装では通常、「何が使えるか」と「何が実体化されたか」を分けて記録します。
+次の record は operator 実装が Deployment の記録として持てる例です。
 
 ```yaml
-ExternalPublicationDeclaration:
+PlatformServiceDeclaration:
   snapshotId: pubsnap_...
   publicationPath: publisher.area.name
   spaceId: space_acme_prod
-  contractRef: some.material@v1
+  materialContract: some.material@v1
   sensitivity: restricted
   accessModes: [read, invoke-only]
   safeDefaultAccess: null
@@ -136,33 +156,33 @@ PublicationMaterialization:
   publicationPath: publisher.area.name
   endpointRefs: []
   secretRefs: []
-  grantHandles: []
+  authorizationRefs: []
 ```
 
-`contractRef`, `sensitivity`, and `accessModes` come from a type catalog and
-operator policy. The projection family is selected by AppSpec `listen.as`;
-compatibility and detailed projection behavior come from catalog descriptor
-metadata and operator policy. The implementation/operator ledger records the
-selected declaration and materialization evidence when `listen` resolves an
-external publication. Public Deployment output exposes only the non-secret
-material fields defined by [Installer API](./installer-api.md#deployment).
+`materialContract`、`sensitivity`、`accessModes` は型カタログと operator
+policy から来ます。注入モードは manifest `listen.as` が選びます。型カタログの
+metadata は互換語彙を提供し、operator が選んだ実装と policy が実体化 / 注入の
+振る舞いを定義します。
 
-## Relationship To Catalogs And Operators
+実装 / operator ledger は、`listen` がプラットフォームサービスを解決したときに
+選択された宣言と実体化の記録を残します。public Deployment output は
+[Installer API](./installer-api.md#deployment) が定義する non-secret な出力
+データ field だけを公開します。
 
-- The Takosumi official type catalog defines reusable material vocabulary such
-  as `identity.oidc@v1` in the
-  [Official Type Catalog Specification](./type-catalog.md).
-- An operator distribution decides which publication paths are visible in a
-  Space.
-- A product distribution can publish product-owned paths under its own root when
-  it ships reusable product material or services.
-- Takosumi Cloud defines its concrete publication paths in its own distribution
-  specification. Start from [Takosumi Cloud](./takosumi-cloud.md).
+## Catalog と operator との関係
 
-## Related Pages
+- Takosumi Kind カタログは `identity.oidc@v1` などの再利用可能な出力データの
+  語彙を [型カタログ仕様](./type-catalog.md) で定義します。
+- operator profile は Space で visible なプラットフォームサービス path を決めます。
+- product distribution は再利用可能な product の出力データや service を ship
+  する場合、自分の root 下に product-owned path を publish できます。
+- Takosumi Cloud は自分の concrete path を自分の distribution 仕様で定義します。
+  入口は [Takosumi Cloud](./takosumi-cloud.md) です。
 
-- [Takosumi Core Specification](./core-spec.md)
-- [AppSpec](./app-spec.md)
-- [Access Modes](./access-modes.md)
-- [Takosumi Official Type Catalog Specification](./type-catalog.md)
+## 関連ページ
+
+- [Takosumi core 仕様](./core-spec.md)
+- [manifest](./manifest.md)
+- [アクセスモード](./access-modes.md)
+- [Takosumi Kind カタログ仕様](./type-catalog.md)
 - [Takosumi Cloud](./takosumi-cloud.md)

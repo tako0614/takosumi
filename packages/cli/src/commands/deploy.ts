@@ -1,7 +1,7 @@
 import { Command } from "@cliffy/command";
 import {
   callInstaller,
-  expectedPinFromOptions,
+  deploymentExpectedGuardFromOptions,
   INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
   INSTALLATION_DEPLOYMENTS_PATH,
   parseSourceRef,
@@ -45,6 +45,10 @@ function createDeployCommand() {
       "--expected-source-digest <digest:string>",
       "Expected prepared source digest pin",
     )
+    .option(
+      "--expected-current-deployment-id <deploymentId:string>",
+      "Expected current Deployment pointer",
+    )
     .option("--dry-run", "Alias for `takosumi deploy dry-run`")
     .action(
       async (
@@ -55,6 +59,7 @@ function createDeployCommand() {
           expectedCommit,
           expectedManifestDigest,
           expectedSourceDigest,
+          expectedCurrentDeploymentId,
           dryRun: dryRunFlag,
         },
         installationId,
@@ -67,6 +72,7 @@ function createDeployCommand() {
           expectedCommit,
           expectedManifestDigest,
           expectedSourceDigest,
+          expectedCurrentDeploymentId,
           dryRun: dryRunFlag === true,
         });
       },
@@ -82,6 +88,7 @@ async function runDeploy(input: {
   readonly expectedCommit?: string;
   readonly expectedManifestDigest?: string;
   readonly expectedSourceDigest?: string;
+  readonly expectedCurrentDeploymentId?: string;
   readonly dryRun: boolean;
 }): Promise<void> {
   try {
@@ -89,10 +96,11 @@ async function runDeploy(input: {
     const body = {
       ...(input.source ? { source: parseSourceRef(input.source) } : {}),
       ...(input.dryRun ? {} : {
-        expected: expectedPinFromOptions({
+        expected: deploymentExpectedGuardFromOptions({
           expectedCommit: input.expectedCommit,
           expectedManifestDigest: input.expectedManifestDigest,
           expectedSourceDigest: input.expectedSourceDigest,
+          expectedCurrentDeploymentId: input.expectedCurrentDeploymentId,
         }),
       }),
     };

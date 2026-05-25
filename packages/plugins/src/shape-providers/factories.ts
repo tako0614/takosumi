@@ -285,7 +285,9 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/selfhost-filesystem",
     shape: OBJECT_STORE,
-    capabilities: ["presigned-urls"] satisfies readonly ObjectStoreCapabilityTerm[],
+    capabilities: [
+      "presigned-urls",
+    ] satisfies readonly ObjectStoreCapabilityTerm[],
   },
   {
     id: "@takos/selfhost-minio",

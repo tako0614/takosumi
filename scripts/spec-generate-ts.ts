@@ -3,8 +3,9 @@
  *
  * For TypeScript helper generation, each official catalog descriptor source
  * file supplies its `spec` shape (= JSON Schema 2020-12 form), `outputs` list,
- * `capabilityTerms` enum, and the publication envelope
- * (`referenceAliases` / `publications{}`). The generator emits a
+ * `capabilityTerms` enum, publication envelope
+ * (`referenceAliases` / `publications{}`), and optional consumer-slot
+ * compatibility metadata (`listens{}`). The generator emits a
  * sibling `packages/plugins/src/kinds/<basename>.generated.ts`
  * containing:
  *
@@ -49,7 +50,9 @@ interface JsonSchema {
 
 interface PublicationDescriptor {
   readonly contract: string;
+  readonly exampleMaterialMapping?: Record<string, unknown>;
   readonly material?: Record<string, unknown>;
+  readonly from?: unknown;
 }
 
 interface KindDoc {
@@ -61,6 +64,7 @@ interface KindDoc {
   readonly description?: string;
   readonly referenceAliases?: readonly string[];
   readonly publications?: Record<string, PublicationDescriptor>;
+  readonly listens?: Record<string, unknown>;
   readonly spec: JsonSchema;
   readonly outputs: readonly OutputField[];
   readonly capabilityTerms: readonly string[];
@@ -357,7 +361,13 @@ function validateKindDoc(path: string, doc: KindDoc): void {
   for (const [name, publication] of Object.entries(doc.publications ?? {})) {
     if ("from" in publication) {
       console.error(
-        `[spec:generate-ts] ${path}: publications.${name}.from is obsolete; use publications.${name}.material`,
+        `[spec:generate-ts] ${path}: publications.${name}.from is obsolete; use publications.${name}.exampleMaterialMapping`,
+      );
+      Deno.exit(1);
+    }
+    if ("material" in publication) {
+      console.error(
+        `[spec:generate-ts] ${path}: publications.${name}.material is ambiguous; use publications.${name}.exampleMaterialMapping`,
       );
       Deno.exit(1);
     }
@@ -368,9 +378,9 @@ function validateKindDoc(path: string, doc: KindDoc): void {
     );
     Deno.exit(1);
   }
-  if ("listens" in doc) {
+  if ("acceptedProjectionFamilies" in doc) {
     console.error(
-      `[spec:generate-ts] ${path}: listens is not an official descriptor source; AppSpec listen binding names are component-local`,
+      `[spec:generate-ts] ${path}: acceptedProjectionFamilies is obsolete; use slot-local listens metadata`,
     );
     Deno.exit(1);
   }
@@ -562,7 +572,7 @@ function renderTsType(
         return `Readonly<Record<string, ${valueType}>>`;
       }
       // Otherwise hoist to a named nested interface.
-      const nestedName = pickNestedName(propName, schema, ctx.prefix);
+      const nestedName = pickNestedName(propName, ctx.prefix);
       registerNested(ctx, nestedName, schema);
       return nestedName;
     }
@@ -575,22 +585,8 @@ function renderTsType(
   }
 }
 
-function addImport(
-  ctx: GeneratorContext,
-  module: string,
-  name: string,
-): void {
-  let set = ctx.imports.get(module);
-  if (!set) {
-    set = new Set();
-    ctx.imports.set(module, set);
-  }
-  set.add(name);
-}
-
 function pickNestedName(
   propName: string,
-  schema: JsonSchema,
   prefix: string,
 ): string {
   return `${prefix}${capitalize(propName)}`;

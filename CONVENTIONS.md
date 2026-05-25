@@ -1,15 +1,15 @@
 # Takosumi Kind / Provider / Template Conventions
 
 このドキュメントは `@takos/takosumi` workspace での operator / reference
-implementation 向け convention です。**external component kind descriptor
-metadata**、**provider implementation binding**、**template** の命名・形状規約を
+implementation 向け convention です。**external component kind schema
+metadata**、**provider binding**、**template** の命名・形状規約を
 まとめます。
 
-`Component.kind` は opaque な non-empty string で、kind の意味は operator
-distribution が kind URI、descriptor metadata、TypeScript helper、provider
-implementation binding、`kindAliases` map で持ち込みます。
+`Component.kind` は不透明な non-empty string で、kind の意味は operator
+distribution が kind URI、kind の定義、TypeScript helper、provider
+binding、`kindAliases` map で持ち込みます。
 `packages/plugins/spec/kinds/` と `packages/plugins/src/kinds/` は Takosumi
-official type catalog の descriptor documents と helper を置く場所です。
+Kind Catalog の kind の定義と helper を置く場所です。
 
 build / prepare は source snapshot model で扱うのが current convention
 です。詳細 design は
@@ -17,28 +17,28 @@ build / prepare は source snapshot model で扱うのが current convention
 
 ## 1. Kind Definition Principle
 
-- **Kind は operator が解決する。** AppSpec parser は `worker` のような short
+- **Kind は operator が解決する。** manifest parser は `worker` のような short
   alias と `https://operator.example.com/kinds/lambda` のような full URI を
   どちらも文字列として受理する。runtime 意味は operator の implementation
   binding が与える。
 - **Alias resolution は operator-owned。** `worker` などの short alias は
   reference kernel では `createPaaSApp({ kindAliases, plugins })` に渡された map
-  で URI に解決される。未解決 alias は provider operation の前に fail-closed
+  で URI に解決される。未解決 alias はリソースの作成・更新の前に fail-closed
   する。
-- **Kind descriptor metadata は operator tooling の入力。** descriptor metadata
+- **Kind の定義は operator tooling の入力。** kind の定義
   は spec / publications / listens / outputs / aliases を定義し、docs や
-  provider package が参照する。Takosumi official type catalog は JSON-LD
+  provider package が参照する。Takosumi Kind Catalog は JSON-LD
   を使う。
 - **Implementation binding が runtime 挙動を持つ。** reusable / public kind は
-  URI + descriptor metadata + implementation binding で publish する。private な
+  URI + kind の定義 + binding で publish する。private な
   operator-local kind は実装設定や docs で同等の contract を持てばよい。
-  Takosumi official type catalog で public に共有する場合は JSON-LD として公開
+  Takosumi Kind Catalog で public に共有する場合は JSON-LD として公開
   する。Takosumi reference kernel では binding を `KernelPlugin` で表すが、
   互換実装は別の registry / controller / adapter へ bind してよい。
-- **Capability は advisory metadata。** capability の型や意味は kind descriptor
+- **Capability は advisory metadata。** capability の型や意味は kind schema
   metadata または owning package が定義する。
 
-Takosumi official type catalog descriptors:
+Takosumi Kind Catalog descriptors:
 
 | Kind           | URI                                          | Description                                        |
 | -------------- | -------------------------------------------- | -------------------------------------------------- |
@@ -48,11 +48,11 @@ Takosumi official type catalog descriptors:
 | `object-store` | `https://takosumi.com/kinds/v1/object-store` | Bucket-style object storage; S3-class API          |
 | `gateway`      | `https://takosumi.com/kinds/v1/gateway`      | HTTP listener, routing, host, and TLS policy       |
 
-These descriptor entries are reusable Takosumi vocabulary. Operators explicitly
-choose which entries and aliases are visible in a Space, and can publish their
-own catalog on another domain. Takosumi Accounts (= takosumi-cloud operator
-account plane) publishes OIDC material through the `operator.identity.oidc`
-external publication path.
+These kind definition entries are reusable Takosumi vocabulary. Operators
+explicitly choose which entries and aliases are visible in a Space, and can
+publish their own catalog on another domain. Takosumi Accounts (= takosumi-cloud operator
+account layer) publishes OIDC material through the `operator.identity.oidc`
+platform service path.
 
 ## 2. Naming Conventions
 
@@ -65,7 +65,7 @@ external publication path.
   that mention pre-split names such as `TAKOS_PAAS_*` and `TAKOS_RUNTIME_*` must
   be explicitly scoped as non-operator test debt.
 - JSR consumers should pin `jsr:@takos/takosumi-contract@^2.6.0` or newer for
-  the v1 AppSpec contract, nested Component type, and Installer API wire DTOs.
+  the v1 manifest contract, nested Component type, and Installer API wire DTOs.
 - Reference provider integration check env names use `TAKOSUMI_PLUGIN_*`.
   `TAKOS_PAAS_PLUGIN_*` is retired from current workflow and secret docs.
 
@@ -73,7 +73,7 @@ external publication path.
 
 - Prefer kebab-case short aliases for examples (`worker`, `postgres`,
   `object-store`, `gateway`).
-- Full kind URI is controlled by the publisher. Takosumi official type catalog
+- Full kind URI is controlled by the publisher. Takosumi Kind Catalog
   descriptors use `https://takosumi.com/kinds/v1/<name>`; operator-defined kind
   は任意 URI を 選べる。
 - Short aliases are operator mappings. They resolve when the operator maps them
@@ -84,7 +84,7 @@ external publication path.
 
 ### Provider ID
 
-- provider id は scoped stable id を使う (例: `@takos/aws-s3`,
+- provider id は scoped な stable id を使う (例: `@takos/aws-s3`,
   `@takos/cloudflare-r2`, `@takos/gcp-cloud-run`)。
 - **version は `version` フィールド (semver) で管理する**。provider id は stable
   name にする。
@@ -102,15 +102,15 @@ external publication path.
 
 ## 3. Output Schema Convention
 
-reference provider outputs は kind descriptor metadata の `publications`
-に登録された material として local publication に投影される。public Deployment
-`outputs` は descriptor が定義した JSON material であり、descriptor 外の
+reference provider outputs は kind schema metadata の `publications`
+に登録された出力データとして local の publish の出力に投影される。public Deployment
+`outputs` は kind の定義が定義した JSON 出力データであり、kind の定��外の
 provider private field は含めない。フィールド名と型は同じ kind URI の provider
 横断で stable にする。
 
 | Suffix / form        | meaning                                                           |
 | -------------------- | ----------------------------------------------------------------- |
-| `*Ref` (string)      | secret reference URI; kernel が secret-store adapter で解決する   |
+| `*Ref` (string)      | secret reference URI; Takosumi が secret-store adapter で解決する   |
 | `connectionString`   | passwordless / client-safe DSN。credential は `*SecretRef` で渡す |
 | `endpoint`, `url`    | scheme 付き URL (`https://...`, `file://...`)                     |
 | `internalHost`       | private DNS name (no scheme)                                      |
@@ -128,27 +128,27 @@ secret://aws/credentials/access-key
 secret://gcp/cloud-sql/<instance>/password
 ```
 
-Reference resolution は operator secret-store adapter が担当する。materializer
-は output schema の `*Ref` フィールドに reference URI を入れる。AppSpec 側 (=
+Reference resolution は operator の secret-store adapter が担当する。materializer
+は output schema の `*Ref` フィールドに reference URI を入れる。manifest 側 (=
 `.takosumi.yml`) に raw secret 値も、placeholder interpolation も登場しない。
 
 ## 4. How To Add A Provider For An Existing Kind
 
-Takosumi reference kernel の operator-facing implementation binding は
+Takosumi reference kernel の operator-facing binding は
 **`KernelPlugin` plain array** です。この節は reference provider packages に
 contribution する場合の手順です。external / operator-owned provider は任意の
 repo、package scope、private distribution、native controller に置けます。
 reference provider package に追加する場合は次の形に揃えます:
 
-1. 対象 kind URI を選ぶ。Takosumi official type catalog descriptor なら
+1. 対象 kind URI を選ぶ。Takosumi Kind Catalog の kind の定義なら
    `@takos/takosumi-plugins/kinds` の `TAKOSUMI_REFERENCE_KIND_URIS` を使う。
 2. `packages/<cloud>-providers/src/<kind>-<provider>.ts` に `KernelPlugin` を
    返す factory function を書く。既存ファイル (例
    `packages/cloudflare-providers/src/worker-cloudflare.ts`) を参考にする。
-3. その kind の `Spec` 型と `Outputs` 型を descriptor owner / owning package
+3. その kind の `Spec` 型と `Outputs` 型を kind の定義の owner / owning package
    から import する。private operator-owned kind では provider package と
-   descriptor owner を同じ repository に co-locate してよいが、責務名は
-   descriptor owner として扱う。
+   kind の定義の owner を同じ repository に co-locate してよいが、責務名は
+   kind の定義の owner として扱う。
 4. lifecycle interface (`<Provider>LifecycleClient`) を同じファイルに定義する。
    テスト用の `InMemory<Provider>Lifecycle` クラスを用意し、real client は
    runtime-agent 経由で inject する。
@@ -170,27 +170,27 @@ catalog に取り込む場合だけ project governance / review を通す。
 
 1. URI を決める。operator-owned kind は任意 domain を使う
    (`https://operator.example.com/kinds/lambda` など)。
-2. descriptor metadata を用意する。Takosumi official type catalog に追加する場
+2. kind の定義を用意する。Takosumi Kind Catalog に追加する場
    合は JSON-LD として `packages/plugins/spec/kinds/v1/<name>.jsonld` に置く。
 3. `Spec` / `Outputs` / `Capability` 型と validator を owning package に置く。
-   Takosumi official type catalog に追加する場合は `packages/plugins/src/kinds/`
+   Takosumi Kind Catalog に追加する場合は `packages/plugins/src/kinds/`
    に置く。
-4. implementation binding を用意する。Takosumi reference kernel では
+4. binding を用意する。Takosumi reference kernel では
    `KernelPlugin` factory を用意する。
-5. Descriptor lint、validator test、implementation lifecycle test、docs
+5. Kind の定義の lint、validator test、implementation lifecycle test、docs
    を追加する。
-6. short alias を使わせる場合は operator distribution が `kindAliases` map に
+6. short alias を使わせる場合は operator profile が `kindAliases` map に
    alias → URI を追加する。
 
 ## 6. Process Summary
 
-- 新 component kind は **URI + descriptor metadata + implementation binding** で
-  publish する。Takosumi official type catalog は JSON-LD を使う。
-- `https://takosumi.com/kinds/v1/*` は Takosumi official type catalog descriptor
+- 新 component kind は **URI + kind の定義 + binding** で
+  publish する。Takosumi Kind Catalog は JSON-LD を使う。
+- `https://takosumi.com/kinds/v1/*` は Takosumi Kind Catalog の kind の定義
   documents。
-- AppSpec parser は `kind` を non-empty string として受理する。alias resolution
-  と provider selection は operator の implementation binding が担う。Takosumi
-  reference kernel では `kindAliases` / implementation binding array (`plugins`
+- manifest parser は `kind` を non-empty string として受理する。alias resolution
+  と provider selection は operator の binding が担う。Takosumi
+  reference kernel では `kindAliases` / binding array (`plugins`
   option) で渡す。
 - workflow / cron / hook は upstream automation の責務 (詳細は
   [Workflow Extension Design](./docs/reference/architecture/workflow-extension-design.md))。

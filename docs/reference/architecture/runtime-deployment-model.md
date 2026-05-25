@@ -1,9 +1,8 @@
 # Runtime Deployment モデル {#runtime-deployment-model}
 
-This page describes reference implementation internals. The portable public
-contract is AppSpec / Installation / Deployment and the Installer API; the
-objects below are execution state used by an implementation or operator
-distribution.
+::: info 内部設計メモ
+public contract は [Installer API](../installer-api.md) を参照。
+:::
 
 ## Operation Plan と Write-Ahead Journal {#operation-plan--write-ahead-journal}
 
@@ -12,7 +11,7 @@ WriteAheadOperationJournal は実行の authority である。
 
 ### OperationPlan {#operationplan}
 
-OperationPlan は同じ Space の `DesiredSnapshot` と `ObservationSet` から derive
+OperationPlan は同じ Space の `TargetState` と `ObservationState` から derive
 される。
 
 含まれる operation の例:
@@ -31,7 +30,7 @@ observe
 compensate
 ```
 
-OperationPlan は execution plan です。canonical desired state は DesiredSnapshot
+OperationPlan は execution plan です。canonical desired state は TargetState
 が持ちます。
 
 ### Write-ahead journal {#write-ahead-journal}
@@ -52,7 +51,7 @@ operation-completed
 operation-failed
 compensation-started
 compensation-completed | compensation-failed
-revoke-debt-created when needed
+cleanup-backlog-created when needed
 ```
 
 ### Stage 列挙 {#stage-enumeration}
@@ -68,7 +67,7 @@ prepare      → pre-commit → commit → post-commit → observe → finalize
                                         → skip      (no-op resolution)
 ```
 
-| stage       | may write provider actual-effects | may queue RevokeDebt | may re-validate approval |
+| stage       | may write provider actual-effects | may queue CleanupBacklog | may re-validate approval |
 | ----------- | --------------------------------- | -------------------- | ------------------------ |
 | prepare     | no                                | no                   | yes                      |
 | pre-commit  | no                                | no                   | yes                      |
@@ -79,9 +78,9 @@ prepare      → pre-commit → commit → post-commit → observe → finalize
 | abort       | no                                | yes                  | no                       |
 | skip        | no                                | no                   | no                       |
 
-`pre-commit` は operator DataAsset extension policy gate
-([Operator DataAsset Extension Policy](../data-asset-policy.md) 参照) と
-[Link and Projection Model](./link-projection-model.md) が上げる衝突 risk の
+`pre-commit` は operator asset extension policy gate
+([Operator asset Extension Policy](../data-asset-policy.md) 参照) と
+[バインディングモデル](./binding-model.md) が上げる衝突 risk の
 canonical な enforcement point である。source build / preparation は Installer
 API submission 前の build-service / CI policy で扱う。`commit` は provider side
 effect を実行しうる唯一の stage である。`post-commit` は commit 後の evidence /
@@ -98,16 +97,16 @@ idempotencyKey = (spaceId, operationPlanDigest, journalEntryId)
 
 この 3 つ組は Space の WAL 内で一意である。replay 時、同じ 3 つ組は決定的に同じ
 operation を再適用する。同じ `(spaceId, operationPlanDigest, journalEntryId)`
-で来た replay の effect digest が以前に記録された entry と一致しない場合、kernel
+で来た replay の effect digest が以前に記録された entry と一致しない場合、Takosumi
 は operation を hard-fail させ stage を進めない。その場合の recovery は新しい
 `operationPlanDigest` (新規 OperationPlan) を発行しなければならない。
 
 ### Pre/post-commit の verification {#prepost-commit-verification}
 
-kind alias と implementation binding は operator が与える resolution
-入力である。 kernel は `ResolutionSnapshot` に記録した selection を pre-commit
-と post-commit で再検証する。selected implementation binding が宣言する実行可能
-hook package を実行する主体は operator implementation binding です。descriptor
+kind alias と binding は operator が与える resolution
+入力である。 Takosumi は `ResolvedPlan` に記録した selection を pre-commit
+と post-commit で再検証する。selected binding が宣言する実行可能
+hook package を実行する主体は operator binding です。kind の定義
 は kind identity / input schema / publish-listen / outputs などの semantic
 metadata に閉じます。Verification lifecycle:
 
@@ -117,13 +116,13 @@ metadata に閉じます。Verification lifecycle:
                       connector visibility are revalidated
 3. result recorded  — verification outcome is journaled as evidence
 4. fail-closed      — pre-commit failure aborts before provider effects;
-                      post-commit failure records RevokeDebt and continues
+                      post-commit failure records CleanupBacklog and continues
                       observe/finalize evidence
 ```
 
 Verification は policy または approval 再検証を bypass してはならない。
-RevokeDebt は `post-commit` / `observe` / `finalize` / `abort` stage から発行
-できる。`commit` 前に actual effect が無い entry は RevokeDebt ではなく abort
+CleanupBacklog は `post-commit` / `observe` / `finalize` / `abort` stage から発行
+できる。`commit` 前に actual effect が無い entry は CleanupBacklog ではなく abort
 evidence として終端する。
 
 ### Journal エントリ {#journal-entries}
@@ -148,7 +147,7 @@ JournalEntry:
 生成 object の id は外部呼び出しの前に計算されるべきである。
 
 ```text
-grant id = hash(spaceId, deploymentId, linkId, publicationSnapshotId, accessMode)
+authorization id = hash(spaceId, deploymentId, linkId, publicationSnapshotId, accessMode)
 secret projection id = hash(spaceId, deploymentId, linkId, projectionName)
 ingress reservation id = hash(spaceId, groupId, exposureId, host, path)
 ```
@@ -168,7 +167,7 @@ ingress reservation id = hash(spaceId, groupId, exposureId, host, path)
 ### Space 隔離 {#space-isolation}
 
 OperationPlan、OperationJournal、生成 object id、compensation record、
-RevokeDebt は厳密に 1 つの Space に属する。ある Space の journal entry を別
+CleanupBacklog は厳密に 1 つの Space に属する。ある Space の journal entry を別
 Space の recovery authority として使ってはならない。
 
 Space-global な state を変更する critical operation は Space 単位で直列化され、
@@ -192,27 +191,25 @@ CurrentStateIndex
 
 ### 必須 invariant {#invariants}
 
-#### 1. Authority invariant
+#### Snapshot / Authority
 
-Apply、activate、rollback、destroy は記録された `ResolutionSnapshot` と
-`DesiredSnapshot` を使わなければならない。provider effects の直前に catalog
-documents や external publication registry を再解決して authority を差し替えて
-はならない。
+**1. Authority invariant** ---
+Apply、activate、rollback、destroy は記録された `ResolvedPlan` と
+`TargetState` を使う。provider effects の直前に catalog documents や platform
+service registry を再解決して authority を差し替えてはならない。
 
-#### 2. Snapshot invariant
+**2. Snapshot invariant** ---
+`ResolvedPlan` と `TargetState` は immutable である。新しい意味または desired
+graph は新しい snapshot を作る。
 
-`ResolutionSnapshot` と `DesiredSnapshot` は immutable である。新しい意味または
-desired graph は新しい snapshot を作る。
-
-#### 3. Identity invariant
-
-すべての
-`Object`、`ExternalPublicationDeclaration`、`Link`、`Exposure`、`Operation`、
-operator DataAsset extension record、generated object、activation item
+**3. Identity invariant** ---
+すべての `Object`、`PlatformServiceDeclaration`、`Link`、`Exposure`、
+`Operation`、operator asset extension record、generated object、activation item
 は安定したアドレスを持つ。
 
-#### 4. Ownership invariant
+#### Ownership / Security
 
+**4. Ownership invariant** ---
 lifecycle class は operation を制限する。
 
 ```text
@@ -220,11 +217,11 @@ managed:
   may be created, updated, replaced, deleted by the deployment
 
 generated:
-  owned by an Object, Link, Exposure, optional DataAsset extension, or Operation
+  owned by an Object, Link, Exposure, optional asset extension, or Operation
   must have owner, reason, deterministic id, and delete policy
 
 external:
-  may be verified, observed, linked, and granted
+  may be verified, observed, linked, and authorized
   must not be created or deleted by the deployment
 
 operator:
@@ -239,97 +236,95 @@ imported:
 この invariant を強制する revoke flow は
 [Object Model — Object revoke flow](./object-model.md) に詳しい。
 
-#### 5. Secret invariant
-
+**5. Secret invariant** ---
 raw secret 値は core canonical state に保存されない。core state には secret
 reference、handle、projection metadata、audit event を保存できる。
 
-#### 6. Effects invariant
-
-implementation は `approvedEffects` を超えてはならない。`actualEffects` が
-approved effect を超えた場合、実行は一時停止し、overflow を journal し、可能なら
-compensation を実行し、承認を要求するか fail しなければならない。
-
-#### 7. Write-ahead journal invariant
-
-side-effect を持つ operation は side effect の前に intent を記録しなければなら
-ない。生成 object identity は外部呼び出しの前に計画されなければならない。観測
-された handle は外部呼び出しの後に append されなければならない。
-
-#### 8. Idempotency invariant
-
-retry は同じ intent である。生成 object identity は、deployment id、link id、
-publication snapshot id、access mode、exposure id、desired generation
-のような安定 した入力から決定的に決まるべきである。
-
-#### 9. Activation invariant
-
-Installer API の public install / deploy の内側では apply phase と activation
-phase を分けて扱う。GroupHead と traffic assignment は apply phase の再検証後
-にのみ移動する。
-
-#### 10. Observation invariant
-
-Observation は reality を記録する。Observation が `DesiredSnapshot` を書き換える
-ことはあってはならない。
-
-#### 11. External ownership invariant
-
+**11. External ownership invariant** ---
 外部 source object は deployment destroy で破壊されない。link が所有する生成
-grant、credential、endpoint、projection は revoke または削除される。revoke 失敗
-は `RevokeDebt` を作る。
+authorization、credential、endpoint、projection は revoke または削除される。
+revoke 失敗は `CleanupBacklog` を作る。
 
-#### 12. Concurrency invariant
+#### Execution / Journal
 
-production インストールは GroupHead 更新、activation 更新、ingress 予約、生成
-credential 変更、生成 grant 変更、external publication registry 書込み、Space
-publication 共有、kind alias / descriptor / implementation binding set
-更新を直列化しなければならない。
+**6. Effects invariant** ---
+implementation は `approvedEffects` を超えてはならない。超えた場合は実行を一時
+停止し、overflow を journal し、可能なら compensation を実行し、承認を要求するか
+fail する。
 
-#### 13. Space containment invariant
+**7. Write-ahead journal invariant** ---
+side-effect を持つ operation は side effect の前に intent を記録する。生成
+object identity は外部呼び出しの前に計画する。観測された handle は外部呼び出しの
+後に append する。
 
-すべての Deployment、ResolutionSnapshot、DesiredSnapshot、OperationJournal、
-ObservationSet、RevokeDebt、ActivationSnapshot、approval、GroupHead は厳密に 1
-つの Space に属する。deployment は自身の Space の外で resolve、materialize、
-activate、observe、destroy してはならない。Space publication 共有や operator
-承認の escape hatch によってのみ例外が許される。
+**8. Idempotency invariant** ---
+retry は同じ intent である。生成 object identity は、deployment id、link id、
+publication snapshot id、access mode、exposure id、desired generation のような
+安定した入力から決定的に決まるべきである。
 
-#### 14. External publication isolation invariant
+#### Activation / Observation
 
-external publication path は Space scope である。current public v1 で external
-publication path として解決できる外部 source は、Space に可視化された external
-publication declaration の exact match である。2 つの Space の同じ path
-は、共有された ExternalPublicationDeclaration snapshot に解決された場合だけ同一
-material として扱う。
+**9. Activation invariant** ---
+Installer API の public install / deploy の内側では apply phase と activation
+phase を分けて扱う。RoutingPointer と traffic assignment は apply phase の再検証
+後にのみ移動する。
 
-#### 15. Space data-boundary invariant
+**10. Observation invariant** ---
+Observation は reality を記録する。`TargetState` を書き換えてはならない。
 
-secret、operator DataAsset extension record、operation journal、observation、
-approval、audit event は Space scope である。これらを Space を跨いで共有する
-には明示的な operator policy が必要で、ResolutionSnapshot に記録されなければ
-ならない。
+#### Concurrency
+
+**12. Concurrency invariant** ---
+production インストールは以下を直列化する:
+
+- RoutingPointer 更新、activation 更新
+- ingress 予約
+- 生成 credential / authorization 変更
+- platform service registry 書込み
+- Space publication 共有
+- kind alias / descriptor / binding set 更新
+
+#### Space 境界
+
+**13. Space containment invariant** ---
+すべての Deployment、ResolvedPlan、TargetState、OperationJournal、
+ObservationState、CleanupBacklog、TrafficSnapshot、approval、RoutingPointer は
+厳密に 1 つの Space に属する。deployment は自身の Space の外で resolve、
+materialize、activate、observe、destroy してはならない。Space publication 共有
+や operator 承認の escape hatch によってのみ例外が許される。
+
+**14. Platform service isolation invariant** ---
+platform service path は Space scope である。外部 source は、Space に可視化
+された platform service declaration の exact match でのみ解決できる。2 つの
+Space の同じ path は、共有された PlatformServiceDeclaration snapshot に解決され
+た場合だけ同一 material として扱う。
+
+**15. Space data-boundary invariant** ---
+secret、operator asset extension record、operation journal、observation、
+approval、audit event は Space scope である。Space を跨ぐ共有には明示的な
+operator policy が必要で、ResolvedPlan に記録する。
 
 ### Reference implementation internal primitives {#reference-implementation-internal-primitives}
 
 ```text
-AppSpec
+manifest
 Space
 IntentGraph
-ResolutionSnapshot
-DesiredSnapshot
+ResolvedPlan
+TargetState
 Object
-ExternalPublicationDeclaration
+PlatformServiceDeclaration
 PublicationMaterialization
 Link
 ProjectionSelection
 Exposure
 OperationPlan
 WriteAheadOperationJournal
-ObservationSet
+ObservationState
 DriftIndex
-RevokeDebt
-ActivationSnapshot
-GroupHead
+CleanupBacklog
+TrafficSnapshot
+RoutingPointer
 ```
 
 `ProjectionSelection` は `Link` の属性である。public な authoring object では

@@ -63,9 +63,8 @@ const LISTEN_OPTIONS_KEYS = new Set([
 const KNOWN_LISTEN_SHAPES: ReadonlySet<string> = new Set([
   "env",
   "secret-env",
-  "mount",
+  "config-mount",
   "upstream",
-  "target",
 ]);
 
 export type ValidationPhase =
@@ -345,7 +344,7 @@ function validateListen(
     if (typeof opts.as !== "string" || opts.as.length === 0) {
       throw new AppSpecParseError(
         `${entryPath}.as must be a non-empty string ` +
-          `(e.g. "env", "mount", "upstream", or an operator-defined shape)`,
+          `(e.g. "env", "secret-env", "config-mount", "upstream", or an operator-defined shape)`,
         "publish-listen",
         `${entryPath}.as`,
       );

@@ -90,8 +90,8 @@ Source-backed connectors, such as `worker@v1`, read files from
 `LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset/artifact
 handling is an optional operator extension: connectors may use `ctx.fetcher`
 when their implementation-specific selector expects uploaded or external asset
-metadata, but DataAsset metadata kinds are connector-owned metadata rather than
-Takosumi AppSpec concepts.
+metadata, but DataAsset metadata values are connector-owned metadata rather than
+Takosumi AppSpec concepts. The compatibility wire may call that value `kind`.
 
 `compensate` is the recovery hook for partially applied effects recorded in the
 kernel WAL. Connectors that can reverse an effect more precisely than

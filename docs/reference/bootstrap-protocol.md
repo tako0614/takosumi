@@ -1,24 +1,24 @@
-# Reference Kernel Bootstrap Protocol
+# Reference Takosumi Bootstrap Protocol
 
-reference Takosumi kernel implementation の new install (初回起動) bootstrap
-手順をまとめる。本ページは new install 専用。既存 install の upgrade は
+reference Takosumi implementation の new install (初回起動) bootstrap 手順を
+まとめる。本ページは new install 専用。既存 install の upgrade は
 [Schema Evolution](./migration-upgrade.md) を参照。
 
-Kernel bootstrap が担うこと:
+Takosumi bootstrap が担うこと:
 
-- kernel storage の schema migration を初期化状態まで進める
+- Takosumi storage の schema migration を初期化状態まで進める
 - secret partition と master key を init する
 - cross-process lock store を init する
 - reference operator credential を発行し token を operator に渡す
-- operator implementation binding / kind alias / connector inventory を確認する
+- operator binding / kind alias / connector inventory を確認する
 - audit chain の genesis event を書く
 - listener を open する
 
-Bootstrap は reference kernel の **初回 1 回のみ** 実行される。operator account
-plane が必要とする Default Space などの account-plane records は operator
-bootstrap が作成し、kernel には scoped installer context / policy snapshot
-として渡される。完了後の再起動では audit chain の genesis event を確認して
-kernel bootstrap stage を skip する。
+Bootstrap は reference Takosumi の **初回 1 回のみ** 実行される。operator
+account plane が必要とする Default Space などの account layer records は
+operator bootstrap が作成し、Takosumi には scoped installer context / policy
+snapshot として渡される。完了後の再起動では audit chain の genesis event を確認
+して Takosumi bootstrap stage を skip する。
 
 ## Bootstrap stage 順序
 
@@ -88,13 +88,13 @@ Bootstrap 完了後に operator が kernel を操作するための初期 creden
   平文は再出力しない (re-init 防止)
 
 将来 operator bootstrap CLI を追加する場合は、token を CLI 側にも copy して
-scrolloff 後に取り戻せるようにしてよい。現在の public `takosumi` CLI は AppSpec
-deploy engine であり、operator bootstrap は operator distribution の init flow
+scrolloff 後に取り戻せるようにしてよい。現在の public `takosumi` CLI は manifest
+deploy engine であり、operator bootstrap は operator profile の init flow
 として扱う。
 
 ## Stage 5 — operator-implementation-load
 
-operator distribution が kernel 起動時に渡した `kindAliases`、implementation
+operator profile が kernel 起動時に渡した `kindAliases`、implementation
 binding、runtime-agent connector inventory を検証する。
 
 - production / staging では selected implementation が 1 つ以上必要
@@ -102,7 +102,7 @@ binding、runtime-agent connector inventory を検証する。
 - 同じ kind URI を複数 reference adapter が提供し、operator profile / Space
   policy でも一意に選べない場合は stage abort
 
-operator distribution が通常の TypeScript module として provider package を
+operator profile が通常の TypeScript module として provider package を
 import し、reference kernel では reference adapter array (`plugins` option) に渡
 す。詳細は [Reference Adapter Loading](./plugin-loading.md)。
 
@@ -168,7 +168,7 @@ Bootstrap は再起動で重複実行されない。
 
 ## CLI Exposure
 
-public な `takosumi` CLI は AppSpec deploy engine であり、この bootstrap
+public な `takosumi` CLI は manifest deploy engine であり、この bootstrap
 protocol を **実行しない**。 bootstrap は現在、 kernel 起動 / operator
 管理のデプロイ自動化 / 内部サービスによって駆動される。
 

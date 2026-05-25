@@ -41,7 +41,7 @@ dashboard (Pages → Custom domains or Workers → Custom domains).
 **Source**: `takosumi/website/` (Solid Start landing) + `takosumi/docs/`
 (VitePress reference docs, base `/docs/`) + `takosumi/spec/contexts/` (JSON-LD
 context under `/contexts/`) + `takosumi/packages/plugins/spec/kinds/v1/`
-(official kind descriptors under `/kinds/v1/`).
+(official kind schemas under `/kinds/v1/`).
 
 `website/build.sh` produces the merged `.output/public/` artifact:
 
@@ -54,7 +54,7 @@ website/.output/public/
 │   ├── reference/, getting-started/, operator/, ...
 │   └── ...
 ├── contexts/                  # JSON-LD context
-└── kinds/v1/                  # official type catalog descriptors
+└── kinds/v1/                  # Kind Catalog descriptors
     ├── v1.jsonld
     └── kinds/v1/<name>.jsonld
 ```
@@ -204,7 +204,7 @@ Accounts need to point at it:
 - `takos-private/apps/control/cloudflare/wrangler.toml` —
   `OIDC_ISSUER_URL = "https://cloud.takosumi.com"` (already set by this deploy
   plan in both production and staging blocks).
-- Any other operator distribution that maintains its own OIDC client
+- Any other operator profile that maintains its own OIDC client
   registration with Takosumi Accounts must update its issuer URL.
 
 The OIDC client `takos-private-production` is registered with the Worker via the

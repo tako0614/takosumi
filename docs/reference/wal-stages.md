@@ -1,18 +1,18 @@
 # WAL Stages
 
 apply pipeline の各 phase は本ページの stage を駆動し、 recovery / approval
-invalidation / RevokeDebt 生成は本ページの規則に従います。
+invalidation / CleanupBacklog 生成は本ページの規則に従います。
 
 ## Stage closed enum (8 値)
 
 新 stage 追加は `CONVENTIONS.md` §6 RFC が必要です。
 
-| Stage         | actual-effects 書き込み         | RevokeDebt キュー | approval re-validation                  | 失敗時の遷移先                      |
+| Stage         | actual-effects 書き込み         | CleanupBacklog キュー | approval re-validation                  | 失敗時の遷移先                      |
 | ------------- | ------------------------------- | ----------------- | --------------------------------------- | ----------------------------------- |
 | `prepare`     | no                              | no                | yes (entry 起動時)                      | `abort`                             |
 | `pre-commit`  | no                              | no                | yes (provider / connector verification) | `abort`                             |
 | `commit`      | yes                             | no                | no                                      | `abort` / `commit` retry            |
-| `post-commit` | no (evidence / projection only) | yes               | no                                      | `observe` 続行 / RevokeDebt enqueue |
+| `post-commit` | no (evidence / projection only) | yes               | no                                      | `observe` 続行 / CleanupBacklog enqueue |
 | `observe`     | no (read-only)                  | yes               | no                                      | `finalize` / `observe` 継続         |
 | `finalize`    | no (cleanup のみ)               | yes (cleanup 残)  | no                                      | terminal                            |
 | `abort`       | no                              | yes (compensate)  | no                                      | terminal                            |
@@ -20,9 +20,9 @@ invalidation / RevokeDebt 生成は本ページの規則に従います。
 
 stage 意味:
 
-- `prepare`: OperationPlan 確定 / idempotency key 割当 / approval binding 再評
-  価。 actual-effects 書込なし。失敗は `abort`。
-- `pre-commit`: provider / connector verification と external precondition
+- `prepare`: OperationPlan 確定 / idempotency key 割当 / approval binding 再
+  評価。 actual-effects 書込なし。失敗は `abort`。
+- `pre-commit`: provider / connector verification と external バリデーション
   (credential reachability / collision check / freshness re-confirm) を
   fail-closed で確認。 actual-effects 書込なし。失敗は `abort`。
 - `commit`: connector / runtime-agent 経由で external system を実際に変更。
@@ -30,13 +30,13 @@ stage 意味:
   冪等。回復不能失敗は `abort`。
 - `post-commit`: commit 後の evidence / projection / metadata sync を記録する。
   provider side effect は新規に実行しない。 external cleanup
-  が完了できないときは RevokeDebt を `external-revoke` / `link-revoke` reason で
+  が完了できないときは CleanupBacklog を `external-revoke` / `link-revoke` reason で
   enqueue。
 - `observe`: long-lived な read-only stage。 runtime-agent describe を吸って
-  health observation / DriftIndex / RevokeDebt 候補を更新。 stage 自身は
+  health 観測 / DriftIndex / CleanupBacklog 候補を更新。 stage 自身は
   actual-effects を変更しません。
 - `finalize`: managed / generated lifecycle class の cleanup 完了。 external /
-  operator / imported は触らず、 cleanup 不能な generated material は RevokeDebt
+  operator / imported は触らず、 cleanup 不能な generated material は CleanupBacklog
   に残します。
 - `abort`: rollback / compensate 後の terminal。 `commit` 済 effect の逆再生で
   残った debt は `activation-rollback` reason で enqueue。
@@ -91,17 +91,18 @@ WAL の各 entry は次の tuple で一意識別:
 (spaceId, operationPlanDigest, journalEntryId)
 ```
 
-- `spaceId`: entry 所有 Space ID。 Cross-Space で同 tuple は出現しません。
+- `spaceId`: entry の Space ID。 Cross-Space で同 tuple は出現しません。
 - `operationPlanDigest`: prepare stage で確定した OperationPlan content digest。
   OperationPlan が変われば必ず別値。
 - `journalEntryId`: OperationPlan 内 entry を識別する ULID。 kernel が prepare
   時に発行し、 retry 中も保持。
 
 生成 timing は prepare stage の最初の WAL append。 retry でも同じ
-`journalEntryId` を再利用し、新規 ULID は発行しません。
+`journalEntryId` を再利用し、新規 ULID は発行しません。 Takosumi が prepare
+時に発行します。
 
 Collision policy: tuple は storage 上で primary key として強制。同じ tuple を
-異なる effect digest で書こうとすると hard-fail (Replay rule §)。
+異なる effect digest で書こうとすると hard-fail (下記 Replay rule 参照)。
 
 ## Replay rule
 
@@ -109,8 +110,8 @@ WAL を読み直すときの規則:
 
 1. 同じ tuple + 同じ effect digest → idempotent re-apply。 actual-effects は
    重複せず、 entry は最後に到達した stage を保つ
-2. 同じ tuple + 異なる effect digest → hard-fail。 kernel は
-   `failed_precondition` で reject (ResolutionSnapshot 変化で
+2. 同じ tuple + 異なる effect digest → hard-fail。 Takosumi は
+   `failed_precondition` で reject (ResolvedPlan 変化で
    `operationPlanDigest` も変わる invariant に依拠)
 3. tuple 一部欠損 (例: WAL header は読めるが entry body 破損) → recovery mode
    経由でしか進行不可。 mode 選択は
@@ -128,19 +129,19 @@ Reference internal recovery modes:
   `failed_precondition`
 - `compensate`: 同 digest / phase の unfinished WAL が `commit` / `post-commit`
   / `observe` まで進んでいる場合のみ terminal `abort` を追記し、各 OperationPlan
-  entry に `activation-rollback` RevokeDebt を enqueue。 `prepare` /
+  entry に `activation-rollback` CleanupBacklog を enqueue。 `prepare` /
   `pre-commit` だけの WAL は actual effect が無いため compensate 対象外で
   `failed_precondition`
 
-Installer API の public route は install / deploy / rollback の 5 endpoint で
+Installer API の public route は install / deploy / rollback を扱いま
 す。`continue` / `compensate` は reference kernel の internal recovery tooling
 が使う mode であり、Installer API request body の mode ではありません。
 
 ## Deployment provenance
 
-operator automation may supply source / provenance evidence to the reference
-kernel. kernel は opaque JSON として internal Deployment / WAL evidence に永続化
-し、workflow 実行 / build log parse / git field 解釈は行いません。この evidence
+operator automation may supply source / provenance の記録を reference Takosumi
+に渡せます。Takosumi は opaque JSON として internal Deployment / WAL の記録に
+永続化し、workflow 実行 / build log parse / git field 解釈は行いません。この evidence
 は public Installer API の必須 field ではありません。
 
 - WAL evidence に provenance object または `provenanceDigest` を含められる
@@ -155,20 +156,20 @@ commit SHA → step log digest の traceability を、kernel に workflow を持
 
 ## Pre/post-commit verification lifecycle {#prepost-commit-verification-lifecycle}
 
-WAL stage は kernel 所有の validation / evidence collection を含みます。汎用の
+WAL stage は Takosumi のバリデーション / 記録収集を含みます。汎用の
 `pre-commit` / `post-commit` hook 的挙動は upstream product / repository
 automation に置きます。
 
 hook 的挙動が必要な workflow / repository automation は上流 product 側で行い、
 installer API に source を渡す前に検査を済ませる前提です。
 
-`prepare` 詳細には AppSpec provenance / resource operation plan / kernel
-validation evidence のみが含まれます。
+`prepare` 詳細には manifest provenance / resource operation plan / Takosumi
+バリデーションの記録のみが含まれます。
 
 ## Orphaned debt 経路
 
-WAL stage が actual-effects を書いた後で外部依存が壊れると、 kernel は
-RevokeDebt entry を生成します。発生条件:
+WAL stage が actual-effects を書いた後で外部依存が壊れると、 Takosumi は
+CleanupBacklog entry を生成します。発生条件:
 
 - `post-commit` 中: link projection / metadata sync が回復不能失敗→
   `link-revoke`
@@ -178,8 +179,8 @@ RevokeDebt entry を生成します。発生条件:
   generated material → `activation-rollback`
 - `finalize` 中: managed / generated cleanup が permanent fail →該当 reason
 
-reason / status / aging は [RevokeDebt Model](./revoke-debt.md) 参照。 WAL stage
-側は enqueue 責務のみで、 retry / aging semantics は RevokeDebt subsystem
+reason / status / aging は [CleanupBacklog Model](./revoke-debt.md) 参照。 WAL stage
+側は enqueue 責務のみで、 retry / aging semantics は CleanupBacklog subsystem
 に委ねます。
 
 ## Related architecture notes
@@ -197,4 +198,4 @@ reason / status / aging は [RevokeDebt Model](./revoke-debt.md) 参照。 WAL s
 
 - [Lifecycle Protocol](./lifecycle.md)
 - [Approval Invalidation Triggers](./approval-invalidation.md)
-- [RevokeDebt Model](./revoke-debt.md)
+- [CleanupBacklog Model](./revoke-debt.md)

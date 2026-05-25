@@ -35,12 +35,12 @@
   "publications": {
     "bucket": {
       "contract": "object-store",
-      "material": {
+      "exampleMaterialMapping": {
         "bucket": "$outputs.bucket",
         "endpoint": "$outputs.endpoint",
         "region": "$outputs.region",
-        "accessKeyRef": "$outputs.accessKeyRef",
-        "secretKeyRef": "$outputs.secretKeyRef"
+        "accessKeyIdRef": "$outputs.accessKeyRef",
+        "secretAccessKeyRef": "$outputs.secretKeyRef"
       }
     }
   },

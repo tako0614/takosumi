@@ -1,9 +1,12 @@
 # 監査イベント {#audit-events}
 
-Takosumi core audit events cover install / deploy / rollback lifecycle evidence.
-Reference/operator extension event families can add provider operation,
-connector, and DataAsset evidence. account、billing、support、 customer
-onboarding の event taxonomy は operator account-plane 側で定義します。
+::: info 内部設計メモ
+public contract は [Installer API](./installer-api.md) を参照。
+:::
+
+Takosumi core audit events cover install / deploy / rollback lifecycle の
+Deployment の記録。Reference/operator extension event families can add リソース
+の作成・更新、connector、and asset の記録。
 
 ## 共通 envelope
 
@@ -56,24 +59,28 @@ restore の stage-specific event はそれぞれ
 | `operation-recovered` | notice   | journal replay / recovery により operation が復旧した。 |
 | `operation-failed`    | warning  | provider operation が失敗した。                         |
 
-### Policy / safety
+### Reference / Operator Policy Events
+
+These events belong to a reference/operator policy profile. They are not
+additional manifest fields and do not expand the portable Installer API entity
+model.
 
 | Type                   | Severity | 説明                                                    |
 | ---------------------- | -------- | ------------------------------------------------------- |
 | `approval-required`    | notice   | apply に operator approval が必要になった。             |
 | `approval-granted`     | notice   | approval が承認された。                                 |
 | `approval-invalidated` | warning  | approval が input drift などで無効化された。            |
-| `revoke-debt-created`  | warning  | revoke が即時完了せず RevokeDebt が記録された。         |
-| `revoke-debt-resolved` | notice   | RevokeDebt が解消された。                               |
+| `cleanup-backlog-created`  | warning  | revoke が即時完了せず CleanupBacklog が記録された。         |
+| `cleanup-backlog-resolved` | notice   | CleanupBacklog が解消された。                               |
 | `drift-detected`       | warning  | observed state と desired state の drift が検出された。 |
 
-### Reference DataAsset / Connector
+### Reference asset / Connector
 
 | Type                       | Severity | 説明                                                |
 | -------------------------- | -------- | --------------------------------------------------- |
-| `artifact-uploaded`        | info     | optional DataAsset が受け付けられた。               |
-| `artifact-gc-marked`       | info     | DataAsset GC が live set を mark した。             |
-| `artifact-gc-swept`        | notice   | DataAsset GC が unreferenced DataAsset を削除した。 |
+| `artifact-uploaded`        | info     | optional asset が受け付けられた。               |
+| `artifact-gc-marked`       | info     | asset GC が live set を mark した。             |
+| `artifact-gc-swept`        | notice   | asset GC が unreferenced asset を削除した。 |
 | `connector-registered`     | notice   | runtime-agent connector が登録された。              |
 | `connector-replaced`       | notice   | runtime-agent connector record が置換された。       |
 | `connector-revoked`        | notice   | runtime-agent connector が無効化された。            |
@@ -97,6 +104,6 @@ implementation は backend に合わせて構いませんが、operator が chai
 
 - [Storage Schema](./storage-schema.md)
 - [Lifecycle Protocol](./lifecycle.md)
-- [DataAsset GC](./data-asset-gc.md)
+- [asset GC](./data-asset-gc.md)
 - [Risk Taxonomy](./risk-taxonomy.md)
 - [Approval Invalidation](./approval-invalidation.md)

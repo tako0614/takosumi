@@ -5,12 +5,12 @@ Installer API、official catalog、reference implementation、operator extension
 
 Public Installer API の entity / error enum は
 [Installer API](./installer-api.md) が正本です。このページは隣接する reference
-kernel / operator implementation の internal enum も一緒に索引します。
+Takosumi / operator implementation の internal enum も一緒に索引します。
 
 ## Public Installer API enums
 
-Installation / Deployment status、Installer API error envelope、dry-run response
-shape は [Installer API](./installer-api.md) が normative source です。この
+Installation / Deployment status、Installer API エラーレスポンス、dry-run
+response shape は [Installer API](./installer-api.md) が normative source です。この
 ページでは重複定義しません。
 
 ## Reference / operator values
@@ -49,7 +49,7 @@ prepare | pre-commit | commit | post-commit | observe | finalize | abort | skip
 
 WAL stage の意味は [WAL Stages](./wal-stages.md) 参照。
 
-## Operator grant metadata
+## Operator access metadata
 
 ### Access mode
 
@@ -58,10 +58,9 @@ read | read-write | admin | invoke-only | observe-only
 ```
 
 Access mode は official catalog vocabulary です。core は resolved value を
-Deployment に紐づく retained evidence に記録し、operator distribution が policy
-を enforce します。AppSpec の dependency expression は `publish` / `listen` と
-external publication path 参照で表します。詳細は
-[Access Modes](./access-modes.md) 参照。
+Deployment の記録に残し、operator profile が policy を enforce します。manifest
+の dependency expression は `publish` / `listen` とプラットフォームサービス path
+参照で表します。詳細は [Access Modes](./access-modes.md) 参照。
 
 ## Approval lifecycle
 
@@ -83,7 +82,7 @@ destructive-change | credential-exposure | network-exposure | quota-exhaustion |
 provider-drift | approval-required | unsupported-capability
 ```
 
-## RevokeDebt
+## CleanupBacklog
 
 ### reason
 
@@ -97,18 +96,19 @@ external-revoke | link-revoke | activation-rollback | approval-invalidated
 open | operator-action-required | cleared
 ```
 
-詳細は [RevokeDebt Model](./revoke-debt.md) 参照。
+詳細は [CleanupBacklog Model](./revoke-debt.md) 参照。
 
 ## Open operator values
 
-### DataAsset metadata kind
+### asset metadata value
 
-DataAsset metadata `kind` は operator が optional DataAsset extension の
-metadata として登録する open value です。connector は `acceptedArtifactKinds` で
-受け付ける metadata value を宣言します。
+asset metadata value は operator が optional asset extension の metadata
+として登録する open value です。current compatibility wire では descriptor の
+`kind` field と `acceptedArtifactKinds` field に現れますが、manifest component
+`kind` とは別の operator extension metadata です。
 
-DataAsset の扱いは [DataAsset Policy](./data-asset-policy.md) と
-[DataAsset GC](./data-asset-gc.md) 参照。
+asset の扱いは [asset Policy](./data-asset-policy.md) と
+[asset GC](./data-asset-gc.md) 参照。
 
 ## Health
 
@@ -126,8 +126,8 @@ failed_precondition | resource_exhausted | not_implemented |
 readiness_probe_failed | internal_error
 ```
 
-HTTP status への対応は reference kernel の
-[Reference Kernel Route Inventory](./kernel-http-api.md) にあります。 Installer
+HTTP status への対応は reference Takosumi の
+[Reference Takosumi Route Inventory](./kernel-http-api.md) にあります。Installer
 API が返す public error code subset は
 [Installer API](./installer-api.md#error-envelope) が正本です。
 
@@ -138,7 +138,7 @@ connector:<id>
 ```
 
 `connector:<id>` は current reference operator registry の compatibility wire
-format です。ユーザー AppSpec が mint / address する値ではありません。
+format です。ユーザー manifest が mint / address する値ではありません。
 runtime-agent lifecycle dispatch key は `(shape, provider)` です。詳細は
 [Connector Guide](./connector-contract.md) 参照。
 
@@ -146,6 +146,6 @@ runtime-agent lifecycle dispatch key は `(shape, provider)` です。詳細は
 
 - [Lifecycle Protocol](./lifecycle.md)
 - [WAL Stages](./wal-stages.md)
-- [Reference Kernel Route Inventory](./kernel-http-api.md)
+- [Reference Takosumi Route Inventory](./kernel-http-api.md)
 - [Risk Taxonomy](./risk-taxonomy.md)
 - [Connector Guide](./connector-contract.md)

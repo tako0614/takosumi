@@ -1,20 +1,24 @@
 # Reference runtime-agent 分離 {#runtime-agent}
 
-runtime-agent は reference Takosumi topology で provider operation を kernel
-process から分離する execution host です。kernel から lifecycle RPC を受け取り、
-cloud API、container runtime、systemd、filesystem などを操作します。kernel は
-Installation / Deployment record と validation を担当し、provider credential は
-agent host 側に閉じ込めます。
+::: info 内部設計メモ
+public contract は [Installer API](../reference/installer-api.md) を参照。[Operator Overview](./index.md) から始めてください。
+:::
+
+runtime-agent は reference Takosumi topology でリソースの作成・更新を Takosumi
+プロセスから分離する execution host です。Takosumi から lifecycle RPC を受け取り���
+cloud API、container runtime、systemd、filesystem などを操作します。Takosumi は
+Installation / Deployment の記録とバリデーションを担当し、provider credential は
+agent host 側に閉じ込���ます。
 
 ## いつ分離するか {#when-to-split}
 
-次のいずれかに当てはまる場合は、単一 VM の embedded self-host connector ではなく
-runtime-agent 分離を使います。
+次のいずれかに当てはまる場合は、単一 VM の embedded self-host connector で���なく
+runtime-agent ��離を使います。
 
-- AWS / GCP / Cloudflare / Kubernetes credential を kernel host に置きたくない。
+- AWS / GCP / Cloudflare / Kubernetes credential を Takosumi host に置きたくない。
 - workload executor と installer API の network boundary を分けたい。
 - provider ごとに host、cloud account、VPC、firewall policy を変えたい。
-- agent host を rolling upgrade し、kernel API を止めずに provider operation を
+- agent host を rolling upgrade し、Takosumi API を止めずにリソースの作成・更新を
   切り替えたい。
 
 ## Agent host {#agent-host}
@@ -29,12 +33,12 @@ export AWS_REGION=ap-northeast-1
 takosumi runtime-agent serve --port 8789 --token "$TAKOSUMI_AGENT_TOKEN"
 ```
 
-`--env-file ./agent.env` は agent 専用の dotenv file です。kernel host にはこの
+`--env-file ./agent.env` は agent 専用の dotenv file です。Takosumi host にはこの
 dotenv file を置きません。
 
-## Kernel host {#kernel-host}
+## Takosumi host {#kernel-host}
 
-kernel host は agent endpoint と token だけを知ります。
+Takosumi host は agent endpoint と token だけを知ります。
 
 ```bash
 export TAKOSUMI_AGENT_URL=https://agent.internal.example.com
@@ -44,7 +48,7 @@ deno run -A ./server.ts
 ```
 
 `server.ts` は [operator bootstrap](./bootstrap.md) の reference adapter array
-(`plugins` option) 例を使い、provider package を kernel に attach します。実際の
+(`plugins` option) 例を使い、provider package を Takosumi に attach します。実際の
 副作用は runtime-agent 側の connector が実行します。stock `takosumi server` は
 connectivity / dev smoke 用で、provider adapter array を読み込まないため実
 provider 操作の例には使いません。agent URL は private network 上の HTTPS
@@ -52,15 +56,15 @@ endpoint にして ください。
 
 ## Network と token {#network-and-token}
 
-- kernel から agent への outbound だけを許可する。
+- Takosumi から agent への outbound だけを許可する。
 - agent token は installer token と別に発行する。
-- reverse proxy を挟む場合、request body size と timeout を provider operation
+- reverse proxy を挟む場合、request body size と timeout をリソースの作成・更新
   に合わせる。
 - agent host の logs には raw credential を出さない。
 
 ## Failure mode {#failure-mode}
 
-agent が unreachable の場合、kernel は operation envelope を dispatch できない
+agent が unreachable の場合、Takosumi は operation を dispatch できない
 ため Deployment は失敗します。provider 側の副作用が出る前に失敗した operation は
 そのまま再試行できます。副作用後の失敗は WAL / provider observation / Deployment
 condition を見て、同じ OperationPlan を continue するか、新しい Deployment
@@ -69,4 +73,4 @@ condition を見て、同じ OperationPlan を continue するか、新しい De
 関連する reference topology:
 
 - [Reference Runtime-Agent Execution Surface](../reference/runtime-agent-api.md)
-- [Implementation / runtime-agent boundary](../reference/architecture/implementation-operation-envelope.md)
+- [Implementation / runtime-agent boundary](../reference/architecture/runtime-agent-boundary.md)

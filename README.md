@@ -22,7 +22,7 @@ takosumi install dry-run \
   --source .
 ```
 
-managed / remote operator に投げる場合は operator-issued token と kernel URL を
+managed / remote operator に投げる場合は operator-issued token と Takosumi URL を
 明示する:
 
 ```bash
@@ -32,9 +32,9 @@ takosumi install --source git:https://github.com/example/notes#v1.2.3 \
   --space space:personal
 ```
 
-### AppSpec (= `.takosumi.yml`) の最小例
+### Manifest (= `.takosumi.yml`) の最小例
 
-この例は operator が Takosumi official type catalog の aliases (`postgres` /
+この例は operator が Takosumi Kind Catalog の aliases (`postgres` /
 `worker`) を採用している前提です。別 operator では `kind` に operator-defined
 alias または URI を使います。
 
@@ -63,28 +63,28 @@ components:
         prefix: DB
 ```
 
-`db` が local publication `db.connection` を公開し、`web` が同じ AppSpec 内で
+`db` が local publication `db.connection` を公開し、`web` が同じ manifest 内で
 `listen` することで `DB_HOST` / `DB_PORT` / secretRef-mediated
 `DB_CONNECTIONSTRING` 等を runtime env として受け取る。component 間の接続は
-publish / listen で表す。Takosumi Cloud などの operator distribution が提供する
-external publication は `from: operator.identity.oidc` のように `listen`
+publish / listen で表す。Takosumi Cloud などの operator profile が提供する
+platform service は `from: operator.identity.oidc` のように `listen`
 から参照する。
 
 ## 中核概念
 
 | 概念             | 表現                                                                          |
 | ---------------- | ----------------------------------------------------------------------------- |
-| **AppSpec**      | `.takosumi.yml` (= source root の 1 ファイル)                                 |
-| **Installation** | Space に入った AppSpec の core record (= current Deployment pointer / status) |
+| **manifest**      | `.takosumi.yml` (= source root の 1 ファイル)                                 |
+| **Installation** | Space に入った manifest の core record (= current Deployment pointer / status) |
 | **Deployment**   | 1 回の apply 結果 (= 履歴 / audit / rollback)                                 |
 
 Takosumi の公開 lifecycle はこの 3 entity を中心に説明する。
 Ownership、billing、permission scope、account-facing projection は operator
-account plane が保持する。
+account layer が保持する。
 
-Kinds are operator-resolved names. The Takosumi official type catalog publishes
+Kinds are operator-resolved names. The Takosumi Kind Catalog publishes
 descriptor vocabulary, and the reference implementation uses provider bindings.
-Public concepts are AppSpec / Installation / Deployment; the Installer API is
+Public concepts are manifest / Installation / Deployment; the Installer API is
 the public HTTP surface for creating, updating, and rolling back them.
 
 ## 設計の核
@@ -92,28 +92,28 @@ the public HTTP surface for creating, updating, and rolling back them.
 ### Source-to-runtime model
 
 `.takosumi.yml` を source root に置くだけ。 Takosumi は git URL または prepared
-source snapshot から source を取得し、operator-selected implementation binding
-で runtime resource を materialize する。build / prepare は kernel 外の build
+source snapshot から source を取得し、operator-selected binding
+で runtime resource を materialize する。build / prepare は Takosumi 外の build
 service / CI が担当し、`source.kind: prepared` として渡す。
 
-### Component kind × implementation binding
+### Component kind × binding
 
-- **Component kind は operator が解決**: Takosumi AppSpec は `kind` を opaque
+- **Component kind は operator が解決**: Takosumi manifest は `kind` を不透明な
   string として扱う。`worker` / `postgres` などは operator の `kindAliases` で
   URI に解決される。
-- **Official type catalog descriptor は採用できる vocabulary**:
-  `https://takosumi.com/kinds/v1/*` は Takosumi official type catalog の
-  descriptor URI。operator は `kindAliases` でそれを採用してもよいし、任意
+- **Official type catalog の kind の定義は採用できる vocabulary**:
+  `https://takosumi.com/kinds/v1/*` は Takosumi Kind Catalog の
+  kind の定義の URI。operator は `kindAliases` でそれを採用してもよいし、任意
   domain の kind URI を使ってもよい。
-- **JSON-LD metadata は descriptor metadata**: kind URI に対応する metadata が
+- **JSON-LD metadata は kind の定義**: kind URI に対応する metadata が
   `spec` input schema、outputs、publish / listen semantics を表す。
-- **Provider package は reference kernel binding**: cloud provider package
+- **Provider package は reference Takosumi binding**: cloud provider package
   (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`)
-  は reference Takosumi kernel 向けに binding factory を export する。 他の
+  は reference Takosumi 向けに binding factory を export する。 他の
   implementation は同じ kind URI を別の仕組みで materialize できる。
 
-同じ kind / material contract の overlapping subset を複数 provider が実装し、
-operator evidence で互換性を確認できる場合、その subset の AppSpec は provider
+同じ kind / output type の overlapping subset を複数 provider が実装し、
+operator evidence で互換性を確認できる場合、その subset の manifest は provider
 差し替えに対して portable になる。provider-specific `spec` extension や
 credential 前提は自動的には portable にならない。
 
@@ -154,7 +154,7 @@ core:
 | [`jsr:@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | .takosumi.yml parser + git fetch + deploy client      |
 | [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | lifecycle execution host (cloud SDK / OS executor)    |
 | [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                   |
-| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | AppSpec / Installer API wire types                    |
+| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | manifest / Installer API wire types                    |
 
 cloud provider packages (= 別 install、 必要な cloud だけ import):
 
@@ -177,7 +177,7 @@ publish scope。互換性の authority は contract (`@takos/takosumi-contract`)
 ```
 takosumi/
 ├── packages/
-│   ├── contract/                @takos/takosumi-contract        — AppSpec / Installer API wire types
+│   ├── contract/                @takos/takosumi-contract        — manifest / Installer API wire types
 │   ├── runtime-agent/           @takos/takosumi-runtime-agent   — lifecycle execution host (cloud SDK / OS executor)
 │   ├── plugins/                 @takos/takosumi-plugins         — official catalog helpers + reference adapter helpers
 │   ├── installer/               @takos/takosumi-installer       — .takosumi.yml parser / git fetch helpers / deploy client

@@ -5,7 +5,7 @@
   "name": "worker",
   "version": "v1",
   "referenceAliases": ["worker"],
-  "description": "Serverless JS function whose entrypoint is read from the resolved source snapshot.",
+  "description": "Serverless JS function whose entrypoint is read from the resolved source view.",
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -15,7 +15,7 @@
       "entrypoint": {
         "type": "string",
         "minLength": 1,
-        "description": "Source-root-relative worker module path inside the resolved source snapshot."
+        "description": "Source-root-relative worker module path inside the resolved source view."
       },
       "env": {
         "type": "object",
@@ -27,13 +27,29 @@
   "publications": {
     "http": {
       "contract": "http-endpoint",
-      "material": {
-        "url": "$outputs.url",
-        "id": "$outputs.id"
+      "exampleMaterialMapping": {
+        "targets": [
+          {
+            "name": "default",
+            "url": "$outputs.url",
+            "visibility": "private"
+          }
+        ]
       }
     }
   },
-  "acceptedProjectionFamilies": ["env", "secret-env"],
+  "listens": {
+    "*": {
+      "accepts": [
+        "service-binding",
+        "object-store",
+        "event-channel",
+        "identity.oidc@v1",
+        "billing.port@v1"
+      ],
+      "projectionFamilies": ["secret-env", "config-mount"]
+    }
+  },
   "outputs": [
     {
       "name": "url",

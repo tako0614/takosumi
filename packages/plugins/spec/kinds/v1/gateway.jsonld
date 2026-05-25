@@ -49,17 +49,17 @@
           "properties": {
             "listener": {
               "type": "string",
-              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9-]{0,62}$",
               "description": "Listener name from `listeners`."
             },
             "path": {
               "type": "string",
-              "minLength": 1,
-              "description": "HTTP path prefix, such as `/` or `/api`."
+              "pattern": "^/[^?#]*$",
+              "description": "HTTP path prefix, such as `/` or `/api`. Duplicate route and segment-boundary checks are descriptor semantic validation."
             },
             "to": {
               "type": "string",
-              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9-]{0,62}$",
               "description": "Local listen binding name that supplies the upstream endpoint."
             }
           }
@@ -70,16 +70,28 @@
   "publications": {
     "public": {
       "contract": "http-endpoint",
-      "material": {
-        "url": "$outputs.url",
-        "host": "$outputs.host",
-        "scheme": "$outputs.scheme",
-        "listener": "$outputs.listener",
-        "routes": "$outputs.routes"
+      "exampleMaterialMapping": {
+        "endpoints": [
+          {
+            "url": "$outputs.url",
+            "scheme": "$outputs.scheme",
+            "host": "$outputs.host",
+            "listener": "$outputs.listener",
+            "visibility": "public",
+            "primary": true,
+            "routes": "$outputs.routes"
+          }
+        ]
       }
     }
   },
-  "acceptedProjectionFamilies": ["upstream"],
+  "listens": {
+    "*": {
+      "accepts": ["http-endpoint"],
+      "projectionFamilies": ["upstream"],
+      "requiredWhenReferencedBy": "spec.routes[].to"
+    }
+  },
   "outputs": [
     {
       "name": "url",

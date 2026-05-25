@@ -3,6 +3,7 @@
   "@id": "https://takosumi.com/reference/kernel/contracts/output/http-endpoint/v1",
   "@type": "OutputContractDescriptor",
   "shortRef": "output.http-endpoint@v1",
+  "description": "Reference kernel internal deploy descriptor for a single provider URL output. The public official type catalog material contract is http-endpoint and uses targets[] / endpoints[] shape.",
   "domain": "output",
   "lifecycleDomain": "declaration-output",
   "changeEffect": "output-binding",

@@ -83,12 +83,14 @@ interface ListenOptions {
 `Component.kind` is opaque to the contract package. Operators may map short
 aliases such as `web-service` to full kind URIs, but alias resolution and kind
 descriptor selection belong to the operator distribution. Component-specific
-gateway route rules, launch endpoint conventions, permission requests, and
-provider details live inside the component's open `spec` or in the operator's
-implementation binding conventions. `publish` declares local publications such
-as `web.http`; `listen` declares local bindings whose `from` is either a
-two-segment `component.publication` reference or a three-or-more-segment
-external publication path such as `operator.identity.oidc`. Publication material
+gateway route/TLS/host rules live inside the selected descriptor-owned open
+`spec`; workload dependencies use `publish` / `listen`; launch, permission,
+account, and billing flows are operator distribution surfaces. `publish`
+declares local publications such as `web.http`; `listen` declares local bindings
+whose `from` is either a two-segment `component.publication` reference or a
+three-or-more-segment external publication path such as
+`publisher.identity.primary`. Takosumi Cloud defines concrete paths such as
+`operator.identity.oidc` in its own distribution docs. Publication material
 projection is owned by the kind descriptor and operator-selected implementation
 binding. Build recipes live outside AppSpec; an operator/build-service
 distribution may define `.takosumi.build.yml`, CI config, or another input.

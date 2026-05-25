@@ -10,9 +10,9 @@
  *    `packages/plugins/spec/kinds/v1/<name>.jsonld`).
  *    Must include `@context` / `@id` / `@type` / `name` /
  *    `referenceAliases` / `publications`. `publications` is an object keyed by local
- *    publication name with `{ contract, material }` values. A document can also
- *    list `acceptedProjectionFamilies` as vocabulary metadata for compatible
- *    `listen.as` values.
+ *    publication name with `{ contract, exampleMaterialMapping? }` values. A
+ *    document can also include `listens` metadata for consumer-slot
+ *    compatibility.
  *
  * The lint is intentionally shallow: kernel does not perform JSON-LD
  * semantic expand, so we only assert the envelope, publication metadata, and
@@ -79,11 +79,12 @@ async function main(): Promise<void> {
       requireNonEmptyString(obj["name"], "name", entry.path, issues);
       checkReferenceAliases(obj["referenceAliases"], entry.path, issues);
       checkPublications(obj["publications"], entry.path, issues);
-      checkAcceptedProjectionFamilies(
+      checkNoLegacyAcceptedProjectionFamilies(
         obj["acceptedProjectionFamilies"],
         entry.path,
         issues,
       );
+      checkListens(obj["listens"], entry.path, issues);
     }
   }
 
@@ -190,24 +191,32 @@ function checkPublications(
       issues.push({
         path,
         message:
-          `publications[${key}].from is obsolete; use material projection metadata`,
+          `publications[${key}].from is obsolete; use exampleMaterialMapping metadata`,
+      });
+    }
+    if ("material" in e) {
+      issues.push({
+        path,
+        message:
+          `publications[${key}].material is ambiguous; use exampleMaterialMapping`,
       });
     }
     if (
-      e["material"] !== undefined &&
-      (e["material"] === null ||
-        typeof e["material"] !== "object" ||
-        Array.isArray(e["material"]))
+      e["exampleMaterialMapping"] !== undefined &&
+      (e["exampleMaterialMapping"] === null ||
+        typeof e["exampleMaterialMapping"] !== "object" ||
+        Array.isArray(e["exampleMaterialMapping"]))
     ) {
       issues.push({
         path,
-        message: `publications[${key}].material must be an object when present`,
+        message:
+          `publications[${key}].exampleMaterialMapping must be an object when present`,
       });
     }
   }
 }
 
-function checkAcceptedProjectionFamilies(
+function checkNoLegacyAcceptedProjectionFamilies(
   value: unknown,
   path: string,
   issues: LintIssue[],
@@ -215,21 +224,24 @@ function checkAcceptedProjectionFamilies(
   if (value === undefined) {
     return;
   }
-  if (!Array.isArray(value)) {
+  issues.push({
+    path,
+    message:
+      "`acceptedProjectionFamilies` is obsolete; use slot-local `listens` metadata",
+  });
+}
+
+function checkListens(
+  value: unknown,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) return;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
     issues.push({
       path,
-      message: "`acceptedProjectionFamilies` must be an array of strings",
+      message: "`listens` must be an object keyed by listen slot name",
     });
-    return;
-  }
-  for (const [index, family] of value.entries()) {
-    if (typeof family !== "string" || family.length === 0) {
-      issues.push({
-        path,
-        message:
-          `acceptedProjectionFamilies[${index}] must be a non-empty string`,
-      });
-    }
   }
 }
 

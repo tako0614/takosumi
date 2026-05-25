@@ -69,15 +69,15 @@ and map short aliases to those URIs.
 | `object-store` | S3-compatible bucket                                   |
 | `gateway`      | HTTP listener, routing, host, and TLS policy           |
 
-An operator account-plane distribution can publish OIDC issuer material at the
-`operator.identity.oidc` external publication path. worker 側は local listen
-binding で `operator.identity.oidc` を参照し、secretRef-mediated runtime env
-を受け取る。
+An operator account-plane distribution can publish OIDC issuer material at a
+Space-visible external publication path. The generic example below uses a
+neutral path. Takosumi Cloud defines `operator.identity.oidc` in
+`takosumi-cloud/docs/workload-publications.md`.
 
 ```yaml
 listen:
   oidc:
-    from: operator.identity.oidc
+    from: publisher.identity.primary
     as: secret-env
     required: true
 ```
@@ -103,11 +103,11 @@ distribution は自分の provider IDs と validation policy を持てます。
 
 ## Data assets
 
-DataAsset metadata kinds are operator metadata. The optional DataAsset routes
-store operator-owned blobs, and `kind` is owned by the operator / connector
-distribution.
+DataAsset metadata values are operator metadata. The optional DataAsset routes
+store operator-owned blobs, and the current compatibility `kind` field is owned
+by the operator / connector distribution.
 
-Reference operators can register discoverable data-asset kinds via
+Reference operators can register discoverable DataAsset metadata values via
 `registerArtifactKind` from
 `@takos/takosumi-contract/reference/runtime-agent-lifecycle`.
 
