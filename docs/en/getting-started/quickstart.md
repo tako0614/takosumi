@@ -64,6 +64,8 @@ TAKOSUMI_DEV_MODE=1 takosumi server --port 8788
 Back in the source root:
 
 ```bash
+cd /path/to/hello-takosumi
+export APP_ROOT="$PWD"
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
 ```

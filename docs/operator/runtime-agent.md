@@ -5,15 +5,15 @@ public contract は [Installer API](../reference/installer-api.md) を参照。[
 :::
 
 runtime-agent は reference Takosumi topology でリソースの作成・更新を Takosumi
-プロセスから分離する execution host です。Takosumi から lifecycle RPC を受け取り���
+プロセスから分離する execution host です。Takosumi から lifecycle RPC を受け取り、
 cloud API、container runtime、systemd、filesystem などを操作します。Takosumi は
 Installation / Deployment の記録とバリデーションを担当し、provider credential は
-agent host 側に閉じ込���ます。
+agent host 側に閉じ込めます。
 
 ## いつ分離するか {#when-to-split}
 
-次のいずれかに当てはまる場合は、単一 VM の embedded self-host connector で���なく
-runtime-agent ��離を使います。
+次のいずれかに当てはまる場合は、単一 VM の embedded self-host connector ではなく
+runtime-agent 分離を使います。
 
 - AWS / GCP / Cloudflare / Kubernetes credential を Takosumi host に置きたくない。
 - workload executor と installer API の network boundary を分けたい。

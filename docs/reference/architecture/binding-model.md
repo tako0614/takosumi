@@ -67,17 +67,17 @@ Link resolution は provider side effect の前に次を検証します。
    PlatformServiceDeclaration に exact match する。
 2. source の output type alias / URI が解決済みで、出力データの metadata、
    publish の出力の declaration、operator policy、または採用済み kind の定義
-   から version / sensitivity 相当の判断材料が���得できる。
+   から version / sensitivity 相当の判断材料が取得できる。
 3. `listen.as` injection mode が source output type で許可される。
 4. PlatformServiceDeclaration 由来の場合、resolved access mode が
    publish の出力の `accessModes` と operator policy で許可される。
 5. publisher role、materialization evidence、operator policy、採用済み
    kind の定義が requested projection を許可する。特に `http-endpoint`
-   を `listen.as: upstream` で受ける場合���source が upstream
+   を `listen.as: upstream` で受ける場合は、source が upstream
    として再利用可能かを provider / operator policy / kind の定義
    で確認する。
 6. secret / restricted 出力データを plain env や public URL へ落とす unsafe
-   projection �� fail-closed で拒否する。
+   projection は fail-closed で拒否する。
 
 成功した selection は Deployment に紐づく deploy
 evidence に、publish の出力 / そのスナップショット、output type、projection

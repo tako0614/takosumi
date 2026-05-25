@@ -50,6 +50,14 @@ metadata、provenance は build-service profile に残します。 operator-loca
 profile が別 archive encoding を受け付ける場合でも、それは portable v1
 の互換条件ではありません。
 
+## Prepared source archive contract {#prepared-source-archive-contract}
+
+Portable Installer API v1 の prepared source archive は uncompressed POSIX tar
+です。archive は `.takosumi.yml` を含む source root を表し、Installer は取得した
+payload bytes の sha256 を `source.digest` として検証します。path traversal、
+absolute path、NUL byte、source root 外への escape、operator policy の size cap
+違反は provider side effect 前に reject します。
+
 component kind schema metadata が source path field として扱う値は、resolved
 source root 内に存在し、source root から escape せず、注入 policy に反しない
 必要があります。dry-run は side effect なしで決定できる schema / kind の定義 /
@@ -72,7 +80,7 @@ workflow、または recipe file なしの workflow を定義できます。Tako
 
 | 内容                            | Surface                                        |
 | ------------------------------- | ---------------------------------------------- |
-| runtime / install intent        | manifest                                        |
+| runtime / install intent        | manifest                                       |
 | runtime file path               | kind-specific `spec`                           |
 | build recipe / build graph      | build-service profile / CI                     |
 | prepared source URL             | Installer API source input                     |

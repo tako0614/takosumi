@@ -10,13 +10,13 @@ Runtime routing は、Deployment に紐づく retained activation evidence と
 implementation/operator evidence を provider-native data plane に反映する model
 です。hostname / path / resource output が active workload に届くようにします。
 
-Takosumi control plane は install / deploy / rollback を扱います。
-runtime request は provider-native data plane が処理します。
+Takosumi control plane は install / deploy / rollback を扱います。 runtime
+request は provider-native data plane が処理します。
 
 ## 入力 {#inputs}
 
-routing materialization が参照する入力は、apply 済み Deployment に紐づく
-deploy record です。
+routing materialization が参照する入力は、apply 済み Deployment に紐づく deploy
+record です。
 
 - selected runtime execution binding
 - resolved source identity and provider-specific immutable runtime input digests
@@ -54,9 +54,9 @@ layer projection 用の public な publish の出力を区別します。
 ## HTTP endpoint {#http-endpoint}
 
 `worker` は resolved source view と `spec.entrypoint` を request-driven runtime
-に渡す workload です。container runtime は official catalog または
-operator が採用した kind の定義が定める `web-service` を使い、その kind の定義の
-schema に従って `spec.image` を読みます。
+に渡す workload です。container runtime は official catalog または operator
+が採用した kind の定義が定める `web-service` を使い、その kind の定義の schema
+に従って `spec.image` を読みます。
 
 ```yaml
 apiVersion: v1
@@ -94,8 +94,8 @@ components:
 ```
 
 provider は Cloudflare Workers や Deno Deploy など任意ですが、canonical routing
-authority は retained activation evidence です。`host` は gateway の kind の定義が
-持つ ingress input であり、reservation、custom-domain proof、DNS
+authority は retained activation evidence です。`host` は gateway の kind
+の定義が 持つ ingress input であり、reservation、custom-domain proof、DNS
 ownership proof、TLS provisioning は採用済みの kind の定義、operator
 policy、provider flow が扱います。
 
@@ -149,14 +149,14 @@ kind-specific な形で workload に渡されます。
 
 runtime request は RoutingPointer が指す TrafficSnapshot assignments を反映した
 data plane で処理されます。その data plane は provider-native route、load
-balancer、reverse proxy、edge runtime binding などです。Takosumi API
-process は per-request path に入りません。
+balancer、reverse proxy、edge runtime binding などです。Takosumi API process は
+per-request path に入りません。
 
 - Takosumi API hostname は installer / internal API へ向ける。
-- manifest の gateway component から作られた public listener は selected provider
-  の data plane で runtime workload へ向ける。
-- external identity endpoint など operator-owned surface は platform service
-  と operator 側 routing で扱う。
+- manifest の gateway component から作られた public listener は selected
+  provider の data plane で runtime workload へ向ける。
+- external identity endpoint など operator-owned surface は platform service と
+  operator 側 routing で扱う。
 - operator の設定が router を Takosumi と同じ process / host に同居させる
   場合も、その router は provider ingress role です。
 
@@ -182,13 +182,12 @@ reference routing implementation は必要に応じて RoutingPointer / traffic
 assignment evidence を再有効化できます。historical Deployment record は書き換え
 ず、新しい Deployment も作りません。
 
-durable resource contents の巻き戻しは rollback ではなく、新しい Deployment /
+durable resource contents の巻き戻しは rollback ではなく、別の source apply /
 resource operation として扱います。
 
 ## Backend parity {#backend-parity}
 
-Takosumi は backend-neutral な runtime contract を提供します。同じ
-manifest でも、Cloudflare Workers、Kubernetes、bare metal、自前 runtime では
-provider capability と実行時制約が異なります。差分は provider capability と
-deploy record に記録し、manifest contract 自体には
-混ぜません。
+Takosumi は backend-neutral な runtime contract を提供します。同じ manifest
+でも、Cloudflare Workers、Kubernetes、bare metal、自前 runtime では provider
+capability と実行時制約が異なります。差分は provider capability と deploy record
+に記録し、manifest contract 自体には 混ぜません。

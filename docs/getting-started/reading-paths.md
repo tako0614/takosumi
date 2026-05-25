@@ -18,9 +18,9 @@
   [対応 kind 一覧](../reference/type-catalog.md)
 - operator が提供する外部サービスの出力データを workload から受け取るときは
   [外部サービス](../reference/external-publications.md)
-- Takosumi Cloud が提供する workload 向け publish の出力、deploy facade、dashboard
-  API などアカウント管理 (課金・認証) / admin surface が必要になったら
-  [Takosumi Cloud](../reference/takosumi-cloud.md)
+- Takosumi Cloud が提供する workload 向け publish の出力、deploy
+  facade、dashboard API などアカウント管理 (課金・認証) / admin surface
+  が必要になったら [Takosumi Cloud](../reference/takosumi-cloud.md)
 - public app endpoint を出すときは [HTTP 公開](../reference/http-exposure.md)
 - build が必要になったら [Build service 境界](../reference/build-spec.md)
 - 操作コマンドが必要になったら [CLI](../reference/cli.md)
@@ -40,12 +40,12 @@
 ## Takosumi Cloud とアカウント管理を読む人 {#cloud-operators}
 
 1. [Takosumi Cloud](../reference/takosumi-cloud.md)
-2. [Takosumi Cloud docs index](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/index.md)
-3. [Takosumi Cloud specification](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/spec.md)
-4. [Operator アカウント管理設定](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/operator-account-plane-profile.md)
-5. [Workload 向け外部サービス](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/workload-publications.md)
-6. [アカウント管理の参照 API](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/account-plane-projections.md)
-7. [Deploy facade](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/deploy-facade.md)
+2. [Takosumi Cloud docs](https://cloud.takosumi.com/docs/)
+3. [Takosumi Cloud Distribution Contract v1](https://cloud.takosumi.com/docs/ja/spec)
+4. [Operator Account-Plane Profile](https://cloud.takosumi.com/docs/ja/operator-account-plane-profile)
+5. [Workload External Publications](https://cloud.takosumi.com/docs/ja/workload-publications)
+6. [Account-Plane Projections](https://cloud.takosumi.com/docs/ja/account-plane-projections)
+7. [Deploy Facade](https://cloud.takosumi.com/docs/ja/deploy-facade)
 
 ## Provider や extension を作る人 {#provider-extension-authors}
 

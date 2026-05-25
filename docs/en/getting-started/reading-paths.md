@@ -17,9 +17,8 @@ After reading the First-Time Reader section above, also see:
   output type vocabulary.
 - [Platform Services](../reference/external-publications.md) when a workload
   consumes services provided by the operator.
-- [Takosumi Cloud](../reference/takosumi-cloud.md) when you need Cloud
-  platform service paths, deploy facade, dashboard API, or account management
-  behavior.
+- [Takosumi Cloud](../reference/takosumi-cloud.md) when you need Cloud platform
+  service paths, deploy facade, dashboard API, or account management behavior.
 - [HTTP Exposure](../reference/http-exposure.md) when you publish a public app
   endpoint.
 - [Build Service Boundary](../reference/build-spec.md) when source is prepared
@@ -40,12 +39,12 @@ After reading the First-Time Reader section above, also see:
 ## Takosumi Cloud And Account Management {#cloud-operators}
 
 1. [Takosumi Cloud Entry](../reference/takosumi-cloud.md)
-2. [Takosumi Cloud docs index](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/index.md)
-3. [Takosumi Cloud Specification](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/spec.md)
-4. [Operator account management profile](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/operator-account-plane-profile.md)
-5. [Workload platform services](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/workload-publications.md)
-6. [Account management projections](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/account-plane-projections.md)
-7. [Deploy facade](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/deploy-facade.md)
+2. [Takosumi Cloud docs](https://cloud.takosumi.com/docs/)
+3. [Takosumi Cloud Distribution Contract v1](https://cloud.takosumi.com/docs/en/spec)
+4. [Operator Account-Plane Profile](https://cloud.takosumi.com/docs/en/operator-account-plane-profile)
+5. [Workload External Publications](https://cloud.takosumi.com/docs/en/workload-publications)
+6. [Account-Plane Projections](https://cloud.takosumi.com/docs/en/account-plane-projections)
+7. [Deploy Facade](https://cloud.takosumi.com/docs/en/deploy-facade)
 
 ## Provider Or Extension Author {#provider-extension-authors}
 
