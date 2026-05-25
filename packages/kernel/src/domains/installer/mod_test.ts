@@ -210,6 +210,104 @@ Deno.test("installer lifecycle hooks fire on subsequent deployments without re-r
   });
 });
 
+Deno.test("InstallerPipeline resolves required external publications through operator resolver", async () => {
+  const spec = `apiVersion: v1
+metadata:
+  id: external-listen-test
+  name: External Listen Test
+components:
+  web:
+    kind: worker
+    listen:
+      oidc:
+        from: operator.identity.oidc
+        as: secret-env
+        prefix: OIDC
+        required: true
+`;
+  await withTempSource(async (dir) => {
+    const seen: Array<Readonly<Record<string, NamespaceMaterial>>> = [];
+    const resolverCalls: string[] = [];
+    const workerPlugin = buildRecordingPlugin({
+      name: "@example/worker",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      recorder: [],
+      captureApply: (ctx) => seen.push(ctx.listenedMaterials),
+    });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [workerPlugin],
+      externalPublications: {
+        resolve: (ctx) => {
+          resolverCalls.push(
+            `${ctx.spaceId}:${ctx.appId}:${ctx.componentName}:${ctx.bindingName}:${ctx.sourceRef}`,
+          );
+          if (ctx.sourceRef !== "operator.identity.oidc") return undefined;
+          return {
+            issuerUrl: "https://accounts.example.test",
+            clientId: "client_test",
+            clientSecret: { secretRef: "secret://oidc/client-secret" },
+          };
+        },
+      },
+    });
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    assert.equal(deployment.status, "succeeded");
+    assert.deepEqual(resolverCalls, [
+      "space_test:external-listen-test:web:oidc:operator.identity.oidc",
+    ]);
+    assert.deepEqual(seen, [{
+      oidc: {
+        issuerUrl: "https://accounts.example.test",
+        clientId: "client_test",
+        clientSecret: { secretRef: "secret://oidc/client-secret" },
+      },
+    }]);
+  }, spec);
+});
+
+Deno.test("InstallerPipeline rejects missing required external publication", async () => {
+  const spec = `apiVersion: v1
+metadata:
+  id: missing-external-listen-test
+  name: Missing External Listen Test
+components:
+  web:
+    kind: worker
+    listen:
+      oidc:
+        from: operator.identity.oidc
+        as: secret-env
+        required: true
+`;
+  await withTempSource(async (dir) => {
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/worker",
+          provides: ["https://takosumi.com/kinds/v1/worker"],
+          recorder: [],
+        }),
+      ],
+      externalPublications: { resolve: () => undefined },
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /unresolved publication "operator.identity.oidc"/,
+    );
+  }, spec);
+});
+
 Deno.test("InstallerPipeline rollback moves current pointer without creating a new Deployment", async () => {
   await withTempSource(async (dir) => {
     const deployments = new InMemoryDeploymentStore();

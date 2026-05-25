@@ -130,6 +130,22 @@ export interface InstallerProviderRegistry {
   apply(context: ProviderApplyContext): Promise<ProviderApplyResult>;
 }
 
+export interface ExternalPublicationResolveContext {
+  readonly installationId: string;
+  readonly spaceId: string;
+  readonly appId: string;
+  readonly componentName: string;
+  readonly component: Component;
+  readonly bindingName: string;
+  readonly sourceRef: string;
+}
+
+export interface ExternalPublicationResolver {
+  resolve(
+    context: ExternalPublicationResolveContext,
+  ): Promise<NamespaceMaterial | undefined> | NamespaceMaterial | undefined;
+}
+
 export interface InstallerPipelineDependencies {
   readonly installations?: InstallationStore;
   readonly deployments?: DeploymentStore;
@@ -154,6 +170,13 @@ export interface InstallerPipelineDependencies {
    * define contract-owned component kinds; aliases are resolved before plugin lookup.
    */
   readonly kindAliases?: KindAliasMap;
+  /**
+   * Operator-owned resolver for Space-visible external publication paths such
+   * as `operator.identity.oidc`. The kernel treats the returned material like
+   * any other listened material; it does not assign special meaning to the
+   * path.
+   */
+  readonly externalPublications?: ExternalPublicationResolver;
   /** Defaults to `crypto.randomUUID()`-based id generation. */
   readonly newId?: (prefix: string) => string;
   /** Defaults to `Date.now()`. */
@@ -171,6 +194,7 @@ export class InstallerPipeline {
   readonly #providers: InstallerProviderRegistry;
   readonly #plugins: readonly KernelPlugin[];
   readonly #pluginRegistry: KernelPluginRegistry;
+  readonly #externalPublications?: ExternalPublicationResolver;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #localSourceRoot?: string;
@@ -187,6 +211,7 @@ export class InstallerPipeline {
       (dependencies.plugins && dependencies.plugins.length > 0
         ? installerProviderRegistryFromPluginRegistry(this.#pluginRegistry)
         : new NoopProviderRegistry());
+    this.#externalPublications = dependencies.externalPublications;
     this.#newId = dependencies.newId ??
       ((prefix: string) =>
         `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`);
@@ -477,7 +502,15 @@ export class InstallerPipeline {
             const [bindingName, options] of Object.entries(component.listen)
           ) {
             const sourceRef = options.from;
-            const material = registry.get(sourceRef);
+            const material = registry.get(sourceRef) ??
+              await this.#resolveExternalPublication({
+                installation: input.installation,
+                componentName,
+                component,
+                bindingName,
+                sourceRef,
+                registry,
+              });
             if (!material) {
               if (
                 isExternalPublicationRef(sourceRef) && options.required !== true
@@ -579,6 +612,48 @@ export class InstallerPipeline {
       await this.#deployments.put(failed);
       throw err;
     }
+  }
+
+  async #resolveExternalPublication(input: {
+    readonly installation: Installation;
+    readonly componentName: string;
+    readonly component: Component;
+    readonly bindingName: string;
+    readonly sourceRef: string;
+    readonly registry: MaterialRegistry;
+  }): Promise<NamespaceMaterial | undefined> {
+    if (!isExternalPublicationRef(input.sourceRef)) return undefined;
+    if (!this.#externalPublications) return undefined;
+    let material: NamespaceMaterial | undefined;
+    try {
+      material = await this.#externalPublications.resolve({
+        installationId: input.installation.id,
+        spaceId: input.installation.spaceId,
+        appId: input.installation.appId,
+        componentName: input.componentName,
+        component: input.component,
+        bindingName: input.bindingName,
+        sourceRef: input.sourceRef,
+      });
+    } catch (error) {
+      const cause = error instanceof Error ? error.message : String(error);
+      throw new InstallerPipelineError(
+        "failed_precondition",
+        `failed to resolve external publication ${
+          JSON.stringify(input.sourceRef)
+        }: ${cause}`,
+      );
+    }
+    if (material === undefined) return undefined;
+    if (!isNamespaceMaterial(material)) {
+      throw new InstallerPipelineError(
+        "failed_precondition",
+        `external publication ${JSON.stringify(input.sourceRef)} returned ` +
+          "invalid material",
+      );
+    }
+    input.registry.publishExternal(input.sourceRef, material);
+    return material;
   }
 
   async #fireInstallationHook(
@@ -845,6 +920,13 @@ class MaterialRegistry {
     this.#materials.set(sourceRef, material);
   }
 
+  publishExternal(
+    sourceRef: string,
+    material: NamespaceMaterial,
+  ): void {
+    this.#materials.set(sourceRef, material);
+  }
+
   get(sourceRef: string): NamespaceMaterial | undefined {
     return this.#materials.get(sourceRef);
   }
@@ -894,6 +976,11 @@ function isSecretRefMaterial(
 ): value is { readonly secretRef: string } {
   return value !== null && typeof value === "object" && !Array.isArray(value) &&
     typeof value.secretRef === "string";
+}
+
+function isNamespaceMaterial(value: unknown): value is NamespaceMaterial {
+  return value !== null && typeof value === "object" &&
+    !Array.isArray(value);
 }
 
 function isExternalPublicationRef(value: ListenSourceRef): boolean {

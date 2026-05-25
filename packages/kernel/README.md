@@ -64,7 +64,17 @@ import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 
 const { app, context, role } = await createPaaSApp({
   runtimeEnv: Deno.env.toObject(),
-  // optional: takosumiDeploymentRecordStore, sqlClient
+  // optional: takosumiDeploymentRecordStore, sqlClient, plugins, kindAliases
+  externalPublications: {
+    resolve(ctx) {
+      if (ctx.sourceRef !== "operator.identity.oidc") return undefined;
+      return {
+        issuerUrl: "https://accounts.example.test",
+        clientId: "client_123",
+        clientSecret: { secretRef: "secret://oidc/client-secret" },
+      };
+    },
+  },
 });
 
 Deno.serve({ port: 8788 }, app.fetch);
@@ -81,12 +91,15 @@ Deno.serve({ port: 8788 }, app.fetch);
    desired.
 3. Builds `AppContext` with adapter ports (auth / kms / secrets / queue /
    storage / observability / objectStorage / runtimeAgentRegistry / etc)
-4. Mounts the route modules that match the configured process role:
+4. Passes `externalPublications` to the Installer pipeline so ordinary external
+   `listen.from` paths such as `operator.identity.oidc` resolve to
+   operator-owned material.
+5. Mounts the route modules that match the configured process role:
    - `takosumi-api` → internal + installer + readiness + openapi; DataAsset
      routes are mounted only when the operator enables that extension
    - `takosumi-worker` → readiness + worker daemon
    - `takosumi-runtime-agent` → runtime-agent fleet routes
-5. Returns the Hono app
+6. Returns the Hono app
 
 ## Adapter ports
 

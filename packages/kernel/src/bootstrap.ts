@@ -35,7 +35,10 @@ import {
   InMemoryTakosumiDeploymentRecordStore,
 } from "./domains/deploy/takosumi_deployment_record_store.ts";
 import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store_sql.ts";
-import { InstallerPipeline } from "./domains/installer/mod.ts";
+import {
+  type ExternalPublicationResolver,
+  InstallerPipeline,
+} from "./domains/installer/mod.ts";
 import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 
 function resolveTakosumiDeploymentRecordStore(input: {
@@ -128,6 +131,12 @@ export interface CreatePaaSAppOptions extends AppContextOptions {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
   readonly takosumiOperationJournalStore?: OperationJournalStore;
   readonly takosumiRevokeDebtStore?: RevokeDebtStore;
+  /**
+   * Operator-owned Space-visible publication resolver passed to the public
+   * InstallerPipeline. Used for ordinary external paths such as
+   * `operator.identity.oidc`.
+   */
+  readonly externalPublications?: ExternalPublicationResolver;
 }
 
 export interface CreatedPaaSApp {
@@ -219,6 +228,9 @@ export async function createPaaSApp(
       pipeline: new InstallerPipeline({
         ...(options.plugins ? { plugins: options.plugins } : {}),
         ...(options.kindAliases ? { kindAliases: options.kindAliases } : {}),
+        ...(options.externalPublications
+          ? { externalPublications: options.externalPublications }
+          : {}),
       }),
       ...(installerToken ? { getInstallerToken: () => installerToken } : {}),
     },
