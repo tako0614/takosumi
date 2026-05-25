@@ -13,7 +13,7 @@
 import type {
   EnqueueLongRunningOperationInput,
   RuntimeAgentRegistry,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 
 export interface ProviderHandoffBridgeOptions {
   readonly registry: RuntimeAgentRegistry;

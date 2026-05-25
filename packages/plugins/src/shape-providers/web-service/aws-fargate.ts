@@ -1,6 +1,6 @@
-import type { ProviderPlugin } from "takosumi-contract";
+import type { ProviderPlugin } from "takosumi-contract/reference/provider-plugin";
 import type {
-  WebServiceCapability,
+  WebServiceCapabilityTerm,
   WebServiceOutputs,
   WebServiceSpec,
 } from "../../kinds/web-service.ts";
@@ -46,7 +46,7 @@ export interface AwsFargateWebServiceProviderOptions {
   readonly clock?: () => Date;
 }
 
-const SUPPORTED_CAPABILITIES: readonly WebServiceCapability[] = [
+const SUPPORTED_CAPABILITIES: readonly WebServiceCapabilityTerm[] = [
   "always-on",
   "websocket",
   "long-request",

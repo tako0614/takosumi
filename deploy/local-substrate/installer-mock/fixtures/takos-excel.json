@@ -12,7 +12,6 @@
     { "op": "create", "component": "spreadsheets", "kind": "object-store" },
     { "op": "create", "component": "auth", "kind": "oidc" }
   ],
-  "estimatedCost": { "currency": "JPY", "monthly": 0 },
   "expected": {
     "commit": "6ee92c73602c04ce5744344a34edb5d8bb2da516",
     "manifestDigest": "sha256:fixture-takos-excel"

@@ -1,11 +1,11 @@
 # @takos/takosumi-kubernetes-providers
 
 Kubernetes-backed reference `KernelPlugin` adapter factory for the takosumi.com
-reference `web-service` example component kind, targeting vanilla / k3s
-Deployment + Service. Operators import this package explicitly when they want
-Kubernetes coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud
-SDK code, so the operator chooses which provider packages to attach to the
-reference adapter array (`createPaaSApp({ kindAliases, plugins: [...] })`).
+official catalog `web-service` descriptor, targeting vanilla / k3s Deployment +
+Service. Operators import this package explicitly when they want Kubernetes
+coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK code,
+so the operator chooses which provider packages to attach to the reference
+adapter array (`createPaaSApp({ kindAliases, plugins: [...] })`).
 
 ## Install
 
@@ -41,5 +41,5 @@ to non-secret selector settings such as namespace or cluster domain.
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
-  reference kind descriptors and adapter helpers.
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official
+  catalog descriptor helpers and reference adapter helpers.

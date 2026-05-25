@@ -2,7 +2,7 @@
 //
 // The retained closure on `Deployment.resolution.descriptor_closure` pins
 // every descriptor (alias + raw digest) the deployment was resolved against.
-// Apply re-uses the closure verbatim and never re-fetches descriptor URLs.
+// Apply re-uses the closure verbatim and never re-reads descriptor documents.
 // Between resolve and apply, an operator might upgrade a provider adapter
 // from `provider.aws.rds@v1` to `provider.aws.rds@v2` — the closure still
 // pins v1 but the live adapter now consumes v2. We MUST detect this and
@@ -18,7 +18,7 @@ import {
 import type {
   DeploymentDescriptorClosure,
   IsoTimestamp,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 
 const RESOLVED_AT = "2026-04-30T00:00:00.000Z" as IsoTimestamp;
 
@@ -31,9 +31,11 @@ function buildClosure(
 ): DeploymentDescriptorClosure {
   return {
     resolutions: resolutions.map((entry) => ({
-      id: entry.id ?? `https://takosumi.com/contracts/${entry.alias}`,
+      id: entry.id ??
+        `https://takosumi.com/reference/kernel/contracts/${entry.alias}`,
       alias: entry.alias,
-      documentUrl: entry.id ?? `https://takosumi.com/contracts/${entry.alias}`,
+      documentUrl: entry.id ??
+        `https://takosumi.com/reference/kernel/contracts/${entry.alias}`,
       mediaType: "application/ld+json",
       rawDigest: entry.rawDigest,
       expandedDigest: `sha256:expanded-${entry.alias}`,

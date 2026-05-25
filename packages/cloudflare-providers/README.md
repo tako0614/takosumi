@@ -1,11 +1,11 @@
 # @takos/takosumi-cloudflare-providers
 
-Cloudflare-backed reference `KernelPlugin` adapter factories for takosumi.com
-reference component kinds (`worker` / `object-store` / `gateway`).
-Operators import this package explicitly when they want Cloudflare coverage —
-Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the
-operator chooses which provider packages to attach to the reference adapter
-array (`createPaaSApp({ kindAliases, plugins: [...] })`).
+Cloudflare-backed reference `KernelPlugin` adapter factories that can bind
+selected takosumi.com kind URIs (`worker` / `object-store` / `gateway`) in the
+reference kernel. Operators import this package explicitly when they want
+Cloudflare coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud
+SDK code, so the operator chooses which provider packages to attach to the
+reference adapter array (`createPaaSApp({ kindAliases, plugins: [...] })`).
 
 ## Install
 
@@ -34,19 +34,19 @@ settings such as account id or zone id.
 
 ## Exports
 
-| Factory                           | Kind URI                                      |
-| --------------------------------- | --------------------------------------------- |
-| `cloudflareWorkerProvider`        | `https://takosumi.com/kinds/v1/worker`        |
-| `cloudflareR2ObjectStoreProvider` | `https://takosumi.com/kinds/v1/object-store`  |
-| `cloudflareCustomDomainProvider`  | `https://takosumi.com/kinds/v1/gateway` |
+| Factory                           | Kind URI                                     |
+| --------------------------------- | -------------------------------------------- |
+| `cloudflareWorkerProvider`        | `https://takosumi.com/kinds/v1/worker`       |
+| `cloudflareR2ObjectStoreProvider` | `https://takosumi.com/kinds/v1/object-store` |
+| `cloudflareCustomDomainProvider`  | `https://takosumi.com/kinds/v1/gateway`      |
 
 Each factory returns a reference `KernelPlugin` adapter (see
-[`@takos/takosumi-contract/plugin`](https://jsr.io/@takos/takosumi-contract)).
-Default options pick an in-memory lifecycle client suitable for tests; pass
-`{ lifecycle: ... }` in production to wire the runtime-agent-backed client.
+`@takos/takosumi-contract/reference/plugin`). Default options pick an in-memory
+lifecycle client suitable for tests; pass `{ lifecycle: ... }` in production to
+wire the runtime-agent-backed client.
 
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
-  reference kind descriptors and adapter helpers.
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official
+  catalog descriptor helpers and reference adapter helpers.

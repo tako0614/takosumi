@@ -1,7 +1,5 @@
 # CLI リファレンス {#cli-reference}
 
-> このページでわかること: Takosumi CLI のコマンド一覧とオプション。
-
 `takosumi` CLI は **source を kernel に送る薄い client** です。 5 endpoint
 ([Installer API](./installer-api.md)) に対応する subcommand を持ちます。
 
@@ -17,8 +15,8 @@ CLI の役割:
 ## モード
 
 installer command (`install` / `deploy` / `rollback`) は remote kernel を必須
-とします。 `--remote`、 `TAKOSUMI_REMOTE_URL`、 または `~/.takosumi/config.yml`
-で kernel URL を渡します。 ローカル開発時は `takosumi server` で kernel
+とします。 `--remote`、 `TAKOSUMI_REMOTE_URL`、または `~/.takosumi/config.yml`
+で kernel URL を渡します。ローカル開発時は `takosumi server` で kernel
 を起動して、その URL を installer command に渡します。
 
 ## インストール
@@ -36,7 +34,7 @@ remote command は bearer token で kernel に認証します。
 
 | Env                        | 用途                          |
 | -------------------------- | ----------------------------- |
-| `TAKOSUMI_INSTALLER_TOKEN` | `/v1/installations/*` 全体    |
+| `TAKOSUMI_INSTALLER_TOKEN` | 5 endpoint Installer API      |
 | `TAKOSUMI_AGENT_TOKEN`     | runtime-agent 系 internal RPC |
 
 token は次の順序で resolve します。
@@ -58,37 +56,42 @@ env、 config file の `remote_url` から resolve します。
 ```bash
 # git source
 takosumi install --remote https://kernel.example.com \
-  --space space:personal \
-  --source git:https://github.com/example/notes#main
+  --space space_personal \
+  --source git:https://github.com/example/notes#v1.2.3
 
 # prepared source from an external build service
 takosumi install --remote https://kernel.example.com \
-  --space space:personal \
-  --source prepared:https://build.example.com/snapshots/app-123.tar#sha256:...
+  --space space_personal \
+  --source prepared:https://build.example.com/snapshots/app-123.archive#sha256:...
 
 # local path visible to the kernel process
 takosumi install --remote http://localhost:8788 \
-  --space space:personal \
+  --space space_personal \
   --source .
 ```
 
 `--space <id>` は必須。`--source .` は kernel process から同じ path が見える
 local dev / operator-local 起動で使います。managed remote operator では `git:`
 または `prepared:` を使います。dry-run は次の subcommand で表示。
+`http://localhost` / `http://127.0.0.1` remote は single-host loopback dev
+専用です。production と LAN dev hostname では HTTPS remote を使います。
 
 `--source` の文字列 grammar:
 
 ```text
-git:<url>[#<ref>]
+git:<url>#<ref>
 prepared:<url>#<sha256:hex>
 <local-path>
 ```
 
 `#` は最後の separator だけを source ref / digest として扱います。URL 自体に
 fragment が必要な場合は encode してください。`prepared:` は build service / CI
-が作った tar snapshot と digest を渡す形式です。
+が作った prepared source archive URL と archive payload digest を渡す形式です。
+git source の ref と prepared source の digest は remote source identity の 必須
+guard です。CLI は `prepared:<url>` のように `#sha256:...` を欠く prepared
+source を client-side invalid として扱います。
 
-dry-run の expected digest guard を apply に渡す場合は次の flag を使います。
+dry-run の expected guard を apply に渡す場合は次の flag を使います。
 
 | Flag                         | 対象 source                  |
 | ---------------------------- | ---------------------------- |
@@ -99,22 +102,23 @@ dry-run の expected digest guard を apply に渡す場合は次の flag を使
 ### `takosumi install dry-run --source <source>`
 
 ```bash
-takosumi install dry-run --space space:personal \
+takosumi install dry-run --space space_personal \
   --remote http://localhost:8788 \
   --source .
 ```
 
 response (`changes[]` / `expected.commit` / `expected.manifestDigest` /
-`expected.sourceDigest`、および operator extension field) を JSON で表示。
+`expected.sourceDigest` / `expected.currentDeploymentId`、および operator
+extension field) を JSON で表示。
 
 ### `takosumi deploy <installation-id> [--source <source>]`
 
-既存 Installation に対する apply。 `--source` 省略時は Installation 元の source
-を再 fetch。dry-run から apply へ進む場合は `install` と同じ expected digest
-guard flag を渡します。
+既存 Installation に対する apply。 `--source` 省略時は current Deployment に記録
+された source descriptor を使って次の Deployment を作ります。dry-run から apply
+へ進む場合は `install` と同じ expected guard flag を渡します。
 
 ```bash
-takosumi deploy installation:01HM9N7XK4QY8RT2P5JZF6V3W9 --source git:https://github.com/example/notes#main
+takosumi deploy inst_01HM9N7XK4QY8RT2P5JZF6V3W9 --source git:https://github.com/example/notes#v1.2.4
 ```
 
 ### `takosumi deploy dry-run <installation-id> [--source <source>]`
@@ -123,10 +127,10 @@ takosumi deploy installation:01HM9N7XK4QY8RT2P5JZF6V3W9 --source git:https://git
 
 ### `takosumi rollback <installation-id> <deployment-id>`
 
-過去 Deployment を元に新 Deployment を作って巻き戻す。
+過去 Deployment を current pointer に戻す。新しい Deployment は作らない。
 
 ```bash
-takosumi rollback installation:01HM9N7XK4QY8RT2P5JZF6V3W9 deployment:01HM9N7XK4QY8RT2P5JZF6V3WA
+takosumi rollback inst_01HM9N7XK4QY8RT2P5JZF6V3W9 dep_01HM9N7XK4QY8RT2P5JZF6V3WA
 ```
 
 ### `takosumi server`
@@ -141,7 +145,15 @@ takosumi server --port 9000
 
 ### `takosumi init [output]`
 
-`.takosumi.yml` AppSpec scaffold を生成。
+`.takosumi.yml` AppSpec scaffold を生成。`init` は AppSpec だけを作ります。
+
+生成しないもの:
+
+- `src/worker.ts` のような runtime file
+- `.takosumi.build.yml`
+
+参照先 file は自分で作ってください。build service / CI を使う場合は prepared
+source handoff を追加してください。
 
 ```bash
 takosumi init .takosumi.yml
@@ -150,14 +162,14 @@ takosumi init --template empty
 
 ## Operator extension helpers {#operator-extension-helpers}
 
-### `takosumi artifact ...`
+### DataAsset helper (`takosumi artifact ...`)
 
 operator が DataAsset extension を有効化した場合だけ使う optional helper です。
 upload / list / delete / GC の write 系は `TAKOSUMI_DEPLOY_TOKEN` を使う。
 installer token とは分離する。
 
 `artifact` は operator DataAsset record を扱う helper command です。prepared
-source snapshot の作成や build handoff は build-service 側で扱います。
+source archive の作成や build handoff は build-service 側で扱います。
 
 ### `takosumi version`
 
@@ -186,4 +198,5 @@ CLI flag > env > config file の優先順位。
 
 - [Installer API](./installer-api.md) — CLI が呼ぶ HTTP endpoint
 - [AppSpec](./app-spec.md) — `.takosumi.yml` 仕様
-- [Reference Kernel Route Inventory](./kernel-http-api.md) — 全 HTTP surface
+- [Reference Kernel Route Inventory](./kernel-http-api.md) — reference mounted
+  route inventory

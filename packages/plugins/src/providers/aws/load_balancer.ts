@@ -1,8 +1,8 @@
-import type { provider } from "takosumi-contract";
+import type { provider } from "takosumi-contract/reference/compat";
 import type {
   RuntimeDesiredState,
   RuntimeRouteBindingSpec,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   type AwsRetryConfig,
   classifyAwsError,

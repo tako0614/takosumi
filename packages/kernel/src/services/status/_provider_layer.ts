@@ -1,4 +1,4 @@
-import type { CoreConditionReason } from "takosumi-contract";
+import type { CoreConditionReason } from "takosumi-contract/reference/compat";
 import type { ProviderObservation as RuntimeProviderObservation } from "../../domains/runtime/mod.ts";
 import type {
   GroupSummaryStatusProjectionInput,

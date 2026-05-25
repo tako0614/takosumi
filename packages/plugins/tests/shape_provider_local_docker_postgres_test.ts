@@ -3,7 +3,7 @@ import {
   createLocalDockerPostgresProvider,
   InMemoryLocalDockerPostgresLifecycle,
 } from "../src/shape-providers/database-postgres/local-docker.ts";
-import type { PlatformContext } from "takosumi-contract";
+import type { PlatformContext } from "takosumi-contract/reference/compat";
 
 const ctx = {} as PlatformContext;
 

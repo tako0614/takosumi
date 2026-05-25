@@ -4,7 +4,7 @@ import type {
   Digest,
   IsoTimestamp,
   JsonObject,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { AuditStore } from "../audit/mod.ts";
 import type {
   CatalogReleaseAdoptionStore,

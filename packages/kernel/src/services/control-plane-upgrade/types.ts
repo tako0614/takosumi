@@ -1,4 +1,7 @@
-import type { JsonObject, TakosumiActorContext } from "takosumi-contract";
+import type {
+  JsonObject,
+  TakosumiActorContext,
+} from "takosumi-contract/reference/compat";
 import type { IsoTimestamp } from "../../shared/time.ts";
 
 export type ControlPlaneUpgradePlanId = string;

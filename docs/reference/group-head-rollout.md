@@ -1,10 +1,15 @@
-# GroupHead ロールアウト {#grouphead-rollout}
+# Reference GroupHead Rollout {#grouphead-rollout}
 
-> このページでわかること: GroupHead pointer / rollout state machine / canary /
-> shadow / audit event。
+This page describes reference routing implementation evidence. Public Takosumi
+rollback authority remains Installation `currentDeploymentId`; GroupHead and
+ActivationSnapshot are not public core entities.
 
-GroupHead は「ある group に現在 traffic が流れている deployment / activation」
-を pin する mutable pointer。 pointer の前進 / 巻き戻しが rollout 本体です。
+GroupHead は「ある group の current ActivationSnapshot」を pin する
+control-plane pointer です。provider data plane に同期された ActivationSnapshot
+assignments が runtime request の宛先になり、GroupHead 自体は request-time
+router ではありません。`currentDeploymentId` は steady state / full rollout の
+primary Deployment projection で、canary / shadow の split routing authority
+ではありません。pointer の前進 / 巻き戻しが rollout 本体です。
 
 ## アイデンティティ {#identity}
 
@@ -20,16 +25,21 @@ identity は `(spaceId, groupId)` の tuple で Space-local。
 ```yaml
 GroupHead:
   spaceId: space:... # 所属 Space
-  groupId: group:... # Space 内で unique
-  currentDeploymentId: deployment:... # pointer 先 deployment
-  currentActivationSnapshotId: activation:... # pointer 先 ActivationSnapshot
+  groupId: group_... # Space 内で unique
+  currentDeploymentId: dep_... # primary/full-rollout deployment projection
+  currentActivationSnapshotId: act_... # reference routing evidence
   rolloutState: <enum: 7 値> # 後述
     movedAt: 2026-... # 最後に pointer が動いた時刻
 ```
 
-`currentDeploymentId` / `currentActivationSnapshotId` は同時に更新されます。
-pointer は ActivationSnapshot を介して Exposure / traffic 配分に反映され、
-ユーザ traffic の宛先になります。
+`currentActivationSnapshotId` が指す ActivationSnapshot の assignments が
+provider data plane の Exposure / traffic assignment に反映されます。
+`currentDeploymentId` は UI、account-plane projection、rollback target のための
+primary Deployment pointer です。canary / shadow 中は previous / candidate /
+mirror の deployment ids が ActivationSnapshot assignments に現れるため、
+`currentDeploymentId` 単体を routing authority として扱いません。full rollout
+確定時は `currentDeploymentId` と `currentActivationSnapshotId` が同じ primary
+Deployment を表すように収束します。
 
 ## Rollout 状態機械 (closed v1 enum, 7 値) {#rollout-state-machine-closed-v1-enum-7}
 
@@ -56,9 +66,10 @@ idle | preparing | canary-active | shadow-active
 
 - `idle → preparing`: 新 deployment が approve されて apply phase が
   `pre-commit` に到達したとき。
-- `preparing → canary-active`: canary 配分の 1 段階目を開始したとき (pointer は
-  GroupHead の semantics 上、canary 比率を反映するが
-  `currentActivationSnapshotId` は新 ActivationSnapshot に切り替わる)。
+- `preparing → canary-active`: canary 配分の 1 段階目を開始したとき。
+  `currentActivationSnapshotId` は split assignment を持つ新 ActivationSnapshot
+  に切り替わる。`currentDeploymentId` は full rollout 確定まで primary
+  projection として残り、candidate は assignments に記録する。
 - `preparing → shadow-active`: shadow rollout を選択したとき。
 - `canary-active → full-rollout`: 全 step を経て 100% に到達した直後。
 - `shadow-active → preparing` または `shadow-active → canary-active`: shadow
@@ -82,7 +93,7 @@ idle | preparing | canary-active | shadow-active
 | `rolling-back`  | 不可            | -                | 可           |
 | `rolled-back`   | 不可            | 不可             | 可           |
 
-新 rollout を開始できるのは `idle` のみで、 多重 rollout 交差を防ぐため他 state
+新 rollout を開始できるのは `idle` のみで、多重 rollout 交差を防ぐため他 state
 からの新規開始は拒否されます。
 
 ## Canary 状態 {#canary-state}
@@ -92,14 +103,15 @@ canary は traffic split を closed な比率列で進めます。
 - v1 default 比率は **5% → 25% → 100%** の 3 step。 policy pack で step 列を
   override できますが、 step 列は OperationPlan に焼き付くため途中での ad-hoc
   比率編集は approval invalidation の effect-detail change trigger を引きます。
-- 各 step 昇格は readiness probe / observe 結果が pass したときのみ進みます。
-  pass 条件は kernel が固定し provider implementation は override 不可。
+- 各 step 昇格は ExposureHealth / ActivationObservation が pass したときのみ進
+  みます。kernel は closed health enum と policy evaluation を固定し、具体的な
+  probe は provider / operator / kind descriptor 側が定義します。
 - candidate release が queue に新 DataContract を出し、 preview 先 consumer が
   primary release のまま古い contract しか受理しない場合、 event subscription
   switch preview は `queue_data_contract_mismatch_requires_policy` で
   `blocked`。 operator policy が明示的 allow した mismatch のみ解除可。
 - canary 失敗時は `rolling-back` に遷移し compensate operation 経由で previous
-  pointer に戻します。 「canary を保ったまま hold」 は v1 では state として持
+  pointer に戻します。「canary を保ったまま hold」は v1 では state として持
   たず、 `canary-active` に留まるか `rolling-back` に進むかの 2 択。
 
 > Rationale: 5% は statistical signal が観測可能な production traffic 量、 25%
@@ -112,14 +124,14 @@ canary は traffic split を closed な比率列で進めます。
 shadow は production traffic を新 deployment に複製送付しますが production 側
 挙動は変えません。
 
-- production request / response は previous pointer (前 deployment) が処理し
-  client に返る
-- shadow 先 (新 deployment) に同 request を mirror。 結果は ObservationSet に
+- production request / response は previous pointer から同期された provider data
+  plane assignment (前 deployment) が処理し、client に返る
+- shadow 先 (新 deployment) に同 request を mirror。結果は ObservationSet に
   記録され、 production 側応答や副作用は変えない
 - drift 検出時は [Drift Detection](./drift-detection.md) flow。 severity `error`
   なら operator gate で `rolling-back` に遷移
 - shadow rollout は副作用 surface を持つ AppSpec を受け付けない。 `outputs` /
-  `queue` route / DB semantic write を含む shadow plan は
+  `queue` delivery path / DB semantic write を含む shadow plan は
   `shadow-side-effects:forbidden` で resolution 時に `deny` (operator approval
   でも override 不可)
 - read-side / invocation-side いずれも mirror。 shape 単位で適用範囲が違う場
@@ -142,8 +154,8 @@ pointer 前進 / 巻き戻し / state transition は同 `(spaceId, groupId)` で
 GroupHead 関連の audit event は以下を発行します
 ([Audit Events](./audit-events.md))。
 
-- `group-head-moved`: pointer が前進した (`currentDeploymentId` /
-  `currentActivationSnapshotId` のいずれかが変わった) ときに記録。
+- `group-head-moved`: pointer が前進した (`currentDeploymentId` または
+  `currentActivationSnapshotId` が変わった) ときに記録。
 - `rollout-started`: `idle → preparing` または
   `preparing → canary-active /
   shadow-active` の遷移時。
@@ -171,11 +183,8 @@ GroupHead 関連の audit event は以下を発行します
 
 ## 関連アーキテクチャ {#related-architecture-notes}
 
-関連 architecture notes:��
-
-- `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`
-  — GroupHead pointer と ActivationSnapshot / Exposure の関係、canary / shadow
-  split 規則の議論
+- `docs/reference/architecture/exposure-activation-model.md` — GroupHead pointer
+  と ActivationSnapshot / Exposure の関係、canary / shadow split 規則の議論
 - `docs/reference/architecture/execution-lifecycle.md` — rollout state machine
   の閉じ方と v1 範囲を blue-green に広げない判断
 - `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`

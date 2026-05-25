@@ -9,7 +9,7 @@ import type {
   AuditEvent,
   AuditEventQuery,
 } from "../../../domains/audit/types.ts";
-import type { Deployment } from "takosumi-contract";
+import type { Deployment } from "takosumi-contract/reference/compat";
 import type {
   AdvanceGroupHeadInput,
   DeploymentFilter,

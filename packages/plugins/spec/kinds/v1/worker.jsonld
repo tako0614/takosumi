@@ -4,12 +4,8 @@
   "@type": "ComponentKind",
   "name": "worker",
   "version": "v1",
-  "aliases": ["worker"],
-  "description": "Serverless JS function whose entrypoint is read from the prepared source snapshot.",
-  "x-ts": {
-    "fileBasename": "worker",
-    "prefix": "Worker"
-  },
+  "referenceAliases": ["worker"],
+  "description": "Serverless JS function whose entrypoint is read from the resolved source snapshot.",
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -19,17 +15,7 @@
       "entrypoint": {
         "type": "string",
         "minLength": 1,
-        "description": "Source-root-relative worker module path inside the prepared source snapshot."
-      },
-      "compatibilityDate": {
-        "type": "string",
-        "minLength": 1,
-        "description": "Optional provider compatibility date for runtimes that use one (for example Cloudflare Workers)."
-      },
-      "compatibilityFlags": {
-        "type": "array",
-        "items": { "type": "string", "minLength": 1 },
-        "description": "Optional compatibility flags (e.g. `nodejs_compat`)."
+        "description": "Source-root-relative worker module path inside the resolved source snapshot."
       },
       "env": {
         "type": "object",
@@ -47,20 +33,13 @@
       }
     }
   },
-  "listens": {
-    "binding": {
-      "shape": "env",
-      "envMap": {
-        "DESCRIPTION": "Accepts any listened material; AppSpec listen options declare `from`, `as: env`, and optional `prefix:` to expand each material field into `${PREFIX}_*` env vars."
-      }
-    }
-  },
+  "acceptedProjectionFamilies": ["env", "secret-env"],
   "outputs": [
     {
       "name": "url",
       "type": "string",
       "required": true,
-      "meaning": "Allocated public URL (scheme-bearing)."
+      "meaning": "Provider-local upstream URL (scheme-bearing) used by gateway/listener components."
     },
     {
       "name": "id",
@@ -75,7 +54,7 @@
       "meaning": "Current deployed worker version."
     }
   ],
-  "capabilities": [
+  "capabilityTerms": [
     "scale-to-zero",
     "long-request",
     "geo-routing"

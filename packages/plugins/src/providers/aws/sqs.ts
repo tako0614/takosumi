@@ -1,4 +1,4 @@
-import type { queue } from "takosumi-contract";
+import type { queue } from "takosumi-contract/reference/compat";
 import type {
   AwsQueueClient,
   AwsQueueDeadLetterMessageRequest,

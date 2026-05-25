@@ -6,10 +6,11 @@
 // `core_conformance_test.ts`.
 
 import { createHash } from "node:crypto";
-import type { JsonObject } from "takosumi-contract";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 
-const TAKOSUMI_CONTEXT_ID = "https://takosumi.com/contexts/deploy.jsonld";
+const TAKOSUMI_CONTEXT_ID =
+  "https://takosumi.com/reference/kernel/contexts/deploy.jsonld";
 const PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR =
   "authoring.public-manifest-expansion@v1";
 
@@ -176,50 +177,54 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
   {
     alias: "source.js-module@v1",
     path: "descriptors/contracts/source-js-module-v1.jsonld",
-    id: "https://takosumi.com/contracts/source/js-module/v1",
+    id: "https://takosumi.com/reference/kernel/contracts/source/js-module/v1",
     digest:
-      "sha256:9bc6d5b0689e33489b03626fd111455eb5b203c6b9cf7831af1a78fa950855ac",
+      "sha256:13516f010ab7242a42cb88776a66289be868c5b8dd0ec4cf983a16241077916e",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "runtime-input.oci-image@v1",
     path: "descriptors/contracts/runtime-input-oci-image-v1.jsonld",
-    id: "https://takosumi.com/contracts/runtime-input/oci-image/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/runtime-input/oci-image/v1",
     digest:
-      "sha256:e2d8d3a94a089f5139b51c3ac3f00fde4a22676cf658734b89791244dd57b095",
+      "sha256:f21e62992ae3d8657fa43ffd22155d6be4edabb700325d087ad638fa056c5502",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "authoring.composite-expansion@v1",
     path: "descriptors/authoring/composite-expansion-v1.jsonld",
-    id: "https://takosumi.com/descriptors/authoring/composite-expansion/v1",
+    id:
+      "https://takosumi.com/reference/kernel/descriptors/authoring/composite-expansion/v1",
     digest:
-      "sha256:663ae832756f40f2a6240a15a1ce35cd60075cb001a44daa93f281c5ef31b129",
+      "sha256:27a444cc80f3c178acf5e71ae9f88d16a05212c2a1c9f8084bfaa1aad3a34f83",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR,
     path: "descriptors/authoring/public-manifest-expansion-v1.jsonld",
     id:
-      "https://takosumi.com/descriptors/authoring/public-manifest-expansion/v1",
+      "https://takosumi.com/reference/kernel/descriptors/authoring/public-manifest-expansion/v1",
     digest:
-      "sha256:0caa8377427a1238aadacb21c3d661ea28c3183d351654df3402cf0f6900d3eb",
+      "sha256:f32306654c8814e6a1bc7883ebe584ffb6140bbafbfdca57fc1d995e273cbc42",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "composite.serverless-with-postgres@v1",
     path: "descriptors/composites/composite-serverless-with-postgres-v1.jsonld",
-    id: "https://takosumi.com/contracts/composite/serverless-with-postgres/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/composite/serverless-with-postgres/v1",
     digest:
-      "sha256:3966208c5bfd2c38709206ebcd71976faaddf410ead68efd603783de4ed9a362",
+      "sha256:f9afdb9125582ed762536ebfe4acfee8fe4ba170fdc4ad75e9ab206e2483246a",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "composite.web-app-with-cdn@v1",
     path: "descriptors/composites/composite-web-app-with-cdn-v1.jsonld",
-    id: "https://takosumi.com/contracts/composite/web-app-with-cdn/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/composite/web-app-with-cdn/v1",
     digest:
-      "sha256:023d1ccd8ec658f55de8a963b0c23ebf6932f9de335652990876af3d2729674d",
+      "sha256:513ff1a266e4b19f2685166d04d674480238e09b446a9fa3327c50b5ef8ea73e",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
@@ -227,9 +232,9 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
     path: "descriptors/contexts/takosumi-deploy-context.jsonld",
     id: TAKOSUMI_CONTEXT_ID,
     digest:
-      "sha256:3990413b7462b310de23610a05757bd36451eb692b6e232b682f92e5dd75f8c0",
+      "sha256:1b956f4a1a82c4b965c534a0be04125e00bf4cbffc83317568c629d0ff53050f",
     context: {
-      takosumi: "https://takosumi.com/vocab/deploy#",
+      takosumi: "https://takosumi.com/reference/kernel/vocab/deploy#",
       id: "@id",
       type: "@type",
       shortRef: "takosumi:shortRef",
@@ -258,217 +263,227 @@ const COMPACT_DESCRIPTOR_RECORDS: readonly {
   {
     alias: "interface.http@v1",
     path: "descriptors/contracts/interface-http-v1.jsonld",
-    id: "https://takosumi.com/contracts/interface/http/v1",
+    id: "https://takosumi.com/reference/kernel/contracts/interface/http/v1",
     digest:
-      "sha256:9d062004ddb47cfcf1bd3523d1e77fe132d3cdba690fa4b7af968d447ff8a149",
+      "sha256:5d1132ec6d94f3a08bfbeeff9e76deb9a5c843f8e2317aaabd1353f2ae1af8e0",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "interface.queue@v1",
     path: "descriptors/contracts/interface-queue-v1.jsonld",
-    id: "https://takosumi.com/contracts/interface/queue/v1",
+    id: "https://takosumi.com/reference/kernel/contracts/interface/queue/v1",
     digest:
-      "sha256:f46b8f9b736f8f26264fb358f751a2e9d0543d5cb161952714243cca550a375e",
+      "sha256:217a4683ec57fee64dbb86f1e7cfcf20ac83753ef2d55a3b7422edb100643678",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "interface.tcp@v1",
     path: "descriptors/contracts/interface-tcp-v1.jsonld",
-    id: "https://takosumi.com/contracts/interface/tcp/v1",
+    id: "https://takosumi.com/reference/kernel/contracts/interface/tcp/v1",
     digest:
-      "sha256:f33906d9668ff96e528c8c6faf142d9491204bacfbf5bcc752ec66171bd7d6bf",
+      "sha256:a414a1f7779b0024de5c68ec3d40f3a6f8e196bd88045d07fa7f45a2d816225a",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "interface.udp@v1",
     path: "descriptors/contracts/interface-udp-v1.jsonld",
-    id: "https://takosumi.com/contracts/interface/udp/v1",
+    id: "https://takosumi.com/reference/kernel/contracts/interface/udp/v1",
     digest:
-      "sha256:bb551434f7c86d44da06858a45cee9bacf5e505d93755e185e1efbe4411ca3d1",
+      "sha256:8ccbaca8342c49549083420bae6338d92c0b1bbf64339f077183e176f45c7094",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "output.http-endpoint@v1",
     path: "descriptors/contracts/output-http-endpoint-v1.jsonld",
-    id: "https://takosumi.com/contracts/output/http-endpoint/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/output/http-endpoint/v1",
     digest:
-      "sha256:e47afb0a17533b05cb2b5753d50228e918fed7fa7adee254eb88c8d5392762cb",
+      "sha256:c78ab0fd470866d5a57b82d52d615630be2e58d913e6edc396e5a67f548ce76e",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "output.mcp-server@v1",
     path: "descriptors/contracts/output-mcp-server-v1.jsonld",
-    id: "https://takosumi.com/contracts/output/mcp-server/v1",
+    id: "https://takosumi.com/reference/kernel/contracts/output/mcp-server/v1",
     digest:
-      "sha256:3f4e8a1608e6b2f9afccca29b4ae33876d94861475654c01a891d48892d2dbd2",
+      "sha256:d67ed4305a18a35456aa6b4ebf23b548bdc3dfc32bf0cadc73adf57a9089780b",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "output.topic@v1",
     path: "descriptors/contracts/output-topic-v1.jsonld",
-    id: "https://takosumi.com/contracts/output/topic/v1",
+    id: "https://takosumi.com/reference/kernel/contracts/output/topic/v1",
     digest:
-      "sha256:886cc6de5084a148871c16b5af9392db5f290b2dbe90df31bac6472f85ab4223",
+      "sha256:f46912b5adba741de3b7a54e47a058241fe237073d376e135df1e5e1b8ed059d",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "provider.aws.ecs-fargate@v1",
     path: "descriptors/providers/aws-ecs-fargate-v1.jsonld",
-    id: "https://takosumi.com/providers/aws/ecs-fargate/v1",
+    id: "https://takosumi.com/reference/kernel/providers/aws/ecs-fargate/v1",
     digest:
-      "sha256:768c6059232a1699b0fad8d0f6d20c01fac9a0b1c02721bfe9ba83743b7721c5",
+      "sha256:08e3ce0c8d5159c7ad4277f01c1ad18e2b551f277beb55a50e2fbb7ddc34dc3a",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "provider.aws.s3@v1",
     path: "descriptors/providers/aws-s3-v1.jsonld",
-    id: "https://takosumi.com/providers/aws/s3/v1",
+    id: "https://takosumi.com/reference/kernel/providers/aws/s3/v1",
     digest:
-      "sha256:5038212675f2d796b71fcc7c5810d72a367c6eed4c319027b9cca4bca9afe149",
+      "sha256:f3d7cb8c042143ec6396ba0675af5a3228d4b70bcf049e684f0da124b07d08d3",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "provider.cloudflare.containers@v1",
     path: "descriptors/providers/cloudflare-containers-v1.jsonld",
-    id: "https://takosumi.com/providers/cloudflare/containers/v1",
+    id:
+      "https://takosumi.com/reference/kernel/providers/cloudflare/containers/v1",
     digest:
-      "sha256:01082a81f0fed5af4517088a3f03b1f79c5fd4a2cadf4c0da14799248a2bc23d",
+      "sha256:a93609417d0a7c43c2f8140d4f09732442c297c3a2db792875f3712c025fe774",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "provider.cloudflare.d1@v1",
     path: "descriptors/providers/cloudflare-d1-v1.jsonld",
-    id: "https://takosumi.com/providers/cloudflare/d1/v1",
+    id: "https://takosumi.com/reference/kernel/providers/cloudflare/d1/v1",
     digest:
-      "sha256:355ee20276988a5e3e2ee0eccaa06b6a8b4683c3f926fbf9d727a05fdfd0555a",
+      "sha256:e3c911dc1d8ffb6640f143f2cf02349c2bb0b566ab631fbf4faa4a69b2220778",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "provider.cloudflare.r2@v1",
     path: "descriptors/providers/cloudflare-r2-v1.jsonld",
-    id: "https://takosumi.com/providers/cloudflare/r2/v1",
+    id: "https://takosumi.com/reference/kernel/providers/cloudflare/r2/v1",
     digest:
-      "sha256:cad6a6627ba0664538974d56feac0436bf691a3629a17b8cb8b7750f57e7a24a",
+      "sha256:0958a16113f1a7eeb1c565b5723d8b0896b5932b26b17fcdb7a4b08e2bfa9ef2",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "provider.cloudflare.workers@v1",
     path: "descriptors/providers/cloudflare-workers-v1.jsonld",
-    id: "https://takosumi.com/providers/cloudflare/workers/v1",
+    id: "https://takosumi.com/reference/kernel/providers/cloudflare/workers/v1",
     digest:
-      "sha256:9cdaa4f1b8c49580ad32b1f2dd9b23adca4a180725e82e5dd3cfa996f7813313",
+      "sha256:60b9d5502dc368267360c2337a56e6a81da66713f7eb1699b0d22b75dcd1cb1c",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "provider.google.cloud-run@v1",
     path: "descriptors/providers/google-cloud-run-v1.jsonld",
-    id: "https://takosumi.com/providers/google/cloud-run/v1",
+    id: "https://takosumi.com/reference/kernel/providers/google/cloud-run/v1",
     digest:
-      "sha256:ae24d22dd09961bb9a5b3dbf9619f193f84661837a9fba04ec835c85f22ecb78",
+      "sha256:f902145e6eef79d9c71244fd0a73dba8638fdc51c731ca263be22d7b294df946",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "provider.kubernetes.generic@v1",
     path: "descriptors/providers/kubernetes-generic-v1.jsonld",
-    id: "https://takosumi.com/providers/kubernetes/generic/v1",
+    id: "https://takosumi.com/reference/kernel/providers/kubernetes/generic/v1",
     digest:
-      "sha256:a77b0c88ca83aa0a6e9fe60f77e3b33da5bf79865d9deee6ff91c1a964864159",
+      "sha256:020f1df5f875a0a12785f2e03d784bec9b46fbdd89d58ae1f8ef5140b0f7dace",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "provider.neon.postgres@v1",
     path: "descriptors/providers/neon-postgres-v1.jsonld",
-    id: "https://takosumi.com/providers/neon/postgres/v1",
+    id: "https://takosumi.com/reference/kernel/providers/neon/postgres/v1",
     digest:
-      "sha256:f67b56d72786f3cba4480b6d5e60b774014a181009bc075c391b96a202a70dd0",
+      "sha256:cb1bac92b4f55232d0da03d21fdfdfdf3975d29aebb35e8b467dffe7f750795a",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "resource.analytics-engine@v1",
     path: "descriptors/contracts/resource-analytics-engine-v1.jsonld",
-    id: "https://takosumi.com/contracts/resource/analytics-engine/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/resource/analytics-engine/v1",
     digest:
-      "sha256:a3bf05789b4ec8fa575fee9e7bcb4f67c081bd6ffe066befb074fd5841c8e584",
+      "sha256:baa7e55fcbe3c7198a9bcf927b77581cb7ef7c9d3ba3b16e6a8e88da473b722e",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "resource.durable-object@v1",
     path: "descriptors/contracts/resource-durable-object-v1.jsonld",
-    id: "https://takosumi.com/contracts/resource/durable-object/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/resource/durable-object/v1",
     digest:
-      "sha256:058fdbd7076b6f62f24f49f53be7b9dfd945bf504685611fef5ef38b989dfb24",
+      "sha256:cb8e1984431236c2cc81c9883237218562951ca47c052f33e750b5fd9eb8a0f6",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "resource.key-value@v1",
     path: "descriptors/contracts/resource-key-value-v1.jsonld",
-    id: "https://takosumi.com/contracts/resource/key-value/v1",
+    id: "https://takosumi.com/reference/kernel/contracts/resource/key-value/v1",
     digest:
-      "sha256:bb0143fae9d1ed869d4c48a47337a0cdc6519b7bc5c36f23729ff9deec83970f",
+      "sha256:404cc7b94910c8c8616486110cc0e964753d1ccf7ba21054a8672331450ed027",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "resource.object-store.s3@v1",
     path: "descriptors/contracts/resource-object-store-s3-v1.jsonld",
-    id: "https://takosumi.com/contracts/resource/object-store/s3/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/resource/object-store/s3/v1",
     digest:
-      "sha256:06425579fb767d0673887fe422ca6771d42a68c1f4f536fd8c938182d6ecd6c2",
+      "sha256:d7dca9bfa45350d2168fc45a32e699ef7953037c6feab962eda744ff8329d902",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "resource.queue.at-least-once@v1",
     path: "descriptors/contracts/resource-queue-at-least-once-v1.jsonld",
-    id: "https://takosumi.com/contracts/resource/queue/at-least-once/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/resource/queue/at-least-once/v1",
     digest:
-      "sha256:0b142163d7bcf56929d0734b13f5076b6843afdb2c840a71b8774716ca9b902e",
+      "sha256:def9b26a70b48afe43b045094b283ce16bbb485331dbdcc0ad53d8708bccc8e9",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "resource.secret@v1",
     path: "descriptors/contracts/resource-secret-v1.jsonld",
-    id: "https://takosumi.com/contracts/resource/secret/v1",
+    id: "https://takosumi.com/reference/kernel/contracts/resource/secret/v1",
     digest:
-      "sha256:8ee6d545068484ef7fa8ba63ce86fcb014b5639874c8f6e2ca461618dc3869c5",
+      "sha256:cb764592bb5bf36405edb30fccb87aa47af91e89983b1e3a4d1a7d43693321f5",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "resource.sql.postgres@v1",
     path: "descriptors/contracts/resource-sql-postgres-v1.jsonld",
-    id: "https://takosumi.com/contracts/resource/sql/postgres/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/resource/sql/postgres/v1",
     digest:
-      "sha256:86c1b09c772ae24a762816ba9d8a4635ace93bcc9ae0286f4c0b776c154ea717",
+      "sha256:dac85ba58c9ad148627d5f1f106e31d5b24f74808f62eb7878d0649f2037e68f",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "resource.sql.sqlite-serverless@v1",
     path: "descriptors/contracts/resource-sql-sqlite-serverless-v1.jsonld",
-    id: "https://takosumi.com/contracts/resource/sql/sqlite-serverless/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/resource/sql/sqlite-serverless/v1",
     digest:
-      "sha256:6ad956c3c3b0bb8ecf5f723ef3fb94278916d8578d9e207d01fc3db8c37997ed",
+      "sha256:5211e966e1476d2f66ecb7c21724a8a0baf545a70d77240ed7eca2427341173e",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "resource.vector-index@v1",
     path: "descriptors/contracts/resource-vector-index-v1.jsonld",
-    id: "https://takosumi.com/contracts/resource/vector-index/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/resource/vector-index/v1",
     digest:
-      "sha256:a9fb46e2429d19ea79f681977b6b98796d805d55a90672dde54318b2351003bb",
+      "sha256:5f02f4e7963245c9a6e20f895e035f320fceedd60583c9fbba281659b1883a58",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "runtime.js-worker@v1",
     path: "descriptors/contracts/runtime-js-worker-v1.jsonld",
-    id: "https://takosumi.com/contracts/runtime/js-worker/v1",
+    id: "https://takosumi.com/reference/kernel/contracts/runtime/js-worker/v1",
     digest:
-      "sha256:03b2586596b9bb7b2715213b87d9ca0329ac98d82d141ac4ff94d72a149f71b2",
+      "sha256:96e36649fb62e097e129c048e8712f3b31e26c7830b5d58c74a5a2638652a145",
     context: TAKOSUMI_CONTEXT_ID,
   },
   {
     alias: "runtime.oci-container@v1",
     path: "descriptors/contracts/runtime-oci-container-v1.jsonld",
-    id: "https://takosumi.com/contracts/runtime/oci-container/v1",
+    id:
+      "https://takosumi.com/reference/kernel/contracts/runtime/oci-container/v1",
     digest:
-      "sha256:e1d00b76e163aa6fc77bbe0b597f7400257b321d7606edbb558ad136718a4c1b",
+      "sha256:36098e538d10690aa79754a10d2d03c320abe5410a30ddbfd4224e1e5203ed87",
     context: TAKOSUMI_CONTEXT_ID,
   },
 ];

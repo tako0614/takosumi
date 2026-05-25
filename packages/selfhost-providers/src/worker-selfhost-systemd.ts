@@ -3,13 +3,13 @@
  * systemd unit.
  */
 
-import type { KernelPlugin } from "takosumi-contract/plugin";
+import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 import {
   createSystemdUnitWebServiceProvider,
   InMemorySystemdUnitLifecycle,
   type SystemdUnitLifecycleClient,
 } from "@takos/takosumi-plugins/shape-providers/web-service/systemd-unit";
-import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/reference/kernel-plugin-adapter";
 import { KIND_URI_WEB_SERVICE } from "./_kinds.ts";
 
 export interface SelfhostSystemdWorkerProviderOptions {

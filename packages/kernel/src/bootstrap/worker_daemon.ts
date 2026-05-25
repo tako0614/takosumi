@@ -21,7 +21,7 @@ import type {
   JsonObject,
   PlatformContext,
   RefResolver,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 
 export interface RoleWorkerDaemonOptions {
   readonly role: PaaSProcessRole;

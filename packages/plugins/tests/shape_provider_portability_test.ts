@@ -12,7 +12,10 @@ import {
   createFilesystemObjectStoreProvider,
   InMemoryFilesystemLifecycle,
 } from "../src/shape-providers/object-store/filesystem.ts";
-import type { PlatformContext, ShapeValidationIssue } from "takosumi-contract";
+import type {
+  PlatformContext,
+  ShapeValidationIssue,
+} from "takosumi-contract/reference/compat";
 
 const ctx = {} as PlatformContext;
 

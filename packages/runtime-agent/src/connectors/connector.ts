@@ -15,7 +15,7 @@ import type {
   LifecycleDescribeResponse,
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { ArtifactFetcher } from "../artifact_fetcher.ts";
 import type { PreparedSourceReader } from "../prepared_source_reader.ts";
 

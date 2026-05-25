@@ -9,8 +9,8 @@ import {
   TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
   type TakosumiActorContext,
   verifyGatewayResponseSignature,
-} from "takosumi-contract";
-import { signTakosumiInternalRequest } from "takosumi-contract/internal-rpc";
+} from "takosumi-contract/reference/compat";
+import { signTakosumiInternalRequest } from "takosumi-contract/internal/rpc";
 import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";
 import type { RuntimeAgentRegistry } from "../agents/types.ts";
 import {

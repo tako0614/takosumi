@@ -2,13 +2,13 @@
  * Bundled `gateway@v1` KernelPlugin factory backed by AWS Route53.
  */
 
-import type { KernelPlugin } from "takosumi-contract/plugin";
+import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 import {
   createRoute53Provider,
   InMemoryRoute53Lifecycle,
   type Route53LifecycleClient,
 } from "@takos/takosumi-plugins/shape-providers/gateway/route53";
-import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/reference/kernel-plugin-adapter";
 import { KIND_URI_GATEWAY } from "./_kinds.ts";
 
 export interface AwsRoute53ProviderOptions {

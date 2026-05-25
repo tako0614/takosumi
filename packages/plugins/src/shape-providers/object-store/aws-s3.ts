@@ -1,6 +1,9 @@
-import type { ProviderPlugin, ResourceHandle } from "takosumi-contract";
 import type {
-  ObjectStoreCapability,
+  ProviderPlugin,
+  ResourceHandle,
+} from "takosumi-contract/reference/provider-plugin";
+import type {
+  ObjectStoreCapabilityTerm,
   ObjectStoreOutputs,
   ObjectStoreSpec,
 } from "../../kinds/object-store.ts";
@@ -20,7 +23,7 @@ export interface AwsS3ObjectStoreProviderOptions {
   readonly clock?: () => Date;
 }
 
-const SUPPORTED_CAPABILITIES: readonly ObjectStoreCapability[] = [
+const SUPPORTED_CAPABILITIES: readonly ObjectStoreCapabilityTerm[] = [
   "versioning",
   "presigned-urls",
   "server-side-encryption",

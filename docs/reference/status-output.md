@@ -1,24 +1,39 @@
-# Status 出力 {#status-output}
+# Status And Read Surfaces {#status-output}
 
-> このページでわかること: current contract での Installation / Deployment 状態の
-> 取得境界。
+The public Takosumi core API is write-oriented: dry-run, install, deploy
+dry-run, deploy, and rollback. A compatible operator also provides a documented
+read projection for the workflows that depend on history: dashboards, CLIs,
+support tooling, rollback target selection, async apply polling, and audit
+review.
 
-current public installer API は write-oriented な 5 endpoint だけを公開する。
-public `GET` status endpoint は無い。
+The read projection is mandatory at the semantic level and operator-owned at the
+route level. Each operator chooses its route inventory, authentication,
+pagination, and account-plane projection shape, while preserving the minimum
+fields below.
 
-Deployment 履歴や Installation 詳細の read path は operator internal surface
-で提供する。
+Minimum read projection:
 
-```text
-GET /api/internal/v1/installations
-GET /api/internal/v1/installations/{id}
-GET /api/internal/v1/installations/{id}/deployments
-GET /api/internal/v1/installations/{id}/events
-```
+| View                 | Minimum semantics                                                                                  |
+| -------------------- | -------------------------------------------------------------------------------------------------- |
+| Installation inspect | `id`, `spaceId`, `appId`, `status`, `currentDeploymentId`, created/update timestamps.              |
+| Deployment list      | Deployments for one Installation, ordered by creation time, with pagination or bounded retention.  |
+| Deployment inspect   | `id`, `installationId`, `source`, `manifestDigest`, `status`, public/non-secret `outputs`.         |
+| Async polling        | A `running` Deployment can be observed until it becomes `succeeded` or `failed`.                   |
+| Rollback eligibility | Whether a `succeeded` Deployment is retained and selectable as a rollback target.                  |
+| Redaction            | Raw credentials, tokens, private keys, and provider secrets stay behind refs or operator controls. |
 
-これらは `TAKOSUMI_INTERNAL_API_SECRET` による internal HMAC 署名が必要で、
-public installer bearer では呼ばない。
+The reference kernel has internal read routes for operator tooling, but those
+routes are reference implementation details. They are not part of the portable
+Installer API contract, and they are not called with the public installer
+bearer.
 
-CLI / operator UI が表示する status shape は、この internal ledger を読む
-operator tooling の責務。 public contract の entity 名は Installation /
-Deployment のまま維持する。
+Takosumi Cloud, for example, exposes account-session / PAT protected
+Installation list, inspect, event, launch, materialize, and export views as
+Cloud account-plane API surface. Start from
+[Takosumi Cloud](./takosumi-cloud.md) for that distribution.
+
+## Related Pages
+
+- [Installer API](./installer-api.md)
+- [Takosumi Core Specification](./core-spec.md)
+- [Reference Kernel Route Inventory](./kernel-http-api.md)

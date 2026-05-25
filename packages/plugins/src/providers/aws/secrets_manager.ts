@@ -1,4 +1,4 @@
-import type { secretStore } from "takosumi-contract";
+import type { secretStore } from "takosumi-contract/reference/compat";
 import type { AwsSecretsClient } from "./clients.ts";
 import {
   type AwsRetryConfig,

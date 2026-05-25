@@ -1,4 +1,4 @@
-import type { SignedGatewayManifest } from "takosumi-contract";
+import type { SignedGatewayManifest } from "takosumi-contract/reference/compat";
 
 export type RuntimeAgentId = string;
 export type RuntimeAgentWorkId = string;

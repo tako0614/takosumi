@@ -1,8 +1,5 @@
 # Journal Compaction
 
-> このページでわかること: WAL journal の compaction trigger / retention 規則 /
-> snapshotization ステップ / operator 制御点。
-
 WriteAheadOperationJournal は WAL stage 進行とともに単調増大する。 compaction
 なしでは journal は際限なく成長し replay が遅くなる。 compaction は audit log
 retention とは独立で、 audit 側の regime 駆動 retention は
@@ -142,11 +139,12 @@ Inspection commands require the operator bearer.
 
 ## Related architecture notes
 
-- `reference/architecture/runtime-deployment-model#operation-plan--write-ahead-journal`
+- [Runtime Deployment — Operation Plan & WAL](./architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal)
   — WAL stage enum, idempotency tuple, replay rules.
-- `reference/architecture/snapshot-model` — base snapshot semantics and snapshot
-  garbage collection.
-- `reference/drift-detection` — RevokeDebt status rules referenced by retention.
+- [Snapshot Model](./architecture/snapshot-model.md) — base snapshot semantics
+  and snapshot garbage collection.
+- [Drift Detection](./drift-detection.md) — RevokeDebt status rules referenced
+  by retention.
 
 ## 関連ページ
 

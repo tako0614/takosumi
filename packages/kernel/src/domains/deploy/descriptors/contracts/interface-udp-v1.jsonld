@@ -1,6 +1,6 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/contracts/interface/udp/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/contracts/interface/udp/v1",
   "@type": "InterfaceContractDescriptor",
   "shortRef": "interface.udp@v1",
   "domain": "interface",

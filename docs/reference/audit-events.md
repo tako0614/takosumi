@@ -1,8 +1,9 @@
 # 監査イベント {#audit-events}
 
-Takosumi kernel の audit event は installer / deployment / provider operation の
-証跡です。account、billing、support、customer onboarding の event taxonomy は
-operator account-plane 側で定義します。
+Takosumi core audit events cover install / deploy / rollback lifecycle evidence.
+Reference/operator extension event families can add provider operation,
+connector, and DataAsset evidence. account、billing、support、 customer
+onboarding の event taxonomy は operator account-plane 側で定義します。
 
 ## 共通 envelope
 
@@ -43,9 +44,9 @@ restore の stage-specific event はそれぞれ
 | `deployment-activated`           | notice   | Deployment が current active になった。            |
 | `deployment-failed`              | warning  | Deployment が失敗した。                            |
 | `rollback-requested`             | warning  | rollback が要求された。                            |
-| `rollback-completed`             | notice   | rollback Deployment が完了した。                   |
+| `rollback-completed`             | notice   | retained Deployment への rollback が完了した。     |
 
-### Lifecycle / provider operation
+### Reference Lifecycle / Provider Operation
 
 | Type                  | Severity | 説明                                                    |
 | --------------------- | -------- | ------------------------------------------------------- |
@@ -66,7 +67,7 @@ restore の stage-specific event はそれぞれ
 | `revoke-debt-resolved` | notice   | RevokeDebt が解消された。                               |
 | `drift-detected`       | warning  | observed state と desired state の drift が検出された。 |
 
-### DataAsset / connector
+### Reference DataAsset / Connector
 
 | Type                       | Severity | 説明                                                |
 | -------------------------- | -------- | --------------------------------------------------- |
@@ -96,6 +97,6 @@ implementation は backend に合わせて構いませんが、operator が chai
 
 - [Storage Schema](./storage-schema.md)
 - [Lifecycle Protocol](./lifecycle.md)
-- [DataAsset GC](./artifact-gc.md)
+- [DataAsset GC](./data-asset-gc.md)
 - [Risk Taxonomy](./risk-taxonomy.md)
 - [Approval Invalidation](./approval-invalidation.md)

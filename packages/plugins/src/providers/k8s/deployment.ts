@@ -1,8 +1,8 @@
-import type { provider } from "takosumi-contract";
+import type { provider } from "takosumi-contract/reference/compat";
 import type {
   RuntimeDesiredState,
   RuntimeWorkloadSpec,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   K8sApplyClient,
   K8sContainerPort,

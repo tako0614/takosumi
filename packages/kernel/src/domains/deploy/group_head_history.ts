@@ -22,7 +22,7 @@
 // implementation in this module is the reference adapter used by tests and
 // by the in-memory bootstrap path.
 
-import type { IsoTimestamp } from "takosumi-contract";
+import type { IsoTimestamp } from "takosumi-contract/reference/compat";
 
 /**
  * One persisted advance-event for a (space, group) pair. Append-only: the

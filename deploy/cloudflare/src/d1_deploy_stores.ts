@@ -1,4 +1,4 @@
-import type { JsonValue } from "takosumi-contract";
+import type { JsonValue } from "takosumi-contract/reference/compat";
 import {
   assertReplayCompatible,
   compareJournalEntries,

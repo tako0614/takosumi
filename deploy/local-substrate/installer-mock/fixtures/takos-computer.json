@@ -11,7 +11,6 @@
     { "op": "create", "component": "web", "kind": "worker" },
     { "op": "create", "component": "auth", "kind": "oidc" }
   ],
-  "estimatedCost": { "currency": "JPY", "monthly": 0 },
   "expected": {
     "commit": "b3e8638ba9be2c7924f25e1b5e65d33bf75e18f9",
     "manifestDigest": "sha256:fixture-takos-computer"

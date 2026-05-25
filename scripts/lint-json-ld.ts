@@ -8,16 +8,16 @@
  *    `@id` / `@type` / `name` are NOT required.
  * 2. **Reference kind document** (= e.g.
  *    `packages/plugins/spec/kinds/v1/<name>.jsonld`).
- *    Must include `@context` / `@id` / `@type` / `name` / `aliases` /
- *    `publications` / `listens`. `publications` is an object keyed by local
- *    publication name with `{ contract, material }` values; `listens` is an
- *    object keyed by local binding name with `{ shape, ...projectionMetadata }`
- *    values.
+ *    Must include `@context` / `@id` / `@type` / `name` /
+ *    `referenceAliases` / `publications`. `publications` is an object keyed by local
+ *    publication name with `{ contract, material }` values. A document can also
+ *    list `acceptedProjectionFamilies` as vocabulary metadata for compatible
+ *    `listen.as` values.
  *
  * The lint is intentionally shallow: kernel does not perform JSON-LD
- * semantic expand, so we only assert the envelope and the publication/listen
- * shape. Schema field checks (= `spec` / `outputs` /
- * `capabilities`) are not enforced here so operators can publish
+ * semantic expand, so we only assert the envelope, publication metadata, and
+ * projection-family metadata. Schema field checks (= `spec` / `outputs` /
+ * `capabilityTerms`) are not enforced here so operators can publish
  * narrower kind variants if they wish.
  */
 import { walk } from "jsr:@std/fs@^1.0.5/walk";
@@ -77,9 +77,13 @@ async function main(): Promise<void> {
       requireNonEmptyString(obj["@id"], "@id", entry.path, issues);
       requireNonEmptyString(obj["@type"], "@type", entry.path, issues);
       requireNonEmptyString(obj["name"], "name", entry.path, issues);
-      checkAliases(obj["aliases"], entry.path, issues);
+      checkReferenceAliases(obj["referenceAliases"], entry.path, issues);
       checkPublications(obj["publications"], entry.path, issues);
-      checkListens(obj["listens"], entry.path, issues);
+      checkAcceptedProjectionFamilies(
+        obj["acceptedProjectionFamilies"],
+        entry.path,
+        issues,
+      );
     }
   }
 
@@ -109,7 +113,7 @@ function requireNonEmptyString(
   }
 }
 
-function checkAliases(
+function checkReferenceAliases(
   value: unknown,
   path: string,
   issues: LintIssue[],
@@ -117,19 +121,23 @@ function checkAliases(
   if (value === undefined) {
     issues.push({
       path,
-      message: "missing `aliases` (declare short-name array, may be empty)",
+      message:
+        "missing `referenceAliases` (declare suggested short-name array, may be empty)",
     });
     return;
   }
   if (!Array.isArray(value)) {
-    issues.push({ path, message: "`aliases` must be an array of strings" });
+    issues.push({
+      path,
+      message: "`referenceAliases` must be an array of strings",
+    });
     return;
   }
   for (const [index, alias] of value.entries()) {
     if (typeof alias !== "string" || alias.length === 0) {
       issues.push({
         path,
-        message: `aliases[${index}] must be a non-empty string`,
+        message: `referenceAliases[${index}] must be a non-empty string`,
       });
     }
   }
@@ -199,63 +207,27 @@ function checkPublications(
   }
 }
 
-function checkListens(
+function checkAcceptedProjectionFamilies(
   value: unknown,
   path: string,
   issues: LintIssue[],
 ): void {
   if (value === undefined) {
+    return;
+  }
+  if (!Array.isArray(value)) {
     issues.push({
       path,
-      message:
-        "missing `listens` (declare local binding shapes this kind can listen through, may be empty {})",
+      message: "`acceptedProjectionFamilies` must be an array of strings",
     });
     return;
   }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    issues.push({
-      path,
-      message: "`listens` must be an object keyed by local binding name",
-    });
-    return;
-  }
-  const obj = value as Record<string, unknown>;
-  for (const [key, descriptor] of Object.entries(obj)) {
-    if (!isLocalName(key)) {
+  for (const [index, family] of value.entries()) {
+    if (typeof family !== "string" || family.length === 0) {
       issues.push({
         path,
-        message: "listens entry keys must be local names",
-      });
-      continue;
-    }
-    if (
-      descriptor === null ||
-      typeof descriptor !== "object" ||
-      Array.isArray(descriptor)
-    ) {
-      issues.push({
-        path,
-        message: `listens[${key}] must be an object with shape metadata`,
-      });
-      continue;
-    }
-    const d = descriptor as Record<string, unknown>;
-    if (typeof d["shape"] !== "string" || d["shape"] === "") {
-      issues.push({
-        path,
-        message: `listens[${key}].shape must be a non-empty string`,
-      });
-    }
-    if (
-      d["envMap"] !== undefined && (
-        d["envMap"] === null ||
-        typeof d["envMap"] !== "object" ||
-        Array.isArray(d["envMap"])
-      )
-    ) {
-      issues.push({
-        path,
-        message: `listens[${key}].envMap must be an object when present`,
+        message:
+          `acceptedProjectionFamilies[${index}] must be a non-empty string`,
       });
     }
   }

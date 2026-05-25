@@ -18,7 +18,7 @@ import {
   isDirectDeployGeneratedManifestSnapshot,
   ManifestManagedGroupMutationBlockedError,
 } from "./mod.ts";
-import type { Deployment, GroupHead } from "takosumi-contract";
+import type { Deployment, GroupHead } from "takosumi-contract/reference/compat";
 
 const IMAGE_API =
   "registry.example.com/demo/api@sha256:1111111111111111111111111111111111111111111111111111111111111111";

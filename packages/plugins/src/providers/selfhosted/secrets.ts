@@ -1,4 +1,4 @@
-import type { kms, secretStore } from "takosumi-contract";
+import type { kms, secretStore } from "takosumi-contract/reference/compat";
 import {
   bytesFromBody,
   decodeBase64Url,

@@ -8,14 +8,17 @@ import {
   type PlatformContext,
   type PlatformOperationContext,
   type ProviderPlugin,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   createTakosumiProductionProviders,
   RuntimeAgentLifecycle,
   type TakosumiProductionProviderOptions,
 } from "../src/shape-providers/factories.ts";
 
-const ctx = {} as PlatformContext;
+const ctx = {
+  spaceId: "space:provider-test",
+  tenantId: "space:provider-test",
+} as PlatformContext;
 
 function operationContext(
   phase: PlatformOperationContext["phase"],
@@ -229,6 +232,7 @@ Deno.test("apply posts a lifecycle envelope to the runtime-agent", async () => {
   assert.equal(body.shape, "object-store@v1");
   assert.equal(body.provider, "@takos/aws-s3");
   assert.equal(body.resourceName, "tenant-artifacts");
+  assert.equal(body.spaceId, "space:provider-test");
   assert.equal(body.tenantId, "tenant-a");
   assert.equal(body.idempotencyKey, operation.idempotencyKeyString);
   const operationRequest = body.operationRequest as Record<string, unknown>;
@@ -286,6 +290,7 @@ Deno.test("destroy posts to the destroy path with the resource handle", async ()
   const body = call.body as Record<string, unknown>;
   assert.equal(body.shape, "web-service@v1");
   assert.equal(body.provider, "@takos/aws-fargate");
+  assert.equal(body.spaceId, "space:provider-test");
   assert.equal(body.tenantId, "tenant-a");
   assert.equal(body.idempotencyKey, operation.idempotencyKeyString);
   const operationRequest = body.operationRequest as Record<string, unknown>;
@@ -334,6 +339,7 @@ Deno.test("compensate posts to the compensate path with the resource handle", as
   const body = call.body as Record<string, unknown>;
   assert.equal(body.shape, "web-service@v1");
   assert.equal(body.provider, "@takos/aws-fargate");
+  assert.equal(body.spaceId, "space:provider-test");
   assert.equal(body.tenantId, "tenant-a");
   assert.equal(
     body.handle,
@@ -408,6 +414,7 @@ Deno.test("RuntimeAgentLifecycle propagates HTTP error bodies", async () => {
     await lifecycle.apply({
       shape: "object-store@v1",
       provider: "@takos/aws-s3",
+      spaceId: "space:provider-test",
       resourceName: "x",
       spec: { name: "x" },
     });

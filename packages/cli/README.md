@@ -17,10 +17,17 @@ export TAKOSUMI_DEV_MODE=1
 export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 
-# Boot kernel + embedded runtime-agent on the same machine
+# Boot the stock kernel + embedded runtime-agent on the same machine.
+# This validates AppSpec and records Installation / Deployment metadata.
+# Runtime resources require a bootstrap server with provider bindings.
 takosumi server --port 8788 &
 
-# Install + deploy
+# Create the AppSpec scaffold and the referenced runtime file.
+takosumi init .takosumi.yml
+mkdir -p dist
+printf 'export default { fetch() { return new Response("ok") } };\\n' > dist/worker.mjs
+
+# Install + deploy metadata through the Installer API.
 takosumi install --source . --space space:personal
 takosumi deploy <installation-id>
 takosumi rollback <installation-id> <deployment-id>
@@ -37,7 +44,7 @@ takosumi rollback <installation-id> <deployment-id>
 | `takosumi install dry-run <source>`                                 | dry-run a new Installation                           |
 | `takosumi deploy <installation-id> [--source <source>]`             | apply a new Deployment to an Installation            |
 | `takosumi deploy dry-run <installation-id> [--source <source>]`     | dry-run an Installation update                       |
-| `takosumi rollback <installation-id> <deployment-id>`               | create a rollback Deployment                         |
+| `takosumi rollback <installation-id> <deployment-id>`               | move current pointer to a retained Deployment        |
 | `takosumi server [--port] [--no-agent]`                             | boot kernel + embedded agent                         |
 | `takosumi runtime-agent serve`                                      | standalone agent (multi-host production)             |
 | `takosumi runtime-agent list`                                       | show registered connectors on an agent               |

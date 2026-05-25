@@ -1,4 +1,4 @@
-import type { JsonObject } from "takosumi-contract";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 import type { NotificationPort } from "../../adapters/notification/mod.ts";
 import type { AuditSeverity } from "../../domains/audit/mod.ts";
 import {

@@ -3,7 +3,7 @@ import {
   LIFECYCLE_AGENT_TOKEN_ENV,
   LIFECYCLE_AGENT_URL_ENV,
   LIFECYCLE_HEALTH_PATH,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import { startEmbeddedAgent } from "./embed.ts";
 
 Deno.test("startEmbeddedAgent serves /v1/health and exports env", async () => {

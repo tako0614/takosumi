@@ -1,10 +1,13 @@
 # Object モデル {#object-model}
 
-> このページでわかること: kernel の object model とエンティティ関係。
+This page describes the reference implementation internal graph. Portable
+Takosumi compatibility remains AppSpec / Installation / Deployment plus the
+Installer API. Object records are retained implementation evidence, not public
+core entities.
 
-Object は kernel graph の canonical entity である。すべての Object は厳密に 1
-つの Space に属する。public な AppSpec `components` entry は Object intent
-となり、 その後 resolved な Object になる。
+Object は reference kernel graph の internal entity である。すべての Object は
+厳密に 1 つの Space に属する。public な AppSpec `components` entry は Object
+intent となり、その後 resolved な Object になる。
 
 ## Space で qualify された identity {#space-qualified-identity}
 
@@ -18,7 +21,7 @@ Object のアドレスは Space 内で一意である。storage は identity を
 qualified な表示形式は log や plan で許される。
 
 ```text
-space:acme-prod/object:api
+space_acme_prod/obj_api
 ```
 
 ある Space の Object を別の Space の authority として更新・削除・observe する
@@ -39,7 +42,7 @@ external:
   Takosumi must not create or delete it.
 
 operator:
-  Owned by operator platform. User deployment may link to approved exports.
+  Owned by operator platform. User deployment may link to approved publications.
   User deployment must not delete it.
 
 imported:
@@ -50,15 +53,15 @@ imported:
 
 ```yaml
 Object:
-  spaceId: space:acme-prod
-  address: object:api
+  spaceId: space_acme_prod
+  address: obj_api
   lifecycleClass: managed
   kind: worker
-  provider: "@takos/takosumi-cloudflare-providers"
+  implementationBindingId: "@takos/cloudflare-workers"
   resolutionSnapshotId: resolution:sha256:...
   owner:
     kind: deployment
-    id: deployment:...
+    id: dep_...
   desiredGeneration: 3
   labels: {}
 ```
@@ -69,8 +72,8 @@ Object:
 
 ```yaml
 GeneratedObject:
-  address: generated:link:api.DATABASE_URL/grant
-  owner: link:api.DATABASE_URL
+  address: generated:link_api_DATABASE_URL/grant
+  owner: link_api_DATABASE_URL
   reason: link-materialization
   deterministicId: sha256:...
   deletePolicy: delete-with-owner | retain-with-approval | revoke-with-owner
@@ -103,7 +106,7 @@ revoke 参加は lifecycle class で制限される。`external-source` と
 
 ## Revoke 参加マトリクス {#revoke-participation-matrix}
 
-行は object の lifecycle class、列は object を tear down する際に関わる 4 つ の
+行は object の lifecycle class、列は object を tear down する際に関わる 4 つの
 operation。`yes` は許可、`gen-only` は object 自身ではなく generated child
 にのみ許可、`no` は禁止、`debt-on-fail` は外部 cleanup の失敗が `RevokeDebt` を
 queue するかどうかを表す。

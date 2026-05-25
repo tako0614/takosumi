@@ -12,7 +12,7 @@ import type {
   DeploymentCondition,
   DeploymentPolicyDecision,
   IsoTimestamp,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import { applyingPhaseCondition } from "../apply_orchestrator.ts";
 import type { ApplyPreflightValidator } from "../deployment_service.ts";
 import type { DeployBlocker } from "../types.ts";

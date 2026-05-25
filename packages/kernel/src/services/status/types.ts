@@ -2,7 +2,7 @@ import type {
   ConditionStatus,
   CoreConditionReason,
   GroupSummaryStatus,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { ProviderMaterializationReference } from "../../adapters/provider/mod.ts";
 import type { ProviderObservation as RuntimeProviderObservation } from "../../domains/runtime/mod.ts";
 

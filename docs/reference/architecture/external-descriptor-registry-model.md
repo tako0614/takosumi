@@ -1,16 +1,15 @@
-# External Descriptor Intake モデル {#external-descriptor-registry-model}
+# External Descriptor Registry モデル {#external-descriptor-registry-model}
 
-> このページでわかること: component kind descriptor と operator registry
-> の境界。
+Takosumi core の public concepts は AppSpec / Installation / Deployment です。
+core public HTTP surface は 5 Installer API endpoint です。component kind の
+semantics は operator distribution が descriptor と alias として取り込み、
+runtime behavior は operator-selected execution binding として接続する。
 
-Takosumi の public entrypoint は AppSpec / Installation / Deployment と
-installer endpoint です。component kind の semantics は operator distribution が
-descriptor と alias として取り込み、runtime behavior は implementation binding
-として接続する。
-
-`https://takosumi.com/kinds/v1/*` や `packages/plugins/spec/kinds/` の
-descriptor は external reference descriptor examples である。互換実装が参照する
-reusable semantic input として扱う。
+`https://takosumi.com/kinds/v1/*` の descriptor は official catalog descriptor
+documents である。operator が採用できる reusable semantic input として扱う。
+`https://takosumi.com/reference/kernel/**` は reference kernel の内部
+conformance metadata の identity であり、この registry model の public catalog
+source では ない。
 
 ## Descriptor source と runtime authority {#descriptor-source-vs-runtime-authority}
 
@@ -21,7 +20,7 @@ Descriptor documents:
 Operator registry:
   select descriptors, validate shape, apply operator policy
 
-Implementation bindings:
+Execution bindings:
   descriptor URI -> provider implementation
 
 ResolutionSnapshot:
@@ -41,12 +40,12 @@ Kind Alias Registry:
   short alias -> external kind URI
 
 Descriptor Registry:
-  descriptor URL -> normalized descriptor metadata
+  catalog descriptor URI/document -> normalized descriptor metadata
 
-Namespace Registry:
-  space-scoped namespace export path -> ExportDeclaration snapshot
+External Publication Registry:
+  space-scoped external publication path -> ExternalPublicationDeclaration snapshot
 
-Implementation Registry:
+Execution Registry:
   kind URI -> provider implementation
 
 Deployment Policy:
@@ -58,8 +57,8 @@ DataAsset Policy:
 
 ## Descriptor ドキュメント {#descriptor-documents}
 
-Descriptor は semantic data を定義する。runtime behavior は implementation
-binding が持つ。
+Descriptor は semantic data を定義する。runtime behavior は operator-selected
+execution binding が持つ。
 
 Descriptor family:
 
@@ -72,9 +71,9 @@ InputSchema
 ```
 
 Implementation packaging は operator implementation 側に置く。Takosumi reference
-kernel では `KernelPlugin` が descriptor identity に対応する runtime behavior を
-提供する。別実装は同じ descriptor identity を別の registry / controller /
-adapter に bind できる。
+implementation は descriptor identity を runtime behavior に bind するための
+registry / adapter を持つ。別実装は同じ descriptor identity を別の registry /
+controller / adapter に bind できる。
 
 ## AppSpec との関係 {#relationship-to-appspec}
 

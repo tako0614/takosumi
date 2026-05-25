@@ -1,4 +1,4 @@
-import { storage } from "takosumi-contract";
+import { storage } from "takosumi-contract/reference/compat";
 import { conflict, freezeClone, ok } from "./common.ts";
 
 export type SelfHostedSqlPrimitive = string | number | boolean | null;

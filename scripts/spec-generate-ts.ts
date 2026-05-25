@@ -1,22 +1,22 @@
 /**
  * Generate TypeScript types from `packages/plugins/spec/kinds/v1/*.jsonld`.
  *
- * Each reference kind document is the source of truth for its
- * `spec` shape (= JSON Schema 2020-12 form), `outputs` list,
- * `capabilities` enum, and the publication/listen envelope
- * (`aliases` / `publications{}` / `listens{}`). The generator emits a
+ * For TypeScript helper generation, each official catalog descriptor source
+ * file supplies its `spec` shape (= JSON Schema 2020-12 form), `outputs` list,
+ * `capabilityTerms` enum, and the publication envelope
+ * (`referenceAliases` / `publications{}`). The generator emits a
  * sibling `packages/plugins/src/kinds/<basename>.generated.ts`
  * containing:
  *
  *   - `<Prefix>Spec` interface (derived from JSON Schema)
  *   - `<Prefix>Outputs` interface (derived from `outputs` array)
- *   - `<Prefix>Capability` string union (derived from `capabilities` array)
+ *   - `<Prefix>CapabilityTerm` string union (derived from `capabilityTerms` array)
  *   - `<Prefix>PublicationName` string union (= local publication names)
- *   - `<Prefix>ListenBindingName` string union (= local listen binding names)
- *   - `<UPPER>_CAPABILITIES` / `<UPPER>_OUTPUT_FIELDS` /
- *     `<UPPER>_ALIASES` / `<UPPER>_PUBLICATIONS` /
- *     `<UPPER>_LISTEN_BINDINGS` const arrays
- *   - `<UPPER>_KIND_ID` / `<UPPER>_KIND_NAME` /
+ *   - `<UPPER>_CAPABILITY_TERMS` / `<UPPER>_OUTPUT_FIELDS` /
+ *     `<UPPER>_ALIASES` (referenceAlias suggestions only) /
+ *     `<UPPER>_PUBLICATIONS` const arrays
+ *   - `<UPPER>_KIND_SHAPE_ID` / `<UPPER>_KIND_ID` (deprecated alias) /
+ *     `<UPPER>_KIND_NAME` /
  *     `<UPPER>_KIND_URI` / `<UPPER>_KIND_VERSION` /
  *     `<UPPER>_DESCRIPTION`
  *
@@ -24,16 +24,8 @@
  * adds the `Shape` descriptor + runtime validators (which are NOT
  * generated, to keep validation diagnostics human-curated).
  *
- * Extension keywords used in the JSON Schema:
- *
- *   - `x-ts` (top-level): `{ fileBasename, prefix }` — controls TS naming.
- *     `prefix` is used for all derived interface names; `fileBasename` is
- *     the generated TS file basename. Kind identity is derived from
- *     JSON-LD `@id` and `name`, never from `x-ts`.
- *   - `x-ts-name` (per nested schema): explicit interface name suffix
- *     (e.g. `Redirect` → `GatewayRedirect`).
- *   - `x-ts-type` (per schema): `{ import: <module>, name: <type> }`
- *     overrides the auto-generated type with an imported one.
+ * TypeScript naming is repo-local generator policy. Public JSON-LD descriptor
+ * bodies stay free of `x-*` tooling metadata.
  */
 import { walk } from "jsr:@std/fs@^1.0.5/walk";
 import { fromFileUrl } from "jsr:@std/path@^1.0.6";
@@ -52,19 +44,12 @@ interface JsonSchema {
   readonly maximum?: number;
   readonly minItems?: number;
   readonly pattern?: string;
-  readonly "x-ts-name"?: string;
-  readonly "x-ts-type"?: { readonly import: string; readonly name: string };
   readonly $schema?: string;
 }
 
 interface PublicationDescriptor {
   readonly contract: string;
   readonly material?: Record<string, unknown>;
-}
-
-interface ListensDescriptor {
-  readonly shape?: string;
-  readonly envMap?: Record<string, unknown>;
 }
 
 interface KindDoc {
@@ -74,16 +59,11 @@ interface KindDoc {
   readonly name: string;
   readonly version: string;
   readonly description?: string;
-  readonly aliases?: readonly string[];
+  readonly referenceAliases?: readonly string[];
   readonly publications?: Record<string, PublicationDescriptor>;
-  readonly listens?: Record<string, ListensDescriptor>;
-  readonly "x-ts": {
-    readonly fileBasename: string;
-    readonly prefix: string;
-  };
   readonly spec: JsonSchema;
   readonly outputs: readonly OutputField[];
-  readonly capabilities: readonly string[];
+  readonly capabilityTerms: readonly string[];
 }
 
 interface OutputField {
@@ -113,6 +93,15 @@ const OUTPUT_DIR = fromFileUrl(
 const HEADER = "// AUTO-GENERATED FROM packages/plugins/spec/kinds/v1/" +
   "<basename>.jsonld — DO NOT EDIT.\n" +
   "// Run `deno task spec:generate-ts` to refresh.\n";
+const TS_GENERATION_OVERRIDES: Readonly<
+  Record<string, { readonly fileBasename: string; readonly prefix: string }>
+> = {
+  gateway: { fileBasename: "gateway", prefix: "Gateway" },
+  "object-store": { fileBasename: "object-store", prefix: "ObjectStore" },
+  postgres: { fileBasename: "database-postgres", prefix: "DatabasePostgres" },
+  "web-service": { fileBasename: "web-service", prefix: "WebService" },
+  worker: { fileBasename: "worker", prefix: "Worker" },
+};
 
 if (import.meta.main) {
   const result = await main();
@@ -128,7 +117,8 @@ async function main(): Promise<number> {
   const written: string[] = [];
   for (const { doc, sourceBasename } of docs) {
     const ts = generateTs(doc, sourceBasename);
-    const outPath = `${OUTPUT_DIR}/${doc["x-ts"].fileBasename}.generated.ts`;
+    const target = generationTarget(doc, sourceBasename);
+    const outPath = `${OUTPUT_DIR}/${target.fileBasename}.generated.ts`;
     await Deno.writeTextFile(outPath, ts);
     written.push(outPath);
     console.log(
@@ -172,10 +162,11 @@ export async function generateAllToTemp(): Promise<
     const map = new Map<string, string>();
     for (const { doc, sourceBasename } of docs) {
       const ts = generateTs(doc, sourceBasename);
-      const outPath = `${tmpDir}/${doc["x-ts"].fileBasename}.generated.ts`;
+      const target = generationTarget(doc, sourceBasename);
+      const outPath = `${tmpDir}/${target.fileBasename}.generated.ts`;
       await Deno.writeTextFile(outPath, ts);
       paths.push(outPath);
-      map.set(doc["x-ts"].fileBasename, outPath);
+      map.set(target.fileBasename, outPath);
     }
     await formatFiles(paths);
     const out = new Map<string, string>();
@@ -217,17 +208,17 @@ export async function loadKindDocs(): Promise<readonly LoadedKindDoc[]> {
 }
 
 export function generateTs(doc: KindDoc, sourceBasename?: string): string {
+  const target = generationTarget(doc, sourceBasename);
   const ctx: GeneratorContext = {
-    prefix: doc["x-ts"].prefix,
+    prefix: target.prefix,
     nested: [],
     imports: new Map(),
   };
-  const upper = camelToUpper(doc["x-ts"].prefix);
-  const specInterfaceName = `${doc["x-ts"].prefix}Spec`;
-  const outputsInterfaceName = `${doc["x-ts"].prefix}Outputs`;
-  const capabilityTypeName = `${doc["x-ts"].prefix}Capability`;
-  const publicationsTypeName = `${doc["x-ts"].prefix}PublicationName`;
-  const listenBindingTypeName = `${doc["x-ts"].prefix}ListenBindingName`;
+  const upper = camelToUpper(target.prefix);
+  const specInterfaceName = `${target.prefix}Spec`;
+  const outputsInterfaceName = `${target.prefix}Outputs`;
+  const capabilityTermTypeName = `${target.prefix}CapabilityTerm`;
+  const publicationsTypeName = `${target.prefix}PublicationName`;
 
   // First pass: collect nested types from spec schema (also generates
   // their inline forms so we know what to emit at top level).
@@ -236,20 +227,20 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
 
   const outputsBody = renderOutputs(doc.outputs);
 
-  const capabilityUnion = doc.capabilities.length === 0
+  const capabilityUnion = doc.capabilityTerms.length === 0
     ? "never"
-    : doc.capabilities.map((c) => JSON.stringify(c)).join("\n  | ");
-  const capabilityArrayLiteral = doc.capabilities
+    : doc.capabilityTerms.map((c) => JSON.stringify(c)).join("\n  | ");
+  const capabilityArrayLiteral = doc.capabilityTerms
     .map((c) => JSON.stringify(c))
     .join(",\n  ");
   const outputFieldsArrayLiteral = doc.outputs
     .map((o) => JSON.stringify(o.name))
     .join(",\n  ");
 
-  const aliases = doc.aliases ?? [];
-  const aliasesArrayLiteral = aliases.length === 0
+  const referenceAliases = doc.referenceAliases ?? [];
+  const aliasesArrayLiteral = referenceAliases.length === 0
     ? ""
-    : aliases.map((a) => JSON.stringify(a)).join(",\n  ");
+    : referenceAliases.map((a) => JSON.stringify(a)).join(",\n  ");
 
   const publicationNames = Object.keys(doc.publications ?? {});
   const publicationsUnion = publicationNames.length === 0
@@ -259,20 +250,12 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
     ? ""
     : publicationNames.map((p) => JSON.stringify(p)).join(",\n  ");
 
-  const listenBindingNames = Object.keys(doc.listens ?? {});
-  const listenBindingsUnion = listenBindingNames.length === 0
-    ? "never"
-    : listenBindingNames.map((p) => JSON.stringify(p)).join("\n  | ");
-  const listenBindingsArrayLiteral = listenBindingNames.length === 0
-    ? ""
-    : listenBindingNames.map((p) => JSON.stringify(p)).join(",\n  ");
-
   const importLines = renderImports(ctx.imports);
   const nestedBlocks = ctx.nested
     .map((n) => renderNestedInterface(n, ctx))
     .join("\n");
 
-  const basename = sourceBasename ?? doc["x-ts"].fileBasename;
+  const basename = sourceBasename ?? target.fileBasename;
   const header = HEADER.replace("<basename>", basename);
 
   const parts: string[] = [header];
@@ -287,25 +270,26 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   parts.push("");
   parts.push(`export interface ${outputsInterfaceName} ${outputsBody}`);
   parts.push("");
-  parts.push(`export type ${capabilityTypeName} =\n  | ${capabilityUnion};`);
+  parts.push(
+    `export type ${capabilityTermTypeName} =\n  | ${capabilityUnion};`,
+  );
   parts.push("");
   parts.push(
     `export type ${publicationsTypeName} =\n  | ${publicationsUnion};`,
   );
   parts.push("");
   parts.push(
-    `export type ${listenBindingTypeName} =\n  | ${listenBindingsUnion};`,
-  );
-  parts.push("");
-  parts.push(
-    `export const ${upper}_CAPABILITIES: readonly ${capabilityTypeName}[] = [\n  ${capabilityArrayLiteral},\n];`,
+    `export const ${upper}_CAPABILITY_TERMS: readonly ${capabilityTermTypeName}[] = [\n  ${capabilityArrayLiteral},\n];`,
   );
   parts.push("");
   parts.push(
     `export const ${upper}_OUTPUT_FIELDS: readonly string[] = [\n  ${outputFieldsArrayLiteral},\n];`,
   );
   parts.push("");
-  if (aliases.length === 0) {
+  parts.push(
+    "// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.",
+  );
+  if (referenceAliases.length === 0) {
     parts.push(`export const ${upper}_ALIASES: readonly string[] = [];`);
   } else {
     parts.push(
@@ -322,22 +306,25 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
       `export const ${upper}_PUBLICATIONS: readonly ${publicationsTypeName}[] = [\n  ${publicationsArrayLiteral},\n];`,
     );
   }
-  parts.push("");
-  if (listenBindingNames.length === 0) {
-    parts.push(
-      `export const ${upper}_LISTEN_BINDINGS: readonly ${listenBindingTypeName}[] = [];`,
-    );
-  } else {
-    parts.push(
-      `export const ${upper}_LISTEN_BINDINGS: readonly ${listenBindingTypeName}[] = [\n  ${listenBindingsArrayLiteral},\n];`,
-    );
-  }
-  parts.push("");
   parts.push(
-    `export const ${upper}_KIND_ID = ${JSON.stringify(doc.name)};`,
+    "// Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.",
+  );
+  parts.push(
+    `export const ${upper}_KIND_SHAPE_ID = ${JSON.stringify(doc.name)};`,
+  );
+  parts.push(
+    "/** @deprecated Use " + `${upper}_KIND_URI` +
+      " for AppSpec kind identity, or " + `${upper}_KIND_SHAPE_ID` +
+      " for legacy Shape.id. */",
+  );
+  parts.push(
+    `export const ${upper}_KIND_ID = ${upper}_KIND_SHAPE_ID;`,
   );
   parts.push(
     `export const ${upper}_KIND_NAME = ${JSON.stringify(doc.name)};`,
+  );
+  parts.push(
+    "// Official catalog descriptor URI used in AppSpec kind resolution.",
   );
   parts.push(
     `export const ${upper}_KIND_URI = ${JSON.stringify(doc["@id"])};`,
@@ -355,23 +342,11 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
 }
 
 function validateKindDoc(path: string, doc: KindDoc): void {
-  if (!doc.name || !doc["@id"] || !doc["x-ts"]) {
-    console.error(`[spec:generate-ts] ${path}: missing @id, name, or x-ts`);
+  if (!doc.name || !doc["@id"]) {
+    console.error(`[spec:generate-ts] ${path}: missing @id or name`);
     Deno.exit(1);
   }
-  if (!doc["x-ts"].fileBasename || !doc["x-ts"].prefix) {
-    console.error(
-      `[spec:generate-ts] ${path}: x-ts must contain fileBasename and prefix`,
-    );
-    Deno.exit(1);
-  }
-  const xTs = doc["x-ts"] as { readonly shapeId?: unknown };
-  if ("shapeId" in xTs) {
-    console.error(
-      `[spec:generate-ts] ${path}: x-ts.shapeId is obsolete; use JSON-LD @id/name for kind identity`,
-    );
-    Deno.exit(1);
-  }
+  assertNoToolingMetadata(path, doc);
   const uriName = kindNameFromUri(doc["@id"]);
   if (uriName !== doc.name) {
     console.error(
@@ -387,6 +362,51 @@ function validateKindDoc(path: string, doc: KindDoc): void {
       Deno.exit(1);
     }
   }
+  if ("capabilities" in doc) {
+    console.error(
+      `[spec:generate-ts] ${path}: capabilities is ambiguous in official descriptors; use capabilityTerms`,
+    );
+    Deno.exit(1);
+  }
+  if ("listens" in doc) {
+    console.error(
+      `[spec:generate-ts] ${path}: listens is not an official descriptor source; AppSpec listen binding names are component-local`,
+    );
+    Deno.exit(1);
+  }
+}
+
+function assertNoToolingMetadata(
+  path: string,
+  value: unknown,
+  location = "$",
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      assertNoToolingMetadata(path, item, `${location}[${index}]`)
+    );
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key.startsWith("x-")) {
+      console.error(
+        `[spec:generate-ts] ${path}: ${location}.${key} is tooling metadata and is not allowed in public descriptors`,
+      );
+      Deno.exit(1);
+    }
+    assertNoToolingMetadata(path, nested, `${location}.${key}`);
+  }
+}
+
+function generationTarget(
+  doc: KindDoc,
+  sourceBasename = doc.name,
+): { readonly fileBasename: string; readonly prefix: string } {
+  return TS_GENERATION_OVERRIDES[sourceBasename] ?? {
+    fileBasename: sourceBasename,
+    prefix: pascalCase(sourceBasename),
+  };
 }
 
 function kindNameFromUri(uri: string): string {
@@ -439,6 +459,8 @@ function outputTypeToTs(t: string): string {
       return "boolean";
     case "string[]":
       return "readonly string[]";
+    case "object[]":
+      return "readonly Record<string, unknown>[]";
     default:
       throw new Error(`unsupported output field type: ${t}`);
   }
@@ -492,21 +514,14 @@ function renderNestedInterface(
  * Render a TS type expression for a JSON Schema node. For nested object
  * schemas, this hoists them to top-level interfaces (registered on
  * ctx.nested) and returns the interface name. Arrays of objects are
- * hoisted as `<Singular>` types (using `x-ts-name` override on `items`
- * when present, otherwise dropping the trailing 's' from the property
- * name).
+ * hoisted as `<Singular>` types by dropping the trailing `s` from simple
+ * plural property names.
  */
 function renderTsType(
   schema: JsonSchema,
   ctx: GeneratorContext,
   propName: string,
 ): string {
-  // x-ts-type override: import the named type from an external module.
-  if (schema["x-ts-type"]) {
-    const { import: mod, name } = schema["x-ts-type"];
-    addImport(ctx, mod, name);
-    return name;
-  }
   if (schema.enum && schema.enum.length > 0) {
     return schema.enum.map((v) => JSON.stringify(v)).join(" | ");
   }
@@ -525,7 +540,7 @@ function renderTsType(
       if (!schema.items) {
         return "readonly unknown[]";
       }
-      const itemName = pickSingularName(propName, schema.items);
+      const itemName = pickSingularName(propName);
       const inner = renderTsType(schema.items, ctx, itemName);
       return `readonly ${inner}[]`;
     }
@@ -542,7 +557,7 @@ function renderTsType(
         const valueType = renderTsType(
           schema.additionalProperties,
           ctx,
-          propName,
+          pickSingularName(propName),
         );
         return `Readonly<Record<string, ${valueType}>>`;
       }
@@ -578,13 +593,10 @@ function pickNestedName(
   schema: JsonSchema,
   prefix: string,
 ): string {
-  const explicit = schema["x-ts-name"];
-  if (explicit) return `${prefix}${explicit}`;
   return `${prefix}${capitalize(propName)}`;
 }
 
-function pickSingularName(propName: string, items: JsonSchema): string {
-  if (items["x-ts-name"]) return items["x-ts-name"];
+function pickSingularName(propName: string): string {
   // simple singularization: drop trailing 's'
   if (propName.endsWith("s") && propName.length > 1) {
     return propName.slice(0, -1);
@@ -604,6 +616,13 @@ function registerNested(
 function capitalize(s: string): string {
   if (s.length === 0) return s;
   return s[0].toUpperCase() + s.slice(1);
+}
+
+function pascalCase(value: string): string {
+  return value.split(/[-_]/g)
+    .filter((part) => part.length > 0)
+    .map(capitalize)
+    .join("");
 }
 
 function camelToUpper(s: string): string {

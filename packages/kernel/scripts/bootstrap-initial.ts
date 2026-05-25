@@ -26,7 +26,7 @@
  * credentials are issued by Takosumi Accounts, not this kernel bootstrap.
  */
 
-import type { TakosumiActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import {
   createCoreDomainServices,
   createInMemoryCoreDomainDependencies,

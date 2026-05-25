@@ -144,7 +144,7 @@ export function mountInstallerPublicRoutes(
       const installationId = c.req.param("installationId");
       const body = await readJsonBody<RollbackRequest>(c);
       const response = await pipeline.rollback(installationId, body);
-      return c.json(response, 201);
+      return c.json(response, 200);
     });
   });
 }

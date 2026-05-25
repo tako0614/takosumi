@@ -2,7 +2,7 @@ import {
   ARTIFACTS_BASE_PATH,
   CORE_CONDITION_REASONS,
   TAKOSUMI_INTERNAL_PATHS,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
   INSTALLER_INSTALLATION_DEPLOYMENTS_PATH,
@@ -75,8 +75,9 @@ export interface CreatePaaSOpenApiDocumentOptions {
    */
   readonly metricsRoutesMounted?: boolean;
   /**
-   * Mounted by default on `takosumi-api` so SDK pipelines can self-discover
-   * the API surface. Surfaces the OpenAPI document at `/openapi.json`.
+   * Mounted by default on `takosumi-api` as reference process route
+   * inventory. Public Installer API docs remain the source of truth for
+   * source-to-deployment contract semantics.
    */
   readonly openApiRouteMounted?: boolean;
   /**
@@ -180,10 +181,11 @@ export function createPaaSOpenApiDocument(
       [INSTALLER_INSTALLATIONS_DRY_RUN_PATH]: {
         post: operation({
           operationId: "dryRunInstallation",
-          summary: "Plans a fresh AppSpec install without persisting state.",
+          summary:
+            "Plans a fresh Installation from a source descriptor without persisting state.",
           tag: "installer-public",
           auth: "installer-token",
-          requestSchema: "InstallerAppSpecBody",
+          requestSchema: "InstallerInstallationDryRunRequest",
           okSchema: "InstallerDryRunResponse",
           mountedPath: INSTALLER_INSTALLATIONS_DRY_RUN_PATH,
         }),
@@ -191,41 +193,41 @@ export function createPaaSOpenApiDocument(
       [INSTALLER_INSTALLATIONS_PATH]: {
         post: operation({
           operationId: "createInstallation",
-          summary: "Creates an Installation from a posted AppSpec.",
+          summary: "Creates an Installation from a source descriptor.",
           tag: "installer-public",
           auth: "installer-token",
-          requestSchema: "InstallerAppSpecBody",
+          requestSchema: "InstallerInstallationApplyRequest",
           okStatus: "201",
-          okSchema: "InstallerInstallationResponse",
+          okSchema: "InstallerInstallationApplyResponse",
           mountedPath: INSTALLER_INSTALLATIONS_PATH,
         }),
       },
-      [INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH]: {
+      [toOpenApiPath(INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH)]: {
         post: operation({
           operationId: "dryRunInstallationDeployment",
           summary: "Plans a re-deploy against an existing Installation.",
           tag: "installer-public",
           auth: "installer-token",
           pathParams: ["installationId"],
-          requestSchema: "InstallerAppSpecBody",
+          requestSchema: "InstallerDeploymentDryRunRequest",
           okSchema: "InstallerDryRunResponse",
           mountedPath: INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
         }),
       },
-      [INSTALLER_INSTALLATION_DEPLOYMENTS_PATH]: {
+      [toOpenApiPath(INSTALLER_INSTALLATION_DEPLOYMENTS_PATH)]: {
         post: operation({
           operationId: "applyInstallationDeployment",
           summary: "Applies a Deployment against an existing Installation.",
           tag: "installer-public",
           auth: "installer-token",
           pathParams: ["installationId"],
-          requestSchema: "InstallerAppSpecBody",
+          requestSchema: "InstallerDeploymentApplyRequest",
           okStatus: "201",
-          okSchema: "InstallerInstallationResponse",
+          okSchema: "InstallerDeploymentApplyResponse",
           mountedPath: INSTALLER_INSTALLATION_DEPLOYMENTS_PATH,
         }),
       },
-      [INSTALLER_INSTALLATION_ROLLBACK_PATH]: {
+      [toOpenApiPath(INSTALLER_INSTALLATION_ROLLBACK_PATH)]: {
         post: operation({
           operationId: "rollbackInstallation",
           summary: "Rolls an Installation back to a prior Deployment.",
@@ -233,7 +235,7 @@ export function createPaaSOpenApiDocument(
           auth: "installer-token",
           pathParams: ["installationId"],
           requestSchema: "InstallerRollbackRequest",
-          okSchema: "InstallerInstallationResponse",
+          okSchema: "InstallerRollbackResponse",
           mountedPath: INSTALLER_INSTALLATION_ROLLBACK_PATH,
         }),
       },
@@ -267,7 +269,7 @@ export function createPaaSOpenApiDocument(
           mountedPath: `${ARTIFACTS_BASE_PATH}/kinds`,
         }),
       },
-      [`${ARTIFACTS_BASE_PATH}/:hash`]: {
+      [toOpenApiPath(`${ARTIFACTS_BASE_PATH}/:hash`)]: {
         head: operation({
           operationId: "headArtifact",
           summary: "Returns artifact metadata headers without a body.",
@@ -357,7 +359,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "DeploymentMutationResponse",
         }),
       },
-      [TAKOSUMI_INTERNAL_PATHS.deploymentApply]: {
+      [toOpenApiPath(TAKOSUMI_INTERNAL_PATHS.deploymentApply)]: {
         post: operation({
           operationId: "applyInternalDeployment",
           summary:
@@ -381,7 +383,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "RuntimeAgentResponse",
         }),
       },
-      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.heartbeat]: {
+      [toOpenApiPath(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.heartbeat)]: {
         post: operation({
           operationId: "heartbeatRuntimeAgent",
           summary: "Records a runtime agent heartbeat.",
@@ -392,7 +394,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "RuntimeAgentResponse",
         }),
       },
-      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.lease]: {
+      [toOpenApiPath(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.lease)]: {
         post: operation({
           operationId: "leaseRuntimeAgentWork",
           summary: "Leases work to a runtime agent.",
@@ -403,7 +405,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "RuntimeAgentLeaseResponse",
         }),
       },
-      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.report]: {
+      [toOpenApiPath(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.report)]: {
         post: operation({
           operationId: "reportRuntimeAgentWork",
           summary: "Reports runtime-agent work completion or failure.",
@@ -414,7 +416,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "RuntimeAgentWorkResponse",
         }),
       },
-      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.drain]: {
+      [toOpenApiPath(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.drain)]: {
         post: operation({
           operationId: "drainRuntimeAgent",
           summary: "Requests runtime-agent drain.",
@@ -425,7 +427,7 @@ export function createPaaSOpenApiDocument(
           okSchema: "RuntimeAgentResponse",
         }),
       },
-      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.gatewayManifest]: {
+      [toOpenApiPath(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.gatewayManifest)]: {
         post: operation({
           operationId: "issueGatewayManifest",
           summary:
@@ -533,7 +535,15 @@ function filterMountedRouteFamilies(
     ...document,
     "x-takos-mounted-route-families": [...mountedTags].sort(),
     paths,
+    components: {
+      ...document.components,
+      schemas: filterReferencedSchemas(document.components.schemas, paths),
+    },
   };
+}
+
+function toOpenApiPath(path: string): string {
+  return path.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, "{$1}");
 }
 
 function operation(input: {
@@ -582,6 +592,16 @@ function operation(input: {
       ...(input.auth === "internal-service" ? { "403": errorResponse() } : {}),
       ...(input.requestSchema || input.requestBody
         ? { "400": errorResponse() }
+        : {}),
+      ...(input.tag === "installer-public"
+        ? {
+          "403": errorResponse(),
+          "404": errorResponse(),
+          "409": errorResponse(),
+          "413": errorResponse(),
+          "500": errorResponse(),
+          "501": errorResponse(),
+        }
         : {}),
     },
     "x-takos-auth": input.auth,
@@ -661,7 +681,10 @@ function multipartArtifactUploadRequestBody(): Record<string, unknown> {
               type: "string",
               description: "Optional JSON object encoded as a string.",
             },
-            expectedDigest: { type: "string", pattern: "^sha256:" },
+            expectedDigest: {
+              type: "string",
+              pattern: "^sha256:[0-9a-f]{64}$",
+            },
           },
           additionalProperties: false,
         },
@@ -689,6 +712,51 @@ function ref(schemaName: string): Record<string, string> {
   return { "$ref": `#/components/schemas/${schemaName}` };
 }
 
+function filterReferencedSchemas(
+  schemas: Record<string, Record<string, unknown>>,
+  paths: Record<string, OpenApiPathItem>,
+): Record<string, Record<string, unknown>> {
+  const referenced = new Set<string>();
+  collectSchemaRefs(paths, referenced);
+  const queue = [...referenced];
+  for (let i = 0; i < queue.length; i += 1) {
+    const before = referenced.size;
+    const schemaName = queue[i];
+    const schema = schemas[schemaName];
+    if (schema) collectSchemaRefs(schema, referenced);
+    if (referenced.size > before) {
+      for (const name of referenced) {
+        if (!queue.includes(name)) queue.push(name);
+      }
+    }
+  }
+  return Object.fromEntries(
+    [...referenced]
+      .sort()
+      .flatMap((schemaName) => {
+        const schema = schemas[schemaName];
+        return schema ? [[schemaName, schema] as const] : [];
+      }),
+  );
+}
+
+function collectSchemaRefs(value: unknown, output: Set<string>): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectSchemaRefs(item, output);
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  const maybeRef = record["$ref"];
+  if (typeof maybeRef === "string") {
+    const prefix = "#/components/schemas/";
+    if (maybeRef.startsWith(prefix)) {
+      output.add(maybeRef.slice(prefix.length));
+    }
+  }
+  for (const item of Object.values(record)) collectSchemaRefs(item, output);
+}
+
 function createSchemas(): Record<string, Record<string, unknown>> {
   const jsonObject = {
     type: "object",
@@ -707,9 +775,10 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     },
     additionalProperties: false,
   };
-  // Deployment / GroupHead / ProviderObservation schemas track the canonical
-  // type definitions in takosumi-contract (Core, see § 13-15).
-  const deployment = {
+  // InternalDeploymentRecord / GroupHead / ProviderObservation schemas track
+  // the internal deploy-domain records. They are intentionally separate from
+  // the public Installer API `Deployment` entity.
+  const internalDeploymentRecord = {
     type: "object",
     required: [
       "id",
@@ -806,7 +875,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         "Canonical condition reason catalog exported by takosumi-contract. CLI, app UI, API clients, controllers, and status projections must use these values for condition.reason.",
     },
     Condition: condition,
-    Deployment: deployment,
+    InternalDeploymentRecord: internalDeploymentRecord,
     GroupHead: groupHead,
     ProviderObservation: providerObservation,
     HealthResponse: {
@@ -858,11 +927,110 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: true,
     },
-    InstallerAppSpecBody: {
+    InstallerGitSourceInput: {
       type: "object",
+      required: ["kind", "url", "ref"],
+      properties: {
+        kind: { const: "git" },
+        url: { type: "string" },
+        ref: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    InstallerPreparedSourceInput: {
+      type: "object",
+      required: ["kind", "url", "digest"],
+      properties: {
+        kind: { const: "prepared" },
+        url: { type: "string" },
+        digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+      },
+      additionalProperties: false,
+    },
+    InstallerLocalSourceInput: {
+      type: "object",
+      required: ["kind", "url"],
+      properties: {
+        kind: { const: "local" },
+        url: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    InstallerSource: {
+      oneOf: [
+        ref("InstallerGitSourceInput"),
+        ref("InstallerPreparedSourceInput"),
+        ref("InstallerLocalSourceInput"),
+      ],
       description:
-        "AppSpec body as parsed from `.takosumi.yml`. See takosumi-contract `app-spec.ts` for the canonical type.",
-      additionalProperties: true,
+        "Installer source descriptor. `git` and `prepared` are remote source inputs; `local` is for dev / operator-local profiles.",
+    },
+    InstallerGitSourcePin: {
+      type: "object",
+      required: ["manifestDigest", "commit"],
+      properties: {
+        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        commit: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    InstallerPreparedSourcePin: {
+      type: "object",
+      required: ["manifestDigest", "sourceDigest"],
+      properties: {
+        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+      },
+      additionalProperties: false,
+    },
+    InstallerLocalSourcePin: {
+      type: "object",
+      required: ["manifestDigest"],
+      properties: {
+        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+      },
+      additionalProperties: false,
+    },
+    InstallerSourcePin: {
+      oneOf: [
+        ref("InstallerGitSourcePin"),
+        ref("InstallerPreparedSourcePin"),
+        ref("InstallerLocalSourcePin"),
+      ],
+    },
+    InstallerInstallationDryRunRequest: {
+      type: "object",
+      required: ["spaceId", "source"],
+      properties: {
+        spaceId: { type: "string" },
+        source: ref("InstallerSource"),
+      },
+      additionalProperties: false,
+    },
+    InstallerInstallationApplyRequest: {
+      type: "object",
+      required: ["spaceId", "source"],
+      properties: {
+        spaceId: { type: "string" },
+        source: ref("InstallerSource"),
+        expected: ref("InstallerSourcePin"),
+      },
+      additionalProperties: false,
+    },
+    InstallerDeploymentDryRunRequest: {
+      type: "object",
+      properties: {
+        source: ref("InstallerSource"),
+      },
+      additionalProperties: false,
+    },
+    InstallerDeploymentApplyRequest: {
+      type: "object",
+      properties: {
+        source: ref("InstallerSource"),
+        expected: ref("InstallerSourcePin"),
+      },
+      additionalProperties: false,
     },
     InstallerDryRunResponse: {
       type: "object",
@@ -870,23 +1038,122 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         "Installation dry-run plan. See takosumi-contract `installer-api.ts` `InstallationDryRunResponse`.",
       additionalProperties: true,
     },
-    InstallerInstallationResponse: {
+    InstallerInstallation: {
       type: "object",
+      required: [
+        "id",
+        "accountId",
+        "spaceId",
+        "appId",
+        "currentDeploymentId",
+        "status",
+        "createdAt",
+      ],
+      properties: {
+        id: { type: "string" },
+        accountId: { type: "string" },
+        spaceId: { type: "string" },
+        appId: { type: "string" },
+        currentDeploymentId: { type: "string", nullable: true },
+        status: { enum: ["installing", "ready", "failed", "suspended"] },
+        createdAt: { type: "number" },
+      },
       description:
-        "Installation / Deployment record. See takosumi-contract `installer-api.ts` `Installation` and `Deployment`.",
-      additionalProperties: true,
+        "Public Installation entity. See takosumi-contract `installer-api.ts` `Installation`.",
+      additionalProperties: false,
+    },
+    InstallerSourceSummary: {
+      type: "object",
+      required: ["kind"],
+      properties: {
+        kind: { enum: ["git", "local", "prepared"] },
+        url: { type: "string" },
+        ref: { type: "string" },
+        commit: { type: "string" },
+        digest: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    InstallerDeployment: {
+      type: "object",
+      required: [
+        "id",
+        "installationId",
+        "source",
+        "manifestDigest",
+        "status",
+        "outputs",
+        "createdAt",
+      ],
+      properties: {
+        id: { type: "string" },
+        installationId: { type: "string" },
+        source: ref("InstallerSourceSummary"),
+        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        status: { enum: ["running", "succeeded", "failed"] },
+        outputs: jsonObject,
+        createdAt: { type: "number" },
+      },
+      description:
+        "Public Deployment entity. Rollback selects a retained succeeded Deployment; it does not create another Deployment.",
+      additionalProperties: false,
+    },
+    InstallerInstallationApplyResponse: {
+      type: "object",
+      required: ["installation", "deployment"],
+      properties: {
+        installation: ref("InstallerInstallation"),
+        deployment: ref("InstallerDeployment"),
+      },
+      description:
+        "Response for creating a new Installation and its first Deployment.",
+      additionalProperties: false,
+    },
+    InstallerDeploymentApplyResponse: {
+      type: "object",
+      required: ["deployment"],
+      properties: {
+        deployment: ref("InstallerDeployment"),
+      },
+      description: "Response for applying a new Deployment to an Installation.",
+      additionalProperties: false,
+    },
+    InstallerRollbackMetadata: {
+      type: "object",
+      required: ["rolledBackFrom", "rolledBackTo"],
+      properties: {
+        rolledBackFrom: { type: "string", nullable: true },
+        rolledBackTo: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    InstallerRollbackResponse: {
+      type: "object",
+      required: ["installation", "deployment", "rollback"],
+      properties: {
+        installation: ref("InstallerInstallation"),
+        deployment: ref("InstallerDeployment"),
+        rollback: ref("InstallerRollbackMetadata"),
+      },
+      description:
+        "Response for pointer-only rollback to a retained succeeded Deployment.",
+      additionalProperties: false,
     },
     InstallerRollbackRequest: {
       type: "object",
       description:
         "Rollback request body. See takosumi-contract `installer-api.ts` `RollbackRequest`.",
-      additionalProperties: true,
+      required: ["deploymentId"],
+      properties: {
+        deploymentId: { type: "string" },
+      },
+      additionalProperties: false,
     },
     ArtifactStored: {
       type: "object",
       required: ["hash", "kind", "size", "uploadedAt"],
       properties: {
-        hash: { type: "string", pattern: "^sha256:" },
+        hash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
         kind: { type: "string" },
         size: { type: "number" },
         uploadedAt: { type: "string", format: "date-time" },
@@ -989,10 +1256,22 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         error: {
           type: "object",
-          required: ["code", "message"],
+          required: ["code", "message", "requestId"],
           properties: {
-            code: { type: "string" },
+            code: {
+              enum: [
+                "invalid_argument",
+                "unauthenticated",
+                "permission_denied",
+                "not_found",
+                "failed_precondition",
+                "resource_exhausted",
+                "not_implemented",
+                "internal_error",
+              ],
+            },
             message: { type: "string" },
+            requestId: { type: "string" },
             details: {},
           },
           additionalProperties: false,

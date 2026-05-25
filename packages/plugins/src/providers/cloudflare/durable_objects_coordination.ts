@@ -1,4 +1,4 @@
-import type { coordination } from "takosumi-contract";
+import type { coordination } from "takosumi-contract/reference/compat";
 
 export interface CloudflareDurableObjectsCoordinationClient {
   acquireLease(

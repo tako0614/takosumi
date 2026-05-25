@@ -1,6 +1,6 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/contracts/source/js-module/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/contracts/source/js-module/v1",
   "@type": "SourceInputDescriptor",
   "shortRef": "source.js-module@v1",
   "domain": "source",

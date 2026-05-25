@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { KernelPlugin } from "takosumi-contract";
+import type { KernelPlugin } from "takosumi-contract/reference/compat";
 import {
   type AppAdapters,
   buildKernelPluginRegistry,

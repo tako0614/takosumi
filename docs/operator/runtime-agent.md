@@ -1,12 +1,10 @@
-# runtime-agent 分離 {#runtime-agent}
+# Reference runtime-agent 分離 {#runtime-agent}
 
-> このページでわかること: kernel process から cloud credential / OS executor を
-> 分離し、runtime-agent host に provider operation を任せる構成。
-
-runtime-agent は kernel から lifecycle RPC を受け取り、cloud API、container
-runtime、systemd、filesystem などを操作する process です。kernel は Installation
-/ Deployment record と validation を担当し、provider credential は agent host 側
-に閉じ込めます。
+runtime-agent は reference Takosumi topology で provider operation を kernel
+process から分離する execution host です。kernel から lifecycle RPC を受け取り、
+cloud API、container runtime、systemd、filesystem などを操作します。kernel は
+Installation / Deployment record と validation を担当し、provider credential は
+agent host 側に閉じ込めます。
 
 ## いつ分離するか {#when-to-split}
 
@@ -42,12 +40,15 @@ kernel host は agent endpoint と token だけを知ります。
 export TAKOSUMI_AGENT_URL=https://agent.internal.example.com
 export TAKOSUMI_AGENT_TOKEN=...
 
-takosumi server --port 8788
+deno run -A ./server.ts
 ```
 
-operator は provider package を kernel に attach し、実際の副作用は
-runtime-agent 側の connector が実行します。agent URL は private network または
-mutual TLS を通した endpoint にしてください。
+`server.ts` は [operator bootstrap](./bootstrap.md) の reference adapter array
+(`plugins` option) 例を使い、provider package を kernel に attach します。実際の
+副作用は runtime-agent 側の connector が実行します。stock `takosumi server` は
+connectivity / dev smoke 用で、provider adapter array を読み込まないため実
+provider 操作の例には使いません。agent URL は private network 上の HTTPS
+endpoint にして ください。
 
 ## Network と token {#network-and-token}
 
@@ -65,7 +66,7 @@ agent が unreachable の場合、kernel は operation envelope を dispatch で
 condition を見て、同じ OperationPlan を continue するか、新しい Deployment
 として reconcile します。
 
-関連する内部 contract:
+関連する reference topology:
 
-- [Runtime-Agent API](../reference/runtime-agent-api.md)
+- [Reference Runtime-Agent Execution Surface](../reference/runtime-agent-api.md)
 - [Implementation / runtime-agent boundary](../reference/architecture/implementation-operation-envelope.md)

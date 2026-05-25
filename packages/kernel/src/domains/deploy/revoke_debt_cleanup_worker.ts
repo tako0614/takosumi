@@ -7,7 +7,7 @@ import {
   type PlatformOperationContext,
   type ProviderPlugin,
   type ResourceHandle,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { RevokeDebtRecord, RevokeDebtStore } from "./revoke_debt_store.ts";
 import type {
   TakosumiDeploymentRecordStore,

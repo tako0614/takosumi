@@ -11,7 +11,7 @@ import {
   type Shape,
   unregisterProvider,
   unregisterShape,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 import { destroyV2 } from "./apply_v2.ts";
 import { buildOperationPlanPreview } from "./operation_plan_preview.ts";

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { type queue, storage } from "takosumi-contract";
+import { type queue, storage } from "takosumi-contract/reference/compat";
 import {
   type CloudflareD1DatabaseBinding,
   type CloudflareDurableObjectNamespaceBinding,

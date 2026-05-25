@@ -4,12 +4,8 @@
   "@type": "ComponentKind",
   "name": "gateway",
   "version": "v1",
-  "aliases": ["gateway"],
-  "description": "HTTP listener, TLS, and routing component. A gateway listens to local upstream bindings, owns listener/domain policy in spec, and publishes the public HTTP endpoint it materializes.",
-  "x-ts": {
-    "fileBasename": "gateway",
-    "prefix": "Gateway"
-  },
+  "referenceAliases": ["gateway"],
+  "description": "HTTP listener, TLS, and routing component. A gateway listens to local upstream bindings, carries listener/domain requests in spec, and publishes the public HTTP endpoint it materializes. Operator policy and the selected implementation materialize or reject those requests.",
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -21,7 +17,6 @@
         "description": "Named HTTP listeners. A listener may request an operator-managed host and TLS policy.",
         "additionalProperties": {
           "type": "object",
-          "x-ts-name": "Listener",
           "required": ["protocol"],
           "additionalProperties": true,
           "properties": {
@@ -49,7 +44,6 @@
         "description": "Path routing rules. Each route sends requests from a listener to one listen binding name.",
         "items": {
           "type": "object",
-          "x-ts-name": "Route",
           "required": ["listener", "path", "to"],
           "additionalProperties": true,
           "properties": {
@@ -80,18 +74,12 @@
         "url": "$outputs.url",
         "host": "$outputs.host",
         "scheme": "$outputs.scheme",
-        "certificateId": "$outputs.certificateId"
+        "listener": "$outputs.listener",
+        "routes": "$outputs.routes"
       }
     }
   },
-  "listens": {
-    "upstream": {
-      "shape": "upstream",
-      "target": {
-        "DESCRIPTION": "Reads the `url` field from listened material as an upstream target. AppSpec listen options declare `from` and `as: upstream`."
-      }
-    }
-  },
+  "acceptedProjectionFamilies": ["upstream"],
   "outputs": [
     {
       "name": "url",
@@ -112,13 +100,19 @@
       "meaning": "Resolved public scheme (`http` or `https`)."
     },
     {
-      "name": "certificateId",
+      "name": "listener",
       "type": "string",
-      "required": false,
-      "meaning": "Provider-scope TLS certificate identifier when TLS is managed."
+      "required": true,
+      "meaning": "Listener name that produced the public endpoint."
+    },
+    {
+      "name": "routes",
+      "type": "object[]",
+      "required": true,
+      "meaning": "Portable route summary with pathPrefix and listen binding target."
     }
   ],
-  "capabilities": [
+  "capabilityTerms": [
     "host-routing",
     "path-routing",
     "wildcard",

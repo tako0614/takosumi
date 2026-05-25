@@ -9,7 +9,11 @@
 // `Deployment.input.manifest_snapshot` and
 // `Deployment.resolution.descriptor_closure` provide the required artefacts.
 
-import type { Deployment, GroupHead, JsonObject } from "takosumi-contract";
+import type {
+  Deployment,
+  GroupHead,
+  JsonObject,
+} from "takosumi-contract/reference/compat";
 import type {
   ResourceInstance,
   ResourceInstanceId,

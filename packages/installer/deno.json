@@ -13,7 +13,7 @@
     "test": "deno test --allow-all"
   },
   "imports": {
-    "@takos/takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
+    "@takos/takosumi-contract": "jsr:@takos/takosumi-contract@^2.6.0",
     "@std/yaml": "jsr:@std/yaml@^1.0.5"
   }
 }

@@ -2,7 +2,7 @@ import type {
   PlatformContext,
   PlatformOperationContext,
   PlatformTraceContext,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   TraceSpanEvent,
   TraceSpanKind,

@@ -1,5 +1,5 @@
-import type { CoreConditionReason } from "takosumi-contract";
-import { isCoreConditionReason } from "takosumi-contract";
+import type { CoreConditionReason } from "takosumi-contract/reference/compat";
+import { isCoreConditionReason } from "takosumi-contract/reference/compat";
 import type {
   GroupSummaryStatusProjection,
   StatusConditionDto,

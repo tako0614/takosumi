@@ -1,9 +1,10 @@
 # @takos/takosumi-kernel
 
 Control plane for the Takosumi self-host PaaS toolkit. Receives AppSpec install
-and deployment requests over HTTP, runs the apply pipeline (DAG-ordered,
-idempotent, concurrency-locked), and forwards lifecycle envelopes to a
-runtime-agent that does the actual cloud SDK / OS work.
+and deployment requests over HTTP and runs the apply pipeline (DAG-ordered,
+idempotent, concurrency-locked). The takosumi.com reference adapters forward
+lifecycle envelopes to runtime-agent; other operator bindings can use native
+controllers or operator-owned execution hosts.
 
 The kernel never holds cloud credentials.
 
@@ -100,9 +101,9 @@ list.
 ## See also
 
 - [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)
-  — executor / data plane
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
-  reference kind descriptors + adapter helpers
+  — lifecycle execution host
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official
+  catalog helpers + reference adapter helpers
 - [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — operator CLI
 - [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) —
   AppSpec / Installer API wire types

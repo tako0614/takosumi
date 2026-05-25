@@ -3,7 +3,7 @@ import {
   createFilesystemObjectStoreProvider,
   InMemoryFilesystemLifecycle,
 } from "../src/shape-providers/object-store/filesystem.ts";
-import type { PlatformContext } from "takosumi-contract";
+import type { PlatformContext } from "takosumi-contract/reference/compat";
 
 const ctx = {} as PlatformContext;
 const ROOT = "/var/lib/takos/object-store";

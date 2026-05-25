@@ -1,4 +1,4 @@
-import type { storage } from "takosumi-contract";
+import type { storage } from "takosumi-contract/reference/compat";
 
 export interface CloudflareD1StorageClient {
   readonly statements: storage.StorageStatementCatalog;

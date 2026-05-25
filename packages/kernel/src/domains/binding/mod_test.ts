@@ -16,7 +16,7 @@ import type {
   EnvInjection,
   KernelPlugin,
   NamespaceMaterial,
-} from "takosumi-contract/plugin";
+} from "takosumi-contract/reference/plugin";
 import { BindingResolver, defaultEnvInjection } from "./mod.ts";
 
 Deno.test("defaultEnvInjection expands env-shape material with a prefix", () => {
@@ -43,6 +43,19 @@ Deno.test("defaultEnvInjection without prefix emits bare upper-snake keys", () =
     material,
   );
   assert.deepEqual(injection.env, { URL: "https://w.example/" });
+});
+
+Deno.test("defaultEnvInjection serializes non-secret JSON material for env", () => {
+  const material: NamespaceMaterial = {
+    routes: [{ pathPrefix: "/", to: "app" }],
+  };
+  const injection = defaultEnvInjection(
+    { from: "public.public", as: "env", prefix: "HTTP" },
+    material,
+  );
+  assert.deepEqual(injection.env, {
+    HTTP_ROUTES: JSON.stringify([{ pathPrefix: "/", to: "app" }]),
+  });
 });
 
 Deno.test("defaultEnvInjection as: upstream surfaces material verbatim", () => {
@@ -165,7 +178,7 @@ Deno.test("BindingResolver.resolveAppSpec silently skips listens to unknown path
       web: {
         kind: "worker",
         listen: {
-          oidc: { from: "namespace:operator.identity.oidc", as: "env" },
+          oidc: { from: "operator.identity.oidc", as: "env" },
         },
       },
     },

@@ -3,10 +3,20 @@
   "version": "0.17.0",
   "license": "MIT",
   "imports": {
+    "@takos/takosumi-contract": "jsr:@takos/takosumi-contract@^2.6.0",
+    "@takos/takosumi-installer": "jsr:@takos/takosumi-installer@^0.1.0",
+    "@takos/takosumi-kernel": "jsr:@takos/takosumi-kernel@^0.14.0",
+    "@takos/takosumi-plugins": "jsr:@takos/takosumi-plugins@^0.12.0",
+    "@takos/takosumi-plugins/kinds": "jsr:@takos/takosumi-plugins@^0.12.0/kinds",
+    "@takos/takosumi-plugins/shape-providers": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers",
+    "@takos/takosumi-plugins/shape-providers/factories": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/factories",
+    "@takos/takosumi-runtime-agent": "jsr:@takos/takosumi-runtime-agent@^0.7.0",
     "@takos/takosumi-cli": "jsr:@takos/takosumi-cli@^0.15.0"
   },
   "exports": {
     ".": "./mod.ts",
+    "./contract": "./contract.ts",
+    "./installer": "./installer.ts",
     "./kernel": "./kernel.ts",
     "./plugins": "./plugins.ts",
     "./kinds": "./kinds.ts",

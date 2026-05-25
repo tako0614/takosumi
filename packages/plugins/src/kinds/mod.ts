@@ -1,9 +1,8 @@
 /**
- * Reference component kind registry. The `worker / web-service / postgres /
- * object-store / gateway` descriptors are distributed by
- * `@takos/takosumi-plugins`,
- * not by the Takosumi AppSpec contract. Operators opt into these aliases and
- * descriptors explicitly when they want the Takos-published reference set.
+ * takosumi.com official catalog descriptor helpers. The `worker /
+ * web-service / postgres / object-store / gateway` descriptors are distributed
+ * by `@takos/takosumi-plugins`. Operators opt into these descriptors and short
+ * aliases explicitly when they want the takosumi.com official catalog set.
  *
  * Each reference kind exports a `*Kind` descriptor; the reference installer
  * pipeline materializes components through provider adapters keyed off the
@@ -12,26 +11,26 @@
  * `oidc` is supplied by an operator account plane rather than by the Takosumi
  * AppSpec contract.
  */
-import { registerShape, type Shape } from "takosumi-contract";
+import { registerShape, type Shape } from "takosumi-contract/reference/shape";
 import { WebServiceKind } from "./web-service.ts";
 import { ObjectStoreKind } from "./object-store.ts";
 import { DatabasePostgresKind } from "./database-postgres.ts";
 import { GatewayKind } from "./gateway.ts";
 import { WorkerKind } from "./worker.ts";
-import { GATEWAY_KIND_ID, GATEWAY_KIND_URI } from "./gateway.generated.ts";
+import { GATEWAY_KIND_NAME, GATEWAY_KIND_URI } from "./gateway.generated.ts";
 import {
-  DATABASE_POSTGRES_KIND_ID,
+  DATABASE_POSTGRES_KIND_NAME,
   DATABASE_POSTGRES_KIND_URI,
 } from "./database-postgres.generated.ts";
 import {
-  OBJECT_STORE_KIND_ID,
+  OBJECT_STORE_KIND_NAME,
   OBJECT_STORE_KIND_URI,
 } from "./object-store.generated.ts";
 import {
-  WEB_SERVICE_KIND_ID,
+  WEB_SERVICE_KIND_NAME,
   WEB_SERVICE_KIND_URI,
 } from "./web-service.generated.ts";
-import { WORKER_KIND_ID, WORKER_KIND_URI } from "./worker.generated.ts";
+import { WORKER_KIND_NAME, WORKER_KIND_URI } from "./worker.generated.ts";
 
 export {
   DatabasePostgresKind,
@@ -42,52 +41,56 @@ export {
 };
 
 export type {
-  GatewayCapability,
+  GatewayCapabilityTerm,
   GatewayOutputs,
   GatewaySpec,
 } from "./gateway.ts";
 export type {
-  DatabasePostgresCapability,
+  DatabasePostgresCapabilityTerm,
   DatabasePostgresOutputs,
   DatabasePostgresSize,
   DatabasePostgresSpec,
   DatabasePostgresStorage,
 } from "./database-postgres.ts";
 export type {
-  ObjectStoreCapability,
+  ObjectStoreCapabilityTerm,
   ObjectStoreOutputs,
   ObjectStoreSpec,
 } from "./object-store.ts";
 export type {
-  WebServiceCapability,
+  WebServiceCapabilityTerm,
   WebServiceOutputs,
   WebServiceResources,
   WebServiceScale,
   WebServiceSpec,
 } from "./web-service.ts";
-export type { WorkerCapability, WorkerOutputs, WorkerSpec } from "./worker.ts";
+export type {
+  WorkerCapabilityTerm,
+  WorkerOutputs,
+  WorkerSpec,
+} from "./worker.ts";
 
 export type TakosumiReferenceKindName =
-  | typeof WORKER_KIND_ID
-  | typeof WEB_SERVICE_KIND_ID
-  | typeof DATABASE_POSTGRES_KIND_ID
-  | typeof OBJECT_STORE_KIND_ID
-  | typeof GATEWAY_KIND_ID;
+  | typeof WORKER_KIND_NAME
+  | typeof WEB_SERVICE_KIND_NAME
+  | typeof DATABASE_POSTGRES_KIND_NAME
+  | typeof OBJECT_STORE_KIND_NAME
+  | typeof GATEWAY_KIND_NAME;
 
 /**
- * Reference component kind URI aliases published by Takos on takosumi.com.
- * These URLs are external registry descriptors, not contract-owned definitions in the
- * Takosumi AppSpec contract.
+ * Official component kind URI map for takosumi.com catalog descriptors.
+ * The short keys are operator-adopted aliases, not alias authority carried by
+ * the descriptor documents themselves.
  */
 export const TAKOSUMI_REFERENCE_KIND_URIS: Readonly<
   Record<TakosumiReferenceKindName, string>
 > = Object.freeze(
   {
-    [WORKER_KIND_ID]: WORKER_KIND_URI,
-    [WEB_SERVICE_KIND_ID]: WEB_SERVICE_KIND_URI,
-    [DATABASE_POSTGRES_KIND_ID]: DATABASE_POSTGRES_KIND_URI,
-    [OBJECT_STORE_KIND_ID]: OBJECT_STORE_KIND_URI,
-    [GATEWAY_KIND_ID]: GATEWAY_KIND_URI,
+    [WORKER_KIND_NAME]: WORKER_KIND_URI,
+    [WEB_SERVICE_KIND_NAME]: WEB_SERVICE_KIND_URI,
+    [DATABASE_POSTGRES_KIND_NAME]: DATABASE_POSTGRES_KIND_URI,
+    [OBJECT_STORE_KIND_NAME]: OBJECT_STORE_KIND_URI,
+    [GATEWAY_KIND_NAME]: GATEWAY_KIND_URI,
   } as const,
 );
 
@@ -95,7 +98,7 @@ export const TAKOSUMI_REFERENCE_KIND_ALIASES: Readonly<Record<string, string>> =
   TAKOSUMI_REFERENCE_KIND_URIS;
 
 /**
- * The reference catalog: external kinds backed by JSON-LD in
+ * The takosumi.com official catalog helpers: external kind descriptors backed by JSON-LD in
  * `packages/plugins/spec/kinds/v1/*.jsonld`.
  */
 export const TAKOSUMI_REFERENCE_KINDS: readonly Shape[] = [

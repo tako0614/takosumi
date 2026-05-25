@@ -3,7 +3,7 @@ import type {
   TraceSpanEvent,
   TraceSpanKind,
   TraceSpanStatus,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 
 export const TRACEPARENT_HEADER = "traceparent" as const;
 export const REQUEST_ID_HEADER = "x-request-id" as const;

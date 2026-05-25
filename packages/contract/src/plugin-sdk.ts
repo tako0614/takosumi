@@ -14,7 +14,13 @@ import {
   TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
 } from "./runtime-agent.ts";
 
-export type PublicDeployManifest = JsonObject;
+// Reference deploy-core manifest shape used by adapter bridges.
+export type ReferenceDeployManifest = JsonObject;
+
+/**
+ * @deprecated Use ReferenceDeployManifest for new reference adapter code.
+ */
+export type PublicDeployManifest = ReferenceDeployManifest;
 
 export type TakosumiProcessRole =
   | "takosumi-api"

@@ -1,4 +1,7 @@
-import type { Shape, ShapeValidationIssue } from "takosumi-contract";
+import type {
+  Shape,
+  ShapeValidationIssue,
+} from "takosumi-contract/reference/shape";
 import {
   isNonNegativeInteger,
   isPositiveInteger,
@@ -10,12 +13,12 @@ import {
   requireRoot,
 } from "./_validators.ts";
 import {
-  WEB_SERVICE_CAPABILITIES,
+  WEB_SERVICE_CAPABILITY_TERMS,
   WEB_SERVICE_DESCRIPTION,
-  WEB_SERVICE_KIND_ID,
+  WEB_SERVICE_KIND_SHAPE_ID,
   WEB_SERVICE_KIND_VERSION,
   WEB_SERVICE_OUTPUT_FIELDS,
-  type WebServiceCapability,
+  type WebServiceCapabilityTerm,
   type WebServiceOutputs,
   type WebServiceResources,
   type WebServiceScale,
@@ -23,7 +26,7 @@ import {
 } from "./web-service.generated.ts";
 
 export type {
-  WebServiceCapability,
+  WebServiceCapabilityTerm,
   WebServiceOutputs,
   WebServiceResources,
   WebServiceScale,
@@ -37,12 +40,12 @@ export type {
 export const WebServiceKind: Shape<
   WebServiceSpec,
   WebServiceOutputs,
-  WebServiceCapability
+  WebServiceCapabilityTerm
 > = {
-  id: WEB_SERVICE_KIND_ID,
+  id: WEB_SERVICE_KIND_SHAPE_ID,
   version: WEB_SERVICE_KIND_VERSION,
   description: WEB_SERVICE_DESCRIPTION,
-  capabilities: WEB_SERVICE_CAPABILITIES,
+  capabilityTerms: WEB_SERVICE_CAPABILITY_TERMS,
   outputFields: WEB_SERVICE_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;

@@ -1,6 +1,6 @@
 /**
  * Phase H import smoke — verify each cloud provider package re-exports a
- * `KernelPlugin` factory that satisfies the public contract surface and is
+ * `KernelPlugin` factory that satisfies the reference materializer surface and is
  * attachable to `createPaaSApp({ kindAliases, plugins })`.
  *
  * Goal: kernel core (`packages/kernel/`) has no cloud SDK import, but the 6

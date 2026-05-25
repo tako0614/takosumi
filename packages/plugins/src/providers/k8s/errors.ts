@@ -182,7 +182,7 @@ function defaultRetryable(code: K8sErrorCode): boolean {
  * provider-agnostic {@link ProviderErrorCategory} so kernel-side retry policy
  * can branch uniformly across all four clouds.
  */
-import type { ProviderErrorCategory } from "takosumi-contract";
+import type { ProviderErrorCategory } from "takosumi-contract/reference/compat";
 
 export function k8sErrorCodeToProviderCategory(
   code: K8sErrorCode,

@@ -6,9 +6,9 @@ import type {
   router,
   secretStore,
   storage,
-} from "takosumi-contract";
-import type { RuntimeAgentRegistry } from "takosumi-contract";
-import type { ObservabilitySink } from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
+import type { RuntimeAgentRegistry } from "takosumi-contract/reference/compat";
+import type { ObservabilitySink } from "takosumi-contract/reference/compat";
 
 export interface GcpStorageClient {
   readonly statements: storage.StorageStatementCatalog;

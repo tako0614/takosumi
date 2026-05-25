@@ -1,4 +1,4 @@
-import type { TakosumiActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import type { ActorAdapter, AuthPort, AuthResult } from "./types.ts";
 
 export interface LocalActorAuthAdapterOptions {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { ShapeValidationIssue } from "takosumi-contract";
+import type { ShapeValidationIssue } from "takosumi-contract/reference/compat";
 import { GatewayKind } from "../src/kinds/gateway.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
@@ -52,12 +52,19 @@ Deno.test("Gateway validateOutputs accepts public endpoint output", () => {
       url: "https://api.example.com",
       host: "api.example.com",
       scheme: "https",
+      listener: "public",
+      routes: [{ pathPrefix: "/", to: "upstream" }],
     }),
     [],
   );
 });
 
 Deno.test("Gateway validateOutputs rejects missing url", () => {
-  const issues = outputIssues({ host: "api.example.com", scheme: "https" });
+  const issues = outputIssues({
+    host: "api.example.com",
+    scheme: "https",
+    listener: "public",
+    routes: [{ pathPrefix: "/", to: "upstream" }],
+  });
   assert.ok(issues.some((i) => i.path === "$.url"));
 });

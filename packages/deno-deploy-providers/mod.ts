@@ -1,6 +1,6 @@
 /**
  * `@takos/takosumi-deno-deploy-providers` — Deno Deploy-backed
- * `KernelPlugin` factories for the `worker` component kind.
+ * `KernelPlugin` factories for the operator-opt-in `worker` reference kind URI.
  *
  * Phase D extracted this factory out of `@takos/takosumi-plugins` reference registry
  * so Takosumi core no longer carries cloud-coupled imports. Operators that

@@ -1,4 +1,7 @@
-import type { Shape, ShapeValidationIssue } from "takosumi-contract";
+import type {
+  Shape,
+  ShapeValidationIssue,
+} from "takosumi-contract/reference/shape";
 import {
   isPositiveInteger,
   isRecord,
@@ -8,19 +11,19 @@ import {
   requireRoot,
 } from "./_validators.ts";
 import {
-  DATABASE_POSTGRES_CAPABILITIES,
+  DATABASE_POSTGRES_CAPABILITY_TERMS,
   DATABASE_POSTGRES_DESCRIPTION,
-  DATABASE_POSTGRES_KIND_ID,
+  DATABASE_POSTGRES_KIND_SHAPE_ID,
   DATABASE_POSTGRES_KIND_VERSION,
   DATABASE_POSTGRES_OUTPUT_FIELDS,
-  type DatabasePostgresCapability,
+  type DatabasePostgresCapabilityTerm,
   type DatabasePostgresOutputs,
   type DatabasePostgresSpec,
   type DatabasePostgresStorage,
 } from "./database-postgres.generated.ts";
 
 export type {
-  DatabasePostgresCapability,
+  DatabasePostgresCapabilityTerm,
   DatabasePostgresOutputs,
   DatabasePostgresSpec,
   DatabasePostgresStorage,
@@ -46,7 +49,7 @@ const SIZES: ReadonlySet<string> = new Set(
  * keep the implementation unambiguous, but the reader-facing kind name is
  * derived from `packages/plugins/spec/kinds/v1/postgres.jsonld`.
  *
- * Spec / outputs / capabilities are derived from
+ * Spec / outputs / capability terms are derived from
  * `packages/plugins/spec/kinds/v1/postgres.jsonld` via
  * `database-postgres.generated.ts`; validation diagnostics are
  * hand-written below.
@@ -54,12 +57,12 @@ const SIZES: ReadonlySet<string> = new Set(
 export const DatabasePostgresKind: Shape<
   DatabasePostgresSpec,
   DatabasePostgresOutputs,
-  DatabasePostgresCapability
+  DatabasePostgresCapabilityTerm
 > = {
-  id: DATABASE_POSTGRES_KIND_ID,
+  id: DATABASE_POSTGRES_KIND_SHAPE_ID,
   version: DATABASE_POSTGRES_KIND_VERSION,
   description: DATABASE_POSTGRES_DESCRIPTION,
-  capabilities: DATABASE_POSTGRES_CAPABILITIES,
+  capabilityTerms: DATABASE_POSTGRES_CAPABILITY_TERMS,
   outputFields: DATABASE_POSTGRES_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;

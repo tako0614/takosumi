@@ -1,5 +1,5 @@
 /**
- * Runtime agent (remote) RPC contract — Phase 17B.
+ * Reference/operator-internal runtime-agent RPC DTOs — Phase 17B.
  *
  * The kernel ↔ remote runtime-agent JSON / HTTP RPC. A runtime-agent is a
  * lightweight process that runs *inside* the operator-owned tenant cloud
@@ -22,13 +22,13 @@
  *   - {@link RuntimeAgentWorkLease} — work lease distribution
  *   - {@link RuntimeAgentHeartbeat} — periodic liveness
  *   - {@link RuntimeAgentReport} — operation result (progress / success / failure)
- *   - {@link RUNTIME_AGENT_RPC_PATHS} — canonical HTTP routes the kernel exposes
+ *   - {@link RUNTIME_AGENT_RPC_PATHS} — reference internal HTTP routes
  */
 
 import type { JsonObject } from "./types.ts";
 
 /**
- * Canonical HTTP endpoint paths the kernel exposes for runtime-agent RPC.
+ * Reference internal HTTP endpoint paths for runtime-agent RPC.
  *
  * Every path is prefixed with `/api/internal/v1/runtime/agents/` and is signed
  * with the same internal-auth scheme as other internal RPC calls.
@@ -122,8 +122,8 @@ export interface RuntimeAgentRegistration {
   readonly capabilities: RuntimeAgentCapabilitiesPayload;
   /**
    * SHA-256 hex digest of the agent's host key (long-lived per machine).
-   * Used to detect impersonation across re-enrollments. Optional during
-   * Phase 17B; required once mTLS gateway is in place.
+   * Used by reference operators that keep a host-key registry across
+   * re-enrollments.
    */
   readonly hostKeyDigest?: string;
   /** Agent runtime metadata (binary version, region, az, ...). */

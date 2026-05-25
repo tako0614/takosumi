@@ -4,7 +4,7 @@ import type {
   DeploymentStatus,
   GroupHead,
   ProviderObservation,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 
 export type DeploymentMode = "preview" | "resolve" | "apply" | "rollback";
 

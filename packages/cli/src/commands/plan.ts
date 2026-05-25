@@ -15,7 +15,7 @@ function createPlanCommand() {
     .arguments("[source:string]")
     .option(
       "--source <source:string>",
-      "git:, catalog:, bundle:, prepared:, or local path",
+      "git:, prepared:, or local path",
     )
     .option("--space <spaceId:string>", "Target Space id", { required: true })
     .option("--remote <url:string>", "Remote kernel URL")

@@ -35,19 +35,21 @@ import type {
   Installation,
   SourceSummary,
 } from "./installer-api.ts";
+import type { JsonValue } from "./types.ts";
 
 export interface KernelPlugin {
   /** Plugin id, e.g. `"@takos/cloudflare-workers"`. */
   readonly name: string;
   readonly version: string;
   /**
-   * Canonical URIs of the component kinds this plugin can materialize.
-   * Must match the `@id` of the corresponding JSON-LD kind document.
-   * The installer resolves `Component.kind` against `provides[]` to pick
-   * the plugin for each component during `apply`.
+   * Operator-resolved kind URIs this plugin can materialize.
+   * The installer resolves `Component.kind` through the operator alias map
+   * and matches the resulting URI against `provides[]` during `apply`.
+   * JSON-LD is the takosumi.com reference descriptor metadata format, not a
+   * required authority for every implementation.
    *
    * Examples:
-   *   - `["https://takosumi.com/kinds/v1/worker"]` (Takos reference registry)
+   *   - `["https://takosumi.com/kinds/v1/worker"]` (takosumi.com reference descriptor)
    *   - `["https://operator.example.com/kinds/lambda"]` (operator-defined)
    */
   readonly provides: readonly string[];
@@ -122,7 +124,7 @@ export interface KernelPlugin {
 
 /**
  * Materializer = arbitrary code that materializes a kind URI and
- * participates in the pub/sub namespace registry. {@link KernelPlugin} is
+ * participates in the publication/listen material registry. {@link KernelPlugin} is
  * the conventional packaging — `name` / `version` / lifecycle hooks — but
  * inline functions and operator-defined raw code can attach to the same
  * kernel surface via {@link InlineMaterializer}.
@@ -138,7 +140,7 @@ export type Materializer = KernelPlugin | InlineMaterializer;
 export interface InlineMaterializer {
   /** Canonical kind URIs this materializer handles. */
   readonly provides: readonly string[];
-  /** Optional short-name aliases (mirror of JSON-LD `aliases`). */
+  /** Optional short-name aliases supplied by operator tooling / alias maps. */
   readonly aliases?: readonly string[];
   apply(ctx: KernelPluginApplyContext): Promise<KernelPluginApplyResult>;
   publishMaterial?(
@@ -148,17 +150,17 @@ export interface InlineMaterializer {
 }
 
 /**
- * Payload published through a local publication. Keys are
- * material field names (e.g. `url`, `host`, `port`) and values are
- * either literal strings or `{ secretRef }` references to entries in
- * the operator secret store.
+ * Payload published through a local publication. Keys are material field names
+ * (e.g. `url`, `host`, `routes`) and values are non-secret JSON material values
+ * or `{ secretRef }` references to entries in the operator secret store.
  *
  * Treated as opaque by the kernel; consumers (= listening plugins'
- * `applyListen`) interpret the payload according to the source kind's
- * JSON-LD publication contract.
+ * `applyListen`) interpret the payload through the source material contract,
+ * operator descriptor metadata, and implementation binding. JSON-LD is the
+ * takosumi.com reference metadata form when an operator chooses to use it.
  */
 export type NamespaceMaterial = Readonly<
-  Record<string, string | { readonly secretRef: string }>
+  Record<string, JsonValue | { readonly secretRef: string }>
 >;
 
 /**
@@ -210,7 +212,7 @@ export interface KernelPluginApplyContext {
   /**
    * Materials this component listens to, keyed by the local binding name as
    * declared in `Component.listen`. Pre-resolved by the installer from
-   * local publications or external namespace exports; the listening plugin's
+   * local publications or Space-visible external publications; the listening plugin's
    * `applyListen` has
    * already been invoked and the resulting env / mount / target
    * descriptors are merged into the runtime environment.
@@ -236,11 +238,12 @@ export interface KernelPluginApplyResult {
    */
   readonly resourceHandle: string;
   /**
-   * Outputs surfaced to the material registry via subsequent
-   * `publishMaterial()` calls. Plugins MAY return any string-valued
-   * map; the keys typically match the kind's JSON-LD `outputs[].name`.
+   * Outputs persisted on Deployment evidence and surfaced to the material
+   * registry via subsequent `publishMaterial()` calls. Plugins may return any
+   * JSON-valued map; the keys typically match the kind descriptor's
+   * `outputs[].name`.
    */
-  readonly outputs: Readonly<Record<string, string>>;
+  readonly outputs: Readonly<Record<string, JsonValue>>;
 }
 
 export interface PublishMaterialContext {
@@ -252,7 +255,7 @@ export interface PublishMaterialContext {
   /** Per-publication options as declared in AppSpec. */
   readonly options: PublishOptions;
   /** Outputs from the preceding `apply()` call for this component. */
-  readonly outputs: Readonly<Record<string, string>>;
+  readonly outputs: Readonly<Record<string, JsonValue>>;
 }
 
 export interface ApplyListenContext {
@@ -262,7 +265,7 @@ export interface ApplyListenContext {
   readonly component: Component;
   /** Local binding name being resolved. */
   readonly bindingName: BindingName;
-  /** Source publication or external namespace export being listened to. */
+  /** Source publication or external publication path being listened to. */
   readonly sourceRef: ListenSourceRef;
   /** Per-listen options as declared in AppSpec. */
   readonly options: ListenOptions;

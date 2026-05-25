@@ -1,16 +1,15 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/descriptors/authoring/public-manifest-expansion/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/descriptors/authoring/public-manifest-expansion/v1",
   "@type": "takosumi:AuthoringExpansionDescriptor",
   "shortRef": "authoring.public-manifest-expansion@v1",
   "domain": "authoring",
   "lifecycleDomain": "shape-derivation",
   "changeEffect": "shape-derivation",
-  "description": "Public deploy manifest authoring expansion into canonical Core AppSpec, EnvSpec, and PolicySpec records before Plan.",
+  "description": "Reference kernel internal authoring expansion from deploy manifest input into AppSpec resolution input and operator policy snapshot before planning.",
   "expandsTo": [
-    "takosumi.com/v1 App",
-    "takosumi.com/v1 Environment",
-    "takosumi.com/v1 Policy"
+    "AppSpec",
+    "operator policy snapshot"
   ],
   "invariants": [
     "expansion-before-plan",

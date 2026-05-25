@@ -13,7 +13,7 @@
 // service, status projector). This file now focuses solely on the
 // resolve -> phase-boundary check -> apply sequencing.
 
-import type { Deployment, GroupHead } from "takosumi-contract";
+import type { Deployment, GroupHead } from "takosumi-contract/reference/compat";
 import type {
   DeployBlockerSource,
   DeploySourceRef,

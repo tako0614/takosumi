@@ -1,4 +1,7 @@
-import type { ActorContext, JsonObject } from "takosumi-contract";
+import type {
+  ActorContext,
+  JsonObject,
+} from "takosumi-contract/reference/compat";
 import type { AuditEvent } from "../../domains/audit/types.ts";
 import type {
   SqlClient,

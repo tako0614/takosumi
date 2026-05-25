@@ -1,18 +1,18 @@
 /**
- * `ArtifactFetcher` — connector-side port for retrieving artifact bytes from
- * the kernel's `/v1/artifacts` store.
+ * `ArtifactFetcher` — connector-side port for retrieving DataAsset bytes from
+ * an operator-mounted `/v1/artifacts` endpoint.
  *
- * The kernel embeds an `ArtifactStoreLocator` (`baseUrl`, `token`) in every
- * `LifecycleApplyRequest`. The runtime-agent server materialises that into a
- * `HttpArtifactFetcher` and threads it through `ConnectorContext.fetcher` so
- * connectors that need to push bytes to a downstream registry / runtime can
- * stream them on demand.
+ * When the optional DataAsset extension is enabled, the dispatcher may include
+ * an `ArtifactStoreLocator` (`baseUrl`, `token`) in `LifecycleApplyRequest`.
+ * The runtime-agent server materialises that into a `HttpArtifactFetcher` and
+ * threads it through `ConnectorContext.fetcher` so connectors that need to push
+ * bytes to a downstream registry / runtime can stream them on demand.
  *
  * Connectors that take only pointer artifacts (`oci-image` URI, managed
  * services with no artifact at all) can ignore the fetcher entirely.
  */
 
-import type { JsonObject } from "takosumi-contract";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 
 export interface FetchedArtifact {
   readonly bytes: Uint8Array;

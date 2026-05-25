@@ -3,8 +3,8 @@
 // the clone through the store classes, and either swaps the clone in
 // (commit) or discards it (rollback).
 
-import type { Deployment, GroupHead } from "takosumi-contract";
-import type { ProviderObservation as CoreProviderObservation } from "takosumi-contract";
+import type { Deployment, GroupHead } from "takosumi-contract/reference/compat";
+import type { ProviderObservation as CoreProviderObservation } from "takosumi-contract/reference/compat";
 import type { AuditEvent, AuditEventId } from "../../../domains/audit/types.ts";
 import type {
   Group,

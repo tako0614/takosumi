@@ -1,4 +1,4 @@
-import type { source } from "takosumi-contract";
+import type { source } from "takosumi-contract/reference/compat";
 import {
   bytesFromBody,
   freezeClone,

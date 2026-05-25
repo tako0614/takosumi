@@ -3,7 +3,7 @@ import {
   getShape,
   isShapeRegistered,
   unregisterShape,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   registerTakosumiReferenceKinds,
   TAKOSUMI_REFERENCE_KINDS,

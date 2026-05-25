@@ -1,6 +1,6 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/providers/gcp/load-balancer/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/providers/gcp/load-balancer/v1",
   "@type": "ProviderCapabilityDescriptor",
   "shortRef": "provider.gcp.load-balancer@v1",
   "materializationProfiles": [

@@ -19,7 +19,7 @@
 // closure + resolved graph + AppSpec), so apply consumes its output verbatim
 // without re-deriving binding shapes from raw descriptors.
 
-import { objectAddress } from "takosumi-contract";
+import { objectAddress } from "takosumi-contract/reference/compat";
 import type {
   CoreAccessModeRef,
   CoreAccessPathStage,
@@ -37,7 +37,7 @@ import type {
   DeploymentRuntimeNetworkPolicy,
   IsoTimestamp,
   ObjectAddress,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   AppSpec,
   AppSpecComponent,

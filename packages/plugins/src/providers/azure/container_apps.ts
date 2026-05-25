@@ -12,8 +12,8 @@
  * gateway). The materializer only translates a `RuntimeDesiredState` into
  * apply / remove calls and records `ProviderOperation` entries.
  */
-import type { provider } from "takosumi-contract";
-import type { RuntimeDesiredState } from "takosumi-contract";
+import type { provider } from "takosumi-contract/reference/compat";
+import type { RuntimeDesiredState } from "takosumi-contract/reference/compat";
 
 export interface AzureContainerAppsClient {
   apply(

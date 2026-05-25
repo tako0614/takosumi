@@ -11,12 +11,12 @@ import {
   RuntimeAgentGatewayManifestIssuer,
   type RuntimeAgentRegistry,
   type TraceSpanEvent,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   registerRuntimeAgentRoutes,
   TAKOSUMI_RUNTIME_AGENT_PATHS,
-} from "takosumi-contract";
-import type { TakosumiActorContext } from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
+import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import {
   GatewayManifestVerificationError,
   GatewayResponseSignatureError,

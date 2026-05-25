@@ -1,25 +1,35 @@
 # ストレージスキーマ {#storage-schema}
 
-このページは Takosumi kernel が扱う logical record の索引です。実際の storage
-backend は Postgres / SQLite / D1 / in-memory など operator が選べますが、record
-の意味と lifecycle boundary はここで揃えます。
+このページは Takosumi core records と reference/operator extension records の
+索引です。実際の storage backend は Postgres / SQLite / D1 / in-memory など
+operator が選べますが、record の意味と lifecycle boundary はここで揃えます。
 
 Account、billing、OIDC issuer、customer onboarding、support workflow の record
 は operator account-plane 側の storage schema に置きます。
 
-## Reference deployment snapshots
+## Core Records
 
-| Record               | 役割                                                                                            |
-| -------------------- | ----------------------------------------------------------------------------------------------- |
-| `ResolutionSnapshot` | AppSpec component、kind、provider、publication / binding の解決結果を固定する。                 |
-| `DesiredSnapshot`    | apply で実現したい desired state。provider side effect の input になる。                        |
-| `OperationPlan`      | Deployment で実行する operation の順序と依存関係。                                              |
-| `ActivationSnapshot` | active routing / traffic assignment。health は ObservationSet と Deployment evidence 側に残す。 |
+| Record         | 役割                                                                                                             |
+| -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `Installation` | AppSpec が Space に installed された core record。current pointer を持つ。                                       |
+| `Deployment`   | 1 回の apply / rollback target になる result record。source identity、status、public/non-secret outputs を持つ。 |
 
-snapshot は Deployment に紐づきます。rollback は過去 snapshot を根拠に新しい
-Deployment を作ります。
+## Reference Kernel Retained Evidence Records
 
-## Journal と lock
+| Record               | 役割                                                                                          |
+| -------------------- | --------------------------------------------------------------------------------------------- |
+| `ResolutionSnapshot` | AppSpec component、kind、provider、publication / binding の解決結果を固定する。               |
+| `DesiredSnapshot`    | apply で実現したい desired state。provider side effect の input になる。                      |
+| `OperationPlan`      | Deployment で実行する operation の順序と依存関係。                                            |
+| `ActivationSnapshot` | active routing / traffic assignment。health は ObservationSet と retained evidence 側に残す。 |
+
+snapshot は reference kernel が Deployment に紐づく implementation/operator
+evidence を説明するための内部 record です。public Deployment wire に portable な
+top-level `evidence` field はありません。rollback は retained Deployment を
+current pointer として再選択し、rollback metadata / audit を記録します。
+Deployment record は追加しません。
+
+## Core Journal And Lock Records
 
 | Record               | 役割                                                                      |
 | -------------------- | ------------------------------------------------------------------------- |
@@ -28,9 +38,9 @@ Deployment を作ります。
 | `LockRecord`         | cross-process lock adapter が使う generic lock row。                      |
 
 詳細は [WAL Stages](./wal-stages.md) と
-[Cross-Process Locks](./cross-process-locks.md) を参照してください。
+[Cross-Process Locks](./cross-process-locks.md)。
 
-## Policy と安全性
+## Reference Policy And Safety Records
 
 | Record           | 役割                                              |
 | ---------------- | ------------------------------------------------- |
@@ -39,10 +49,11 @@ Deployment を作ります。
 | `DriftIndex`     | observed state と desired state の drift index。  |
 | `ObservationSet` | provider / runtime observation の現在値。         |
 
-これらは kernel が apply / observe / recovery を fail-safe に進めるための record
-です。顧客向け approval UI や account role model は含みません。
+これらは reference implementation が apply / observe / recovery を fail-safe に
+進めるための record です。顧客向け approval UI や account role model は operator
+account plane が所有します。
 
-## Implementation、connector、DataAsset
+## Reference Implementation, Connector, And DataAsset Records
 
 | Record                         | 役割                                                                                 |
 | ------------------------------ | ------------------------------------------------------------------------------------ |
@@ -52,8 +63,8 @@ Deployment を作ります。
 | `DataAssetRecord`              | optional operator DataAsset extension の digest、size、retention metadata。          |
 | `SecretPartitionReference`     | secret store partition の logical reference。secret value は secret backend に置く。 |
 
-DataAsset retention は [DataAsset GC](./artifact-gc.md)、connector envelope は
-[Connector Guide](./connector-contract.md) を参照してください。
+DataAsset retention は [DataAsset GC](./data-asset-gc.md)、connector envelope は
+[Connector Guide](./connector-contract.md)。
 
 ## Audit
 
@@ -63,8 +74,9 @@ payload の詳細は [Audit Events](./audit-events.md) にあります。
 ## 実装の自由度
 
 この schema は logical model です。backend 固有の table 名、index 名、
-partitioning、compaction strategy は実装の自由度に含まれます。ただし次の互換性は
-保ちます。
+partitioning、compaction strategy は実装の自由度に含まれます。Takosumi core の
+portable record は Installation と Deployment です。下の項目は reference kernel
+や operator ledger が採用する consistency / audit pattern です。
 
 - Deployment を再構成できる snapshot と journal を保持する。
 - apply / rollback の同時実行を lock で防ぐ。
@@ -76,6 +88,6 @@ partitioning、compaction strategy は実装の自由度に含まれます。た
 - [Lifecycle Protocol](./lifecycle.md)
 - [WAL Stages](./wal-stages.md)
 - [Audit Events](./audit-events.md)
-- [DataAsset GC](./artifact-gc.md)
+- [DataAsset GC](./data-asset-gc.md)
 - [Secret Partitions](./secret-partitions.md)
 - [Drift Detection](./drift-detection.md)

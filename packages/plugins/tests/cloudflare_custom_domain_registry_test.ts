@@ -17,7 +17,7 @@
  *   - registry-less materializer skips reservation checks
  */
 import assert from "node:assert/strict";
-import type { RuntimeDesiredState } from "takosumi-contract";
+import type { RuntimeDesiredState } from "takosumi-contract/reference/compat";
 import {
   type CloudflareCustomDomainClient,
   type CloudflareCustomDomainMaterializationInput,

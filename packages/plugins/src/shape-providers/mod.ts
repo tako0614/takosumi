@@ -8,8 +8,8 @@
  * that want a self-contained workflow without spinning up an agent.
  */
 
-import { registerProvider } from "takosumi-contract";
-import type { ProviderPlugin } from "takosumi-contract";
+import { registerProvider } from "takosumi-contract/reference/provider-plugin";
+import type { ProviderPlugin } from "takosumi-contract/reference/provider-plugin";
 import {
   createAwsS3ObjectStoreProvider,
   InMemoryAwsS3Lifecycle,

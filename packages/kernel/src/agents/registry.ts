@@ -3,7 +3,7 @@ import {
   type GatewayManifest,
   type SignedGatewayManifest,
   signGatewayManifest,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   CompleteRuntimeAgentWorkInput,
   DetectStaleAgentsInput,

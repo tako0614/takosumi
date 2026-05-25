@@ -17,7 +17,10 @@
  * the `runtime` option each provider exposes.
  */
 
-import type { provider, ProviderErrorCategory } from "takosumi-contract";
+import type {
+  provider,
+  ProviderErrorCategory,
+} from "takosumi-contract/reference/compat";
 
 /**
  * Classified GCP API condition. The discriminant maps onto well-known status

@@ -4,13 +4,14 @@ import type {
   LifecycleApplyResponse,
   LifecycleDescribeResponse,
   LifecycleDestroyResponse,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { Connector } from "./connector.ts";
 import { withConnectorResilience } from "./resilience.ts";
 
 const applyReq: LifecycleApplyRequest = {
   shape: "object-store@v1",
   provider: "@takos/test",
+  spaceId: "space:test",
   resourceName: "bucket",
   spec: { name: "bucket" },
 };

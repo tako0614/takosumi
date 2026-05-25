@@ -1,6 +1,6 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/providers/aws/target-group/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/providers/aws/target-group/v1",
   "@type": "ProviderCapabilityDescriptor",
   "shortRef": "provider.aws.target-group@v1",
   "materializationProfiles": [

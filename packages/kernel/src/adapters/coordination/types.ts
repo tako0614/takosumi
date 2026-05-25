@@ -1,4 +1,4 @@
-import type { JsonObject } from "takosumi-contract";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 
 export interface CoordinationLease {
   readonly scope: string;

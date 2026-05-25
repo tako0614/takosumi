@@ -1,4 +1,4 @@
-import type { Shape } from "takosumi-contract";
+import type { Shape } from "takosumi-contract/reference/shape";
 import {
   isNonEmptyString,
   isRecord,
@@ -7,17 +7,17 @@ import {
   requireRoot,
 } from "./_validators.ts";
 import {
-  GATEWAY_CAPABILITIES,
+  GATEWAY_CAPABILITY_TERMS,
   GATEWAY_DESCRIPTION,
-  GATEWAY_KIND_ID,
+  GATEWAY_KIND_SHAPE_ID,
   GATEWAY_KIND_VERSION,
   GATEWAY_OUTPUT_FIELDS,
-  type GatewayCapability,
+  type GatewayCapabilityTerm,
   type GatewayOutputs,
   type GatewaySpec,
 } from "./gateway.generated.ts";
 
-export type { GatewayCapability, GatewayOutputs, GatewaySpec };
+export type { GatewayCapabilityTerm, GatewayOutputs, GatewaySpec };
 
 const PROTOCOLS = new Set(["http", "https"]);
 const TLS_POLICIES = new Set(["auto", "manual", "off"]);
@@ -26,19 +26,19 @@ const TLS_POLICIES = new Set(["auto", "manual", "off"]);
  * `gateway@v1` component kind descriptor. It models HTTP listeners, TLS
  * policy, and route rules as a normal component kind.
  *
- * Spec / outputs / capabilities are derived from
+ * Spec / outputs / capability terms are derived from
  * `packages/plugins/spec/kinds/v1/gateway.jsonld` via `gateway.generated.ts`;
  * validation diagnostics are hand-written below.
  */
 export const GatewayKind: Shape<
   GatewaySpec,
   GatewayOutputs,
-  GatewayCapability
+  GatewayCapabilityTerm
 > = {
-  id: GATEWAY_KIND_ID,
+  id: GATEWAY_KIND_SHAPE_ID,
   version: GATEWAY_KIND_VERSION,
   description: GATEWAY_DESCRIPTION,
-  capabilities: GATEWAY_CAPABILITIES,
+  capabilityTerms: GATEWAY_CAPABILITY_TERMS,
   outputFields: GATEWAY_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
@@ -101,6 +101,23 @@ export const GatewayKind: Shape<
     if (!requireRoot(value, issues)) return;
     requireNonEmptyString(value.url, "$.url", issues);
     requireNonEmptyString(value.host, "$.host", issues);
+    requireNonEmptyString(value.listener, "$.listener", issues);
+    if (!Array.isArray(value.routes) || value.routes.length === 0) {
+      issues.push({
+        path: "$.routes",
+        message: "must be a non-empty array",
+      });
+    } else {
+      value.routes.forEach((route, index) => {
+        const path = `$.routes[${index}]`;
+        if (!isRecord(route)) {
+          issues.push({ path, message: "must be an object" });
+          return;
+        }
+        requireNonEmptyString(route.pathPrefix, `${path}.pathPrefix`, issues);
+        requireNonEmptyString(route.to, `${path}.to`, issues);
+      });
+    }
     if (
       !isNonEmptyString(value.scheme) ||
       !PROTOCOLS.has(value.scheme)
@@ -110,6 +127,5 @@ export const GatewayKind: Shape<
         message: 'must be "http" or "https"',
       });
     }
-    optionalNonEmptyString(value.certificateId, "$.certificateId", issues);
   },
 };

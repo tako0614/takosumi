@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { JsonObject } from "takosumi-contract";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 import type { OperationPlanPreview } from "./operation_plan_preview.ts";
 
 export type OperationJournalStage =

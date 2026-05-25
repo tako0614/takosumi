@@ -17,7 +17,7 @@ import type {
   RuntimeAgentRegistrationResponse,
   RuntimeAgentWorkLease,
   RuntimeAgentWorkPayload,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { RuntimeAgentHttpClient } from "./client.ts";
 import {
   createRuntimeAgentTraceContext,
@@ -141,7 +141,7 @@ export class RuntimeAgentLoop {
       client: options.client,
       agentId: options.agentId,
       provider: options.provider,
-      capabilities: options.capabilities,
+      capabilities: options.capabilityTerms,
       hostKeyDigest: options.hostKeyDigest,
       executors: { ...options.executors },
       defaultExecutor: options.defaultExecutor ?? defaultUnsupportedExecutor,
@@ -184,7 +184,7 @@ export class RuntimeAgentLoop {
     const response = await this.#options.client.enroll({
       agentId: this.#options.agentId,
       provider: this.#options.provider,
-      capabilities: this.#options.capabilities,
+      capabilities: this.#options.capabilityTerms,
       hostKeyDigest: this.#options.hostKeyDigest,
       enrolledAt: this.#options.clock().toISOString(),
     });

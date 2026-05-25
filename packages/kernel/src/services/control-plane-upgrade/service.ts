@@ -1,4 +1,7 @@
-import type { JsonObject, TakosumiActorContext } from "takosumi-contract";
+import type {
+  JsonObject,
+  TakosumiActorContext,
+} from "takosumi-contract/reference/compat";
 import { invalidArgument, permissionDenied } from "../../shared/errors.ts";
 import type {
   ControlPlaneMigration,

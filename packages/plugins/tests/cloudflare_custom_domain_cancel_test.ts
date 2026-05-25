@@ -12,7 +12,7 @@
  *   3. deletes the partially-provisioned custom hostname from the zone.
  */
 import assert from "node:assert/strict";
-import type { RuntimeDesiredState } from "takosumi-contract";
+import type { RuntimeDesiredState } from "takosumi-contract/reference/compat";
 import {
   type CloudflareCustomDomainClient,
   type CloudflareCustomDomainMaterializationInput,

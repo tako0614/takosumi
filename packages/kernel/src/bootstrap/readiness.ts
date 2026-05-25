@@ -25,6 +25,8 @@ export interface RoleReadinessProbeOptions {
   readonly context: AppContext;
   readonly runtimeConfig: AppRuntimeConfig;
   readonly runtimeEnv: Record<string, string | undefined>;
+  readonly implementationBindingCount?: number;
+  readonly strictImplementationBindings?: boolean;
   readonly workerDaemonState: ReadinessWorkerDaemonState;
   readonly workerDaemon?: WorkerDaemonHandle;
 }
@@ -52,9 +54,10 @@ export function createRoleReadinessProbes(
         await options.context.adapters.storage.transaction(() => undefined);
         return "ok";
       });
-      await recordCheck(checks, failures, "plugins", () => {
-        return { selected: 0, strict: false };
-      });
+      await recordCheck(checks, failures, "implementationBindings", () => ({
+        selected: options.implementationBindingCount ?? 0,
+        strict: options.strictImplementationBindings ?? false,
+      }));
       if (requiresInternalApiSecret(options.role)) {
         await recordCheck(checks, failures, "internalApiSecret", () => {
           if (!options.runtimeEnv.TAKOSUMI_INTERNAL_API_SECRET) {

@@ -22,7 +22,7 @@ import type {
   KernelPlugin,
   NamespaceMaterial,
   ResolvedListenBinding,
-} from "takosumi-contract/plugin";
+} from "takosumi-contract/reference/plugin";
 
 export type ResolvedBinding = ResolvedListenBinding;
 
@@ -126,13 +126,16 @@ export class BindingResolver {
 }
 
 /**
- * Kernel default {@link EnvInjection} for a listen binding. Implements the
- * `as: env` shape declared in the kind JSON-LD `envMap`:
+ * Reference fallback {@link EnvInjection} for a listen binding. Operator
+ * descriptor metadata or implementation bindings may override this projection;
+ * JSON-LD is only one metadata format a distribution can use.
  *
  *   - `as: env`    → expand every material field into `${PREFIX}_${FIELD}`
  *                    (PREFIX = `options.prefix` or upper-cased binding
  *                    name when `prefix` is omitted; FIELD = upper-snake
  *                    of the material key).
+ *   - `as: secret-env` → use the same env names while preserving secretRef
+ *                    values in the resolved binding record.
  *   - `as: mount`  → return the material as a mount descriptor under
  *                    `options.mount` (or `/` when absent).
  *   - `as: upstream` / `as: target` → return the material as an upstream
@@ -154,6 +157,7 @@ export function defaultEnvInjection(
     case "upstream":
       return { target: material };
     case "env":
+    case "secret-env":
     default:
       return { env: expandMaterialAsEnv(material, options.prefix) };
   }
@@ -167,9 +171,17 @@ function expandMaterialAsEnv(
   const normalizedPrefix = (prefix ?? "").trim();
   for (const [field, value] of Object.entries(material)) {
     const envKey = composeEnvKey(normalizedPrefix, field);
-    out[envKey] = value;
+    out[envKey] = materialValueToEnv(value);
   }
   return out;
+}
+
+function materialValueToEnv(
+  value: NamespaceMaterial[string],
+): string | { readonly secretRef: string } {
+  if (isSecretRefMaterial(value)) return { secretRef: value.secretRef };
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
 }
 
 function composeEnvKey(prefix: string, field: string): string {
@@ -196,7 +208,21 @@ function serializeMaterialForMount(
   const parts: string[] = [];
   for (const [field, value] of Object.entries(material)) {
     if (typeof value === "string") parts.push(`${field}=${value}`);
-    else parts.push(`${field}=$secret(${value.secretRef})`);
+    else if (isSecretRefMaterial(value)) {
+      parts.push(`${field}=$secret(${value.secretRef})`);
+    } else {
+      parts.push(`${field}=${JSON.stringify(value)}`);
+    }
   }
   return parts.sort().join("\n");
+}
+
+function isSecretRefMaterial(
+  value: NamespaceMaterial[string],
+): value is { readonly secretRef: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return typeof (value as { readonly secretRef?: unknown }).secretRef ===
+    "string";
 }

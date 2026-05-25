@@ -13,7 +13,7 @@ import type {
   Deployment,
   DeploymentCondition,
   IsoTimestamp,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   activationCommittedCondition,
   applyFailedCondition,

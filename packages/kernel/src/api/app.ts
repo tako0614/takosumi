@@ -1,5 +1,8 @@
 import { Hono, type Hono as HonoApp } from "hono";
-import type { ActorContext, Deployment } from "takosumi-contract";
+import type {
+  ActorContext,
+  Deployment,
+} from "takosumi-contract/reference/compat";
 import type { AppContext } from "../app_context.ts";
 import type { SourcePort, SourceSnapshot } from "../adapters/source/mod.ts";
 import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";

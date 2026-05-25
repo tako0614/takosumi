@@ -25,7 +25,7 @@ import {
   type LifecycleDestroyRequest,
   type LifecycleDestroyResponse,
   type PreparedSourceLocator,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
 
 export interface RuntimeAgentClientOptions {
   /** Base URL of the runtime-agent service (e.g. `http://127.0.0.1:8789`). */

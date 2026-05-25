@@ -6,7 +6,7 @@ import {
 import {
   ARTIFACTS_BASE_PATH,
   TAKOSUMI_INTERNAL_PATHS,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import { TAKOSUMI_METRICS_PATH } from "./metrics_routes.ts";
 import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
 import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";

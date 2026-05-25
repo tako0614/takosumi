@@ -3,13 +3,13 @@
  * connector on the runtime-agent.
  */
 
-import type { KernelPlugin } from "takosumi-contract/plugin";
+import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 import {
   createDenoDeployProvider,
   type DenoDeployLifecycleClient,
   InMemoryDenoDeployLifecycle,
 } from "@takos/takosumi-plugins/shape-providers/worker/deno-deploy";
-import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/reference/kernel-plugin-adapter";
 import { KIND_URI_WORKER } from "./_kinds.ts";
 
 export interface DenoDeployWorkerProviderOptions {

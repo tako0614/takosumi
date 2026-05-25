@@ -5,7 +5,7 @@
 // surface while letting future phase modules reuse the same deterministic
 // digest function without circular imports.
 
-import type { JsonObject } from "takosumi-contract";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 
 export function stableHash(value: JsonObject | unknown): string {
   const input = stableStringify(value);

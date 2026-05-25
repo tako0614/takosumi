@@ -1,8 +1,5 @@
 # Approval Invalidation Triggers
 
-> このページでわかること: approval を `approved` から `invalidated` に落とす 6
-> 種の trigger と、 発火条件 / 検出 timing / propagation / approver UX state。
-
 ## Trigger 6 値
 
 新 trigger 追加は `CONVENTIONS.md` §6 RFC を要する。
@@ -11,9 +8,10 @@
    変更。
 2. **effect-detail change** — `approvedEffects` / `effectDetailsDigest` / grant
    access / network egress shape の変更。
-3. **implementation change** — 選択された provider implementation / connector
+3. **implementation change** —選択された provider implementation / connector
    binding の変更。
-4. **external freshness change** — operator-owned ExportDeclaration の freshness
+4. **external freshness change** — operator-owned ExternalPublicationDeclaration
+   の freshness
 5. **operator implementation config change** — Space に visible な kind alias /
    provider implementation / connector visibility の変更。
 6. **Space-context change** — Space membership / policy pack の変更。
@@ -42,7 +40,7 @@
 
 - **発火条件**: provider implementation / connector binding が approval bind
   時と異なる。 provider implementation、connector visibility、operator policy を
-  operator が swap した 場合に起きる。
+  operator が swap した場合に起きる。
 - **検出 timing**: `prepare` stage の resolve、および `pre-commit` verification
   の直前。
 - **再評価範囲**: plan を保ったまま `invalidated`。kernel は影響範囲を **当該
@@ -50,16 +48,16 @@
 
 ### 4. external freshness change
 
-- **発火条件**: operator-owned ExportDeclaration の freshness state が `fresh`
-  から `stale` または `revoked` に遷移。`fresh → refresh-required` は warning
-  相当 (Risk emit のみ) で trigger 4 を **発火させない** — approval は
+- **発火条件**: operator-owned ExternalPublicationDeclaration の freshness state
+  が `fresh` から `stale` または `revoked` に遷移。`fresh → refresh-required` は
+  warning 相当 (Risk emit のみ) で trigger 4 を **発火させない** — approval は
   `approved` のまま保持される
   ([Observation Retention — Approval invalidation との関係](./observation-retention.md#approval-invalidation-relationship))。
 - **検出 timing**: external freshness は kernel observe loop が継続的に監視
   し、`stale` / `revoked` への遷移を検出した瞬間に対応 approval を再評価
   する。`prepare` stage 起動時の最初の確認も含む。
-- **再評価範囲**: 当該 export を消費する binding subset に絞って propagate。
-  監視しない。
+- **再評価範囲**: 当該 publication を消費する binding subset に絞って
+  propagate。 監視しない。
 
 ### 5. operator implementation config change
 
@@ -71,11 +69,12 @@
 - **再評価範囲**: 新 implementation config で binding が同一なら approval
   を保持、binding が変わるなら影響 binding subset を `invalidated`。
 
-### 6. Space-context change
+### 6. Authorization-context change
 
-- **発火条件**: Space membership (actor 集合)、policy pack の変更。
-- **検出 timing**: 該当 mutation の commit 完了直後。kernel は Space 単位で 関連
-  approval を walk する。
+- **発火条件**: operator account-plane membership version、scoped installer
+  context、policy pack の変更。
+- **検出 timing**: 該当 mutation の commit 完了直後。kernel は operator から渡
+  された authorization-context digest に紐づく approval を walk する。
 - **再評価範囲**: context に依存する binding subset に絞って propagate。actor
   removal は `actor` field が消えた approval だけを invalidate する。
 
@@ -83,7 +82,7 @@
 
 - 1 つの trigger でも発火すれば、対象 approval record 全体は `invalidated`
   状態になる。再 approve には新 OperationPlan / 新 binding での再評価が要る。
-- Trigger 1, 2 (digest 系) は **短絡 invalidate**: 他 binding を再評価せず 即時
+- Trigger 1, 2 (digest 系) は **短絡 invalidate**: 他 binding を再評価せず即時
   `invalidated` 確定。
 - Trigger 3-6 は plan を保ったまま発火し、kernel は **影響範囲を minimum
   approval set に絞って propagate** する。Space 全体や全 plan を巻き込まない。
@@ -113,7 +112,7 @@ terminal subset は `denied | expired | invalidated | consumed` で、`approved`
 apply に消費されるまで再検証対象として残ります。
 
 - `consumed`: approval が apply pipeline で正常消費された後の終端。 audit
-  retention のため record は保持するが再 use はできない。 再度 apply
+  retention のため record は保持するが再 use はできない。再度 apply
   起動に提示すると `failed_precondition` で reject される。
 - `invalidated`: trigger 1-6 由来の取り消し (binding 崩壊) を表す。 `consumed`
   は binding が valid のまま正常消費された終端である点が異なる。

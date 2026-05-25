@@ -1,6 +1,6 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/contracts/runtime-input/oci-image/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/contracts/runtime-input/oci-image/v1",
   "@type": "RuntimeInputDescriptor",
   "shortRef": "runtime-input.oci-image@v1",
   "domain": "runtime-input",

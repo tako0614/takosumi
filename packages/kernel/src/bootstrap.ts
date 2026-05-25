@@ -36,7 +36,7 @@ import {
 } from "./domains/deploy/takosumi_deployment_record_store.ts";
 import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store_sql.ts";
 import { InstallerPipeline } from "./domains/installer/mod.ts";
-import type { KernelPlugin } from "takosumi-contract/plugin";
+import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -227,6 +227,10 @@ export async function createPaaSApp(
       context,
       runtimeConfig,
       runtimeEnv,
+      implementationBindingCount: options.plugins?.length ?? 0,
+      strictImplementationBindings:
+        runtimeConfig.environment === "production" ||
+        runtimeConfig.environment === "staging",
       workerDaemonState,
       workerDaemon,
     }),

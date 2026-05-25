@@ -5,7 +5,7 @@ import type {
   Digest,
   JsonObject,
   ObjectAddress,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { IsoTimestamp } from "../../shared/time.ts";
 import type { SpaceId } from "../../shared/ids.ts";
 

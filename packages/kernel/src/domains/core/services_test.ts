@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { TakosumiActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import {
   createCoreDomainServices,
   createInMemoryCoreDomainDependencies,

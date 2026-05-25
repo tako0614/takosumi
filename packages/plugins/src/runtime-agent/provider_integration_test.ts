@@ -8,7 +8,7 @@
  * registry on each provider.
  */
 import assert from "node:assert/strict";
-import { InMemoryRuntimeAgentRegistry } from "takosumi-contract";
+import { InMemoryRuntimeAgentRegistry } from "takosumi-contract/reference/compat";
 import {
   DEFAULT_AWS_LONG_RUNNING_THRESHOLD_MS,
   deriveAwsHandoffKey,

@@ -1,5 +1,5 @@
-import type { RuntimeAgentRegistry } from "takosumi-contract";
-import type { provider, router } from "takosumi-contract";
+import type { RuntimeAgentRegistry } from "takosumi-contract/reference/compat";
+import type { provider, router } from "takosumi-contract/reference/compat";
 
 export interface KubernetesProviderClient {
   reconcileDesiredState(

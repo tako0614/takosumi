@@ -170,12 +170,17 @@
     "members": {
       "packages/all": {
         "dependencies": [
-          "jsr:@takos/takosumi-cli@0.15"
+          "jsr:@takos/takosumi-cli@0.15",
+          "jsr:@takos/takosumi-contract@^2.6.0",
+          "jsr:@takos/takosumi-installer@0.1",
+          "jsr:@takos/takosumi-kernel@0.14",
+          "jsr:@takos/takosumi-plugins@0.12",
+          "jsr:@takos/takosumi-runtime-agent@0.7"
         ]
       },
       "packages/aws-providers": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.5.0",
+          "jsr:@takos/takosumi-contract@^2.6.0",
           "jsr:@takos/takosumi-plugins@0.12"
         ]
       },
@@ -183,61 +188,62 @@
         "dependencies": [
           "jsr:@cliffy/command@^1.0.0-rc.7",
           "jsr:@std/yaml@1",
-          "jsr:@takos/takosumi-contract@^2.5.0",
+          "jsr:@takos/takosumi-contract@^2.6.0",
           "jsr:@takos/takosumi-kernel@0.14",
           "jsr:@takos/takosumi-runtime-agent@0.7"
         ]
       },
       "packages/cloudflare-providers": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.5.0",
+          "jsr:@takos/takosumi-contract@^2.6.0",
           "jsr:@takos/takosumi-plugins@0.12"
         ]
       },
       "packages/deno-deploy-providers": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.5.0",
+          "jsr:@takos/takosumi-contract@^2.6.0",
           "jsr:@takos/takosumi-plugins@0.12"
         ]
       },
       "packages/gcp-providers": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.5.0",
+          "jsr:@takos/takosumi-contract@^2.6.0",
           "jsr:@takos/takosumi-plugins@0.12"
         ]
       },
       "packages/installer": {
         "dependencies": [
           "jsr:@std/yaml@^1.0.5",
-          "jsr:@takos/takosumi-contract@^2.5.0"
+          "jsr:@takos/takosumi-contract@^2.6.0"
         ]
       },
       "packages/kernel": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.5.0",
+          "jsr:@takos/takosumi-contract@^2.6.0",
+          "jsr:@takos/takosumi-installer@0.1",
           "jsr:@takos/takosumi-plugins@0.12"
         ]
       },
       "packages/kubernetes-providers": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.5.0",
+          "jsr:@takos/takosumi-contract@^2.6.0",
           "jsr:@takos/takosumi-plugins@0.12"
         ]
       },
       "packages/plugins": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.5.0"
+          "jsr:@takos/takosumi-contract@^2.6.0"
         ]
       },
       "packages/runtime-agent": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.5.0",
+          "jsr:@takos/takosumi-contract@^2.6.0",
           "npm:hono@^4.12.4"
         ]
       },
       "packages/selfhost-providers": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.5.0",
+          "jsr:@takos/takosumi-contract@^2.6.0",
           "jsr:@takos/takosumi-plugins@0.12"
         ]
       }

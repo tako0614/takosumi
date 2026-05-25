@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { ShapeValidationIssue } from "takosumi-contract";
+import type { ShapeValidationIssue } from "takosumi-contract/reference/compat";
 import { WorkerKind } from "../src/kinds/worker.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
@@ -23,10 +23,10 @@ Deno.test("Worker shape exposes id and version", () => {
   assert.equal(WorkerKind.version, "v1");
 });
 
-Deno.test("Worker capabilities cover serverless traits", () => {
-  assert.ok(WorkerKind.capabilities.includes("scale-to-zero"));
-  assert.ok(WorkerKind.capabilities.includes("long-request"));
-  assert.ok(WorkerKind.capabilities.includes("geo-routing"));
+Deno.test("Worker capability terms cover serverless traits", () => {
+  assert.ok(WorkerKind.capabilityTerms.includes("scale-to-zero"));
+  assert.ok(WorkerKind.capabilityTerms.includes("long-request"));
+  assert.ok(WorkerKind.capabilityTerms.includes("geo-routing"));
 });
 
 Deno.test("Worker outputFields list is fixed", () => {

@@ -9,13 +9,13 @@
  * resolved materials to plugin.apply via `listenedMaterials`.
  */
 import assert from "node:assert/strict";
-import type { KernelPlugin } from "takosumi-contract";
+import type { KernelPlugin } from "takosumi-contract/reference/compat";
 import type {
   ApplyListenContext,
   EnvInjection,
   NamespaceMaterial,
   PublishMaterialContext,
-} from "takosumi-contract/plugin";
+} from "takosumi-contract/reference/plugin";
 import {
   InstallerPipeline,
   type InstallerProviderRegistry,
@@ -23,6 +23,7 @@ import {
   type ProviderApplyContext,
   type ProviderApplyResult,
 } from "./mod.ts";
+import { InMemoryDeploymentStore } from "./store.ts";
 
 // Canonical AppSpec: a `postgres` component publishes `db.connection`; a
 // `worker` component listens to it with `as: env` + `prefix: DB` so the
@@ -99,7 +100,7 @@ function buildRecordingPlugin(opts: {
       });
     },
     publishMaterial: opts.publishMaterial ??
-      ((ctx) => Promise.resolve(ctx.outputs)),
+      ((ctx) => Promise.resolve(ctx.outputs as NamespaceMaterial)),
     applyListen: opts.applyListen,
     onInstallStart: () => {
       opts.recorder.push(`onInstallStart:${opts.name}`);
@@ -194,7 +195,9 @@ Deno.test("installer lifecycle hooks fire on subsequent deployments without re-r
 
     events.length = 0;
 
-    const second = await pipeline.deploymentApply(first.installation.id, {});
+    const second = await pipeline.deploymentApply(first.installation.id, {
+      source: { kind: "local", url: dir },
+    });
     assert.equal(second.deployment.status, "succeeded");
     assert.deepEqual(events, [
       "onDeploymentStart:@example/postgres",
@@ -204,6 +207,109 @@ Deno.test("installer lifecycle hooks fire on subsequent deployments without re-r
       "onDeploymentComplete:@example/postgres",
       "onDeploymentComplete:@example/worker",
     ]);
+  });
+});
+
+Deno.test("InstallerPipeline rollback moves current pointer without creating a new Deployment", async () => {
+  await withTempSource(async (dir) => {
+    const deployments = new InMemoryDeploymentStore();
+    let nextId = 0;
+    const pipeline = new InstallerPipeline({
+      deployments,
+      newId: (prefix) => `${prefix}_${++nextId}`,
+      now: () => 0,
+    });
+
+    const first = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+    const second = await pipeline.deploymentApply(first.installation.id, {
+      source: { kind: "local", url: dir },
+    });
+
+    const before = await deployments.listForInstallation(
+      first.installation.id,
+    );
+    assert.equal(before.length, 2);
+
+    const rollback = await pipeline.rollback(first.installation.id, {
+      deploymentId: first.deployment.id,
+    });
+
+    const after = await deployments.listForInstallation(first.installation.id);
+    const rollbackEvents = await deployments.listRollbackEvents(
+      first.installation.id,
+    );
+    assert.equal(after.length, 2);
+    assert.deepEqual(rollbackEvents, [{
+      installationId: first.installation.id,
+      rolledBackFrom: second.deployment.id,
+      rolledBackTo: first.deployment.id,
+      createdAt: 0,
+    }]);
+    assert.equal(rollback.deployment.id, first.deployment.id);
+    assert.equal(
+      rollback.installation.currentDeploymentId,
+      first.deployment.id,
+    );
+    assert.equal(rollback.installation.status, "ready");
+    assert.deepEqual(rollback.rollback, {
+      rolledBackFrom: second.deployment.id,
+      rolledBackTo: first.deployment.id,
+    });
+
+    const [installation] = await pipeline.listInstallations("space_test");
+    assert.equal(installation?.currentDeploymentId, first.deployment.id);
+  });
+});
+
+Deno.test("InstallerPipeline failed redeploy keeps prior ready Installation current", async () => {
+  await withTempSource(async (dir) => {
+    const deployments = new InMemoryDeploymentStore();
+    let applyCalls = 0;
+    const providers: InstallerProviderRegistry = {
+      apply(ctx: ProviderApplyContext): Promise<ProviderApplyResult> {
+        applyCalls += 1;
+        if (applyCalls > 2) {
+          throw new Error(`provider failed during ${ctx.componentName}`);
+        }
+        return Promise.resolve({
+          resource: {
+            component: ctx.componentName,
+            kind: ctx.component.kind,
+            provider: "test-direct",
+            resourceHandle: `test://${ctx.componentName}`,
+          },
+          outputs: {},
+        });
+      },
+    };
+    const pipeline = new InstallerPipeline({ deployments, providers });
+    const first = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    await assert.rejects(
+      pipeline.deploymentApply(first.installation.id, {
+        source: { kind: "local", url: dir },
+      }),
+      /provider failed during db/,
+    );
+
+    const [installation] = await pipeline.listInstallations("space_test");
+    assert.equal(installation?.status, "ready");
+    assert.equal(installation?.currentDeploymentId, first.deployment.id);
+    const history = await deployments.listForInstallation(
+      first.installation.id,
+    );
+    assert.equal(history.length, 2);
+    assert.equal(
+      history.find((deployment) => deployment.status === "failed")
+        ?.id.startsWith("dep_"),
+      true,
+    );
   });
 });
 
@@ -233,6 +339,10 @@ Deno.test("installer onInstallStart error aborts apply and surfaces InstallerPip
       }),
       /plugin @example\/postgres onInstallStart failed: boom/,
     );
+
+    const [installation] = await pipeline.listInstallations("space_test");
+    assert.equal(installation?.status, "failed");
+    assert.equal(installation?.currentDeploymentId, null);
   });
 });
 
@@ -247,7 +357,8 @@ Deno.test("installer onDeploymentComplete error is swallowed (post-apply hook is
           resourceHandle: "postgres://x",
           outputs: { host: "db.local", port: "5432" },
         }),
-      publishMaterial: (ctx) => Promise.resolve(ctx.outputs),
+      publishMaterial: (ctx) =>
+        Promise.resolve(ctx.outputs as NamespaceMaterial),
       onDeploymentComplete: () =>
         Promise.reject(new Error("post-deploy hook failed")),
     };
@@ -350,8 +461,8 @@ Deno.test("InstallerPipeline falls back to noop provider when no plugins / provi
     assert.equal(deployment.status, "succeeded");
     assert.deepEqual(Object.keys(deployment.outputs.components ?? {}), [
       "db",
-      "web",
     ]);
+    assert.deepEqual(deployment.outputs.components?.db, { connection: {} });
   });
 });
 
@@ -382,17 +493,17 @@ Deno.test("InstallerPipeline lets test code override providers directly without 
   });
 });
 
-Deno.test("InstallerPipeline skips missing external namespace refs by default", async () => {
+Deno.test("InstallerPipeline skips missing external publication refs by default", async () => {
   const yaml = `apiVersion: v1
 metadata:
-  id: optional-namespace-test
-  name: Optional Namespace Test
+  id: optional-publication-test
+  name: Optional Publication Test
 components:
   web:
     kind: worker
     listen:
       oidc:
-        from: namespace:operator.identity.oidc
+        from: operator.identity.oidc
         as: env
         prefix: OIDC
 `;
@@ -419,17 +530,17 @@ components:
   }, yaml);
 });
 
-Deno.test("InstallerPipeline fails required missing external namespace refs", async () => {
+Deno.test("InstallerPipeline fails required missing external publication refs", async () => {
   const yaml = `apiVersion: v1
 metadata:
-  id: required-namespace-test
-  name: Required Namespace Test
+  id: required-publication-test
+  name: Required Publication Test
 components:
   web:
     kind: worker
     listen:
       oidc:
-        from: namespace:operator.identity.oidc
+        from: operator.identity.oidc
         as: env
         prefix: OIDC
         required: true
@@ -450,7 +561,7 @@ components:
         spaceId: "space_test",
         source: { kind: "local", url: dir },
       }),
-      /web\.listen\.oidc\.from refers to unresolved publication "namespace:operator\.identity\.oidc"/,
+      /web\.listen\.oidc\.from refers to unresolved publication "operator\.identity\.oidc"/,
     );
   }, yaml);
 });
@@ -547,7 +658,7 @@ async function makePreparedSource(): Promise<{
   });
   await Deno.writeTextFile(`${sourceDir}/.takosumi.yml`, SAMPLE_YAML);
   const { code, stderr } = await new Deno.Command("tar", {
-    args: ["-c", "-f", archive, "-C", sourceDir, "."],
+    args: ["-c", "-f", archive, "-C", sourceDir, ".takosumi.yml"],
     stderr: "piped",
   }).output();
   if (code !== 0) {

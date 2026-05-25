@@ -1,6 +1,7 @@
 /**
  * `@takos/takosumi-kubernetes-providers` — Kubernetes-backed `KernelPlugin`
- * factories for the `web-service` component kind (k3s / vanilla deployment).
+ * factories for the operator-opt-in `web-service` reference kind URI
+ * (k3s / vanilla deployment).
  *
  * Phase D extracted this factory out of `@takos/takosumi-plugins` reference registry
  * so Takosumi core no longer carries cloud-coupled imports. Operators that

@@ -1,10 +1,5 @@
 # Logging Conventions
 
-> このページでわかること: Takosumi 全 process (kernel / runtime-agent / CLI /
-> reference adapter) のログ発行 v1 contract。 行フォーマット、 必須 /
-> 禁止フィールド、 log-level enum、 出力 sink、 redaction、 audit との関係、
-> trace 相関、 operator 設定キーを定める。
-
 ::: info Current implementation status
 
 kernel HTTP request correlation middleware は current:
@@ -14,7 +9,8 @@ kernel HTTP request correlation middleware は current:
 - staging / production と `TAKOSUMI_HTTP_REQUEST_LOGS=true` の他環境では、
   bootstrap path が `requestId` / `correlationId` / `trace_id` / `span_id` /
   route / status / duration を持つ JSON request log を 1 行 emit。
-- installer / artifact metrics も inbound request / correlation id を carry。
+- installer / optional DataAsset extension metrics も inbound request /
+  correlation id を carry。
 - 非 HTTP log への trace id / span id enrichment は今後の target contract。
 
 :::
@@ -36,12 +32,12 @@ kernel は process 終了を跨いでログ行を buffer しない。kernel が 
 
 Every line carries the following fields.
 
-| Field       | Type   | Notes                                                                                                       |
-| ----------- | ------ | ----------------------------------------------------------------------------------------------------------- |
-| `ts`        | string | RFC 3339 UTC, millisecond precision (see Time / Clock Model).                                               |
-| `level`     | string | Closed enum: `debug`, `info`, `warn`, `error`, `fatal`.                                                     |
-| `msg`       | string | Human-readable summary of the event. Imperative, present tense.                                             |
-| `subsystem` | string | Closed enum: `kernel`, `runtime-agent`, `cli`, `plugin`. `plugin` is the reference adapter subsystem value. |
+| Field       | Type   | Notes                                                                                                     |
+| ----------- | ------ | --------------------------------------------------------------------------------------------------------- |
+| `ts`        | string | RFC 3339 UTC, millisecond precision (see Time / Clock Model).                                             |
+| `level`     | string | Closed enum: `debug`, `info`, `warn`, `error`, `fatal`.                                                   |
+| `msg`       | string | Human-readable summary of the event. Imperative, present tense.                                           |
+| `subsystem` | string | Closed enum: `kernel`, `runtime-agent`, `cli`, `implementation`. Reference adapters use `implementation`. |
 
 In addition, lines carry **at least one** of the following correlation fields
 whenever the line is associated with an operation:
@@ -83,9 +79,9 @@ level enum は closed。隣接 level 間の意味境界は normative。level を
   production. Examples: per-stage trace inside `commit`, per-row storage
   queries, per-message poll loop ticks.
 - **info** — lifecycle events that an operator expects to see in steady-state
-  production. Examples: `apply started`, `apply completed`, `share activated`,
-  `lock acquired`, `compaction started`. The installation produces a steady,
-  low-rate stream of `info` lines.
+  production. Examples: `apply started`, `apply completed`,
+  `operator publication refreshed`, `lock acquired`, `compaction started`. The
+  installation produces a steady, low-rate stream of `info` lines.
 - **warn** — anomalies that do not block progress but require operator attention
   soon. Examples: drift detected, approval near expiry, quota near limit, clock
   skew within tolerance, transition warning used.
@@ -166,8 +162,10 @@ runtime-agent も同じ環境変数を読み、`subsystem: runtime-agent` を発
 - **cli** — every line carries `command` (the dotted CLI command path, e.g.
   `deploy.run`, `audit.verify`) and `argvDigest` (a digest of the post-redaction
   argument vector, never the raw argv).
-- **plugin** — every line emitted by operator-attached reference adapter code
-  carries `pluginId` and, when relevant, the resolved kind URI / connector id.
+- **implementation** — every line emitted by operator-attached implementation
+  binding code carries `implementationBindingId` and, when relevant, the
+  resolved kind URI / connector id. The reference kernel may also include
+  `pluginId` as a reference-adapter-specific field.
 
 これらのフィールドは付加的: HTTP `requestId` を既に持つ行も、kernel から発行
 される際は `route` と `status` を持つ。
@@ -175,7 +173,7 @@ runtime-agent も同じ環境変数を読み、`subsystem: runtime-agent` を発
 ## Sampling
 
 ログは sample されない。kernel が emit すると決めた `info` 以上の行はすべて sink
-に書かれる。sampling があるなら collector の責務であり、ingest 後に適用 される。
+に書かれる。sampling があるなら collector の責務であり、ingest 後に適用される。
 
 暴走 debug 出力が sink を埋め尽くさないよう、`debug` 行は kernel 内で per-
 subsystem の rate limit を受けうる。limiter は超過分の `debug` 行を黙って drop

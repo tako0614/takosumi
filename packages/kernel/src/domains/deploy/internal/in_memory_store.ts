@@ -9,7 +9,7 @@ import type {
   Deployment,
   GroupHead,
   ProviderObservation,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import { InMemoryGroupHeadHistoryStore } from "../group_head_history.ts";
 import type { GroupHeadHistoryStore } from "../group_head_history.ts";
 import type {

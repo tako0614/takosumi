@@ -3,8 +3,8 @@ import type {
   CoreBindingResolutionInput,
   CoreBindingValueResolution,
   JsonObject,
-} from "takosumi-contract";
-import { objectAddress } from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
+import { objectAddress } from "takosumi-contract/reference/compat";
 import type {
   BindingSetRevision,
   BindingSetRevisionStore,

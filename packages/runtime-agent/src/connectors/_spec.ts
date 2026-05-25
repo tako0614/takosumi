@@ -15,7 +15,7 @@
  * `undefined` when absent, throws when present with the wrong type.
  */
 
-import type { JsonObject, JsonValue } from "takosumi-contract";
+import type { JsonObject, JsonValue } from "takosumi-contract/reference/compat";
 
 export type SpecObject = JsonObject;
 

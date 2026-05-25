@@ -1,4 +1,4 @@
-import { objectStorage } from "takosumi-contract";
+import { objectStorage } from "takosumi-contract/reference/compat";
 
 export interface CloudflareR2ObjectHead {
   readonly bucket: string;

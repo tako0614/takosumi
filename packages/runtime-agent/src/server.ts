@@ -20,7 +20,7 @@ import {
   type LifecycleDescribeRequest,
   type LifecycleDestroyRequest,
   type LifecycleErrorBody,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { HttpArtifactFetcher } from "./artifact_fetcher.ts";
 import type { ConnectorContext } from "./connectors/connector.ts";
 import type { ConnectorRegistry } from "./connectors/mod.ts";
@@ -232,6 +232,7 @@ function validApply(body: unknown): body is LifecycleApplyRequest {
   return typeof body.shape === "string" &&
     typeof body.provider === "string" &&
     typeof body.resourceName === "string" &&
+    typeof body.spaceId === "string" &&
     (body.idempotencyKey === undefined ||
       typeof body.idempotencyKey === "string") &&
     "spec" in body;
@@ -242,6 +243,7 @@ function validDestroy(body: unknown): body is LifecycleDestroyRequest {
   return typeof body.shape === "string" &&
     typeof body.provider === "string" &&
     typeof body.handle === "string" &&
+    typeof body.spaceId === "string" &&
     (body.idempotencyKey === undefined ||
       typeof body.idempotencyKey === "string");
 }
@@ -251,6 +253,7 @@ function validCompensate(body: unknown): body is LifecycleCompensateRequest {
   return typeof body.shape === "string" &&
     typeof body.provider === "string" &&
     typeof body.handle === "string" &&
+    typeof body.spaceId === "string" &&
     (body.idempotencyKey === undefined ||
       typeof body.idempotencyKey === "string");
 }
@@ -259,7 +262,8 @@ function validDescribe(body: unknown): body is LifecycleDescribeRequest {
   if (!isRecord(body)) return false;
   return typeof body.shape === "string" &&
     typeof body.provider === "string" &&
-    typeof body.handle === "string";
+    typeof body.handle === "string" &&
+    typeof body.spaceId === "string";
 }
 
 function errorBody(error: string, code?: string): LifecycleErrorBody {

@@ -1,19 +1,14 @@
 # RevokeDebt Model
 
-> このページでわかること: commit 済みだが取り消しきれなかった external effect /
-> generated material を追跡する RevokeDebt record の正式仕様 (reason / status
-> enum、 aging window、 Multi-Space ownership、 ActivationSnapshot
-> propagation)。
-
 ## RevokeDebt record schema
 
 ```yaml
 RevokeDebt:
   id: revoke-debt:01HZ... # ULID-based ID
   generatedObjectId: generated:... # 対象 generated material / external object
-  sourceExportSnapshotId: export-snapshot:...
+  sourcePublicationSnapshotId: pubsnap_...
   externalParticipantId: external-participant:...
-  reason: <enum: 5 値> # 後述
+  reason: <enum: 4 値> # 後述
     status: <enum: 3 値> # 後述
       ownerSpaceId: space:... # 現 ownership を持つ Space
       originatingSpaceId: space:... # debt を最初に生んだ Space
@@ -29,7 +24,7 @@ RevokeDebt:
 ```
 
 `generatedObjectId` は generated lifecycle class の object、external object、
-または link projection の対象を指す。`sourceExportSnapshotId` は debt 発生時
+または link projection の対象を指す。`sourcePublicationSnapshotId` は debt 発生時
 
 `retryPolicy` は kernel 定数ではなく policy-controlled で、 Space の policy pack
 から派生する。 kernel が直接解釈する portable subset は次のみ:
@@ -40,7 +35,7 @@ RevokeDebt:
 
 これ以外の policy-controlled fields は operator policy engine が解釈してよい。
 
-## reason 5 値
+## reason 4 値
 
 `reason` field は debt 発生の origin を示す closed enum。新 reason 追加は
 `CONVENTIONS.md` §6 RFC を要する。
@@ -62,10 +57,8 @@ reason ごとの典型ケース:
   material。`abort` 経路で enqueue。
 - `approval-invalidated`: approval が `invalidated` に落ちたが既に materialize
   済みの retain 物。新規 approval の granting までは debt として可視化する。
-- `cross-space-share-expired` (reserved): cross-Space share lifecycle が expiry
-  に達し、importing Space 側で materialize された material が exporting Space
-  側の retention 範囲を超えるケース (= v1 では reserved、 enqueue path
-  は未配線)。
+  cross-Space sharing の TTL / revocation / cleanup debt は current v1 の reason
+  enum には含めず、sharing RFC でまとめて定義します。
 
 ## status 3 値
 
@@ -96,7 +89,7 @@ debt を対象にする。Public deploy 由来の debt は
 deploymentName, resourceName, providerId)` から persisted
 deployment record の handle を解決し、provider の `compensate` operation
 を呼ぶ。 `compensate` が無い provider では handle-keyed `destroy` を fallback
-として実行する。成功時は `cleared`、 一時失敗は `retryable-failure`、handle /
+として実行する。成功時は `cleared`、一時失敗は `retryable-failure`、handle /
 provider が解決できない場合は `blocked` として `operator-action-required`
 に進む。
 
@@ -138,15 +131,15 @@ RevokeDebt の status は ActivationSnapshot に伝播し、traffic shift の挙
 
 これにより「debt が出るたびに自動 rollback で更に状況を悪化させる」のを避ける。
 
-## Production readiness check
+## Production deploy gate
 
 production deployment では status 表示を必須とする:
 
 - operator UI / CLI status は `open` / `operator-action-required` / `cleared`
   の件数を Space 単位で表示する。
-- `operator-action-required` 1 件以上の状態を **production readiness check
-  失敗** として扱い、kernel の `/readyz` に直接は反映しないが、operator gate で
-  deploy を止める運用にする。
+- `operator-action-required` 1 件以上の状態を **production deploy gate 失敗**
+  として扱い、kernel の `/readyz` に直接は反映しないが、operator gate で deploy
+  を止める運用にする。
 - audit event は debt の status transition ごとに 1 entry 出す
   (`createdAt → agedAt → clearedAt` を hash chain で繋ぐ)。
 
@@ -154,10 +147,12 @@ production deployment では status 表示を必須とする:
 
 - WAL stage 側からの enqueue 経路:
   [WAL Stages — Orphaned debt 経路](./wal-stages.md#orphaned-debt-経路)
-- Installer recovery: `/v1/installations/{id}/rollback` は、同じ OperationPlan
-  digest / phase の unfinished WAL が `commit` 以降に 到達している場合に
-  `activation-rollback` RevokeDebt を `takosumi_revoke_debts` へ enqueue し、WAL
-  を terminal `abort` に進める。
+- Internal recovery / compensate path: 同じ OperationPlan digest / phase の
+  unfinished WAL が `commit` 以降に到達している場合に `activation-rollback`
+  RevokeDebt を `takosumi_revoke_debts` へ enqueue し、WAL を terminal `abort`
+  に進める。public rollback endpoint は retained `succeeded` Deployment へ
+  current pointer を戻す操作であり、unfinished WAL recovery を直接 drive
+  しない。
 - Approval invalidation との連動:
   [Approval Invalidation Triggers](./approval-invalidation.md)
 - Recovery mode 中の `activation-rollback` 発生条件:
@@ -169,8 +164,8 @@ production deployment では status 表示を必須とする:
 関連 architecture notes:
 
 - `docs/reference/drift-detection.md` — RevokeDebt と drift observation の連動
-- `docs/reference/architecture/namespace-export-model.md#exposure-activation-model`
-  — ActivationSnapshot propagation と fail-safe-not-fail-closed スタンスの議論
+- `docs/reference/architecture/exposure-activation-model.md` —
+  ActivationSnapshot propagation と fail-safe-not-fail-closed スタンスの議論
 - `docs/reference/architecture/space-model.md` — future Multi-Space ownership と
 
 ## 関連ページ

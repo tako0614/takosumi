@@ -24,7 +24,7 @@
 // resolution-time witness consumed by Group head + read-set checks.
 
 import { createHash } from "node:crypto";
-import { objectAddress } from "takosumi-contract";
+import { objectAddress } from "takosumi-contract/reference/compat";
 import type {
   CoreComponent,
   CoreContractInstance,
@@ -35,7 +35,7 @@ import type {
   IsoTimestamp,
   JsonObject,
   ObjectAddress,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   AppSpec,
   AppSpecComponent,
@@ -60,7 +60,7 @@ export interface BuildResolvedGraphInput {
 /** Build the canonical `DeploymentResolvedGraph` for a resolved Deployment.
  *
  *  The returned graph carries the six projection families described above and
- *  pre-computed digests for the AppSpec / EnvSpec / PolicySpec inputs. The
+ *  pre-computed digests for the AppSpec and operator resolution inputs. The
  *  graph digest is a sha256 over the canonical-stringified projections plus
  *  manifest snapshot + closure digest, so two resolutions with identical
  *  manifests + closures always produce identical graph digests.

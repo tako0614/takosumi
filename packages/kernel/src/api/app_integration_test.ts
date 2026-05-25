@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import type { TakosumiActorContext } from "takosumi-contract";
-import { signTakosumiInternalRequest } from "takosumi-contract/internal-rpc";
+import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
+import { signTakosumiInternalRequest } from "takosumi-contract/internal/rpc";
 import { InMemoryRuntimeAgentRegistry } from "../agents/mod.ts";
 import { createInMemoryAppContext } from "../app_context.ts";
 import { createApiApp } from "./app.ts";
@@ -55,8 +55,27 @@ Deno.test("createApiApp does not mount legacy public deployment routes", async (
 
   const openapi = await (await app.request("/openapi.json")).json();
   assert.ok(openapi.paths["/v1/installations"]);
+  assert.ok(openapi.paths["/v1/installations/{installationId}/deployments"]);
+  assert.equal(
+    openapi.paths["/v1/installations/:installationId/deployments"],
+    undefined,
+  );
   assert.equal(openapi.paths["/api/public/v1/deployments"], undefined);
   assert.equal(openapi.paths["/v1/deployments"], undefined);
+  assert.equal(openapi.components.schemas.InternalDeploymentRecord, undefined);
+  assert.equal(openapi.components.schemas.GroupHead, undefined);
+  assert.equal(openapi.components.schemas.StatusSummaryResponse, undefined);
+  assert.equal(
+    openapi.paths["/v1/installations"].post.requestBody.content[
+      "application/json"
+    ].schema.$ref,
+    "#/components/schemas/InstallerInstallationApplyRequest",
+  );
+  assert.equal(
+    openapi.components.schemas.ErrorResponse.properties.error.required
+      .includes("requestId"),
+    true,
+  );
 });
 
 Deno.test("createApiApp mounts runtime-agent routes fail-closed when enabled", async () => {

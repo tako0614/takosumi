@@ -1,1 +1,1 @@
-export * from "@takos/takosumi-plugins";
+export * from "@takos/takosumi-contract";

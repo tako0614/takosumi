@@ -19,7 +19,7 @@ import type {
   LifecycleDescribeResponse,
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   Connector,
   ConnectorContext,

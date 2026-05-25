@@ -54,7 +54,7 @@ import {
   type TakosumiActorContext,
   verifyGatewayManifest,
   verifyGatewayResponseSignature,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   CORRELATION_ID_HEADER,
   createRuntimeAgentTraceContext,

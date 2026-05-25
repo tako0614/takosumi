@@ -58,7 +58,6 @@ out = {
     },
     'manifestDigest': 'sha256:$digest',
     'changes': changes,
-    'estimatedCost': {'currency': 'JPY', 'monthly': 0},
     'expected': {
         'commit': '$commit',
         'manifestDigest': 'sha256:$digest',

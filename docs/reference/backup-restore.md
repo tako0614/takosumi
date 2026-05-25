@@ -1,7 +1,5 @@
 # バックアップとリストア {#backup-and-restore}
 
-> このページでわかること: kernel state のバックアップとリストアの手順。
-
 operator self-host deployment 向け Takosumi v1 backup / restore プロトコル。
 backup 必須の storage record、regenerable で skip 可能な record、on-disk な
 backup フォーマット、point-in-time 整合性 invariant、audit chain
@@ -33,7 +31,7 @@ record。
 | Operator implementation config | Which kind aliases / provider implementations / connector inventory were visible. |
 | `DataAssetRecord` metadata     | Optional DataAsset extension metadata needed for retention / replay.              |
 
-これらが集合として v1 の **backup set** を構成する。 いずれかの行を省略する v1
+これらが集合として v1 の **backup set** を構成する。いずれかの行を省略する v1
 backup は非適合。 reserved な将来の record は、対応する RFC
 が受理されたときにのみ必須となる。
 
@@ -43,16 +41,16 @@ operator が DataAsset extension を mount する場合、logical backup は
 
 ### Regenerable records {#regenerable-backup-not-required}
 
-| Record                           | How regenerated                                                            |
-| -------------------------------- | -------------------------------------------------------------------------- |
-| `ObservationSet` (current state) | Recomputed by the next observe phase against runtime-agent describe.       |
-| `DriftIndex`                     | Recomputed from `ObservationSet` and the active `ResolutionSnapshot`.      |
-| `ExportMaterial` cache           | Re-derived from `ResolutionSnapshot` and managed objects.                  |
-| Generated object cache           | Re-rendered from link projection rules and source exports.                 |
-| `ObservationHistory` (opt-in)    | Operator-configurable; treated as regenerable unless the operator pins it. |
+| Record                             | How regenerated                                                            |
+| ---------------------------------- | -------------------------------------------------------------------------- |
+| `ObservationSet` (current state)   | Recomputed by the next observe phase against runtime-agent describe.       |
+| `DriftIndex`                       | Recomputed from `ObservationSet` and the active `ResolutionSnapshot`.      |
+| `PublicationMaterialization` cache | Re-derived from `ResolutionSnapshot` and managed objects.                  |
+| Generated object cache             | Re-rendered from link projection rules and source publications.            |
+| `ObservationHistory` (opt-in)      | Operator-configurable; treated as regenerable unless the operator pins it. |
 
 operator は restore 後の warm-up を速めるために regenerable record を backup
-に含めて **もよい** が、 適合な restore
+に含めて **もよい** が、適合な restore
 はそれらが無くても成功しなければならない。
 
 ## Backup フォーマット {#backup-format}
@@ -60,7 +58,7 @@ operator は restore 後の warm-up を速めるために regenerable record を
 logical export は kernel 内部 JSON の単一 multi-record stream として生成される。
 各 record は次を含む。
 
-- `spaceId` — 所有 Space ID。 Space を跨ぐ record (audit chain global、operator
+- `spaceId` —所有 Space ID。 Space を跨ぐ record (audit chain global、operator
   implementation config evidence) は予約値 `space:_global` を使う。
 - `id` — [Resource IDs](./resource-ids.md) に従う resource ID。
 - `kind` — record の kind (例: `resolution-snapshot`、`journal-entry`)。
@@ -108,7 +106,7 @@ backup duration は per-Space lock TTL で範囲が決まる。 operator が TTL
 
 secret partition record は **そのまま** 、 operator の master key
 で暗号化されたままで export される。 backup ツールは secret material
-を復号して再暗号化しない。 帰結は 2 つ。
+を復号して再暗号化しない。帰結は 2 つ。
 
 - export stream が漏洩しても、master key なしには backup は使えない。
 - restore には operator が同じ master key (または同じ partition key
@@ -124,7 +122,7 @@ restore は ingest 中に global chain を検証する。順序外の ingest は
 
 ## Restore のフロー {#restore-flow}
 
-restore は 6 ステップの sequence。 各ステップは hard gate
+restore は 6 ステップの sequence。各ステップは hard gate
 であり、前のステップが検証されるまで次のステップは始められない。
 
 ### 1. ストレージの初期化 {#1-storage-initialization}
@@ -137,7 +135,7 @@ cross-major restore はこのステップで reject される。target は backu
 ### 2. Secret master key の注入 {#2-secret-master-key-injection}
 
 operator は record ingest の前に master key (または master key 派生材料)
-を供給する。 鍵は operator の secret backend が保持し、 restore ツールは kernel
+を供給する。鍵は operator の secret backend が保持し、 restore ツールは kernel
 が runtime で使うのと同じ factory 経由で読み込む。
 
 ### 3. Logical import {#3-logical-import}
@@ -201,7 +199,7 @@ window を見込むべき。
 ### In-flight operation の解決 {#in-flight-operation-resolution}
 
 in-flight operation はステップ 5 で記録された recovery mode を通じて resume
-する。 各 Implementation が `recoveryMode = continue` と
+する。各 Implementation が `recoveryMode = continue` と
 `recoveryMode = compensate` をどう扱うかは
 [Provider Implementations](./providers.md) が定める。
 
@@ -216,20 +214,20 @@ restore 後も 30% 状態のままで、 rollout state machine は次の deploy
 
 restore は **同じ kernel major version 内で保証される**。cross-major restore は
 release-specific private runbook と検証済み evidence を要求する。restore
-ツールは 直接 restore を止め、closed な `failed_precondition` エラーを発行する。
+ツールは直接 restore を止め、closed な `failed_precondition` エラーを発行する。
 
 ## オペレーター surface {#operator-surface}
 
 現行の public `takosumi` CLI は backup / restore コマンドを公開していない。
 backup と restore は operator 限定の workflow であり、 public operator CLI
-surface が実装され [CLI](./cli.md) で文書化されるまでは、 内部 control plane
+surface が実装され [CLI](./cli.md) で文書化されるまでは、内部 control plane
 ツールや deployment 自動化を通じて駆動する必要がある。
 
 - backup は上述の point-in-time lock 下で export stream を生成する。
 - restore は上記 6 ステップのフローを、初期化された空 storage に対して実行する。
 
-両コマンドとも deploy bearer ではなく operator bearer 認証を要求する。
-両コマンドとも下記 audit event を通じて進捗を記録する。
+両コマンドとも Installer bearer や DataAsset writer token ではなく operator
+bearer 認証を要求する。 両コマンドとも下記 audit event を通じて進捗を記録する。
 
 ## 監査イベント {#audit-event}
 
@@ -251,11 +249,11 @@ restore 後の current chain head は当然別の値になる。
 
 ## 関連アーキテクチャノート
 
-- docs/reference/architecture/snapshot-model.md
-- docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal
-- docs/reference/drift-detection.md
-- docs/reference/architecture/operational-hardening-checklist.md
-- docs/reference/architecture/operator-boundaries.md
+- [Snapshot Model](./architecture/snapshot-model.md)
+- [Runtime Deployment — Operation Plan & WAL](./architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal)
+- [Drift Detection](./drift-detection.md)
+- [Operational Hardening Checklist](./architecture/operational-hardening-checklist.md)
+- [Operator Boundaries](./architecture/operator-boundaries.md)
 
 ## 関連ページ
 
@@ -265,4 +263,4 @@ restore 後の current chain head は当然別の値になる。
 - [Schema Evolution](./migration-upgrade.md)
 - [CLI](./cli.md)
 - [Reference Kernel Route Inventory](./kernel-http-api.md)
-- [Closed Enums](./closed-enums.md)
+- [Enum and Value Index](./closed-enums.md)

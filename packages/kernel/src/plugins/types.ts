@@ -1,7 +1,7 @@
 /**
  * Kernel-internal re-exports for the canonical `KernelPlugin` contract.
  *
- * The contract itself lives in `@takos/takosumi-contract/plugin`. This
+ * The contract itself lives in `@takos/takosumi-contract/reference/plugin`. This
  * shim keeps existing kernel imports stable and adds the kernel-internal
  * `KernelPluginRegistry` interface used by `InstallerPipeline`.
  */
@@ -12,8 +12,8 @@ export type {
   KernelPluginDeploymentContext,
   KernelPluginDestroyContext,
   KernelPluginInstallationContext,
-} from "takosumi-contract";
-import type { KernelPlugin } from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
+import type { KernelPlugin } from "takosumi-contract/reference/compat";
 
 export type KindAliasMap = Readonly<Record<string, string>>;
 

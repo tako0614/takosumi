@@ -3,7 +3,7 @@ import {
   createCloudflareR2ObjectStoreProvider,
   InMemoryCloudflareR2Lifecycle,
 } from "../src/shape-providers/object-store/cloudflare-r2.ts";
-import type { PlatformContext } from "takosumi-contract";
+import type { PlatformContext } from "takosumi-contract/reference/compat";
 
 const ctx = {} as PlatformContext;
 

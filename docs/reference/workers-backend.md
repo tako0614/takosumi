@@ -1,24 +1,29 @@
 # Workers backend implementation note
 
-> このページでわかること: Cloudflare Workers backend の実装上の注意点。
-
 Cloudflare Workers / D1 / R2 / Queues / Durable Objects / wrangler.toml と、
 必要な image-backed workload 用の optional Cloudflare Containers は Takosumi の
-reference materialization detail です。Cloudflare Containers は Worker-first
-control path の前提ではなく、provider/materializer が image-backed workload を
+reference execution detail です。Cloudflare Containers は Worker-first control
+path の前提ではなく、provider adapter が image-backed workload を
 必要とする場合の substrate です。
 
-Core 用語は AppSpec / Installation / Deployment / ProviderObservation /
-GroupHead / runtime target metadata を優先します。 これらは provider substrate
-に依存しない抽象で あり、 Cloudflare 以外の compute substrate (Kubernetes / bare
-metal / 自前 runtime) に substitutability を保ったまま展開できます。
+Public 用語は AppSpec / Installation / Deployment
+を優先します。ProviderObservation / GroupHead / runtime target metadata は
+reference implementation の内部 evidence です。これらは Cloudflare 以外の
+compute substrate (Kubernetes / bare metal / 自前 runtime) に展開するための
+provider-neutral implementation vocabulary であり、AppSpec authoring contract
+ではありません。
 
-`@takos/takosumi-plugins` の Cloudflare connector / `wrangler.toml` テンプレート
-/ `@takos/takosumi-runtime-agent` の Cloudflare gateway は、 これら kernel 用語
-を Cloudflare の primitive (Worker、 Durable Object、 R2、 D1、 Queues、
-Hyperdrive 等) に materialize する具体例の一つです。 他 substrate (K8s +
-cert-manager + Postgres、 bare metal + systemd) も同等の materializer を持てば
-kernel 契約は変わりません。
+Cloudflare provider adapters live in `@takos/takosumi-cloudflare-providers`.
+They, together with the runtime-agent Cloudflare connector and operator-owned
+`wrangler.toml` wiring, materialize the reference kernel terms into Cloudflare
+primitives (Worker, Route, Durable Object, R2, D1, Queues, Hyperdrive 等).
+`@takos/takosumi-plugins` is used for official catalog helpers and reference
+aliases; it is not the Cloudflare materialization package.
+
+Cloudflare route / Worker が request-time data plane になり、Takosumi kernel API
+process はその request を毎回 proxy しません。他 substrate (K8s + Gateway /
+Ingress + cert-manager + Postgres、 bare metal + Caddy / Nginx + systemd)
+も同等の provider adapter を持てば kernel 契約は変わりません。
 
 ## 関連
 

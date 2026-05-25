@@ -36,6 +36,8 @@
 #   - https://takosumi.com/docs/                 (VitePress docs)
 #   - https://takosumi.com/contexts/v1.jsonld    (JSON-LD vocab)
 #   - https://takosumi.com/contexts/kinds/v1/<name>.jsonld (kind docs)
+#   - https://takosumi.com/kinds/v1/<name>       (canonical kind descriptor URI)
+#   - https://takosumi.com/kinds/v1/<name>.jsonld (explicit JSON-LD descriptor)
 # The default `takosumi-website.pages.dev` host stays available for
 # preview deploys.
 name = "takosumi-website"

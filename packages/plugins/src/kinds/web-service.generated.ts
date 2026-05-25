@@ -16,19 +16,17 @@ export interface WebServiceSpec {
   readonly image: string;
   /** Container listen port exposed by the service. */
   readonly port: number;
-  /** Replica bounds. `min: 0` requests scale-to-zero when the chosen provider supports it. */
+  /** Replica bounds. `min: 0` requests scale-to-zero. Operator policy and the selected implementation materialize or reject the request. */
   readonly scale: WebServiceScale;
-  /** Provider-specific binding references. */
-  readonly bindings?: Readonly<Record<string, string>>;
   /** Environment variables passed to the service. */
   readonly env?: Readonly<Record<string, string>>;
-  /** Provider-portable CPU / memory hints. */
+  /** CPU / memory hints consumed by compatible provider bindings. */
   readonly resources?: WebServiceResources;
   readonly [extension: string]: unknown;
 }
 
 export interface WebServiceOutputs {
-  /** Allocated public URL (scheme-bearing). */
+  /** Provider-local upstream URL (scheme-bearing) used by gateway/listener components. */
   readonly url: string;
   /** Provider-local service host. */
   readonly internalHost: string;
@@ -36,7 +34,7 @@ export interface WebServiceOutputs {
   readonly internalPort: number;
 }
 
-export type WebServiceCapability =
+export type WebServiceCapabilityTerm =
   | "always-on"
   | "scale-to-zero"
   | "websocket"
@@ -48,18 +46,17 @@ export type WebServiceCapability =
 
 export type WebServicePublicationName = "http";
 
-export type WebServiceListenBindingName = "binding";
-
-export const WEB_SERVICE_CAPABILITIES: readonly WebServiceCapability[] = [
-  "always-on",
-  "scale-to-zero",
-  "websocket",
-  "long-request",
-  "sticky-session",
-  "geo-routing",
-  "crons",
-  "private-networking",
-];
+export const WEB_SERVICE_CAPABILITY_TERMS: readonly WebServiceCapabilityTerm[] =
+  [
+    "always-on",
+    "scale-to-zero",
+    "websocket",
+    "long-request",
+    "sticky-session",
+    "geo-routing",
+    "crons",
+    "private-networking",
+  ];
 
 export const WEB_SERVICE_OUTPUT_FIELDS: readonly string[] = [
   "url",
@@ -67,6 +64,7 @@ export const WEB_SERVICE_OUTPUT_FIELDS: readonly string[] = [
   "internalPort",
 ];
 
+// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.
 export const WEB_SERVICE_ALIASES: readonly string[] = [
   "web-service",
 ];
@@ -74,14 +72,12 @@ export const WEB_SERVICE_ALIASES: readonly string[] = [
 export const WEB_SERVICE_PUBLICATIONS: readonly WebServicePublicationName[] = [
   "http",
 ];
-
-export const WEB_SERVICE_LISTEN_BINDINGS:
-  readonly WebServiceListenBindingName[] = [
-    "binding",
-  ];
-
-export const WEB_SERVICE_KIND_ID = "web-service";
+// Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
+export const WEB_SERVICE_KIND_SHAPE_ID = "web-service";
+/** @deprecated Use WEB_SERVICE_KIND_URI for AppSpec kind identity, or WEB_SERVICE_KIND_SHAPE_ID for legacy Shape.id. */
+export const WEB_SERVICE_KIND_ID = WEB_SERVICE_KIND_SHAPE_ID;
 export const WEB_SERVICE_KIND_NAME = "web-service";
+// Official catalog descriptor URI used in AppSpec kind resolution.
 export const WEB_SERVICE_KIND_URI = "https://takosumi.com/kinds/v1/web-service";
 export const WEB_SERVICE_KIND_VERSION = "v1";
 export const WEB_SERVICE_DESCRIPTION =

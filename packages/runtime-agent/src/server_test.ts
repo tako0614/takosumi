@@ -7,7 +7,7 @@ import {
   type LifecycleApplyRequest,
   type LifecycleCompensateRequest,
   type LifecycleDestroyRequest,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import { ConnectorRegistry } from "./connectors/mod.ts";
 import { createRuntimeAgentApp } from "./server.ts";
 
@@ -67,6 +67,7 @@ Deno.test("apply returns 404 for unknown connector", async () => {
   const req: LifecycleApplyRequest = {
     shape: "object-store@v1",
     provider: "ghost",
+    spaceId: "space:test",
     resourceName: "x",
     spec: {},
   };
@@ -95,6 +96,7 @@ Deno.test("apply dispatches to registered connector", async () => {
   const req: LifecycleApplyRequest = {
     shape: "object-store@v1",
     provider: "memory",
+    spaceId: "space:test",
     resourceName: "x",
     spec: { name: "x" },
   };
@@ -324,6 +326,7 @@ Deno.test("destroy dispatches to registered connector", async () => {
   const req: LifecycleDestroyRequest = {
     shape: "object-store@v1",
     provider: "memory",
+    spaceId: "space:test",
     handle: "memory://x",
   };
   const res = await app.request(LIFECYCLE_DESTROY_PATH, {
@@ -354,6 +357,7 @@ Deno.test("compensate dispatches to registered connector", async () => {
   const req: LifecycleCompensateRequest = {
     shape: "object-store@v1",
     provider: "memory",
+    spaceId: "space:test",
     handle: "memory://x",
   };
   const res = await app.request(LIFECYCLE_COMPENSATE_PATH, {

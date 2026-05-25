@@ -1,11 +1,13 @@
 # Lifecycle Phases
 
-> このページでわかること: lifecycle 6 phase enum と `LifecycleStatus` 5 値の
-> 遷移規則。
+このページは reference kernel の internal execution phases を定義します。public
+Installer API から見える status は Deployment / Installation の wire shape
+であり、ここにある `Phase` / `LifecycleStatus` は retained
+implementation/operator evidence と recovery に使う internal enum です。
 
-Takosumi v1 lifecycle は OperationPlan ごとに走る 6 phase closed enum と、
-managed object の可視状態を表す 5 値 `LifecycleStatus` closed enum の組合せ。
-値の追加には `CONVENTIONS.md` §6 RFC が必須です。
+Reference kernel v1 lifecycle は OperationPlan ごとに走る 6 phase closed enum
+と、managed object の可視状態を表す 5 値 `LifecycleStatus` closed enum
+の組合せ。値の追加には `CONVENTIONS.md` §6 RFC が必須です。
 
 ```text
 Phases:           apply | activate | destroy | rollback | recovery | observe
@@ -23,13 +25,13 @@ apply  ──►  activate  ──►  observe   (steady state)
                 │
                 └──►  destroy
                 │
-rollback ◄──────┘     (new Deployment from recorded evidence)
+rollback ◄──────┘     (pointer move to retained Deployment)
 recovery ◄── (kernel restart / lock re-acquire,
               resumes from last persisted WAL stage)
 ```
 
-`observe` は長時間動作で、 同 Space の次 `apply` / `destroy` と重なっても block
-しません。 `rollback` / `recovery` は常に WAL replay で、 最後に persist された
+`observe` は長時間動作で、同 Space の次 `apply` / `destroy` と重なっても block
+しません。 `rollback` / `recovery` は常に WAL replay で、最後に persist された
 journal entry から再入します。
 
 ### `apply`
@@ -43,8 +45,9 @@ journal entry から再入します。
 - **WAL stages**: `prepare` -> `pre-commit` -> `commit` -> `post-commit` ->
   `finalize`
 - **Failure**: `prepare` / `pre-commit` 失敗は副作用なく `abort`。`commit`
-  失敗は同じ idempotency key で retry するか、operator が recovery mode を選ぶ
-- **Blocking**: 期間中 `(spaceId, operationPlanDigest)` lock を保持。 同 Space
+  失敗は同じ internal WAL idempotency key で retry するか、operator が recovery
+  mode を選ぶ
+- **Blocking**: 期間中 `(spaceId, operationPlanDigest)` lock を保持。同 Space
   の他 intentional phase は queue
 - **Typical duration**: 数秒〜数分。 OCI image pull / Transform 含む plan は
   connector apply 待ちが支配的
@@ -53,7 +56,7 @@ journal entry から再入します。
 
 - **Input**: `apply` が生成した `ResolutionSnapshot`
 - **Output**: ActivationSnapshot / GroupHead update。health は observe が
-  append-only observation として記録する。 新 `ResolutionSnapshot` は生成しない
+  append-only observation として記録する。新 `ResolutionSnapshot` は生成しない
 - **Journal cursor**: apply phase の entry を `commit` -> `post-commit` 遷移で
   継続使用
 - **WAL stages**: `post-commit` -> `observe`
@@ -68,39 +71,42 @@ journal entry から再入します。
 
 - **Input**: 現行 Deployment の recorded `ResolutionSnapshot` / operation
   evidence
-- **Output**: 新しい destroy Deployment evidence / WAL cleanup result /
-  activation state。旧 `ResolutionSnapshot` は変更しない。external / operator /
-  imported は不変
+- **Output**: 新しい destroy operation evidence / WAL cleanup result /
+  activation state。旧 `ResolutionSnapshot` は変更しない。external /
+  operator-owned input refs は不変
 - **Journal cursor**: destroy plan digest の下で新 `journalEntryId` を割当て
 - **WAL stages**: `pre-commit` -> `commit` -> `finalize`
 - **Failure**: `commit` 失敗で部分削除が残り、 recovery は resume (idempotent)
   か pre-destroy snapshot への compensate を選択。 `finalize` で external
   connector が削除を拒否すれば `external-revoke` `RevokeDebt` を emit
 - **Blocking**: 同 lock。 `apply` と相互排他
-- **Typical duration**: `apply` 相当。 削除が緩慢な external resource で長く
+- **Typical duration**: `apply` 相当。削除が緩慢な external resource で長く
   なりうる
 
 ### `rollback`
 
 - **Input**: 巻き戻し対象 Deployment の recorded source / snapshot / evidence
-- **Output**: その evidence から作られる新しい rollback Deployment。過去
-  snapshot は入力として使い、出力 identity として再利用しない
+- **Public output**: `Installation.currentDeploymentId` が target Deployment
+  を指 す。Deployment は新規作成しない
+- **Reference implementation output**: internal routing / activation pointer
+  update。具体的な pointer 名は implementation detail
 - **Journal cursor**: 新 `journalEntryId`。 rollback plan は独自の
   `operationPlanDigest` を持つ
-- **WAL stages**: `pre-commit` (compensate replay) -> `commit` -> `abort`
-- **Failure**: compensate 不能 entry があれば rollback は `abort` 遷移し、
-  `activation-rollback` `RevokeDebt` を emit
+- **WAL stages**: `pre-commit` -> `commit` -> `post-commit` -> `finalize`
+- **Failure**: retained Deployment / ActivationSnapshot が利用不能、または
+  pointer update を atomic に commit できない場合は `abort`。unfinished WAL の
+  cleanup / compensate は `recovery` phase で扱う
 - **Blocking**: 前方 phase と同じ lock
-- **Typical duration**: 元 `apply` と同程度。 最も遅い compensate operation が
-  boundary
+- **Typical duration**: pointer update と provider ingress assignment
+  の反映時間。 DB / object-store contents や migration は巻き戻さない
 
 ### `recovery`
 
 - **Input**: persist 済 WAL state + unfinished journal entry に記録された
-  snapshot / Deployment evidence ids
+  snapshot / retained evidence ids
 - **Output**: recovery mode (`normal` / `continue` / `compensate` / `inspect`)
-  に依存。 詳細は [Recovery modes](./lifecycle.md#recovery-modes)
-- **Journal cursor**: 最後に persist された entry の次 stage から resume。 新
+  に依存。詳細は [Recovery modes](./lifecycle.md#recovery-modes)
+- **Journal cursor**: 最後に persist された entry の次 stage から resume。新
   `journalEntryId` は割当てない
 - **WAL stages**: resume point 以降の残り stage
 - **Failure**: mode 依存。 `inspect` は副作用なし、 `compensate` は `RevokeDebt`
@@ -113,7 +119,7 @@ journal entry から再入します。
 - **Input**: live runtime-agent describe 結果 + 現行 `ResolutionSnapshot`
 - **Output**: health observation (`healthy` / `degraded` / `unhealthy`)、
   ObservationSet entry、 drift / external revoke 検出時の `RevokeDebt` 候補
-- **Journal cursor**: Space ごとに長時間 observe entry を再利用。 新 operation
+- **Journal cursor**: Space ごとに長時間 observe entry を再利用。新 operation
   plan digest は割当てない
 - **WAL stages**: `observe` (long-lived、 terminal にならない)
 - **Failure**: 非 blocking。 freshness annotation は立てるが compensate effect
@@ -131,13 +137,13 @@ journal entry から再入します。
 running | stopped | missing | error | unknown
 ```
 
-| 値        | 意味                                                                                               |
-| --------- | -------------------------------------------------------------------------------------------------- |
-| `running` | object が存在し、 component kind の contract に従って connector の「live」状態にある。             |
-| `stopped` | object は存在するが意図的に動作していない (例: paused worker、 drained gateway)。                  |
-| `missing` | connector 視点で object が不在。 未 apply か、 外部から削除されたかのいずれか。                    |
-| `error`   | object は存在するが connector が通常動作不能の fault を報告している。                              |
-| `unknown` | connector が応答しない、 未知の state を返した、 または runtime-agent がまだ describe していない。 |
+| 値        | 意味                                                                                             |
+| --------- | ------------------------------------------------------------------------------------------------ |
+| `running` | object が存在し、 component kind の contract に従って connector の「live」状態にある。           |
+| `stopped` | object は存在するが意図的に動作していない (例: paused worker、 drained gateway)。                |
+| `missing` | connector 視点で object が不在。未 apply か、外部から削除されたかのいずれか。                    |
+| `error`   | object は存在するが connector が通常動作不能の fault を報告している。                            |
+| `unknown` | connector が応答しない、未知の state を返した、または runtime-agent がまだ describe していない。 |
 
 ### Trigger transitions
 
@@ -172,8 +178,8 @@ verify trigger:
 
 ### 報告ルール
 
-runtime-agent は describe ごと、 および `apply` / `destroy` の lifecycle
-response で `LifecycleStatus` を返します。 ルール:
+runtime-agent は describe ごと、および `apply` / `destroy` の lifecycle response
+で `LifecycleStatus` を返します。ルール:
 
 - component kind contract に従い connector が live と確認したときのみ `running`
   (accept されただけでは不可)
@@ -194,6 +200,6 @@ response で `LifecycleStatus` を返します。 ルール:
 
 ## 関連ページ
 
-- [Closed Enums](./closed-enums.md)
+- [Enum and Value Index](./closed-enums.md)
 - [Lifecycle Protocol](./lifecycle.md)
-- [Runtime-Agent API](./runtime-agent-api.md)
+- [Reference Runtime-Agent Execution Surface](./runtime-agent-api.md)

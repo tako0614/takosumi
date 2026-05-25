@@ -14,6 +14,8 @@
 #      and copies it onto `.output/public/docs/`
 #   3. Copies the JSON-LD context catalog (`takosumi/spec/contexts/`)
 #      onto `.output/public/contexts/`
+#   4. Copies takosumi.com kind descriptor JSON-LD documents onto
+#      `.output/public/kinds/v1/` so canonical kind URIs resolve.
 #
 # The merged `.output/public/` is the `pages_build_output_dir` declared
 # in `wrangler.toml`. The legacy `takosumi/site/` minimal HTML landing
@@ -30,6 +32,7 @@ OUTPUT_PUBLIC="${WEBSITE_DIR}/.output/public"
 DOCS_DIR="${REPO_ROOT}/docs"
 DOCS_DIST="${DOCS_DIR}/.vitepress/dist"
 SPEC_CONTEXTS="${REPO_ROOT}/spec/contexts"
+KIND_DESCRIPTORS="${REPO_ROOT}/packages/plugins/spec/kinds/v1"
 
 # 1. Landing build (Solid Start, static prerender).
 echo "[takosumi/website] build landing (vinxi build)"
@@ -63,15 +66,50 @@ rm -rf "${OUTPUT_PUBLIC}/docs"
 mkdir -p "${OUTPUT_PUBLIC}/docs"
 cp -R "${DOCS_DIST}/." "${OUTPUT_PUBLIC}/docs/"
 
-# 3. JSON-LD context catalog overlay — spec/contexts/v1.jsonld and
-#    spec/contexts/kinds/v1/<name>.jsonld go under /contexts/ so the
-#    wire URLs `https://takosumi.com/contexts/v1.jsonld` and
-#    `https://takosumi.com/contexts/kinds/v1/<name>.jsonld` resolve.
+# 3. JSON-LD context overlay — spec/contexts/v1.jsonld goes under /contexts/
+#    so the wire URL `https://takosumi.com/contexts/v1.jsonld` resolves.
 if [ -d "${SPEC_CONTEXTS}" ]; then
   echo "[takosumi/website] overlay /contexts/ from spec/contexts/"
   rm -rf "${OUTPUT_PUBLIC}/contexts"
   mkdir -p "${OUTPUT_PUBLIC}/contexts"
   cp -R "${SPEC_CONTEXTS}/." "${OUTPUT_PUBLIC}/contexts/"
+fi
+
+# 4. Kind descriptor overlay — packages/plugins/spec/kinds/v1/<name>.jsonld
+#    is the descriptor catalog source. Publish both `<name>.jsonld` and
+#    extensionless `<name>` so `https://takosumi.com/kinds/v1/<name>` resolves as
+#    the stable kind URI while clients that prefer explicit JSON-LD can fetch
+#    `.jsonld`. Strip local codegen-only `x-ts*` annotations from the public
+#    catalog payload.
+if [ -d "${KIND_DESCRIPTORS}" ]; then
+  echo "[takosumi/website] overlay /kinds/v1/ from packages/plugins/spec/kinds/v1/"
+  rm -rf "${OUTPUT_PUBLIC}/kinds"
+  mkdir -p "${OUTPUT_PUBLIC}/kinds/v1"
+  for descriptor in "${KIND_DESCRIPTORS}"/*.jsonld; do
+    [ -f "${descriptor}" ] || continue
+    name="$(basename "${descriptor}" .jsonld)"
+    node -e '
+const fs = require("node:fs");
+const [src, dst] = process.argv.slice(1);
+function stripTooling(value) {
+  if (Array.isArray(value)) return value.map(stripTooling);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "x-ts" || key === "x-ts-name" || key === "x-ts-type") continue;
+      out[key] = stripTooling(child);
+    }
+    return out;
+  }
+  return value;
+}
+fs.writeFileSync(
+  dst,
+  JSON.stringify(stripTooling(JSON.parse(fs.readFileSync(src, "utf8"))), null, 2) + "\n",
+);
+' "${descriptor}" "${OUTPUT_PUBLIC}/kinds/v1/${name}.jsonld"
+    cp "${OUTPUT_PUBLIC}/kinds/v1/${name}.jsonld" "${OUTPUT_PUBLIC}/kinds/v1/${name}"
+  done
 fi
 
 # Optional static assets — copy whatever lives under website/static/

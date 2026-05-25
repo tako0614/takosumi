@@ -9,7 +9,7 @@ import type {
   GroupHead,
   IsoTimestamp,
   ProviderObservation,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   type DeploymentProviderAdapter,
   rolledBackCondition,

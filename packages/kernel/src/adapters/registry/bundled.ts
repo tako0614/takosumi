@@ -6,7 +6,7 @@ import type {
   ProviderSupportReport,
   TrustRecord,
 } from "../../domains/registry/mod.ts";
-import type { Digest, JsonObject } from "takosumi-contract";
+import type { Digest, JsonObject } from "takosumi-contract/reference/compat";
 
 const REGISTRY_NAME = "bundled";
 const PUBLISHER = "takos";

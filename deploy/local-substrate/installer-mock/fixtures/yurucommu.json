@@ -13,10 +13,6 @@
     { "op": "create", "component": "media", "kind": "object-store" },
     { "op": "create", "component": "auth", "kind": "oidc" }
   ],
-  "estimatedCost": {
-    "currency": "JPY",
-    "monthly": 0
-  },
   "expected": {
     "commit": "53bec9b4097aee10b032445568d74a450dbc875a",
     "manifestDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7"

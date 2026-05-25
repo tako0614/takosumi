@@ -14,10 +14,12 @@ components:
       entrypoint: dist/worker.mjs
       compatibilityDate: "2025-01-01"
     listen:
-      com.example.my-app.db:
+      db:
+        from: db.connection
         as: env
-        prefix: DATABASE
-      com.example.my-app.assets:
+        prefix: DB
+      assets:
+        from: assets.bucket
         as: env
         prefix: ASSETS
 
@@ -27,14 +29,16 @@ components:
       version: "16"
       size: small
     publish:
-      - com.example.my-app.db
+      connection:
+        as: service-binding
 
   assets:
     kind: object-store
     spec:
       name: my-app-assets
     publish:
-      - com.example.my-app.assets
+      bucket:
+        as: object-store
 `,
   empty: `apiVersion: v1
 
@@ -42,7 +46,11 @@ metadata:
   id: com.example.my-app
   name: My App
 
-components: {}
+components:
+  app:
+    kind: worker
+    spec:
+      entrypoint: dist/worker.mjs
 `,
 } as const;
 

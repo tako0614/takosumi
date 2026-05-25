@@ -1,4 +1,7 @@
-import type { ActorContext, JsonObject } from "takosumi-contract";
+import type {
+  ActorContext,
+  JsonObject,
+} from "takosumi-contract/reference/compat";
 import type { IsoTimestamp } from "../../shared/time.ts";
 
 export type AuditEventId = string;

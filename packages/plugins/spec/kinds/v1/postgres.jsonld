@@ -4,12 +4,8 @@
   "@type": "ComponentKind",
   "name": "postgres",
   "version": "v1",
-  "aliases": ["postgres"],
-  "description": "Managed PostgreSQL instance. Provider-portable via standard wire protocol. Publishes connection material as a local publication.",
-  "x-ts": {
-    "fileBasename": "database-postgres",
-    "prefix": "DatabasePostgres"
-  },
+  "referenceAliases": ["postgres"],
+  "description": "Managed PostgreSQL instance intended to be bindable across compatible providers through the standard wire protocol. Publishes connection material as a local publication.",
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -37,7 +33,7 @@
       },
       "highAvailability": {
         "type": "boolean",
-        "description": "Enable provider-managed HA replica."
+        "description": "Request provider-managed HA when supported. Operator policy and the selected implementation materialize or reject the request."
       }
     }
   },
@@ -54,7 +50,6 @@
       }
     }
   },
-  "listens": {},
   "outputs": [
     {
       "name": "host",
@@ -93,7 +88,7 @@
       "meaning": "Passwordless client connection URL. Credentials are supplied through passwordSecretRef."
     }
   ],
-  "capabilities": [
+  "capabilityTerms": [
     "pitr",
     "read-replicas",
     "high-availability",

@@ -1,52 +1,39 @@
 # Deploy システム {#deploy-system}
 
-> このページでわかること: current Takosumi deploy lifecycle の public contract。
-
-Takosumi の public surface は **AppSpec (`.takosumi.yml`) / Installation /
-Deployment** の 3 entity に閉じる。 kernel が公開する installer API は次の 5
-endpoint だけ。
-
-```text
-POST /v1/installations/dry-run
-POST /v1/installations
-POST /v1/installations/{id}/deployments/dry-run
-POST /v1/installations/{id}/deployments
-POST /v1/installations/{id}/rollback
-```
-
-`TAKOSUMI_INSTALLER_TOKEN` が installer endpoint の bearer。 token 未設定時は
-endpoint が 404 を返す。
+Takosumi core の public concepts は **AppSpec (`.takosumi.yml`) / Installation /
+Deployment** の 3 entity です。public Installer API は
+[Installer API](../installer-api.md) の 5 endpoint に閉じます。
 
 ## ライフサイクル {#lifecycle}
 
 ```text
-git source / prepared source snapshot
+git source / prepared source archive
   └─ .takosumi.yml (= AppSpec)
       ↓ POST /v1/installations[/dry-run]
     Installation
       ↓ POST /v1/installations/{id}/deployments[/dry-run]
     Deployment
-      ↓ internal lifecycle dispatch
-    runtime-agent / provider connector
 ```
 
 - AppSpec は source root の `.takosumi.yml` 1 file。
 - Installation は Space 内に install された AppSpec source と current state。
-- Deployment は Installation に対する apply / rollback の履歴。
+- Deployment は Installation に対する apply の履歴。
 - rollback は `POST /v1/installations/{id}/rollback` で過去 Deployment を入力に
-  新しい Deployment を作る。
+  current pointer を戻す。
 
-## Workflow placement {#non-goals}
+Deployment の apply は operator-selected execution によって実体化されます。
+runtime-agent、provider connector、in-process controller などの packaging は
+operator implementation の選択です。
 
-workflow / webhook / cron / CI runner は upstream automation として AppSpec
-source を installer API に渡す。
+## Workflow placement {#workflow-placement}
 
-過去 docs の `.takosumi/app.yml`、中間 deployment document、 public raw deploy
-endpoint は retired model として扱う。
+workflow / webhook / cron / CI runner は upstream automation として source ref
+または prepared source archive を選び、Installer API に渡します。
+`.takosumi.yml` が AppSpec の source of truth で、Deployment は Installer API
+lifecycle の結果として記録されます。
 
 ## クロスリファレンス {#cross-references}
 
 - [Installer API](../installer-api.md)
 - [AppSpec](../app-spec.md)
 - [Reference Kernel Route Inventory](../kernel-http-api.md)
-- [AppSpec](../app-spec.md)

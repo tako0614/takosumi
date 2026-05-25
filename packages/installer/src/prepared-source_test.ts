@@ -16,7 +16,7 @@ Deno.test("fetchPreparedSource verifies sha256 and extracts tar snapshot", async
       `${sourceDir}/src/worker.mjs`,
       "export default {}",
     );
-    await tar(["-c", "-f", archive, "-C", sourceDir, "."]);
+    await tar(["-c", "-f", archive, "-C", sourceDir, ".takosumi.yml", "src"]);
     const digest = await sha256Hex(await Deno.readFile(archive));
 
     const result = await fetchPreparedSource({ url: archive, digest });

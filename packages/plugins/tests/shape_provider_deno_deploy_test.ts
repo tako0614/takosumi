@@ -3,7 +3,7 @@ import {
   createDenoDeployProvider,
   InMemoryDenoDeployLifecycle,
 } from "../src/shape-providers/worker/deno-deploy.ts";
-import type { PlatformContext } from "takosumi-contract";
+import type { PlatformContext } from "takosumi-contract/reference/compat";
 
 const ctx = {} as PlatformContext;
 

@@ -2,7 +2,10 @@
 
 import { fileURLToPath } from "node:url";
 import { basename, join } from "node:path";
-import type { provider, RuntimeDesiredState } from "takosumi-contract";
+import type {
+  provider,
+  RuntimeDesiredState,
+} from "takosumi-contract/reference/compat";
 import {
   assertProviderProofFixture,
   operationDescriptor,

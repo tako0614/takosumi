@@ -1,4 +1,4 @@
-import type { CoreBindingResolutionInput } from "takosumi-contract";
+import type { CoreBindingResolutionInput } from "takosumi-contract/reference/compat";
 import type {
   ResourceBindingRole,
   ResourceInstance,

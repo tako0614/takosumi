@@ -1,4 +1,4 @@
-import type { Digest } from "takosumi-contract";
+import type { Digest } from "takosumi-contract/reference/compat";
 import type {
   CatalogReleaseAdoption,
   CatalogReleaseDescriptor,

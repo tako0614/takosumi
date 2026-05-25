@@ -24,7 +24,7 @@ export async function fetchPreparedSource(
   if (options.url.length === 0) {
     throw new Error("prepared source requires a non-empty url");
   }
-  if (!options.digest.startsWith("sha256:")) {
+  if (!isSha256Digest(options.digest)) {
     throw new Error("prepared source digest must use sha256:<hex>");
   }
 
@@ -86,6 +86,10 @@ function isHttpUrl(value: string): boolean {
   return value.startsWith("https://") || value.startsWith("http://");
 }
 
+function isSha256Digest(value: string): boolean {
+  return /^sha256:[0-9a-f]{64}$/.test(value);
+}
+
 function isGzipArchive(url: string): boolean {
   const lower = url.toLowerCase();
   return lower.endsWith(".tgz") || lower.endsWith(".tar.gz");
@@ -99,17 +103,69 @@ async function assertSafeTarEntries(
     compressed ? ["-t", "-z", "-f", "-"] : ["-t", "-f", "-"],
     bytes,
   );
+  const seen = new Set<string>();
   for (const entry of stdout.split(/\r?\n/)) {
     if (entry.length === 0) continue;
-    if (entry.startsWith("/") || entry.includes("\0")) {
-      throw new Error(`prepared source tar entry is unsafe: ${entry}`);
-    }
-    const segments = entry.split("/");
-    if (segments.includes("..")) {
+    const normalized = normalizeTarEntryPath(
+      entry,
+      "prepared source tar entry",
+    );
+    if (seen.has(normalized)) {
       throw new Error(
-        `prepared source tar entry escapes destination: ${entry}`,
+        `prepared source tar entry duplicates normalized path: ${entry}`,
       );
     }
+    seen.add(normalized);
+  }
+  const verbose = await runTar(
+    compressed ? ["-t", "-v", "-z", "-f", "-"] : ["-t", "-v", "-f", "-"],
+    bytes,
+  );
+  for (const line of verbose.split(/\r?\n/)) {
+    if (line.length === 0) continue;
+    assertSafeTarLinkTarget(line, "prepared source tar entry");
+  }
+}
+
+function normalizeTarEntryPath(entry: string, label: string): string {
+  if (entry.startsWith("/") || entry.includes("\0")) {
+    throw new Error(`${label} is unsafe: ${entry}`);
+  }
+  const withoutTrailingSlash = entry.replace(/\/+$/, "");
+  if (
+    withoutTrailingSlash.length === 0 ||
+    withoutTrailingSlash === "." ||
+    withoutTrailingSlash === ".."
+  ) {
+    throw new Error(`${label} is empty or root-only: ${entry}`);
+  }
+  const segments = withoutTrailingSlash.split("/");
+  if (
+    segments.some((segment) =>
+      segment.length === 0 || segment === "." || segment === ".."
+    )
+  ) {
+    throw new Error(`${label} escapes destination: ${entry}`);
+  }
+  return segments.join("/");
+}
+
+function assertSafeTarLinkTarget(line: string, label: string): void {
+  const type = line[0];
+  if (type !== "l" && type !== "h") return;
+  const target = type === "l"
+    ? line.split(" -> ")[1]
+    : line.split(" link to ")[1];
+  if (!target) return;
+  if (target.startsWith("/") || target.includes("\0")) {
+    throw new Error(`${label} link target is unsafe: ${target}`);
+  }
+  if (
+    target.split("/").some((segment) =>
+      segment.length === 0 || segment === "." || segment === ".."
+    )
+  ) {
+    throw new Error(`${label} link target escapes destination: ${target}`);
   }
 }
 

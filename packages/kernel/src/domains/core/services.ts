@@ -1,4 +1,4 @@
-import type { InternalSpaceSummary } from "takosumi-contract";
+import type { InternalSpaceSummary } from "takosumi-contract/reference/compat";
 import {
   conflict,
   type DomainError,

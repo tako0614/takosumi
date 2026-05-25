@@ -1,7 +1,7 @@
 import type {
   CoreConditionReason,
   GroupSummaryStatus,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   DependencyLayerStatus,
   DesiredLayerStatus,

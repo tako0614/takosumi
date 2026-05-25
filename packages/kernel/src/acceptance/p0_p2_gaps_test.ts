@@ -9,8 +9,8 @@ import {
   TAKOSUMI_INTERNAL_ACTOR_HEADER,
   TAKOSUMI_INTERNAL_PATHS,
   type TakosumiActorContext,
-} from "takosumi-contract";
-import { encodeActorContext } from "takosumi-contract/internal-rpc";
+} from "takosumi-contract/reference/compat";
+import { encodeActorContext } from "takosumi-contract/internal/rpc";
 import { createApiApp } from "../api/app.ts";
 import {
   InMemoryPackageDescriptorStore,

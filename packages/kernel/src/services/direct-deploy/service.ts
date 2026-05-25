@@ -17,7 +17,7 @@ import type {
   PublicResourceSpec,
   PublicRouteSpec,
 } from "../../domains/deploy/types.ts";
-import type { Deployment, GroupHead } from "takosumi-contract";
+import type { Deployment, GroupHead } from "takosumi-contract/reference/compat";
 
 export type DirectWorkloadInputKind = "image" | "source" | "bundle";
 

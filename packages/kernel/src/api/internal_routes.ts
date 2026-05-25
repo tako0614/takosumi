@@ -9,7 +9,7 @@ import {
   type InternalSpaceRequest,
   type JsonObject,
   TAKOSUMI_INTERNAL_PATHS,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { createCoreDomainServices } from "../domains/core/mod.ts";
 import type { MutationBoundaryOperation } from "../services/entitlements/mod.ts";
 import type { WorkerAuthzService } from "../services/security/mod.ts";

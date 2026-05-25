@@ -15,7 +15,10 @@ import type {
   OperationOutcome,
   PlannedOperation,
 } from "./apply_orchestrator.ts";
-import type { Deployment, IsoTimestamp } from "takosumi-contract";
+import type {
+  Deployment,
+  IsoTimestamp,
+} from "takosumi-contract/reference/compat";
 import type { DeployBlocker, PublicDeployManifest } from "./types.ts";
 import { InMemoryObservabilitySink } from "../../services/observability/mod.ts";
 

@@ -1,22 +1,21 @@
-# Reference Plugin Loading {#plugin-loading}
+# Reference Adapter Loading (`plugins` option) {#plugin-loading}
 
-> このページでわかること: Takosumi reference kernel が provider implementation
-> を Vite 風に attach する方法。
-
-JSON-LD kind descriptor は kind の型・意味・入出力を表す semantic metadata
-です。 provider implementation はその descriptor を具体 runtime / resource
-に変換する operator-owned 実装です。Takosumi reference kernel では、この実装を
-`KernelPlugin` として attach します。
+AppSpec の `kind` は operator が URI に解決し、その kind の `spec` と
+publish/listen contract に合う implementation binding を選びます。JSON-LD
+descriptor は、Takosumi official type catalog がその型・意味・入出力を表すため
+に使う semantic metadata です。provider implementation は、その contract を具体
+runtime / resource に変換する operator-owned 実装です。Takosumi reference kernel
+では、この実装を `KernelPlugin` として attach します。
 
 同じ descriptor を扱う別の Takosumi-compatible implementation は、native
-controller、static registry、SaaS adapter、workflow engine など別の仕組みで
-implementation binding を持てます。plugin loading は reference kernel の実装手段
-であり、Takosumi spec の必須 runtime mechanism ではありません。
+controller、static registry、SaaS adapter、workflow engine などで implementation
+binding を持てます。plugin loading は reference kernel の実装手段です。
 
 ## 基本モデル {#model}
 
-Takosumi reference operator distribution は普通の TypeScript module として
-provider package を import し、`createPaaSApp()` に plain array で渡します。
+An operator using the reference kernel imports provider packages as ordinary
+TypeScript modules and passes them to `createPaaSApp()` as the reference adapter
+array (`plugins` option).
 
 ```ts
 import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
@@ -41,24 +40,30 @@ array (`plugins` option) です。
 
 - short alias は operator-provided `kindAliases` にあるものだけ解決される
 - reference implementation adapter は `provides[]` で kind URI を宣言する
-- 同じ kind URI を複数 adapter が提供する bootstrap は fail-closed
-- adapter が 0 件、または必要 kind を提供する adapter が 0 件なら provider side
-  effect 前に fail-closed
+- 同じ kind URI を複数 adapter が提供し、operator profile / Space policy でも
+  一意に選べない bootstrap は fail-closed
+- apply / dry-run が必要とする kind URI を Space-visible implementation binding
+  が 1 つも提供しない場合は provider side effect 前に fail-closed。bootstrap
+  validation は、operator が宣言した reference adapter inventory の重複・不正・
+  operator profile が必須として宣言した binding の欠落を検査する。
 
 ## DataAsset extension との関係 {#dataasset-extension}
 
-`/v1/artifacts` は operator が mount できる DataAsset extension です。
-source-backed connector は prepared source を読み、DataAsset-backed connector は
-operator extension の content-addressed bytes を consume します。
+`/v1/artifacts` は operator が mount できる optional DataAsset extension です。
+DataAsset routes は Installer API の 5 endpoint と別の credential / route
+surface を使います。plugin loading は reference adapter array の話であり、
+DataAsset の route、credential、metadata kind、GC policy は
+[Operator DataAsset Extension](./data-asset-policy.md) と
+[Connector Guide](./connector-contract.md) が定義します。
 
 ## 失敗時の UX {#failure-ux}
 
-| Failure                            | Behavior                                           |
-| ---------------------------------- | -------------------------------------------------- |
-| unresolved kind alias              | dry-run / apply reject before provider side effect |
-| no adapter provides a kind URI     | dry-run / apply reject before provider side effect |
-| duplicate adapter for one kind URI | boot reject                                        |
-| connector not visible              | apply reject before runtime-agent dispatch         |
+| Failure                                | Behavior                                           |
+| -------------------------------------- | -------------------------------------------------- |
+| unresolved kind alias                  | dry-run / apply reject before provider side effect |
+| no adapter provides a kind URI         | dry-run / apply reject before provider side effect |
+| ambiguous adapter set for one kind URI | boot reject                                        |
+| connector not visible                  | apply reject before runtime-agent dispatch         |
 
 ## 関連ページ {#related-pages}
 

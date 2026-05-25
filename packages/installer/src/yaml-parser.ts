@@ -8,7 +8,7 @@
  * Components declare local publications (`publish.<name>`) and local
  * bindings (`listen.<name>`). A binding's `from` field points at either a
  * same-AppSpec publication (`component.publication`) or an operator-owned
- * namespace export (`namespace:<path>`). The prior `use:` edge model is
+ * external publication path (`publisher.area.name`). The prior `use:` edge model is
  * removed; encountering `use:` is rejected with `AppSpecParseError`.
  */
 
@@ -62,6 +62,7 @@ const LISTEN_OPTIONS_KEYS = new Set([
  */
 const KNOWN_LISTEN_SHAPES: ReadonlySet<string> = new Set([
   "env",
+  "secret-env",
   "mount",
   "upstream",
   "target",
@@ -93,7 +94,7 @@ export class AppSpecParseError extends Error {
 export function parseAppSpec(yamlBytes: string | Uint8Array): AppSpec {
   const text = typeof yamlBytes === "string"
     ? yamlBytes
-    : new TextDecoder().decode(yamlBytes);
+    : decodeUtf8(yamlBytes);
 
   let raw: unknown;
   try {
@@ -108,6 +109,19 @@ export function parseAppSpec(yamlBytes: string | Uint8Array): AppSpec {
   }
 
   return validateAppSpec(raw);
+}
+
+function decodeUtf8(yamlBytes: Uint8Array): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(yamlBytes);
+  } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    throw new AppSpecParseError(
+      `AppSpec YAML must be valid UTF-8: ${cause}`,
+      "syntax",
+      "$",
+    );
+  }
 }
 
 function validateAppSpec(raw: unknown): AppSpec {
@@ -322,7 +336,7 @@ function validateListen(
     if (typeof opts.from !== "string" || opts.from.length === 0) {
       throw new AppSpecParseError(
         `${entryPath}.from must be a non-empty source ref ` +
-          `(<component>.<publication> or namespace:<path>)`,
+          `(<component>.<publication> or publisher.area.name)`,
         "publish-listen",
         `${entryPath}.from`,
       );
@@ -357,6 +371,13 @@ function validateListen(
         `${entryPath}.required`,
       );
     }
+    if (opts.required !== undefined && !isExternalPublicationRef(from)) {
+      throw new AppSpecParseError(
+        `${entryPath}.required is only valid for external publication refs`,
+        "publish-listen",
+        `${entryPath}.required`,
+      );
+    }
     result[bindingName] = {
       from,
       as: opts.as,
@@ -386,8 +407,8 @@ function validateSpecObject(
  * Validate local publish / listen edges and detect cycles.
  *
  * Same-AppSpec refs use `<component>.<publication>` and must resolve inside
- * this AppSpec. External namespace refs use `namespace:<path>` and do not
- * create AppSpec-internal graph edges.
+ * this AppSpec. External publication refs use a dotted path with three or more
+ * segments and do not create AppSpec-internal graph edges.
  */
 function validatePublishListenGraph(
   components: Readonly<Record<string, Component>>,
@@ -408,7 +429,7 @@ function validatePublishListenGraph(
     if (!component.listen) continue;
     for (const [bindingName, options] of Object.entries(component.listen)) {
       const from = options.from;
-      if (isExternalNamespaceRef(from)) continue;
+      if (isExternalPublicationRef(from)) continue;
       const publisher = publisherByRef.get(from);
       if (publisher === undefined) {
         throw new AppSpecParseError(
@@ -489,9 +510,9 @@ function requireString(value: unknown, path: string): void {
 }
 
 function validateLocalName(value: string, path: string): void {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+  if (!isValidLocalName(value)) {
     throw new AppSpecParseError(
-      `${path} must be a local name using letters, numbers, "_" or "-"`,
+      `${path} must match [a-z][a-z0-9-]{0,62}`,
       "schema",
       path,
     );
@@ -502,50 +523,47 @@ function validateListenSourceRef(
   value: string,
   path: string,
 ): ListenSourceRef {
-  if (isExternalNamespaceRef(value)) {
-    const nsPath = value.slice("namespace:".length);
-    if (!isValidNamespacePath(nsPath)) {
-      throw new AppSpecParseError(
-        `${path} must use namespace:<dot-separated non-empty path>`,
-        "publish-listen",
-        path,
-      );
-    }
+  const parts = value.split(".");
+  if (parts.length === 2 && parts.every((part) => isValidLocalName(part))) {
     return value as ListenSourceRef;
   }
-  const parts = value.split(".");
-  if (parts.length !== 2 || parts.some((part) => !isValidLocalName(part))) {
+  if (parts.length >= 3 && isValidExternalPublicationPath(value)) {
+    return value as ListenSourceRef;
+  }
+  if (parts.length === 2) {
     throw new AppSpecParseError(
-      `${path} must be <component>.<publication> or namespace:<path>`,
+      `${path} must use valid component/publication names`,
       "publish-listen",
       path,
     );
   }
-  return value as ListenSourceRef;
+  throw new AppSpecParseError(
+    `${path} must be <component>.<publication> or publisher.area.name`,
+    "publish-listen",
+    path,
+  );
 }
 
-function isExternalNamespaceRef(value: string): boolean {
-  return value.startsWith("namespace:");
+function isExternalPublicationRef(value: string): boolean {
+  return value.split(".").length >= 3 && isValidExternalPublicationPath(value);
 }
 
 function isValidLocalName(value: string): boolean {
-  return /^[A-Za-z0-9_-]+$/.test(value);
+  return /^[a-z][a-z0-9-]{0,62}$/.test(value);
 }
 
 /**
- * Namespace paths are dot-separated sequences of non-empty segments.
- * No segment may be empty (so `"a..b"` and `".x"` and `"x."` are
- * rejected); whitespace inside a segment is permitted but discouraged.
- * The grammar is intentionally permissive — operators may publish
- * arbitrary domain-shaped paths (`com.example.app.web`,
- * `tenant-1.queues.events`, etc.).
+ * External publication paths are dot-separated sequences of local-name
+ * segments. `default` is an ordinary segment; Takosumi v1 does not perform
+ * hidden default-path expansion.
  */
-function isValidNamespacePath(value: string): boolean {
+function isValidExternalPublicationPath(value: string): boolean {
   if (typeof value !== "string" || value.length === 0) return false;
+  if (value.length > 255) return false;
   const segments = value.split(".");
-  if (segments.length === 0) return false;
+  if (segments.length === 0 || segments.length > 8) return false;
   for (const segment of segments) {
-    if (segment.length === 0) return false;
+    if (!isValidLocalName(segment)) return false;
   }
   return true;
 }

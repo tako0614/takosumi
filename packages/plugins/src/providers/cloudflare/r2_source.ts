@@ -1,4 +1,4 @@
-import { objectStorage, type source } from "takosumi-contract";
+import { objectStorage, type source } from "takosumi-contract/reference/compat";
 
 export interface CloudflareR2SourceFileInput {
   readonly path: string;

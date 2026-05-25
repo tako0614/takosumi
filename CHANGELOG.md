@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-visible changes to the published Takosumi packages live here.
-The workspace publishes six packages independently; entries below are grouped by
+The workspace publishes 13 packages independently; entries below are grouped by
 package and dated by JSR publish.
 
 Versions follow [Semantic Versioning](https://semver.org/) once each package
@@ -33,6 +33,13 @@ Wave J → K → L の minimization sequence の自然な終点として、 tako
   `TAKOSUMI_REFERENCE_KINDS` を export。
 - **Provider packages**: 6 provider package は contract の removed kind helpers
   ではなく `@takos/takosumi-plugins/kinds` の reference URI helper を参照する。
+- **Package boundary**: `@takos/takosumi-contract@2.6.0` keeps the root export
+  focused on AppSpec / Installer API DTOs and exposes reference implementation
+  helpers through explicit subpaths. The temporary compatibility umbrella is
+  `@takos/takosumi-contract/reference/compat`.
+- **JSR publish set**: release dry-run now covers all 13 packages, including
+  `@takos/takosumi-installer`. `@takos/takosumi-plugins` no longer publishes
+  cloud provider subpaths; provider factories live in the six provider packages.
 - **Docs / RFC**: AppSpec、provider、reference descriptors、BuildSpec、RFC
   0001、 README / CONVENTIONS / AGENTS を更新し、official kind = 0 と external
   reference descriptors の境界を明記。
@@ -216,10 +223,10 @@ materializer convention 側に置く):
   宣言を削除 (= kind contract が routes を mandate しない)。
 - **Breaking — `AppSpec.interfaces` 削除**: top-level AppSpec field から
   物理削除。 launch / mcp / health endpoint は kind の open `spec:` 内、
-  または別 kind の namespace pub/sub で表現する。
+  または別 kind / external publication で表現する。
 - **Breaking — `AppSpec.permissions` 削除**: top-level AppSpec field から
-  物理削除。 capability request は namespace pub / consumer-defined kind で
-  model する。
+  物理削除。 capability request は external publication / consumer-defined kind
+  で model する。
 - **Breaking — kernel routes machinery 削除**: `event-planner` / `rollout`
   services 完全削除 (= dormant、 installer pipeline から呼ばれ ていなかった)。
   old compile layer が route declarations を drop し、kernel pipeline は route
@@ -240,29 +247,30 @@ materializer convention 側に置く):
 Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 
 - **Breaking — AppSpec connection edge を `publish` / `listen` に統合**: 旧
-  `use:` edge は AppSpec から廃止。 component 間の接続は (1)
-  `publish:
-  [<namespacePath>]` で material を namespace registry に登録、 (2)
-  `listen:
-  { <namespacePath>: { as, prefix?, mount? } }` で他 component の
-  material を env / mount として受け取る、 の 2 つに集約。 旧 `${ref:...}` /
-  `${secret-ref:...}` / `${bindings.*}` / `${secrets.*}` / `${installation.*}` /
-  `${artifacts.*}` / `${params.*}` placeholder interpolation は parser から
-  完全削除。 compiled intermediate / `workflowRef` 中間 entity も廃止。
+  `use:` edge は AppSpec から廃止。 component は `publish` で local publication
+  を宣言し、`listen.from` で `component.publication` または external publication
+  path を参照する形に集約。旧 `${ref:...}` / `${secret-ref:...}` /
+  `${bindings.*}` / `${secrets.*}` / `${installation.*}` / `${artifacts.*}` /
+  `${params.*}` placeholder interpolation は parser から 完全削除。 compiled
+  intermediate / `workflowRef` 中間 entity も廃止。
 - **Breaking — `kind: oidc` を takosumi-cloud に移動**: 旧 frozen kind 構造を
   廃止し、 `oidc` を本 repo から削除。 Takosumi Accounts (= takosumi-cloud) が
-  `operator.identity.oidc` namespace path に OIDC client material を publish
-  し、 worker は `listen.operator.identity.oidc` で標準 env (`OIDC_ISSUER_URL` /
-  `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS`) を受け取る
-  形に変更。 本 repo には `spec/contexts/kinds/v1/oidc.jsonld` も `oidc`
-  materializer (旧 `oidc-takosumi-accounts.ts`) も無い。
+  `operator.identity.oidc` external publication path に OIDC client material を
+  publish し、 worker は `listen.<binding>.from: operator.identity.oidc` で標準
+  env (`OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` /
+  `OIDC_REDIRECT_URIS`) を受け取る 形に変更。 本 repo には
+  `spec/contexts/kinds/v1/oidc.jsonld` も `oidc` materializer (旧
+  `oidc-takosumi-accounts.ts`) も無い。
 - **Breaking — Component kind は external**: `worker` / `postgres` /
   `object-store` / `custom-domain` / `web-service` は takosumi.com reference
   descriptors が publish する external descriptor 例として扱う。新 kind は任意
-  domain の URI + optional JSON-LD descriptor + `KernelPlugin` で追加可能。
-- **Breaking — Materializer = KernelPlugin**: kind 実装は `KernelPlugin` factory
-  を返す plain array (= Vite plugin pattern, cloud provider package が提供する
-  形式) として `createPaaSApp({ plugins: [...] })` に attach する。
+  domain の URI + material contract + operator implementation binding
+  で追加可能。
+- **Breaking — Reference materializer binding**: takosumi.com reference
+  implementation は `KernelPlugin` factory を返す plain array (= Vite-like
+  adapter pattern, cloud provider package が提供する形式) として
+  `createPaaSApp({ plugins: [...] })` に attach する。互換 implementation は別の
+  registry / controller / operator catalog で同じ kind URI を実行できる。
 - **Breaking — Cloud provider plugins を別 package に分離**: AWS / GCP /
   Cloudflare / Kubernetes / Deno Deploy / Self-host の materializer 実装は
   `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`

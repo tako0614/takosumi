@@ -5,7 +5,7 @@ import {
   registerShape,
   type Shape,
   unregisterShape,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import { TAKOSUMI_REFERENCE_KINDS } from "../src/kinds/mod.ts";
 import { createInMemoryTakosumiProviders } from "../src/shape-providers/mod.ts";
 

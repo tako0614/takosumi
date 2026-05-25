@@ -4,11 +4,11 @@
 export interface ObjectStoreSpec {
   /** Logical bucket name (provider applies its own scoping rules). */
   readonly name: string;
-  /** Allow anonymous reads when true. */
+  /** Request anonymous-read policy when true. Operator policy and the selected implementation materialize or reject the request. */
   readonly public?: boolean;
   /** Provider region (when applicable). */
   readonly region?: string;
-  /** Enable object versioning when supported. */
+  /** Request object versioning. Operator policy and the selected implementation materialize or reject the request. */
   readonly versioning?: boolean;
   readonly [extension: string]: unknown;
 }
@@ -26,7 +26,7 @@ export interface ObjectStoreOutputs {
   readonly secretKeyRef: string;
 }
 
-export type ObjectStoreCapability =
+export type ObjectStoreCapabilityTerm =
   | "versioning"
   | "presigned-urls"
   | "server-side-encryption"
@@ -37,17 +37,16 @@ export type ObjectStoreCapability =
 
 export type ObjectStorePublicationName = "bucket";
 
-export type ObjectStoreListenBindingName = never;
-
-export const OBJECT_STORE_CAPABILITIES: readonly ObjectStoreCapability[] = [
-  "versioning",
-  "presigned-urls",
-  "server-side-encryption",
-  "public-access",
-  "event-notifications",
-  "lifecycle-rules",
-  "multipart-upload",
-];
+export const OBJECT_STORE_CAPABILITY_TERMS:
+  readonly ObjectStoreCapabilityTerm[] = [
+    "versioning",
+    "presigned-urls",
+    "server-side-encryption",
+    "public-access",
+    "event-notifications",
+    "lifecycle-rules",
+    "multipart-upload",
+  ];
 
 export const OBJECT_STORE_OUTPUT_FIELDS: readonly string[] = [
   "bucket",
@@ -57,6 +56,7 @@ export const OBJECT_STORE_OUTPUT_FIELDS: readonly string[] = [
   "secretKeyRef",
 ];
 
+// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.
 export const OBJECT_STORE_ALIASES: readonly string[] = [
   "object-store",
 ];
@@ -65,14 +65,14 @@ export const OBJECT_STORE_PUBLICATIONS: readonly ObjectStorePublicationName[] =
   [
     "bucket",
   ];
-
-export const OBJECT_STORE_LISTEN_BINDINGS:
-  readonly ObjectStoreListenBindingName[] = [];
-
-export const OBJECT_STORE_KIND_ID = "object-store";
+// Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
+export const OBJECT_STORE_KIND_SHAPE_ID = "object-store";
+/** @deprecated Use OBJECT_STORE_KIND_URI for AppSpec kind identity, or OBJECT_STORE_KIND_SHAPE_ID for legacy Shape.id. */
+export const OBJECT_STORE_KIND_ID = OBJECT_STORE_KIND_SHAPE_ID;
 export const OBJECT_STORE_KIND_NAME = "object-store";
+// Official catalog descriptor URI used in AppSpec kind resolution.
 export const OBJECT_STORE_KIND_URI =
   "https://takosumi.com/kinds/v1/object-store";
 export const OBJECT_STORE_KIND_VERSION = "v1";
 export const OBJECT_STORE_DESCRIPTION =
-  "Bucket-style object storage. Provider-portable across S3-class APIs. Publishes endpoint + credential refs as a local publication.";
+  "Bucket-style object storage intended to be bindable across compatible S3-class providers. Publishes endpoint + credential refs as a local publication.";

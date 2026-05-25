@@ -1,4 +1,4 @@
-import { isCoreConditionReason } from "takosumi-contract";
+import { isCoreConditionReason } from "takosumi-contract/reference/compat";
 
 export interface ConditionReasonValidationError {
   readonly path: string;

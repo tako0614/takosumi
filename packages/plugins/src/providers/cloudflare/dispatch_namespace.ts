@@ -1,5 +1,5 @@
-import type { provider } from "takosumi-contract";
-import type { RuntimeDesiredState } from "takosumi-contract";
+import type { provider } from "takosumi-contract/reference/compat";
+import type { RuntimeDesiredState } from "takosumi-contract/reference/compat";
 
 /**
  * Cloudflare Workers for Platforms dispatch namespace materialization.

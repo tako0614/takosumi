@@ -1,4 +1,4 @@
-import type { objectStorage } from "takosumi-contract";
+import type { objectStorage } from "takosumi-contract/reference/compat";
 import type {
   AwsObjectStorageClient,
   AwsObjectStorageDeleteRequest,

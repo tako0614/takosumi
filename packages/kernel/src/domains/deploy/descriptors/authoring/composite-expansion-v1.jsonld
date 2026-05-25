@@ -1,15 +1,16 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/descriptors/authoring/composite-expansion/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/descriptors/authoring/composite-expansion/v1",
   "@type": "takosumi:AuthoringExpansionDescriptor",
   "shortRef": "authoring.composite-expansion@v1",
   "domain": "authoring",
   "lifecycleDomain": "shape-derivation",
   "changeEffect": "shape-derivation",
-  "description": "Authoring expansion that replaces a composite.* compute reference with its canonical runtime + resource (+ optional output + route) contract instances before plan finalises.",
+  "description": "Reference kernel internal authoring expansion that replaces a composite.* input with runtime, resource, and output contract instances before planning.",
   "expandsTo": [
-    "takosumi.com/v1 App",
-    "takosumi.com/v1 Environment"
+    "AppSpec",
+    "runtime contract input",
+    "resource contract input"
   ],
   "invariants": [
     "expansion-before-plan",

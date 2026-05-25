@@ -1,4 +1,4 @@
-import { router } from "takosumi-contract";
+import { router } from "takosumi-contract/reference/compat";
 import { freezeClone } from "./common.ts";
 
 export type SelfHostedRouterKind = "caddy" | "traefik";

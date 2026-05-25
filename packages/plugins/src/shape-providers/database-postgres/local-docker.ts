@@ -1,6 +1,6 @@
-import type { ProviderPlugin } from "takosumi-contract";
+import type { ProviderPlugin } from "takosumi-contract/reference/provider-plugin";
 import type {
-  DatabasePostgresCapability,
+  DatabasePostgresCapabilityTerm,
   DatabasePostgresOutputs,
   DatabasePostgresSpec,
 } from "../../kinds/database-postgres.ts";
@@ -46,7 +46,7 @@ export interface LocalDockerPostgresProviderOptions {
   readonly clock?: () => Date;
 }
 
-const SUPPORTED_CAPABILITIES: readonly DatabasePostgresCapability[] = [
+const SUPPORTED_CAPABILITIES: readonly DatabasePostgresCapabilityTerm[] = [
   "ssl-required",
   "extensions",
 ];

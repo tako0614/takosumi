@@ -12,7 +12,6 @@
     { "op": "create", "component": "presentations", "kind": "object-store" },
     { "op": "create", "component": "auth", "kind": "oidc" }
   ],
-  "estimatedCost": { "currency": "JPY", "monthly": 0 },
   "expected": {
     "commit": "b4b6a000f809407f59f1482330321710b496ecf6",
     "manifestDigest": "sha256:fixture-takos-slide"

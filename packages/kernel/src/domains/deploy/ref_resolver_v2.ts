@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "takosumi-contract";
+import type { JsonObject, JsonValue } from "takosumi-contract/reference/compat";
 import {
   extractRefs,
   extractRefsFromValue,

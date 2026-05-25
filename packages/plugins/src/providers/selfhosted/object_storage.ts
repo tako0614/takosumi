@@ -1,4 +1,4 @@
-import { objectStorage } from "takosumi-contract";
+import { objectStorage } from "takosumi-contract/reference/compat";
 import { bytesFromBody, freezeClone, sha256Digest } from "./common.ts";
 
 export interface SelfHostedObjectClient {

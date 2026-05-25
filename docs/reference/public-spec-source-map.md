@@ -1,62 +1,134 @@
-# Public Spec ソースマップ {#public-spec-source-map}
+# Spec Maintenance Map {#public-spec-source-map}
 
-Takosumi public spec の source of truth と reference の対応表です。public spec
-concept は AppSpec / Installation / Deployment と installer endpoint
-に閉じます。wire surface を変えるときは、実装 source、test、docs を同じ変更で
-更新します。
+This is a maintainer map, not a reader path. It lists repository source files
+that must move together when Takosumi public contracts or adjacent reference
+surfaces change.
 
-## Public spec map
+Takosumi の public concepts は AppSpec / Installation / Deployment です。public
+Installer API は 5 endpoint です。wire surface を変えるときは、実装 source、
+test、docs を同じ変更で更新します。
 
-| Spec key           | Public surface                                  | Owner                         | Source of truth                                                                                                                      | Published reference                 |
-| ------------------ | ----------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
-| `appspec-v1`       | `.takosumi.yml` envelope / validation           | takosumi installer + contract | `packages/installer/src/yaml-parser.ts`, `packages/contract/`                                                                        | [AppSpec](./app-spec.md)            |
-| `installer-api-v1` | Installation / Deployment / rollback 5 endpoint | takosumi kernel + installer   | `packages/kernel/src/api/installer_public_routes.ts`, `packages/contract/src/installer-api.ts`, `packages/kernel/src/api/openapi.ts` | [Installer API](./installer-api.md) |
+## Takosumi Core Spec Map
+
+| Spec key           | Public surface                                  | Owner                       | Normative spec                       | Executable conformance targets                                                                                                                                |
+| ------------------ | ----------------------------------------------- | --------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core-spec-v1`     | AppSpec / Installation / Deployment model       | takosumi contract           | [Core Specification](./core-spec.md) | `packages/contract/src/app-spec.ts`, `packages/contract/src/installer-api.ts`                                                                                 |
+| `appspec-v1`       | `.takosumi.yml` envelope / validation           | takosumi contract           | [AppSpec](./app-spec.md)             | `packages/contract/src/app-spec.ts`, `packages/installer/src/yaml-parser.ts`                                                                                  |
+| `installer-api-v1` | Installation / Deployment / rollback 5 endpoint | takosumi kernel + installer | [Installer API](./installer-api.md)  | `packages/kernel/src/api/installer_public_routes.ts`, `packages/contract/src/installer-api.ts`, `packages/kernel/src/api/installer_public_routes_e2e_test.ts` |
+
+`packages/installer/src/yaml-parser.ts` is the reference implementation
+conformance target for AppSpec parsing. The spec above is authoritative when
+implementation parser behavior is being updated.
+
+## Public contract exports
+
+Published examples use the scoped package name `@takos/takosumi-contract/...`.
+Workspace-local import aliases such as `takosumi-contract/...` are internal
+build conveniences and do not appear in public snippets.
+
+| Export key                  | Status                        | Repository source                        |
+| --------------------------- | ----------------------------- | ---------------------------------------- |
+| `contract-root`             | public convenience entry      | `packages/contract/src/index.ts`         |
+| `contract-appspec-v1`       | public AppSpec type contract  | `packages/contract/src/app-spec.ts`      |
+| `contract-installer-api-v1` | public Installer API contract | `packages/contract/src/installer-api.ts` |
+
+## Reference/helper/internal subpaths
+
+These subpaths support the reference Takosumi implementation and compatibility
+tooling. AppSpec authoring starts from `.takosumi.yml`, kind descriptors, and
+the Installer API.
+
+| Export key                    | Status                           | Repository source                                                       |
+| ----------------------------- | -------------------------------- | ----------------------------------------------------------------------- |
+| `contract-reference-plugin`   | reference implementation helpers | `packages/contract/src/plugin*.ts`, `provider-plugin.ts`                |
+| `contract-reference-runtime`  | reference runtime-agent shape    | `packages/contract/src/runtime-agent*.ts`                               |
+| `contract-reference-metadata` | reference metadata helpers       | `packages/contract/src/{error-category,shape,kernel-plugin-adapter}.ts` |
+| `contract-internal-exports`   | reference internal RPC/API       | `packages/contract/src/{internal-api,internal-rpc}.ts`                  |
+
+### Compatibility debt
+
+These exports support old reference DTO imports and maintenance tooling. Current
+public docs and examples use `app-spec`, `installer-api`, or a narrow
+`reference/*` / `internal/*` subpath.
+
+| Export key                      | Status                   | Repository source                           |
+| ------------------------------- | ------------------------ | ------------------------------------------- |
+| `contract-reference-dto-compat` | compatibility DTO export | `packages/contract/src/types.ts`            |
+| `contract-legacy-compat`        | compatibility export     | `packages/contract/src/reference-compat.ts` |
+
+## Official Type Catalog Spec Map
+
+The Takosumi official type catalog specification covers vocabulary published
+from `takosumi.com`. Operators can adopt its descriptors and material contracts.
+Operator implementations and reference runtime helpers live in the
+reference/operator sections. Published catalog documents live under
+`/kinds/v1/*` and `/contexts/v1.jsonld`. Provider-selection descriptors under
+kernel implementation paths are reference internal metadata.
+
+| Key                                 | Surface                                                     | Owner                                                  | Normative spec                                                    | Repository source                                                    | Published reference                                                      |
+| ----------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `takosumi-official-type-catalog-v1` | kind descriptors / material contracts / projection examples | Takosumi official catalog, published from takosumi.com | [Takosumi Official Type Catalog Specification](./type-catalog.md) | `packages/plugins/spec/kinds/v1/*.jsonld`; `spec/contexts/v1.jsonld` | `/kinds/v1/<name>`, `/kinds/v1/<name>.jsonld`, and `/contexts/v1.jsonld` |
+
+`packages/plugins/spec/kinds/v1/*.jsonld` is the repository storage path for
+kind descriptor source files. `spec/contexts/v1.jsonld` is the repository
+storage path for `https://takosumi.com/contexts/v1.jsonld`. The public catalog
+surface is the published `https://takosumi.com/kinds/v1/*` and
+`https://takosumi.com/contexts/v1.jsonld` documents plus the catalog docs.
+
+## Operator Distribution Spec Map
+
+These specs are maintained by operator distributions that compose the Takosumi
+core contract and adopted catalog vocabulary.
+
+| Key                      | Surface                                            | Owner                       | Reader entry                          | Repository source                                                                                                                     |
+| ------------------------ | -------------------------------------------------- | --------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `takosumi-cloud-spec-v1` | concrete account-plane publications and Cloud APIs | Takosumi Cloud distribution | [Takosumi Cloud](./takosumi-cloud.md) | sibling checkout `../takosumi-cloud/docs/spec.md` plus `workload-publications.md`, `account-plane-projections.md`, `deploy-facade.md` |
 
 ## Adjacent operator references
 
-The following surfaces help operators run or extend the takosumi.com reference
-distribution.
+The following surfaces help operators run or extend the reference kernel and
+provider packages.
 
-| Key                          | Surface                                          | Owner                               | Source / reference                                                                                            |
-| ---------------------------- | ------------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `build-service-input-v1`     | `.takosumi.build.yml` build service input        | build service distribution          | [Build service handoff](./build-spec.md); parser/service are operator distribution scope                      |
-| `kernel-http-api-v1`         | internal / runtime-agent HTTP boundary           | takosumi kernel                     | [Reference Kernel Route Inventory](./kernel-http-api.md)                                                      |
-| `runtime-agent-api-v1`       | lifecycle RPC envelope                           | takosumi runtime-agent              | [Runtime-Agent API](./runtime-agent-api.md)                                                                   |
-| `reference-kind-examples-v1` | non-normative reference kind descriptor examples | takosumi.com reference distribution | `packages/plugins/spec/kinds/`, `packages/plugins/src/kinds/`, [Kind Descriptor Examples](./kind-registry.md) |
-| `reference-providers-v1`     | provider binding guide and matrix                | takosumi provider packages          | [Provider Implementations](./providers.md)                                                                    |
-| `takosumi-jsr-packages`      | JSR package exports and dependency pins          | package owners                      | `packages/*/deno.json`, `packages/*/mod.ts`, `https://jsr.io/@takos/takosumi`                                 |
+| Key                        | Surface                                 | Owner                           | Reference                                                                                                                      |
+| -------------------------- | --------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `build-service-input`      | optional build-service profile input    | build service distribution      | [Operator build-service profile example](../operator/build-service-profile.md); parser/service are operator distribution scope |
+| `kernel-route-inventory`   | internal / runtime-agent HTTP boundary  | reference kernel implementation | [Reference Kernel Route Inventory](./kernel-http-api.md)                                                                       |
+| `runtime-agent-envelope`   | lifecycle RPC envelope                  | operator runtime topology       | [Reference Runtime-Agent Execution Surface](./runtime-agent-api.md)                                                            |
+| `reference-provider-guide` | provider binding guide and matrix       | takosumi provider packages      | [Provider Implementations](./providers.md)                                                                                     |
+| `takosumi-jsr-packages`    | JSR package exports and dependency pins | package owners                  | `packages/*/deno.json`, `packages/*/mod.ts`, `https://jsr.io/@takos/takosumi`                                                  |
 
 ## Placement rules
 
-- AppSpec source is `.takosumi.yml`; build input, when used, is
-  `.takosumi.build.yml` and belongs to operator build service scope.
-- Component kind descriptor examples under `packages/plugins/spec/kinds/` and
-  `https://takosumi.com/kinds/v1/*` feed operator alias / binding config.
-- Installer clients submit source / expected digest guards to the installer
-  endpoints.
-- Build services submit prepared source snapshots with `source.kind=prepared`;
-  build recipes stay in `.takosumi.build.yml` / build service scope.
+- AppSpec source is `.takosumi.yml`; build-service input, when used, belongs to
+  operator build service scope and is not a Takosumi core manifest.
+- Component kind descriptor documents such as `https://takosumi.com/kinds/v1/*`
+  can be referenced by operator alias and visibility policy. Implementation
+  binding is configured separately by the operator or reference kernel.
+- Installer clients submit source / expected guards to the installer endpoints.
+- Build services submit prepared source archives with `source.kind: "prepared"`;
+  build recipes stay in build service scope.
 - DataAsset upload / discovery docs describe an operator extension with separate
   credentials.
-- Workflow runner, scheduler, webhook, account-plane, billing, and OIDC issuer
-  are operator / account-plane surfaces that submit source to the Installer API.
+- Kernel route inventory and runtime-agent envelope pages describe the current
+  reference implementation topology. They are not public conformance targets for
+  compatible Takosumi installers.
+- Workflow runner, scheduler, webhook, and CI automation may choose source refs
+  or prepared source and submit them to the Installer API.
+- Account-plane, billing, OIDC issuer, and deploy facades are operator surfaces
+  around ownership, grants, workload external publications, approval, ledgers,
+  and admin automation.
 - Public JSR package checks use each package's `deno.json`, not only the root
-  workspace import map.
+  workspace import map. A package that imports a contract subpath declares that
+  subpath in its own import map or dependency metadata.
 
-## Installer API symbols
+## Installer API evidence
 
-The installer HTTP surface is represented by OpenAPI output from
-`packages/kernel/src/api/openapi.ts` and by these route constants in
-`packages/kernel/src/api/installer_public_routes.ts`:
-
-- `INSTALLER_INSTALLATIONS_DRY_RUN_PATH`
-- `INSTALLER_INSTALLATIONS_PATH`
-- `INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH`
-- `INSTALLER_INSTALLATION_DEPLOYMENTS_PATH`
-- `INSTALLER_INSTALLATION_ROLLBACK_PATH`
-
-The dry-run handler remains `dryRunInstallation`; route behavior is covered by
-`packages/kernel/src/api/installer_public_routes_e2e_test.ts`.
+The public Installer API surface is represented by contract DTOs, the installer
+public route table, and route coverage in
+`packages/kernel/src/api/installer_public_routes_e2e_test.ts`. The test covers
+the five Installer API endpoints listed in [Installer API](./installer-api.md).
+`/openapi.json` is a mounted process inventory; a distribution that needs a
+public-only OpenAPI artifact publishes it separately from that inventory.
 
 ## Drift check
 

@@ -1,4 +1,7 @@
-import type { ActorContext, JsonObject } from "takosumi-contract";
+import type {
+  ActorContext,
+  JsonObject,
+} from "takosumi-contract/reference/compat";
 import type { NotificationRecord } from "../../adapters/notification/mod.ts";
 import type { AuditEventId } from "../../domains/audit/mod.ts";
 import type { DomainEvent } from "../../shared/events.ts";

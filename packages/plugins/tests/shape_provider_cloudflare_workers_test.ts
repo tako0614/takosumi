@@ -3,7 +3,7 @@ import {
   createCloudflareWorkersProvider,
   InMemoryCloudflareWorkersLifecycle,
 } from "../src/shape-providers/worker/cloudflare-workers.ts";
-import type { PlatformContext } from "takosumi-contract";
+import type { PlatformContext } from "takosumi-contract/reference/compat";
 
 const ctx = {} as PlatformContext;
 

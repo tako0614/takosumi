@@ -12,7 +12,7 @@
  * retry policy can branch the same way it does for AWS / GCP / k8s.
  */
 
-import type { ProviderErrorCategory } from "takosumi-contract";
+import type { ProviderErrorCategory } from "takosumi-contract/reference/compat";
 
 /**
  * Cloudflare-native error categories. Every provider sub-module either throws

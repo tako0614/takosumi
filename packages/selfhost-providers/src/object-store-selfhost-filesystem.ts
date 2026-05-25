@@ -3,13 +3,13 @@
  * filesystem storage — primarily useful for development.
  */
 
-import type { KernelPlugin } from "takosumi-contract/plugin";
+import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 import {
   createFilesystemObjectStoreProvider,
   type FilesystemBucketLifecycleClient,
   InMemoryFilesystemLifecycle,
 } from "@takos/takosumi-plugins/shape-providers/object-store/filesystem";
-import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/reference/kernel-plugin-adapter";
 import { KIND_URI_OBJECT_STORE } from "./_kinds.ts";
 
 export interface SelfhostFilesystemProviderOptions {

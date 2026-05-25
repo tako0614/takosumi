@@ -1,4 +1,8 @@
-import type { JsonObject, JsonValue, ResourceHandle } from "takosumi-contract";
+import type {
+  JsonObject,
+  JsonValue,
+  ResourceHandle,
+} from "takosumi-contract/reference/compat";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 
 /**
@@ -250,12 +254,11 @@ const ARTIFACT_HASH_REGEX = /^sha256:[0-9a-f]{64}$/;
 
 /**
  * Walks an arbitrary JSON tree and adds every `sha256:<64-hex>` string it
- * sees to the accumulator. We accept BOTH:
- *  - `{ artifact: { hash: "sha256:..." } }` — the canonical shape spec
- *    form recognised by Workers / Lambda / static-bundle connectors.
- *  - bare `sha256:...` strings anywhere in the tree — covers nested
- *    `${ref:...}`-resolved values that the kernel substitutes into the
- *    manifest before persisting.
+ * sees to the accumulator. We accept BOTH legacy/internal evidence shapes:
+ *  - `{ artifact: { hash: "sha256:..." } }` — DataAsset-backed connector
+ *    evidence used by optional operator extensions.
+ *  - bare `sha256:...` strings anywhere in the tree — covers nested legacy
+ *    ref-resolved values that the kernel substitutes before persisting.
  *
  * Liberal capture is the safe direction: a false positive only retains an
  * artifact that was never live, which costs storage but never breaks a

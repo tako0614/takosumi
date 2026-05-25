@@ -15,7 +15,7 @@
 import {
   LIFECYCLE_AGENT_TOKEN_ENV,
   LIFECYCLE_AGENT_URL_ENV,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { buildConnectorRegistry } from "./connectors/factory.ts";
 import { type ServeHandle, serveRuntimeAgent } from "./server.ts";
 

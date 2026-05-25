@@ -5,47 +5,106 @@ const sidebar: DefaultTheme.SidebarMulti = {
     {
       text: "まず読む",
       items: [
-        { text: "概要", link: "/" },
-        { text: "クイックスタート", link: "/getting-started/quickstart" },
         { text: "コンセプト", link: "/getting-started/concepts" },
+        { text: "クイックスタート", link: "/getting-started/quickstart" },
         { text: "読む順序", link: "/getting-started/reading-paths" },
       ],
     },
     {
       text: "役割別",
       items: [
-        { text: "AppSpec を書く", link: "/reference/app-spec" },
-        { text: "Operator として動かす", link: "/operator/" },
-        { text: "Takosumi を拡張する", link: "/extending" },
-        { text: "内部設計を追う", link: "/reference/architecture/" },
+        {
+          text: "AppSpec を書く",
+          link: "/getting-started/reading-paths#appspec-authors",
+        },
+        {
+          text: "Operator として動かす",
+          link: "/getting-started/reading-paths#reference-kernel-operators",
+        },
+        {
+          text: "Takosumi を拡張する",
+          link: "/getting-started/reading-paths#provider-extension-authors",
+        },
+        {
+          text: "Takosumi Cloud を読む",
+          link: "/getting-started/reading-paths#cloud-operators",
+        },
+        {
+          text: "内部設計を追う",
+          link: "/getting-started/reading-paths#core-contributors",
+        },
       ],
     },
     {
-      text: "公開契約",
+      text: "Core contract",
       items: [
-        { text: "リファレンス索引", link: "/reference/" },
+        {
+          text: "Specification boundaries",
+          link: "/reference/spec-boundaries",
+        },
+        { text: "Core specification", link: "/reference/core-spec" },
         { text: "AppSpec", link: "/reference/app-spec" },
         { text: "Installer API", link: "/reference/installer-api" },
-        { text: "CLI", link: "/reference/cli" },
-        { text: "Build service handoff", link: "/reference/build-spec" },
-        { text: "Reference kind examples", link: "/reference/kind-registry" },
-        { text: "環境変数", link: "/reference/env-vars" },
-        { text: "用語集", link: "/reference/glossary" },
+        { text: "Plan output", link: "/reference/plan-output" },
+        {
+          text: "External publications",
+          link: "/reference/external-publications",
+        },
+        { text: "HTTP exposure", link: "/reference/http-exposure" },
       ],
     },
     {
-      text: "運用",
+      text: "Official catalog",
+      items: [
+        { text: "Type catalog specification", link: "/reference/type-catalog" },
+        { text: "Access modes", link: "/reference/access-modes" },
+      ],
+    },
+    {
+      text: "Cloud distribution",
+      items: [
+        {
+          text: "Takosumi Cloud account plane",
+          link: "/reference/takosumi-cloud",
+        },
+      ],
+    },
+    {
+      text: "Build / prepared source",
+      collapsed: true,
+      items: [
+        { text: "Build service handoff", link: "/reference/build-spec" },
+        {
+          text: "Operator build-service profile",
+          link: "/operator/build-service-profile",
+        },
+        { text: "Digest computation", link: "/reference/digest-computation" },
+      ],
+    },
+    {
+      text: "Reference implementation operations",
+      collapsed: true,
       items: [
         { text: "運用概要", link: "/operator/" },
-        { text: "セルフホスト運用", link: "/operator/self-host" },
         { text: "Bootstrap", link: "/operator/bootstrap" },
+        { text: "セルフホスト運用", link: "/operator/self-host" },
+        { text: "環境変数", link: "/reference/env-vars" },
         { text: "runtime-agent 分離", link: "/operator/runtime-agent" },
         { text: "バージョン整合", link: "/operator/upgrade" },
         { text: "Migration / Upgrade", link: "/reference/migration-upgrade" },
         { text: "Backup / Restore", link: "/reference/backup-restore" },
         { text: "Observability", link: "/reference/observability-stack" },
+        { text: "Readiness probes", link: "/reference/readiness-probes" },
         { text: "Telemetry / Metrics", link: "/reference/telemetry-metrics" },
         { text: "Logging", link: "/reference/logging-conventions" },
+      ],
+    },
+    {
+      text: "補助リファレンス",
+      items: [
+        { text: "リファレンス索引", link: "/reference/" },
+        { text: "CLI", link: "/reference/cli" },
+        { text: "用語集", link: "/reference/glossary" },
       ],
     },
     {
@@ -54,9 +113,15 @@ const sidebar: DefaultTheme.SidebarMulti = {
         { text: "Takosumi を拡張する", link: "/extending" },
         { text: "Provider implementations", link: "/reference/providers" },
         { text: "Provider packages", link: "/reference/provider-packages" },
-        { text: "Plugin loading", link: "/reference/plugin-loading" },
+        {
+          text: "Reference adapter loading",
+          link: "/reference/plugin-loading",
+        },
         { text: "Connector guide", link: "/reference/connector-contract" },
-        { text: "Runtime-Agent API", link: "/reference/runtime-agent-api" },
+        {
+          text: "Reference Runtime-Agent Execution Surface",
+          link: "/reference/runtime-agent-api",
+        },
       ],
     },
     {
@@ -84,8 +149,8 @@ const sidebar: DefaultTheme.SidebarMulti = {
         { text: "Space model", link: "/reference/architecture/space-model" },
         { text: "Object model", link: "/reference/architecture/object-model" },
         {
-          text: "Namespace export model",
-          link: "/reference/architecture/namespace-export-model",
+          text: "External publication model",
+          link: "/reference/architecture/external-publication-model",
         },
         {
           text: "Link / projection model",
@@ -135,18 +200,24 @@ const sidebar: DefaultTheme.SidebarMulti = {
           text: "Operational hardening",
           link: "/reference/architecture/operational-hardening-checklist",
         },
+        {
+          text: "Exposure Activation",
+          link: "/reference/architecture/exposure-activation-model",
+        },
       ],
     },
     {
-      text: "高度な参照",
+      text: "Internals / maintenance",
       collapsed: true,
       items: [
-        { text: "Kernel HTTP API", link: "/reference/kernel-http-api" },
+        {
+          text: "Reference kernel route inventory",
+          link: "/reference/kernel-http-api",
+        },
         { text: "Lifecycle protocol", link: "/reference/lifecycle" },
         { text: "Lifecycle phases", link: "/reference/lifecycle-phases" },
         { text: "WAL stages", link: "/reference/wal-stages" },
         { text: "GroupHead rollout", link: "/reference/group-head-rollout" },
-        { text: "Readiness probes", link: "/reference/readiness-probes" },
         { text: "Storage schema", link: "/reference/storage-schema" },
         { text: "Journal compaction", link: "/reference/journal-compaction" },
         { text: "Audit events", link: "/reference/audit-events" },
@@ -155,8 +226,7 @@ const sidebar: DefaultTheme.SidebarMulti = {
           link: "/reference/observation-retention",
         },
         { text: "Drift detection", link: "/reference/drift-detection" },
-        { text: "Closed enums", link: "/reference/closed-enums" },
-        { text: "Access modes", link: "/reference/access-modes" },
+        { text: "Enum and value index", link: "/reference/closed-enums" },
         {
           text: "Approval invalidation",
           link: "/reference/approval-invalidation",
@@ -166,19 +236,17 @@ const sidebar: DefaultTheme.SidebarMulti = {
         { text: "Plan output", link: "/reference/plan-output" },
         { text: "Status output", link: "/reference/status-output" },
         { text: "Resource IDs", link: "/reference/resource-ids" },
-        { text: "Digest computation", link: "/reference/digest-computation" },
         { text: "Time / clock model", link: "/reference/time-clock-model" },
         {
-          text: "Public spec source map",
+          text: "Spec maintenance map",
           link: "/reference/public-spec-source-map",
         },
-        { text: "Namespace exports", link: "/reference/namespace-exports" },
-        { text: "Connector guide", link: "/reference/connector-contract" },
+        { text: "Digest computation", link: "/reference/digest-computation" },
         {
           text: "Operator DataAsset policy",
           link: "/reference/data-asset-policy",
         },
-        { text: "Operator DataAsset GC", link: "/reference/artifact-gc" },
+        { text: "Operator DataAsset GC", link: "/reference/data-asset-gc" },
         { text: "Secret partitions", link: "/reference/secret-partitions" },
         { text: "Cross-process locks", link: "/reference/cross-process-locks" },
         { text: "Bootstrap protocol", link: "/reference/bootstrap-protocol" },
@@ -201,6 +269,7 @@ const sidebar: DefaultTheme.SidebarMulti = {
 
 const nav: DefaultTheme.NavItem[] = [
   { text: "概要", link: "/" },
+  { text: "コンセプト", link: "/getting-started/concepts" },
   { text: "クイックスタート", link: "/getting-started/quickstart" },
   { text: "読む順序", link: "/getting-started/reading-paths" },
   { text: "AppSpec", link: "/reference/app-spec" },
@@ -248,7 +317,7 @@ export default defineConfig({
     ],
     search: { provider: "local" },
     editLink: {
-      pattern: "https://github.com/tako0614/takosumi/edit/master/docs/:path",
+      pattern: "https://github.com/tako0614/takosumi/edit/main/docs/:path",
       text: "GitHub でこのページを編集",
     },
     footer: {

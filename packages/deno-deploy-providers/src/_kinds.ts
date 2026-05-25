@@ -1,7 +1,7 @@
 /**
- * Reference Takos-published component kind URIs. These are registry
- * descriptors supplied by `@takos/takosumi-plugins`, not contract-owned definitions in the
- * Takosumi AppSpec contract.
+ * takosumi.com reference descriptor URI helpers. These are operator-opt-in
+ * examples supplied by `@takos/takosumi-plugins`, not AppSpec-owned kind
+ * definitions.
  */
 
 import { TAKOSUMI_REFERENCE_KIND_URIS } from "@takos/takosumi-plugins/kinds";

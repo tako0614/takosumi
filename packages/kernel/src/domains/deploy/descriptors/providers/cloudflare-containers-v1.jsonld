@@ -1,6 +1,6 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/providers/cloudflare/containers/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/providers/cloudflare/containers/v1",
   "@type": "ProviderCapabilityDescriptor",
   "shortRef": "provider.cloudflare.containers@v1",
   "materializationProfiles": [

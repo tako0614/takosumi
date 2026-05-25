@@ -4,12 +4,8 @@
   "@type": "ComponentKind",
   "name": "object-store",
   "version": "v1",
-  "aliases": ["object-store"],
-  "description": "Bucket-style object storage. Provider-portable across S3-class APIs. Publishes endpoint + credential refs as a local publication.",
-  "x-ts": {
-    "fileBasename": "object-store",
-    "prefix": "ObjectStore"
-  },
+  "referenceAliases": ["object-store"],
+  "description": "Bucket-style object storage intended to be bindable across compatible S3-class providers. Publishes endpoint + credential refs as a local publication.",
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -23,11 +19,11 @@
       },
       "public": {
         "type": "boolean",
-        "description": "Allow anonymous reads when true."
+        "description": "Request anonymous-read policy when true. Operator policy and the selected implementation materialize or reject the request."
       },
       "versioning": {
         "type": "boolean",
-        "description": "Enable object versioning when supported."
+        "description": "Request object versioning. Operator policy and the selected implementation materialize or reject the request."
       },
       "region": {
         "type": "string",
@@ -48,7 +44,6 @@
       }
     }
   },
-  "listens": {},
   "outputs": [
     {
       "name": "bucket",
@@ -81,7 +76,7 @@
       "meaning": "Reference to secret store entry holding secret access key."
     }
   ],
-  "capabilities": [
+  "capabilityTerms": [
     "versioning",
     "presigned-urls",
     "server-side-encryption",

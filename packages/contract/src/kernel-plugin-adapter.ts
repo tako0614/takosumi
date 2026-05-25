@@ -63,7 +63,7 @@ export function kernelPluginFromProviderPlugin(
       );
       return {
         resourceHandle: result.handle,
-        outputs: stringifyOutputs(result.outputs),
+        outputs: result.outputs ?? {},
       };
     },
     async destroy(ctx) {
@@ -226,24 +226,6 @@ function preparedSourceLocator(input: {
     return { workingDirectory: input.sourceDirectory };
   }
   return undefined;
-}
-
-/**
- * `apply()` outputs are `JsonObject` on the contract side; the kernel
- * surfaces `Record<string, string>` to downstream components through
- * publish/listen env injection. Numbers / booleans get stringified — secrets /
- * refs stay as their string form.
- */
-function stringifyOutputs(
-  outputs: JsonObject | undefined,
-): Readonly<Record<string, string>> {
-  if (!outputs) return Object.freeze({});
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(outputs)) {
-    if (value === null || value === undefined) continue;
-    out[key] = typeof value === "string" ? value : String(value);
-  }
-  return Object.freeze(out);
 }
 
 function unavailable(port: string): Promise<never> {

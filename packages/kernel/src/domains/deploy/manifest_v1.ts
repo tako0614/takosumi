@@ -1,4 +1,4 @@
-import type { JsonObject } from "takosumi-contract";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 import type {
   ManifestEnvelopeIssue,
   ManifestResource,

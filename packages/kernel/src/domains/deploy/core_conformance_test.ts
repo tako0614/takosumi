@@ -2,20 +2,23 @@
 // Deployment.policy_decisions.
 
 import assert from "node:assert/strict";
-import { CORE_CONDITION_REASONS } from "takosumi-contract";
+import { CORE_CONDITION_REASONS } from "takosumi-contract/reference/compat";
 import { InMemoryProviderObservationStore } from "../runtime/mod.ts";
 import { REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS } from "./core_plan.ts";
 import {
   DeploymentService,
   InMemoryDeploymentStore,
 } from "./deployment_service.ts";
-import type { Deployment, IsoTimestamp } from "takosumi-contract";
+import type {
+  Deployment,
+  IsoTimestamp,
+} from "takosumi-contract/reference/compat";
 import type { PublicDeployManifest } from "./types.ts";
 
 const DEMO_IMAGE =
   "registry.example.test/demo@sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const SOURCE_JS_MODULE_DESCRIPTOR_ID =
-  "https://takosumi.com/contracts/source/js-module/v1";
+  "https://takosumi.com/reference/kernel/contracts/source/js-module/v1";
 
 function fixedClock(iso: string): () => Date {
   return () => new Date(iso);

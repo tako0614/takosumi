@@ -1,6 +1,6 @@
-import type { ProviderPlugin } from "takosumi-contract";
+import type { ProviderPlugin } from "takosumi-contract/reference/provider-plugin";
 import type {
-  ObjectStoreCapability,
+  ObjectStoreCapabilityTerm,
   ObjectStoreOutputs,
   ObjectStoreSpec,
 } from "../../kinds/object-store.ts";
@@ -32,7 +32,7 @@ export interface MinioProviderOptions {
   readonly clock?: () => Date;
 }
 
-const SUPPORTED_CAPABILITIES: readonly ObjectStoreCapability[] = [
+const SUPPORTED_CAPABILITIES: readonly ObjectStoreCapabilityTerm[] = [
   "versioning",
   "presigned-urls",
   "server-side-encryption",

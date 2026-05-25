@@ -100,7 +100,7 @@ import type {
   GroupHead,
   IsoTimestamp,
   KernelPlugin,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   InMemoryRuntimeAgentRegistry,
   type RuntimeAgentRegistry,

@@ -41,7 +41,7 @@ Deno.test("phase-h: 6 cloud provider packages are covered (no missing publisher)
   );
 });
 
-Deno.test("phase-h: each KernelPlugin advertises a Takos reference kind URI", () => {
+Deno.test("phase-h: each KernelPlugin advertises a takosumi.com reference kind URI", () => {
   const allowedKindUris = new Set([
     "https://takosumi.com/kinds/v1/worker",
     "https://takosumi.com/kinds/v1/web-service",

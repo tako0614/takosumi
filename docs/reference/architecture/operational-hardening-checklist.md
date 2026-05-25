@@ -1,27 +1,26 @@
 # 運用 Hardening チェックリスト {#operational-hardening-checklist}
 
-> このページでわかること: 運用 hardening のチェックリスト。
-
-このページは未完タスク表ではなく、production profile が満たすべき normative
-requirements の一覧です。各 requirement の実装状況は対応する reference docs /
-tests / release evidence で確認します。
+このページは未完タスク表ではなく、reference / operator production profile が
+満たすべき hardening requirements の一覧です。各 requirement
+の実装状況は対応する reference docs / tests / release evidence で確認します。
 
 ## Space 隔離 {#space-isolation}
 
 - Every Deployment, snapshot, journal, observation, approval, debt, activation,
   and GroupHead has a Space id.
 - Space comes from deploy context / auth / API / operator profile.
-- Namespace paths are Space-scoped.
+- External publication paths are Space-scoped.
 - Secrets, optional DataAssets, journals, approvals, observations, and audit
   events are Space-scoped.
-- Reserved prefixes are operator-controlled and granted into Spaces.
+- Publisher roots are defined by operator or product distributions, and concrete
+  external publication paths are granted into Spaces.
 - GroupHead identity is `spaceId + groupId`.
 
 ## Root 不変条件 {#root-invariants}
 
 - ResolutionSnapshot and DesiredSnapshot are immutable.
-- Apply uses recorded snapshots, not live descriptor URLs or live namespace
-  registry.
+- Apply uses recorded resolution evidence and snapshots instead of re-resolving
+  catalog documents or external publication registries during provider effects.
 - All graph entities have stable addresses.
 - Lifecycle class restricts operation kinds.
 - Core canonical state stores secret references, not raw secret values.
@@ -33,8 +32,8 @@ tests / release evidence で確認します。
 - Observations append facts; desired state changes through new snapshots.
 - Deployment destroy handles Takosumi-managed objects according to lifecycle
   policy.
-- Production serializes critical mutations, Space export sharing, and kind alias
-  / descriptor / implementation binding set updates.
+- Production serializes critical mutations, Space publication sharing, and kind
+  alias / descriptor / implementation binding set updates.
 
 ## Component kind resolution {#component-kind-resolution}
 
@@ -42,19 +41,24 @@ tests / release evidence で確認します。
 - AppSpec root is only `apiVersion`, `metadata`, and `components`.
 - Component public fields are only `kind`, `spec`, `publish`, and `listen`.
 - Short kind aliases are operator-injected and fail closed when unresolved.
-- Descriptor documents and kind-specific input schemas are resolved and recorded
-  before runtime use.
-- Provider targets come from the operator implementation binding set.
+- Catalog entries, kind-specific input schemas, and implementation bindings are
+  resolved and recorded before runtime use.
 
-## Namespace export {#namespace-exports}
+Reference / operator production profile:
 
-- Namespace path grammar is enforced inside each Space.
+- Execution targets come from the operator-selected binding set.
+- runtime-agent or provider inventory drift is recorded as operator evidence,
+  not as AppSpec vocabulary.
+
+## External publication {#external-publications}
+
+- External publication path grammar is enforced inside each Space.
 - Shadowing is policy-gated, and production denies meaningful Space / operator /
   external shadowing by default.
-- Default exports never imply admin access.
-- Grant-producing exports require explicit access unless safe default is
+- Default publications never imply admin access.
+- Grant-producing publications require explicit access unless safe default is
   declared.
-- ExportDeclaration and ExportMaterial are separated.
+- ExternalPublicationDeclaration and PublicationMaterialization are separated.
 
 ## Journal と回復 {#journal-and-recovery}
 
@@ -75,7 +79,7 @@ tests / release evidence で確認します。
 
 ## シークレット {#secrets}
 
-- Secret exports cannot project to plain env.
+- Secret-bearing publications cannot project to plain env.
 - Literal env secret scanning or policy is enabled.
 - Runtime secrets are not passed to transforms by default.
 
@@ -90,4 +94,5 @@ tests / release evidence で確認します。
 - Audit events include kind descriptor selections, resolution, desired adoption,
   link selection, operation stages, generated objects, debts, approvals,
   activation, and GroupHead.
-- RevokeDebt is visible in status and readiness checks.
+- RevokeDebt is visible in operator status views and deploy gates. `/readyz`
+  remains kernel control-plane readiness only.

@@ -1,4 +1,4 @@
-import { storage } from "takosumi-contract";
+import { storage } from "takosumi-contract/reference/compat";
 import type {
   GcpKmsClient,
   GcpObjectStorageClient,

@@ -3,7 +3,7 @@ import { Hono, type Hono as HonoApp } from "hono";
 import {
   registerArtifactKind,
   unregisterArtifactKind,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import { registerBundledArtifactKinds } from "@takos/takosumi-plugins/shape-providers";
 import { MemoryObjectStorage } from "../adapters/object-storage/memory.ts";
 import { InMemoryTakosumiDeploymentRecordStore } from "../domains/deploy/takosumi_deployment_record_store.ts";
@@ -152,6 +152,29 @@ Deno.test("artifact upload rejects mismatched expectedDigest", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const form = new FormData();
   form.set("kind", "js-bundle");
+  form.set(
+    "expectedDigest",
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  );
+  form.set(
+    "body",
+    new Blob([new TextEncoder().encode("x") as BlobPart]),
+    "x.js",
+  );
+  const res = await app.request(TAKOSUMI_ARTIFACTS_PATH, {
+    method: "POST",
+    headers: authHeaders(VALID_TOKEN),
+    body: form,
+  });
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.match(body.error.message, /digest mismatch/);
+});
+
+Deno.test("artifact upload rejects malformed expectedDigest", async () => {
+  const { app } = createApp({ token: VALID_TOKEN });
+  const form = new FormData();
+  form.set("kind", "js-bundle");
   form.set("expectedDigest", "sha256:0000000000000000");
   form.set(
     "body",
@@ -165,7 +188,7 @@ Deno.test("artifact upload rejects mismatched expectedDigest", async () => {
   });
   assert.equal(res.status, 400);
   const body = await res.json();
-  assert.match(body.error.message, /digest mismatch/);
+  assert.match(body.error.message, /expectedDigest/);
 });
 
 Deno.test("artifact GET returns the stored bytes", async () => {

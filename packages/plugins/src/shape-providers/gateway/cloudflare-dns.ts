@@ -1,6 +1,6 @@
-import type { ProviderPlugin } from "takosumi-contract";
+import type { ProviderPlugin } from "takosumi-contract/reference/provider-plugin";
 import type {
-  GatewayCapability,
+  GatewayCapabilityTerm,
   GatewayOutputs,
   GatewaySpec,
 } from "../../kinds/gateway.ts";
@@ -9,6 +9,8 @@ export interface CloudflareDnsRecordDescriptor {
   readonly recordId: string;
   readonly fqdn: string;
   readonly target: string;
+  readonly listener: string;
+  readonly routes: readonly Record<string, unknown>[];
   readonly proxied: boolean;
   readonly zoneId: string;
 }
@@ -17,6 +19,8 @@ export interface CloudflareDnsLifecycleClient {
   createRecord(input: {
     readonly fqdn: string;
     readonly target: string;
+    readonly listener: string;
+    readonly routes: readonly Record<string, unknown>[];
     readonly proxied: boolean;
   }): Promise<CloudflareDnsRecordDescriptor>;
   describeRecord(input: {
@@ -34,7 +38,7 @@ export interface CloudflareDnsProviderOptions {
   readonly clock?: () => Date;
 }
 
-const SUPPORTED_CAPABILITIES: readonly GatewayCapability[] = [
+const SUPPORTED_CAPABILITIES: readonly GatewayCapabilityTerm[] = [
   "wildcard",
   "auto-tls",
   "sni",
@@ -53,15 +57,17 @@ export function createCloudflareDnsProvider(
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
       const target = requireInjectedTarget(spec);
-      const fqdn = requireRequestedHost(spec);
+      const endpoint = requireEndpointRequest(spec);
       const desc = await lifecycle.createRecord({
-        fqdn,
+        fqdn: endpoint.host,
         target,
+        listener: endpoint.listener,
+        routes: endpoint.routes,
         proxied: true,
       });
       return {
         handle: desc.recordId,
-        outputs: endpointOutputs(desc.fqdn),
+        outputs: endpointOutputs(desc.fqdn, desc.listener, desc.routes),
       };
     },
     async destroy(handle, _ctx) {
@@ -72,7 +78,7 @@ export function createCloudflareDnsProvider(
       if (!desc) return { kind: "deleted", observedAt: clock().toISOString() };
       return {
         kind: "ready",
-        outputs: endpointOutputs(desc.fqdn),
+        outputs: endpointOutputs(desc.fqdn, desc.listener, desc.routes),
         observedAt: clock().toISOString(),
       };
     },
@@ -92,6 +98,8 @@ export class InMemoryCloudflareDnsLifecycle
   createRecord(input: {
     readonly fqdn: string;
     readonly target: string;
+    readonly listener: string;
+    readonly routes: readonly Record<string, unknown>[];
     readonly proxied: boolean;
   }): Promise<CloudflareDnsRecordDescriptor> {
     const recordId = `cf-rec-${++this.#counter}`;
@@ -99,6 +107,8 @@ export class InMemoryCloudflareDnsLifecycle
       recordId,
       fqdn: input.fqdn,
       target: input.target,
+      listener: input.listener,
+      routes: input.routes,
       proxied: input.proxied,
       zoneId: this.#zoneId,
     };
@@ -127,23 +137,42 @@ function requireInjectedTarget(spec: GatewaySpec): string {
   return target;
 }
 
-function requireRequestedHost(spec: GatewaySpec): string {
-  for (const listener of Object.values(spec.listeners)) {
+function requireEndpointRequest(spec: GatewaySpec): {
+  readonly host: string;
+  readonly listener: string;
+  readonly routes: readonly Record<string, unknown>[];
+} {
+  for (const [name, listener] of Object.entries(spec.listeners)) {
     if (typeof listener.host === "string" && listener.host.length > 0) {
-      return listener.host;
+      return {
+        host: listener.host,
+        listener: name,
+        routes: routesForListener(spec, name),
+      };
     }
   }
   throw new Error("gateway requires at least one listener host");
 }
 
+function routesForListener(
+  spec: GatewaySpec,
+  listener: string,
+): readonly Record<string, unknown>[] {
+  return spec.routes
+    .filter((route) => route.listener === listener)
+    .map((route) => ({ pathPrefix: route.path, to: route.to }));
+}
+
 function endpointOutputs(
   host: string,
-  certificateId?: string,
+  listener: string,
+  routes: readonly Record<string, unknown>[],
 ): GatewayOutputs {
   return {
     url: `https://${host}`,
     host,
     scheme: "https",
-    ...(certificateId ? { certificateId } : {}),
+    listener,
+    routes,
   };
 }

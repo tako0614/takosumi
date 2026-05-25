@@ -1,10 +1,15 @@
-// Descriptor closure construction for Deployment.resolution.
+// Reference deploy descriptor closure construction for Deployment.resolution.
+//
+// This module supports the reference kernel's internal deploy conformance
+// dataset. The public AppSpec / Installer API contract stays in
+// `packages/contract`; compatible implementations can use different internal
+// metadata.
 //
 // Phase 10A (Wave 1): builds the immutable descriptor closure that pins every
 // descriptor referenced (directly or transitively) by a resolved Deployment.
-// The closure is the canonical record consumed by Apply — apply MUST reuse the
-// closure pinned at resolve time and MUST NOT re-fetch descriptor URLs at
-// execution time (Core contract § 6).
+// The closure is the reference-kernel record consumed by Apply — apply reuses
+// the closure pinned at resolve time and does not re-read descriptor documents
+// during provider effects.
 //
 // What we pin in the closure:
 //   1. Authoring-expansion descriptor (`authoring.public-manifest-expansion@v1`)
@@ -18,11 +23,13 @@
 //   3. Resource contract descriptors for every declared resource.
 //   4. Interface contract descriptors for every route protocol.
 //   5. Output contract descriptors for every outputs entry.
-//   6. The shared JSON-LD context (`https://takosumi.com/contexts/deploy.jsonld`)
+//   6. The shared reference-kernel JSON-LD context
+//      (`https://takosumi.com/reference/kernel/contexts/deploy.jsonld`)
 //      that all of the above use, recorded as a `jsonld-context` dependency.
 //
 // Each `CoreDescriptorResolution` carries:
-//   - `id`        — canonical URI (e.g. `https://takosumi.com/contracts/runtime/oci-container/v1`)
+//   - `id`        — reference-kernel URI
+//                   (e.g. `https://takosumi.com/reference/kernel/contracts/runtime/oci-container/v1`)
 //   - `alias`     — short-form ref (e.g. `runtime.oci-container@v1`)
 //   - `mediaType` — `application/ld+json`
 //   - `rawDigest` — sha256 over the raw JSON-LD document bytes (canonicalized)
@@ -51,7 +58,7 @@ import type {
   CoreDescriptorResolution,
   DeploymentDescriptorClosure,
   IsoTimestamp,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS,
   type ReferenceDescriptorConformanceRecord,
@@ -59,7 +66,8 @@ import {
 import type { AppSpec, AppSpecRoute } from "./types.ts";
 
 /** Canonical JSON-LD context URI shared by every reference descriptor. */
-const TAKOSUMI_CONTEXT_ID = "https://takosumi.com/contexts/deploy.jsonld";
+const TAKOSUMI_CONTEXT_ID =
+  "https://takosumi.com/reference/kernel/contexts/deploy.jsonld";
 
 /** MIME type used by every JSON-LD descriptor in the reference set. */
 const DESCRIPTOR_MEDIA_TYPE = "application/ld+json";
@@ -163,7 +171,7 @@ function resolveRef(ref: string): RegistryEntry | undefined {
 }
 
 /** Canonical URI for an alias-or-URI. Falls back to a synthetic descriptor
- *  URI under `https://takosumi.com/descriptors/unknown/<sanitised-alias>` when no
+ *  URI under `https://takosumi.com/reference/kernel/descriptors/unknown/<sanitised-alias>` when no
  *  registry entry matches; the alias is preserved on the resolution so callers
  *  can inspect the original short form. */
 function canonicalUriFor(ref: string): { id: string; alias: string } {
@@ -178,7 +186,8 @@ function canonicalUriFor(ref: string): { id: string; alias: string } {
   // observability and policy gates.
   const sanitised = ref.replace(/[^A-Za-z0-9.@_-]/g, "-").toLowerCase();
   return {
-    id: `https://takosumi.com/descriptors/unknown/${sanitised}`,
+    id:
+      `https://takosumi.com/reference/kernel/descriptors/unknown/${sanitised}`,
     alias: ref,
   };
 }
@@ -434,7 +443,7 @@ export { canonicalUriFor as canonicaliseDescriptorRef };
  * The retained closure on `Deployment.resolution.descriptor_closure` is the
  * authoritative pinned record of every descriptor (alias + raw digest +
  * apiVersion) the deployment was resolved against. Apply re-uses that closure
- * verbatim and never re-fetches descriptor URLs (Core contract § 6).
+ * verbatim and never re-reads descriptor documents during provider effects.
  *
  * Risk: between resolve and apply, an operator might upgrade a provider
  * plugin from `provider.aws.rds@v1` to `provider.aws.rds@v2`. The closure
@@ -652,7 +661,11 @@ function isPluginOwnedDescriptorAlias(alias: string): boolean {
   if (alias === TAKOSUMI_CONTEXT_ID) return false;
   if (alias.startsWith("authoring.")) return false;
   if (alias.startsWith("https://takosumi.com/contexts/")) return false;
-  if (alias.startsWith("https://takosumi.com/descriptors/unknown/")) {
+  if (
+    alias.startsWith(
+      "https://takosumi.com/reference/kernel/descriptors/unknown/",
+    )
+  ) {
     return false;
   }
   // runtime / source / runtime-input / resource / interface / output /

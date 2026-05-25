@@ -1,4 +1,7 @@
-import type { CoreConditionReason, JsonObject } from "takosumi-contract";
+import type {
+  CoreConditionReason,
+  JsonObject,
+} from "takosumi-contract/reference/compat";
 import type { IsoTimestamp } from "../../shared/time.ts";
 import type { SpaceId } from "../../shared/ids.ts";
 

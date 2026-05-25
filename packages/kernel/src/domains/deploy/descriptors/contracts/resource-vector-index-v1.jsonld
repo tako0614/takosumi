@@ -1,6 +1,6 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/contracts/resource/vector-index/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/contracts/resource/vector-index/v1",
   "@type": "ResourceContractDescriptor",
   "shortRef": "resource.vector-index@v1",
   "domain": "resource",

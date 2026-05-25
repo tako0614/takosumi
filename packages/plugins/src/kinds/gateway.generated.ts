@@ -36,11 +36,13 @@ export interface GatewayOutputs {
   readonly host: string;
   /** Resolved public scheme (`http` or `https`). */
   readonly scheme: string;
-  /** Provider-scope TLS certificate identifier when TLS is managed. */
-  readonly certificateId?: string;
+  /** Listener name that produced the public endpoint. */
+  readonly listener: string;
+  /** Portable route summary with pathPrefix and listen binding target. */
+  readonly routes: readonly Record<string, unknown>[];
 }
 
-export type GatewayCapability =
+export type GatewayCapabilityTerm =
   | "host-routing"
   | "path-routing"
   | "wildcard"
@@ -52,9 +54,7 @@ export type GatewayCapability =
 
 export type GatewayPublicationName = "public";
 
-export type GatewayListenBindingName = "upstream";
-
-export const GATEWAY_CAPABILITIES: readonly GatewayCapability[] = [
+export const GATEWAY_CAPABILITY_TERMS: readonly GatewayCapabilityTerm[] = [
   "host-routing",
   "path-routing",
   "wildcard",
@@ -69,9 +69,11 @@ export const GATEWAY_OUTPUT_FIELDS: readonly string[] = [
   "url",
   "host",
   "scheme",
-  "certificateId",
+  "listener",
+  "routes",
 ];
 
+// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.
 export const GATEWAY_ALIASES: readonly string[] = [
   "gateway",
 ];
@@ -79,14 +81,13 @@ export const GATEWAY_ALIASES: readonly string[] = [
 export const GATEWAY_PUBLICATIONS: readonly GatewayPublicationName[] = [
   "public",
 ];
-
-export const GATEWAY_LISTEN_BINDINGS: readonly GatewayListenBindingName[] = [
-  "upstream",
-];
-
-export const GATEWAY_KIND_ID = "gateway";
+// Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
+export const GATEWAY_KIND_SHAPE_ID = "gateway";
+/** @deprecated Use GATEWAY_KIND_URI for AppSpec kind identity, or GATEWAY_KIND_SHAPE_ID for legacy Shape.id. */
+export const GATEWAY_KIND_ID = GATEWAY_KIND_SHAPE_ID;
 export const GATEWAY_KIND_NAME = "gateway";
+// Official catalog descriptor URI used in AppSpec kind resolution.
 export const GATEWAY_KIND_URI = "https://takosumi.com/kinds/v1/gateway";
 export const GATEWAY_KIND_VERSION = "v1";
 export const GATEWAY_DESCRIPTION =
-  "HTTP listener, TLS, and routing component. A gateway listens to local upstream bindings, owns listener/domain policy in spec, and publishes the public HTTP endpoint it materializes.";
+  "HTTP listener, TLS, and routing component. A gateway listens to local upstream bindings, carries listener/domain requests in spec, and publishes the public HTTP endpoint it materializes. Operator policy and the selected implementation materialize or reject those requests.";

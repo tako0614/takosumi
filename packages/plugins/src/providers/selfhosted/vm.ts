@@ -15,8 +15,8 @@
  * VM glue that translates a Takos `RuntimeDesiredState` into the unit list a
  * VM-shaped target can apply.
  */
-import type { provider } from "takosumi-contract";
-import type { RuntimeDesiredState } from "takosumi-contract";
+import type { provider } from "takosumi-contract/reference/compat";
+import type { RuntimeDesiredState } from "takosumi-contract/reference/compat";
 import { freezeClone } from "./common.ts";
 import {
   type CloudInitSpec,

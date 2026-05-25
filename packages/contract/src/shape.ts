@@ -17,12 +17,13 @@ export interface ShapeValidationIssue {
 export interface Shape<
   Spec = JsonObject,
   Outputs = JsonObject,
-  Capability extends string = string,
+  CapabilityTerm extends string = string,
 > {
   readonly id: string;
   readonly version: string;
   readonly description?: string;
-  readonly capabilities: readonly Capability[];
+  /** Catalog vocabulary terms associated with this shape. */
+  readonly capabilityTerms: readonly CapabilityTerm[];
   readonly outputFields: readonly string[];
   validateSpec(value: unknown, issues: ShapeValidationIssue[]): void;
   validateOutputs(value: unknown, issues: ShapeValidationIssue[]): void;

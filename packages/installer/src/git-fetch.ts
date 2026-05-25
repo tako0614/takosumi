@@ -41,15 +41,36 @@ export async function fetchGitSource(
   const ref = options.ref ?? "HEAD";
   const depth = options.depth ?? 1;
 
-  await runGit([
-    "clone",
-    "--depth",
-    String(depth),
-    "--branch",
-    ref,
-    options.url,
-    destination,
-  ]);
+  if (ref === "HEAD") {
+    await runGit([
+      "clone",
+      "--depth",
+      String(depth),
+      options.url,
+      destination,
+    ]);
+  } else if (isFullGitSha(ref)) {
+    await runGit([
+      "clone",
+      options.url,
+      destination,
+    ]);
+    await runGit([
+      "checkout",
+      "--detach",
+      ref,
+    ], destination);
+  } else {
+    await runGit([
+      "clone",
+      "--depth",
+      String(depth),
+      "--branch",
+      ref,
+      options.url,
+      destination,
+    ]);
+  }
 
   const commit = (await runGit(["rev-parse", "HEAD"], destination)).trim();
 
@@ -59,6 +80,10 @@ export async function fetchGitSource(
     ref,
     cleanup: () => Deno.remove(destination, { recursive: true }),
   };
+}
+
+function isFullGitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(value);
 }
 
 async function runGit(args: readonly string[], cwd?: string): Promise<string> {

@@ -3,7 +3,7 @@
  * `Connector` lifecycle protocol envelope expected by the runtime-agent.
  */
 
-import type { JsonObject } from "takosumi-contract";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 import type {
   LifecycleApplyRequest,
   LifecycleApplyResponse,
@@ -11,7 +11,7 @@ import type {
   LifecycleDescribeResponse,
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   Connector,
   ConnectorContext,

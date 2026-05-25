@@ -1,4 +1,4 @@
-import type { Shape } from "takosumi-contract";
+import type { Shape } from "takosumi-contract/reference/shape";
 import {
   optionalBoolean,
   optionalNonEmptyString,
@@ -6,23 +6,23 @@ import {
   requireRoot,
 } from "./_validators.ts";
 import {
-  OBJECT_STORE_CAPABILITIES,
+  OBJECT_STORE_CAPABILITY_TERMS,
   OBJECT_STORE_DESCRIPTION,
-  OBJECT_STORE_KIND_ID,
+  OBJECT_STORE_KIND_SHAPE_ID,
   OBJECT_STORE_KIND_VERSION,
   OBJECT_STORE_OUTPUT_FIELDS,
-  type ObjectStoreCapability,
+  type ObjectStoreCapabilityTerm,
   type ObjectStoreOutputs,
   type ObjectStoreSpec,
 } from "./object-store.generated.ts";
 
-export type { ObjectStoreCapability, ObjectStoreOutputs, ObjectStoreSpec };
+export type { ObjectStoreCapabilityTerm, ObjectStoreOutputs, ObjectStoreSpec };
 
 /**
  * `object-store@v1` component kind descriptor. Materialized by a provider
  * adapter (S3-class API) at apply time.
  *
- * Spec / outputs / capabilities are derived from
+ * Spec / outputs / capability terms are derived from
  * `packages/plugins/spec/kinds/v1/object-store.jsonld` via
  * `object-store.generated.ts`; validation diagnostics are hand-written
  * below.
@@ -30,12 +30,12 @@ export type { ObjectStoreCapability, ObjectStoreOutputs, ObjectStoreSpec };
 export const ObjectStoreKind: Shape<
   ObjectStoreSpec,
   ObjectStoreOutputs,
-  ObjectStoreCapability
+  ObjectStoreCapabilityTerm
 > = {
-  id: OBJECT_STORE_KIND_ID,
+  id: OBJECT_STORE_KIND_SHAPE_ID,
   version: OBJECT_STORE_KIND_VERSION,
   description: OBJECT_STORE_DESCRIPTION,
-  capabilities: OBJECT_STORE_CAPABILITIES,
+  capabilityTerms: OBJECT_STORE_CAPABILITY_TERMS,
   outputFields: OBJECT_STORE_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;

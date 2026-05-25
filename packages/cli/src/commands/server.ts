@@ -1,5 +1,5 @@
 import { Command } from "@cliffy/command";
-import { LIFECYCLE_AGENT_URL_ENV } from "takosumi-contract";
+import { LIFECYCLE_AGENT_URL_ENV } from "takosumi-contract/reference/runtime-agent-lifecycle";
 
 function createServerCommand() {
   return new Command()

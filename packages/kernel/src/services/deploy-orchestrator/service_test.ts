@@ -16,7 +16,7 @@ import {
   type OrchestratorDeploymentClient,
   type OrchestratorResolveInput,
 } from "./mod.ts";
-import type { Deployment, GroupHead } from "takosumi-contract";
+import type { Deployment, GroupHead } from "takosumi-contract/reference/compat";
 import type { PublicDeployManifest } from "../../domains/deploy/types.ts";
 import {
   InMemoryPreparedArtifactStore,

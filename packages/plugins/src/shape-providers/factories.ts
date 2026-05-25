@@ -1,5 +1,5 @@
 /**
- * Production factory for the Takos reference set of shape-providers.
+ * Legacy/reference shape-provider factory for the takosumi.com distribution.
  *
  * Every provider is a paper-thin HTTP wrapper around a runtime-agent: the
  * kernel posts lifecycle envelopes (apply / destroy / describe) to the
@@ -14,21 +14,23 @@
 
 import type {
   ApplyResult,
-  ArtifactStoreLocator,
-  JsonObject,
   PlatformOperationContext,
   PlatformOperationRequest,
-  PreparedSourceLocator,
   ProviderPlugin,
   ResourceHandle,
   ResourceStatus,
   ShapeRef,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/provider-plugin";
 import type {
-  DatabasePostgresCapability,
-  GatewayCapability,
-  ObjectStoreCapability,
-  WebServiceCapability,
+  ArtifactStoreLocator,
+  PreparedSourceLocator,
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
+import type { JsonObject } from "takosumi-contract/reference/types";
+import type {
+  DatabasePostgresCapabilityTerm,
+  GatewayCapabilityTerm,
+  ObjectStoreCapabilityTerm,
+  WebServiceCapabilityTerm,
 } from "../kinds/mod.ts";
 
 import { RuntimeAgentLifecycle } from "./_runtime_agent_lifecycle.ts";
@@ -116,7 +118,7 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
       "event-notifications",
       "lifecycle-rules",
       "multipart-upload",
-    ] satisfies readonly ObjectStoreCapability[],
+    ] satisfies readonly ObjectStoreCapabilityTerm[],
   },
   {
     id: "@takos/aws-fargate",
@@ -127,7 +129,7 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
       "long-request",
       "sticky-session",
       "private-networking",
-    ] satisfies readonly WebServiceCapability[],
+    ] satisfies readonly WebServiceCapabilityTerm[],
   },
   {
     id: "@takos/aws-rds",
@@ -139,7 +141,7 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
       "backups",
       "ssl-required",
       "extensions",
-    ] satisfies readonly DatabasePostgresCapability[],
+    ] satisfies readonly DatabasePostgresCapabilityTerm[],
   },
   {
     id: "@takos/aws-route53",
@@ -149,7 +151,7 @@ const AWS_PROVIDERS: readonly ProviderEntry[] = [
       "auto-tls",
       "sni",
       "alpn-acme",
-    ] satisfies readonly GatewayCapability[],
+    ] satisfies readonly GatewayCapabilityTerm[],
   },
 ];
 
@@ -165,7 +167,7 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
       "event-notifications",
       "lifecycle-rules",
       "multipart-upload",
-    ] satisfies readonly ObjectStoreCapability[],
+    ] satisfies readonly ObjectStoreCapabilityTerm[],
   },
   {
     id: "@takos/gcp-cloud-run",
@@ -175,7 +177,7 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
       "scale-to-zero",
       "websocket",
       "long-request",
-    ] satisfies readonly WebServiceCapability[],
+    ] satisfies readonly WebServiceCapabilityTerm[],
   },
   {
     id: "@takos/gcp-cloud-sql",
@@ -187,7 +189,7 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
       "backups",
       "ssl-required",
       "extensions",
-    ] satisfies readonly DatabasePostgresCapability[],
+    ] satisfies readonly DatabasePostgresCapabilityTerm[],
   },
   {
     id: "@takos/gcp-cloud-dns",
@@ -196,7 +198,7 @@ const GCP_PROVIDERS: readonly ProviderEntry[] = [
       "wildcard",
       "auto-tls",
       "sni",
-    ] satisfies readonly GatewayCapability[],
+    ] satisfies readonly GatewayCapabilityTerm[],
   },
 ];
 
@@ -208,7 +210,7 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
       "presigned-urls",
       "public-access",
       "multipart-upload",
-    ] satisfies readonly ObjectStoreCapability[],
+    ] satisfies readonly ObjectStoreCapabilityTerm[],
   },
   {
     id: "@takos/cloudflare-container",
@@ -216,7 +218,7 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
     capabilities: [
       "scale-to-zero",
       "geo-routing",
-    ] satisfies readonly WebServiceCapability[],
+    ] satisfies readonly WebServiceCapabilityTerm[],
   },
   {
     id: "@takos/cloudflare-workers",
@@ -237,7 +239,7 @@ const CLOUDFLARE_PROVIDERS: readonly ProviderEntry[] = [
       "auto-tls",
       "sni",
       "http3",
-    ] satisfies readonly GatewayCapability[],
+    ] satisfies readonly GatewayCapabilityTerm[],
   },
 ];
 
@@ -250,7 +252,7 @@ const AZURE_PROVIDERS: readonly ProviderEntry[] = [
       "scale-to-zero",
       "websocket",
       "long-request",
-    ] satisfies readonly WebServiceCapability[],
+    ] satisfies readonly WebServiceCapabilityTerm[],
   },
 ];
 
@@ -263,7 +265,7 @@ const KUBERNETES_PROVIDERS: readonly ProviderEntry[] = [
       "websocket",
       "long-request",
       "private-networking",
-    ] satisfies readonly WebServiceCapability[],
+    ] satisfies readonly WebServiceCapabilityTerm[],
   },
 ];
 
@@ -283,7 +285,7 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
   {
     id: "@takos/selfhost-filesystem",
     shape: OBJECT_STORE,
-    capabilities: ["presigned-urls"] satisfies readonly ObjectStoreCapability[],
+    capabilities: ["presigned-urls"] satisfies readonly ObjectStoreCapabilityTerm[],
   },
   {
     id: "@takos/selfhost-minio",
@@ -295,7 +297,7 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
       "public-access",
       "lifecycle-rules",
       "multipart-upload",
-    ] satisfies readonly ObjectStoreCapability[],
+    ] satisfies readonly ObjectStoreCapabilityTerm[],
   },
   {
     id: "@takos/selfhost-docker-compose",
@@ -305,7 +307,7 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
       "websocket",
       "long-request",
       "sticky-session",
-    ] satisfies readonly WebServiceCapability[],
+    ] satisfies readonly WebServiceCapabilityTerm[],
   },
   {
     id: "@takos/selfhost-systemd",
@@ -313,7 +315,7 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
     capabilities: [
       "always-on",
       "long-request",
-    ] satisfies readonly WebServiceCapability[],
+    ] satisfies readonly WebServiceCapabilityTerm[],
   },
   {
     id: "@takos/selfhost-postgres",
@@ -321,12 +323,12 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
     capabilities: [
       "ssl-required",
       "extensions",
-    ] satisfies readonly DatabasePostgresCapability[],
+    ] satisfies readonly DatabasePostgresCapabilityTerm[],
   },
   {
     id: "@takos/selfhost-coredns",
     shape: GATEWAY,
-    capabilities: ["wildcard"] satisfies readonly GatewayCapability[],
+    capabilities: ["wildcard"] satisfies readonly GatewayCapabilityTerm[],
   },
 ];
 
@@ -389,7 +391,7 @@ function buildProvider(
         provider: entry.id,
         resourceName,
         spec: spec as JsonObject,
-        ...tenantIdOf(ctx),
+        ...spaceEnvelopeOf(ctx),
         ...(ctx.operation
           ? { idempotencyKey: ctx.operation.idempotencyKeyString }
           : {}),
@@ -410,7 +412,7 @@ function buildProvider(
         shape: shapeRef,
         provider: entry.id,
         handle,
-        ...tenantIdOf(ctx),
+        ...spaceEnvelopeOf(ctx),
         ...(ctx.operation
           ? { idempotencyKey: ctx.operation.idempotencyKeyString }
           : {}),
@@ -426,7 +428,7 @@ function buildProvider(
         shape: shapeRef,
         provider: entry.id,
         handle,
-        ...tenantIdOf(ctx),
+        ...spaceEnvelopeOf(ctx),
         ...(ctx.operation
           ? { idempotencyKey: ctx.operation.idempotencyKeyString }
           : {}),
@@ -443,7 +445,7 @@ function buildProvider(
         shape: shapeRef,
         provider: entry.id,
         handle,
-        ...tenantIdOf(ctx),
+        ...spaceEnvelopeOf(ctx),
       });
       const observedAt = clock().toISOString();
       switch (result.status) {
@@ -502,13 +504,13 @@ function pickResourceName(spec: unknown): string {
   return "";
 }
 
-function tenantIdOf(
-  ctx: { readonly tenantId?: string } | undefined,
-): { tenantId?: string } {
-  if (ctx && typeof ctx.tenantId === "string" && ctx.tenantId.length > 0) {
-    return { tenantId: ctx.tenantId };
+function spaceEnvelopeOf(
+  ctx: { readonly spaceId: string; readonly tenantId?: string },
+): { spaceId: string; tenantId?: string } {
+  if (typeof ctx.tenantId === "string" && ctx.tenantId.length > 0) {
+    return { spaceId: ctx.spaceId, tenantId: ctx.tenantId };
   }
-  return {};
+  return { spaceId: ctx.spaceId };
 }
 
 function lifecycleOperationMetadata(

@@ -4,79 +4,92 @@ layout: home
 hero:
   name: Takosumi
   text: AppSpec から Deployment へ
-  tagline: source root の `.takosumi.yml` を読み、Space に Installation を作り、apply ごとに Deployment を記録する self-hostable PaaS。
+  tagline: アプリの構成ファイルからデプロイまでを一貫して管理する self-hostable PaaS。
   image:
     src: /logo.svg
     alt: Takosumi
   actions:
     - theme: brand
+      text: コンセプト
+      link: ./getting-started/concepts
+    - theme: alt
       text: クイックスタート
-      link: /getting-started/quickstart
+      link: ./getting-started/quickstart
     - theme: alt
       text: 読む順序
-      link: /getting-started/reading-paths
+      link: ./getting-started/reading-paths
     - theme: alt
       text: AppSpec
-      link: /reference/app-spec
+      link: ./reference/app-spec
 
 features:
   - title: 3 つの公開概念
     details: |
-      Takosumi の読み始めは AppSpec / Installation / Deployment だけで十分です。
+      AppSpec / Installation / Deployment だけで始められる。
   - title: AppSpec は小さく保つ
     details: |
-      `.takosumi.yml` には runtime、resource、component 間接続の intent を書きます。
-  - title: source を固定して apply する
+      `.takosumi.yml` には component kind、kind-specific spec、publish/listen の接続を書く。
+  - title: Deployment が履歴になる
     details: |
-      git source または prepared source snapshot を Installer API に渡し、Deployment として記録します。
+      apply の結果は append-only Deployment record として残り、rollback は retained Deployment を選ぶ。
   - title: 実行先は operator が選ぶ
     details: |
-      AppSpec は portable な intent です。kind の意味と実行先は operator distribution が解決します。
+      AppSpec は portable な intent。operator は採用する catalog entry、implementation binding、policy で具体的な実行先を選ぶ。
 ---
-
-## 何をするものか
-
-Takosumi は AppSpec を Installation として Space に入れ、apply / rollback
-の結果を Deployment として記録する installer kernel です。
-
-アプリを書く人は source root に `.takosumi.yml` を置きます。CLI や automation は
-その source を Installer API に渡します。Takosumi は AppSpec を検証し、component
-kind と namespace 接続を解決し、実行結果を Deployment history として残します。
-
-account、billing、OIDC issuer、customer onboarding UI は operator account-plane
-が接続します。Takosumi kernel docs は AppSpec、Installation、Deployment、
-Installer API、operator が起動する reference implementation の境界を扱います。
 
 ## 最初に読むもの
 
-| 読者                         | 最初のページ                                    |
-| ---------------------------- | ----------------------------------------------- |
-| まず動かしたい               | [クイックスタート](/getting-started/quickstart) |
-| 全体像を掴みたい             | [コンセプト](/getting-started/concepts)         |
-| 役割別に読みたい             | [読む順序](/getting-started/reading-paths)      |
-| `.takosumi.yml` を書きたい   | [AppSpec リファレンス](/reference/app-spec)     |
-| operator として運用したい    | [オペレーター](/operator/)                      |
-| provider / kind を増やしたい | [Takosumi を拡張する](/extending)               |
+| 読者                         | 最初のページ                                        |
+| ---------------------------- | --------------------------------------------------- |
+| 迷ったとき                   | [読む順序](./getting-started/reading-paths.md)      |
+| 初めて読む                   | [コンセプト](./getting-started/concepts.md)         |
+| まず動かしたい               | [クイックスタート](./getting-started/quickstart.md) |
+| `.takosumi.yml` を書きたい   | [AppSpec リファレンス](./reference/app-spec.md)     |
+| operator として運用したい    | [オペレーター](./operator/index.md)                 |
+| provider / kind を増やしたい | [Takosumi を拡張する](./extending.md)               |
+
+## 仕様の 3 層
+
+Takosumi docs は core、official type catalog、operator distribution を分けて
+読みます。AppSpec / Installation / Deployment の互換性は core spec、kind や
+material の vocabulary は official type catalog、account-plane behavior は
+operator distribution spec が持ちます。
+
+| 仕様面                         | 読む入口                                                  | 何を決めるか                                                                            |
+| ------------------------------ | --------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Takosumi core                  | [Core Specification](./reference/core-spec.md)            | AppSpec / Installation / Deployment、Installer API、publish/listen grammar。            |
+| Takosumi official type catalog | [Type Catalog Specification](./reference/type-catalog.md) | kind descriptor、material contract、projection family、JSON-LD catalog metadata。       |
+| Operator distribution          | [Takosumi Cloud bridge](./reference/takosumi-cloud.md)    | 別 docs で定義される account-plane、dashboard、billing、identity、deploy/admin facade。 |
+
+Takosumi 本体仕様と Takosumi 公式型仕様は同じ docs site にありますが、章を分けて
+読みます。Takosumi Cloud の具体仕様は `takosumi-cloud/docs/` に置き、この site
+の [Takosumi Cloud](./reference/takosumi-cloud.md) はそこへ進む入口です。
 
 ## 3 つの公開概念
 
-| 概念         | 意味                                                                              |
-| ------------ | --------------------------------------------------------------------------------- |
-| AppSpec      | source root の `.takosumi.yml`。アプリが欲しい runtime / resource / 接続を書く。  |
-| Installation | Space に入った AppSpec。Space は operator/account-plane が所有する install 境界。 |
-| Deployment   | 1 回の apply / rollback の結果。履歴、audit、rollback の根拠になる。              |
+AppSpec は source に入る宣言ファイルです。Installer API は AppSpec source を
+operator-supplied `spaceId` の文脈で評価し、Installation / Deployment record を
+記録します。operator account plane は Space / account membership と
+account-facing projection を所有します。
 
-この 3 つを掴んだら、次は [AppSpec](/reference/app-spec) と
-[Installer API](/reference/installer-api) を読めば public contract を追えます。
+| 概念         | 意味                                                                                             |
+| ------------ | ------------------------------------------------------------------------------------------------ |
+| AppSpec      | source root の `.takosumi.yml`。アプリが欲しい runtime / resource / 接続を書く。                 |
+| Installation | operator-supplied `spaceId` に scoped された AppSpec の core record。                            |
+| Deployment   | 1 回の apply 結果。履歴、audit、rollback の根拠になる。rollback 自体は新 Deployment を作らない。 |
 
 ## よく参照するページ
 
-| 目的                                   | ページ                                               |
-| -------------------------------------- | ---------------------------------------------------- |
-| `.takosumi.yml` を書く                 | [AppSpec](/reference/app-spec)                       |
-| source build / prepare の分担を見る    | [Build service handoff](/reference/build-spec)       |
-| install / deploy / rollback API を叩く | [Installer API](/reference/installer-api)            |
-| CLI の subcommand と env を見る        | [CLI](/reference/cli)                                |
-| kind descriptor の例を見る             | [Kind Descriptor Examples](/reference/kind-registry) |
-| provider 実装の attach / 選択を見る    | [Provider Implementations](/reference/providers)     |
-| production 起動の前提を見る            | [Operator](/operator/)                               |
+| 目的                                                                 | ページ                                                                      |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| core contract 全体を読む                                             | [Core Specification](./reference/core-spec.md)                              |
+| `.takosumi.yml` を書く                                               | [AppSpec](./reference/app-spec.md)                                          |
+| kind や material contract の vocabulary を見る                       | [Takosumi Official Type Catalog Specification](./reference/type-catalog.md) |
+| operator surface を workload から consume する                       | [External publications](./reference/external-publications.md)               |
+| Takosumi Cloud の account-plane API / facade を見る                  | [Takosumi Cloud](./reference/takosumi-cloud.md)                             |
+| core / catalog / Cloud の境界を確認する                              | [Specification Boundaries](./reference/spec-boundaries.md)                  |
+| install / deploy / rollback API を叩く                               | [Installer API](./reference/installer-api.md)                               |
+| CLI の subcommand と env を見る                                      | [CLI](./reference/cli.md)                                                   |
+| public app endpoint を adopted gateway/ingress descriptor で公開する | [HTTP Exposure](./reference/http-exposure.md)                               |
+| build service / CI から prepared source を渡す                       | [Build service handoff](./reference/build-spec.md)                          |
+| reference implementation を production 相当に起動するとき            | [Operator](./operator/index.md)                                             |

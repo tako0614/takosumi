@@ -20,7 +20,7 @@ import {
   type Shape,
   unregisterProvider,
   unregisterShape,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import { ApplyService } from "./apply_service.ts";
 import { InMemoryDeploymentStore } from "./deployment_service.ts";
 import type { PublicDeployManifest } from "./types.ts";

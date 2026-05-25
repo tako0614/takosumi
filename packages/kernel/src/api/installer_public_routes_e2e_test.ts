@@ -21,14 +21,17 @@ import type {
   KernelPlugin,
   NamespaceMaterial,
   PublishMaterialContext,
-} from "takosumi-contract/plugin";
+} from "takosumi-contract/reference/plugin";
 import type {
   Deployment,
+  DeploymentApplyResponse,
   Installation,
   InstallationApplyResponse,
   InstallationDryRunResponse,
+  RollbackResponse,
 } from "takosumi-contract/installer-api";
 import { InstallerPipeline } from "../domains/installer/mod.ts";
+import { InMemoryDeploymentStore } from "../domains/installer/store.ts";
 import { mountInstallerPublicRoutes } from "./installer_public_routes.ts";
 
 // Canonical AppSpec: `db` publishes `db.connection`; `web` listens with
@@ -119,7 +122,7 @@ function buildRecordingPlugin(opts: {
       });
     },
     publishMaterial: opts.publishMaterial ??
-      ((ctx) => Promise.resolve(ctx.outputs)),
+      ((ctx) => Promise.resolve(stringOutputsAsMaterial(ctx.outputs))),
     applyListen: opts.applyListen,
     destroy: (_ctx) => Promise.resolve(),
     onInstallStart: () => {
@@ -172,12 +175,12 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
       // connectionString).
       publishMaterial: (ctx: PublishMaterialContext) =>
         Promise.resolve({
-          host: ctx.outputs.host,
-          port: ctx.outputs.port,
-          database: ctx.outputs.database,
-          username: ctx.outputs.username,
-          passwordSecretRef: ctx.outputs.passwordSecretRef,
-          connectionString: ctx.outputs.connectionString,
+          host: requireStringOutput(ctx, "host"),
+          port: requireStringOutput(ctx, "port"),
+          database: requireStringOutput(ctx, "database"),
+          username: requireStringOutput(ctx, "username"),
+          passwordSecretRef: requireStringOutput(ctx, "passwordSecretRef"),
+          connectionString: requireStringOutput(ctx, "connectionString"),
         }),
     });
     const workerPlugin = buildRecordingPlugin({
@@ -227,10 +230,9 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
     assertEquals(apply.deployment.status, "succeeded");
     assertEquals(Object.keys(apply.deployment.outputs.components ?? {}), [
       "db",
-      "web",
     ]);
     assertEquals(
-      apply.deployment.outputs.components?.db,
+      apply.deployment.outputs.components?.db?.connection,
       {
         host: "db.local",
         port: "5432",
@@ -331,6 +333,90 @@ Deno.test("installer e2e — listener applyListen receives material with prefixe
   });
 });
 
+Deno.test("installer e2e — rollback is pointer-only and does not re-apply providers", async () => {
+  await withTempSource(async (workingDirectory) => {
+    const events: string[] = [];
+    const applies: ApplyRecord[] = [];
+    const deployments = new InMemoryDeploymentStore();
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      deployments,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@test/postgres",
+          kindUri: "https://takosumi.com/kinds/v1/postgres",
+          events,
+          applies,
+        }),
+        buildRecordingPlugin({
+          name: "@test/worker",
+          kindUri: "https://takosumi.com/kinds/v1/worker",
+          events,
+          applies,
+        }),
+      ],
+    });
+    const app = buildApp(pipeline);
+
+    const installRes = await app.request("/v1/installations", {
+      method: "POST",
+      headers: INSTALLER_AUTH_HEADERS,
+      body: JSON.stringify({
+        spaceId: "space_test",
+        source: { kind: "local", url: workingDirectory },
+      }),
+    });
+    assertEquals(installRes.status, 201);
+    const install = await installRes.json() as InstallationApplyResponse;
+
+    const deployRes = await app.request(
+      `/v1/installations/${install.installation.id}/deployments`,
+      {
+        method: "POST",
+        headers: INSTALLER_AUTH_HEADERS,
+        body: JSON.stringify({
+          source: { kind: "local", url: workingDirectory },
+        }),
+      },
+    );
+    assertEquals(deployRes.status, 201);
+    const deploy = await deployRes.json() as DeploymentApplyResponse;
+    assertEquals(applies.length, 4);
+    const before = await deployments.listForInstallation(
+      install.installation.id,
+    );
+    assertEquals(before.length, 2);
+
+    const rollbackRes = await app.request(
+      `/v1/installations/${install.installation.id}/rollback`,
+      {
+        method: "POST",
+        headers: INSTALLER_AUTH_HEADERS,
+        body: JSON.stringify({ deploymentId: install.deployment.id }),
+      },
+    );
+    assertEquals(rollbackRes.status, 200);
+    const rollback = await rollbackRes.json() as RollbackResponse;
+
+    const after = await deployments.listForInstallation(
+      install.installation.id,
+    );
+    assertEquals(after.length, 2);
+    assertEquals(applies.length, 4);
+    assertEquals(rollback.deployment.id, install.deployment.id);
+    assertEquals(
+      rollback.installation.currentDeploymentId,
+      install.deployment.id,
+    );
+    assertEquals(rollback.installation.status, "ready");
+    assertEquals(rollback.rollback, {
+      rolledBackFrom: deploy.deployment.id,
+      rolledBackTo: install.deployment.id,
+    });
+    assert(!events.some((event) => event.includes("rollback")));
+  });
+});
+
 Deno.test("installer e2e — apply with mismatched expected returns 409 (Phase A status flip)", async () => {
   await withTempSource(async (workingDirectory) => {
     const events: string[] = [];
@@ -360,7 +446,7 @@ Deno.test("installer e2e — apply with mismatched expected returns 409 (Phase A
       body: JSON.stringify({
         spaceId: "space_test",
         source: { kind: "local", url: workingDirectory },
-        expected: { commit: "", manifestDigest: "sha256:not-a-real-digest" },
+        expected: { manifestDigest: "sha256:not-a-real-digest" },
       }),
     });
     // Phase A docs flip: failed_precondition surfaces as 409 Conflict
@@ -512,6 +598,30 @@ components:
   }, spec);
 });
 
+function stringOutputsAsMaterial(
+  outputs: PublishMaterialContext["outputs"],
+): NamespaceMaterial {
+  const material: Record<string, string> = {};
+  for (const [key, value] of Object.entries(outputs)) {
+    if (typeof value !== "string") {
+      throw new TypeError(`expected ${key} output to be a string`);
+    }
+    material[key] = value;
+  }
+  return material;
+}
+
+function requireStringOutput(
+  ctx: PublishMaterialContext,
+  key: string,
+): string {
+  const value = ctx.outputs[key];
+  if (typeof value !== "string") {
+    throw new TypeError(`expected ${key} output to be a string`);
+  }
+  return value;
+}
+
 function assertInstallation(
   installation: Installation,
   spaceId: string,
@@ -520,7 +630,7 @@ function assertInstallation(
   assert(installation.id.startsWith("ins_"));
   assertEquals(installation.spaceId, spaceId);
   assertEquals(installation.appId, appId);
-  assertEquals(installation.status, "running");
+  assertEquals(installation.status, "ready");
   assert(typeof installation.createdAt === "number");
 }
 

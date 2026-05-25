@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "takosumi-contract/types";
+import type { JsonObject, JsonValue } from "takosumi-contract/reference/types";
 
 /**
  * Pinned envelope identifier for every Takosumi manifest. The `apiVersion`

@@ -12,7 +12,7 @@
 // carries ~800 lines of compilation logic. Behavior preserved verbatim;
 // every helper migrated as-is.
 
-import { objectAddress } from "takosumi-contract";
+import { objectAddress } from "takosumi-contract/reference/compat";
 import type {
   DeploymentBinding,
   DeploymentDesired,
@@ -23,7 +23,7 @@ import type {
   DeploymentRoute,
   DeploymentRuntimeNetworkPolicy,
   IsoTimestamp,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import { resolveBindings, validateAccessPaths } from "../binding_resolver.ts";
 import { compileManifestToAppSpec } from "../compiler.ts";
 import { buildDescriptorClosure } from "../descriptor_closure.ts";
@@ -61,8 +61,8 @@ export function buildDeploymentArtifacts(input: {
   // `compileManifestToAppSpec`. The expansion descriptor digest plus every
   // referenced runtime/artifact/interface/resource/output descriptor
   // (and their JSON-LD context dependencies) is pinned by the descriptor
-  // closure builder. Apply consumes this closure verbatim and MUST NOT
-  // re-fetch descriptor URLs at execution time (Core spec § 6).
+  // closure builder. Apply consumes this closure verbatim and does not
+  // re-read descriptor documents during provider effects.
   const descriptorClosure = buildDescriptorClosure({
     appSpec,
     resolvedAt: input.createdAt,

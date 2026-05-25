@@ -7,7 +7,7 @@ import {
   TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
   TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
   type TakosumiActorContext,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   GatewayManifestIssuer,
   RegisterRuntimeAgentInput,

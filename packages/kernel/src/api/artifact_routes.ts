@@ -4,7 +4,7 @@ import {
   type ArtifactStored,
   type JsonObject,
   listArtifactKinds,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   ObjectStorageDigest,
   ObjectStoragePort,
@@ -228,18 +228,28 @@ export function registerArtifactRoutes(
 
     const digest = await sha256Digest(bytes);
     const expectedDigestField = form.get("expectedDigest");
-    if (
-      typeof expectedDigestField === "string" &&
-      expectedDigestField.trim() !== "" &&
-      expectedDigestField.trim() !== digest
-    ) {
-      return c.json(
-        apiError(
-          "invalid_argument",
-          `digest mismatch: expected ${expectedDigestField}, computed ${digest}`,
-        ),
-        400,
-      );
+    if (typeof expectedDigestField === "string") {
+      const expectedDigest = expectedDigestField.trim();
+      if (expectedDigest !== "") {
+        if (!/^sha256:[0-9a-f]{64}$/.test(expectedDigest)) {
+          return c.json(
+            apiError(
+              "invalid_argument",
+              "form field `expectedDigest` must be sha256:<64 lowercase hex>",
+            ),
+            400,
+          );
+        }
+        if (expectedDigest !== digest) {
+          return c.json(
+            apiError(
+              "failed_precondition",
+              `digest mismatch: expected ${expectedDigest}, computed ${digest}`,
+            ),
+            409,
+          );
+        }
+      }
     }
 
     const objectMeta: Record<string, string> = {

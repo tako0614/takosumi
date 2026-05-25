@@ -1,4 +1,4 @@
-import type { kms } from "takosumi-contract";
+import type { kms } from "takosumi-contract/reference/compat";
 import type { AwsKmsClient } from "./clients.ts";
 import {
   type AwsRetryConfig,

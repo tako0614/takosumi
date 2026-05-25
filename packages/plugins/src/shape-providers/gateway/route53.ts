@@ -1,6 +1,6 @@
-import type { ProviderPlugin } from "takosumi-contract";
+import type { ProviderPlugin } from "takosumi-contract/reference/provider-plugin";
 import type {
-  GatewayCapability,
+  GatewayCapabilityTerm,
   GatewayOutputs,
   GatewaySpec,
 } from "../../kinds/gateway.ts";
@@ -9,6 +9,8 @@ export interface Route53RecordDescriptor {
   readonly recordSetId: string;
   readonly fqdn: string;
   readonly target: string;
+  readonly listener: string;
+  readonly routes: readonly Record<string, unknown>[];
   readonly hostedZoneId: string;
   readonly certificateArn?: string;
 }
@@ -17,6 +19,8 @@ export interface Route53LifecycleClient {
   createRecord(input: {
     readonly fqdn: string;
     readonly target: string;
+    readonly listener: string;
+    readonly routes: readonly Record<string, unknown>[];
     readonly recordType: "A" | "AAAA" | "CNAME";
   }): Promise<Route53RecordDescriptor>;
   describeRecord(input: {
@@ -33,7 +37,7 @@ export interface Route53ProviderOptions {
   readonly clock?: () => Date;
 }
 
-const SUPPORTED_CAPABILITIES: readonly GatewayCapability[] = [
+const SUPPORTED_CAPABILITIES: readonly GatewayCapabilityTerm[] = [
   "wildcard",
   "auto-tls",
   "sni",
@@ -52,14 +56,17 @@ export function createRoute53Provider(
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
       const target = requireInjectedTarget(spec);
+      const endpoint = requireEndpointRequest(spec);
       const desc = await lifecycle.createRecord({
-        fqdn: requireRequestedHost(spec),
+        fqdn: endpoint.host,
         target,
+        listener: endpoint.listener,
+        routes: endpoint.routes,
         recordType: "CNAME",
       });
       return {
         handle: desc.recordSetId,
-        outputs: endpointOutputs(desc.fqdn, desc.certificateArn),
+        outputs: endpointOutputs(desc.fqdn, desc.listener, desc.routes),
       };
     },
     async destroy(handle, _ctx) {
@@ -70,7 +77,7 @@ export function createRoute53Provider(
       if (!desc) return { kind: "deleted", observedAt: clock().toISOString() };
       return {
         kind: "ready",
-        outputs: endpointOutputs(desc.fqdn, desc.certificateArn),
+        outputs: endpointOutputs(desc.fqdn, desc.listener, desc.routes),
         observedAt: clock().toISOString(),
       };
     },
@@ -89,12 +96,16 @@ export class InMemoryRoute53Lifecycle implements Route53LifecycleClient {
   createRecord(input: {
     readonly fqdn: string;
     readonly target: string;
+    readonly listener: string;
+    readonly routes: readonly Record<string, unknown>[];
   }): Promise<Route53RecordDescriptor> {
     const recordSetId = `r53-${++this.#counter}`;
     const desc: Route53RecordDescriptor = {
       recordSetId,
       fqdn: input.fqdn,
       target: input.target,
+      listener: input.listener,
+      routes: input.routes,
       hostedZoneId: this.#hostedZoneId,
     };
     this.#records.set(recordSetId, desc);
@@ -122,23 +133,42 @@ function requireInjectedTarget(spec: GatewaySpec): string {
   return target;
 }
 
-function requireRequestedHost(spec: GatewaySpec): string {
-  for (const listener of Object.values(spec.listeners)) {
+function requireEndpointRequest(spec: GatewaySpec): {
+  readonly host: string;
+  readonly listener: string;
+  readonly routes: readonly Record<string, unknown>[];
+} {
+  for (const [name, listener] of Object.entries(spec.listeners)) {
     if (typeof listener.host === "string" && listener.host.length > 0) {
-      return listener.host;
+      return {
+        host: listener.host,
+        listener: name,
+        routes: routesForListener(spec, name),
+      };
     }
   }
   throw new Error("gateway requires at least one listener host");
 }
 
+function routesForListener(
+  spec: GatewaySpec,
+  listener: string,
+): readonly Record<string, unknown>[] {
+  return spec.routes
+    .filter((route) => route.listener === listener)
+    .map((route) => ({ pathPrefix: route.path, to: route.to }));
+}
+
 function endpointOutputs(
   host: string,
-  certificateId?: string,
+  listener: string,
+  routes: readonly Record<string, unknown>[],
 ): GatewayOutputs {
   return {
     url: `https://${host}`,
     host,
     scheme: "https",
-    ...(certificateId ? { certificateId } : {}),
+    listener,
+    routes,
   };
 }

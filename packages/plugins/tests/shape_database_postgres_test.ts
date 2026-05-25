@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { ShapeValidationIssue } from "takosumi-contract";
+import type { ShapeValidationIssue } from "takosumi-contract/reference/compat";
 import { DatabasePostgresKind } from "../src/kinds/database-postgres.ts";
 import {
   DATABASE_POSTGRES_KIND_ID,

@@ -2,8 +2,8 @@
  * Mock installer service for local-substrate.
  *
  * Returns the v1 InstallationDryRunResponse shape (source + manifestDigest +
- * changes[] + estimatedCost + expected.{commit, manifestDigest}) per the
- * AppSpec / Installation / Deployment contract reset.
+ * changes[] + expected.{commit, manifestDigest}) per the AppSpec /
+ * Installation / Deployment contract.
  *
  * Primary path: load pre-baked fixtures from /srv/fixtures/<repo>.json
  * (one per bundled app, mirroring the real `.takosumi.yml`).
@@ -121,7 +121,6 @@ Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
     source: { kind: "git", url: gitUrl, ref, commit },
     manifestDigest: digest,
     changes: [],
-    estimatedCost: { currency: "JPY", monthly: 0 },
     expected: { commit, manifestDigest: digest },
     metadata: {
       mock: true,

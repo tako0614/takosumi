@@ -6,7 +6,7 @@ import {
   parseShapeRef,
   type ProviderPlugin,
   type Shape,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 
 export interface ResolvedResourceV2 {

@@ -1,10 +1,14 @@
-# Runtime-Agent API {#runtime-agent-api}
+# Reference Runtime-Agent Execution Surface {#runtime-agent-api}
 
-> このページでわかること: runtime-agent process が公開する HTTP RPC v1 仕様。
+runtime-agent は reference Takosumi topology で使う execution host です。
+operator が cloud / OS credential を握る host で起動し、kernel の下流 execution
+surface として connector-local selector 単位の lifecycle envelope を受けます。
 
-runtime-agent は operator が cloud / OS credential を握る host で起動し、 kernel
-の下流 execution surface として connector-local selector 単位の lifecycle
-envelope を受けます。
+このページは reference runtime-agent topology の HTTP surface を記述します。
+Takosumi public conformance surface は AppSpec / Installation / Deployment と
+Installer API です。別 implementation はこの route set ではなく、同じ AppSpec
+resolution、retained evidence、lifecycle outcome を満たす別の execution boundary
+を持てます。
 
 逆方向の制御 (enroll / heartbeat / lease / drain / gateway manifest) は
 [Reference Kernel Route Inventory — Runtime-Agent control RPC](./kernel-http-api.md#runtime-agent-control-rpc)
@@ -21,16 +25,31 @@ envelope を受けます。
 のみ無認証で orchestrator probe (Kubernetes / Nomad / docker healthcheck) を想
 定。
 
-prepared source を読む connector には、kernel が
-`LifecycleApplyRequest.preparedSource` に source snapshot locator
-を載せて渡します。 operator が optional DataAsset extension として
-`/v1/artifacts` を mount しており、DataAsset bytes 取得が必要な connector には、
-kernel が `LifecycleApplyRequest.artifactStore` に `baseUrl` と
-`TAKOSUMI_ARTIFACT_FETCH_TOKEN` を載せて渡します。 agent token とは別物で、
-scope は optional DataAsset extension の `GET /v1/artifacts/:hash` のみ
+prepared source を読む connector には、reference dispatcher /
+operator-configured kernel が `LifecycleApplyRequest.preparedSource` に resolved
+source snapshot の runtime-agent transport locator を載せて渡す場合があります。
+`workingDirectory` は co-located / operator-local dispatch 用の transport
+locator で、Installer API の `source.kind: "local"` ではありません。portable
+remote agent には `url` + `digest` を渡します。prepared handoff では Installer
+API は引き続き `source.kind: "prepared"` を受け取ります。runtime file path
+は常に AppSpec の kind-specific `spec` にある source-root-relative path です。
+
+operator が optional DataAsset extension として `/v1/artifacts` を mount
+しており、DataAsset bytes 取得が必要な connector には、 reference dispatcher /
+operator-configured kernel が `LifecycleApplyRequest.artifactStore` に `baseUrl`
+と `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を載せて渡す場合があります。この
+operator-mounted DataAsset extension は agent token と別の credential family を
+使い、scope は optional DataAsset extension の `GET /v1/artifacts/:hash` のみ
 ([Authentication](./kernel-http-api.md#authentication))。
+`artifactStore.baseUrl` は operator-owned artifact endpoint を指してよく、kernel
+Installer API process が blob data plane になることを要求しません。
 
 ## エンドポイント {#endpoints}
+
+この表の route は reference runtime-agent process / operator-internal host が提
+供する execution surface です。すべての path は runtime-agent base URL からの
+相対 path です。public Installer API の shape は
+[Installer API](./installer-api.md) を正本とします。
 
 | Method | Path                       | Auth        | Purpose                                                              |
 | ------ | -------------------------- | ----------- | -------------------------------------------------------------------- |
@@ -53,22 +72,20 @@ interface LifecycleApplyRequest {
   readonly resourceName: string; // component / internal resource name
   readonly spec: JsonValue; // component kind spec (selected implementation convention)
   readonly spaceId: string;
-  readonly idempotencyKey?: string; // WAL 由来の外部 API request token
+  readonly idempotencyKey?: string; // internal WAL-derived provider request token
   readonly operationRequest?: PlatformOperationRequest;
   readonly metadata?: JsonObject; // request id, audit trail 等
   readonly artifactStore?: {
     // Optional DataAsset fetch endpoint (`/v1/artifacts`) when the operator
     // enables the DataAsset extension.
-    readonly baseUrl: string; // 例: "https://kernel.example.com"
+    readonly baseUrl: string; // 例: "https://artifacts.operator.example.com/v1/artifacts"
     readonly token: string; // TAKOSUMI_ARTIFACT_FETCH_TOKEN
   };
-  readonly preparedSource?:
-    | { readonly kind: "localDirectory"; readonly path: string }
-    | {
-      readonly kind: "remoteTar";
-      readonly url: string;
-      readonly digest: string;
-    };
+  readonly preparedSource?: {
+    readonly url?: string;
+    readonly digest?: string;
+    readonly workingDirectory?: string;
+  };
 }
 ```
 
@@ -81,18 +98,20 @@ interface LifecycleApplyResponse {
 }
 ```
 
-`handle` は kernel 側 deployment record に persist され、 以降の `destroy` /
-`describe` の key になります。
+`handle` は reference kernel の retained implementation state に Deployment
+と紐づけて persist され、以降の `destroy` / `describe` の key になります。
 
 `spaceId` は caller Installation の Space を表します。runtime-agent connector は
 この値を cloud tag、namespace、resource name prefix、audit metadata などの Space
 isolation boundary として扱います。別 Space の request で同じ handle を
 再利用してはいけません。
 
-WAL-backed public apply では kernel が `PlatformContext.operation` から
-`idempotencyKey` / `operationRequest` / `metadata.takosumiOperation` を envelope
-に転送します。 connector は外部 API が idempotency / client request token を
-受け付ける場合、 この `idempotencyKey` をそのまま渡します。
+WAL-backed lifecycle apply では kernel が internal `PlatformContext.operation`
+から `idempotencyKey` / `operationRequest` / `metadata.takosumiOperation` を
+envelope に転送します。connector は外部 API が idempotency / client request
+token を受け付ける場合、この internal WAL-derived `idempotencyKey` をそのまま
+渡します。Installer API には caller-supplied idempotency header はなく、caller
+は `expected` guard だけを使います。
 
 ### `POST /v1/lifecycle/destroy`
 
@@ -104,7 +123,7 @@ interface LifecycleDestroyRequest {
   readonly provider: string;
   readonly handle: string;
   readonly spaceId: string;
-  readonly idempotencyKey?: string; // WAL 由来の外部 API request token
+  readonly idempotencyKey?: string; // internal WAL-derived provider request token
   readonly operationRequest?: PlatformOperationRequest;
   readonly metadata?: JsonObject;
 }
@@ -119,12 +138,12 @@ interface LifecycleDestroyResponse {
 }
 ```
 
-connector は `destroy` を delete-if-exists な冪等動作として実装します。 実体が
+connector は `destroy` を delete-if-exists な冪等動作として実装します。実体が
 既に消えている場合は HTTP 200 + `ok: true` + `note` で返すのが推奨。
 
-WAL-backed public destroy でも apply と同じ key が転送されます。 削除 API に
-external request token が無い provider は、 connector 内部の local ledger / tag
-/ annotation で同じ key を使って重複 side effect を抑止します。
+WAL-backed lifecycle destroy でも apply と同じ internal key が転送されます。
+削除 API に external request token が無い provider は、connector 内部の local
+ledger / tag / annotation で同じ key を使って重複 side effect を抑止します。
 
 ### `POST /v1/lifecycle/compensate`
 
@@ -155,7 +174,7 @@ interface LifecycleCompensateResponse {
 ```
 
 `compensate` は commit 済み effect を逆再生する connector-native operation で
-す。 専用 operation が無い connector は handle-keyed `destroy` に fallback。
+す。専用 operation が無い connector は handle-keyed `destroy` に fallback。
 完全に逆再生できない場合は `revokeDebtRequired: true` を返し、 kernel が
 RevokeDebt として保持します。
 
@@ -234,17 +253,19 @@ resilience wrapper で包みます。 retry 対象は次のみ:
 `HTTP 400` 等の provider validation error、 `retryable: false`、 permission
 denied 等の恒久 failure は retry せず。 retry は bounded exponential backoff
 で同じ envelope を再投入します。 connector は `idempotencyKey` / provider-native
-client token / handle-keyed delete で重複 side effect を抑止 します。
+client token / handle-keyed delete で重複 side effect を抑止します。
 
 credential refresh は opt-in。
 `ConnectorBootOptions.resilience.refreshCredentials` を渡した場合のみ、 wrapper
-は `HTTP 401` / expired token を検出して refresh を 1 回呼び、 同じ operation
+は `HTTP 401` / expired token を検出して refresh を 1 回呼び、同じ operation
 を再試行します。 refresh 未設定なら credential error は通常の connector failure
 として返ります。
 
 ## Lifecycle status の状態機械 {#lifecycle-status-state-machine}
 
-`LifecycleStatus` は v1 で 5 値の closed enum です。
+`LifecycleStatus` は reference runtime-agent envelope v1 の中で 5 値の closed
+enum です。public Installation / Deployment status は
+[Installer API](./installer-api.md#entity-fields) が正本です。
 
 ```ts
 type LifecycleStatus =
@@ -278,18 +299,20 @@ apply ─────────────► running
                    unknown
 ```
 
-- `apply` 成功は `running` に遷移。 失敗は `connector_failed` を返し kernel 側
-  で `error` projection。
-- `destroy` 成功は `missing` に遷移。 以降 `describe` も `missing` を返します。
+- `apply` 成功は `running` に遷移。失敗は `connector_failed` を返し kernel 側で
+  `error` projection。
+- `destroy` 成功は `missing` に遷移。以降 `describe` も `missing` を返します。
 - `describe` は実体 API を毎回叩くので 5 値いずれにも遷移し得ます。 `unknown` は
   rate limit / transient error 等で API が一時応答できない時の予備。
 - `verify` は status を materialize しません。 connector credential / network
-  reachability の health probe に専念し、 結果は
+  reachability の health probe に専念し、結果は
   `LifecycleVerifyResponse.results[].ok` に集約します。
 
 ## エラー envelope {#error-envelope}
 
-すべての failure は `LifecycleErrorBody` を 4xx / 5xx で返します。
+reference runtime-agent envelope の failure は `LifecycleErrorBody` を 4xx / 5xx
+で返します。public Installer API の error envelope は
+[Installer API](./installer-api.md#error-envelope) が正本です。
 
 ```ts
 interface LifecycleErrorBody {
@@ -300,9 +323,10 @@ interface LifecycleErrorBody {
 }
 ```
 
-`code` は v1 closed enum。 `connector-extended:` prefix は connector 拡張用の
-予約で、 kernel は共通 error logic に載せず connector の string をそのまま actor
-に伝えます。
+`code` は reference runtime-agent envelope v1 の closed enum。current reference
+implementation では `connector-extended:` prefix を connector 拡張用に予約し、
+kernel は共通 error logic に載せず connector の string をそのまま actor に伝え
+ます。
 
 | `code`                   | HTTP   | 発生条件                                                                     |
 | ------------------------ | ------ | ---------------------------------------------------------------------------- |
@@ -317,23 +341,9 @@ interface LifecycleErrorBody {
 フラグ。 kernel は WAL の `pre-commit` / `commit` stage で再試行可否をこれで
 分岐します。
 
-## クロスリファレンス {#cross-references}
-
-- [Lifecycle Phases](./lifecycle-phases.md) — phase ごとの input / output
-  snapshot 対応と `LifecycleStatus` 5 値の trigger 別 遷移。runtime-agent
-  describe が報告する条件はここに集約されている。
-- [Lifecycle Protocol](./lifecycle.md) — cross-process lock と recovery mode
-  選択を含む運用面。
-- [Closed Enums](./closed-enums.md) — `LifecycleErrorBody` codes /
-  `LifecycleStatus` 等の closed enum hub。
-- [Connector Guide](./connector-contract.md) — `connector:<id>` inventory
-  identity, connector-local lifecycle addressing, accepted DataAsset metadata
-  vector, Space visibility, and envelope versioning that the runtime-agent
-  hosts.
-- [Reference Kernel Route Inventory](./kernel-http-api.md)
-
 ## 関連ページ
 
 - [Lifecycle Phases](./lifecycle-phases.md)
+- [Connector Guide](./connector-contract.md)
 - [Provider Implementations](./providers.md)
-- [Closed Enums](./closed-enums.md)
+- [Enum and Value Index](./closed-enums.md)

@@ -12,7 +12,6 @@
     { "op": "create", "component": "documents", "kind": "object-store" },
     { "op": "create", "component": "auth", "kind": "oidc" }
   ],
-  "estimatedCost": { "currency": "JPY", "monthly": 0 },
   "expected": {
     "commit": "8362022b8925a831f64cd0481efe7aa13561f7c2",
     "manifestDigest": "sha256:fixture-takos-docs"

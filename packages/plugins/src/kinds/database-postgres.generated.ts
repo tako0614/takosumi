@@ -10,7 +10,7 @@ export interface DatabasePostgresSpec {
   readonly size: "small" | "medium" | "large" | "xlarge";
   /** PostgreSQL major version string (e.g. `15`, `16`). */
   readonly version: string;
-  /** Enable provider-managed HA replica. */
+  /** Request provider-managed HA when supported. Operator policy and the selected implementation materialize or reject the request. */
   readonly highAvailability?: boolean;
   /** Persistent volume sizing. */
   readonly storage?: DatabasePostgresStorage;
@@ -32,7 +32,7 @@ export interface DatabasePostgresOutputs {
   readonly connectionString: string;
 }
 
-export type DatabasePostgresCapability =
+export type DatabasePostgresCapabilityTerm =
   | "pitr"
   | "read-replicas"
   | "high-availability"
@@ -43,10 +43,8 @@ export type DatabasePostgresCapability =
 
 export type DatabasePostgresPublicationName = "connection";
 
-export type DatabasePostgresListenBindingName = never;
-
-export const DATABASE_POSTGRES_CAPABILITIES:
-  readonly DatabasePostgresCapability[] = [
+export const DATABASE_POSTGRES_CAPABILITY_TERMS:
+  readonly DatabasePostgresCapabilityTerm[] = [
     "pitr",
     "read-replicas",
     "high-availability",
@@ -65,6 +63,7 @@ export const DATABASE_POSTGRES_OUTPUT_FIELDS: readonly string[] = [
   "connectionString",
 ];
 
+// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.
 export const DATABASE_POSTGRES_ALIASES: readonly string[] = [
   "postgres",
 ];
@@ -73,14 +72,14 @@ export const DATABASE_POSTGRES_PUBLICATIONS:
   readonly DatabasePostgresPublicationName[] = [
     "connection",
   ];
-
-export const DATABASE_POSTGRES_LISTEN_BINDINGS:
-  readonly DatabasePostgresListenBindingName[] = [];
-
-export const DATABASE_POSTGRES_KIND_ID = "postgres";
+// Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
+export const DATABASE_POSTGRES_KIND_SHAPE_ID = "postgres";
+/** @deprecated Use DATABASE_POSTGRES_KIND_URI for AppSpec kind identity, or DATABASE_POSTGRES_KIND_SHAPE_ID for legacy Shape.id. */
+export const DATABASE_POSTGRES_KIND_ID = DATABASE_POSTGRES_KIND_SHAPE_ID;
 export const DATABASE_POSTGRES_KIND_NAME = "postgres";
+// Official catalog descriptor URI used in AppSpec kind resolution.
 export const DATABASE_POSTGRES_KIND_URI =
   "https://takosumi.com/kinds/v1/postgres";
 export const DATABASE_POSTGRES_KIND_VERSION = "v1";
 export const DATABASE_POSTGRES_DESCRIPTION =
-  "Managed PostgreSQL instance. Provider-portable via standard wire protocol. Publishes connection material as a local publication.";
+  "Managed PostgreSQL instance intended to be bindable across compatible providers through the standard wire protocol. Publishes connection material as a local publication.";

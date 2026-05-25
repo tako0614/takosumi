@@ -46,7 +46,7 @@ Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployme
     spaceId: "space_1",
     appId: "app_1",
     currentDeploymentId: null,
-    status: "running",
+    status: "ready",
     createdAt: 0,
   };
   const deployment: Deployment = {
@@ -176,8 +176,8 @@ Deno.test("KernelPlugin.publishMaterial emits a NamespaceMaterial", async () => 
       }),
     publishMaterial: (ctx: PublishMaterialContext) =>
       Promise.resolve({
-        url: ctx.outputs.url,
-        id: ctx.outputs.id,
+        url: String(ctx.outputs.url),
+        id: String(ctx.outputs.id),
       }),
   };
 

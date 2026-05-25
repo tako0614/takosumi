@@ -26,8 +26,13 @@ export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
   [
     {
       name: "@takos/takosumi-contract",
-      version: "2.5.0",
+      version: "2.6.0",
       directory: "packages/contract",
+    },
+    {
+      name: "@takos/takosumi-installer",
+      version: "0.1.0",
+      directory: "packages/installer",
     },
     {
       name: "@takos/takosumi-runtime-agent",

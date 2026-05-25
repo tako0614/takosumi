@@ -4,9 +4,8 @@
  * v1 contract per the publication/listen model. Components declare local
  * publications (`publish.<name>`) and local bindings (`listen.<name>`). A
  * binding refers to a same-AppSpec publication with `component.publication`
- * or to an operator-owned namespace export with `namespace:<path>`. Public
- * concepts remain limited
- * to:
+ * or to a Space-visible external publication path such as
+ * `publisher.area.name`. Public concepts remain limited to:
  *   1. AppSpec       (= `.takosumi.yml`)
  *   2. Installation  (= a Space-scoped App)
  *   3. Deployment    (= one apply result)
@@ -54,11 +53,10 @@ export interface AppSpecMetadata {
 export type ComponentKindRef = string;
 
 /**
- * Hierarchical namespace path used by operator-owned namespace exports. A
- * path is a dot-separated string of non-empty segments, e.g.
- * `operator.identity.oidc`.
+ * Dotted path used by Space-visible external publications. A path has three
+ * or more dot-separated segments, e.g. `publisher.identity.primary`.
  */
-export type NamespacePath = string;
+export type ExternalPublicationPath = string;
 
 /**
  * Local names used inside one AppSpec. The parser keeps the runtime type as a
@@ -81,37 +79,38 @@ export type MaterialContractRef = string;
 export type ComponentPublicationRef = string;
 
 /**
- * Operator-owned namespace export reference, formatted as
- * `namespace:<dot.path>`.
+ * Space-visible external publication path, formatted as a dotted path with
+ * three or more segments.
  */
-export type ExternalNamespaceRef = string;
-export type ListenSourceRef = ComponentPublicationRef | ExternalNamespaceRef;
+export type ExternalPublicationRef = ExternalPublicationPath;
+export type ListenSourceRef = ComponentPublicationRef | ExternalPublicationRef;
 
 /**
- * Listen shapes recognized by the kernel surface. A `KernelPlugin` may
- * surface a listened material as one of:
+ * Consumer-side projection family selected by `listen.<binding>.as`.
+ * Common projection families are:
  *
  *   - `"env"`  — expand the material into env vars prefixed by `prefix`
  *               (so `{ url, id }` becomes `${PREFIX}_URL`, `${PREFIX}_ID`);
+ *   - `"secret-env"` — expand the material into env vars whose sensitive
+ *               values remain secretRef-mediated;
  *   - `"mount"` — mount the material at the declared filesystem path
  *               (used for secret bundles, etc.);
- *   - `"upstream"` / `"target"` — pass the material to the plugin as an
+ *   - `"upstream"` / `"target"` — pass the material to the implementation as an
  *               upstream target descriptor.
  *
- * Materializer authors may publish additional shapes in their JSON-LD; the
- * parser accepts any non-empty string here so operator-defined shapes are
+ * Operators may publish additional projection families in descriptor metadata;
+ * the parser accepts any non-empty string here so operator-defined shapes are
  * forward-compatible.
  */
-// `string & {}` is the canonical TypeScript trick for "string literal
-// union with autocomplete plus open-ended string fallback". `ban-types`
-// flags it but the intent here is exactly that idiom.
-// deno-lint-ignore ban-types
+// `string & Record<never, never>` keeps literal autocomplete while allowing
+// operator-defined string values.
 export type MaterialShape =
   | "env"
+  | "secret-env"
   | "mount"
   | "upstream"
   | "target"
-  | (string & {});
+  | (string & Record<never, never>);
 
 /**
  * Per-publish options declared on `Component.publish[<publicationName>]`.
@@ -129,16 +128,17 @@ export interface PublishOptions {
 /**
  * Per-listen options declared on `Component.listen[<bindingName>]`.
  *
- *   - `from`   — source publication (`component.publication`) or external
- *                namespace export (`namespace:<path>`).
+ *   - `from`   — source publication (`component.publication`) or
+ *                Space-visible external publication path
+ *                (`publisher.area.name`).
  *   - `as`     — the shape the material should take in this component's
  *                runtime (env / mount / upstream / operator-defined).
  *   - `prefix` — for `as: env`, the prefix used to derive env var names
  *                (e.g. `prefix: DB` + `{ url }` → `DB_URL`).
  *   - `mount`  — for `as: mount`, the filesystem path inside the
  *                component runtime where the material is mounted.
- *   - `required` — for `namespace:<path>` refs, fail apply when the external
- *                  namespace export is absent. Same-AppSpec refs are always
+ *   - `required` — for external publication refs, fail apply when the
+ *                  publication path is absent. Same-AppSpec refs are always
  *                  required by parser/topology validation.
  */
 export interface ListenOptions {

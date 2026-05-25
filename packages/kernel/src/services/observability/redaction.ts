@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "takosumi-contract";
+import type { JsonObject, JsonValue } from "takosumi-contract/reference/compat";
 
 export const REDACTED_VALUE = "[REDACTED]";
 

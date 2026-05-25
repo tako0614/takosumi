@@ -1,5 +1,5 @@
 import { Command } from "@cliffy/command";
-import { ARTIFACTS_BASE_PATH } from "takosumi-contract";
+import { ARTIFACTS_BASE_PATH } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { loadConfig, resolveMode } from "../config.ts";
 
 /**
@@ -123,8 +123,8 @@ const rmCmd: ReturnType<typeof createRmCmd> = createRmCmd();
 function createKindsCmd() {
   return new Command()
     .description(
-      "List the artifact kinds the deployed kernel understands " +
-        "(GET /v1/artifacts/kinds)",
+      "List DataAsset metadata kinds registered by the optional DataAsset " +
+        "extension (GET /v1/artifacts/kinds)",
     )
     .option("--remote <url:string>", "Kernel base URL")
     .option("--token <token:string>", "Bearer token")

@@ -6,6 +6,13 @@
  */
 import type { Deployment, Installation } from "takosumi-contract/installer-api";
 
+export interface RollbackEvent {
+  readonly installationId: string;
+  readonly rolledBackFrom: string | null;
+  readonly rolledBackTo: string;
+  readonly createdAt: number;
+}
+
 export interface InstallationStore {
   put(installation: Installation): Promise<Installation>;
   get(id: string): Promise<Installation | undefined>;
@@ -20,6 +27,10 @@ export interface DeploymentStore {
   put(deployment: Deployment): Promise<Deployment>;
   get(id: string): Promise<Deployment | undefined>;
   listForInstallation(installationId: string): Promise<readonly Deployment[]>;
+  recordRollback?(event: RollbackEvent): Promise<void>;
+  listRollbackEvents?(
+    installationId: string,
+  ): Promise<readonly RollbackEvent[]>;
 }
 
 export class InMemoryInstallationStore implements InstallationStore {
@@ -54,6 +65,7 @@ export class InMemoryInstallationStore implements InstallationStore {
 
 export class InMemoryDeploymentStore implements DeploymentStore {
   readonly #rows = new Map<string, Deployment>();
+  readonly #rollbackEvents: RollbackEvent[] = [];
 
   put(deployment: Deployment): Promise<Deployment> {
     this.#rows.set(deployment.id, deployment);
@@ -70,6 +82,21 @@ export class InMemoryDeploymentStore implements DeploymentStore {
     return Promise.resolve(
       Array.from(this.#rows.values()).filter((row) =>
         row.installationId === installationId
+      ),
+    );
+  }
+
+  recordRollback(event: RollbackEvent): Promise<void> {
+    this.#rollbackEvents.push(event);
+    return Promise.resolve();
+  }
+
+  listRollbackEvents(
+    installationId: string,
+  ): Promise<readonly RollbackEvent[]> {
+    return Promise.resolve(
+      this.#rollbackEvents.filter((event) =>
+        event.installationId === installationId
       ),
     );
   }

@@ -1,17 +1,18 @@
 /**
- * Bundled `Artifact.kind` registrations.
+ * Bundled DataAsset metadata kind registrations.
  *
- * The kernel's artifact endpoint accepts an open `kind: string`; this
- * module enumerates the kinds the bundled connector set understands so
- * `GET /v1/artifacts/kinds` can surface them to CLIs and operators. Third-
- * party connectors that introduce new kinds register them through
- * `registerArtifactKind` directly — they do NOT have to extend this list.
+ * The optional DataAsset extension keeps the historical `/v1/artifacts` route
+ * name, but the metadata concept is DataAsset. This module enumerates the
+ * DataAsset kinds the bundled connector set understands so
+ * `GET /v1/artifacts/kinds` can surface them to CLIs and operators.
+ * Third-party connectors that introduce new DataAsset metadata kinds register
+ * them through `registerArtifactKind` directly.
  */
 
 import {
   registerArtifactKind,
   type RegisteredArtifactKind,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
 
 export const TAKOSUMI_BUNDLED_ARTIFACT_KINDS:
   readonly RegisteredArtifactKind[] = [

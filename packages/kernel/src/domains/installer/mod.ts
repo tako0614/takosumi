@@ -19,7 +19,8 @@
  * follow-up wave.
  */
 
-import type { KernelPlugin } from "takosumi-contract";
+import type { JsonValue } from "takosumi-contract";
+import type { KernelPlugin } from "takosumi-contract/reference/compat";
 import type {
   AppSpec,
   Component,
@@ -46,7 +47,7 @@ import type {
   SourcePin,
   SourceSummary,
 } from "takosumi-contract/installer-api";
-import type { NamespaceMaterial } from "takosumi-contract/plugin";
+import type { NamespaceMaterial } from "takosumi-contract/reference/plugin";
 import {
   fetchGitSource,
   fetchPreparedSource,
@@ -87,7 +88,7 @@ export interface ProviderApplyContext {
   /**
    * Materials this component listens to, keyed by the local binding name as
    * declared in `Component.listen`. Pre-resolved by the installer from
-   * local publications or external namespace exports; the listener's
+   * local publications or external publication paths; the listener's
    * `applyListen` (or the kernel
    * default) has already emitted env / mount / target descriptors before
    * the plugin's `apply` is called.
@@ -109,7 +110,7 @@ export interface ProviderApplyResult {
    * Outputs the plugin emits. Declared publications are projected into
    * namespace material by the component kind's materializer.
    */
-  readonly outputs: Readonly<Record<string, string>>;
+  readonly outputs: Readonly<Record<string, JsonValue>>;
 }
 
 interface ProviderResourceEvidence {
@@ -162,10 +163,6 @@ export interface InstallerPipelineDependencies {
    * must supply `source.url` as an absolute path.
    */
   readonly localSourceRoot?: string;
-  /** Cost estimator — defaults to a placeholder `0 JPY/month` value. */
-  readonly estimateCost?: (
-    appSpec: AppSpec,
-  ) => { readonly currency: string; readonly monthly: number };
 }
 
 export class InstallerPipeline {
@@ -177,10 +174,6 @@ export class InstallerPipeline {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #localSourceRoot?: string;
-  readonly #estimateCost: (
-    appSpec: AppSpec,
-  ) => { readonly currency: string; readonly monthly: number };
-
   constructor(dependencies: InstallerPipelineDependencies = {}) {
     this.#installations = dependencies.installations ??
       new InMemoryInstallationStore();
@@ -199,8 +192,6 @@ export class InstallerPipeline {
         `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`);
     this.#now = dependencies.now ?? (() => Date.now());
     this.#localSourceRoot = dependencies.localSourceRoot;
-    this.#estimateCost = dependencies.estimateCost ??
-      (() => ({ currency: "JPY", monthly: 0 }));
   }
 
   /**
@@ -214,7 +205,7 @@ export class InstallerPipeline {
     readonly component: Component;
     readonly publicationName: PublicationName;
     readonly options: PublishOptions;
-    readonly outputs: Readonly<Record<string, string>>;
+    readonly outputs: Readonly<Record<string, JsonValue>>;
   }): Promise<NamespaceMaterial> {
     const plugin = findPluginForKind(this.#pluginRegistry, ctx.component.kind);
     if (plugin && typeof plugin.publishMaterial === "function") {
@@ -249,14 +240,7 @@ export class InstallerPipeline {
         manifestDigest,
         appSpec,
         changes,
-        estimatedCost: this.#estimateCost(appSpec),
-        expected: {
-          commit: sourceSummary.commit ?? "",
-          manifestDigest,
-          ...(sourceSummary.digest
-            ? { sourceDigest: sourceSummary.digest }
-            : {}),
-        },
+        expected: sourcePinFromSummary(sourceSummary, manifestDigest),
       };
     } finally {
       await fetched.cleanup();
@@ -281,43 +265,50 @@ export class InstallerPipeline {
       const now = this.#now();
       installation = {
         id: installationId,
-        accountId: deriveAccountId(request.spaceId),
         spaceId: request.spaceId,
         appId: appSpec.metadata.id,
         currentDeploymentId: null,
-        status: "running",
+        status: "installing",
         createdAt: now,
       };
       await this.#installations.put(installation);
 
-      // Vite-style `onInstallStart` runs before the very first Deployment
-      // of this Installation. Errors here are fatal — Installation goes
-      // to `failed` status and the apply rejects.
-      await this.#fireInstallationHook("onInstallStart", { installation });
+      try {
+        // Vite-style `onInstallStart` runs before the very first Deployment
+        // of this Installation. Errors here are fatal — Installation goes
+        // to `failed` status and the apply rejects.
+        await this.#fireInstallationHook("onInstallStart", { installation });
 
-      deployment = await this.#runDeployment({
-        installation,
-        appSpec,
-        manifestDigest,
-        sourceSummary,
-        workingDirectory: fetched.workingDirectory,
-      });
-
-      const patched = await this.#installations.patch(installation.id, {
-        currentDeploymentId: deployment.id,
-        status: deployment.status === "succeeded" ? "running" : "failed",
-      });
-      installation = patched ?? installation;
-
-      // After-the-fact installer-complete hook. Errors here are logged
-      // but do NOT roll the Installation back; the Deployment already
-      // succeeded so post-install cleanup failures should not destroy
-      // the user's app.
-      if (deployment.status === "succeeded") {
-        await this.#fireInstallationHook("onInstallComplete", {
+        deployment = await this.#runDeployment({
           installation,
-          deployment,
-        }, { swallowErrors: true });
+          appSpec,
+          manifestDigest,
+          sourceSummary,
+          workingDirectory: fetched.workingDirectory,
+        });
+
+        const patched = await this.#installations.patch(installation.id, {
+          currentDeploymentId: deployment.id,
+          status: deployment.status === "succeeded" ? "ready" : "failed",
+        });
+        installation = patched ?? installation;
+
+        // After-the-fact installer-complete hook. Errors here are logged
+        // but do NOT roll the Installation back; the Deployment already
+        // succeeded so post-install cleanup failures should not destroy
+        // the user's app.
+        if (deployment.status === "succeeded") {
+          await this.#fireInstallationHook("onInstallComplete", {
+            installation,
+            deployment,
+          }, { swallowErrors: true });
+        }
+      } catch (error) {
+        const patched = await this.#installations.patch(installation.id, {
+          status: "failed",
+        });
+        installation = patched ?? installation;
+        throw error;
       }
     } finally {
       await fetched.cleanup();
@@ -362,7 +353,7 @@ export class InstallerPipeline {
       });
       await this.#installations.patch(installation.id, {
         currentDeploymentId: deployment.id,
-        status: deployment.status === "succeeded" ? "running" : "failed",
+        status: deployment.status === "succeeded" ? "ready" : "failed",
       });
     } finally {
       await fetched.cleanup();
@@ -383,44 +374,36 @@ export class InstallerPipeline {
         `deployment ${request.deploymentId} not found for installation ${installationId}`,
       );
     }
-    const rollbackSource = sourceFromSummary(previous.source);
-    const fetched = await this.#fetchSource(rollbackSource);
-    let deployment: Deployment;
-    try {
-      const { appSpec, manifestDigest } = await readAppSpec(
-        fetched.workingDirectory,
+    if (previous.status !== "succeeded") {
+      throw new InstallerPipelineError(
+        "failed_precondition",
+        `deployment ${request.deploymentId} is not a succeeded rollback target`,
       );
-      const sourceSummary = summarizeSource(rollbackSource, fetched);
-      // Source digest must match the target deployment's manifestDigest;
-      // otherwise the target source has drifted and rollback is unsafe.
-      if (manifestDigest !== previous.manifestDigest) {
-        throw new InstallerPipelineError(
-          "failed_precondition",
-          "source manifestDigest does not match target deployment; " +
-            "source has drifted since the original deployment",
-        );
-      }
-      const rolledBack = await this.#runDeployment({
-        installation,
-        appSpec,
-        manifestDigest,
-        sourceSummary,
-        workingDirectory: fetched.workingDirectory,
-      });
-      deployment = {
-        ...rolledBack,
-        rolledBackFrom: installation.currentDeploymentId ?? undefined,
-        rolledBackTo: previous.id,
-      };
-      await this.#deployments.put(deployment);
-      await this.#installations.patch(installation.id, {
-        currentDeploymentId: deployment.id,
-        status: deployment.status === "succeeded" ? "running" : "failed",
-      });
-    } finally {
-      await fetched.cleanup();
     }
-    return { deployment };
+    const rolledBackFrom = installation.currentDeploymentId;
+    const patched = await this.#installations.patch(installation.id, {
+      currentDeploymentId: previous.id,
+      status: "ready",
+    });
+    await this.#deployments.recordRollback?.({
+      installationId,
+      rolledBackFrom,
+      rolledBackTo: previous.id,
+      createdAt: this.#now(),
+    });
+    const updatedInstallation = patched ?? {
+      ...installation,
+      currentDeploymentId: previous.id,
+      status: "ready" as const,
+    };
+    return {
+      installation: updatedInstallation,
+      deployment: previous,
+      rollback: {
+        rolledBackFrom,
+        rolledBackTo: previous.id,
+      },
+    };
   }
 
   listInstallations(spaceId?: string): Promise<readonly Installation[]> {
@@ -436,12 +419,14 @@ export class InstallerPipeline {
   }): Promise<Deployment> {
     const deploymentId = this.#newId("dep");
     const now = this.#now();
-    const componentOutputs: Record<string, Readonly<Record<string, string>>> =
-      {};
+    const componentOutputs: Record<
+      string,
+      Record<string, Readonly<Record<string, JsonValue>>>
+    > = {};
 
     // Material registry — single Installation-scoped store used for local
-    // publications (`component.publication`) and external namespace refs
-    // (`namespace:<path>`). Built incrementally as each component applies in
+    // publications (`component.publication`) and external publication refs
+    // (`publisher.area.name`). Built incrementally as each component applies in
     // topological order.
     const registry = new MaterialRegistry();
     const resolver = new BindingResolver({
@@ -474,7 +459,7 @@ export class InstallerPipeline {
       for (const componentName of order) {
         const component = input.appSpec.components[componentName];
         // Resolve listen bindings against the current registry. External
-        // namespace refs with no registered material are skipped unless the
+        // publication refs with no registered material are skipped unless the
         // AppSpec marks that binding as required; local refs are parser-
         // validated and must be present by topology.
         const listenedMaterials: Record<string, NamespaceMaterial> = {};
@@ -487,12 +472,14 @@ export class InstallerPipeline {
             const material = registry.get(sourceRef);
             if (!material) {
               if (
-                isExternalNamespaceRef(sourceRef) && options.required !== true
+                isExternalPublicationRef(sourceRef) && options.required !== true
               ) {
                 continue;
               }
               throw new InstallerPipelineError(
-                "failed_precondition",
+                isExternalPublicationRef(sourceRef)
+                  ? "not_implemented"
+                  : "invalid_argument",
                 `${componentName}.listen.${bindingName}.from refers to ` +
                   `unresolved publication ${JSON.stringify(sourceRef)}`,
               );
@@ -521,11 +508,8 @@ export class InstallerPipeline {
           listenedMaterials,
           resolvedBindings,
         });
-        componentOutputs[componentName] = applied.outputs;
-
         // Publish flow: register material only for declared local
-        // publications. There is no automatic `<app-id>.<component-name>`
-        // namespace export.
+        // publications. There is no automatic external publication.
         for (
           const [publicationName, publishOptions] of Object.entries(
             component.publish ?? {},
@@ -544,6 +528,9 @@ export class InstallerPipeline {
             outputs: applied.outputs,
           });
           registry.publish(publicationRef, componentName, material);
+          componentOutputs[componentName] ??= {};
+          componentOutputs[componentName][publicationName] =
+            materialToDeploymentOutput(material);
         }
       }
       const outputs: DeploymentOutputs = {
@@ -661,7 +648,15 @@ export class InstallerPipeline {
       const current = await this.#deployments.get(
         installation.currentDeploymentId,
       );
-      if (current) return sourceFromSummary(current.source);
+      if (current) {
+        if (current.source.kind === "local") {
+          throw new InstallerPipelineError(
+            "failed_precondition",
+            "current deployment uses local source; supply source explicitly",
+          );
+        }
+        return sourceFromSummary(current.source);
+      }
     }
     throw new InstallerPipelineError(
       "failed_precondition",
@@ -670,6 +665,7 @@ export class InstallerPipeline {
   }
 
   async #fetchSource(source: Source): Promise<FetchedSource> {
+    validateSourceDescriptor(source);
     if (source.kind === "local") {
       const root = source.url ?? this.#localSourceRoot;
       if (!root) {
@@ -680,7 +676,6 @@ export class InstallerPipeline {
       }
       return {
         workingDirectory: root,
-        commit: source.commit ?? "",
         cleanup: () => Promise.resolve(),
       };
     }
@@ -721,7 +716,6 @@ export class InstallerPipeline {
         });
         return {
           workingDirectory: result.workingDirectory,
-          commit: source.commit ?? "",
           sourceDigest: result.digest,
           cleanup: result.cleanup,
         };
@@ -735,14 +729,14 @@ export class InstallerPipeline {
     }
     throw new InstallerPipelineError(
       "not_implemented",
-      `source.kind=${source.kind} is not yet supported`,
+      "source.kind is not yet supported",
     );
   }
 }
 
 interface FetchedSource {
   readonly workingDirectory: string;
-  readonly commit: string;
+  readonly commit?: string;
   readonly sourceDigest?: string;
   readonly cleanup: () => Promise<void>;
 }
@@ -789,7 +783,7 @@ function installerProviderRegistryFromPluginRegistry(
       const plugin = findPluginForKind(registry, kind);
       if (!plugin) {
         throw new InstallerPipelineError(
-          "failed_precondition",
+          "not_implemented",
           `no kernel plugin advertises kind ${kind} (component ${context.componentName})`,
         );
       }
@@ -818,7 +812,7 @@ function installerProviderRegistryFromPluginRegistry(
 /**
  * In-memory material registry — owns the (source ref → publisher / material)
  * map for one Deployment apply. Local publications use
- * `component.publication`; external namespace exports use `namespace:<path>`
+ * `component.publication`; external publication refs use `publisher.area.name`
  * when an operator pre-populates them.
  */
 class MaterialRegistry {
@@ -861,7 +855,7 @@ function localPublicationRef(
 
 function defaultPublishedMaterial(
   publicationName: PublicationName,
-  outputs: Readonly<Record<string, string>>,
+  outputs: Readonly<Record<string, JsonValue>>,
 ): NamespaceMaterial {
   if (Object.keys(outputs).length === 0) return {};
   const selected = outputs[publicationName];
@@ -875,8 +869,36 @@ function defaultPublishedMaterial(
   );
 }
 
-function isExternalNamespaceRef(value: ListenSourceRef): boolean {
-  return value.startsWith("namespace:");
+function materialToDeploymentOutput(
+  material: NamespaceMaterial,
+): Readonly<Record<string, JsonValue>> {
+  const output: Record<string, JsonValue> = {};
+  for (const [key, value] of Object.entries(material)) {
+    output[key] = isSecretRefMaterial(value)
+      ? { secretRef: value.secretRef }
+      : value;
+  }
+  return output;
+}
+
+function isSecretRefMaterial(
+  value: NamespaceMaterial[string],
+): value is { readonly secretRef: string } {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    typeof value.secretRef === "string";
+}
+
+function isExternalPublicationRef(value: ListenSourceRef): boolean {
+  const segments = value.split(".");
+  if (segments.length < 3 || segments.length > 8) return false;
+  return segments.every((segment, index) =>
+    isValidPublicationSegment(segment) &&
+    (segment !== "default" || index === segments.length - 1)
+  );
+}
+
+function isValidPublicationSegment(value: string): boolean {
+  return /^[a-z][a-z0-9-]{0,62}$/.test(value);
 }
 
 export type InstallerPipelineErrorCode =
@@ -938,19 +960,56 @@ function summarizeSource(
     kind: source.kind,
     url: source.url,
     ref: source.ref,
-    commit: fetched.commit || source.commit,
+    commit: fetched.commit,
     digest: fetched.sourceDigest ?? source.digest,
   };
 }
 
 function sourceFromSummary(summary: SourceSummary): Source {
+  if (summary.kind === "git") {
+    requireNonEmptyString(summary.url, "source.url");
+    requireNonEmptyString(summary.commit, "source.commit");
+    return {
+      kind: "git",
+      url: summary.url,
+      ref: summary.commit,
+    };
+  }
+  if (summary.kind === "prepared") {
+    requireNonEmptyString(summary.url, "source.url");
+    requireNonEmptyString(summary.digest, "source.digest");
+    return {
+      kind: "prepared",
+      url: summary.url,
+      digest: summary.digest,
+    };
+  }
+  requireNonEmptyString(summary.url, "source.url");
   return {
-    kind: summary.kind,
+    kind: "local",
     url: summary.url,
-    ref: summary.ref,
-    commit: summary.commit,
-    digest: summary.digest,
   };
+}
+
+function sourcePinFromSummary(
+  summary: SourceSummary,
+  manifestDigest: string,
+): SourcePin {
+  if (summary.kind === "git") {
+    requireNonEmptyString(summary.commit, "source.commit");
+    return {
+      manifestDigest,
+      commit: summary.commit,
+    };
+  }
+  if (summary.kind === "prepared") {
+    requireNonEmptyString(summary.digest, "source.digest");
+    return {
+      manifestDigest,
+      sourceDigest: summary.digest,
+    };
+  }
+  return { manifestDigest };
 }
 
 function computeFreshInstallChangeSet(
@@ -1002,7 +1061,7 @@ function topologicalOrder(appSpec: AppSpec): readonly string[] {
     if (listen) {
       for (const [bindingName, options] of Object.entries(listen)) {
         const from = options.from;
-        if (isExternalNamespaceRef(from)) continue;
+        if (isExternalPublicationRef(from)) continue;
         const publisher = publisherByRef.get(from);
         if (publisher === undefined) {
           throw new InstallerPipelineError(
@@ -1033,19 +1092,13 @@ function topologicalOrder(appSpec: AppSpec): readonly string[] {
   return order;
 }
 
-function deriveAccountId(spaceId: string): string {
-  // Wave 5 placeholder: real account resolution is the Takosumi Accounts
-  // operator-plane responsibility; the kernel just echoes spaceId until
-  // the account-resolver plug-point lands.
-  return `acc_for_${spaceId}`;
-}
-
 function checkExpectedPin(
   expected: SourcePin | undefined,
   source: SourceSummary,
   manifestDigest: string,
 ): void {
   if (!expected) return;
+  validateExpectedPinShape(expected, source.kind);
   if (expected.manifestDigest !== manifestDigest) {
     throw new InstallerPipelineError(
       "failed_precondition",
@@ -1065,6 +1118,74 @@ function checkExpectedPin(
         source.digest ?? "<none>"
       }`,
     );
+  }
+}
+
+function validateExpectedPinShape(
+  expected: SourcePin,
+  sourceKind: SourceSummary["kind"],
+): void {
+  if (sourceKind === "git") {
+    if (expected.commit === undefined || expected.sourceDigest !== undefined) {
+      throw new InstallerPipelineError(
+        "invalid_argument",
+        "git source expected guard must include expected.commit and must not include expected.sourceDigest",
+      );
+    }
+    return;
+  }
+  if (sourceKind === "prepared") {
+    if (expected.sourceDigest === undefined || expected.commit !== undefined) {
+      throw new InstallerPipelineError(
+        "invalid_argument",
+        "prepared source expected guard must include expected.sourceDigest and must not include expected.commit",
+      );
+    }
+    return;
+  }
+  if (expected.commit !== undefined || expected.sourceDigest !== undefined) {
+    throw new InstallerPipelineError(
+      "invalid_argument",
+      "local source expected guard must include only expected.manifestDigest",
+    );
+  }
+}
+
+function validateSourceDescriptor(source: Source): void {
+  if (source.kind === "git") {
+    if (source.digest !== undefined) {
+      throw new InstallerPipelineError(
+        "invalid_argument",
+        "git source must not include source.digest",
+      );
+    }
+    return;
+  }
+  if (source.commit !== undefined) {
+    throw new InstallerPipelineError(
+      "invalid_argument",
+      `${source.kind} source must not include source.commit`,
+    );
+  }
+  if (source.kind === "prepared" && source.ref !== undefined) {
+    throw new InstallerPipelineError(
+      "invalid_argument",
+      "prepared source must not include source.ref",
+    );
+  }
+  if (source.kind === "local") {
+    if (source.ref !== undefined) {
+      throw new InstallerPipelineError(
+        "invalid_argument",
+        "local source must not include source.ref",
+      );
+    }
+    if (source.digest !== undefined) {
+      throw new InstallerPipelineError(
+        "invalid_argument",
+        "local source must not include source.digest",
+      );
+    }
   }
 }
 

@@ -6,8 +6,9 @@ HTTP and dispatches to the right per-provider connector, which makes the actual
 cloud REST API call (SigV4 / OAuth / Cloudflare API token / Azure ARM /
 Kubernetes / etc) or local OS call (`docker`, `systemd`, filesystem).
 
-The runtime-agent is the **only place cloud credentials live**. The kernel never
-sees them.
+Cloud / OS credentials stay outside the kernel. In the takosumi.com reference
+topology they typically live in the runtime-agent process; another
+operator-owned execution host can enforce the same boundary.
 
 ## Install
 
@@ -27,7 +28,7 @@ console.log(`agent listening at ${handle.url}`);
 takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 ```
 
-## HTTP API
+## Reference operator-internal HTTP API
 
 | Method | Path                       | Description                                                                         |
 | ------ | -------------------------- | ----------------------------------------------------------------------------------- |
@@ -82,8 +83,8 @@ interface Connector {
 ```
 
 The `shape` and `provider` fields are connector-local wire selectors. The
-operator's `KernelPlugin` adapter derives them from the kind/materializer
-mapping before sending a lifecycle request.
+operator adapter derives them from its kind-to-execution binding before sending
+a lifecycle request.
 
 Source-backed connectors, such as `worker@v1`, read files from
 `LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset/artifact
@@ -142,8 +143,8 @@ surface small.
   plane that talks to this agent
 - [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — runs
   `takosumi runtime-agent serve`
-- [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) —
-  defines `LifecycleApplyRequest` etc.
+- [`@takos/takosumi-contract/reference/runtime-agent-lifecycle`](https://jsr.io/@takos/takosumi-contract/doc/reference/runtime-agent-lifecycle)
+  — defines `LifecycleApplyRequest` etc. for the reference lifecycle envelope.
 
 > The `@takos/` JSR scope is the reference Takosumi distribution published by
 > Takos. The contract is the authority. Contract-compatible publishers such as

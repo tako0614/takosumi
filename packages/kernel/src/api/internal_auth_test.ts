@@ -3,8 +3,8 @@ import {
   TAKOSUMI_INTERNAL_SIGNATURE_HEADER,
   TAKOSUMI_INTERNAL_TIMESTAMP_HEADER,
   type TakosumiActorContext,
-} from "takosumi-contract";
-import { signTakosumiInternalRequest } from "takosumi-contract/internal-rpc";
+} from "takosumi-contract/reference/compat";
+import { signTakosumiInternalRequest } from "takosumi-contract/internal/rpc";
 import {
   readInternalAuth,
   SignatureVerificationError,

@@ -1,9 +1,9 @@
 # @takos/takosumi-selfhost-providers
 
-Self-host-backed reference `KernelPlugin` adapter factories for takosumi.com
-reference component kinds (`web-service` / `object-store` / `postgres`).
-Provides a credential-free baseline for Takosumi operators who want to run the
-kernel without any cloud account.
+Self-host-backed reference `KernelPlugin` adapter factories that can bind
+selected takosumi.com kind URIs (`web-service` / `object-store` / `postgres`) in
+the reference kernel. Provides a credential-free baseline for Takosumi operators
+who want to run the kernel without any cloud account.
 
 Operators import this package explicitly — Takosumi core
 (`@takos/takosumi-kernel`) ships zero cloud / self-host SDK code, so the
@@ -49,5 +49,5 @@ alternate exports for the web-service factories.
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) —
-  reference kind descriptors and adapter helpers.
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official
+  catalog descriptor helpers and reference adapter helpers.

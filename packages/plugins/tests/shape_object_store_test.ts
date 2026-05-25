@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { ShapeValidationIssue } from "takosumi-contract";
+import type { ShapeValidationIssue } from "takosumi-contract/reference/compat";
 import { ObjectStoreKind } from "../src/kinds/object-store.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {

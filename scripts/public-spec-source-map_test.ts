@@ -14,13 +14,15 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/public-spec-source-map.md",
   "docs/reference/app-spec.md",
   "docs/reference/build-spec.md",
+  "docs/reference/core-spec.md",
   "docs/reference/installer-api.md",
   "docs/reference/kernel-http-api.md",
+  "docs/reference/spec-boundaries.md",
   "docs/reference/runtime-agent-api.md",
   "docs/reference/providers.md",
-  // Reference kind descriptors live in @takos/takosumi-plugins rather than
-  // the Takosumi AppSpec contract.
-  "docs/reference/kind-registry.md",
+  "docs/reference/takosumi-cloud.md",
+  "docs/reference/type-catalog.md",
+  "../takosumi-cloud/docs/spec.md",
   "packages/kernel/src/domains/deploy/_internal_manifest_types.ts",
   "packages/kernel/src/domains/deploy/manifest_v1.ts",
   "packages/kernel/src/api/app.ts",
@@ -44,12 +46,13 @@ const TAKOSUMI_OWNED_PATHS = [
 
 const REQUIRED_SPEC_KEYS = [
   "appspec-v1",
-  "build-service-input-v1",
-  "reference-kind-examples-v1",
-  "kernel-http-api-v1",
   "installer-api-v1",
-  "runtime-agent-api-v1",
-  "reference-providers-v1",
+  "build-service-input",
+  "takosumi-official-type-catalog-v1",
+  "takosumi-cloud-spec-v1",
+  "kernel-route-inventory",
+  "runtime-agent-envelope",
+  "reference-provider-guide",
   "takosumi-jsr-packages",
 ];
 
@@ -63,27 +66,28 @@ Deno.test("public spec source map covers required public surfaces", async () => 
   assert.equal(source.includes("deploy-public-api-v1"), false);
   assert.equal(source.includes(`takosumi-${"git"}-workflow-ref-v1`), false);
   assert.equal(source.includes(`takosumi-${"git"}-artifact-uri-v1`), false);
-  assert.ok(source.includes("packages/installer/src/yaml-parser.ts"));
-  assert.match(source, /Source of truth/);
+  assert.ok(source.includes("packages/contract/src/app-spec.ts"));
+  assert.ok(source.includes("packages/plugins/spec/kinds/v1/*.jsonld"));
+  assert.ok(source.includes("../takosumi-cloud/docs/spec.md"));
+  assert.match(source, /Normative spec/);
+  assert.match(source, /Executable conformance targets/);
+  assert.match(source, /Repository source/);
   assert.match(source, /Published reference/);
   assert.match(source, /Drift check/);
 });
 
-Deno.test("public spec source map covers installer OpenAPI routes", async () => {
+Deno.test("public spec source map covers installer route evidence", async () => {
   const source = await read("docs/reference/public-spec-source-map.md");
   const reference = await read("docs/reference/kernel-http-api.md");
   const openapi = createPaaSOpenApiDocument({
     installerPublicRoutesMounted: true,
   });
 
-  assert.match(source, /`kernel-http-api-v1`/);
+  assert.match(source, /`kernel-route-inventory`/);
   assert.match(source, /`installer-api-v1`/);
-  assert.ok(source.includes("packages/kernel/src/api/openapi.ts"));
   assert.ok(
     source.includes("packages/kernel/src/api/installer_public_routes.ts"),
   );
-  assert.ok(source.includes("INSTALLER_INSTALLATIONS_PATH"));
-  assert.ok(source.includes("dryRunInstallation"));
   assert.ok(
     source.includes(
       "packages/kernel/src/api/installer_public_routes_e2e_test.ts",
@@ -92,10 +96,18 @@ Deno.test("public spec source map covers installer OpenAPI routes", async () => 
   assert.ok(openapi.paths[INSTALLER_INSTALLATIONS_DRY_RUN_PATH]?.post);
   assert.ok(openapi.paths[INSTALLER_INSTALLATIONS_PATH]?.post);
   assert.ok(
-    openapi.paths[INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH]?.post,
+    openapi.paths[
+      toOpenApiPath(
+        INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
+      )
+    ]?.post,
   );
-  assert.ok(openapi.paths[INSTALLER_INSTALLATION_DEPLOYMENTS_PATH]?.post);
-  assert.ok(openapi.paths[INSTALLER_INSTALLATION_ROLLBACK_PATH]?.post);
+  assert.ok(
+    openapi.paths[toOpenApiPath(INSTALLER_INSTALLATION_DEPLOYMENTS_PATH)]?.post,
+  );
+  assert.ok(
+    openapi.paths[toOpenApiPath(INSTALLER_INSTALLATION_ROLLBACK_PATH)]?.post,
+  );
   assert.ok(reference.includes("POST   | `/v1/installations/dry-run`"));
   assert.ok(
     reference.includes("POST   | `/v1/installations/{id}/deployments`"),
@@ -117,6 +129,36 @@ Deno.test("public spec source map is linked from reference navigation", async ()
 
   assert.ok(index.includes("./public-spec-source-map"));
   assert.ok(config.includes("/reference/public-spec-source-map"));
+});
+
+Deno.test("reference-kernel descriptors stay out of public catalog roots", async () => {
+  const docs = await read("docs/reference/public-spec-source-map.md");
+  assert.ok(docs.includes("/kinds/v1/*"));
+  assert.ok(docs.includes("/contexts/v1.jsonld"));
+  assert.match(docs, /reference\s+internal metadata/);
+
+  const descriptorRoot = new URL(
+    "packages/kernel/src/domains/deploy/descriptors/",
+    root,
+  );
+  const forbidden = [
+    "https://takosumi.com/providers/",
+    "https://takosumi.com/contracts/",
+    "https://takosumi.com/descriptors/",
+    "https://takosumi.com/contexts/deploy.jsonld",
+    "https://takosumi.com/vocab/deploy#",
+  ];
+
+  for await (const file of walkFiles(descriptorRoot)) {
+    const source = await Deno.readTextFile(file);
+    for (const snippet of forbidden) {
+      assert.equal(
+        source.includes(snippet),
+        false,
+        `${file.pathname} contains public-looking internal descriptor root ${snippet}`,
+      );
+    }
+  }
 });
 
 Deno.test("kernel HTTP API does not reintroduce workflow trigger endpoint specs", async () => {
@@ -143,4 +185,19 @@ Deno.test("kernel HTTP API does not reintroduce workflow trigger endpoint specs"
 
 async function read(path: string): Promise<string> {
   return await Deno.readTextFile(new URL(path, root));
+}
+
+async function* walkFiles(dir: URL): AsyncGenerator<URL> {
+  for await (const entry of Deno.readDir(dir)) {
+    const child = new URL(entry.name + (entry.isDirectory ? "/" : ""), dir);
+    if (entry.isDirectory) {
+      yield* walkFiles(child);
+    } else if (entry.isFile) {
+      yield child;
+    }
+  }
+}
+
+function toOpenApiPath(path: string): string {
+  return path.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, "{$1}");
 }

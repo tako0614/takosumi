@@ -2,7 +2,7 @@ import {
   createJsonGatewayHandler,
   requireGatewayMethod,
 } from "../../gateway/mod.ts";
-import type { provider } from "takosumi-contract";
+import type { provider } from "takosumi-contract/reference/compat";
 import type {
   KubernetesProviderClient,
   KubernetesRouterClient,

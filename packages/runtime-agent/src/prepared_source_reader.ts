@@ -7,7 +7,7 @@
  * snapshot that is verified and extracted per apply request.
  */
 
-import type { PreparedSourceLocator } from "takosumi-contract";
+import type { PreparedSourceLocator } from "takosumi-contract/reference/compat";
 
 export interface PreparedSourceReader {
   readFile(path: string): Promise<Uint8Array>;
@@ -32,6 +32,9 @@ export async function sourceContextFromLocator(
     throw new Error(
       "preparedSource requires workingDirectory or both url and digest",
     );
+  }
+  if (!isSha256Digest(locator.digest)) {
+    throw new Error("preparedSource digest must use sha256:<64 lowercase hex>");
   }
   const bytes = await readArchive(locator.url);
   const actualDigest = await sha256Hex(bytes);
@@ -115,6 +118,10 @@ function isGzipArchive(url: string): boolean {
   return lower.endsWith(".tgz") || lower.endsWith(".tar.gz");
 }
 
+function isSha256Digest(value: string): boolean {
+  return /^sha256:[0-9a-f]{64}$/.test(value);
+}
+
 async function assertSafeTarEntries(
   bytes: Uint8Array,
   compressed: boolean,
@@ -123,14 +130,66 @@ async function assertSafeTarEntries(
     compressed ? ["-t", "-z", "-f", "-"] : ["-t", "-f", "-"],
     bytes,
   );
+  const seen = new Set<string>();
   for (const entry of stdout.split(/\r?\n/)) {
     if (entry.length === 0) continue;
-    if (entry.startsWith("/") || entry.includes("\0")) {
-      throw new Error(`preparedSource tar entry is unsafe: ${entry}`);
+    const normalized = normalizeTarEntryPath(entry, "preparedSource tar entry");
+    if (seen.has(normalized)) {
+      throw new Error(
+        `preparedSource tar entry duplicates normalized path: ${entry}`,
+      );
     }
-    if (entry.split("/").includes("..")) {
-      throw new Error(`preparedSource tar entry escapes destination: ${entry}`);
-    }
+    seen.add(normalized);
+  }
+  const verbose = await runTar(
+    compressed ? ["-t", "-v", "-z", "-f", "-"] : ["-t", "-v", "-f", "-"],
+    bytes,
+  );
+  for (const line of verbose.split(/\r?\n/)) {
+    if (line.length === 0) continue;
+    assertSafeTarLinkTarget(line, "preparedSource tar entry");
+  }
+}
+
+function normalizeTarEntryPath(entry: string, label: string): string {
+  if (entry.startsWith("/") || entry.includes("\0")) {
+    throw new Error(`${label} is unsafe: ${entry}`);
+  }
+  const withoutTrailingSlash = entry.replace(/\/+$/, "");
+  if (
+    withoutTrailingSlash.length === 0 ||
+    withoutTrailingSlash === "." ||
+    withoutTrailingSlash === ".."
+  ) {
+    throw new Error(`${label} is empty or root-only: ${entry}`);
+  }
+  const segments = withoutTrailingSlash.split("/");
+  if (
+    segments.some((segment) =>
+      segment.length === 0 || segment === "." || segment === ".."
+    )
+  ) {
+    throw new Error(`${label} escapes destination: ${entry}`);
+  }
+  return segments.join("/");
+}
+
+function assertSafeTarLinkTarget(line: string, label: string): void {
+  const type = line[0];
+  if (type !== "l" && type !== "h") return;
+  const target = type === "l"
+    ? line.split(" -> ")[1]
+    : line.split(" link to ")[1];
+  if (!target) return;
+  if (target.startsWith("/") || target.includes("\0")) {
+    throw new Error(`${label} link target is unsafe: ${target}`);
+  }
+  if (
+    target.split("/").some((segment) =>
+      segment.length === 0 || segment === "." || segment === ".."
+    )
+  ) {
+    throw new Error(`${label} link target escapes destination: ${target}`);
   }
 }
 

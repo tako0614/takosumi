@@ -6,7 +6,7 @@ import type {
   Deployment,
   GroupHead,
   ProviderObservation as CoreProviderObservation,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type {
   AdvanceGroupHeadInput,
   CommitAppliedDeploymentInput,

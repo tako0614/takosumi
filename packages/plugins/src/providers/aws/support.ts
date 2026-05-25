@@ -9,7 +9,10 @@
  * deterministic operation IDs) without forcing each implementation to
  * re-derive the same pattern.
  */
-import type { provider, ProviderErrorCategory } from "takosumi-contract";
+import type {
+  provider,
+  ProviderErrorCategory,
+} from "takosumi-contract/reference/compat";
 
 /**
  * Runtime-agent handoff hook (Phase 17B). Long-running AWS operations

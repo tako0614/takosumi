@@ -11,7 +11,7 @@
     "Component": "takosumi:Component",
     "Installation": "takosumi:Installation",
     "Deployment": "takosumi:Deployment",
-    "Capability": "takosumi:Capability",
+    "CapabilityTerm": "takosumi:CapabilityTerm",
     "OutputField": "takosumi:OutputField",
     "SpecField": "takosumi:SpecField",
     "PublishDeclaration": "takosumi:PublishDeclaration",
@@ -37,36 +37,32 @@
       "@id": "takosumi:outputs",
       "@container": "@set"
     },
-    "capabilities": {
-      "@id": "takosumi:capabilities",
+    "capabilityTerms": {
+      "@id": "takosumi:capabilityTerms",
       "@container": "@set"
     },
-    "aliases": {
-      "@id": "takosumi:aliases",
+    "referenceAliases": {
+      "@id": "takosumi:referenceAliases",
       "@container": "@set"
     },
-    "publishes": {
-      "@id": "takosumi:publishes",
-      "@container": "@set"
-    },
-    "listens": {
-      "@id": "takosumi:listens",
+    "publications": {
+      "@id": "takosumi:publications",
       "@type": "@json"
     },
-    "namespacePath": {
-      "@id": "takosumi:namespacePath",
+    "acceptedProjectionFamilies": {
+      "@id": "takosumi:acceptedProjectionFamilies",
+      "@container": "@set"
+    },
+    "publicationPath": {
+      "@id": "takosumi:publicationPath",
+      "@type": "xsd:string"
+    },
+    "contract": {
+      "@id": "takosumi:contract",
       "@type": "xsd:string"
     },
     "material": {
       "@id": "takosumi:material",
-      "@type": "@json"
-    },
-    "shape": {
-      "@id": "takosumi:shape",
-      "@type": "xsd:string"
-    },
-    "envMap": {
-      "@id": "takosumi:envMap",
       "@type": "@json"
     },
     "type": {

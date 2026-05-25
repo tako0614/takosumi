@@ -1,4 +1,8 @@
-import type { coordination, objectStorage, queue } from "takosumi-contract";
+import type {
+  coordination,
+  objectStorage,
+  queue,
+} from "takosumi-contract/reference/compat";
 import {
   CloudflareD1StorageAdapter,
   type CloudflareD1StorageClient,

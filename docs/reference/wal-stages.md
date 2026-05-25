@@ -1,8 +1,5 @@
 # WAL Stages
 
-> このページでわかること: WriteAheadOperationJournal の 8 stage / idempotency
-> key / replay rule。
-
 apply pipeline の各 phase は本ページの stage を駆動し、 recovery / approval
 invalidation / RevokeDebt 生成は本ページの規則に従います。
 
@@ -24,13 +21,13 @@ invalidation / RevokeDebt 生成は本ページの規則に従います。
 stage 意味:
 
 - `prepare`: OperationPlan 確定 / idempotency key 割当 / approval binding 再評
-  価。 actual-effects 書込なし。 失敗は `abort`。
+  価。 actual-effects 書込なし。失敗は `abort`。
 - `pre-commit`: provider / connector verification と external precondition
   (credential reachability / collision check / freshness re-confirm) を
-  fail-closed で確認。 actual-effects 書込なし。 失敗は `abort`。
+  fail-closed で確認。 actual-effects 書込なし。失敗は `abort`。
 - `commit`: connector / runtime-agent 経由で external system を実際に変更。
   actual-effects はこの stage のみで書込。 retry は idempotency key 一致前提で
-  冪等。 回復不能失敗は `abort`。
+  冪等。回復不能失敗は `abort`。
 - `post-commit`: commit 後の evidence / projection / metadata sync を記録する。
   provider side effect は新規に実行しない。 external cleanup
   が完了できないときは RevokeDebt を `external-revoke` / `link-revoke` reason で
@@ -101,9 +98,9 @@ WAL の各 entry は次の tuple で一意識別:
   時に発行し、 retry 中も保持。
 
 生成 timing は prepare stage の最初の WAL append。 retry でも同じ
-`journalEntryId` を再利用し、 新規 ULID は発行しません。
+`journalEntryId` を再利用し、新規 ULID は発行しません。
 
-Collision policy: tuple は storage 上で primary key として強制。 同じ tuple を
+Collision policy: tuple は storage 上で primary key として強制。同じ tuple を
 異なる effect digest で書こうとすると hard-fail (Replay rule §)。
 
 ## Replay rule
@@ -123,17 +120,21 @@ WAL を読み直すときの規則:
 確認してから他 mode に進めます。 `continue` で進める前に overflow の origin
 connector を operator が手動 resolve する必要があります。
 
-Public deploy route v1:
+Reference internal recovery modes:
 
 - `continue`: requested phase と `operationPlanDigest` が unfinished WAL と
   一致時のみ同 OperationPlan を再実行。 idempotency tuple が変わらず外部 request
   token も同じ。 digest 変化は recovery ではなく新 intent として
   `failed_precondition`
 - `compensate`: 同 digest / phase の unfinished WAL が `commit` / `post-commit`
-  / `observe` まで進んでいる場合のみ terminal `abort` を追記し、 各
-  OperationPlan entry に `activation-rollback` RevokeDebt を enqueue。 `prepare`
-  / `pre-commit` だけの WAL は actual effect が無いため compensate 対象外で
+  / `observe` まで進んでいる場合のみ terminal `abort` を追記し、各 OperationPlan
+  entry に `activation-rollback` RevokeDebt を enqueue。 `prepare` /
+  `pre-commit` だけの WAL は actual effect が無いため compensate 対象外で
   `failed_precondition`
+
+Installer API の public route は install / deploy / rollback の 5 endpoint で
+す。`continue` / `compensate` は reference kernel の internal recovery tooling
+が使う mode であり、Installer API request body の mode ではありません。
 
 ## Deployment provenance
 
@@ -167,15 +168,15 @@ validation evidence のみが含まれます。
 ## Orphaned debt 経路
 
 WAL stage が actual-effects を書いた後で外部依存が壊れると、 kernel は
-RevokeDebt entry を生成します。 発生条件:
+RevokeDebt entry を生成します。発生条件:
 
-- `post-commit` 中: link projection / metadata sync が回復不能失敗 →
+- `post-commit` 中: link projection / metadata sync が回復不能失敗→
   `link-revoke`
-- `observe` 中: commit 済 external object が外部 revoke / 消失 →
+- `observe` 中: commit 済 external object が外部 revoke / 消失→
   `external-revoke`
 - `abort` 経路 (compensate recovery): `commit` 済 effect の逆再生で残った
   generated material → `activation-rollback`
-- `finalize` 中: managed / generated cleanup が permanent fail → 該当 reason
+- `finalize` 中: managed / generated cleanup が permanent fail →該当 reason
 
 reason / status / aging は [RevokeDebt Model](./revoke-debt.md) 参照。 WAL stage
 側は enqueue 責務のみで、 retry / aging semantics は RevokeDebt subsystem
@@ -186,7 +187,7 @@ reason / status / aging は [RevokeDebt Model](./revoke-debt.md) 参照。 WAL s
 関連 architecture notes:
 
 - `docs/reference/architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal`
-  — WAL stage 設計 の動機、idempotency tuple の derivation、descriptor
+  — WAL stage 設計の動機、idempotency tuple の derivation、descriptor
   verification contract の議論
 - `docs/reference/architecture/execution-lifecycle.md` — phase ↔ stage
   マッピングの設計 rationale と recovery mode の選定背景

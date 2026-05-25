@@ -6,7 +6,7 @@ import type {
   Deployment,
   DeploymentCondition,
   DeploymentStatus,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { RuntimeAgentWorkItem } from "../../agents/mod.ts";
 import type { DeploymentStore } from "../../domains/deploy/deployment_service.ts";
 import type { ProviderMaterializationStore } from "./stores.ts";

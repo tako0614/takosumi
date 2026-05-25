@@ -171,8 +171,8 @@ export function formatPlatformOperationIdempotencyKey(
  * {@link registerProvider} and reference them from implementation-specific
  * `provider:` fields by `id`.
  *
- * The `Capability` type parameter pins the capability vocabulary to the
- * shape's published union (e.g. `WebServiceCapability`). Adapters that
+ * The `CapabilityTerm` type parameter pins the capability vocabulary to the
+ * shape's published union (e.g. `WebServiceCapabilityTerm`). Adapters that
  * type-parameterize this generic catch capability typos at compile time;
  * untyped adapters fall back to `string`.
  *
@@ -188,12 +188,12 @@ export function formatPlatformOperationIdempotencyKey(
 export interface ProviderPlugin<
   Spec = JsonObject,
   Outputs = JsonObject,
-  Capability extends string = string,
+  CapabilityTerm extends string = string,
 > {
   readonly id: string;
   readonly version: string;
   readonly implements: ShapeRef;
-  readonly capabilities: readonly Capability[];
+  readonly capabilities: readonly CapabilityTerm[];
   validate?(spec: Spec, issues: ProviderValidationIssue[]): void;
   apply(spec: Spec, ctx: PlatformContext): Promise<ApplyResult<Outputs>>;
   destroy(handle: ResourceHandle, ctx: PlatformContext): Promise<void>;

@@ -14,9 +14,12 @@
  * Deno Deploy API stabilises beyond `/v1/`.
  */
 
-import type { ProviderPlugin, ResourceHandle } from "takosumi-contract";
 import type {
-  WorkerCapability,
+  ProviderPlugin,
+  ResourceHandle,
+} from "takosumi-contract/reference/provider-plugin";
+import type {
+  WorkerCapabilityTerm,
   WorkerOutputs,
   WorkerSpec,
 } from "../../kinds/worker.ts";
@@ -55,7 +58,7 @@ export interface DenoDeployProviderOptions {
   readonly clock?: () => Date;
 }
 
-const SUPPORTED_CAPABILITIES: readonly WorkerCapability[] = [
+const SUPPORTED_CAPABILITIES: readonly WorkerCapabilityTerm[] = [
   "scale-to-zero",
   "long-request",
   "geo-routing",
@@ -75,10 +78,11 @@ export function createDenoDeployProvider(
     capabilities: SUPPORTED_CAPABILITIES,
     async apply(spec, _ctx) {
       const scriptName = scriptNameFromEntrypoint(spec);
+      const runtime = workerRuntimeExtensions(spec);
       const desc = await lifecycle.putScript({
         scriptName,
-        compatibilityDate: spec.compatibilityDate,
-        compatibilityFlags: spec.compatibilityFlags,
+        compatibilityDate: runtime.compatibilityDate,
+        compatibilityFlags: runtime.compatibilityFlags,
         env: spec.env,
         // `routes` is no longer a formal worker-kind field (= dropped from
         // worker.jsonld). The materializer keeps reading `spec.routes` as
@@ -121,6 +125,21 @@ function deployHandle(
 function scriptNameFromHandle(handle: ResourceHandle): string {
   const parts = handle.split(":");
   return parts.at(-1) ?? handle;
+}
+
+function workerRuntimeExtensions(spec: WorkerSpec): {
+  readonly compatibilityDate?: string;
+  readonly compatibilityFlags?: readonly string[];
+} {
+  const compatibilityDate = typeof spec.compatibilityDate === "string"
+    ? spec.compatibilityDate
+    : undefined;
+  const flags = spec.compatibilityFlags;
+  const compatibilityFlags = Array.isArray(flags) &&
+      flags.every((flag): flag is string => typeof flag === "string")
+    ? flags
+    : undefined;
+  return { compatibilityDate, compatibilityFlags };
 }
 
 function scriptNameFromEntrypoint(spec: WorkerSpec): string {

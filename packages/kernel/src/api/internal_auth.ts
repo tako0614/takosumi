@@ -6,10 +6,10 @@ import {
   TAKOSUMI_INTERNAL_TIMESTAMP_HEADER,
   type TakosumiActorContext,
   verifySignedInternalResponseFromHeaders,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   verifyTakosumiInternalRequestFromHeaders,
-} from "takosumi-contract/internal-rpc";
+} from "takosumi-contract/internal/rpc";
 import {
   InMemoryReplayProtectionStore,
   type ReplayProtectionNamespace,

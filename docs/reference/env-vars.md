@@ -1,8 +1,8 @@
 # 環境変数 {#environment-variables}
 
-Takosumi kernel / CLI / runtime-agent が読む `TAKOSUMI_*` 環境変数の一覧です。
-account-plane、billing、OIDC issuer、customer onboarding 由来の設定は Takosumi
-kernel docs の対象外です。
+`TAKOSUMI_*` 環境変数の一覧。public Installer API に直接属する env は
+`TAKOSUMI_INSTALLER_TOKEN` です。その他は reference Takosumi server、 operator
+extension、runtime-agent、CLI の設定です。
 
 ## 優先順位
 
@@ -17,19 +17,19 @@ boolean は `1 / true / yes / on / enabled` を真、
 `0 / false / no / off / disabled` を偽として扱います。それ以外は fail closed
 です。
 
-## Kernel server
+## Reference kernel server
 
-| Variable                       | Type      | Default        | Required                       | 説明                                                          |
-| ------------------------------ | --------- | -------------- | ------------------------------ | ------------------------------------------------------------- |
-| `TAKOSUMI_ENVIRONMENT`         | enum      | `local`        | no                             | `local` / `development` / `test` / `staging` / `production`。 |
-| `TAKOSUMI_DEV_MODE`            | boolean   | `false`        | no                             | dev 専用 unsafe defaults opt-out。production では使わない。   |
-| `TAKOSUMI_LISTEN_ADDR`         | host:port | `0.0.0.0:8788` | no                             | kernel HTTP server bind address。                             |
-| `TAKOSUMI_PUBLIC_BASE_URL`     | URL       | unset          | DataAsset routes 使用時        | DataAsset URL synthesis 用の public base URL。                |
-| `TAKOSUMI_INSTALLER_TOKEN`     | secret    | unset          | public installer routes 使用時 | `/v1/installations/*` bearer。                                |
-| `TAKOSUMI_DEPLOY_TOKEN`        | secret    | unset          | DataAsset write routes 使用時  | optional DataAsset upload / write bearer。                    |
-| `TAKOSUMI_INTERNAL_API_SECRET` | secret    | unset          | production                     | internal control-plane RPC bearer。                           |
-| `TAKOSUMI_AGENT_URL`           | URL       | unset          | remote agent topology          | runtime-agent base URL。unset 時は embedded agent を使える。  |
-| `TAKOSUMI_AGENT_TOKEN`         | secret    | unset          | remote agent topology          | runtime-agent call bearer。                                   |
+| Variable                       | Type    | Default | Required                       | 説明                                                                  |
+| ------------------------------ | ------- | ------- | ------------------------------ | --------------------------------------------------------------------- |
+| `TAKOSUMI_ENVIRONMENT`         | enum    | `local` | no                             | `local` / `development` / `test` / `staging` / `production`。         |
+| `TAKOSUMI_DEV_MODE`            | boolean | `false` | no                             | dev 専用 unsafe defaults opt-out。production では使わない。           |
+| `PORT`                         | number  | `8788`  | no                             | kernel HTTP server port。CLI は `takosumi server --port` で設定。     |
+| `TAKOSUMI_PUBLIC_BASE_URL`     | URL     | unset   | DataAsset routes 使用時        | DataAsset URL synthesis 用の public base URL。                        |
+| `TAKOSUMI_INSTALLER_TOKEN`     | secret  | unset   | public installer routes 使用時 | 5 endpoint Installer API bearer。                                     |
+| `TAKOSUMI_DEPLOY_TOKEN`        | secret  | unset   | DataAsset write routes 使用時  | optional DataAsset upload / write bearer。                            |
+| `TAKOSUMI_INTERNAL_API_SECRET` | secret  | unset   | production                     | internal control-plane RPC bearer。                                   |
+| `TAKOSUMI_AGENT_URL`           | URL     | unset   | remote agent topology          | runtime-agent base URL。unset 時は embedded execution role を使える。 |
+| `TAKOSUMI_AGENT_TOKEN`         | secret  | unset   | remote agent topology          | runtime-agent call bearer。                                           |
 
 ## Storage and locks
 
@@ -55,14 +55,14 @@ boolean は `1 / true / yes / on / enabled` を真、
 
 ## Boot timeouts
 
-| Variable                                           | Type    | Default | Required | 説明                                  |
-| -------------------------------------------------- | ------- | ------- | -------- | ------------------------------------- |
-| `TAKOSUMI_BOOT_TIMEOUT_STORAGE_SEC`                | seconds | `30`    | no       | storage readiness timeout。           |
-| `TAKOSUMI_BOOT_TIMEOUT_LOCK_STORE_SEC`             | seconds | `30`    | no       | lock store readiness timeout。        |
-| `TAKOSUMI_BOOT_TIMEOUT_SECRET_PARTITION_SEC`       | seconds | `15`    | no       | secret partition readiness timeout。  |
-| `TAKOSUMI_BOOT_TIMEOUT_PUBLIC_LISTENER_SEC`        | seconds | `15`    | no       | public listener bind timeout。        |
-| `TAKOSUMI_BOOT_TIMEOUT_PLUGIN_BOOTSTRAP_SEC`       | seconds | `60`    | no       | reference adapter bootstrap timeout。 |
-| `TAKOSUMI_BOOT_TIMEOUT_RUNTIME_AGENT_REGISTRY_SEC` | seconds | `60`    | no       | runtime-agent registry timeout。      |
+| Variable                                           | Type    | Default | Required | 説明                                                               |
+| -------------------------------------------------- | ------- | ------- | -------- | ------------------------------------------------------------------ |
+| `TAKOSUMI_BOOT_TIMEOUT_STORAGE_SEC`                | seconds | `30`    | no       | storage readiness timeout。                                        |
+| `TAKOSUMI_BOOT_TIMEOUT_LOCK_STORE_SEC`             | seconds | `30`    | no       | lock store readiness timeout。                                     |
+| `TAKOSUMI_BOOT_TIMEOUT_SECRET_PARTITION_SEC`       | seconds | `15`    | no       | secret partition readiness timeout。                               |
+| `TAKOSUMI_BOOT_TIMEOUT_PUBLIC_LISTENER_SEC`        | seconds | `15`    | no       | kernel control-plane listener bind timeout (historical env name)。 |
+| `TAKOSUMI_BOOT_TIMEOUT_PLUGIN_BOOTSTRAP_SEC`       | seconds | `60`    | no       | implementation binding bootstrap timeout (historical env name)。   |
+| `TAKOSUMI_BOOT_TIMEOUT_RUNTIME_AGENT_REGISTRY_SEC` | seconds | `60`    | no       | runtime-agent registry timeout。                                   |
 
 ## Observability
 
@@ -82,6 +82,8 @@ boolean は `1 / true / yes / on / enabled` を真、
 | `TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET` | string       | unset             | sink 使用時 | audit replication S3 bucket。                              |
 
 ## Worker daemon
+
+`TAKOSUMI_PAAS_WORKER_*` は historical prefix。
 
 | Variable                                   | Type       | Default             | Required | 説明                             |
 | ------------------------------------------ | ---------- | ------------------- | -------- | -------------------------------- |
@@ -125,12 +127,13 @@ kernel host には置きません。
 | `TAKOSUMI_SELFHOSTED_COREDNS_FILE`          | path   | unset             | no                   | CoreDNS config path。            |
 | `TAKOSUMI_SELFHOSTED_POSTGRES_HOST`         | string | unset             | no                   | self-hosted Postgres host。      |
 
-## Implementation / materializer config
+## Implementation Binding Config
 
-reference operator は `createPaaSApp({ kindAliases, plugins })` に kind alias
-map と reference adapter array (`plugins` option) を渡します。adapter
-が必要とする credential / config は factory option か runtime-agent host env
-から読みます。provider package の取得方法は operator distribution の責務です。
+An operator using the reference kernel passes the kind alias map and reference
+adapter array (`plugins` option) to `createPaaSApp({ kindAliases, plugins })`.
+adapter が必要とする credential / config は factory option か runtime-agent host
+env から読みます。provider package の取得方法は operator distribution
+の責務です。
 
 ## 関連ページ
 
@@ -139,4 +142,4 @@ map と reference adapter array (`plugins` option) を渡します。adapter
 - [DataAsset Policy](./data-asset-policy.md)
 - [Secret Partitions](./secret-partitions.md)
 - [Telemetry / Metrics](./telemetry-metrics.md)
-- [Runtime-Agent API](./runtime-agent-api.md)
+- [Reference Runtime-Agent Execution Surface](./runtime-agent-api.md)

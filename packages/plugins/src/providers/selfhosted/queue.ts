@@ -1,4 +1,4 @@
-import type { queue } from "takosumi-contract";
+import type { queue } from "takosumi-contract/reference/compat";
 import { freezeClone } from "./common.ts";
 import {
   createDocumentStore,

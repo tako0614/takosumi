@@ -1,6 +1,6 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/contracts/resource/sql/sqlite-serverless/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/contracts/resource/sql/sqlite-serverless/v1",
   "@type": "ResourceContractDescriptor",
   "shortRef": "resource.sql.sqlite-serverless@v1",
   "domain": "resource",

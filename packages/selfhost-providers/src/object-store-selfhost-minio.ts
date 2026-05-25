@@ -3,13 +3,13 @@
  * MinIO.
  */
 
-import type { KernelPlugin } from "takosumi-contract/plugin";
+import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 import {
   createMinioObjectStoreProvider,
   InMemoryMinioLifecycle,
   type MinioLifecycleClient,
 } from "@takos/takosumi-plugins/shape-providers/object-store/minio";
-import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/reference/kernel-plugin-adapter";
 import { KIND_URI_OBJECT_STORE } from "./_kinds.ts";
 
 export interface SelfhostMinioProviderOptions {

@@ -1,6 +1,6 @@
 {
-  "@context": "https://takosumi.com/contexts/deploy.jsonld",
-  "@id": "https://takosumi.com/providers/aws/ecs-fargate/v1",
+  "@context": "https://takosumi.com/reference/kernel/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/kernel/providers/aws/ecs-fargate/v1",
   "@type": "ProviderCapabilityDescriptor",
   "shortRef": "provider.aws.ecs-fargate@v1",
   "materializationProfiles": [

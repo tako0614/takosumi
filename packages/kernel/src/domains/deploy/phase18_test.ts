@@ -21,7 +21,10 @@ import type {
 } from "./apply_orchestrator.ts";
 import { compileManifestToAppSpec } from "./compiler.ts";
 import { buildDescriptorClosure } from "./descriptor_closure.ts";
-import type { Deployment, IsoTimestamp } from "takosumi-contract";
+import type {
+  Deployment,
+  IsoTimestamp,
+} from "takosumi-contract/reference/compat";
 import type { PublicDeployManifest } from "./types.ts";
 
 const DEMO_IMAGE_1 =

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { ShapeValidationIssue } from "takosumi-contract";
+import type { ShapeValidationIssue } from "takosumi-contract/reference/compat";
 import { WebServiceKind } from "../src/kinds/web-service.ts";
 
 function specIssues(value: unknown): ShapeValidationIssue[] {
@@ -19,10 +19,10 @@ Deno.test("WebService shape exposes id and version", () => {
   assert.equal(WebServiceKind.version, "v1");
 });
 
-Deno.test("WebService capabilities include common runtime traits", () => {
-  assert.ok(WebServiceKind.capabilities.includes("always-on"));
-  assert.ok(WebServiceKind.capabilities.includes("scale-to-zero"));
-  assert.ok(WebServiceKind.capabilities.includes("websocket"));
+Deno.test("WebService capability terms include common runtime traits", () => {
+  assert.ok(WebServiceKind.capabilityTerms.includes("always-on"));
+  assert.ok(WebServiceKind.capabilityTerms.includes("scale-to-zero"));
+  assert.ok(WebServiceKind.capabilityTerms.includes("websocket"));
 });
 
 Deno.test("WebService outputFields list is fixed", () => {

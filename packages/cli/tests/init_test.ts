@@ -20,7 +20,8 @@ Deno.test("init command writes the empty AppSpec template", async () => {
 
     const text = await Deno.readTextFile(tmp);
     assert.match(text, /apiVersion: v1/);
-    assert.match(text, /components: \{\}/);
+    assert.match(text, /components:/);
+    assert.match(text, /kind: worker/);
     // Wave K: AppSpec root no longer carries `kind: App`.
     assert.equal(/^kind: App$/m.test(text), false);
     assert.equal(text.includes("kind: Manifest"), false);

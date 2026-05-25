@@ -1,16 +1,14 @@
 # Time / Clock Model
 
-> このページでわかること: kernel の時刻モデルと clock 依存の扱い。
-
 本ページは Takosumi installation での時刻と clock 取り扱いに関する v1 contract
-である。 各時刻依存機能の clock source、 pod 間で許容する skew、 canonical な
+である。各時刻依存機能の clock source、 pod 間で許容する skew、 canonical な
 timestamp フォーマット、 kernel が clock を読むタイミング、 operator の clock
-操作の検知、 時刻と audit chain の相互作用を定義する。
+操作の検知、時刻と audit chain の相互作用を定義する。
 
 ## Clock sources
 
-Takosumi は 3 種の clock source を区別する。 各 feature は 1 つの source に bind
-される。 単一の決定で source を混ぜるのは kernel 実装 bug である。
+Takosumi は 3 種の clock source を区別する。各 feature は 1 つの source に bind
+される。単一の決定で source を混ぜるのは kernel 実装 bug である。
 
 - **Wall clock** — UTC, NTP-synchronized. Used for any value that an operator,
   integrator, or auditor must interpret as a calendar time: audit `ts`, TTL
@@ -45,7 +43,7 @@ Takosumi は 3 種の clock source を区別する。 各 feature は 1 つの s
 | Drift detection observation window                 | wall clock                                               |
 | Compaction cadence                                 | wall clock (cron-style)                                  |
 
-上 table に binding が無い feature は v1 で時刻を読んではいけない。 追加は
+上 table に binding が無い feature は v1 で時刻を読んではいけない。追加は
 `CONVENTIONS.md` §6 RFC を通す。
 
 ## Clock skew tolerance
@@ -60,13 +58,14 @@ sub-second) に十分な余裕を持たせつつ、 HMAC replay window や lock 
 の前提が崩れる。
 
 - The readiness probe rejects pods whose observed skew against the installation
-  reference clock exceeds 5 seconds. The pod surfaces as `degraded` until skew
-  returns to within tolerance.
+  reference clock exceeds 5 seconds. `/readyz` returns 503 with a named failed
+  check until skew returns to within tolerance. Exposure/workload health
+  vocabulary remains separate.
 - NTP synchronization is an operator responsibility. Operators configure the
   host's NTP daemon to track a stable upstream and do not let local drift exceed
   the tolerance.
-- Cross-region installations are out of scope for v1. A v1 installation occupies
-  a single time-coherence region.
+- v1 installation occupies a single time-coherence region. Multi-AZ within one
+  region is the expected high-availability shape for v1 operators.
 
 Rationale: cross-region は wall clock skew + replication latency の合算が NTP
 同期前提の 5 秒許容を超える可能性が高く、 multi-AZ within region とは異なる
@@ -88,22 +87,23 @@ RFC 3339 in UTC, millisecond precision, trailing Z
 example: 2026-05-05T10:00:00.123Z
 ```
 
-このフォーマットは audit log envelope、 kernel HTTP API、 runtime-agent API、
-CLI 出力、 ログ行、 metric exemplar に一律に適用される。 他の zone offset、
-ミリ秒未満の精度、 秒のみの形式は parse 時に reject される。
+このフォーマットは audit log envelope、 kernel HTTP API、 reference
+runtime-agent lifecycle API、 CLI 出力、ログ行、 metric exemplar
+に一律に適用される。他の zone offset、 ミリ秒未満の精度、秒のみの形式は parse
+時に reject される。
 
 ## TTL evaluation
 
 TTL 評価は **その瞬間に** wall clock を読む。 cache から読まない。
 
-- Approval `expiresAt`、 その他の TTL field は、 kernel が validity を判定する
-  たびに毎回読み直す。 前回 request の cached decision は TTL チェックに
+- Approval `expiresAt`、その他の TTL field は、 kernel が validity を判定する
+  たびに毎回読み直す。前回 request の cached decision は TTL チェックに
   再利用しない。
 - 評価は strict。 `now > expiresAt` は expired。 `now == expiresAt` も expired。
   comparator に slop window は無い。 operator が tunable な grace が必要なら
   write 時に `expiresAt` 側で吸収する。
 - 長い `observe` interval を跨いで TTL-bound binding を持ち続けた WAL stage は、
-  次に binding に対して動くときに TTL を再評価する。 以前の評価は永続化しない。
+  次に binding に対して動くときに TTL を再評価する。以前の評価は永続化しない。
 
 ## Operator clock operations
 
@@ -115,11 +115,11 @@ migration)。 kernel は最も破壊的なケースを検知する。
   する。
 - wall clock の reverse jump が **1 時間** を超えた場合は safety abort 発動。
   operator が recovery CLI で jump を ack するまで kernel は `apply` に
-  入らない。 この間の TTL 評価は block され、 すでに expired な approval や
-  share の un-expiry を防ぐ。
+  入らない。この間の TTL 評価は block され、すでに expired な approval や share
+  の un-expiry を防ぐ。
 - forward jump (clock が未来に動く) は許容するが、 5 分を超えた場合に
-  `clock_forward_jump` audit event を出す。 forward jump は TTL field を 早期
-  expire させる。 これは意図的な挙動である。
+  `clock_forward_jump` audit event を出す。 forward jump は TTL field を早期
+  expire させる。これは意図的な挙動である。
 
 ## Timezone handling
 
@@ -129,7 +129,7 @@ time を rendering してよい。
 - kernel storage、 audit event、 telemetry exemplar、 HTTP API response はすべて
   UTC 値を運ぶ。
 - operator UI と CLI 出力は、 operator が `TAKOSUMI_LOG_TIMEZONE` 等の
-  client-side flag で opt-in したときに local zone で表示してよい。 内側の値 は
+  client-side flag で opt-in したときに local zone で表示してよい。内側の値は
   UTC のまま。
 - AppSpec / plan / snapshot は local-zone timestamp を運ばない。non-UTC
   timestamp を含む AppSpec は `invalid_argument` で reject される。
@@ -154,8 +154,8 @@ audit chain は整合性と clock 真値を切り離す。
 ## Bootstrap
 
 chain の最初の event (genesis または rotation 後の genesis) は wall clock を
-読んで `ts` と chain identifier に使う。 同じ chain の以降の event はすべて、
-前の event から `prevHash` を導出する。 後続の clock skew や operator clock
+読んで `ts` と chain identifier に使う。同じ chain の以降の event はすべて、
+前の event から `prevHash` を導出する。後続の clock skew や operator clock
 操作を跨いでも chain は有効なまま残る。
 
 fresh kernel install で host clock が未設定の場合は hard boot failure として
@@ -179,12 +179,12 @@ operator の最小義務は次の通り。
 
 ## Related architecture notes
 
-- `reference/architecture/operator-boundaries` — placement of NTP responsibility
-  and the readiness contract.
-- `reference/architecture/runtime-deployment-model#operation-plan--write-ahead-journal`
+- [Operator Boundaries](./architecture/operator-boundaries.md) — placement of
+  NTP responsibility and the readiness contract.
+- [Runtime Deployment — Operation Plan & WAL](./architecture/runtime-deployment-model.md#operation-plan--write-ahead-journal)
   — clock binding for WAL stage retry and idempotency window.
-- `reference/architecture/policy-risk-approval-error-model` — approval
-  `expiresAt` derivation and skew-related fail-closed rules.
+- [Policy / Risk / Approval / Error](./architecture/policy-risk-approval-error-model.md)
+  — approval `expiresAt` derivation and skew-related fail-closed rules.
 
 ## 関連ページ
 

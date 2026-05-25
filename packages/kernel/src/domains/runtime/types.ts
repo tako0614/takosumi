@@ -3,7 +3,7 @@ import type {
   AppSpecResource,
   AppSpecRoute,
 } from "../deploy/types.ts";
-import type { Digest } from "takosumi-contract";
+import type { Digest } from "takosumi-contract/reference/compat";
 
 /**
  * Provider materialization role used by adapters/observers to describe which

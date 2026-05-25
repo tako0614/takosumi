@@ -37,7 +37,7 @@ export interface Artifact {
   readonly hash?: string;
   /** External pointer (OCI registry URI, https URL, etc). */
   readonly uri?: string;
-  /** Kind-specific metadata (entrypoint / handler / mime / compatibility-date / …). */
+  /** DataAsset-backed connector metadata (handler / mime / abi / compatibility-date / …). */
   readonly metadata?: JsonObject;
 }
 
@@ -60,10 +60,10 @@ export interface ArtifactStored {
 }
 
 /**
- * Locator for the kernel-side DataAsset store. The kernel embeds this in every
- * `LifecycleApplyRequest` so connectors can fetch uploaded bytes when their
- * implementation-specific spec carries `artifact.hash`. Token is short-lived
- * and scoped to read-only DataAsset access.
+ * Locator for an operator DataAsset endpoint. Reference dispatchers include
+ * this only when the optional DataAsset extension is enabled and the connector
+ * may need to fetch uploaded bytes by hash. Token is scoped to read-only
+ * DataAsset access.
  */
 export interface ArtifactStoreLocator {
   readonly baseUrl: string;
@@ -94,6 +94,7 @@ export interface LifecycleApplyRequest {
   readonly provider: string;
   readonly resourceName: string;
   readonly spec: JsonValue;
+  readonly spaceId: string;
   readonly tenantId?: string;
   /**
    * @internal kernel ↔ runtime-agent RPC only. WAL-derived request token
@@ -118,7 +119,7 @@ export interface LifecycleApplyRequest {
 export interface LifecycleApplyResponse {
   /** Stable handle (e.g. AWS ARN, Docker container id). Used for destroy/describe. */
   readonly handle: string;
-  /** Outputs the shape declares (for ${ref:...} resolution). */
+  /** Outputs recorded as Deployment evidence for publication/material projection. */
   readonly outputs: JsonObject;
 }
 
@@ -128,6 +129,7 @@ export interface LifecycleDestroyRequest {
   /** Legacy connector-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
+  readonly spaceId: string;
   readonly tenantId?: string;
   /**
    * @internal kernel ↔ runtime-agent RPC only. WAL-derived request token
@@ -155,6 +157,7 @@ export interface LifecycleCompensateRequest {
   /** Legacy connector-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
+  readonly spaceId: string;
   readonly tenantId?: string;
   /** WAL-derived request token for the compensating operation. */
   readonly idempotencyKey?: string;
@@ -182,6 +185,7 @@ export interface LifecycleDescribeRequest {
   /** Legacy connector-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
+  readonly spaceId: string;
   readonly tenantId?: string;
 }
 
@@ -231,7 +235,7 @@ export const LIFECYCLE_AGENT_URL_ENV = "TAKOSUMI_AGENT_URL" as const;
  * registry is purely a discovery / documentation layer. Connectors do
  * not have to consult it before producing or consuming an artifact —
  * but registering a kind makes it visible to operators and lets the
- * kernel apply per-kind size overrides.
+ * optional operator artifact extension apply per-kind size overrides.
  */
 export interface RegisteredArtifactKind {
   readonly kind: string;

@@ -1,4 +1,4 @@
-import type { TakosumiActorContext } from "takosumi-contract";
+import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 
 export type AuthResult =
   | { readonly ok: true; readonly actor: TakosumiActorContext }

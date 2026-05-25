@@ -8,7 +8,7 @@ import {
   registerProvider,
   type ResourceHandle,
   unregisterProvider,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   InMemoryRevokeDebtStore,
   type RevokeDebtRecord,

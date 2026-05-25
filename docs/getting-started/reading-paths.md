@@ -1,72 +1,80 @@
 # 読む順序 {#reading-paths}
 
-Takosumi docs は役割ごとに読む順序を分けると追いやすくなります。最初から内部設計
-や provider 実装まで読む必要はありません。
+## First-time evaluator
 
-## AppSpec author
+1. [コンセプト](./concepts.md)
+2. [Specification Boundaries](../reference/spec-boundaries.md)
+3. [Takosumi Core Specification](../reference/core-spec.md)
+4. [AppSpec](../reference/app-spec.md)
+5. [クイックスタート](./quickstart.md)
+6. 公開 contract の範囲を確認したくなったら
+   [リファレンス索引](../reference/index.md)
 
-アプリを install / deploy したい人向けの順序です。
+## AppSpec を書く人 {#appspec-authors}
 
-1. [クイックスタート](./quickstart.md)
-2. [コンセプト](./concepts.md)
+まず読む:
+
+1. [コンセプト](./concepts.md)
+2. [クイックスタート](./quickstart.md)
 3. [AppSpec](../reference/app-spec.md)
-4. [Kind Descriptor Examples](../reference/kind-registry.md)
-5. 必要になったら [Build service handoff](../reference/build-spec.md)
+4. [Takosumi Core Specification](../reference/core-spec.md)
+5. [Specification Boundaries](../reference/spec-boundaries.md)
 
-読了後に分かること:
+必要になったら読む:
 
-- `.takosumi.yml` の root field と component field
-- `kind` / `spec` / `publish` / `listen` の役割
-- source file path を AppSpec のどこに書くか
-- build が必要な source を prepared source として渡す考え方
+- kind や material contract の concrete vocabulary が必要になったら
+  [Takosumi Official Type Catalog Specification](../reference/type-catalog.md)
+- operator提供materialを workload から受け取るときは
+  [External publications](../reference/external-publications.md)
+- Takosumi Cloud が所有する workload publication path、deploy facade、 dashboard
+  API など account-plane/admin surface が必要になったら
+  [Takosumi Cloud](../reference/takosumi-cloud.md) から
+  [Takosumi Cloud Specification](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/spec.md)
+- public app endpoint を出すときは
+  [HTTP Exposure](../reference/http-exposure.md)
+- build が必要になったら [Build service handoff](../reference/build-spec.md)
+- 操作コマンドが必要になったら [CLI](../reference/cli.md)
+- automation / integration が必要になったら
+  [Installer API](../reference/installer-api.md)
 
-## Operator
-
-Takosumi kernel を起動し、Space に Installation を受け付ける人向けの順序です。
+## Reference kernel operator として動かす人 {#reference-kernel-operators}
 
 1. [コンセプト](./concepts.md)
 2. [オペレーター](../operator/index.md)
-3. [セルフホスト運用](../operator/self-host.md)
-4. [Operator Bootstrap](../operator/bootstrap.md)
+3. [Operator Bootstrap](../operator/bootstrap.md)
+4. [セルフホスト運用](../operator/self-host.md)
 5. [runtime-agent 分離](../operator/runtime-agent.md)
 6. [Environment Variables](../reference/env-vars.md)
+7. [Readiness Probes](../reference/readiness-probes.md)
+8. 必要な詳細を引くときは [リファレンス索引](../reference/index.md)
 
-読了後に分かること:
+## Takosumi Cloud operator / account-plane を読む人 {#cloud-operators}
 
-- dev 起動と production 起動で固定する設定の違い
-- installer token、storage、secret、provider credential の置き場所
-- reference kernel に provider implementation を渡す方法
-- runtime-agent を分離する判断基準
+1. [Takosumi Cloud](../reference/takosumi-cloud.md)
+2. [Takosumi Cloud docs index](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/index.md)
+3. [Takosumi Cloud Specification](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/spec.md)
+4. [Takosumi Cloud Accounts service wire details](https://github.com/tako0614/takos-ecosystem/blob/main/takosumi-cloud/docs/accounts-service.md)
 
-## Provider / extension author
-
-新しい cloud / runtime / resource を Takosumi から扱いたい人向けの順序です。
+## Provider / extension を作る人 {#provider-extension-authors}
 
 1. [Takosumi を拡張する](../extending.md)
-2. [Provider Implementations](../reference/providers.md)
-3. [Reference Plugin Loading](../reference/plugin-loading.md)
-4. [Connector Guide](../reference/connector-contract.md)
-5. [Runtime-Agent API](../reference/runtime-agent-api.md)
+2. [Specification Boundaries](../reference/spec-boundaries.md)
+3. [Takosumi Official Type Catalog Specification](../reference/type-catalog.md)
+4. [AppSpec](../reference/app-spec.md)
+5. [Provider Implementations](../reference/providers.md) — adopted descriptor を
+   reference implementation binding へ接続する実装資料
+6. [Connector Guide](../reference/connector-contract.md)
+7. [Reference Runtime-Agent Execution Surface](../reference/runtime-agent-api.md)
+8. reference kernel の adapter 配線を実装するときだけ
+   [Reference Adapter Loading](../reference/plugin-loading.md)
 
-読了後に分かること:
+## Core contributor {#core-contributors}
 
-- kind descriptor と implementation binding の分担
-- takosumi.com reference descriptor は JSON-LD で型・入出力 metadata を表すこと
-- `KernelPlugin` が reference kernel の実装手段であること
-- connector / runtime-agent が副作用を実行する境界
-
-## Core contributor
-
-Takosumi kernel の内部設計や実装を追う人向けの順序です。
-
-1. [リファレンス索引](../reference/index.md)
-2. [Reference Kernel Route Inventory](../reference/kernel-http-api.md)
-3. [Lifecycle Protocol](../reference/lifecycle.md)
-4. [内部設計の概要](../reference/architecture/index.md)
-5. 必要に応じて [RFC / design record](../rfc/0001-kernel-kind-agnostic.md)
-
-読了後に分かること:
-
-- public installer API と internal/runtime-agent API の境界
-- Deployment lifecycle、journal、status、risk、approval の設計
-- current spec と設計履歴の置き場所
+1. [Specification Boundaries](../reference/spec-boundaries.md)
+2. [Takosumi Core Specification](../reference/core-spec.md)
+3. [AppSpec](../reference/app-spec.md)
+4. [Installer API](../reference/installer-api.md)
+5. [内部設計の概要](../reference/architecture/index.md)
+6. [Reference Kernel Route Inventory](../reference/kernel-http-api.md)
+7. [Lifecycle Protocol](../reference/lifecycle.md)
+8. 必要に応じて [RFC / design record](../rfc/0001-kernel-kind-agnostic.md)

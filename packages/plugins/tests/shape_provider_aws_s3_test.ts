@@ -3,7 +3,7 @@ import {
   createAwsS3ObjectStoreProvider,
   InMemoryAwsS3Lifecycle,
 } from "../src/shape-providers/object-store/aws-s3.ts";
-import type { PlatformContext } from "takosumi-contract";
+import type { PlatformContext } from "takosumi-contract/reference/compat";
 
 const ctx = {} as PlatformContext;
 

@@ -29,7 +29,7 @@ import type {
   DeploymentResolvedGraph,
   IsoTimestamp,
   ObjectAddress,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 
 // ---------------------------------------------------------------------------
 // Public surface

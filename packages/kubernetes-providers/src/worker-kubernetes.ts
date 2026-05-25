@@ -3,13 +3,13 @@
  * k3s deployment.
  */
 
-import type { KernelPlugin } from "takosumi-contract/plugin";
+import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 import {
   createK3sDeploymentWebServiceProvider,
   InMemoryK3sDeploymentLifecycle,
   type K3sDeploymentLifecycleClient,
 } from "@takos/takosumi-plugins/shape-providers/web-service/k3s-deployment";
-import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/reference/kernel-plugin-adapter";
 import { KIND_URI_WEB_SERVICE } from "./_kinds.ts";
 
 export interface KubernetesWorkerProviderOptions {

@@ -9,13 +9,13 @@
  * `createCloudflareWorkersProvider()` factory.
  */
 
-import type { KernelPlugin } from "takosumi-contract/plugin";
+import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 import {
   type CloudflareWorkersLifecycleClient,
   createCloudflareWorkersProvider,
   InMemoryCloudflareWorkersLifecycle,
 } from "@takos/takosumi-plugins/shape-providers/worker/cloudflare-workers";
-import { kernelPluginFromProviderPlugin } from "takosumi-contract/kernel-plugin-adapter";
+import { kernelPluginFromProviderPlugin } from "takosumi-contract/reference/kernel-plugin-adapter";
 import { KIND_URI_WORKER } from "./_kinds.ts";
 
 export interface CloudflareWorkerProviderOptions {

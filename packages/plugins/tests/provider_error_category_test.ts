@@ -9,7 +9,7 @@ import {
   isFailClosedErrorCategory,
   isRetryableErrorCategory,
   type ProviderErrorCategory,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   awsErrorCategoryToProviderCategory,
   classifyAwsErrorAsProviderCategory,

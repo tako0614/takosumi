@@ -13,7 +13,7 @@ import type {
   LifecycleDescribeResponse,
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { Connector, ConnectorContext } from "./connectors/connector.ts";
 import type { ConnectorRegistry } from "./connectors/mod.ts";
 

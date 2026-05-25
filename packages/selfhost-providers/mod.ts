@@ -1,6 +1,6 @@
 /**
  * `@takos/takosumi-selfhost-providers` — Self-host-backed `KernelPlugin`
- * factories for the Takos reference component kinds.
+ * factories for operator-opt-in takosumi.com reference kind URIs.
  *
  * Phase D extracted these factories out of `@takos/takosumi-plugins` reference registry
  * so Takosumi core no longer carries cloud / self-host coupled imports.

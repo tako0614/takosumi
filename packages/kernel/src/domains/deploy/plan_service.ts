@@ -4,7 +4,7 @@ import type {
   Deployment,
   DeploymentInput,
   IsoTimestamp,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   type DeploymentFilter,
   DeploymentService,

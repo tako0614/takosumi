@@ -1,12 +1,12 @@
 import {
   TAKOSUMI_INTERNAL_ACTOR_HEADER,
   type TakosumiActorContext,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import {
   decodeActorContext,
   signTakosumiInternalRequest,
   verifyTakosumiInternalRequestFromHeaders,
-} from "takosumi-contract/internal-rpc";
+} from "takosumi-contract/internal/rpc";
 import type { ActorAdapter, AuthPort, AuthResult } from "./types.ts";
 
 export interface ServiceActorAuthAdapterOptions {

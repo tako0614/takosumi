@@ -1,6 +1,6 @@
 /**
  * `@takos/takosumi-gcp-providers` — GCP-backed `KernelPlugin` factories
- * for the Takos reference component kinds.
+ * for operator-opt-in takosumi.com reference kind URIs.
  *
  * Phase D extracted these factories out of `@takos/takosumi-plugins` reference registry
  * so Takosumi core no longer carries cloud-coupled imports. Operators that

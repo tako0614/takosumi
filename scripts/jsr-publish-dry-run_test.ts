@@ -12,6 +12,7 @@ Deno.test("JSR publish dry-run package list includes only publishable packages",
     JSR_PUBLISH_PACKAGES.map((packageInfo) => packageInfo.directory),
     [
       "packages/contract",
+      "packages/installer",
       "packages/runtime-agent",
       "packages/plugins",
       "packages/cloudflare-providers",

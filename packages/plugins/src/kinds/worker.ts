@@ -1,4 +1,7 @@
-import type { Shape, ShapeValidationIssue } from "takosumi-contract";
+import type {
+  Shape,
+  ShapeValidationIssue,
+} from "takosumi-contract/reference/shape";
 import {
   isNonEmptyString,
   optionalNonEmptyString,
@@ -7,31 +10,35 @@ import {
   requireRoot,
 } from "./_validators.ts";
 import {
-  WORKER_CAPABILITIES,
+  WORKER_CAPABILITY_TERMS,
   WORKER_DESCRIPTION,
-  WORKER_KIND_ID,
+  WORKER_KIND_SHAPE_ID,
   WORKER_KIND_VERSION,
   WORKER_OUTPUT_FIELDS,
-  type WorkerCapability,
+  type WorkerCapabilityTerm,
   type WorkerOutputs,
   type WorkerSpec,
 } from "./worker.generated.ts";
 
-export type { WorkerCapability, WorkerOutputs, WorkerSpec };
+export type { WorkerCapabilityTerm, WorkerOutputs, WorkerSpec };
 
 /**
  * `worker@v1` component kind descriptor. Materialized by a provider adapter
  * (cloudflare-workers / deno-deploy / etc.) at apply time.
  *
- * Spec / outputs / capabilities are derived from
+ * Spec / outputs / capability terms are derived from
  * `packages/plugins/spec/kinds/v1/worker.jsonld` via `worker.generated.ts`;
  * validation diagnostics are hand-written below.
  */
-export const WorkerKind: Shape<WorkerSpec, WorkerOutputs, WorkerCapability> = {
-  id: WORKER_KIND_ID,
+export const WorkerKind: Shape<
+  WorkerSpec,
+  WorkerOutputs,
+  WorkerCapabilityTerm
+> = {
+  id: WORKER_KIND_SHAPE_ID,
   version: WORKER_KIND_VERSION,
   description: WORKER_DESCRIPTION,
-  capabilities: WORKER_CAPABILITIES,
+  capabilityTerms: WORKER_CAPABILITY_TERMS,
   outputFields: WORKER_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;

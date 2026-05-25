@@ -1,12 +1,9 @@
 # Risk タクソノミ {#risk-taxonomy}
 
-> このページでわかること: plan / apply pipeline が発火しうる Risk の closed enum
-> 18 active 値を stable id ベースで定義する。
-
 各 Risk は plan 出力上の判定点として働き、 operator が allow / deny /
-require-approval を判断する材料になる。 新 Risk kind の追加には `CONVENTIONS.md`
+require-approval を判断する材料になる。新 Risk kind の追加には `CONVENTIONS.md`
 §6 RFC が必要。 entry 番号は historical で安定 ID として扱う (= 番号は renumber
-せず、 過去 audit / docs cross-ref の連続性を保つ。 entry 15 は欠番)。
+せず、過去 audit / docs cross-ref の連続性を保つ。 entry 15 は欠番)。
 
 ## Risk と Error {#risk-vs-error}
 
@@ -15,7 +12,7 @@ require-approval を判断する材料になる。 新 Risk kind の追加には
 - **Risk**: plan 出力時の判定点。 `allow` / `deny` / `require-approval` の 3
   値で resolve され、 approve 可能。 binding が approval record に乗る。
 - **Error**: operation result の失敗理由 (DomainErrorCode /
-  LifecycleErrorBody)。 approve 対象ではなく、 再 plan / 再 apply で解消する。
+  LifecycleErrorBody)。 approve 対象ではなく、再 plan / 再 apply で解消する。
 
 Risk が stage 進行中に再評価されて approval が崩れる経路は
 [Approval Invalidation Triggers](./approval-invalidation.md) に従う。
@@ -27,7 +24,7 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 - **stable id**: enum の wire 値。永続化される。
 - **発火 stage**: `prepare` / `pre-commit` / `commit` / `post-commit` /
   `observe` / `finalize` のうち、実際に Risk が emit されうる stage。
-- **severity**: `warning` / `error`。`error` severity は approval 無しでは 必ず
+- **severity**: `warning` / `error`。`error` severity は approval 無しでは必ず
   `deny` になる。
 - **invalidation trigger**: 当該 Risk に関連する approval invalidation trigger
   番号 (1-6、詳細は [approval-invalidation](./approval-invalidation.md))。
@@ -45,10 +42,10 @@ Risk が stage 進行中に再評価されて approval が崩れる経路は
 - **invalidation trigger**: 2
 - **fix kind**: `requiresPolicyReview`
 
-### 2. `external-export`
+### 2. `external-publication`
 
-operator-internal share model や future extension で、外部 Space へ export
-する操作を扱う場合の候補 Risk です。current public AppSpec v1 は external export
+operator-internal share model や future extension で、外部 Space へ publication
+する操作を扱う場合の候補 Risk です。current public AppSpec v1 は external publication
 を直接宣言しません。
 
 - **発火 stage**: `prepare`
@@ -90,19 +87,19 @@ operator-internal share model や future extension で、外部 Space へ export
 - **invalidation trigger**: 2, 3
 - **fix kind**: `safeFix`
 
-### 7. `stale-export`
+### 7. `stale-publication`
 
-- **意味**: 消費する operator-owned ExportDeclaration の freshness が policy
-  許容 window を超えており、 plan は最新化されない export snapshot に bind さ
+- **意味**: 消費する operator-owned ExternalPublicationDeclaration の freshness が policy
+  許容 window を超えており、 plan は最新化されない publication snapshot に bind さ
   れている。
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 4
 - **fix kind**: `operatorFix`
 
-### 8. `revoked-export`
+### 8. `revoked-publication`
 
-- **意味**: 消費する operator-owned ExportDeclaration が revoke 済 (= generated
+- **意味**: 消費する operator-owned ExternalPublicationDeclaration が revoke 済 (= generated
   material は残るが新規 link projection は許可されない状態)。
 - **発火 stage**: `prepare`
 - **severity**: `error`
@@ -118,22 +115,22 @@ operator-internal share model や future extension で、外部 Space へ export
 - **invalidation trigger**: 2
 - **fix kind**: `requiresPolicyReview`
 
-### 10. `cross-space-link`
+### Future extension: `cross-space-link`
 
 operator-internal share model や future extension で cross-Space link
-を扱う場合の候補 Risk です。current public AppSpec v1 は cross-Space link
-を宣言できず、kernel は reject します。
+を扱う場合の候補 Risk です。current public AppSpec v1 の Risk enum ではなく、
+Space を跨ぐ sharing RFC が導入されるまで発火しません。
 
 - **発火 stage**: `prepare`
 - **severity**: `warning`
 - **invalidation trigger**: 4, 6
 - **fix kind**: `requiresPolicyReview`
 
-### 11. `shadowed-namespace`
+### 11. `shadowed-publication`
 
-- **意味**: reserved / future sharing model で、同じ namespace path が複数
+- **意味**: reserved / future sharing model で、同じ external publication path が複数
   source から見える可能性を示す。current public v1 は Space-visible operator
-  export の exact match だけを解決し、duplicate / shadow は policy choice
+  publication の exact match だけを解決し、duplicate / shadow は policy choice
   ではなく invalid resolution として fail-closed する。
 - **発火 stage**: `prepare`
 - **severity**: `warning`
@@ -143,7 +140,7 @@ operator-internal share model や future extension で cross-Space link
 ### 12. `implementation-unverified`
 
 - **意味**: 選択された Implementation が operator の visible implementation
-  config に存在し ない状態で binding されようとしている。
+  config に存在しない状態で binding されようとしている。
 - **発火 stage**: `prepare`
 - **severity**: `error`
 - **invalidation trigger**: 3, 5
@@ -187,21 +184,19 @@ operator-internal share model や future extension で cross-Space link
 
 ### 18. `collision-detected`
 
-- **意味**: 同名 / 同 namespace の object を別 source が同時に作ろうとしている
+- **意味**: 同名 / 同 scope の object を別 source が同時に作ろうとしている
   か、既に存在する unmanaged object と衝突する。
 - **発火 stage**: `pre-commit`
 - **severity**: `error`
 - **invalidation trigger**: 2
 - **fix kind**: `operatorFix`
 
-### 19. `transform-unapproved`
+### External pre-submission: `transform-unapproved`
 
-- **意味**: 当該 plan が approval を得ていない DataAsset transform を実行しよう
-  としている。
-- **発火 stage**: `pre-commit`
-- **severity**: `error`
-- **invalidation trigger**: 2
-- **fix kind**: `requiresPolicyReview`
+`transform-unapproved` は build service / operator pre-submission policy が返す
+external error です。source transform / build は
+Installer API submission 前に解決され、kernel plan / WAL の `pre-commit` Risk
+として DataAsset transform 実行判断を戻しません。
 
 ## Severity と approval gate の関係 {#severity-と-approval-gate-の関係}
 
@@ -218,13 +213,13 @@ operator-internal share model や future extension で cross-Space link
   を managed secret に置き換える、traffic 配分を rollback 互換に直す)。
 - `requiresPolicyReview`: policy pack / approval flow を経由しないと進めない。
   operator 単独では解消しない。
-- `operatorFix`: operator の手動操作 (export refresh / implementation config
+- `operatorFix`: operator の手動操作 (publication refresh / implementation config
   update / collision resolution / RevokeDebt clearance) が要る。
 
 ## RFC 要件 {#rfc-要件}
 
 新 Risk kind の追加は plan / approval / WAL のすべてに影響するため、
-`CONVENTIONS.md` §6 の RFC を要する。 stable id は付与後 rename しない。 削除も
+`CONVENTIONS.md` §6 の RFC を要する。 stable id は付与後 rename しない。削除も
 同様に RFC を経由し、 stable id は欠番として保持する (= 過去 audit の再評価で ID
 が解決可能であることを保証する)。
 

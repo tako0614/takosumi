@@ -1,20 +1,29 @@
 # @takos/takosumi-plugins
 
-Reference component kind descriptors and provider helper package for the
-takosumi.com reference implementation. JSON-LD descriptors carry kind semantics;
-provider adapters are the reference kernel's TypeScript adapter API. Operators
-attach reference provider adapters as a **plain array** to
-`createPaaSApp({ kindAliases, plugins: [...] })` — the Vite plugin pattern in
-the reference kernel. Each adapter returns a `KernelPlugin` that declares the
-kind URI(s) it provides.
+Compatibility package for Takosumi official catalog descriptor helpers. The
+documented official helper surface is the `@takos/takosumi-plugins/kinds`
+subpath. Root exports also include compatibility helpers used by the reference
+kernel; those exports are implementation wiring, not the catalog specification.
+
+JSON-LD descriptors publish descriptor/type/catalog metadata; runtime behavior
+lives in operator-selected implementation bindings.
+
+The catalog descriptors are Takosumi official type catalog material. Provider
+adapters and gateway-side helpers are reference kernel implementation helpers.
+Operators using the reference kernel can attach provider adapters as a **plain
+array** to `createPaaSApp({ kindAliases, plugins: [...] })` — the Vite plugin
+pattern in that implementation. Each adapter returns a `KernelPlugin` that
+declares the kind URI(s) it provides.
 
 This package itself ships **no cloud SDK code**. Cloud-backed reference
 `KernelPlugin` factories live in six independent provider packages
 (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`),
-each importable on its own. The takosumi.com reference kind examples stay
-core-only.
+each importable on its own. The official catalog descriptors stay
+descriptor/helper-only and cloud-provider-neutral. The published descriptor
+identities under `https://takosumi.com/kinds/v1/*` are Takosumi official type
+catalog entries; the provider adapters are reference implementation wiring.
 
-## Install (cloud provider package 経由)
+## Reference Kernel Example
 
 ```typescript
 import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
@@ -35,33 +44,45 @@ const { app } = await createPaaSApp({
 });
 ```
 
-Operators choose the providers they need and attach them as the reference
-adapter array (`plugins` option) in the reference kernel. Cloud credentials live
-on the runtime-agent environment or operator host, not in public bootstrap
-factory arguments.
+This is a reference-kernel bootstrap example, not an AppSpec or Takosumi core
+requirement. Operators choose the providers they need and attach them as the
+reference adapter array (`plugins` option) in the reference kernel. Cloud
+credentials live on the runtime-agent environment or operator host, not in
+public bootstrap factory arguments.
 
-## Reference component kinds
+## Official Catalog Descriptor Helpers
 
-This package includes takosumi.com reference descriptor examples for five common
-component kinds. Operators opt into them by importing this package and passing
-aliases such as `{ web: "https://takosumi.com/kinds/v1/web-service" }`.
+This package includes helper exports for the current `takosumi.com` v1 catalog
+descriptors. That descriptor set is not a closed built-in kind set. Importing
+this package is a reference helper convenience. Operators adopt descriptors
+through policy, visibility, and alias mapping such as
+`{ web: "https://takosumi.com/kinds/v1/web-service" }`.
 
 Operator distributions can publish their own JSON-LD descriptors on any domain
 and map short aliases to those URIs.
 
-| Kind            | Description                                            |
-| --------------- | ------------------------------------------------------ |
-| `worker`        | JavaScript edge worker from prepared source entrypoint |
-| `web-service`   | OCI/container web service with an HTTP port            |
-| `postgres`      | Managed PostgreSQL instance                            |
-| `object-store`  | S3-compatible bucket                                   |
-| `gateway`       | HTTP listener, routing, host, and TLS policy           |
+| Kind           | Description                                            |
+| -------------- | ------------------------------------------------------ |
+| `worker`       | JavaScript edge worker from resolved source entrypoint |
+| `web-service`  | OCI/container web service with an HTTP port            |
+| `postgres`     | Managed PostgreSQL instance                            |
+| `object-store` | S3-compatible bucket                                   |
+| `gateway`      | HTTP listener, routing, host, and TLS policy           |
 
-An operator account-plane distribution can publish OIDC issuer material through
-the `operator.identity.oidc` namespace. worker 側は
-`listen.operator.identity.oidc` で標準 env を受け取る。
+An operator account-plane distribution can publish OIDC issuer material at the
+`operator.identity.oidc` external publication path. worker 側は local listen
+binding で `operator.identity.oidc` を参照し、secretRef-mediated runtime env
+を受け取る。
 
-## Providers (= 別 package、 6 cloud)
+```yaml
+listen:
+  oidc:
+    from: operator.identity.oidc
+    as: secret-env
+    required: true
+```
+
+## Reference provider adapters
 
 cloud-backed reference provider adapter は **独立 JSR package** として publish
 される。 各 package は paper-thin な lifecycle client を提供し、 cloud SDK code
@@ -76,9 +97,9 @@ cloud-backed reference provider adapter は **独立 JSR package** として pub
 | `@takos/takosumi-deno-deploy-providers` | Deno Deploy                                       |
 | `@takos/takosumi-selfhost-providers`    | Self-host (docker / systemd / filesystem / minio) |
 
-provider id namespace は `@takos/<cloud>-<service>` を使う (= `@takos/aws-s3`,
-`@takos/cloudflare-r2`, `@takos/gcp-cloud-run` 等)。 Bare provider IDs
-(`aws-fargate`, `cloud-run`, etc.) は reject される。
+reference provider id root は `@takos/<cloud>-<service>` を使う (=
+`@takos/aws-s3`, `@takos/cloudflare-r2`, `@takos/gcp-cloud-run` 等)。 operator
+distribution は自分の provider IDs と validation policy を持てます。
 
 ## Data assets
 
@@ -88,7 +109,7 @@ distribution.
 
 Reference operators can register discoverable data-asset kinds via
 `registerArtifactKind` from
-[`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract).
+`@takos/takosumi-contract/reference/runtime-agent-lifecycle`.
 
 ## See also
 

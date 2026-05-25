@@ -11,7 +11,7 @@ import type {
   DeploymentStatus,
   IsoTimestamp,
   JsonObject,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 
 export type {
   Deployment,
@@ -28,7 +28,7 @@ export type {
   DeploymentStatus,
   GroupHead,
   ProviderObservation,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 
 // Public app manifest payloads. All shapes are open (index-signature) because
 // manifest fields are validated downstream by the compiler/normalizer, not by

@@ -8,9 +8,9 @@ import { Hono } from "hono";
 import {
   InMemoryRuntimeAgentRegistry,
   RuntimeAgentGatewayManifestIssuer,
-} from "takosumi-contract";
-import { registerRuntimeAgentRoutes } from "takosumi-contract";
-import type { TakosumiActorContext } from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
+import { registerRuntimeAgentRoutes } from "takosumi-contract/reference/compat";
+import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import { RuntimeAgentHttpClient } from "./client.ts";
 import { createProviderHandoff, shouldHandoff } from "./handoff.ts";
 import {

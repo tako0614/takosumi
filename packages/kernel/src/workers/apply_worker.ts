@@ -19,7 +19,7 @@ import type {
   GroupHead,
   IsoTimestamp,
   JsonObject,
-} from "takosumi-contract";
+} from "takosumi-contract/reference/compat";
 import type { AuditStore } from "../domains/audit/mod.ts";
 import type {
   DeploymentService,

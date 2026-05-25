@@ -18,7 +18,7 @@ export const AUDIENCES: readonly Audience[] = [
     persona:
       "自分のサービスを 自分の host で持ちたい。 SaaS に預けず、 自分で書いた app も 同じ Space に入れる。",
     exampleStack: "chat + agent + 自作 worker + DB",
-    cta: { label: "manifest を 書く", href: "/docs/manifest" },
+    cta: { label: "AppSpec を 書く", href: "/docs/reference/app-spec" },
   },
   {
     name: "小チーム / コミュニティ",

@@ -10,7 +10,7 @@ import {
   type GcpPubSubListResult,
   GcpPubSubProviderMaterializer,
 } from "../src/providers/gcp/mod.ts";
-import type { RuntimeDesiredState } from "takosumi-contract";
+import type { RuntimeDesiredState } from "takosumi-contract/reference/compat";
 
 const now = "2026-04-30T00:00:00.000Z";
 const clock = () => () => new Date(now);

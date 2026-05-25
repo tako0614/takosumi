@@ -8,10 +8,22 @@
   "imports": {
     "@cliffy/command": "jsr:@cliffy/command@^1.0.0-rc.7",
     "@std/yaml": "jsr:@std/yaml@^1.0.0",
-    "takosumi-contract": "jsr:@takos/takosumi-contract@^2.5.0",
-    "takosumi-contract/installer-api": "jsr:@takos/takosumi-contract@^2.5.0/installer-api",
+    "takosumi-contract": "jsr:@takos/takosumi-contract@^2.6.0",
+    "takosumi-contract/installer-api": "jsr:@takos/takosumi-contract@^2.6.0/installer-api",
     "@takos/takosumi-kernel": "jsr:@takos/takosumi-kernel@^0.14.0",
-    "@takos/takosumi-runtime-agent/embed": "jsr:@takos/takosumi-runtime-agent@^0.7.0/embed"
+    "@takos/takosumi-runtime-agent/embed": "jsr:@takos/takosumi-runtime-agent@^0.7.0/embed",
+    "takosumi-contract/app-spec": "jsr:@takos/takosumi-contract@^2.6.0/app-spec",
+    "takosumi-contract/reference/plugin": "jsr:@takos/takosumi-contract@^2.6.0/reference/plugin",
+    "takosumi-contract/reference/plugin-sdk": "jsr:@takos/takosumi-contract@^2.6.0/reference/plugin-sdk",
+    "takosumi-contract/reference/provider-plugin": "jsr:@takos/takosumi-contract@^2.6.0/reference/provider-plugin",
+    "takosumi-contract/reference/kernel-plugin-adapter": "jsr:@takos/takosumi-contract@^2.6.0/reference/kernel-plugin-adapter",
+    "takosumi-contract/reference/runtime-agent": "jsr:@takos/takosumi-contract@^2.6.0/reference/runtime-agent",
+    "takosumi-contract/reference/runtime-agent-lifecycle": "jsr:@takos/takosumi-contract@^2.6.0/reference/runtime-agent-lifecycle",
+    "takosumi-contract/internal/api": "jsr:@takos/takosumi-contract@^2.6.0/internal/api",
+    "takosumi-contract/internal/rpc": "jsr:@takos/takosumi-contract@^2.6.0/internal/rpc",
+    "takosumi-contract/reference/error-category": "jsr:@takos/takosumi-contract@^2.6.0/reference/error-category",
+    "takosumi-contract/reference/shape": "jsr:@takos/takosumi-contract@^2.6.0/reference/shape",
+    "takosumi-contract/reference/types": "jsr:@takos/takosumi-contract@^2.6.0/reference/types"
   },
   "tasks": {
     "run": "deno run -A src/main.ts",

@@ -1,4 +1,4 @@
-import type { provider } from "takosumi-contract";
+import type { provider } from "takosumi-contract/reference/compat";
 import type { CloudflareProviderClient } from "./clients.ts";
 
 export interface CloudflareHttpGatewayClientOptions {

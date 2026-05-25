@@ -1,8 +1,9 @@
 # Resource IDs
 
-Takosumi kernel が API response、audit event、snapshot、journal entry、CLI
-output に出す resource ID の grammar です。operator account-plane の actor /
-organization / billing ID は account-plane docs で扱います。
+Takosumi installer public wire と reference kernel evidence で使う resource ID
+の grammar です。public installer wire と reference-internal /
+operator-extension wire は stability scope が違います。operator account-plane の
+actor / organization / billing ID は account-plane docs で扱います。
 
 ## Grammar
 
@@ -19,53 +20,72 @@ organization / billing ID は account-plane docs で扱います。
   prefix を含めてよく、`generated` は owner resource ID を prefix として含めて
   よい。
 
-## Kernel-Owned And Operator-Extension ID Kinds
+## Public Installer Wire ID Kinds
 
-| Kind                             | Suffix                             | 説明                                                        |
-| -------------------------------- | ---------------------------------- | ----------------------------------------------------------- |
-| `space`                          | kebab-case                         | operator が指定する Space id。                              |
-| `installation`                   | ULID or stable name                | Space 内の Installation。                                   |
-| `deployment`                     | ULID                               | apply / rollback ごとに kernel が生成。                     |
-| `journal`                        | ULID                               | WAL entry。                                                 |
-| `operation`                      | ULID                               | OperationPlan entry。                                       |
-| `resolution`                     | `sha256:<hex>`                     | ResolutionSnapshot の content address。                     |
-| `desired`                        | `sha256:<hex>`                     | DesiredSnapshot の content address。                        |
-| `activation`                     | ULID                               | ActivationSnapshot。                                        |
-| `object`                         | kebab-case                         | materialized object の logical id。                         |
-| `link`                           | `<consumer>.<slot>`                | namespace / binding link。                                  |
-| `generated`                      | `<owner-kind>:<owner-id>/<reason>` | kernel 生成 object。                                        |
-| `exposure`                       | kebab-case                         | route / ingress exposure。                                  |
-| `revoke-debt`                    | ULID                               | RevokeDebt entry。                                          |
-| `approval`                       | ULID                               | approval record。                                           |
-| `connector`                      | kebab-case                         | runtime-agent connector id。                                |
-| `artifact`                       | `sha256:<hex>`                     | wire prefix for optional operator DataAsset record digest。 |
-| `policy`                         | `sha256:<hex>`                     | policy bundle digest。                                      |
-| `group`                          | kebab-case                         | rollout / activation group。                                |
-| `operator-implementation-config` | kebab-case or ULID                 | operator implementation / alias config evidence。           |
+| Kind           | Suffix              | 説明                                                                 |
+| -------------- | ------------------- | -------------------------------------------------------------------- |
+| `space`        | kebab-case          | operator が指定する Space id。                                       |
+| `installation` | ULID or stable name | Space 内の Installation。                                            |
+| `deployment`   | ULID                | apply ごとに kernel が生成。rollback は retained Deployment を参照。 |
+
+## Reference-Internal And Operator-Extension ID Kinds
+
+以下は reference kernel evidence、operator tooling、または optional extension の
+ID です。AppSpec shape と Installer API request / response shape が全
+implementation に要求する portable public spec であり、下表の ID
+はその外側です。
+
+| Kind                             | Suffix                             | 説明                                                                      |
+| -------------------------------- | ---------------------------------- | ------------------------------------------------------------------------- |
+| `journal`                        | ULID                               | WAL entry。                                                               |
+| `operation`                      | ULID                               | OperationPlan entry。                                                     |
+| `resolution`                     | `sha256:<hex>`                     | ResolutionSnapshot の content address。                                   |
+| `desired`                        | `sha256:<hex>`                     | DesiredSnapshot の content address。                                      |
+| `activation`                     | ULID                               | ActivationSnapshot。                                                      |
+| `object`                         | kebab-case                         | materialized object の logical id。                                       |
+| `link`                           | `<consumer>.<slot>`                | publication / binding link。                                              |
+| `generated`                      | `<owner-kind>:<owner-id>/<reason>` | kernel 生成 object。                                                      |
+| `exposure`                       | kebab-case                         | route / ingress exposure。                                                |
+| `revoke-debt`                    | ULID                               | RevokeDebt entry。                                                        |
+| `approval`                       | ULID                               | approval record。                                                         |
+| `connector`                      | kebab-case                         | runtime-agent connector id。                                              |
+| `artifact`                       | `sha256:<hex>`                     | compatibility wire prefix for optional operator DataAsset record digest。 |
+| `policy`                         | `sha256:<hex>`                     | policy bundle digest。                                                    |
+| `group`                          | kebab-case                         | rollout / activation group。                                              |
+| `operator-implementation-config` | kebab-case or ULID                 | operator implementation / alias config evidence。                         |
 
 ## Examples
 
 ```text
-space:acme-prod
-installation:01HM9N7XK4QY8RT2P5JZF6V3W9
-deployment:01HM9N7XK4QY8RT2P5JZF6V3WA
+space_acme_prod
+inst_01HM9N7XK4QY8RT2P5JZF6V3W9
+dep_01HM9N7XK4QY8RT2P5JZF6V3WA
+```
+
+Reference-internal / extension examples:
+
+```text
 journal:01HM9N7XK4QY8RT2P5JZF6V3WB
 operation:01HM9N7XK4QY8RT2P5JZF6V3WC
-resolution:sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+res_sha256_...
 desired:sha256:b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
-connector:cloudflare-workers
+conn_cloudflare_workers
 artifact:sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-operator-implementation-config:default
+operator_implementation_config_default
 ```
 
 ## Stability
 
-ID grammar is part of the public wire shape. Changing a kind name, suffix
-grammar, or delimiter is a breaking change and requires an RFC.
+Public installer wire ID grammar is part of the public wire shape. Changing
+`space` / `installation` / `deployment` kind names, suffix grammar, or delimiter
+is a breaking change and requires an RFC. Reference-internal and
+operator-extension IDs may evolve with the owning implementation or extension,
+but readers of reference kernel evidence must follow the grammar documented
+here.
 
 ## 関連ページ
 
-- [Closed Enums](./closed-enums.md)
+- [Enum and Value Index](./closed-enums.md)
 - [Storage Schema](./storage-schema.md)
 - [Digest Computation](./digest-computation.md)
 - [Connector Guide](./connector-contract.md)
