@@ -1,18 +1,15 @@
 # Reference Bootstrap {#operator-bootstrap}
 
-::: info 内部設計メモ
-public contract は [Installer API](../reference/installer-api.md) を参照。[Operator Overview](./index.md) から始めてください。
+::: info
+内部設計メモ public contract は [Installer API](../reference/installer-api.md) を参照。[Operator Overview](./index.md) から始めてください。
 :::
 
-このページは reference Takosumi 実装の bootstrap
-を設定します。この実装では kind を実行環境に接続する設定を `kindAliases` と
-reference adapter array (`plugins` option) として `createPaaSApp()` に渡します。
+このページは reference Takosumi 実装の bootstrap を設定します。この実装では kind を実行環境に接続する設定を `kindAliases` と reference adapter array (`plugins` option) として `createPaaSApp()` に渡します。
 
 - `kindAliases`: short alias → kind URI の解決 map
 - `plugins`: reference adapter factory の plain array
 
-credential は runtime-agent / operator host 側に置く。 Takosumi 互換の
-実装は別の接続方式を使えます。
+credential は runtime-agent / operator host 側に置く。 Takosumi 互換の実装は別の接続方式を使えます。
 
 ## 最小例
 
@@ -43,13 +40,11 @@ const { app } = await createPaaSApp({
 Deno.serve({ port: 8788 }, app.fetch);
 ```
 
-CLI (`takosumi server`) は stock dev/reference entrypoint です。カスタム
-provider を使うなら TypeScript bootstrap を直接書く。
+CLI (`takosumi server`) は stock dev/reference entrypoint です。カスタム provider を使うなら TypeScript bootstrap を直接書く。
 
 ## Provider package entrypoints
 
-reference provider adapter factory は cloud ごとの provider package の named export
-として公開されます。operator は必要な cloud の package だけを install します。
+reference provider adapter factory は cloud ごとの provider package の named export として公開されます。operator は必要な cloud の package だけを install します。
 
 - `@takos/takosumi-cloudflare-providers`
 - `@takos/takosumi-aws-providers`
@@ -69,16 +64,11 @@ reference provider adapter factory は cloud ごとの provider package の name
 | Selfhost    | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres` |
 | Deno Deploy | `@takos/deno-deploy`                                                                                                                           |
 
-各 factory は該当 cloud provider package
-(`@takos/takosumi-{cloudflare,aws,gcp,kubernetes,deno-deploy,selfhost}-providers`)
-の named export として取得します。operator は必要な cloud の package だけを別
-install します。
+各 factory は該当 cloud provider package (`@takos/takosumi-{cloudflare,aws,gcp,kubernetes,deno-deploy,selfhost}-providers`) の named export として取得します。operator は必要な cloud の package だけを別 install します。
 
 ## Runtime-agent との対応
 
-下表の `provider id` は operator wiring 由来の安定 id です。runtime-agent の
-connector 名は実行側の実装詳細で、operator は agent boot 時に必要な credential /
-local path を設定します。
+下表の `provider id` は operator wiring 由来の安定 id です。runtime-agent の connector 名は実行側の実装詳細で、operator は agent boot 時に必要な credential / local path を設定します。
 
 | provider id                      | runtime-agent connector の例    |
 | -------------------------------- | ------------------------------- |
@@ -113,14 +103,7 @@ const { app } = await createPaaSApp({
 });
 ```
 
-この構成では Manifest の reference component kind alias を self-host provider に
-解決します。public ingress を扱う distribution は、`gateway` kind を提供する
-provider adapter を同じ reference adapter array (`plugins` option)
-に追加します。 `selfhostDockerComposeWebServiceProvider` と
-`selfhostSystemdWebServiceProvider` はどちらも `web-service` kind
-を提供します。1 つの operator の設定で両方を有効にする場合は、Space policy /
-provider selector で一意に解決できるようにし
-ます。最小構成では片方だけを選びます。
+この構成では Manifest の reference component kind alias を self-host provider に解決します。public ingress を扱う distribution は、`gateway` kind を提供する provider adapter を同じ reference adapter array (`plugins` option) に追加します。 `selfhostDockerComposeWebServiceProvider` と `selfhostSystemdWebServiceProvider` はどちらも `web-service` kind を提供します。1 つの operator の設定で両方を有効にする場合は、Space policy / provider selector で一意に解決できるようにします。最小構成では片方だけを選びます。
 
 ## 関連ページ
 

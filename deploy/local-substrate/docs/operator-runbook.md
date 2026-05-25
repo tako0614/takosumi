@@ -42,10 +42,8 @@ sudo bash scripts/configure-dns.sh      # systemd-resolved per-domain split
 ### `curl: (6) Could not resolve host: hello.takosumi.test`
 
 - `dig hello.takosumi.test @127.0.0.1` で CoreDNS 自体が答えているか確認
-- 答えていれば systemd-resolved の per-domain split 未設定 →
-  `sudo bash scripts/configure-dns.sh`
-- 答えていなければ CoreDNS container が落ちている →
-  `docker compose -f compose.ingress.yml logs coredns`
+- 答えていれば systemd-resolved の per-domain split 未設定 → `sudo bash scripts/configure-dns.sh`
+- 答えていなければ CoreDNS container が落ちている → `docker compose -f compose.ingress.yml logs coredns`
 
 ### Caddy が cert を obtain できない
 
@@ -57,10 +55,7 @@ docker compose -f compose.ingress.yml logs caddy | grep -i "error\|acme"
 
 - `caddy/runtime/pebble.minica.pem` が無い → `bash scripts/up.sh` を再実行
 - Pebble が起動しきっていない → up.sh の `Waiting for Pebble` ループに任せる
-- 新しい hostname を `compose.ingress.yml` の Caddy network alias に追加した直後
-  → `docker compose -f compose.ingress.yml up -d --force-recreate caddy` で
-  Caddy container を作り直す。Caddyfile reload だけでは Docker network alias
-  は増えない。
+- 新しい hostname を `compose.ingress.yml` の Caddy network alias に追加した直後 → `docker compose -f compose.ingress.yml up -d --force-recreate caddy` で Caddy container を作り直す。Caddyfile reload だけでは Docker network alias は増えない。
 
 ### Caddy admin API への curl が refused
 

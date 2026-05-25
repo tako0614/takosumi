@@ -25,7 +25,7 @@ function shape(): Shape {
   return {
     id: SHAPE,
     version: "v1",
-    capabilities: ["c"],
+    capabilityTerms: ["c"],
     outputFields: ["url"],
     validateSpec(value, issues) {
       if (typeof value !== "object" || value === null) {

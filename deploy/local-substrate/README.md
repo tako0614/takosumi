@@ -1,15 +1,10 @@
 # local-substrate
 
-`*.takosumi.test` の DNS / TLS / ingress / OIDC / installer API / cloud emulator
-を すべて 1 つの docker network で完結させる cloud-independent test bed。
+`*.takosumi.test` の DNS / TLS / ingress / OIDC / installer API / cloud emulator をすべて 1 つの docker network で完結させる cloud-independent test bed。
 
-Takosumi の deploy / account-plane / cloud-worker surface を、 public network
-依存ゼロで踏むための integration test bed。Takos product の dev stack や product
-distribution は各 product repo 側の責務で、ここでは direct service と
-して起動しない。
+Takosumi の deploy / account-plane / cloud-worker surface を、 public network 依存ゼロで踏むための integration test bed。Takos product の dev stack や product distribution は各 product repo 側の責務で、ここでは direct service として起動しない。
 
-Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native
-Windows は対象外。
+Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native Windows は対象外。
 
 ## Phases
 
@@ -20,31 +15,20 @@ Windows は対象外。
 | 2     | LocalStack / k3d / fake-gcs / Azurite / miniflare を `compose.emulators.yml` 1 本で並行統合 | `scripts/smoke.sh` 全 cloud fixture が pass                                  |
 | 3     | factory で endpoint override + Caddy admin route registrar + 公開面 deny 多重防御           | dynamic subdomain が deploy 直後に hit する + `prove-no-public-leak.sh` pass |
 
-現在 Phase 0–3 まで実装済み。`scripts/smoke.sh` は canonical installer 5
-endpoint surface も含めて検証する。
+現在 Phase 0–3 まで実装済み。`scripts/smoke.sh` は canonical installer 5 endpoint surface も含めて検証する。
 
 ## Scope — Takosumi-only
 
-この test bed は **Takosumi (kernel + Accounts + cloud worker + dashboard)** の
-integration test 専用。 Takos product (`takos-app`) や bundled app (yurucommu)
-の動作確認は各 repo 内の test に任せる:
+この test bed は **Takosumi (kernel + Accounts + cloud worker + dashboard)** の integration test 専用。 Takos product (`takos-app`) や bundled app (yurucommu) の動作確認は各 repo 内の test に任せる:
 
 - `takos/` — Takos product 固有の test (deno task test / Playwright 等)
 - `yurucommu/` — yurucommu 固有の test
 
-外部 app の `.takosumi.yml` 由来 fixture を installer mock で使う
-ことはあるが、それは Takosumi の install contract を検証するための入力 fixture
-です。該当 product を local-substrate の service
-として直起動する運用は扱わない。 「Takosumi 経由で yurucommu / takos-app を
-install して deploy する」 統合 シナリオは別タスク
-(`@takos/local-miniflare-workers` connector 実装が前提、 TODO-SMOKE.md
-筆頭参照)。
+外部 app の `.takosumi.yml` 由来 fixture を installer mock で使うことはあるが、それは Takosumi の install contract を検証するための入力 fixture です。該当 product を local-substrate の service として直起動する運用は扱わない。「Takosumi 経由で yurucommu / takos-app を install して deploy する」統合シナリオは別タスク (`@takos/local-miniflare-workers` connector 実装が前提、 TODO-SMOKE.md 筆頭参照)。
 
 ## Current smoke coverage (29 checks)
 
-`scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして
-deploy しても 99% 動く」 を目標に、 honest pass のみを数える。 各 ファイル詳細は
-[TODO-SMOKE.md](TODO-SMOKE.md) と script header を参照。
+`scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして deploy しても 99% 動く」を目標に、 honest pass のみを数える。各ファイル詳細は [TODO-SMOKE.md](TODO-SMOKE.md) と script header を参照。
 
 | 範疇            | 件数 | 代表 check                                                                                                |
 | --------------- | ---: | --------------------------------------------------------------------------------------------------------- |
@@ -65,16 +49,9 @@ deploy しても 99% 動く」 を目標に、 honest pass のみを数える。
 | mailpit         |    1 | `mailpit` (SMTP catcher reachable + probe email delivered)                                                |
 | stripe          |    1 | `stripe.webhook.e2e` (HMAC verify + idempotency + tolerance)                                              |
 
-加えて vitest 4 case (COSE/JWK decode) + worker_test.ts 30 case (issuer policy +
-IPv6/CGNAT + fail-closed + R2 route-level signed export / malformed URL /
-data-bearing refusal) + Playwright 2 spec (install wizard happy path + TLS trust
-regression) を CI で並列実行する。公開面 / egress の companion gate として
-`scripts/prove-no-public-leak.sh` も用意している。
+加えて vitest 4 case (COSE/JWK decode) + worker_test.ts 30 case (issuer policy + IPv6/CGNAT + fail-closed + R2 route-level signed export / malformed URL / data-bearing refusal) + Playwright 2 spec (install wizard happy path + TLS trust regression) を CI で並列実行する。公開面 / egress の companion gate として `scripts/prove-no-public-leak.sh` も用意している。
 
-CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml`
-を参照。 3 job (smoke / vitest / playwright) が submodule checkout 経由で
-takosumi + takosumi-cloud を揃え、 ca-install.sh の sudo run + Pebble root の
-NSS install を含めた full chain を毎 PR で再現する。
+CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml` を参照。 3 job (smoke / vitest / playwright) が submodule checkout 経由で takosumi + takosumi-cloud を揃え、 ca-install.sh の sudo run + Pebble root の NSS install を含めた full chain を毎 PR で再現する。
 
 ## Quick start
 
@@ -105,8 +82,7 @@ curl https://kernel-worker.takosumi.test/healthz  # postgres profile mirror
 curl https://kernel.takosumi.test/healthz         # workers profile
 ```
 
-詳細は [docs/root-ca-install.md](docs/root-ca-install.md) と
-[docs/operator-runbook.md](docs/operator-runbook.md)。
+詳細は [docs/root-ca-install.md](docs/root-ca-install.md) と [docs/operator-runbook.md](docs/operator-runbook.md)。
 
 ## ファイル layout
 
@@ -147,9 +123,7 @@ takosumi/deploy/local-substrate/
 
 ## Browser trust (Chrome / Firefox 上で `.test` を踏める状態にする)
 
-Pebble は毎回 root CA を再生成するので、 ホストの trust store にも、 Chrome /
-Firefox の NSS DB にも root を入れる必要がある。 `ca-install.sh`
-は両方を一括で処理する:
+Pebble は毎回 root CA を再生成するので、ホストの trust store にも、 Chrome / Firefox の NSS DB にも root を入れる必要がある。 `ca-install.sh` は両方を一括で処理する:
 
 ```bash
 sudo bash deploy/local-substrate/scripts/ca-install.sh
@@ -157,46 +131,30 @@ sudo bash deploy/local-substrate/scripts/ca-install.sh
 
 実行後の手動確認 checklist:
 
-- [ ] Chromium / Chrome を完全終了 (タスクトレイ含む) → 再起動 →
-      `https://takosumi.test/` で privacy error が出ないこと
+- [ ] Chromium / Chrome を完全終了 (タスクトレイ含む) → 再起動 → `https://takosumi.test/` で privacy error が出ないこと
 - [ ] 同じく `https://cloud.takosumi.test/` が緑鍵で開くこと
 - [ ] Firefox (snap か deb どちらでも) を再起動 → 同様に確認
-- [ ] `scripts/up.sh` で Pebble を再起動した場合は root が rotation
-      されているので、 `sudo bash scripts/ca-install.sh` を再実行 +
-      ブラウザ再起動
+- [ ] `scripts/up.sh` で Pebble を再起動した場合は root が rotation されているので、 `sudo bash scripts/ca-install.sh` を再実行 + ブラウザ再起動
 
-`certutil` が無い場合 `sudo` ありで実行すれば `libnss3-tools` を 自動 install
-する。 非 sudo で実行すると system trust は skip、 NSS DB のみ更新する (NSS は
-per-user)。
+`certutil` が無い場合 `sudo` ありで実行すれば `libnss3-tools` を自動 install する。非 sudo で実行すると system trust は skip、 NSS DB のみ更新する (NSS は per-user)。
 
 最後に手動 verification した日付を以下に記録:
 
-| 日付     | Chrome | Firefox (snap) | 確認者 | 環境 | メモ                                                                                                                                       |
-| -------- | ------ | -------------- | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| _未確認_ | _-_    | _-_            | _-_    | _-_  | _CI (.github/workflows/local-substrate-smoke.yml) で毎 PR 自動実行されている (smoke + dashboard-ui-playwright job)。 ローカル目視は別途要_ |
+| 日付     | Chrome | Firefox (snap) | 確認者 | 環境 | メモ                                                                                                                                      |
+| -------- | ------ | -------------- | ------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| _未確認_ | _-_    | _-_            | _-_    | _-_  | _CI (.github/workflows/local-substrate-smoke.yml) で毎 PR 自動実行されている (smoke + dashboard-ui-playwright job)。ローカル目視は別途要_ |
 
 CI で自動検証されるパス:
 
 - ecosystem-root の `.github/workflows/local-substrate-smoke.yml`
-  - `smoke` job:
-    `up.sh → sudo bash scripts/ca-install.sh → bash scripts/smoke.sh`
-  - `dashboard-ui-playwright` job: 同 install + Playwright が
-    **`ignoreHTTPSErrors=false`** で Chromium が Pebble 経由の cert を NSS DB
-    から validate するかを assert
+  - `smoke` job: `up.sh → sudo bash scripts/ca-install.sh → bash scripts/smoke.sh`
+  - `dashboard-ui-playwright` job: 同 install + Playwright が **`ignoreHTTPSErrors=false`** で Chromium が Pebble 経由の cert を NSS DB から validate するかを assert
   - `dashboard-ui-vitest` job: COSE/JWK unit test
 
-ローカル目視は dev iteration の中で実行し、 上記 table に行追加して commit
-する。
+ローカル目視は dev iteration の中で実行し、上記 table に行追加して commit する。
 
 ## 制約
 
-- **公開面は絶対に出さない**: ACME は Pebble 固定、 DNS は CoreDNS 固定、
-  emulator は内部 network。 Phase 3 で多重防御 guard と
-  `prove-no-public-leak.sh` を追加
-- **実 cloud compute は credentials で叩いてよい**: emulator 無し compute
-  (Fargate / Cloud Run / Container Apps / Cloudflare Container) は `.env` に
-  credentials を入れた場合に限り real cloud を呼ぶ。 default では factory が
-  register せず "provider not configured" で fail させる
-- **Takosumi-owned fixture に閉じる**: endpoint override は
-  `deploy/local-substrate/factories/` と local wrapper に閉じ、 Takos product
-  service をこの compose topology に戻さない
+- **公開面は絶対に出さない**: ACME は Pebble 固定、 DNS は CoreDNS 固定、 emulator は内部 network。 Phase 3 で多重防御 guard と `prove-no-public-leak.sh` を追加
+- **実 cloud compute は credentials で叩いてよい**: emulator 無し compute (Fargate / Cloud Run / Container Apps / Cloudflare Container) は `.env` に credentials を入れた場合に限り real cloud を呼ぶ。 default では factory が register せず "provider not configured" で fail させる
+- **Takosumi-owned fixture に閉じる**: endpoint override は `deploy/local-substrate/factories/` と local wrapper に閉じ、 Takos product service をこの compose topology に戻さない

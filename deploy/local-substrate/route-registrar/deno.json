@@ -4,6 +4,6 @@
   "license": "AGPL-3.0-only",
   "exports": "./mod.ts",
   "tasks": {
-    "start": "deno run --allow-net --allow-env mod.ts"
+    "start": "deno run --allow-net --allow-env --allow-read=/local-substrate-runtime/gateway-routes.json mod.ts"
   }
 }

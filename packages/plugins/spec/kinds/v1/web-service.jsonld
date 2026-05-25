@@ -67,13 +67,14 @@
   "listens": {
     "*": {
       "accepts": [
+        "http-endpoint",
         "service-binding",
         "object-store",
         "event-channel",
         "identity.oidc@v1",
         "billing.port@v1"
       ],
-      "projectionFamilies": ["secret-env", "config-mount"]
+      "projectionFamilies": ["env", "secret-env", "config-mount", "upstream"]
     }
   },
   "outputs": [

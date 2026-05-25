@@ -9,12 +9,13 @@ set -euo pipefail
 NETWORK="local-substrate_takos-local-internal"
 USER="${MINIO_ROOT_USER:-takos}"
 PASS="${MINIO_ROOT_PASSWORD:-takos-minio-pw}"
+MC_TIMEOUT="${MINIO_MC_TIMEOUT:-30s}"
 BUCKET="smoke-$(date +%s)"
 PAYLOAD="hello takos minio $(date -u +%FT%TZ) $RANDOM"
 EXPECTED=$(echo -n "$PAYLOAD" | sha256sum | head -c 64)
 
 mc() {
-	docker run --rm \
+	timeout "$MC_TIMEOUT" docker run --rm \
 		--network "$NETWORK" \
 		-e MC_HOST_takos="http://${USER}:${PASS}@minio:9000" \
 		minio/mc:latest "$@"
@@ -24,7 +25,7 @@ mc() {
 mc mb -q takos/"$BUCKET" >/dev/null
 
 # 2. Put blob
-echo -n "$PAYLOAD" | docker run --rm -i \
+echo -n "$PAYLOAD" | timeout "$MC_TIMEOUT" docker run --rm -i \
 	--network "$NETWORK" \
 	-e MC_HOST_takos="http://${USER}:${PASS}@minio:9000" \
 	minio/mc:latest pipe takos/"$BUCKET"/blob >/dev/null

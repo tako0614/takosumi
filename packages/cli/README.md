@@ -1,7 +1,6 @@
 # @takos/takosumi-cli
 
-Operator CLI for the Takosumi self-host PaaS toolkit. Wraps the kernel HTTP API
-and the runtime-agent embed for a single-command dev experience.
+Operator CLI for the Takosumi self-host PaaS toolkit. Wraps the kernel HTTP API and the runtime-agent embed for a single-command dev experience.
 
 ## Install
 
@@ -33,8 +32,7 @@ takosumi deploy <installation-id> --source .
 takosumi rollback <installation-id> <deployment-id>
 ```
 
-> The public surface is AppSpec (`.takosumi.yml`), Installation, and Deployment.
-> The CLI calls the five installer endpoints under `/v1/installations/*`.
+> The public surface is AppSpec (`.takosumi.yml`), Installation, and Deployment. The CLI calls the five installer endpoints under `/v1/installations/*`.
 
 ## Commands
 
@@ -74,17 +72,11 @@ Priority (highest first):
 | `TAKOSUMI_DEV_MODE=1`                         | dev opt-out: plaintext secrets / unencrypted DB / unsafe defaults |
 | `TAKOSUMI_LOG_LEVEL=warn`                     | suppress dev-mode in-memory fallback notices                      |
 
-See
-[`docs/getting-started/quickstart.md`](../../docs/getting-started/quickstart.md)
-for full multi-host production setup, cloud credential placement, and
-troubleshooting.
+See [`docs/getting-started/quickstart.md`](../../docs/getting-started/quickstart.md) for full multi-host production setup, cloud credential placement, and troubleshooting.
 
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
 - [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)
 
-> The `@takos/` JSR scope is the reference Takosumi distribution published by
-> Takos. The contract is the authority. Alternative publishers such as
-> `@example/takosumi-cli` can ship compatible CLI implementations; current
-> verification covers the reference distribution.
+> The `@takos/` JSR scope is the reference Takosumi distribution published by Takos. The contract is the authority. Alternative publishers such as `@example/takosumi-cli` can ship compatible CLI implementations; current verification covers the reference distribution.

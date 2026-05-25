@@ -36,6 +36,23 @@ Deno.test("defaultEnvInjection expands env-shape material with a prefix", () => 
   });
 });
 
+Deno.test("defaultEnvInjection as: secret-env strips secret Ref suffix from env names", () => {
+  const material: NamespaceMaterial = {
+    issuerUrl: "https://accounts.example.test",
+    clientId: "client_test",
+    clientSecretRef: { secretRef: "secret://oidc/client-secret" },
+  };
+  const injection = defaultEnvInjection(
+    { from: "operator.identity.oidc", as: "secret-env", prefix: "OIDC" },
+    material,
+  );
+  assert.deepEqual(injection.env, {
+    OIDC_ISSUER_URL: "https://accounts.example.test",
+    OIDC_CLIENT_ID: "client_test",
+    OIDC_CLIENT_SECRET: { secretRef: "secret://oidc/client-secret" },
+  });
+});
+
 Deno.test("defaultEnvInjection without prefix emits bare upper-snake keys", () => {
   const material: NamespaceMaterial = { url: "https://w.example/" };
   const injection = defaultEnvInjection(

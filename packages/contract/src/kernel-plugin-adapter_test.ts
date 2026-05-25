@@ -72,6 +72,59 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into l
   });
 });
 
+Deno.test("kernelPluginFromProviderPlugin publishes provider outputs as namespace material", async () => {
+  const provider: ProviderPlugin = {
+    id: "@test/postgres",
+    version: "1.0.0",
+    implements: { id: "postgres", version: "v1" },
+    capabilities: [],
+    apply: () =>
+      Promise.resolve({
+        handle: "postgres://db",
+        outputs: {
+          host: "db.internal",
+          port: 5432,
+          passwordSecretRef: "secret://postgres/password",
+          configRef: "config://postgres",
+        },
+      }),
+    destroy: () => Promise.resolve(),
+    status: () =>
+      Promise.resolve({
+        kind: "ready",
+        observedAt: "2026-05-21T00:00:00.000Z",
+      }),
+  };
+  const plugin = kernelPluginFromProviderPlugin({
+    provider,
+    kindUri: "https://takosumi.com/kinds/v1/postgres",
+  });
+
+  const material = await plugin.publishMaterial!({
+    installationId: "ins_1",
+    componentName: "db",
+    component: {
+      kind: "postgres",
+      publish: { connection: { as: "service-binding" } },
+    },
+    publicationName: "connection",
+    options: { as: "service-binding" },
+    outputs: {
+      host: "db.internal",
+      port: 5432,
+      passwordSecretRef: "secret://postgres/password",
+      configRef: "config://postgres",
+    },
+  });
+
+  assert.deepEqual(material, {
+    host: "db.internal",
+    port: 5432,
+    passwordSecretRef: { secretRef: "secret://postgres/password" },
+    configRef: "config://postgres",
+  });
+});
+
 Deno.test("kernelPluginFromProviderPlugin rejects explicit env collision", async () => {
   const provider: ProviderPlugin = {
     id: "@test/web",

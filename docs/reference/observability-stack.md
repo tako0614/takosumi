@@ -1,22 +1,19 @@
 # Observability スタックの責務 {#observability-stack-ownership}
 
-Takosumi は signal の形状と emission を定義・出力します。Prometheus、
-OpenTelemetry Collector、Grafana、log backend、paging provider などの運用 stack
-は operator が管理します。
+Takosumi は signal の形状と emission を定義・出力します。Prometheus、 OpenTelemetry Collector、Grafana、log backend、paging provider などの運用 stack は operator が管理します。
 
 ## Takosumi が出力する signal
 
-| Signal             | Takosumi の責務                                                       |
-| ------------------ | --------------------------------------------------------------------- |
-| Readiness          | `/livez` / `/readyz` / `/status/summary` の response shape。          |
-| Metrics            | metric 名、label、unit、`/metrics`、OTLP metric export。              |
-| Traces             | HTTP server / WAL / リソースの作成・更新 / runtime-agent RPC span。   |
-| Logs               | request id propagation、JSON request log envelope、redaction rule。   |
-| Audit              | audit event envelope、hash chain、retention / replication primitive。 |
+| Signal                 | Takosumi の責務                                                       |
+| ---------------------- | --------------------------------------------------------------------- |
+| Readiness              | `/livez` / `/readyz` / `/status/summary` の response shape。          |
+| Metrics                | metric 名、label、unit、`/metrics`、OTLP metric export。              |
+| Traces                 | HTTP server / WAL / リソースの作成・更新 / runtime-agent RPC span。   |
+| Logs                   | request id propagation、JSON request log envelope、redaction rule。   |
+| Audit                  | audit event envelope、hash chain、retention / replication primitive。 |
 | Drift / CleanupBacklog | drift detection と cleanup debt の signal。                           |
 
-alert rule、paging routing、public status page、customer comms、commercial
-credit policy は operator が管理します。
+alert rule、paging routing、public status page、customer comms、commercial credit policy は operator が管理します。
 
 ## Minimal self-host topology
 
@@ -29,8 +26,7 @@ audit_events           -> SQL + optional immutable archive
 
 ## SLI starting points
 
-これらは operator が alert policy を作るための出発点です。SLO は operator policy
-として決めます。
+これらは operator が alert policy を作るための出発点です。SLO は operator policy として決めます。
 
 | SLI                  | Measurement                                        | Initial target      |
 | -------------------- | -------------------------------------------------- | ------------------- |
@@ -40,19 +36,14 @@ audit_events           -> SQL + optional immutable archive
 | API 5xx-free ratio   | non-5xx HTTP requests / all HTTP requests          | >= 99.9%            |
 | Audit chain health   | hash-chain verification failures                   | 0                   |
 
-deploy 量が少ない環境では minimum event count を併用し、1 件の失敗で page しない
-よう調整してください。
+deploy 量が少ない環境では minimum event count を併用し、1 件の失敗で page しないよう調整してください。
 
 ## Bootstrap checklist
 
-1. `TAKOSUMI_METRICS_SCRAPE_TOKEN` を設定し、private Prometheus identity から
-   `/metrics` を scrape する。
-2. OTLP を使う場合は `TAKOSUMI_OTLP_METRICS_ENDPOINT` /
-   `TAKOSUMI_OTLP_TRACES_ENDPOINT` を設定する。
-3. log collector 側で JSON request log を取り込み、secret / token を index し
-   ない redaction policy を置く。
-4. production では audit replication と hash-chain verification を運用手順に
-   入れる。
+1. `TAKOSUMI_METRICS_SCRAPE_TOKEN` を設定し、private Prometheus identity から `/metrics` を scrape する。
+2. OTLP を使う場合は `TAKOSUMI_OTLP_METRICS_ENDPOINT` / `TAKOSUMI_OTLP_TRACES_ENDPOINT` を設定する。
+3. log collector 側で JSON request log を取り込み、secret / token を index しない redaction policy を置く。
+4. production では audit replication と hash-chain verification を運用手順に入れる。
 5. operator-owned alert rule と on-call routing を設定する。
 
 ## 関連ページ

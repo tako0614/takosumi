@@ -57,6 +57,7 @@ Deno.test("CloudflareDnsConnector.apply rejects malformed result.id in API respo
       connector.apply({
         shape: "gateway@v1",
         provider: "@takos/cloudflare-dns",
+        spaceId: "space_test",
         resourceName: "rs",
         spec: gatewaySpec("app.example.com", "lb.example.com"),
       }, {}),
@@ -82,6 +83,7 @@ Deno.test("CloudflareDnsConnector.apply creates record and returns id handle", a
   const res = await connector.apply({
     shape: "gateway@v1",
     provider: "@takos/cloudflare-dns",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: gatewaySpec("app.example.com", "lb.example.com"),
   }, {});

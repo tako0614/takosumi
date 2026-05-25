@@ -1,12 +1,9 @@
 # Root CA install + DNS split (Linux native)
 
-`https://*.takosumi.test` を Pebble-issued cert で local termination するため、
-host に 2 つの設定を一回だけ入れる:
+`https://*.takosumi.test` を Pebble-issued cert で local termination するため、 host に 2 つの設定を一回だけ入れる:
 
-1. Pebble issuance root を host trust store に追加 (curl / chrome / firefox
-   が緑鍵で verify するため)
-2. systemd-resolved を `*.takosumi.test → 127.0.0.1` で per-domain split (host
-   から CoreDNS に流すため)
+1. Pebble issuance root を host trust store に追加 (curl / chrome / firefox が緑鍵で verify するため)
+2. systemd-resolved を `*.takosumi.test → 127.0.0.1` で per-domain split (host から CoreDNS に流すため)
 
 両方とも対応 script があるので、 `up.sh` 後に下記を一回流せばよい:
 
@@ -29,9 +26,7 @@ sudo cp caddy/runtime/pebble-issuance-root.pem \
 sudo update-ca-certificates
 ```
 
-Pebble は restart のたびに issuance root を regenerate するので、 stack を
-完全に tear down (`docker compose down -v`) した後に再起動した場合は
-`ca-install.sh` を再実行する。 既存の `.crt` は上書きされる。
+Pebble は restart のたびに issuance root を regenerate するので、 stack を完全に tear down (`docker compose down -v`) した後に再起動した場合は `ca-install.sh` を再実行する。既存の `.crt` は上書きされる。
 
 ### systemd-resolved per-domain split
 
@@ -45,9 +40,7 @@ EOF
 sudo systemctl restart systemd-resolved
 ```
 
-`~takosumi.test` の leading tilde は 「`takosumi.test` で終わるクエリ **のみ**
-この DNS server に送る」 の意。 他の DNS 解決は通常の path を踏むので WAN
-解決が壊れない。
+`~takosumi.test` の leading tilde は「`takosumi.test` で終わるクエリ **のみ** この DNS server に送る」の意。他の DNS 解決は通常の path を踏むので WAN 解決が壊れない。
 
 設定を解除する場合は config を消して resolved を再起動する:
 

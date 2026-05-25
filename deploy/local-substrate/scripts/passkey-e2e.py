@@ -32,82 +32,19 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, utils as ec_utils
 
 import atexit
-import subprocess
 
 SUBSTRATE_DIR = Path(__file__).resolve().parent.parent
 CA_PATH = SUBSTRATE_DIR / "caddy" / "runtime" / "pebble-issuance-root.pem"
 
 
 def cleanup_subject(subject: str | None, credential_id: str | None) -> None:
-    """Remove the test-created subject and passkey credential from D1.
-    Backend doesn't expose DELETE endpoints for either yet, so we go
-    straight to the sqlite file via docker cp + python sqlite3.
-
-    Best-effort — if docker isn't available (CI without docker-in-docker)
-    we skip the cleanup with a stderr breadcrumb so D1 accumulation is
-    visible but the smoke itself is not affected.
-    """
+    """Leave test-created records in D1 until the backend has cleanup APIs."""
     if not subject and not credential_id:
         return
-    docker_ok = subprocess.run(
-        ["docker", "info"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    sys.stderr.write(
+        "[passkey-e2e] cleanup skipped: no safe live D1 delete API yet; "
+        "records are isolated by random subject/credential ids\n",
     )
-    if docker_ok.returncode != 0:
-        sys.stderr.write(
-            "[passkey-e2e] cleanup skipped: docker daemon not reachable "
-            "(D1 will accumulate test entries; harmless for next run)\n",
-        )
-        return
-    try:
-        sqlite_path = subprocess.check_output(
-            [
-                "docker", "exec", "local-substrate-takosumi-cloud-worker-1",
-                "sh", "-c", "find /data/d1 -name '*.sqlite' | head -1",
-            ],
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
-        if not sqlite_path:
-            return
-        subprocess.run(
-            ["docker", "cp",
-             f"local-substrate-takosumi-cloud-worker-1:{sqlite_path}",
-             "/tmp/d1-cleanup.sqlite"],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        import sqlite3
-        con = sqlite3.connect("/tmp/d1-cleanup.sqlite")
-        # The document column is JSON. Use json_extract so a stray
-        # 'credentialId' or 'subject' substring inside unrelated text
-        # can't accidentally widen the DELETE.
-        try:
-            cur = con.cursor()
-            if credential_id:
-                cur.execute(
-                    "DELETE FROM takosumi_accounts_documents "
-                    "WHERE json_extract(document, '$.credentialId') = ?",
-                    (credential_id,),
-                )
-            if subject:
-                cur.execute(
-                    "DELETE FROM takosumi_accounts_documents "
-                    "WHERE json_extract(document, '$.subject') = ?",
-                    (subject,),
-                )
-            con.commit()
-        finally:
-            con.close()
-        subprocess.run(
-            ["docker", "cp", "/tmp/d1-cleanup.sqlite",
-             f"local-substrate-takosumi-cloud-worker-1:{sqlite_path}"],
-            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except Exception as exc:
-        sys.stderr.write(
-            f"[passkey-e2e] cleanup best-effort failed: {exc}\n",
-        )
 
 
 # Mutable holder so atexit can read the final subject/credential

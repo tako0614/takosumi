@@ -133,6 +133,7 @@ Deno.test(
     const result = await connector.apply({
       shape: "worker@v1",
       provider: "@takos/deno-deploy",
+      spaceId: "space_test",
       resourceName: "fn",
       spec: {
         entrypoint: "src/worker.js",
@@ -192,6 +193,7 @@ Deno.test(
     await connector.apply({
       shape: "worker@v1",
       provider: "@takos/deno-deploy",
+      spaceId: "space_test",
       resourceName: "fn",
       spec: {
         entrypoint: "worker.js",
@@ -221,6 +223,7 @@ Deno.test(
       await connector.apply({
         shape: "worker@v1",
         provider: "@takos/deno-deploy",
+        spaceId: "space_test",
         resourceName: "fn",
         spec: {
           entrypoint: "worker.js",
@@ -259,6 +262,7 @@ Deno.test(
     const ok = await connector.destroy({
       shape: "worker@v1",
       provider: "@takos/deno-deploy",
+      spaceId: "space_test",
       handle: "org/fn",
     }, {});
     assert.equal(ok.ok, true);
@@ -269,6 +273,7 @@ Deno.test(
     const missing = await connector.destroy({
       shape: "worker@v1",
       provider: "@takos/deno-deploy",
+      spaceId: "space_test",
       handle: "org/fn",
     }, {});
     assert.equal(missing.ok, true);
@@ -296,6 +301,7 @@ Deno.test(
     const running = await connector.describe({
       shape: "worker@v1",
       provider: "@takos/deno-deploy",
+      spaceId: "space_test",
       handle: "org/fn",
     }, {});
     assert.equal(running.status, "running");
@@ -308,6 +314,7 @@ Deno.test(
     const missing = await connector.describe({
       shape: "worker@v1",
       provider: "@takos/deno-deploy",
+      spaceId: "space_test",
       handle: "org/fn",
     }, {});
     assert.equal(missing.status, "missing");

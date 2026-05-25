@@ -28,6 +28,8 @@ import { parseSelfhostWebServiceSpec } from "../_spec.ts";
 export interface DockerComposeConnectorOptions {
   readonly hostBinding?: string;
   readonly hostPortStart?: number;
+  readonly network?: string;
+  readonly extraHosts?: readonly string[];
   /** Override for tests: replacement for `Deno.Command`. */
   readonly command?: typeof Deno.Command;
 }
@@ -47,12 +49,16 @@ export class DockerComposeConnector implements Connector {
   readonly shape = "web-service@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #hostBinding: string;
+  readonly #network?: string;
+  readonly #extraHosts: readonly string[];
   readonly #portAlloc: () => number;
   readonly #command: typeof Deno.Command;
   readonly #services = new Map<string, ServiceDescriptor>();
 
   constructor(opts: DockerComposeConnectorOptions = {}) {
     this.#hostBinding = opts.hostBinding ?? "localhost";
+    this.#network = opts.network;
+    this.#extraHosts = opts.extraHosts ?? [];
     this.#portAlloc = createPortAllocator(opts.hostPortStart ?? 18080);
     this.#command = opts.command ?? Deno.Command;
   }
@@ -66,7 +72,10 @@ export class DockerComposeConnector implements Connector {
     if (!image) {
       throw new Error("web-service spec requires `image` or `artifact.uri`");
     }
-    const serviceName = serviceNameFromImage(image);
+    const serviceName = containerNameFromRequest(
+      serviceNameFromImage(image),
+      req,
+    );
     const env = { ...(spec.env ?? {}), ...(spec.bindings ?? {}) };
 
     let lastErr = "";
@@ -81,6 +90,8 @@ export class DockerComposeConnector implements Connector {
           "unless-stopped",
           "--name",
           serviceName,
+          ...networkFlags(this.#network),
+          ...extraHostFlags(this.#extraHosts),
           "-p",
           `${hostPort}:${spec.port}`,
           ...envFlags(env),
@@ -106,6 +117,15 @@ export class DockerComposeConnector implements Connector {
         };
       }
       lastErr = new TextDecoder().decode(stderr);
+      if (isContainerNameConflictError(lastErr)) {
+        const outputs = await this.#outputsFromDockerInspect(serviceName);
+        if (outputs) {
+          return {
+            handle: serviceName,
+            outputs,
+          };
+        }
+      }
       if (!isPortAllocationError(lastErr)) {
         throw new Error(`docker run failed for ${serviceName}: ${lastErr}`);
       }
@@ -145,10 +165,8 @@ export class DockerComposeConnector implements Connector {
     if (code !== 0) return { status: "missing" };
     const text = new TextDecoder().decode(stdout).trim();
     if (!text) return { status: "missing" };
-    let parsed: DockerInspect;
-    try {
-      parsed = JSON.parse(text) as DockerInspect;
-    } catch {
+    const parsed = parseDockerInspect(text);
+    if (!parsed) {
       return { status: "missing" };
     }
     const status = parsed.State?.Status;
@@ -206,6 +224,21 @@ export class DockerComposeConnector implements Connector {
       internalPort,
     };
   }
+
+  async #outputsFromDockerInspect(
+    handle: string,
+  ): Promise<JsonObject | undefined> {
+    const cmd = new this.#command("docker", {
+      args: ["inspect", handle, "--format", "{{json .}}"],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stdout } = await cmd.output();
+    if (code !== 0) return undefined;
+    const parsed = parseDockerInspect(new TextDecoder().decode(stdout).trim());
+    if (!parsed || parsed.State?.Status !== "running") return undefined;
+    return this.#outputsFromInspect(handle, parsed);
+  }
 }
 
 interface DockerInspect {
@@ -224,6 +257,12 @@ function isPortAllocationError(stderr: string): boolean {
     lower.includes("port already in use");
 }
 
+function isContainerNameConflictError(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return lower.includes("container name") &&
+    lower.includes("is already in use");
+}
+
 function envFlags(env: Readonly<Record<string, string>> | undefined): string[] {
   if (!env) return [];
   const flags: string[] = [];
@@ -231,12 +270,55 @@ function envFlags(env: Readonly<Record<string, string>> | undefined): string[] {
   return flags;
 }
 
+function networkFlags(network: string | undefined): string[] {
+  return network ? ["--network", network] : [];
+}
+
+function extraHostFlags(extraHosts: readonly string[]): string[] {
+  return extraHosts.flatMap((entry) => ["--add-host", entry]);
+}
+
 function serviceNameFromImage(image: string): string {
   const tail = image.split("/").at(-1)?.split(":")[0] ?? "web-service";
   return tail.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
 }
 
+function containerNameFromRequest(
+  baseServiceName: string,
+  req: LifecycleApplyRequest,
+): string {
+  const base = baseServiceName.replace(/^-+|-+$/g, "") || "web-service";
+  const safeBase = base.length > 42
+    ? base.slice(0, 42).replace(/-+$/g, "")
+    : base;
+  const seed = [
+    req.spaceId,
+    req.resourceName,
+    req.idempotencyKey ?? "",
+    base,
+  ].join("\n");
+  return `${safeBase}-${hashSuffix(seed)}`;
+}
+
+function hashSuffix(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36).padStart(7, "0");
+}
+
 function createPortAllocator(start: number): () => number {
   let next = start;
   return () => next++;
+}
+
+function parseDockerInspect(text: string): DockerInspect | undefined {
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text) as DockerInspect;
+  } catch {
+    return undefined;
+  }
 }

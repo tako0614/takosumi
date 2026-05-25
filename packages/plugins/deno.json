@@ -23,6 +23,7 @@
     "./shape-providers/database-postgres/aws-rds": "./src/shape-providers/database-postgres/aws-rds.ts",
     "./shape-providers/database-postgres/cloud-sql": "./src/shape-providers/database-postgres/cloud-sql.ts",
     "./shape-providers/database-postgres/local-docker": "./src/shape-providers/database-postgres/local-docker.ts",
+    "./shape-providers/gateway/coredns-local": "./src/shape-providers/gateway/coredns-local.ts",
     "./shape-providers/gateway/cloudflare-dns": "./src/shape-providers/gateway/cloudflare-dns.ts",
     "./shape-providers/gateway/route53": "./src/shape-providers/gateway/route53.ts",
     "./runtime-agent": "./src/runtime-agent/mod.ts"

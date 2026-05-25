@@ -246,7 +246,7 @@ components:
           return {
             issuerUrl: "https://accounts.example.test",
             clientId: "client_test",
-            clientSecret: { secretRef: "secret://oidc/client-secret" },
+            clientSecretRef: { secretRef: "secret://oidc/client-secret" },
           };
         },
       },
@@ -265,7 +265,7 @@ components:
       oidc: {
         issuerUrl: "https://accounts.example.test",
         clientId: "client_test",
-        clientSecret: { secretRef: "secret://oidc/client-secret" },
+        clientSecretRef: { secretRef: "secret://oidc/client-secret" },
       },
     }]);
   }, spec);

@@ -68,6 +68,7 @@ Deno.test("LocalDockerPostgresConnector.apply runs `docker run postgres:<version
   const res = await connector.apply({
     shape: "postgres@v1",
     provider: "@takos/selfhost-postgres",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: { version: "16" },
   }, {});
@@ -98,6 +99,7 @@ Deno.test("LocalDockerPostgresConnector.apply retries on port-allocation collisi
   const res = await connector.apply({
     shape: "postgres@v1",
     provider: "@takos/selfhost-postgres",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: { version: "16" },
   }, {});
@@ -120,6 +122,7 @@ Deno.test("LocalDockerPostgresConnector.apply throws on non-port docker errors w
       connector.apply({
         shape: "postgres@v1",
         provider: "@takos/selfhost-postgres",
+        spaceId: "space_test",
         resourceName: "rs",
         spec: { version: "16" },
       }, {}),
@@ -151,6 +154,7 @@ Deno.test("LocalDockerPostgresConnector.describe queries `docker inspect` and re
   const res = await connector.describe({
     shape: "postgres@v1",
     provider: "@takos/selfhost-postgres",
+    spaceId: "space_test",
     handle: "pg-app-abc123",
   }, {});
   assert.equal(res.status, "running");
@@ -174,6 +178,7 @@ Deno.test("LocalDockerPostgresConnector.describe returns missing when docker ins
   const res = await connector.describe({
     shape: "postgres@v1",
     provider: "@takos/selfhost-postgres",
+    spaceId: "space_test",
     handle: "pg-app-missing",
   }, {});
   assert.equal(res.status, "missing");
@@ -190,6 +195,7 @@ Deno.test("LocalDockerPostgresConnector.describe survives without prior apply (r
   const res = await connector.describe({
     shape: "postgres@v1",
     provider: "@takos/selfhost-postgres",
+    spaceId: "space_test",
     handle: "pg-app-fromdisk",
   }, {});
   assert.equal(res.status, "running");

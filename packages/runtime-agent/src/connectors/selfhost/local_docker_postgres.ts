@@ -27,6 +27,7 @@ import { parsePostgresVersionSpec } from "../_spec.ts";
 export interface LocalDockerPostgresConnectorOptions {
   readonly hostBinding?: string;
   readonly hostPortStart?: number;
+  readonly authMode?: "password" | "trust";
   readonly databaseName?: string;
   readonly username?: string;
   readonly secretRefBase?: string;
@@ -50,6 +51,7 @@ export class LocalDockerPostgresConnector implements Connector {
   readonly shape = "postgres@v1";
   readonly acceptedArtifactKinds: readonly string[] = ["oci-image"];
   readonly #hostBinding: string;
+  readonly #authMode: "password" | "trust";
   readonly #portAlloc: () => number;
   readonly #dbName: string;
   readonly #user: string;
@@ -60,6 +62,7 @@ export class LocalDockerPostgresConnector implements Connector {
 
   constructor(opts: LocalDockerPostgresConnectorOptions = {}) {
     this.#hostBinding = opts.hostBinding ?? "localhost";
+    this.#authMode = opts.authMode ?? "password";
     this.#portAlloc = createPortAllocator(opts.hostPortStart ?? 15432);
     this.#dbName = opts.databaseName ?? "app";
     this.#user = opts.username ?? "app";
@@ -97,6 +100,7 @@ export class LocalDockerPostgresConnector implements Connector {
           `POSTGRES_USER=${this.#user}`,
           "-e",
           `POSTGRES_PASSWORD=${password}`,
+          ...postgresAuthEnvFlags(this.#authMode),
           `postgres:${spec.version}`,
         ],
         stdout: "null",
@@ -256,6 +260,10 @@ function parseEnv(entries: readonly string[]): Record<string, string> {
     out[key] = value;
   }
   return out;
+}
+
+function postgresAuthEnvFlags(authMode: "password" | "trust"): string[] {
+  return authMode === "trust" ? ["-e", "POSTGRES_HOST_AUTH_METHOD=trust"] : [];
 }
 
 function createPortAllocator(start: number): () => number {

@@ -56,6 +56,8 @@ export function buildLocalSubstrateRegistry(
   reg.register(
     new DockerComposeConnector({
       hostBinding: env.TAKOSUMI_SELFHOSTED_DOCKER_HOST_BINDING,
+      network: env.TAKOSUMI_SELFHOSTED_DOCKER_NETWORK,
+      extraHosts: parseList(env.TAKOSUMI_SELFHOSTED_DOCKER_ADD_HOSTS),
     }),
   );
   reg.register(
@@ -78,6 +80,9 @@ export function buildLocalSubstrateRegistry(
   reg.register(
     new LocalDockerPostgresConnector({
       hostBinding: env.TAKOSUMI_SELFHOSTED_POSTGRES_HOST,
+      authMode: env.TAKOSUMI_SELFHOSTED_POSTGRES_AUTH_MODE === "trust"
+        ? "trust"
+        : "password",
     }),
   );
 

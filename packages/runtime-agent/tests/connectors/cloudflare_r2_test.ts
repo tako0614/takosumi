@@ -59,6 +59,7 @@ Deno.test("CloudflareR2Connector.apply POSTs to R2 buckets endpoint", async () =
   const res = await connector.apply({
     shape: "object-store@v1",
     provider: "@takos/cloudflare-r2",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: { name: "tenant-data" },
   }, {});

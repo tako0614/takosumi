@@ -53,6 +53,7 @@ Deno.test("CloudDnsConnector.apply POSTs CNAME RRSet to managed zone", async () 
   const res = await connector.apply({
     shape: "gateway@v1",
     provider: "@takos/gcp-cloud-dns",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: gatewaySpec("app.example.com", "lb.example.com"),
   }, {});

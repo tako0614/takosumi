@@ -1,14 +1,8 @@
 # @takos/takosumi-runtime-agent
 
-Executor / data plane for the Takosumi self-host PaaS toolkit. Receives
-lifecycle envelopes (apply / destroy / describe / verify) from the kernel over
-HTTP and dispatches to the right per-provider connector, which makes the actual
-cloud REST API call (SigV4 / OAuth / Cloudflare API token / Azure ARM /
-Kubernetes / etc) or local OS call (`docker`, `systemd`, filesystem).
+Executor / data plane for the Takosumi self-host PaaS toolkit. Receives lifecycle envelopes (apply / destroy / describe / verify) from the kernel over HTTP and dispatches to the right per-provider connector, which makes the actual cloud REST API call (SigV4 / OAuth / Cloudflare API token / Azure ARM / Kubernetes / etc) or local OS call (`docker`, `systemd`, filesystem).
 
-Cloud / OS credentials stay outside the kernel. In the takosumi.com reference
-topology they typically live in the runtime-agent process; another
-operator-owned execution host can enforce the same boundary.
+Cloud / OS credentials stay outside the kernel. In the takosumi.com reference topology they typically live in the runtime-agent process; another operator-owned execution host can enforce the same boundary.
 
 ## Install
 
@@ -40,14 +34,11 @@ takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 | `POST` | `/v1/lifecycle/describe`   | bearer-auth: query resource state                                                   |
 | `POST` | `/v1/lifecycle/verify`     | bearer-auth: read-only credential check per connector (optionally filtered by body) |
 
-Auth is a single bearer token, shared with the kernel via
-`TAKOSUMI_AGENT_TOKEN`.
+Auth is a single bearer token, shared with the kernel via `TAKOSUMI_AGENT_TOKEN`.
 
 ## Reference connector examples
 
-The takosumi.com reference runtime-agent ships connector examples for common
-provider families. A connector is registered when the operator enables it and
-provides the required env / boot config.
+The takosumi.com reference runtime-agent ships connector examples for common provider families. A connector is registered when the operator enables it and provides the required env / boot config.
 
 | Group      | Connectors                                                                                                                                                                |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -58,9 +49,7 @@ provides the required env / boot config.
 | Deno       | `@takos/deno-deploy`                                                                                                                                                      |
 | Self-host  | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres`, `@takos/selfhost-coredns` |
 
-External connector examples may use the same lifecycle envelope. For example,
-`@takos/azure-container-apps` can implement `web-service@v1` outside the current
-reference provider package set.
+External connector examples may use the same lifecycle envelope. For example, `@takos/azure-container-apps` can implement `web-service@v1` outside the current reference provider package set.
 
 Each connector implements:
 
@@ -82,22 +71,11 @@ interface Connector {
 }
 ```
 
-The `shape` and `provider` fields are connector-local wire selectors. The
-operator adapter derives them from its kind-to-execution binding before sending
-a lifecycle request.
+The `shape` and `provider` fields are connector-local wire selectors. The operator adapter derives them from its kind-to-execution binding before sending a lifecycle request.
 
-Source-backed connectors, such as `worker@v1`, read files from
-`LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset/artifact
-handling is an optional operator extension: connectors may use `ctx.fetcher`
-when their implementation-specific selector expects uploaded or external asset
-metadata, but DataAsset metadata values are connector-owned metadata rather than
-Takosumi AppSpec concepts. The compatibility wire may call that value `kind`.
+Source-backed connectors, such as `worker@v1`, read files from `LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset/artifact handling is an optional operator extension: connectors may use `ctx.fetcher` when their implementation-specific selector expects uploaded or external asset metadata, but DataAsset metadata values are connector-owned metadata rather than Takosumi AppSpec concepts. The compatibility wire may call that value `kind`.
 
-`compensate` is the recovery hook for partially applied effects recorded in the
-kernel WAL. Connectors that can reverse an effect more precisely than
-handle-keyed deletion should implement it. When the hook is absent, the
-dispatcher falls back to `destroy`; if cleanup cannot be completed, the response
-can set `revokeDebtRequired` so the kernel keeps operator-visible cleanup debt.
+`compensate` is the recovery hook for partially applied effects recorded in the kernel WAL. Connectors that can reverse an effect more precisely than handle-keyed deletion should implement it. When the hook is absent, the dispatcher falls back to `destroy`; if cleanup cannot be completed, the response can set `revokeDebtRequired` so the kernel keeps operator-visible cleanup debt.
 
 ## Cloud credentials (per connector)
 
@@ -113,40 +91,22 @@ The agent reads env at startup. Set what you need:
 | Deno Deploy     | `DENO_DEPLOY_ACCESS_TOKEN`, `DENO_DEPLOY_ORGANIZATION_ID`                                                 |
 | Self-host       | `TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT`, `TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR`, etc.                     |
 
-A cloud's connectors are skipped (not registered) when its required env vars are
-missing — operator can `takosumi runtime-agent verify` to confirm which
-connectors are live.
+A cloud's connectors are skipped (not registered) when its required env vars are missing — operator can `takosumi runtime-agent verify` to confirm which connectors are live.
 
 ## Connector resilience
 
-`buildConnectorRegistry()` wraps registered connectors with bounded resilience
-by default. Transient HTTP statuses (`408`, `425`, `429`, `5xx` allowlist) and
-network errors are retried with exponential backoff. Provider rejections such as
-`400` / validation errors fail fast.
+`buildConnectorRegistry()` wraps registered connectors with bounded resilience by default. Transient HTTP statuses (`408`, `425`, `429`, `5xx` allowlist) and network errors are retried with exponential backoff. Provider rejections such as `400` / validation errors fail fast.
 
-Operators that can rotate or refresh credentials may pass
-`ConnectorBootOptions.resilience.refreshCredentials`; the wrapper invokes it
-before retrying one credential-looking failure such as `HTTP 401` or an expired
-token error. Pass `resilience: false` to keep raw connector behavior in tests or
-specialized deployments.
+Operators that can rotate or refresh credentials may pass `ConnectorBootOptions.resilience.refreshCredentials`; the wrapper invokes it before retrying one credential-looking failure such as `HTTP 401` or an expired token error. Pass `resilience: false` to keep raw connector behavior in tests or specialized deployments.
 
 ## Implementation note
 
-All cloud REST calls are made via `fetch()` + `crypto.subtle` (Web Crypto). No
-npm SDK packages are pulled in; SigV4 / OAuth bearer / Service-account JWT
-signing is internal. This keeps the agent Deno-runtime-pure and the install
-surface small.
+All cloud REST calls are made via `fetch()` + `crypto.subtle` (Web Crypto). No npm SDK packages are pulled in; SigV4 / OAuth bearer / Service-account JWT signing is internal. This keeps the agent Deno-runtime-pure and the install surface small.
 
 ## See also
 
-- [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel) — control
-  plane that talks to this agent
-- [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — runs
-  `takosumi runtime-agent serve`
-- [`@takos/takosumi-contract/reference/runtime-agent-lifecycle`](https://jsr.io/@takos/takosumi-contract/doc/reference/runtime-agent-lifecycle)
-  — defines `LifecycleApplyRequest` etc. for the reference lifecycle envelope.
+- [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel) — control plane that talks to this agent
+- [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — runs `takosumi runtime-agent serve`
+- [`@takos/takosumi-contract/reference/runtime-agent-lifecycle`](https://jsr.io/@takos/takosumi-contract/doc/reference/runtime-agent-lifecycle) — defines `LifecycleApplyRequest` etc. for the reference lifecycle envelope.
 
-> The `@takos/` JSR scope is the reference Takosumi distribution published by
-> Takos. The contract is the authority. Contract-compatible publishers such as
-> `@example/takosumi-runtime-agent` can ship their own runtime-agent
-> implementations; current verification covers the reference distribution.
+> The `@takos/` JSR scope is the reference Takosumi distribution published by Takos. The contract is the authority. Contract-compatible publishers such as `@example/takosumi-runtime-agent` can ship their own runtime-agent implementations; current verification covers the reference distribution.

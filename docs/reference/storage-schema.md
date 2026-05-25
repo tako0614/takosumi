@@ -1,37 +1,30 @@
 # ストレージスキーマ {#storage-schema}
 
-::: info 内部設計メモ
-public contract は [Installer API](./installer-api.md) を参照。
+::: info
+内部設計メモ public contract は [Installer API](./installer-api.md) を参照。
 :::
 
-このページは Takosumi core records と reference/operator extension records の
-索引です。実際の storage backend は Postgres / SQLite / D1 / in-memory など
-operator が選べます。
+このページは Takosumi core records と reference/operator extension records の索引です。実際の storage backend は Postgres / SQLite / D1 / in-memory など operator が選べます。
 
-Account、billing、OIDC issuer、customer onboarding、support workflow の record
-は operator account layer 側の storage schema に置きます。
+Account、billing、OIDC issuer、customer onboarding、support workflow の record は operator account layer 側の storage schema に置きます。
 
 ## Core Records
 
 | Record         | 役割                                                                                                             |
 | -------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `Installation` | manifest が Space に installed された core record。current pointer を持つ。                                       |
+| `Installation` | manifest が Space に installed された core record。current pointer を持つ。                                      |
 | `Deployment`   | 1 回の apply / rollback target になる result record。source identity、status、public/non-secret outputs を持つ。 |
 
 ## Reference Kernel Retained Evidence Records
 
-| Record               | 役割                                                                                          |
-| -------------------- | --------------------------------------------------------------------------------------------- |
-| `ResolvedPlan` | manifest component、kind、provider、publish の出力 / binding の解決結果を固定する。               |
-| `TargetState`    | apply で実現したい desired state。provider side effect の input になる。                      |
-| `OperationPlan`      | Deployment で実行する operation の順序と依存関係。                                            |
+| Record            | 役割                                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------------------- |
+| `ResolvedPlan`    | manifest component、kind、provider、publish の出力 / binding の解決結果を固定する。             |
+| `TargetState`     | apply で実現したい desired state。provider side effect の input になる。                        |
+| `OperationPlan`   | Deployment で実行する operation の順序と依存関係。                                              |
 | `TrafficSnapshot` | active routing / traffic assignment。health は ObservationState と retained evidence 側に残す。 |
 
-snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明するための
-内部 record です。public Deployment wire に portable な
-top-level `evidence` field はありません。rollback は retained Deployment を
-current pointer として再選択し、rollback metadata / audit を記録します。
-Deployment record は追加しません。
+snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明するための内部 record です。public Deployment wire に portable な top-level `evidence` field はありません。rollback は retained Deployment を current pointer として再選択し、rollback metadata / audit を記録します。 Deployment record は追加しません。
 
 ## Core Journal And Lock Records
 
@@ -41,21 +34,18 @@ Deployment record は追加しません。
 | `InstallerLeaseLock` | Installation 単位の apply / rollback 排他制御。                           |
 | `LockRecord`         | cross-process lock adapter が使う generic lock row。                      |
 
-詳細は [WAL Stages](./wal-stages.md) と
-[Cross-Process Locks](./cross-process-locks.md)。
+詳細は [WAL Stages](./wal-stages.md) と [Cross-Process Locks](./cross-process-locks.md)。
 
 ## Reference Policy And Safety Records
 
-| Record           | 役割                                              |
-| ---------------- | ------------------------------------------------- |
-| `Approval`       | operator approval が必要な operation の承認状態。 |
-| `CleanupBacklog`     | revoke が必要だが即時反映できなかった状態の追跡。 |
-| `DriftIndex`     | observed state と desired state の drift index。  |
+| Record             | 役割                                              |
+| ------------------ | ------------------------------------------------- |
+| `Approval`         | operator approval が必要な operation の承認状態。 |
+| `CleanupBacklog`   | revoke が必要だが即時反映できなかった状態の追跡。 |
+| `DriftIndex`       | observed state と desired state の drift index。  |
 | `ObservationState` | provider / runtime observation の現在値。         |
 
-これらは reference implementation が apply / observe / recovery を fail-safe に
-進めるための record です。顧客向け approval UI や account role model は operator
-account layer に置きます。
+これらは reference implementation が apply / observe / recovery を fail-safe に進めるための record です。顧客向け approval UI や account role model は operator account layer に置きます。
 
 ## Reference Implementation, Connector, And asset Records
 
@@ -63,24 +53,19 @@ account layer に置きます。
 | ------------------------------ | ------------------------------------------------------------------------------------ |
 | `OperatorImplementationConfig` | operator が attach した kind alias / provider implementation / connector inventory。 |
 | `ImplementationRegistry`       | operator が attach した provider implementation / connector の registry view。       |
-| `ConnectorDescriptor`          | runtime-agent connector の id、accepted asset metadata、health。                 |
-| `assetRecord`              | optional operator asset extension の digest、size、retention metadata。          |
+| `ConnectorDescriptor`          | runtime-agent connector の id、accepted asset metadata、health。                     |
+| `assetRecord`                  | optional operator asset extension の digest、size、retention metadata。              |
 | `SecretPartitionReference`     | secret store partition の logical reference。secret value は secret backend に置く。 |
 
-asset retention は [asset GC](./data-asset-gc.md)、connector envelope は
-[Connector Guide](./connector-contract.md)。
+asset retention は [asset GC](./data-asset-gc.md)、connector envelope は [Connector Guide](./connector-contract.md)。
 
 ## Audit
 
-`AuditLogEvent` は kernel operation の audit envelope です。event type と
-payload の詳細は [Audit Events](./audit-events.md) にあります。
+`AuditLogEvent` は kernel operation の audit envelope です。event type と payload の詳細は [Audit Events](./audit-events.md) にあります。
 
 ## 実装の自由度
 
-この schema は logical model です。backend 固有の table 名、index 名、
-partitioning、compaction strategy は実装の自由度に含まれます。Takosumi core の
-portable record は Installation と Deployment です。下の項目は reference kernel
-や operator ledger が採用する consistency / audit pattern です。
+この schema は logical model です。backend 固有の table 名、index 名、 partitioning、compaction strategy は実装の自由度に含まれます。Takosumi core の portable record は Installation と Deployment です。下の項目は reference kernel や operator ledger が採用する consistency / audit pattern です。
 
 - Deployment を再構成できる snapshot と journal を保持する。
 - apply / rollback の同時実行を lock で防ぐ。

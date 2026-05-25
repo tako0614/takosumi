@@ -107,7 +107,19 @@ docker compose -f compose.ingress.yml cp \
 	caddy/runtime/pebble.minica.pem
 
 echo "==> Capturing Pebble issuance root (host will use to verify certs issued by Pebble)"
+old_issuance_root_hash=""
+if [[ -f caddy/runtime/pebble-issuance-root.pem ]]; then
+	old_issuance_root_hash="$(sha256sum caddy/runtime/pebble-issuance-root.pem | awk '{print $1}')"
+fi
 curl -sk https://127.0.0.1:15000/roots/0 -o caddy/runtime/pebble-issuance-root.pem
+new_issuance_root_hash="$(sha256sum caddy/runtime/pebble-issuance-root.pem | awk '{print $1}')"
+if [[ "${TAKOSUMI_LOCAL_SUBSTRATE_REFRESH_CADDY_ACME_CACHE:-1}" == "1" ||
+	( -n "$old_issuance_root_hash" && "$old_issuance_root_hash" != "$new_issuance_root_hash" ) ]]; then
+	echo "==> Refreshing Caddy ACME cache"
+	docker compose -f compose.ingress.yml stop caddy >/dev/null 2>&1 || true
+	docker compose -f compose.ingress.yml rm -f -s caddy >/dev/null 2>&1 || true
+	docker volume rm local-substrate_caddy-data local-substrate_caddy-config >/dev/null 2>&1 || true
+fi
 
 echo "==> Starting Caddy"
 docker compose -f compose.ingress.yml up -d caddy

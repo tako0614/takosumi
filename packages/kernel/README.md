@@ -1,10 +1,6 @@
 # @takos/takosumi-kernel
 
-Control plane for the Takosumi self-host PaaS toolkit. Receives AppSpec install
-and deployment requests over HTTP and runs the apply pipeline (DAG-ordered,
-idempotent, concurrency-locked). The takosumi.com reference adapters forward
-lifecycle envelopes to runtime-agent; other operator bindings can use native
-controllers or operator-owned execution hosts.
+Control plane for the Takosumi self-host PaaS toolkit. Receives AppSpec install and deployment requests over HTTP and runs the apply pipeline (DAG-ordered, idempotent, concurrency-locked). The takosumi.com reference adapters forward lifecycle envelopes to runtime-agent; other operator bindings can use native controllers or operator-owned execution hosts.
 
 The kernel never holds cloud credentials.
 
@@ -14,8 +10,7 @@ The kernel never holds cloud credentials.
 deno run -A jsr:@takos/takosumi-kernel
 ```
 
-Most operators run the kernel via the CLI:
-[`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) (`takosumi server`).
+Most operators run the kernel via the CLI: [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) (`takosumi server`).
 
 ## Public installer endpoints
 
@@ -28,16 +23,10 @@ Most operators run the kernel via the CLI:
 ## Operator / internal extensions
 
 - Optional `/v1/artifacts*` routes — operator DataAsset extension
-- `/api/internal/v1/runtime/agents/*` — runtime-agent fleet enrollment / lease /
-  heartbeat
-- `applyV2` — DAG topological apply with idempotency (spec fingerprint),
-  rollback on partial failure, concurrency lock per `(tenant, deployment)`
+- `/api/internal/v1/runtime/agents/*` — runtime-agent fleet enrollment / lease / heartbeat
+- `applyV2` — DAG topological apply with idempotency (spec fingerprint), rollback on partial failure, concurrency lock per `(tenant, deployment)`
 - `destroyV2` — reverse-order teardown with persisted handle resolution
-- `TakosumiDeploymentRecordStore` — persists internal apply evidence: AppSpec
-  digest / source summary, component JSON outputs, internal operation/resource
-  evidence, and status. SQL backend via `TAKOSUMI_DATABASE_URL` also persists
-  installer lifecycle state and OperationPlan WAL stage records; in-memory
-  fallback is dev / test only.
+- `TakosumiDeploymentRecordStore` — persists internal apply evidence: AppSpec digest / source summary, component JSON outputs, internal operation/resource evidence, and status. SQL backend via `TAKOSUMI_DATABASE_URL` also persists installer lifecycle state and OperationPlan WAL stage records; in-memory fallback is dev / test only.
 
 ## Required env (production)
 
@@ -71,7 +60,7 @@ const { app, context, role } = await createPaaSApp({
       return {
         issuerUrl: "https://accounts.example.test",
         clientId: "client_123",
-        clientSecret: { secretRef: "secret://oidc/client-secret" },
+        clientSecretRef: { secretRef: "secret://oidc/client-secret" },
       };
     },
   },
@@ -83,45 +72,26 @@ Deno.serve({ port: 8788 }, app.fetch);
 `createPaaSApp` does:
 
 1. Loads runtime config from env
-2. Registers optional DataAsset metadata used by DataAsset extension routes.
-   Component kind descriptors and providers are operator-supplied. Cloud-backed
-   reference `KernelPlugin` adapter factories are imported separately from
-   `@takos/takosumi-<cloud>-providers` packages and attached via
-   `plugins: [...]` plus an operator `kindAliases` map when short aliases are
-   desired.
-3. Builds `AppContext` with adapter ports (auth / kms / secrets / queue /
-   storage / observability / objectStorage / runtimeAgentRegistry / etc)
-4. Passes `externalPublications` to the Installer pipeline so ordinary external
-   `listen.from` paths such as `operator.identity.oidc` resolve to
-   operator-owned material.
+2. Registers optional DataAsset metadata used by DataAsset extension routes. Component kind descriptors and providers are operator-supplied. Cloud-backed reference `KernelPlugin` adapter factories are imported separately from `@takos/takosumi-<cloud>-providers` packages and attached via `plugins: [...]` plus an operator `kindAliases` map when short aliases are desired.
+3. Builds `AppContext` with adapter ports (auth / kms / secrets / queue / storage / observability / objectStorage / runtimeAgentRegistry / etc)
+4. Passes `externalPublications` to the Installer pipeline so ordinary external `listen.from` paths such as `operator.identity.oidc` resolve to operator-owned material.
 5. Mounts the route modules that match the configured process role:
-   - `takosumi-api` → internal + installer + readiness + openapi; DataAsset
-     routes are mounted only when the operator enables that extension
+   - `takosumi-api` → internal + installer + readiness + openapi; DataAsset routes are mounted only when the operator enables that extension
    - `takosumi-worker` → readiness + worker daemon
    - `takosumi-runtime-agent` → runtime-agent fleet routes
 6. Returns the Hono app
 
 ## Adapter ports
 
-`AppContext.adapters` exposes 15 pluggable adapter ports (auth, kms, secrets,
-queue, storage, observability, objectStorage, etc). All are optional in dev —
-the kernel logs which ports fell back to in-memory at boot. In production /
-staging, missing strict-runtime ports fail the boot.
+`AppContext.adapters` exposes 15 pluggable adapter ports (auth, kms, secrets, queue, storage, observability, objectStorage, etc). All are optional in dev — the kernel logs which ports fell back to in-memory at boot. In production / staging, missing strict-runtime ports fail the boot.
 
-See [`packages/kernel/src/app_context.ts`](./src/app_context.ts) for the full
-list.
+See [`packages/kernel/src/app_context.ts`](./src/app_context.ts) for the full list.
 
 ## See also
 
-- [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)
-  — lifecycle execution host
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official
-  catalog helpers + reference adapter helpers
+- [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) — lifecycle execution host
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official catalog helpers + reference adapter helpers
 - [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — operator CLI
-- [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) —
-  AppSpec / Installer API wire types
+- [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) — AppSpec / Installer API wire types
 
-> The `@takos/` JSR scope is the reference Takosumi distribution published by
-> Takos. Authority lives in the contract. Alternative publishers such as
-> `@example/takosumi-kernel` can ship compatible kernel implementations; current
-> verification covers the reference distribution.
+> The `@takos/` JSR scope is the reference Takosumi distribution published by Takos. Authority lives in the contract. Alternative publishers such as `@example/takosumi-kernel` can ship compatible kernel implementations; current verification covers the reference distribution.

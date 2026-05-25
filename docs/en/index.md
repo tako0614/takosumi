@@ -48,26 +48,25 @@ For specification details, see [Specification Boundaries](./reference/spec-bound
 
 ## Core Model
 
-See [Concepts](./getting-started/concepts.md) for details on the three public
-concepts: Manifest, Installation, and Deployment.
+See [Concepts](./getting-started/concepts.md) for details on the three public concepts: Manifest, Installation, and Deployment.
 
-| Concept      | Meaning                                                                         |
-| ------------ | ------------------------------------------------------------------------------- |
-| Manifest     | The `.takosumi.yml` file. Declares your app's components and connections.       |
-| Installation | The record of a Manifest installed into a Space. Holds current state.           |
-| Deployment   | One apply result. Kept as history; you can roll back to a previous Deployment.  |
+| Concept      | Meaning                                                                        |
+| ------------ | ------------------------------------------------------------------------------ |
+| Manifest     | The `.takosumi.yml` file. Declares your app's components and connections.      |
+| Installation | The record of a Manifest installed into a Space. Holds current state.          |
+| Deployment   | One apply result. Kept as history; you can roll back to a previous Deployment. |
 
 ## Common References
 
-| Goal                                                            | Page                                                          |
-| --------------------------------------------------------------- | ------------------------------------------------------------- |
-| Read the whole core contract                                    | [Core Specification](./reference/core-spec.md)                |
-| Write `.takosumi.yml`                                           | [Manifest](./reference/manifest.md)                           |
-| Look up available component types                               | [Kind Catalog](./reference/type-catalog.md)          |
-| Use services provided by the operator                           | [Platform Services](./reference/external-publications.md) |
-| Read Takosumi Cloud account management APIs and facade behavior | [Takosumi Cloud](./reference/takosumi-cloud.md)               |
-| Check the core / catalog / Cloud boundary                       | [Specification Boundaries](./reference/spec-boundaries.md)    |
-| Call install / deploy / rollback automation                     | [Installer API](./reference/installer-api.md)                 |
-| Inspect CLI commands and environment variables                  | [CLI](./reference/cli.md)                                     |
-| Expose your app on a public URL                                 | [HTTP Exposure](./reference/http-exposure.md)                 |
-| Deploy from CI or a build service                               | [Build Service Boundary](./reference/build-spec.md)           |
+| Goal                                                            | Page                                                       |
+| --------------------------------------------------------------- | ---------------------------------------------------------- |
+| Read the whole core contract                                    | [Core Specification](./reference/core-spec.md)             |
+| Write `.takosumi.yml`                                           | [Manifest](./reference/manifest.md)                        |
+| Look up available component types                               | [Kind Catalog](./reference/type-catalog.md)                |
+| Use services provided by the operator                           | [Platform Services](./reference/external-publications.md)  |
+| Read Takosumi Cloud account management APIs and facade behavior | [Takosumi Cloud](./reference/takosumi-cloud.md)            |
+| Check the core / catalog / Cloud boundary                       | [Specification Boundaries](./reference/spec-boundaries.md) |
+| Call install / deploy / rollback automation                     | [Installer API](./reference/installer-api.md)              |
+| Inspect CLI commands and environment variables                  | [CLI](./reference/cli.md)                                  |
+| Expose your app on a public URL                                 | [HTTP Exposure](./reference/http-exposure.md)              |
+| Deploy from CI or a build service                               | [Build Service Boundary](./reference/build-spec.md)        |

@@ -59,6 +59,7 @@ Deno.test("CloudflareContainerConnector.apply uses returned URL when present", a
   const res = await connector.apply({
     shape: "web-service@v1",
     provider: "@takos/cloudflare-container",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: {
       image: "registry/app:1",

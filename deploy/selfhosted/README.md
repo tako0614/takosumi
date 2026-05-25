@@ -1,14 +1,8 @@
 # Takosumi Kernel — selfhost reference distribution
 
-Substrate-neutral counterpart to `deploy/cloudflare/`. Brings up the full
-Takosumi PaaS kernel + runtime-agent + Postgres + MinIO + Caddy on any Docker
-host (single VM, container host, k8s pod via kompose).
+Substrate-neutral counterpart to `deploy/cloudflare/`. Brings up the full Takosumi PaaS kernel + runtime-agent + Postgres + MinIO + Caddy on any Docker host (single VM, container host, k8s pod via kompose).
 
-The kernel here is the same `packages/kernel/src/index.ts` that ships to
-Cloudflare Workers. It uses the runtime-neutral `RuntimeAdapter` under
-`packages/kernel/src/shared/runtime/` and so runs identically on Deno (this
-distribution), Node 22+ (via Deno's Node compat), and Cloudflare Workers (via
-`deploy/cloudflare/`).
+The kernel here is the same `packages/kernel/src/index.ts` that ships to Cloudflare Workers. It uses the runtime-neutral `RuntimeAdapter` under `packages/kernel/src/shared/runtime/` and so runs identically on Deno (this distribution), Node 22+ (via Deno's Node compat), and Cloudflare Workers (via `deploy/cloudflare/`).
 
 ## Quick start
 
@@ -56,30 +50,15 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 - `Dockerfile.kernel` — kernel image (Deno + workspace bundle)
 - `Dockerfile.runtime-agent` — runtime-agent image (Deno + connector tree)
 - `Caddyfile.example` — reverse proxy + automatic HTTPS template
-- `schema.sql` — initial Postgres schema (loaded by
-  `docker-entrypoint-initdb.d`)
+- `schema.sql` — initial Postgres schema (loaded by `docker-entrypoint-initdb.d`)
 - `.env.example` — template for required secrets
 
 ## Operator notes
 
-- The kernel exposes `/v1/installations*` as the canonical installer API. CLI /
-  GitHub Actions / custom CI all use that 5 endpoint surface with an installer
-  bearer token.
-- `runtime-agent` receives provider apply / destroy calls from the kernel and
-  dispatches them to the bundled connector tree under
-  `packages/runtime-agent/src/connectors/`. The selfhost connectors
-  (`docker_compose`, `local_docker_postgres`, `filesystem`, `minio`,
-  `coredns_local`, `systemd_unit`) are wired by default; AWS / GCP / Azure / k8s
-  connectors are available for operator-attached provider packages and activate
-  only when the operator wires the matching provider package into the kernel and
-  supplies the matching runtime-agent credentials.
-- The runtime-agent needs `/var/run/docker.sock` mounted to drive user-deployed
-  containers via the `selfhost-docker-compose` provider. Lock this down with
-  rootless Docker or Podman in production.
-- For multi-host deployments, replace the `runtime-agent` service with one
-  runtime-agent process per host and configure the kernel with
-  `TAKOSUMI_AGENT_REGISTRY` to fan out apply calls. See
-  `docs/operator/self-host.md` for the multi-agent topology.
+- The kernel exposes `/v1/installations*` as the canonical installer API. CLI / GitHub Actions / custom CI all use that 5 endpoint surface with an installer bearer token.
+- `runtime-agent` receives provider apply / destroy calls from the kernel and dispatches them to the bundled connector tree under `packages/runtime-agent/src/connectors/`. The selfhost connectors (`docker_compose`, `local_docker_postgres`, `filesystem`, `minio`, `coredns_local`, `systemd_unit`) are wired by default; AWS / GCP / Azure / k8s connectors are available for operator-attached provider packages and activate only when the operator wires the matching provider package into the kernel and supplies the matching runtime-agent credentials.
+- The runtime-agent needs `/var/run/docker.sock` mounted to drive user-deployed containers via the `selfhost-docker-compose` provider. Lock this down with rootless Docker or Podman in production.
+- For multi-host deployments, replace the `runtime-agent` service with one runtime-agent process per host and configure the kernel with `TAKOSUMI_AGENT_REGISTRY` to fan out apply calls. See `docs/operator/self-host.md` for the multi-agent topology.
 
 ## Substrate matrix
 
@@ -91,19 +70,8 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 | AWS (ECS / Fargate + RDS + S3)    | n/a                             | spec-compliant, operator-owned |
 | GCP (Cloud Run + Cloud SQL + GCS) | n/a                             | spec-compliant, operator-owned |
 
-Provider packages for AWS / GCP / Kubernetes and runtime-agent connectors for
-AWS / GCP / Azure / Kubernetes are available for operator-attached distributions
-(see `packages/aws-providers/`, `packages/gcp-providers/`,
-`packages/kubernetes-providers/`, and
-`packages/runtime-agent/src/connectors/{aws,gcp,azure,kubernetes}/`), but no
-production-grade default reference deploy package for the kernel itself ships
-there. Operators bring their own Terraform / Helm / Pulumi to land the kernel
-image and runtime-agent image on those substrates.
+Provider packages for AWS / GCP / Kubernetes and runtime-agent connectors for AWS / GCP / Azure / Kubernetes are available for operator-attached distributions (see `packages/aws-providers/`, `packages/gcp-providers/`, `packages/kubernetes-providers/`, and `packages/runtime-agent/src/connectors/{aws,gcp,azure,kubernetes}/`), but no production-grade default reference deploy package for the kernel itself ships there. Operators bring their own Terraform / Helm / Pulumi to land the kernel image and runtime-agent image on those substrates.
 
 ## Why two reference distributions
 
-The architectural claim that the Takosumi kernel is substrate-neutral needs a
-second working deployment to be more than a spec promise. This distribution is
-that second working deployment. See
-`docs/reference/architecture/operator-boundaries.md` and the ecosystem-level
-`ARCHITECTURE.md` for the substitutability table.
+The architectural claim that the Takosumi kernel is substrate-neutral needs a second working deployment to be more than a spec promise. This distribution is that second working deployment. See `docs/reference/architecture/operator-boundaries.md` and the ecosystem-level `ARCHITECTURE.md` for the substitutability table.

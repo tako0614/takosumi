@@ -1,11 +1,6 @@
 # @takos/takosumi-aws-providers
 
-AWS-backed reference `KernelPlugin` adapter factories that can bind selected
-takosumi.com kind URIs (`web-service` / `object-store` / `postgres` / `gateway`)
-in the reference kernel. Operators import this package explicitly when they want
-AWS coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK
-code, so the operator chooses which provider packages to attach to the reference
-adapter array (`createPaaSApp({ kindAliases, plugins: [...] })`).
+AWS-backed reference `KernelPlugin` adapter factories that can bind selected takosumi.com kind URIs (`web-service` / `object-store` / `postgres` / `gateway`) in the reference kernel. Operators import this package explicitly when they want AWS coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses which provider packages to attach to the reference adapter array (`createPaaSApp({ kindAliases, plugins: [...] })`).
 
 ## Install
 
@@ -33,9 +28,7 @@ const { app } = await createPaaSApp({
 });
 ```
 
-AWS credentials are configured on the runtime-agent connector environment or
-operator host. Provider factory arguments stay limited to non-secret selector
-settings such as region, cluster name, or hosted zone id.
+AWS credentials are configured on the runtime-agent connector environment or operator host. Provider factory arguments stay limited to non-secret selector settings such as region, cluster name, or hosted zone id.
 
 ## Exports
 
@@ -46,11 +39,9 @@ settings such as region, cluster name, or hosted zone id.
 | `awsRdsPostgresProvider`         | `https://takosumi.com/kinds/v1/postgres`     |
 | `awsRoute53CustomDomainProvider` | `https://takosumi.com/kinds/v1/gateway`      |
 
-`awsFargateWorkerProvider` is an alternate export for
-`awsFargateWebServiceProvider`.
+`awsFargateWorkerProvider` is an alternate export for `awsFargateWebServiceProvider`.
 
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official
-  catalog descriptor helpers and reference adapter helpers.
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official catalog descriptor helpers and reference adapter helpers.

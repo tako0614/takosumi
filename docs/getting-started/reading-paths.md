@@ -7,25 +7,19 @@
 3. [Manifest](../reference/manifest.md)
 4. [Takosumi core 仕様](../reference/core-spec.md)
 5. [仕様境界](../reference/spec-boundaries.md)
-6. 公開 contract の範囲を確認したくなったら
-   [リファレンス索引](../reference/index.md)
+6. 公開 contract の範囲を確認したくなったら [リファレンス索引](../reference/index.md)
 
 ## Manifest を書く人 {#appspec-authors}
 
 上記の「初めて読む人」の順に読んだ後、以下も参照:
 
-- kind や出力の型 (`service-binding` 等) の具体語彙が必要になったら
-  [対応 kind 一覧](../reference/type-catalog.md)
-- operator が提供する外部サービスの出力データを workload から受け取るときは
-  [外部サービス](../reference/external-publications.md)
-- Takosumi Cloud が提供する workload 向け publish の出力、deploy
-  facade、dashboard API などアカウント管理 (課金・認証) / admin surface
-  が必要になったら [Takosumi Cloud](../reference/takosumi-cloud.md)
+- kind や出力の型 (`service-binding` 等) の具体語彙が必要になったら [対応 kind 一覧](../reference/type-catalog.md)
+- operator が提供する外部サービスの出力データを workload から受け取るときは [外部サービス](../reference/external-publications.md)
+- Takosumi Cloud が提供する workload 向け publish の出力、deploy facade、dashboard API などアカウント管理 (課金・認証) / admin surface が必要になったら [Takosumi Cloud](../reference/takosumi-cloud.md)
 - public app endpoint を出すときは [HTTP 公開](../reference/http-exposure.md)
 - build が必要になったら [Build service 境界](../reference/build-spec.md)
 - 操作コマンドが必要になったら [CLI](../reference/cli.md)
-- automation / integration が必要になったら
-  [Installer API](../reference/installer-api.md)
+- automation / integration が必要になったら [Installer API](../reference/installer-api.md)
 
 ## Operator として動かす人 {#operators}
 

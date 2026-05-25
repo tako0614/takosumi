@@ -13,16 +13,11 @@
 
 After reading the First-Time Reader section above, also see:
 
-- [Kind Catalog](../reference/type-catalog.md) when you need concrete kind or
-  output type vocabulary.
-- [Platform Services](../reference/external-publications.md) when a workload
-  consumes services provided by the operator.
-- [Takosumi Cloud](../reference/takosumi-cloud.md) when you need Cloud platform
-  service paths, deploy facade, dashboard API, or account management behavior.
-- [HTTP Exposure](../reference/http-exposure.md) when you publish a public app
-  endpoint.
-- [Build Service Boundary](../reference/build-spec.md) when source is prepared
-  by CI or a build service.
+- [Kind Catalog](../reference/type-catalog.md) when you need concrete kind or output type vocabulary.
+- [Platform Services](../reference/external-publications.md) when a workload consumes services provided by the operator.
+- [Takosumi Cloud](../reference/takosumi-cloud.md) when you need Cloud platform service paths, deploy facade, dashboard API, or account management behavior.
+- [HTTP Exposure](../reference/http-exposure.md) when you publish a public app endpoint.
+- [Build Service Boundary](../reference/build-spec.md) when source is prepared by CI or a build service.
 - [CLI](../reference/cli.md) when you need commands.
 - [Installer API](../reference/installer-api.md) for automation.
 

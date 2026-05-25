@@ -12,7 +12,7 @@ const root = new URL("../", import.meta.url);
 
 const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/public-spec-source-map.md",
-  "docs/reference/app-spec.md",
+  "docs/reference/manifest.md",
   "docs/reference/build-spec.md",
   "docs/reference/core-spec.md",
   "docs/reference/installer-api.md",
@@ -22,7 +22,8 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/providers.md",
   "docs/reference/takosumi-cloud.md",
   "docs/reference/type-catalog.md",
-  "../takosumi-cloud/docs/spec.md",
+  "../takosumi-cloud/docs/ja/spec.md",
+  "../takosumi-cloud/docs/en/spec.md",
   "packages/kernel/src/domains/deploy/_internal_manifest_types.ts",
   "packages/kernel/src/domains/deploy/manifest_v1.ts",
   "packages/kernel/src/api/app.ts",
@@ -68,7 +69,8 @@ Deno.test("public spec source map covers required public surfaces", async () => 
   assert.equal(source.includes(`takosumi-${"git"}-artifact-uri-v1`), false);
   assert.ok(source.includes("packages/contract/src/app-spec.ts"));
   assert.ok(source.includes("packages/plugins/spec/kinds/v1/*.jsonld"));
-  assert.ok(source.includes("../takosumi-cloud/docs/spec.md"));
+  assert.ok(source.includes("../takosumi-cloud/docs/ja/spec.md"));
+  assert.ok(source.includes("../takosumi-cloud/docs/en/spec.md"));
   assert.match(source, /Normative spec/);
   assert.match(source, /Executable conformance targets/);
   assert.match(source, /Repository source/);
@@ -123,12 +125,12 @@ Deno.test("public spec source map Takosumi-owned paths exist", async () => {
   }
 });
 
-Deno.test("public spec source map is linked from reference navigation", async () => {
-  const index = await read("docs/reference/index.md");
+Deno.test("public spec source map is kept as maintainer-only reference", async () => {
+  const kernelReference = await read("docs/reference/kernel-http-api.md");
   const config = await read("docs/.vitepress/config.ts");
 
-  assert.ok(index.includes("./public-spec-source-map"));
-  assert.ok(config.includes("/reference/public-spec-source-map"));
+  assert.ok(kernelReference.includes("./public-spec-source-map.md"));
+  assert.ok(config.includes("public-spec-source-map"));
 });
 
 Deno.test("reference-kernel descriptors stay out of public catalog roots", async () => {

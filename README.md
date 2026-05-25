@@ -1,16 +1,12 @@
 # Takosumi
 
-Takosumi is a self-hostable PaaS for installing source into a Space and
-recording each apply as a Deployment. Authors write one runtime/install
-manifest, `.takosumi.yml`; operators decide how each component kind is
-materialized on their substrate.
+Takosumi is a self-hostable PaaS for installing source into a Space and recording each apply as a Deployment. Authors write one runtime/install manifest, `.takosumi.yml`; operators decide how each component kind is materialized on their substrate.
 
 ドキュメント: <https://takosumi.com/docs/>
 
 ## Quickstart
 
-Run this from a source root that contains the `.takosumi.yml` shown below and
-the files referenced by its kind-specific `spec`.
+Run this from a source root that contains the `.takosumi.yml` shown below and the files referenced by its kind-specific `spec`.
 
 ```bash
 deno install -gA -n takosumi jsr:@takos/takosumi-cli
@@ -22,8 +18,7 @@ takosumi install dry-run \
   --source .
 ```
 
-managed / remote operator に投げる場合は operator-issued token と Takosumi URL を
-明示する:
+managed / remote operator に投げる場合は operator-issued token と Takosumi URL を明示する:
 
 ```bash
 export TAKOSUMI_INSTALLER_TOKEN=<operator-issued-installer-token>
@@ -34,9 +29,7 @@ takosumi install --source git:https://github.com/example/notes#v1.2.3 \
 
 ### Manifest (= `.takosumi.yml`) の最小例
 
-この例は operator が Takosumi Kind Catalog の aliases (`postgres` /
-`worker`) を採用している前提です。別 operator では `kind` に operator-defined
-alias または URI を使います。
+この例は operator が Takosumi Kind Catalog の aliases (`postgres` / `worker`) を採用している前提です。別 operator では `kind` に operator-defined alias または URI を使います。
 
 ```yaml
 apiVersion: v1
@@ -63,59 +56,34 @@ components:
         prefix: DB
 ```
 
-`db` が local publication `db.connection` を公開し、`web` が同じ manifest 内で
-`listen` することで `DB_HOST` / `DB_PORT` / secretRef-mediated
-`DB_CONNECTIONSTRING` 等を runtime env として受け取る。component 間の接続は
-publish / listen で表す。Takosumi Cloud などの operator profile が提供する
-platform service は `from: operator.identity.oidc` のように `listen`
-から参照する。
+`db` が local publication `db.connection` を公開し、`web` が同じ manifest 内で `listen` することで `DB_HOST` / `DB_PORT` / secretRef-mediated `DB_CONNECTIONSTRING` 等を runtime env として受け取る。component 間の接続は publish / listen で表す。Takosumi Cloud などの operator profile が提供する platform service は `from: operator.identity.oidc` のように `listen` から参照する。
 
 ## 中核概念
 
-| 概念             | 表現                                                                          |
-| ---------------- | ----------------------------------------------------------------------------- |
-| **manifest**      | `.takosumi.yml` (= source root の 1 ファイル)                                 |
+| 概念             | 表現                                                                           |
+| ---------------- | ------------------------------------------------------------------------------ |
+| **manifest**     | `.takosumi.yml` (= source root の 1 ファイル)                                  |
 | **Installation** | Space に入った manifest の core record (= current Deployment pointer / status) |
-| **Deployment**   | 1 回の apply 結果 (= 履歴 / audit / rollback)                                 |
+| **Deployment**   | 1 回の apply 結果 (= 履歴 / audit / rollback)                                  |
 
-Takosumi の公開 lifecycle はこの 3 entity を中心に説明する。
-Ownership、billing、permission scope、account-facing projection は operator
-account layer が保持する。
+Takosumi の公開 lifecycle はこの 3 entity を中心に説明する。 Ownership、billing、permission scope、account-facing projection は operator account layer が保持する。
 
-Kinds are operator-resolved names. The Takosumi Kind Catalog publishes
-descriptor vocabulary, and the reference implementation uses provider bindings.
-Public concepts are manifest / Installation / Deployment; the Installer API is
-the public HTTP surface for creating, updating, and rolling back them.
+Kinds are operator-resolved names. The Takosumi Kind Catalog publishes descriptor vocabulary, and the reference implementation uses provider bindings. Public concepts are manifest / Installation / Deployment; the Installer API is the public HTTP surface for creating, updating, and rolling back them.
 
 ## 設計の核
 
 ### Source-to-runtime model
 
-`.takosumi.yml` を source root に置くだけ。 Takosumi は git URL または prepared
-source snapshot から source を取得し、operator-selected binding
-で runtime resource を materialize する。build / prepare は Takosumi 外の build
-service / CI が担当し、`source.kind: prepared` として渡す。
+`.takosumi.yml` を source root に置くだけ。 Takosumi は git URL または prepared source snapshot から source を取得し、operator-selected binding で runtime resource を materialize する。build / prepare は Takosumi 外の build service / CI が担当し、`source.kind: prepared` として渡す。
 
 ### Component kind × binding
 
-- **Component kind は operator が解決**: Takosumi manifest は `kind` を不透明な
-  string として扱う。`worker` / `postgres` などは operator の `kindAliases` で
-  URI に解決される。
-- **Official type catalog の kind の定義は採用できる vocabulary**:
-  `https://takosumi.com/kinds/v1/*` は Takosumi Kind Catalog の
-  kind の定義の URI。operator は `kindAliases` でそれを採用してもよいし、任意
-  domain の kind URI を使ってもよい。
-- **JSON-LD metadata は kind の定義**: kind URI に対応する metadata が
-  `spec` input schema、outputs、publish / listen semantics を表す。
-- **Provider package は reference Takosumi binding**: cloud provider package
-  (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`)
-  は reference Takosumi 向けに binding factory を export する。 他の
-  implementation は同じ kind URI を別の仕組みで materialize できる。
+- **Component kind は operator が解決**: Takosumi manifest は `kind` を不透明な string として扱う。`worker` / `postgres` などは operator の `kindAliases` で URI に解決される。
+- **Official type catalog の kind の定義は採用できる vocabulary**: `https://takosumi.com/kinds/v1/*` は Takosumi Kind Catalog の kind の定義の URI。operator は `kindAliases` でそれを採用してもよいし、任意 domain の kind URI を使ってもよい。
+- **JSON-LD metadata は kind の定義**: kind URI に対応する metadata が `spec` input schema、outputs、publish / listen semantics を表す。
+- **Provider package は reference Takosumi binding**: cloud provider package (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`) は reference Takosumi 向けに binding factory を export する。他の implementation は同じ kind URI を別の仕組みで materialize できる。
 
-同じ kind / output type の overlapping subset を複数 provider が実装し、
-operator evidence で互換性を確認できる場合、その subset の manifest は provider
-差し替えに対して portable になる。provider-specific `spec` extension や
-credential 前提は自動的には portable にならない。
+同じ kind / output type の overlapping subset を複数 provider が実装し、 operator evidence で互換性を確認できる場合、その subset の manifest は provider 差し替えに対して portable になる。provider-specific `spec` extension や credential 前提は自動的には portable にならない。
 
 詳細は [`CONVENTIONS.md`](./CONVENTIONS.md) と [`docs/`](./docs/) 参照。
 
@@ -154,9 +122,9 @@ core:
 | [`jsr:@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | .takosumi.yml parser + git fetch + deploy client      |
 | [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | lifecycle execution host (cloud SDK / OS executor)    |
 | [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                   |
-| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | manifest / Installer API wire types                    |
+| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | manifest / Installer API wire types                   |
 
-cloud provider packages (= 別 install、 必要な cloud だけ import):
+cloud provider packages (= 別 install、必要な cloud だけ import):
 
 | Package                                                                                             | 内容                                              |
 | --------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
@@ -167,10 +135,7 @@ cloud provider packages (= 別 install、 必要な cloud だけ import):
 | [`jsr:@takos/takosumi-deno-deploy-providers`](https://jsr.io/@takos/takosumi-deno-deploy-providers) | Deno Deploy                                       |
 | [`jsr:@takos/takosumi-selfhost-providers`](https://jsr.io/@takos/takosumi-selfhost-providers)       | Self-host (docker / systemd / filesystem / minio) |
 
-<sub>Note: `@takos/` JSR scope は current reference Takosumi distribution の
-publish scope。互換性の authority は contract (`@takos/takosumi-contract`)
-にあり、 alternative publisher (例: `@example/takosumi-kernel`) も同じ contract
-に合わせられる。</sub>
+<sub>Note: `@takos/` JSR scope は current reference Takosumi distribution の publish scope。互換性の authority は contract (`@takos/takosumi-contract`) にあり、 alternative publisher (例: `@example/takosumi-kernel`) も同じ contract に合わせられる。</sub>
 
 ## Workspace layout
 
@@ -195,8 +160,7 @@ takosumi/
 └── AGENTS.md, CONVENTIONS.md, CHANGELOG.md
 ```
 
-Canonical contract source は `packages/contract/` で、 公開 package は
-[`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)。
+Canonical contract source は `packages/contract/` で、公開 package は [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)。
 
 ## Development
 
@@ -218,17 +182,11 @@ cd packages/kernel && deno task db:migrate:dry-run
 
 ## Release
 
-Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks
-the workspace, runs tests, performs a JSR dry-run, publishes the 13 JSR packages
-(core 7 + provider 6) with GitHub OIDC, and builds/pushes the `takosumi` OCI
-image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish`
-input is set.
+Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace, runs tests, performs a JSR dry-run, publishes the 13 JSR packages (core 7 + provider 6) with GitHub OIDC, and builds/pushes the `takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish` input is set.
 
 ## Docs site (VitePress)
 
-`takosumi/docs/` は VitePress site (`base: "/docs/"`)、 `takosumi/website/` は
-Solid Start landing です。公開 Pages output は landing / docs / reference
-descriptor contexts を同じ `takosumi.com` 配下にまとめます。
+`takosumi/docs/` は VitePress site (`base: "/docs/"`)、 `takosumi/website/` は Solid Start landing です。公開 Pages output は landing / docs / reference descriptor contexts を同じ `takosumi.com` 配下にまとめます。
 
 ```bash
 deno task docs:install      # cd docs && npm install (vitepress を pin)
@@ -240,7 +198,4 @@ deno task website:preview   # 同 Pages output を wrangler pages dev で確認
 deno task website:deploy    # Cloudflare Pages project `takosumi-website` にデプロイ
 ```
 
-publish: `master` への push で `.github/workflows/website-deploy.yml` が
-Cloudflare Pages project `takosumi-website` にデプロイします。詳細は
-[`DEPLOY.md`](./DEPLOY.md) と [`website/README.md`](./website/README.md)
-を参照。
+publish: `master` への push で `.github/workflows/website-deploy.yml` が Cloudflare Pages project `takosumi-website` にデプロイします。詳細は [`DEPLOY.md`](./DEPLOY.md) と [`website/README.md`](./website/README.md) を参照。

@@ -1,13 +1,10 @@
 # Quickstart {#quickstart}
 
-This local path checks manifest validation and the Deployment ledger. Public
-application endpoints need an operator environment with a gateway or ingress
-implementation.
+This local path checks manifest validation and the Deployment ledger. Public application endpoints need an operator environment with a gateway or ingress implementation.
 
 ## Prerequisite
 
-- [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.x or
-  later
+- [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.x or later
 
 ## 1. Install The CLI
 
@@ -49,8 +46,7 @@ components:
 
 ## 3. Start The Local Dev Server
 
-Takosumi has a server and a CLI that run separately.
-During development, start the server in the background and use the CLI from another shell.
+Takosumi has a server and a CLI that run separately. During development, start the server in the background and use the CLI from another shell.
 
 In another shell:
 
@@ -76,8 +72,7 @@ export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
 takosumi install dry-run --space space_personal --source "$APP_ROOT"
 ```
 
-On success, look at `changes[]` (planned diff) and `expected.manifestDigest`
-(drift guard for the next apply).
+On success, look at `changes[]` (planned diff) and `expected.manifestDigest` (drift guard for the next apply).
 
 ```json
 {
@@ -111,8 +106,7 @@ Successful apply returns an Installation id and a Deployment id.
 }
 ```
 
-This completes the local ledger quickstart. Public app endpoints are only
-created in operator environments with a gateway or ingress provider.
+This completes the local ledger quickstart. Public app endpoints are only created in operator environments with a gateway or ingress provider.
 
 Next: [Connect Components and HTTP Exposure](./next-steps.md)
 

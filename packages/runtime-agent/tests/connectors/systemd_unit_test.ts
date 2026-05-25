@@ -67,6 +67,7 @@ Deno.test("SystemdUnitConnector.apply writes unit file with port markers and ena
     const res = await connector.apply({
       shape: "web-service@v1",
       provider: "@takos/selfhost-systemd",
+      spaceId: "space_test",
       resourceName: "rs",
       spec: {
         image: "registry/app:1",
@@ -98,6 +99,7 @@ Deno.test("SystemdUnitConnector.describe returns missing when unit file does not
     const res = await connector.describe({
       shape: "web-service@v1",
       provider: "@takos/selfhost-systemd",
+      spaceId: "space_test",
       handle: "ghost.service",
     }, {});
     assert.equal(res.status, "missing");
@@ -120,12 +122,14 @@ Deno.test("SystemdUnitConnector.describe returns missing when systemctl is-activ
     await connector.apply({
       shape: "web-service@v1",
       provider: "@takos/selfhost-systemd",
+      spaceId: "space_test",
       resourceName: "rs",
       spec: { image: "registry/app:1", port: 8080 },
     }, {});
     const res = await connector.describe({
       shape: "web-service@v1",
       provider: "@takos/selfhost-systemd",
+      spaceId: "space_test",
       handle: "app.service",
     }, {});
     assert.equal(res.status, "missing");
@@ -149,6 +153,7 @@ Deno.test("SystemdUnitConnector.describe returns running with reconstructed outp
     const apply = await connector.apply({
       shape: "web-service@v1",
       provider: "@takos/selfhost-systemd",
+      spaceId: "space_test",
       resourceName: "rs",
       spec: { image: "registry/app:1", port: 8080 },
     }, {});
@@ -165,6 +170,7 @@ Deno.test("SystemdUnitConnector.describe returns running with reconstructed outp
     const res = await connector2.describe({
       shape: "web-service@v1",
       provider: "@takos/selfhost-systemd",
+      spaceId: "space_test",
       handle: apply.handle,
     }, {});
     assert.equal(res.status, "running");
@@ -191,6 +197,7 @@ Deno.test("SystemdUnitConnector.describe returns status only when port markers a
     const res = await connector.describe({
       shape: "web-service@v1",
       provider: "@takos/selfhost-systemd",
+      spaceId: "space_test",
       handle: "handwritten.service",
     }, {});
     assert.equal(res.status, "running");

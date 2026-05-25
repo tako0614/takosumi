@@ -79,6 +79,7 @@
     "website:deploy": "bash website/build.sh && npx wrangler pages deploy website/.output/public --project-name=takosumi-website"
   },
   "fmt": {
+    "proseWrap": "preserve",
     "exclude": [
       "docs/.vitepress/cache",
       "docs/.vitepress/dist",

@@ -13,6 +13,7 @@ Deno.test("dispatcher throws ConnectorNotFoundError for unknown shape/provider",
       dispatcher.apply({
         shape: "object-store@v1",
         provider: "ghost",
+        spaceId: "space_test",
         resourceName: "x",
         spec: {},
       }),
@@ -36,6 +37,7 @@ Deno.test("dispatcher rejects request whose artifact.kind is not accepted", () =
       dispatcher.apply({
         shape: "function@v1",
         provider: "lambda",
+        spaceId: "space_test",
         resourceName: "fn",
         spec: { artifact: { kind: "oci-image", uri: "ghcr.io/me/api:v1" } },
       }),
@@ -68,6 +70,7 @@ Deno.test("dispatcher accepts spec.image shorthand as oci-image kind", async () 
   const res = await dispatcher.apply({
     shape: "web-service@v1",
     provider: "fargate-fake",
+    spaceId: "space_test",
     resourceName: "svc",
     spec: {
       image: "ghcr.io/me/api:v1",
@@ -96,6 +99,7 @@ Deno.test("dispatcher accepts new artifact.kind matching accepted list", async (
   const res = await dispatcher.apply({
     shape: "web-service@v1",
     provider: "static-host",
+    spaceId: "space_test",
     resourceName: "svc",
     spec: {
       artifact: { kind: "operator.example/static-bundle", hash: "sha256:abc" },
@@ -128,6 +132,7 @@ Deno.test("dispatcher passes ConnectorContext through to connector.apply", async
   await dispatcher.apply({
     shape: "object-store@v1",
     provider: "ctx-test",
+    spaceId: "space_test",
     resourceName: "x",
     spec: { name: "x" },
   }, { fetcher });
@@ -149,6 +154,7 @@ Deno.test("dispatcher skips kind validation when spec has no artifact and no ima
   const res = await dispatcher.apply({
     shape: "postgres@v1",
     provider: "no-artifact",
+    spaceId: "space_test",
     resourceName: "db",
     spec: { version: "16", size: "small" },
   });
@@ -174,6 +180,7 @@ Deno.test("dispatcher routes compensate to connector hook when present", async (
   const res = await dispatcher.compensate({
     shape: "object-store@v1",
     provider: "compensating",
+    spaceId: "space_test",
     handle: "bucket-one",
   });
   assert.equal(seenHandle, "bucket-one");
@@ -198,6 +205,7 @@ Deno.test("dispatcher falls back to destroy when compensate hook is absent", asy
   const res = await dispatcher.compensate({
     shape: "object-store@v1",
     provider: "destroy-fallback",
+    spaceId: "space_test",
     handle: "bucket-two",
   });
   assert.equal(destroyed, "bucket-two");

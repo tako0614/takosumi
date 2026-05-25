@@ -1,11 +1,6 @@
 # @takos/takosumi-gcp-providers
 
-GCP-backed reference `KernelPlugin` adapter factories that can bind selected
-takosumi.com kind URIs (`web-service` / `object-store` / `postgres`) in the
-reference kernel. Operators import this package explicitly when they want GCP
-coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK code,
-so the operator chooses which provider packages to attach to the reference
-adapter array (`createPaaSApp({ kindAliases, plugins: [...] })`).
+GCP-backed reference `KernelPlugin` adapter factories that can bind selected takosumi.com kind URIs (`web-service` / `object-store` / `postgres`) in the reference kernel. Operators import this package explicitly when they want GCP coverage — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud SDK code, so the operator chooses which provider packages to attach to the reference adapter array (`createPaaSApp({ kindAliases, plugins: [...] })`).
 
 ## Install
 
@@ -34,9 +29,7 @@ const { app } = await createPaaSApp({
 });
 ```
 
-GCP credentials are configured on the runtime-agent connector environment or
-operator host. Provider factory arguments stay limited to non-secret selector
-settings such as project id or region.
+GCP credentials are configured on the runtime-agent connector environment or operator host. Provider factory arguments stay limited to non-secret selector settings such as project id or region.
 
 ## Exports
 
@@ -46,11 +39,9 @@ settings such as project id or region.
 | `gcpGcsObjectStoreProvider`     | `https://takosumi.com/kinds/v1/object-store` |
 | `gcpCloudSqlPostgresProvider`   | `https://takosumi.com/kinds/v1/postgres`     |
 
-`gcpCloudRunWorkerProvider` is an alternate export for
-`gcpCloudRunWebServiceProvider`.
+`gcpCloudRunWorkerProvider` is an alternate export for `gcpCloudRunWebServiceProvider`.
 
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official
-  catalog descriptor helpers and reference adapter helpers.
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official catalog descriptor helpers and reference adapter helpers.

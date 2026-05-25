@@ -2,9 +2,7 @@
 
 ## What is Takosumi?
 
-Takosumi is a PaaS that reads a manifest (a declaration file called `.takosumi.yml`) and deploys your entire app.
-It is similar to Docker Compose, but with one key difference: the manifest only says WHAT you need, never WHERE it runs.
-The operator (the person or team running the platform) decides the execution target, so the same manifest works on Cloudflare, AWS, or bare metal.
+Takosumi is a PaaS that reads a manifest (a declaration file called `.takosumi.yml`) and deploys your entire app. It is similar to Docker Compose, but with one key difference: the manifest only says WHAT you need, never WHERE it runs. The operator (the person or team running the platform) decides the execution target, so the same manifest works on Cloudflare, AWS, or bare metal.
 
 ## Inside a manifest
 
@@ -24,10 +22,10 @@ components:
       version: "16"
 ```
 
-| Key         | Meaning                                                            |
-| ----------- | ------------------------------------------------------------------ |
-| `component` | An individual piece of your app. The example above has two: `web` and `db` |
-| `kind`      | The type of piece. `worker` is a code runtime, `postgres` is a database |
+| Key         | Meaning                                                                              |
+| ----------- | ------------------------------------------------------------------------------------ |
+| `component` | An individual piece of your app. The example above has two: `web` and `db`           |
+| `kind`      | The type of piece. `worker` is a code runtime, `postgres` is a database              |
 | `spec`      | Settings specific to the kind. A worker needs `entrypoint`, postgres needs `version` |
 
 ## Connecting with publish / listen {#publish-listen}
@@ -70,10 +68,10 @@ The `prefix: DB` becomes the prefix of each variable name. Your code reads them 
 
 When you deploy a manifest, two kinds of records are created.
 
-| Concept                        | Role                                                        |
-| ------------------------------ | ----------------------------------------------------------- |
-| Installation (install record)  | A management record tied to a Space (a deployment group). One per manifest |
-| Deployment (deploy history)    | A history entry created each time you apply changes         |
+| Concept                       | Role                                                                       |
+| ----------------------------- | -------------------------------------------------------------------------- |
+| Installation (install record) | A management record tied to a Space (a deployment group). One per manifest |
+| Deployment (deploy history)   | A history entry created each time you apply changes                        |
 
 One Installation can have many Deployments, and each Deployment is kept as history. A rollback is simply pointing back to an earlier successful Deployment.
 

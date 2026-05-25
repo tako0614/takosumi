@@ -7,6 +7,7 @@ SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
 
 CA="caddy/runtime/pebble-issuance-root.pem"
+LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
 PASS=0
 FAIL=0
 SMOKE_LOG_DIR="${SMOKE_LOG_DIR:-/tmp/smoke-logs}"
@@ -182,7 +183,8 @@ check_post() {
 	local expect_status=$5
 	local code
 	code=$(curl -sk --cacert "$CA" --resolve "${host}:443:127.0.0.1" \
-		-X POST -H "Content-Type: application/json" --data "$body" \
+		-X POST -H "Authorization: Bearer $LOCAL_CLOUD_SESSION_ID" \
+		-H "Content-Type: application/json" --data "$body" \
 		-o /dev/null -w "%{http_code}" "https://${host}${path}")
 	if [[ "$code" == "$expect_status" ]]; then
 		echo "    PASS [$label] POST https://${host}${path} -> $code"
@@ -272,7 +274,7 @@ fi
 
 echo
 echo "==> Tenant isolation — cross-subject installation read must not leak"
-if bash "$SCRIPT_DIR/tenant-isolation.sh"  >/dev/null 2>&1; then
+if run_script "tenant.isolation" "bash $SCRIPT_DIR/tenant-isolation.sh"; then
 	echo "    PASS [tenant.isolation] subject B cannot read subject A's installation"
 	PASS=$((PASS + 1))
 else
@@ -286,7 +288,7 @@ echo "==> Passkey register + authenticate (virtual P-256 authenticator)"
 # then signs an assertion challenge and asserts the worker accepts it.
 # Exercises the full COSE/JWK + ECDSA verification path. Needs python3 +
 # cryptography (python3-cryptography on debian/ubuntu).
-if python3 "$SCRIPT_DIR/passkey-e2e.py"  >/dev/null 2>&1; then
+if run_script "passkey.e2e" "python3 $SCRIPT_DIR/passkey-e2e.py"; then
 	echo "    PASS [passkey.e2e] register + authenticate verified end-to-end"
 	PASS=$((PASS + 1))
 else

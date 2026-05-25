@@ -103,7 +103,9 @@ KERNEL_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${KERNEL_HOST}:443:127.0.
 }
 
 # 3. installer dry-run (D1 + handler init still working from this stack)
+LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
 DRY_RUN=$(curl -sk --cacert "$CA" -X POST \
+	-H "Authorization: Bearer $LOCAL_CLOUD_SESSION_ID" \
 	-H "Content-Type: application/json" \
 	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' \
 	https://cloud.takosumi.test/v1/installations/dry-run)

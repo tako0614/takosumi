@@ -8,6 +8,7 @@ Deno.test("FilesystemConnector.apply creates a directory and returns its path as
     const res = await connector.apply({
       shape: "object-store@v1",
       provider: "@takos/selfhost-filesystem",
+      spaceId: "space_test",
       resourceName: "rs",
       spec: { name: "tenant-data" },
     }, {});
@@ -28,6 +29,7 @@ Deno.test("FilesystemConnector.describe returns missing for non-existent dir", a
     const res = await connector.describe({
       shape: "object-store@v1",
       provider: "@takos/selfhost-filesystem",
+      spaceId: "space_test",
       handle: `${root}/missing`,
     }, {});
     assert.equal(res.status, "missing");
@@ -64,12 +66,14 @@ Deno.test("FilesystemConnector.destroy removes the directory", async () => {
     const apply = await connector.apply({
       shape: "object-store@v1",
       provider: "@takos/selfhost-filesystem",
+      spaceId: "space_test",
       resourceName: "rs",
       spec: { name: "x" },
     }, {});
     const res = await connector.destroy({
       shape: "object-store@v1",
       provider: "@takos/selfhost-filesystem",
+      spaceId: "space_test",
       handle: apply.handle,
     }, {});
     assert.equal(res.ok, true);

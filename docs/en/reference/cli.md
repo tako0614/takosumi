@@ -1,9 +1,6 @@
 # CLI {#cli}
 
-The `takosumi` CLI is a thin client for the five-endpoint
-[Installer API](./installer-api.md). It sends source, shows dry-run output,
-applies deployments, rolls back, and can start a local server for
-development.
+The `takosumi` CLI is a thin client for the five-endpoint [Installer API](./installer-api.md). It sends source, shows dry-run output, applies deployments, rolls back, and can start a local server for development.
 
 ## Install
 
@@ -26,8 +23,7 @@ Token resolution order:
 2. `TAKOSUMI_INSTALLER_TOKEN`
 3. `~/.takosumi/config.yml` `token`
 
-Remote URL resolution uses `--remote`, `TAKOSUMI_REMOTE_URL`, or
-`~/.takosumi/config.yml` `remote_url`.
+Remote URL resolution uses `--remote`, `TAKOSUMI_REMOTE_URL`, or `~/.takosumi/config.yml` `remote_url`.
 
 ## Commands {#commands}
 
@@ -49,9 +45,7 @@ prepared:<url>#<sha256:hex>
 <local-path>
 ```
 
-`local` source is for development or operator-local use when the server process
-can see the same path. `git` source requires `#<ref>`, and `prepared` source
-requires `#<sha256:hex>`.
+`local` source is for development or operator-local use when the server process can see the same path. `git` source requires `#<ref>`, and `prepared` source requires `#<sha256:hex>`.
 
 Expected guard flags:
 
@@ -67,31 +61,22 @@ Expected guard flags:
 takosumi install dry-run --space space_personal --source .
 ```
 
-Dry-run returns `expected` guards. Pass those guards to apply when automation
-needs to bind apply to the reviewed source.
+Dry-run returns `expected` guards. Pass those guards to apply when automation needs to bind apply to the reviewed source.
 
 ### `takosumi deploy <installation-id> [--source <source>]`
 
-Apply a new Deployment to an existing Installation. When `--source` is omitted,
-the operator reuses the immutable source record from the current
-Deployment. `local` source has no portable source byte identity, so provide
-`--source` each time for local deploy dry-run and apply.
+Apply a new Deployment to an existing Installation. When `--source` is omitted, the operator reuses the immutable source record from the current Deployment. `local` source has no portable source byte identity, so provide `--source` each time for local deploy dry-run and apply.
 
 ```bash
 takosumi deploy inst_01HM9N7XK4QY8RT2P5JZF6V3W9 \
   --source git:https://github.com/example/notes#v1.2.4
 ```
 
-Deploy apply uses the source expected flags plus
-`--expected-current-deployment-id` from deploy dry-run. That pointer guard makes
-apply fail if another Deployment became current after review. If deploy dry-run
-returns `expected.currentDeploymentId: null`, pass the literal `null` to the CLI
-flag.
+Deploy apply uses the source expected flags plus `--expected-current-deployment-id` from deploy dry-run. That pointer guard makes apply fail if another Deployment became current after review. If deploy dry-run returns `expected.currentDeploymentId: null`, pass the literal `null` to the CLI flag.
 
 ### `takosumi deploy dry-run <installation-id> [--source <source>]`
 
-Preview an update without applying it. The response includes
-`expected.currentDeploymentId`.
+Preview an update without applying it. The response includes `expected.currentDeploymentId`.
 
 ### `takosumi rollback <installation-id> <deployment-id>`
 
@@ -112,8 +97,7 @@ takosumi server --port 9000
 
 ### `takosumi init [output]`
 
-Generate a manifest scaffold. `init` creates the manifest only; it does not generate
-runtime files or a build recipe.
+Generate a manifest scaffold. `init` creates the manifest only; it does not generate runtime files or a build recipe.
 
 ## Config File {#config-file}
 

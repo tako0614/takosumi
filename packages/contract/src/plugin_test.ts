@@ -42,7 +42,6 @@ Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployme
   const calls: string[] = [];
   const installation: Installation = {
     id: "ins_1",
-    accountId: "acc_1",
     spaceId: "space_1",
     appId: "app_1",
     currentDeploymentId: null,
@@ -214,7 +213,14 @@ Deno.test("KernelPlugin.applyListen returns an EnvInjection", async () => {
         const key = prefix
           ? `${prefix}_${field.toUpperCase()}`
           : field.toUpperCase();
-        env[key] = value;
+        if (typeof value === "string") {
+          env[key] = value;
+        } else if (
+          value !== null && typeof value === "object" &&
+          !Array.isArray(value) && typeof value.secretRef === "string"
+        ) {
+          env[key] = { secretRef: value.secretRef };
+        }
       }
       return Promise.resolve({ env });
     },

@@ -1,16 +1,12 @@
 # @takos/takosumi-contract
 
-TypeScript DTOs and wire types for Takosumi AppSpec and Installer API.
-Reference-kernel adapter APIs live under explicit reference implementation
-subpaths.
+TypeScript DTOs and wire types for Takosumi AppSpec and Installer API. Reference-kernel adapter APIs live under explicit reference implementation subpaths.
 
-This package defines the wire shapes that let a Takosumi distribution read an
-AppSpec, create an Installation, and record each apply as a Deployment.
+This package defines the wire shapes that let a Takosumi distribution read an AppSpec, create an Installation, and record each apply as a Deployment.
 
 ## Public spec subpaths
 
-Use the package root or explicit subpath imports for the current v1 public spec
-surfaces:
+Use the package root or explicit subpath imports for the current v1 public spec surfaces:
 
 | Subpath                                  | Owns                                                                                     |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -18,18 +14,11 @@ surfaces:
 | `@takos/takosumi-contract/app-spec`      | `AppSpec`, `Component`, local `publish` / `listen` declarations                          |
 | `@takos/takosumi-contract/installer-api` | 5 endpoint Installer API DTOs, `Installation`, `Deployment`, source pins, error envelope |
 
-The root export intentionally excludes deploy-core projections and reference
-adapter helper types so the current public `AppSpec`, `Installation`, and
-`Deployment` names stay unambiguous.
+The root export intentionally excludes deploy-core projections and reference adapter helper types so the current public `AppSpec`, `Installation`, and `Deployment` names stay unambiguous.
 
 ## Reference implementation APIs
 
-These subpaths support the takosumi.com reference kernel, runtime-agent, and
-provider packages. They are versioned with this package, but they are reference
-implementation APIs rather than AppSpec authoring fields. A compatible
-implementation may bind kinds through a native controller, static registry,
-workflow engine, or any other implementation mechanism while keeping the AppSpec
-and Installer API wire shapes above.
+These subpaths support the takosumi.com reference kernel, runtime-agent, and provider packages. They are versioned with this package, but they are reference implementation APIs rather than AppSpec authoring fields. A compatible implementation may bind kinds through a native controller, static registry, workflow engine, or any other implementation mechanism while keeping the AppSpec and Installer API wire shapes above.
 
 | Subpath                                                      | Owns                                                                                          |
 | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
@@ -44,14 +33,11 @@ and Installer API wire shapes above.
 | `@takos/takosumi-contract/internal/rpc`                      | reference internal RPC signing and service directory helpers                                  |
 | `@takos/takosumi-contract/reference/compat`                  | compatibility umbrella for reference packages that still need deploy-core bridge helpers      |
 
-`reference/compat` is a migration umbrella for packages that still import the
-older deploy-core DTOs. New reference implementation code should prefer the
-specific `reference/*` or `internal/*` subpath it uses.
+`reference/compat` is a migration umbrella for packages that still import the older deploy-core DTOs. New reference implementation code should prefer the specific `reference/*` or `internal/*` subpath it uses.
 
 ## AppSpec and Component
 
-The canonical source file is `.takosumi.yml`. The v1 AppSpec contract is the
-small envelope:
+The canonical source file is `.takosumi.yml`. The v1 AppSpec contract is the small envelope:
 
 ```typescript
 interface AppSpec {
@@ -80,21 +66,7 @@ interface ListenOptions {
 }
 ```
 
-`Component.kind` is opaque to the contract package. Operators may map short
-aliases such as `web-service` to full kind URIs, but alias resolution and kind
-descriptor selection belong to the operator distribution. Component-specific
-gateway route/TLS/host rules live inside the selected descriptor-owned open
-`spec`; workload dependencies use `publish` / `listen`; launch, permission,
-account, and billing flows are operator distribution surfaces. `publish`
-declares local publications such as `web.http`; `listen` declares local bindings
-whose `from` is either a two-segment `component.publication` reference or a
-three-or-more-segment external publication path such as
-`publisher.identity.primary`. Takosumi Cloud defines concrete paths such as
-`operator.identity.oidc` in its own distribution docs. Publication material
-projection is owned by the kind descriptor and operator-selected implementation
-binding. Build recipes live outside AppSpec; an operator/build-service
-distribution may define `.takosumi.build.yml`, CI config, or another input.
-AppSpec components carry runtime/install intent.
+`Component.kind` is opaque to the contract package. Operators may map short aliases such as `web-service` to full kind URIs, but alias resolution and kind descriptor selection belong to the operator distribution. Component-specific gateway route/TLS/host rules live inside the selected descriptor-owned open `spec`; workload dependencies use `publish` / `listen`; launch, permission, account, and billing flows are operator distribution surfaces. `publish` declares local publications such as `web.http`; `listen` declares local bindings whose `from` is either a two-segment `component.publication` reference or a three-or-more-segment external publication path such as `publisher.identity.primary`. Takosumi Cloud defines concrete paths such as `operator.identity.oidc` in its own distribution docs. Publication material projection is owned by the kind descriptor and operator-selected implementation binding. Build recipes live outside AppSpec; an operator/build-service distribution may define `.takosumi.build.yml`, CI config, or another input. AppSpec components carry runtime/install intent.
 
 ## Installer API
 
@@ -106,19 +78,11 @@ The Installer API is the public API for moving source into Takosumi:
 - `POST /v1/installations/{id}/deployments`
 - `POST /v1/installations/{id}/rollback`
 
-Requests carry a `Source` (`git`, `prepared`, or dev/operator-local `local`) and
-an optional expected source pin. Responses return Installation / Deployment
-records with AppSpec digest (serialized as `manifestDigest`), source, status,
-and public/non-secret materialized component outputs. Retained implementation /
-operator evidence lives behind the reference implementation or operator ledger.
-Dry-runs return changes and expected digests without persisting a plan entity.
+Requests carry a `Source` (`git`, `prepared`, or dev/operator-local `local`) and an optional expected source pin. Responses return Installation / Deployment records with AppSpec digest (serialized as `manifestDigest`), source, status, and public/non-secret materialized component outputs. Retained implementation / operator evidence lives behind the reference implementation or operator ledger. Dry-runs return changes and expected digests without persisting a plan entity.
 
 ## Reference KernelPlugin
 
-`KernelPlugin` is the current takosumi.com reference kernel adapter API. An
-operator-attached adapter declares the kind URIs it provides, applies a
-component, optionally destroys it, publishes local publication material, and
-adapts listened material into env / mount / upstream runtime inputs.
+`KernelPlugin` is the current takosumi.com reference kernel adapter API. An operator-attached adapter declares the kind URIs it provides, applies a component, optionally destroys it, publishes local publication material, and adapts listened material into env / mount / upstream runtime inputs.
 
 Reference operators attach adapters as plain arrays:
 
@@ -129,24 +93,15 @@ await createPaaSApp({
 });
 ```
 
-Cloud and self-host provider packages are optional imports for the reference
-kernel. Operators choose an implementation set for each distribution.
+Cloud and self-host provider packages are optional imports for the reference kernel. Operators choose an implementation set for each distribution.
 
 ## Reference Runtime-Agent Lifecycle
 
-These DTOs describe the reference lifecycle envelope used by the takosumi.com
-runtime-agent topology:
+These DTOs describe the reference lifecycle envelope used by the takosumi.com runtime-agent topology:
 
 - `LifecycleApplyRequest` / `LifecycleApplyResponse`
 - `LifecycleDestroyRequest` / `LifecycleDestroyResponse`
 - `LifecycleCompensateRequest` / `LifecycleCompensateResponse`
 - `LifecycleDescribeRequest` / `LifecycleDescribeResponse`
 
-AppSpec and the Installer API remain the public conformance surface. Credentials
-stay outside the kernel. Reference kernel adapters send lifecycle envelopes to a
-runtime-agent connector, which performs the cloud API or local OS operation and
-returns opaque handles for internal operation state plus component outputs for
-local publication material and installer responses. The lifecycle
-`(shape, provider)` fields are connector-local wire selectors derived from the
-operator's kind / implementation binding mapping before the lifecycle request is
-sent.
+AppSpec and the Installer API remain the public conformance surface. Credentials stay outside the kernel. Reference kernel adapters send lifecycle envelopes to a runtime-agent connector, which performs the cloud API or local OS operation and returns opaque handles for internal operation state plus component outputs for local publication material and installer responses. The lifecycle `(shape, provider)` fields are connector-local wire selectors derived from the operator's kind / implementation binding mapping before the lifecycle request is sent.

@@ -1,14 +1,8 @@
 # Space モデル {#space-model}
 
-`Space` は operator account layer が提供する install scope です。Takosumi core
-は `spaceId` を request context と record field として扱い、その Space に見える
-kind の定義 / platform service / policy を使って apply を解決します。
+`Space` は operator account layer が提供する install scope です。Takosumi core は `spaceId` を request context と record field として扱い、その Space に見える kind の定義 / platform service / policy を使って apply を解決します。
 
-manifest は Space を宣言しない。deploy / preview / apply リクエストは、actor
-auth、API path、operator context、CLI profile が選んだ Space で実行される。各
-Space は独自の platform service visibility、policy、kind alias / kind の定義の
-visibility、secret partition、operator asset extension policy、 approval
-context を持つため、同じ manifest が Space ごとに異なる resolve 結果に なりうる。
+manifest は Space を宣言しない。deploy / preview / apply リクエストは、actor auth、API path、operator context、CLI profile が選んだ Space で実行される。各 Space は独自の platform service visibility、policy、kind alias / kind の定義の visibility、secret partition、operator asset extension policy、 approval context を持つため、同じ manifest が Space ごとに異なる resolve 結果になりうる。
 
 ## 包含関係 {#containment}
 
@@ -33,9 +27,7 @@ Operator / reference implementation state
 Space は operator が与える visibility / policy / ownership context である。
 ```
 
-すべての `Deployment`、`ResolvedPlan`、`TargetState`、
-`OperationJournal`、`ObservationState`、`CleanupBacklog`、`TrafficSnapshot`、
-approval、`RoutingPointer` は厳密に 1 つの Space に属する。
+すべての `Deployment`、`ResolvedPlan`、`TargetState`、 `OperationJournal`、`ObservationState`、`CleanupBacklog`、`TrafficSnapshot`、 approval、`RoutingPointer` は厳密に 1 つの Space に属する。
 
 ```yaml
 Space:
@@ -53,16 +45,14 @@ Space:
 
 ## Space と platform service {#space-vs-platform-service}
 
-platform service path は Space scope の platform service
-table 内の名前である。
+platform service path は Space scope の platform service table 内の名前である。
 
 ```text
 publisher.identity.primary
 publisher.database.primary
 ```
 
-2 つの Space にある同じ platform service path は、それぞれの Space の
-platform service table で解決される別個の subject です。
+2 つの Space にある同じ platform service path は、それぞれの Space の platform service table で解決される別個の subject です。
 
 ```text
 space_acme_prod / publisher.database.primary
@@ -73,8 +63,7 @@ space_acme_dev  / publisher.database.primary
 
 ## アドレス qualification {#address-qualification}
 
-canonical record は identity の一部として `spaceId` を持つ。テキスト表現は tuple
-または qualified address のいずれかで描画できる。
+canonical record は identity の一部として `spaceId` を持つ。テキスト表現は tuple または qualified address のいずれかで描画できる。
 
 ```text
 (space_acme_prod, obj_api)
@@ -82,16 +71,11 @@ space_acme_prod/obj_api
 space_acme_prod/link_api_DATABASE_URL
 ```
 
-storage では tuple 形式が望ましい。qualified 文字列は log、plan 出力、audit
-event で有用である。
+storage では tuple 形式が望ましい。qualified 文字列は log、plan 出力、audit event で有用である。
 
 ## Platform service scope {#platform-service-scope}
 
-public manifest v1 の platform service path resolution は Space
-の中で行われ、Space に可視化された platform service declaration を exact
-match で見る。以下の scope は reference implementation が内部 record
-を整理するために使える vocabulary であり、manifest author が `listen.from` で選ぶ
-public source ではありません。
+public manifest v1 の platform service path resolution は Space の中で行われ、Space に可視化された platform service declaration を exact match で見る。以下の scope は reference implementation が内部 record を整理するために使える vocabulary であり、manifest author が `listen.from` で選ぶ public source ではありません。
 
 ```text
 public:
@@ -106,28 +90,18 @@ internal / future:
   explicit cross-Space publication shares
 ```
 
-current public v1 では platform service の exact match が正本です。内部
-scope を導入する場合も public platform service path を shadow しないよう
-policy で fail-closed にします。
+current public v1 では platform service の exact match が正本です。内部 scope を導入する場合も public platform service path を shadow しないよう policy で fail-closed にします。
 
 ## Publisher roots {#publisher-roots}
 
-platform service path の first segment は publisher root
-です。名前はグローバルに見えても、 可視性は Space scope です。Takosumi core の
-grammar は publisher root を plain segment として扱います。operator profile
-や product distribution が、自分の公開する publication path を distribution spec
-で定義します。
+platform service path の first segment は publisher root です。名前はグローバルに見えても、可視性は Space scope です。Takosumi core の grammar は publisher root を plain segment として扱います。operator profile や product distribution が、自分の公開する publication path を distribution spec で定義します。
 
 ```text
 publisher.area.name
 publisher.database.primary
 ```
 
-`publisher.database.primary` のような path も、resolution で使う前にその Space
-で visible になり、operator policy が access を許可する必要がある。Takosumi
-Cloud の concrete workload publication paths と account layer API / facade
-identifiers は Cloud distribution spec が定義するものであり、Takosumi core の特
-別な組み込み path ではありません。
+`publisher.database.primary` のような path も、resolution で使う前にその Space で visible になり、operator policy が access を許可する必要がある。Takosumi Cloud の concrete workload publication paths と account layer API / facade identifiers は Cloud distribution spec が定義するものであり、Takosumi core の特別な組み込み path ではありません。
 
 operator が publish する platform service は Space に明示的に visible になります。
 
@@ -143,16 +117,11 @@ ExternalPublicationVisibility:
     state: fresh
 ```
 
-public v1 の依存は、同じ manifest 内の `component.publication` と、対象 Space に
-可視化された platform service declaration `publicationPath` を exact match
-で解決する platform service path です。
+public v1 の依存は、同じ manifest 内の `component.publication` と、対象 Space に可視化された platform service declaration `publicationPath` を exact match で解決する platform service path です。
 
 ## Space 跨ぎ sharing {#cross-space-sharing}
 
-current public v1 の platform service resolution は同一 Space
-内で完結します。別 Space の publication を使う sharing model は将来 RFC の scope
-です。将来 RFC では owner、 TTL、revocation、audit、cleanup debt
-をまとめて定義します。
+current public v1 の platform service resolution は同一 Space 内で完結します。別 Space の publication を使う sharing model は将来 RFC の scope です。将来 RFC では owner、 TTL、revocation、audit、cleanup debt をまとめて定義します。
 
 ```yaml
 fromSpaceId: space_platform
@@ -182,8 +151,7 @@ draft → active → refresh-required → stale → revoked
 
 Refresh / TTL 規則:
 
-- 各 share は `expiresAt` と operator 管理の refresh policy を持つ。TTL に
-  近づくと `active → refresh-required` に遷移する。
+- 各 share は `expiresAt` と operator 管理の refresh policy を持つ。TTL に近づくと `active → refresh-required` に遷移する。
 - refresh 成功は share を `active` に戻す。refresh 失敗は `stale` に遷移する。
 - `stale` と `revoked` はいずれも dependency cleanup を queue する。
 - future risk / debt reason は RFC 側で closed enum に追加する。
@@ -203,9 +171,7 @@ approvals and policy decisions
 group heads and activation history
 ```
 
-Space isolation はすべてのデータが物理的に別 database に保管されることを意味
-しない。すべての読み込み・書き込み・resolution・operation が `spaceId` と policy
-で scope されることを意味する。
+Space isolation はすべてのデータが物理的に別 database に保管されることを意味しない。すべての読み込み・書き込み・resolution・operation が `spaceId` と policy で scope されることを意味する。
 
 ## Space 内の Group {#group-inside-space}
 
@@ -223,8 +189,7 @@ space_acme_prod/group_api
 space_acme_dev/group_web
 ```
 
-RoutingPointer 更新は所有 Space 内で直列化される。Group は別の Space で current に
-なることはできない。
+RoutingPointer 更新は所有 Space 内で直列化される。Group は別の Space で current になることはできない。
 
 ## Space 不変条件 {#space-invariants}
 
@@ -249,8 +214,7 @@ Activation isolation invariant:
 
 ## 最小例 {#minimal-example}
 
-manifest は Space を言及しない。 Space は installer request の `spaceId`
-で決まる。
+manifest は Space を言及しない。 Space は installer request の `spaceId` で決まる。
 
 ```yaml
 apiVersion: v1
@@ -280,16 +244,13 @@ components:
       entrypoint: src/worker.ts
 ```
 
-`space_acme_prod` で apply すると、publish/listen resolution、選ばれた
-provider、 output ref、policy、secret、prepared source、RoutingPointer はすべて
-production Space に対して resolve される。
+`space_acme_prod` で apply すると、publish/listen resolution、選ばれた provider、 output ref、policy、secret、prepared source、RoutingPointer はすべて production Space に対して resolve される。
 
 ```text
 space_acme_prod/db.connection
 ```
 
-`space_acme_dev` で apply すると、同じ manifest が development Space に対して
-resolve される。
+`space_acme_dev` で apply すると、同じ manifest が development Space に対して resolve される。
 
 ```text
 space_acme_dev/db.connection

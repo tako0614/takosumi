@@ -4,8 +4,7 @@
 
 - [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.x 以上
 
-この手順は local dev サーバーに Manifest を渡し、Installation と最初の Deployment
-の記録を作るところまでを確認します。
+この手順は local dev サーバーに Manifest を渡し、Installation と最初の Deployment の記録を作るところまでを確認します。
 
 ## 1. CLI を入れる
 
@@ -47,8 +46,7 @@ components:
 
 ## 3. ローカル開発サーバーを起動する
 
-Takosumi はサーバーと CLI (クライアント) が分かれています。
-開発時はサーバーをバックグラウンドで起動し、別の shell で CLI を使います。
+Takosumi はサーバーと CLI (クライアント) が分かれています。開発時はサーバーをバックグラウンドで起動し、別の shell で CLI を使います。
 
 別 shell でサーバーを起動する:
 
@@ -74,8 +72,7 @@ export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
 takosumi install dry-run --space space_personal --source "$APP_ROOT"
 ```
 
-成功すると `changes[]` (予定差分) と `expected.manifestDigest` (dry-run 時のハッシュ照合値) が
-返ります。
+成功すると `changes[]` (予定差分) と `expected.manifestDigest` (dry-run 時のハッシュ照合値) が返ります。
 
 ```json
 {
@@ -85,8 +82,7 @@ takosumi install dry-run --space space_personal --source "$APP_ROOT"
 }
 ```
 
-`changes` は作成される component のリスト、`manifestDigest` はソースの識別子です。
-apply 時にこの digest を照合して、dry-run 後にソースが変わっていないことを確認します。
+`changes` は作成される component のリスト、`manifestDigest` はソースの識別子です。 apply 時にこの digest を照合して、dry-run 後にソースが変わっていないことを確認します。
 
 ## 5. Installation を作る
 
@@ -110,8 +106,7 @@ takosumi install --space space_personal --source "$APP_ROOT" \
 }
 ```
 
-ここまでが local ledger quickstart の runnable path です。public app endpoint
-は gateway / ingress provider がある operator 環境でだけ作られます。
+ここまでが local ledger quickstart の runnable path です。public app endpoint は gateway / ingress provider がある operator 環境でだけ作られます。
 
 次のステップ: [component 接続と HTTP 公開](./next-steps.md)
 

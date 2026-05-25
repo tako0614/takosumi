@@ -43,7 +43,7 @@ function shape(): Shape {
   return {
     id: SHAPE,
     version: SHAPE_VERSION,
-    capabilities: ["c"],
+    capabilityTerms: ["c"],
     outputFields: ["url"],
     validateSpec(value, issues) {
       if (typeof value !== "object" || value === null) {

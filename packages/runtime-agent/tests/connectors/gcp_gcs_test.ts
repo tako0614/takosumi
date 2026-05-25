@@ -54,6 +54,7 @@ Deno.test("GcpGcsConnector.apply POSTs to storage.googleapis.com with project qu
   const res = await connector.apply({
     shape: "object-store@v1",
     provider: "@takos/gcp-gcs",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: { name: "tenant-data" },
   }, {});

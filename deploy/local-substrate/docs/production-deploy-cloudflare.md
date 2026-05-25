@@ -8,19 +8,13 @@ The local-substrate mirrors production using `.test` TLDs:
 | `https://cloud.takosumi.com/`              | `https://cloud.takosumi.test/`         | Accounts Cloudflare Worker + D1 + R2 (prod) / Miniflare + SQLite/R2 (local) |
 | operator-selected Takosumi kernel hostname | `https://kernel-worker.takosumi.test/` | Takosumi kernel Worker + D1/R2/Queues/DO (prod) / Miniflare local binds     |
 
-Once the local mirror passes `scripts/smoke.sh`, follow this runbook to push the
-same artifacts to real Cloudflare. The Worker code is byte-for- byte identical;
-only DNS / binding IDs / secrets differ.
+Once the local mirror passes `scripts/smoke.sh`, follow this runbook to push the same artifacts to real Cloudflare. The Worker code is byte-for- byte identical; only DNS / binding IDs / secrets differ.
 
 ## Prerequisites
 
-1. **Domain ownership**: `takosumi.com` registered, DNS delegated to Cloudflare
-   nameservers.
+1. **Domain ownership**: `takosumi.com` registered, DNS delegated to Cloudflare nameservers.
 2. **Cloudflare account** with the `takosumi.com` zone added.
-3. **API token** with: `Workers Scripts:Edit`, `Workers Routes:Edit`, `D1:Edit`,
-   `R2:Edit`, `Queues:Edit`, `Pages:Edit`, `DNS:Edit` for `takosumi.com`. The
-   Pages permission must cover writes to the single `takosumi-website` project
-   (post Wave M-G consolidation; see §Step 3).
+3. **API token** with: `Workers Scripts:Edit`, `Workers Routes:Edit`, `D1:Edit`, `R2:Edit`, `Queues:Edit`, `Pages:Edit`, `DNS:Edit` for `takosumi.com`. The Pages permission must cover writes to the single `takosumi-website` project (post Wave M-G consolidation; see §Step 3).
 4. **wrangler** installed (`npm install -g wrangler` or `npx wrangler`).
 5. **Logged in**: `wrangler login` once.
 
@@ -49,9 +43,7 @@ wrangler secret put TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET --config deploy/clo
 wrangler deploy --config deploy/cloudflare/wrangler.toml
 ```
 
-The `[[routes]]` block in `wrangler.toml` already maps `cloud.takosumi.com/*` to
-this Worker. Cloudflare auto-creates the DNS record on first deploy as long as
-the zone is in your account.
+The `[[routes]]` block in `wrangler.toml` already maps `cloud.takosumi.com/*` to this Worker. Cloudflare auto-creates the DNS record on first deploy as long as the zone is in your account.
 
 Verify:
 
@@ -61,10 +53,7 @@ curl https://cloud.takosumi.com/.well-known/openid-configuration
 
 ## Step 2 — Takosumi kernel Worker
 
-The Takosumi kernel Worker is owned by `takosumi/deploy/cloudflare/`. It is
-Worker-first and uses Cloudflare bindings directly: D1 for kernel snapshots /
-Installation and Deployment records, R2 for artifacts, Queues for enqueue, and
-Durable Objects for coordination.
+The Takosumi kernel Worker is owned by `takosumi/deploy/cloudflare/`. It is Worker-first and uses Cloudflare bindings directly: D1 for kernel snapshots / Installation and Deployment records, R2 for artifacts, Queues for enqueue, and Durable Objects for coordination.
 
 ```sh
 cd takosumi/
@@ -88,10 +77,7 @@ wrangler secret put TAKOSUMI_AGENT_TOKEN --config deploy/cloudflare/wrangler.tom
 wrangler deploy --config deploy/cloudflare/wrangler.toml
 ```
 
-Add the operator-owned route or custom domain for the kernel Worker in
-Cloudflare after choosing the public/private API hostname. The local-substrate
-intentionally exposes the mirror as `kernel-worker.takosumi.test` so it can be
-checked beside the default Deno+Postgres kernel at `kernel.takosumi.test`.
+Add the operator-owned route or custom domain for the kernel Worker in Cloudflare after choosing the public/private API hostname. The local-substrate intentionally exposes the mirror as `kernel-worker.takosumi.test` so it can be checked beside the default Deno+Postgres kernel at `kernel.takosumi.test`.
 
 Verify:
 
@@ -106,15 +92,7 @@ curl -X POST -H "Content-Type: application/json" \
 
 ## Step 3 — takosumi.com website (landing + /docs/ + /contexts/, Cloudflare Pages)
 
-Wave M-G (= 2026-05-20) consolidated the apex landing, the VitePress reference
-docs, and the JSON-LD context catalog into a **single** Cloudflare Pages project
-(`takosumi-website`). The build script `takosumi/website/build.sh` produces one
-merged `.output/public/` artifact with `index.html` at the apex, the VitePress
-build overlaid under `/docs/`, and `spec/contexts/` overlaid under `/contexts/`.
-The legacy split (`takosumi-site` for the landing + `takosumi-docs` for
-`docs.takosumi.com`) is superseded; see
-[`takosumi/DEPLOY.md`](../../../DEPLOY.md) §"Cleanup of legacy Pages projects"
-for the one-time dashboard cleanup steps.
+Wave M-G (= 2026-05-20) consolidated the apex landing, the VitePress reference docs, and the JSON-LD context catalog into a **single** Cloudflare Pages project (`takosumi-website`). The build script `takosumi/website/build.sh` produces one merged `.output/public/` artifact with `index.html` at the apex, the VitePress build overlaid under `/docs/`, and `spec/contexts/` overlaid under `/contexts/`. The legacy split (`takosumi-site` for the landing + `takosumi-docs` for `docs.takosumi.com`) is superseded; see [`takosumi/DEPLOY.md`](../../../DEPLOY.md) §"Cleanup of legacy Pages projects" for the one-time dashboard cleanup steps.
 
 Option A — connect Pages to the takosumi repo (recommended for CI):
 
@@ -123,8 +101,7 @@ Option A — connect Pages to the takosumi repo (recommended for CI):
    - Build command: `bash website/build.sh`
    - Build output directory: `website/.output/public`
    - Root directory: (repo root)
-3. Custom domain: `takosumi.com` (apex), optionally `www.takosumi.com`. Pages
-   provisions cert.
+3. Custom domain: `takosumi.com` (apex), optionally `www.takosumi.com`. Pages provisions cert.
 
 Option B — `wrangler pages deploy` (one-shot from your laptop):
 
@@ -155,8 +132,7 @@ In the `takosumi.com` Cloudflare zone you should now have:
 | Worker route      | `cloud.takosumi.com`     | takosumi-cloud-accounts Worker | (no DNS record needed for `*.com/*` Worker routes — Cloudflare matches on the route pattern) |
 | Worker route      | operator kernel hostname | takosumi kernel Worker         | choose operator-owned public/private hostname and route policy                               |
 
-If using a separate CNAME for `cloud.takosumi.com`, add it pointing anywhere —
-the Worker route intercepts before DNS resolution matters.
+If using a separate CNAME for `cloud.takosumi.com`, add it pointing anywhere — the Worker route intercepts before DNS resolution matters.
 
 ## Rollback
 
@@ -173,23 +149,13 @@ wrangler rollback --config takosumi/deploy/cloudflare/wrangler.toml
 
 ## Why the local mirror is a faithful test
 
-The local-substrate runs the **same bundled Worker files** that
-`wrangler deploy` ships:
+The local-substrate runs the **same bundled Worker files** that `wrangler deploy` ships:
 
 ```
 takosumi-cloud/deploy/cloudflare/.wrangler/dist/takosumi-cloud-accounts-worker.mjs
 takosumi/deploy/cloudflare/.wrangler/dist/takosumi-cloudflare-worker.mjs
 ```
 
-The build containers produce them; Miniflare runs them locally with emulated
-D1/R2/Queues/DO bindings. The difference between local and prod is the
-provider-managed binding backend and the binding / secret values. Code path is
-identical.
+The build containers produce them; Miniflare runs them locally with emulated D1/R2/Queues/DO bindings. The difference between local and prod is the provider-managed binding backend and the binding / secret values. Code path is identical.
 
-If `cloud.takosumi.test/.well-known/openid-configuration` returns 200 in
-local-substrate, the same Worker route should work on `cloud.takosumi.com` only
-after Cloudflare-side DNS/TLS, route, D1/R2 binding IDs, and secrets are
-validated and recorded as launch-readiness evidence. If
-`kernel-worker.takosumi.test/{healthz,storage/healthz,coordination/healthz,queue/test}`
-passes locally, the kernel Worker bundle has booted with the same Cloudflare
-binding contract that production uses.
+If `cloud.takosumi.test/.well-known/openid-configuration` returns 200 in local-substrate, the same Worker route should work on `cloud.takosumi.com` only after Cloudflare-side DNS/TLS, route, D1/R2 binding IDs, and secrets are validated and recorded as launch-readiness evidence. If `kernel-worker.takosumi.test/{healthz,storage/healthz,coordination/healthz,queue/test}` passes locally, the kernel Worker bundle has booted with the same Cloudflare binding contract that production uses.

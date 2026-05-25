@@ -66,6 +66,7 @@ Deno.test("DockerComposeConnector.apply runs `docker run` with image + port mapp
   const res = await connector.apply({
     shape: "web-service@v1",
     provider: "@takos/selfhost-docker-compose",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: {
       image: "registry/app:1",
@@ -73,14 +74,14 @@ Deno.test("DockerComposeConnector.apply runs `docker run` with image + port mapp
       env: { FOO: "bar" },
     },
   }, {});
-  assert.equal(res.handle, "app");
+  assert.match(res.handle, /^app-[a-z0-9]+$/);
   assert.equal(res.outputs.internalPort, 8080);
-  assert.equal(res.outputs.internalHost, "app");
+  assert.equal(res.outputs.internalHost, res.handle);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].cmd, "docker");
   assert.equal(calls[0].args[0], "run");
   assert.ok(calls[0].args.includes("--name"));
-  assert.ok(calls[0].args.includes("app"));
+  assert.ok(calls[0].args.includes(res.handle));
   assert.ok(calls[0].args.some((a) => a.startsWith("18080:")));
 });
 
@@ -102,6 +103,7 @@ Deno.test("DockerComposeConnector.apply retries on port-allocation collision", a
   const res = await connector.apply({
     shape: "web-service@v1",
     provider: "@takos/selfhost-docker-compose",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: { image: "registry/app:1", port: 8080 },
   }, {});
@@ -109,7 +111,39 @@ Deno.test("DockerComposeConnector.apply retries on port-allocation collision", a
   assert.ok(calls[0].args.some((a) => a === "18080:8080"));
   assert.ok(calls[1].args.some((a) => a === "18081:8080"));
   assert.ok(calls[2].args.some((a) => a === "18082:8080"));
-  assert.equal(res.handle, "app");
+  assert.match(res.handle, /^app-[a-z0-9]+$/);
+});
+
+Deno.test("DockerComposeConnector.apply treats same container-name conflict as idempotent success", async () => {
+  const inspectJson = JSON.stringify({
+    State: { Status: "running" },
+    NetworkSettings: {
+      Ports: {
+        "8080/tcp": [{ HostIp: "0.0.0.0", HostPort: "18080" }],
+      },
+    },
+  });
+  const { command, calls } = makeMockCommand([
+    {
+      code: 125,
+      stderr:
+        'docker: Error response from daemon: Conflict. The container name "/app-0vqi8hi" is already in use.',
+    },
+    { code: 0, stdout: inspectJson },
+  ]);
+  const connector = new DockerComposeConnector({ command });
+  const res = await connector.apply({
+    shape: "web-service@v1",
+    provider: "@takos/selfhost-docker-compose",
+    spaceId: "space_test",
+    resourceName: "rs",
+    spec: { image: "registry/app:1", port: 8080 },
+  }, {});
+  assert.match(res.handle, /^app-[a-z0-9]+$/);
+  assert.equal(res.outputs.url, "http://localhost:18080");
+  assert.equal(calls[0].args[0], "run");
+  assert.equal(calls[1].args[0], "inspect");
+  assert.equal(calls[1].args[1], res.handle);
 });
 
 Deno.test("DockerComposeConnector.apply throws on non-port docker errors without retry", async () => {
@@ -122,6 +156,7 @@ Deno.test("DockerComposeConnector.apply throws on non-port docker errors without
       connector.apply({
         shape: "web-service@v1",
         provider: "@takos/selfhost-docker-compose",
+        spaceId: "space_test",
         resourceName: "rs",
         spec: { image: "registry/app:1", port: 8080 },
       }, {}),
@@ -136,12 +171,14 @@ Deno.test("DockerComposeConnector.destroy runs `docker rm -f`", async () => {
   await connector.apply({
     shape: "web-service@v1",
     provider: "@takos/selfhost-docker-compose",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: { image: "registry/app:1", port: 8080 },
   }, {});
   const res = await connector.destroy({
     shape: "web-service@v1",
     provider: "@takos/selfhost-docker-compose",
+    spaceId: "space_test",
     handle: "app",
   }, {});
   assert.equal(res.ok, true);
@@ -166,6 +203,7 @@ Deno.test("DockerComposeConnector.describe queries `docker inspect` and reports 
   const res = await connector.describe({
     shape: "web-service@v1",
     provider: "@takos/selfhost-docker-compose",
+    spaceId: "space_test",
     handle: "app",
   }, {});
   assert.equal(res.status, "running");
@@ -185,6 +223,7 @@ Deno.test("DockerComposeConnector.describe returns missing when docker inspect e
   const res = await connector.describe({
     shape: "web-service@v1",
     provider: "@takos/selfhost-docker-compose",
+    spaceId: "space_test",
     handle: "app",
   }, {});
   assert.equal(res.status, "missing");
@@ -200,6 +239,7 @@ Deno.test("DockerComposeConnector.describe returns missing when container is not
   const res = await connector.describe({
     shape: "web-service@v1",
     provider: "@takos/selfhost-docker-compose",
+    spaceId: "space_test",
     handle: "app",
   }, {});
   assert.equal(res.status, "missing");
@@ -218,6 +258,7 @@ Deno.test("DockerComposeConnector.describe survives without prior apply (restart
   const res = await connector.describe({
     shape: "web-service@v1",
     provider: "@takos/selfhost-docker-compose",
+    spaceId: "space_test",
     handle: "previously-deployed",
   }, {});
   assert.equal(res.status, "running");

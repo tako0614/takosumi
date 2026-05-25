@@ -111,11 +111,34 @@ services:
 
   # ---- Takosumi Accounts (OIDC issuer) ----
 
+  accounts-migrate:
+    image: denoland/deno:2.7.10
+    restart: "no"
+    depends_on:
+      substrate-postgres-init:
+        condition: service_completed_successfully
+    working_dir: /workspace
+    command:
+      - sh
+      - -c
+      - |
+          deno run \
+            --allow-net \
+            --allow-read=packages/accounts-service/migrations \
+            packages/cli/src/main.ts accounts migrate \
+            --database-url "$$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+    env_file:
+      - env/accounts.env
+    volumes:
+      - ../../../takosumi-cloud:/workspace
+    networks:
+      - takos-local-internal
+
   accounts:
     image: denoland/deno:2.7.10
     restart: unless-stopped
     depends_on:
-      substrate-postgres-init:
+      accounts-migrate:
         condition: service_completed_successfully
     working_dir: /workspace/deploy/node-postgres
     command:
@@ -173,8 +196,10 @@ services:
       - env/kernel.env
     volumes:
       - ../../../takosumi:/workspace
+      - ../../../takos:/sources/takos:ro
       - ./wrappers:/wrappers:ro
       - ./factories:/local-substrate-factories:ro
+      - ./caddy/runtime:/local-substrate-runtime
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test:
@@ -428,6 +453,10 @@ services:
             npm install --no-fund --no-audit
           fi
           export VITE_TAKOSUMI_DASHBOARD_DEV_SIGN_IN="true"
+          export VITE_TAKOSUMI_DASHBOARD_DEV_SUBJECT="tsub_takosumi_cloud_local"
+          export VITE_TAKOSUMI_DASHBOARD_DEV_SESSION_ID="sess_local_substrate"
+          export VITE_TAKOSUMI_DASHBOARD_DEV_ACCOUNT_ID="acct_local"
+          export VITE_TAKOSUMI_DASHBOARD_DEV_SPACE_ID="space_local"
           npm run build
     volumes:
       - ../../../takosumi-cloud/packages/dashboard-ui:/dashboard
@@ -496,8 +525,10 @@ services:
       KERNEL_URL: http://kernel:8788
       CADDY_ADMIN_URL: http://caddy:2019
       POLL_INTERVAL_MS: "5000"
+      GATEWAY_ROUTE_PROJECTION_FILE: /local-substrate-runtime/gateway-routes.json
     volumes:
       - ./route-registrar:/app:ro
+      - ./caddy/runtime:/local-substrate-runtime:ro
     networks:
       - takos-local-internal
 
@@ -514,8 +545,10 @@ services:
       KERNEL_URL: http://kernel-workers:8788
       CADDY_ADMIN_URL: http://caddy:2019
       POLL_INTERVAL_MS: "5000"
+      GATEWAY_ROUTE_PROJECTION_FILE: /local-substrate-runtime/gateway-routes.json
     volumes:
       - ./route-registrar:/app:ro
+      - ./caddy/runtime:/local-substrate-runtime:ro
     networks:
       - takos-local-internal
 

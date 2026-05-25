@@ -89,6 +89,7 @@ services:
           - kernel-worker.takosumi.test
           - takosumi.test
           - cloud.takosumi.test
+          - takos.app.takosumi.test
           - oauth-mock.test
           - mailpit.takosumi.test
           - jaeger.takosumi.test

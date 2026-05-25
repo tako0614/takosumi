@@ -1,8 +1,6 @@
 # 環境変数 {#environment-variables}
 
-`TAKOSUMI_*` 環境変数の一覧。public Installer API に直接属する env は
-`TAKOSUMI_INSTALLER_TOKEN` です。その他は reference Takosumi server、 operator
-extension、runtime-agent、CLI の設定です。
+`TAKOSUMI_*` 環境変数の一覧。public Installer API に直接属する env は `TAKOSUMI_INSTALLER_TOKEN` です。その他は reference Takosumi server、 operator extension、runtime-agent、CLI の設定です。
 
 ## 優先順位
 
@@ -13,9 +11,7 @@ extension、runtime-agent、CLI の設定です。
 4. built-in default
 ```
 
-boolean は `1 / true / yes / on / enabled` を真、
-`0 / false / no / off / disabled` を偽として扱います。それ以外は fail closed
-です。
+boolean は `1 / true / yes / on / enabled` を真、 `0 / false / no / off / disabled` を偽として扱います。それ以外は fail closed です。
 
 ## Reference Takosumi server
 
@@ -24,12 +20,21 @@ boolean は `1 / true / yes / on / enabled` を真、
 | `TAKOSUMI_ENVIRONMENT`         | enum    | `local` | no                             | `local` / `development` / `test` / `staging` / `production`。         |
 | `TAKOSUMI_DEV_MODE`            | boolean | `false` | no                             | dev 専用 unsafe defaults opt-out。production では使わない。           |
 | `PORT`                         | number  | `8788`  | no                             | Takosumi HTTP server port。CLI は `takosumi server --port` で設定。   |
-| `TAKOSUMI_PUBLIC_BASE_URL`     | URL     | unset   | asset routes 使用時        | asset URL synthesis 用の public base URL。                        |
+| `TAKOSUMI_PUBLIC_BASE_URL`     | URL     | unset   | asset routes 使用時            | asset URL synthesis 用の public base URL。                            |
 | `TAKOSUMI_INSTALLER_TOKEN`     | secret  | unset   | public installer routes 使用時 | Installer API bearer。                                                |
-| `TAKOSUMI_DEPLOY_TOKEN`        | secret  | unset   | asset write routes 使用時  | optional asset upload / write bearer。                            |
+| `TAKOSUMI_DEPLOY_TOKEN`        | secret  | unset   | asset write routes 使用時      | optional asset upload / write bearer。                                |
 | `TAKOSUMI_INTERNAL_API_SECRET` | secret  | unset   | production                     | internal control-plane RPC bearer。                                   |
 | `TAKOSUMI_AGENT_URL`           | URL     | unset   | remote agent topology          | runtime-agent base URL。unset 時は embedded execution role を使える。 |
 | `TAKOSUMI_AGENT_TOKEN`         | secret  | unset   | remote agent topology          | runtime-agent call bearer。                                           |
+
+## External publication resolver
+
+Reference kernel が 3 segment 以上の `listen.from` を operator account-plane に問い合わせるための設定です。これは implementation wiring であり、AppSpec の grammar や Cloud 固有 path を kernel contract に追加するものではありません。
+
+| Variable                                       | Type   | Default | Required                            | 説明                                                                |
+| ---------------------------------------------- | ------ | ------- | ----------------------------------- | ------------------------------------------------------------------- |
+| `TAKOSUMI_EXTERNAL_PUBLICATION_RESOLVER_URL`   | URL    | unset   | external publication を解決する場合 | operator account-plane の resolver endpoint。POST JSON で呼び出す。 |
+| `TAKOSUMI_EXTERNAL_PUBLICATION_RESOLVER_TOKEN` | secret | unset   | resolver が bearer を要求する場合   | resolver endpoint に送る bearer token。                             |
 
 ## Storage and locks
 
@@ -46,8 +51,8 @@ boolean は `1 / true / yes / on / enabled` を真、
 
 ## Optional asset Routes
 
-| Variable                              | Type          | Default    | Required              | 説明                                                            |
-| ------------------------------------- | ------------- | ---------- | --------------------- | --------------------------------------------------------------- |
+| Variable                              | Type          | Default    | Required              | 説明                                                        |
+| ------------------------------------- | ------------- | ---------- | --------------------- | ----------------------------------------------------------- |
 | `TAKOSUMI_ARTIFACT_FETCH_TOKEN`       | secret        | unset      | remote agent topology | optional asset GET / HEAD read bearer。                     |
 | `TAKOSUMI_ARTIFACT_MAX_BYTES`         | bytes         | `52428800` | no                    | optional asset upload cap。operator metadata が上書き可能。 |
 | `TAKOSUMI_ARTIFACT_GC_GRACE_DAYS`     | integer days  | `7`        | no                    | optional asset GC sweep grace window。                      |
@@ -61,7 +66,7 @@ boolean は `1 / true / yes / on / enabled` を真、
 | `TAKOSUMI_BOOT_TIMEOUT_LOCK_STORE_SEC`             | seconds | `30`    | no       | lock store readiness timeout。                                     |
 | `TAKOSUMI_BOOT_TIMEOUT_SECRET_PARTITION_SEC`       | seconds | `15`    | no       | secret partition readiness timeout。                               |
 | `TAKOSUMI_BOOT_TIMEOUT_PUBLIC_LISTENER_SEC`        | seconds | `15`    | no       | kernel control-plane listener bind timeout (historical env name)。 |
-| `TAKOSUMI_BOOT_TIMEOUT_PLUGIN_BOOTSTRAP_SEC`       | seconds | `60`    | no       | binding bootstrap timeout (historical env name)。   |
+| `TAKOSUMI_BOOT_TIMEOUT_PLUGIN_BOOTSTRAP_SEC`       | seconds | `60`    | no       | binding bootstrap timeout (historical env name)。                  |
 | `TAKOSUMI_BOOT_TIMEOUT_RUNTIME_AGENT_REGISTRY_SEC` | seconds | `60`    | no       | runtime-agent registry timeout。                                   |
 
 ## Observability
@@ -85,34 +90,31 @@ boolean は `1 / true / yes / on / enabled` を真、
 
 `TAKOSUMI_PAAS_WORKER_*` は historical prefix。
 
-| Variable                                   | Type       | Default             | Required | 説明                             |
-| ------------------------------------------ | ---------- | ------------------- | -------- | -------------------------------- |
-| `TAKOSUMI_PAAS_WORKER_HEARTBEAT_FILE`      | path       | unset               | no       | worker daemon liveness file。    |
-| `TAKOSUMI_PAAS_WORKER_POLL_INTERVAL_MS`    | integer ms | `250`               | no       | worker poll loop interval。      |
-| `TAKOSUMI_APPLY_QUEUE`                     | string     | provider default    | no       | apply worker queue name。        |
-| `TAKOSUMI_WORKER_POLL_INTERVAL_MS`         | integer ms | provider default    | no       | apply worker poll interval。     |
-| `TAKOSUMI_WORKER_VISIBILITY_TIMEOUT_MS`    | integer ms | provider default    | no       | apply queue visibility timeout。 |
-| `TAKOSUMI_OUTBOX_DISPATCH_LIMIT`           | integer    | provider default    | no       | outbox dispatcher batch limit。  |
+| Variable                                   | Type       | Default             | Required | 説明                                 |
+| ------------------------------------------ | ---------- | ------------------- | -------- | ------------------------------------ |
+| `TAKOSUMI_PAAS_WORKER_HEARTBEAT_FILE`      | path       | unset               | no       | worker daemon liveness file。        |
+| `TAKOSUMI_PAAS_WORKER_POLL_INTERVAL_MS`    | integer ms | `250`               | no       | worker poll loop interval。          |
+| `TAKOSUMI_APPLY_QUEUE`                     | string     | provider default    | no       | apply worker queue name。            |
+| `TAKOSUMI_WORKER_POLL_INTERVAL_MS`         | integer ms | provider default    | no       | apply worker poll interval。         |
+| `TAKOSUMI_WORKER_VISIBILITY_TIMEOUT_MS`    | integer ms | provider default    | no       | apply queue visibility timeout。     |
+| `TAKOSUMI_OUTBOX_DISPATCH_LIMIT`           | integer    | provider default    | no       | outbox dispatcher batch limit。      |
 | `TAKOSUMI_REVOKE_DEBT_CLEANUP_INTERVAL_MS` | integer ms | apply poll interval | no       | CleanupBacklog cleanup cadence。     |
 | `TAKOSUMI_REVOKE_DEBT_CLEANUP_LIMIT`       | integer    | `50`                | no       | CleanupBacklog cleanup batch limit。 |
 
 ## CLI
 
-| Variable                   | Type   | Default                  | Required                 | 説明                              |
-| -------------------------- | ------ | ------------------------ | ------------------------ | --------------------------------- |
-| `TAKOSUMI_REMOTE_URL`      | URL    | unset                    | remote commands          | Takosumi HTTP server URL。        |
-| `TAKOSUMI_INSTALLER_TOKEN` | secret | unset                    | installer commands       | installer bearer。                |
+| Variable                   | Type   | Default                  | Required             | 説明                          |
+| -------------------------- | ------ | ------------------------ | -------------------- | ----------------------------- |
+| `TAKOSUMI_REMOTE_URL`      | URL    | unset                    | remote commands      | Takosumi HTTP server URL。    |
+| `TAKOSUMI_INSTALLER_TOKEN` | secret | unset                    | installer commands   | installer bearer。            |
 | `TAKOSUMI_DEPLOY_TOKEN`    | secret | unset                    | asset write commands | optional asset write bearer。 |
-| `TAKOSUMI_AGENT_URL`       | URL    | unset                    | agent commands           | runtime-agent URL。               |
-| `TAKOSUMI_AGENT_TOKEN`     | secret | unset                    | agent commands           | runtime-agent bearer。            |
-| `TAKOSUMI_CONFIG_FILE`     | path   | `~/.takosumi/config.yml` | no                       | CLI config file override。        |
+| `TAKOSUMI_AGENT_URL`       | URL    | unset                    | agent commands       | runtime-agent URL。           |
+| `TAKOSUMI_AGENT_TOKEN`     | secret | unset                    | agent commands       | runtime-agent bearer。        |
+| `TAKOSUMI_CONFIG_FILE`     | path   | `~/.takosumi/config.yml` | no                   | CLI config file override。    |
 
 ## Runtime-Agent
 
-runtime-agent process は cloud SDK credential を保持します。`AWS_*`、
-`GOOGLE_APPLICATION_CREDENTIALS`、`CLOUDFLARE_API_TOKEN`、`AZURE_*` などの
-provider-specific env は runtime-agent host または provider package 側で読み、
-kernel host には置きません。
+runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `GOOGLE_APPLICATION_CREDENTIALS`、`CLOUDFLARE_API_TOKEN`、`AZURE_*` などの provider-specific env は runtime-agent host または provider package 側で読み、 kernel host には置きません。
 
 | Variable                                    | Type   | Default           | Required             | 説明                             |
 | ------------------------------------------- | ------ | ----------------- | -------------------- | -------------------------------- |
@@ -129,11 +131,7 @@ kernel host には置きません。
 
 ## Binding Config
 
-An operator using the reference kernel passes the kind alias map and reference
-adapter array (`plugins` option) to `createPaaSApp({ kindAliases, plugins })`.
-adapter が必要とする credential / config は factory option か runtime-agent host
-env から読みます。provider package の取得方法は operator profile
-の責務です。
+An operator using the reference kernel passes the kind alias map and reference adapter array (`plugins` option) to `createPaaSApp({ kindAliases, plugins })`. adapter が必要とする credential / config は factory option か runtime-agent host env から読みます。provider package の取得方法は operator profile の責務です。
 
 ## 関連ページ
 

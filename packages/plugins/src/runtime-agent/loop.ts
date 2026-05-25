@@ -141,7 +141,7 @@ export class RuntimeAgentLoop {
       client: options.client,
       agentId: options.agentId,
       provider: options.provider,
-      capabilities: options.capabilityTerms,
+      capabilities: options.capabilities,
       hostKeyDigest: options.hostKeyDigest,
       executors: { ...options.executors },
       defaultExecutor: options.defaultExecutor ?? defaultUnsupportedExecutor,
@@ -184,7 +184,7 @@ export class RuntimeAgentLoop {
     const response = await this.#options.client.enroll({
       agentId: this.#options.agentId,
       provider: this.#options.provider,
-      capabilities: this.#options.capabilityTerms,
+      capabilities: this.#options.capabilities,
       hostKeyDigest: this.#options.hostKeyDigest,
       enrolledAt: this.#options.clock().toISOString(),
     });

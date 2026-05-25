@@ -50,6 +50,7 @@ const bindings = Object.fromEntries(
     typeof v === "string" && k.startsWith("TAKOSUMI_ACCOUNTS_")
   ),
 );
+bindings.LOCAL_SUBSTRATE_TEST_BED = "1";
 // Sensible defaults if the operator forgot to set the basics.
 bindings.TAKOSUMI_ACCOUNTS_ISSUER ??= "https://cloud.takosumi.test";
 bindings.TAKOSUMI_ACCOUNTS_SUBJECT ??= "tsub_takosumi_cloud_local";

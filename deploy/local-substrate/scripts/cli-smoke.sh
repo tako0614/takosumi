@@ -16,6 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 TOKEN="${TAKOSUMI_INSTALLER_TOKEN:-local-substrate-installer-token}"
+LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
 SPACE_ID="${TAKOSUMI_INSTALLER_SPACE_ID:-local-substrate-space}"
 SOURCE_PATH="${TAKOSUMI_INSTALLER_SOURCE_PATH:-/workspace/examples/direct-deploy}"
 KERNEL_URL="${TAKOSUMI_KERNEL_URL:-https://kernel.takosumi.test}"
@@ -110,21 +111,44 @@ if [[ "$DEPLOYMENT_STATUS" != "succeeded" ]]; then
 	exit 1
 fi
 
-DEPLOY_DRY_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/deployments/dry-run" "{}")"
+DEPLOY_REQUEST="$(cat <<EOF
+{
+  "source": {
+    "kind": "local",
+    "url": "$SOURCE_PATH"
+  }
+}
+EOF
+)"
+DEPLOY_DRY_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/deployments/dry-run" "$DEPLOY_REQUEST")"
 require_code "deployment dry-run" "$DEPLOY_DRY_RESPONSE" "200"
+DEPLOY_DRY_BODY="$(response_body "$DEPLOY_DRY_RESPONSE")"
+DEPLOY_EXPECTED="$(printf '%s' "$DEPLOY_DRY_BODY" | python3 -c '
+import json, sys
+body = json.load(sys.stdin)
+print(json.dumps(body["expected"], separators=(",", ":")))
+')"
 
-DEPLOY_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/deployments" "{}")"
+DEPLOY_APPLY_REQUEST="$(printf '%s' "$DEPLOY_REQUEST" | python3 -c '
+import json, sys
+body = json.load(sys.stdin)
+body["expected"] = json.loads(sys.argv[1])
+print(json.dumps(body, separators=(",", ":")))
+' "$DEPLOY_EXPECTED")"
+
+DEPLOY_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/deployments" "$DEPLOY_APPLY_REQUEST")"
 require_code "deployment apply" "$DEPLOY_RESPONSE" "201"
 
 ROLLBACK_REQUEST="{\"deploymentId\":\"$DEPLOYMENT_ID\"}"
 ROLLBACK_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/rollback" "$ROLLBACK_REQUEST")"
-require_code "rollback" "$ROLLBACK_RESPONSE" "201"
+require_code "rollback" "$ROLLBACK_RESPONSE" "200"
 
 echo "OK installer installation=$INSTALLATION_ID deployment=$DEPLOYMENT_ID status=$DEPLOYMENT_STATUS digest=$MANIFEST_DIGEST"
 
 # B6: also assert installer-mock returns real AppSpec-derived changes
 # (fixture-hit path, not the empty fallback).
 PREVIEW=$(curl -sk --cacert "$CA" \
+	-H "Authorization: Bearer $LOCAL_CLOUD_SESSION_ID" \
 	-H "Content-Type: application/json" \
 	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' \
 	"https://cloud.takosumi.test/v1/installations/dry-run")

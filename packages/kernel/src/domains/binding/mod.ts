@@ -130,12 +130,13 @@ export class BindingResolver {
  * descriptor metadata or implementation bindings may override this projection;
  * JSON-LD is only one metadata format a distribution can use.
  *
- *   - `as: env`    → expand every material field into `${PREFIX}_${FIELD}`
- *                    (PREFIX = `options.prefix` or upper-cased binding
- *                    name when `prefix` is omitted; FIELD = upper-snake
- *                    of the material key).
- *   - `as: secret-env` → use the same env names while preserving secretRef
- *                    values in the resolved binding record.
+ *   - `as: env`    → expand every material field into `${PREFIX}_${FIELD}` when
+ *                    `prefix` is set, or bare `${FIELD}` when it is omitted.
+ *                    FIELD is upper-snake of the material key.
+ *   - `as: secret-env` → use the same rule while preserving secretRef values in
+ *                    the resolved binding record. Secret ref material fields
+ *                    such as `clientSecretRef` drop the trailing `Ref` in the
+ *                    env key (`CLIENT_SECRET`).
  *   - `as: mount`  → return the material as a mount descriptor under
  *                    `options.mount` (or `/` when absent).
  *   - `as: upstream` / `as: target` → return the material as an upstream
@@ -156,8 +157,13 @@ export function defaultEnvInjection(
     case "target":
     case "upstream":
       return { target: material };
-    case "env":
     case "secret-env":
+      return {
+        env: expandMaterialAsEnv(material, options.prefix, {
+          stripSecretRefSuffix: true,
+        }),
+      };
+    case "env":
     default:
       return { env: expandMaterialAsEnv(material, options.prefix) };
   }
@@ -166,11 +172,15 @@ export function defaultEnvInjection(
 function expandMaterialAsEnv(
   material: NamespaceMaterial,
   prefix: string | undefined,
+  options: { readonly stripSecretRefSuffix?: boolean } = {},
 ): Readonly<Record<string, string | { readonly secretRef: string }>> {
   const out: Record<string, string | { readonly secretRef: string }> = {};
   const normalizedPrefix = (prefix ?? "").trim();
   for (const [field, value] of Object.entries(material)) {
-    const envKey = composeEnvKey(normalizedPrefix, field);
+    const envField = options.stripSecretRefSuffix && isSecretRefMaterial(value)
+      ? stripSecretRefSuffix(field)
+      : field;
+    const envKey = composeEnvKey(normalizedPrefix, envField);
     out[envKey] = materialValueToEnv(value);
   }
   return out;
@@ -196,6 +206,13 @@ function toUpperSnake(value: string): string {
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[-.]/g, "_")
     .toUpperCase();
+}
+
+function stripSecretRefSuffix(value: string): string {
+  if (value.endsWith("Ref") && value.length > "Ref".length) {
+    return value.slice(0, -"Ref".length);
+  }
+  return value;
 }
 
 function serializeMaterialForMount(

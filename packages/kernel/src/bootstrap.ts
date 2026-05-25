@@ -37,6 +37,7 @@ import {
 import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store_sql.ts";
 import {
   type ExternalPublicationResolver,
+  httpExternalPublicationResolver,
   InstallerPipeline,
 } from "./domains/installer/mod.ts";
 import type { KernelPlugin } from "takosumi-contract/reference/plugin";
@@ -164,6 +165,10 @@ export async function createPaaSApp(
   const installerToken = runtimeEnv.TAKOSUMI_INSTALLER_TOKEN;
   const fetchToken = runtimeEnv.TAKOSUMI_ARTIFACT_FETCH_TOKEN;
   const metricsScrapeToken = runtimeEnv.TAKOSUMI_METRICS_SCRAPE_TOKEN;
+  const externalPublicationResolverUrl =
+    runtimeEnv.TAKOSUMI_EXTERNAL_PUBLICATION_RESOLVER_URL;
+  const externalPublicationResolverToken =
+    runtimeEnv.TAKOSUMI_EXTERNAL_PUBLICATION_RESOLVER_TOKEN;
   const artifactMaxBytes = parsePositiveIntegerEnv(
     runtimeEnv.TAKOSUMI_ARTIFACT_MAX_BYTES,
   );
@@ -195,6 +200,11 @@ export async function createPaaSApp(
       onTick: workerDaemonState.onTick,
     }).start()
     : undefined;
+  const externalPublications = resolveExternalPublications({
+    configured: options.externalPublications,
+    url: externalPublicationResolverUrl,
+    token: externalPublicationResolverToken,
+  });
   const app = await createApiApp({
     role,
     context,
@@ -228,9 +238,7 @@ export async function createPaaSApp(
       pipeline: new InstallerPipeline({
         ...(options.plugins ? { plugins: options.plugins } : {}),
         ...(options.kindAliases ? { kindAliases: options.kindAliases } : {}),
-        ...(options.externalPublications
-          ? { externalPublications: options.externalPublications }
-          : {}),
+        ...(externalPublications ? { externalPublications } : {}),
       }),
       ...(installerToken ? { getInstallerToken: () => installerToken } : {}),
     },
@@ -288,4 +296,17 @@ function parsePositiveIntegerEnv(
   if (!value) return undefined;
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function resolveExternalPublications(input: {
+  readonly configured?: ExternalPublicationResolver;
+  readonly url?: string;
+  readonly token?: string;
+}): ExternalPublicationResolver | undefined {
+  if (input.configured) return input.configured;
+  if (!input.url) return undefined;
+  return httpExternalPublicationResolver({
+    url: input.url,
+    ...(input.token ? { token: input.token } : {}),
+  });
 }

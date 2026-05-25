@@ -15,7 +15,7 @@ function fakeShape(id: string, version = "v1"): Shape {
   return {
     id,
     version,
-    capabilities: ["c1", "c2"],
+    capabilityTerms: ["c1", "c2"],
     outputFields: ["url"],
     validateSpec(value, issues) {
       if (typeof value !== "object" || value === null) {

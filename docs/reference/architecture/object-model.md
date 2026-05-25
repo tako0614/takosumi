@@ -1,17 +1,14 @@
 # Object モデル {#object-model}
 
-::: info 内部設計メモ
-public contract は [Installer API](../installer-api.md) を参照。
+::: info
+内部設計メモ public contract は [Installer API](../installer-api.md) を参照。
 :::
 
-Object は reference Takosumi graph の internal entity である。すべての Object は
-厳密に 1 つの Space に属する。public な manifest `components` entry は Object
-intent となり、その後 resolved な Object になる。
+Object は reference Takosumi graph の internal entity である。すべての Object は厳密に 1 つの Space に属する。public な manifest `components` entry は Object intent となり、その後 resolved な Object になる。
 
 ## Space で qualify された identity {#space-qualified-identity}
 
-Object のアドレスは Space 内で一意である。storage は identity を tuple として
-扱うべきである。
+Object のアドレスは Space 内で一意である。storage は identity を tuple として扱うべきである。
 
 ```text
 (spaceId, objectAddress)
@@ -23,8 +20,7 @@ qualified な表示形式は log や plan で許される。
 space_acme_prod/obj_api
 ```
 
-ある Space の Object を別の Space の authority として更新・削除・observe する
-ことは決して許されない。
+ある Space の Object を別の Space の authority として更新・削除・observe することは決して許されない。
 
 ## Object lifecycle クラス {#object-lifecycle-classes}
 
@@ -83,8 +79,7 @@ GeneratedObject:
 
 ## Object revoke フロー {#object-revoke-flow}
 
-Revoke は managed または generated object をその不在で置き換える lifecycle で、
-外部制約を尊重する。state machine は次の通り。
+Revoke は managed または generated object をその不在で置き換える lifecycle で、外部制約を尊重する。state machine は次の通り。
 
 ```text
 live → revoking → revoked
@@ -92,23 +87,13 @@ live → revoking → revoked
              → debt          (revoke could not complete cleanly)
 ```
 
-revoke 参加は lifecycle class で制限される。`external-source` と
-`external-participant` (下表の `external` と `operator` 行) は revoke target と
-してこの flow に入ってはならず、その generated child だけが対象となる。これは
-[Invariant-First Root Model](./runtime-deployment-model.md#invariant-first-root-model)
-の external ownership invariant の再宣言である。
+revoke 参加は lifecycle class で制限される。`external-source` と `external-participant` (下表の `external` と `operator` 行) は revoke target としてこの flow に入ってはならず、その generated child だけが対象となる。これは [Invariant-First Root Model](./runtime-deployment-model.md#invariant-first-root-model) の external ownership invariant の再宣言である。
 
-外部 cleanup が必要で外部システムが revoke を reject または ack できなかった
-とき、link の owner は [Drift Detection](../drift-detection.md) に従って
-`CleanupBacklog` record を queue し、object は debt が clear されるまで `debt` state
-に入る。
+外部 cleanup が必要で外部システムが revoke を reject または ack できなかったとき、link の owner は [Drift Detection](../drift-detection.md) に従って `CleanupBacklog` record を queue し、object は debt が clear されるまで `debt` state に入る。
 
 ## Revoke 参加マトリクス {#revoke-participation-matrix}
 
-行は object の lifecycle class、列は object を tear down する際に関わる 4 つの
-operation。`yes` は許可、`gen-only` は object 自身ではなく generated child
-にのみ許可、`no` は禁止、`debt-on-fail` は外部 cleanup の失敗が `CleanupBacklog` を
-queue するかどうかを表す。
+行は object の lifecycle class、列は object を tear down する際に関わる 4 つの operation。`yes` は許可、`gen-only` は object 自身ではなく generated child にのみ許可、`no` は禁止、`debt-on-fail` は外部 cleanup の失敗が `CleanupBacklog` を queue するかどうかを表す。
 
 | Lifecycle class | delete             | revoke             | detach       | debt-on-fail |
 | --------------- | ------------------ | ------------------ | ------------ | ------------ |
@@ -118,13 +103,11 @@ queue するかどうかを表す。
 | operator        | no                 | gen-only           | policy-gated | gen-only     |
 | imported        | policy-gated       | gen-only           | yes          | gen-only     |
 
-`detach` は source object を変更せずに consumer 側の reference (Link または
-Exposure) を取り除く。policy で明示的に gate されない限り、常に合法である。
+`detach` は source object を変更せずに consumer 側の reference (Link または Exposure) を取り除く。policy で明示的に gate されない限り、常に合法である。
 
 ## Operation の制限 {#operation-restrictions}
 
-lifecycle class は operation 種別を制限する。Space containment も operation
-種別を制限する。
+lifecycle class は operation 種別を制限する。Space containment も operation 種別を制限する。
 
 | Lifecycle class | Create/update/delete  | Verify/observe | Link/materialize | Revoke generated child  |
 | --------------- | --------------------- | -------------- | ---------------- | ----------------------- |

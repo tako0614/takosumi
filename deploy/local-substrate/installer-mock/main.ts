@@ -18,6 +18,8 @@
  */
 
 const PORT = Number(Deno.env.get("PORT") ?? "8788");
+const installations = new Map<string, Record<string, unknown>>();
+const deployments = new Map<string, Record<string, unknown>>();
 
 async function sha256Hex(input: string): Promise<string> {
   const buf = await crypto.subtle.digest(
@@ -51,25 +53,9 @@ async function loadFixture(
   }
 }
 
-Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
-  const url = new URL(req.url);
-  if (url.pathname === "/healthz") {
-    return new Response("ok", { headers: { "content-type": "text/plain" } });
-  }
-  if (url.pathname !== "/v1/installations/dry-run") {
-    return Response.json({ error: "not_found" }, { status: 404 });
-  }
-  if (req.method !== "POST") {
-    return Response.json({ error: "method_not_allowed" }, { status: 405 });
-  }
-
-  let body: Record<string, unknown> = {};
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "invalid_json" }, { status: 400 });
-  }
-
+async function dryRunPayload(
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown> | Response> {
   const source = (body.source ?? {}) as Record<string, unknown>;
   const gitUrl = String(source.url ?? source.gitUrl ?? body.gitUrl ?? "");
   const ref = String(source.ref ?? body.ref ?? "main");
@@ -85,24 +71,25 @@ Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
   // Fixture path: real .takosumi.yml-derived response if we have one.
   const fixture = await loadFixture(repoBasename);
   if (fixture) {
-    const src = (fixture.source ?? {}) as Record<string, unknown>;
+    const next = structuredClone(fixture);
+    const src = (next.source ?? {}) as Record<string, unknown>;
     if (ref !== src.ref) {
       const fp = await sha256Hex(`${gitUrl}@${ref}`);
       const commit = fp.slice(0, 40);
-      fixture.source = {
+      next.source = {
         ...src,
         ref,
         commit,
       };
-      fixture.expected = { commit, manifestDigest: `sha256:${fp}` };
-      fixture.manifestDigest = `sha256:${fp}`;
+      next.expected = { commit, manifestDigest: `sha256:${fp}` };
+      next.manifestDigest = `sha256:${fp}`;
     }
-    const changes = ((fixture.changes ?? []) as unknown[]).length;
+    const changes = ((next.changes ?? []) as unknown[]).length;
     console.log(
-      `[installer-mock] fixture-hit ${repoBasename} → appId=${fixture.appId} ` +
+      `[installer-mock] fixture-hit ${repoBasename} → appId=${next.appId} ` +
         `changes=${changes}`,
     );
-    return Response.json(fixture);
+    return next;
   }
 
   // Fallback: deterministic fake for arbitrary git URLs. Loud-warn so operator
@@ -116,7 +103,8 @@ Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
       `to add this repo to the fixture set.`,
   );
 
-  return Response.json({
+  return {
+    appSpec: { metadata: { id: repoBasename } },
     appId: repoBasename,
     source: { kind: "git", url: gitUrl, ref, commit },
     manifestDigest: digest,
@@ -128,7 +116,265 @@ Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
       service: "installer-mock (local-substrate)",
       generatedAt: new Date().toISOString(),
     },
+  };
+}
+
+function installApplyPayload(
+  requestBody: Record<string, unknown>,
+  dryRun: Record<string, unknown>,
+): Record<string, unknown> | Response {
+  const spaceId = String(requestBody.spaceId ?? requestBody.space_id ?? "");
+  if (!spaceId) {
+    return Response.json({
+      error: "invalid_request",
+      error_description: "spaceId required",
+    }, { status: 400 });
+  }
+  const source = (dryRun.source ?? {}) as Record<string, unknown>;
+  const expected = (dryRun.expected ?? {}) as Record<string, unknown>;
+  const appSpec = (dryRun.appSpec ?? {}) as Record<string, unknown>;
+  const metadata = (appSpec.metadata ?? {}) as Record<string, unknown>;
+  const appId = String(dryRun.appId ?? metadata.id ?? "fake-app");
+  const commit = String(source.commit ?? expected.commit ?? "");
+  const manifestDigest = String(
+    dryRun.manifestDigest ?? expected.manifestDigest ?? "",
+  );
+  const fingerprintBase = `${spaceId}:${appId}:${commit}:${manifestDigest}`;
+  const idSuffix = crypto.randomUUID().slice(0, 8);
+  const safeAppId = appId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const installationId = `inst_${safeAppId}_${idSuffix}`;
+  const deploymentId = `dep_${safeAppId}_${idSuffix}`;
+  return {
+    installation: {
+      id: installationId,
+      spaceId,
+      appId,
+      currentDeploymentId: deploymentId,
+      status: "ready",
+      createdAt: Date.now(),
+    },
+    deployment: {
+      id: deploymentId,
+      installationId,
+      source,
+      manifestDigest,
+      status: "succeeded",
+      outputs: { extensions: { mockFingerprint: fingerprintBase } },
+      createdAt: Date.now(),
+    },
+  };
+}
+
+async function deploymentDryRunPayload(
+  installationId: string,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown> | Response> {
+  const installation = installations.get(installationId);
+  if (!installation) {
+    return Response.json({
+      error: { code: "not_found", message: "installation not found" },
+    }, { status: 404 });
+  }
+  const currentDeploymentId = String(
+    installation.currentDeploymentId ?? "",
+  );
+  const currentDeployment = currentDeploymentId
+    ? deployments.get(currentDeploymentId)
+    : undefined;
+  const source = (body.source ?? currentDeployment?.source ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const dryRun = await dryRunPayload({
+    source,
+    spaceId: installation.spaceId,
   });
+  if (dryRun instanceof Response) return dryRun;
+  const expected = (dryRun.expected ?? {}) as Record<string, unknown>;
+  return {
+    ...dryRun,
+    expected: {
+      ...expected,
+      currentDeploymentId: currentDeploymentId || null,
+    },
+  };
+}
+
+async function deploymentApplyPayload(
+  installationId: string,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown> | Response> {
+  const installation = installations.get(installationId);
+  if (!installation) {
+    return Response.json({
+      error: { code: "not_found", message: "installation not found" },
+    }, { status: 404 });
+  }
+  const expected = (body.expected ?? {}) as Record<string, unknown>;
+  if (
+    "currentDeploymentId" in expected &&
+    expected.currentDeploymentId !== installation.currentDeploymentId
+  ) {
+    return Response.json({
+      error: {
+        code: "failed_precondition",
+        message: "currentDeploymentId mismatch",
+      },
+    }, { status: 409 });
+  }
+  const dryRun = await deploymentDryRunPayload(installationId, body);
+  if (dryRun instanceof Response) return dryRun;
+  const dryRunExpected = (dryRun.expected ?? {}) as Record<string, unknown>;
+  if (
+    expected.commit && dryRunExpected.commit &&
+    expected.commit !== dryRunExpected.commit
+  ) {
+    return Response.json({
+      error: { code: "failed_precondition", message: "commit mismatch" },
+    }, { status: 409 });
+  }
+  if (
+    expected.manifestDigest && dryRunExpected.manifestDigest &&
+    expected.manifestDigest !== dryRunExpected.manifestDigest
+  ) {
+    return Response.json({
+      error: {
+        code: "failed_precondition",
+        message: "manifestDigest mismatch",
+      },
+    }, { status: 409 });
+  }
+  const appId = String(installation.appId ?? "fake-app");
+  const safeAppId = appId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const idSuffix = crypto.randomUUID().slice(0, 8);
+  const deploymentId = `dep_${safeAppId}_${idSuffix}`;
+  const deployment = {
+    id: deploymentId,
+    installationId,
+    source: dryRun.source,
+    manifestDigest: dryRun.manifestDigest,
+    status: "succeeded",
+    outputs: { extensions: { mockDeployment: true } },
+    createdAt: Date.now(),
+  };
+  deployments.set(deploymentId, deployment);
+  installations.set(installationId, {
+    ...installation,
+    currentDeploymentId: deploymentId,
+    status: "ready",
+  });
+  return { deployment };
+}
+
+function rollbackPayload(
+  installationId: string,
+  body: Record<string, unknown>,
+): Record<string, unknown> | Response {
+  const installation = installations.get(installationId);
+  if (!installation) {
+    return Response.json({
+      error: { code: "not_found", message: "installation not found" },
+    }, { status: 404 });
+  }
+  const deploymentId = String(body.deploymentId ?? "");
+  const deployment = deployments.get(deploymentId);
+  if (!deployment || deployment.installationId !== installationId) {
+    return Response.json({
+      error: { code: "not_found", message: "deployment not found" },
+    }, { status: 404 });
+  }
+  if (deployment.status !== "succeeded") {
+    return Response.json({
+      error: {
+        code: "failed_precondition",
+        message: "rollback target is not succeeded",
+      },
+    }, { status: 409 });
+  }
+  const rolledBackFrom = installation.currentDeploymentId ?? null;
+  const updatedInstallation = {
+    ...installation,
+    currentDeploymentId: deploymentId,
+    status: "ready",
+  };
+  installations.set(installationId, updatedInstallation);
+  return {
+    installation: updatedInstallation,
+    deployment,
+    rollback: {
+      rolledBackFrom,
+      rolledBackTo: deploymentId,
+    },
+  };
+}
+
+Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
+  const url = new URL(req.url);
+  if (url.pathname === "/healthz") {
+    return new Response("ok", { headers: { "content-type": "text/plain" } });
+  }
+  const isDryRun = url.pathname === "/v1/installations/dry-run";
+  const isInstallApply = url.pathname === "/v1/installations";
+  const deploymentDryRunMatch = url.pathname.match(
+    /^\/v1\/installations\/([^/]+)\/deployments\/dry-run$/,
+  );
+  const deploymentApplyMatch = url.pathname.match(
+    /^\/v1\/installations\/([^/]+)\/deployments$/,
+  );
+  const rollbackMatch = url.pathname.match(
+    /^\/v1\/installations\/([^/]+)\/rollback$/,
+  );
+  if (
+    !isDryRun && !isInstallApply && !deploymentDryRunMatch &&
+    !deploymentApplyMatch && !rollbackMatch
+  ) {
+    return Response.json({ error: "not_found" }, { status: 404 });
+  }
+  if (req.method !== "POST") {
+    return Response.json({ error: "method_not_allowed" }, { status: 405 });
+  }
+
+  let body: Record<string, unknown> = {};
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "invalid_json" }, { status: 400 });
+  }
+
+  if (deploymentDryRunMatch) {
+    const response = await deploymentDryRunPayload(
+      decodeURIComponent(deploymentDryRunMatch[1]),
+      body,
+    );
+    return response instanceof Response ? response : Response.json(response);
+  }
+  if (deploymentApplyMatch) {
+    const response = await deploymentApplyPayload(
+      decodeURIComponent(deploymentApplyMatch[1]),
+      body,
+    );
+    return response instanceof Response
+      ? response
+      : Response.json(response, { status: 201 });
+  }
+  if (rollbackMatch) {
+    const response = rollbackPayload(
+      decodeURIComponent(rollbackMatch[1]),
+      body,
+    );
+    return response instanceof Response ? response : Response.json(response);
+  }
+
+  const dryRun = await dryRunPayload(body);
+  if (dryRun instanceof Response) return dryRun;
+  if (isDryRun) return Response.json(dryRun);
+  const apply = installApplyPayload(body, dryRun);
+  if (apply instanceof Response) return apply;
+  const installation = apply.installation as Record<string, unknown>;
+  const deployment = apply.deployment as Record<string, unknown>;
+  installations.set(String(installation.id), installation);
+  deployments.set(String(deployment.id), deployment);
+  return Response.json(apply, { status: 201 });
 });
 
 console.log(`[installer-mock] listening on :${PORT}`);

@@ -61,6 +61,7 @@ Deno.test("CloudRunConnector.apply rejects malformed uri in API response", async
       connector.apply({
         shape: "web-service@v1",
         provider: "@takos/gcp-cloud-run",
+        spaceId: "space_test",
         resourceName: "rs",
         spec: {
           image: "us-docker.pkg.dev/proj/app:1",
@@ -88,6 +89,7 @@ Deno.test("CloudRunConnector.apply creates service and uses returned uri", async
   const res = await connector.apply({
     shape: "web-service@v1",
     provider: "@takos/gcp-cloud-run",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: {
       image: "us-docker.pkg.dev/proj/app:1",

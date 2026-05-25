@@ -1,7 +1,6 @@
 # Core Specification {#core-spec}
 
-Takosumi core is the portable contract for installing source into a Space and
-recording apply results.
+Takosumi core is the portable contract for installing source into a Space and recording apply results.
 
 ## Public Entities
 
@@ -22,12 +21,12 @@ components:
     listen: {}
 ```
 
-| Field     | Core meaning                                              |
-| --------- | --------------------------------------------------------- |
+| Field     | Core meaning                                                                                 |
+| --------- | -------------------------------------------------------------------------------------------- |
 | `kind`    | A string the operator resolves to a kind definition (Takosumi does not interpret the value). |
-| `spec`    | Open object defined by the selected kind's definition.    |
-| `publish` | Names and output types this component offers.             |
-| `listen`  | Connections to other components or platform services.     |
+| `spec`    | Open object defined by the selected kind's definition.                                       |
+| `publish` | Names and output types this component offers.                                                |
+| `listen`  | Connections to other components or platform services.                                        |
 
 ## Installer API
 
@@ -41,8 +40,7 @@ POST /v1/installations/{id}/deployments
 POST /v1/installations/{id}/rollback
 ```
 
-Read APIs for dashboards, CLIs, polling, and support workflows are
-operator-provided read models around this write lifecycle.
+Read APIs for dashboards, CLIs, polling, and support workflows are operator-provided read models around this write lifecycle.
 
 ## Source Kinds
 
@@ -52,7 +50,4 @@ operator-provided read models around this write lifecycle.
 | `prepared` | Remote source prepared by CI or a build service. Apply guard uses source digest plus `manifestDigest`. |
 | `local`    | Kernel-local source tree for development or operator-local use. Apply guard uses `manifestDigest`.     |
 
-Portable Installer API v1 prepared source payloads are uncompressed POSIX tar
-archives. If an operator-local profile accepts another archive encoding, that
-encoding is outside the portable v1 compatibility profile. Build recipes, cache
-metadata, and provenance stay with the build service or operator automation.
+Portable Installer API v1 prepared source payloads are uncompressed POSIX tar archives. If an operator-local profile accepts another archive encoding, that encoding is outside the portable v1 compatibility profile. Build recipes, cache metadata, and provenance stay with the build service or operator automation.

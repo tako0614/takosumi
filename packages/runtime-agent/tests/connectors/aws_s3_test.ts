@@ -19,6 +19,7 @@ Deno.test("AwsS3Connector.apply creates bucket and returns ARN handle", async ()
   const res = await connector.apply({
     shape: "object-store@v1",
     provider: "@takos/aws-s3",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: { name: "tenant-data" },
   }, {});
@@ -44,6 +45,7 @@ Deno.test("AwsS3Connector.describe returns missing on 404", async () => {
   const res = await connector.describe({
     shape: "object-store@v1",
     provider: "@takos/aws-s3",
+    spaceId: "space_test",
     handle: "arn:aws:s3:::missing",
   }, {});
   assert.equal(res.status, "missing");
@@ -98,6 +100,7 @@ Deno.test("AwsS3Connector.destroy parses bucket from ARN", async () => {
   const res = await connector.destroy({
     shape: "object-store@v1",
     provider: "@takos/aws-s3",
+    spaceId: "space_test",
     handle: "arn:aws:s3:::my-bucket",
   }, {});
   assert.equal(res.ok, true);

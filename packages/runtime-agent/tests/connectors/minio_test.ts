@@ -41,6 +41,7 @@ Deno.test("MinioConnector.apply PUTs bucket against MinIO endpoint", async () =>
   const res = await connector.apply({
     shape: "object-store@v1",
     provider: "@takos/selfhost-minio",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: { name: "tenant-data" },
   }, {});
@@ -63,6 +64,7 @@ Deno.test("MinioConnector.describe returns missing on 404", async () => {
   const res = await connector.describe({
     shape: "object-store@v1",
     provider: "@takos/selfhost-minio",
+    spaceId: "space_test",
     handle: "ghost",
   }, {});
   assert.equal(res.status, "missing");

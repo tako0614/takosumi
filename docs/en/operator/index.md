@@ -1,11 +1,8 @@
 # Operator Overview {#operator-overview}
 
-The operator's configuration chooses how Takosumi core is exposed and implemented.
-It supplies Space context, which kinds are enabled, provider
-credentials, account management APIs, and read APIs.
+The operator's configuration chooses how Takosumi core is exposed and implemented. It supplies Space context, which kinds are enabled, provider credentials, account management APIs, and read APIs.
 
-The [public contract](../getting-started/concepts.md) stays as-is regardless of
-operator choices.
+The [public contract](../getting-started/concepts.md) stays as-is regardless of operator choices.
 
 ## Reading Order {#reading-order}
 
@@ -27,11 +24,9 @@ The operator controls:
 - provider/runtime configuration
 - read APIs, history, and support views around the write lifecycle
 
-Reference self-host profiles and Takosumi Cloud profiles document their own
-runtime, database, object storage, and operations requirements.
+Reference self-host profiles and Takosumi Cloud profiles document their own runtime, database, object storage, and operations requirements.
 
-For Takosumi Cloud, the concrete account management specification lives in
-`takosumi-cloud/docs/`.
+For Takosumi Cloud, the concrete account management specification lives in `takosumi-cloud/docs/`.
 
 ## Related Pages {#related-pages}
 

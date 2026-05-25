@@ -14,6 +14,7 @@
  *   - `selfhostMinioObjectStoreProvider`      → `object-store@v1` (MinIO)
  *   - `selfhostFilesystemObjectStoreProvider` → `object-store@v1` (local fs)
  *   - `selfhostPostgresProvider`              → `postgres@v1` (local Docker)
+ *   - `selfhostCoreDnsGatewayProvider`        → `gateway@v1` (CoreDNS)
  */
 
 export {
@@ -40,3 +41,7 @@ export {
   selfhostPostgresProvider,
   type SelfhostPostgresProviderOptions,
 } from "./src/postgres-selfhost.ts";
+export {
+  selfhostCoreDnsGatewayProvider,
+  type SelfhostCoreDnsGatewayProviderOptions,
+} from "./src/gateway-selfhost-coredns.ts";

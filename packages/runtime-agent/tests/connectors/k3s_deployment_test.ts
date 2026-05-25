@@ -61,6 +61,7 @@ Deno.test("K3sDeploymentConnector.apply POSTs Deployment + Service to k8s API", 
   const res = await connector.apply({
     shape: "web-service@v1",
     provider: "@takos/kubernetes-deployment",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: {
       image: "registry/app:1",

@@ -32,78 +32,19 @@ import urllib.request
 from pathlib import Path
 
 import atexit
-import subprocess
 
 SUBSTRATE_DIR = Path(__file__).resolve().parent.parent
 CA_PATH = SUBSTRATE_DIR / "caddy" / "runtime" / "pebble-issuance-root.pem"
 
 
 def cleanup_billing(subject: str | None, customer: str | None) -> None:
-    """Wipe the test-created billing_account + webhook_events from D1.
-
-    Best-effort — if docker isn't available (CI without docker-in-docker)
-    we skip the cleanup with a stderr breadcrumb. The DELETE uses
-    json_extract to compare the exact subject / customer fields so a
-    stray substring match (e.g. customer id appearing in a stripe event
-    payload for an unrelated subject) can't widen the delete.
-    """
+    """Leave test-created billing records in D1 until cleanup APIs exist."""
     if not subject and not customer:
         return
-    docker_ok = subprocess.run(
-        ["docker", "info"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    sys.stderr.write(
+        "[stripe-webhook-replay] cleanup skipped: no safe live D1 delete API "
+        "yet; records are isolated by random subject/customer ids\n",
     )
-    if docker_ok.returncode != 0:
-        sys.stderr.write(
-            "[stripe-webhook-replay] cleanup skipped: docker daemon not "
-            "reachable (D1 will accumulate test entries; harmless for "
-            "next run)\n",
-        )
-        return
-    try:
-        sqlite_path = subprocess.check_output(
-            ["docker", "exec", "local-substrate-takosumi-cloud-worker-1",
-             "sh", "-c", "find /data/d1 -name '*.sqlite' | head -1"],
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
-        if not sqlite_path:
-            return
-        subprocess.run(
-            ["docker", "cp",
-             f"local-substrate-takosumi-cloud-worker-1:{sqlite_path}",
-             "/tmp/d1-stripe-cleanup.sqlite"],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        import sqlite3
-        con = sqlite3.connect("/tmp/d1-stripe-cleanup.sqlite")
-        try:
-            if subject:
-                con.execute(
-                    "DELETE FROM takosumi_accounts_documents "
-                    "WHERE json_extract(document, '$.subject') = ?",
-                    (subject,),
-                )
-            if customer:
-                con.execute(
-                    "DELETE FROM takosumi_accounts_documents "
-                    "WHERE json_extract(document, '$.customerId') = ? "
-                    "   OR json_extract(document, '$.stripeCustomerId') = ?",
-                    (customer, customer),
-                )
-            con.commit()
-        finally:
-            con.close()
-        subprocess.run(
-            ["docker", "cp", "/tmp/d1-stripe-cleanup.sqlite",
-             f"local-substrate-takosumi-cloud-worker-1:{sqlite_path}"],
-            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except Exception as exc:
-        sys.stderr.write(
-            f"[stripe-webhook-replay] cleanup best-effort failed: {exc}\n",
-        )
 
 
 _state: dict[str, str | None] = {"subject": None, "customer": None}

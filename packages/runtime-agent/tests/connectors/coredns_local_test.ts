@@ -37,6 +37,7 @@ Deno.test("CorednsLocalConnector.apply appends record to zone file", async () =>
     const res = await connector.apply({
       shape: "gateway@v1",
       provider: "@takos/selfhost-coredns",
+      spaceId: "space_test",
       resourceName: "rs",
       spec: gatewaySpec("app.example.com", "10.0.0.5"),
     }, {});

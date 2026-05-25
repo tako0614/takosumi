@@ -146,6 +146,62 @@ export interface ExternalPublicationResolver {
   ): Promise<NamespaceMaterial | undefined> | NamespaceMaterial | undefined;
 }
 
+export interface HttpExternalPublicationResolverOptions {
+  readonly url: string;
+  readonly token?: string;
+  readonly fetch?: typeof fetch;
+}
+
+export function httpExternalPublicationResolver(
+  options: HttpExternalPublicationResolverOptions,
+): ExternalPublicationResolver {
+  return {
+    async resolve(context) {
+      const requestFetch = options.fetch ?? fetch;
+      const response = await requestFetch(options.url, {
+        method: "POST",
+        headers: {
+          "accept": "application/json",
+          "content-type": "application/json",
+          ...(options.token
+            ? { authorization: `Bearer ${options.token}` }
+            : {}),
+        },
+        body: JSON.stringify(context),
+      });
+      if (response.status === 204 || response.status === 404) {
+        return undefined;
+      }
+      const text = await response.text();
+      let payload: unknown = text;
+      if (text.length > 0) {
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          // Keep the raw text for the error below.
+        }
+      }
+      if (response.status < 200 || response.status >= 300) {
+        throw new InstallerPipelineError(
+          "failed_precondition",
+          `external publication resolver returned HTTP ${response.status}`,
+        );
+      }
+      const material =
+        isRecord(payload) && isNamespaceMaterial(payload.material)
+          ? payload.material
+          : payload;
+      if (!isNamespaceMaterial(material)) {
+        throw new InstallerPipelineError(
+          "failed_precondition",
+          "external publication resolver response must be a material object",
+        );
+      }
+      return material;
+    },
+  };
+}
+
 export interface InstallerPipelineDependencies {
   readonly installations?: InstallationStore;
   readonly deployments?: DeploymentStore;
@@ -519,7 +575,7 @@ export class InstallerPipeline {
               }
               throw new InstallerPipelineError(
                 isExternalPublicationRef(sourceRef)
-                  ? "not_implemented"
+                  ? "failed_precondition"
                   : "invalid_argument",
                 `${componentName}.listen.${bindingName}.from refers to ` +
                   `unresolved publication ${JSON.stringify(sourceRef)}`,
@@ -981,6 +1037,10 @@ function isSecretRefMaterial(
 function isNamespaceMaterial(value: unknown): value is NamespaceMaterial {
   return value !== null && typeof value === "object" &&
     !Array.isArray(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isExternalPublicationRef(value: ListenSourceRef): boolean {

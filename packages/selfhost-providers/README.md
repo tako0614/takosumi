@@ -1,14 +1,8 @@
 # @takos/takosumi-selfhost-providers
 
-Self-host-backed reference `KernelPlugin` adapter factories that can bind
-selected takosumi.com kind URIs (`web-service` / `object-store` / `postgres`) in
-the reference kernel. Provides a credential-free baseline for Takosumi operators
-who want to run the kernel without any cloud account.
+Self-host-backed reference `KernelPlugin` adapter factories that can bind selected takosumi.com kind URIs (`web-service` / `object-store` / `postgres` / `gateway`) in the reference kernel. Provides a credential-free baseline for Takosumi operators who want to run the kernel without any cloud account.
 
-Operators import this package explicitly — Takosumi core
-(`@takos/takosumi-kernel`) ships zero cloud / self-host SDK code, so the
-operator chooses which provider packages to attach to the reference adapter
-array (`createPaaSApp({ kindAliases, plugins: [...] })`).
+Operators import this package explicitly — Takosumi core (`@takos/takosumi-kernel`) ships zero cloud / self-host SDK code, so the operator chooses which provider packages to attach to the reference adapter array (`createPaaSApp({ kindAliases, plugins: [...] })`).
 
 ## Install
 
@@ -16,6 +10,7 @@ array (`createPaaSApp({ kindAliases, plugins: [...] })`).
 import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
 import {
+  selfhostCoreDnsGatewayProvider,
   selfhostDockerComposeWebServiceProvider,
   selfhostFilesystemObjectStoreProvider,
   selfhostPostgresProvider,
@@ -29,6 +24,10 @@ const { app } = await createPaaSApp({
       rootDir: "/var/lib/takos/object-store",
     }),
     selfhostPostgresProvider(),
+    selfhostCoreDnsGatewayProvider({
+      defaultHost: "takos.test",
+      ingressTarget: "127.0.0.1",
+    }),
   ],
 });
 ```
@@ -42,12 +41,11 @@ const { app } = await createPaaSApp({
 | `selfhostMinioObjectStoreProvider`        | `https://takosumi.com/kinds/v1/object-store` |
 | `selfhostFilesystemObjectStoreProvider`   | `https://takosumi.com/kinds/v1/object-store` |
 | `selfhostPostgresProvider`                | `https://takosumi.com/kinds/v1/postgres`     |
+| `selfhostCoreDnsGatewayProvider`          | `https://takosumi.com/kinds/v1/gateway`      |
 
-`selfhostDockerComposeWorkerProvider` and `selfhostSystemdWorkerProvider` are
-alternate exports for the web-service factories.
+`selfhostDockerComposeWorkerProvider` and `selfhostSystemdWorkerProvider` are alternate exports for the web-service factories.
 
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official
-  catalog descriptor helpers and reference adapter helpers.
+- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official catalog descriptor helpers and reference adapter helpers.

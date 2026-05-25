@@ -66,6 +66,9 @@ export function kernelPluginFromProviderPlugin(
         outputs: result.outputs ?? {},
       };
     },
+    publishMaterial(ctx) {
+      return Promise.resolve(providerOutputsToNamespaceMaterial(ctx.outputs));
+    },
     async destroy(ctx) {
       await provider.destroy(
         ctx.resourceHandle,
@@ -73,6 +76,31 @@ export function kernelPluginFromProviderPlugin(
       );
     },
   };
+}
+
+function providerOutputsToNamespaceMaterial(
+  outputs: JsonObject,
+): NamespaceMaterial {
+  const material: Record<string, JsonObject[string] | { secretRef: string }> =
+    {};
+  for (const [key, value] of Object.entries(outputs)) {
+    material[key] = secretRefMaterial(key, value) ?? value;
+  }
+  return material;
+}
+
+function secretRefMaterial(
+  key: string,
+  value: JsonObject[string],
+): { secretRef: string } | undefined {
+  if (
+    typeof value === "string" &&
+    key.endsWith("Ref") &&
+    value.startsWith("secret://")
+  ) {
+    return { secretRef: value };
+  }
+  return undefined;
 }
 
 function mergeResolvedBindingsIntoSpec(

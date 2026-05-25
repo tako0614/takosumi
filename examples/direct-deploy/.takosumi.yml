@@ -7,3 +7,5 @@ metadata:
 components:
   assets:
     kind: object-store
+    spec:
+      name: direct-deploy-assets

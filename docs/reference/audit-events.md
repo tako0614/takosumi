@@ -1,12 +1,10 @@
 # 監査イベント {#audit-events}
 
-::: info 内部設計メモ
-public contract は [Installer API](./installer-api.md) を参照。
+::: info
+内部設計メモ public contract は [Installer API](./installer-api.md) を参照。
 :::
 
-Takosumi core audit events cover install / deploy / rollback lifecycle の
-Deployment の記録。Reference/operator extension event families can add リソース
-の作成・更新、connector、and asset の記録。
+Takosumi core audit events cover install / deploy / rollback lifecycle の Deployment の記録。Reference/operator extension event families can add リソースの作成・更新、connector、and asset の記録。
 
 ## 共通 envelope
 
@@ -26,15 +24,11 @@ interface AuditLogEvent {
 }
 ```
 
-`payload` は event type ごとの object です。secret value、raw token、 provider
-credential は reference / redacted form で扱います。
+`payload` は event type ごとの object です。secret value、raw token、 provider credential は reference / redacted form で扱います。
 
 ## Event type
 
-この表は frequently consumed event type の索引です。Bootstrap と backup /
-restore の stage-specific event はそれぞれ
-[Bootstrap Protocol](./bootstrap-protocol.md) と
-[Backup and Restore](./backup-restore.md) が正本です。
+この表は frequently consumed event type の索引です。Bootstrap と backup / restore の stage-specific event はそれぞれ [Bootstrap Protocol](./bootstrap-protocol.md) と [Backup and Restore](./backup-restore.md) が正本です。
 
 ### Installation / Deployment
 
@@ -61,44 +55,39 @@ restore の stage-specific event はそれぞれ
 
 ### Reference / Operator Policy Events
 
-These events belong to a reference/operator policy profile. They are not
-additional manifest fields and do not expand the portable Installer API entity
-model.
+These events belong to a reference/operator policy profile. They are not additional manifest fields and do not expand the portable Installer API entity model.
 
-| Type                   | Severity | 説明                                                    |
-| ---------------------- | -------- | ------------------------------------------------------- |
-| `approval-required`    | notice   | apply に operator approval が必要になった。             |
-| `approval-granted`     | notice   | approval が承認された。                                 |
-| `approval-invalidated` | warning  | approval が input drift などで無効化された。            |
-| `cleanup-backlog-created`  | warning  | revoke が即時完了せず CleanupBacklog が記録された。         |
-| `cleanup-backlog-resolved` | notice   | CleanupBacklog が解消された。                               |
-| `drift-detected`       | warning  | observed state と desired state の drift が検出された。 |
+| Type                       | Severity | 説明                                                    |
+| -------------------------- | -------- | ------------------------------------------------------- |
+| `approval-required`        | notice   | apply に operator approval が必要になった。             |
+| `approval-granted`         | notice   | approval が承認された。                                 |
+| `approval-invalidated`     | warning  | approval が input drift などで無効化された。            |
+| `cleanup-backlog-created`  | warning  | revoke が即時完了せず CleanupBacklog が記録された。     |
+| `cleanup-backlog-resolved` | notice   | CleanupBacklog が解消された。                           |
+| `drift-detected`           | warning  | observed state と desired state の drift が検出された。 |
 
 ### Reference asset / Connector
 
-| Type                       | Severity | 説明                                                |
-| -------------------------- | -------- | --------------------------------------------------- |
-| `artifact-uploaded`        | info     | optional asset が受け付けられた。               |
-| `artifact-gc-marked`       | info     | asset GC が live set を mark した。             |
-| `artifact-gc-swept`        | notice   | asset GC が unreferenced asset を削除した。 |
-| `connector-registered`     | notice   | runtime-agent connector が登録された。              |
-| `connector-replaced`       | notice   | runtime-agent connector record が置換された。       |
-| `connector-revoked`        | notice   | runtime-agent connector が無効化された。            |
-| `connector-health-changed` | warning  | connector health が変化した。                       |
-| `journal-compacted`        | info     | WAL base snapshot digest pair が更新された。        |
+| Type                       | Severity | 説明                                          |
+| -------------------------- | -------- | --------------------------------------------- |
+| `artifact-uploaded`        | info     | optional asset が受け付けられた。             |
+| `artifact-gc-marked`       | info     | asset GC が live set を mark した。           |
+| `artifact-gc-swept`        | notice   | asset GC が unreferenced asset を削除した。   |
+| `connector-registered`     | notice   | runtime-agent connector が登録された。        |
+| `connector-replaced`       | notice   | runtime-agent connector record が置換された。 |
+| `connector-revoked`        | notice   | runtime-agent connector が無効化された。      |
+| `connector-health-changed` | warning  | connector health が変化した。                 |
+| `journal-compacted`        | info     | WAL base snapshot digest pair が更新された。  |
 
 ## Redaction
 
 - secret value、raw token、private key、provider credential は記録しない。
 - URL や object key に secret が含まれる可能性がある場合は digest にする。
-- payload に source content 全体を埋めず、digest / size / source ref
-  を記録する。
+- payload に source content 全体を埋めず、digest / size / source ref を記録する。
 
 ## Hash chain
 
-audit store は event hash chain または同等の tamper-evident 方式を持ちます。
-implementation は backend に合わせて構いませんが、operator が chain break を検知
-できる必要があります。
+audit store は event hash chain または同等の tamper-evident 方式を持ちます。 implementation は backend に合わせて構いませんが、operator が chain break を検知できる必要があります。
 
 ## 関連ページ
 

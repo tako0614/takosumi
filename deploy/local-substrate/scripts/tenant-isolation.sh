@@ -57,7 +57,9 @@ if [[ "$SUB_A" == "$SUB_B" ]]; then
 	exit 1
 fi
 
+LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
 PREVIEW=$(curl -sk --cacert "$CA" -X POST \
+	-H "Authorization: Bearer $LOCAL_CLOUD_SESSION_ID" \
 	-H "Content-Type: application/json" \
 	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/takos-docs.git","ref":"main"}}' \
 	"$BASE/v1/installations/dry-run")

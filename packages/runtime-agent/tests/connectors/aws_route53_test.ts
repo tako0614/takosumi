@@ -49,6 +49,7 @@ Deno.test("Route53Connector.apply UPSERTs CNAME via ChangeResourceRecordSets", a
   const res = await connector.apply({
     shape: "gateway@v1",
     provider: "@takos/aws-route53",
+    spaceId: "space_test",
     resourceName: "rs",
     spec: gatewaySpec("app.example.com", "lb.example.com"),
   }, {});

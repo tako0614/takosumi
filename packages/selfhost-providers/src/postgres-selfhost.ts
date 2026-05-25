@@ -14,6 +14,11 @@ import { KIND_URI_POSTGRES } from "./_kinds.ts";
 
 export interface SelfhostPostgresProviderOptions {
   readonly hostBinding?: string;
+  readonly hostPortStart?: number;
+  readonly secretRefBase?: string;
+  readonly databaseName?: string;
+  readonly username?: string;
+  readonly passwordGenerator?: () => string;
   readonly lifecycle?: LocalDockerPostgresLifecycleClient;
 }
 
@@ -25,6 +30,15 @@ export function selfhostPostgresProvider(
   const provider = createLocalDockerPostgresProvider({
     lifecycle,
     ...(opts.hostBinding ? { hostBinding: opts.hostBinding } : {}),
+    ...(opts.hostPortStart !== undefined
+      ? { hostPortStart: opts.hostPortStart }
+      : {}),
+    ...(opts.secretRefBase ? { secretRefBase: opts.secretRefBase } : {}),
+    ...(opts.databaseName ? { databaseName: opts.databaseName } : {}),
+    ...(opts.username ? { username: opts.username } : {}),
+    ...(opts.passwordGenerator
+      ? { passwordGenerator: opts.passwordGenerator }
+      : {}),
   });
   return kernelPluginFromProviderPlugin({
     provider,
