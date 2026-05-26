@@ -1,6 +1,6 @@
 # Reference Kind Packages {#kind-packages}
 
-Takosumi の manifest は `kind` だけで component の種類を選びます。Reference implementation では、各 kind の descriptor、TypeScript helper、validator、必要な KernelPlugin factory を **kind package** に置きます。package は `@takos/takosumi-kind-<alias>` です。
+Takosumi の manifest は `kind` だけで component の種類を選びます。各 kind の descriptor、TypeScript helper、validator は **kind package** に置きます。Backend-specific native kind package は、reference kernel に attach する `KernelPlugin` factory も export できます。package は `@takos/takosumi-kind-<alias>` です。
 
 Repository ownership は二つに分かれます。portable kind package は `takosumi/` に残り、backend-specific native kind package は `takosumi-plugins/` に置きます。package 名はどちらも `@takos/takosumi-kind-*` を使います。
 

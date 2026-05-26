@@ -72,7 +72,7 @@ Deno.serve({ port: 8788 }, app.fetch);
 `createPaaSApp` does:
 
 1. Loads runtime config from env
-2. Registers optional DataAsset metadata used by DataAsset extension routes. Component kind descriptors and providers are operator-supplied. Cloud-backed reference `KernelPlugin` adapter factories are imported separately from `@takos/takosumi-<cloud>-providers` packages and attached via `plugins: [...]` plus an operator `kindAliases` map when short aliases are desired.
+2. Registers optional DataAsset metadata used by DataAsset extension routes. Component kind descriptors and implementation bindings are operator-supplied. Backend-specific reference `KernelPlugin` factories are imported from `takosumi-plugins` native kind packages such as `@takos/takosumi-kind-cloudflare-worker` or `@takos/takosumi-kind-aws-rds-postgres`, then attached via `plugins: [...]` plus an operator `kindAliases` map when short aliases are desired.
 3. Builds `AppContext` with adapter ports (auth / kms / secrets / queue / storage / observability / objectStorage / runtimeAgentRegistry / etc)
 4. Passes `externalPublications` to the Installer pipeline so ordinary external `listen.from` paths such as `operator.identity.oidc` resolve to operator-owned material.
 5. Mounts the route modules that match the configured process role:
@@ -90,7 +90,7 @@ See [`packages/kernel/src/app_context.ts`](./src/app_context.ts) for the full li
 ## See also
 
 - [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) — lifecycle execution host
-- [`@takos/takosumi-kind-*`](https://jsr.io/@takos/takosumi-kind-worker) — package-owned kind descriptors and reference adapter factories
+- [`@takos/takosumi-kind-*`](https://jsr.io/@takos/takosumi-kind-worker) — package-owned kind descriptors; native packages in `takosumi-plugins` also export reference adapter factories
 - [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — operator CLI
 - [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) — AppSpec / Installer API wire types
 

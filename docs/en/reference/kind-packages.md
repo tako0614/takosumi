@@ -1,6 +1,6 @@
 # Reference Kind Packages {#kind-packages}
 
-Takosumi manifests choose a component with `kind`. In the reference implementation, each kind's descriptor, TypeScript helpers, validator, and optional KernelPlugin factory live in a **kind package**. Package names use `@takos/takosumi-kind-<alias>`.
+Takosumi manifests choose a component with `kind`. Each kind's descriptor, TypeScript helpers, and validator live in a **kind package**. Backend-specific native kind packages may also export a `KernelPlugin` factory for the reference kernel. Package names use `@takos/takosumi-kind-<alias>`.
 
 Repository ownership is split. Portable kind packages stay in `takosumi/`; backend-specific native kind packages live in `takosumi-plugins/`. Both keep the `@takos/takosumi-kind-*` package naming convention.
 
