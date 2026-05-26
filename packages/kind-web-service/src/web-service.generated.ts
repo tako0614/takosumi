@@ -2,12 +2,16 @@
 // Run `deno task spec:generate-ts` to refresh.
 
 export interface WebServiceScale {
+  /** Maximum requested replica count. */
   readonly max: number;
+  /** Minimum requested replica count. */
   readonly min: number;
 }
 
 export interface WebServiceResources {
+  /** Requested CPU size or provider-specific CPU class. */
   readonly cpu?: string;
+  /** Requested memory size or provider-specific memory class. */
   readonly memory?: string;
 }
 

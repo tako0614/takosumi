@@ -28,8 +28,16 @@
         "additionalProperties": false,
         "description": "Replica bounds. `min: 0` requests scale-to-zero. Operator policy and the selected implementation materialize or reject the request.",
         "properties": {
-          "min": { "type": "integer", "minimum": 0 },
-          "max": { "type": "integer", "minimum": 1 }
+          "min": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Minimum requested replica count."
+          },
+          "max": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum requested replica count."
+          }
         }
       },
       "env": {
@@ -42,8 +50,16 @@
         "additionalProperties": false,
         "description": "CPU / memory hints consumed by compatible provider bindings.",
         "properties": {
-          "cpu": { "type": "string", "minLength": 1 },
-          "memory": { "type": "string", "minLength": 1 }
+          "cpu": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Requested CPU size or provider-specific CPU class."
+          },
+          "memory": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Requested memory size or provider-specific memory class."
+          }
         }
       }
     }

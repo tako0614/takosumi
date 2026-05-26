@@ -2,6 +2,7 @@
 // Run `deno task spec:generate-ts` to refresh.
 
 export interface DatabasePostgresStorage {
+  /** Requested persistent storage size in GiB. */
   readonly sizeGiB: number;
 }
 

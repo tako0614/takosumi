@@ -24,9 +24,11 @@ import {
   allowedProjectionFamiliesForOutputType,
   OFFICIAL_OUTPUT_TYPE_NAMES,
   type OfficialOutputTypeName,
+  type OutputFieldTypeDefinition,
   PROJECTION_FAMILY_NAMES,
   SAFE_DEFAULT_ACCESS_MODES as OFFICIAL_SAFE_DEFAULT_ACCESS_MODES,
   validateOfficialOutputMaterialMapping,
+  validateOfficialOutputMaterialMappingOutputTypes,
 } from "takosumi-contract/type-catalog";
 
 interface LintIssue {
@@ -50,8 +52,24 @@ const ROOTS = [
 const KIND_ID_PREFIX = "https://takosumi.com/kinds/v1/";
 const KIND_TYPES = new Set(["ComponentKind", "takosumi:Kind"]);
 const OUTPUT_CONTRACTS = new Set<string>(OFFICIAL_OUTPUT_TYPE_NAMES);
+const OUTPUT_FIELD_TYPES = new Set([
+  "boolean",
+  "integer",
+  "number",
+  "object",
+  "object[]",
+  "string",
+]);
 const PROJECTION_FAMILIES = new Set<string>(PROJECTION_FAMILY_NAMES);
 const ACCESS_MODES = new Set<string>(OFFICIAL_ACCESS_MODES);
+const SCHEMA_TYPES = new Set([
+  "array",
+  "boolean",
+  "integer",
+  "number",
+  "object",
+  "string",
+]);
 const SAFE_DEFAULT_ACCESS_MODES = new Set<string>(
   OFFICIAL_SAFE_DEFAULT_ACCESS_MODES.filter((mode) => mode !== null),
 );
@@ -109,7 +127,12 @@ async function main(): Promise<void> {
         issues,
       );
       checkReferenceAliases(obj["referenceAliases"], entry.path, issues);
-      checkPublications(obj["publications"], entry.path, issues);
+      checkPublications(
+        obj["publications"],
+        obj["outputs"],
+        entry.path,
+        issues,
+      );
       checkSpecAndInheritance(obj, entry.path, issues);
       checkOutputs(obj["outputs"], obj["portableBase"], entry.path, issues);
       checkCapabilityTerms(obj["capabilityTerms"], entry.path, issues);
@@ -210,6 +233,7 @@ function checkReferenceAliases(
 
 function checkPublications(
   value: unknown,
+  outputsValue: unknown,
   path: string,
   issues: LintIssue[],
 ): void {
@@ -229,6 +253,14 @@ function checkPublications(
     });
     return;
   }
+  if (Object.keys(value).length === 0) {
+    issues.push({
+      path,
+      message: "`publications` must declare at least one local publication",
+    });
+    return;
+  }
+  const outputDefinitions = outputDefinitionsForMapping(outputsValue);
   for (const [key, entry] of Object.entries(value)) {
     if (!isLocalName(key)) {
       issues.push({
@@ -271,27 +303,23 @@ function checkPublications(
           `publications[${key}].material is ambiguous; use exampleMaterialMapping`,
       });
     }
-    if (
-      e["exampleMaterialMapping"] !== undefined &&
-      (e["exampleMaterialMapping"] === null ||
-        typeof e["exampleMaterialMapping"] !== "object" ||
-        Array.isArray(e["exampleMaterialMapping"]))
-    ) {
+    const mapping = e["exampleMaterialMapping"];
+    if (!isRecord(mapping)) {
       issues.push({
         path,
         message:
-          `publications[${key}].exampleMaterialMapping must be an object when present`,
+          `publications[${key}].exampleMaterialMapping must be an object`,
       });
+      continue;
     }
     if (
       typeof e["contract"] === "string" &&
-      OUTPUT_CONTRACTS.has(e["contract"]) &&
-      isRecord(e["exampleMaterialMapping"])
+      OUTPUT_CONTRACTS.has(e["contract"])
     ) {
       for (
         const issue of validateOfficialOutputMaterialMapping(
           e["contract"] as OfficialOutputTypeName,
-          e["exampleMaterialMapping"],
+          mapping,
         )
       ) {
         issues.push({
@@ -302,6 +330,24 @@ function checkPublications(
             issue.message,
           ),
         });
+      }
+      if (outputDefinitions) {
+        for (
+          const issue of validateOfficialOutputMaterialMappingOutputTypes(
+            e["contract"] as OfficialOutputTypeName,
+            mapping,
+            outputDefinitions,
+          )
+        ) {
+          issues.push({
+            path,
+            message: formatMaterialMappingIssue(
+              `publications[${key}].exampleMaterialMapping`,
+              issue.path,
+              issue.message,
+            ),
+          });
+        }
       }
     }
   }
@@ -368,6 +414,111 @@ function checkSpecSchema(
   if (value["required"] !== undefined) {
     checkStringArray(value["required"], "spec.required", path, issues);
   }
+  checkJsonSchemaNode(value, "spec", path, issues);
+}
+
+function checkJsonSchemaNode(
+  schema: Record<string, unknown>,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  const schemaType = schema["type"];
+  if (
+    schemaType !== undefined &&
+    (typeof schemaType !== "string" || !SCHEMA_TYPES.has(schemaType))
+  ) {
+    issues.push({
+      path,
+      message: `${fieldName}.type must be a supported JSON Schema type`,
+    });
+  }
+
+  if (schema["enum"] !== undefined && !Array.isArray(schema["enum"])) {
+    issues.push({ path, message: `${fieldName}.enum must be an array` });
+  }
+
+  const properties = schema["properties"];
+  if (properties !== undefined) {
+    if (!isRecord(properties)) {
+      issues.push({
+        path,
+        message: `${fieldName}.properties must be an object`,
+      });
+    } else {
+      for (const [key, value] of Object.entries(properties)) {
+        if (!isLocalName(key)) {
+          issues.push({
+            path,
+            message: `${fieldName}.properties keys must be local names`,
+          });
+          continue;
+        }
+        if (!isRecord(value)) {
+          issues.push({
+            path,
+            message: `${fieldName}.properties.${key} must be an object`,
+          });
+          continue;
+        }
+        requireNonEmptyString(
+          value["description"],
+          `${fieldName}.properties.${key}.description`,
+          path,
+          issues,
+        );
+        checkJsonSchemaNode(
+          value,
+          `${fieldName}.properties.${key}`,
+          path,
+          issues,
+        );
+      }
+    }
+  }
+
+  if (Array.isArray(schema["required"]) && isRecord(properties)) {
+    for (const name of schema["required"]) {
+      if (typeof name === "string" && properties[name] === undefined) {
+        issues.push({
+          path,
+          message:
+            `${fieldName}.required entry ${name} must refer to a property`,
+        });
+      }
+    }
+  }
+
+  if (schemaType === "array") {
+    if (!isRecord(schema["items"])) {
+      issues.push({
+        path,
+        message: `${fieldName}.items must be an object for array schemas`,
+      });
+    } else {
+      checkJsonSchemaNode(schema["items"], `${fieldName}.items`, path, issues);
+    }
+  }
+
+  const additionalProperties = schema["additionalProperties"];
+  if (
+    additionalProperties !== undefined &&
+    typeof additionalProperties !== "boolean"
+  ) {
+    if (!isRecord(additionalProperties)) {
+      issues.push({
+        path,
+        message: `${fieldName}.additionalProperties must be boolean or object`,
+      });
+    } else {
+      checkJsonSchemaNode(
+        additionalProperties,
+        `${fieldName}.additionalProperties`,
+        path,
+        issues,
+      );
+    }
+  }
 }
 
 function checkOutputs(
@@ -403,12 +554,15 @@ function checkOutputs(
         message: `outputs[${index}].name must be a local name`,
       });
     }
-    requireNonEmptyString(
-      output["type"],
-      `outputs[${index}].type`,
-      path,
-      issues,
-    );
+    if (
+      typeof output["type"] !== "string" ||
+      !OUTPUT_FIELD_TYPES.has(output["type"])
+    ) {
+      issues.push({
+        path,
+        message: `outputs[${index}].type must be a supported output field type`,
+      });
+    }
     if (typeof output["required"] !== "boolean") {
       issues.push({
         path,
@@ -437,6 +591,13 @@ function checkCapabilityTerms(
     issues.push({ path, message: "`capabilityTerms` must be an array" });
     return;
   }
+  if (value.length === 0) {
+    issues.push({
+      path,
+      message: "`capabilityTerms` must be a non-empty array",
+    });
+    return;
+  }
   for (const [index, term] of value.entries()) {
     if (typeof term !== "string" || !isLocalName(term)) {
       issues.push({
@@ -445,6 +606,30 @@ function checkCapabilityTerms(
       });
     }
   }
+}
+
+function outputDefinitionsForMapping(
+  value: unknown,
+): readonly OutputFieldTypeDefinition[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const definitions: OutputFieldTypeDefinition[] = [];
+  for (const output of value) {
+    if (
+      !isRecord(output) ||
+      typeof output["name"] !== "string" ||
+      typeof output["type"] !== "string"
+    ) {
+      return undefined;
+    }
+    definitions.push({
+      name: output["name"],
+      type: output["type"],
+      ...(typeof output["required"] === "boolean"
+        ? { required: output["required"] }
+        : {}),
+    });
+  }
+  return definitions;
 }
 
 function checkNoLegacyAcceptedProjectionFamilies(

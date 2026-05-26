@@ -28,7 +28,11 @@
         "additionalProperties": false,
         "description": "Persistent volume sizing.",
         "properties": {
-          "sizeGiB": { "type": "integer", "minimum": 1 }
+          "sizeGiB": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Requested persistent storage size in GiB."
+          }
         }
       },
       "highAvailability": {
