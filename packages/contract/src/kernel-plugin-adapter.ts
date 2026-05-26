@@ -191,7 +191,7 @@ function projectServiceBindingMaterial(
     host,
     port,
   };
-  const service = readString(material.service);
+  const service = readString(material.service) ?? host;
   if (service) out.service = service;
   const database = readString(material.database);
   if (database) out.database = database;

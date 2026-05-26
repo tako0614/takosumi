@@ -135,6 +135,7 @@ Deno.test("kernelPluginFromProviderPlugin publishes provider outputs as namespac
   });
 
   assert.deepEqual(material, {
+    service: "db.internal",
     host: "db.internal",
     port: 5432,
     protocol: "postgresql",
