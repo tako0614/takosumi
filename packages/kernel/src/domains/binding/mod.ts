@@ -139,7 +139,7 @@ export class BindingResolver {
  *                    env key (`CLIENT_SECRET`).
  *   - `as: config-mount` → return the material as a mount descriptor under
  *                    `options.mount` (or `/` when absent).
- *   - `as: upstream` / `as: target` → return the material as an upstream
+ *   - `as: upstream` → return the material as an upstream
  *                    target descriptor.
  *   - operator-defined shape → fall back to env expansion.
  */
@@ -154,7 +154,6 @@ export function defaultEnvInjection(
         mounts: { [mountPath]: serializeMaterialForMount(material) },
       };
     }
-    case "target":
     case "upstream":
       return { target: material };
     case "secret-env":

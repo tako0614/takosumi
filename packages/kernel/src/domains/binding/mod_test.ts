@@ -17,7 +17,68 @@ import type {
   KernelPlugin,
   NamespaceMaterial,
 } from "takosumi-contract/reference/plugin";
+import { PROJECTION_FAMILY_NAMES } from "takosumi-contract/type-catalog";
 import { BindingResolver, defaultEnvInjection } from "./mod.ts";
+
+Deno.test("defaultEnvInjection implements exactly the official projection families", () => {
+  assert.deepEqual([...PROJECTION_FAMILY_NAMES].sort(), [
+    "config-mount",
+    "env",
+    "secret-env",
+    "upstream",
+  ]);
+
+  const material: NamespaceMaterial = {
+    url: "https://service.internal",
+    clientSecretRef: { secretRef: "secret://client-secret" },
+  };
+
+  assert.deepEqual(
+    defaultEnvInjection({ from: "service.http", as: "env" }, material).env,
+    {
+      URL: "https://service.internal",
+      CLIENT_SECRET_REF: { secretRef: "secret://client-secret" },
+    },
+  );
+  assert.deepEqual(
+    defaultEnvInjection(
+      { from: "service.http", as: "secret-env" },
+      material,
+    ).env,
+    {
+      URL: "https://service.internal",
+      CLIENT_SECRET: { secretRef: "secret://client-secret" },
+    },
+  );
+  assert.deepEqual(
+    defaultEnvInjection({ from: "service.http", as: "upstream" }, material)
+      .target,
+    material,
+  );
+  assert.deepEqual(
+    Object.keys(
+      defaultEnvInjection({
+        from: "service.http",
+        as: "config-mount",
+        mount: "/bindings/service",
+      }, material).mounts ?? {},
+    ),
+    ["/bindings/service"],
+  );
+});
+
+Deno.test("defaultEnvInjection treats non-official projection names as env expansion", () => {
+  const material: NamespaceMaterial = {
+    url: "https://service.internal",
+  };
+  const injection = defaultEnvInjection(
+    { from: "service.http", as: "target", prefix: "UPSTREAM" },
+    material,
+  );
+  assert.deepEqual(injection, {
+    env: { UPSTREAM_URL: "https://service.internal" },
+  });
+});
 
 Deno.test("defaultEnvInjection expands env-shape material with a prefix", () => {
   const material: NamespaceMaterial = {
