@@ -57,8 +57,7 @@ export type EndpointVisibility =
   | "private"
   | "space"
   | "public"
-  | "internal"
-  | (string & Record<never, never>);
+  | "internal";
 
 export interface HttpEndpointTarget {
   readonly name?: string;
@@ -251,7 +250,7 @@ export function validateOfficialOutputMaterial(
       requireString(value.service, "$.service", issues, { optional: true });
       requireString(value.protocol, "$.protocol", issues);
       requireString(value.host, "$.host", issues);
-      requireNumber(value.port, "$.port", issues);
+      requirePortNumber(value.port, "$.port", issues);
       requireString(value.database, "$.database", issues, { optional: true });
       requireString(value.username, "$.username", issues, { optional: true });
       requireString(value.connectionUrl, "$.connectionUrl", issues, {
@@ -471,18 +470,32 @@ function checkHttpEndpointTarget(
     "visibility",
   ]);
   requireString(value.name, `${path}.name`, issues, { optional: true });
+  requireIdentifier(value.name, `${path}.name`, issues, { optional: true });
   requireString(value.url, `${path}.url`, issues, { optional: true });
+  requireHttpUrl(value.url, `${path}.url`, issues, { optional: true });
   requireString(value.protocol, `${path}.protocol`, issues, {
     optional: true,
   });
+  requireHttpScheme(value.protocol, `${path}.protocol`, issues, {
+    optional: true,
+  });
   requireString(value.host, `${path}.host`, issues, { optional: true });
-  requireNumber(value.port, `${path}.port`, issues, { optional: true });
+  requirePortNumber(value.port, `${path}.port`, issues, { optional: true });
   requireString(value.basePath, `${path}.basePath`, issues, {
+    optional: true,
+  });
+  requirePathPrefix(value.basePath, `${path}.basePath`, issues, {
     optional: true,
   });
   requireString(value.visibility, `${path}.visibility`, issues, {
     optional: true,
   });
+  requireEndpointVisibility(
+    value.visibility,
+    `${path}.visibility`,
+    issues,
+    { optional: true },
+  );
   const hasUrl = typeof value.url === "string" && value.url.length > 0;
   const hasHostPort = typeof value.host === "string" &&
     value.host.length > 0 && typeof value.port === "number";
@@ -513,14 +526,27 @@ function checkHttpEndpoint(
     "routes",
   ]);
   requireString(value.url, `${path}.url`, issues);
+  requireHttpUrl(value.url, `${path}.url`, issues);
   requireString(value.scheme, `${path}.scheme`, issues, { optional: true });
+  requireHttpScheme(value.scheme, `${path}.scheme`, issues, {
+    optional: true,
+  });
   requireString(value.host, `${path}.host`, issues, { optional: true });
   requireString(value.listener, `${path}.listener`, issues, {
+    optional: true,
+  });
+  requireIdentifier(value.listener, `${path}.listener`, issues, {
     optional: true,
   });
   requireString(value.visibility, `${path}.visibility`, issues, {
     optional: true,
   });
+  requireEndpointVisibility(
+    value.visibility,
+    `${path}.visibility`,
+    issues,
+    { optional: true },
+  );
   requireBoolean(value.primary, `${path}.primary`, issues, { optional: true });
   if (value.routes !== undefined) {
     if (!Array.isArray(value.routes)) {
@@ -544,7 +570,9 @@ function checkRouteSummary(
   }
   checkNoUnknownKeys(value, path, issues, ["pathPrefix", "to"]);
   requireString(value.pathPrefix, `${path}.pathPrefix`, issues);
+  requirePathPrefix(value.pathPrefix, `${path}.pathPrefix`, issues);
   requireString(value.to, `${path}.to`, issues);
+  requireIdentifier(value.to, `${path}.to`, issues);
 }
 
 function checkNoUnknownKeys(
@@ -573,7 +601,7 @@ function requireString(
   }
 }
 
-function requireNumber(
+function requirePortNumber(
   value: unknown,
   path: string,
   issues: CatalogValidationIssue[],
@@ -582,6 +610,10 @@ function requireNumber(
   if (value === undefined && opts.optional) return;
   if (typeof value !== "number" || !Number.isFinite(value)) {
     issues.push({ path, message: "must be a finite number" });
+    return;
+  }
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    issues.push({ path, message: "must be an integer port from 1 to 65535" });
   }
 }
 
@@ -606,6 +638,91 @@ function requireSecretReference(
   if (value === undefined && opts.optional) return;
   if (!isSecretReference(value)) {
     issues.push({ path, message: "must be a secretRef object" });
+  }
+}
+
+function requireHttpUrl(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+  opts: { readonly optional?: boolean } = {},
+): void {
+  if (value === undefined && opts.optional) return;
+  if (typeof value !== "string") return;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    issues.push({ path, message: "must be an absolute http(s) URL" });
+    return;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    issues.push({ path, message: "must use http or https" });
+  }
+}
+
+function requireHttpScheme(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+  opts: { readonly optional?: boolean } = {},
+): void {
+  if (value === undefined && opts.optional) return;
+  if (typeof value !== "string") return;
+  if (value !== "http" && value !== "https") {
+    issues.push({ path, message: 'must be "http" or "https"' });
+  }
+}
+
+function requireEndpointVisibility(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+  opts: { readonly optional?: boolean } = {},
+): void {
+  if (value === undefined && opts.optional) return;
+  if (typeof value !== "string") return;
+  if (
+    value !== "private" && value !== "space" && value !== "public" &&
+    value !== "internal"
+  ) {
+    issues.push({
+      path,
+      message: 'must be "private", "space", "public", or "internal"',
+    });
+  }
+}
+
+function requirePathPrefix(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+  opts: { readonly optional?: boolean } = {},
+): void {
+  if (value === undefined && opts.optional) return;
+  if (typeof value !== "string") return;
+  if (!value.startsWith("/") || value.includes("?") || value.includes("#")) {
+    issues.push({
+      path,
+      message: 'must start with "/" and must not contain "?" or "#"',
+    });
+  }
+}
+
+function requireIdentifier(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+  opts: { readonly optional?: boolean } = {},
+): void {
+  if (value === undefined && opts.optional) return;
+  if (typeof value !== "string") return;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value)) {
+    issues.push({
+      path,
+      message:
+        "must start with an ASCII letter or digit and contain only ASCII letters, digits, _, ., or -",
+    });
   }
 }
 

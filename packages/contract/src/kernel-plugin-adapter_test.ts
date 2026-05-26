@@ -26,7 +26,12 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into l
   const plugin = kernelPluginFromProviderPlugin({
     provider,
     kindUri: "https://takosumi.com/kinds/v1/gateway",
+    name: "@takos/takosumi-kind-test-gateway",
+    version: "0.1.0",
   });
+
+  assert.equal(plugin.name, "@takos/takosumi-kind-test-gateway");
+  assert.equal(plugin.version, "0.1.0");
 
   await plugin.apply({
     installationId: "ins_1",

@@ -62,6 +62,8 @@ Official output material is a closed shape. Operator-specific fields should be m
 
 `http-endpoint` describes callable HTTP output data. Workload published outputs usually emit `targets[]`; gateway or ingress published outputs usually emit `endpoints[]`. One output must contain at least one of `targets[]` or `endpoints[]`. Public reachability is a property of the publisher and the resulting output.
 
+HTTP output values are closed. `url` is an absolute `http` / `https` URL, `scheme` / `protocol` is `http` or `https`, `port` is an integer from 1 to 65535, and `visibility` is one of `private`, `space`, `public`, or `internal`. `basePath` and `routes[].pathPrefix` start with `/` and do not contain `?` or `#`. `name`, `listener`, and `routes[].to` are ASCII identifiers (`A-Za-z0-9_.-`).
+
 Compact schema:
 
 ```yaml

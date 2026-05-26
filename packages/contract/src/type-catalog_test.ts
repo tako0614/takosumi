@@ -131,3 +131,46 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     [{ path: "$.accessKeyRef", message: "unknown field" }],
   );
 });
+
+Deno.test("type catalog rejects invalid http endpoint material values", () => {
+  assert.deepEqual(
+    validateOfficialOutputMaterial("http-endpoint", {
+      targets: [{
+        url: "ftp://web.internal",
+        port: 70000,
+        visibility: "world",
+      }],
+      endpoints: [{
+        url: "https://app.example.test",
+        scheme: "ftp",
+        visibility: "edge",
+        routes: [{ pathPrefix: "api?x=1", to: "app/service" }],
+      }],
+    }),
+    [
+      { path: "$.targets[0].url", message: "must use http or https" },
+      {
+        path: "$.targets[0].port",
+        message: "must be an integer port from 1 to 65535",
+      },
+      {
+        path: "$.targets[0].visibility",
+        message: 'must be "private", "space", "public", or "internal"',
+      },
+      { path: "$.endpoints[0].scheme", message: 'must be "http" or "https"' },
+      {
+        path: "$.endpoints[0].visibility",
+        message: 'must be "private", "space", "public", or "internal"',
+      },
+      {
+        path: "$.endpoints[0].routes[0].pathPrefix",
+        message: 'must start with "/" and must not contain "?" or "#"',
+      },
+      {
+        path: "$.endpoints[0].routes[0].to",
+        message:
+          "must start with an ASCII letter or digit and contain only ASCII letters, digits, _, ., or -",
+      },
+    ],
+  );
+});

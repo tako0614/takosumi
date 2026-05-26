@@ -43,6 +43,8 @@ export function kernelPluginFromProviderPlugin(
     // deno-lint-ignore no-explicit-any
     readonly provider: ProviderPlugin<any, any, any>;
     readonly kindUri: string;
+    readonly name?: string;
+    readonly version?: string;
     readonly capabilities?: readonly string[];
   },
 ): KernelPlugin {
@@ -50,8 +52,8 @@ export function kernelPluginFromProviderPlugin(
   const capabilities = opts.capabilities ??
     (provider.capabilities as readonly string[]);
   return {
-    name: provider.id,
-    version: provider.version,
+    name: opts.name ?? provider.id,
+    version: opts.version ?? provider.version,
     provides: [opts.kindUri],
     capabilities,
     async apply(ctx) {
