@@ -2,7 +2,7 @@ import { Meta, Title } from "@solidjs/meta";
 import Nav from "~/components/Nav";
 import Hero from "~/components/Hero";
 import WhatYouCanHost from "~/components/WhatYouCanHost";
-import WhySelfHost from "~/components/WhySelfHost";
+import WhyOperatorOwned from "~/components/WhyOperatorOwned";
 import EcosystemMap from "~/components/EcosystemMap";
 import ForEveryone from "~/components/ForEveryone";
 import Showcase from "~/components/Showcase";
@@ -14,19 +14,19 @@ export default function Home() {
   return (
     <>
       <Title>
-        Takosumi — An Open Source, Self-Hostable Platform for Everything
+        Takosumi — An Open Source, Operator-Portable Platform for Everything
       </Title>
       <Meta
         name="description"
-        content="chat も docs も agent も SNS も、 自分の DB も —— 1 つの Takosumi の上で、 自分の host に。 cloud でも自宅の docker でも、 同じ Space が動く。 Takosumi は open source な self-host platform、 全ての人のために。"
+        content="chat も docs も agent も SNS も、 自分の DB も —— 1 つの Takosumi の上で、 cloud でも VM でも cluster でも、 同じ Space が動く。"
       />
       <Meta
         property="og:title"
-        content="Takosumi — An Open Source, Self-Hostable Platform for Everything"
+        content="Takosumi — An Open Source, Operator-Portable Platform for Everything"
       />
       <Meta
         property="og:description"
-        content="chat / docs / agent / SNS / DB を 1 つの Takosumi の上で、 自分の host に。 open source な self-host platform、 全ての人のために。"
+        content="Manifest、Installation、Deployment を共通化し、実行先は operator が選ぶ。cloud でも VM でも cluster でも同じ Space が動く。"
       />
       <Meta property="og:url" content="https://takosumi.com/" />
       <Meta property="og:type" content="website" />
@@ -39,7 +39,7 @@ export default function Home() {
       <main>
         <Hero />
         <WhatYouCanHost />
-        <WhySelfHost />
+        <WhyOperatorOwned />
         <EcosystemMap />
         <ForEveryone />
         <Showcase />

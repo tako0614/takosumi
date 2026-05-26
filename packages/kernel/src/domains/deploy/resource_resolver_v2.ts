@@ -45,12 +45,12 @@ const BARE_PROVIDER_SUGGESTIONS: Readonly<Record<string, string>> = {
   "azure-container-apps": "@takos/azure-container-apps",
   "k3s-deployment": "@takos/kubernetes-deployment",
   "deno-deploy": "@takos/deno-deploy",
-  "filesystem": "@takos/selfhost-filesystem",
-  "minio": "@takos/selfhost-minio",
-  "docker-compose": "@takos/selfhost-docker-compose",
-  "systemd-unit": "@takos/selfhost-systemd",
-  "local-docker": "@takos/selfhost-postgres",
-  "coredns-local": "@takos/selfhost-coredns",
+  "filesystem": "@takos/filesystem-object-store",
+  "minio": "@takos/minio-object-store",
+  "docker-compose": "@takos/docker-compose-web-service",
+  "systemd-unit": "@takos/systemd-web-service",
+  "local-docker": "@takos/docker-postgres",
+  "coredns-local": "@takos/coredns-gateway",
 };
 
 type ProviderSelection = {

@@ -8,10 +8,9 @@ export default function EcosystemMap() {
         <span class="eyebrow">ecosystem map</span>
         <h2>ひとつの土台、 たくさんの形。</h2>
         <p class="lede">
-          同じ Takosumi の上で、 chat も docs も agent も 動く。 下は cloud で
-          も 自宅 VM でも、 同じ manifest が走る。 必要なら 自分の resource も
-          {" "}
-          1 つ 増やせる。
+          同じ Takosumi の上で、chat も docs も agent も動く。下は cloud、
+          VM、cluster、管理サービスのどれでも、同じ manifest が走る。必要なら
+          自分の resource も 1 つ増やせる。
         </p>
         <div class="ecosystem-map">
           <div class="ecosystem-layer ecosystem-apps">

@@ -18,7 +18,7 @@ export type TakosumiCommand = Command<any>;
 function createTakosumi(): TakosumiCommand {
   return new Command()
     .name("takosumi")
-    .description("Takosumi: self-hostable PaaS toolkit")
+    .description("Takosumi: operator-portable PaaS toolkit")
     .version(TAKOSUMI_CLI_VERSION)
     .command("install", installCommand)
     .command("deploy", deployCommand)

@@ -1,0 +1,18 @@
+{
+  "name": "@takos/takosumi-plugin-object-store-filesystem",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "imports": {
+    "@takos/takosumi-plugins/shape-providers/object-store/filesystem": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/object-store/filesystem",
+    "@takos/takosumi-plugins/kinds": "jsr:@takos/takosumi-plugins@^0.12.0/kinds",
+    "takosumi-contract/reference/kernel-plugin-adapter": "jsr:@takos/takosumi-contract@^2.6.0/reference/kernel-plugin-adapter",
+    "takosumi-contract/reference/plugin": "jsr:@takos/takosumi-contract@^2.6.0/reference/plugin"
+  },
+  "tasks": {
+    "check": "deno check mod.ts",
+    "test": "deno test --allow-all"
+  }
+}

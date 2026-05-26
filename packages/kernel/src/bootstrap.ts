@@ -96,12 +96,13 @@ export { registerDefaultArtifactKinds };
 /**
  * KernelPlugin instances bundled with the kernel distribution.
  *
- * Phase D extracted every cloud / self-host provider factory out of the
- * Takosumi kernel distribution into dedicated provider packages
+ * Phase D extracted every cloud / external adapter factory out of the
+ * Takosumi kernel distribution into dedicated provider / plugin packages
  * (`@takos/takosumi-cloudflare-providers`, `@takos/takosumi-aws-providers`,
  * `@takos/takosumi-gcp-providers`, `@takos/takosumi-kubernetes-providers`,
  * `@takos/takosumi-deno-deploy-providers`,
- * `@takos/takosumi-selfhost-providers`). Takosumi core no longer carries
+ * and `@takos/takosumi-plugin-<kind>-<backend>` external adapter packages).
+ * Takosumi core no longer carries
  * any cloud SDK import, so this function intentionally returns an empty
  * array: operators explicitly `import` the provider packages they want and
  * pass them to `createPaaSApp({ kindAliases, plugins: [...] })`.

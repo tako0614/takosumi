@@ -34,53 +34,53 @@ import { CloudflareWorkersConnector } from "/workspace/packages/runtime-agent/sr
 import { DenoDeployWorkersConnector } from "/workspace/packages/runtime-agent/src/connectors/deno_deploy/workers.ts";
 import { AzureContainerAppsConnector } from "/workspace/packages/runtime-agent/src/connectors/azure/container_apps.ts";
 import { K3sDeploymentConnector } from "/workspace/packages/runtime-agent/src/connectors/kubernetes/k3s_deployment.ts";
-import { CorednsLocalConnector } from "/workspace/packages/runtime-agent/src/connectors/selfhost/coredns_local.ts";
-import { DockerComposeConnector } from "/workspace/packages/runtime-agent/src/connectors/selfhost/docker_compose.ts";
-import { FilesystemConnector } from "/workspace/packages/runtime-agent/src/connectors/selfhost/filesystem.ts";
-import { LocalDockerPostgresConnector } from "/workspace/packages/runtime-agent/src/connectors/selfhost/local_docker_postgres.ts";
-import { MinioConnector } from "/workspace/packages/runtime-agent/src/connectors/selfhost/minio.ts";
-import { SystemdUnitConnector } from "/workspace/packages/runtime-agent/src/connectors/selfhost/systemd_unit.ts";
+import { CorednsLocalConnector } from "/workspace/packages/runtime-agent/src/connectors/external/coredns_local.ts";
+import { DockerComposeConnector } from "/workspace/packages/runtime-agent/src/connectors/external/docker_compose.ts";
+import { FilesystemConnector } from "/workspace/packages/runtime-agent/src/connectors/external/filesystem.ts";
+import { LocalDockerPostgresConnector } from "/workspace/packages/runtime-agent/src/connectors/external/local_docker_postgres.ts";
+import { MinioConnector } from "/workspace/packages/runtime-agent/src/connectors/external/minio.ts";
+import { SystemdUnitConnector } from "/workspace/packages/runtime-agent/src/connectors/external/systemd_unit.ts";
 
 export function buildLocalSubstrateRegistry(
   env: Record<string, string | undefined>,
 ): ConnectorRegistry {
   const reg = new ConnectorRegistry();
 
-  // ===== Always-on selfhost connectors =====
+  // ===== Always-on local adapter connectors =====
   reg.register(
     new FilesystemConnector({
-      rootDir: env.TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT ??
+      rootDir: env.TAKOSUMI_LOCAL_ADAPTER_OBJECT_STORE_ROOT ??
         "/var/lib/takosumi/objects",
     }),
   );
   reg.register(
     new DockerComposeConnector({
-      hostBinding: env.TAKOSUMI_SELFHOSTED_DOCKER_HOST_BINDING,
-      network: env.TAKOSUMI_SELFHOSTED_DOCKER_NETWORK,
-      extraHosts: parseList(env.TAKOSUMI_SELFHOSTED_DOCKER_ADD_HOSTS),
+      hostBinding: env.TAKOSUMI_LOCAL_ADAPTER_DOCKER_HOST_BINDING,
+      network: env.TAKOSUMI_LOCAL_ADAPTER_DOCKER_NETWORK,
+      extraHosts: parseList(env.TAKOSUMI_LOCAL_ADAPTER_DOCKER_ADD_HOSTS),
     }),
   );
   reg.register(
     new SystemdUnitConnector({
-      unitDir: env.TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR,
+      unitDir: env.TAKOSUMI_LOCAL_ADAPTER_SYSTEMD_UNIT_DIR,
     }),
   );
   reg.register(
     new MinioConnector({
-      endpoint: env.TAKOSUMI_SELFHOSTED_OBJECT_STORE_ENDPOINT ??
+      endpoint: env.TAKOSUMI_LOCAL_ADAPTER_OBJECT_STORE_ENDPOINT ??
         "http://minio:9000",
     }),
   );
   reg.register(
     new CorednsLocalConnector({
-      zoneFile: env.TAKOSUMI_SELFHOSTED_COREDNS_FILE ??
+      zoneFile: env.TAKOSUMI_LOCAL_ADAPTER_COREDNS_FILE ??
         "/etc/coredns/zones/takosumi.test.zone",
     }),
   );
   reg.register(
     new LocalDockerPostgresConnector({
-      hostBinding: env.TAKOSUMI_SELFHOSTED_POSTGRES_HOST,
-      authMode: env.TAKOSUMI_SELFHOSTED_POSTGRES_AUTH_MODE === "trust"
+      hostBinding: env.TAKOSUMI_LOCAL_ADAPTER_POSTGRES_HOST,
+      authMode: env.TAKOSUMI_LOCAL_ADAPTER_POSTGRES_AUTH_MODE === "trust"
         ? "trust"
         : "password",
     }),
@@ -127,7 +127,7 @@ export function buildLocalSubstrateRegistry(
           : {}),
       }),
     );
-    // Route53 — INTENTIONALLY skipped. Use selfhost coredns-local instead.
+    // Route53 — INTENTIONALLY skipped. Use the local CoreDNS adapter instead.
   }
 
   // ===== GCP (storage + compute, NO Cloud DNS) =====

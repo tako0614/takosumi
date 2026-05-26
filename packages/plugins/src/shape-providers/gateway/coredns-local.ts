@@ -45,7 +45,7 @@ export function createCoreDnsLocalProvider(
   const lifecycle = options.lifecycle;
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "@takos/selfhost-coredns",
+    id: "@takos/coredns-gateway",
     version: "1.0.0",
     implements: { id: "gateway", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

@@ -47,7 +47,7 @@ export function createMinioObjectStoreProvider(
   const lifecycle = options.lifecycle;
   const endpoint = options.endpoint;
   const region = options.region ?? "local";
-  const secretBase = options.secretRefBase ?? "secret://selfhosted/minio";
+  const secretBase = options.secretRefBase ?? "secret://local-adapters/minio";
   const clock = options.clock ?? (() => new Date());
 
   function outputsOf(desc: MinioBucketDescriptor): ObjectStoreOutputs {
@@ -61,7 +61,7 @@ export function createMinioObjectStoreProvider(
   }
 
   return {
-    id: "@takos/selfhost-minio",
+    id: "@takos/minio-object-store",
     version: "1.0.0",
     implements: { id: "object-store", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

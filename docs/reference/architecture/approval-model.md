@@ -161,7 +161,7 @@ operator は policy pack から選び、差分のみを override します。
 
 ```text
 dev/open
-selfhost/simple
+external/simple
 prod/default
 prod/strict
 enterprise/descriptor-approved-only

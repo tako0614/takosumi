@@ -8,12 +8,11 @@
  * `resourceHandle` for the kernel's internal apply evidence.
  *
  * Single-source-of-truth: this adapter lives in `@takos/takosumi-contract`
- * (Phase K iteration 2 consolidation) so the 6 per-cloud provider packages
- * (`@takos/takosumi-{cloudflare,aws,gcp,kubernetes,deno-deploy,selfhost}-
- * providers`) import the same implementation instead of shipping byte-
- * identical 140-line copies. `KernelPlugin` is the current reference adapter
- * API; `ProviderPlugin` is the legacy shape/provider surface this bridge
- * quarantines for older packages.
+ * (Phase K iteration 2 consolidation) so provider packages and external
+ * adapter packages import the same implementation instead of shipping
+ * byte-identical 140-line copies. `KernelPlugin` is the current reference
+ * adapter API; `ProviderPlugin` is the legacy shape/provider surface this
+ * bridge quarantines for older packages.
  */
 
 import type { JsonObject } from "./types.ts";
@@ -218,7 +217,7 @@ function mergeWithoutConflict(
 
 /**
  * Build a minimal `PlatformContext` for legacy shape/provider delegation. The
- * compatibility provider set (selfhost / cloud) uses `_ctx` exclusively, so we
+ * compatibility provider set (external / cloud) uses `_ctx` exclusively, so we
  * pass typed stubs for the SDK ports — none of them are exercised by the
  * wrappers in this directory.
  */

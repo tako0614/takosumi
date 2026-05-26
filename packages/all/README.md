@@ -1,9 +1,8 @@
 # @takos/takosumi
 
-Takosumi の turnkey umbrella package。root export は public contract types で、 kernel / plugins / installer / runtime-agent / cli は sub-export から使います。 cloud-backed provider は **別 install** (= `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,
-deno-deploy,selfhost}-providers`)。
+Takosumi の turnkey umbrella package。root export は public contract types で、 kernel / plugins / installer / runtime-agent / cli は sub-export から使います。provider / external adapter は **別 install** (= `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy}-providers` または `@takos/takosumi-plugin-<kind>-<backend>`)。
 
-## Self-host
+## Local Smoke
 
 ```bash
 export TAKOSUMI_DEV_MODE=1
@@ -31,11 +30,12 @@ This stock server path records Installation / Deployment metadata and is useful 
 - `jsr:@takos/takosumi/kinds` — Takosumi official catalog kind descriptors (`worker` / `web-service` / `postgres` / `object-store` / `gateway`)
 - `jsr:@takos/takosumi/cli` — CLI module entry
 
-cloud-backed reference `KernelPlugin` adapter factory は **別 package** に分離されているため、 attach 時は対応 cloud package を直接 import する:
+reference `KernelPlugin` adapter factory は **別 package** に分離されているため、 attach 時は対応 package を直接 import する:
 
 ```ts
 import { cloudflareWorkerProvider } from "@takos/takosumi-cloudflare-providers";
 import { awsS3ObjectStoreProvider } from "@takos/takosumi-aws-providers";
+import { dockerComposeWebServiceProvider } from "@takos/takosumi-plugin-web-service-docker-compose";
 ```
 
 ## Sister packages
@@ -52,14 +52,19 @@ reference helpers / tooling:
 - `jsr:@takos/takosumi-plugins` — official catalog helpers and reference adapter helpers
 - `jsr:@takos/takosumi-runtime-agent` — lifecycle execution host
 
-cloud provider packages (= 別 install):
+provider / adapter packages (= 別 install):
 
 - `jsr:@takos/takosumi-cloudflare-providers` — Cloudflare (Workers / R2 / DNS)
 - `jsr:@takos/takosumi-aws-providers` — AWS (Fargate / S3 / RDS / Route53)
 - `jsr:@takos/takosumi-gcp-providers` — GCP (Cloud Run / GCS / Cloud SQL)
 - `jsr:@takos/takosumi-kubernetes-providers` — Kubernetes Deployment + Service
 - `jsr:@takos/takosumi-deno-deploy-providers` — Deno Deploy
-- `jsr:@takos/takosumi-selfhost-providers` — Self-host (docker / systemd / filesystem / minio)
+- `jsr:@takos/takosumi-plugin-web-service-docker-compose` — Docker Compose web-service adapter
+- `jsr:@takos/takosumi-plugin-web-service-systemd` — systemd web-service adapter
+- `jsr:@takos/takosumi-plugin-object-store-minio` — MinIO object-store adapter
+- `jsr:@takos/takosumi-plugin-object-store-filesystem` — filesystem object-store adapter
+- `jsr:@takos/takosumi-plugin-postgres-docker` — Docker Postgres adapter
+- `jsr:@takos/takosumi-plugin-gateway-coredns` — CoreDNS gateway adapter
 
 ## Scope note
 

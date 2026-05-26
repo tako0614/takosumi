@@ -1,6 +1,6 @@
 # Takosumi
 
-Takosumi is a self-hostable PaaS for installing source into a Space and recording each apply as a Deployment. Authors write one runtime/install manifest, `.takosumi.yml`; operators decide how each component kind is materialized on their substrate.
+Takosumi is an operator-portable PaaS contract for installing source into a Space and recording each apply as a Deployment. Authors write one runtime/install manifest, `.takosumi.yml`; operators decide which external systems materialize each component kind.
 
 ドキュメント: <https://takosumi.com/docs/>
 
@@ -81,7 +81,7 @@ Kinds are operator-resolved names. The Takosumi Kind Catalog publishes descripto
 - **Component kind は operator が解決**: Takosumi manifest は `kind` を不透明な string として扱う。`worker` / `postgres` などは operator の `kindAliases` で URI に解決される。
 - **Official type catalog の kind の定義は採用できる vocabulary**: `https://takosumi.com/kinds/v1/*` は Takosumi Kind Catalog の kind の定義の URI。operator は `kindAliases` でそれを採用してもよいし、任意 domain の kind URI を使ってもよい。
 - **JSON-LD metadata は kind の定義**: kind URI に対応する metadata が `spec` input schema、outputs、publish / listen semantics を表す。
-- **Provider package は reference Takosumi binding**: cloud provider package (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`) は reference Takosumi 向けに binding factory を export する。他の implementation は同じ kind URI を別の仕組みで materialize できる。
+- **Provider / adapter package は reference Takosumi binding**: cloud provider package (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy}-providers`) と external adapter package (`@takos/takosumi-plugin-<kind>-<backend>`) は reference Takosumi 向けに binding factory を export する。他の implementation は同じ kind URI を別の仕組みで materialize できる。
 
 同じ kind / output type の overlapping subset を複数 provider が実装し、 operator evidence で互換性を確認できる場合、その subset の manifest は provider 差し替えに対して portable になる。provider-specific `spec` extension や credential 前提は自動的には portable にならない。
 
@@ -124,16 +124,21 @@ core:
 | [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` コマンド                                   |
 | [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | manifest / Installer API wire types                   |
 
-cloud provider packages (= 別 install、必要な cloud だけ import):
+provider / adapter packages (= 別 install、必要な外部 system だけ import):
 
-| Package                                                                                             | 内容                                              |
-| --------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| [`jsr:@takos/takosumi-cloudflare-providers`](https://jsr.io/@takos/takosumi-cloudflare-providers)   | Cloudflare (Workers / R2 / DNS)                   |
-| [`jsr:@takos/takosumi-aws-providers`](https://jsr.io/@takos/takosumi-aws-providers)                 | AWS (Fargate / S3 / RDS / Route53)                |
-| [`jsr:@takos/takosumi-gcp-providers`](https://jsr.io/@takos/takosumi-gcp-providers)                 | GCP (Cloud Run / GCS / Cloud SQL)                 |
-| [`jsr:@takos/takosumi-kubernetes-providers`](https://jsr.io/@takos/takosumi-kubernetes-providers)   | Kubernetes Deployment + Service                   |
-| [`jsr:@takos/takosumi-deno-deploy-providers`](https://jsr.io/@takos/takosumi-deno-deploy-providers) | Deno Deploy                                       |
-| [`jsr:@takos/takosumi-selfhost-providers`](https://jsr.io/@takos/takosumi-selfhost-providers)       | Self-host (docker / systemd / filesystem / minio) |
+| Package                                                                                                                     | 内容                               |
+| --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| [`jsr:@takos/takosumi-cloudflare-providers`](https://jsr.io/@takos/takosumi-cloudflare-providers)                           | Cloudflare (Workers / R2 / DNS)    |
+| [`jsr:@takos/takosumi-aws-providers`](https://jsr.io/@takos/takosumi-aws-providers)                                         | AWS (Fargate / S3 / RDS / Route53) |
+| [`jsr:@takos/takosumi-gcp-providers`](https://jsr.io/@takos/takosumi-gcp-providers)                                         | GCP (Cloud Run / GCS / Cloud SQL)  |
+| [`jsr:@takos/takosumi-kubernetes-providers`](https://jsr.io/@takos/takosumi-kubernetes-providers)                           | Kubernetes Deployment + Service    |
+| [`jsr:@takos/takosumi-deno-deploy-providers`](https://jsr.io/@takos/takosumi-deno-deploy-providers)                         | Deno Deploy                        |
+| [`jsr:@takos/takosumi-plugin-web-service-docker-compose`](https://jsr.io/@takos/takosumi-plugin-web-service-docker-compose) | Docker Compose web-service adapter |
+| [`jsr:@takos/takosumi-plugin-web-service-systemd`](https://jsr.io/@takos/takosumi-plugin-web-service-systemd)               | systemd web-service adapter        |
+| [`jsr:@takos/takosumi-plugin-object-store-minio`](https://jsr.io/@takos/takosumi-plugin-object-store-minio)                 | MinIO object-store adapter         |
+| [`jsr:@takos/takosumi-plugin-object-store-filesystem`](https://jsr.io/@takos/takosumi-plugin-object-store-filesystem)       | filesystem object-store adapter    |
+| [`jsr:@takos/takosumi-plugin-postgres-docker`](https://jsr.io/@takos/takosumi-plugin-postgres-docker)                       | Docker Postgres adapter            |
+| [`jsr:@takos/takosumi-plugin-gateway-coredns`](https://jsr.io/@takos/takosumi-plugin-gateway-coredns)                       | CoreDNS gateway adapter            |
 
 <sub>Note: `@takos/` JSR scope は current reference Takosumi distribution の publish scope。互換性の authority は contract (`@takos/takosumi-contract`) にあり、 alternative publisher (例: `@example/takosumi-kernel`) も同じ contract に合わせられる。</sub>
 
@@ -153,7 +158,12 @@ takosumi/
 │   ├── gcp-providers/           @takos/takosumi-gcp-providers            — GCP provider bindings
 │   ├── kubernetes-providers/    @takos/takosumi-kubernetes-providers     — Kubernetes provider binding
 │   ├── deno-deploy-providers/   @takos/takosumi-deno-deploy-providers    — Deno Deploy provider binding
-│   ├── selfhost-providers/      @takos/takosumi-selfhost-providers       — Self-host provider bindings
+│   ├── plugin-web-service-docker-compose/    @takos/takosumi-plugin-web-service-docker-compose
+│   ├── plugin-web-service-systemd/           @takos/takosumi-plugin-web-service-systemd
+│   ├── plugin-object-store-minio/            @takos/takosumi-plugin-object-store-minio
+│   ├── plugin-object-store-filesystem/       @takos/takosumi-plugin-object-store-filesystem
+│   ├── plugin-postgres-docker/               @takos/takosumi-plugin-postgres-docker
+│   ├── plugin-gateway-coredns/               @takos/takosumi-plugin-gateway-coredns
 │   └── all/                     @takos/takosumi                 — umbrella (core packages + reference helpers)
 ├── docs/                                                         — VitePress site (`deno task docs:dev`)
 ├── deploy/, fixtures/
@@ -182,7 +192,7 @@ cd packages/kernel && deno task db:migrate:dry-run
 
 ## Release
 
-Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace, runs tests, performs a JSR dry-run, publishes the 13 JSR packages (core 7 + provider 6) with GitHub OIDC, and builds/pushes the `takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish` input is set.
+Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace, runs tests, performs a JSR dry-run, publishes the 18 JSR packages (core/runtime/tooling 6 + official helper 1 + provider/adapter 11) with GitHub OIDC, and builds/pushes the `takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish` input is set.
 
 ## Docs site (VitePress)
 

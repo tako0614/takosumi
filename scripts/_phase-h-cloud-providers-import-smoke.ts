@@ -3,10 +3,11 @@
  * `KernelPlugin` factory that satisfies the reference materializer surface and is
  * attachable to `createPaaSApp({ kindAliases, plugins })`.
  *
- * Goal: kernel core (`packages/kernel/`) has no cloud SDK import, but the 6
- * provider packages exist as separate workspace members and the factories
- * can be imported + invoked without erroring. No real cloud API is called —
- * the in-memory defaults exercised here keep the smoke offline.
+ * Goal: kernel core (`packages/kernel/`) has no cloud SDK import, but the
+ * reference provider and external adapter plugin packages exist as separate
+ * workspace members and the factories can be imported + invoked without
+ * erroring. No real cloud API is called — the in-memory defaults exercised
+ * here keep the smoke offline.
  *
  * Run from `takosumi/`:
  *
@@ -36,12 +37,23 @@ import {
 import { kubernetesWebServiceProvider } from "../packages/kubernetes-providers/mod.ts";
 import { denoDeployWorkerProvider } from "../packages/deno-deploy-providers/mod.ts";
 import {
-  selfhostDockerComposeWebServiceProvider,
-  selfhostFilesystemObjectStoreProvider,
-  selfhostMinioObjectStoreProvider,
-  selfhostPostgresProvider,
-  selfhostSystemdWebServiceProvider,
-} from "../packages/selfhost-providers/mod.ts";
+  dockerComposeWebServiceProvider,
+} from "../packages/plugin-web-service-docker-compose/mod.ts";
+import {
+  filesystemObjectStoreProvider,
+} from "../packages/plugin-object-store-filesystem/mod.ts";
+import {
+  coreDnsGatewayProvider,
+} from "../packages/plugin-gateway-coredns/mod.ts";
+import {
+  minioObjectStoreProvider,
+} from "../packages/plugin-object-store-minio/mod.ts";
+import {
+  dockerPostgresProvider,
+} from "../packages/plugin-postgres-docker/mod.ts";
+import {
+  systemdWebServiceProvider,
+} from "../packages/plugin-web-service-systemd/mod.ts";
 
 import type { KernelPlugin } from "../packages/contract/src/plugin.ts";
 
@@ -113,29 +125,34 @@ export const CLOUD_PROVIDER_ROWS: readonly CloudProviderRow[] = [
     plugin: denoDeployWorkerProvider(),
   },
   {
-    pkg: "selfhost",
-    factory: "selfhostDockerComposeWebServiceProvider",
-    plugin: selfhostDockerComposeWebServiceProvider(),
+    pkg: "docker-compose",
+    factory: "dockerComposeWebServiceProvider",
+    plugin: dockerComposeWebServiceProvider(),
   },
   {
-    pkg: "selfhost",
-    factory: "selfhostSystemdWebServiceProvider",
-    plugin: selfhostSystemdWebServiceProvider(),
+    pkg: "systemd",
+    factory: "systemdWebServiceProvider",
+    plugin: systemdWebServiceProvider(),
   },
   {
-    pkg: "selfhost",
-    factory: "selfhostMinioObjectStoreProvider",
-    plugin: selfhostMinioObjectStoreProvider(),
+    pkg: "minio",
+    factory: "minioObjectStoreProvider",
+    plugin: minioObjectStoreProvider(),
   },
   {
-    pkg: "selfhost",
-    factory: "selfhostFilesystemObjectStoreProvider",
-    plugin: selfhostFilesystemObjectStoreProvider(),
+    pkg: "filesystem",
+    factory: "filesystemObjectStoreProvider",
+    plugin: filesystemObjectStoreProvider(),
   },
   {
-    pkg: "selfhost",
-    factory: "selfhostPostgresProvider",
-    plugin: selfhostPostgresProvider(),
+    pkg: "docker-postgres",
+    factory: "dockerPostgresProvider",
+    plugin: dockerPostgresProvider(),
+  },
+  {
+    pkg: "coredns",
+    factory: "coreDnsGatewayProvider",
+    plugin: coreDnsGatewayProvider({ defaultHost: "app.test" }),
   },
 ];
 

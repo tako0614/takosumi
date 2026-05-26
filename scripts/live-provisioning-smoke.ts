@@ -22,7 +22,7 @@ const DEFAULT_FIXTURE_FILES = [
   "gcp.shape-v1.json",
   "kubernetes.shape-v1.json",
   "cloudflare.shape-v1.json",
-  "selfhosted.shape-v1.json",
+  "external.shape-v1.json",
 ] as const;
 
 export interface SmokeOptions {
@@ -719,7 +719,7 @@ function providerFromSourceName(
   if (sourceName.startsWith("gcp")) return "gcp";
   if (sourceName.startsWith("kubernetes")) return "kubernetes";
   if (sourceName.startsWith("cloudflare")) return "cloudflare";
-  if (sourceName.startsWith("selfhosted")) return "selfhosted";
+  if (sourceName.startsWith("external")) return "external";
   if (sourceName.startsWith("azure")) return "azure";
   return undefined;
 }
@@ -739,7 +739,7 @@ function manifestProviderFamily(providerId: string): string {
   ) return "kubernetes";
   if (providerId.startsWith("cloudflare")) return "cloudflare";
   if (
-    providerId.startsWith("selfhost") ||
+    providerId.startsWith("external") ||
     providerId === "filesystem" ||
     providerId === "local-docker" ||
     providerId === "docker-compose" ||
@@ -747,7 +747,7 @@ function manifestProviderFamily(providerId: string): string {
     providerId === "systemd-unit" ||
     providerId === "minio" ||
     providerId === "postgres"
-  ) return "selfhosted";
+  ) return "external";
   if (providerId.startsWith("azure")) return "azure";
   return providerId;
 }
@@ -874,7 +874,7 @@ function specString(
 function isProvider(value: string): value is ProviderProofProvider {
   return value === "aws" || value === "gcp" || value === "k8s" ||
     value === "kubernetes" || value === "cloudflare" ||
-    value === "selfhosted" || value === "azure";
+    value === "external" || value === "azure";
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {

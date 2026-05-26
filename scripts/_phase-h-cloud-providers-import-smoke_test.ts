@@ -1,13 +1,12 @@
 /**
- * Phase H test — all 6 cloud provider workspace packages export factory
- * functions whose return value is a structurally valid `KernelPlugin`
- * suitable for `createPaaSApp({ kindAliases, plugins: [...] })`.
+ * Phase H test — reference provider and external adapter plugin workspace packages
+ * export factory functions whose return value is a structurally valid
+ * `KernelPlugin` suitable for `createPaaSApp({ kindAliases, plugins: [...] })`.
  *
  * This locks in the "Phase D extraction" outcome: provider materializers
- * live in `@takos/takosumi-{cloudflare,aws,gcp,kubernetes,deno-deploy,
- * selfhost}-providers`, kernel core is cloud-SDK-free, and operators wire
- * providers into the kernel by importing the relevant package and pushing
- * the factory result into the plain `plugins[]` array.
+ * live outside the kernel package, kernel core is cloud-SDK-free, and
+ * operators wire providers into the kernel by importing the relevant package
+ * and pushing the factory result into the plain `plugins[]` array.
  */
 
 import { assert, assertEquals } from "jsr:@std/assert@^1.0.6";
@@ -16,8 +15,8 @@ import {
   isValidKernelPlugin,
 } from "./_phase-h-cloud-providers-import-smoke.ts";
 
-Deno.test("phase-h: all 17 cloud-provider factories return valid KernelPlugin", () => {
-  assertEquals(CLOUD_PROVIDER_ROWS.length, 17);
+Deno.test("phase-h: all 18 reference provider factories return valid KernelPlugin", () => {
+  assertEquals(CLOUD_PROVIDER_ROWS.length, 18);
   for (const row of CLOUD_PROVIDER_ROWS) {
     assert(
       isValidKernelPlugin(row.plugin),
@@ -26,7 +25,7 @@ Deno.test("phase-h: all 17 cloud-provider factories return valid KernelPlugin", 
   }
 });
 
-Deno.test("phase-h: 6 cloud provider packages are covered (no missing publisher)", () => {
+Deno.test("phase-h: reference provider groups are covered (no missing publisher)", () => {
   const pkgs = new Set(CLOUD_PROVIDER_ROWS.map((row) => row.pkg));
   assertEquals(
     pkgs,
@@ -36,7 +35,12 @@ Deno.test("phase-h: 6 cloud provider packages are covered (no missing publisher)
       "gcp",
       "kubernetes",
       "deno-deploy",
-      "selfhost",
+      "docker-compose",
+      "systemd",
+      "minio",
+      "filesystem",
+      "docker-postgres",
+      "coredns",
     ]),
   );
 });

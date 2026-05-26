@@ -24,7 +24,7 @@ The operator controls:
 - provider/runtime configuration
 - read APIs, history, and support views around the write lifecycle
 
-Reference self-host profiles and Takosumi Cloud profiles document their own runtime, database, object storage, and operations requirements.
+Reference operator-managed profiles and Takosumi Cloud profiles document their own runtime, database, object storage, and operations requirements.
 
 For Takosumi Cloud, the concrete account management specification lives in `takosumi-cloud/docs/`.
 

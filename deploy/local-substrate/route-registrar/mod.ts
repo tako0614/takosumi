@@ -5,7 +5,7 @@
  * (`/v1/deployments`) for `desired.routes[]`. Takosumi v1's public surface is
  * now the installer API; it intentionally does not expose a deployment list.
  * The postgres-profile kernel wrapper writes a local operator projection file
- * whenever the selfhost gateway provider applies a gateway component. This
+ * whenever the CoreDNS gateway adapter applies a gateway component. This
  * process reads that local projection and turns it into Caddy routes.
  *
  * Static / dynamic partition strategy (no Caddy @id required):

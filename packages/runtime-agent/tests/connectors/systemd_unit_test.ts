@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { SystemdUnitConnector } from "../../src/connectors/selfhost/systemd_unit.ts";
+import { SystemdUnitConnector } from "../../src/connectors/external/systemd_unit.ts";
 
 interface CapturedCommand {
   readonly cmd: string;
@@ -66,7 +66,7 @@ Deno.test("SystemdUnitConnector.apply writes unit file with port markers and ena
     const connector = new SystemdUnitConnector({ unitDir: dir, command });
     const res = await connector.apply({
       shape: "web-service@v1",
-      provider: "@takos/selfhost-systemd",
+      provider: "@takos/systemd-web-service",
       spaceId: "space_test",
       resourceName: "rs",
       spec: {
@@ -98,7 +98,7 @@ Deno.test("SystemdUnitConnector.describe returns missing when unit file does not
     const connector = new SystemdUnitConnector({ unitDir: dir, command });
     const res = await connector.describe({
       shape: "web-service@v1",
-      provider: "@takos/selfhost-systemd",
+      provider: "@takos/systemd-web-service",
       spaceId: "space_test",
       handle: "ghost.service",
     }, {});
@@ -121,14 +121,14 @@ Deno.test("SystemdUnitConnector.describe returns missing when systemctl is-activ
     const connector = new SystemdUnitConnector({ unitDir: dir, command });
     await connector.apply({
       shape: "web-service@v1",
-      provider: "@takos/selfhost-systemd",
+      provider: "@takos/systemd-web-service",
       spaceId: "space_test",
       resourceName: "rs",
       spec: { image: "registry/app:1", port: 8080 },
     }, {});
     const res = await connector.describe({
       shape: "web-service@v1",
-      provider: "@takos/selfhost-systemd",
+      provider: "@takos/systemd-web-service",
       spaceId: "space_test",
       handle: "app.service",
     }, {});
@@ -152,7 +152,7 @@ Deno.test("SystemdUnitConnector.describe returns running with reconstructed outp
     const connector = new SystemdUnitConnector({ unitDir: dir, command });
     const apply = await connector.apply({
       shape: "web-service@v1",
-      provider: "@takos/selfhost-systemd",
+      provider: "@takos/systemd-web-service",
       spaceId: "space_test",
       resourceName: "rs",
       spec: { image: "registry/app:1", port: 8080 },
@@ -169,7 +169,7 @@ Deno.test("SystemdUnitConnector.describe returns running with reconstructed outp
     });
     const res = await connector2.describe({
       shape: "web-service@v1",
-      provider: "@takos/selfhost-systemd",
+      provider: "@takos/systemd-web-service",
       spaceId: "space_test",
       handle: apply.handle,
     }, {});
@@ -196,7 +196,7 @@ Deno.test("SystemdUnitConnector.describe returns status only when port markers a
     const connector = new SystemdUnitConnector({ unitDir: dir, command });
     const res = await connector.describe({
       shape: "web-service@v1",
-      provider: "@takos/selfhost-systemd",
+      provider: "@takos/systemd-web-service",
       spaceId: "space_test",
       handle: "handwritten.service",
     }, {});

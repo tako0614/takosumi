@@ -8,7 +8,7 @@ import {
 const EXTRA_RESOURCE: ManifestResource = {
   shape: "object-store@v1",
   name: "backups",
-  provider: "@takos/selfhost-filesystem",
+  provider: "@takos/filesystem-object-store",
   spec: { name: "backups" },
 };
 
@@ -31,7 +31,7 @@ Deno.test("manifest v1 resolver rejects retired top-level template", () => {
     apiVersion: "1.0",
     kind: "Manifest",
     template: {
-      template: "selfhosted-single-vm@v1",
+      template: "single-host@v1",
       inputs: { name: "assets" },
     },
   });

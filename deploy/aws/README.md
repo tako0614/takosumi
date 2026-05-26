@@ -4,7 +4,7 @@ This directory documents the AWS surface as **operator-owned scope**: the operat
 
 ## Why no reference deploy here
 
-The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/selfhosted/`) cover the substrate-neutrality claim at spec level. AWS / GCP / Azure / k8s are operator-owned targets: operators run the kernel image on whatever AWS compute they prefer (ECS / Fargate / EC2 / EKS), point the kernel at a Postgres database (RDS / Aurora), and attach the AWS provider factories from `@takos/takosumi-aws-providers` plus matching runtime-agent credentials.
+The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. AWS / GCP / Azure / k8s are operator-owned targets: operators run the kernel image on whatever AWS compute they prefer (ECS / Fargate / EC2 / EKS), point the kernel at a Postgres database (RDS / Aurora), and attach the AWS provider factories from `@takos/takosumi-aws-providers` plus matching runtime-agent credentials.
 
 ## Required runtime shape
 
@@ -40,4 +40,4 @@ The live smoke calls each provider's lifecycle once and tears down.
 
 ## Substrate-neutral references
 
-If you want a reference Docker image to base your AWS task definitions on, copy `deploy/selfhosted/Dockerfile.kernel` and `deploy/selfhosted/Dockerfile.runtime-agent`. They are substrate- neutral and run unmodified on any container runtime, including AWS Fargate / ECS / EKS.
+If you want a reference Docker image to base your AWS task definitions on, copy `deploy/single-host/Dockerfile.kernel` and `deploy/single-host/Dockerfile.runtime-agent`. They are substrate- neutral and run unmodified on any container runtime, including AWS Fargate / ECS / EKS.

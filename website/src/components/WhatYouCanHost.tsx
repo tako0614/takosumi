@@ -5,12 +5,11 @@ export default function WhatYouCanHost() {
   return (
     <section id="what">
       <div class="container">
-        <span class="eyebrow">what you can host</span>
-        <h2>全部、 自分のサーバーに。</h2>
+        <span class="eyebrow">what you can run</span>
+        <h2>全部、 選んだ実行先に。</h2>
         <p class="lede">
-          chat も、 SNS も、 docs も、 表計算も、 agent も。 SaaS に預けず、
-          {" "}
-          1 つの platform の上で。 自分の host に。
+          chat も、 SNS も、 docs も、 表計算も、 agent も。1 つの platform
+          の上で、cloud、VM、cluster、管理サービスのどれにも置けます。
         </p>
         <div class="use-cases-grid">
           <For each={USE_CASES}>

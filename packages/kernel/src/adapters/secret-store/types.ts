@@ -1,5 +1,5 @@
 /**
- * Logical cloud partition that isolates secret material by deployment cloud.
+ * Logical provider partition that isolates secret material by external system.
  *
  * Each partition is encrypted with an independent boundary key so that a
  * compromise of one cloud's master key does not propagate to other clouds
@@ -11,7 +11,7 @@ export type CloudPartition =
   | "aws"
   | "gcp"
   | "k8s"
-  | "selfhosted";
+  | "local-adapters";
 
 export const CLOUD_PARTITIONS: readonly CloudPartition[] = [
   "global",
@@ -19,7 +19,7 @@ export const CLOUD_PARTITIONS: readonly CloudPartition[] = [
   "aws",
   "gcp",
   "k8s",
-  "selfhosted",
+  "local-adapters",
 ];
 
 export function isCloudPartition(value: unknown): value is CloudPartition {

@@ -43,11 +43,11 @@ export function createFilesystemObjectStoreProvider(
   const lifecycle = options.lifecycle;
   const rootDir = options.rootDir;
   const secretBase = options.secretRefBase ??
-    `secret://selfhosted/object-store`;
+    `secret://local-adapters/object-store`;
   const clock = options.clock ?? (() => new Date());
 
   return {
-    id: "@takos/selfhost-filesystem",
+    id: "@takos/filesystem-object-store",
     version: "1.0.0",
     implements: { id: "object-store", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

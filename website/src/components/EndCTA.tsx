@@ -6,8 +6,8 @@ export default function EndCTA() {
       <div class="container">
         <h2>5 分で始める。</h2>
         <p class="lede" style="margin-left: auto; margin-right: auto;">
-          Space を作って、 必要なものを入れて、 deploy。 cloud でも、 自宅
-          サーバーでも、 同じ 1 行で。
+          Space を作って、必要なものを入れて、deploy。cloud、VM、cluster
+          のどれでも、同じ入口で。
         </p>
         <CodeBlock terminal class="terminal">
           <span class="k">$</span>{" "}
@@ -28,7 +28,7 @@ export default function EndCTA() {
             href="/docs/getting-started/quickstart"
             rel="external"
           >
-            自宅サーバーで 動かす
+            Single-host で動かす
           </a>
           <a class="btn btn-secondary" href="/docs/" rel="external">
             ドキュメント

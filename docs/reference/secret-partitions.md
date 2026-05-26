@@ -10,13 +10,13 @@ The operator manages secret storage, partitioning, rotation, and runtime deliver
 
 secret partition は **Space と operator-defined partition tag の組** に対して 1:1 で分離される独立した暗号箱である。Takosumi core は partition の中身を永続化したり cache したりしない。各 partition から復号する際に partition key を request scope で一時的に derive する。
 
-| 概念              | 内容                                                                             |
-| ----------------- | -------------------------------------------------------------------------------- |
-| Space             | secret partition の **scope owner**。Space を消すと partition も消える           |
-| partition tag     | operator-defined string。例: `aws` / `gcp` / `cloudflare` / `k8s` / `selfhosted` |
-| partition key     | `(spaceId, partitionTag)` から derive される 256-bit AES-GCM 用 key              |
-| master passphrase | env (後述) から取得する partition key の seed                                    |
-| generation        | partition rotation の世代 counter (整数、increment-only)                         |
+| 概念              | 内容                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| Space             | secret partition の **scope owner**。Space を消すと partition も消える               |
+| partition tag     | operator-defined string。例: `aws` / `gcp` / `cloudflare` / `k8s` / `local-adapters` |
+| partition key     | `(spaceId, partitionTag)` から derive される 256-bit AES-GCM 用 key                  |
+| master passphrase | env (後述) から取得する partition key の seed                                        |
+| generation        | partition rotation の世代 counter (整数、increment-only)                             |
 
 不変条件:
 
@@ -68,17 +68,17 @@ GCM nonce は 96-bit ランダムを entry ごとに生成する。同 partition
 
 master passphrase は env から取得される。優先順位は **tag-specific > global**。 partition tag が `aws` の partition は `..._AWS` env があればそれを使い、無ければ global にフォールバックする。下表の provider 名は reference operator examples です。operator が別 tag を使う場合は uppercase `[A-Z0-9_]+` に正規化した `TAKOSUMI_SECRET_STORE_PASSPHRASE_<TAG>` を使います。
 
-| Env                                           | 用途                                          |
-| --------------------------------------------- | --------------------------------------------- |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE`            | global default。すべての partition の seed 元 |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS`        | AWS partition 専用 master passphrase          |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE_GCP`        | GCP partition 専用                            |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE_CLOUDFLARE` | Cloudflare partition 専用                     |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE_AZURE`      | Azure partition 専用                          |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE_K8S`        | Kubernetes partition 専用                     |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE_SELFHOSTED` | self-hosted runtime 用 partition 専用         |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE_NEXT`       | rotation 中の new-generation passphrase       |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE_<TAG>_NEXT` | rotation 中の tag-specific new passphrase     |
+| Env                                               | 用途                                          |
+| ------------------------------------------------- | --------------------------------------------- |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE`                | global default。すべての partition の seed 元 |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS`            | AWS partition 専用 master passphrase          |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE_GCP`            | GCP partition 専用                            |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE_CLOUDFLARE`     | Cloudflare partition 専用                     |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE_AZURE`          | Azure partition 専用                          |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE_K8S`            | Kubernetes partition 専用                     |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE_LOCAL_ADAPTERS` | local-adapters partition 専用                 |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE_NEXT`           | rotation 中の new-generation passphrase       |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE_<TAG>_NEXT`     | rotation 中の tag-specific new passphrase     |
 
 resolution rule:
 
@@ -92,7 +92,7 @@ env を一切使わずに `factories.ts` 経由で passphrase resolver を injec
 
 partition tag ごとに partition を分ける目的は **blast radius の遮断** である。
 
-- `aws` credential が漏れても `gcp` / `cloudflare` / `k8s` / `selfhosted` など別 tag の partition は復号されない (key が独立、 AAD でも分離)
+- `aws` credential が漏れても `gcp` / `cloudflare` / `k8s` / `local-adapters` など別 tag の partition は復号されない (key が独立、 AAD でも分離)
 - tag-specific passphrase rotation を独立に実施できる (other partition は影響を受けない)
 - audit / compliance scope を tag 単位で切れる (PCI-DSS / HIPAA / SOX で scope を絞りたい partition だけを再暗号化対象にできる)
 

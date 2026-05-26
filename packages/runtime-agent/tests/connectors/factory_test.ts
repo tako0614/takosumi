@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { buildConnectorRegistry } from "../../src/connectors/factory.ts";
 
-Deno.test("buildConnectorRegistry({}) registers the 6 selfhost connectors", () => {
+Deno.test("buildConnectorRegistry({}) registers the 6 local adapter connectors", () => {
   const reg = buildConnectorRegistry();
-  // 6 selfhost connectors: filesystem + minio + docker-compose + systemd-unit
+  // 6 local adapter connectors: filesystem + minio + docker-compose + systemd-unit
   // + coredns-local + local-docker
   assert.equal(reg.size(), 6);
-  assert.ok(reg.get("object-store@v1", "@takos/selfhost-filesystem"));
-  assert.ok(reg.get("object-store@v1", "@takos/selfhost-minio"));
-  assert.ok(reg.get("web-service@v1", "@takos/selfhost-docker-compose"));
-  assert.ok(reg.get("web-service@v1", "@takos/selfhost-systemd"));
-  assert.ok(reg.get("gateway@v1", "@takos/selfhost-coredns"));
-  assert.ok(reg.get("postgres@v1", "@takos/selfhost-postgres"));
+  assert.ok(reg.get("object-store@v1", "@takos/filesystem-object-store"));
+  assert.ok(reg.get("object-store@v1", "@takos/minio-object-store"));
+  assert.ok(reg.get("web-service@v1", "@takos/docker-compose-web-service"));
+  assert.ok(reg.get("web-service@v1", "@takos/systemd-web-service"));
+  assert.ok(reg.get("gateway@v1", "@takos/coredns-gateway"));
+  assert.ok(reg.get("postgres@v1", "@takos/docker-postgres"));
 });
 
 Deno.test("buildConnectorRegistry with AWS opts adds 4 cloud connectors when route53HostedZoneId set", () => {
@@ -24,7 +24,7 @@ Deno.test("buildConnectorRegistry with AWS opts adds 4 cloud connectors when rou
       route53HostedZoneId: "ZONE-1",
     },
   });
-  // 6 selfhost + 4 AWS
+  // 6 local adapters + 4 AWS
   assert.equal(reg.size(), 10);
   assert.ok(reg.get("object-store@v1", "@takos/aws-s3"));
   assert.ok(reg.get("web-service@v1", "@takos/aws-fargate"));
@@ -40,7 +40,7 @@ Deno.test("buildConnectorRegistry with GCP opts adds GCS / Cloud Run / Cloud SQL
       bearerToken: "tok",
     },
   });
-  // 6 selfhost + 3 GCP (no DNS without zoneName)
+  // 6 local adapters + 3 GCP (no DNS without zoneName)
   assert.equal(reg.size(), 9);
   assert.ok(reg.get("object-store@v1", "@takos/gcp-gcs"));
   assert.ok(reg.get("web-service@v1", "@takos/gcp-cloud-run"));

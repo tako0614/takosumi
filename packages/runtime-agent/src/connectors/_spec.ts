@@ -267,7 +267,7 @@ export function parsePostgresVersionSpec(
   return { version: requireString(obj, "version", shape) };
 }
 
-export interface SelfhostWebServiceSpec {
+export interface ExternalWebServiceSpec {
   readonly image: string;
   readonly port: number;
   readonly env?: Record<string, string>;
@@ -296,9 +296,9 @@ function optionalStringArray(
   return out;
 }
 
-export function parseSelfhostWebServiceSpec(
+export function parseExternalWebServiceSpec(
   value: JsonValue,
-): SelfhostWebServiceSpec {
+): ExternalWebServiceSpec {
   const shape = "web-service@v1";
   const obj = asSpecObject(value, shape);
   return {

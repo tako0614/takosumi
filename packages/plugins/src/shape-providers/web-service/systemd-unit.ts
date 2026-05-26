@@ -50,7 +50,7 @@ export function createSystemdUnitWebServiceProvider(
   const portAlloc = createPortAllocator(options.hostPortStart ?? 28080);
   const clock = options.clock ?? (() => new Date());
   return {
-    id: "@takos/selfhost-systemd",
+    id: "@takos/systemd-web-service",
     version: "1.0.0",
     implements: { id: "web-service", version: "v1" },
     capabilities: SUPPORTED_CAPABILITIES,

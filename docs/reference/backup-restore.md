@@ -1,6 +1,6 @@
 # バックアップとリストア {#backup-and-restore}
 
-operator self-host deployment 向けの reference backup / restore profile。 Takosumi core の portable portability surface は Installation / Deployment、 source identity、`manifestDigest`、non-secret outputs、Deployment の記録の可用性で説明します。このページは current reference operator がその surface を復元するために保存する logical record set、backup フォーマット、point-in-time 整合性 invariant、audit chain 整合性を保つ順序付き restore 手順を説明します。
+operator-managed deployment 向けの reference backup / restore profile。Takosumi core の portability surface は Installation / Deployment、source identity、`manifestDigest`、non-secret outputs、Deployment の記録の可用性で説明します。このページは current reference operator がその surface を復元するために保存する logical record set、backup フォーマット、point-in-time 整合性 invariant、audit chain 整合性を保つ順序付き restore 手順を説明します。
 
 protocol は logical record stream を扱う。snapshot は Takosumi の storage 抽象から取得する。operator は冗長性のために SQL / object store / filesystem level の物理 backup を下に重ねてよいが、Takosumi 適合な restore はここで定義する logical path を通る。
 

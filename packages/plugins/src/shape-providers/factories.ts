@@ -7,8 +7,8 @@
  * touch cloud APIs.
  *
  * Operators wire the kernel by passing `{ agentUrl, token }` plus optional
- * `enable*` switches. By default every cloud is enabled and selfhosted is
- * always on — operators turn off clouds whose connectors aren't registered
+ * `enable*` switches. By default cloud providers and local/external adapters
+ * are enabled — operators turn off groups whose connectors aren't registered
  * on the agent.
  */
 
@@ -64,10 +64,10 @@ export interface TakosumiProductionProviderOptions {
   /** Enable Kubernetes providers (k3s-deployment). Default: true. */
   readonly enableKubernetes?: boolean;
   /**
-   * Enable selfhost providers (filesystem, minio, docker-compose, systemd-unit,
-   * local-docker, coredns-local). Default: true.
+   * Enable local/external adapter providers (filesystem, minio,
+   * docker-compose, systemd-unit, local-docker, coredns-local). Default: true.
    */
-  readonly enableSelfhost?: boolean;
+  readonly enableLocalAdapters?: boolean;
   /**
    * Enable Deno Deploy provider (deno-deploy → worker@v1). Default: false —
    * the runtime-agent must have a Deno Deploy connector registered via
@@ -281,16 +281,16 @@ const DENO_DEPLOY_PROVIDERS: readonly ProviderEntry[] = [
   },
 ];
 
-const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
+const LOCAL_ADAPTER_PROVIDERS: readonly ProviderEntry[] = [
   {
-    id: "@takos/selfhost-filesystem",
+    id: "@takos/filesystem-object-store",
     shape: OBJECT_STORE,
     capabilities: [
       "presigned-urls",
     ] satisfies readonly ObjectStoreCapabilityTerm[],
   },
   {
-    id: "@takos/selfhost-minio",
+    id: "@takos/minio-object-store",
     shape: OBJECT_STORE,
     capabilities: [
       "versioning",
@@ -302,7 +302,7 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
     ] satisfies readonly ObjectStoreCapabilityTerm[],
   },
   {
-    id: "@takos/selfhost-docker-compose",
+    id: "@takos/docker-compose-web-service",
     shape: WEB_SERVICE,
     capabilities: [
       "always-on",
@@ -312,7 +312,7 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
     ] satisfies readonly WebServiceCapabilityTerm[],
   },
   {
-    id: "@takos/selfhost-systemd",
+    id: "@takos/systemd-web-service",
     shape: WEB_SERVICE,
     capabilities: [
       "always-on",
@@ -320,7 +320,7 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
     ] satisfies readonly WebServiceCapabilityTerm[],
   },
   {
-    id: "@takos/selfhost-postgres",
+    id: "@takos/docker-postgres",
     shape: DATABASE_POSTGRES,
     capabilities: [
       "ssl-required",
@@ -328,7 +328,7 @@ const SELFHOST_PROVIDERS: readonly ProviderEntry[] = [
     ] satisfies readonly DatabasePostgresCapabilityTerm[],
   },
   {
-    id: "@takos/selfhost-coredns",
+    id: "@takos/coredns-gateway",
     shape: GATEWAY,
     capabilities: ["wildcard"] satisfies readonly GatewayCapabilityTerm[],
   },
@@ -366,7 +366,7 @@ export function createTakosumiProductionProviders(
   if (opts.enableCloudflare !== false) push(CLOUDFLARE_PROVIDERS);
   if (opts.enableAzure !== false) push(AZURE_PROVIDERS);
   if (opts.enableKubernetes !== false) push(KUBERNETES_PROVIDERS);
-  if (opts.enableSelfhost !== false) push(SELFHOST_PROVIDERS);
+  if (opts.enableLocalAdapters !== false) push(LOCAL_ADAPTER_PROVIDERS);
   if (opts.enableDenoDeploy === true) push(DENO_DEPLOY_PROVIDERS);
 
   return out;

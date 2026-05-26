@@ -45,6 +45,36 @@ export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
       directory: "packages/plugins",
     },
     {
+      name: "@takos/takosumi-plugin-web-service-docker-compose",
+      version: "0.1.0",
+      directory: "packages/plugin-web-service-docker-compose",
+    },
+    {
+      name: "@takos/takosumi-plugin-web-service-systemd",
+      version: "0.1.0",
+      directory: "packages/plugin-web-service-systemd",
+    },
+    {
+      name: "@takos/takosumi-plugin-object-store-minio",
+      version: "0.1.0",
+      directory: "packages/plugin-object-store-minio",
+    },
+    {
+      name: "@takos/takosumi-plugin-object-store-filesystem",
+      version: "0.1.0",
+      directory: "packages/plugin-object-store-filesystem",
+    },
+    {
+      name: "@takos/takosumi-plugin-postgres-docker",
+      version: "0.1.0",
+      directory: "packages/plugin-postgres-docker",
+    },
+    {
+      name: "@takos/takosumi-plugin-gateway-coredns",
+      version: "0.1.0",
+      directory: "packages/plugin-gateway-coredns",
+    },
+    {
       name: "@takos/takosumi-cloudflare-providers",
       version: "0.1.0",
       directory: "packages/cloudflare-providers",
@@ -68,11 +98,6 @@ export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
       name: "@takos/takosumi-kubernetes-providers",
       version: "0.1.0",
       directory: "packages/kubernetes-providers",
-    },
-    {
-      name: "@takos/takosumi-selfhost-providers",
-      version: "0.1.0",
-      directory: "packages/selfhost-providers",
     },
     {
       name: "@takos/takosumi-kernel",

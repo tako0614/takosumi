@@ -8,14 +8,19 @@ Gateway provider capability is explicit. Some current DNS-backed adapters cover 
 
 ## Reference package mapping {#package-mapping}
 
-| Package id                              | Provider group |
-| --------------------------------------- | -------------- |
-| `@takos/takosumi-aws-providers`         | AWS            |
-| `@takos/takosumi-gcp-providers`         | GCP            |
-| `@takos/takosumi-cloudflare-providers`  | Cloudflare     |
-| `@takos/takosumi-kubernetes-providers`  | Kubernetes     |
-| `@takos/takosumi-deno-deploy-providers` | Deno Deploy    |
-| `@takos/takosumi-selfhost-providers`    | Self-host      |
+| Package id                                          | Provider group                     |
+| --------------------------------------------------- | ---------------------------------- |
+| `@takos/takosumi-aws-providers`                     | AWS                                |
+| `@takos/takosumi-gcp-providers`                     | GCP                                |
+| `@takos/takosumi-cloudflare-providers`              | Cloudflare                         |
+| `@takos/takosumi-kubernetes-providers`              | Kubernetes                         |
+| `@takos/takosumi-deno-deploy-providers`             | Deno Deploy                        |
+| `@takos/takosumi-plugin-web-service-docker-compose` | Docker Compose web-service adapter |
+| `@takos/takosumi-plugin-web-service-systemd`        | systemd web-service adapter        |
+| `@takos/takosumi-plugin-object-store-minio`         | MinIO object-store adapter         |
+| `@takos/takosumi-plugin-object-store-filesystem`    | filesystem object-store adapter    |
+| `@takos/takosumi-plugin-postgres-docker`            | Docker Postgres adapter            |
+| `@takos/takosumi-plugin-gateway-coredns`            | CoreDNS gateway adapter            |
 
 以下の rows は current reference provider package exports を reader-friendly に並べた inventory です。`provider id` は factory が返す adapter / connector identity の例で、`factory export` は package から import する関数名です。 manifest portability は matching kind URI、出力の型、operator-selected support constraints / extension fields、credential、operator の記録が揃う範囲で成立します。
 
@@ -66,12 +71,14 @@ Azure は external connector metadata example です。別 operator profile が 
 
 `@takos/deno-deploy` は operator が明示的に package と connector credential を用意したときだけ selectable にします。
 
-## Self-host examples {#self-host}
+## External Adapter Examples {#external-adapters}
 
-| provider id                      | role           | declared capabilities                                                                                            |
-| -------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `@takos/selfhost-filesystem`     | `object-store` | `presigned-urls`                                                                                                 |
-| `@takos/selfhost-minio`          | `object-store` | `versioning`, `presigned-urls`, `server-side-encryption`, `public-access`, `lifecycle-rules`, `multipart-upload` |
-| `@takos/selfhost-docker-compose` | `web-service`  | `always-on`, `websocket`, `long-request`, `sticky-session`                                                       |
-| `@takos/selfhost-systemd`        | `web-service`  | `always-on`, `long-request`                                                                                      |
-| `@takos/selfhost-postgres`       | `postgres`     | `ssl-required`, `extensions`                                                                                     |
+These adapter examples describe the external system boundary, not the hosting topology. The same adapter can target a developer laptop, an operator VM, a private network host, or a managed service endpoint when the lifecycle client is implemented for that environment.
+
+| provider id                         | role           | declared capabilities                                                                                            |
+| ----------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `@takos/filesystem-object-store`    | `object-store` | `presigned-urls`                                                                                                 |
+| `@takos/minio-object-store`         | `object-store` | `versioning`, `presigned-urls`, `server-side-encryption`, `public-access`, `lifecycle-rules`, `multipart-upload` |
+| `@takos/docker-compose-web-service` | `web-service`  | `always-on`, `websocket`, `long-request`, `sticky-session`                                                       |
+| `@takos/systemd-web-service`        | `web-service`  | `always-on`, `long-request`                                                                                      |
+| `@takos/docker-postgres`            | `postgres`     | `ssl-required`, `extensions`                                                                                     |

@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Takosumi
   text: Manifest から Deployment へ
-  tagline: アプリの構成ファイルからデプロイまでを一貫して管理する、セルフホスト可能な PaaS。
+  tagline: アプリの構成ファイルから Deployment 履歴までを一貫して管理し、実行先を operator が選べる PaaS。
   image:
     src: /logo.svg
     alt: Takosumi

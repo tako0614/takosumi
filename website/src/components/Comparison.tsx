@@ -2,7 +2,7 @@
  * 3 列 audience-aware comparison (Wave M-H3 訂正後)。
  * SaaS = Notion / Slack / Google Docs 等 (= 非技術者にも届く対比軸)、
  * Vendor PaaS = Heroku / Render 等。 旧「素の cloud」「Terraform」 列は
- * 削除 (= 非技術者には伝わらない + WhySelfHost で本質は語り済)。
+ * 削除 (= 非技術者には伝わらない + WhyOperatorOwned で本質は語り済)。
  */
 const ROWS = [
   {

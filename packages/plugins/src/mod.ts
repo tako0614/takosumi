@@ -1,10 +1,11 @@
 /**
  * Compatibility entry point for `@takos/takosumi-plugins`.
  *
- * Phase D extracted every cloud / self-host provider wrapper out of this
- * package into dedicated `@takos/takosumi-<cloud>-providers` packages so
- * the reference package/server path boots with zero cloud SDK dependency.
- * Operators import provider factories directly from those packages
+ * Phase D extracted provider / external adapter wrappers out of this package
+ * into dedicated `@takos/takosumi-<cloud>-providers` and
+ * `@takos/takosumi-plugin-<kind>-<backend>` packages so the reference
+ * package/server path boots with zero cloud SDK dependency. Operators import
+ * provider factories directly from those packages
  * (`@takos/takosumi-cloudflare-providers`, `@takos/takosumi-aws-providers`,
  * etc.) and pass the results to `createPaaSApp({ kindAliases, plugins })`.
  *

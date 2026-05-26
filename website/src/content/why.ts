@@ -5,18 +5,18 @@ export interface Pillar {
 
 export const PILLARS: readonly Pillar[] = [
   {
-    title: "あなたの host、 あなたの credential",
+    title: "入口は共通、実体は外部",
     body:
-      "data も API key も、 自分のサーバーの中だけ。 SaaS にも、 こちらの kernel にも、 通り過ぎない。 self-host が default。",
+      "API、DB、object store、gateway は provider adapter の先で作る。Takosumi は Installation / Deployment を記録し、credential は operator の実行環境に置く。",
   },
   {
-    title: "open source、 中身が見える",
+    title: "cloud でも VM でも同じ形",
     body:
-      "kernel も、 provider も、 bundled app も全部 source 公開。 動いている物が分かる。 自分で fork もできる。",
+      "Cloudflare、AWS、GCP、Kubernetes、Docker Compose、systemd を同じ provider adapter model で扱う。構成ファイルは同じまま。",
   },
   {
     title: "lock-in しない、 引っ越せる、 終わらない",
     body:
-      "manifest 1 行で AWS から自宅 VM へ引っ越せる。 SaaS が止まっても、 値上げしても、 規約を変えても、 自分のものは自分のもの。",
+      "operator が実行先を差し替えても、AppSpec の入口は変わらない。cloud、VM、cluster のどれかに閉じ込めない。",
   },
 ];

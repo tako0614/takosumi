@@ -43,7 +43,7 @@ const SIZES: ReadonlySet<string> = new Set(
 
 /**
  * `postgres@v1` component kind descriptor. Materialized by a provider
- * adapter (managed Postgres or self-hosted) at apply time.
+ * adapter (managed Postgres or external) at apply time.
  *
  * The TypeScript filename and interface prefix retain `DatabasePostgres` to
  * keep the implementation unambiguous, but the reader-facing kind name is

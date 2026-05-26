@@ -4,7 +4,7 @@
  * Implements the lifecycle protocol from `@takos/takosumi-contract` and
  * dispatches to per-provider connectors. Operators run this on the host that
  * has the cloud credentials (`AWS_ACCESS_KEY_ID`, etc.) or the OS access
- * (docker daemon, systemd) for self-hosted resources.
+ * (docker daemon, systemd) for local adapter resources.
  */
 
 // @ts-types="npm:hono@^4.12.4"

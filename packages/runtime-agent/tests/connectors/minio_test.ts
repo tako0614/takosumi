@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { MinioConnector } from "../../src/connectors/selfhost/minio.ts";
+import { MinioConnector } from "../../src/connectors/external/minio.ts";
 import { recordingFetch } from "./_fetch_mock.ts";
 
 Deno.test("MinioConnector.verify hits /minio/health/live and reports ok on 200", async () => {
@@ -40,7 +40,7 @@ Deno.test("MinioConnector.apply PUTs bucket against MinIO endpoint", async () =>
   });
   const res = await connector.apply({
     shape: "object-store@v1",
-    provider: "@takos/selfhost-minio",
+    provider: "@takos/minio-object-store",
     spaceId: "space_test",
     resourceName: "rs",
     spec: { name: "tenant-data" },
@@ -63,7 +63,7 @@ Deno.test("MinioConnector.describe returns missing on 404", async () => {
   });
   const res = await connector.describe({
     shape: "object-store@v1",
-    provider: "@takos/selfhost-minio",
+    provider: "@takos/minio-object-store",
     spaceId: "space_test",
     handle: "ghost",
   }, {});

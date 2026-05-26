@@ -1,6 +1,6 @@
 # @takos/takosumi-runtime-agent
 
-Executor / data plane for the Takosumi self-host PaaS toolkit. Receives lifecycle envelopes (apply / destroy / describe / verify) from the kernel over HTTP and dispatches to the right per-provider connector, which makes the actual cloud REST API call (SigV4 / OAuth / Cloudflare API token / Azure ARM / Kubernetes / etc) or local OS call (`docker`, `systemd`, filesystem).
+Executor / data plane for the Takosumi reference runtime. Receives lifecycle envelopes (apply / destroy / describe / verify) from the kernel over HTTP and dispatches to the right per-provider connector, which makes the actual cloud REST API call (SigV4 / OAuth / Cloudflare API token / Azure ARM / Kubernetes / etc) or local OS call (`docker`, `systemd`, filesystem).
 
 Cloud / OS credentials stay outside the kernel. In the takosumi.com reference topology they typically live in the runtime-agent process; another operator-owned execution host can enforce the same boundary.
 
@@ -40,14 +40,14 @@ Auth is a single bearer token, shared with the kernel via `TAKOSUMI_AGENT_TOKEN`
 
 The takosumi.com reference runtime-agent ships connector examples for common provider families. A connector is registered when the operator enables it and provides the required env / boot config.
 
-| Group      | Connectors                                                                                                                                                                |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AWS        | `@takos/aws-s3`, `@takos/aws-fargate`, `@takos/aws-rds`, `@takos/aws-route53`                                                                                             |
-| GCP        | `@takos/gcp-gcs`, `@takos/gcp-cloud-run`, `@takos/gcp-cloud-sql`, `@takos/gcp-cloud-dns`                                                                                  |
-| Cloudflare | `@takos/cloudflare-r2`, `@takos/cloudflare-container`, `@takos/cloudflare-workers`, `@takos/cloudflare-dns`                                                               |
-| Kubernetes | `@takos/kubernetes-deployment`                                                                                                                                            |
-| Deno       | `@takos/deno-deploy`                                                                                                                                                      |
-| Self-host  | `@takos/selfhost-filesystem`, `@takos/selfhost-minio`, `@takos/selfhost-docker-compose`, `@takos/selfhost-systemd`, `@takos/selfhost-postgres`, `@takos/selfhost-coredns` |
+| Group                     | Connectors                                                                                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| AWS                       | `@takos/aws-s3`, `@takos/aws-fargate`, `@takos/aws-rds`, `@takos/aws-route53`                                                                                                        |
+| GCP                       | `@takos/gcp-gcs`, `@takos/gcp-cloud-run`, `@takos/gcp-cloud-sql`, `@takos/gcp-cloud-dns`                                                                                             |
+| Cloudflare                | `@takos/cloudflare-r2`, `@takos/cloudflare-container`, `@takos/cloudflare-workers`, `@takos/cloudflare-dns`                                                                          |
+| Kubernetes                | `@takos/kubernetes-deployment`                                                                                                                                                       |
+| Deno                      | `@takos/deno-deploy`                                                                                                                                                                 |
+| Local / external adapters | `@takos/filesystem-object-store`, `@takos/minio-object-store`, `@takos/docker-compose-web-service`, `@takos/systemd-web-service`, `@takos/docker-postgres`, `@takos/coredns-gateway` |
 
 External connector examples may use the same lifecycle envelope. For example, `@takos/azure-container-apps` can implement `web-service@v1` outside the current reference provider package set.
 
@@ -89,7 +89,7 @@ The agent reads env at startup. Set what you need:
 | Azure           | `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `AZURE_BEARER_TOKEN`, `AZURE_LOCATION`                   |
 | Kubernetes      | `TAKOSUMI_KUBERNETES_API_SERVER_URL`, `TAKOSUMI_KUBERNETES_BEARER_TOKEN`, `TAKOSUMI_KUBERNETES_NAMESPACE` |
 | Deno Deploy     | `DENO_DEPLOY_ACCESS_TOKEN`, `DENO_DEPLOY_ORGANIZATION_ID`                                                 |
-| Self-host       | `TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT`, `TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR`, etc.                     |
+| Local adapters  | `TAKOSUMI_LOCAL_ADAPTER_OBJECT_STORE_ROOT`, `TAKOSUMI_LOCAL_ADAPTER_SYSTEMD_UNIT_DIR`, etc.               |
 
 A cloud's connectors are skipped (not registered) when its required env vars are missing — operator can `takosumi runtime-agent verify` to confirm which connectors are live.
 

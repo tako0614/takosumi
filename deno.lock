@@ -230,6 +230,42 @@
           "jsr:@takos/takosumi-plugins@0.12"
         ]
       },
+      "packages/plugin-gateway-coredns": {
+        "dependencies": [
+          "jsr:@takos/takosumi-contract@^2.6.0",
+          "jsr:@takos/takosumi-plugins@0.12"
+        ]
+      },
+      "packages/plugin-object-store-filesystem": {
+        "dependencies": [
+          "jsr:@takos/takosumi-contract@^2.6.0",
+          "jsr:@takos/takosumi-plugins@0.12"
+        ]
+      },
+      "packages/plugin-object-store-minio": {
+        "dependencies": [
+          "jsr:@takos/takosumi-contract@^2.6.0",
+          "jsr:@takos/takosumi-plugins@0.12"
+        ]
+      },
+      "packages/plugin-postgres-docker": {
+        "dependencies": [
+          "jsr:@takos/takosumi-contract@^2.6.0",
+          "jsr:@takos/takosumi-plugins@0.12"
+        ]
+      },
+      "packages/plugin-web-service-docker-compose": {
+        "dependencies": [
+          "jsr:@takos/takosumi-contract@^2.6.0",
+          "jsr:@takos/takosumi-plugins@0.12"
+        ]
+      },
+      "packages/plugin-web-service-systemd": {
+        "dependencies": [
+          "jsr:@takos/takosumi-contract@^2.6.0",
+          "jsr:@takos/takosumi-plugins@0.12"
+        ]
+      },
       "packages/plugins": {
         "dependencies": [
           "jsr:@takos/takosumi-contract@^2.6.0"
@@ -239,12 +275,6 @@
         "dependencies": [
           "jsr:@takos/takosumi-contract@^2.6.0",
           "npm:hono@^4.12.4"
-        ]
-      },
-      "packages/selfhost-providers": {
-        "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
         ]
       }
     }

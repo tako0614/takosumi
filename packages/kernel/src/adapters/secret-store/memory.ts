@@ -82,7 +82,7 @@ export function cloudPartitionEnvKeys(
   partition: CloudPartition,
 ): readonly string[] {
   if (partition === "global") return SECRET_STORE_KEY_ENV_KEYS;
-  const suffix = partition.toUpperCase();
+  const suffix = partition.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
   return SECRET_STORE_KEY_ENV_KEYS.map((key) => `${key}_${suffix}`);
 }
 
@@ -127,7 +127,7 @@ export function selectSecretBoundaryCrypto(
       `secret-store encryption key missing in ${environment}: ` +
         `set one of ${SECRET_STORE_KEY_ENV_KEYS.join(", ")} ` +
         `to a 32+ byte high-entropy passphrase ` +
-        `(per-cloud overrides via *_AWS / *_GCP / *_CLOUDFLARE / *_K8S / *_SELFHOSTED). ` +
+        `(per-provider overrides via *_AWS / *_GCP / *_CLOUDFLARE / *_K8S / *_LOCAL_ADAPTERS). ` +
         `Refusing to fall back to plaintext (base64) secret storage.`,
     );
   }

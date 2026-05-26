@@ -257,7 +257,7 @@ export default defineConfig({
     hostname: "https://takosumi.com/docs/",
   },
   srcExclude: [
-    "operator/{bootstrap,runtime-agent,self-host,upgrade}.md",
+    "operator/{bootstrap,runtime-agent,operator-managed,upgrade}.md",
     "reference/architecture/**",
     "reference/{approval-invalidation,audit-events,backup-restore,bootstrap-protocol,closed-enums,connector-contract,cross-process-locks,data-asset-gc,data-asset-policy,drift-detection,env-vars,group-head-rollout,journal-compaction,kernel-http-api,kind-registry,lifecycle,lifecycle-phases,logging-conventions,migration-upgrade,observability-stack,observation-retention,plan-output,plugin-loading,provider-packages,providers,public-spec-source-map,readiness-probes,resource-ids,revoke-debt,risk-taxonomy,runtime-agent-api,secret-partitions,status-output,storage-schema,supply-chain-trust,telemetry-metrics,time-clock-model,wal-stages,workers-backend}.md",
     "rfc/**",

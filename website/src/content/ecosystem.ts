@@ -21,13 +21,13 @@ export const PROVIDERS: readonly Chip[] = [
   { label: "GCP", hint: "Cloud Run / GCS" },
   { label: "Kubernetes", hint: "any cluster" },
   { label: "Deno Deploy", hint: "edge" },
-  { label: "Self-host", hint: "docker / systemd" },
+  { label: "Single-host", hint: "docker / systemd" },
 ];
 
 export const SUBSTRATE = {
   label: "Takosumi",
   description:
-    "共通 PaaS 基盤。 同じ AppSpec を どの cloud にも、 自宅 VM にも apply。",
+    "共通 PaaS 基盤。同じ AppSpec を cloud、VM、cluster、管理サービスへ apply。",
 };
 
 export const ACCOUNTS = {

@@ -20,7 +20,7 @@ The Installer API is the portable write lifecycle. It handles preview, Installat
 
 Workflows that need Deployment history use an operator-provided read API. Examples include dashboard support tooling, CLI read models, rollback target selectors, async apply polling, and audit review views.
 
-The read API may be a Cloud account management API, a self-hosted operator API, or dashboard support tooling. Route inventory, pagination, authentication, and redaction rules belong to the operator's configuration.
+The read API may be a Cloud account management API, an operator-managed read API, or dashboard support tooling. Route inventory, pagination, authentication, and redaction rules belong to the operator's configuration.
 
 Read APIs are compatibility/read-model views around the write lifecycle. They do not add core Installer API endpoints.
 

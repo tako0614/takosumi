@@ -37,7 +37,7 @@ Deno.test("runBundledFixtureProof validates all credential-free provider fixture
     "gcp",
     "kubernetes",
     "cloudflare",
-    "selfhosted",
+    "external",
   ]);
 });
 

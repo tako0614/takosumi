@@ -183,7 +183,7 @@ Deno.test("SqlOperationJournalStore appends and replays the same stage", async (
     stage: "prepare" as const,
     operationKind: "create",
     resourceName: "logs",
-    providerId: "@takos/selfhost-filesystem",
+    providerId: "@takos/filesystem-object-store",
     effect: { expected: "first" },
     createdAt: "2026-05-02T00:00:00.000Z",
   };

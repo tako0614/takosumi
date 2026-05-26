@@ -39,8 +39,8 @@ import type {
   CoreDnsRecordDescriptor,
 } from "/workspace/packages/plugins/src/shape-providers/gateway/coredns-local.ts";
 import {
-  selfhostCoreDnsGatewayProvider,
-} from "/workspace/packages/selfhost-providers/src/gateway-selfhost-coredns.ts";
+  coreDnsGatewayProvider,
+} from "/workspace/packages/plugin-gateway-coredns/mod.ts";
 import { buildLocalSubstrateRegistry } from "/local-substrate-factories/local-substrate-factories.ts";
 
 const agentPort = Number(Deno.env.get("TAKOSUMI_AGENT_PORT") ?? "8789");
@@ -121,7 +121,7 @@ function localSubstrateInstallerPlugins(input: {
       enableAzure: false,
       enableKubernetes: false,
       enableDenoDeploy: false,
-      enableSelfhost: true,
+      enableLocalAdapters: true,
     });
   const byId: Map<string, ProviderPlugin> = new Map(
     providers.map((provider) => [provider.id, provider]),
@@ -129,20 +129,20 @@ function localSubstrateInstallerPlugins(input: {
   return [
     providerKernelPlugin(
       byId,
-      "@takos/selfhost-postgres",
+      "@takos/docker-postgres",
       TAKOSUMI_REFERENCE_KIND_URIS.postgres,
     ),
     providerKernelPlugin(
       byId,
-      "@takos/selfhost-filesystem",
+      "@takos/filesystem-object-store",
       TAKOSUMI_REFERENCE_KIND_URIS["object-store"],
     ),
     providerKernelPlugin(
       byId,
-      "@takos/selfhost-docker-compose",
+      "@takos/docker-compose-web-service",
       TAKOSUMI_REFERENCE_KIND_URIS["web-service"],
     ),
-    selfhostCoreDnsGatewayProvider({
+    coreDnsGatewayProvider({
       defaultHost: input.defaultGatewayHost,
       ingressTarget: input.ingressTarget,
       lifecycle: createLocalSubstrateGatewayLifecycle(

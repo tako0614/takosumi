@@ -259,7 +259,7 @@ Deno.test("SqlRevokeDebtStore enqueues idempotently by source key", async () => 
     journalEntryId: "operation:one",
     operationId: "operation:one",
     resourceName: "logs",
-    providerId: "@takos/selfhost-filesystem",
+    providerId: "@takos/filesystem-object-store",
     now: "2026-05-02T00:00:00.000Z",
   };
 

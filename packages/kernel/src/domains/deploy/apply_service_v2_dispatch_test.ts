@@ -207,7 +207,7 @@ Deno.test("ApplyService rejects retired top-level template shorthand", async () 
     const manifest = {
       name: "template-app",
       template: {
-        template: "selfhosted-single-vm@v1",
+        template: "single-host@v1",
         inputs: {},
       },
     } as unknown as PublicDeployManifest;

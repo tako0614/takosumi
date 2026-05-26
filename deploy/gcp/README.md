@@ -4,7 +4,7 @@ This directory documents the GCP surface as **operator-owned scope**: the operat
 
 ## Why no reference deploy here
 
-The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/selfhosted/`) cover the substrate-neutrality claim at spec level. GCP / AWS / Azure / k8s are operator-owned targets: operators run the kernel image on whatever GCP compute they prefer (Cloud Run / GKE / GCE), point the kernel at a Postgres database (Cloud SQL), and attach the GCP provider factories from `@takos/takosumi-gcp-providers` plus matching runtime-agent credentials.
+The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. GCP / AWS / Azure / k8s are operator-owned targets: operators run the kernel image on whatever GCP compute they prefer (Cloud Run / GKE / GCE), point the kernel at a Postgres database (Cloud SQL), and attach the GCP provider factories from `@takos/takosumi-gcp-providers` plus matching runtime-agent credentials.
 
 ## Required runtime shape
 
@@ -37,4 +37,4 @@ deno task live-smoke --provider gcp --shape object-store
 
 ## Substrate-neutral references
 
-If you want a reference Docker image to base your Cloud Run / GKE deployments on, copy `deploy/selfhosted/Dockerfile.kernel` and `deploy/selfhosted/Dockerfile.runtime-agent`. They are substrate-neutral and run unmodified on any container runtime, including Cloud Run and GKE.
+If you want a reference Docker image to base your Cloud Run / GKE deployments on, copy `deploy/single-host/Dockerfile.kernel` and `deploy/single-host/Dockerfile.runtime-agent`. They are substrate-neutral and run unmodified on any container runtime, including Cloud Run and GKE.

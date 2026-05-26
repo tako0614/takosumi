@@ -10,7 +10,7 @@ import {
 const RESOURCE = {
   shape: "object-store@v1",
   name: "logs",
-  provider: "@takos/selfhost-filesystem",
+  provider: "@takos/filesystem-object-store",
   spec: { name: "logs" },
 } satisfies ManifestResource;
 
@@ -79,7 +79,7 @@ Deno.test("operation journal rejects same tuple with different effect digest", a
     stage: "prepare" as const,
     operationKind: "create",
     resourceName: "logs",
-    providerId: "@takos/selfhost-filesystem",
+    providerId: "@takos/filesystem-object-store",
     status: "recorded" as const,
     createdAt: "2026-05-02T00:00:00.000Z",
   };

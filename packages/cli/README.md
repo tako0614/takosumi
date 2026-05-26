@@ -1,6 +1,6 @@
 # @takos/takosumi-cli
 
-Operator CLI for the Takosumi self-host PaaS toolkit. Wraps the kernel HTTP API and the runtime-agent embed for a single-command dev experience.
+Operator CLI for the Takosumi operator-portable PaaS toolkit. Wraps the kernel HTTP API and the runtime-agent embed for a single-command dev experience.
 
 ## Install
 

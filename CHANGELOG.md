@@ -1,6 +1,6 @@
 # Changelog
 
-All notable user-visible changes to the published Takosumi packages live here. The workspace publishes 13 packages independently; entries below are grouped by package and dated by JSR publish.
+All notable user-visible changes to the published Takosumi packages live here. The workspace publishes 18 packages independently; entries below are grouped by package and dated by JSR publish.
 
 Versions follow [Semantic Versioning](https://semver.org/) once each package crosses 1.0.0. Pre-1.0 minor bumps may carry breaking changes (documented per entry).
 
@@ -14,7 +14,7 @@ Wave J → K → L の minimization sequence の自然な終点として、 tako
 - **Reference descriptors**: takosumi.com reference descriptors は `packages/plugins/spec/kinds/v1/*.jsonld` と `packages/plugins/src/kinds/` に移動 / rescope。`https://takosumi.com/kinds/v1/*` は external reference descriptor examples。 `@takos/takosumi-plugins/kinds` は `TAKOSUMI_REFERENCE_KIND_URIS` / `TAKOSUMI_REFERENCE_KIND_ALIASES` / `TAKOSUMI_REFERENCE_KINDS` を export。
 - **Provider packages**: 6 provider package は contract の removed kind helpers ではなく `@takos/takosumi-plugins/kinds` の reference URI helper を参照する。
 - **Package boundary**: `@takos/takosumi-contract@2.6.0` keeps the root export focused on AppSpec / Installer API DTOs and exposes reference implementation helpers through explicit subpaths. The temporary compatibility umbrella is `@takos/takosumi-contract/reference/compat`.
-- **JSR publish set**: release dry-run now covers all 13 packages, including `@takos/takosumi-installer`. `@takos/takosumi-plugins` no longer publishes cloud provider subpaths; provider factories live in the six provider packages.
+- **JSR publish set**: release dry-run now covers all 18 packages, including `@takos/takosumi-installer` and the individual `@takos/takosumi-plugin-<kind>-<backend>` adapter packages. `@takos/takosumi-plugins` no longer publishes provider subpaths; provider factories live in their dedicated packages.
 - **Docs / RFC**: AppSpec、provider、reference descriptors、BuildSpec、RFC 0001、 README / CONVENTIONS / AGENTS を更新し、official kind = 0 と external reference descriptors の境界を明記。
 
 Remaining follow-up:
@@ -91,7 +91,7 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 - **Breaking — `kind: oidc` を takosumi-cloud に移動**: 旧 frozen kind 構造を廃止し、 `oidc` を本 repo から削除。 Takosumi Accounts (= takosumi-cloud) が `operator.identity.oidc` external publication path に OIDC client material を publish し、 worker は `listen.<binding>.from: operator.identity.oidc` で標準 env (`OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS`) を受け取る形に変更。本 repo には `spec/contexts/kinds/v1/oidc.jsonld` も `oidc` materializer (旧 `oidc-takosumi-accounts.ts`) も無い。
 - **Breaking — Component kind は external**: `worker` / `postgres` / `object-store` / `custom-domain` / `web-service` は takosumi.com reference descriptors が publish する external descriptor 例として扱う。新 kind は任意 domain の URI + material contract + operator implementation binding で追加可能。
 - **Breaking — Reference materializer binding**: takosumi.com reference implementation は `KernelPlugin` factory を返す plain array (= Vite-like adapter pattern, cloud provider package が提供する形式) として `createPaaSApp({ plugins: [...] })` に attach する。互換 implementation は別の registry / controller / operator catalog で同じ kind URI を実行できる。
-- **Breaking — Cloud provider plugins を別 package に分離**: AWS / GCP / Cloudflare / Kubernetes / Deno Deploy / Self-host の materializer 実装は `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers` に分離して publish される。 takosumi core (kernel / plugins / cli) は cloud SDK に依存しない。 operator は必要な provider package を import して `plugins: [...]` に attach する。旧 `enableAws: true` / `createTakosumiProductionProviders(opts)` switch は撤回済。
+- **Breaking — Provider / adapter plugins を別 package に分離**: AWS / GCP / Cloudflare / Kubernetes / Deno Deploy の materializer 実装は `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy}-providers` に、Docker Compose / systemd / MinIO / filesystem / Docker Postgres / CoreDNS adapter は `@takos/takosumi-plugin-<kind>-<backend>` に分離して publish される。 takosumi core (kernel / plugins / cli) は cloud SDK や host-specific SDK に依存しない。 operator は必要な provider / adapter package を import して `plugins: [...]` に attach する。旧 `enableAws: true` / `createTakosumiProductionProviders(opts)` switch は撤回済。
 - **Breaking — HTTP status flip**: kernel HTTP surface の status code を spec と整合化。 `failed_precondition` = **409** (旧 412)、 `resource_exhausted` = **413** (旧 429)。 client / docs / SDK は新 status に追従が必要。
 - **Breaking — Idempotency-Key header 廃止**: 旧 `Idempotency-Key` HTTP header ベースの retry semantics を撤回。 idempotency は AppSpec digest + Installation/Deployment id で deterministic に成立し、別途 header は不要。
 - `KernelPlugin` plain-array attach (Wave 9 で導入) は維持。provider plugin は operator distribution が普通の TypeScript module として import する。
@@ -121,7 +121,7 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 ### 0.12.0 — 2026-05-03
 
 - `takosumi destroy <manifest>` now works in **local mode** (in-process destroy via the bundled in-memory providers). Previously printed "not yet wired" and exited.
-- `takosumi deploy <manifest>` local mode now expands `template:` field manifests against bundled templates (`selfhosted-single-vm`, `web-app-on-cloudflare`). Previously errored when manifest had no `resources[]`.
+- `takosumi deploy <manifest>` local mode now expands `template:` field manifests against bundled templates (`single-host`, `web-app-on-cloudflare`). Previously errored when manifest had no `resources[]`.
 - New helper exports from `@takos/takosumi-cli/local-runner`: `expandManifestLocal()` and `destroyLocal()`.
 
 ### 0.11.0 — 2026-05-02
@@ -138,7 +138,7 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 
 ### 0.7.0 — 2026-05-03
 
-- **Selfhost connectors recover state across agent restarts.** `DockerComposeConnector` and `LocalDockerPostgresConnector` now query `docker inspect <handle>` for live status and reconstruct outputs from `NetworkSettings.Ports` / `Config.Env`. `SystemdUnitConnector` reads the on-disk unit file and runs `systemctl is-active`. Earlier versions returned `missing` from `describe()` after any agent restart, even though containers / units kept running.
+- **Local adapter connectors recover state across agent restarts.** `DockerComposeConnector` and `LocalDockerPostgresConnector` now query `docker inspect <handle>` for live status and reconstruct outputs from `NetworkSettings.Ports` / `Config.Env`. `SystemdUnitConnector` reads the on-disk unit file and runs `systemctl is-active`. Earlier versions returned `missing` from `describe()` after any agent restart, even though containers / units kept running.
 - `apply()` retries port allocations up to 50 times when docker reports "port is already allocated" / "address already in use", so a re-deploy after restart no longer fails on stale port collisions.
 - `SystemdUnitConnector` rendered unit files now embed `# X-Takos-HostPort=<n>` and `# X-Takos-InternalPort=<n>` markers so `describe()` can reconstruct outputs from disk. Hand-written units without the markers describe with status only.
 - Published package imports now pin `@takos/takosumi-contract@^2.5.0`, matching the current runtime-agent lifecycle contract.
@@ -165,7 +165,7 @@ Phase A–F (= Wave-level spec re-baseline) で次の breaking change を確定:
 - Kernel API request correlation now propagates W3C `traceparent`, records HTTP server spans in the configured `ObservabilitySink`, exports spans through native OTLP/HTTP JSON `/v1/traces`, and adds `trace_id` / `span_id` to JSON request logs.
 - WAL-backed `applyV2` / `destroyV2` provider calls now record `takosumi.provider.apply` / `takosumi.provider.destroy` spans with operation id, operation kind, WAL stage, idempotency key, provider id, resource name, request id, and correlation id attributes.
 - Runtime-agent RPC calls now propagate `traceparent` / request correlation headers and record client spans, runtime-agent work execution records `takosumi.runtime_agent.execute` spans, and the generic `TakosumiInternalClient` records `takosumi.internal_rpc.client` spans.
-- Added the Observability Stack ownership reference, including managed vs self-hosted responsibilities, default SLI / SLO targets, and alert policy ownership.
+- Added the Observability Stack ownership reference, including managed vs external responsibilities, default SLI / SLO targets, and alert policy ownership.
 
 ### 0.14.0 — 2026-05-06
 

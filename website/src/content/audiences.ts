@@ -16,7 +16,7 @@ export const AUDIENCES: readonly Audience[] = [
   {
     name: "Indie hacker / 個人開発者",
     persona:
-      "自分のサービスを 自分の host で持ちたい。 SaaS に預けず、 自分で書いた app も 同じ Space に入れる。",
+      "自分のサービスを operator-owned runtime に置きたい。SaaS に閉じず、自分で書いた app も同じ Space に入れる。",
     exampleStack: "chat + agent + 自作 worker + DB",
     cta: { label: "AppSpec を 書く", href: "/docs/reference/app-spec" },
   },
@@ -30,7 +30,7 @@ export const AUDIENCES: readonly Audience[] = [
   {
     name: "学校 / 組織 / 公共",
     persona:
-      "大規模 multi-tenant、 自前 DC でも cloud でも。 監査 / 引っ越し / lock-in 回避 が必要。",
+      "大規模 multi-tenant、private DC でも cloud でも。監査 / 引っ越し / lock-in 回避が必要。",
     exampleStack: "全 bundled apps + custom resource + 自前 IdP 連携",
     cta: { label: "operator runbook", href: "/docs/operator/" },
   },

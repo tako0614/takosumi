@@ -108,7 +108,7 @@ function fatalStartupError(error: unknown): never {
         ...(diagnostic.key ? { key: diagnostic.key } : {}),
         message: diagnostic.message,
       })),
-      docs: ["docs/operator/self-host.md", "docs/reference/env-vars.md"],
+      docs: ["docs/operator/operator-managed.md", "docs/reference/env-vars.md"],
     });
     runtime.exit(1);
   }
@@ -116,7 +116,7 @@ function fatalStartupError(error: unknown): never {
     log.error("kernel.boot.secret_encryption_required", {
       message: error.message,
       hint: "Refusing to start takosumi with plaintext secret storage. " +
-        "See docs/operator/self-host.md and " +
+        "See docs/operator/operator-managed.md and " +
         "docs/reference/secret-partitions.md for required " +
         "encryption-key configuration.",
     });
@@ -126,7 +126,7 @@ function fatalStartupError(error: unknown): never {
     log.error("kernel.boot.database_encryption_required", {
       message: error.message,
       hint: "Refusing to start takosumi against an unencrypted database. " +
-        "See docs/operator/self-host.md and docs/reference/env-vars.md " +
+        "See docs/operator/operator-managed.md and docs/reference/env-vars.md " +
         "for database at-rest encryption configuration.",
     });
     runtime.exit(1);
@@ -493,7 +493,7 @@ function assertSecretEncryptionConfigured(
       log.error("kernel.boot.secret_encryption_required", {
         message: error.message,
         hint: "Refusing to start takosumi with plaintext secret storage. " +
-          "See docs/operator/self-host.md and " +
+          "See docs/operator/operator-managed.md and " +
           "docs/reference/secret-partitions.md for required " +
           "encryption-key configuration.",
       });
@@ -526,7 +526,7 @@ function assertDatabaseEncryptionConfigured(
       log.error("kernel.boot.database_encryption_required", {
         message: error.message,
         hint: "Refusing to start takosumi against an unencrypted database. " +
-          "See docs/operator/self-host.md and docs/reference/env-vars.md " +
+          "See docs/operator/operator-managed.md and docs/reference/env-vars.md " +
           "for database at-rest encryption configuration.",
       });
       runtime.exit(1);

@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Takosumi
   text: From Manifest to Deployment
-  tagline: A self-hostable PaaS toolkit that records application intent, installs it into a Space, and keeps every apply as Deployment history.
+  tagline: An operator-portable PaaS toolkit that records application intent, installs it into a Space, and keeps every apply as Deployment history.
   image:
     src: /logo.svg
     alt: Takosumi

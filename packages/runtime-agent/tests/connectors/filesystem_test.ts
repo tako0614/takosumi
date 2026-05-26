@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { FilesystemConnector } from "../../src/connectors/selfhost/filesystem.ts";
+import { FilesystemConnector } from "../../src/connectors/external/filesystem.ts";
 
 Deno.test("FilesystemConnector.apply creates a directory and returns its path as handle", async () => {
   const root = await Deno.makeTempDir({ prefix: "fs-connector-" });
@@ -7,7 +7,7 @@ Deno.test("FilesystemConnector.apply creates a directory and returns its path as
     const connector = new FilesystemConnector({ rootDir: root });
     const res = await connector.apply({
       shape: "object-store@v1",
-      provider: "@takos/selfhost-filesystem",
+      provider: "@takos/filesystem-object-store",
       spaceId: "space_test",
       resourceName: "rs",
       spec: { name: "tenant-data" },
@@ -28,7 +28,7 @@ Deno.test("FilesystemConnector.describe returns missing for non-existent dir", a
     const connector = new FilesystemConnector({ rootDir: root });
     const res = await connector.describe({
       shape: "object-store@v1",
-      provider: "@takos/selfhost-filesystem",
+      provider: "@takos/filesystem-object-store",
       spaceId: "space_test",
       handle: `${root}/missing`,
     }, {});
@@ -65,14 +65,14 @@ Deno.test("FilesystemConnector.destroy removes the directory", async () => {
     const connector = new FilesystemConnector({ rootDir: root });
     const apply = await connector.apply({
       shape: "object-store@v1",
-      provider: "@takos/selfhost-filesystem",
+      provider: "@takos/filesystem-object-store",
       spaceId: "space_test",
       resourceName: "rs",
       spec: { name: "x" },
     }, {});
     const res = await connector.destroy({
       shape: "object-store@v1",
-      provider: "@takos/selfhost-filesystem",
+      provider: "@takos/filesystem-object-store",
       spaceId: "space_test",
       handle: apply.handle,
     }, {});

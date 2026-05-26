@@ -4,7 +4,7 @@ export type ProviderProofProvider =
   | "k8s"
   | "kubernetes"
   | "cloudflare"
-  | "selfhosted"
+  | "external"
   | "azure";
 
 export interface ProviderProofDesiredState {
@@ -93,7 +93,7 @@ export function assertProviderProofFixture(
   }
   if (!isProvider(value.provider)) {
     throw new Error(
-      "provider proof fixture provider must be one of: aws, gcp, k8s, kubernetes, cloudflare, selfhosted",
+      "provider proof fixture provider must be one of: aws, gcp, k8s, kubernetes, cloudflare, external",
     );
   }
   if (!nonEmptyString(value.runId)) {
@@ -147,7 +147,7 @@ export function assertProviderProofFixture(
 export function isProvider(value: unknown): value is ProviderProofProvider {
   return value === "aws" || value === "gcp" || value === "k8s" ||
     value === "kubernetes" || value === "cloudflare" ||
-    value === "selfhosted" || value === "azure";
+    value === "external" || value === "azure";
 }
 
 export function operationDescriptor(operation: unknown): string | undefined {

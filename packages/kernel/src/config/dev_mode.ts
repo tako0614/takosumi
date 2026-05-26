@@ -1,7 +1,7 @@
 import { log } from "../shared/log.ts";
 
 /**
- * Single dev-mode opt-out flag for Takosumi self-host.
+ * Single dev-mode opt-out flag for local Takosumi development.
  *
  * Replaces the historical trio of `*_ALLOW_PLAINTEXT_SECRETS` /
  * `*_ALLOW_UNENCRYPTED_DB` / `*_ALLOW_UNSAFE_DEFAULTS` flags with one

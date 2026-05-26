@@ -67,7 +67,7 @@ const TABS: readonly Tab[] = [
   {
     key: "deploy",
     label: "3. deploy 先を切り替える",
-    subtitle: "cloud でも 自宅 VM でも",
+    subtitle: "cloud でも VM でも cluster でも",
     manifest: () => (
       <>
         <span class="c"># provider を 1 行差し替えるだけ</span>
@@ -77,16 +77,17 @@ const TABS: readonly Tab[] = [
         <span class="c">{" ".repeat(2)}✓ deployed to Cloudflare Workers</span>
         {"\n"}
         {"\n"}
-        <span class="k">$</span> takosumi deploy my-home --provider selfhost
+        <span class="k">$</span>{" "}
+        takosumi deploy my-home --provider docker-compose
         {"\n"}
-        <span class="c">{" ".repeat(2)}✓ deployed to your docker host</span>
+        <span class="c">{" ".repeat(2)}✓ deployed to an operator VM</span>
       </>
     ),
     output: () => (
       <>
         <span class="c">同じ Space が、 同じ manifest で。</span>
         {"\n"}
-        <span class="c">cloud に出しても、 自宅 VM に戻しても、</span>
+        <span class="c">cloud に出しても、 VM や cluster に戻しても、</span>
         {"\n"}
         <span class="c">中身は変わらない。 引っ越せる。</span>
       </>
@@ -104,8 +105,10 @@ export default function Showcase() {
         <span class="eyebrow">how it works</span>
         <h2>Space を 1 つ作ると、 必要なもの 全部 揃う。</h2>
         <p class="lede">
-          Space を作る → 自分の app を 1 つ足す → deploy 先を選ぶ。 3 step、
-          同じ <code>.takosumi.yml</code> が cloud でも 自宅 VM でも 動きます。
+          Space を作る → 自分の app を 1 つ足す → deploy 先を選ぶ。3 step、 同じ
+          {" "}
+          <code>.takosumi.yml</code>{" "}
+          が cloud でも VM でも cluster でも動きます。
         </p>
         <div class="showcase">
           <div class="showcase-tabs" role="tablist">

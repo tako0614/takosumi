@@ -6,7 +6,7 @@ JSON-LD descriptors publish descriptor/type/catalog metadata; runtime behavior l
 
 The catalog descriptors are Takosumi official type catalog material. Provider adapters and gateway-side helpers are reference kernel implementation helpers. Operators using the reference kernel can attach provider adapters as a **plain array** to `createPaaSApp({ kindAliases, plugins: [...] })` — the Vite plugin pattern in that implementation. Each adapter returns a `KernelPlugin` that declares the kind URI(s) it provides.
 
-This package itself ships **no cloud SDK code**. Cloud-backed reference `KernelPlugin` factories live in six independent provider packages (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`), each importable on its own. The official catalog descriptors stay descriptor/helper-only and cloud-provider-neutral. The published descriptor identities under `https://takosumi.com/kinds/v1/*` are Takosumi official type catalog entries; the provider adapters are reference implementation wiring.
+This package itself ships **no cloud SDK code**. Cloud-backed reference `KernelPlugin` factories live in provider packages (`@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy}-providers`), and external adapter bindings live in individually importable `@takos/takosumi-plugin-<kind>-<backend>` packages. The official catalog descriptors stay descriptor/helper-only and provider-neutral. The published descriptor identities under `https://takosumi.com/kinds/v1/*` are Takosumi official type catalog entries; the provider adapters are reference implementation wiring.
 
 ## Reference Kernel Example
 
@@ -57,16 +57,21 @@ listen:
 
 ## Reference provider adapters
 
-cloud-backed reference provider adapter は **独立 JSR package** として publish される。各 package は paper-thin な lifecycle client を提供し、 cloud SDK code / credential / 副作用は **runtime-agent** の背後に住む。
+reference provider / adapter は **独立 JSR package** として publish される。各 package は paper-thin な lifecycle client を提供し、 cloud SDK code / credential / 副作用は **runtime-agent** または operator-owned external system の背後に住む。
 
-| Package                                 | Cloud / runtime                                   |
-| --------------------------------------- | ------------------------------------------------- |
-| `@takos/takosumi-cloudflare-providers`  | Cloudflare (Workers / R2 / DNS)                   |
-| `@takos/takosumi-aws-providers`         | AWS (Fargate / S3 / RDS / Route53)                |
-| `@takos/takosumi-gcp-providers`         | GCP (Cloud Run / GCS / Cloud SQL / Cloud DNS)     |
-| `@takos/takosumi-kubernetes-providers`  | Kubernetes Deployment + Service                   |
-| `@takos/takosumi-deno-deploy-providers` | Deno Deploy                                       |
-| `@takos/takosumi-selfhost-providers`    | Self-host (docker / systemd / filesystem / minio) |
+| Package                                             | Cloud / runtime                               |
+| --------------------------------------------------- | --------------------------------------------- |
+| `@takos/takosumi-cloudflare-providers`              | Cloudflare (Workers / R2 / DNS)               |
+| `@takos/takosumi-aws-providers`                     | AWS (Fargate / S3 / RDS / Route53)            |
+| `@takos/takosumi-gcp-providers`                     | GCP (Cloud Run / GCS / Cloud SQL / Cloud DNS) |
+| `@takos/takosumi-kubernetes-providers`              | Kubernetes Deployment + Service               |
+| `@takos/takosumi-deno-deploy-providers`             | Deno Deploy                                   |
+| `@takos/takosumi-plugin-web-service-docker-compose` | Docker Compose web-service adapter            |
+| `@takos/takosumi-plugin-web-service-systemd`        | systemd web-service adapter                   |
+| `@takos/takosumi-plugin-object-store-minio`         | MinIO object-store adapter                    |
+| `@takos/takosumi-plugin-object-store-filesystem`    | filesystem object-store adapter               |
+| `@takos/takosumi-plugin-postgres-docker`            | Docker Postgres adapter                       |
+| `@takos/takosumi-plugin-gateway-coredns`            | CoreDNS gateway adapter                       |
 
 reference provider id root は `@takos/<cloud>-<service>` を使う (= `@takos/aws-s3`, `@takos/cloudflare-r2`, `@takos/gcp-cloud-run` 等)。 operator distribution は自分の provider IDs と validation policy を持てます。
 

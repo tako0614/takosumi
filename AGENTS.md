@@ -1,6 +1,6 @@
 # AGENTS.md — Takosumi
 
-This repository is **Takosumi**, a self-hostable PaaS. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the type contract, the PaaS kernel, the official type catalog helpers, the runtime-agent, the canonical installer, the CLI, and six per-cloud provider packages as co-equal workspace members, all consumable from JSR.
+This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the type contract, the PaaS kernel, the official type catalog helpers, the runtime-agent, the canonical installer, the CLI, grouped provider packages, and individually publishable external adapter packages as co-equal workspace members, all consumable from JSR.
 
 **Spec status (= Wave L AppSpec apiVersion group prefix removal 完遂、 2026-05-20、 Wave K AppSpec root envelope minimization 2026-05-20 / Wave J Component contract minimization 2026-05-19 の延長)**: Takosumi の AppSpec contract は完全 kind-agnostic な単一 spec で閉じている。 AppSpec root は `{ apiVersion, metadata, components }` の 3 field、 Component は `{ kind, spec, publish, listen }` の 4 field のみ。 `apiVersion` は bare `"v1"` 固定 (Wave L 以降 k8s 風 group prefix `takosumi.dev/` は redundant な vestige として削除済、 Takosumi parser は `.takosumi.yml` のみ扱う)。 `apiVersion: v1` 単独で schema を discriminate するため、旧 `kind: App` root field は Wave K で物理削除済 (= 入力に `kind:` を root に含む YAML は unknown-key として reject)。内部 Component の `kind:` field (= component type discriminator) は当然 keep。kind の意味は operator-injected `kindAliases`、descriptor metadata、 Space policy、operator implementation binding が与える。5-endpoint installer API は AppSpec / source / apply request を運ぶ transport であり、kind semantics の定義元ではない。6 別 cloud provider package と operator-attached `KernelPlugin` は reference kernel の implementation binding 例。旧 `use:` edge、placeholder syntax、中間 manifest compile 形式、 workflow-reference field、publisher-trust scheme、 external publication special-case、 Wave J で削除した **Component.routes / AppSpec.interfaces / AppSpec.permissions**、 Wave K で削除した **AppSpec root の `kind: App` field**、そして Wave L で削除した **`apiVersion` の `takosumi.dev/` group prefix** は全て物理削除済。 routes / launch endpoint / capability request は kind の open `spec:` 内、component `publish` / `listen`、または external publication で表現する (= 「底は自由」原則: 実装層の convention は spec contract の外)。Takosumi official type catalog の descriptor documents は `packages/plugins/spec/kinds/` に保存され、 `https://takosumi.com/kinds/v1/*` で publish される。operator はその catalog を採用してもよいし、自分の catalog を採用してもよい。production deployable (= bare core と full-feature 両 smoke green、kernel pipeline は routes を処理しない)。これ以降の spec 変更は CHANGELOG / RFC ベースの個別 evolution として扱う。
 
@@ -18,12 +18,12 @@ takosumi/
 │   ├── installer/            @takos/takosumi-installer      — .takosumi.yml parser + git fetch + deploy client
 │   ├── runtime-agent/        @takos/takosumi-runtime-agent  — operator-internal reference execution / connector host
 │   ├── cli/                  @takos/takosumi-cli            — `takosumi install` / `takosumi deploy` / `takosumi server` 等
+│   ├── plugin-*/             @takos/takosumi-plugin-<kind>-<backend> — external adapter `KernelPlugin` factories
 │   ├── cloudflare-providers/ @takos/takosumi-cloudflare-providers   — Cloudflare 用 KernelPlugin factories
 │   ├── aws-providers/        @takos/takosumi-aws-providers          — AWS 用 KernelPlugin factories
 │   ├── gcp-providers/        @takos/takosumi-gcp-providers          — GCP 用 KernelPlugin factories
 │   ├── kubernetes-providers/ @takos/takosumi-kubernetes-providers   — Kubernetes 用 KernelPlugin factory
 │   ├── deno-deploy-providers/@takos/takosumi-deno-deploy-providers  — Deno Deploy 用 KernelPlugin factory
-│   ├── selfhost-providers/   @takos/takosumi-selfhost-providers     — Self-host (docker / systemd / filesystem) 用 KernelPlugin factories
 │   └── all/                  @takos/takosumi                — umbrella (上記 6 つを re-export、cloud provider 群は別 install)
 ├── docs/, deploy/, fixtures/
 └── README.md, CONVENTIONS.md, CHANGELOG.md
@@ -74,7 +74,7 @@ Wave J / K / L の minimization sequence を継承し、Wave N は component kin
 - **Takos 中立**: takos-git / Takos 固有 service ID への直接依存は kernel core から完全に除去済み。
 - **Component kind は外部定義**: 新 kind は任意 domain の URI + descriptor metadata + implementation binding で成立する (`CONVENTIONS.md` §6)。 Takosumi official type catalog は reusable descriptor documents を JSON-LD で公開する。Takosumi が `https://takosumi.com/kinds/v1/<name>` で publish する `worker` / `postgres` / `object-store` / `gateway` は official catalog の descriptor URI。short alias は operator が `kindAliases` で opt-in した場合だけ解決される。OIDC は component kind ではなく、Takosumi Accounts が `operator.identity.oidc` external publication path に publish する account-plane material として扱う。
 - **Reference implementation binding = operator-attached KernelPlugin**: reference kernel では kind 実装を `KernelPlugin` factory を返す plain array (= Vite plugin pattern, cloud provider package が提供する形式) として attach する。互換実装は同じ kind URI を別 registry / controller / adapter へ bind してよい。
-- **Cloud provider reference bindings は別 package**: AWS / GCP / Cloudflare / Kubernetes / Deno Deploy / Self-host の provider implementation は `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers` に分離して publish する。 takosumi core (kernel / plugins / cli) は cloud SDK に依存しない。 operator は必要な provider package を import して reference kernel の `plugins: [...]` に attach する。
+- **Provider / adapter reference bindings は別 package**: AWS / GCP / Cloudflare / Kubernetes / Deno Deploy の provider implementation は `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy}-providers` に分離し、Docker Compose / systemd / MinIO / filesystem / Docker Postgres / CoreDNS のような外部入口 adapter は `@takos/takosumi-plugin-<kind>-<backend>` として publish する。takosumi core (kernel / plugins / cli) は cloud SDK や host-specific SDK に依存しない。operator は必要な package を import して reference kernel の `plugins: [...]` に attach する。
 - **credential は operator/runtime-agent 側**: cloud credential / SDK code は runtime-agent host または operator host 側に置き、kernel には `kindAliases` と provider `plugins` だけを渡す。
 - **identity / billing は account-plane 側**: per-Installation OIDC client 発行は Takosumi Accounts (operator-owned identity plane) の責務。 Takosumi Accounts は `operator.identity.oidc` external publication path に OIDC client material を publish し、 worker は `listen: { oidc: { from: operator.identity.oidc, as: secret-env, required: true } }` で標準 env (`OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URIS`) を受け取る。sensitive value は secretRef-mediated projection として扱う。
 - **implementation binding loading は operator import**: ecosystem trust model は OIDC ID token issuance / signing と opaque install launch token issuance を **Takosumi Accounts** が所有する。reference kernel では provider binding を Vite と同じく operator distribution が TypeScript module として import し、 `createPaaSApp({ plugins })` に attach する。package の取得・検証は operator policy で扱う。詳細は [docs/reference/supply-chain-trust.md](./docs/reference/supply-chain-trust.md)。
@@ -84,27 +84,32 @@ Wave J / K / L の minimization sequence を継承し、Wave N は component kin
 
 > package version は per-package deno.json と同期する pre-1.0 値で運用する。 public concepts は AppSpec / Installation / Deployment であり、public HTTP contract は Installer API 5 endpoint。「ecosystem 一律 1.0 GA」は宣言しない。
 
-| Package                                 | Version | 内容                                                                                      |
-| --------------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
-| `@takos/takosumi-contract`              | 2.6.0   | public AppSpec / Installer API DTOs; reference/internal APIs live under explicit subpaths |
-| `@takos/takosumi-kernel`                | 0.14.0  | HTTP server + installer pipeline + storage + workers                                      |
-| `@takos/takosumi-plugins`               | 0.12.0  | official catalog helpers + reference adapter helpers                                      |
-| `@takos/takosumi-installer`             | 0.1.0   | .takosumi.yml parser + git fetch + deploy client                                          |
-| `@takos/takosumi-runtime-agent`         | 0.7.0   | kernel ↔ tenant gateway-manifest runtime                                                  |
-| `@takos/takosumi-cli`                   | 0.15.0  | CLI (`takosumi install` / `takosumi deploy` 等)                                           |
-| `@takos/takosumi-cloudflare-providers`  | 0.1.0   | Cloudflare (Workers / R2 / DNS) `KernelPlugin` factories                                  |
-| `@takos/takosumi-aws-providers`         | 0.1.0   | AWS (Fargate / S3 / RDS / Route53) `KernelPlugin` factories                               |
-| `@takos/takosumi-gcp-providers`         | 0.1.0   | GCP (Cloud Run / GCS / Cloud SQL) `KernelPlugin` factories                                |
-| `@takos/takosumi-kubernetes-providers`  | 0.1.0   | Kubernetes Deployment + Service `KernelPlugin` factory                                    |
-| `@takos/takosumi-deno-deploy-providers` | 0.1.0   | Deno Deploy `KernelPlugin` factory                                                        |
-| `@takos/takosumi-selfhost-providers`    | 0.1.0   | Self-host (docker / systemd / filesystem / minio) factories                               |
-| `@takos/takosumi`                       | 0.17.0  | umbrella (core 6 つを再公開、 provider packages は別 install)                             |
+| Package                                             | Version | 内容                                                                                      |
+| --------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `@takos/takosumi-contract`                          | 2.6.0   | public AppSpec / Installer API DTOs; reference/internal APIs live under explicit subpaths |
+| `@takos/takosumi-kernel`                            | 0.14.0  | HTTP server + installer pipeline + storage + workers                                      |
+| `@takos/takosumi-plugins`                           | 0.12.0  | official catalog helpers + reference adapter helpers                                      |
+| `@takos/takosumi-installer`                         | 0.1.0   | .takosumi.yml parser + git fetch + deploy client                                          |
+| `@takos/takosumi-runtime-agent`                     | 0.7.0   | kernel ↔ tenant gateway-manifest runtime                                                  |
+| `@takos/takosumi-cli`                               | 0.15.0  | CLI (`takosumi install` / `takosumi deploy` 等)                                           |
+| `@takos/takosumi-plugin-web-service-docker-compose` | 0.1.0   | Docker Compose `web-service` `KernelPlugin` factory                                       |
+| `@takos/takosumi-plugin-web-service-systemd`        | 0.1.0   | systemd `web-service` `KernelPlugin` factory                                              |
+| `@takos/takosumi-plugin-object-store-minio`         | 0.1.0   | MinIO `object-store` `KernelPlugin` factory                                               |
+| `@takos/takosumi-plugin-object-store-filesystem`    | 0.1.0   | filesystem `object-store` `KernelPlugin` factory                                          |
+| `@takos/takosumi-plugin-postgres-docker`            | 0.1.0   | Docker `postgres` `KernelPlugin` factory                                                  |
+| `@takos/takosumi-plugin-gateway-coredns`            | 0.1.0   | CoreDNS `gateway` `KernelPlugin` factory                                                  |
+| `@takos/takosumi-cloudflare-providers`              | 0.1.0   | Cloudflare (Workers / R2 / DNS) `KernelPlugin` factories                                  |
+| `@takos/takosumi-aws-providers`                     | 0.1.0   | AWS (Fargate / S3 / RDS / Route53) `KernelPlugin` factories                               |
+| `@takos/takosumi-gcp-providers`                     | 0.1.0   | GCP (Cloud Run / GCS / Cloud SQL) `KernelPlugin` factories                                |
+| `@takos/takosumi-kubernetes-providers`              | 0.1.0   | Kubernetes Deployment + Service `KernelPlugin` factory                                    |
+| `@takos/takosumi-deno-deploy-providers`             | 0.1.0   | Deno Deploy `KernelPlugin` factory                                                        |
+| `@takos/takosumi`                                   | 0.17.0  | umbrella (core 6 つを再公開、 provider packages は別 install)                             |
 
 > Wave J Component contract minimization は contract surface 削減 (= routes / interfaces / permissions 削除) のため breaking だが、策定中 phase なので version bump は次回 publish 直前に collective minor bump として行う (= 現状 deno.json の version は固定維持、 contract / kernel / plugins / cli / all の minor bump を Wave J 完了の announcement 時に同時実施予定)。
 
 > Note: `@takos/` JSR scope は current package distribution の publish scope であり、 authority は publisher ではなく contract (`@takos/takosumi-contract`) の側にある。 contract-compatible な alternative publisher (例: `@example/takosumi-kernel`) は spec 上可能。
 
-## Self-host 起点
+## Local / Remote 起点
 
 ```bash
 # kernel server を起動
@@ -132,9 +137,8 @@ takosumi install --remote https://kernel.example.com \
 ## 依存関係
 
 - **Upstream**: `@takos/takosumi-contract` (型契約のみ、本 workspace の `packages/contract/`)
-- **Downstream consumers**: 任意の operator が JSR から install して self-host
-- **Cloud provider packages**: `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,
-  deno-deploy,selfhost}-providers` は本 repo の workspace member であり、各々独立 JSR package として publish される。 operator は必要な cloud だけを import する。
+- **Downstream consumers**: 任意の operator が JSR から install して自分の account-plane / runtime / external systems に接続する
+- **Provider / adapter packages**: `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy}-providers` と `@takos/takosumi-plugin-<kind>-<backend>` は本 repo の workspace member であり、各々独立 JSR package として publish される。operator は必要な package だけを import する。
 - **Takosumi Accounts (`takosumi-cloud/`)**: identity / billing / OIDC issuer / Installation ledger を保有する operator account plane の reference 実装。 Takosumi Accounts が `operator.identity.oidc` external publication path に OIDC client material を publish し、 worker は `listen` で受け取る。public AppSpec に `oidc` component kind はない。
 - **Takos ecosystem**: Takos product distribution は本 repo の上に Takos 固有 deploy package (deploy/distributions/*.json 等) を被せる。これは `takos/` に残る別レイヤー。
 

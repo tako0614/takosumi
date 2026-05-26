@@ -22,7 +22,7 @@ function newProvider() {
 
 Deno.test("local-docker provider declares postgres@v1", () => {
   const { provider } = newProvider();
-  assert.equal(provider.id, "@takos/selfhost-postgres");
+  assert.equal(provider.id, "@takos/docker-postgres");
   assert.deepEqual(provider.implements, {
     id: "postgres",
     version: "v1",

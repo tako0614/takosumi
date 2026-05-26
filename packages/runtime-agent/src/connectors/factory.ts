@@ -1,9 +1,9 @@
 /**
- * `buildConnectorRegistry` — wires per-cloud / selfhost connectors into a
+ * `buildConnectorRegistry` — wires per-cloud and local/external adapter connectors into a
  * `ConnectorRegistry` based on operator-supplied credentials.
  *
  * Empty `opts` returns a registry containing only the always-available
- * selfhost connectors (filesystem rooted at `/var/lib/takosumi/objects`,
+ * local adapter connectors (filesystem rooted at `/var/lib/takosumi/objects`,
  * docker-compose / systemd / minio / coredns-local with default endpoints,
  * local-docker postgres).
  */
@@ -24,12 +24,12 @@ import { CloudflareWorkersConnector } from "./cloudflare/workers.ts";
 import { DenoDeployWorkersConnector } from "./deno_deploy/workers.ts";
 import { AzureContainerAppsConnector } from "./azure/container_apps.ts";
 import { K3sDeploymentConnector } from "./kubernetes/k3s_deployment.ts";
-import { CorednsLocalConnector } from "./selfhost/coredns_local.ts";
-import { DockerComposeConnector } from "./selfhost/docker_compose.ts";
-import { FilesystemConnector } from "./selfhost/filesystem.ts";
-import { LocalDockerPostgresConnector } from "./selfhost/local_docker_postgres.ts";
-import { MinioConnector } from "./selfhost/minio.ts";
-import { SystemdUnitConnector } from "./selfhost/systemd_unit.ts";
+import { CorednsLocalConnector } from "./external/coredns_local.ts";
+import { DockerComposeConnector } from "./external/docker_compose.ts";
+import { FilesystemConnector } from "./external/filesystem.ts";
+import { LocalDockerPostgresConnector } from "./external/local_docker_postgres.ts";
+import { MinioConnector } from "./external/minio.ts";
+import { SystemdUnitConnector } from "./external/systemd_unit.ts";
 import {
   type ConnectorResilienceOptions,
   withConnectorResilience,
@@ -81,7 +81,7 @@ export interface ConnectorBootOptions {
     readonly namespace?: string;
     readonly clusterDomain?: string;
   };
-  readonly selfhost?: {
+  readonly localAdapters?: {
     readonly filesystemRoot?: string;
     readonly dockerHostBinding?: string;
     readonly systemdUnitDir?: string;
@@ -269,46 +269,49 @@ export function buildConnectorRegistry(
     );
   }
 
-  // Selfhost connectors are always registered with reasonable defaults.
+  // Local adapter connectors are always registered with reasonable defaults.
   registerConnector(
     reg,
     new FilesystemConnector({
-      rootDir: opts.selfhost?.filesystemRoot ?? "/var/lib/takosumi/objects",
+      rootDir: opts.localAdapters?.filesystemRoot ??
+        "/var/lib/takosumi/objects",
     }),
     opts.resilience,
   );
   registerConnector(
     reg,
     new DockerComposeConnector({
-      hostBinding: opts.selfhost?.dockerHostBinding,
+      hostBinding: opts.localAdapters?.dockerHostBinding,
     }),
     opts.resilience,
   );
   registerConnector(
     reg,
     new SystemdUnitConnector({
-      unitDir: opts.selfhost?.systemdUnitDir,
+      unitDir: opts.localAdapters?.systemdUnitDir,
     }),
     opts.resilience,
   );
   registerConnector(
     reg,
     new MinioConnector({
-      endpoint: opts.selfhost?.minioEndpoint ?? "http://minio.local:9000",
+      endpoint: opts.localAdapters?.minioEndpoint ??
+        "http://minio.local:9000",
     }),
     opts.resilience,
   );
   registerConnector(
     reg,
     new CorednsLocalConnector({
-      zoneFile: opts.selfhost?.corednsZoneFile ?? "/etc/coredns/Corefile",
+      zoneFile: opts.localAdapters?.corednsZoneFile ??
+        "/etc/coredns/Corefile",
     }),
     opts.resilience,
   );
   registerConnector(
     reg,
     new LocalDockerPostgresConnector({
-      hostBinding: opts.selfhost?.postgresHostBinding,
+      hostBinding: opts.localAdapters?.postgresHostBinding,
     }),
     opts.resilience,
   );

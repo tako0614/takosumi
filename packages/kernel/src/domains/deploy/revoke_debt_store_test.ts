@@ -18,7 +18,7 @@ Deno.test("InMemoryRevokeDebtStore enqueues one open debt per source tuple", asy
     journalEntryId: "operation:one",
     operationId: "operation:one",
     resourceName: "logs",
-    providerId: "@takos/selfhost-filesystem",
+    providerId: "@takos/filesystem-object-store",
     now: "2026-05-02T00:00:00.000Z",
   };
 
@@ -37,7 +37,7 @@ Deno.test("InMemoryRevokeDebtStore enqueues one open debt per source tuple", asy
   assert.equal(first.originatingSpaceId, "space:one");
   assert.equal(first.reason, "activation-rollback");
   assert.equal(first.resourceName, "logs");
-  assert.equal(first.providerId, "@takos/selfhost-filesystem");
+  assert.equal(first.providerId, "@takos/filesystem-object-store");
 
   const byDeployment = await store.listByDeployment("space:one", "app");
   assert.equal(byDeployment.length, 1);

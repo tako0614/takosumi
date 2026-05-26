@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { CorednsLocalConnector } from "../../src/connectors/selfhost/coredns_local.ts";
+import { CorednsLocalConnector } from "../../src/connectors/external/coredns_local.ts";
 
 Deno.test("CorednsLocalConnector.verify returns ok when corefile exists", async () => {
   const dir = await Deno.makeTempDir({ prefix: "coredns-verify-" });
@@ -36,7 +36,7 @@ Deno.test("CorednsLocalConnector.apply appends record to zone file", async () =>
     const connector = new CorednsLocalConnector({ zoneFile });
     const res = await connector.apply({
       shape: "gateway@v1",
-      provider: "@takos/selfhost-coredns",
+      provider: "@takos/coredns-gateway",
       spaceId: "space_test",
       resourceName: "rs",
       spec: gatewaySpec("app.example.com", "10.0.0.5"),

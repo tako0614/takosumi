@@ -9,7 +9,7 @@ Deno.test("kernel startup diagnostics reference current docs", async () => {
 
   for (
     const docPath of [
-      "docs/operator/self-host.md",
+      "docs/operator/operator-managed.md",
       "docs/reference/secret-partitions.md",
       "docs/reference/env-vars.md",
       "docs/reference/audit-events.md",

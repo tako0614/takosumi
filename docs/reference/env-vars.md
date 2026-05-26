@@ -116,18 +116,18 @@ Reference kernel が 3 segment 以上の `listen.from` を operator account-plan
 
 runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `GOOGLE_APPLICATION_CREDENTIALS`、`CLOUDFLARE_API_TOKEN`、`AZURE_*` などの provider-specific env は runtime-agent host または provider package 側で読み、 kernel host には置きません。
 
-| Variable                                    | Type   | Default           | Required             | 説明                             |
-| ------------------------------------------- | ------ | ----------------- | -------------------- | -------------------------------- |
-| `TAKOSUMI_AGENT_TOKEN`                      | secret | random when unset | remote topology      | runtime-agent HTTP bearer。      |
-| `TAKOSUMI_KUBERNETES_API_SERVER_URL`        | URL    | unset             | Kubernetes connector | k8s API server URL。             |
-| `TAKOSUMI_KUBERNETES_BEARER_TOKEN`          | secret | unset             | Kubernetes connector | k8s bearer token。               |
-| `TAKOSUMI_KUBERNETES_NAMESPACE`             | string | `takosumi`        | no                   | k8s namespace。                  |
-| `TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT`     | path   | unset             | no                   | filesystem object-store root。   |
-| `TAKOSUMI_SELFHOSTED_DOCKER_SOCKET`         | path   | unset             | no                   | docker socket path。             |
-| `TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR`      | path   | unset             | no                   | systemd unit directory。         |
-| `TAKOSUMI_SELFHOSTED_OBJECT_STORE_ENDPOINT` | URL    | unset             | no                   | MinIO / S3-compatible endpoint。 |
-| `TAKOSUMI_SELFHOSTED_COREDNS_FILE`          | path   | unset             | no                   | CoreDNS config path。            |
-| `TAKOSUMI_SELFHOSTED_POSTGRES_HOST`         | string | unset             | no                   | self-hosted Postgres host。      |
+| Variable                                       | Type   | Default           | Required             | 説明                             |
+| ---------------------------------------------- | ------ | ----------------- | -------------------- | -------------------------------- |
+| `TAKOSUMI_AGENT_TOKEN`                         | secret | random when unset | remote topology      | runtime-agent HTTP bearer。      |
+| `TAKOSUMI_KUBERNETES_API_SERVER_URL`           | URL    | unset             | Kubernetes connector | k8s API server URL。             |
+| `TAKOSUMI_KUBERNETES_BEARER_TOKEN`             | secret | unset             | Kubernetes connector | k8s bearer token。               |
+| `TAKOSUMI_KUBERNETES_NAMESPACE`                | string | `takosumi`        | no                   | k8s namespace。                  |
+| `TAKOSUMI_LOCAL_ADAPTER_OBJECT_STORE_ROOT`     | path   | unset             | no                   | filesystem object-store root。   |
+| `TAKOSUMI_LOCAL_ADAPTER_DOCKER_SOCKET`         | path   | unset             | no                   | docker socket path。             |
+| `TAKOSUMI_LOCAL_ADAPTER_SYSTEMD_UNIT_DIR`      | path   | unset             | no                   | systemd unit directory。         |
+| `TAKOSUMI_LOCAL_ADAPTER_OBJECT_STORE_ENDPOINT` | URL    | unset             | no                   | MinIO / S3-compatible endpoint。 |
+| `TAKOSUMI_LOCAL_ADAPTER_COREDNS_FILE`          | path   | unset             | no                   | CoreDNS config path。            |
+| `TAKOSUMI_LOCAL_ADAPTER_POSTGRES_HOST`         | string | unset             | no                   | Docker Postgres host。           |
 
 ## Binding Config
 
@@ -136,7 +136,7 @@ An operator using the reference kernel passes the kind alias map and reference a
 ## 関連ページ
 
 - [Operator Bootstrap](../operator/bootstrap.md)
-- [セルフホスト運用](../operator/self-host.md)
+- [Operator-managed 運用](../operator/operator-managed.md)
 - [asset Policy](./data-asset-policy.md)
 - [Secret Partitions](./secret-partitions.md)
 - [Telemetry / Metrics](./telemetry-metrics.md)

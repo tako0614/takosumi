@@ -94,17 +94,17 @@ const ALL_PROVIDER_IDS = [
   "@takos/cloudflare-dns",
   "@takos/cloudflare-r2",
   "@takos/cloudflare-workers",
+  "@takos/coredns-gateway",
+  "@takos/docker-compose-web-service",
+  "@takos/docker-postgres",
+  "@takos/filesystem-object-store",
   "@takos/gcp-cloud-dns",
   "@takos/gcp-cloud-run",
   "@takos/gcp-cloud-sql",
   "@takos/gcp-gcs",
   "@takos/kubernetes-deployment",
-  "@takos/selfhost-coredns",
-  "@takos/selfhost-docker-compose",
-  "@takos/selfhost-filesystem",
-  "@takos/selfhost-minio",
-  "@takos/selfhost-postgres",
-  "@takos/selfhost-systemd",
+  "@takos/minio-object-store",
+  "@takos/systemd-web-service",
 ];
 
 Deno.test("default opts returns the full reference set of providers", () => {
@@ -138,30 +138,30 @@ Deno.test("disabling a cloud strips its providers from the registry", () => {
   });
   const ids = providers.map((p) => p.id).sort();
   assert.deepEqual(ids, [
-    "@takos/selfhost-coredns",
-    "@takos/selfhost-docker-compose",
-    "@takos/selfhost-filesystem",
-    "@takos/selfhost-minio",
-    "@takos/selfhost-postgres",
-    "@takos/selfhost-systemd",
+    "@takos/coredns-gateway",
+    "@takos/docker-compose-web-service",
+    "@takos/docker-postgres",
+    "@takos/filesystem-object-store",
+    "@takos/minio-object-store",
+    "@takos/systemd-web-service",
   ]);
 });
 
-Deno.test("disabling selfhost leaves only cloud providers", () => {
+Deno.test("disabling local adapters leaves only cloud providers", () => {
   const providers = createTakosumiProductionProviders({
     agentUrl: "http://agent.test",
     token: "t",
-    enableSelfhost: false,
+    enableLocalAdapters: false,
   });
   const ids = new Set(providers.map((p) => p.id));
   for (
     const sh of [
-      "@takos/selfhost-filesystem",
-      "@takos/selfhost-minio",
-      "@takos/selfhost-docker-compose",
-      "@takos/selfhost-systemd",
-      "@takos/selfhost-postgres",
-      "@takos/selfhost-coredns",
+      "@takos/filesystem-object-store",
+      "@takos/minio-object-store",
+      "@takos/docker-compose-web-service",
+      "@takos/systemd-web-service",
+      "@takos/docker-postgres",
+      "@takos/coredns-gateway",
     ]
   ) {
     assert.ok(!ids.has(sh), `${sh} should be disabled`);
@@ -375,7 +375,7 @@ Deno.test("status maps missing -> deleted", async () => {
     token: "t",
     fetch: fetchImpl,
   });
-  const fs = providers.find((p) => p.id === "@takos/selfhost-filesystem")!;
+  const fs = providers.find((p) => p.id === "@takos/filesystem-object-store")!;
   const status = await fs.status("bucket-1", ctx);
   assert.equal(status.kind, "deleted");
 });

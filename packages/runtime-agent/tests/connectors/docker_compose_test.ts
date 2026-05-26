@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { DockerComposeConnector } from "../../src/connectors/selfhost/docker_compose.ts";
+import { DockerComposeConnector } from "../../src/connectors/external/docker_compose.ts";
 
 interface CapturedCommand {
   readonly cmd: string;
@@ -65,7 +65,7 @@ Deno.test("DockerComposeConnector.apply runs `docker run` with image + port mapp
   const connector = new DockerComposeConnector({ command });
   const res = await connector.apply({
     shape: "web-service@v1",
-    provider: "@takos/selfhost-docker-compose",
+    provider: "@takos/docker-compose-web-service",
     spaceId: "space_test",
     resourceName: "rs",
     spec: {
@@ -102,7 +102,7 @@ Deno.test("DockerComposeConnector.apply retries on port-allocation collision", a
   const connector = new DockerComposeConnector({ command });
   const res = await connector.apply({
     shape: "web-service@v1",
-    provider: "@takos/selfhost-docker-compose",
+    provider: "@takos/docker-compose-web-service",
     spaceId: "space_test",
     resourceName: "rs",
     spec: { image: "registry/app:1", port: 8080 },
@@ -134,7 +134,7 @@ Deno.test("DockerComposeConnector.apply treats same container-name conflict as i
   const connector = new DockerComposeConnector({ command });
   const res = await connector.apply({
     shape: "web-service@v1",
-    provider: "@takos/selfhost-docker-compose",
+    provider: "@takos/docker-compose-web-service",
     spaceId: "space_test",
     resourceName: "rs",
     spec: { image: "registry/app:1", port: 8080 },
@@ -155,7 +155,7 @@ Deno.test("DockerComposeConnector.apply throws on non-port docker errors without
     () =>
       connector.apply({
         shape: "web-service@v1",
-        provider: "@takos/selfhost-docker-compose",
+        provider: "@takos/docker-compose-web-service",
         spaceId: "space_test",
         resourceName: "rs",
         spec: { image: "registry/app:1", port: 8080 },
@@ -170,14 +170,14 @@ Deno.test("DockerComposeConnector.destroy runs `docker rm -f`", async () => {
   const connector = new DockerComposeConnector({ command });
   await connector.apply({
     shape: "web-service@v1",
-    provider: "@takos/selfhost-docker-compose",
+    provider: "@takos/docker-compose-web-service",
     spaceId: "space_test",
     resourceName: "rs",
     spec: { image: "registry/app:1", port: 8080 },
   }, {});
   const res = await connector.destroy({
     shape: "web-service@v1",
-    provider: "@takos/selfhost-docker-compose",
+    provider: "@takos/docker-compose-web-service",
     spaceId: "space_test",
     handle: "app",
   }, {});
@@ -202,7 +202,7 @@ Deno.test("DockerComposeConnector.describe queries `docker inspect` and reports 
   const connector = new DockerComposeConnector({ command });
   const res = await connector.describe({
     shape: "web-service@v1",
-    provider: "@takos/selfhost-docker-compose",
+    provider: "@takos/docker-compose-web-service",
     spaceId: "space_test",
     handle: "app",
   }, {});
@@ -222,7 +222,7 @@ Deno.test("DockerComposeConnector.describe returns missing when docker inspect e
   const connector = new DockerComposeConnector({ command });
   const res = await connector.describe({
     shape: "web-service@v1",
-    provider: "@takos/selfhost-docker-compose",
+    provider: "@takos/docker-compose-web-service",
     spaceId: "space_test",
     handle: "app",
   }, {});
@@ -238,7 +238,7 @@ Deno.test("DockerComposeConnector.describe returns missing when container is not
   const connector = new DockerComposeConnector({ command });
   const res = await connector.describe({
     shape: "web-service@v1",
-    provider: "@takos/selfhost-docker-compose",
+    provider: "@takos/docker-compose-web-service",
     spaceId: "space_test",
     handle: "app",
   }, {});
@@ -257,7 +257,7 @@ Deno.test("DockerComposeConnector.describe survives without prior apply (restart
   const connector = new DockerComposeConnector({ command });
   const res = await connector.describe({
     shape: "web-service@v1",
-    provider: "@takos/selfhost-docker-compose",
+    provider: "@takos/docker-compose-web-service",
     spaceId: "space_test",
     handle: "previously-deployed",
   }, {});

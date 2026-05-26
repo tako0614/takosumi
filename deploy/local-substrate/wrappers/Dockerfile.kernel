@@ -2,7 +2,7 @@
 #
 # Base: denoland/deno (matches what the kernel expects at runtime).
 # Adds: docker CLI + compose plugin so the embedded runtime-agent's
-# selfhost-docker-compose connector can spawn `docker compose` against
+# Docker Compose connector can spawn `docker compose` against
 # the host docker socket mounted at /var/run/docker.sock.
 #
 # Source mounts: handled by docker compose; the wrapper script and the

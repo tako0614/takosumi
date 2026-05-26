@@ -4,7 +4,7 @@ This directory documents the Kubernetes surface as **operator-owned scope**: the
 
 ## Why no reference Helm chart
 
-The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/selfhosted/`) cover the substrate-neutrality claim at spec level. Kubernetes is an operator-owned target: operators deploy the kernel image (from `deploy/selfhosted/Dockerfile.kernel`) and the runtime-agent image (from `deploy/selfhosted/Dockerfile.runtime-agent`) using their existing GitOps / Helm / kustomize tooling, then attach the Kubernetes provider factory from `@takos/takosumi-kubernetes-providers` plus matching runtime-agent credentials.
+The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. Kubernetes is an operator-owned target: operators deploy the kernel image (from `deploy/single-host/Dockerfile.kernel`) and the runtime-agent image (from `deploy/single-host/Dockerfile.runtime-agent`) using their existing GitOps / Helm / kustomize tooling, then attach the Kubernetes provider factory from `@takos/takosumi-kubernetes-providers` plus matching runtime-agent credentials.
 
 ## Required runtime shape
 
@@ -41,4 +41,4 @@ kubectl exec -it takosumi-smoke -- curl http://localhost:8788/healthz
 
 ## Substrate-neutral references
 
-The kernel and runtime-agent images in `deploy/selfhosted/` are substrate-neutral and ready to run on any Kubernetes distribution. The kernel reads env via the `RuntimeAdapter`; cluster configuration stays runtime-neutral. The image base is the Deno runtime today, or a Node image once the Node bundle path is wired through CI.
+The kernel and runtime-agent images in `deploy/single-host/` are substrate-neutral and ready to run on any Kubernetes distribution. The kernel reads env via the `RuntimeAdapter`; cluster configuration stays runtime-neutral. The image base is the Deno runtime today, or a Node image once the Node bundle path is wired through CI.

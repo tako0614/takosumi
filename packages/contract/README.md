@@ -93,7 +93,7 @@ await createPaaSApp({
 });
 ```
 
-Cloud and self-host provider packages are optional imports for the reference kernel. Operators choose an implementation set for each distribution.
+Provider and external adapter packages are optional imports for the reference kernel. Operators choose an implementation set for each distribution.
 
 ## Reference Runtime-Agent Lifecycle
 

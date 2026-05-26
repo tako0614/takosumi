@@ -8,17 +8,17 @@ export default function Hero() {
       <div class="container hero-grid">
         <div class="hero-copy">
           <span class="eyebrow">
-            墨 · open source · self-hostable · for everyone
+            墨 · open source · operator-owned · for everyone
           </span>
           <h1>
-            <span class="hero-line">全部、 ひとつに。</span>
-            <span class="hero-line grad-text">全部、 自分のサーバーに。</span>
+            <span class="hero-line">全部、 ひとつの入口で。</span>
+            <span class="hero-line grad-text">全部、 選んだ実行先に。</span>
             <span class="hero-line">誰でも、 含めて。</span>
           </h1>
           <p class="lede">
             chat も、 docs も、 agent も、 SNS も、 自分の DB も —— 1 つの{" "}
-            Takosumi の上で、 自分の host に。 cloud でも、 自宅の docker でも、
-            同じ Space が動きます。
+            Takosumi の上で。cloud でも、VM でも、cluster でも、同じ Space
+            が動きます。
           </p>
           <div class="cta-row">
             <a
@@ -49,10 +49,12 @@ export default function Hero() {
             <span class="c">{" ".repeat(2)}✓ files (object-store)</span>
             {"\n"}
             <span class="c">
-              {" ".repeat(2)}↳ on Cloudflare / on docker / on bare metal
+              {" ".repeat(2)}↳ on Cloudflare / AWS / docker / k8s
             </span>
             {"\n"}
-            <span class="c">{" ".repeat(4)}— same Space, your host.</span>
+            <span class="c">
+              {" ".repeat(4)}— same Space, operator-owned runtime.
+            </span>
           </CodeBlock>
         </div>
       </div>

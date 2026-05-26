@@ -109,13 +109,21 @@ function detectFromEnv(
       namespace: env.TAKOSUMI_KUBERNETES_NAMESPACE ?? "takosumi",
     }
     : undefined;
-  const selfhost = {
-    filesystemRoot: env.TAKOSUMI_SELFHOSTED_OBJECT_STORE_ROOT,
-    dockerSocket: env.TAKOSUMI_SELFHOSTED_DOCKER_SOCKET,
-    systemdUnitDir: env.TAKOSUMI_SELFHOSTED_SYSTEMD_UNIT_DIR,
-    minioEndpoint: env.TAKOSUMI_SELFHOSTED_OBJECT_STORE_ENDPOINT,
-    corednsFile: env.TAKOSUMI_SELFHOSTED_COREDNS_FILE,
-    postgresHost: env.TAKOSUMI_SELFHOSTED_POSTGRES_HOST,
+  const localAdapters = {
+    filesystemRoot: env.TAKOSUMI_LOCAL_ADAPTER_OBJECT_STORE_ROOT,
+    dockerHostBinding: env.TAKOSUMI_LOCAL_ADAPTER_DOCKER_HOST_BINDING,
+    systemdUnitDir: env.TAKOSUMI_LOCAL_ADAPTER_SYSTEMD_UNIT_DIR,
+    minioEndpoint: env.TAKOSUMI_LOCAL_ADAPTER_OBJECT_STORE_ENDPOINT,
+    corednsZoneFile: env.TAKOSUMI_LOCAL_ADAPTER_COREDNS_FILE,
+    postgresHostBinding: env.TAKOSUMI_LOCAL_ADAPTER_POSTGRES_HOST,
   };
-  return { aws, gcp, cloudflare, denoDeploy, azure, kubernetes, selfhost };
+  return {
+    aws,
+    gcp,
+    cloudflare,
+    denoDeploy,
+    azure,
+    kubernetes,
+    localAdapters,
+  };
 }

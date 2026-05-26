@@ -164,21 +164,21 @@ Deno.test("recordsFromAppliedResources copies shape from manifest", () => {
   const records = recordsFromAppliedResources(
     [{
       name: "logs",
-      providerId: "@takos/selfhost-filesystem",
+      providerId: "@takos/filesystem-object-store",
       handle: "h_1",
       outputs: { ok: true },
     }],
     [{
       shape: "object-store@v1",
       name: "logs",
-      provider: "@takos/selfhost-filesystem",
+      provider: "@takos/filesystem-object-store",
       spec: {},
     }],
     NOW_1,
   );
   assert.equal(records.length, 1);
   assert.equal(records[0].shape, "object-store@v1");
-  assert.equal(records[0].providerId, "@takos/selfhost-filesystem");
+  assert.equal(records[0].providerId, "@takos/filesystem-object-store");
   assert.equal(records[0].handle, "h_1");
   assert.equal(records[0].appliedAt, NOW_1);
 });
