@@ -13,6 +13,7 @@ import {
   type OfficialOutputMaterialByType,
   validateOfficialOutputMaterial,
   validateOfficialOutputMaterialMapping,
+  validateOfficialOutputMaterialMappingOutputTypes,
 } from "./type-catalog.ts";
 
 Deno.test("type catalog guards pin official names", () => {
@@ -291,6 +292,84 @@ Deno.test("type catalog accepts valid official material mapping samples", () => 
       clientSecretRef: { secretRef: "$outputs.clientSecretRef" },
     }),
     [],
+  );
+});
+
+Deno.test("type catalog checks output marker types in material mappings", () => {
+  assert.deepEqual(
+    validateOfficialOutputMaterialMappingOutputTypes(
+      "http-endpoint",
+      {
+        targets: [{
+          url: "$outputs.url",
+          port: "$outputs.port",
+        }],
+        endpoints: [{
+          url: "$outputs.publicUrl",
+          primary: "$outputs.primary",
+          routes: "$outputs.routes",
+        }],
+      },
+      [
+        { name: "url", type: "string" },
+        { name: "port", type: "integer" },
+        { name: "publicUrl", type: "string" },
+        { name: "primary", type: "boolean" },
+        { name: "routes", type: "object[]" },
+      ],
+    ),
+    [],
+  );
+
+  assert.deepEqual(
+    validateOfficialOutputMaterialMappingOutputTypes(
+      "service-binding",
+      {
+        protocol: "postgresql",
+        host: "$outputs.host",
+        port: "$outputs.host",
+        passwordRef: { secretRef: "$outputs.missingSecretRef" },
+      },
+      [
+        { name: "host", type: "string" },
+      ],
+    ),
+    [
+      {
+        path: "$.port",
+        message:
+          "$outputs.host has output type string, expected number or integer",
+      },
+      {
+        path: "$.passwordRef.secretRef",
+        message: "$outputs.missingSecretRef is not declared in outputs[]",
+      },
+    ],
+  );
+
+  assert.deepEqual(
+    validateOfficialOutputMaterialMappingOutputTypes(
+      "object-store",
+      {
+        bucket: "$outputs.bucket",
+        pathStyle: "$outputs.bucket",
+        policyRefs: "$outputs.policy",
+      },
+      [
+        { name: "bucket", type: "string" },
+        { name: "policy", type: "string" },
+      ],
+    ),
+    [
+      {
+        path: "$.pathStyle",
+        message: "$outputs.bucket has output type string, expected boolean",
+      },
+      {
+        path: "$.policyRefs",
+        message: "$outputs.policy has output type string, expected string[]",
+      },
+    ],
   );
 });
 

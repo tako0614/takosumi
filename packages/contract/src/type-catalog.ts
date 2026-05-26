@@ -160,6 +160,11 @@ export interface CatalogValidationIssue {
   readonly message: string;
 }
 
+export interface OutputFieldTypeDefinition {
+  readonly name: string;
+  readonly type: string;
+}
+
 const OUTPUT_TYPE_SET = new Set<string>(OFFICIAL_OUTPUT_TYPE_NAMES);
 const PROJECTION_FAMILY_SET = new Set<string>(PROJECTION_FAMILY_NAMES);
 const ACCESS_MODE_SET = new Set<string>(ACCESS_MODES);
@@ -618,6 +623,21 @@ export function validateOfficialOutputMaterialMapping(
   return issues;
 }
 
+export function validateOfficialOutputMaterialMappingOutputTypes(
+  type: OfficialOutputTypeName,
+  value: unknown,
+  outputs: readonly OutputFieldTypeDefinition[],
+): readonly CatalogValidationIssue[] {
+  const issues: CatalogValidationIssue[] = [];
+  const outputTypes = new Map(outputs.map((output) => [
+    output.name,
+    output.type,
+  ]));
+
+  collectOutputMappingMarkerUses(type, value, "$", outputTypes, issues);
+  return issues;
+}
+
 export function isOutputMappingMarker(value: unknown): value is string {
   return typeof value === "string" &&
     value.startsWith("$outputs.") &&
@@ -633,6 +653,269 @@ export function isOutputMaterialMappingValue(value: unknown): boolean {
   if (typeof value === "number") return Number.isFinite(value);
   return typeof value === "boolean";
 }
+
+type ExpectedOutputMarkerType =
+  | "string"
+  | "number"
+  | "boolean"
+  | "string-array"
+  | "object-array";
+
+function collectOutputMappingMarkerUses(
+  outputType: OfficialOutputTypeName,
+  value: unknown,
+  path: string,
+  outputTypes: ReadonlyMap<string, string>,
+  issues: CatalogValidationIssue[],
+): void {
+  if (isOutputMappingMarker(value)) {
+    const name = value.slice("$outputs.".length);
+    const actualType = outputTypes.get(name);
+    const expectedType = expectedOutputMarkerType(outputType, path);
+
+    if (actualType === undefined) {
+      issues.push({
+        path,
+        message: `${value} is not declared in outputs[]`,
+      });
+      return;
+    }
+    if (expectedType === undefined) {
+      issues.push({
+        path,
+        message: `${value} is not valid at this material mapping path`,
+      });
+      return;
+    }
+    if (!isCompatibleOutputMarkerType(expectedType, actualType)) {
+      issues.push({
+        path,
+        message: `${value} has output type ${actualType}, expected ${
+          formatExpectedOutputMarkerType(expectedType)
+        }`,
+      });
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectOutputMappingMarkerUses(
+        outputType,
+        entry,
+        `${path}[]`,
+        outputTypes,
+        issues,
+      );
+    }
+    return;
+  }
+
+  if (isRecord(value)) {
+    for (const [key, entry] of Object.entries(value)) {
+      collectOutputMappingMarkerUses(
+        outputType,
+        entry,
+        `${path}.${key}`,
+        outputTypes,
+        issues,
+      );
+    }
+  }
+}
+
+function expectedOutputMarkerType(
+  outputType: OfficialOutputTypeName,
+  path: string,
+): ExpectedOutputMarkerType | undefined {
+  switch (outputType) {
+    case "http-endpoint":
+      return expectedHttpEndpointMarkerType(path);
+    case "service-binding":
+      return expectedServiceBindingMarkerType(path);
+    case "object-store":
+      return expectedObjectStoreMarkerType(path);
+    case "event-channel":
+      return expectedEventChannelMarkerType(path);
+    case "identity.oidc@v1":
+      return expectedIdentityOidcMarkerType(path);
+    case "billing.port@v1":
+      return expectedBillingPortMarkerType(path);
+  }
+}
+
+function expectedHttpEndpointMarkerType(
+  path: string,
+): ExpectedOutputMarkerType | undefined {
+  if (
+    path === "$.targets" || path === "$.endpoints" ||
+    path === "$.endpoints[].routes"
+  ) {
+    return "object-array";
+  }
+  if (path === "$.targets[].port") return "number";
+  if (path === "$.endpoints[].primary") return "boolean";
+  if (
+    HTTP_ENDPOINT_STRING_MARKER_PATHS.has(path) ||
+    path === "$.endpoints[].routes[].pathPrefix" ||
+    path === "$.endpoints[].routes[].to"
+  ) {
+    return "string";
+  }
+}
+
+function expectedServiceBindingMarkerType(
+  path: string,
+): ExpectedOutputMarkerType | undefined {
+  if (path === "$.port") return "number";
+  if (
+    SERVICE_BINDING_STRING_MARKER_PATHS.has(path) ||
+    path === "$.passwordRef.secretRef" ||
+    path === "$.tokenRef.secretRef" ||
+    /^\$\.tokenRefs\..+\.secretRef$/.test(path)
+  ) {
+    return "string";
+  }
+}
+
+function expectedObjectStoreMarkerType(
+  path: string,
+): ExpectedOutputMarkerType | undefined {
+  if (path === "$.pathStyle") return "boolean";
+  if (path === "$.policyRefs") return "string-array";
+  if (path === "$.policyRefs[]") return "string";
+  if (
+    OBJECT_STORE_STRING_MARKER_PATHS.has(path) ||
+    path === "$.accessKeyIdRef.secretRef" ||
+    path === "$.secretAccessKeyRef.secretRef" ||
+    path === "$.sessionTokenRef.secretRef"
+  ) {
+    return "string";
+  }
+}
+
+function expectedEventChannelMarkerType(
+  path: string,
+): ExpectedOutputMarkerType | undefined {
+  if (path === "$.deliveryPolicyRefs") return "string-array";
+  if (path === "$.deliveryPolicyRefs[]") return "string";
+  if (
+    EVENT_CHANNEL_STRING_MARKER_PATHS.has(path) ||
+    path === "$.producerCredentialRef.secretRef" ||
+    path === "$.consumerCredentialRef.secretRef"
+  ) {
+    return "string";
+  }
+}
+
+function expectedIdentityOidcMarkerType(
+  path: string,
+): ExpectedOutputMarkerType | undefined {
+  if (
+    IDENTITY_OIDC_STRING_MARKER_PATHS.has(path) ||
+    path === "$.clientSecretRef.secretRef"
+  ) {
+    return "string";
+  }
+}
+
+function expectedBillingPortMarkerType(
+  path: string,
+): ExpectedOutputMarkerType | undefined {
+  if (
+    BILLING_PORT_STRING_MARKER_PATHS.has(path) ||
+    path === "$.meteringCredentialRef.secretRef"
+  ) {
+    return "string";
+  }
+}
+
+function isCompatibleOutputMarkerType(
+  expected: ExpectedOutputMarkerType,
+  actual: string,
+): boolean {
+  switch (expected) {
+    case "string":
+      return actual === "string";
+    case "number":
+      return actual === "number" || actual === "integer";
+    case "boolean":
+      return actual === "boolean";
+    case "string-array":
+      return actual === "string[]";
+    case "object-array":
+      return actual === "object[]";
+  }
+}
+
+function formatExpectedOutputMarkerType(
+  expected: ExpectedOutputMarkerType,
+): string {
+  switch (expected) {
+    case "number":
+      return "number or integer";
+    case "string-array":
+      return "string[]";
+    case "object-array":
+      return "object[]";
+    default:
+      return expected;
+  }
+}
+
+const HTTP_ENDPOINT_STRING_MARKER_PATHS = new Set([
+  "$.targets[].name",
+  "$.targets[].url",
+  "$.targets[].protocol",
+  "$.targets[].host",
+  "$.targets[].basePath",
+  "$.targets[].visibility",
+  "$.endpoints[].url",
+  "$.endpoints[].scheme",
+  "$.endpoints[].host",
+  "$.endpoints[].listener",
+  "$.endpoints[].visibility",
+]);
+
+const SERVICE_BINDING_STRING_MARKER_PATHS = new Set([
+  "$.service",
+  "$.protocol",
+  "$.host",
+  "$.database",
+  "$.username",
+  "$.connectionUrl",
+  "$.caCertRef",
+]);
+
+const OBJECT_STORE_STRING_MARKER_PATHS = new Set([
+  "$.bucket",
+  "$.endpoint",
+  "$.region",
+  "$.publicBaseUrl",
+]);
+
+const EVENT_CHANNEL_STRING_MARKER_PATHS = new Set([
+  "$.channel",
+  "$.protocol",
+  "$.endpoint",
+  "$.topic",
+  "$.queue",
+  "$.stream",
+]);
+
+const IDENTITY_OIDC_STRING_MARKER_PATHS = new Set([
+  "$.issuerUrl",
+  "$.discoveryUrl",
+  "$.clientId",
+  "$.redirectOrigin",
+  "$.jwksRef",
+]);
+
+const BILLING_PORT_STRING_MARKER_PATHS = new Set([
+  "$.portalUrl",
+  "$.usageReportEndpoint",
+  "$.billingSubjectRef",
+]);
 
 function isStringMappingValue(value: unknown): boolean {
   return isOutputMappingMarker(value) || isLiteralStringMappingValue(value);

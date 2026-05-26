@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   isOfficialOutputTypeName,
   validateOfficialOutputMaterialMapping,
+  validateOfficialOutputMaterialMappingOutputTypes,
 } from "takosumi-contract/type-catalog";
 
 const PORTABLE_KIND_PACKAGES = [
@@ -24,7 +25,7 @@ Deno.test("portable kind descriptors publish official material mappings", async 
       readonly outputs?: readonly unknown[];
     };
     const label = descriptor.name ?? pkg;
-    const outputNames = declaredOutputNames(descriptor.outputs, label);
+    const outputs = declaredOutputs(descriptor.outputs, label);
     const publications = descriptor.publications;
 
     assert.ok(
@@ -66,24 +67,25 @@ Deno.test("portable kind descriptors publish official material mappings", async 
         `${label}.${name}: exampleMaterialMapping must match official material shape`,
       );
 
-      for (
-        const marker of collectOutputMarkers(publication.exampleMaterialMapping)
-      ) {
-        assert.ok(
-          outputNames.has(marker),
-          `${label}.${name}: ${marker} is not declared in outputs[]`,
-        );
-      }
+      assert.deepEqual(
+        validateOfficialOutputMaterialMappingOutputTypes(
+          contract,
+          publication.exampleMaterialMapping,
+          outputs,
+        ),
+        [],
+        `${label}.${name}: output markers must match declared output types`,
+      );
     }
   }
 });
 
-function declaredOutputNames(
+function declaredOutputs(
   outputs: readonly unknown[] | undefined,
   label: string,
 ) {
   assert.ok(Array.isArray(outputs), `${label}: outputs must be an array`);
-  const names = new Set<string>();
+  const fields: { readonly name: string; readonly type: string }[] = [];
   for (const [index, raw] of outputs.entries()) {
     assert.ok(
       raw && typeof raw === "object" && !Array.isArray(raw),
@@ -93,27 +95,11 @@ function declaredOutputNames(
     if (typeof name !== "string") {
       assert.fail(`${label}.outputs[${index}].name must be a string`);
     }
-    names.add(name);
+    const type = (raw as { readonly type?: unknown }).type;
+    if (typeof type !== "string") {
+      assert.fail(`${label}.outputs[${index}].type must be a string`);
+    }
+    fields.push({ name, type });
   }
-  return names;
-}
-
-function collectOutputMarkers(value: unknown): readonly string[] {
-  const markers: string[] = [];
-  collect(value);
-  return markers;
-
-  function collect(entry: unknown): void {
-    if (typeof entry === "string" && entry.startsWith("$outputs.")) {
-      markers.push(entry.slice("$outputs.".length));
-      return;
-    }
-    if (Array.isArray(entry)) {
-      for (const item of entry) collect(item);
-      return;
-    }
-    if (entry && typeof entry === "object") {
-      for (const item of Object.values(entry)) collect(item);
-    }
-  }
+  return fields;
 }
