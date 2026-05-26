@@ -1,6 +1,6 @@
 # AGENTS.md — Takosumi
 
-This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the contract package, reference kernel, installer, CLI, runtime-agent, portable official kind catalog packages, and the umbrella package published to JSR. Backend-specific native kind plugin packages live in the sibling `takosumi-plugins` repository.
+This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the contract package, reference kernel, installer, CLI, generic runtime-agent host, portable official kind catalog packages, and the umbrella package published to JSR. Backend-specific native kind plugin packages and concrete runtime-agent connectors live in the sibling `takosumi-plugins` repository.
 
 Canonical contract: [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (`packages/contract/`).
 
@@ -37,7 +37,7 @@ takosumi/
 Kind packages are split by ownership:
 
 - Portable kind packages define author-facing shapes: `kind-worker`, `kind-web-service`, `kind-postgres`, `kind-object-store`, `kind-gateway`.
-- Native kind plugin packages bind concrete backends into the reference kernel and live in `../takosumi-plugins`: Cloudflare Workers/R2/DNS, Deno Deploy, AWS Fargate/RDS/S3/Route53, GCP Cloud Run/Cloud SQL/GCS/Cloud DNS, Kubernetes, Docker Compose, systemd, MinIO, filesystem, Docker Postgres, CoreDNS, Cloudflare Containers, and Azure Container Apps.
+- Native kind plugin packages and concrete runtime-agent connectors bind concrete backends into the reference kernel and live in `../takosumi-plugins`: Cloudflare Workers/R2/DNS, Deno Deploy, AWS Fargate/RDS/S3/Route53, GCP Cloud Run/Cloud SQL/GCS/Cloud DNS, Kubernetes, Docker Compose, systemd, MinIO, filesystem, Docker Postgres, CoreDNS, Cloudflare Containers, and Azure Container Apps.
 
 ## Public Concepts
 
@@ -147,7 +147,8 @@ cd packages/kernel && deno task db:migrate:dry-run
 - Keep public contract changes in `packages/contract/` and update docs/tests in the same change.
 - Keep kernel-specific changes in `packages/kernel/`.
 - Add or change portable descriptor behavior in the owning `packages/kind-*` package.
-- Add or change backend-specific native behavior in `../takosumi-plugins/packages/kind-*`.
+- Add or change backend-specific native kind behavior in `../takosumi-plugins/packages/kind-*`.
+- Add or change concrete runtime-agent connectors in `../takosumi-plugins/packages/runtime-agent-connectors/`.
 - Add new official portable catalog descriptors as package-owned JSON-LD under `packages/kind-*/spec/kind.jsonld`.
 - Keep Takos product IDs and Takos-specific services out of Takosumi kernel core.
 - Keep account-plane features in operator distribution docs/code, not in Takosumi core.

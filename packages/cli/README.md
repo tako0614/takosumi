@@ -16,9 +16,9 @@ export TAKOSUMI_DEV_MODE=1
 export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 
-# Boot the stock kernel + embedded runtime-agent on the same machine.
+# Boot the stock kernel + generic embedded runtime-agent on the same machine.
 # This validates AppSpec and records Installation / Deployment metadata.
-# Runtime resources require a bootstrap server with provider bindings.
+# Runtime resources require an operator bootstrap with connector bindings.
 takosumi server --port 8788 &
 
 # Create the AppSpec scaffold and the referenced runtime file.
@@ -43,8 +43,8 @@ takosumi rollback <installation-id> <deployment-id>
 | `takosumi deploy <installation-id> [--source <source>]`             | apply a new Deployment to an Installation                        |
 | `takosumi deploy dry-run <installation-id> [--source <source>]`     | dry-run an Installation update                                   |
 | `takosumi rollback <installation-id> <deployment-id>`               | move current pointer to a retained Deployment                    |
-| `takosumi server [--port] [--no-agent]`                             | boot kernel + embedded agent                                     |
-| `takosumi runtime-agent serve`                                      | standalone agent (multi-host production)                         |
+| `takosumi server [--port] [--no-agent]`                             | boot kernel + generic embedded agent                             |
+| `takosumi runtime-agent serve`                                      | standalone generic agent host                                    |
 | `takosumi runtime-agent list`                                       | show registered connectors on an agent                           |
 | `takosumi runtime-agent verify`                                     | smoke-test connectors (read-only API call per cloud)             |
 | `takosumi artifact push <file> --kind <kind>`                       | optional DataAsset upload                                        |
@@ -78,5 +78,6 @@ See [`docs/getting-started/quickstart.md`](../../docs/getting-started/quickstart
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
 - [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)
+- [`@takos/takosumi-runtime-agent-connectors`](https://jsr.io/@takos/takosumi-runtime-agent-connectors)
 
 > The `@takos/` JSR scope is the reference Takosumi distribution published by Takos. The contract is the authority. Alternative publishers such as `@example/takosumi-cli` can ship compatible CLI implementations; current verification covers the reference distribution.

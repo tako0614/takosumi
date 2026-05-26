@@ -1,9 +1,9 @@
 /**
  * Local-substrate connector factory.
  *
- * Replaces takosumi/packages/runtime-agent/src/connectors/factory.ts's
- * `buildConnectorRegistry` for the local-substrate test bed. The key
- * difference is **import-time deny** of public-DNS providers:
+ * Builds a local-substrate runtime-agent registry from the reference connector
+ * package in /plugins. The key difference from the stock
+ * `buildConnectorRegistry` is **import-time deny** of public-DNS providers:
  *
  *   - `@takos/aws-route53` — NOT imported, NOT registerable
  *   - `@takos/gcp-cloud-dns` — NOT imported, NOT registerable
@@ -19,27 +19,27 @@
  * publish-to-internet surface (DNS) is denied.
  */
 import { ConnectorRegistry } from "/workspace/packages/runtime-agent/src/connectors/connector.ts";
-import { AwsS3Connector } from "/workspace/packages/runtime-agent/src/connectors/aws/s3.ts";
-import { AwsFargateConnector } from "/workspace/packages/runtime-agent/src/connectors/aws/fargate.ts";
-import { AwsRdsConnector } from "/workspace/packages/runtime-agent/src/connectors/aws/rds.ts";
+import { AwsS3Connector } from "/plugins/packages/runtime-agent-connectors/src/connectors/aws/s3.ts";
+import { AwsFargateConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/aws/fargate.ts";
+import { AwsRdsConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/aws/rds.ts";
 // Route53Connector intentionally NOT imported — public DNS deny.
-import { GcpGcsConnector } from "/workspace/packages/runtime-agent/src/connectors/gcp/gcs.ts";
-import { CloudRunConnector } from "/workspace/packages/runtime-agent/src/connectors/gcp/cloud_run.ts";
-import { CloudSqlConnector } from "/workspace/packages/runtime-agent/src/connectors/gcp/cloud_sql.ts";
+import { GcpGcsConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/gcp/gcs.ts";
+import { CloudRunConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/gcp/cloud_run.ts";
+import { CloudSqlConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/gcp/cloud_sql.ts";
 // CloudDnsConnector intentionally NOT imported — public DNS deny.
-import { CloudflareR2Connector } from "/workspace/packages/runtime-agent/src/connectors/cloudflare/r2.ts";
-import { CloudflareContainerConnector } from "/workspace/packages/runtime-agent/src/connectors/cloudflare/container.ts";
-import { CloudflareWorkersConnector } from "/workspace/packages/runtime-agent/src/connectors/cloudflare/workers.ts";
+import { CloudflareR2Connector } from "/plugins/packages/runtime-agent-connectors/src/connectors/cloudflare/r2.ts";
+import { CloudflareContainerConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/cloudflare/container.ts";
+import { CloudflareWorkersConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/cloudflare/workers.ts";
 // CloudflareDnsConnector intentionally NOT imported — public DNS deny.
-import { DenoDeployWorkersConnector } from "/workspace/packages/runtime-agent/src/connectors/deno_deploy/workers.ts";
-import { AzureContainerAppsConnector } from "/workspace/packages/runtime-agent/src/connectors/azure/container_apps.ts";
-import { K3sDeploymentConnector } from "/workspace/packages/runtime-agent/src/connectors/kubernetes/k3s_deployment.ts";
-import { CorednsLocalConnector } from "/workspace/packages/runtime-agent/src/connectors/external/coredns_local.ts";
-import { DockerComposeConnector } from "/workspace/packages/runtime-agent/src/connectors/external/docker_compose.ts";
-import { FilesystemConnector } from "/workspace/packages/runtime-agent/src/connectors/external/filesystem.ts";
-import { LocalDockerPostgresConnector } from "/workspace/packages/runtime-agent/src/connectors/external/local_docker_postgres.ts";
-import { MinioConnector } from "/workspace/packages/runtime-agent/src/connectors/external/minio.ts";
-import { SystemdUnitConnector } from "/workspace/packages/runtime-agent/src/connectors/external/systemd_unit.ts";
+import { DenoDeployWorkersConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/deno_deploy/workers.ts";
+import { AzureContainerAppsConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/azure/container_apps.ts";
+import { K3sDeploymentConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/kubernetes/k3s_deployment.ts";
+import { CorednsLocalConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/external/coredns_local.ts";
+import { DockerComposeConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/external/docker_compose.ts";
+import { FilesystemConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/external/filesystem.ts";
+import { LocalDockerPostgresConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/external/local_docker_postgres.ts";
+import { MinioConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/external/minio.ts";
+import { SystemdUnitConnector } from "/plugins/packages/runtime-agent-connectors/src/connectors/external/systemd_unit.ts";
 
 export function buildLocalSubstrateRegistry(
   env: Record<string, string | undefined>,

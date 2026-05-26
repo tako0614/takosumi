@@ -73,7 +73,8 @@ Capability names are open strings used by operator tooling and dashboards. Concr
 - `takosumi/packages/kind-*/spec/kind.jsonld` — portable package-owned kind descriptors.
 - `takosumi-plugins/packages/kind-*/spec/kind.jsonld` — native package-owned kind descriptors.
 - `takosumi-plugins/packages/kind-*/mod.ts` — native descriptor constants and reference adapter factories.
-- `packages/runtime-agent/src/connectors/` — connector host implementations used by operator distributions.
+- `takosumi/packages/runtime-agent/src/connectors/` — generic `Connector` interface, registry, and resilience wrapper.
+- `takosumi-plugins/packages/runtime-agent-connectors/` — reference concrete connector implementations used by operator distributions.
 
 ## Related pages
 

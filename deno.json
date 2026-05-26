@@ -34,6 +34,8 @@
     "takosumi-installer/yaml-parser": "./packages/installer/src/yaml-parser.ts",
     "takosumi-installer/git-fetch": "./packages/installer/src/git-fetch.ts",
     "takosumi-installer/deploy-client": "./packages/installer/src/deploy-client.ts",
+    "takosumi-runtime-agent/connectors": "./packages/runtime-agent/src/connectors/mod.ts",
+    "takosumi-runtime-agent/prepared-source-reader": "./packages/runtime-agent/src/prepared_source_reader.ts",
     "hono": "npm:hono@^4.12.4",
     "@takos/takosumi-kind-worker": "./packages/kind-worker/mod.ts",
     "@takos/takosumi-kind-web-service": "./packages/kind-web-service/mod.ts",

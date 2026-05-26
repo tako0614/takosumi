@@ -1,6 +1,6 @@
 # Takosumi GCP Kind Runbook
 
-This directory documents the GCP surface as **operator-owned scope**: GCP native kind packages (`takosumi-plugins/packages/kind-gcp-*`) and runtime-agent connectors (`packages/runtime-agent/src/connectors/gcp/`) provide GCP lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Terraform / Pulumi / Deployment Manager that lands the Takosumi kernel image and runtime-agent image on GCP infrastructure) is also the operator's responsibility. Operators provide the production-grade GCP IaC stack for their distribution.
+This directory documents the GCP surface as **operator-owned scope**: GCP native kind packages (`takosumi-plugins/packages/kind-gcp-*`) and runtime-agent connectors (`takosumi-plugins/packages/runtime-agent-connectors/src/connectors/gcp/`) provide GCP lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Terraform / Pulumi / Deployment Manager that lands the Takosumi kernel image and runtime-agent image on GCP infrastructure) is also the operator's responsibility. Operators provide the production-grade GCP IaC stack for their distribution.
 
 ## Why no reference deploy here
 

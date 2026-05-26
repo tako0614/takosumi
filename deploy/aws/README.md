@@ -1,6 +1,6 @@
 # Takosumi AWS Kind Runbook
 
-This directory documents the AWS surface as **operator-owned scope**: AWS native kind packages (`takosumi-plugins/packages/kind-aws-*`) and runtime-agent connectors (`packages/runtime-agent/src/connectors/aws/`) provide AWS lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Terraform / CDK / Pulumi that lands the Takosumi kernel image and runtime-agent image on AWS infrastructure) is also the operator's responsibility. Operators provide the production-grade AWS IaC stack for their distribution.
+This directory documents the AWS surface as **operator-owned scope**: AWS native kind packages (`takosumi-plugins/packages/kind-aws-*`) and runtime-agent connectors (`takosumi-plugins/packages/runtime-agent-connectors/src/connectors/aws/`) provide AWS lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Terraform / CDK / Pulumi that lands the Takosumi kernel image and runtime-agent image on AWS infrastructure) is also the operator's responsibility. Operators provide the production-grade AWS IaC stack for their distribution.
 
 ## Why no reference deploy here
 

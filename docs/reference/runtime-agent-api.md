@@ -196,7 +196,9 @@ interface LifecycleVerifyResult {
 
 ## Connector retry / credential refresh {#connector-retry--credential-refresh}
 
-`buildConnectorRegistry()` は connector の lifecycle operation を共通の resilience wrapper で包みます。 retry 対象は次のみ:
+runtime-agent core は `withConnectorResilience()` を提供します。reference connector package
+(`@takos/takosumi-runtime-agent-connectors`) の `buildConnectorRegistry()` は connector の lifecycle operation をこの
+wrapper で包みます。 retry 対象は次のみ:
 
 - `HTTP 408` / `425` / `429` / `500` / `502` / `503` / `504`
 - `TypeError` / `ECONNRESET` / `ETIMEDOUT` などの network failure
@@ -204,7 +206,9 @@ interface LifecycleVerifyResult {
 
 `HTTP 400` 等の backend validation error、`retryable: false`、permission denied 等の恒久 failure は retry せず。retry は bounded exponential backoff で同じ envelope を再投入します。connector は `idempotencyKey` / backend-native client token / handle-keyed delete で重複 side effect を抑止します。
 
-credential refresh は opt-in。 `ConnectorBootOptions.resilience.refreshCredentials` を渡した場合のみ、 wrapper は `HTTP 401` / expired token を検出して refresh を 1 回呼び、同じ operation を再試行します。 refresh 未設定なら credential error は通常の connector failure として返ります。
+credential refresh は opt-in。 `ConnectorResilienceOptions.refreshCredentials` または reference connector package の
+`ConnectorBootOptions.resilience.refreshCredentials` を渡した場合のみ、 wrapper は `HTTP 401` / expired token を検出して
+refresh を 1 回呼び、同じ operation を再試行します。 refresh 未設定なら credential error は通常の connector failure として返ります。
 
 ## Lifecycle status の状態機械 {#lifecycle-status-state-machine}
 

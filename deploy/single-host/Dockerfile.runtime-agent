@@ -1,10 +1,9 @@
 # Takosumi runtime-agent image — single-host reference distribution.
 #
-# The runtime-agent holds cloud SDK credentials and translates kernel
-# provider calls into actual SDK requests. Each substrate or external
-# adapter family has its own connector tree under
-# packages/runtime-agent/src/connectors/. This image bundles them all
-# and selects via env at boot.
+# The runtime-agent holds credentials and translates kernel lifecycle calls
+# into connector dispatch. This image carries the generic host; operator
+# distributions add concrete connectors from takosumi-plugins or their own
+# package set.
 
 FROM denoland/deno:2.0.0
 WORKDIR /app

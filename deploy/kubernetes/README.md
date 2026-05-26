@@ -1,6 +1,6 @@
 # Takosumi Kubernetes Kind Runbook
 
-This directory documents the Kubernetes surface as **operator-owned scope**: the Kubernetes native kind package (`takosumi-plugins/packages/kind-kubernetes-web-service/`) and runtime-agent connectors (`packages/runtime-agent/src/connectors/kubernetes/`) provide Kubernetes lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Helm chart / kustomize overlay / Argo CD manifests that land the Takosumi kernel image and runtime-agent image on a Kubernetes cluster) is also the operator's responsibility. Operators provide the production-grade Kubernetes deploy artifact for their distribution.
+This directory documents the Kubernetes surface as **operator-owned scope**: the Kubernetes native kind package (`takosumi-plugins/packages/kind-kubernetes-web-service/`) and runtime-agent connectors (`takosumi-plugins/packages/runtime-agent-connectors/src/connectors/kubernetes/`) provide Kubernetes lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Helm chart / kustomize overlay / Argo CD manifests that land the Takosumi kernel image and runtime-agent image on a Kubernetes cluster) is also the operator's responsibility. Operators provide the production-grade Kubernetes deploy artifact for their distribution.
 
 ## Why no reference Helm chart
 

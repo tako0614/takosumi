@@ -6,7 +6,7 @@
     "@takos/takosumi-contract": "jsr:@takos/takosumi-contract@^2.6.0",
     "@takos/takosumi-installer": "jsr:@takos/takosumi-installer@^0.1.0",
     "@takos/takosumi-kernel": "jsr:@takos/takosumi-kernel@^0.14.0",
-    "@takos/takosumi-runtime-agent": "jsr:@takos/takosumi-runtime-agent@^0.7.0",
+    "@takos/takosumi-runtime-agent": "jsr:@takos/takosumi-runtime-agent@^0.8.0",
     "@takos/takosumi-cli": "jsr:@takos/takosumi-cli@^0.15.0",
     "@takos/takosumi-kind-gateway": "jsr:@takos/takosumi-kind-gateway@^0.1.0",
     "@takos/takosumi-kind-object-store": "jsr:@takos/takosumi-kind-object-store@^0.1.0",

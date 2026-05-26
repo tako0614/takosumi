@@ -36,9 +36,12 @@ takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 
 Auth is a single bearer token, shared with the kernel via `TAKOSUMI_AGENT_TOKEN`.
 
-## Reference connector examples
+## Connector packages
 
-The takosumi.com reference runtime-agent ships connector examples for common provider families. A connector is registered when the operator enables it and provides the required env / boot config.
+`@takos/takosumi-runtime-agent` ships the lifecycle HTTP server, dispatcher,
+`ConnectorRegistry`, and resilience wrapper. Concrete backend connectors live
+outside this package in `takosumi-plugins` as
+`@takos/takosumi-runtime-agent-connectors`.
 
 | Group                     | Connectors                                                                                                                                                                           |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -49,7 +52,8 @@ The takosumi.com reference runtime-agent ships connector examples for common pro
 | Deno                      | `@takos/deno-deploy`                                                                                                                                                                 |
 | Local / external adapters | `@takos/filesystem-object-store`, `@takos/minio-object-store`, `@takos/docker-compose-web-service`, `@takos/systemd-web-service`, `@takos/docker-postgres`, `@takos/coredns-gateway` |
 
-External connector examples may use the same lifecycle envelope. For example, `@takos/takosumi-kind-azure-container-apps-web-service` in `takosumi-plugins` implements a native web-service binding outside the portable `web-service` shape.
+Operators can use the reference connector package or provide their own
+connectors that implement the same interface:
 
 Each connector implements:
 
@@ -77,9 +81,14 @@ Source-backed connectors, such as `worker@v1`, read files from `LifecycleApplyRe
 
 `compensate` is the recovery hook for partially applied effects recorded in the kernel WAL. Connectors that can reverse an effect more precisely than handle-keyed deletion should implement it. When the hook is absent, the dispatcher falls back to `destroy`; if cleanup cannot be completed, the response can set `revokeDebtRequired` so the kernel keeps operator-visible cleanup debt.
 
-## Cloud credentials (per connector)
+## Boot wiring
 
-The agent reads env at startup. Set what you need:
+The generic runtime-agent does not auto-load cloud connectors from env. An
+operator-owned boot module reads env or config, constructs a `ConnectorRegistry`,
+and passes it to `serveRuntimeAgent(...)` or `startEmbeddedAgent(...)`.
+
+The reference connector package exposes `buildConnectorRegistry(...)` for
+common provider families. A typical boot module maps env vars to that function:
 
 | Connector group | Env vars                                                                                                  |
 | --------------- | --------------------------------------------------------------------------------------------------------- |
@@ -91,22 +100,31 @@ The agent reads env at startup. Set what you need:
 | Deno Deploy     | `DENO_DEPLOY_ACCESS_TOKEN`, `DENO_DEPLOY_ORGANIZATION_ID`                                                 |
 | Local adapters  | `TAKOSUMI_LOCAL_ADAPTER_OBJECT_STORE_ROOT`, `TAKOSUMI_LOCAL_ADAPTER_SYSTEMD_UNIT_DIR`, etc.               |
 
-A cloud's connectors are skipped (not registered) when its required env vars are missing — operator can `takosumi runtime-agent verify` to confirm which connectors are live.
+Operator can call `takosumi runtime-agent list` or `takosumi runtime-agent
+verify` against the running agent to confirm which connectors are live.
 
 ## Connector resilience
 
-`buildConnectorRegistry()` wraps registered connectors with bounded resilience by default. Transient HTTP statuses (`408`, `425`, `429`, `5xx` allowlist) and network errors are retried with exponential backoff. Provider rejections such as `400` / validation errors fail fast.
+`withConnectorResilience()` wraps registered connectors with bounded resilience. Transient HTTP statuses (`408`, `425`, `429`, `5xx` allowlist) and network errors are retried with exponential backoff. Provider rejections such as `400` / validation errors fail fast.
 
-Operators that can rotate or refresh credentials may pass `ConnectorBootOptions.resilience.refreshCredentials`; the wrapper invokes it before retrying one credential-looking failure such as `HTTP 401` or an expired token error. Pass `resilience: false` to keep raw connector behavior in tests or specialized deployments.
+Operators that can rotate or refresh credentials may pass
+`ConnectorResilienceOptions.refreshCredentials`; the wrapper invokes it before
+retrying one credential-looking failure such as `HTTP 401` or an expired token
+error. The reference connector package's `buildConnectorRegistry(...)` applies
+this wrapper by default unless `resilience: false` is supplied.
 
 ## Implementation note
 
-All cloud REST calls are made via `fetch()` + `crypto.subtle` (Web Crypto). No npm SDK packages are pulled in; SigV4 / OAuth bearer / Service-account JWT signing is internal. This keeps the agent Deno-runtime-pure and the install surface small.
+The reference connectors make cloud REST calls via `fetch()` + `crypto.subtle`
+(Web Crypto). No npm SDK packages are pulled in; SigV4 / OAuth bearer /
+Service-account JWT signing is internal to
+`@takos/takosumi-runtime-agent-connectors`.
 
 ## See also
 
 - [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel) — control plane that talks to this agent
 - [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — runs `takosumi runtime-agent serve`
+- [`@takos/takosumi-runtime-agent-connectors`](https://jsr.io/@takos/takosumi-runtime-agent-connectors) — reference concrete connector package
 - [`@takos/takosumi-contract/reference/runtime-agent-lifecycle`](https://jsr.io/@takos/takosumi-contract/doc/reference/runtime-agent-lifecycle) — defines `LifecycleApplyRequest` etc. for the reference lifecycle envelope.
 
 > The `@takos/` JSR scope is the reference Takosumi distribution published by Takos. The contract is the authority. Contract-compatible publishers such as `@example/takosumi-runtime-agent` can ship their own runtime-agent implementations; current verification covers the reference distribution.

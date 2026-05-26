@@ -179,7 +179,7 @@
           "jsr:@takos/takosumi-kind-postgres@0.1",
           "jsr:@takos/takosumi-kind-web-service@0.1",
           "jsr:@takos/takosumi-kind-worker@0.1",
-          "jsr:@takos/takosumi-runtime-agent@0.7"
+          "jsr:@takos/takosumi-runtime-agent@0.8"
         ]
       },
       "packages/cli": {
@@ -188,7 +188,7 @@
           "jsr:@std/yaml@1",
           "jsr:@takos/takosumi-contract@^2.6.0",
           "jsr:@takos/takosumi-kernel@0.14",
-          "jsr:@takos/takosumi-runtime-agent@0.7"
+          "jsr:@takos/takosumi-runtime-agent@0.8"
         ]
       },
       "packages/installer": {

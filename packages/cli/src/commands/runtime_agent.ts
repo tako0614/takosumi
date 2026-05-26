@@ -15,7 +15,7 @@ function createServeCmd() {
     )
     .option(
       "--env-file <path:file>",
-      "Load extra env vars from a dotenv-style file before building connectors",
+      "Load extra env vars before starting the generic agent",
     )
     .action(async ({ port, hostname, token, envFile }) => {
       if (envFile) {
@@ -74,7 +74,7 @@ function createListCmd() {
       };
       if (body.connectors.length === 0) {
         console.log(
-          "no connectors registered (operator likely missing cloud env vars)",
+          "no connectors registered (operator must pass a registry in their distribution)",
         );
         return;
       }
@@ -153,7 +153,7 @@ function createVerifyCmd() {
       };
       if (body.results.length === 0) {
         console.log(
-          "no connectors registered (operator likely missing cloud env vars)",
+          "no connectors registered (operator must pass a registry in their distribution)",
         );
         return;
       }

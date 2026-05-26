@@ -36,7 +36,7 @@ export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
     },
     {
       name: "@takos/takosumi-runtime-agent",
-      version: "0.7.0",
+      version: "0.8.0",
       directory: "packages/runtime-agent",
     },
     {
