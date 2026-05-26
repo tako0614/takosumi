@@ -163,6 +163,7 @@ export interface CatalogValidationIssue {
 export interface OutputFieldTypeDefinition {
   readonly name: string;
   readonly type: string;
+  readonly required?: boolean;
 }
 
 const OUTPUT_TYPE_SET = new Set<string>(OFFICIAL_OUTPUT_TYPE_NAMES);
@@ -629,12 +630,12 @@ export function validateOfficialOutputMaterialMappingOutputTypes(
   outputs: readonly OutputFieldTypeDefinition[],
 ): readonly CatalogValidationIssue[] {
   const issues: CatalogValidationIssue[] = [];
-  const outputTypes = new Map(outputs.map((output) => [
+  const outputDefinitions = new Map(outputs.map((output) => [
     output.name,
-    output.type,
+    output,
   ]));
 
-  collectOutputMappingMarkerUses(type, value, "$", outputTypes, issues);
+  collectOutputMappingMarkerUses(type, value, "$", outputDefinitions, issues);
   return issues;
 }
 
@@ -665,15 +666,15 @@ function collectOutputMappingMarkerUses(
   outputType: OfficialOutputTypeName,
   value: unknown,
   path: string,
-  outputTypes: ReadonlyMap<string, string>,
+  outputDefinitions: ReadonlyMap<string, OutputFieldTypeDefinition>,
   issues: CatalogValidationIssue[],
 ): void {
   if (isOutputMappingMarker(value)) {
     const name = value.slice("$outputs.".length);
-    const actualType = outputTypes.get(name);
+    const definition = outputDefinitions.get(name);
     const expectedType = expectedOutputMarkerType(outputType, path);
 
-    if (actualType === undefined) {
+    if (definition === undefined) {
       issues.push({
         path,
         message: `${value} is not declared in outputs[]`,
@@ -687,10 +688,16 @@ function collectOutputMappingMarkerUses(
       });
       return;
     }
-    if (!isCompatibleOutputMarkerType(expectedType, actualType)) {
+    if (definition.required !== true) {
       issues.push({
         path,
-        message: `${value} has output type ${actualType}, expected ${
+        message: `${value} must reference a required output`,
+      });
+    }
+    if (!isCompatibleOutputMarkerType(expectedType, definition.type)) {
+      issues.push({
+        path,
+        message: `${value} has output type ${definition.type}, expected ${
           formatExpectedOutputMarkerType(expectedType)
         }`,
       });
@@ -704,7 +711,7 @@ function collectOutputMappingMarkerUses(
         outputType,
         entry,
         `${path}[]`,
-        outputTypes,
+        outputDefinitions,
         issues,
       );
     }
@@ -717,7 +724,7 @@ function collectOutputMappingMarkerUses(
         outputType,
         entry,
         `${path}.${key}`,
-        outputTypes,
+        outputDefinitions,
         issues,
       );
     }

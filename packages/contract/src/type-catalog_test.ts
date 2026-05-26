@@ -311,11 +311,11 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
         }],
       },
       [
-        { name: "url", type: "string" },
-        { name: "port", type: "integer" },
-        { name: "publicUrl", type: "string" },
-        { name: "primary", type: "boolean" },
-        { name: "routes", type: "object[]" },
+        { name: "url", type: "string", required: true },
+        { name: "port", type: "integer", required: true },
+        { name: "publicUrl", type: "string", required: true },
+        { name: "primary", type: "boolean", required: true },
+        { name: "routes", type: "object[]", required: true },
       ],
     ),
     [],
@@ -335,6 +335,14 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
       ],
     ),
     [
+      {
+        path: "$.host",
+        message: "$outputs.host must reference a required output",
+      },
+      {
+        path: "$.port",
+        message: "$outputs.host must reference a required output",
+      },
       {
         path: "$.port",
         message:
@@ -362,8 +370,20 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
     ),
     [
       {
+        path: "$.bucket",
+        message: "$outputs.bucket must reference a required output",
+      },
+      {
+        path: "$.pathStyle",
+        message: "$outputs.bucket must reference a required output",
+      },
+      {
         path: "$.pathStyle",
         message: "$outputs.bucket has output type string, expected boolean",
+      },
+      {
+        path: "$.policyRefs",
+        message: "$outputs.policy must reference a required output",
       },
       {
         path: "$.policyRefs",

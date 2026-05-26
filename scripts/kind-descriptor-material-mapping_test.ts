@@ -85,7 +85,11 @@ function declaredOutputs(
   label: string,
 ) {
   assert.ok(Array.isArray(outputs), `${label}: outputs must be an array`);
-  const fields: { readonly name: string; readonly type: string }[] = [];
+  const fields: {
+    readonly name: string;
+    readonly type: string;
+    readonly required?: boolean;
+  }[] = [];
   for (const [index, raw] of outputs.entries()) {
     assert.ok(
       raw && typeof raw === "object" && !Array.isArray(raw),
@@ -99,7 +103,11 @@ function declaredOutputs(
     if (typeof type !== "string") {
       assert.fail(`${label}.outputs[${index}].type must be a string`);
     }
-    fields.push({ name, type });
+    const required = (raw as { readonly required?: unknown }).required;
+    if (typeof required !== "boolean") {
+      assert.fail(`${label}.outputs[${index}].required must be a boolean`);
+    }
+    fields.push({ name, type, required });
   }
   return fields;
 }
