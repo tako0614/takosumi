@@ -46,6 +46,14 @@ export type WebServiceCapabilityTerm =
 
 export type WebServicePublicationName = "http";
 
+export type WebServicePublicationContract = "http-endpoint";
+
+export interface WebServicePublicationDescriptor {
+  readonly name: WebServicePublicationName;
+  readonly contract: WebServicePublicationContract;
+  readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
+}
+
 export const WEB_SERVICE_CAPABILITY_TERMS: readonly WebServiceCapabilityTerm[] =
   [
     "always-on",
@@ -72,6 +80,25 @@ export const WEB_SERVICE_ALIASES: readonly string[] = [
 export const WEB_SERVICE_PUBLICATIONS: readonly WebServicePublicationName[] = [
   "http",
 ];
+
+export const WEB_SERVICE_PUBLICATION_DESCRIPTORS:
+  readonly WebServicePublicationDescriptor[] = [
+    {
+      name: "http",
+      contract: "http-endpoint",
+      exampleMaterialMapping: {
+        "targets": [
+          {
+            "name": "default",
+            "url": "$outputs.url",
+            "host": "$outputs.internalHost",
+            "port": "$outputs.internalPort",
+            "visibility": "private",
+          },
+        ],
+      },
+    },
+  ];
 // Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
 export const WEB_SERVICE_KIND_SHAPE_ID = "web-service";
 /** @deprecated Use WEB_SERVICE_KIND_URI for AppSpec kind identity, or WEB_SERVICE_KIND_SHAPE_ID for legacy Shape.id. */

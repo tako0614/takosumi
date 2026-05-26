@@ -37,6 +37,14 @@ export type ObjectStoreCapabilityTerm =
 
 export type ObjectStorePublicationName = "bucket";
 
+export type ObjectStorePublicationContract = "object-store";
+
+export interface ObjectStorePublicationDescriptor {
+  readonly name: ObjectStorePublicationName;
+  readonly contract: ObjectStorePublicationContract;
+  readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
+}
+
 export const OBJECT_STORE_CAPABILITY_TERMS:
   readonly ObjectStoreCapabilityTerm[] = [
     "versioning",
@@ -64,6 +72,25 @@ export const OBJECT_STORE_ALIASES: readonly string[] = [
 export const OBJECT_STORE_PUBLICATIONS: readonly ObjectStorePublicationName[] =
   [
     "bucket",
+  ];
+
+export const OBJECT_STORE_PUBLICATION_DESCRIPTORS:
+  readonly ObjectStorePublicationDescriptor[] = [
+    {
+      name: "bucket",
+      contract: "object-store",
+      exampleMaterialMapping: {
+        "bucket": "$outputs.bucket",
+        "endpoint": "$outputs.endpoint",
+        "region": "$outputs.region",
+        "accessKeyIdRef": {
+          "secretRef": "$outputs.accessKeyRef",
+        },
+        "secretAccessKeyRef": {
+          "secretRef": "$outputs.secretKeyRef",
+        },
+      },
+    },
   ];
 // Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
 export const OBJECT_STORE_KIND_SHAPE_ID = "object-store";

@@ -14,6 +14,9 @@
  *   - `<Prefix>Outputs` interface (derived from `outputs` array)
  *   - `<Prefix>CapabilityTerm` string union (derived from `capabilityTerms` array)
  *   - `<Prefix>PublicationName` string union (= local publication names)
+ *   - `<Prefix>PublicationContract` string union (= publication contracts)
+ *   - `<Prefix>PublicationDescriptor` interface and
+ *     `<UPPER>_PUBLICATION_DESCRIPTORS` const array
  *   - `<UPPER>_CAPABILITY_TERMS` / `<UPPER>_OUTPUT_FIELDS` /
  *     `<UPPER>_ALIASES` (referenceAlias suggestions only) /
  *     `<UPPER>_PUBLICATIONS` const arrays
@@ -299,6 +302,21 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   const publicationsArrayLiteral = publicationNames.length === 0
     ? ""
     : publicationNames.map((p) => JSON.stringify(p)).join(",\n  ");
+  const publicationContracts = [
+    ...new Set(
+      publicationNames
+        .map((p) => doc.publications?.[p]?.contract)
+        .filter((contract): contract is string => typeof contract === "string"),
+    ),
+  ];
+  const publicationContractsUnion = publicationContracts.length === 0
+    ? "never"
+    : publicationContracts.map((p) => JSON.stringify(p)).join("\n  | ");
+  const publicationDescriptorsArrayLiteral = publicationNames.length === 0
+    ? ""
+    : publicationNames
+      .map((p) => renderPublicationDescriptor(p, doc.publications?.[p]))
+      .join(",\n  ");
 
   const importLines = renderImports(ctx.imports);
   const nestedBlocks = ctx.nested
@@ -329,6 +347,18 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   );
   parts.push("");
   parts.push(
+    `export type ${target.prefix}PublicationContract =\n  | ${publicationContractsUnion};`,
+  );
+  parts.push("");
+  parts.push(
+    `export interface ${target.prefix}PublicationDescriptor {
+  readonly name: ${publicationsTypeName};
+  readonly contract: ${target.prefix}PublicationContract;
+  readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
+}`,
+  );
+  parts.push("");
+  parts.push(
     `export const ${upper}_CAPABILITY_TERMS: readonly ${capabilityTermTypeName}[] = [\n  ${capabilityArrayLiteral},\n];`,
   );
   parts.push("");
@@ -354,6 +384,16 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   } else {
     parts.push(
       `export const ${upper}_PUBLICATIONS: readonly ${publicationsTypeName}[] = [\n  ${publicationsArrayLiteral},\n];`,
+    );
+  }
+  parts.push("");
+  if (publicationNames.length === 0) {
+    parts.push(
+      `export const ${upper}_PUBLICATION_DESCRIPTORS: readonly ${target.prefix}PublicationDescriptor[] = [];`,
+    );
+  } else {
+    parts.push(
+      `export const ${upper}_PUBLICATION_DESCRIPTORS: readonly ${target.prefix}PublicationDescriptor[] = [\n  ${publicationDescriptorsArrayLiteral},\n];`,
     );
   }
   parts.push(
@@ -389,6 +429,31 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   }
   parts.push("");
   return parts.join("\n");
+}
+
+function renderPublicationDescriptor(
+  name: string,
+  descriptor: PublicationDescriptor | undefined,
+): string {
+  if (!descriptor) {
+    throw new Error(`publication ${name} is missing descriptor metadata`);
+  }
+  const fields = [
+    `name: ${JSON.stringify(name)}`,
+    `contract: ${JSON.stringify(descriptor.contract)}`,
+  ];
+  if (descriptor.exampleMaterialMapping !== undefined) {
+    fields.push(
+      `exampleMaterialMapping: ${
+        renderJsonLiteral(descriptor.exampleMaterialMapping)
+      }`,
+    );
+  }
+  return `{\n    ${fields.join(",\n    ")},\n  }`;
+}
+
+function renderJsonLiteral(value: unknown): string {
+  return JSON.stringify(value, null, 2).replaceAll("\n", "\n    ");
 }
 
 function validateKindDoc(path: string, doc: KindDoc): void {

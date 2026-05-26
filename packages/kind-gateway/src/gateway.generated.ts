@@ -54,6 +54,14 @@ export type GatewayCapabilityTerm =
 
 export type GatewayPublicationName = "public";
 
+export type GatewayPublicationContract = "http-endpoint";
+
+export interface GatewayPublicationDescriptor {
+  readonly name: GatewayPublicationName;
+  readonly contract: GatewayPublicationContract;
+  readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
+}
+
 export const GATEWAY_CAPABILITY_TERMS: readonly GatewayCapabilityTerm[] = [
   "host-routing",
   "path-routing",
@@ -81,6 +89,27 @@ export const GATEWAY_ALIASES: readonly string[] = [
 export const GATEWAY_PUBLICATIONS: readonly GatewayPublicationName[] = [
   "public",
 ];
+
+export const GATEWAY_PUBLICATION_DESCRIPTORS:
+  readonly GatewayPublicationDescriptor[] = [
+    {
+      name: "public",
+      contract: "http-endpoint",
+      exampleMaterialMapping: {
+        "endpoints": [
+          {
+            "url": "$outputs.url",
+            "scheme": "$outputs.scheme",
+            "host": "$outputs.host",
+            "listener": "$outputs.listener",
+            "visibility": "public",
+            "primary": true,
+            "routes": "$outputs.routes",
+          },
+        ],
+      },
+    },
+  ];
 // Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
 export const GATEWAY_KIND_SHAPE_ID = "gateway";
 /** @deprecated Use GATEWAY_KIND_URI for AppSpec kind identity, or GATEWAY_KIND_SHAPE_ID for legacy Shape.id. */

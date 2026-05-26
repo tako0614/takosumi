@@ -25,6 +25,14 @@ export type WorkerCapabilityTerm =
 
 export type WorkerPublicationName = "http";
 
+export type WorkerPublicationContract = "http-endpoint";
+
+export interface WorkerPublicationDescriptor {
+  readonly name: WorkerPublicationName;
+  readonly contract: WorkerPublicationContract;
+  readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
+}
+
 export const WORKER_CAPABILITY_TERMS: readonly WorkerCapabilityTerm[] = [
   "scale-to-zero",
   "long-request",
@@ -45,6 +53,23 @@ export const WORKER_ALIASES: readonly string[] = [
 export const WORKER_PUBLICATIONS: readonly WorkerPublicationName[] = [
   "http",
 ];
+
+export const WORKER_PUBLICATION_DESCRIPTORS:
+  readonly WorkerPublicationDescriptor[] = [
+    {
+      name: "http",
+      contract: "http-endpoint",
+      exampleMaterialMapping: {
+        "targets": [
+          {
+            "name": "default",
+            "url": "$outputs.url",
+            "visibility": "private",
+          },
+        ],
+      },
+    },
+  ];
 // Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
 export const WORKER_KIND_SHAPE_ID = "worker";
 /** @deprecated Use WORKER_KIND_URI for AppSpec kind identity, or WORKER_KIND_SHAPE_ID for legacy Shape.id. */

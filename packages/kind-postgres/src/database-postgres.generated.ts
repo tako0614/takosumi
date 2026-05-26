@@ -43,6 +43,14 @@ export type DatabasePostgresCapabilityTerm =
 
 export type DatabasePostgresPublicationName = "connection";
 
+export type DatabasePostgresPublicationContract = "service-binding";
+
+export interface DatabasePostgresPublicationDescriptor {
+  readonly name: DatabasePostgresPublicationName;
+  readonly contract: DatabasePostgresPublicationContract;
+  readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
+}
+
 export const DATABASE_POSTGRES_CAPABILITY_TERMS:
   readonly DatabasePostgresCapabilityTerm[] = [
     "pitr",
@@ -71,6 +79,26 @@ export const DATABASE_POSTGRES_ALIASES: readonly string[] = [
 export const DATABASE_POSTGRES_PUBLICATIONS:
   readonly DatabasePostgresPublicationName[] = [
     "connection",
+  ];
+
+export const DATABASE_POSTGRES_PUBLICATION_DESCRIPTORS:
+  readonly DatabasePostgresPublicationDescriptor[] = [
+    {
+      name: "connection",
+      contract: "service-binding",
+      exampleMaterialMapping: {
+        "service": "$outputs.host",
+        "protocol": "postgresql",
+        "host": "$outputs.host",
+        "port": "$outputs.port",
+        "database": "$outputs.database",
+        "username": "$outputs.username",
+        "passwordRef": {
+          "secretRef": "$outputs.passwordSecretRef",
+        },
+        "connectionUrl": "$outputs.connectionString",
+      },
+    },
   ];
 // Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
 export const DATABASE_POSTGRES_KIND_SHAPE_ID = "postgres";
