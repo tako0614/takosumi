@@ -21,7 +21,7 @@
     "./internal/rpc": "./src/internal-rpc.ts"
   },
   "tasks": {
-    "check": "bash -lc 'find src -name \"*.ts\" ! -name \"*_test.ts\" -print0 | xargs -0 deno check'",
+    "check": "bash -lc 'find src -name \"*.ts\" -print0 | xargs -0 deno check'",
     "test": "deno test --allow-all"
   }
 }

@@ -281,11 +281,15 @@ export function validateOfficialOutputMaterial(
       ]);
       requireString(value.bucket, "$.bucket", issues);
       requireString(value.endpoint, "$.endpoint", issues);
+      requireAbsoluteUri(value.endpoint, "$.endpoint", issues);
       requireString(value.region, "$.region", issues, { optional: true });
       requireBoolean(value.pathStyle, "$.pathStyle", issues, {
         optional: true,
       });
       requireString(value.publicBaseUrl, "$.publicBaseUrl", issues, {
+        optional: true,
+      });
+      requireHttpUrl(value.publicBaseUrl, "$.publicBaseUrl", issues, {
         optional: true,
       });
       checkStringArray(value.policyRefs, "$.policyRefs", issues);
@@ -354,11 +358,18 @@ export function validateOfficialOutputMaterial(
         "clientSecretRef",
       ]);
       requireString(value.issuerUrl, "$.issuerUrl", issues);
+      requireHttpUrl(value.issuerUrl, "$.issuerUrl", issues);
       requireString(value.discoveryUrl, "$.discoveryUrl", issues, {
+        optional: true,
+      });
+      requireHttpUrl(value.discoveryUrl, "$.discoveryUrl", issues, {
         optional: true,
       });
       requireString(value.clientId, "$.clientId", issues);
       requireString(value.redirectOrigin, "$.redirectOrigin", issues, {
+        optional: true,
+      });
+      requireHttpUrl(value.redirectOrigin, "$.redirectOrigin", issues, {
         optional: true,
       });
       requireString(value.jwksRef, "$.jwksRef", issues, { optional: true });
@@ -380,7 +391,16 @@ export function validateOfficialOutputMaterial(
       requireString(value.portalUrl, "$.portalUrl", issues, {
         optional: true,
       });
+      requireHttpUrl(value.portalUrl, "$.portalUrl", issues, {
+        optional: true,
+      });
       requireString(
+        value.usageReportEndpoint,
+        "$.usageReportEndpoint",
+        issues,
+        { optional: true },
+      );
+      requireHttpUrl(
         value.usageReportEndpoint,
         "$.usageReportEndpoint",
         issues,
@@ -433,18 +453,18 @@ export function validateOfficialOutputMaterialMapping(
         "tokenRef",
         "tokenRefs",
       ]);
-      requireMaterialMappingValue(value.protocol, "$.protocol", issues);
-      requireMaterialMappingValue(value.host, "$.host", issues);
-      requireMaterialMappingValue(value.port, "$.port", issues);
-      checkOptionalMaterialMappingValue(value.service, "$.service", issues);
-      checkOptionalMaterialMappingValue(value.database, "$.database", issues);
-      checkOptionalMaterialMappingValue(value.username, "$.username", issues);
-      checkOptionalMaterialMappingValue(
+      requireStringMappingValue(value.protocol, "$.protocol", issues);
+      requireStringMappingValue(value.host, "$.host", issues);
+      requirePortNumberMappingValue(value.port, "$.port", issues);
+      checkOptionalStringMappingValue(value.service, "$.service", issues);
+      checkOptionalStringMappingValue(value.database, "$.database", issues);
+      checkOptionalStringMappingValue(value.username, "$.username", issues);
+      checkOptionalStringMappingValue(
         value.connectionUrl,
         "$.connectionUrl",
         issues,
       );
-      checkOptionalMaterialMappingValue(value.caCertRef, "$.caCertRef", issues);
+      checkOptionalStringMappingValue(value.caCertRef, "$.caCertRef", issues);
       checkOptionalSecretReferenceMapping(
         value.passwordRef,
         "$.passwordRef",
@@ -465,16 +485,20 @@ export function validateOfficialOutputMaterialMapping(
         "secretAccessKeyRef",
         "sessionTokenRef",
       ]);
-      requireMaterialMappingValue(value.bucket, "$.bucket", issues);
-      requireMaterialMappingValue(value.endpoint, "$.endpoint", issues);
-      checkOptionalMaterialMappingValue(value.region, "$.region", issues);
-      checkOptionalMaterialMappingValue(value.pathStyle, "$.pathStyle", issues);
-      checkOptionalMaterialMappingValue(
+      requireStringMappingValue(value.bucket, "$.bucket", issues);
+      requireAbsoluteUriMappingValue(value.endpoint, "$.endpoint", issues);
+      checkOptionalStringMappingValue(value.region, "$.region", issues);
+      checkOptionalBooleanMappingValue(
+        value.pathStyle,
+        "$.pathStyle",
+        issues,
+      );
+      checkOptionalHttpUrlMappingValue(
         value.publicBaseUrl,
         "$.publicBaseUrl",
         issues,
       );
-      checkOptionalMaterialMappingArray(
+      checkOptionalStringMappingArray(
         value.policyRefs,
         "$.policyRefs",
         issues,
@@ -507,13 +531,13 @@ export function validateOfficialOutputMaterialMapping(
         "producerCredentialRef",
         "consumerCredentialRef",
       ]);
-      requireMaterialMappingValue(value.channel, "$.channel", issues);
-      requireMaterialMappingValue(value.protocol, "$.protocol", issues);
-      checkOptionalMaterialMappingValue(value.endpoint, "$.endpoint", issues);
-      checkOptionalMaterialMappingValue(value.topic, "$.topic", issues);
-      checkOptionalMaterialMappingValue(value.queue, "$.queue", issues);
-      checkOptionalMaterialMappingValue(value.stream, "$.stream", issues);
-      checkOptionalMaterialMappingArray(
+      requireStringMappingValue(value.channel, "$.channel", issues);
+      requireStringMappingValue(value.protocol, "$.protocol", issues);
+      checkOptionalStringMappingValue(value.endpoint, "$.endpoint", issues);
+      checkOptionalStringMappingValue(value.topic, "$.topic", issues);
+      checkOptionalStringMappingValue(value.queue, "$.queue", issues);
+      checkOptionalStringMappingValue(value.stream, "$.stream", issues);
+      checkOptionalStringMappingArray(
         value.deliveryPolicyRefs,
         "$.deliveryPolicyRefs",
         issues,
@@ -538,19 +562,19 @@ export function validateOfficialOutputMaterialMapping(
         "jwksRef",
         "clientSecretRef",
       ]);
-      requireMaterialMappingValue(value.issuerUrl, "$.issuerUrl", issues);
-      requireMaterialMappingValue(value.clientId, "$.clientId", issues);
-      checkOptionalMaterialMappingValue(
+      requireHttpUrlMappingValue(value.issuerUrl, "$.issuerUrl", issues);
+      requireStringMappingValue(value.clientId, "$.clientId", issues);
+      checkOptionalHttpUrlMappingValue(
         value.discoveryUrl,
         "$.discoveryUrl",
         issues,
       );
-      checkOptionalMaterialMappingValue(
+      checkOptionalHttpUrlMappingValue(
         value.redirectOrigin,
         "$.redirectOrigin",
         issues,
       );
-      checkOptionalMaterialMappingValue(value.jwksRef, "$.jwksRef", issues);
+      checkOptionalStringMappingValue(value.jwksRef, "$.jwksRef", issues);
       checkOptionalSecretReferenceMapping(
         value.clientSecretRef,
         "$.clientSecretRef",
@@ -564,13 +588,13 @@ export function validateOfficialOutputMaterialMapping(
         "billingSubjectRef",
         "meteringCredentialRef",
       ]);
-      requireMaterialMappingValue(
+      requireStringMappingValue(
         value.billingSubjectRef,
         "$.billingSubjectRef",
         issues,
       );
-      checkOptionalMaterialMappingValue(value.portalUrl, "$.portalUrl", issues);
-      checkOptionalMaterialMappingValue(
+      checkOptionalHttpUrlMappingValue(value.portalUrl, "$.portalUrl", issues);
+      checkOptionalHttpUrlMappingValue(
         value.usageReportEndpoint,
         "$.usageReportEndpoint",
         issues,
@@ -608,6 +632,25 @@ export function isOutputMaterialMappingValue(value: unknown): boolean {
   }
   if (typeof value === "number") return Number.isFinite(value);
   return typeof value === "boolean";
+}
+
+function isStringMappingValue(value: unknown): boolean {
+  return isOutputMappingMarker(value) || isLiteralStringMappingValue(value);
+}
+
+function isLiteralStringMappingValue(value: unknown): value is string {
+  return typeof value === "string" &&
+    !value.startsWith("$outputs.") &&
+    value.length > 0;
+}
+
+function isNumberMappingValue(value: unknown): boolean {
+  return isOutputMappingMarker(value) ||
+    (typeof value === "number" && Number.isFinite(value));
+}
+
+function isBooleanMappingValue(value: unknown): boolean {
+  return isOutputMappingMarker(value) || typeof value === "boolean";
 }
 
 function checkHttpEndpointMaterialMapping(
@@ -653,21 +696,21 @@ function checkOptionalTargetArrayMapping(
       "basePath",
       "visibility",
     ]);
-    checkOptionalMaterialMappingValue(entry.name, `${itemPath}.name`, issues);
-    checkOptionalMaterialMappingValue(entry.url, `${itemPath}.url`, issues);
-    checkOptionalMaterialMappingValue(
+    checkOptionalIdentifierMappingValue(entry.name, `${itemPath}.name`, issues);
+    checkOptionalHttpUrlMappingValue(entry.url, `${itemPath}.url`, issues);
+    checkOptionalHttpSchemeMappingValue(
       entry.protocol,
       `${itemPath}.protocol`,
       issues,
     );
-    checkOptionalMaterialMappingValue(entry.host, `${itemPath}.host`, issues);
-    checkOptionalMaterialMappingValue(entry.port, `${itemPath}.port`, issues);
-    checkOptionalMaterialMappingValue(
+    checkOptionalStringMappingValue(entry.host, `${itemPath}.host`, issues);
+    checkOptionalPortNumberMappingValue(entry.port, `${itemPath}.port`, issues);
+    checkOptionalPathPrefixMappingValue(
       entry.basePath,
       `${itemPath}.basePath`,
       issues,
     );
-    checkOptionalMaterialMappingValue(
+    checkOptionalEndpointVisibilityMappingValue(
       entry.visibility,
       `${itemPath}.visibility`,
       issues,
@@ -707,24 +750,24 @@ function checkOptionalEndpointArrayMapping(
       "primary",
       "routes",
     ]);
-    requireMaterialMappingValue(entry.url, `${itemPath}.url`, issues);
-    checkOptionalMaterialMappingValue(
+    requireHttpUrlMappingValue(entry.url, `${itemPath}.url`, issues);
+    checkOptionalHttpSchemeMappingValue(
       entry.scheme,
       `${itemPath}.scheme`,
       issues,
     );
-    checkOptionalMaterialMappingValue(entry.host, `${itemPath}.host`, issues);
-    checkOptionalMaterialMappingValue(
+    checkOptionalStringMappingValue(entry.host, `${itemPath}.host`, issues);
+    checkOptionalIdentifierMappingValue(
       entry.listener,
       `${itemPath}.listener`,
       issues,
     );
-    checkOptionalMaterialMappingValue(
+    checkOptionalEndpointVisibilityMappingValue(
       entry.visibility,
       `${itemPath}.visibility`,
       issues,
     );
-    checkOptionalMaterialMappingValue(
+    checkOptionalBooleanMappingValue(
       entry.primary,
       `${itemPath}.primary`,
       issues,
@@ -751,38 +794,178 @@ function checkOptionalRouteArrayMapping(
       continue;
     }
     checkNoUnknownKeys(entry, itemPath, issues, ["pathPrefix", "to"]);
-    requireMaterialMappingValue(
+    requirePathPrefixMappingValue(
       entry.pathPrefix,
       `${itemPath}.pathPrefix`,
       issues,
     );
-    requireMaterialMappingValue(entry.to, `${itemPath}.to`, issues);
+    requireIdentifierMappingValue(entry.to, `${itemPath}.to`, issues);
   }
 }
 
-function requireMaterialMappingValue(
+function requireStringMappingValue(
   value: unknown,
   path: string,
   issues: CatalogValidationIssue[],
 ): void {
-  if (!isOutputMaterialMappingValue(value)) {
+  if (!isStringMappingValue(value)) {
     issues.push({
       path,
-      message: "must be a scalar value or $outputs.<field> marker",
+      message: "must be a string value or $outputs.<field> marker",
     });
   }
 }
 
-function checkOptionalMaterialMappingValue(
+function checkOptionalStringMappingValue(
   value: unknown,
   path: string,
   issues: CatalogValidationIssue[],
 ): void {
   if (value === undefined) return;
-  requireMaterialMappingValue(value, path, issues);
+  requireStringMappingValue(value, path, issues);
 }
 
-function checkOptionalMaterialMappingArray(
+function requireNumberMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (!isNumberMappingValue(value)) {
+    issues.push({
+      path,
+      message: "must be a number value or $outputs.<field> marker",
+    });
+  }
+}
+
+function requirePortNumberMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  requireNumberMappingValue(value, path, issues);
+  if (typeof value === "number") {
+    requirePortNumber(value, path, issues);
+  }
+}
+
+function checkOptionalPortNumberMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  requirePortNumberMappingValue(value, path, issues);
+}
+
+function checkOptionalBooleanMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  if (!isBooleanMappingValue(value)) {
+    issues.push({
+      path,
+      message: "must be a boolean value or $outputs.<field> marker",
+    });
+  }
+}
+
+function requireHttpUrlMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  requireStringMappingValue(value, path, issues);
+  if (isLiteralStringMappingValue(value)) requireHttpUrl(value, path, issues);
+}
+
+function checkOptionalHttpUrlMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  requireHttpUrlMappingValue(value, path, issues);
+}
+
+function requireAbsoluteUriMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  requireStringMappingValue(value, path, issues);
+  if (isLiteralStringMappingValue(value)) {
+    requireAbsoluteUri(value, path, issues);
+  }
+}
+
+function checkOptionalHttpSchemeMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  checkOptionalStringMappingValue(value, path, issues);
+  if (isLiteralStringMappingValue(value)) {
+    requireHttpScheme(value, path, issues);
+  }
+}
+
+function checkOptionalEndpointVisibilityMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  checkOptionalStringMappingValue(value, path, issues);
+  if (isLiteralStringMappingValue(value)) {
+    requireEndpointVisibility(value, path, issues);
+  }
+}
+
+function requirePathPrefixMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  requireStringMappingValue(value, path, issues);
+  if (isLiteralStringMappingValue(value)) {
+    requirePathPrefix(value, path, issues);
+  }
+}
+
+function checkOptionalPathPrefixMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  requirePathPrefixMappingValue(value, path, issues);
+}
+
+function requireIdentifierMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  requireStringMappingValue(value, path, issues);
+  if (isLiteralStringMappingValue(value)) {
+    requireIdentifier(value, path, issues);
+  }
+}
+
+function checkOptionalIdentifierMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  requireIdentifierMappingValue(value, path, issues);
+}
+
+function checkOptionalStringMappingArray(
   value: unknown,
   path: string,
   issues: CatalogValidationIssue[],
@@ -794,7 +977,7 @@ function checkOptionalMaterialMappingArray(
     return;
   }
   for (const [index, entry] of value.entries()) {
-    requireMaterialMappingValue(entry, `${path}[${index}]`, issues);
+    requireStringMappingValue(entry, `${path}[${index}]`, issues);
   }
 }
 
@@ -809,7 +992,7 @@ function checkOptionalSecretReferenceMapping(
     return;
   }
   checkNoUnknownKeys(value, path, issues, ["secretRef"]);
-  requireMaterialMappingValue(value.secretRef, `${path}.secretRef`, issues);
+  requireStringMappingValue(value.secretRef, `${path}.secretRef`, issues);
 }
 
 function checkSecretReferenceRecordMapping(
@@ -1079,6 +1262,21 @@ function requireHttpUrl(
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     issues.push({ path, message: "must use http or https" });
+  }
+}
+
+function requireAbsoluteUri(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+  opts: { readonly optional?: boolean } = {},
+): void {
+  if (value === undefined && opts.optional) return;
+  if (typeof value !== "string") return;
+  try {
+    new URL(value);
+  } catch {
+    issues.push({ path, message: "must be an absolute URI" });
   }
 }
 

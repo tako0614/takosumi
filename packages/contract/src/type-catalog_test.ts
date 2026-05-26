@@ -97,6 +97,25 @@ Deno.test("type catalog accepts valid official material samples", () => {
     validateOfficialOutputMaterial("billing.port@v1", billing),
     [],
   );
+
+  assert.deepEqual(
+    validateOfficialOutputMaterial("event-channel", {
+      channel: "orders",
+      protocol: "cloud-events",
+      endpoint: "https://events.example.test/orders",
+      producerCredentialRef: { secretRef: "secret://events/producer" },
+    }),
+    [],
+  );
+
+  assert.deepEqual(
+    validateOfficialOutputMaterial("identity.oidc@v1", {
+      issuerUrl: "https://accounts.example.test",
+      clientId: "app",
+      clientSecretRef: { secretRef: "secret://oidc/client-secret" },
+    }),
+    [],
+  );
 });
 
 Deno.test("type catalog rejects ambiguous official material", () => {
@@ -130,6 +149,43 @@ Deno.test("type catalog rejects ambiguous official material", () => {
       accessKeyRef: { secretRef: "secret://bucket/access-key" },
     }),
     [{ path: "$.accessKeyRef", message: "unknown field" }],
+  );
+});
+
+Deno.test("type catalog rejects invalid official material URL values", () => {
+  assert.deepEqual(
+    validateOfficialOutputMaterial("object-store", {
+      bucket: "assets",
+      endpoint: "assets",
+      publicBaseUrl: "ftp://assets.example.test",
+    }),
+    [
+      { path: "$.endpoint", message: "must be an absolute URI" },
+      { path: "$.publicBaseUrl", message: "must use http or https" },
+    ],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("identity.oidc@v1", {
+      issuerUrl: "accounts.example.test",
+      discoveryUrl: "ftp://accounts.example.test/.well-known/openid",
+      clientId: "app",
+      redirectOrigin: "/callback",
+    }),
+    [
+      { path: "$.issuerUrl", message: "must be an absolute http(s) URL" },
+      { path: "$.discoveryUrl", message: "must use http or https" },
+      {
+        path: "$.redirectOrigin",
+        message: "must be an absolute http(s) URL",
+      },
+    ],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("billing.port@v1", {
+      billingSubjectRef: "acct_123",
+      portalUrl: "ftp://billing.example.test/session/123",
+    }),
+    [{ path: "$.portalUrl", message: "must use http or https" }],
   );
 });
 
@@ -218,6 +274,24 @@ Deno.test("type catalog accepts valid official material mapping samples", () => 
     }),
     [],
   );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("event-channel", {
+      channel: "$outputs.channel",
+      protocol: "cloud-events",
+      endpoint: "$outputs.endpoint",
+      deliveryPolicyRefs: ["policy://at-least-once"],
+      producerCredentialRef: { secretRef: "$outputs.producerSecretRef" },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("identity.oidc@v1", {
+      issuerUrl: "$outputs.issuerUrl",
+      clientId: "$outputs.clientId",
+      clientSecretRef: { secretRef: "$outputs.clientSecretRef" },
+    }),
+    [],
+  );
 });
 
 Deno.test("type catalog rejects drifted material mapping shapes", () => {
@@ -241,7 +315,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     }),
     [{
       path: "$.port",
-      message: "must be a scalar value or $outputs.<field> marker",
+      message: "must be a number value or $outputs.<field> marker",
     }],
   );
   assert.deepEqual(
@@ -251,5 +325,99 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
       accessKeyRef: { secretRef: "$outputs.secret" },
     }),
     [{ path: "$.accessKeyRef", message: "unknown field" }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("service-binding", {
+      protocol: "postgresql",
+      host: "$outputs.host",
+      port: "5432",
+    }),
+    [{
+      path: "$.port",
+      message: "must be a number value or $outputs.<field> marker",
+    }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("service-binding", {
+      protocol: "postgresql",
+      host: "$outputs.host",
+      port: 70000,
+      passwordRef: { secretRef: 42 },
+    }),
+    [
+      {
+        path: "$.port",
+        message: "must be an integer port from 1 to 65535",
+      },
+      {
+        path: "$.passwordRef.secretRef",
+        message: "must be a string value or $outputs.<field> marker",
+      },
+    ],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("object-store", {
+      bucket: "assets",
+      endpoint: "assets",
+      publicBaseUrl: "ftp://assets.example.test",
+    }),
+    [
+      { path: "$.endpoint", message: "must be an absolute URI" },
+      { path: "$.publicBaseUrl", message: "must use http or https" },
+    ],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("identity.oidc@v1", {
+      issuerUrl: "accounts.example.test",
+      discoveryUrl: "ftp://accounts.example.test/.well-known/openid",
+      clientId: "app",
+      redirectOrigin: "/callback",
+    }),
+    [
+      { path: "$.issuerUrl", message: "must be an absolute http(s) URL" },
+      { path: "$.discoveryUrl", message: "must use http or https" },
+      {
+        path: "$.redirectOrigin",
+        message: "must be an absolute http(s) URL",
+      },
+    ],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("billing.port@v1", {
+      billingSubjectRef: "acct_123",
+      portalUrl: "ftp://billing.example.test/session/123",
+    }),
+    [{ path: "$.portalUrl", message: "must use http or https" }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("http-endpoint", {
+      endpoints: [{
+        url: "https://app.example.test",
+        scheme: "ftp",
+        visibility: "edge",
+        primary: "true",
+        routes: [{ pathPrefix: "api?x=1", to: "app/service" }],
+      }],
+    }),
+    [
+      { path: "$.endpoints[0].scheme", message: 'must be "http" or "https"' },
+      {
+        path: "$.endpoints[0].visibility",
+        message: 'must be "private", "space", "public", or "internal"',
+      },
+      {
+        path: "$.endpoints[0].primary",
+        message: "must be a boolean value or $outputs.<field> marker",
+      },
+      {
+        path: "$.endpoints[0].routes[0].pathPrefix",
+        message: 'must start with "/" and must not contain "?" or "#"',
+      },
+      {
+        path: "$.endpoints[0].routes[0].to",
+        message:
+          "must start with an ASCII letter or digit and contain only ASCII letters, digits, _, ., or -",
+      },
+    ],
   );
 });
