@@ -12,6 +12,7 @@ import {
   type ObjectStoreMaterial,
   type OfficialOutputMaterialByType,
   validateOfficialOutputMaterial,
+  validateOfficialOutputMaterialMapping,
 } from "./type-catalog.ts";
 
 Deno.test("type catalog guards pin official names", () => {
@@ -172,5 +173,83 @@ Deno.test("type catalog rejects invalid http endpoint material values", () => {
           "must start with an ASCII letter or digit and contain only ASCII letters, digits, _, ., or -",
       },
     ],
+  );
+});
+
+Deno.test("type catalog accepts valid official material mapping samples", () => {
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("http-endpoint", {
+      targets: [{
+        name: "default",
+        url: "$outputs.url",
+        visibility: "private",
+      }],
+      endpoints: [{
+        url: "$outputs.publicUrl",
+        scheme: "$outputs.scheme",
+        host: "$outputs.host",
+        listener: "$outputs.listener",
+        primary: true,
+        routes: "$outputs.routes",
+      }],
+    }),
+    [],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("service-binding", {
+      service: "$outputs.host",
+      protocol: "postgresql",
+      host: "$outputs.host",
+      port: "$outputs.port",
+      database: "$outputs.database",
+      passwordRef: { secretRef: "$outputs.passwordSecretRef" },
+      tokenRefs: {
+        admin: { secretRef: "$outputs.adminTokenSecretRef" },
+      },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("object-store", {
+      bucket: "$outputs.bucket",
+      endpoint: "$outputs.endpoint",
+      accessKeyIdRef: { secretRef: "$outputs.accessKeyRef" },
+      secretAccessKeyRef: { secretRef: "$outputs.secretKeyRef" },
+    }),
+    [],
+  );
+});
+
+Deno.test("type catalog rejects drifted material mapping shapes", () => {
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("http-endpoint", {
+      urls: ["$outputs.url"],
+    }),
+    [
+      { path: "$.urls", message: "unknown field" },
+      {
+        path: "$",
+        message: "http-endpoint mapping requires targets or endpoints",
+      },
+    ],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("service-binding", {
+      protocol: "postgresql",
+      host: "$outputs.host",
+      port: "$outputs.",
+    }),
+    [{
+      path: "$.port",
+      message: "must be a scalar value or $outputs.<field> marker",
+    }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("object-store", {
+      bucket: "$outputs.bucket",
+      endpoint: "$outputs.endpoint",
+      accessKeyRef: { secretRef: "$outputs.secret" },
+    }),
+    [{ path: "$.accessKeyRef", message: "unknown field" }],
   );
 });

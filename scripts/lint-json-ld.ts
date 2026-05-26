@@ -19,6 +19,15 @@
  */
 import { walk } from "jsr:@std/fs@^1.0.5/walk";
 import { fromFileUrl } from "jsr:@std/path@^1.0.6";
+import {
+  ACCESS_MODES as OFFICIAL_ACCESS_MODES,
+  allowedProjectionFamiliesForOutputType,
+  OFFICIAL_OUTPUT_TYPE_NAMES,
+  type OfficialOutputTypeName,
+  PROJECTION_FAMILY_NAMES,
+  SAFE_DEFAULT_ACCESS_MODES as OFFICIAL_SAFE_DEFAULT_ACCESS_MODES,
+  validateOfficialOutputMaterialMapping,
+} from "takosumi-contract/type-catalog";
 
 interface LintIssue {
   readonly path: string;
@@ -40,42 +49,12 @@ const ROOTS = [
 
 const KIND_ID_PREFIX = "https://takosumi.com/kinds/v1/";
 const KIND_TYPES = new Set(["ComponentKind", "takosumi:Kind"]);
-const OUTPUT_CONTRACTS = new Set([
-  "http-endpoint",
-  "service-binding",
-  "object-store",
-  "event-channel",
-  "identity.oidc@v1",
-  "billing.port@v1",
-]);
-const PROJECTION_FAMILIES = new Set([
-  "env",
-  "secret-env",
-  "upstream",
-  "config-mount",
-]);
-const PROJECTION_FAMILIES_BY_OUTPUT_CONTRACT: Readonly<
-  Record<string, readonly string[]>
-> = {
-  "http-endpoint": ["upstream", "env", "config-mount"],
-  "service-binding": ["secret-env", "config-mount"],
-  "object-store": ["secret-env", "config-mount"],
-  "event-channel": ["secret-env", "config-mount"],
-  "identity.oidc@v1": ["secret-env", "config-mount"],
-  "billing.port@v1": ["secret-env", "config-mount"],
-};
-const ACCESS_MODES = new Set([
-  "read",
-  "read-write",
-  "admin",
-  "invoke-only",
-  "observe-only",
-]);
-const SAFE_DEFAULT_ACCESS_MODES = new Set([
-  "read",
-  "invoke-only",
-  "observe-only",
-]);
+const OUTPUT_CONTRACTS = new Set<string>(OFFICIAL_OUTPUT_TYPE_NAMES);
+const PROJECTION_FAMILIES = new Set<string>(PROJECTION_FAMILY_NAMES);
+const ACCESS_MODES = new Set<string>(OFFICIAL_ACCESS_MODES);
+const SAFE_DEFAULT_ACCESS_MODES = new Set<string>(
+  OFFICIAL_SAFE_DEFAULT_ACCESS_MODES.filter((mode) => mode !== null),
+);
 
 async function main(): Promise<void> {
   const issues: LintIssue[] = [];
@@ -309,618 +288,32 @@ function checkPublications(
       OUTPUT_CONTRACTS.has(e["contract"]) &&
       isRecord(e["exampleMaterialMapping"])
     ) {
-      checkExampleMaterialMapping(
-        e["contract"],
-        e["exampleMaterialMapping"],
-        `publications[${key}].exampleMaterialMapping`,
-        path,
-        issues,
-      );
+      for (
+        const issue of validateOfficialOutputMaterialMapping(
+          e["contract"] as OfficialOutputTypeName,
+          e["exampleMaterialMapping"],
+        )
+      ) {
+        issues.push({
+          path,
+          message: formatMaterialMappingIssue(
+            `publications[${key}].exampleMaterialMapping`,
+            issue.path,
+            issue.message,
+          ),
+        });
+      }
     }
   }
 }
 
-function checkExampleMaterialMapping(
-  contract: string,
-  value: Record<string, unknown>,
+function formatMaterialMappingIssue(
   fieldName: string,
-  path: string,
-  issues: LintIssue[],
-): void {
-  switch (contract) {
-    case "http-endpoint":
-      checkNoUnknownKeys(value, fieldName, path, issues, [
-        "targets",
-        "endpoints",
-      ]);
-      checkHttpEndpointMapping(value, fieldName, path, issues);
-      break;
-    case "service-binding":
-      checkNoUnknownKeys(value, fieldName, path, issues, [
-        "service",
-        "protocol",
-        "host",
-        "port",
-        "database",
-        "username",
-        "connectionUrl",
-        "caCertRef",
-        "passwordRef",
-        "tokenRef",
-        "tokenRefs",
-      ]);
-      requireMappingValue(
-        value["protocol"],
-        `${fieldName}.protocol`,
-        path,
-        issues,
-      );
-      requireMappingValue(value["host"], `${fieldName}.host`, path, issues);
-      requireMappingValue(value["port"], `${fieldName}.port`, path, issues);
-      checkOptionalMappingValue(
-        value["service"],
-        `${fieldName}.service`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["database"],
-        `${fieldName}.database`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["username"],
-        `${fieldName}.username`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["connectionUrl"],
-        `${fieldName}.connectionUrl`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["caCertRef"],
-        `${fieldName}.caCertRef`,
-        path,
-        issues,
-      );
-      checkOptionalSecretRefMapping(
-        value["passwordRef"],
-        `${fieldName}.passwordRef`,
-        path,
-        issues,
-      );
-      checkOptionalSecretRefMapping(
-        value["tokenRef"],
-        `${fieldName}.tokenRef`,
-        path,
-        issues,
-      );
-      checkSecretRefRecordMapping(
-        value["tokenRefs"],
-        `${fieldName}.tokenRefs`,
-        path,
-        issues,
-      );
-      break;
-    case "object-store":
-      checkNoUnknownKeys(value, fieldName, path, issues, [
-        "bucket",
-        "endpoint",
-        "region",
-        "pathStyle",
-        "publicBaseUrl",
-        "policyRefs",
-        "accessKeyIdRef",
-        "secretAccessKeyRef",
-        "sessionTokenRef",
-      ]);
-      requireMappingValue(value["bucket"], `${fieldName}.bucket`, path, issues);
-      requireMappingValue(
-        value["endpoint"],
-        `${fieldName}.endpoint`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["region"],
-        `${fieldName}.region`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["pathStyle"],
-        `${fieldName}.pathStyle`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["publicBaseUrl"],
-        `${fieldName}.publicBaseUrl`,
-        path,
-        issues,
-      );
-      checkOptionalArrayOrMarker(
-        value["policyRefs"],
-        `${fieldName}.policyRefs`,
-        path,
-        issues,
-      );
-      checkOptionalSecretRefMapping(
-        value["accessKeyIdRef"],
-        `${fieldName}.accessKeyIdRef`,
-        path,
-        issues,
-      );
-      checkOptionalSecretRefMapping(
-        value["secretAccessKeyRef"],
-        `${fieldName}.secretAccessKeyRef`,
-        path,
-        issues,
-      );
-      checkOptionalSecretRefMapping(
-        value["sessionTokenRef"],
-        `${fieldName}.sessionTokenRef`,
-        path,
-        issues,
-      );
-      break;
-    case "event-channel":
-      checkNoUnknownKeys(value, fieldName, path, issues, [
-        "channel",
-        "protocol",
-        "endpoint",
-        "topic",
-        "queue",
-        "stream",
-        "deliveryPolicyRefs",
-        "producerCredentialRef",
-        "consumerCredentialRef",
-      ]);
-      requireMappingValue(
-        value["channel"],
-        `${fieldName}.channel`,
-        path,
-        issues,
-      );
-      requireMappingValue(
-        value["protocol"],
-        `${fieldName}.protocol`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["endpoint"],
-        `${fieldName}.endpoint`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["topic"],
-        `${fieldName}.topic`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["queue"],
-        `${fieldName}.queue`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["stream"],
-        `${fieldName}.stream`,
-        path,
-        issues,
-      );
-      checkOptionalArrayOrMarker(
-        value["deliveryPolicyRefs"],
-        `${fieldName}.deliveryPolicyRefs`,
-        path,
-        issues,
-      );
-      checkOptionalSecretRefMapping(
-        value["producerCredentialRef"],
-        `${fieldName}.producerCredentialRef`,
-        path,
-        issues,
-      );
-      checkOptionalSecretRefMapping(
-        value["consumerCredentialRef"],
-        `${fieldName}.consumerCredentialRef`,
-        path,
-        issues,
-      );
-      break;
-    case "identity.oidc@v1":
-      checkNoUnknownKeys(value, fieldName, path, issues, [
-        "issuerUrl",
-        "discoveryUrl",
-        "clientId",
-        "redirectOrigin",
-        "jwksRef",
-        "clientSecretRef",
-      ]);
-      requireMappingValue(
-        value["issuerUrl"],
-        `${fieldName}.issuerUrl`,
-        path,
-        issues,
-      );
-      requireMappingValue(
-        value["clientId"],
-        `${fieldName}.clientId`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["discoveryUrl"],
-        `${fieldName}.discoveryUrl`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["redirectOrigin"],
-        `${fieldName}.redirectOrigin`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["jwksRef"],
-        `${fieldName}.jwksRef`,
-        path,
-        issues,
-      );
-      checkOptionalSecretRefMapping(
-        value["clientSecretRef"],
-        `${fieldName}.clientSecretRef`,
-        path,
-        issues,
-      );
-      break;
-    case "billing.port@v1":
-      checkNoUnknownKeys(value, fieldName, path, issues, [
-        "portalUrl",
-        "usageReportEndpoint",
-        "billingSubjectRef",
-        "meteringCredentialRef",
-      ]);
-      requireMappingValue(
-        value["billingSubjectRef"],
-        `${fieldName}.billingSubjectRef`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["portalUrl"],
-        `${fieldName}.portalUrl`,
-        path,
-        issues,
-      );
-      checkOptionalMappingValue(
-        value["usageReportEndpoint"],
-        `${fieldName}.usageReportEndpoint`,
-        path,
-        issues,
-      );
-      checkOptionalSecretRefMapping(
-        value["meteringCredentialRef"],
-        `${fieldName}.meteringCredentialRef`,
-        path,
-        issues,
-      );
-      break;
-  }
-}
-
-function checkHttpEndpointMapping(
-  value: Record<string, unknown>,
-  fieldName: string,
-  path: string,
-  issues: LintIssue[],
-): void {
-  if (value["targets"] === undefined && value["endpoints"] === undefined) {
-    issues.push({
-      path,
-      message:
-        `${fieldName} must declare targets or endpoints for http-endpoint`,
-    });
-  }
-  checkOptionalTargetArrayMapping(
-    value["targets"],
-    `${fieldName}.targets`,
-    path,
-    issues,
-  );
-  checkOptionalEndpointArrayMapping(
-    value["endpoints"],
-    `${fieldName}.endpoints`,
-    path,
-    issues,
-  );
-}
-
-function checkOptionalTargetArrayMapping(
-  value: unknown,
-  fieldName: string,
-  path: string,
-  issues: LintIssue[],
-): void {
-  if (value === undefined) return;
-  if (isMappingMarker(value)) return;
-  if (!Array.isArray(value) || value.length === 0) {
-    issues.push({
-      path,
-      message: `${fieldName} must be a non-empty array or output marker`,
-    });
-    return;
-  }
-  for (const [index, entry] of value.entries()) {
-    const itemName = `${fieldName}[${index}]`;
-    if (!isRecord(entry)) {
-      issues.push({ path, message: `${itemName} must be an object` });
-      continue;
-    }
-    checkNoUnknownKeys(entry, itemName, path, issues, [
-      "name",
-      "url",
-      "protocol",
-      "host",
-      "port",
-      "basePath",
-      "visibility",
-    ]);
-    checkOptionalMappingValue(entry["name"], `${itemName}.name`, path, issues);
-    checkOptionalMappingValue(entry["url"], `${itemName}.url`, path, issues);
-    checkOptionalMappingValue(
-      entry["protocol"],
-      `${itemName}.protocol`,
-      path,
-      issues,
-    );
-    checkOptionalMappingValue(entry["host"], `${itemName}.host`, path, issues);
-    checkOptionalMappingValue(entry["port"], `${itemName}.port`, path, issues);
-    checkOptionalMappingValue(
-      entry["basePath"],
-      `${itemName}.basePath`,
-      path,
-      issues,
-    );
-    checkOptionalMappingValue(
-      entry["visibility"],
-      `${itemName}.visibility`,
-      path,
-      issues,
-    );
-    if (entry["url"] === undefined && entry["host"] === undefined) {
-      issues.push({
-        path,
-        message: `${itemName} must map url or host`,
-      });
-    }
-  }
-}
-
-function checkOptionalEndpointArrayMapping(
-  value: unknown,
-  fieldName: string,
-  path: string,
-  issues: LintIssue[],
-): void {
-  if (value === undefined) return;
-  if (isMappingMarker(value)) return;
-  if (!Array.isArray(value) || value.length === 0) {
-    issues.push({
-      path,
-      message: `${fieldName} must be a non-empty array or output marker`,
-    });
-    return;
-  }
-  for (const [index, entry] of value.entries()) {
-    const itemName = `${fieldName}[${index}]`;
-    if (!isRecord(entry)) {
-      issues.push({ path, message: `${itemName} must be an object` });
-      continue;
-    }
-    checkNoUnknownKeys(entry, itemName, path, issues, [
-      "url",
-      "scheme",
-      "host",
-      "listener",
-      "visibility",
-      "primary",
-      "routes",
-    ]);
-    requireMappingValue(entry["url"], `${itemName}.url`, path, issues);
-    checkOptionalMappingValue(
-      entry["scheme"],
-      `${itemName}.scheme`,
-      path,
-      issues,
-    );
-    checkOptionalMappingValue(entry["host"], `${itemName}.host`, path, issues);
-    checkOptionalMappingValue(
-      entry["listener"],
-      `${itemName}.listener`,
-      path,
-      issues,
-    );
-    checkOptionalMappingValue(
-      entry["visibility"],
-      `${itemName}.visibility`,
-      path,
-      issues,
-    );
-    checkOptionalMappingValue(
-      entry["primary"],
-      `${itemName}.primary`,
-      path,
-      issues,
-    );
-    checkOptionalRouteArrayMapping(
-      entry["routes"],
-      `${itemName}.routes`,
-      path,
-      issues,
-    );
-  }
-}
-
-function checkOptionalRouteArrayMapping(
-  value: unknown,
-  fieldName: string,
-  path: string,
-  issues: LintIssue[],
-): void {
-  if (value === undefined) return;
-  if (isMappingMarker(value)) return;
-  if (!Array.isArray(value)) {
-    issues.push({
-      path,
-      message: `${fieldName} must be an array or output marker`,
-    });
-    return;
-  }
-  for (const [index, entry] of value.entries()) {
-    const itemName = `${fieldName}[${index}]`;
-    if (!isRecord(entry)) {
-      issues.push({ path, message: `${itemName} must be an object` });
-      continue;
-    }
-    checkNoUnknownKeys(entry, itemName, path, issues, ["pathPrefix", "to"]);
-    requireMappingValue(
-      entry["pathPrefix"],
-      `${itemName}.pathPrefix`,
-      path,
-      issues,
-    );
-    requireMappingValue(entry["to"], `${itemName}.to`, path, issues);
-  }
-}
-
-function checkNoUnknownKeys(
-  value: Record<string, unknown>,
-  fieldName: string,
-  path: string,
-  issues: LintIssue[],
-  allowed: readonly string[],
-): void {
-  const allowedSet = new Set(allowed);
-  for (const key of Object.keys(value)) {
-    if (!allowedSet.has(key)) {
-      issues.push({
-        path,
-        message:
-          `${fieldName}.${key} is not part of the official material shape`,
-      });
-    }
-  }
-}
-
-function requireMappingValue(
-  value: unknown,
-  fieldName: string,
-  path: string,
-  issues: LintIssue[],
-): void {
-  if (!isMappingValue(value)) {
-    issues.push({
-      path,
-      message: `${fieldName} must be a scalar value or output marker`,
-    });
-  }
-}
-
-function checkOptionalMappingValue(
-  value: unknown,
-  fieldName: string,
-  path: string,
-  issues: LintIssue[],
-): void {
-  if (value === undefined) return;
-  requireMappingValue(value, fieldName, path, issues);
-}
-
-function checkOptionalArrayOrMarker(
-  value: unknown,
-  fieldName: string,
-  path: string,
-  issues: LintIssue[],
-): void {
-  if (value === undefined) return;
-  if (isMappingMarker(value)) return;
-  if (!Array.isArray(value)) {
-    issues.push({
-      path,
-      message: `${fieldName} must be an array or output marker`,
-    });
-  }
-}
-
-function checkOptionalSecretRefMapping(
-  value: unknown,
-  fieldName: string,
-  path: string,
-  issues: LintIssue[],
-): void {
-  if (value === undefined) return;
-  if (!isRecord(value)) {
-    issues.push({
-      path,
-      message: `${fieldName} must be an object with secretRef`,
-    });
-    return;
-  }
-  checkNoUnknownKeys(value, fieldName, path, issues, ["secretRef"]);
-  if (
-    !isMappingMarker(value["secretRef"]) &&
-    !isNonEmptyScalar(value["secretRef"])
-  ) {
-    issues.push({
-      path,
-      message: `${fieldName}.secretRef must be a scalar value or output marker`,
-    });
-  }
-}
-
-function checkSecretRefRecordMapping(
-  value: unknown,
-  fieldName: string,
-  path: string,
-  issues: LintIssue[],
-): void {
-  if (value === undefined) return;
-  if (!isRecord(value)) {
-    issues.push({
-      path,
-      message: `${fieldName} must be an object of secretRef objects`,
-    });
-    return;
-  }
-  for (const [key, entry] of Object.entries(value)) {
-    checkOptionalSecretRefMapping(
-      entry,
-      `${fieldName}.${key}`,
-      path,
-      issues,
-    );
-  }
-}
-
-function isMappingValue(value: unknown): boolean {
-  return isMappingMarker(value) || isNonEmptyScalar(value);
-}
-
-function isMappingMarker(value: unknown): boolean {
-  return typeof value === "string" && value.startsWith("$outputs.");
-}
-
-function isNonEmptyScalar(value: unknown): boolean {
-  if (typeof value === "string") return value.length > 0;
-  return typeof value === "number" || typeof value === "boolean";
+  issuePath: string,
+  message: string,
+): string {
+  const suffix = issuePath === "$" ? "" : issuePath.slice(1);
+  return `${fieldName}${suffix} ${message}`;
 }
 
 function checkSpecAndInheritance(
@@ -1230,8 +623,14 @@ function checkListenProjectionCompatibility(
   );
   if (!accepts || !projections) return;
   for (const contract of accepts) {
-    const allowed = PROJECTION_FAMILIES_BY_OUTPUT_CONTRACT[contract] ?? [];
-    if (!projections.some((projection) => allowed.includes(projection))) {
+    const allowed = allowedProjectionFamiliesForOutputType(
+      contract as OfficialOutputTypeName,
+    );
+    if (
+      !projections.some((projection) =>
+        allowed.some((allowedProjection) => allowedProjection === projection)
+      )
+    ) {
       issues.push({
         path,
         message:

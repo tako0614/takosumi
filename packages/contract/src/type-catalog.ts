@@ -406,6 +406,427 @@ export function validateOfficialOutputMaterial(
   return issues;
 }
 
+export function validateOfficialOutputMaterialMapping(
+  type: OfficialOutputTypeName,
+  value: unknown,
+): readonly CatalogValidationIssue[] {
+  const issues: CatalogValidationIssue[] = [];
+  if (!isRecord(value)) {
+    return [{ path: "$", message: "mapping must be an object" }];
+  }
+  switch (type) {
+    case "http-endpoint":
+      checkNoUnknownKeys(value, "$", issues, ["targets", "endpoints"]);
+      checkHttpEndpointMaterialMapping(value, issues);
+      break;
+    case "service-binding":
+      checkNoUnknownKeys(value, "$", issues, [
+        "service",
+        "protocol",
+        "host",
+        "port",
+        "database",
+        "username",
+        "connectionUrl",
+        "caCertRef",
+        "passwordRef",
+        "tokenRef",
+        "tokenRefs",
+      ]);
+      requireMaterialMappingValue(value.protocol, "$.protocol", issues);
+      requireMaterialMappingValue(value.host, "$.host", issues);
+      requireMaterialMappingValue(value.port, "$.port", issues);
+      checkOptionalMaterialMappingValue(value.service, "$.service", issues);
+      checkOptionalMaterialMappingValue(value.database, "$.database", issues);
+      checkOptionalMaterialMappingValue(value.username, "$.username", issues);
+      checkOptionalMaterialMappingValue(
+        value.connectionUrl,
+        "$.connectionUrl",
+        issues,
+      );
+      checkOptionalMaterialMappingValue(value.caCertRef, "$.caCertRef", issues);
+      checkOptionalSecretReferenceMapping(
+        value.passwordRef,
+        "$.passwordRef",
+        issues,
+      );
+      checkOptionalSecretReferenceMapping(value.tokenRef, "$.tokenRef", issues);
+      checkSecretReferenceRecordMapping(value.tokenRefs, "$.tokenRefs", issues);
+      break;
+    case "object-store":
+      checkNoUnknownKeys(value, "$", issues, [
+        "bucket",
+        "endpoint",
+        "region",
+        "pathStyle",
+        "publicBaseUrl",
+        "policyRefs",
+        "accessKeyIdRef",
+        "secretAccessKeyRef",
+        "sessionTokenRef",
+      ]);
+      requireMaterialMappingValue(value.bucket, "$.bucket", issues);
+      requireMaterialMappingValue(value.endpoint, "$.endpoint", issues);
+      checkOptionalMaterialMappingValue(value.region, "$.region", issues);
+      checkOptionalMaterialMappingValue(value.pathStyle, "$.pathStyle", issues);
+      checkOptionalMaterialMappingValue(
+        value.publicBaseUrl,
+        "$.publicBaseUrl",
+        issues,
+      );
+      checkOptionalMaterialMappingArray(
+        value.policyRefs,
+        "$.policyRefs",
+        issues,
+      );
+      checkOptionalSecretReferenceMapping(
+        value.accessKeyIdRef,
+        "$.accessKeyIdRef",
+        issues,
+      );
+      checkOptionalSecretReferenceMapping(
+        value.secretAccessKeyRef,
+        "$.secretAccessKeyRef",
+        issues,
+      );
+      checkOptionalSecretReferenceMapping(
+        value.sessionTokenRef,
+        "$.sessionTokenRef",
+        issues,
+      );
+      break;
+    case "event-channel":
+      checkNoUnknownKeys(value, "$", issues, [
+        "channel",
+        "protocol",
+        "endpoint",
+        "topic",
+        "queue",
+        "stream",
+        "deliveryPolicyRefs",
+        "producerCredentialRef",
+        "consumerCredentialRef",
+      ]);
+      requireMaterialMappingValue(value.channel, "$.channel", issues);
+      requireMaterialMappingValue(value.protocol, "$.protocol", issues);
+      checkOptionalMaterialMappingValue(value.endpoint, "$.endpoint", issues);
+      checkOptionalMaterialMappingValue(value.topic, "$.topic", issues);
+      checkOptionalMaterialMappingValue(value.queue, "$.queue", issues);
+      checkOptionalMaterialMappingValue(value.stream, "$.stream", issues);
+      checkOptionalMaterialMappingArray(
+        value.deliveryPolicyRefs,
+        "$.deliveryPolicyRefs",
+        issues,
+      );
+      checkOptionalSecretReferenceMapping(
+        value.producerCredentialRef,
+        "$.producerCredentialRef",
+        issues,
+      );
+      checkOptionalSecretReferenceMapping(
+        value.consumerCredentialRef,
+        "$.consumerCredentialRef",
+        issues,
+      );
+      break;
+    case "identity.oidc@v1":
+      checkNoUnknownKeys(value, "$", issues, [
+        "issuerUrl",
+        "discoveryUrl",
+        "clientId",
+        "redirectOrigin",
+        "jwksRef",
+        "clientSecretRef",
+      ]);
+      requireMaterialMappingValue(value.issuerUrl, "$.issuerUrl", issues);
+      requireMaterialMappingValue(value.clientId, "$.clientId", issues);
+      checkOptionalMaterialMappingValue(
+        value.discoveryUrl,
+        "$.discoveryUrl",
+        issues,
+      );
+      checkOptionalMaterialMappingValue(
+        value.redirectOrigin,
+        "$.redirectOrigin",
+        issues,
+      );
+      checkOptionalMaterialMappingValue(value.jwksRef, "$.jwksRef", issues);
+      checkOptionalSecretReferenceMapping(
+        value.clientSecretRef,
+        "$.clientSecretRef",
+        issues,
+      );
+      break;
+    case "billing.port@v1":
+      checkNoUnknownKeys(value, "$", issues, [
+        "portalUrl",
+        "usageReportEndpoint",
+        "billingSubjectRef",
+        "meteringCredentialRef",
+      ]);
+      requireMaterialMappingValue(
+        value.billingSubjectRef,
+        "$.billingSubjectRef",
+        issues,
+      );
+      checkOptionalMaterialMappingValue(value.portalUrl, "$.portalUrl", issues);
+      checkOptionalMaterialMappingValue(
+        value.usageReportEndpoint,
+        "$.usageReportEndpoint",
+        issues,
+      );
+      if (
+        value.portalUrl === undefined && value.usageReportEndpoint === undefined
+      ) {
+        issues.push({
+          path: "$",
+          message:
+            "billing.port@v1 mapping requires portalUrl or usageReportEndpoint",
+        });
+      }
+      checkOptionalSecretReferenceMapping(
+        value.meteringCredentialRef,
+        "$.meteringCredentialRef",
+        issues,
+      );
+      break;
+  }
+  return issues;
+}
+
+export function isOutputMappingMarker(value: unknown): value is string {
+  return typeof value === "string" &&
+    value.startsWith("$outputs.") &&
+    value.length > "$outputs.".length;
+}
+
+export function isOutputMaterialMappingValue(value: unknown): boolean {
+  if (isOutputMappingMarker(value)) return true;
+  if (typeof value === "string") {
+    if (value.startsWith("$outputs.")) return false;
+    return value.length > 0;
+  }
+  if (typeof value === "number") return Number.isFinite(value);
+  return typeof value === "boolean";
+}
+
+function checkHttpEndpointMaterialMapping(
+  value: Record<string, unknown>,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value.targets === undefined && value.endpoints === undefined) {
+    issues.push({
+      path: "$",
+      message: "http-endpoint mapping requires targets or endpoints",
+    });
+  }
+  checkOptionalTargetArrayMapping(value.targets, "$.targets", issues);
+  checkOptionalEndpointArrayMapping(value.endpoints, "$.endpoints", issues);
+}
+
+function checkOptionalTargetArrayMapping(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  if (isOutputMappingMarker(value)) return;
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push({
+      path,
+      message: "must be a non-empty array or output marker",
+    });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    const itemPath = `${path}[${index}]`;
+    if (!isRecord(entry)) {
+      issues.push({ path: itemPath, message: "must be an object" });
+      continue;
+    }
+    checkNoUnknownKeys(entry, itemPath, issues, [
+      "name",
+      "url",
+      "protocol",
+      "host",
+      "port",
+      "basePath",
+      "visibility",
+    ]);
+    checkOptionalMaterialMappingValue(entry.name, `${itemPath}.name`, issues);
+    checkOptionalMaterialMappingValue(entry.url, `${itemPath}.url`, issues);
+    checkOptionalMaterialMappingValue(
+      entry.protocol,
+      `${itemPath}.protocol`,
+      issues,
+    );
+    checkOptionalMaterialMappingValue(entry.host, `${itemPath}.host`, issues);
+    checkOptionalMaterialMappingValue(entry.port, `${itemPath}.port`, issues);
+    checkOptionalMaterialMappingValue(
+      entry.basePath,
+      `${itemPath}.basePath`,
+      issues,
+    );
+    checkOptionalMaterialMappingValue(
+      entry.visibility,
+      `${itemPath}.visibility`,
+      issues,
+    );
+    if (entry.url === undefined && entry.host === undefined) {
+      issues.push({ path: itemPath, message: "target must map url or host" });
+    }
+  }
+}
+
+function checkOptionalEndpointArrayMapping(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  if (isOutputMappingMarker(value)) return;
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push({
+      path,
+      message: "must be a non-empty array or output marker",
+    });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    const itemPath = `${path}[${index}]`;
+    if (!isRecord(entry)) {
+      issues.push({ path: itemPath, message: "must be an object" });
+      continue;
+    }
+    checkNoUnknownKeys(entry, itemPath, issues, [
+      "url",
+      "scheme",
+      "host",
+      "listener",
+      "visibility",
+      "primary",
+      "routes",
+    ]);
+    requireMaterialMappingValue(entry.url, `${itemPath}.url`, issues);
+    checkOptionalMaterialMappingValue(
+      entry.scheme,
+      `${itemPath}.scheme`,
+      issues,
+    );
+    checkOptionalMaterialMappingValue(entry.host, `${itemPath}.host`, issues);
+    checkOptionalMaterialMappingValue(
+      entry.listener,
+      `${itemPath}.listener`,
+      issues,
+    );
+    checkOptionalMaterialMappingValue(
+      entry.visibility,
+      `${itemPath}.visibility`,
+      issues,
+    );
+    checkOptionalMaterialMappingValue(
+      entry.primary,
+      `${itemPath}.primary`,
+      issues,
+    );
+    checkOptionalRouteArrayMapping(entry.routes, `${itemPath}.routes`, issues);
+  }
+}
+
+function checkOptionalRouteArrayMapping(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  if (isOutputMappingMarker(value)) return;
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: "must be an array or output marker" });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    const itemPath = `${path}[${index}]`;
+    if (!isRecord(entry)) {
+      issues.push({ path: itemPath, message: "must be an object" });
+      continue;
+    }
+    checkNoUnknownKeys(entry, itemPath, issues, ["pathPrefix", "to"]);
+    requireMaterialMappingValue(
+      entry.pathPrefix,
+      `${itemPath}.pathPrefix`,
+      issues,
+    );
+    requireMaterialMappingValue(entry.to, `${itemPath}.to`, issues);
+  }
+}
+
+function requireMaterialMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (!isOutputMaterialMappingValue(value)) {
+    issues.push({
+      path,
+      message: "must be a scalar value or $outputs.<field> marker",
+    });
+  }
+}
+
+function checkOptionalMaterialMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  requireMaterialMappingValue(value, path, issues);
+}
+
+function checkOptionalMaterialMappingArray(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  if (isOutputMappingMarker(value)) return;
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: "must be an array or output marker" });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    requireMaterialMappingValue(entry, `${path}[${index}]`, issues);
+  }
+}
+
+function checkOptionalSecretReferenceMapping(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push({ path, message: "must be an object with secretRef" });
+    return;
+  }
+  checkNoUnknownKeys(value, path, issues, ["secretRef"]);
+  requireMaterialMappingValue(value.secretRef, `${path}.secretRef`, issues);
+}
+
+function checkSecretReferenceRecordMapping(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push({ path, message: "must be an object of secretRef objects" });
+    return;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    checkOptionalSecretReferenceMapping(entry, `${path}.${key}`, issues);
+  }
+}
+
 function checkHttpEndpointMaterial(
   value: Record<string, unknown>,
   issues: CatalogValidationIssue[],
