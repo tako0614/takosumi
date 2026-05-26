@@ -17,12 +17,12 @@ Account、billing、OIDC issuer、customer onboarding、support workflow の rec
 
 ## Reference Kernel Retained Evidence Records
 
-| Record            | 役割                                                                                            |
-| ----------------- | ----------------------------------------------------------------------------------------------- |
-| `ResolvedPlan`    | manifest component、kind、provider、publish の出力 / binding の解決結果を固定する。             |
-| `TargetState`     | apply で実現したい desired state。provider side effect の input になる。                        |
-| `OperationPlan`   | Deployment で実行する operation の順序と依存関係。                                              |
-| `TrafficSnapshot` | active routing / traffic assignment。health は ObservationState と retained evidence 側に残す。 |
+| Record            | 役割                                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------- |
+| `ResolvedPlan`    | manifest component、kind、implementation binding、publish の出力 / binding の解決結果を固定する。 |
+| `TargetState`     | apply で実現したい desired state。resource side effect の input になる。                          |
+| `OperationPlan`   | Deployment で実行する operation の順序と依存関係。                                                |
+| `TrafficSnapshot` | active routing / traffic assignment。health は ObservationState と retained evidence 側に残す。   |
 
 snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明するための内部 record です。public Deployment wire に portable な top-level `evidence` field はありません。rollback は retained Deployment を current pointer として再選択し、rollback metadata / audit を記録します。 Deployment record は追加しません。
 
@@ -30,7 +30,7 @@ snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明
 
 | Record               | 役割                                                                      |
 | -------------------- | ------------------------------------------------------------------------- |
-| `JournalEntry`       | write-ahead operation journal。provider side effect 前後の replay point。 |
+| `JournalEntry`       | write-ahead operation journal。resource side effect 前後の replay point。 |
 | `InstallerLeaseLock` | Installation 単位の apply / rollback 排他制御。                           |
 | `LockRecord`         | cross-process lock adapter が使う generic lock row。                      |
 
@@ -43,7 +43,7 @@ snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明
 | `Approval`         | operator approval が必要な operation の承認状態。 |
 | `CleanupBacklog`   | revoke が必要だが即時反映できなかった状態の追跡。 |
 | `DriftIndex`       | observed state と desired state の drift index。  |
-| `ObservationState` | provider / runtime observation の現在値。         |
+| `ObservationState` | backend / runtime observation の現在値。          |
 
 これらは reference implementation が apply / observe / recovery を fail-safe に進めるための record です。顧客向け approval UI や account role model は operator account layer に置きます。
 
@@ -51,8 +51,8 @@ snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明
 
 | Record                         | 役割                                                                                 |
 | ------------------------------ | ------------------------------------------------------------------------------------ |
-| `OperatorImplementationConfig` | operator が attach した kind alias / provider implementation / connector inventory。 |
-| `ImplementationRegistry`       | operator が attach した provider implementation / connector の registry view。       |
+| `OperatorImplementationConfig` | operator が attach した kind alias / implementation binding / connector inventory。  |
+| `ImplementationRegistry`       | operator が attach した implementation binding / connector の registry view。        |
 | `ConnectorDescriptor`          | runtime-agent connector の id、accepted asset metadata、health。                     |
 | `assetRecord`                  | optional operator asset extension の digest、size、retention metadata。              |
 | `SecretPartitionReference`     | secret store partition の logical reference。secret value は secret backend に置く。 |

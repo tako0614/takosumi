@@ -122,7 +122,7 @@ function buildRecordingPlugin(opts: {
       });
     },
     publishMaterial: opts.publishMaterial ??
-      ((ctx) => Promise.resolve(stringOutputsAsMaterial(ctx.outputs))),
+      ((ctx) => Promise.resolve(defaultE2ePublishMaterial(ctx))),
     applyListen: opts.applyListen,
     destroy: (_ctx) => Promise.resolve(),
     onInstallStart: () => {
@@ -170,17 +170,20 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
         passwordSecretRef: "secret://db-password",
         connectionString: "postgres://notes:***@db.local:5432/notes",
       },
-      // Use the canonical postgres publish material shape (per the JSON-LD
-      // contract: host / port / database / username / passwordSecretRef /
-      // connectionString).
+      // Use the official service-binding material shape. Provider-local
+      // output names such as passwordSecretRef / connectionString are
+      // projected before publication.
       publishMaterial: (ctx: PublishMaterialContext) =>
         Promise.resolve({
+          protocol: "postgresql",
           host: requireStringOutput(ctx, "host"),
-          port: requireStringOutput(ctx, "port"),
+          port: Number(requireStringOutput(ctx, "port")),
           database: requireStringOutput(ctx, "database"),
           username: requireStringOutput(ctx, "username"),
-          passwordSecretRef: requireStringOutput(ctx, "passwordSecretRef"),
-          connectionString: requireStringOutput(ctx, "connectionString"),
+          passwordRef: {
+            secretRef: requireStringOutput(ctx, "passwordSecretRef"),
+          },
+          connectionUrl: requireStringOutput(ctx, "connectionString"),
         }),
     });
     const workerPlugin = buildRecordingPlugin({
@@ -234,12 +237,13 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
     assertEquals(
       apply.deployment.outputs.components?.db?.connection,
       {
+        protocol: "postgresql",
         host: "db.local",
-        port: "5432",
+        port: 5432,
         database: "notes",
         username: "notes",
-        passwordSecretRef: "secret://db-password",
-        connectionString: "postgres://notes:***@db.local:5432/notes",
+        passwordRef: { secretRef: "secret://db-password" },
+        connectionUrl: "postgres://notes:***@db.local:5432/notes",
       },
     );
 
@@ -250,7 +254,7 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
     const dbMaterial = applies[1].listenedMaterials.db;
     assert(dbMaterial, "worker should see db material on the db binding");
     assertEquals(dbMaterial.host, "db.local");
-    assertEquals(dbMaterial.port, "5432");
+    assertEquals(dbMaterial.port, 5432);
     assertEquals(dbMaterial.database, "notes");
 
     // First-install lifecycle hook ordering: install hooks bracket
@@ -292,7 +296,7 @@ Deno.test("installer e2e — listener applyListen receives material with prefixe
         return Promise.resolve({
           env: {
             DB_HOST: ctx.material.host as string,
-            DB_PORT: ctx.material.port as string,
+            DB_PORT: String(ctx.material.port),
           },
         });
       },
@@ -598,11 +602,31 @@ components:
   }, spec);
 });
 
-function stringOutputsAsMaterial(
-  outputs: PublishMaterialContext["outputs"],
+function defaultE2ePublishMaterial(
+  ctx: PublishMaterialContext,
 ): NamespaceMaterial {
+  if (ctx.options.as === "service-binding") {
+    const material: Record<string, NamespaceMaterial[string]> = {
+      protocol: "postgresql",
+      host: String(ctx.outputs.host ?? "db.local"),
+      port: Number(ctx.outputs.port ?? 5432),
+    };
+    if (typeof ctx.outputs.database === "string") {
+      material.database = ctx.outputs.database;
+    }
+    if (typeof ctx.outputs.username === "string") {
+      material.username = ctx.outputs.username;
+    }
+    if (typeof ctx.outputs.passwordSecretRef === "string") {
+      material.passwordRef = { secretRef: ctx.outputs.passwordSecretRef };
+    }
+    if (typeof ctx.outputs.connectionString === "string") {
+      material.connectionUrl = ctx.outputs.connectionString;
+    }
+    return material;
+  }
   const material: Record<string, string> = {};
-  for (const [key, value] of Object.entries(outputs)) {
+  for (const [key, value] of Object.entries(ctx.outputs)) {
     if (typeof value !== "string") {
       throw new TypeError(`expected ${key} output to be a string`);
     }

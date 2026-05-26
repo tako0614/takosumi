@@ -8,7 +8,7 @@ manifest author は `listen.from` で出力データの source を選び、`list
 read | read-write | admin | invoke-only | observe-only
 ```
 
-enum は閉じています。新規モード追加には `CONVENTIONS.md` §6 の RFC が必須で、 provider / connector が単独で拡張することはできません。
+enum は閉じています。新規モード追加には `CONVENTIONS.md` §6 の RFC が必須で、 backend connector が単独で拡張することはできません。
 
 ## モードごとの意味
 
@@ -43,7 +43,7 @@ consumer は component kind schema または publication declaration の invocat
 
 - 許可: component kind の invocation contract に基づく invoke / call / publish / submit
 - 不許可: 蓄積された state の read、内部 queue の観測、 invocation envelope 外での mutation
-- 典型例: `worker` が他 component の invocation surface / publication を provider-native private routing や resolved material 経由で呼ぶ、 queue 自体の read 権限を持たず producer として publish のみ行う。public ingress への hairpin を前提にしない
+- 典型例: `worker` が他 component の invocation surface / publication を backend-native private routing や resolved material 経由で呼ぶ、 queue 自体の read 権限を持たず producer として publish のみ行う。public ingress への hairpin を前提にしない
 
 ### `observe-only`
 

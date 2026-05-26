@@ -41,7 +41,7 @@ recovery ◄── (kernel restart / lock re-acquire,
 - **Output**: TrafficSnapshot / RoutingPointer update。health は observe が append-only observation として記録する。新 `ResolvedPlan` は生成しない
 - **Journal cursor**: apply phase の entry を `commit` -> `post-commit` 遷移で継続使用
 - **WAL stages**: `post-commit` -> `observe`
-- **Failure**: `post-commit` 失敗は provider side effect を rollback せず CleanupBacklog を enqueue し、observe loop が reconcile。`compensate` recovery 選択時は `activation-rollback` CleanupBacklog を emit
+- **Failure**: `post-commit` 失敗は resource side effect を rollback せず CleanupBacklog を enqueue し、observe loop が reconcile。`compensate` recovery 選択時は `activation-rollback` CleanupBacklog を emit
 - **Blocking**: 元 `apply` と同じ lock を保持
 - **Typical duration**: 1 分未満。 connector traffic flip / DNS / readiness 伝播が支配的
 
@@ -64,7 +64,7 @@ recovery ◄── (kernel restart / lock re-acquire,
 - **WAL stages**: `pre-commit` -> `commit` -> `post-commit` -> `finalize`
 - **Failure**: 記録済 Deployment / TrafficSnapshot が利用不能、または pointer update を atomic に commit できない場合は `abort`。unfinished WAL の cleanup / compensate は `recovery` phase で扱う
 - **Blocking**: 前方 phase と同じ lock
-- **Typical duration**: pointer update と provider ingress assignment の反映時間。 DB / object-store contents や migration は巻き戻さない
+- **Typical duration**: pointer update と backend ingress assignment の反映時間。 DB / object-store contents や migration は巻き戻さない
 
 ### `recovery`
 
@@ -107,7 +107,7 @@ running | stopped | missing | error | unknown
 ```text
 apply trigger:
   unknown -> running     (managed object materialized successfully)
-  unknown -> error       (provider reported failure during commit)
+  unknown -> error       (backend reported failure during commit)
   missing -> running     (re-applied after external delete; may emit CleanupBacklog)
   error   -> running     (subsequent apply healed the fault)
 

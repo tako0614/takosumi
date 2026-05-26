@@ -24,7 +24,7 @@ import { fromFileUrl } from "jsr:@std/path@^1.0.6";
 import { checkDrift } from "./spec-check-drift.ts";
 
 const WORKER_JSONLD = fromFileUrl(
-  new URL("../packages/plugins/spec/kinds/v1/worker.jsonld", import.meta.url),
+  new URL("../packages/kind-worker/spec/kind.jsonld", import.meta.url),
 );
 
 Deno.test("spec-check-drift reports no drift on the committed source", async () => {

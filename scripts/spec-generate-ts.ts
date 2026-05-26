@@ -1,12 +1,13 @@
 /**
- * Generate TypeScript types from `packages/plugins/spec/kinds/v1/*.jsonld`.
+ * Generate TypeScript types from package-owned kind descriptors
+ * (`packages/kind-<name>/spec/kind.jsonld`).
  *
  * For TypeScript helper generation, each official catalog descriptor source
  * file supplies its `spec` shape (= JSON Schema 2020-12 form), `outputs` list,
  * `capabilityTerms` enum, publication envelope
  * (`referenceAliases` / `publications{}`), and optional consumer-slot
  * compatibility metadata (`listens{}`). The generator emits a
- * sibling `packages/plugins/src/kinds/<basename>.generated.ts`
+ * sibling `packages/kind-<name>/src/<basename>.generated.ts`
  * containing:
  *
  *   - `<Prefix>Spec` interface (derived from JSON Schema)
@@ -28,7 +29,6 @@
  * TypeScript naming is repo-local generator policy. Public JSON-LD descriptor
  * bodies stay free of `x-*` tooling metadata.
  */
-import { walk } from "jsr:@std/fs@^1.0.5/walk";
 import { fromFileUrl } from "jsr:@std/path@^1.0.6";
 
 interface JsonSchema {
@@ -88,14 +88,49 @@ interface GeneratorContext {
   readonly imports: Map<string, Set<string>>;
 }
 
-const SPEC_ROOT = fromFileUrl(
-  new URL("../packages/plugins/spec/kinds/v1", import.meta.url),
-);
-const OUTPUT_DIR = fromFileUrl(
-  new URL("../packages/plugins/src/kinds", import.meta.url),
-);
-const HEADER = "// AUTO-GENERATED FROM packages/plugins/spec/kinds/v1/" +
-  "<basename>.jsonld — DO NOT EDIT.\n" +
+interface KindSourceTarget {
+  readonly source: string;
+  readonly sourceBasename: string;
+  readonly outputDir: string;
+}
+
+const KIND_SOURCE_TARGETS: readonly KindSourceTarget[] = [
+  {
+    source: "../packages/kind-worker/spec/kind.jsonld",
+    sourceBasename: "worker",
+    outputDir: "../packages/kind-worker/src",
+  },
+  {
+    source: "../packages/kind-web-service/spec/kind.jsonld",
+    sourceBasename: "web-service",
+    outputDir: "../packages/kind-web-service/src",
+  },
+  {
+    source: "../packages/kind-postgres/spec/kind.jsonld",
+    sourceBasename: "postgres",
+    outputDir: "../packages/kind-postgres/src",
+  },
+  {
+    source: "../packages/kind-object-store/spec/kind.jsonld",
+    sourceBasename: "object-store",
+    outputDir: "../packages/kind-object-store/src",
+  },
+  {
+    source: "../packages/kind-gateway/spec/kind.jsonld",
+    sourceBasename: "gateway",
+    outputDir: "../packages/kind-gateway/src",
+  },
+];
+
+function sourcePath(target: KindSourceTarget): string {
+  return fromFileUrl(new URL(target.source, import.meta.url));
+}
+
+function outputPath(target: KindSourceTarget): string {
+  return fromFileUrl(new URL(target.outputDir, import.meta.url));
+}
+const HEADER = "// AUTO-GENERATED FROM package-owned kind descriptor " +
+  "spec/kind.jsonld — DO NOT EDIT.\n" +
   "// Run `deno task spec:generate-ts` to refresh.\n";
 const TS_GENERATION_OVERRIDES: Readonly<
   Record<string, { readonly fileBasename: string; readonly prefix: string }>
@@ -114,20 +149,16 @@ if (import.meta.main) {
 
 async function main(): Promise<number> {
   const docs = await loadKindDocs();
-  if (docs.length === 0) {
-    console.error(`[spec:generate-ts] no .jsonld files found in ${SPEC_ROOT}`);
-    return 2;
-  }
   const written: string[] = [];
-  for (const { doc, sourceBasename } of docs) {
-    const ts = generateTs(doc, sourceBasename);
-    const target = generationTarget(doc, sourceBasename);
-    const outPath = `${OUTPUT_DIR}/${target.fileBasename}.generated.ts`;
+  for (const loaded of docs) {
+    const ts = generateTs(loaded.doc, loaded.sourceBasename);
+    const target = generationTarget(loaded.doc, loaded.sourceBasename);
+    const outPath = `${loaded.outputDir}/${target.fileBasename}.generated.ts`;
     await Deno.writeTextFile(outPath, ts);
     written.push(outPath);
     console.log(
-      `[spec:generate-ts] wrote ${outPath} (${doc.name}@${doc.version}, ${
-        doc["@id"]
+      `[spec:generate-ts] wrote ${outPath} (${loaded.doc.name}@${loaded.doc.version}, ${
+        loaded.doc["@id"]
       })`,
     );
   }
@@ -164,9 +195,9 @@ export async function generateAllToTemp(): Promise<
     const docs = await loadKindDocs();
     const paths: string[] = [];
     const map = new Map<string, string>();
-    for (const { doc, sourceBasename } of docs) {
-      const ts = generateTs(doc, sourceBasename);
-      const target = generationTarget(doc, sourceBasename);
+    for (const loaded of docs) {
+      const ts = generateTs(loaded.doc, loaded.sourceBasename);
+      const target = generationTarget(loaded.doc, loaded.sourceBasename);
       const outPath = `${tmpDir}/${target.fileBasename}.generated.ts`;
       await Deno.writeTextFile(outPath, ts);
       paths.push(outPath);
@@ -183,31 +214,46 @@ export async function generateAllToTemp(): Promise<
   }
 }
 
+export function generatedKindTargets(): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  for (const source of KIND_SOURCE_TARGETS) {
+    const target = generationTarget(
+      { name: source.sourceBasename } as KindDoc,
+      source.sourceBasename,
+    );
+    out.set(
+      target.fileBasename,
+      `${outputPath(source)}/${target.fileBasename}.generated.ts`,
+    );
+  }
+  return out;
+}
+
 export function outputDir(): string {
-  return OUTPUT_DIR;
+  return fromFileUrl(new URL("../packages", import.meta.url));
 }
 
 export interface LoadedKindDoc {
   readonly path: string;
   readonly sourceBasename: string;
+  readonly outputDir: string;
   readonly doc: KindDoc;
 }
 
 export async function loadKindDocs(): Promise<readonly LoadedKindDoc[]> {
   const out: LoadedKindDoc[] = [];
-  for await (
-    const entry of walk(SPEC_ROOT, { includeDirs: false, exts: [".jsonld"] })
-  ) {
-    const text = await Deno.readTextFile(entry.path);
+  for (const target of KIND_SOURCE_TARGETS) {
+    const path = sourcePath(target);
+    const text = await Deno.readTextFile(path);
     const doc = JSON.parse(text) as KindDoc;
-    validateKindDoc(entry.path, doc);
+    validateKindDoc(path, doc);
     out.push({
-      path: entry.path,
-      sourceBasename: jsonLdBasename(entry.path),
+      path,
+      sourceBasename: target.sourceBasename,
+      outputDir: outputPath(target),
       doc,
     });
   }
-  out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
 }
 
@@ -427,13 +473,6 @@ function kindNameFromUri(uri: string): string {
   } catch {
     return uri.split("/").filter((s) => s.length > 0).at(-1) ?? "";
   }
-}
-
-function jsonLdBasename(path: string): string {
-  const filename = path.split(/[\\/]/).at(-1) ?? path;
-  return filename.endsWith(".jsonld")
-    ? filename.slice(0, -".jsonld".length)
-    : filename;
 }
 
 function renderImports(imports: Map<string, Set<string>>): string {

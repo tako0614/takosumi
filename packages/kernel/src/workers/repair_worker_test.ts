@@ -13,7 +13,7 @@ import { ProviderOperationService } from "../services/provider-operations/mod.ts
 import { InMemoryOutboxStore } from "../shared/events.ts";
 import { RepairWorker } from "./repair_worker.ts";
 
-Deno.test("RepairWorker rematerializes with a trusted provider package", async () => {
+Deno.test("RepairWorker rematerializes with a trusted kind package", async () => {
   const desiredStates = new InMemoryRuntimeDesiredStateStore();
   await desiredStates.put(desiredState());
   const outbox = new InMemoryOutboxStore();

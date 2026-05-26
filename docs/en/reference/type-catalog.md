@@ -2,7 +2,7 @@
 
 Takosumi publishes reusable kind definitions and output type vocabulary from `takosumi.com`. The Kind Catalog is a specification chapter next to the core specification. Operator configurations, including Takosumi Cloud, adopt catalog vocabulary from their own docs.
 
-This page defines Takosumi type vocabulary: kind definition identities, output type names, injection mode names, access metadata, and the JSON-LD format for the official catalog.
+This page defines Takosumi type vocabulary: kind definition identities, output type names, injection mode names, access metadata, and the JSON-LD format for the official catalog. Code that targets the official vocabulary can import TypeScript helpers from `@takos/takosumi-contract/type-catalog`.
 
 ## Normative Scope
 
@@ -15,9 +15,9 @@ The Kind Catalog defines:
 - access metadata vocabulary such as access mode enum, sensitivity levels, and safe default access
 - JSON-LD kind definition documents under `https://takosumi.com/kinds/v1/*` and the context document at `https://takosumi.com/contexts/v1.jsonld`
 
-The catalog defines reusable output formats. Operator configuration specs define concrete platform service paths, OIDC issuer operation, billing behavior, account management records, provider provisioning, and dashboard APIs.
+The catalog defines reusable output formats. Operator configuration specs define concrete platform service paths, OIDC issuer operation, billing behavior, account management records, backend provisioning, and dashboard APIs.
 
-Operators decide which catalog entries are enabled. They choose which catalog entries are visible in a Space, which aliases are active, which provider or local runtime implements each kind, and which platform service paths they offer.
+Operators decide which catalog entries are enabled. They choose which catalog entries are visible in a Space, which aliases are active, which backend or local runtime implements each kind, and which platform service paths they offer.
 
 ## Catalog Roles
 
@@ -29,7 +29,7 @@ Operators decide which catalog entries are enabled. They choose which catalog en
 | External output type | `identity.oidc@v1`                              | Reusable output type for platform services.         |
 | Access metadata      | `invoke-only`, `restricted`                     | Access and projection metadata for external output. |
 
-The manifest records catalog references as strings such as `kind`, `publish.<name>.as`, and `listen.<binding>.as`. Operator resolution attaches kind definition semantics, chooses which catalog entries are visible in a Space, and selects the provider configuration that creates/updates the resources.
+The manifest records catalog references as strings such as `kind`, `publish.<name>.as`, and `listen.<binding>.as`. Operator resolution attaches kind definition semantics, chooses which catalog entries are visible in a Space, and selects the implementation binding that creates/updates the resources. Native kind packages are listed in [Kind Packages](/en/reference/kind-packages).
 
 ## Official Kind Definitions
 
@@ -47,7 +47,9 @@ Short aliases are operator-selected conveniences. The URI is the kind definition
 
 ## Output Types
 
-Output types define the portable format of output data offered by `publish.<name>.as` or by a platform service entry. Publisher paths, provider resources, dashboard routes, and account management lifecycle belong to the operator or product distribution spec that offers the output.
+Output types define the portable format of output data offered by `publish.<name>.as` or by a platform service entry. Publisher paths, backend resources, dashboard routes, and account management lifecycle belong to the operator or product distribution spec that offers the output.
+
+Official output material is a closed shape. Operator-specific fields should be modeled as another output type or catalog extension. Provider-local outputs are not publication material until the kind definition or implementation binding projects them into the official material shape.
 
 | Contract           | Public / non-secret fields                                                                           | Secret refs                                               | Typical projections               |
 | ------------------ | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------- |
@@ -105,7 +107,7 @@ billing.port@v1:
 
 `ref` fields are operator-provided reference strings. They are stable handles for operator projections and Deployment records; they are not raw secret values.
 
-Public Deployment outputs and operator read APIs expose only non-secret fields plus refs. Raw passwords, client secrets, payment-provider credentials, bearer tokens, and generated private keys are delivered only through operator-approved runtime secret mechanisms.
+Public Deployment outputs and operator read APIs expose only non-secret fields plus refs. Raw passwords, client secrets, payment-backend credentials, bearer tokens, and generated private keys are delivered only through operator-approved runtime secret mechanisms.
 
 ## Injection Modes
 
@@ -177,14 +179,14 @@ Platform services use the same output types as same-manifest component published
 | Term                | Meaning                                                                                 |
 | ------------------- | --------------------------------------------------------------------------------------- |
 | `accessModes`       | Allowed access modes: `read`, `read-write`, `admin`, `invoke-only`, and `observe-only`. |
-| `sensitivity`       | Output sensitivity level such as `public-config` or `restricted`.                       |
+| `sensitivity`       | Official enum: `public-config`, `internal`, `restricted`, `secret-bearing`.             |
 | `safeDefaultAccess` | Default access mode before operator policy selects stronger access.                     |
 
 ## JSON-LD Kind Definition Metadata
 
-JSON-LD is the format for kind definitions, vocabulary terms, and catalog metadata. Runtime behavior belongs to the operator-selected provider configuration.
+JSON-LD is the format for kind definitions, vocabulary terms, and catalog metadata. Runtime behavior belongs to the operator-selected implementation binding.
 
-`publications.<name>.contract` names the output type used by `publish.<name>.as`. Kind definition documents can include `exampleMaterialMapping` metadata for generated helper types, examples, and documentation checks. Markers such as `$outputs.*` are non-executable example metadata; operator-selected provider configurations collect and record provider output in Deployment records.
+`publications.<name>.contract` names the output type used by `publish.<name>.as`. Kind definition documents can include `exampleMaterialMapping` metadata for generated helper types, examples, and documentation checks. `exampleMaterialMapping` uses the same field layout as the official material shape; secret refs use `{ "secretRef": "$outputs.name" }`. Markers such as `$outputs.*` are non-executable example metadata; operator-selected implementation bindings collect and record backend output in Deployment records.
 
 `listens.<slot>.projectionFamilies` lists injection modes accepted through a component-local `listen` slot.
 
@@ -210,6 +212,6 @@ JSON-LD is the format for kind definitions, vocabulary terms, and catalog metada
 
 ## Source Of Truth
 
-The public catalog surface is the published `https://takosumi.com/kinds/v1/*`, `https://takosumi.com/kinds/v1/*.jsonld`, and `https://takosumi.com/contexts/v1.jsonld` documents plus this page.
+The public catalog surface is the published `https://takosumi.com/kinds/v1/*`, `https://takosumi.com/kinds/v1/*.jsonld`, and `https://takosumi.com/contexts/v1.jsonld` documents, this page, and the `@takos/takosumi-contract/type-catalog` TypeScript helpers.
 
-Conforming implementations may compile, mirror, or vendor the catalog. Runtime execution uses the operator-selected provider configuration to choose runtime or provider implementations.
+Conforming implementations may compile, mirror, or vendor the catalog. Runtime execution uses the operator-selected implementation binding to choose the backend implementation.

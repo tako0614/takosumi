@@ -54,7 +54,7 @@ export interface PrepareArtifactRequestInput {
   resolvedGraphDigest: Digest;
   packageResolutionDigest: Digest;
   artifactDigest: Digest;
-  providerPackageDigests?: readonly Digest[];
+  kindPackageDigests?: readonly Digest[];
   resourceContractPackageDigests?: readonly Digest[];
   dataContractPackageDigests?: readonly Digest[];
   nativeSchemaDigests?: readonly Digest[];
@@ -202,7 +202,7 @@ export class SupplyChainService {
       buildEnvironmentDigest: input.buildEnvironmentDigest,
       artifactDigest: input.artifactDigest,
       packageResolutionDigest: input.packageResolutionDigest,
-      providerPackageDigests: [...(input.providerPackageDigests ?? [])],
+      kindPackageDigests: [...(input.kindPackageDigests ?? [])],
       resourceContractPackageDigests: [
         ...(input.resourceContractPackageDigests ?? []),
       ],

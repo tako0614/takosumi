@@ -6,6 +6,7 @@
     ".": "./mod.ts",
     "./app-spec": "./src/app-spec.ts",
     "./installer-api": "./src/installer-api.ts",
+    "./type-catalog": "./src/type-catalog.ts",
     "./reference/compat": "./src/reference-compat.ts",
     "./reference/error-category": "./src/error-category.ts",
     "./reference/plugin": "./src/plugin.ts",

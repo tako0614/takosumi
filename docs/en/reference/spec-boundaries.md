@@ -76,7 +76,7 @@ An operator configuration can adopt output types from the official type catalog.
 | operator-provided workload platform service path                               | that operator configuration spec  |
 | account API, billing flow, identity issuer endpoint, dashboard route           | that operator configuration spec  |
 | deploy/admin facade around Installer API                                       | that operator configuration spec  |
-| implementation-specific provider loading or provider package wiring            | implementation docs               |
+| implementation-specific binding loading or kind package wiring                 | implementation docs               |
 
 ## Reading Order {#reading-order}
 

@@ -622,7 +622,7 @@ export interface LongRunningOperationEnqueue {
   readonly descriptor: string;
   readonly desiredStateId: string;
   readonly targetId?: string;
-  /** Arbitrary, JSON-safe payload the connector-local provider adapter understands. */
+  /** Arbitrary, JSON-safe payload the connector-local backend adapter understands. */
   readonly payload: JsonObject;
   /** Operator priority (higher first). Default 0. */
   readonly priority?: number;

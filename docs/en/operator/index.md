@@ -1,6 +1,6 @@
 # Operator Overview {#operator-overview}
 
-The operator's configuration chooses how Takosumi core is exposed and implemented. It supplies Space context, which kinds are enabled, provider credentials, account management APIs, and read APIs.
+The operator's configuration chooses how Takosumi core is exposed and implemented. It supplies Space context, which kinds are enabled, backend credentials, account management APIs, and read APIs.
 
 The [public contract](../getting-started/concepts.md) stays as-is regardless of operator choices.
 

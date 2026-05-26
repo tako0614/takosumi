@@ -100,7 +100,7 @@ function buildRecordingPlugin(opts: {
       });
     },
     publishMaterial: opts.publishMaterial ??
-      ((ctx) => Promise.resolve(ctx.outputs as NamespaceMaterial)),
+      ((ctx) => Promise.resolve(defaultTestPublishMaterial(ctx))),
     applyListen: opts.applyListen,
     onInstallStart: () => {
       opts.recorder.push(`onInstallStart:${opts.name}`);
@@ -119,6 +119,25 @@ function buildRecordingPlugin(opts: {
       return Promise.resolve();
     },
   };
+}
+
+function defaultTestPublishMaterial(
+  ctx: PublishMaterialContext,
+): NamespaceMaterial {
+  if (ctx.options.as === "service-binding") {
+    return {
+      protocol: "postgresql",
+      host: String(ctx.outputs.host ?? "db.local"),
+      port: Number(ctx.outputs.port ?? 5432),
+      ...(ctx.outputs.database
+        ? { database: String(ctx.outputs.database) }
+        : {}),
+      ...(ctx.outputs.username
+        ? { username: String(ctx.outputs.username) }
+        : {}),
+    };
+  }
+  return ctx.outputs as NamespaceMaterial;
 }
 
 Deno.test("installer lifecycle hooks fire onInstallStart -> onDeploymentStart -> apply -> onDeploymentComplete -> onInstallComplete", async () => {
@@ -456,7 +475,11 @@ Deno.test("installer onDeploymentComplete error is swallowed (post-apply hook is
           outputs: { host: "db.local", port: "5432" },
         }),
       publishMaterial: (ctx) =>
-        Promise.resolve(ctx.outputs as NamespaceMaterial),
+        Promise.resolve({
+          protocol: "postgresql",
+          host: String(ctx.outputs.host),
+          port: Number(ctx.outputs.port),
+        }),
       onDeploymentComplete: () =>
         Promise.reject(new Error("post-deploy hook failed")),
     };

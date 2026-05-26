@@ -16,24 +16,24 @@ Takosumi-only 化に伴い `yurucommu-a` / `yurucommu-b` の直起動 + federati
 
 ### 詳細実装計画 (drafted 2026-05-18)
 
-既存 `worker@v1` shape provider:
+既存 worker kind packages:
 
-- `packages/plugins/src/shape-providers/worker/cloudflare-workers.ts` — 実 Cloudflare API を叩く reference impl
-- `packages/plugins/src/shape-providers/worker/deno-deploy.ts` — Deno Deploy版
-- `packages/plugins/src/shapes/worker.ts` — shape contract (`WorkerSpec` / `WorkerOutputs` / `WorkerCapability`)
+- `packages/kind-worker/` — portable worker descriptor / types
+- `takosumi-plugins/packages/kind-cloudflare-worker/` — Cloudflare Workers native binding
+- `takosumi-plugins/packages/kind-deno-deploy-worker/` — Deno Deploy native binding
 
-両 provider とも `ProviderPlugin<WorkerSpec, WorkerOutputs>` を返し、 `apply(spec) → { handle, outputs }` / `destroy(handle)` / `status(handle)` の 3 メソッド。 lifecycle は `XxxLifecycleClient` interface に hook 化されて DI される (= mock 化容易)。
+native binding は `KernelPlugin` factory を返し、必要な lifecycle client は DI できる (= mock 化容易)。
 
 **必要な新規 module + 工数見積もり**:
 
-| Sub-task                              | 内容                                                                                                                                                                                                                                                                                                                 |                 工数 |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------: |
-| (1) `local-miniflare` provider 実装   | `packages/plugins/src/shape-providers/worker/local-miniflare.ts` 新規: `MiniflareLifecycleClient` impl — prepared source の `spec.entrypoint` を読み、miniflare subprocess を spawn + component `spec` の D1/R2/KV/Queue/DO bindings を flag 解釈 + Caddy admin API で `<scriptName>.app.takosumi.test` route 追加。 |                 4-6h |
-| (2) factory wire                      | kernel bootstrap で `packages/plugins/src/shape-providers/factories.ts` 経由で provider register。 local mode (= TAKOSUMI_DEV_MODE=1) なら cloudflare-workers の代わりに local-miniflare を inject する分岐を追加                                                                                                    |                   1h |
-| (3) installer-mock の本物化           | 現状 `installer-mock/main.ts` は fixture JSON 返すだけ。 kernel installer dry-run を呼ぶ shim に refactor、または Accounts 側の dry-run contract を `/v1/installations/dry-run` と統合                                                                                                                               |                 2-4h |
-| (4) prepared source pipeline (簡易版) | yurucommu repo で `.takosumi.build.yml` を事前に実行し、生成済み source tree を prepared source snapshot として pin する shim service は follow-up                                                                                                                                                                   |                 1-2h |
-| (5) federation 復活 smoke             | 新 `scripts/yurucommu-install-federation.sh`: yurucommu AppSpec を 2 つ複製 (metadata.id + route 差別化) → POST /v1/installations x 2 → allocated subdomain 2 個取得 → 旧 federation-follow.sh のロジックで Follow → Accept poll                                                                                     |                 2-3h |
-| **計**                                |                                                                                                                                                                                                                                                                                                                      | **10-16h = 1-2 day** |
+| Sub-task                               | 内容                                                                                                                                                                                                                                                                                        |                 工数 |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------: |
+| (1) `local-miniflare-worker` kind 実装 | `packages/kind-local-miniflare-worker/` 新規: `MiniflareLifecycleClient` impl — prepared source の `spec.entrypoint` を読み、miniflare subprocess を spawn + component `spec` の D1/R2/KV/Queue/DO bindings を flag 解釈 + Caddy admin API で `<scriptName>.app.takosumi.test` route 追加。 |                 4-6h |
+| (2) factory wire                       | local-substrate bootstrap で local kind package を import し、`createPaaSApp({ kindAliases, plugins })` に渡す。 local mode (= TAKOSUMI_DEV_MODE=1) なら Cloudflare Workers kind の代わりに local-miniflare kind を使う。                                                                   |                   1h |
+| (3) installer-mock の本物化            | 現状 `installer-mock/main.ts` は fixture JSON 返すだけ。 kernel installer dry-run を呼ぶ shim に refactor、または Accounts 側の dry-run contract を `/v1/installations/dry-run` と統合                                                                                                      |                 2-4h |
+| (4) prepared source pipeline (簡易版)  | yurucommu repo で `.takosumi.build.yml` を事前に実行し、生成済み source tree を prepared source snapshot として pin する shim service は follow-up                                                                                                                                          |                 1-2h |
+| (5) federation 復活 smoke              | 新 `scripts/yurucommu-install-federation.sh`: yurucommu AppSpec を 2 つ複製 (metadata.id + route 差別化) → POST /v1/installations x 2 → allocated subdomain 2 個取得 → 旧 federation-follow.sh のロジックで Follow → Accept poll                                                            |                 2-3h |
+| **計**                                 |                                                                                                                                                                                                                                                                                             | **10-16h = 1-2 day** |
 
 session 内 complete は非現実的なため deferred。着手時はこの sub-plan をコピーして個別 PR にする (1 PR = 1 sub-task)。着手順は `(2) → (1) → (4) →
 (3) → (5)` を推奨 (factory が一番先、 smoke が一番後)。これが landed したら yurucommu の federation 系 2 smoke を新 architecture で復活させる (= test bed が「Takosumi 1 個」を verify するための 1 example として yurucommu install が走る形)。

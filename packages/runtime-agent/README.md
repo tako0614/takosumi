@@ -49,7 +49,7 @@ The takosumi.com reference runtime-agent ships connector examples for common pro
 | Deno                      | `@takos/deno-deploy`                                                                                                                                                                 |
 | Local / external adapters | `@takos/filesystem-object-store`, `@takos/minio-object-store`, `@takos/docker-compose-web-service`, `@takos/systemd-web-service`, `@takos/docker-postgres`, `@takos/coredns-gateway` |
 
-External connector examples may use the same lifecycle envelope. For example, `@takos/azure-container-apps` can implement `web-service@v1` outside the current reference provider package set.
+External connector examples may use the same lifecycle envelope. For example, `@takos/takosumi-kind-azure-container-apps-web-service` in `takosumi-plugins` implements a native web-service binding outside the portable `web-service` shape.
 
 Each connector implements:
 

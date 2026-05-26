@@ -59,7 +59,7 @@ Deno.test("GC keeps old WorkloadRevision during rollback window", async () => {
   assert.equal(expired.deleteOperation?.dryRun, true);
 });
 
-Deno.test("GC plans prepared artifact/resource/provider package decisions without deleting", async () => {
+Deno.test("GC plans prepared artifact/resource/kind package decisions without deleting", async () => {
   const service = new GcRetentionService({
     protectedReferences: new InMemoryProtectedReferenceStore(),
   });
@@ -97,7 +97,7 @@ Deno.test("GC plans prepared artifact/resource/provider package decisions withou
       activeBindingCount: 0,
       providerResourceActive: false,
     }],
-    providerPackages: [{
+    kindPackages: [{
       digest: "sha256:provider-active",
       activeMaterializationIds: ["materialization_current"],
     }, {
@@ -140,7 +140,7 @@ Deno.test("GC plans prepared artifact/resource/provider package decisions withou
     [
       ["PreparedArtifact", "artifact_expired"],
       ["ResourceInstance", "resource_deleted"],
-      ["ProviderPackage", "sha256:provider-unused"],
+      ["KindPackage", "sha256:provider-unused"],
     ],
   );
 });

@@ -1,6 +1,6 @@
 # オペレーター {#operator}
 
-operator は Takosumi を起動し、どの provider 実装、storage、 secret、runtime execution を使うかを決めます。アカウント管理 (課金・認証) / signup flow は operator のアカウント管理資料で扱います。Takosumi Cloud を使う場合は [Takosumi Cloud](../reference/takosumi-cloud.md) から参照します。
+operator は Takosumi を起動し、どの implementation binding、storage、secret、runtime execution を使うかを決めます。アカウント管理 (課金・認証) / signup flow は operator のアカウント管理資料で扱います。Takosumi Cloud を使う場合は [Takosumi Cloud](../reference/takosumi-cloud.md) から参照します。
 
 ## 前提知識
 
@@ -27,7 +27,7 @@ single-host reference distribution や Takosumi Cloud 構成が要求する runt
 | -------------------- | --------------------------------------------------------------------- |
 | source intake        | git source、ビルド済みアーカイブ、dev / operator-local source         |
 | Space / actor policy | token claim、Space visibility、外部サービスへのアクセス               |
-| kind resolution      | alias map、kind の定義、provider 実装の公開範囲                       |
+| kind resolution      | alias map、kind の定義、implementation binding の公開範囲             |
 | state / secret store | Postgres、secret encryption key、backup / restore                     |
 | runtime execution    | embedded execution role、別 host execution role、cloud API credential |
 | optional extensions  | content storage、observability、operator UI                           |

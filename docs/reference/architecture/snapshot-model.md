@@ -18,7 +18,7 @@ Space-visible kind alias / descriptor provenance
 manifest publish/listen edge dependency provenance
 link intents derived from component kind publish/listen bindings
 exposure intents derived from kind-specific specs
-optional operator asset extension requirements / refs resolved by operator policy, kind schema, provider binding, or connector binding
+optional operator asset extension requirements / refs resolved by operator policy, kind schema, implementation binding, or connector binding
 space id from deploy context
 ```
 

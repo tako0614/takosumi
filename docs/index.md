@@ -39,14 +39,14 @@ features:
 
 ## 最初に読むもの
 
-| 読者                         | 最初のページ                                        |
-| ---------------------------- | --------------------------------------------------- |
-| 迷ったとき                   | [読む順序](./getting-started/reading-paths.md)      |
-| 初めて読む                   | [コンセプト](./getting-started/concepts.md)         |
-| まず動かしたい               | [クイックスタート](./getting-started/quickstart.md) |
-| `.takosumi.yml` を書きたい   | [Manifest リファレンス](./reference/manifest.md)    |
-| operator として運用したい    | [オペレーター](./operator/index.md)                 |
-| provider / kind を増やしたい | [Takosumi を拡張する](./extending.md)               |
+| 読者                                | 最初のページ                                        |
+| ----------------------------------- | --------------------------------------------------- |
+| 迷ったとき                          | [読む順序](./getting-started/reading-paths.md)      |
+| 初めて読む                          | [コンセプト](./getting-started/concepts.md)         |
+| まず動かしたい                      | [クイックスタート](./getting-started/quickstart.md) |
+| `.takosumi.yml` を書きたい          | [Manifest リファレンス](./reference/manifest.md)    |
+| operator として運用したい           | [オペレーター](./operator/index.md)                 |
+| kind / backend adapter を増やしたい | [Takosumi を拡張する](./extending.md)               |
 
 仕様の詳細は[仕様境界](./reference/spec-boundaries.md)を参照。
 

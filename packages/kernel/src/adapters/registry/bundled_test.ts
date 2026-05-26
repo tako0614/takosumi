@@ -11,8 +11,8 @@ Deno.test("bundled registry seed adapter resolves built-in packages by kind and 
   const expected = [
     ["resource-contract-package", "resource.sql.postgres@v1"],
     ["resource-contract-package", "resource.object-store.s3@v1"],
-    ["provider-package", "provider.noop@v1"],
-    ["provider-package", "provider.local-docker@v1"],
+    ["kind-package", "provider.noop@v1"],
+    ["kind-package", "provider.local-docker@v1"],
     ["data-contract-package", "data.json@v1"],
     ["output-contract-package", "output.route@v1"],
   ] as const;
@@ -47,7 +47,7 @@ Deno.test("bundled registry seed adapter only resolves digest-pinned built-ins",
   const registry = new BundledRegistrySeedAdapter();
 
   assert.equal(
-    await registry.resolve("provider-package", "missing@v1"),
+    await registry.resolve("kind-package", "missing@v1"),
     undefined,
   );
   assert.equal(
@@ -56,7 +56,7 @@ Deno.test("bundled registry seed adapter only resolves digest-pinned built-ins",
   );
 
   const resolution = await registry.resolve(
-    "provider-package",
+    "kind-package",
     "provider.noop@v1",
   );
   assert.ok(resolution);
@@ -92,7 +92,7 @@ Deno.test("bundled registry seed adapter reports provider support", async () => 
   const reports = await registry.listProviderSupport();
   assert.equal(reports.length, 2);
   assert.deepEqual(
-    reports.map((report) => report.providerPackageRef).sort(),
+    reports.map((report) => report.kindPackageRef).sort(),
     ["provider.local-docker@v1", "provider.noop@v1"],
   );
   for (const report of reports) {

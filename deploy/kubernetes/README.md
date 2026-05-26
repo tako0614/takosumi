@@ -1,10 +1,10 @@
-# Takos Kubernetes Provider Runbook
+# Takosumi Kubernetes Kind Runbook
 
-This directory documents the Kubernetes surface as **operator-owned scope**: the operator-attached provider package (`packages/kubernetes-providers/`) and runtime-agent connectors (`packages/runtime-agent/src/connectors/kubernetes/`) provide Kubernetes lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Helm chart / kustomize overlay / Argo CD manifests that land the Takosumi kernel image and runtime-agent image on a Kubernetes cluster) is also the operator's responsibility. Operators provide the production-grade Kubernetes deploy artifact for their distribution.
+This directory documents the Kubernetes surface as **operator-owned scope**: the Kubernetes native kind package (`takosumi-plugins/packages/kind-kubernetes-web-service/`) and runtime-agent connectors (`packages/runtime-agent/src/connectors/kubernetes/`) provide Kubernetes lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Helm chart / kustomize overlay / Argo CD manifests that land the Takosumi kernel image and runtime-agent image on a Kubernetes cluster) is also the operator's responsibility. Operators provide the production-grade Kubernetes deploy artifact for their distribution.
 
 ## Why no reference Helm chart
 
-The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. Kubernetes is an operator-owned target: operators deploy the kernel image (from `deploy/single-host/Dockerfile.kernel`) and the runtime-agent image (from `deploy/single-host/Dockerfile.runtime-agent`) using their existing GitOps / Helm / kustomize tooling, then attach the Kubernetes provider factory from `@takos/takosumi-kubernetes-providers` plus matching runtime-agent credentials.
+The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. Kubernetes is an operator-owned target: operators deploy the kernel image (from `deploy/single-host/Dockerfile.kernel`) and the runtime-agent image (from `deploy/single-host/Dockerfile.runtime-agent`) using their existing GitOps / Helm / kustomize tooling, then attach `@takos/takosumi-kind-kubernetes-web-service` plus matching runtime-agent credentials.
 
 ## Required runtime shape
 

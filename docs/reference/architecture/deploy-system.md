@@ -20,7 +20,7 @@ git source / prepared source archive
 - Deployment は Installation に対する apply の履歴。
 - rollback は `POST /v1/installations/{id}/rollback` で過去 Deployment を入力に current pointer を戻す。
 
-Deployment の apply は operator-selected execution によって実体化されます。 runtime-agent、provider connector、in-process controller などの packaging は operator implementation の選択です。
+Deployment の apply は operator-selected execution によって実体化されます。runtime-agent、backend connector、in-process controller などの packaging は operator implementation の選択です。
 
 ## Workflow placement {#workflow-placement}
 

@@ -1,10 +1,10 @@
-# Takos GCP Provider Runbook
+# Takosumi GCP Kind Runbook
 
-This directory documents the GCP surface as **operator-owned scope**: the operator-attached provider package (`packages/gcp-providers/`) and runtime-agent connectors (`packages/runtime-agent/src/connectors/gcp/`) provide GCP lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Terraform / Pulumi / Deployment Manager that lands the Takosumi kernel image and runtime-agent image on GCP infrastructure) is also the operator's responsibility. Operators provide the production-grade GCP IaC stack for their distribution.
+This directory documents the GCP surface as **operator-owned scope**: GCP native kind packages (`takosumi-plugins/packages/kind-gcp-*`) and runtime-agent connectors (`packages/runtime-agent/src/connectors/gcp/`) provide GCP lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Terraform / Pulumi / Deployment Manager that lands the Takosumi kernel image and runtime-agent image on GCP infrastructure) is also the operator's responsibility. Operators provide the production-grade GCP IaC stack for their distribution.
 
 ## Why no reference deploy here
 
-The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. GCP / AWS / Azure / k8s are operator-owned targets: operators run the kernel image on whatever GCP compute they prefer (Cloud Run / GKE / GCE), point the kernel at a Postgres database (Cloud SQL), and attach the GCP provider factories from `@takos/takosumi-gcp-providers` plus matching runtime-agent credentials.
+The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. GCP / AWS / Azure / k8s are operator-owned targets: operators run the kernel image on whatever GCP compute they prefer (Cloud Run / GKE / GCE), point the kernel at a Postgres database (Cloud SQL), and attach the needed GCP kind factories such as `@takos/takosumi-kind-gcp-cloud-run-web-service`, `@takos/takosumi-kind-gcp-cloud-sql-postgres`, `@takos/takosumi-kind-gcp-gcs-object-store`, or `@takos/takosumi-kind-gcp-cloud-dns-gateway`.
 
 ## Required runtime shape
 

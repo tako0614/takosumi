@@ -1,4 +1,4 @@
-import { registerBundledArtifactKinds } from "@takos/takosumi-plugins/shape-providers";
+import { registerBundledArtifactKinds } from "./artifact_kinds.ts";
 
 let artifactKindsRegistered = false;
 

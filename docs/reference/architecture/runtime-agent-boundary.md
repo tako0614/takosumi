@@ -115,7 +115,7 @@ reference runtime-agent の `verify` request は登録済み connector に対す
 
 ## Runtime-agent auth chain
 
-Takosumi → runtime-agent 方向の認証方式は operator の設定の internal runtime auth です。provider package は通常の operator import として読み込まれ、 runtime-agent の host 権限は enrollment / heartbeat / lease material に bind された `(shape, provider)` ペアで表す。runtime-agent はその material に基づいて lifecycle request を受けます。
+Takosumi → runtime-agent 方向の認証方式は operator の設定の internal runtime auth です。kind package は通常の operator import として読み込まれ、 runtime-agent の host 権限は enrollment / heartbeat / lease material に bind された `(shape, provider)` ペアで表す。runtime-agent はその material に基づいて lifecycle request を受けます。
 
 runtime-agent → Takosumi 方向は別の auth path である: enrollment token が identity を確立し、heartbeat / lease token で runtime-agent を attach し続け、agent bearer (`TAKOSUMI_AGENT_TOKEN`) が lifecycle / connectors RPC を保護する。両方向は鍵素材を分け、blast radius を片側の auth path に閉じる。
 

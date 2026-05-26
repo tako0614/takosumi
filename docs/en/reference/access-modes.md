@@ -32,7 +32,7 @@ Observation-only access to the published resource. The consumer can inspect stat
 
 Full management authority for the published resource within the lifecycle surface the provider permits. This is the most privileged closed enum value.
 
-- Allowed: every `read-write` permission plus management operations provided by the component kind definition or selected provider configuration
+- Allowed: every `read-write` permission plus management operations provided by the component kind definition or selected implementation binding
 - Not allowed: cross-resource side effects outside the selected resource's management boundary unless operator policy and approval allow them
 - Default behavior: `admin` is never a safe default. It requires explicit operator policy and, where the operator uses approvals, approval flow.
 - Typical example: an operator control-plane Space that manages databases; this is rare for application Spaces
@@ -43,7 +43,7 @@ The consumer can call the resource through an invocation surface from the compon
 
 - Allowed: invoke / call / publish / submit under the component kind invocation contract
 - Not allowed: reading accumulated state, observing an internal queue, or mutating outside the invocation envelope
-- Typical example: a worker calls another component's invocation output via provider-native private routing or resolved output data, or publishes to a queue without queue read authority
+- Typical example: a worker calls another component's invocation output via backend-native private routing or resolved output data, or publishes to a queue without queue read authority
 
 ### `observe-only`
 

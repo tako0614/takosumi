@@ -1,6 +1,6 @@
 # イングレスルーティング {#exposure-activation-model}
 
-Exposure は runtime routing の内部 record です。public manifest では `gateway` のような component の `listen` と kind-specific `spec` として表現します。 Exposure は public ingress intent と activation state を記録し、runtime request は provider-native data plane が処理します。
+Exposure は runtime routing の内部 record です。public manifest では `gateway` のような component の `listen` と kind-specific `spec` として表現します。Exposure は public ingress intent と activation state を記録し、runtime request は backend-native data plane が処理します。
 
 public ingress を持つ component は 1 つの Space の中に Exposure intent を作成する。public manifest では、`gateway` のような component が upstream publication を `listen` し、listener / route rule を `spec` に持つ形で表現します。Exposure は Link と別の runtime object です。
 
@@ -36,19 +36,19 @@ components:
           to: app
 ```
 
-resolver はこれを `web.http` を `app` binding として listen する `app.example.com` の Exposure record に変換する。`web.http` は upstream の出力データ、`public.public` は materialized public endpoint の publish の出力です。Exposure は外部 ingress を準備するが、それだけで deployment を current にはしない。selected provider implementation は Exposure から Cloudflare route、Kubernetes Gateway / HTTPRoute、Caddy / Nginx config、load balancer rule、edge runtime binding などの data plane object を作ります。
+resolver はこれを `web.http` を `app` binding として listen する `app.example.com` の Exposure record に変換する。`web.http` は upstream の出力データ、`public.public` は materialized public endpoint の publish の出力です。Exposure は外部 ingress を準備するが、それだけで deployment を current にはしない。selected execution binding は Exposure から Cloudflare route、Kubernetes Gateway / HTTPRoute、Caddy / Nginx config、load balancer rule、edge runtime binding などの data plane object を作ります。
 
-`host` は gateway の kind の定義が持つ ingress input です。reservation、 custom-domain proof、DNS ownership proof、TLS provisioning は採用済みの kind の定義、operator policy、provider flow が扱います。manifest はその proof protocol を埋め込まない。
+`host` は gateway の kind の定義が持つ ingress input です。reservation、 custom-domain proof、DNS ownership proof、TLS provisioning は採用済みの kind の定義、operator policy、backend-specific flow が扱います。manifest はその proof protocol を埋め込まない。
 
 ```text
 runtime request:
-  client -> provider-native listener/route -> active workload
-         <- same provider data plane <- response
+  client -> backend-native listener/route -> active workload
+         <- same backend data plane <- response
 ```
 
 ## Installer API と activation {#installer-api-and-activation}
 
-public operation は Installer API の install / deploy / rollback です。reference Takosumi はその内側で resolve → apply → activate → observe の phase を進めます。別の public activate endpoint は作りません。Installer API が `Deployment.status: "succeeded"` を返す時点では、current Deployment として使うために必要な apply と activation の同期部分が完了しています。observe は後続で provider-native data plane を確認し、health annotation を更新します。
+public operation は Installer API の install / deploy / rollback です。reference Takosumi はその内側で resolve → apply → activate → observe の phase を進めます。別の public activate endpoint は作りません。Installer API が `Deployment.status: "succeeded"` を返す時点では、current Deployment として使うために必要な apply と activation の同期部分が完了しています。observe は後続で backend-native data plane を確認し、health annotation を更新します。
 
 ```text
 resolve:
@@ -64,7 +64,7 @@ post-activate observe:
   verify route health and active assignment
 ```
 
-Activation は traffic assignment / TrafficSnapshot / RoutingPointer を更新する内部 phase です。runtime request path は provider data plane のままです。
+Activation は traffic assignment / TrafficSnapshot / RoutingPointer を更新する内部 phase です。runtime request path は backend data plane のままです。
 
 ## Space ルール {#space-rule}
 
@@ -116,7 +116,7 @@ TrafficSnapshot の `assignments` が split / shadow を含む routing authority
 
 activation 後、exposure は closed v1 persisted health enum を通じて runtime reality を追跡する。`observing` は worker 内部の transient state で、persisted health enum は `unknown | healthy | degraded | unhealthy` です。状態遷移は [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal) の `observe` stage が ObservationState に append する entry によってのみ駆動される。どの状態遷移も TargetState を変更しない。
 
-observe は provider-native data plane を観測しますが、response path は担当しません。
+observe は backend-native data plane を観測しますが、response path は担当しません。
 
 ```text
 unknown → healthy

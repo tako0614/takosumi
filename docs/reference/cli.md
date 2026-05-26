@@ -37,7 +37,7 @@ token は次の順序で resolve します。
 2. `TAKOSUMI_INSTALLER_TOKEN` env
 3. config file の `token` field
 
-remote URL は `--remote https://kernel.example.com` か `TAKOSUMI_REMOTE_URL` env、 config file の `remote_url` から resolve します。
+remote URL は `--remote https://takosumi.example.com` か `TAKOSUMI_REMOTE_URL` env、 config file の `remote_url` から resolve します。
 
 ## サブコマンド {#subcommand}
 
@@ -47,12 +47,12 @@ remote URL は `--remote https://kernel.example.com` か `TAKOSUMI_REMOTE_URL` e
 
 ```bash
 # git source
-takosumi install --remote https://kernel.example.com \
+takosumi install --remote https://takosumi.example.com \
   --space space_personal \
   --source git:https://github.com/example/notes#v1.2.3
 
 # prepared source from an external build service
-takosumi install --remote https://kernel.example.com \
+takosumi install --remote https://takosumi.example.com \
   --space space_personal \
   --source prepared:https://source.example/prepared/notes.tar#sha256:...
 
@@ -94,7 +94,7 @@ response (`changes[]` / `expected.commit` / `expected.manifestDigest` / `expecte
 
 ### `takosumi deploy <installation-id> [--source <source>]`
 
-既存 Installation に対する apply。 `--source` 省略時は current Deployment に記録された immutable source descriptor を再利用します。対象は git source の resolved commit / ref と prepared source archive URL + digest です。`local` source は portable な source byte identity を持たないため、deploy dry-run / apply で `--source` を毎回渡します。dry-run から apply へ進む場合は `install` と同じ expected guard flag に加えて `--expected-current-deployment-id` を渡します。 dry-run response の `expected.currentDeploymentId` が `null` の場合は、CLI では literal `null` を渡します。
+既存 Installation に対する apply。 `--source` 省略時は current Deployment に記録された immutable source の記録 を再利用します。対象は git source の resolved commit / ref と prepared source archive URL + digest です。`local` source は portable な source byte identity を持たないため、deploy dry-run / apply で `--source` を毎回渡します。dry-run から apply へ進む場合は `install` と同じ expected guard flag に加えて `--expected-current-deployment-id` を渡します。 dry-run response の `expected.currentDeploymentId` が `null` の場合は、CLI では literal `null` を渡します。
 
 ```bash
 takosumi deploy inst_01HM9N7XK4QY8RT2P5JZF6V3W9 --source git:https://github.com/example/notes#v1.2.4
@@ -163,7 +163,7 @@ CLI version を表示。
 `~/.takosumi/config.yml` :
 
 ```yaml
-remote_url: https://kernel.example.com
+remote_url: https://takosumi.example.com
 token: <installer-token>
 ```
 

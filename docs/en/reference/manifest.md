@@ -210,15 +210,15 @@ install / deploy:
   manifest -> Installer API -> Deployment record / outputs
 
 runtime request:
-  client -> provider-native listener/route -> workload
-         <- same provider data plane <- response
+  client -> backend-native listener/route -> workload
+         <- same backend data plane <- response
 ```
 
-`host` is gateway-specific ingress input defined by that kind. Host omission, reservation, custom-domain proof, DNS ownership proof, and TLS provisioning are handled by the adopted kind definition, operator policy, and provider flow.
+`host` is gateway-specific ingress input defined by that kind. Host omission, reservation, custom-domain proof, DNS ownership proof, and TLS provisioning are handled by the adopted kind definition, operator policy, and backend-specific flow.
 
 `routes[].to` points to a `listen` key. In this example the listen key is `app` and the injection mode is `upstream`.
 
-Provider object IDs, DNS verification records, TLS certificate handles, and generated refs stay in the Deployment record. Runtime file paths used by a workload stay in the workload component's kind-specific `spec`. Runtime requests are handled by the provider data plane.
+Backend object IDs, DNS verification records, TLS certificate handles, and generated refs stay in the Deployment record. Runtime file paths used by a workload stay in the workload component's kind-specific `spec`. Runtime requests are handled by the backend data plane.
 
 ## Where Adjacent Data Lives {#where-adjacent-data-lives}
 
@@ -229,7 +229,7 @@ Provider object IDs, DNS verification records, TLS certificate handles, and gene
 | local source path                 | dev / operator-local Installer API input         |
 | build recipe or container command | build service or CI outside the manifest         |
 | runtime file path                 | kind-specific `spec`                             |
-| provider credential               | operator / provider configuration                |
+| backend credential                | operator / implementation binding                |
 | implementation selection          | operator configuration                           |
 | identity, billing, signup UI      | operator configuration / account management docs |
 | workflow, schedule, webhook       | automation that submits source to Installer API  |

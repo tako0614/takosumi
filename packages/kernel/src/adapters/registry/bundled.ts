@@ -61,7 +61,7 @@ const BUILT_IN_PACKAGE_SEEDS: readonly BuiltInPackageSeed[] = [
   },
   {
     ref: "provider.noop@v1",
-    kind: "provider-package",
+    kind: "kind-package",
     digest:
       "sha256:4f4881ad8747ad039d587479e4d1b8e11d9f8b39a5d4e6b88af9fa0f95734c56",
     version: "1.0.0",
@@ -91,7 +91,7 @@ const BUILT_IN_PACKAGE_SEEDS: readonly BuiltInPackageSeed[] = [
   },
   {
     ref: "provider.local-docker@v1",
-    kind: "provider-package",
+    kind: "kind-package",
     digest:
       "sha256:806df0fc4f7b68c60434a1c7f11b98a877af672de2b0bf73bc70b73c8fbd3f42",
     version: "1.0.0",
@@ -262,7 +262,7 @@ function providerSupportReport(
   limitations?: readonly string[],
 ): ProviderSupportReport {
   const resolution = bundledRegistrySeedResolutions.find((candidate) =>
-    candidate.kind === "provider-package" && candidate.ref === providerRef
+    candidate.kind === "kind-package" && candidate.ref === providerRef
   );
   if (!resolution) throw new Error(`Missing bundled provider ${providerRef}`);
   const interfaceContracts = providerRef === "provider.local-docker@v1"
@@ -277,8 +277,8 @@ function providerSupportReport(
     ? ["http", "tcp", "udp"]
     : ["http", "tcp", "udp", "queue"];
   return {
-    providerPackageRef: resolution.ref,
-    providerPackageDigest: resolution.digest,
+    kindPackageRef: resolution.ref,
+    kindPackageDigest: resolution.digest,
     resourceContracts: [
       "resource.sql.postgres@v1",
       "resource.object-store.s3@v1",

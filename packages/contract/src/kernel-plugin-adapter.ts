@@ -8,8 +8,8 @@
  * `resourceHandle` for the kernel's internal apply evidence.
  *
  * Single-source-of-truth: this adapter lives in `@takos/takosumi-contract`
- * (Phase K iteration 2 consolidation) so provider packages and external
- * adapter packages import the same implementation instead of shipping
+ * (Phase K iteration 2 consolidation) so kind packages import the same
+ * implementation instead of shipping
  * byte-identical 140-line copies. `KernelPlugin` is the current reference
  * adapter API; `ProviderPlugin` is the legacy shape/provider surface this
  * bridge quarantines for older packages.
@@ -18,6 +18,10 @@
 import type { JsonObject } from "./types.ts";
 import type { PlatformContext, ProviderPlugin } from "./provider-plugin.ts";
 import type { PreparedSourceLocator } from "./runtime-agent-lifecycle.ts";
+import {
+  isOfficialOutputTypeName,
+  validateOfficialOutputMaterial,
+} from "./type-catalog.ts";
 import type {
   KernelPlugin,
   KernelPluginApplyContext,
@@ -31,9 +35,8 @@ import type {
  * the underlying provider materializes.
  *
  * `ProviderPlugin` is generic over `Spec` / `Outputs` types; this compatibility
- * adapter erases to the generic JsonObject form so each provider package can
- * pass its provider-local typed ProviderPlugin without manual casts at the
- * call site.
+ * adapter erases to the generic JsonObject form so each kind package can pass
+ * its typed ProviderPlugin without manual casts at the call site.
  */
 export function kernelPluginFromProviderPlugin(
   opts: {
@@ -66,7 +69,9 @@ export function kernelPluginFromProviderPlugin(
       };
     },
     publishMaterial(ctx) {
-      return Promise.resolve(providerOutputsToNamespaceMaterial(ctx.outputs));
+      return Promise.resolve(
+        providerOutputsToNamespaceMaterial(ctx.outputs, ctx.options.as),
+      );
     },
     async destroy(ctx) {
       await provider.destroy(
@@ -79,6 +84,26 @@ export function kernelPluginFromProviderPlugin(
 
 function providerOutputsToNamespaceMaterial(
   outputs: JsonObject,
+  contract?: string,
+): NamespaceMaterial {
+  const generic = rawProviderOutputsToNamespaceMaterial(outputs);
+  if (contract === undefined || !isOfficialOutputTypeName(contract)) {
+    return generic;
+  }
+  const material = projectOfficialMaterial(contract, generic);
+  const issues = validateOfficialOutputMaterial(contract, material);
+  if (issues.length > 0) {
+    throw new Error(
+      `provider outputs cannot be projected to ${contract} material: ${
+        issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
+      }`,
+    );
+  }
+  return material;
+}
+
+function rawProviderOutputsToNamespaceMaterial(
+  outputs: JsonObject,
 ): NamespaceMaterial {
   const material: Record<string, JsonObject[string] | { secretRef: string }> =
     {};
@@ -86,6 +111,188 @@ function providerOutputsToNamespaceMaterial(
     material[key] = secretRefMaterial(key, value) ?? value;
   }
   return material;
+}
+
+function projectOfficialMaterial(
+  contract: string,
+  material: NamespaceMaterial,
+): NamespaceMaterial {
+  switch (contract) {
+    case "http-endpoint":
+      return projectHttpEndpointMaterial(material);
+    case "service-binding":
+      return projectServiceBindingMaterial(material);
+    case "object-store":
+      return projectObjectStoreMaterial(material);
+    default:
+      return material;
+  }
+}
+
+function projectHttpEndpointMaterial(
+  material: NamespaceMaterial,
+): NamespaceMaterial {
+  if (Array.isArray(material.targets) || Array.isArray(material.endpoints)) {
+    return material;
+  }
+  const url = readString(material.url);
+  const host = readString(material.host) ?? readString(material.internalHost);
+  const port = readNumber(material.port) ?? readNumber(material.internalPort);
+  const listener = readString(material.listener);
+  const scheme = readString(material.scheme);
+  const routes = readRouteSummaries(material.routes);
+  if (listener || scheme || routes) {
+    if (!url) return material;
+    const endpoint: Record<string, JsonObject[string]> = {
+      url,
+      visibility: "public",
+      primary: true,
+    };
+    if (scheme) endpoint.scheme = scheme;
+    if (host) endpoint.host = host;
+    if (listener) endpoint.listener = listener;
+    if (routes) endpoint.routes = routes;
+    return { endpoints: [endpoint] };
+  }
+  if (!url && !(host && port !== undefined)) return material;
+  const target: Record<string, JsonObject[string]> = {
+    name: "default",
+    visibility: "private",
+  };
+  if (url) target.url = url;
+  if (host) target.host = host;
+  if (port !== undefined) target.port = port;
+  const protocol = readString(material.protocol);
+  if (protocol) target.protocol = protocol;
+  const basePath = readString(material.basePath);
+  if (basePath) target.basePath = basePath;
+  return { targets: [target] };
+}
+
+function projectServiceBindingMaterial(
+  material: NamespaceMaterial,
+): NamespaceMaterial {
+  if (
+    readString(material.protocol) &&
+    readString(material.host) &&
+    readNumber(material.port) !== undefined &&
+    material.passwordSecretRef === undefined &&
+    material.connectionString === undefined
+  ) {
+    return material;
+  }
+  const host = readString(material.host);
+  const port = readNumber(material.port);
+  if (!host || port === undefined) return material;
+  const out: Record<string, JsonObject[string] | { secretRef: string }> = {
+    protocol: readString(material.protocol) ?? inferServiceProtocol(material),
+    host,
+    port,
+  };
+  const service = readString(material.service);
+  if (service) out.service = service;
+  const database = readString(material.database);
+  if (database) out.database = database;
+  const username = readString(material.username);
+  if (username) out.username = username;
+  const connectionUrl = readString(material.connectionUrl) ??
+    readString(material.connectionString);
+  if (connectionUrl) out.connectionUrl = connectionUrl;
+  const caCertRef = readString(material.caCertRef);
+  if (caCertRef) out.caCertRef = caCertRef;
+  const passwordRef = readSecretReference(material.passwordRef) ??
+    readSecretReference(material.passwordSecretRef);
+  if (passwordRef) out.passwordRef = passwordRef;
+  const tokenRef = readSecretReference(material.tokenRef);
+  if (tokenRef) out.tokenRef = tokenRef;
+  if (isRecord(material.tokenRefs)) out.tokenRefs = material.tokenRefs;
+  return out;
+}
+
+function projectObjectStoreMaterial(
+  material: NamespaceMaterial,
+): NamespaceMaterial {
+  const bucket = readString(material.bucket);
+  const endpoint = readString(material.endpoint);
+  if (!bucket || !endpoint) return material;
+  const out: Record<string, JsonObject[string] | { secretRef: string }> = {
+    bucket,
+    endpoint,
+  };
+  const region = readString(material.region);
+  if (region) out.region = region;
+  if (typeof material.pathStyle === "boolean") {
+    out.pathStyle = material.pathStyle;
+  }
+  const publicBaseUrl = readString(material.publicBaseUrl);
+  if (publicBaseUrl) out.publicBaseUrl = publicBaseUrl;
+  if (Array.isArray(material.policyRefs)) out.policyRefs = material.policyRefs;
+  const accessKeyIdRef = readSecretReference(material.accessKeyIdRef) ??
+    readSecretReference(material.accessKeyRef);
+  if (accessKeyIdRef) out.accessKeyIdRef = accessKeyIdRef;
+  const secretAccessKeyRef = readSecretReference(material.secretAccessKeyRef) ??
+    readSecretReference(material.secretKeyRef);
+  if (secretAccessKeyRef) out.secretAccessKeyRef = secretAccessKeyRef;
+  const sessionTokenRef = readSecretReference(material.sessionTokenRef);
+  if (sessionTokenRef) out.sessionTokenRef = sessionTokenRef;
+  return out;
+}
+
+function inferServiceProtocol(material: NamespaceMaterial): string {
+  const connection = readString(material.connectionString) ??
+    readString(material.connectionUrl);
+  if (connection?.startsWith("postgres://")) return "postgresql";
+  if (connection?.startsWith("postgresql://")) return "postgresql";
+  if (
+    material.database !== undefined || material.passwordSecretRef !== undefined
+  ) {
+    return "postgresql";
+  }
+  return "tcp";
+}
+
+function readRouteSummaries(
+  value: NamespaceMaterial[string],
+): JsonObject[string] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((entry) => {
+    if (!isRecord(entry)) return {};
+    const pathPrefix = readString(entry.pathPrefix);
+    const to = readString(entry.to);
+    return {
+      ...(pathPrefix ? { pathPrefix } : {}),
+      ...(to ? { to } : {}),
+    };
+  });
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function readSecretReference(
+  value: unknown,
+): { readonly secretRef: string } | undefined {
+  if (isRecord(value) && readString(value.secretRef)) {
+    return { secretRef: value.secretRef as string };
+  }
+  if (typeof value === "string" && value.startsWith("secret://")) {
+    return { secretRef: value };
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, JsonObject[string]> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function secretRefMaterial(
@@ -164,13 +371,32 @@ function targetMaterialToString(
   material: NamespaceMaterial,
   sourceRef: string,
 ): string {
-  const url = material.url;
-  if (typeof url === "string" && url.length > 0) return url;
-  const target = material.target;
-  if (typeof target === "string" && target.length > 0) return target;
+  const direct = readString(material.url) ?? readString(material.target);
+  if (direct) return direct;
+  const httpTarget = firstRecord(material.targets) ??
+    firstRecord(material.endpoints);
+  if (httpTarget) {
+    const url = readString(httpTarget.url);
+    if (url) return url;
+    const host = readString(httpTarget.host);
+    const port = readNumber(httpTarget.port);
+    if (host && port !== undefined) {
+      const protocol = readString(httpTarget.protocol) ??
+        readString(httpTarget.scheme) ?? "http";
+      const basePath = readString(httpTarget.basePath) ?? "";
+      return `${protocol}://${host}:${port}${basePath}`;
+    }
+  }
   throw new Error(
-    `listen target ${sourceRef} must publish a string url or target field`,
+    `listen target ${sourceRef} must publish an http-endpoint target or endpoint`,
   );
+}
+
+function firstRecord(
+  value: unknown,
+): Record<string, JsonObject[string]> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.find(isRecord);
 }
 
 function envValueToString(

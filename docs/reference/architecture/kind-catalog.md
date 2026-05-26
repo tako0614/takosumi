@@ -18,7 +18,7 @@ Operator registry:
   select kind definitions, validate shape, apply operator policy
 
 Execution bindings:
-  kind URI -> provider implementation
+  kind URI -> implementation binding
 
 ResolvedPlan:
   deployment-specific evidence recorded by the operator/Takosumi implementation
@@ -41,7 +41,7 @@ Platform Service Registry:
   space-scoped platform service path -> PlatformServiceDeclaration snapshot
 
 Execution Registry:
-  kind URI -> provider implementation
+  kind URI -> implementation binding
 
 Deployment Policy:
   allow / deny / approval defaults
@@ -68,4 +68,4 @@ Implementation packaging は operator implementation 側に置く。Takosumi ref
 
 ## Manifest との関係 {#relationship-to-appspec}
 
-Public v1 manifest は `components.<name>.kind` に不透明な string を置く。URI を直接置いてもよいし、operator が `kindAliases` で opt-in した short alias を置いてもよい。どちらの場合も、kind の意味、input schema、provider mapping、 policy は operator の設定が与える。
+Public v1 manifest は `components.<name>.kind` に不透明な string を置く。URI を直接置いてもよいし、operator が `kindAliases` で opt-in した short alias を置いてもよい。どちらの場合も、kind の意味、input schema、implementation binding、policy は operator の設定が与える。

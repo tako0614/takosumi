@@ -2,7 +2,7 @@
 
 このページは reference routing implementation の Deployment の記録を説明します。 public な Takosumi rollback authority は Installation の `currentDeploymentId` に留まります。RoutingPointer と TrafficSnapshot は public core entity ではありません。
 
-RoutingPointer は「ある group の current TrafficSnapshot」を pin する control-plane pointer です。provider data plane に同期された TrafficSnapshot assignments が runtime request の宛先になり、RoutingPointer 自体は request-time router ではありません。`currentDeploymentId` は steady state / full rollout の primary Deployment projection で、canary / shadow の split routing authority ではありません。pointer の前進 / 巻き戻しが rollout 本体です。
+RoutingPointer は「ある group の current TrafficSnapshot」を pin する control-plane pointer です。backend data plane に同期された TrafficSnapshot assignments が runtime request の宛先になり、RoutingPointer 自体は request-time router ではありません。`currentDeploymentId` は steady state / full rollout の primary Deployment projection で、canary / shadow の split routing authority ではありません。pointer の前進 / 巻き戻しが rollout 本体です。
 
 ## アイデンティティ {#identity}
 
@@ -24,7 +24,7 @@ RoutingPointer:
     movedAt: 2026-... # 最後に pointer が動いた時刻
 ```
 
-`currentTrafficSnapshotId` が指す TrafficSnapshot の assignments が provider data plane の Exposure / traffic assignment に反映されます。 `currentDeploymentId` は UI、account layer projection、rollback target のための primary Deployment pointer です。canary / shadow 中は previous / candidate / mirror の deployment ids が TrafficSnapshot assignments に現れるため、 `currentDeploymentId` 単体を routing authority として扱いません。full rollout 確定時は `currentDeploymentId` と `currentTrafficSnapshotId` が同じ primary Deployment を表すように収束します。
+`currentTrafficSnapshotId` が指す TrafficSnapshot の assignments が backend data plane の Exposure / traffic assignment に反映されます。 `currentDeploymentId` は UI、account layer projection、rollback target のための primary Deployment pointer です。canary / shadow 中は previous / candidate / mirror の deployment ids が TrafficSnapshot assignments に現れるため、 `currentDeploymentId` 単体を routing authority として扱いません。full rollout 確定時は `currentDeploymentId` と `currentTrafficSnapshotId` が同じ primary Deployment を表すように収束します。
 
 ## Rollout 状態機械 (closed v1 enum, 7 値) {#rollout-state-machine-closed-v1-enum-7}
 
@@ -78,7 +78,7 @@ idle | preparing | canary-active | shadow-active
 canary は traffic split を closed な比率列で進めます。
 
 - v1 default 比率は **5% → 25% → 100%** の 3 step。 policy pack で step 列を override できますが、 step 列は OperationPlan に焼き付くため途中での ad-hoc 比率編集は approval invalidation の effect-detail change trigger を引きます。
-- 各 step 昇格は IngressHealth / TrafficObservation が pass したときのみ進みます。kernel は closed health enum と policy evaluation を固定し、具体的な probe は provider / operator / kind schema 側が定義します。
+- 各 step 昇格は IngressHealth / TrafficObservation が pass したときのみ進みます。kernel は closed health enum と policy evaluation を固定し、具体的な probe は backend / operator / kind schema 側が定義します。
 - candidate release が queue に新 DataContract を出し、 preview 先 consumer が primary release のまま古い contract しか受理しない場合、 event subscription switch preview は `queue_data_contract_mismatch_requires_policy` で `blocked`。 operator policy が明示的 allow した mismatch のみ解除可。
 - canary 失敗時は `rolling-back` に遷移し compensate operation 経由で previous pointer に戻します。「canary を保ったまま hold」は v1 では state として持たず、 `canary-active` に留まるか `rolling-back` に進むかの 2 択。
 
@@ -88,7 +88,7 @@ canary は traffic split を closed な比率列で進めます。
 
 shadow は production traffic を新 deployment に複製送付しますが production 側挙動は変えません。
 
-- production request / response は previous pointer から同期された provider data plane assignment (前 deployment) が処理し、client に返る
+- production request / response は previous pointer から同期された backend data plane assignment (前 deployment) が処理し、client に返る
 - shadow 先 (新 deployment) に同 request を mirror。結果は ObservationState に記録され、 production 側応答や副作用は変えない
 - drift 検出時は [Drift Detection](./drift-detection.md) flow。 severity `error` なら operator gate で `rolling-back` に遷移
 - shadow rollout は副作用 surface を持つ manifest を受け付けない。 `outputs` / `queue` delivery path / DB semantic write を含む shadow plan は `shadow-side-effects:forbidden` で resolution 時に `deny` (operator approval でも override 不可)

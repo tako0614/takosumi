@@ -20,6 +20,10 @@
  */
 
 import type { JsonValue } from "takosumi-contract";
+import {
+  isOfficialOutputTypeName,
+  validateOfficialOutputMaterial,
+} from "takosumi-contract/type-catalog";
 import type { KernelPlugin } from "takosumi-contract/reference/compat";
 import type {
   AppSpec,
@@ -289,8 +293,9 @@ export class InstallerPipeline {
     readonly outputs: Readonly<Record<string, JsonValue>>;
   }): Promise<NamespaceMaterial> {
     const plugin = findPluginForKind(this.#pluginRegistry, ctx.component.kind);
+    let material: NamespaceMaterial;
     if (plugin && typeof plugin.publishMaterial === "function") {
-      return await plugin.publishMaterial({
+      material = await plugin.publishMaterial({
         installationId: ctx.installationId,
         componentName: ctx.componentName,
         component: ctx.component,
@@ -298,11 +303,21 @@ export class InstallerPipeline {
         options: ctx.options,
         outputs: ctx.outputs,
       });
+    } else {
+      material = defaultPublishedMaterial(
+        ctx.publicationName,
+        ctx.outputs,
+      );
     }
-    return defaultPublishedMaterial(
-      ctx.publicationName,
-      ctx.outputs,
-    );
+    validateDeclaredPublicationMaterial({
+      componentName: ctx.componentName,
+      publicationName: ctx.publicationName,
+      contract: ctx.options.as,
+      material,
+      skipEmptyNoopMaterial: plugin === undefined &&
+        Object.keys(material).length === 0,
+    });
+    return material;
   }
 
   async installationDryRun(
@@ -1012,6 +1027,26 @@ function defaultPublishedMaterial(
     "failed_precondition",
     `publish.${publicationName} requires the component materializer to ` +
       `project provider outputs into namespace material`,
+  );
+}
+
+function validateDeclaredPublicationMaterial(input: {
+  readonly componentName: string;
+  readonly publicationName: PublicationName;
+  readonly contract: string;
+  readonly material: NamespaceMaterial;
+  readonly skipEmptyNoopMaterial?: boolean;
+}): void {
+  if (input.skipEmptyNoopMaterial) return;
+  if (!isOfficialOutputTypeName(input.contract)) return;
+  const issues = validateOfficialOutputMaterial(input.contract, input.material);
+  if (issues.length === 0) return;
+  throw new InstallerPipelineError(
+    "failed_precondition",
+    `${input.componentName}.publish.${input.publicationName} produced ` +
+      `invalid ${input.contract} material: ${
+        issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
+      }`,
   );
 }
 

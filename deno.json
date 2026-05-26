@@ -2,18 +2,11 @@
   "workspace": [
     "./packages/contract",
     "./packages/runtime-agent",
-    "./packages/plugins",
-    "./packages/plugin-web-service-docker-compose",
-    "./packages/plugin-web-service-systemd",
-    "./packages/plugin-object-store-minio",
-    "./packages/plugin-object-store-filesystem",
-    "./packages/plugin-postgres-docker",
-    "./packages/plugin-gateway-coredns",
-    "./packages/cloudflare-providers",
-    "./packages/deno-deploy-providers",
-    "./packages/aws-providers",
-    "./packages/gcp-providers",
-    "./packages/kubernetes-providers",
+    "./packages/kind-worker",
+    "./packages/kind-web-service",
+    "./packages/kind-postgres",
+    "./packages/kind-object-store",
+    "./packages/kind-gateway",
     "./packages/installer",
     "./packages/kernel",
     "./packages/cli",
@@ -36,16 +29,28 @@
     "takosumi-contract/reference/types": "./packages/contract/src/types.ts",
     "takosumi-contract/app-spec": "./packages/contract/src/app-spec.ts",
     "takosumi-contract/installer-api": "./packages/contract/src/installer-api.ts",
+    "takosumi-contract/type-catalog": "./packages/contract/src/type-catalog.ts",
     "takosumi-installer": "./packages/installer/mod.ts",
     "takosumi-installer/yaml-parser": "./packages/installer/src/yaml-parser.ts",
     "takosumi-installer/git-fetch": "./packages/installer/src/git-fetch.ts",
     "takosumi-installer/deploy-client": "./packages/installer/src/deploy-client.ts",
-    "hono": "npm:hono@^4.12.4"
+    "hono": "npm:hono@^4.12.4",
+    "@takos/takosumi-kind-worker": "./packages/kind-worker/mod.ts",
+    "@takos/takosumi-kind-web-service": "./packages/kind-web-service/mod.ts",
+    "@takos/takosumi-kind-postgres": "./packages/kind-postgres/mod.ts",
+    "@takos/takosumi-kind-object-store": "./packages/kind-object-store/mod.ts",
+    "@takos/takosumi-kind-gateway": "./packages/kind-gateway/mod.ts"
   },
   "compilerOptions": {
     "strict": true,
-    "lib": ["deno.window", "dom", "dom.iterable"],
-    "types": ["node"]
+    "lib": [
+      "deno.window",
+      "dom",
+      "dom.iterable"
+    ],
+    "types": [
+      "node"
+    ]
   },
   "lint": {
     "exclude": [
@@ -61,7 +66,7 @@
     }
   },
   "tasks": {
-    "check": "deno check packages/plugins/src/mod.ts packages/plugin-web-service-docker-compose/mod.ts packages/plugin-web-service-systemd/mod.ts packages/plugin-object-store-minio/mod.ts packages/plugin-object-store-filesystem/mod.ts packages/plugin-postgres-docker/mod.ts packages/plugin-gateway-coredns/mod.ts packages/kernel/src/index.ts scripts/live-provisioning-smoke.ts scripts/jsr-publish-dry-run.ts scripts/public-spec-source-map_test.ts scripts/spec-generate-ts.ts scripts/spec-check-drift.ts scripts/spec-check-drift_test.ts",
+    "check": "deno check packages/kind-worker/mod.ts packages/kind-web-service/mod.ts packages/kind-postgres/mod.ts packages/kind-object-store/mod.ts packages/kind-gateway/mod.ts packages/kernel/src/index.ts scripts/live-provisioning-smoke.ts scripts/jsr-publish-dry-run.ts scripts/public-spec-source-map_test.ts scripts/spec-generate-ts.ts scripts/spec-check-drift.ts scripts/spec-check-drift_test.ts",
     "check:cloudflare": "deno check --config deploy/cloudflare/deno.json deploy/cloudflare/src/worker.ts deploy/cloudflare/src/worker_test.ts deploy/cloudflare/src/scaffold_test.ts",
     "test": "deno test --allow-all",
     "publish:dry-run": "deno run --allow-run --allow-read scripts/jsr-publish-dry-run.ts",

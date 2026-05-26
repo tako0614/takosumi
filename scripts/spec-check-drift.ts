@@ -1,6 +1,7 @@
 /**
- * Detect drift between `packages/plugins/spec/kinds/v1/*.jsonld` and the
- * committed `packages/plugins/src/kinds/<basename>.generated.ts` files.
+ * Detect drift between package-owned kind descriptors
+ * (`packages/kind-<name>/spec/kind.jsonld`) and the committed
+ * `packages/kind-<name>/src/<basename>.generated.ts` files.
  *
  * The check works by regenerating each `.generated.ts` from its source
  * `.jsonld` into a temp directory (formatted by `deno fmt`) and
@@ -13,7 +14,11 @@
  *   1 — drift detected (or generator / on-disk file failed to load)
  *   2 — internal error (missing source / write failure)
  */
-import { generateAllToTemp, outputDir } from "./spec-generate-ts.ts";
+import {
+  generateAllToTemp,
+  generatedKindTargets,
+  outputDir,
+} from "./spec-generate-ts.ts";
 
 interface DriftResult {
   readonly basename: string;
@@ -37,8 +42,10 @@ async function main(): Promise<number> {
     return 2;
   }
   const drifts: DriftResult[] = [];
+  const targets = generatedKindTargets();
   for (const [basename, expected] of generated.entries()) {
-    const actualPath = `${outputDir()}/${basename}.generated.ts`;
+    const actualPath = targets.get(basename) ??
+      `${outputDir()}/${basename}.generated.ts`;
     let actual: string;
     try {
       actual = await Deno.readTextFile(actualPath);
@@ -98,8 +105,10 @@ function diff(actual: string, expected: string): string {
 export async function checkDrift(): Promise<readonly DriftResult[]> {
   const generated = await generateAllToTemp();
   const drifts: DriftResult[] = [];
+  const targets = generatedKindTargets();
   for (const [basename, expected] of generated.entries()) {
-    const actualPath = `${outputDir()}/${basename}.generated.ts`;
+    const actualPath = targets.get(basename) ??
+      `${outputDir()}/${basename}.generated.ts`;
     let actual: string;
     try {
       actual = await Deno.readTextFile(actualPath);

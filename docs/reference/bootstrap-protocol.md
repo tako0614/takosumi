@@ -81,7 +81,7 @@ operator profile が kernel 起動時に渡した `kindAliases`、implementation
 - short alias は operator-provided `kindAliases` にあるものだけ解決される
 - 同じ kind URI を複数 reference adapter が提供し、operator profile / Space policy でも一意に選べない場合は stage abort
 
-operator profile が通常の TypeScript module として provider package を import し、reference kernel では reference adapter array (`plugins` option) に渡す。詳細は [Reference Adapter Loading](./plugin-loading.md)。
+operator profile が通常の TypeScript module として kind package を import し、reference kernel では reference adapter array (`plugins` option) に渡す。詳細は [Reference Adapter Loading](./plugin-loading.md)。
 
 ## Stage 6 — audit-genesis
 

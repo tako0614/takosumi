@@ -1,0 +1,102 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/postgres",
+  "@type": "ComponentKind",
+  "name": "postgres",
+  "version": "v1",
+  "referenceAliases": ["postgres"],
+  "description": "Managed PostgreSQL instance intended to be bindable across compatible providers through the standard wire protocol. Publishes connection material as a local publication.",
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["version", "size"],
+    "additionalProperties": true,
+    "properties": {
+      "version": {
+        "type": "string",
+        "minLength": 1,
+        "description": "PostgreSQL major version string (e.g. `15`, `16`)."
+      },
+      "size": {
+        "type": "string",
+        "enum": ["small", "medium", "large", "xlarge"],
+        "description": "Instance size class."
+      },
+      "storage": {
+        "type": "object",
+        "required": ["sizeGiB"],
+        "additionalProperties": false,
+        "description": "Persistent volume sizing.",
+        "properties": {
+          "sizeGiB": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "highAvailability": {
+        "type": "boolean",
+        "description": "Request provider-managed HA when supported. Operator policy and the selected implementation materialize or reject the request."
+      }
+    }
+  },
+  "publications": {
+    "connection": {
+      "contract": "service-binding",
+      "exampleMaterialMapping": {
+        "service": "$outputs.host",
+        "protocol": "postgresql",
+        "host": "$outputs.host",
+        "port": "$outputs.port",
+        "database": "$outputs.database",
+        "username": "$outputs.username",
+        "passwordRef": { "secretRef": "$outputs.passwordSecretRef" },
+        "connectionUrl": "$outputs.connectionString"
+      }
+    }
+  },
+  "outputs": [
+    {
+      "name": "host",
+      "type": "string",
+      "required": true,
+      "meaning": "Database hostname."
+    },
+    {
+      "name": "port",
+      "type": "integer",
+      "required": true,
+      "meaning": "TCP port (typically 5432)."
+    },
+    {
+      "name": "database",
+      "type": "string",
+      "required": true,
+      "meaning": "Database name."
+    },
+    {
+      "name": "username",
+      "type": "string",
+      "required": true,
+      "meaning": "Connection username (role name)."
+    },
+    {
+      "name": "passwordSecretRef",
+      "type": "string",
+      "required": true,
+      "meaning": "Reference to secret store entry holding password."
+    },
+    {
+      "name": "connectionString",
+      "type": "string",
+      "required": true,
+      "meaning": "Passwordless client connection URL. Credentials are supplied through passwordSecretRef."
+    }
+  ],
+  "capabilityTerms": [
+    "pitr",
+    "read-replicas",
+    "high-availability",
+    "backups",
+    "ssl-required",
+    "ipv6",
+    "extensions"
+  ]
+}

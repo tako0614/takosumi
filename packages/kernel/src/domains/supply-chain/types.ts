@@ -12,7 +12,7 @@ export interface SupplyChainRecord {
   readonly buildEnvironmentDigest?: Digest;
   readonly artifactDigest?: Digest;
   readonly packageResolutionDigest: Digest;
-  readonly providerPackageDigests: readonly Digest[];
+  readonly kindPackageDigests: readonly Digest[];
   readonly resourceContractPackageDigests: readonly Digest[];
   readonly dataContractPackageDigests?: readonly Digest[];
   readonly nativeSchemaDigests: readonly Digest[];

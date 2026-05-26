@@ -2,8 +2,9 @@
  * Boots takosumi kernel with an embedded runtime-agent in one process.
  *
  * Differences from `takosumi-cli server`:
- * - Imports kernel from local /workspace source so the running bytes match
- *   the takosumi/ submodule under active development (cli pins JSR).
+ * - Imports kernel from local /workspace source and native plugins from
+ *   /plugins so the running bytes match the checked-out repositories under
+ *   active development (cli pins JSR).
  * - Uses local-substrate-factories.buildLocalSubstrateRegistry instead of
  *   the upstream auto-detected registry, so public-DNS providers
  *   (route53 / cloud-dns / cloudflare-dns) are import-time denied — see
@@ -19,28 +20,28 @@ import {
   LIFECYCLE_AGENT_URL_ENV,
 } from "/workspace/packages/contract/src/runtime-agent-lifecycle.ts";
 import type { KernelPlugin } from "/workspace/packages/contract/src/plugin.ts";
-import type {
-  ProviderPlugin,
-} from "/workspace/packages/contract/src/provider-plugin.ts";
-import {
-  kernelPluginFromProviderPlugin,
-} from "/workspace/packages/contract/src/kernel-plugin-adapter.ts";
 import { currentRuntime } from "/workspace/packages/kernel/src/shared/runtime/index.ts";
 import { createPaaSApp } from "/workspace/packages/kernel/src/bootstrap.ts";
 import {
-  TAKOSUMI_REFERENCE_KIND_ALIASES,
-  TAKOSUMI_REFERENCE_KIND_URIS,
-} from "/workspace/packages/plugins/src/kinds/mod.ts";
+  dockerPostgresPlugin,
+  KIND_URI as DOCKER_POSTGRES_KIND_URI,
+} from "/plugins/packages/kind-docker-postgres/mod.ts";
 import {
-  createTakosumiProductionProviders,
-} from "/workspace/packages/plugins/src/shape-providers/factories.ts";
+  filesystemObjectStorePlugin,
+  KIND_URI as FILESYSTEM_OBJECT_STORE_KIND_URI,
+} from "/plugins/packages/kind-filesystem-object-store/mod.ts";
 import type {
   CoreDnsLifecycleClient,
   CoreDnsRecordDescriptor,
-} from "/workspace/packages/plugins/src/shape-providers/gateway/coredns-local.ts";
+} from "/plugins/packages/kind-coredns-gateway/mod.ts";
 import {
-  coreDnsGatewayProvider,
-} from "/workspace/packages/plugin-gateway-coredns/mod.ts";
+  coreDnsGatewayPlugin,
+  KIND_URI as COREDNS_GATEWAY_KIND_URI,
+} from "/plugins/packages/kind-coredns-gateway/mod.ts";
+import {
+  dockerComposeWebServicePlugin,
+  KIND_URI as DOCKER_COMPOSE_WEB_SERVICE_KIND_URI,
+} from "/plugins/packages/kind-docker-compose-web-service/mod.ts";
 import { buildLocalSubstrateRegistry } from "/local-substrate-factories/local-substrate-factories.ts";
 
 const agentPort = Number(Deno.env.get("TAKOSUMI_AGENT_PORT") ?? "8789");
@@ -71,7 +72,12 @@ console.log(
 
 const created = await createPaaSApp({
   runtimeEnv: Deno.env.toObject(),
-  kindAliases: TAKOSUMI_REFERENCE_KIND_ALIASES,
+  kindAliases: {
+    postgres: DOCKER_POSTGRES_KIND_URI,
+    "object-store": FILESYSTEM_OBJECT_STORE_KIND_URI,
+    "web-service": DOCKER_COMPOSE_WEB_SERVICE_KIND_URI,
+    gateway: COREDNS_GATEWAY_KIND_URI,
+  },
   plugins: localSubstrateInstallerPlugins({
     agentUrl: agent.url,
     token,
@@ -111,38 +117,13 @@ function localSubstrateInstallerPlugins(input: {
   readonly defaultGatewayHost: string;
   readonly ingressTarget: string;
 }): readonly KernelPlugin[] {
-  const providers: readonly ProviderPlugin[] =
-    createTakosumiProductionProviders({
-      agentUrl: input.agentUrl,
-      token: input.token,
-      enableAws: false,
-      enableGcp: false,
-      enableCloudflare: false,
-      enableAzure: false,
-      enableKubernetes: false,
-      enableDenoDeploy: false,
-      enableLocalAdapters: true,
-    });
-  const byId: Map<string, ProviderPlugin> = new Map(
-    providers.map((provider) => [provider.id, provider]),
-  );
+  void input.agentUrl;
+  void input.token;
   return [
-    providerKernelPlugin(
-      byId,
-      "@takos/docker-postgres",
-      TAKOSUMI_REFERENCE_KIND_URIS.postgres,
-    ),
-    providerKernelPlugin(
-      byId,
-      "@takos/filesystem-object-store",
-      TAKOSUMI_REFERENCE_KIND_URIS["object-store"],
-    ),
-    providerKernelPlugin(
-      byId,
-      "@takos/docker-compose-web-service",
-      TAKOSUMI_REFERENCE_KIND_URIS["web-service"],
-    ),
-    coreDnsGatewayProvider({
+    dockerPostgresPlugin(),
+    filesystemObjectStorePlugin(),
+    dockerComposeWebServicePlugin(),
+    coreDnsGatewayPlugin({
       defaultHost: input.defaultGatewayHost,
       ingressTarget: input.ingressTarget,
       lifecycle: createLocalSubstrateGatewayLifecycle(
@@ -150,22 +131,6 @@ function localSubstrateInstallerPlugins(input: {
       ),
     }),
   ];
-}
-
-function providerKernelPlugin(
-  byId: ReadonlyMap<string, ProviderPlugin>,
-  providerId: string,
-  kindUri: string,
-): KernelPlugin {
-  const provider = byId.get(providerId);
-  if (!provider) {
-    throw new Error(`local-substrate provider missing: ${providerId}`);
-  }
-  return kernelPluginFromProviderPlugin({
-    provider,
-    kindUri,
-    capabilities: provider.capabilities,
-  });
 }
 
 function createLocalSubstrateGatewayLifecycle(

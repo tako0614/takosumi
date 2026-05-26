@@ -2,7 +2,7 @@ import type { Digest, JsonObject } from "takosumi-contract/reference/compat";
 import type { IsoTimestamp } from "../../shared/time.ts";
 
 export type PackageKind =
-  | "provider-package"
+  | "kind-package"
   | "resource-contract-package"
   | "data-contract-package"
   | "output-contract-package"
@@ -46,8 +46,8 @@ export interface TrustRecord {
 }
 
 export interface ProviderSupportReport {
-  readonly providerPackageRef: string;
-  readonly providerPackageDigest: Digest;
+  readonly kindPackageRef: string;
+  readonly kindPackageDigest: Digest;
   readonly resourceContracts: readonly string[];
   readonly interfaceContracts?: readonly string[];
   readonly routeProtocols?: readonly string[];

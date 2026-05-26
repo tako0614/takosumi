@@ -96,16 +96,13 @@ export { registerDefaultArtifactKinds };
 /**
  * KernelPlugin instances bundled with the kernel distribution.
  *
- * Phase D extracted every cloud / external adapter factory out of the
- * Takosumi kernel distribution into dedicated provider / plugin packages
- * (`@takos/takosumi-cloudflare-providers`, `@takos/takosumi-aws-providers`,
- * `@takos/takosumi-gcp-providers`, `@takos/takosumi-kubernetes-providers`,
- * `@takos/takosumi-deno-deploy-providers`,
- * and `@takos/takosumi-plugin-<kind>-<backend>` external adapter packages).
- * Takosumi core no longer carries
- * any cloud SDK import, so this function intentionally returns an empty
- * array: operators explicitly `import` the provider packages they want and
- * pass them to `createPaaSApp({ kindAliases, plugins: [...] })`.
+ * Cloud / host-specific factories live in the separate takosumi-plugins
+ * repository as dedicated `kind-*` packages such as
+ * `@takos/takosumi-kind-cloudflare-worker` or
+ * `@takos/takosumi-kind-docker-compose-web-service`. Takosumi core no longer
+ * carries cloud SDK imports, so this function intentionally returns an empty
+ * array: operators explicitly import the kind packages they want and pass their
+ * factories to `createPaaSApp({ kindAliases, plugins: [...] })`.
  *
  * The function is retained as a no-op so existing callers don't break, but
  * its return value is `readonly []`. Future major versions may remove it.

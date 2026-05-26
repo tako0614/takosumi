@@ -196,6 +196,7 @@ services:
       - env/kernel.env
     volumes:
       - ../../../takosumi:/workspace
+      - ../../../takosumi-plugins:/plugins
       - ../../../takos:/sources/takos:ro
       - ./wrappers:/wrappers:ro
       - ./factories:/local-substrate-factories:ro

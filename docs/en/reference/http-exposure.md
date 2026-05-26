@@ -54,14 +54,14 @@ Install and deploy are separate from runtime request handling.
 ```text
 install / deploy:
   manifest -> Installer API -> Deployment record / outputs
-          -> selected provider/operator configuration
+          -> selected backend/operator configuration
 
 runtime request:
-  client -> provider-native listener/route -> active workload
-         <- same provider data plane <- response
+  client -> backend-native listener/route -> active workload
+         <- same backend data plane <- response
 ```
 
-Takosumi records manifest validation, publish/listen resolution, Deployment outputs, and Deployment record. The selected provider or operator configuration uses that record to create provider-native ingress. Runtime HTTP requests do not pass through the Installer API.
+Takosumi records manifest validation, publish/listen resolution, Deployment outputs, and Deployment record. The selected backend or operator configuration uses that record to create backend-native ingress. Runtime HTTP requests do not pass through the Installer API.
 
 Runtime traffic authority is the `succeeded` Deployment pointed to by `Installation.currentDeploymentId` plus the ingress Deployment record linked to that Deployment. `running` and `failed` Deployments are history, not HTTP traffic authority. Rollback moves the pointer back to a previous succeeded Deployment and reuses that Deployment's public/non-secret outputs and reactivation record.
 
@@ -69,7 +69,7 @@ Runtime traffic authority is the `succeeded` Deployment pointed to by `Installat
 
 `spec.listeners.<name>.host` is gateway-specific ingress input defined by that kind. If `host` is omitted, the adopted kind definition and operator policy define the meaning. An operator-assigned default public host can appear in the produced public endpoint output.
 
-Domain reservation, custom-domain proof, DNS ownership proof, and TLS provisioning belong to the adopted kind definition, operator policy, and provider flow. The manifest does not carry provider object ids, DNS verification records, TLS certificate handles, or generated object references.
+Domain reservation, custom-domain proof, DNS ownership proof, and TLS provisioning belong to the adopted kind definition, operator policy, and backend-specific flow. The manifest does not carry backend object ids, DNS verification records, TLS certificate handles, or generated object references.
 
 ## Related Pages {#related-pages}
 

@@ -64,9 +64,9 @@ components:
 
 ## 実行環境への接続を追加する
 
-接続設定は、kind の定義と出力の型 (`service-binding` 等) を具体的な provider の runtime やリソースの作成・更新に結びつけます。公開仕様として共有されるのは、kind URI、kind の定義、出力の型、出力データの生成方法、Deployment に出す non-secret な出力データです。
+接続設定は、kind の定義と出力の型 (`service-binding` 等) を具体的な backend runtime やリソースの作成・更新に結びつけます。公開仕様として共有されるのは、kind URI、kind の定義、出力の型、出力データの生成方法、Deployment に出す non-secret な出力データです。
 
-接続設定の読み込み方法、別プロセス化、provider API への接続、credential 注入方法は実装や operator の設定が選びます。Manifest author が覚える語彙は `kind` / `spec` / `publish` / `listen` に閉じます。
+接続設定の読み込み方法、別プロセス化、backend API への接続、credential 注入方法は実装や operator の設定が選びます。Manifest author が覚える語彙は `kind` / `spec` / `publish` / `listen` に閉じます。
 
 ## 確認項目
 

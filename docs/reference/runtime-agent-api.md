@@ -202,7 +202,7 @@ interface LifecycleVerifyResult {
 - `TypeError` / `ECONNRESET` / `ETIMEDOUT` などの network failure
 - `retryable: true` を持つ connector error
 
-`HTTP 400` 等の provider validation error、 `retryable: false`、 permission denied 等の恒久 failure は retry せず。 retry は bounded exponential backoff で同じ envelope を再投入します。 connector は `idempotencyKey` / provider-native client token / handle-keyed delete で重複 side effect を抑止します。
+`HTTP 400` 等の backend validation error、`retryable: false`、permission denied 等の恒久 failure は retry せず。retry は bounded exponential backoff で同じ envelope を再投入します。connector は `idempotencyKey` / backend-native client token / handle-keyed delete で重複 side effect を抑止します。
 
 credential refresh は opt-in。 `ConnectorBootOptions.resilience.refreshCredentials` を渡した場合のみ、 wrapper は `HTTP 401` / expired token を検出して refresh を 1 回呼び、同じ operation を再試行します。 refresh 未設定なら credential error は通常の connector failure として返ります。
 
@@ -277,5 +277,5 @@ interface LifecycleErrorBody {
 
 - [Lifecycle Phases](./lifecycle-phases.md)
 - [Connector Guide](./connector-contract.md)
-- [Provider Implementations](./providers.md)
+- [Kind Binding Implementations](./kind-bindings.md)
 - [Enum and Value Index](./closed-enums.md)

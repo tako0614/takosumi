@@ -29,7 +29,7 @@ boolean は `1 / true / yes / on / enabled` を真、 `0 / false / no / off / di
 
 ## External publication resolver
 
-Reference kernel が 3 segment 以上の `listen.from` を operator account-plane に問い合わせるための設定です。これは implementation wiring であり、AppSpec の grammar や Cloud 固有 path を kernel contract に追加するものではありません。
+Reference kernel が 3 segment 以上の `listen.from` を operator account-plane に問い合わせるための設定です。これは implementation wiring であり、manifest の grammar や Cloud 固有 path を kernel contract に追加するものではありません。
 
 | Variable                                       | Type   | Default | Required                            | 説明                                                                |
 | ---------------------------------------------- | ------ | ------- | ----------------------------------- | ------------------------------------------------------------------- |
@@ -114,7 +114,7 @@ Reference kernel が 3 segment 以上の `listen.from` を operator account-plan
 
 ## Runtime-Agent
 
-runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `GOOGLE_APPLICATION_CREDENTIALS`、`CLOUDFLARE_API_TOKEN`、`AZURE_*` などの provider-specific env は runtime-agent host または provider package 側で読み、 kernel host には置きません。
+runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `GOOGLE_APPLICATION_CREDENTIALS`、`CLOUDFLARE_API_TOKEN`、`AZURE_*` などの backend-specific env は runtime-agent host または native kind package 側で読み、 kernel host には置きません。
 
 | Variable                                       | Type   | Default           | Required             | 説明                             |
 | ---------------------------------------------- | ------ | ----------------- | -------------------- | -------------------------------- |
@@ -131,7 +131,7 @@ runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `
 
 ## Binding Config
 
-An operator using the reference kernel passes the kind alias map and reference adapter array (`plugins` option) to `createPaaSApp({ kindAliases, plugins })`. adapter が必要とする credential / config は factory option か runtime-agent host env から読みます。provider package の取得方法は operator profile の責務です。
+An operator using the reference kernel passes the kind alias map and reference adapter array (`plugins` option) to `createPaaSApp({ kindAliases, plugins })`. adapter が必要とする credential / config は factory option か runtime-agent host env から読みます。kind package の取得方法は operator profile の責務です。
 
 ## 関連ページ
 

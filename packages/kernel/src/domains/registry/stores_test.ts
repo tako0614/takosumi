@@ -18,7 +18,7 @@ Deno.test("registry resolves package descriptors and exposes trust records", asy
   const newDescriptor = descriptor("sha256:new", "1.1.0");
   const resolution: PackageResolution = {
     ref: "providers/postgres",
-    kind: "provider-package",
+    kind: "kind-package",
     digest: newDescriptor.digest,
     registry: "bundled",
     trustRecordId: "trust_new",
@@ -48,12 +48,12 @@ Deno.test("registry resolves package descriptors and exposes trust records", asy
   );
 
   assert.equal(
-    (await registry.resolve("provider-package", "providers/postgres"))?.digest,
+    (await registry.resolve("kind-package", "providers/postgres"))?.digest,
     "sha256:new",
   );
   assert.equal(
     (await registry.getDescriptor(
-      "provider-package",
+      "kind-package",
       "providers/postgres",
       "sha256:new",
     ))?.version,
@@ -61,7 +61,7 @@ Deno.test("registry resolves package descriptors and exposes trust records", asy
   );
   assert.equal(
     (await trustRecords.findForPackage(
-      "provider-package",
+      "kind-package",
       "providers/postgres",
       "sha256:new",
     ))?.trustLevel,
@@ -140,7 +140,7 @@ Deno.test("registry resolves resource contract packages through PackageResolutio
 function descriptor(digest: string, version: string): PackageDescriptor {
   return {
     ref: "providers/postgres",
-    kind: "provider-package",
+    kind: "kind-package",
     digest,
     publisher: "takos",
     version,

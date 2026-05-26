@@ -35,7 +35,7 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
     "1.1.0",
   );
   const currentResolution: PackageResolution = {
-    kind: "provider-package",
+    kind: "kind-package",
     ref: "providers/postgres",
     digest: currentDescriptor.digest,
     registry: "bundled",
@@ -59,7 +59,7 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
   await resolutions.record(currentResolution);
   await trustRecords.put({
     id: "trust_provider_old",
-    packageKind: "provider-package",
+    packageKind: "kind-package",
     packageRef: "providers/postgres",
     packageDigest: oldDescriptor.digest,
     trustLevel: "reference",
@@ -76,8 +76,8 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
     resolutions,
     trustRecords,
     [{
-      providerPackageRef: "providers/postgres",
-      providerPackageDigest: currentDescriptor.digest,
+      kindPackageRef: "providers/postgres",
+      kindPackageDigest: currentDescriptor.digest,
       resourceContracts: ["postgres.v1"],
       capabilityProfiles: ["runtime.worker.v1"],
       conformanceTier: "tested",
@@ -85,13 +85,13 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
   );
 
   const resolution = await registry.resolve(
-    "provider-package",
+    "kind-package",
     "providers/postgres",
   );
   assert.deepEqual(resolution, currentResolution);
   assert.equal(
     (await registry.getDescriptor(
-      "provider-package",
+      "kind-package",
       "providers/postgres",
       resolution?.digest ?? "",
     ))?.version,
@@ -105,7 +105,7 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
   );
   assert.equal(
     (await trustRecords.findForPackage(
-      "provider-package",
+      "kind-package",
       "providers/postgres",
       currentDescriptor.digest,
     ))?.status,
@@ -113,8 +113,8 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
   );
   assert.deepEqual(
     (await registry.listProviderSupport()).map((report) => ({
-      ref: report.providerPackageRef,
-      digest: report.providerPackageDigest,
+      ref: report.kindPackageRef,
+      digest: report.kindPackageDigest,
       tier: report.conformanceTier,
     })),
     [{
@@ -276,7 +276,7 @@ function providerDescriptor(
   version: string,
 ): PackageDescriptor {
   return {
-    kind: "provider-package",
+    kind: "kind-package",
     ref: "providers/postgres",
     digest,
     publisher: "takos",

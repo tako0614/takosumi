@@ -11,7 +11,7 @@ export type GcRefType =
   | "PreparedArtifact"
   | "WorkloadRevision"
   | "ResourceInstance"
-  | "ProviderPackage"
+  | "KindPackage"
   | "MirroredArtifact"
   | "RetainedDeployArtifact";
 
@@ -65,7 +65,7 @@ export interface ResourceRetentionCandidate {
   readonly instance?: ResourceInstance;
 }
 
-export interface ProviderPackageRetentionCandidate {
+export interface KindPackageRetentionCandidate {
   readonly digest: Digest;
   readonly activeMaterializationIds?: readonly string[];
   readonly rollbackMaterializations?: readonly {
@@ -85,7 +85,7 @@ export interface GcDryRunPlanInput {
   readonly preparedArtifacts?: readonly PreparedArtifact[];
   readonly workloadRevisions?: readonly WorkloadRevisionRetentionCandidate[];
   readonly resources?: readonly ResourceRetentionCandidate[];
-  readonly providerPackages?: readonly ProviderPackageRetentionCandidate[];
+  readonly kindPackages?: readonly KindPackageRetentionCandidate[];
   readonly mirroredArtifacts?: readonly MirroredArtifactRetentionCandidate[];
   readonly retainedDeployArtifacts?: readonly RetainedDeployArtifact[];
 }
@@ -123,8 +123,8 @@ export class GcRetentionService {
     for (const resource of input.resources ?? []) {
       decisions.push(await this.decideResource(resource, now));
     }
-    for (const providerPackage of input.providerPackages ?? []) {
-      decisions.push(await this.decideProviderPackage(providerPackage, now));
+    for (const kindPackage of input.kindPackages ?? []) {
+      decisions.push(await this.decideKindPackage(kindPackage, now));
     }
     for (const mirror of input.mirroredArtifacts ?? []) {
       decisions.push(await this.decideMirroredArtifact(mirror, now));
@@ -226,20 +226,19 @@ export class GcRetentionService {
     });
   }
 
-  async decideProviderPackage(
-    providerPackage: ProviderPackageRetentionCandidate,
+  async decideKindPackage(
+    kindPackage: KindPackageRetentionCandidate,
     now: IsoTimestamp = this.#clock().toISOString(),
   ): Promise<GcRetentionDecision> {
     const reasons: GcRetentionReason[] = [];
-    if ((providerPackage.activeMaterializationIds ?? []).length > 0) {
+    if ((kindPackage.activeMaterializationIds ?? []).length > 0) {
       reasons.push({
         code: "active-materialization",
-        message:
-          "ProviderPackage digest is referenced by active materialization.",
-        referenceIds: providerPackage.activeMaterializationIds,
+        message: "KindPackage digest is referenced by active materialization.",
+        referenceIds: kindPackage.activeMaterializationIds,
       });
     }
-    const rollbackIds = (providerPackage.rollbackMaterializations ?? [])
+    const rollbackIds = (kindPackage.rollbackMaterializations ?? [])
       .filter((materialization) =>
         materialization.rollbackWindowExpiresAt > now
       );
@@ -247,7 +246,7 @@ export class GcRetentionService {
       reasons.push({
         code: "rollback-materialization",
         message:
-          "ProviderPackage digest is referenced by rollback-window materialization.",
+          "KindPackage digest is referenced by rollback-window materialization.",
         until: maxIso(
           rollbackIds.map((materialization) =>
             materialization.rollbackWindowExpiresAt
@@ -257,8 +256,8 @@ export class GcRetentionService {
       });
     }
     return await this.#decideBase({
-      refType: "ProviderPackage",
-      refId: providerPackage.digest,
+      refType: "KindPackage",
+      refId: kindPackage.digest,
       now,
       reasons,
     });

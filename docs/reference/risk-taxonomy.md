@@ -44,7 +44,7 @@ operator-internal share model や future extension で、外部 Space へ publis
 
 ### 3. `generated-credential`
 
-- **意味**: provider / connector が新 credential を生成して return する。 approve すると scope は実体化した Space に固定される。
+- **意味**: backend connector が新 credential を生成して return する。 approve すると scope は実体化した Space に固定される。
 - **発火 stage**: `pre-commit`
 - **severity**: `error`
 - **invalidation trigger**: 2, 3

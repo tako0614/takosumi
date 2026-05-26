@@ -13,8 +13,8 @@ author / operator:
     -> Installation / Deployment record
 
 runtime request:
-  client -> provider-native listener/route -> workload
-         <- same provider data plane <- response
+  client -> backend-native listener/route -> workload
+         <- same backend data plane <- response
 ```
 
 Takosumi API process は install / deploy / rollback の control plane であり、通常の runtime request data plane ではありません。以下の internal snapshots は apply 時に deploy record と activation intent を作るための構造です。
@@ -25,18 +25,18 @@ manifest + Space context
   -> TargetState
   -> OperationPlan
   -> WriteAheadOperationJournal
-  -> provider / runtime-agent operation
+  -> execution binding / runtime-agent operation
   -> TrafficSnapshot / RoutingPointer
   -> ObservationState / DriftIndex / CleanupBacklog
 ```
 
-Activation is the apply-time cutover that selects the current runtime target. Observation and drift records are retained after activation; pre-activation health checks are provider/runtime evidence used before the activation step.
+Activation is the apply-time cutover that selects the current runtime target. Observation and drift records are retained after activation; pre-activation health checks are backend/runtime evidence used before the activation step.
 
 ## Public Manifest vocabulary {#public-appspec-vocabulary}
 
 manifest root: `apiVersion` / `metadata` / `components`。
 
-component の公開 field は `kind`、`spec`、`publish`、`listen` です。 entrypoint、image、gateway route などの詳細は kind の `spec` または operator が提供する kind の定義に置きます。execution binding は manifest の外で operator が選びます。Takosumi 固有の release bundle や provider target list はありません。
+component の公開 field は `kind`、`spec`、`publish`、`listen` です。 entrypoint、image、gateway route などの詳細は kind の `spec` または operator が提供する kind の定義に置きます。execution binding は manifest の外で operator が選びます。Takosumi 固有の release bundle や backend target list はありません。
 
 ## 読む順序 {#reading-order}
 
@@ -47,7 +47,7 @@ component の公開 field は `kind`、`spec`、`publish`、`listen` です。 e
 | [Snapshot Model](./snapshot-model.md)                         | snapshot 体系と各 snapshot の役割。                           |
 | [Space Model](./space-model.md)                               | Space scope で何が分離されるか。                              |
 | [Deploy System](./deploy-system.md)                           | Installation / Deployment lifecycle はどう進むか。            |
-| [Kind Resolution Model](./kind-resolution-model.md)           | kind alias / provider / connector 解決はどう決まるか。        |
+| [Kind Resolution Model](./kind-resolution-model.md)           | kind alias / binding / connector 解決はどう決まるか。         |
 | [Platform Service Model](./platform-service-model.md)         | component outputs と platform service path はどう扱われるか。 |
 | [バインディングモデル](./binding-model.md)                    | publish/listen は runtime binding にどう変換されるか。        |
 | [Runtime Deployment](./runtime-deployment-model.md)           | snapshot と WAL は何を保証するか。                            |

@@ -14,8 +14,10 @@
 #      and copies it onto `.output/public/docs/`
 #   3. Copies the JSON-LD context catalog (`takosumi/spec/contexts/`)
 #      onto `.output/public/contexts/`
-#   4. Copies takosumi.com kind descriptor JSON-LD documents onto
-#      `.output/public/kinds/v1/` so canonical kind URIs resolve.
+#   4. Copies package-owned kind descriptor JSON-LD documents from
+#      takosumi portable packages and, when present, sibling
+#      takosumi-plugins native packages onto `.output/public/kinds/v1/`
+#      so canonical kind URIs resolve.
 #
 # The merged `.output/public/` is the `pages_build_output_dir` declared
 # in `wrangler.toml`. The legacy `takosumi/site/` minimal HTML landing
@@ -32,7 +34,8 @@ OUTPUT_PUBLIC="${WEBSITE_DIR}/.output/public"
 DOCS_DIR="${REPO_ROOT}/docs"
 DOCS_DIST="${DOCS_DIR}/.vitepress/dist"
 SPEC_CONTEXTS="${REPO_ROOT}/spec/contexts"
-KIND_DESCRIPTORS="${REPO_ROOT}/packages/plugins/spec/kinds/v1"
+KIND_PACKAGES="${REPO_ROOT}/packages"
+PLUGIN_KIND_PACKAGES="${REPO_ROOT}/../takosumi-plugins/packages"
 
 # 1. Landing build (Solid Start, static prerender).
 echo "[takosumi/website] build landing (vinxi build)"
@@ -75,19 +78,33 @@ if [ -d "${SPEC_CONTEXTS}" ]; then
   cp -R "${SPEC_CONTEXTS}/." "${OUTPUT_PUBLIC}/contexts/"
 fi
 
-# 4. Kind descriptor overlay — packages/plugins/spec/kinds/v1/<name>.jsonld
-#    is the descriptor catalog source. Publish both `<name>.jsonld` and
-#    extensionless `<name>` so `https://takosumi.com/kinds/v1/<name>` resolves as
-#    the stable kind URI while clients that prefer explicit JSON-LD can fetch
+# 4. Kind descriptor overlay — packages/kind-*/spec/kind.jsonld is the
+#    descriptor catalog source. Portable descriptor sources live in takosumi;
+#    backend-specific native reference descriptors live in takosumi-plugins
+#    when that sibling checkout is available. Publish both `<name>.jsonld` and
+#    extensionless `<name>` so `https://takosumi.com/kinds/v1/<name>` resolves
+#    as the stable kind URI while clients that prefer explicit JSON-LD can fetch
 #    `.jsonld`. Strip local codegen-only `x-ts*` annotations from the public
 #    catalog payload.
-if [ -d "${KIND_DESCRIPTORS}" ]; then
-  echo "[takosumi/website] overlay /kinds/v1/ from packages/plugins/spec/kinds/v1/"
+descriptor_count="$(
+  {
+    find "${KIND_PACKAGES}" -maxdepth 3 -path '*/kind-*/spec/kind.jsonld' -type f
+    if [ -d "${PLUGIN_KIND_PACKAGES}" ]; then
+      find "${PLUGIN_KIND_PACKAGES}" -maxdepth 3 -path '*/kind-*/spec/kind.jsonld' -type f
+    fi
+  } | wc -l | tr -d ' '
+)"
+if [ "${descriptor_count}" != "0" ]; then
+  echo "[takosumi/website] overlay /kinds/v1/ from package-owned kind descriptors"
   rm -rf "${OUTPUT_PUBLIC}/kinds"
   mkdir -p "${OUTPUT_PUBLIC}/kinds/v1"
-  for descriptor in "${KIND_DESCRIPTORS}"/*.jsonld; do
-    [ -f "${descriptor}" ] || continue
-    name="$(basename "${descriptor}" .jsonld)"
+  {
+    find "${KIND_PACKAGES}" -maxdepth 3 -path '*/kind-*/spec/kind.jsonld' -type f
+    if [ -d "${PLUGIN_KIND_PACKAGES}" ]; then
+      find "${PLUGIN_KIND_PACKAGES}" -maxdepth 3 -path '*/kind-*/spec/kind.jsonld' -type f
+    fi
+  } | sort | while read -r descriptor; do
+    name="$(basename "$(dirname "$(dirname "${descriptor}")")" | sed 's/^kind-//')"
     node -e '
 const fs = require("node:fs");
 const [src, dst] = process.argv.slice(1);

@@ -38,7 +38,7 @@ import type {
 import type { JsonValue } from "./types.ts";
 
 export interface KernelPlugin {
-  /** Plugin id, e.g. `"@takos/cloudflare-workers"`. */
+  /** Plugin id, e.g. `"@takos/takosumi-kind-cloudflare-worker"`. */
   readonly name: string;
   readonly version: string;
   /**
@@ -151,8 +151,9 @@ export interface InlineMaterializer {
 
 /**
  * Payload published through a local publication. Keys are material field names
- * (e.g. `url`, `host`, `routes`) and values are non-secret JSON material values
- * or `{ secretRef }` references to entries in the operator secret store.
+ * (e.g. `targets`, `endpoints`, `host`) and values are non-secret JSON
+ * material values or `{ secretRef }` references to entries in the operator
+ * secret store.
  *
  * Treated as opaque by the kernel; consumers (= listening plugins'
  * `applyListen`) interpret the payload through the source material contract,
@@ -170,7 +171,8 @@ export type NamespaceMaterial = Readonly<
  *   - `env`    — env-var injections (literal strings or secretRefs).
  *   - `mounts` — filesystem-mount descriptors keyed by mount path.
  *   - `target` — free-form target descriptor used by router-style kinds
- *                (e.g. gateway-style materializers read an upstream `url`).
+ *                (e.g. gateway-style materializers read an `http-endpoint`
+ *                target or endpoint).
  *
  * All fields are optional; an empty `EnvInjection` is a valid no-op
  * (the installer will treat it as "this listener took no action").
@@ -233,7 +235,7 @@ export interface KernelPluginApplyContext {
 
 export interface KernelPluginApplyResult {
   /**
-   * Provider-side resource handle. The kernel treats it as opaque
+   * Backend-side resource handle. The kernel treats it as opaque
    * implementation evidence and passes it back to `destroy()` when needed.
    */
   readonly resourceHandle: string;

@@ -8,7 +8,7 @@ import type {
 } from "./plugin-sdk.ts";
 
 /**
- * Legacy connector-local selector for shape-based provider adapters.
+ * Legacy connector-local selector for shape-based backend adapters.
  *
  * Runtime-agent lifecycle envelopes still carry `(shape, provider)` so older
  * connectors can dispatch work locally. Current operator distributions derive
@@ -166,7 +166,7 @@ export function formatPlatformOperationIdempotencyKey(
 }
 
 /**
- * A legacy provider adapter implements one shape (`implements`) with a chosen
+ * A legacy backend adapter implements one shape (`implements`) with a chosen
  * cloud / runtime backend. Operators register adapters via
  * {@link registerProvider} and reference them from implementation-specific
  * `provider:` fields by `id`.
@@ -181,9 +181,8 @@ export function formatPlatformOperationIdempotencyKey(
  * `Materializer = KernelPlugin | InlineMaterializer` union) from
  * `packages/contract/src/plugin.ts`. `ProviderPlugin` remains as a transitional
  * adapter wrapped by `kernelPluginFromProviderPlugin()`; new code should
- * implement `KernelPlugin` directly. The plugin-sdk re-exports of
- * `ProviderPlugin` are kept until the cloud provider packages migrate to the
- * KernelPlugin shape natively.
+ * implement `KernelPlugin` directly. Native kind packages may still wrap older
+ * `ProviderPlugin` implementations through `kernelPluginFromProviderPlugin()`.
  */
 export interface ProviderPlugin<
   Spec = JsonObject,

@@ -84,14 +84,14 @@ const TIER_RANK: Record<ConformanceTier, number> = {
 };
 
 const PACKAGE_FAMILY: Partial<Record<PackageKind, ConformancePackageFamily>> = {
-  "provider-package": "provider",
+  "kind-package": "provider",
   "resource-contract-package": "resource",
   "data-contract-package": "data",
   "output-contract-package": "output",
 };
 
 const PACKAGE_TYPE_BY_KIND: Partial<Record<PackageKind, string>> = {
-  "provider-package": "provider",
+  "kind-package": "provider",
   "resource-contract-package": "resource-contract",
   "data-contract-package": "data-contract",
   "output-contract-package": "output-contract",
@@ -108,19 +108,19 @@ export class PackageConformanceService {
     input: AssessProviderInput,
   ): Promise<PackageConformanceResult> {
     if (!this.#registry) {
-      throw new TypeError("registry is required to assess provider packages");
+      throw new TypeError("registry is required to assess kind packages");
     }
 
     const resolution = await this.#registry.resolve(
-      "provider-package",
+      "kind-package",
       input.providerRef,
     );
     if (!resolution) {
       return blockedResult(
         input.providerRef,
-        "provider-package",
+        "kind-package",
         "package-resolution-missing",
-        `Provider package ${input.providerRef} could not be resolved`,
+        `Kind package ${input.providerRef} could not be resolved`,
       );
     }
 
@@ -135,8 +135,8 @@ export class PackageConformanceService {
     const supportReport = (await this.#registry.listProviderSupport()).find((
       report,
     ) =>
-      report.providerPackageRef === resolution.ref &&
-      report.providerPackageDigest === resolution.digest
+      report.kindPackageRef === resolution.ref &&
+      report.kindPackageDigest === resolution.digest
     );
 
     if (!descriptor) {
@@ -219,12 +219,12 @@ export class PackageConformanceService {
     const issues = [...base.issues];
     const requirements = input.requirements ?? {};
 
-    if (input.descriptor.kind !== "provider-package") {
+    if (input.descriptor.kind !== "kind-package") {
       addIssue(
         issues,
         "provider-kind-mismatch",
         "blocked",
-        "Provider support validation requires a provider-package descriptor",
+        "Provider support validation requires a kind-package descriptor",
         input.descriptor.ref,
       );
     }
@@ -305,7 +305,7 @@ export class PackageConformanceService {
     );
 
     switch (descriptor.kind) {
-      case "provider-package":
+      case "kind-package":
         recordCheck(
           checks,
           issues,
@@ -520,10 +520,10 @@ function validateSupportReportCompatibility(
     checks,
     issues,
     "support-report.provider",
-    report.providerPackageRef === resolution.ref &&
-      report.providerPackageDigest === resolution.digest,
+    report.kindPackageRef === resolution.ref &&
+      report.kindPackageDigest === resolution.digest,
     "blocked",
-    "Capability support report matches provider package ref and digest",
+    "Capability support report matches kind package ref and digest",
     "capability-support-report-incompatible",
     resolution.ref,
   );

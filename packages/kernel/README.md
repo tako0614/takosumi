@@ -90,7 +90,7 @@ See [`packages/kernel/src/app_context.ts`](./src/app_context.ts) for the full li
 ## See also
 
 - [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) — lifecycle execution host
-- [`@takos/takosumi-plugins`](https://jsr.io/@takos/takosumi-plugins) — official catalog helpers + reference adapter helpers
+- [`@takos/takosumi-kind-*`](https://jsr.io/@takos/takosumi-kind-worker) — package-owned kind descriptors and reference adapter factories
 - [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — operator CLI
 - [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) — AppSpec / Installer API wire types
 

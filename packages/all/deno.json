@@ -6,24 +6,27 @@
     "@takos/takosumi-contract": "jsr:@takos/takosumi-contract@^2.6.0",
     "@takos/takosumi-installer": "jsr:@takos/takosumi-installer@^0.1.0",
     "@takos/takosumi-kernel": "jsr:@takos/takosumi-kernel@^0.14.0",
-    "@takos/takosumi-plugins": "jsr:@takos/takosumi-plugins@^0.12.0",
-    "@takos/takosumi-plugins/kinds": "jsr:@takos/takosumi-plugins@^0.12.0/kinds",
-    "@takos/takosumi-plugins/shape-providers": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers",
-    "@takos/takosumi-plugins/shape-providers/factories": "jsr:@takos/takosumi-plugins@^0.12.0/shape-providers/factories",
     "@takos/takosumi-runtime-agent": "jsr:@takos/takosumi-runtime-agent@^0.7.0",
-    "@takos/takosumi-cli": "jsr:@takos/takosumi-cli@^0.15.0"
+    "@takos/takosumi-cli": "jsr:@takos/takosumi-cli@^0.15.0",
+    "@takos/takosumi-kind-gateway": "jsr:@takos/takosumi-kind-gateway@^0.1.0",
+    "@takos/takosumi-kind-object-store": "jsr:@takos/takosumi-kind-object-store@^0.1.0",
+    "@takos/takosumi-kind-postgres": "jsr:@takos/takosumi-kind-postgres@^0.1.0",
+    "@takos/takosumi-kind-web-service": "jsr:@takos/takosumi-kind-web-service@^0.1.0",
+    "@takos/takosumi-kind-worker": "jsr:@takos/takosumi-kind-worker@^0.1.0"
   },
   "exports": {
     ".": "./mod.ts",
     "./contract": "./contract.ts",
     "./installer": "./installer.ts",
     "./kernel": "./kernel.ts",
-    "./plugins": "./plugins.ts",
     "./kinds": "./kinds.ts",
-    "./shape-providers": "./shape-providers.ts",
-    "./shape-providers/factories": "./shape-providers-factories.ts",
     "./cli": "./cli.ts",
     "./server": "./server.ts",
-    "./runtime-agent": "./runtime-agent.ts"
+    "./runtime-agent": "./runtime-agent.ts",
+    "./kind/gateway": "./kind-gateway.ts",
+    "./kind/object-store": "./kind-object-store.ts",
+    "./kind/postgres": "./kind-postgres.ts",
+    "./kind/web-service": "./kind-web-service.ts",
+    "./kind/worker": "./kind-worker.ts"
   }
 }

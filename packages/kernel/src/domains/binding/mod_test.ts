@@ -5,7 +5,7 @@
  *   - kernel default env expansion (`as: env` + `prefix: DB` →
  *     `DB_HOST` / `DB_PORT` style env keys)
  *   - operator-defined applyListen hook override
- *   - `as: upstream` / `as: mount` shape handling
+ *   - `as: upstream` / `as: config-mount` shape handling
  *   - end-to-end `resolveAppSpec` against a multi-component AppSpec
  */
 
@@ -76,7 +76,9 @@ Deno.test("defaultEnvInjection serializes non-secret JSON material for env", () 
 });
 
 Deno.test("defaultEnvInjection as: upstream surfaces material verbatim", () => {
-  const material: NamespaceMaterial = { url: "https://w.example/" };
+  const material: NamespaceMaterial = {
+    targets: [{ name: "default", url: "https://w.example/" }],
+  };
   const injection = defaultEnvInjection(
     { from: "web.http", as: "upstream" },
     material,
@@ -84,13 +86,13 @@ Deno.test("defaultEnvInjection as: upstream surfaces material verbatim", () => {
   assert.deepEqual(injection.target, material);
 });
 
-Deno.test("defaultEnvInjection as: mount writes deterministic mount descriptor", () => {
+Deno.test("defaultEnvInjection as: config-mount writes deterministic mount descriptor", () => {
   const material: NamespaceMaterial = {
     fqdn: "notes.example.com",
     certificateId: "cert_123",
   };
   const injection = defaultEnvInjection(
-    { from: "domain.tls", as: "mount", mount: "/srv" },
+    { from: "domain.tls", as: "config-mount", mount: "/srv" },
     material,
   );
   assert.deepEqual(Object.keys(injection.mounts ?? {}), ["/srv"]);
@@ -172,7 +174,9 @@ Deno.test("BindingResolver.resolveAppSpec emits one binding per listen edge", as
   };
   const materials: Record<string, NamespaceMaterial> = {
     "db.connection": { host: "db.local", port: "5432" },
-    "web.http": { url: "https://web.local/" },
+    "web.http": {
+      targets: [{ name: "default", url: "https://web.local/" }],
+    },
   };
   const bindings = await resolver.resolveAppSpec(appSpec, materials);
   assert.equal(bindings.length, 2);
@@ -182,7 +186,7 @@ Deno.test("BindingResolver.resolveAppSpec emits one binding per listen edge", as
     DB_PORT: "5432",
   });
   assert.deepEqual(byListener.get("router")?.target, {
-    url: "https://web.local/",
+    targets: [{ name: "default", url: "https://web.local/" }],
   });
 });
 

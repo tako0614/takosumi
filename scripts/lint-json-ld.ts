@@ -7,18 +7,15 @@
  *    top-level key `@context` whose value is a JSON-LD context object.
  *    `@id` / `@type` / `name` are NOT required.
  * 2. **Reference kind document** (= e.g.
- *    `packages/plugins/spec/kinds/v1/<name>.jsonld`).
- *    Must include `@context` / `@id` / `@type` / `name` /
- *    `referenceAliases` / `publications`. `publications` is an object keyed by local
- *    publication name with `{ contract, exampleMaterialMapping? }` values. A
- *    document can also include `listens` metadata for consumer-slot
- *    compatibility.
+ *    `packages/kind-worker/spec/kind.jsonld`).
+ *    Must include a stable takosumi.com kind URI, a supported kind document
+ *    type, `version`, `description`, suggested aliases, publications, and
+ *    capability terms. Portable kind documents own `spec` and `outputs`;
+ *    native kind documents name their `family` and `portableBase`.
  *
- * The lint is intentionally shallow: kernel does not perform JSON-LD
- * semantic expand, so we only assert the envelope, publication metadata, and
- * projection-family metadata. Schema field checks (= `spec` / `outputs` /
- * `capabilityTerms`) are not enforced here so operators can publish
- * narrower kind variants if they wish.
+ * This linter does not JSON-LD-expand documents. It pins the official
+ * takosumi.com catalog envelope and vocabulary so descriptor drift is caught
+ * before docs or package publication.
  */
 import { walk } from "jsr:@std/fs@^1.0.5/walk";
 import { fromFileUrl } from "jsr:@std/path@^1.0.6";
@@ -30,8 +27,55 @@ interface LintIssue {
 
 const ROOTS = [
   fromFileUrl(new URL("../spec/contexts", import.meta.url)),
-  fromFileUrl(new URL("../packages/plugins/spec/kinds", import.meta.url)),
+  ...[
+    "kind-worker",
+    "kind-web-service",
+    "kind-postgres",
+    "kind-object-store",
+    "kind-gateway",
+  ].map((name) =>
+    fromFileUrl(new URL(`../packages/${name}/spec`, import.meta.url))
+  ),
 ] as const;
+
+const KIND_ID_PREFIX = "https://takosumi.com/kinds/v1/";
+const KIND_TYPES = new Set(["ComponentKind", "takosumi:Kind"]);
+const OUTPUT_CONTRACTS = new Set([
+  "http-endpoint",
+  "service-binding",
+  "object-store",
+  "event-channel",
+  "identity.oidc@v1",
+  "billing.port@v1",
+]);
+const PROJECTION_FAMILIES = new Set([
+  "env",
+  "secret-env",
+  "upstream",
+  "config-mount",
+]);
+const PROJECTION_FAMILIES_BY_OUTPUT_CONTRACT: Readonly<
+  Record<string, readonly string[]>
+> = {
+  "http-endpoint": ["upstream", "env", "config-mount"],
+  "service-binding": ["secret-env", "config-mount"],
+  "object-store": ["secret-env", "config-mount"],
+  "event-channel": ["secret-env", "config-mount"],
+  "identity.oidc@v1": ["secret-env", "config-mount"],
+  "billing.port@v1": ["secret-env", "config-mount"],
+};
+const ACCESS_MODES = new Set([
+  "read",
+  "read-write",
+  "admin",
+  "invoke-only",
+  "observe-only",
+]);
+const SAFE_DEFAULT_ACCESS_MODES = new Set([
+  "read",
+  "invoke-only",
+  "observe-only",
+]);
 
 async function main(): Promise<void> {
   const issues: LintIssue[] = [];
@@ -77,8 +121,19 @@ async function main(): Promise<void> {
       requireNonEmptyString(obj["@id"], "@id", entry.path, issues);
       requireNonEmptyString(obj["@type"], "@type", entry.path, issues);
       requireNonEmptyString(obj["name"], "name", entry.path, issues);
+      checkKindIdentity(obj, entry.path, issues);
+      requireNonEmptyString(obj["version"], "version", entry.path, issues);
+      requireNonEmptyString(
+        obj["description"],
+        "description",
+        entry.path,
+        issues,
+      );
       checkReferenceAliases(obj["referenceAliases"], entry.path, issues);
       checkPublications(obj["publications"], entry.path, issues);
+      checkSpecAndInheritance(obj, entry.path, issues);
+      checkOutputs(obj["outputs"], obj["portableBase"], entry.path, issues);
+      checkCapabilityTerms(obj["capabilityTerms"], entry.path, issues);
       checkNoLegacyAcceptedProjectionFamilies(
         obj["acceptedProjectionFamilies"],
         entry.path,
@@ -114,6 +169,36 @@ function requireNonEmptyString(
   }
 }
 
+function checkKindIdentity(
+  obj: Record<string, unknown>,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (
+    typeof obj["@id"] === "string" && !obj["@id"].startsWith(KIND_ID_PREFIX)
+  ) {
+    issues.push({
+      path,
+      message: `@id must start with ${KIND_ID_PREFIX}`,
+    });
+  }
+  if (typeof obj["@type"] === "string" && !KIND_TYPES.has(obj["@type"])) {
+    issues.push({
+      path,
+      message: "@type must be ComponentKind or takosumi:Kind",
+    });
+  }
+  if (typeof obj["@id"] === "string" && typeof obj["name"] === "string") {
+    const suffix = obj["@id"].slice(KIND_ID_PREFIX.length);
+    if (suffix !== obj["name"]) {
+      issues.push({
+        path,
+        message: "name must match the final segment of @id",
+      });
+    }
+  }
+}
+
 function checkReferenceAliases(
   value: unknown,
   path: string,
@@ -135,10 +220,10 @@ function checkReferenceAliases(
     return;
   }
   for (const [index, alias] of value.entries()) {
-    if (typeof alias !== "string" || alias.length === 0) {
+    if (typeof alias !== "string" || !isLocalName(alias)) {
       issues.push({
         path,
-        message: `referenceAliases[${index}] must be a non-empty string`,
+        message: `referenceAliases[${index}] must be a local name`,
       });
     }
   }
@@ -186,6 +271,12 @@ function checkPublications(
         path,
         message: `publications[${key}].contract must be a non-empty string`,
       });
+    } else if (!OUTPUT_CONTRACTS.has(e["contract"])) {
+      issues.push({
+        path,
+        message:
+          `publications[${key}].contract must be an official output type`,
+      });
     }
     if ("from" in e) {
       issues.push({
@@ -213,6 +304,753 @@ function checkPublications(
           `publications[${key}].exampleMaterialMapping must be an object when present`,
       });
     }
+    if (
+      typeof e["contract"] === "string" &&
+      OUTPUT_CONTRACTS.has(e["contract"]) &&
+      isRecord(e["exampleMaterialMapping"])
+    ) {
+      checkExampleMaterialMapping(
+        e["contract"],
+        e["exampleMaterialMapping"],
+        `publications[${key}].exampleMaterialMapping`,
+        path,
+        issues,
+      );
+    }
+  }
+}
+
+function checkExampleMaterialMapping(
+  contract: string,
+  value: Record<string, unknown>,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  switch (contract) {
+    case "http-endpoint":
+      checkNoUnknownKeys(value, fieldName, path, issues, [
+        "targets",
+        "endpoints",
+      ]);
+      checkHttpEndpointMapping(value, fieldName, path, issues);
+      break;
+    case "service-binding":
+      checkNoUnknownKeys(value, fieldName, path, issues, [
+        "service",
+        "protocol",
+        "host",
+        "port",
+        "database",
+        "username",
+        "connectionUrl",
+        "caCertRef",
+        "passwordRef",
+        "tokenRef",
+        "tokenRefs",
+      ]);
+      requireMappingValue(
+        value["protocol"],
+        `${fieldName}.protocol`,
+        path,
+        issues,
+      );
+      requireMappingValue(value["host"], `${fieldName}.host`, path, issues);
+      requireMappingValue(value["port"], `${fieldName}.port`, path, issues);
+      checkOptionalMappingValue(
+        value["service"],
+        `${fieldName}.service`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["database"],
+        `${fieldName}.database`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["username"],
+        `${fieldName}.username`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["connectionUrl"],
+        `${fieldName}.connectionUrl`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["caCertRef"],
+        `${fieldName}.caCertRef`,
+        path,
+        issues,
+      );
+      checkOptionalSecretRefMapping(
+        value["passwordRef"],
+        `${fieldName}.passwordRef`,
+        path,
+        issues,
+      );
+      checkOptionalSecretRefMapping(
+        value["tokenRef"],
+        `${fieldName}.tokenRef`,
+        path,
+        issues,
+      );
+      checkSecretRefRecordMapping(
+        value["tokenRefs"],
+        `${fieldName}.tokenRefs`,
+        path,
+        issues,
+      );
+      break;
+    case "object-store":
+      checkNoUnknownKeys(value, fieldName, path, issues, [
+        "bucket",
+        "endpoint",
+        "region",
+        "pathStyle",
+        "publicBaseUrl",
+        "policyRefs",
+        "accessKeyIdRef",
+        "secretAccessKeyRef",
+        "sessionTokenRef",
+      ]);
+      requireMappingValue(value["bucket"], `${fieldName}.bucket`, path, issues);
+      requireMappingValue(
+        value["endpoint"],
+        `${fieldName}.endpoint`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["region"],
+        `${fieldName}.region`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["pathStyle"],
+        `${fieldName}.pathStyle`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["publicBaseUrl"],
+        `${fieldName}.publicBaseUrl`,
+        path,
+        issues,
+      );
+      checkOptionalArrayOrMarker(
+        value["policyRefs"],
+        `${fieldName}.policyRefs`,
+        path,
+        issues,
+      );
+      checkOptionalSecretRefMapping(
+        value["accessKeyIdRef"],
+        `${fieldName}.accessKeyIdRef`,
+        path,
+        issues,
+      );
+      checkOptionalSecretRefMapping(
+        value["secretAccessKeyRef"],
+        `${fieldName}.secretAccessKeyRef`,
+        path,
+        issues,
+      );
+      checkOptionalSecretRefMapping(
+        value["sessionTokenRef"],
+        `${fieldName}.sessionTokenRef`,
+        path,
+        issues,
+      );
+      break;
+    case "event-channel":
+      checkNoUnknownKeys(value, fieldName, path, issues, [
+        "channel",
+        "protocol",
+        "endpoint",
+        "topic",
+        "queue",
+        "stream",
+        "deliveryPolicyRefs",
+        "producerCredentialRef",
+        "consumerCredentialRef",
+      ]);
+      requireMappingValue(
+        value["channel"],
+        `${fieldName}.channel`,
+        path,
+        issues,
+      );
+      requireMappingValue(
+        value["protocol"],
+        `${fieldName}.protocol`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["endpoint"],
+        `${fieldName}.endpoint`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["topic"],
+        `${fieldName}.topic`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["queue"],
+        `${fieldName}.queue`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["stream"],
+        `${fieldName}.stream`,
+        path,
+        issues,
+      );
+      checkOptionalArrayOrMarker(
+        value["deliveryPolicyRefs"],
+        `${fieldName}.deliveryPolicyRefs`,
+        path,
+        issues,
+      );
+      checkOptionalSecretRefMapping(
+        value["producerCredentialRef"],
+        `${fieldName}.producerCredentialRef`,
+        path,
+        issues,
+      );
+      checkOptionalSecretRefMapping(
+        value["consumerCredentialRef"],
+        `${fieldName}.consumerCredentialRef`,
+        path,
+        issues,
+      );
+      break;
+    case "identity.oidc@v1":
+      checkNoUnknownKeys(value, fieldName, path, issues, [
+        "issuerUrl",
+        "discoveryUrl",
+        "clientId",
+        "redirectOrigin",
+        "jwksRef",
+        "clientSecretRef",
+      ]);
+      requireMappingValue(
+        value["issuerUrl"],
+        `${fieldName}.issuerUrl`,
+        path,
+        issues,
+      );
+      requireMappingValue(
+        value["clientId"],
+        `${fieldName}.clientId`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["discoveryUrl"],
+        `${fieldName}.discoveryUrl`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["redirectOrigin"],
+        `${fieldName}.redirectOrigin`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["jwksRef"],
+        `${fieldName}.jwksRef`,
+        path,
+        issues,
+      );
+      checkOptionalSecretRefMapping(
+        value["clientSecretRef"],
+        `${fieldName}.clientSecretRef`,
+        path,
+        issues,
+      );
+      break;
+    case "billing.port@v1":
+      checkNoUnknownKeys(value, fieldName, path, issues, [
+        "portalUrl",
+        "usageReportEndpoint",
+        "billingSubjectRef",
+        "meteringCredentialRef",
+      ]);
+      requireMappingValue(
+        value["billingSubjectRef"],
+        `${fieldName}.billingSubjectRef`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["portalUrl"],
+        `${fieldName}.portalUrl`,
+        path,
+        issues,
+      );
+      checkOptionalMappingValue(
+        value["usageReportEndpoint"],
+        `${fieldName}.usageReportEndpoint`,
+        path,
+        issues,
+      );
+      checkOptionalSecretRefMapping(
+        value["meteringCredentialRef"],
+        `${fieldName}.meteringCredentialRef`,
+        path,
+        issues,
+      );
+      break;
+  }
+}
+
+function checkHttpEndpointMapping(
+  value: Record<string, unknown>,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value["targets"] === undefined && value["endpoints"] === undefined) {
+    issues.push({
+      path,
+      message:
+        `${fieldName} must declare targets or endpoints for http-endpoint`,
+    });
+  }
+  checkOptionalTargetArrayMapping(
+    value["targets"],
+    `${fieldName}.targets`,
+    path,
+    issues,
+  );
+  checkOptionalEndpointArrayMapping(
+    value["endpoints"],
+    `${fieldName}.endpoints`,
+    path,
+    issues,
+  );
+}
+
+function checkOptionalTargetArrayMapping(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) return;
+  if (isMappingMarker(value)) return;
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push({
+      path,
+      message: `${fieldName} must be a non-empty array or output marker`,
+    });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    const itemName = `${fieldName}[${index}]`;
+    if (!isRecord(entry)) {
+      issues.push({ path, message: `${itemName} must be an object` });
+      continue;
+    }
+    checkNoUnknownKeys(entry, itemName, path, issues, [
+      "name",
+      "url",
+      "protocol",
+      "host",
+      "port",
+      "basePath",
+      "visibility",
+    ]);
+    checkOptionalMappingValue(entry["name"], `${itemName}.name`, path, issues);
+    checkOptionalMappingValue(entry["url"], `${itemName}.url`, path, issues);
+    checkOptionalMappingValue(
+      entry["protocol"],
+      `${itemName}.protocol`,
+      path,
+      issues,
+    );
+    checkOptionalMappingValue(entry["host"], `${itemName}.host`, path, issues);
+    checkOptionalMappingValue(entry["port"], `${itemName}.port`, path, issues);
+    checkOptionalMappingValue(
+      entry["basePath"],
+      `${itemName}.basePath`,
+      path,
+      issues,
+    );
+    checkOptionalMappingValue(
+      entry["visibility"],
+      `${itemName}.visibility`,
+      path,
+      issues,
+    );
+    if (entry["url"] === undefined && entry["host"] === undefined) {
+      issues.push({
+        path,
+        message: `${itemName} must map url or host`,
+      });
+    }
+  }
+}
+
+function checkOptionalEndpointArrayMapping(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) return;
+  if (isMappingMarker(value)) return;
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push({
+      path,
+      message: `${fieldName} must be a non-empty array or output marker`,
+    });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    const itemName = `${fieldName}[${index}]`;
+    if (!isRecord(entry)) {
+      issues.push({ path, message: `${itemName} must be an object` });
+      continue;
+    }
+    checkNoUnknownKeys(entry, itemName, path, issues, [
+      "url",
+      "scheme",
+      "host",
+      "listener",
+      "visibility",
+      "primary",
+      "routes",
+    ]);
+    requireMappingValue(entry["url"], `${itemName}.url`, path, issues);
+    checkOptionalMappingValue(
+      entry["scheme"],
+      `${itemName}.scheme`,
+      path,
+      issues,
+    );
+    checkOptionalMappingValue(entry["host"], `${itemName}.host`, path, issues);
+    checkOptionalMappingValue(
+      entry["listener"],
+      `${itemName}.listener`,
+      path,
+      issues,
+    );
+    checkOptionalMappingValue(
+      entry["visibility"],
+      `${itemName}.visibility`,
+      path,
+      issues,
+    );
+    checkOptionalMappingValue(
+      entry["primary"],
+      `${itemName}.primary`,
+      path,
+      issues,
+    );
+    checkOptionalRouteArrayMapping(
+      entry["routes"],
+      `${itemName}.routes`,
+      path,
+      issues,
+    );
+  }
+}
+
+function checkOptionalRouteArrayMapping(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) return;
+  if (isMappingMarker(value)) return;
+  if (!Array.isArray(value)) {
+    issues.push({
+      path,
+      message: `${fieldName} must be an array or output marker`,
+    });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    const itemName = `${fieldName}[${index}]`;
+    if (!isRecord(entry)) {
+      issues.push({ path, message: `${itemName} must be an object` });
+      continue;
+    }
+    checkNoUnknownKeys(entry, itemName, path, issues, ["pathPrefix", "to"]);
+    requireMappingValue(
+      entry["pathPrefix"],
+      `${itemName}.pathPrefix`,
+      path,
+      issues,
+    );
+    requireMappingValue(entry["to"], `${itemName}.to`, path, issues);
+  }
+}
+
+function checkNoUnknownKeys(
+  value: Record<string, unknown>,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+  allowed: readonly string[],
+): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(value)) {
+    if (!allowedSet.has(key)) {
+      issues.push({
+        path,
+        message:
+          `${fieldName}.${key} is not part of the official material shape`,
+      });
+    }
+  }
+}
+
+function requireMappingValue(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (!isMappingValue(value)) {
+    issues.push({
+      path,
+      message: `${fieldName} must be a scalar value or output marker`,
+    });
+  }
+}
+
+function checkOptionalMappingValue(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) return;
+  requireMappingValue(value, fieldName, path, issues);
+}
+
+function checkOptionalArrayOrMarker(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) return;
+  if (isMappingMarker(value)) return;
+  if (!Array.isArray(value)) {
+    issues.push({
+      path,
+      message: `${fieldName} must be an array or output marker`,
+    });
+  }
+}
+
+function checkOptionalSecretRefMapping(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push({
+      path,
+      message: `${fieldName} must be an object with secretRef`,
+    });
+    return;
+  }
+  checkNoUnknownKeys(value, fieldName, path, issues, ["secretRef"]);
+  if (
+    !isMappingMarker(value["secretRef"]) &&
+    !isNonEmptyScalar(value["secretRef"])
+  ) {
+    issues.push({
+      path,
+      message: `${fieldName}.secretRef must be a scalar value or output marker`,
+    });
+  }
+}
+
+function checkSecretRefRecordMapping(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push({
+      path,
+      message: `${fieldName} must be an object of secretRef objects`,
+    });
+    return;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    checkOptionalSecretRefMapping(
+      entry,
+      `${fieldName}.${key}`,
+      path,
+      issues,
+    );
+  }
+}
+
+function isMappingValue(value: unknown): boolean {
+  return isMappingMarker(value) || isNonEmptyScalar(value);
+}
+
+function isMappingMarker(value: unknown): boolean {
+  return typeof value === "string" && value.startsWith("$outputs.");
+}
+
+function isNonEmptyScalar(value: unknown): boolean {
+  if (typeof value === "string") return value.length > 0;
+  return typeof value === "number" || typeof value === "boolean";
+}
+
+function checkSpecAndInheritance(
+  obj: Record<string, unknown>,
+  path: string,
+  issues: LintIssue[],
+): void {
+  const type = obj["@type"];
+  const spec = obj["spec"];
+  const portableBase = obj["portableBase"];
+  if (type === "ComponentKind") {
+    if (portableBase !== undefined) {
+      issues.push({
+        path,
+        message: "portable ComponentKind must not declare portableBase",
+      });
+    }
+    checkSpecSchema(spec, path, issues, { required: true });
+    return;
+  }
+  if (type === "takosumi:Kind") {
+    requireNonEmptyString(obj["family"], "family", path, issues);
+    requireKindUri(portableBase, "portableBase", path, issues);
+    checkSpecSchema(spec, path, issues, { required: false });
+  }
+}
+
+function checkSpecSchema(
+  value: unknown,
+  path: string,
+  issues: LintIssue[],
+  opts: { readonly required: boolean },
+): void {
+  if (value === undefined) {
+    if (opts.required) {
+      issues.push({ path, message: "missing `spec` schema" });
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    issues.push({ path, message: "`spec` must be an object" });
+    return;
+  }
+  if (value["type"] !== "object") {
+    issues.push({ path, message: "`spec.type` must be object" });
+  }
+  if (
+    value["properties"] !== undefined && !isRecord(value["properties"])
+  ) {
+    issues.push({ path, message: "`spec.properties` must be an object" });
+  }
+  if (value["required"] !== undefined) {
+    checkStringArray(value["required"], "spec.required", path, issues);
+  }
+}
+
+function checkOutputs(
+  value: unknown,
+  portableBase: unknown,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) {
+    if (portableBase === undefined) {
+      issues.push({
+        path,
+        message: "portable kind document must declare `outputs`",
+      });
+    }
+    return;
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push({
+      path,
+      message: "`outputs` must be a non-empty array",
+    });
+    return;
+  }
+  for (const [index, output] of value.entries()) {
+    if (!isRecord(output)) {
+      issues.push({ path, message: `outputs[${index}] must be an object` });
+      continue;
+    }
+    if (typeof output["name"] !== "string" || !isLocalName(output["name"])) {
+      issues.push({
+        path,
+        message: `outputs[${index}].name must be a local name`,
+      });
+    }
+    requireNonEmptyString(
+      output["type"],
+      `outputs[${index}].type`,
+      path,
+      issues,
+    );
+    if (typeof output["required"] !== "boolean") {
+      issues.push({
+        path,
+        message: `outputs[${index}].required must be a boolean`,
+      });
+    }
+    requireNonEmptyString(
+      output["meaning"],
+      `outputs[${index}].meaning`,
+      path,
+      issues,
+    );
+  }
+}
+
+function checkCapabilityTerms(
+  value: unknown,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === undefined) {
+    issues.push({ path, message: "missing `capabilityTerms`" });
+    return;
+  }
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: "`capabilityTerms` must be an array" });
+    return;
+  }
+  for (const [index, term] of value.entries()) {
+    if (typeof term !== "string" || !isLocalName(term)) {
+      issues.push({
+        path,
+        message: `capabilityTerms[${index}] must be a local name`,
+      });
+    }
   }
 }
 
@@ -237,16 +1075,216 @@ function checkListens(
   issues: LintIssue[],
 ): void {
   if (value === undefined) return;
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     issues.push({
       path,
       message: "`listens` must be an object keyed by listen slot name",
     });
+    return;
+  }
+  for (const [key, slot] of Object.entries(value)) {
+    if (key !== "*" && !isLocalName(key)) {
+      issues.push({ path, message: "listen slot keys must be local names" });
+      continue;
+    }
+    if (!isRecord(slot)) {
+      issues.push({ path, message: `listens[${key}] must be an object` });
+      continue;
+    }
+    checkOutputContractArray(
+      slot["accepts"],
+      `listens[${key}].accepts`,
+      path,
+      issues,
+    );
+    checkProjectionFamilyArray(
+      slot["projectionFamilies"],
+      `listens[${key}].projectionFamilies`,
+      path,
+      issues,
+    );
+    checkListenProjectionCompatibility(
+      slot["accepts"],
+      slot["projectionFamilies"],
+      `listens[${key}]`,
+      path,
+      issues,
+    );
+    if (slot["minimumAccess"] !== undefined) {
+      checkAccessMode(
+        slot["minimumAccess"],
+        `listens[${key}].minimumAccess`,
+        path,
+        issues,
+      );
+    }
+    if (slot["safeDefaultAccess"] !== undefined) {
+      checkSafeDefaultAccessMode(
+        slot["safeDefaultAccess"],
+        `listens[${key}].safeDefaultAccess`,
+        path,
+        issues,
+      );
+    }
+    if (slot["requiredWhenReferencedBy"] !== undefined) {
+      requireNonEmptyString(
+        slot["requiredWhenReferencedBy"],
+        `listens[${key}].requiredWhenReferencedBy`,
+        path,
+        issues,
+      );
+    }
   }
 }
 
 function isLocalName(value: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function requireKindUri(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  requireNonEmptyString(value, fieldName, path, issues);
+  if (typeof value === "string" && !value.startsWith(KIND_ID_PREFIX)) {
+    issues.push({
+      path,
+      message: `${fieldName} must be a takosumi.com kind URI`,
+    });
+  }
+}
+
+function checkStringArray(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: `${fieldName} must be an array of strings` });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || entry.length === 0) {
+      issues.push({
+        path,
+        message: `${fieldName}[${index}] must be a non-empty string`,
+      });
+    }
+  }
+}
+
+function checkOutputContractArray(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push({ path, message: `${fieldName} must be a non-empty array` });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || !OUTPUT_CONTRACTS.has(entry)) {
+      issues.push({
+        path,
+        message: `${fieldName}[${index}] must be an official output type`,
+      });
+    }
+  }
+}
+
+function checkProjectionFamilyArray(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push({ path, message: `${fieldName} must be a non-empty array` });
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || !PROJECTION_FAMILIES.has(entry)) {
+      issues.push({
+        path,
+        message: `${fieldName}[${index}] must be an official projection family`,
+      });
+    }
+  }
+}
+
+function checkListenProjectionCompatibility(
+  acceptsValue: unknown,
+  projectionsValue: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  const accepts = officialStringArray(acceptsValue, OUTPUT_CONTRACTS);
+  const projections = officialStringArray(
+    projectionsValue,
+    PROJECTION_FAMILIES,
+  );
+  if (!accepts || !projections) return;
+  for (const contract of accepts) {
+    const allowed = PROJECTION_FAMILIES_BY_OUTPUT_CONTRACT[contract] ?? [];
+    if (!projections.some((projection) => allowed.includes(projection))) {
+      issues.push({
+        path,
+        message:
+          `${fieldName} has no projection family compatible with ${contract}`,
+      });
+    }
+  }
+}
+
+function officialStringArray(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || !allowed.has(entry)) return undefined;
+    out.push(entry);
+  }
+  return out;
+}
+
+function checkAccessMode(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (typeof value !== "string" || !ACCESS_MODES.has(value)) {
+    issues.push({
+      path,
+      message: `${fieldName} must be an official access mode`,
+    });
+  }
+}
+
+function checkSafeDefaultAccessMode(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value === null) return;
+  if (typeof value !== "string" || !SAFE_DEFAULT_ACCESS_MODES.has(value)) {
+    issues.push({
+      path,
+      message: `${fieldName} must be null or a safe default access mode`,
+    });
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**

@@ -42,7 +42,7 @@ After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warni
 
 1. Navigate: `https://cloud.takosumi.test/sign-in`
 2. Expect: redirect to `https://oauth-mock.test/{google|github}/authorize?...` when a provider is selected.
-3. Complete the local mock provider flow.
+3. Complete the local mock backend flow.
 4. Expect: redirect back to `https://cloud.takosumi.test/sign-in/callback?code=...`
 5. Expect: the dashboard session is established.
 

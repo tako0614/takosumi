@@ -10,7 +10,7 @@ Space platform service registry visibility
 Space publication sharing
 Kind alias assignment
 Descriptor selection and binding loading
-Provider adapter attachment and credentials
+Backend adapter attachment and credentials
 Platform service registry policy, reserved/operator publications, visibility, and cross-Space sharing
 Profile and policy packs
 Secret store and Space partitions

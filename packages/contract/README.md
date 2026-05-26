@@ -13,20 +13,21 @@ Use the package root or explicit subpath imports for the current v1 public spec 
 | `@takos/takosumi-contract`               | current AppSpec + Installer API DTOs, plus JSON scalar helper types                      |
 | `@takos/takosumi-contract/app-spec`      | `AppSpec`, `Component`, local `publish` / `listen` declarations                          |
 | `@takos/takosumi-contract/installer-api` | 5 endpoint Installer API DTOs, `Installation`, `Deployment`, source pins, error envelope |
+| `@takos/takosumi-contract/type-catalog`  | official output type, injection mode, access/sensitivity, and material helper types      |
 
 The root export intentionally excludes deploy-core projections and reference adapter helper types so the current public `AppSpec`, `Installation`, and `Deployment` names stay unambiguous.
 
 ## Reference implementation APIs
 
-These subpaths support the takosumi.com reference kernel, runtime-agent, and provider packages. They are versioned with this package, but they are reference implementation APIs rather than AppSpec authoring fields. A compatible implementation may bind kinds through a native controller, static registry, workflow engine, or any other implementation mechanism while keeping the AppSpec and Installer API wire shapes above.
+These subpaths support the takosumi.com reference kernel, runtime-agent, and kind packages. They are versioned with this package, but they are reference implementation APIs rather than AppSpec authoring fields. A compatible implementation may bind kinds through a native controller, static registry, workflow engine, or any other implementation mechanism while keeping the AppSpec and Installer API wire shapes above.
 
 | Subpath                                                      | Owns                                                                                          |
 | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
 | `@takos/takosumi-contract/reference/plugin`                  | reference `KernelPlugin` adapter, material publish / listen hooks                             |
-| `@takos/takosumi-contract/reference/plugin-sdk`              | reference adapter SDK for storage, queue, gateway, provider, and process helper ports         |
+| `@takos/takosumi-contract/reference/plugin-sdk`              | reference adapter SDK for storage, queue, gateway, backend, and process helper ports          |
 | `@takos/takosumi-contract/reference/runtime-agent-lifecycle` | kernel to runtime-agent lifecycle envelopes for `apply`, `destroy`, `compensate`, `describe`  |
 | `@takos/takosumi-contract/reference/shape`                   | connector-local wire selector registry derived from operator-selected implementation binding  |
-| `@takos/takosumi-contract/reference/provider-plugin`         | provider adapter API bridged into `KernelPlugin` for connector-backed packages                |
+| `@takos/takosumi-contract/reference/provider-plugin`         | legacy `ProviderPlugin` compatibility API bridged into `KernelPlugin`                         |
 | `@takos/takosumi-contract/reference/kernel-plugin-adapter`   | adapter bridge from provider-plugin API to the current reference `KernelPlugin` adapter shape |
 | `@takos/takosumi-contract/reference/types`                   | reference implementation DTO helpers beyond the root JSON scalar helpers                      |
 | `@takos/takosumi-contract/internal/api`                      | reference kernel actor/context DTOs for in-process and internal HTTP boundaries               |
@@ -68,6 +69,12 @@ interface ListenOptions {
 
 `Component.kind` is opaque to the contract package. Operators may map short aliases such as `web-service` to full kind URIs, but alias resolution and kind descriptor selection belong to the operator distribution. Component-specific gateway route/TLS/host rules live inside the selected descriptor-owned open `spec`; workload dependencies use `publish` / `listen`; launch, permission, account, and billing flows are operator distribution surfaces. `publish` declares local publications such as `web.http`; `listen` declares local bindings whose `from` is either a two-segment `component.publication` reference or a three-or-more-segment external publication path such as `publisher.identity.primary`. Takosumi Cloud defines concrete paths such as `operator.identity.oidc` in its own distribution docs. Publication material projection is owned by the kind descriptor and operator-selected implementation binding. Build recipes live outside AppSpec; an operator/build-service distribution may define `.takosumi.build.yml`, CI config, or another input. AppSpec components carry runtime/install intent.
 
+## Type Catalog Helpers
+
+The `type-catalog` subpath mirrors the official Takosumi Kind Catalog vocabulary in TypeScript. It exports the closed official output type names (`http-endpoint`, `service-binding`, `object-store`, `event-channel`, `identity.oidc@v1`, `billing.port@v1`), injection mode names (`env`, `secret-env`, `upstream`, `config-mount`), access modes, sensitivity classes, material interfaces, and small validation helpers for catalog-shaped material.
+
+These helpers do not add fields to AppSpec. AppSpec still stores `publish.<name>.as` and `listen.<binding>.as` as strings so operator profiles can adopt other catalogs. The helper types are for code that intentionally targets the official `takosumi.com` catalog.
+
 ## Installer API
 
 The Installer API is the public API for moving source into Takosumi:
@@ -89,11 +96,11 @@ Reference operators attach adapters as plain arrays:
 ```typescript
 await createPaaSApp({
   kindAliases,
-  plugins: [workerProvider(), objectStoreProvider()],
+  plugins: [cloudflareWorkerPlugin(), cloudflareR2ObjectStorePlugin()],
 });
 ```
 
-Provider and external adapter packages are optional imports for the reference kernel. Operators choose an implementation set for each distribution.
+Kind and backend adapter packages are optional imports for the reference kernel. Operators choose an implementation set for each distribution.
 
 ## Reference Runtime-Agent Lifecycle
 

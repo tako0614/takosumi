@@ -118,7 +118,7 @@ export type MaterialShape =
  *
  * Output-to-material projection is defined by the component kind descriptor
  * and materializer. AppSpec authors name the publication and its contract;
- * they do not select provider output paths here.
+ * they do not select backend output paths here.
  */
 export interface PublishOptions {
   readonly as: MaterialContractRef;

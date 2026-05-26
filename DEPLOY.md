@@ -24,7 +24,7 @@ DNS records for `takosumi.com`, `www.takosumi.com` and `cloud.takosumi.com` are 
 
 ## 1. `takosumi.com` — website (landing + /docs/ + /contexts/, Cloudflare Pages)
 
-**Source**: `takosumi/website/` (Solid Start landing) + `takosumi/docs/` (VitePress reference docs, base `/docs/`) + `takosumi/spec/contexts/` (JSON-LD context under `/contexts/`) + `takosumi/packages/plugins/spec/kinds/v1/` (official kind schemas under `/kinds/v1/`).
+**Source**: `takosumi/website/` (Solid Start landing) + `takosumi/docs/` (VitePress reference docs, base `/docs/`) + `takosumi/spec/contexts/` (JSON-LD context under `/contexts/`) + `takosumi/packages/kind-*/spec/kind.jsonld` (official kind schemas under `/kinds/v1/`).
 
 `website/build.sh` produces the merged `.output/public/` artifact:
 
@@ -38,8 +38,8 @@ website/.output/public/
 │   └── ...
 ├── contexts/                  # JSON-LD context
 └── kinds/v1/                  # Kind Catalog descriptors
-    ├── v1.jsonld
-    └── kinds/v1/<name>.jsonld
+    ├── <name>
+    └── <name>.jsonld
 ```
 
 One-time setup:

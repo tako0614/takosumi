@@ -1,7 +1,7 @@
 /**
  * Minimal AWS Signature Version 4 signer over `fetch()`.
  *
- * Used by the `Direct*Lifecycle` classes in `shape-providers/<shape>/*-direct.ts`
+ * Used by direct lifecycle classes in native kind packages
  * so operators can call AWS REST APIs in-process without spawning a separate
  * gateway service.
  *

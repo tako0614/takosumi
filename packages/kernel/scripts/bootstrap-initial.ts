@@ -250,7 +250,7 @@ function loadTrustRoots(env: Record<string, string | undefined>): {
 }
 
 function isPackageKind(value: unknown): value is PackageKind {
-  return value === "provider-package" ||
+  return value === "kind-package" ||
     value === "resource-contract-package" ||
     value === "data-contract-package" ||
     value === "output-contract-package" ||
@@ -380,7 +380,7 @@ async function executePlan(plan: BootstrapPlan): Promise<BootstrapOutcome> {
       id: root.id,
       packageRef: root.packageRef,
       packageDigest: root.packageDigest,
-      packageKind: root.packageKind ?? "provider-package",
+      packageKind: root.packageKind ?? "kind-package",
       trustLevel: root.trustLevel ?? "reference",
       status: "active",
       conformanceTier: root.conformanceTier ?? "declared",

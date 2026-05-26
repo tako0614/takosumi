@@ -82,12 +82,10 @@ const CANONICALIZATION = {
 const PUBLIC_MANIFEST_EXPANSION_ALIAS =
   "authoring.public-manifest-expansion@v1";
 
-/** Built-in alias → canonical URI mapping for descriptors that may be
- *  referenced by the manifest but are not present in the in-tree document
- *  registry (e.g. provider adapters shipped via `@takos/takosumi-plugins`). */
+/** Built-in alias -> canonical URI mapping for descriptors that may be
+ *  referenced by manifests but are not present in the in-tree registry. */
 const ALIAS_FALLBACK_URI: Record<string, string> = {
-  // Providers — shipped by plugins; URIs follow the reference descriptor v1
-  // naming. We accept either short alias or canonical URI from manifest input.
+  // Accept either short aliases or canonical URIs from manifest input.
 };
 
 interface DescriptorRefSeed {

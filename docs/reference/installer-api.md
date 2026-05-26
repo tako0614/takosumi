@@ -61,7 +61,7 @@ token は operator が actor 単位に発行する scoped credential です。 S
 
 remote `source.url` は HTTPS です。`http://localhost` / `http://127.0.0.1` は single-host loopback dev だけで使えます。digest は integrity evidence であり、 public network transport の HTTPS 要求を置き換えません。file path や `file://` locator は remote source ではなく、`source.kind: "local"` で表します。
 
-source descriptor は kind ごとに閉じています。
+source input の構造は kind ごとに閉じています。
 
 - `git`: `url` と `ref` は必須。`ref` は branch / tag / commit。`digest` は invalid。
 - `prepared`: `url` と `digest` は必須。`digest` は build service / caller が計算した archive payload guard。`ref` / `commit` は invalid。

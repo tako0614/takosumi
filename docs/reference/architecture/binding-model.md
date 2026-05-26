@@ -44,13 +44,13 @@ Secret の publish の出力はプレーンな `env` に projection してはな
 
 ## Compatibility check {#compatibility-check}
 
-Link resolution は provider side effect の前に次を検証します。
+Link resolution は resource side effect の前に次を検証します。
 
 1. `listen.from` が same-manifest の publish の出力か Space-visible PlatformServiceDeclaration に exact match する。
 2. source の output type alias / URI が解決済みで、出力データの metadata、 publish の出力の declaration、operator policy、または採用済み kind の定義から version / sensitivity 相当の判断材料が取得できる。
 3. `listen.as` injection mode が source output type で許可される。
 4. PlatformServiceDeclaration 由来の場合、resolved access mode が publish の出力の `accessModes` と operator policy で許可される。
-5. publisher role、materialization evidence、operator policy、採用済み kind の定義が requested projection を許可する。特に `http-endpoint` を `listen.as: upstream` で受ける場合は、source が upstream として再利用可能かを provider / operator policy / kind の定義で確認する。
+5. publisher role、materialization evidence、operator policy、採用済み kind の定義が requested projection を許可する。特に `http-endpoint` を `listen.as: upstream` で受ける場合は、source が upstream として再利用可能かを backend / operator policy / kind の定義で確認する。
 6. secret / restricted 出力データを plain env や public URL へ落とす unsafe projection は fail-closed で拒否する。
 
 成功した selection は Deployment に紐づく deploy evidence に、publish の出力 / そのスナップショット、output type、projection family、access mode として記録されます。
@@ -139,7 +139,7 @@ RFC (CONVENTIONS.md §6) なしに新規 mutation 種別を追加しない。
 
 ## 衝突ルール {#collision-rules}
 
-Link の projection が別の解決済�� binding と衝突する場合、Takosumi は resolution の順序で precedence list を適���しなければならない。最初に一致したものが勝ち、先行 binding を上書きするような後続入力は resolution を失敗させる。
+Link の projection が別の解決済み binding と衝突する場合、Takosumi は resolution の順序で precedence list を適用しなければならない。最初に一致したものが勝ち、先行 binding を上書きするような後続入力は resolution を失敗させる。
 
 ```text
 1. literal target input field        (strongest)

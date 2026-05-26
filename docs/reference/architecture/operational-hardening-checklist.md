@@ -14,7 +14,7 @@
 ## Root 不変条件 {#root-invariants}
 
 - ResolvedPlan と TargetState は immutable である。
-- apply は provider effect 実行中に catalog document や platform service registry を再解決せず、記録済みの resolution evidence と snapshot を使う。
+- apply は resource effect 実行中に catalog document や platform service registry を再解決せず、記録済みの resolution evidence と snapshot を使う。
 - すべての graph entity は安定したアドレスを持つ。
 - lifecycle class は operation 種別を制限する。
 - core canonical state は raw secret 値ではなく secret reference を保存する。
@@ -36,7 +36,7 @@
 Reference / operator production の設定:
 
 - 実行ターゲットは operator が選択した binding set から決まる。
-- runtime-agent や provider inventory の drift は operator evidence として記録され、manifest vocabulary としては扱わない。
+- runtime-agent や backend inventory の drift は operator evidence として記録され、manifest vocabulary としては扱わない。
 
 ## Platform service {#platform-services}
 

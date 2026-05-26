@@ -69,7 +69,7 @@ WHERE lockId = ? AND holderId = ? AND epoch = ?
 
 返り行数が 0 の場合 (lock を別 holder が claim 済み)、Takosumi は in-flight operation を `cross_process_lock_lost` で fail-closed させ、当該 OperationPlan を recovery 経路に渡す。
 
-installer compact lock は `locked_until` を holder token 条件で renew する lease。下流 provider へ fencing token は渡さない。長時間の operation では `TAKOSUMI_LOCK_LEASE_MS` / `TAKOSUMI_LOCK_HEARTBEAT_MS` を provider 実行時間に合わせて調整する。
+installer compact lock は `locked_until` を holder token 条件で renew する lease。下流 backend へ fencing token は渡さない。長時間の operation では `TAKOSUMI_LOCK_LEASE_MS` / `TAKOSUMI_LOCK_HEARTBEAT_MS` を backend 実行時間に合わせて調整する。
 
 ## TTL recommendations
 

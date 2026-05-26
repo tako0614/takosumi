@@ -23,7 +23,7 @@ Deno.test("prepare artifact request creates artifact, record, mirror decision, a
     resolvedGraphDigest: "sha256:graph",
     packageResolutionDigest: "sha256:packages",
     artifactDigest: "sha256:artifact",
-    providerPackageDigests: ["sha256:provider"],
+    kindPackageDigests: ["sha256:provider"],
     resourceContractPackageDigests: ["sha256:resource-contract"],
     nativeSchemaDigests: ["sha256:schema"],
     provenanceRef: "prov://artifact_1",

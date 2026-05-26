@@ -73,7 +73,7 @@ prepare      → pre-commit → commit → post-commit → observe → finalize
 | abort       | no                                | yes                      | no                       |
 | skip        | no                                | no                       | no                       |
 
-`pre-commit` は operator asset extension policy gate ([Operator asset Extension Policy](../data-asset-policy.md) 参照) と [バインディングモデル](./binding-model.md) が上げる衝突 risk の canonical な enforcement point である。source build / preparation は Installer API submission 前の build-service / CI policy で扱う。`commit` は provider side effect を実行しうる唯一の stage である。`post-commit` は commit 後の evidence / projection を記録し、外部 cleanup が完了できないとき debt を queue する。新規 stage は RFC (CONVENTIONS.md §6) を要する。
+`pre-commit` は operator asset extension policy gate ([Operator asset Extension Policy](../data-asset-policy.md) 参照) と [バインディングモデル](./binding-model.md) が上げる衝突 risk の canonical な enforcement point である。source build / preparation は Installer API submission 前の build-service / CI policy で扱う。`commit` は resource side effect を実行しうる唯一の stage である。`post-commit` は commit 後の evidence / projection を記録し、外部 cleanup が完了できないとき debt を queue する。新規 stage は RFC (CONVENTIONS.md §6) を要する。
 
 ### 冪等性キー {#idempotency-keys}
 
@@ -94,7 +94,7 @@ kind alias と binding は operator が与える resolution 入力である。 T
 2. selection check  — recorded kind aliases / selected implementations /
                       connector visibility are revalidated
 3. result recorded  — verification outcome is journaled as evidence
-4. fail-closed      — pre-commit failure aborts before provider effects;
+4. fail-closed      — pre-commit failure aborts before resource effects;
                       post-commit failure records CleanupBacklog and continues
                       observe/finalize evidence
 ```
@@ -164,7 +164,7 @@ CurrentStateIndex
 
 #### Snapshot / Authority
 
-**1. Authority invariant** --- Apply、activate、rollback、destroy は記録された `ResolvedPlan` と `TargetState` を使う。provider effects の直前に catalog documents や platform service registry を再解決して authority を差し替えてはならない。
+**1. Authority invariant** --- Apply、activate、rollback、destroy は記録された `ResolvedPlan` と `TargetState` を使う。resource effects の直前に catalog documents や platform service registry を再解決して authority を差し替えてはならない。
 
 **2. Snapshot invariant** --- `ResolvedPlan` と `TargetState` は immutable である。新しい意味または desired graph は新しい snapshot を作る。
 

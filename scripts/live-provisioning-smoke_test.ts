@@ -6,7 +6,7 @@ import {
   runFixtureProof,
   runLiveProof,
 } from "./live-provisioning-smoke.ts";
-import type { ProviderProofFixture } from "../packages/plugins/src/providers/proof.ts";
+import type { ProviderProofFixture } from "./provider-proof.ts";
 
 Deno.test("manifestToProofFixture maps bundled manifests to runtime desired state", async () => {
   const manifest = JSON.parse(

@@ -24,7 +24,7 @@ interface AuditLogEvent {
 }
 ```
 
-`payload` は event type ごとの object です。secret value、raw token、 provider credential は reference / redacted form で扱います。
+`payload` は event type ごとの object です。secret value、raw token、 backend credential は reference / redacted form で扱います。
 
 ## Event type
 
@@ -43,15 +43,15 @@ interface AuditLogEvent {
 | `rollback-requested`             | warning  | rollback が要求された。                            |
 | `rollback-completed`             | notice   | retained Deployment への rollback が完了した。     |
 
-### Reference Lifecycle / Provider Operation
+### Reference Lifecycle / Backend Operation
 
 | Type                  | Severity | 説明                                                    |
 | --------------------- | -------- | ------------------------------------------------------- |
 | `operation-planned`   | info     | OperationPlan が作成された。                            |
-| `operation-started`   | info     | provider operation が開始された。                       |
-| `operation-committed` | info     | provider operation が commit point を越えた。           |
+| `operation-started`   | info     | backend operation が開始された。                        |
+| `operation-committed` | info     | backend operation が commit point を越えた。            |
 | `operation-recovered` | notice   | journal replay / recovery により operation が復旧した。 |
-| `operation-failed`    | warning  | provider operation が失敗した。                         |
+| `operation-failed`    | warning  | backend operation が失敗した。                          |
 
 ### Reference / Operator Policy Events
 
@@ -81,7 +81,7 @@ These events belong to a reference/operator policy profile. They are not additio
 
 ## Redaction
 
-- secret value、raw token、private key、provider credential は記録しない。
+- secret value、raw token、private key、backend credential は記録しない。
 - URL や object key に secret が含まれる可能性がある場合は digest にする。
 - payload に source content 全体を埋めず、digest / size / source ref を記録する。
 

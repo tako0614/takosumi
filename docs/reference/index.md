@@ -43,4 +43,4 @@ Takosumi Cloud は別の operator profile 仕様です。この docs site では
 
 - [Takosumi を拡張する](../extending.md) — kind の定義と implementation binding の関係、互換境界、operator profile が決める配線方法。
 
-内部設計メモ、provider 実装メモ、operator 固有の運用メモは公開仕様の導線からは外しています。仕様として読ませるページはここに集約し、実装詳細は各 operator distribution と implementation repository の資料で扱います。
+内部設計メモ、implementation binding メモ、operator 固有の運用メモは公開仕様の導線からは外しています。仕様として読ませるページはここに集約し、実装詳細は各 operator distribution と implementation repository の資料で扱います。

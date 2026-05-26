@@ -1,5 +1,5 @@
 /**
- * Provider-agnostic error category (Phase 18.2 / H6).
+ * Backend-agnostic error category (Phase 18.2 / H6).
  *
  * Each cloud provider (AWS / GCP / Kubernetes / Cloudflare) speaks a different
  * dialect when surfacing API errors:
@@ -13,8 +13,8 @@
  * - Cloudflare uses error code numbers + JSON `{ "errors": [{ "code": ... }] }`
  *   bodies.
  *
- * Rather than hard-coding a provider-specific switch in every retry / fail-closed
- * code path, the kernel and provider adapters MUST normalise their native error
+ * Rather than hard-coding a backend-specific switch in every retry / fail-closed
+ * code path, the kernel and backend adapters MUST normalise their native error
  * shape onto this enum. Retry policy is then expressed in terms of the
  * normalised category, not the provider dialect, so a "retry on transient"
  * rule applies uniformly across all four clouds.
@@ -24,7 +24,7 @@
  * haven't explicitly mapped; it is treated as non-retryable so unknown errors
  * fail-closed.
  *
- * Provider adapters expose a `classifyXxxError(err) → ProviderErrorCategory`
+ * Backend adapters expose a `classifyXxxError(err) → ProviderErrorCategory`
  * helper alongside their native classifier so kernel-side code that does not
  * know which cloud it is talking to can still take a retry decision via
  * {@link isRetryableErrorCategory}.
@@ -82,9 +82,9 @@ export function isFailClosedErrorCategory(
 }
 
 /**
- * A normalised provider error envelope. Provider adapters SHOULD populate this
+ * A normalised backend error envelope. Backend adapters SHOULD populate this
  * shape on `Deployment.conditions[]` so the deployment service can render a
- * provider-agnostic UI without sniffing native error codes.
+ * backend-agnostic UI without sniffing native error codes.
  */
 export interface NormalisedProviderError {
   /** Cloud-agnostic category. */

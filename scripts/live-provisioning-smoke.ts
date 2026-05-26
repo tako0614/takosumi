@@ -14,7 +14,7 @@ import {
   type ProviderProofProvider,
   type ProviderProofReport,
   type ProviderProofStepReport,
-} from "../packages/plugins/src/providers/proof.ts";
+} from "./provider-proof.ts";
 
 const ROOT_DIR = fileURLToPath(new URL("..", import.meta.url));
 const DEFAULT_FIXTURE_FILES = [

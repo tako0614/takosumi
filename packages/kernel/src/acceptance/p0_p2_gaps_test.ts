@@ -90,7 +90,7 @@ Deno.test("acceptance P1: revoked registry trust degrades group and blocks secur
   const resolutions = new InMemoryPackageResolutionStore();
   const trustRecords = new InMemoryTrustRecordStore();
   const descriptor: PackageDescriptor = {
-    kind: "provider-package",
+    kind: "kind-package",
     ref: "providers/noop",
     digest: "sha256:revoked",
     publisher: "takos",
@@ -125,7 +125,7 @@ Deno.test("acceptance P1: revoked registry trust degrades group and blocks secur
 
   const securityCondition = trustCondition(
     await trustRecords.findForPackage(
-      "provider-package",
+      "kind-package",
       "providers/noop",
       "sha256:revoked",
     ),

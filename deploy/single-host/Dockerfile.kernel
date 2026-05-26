@@ -10,7 +10,7 @@ WORKDIR /app
 
 COPY ../../packages/contract /app/packages/contract
 COPY ../../packages/kernel /app/packages/kernel
-COPY ../../packages/plugins /app/packages/plugins
+COPY ../../packages/kind-* /app/packages/
 COPY ../../packages/runtime-agent /app/packages/runtime-agent
 COPY ../../packages/all /app/packages/all
 COPY ../../deno.json /app/deno.json

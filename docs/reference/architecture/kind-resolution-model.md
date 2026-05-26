@@ -1,6 +1,6 @@
 # Kind Resolution モデル {#kind-resolution-model}
 
-public manifest は `components.<name>.kind` と kind-specific な open `spec` から runtime intent を表す。component kind の意味と input schema は operator が選ぶ kind の定義 / catalog metadata が表し、provider mapping と Space policy は operator の設定が定義する。Takosumi Kind Catalog の kind の定義は JSON-LD で公開される official catalog documents です。
+public manifest は `components.<name>.kind` と kind-specific な open `spec` から runtime intent を表す。component kind の意味と input schema は operator が選ぶ kind の定義 / catalog metadata が表し、implementation binding と Space policy は operator の設定が定義する。Takosumi Kind Catalog の kind の定義は JSON-LD で公開される official catalog documents です。
 
 ## Public な component kind {#public-component-kind}
 
@@ -12,7 +12,7 @@ components:
       entrypoint: src/worker.ts
 ```
 
-kind resolution は `components.<name>.kind` から始まる。値が absolute URI として parse できる場合、その URI が resolved kind URI です。それ以外の値は short alias として operator-provided alias map / profile で exact match 解決する。未解決 alias は provider side effect 前に fail-closed で拒否される。解決された operator-selected binding は deploy evidence として Deployment に紐づき、component kind の semantic identity とは別に記録される。
+kind resolution は `components.<name>.kind` から始まる。値が absolute URI として parse できる場合、その URI が resolved kind URI です。それ以外の値は short alias として operator-provided alias map / profile で exact match 解決する。未解決 alias は resource side effect 前に fail-closed で拒否される。解決された operator-selected binding は deploy evidence として Deployment に紐づき、component kind の semantic identity とは別に記録される。
 
 ## External kind schema {#external-kind-descriptor}
 
@@ -29,7 +29,7 @@ compatibility hints
 
 asset を扱う場合、operator extension の policy として扱います。
 
-## Kind / provider resolution {#kind-provider-resolution}
+## Kind / binding resolution {#kind-binding-resolution}
 
 resolution は operator-owned で、決定的かつ fail-closed にする。Takosumi は manifest を受け、Installation に紐づく Deployment として resolution evidence を記録する。
 
@@ -37,12 +37,12 @@ resolution は operator-owned で、決定的かつ fail-closed にする。Tako
 1. Read `components.<name>.kind`.
 2. If the value parses as an absolute URI, use it as the resolved kind URI.
 3. Otherwise resolve it through the operator-provided alias map / profile;
-   unresolved aliases fail before provider side effects.
+   unresolved aliases fail before resource side effects.
 4. If the operator uses kind definition metadata, select the definition for the
    resolved URI.
 5. If kind definition input schema is present, validate `spec` against that schema.
 6. Check that the operator has an execution binding visible to the Space and
-   apply provider support metadata and Space policy checks.
+   apply binding support metadata and Space policy checks.
 7. Link the operator-selected implementation evidence to the Deployment as
    deploy record, and expose only component JSON outputs
    through public Deployment outputs.
@@ -52,7 +52,7 @@ resolution は operator-owned で、決定的かつ fail-closed にする。Tako
 
 ## Component 入力スキーマ {#input-schema}
 
-Component input 検証は `components.<name>` を `components.<name>.kind` で選ばれた component kind contract に対して validate する。provider のサポート metadata は provider resolution の段階でチェックされる。
+Component input 検証は `components.<name>` を `components.<name>.kind` で選ばれた component kind contract に対して validate する。binding support metadata は kind / binding resolution の段階でチェックされる。
 
 ```text
 JSON-LD / kind の定義:
@@ -70,7 +70,7 @@ Binding:
 
 ## Mutation 制約 {#mutation-constraints}
 
-mutation 動作は external component kind / provider contract が定義する。下記は official catalog の kind の定義で使える vocabulary の例です。
+mutation 動作は external component kind / implementation contract が定義する。下記は official catalog の kind の定義で使える vocabulary の例です。
 
 | mutation-constraint | semantics                                                            | allowed lifecycle classes    |
 | ------------------- | -------------------------------------------------------------------- | ---------------------------- |
@@ -101,4 +101,4 @@ operator policy が明示的に access mode を選ぶ場合は、この閉じた
 
 ## Space 固有の availability {#space-specific-availability}
 
-kind alias や provider implementation が operator registry に存在しても、ある Space では利用不可能であることがある。resolution は alias / implementation binding と Space policy の許可の両方を要求する。
+kind alias や implementation binding が operator registry に存在しても、ある Space では利用不可能であることがある。resolution は alias / implementation binding と Space policy の許可の両方を要求する。

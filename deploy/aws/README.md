@@ -1,10 +1,10 @@
-# Takos AWS Provider Runbook
+# Takosumi AWS Kind Runbook
 
-This directory documents the AWS surface as **operator-owned scope**: the operator-attached provider package (`packages/aws-providers/`) and runtime-agent connectors (`packages/runtime-agent/src/connectors/aws/`) provide AWS lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Terraform / CDK / Pulumi that lands the Takosumi kernel image and runtime-agent image on AWS infrastructure) is also the operator's responsibility. Operators provide the production-grade AWS IaC stack for their distribution.
+This directory documents the AWS surface as **operator-owned scope**: AWS native kind packages (`takosumi-plugins/packages/kind-aws-*`) and runtime-agent connectors (`packages/runtime-agent/src/connectors/aws/`) provide AWS lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Terraform / CDK / Pulumi that lands the Takosumi kernel image and runtime-agent image on AWS infrastructure) is also the operator's responsibility. Operators provide the production-grade AWS IaC stack for their distribution.
 
 ## Why no reference deploy here
 
-The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. AWS / GCP / Azure / k8s are operator-owned targets: operators run the kernel image on whatever AWS compute they prefer (ECS / Fargate / EC2 / EKS), point the kernel at a Postgres database (RDS / Aurora), and attach the AWS provider factories from `@takos/takosumi-aws-providers` plus matching runtime-agent credentials.
+The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. AWS / GCP / Azure / k8s are operator-owned targets: operators run the kernel image on whatever AWS compute they prefer (ECS / Fargate / EC2 / EKS), point the kernel at a Postgres database (RDS / Aurora), and attach the needed AWS kind factories such as `@takos/takosumi-kind-aws-fargate-web-service`, `@takos/takosumi-kind-aws-rds-postgres`, `@takos/takosumi-kind-aws-s3-object-store`, or `@takos/takosumi-kind-aws-route53-gateway`.
 
 ## Required runtime shape
 
@@ -36,7 +36,7 @@ TAKOSUMI_AWS_SECRET_ACCESS_KEY=... \
 deno task live-smoke --provider aws --shape object-store
 ```
 
-The live smoke calls each provider's lifecycle once and tears down.
+The live smoke calls each native kind lifecycle once and tears down.
 
 ## Substrate-neutral references
 

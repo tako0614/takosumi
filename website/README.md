@@ -17,7 +17,7 @@ deno task website:build
 1. `vinxi build` → `website/.output/public/` (= landing).
 2. `vitepress build` → `docs/.vitepress/dist/` → overlaid onto `website/.output/public/docs/` (= reference docs).
 3. `spec/contexts/` → overlaid onto `website/.output/public/contexts/` (= JSON-LD context).
-4. `packages/plugins/spec/kinds/v1/` → overlaid onto `website/.output/public/kinds/v1/` (= official type catalog descriptors, with extensionless and `.jsonld` variants).
+4. `packages/kind-*/spec/kind.jsonld` → overlaid onto `website/.output/public/kinds/v1/` (= official type catalog descriptors, with extensionless and `.jsonld` variants).
 
 The merged `.output/public/` is the `pages_build_output_dir` declared in `wrangler.toml`.
 

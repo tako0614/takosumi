@@ -137,7 +137,7 @@ export class BindingResolver {
  *                    the resolved binding record. Secret ref material fields
  *                    such as `clientSecretRef` drop the trailing `Ref` in the
  *                    env key (`CLIENT_SECRET`).
- *   - `as: mount`  → return the material as a mount descriptor under
+ *   - `as: config-mount` → return the material as a mount descriptor under
  *                    `options.mount` (or `/` when absent).
  *   - `as: upstream` / `as: target` → return the material as an upstream
  *                    target descriptor.
@@ -148,7 +148,7 @@ export function defaultEnvInjection(
   material: NamespaceMaterial,
 ): EnvInjection {
   switch (options.as) {
-    case "mount": {
+    case "config-mount": {
       const mountPath = options.mount ?? "/";
       return {
         mounts: { [mountPath]: serializeMaterialForMount(material) },

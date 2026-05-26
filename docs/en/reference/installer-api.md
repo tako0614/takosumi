@@ -160,7 +160,7 @@ Core dry-run response is `changes[]` plus an `expected` guard. Cost estimates, b
 | `kind`      | yes      | Submitted kind for create/update/noop; previous kind for delete. |
 | `reason`    | no       | Short operator explanation.                                      |
 
-`noop` may be used when the compared plan matches an existing current Deployment component. No plan entity is created; it is only preview inside the dry-run response. Operators that expose resolved kind definition URI or selected provider configuration store those values in extension fields and Deployment records.
+`noop` may be used when the compared plan matches an existing current Deployment component. No plan entity is created; it is only preview inside the dry-run response. Operators that expose resolved kind definition URI or selected implementation binding store those values in extension fields and Deployment records.
 
 `expected` is a guard for the resolved source kind. `manifestDigest` is always required. Git source adds `expected.commit`; prepared source adds `expected.sourceDigest`. Deploy dry-run for an existing Installation also adds `expected.currentDeploymentId` as the reviewed base pointer. Inapplicable fields return `400 invalid_argument`; well-formed guards that do not match the resolved source or current pointer return `409 failed_precondition`.
 
@@ -289,7 +289,7 @@ Prepared source apply requires request `source.digest`. Dry-run `expected.source
 
 `outputs.components[componentName][publicationName]` is the public/non-secret output data for a manifest `publish` entry in that Deployment. Public Installer responses return catalog-defined published output as JSON objects. Output field meaning belongs to the selected catalog/operator configuration, and operator-facing ledgers may store separate apply records.
 
-Public `outputs` contain only non-secret runtime/public projections. Raw credentials, tokens, private keys, passwords, cookies, provider secrets, and payment-provider credentials are not placed in Deployment outputs or export bundles. Required sensitive values are represented as `configRef`, `secretRef`, or operator-provided configuration. Exporter-specific rejection and redaction behavior belongs to operator/exporter docs.
+Public `outputs` contain only non-secret runtime/public projections. Raw credentials, tokens, private keys, passwords, cookies, provider secrets, and payment-backend credentials are not placed in Deployment outputs or export bundles. Required sensitive values are represented as `configRef`, `secretRef`, or operator-provided configuration. Exporter-specific rejection and redaction behavior belongs to operator/exporter docs.
 
 `Deployment.status: "succeeded"` means the synchronous apply/activation work needed to make the Deployment current has completed. Health observation can update operator observation state later. Activate is an internal phase of install/deploy/rollback; there is no separate public activate endpoint. Rollback does not rewrite historical records. It moves the current pointer back to a previous Deployment.
 
@@ -563,7 +563,7 @@ interface ApiErrorEnvelope {
 | `not_found`           | 404  | Installation or Deployment is absent.                                                                                   |
 | `failed_precondition` | 409  | See list below.                                                                                                         |
 | `resource_exhausted`  | 413  | Request body, manifest, or prepared source payload exceeds size limits.                                                 |
-| `not_implemented`     | 501  | API endpoint, adopted kind's provider configuration, or operator-defined extension is not implemented by this operator. |
+| `not_implemented`     | 501  | API endpoint, adopted kind's implementation binding, or operator-defined extension is not implemented by this operator. |
 | `internal_error`      | 500  | Unhandled exception.                                                                                                    |
 
 Common `invalid_argument` causes:

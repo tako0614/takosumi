@@ -14,7 +14,7 @@ An execution unit inside a manifest. Public fields are `kind`, `spec`, `publish`
 
 ### Kind
 
-The component type discriminator. The operator resolves a short alias or URI to a kind definition and a provider configuration via `kindAliases`.
+The component type discriminator. The operator resolves a short alias or URI to a kind definition and an implementation binding via `kindAliases`.
 
 ### Installation
 
@@ -70,11 +70,11 @@ A policy that explicitly rejects unknown input or unresolved dependencies before
 
 ### Operator
 
-The party that runs Takosumi and chooses provider, credential, storage, and account management integration.
+The party that runs Takosumi and chooses backend bindings, credentials, storage, and account management integration.
 
 ---
 
-## Catalog & Provider Configuration
+## Catalog & Implementation Binding
 
 ### Output type
 
@@ -84,13 +84,13 @@ The type of output offered by `publish.<name>.as` (code: `MaterialContract`). Ex
 
 How values are delivered (`env`, `secret-env`, etc.) from `listen` to a consuming runtime. Selected by `listen.<name>.as`. Examples: `env`, `secret-env`, `config-mount`, `upstream`. `listen.<name>.mount` is used by path-based projections like `config-mount`.
 
-### Provider configuration (binding)
+### Implementation binding
 
-The operator-side implementation that connects a kind URI and kind definition to a concrete provider runtime or resource creation/update (formerly: implementation binding). The mechanism for loading provider configurations is chosen by the operator's configuration.
+The operator-side implementation that connects a kind URI and kind definition to a concrete backend runtime or resource creation/update. The mechanism for loading implementation bindings is chosen by the operator's configuration.
 
 ### Kind definition
 
-Metadata describing a component kind's input schema, published outputs, projection capabilities, and output metadata (formerly: kind descriptor). The Takosumi Kind Catalog publishes kind definitions as JSON-LD. Runtime behavior lives in the provider configuration.
+Metadata describing a component kind's input schema, published outputs, projection capabilities, and output metadata (formerly: kind descriptor). The Takosumi Kind Catalog publishes kind definitions as JSON-LD. Runtime behavior lives in the implementation binding.
 
 ### Kind Catalog
 
@@ -106,7 +106,7 @@ The Space-scoped entry record for a platform service (code: `ExternalPublication
 
 ### Deployment record
 
-The selected kind definition, provider configuration, output data, and operator records linked to a Deployment (formerly: retained evidence). Public Deployment wire exposes only source identity, manifest digest, status, and non-secret outputs. Deployment records serve as the basis for subsequent rollback, audit, and current projection.
+The selected kind definition, implementation binding, output data, and operator records linked to a Deployment (formerly: retained evidence). Public Deployment wire exposes only source identity, manifest digest, status, and non-secret outputs. Deployment records serve as the basis for subsequent rollback, audit, and current projection.
 
 ### Account management (account layer)
 
@@ -114,7 +114,7 @@ The operator-side layer that handles account, billing, OIDC issuer, and customer
 
 ### Operator configuration (operator profile)
 
-The bundle of kind, provider, and policy choices made by an operator (formerly: operator distribution). Takosumi Cloud serves as a reference operator configuration.
+The bundle of kind, backend binding, and policy choices made by an operator (formerly: operator distribution). Takosumi Cloud serves as a reference operator configuration.
 
 ---
 
@@ -160,6 +160,6 @@ The deadline for a CleanupBacklog entry to transition to operator-action-require
 
 The snapshot creation step during journal compaction (formerly: Snapshotization). An internal compaction process that aggregates journal entries into a snapshot.
 
-### before resource creation
+### before resource creation/update
 
 The fail-closed verification timing before resource creation/update begins. Rejects kind alias resolution misses and validation errors at this point, aborting the operation before any resources are created or modified.

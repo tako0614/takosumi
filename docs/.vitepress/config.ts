@@ -56,6 +56,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Kind カタログ",
       items: [
         { text: "Kind カタログ仕様", link: "/reference/type-catalog" },
+        { text: "Kind Packages", link: "/reference/kind-packages" },
         { text: "アクセスモード", link: "/reference/access-modes" },
       ],
     },
@@ -161,6 +162,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Kind Catalog",
       items: [
         { text: "Kind Catalog", link: "/en/reference/type-catalog" },
+        { text: "Kind Packages", link: "/en/reference/kind-packages" },
         { text: "Access Modes", link: "/en/reference/access-modes" },
       ],
     },
@@ -259,7 +261,7 @@ export default defineConfig({
   srcExclude: [
     "operator/{bootstrap,runtime-agent,operator-managed,upgrade}.md",
     "reference/architecture/**",
-    "reference/{approval-invalidation,audit-events,backup-restore,bootstrap-protocol,closed-enums,connector-contract,cross-process-locks,data-asset-gc,data-asset-policy,drift-detection,env-vars,group-head-rollout,journal-compaction,kernel-http-api,kind-registry,lifecycle,lifecycle-phases,logging-conventions,migration-upgrade,observability-stack,observation-retention,plan-output,plugin-loading,provider-packages,providers,public-spec-source-map,readiness-probes,resource-ids,revoke-debt,risk-taxonomy,runtime-agent-api,secret-partitions,status-output,storage-schema,supply-chain-trust,telemetry-metrics,time-clock-model,wal-stages,workers-backend}.md",
+    "reference/{approval-invalidation,audit-events,backup-restore,bootstrap-protocol,closed-enums,connector-contract,cross-process-locks,data-asset-gc,data-asset-policy,drift-detection,env-vars,group-head-rollout,journal-compaction,kernel-http-api,kind-bindings,kind-registry,lifecycle,lifecycle-phases,logging-conventions,migration-upgrade,observability-stack,observation-retention,plan-output,plugin-loading,public-spec-source-map,readiness-probes,resource-ids,revoke-debt,risk-taxonomy,runtime-agent-api,secret-partitions,status-output,storage-schema,supply-chain-trust,telemetry-metrics,time-clock-model,wal-stages,workers-backend}.md",
     "rfc/**",
   ],
   locales: {

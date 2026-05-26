@@ -4,7 +4,7 @@ import {
   registerArtifactKind,
   unregisterArtifactKind,
 } from "takosumi-contract/reference/compat";
-import { registerBundledArtifactKinds } from "@takos/takosumi-plugins/shape-providers";
+import { registerBundledArtifactKinds } from "../bootstrap/artifact_kinds.ts";
 import { MemoryObjectStorage } from "../adapters/object-storage/memory.ts";
 import { InMemoryTakosumiDeploymentRecordStore } from "../domains/deploy/takosumi_deployment_record_store.ts";
 import {

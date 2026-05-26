@@ -174,14 +174,12 @@
           "jsr:@takos/takosumi-contract@^2.6.0",
           "jsr:@takos/takosumi-installer@0.1",
           "jsr:@takos/takosumi-kernel@0.14",
-          "jsr:@takos/takosumi-plugins@0.12",
+          "jsr:@takos/takosumi-kind-gateway@0.1",
+          "jsr:@takos/takosumi-kind-object-store@0.1",
+          "jsr:@takos/takosumi-kind-postgres@0.1",
+          "jsr:@takos/takosumi-kind-web-service@0.1",
+          "jsr:@takos/takosumi-kind-worker@0.1",
           "jsr:@takos/takosumi-runtime-agent@0.7"
-        ]
-      },
-      "packages/aws-providers": {
-        "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
         ]
       },
       "packages/cli": {
@@ -193,24 +191,6 @@
           "jsr:@takos/takosumi-runtime-agent@0.7"
         ]
       },
-      "packages/cloudflare-providers": {
-        "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
-        ]
-      },
-      "packages/deno-deploy-providers": {
-        "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
-        ]
-      },
-      "packages/gcp-providers": {
-        "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
-        ]
-      },
       "packages/installer": {
         "dependencies": [
           "jsr:@std/yaml@^1.0.5",
@@ -220,53 +200,30 @@
       "packages/kernel": {
         "dependencies": [
           "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-installer@0.1",
-          "jsr:@takos/takosumi-plugins@0.12"
+          "jsr:@takos/takosumi-installer@0.1"
         ]
       },
-      "packages/kubernetes-providers": {
+      "packages/kind-gateway": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
+          "jsr:@takos/takosumi-contract@^2.6.0"
         ]
       },
-      "packages/plugin-gateway-coredns": {
+      "packages/kind-object-store": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
+          "jsr:@takos/takosumi-contract@^2.6.0"
         ]
       },
-      "packages/plugin-object-store-filesystem": {
+      "packages/kind-postgres": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
+          "jsr:@takos/takosumi-contract@^2.6.0"
         ]
       },
-      "packages/plugin-object-store-minio": {
+      "packages/kind-web-service": {
         "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
+          "jsr:@takos/takosumi-contract@^2.6.0"
         ]
       },
-      "packages/plugin-postgres-docker": {
-        "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
-        ]
-      },
-      "packages/plugin-web-service-docker-compose": {
-        "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
-        ]
-      },
-      "packages/plugin-web-service-systemd": {
-        "dependencies": [
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-plugins@0.12"
-        ]
-      },
-      "packages/plugins": {
+      "packages/kind-worker": {
         "dependencies": [
           "jsr:@takos/takosumi-contract@^2.6.0"
         ]

@@ -59,8 +59,20 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into l
         sourceRef: "web.http",
         options: { from: "web.http", as: "upstream" },
         envInjections: {},
-        target: { url: "https://web.example.com" },
-        material: { url: "https://web.example.com" },
+        target: {
+          targets: [{
+            name: "default",
+            url: "https://web.example.com",
+            visibility: "private",
+          }],
+        },
+        material: {
+          targets: [{
+            name: "default",
+            url: "https://web.example.com",
+            visibility: "private",
+          }],
+        },
       },
     ],
   });
@@ -120,8 +132,108 @@ Deno.test("kernelPluginFromProviderPlugin publishes provider outputs as namespac
   assert.deepEqual(material, {
     host: "db.internal",
     port: 5432,
-    passwordSecretRef: { secretRef: "secret://postgres/password" },
-    configRef: "config://postgres",
+    protocol: "postgresql",
+    passwordRef: { secretRef: "secret://postgres/password" },
+  });
+});
+
+Deno.test("kernelPluginFromProviderPlugin projects object-store outputs to official material", async () => {
+  const provider: ProviderPlugin = {
+    id: "@test/object-store",
+    version: "1.0.0",
+    implements: { id: "object-store", version: "v1" },
+    capabilities: [],
+    apply: () =>
+      Promise.resolve({
+        handle: "bucket://assets",
+        outputs: {
+          bucket: "assets",
+          endpoint: "https://s3.example.test",
+          region: "auto",
+          accessKeyRef: "secret://bucket/access-key",
+          secretKeyRef: "secret://bucket/secret-key",
+        },
+      }),
+    destroy: () => Promise.resolve(),
+    status: () =>
+      Promise.resolve({
+        kind: "ready",
+        observedAt: "2026-05-21T00:00:00.000Z",
+      }),
+  };
+  const plugin = kernelPluginFromProviderPlugin({
+    provider,
+    kindUri: "https://takosumi.com/kinds/v1/object-store",
+  });
+
+  const material = await plugin.publishMaterial!({
+    installationId: "ins_1",
+    componentName: "bucket",
+    component: {
+      kind: "object-store",
+      publish: { bucket: { as: "object-store" } },
+    },
+    publicationName: "bucket",
+    options: { as: "object-store" },
+    outputs: {
+      bucket: "assets",
+      endpoint: "https://s3.example.test",
+      region: "auto",
+      accessKeyRef: "secret://bucket/access-key",
+      secretKeyRef: "secret://bucket/secret-key",
+    },
+  });
+
+  assert.deepEqual(material, {
+    bucket: "assets",
+    endpoint: "https://s3.example.test",
+    region: "auto",
+    accessKeyIdRef: { secretRef: "secret://bucket/access-key" },
+    secretAccessKeyRef: { secretRef: "secret://bucket/secret-key" },
+  });
+});
+
+Deno.test("kernelPluginFromProviderPlugin projects HTTP outputs to endpoint material", async () => {
+  const provider: ProviderPlugin = {
+    id: "@test/worker",
+    version: "1.0.0",
+    implements: { id: "worker", version: "v1" },
+    capabilities: [],
+    apply: () =>
+      Promise.resolve({
+        handle: "worker://web",
+        outputs: { url: "https://web.internal", id: "web" },
+      }),
+    destroy: () => Promise.resolve(),
+    status: () =>
+      Promise.resolve({
+        kind: "ready",
+        observedAt: "2026-05-21T00:00:00.000Z",
+      }),
+  };
+  const plugin = kernelPluginFromProviderPlugin({
+    provider,
+    kindUri: "https://takosumi.com/kinds/v1/worker",
+  });
+
+  const material = await plugin.publishMaterial!({
+    installationId: "ins_1",
+    componentName: "web",
+    component: {
+      kind: "worker",
+      publish: { http: { as: "http-endpoint" } },
+    },
+    publicationName: "http",
+    options: { as: "http-endpoint" },
+    outputs: { url: "https://web.internal", id: "web" },
+  });
+
+  assert.deepEqual(material, {
+    targets: [{
+      name: "default",
+      url: "https://web.internal",
+      visibility: "private",
+    }],
   });
 });
 

@@ -1,58 +1,43 @@
 # Reference Adapter Loading (`plugins` option) {#plugin-loading}
 
 ::: info
-内部設計メモ public contract は [Installer API](./installer-api.md) を参照。public readers は [Extending Takosumi](../extending.md) から始めてください。
+This is reference-kernel implementation documentation. Takosumi-compatible implementations can bind kind URIs without using this plugin mechanism.
 :::
 
-manifest の `kind` は operator が URI に解決し、その kind の `spec` と publish/listen contract に合う binding を選びます。JSON-LD の kind の定義は、 Takosumi Kind Catalog がその型・意味・入出力を表すために使う semantic metadata です。provider implementation は、その contract を具体 runtime / resource に変換する operator-owned 実装です。Takosumi reference kernel では、この実装を `KernelPlugin` として attach します。
+The reference kernel accepts a plain array of `KernelPlugin` objects through `createPaaSApp({ kindAliases, plugins })`. Each adapter declares the kind URIs it can materialize in `provides[]`.
 
-同じ kind の定義を扱う別の Takosumi-compatible implementation は、native controller、static registry、SaaS adapter、workflow engine などで implementation binding を持てます。plugin loading は reference kernel の実装手段です。
-
-## 基本モデル {#model}
-
-An operator using the reference kernel imports provider packages as ordinary TypeScript modules and passes them to `createPaaSApp()` as the reference adapter array (`plugins` option).
+Backend-specific reference adapters live in the separate `takosumi-plugins` repository. The Takosumi core repository keeps the plugin interface and portable descriptors, but does not bundle concrete cloud or host bindings into the umbrella package.
 
 ```ts
 import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
-import { TAKOSUMI_REFERENCE_KIND_ALIASES } from "@takos/takosumi-plugins/kinds";
-import { cloudflareWorkerProvider } from "@takos/takosumi-cloudflare-providers";
+import {
+  cloudflareWorkerPlugin,
+  KIND_URI as WORKER_KIND,
+} from "@takos/takosumi-kind-cloudflare-worker";
 
 const { app } = await createPaaSApp({
-  kindAliases: TAKOSUMI_REFERENCE_KIND_ALIASES,
-  plugins: [
-    cloudflareWorkerProvider({ accountId }),
-  ],
+  kindAliases: { worker: WORKER_KIND },
+  plugins: [cloudflareWorkerPlugin({ accountId })],
 });
 ```
 
-package の取得方法、lockfile、HTTPS、private registry、vendoring は operator distribution の policy です。
+`kindAliases` is operator policy. A short alias such as `worker` can point to a portable kind URI or directly to a native kind URI such as `https://takosumi.com/kinds/v1/cloudflare-worker`.
 
-## 起動時検査 {#boot-validation}
+## Boot validation
 
-Takosumi reference 実装が見るのは、起動時に渡された `kindAliases` と reference adapter array (`plugins` option) です。
+- unresolved aliases fail before apply
+- adapter entries with empty `provides[]` fail at bootstrap
+- duplicate adapters for the same kind URI fail at bootstrap
+- an apply whose kind URI has no adapter fails before side effects
 
-- short alias は operator-provided `kindAliases` にあるものだけ解決される
-- reference implementation adapter は `provides[]` で kind URI を宣言する
-- 同じ kind URI を複数 adapter が提供し、operator profile / Space policy でも一意に選べない bootstrap は fail-closed
-- apply / dry-run が必要とする kind URI を Space-visible binding が 1 つも提供しない場合は provider side effect 前に fail-closed。bootstrap validation は、operator が宣言した reference adapter inventory の重複・不正・ operator profile が必須として宣言した binding の欠落を検査する。
+Package acquisition, lockfiles, vendoring, private registries, and supply-chain policy belong to the operator distribution.
 
-## asset extension との関係 {#dataasset-extension}
+## Relation to JSON-LD
 
-`/v1/artifacts` は operator が mount できる optional asset extension です。 asset routes は Installer API と別の credential / route surface を使います。plugin loading は reference adapter array の話であり、 asset の route、credential、metadata kind、GC policy は [Operator asset Extension](./data-asset-policy.md) と [Connector Guide](./connector-contract.md) が定義します。
+JSON-LD descriptor files publish kind vocabulary and metadata. The reference adapter array does not load JSON-LD as executable code. A compatible implementation may compile, mirror, or vendor descriptor metadata and still use a different implementation binding mechanism.
 
-## 失敗時の UX {#failure-ux}
+## Related pages
 
-| Failure                                | Behavior                                           |
-| -------------------------------------- | -------------------------------------------------- |
-| unresolved kind alias                  | dry-run / apply reject before provider side effect |
-| no adapter provides a kind URI         | dry-run / apply reject before provider side effect |
-| ambiguous adapter set for one kind URI | boot reject                                        |
-| connector not visible                  | apply reject before runtime-agent dispatch         |
-
-## 関連ページ {#related-pages}
-
+- [Kind Packages](./kind-packages.md)
+- [Kind Binding Implementations](./kind-bindings.md)
 - [Supply Chain Trust](./supply-chain-trust.md)
-- [Provider Implementations](./providers.md)
-- [Connector Guide](./connector-contract.md)
-- [asset Policy](./data-asset-policy.md)
-- [Storage Schema](./storage-schema.md)

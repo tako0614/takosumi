@@ -104,7 +104,7 @@ Deno.test("worker task factories adapt apply, outbox, registry, and repair worke
   });
   const registryTask = createRegistrySyncWorkerTask({
     intervalMs: 1,
-    refs: [{ kind: "provider-package", ref: "demo@1.0.0" }],
+    refs: [{ kind: "kind-package", ref: "demo@1.0.0" }],
     syncProviderSupport: true,
     worker: {
       syncPackages: (refs) => {
