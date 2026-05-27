@@ -162,7 +162,9 @@ Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks 
 
 Manual `deno task publish:jsr` requires `JSR_TOKEN`, skips target versions that
 are already visible in the registry, and leaves the normal `deno publish` clean
-tree check enabled.
+tree check enabled. A package record must exist before the first version is
+published; the release tooling checks the JSR management API so an empty package
+record is treated as publishable rather than missing.
 
 ## Docs Site
 

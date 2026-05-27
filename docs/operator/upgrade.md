@@ -30,9 +30,11 @@ local package metadata と publishability を確認し、`deno task publish:jsr`
 check を残す。
 
 JSR package record がまだ存在しない package は先に `https://jsr.io/new?scope=takos&package=<name>&from=cli`
-で作成する。`deno publish` は新規 package record を CLI から作成できないため、publish tooling は package-missing
-を検出した時点で create URL を表示して fail-fast する。package record 作成後に `deno task publish:jsr`
-を再実行すると、target version が未公開の package だけを publish する。
+または JSR management API で作成する。`deno publish` は新規 package record を CLI から作成できないため、publish
+tooling は package-missing を検出した時点で create URL を表示して fail-fast する。package record 作成後に
+`deno task publish:jsr` を再実行すると、target version が未公開の package だけを publish する。空の package record は
+public registry の `meta.json` では 404 になるため、release tooling は JSR management API で空 record と missing record
+を区別する。
 
 `deno task publish:check-jsr-records` は publish 後に public JSR registry の package record / target version visibility
 を確認する。native パッケージのチェックは `takosumi-plugins/` にある。
