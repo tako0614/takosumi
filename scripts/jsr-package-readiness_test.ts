@@ -22,6 +22,11 @@ Deno.test("checkJsrPackageReadiness classifies published and missing versions", 
         version: "0.1.0",
         directory: "packages/example-missing",
       },
+      {
+        name: "@takos/example-empty",
+        version: "0.1.0",
+        directory: "packages/example-empty",
+      },
     ],
     fetch: fakeFetch({
       "https://jsr.test/@takos/example-published/meta.json": {
@@ -37,7 +42,13 @@ Deno.test("checkJsrPackageReadiness classifies published and missing versions", 
           "1.9.0": { createdAt: "2026-01-03T00:00:00Z" },
         },
       },
+      "https://api.jsr.test/scopes/takos/packages/example-empty": {
+        scope: "takos",
+        name: "example-empty",
+        versionCount: 0,
+      },
     }),
+    apiBaseUrl: "https://api.jsr.test",
     registryBaseUrl: "https://jsr.test",
   });
 
@@ -45,9 +56,11 @@ Deno.test("checkJsrPackageReadiness classifies published and missing versions", 
     "published",
     "version-missing",
     "package-missing",
+    "version-missing",
   ]);
   assertEquals(results[0].publishedVersions, ["1.0.0", "1.2.0"]);
   assertEquals(results[1].latest, "1.9.0");
+  assertEquals(results[3].publishedVersions, []);
 });
 
 Deno.test("summarizeJsrReadiness prints package status lines", () => {

@@ -180,6 +180,7 @@ export async function runJsrPublish(options: {
   readonly dryRun: boolean;
   readonly fetch?: typeof fetch;
   readonly registryBaseUrl?: string;
+  readonly apiBaseUrl?: string;
 }): Promise<boolean> {
   const root = options.root ?? new URL("../", import.meta.url);
   let allOk = true;
@@ -191,6 +192,7 @@ export async function runJsrPublish(options: {
       dryRun: options.dryRun,
       fetch: options.fetch ?? fetch,
       registryBaseUrl: options.registryBaseUrl ?? "https://jsr.io",
+      apiBaseUrl: options.apiBaseUrl ?? "https://api.jsr.io",
     });
     allOk &&= ok;
   }
@@ -204,8 +206,9 @@ async function runSinglePackagePublish(input: {
   readonly dryRun: boolean;
   readonly fetch: typeof fetch;
   readonly registryBaseUrl: string;
+  readonly apiBaseUrl: string;
 }): Promise<boolean> {
-  const { dryRun, packageInfo, registryBaseUrl, root } = input;
+  const { apiBaseUrl, dryRun, packageInfo, registryBaseUrl, root } = input;
   const label = `${packageInfo.name}@${packageInfo.version}`;
   const cwd = new URL(`${packageInfo.directory}/`, root);
   const action = dryRun ? "dry-run" : "publish";
@@ -214,6 +217,7 @@ async function runSinglePackagePublish(input: {
   if (!dryRun) {
     const publication = await checkJsrTargetPublication(packageInfo, {
       fetch: input.fetch,
+      apiBaseUrl,
       registryBaseUrl,
     });
     if (publication.status === "published") {
@@ -295,10 +299,12 @@ export async function checkJsrTargetPublication(
   packageInfo: JsrPublishPackage,
   options: {
     readonly fetch?: typeof fetch;
+    readonly apiBaseUrl?: string;
     readonly registryBaseUrl?: string;
   } = {},
 ): Promise<JsrTargetPublicationCheck> {
   const fetchImpl = options.fetch ?? fetch;
+  const apiBaseUrl = options.apiBaseUrl ?? "https://api.jsr.io";
   const registryBaseUrl = options.registryBaseUrl ?? "https://jsr.io";
   const url = `${
     registryBaseUrl.replace(/\/+$/, "")
@@ -317,13 +323,11 @@ export async function checkJsrTargetPublication(
   }
 
   if (response.status === 404) {
-    return {
-      name: packageInfo.name,
-      targetVersion: packageInfo.version,
-      status: "package-missing",
-      message: "JSR package record does not exist",
-      createUrl: jsrCreatePackageUrl(packageInfo.name, registryBaseUrl),
-    };
+    return await checkJsrPackageRecord(packageInfo, {
+      apiBaseUrl,
+      fetch: fetchImpl,
+      registryBaseUrl,
+    });
   }
   if (!response.ok) {
     return {
@@ -356,16 +360,91 @@ export async function checkJsrTargetPublication(
   };
 }
 
+async function checkJsrPackageRecord(
+  packageInfo: JsrPublishPackage,
+  options: {
+    readonly apiBaseUrl: string;
+    readonly fetch: typeof fetch;
+    readonly registryBaseUrl: string;
+  },
+): Promise<JsrTargetPublicationCheck> {
+  const packagePath = jsrPackageApiPath(packageInfo.name);
+  if (!packagePath) {
+    return {
+      name: packageInfo.name,
+      targetVersion: packageInfo.version,
+      status: "package-missing",
+      message: "JSR package record does not exist",
+      createUrl: jsrCreatePackageUrl(packageInfo.name, options.registryBaseUrl),
+    };
+  }
+
+  const url = `${options.apiBaseUrl.replace(/\/+$/, "")}${packagePath}`;
+  let response: Response;
+  try {
+    response = await options.fetch(url, {
+      headers: { "accept": "application/json" },
+    });
+  } catch (error) {
+    return {
+      name: packageInfo.name,
+      targetVersion: packageInfo.version,
+      status: "registry-error",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  if (response.status === 404) {
+    return {
+      name: packageInfo.name,
+      targetVersion: packageInfo.version,
+      status: "package-missing",
+      message: "JSR package record does not exist",
+      createUrl: jsrCreatePackageUrl(packageInfo.name, options.registryBaseUrl),
+    };
+  }
+  if (!response.ok) {
+    return {
+      name: packageInfo.name,
+      targetVersion: packageInfo.version,
+      status: "registry-error",
+      message: `JSR management API returned HTTP ${response.status}`,
+    };
+  }
+
+  return {
+    name: packageInfo.name,
+    targetVersion: packageInfo.version,
+    status: "version-missing",
+  };
+}
+
 export function jsrCreatePackageUrl(
   packageName: string,
   registryBaseUrl = "https://jsr.io",
 ): string | undefined {
+  const parsed = parseJsrPackageName(packageName);
+  if (!parsed) return undefined;
+  const base = registryBaseUrl.replace(/\/+$/, "");
+  return `${base}/new?scope=${encodeURIComponent(parsed.scope)}&package=${
+    encodeURIComponent(parsed.package)
+  }&from=cli`;
+}
+
+function jsrPackageApiPath(packageName: string): string | undefined {
+  const parsed = parseJsrPackageName(packageName);
+  if (!parsed) return undefined;
+  return `/scopes/${encodeURIComponent(parsed.scope)}/packages/${
+    encodeURIComponent(parsed.package)
+  }`;
+}
+
+function parseJsrPackageName(
+  packageName: string,
+): { readonly scope: string; readonly package: string } | undefined {
   const match = packageName.match(/^@([^/]+)\/(.+)$/);
   if (!match) return undefined;
-  const base = registryBaseUrl.replace(/\/+$/, "");
-  return `${base}/new?scope=${encodeURIComponent(match[1])}&package=${
-    encodeURIComponent(match[2])
-  }&from=cli`;
+  return { scope: match[1], package: match[2] };
 }
 
 function acceptedWarning(

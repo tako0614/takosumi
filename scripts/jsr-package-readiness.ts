@@ -25,10 +25,12 @@ interface JsrMeta {
 
 export async function checkJsrPackageReadiness(options: {
   readonly packages?: readonly JsrPublishPackage[];
+  readonly apiBaseUrl?: string;
   readonly fetch?: typeof fetch;
   readonly registryBaseUrl?: string;
 } = {}): Promise<readonly JsrPackageReadiness[]> {
   const packages = options.packages ?? JSR_PUBLISH_PACKAGES;
+  const apiBaseUrl = options.apiBaseUrl ?? "https://api.jsr.io";
   const fetchImpl = options.fetch ?? fetch;
   const registryBaseUrl = options.registryBaseUrl ?? "https://jsr.io";
   const results: JsrPackageReadiness[] = [];
@@ -36,6 +38,7 @@ export async function checkJsrPackageReadiness(options: {
   for (const packageInfo of packages) {
     results.push(
       await checkSinglePackage({
+        apiBaseUrl,
         packageInfo,
         fetch: fetchImpl,
         registryBaseUrl,
@@ -47,6 +50,7 @@ export async function checkJsrPackageReadiness(options: {
 }
 
 async function checkSinglePackage(input: {
+  readonly apiBaseUrl: string;
   readonly packageInfo: JsrPublishPackage;
   readonly fetch: typeof fetch;
   readonly registryBaseUrl: string;
@@ -67,12 +71,7 @@ async function checkSinglePackage(input: {
   }
 
   if (response.status === 404) {
-    return {
-      name: input.packageInfo.name,
-      targetVersion: input.packageInfo.version,
-      status: "package-missing",
-      message: "JSR package record does not exist",
-    };
+    return await checkEmptyOrMissingPackageRecord(input);
   }
   if (!response.ok) {
     return {
@@ -117,6 +116,59 @@ async function checkSinglePackage(input: {
   };
 }
 
+async function checkEmptyOrMissingPackageRecord(input: {
+  readonly apiBaseUrl: string;
+  readonly packageInfo: JsrPublishPackage;
+  readonly fetch: typeof fetch;
+}): Promise<JsrPackageReadiness> {
+  const packagePath = jsrPackageApiPath(input.packageInfo.name);
+  if (!packagePath) {
+    return missingPackage(input.packageInfo);
+  }
+
+  const url = `${input.apiBaseUrl.replace(/\/+$/, "")}${packagePath}`;
+  let response: Response;
+  try {
+    response = await input.fetch(url, {
+      headers: { "accept": "application/json" },
+    });
+  } catch (error) {
+    return {
+      name: input.packageInfo.name,
+      targetVersion: input.packageInfo.version,
+      status: "registry-error",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  if (response.status === 404) return missingPackage(input.packageInfo);
+  if (!response.ok) {
+    return {
+      name: input.packageInfo.name,
+      targetVersion: input.packageInfo.version,
+      status: "registry-error",
+      message: `JSR management API returned HTTP ${response.status}`,
+    };
+  }
+
+  return {
+    name: input.packageInfo.name,
+    targetVersion: input.packageInfo.version,
+    status: "version-missing",
+    publishedVersions: [],
+    message: "JSR package exists, but target version is not published",
+  };
+}
+
+function missingPackage(packageInfo: JsrPublishPackage): JsrPackageReadiness {
+  return {
+    name: packageInfo.name,
+    targetVersion: packageInfo.version,
+    status: "package-missing",
+    message: "JSR package record does not exist",
+  };
+}
+
 function versionsFromMeta(value: unknown): readonly string[] {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return [];
@@ -132,6 +184,14 @@ function compareSemverish(left: string, right: string): number {
     if (Number.isFinite(delta) && delta !== 0) return delta;
   }
   return left.localeCompare(right);
+}
+
+function jsrPackageApiPath(packageName: string): string | undefined {
+  const match = packageName.match(/^@([^/]+)\/(.+)$/);
+  if (!match) return undefined;
+  return `/scopes/${encodeURIComponent(match[1])}/packages/${
+    encodeURIComponent(match[2])
+  }`;
 }
 
 export function summarizeJsrReadiness(

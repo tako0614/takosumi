@@ -143,6 +143,11 @@ Deno.test("checkJsrTargetPublication separates package records from missing vers
         "1.0.0": {},
       },
     },
+    "https://api.jsr.test/scopes/takos/packages/example-empty": {
+      scope: "takos",
+      name: "example-empty",
+      versionCount: 0,
+    },
   });
 
   assert.equal(
@@ -155,6 +160,25 @@ Deno.test("checkJsrTargetPublication separates package records from missing vers
       { registryBaseUrl: "https://jsr.test", fetch: fetchImpl },
     )).status,
     "version-missing",
+  );
+  assert.deepEqual(
+    await checkJsrTargetPublication(
+      {
+        name: "@takos/example-empty",
+        version: "0.1.0",
+        directory: "packages/example-empty",
+      },
+      {
+        apiBaseUrl: "https://api.jsr.test",
+        registryBaseUrl: "https://jsr.test",
+        fetch: fetchImpl,
+      },
+    ),
+    {
+      name: "@takos/example-empty",
+      targetVersion: "0.1.0",
+      status: "version-missing",
+    },
   );
   assert.deepEqual(
     await checkJsrTargetPublication(
