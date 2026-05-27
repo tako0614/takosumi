@@ -8,11 +8,12 @@ platform service path は Space の中で解決されます。operator distribut
 product distribution は service entry を offer し、link materialization は
 runtime に渡す binding data を生成します。
 
-Public manifest v1 が定義するのは `connect.output` と `listen.path` の reference grammar
-です。2 segment の `component.output` は同じ manifest 内の component output、3
-segment 以上の path は Space-visible platform service として解決します。この
-architecture note は、reference implementation が内部で使う snapshot / link /
-exposure record も説明します。
+Public manifest v1 が定義する外部接続は `connect.output`、`listen.path`、
+`listen.kind` です。2 segment の `component.output` は同じ manifest 内の
+component output、3 segment 以上の path は Space-visible platform service の
+exact name、`listen.kind` は Space-visible publication の discovery selector
+として解決します。この architecture note は、reference implementation が内部で使う
+snapshot / link / exposure record も説明します。
 
 ## Platform service path 文法 {#platform-service-path-grammar}
 
@@ -61,7 +62,7 @@ PlatformServiceDeclaration:
     observedAt: ...
 ```
 
-`sensitivity` class は [Access Modes](../access-modes.md) と type catalog
+`sensitivity` class は [Access Modes](../access-modes.md) と official catalog
 metadata の `public-config` / `internal` / `restricted` / `secret-bearing`
 を使います。この architecture note では enum を再定義しません。
 
@@ -111,6 +112,13 @@ platform service path の exact-match model を変えず、別 RFC で manifest 
 
 同じ Space の同じ platform service path は、active provider を 1 つだけ持てます。これは `listen.path` の exact-match
 resolution を曖昧にしないための invariant です。
+
+この制約は path を持つ publication だけに適用します。path を持たない publication
+は `kind` と optional labels で discover され、同じ material kind が同じ Space
+に複数存在できます。MCP server のように「見えるものを全部受け取る」対象は
+path を割り当てず、consumer が `listen.kind: mcp-server@v1` と `many: true`
+で collection として受け取ります。`type` という別 selector は置かず、component
+selector も publication selector も `kind` に揃えます。
 
 root `publish` declaration を inventory に投影する operator は、`(spaceId, path)` を active-entry key として扱います。owner
 Installation が同じなら redeploy は replacement です。owner が違うなら conflict です。conflict は新しい AppSpec が既存

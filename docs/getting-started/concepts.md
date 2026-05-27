@@ -66,7 +66,8 @@ DB_PASSWORD=...
 
 `prefix: DB` の値が環境変数名の先頭に付きます。worker のコードからは通常の環境変数として参照できます。
 
-manifest 外の operator service を使う場合は `listen.path` を使います。
+manifest 外の operator service を使う場合、確定した 1 つの対象は
+`listen.path` を使います。
 
 ```yaml
 listen:
@@ -74,6 +75,17 @@ listen:
     path: identity.primary.oidc
     inject: secret-env
     prefix: IDENTITY
+```
+
+MCP server のように Space 内に複数存在してよい対象は、path を指定せず
+`listen.kind` と `many: true` でまとめて受け取れます。
+
+```yaml
+listen:
+  tools:
+    kind: mcp-server@v1
+    many: true
+    inject: config-mount
 ```
 
 ## Installation と Deployment {#installation-deployment}

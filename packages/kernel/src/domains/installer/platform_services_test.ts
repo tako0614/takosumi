@@ -11,7 +11,7 @@ Deno.test("httpPlatformServiceResolver posts context and returns material", asyn
       requests.push(new Request(request, init));
       return Promise.resolve(Response.json({
         material: {
-          materialContract: "identity.oidc@v1",
+          materialKind: "identity.oidc@v1",
           issuerUrl: "https://cloud.example.test",
           clientSecretRef: { secretRef: "secret://oidc/client-secret" },
         },
@@ -48,7 +48,7 @@ Deno.test("httpPlatformServiceResolver posts context and returns material", asyn
     sourceRef: "identity.primary.oidc",
   });
   assertEquals(material, {
-    materialContract: "identity.oidc@v1",
+    materialKind: "identity.oidc@v1",
     issuerUrl: "https://cloud.example.test",
     clientSecretRef: { secretRef: "secret://oidc/client-secret" },
   });
@@ -75,6 +75,37 @@ Deno.test("httpPlatformServiceResolver treats 404 as absent platform service", a
       sourceRef: "identity.missing.service",
     }),
     undefined,
+  );
+});
+
+Deno.test("httpPlatformServiceResolver returns material collections", async () => {
+  const resolver = httpPlatformServiceResolver({
+    url:
+      "https://cloud.example.test/internal/workload-platform-services/resolve",
+    fetch: () =>
+      Promise.resolve(Response.json({
+        materials: [
+          { materialKind: "mcp-server", url: "https://one.example.test/mcp" },
+          { materialKind: "mcp-server", url: "https://two.example.test/mcp" },
+        ],
+      })),
+  });
+
+  assertEquals(
+    await resolver.resolve({
+      installationId: "ins_1",
+      spaceId: "space_1",
+      appId: "app.example",
+      componentName: "agent",
+      component: { kind: "worker" },
+      bindingName: "tools",
+      kind: "mcp-server",
+      many: true,
+    }),
+    [
+      { materialKind: "mcp-server", url: "https://one.example.test/mcp" },
+      { materialKind: "mcp-server", url: "https://two.example.test/mcp" },
+    ],
   );
 });
 

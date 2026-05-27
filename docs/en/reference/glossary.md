@@ -15,8 +15,10 @@ An execution unit inside a manifest. Public fields are `kind`, `spec`,
 
 ### Kind
 
-The component type discriminator. The operator resolves a short alias or URI to
-a kind definition and an implementation binding via `kindAliases`.
+The AppSpec selector word. Component `kind` selects what is created.
+`publish.kind` and `listen.kind` select the material kind being offered or
+consumed. The operator resolves short aliases or URIs to kind definitions and
+implementation bindings. AppSpec does not use a separate `type` selector.
 
 ### Installation
 
@@ -52,8 +54,9 @@ apply rejects a different source with 409. Deploy expected guards also include
 ### connect / listen / publish
 
 Component connection language. `connect` consumes same-manifest component
-output, `listen` consumes platform service material, and root `publish`
-records component output as an Installation output service path declaration.
+output, `listen` consumes external publications by exact path or material kind
+discovery, and root `publish` records component output as an Installation output
+publication.
 
 ### dry-run
 
@@ -94,11 +97,12 @@ and account management integration.
 
 ## Catalog & Implementation Binding
 
-### Output type
+### Material kind
 
-The type of output offered by a component output slot or platform service (code:
-`MaterialContract`). Examples: `http-endpoint`, `service-binding`,
-`object-store`.
+The kind of output material offered by a component output slot or platform
+service. Examples: `http-endpoint`, `service-binding`, `object-store`, and
+`mcp-server@v1`. Manifests use this vocabulary in `publish.kind` and
+`listen.kind`.
 
 ### Injection mode
 
@@ -116,20 +120,21 @@ loading implementation bindings is chosen by the operator's configuration.
 ### Kind definition
 
 Metadata describing a component kind's input schema, output slots, projection
-capabilities, and output metadata. The Takosumi official type catalog publishes
-kind definitions as JSON-LD. Runtime behavior lives in the implementation
-binding.
+capabilities, and output metadata. The Takosumi official catalog publishes kind
+definitions as JSON-LD. Runtime behavior lives in the implementation binding.
 
-### Official Type Catalog
+### Official Catalog
 
-Takosumi's reusable kind definition collection. Published at
+Takosumi's reusable kind definition and material kind collection. Published at
 `https://takosumi.com/kinds/v1/*` as JSON-LD kind definitions. Operators opt in
 per Space; alternative catalogs use the same core contract.
 
 ### Platform service
 
-Space-scoped output offered by the operator outside the manifest. Consumed
-through `listen.path`.
+Space-scoped service material offered by an operator or another Installation.
+Known exact targets are consumed through `listen.path`; targets that may have
+many visible providers, such as MCP servers, are consumed through `listen.kind`
+with optional labels and `many: true`.
 
 ### PlatformServiceDeclaration
 

@@ -1,6 +1,6 @@
 # バインディングモデル {#link-and-projection-model}
 
-Component kind が定義する resource 配線は Link intent を作る。current manifest では `components.<name>.connect` と `components.<name>.listen` edge から発生する。manifest author は `connect.output` または `listen.path` で source を選び、`inject` で injection mode を選ぶ。resolved access mode は operator policy、output slot declaration、consumer slot metadata から resolution 中に決まる。Link は 1 つの Space の中で consumer slot を producer output または PlatformServiceDeclaration snapshot に接続する。
+Component kind が定義する resource 配線は Link intent を作る。current manifest では `components.<name>.connect` と `components.<name>.listen` edge から発生する。manifest author は `connect.output`、`listen.path`、または `listen.kind` で source を選び、`inject` で injection mode を選ぶ。resolved access mode は operator policy、output slot declaration、consumer slot metadata から resolution 中に決まる。Link は 1 つの Space の中で consumer slot を producer output、PlatformServiceDeclaration snapshot、または `listen.kind` discovery で選ばれた publication collection に接続する。
 
 ## Link レコード {#link-record}
 
@@ -29,7 +29,7 @@ ProjectionSelection は Link field として扱う internal selection record で
 
 ## Space ルール {#space-rule}
 
-current public manifest の Link は、consumer Object を same-manifest component output または同じ Space に見える operator PlatformServiceDeclaration に接続する。 Space を跨ぐ Link は operator-internal / future sharing model であり、manifest v1 から直接作る construct ではない。
+current public manifest の Link は、consumer Object を same-manifest component output、同じ Space に見える operator PlatformServiceDeclaration、または同じ Space に見える publication discovery result に接続する。 Space を跨ぐ Link は operator-internal / future sharing model であり、manifest v1 から直接作る construct ではない。
 
 ## Projection ファミリ {#projection-families}
 
@@ -40,20 +40,20 @@ upstream
 config-mount
 ```
 
-Secret-bearing output はプレーンな `env` に projection してはならない。 `upstream` は gateway / ingress kind が `connect` した HTTP 出力データを kind-specific route rule から参照する injection mode です。`routes[].to` は `connect` binding name を指し、別の route graph や public URL assignment を作る field ではありません。 `http-endpoint` は injection mode ではなく output type です。 Operator distribution は独自の injection mode を追加できます。その family を portable official catalog term として扱う場合は、type catalog に意味と出力データの compatibility を追加します。`file-secret`、`runtime-capability`, `volume-mount` のような implementation-specific families は operator extension です。portable official catalog term として使うには type catalog で定義します。
+Secret-bearing output はプレーンな `env` に projection してはならない。 `upstream` は gateway / ingress kind が `connect` した HTTP 出力データを kind-specific route rule から参照する injection mode です。`routes[].to` は `connect` binding name を指し、別の route graph や public URL assignment を作る field ではありません。 `http-endpoint` は injection mode ではなく material kind です。 Operator distribution は独自の injection mode を追加できます。その family を portable official catalog term として扱う場合は、official catalog に意味と出力データの compatibility を追加します。`file-secret`、`runtime-capability`, `volume-mount` のような implementation-specific families は operator extension です。portable official catalog term として使うには official catalog で定義します。
 
 ## Compatibility check {#compatibility-check}
 
 Link resolution は resource side effect の前に次を検証します。
 
-1. `connect.output` が same-manifest output に解決するか、`listen.path` が Space-visible PlatformServiceDeclaration に exact match する。
-2. source の output type alias / URI が解決済みで、出力データの metadata、output slot declaration、operator policy、または採用済み kind の定義から version / sensitivity 相当の判断材料が取得できる。
-3. `inject` が source output type で許可される。
+1. `connect.output` が same-manifest output に解決するか、`listen.path` が Space-visible PlatformServiceDeclaration に exact match するか、`listen.kind` が Space-visible publication を kind / labels で選択する。
+2. source の material kind alias / URI が解決済みで、出力データの metadata、output slot declaration、operator policy、または採用済み kind の定義から version / sensitivity 相当の判断材料が取得できる。
+3. `inject` が source material kind で許可される。
 4. PlatformServiceDeclaration 由来の場合、resolved access mode が service declaration の `accessModes` と operator policy で許可される。
 5. service owner role、materialization evidence、operator policy、採用済み kind の定義が requested projection を許可する。特に `http-endpoint` を `inject: upstream` で受ける場合は、source が upstream として再利用可能かを backend / operator policy / kind の定義で確認する。
 6. secret / restricted 出力データを plain env や public URL へ落とす unsafe projection は fail-closed で拒否する。
 
-成功した selection は Deployment に紐づく deploy evidence に、output material / そのスナップショット、output type、projection family、access mode として記録されます。
+成功した selection は Deployment に紐づく deploy evidence に、output material / そのスナップショット、material kind、projection family、access mode として記録されます。
 
 ## Access の既定値 {#access-defaults}
 

@@ -3,9 +3,11 @@
  *
  * v1 contract per the connect / platform-listen model. Components use
  * `connect.<name>` for same-AppSpec component output wiring and
- * `listen.<name>` only for Space-visible platform service paths such as
- * `identity.primary.oidc`. Root `publish` records Installation output service
- * path declarations for selected component outputs. Public concepts remain limited
+ * `listen.<name>` for Space-visible platform services. A listener can select
+ * one exact `path` such as `identity.primary.oidc`, or discover visible
+ * publications by material `kind` plus optional labels (for example every
+ * `mcp-server@v1` publication visible in the Space). Root `publish` records
+ * Installation output declarations for selected component outputs. Public concepts remain limited
  * to:
  *   1. AppSpec       (= `.takosumi.yml`)
  *   2. Installation  (= a Space-scoped App)
@@ -53,6 +55,7 @@ export interface AppSpecMetadata {
  * resolution is outside this package.
  */
 export type ComponentKindRef = string;
+export type MaterialKindRef = string;
 
 /**
  * Dotted path used by Space-visible platform services. A path has three
@@ -68,6 +71,7 @@ export type PlatformServicePath = string;
 export type OutputSlotName = string;
 export type ExternalServiceName = string;
 export type BindingName = string;
+export type PublicationLabelMap = Readonly<Record<string, string>>;
 
 /**
  * Same-AppSpec component output reference, formatted as `<component>.<output>`.
@@ -165,9 +169,15 @@ export interface ConnectOptions {
 /**
  * Per-listen options declared on `Component.listen[<bindingName>]`.
  *
- *   - `path`   — Space-visible platform service path
+ *   - `path`   — Optional exact Space-visible publication path
  *                (`identity.primary.oidc`). Same-AppSpec component outputs use
  *                `connect`, not `listen`.
+ *   - `kind`   — Optional material kind selector. Required when `path` is
+ *                omitted. With `path`, it acts as a compatibility assertion.
+ *   - `labels` — Optional label selector for discovery by kind.
+ *   - `many`   — When true, bind every visible matching publication as one
+ *                collection material. When false/omitted, resolution must
+ *                produce exactly one active material.
  *   - `inject` — the shape the material should take in this component's
  *                runtime (env / secret-env / config-mount / upstream /
  *                operator-defined).
@@ -179,7 +189,10 @@ export interface ConnectOptions {
  *   - `required` — fail apply when the platform service path is absent.
  */
 export interface ListenOptions {
-  readonly path: PlatformServiceRef;
+  readonly path?: PlatformServiceRef;
+  readonly kind?: MaterialKindRef;
+  readonly labels?: PublicationLabelMap;
+  readonly many?: boolean;
   readonly inject: InjectionModeRef;
   readonly prefix?: string;
   readonly mount?: string;
@@ -189,14 +202,21 @@ export interface ListenOptions {
 export type BindingOptions = ConnectOptions | ListenOptions;
 
 /**
- * Root-level Installation output service path declaration. This does not create
- * a component-local connection. It records an already materialized component
+ * Root-level Installation output declaration. This does not create a
+ * component-local connection. It records an already materialized component
  * output in Deployment outputs; operator / product distributions can project
- * that declaration into a Space-visible platform service inventory.
+ * that declaration into a Space-visible publication inventory.
  */
 export interface PublishOptions {
   readonly output: ComponentOutputRef;
-  readonly path: PlatformServicePath;
+  /** Optional material kind assertion / publication kind. */
+  readonly kind?: MaterialKindRef;
+  /**
+   * Optional exact publication path. Paths are unique per Space when projected.
+   * Publications without a path can still be discovered by `kind` and labels.
+   */
+  readonly path?: PlatformServicePath;
+  readonly labels?: PublicationLabelMap;
 }
 
 export interface Component {

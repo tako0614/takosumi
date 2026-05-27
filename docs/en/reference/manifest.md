@@ -24,23 +24,29 @@ components:
 publish:
   api:
     output: web.http
+    kind: http-endpoint
     path: acme.notes.api
 ```
 
 `components` is the component graph inside this manifest. A component chooses
 its contract with `kind` and writes kind-owned input in `spec`. Deterministic
-connections inside the same manifest use `connect`; platform services outside
-the manifest use `listen`; service path declarations recorded as Installation
-outputs use root `publish`.
+connections inside the same manifest use `connect`; publications outside the
+manifest use `listen`; publication declarations recorded as Installation outputs
+use root `publish`.
+
+AppSpec uses `kind` as the selector word. Component `kind` says what is created.
+`publish.kind` and `listen.kind` say which kind of output material is offered or
+consumed. There is no manifest `type` selector. The word `type` is reserved for
+JSON Schema, JSON-LD `@type`, and TypeScript type names.
 
 ## Root Fields {#root-fields}
 
-| Field        | Required | Meaning                                                                        |
-| ------------ | -------- | ------------------------------------------------------------------------------ |
-| `apiVersion` | yes      | Current manifest version. The value is `"v1"`.                                 |
-| `metadata`   | yes      | Manifest id, name, and optional descriptive metadata.                          |
-| `components` | yes      | Component declarations keyed by name.                                          |
-| `publish`    | no       | Records a component output as an Installation output service path declaration. |
+| Field        | Required | Meaning                                                           |
+| ------------ | -------- | ----------------------------------------------------------------- |
+| `apiVersion` | yes      | Current manifest version. The value is `"v1"`.                    |
+| `metadata`   | yes      | Manifest id, name, and optional descriptive metadata.             |
+| `components` | yes      | Component declarations keyed by name.                             |
+| `publish`    | no       | Records a component output as an Installation output publication. |
 
 ## `metadata` {#metadata}
 
@@ -87,7 +93,7 @@ components:
 | `kind`    | yes      | Component kind. Operators resolve short aliases such as `worker` and full URIs. |
 | `spec`    | no       | Kind-owned input such as worker entrypoints or gateway listener rules.          |
 | `connect` | no       | Connects output from another component in this manifest to this component.      |
-| `listen`  | no       | Connects a Space-visible platform service path to this component.               |
+| `listen`  | no       | Connects Space-visible publications to this component.                          |
 
 Short values in examples, such as `worker`, `postgres`, and `gateway`, assume an
 operator distribution with an alias map. The resolved kind URI owns the `spec`
@@ -158,9 +164,11 @@ Cycles through `connect` fail before apply. `connect` is always required.
 
 ## `listen` {#listen}
 
-`listen` connects a Space-visible platform service path to a component. It is
-the entry point for service material offered by an account plane, operator
-distribution, product distribution, or similar provider.
+`listen` connects Space-visible publications to a component. It is the entry
+point for service material offered by an account plane, operator distribution,
+product distribution, another Installation, or a similar provider. Use `path`
+for a known exact target; use `kind` and `labels` when the target is discovered
+or when multiple targets are expected.
 
 ```yaml
 components:
@@ -169,22 +177,40 @@ components:
     listen:
       identity:
         path: identity.primary.oidc
+        kind: identity.oidc@v1
         inject: secret-env
         prefix: IDENTITY
         required: true
+      tools:
+        kind: mcp-server@v1
+        labels:
+          capability: docs
+        many: true
+        inject: config-mount
 ```
 
-| Field      | Required | Meaning                                                               |
-| ---------- | -------- | --------------------------------------------------------------------- |
-| `path`     | yes      | Space-visible platform service path, such as `identity.primary.oidc`. |
-| `inject`   | yes      | How material is delivered to the consumer runtime.                    |
-| `prefix`   | no       | Prefix for env-like projections.                                      |
-| `mount`    | no       | Path for path-based projections such as config mounts.                |
-| `required` | no       | Fails apply when the path cannot be resolved.                         |
+| Field      | Required | Meaning                                                                                             |
+| ---------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `path`     | no       | Exact Space-visible publication path, such as `identity.primary.oidc`.                              |
+| `kind`     | no       | Material kind selector. Required when `path` is omitted; with `path`, it is a compatibility check.  |
+| `labels`   | no       | Label selector used with `kind` discovery.                                                          |
+| `many`     | no       | When true, binds every matching publication as one collection material. It is not used with `path`. |
+| `inject`   | yes      | How material is delivered to the consumer runtime.                                                  |
+| `prefix`   | no       | Prefix for env-like projections.                                                                    |
+| `mount`    | no       | Path for path-based projections such as config mounts.                                              |
+| `required` | no       | Fails apply when the publication cannot be resolved.                                                |
 
 `path` has three to eight dotted segments. Two-segment component outputs are
-referenced with `connect`. Concrete platform service paths and lifecycles live
-in the specification for the distribution that provides them.
+referenced with `connect`. Concrete publication paths and lifecycles live in the
+specification for the distribution that provides them. `kind` follows the same
+opaque alias-or-URI rule as component `kind`, but here it names the material
+kind being consumed.
+
+`path` and `kind` do different jobs. `path` is an exact name for one target.
+`kind` is a discovery selector. Materials that may exist many times in a Space,
+such as MCP servers, do not need paths: consume them with
+`kind: mcp-server@v1` and `many: true`. Without `many`, the selector must resolve
+to exactly one publication or apply fails.
 
 A platform service is optional unless `required: true` is set. When an optional
 path is absent, the binding is not created. If kind-specific `spec` treats that
@@ -192,36 +218,53 @@ binding as required input, apply fails.
 
 ## Root `publish` {#root-publish}
 
-Root `publish` records a component output as an Installation output service
-path declaration. It is for operator/projected consumers, not for
-component-to-component wiring inside the same manifest.
+Root `publish` records a component output as an Installation output publication.
+It is for operator/projected consumers, not for component-to-component wiring
+inside the same manifest. `path` is optional. Use it only for publications that
+need a stable exact name; publish discoverable materials such as MCP servers
+with `kind` and `labels`. `mcp-server@v1` is an official catalog material kind,
+so pathless MCP server publications can be discovered as a set with
+`listen.kind`.
 
 ```yaml
 publish:
   api:
     output: web.http
+    kind: http-endpoint
     path: acme.notes.api
+  tools:
+    output: web.mcp
+    kind: mcp-server@v1
+    labels:
+      capability: docs
 ```
 
-| Field    | Required | Meaning                                                                                                                                              |
-| -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `output` | yes      | Component output to expose, formatted `component.output`.                                                                                            |
-| `path`   | yes      | Service path recorded as an Installation output. An operator or product distribution may project it into a Space-visible platform service inventory. |
+| Field    | Required | Meaning                                                                                        |
+| -------- | -------- | ---------------------------------------------------------------------------------------------- |
+| `output` | yes      | Component output to expose, formatted `component.output`.                                      |
+| `kind`   | no       | Material kind for this publication. The operator can derive it when the output slot is unique. |
+| `path`   | no       | Service path used only when an exact name is needed.                                           |
+| `labels` | no       | Discovery labels used with `listen.kind`.                                                      |
 
 Root `publish` is not an HTTP exposure shortcut. HTTP listeners, hosts, TLS, and
 route rules live in a gateway or ingress kind's `spec`. Root `publish` records
-materialized output as an Installation output declaration. Other Installations
+materialized output as an Installation output publication. Other Installations
 or operator-facing workflows can resolve it only when an operator or product
-distribution projects that declaration into a Space-visible platform service
+distribution projects that declaration into a Space-visible publication
 inventory.
 
 One AppSpec cannot declare the same `publish.path` twice. After projection into
-the Space-visible inventory, one path in one Space has at most one active
-provider. If another Installation publishes the same path, the operator treats
-it as a conflict and does not turn off the existing provider automatically. To
-switch owners, the existing owner removes `publish`, the Installation is
-disabled/deleted, or an operator/admin performs an explicit transfer or disable.
-See [Platform Services](./platform-services.md#path-uniqueness-and-conflict).
+the Space-visible inventory, a publication with a path has at most one active
+owner for that path in that Space. If another Installation publishes the same
+path, the operator treats it as a conflict and does not turn off the existing
+provider automatically. A publication without a path is discoverable by `kind`
+and `labels` and does not participate in path conflict rules. To switch owners,
+the existing owner removes `publish`, the Installation is disabled/deleted, or
+an operator/admin performs an explicit transfer or disable. See
+[Platform Services](./platform-services.md#path-uniqueness-and-conflict).
+
+In short: named publications can conflict; pathless publications cannot conflict
+by path. Do not add a path just to make discoverable collections work.
 
 ## Runtime HTTP Exposure {#runtime-http-exposure}
 
@@ -349,12 +392,13 @@ components:
 publish:
   api:
     output: web.http
+    kind: http-endpoint
     path: acme.notes.api
 ```
 
 ## Related Pages {#related-pages}
 
-- [Official Type Catalog](./type-catalog.md)
+- [Official Catalog](./catalog.md)
 - [Platform Services](./platform-services.md)
 - [Installer API](./installer-api.md)
 - [HTTP Exposure](./http-exposure.md)

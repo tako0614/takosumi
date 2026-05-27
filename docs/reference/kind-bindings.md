@@ -4,7 +4,7 @@
 Public contract は [Installer API](./installer-api.md) と [manifest](./manifest.md) です。このページは reference kernel が選択済み kind をどう実体化するかを説明します。
 :::
 
-Takosumi component は `kind`、`spec`、`connect`、`listen` を持ちます。operator は `kindAliases` または absolute URI で `kind` を kind URI に解決し、その kind URI を実体化できる implementation binding を選びます。same-manifest dependency は `connect.<binding>.output`、platform service / external service は `listen.<binding>.path` で解決します。
+Takosumi component は `kind`、`spec`、`connect`、`listen` を持ちます。operator は `kindAliases` または absolute URI で `kind` を kind URI に解決し、その kind URI を実体化できる implementation binding を選びます。same-manifest dependency は `connect.<binding>.output`、platform service / external publication は exact target なら `listen.<binding>.path`、discovery なら `listen.<binding>.kind` + labels で解決します。
 
 Reference kernel では、その binding を `KernelPlugin` として `createPaaSApp({ kindAliases, plugins })` に渡します。`plugins` array は reference implementation の adapter loading 方式です。互換 implementation は同じ kind URI を native controller、static registry、workflow engine、SaaS adapter などへ bind できます。
 
@@ -69,7 +69,7 @@ const { app } = await createPaaSApp({
 
 1. `Component.kind` を `kindAliases` で解決する。absolute URI は解決済みとして扱う。
 2. operator が descriptor validation を使う場合、その kind の descriptor metadata を読む。
-3. side effect の前に、kind-owned `spec`、output slot、`connect` output ref / `listen.path` compatibility を検証する。
+3. side effect の前に、kind-owned `spec`、output slot、`connect` output ref / `listen.path` / `listen.kind` compatibility を検証する。
 4. 解決済み kind URI に対して implementation binding を 1 つ選ぶ。
 5. 選択した binding を実行し、non-secret output を Deployment evidence に記録する。
 
@@ -79,7 +79,7 @@ Capability name は operator tooling / dashboard のための open string です
 
 - `packages/contract/src/plugin.ts` — `KernelPlugin` / materializer interface。
 - `takosumi/packages/kind-*/spec/kind.jsonld` — portable package-owned kind descriptor。
-- `takosumi-plugins/packages/kind-*/spec/kind.jsonld` — native package-owned kind descriptor。JSON-LD は catalog / type metadata で、runtime plugin requirement ではない。
+- `takosumi-plugins/packages/kind-*/spec/kind.jsonld` — native package-owned kind descriptor。JSON-LD は catalog / schema metadata で、runtime plugin requirement ではない。
 - `takosumi-plugins/packages/kind-*/mod.ts` — native descriptor constant と reference adapter factory。
 - `takosumi/packages/runtime-agent/src/connectors/` — generic connector interface、registry、resilience wrapper。
 - `takosumi-plugins/packages/runtime-agent-connectors/` — operator distribution が使える concrete connector implementation。
@@ -88,4 +88,4 @@ Capability name は operator tooling / dashboard のための open string です
 
 - [Kind Packages](./kind-packages.md)
 - [Reference Adapter Loading](./plugin-loading.md)
-- [Takosumi 公式型カタログ仕様](./type-catalog.md)
+- [Takosumi 公式カタログ仕様](./catalog.md)

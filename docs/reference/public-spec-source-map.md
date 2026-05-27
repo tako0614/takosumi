@@ -29,7 +29,7 @@ build conveniences and do not appear in public snippets.
 | `contract-root`             | public convenience entry      | `packages/contract/src/index.ts`         |
 | `contract-appspec-v1`       | public manifest type contract | `packages/contract/src/app-spec.ts`      |
 | `contract-installer-api-v1` | public Installer API contract | `packages/contract/src/installer-api.ts` |
-| `contract-type-catalog-v1`  | public catalog helper types   | `packages/contract/src/type-catalog.ts`  |
+| `contract-catalog-v1`       | public catalog helper types   | `packages/contract/src/catalog.ts`       |
 
 ## Reference/helper/internal subpaths
 
@@ -55,30 +55,30 @@ Current public docs and examples use `app-spec`, `installer-api`, or a narrow
 | `contract-reference-dto-compat` | compatibility DTO export | `packages/contract/src/types.ts`            |
 | `contract-legacy-compat`        | compatibility export     | `packages/contract/src/reference-compat.ts` |
 
-## Official Type Catalog Spec Map
+## Official Catalog Spec Map
 
-The Takosumi official type catalog covers vocabulary hosted at
-`takosumi.com`. Operators can adopt its descriptors and output types. Portable
-definition packages live in `takosumi/`; official native definition packages
-live in the sibling `takosumi-plugins/` repository because they also ship
-reference implementation bindings. Operator implementations and reference
-runtime helpers live in the reference/operator sections. Published catalog
-documents live under `/kinds/v1/*` and `/contexts/v1.jsonld`. Provider-selection
-descriptors under kernel implementation paths are reference internal metadata.
+The Takosumi official catalog covers vocabulary hosted at `takosumi.com`.
+Operators can adopt its descriptors and material kinds. Portable definition
+packages live in `takosumi/`; official native definition packages live in the
+sibling `takosumi-plugins/` repository because they also ship reference
+implementation bindings. Operator implementations and reference runtime helpers
+live in the reference/operator sections. Published catalog documents live under
+`/kinds/v1/*` and `/contexts/v1.jsonld`. Provider-selection descriptors under
+kernel implementation paths are reference internal metadata.
 
-| Key                                 | Surface                                                                          | Owner                                                  | Normative spec                                                                          | Repository source                                                                                                                                                      | Published reference                                                      |
-| ----------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `takosumi-official-type-catalog-v1` | portable kind schemas / native kind schemas / output types / projection examples | Takosumi official type catalog, hosted at takosumi.com | [Takosumi Official Type Catalog](./type-catalog.md)                                     | `packages/kind-*/spec/kind.jsonld`; sibling `../takosumi-plugins/packages/kind-*/spec/kind.jsonld`; `spec/contexts/v1.jsonld`; `packages/contract/src/type-catalog.ts` | `/kinds/v1/<name>`, `/kinds/v1/<name>.jsonld`, and `/contexts/v1.jsonld` |
-| `reference-native-kind-bindings`    | backend-specific reference plugin factories and runtime bindings                 | `takosumi-plugins` native kind packages                | [Kind Packages](./kind-packages.md); [Kind Binding Implementations](./kind-bindings.md) | sibling `../takosumi-plugins/packages/kind-*/mod.ts`; sibling `../takosumi-plugins/packages/runtime-agent-connectors/`                                                 | implementation packages adopted by operator distributions                |
+| Key                              | Surface                                                                            | Owner                                             | Normative spec                                                                          | Repository source                                                                                                                                                 | Published reference                                                      |
+| -------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `takosumi-official-catalog-v1`   | portable kind schemas / native kind schemas / material kinds / projection examples | Takosumi official catalog, hosted at takosumi.com | [Takosumi Official Catalog](./catalog.md)                                               | `packages/kind-*/spec/kind.jsonld`; sibling `../takosumi-plugins/packages/kind-*/spec/kind.jsonld`; `spec/contexts/v1.jsonld`; `packages/contract/src/catalog.ts` | `/kinds/v1/<name>`, `/kinds/v1/<name>.jsonld`, and `/contexts/v1.jsonld` |
+| `reference-native-kind-bindings` | backend-specific reference plugin factories and runtime bindings                   | `takosumi-plugins` native kind packages           | [Kind Packages](./kind-packages.md); [Kind Binding Implementations](./kind-bindings.md) | sibling `../takosumi-plugins/packages/kind-*/mod.ts`; sibling `../takosumi-plugins/packages/runtime-agent-connectors/`                                            | implementation packages adopted by operator distributions                |
 
 `takosumi/packages/kind-*/spec/kind.jsonld` is the repository storage path for
 portable package-owned kind schema source files.
 `takosumi-plugins/packages/kind-*/spec/kind.jsonld` is the repository storage
 path for official native kind schema source files. `spec/contexts/v1.jsonld` is
 the repository storage path for `https://takosumi.com/contexts/v1.jsonld`.
-`packages/contract/src/type-catalog.ts` mirrors the official output type,
-injection mode, access mode, sensitivity class, and material helper vocabulary
-for TypeScript callers. The public catalog surface is the published
+`packages/contract/src/catalog.ts` mirrors the official material kind, injection
+mode, access mode, sensitivity class, and material helper vocabulary for
+TypeScript callers. The public catalog surface is the published
 `https://takosumi.com/kinds/v1/*` and `https://takosumi.com/contexts/v1.jsonld`
 documents plus the catalog docs and helper types. Reference plugin factories and
 connector implementations are implementation packages; they are not part of the

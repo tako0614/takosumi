@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import {
-  isOfficialOutputTypeName,
+  isOfficialMaterialKindName,
   isOutputFieldTypeName,
   OUTPUT_FIELD_TYPE_NAMES,
   type OutputFieldTypeDefinition,
-  validateOfficialOutputMaterialMapping,
-  validateOfficialOutputMaterialMappingOutputTypes,
-} from "takosumi-contract/type-catalog";
+  validateOfficialMaterialMapping,
+  validateOfficialMaterialMappingOutputFields,
+} from "takosumi-contract/catalog";
 
 const PORTABLE_KIND_PACKAGES = [
   "kind-worker",
@@ -56,8 +56,8 @@ Deno.test("portable kind descriptors publish official material mappings", async 
         assert.fail(`${label}.${name}: contract must be a string`);
       }
       assert.ok(
-        isOfficialOutputTypeName(contract),
-        `${label}.${name}: contract must be an official output type`,
+        isOfficialMaterialKindName(contract),
+        `${label}.${name}: contract must be an official material kind`,
       );
       assert.ok(
         outputSlot.exampleMaterialMapping &&
@@ -67,7 +67,7 @@ Deno.test("portable kind descriptors publish official material mappings", async 
       );
 
       assert.deepEqual(
-        validateOfficialOutputMaterialMapping(
+        validateOfficialMaterialMapping(
           contract,
           outputSlot.exampleMaterialMapping,
         ),
@@ -76,7 +76,7 @@ Deno.test("portable kind descriptors publish official material mappings", async 
       );
 
       assert.deepEqual(
-        validateOfficialOutputMaterialMappingOutputTypes(
+        validateOfficialMaterialMappingOutputFields(
           contract,
           outputSlot.exampleMaterialMapping,
           outputs,

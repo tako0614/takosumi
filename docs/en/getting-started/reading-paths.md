@@ -13,7 +13,7 @@
 
 After reading the First-Time Reader section above, also see:
 
-- [Official Type Catalog](../reference/type-catalog.md) when you need concrete kind or output type vocabulary.
+- [Official Catalog](../reference/catalog.md) when you need concrete kind or material kind vocabulary.
 - [Platform Services](../reference/platform-services.md) when a workload consumes services provided by the operator.
 - [Takosumi Cloud](../reference/takosumi-cloud.md) when you need Cloud platform service paths, deploy facade, dashboard API, or account management behavior.
 - [HTTP Exposure](../reference/http-exposure.md) when you publish a public app endpoint.
@@ -45,7 +45,7 @@ After reading the First-Time Reader section above, also see:
 
 1. [Extending Takosumi](../extending.md)
 2. [Specification Boundaries](../reference/spec-boundaries.md)
-3. [Official Type Catalog](../reference/type-catalog.md)
+3. [Official Catalog](../reference/catalog.md)
 4. [Manifest](../reference/manifest.md)
 5. [Platform Services](../reference/platform-services.md)
 6. [Access Modes](../reference/access-modes.md)
@@ -57,4 +57,4 @@ After reading the First-Time Reader section above, also see:
 3. [Manifest](../reference/manifest.md)
 4. [Installer API](../reference/installer-api.md)
 5. [Platform Services](../reference/platform-services.md)
-6. [Official Type Catalog](../reference/type-catalog.md)
+6. [Official Catalog](../reference/catalog.md)

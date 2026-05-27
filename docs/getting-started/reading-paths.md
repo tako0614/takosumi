@@ -13,7 +13,7 @@
 
 「初めて読む人」の順に読んだ後、以下も参照:
 
-- kind や出力の型 (`service-binding` 等) の具体語彙が必要になったら [公式型カタログ](../reference/type-catalog.md)
+- kind やmaterial kind (`service-binding` 等) の具体語彙が必要になったら [公式カタログ](../reference/catalog.md)
 - operator が提供するプラットフォームサービスの出力データを workload から受け取るときは [プラットフォームサービス](../reference/platform-services.md)
 - Takosumi Cloud のアカウント管理 (課金・認証)、deploy facade、dashboard API が必要になったら [Takosumi Cloud](../reference/takosumi-cloud.md)
 - public app endpoint を出すときは [HTTP 公開](../reference/http-exposure.md)
@@ -45,7 +45,7 @@
 
 1. [Takosumi を拡張する](../extending.md)
 2. [仕様境界](../reference/spec-boundaries.md)
-3. [公式型カタログ](../reference/type-catalog.md)
+3. [公式カタログ](../reference/catalog.md)
 4. [Manifest](../reference/manifest.md)
 5. [プラットフォームサービス](../reference/platform-services.md)
 6. [アクセスモード](../reference/access-modes.md)
@@ -57,5 +57,5 @@
 3. [Manifest](../reference/manifest.md)
 4. [Installer API](../reference/installer-api.md)
 5. [プラットフォームサービス](../reference/platform-services.md)
-6. [公式型カタログ](../reference/type-catalog.md)
+6. [公式カタログ](../reference/catalog.md)
 7. 実装資料が必要になったら repository-local の内部設計メモを読む

@@ -133,10 +133,12 @@ The `outputs`-related examples in this page use catalog-shaped output data an op
     "publish": {
       "api": {
         "output": "public.endpoint",
+        "kind": "http-endpoint",
         "path": "acme.notes.api"
       },
       "database": {
         "output": "db.connection",
+        "kind": "service-binding",
         "path": "acme.database.reporting"
       }
     }
@@ -289,6 +291,7 @@ Prepared source apply requires request `source.digest`. Dry-run `expected.source
         "servicePathExposures": {
           "api": {
             "path": "acme.notes.api",
+            "kind": "http-endpoint",
             "output": "public.endpoint",
             "material": {
               "contract": "http-endpoint",
@@ -307,6 +310,7 @@ Prepared source apply requires request `source.digest`. Dry-run `expected.source
           },
           "database": {
             "path": "acme.database.reporting",
+            "kind": "service-binding",
             "output": "db.connection",
             "material": {
               "contract": "service-binding",
@@ -322,7 +326,14 @@ Prepared source apply requires request `source.digest`. Dry-run `expected.source
 }
 ```
 
-`outputs.components[componentName][outputSlot]` is public/non-secret output data for a materialized component output slot in that Deployment. Installation output service path declarations made through root `publish` can be recorded in `outputs.extensions.servicePathExposures` with their path and source output. The example above uses official type catalog `http-endpoint` and `service-binding` output data. Output field meaning belongs to the selected catalog/operator distribution, and operator-facing ledgers may store separate apply records.
+`outputs.components[componentName][outputSlot]` is public/non-secret output data
+for a materialized component output slot in that Deployment. Installation
+output publications made through root `publish` can be recorded in
+`outputs.extensions.servicePathExposures` with their source output, optional
+path, and material kind. The example above uses official catalog
+`http-endpoint` and `service-binding` material data. Output field meaning
+belongs to the selected catalog/operator distribution, and operator-facing
+ledgers may store separate apply records.
 
 Public `outputs` contain only non-secret runtime/public projections. Raw credentials, tokens, private keys, passwords, cookies, provider secrets, and payment-backend credentials are not placed in Deployment outputs or export bundles. Required sensitive values are represented as `configRef`, `secretRef`, or operator-provided configuration. Exporter-specific rejection and redaction behavior belongs to operator/exporter docs.
 
@@ -615,7 +626,7 @@ Common `failed_precondition` causes:
 - Source pin mismatch
 - Prepared `source.digest` mismatch
 - Expected guard mismatch
-- Well-formed kind/output type/projection term not adopted or invisible in the Space
+- Well-formed kind/material kind/projection term not adopted or invisible in the Space
 - Required platform service absent from current Space state
 - Duplicate visible platform service entries
 - Active mutation conflict

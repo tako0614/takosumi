@@ -13,7 +13,7 @@ Use the package root or explicit subpath imports for the current v1 public spec 
 | `@takos/takosumi-contract`               | current AppSpec + Installer API DTOs, plus JSON scalar helper types                      |
 | `@takos/takosumi-contract/app-spec`      | `AppSpec`, `Component`, `connect`, platform `listen`, and root `publish` declarations    |
 | `@takos/takosumi-contract/installer-api` | 5 endpoint Installer API DTOs, `Installation`, `Deployment`, source pins, error envelope |
-| `@takos/takosumi-contract/type-catalog`  | official output type, injection mode, access/sensitivity, and material helper types      |
+| `@takos/takosumi-contract/catalog`       | official material kind, injection mode, access/sensitivity, and material helper types    |
 
 The root export intentionally excludes deploy-core projections and reference adapter helper types so the current public `AppSpec`, `Installation`, and `Deployment` names stay unambiguous.
 
@@ -63,11 +63,16 @@ interface ConnectOptions {
 
 interface PublishOptions {
   readonly output: string;
-  readonly path: string;
+  readonly kind?: string;
+  readonly path?: string;
+  readonly labels?: Readonly<Record<string, string>>;
 }
 
 interface ListenOptions {
-  readonly path: string;
+  readonly path?: string;
+  readonly kind?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly many?: boolean;
   readonly inject: string;
   readonly prefix?: string;
   readonly mount?: string;
@@ -75,13 +80,13 @@ interface ListenOptions {
 }
 ```
 
-`Component.kind` is opaque to the contract package. Operators may map short aliases such as `web-service` to full kind URIs, but alias resolution and kind descriptor selection belong to the operator distribution. Component-specific gateway route/TLS/host rules live inside the selected descriptor-owned open `spec`; same-manifest workload dependencies use `connect`; platform service dependencies use `listen.path`; root `publish` records a selected component output as an Installation output service path declaration. Operator distributions define their own concrete platform service paths in their distribution docs. Output material projection is owned by the kind descriptor and operator-selected implementation binding. Build recipes live outside AppSpec; an operator/build-service distribution may define `.takosumi.build.yml`, CI config, or another input. AppSpec components carry runtime/install intent.
+`Component.kind` is opaque to the contract package. Operators may map short aliases such as `web-service` to full kind URIs, but alias resolution and kind descriptor selection belong to the operator distribution. Publication `kind` uses the same opaque alias-or-URI rule for material being offered or consumed. Component-specific gateway route/TLS/host rules live inside the selected descriptor-owned open `spec`; same-manifest workload dependencies use `connect`; platform service dependencies use exact `listen.path` or discovery through `listen.kind` + labels; root `publish` records a selected component output as an Installation output publication. `publish.path` is optional and only participates in path conflict rules when present. Operator distributions define their own concrete platform service paths in their distribution docs. Output material projection is owned by the kind descriptor and operator-selected implementation binding. Build recipes live outside AppSpec; an operator/build-service distribution may define `.takosumi.build.yml`, CI config, or another input. AppSpec components carry runtime/install intent.
 
-## Type Catalog Helpers
+## Catalog Helpers
 
-The `type-catalog` subpath mirrors the Takosumi official type catalog vocabulary in TypeScript. It exports the closed official output type names (`http-endpoint`, `service-binding`, `object-store`, `event-channel`, `identity.oidc@v1`, `billing.port@v1`), injection mode names (`env`, `secret-env`, `upstream`, `config-mount`), access modes, sensitivity classes, material interfaces, and small validation helpers for catalog-shaped material.
+The `catalog` subpath mirrors the Takosumi official catalog vocabulary in TypeScript. It exports the closed official material kind names (`http-endpoint`, `service-binding`, `object-store`, `event-channel`, `identity.oidc@v1`, `billing.port@v1`, `mcp-server@v1`), injection mode names (`env`, `secret-env`, `upstream`, `config-mount`), access modes, sensitivity classes, material interfaces, and small validation helpers for catalog-shaped material. Use `OfficialMaterialKindName` / `isOfficialMaterialKindName` for material vocabulary. Legacy output-type names and the legacy compatibility import path remain aliases for older callers; new code should use material kind terminology.
 
-These helpers do not add fields to AppSpec. AppSpec stores `connect.<binding>.inject` and `listen.<binding>.inject` as strings so operator distributions can adopt other projection vocabularies. The helper types are for code that intentionally targets the official `takosumi.com` catalog.
+AppSpec stores `connect.<binding>.inject` and `listen.<binding>.inject` as strings so operator distributions can adopt other projection vocabularies. The helper types are for code that intentionally targets the official `takosumi.com` catalog.
 
 ## Installer API
 

@@ -52,7 +52,8 @@ features:
 
 ## 3 つの公開概念
 
-Manifest / Installation / Deployment の詳細は [コンセプト](./getting-started/concepts.md) を参照。
+Manifest / Installation / Deployment の詳細は
+[コンセプト](./getting-started/concepts.md) を参照。
 
 | 概念         | 意味                                                                      |
 | ------------ | ------------------------------------------------------------------------- |
@@ -66,10 +67,10 @@ Manifest / Installation / Deployment の詳細は [コンセプト](./getting-st
 | ----------------------------------------------------- | ------------------------------------------------------------ |
 | Takosumi 仕様全体を読む                               | [Takosumi core 仕様](./reference/core-spec.md)               |
 | `.takosumi.yml` を書く                                | [Manifest](./reference/manifest.md)                          |
-| component の種類を調べる                              | [公式型カタログ](./reference/type-catalog.md)                |
+| component の種類を調べる                              | [公式カタログ](./reference/catalog.md)                       |
 | operator が提供するプラットフォームサービスを利用する | [プラットフォームサービス](./reference/platform-services.md) |
 | Takosumi Cloud のアカウント管理 API / facade を見る   | [Takosumi Cloud](./reference/takosumi-cloud.md)              |
-| Takosumi / 公式型カタログ / Cloud の境界を確認する    | [仕様境界](./reference/spec-boundaries.md)                   |
+| Takosumi / 公式カタログ / Cloud の境界を確認する      | [仕様境界](./reference/spec-boundaries.md)                   |
 | install / deploy / rollback API を叩く                | [Installer API](./reference/installer-api.md)                |
 | CLI の subcommand と env を見る                       | [CLI](./reference/cli.md)                                    |
 | アプリを public URL で公開する                        | [HTTP 公開](./reference/http-exposure.md)                    |

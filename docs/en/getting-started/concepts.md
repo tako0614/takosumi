@@ -64,7 +64,7 @@ DB_PASSWORD=...
 
 The `prefix: DB` becomes the prefix of each variable name. Your code reads them as ordinary environment variables.
 
-Use `listen.path` for operator-provided services outside the manifest.
+Use `listen.path` for one known operator-provided service outside the manifest.
 
 ```yaml
 listen:
@@ -72,6 +72,17 @@ listen:
     path: identity.primary.oidc
     inject: secret-env
     prefix: IDENTITY
+```
+
+For targets that may have many visible providers, such as MCP servers, omit the
+path and use `listen.kind` with `many: true`.
+
+```yaml
+listen:
+  tools:
+    kind: mcp-server@v1
+    many: true
+    inject: config-mount
 ```
 
 ## Installation and Deployment {#installation-deployment}

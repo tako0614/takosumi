@@ -1,6 +1,13 @@
 # Takosumi Conventions
 
-`Component.kind` is an opaque string resolved by the operator. The manifest shape stays `{ apiVersion, metadata, components }`, and each component stays `{ kind, spec, publish, listen }`.
+`kind` is the selector word everywhere in AppSpec. `Component.kind` chooses what
+to create. Root `publish.kind` and `listen.kind` name the kind of material being
+offered or consumed. The manifest shape stays
+`{ apiVersion, metadata, components, publish? }`, and each component stays
+`{ kind, spec, connect, listen }`.
+
+Use `type` only for JSON Schema, JSON-LD `@type`, or TypeScript names. Public
+manifest and publication selectors use `kind`.
 
 ## Kind ownership
 
@@ -8,6 +15,14 @@
 - Native kind packages live in the sibling `takosumi-plugins` repository, use the same naming rule, and own substrate-specific kind definition metadata and adapter factories.
 - Kind families such as worker, postgres, object-store, gateway, and web-service are documentation groups, not an manifest field.
 - Backend-specific `spec` fields belong to native kinds. Do not hide them behind a portable kind.
+
+## Publication paths
+
+`path` is only for exact Space-visible names. One Space can have at most one
+active owner for the same publication path. Pathless publications are
+discoverable by `kind` and `labels`; multiple pathless publications with the
+same kind are valid. Consumers that intentionally want all visible matches use
+`listen.<binding>.kind` with `many: true`.
 
 ## Adding a kind package
 

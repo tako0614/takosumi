@@ -11,7 +11,7 @@ Manifest には component の kind 名と `spec` を書きます。Takosumi は 
 
 ## 新しい kind を追加する
 
-再利用可能な kind は安定した kind URI と kind の定義で意味を公開します。 operator はその URI に実行環境への接続を別途追加して実行可能にします。公式型カタログの定義は JSON-LD を公開形式として使います。
+再利用可能な kind は安定した kind URI と kind の定義で意味を公開します。 operator はその URI に実行環境への接続を別途追加して実行可能にします。公式カタログの定義は JSON-LD を公開形式として使います。
 
 ```json
 {
@@ -68,7 +68,7 @@ components:
 
 ## 実行環境への接続を追加する
 
-接続設定は、kind の定義と出力の型 (`service-binding` 等) を具体的な backend runtime やリソースの作成・更新に結びつけます。公開仕様として共有されるのは、kind URI、kind の定義、出力の型、出力データの生成方法、Deployment に出す non-secret な出力データです。
+接続設定は、kind の定義とmaterial kind (`service-binding` 等) を具体的な backend runtime やリソースの作成・更新に結びつけます。公開仕様として共有されるのは、kind URI、kind の定義、material kind、出力データの生成方法、Deployment に出す non-secret な出力データです。
 
 接続設定の読み込み方法、別プロセス化、backend API への接続、credential 注入方法は実装や operator の設定が選びます。Manifest author が覚える component 語彙は `kind` / `spec` / `connect` / `listen` に閉じます。selected component output を Installation output service path declaration として記録する場合だけ root `publish` を使います。
 
@@ -83,6 +83,6 @@ components:
 ## 関連ページ
 
 - [Manifest](./reference/manifest.md)
-- [公式型カタログ](./reference/type-catalog.md)
+- [公式カタログ](./reference/catalog.md)
 - [プラットフォームサービス](./reference/platform-services.md)
 - [ビルドサービス境界](./reference/build-spec.md)

@@ -22,6 +22,18 @@ export interface DryRunDiagnostics {
   readonly errors: readonly string[];
 }
 
+export type JsrTargetPublicationStatus =
+  | "published"
+  | "publish-needed"
+  | "registry-error";
+
+export interface JsrTargetPublicationCheck {
+  readonly name: string;
+  readonly targetVersion: string;
+  readonly status: JsrTargetPublicationStatus;
+  readonly message?: string;
+}
+
 export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
   [
     {
@@ -164,29 +176,68 @@ export async function runJsrPublishDryRun(options: {
 export async function runJsrPublish(options: {
   readonly root?: URL;
   readonly dryRun: boolean;
+  readonly fetch?: typeof fetch;
+  readonly registryBaseUrl?: string;
 }): Promise<boolean> {
   const root = options.root ?? new URL("../", import.meta.url);
   let allOk = true;
 
   for (const packageInfo of JSR_PUBLISH_PACKAGES) {
-    const ok = await runSinglePackagePublish(root, packageInfo, options.dryRun);
+    const ok = await runSinglePackagePublish({
+      root,
+      packageInfo,
+      dryRun: options.dryRun,
+      fetch: options.fetch ?? fetch,
+      registryBaseUrl: options.registryBaseUrl ?? "https://jsr.io",
+    });
     allOk &&= ok;
   }
 
   return allOk;
 }
 
-async function runSinglePackagePublish(
-  root: URL,
-  packageInfo: JsrPublishPackage,
-  dryRun: boolean,
-): Promise<boolean> {
+async function runSinglePackagePublish(input: {
+  readonly root: URL;
+  readonly packageInfo: JsrPublishPackage;
+  readonly dryRun: boolean;
+  readonly fetch: typeof fetch;
+  readonly registryBaseUrl: string;
+}): Promise<boolean> {
+  const { dryRun, packageInfo, registryBaseUrl, root } = input;
   const label = `${packageInfo.name}@${packageInfo.version}`;
   const cwd = new URL(`${packageInfo.directory}/`, root);
   const action = dryRun ? "dry-run" : "publish";
   console.log(`${action} ${label}`);
+
+  if (!dryRun) {
+    const publication = await checkJsrTargetPublication(packageInfo, {
+      fetch: input.fetch,
+      registryBaseUrl,
+    });
+    if (publication.status === "published") {
+      console.log(`skip ${label} (already published)`);
+      return true;
+    }
+    if (publication.status === "registry-error") {
+      console.error(`failed ${label}`);
+      console.error(
+        `  ${publication.message ?? "JSR registry status unknown"}`,
+      );
+      return false;
+    }
+  }
+
   const args = ["publish", "--quiet"];
   if (dryRun) args.push("--dry-run", "--allow-dirty");
+  if (!dryRun) {
+    const token = Deno.env.get("JSR_TOKEN")?.trim();
+    if (!token) {
+      console.error(`failed ${label}`);
+      console.error("  JSR_TOKEN is required for publish mode");
+      return false;
+    }
+    args.push("--token", token);
+  }
 
   const command = new Deno.Command(Deno.execPath(), {
     args,
@@ -226,6 +277,69 @@ async function runSinglePackagePublish(
     );
   }
   return true;
+}
+
+export async function checkJsrTargetPublication(
+  packageInfo: JsrPublishPackage,
+  options: {
+    readonly fetch?: typeof fetch;
+    readonly registryBaseUrl?: string;
+  } = {},
+): Promise<JsrTargetPublicationCheck> {
+  const fetchImpl = options.fetch ?? fetch;
+  const registryBaseUrl = options.registryBaseUrl ?? "https://jsr.io";
+  const url = `${
+    registryBaseUrl.replace(/\/+$/, "")
+  }/${packageInfo.name}/meta.json`;
+
+  let response: Response;
+  try {
+    response = await fetchImpl(url);
+  } catch (error) {
+    return {
+      name: packageInfo.name,
+      targetVersion: packageInfo.version,
+      status: "registry-error",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  if (response.status === 404) {
+    return {
+      name: packageInfo.name,
+      targetVersion: packageInfo.version,
+      status: "publish-needed",
+    };
+  }
+  if (!response.ok) {
+    return {
+      name: packageInfo.name,
+      targetVersion: packageInfo.version,
+      status: "registry-error",
+      message: `JSR registry returned HTTP ${response.status}`,
+    };
+  }
+
+  let meta: { readonly versions?: unknown };
+  try {
+    meta = await response.json() as { readonly versions?: unknown };
+  } catch (error) {
+    return {
+      name: packageInfo.name,
+      targetVersion: packageInfo.version,
+      status: "registry-error",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const versions = meta.versions;
+  const published = versions !== null && typeof versions === "object" &&
+    !Array.isArray(versions) && packageInfo.version in versions;
+  return {
+    name: packageInfo.name,
+    targetVersion: packageInfo.version,
+    status: published ? "published" : "publish-needed",
+  };
 }
 
 function acceptedWarning(

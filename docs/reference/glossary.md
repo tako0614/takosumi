@@ -15,9 +15,11 @@ manifest 内の実行単位。公開 field は `kind` / `spec` / `connect` / `li
 
 ### Kind
 
-component の種類を示す文字列（Takosumi は値を解釈しない）。operator が
-`kindAliases` で省略名 / URI を kind の定義と binding に解決する。takosumi.com
-の例は [公式型カタログ仕様](./type-catalog.md)。
+AppSpec の selector 語。component の `kind` は何を作るかを選び、
+`publish.kind` / `listen.kind` はどの material kind を offer / consume するかを
+選ぶ。operator が省略名 / URI を kind の定義と binding に解決する。manifest
+field としての `type` は使わない。takosumi.com の例は
+[公式カタログ仕様](./catalog.md)。
 
 ### Installation
 
@@ -54,8 +56,9 @@ review した source と異なる入力を 409 で止める。deploy expected gu
 ### connect / listen / publish
 
 component の接続語彙。`connect` は同じ manifest 内の component output を consume
-し、`listen` は platform service path を consume する。root `publish` は
-component output を Installation output service path declaration として記録する。
+し、`listen` は platform service path または material kind discovery で manifest
+外の publication を consume する。root `publish` は component output を
+Installation output publication として記録する。
 
 ### dry-run
 
@@ -101,11 +104,11 @@ Takosumi を起動し、provider / credential / storage / account layer
 
 ## Catalog & Binding
 
-### Output type（出力の形式）
+### Material kind（出力 kind）
 
-component output slot や platform service が提供する出力データの型 (コード:
-`MaterialContract`)。例: `http-endpoint`、`service-binding`、`object-store`。 ※
-ドキュメント内では「出力の形式」とも表記する。
+component output slot や platform service が提供する出力データの kind。例:
+`http-endpoint`、`service-binding`、`object-store`、`mcp-server@v1`。manifest では
+`publish.kind` / `listen.kind` に現れる。
 
 ### Injection mode（注入モード）
 
@@ -124,21 +127,23 @@ operator distribution が選ぶ。
 ### Kind schema（kind の定義）
 
 operator が採用する metadata で、component kind の input schema、output
-slot、注入 capability、output metadata を説明する。 Takosumi 公式型カタログは
+slot、注入 capability、output metadata を説明する。 Takosumi 公式カタログは
 JSON-LD で定義を公開する。runtime behavior は binding が持つ。 ※
 ドキュメント内では「kind の定義」とも表記する。
 
-### Takosumi 公式型カタログ
+### Takosumi 公式カタログ
 
-Takosumi が公開する再利用可能な kind の定義と output type の
+Takosumi が公開する再利用可能な kind の定義と material kind の
 catalog。`https://takosumi.com/kinds/v1/*` で JSON-LD の定義を公開する。operator
 は opt-in で Space に公開し、operator-adopted catalog も同じ core contract
 で扱える。
 
 ### Platform service（プラットフォームサービス）
 
-operator が Space に公開するサービス。manifest では `listen.path` から consume
-する。→ [プラットフォームサービス](./platform-services.md)
+operator や他の Installation が Space に公開する service material。確定した対象は
+`listen.path`、MCP server のように複数存在してよい対象は `listen.kind` と
+optional labels / `many: true` で consume する。→
+[プラットフォームサービス](./platform-services.md)
 
 ### PlatformServiceDeclaration
 

@@ -732,8 +732,74 @@ components:
         spaceId: "space_test",
         source: { kind: "local", url: dir },
       }),
-      /web\.listen\.oidc\.path refers to unresolved platform service "identity\.primary\.oidc"/,
+      /web\.listen\.oidc refers to unresolved platform service "identity\.primary\.oidc"/,
     );
+  }, yaml);
+});
+
+Deno.test("InstallerPipeline binds discovery listen collections", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: mcp-discovery-test
+  name: MCP Discovery Test
+components:
+  agent:
+    kind: worker
+    listen:
+      tools:
+        kind: mcp-server
+        labels:
+          capability: docs
+        many: true
+        inject: config-mount
+`;
+  await withTempSource(async (dir) => {
+    const captures: Array<Readonly<Record<string, OutputMaterial>>> = [];
+    const workerPlugin = buildRecordingPlugin({
+      name: "@example/worker",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      recorder: [],
+      captureApply: (ctx) => captures.push(ctx.inputMaterials),
+    });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [workerPlugin],
+      platformServices: {
+        resolve: (ctx) => {
+          assert.equal(ctx.kind, "mcp-server");
+          assert.deepEqual(ctx.labels, { capability: "docs" });
+          assert.equal(ctx.many, true);
+          return [
+            { materialKind: "mcp-server", url: "https://one.example.test/mcp" },
+            { materialKind: "mcp-server", url: "https://two.example.test/mcp" },
+          ];
+        },
+      },
+    });
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    assert.equal(deployment.status, "succeeded");
+    assert.deepEqual(captures, [
+      {
+        tools: {
+          kind: "collection",
+          items: [
+            {
+              materialKind: "mcp-server",
+              url: "https://one.example.test/mcp",
+            },
+            {
+              materialKind: "mcp-server",
+              url: "https://two.example.test/mcp",
+            },
+          ],
+        },
+      },
+    ]);
   }, yaml);
 });
 

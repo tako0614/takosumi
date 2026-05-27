@@ -25,6 +25,7 @@ import type {
   AppSpec,
   Component,
   ComponentOutputRef,
+  ListenOptions,
   OutputSlotName,
   PublishOptions,
 } from "takosumi-contract/app-spec";
@@ -143,13 +144,20 @@ export interface PlatformServiceResolveContext {
   readonly componentName: string;
   readonly component: Component;
   readonly bindingName: string;
-  readonly sourceRef: string;
+  readonly sourceRef?: string;
+  readonly kind?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly many?: boolean;
 }
 
 export interface PlatformServiceResolver {
   resolve(
     context: PlatformServiceResolveContext,
-  ): Promise<OutputMaterial | undefined> | OutputMaterial | undefined;
+  ):
+    | Promise<OutputMaterial | readonly OutputMaterial[] | undefined>
+    | OutputMaterial
+    | readonly OutputMaterial[]
+    | undefined;
 }
 
 export interface HttpPlatformServiceResolverOptions {
@@ -196,6 +204,18 @@ export function httpPlatformServiceResolver(
       const material = isRecord(payload) && isOutputMaterial(payload.material)
         ? payload.material
         : payload;
+      const materials = isRecord(payload) && Array.isArray(payload.materials)
+        ? payload.materials
+        : undefined;
+      if (materials !== undefined) {
+        if (!materials.every(isOutputMaterial)) {
+          throw new InstallerPipelineError(
+            "failed_precondition",
+            "platform service resolver response materials must be material objects",
+          );
+        }
+        return materials;
+      }
       if (!isOutputMaterial(material)) {
         throw new InstallerPipelineError(
           "failed_precondition",
@@ -232,10 +252,10 @@ export interface InstallerPipelineDependencies {
    */
   readonly kindAliases?: KindAliasMap;
   /**
-   * Operator-owned resolver for Space-visible platform service paths such
-   * as `identity.primary.oidc`. The kernel treats the returned material like
-   * any other listened material; it does not assign special meaning to the
-   * path.
+   * Operator-owned resolver for Space-visible publications. Exact listens pass
+   * a platform service path such as `identity.primary.oidc`; discovery listens
+   * pass material kind, labels, and `many`. The kernel treats the returned
+   * material like any other listened material.
    */
   readonly platformServices?: PlatformServiceResolver;
   /** Defaults to `crypto.randomUUID()`-based id generation. */
@@ -599,7 +619,7 @@ export class InstallerPipeline {
           for (
             const [bindingName, options] of Object.entries(component.listen)
           ) {
-            const sourceRef = options.path;
+            const sourceRef = listenSourceRef(options);
             const material = registry.get(sourceRef) ??
               await this.#resolvePlatformService({
                 installation: input.installation,
@@ -607,6 +627,7 @@ export class InstallerPipeline {
                 component,
                 bindingName,
                 sourceRef,
+                options,
                 registry,
               });
             if (!material) {
@@ -615,7 +636,7 @@ export class InstallerPipeline {
               }
               throw new InstallerPipelineError(
                 "failed_precondition",
-                `${componentName}.listen.${bindingName}.path refers to ` +
+                `${componentName}.listen.${bindingName} refers to ` +
                   `unresolved platform service ${JSON.stringify(sourceRef)}`,
               );
             }
@@ -678,8 +699,10 @@ export class InstallerPipeline {
           );
         }
         servicePathExposures[name] = {
-          path: options.path,
           output: options.output,
+          ...(options.kind ? { kind: options.kind } : {}),
+          ...(options.path ? { path: options.path } : {}),
+          ...(options.labels ? { labels: options.labels } : {}),
           material: materialToDeploymentOutput(material),
         };
       }
@@ -732,19 +755,23 @@ export class InstallerPipeline {
     readonly component: Component;
     readonly bindingName: string;
     readonly sourceRef: string;
+    readonly options: ListenOptions;
     readonly registry: MaterialRegistry;
   }): Promise<OutputMaterial | undefined> {
     if (!this.#platformServices) return undefined;
-    let material: OutputMaterial | undefined;
+    let resolved: OutputMaterial | readonly OutputMaterial[] | undefined;
     try {
-      material = await this.#platformServices.resolve({
+      resolved = await this.#platformServices.resolve({
         installationId: input.installation.id,
         spaceId: input.installation.spaceId,
         appId: input.installation.appId,
         componentName: input.componentName,
         component: input.component,
         bindingName: input.bindingName,
-        sourceRef: input.sourceRef,
+        sourceRef: input.options.path,
+        kind: input.options.kind,
+        labels: input.options.labels,
+        many: input.options.many,
       });
     } catch (error) {
       const cause = error instanceof Error ? error.message : String(error);
@@ -755,6 +782,12 @@ export class InstallerPipeline {
         }: ${cause}`,
       );
     }
+    if (resolved === undefined) return undefined;
+    const material = normalizeResolvedPlatformService({
+      sourceRef: input.sourceRef,
+      many: input.options.many === true,
+      resolved,
+    });
     if (material === undefined) return undefined;
     if (!isOutputMaterial(material)) {
       throw new InstallerPipelineError(
@@ -1046,6 +1079,43 @@ class MaterialRegistry {
   snapshot(): Readonly<Record<string, OutputMaterial>> {
     return Object.fromEntries(this.#materials.entries());
   }
+}
+
+function listenSourceRef(options: ListenOptions): string {
+  if (typeof options.path === "string") {
+    return options.path;
+  }
+  const selector = {
+    kind: options.kind,
+    labels: options.labels ?? {},
+    many: options.many === true,
+  };
+  return `query:${JSON.stringify(selector)}`;
+}
+
+function normalizeResolvedPlatformService(input: {
+  readonly sourceRef: string;
+  readonly many: boolean;
+  readonly resolved: OutputMaterial | readonly OutputMaterial[];
+}): OutputMaterial | undefined {
+  if (!Array.isArray(input.resolved)) {
+    return input.resolved as OutputMaterial;
+  }
+  if (input.resolved.length === 0) {
+    return undefined;
+  }
+  if (!input.many) {
+    if (input.resolved.length === 1) return input.resolved[0]!;
+    throw new InstallerPipelineError(
+      "failed_precondition",
+      `platform service selector ${JSON.stringify(input.sourceRef)} matched ` +
+        `${input.resolved.length} entries; set many: true to bind a collection`,
+    );
+  }
+  return {
+    kind: "collection",
+    items: input.resolved as unknown as JsonValue,
+  };
 }
 
 function localOutputRef(

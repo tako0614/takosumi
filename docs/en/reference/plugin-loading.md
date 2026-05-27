@@ -8,7 +8,7 @@ The reference kernel accepts a plain array of `KernelPlugin` objects through `cr
 
 Backend-specific reference adapters live in the separate `takosumi-plugins` repository. The Takosumi core repository keeps the plugin interface and portable descriptors, but does not bundle concrete cloud or host bindings into the umbrella package.
 
-`component.spec` is descriptor-owned author input. The reference pipeline resolves `connect` output refs and `listen.path` entries into `ctx.resolvedBindings` before `apply()`. Adapters read that context when they need env, mount, or upstream runtime inputs. Native packages should not rely on hidden mutation of `spec` to receive dependency-derived values.
+`component.spec` is descriptor-owned author input. The reference pipeline resolves `connect` output refs and `listen.path` / `listen.kind` selectors into `ctx.resolvedBindings` before `apply()`. Adapters read that context when they need env, mount, or upstream runtime inputs. Native packages should not rely on hidden mutation of `spec` to receive dependency-derived values.
 
 ```ts
 import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
@@ -44,4 +44,4 @@ JSON-LD descriptor files publish kind vocabulary and metadata. The reference ada
 
 - [Kind Packages](./kind-packages.md)
 - [Kind Binding Implementations](./kind-bindings.md)
-- [Official Type Catalog](./type-catalog.md)
+- [Official Catalog](./catalog.md)

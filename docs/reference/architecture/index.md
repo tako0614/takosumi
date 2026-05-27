@@ -58,7 +58,7 @@ component の公開 field は `kind`、`spec`、`connect`、`listen` です。ro
 | [API Surface](./api-surface-architecture.md)                  | public / internal / runtime-agent の surface 分割。           |
 | [CLI Surface](./cli-companion-architecture-note.md)           | CLI の設計方針と Takosumi API との関係。                      |
 | [Operator Boundaries](./operator-boundaries.md)               | operator が選ぶものと Takosumi が固定するものは何か。         |
-| [公式型カタログモデル](./kind-catalog.md)                     | descriptor を operator がどう取り込むか。                     |
+| [公式カタログモデル](./kind-catalog.md)                       | descriptor を operator がどう取り込むか。                     |
 | [Workflow Placement](./workflow-extension-design.md)          | workflow / scheduler をどこに置くか。                         |
 | [Operational Hardening](./operational-hardening-checklist.md) | production readiness の normative checklist。                 |
 | [イングレスルーティング](./ingress-routing.md)                | public ingress の activation と health state の追跡。         |

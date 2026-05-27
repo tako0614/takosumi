@@ -8,7 +8,7 @@ Reference kernel は `createPaaSApp({ kindAliases, plugins })` で `KernelPlugin
 
 Backend-specific reference adapter は別 repository の `takosumi-plugins` に置きます。Takosumi core repository は plugin interface と portable descriptor を持ちますが、concrete cloud / host binding は umbrella package に同梱しません。
 
-`component.spec` は descriptor-owned author input です。Reference pipeline は `apply()` の前に `connect` output ref と `listen.path` を `ctx.resolvedBindings` へ解決します。adapter は env、mount、upstream runtime input が必要なときにその context を読みます。Native package は dependency-derived value を受け取るために hidden `spec` mutation へ依存しません。
+`component.spec` は descriptor-owned author input です。Reference pipeline は `apply()` の前に `connect` output ref と `listen.path` / `listen.kind` selector を `ctx.resolvedBindings` へ解決します。adapter は env、mount、upstream runtime input が必要なときにその context を読みます。Native package は dependency-derived value を受け取るために hidden `spec` mutation へ依存しません。
 
 ```ts
 import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
@@ -46,4 +46,4 @@ JSON-LD descriptor file は kind vocabulary と metadata を公開します。Re
 
 - [Kind Packages](./kind-packages.md)
 - [Kind Binding 実装](./kind-bindings.md)
-- [Takosumi 公式型カタログ仕様](./type-catalog.md)
+- [Takosumi 公式カタログ仕様](./catalog.md)

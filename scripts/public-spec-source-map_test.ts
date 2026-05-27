@@ -21,10 +21,10 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/runtime-agent-api.md",
   "docs/reference/kind-bindings.md",
   "docs/reference/takosumi-cloud.md",
-  "docs/reference/type-catalog.md",
+  "docs/reference/catalog.md",
   "../takosumi-cloud/docs/ja/spec.md",
   "../takosumi-cloud/docs/en/spec.md",
-  "packages/contract/src/type-catalog.ts",
+  "packages/contract/src/catalog.ts",
   "packages/kernel/src/domains/deploy/_internal_manifest_types.ts",
   "packages/kernel/src/domains/deploy/manifest_v1.ts",
   "packages/kernel/src/api/app.ts",
@@ -54,10 +54,10 @@ const TAKOSUMI_OWNED_PATHS = [
 
 const REQUIRED_SPEC_KEYS = [
   "appspec-v1",
-  "contract-type-catalog-v1",
+  "contract-catalog-v1",
   "installer-api-v1",
   "build-service-input",
-  "takosumi-official-type-catalog-v1",
+  "takosumi-official-catalog-v1",
   "takosumi-cloud-spec-v1",
   "kernel-route-inventory",
   "runtime-agent-envelope",
@@ -76,7 +76,7 @@ Deno.test("public spec source map covers required public surfaces", async () => 
   assert.equal(source.includes(`takosumi-${"git"}-workflow-ref-v1`), false);
   assert.equal(source.includes(`takosumi-${"git"}-artifact-uri-v1`), false);
   assert.ok(source.includes("packages/contract/src/app-spec.ts"));
-  assert.ok(source.includes("packages/contract/src/type-catalog.ts"));
+  assert.ok(source.includes("packages/contract/src/catalog.ts"));
   assert.ok(source.includes("packages/kind-*/spec/kind.jsonld"));
   assert.ok(
     source.includes("../takosumi-plugins/packages/kind-*/spec/kind.jsonld"),

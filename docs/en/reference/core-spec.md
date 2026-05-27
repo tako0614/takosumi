@@ -3,11 +3,11 @@
 Takosumi core is the portable contract for installing source into a Space and
 recording apply results as Deployments. The public model has three entities.
 
-| Entity       | Meaning                                                                                                                                       |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Manifest     | `.takosumi.yml` in a source root. It declares `metadata.id`, the component graph, and optional Installation output service path declarations. |
-| Installation | A manifest installed into a Space, with current state.                                                                                        |
-| Deployment   | One apply result with source identity, `manifestDigest`, status, and outputs.                                                                 |
+| Entity       | Meaning                                                                                                                          |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Manifest     | `.takosumi.yml` in a source root. It declares `metadata.id`, the component graph, and optional Installation output publications. |
+| Installation | A manifest installed into a Space, with current state.                                                                           |
+| Deployment   | One apply result with source identity, `manifestDigest`, status, and outputs.                                                    |
 
 Core defines:
 
@@ -15,10 +15,14 @@ Core defines:
 - Installation and Deployment lifecycle
 - Installer API
 - Source input kinds and digest guards
-- Component output reference and platform service path grammar
+- Component output references, publication kinds, and platform service path grammar
 
-Component kinds, output slots, material shapes, and injection modes are resolved
-by the adopted kind definitions and operator-selected implementation bindings.
+Component kinds, publication kinds, output slots, material shapes, and injection
+modes are resolved by the adopted kind definitions and operator-selected
+implementation bindings.
+The selector name is always `kind`: component selectors, publication selectors,
+and platform service discovery selectors all use `kind`. `type` is not an
+AppSpec selector.
 
 ## Manifest {#manifest}
 
@@ -35,6 +39,7 @@ components:
 publish:
   api:
     output: web.http
+    kind: http-endpoint
     path: acme.example.api
 ```
 
@@ -56,7 +61,11 @@ components:
 | `connect` | Connects same-manifest component output to the consumer.          |
 | `listen`  | Connects Space-visible platform service material to the consumer. |
 
-Root `publish` records component output as an Installation output service path declaration. An operator or product distribution may project that declaration into a Space-visible platform service inventory.
+Root `publish` records component output as an Installation output declaration.
+`kind` is the material kind being offered; `path` is an optional exact alias
+used only when a stable named entry is needed. An operator or product
+distribution may project that declaration into a Space-visible publication
+inventory.
 
 ## Connection Model {#connection-model}
 
@@ -84,6 +93,7 @@ components:
     listen:
       identity:
         path: identity.primary.oidc
+        kind: identity.oidc@v1
         inject: secret-env
         required: true
 ```
@@ -94,21 +104,41 @@ Space-visible service path:
 publish:
   api:
     output: web.http
+    kind: http-endpoint
     path: acme.notes.api
 ```
 
-| Shape                          | Resolution                                                   |
-| ------------------------------ | ------------------------------------------------------------ |
-| `component.output`             | Component output in the same manifest. Exactly two segments. |
-| `identity.primary.oidc[.more]` | Space-visible platform service. Three to eight segments.     |
+Discovery by publication kind:
 
-`connect` references `component.output`. `listen.path` references a platform
-service path. Root `publish.path` is recorded in Deployment output as an
-Installation output declaration. External consumers can resolve it only when
-the operator or product distribution projects that declaration into a
-Space-visible platform service inventory.
-In that inventory, one path in one Space has at most one active provider. The
-same path from a different owner is a conflict, not an automatic overwrite.
+```yaml
+components:
+  agent:
+    kind: worker
+    listen:
+      tools:
+        kind: mcp-server@v1
+        labels:
+          capability: docs
+        many: true
+        inject: config-mount
+```
+
+| Shape                          | Resolution                                                     |
+| ------------------------------ | -------------------------------------------------------------- |
+| `component.output`             | Component output in the same manifest. Exactly two segments.   |
+| `identity.primary.oidc[.more]` | Exact Space-visible publication path. Three to eight segments. |
+| `kind + labels`                | Selector over Space-visible publications.                      |
+
+`connect` references `component.output`. `listen.path` references an exact
+publication path. `listen.kind` discovers visible publications by material kind.
+With `many: true`, every matching publication is delivered as one collection
+material. Without `many`, resolution must produce exactly one match. Root
+`publish.path` is optional. A publication with a path has at most one active
+owner per Space; the same path from a different owner is a conflict, not an
+automatic overwrite. A publication without a path is discoverable by `kind` and
+`labels` and does not participate in path conflict rules. Services that can
+exist many times, such as MCP servers, are represented as pathless publications
+and consumed with `listen.kind` plus `many: true`.
 
 ## Installer API {#installer-api}
 
@@ -145,7 +175,7 @@ build-service profile.
 | Layer                 | Defines                                                                                                     |
 | --------------------- | ----------------------------------------------------------------------------------------------------------- |
 | Takosumi core         | AppSpec shape, Installation / Deployment, Installer API, source / digest guards, reference grammar.         |
-| Official type catalog | Reusable kind definitions, output slots, material vocabulary, and JSON-LD catalog metadata.                 |
+| Official catalog      | Reusable kind definitions, output slots, material vocabulary, and JSON-LD catalog metadata.                 |
 | Operator distribution | Available kinds, platform service paths, account layer APIs, provider bindings, dashboards, deploy facades. |
 
 Concrete workload-facing platform service paths and account layer API
@@ -158,5 +188,5 @@ see [Takosumi Cloud](./takosumi-cloud.md).
 - [Spec Boundaries](./spec-boundaries.md)
 - [Installer API](./installer-api.md)
 - [Platform Services](./platform-services.md)
-- [Official Type Catalog](./type-catalog.md)
+- [Official Catalog](./catalog.md)
 - [Takosumi Cloud](./takosumi-cloud.md)

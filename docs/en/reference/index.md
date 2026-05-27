@@ -4,16 +4,16 @@ Takosumi documentation is split by ownership.
 
 ## Core Specification
 
-- [Specification Boundaries](./spec-boundaries.md) — ownership split between core, the Official Type Catalog, and operator distributions.
+- [Specification Boundaries](./spec-boundaries.md) — ownership split between core, the Official Catalog, and operator distributions.
 - [Core Specification](./core-spec.md) — Manifest, Installation, Deployment, Installer API, source guards, and connection grammar.
 - [Manifest](./manifest.md) — the `.takosumi.yml` source-root file.
 - [Installer API](./installer-api.md) — write endpoints for install, deploy, dry-run, and rollback.
-- [Platform Services](./platform-services.md) — consuming Space-visible output through `listen.path`.
-- [HTTP Exposure](./http-exposure.md) — modeling public HTTP endpoints through workload component outputs, gateway outputs, and root Installation output declarations.
+- [Platform Services](./platform-services.md) — consuming Space-visible output through `listen.path` / `listen.kind`.
+- [HTTP Exposure](./http-exposure.md) — modeling public HTTP endpoints through workload component outputs, gateway outputs, and root Installation output publications.
 
-## Official Type Catalog
+## Official Catalog
 
-- [Takosumi Official Type Catalog](./type-catalog.md) — reusable kind definitions, output type contracts, injection modes, and JSON-LD catalog metadata.
+- [Takosumi Official Catalog](./catalog.md) — reusable kind definitions, material kinds, injection modes, and JSON-LD catalog metadata.
 - [Access Modes](./access-modes.md) — access vocabulary for platform services and projections.
 
 ## Takosumi Cloud
@@ -33,7 +33,7 @@ Takosumi documentation is split by ownership.
 
 ## Reference Implementation / Package Inventory
 
-These pages explain how the reference kernel connects adopted type definitions to implementation packages. They are not AppSpec core contract chapters.
+These pages explain how the reference kernel connects adopted kind definitions to implementation packages. They are not AppSpec core contract chapters.
 
 - [Kind Packages](./kind-packages.md) — portable and native kind package ownership.
 - [Kind Binding Implementations](./kind-bindings.md) — how the reference kernel attaches implementation bindings.

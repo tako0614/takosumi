@@ -31,6 +31,7 @@ components:
 publish:
   public-endpoint:
     output: public.public
+    kind: http-endpoint
     path: acme.web.public
 ```
 

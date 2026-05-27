@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  checkJsrTargetPublication,
   JSR_PUBLISH_PACKAGES,
   parseDenoPublishWarnings,
   parseDenoWarningCodes,
@@ -107,6 +108,66 @@ warning[unanalyzable-dynamic-import]: unable to analyze dynamic import
   ]);
 });
 
+Deno.test("checkJsrTargetPublication skips already published target versions", async () => {
+  const result = await checkJsrTargetPublication(
+    {
+      name: "@takos/example",
+      version: "1.2.0",
+      directory: "packages/example",
+    },
+    {
+      registryBaseUrl: "https://jsr.test",
+      fetch: fakeFetch({
+        "https://jsr.test/@takos/example/meta.json": {
+          versions: {
+            "1.0.0": {},
+            "1.2.0": {},
+          },
+        },
+      }),
+    },
+  );
+
+  assert.deepEqual(result, {
+    name: "@takos/example",
+    targetVersion: "1.2.0",
+    status: "published",
+  });
+});
+
+Deno.test("checkJsrTargetPublication publishes missing packages and missing target versions", async () => {
+  const fetchImpl = fakeFetch({
+    "https://jsr.test/@takos/example-old/meta.json": {
+      versions: {
+        "1.0.0": {},
+      },
+    },
+  });
+
+  assert.equal(
+    (await checkJsrTargetPublication(
+      {
+        name: "@takos/example-old",
+        version: "1.2.0",
+        directory: "packages/example-old",
+      },
+      { registryBaseUrl: "https://jsr.test", fetch: fetchImpl },
+    )).status,
+    "publish-needed",
+  );
+  assert.equal(
+    (await checkJsrTargetPublication(
+      {
+        name: "@takos/example-missing",
+        version: "0.1.0",
+        directory: "packages/example-missing",
+      },
+      { registryBaseUrl: "https://jsr.test", fetch: fetchImpl },
+    )).status,
+    "publish-needed",
+  );
+});
+
 Deno.test("parseMode accepts explicit modes and rejects unknown args", () => {
   assert.equal(parseMode([]), "dry-run");
   assert.equal(parseMode(["--dry-run"]), "dry-run");
@@ -114,3 +175,17 @@ Deno.test("parseMode accepts explicit modes and rejects unknown args", () => {
   assert.equal(parseMode(["--publish", "--dry-run"]), null);
   assert.equal(parseMode(["--unknown"]), null);
 });
+
+function fakeFetch(fixtures: Readonly<Record<string, unknown>>): typeof fetch {
+  return ((input: string | URL | Request) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : input.url;
+    if (!(url in fixtures)) {
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    }
+    return Promise.resolve(Response.json(fixtures[url]));
+  }) as typeof fetch;
+}

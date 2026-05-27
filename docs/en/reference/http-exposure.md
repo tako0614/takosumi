@@ -39,17 +39,20 @@ components:
 `app` and the injection mode is `upstream`.
 
 Root `publish` is an optional declaration for recording the gateway output as
-an Installation output service path declaration in Deployment outputs.
+an Installation output publication in Deployment outputs.
 HTTP listeners, hosts, TLS, and route rules are handled by the gateway or
 ingress kind's `spec`.
 
 Add root `publish` only when an operator or product distribution should be able
-to project the public endpoint into a Space-visible platform service inventory:
+to project the public endpoint into a Space-visible publication inventory. Add a
+`path` when the endpoint needs a stable exact name; `kind` and `labels` are
+enough for discovery-only publications:
 
 ```yaml
 publish:
   public-endpoint:
     output: public.public
+    kind: http-endpoint
     path: acme.web.public
 ```
 
@@ -88,4 +91,4 @@ TLS certificate handles, or generated object references.
 ## Related Pages {#related-pages}
 
 - [Manifest](./manifest.md)
-- [Official Type Catalog](./type-catalog.md)
+- [Official Catalog](./catalog.md)

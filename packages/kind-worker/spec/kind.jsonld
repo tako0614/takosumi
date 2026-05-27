@@ -46,7 +46,8 @@
         "object-store",
         "event-channel",
         "identity.oidc@v1",
-        "billing.port@v1"
+        "billing.port@v1",
+        "mcp-server@v1"
       ],
       "projectionFamilies": ["env", "secret-env", "config-mount", "upstream"],
       "projectionMatrix": {
@@ -55,7 +56,8 @@
         "object-store": ["secret-env", "config-mount"],
         "event-channel": ["secret-env", "config-mount"],
         "identity.oidc@v1": ["secret-env", "config-mount"],
-        "billing.port@v1": ["secret-env", "config-mount"]
+        "billing.port@v1": ["secret-env", "config-mount"],
+        "mcp-server@v1": ["secret-env", "config-mount"]
       }
     }
   },

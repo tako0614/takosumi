@@ -1,6 +1,6 @@
 # Takosumi
 
-Takosumi is an operator-portable PaaS contract for installing source into a Space and recording each apply as a Deployment. App authors write `.takosumi.yml`; operators decide which official type catalog and implementation bindings materialize each component.
+Takosumi is an operator-portable PaaS contract for installing source into a Space and recording each apply as a Deployment. App authors write `.takosumi.yml`; operators decide which official catalog and implementation bindings materialize each component.
 
 Docs: <https://takosumi.com/docs/>
 
@@ -76,7 +76,7 @@ Takosumi kind packages are split by repository:
 
 The reference implementation wires native kind packages through `KernelPlugin` factories passed to `createPaaSApp({ kindAliases, plugins })`. Compatible implementations may bind the same kind URIs with another controller, registry, workflow engine, or SaaS adapter.
 
-See [`docs/reference/kind-packages.md`](./docs/reference/kind-packages.md), [`docs/reference/type-catalog.md`](./docs/reference/type-catalog.md), and [`CONVENTIONS.md`](./CONVENTIONS.md).
+See [`docs/reference/kind-packages.md`](./docs/reference/kind-packages.md), [`docs/reference/catalog.md`](./docs/reference/catalog.md), and [`CONVENTIONS.md`](./CONVENTIONS.md).
 
 ## CLI
 
@@ -146,6 +146,7 @@ deno task lint
 deno task lint:json-ld
 deno task spec:check-drift
 deno task publish:dry-run
+deno task publish:check-jsr-records
 ```
 
 Per-package examples:
@@ -157,7 +158,11 @@ cd packages/kernel && deno task db:migrate:dry-run
 
 ## Release
 
-Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace, runs tests, performs a JSR dry-run, publishes the Takosumi JSR packages with GitHub OIDC, and builds/pushes the `takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish` input is set.
+Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace, runs tests, performs a JSR dry-run, publishes the Takosumi JSR packages with GitHub OIDC, and builds/pushes the `takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish` input is set. `publish:check-jsr-records` checks the public JSR registry after publishing and fails until every package/version in `scripts/jsr-publish-dry-run.ts` is visible.
+
+Manual `deno task publish:jsr` requires `JSR_TOKEN`, skips target versions that
+are already visible in the registry, and leaves the normal `deno publish` clean
+tree check enabled.
 
 ## Docs Site
 

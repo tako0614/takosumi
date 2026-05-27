@@ -37,9 +37,9 @@ import type {
   SourceSummary,
 } from "./installer-api.ts";
 import {
-  isOfficialOutputTypeName,
-  validateOfficialOutputMaterial,
-} from "./type-catalog.ts";
+  isOfficialMaterialKindName,
+  validateOfficialMaterial,
+} from "./catalog.ts";
 import type { JsonObject, JsonValue } from "./types.ts";
 
 export interface KernelPlugin {
@@ -470,18 +470,19 @@ export function kernelPluginFromNativeKindOperations<Spec, Outputs>(
   const materializeOutput = async (
     ctx: OutputMaterialContext,
   ): Promise<OutputMaterial> => {
+    const materialKind = ctx.options?.kind;
     const operation = operations.materializeOutput ??
       operations.publishMaterial;
     if (operation) {
       return validatePublishedOutputMaterial(
-        undefined,
+        materialKind,
         await operation({
           ...ctx,
           outputs: ctx.outputs as Outputs,
         }),
       );
     }
-    return outputsToOutputMaterial(ctx.outputs);
+    return outputsToOutputMaterial(ctx.outputs, materialKind);
   };
   return {
     name: opts.name ?? operations.id,
@@ -533,10 +534,10 @@ function validatePublishedOutputMaterial(
   contract: string | undefined,
   material: OutputMaterial,
 ): OutputMaterial {
-  if (contract === undefined || !isOfficialOutputTypeName(contract)) {
+  if (contract === undefined || !isOfficialMaterialKindName(contract)) {
     return material;
   }
-  const issues = validateOfficialOutputMaterial(contract, material);
+  const issues = validateOfficialMaterial(contract, material);
   if (issues.length > 0) {
     throw new Error(
       `plugin produced invalid ${contract} output material: ${
@@ -552,11 +553,11 @@ export function outputsToOutputMaterial(
   contract?: string,
 ): OutputMaterial {
   const generic = rawOutputsToOutputMaterial(outputs);
-  if (contract === undefined || !isOfficialOutputTypeName(contract)) {
+  if (contract === undefined || !isOfficialMaterialKindName(contract)) {
     return generic;
   }
   const material = projectOfficialMaterial(contract, generic);
-  const issues = validateOfficialOutputMaterial(contract, material);
+  const issues = validateOfficialMaterial(contract, material);
   if (issues.length > 0) {
     throw new Error(
       `plugin outputs cannot be projected to ${contract} material: ${

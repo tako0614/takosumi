@@ -44,11 +44,13 @@ features:
 | Operating Takosumi      | [Operator Overview](./operator/index.md)            |
 | Extending Takosumi      | [Extending Takosumi](./extending.md)                |
 
-For specification details, see [Specification Boundaries](./reference/spec-boundaries.md).
+For specification details, see
+[Specification Boundaries](./reference/spec-boundaries.md).
 
 ## Core Model
 
-See [Concepts](./getting-started/concepts.md) for details on the three public concepts: Manifest, Installation, and Deployment.
+See [Concepts](./getting-started/concepts.md) for details on the three public
+concepts: Manifest, Installation, and Deployment.
 
 | Concept      | Meaning                                                                        |
 | ------------ | ------------------------------------------------------------------------------ |
@@ -62,7 +64,7 @@ See [Concepts](./getting-started/concepts.md) for details on the three public co
 | --------------------------------------------------------------- | ---------------------------------------------------------- |
 | Read the whole core contract                                    | [Core Specification](./reference/core-spec.md)             |
 | Write `.takosumi.yml`                                           | [Manifest](./reference/manifest.md)                        |
-| Look up available component types                               | [Official Type Catalog](./reference/type-catalog.md)       |
+| Look up available component kinds                               | [Official Catalog](./reference/catalog.md)                 |
 | Use services provided by the operator                           | [Platform Services](./reference/platform-services.md)      |
 | Read Takosumi Cloud account management APIs and facade behavior | [Takosumi Cloud](./reference/takosumi-cloud.md)            |
 | Check the core / catalog / Cloud boundary                       | [Specification Boundaries](./reference/spec-boundaries.md) |

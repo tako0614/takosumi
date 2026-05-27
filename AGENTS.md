@@ -1,6 +1,6 @@
 # AGENTS.md — Takosumi
 
-This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the contract package, reference kernel, installer, CLI, generic runtime-agent host, portable official type catalog packages, and the umbrella package published to JSR. Backend-specific native kind plugin packages and concrete runtime-agent connectors live in the sibling `takosumi-plugins` repository.
+This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the contract package, reference kernel, installer, CLI, generic runtime-agent host, portable official catalog packages, and the umbrella package published to JSR. Backend-specific native kind plugin packages and concrete runtime-agent connectors live in the sibling `takosumi-plugins` repository.
 
 Canonical contract: [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (`packages/contract/`).
 
@@ -11,7 +11,7 @@ Takosumi AppSpec is kind-agnostic and intentionally small:
 - AppSpec root: `apiVersion: "v1"`, `metadata.id`, `metadata.name`,
   `components`, and optional root `publish`
 - Component: `{ kind, spec, connect, listen }`
-- Root `publish` records Installation output service path declarations.
+- Root `publish` records Installation output publications.
 - `apiVersion` is bare `"v1"`.
 - Root `kind: App`, component `build`, `use:` edges, placeholder interpolation, `routes`, `interfaces`, and `permissions` are not part of the contract.
 
@@ -54,16 +54,24 @@ Specification language should stay centered on these concepts. Ownership, billin
 ## Connect / Listen / Publish
 
 Component connections use `connect` for deterministic same-AppSpec wiring and
-`listen` for Space-visible platform services.
+`listen` for Space-visible publications.
 
 - `connect: { <binding>: { output, inject, prefix?, mount? } }` consumes a
   same-AppSpec component output such as `db.connection`.
-- `listen: { <binding>: { path, inject, prefix?, mount?, required? } }`
-  consumes a platform service path such as `identity.primary.oidc`.
-- root `publish: { <name>: { output, path } }` records an Installation
-  output service path declaration for a materialized component output.
+- `listen: { <binding>: { path?, kind?, labels?, many?, inject, prefix?, mount?, required? } }`
+  consumes an exact platform service path such as `identity.primary.oidc` or
+  discovers visible publications by material `kind` and labels. `many: true`
+  binds every match as one collection material.
+- root `publish: { <name>: { output, kind?, path?, labels? } }` records an
+  Installation output publication for a materialized component output. `path`
+  is optional and only participates in conflict rules when present.
 
-OIDC is platform service output from an operator account plane, for example a distribution-defined path such as `identity.primary.oidc`. It is not a special Takosumi core component kind. Takosumi Cloud defines its concrete paths in the Cloud docs.
+OIDC is platform service output from an operator account plane, for example a
+distribution-defined path such as `identity.primary.oidc`. MCP servers and
+similar discoverable capabilities are ordinary material kinds, for example the
+official `mcp-server@v1` kind. Neither is a special Takosumi core component
+kind. Takosumi Cloud defines its concrete paths and publication inventory in
+the Cloud docs.
 
 ## Source And Build
 
@@ -144,6 +152,7 @@ deno task lint
 deno task lint:json-ld
 deno task spec:check-drift
 deno task publish:dry-run
+deno task publish:check-jsr-records
 ```
 
 Per-package work should run from the package or product root:

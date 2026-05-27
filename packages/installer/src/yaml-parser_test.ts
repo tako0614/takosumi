@@ -46,7 +46,10 @@ components:
 publish:
   api:
     output: web.http
+    kind: http-endpoint
     path: acme.notes.api
+    labels:
+      app: notes
 `);
 
   assertEquals(spec.apiVersion, "v1");
@@ -58,7 +61,9 @@ publish:
   );
   assertEquals(spec.components.public.connect?.app?.inject, "upstream");
   assertEquals(spec.publish?.api?.output, "web.http");
+  assertEquals(spec.publish?.api?.kind, "http-endpoint");
   assertEquals(spec.publish?.api?.path, "acme.notes.api");
+  assertEquals(spec.publish?.api?.labels?.app, "notes");
 });
 
 Deno.test("parseAppSpec rejects component-local publish", () => {
@@ -146,6 +151,51 @@ components:
   }
 });
 
+Deno.test("parseAppSpec accepts discovery listen by material kind", () => {
+  const spec = parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  agent:
+    kind: worker
+    listen:
+      tools:
+        kind: mcp-server@v1
+        labels:
+          capability: docs
+        many: true
+        inject: config-mount
+`);
+
+  assertEquals(spec.components.agent.listen?.tools?.kind, "mcp-server@v1");
+  assertEquals(
+    spec.components.agent.listen?.tools?.labels?.capability,
+    "docs",
+  );
+  assertEquals(spec.components.agent.listen?.tools?.many, true);
+});
+
+Deno.test("parseAppSpec accepts root publish without path for discovery", () => {
+  const spec = parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+publish:
+  tools:
+    output: web.mcp
+    kind: mcp-server@v1
+    labels:
+      capability: docs
+`);
+
+  assertEquals(spec.publish?.tools?.output, "web.mcp");
+  assertEquals(spec.publish?.tools?.kind, "mcp-server@v1");
+  assertEquals(spec.publish?.tools?.path, undefined);
+  assertEquals(spec.publish?.tools?.labels?.capability, "docs");
+});
+
 Deno.test("parseAppSpec rejects malformed platform service paths", () => {
   const cases = [
     ["uppercase segment", "identity.Primary.oidc"],
@@ -181,6 +231,46 @@ components:
       name,
     );
   }
+});
+
+Deno.test("parseAppSpec rejects listen selectors without path or kind", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    listen:
+      service:
+        inject: env
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "connection-resolution");
+  assertEquals(err.validationPath, '$.components.web.listen."service"');
+});
+
+Deno.test("parseAppSpec rejects many on exact listen path", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    listen:
+      service:
+        path: identity.primary.oidc
+        many: true
+        inject: env
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "connection-resolution");
+  assertEquals(err.validationPath, '$.components.web.listen."service".many');
 });
 
 Deno.test("parseAppSpec rejects connect cycles and self loops", () => {

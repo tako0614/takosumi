@@ -53,9 +53,9 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "公式型カタログ",
+      text: "公式カタログ",
       items: [
-        { text: "公式型カタログ仕様", link: "/reference/type-catalog" },
+        { text: "公式カタログ仕様", link: "/reference/catalog" },
         { text: "Kind Packages", link: "/reference/kind-packages" },
         { text: "Kind Binding 実装", link: "/reference/kind-bindings" },
         {
@@ -164,9 +164,9 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "Official Type Catalog",
+      text: "Official Catalog",
       items: [
-        { text: "Official Type Catalog", link: "/en/reference/type-catalog" },
+        { text: "Official Catalog", link: "/en/reference/catalog" },
         { text: "Kind Packages", link: "/en/reference/kind-packages" },
         {
           text: "Kind Binding Implementations",

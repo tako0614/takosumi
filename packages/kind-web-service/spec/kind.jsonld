@@ -99,7 +99,8 @@
         "object-store",
         "event-channel",
         "identity.oidc@v1",
-        "billing.port@v1"
+        "billing.port@v1",
+        "mcp-server@v1"
       ],
       "projectionFamilies": [
         "env",
@@ -130,6 +131,10 @@
           "config-mount"
         ],
         "billing.port@v1": [
+          "secret-env",
+          "config-mount"
+        ],
+        "mcp-server@v1": [
           "secret-env",
           "config-mount"
         ]

@@ -1,6 +1,6 @@
 # Kind Resolution モデル {#kind-resolution-model}
 
-public manifest は `components.<name>.kind` と kind-specific な open `spec` から runtime intent を表す。component kind の意味と input schema は operator が選ぶ kind の定義 / catalog metadata が表し、implementation binding と Space policy は operator の設定が定義する。Takosumi 公式型カタログの kind の定義は JSON-LD で公開される official catalog documents です。
+public manifest は `components.<name>.kind` と kind-specific な open `spec` から runtime intent を表す。component kind の意味と input schema は operator が選ぶ kind の定義 / catalog metadata が表し、implementation binding と Space policy は operator の設定が定義する。Takosumi 公式カタログの kind の定義は JSON-LD で公開される official catalog documents です。
 
 ## Public な component kind {#public-component-kind}
 

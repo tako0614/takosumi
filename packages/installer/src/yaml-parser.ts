@@ -6,9 +6,10 @@
  * syntax / schema violations.
  *
  * Components declare deterministic same-AppSpec wiring with `connect.<name>`
- * and platform-service wiring with `listen.<name>.path`. Root `publish`
- * declares a selected component output as an Installation output service path
- * exposure.
+ * and platform-service wiring with `listen.<name>`. A listener can select an
+ * exact publication path or discover visible publications by material kind and
+ * labels. Root `publish` declares a selected component output as an
+ * Installation output declaration.
  * The prior `use:` and component-local `publish:` edge models are removed;
  * encountering them is rejected with `AppSpecParseError`.
  */
@@ -58,9 +59,17 @@ const CONNECT_OPTIONS_KEYS = new Set([
   "prefix",
   "mount",
 ]);
-const ROOT_PUBLISH_OPTIONS_KEYS = new Set(["output", "path"]);
+const ROOT_PUBLISH_OPTIONS_KEYS = new Set([
+  "output",
+  "kind",
+  "path",
+  "labels",
+]);
 const LISTEN_OPTIONS_KEYS = new Set([
   "path",
+  "kind",
+  "labels",
+  "many",
   "inject",
   "prefix",
   "mount",
@@ -371,25 +380,43 @@ function validateListen(
     validateLocalName(bindingName, entryPath);
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
       throw new AppSpecParseError(
-        `${entryPath} must be an options object { path, inject, prefix?, mount?, required? }`,
+        `${entryPath} must be an options object { path?, kind?, labels?, many?, inject, prefix?, mount?, required? }`,
         "schema",
         entryPath,
       );
     }
     const opts = value as Record<string, unknown>;
     rejectUnknownKeys(opts, LISTEN_OPTIONS_KEYS, entryPath);
-    if (typeof opts.path !== "string" || opts.path.length === 0) {
+    const servicePath = opts.path === undefined
+      ? undefined
+      : validatePlatformServicePathOption(opts.path, `${entryPath}.path`);
+    const kind = opts.kind === undefined
+      ? undefined
+      : validateMaterialKind(opts.kind, `${entryPath}.kind`);
+    if (servicePath === undefined && kind === undefined) {
       throw new AppSpecParseError(
-        `${entryPath}.path must be a non-empty platform service path ` +
-          `(e.g. identity.primary.oidc)`,
+        `${entryPath} must declare either path for exact resolution or kind for discovery`,
         "connection-resolution",
-        `${entryPath}.path`,
+        entryPath,
       );
     }
-    const servicePath = validatePlatformServicePath(
-      opts.path,
-      `${entryPath}.path`,
-    );
+    const labels = opts.labels === undefined
+      ? undefined
+      : validateLabels(opts.labels, `${entryPath}.labels`);
+    if (opts.many !== undefined && typeof opts.many !== "boolean") {
+      throw new AppSpecParseError(
+        `${entryPath}.many must be a boolean when present`,
+        "connection-resolution",
+        `${entryPath}.many`,
+      );
+    }
+    if (opts.many === true && servicePath !== undefined) {
+      throw new AppSpecParseError(
+        `${entryPath}.many can only be used with kind/labels discovery, not exact path resolution`,
+        "connection-resolution",
+        `${entryPath}.many`,
+      );
+    }
     if (typeof opts.inject !== "string" || opts.inject.length === 0) {
       throw new AppSpecParseError(
         `${entryPath}.inject must be a non-empty string ` +
@@ -421,6 +448,9 @@ function validateListen(
     }
     result[bindingName] = {
       path: servicePath,
+      kind,
+      labels,
+      many: opts.many as boolean | undefined,
       inject: opts.inject,
       prefix: opts.prefix as string | undefined,
       mount: opts.mount as string | undefined,
@@ -449,7 +479,7 @@ function validateRootPublish(
     validateLocalName(publishName, entryPath);
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
       throw new AppSpecParseError(
-        `${entryPath} must be an options object { output, path }`,
+        `${entryPath} must be an options object { output, kind?, path?, labels? }`,
         "schema",
         entryPath,
       );
@@ -478,31 +508,33 @@ function validateRootPublish(
         `${entryPath}.output`,
       );
     }
-    if (typeof opts.path !== "string" || opts.path.length === 0) {
-      throw new AppSpecParseError(
-        `${entryPath}.path must be a non-empty platform service path`,
-        "connection-resolution",
-        `${entryPath}.path`,
-      );
+    const kind = opts.kind === undefined
+      ? undefined
+      : validateMaterialKind(opts.kind, `${entryPath}.kind`);
+    const servicePath = opts.path === undefined
+      ? undefined
+      : validatePlatformServicePathOption(opts.path, `${entryPath}.path`);
+    const labels = opts.labels === undefined
+      ? undefined
+      : validateLabels(opts.labels, `${entryPath}.labels`);
+    if (servicePath !== undefined) {
+      const existing = paths.get(servicePath);
+      if (existing !== undefined) {
+        throw new AppSpecParseError(
+          `${entryPath}.path duplicates $.publish.${
+            JSON.stringify(existing)
+          }.path`,
+          "connection-resolution",
+          `${entryPath}.path`,
+        );
+      }
+      paths.set(servicePath, publishName);
     }
-    const servicePath = validatePlatformServicePath(
-      opts.path,
-      `${entryPath}.path`,
-    );
-    const existing = paths.get(servicePath);
-    if (existing !== undefined) {
-      throw new AppSpecParseError(
-        `${entryPath}.path duplicates $.publish.${
-          JSON.stringify(existing)
-        }.path`,
-        "connection-resolution",
-        `${entryPath}.path`,
-      );
-    }
-    paths.set(servicePath, publishName);
     result[publishName] = {
       output,
+      kind,
       path: servicePath,
+      labels,
     };
   }
   return result;
@@ -657,6 +689,57 @@ function validatePlatformServicePath(
     "connection-resolution",
     path,
   );
+}
+
+function validatePlatformServicePathOption(
+  value: unknown,
+  path: string,
+): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new AppSpecParseError(
+      `${path} must be a non-empty platform service path`,
+      "connection-resolution",
+      path,
+    );
+  }
+  return validatePlatformServicePath(value, path);
+}
+
+function validateMaterialKind(value: unknown, path: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new AppSpecParseError(
+      `${path} must be a non-empty material kind string`,
+      "connection-resolution",
+      path,
+    );
+  }
+  return value;
+}
+
+function validateLabels(
+  value: unknown,
+  path: string,
+): Readonly<Record<string, string>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new AppSpecParseError(
+      `${path} must be a mapping of label name to string value`,
+      "connection-resolution",
+      path,
+    );
+  }
+  const labels: Record<string, string> = {};
+  for (const [key, labelValue] of Object.entries(value)) {
+    validateLocalName(key, `${path}.${JSON.stringify(key)}`);
+    if (typeof labelValue !== "string" || labelValue.length === 0) {
+      throw new AppSpecParseError(
+        `${path}.${JSON.stringify(key)} must be a non-empty string`,
+        "connection-resolution",
+        `${path}.${JSON.stringify(key)}`,
+      );
+    }
+    labels[key] = labelValue;
+  }
+  return labels;
 }
 
 function isValidLocalName(value: string): boolean {

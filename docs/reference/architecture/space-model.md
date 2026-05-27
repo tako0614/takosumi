@@ -86,11 +86,12 @@ event で有用である。
 
 ## Platform service scope {#platform-service-scope}
 
-public manifest v1 の platform service path resolution は Space
-の中で行われ、Space に可視化された platform service declaration を exact match
-で見る。以下の scope は reference implementation が内部 record
-を整理するために使える vocabulary であり、manifest author が `listen.path`
-で選ぶ public source ではありません。
+public manifest v1 の platform service resolution は Space の中で行われます。
+確定した対象は Space に可視化された platform service declaration を `listen.path`
+で exact match し、複数存在しうる対象は Space-visible publication を
+`listen.kind` と labels で選択します。以下の scope は reference implementation
+が内部 record を整理するために使える vocabulary であり、manifest author が
+`listen.path` / `listen.kind` で選ぶ public source ではありません。
 
 ```text
 public:

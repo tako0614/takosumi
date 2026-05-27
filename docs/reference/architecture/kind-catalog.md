@@ -1,4 +1,4 @@
-# 公式型カタログモデル {#external-descriptor-registry-model}
+# 公式カタログモデル {#external-descriptor-registry-model}
 
 ::: info
 内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。

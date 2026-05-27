@@ -6,7 +6,7 @@ operator は Takosumi を起動し、どの implementation binding、storage、s
 
 - AppSpec / Installation / Deployment のライフサイクル
 - source の受け渡し (`git` / `prepared` / `local`) と dry-run 時のハッシュ照合
-- 公式型カタログの採用、kind の実行環境への接続、secret store、参照 API の分担
+- 公式カタログの採用、kind の実行環境への接続、secret store、参照 API の分担
 - public ingress を扱う場合の DNS / TLS の基礎
 
 single-host reference distribution や Takosumi Cloud 構成が要求する runtime、database、object storage は、それぞれの distribution docs に置きます。

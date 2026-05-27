@@ -18,7 +18,7 @@ import type {
   KernelPlugin,
   OutputMaterial,
 } from "takosumi-contract/reference/plugin";
-import { PROJECTION_FAMILY_NAMES } from "takosumi-contract/type-catalog";
+import { PROJECTION_FAMILY_NAMES } from "takosumi-contract/catalog";
 import { BindingResolver, defaultEnvInjection } from "./mod.ts";
 
 Deno.test("defaultEnvInjection implements exactly the official projection families", () => {

@@ -50,10 +50,11 @@ export class BindingResolver {
 
   /**
    * Resolve every connect/listen input in `appSpec` against the supplied
-   * material registry. Returns one {@link ResolvedBinding} per consumer /
-   * binding
-   * pair. Entries whose source ref is missing from `materials` are silently
-   * skipped; callers decide whether a missing local source is fatal.
+   * material registry. Exact listens use `path`; discovery listens use a stable
+   * synthetic source ref derived from `kind` and labels. Returns one
+   * {@link ResolvedBinding} per consumer / binding pair. Entries whose source
+   * ref is missing from `materials` are silently skipped; callers decide
+   * whether a missing local source is fatal.
    */
   async resolveAppSpec(
     appSpec: AppSpec,
@@ -69,7 +70,7 @@ export class BindingResolver {
         ) => [bindingName, options.output, options] as const),
         ...Object.entries(component.listen ?? {}).map((
           [bindingName, options],
-        ) => [bindingName, options.path, options] as const),
+        ) => [bindingName, listenSourceRef(options), options] as const),
       ];
       for (const [bindingName, sourceRef, options] of entries) {
         const material = materials[sourceRef];
@@ -142,6 +143,16 @@ export class BindingResolver {
       material: input.material,
     };
   }
+}
+
+function listenSourceRef(options: BindingOptions): string {
+  if ("path" in options && typeof options.path === "string") {
+    return options.path;
+  }
+  if ("kind" in options && typeof options.kind === "string") {
+    return `kind:${options.kind}`;
+  }
+  return "kind:unknown";
 }
 
 /**

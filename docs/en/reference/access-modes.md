@@ -1,13 +1,14 @@
 # Access Modes {#access-modes}
 
-Access modes are Official Type Catalog vocabulary. They describe the strength of
+Access modes are Official Catalog vocabulary. They describe the strength of
 access selected when component output or a platform service entry is delivered
 to a consuming component.
 
-Manifest authors choose a source with `connect.output` or `listen.path` and a
-delivery mode with `inject`. The resolved access mode comes from operator
-policy, the output slot or platform service entry's `safeDefaultAccess`, and the
-selected component kind's slot policy. It is recorded in the Deployment record.
+Manifest authors choose a source with `connect.output`, `listen.path`, or
+`listen.kind`, and a delivery mode with `inject`. The resolved access mode comes
+from operator policy, the output slot or platform service entry/publication's
+`safeDefaultAccess`, and the selected component kind's slot policy. It is
+recorded in the Deployment record.
 
 ```text
 read | read-write | admin | invoke-only | observe-only
@@ -130,6 +131,6 @@ account management. The access mode spec defines the compatibility meaning that
 
 ## Related Pages {#related-pages}
 
-- [Official Type Catalog](./type-catalog.md)
+- [Official Catalog](./catalog.md)
 - [Platform Services](./platform-services.md)
 - [Manifest](./manifest.md)

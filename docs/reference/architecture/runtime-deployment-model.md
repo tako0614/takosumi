@@ -230,7 +230,7 @@ imported:
 
 **13. Space containment invariant** --- すべての Deployment、ResolvedPlan、TargetState、OperationJournal、 ObservationState、CleanupBacklog、TrafficSnapshot、approval、RoutingPointer は厳密に 1 つの Space に属する。deployment は自身の Space の外で resolve、 materialize、activate、observe、destroy してはならない。current v1 には Space 越えの service input はなく、将来 RFC が定義する明示的な sharing model なしに例外は許されない。
 
-**14. Platform service isolation invariant** --- platform service path は Space scope である。外部 source は、Space に可視化された platform service declaration の exact match でのみ解決できる。2 つの Space の同じ path は current v1 では同一 material として扱わない。
+**14. Platform service isolation invariant** --- platform service path と publication discovery は Space scope である。外部 source は、Space に可視化された platform service declaration の exact match、または Space-visible publication の `kind` / labels selection でのみ解決できる。2 つの Space の同じ path や同じ material kind は current v1 では同一 material として扱わない。
 
 **15. Space data-boundary invariant** --- secret、operator asset extension record、operation journal、observation、 approval、audit event は Space scope である。Space を跨ぐ共有には明示的な operator policy が必要で、ResolvedPlan に記録する。
 

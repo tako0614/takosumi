@@ -21,17 +21,17 @@ import { walk } from "jsr:@std/fs@^1.0.5/walk";
 import { fromFileUrl } from "jsr:@std/path@^1.0.6";
 import {
   ACCESS_MODES as OFFICIAL_ACCESS_MODES,
-  allowedProjectionFamiliesForOutputType,
+  allowedProjectionFamiliesForMaterialKind,
   isOutputFieldTypeName,
-  OFFICIAL_OUTPUT_TYPE_NAMES,
-  type OfficialOutputTypeName,
+  OFFICIAL_MATERIAL_KIND_NAMES,
+  type OfficialMaterialKindName,
   type OutputFieldTypeDefinition,
   PROJECTION_FAMILY_NAMES,
   type ProjectionFamilyName,
   SAFE_DEFAULT_ACCESS_MODES as OFFICIAL_SAFE_DEFAULT_ACCESS_MODES,
-  validateOfficialOutputMaterialMapping,
-  validateOfficialOutputMaterialMappingOutputTypes,
-} from "takosumi-contract/type-catalog";
+  validateOfficialMaterialMapping,
+  validateOfficialMaterialMappingOutputFields,
+} from "takosumi-contract/catalog";
 
 export interface LintIssue {
   readonly path: string;
@@ -57,7 +57,7 @@ const ROOTS = [
 
 const KIND_ID_PREFIX = "https://takosumi.com/kinds/v1/";
 const KIND_TYPES = new Set(["ComponentKind"]);
-const OUTPUT_CONTRACTS = new Set<string>(OFFICIAL_OUTPUT_TYPE_NAMES);
+const OUTPUT_CONTRACTS = new Set<string>(OFFICIAL_MATERIAL_KIND_NAMES);
 const PROJECTION_FAMILIES = new Set<string>(PROJECTION_FAMILY_NAMES);
 const ACCESS_MODES = new Set<string>(OFFICIAL_ACCESS_MODES);
 const SCHEMA_TYPES = new Set([
@@ -283,7 +283,8 @@ function checkOutputSlots(
     } else if (!OUTPUT_CONTRACTS.has(e["contract"])) {
       issues.push({
         path,
-        message: `outputSlots[${key}].contract must be an official output type`,
+        message:
+          `outputSlots[${key}].contract must be an official material kind`,
       });
     }
     if ("from" in e) {
@@ -313,8 +314,8 @@ function checkOutputSlots(
       OUTPUT_CONTRACTS.has(e["contract"])
     ) {
       for (
-        const issue of validateOfficialOutputMaterialMapping(
-          e["contract"] as OfficialOutputTypeName,
+        const issue of validateOfficialMaterialMapping(
+          e["contract"] as OfficialMaterialKindName,
           mapping,
         )
       ) {
@@ -329,8 +330,8 @@ function checkOutputSlots(
       }
       if (outputDefinitions) {
         for (
-          const issue of validateOfficialOutputMaterialMappingOutputTypes(
-            e["contract"] as OfficialOutputTypeName,
+          const issue of validateOfficialMaterialMappingOutputFields(
+            e["contract"] as OfficialMaterialKindName,
             mapping,
             outputDefinitions,
           )
@@ -931,7 +932,7 @@ function checkOutputContractArray(
     if (typeof entry !== "string" || !OUTPUT_CONTRACTS.has(entry)) {
       issues.push({
         path,
-        message: `${fieldName}[${index}] must be an official output type`,
+        message: `${fieldName}[${index}] must be an official material kind`,
       });
     }
   }
@@ -980,8 +981,8 @@ function checkListenProjectionCompatibility(
     issues,
   );
   for (const contract of accepts) {
-    const allowed = allowedProjectionFamiliesForOutputType(
-      contract as OfficialOutputTypeName,
+    const allowed = allowedProjectionFamiliesForMaterialKind(
+      contract as OfficialMaterialKindName,
     );
     const advertised = matrix?.[contract] ?? projections;
     if (
@@ -1022,7 +1023,7 @@ function checkProjectionMatrix(
       issues.push({
         path,
         message:
-          `${fieldName}.projectionMatrix.${contract} must name an accepted output type`,
+          `${fieldName}.projectionMatrix.${contract} must name an accepted material kind`,
       });
       continue;
     }
@@ -1044,8 +1045,8 @@ function checkProjectionMatrix(
         });
       }
       if (
-        !allowedProjectionFamiliesForOutputType(
-          contract as OfficialOutputTypeName,
+        !allowedProjectionFamiliesForMaterialKind(
+          contract as OfficialMaterialKindName,
         ).includes(projection as ProjectionFamilyName)
       ) {
         issues.push({

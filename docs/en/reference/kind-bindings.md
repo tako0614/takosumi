@@ -4,7 +4,7 @@
 The public contract is [Installer API](./installer-api.md) plus [Manifest](./manifest.md). This page explains how the reference kernel materializes a selected kind.
 :::
 
-Takosumi components contain `kind`, `spec`, `connect`, and `listen`. The operator resolves `kind` through `kindAliases` or an absolute URI, then chooses the implementation binding that can materialize that resolved kind URI. Same-manifest dependencies resolve through `connect.<binding>.output`; platform services and external services resolve through `listen.<binding>.path`.
+Takosumi components contain `kind`, `spec`, `connect`, and `listen`. The operator resolves `kind` through `kindAliases` or an absolute URI, then chooses the implementation binding that can materialize that resolved kind URI. Same-manifest dependencies resolve through `connect.<binding>.output`; platform services and external publications resolve through exact `listen.<binding>.path` or discovery with `listen.<binding>.kind` and labels.
 
 In the reference kernel, that binding is a `KernelPlugin` passed to `createPaaSApp({ kindAliases, plugins })`. The `plugins` array is the reference implementation's adapter-loading mechanism. A compatible implementation may bind the same kind URI with a native controller, static registry, workflow engine, or SaaS adapter.
 
@@ -69,7 +69,7 @@ Each factory returns a `KernelPlugin`. The plugin advertises supported kind URIs
 
 1. Resolve `Component.kind` through `kindAliases`; absolute URIs are already resolved.
 2. Load descriptor metadata if the operator uses descriptor validation.
-3. Validate kind-owned `spec`, output slots, and `connect` output ref / `listen.path` compatibility before side effects.
+3. Validate kind-owned `spec`, output slots, and `connect` output ref / `listen.path` / `listen.kind` compatibility before side effects.
 4. Pick exactly one implementation binding for the resolved kind URI.
 5. Run the selected binding and record non-secret outputs in Deployment evidence.
 
@@ -79,7 +79,7 @@ Capability names are open strings for operator tooling and dashboards. Concrete 
 
 - `packages/contract/src/plugin.ts` — `KernelPlugin` and materializer interface.
 - `takosumi/packages/kind-*/spec/kind.jsonld` — portable package-owned kind descriptors.
-- `takosumi-plugins/packages/kind-*/spec/kind.jsonld` — native package-owned kind descriptors; JSON-LD is catalog/type metadata, not a runtime plugin requirement.
+- `takosumi-plugins/packages/kind-*/spec/kind.jsonld` — native package-owned kind descriptors; JSON-LD is catalog metadata, not a runtime plugin requirement.
 - `takosumi-plugins/packages/kind-*/mod.ts` — native descriptor constants and reference adapter factories.
 - `takosumi/packages/runtime-agent/src/connectors/` — generic connector interface, registry, and resilience wrapper.
 - `takosumi-plugins/packages/runtime-agent-connectors/` — concrete connector implementations used by operator distributions.
@@ -88,4 +88,4 @@ Capability names are open strings for operator tooling and dashboards. Concrete 
 
 - [Kind Packages](./kind-packages.md)
 - [Reference Adapter Loading](./plugin-loading.md)
-- [Official Type Catalog](./type-catalog.md)
+- [Official Catalog](./catalog.md)

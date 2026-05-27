@@ -30,7 +30,7 @@ gateway が作った public endpoint は Deployment output / launch / account la
 
 通常の component-to-component routing は public ingress ではなく resolved 出力データ / backend-native private routing を使います。
 
-HTTP output の material contract は callable HTTP 出力データを表します。upstream か public endpoint かは component role と selected materialization evidence で決まります。
+HTTP output の material kind は callable HTTP 出力データを表します。upstream か public endpoint かは component role と selected materialization evidence で決まります。
 
 manifest core に別 field は増やしません。gateway kind の定義 / operator policy が upstream binding と public endpoint output を区別します。
 
@@ -68,6 +68,7 @@ components:
 publish:
   public-endpoint:
     output: public.public
+    kind: http-endpoint
     path: acme.edge.public
 ```
 

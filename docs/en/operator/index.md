@@ -20,7 +20,7 @@ The operator controls:
 
 - account and Space ownership
 - identity, billing, dashboard, and deploy facade behavior
-- visible kind definitions and output types
+- visible kind definitions and material kinds
 - provider/runtime configuration
 - read APIs, history, and support views around the write lifecycle
 

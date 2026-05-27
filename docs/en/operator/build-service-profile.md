@@ -27,7 +27,7 @@ nodes:
 | `metadata`   | yes      | Metadata for this build-service input.       |
 | `nodes`      | yes      | Build graph nodes understood by the profile. |
 
-Build node fields are `kind`, `spec`, and `dependsOn`. This `kind` is local to the build-service profile. It is not an AppSpec component kind and not an official Takosumi type catalog entry.
+Build node fields are `kind`, `spec`, and `dependsOn`. This `kind` is local to the build-service profile. It is not an AppSpec component kind and not an official Takosumi catalog entry.
 
 ## Linux Container Node {#linux-container-node}
 

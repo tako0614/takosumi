@@ -1,25 +1,27 @@
 import assert from "node:assert/strict";
 import {
-  allowedProjectionFamiliesForOutputType,
+  allowedProjectionFamiliesForMaterialKind,
   type BillingPortMaterial,
   type HttpEndpointMaterial,
   isAccessMode,
-  isOfficialOutputTypeName,
+  isOfficialMaterialKindName,
   isOfficialSensitivityClass,
   isOutputFieldTypeName,
-  isProjectionAllowedForOutputType,
+  isProjectionAllowedForMaterialKind,
   isProjectionFamilyName,
   isSafeDefaultAccessMode,
+  type McpServerMaterial,
   type ObjectStoreMaterial,
-  type OfficialOutputMaterialByType,
-  validateOfficialOutputMaterial,
-  validateOfficialOutputMaterialMapping,
-  validateOfficialOutputMaterialMappingOutputTypes,
-} from "./type-catalog.ts";
+  type OfficialMaterialByKind,
+  validateOfficialMaterial,
+  validateOfficialMaterialMapping,
+  validateOfficialMaterialMappingOutputFields,
+} from "./catalog.ts";
 
-Deno.test("type catalog guards pin official names", () => {
-  assert.equal(isOfficialOutputTypeName("http-endpoint"), true);
-  assert.equal(isOfficialOutputTypeName("sql-connection"), false);
+Deno.test("catalog guards pin official names", () => {
+  assert.equal(isOfficialMaterialKindName("http-endpoint"), true);
+  assert.equal(isOfficialMaterialKindName("mcp-server@v1"), true);
+  assert.equal(isOfficialMaterialKindName("sql-connection"), false);
   assert.equal(isOutputFieldTypeName("string[]"), true);
   assert.equal(isOutputFieldTypeName("object"), false);
   assert.equal(isProjectionFamilyName("secret-env"), true);
@@ -33,26 +35,34 @@ Deno.test("type catalog guards pin official names", () => {
   assert.equal(isSafeDefaultAccessMode("read-write"), false);
 });
 
-Deno.test("type catalog projection matrix matches official output types", () => {
+Deno.test("catalog projection matrix matches official material kinds", () => {
   assert.deepEqual(
-    [...allowedProjectionFamiliesForOutputType("http-endpoint")],
+    [...allowedProjectionFamiliesForMaterialKind("http-endpoint")],
     ["upstream", "env", "config-mount"],
   );
   assert.equal(
-    isProjectionAllowedForOutputType("http-endpoint", "upstream"),
+    isProjectionAllowedForMaterialKind("http-endpoint", "upstream"),
     true,
   );
   assert.equal(
-    isProjectionAllowedForOutputType("service-binding", "env"),
+    isProjectionAllowedForMaterialKind("service-binding", "env"),
     false,
   );
   assert.equal(
-    isProjectionAllowedForOutputType("service-binding", "secret-env"),
+    isProjectionAllowedForMaterialKind("service-binding", "secret-env"),
     true,
+  );
+  assert.equal(
+    isProjectionAllowedForMaterialKind("mcp-server@v1", "config-mount"),
+    true,
+  );
+  assert.equal(
+    isProjectionAllowedForMaterialKind("mcp-server@v1", "env"),
+    false,
   );
 });
 
-Deno.test("type catalog accepts valid official material samples", () => {
+Deno.test("catalog accepts valid official material samples", () => {
   const http: HttpEndpointMaterial = {
     targets: [{
       name: "default",
@@ -69,9 +79,9 @@ Deno.test("type catalog accepts valid official material samples", () => {
       routes: [{ pathPrefix: "/", to: "app" }],
     }],
   };
-  assert.deepEqual(validateOfficialOutputMaterial("http-endpoint", http), []);
+  assert.deepEqual(validateOfficialMaterial("http-endpoint", http), []);
 
-  const service: OfficialOutputMaterialByType["service-binding"] = {
+  const service: OfficialMaterialByKind["service-binding"] = {
     service: "postgres",
     protocol: "postgresql",
     host: "db.internal",
@@ -81,11 +91,11 @@ Deno.test("type catalog accepts valid official material samples", () => {
     passwordRef: { secretRef: "secret://postgres/password" },
   };
   assert.deepEqual(
-    validateOfficialOutputMaterial("service-binding", service),
+    validateOfficialMaterial("service-binding", service),
     [],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("service-binding", {
+    validateOfficialMaterial("service-binding", {
       service: "kv-sessions",
       protocol: "kv",
       tokenRef: { secretRef: "secret://kv/token" },
@@ -93,7 +103,7 @@ Deno.test("type catalog accepts valid official material samples", () => {
     [],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("service-binding", {
+    validateOfficialMaterial("service-binding", {
       protocol: "sqlite",
       connectionUrl: "libsql://sqlite.example.test/app",
       tokenRef: { secretRef: "secret://sqlite/token" },
@@ -107,19 +117,19 @@ Deno.test("type catalog accepts valid official material samples", () => {
     accessKeyIdRef: { secretRef: "secret://bucket/access-key-id" },
     secretAccessKeyRef: { secretRef: "secret://bucket/secret-access-key" },
   };
-  assert.deepEqual(validateOfficialOutputMaterial("object-store", bucket), []);
+  assert.deepEqual(validateOfficialMaterial("object-store", bucket), []);
 
   const billing: BillingPortMaterial = {
     portalUrl: "https://billing.example.test/session/123",
     billingSubjectRef: "acct_123",
   };
   assert.deepEqual(
-    validateOfficialOutputMaterial("billing.port@v1", billing),
+    validateOfficialMaterial("billing.port@v1", billing),
     [],
   );
 
   assert.deepEqual(
-    validateOfficialOutputMaterial("event-channel", {
+    validateOfficialMaterial("event-channel", {
       channel: "orders",
       protocol: "cloud-events",
       endpoint: "https://events.example.test/orders",
@@ -129,22 +139,31 @@ Deno.test("type catalog accepts valid official material samples", () => {
   );
 
   assert.deepEqual(
-    validateOfficialOutputMaterial("identity.oidc@v1", {
+    validateOfficialMaterial("identity.oidc@v1", {
       issuerUrl: "https://accounts.example.test",
       clientId: "app",
       clientSecretRef: { secretRef: "secret://oidc/client-secret" },
     }),
     [],
   );
+
+  const mcp: McpServerMaterial = {
+    endpointUrl: "https://tools.example.test/mcp",
+    transport: "streamable-http",
+    protocolVersion: "2025-06-18",
+    serverName: "docs",
+    tokenRef: { secretRef: "secret://mcp/docs-token" },
+  };
+  assert.deepEqual(validateOfficialMaterial("mcp-server@v1", mcp), []);
 });
 
-Deno.test("type catalog rejects ambiguous official material", () => {
-  assert.deepEqual(validateOfficialOutputMaterial("http-endpoint", {}), [{
+Deno.test("catalog rejects ambiguous official material", () => {
+  assert.deepEqual(validateOfficialMaterial("http-endpoint", {}), [{
     path: "$",
     message: "http-endpoint requires at least one target or endpoint",
   }]);
   assert.deepEqual(
-    validateOfficialOutputMaterial("service-binding", {
+    validateOfficialMaterial("service-binding", {
       protocol: "postgresql",
       host: "db.internal",
       port: "5432",
@@ -152,7 +171,7 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     [{ path: "$.port", message: "must be a finite number" }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("identity.oidc@v1", {
+    validateOfficialMaterial("identity.oidc@v1", {
       issuerUrl: "https://accounts.example.test",
       clientId: "app",
       clientSecretRef: "secret://oidc/client-secret",
@@ -163,7 +182,7 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("service-binding", {
+    validateOfficialMaterial("service-binding", {
       protocol: "postgresql",
       host: "db.internal",
       port: 5432,
@@ -175,7 +194,7 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     [{ path: "$.passwordRef.name", message: "unknown field" }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("service-binding", {
+    validateOfficialMaterial("service-binding", {
       protocol: "kv",
     }),
     [{
@@ -185,7 +204,7 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("service-binding", {
+    validateOfficialMaterial("service-binding", {
       protocol: "postgresql",
       host: "db.internal",
     }),
@@ -195,7 +214,7 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("object-store", {
+    validateOfficialMaterial("object-store", {
       bucket: "assets",
       endpoint: "https://s3.example.test",
       accessKeyIdRef: { secretRef: "secret://bucket/access-key" },
@@ -207,7 +226,7 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("object-store", {
+    validateOfficialMaterial("object-store", {
       bucket: "assets",
       endpoint: "https://s3.example.test",
       sessionTokenRef: { secretRef: "secret://bucket/session-token" },
@@ -221,7 +240,7 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("object-store", {
+    validateOfficialMaterial("object-store", {
       bucket: "assets",
       endpoint: "https://s3.example.test",
       accessKeyRef: { secretRef: "secret://bucket/access-key" },
@@ -229,7 +248,7 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     [{ path: "$.accessKeyRef", message: "unknown field" }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("service-binding", {
+    validateOfficialMaterial("service-binding", {
       protocol: "postgresql",
       host: "db.internal",
       port: 5432,
@@ -248,7 +267,7 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("service-binding", {
+    validateOfficialMaterial("service-binding", {
       protocol: "postgresql",
       host: "db.internal",
       port: 5432,
@@ -261,9 +280,9 @@ Deno.test("type catalog rejects ambiguous official material", () => {
   );
 });
 
-Deno.test("type catalog rejects invalid official material URL values", () => {
+Deno.test("catalog rejects invalid official material URL values", () => {
   assert.deepEqual(
-    validateOfficialOutputMaterial("object-store", {
+    validateOfficialMaterial("object-store", {
       bucket: "assets",
       endpoint: "assets",
       publicBaseUrl: "ftp://assets.example.test",
@@ -274,7 +293,7 @@ Deno.test("type catalog rejects invalid official material URL values", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("identity.oidc@v1", {
+    validateOfficialMaterial("identity.oidc@v1", {
       issuerUrl: "accounts.example.test",
       discoveryUrl: "ftp://accounts.example.test/.well-known/openid",
       clientId: "app",
@@ -290,41 +309,61 @@ Deno.test("type catalog rejects invalid official material URL values", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("billing.port@v1", {
+    validateOfficialMaterial("billing.port@v1", {
       billingSubjectRef: "acct_123",
       portalUrl: "ftp://billing.example.test/session/123",
     }),
     [{ path: "$.portalUrl", message: "must use http or https" }],
   );
+  assert.deepEqual(
+    validateOfficialMaterial("mcp-server@v1", {
+      endpointUrl: "mcp://tools.example.test",
+      transport: "sse",
+    }),
+    [
+      { path: "$.endpointUrl", message: "must use http or https" },
+      { path: "$.transport", message: 'must be "streamable-http"' },
+    ],
+  );
 });
 
-Deno.test("type catalog rejects embedded credentials in public URL fields", () => {
+Deno.test("catalog rejects embedded credentials in public URL fields", () => {
   assert.deepEqual(
-    validateOfficialOutputMaterial("object-store", {
+    validateOfficialMaterial("object-store", {
       bucket: "assets",
       endpoint: "https://user:pass@s3.example.test",
     }),
     [{ path: "$.endpoint", message: "must not contain embedded credentials" }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("identity.oidc@v1", {
+    validateOfficialMaterial("identity.oidc@v1", {
       issuerUrl: "https://user:pass@accounts.example.test",
       clientId: "app",
     }),
     [{ path: "$.issuerUrl", message: "must not contain embedded credentials" }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("billing.port@v1", {
+    validateOfficialMaterial("billing.port@v1", {
       billingSubjectRef: "acct_123",
       portalUrl: "https://user:pass@billing.example.test/session/123",
     }),
     [{ path: "$.portalUrl", message: "must not contain embedded credentials" }],
   );
+  assert.deepEqual(
+    validateOfficialMaterial("mcp-server@v1", {
+      endpointUrl: "https://user:pass@tools.example.test/mcp",
+      transport: "streamable-http",
+    }),
+    [{
+      path: "$.endpointUrl",
+      message: "must not contain embedded credentials",
+    }],
+  );
 });
 
-Deno.test("type catalog rejects incoherent http endpoint material", () => {
+Deno.test("catalog rejects incoherent http endpoint material", () => {
   assert.deepEqual(
-    validateOfficialOutputMaterial("http-endpoint", {
+    validateOfficialMaterial("http-endpoint", {
       endpoints: [{
         url: "https://app.example.test",
         scheme: "http",
@@ -344,16 +383,16 @@ Deno.test("type catalog rejects incoherent http endpoint material", () => {
   );
 });
 
-Deno.test("type catalog rejects embedded credentials in literal material mappings", () => {
+Deno.test("catalog rejects embedded credentials in literal material mappings", () => {
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("object-store", {
+    validateOfficialMaterialMapping("object-store", {
       bucket: "$outputs.bucket",
       endpoint: "https://user:pass@s3.example.test",
     }),
     [{ path: "$.endpoint", message: "must not contain embedded credentials" }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("http-endpoint", {
+    validateOfficialMaterialMapping("http-endpoint", {
       endpoints: [{
         url: "https://app.example.test",
         scheme: "http",
@@ -373,9 +412,9 @@ Deno.test("type catalog rejects embedded credentials in literal material mapping
   );
 });
 
-Deno.test("type catalog rejects invalid http endpoint material values", () => {
+Deno.test("catalog rejects invalid http endpoint material values", () => {
   assert.deepEqual(
-    validateOfficialOutputMaterial("http-endpoint", {
+    validateOfficialMaterial("http-endpoint", {
       targets: [{
         url: "ftp://web.internal",
         port: 70000,
@@ -423,7 +462,7 @@ Deno.test("type catalog rejects invalid http endpoint material values", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("http-endpoint", {
+    validateOfficialMaterial("http-endpoint", {
       targets: [{
         url: "https://web.internal",
         basePath: "/api",
@@ -435,7 +474,7 @@ Deno.test("type catalog rejects invalid http endpoint material values", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterial("event-channel", {
+    validateOfficialMaterial("event-channel", {
       channel: "orders",
       protocol: "cloud-events",
       endpoint: "events/orders",
@@ -444,9 +483,9 @@ Deno.test("type catalog rejects invalid http endpoint material values", () => {
   );
 });
 
-Deno.test("type catalog accepts valid official material mapping samples", () => {
+Deno.test("catalog accepts valid official material mapping samples", () => {
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("http-endpoint", {
+    validateOfficialMaterialMapping("http-endpoint", {
       targets: [{
         name: "default",
         url: "$outputs.url",
@@ -464,7 +503,7 @@ Deno.test("type catalog accepts valid official material mapping samples", () => 
     [],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("service-binding", {
+    validateOfficialMaterialMapping("service-binding", {
       service: "$outputs.host",
       protocol: "postgresql",
       host: "$outputs.host",
@@ -478,7 +517,7 @@ Deno.test("type catalog accepts valid official material mapping samples", () => 
     [],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("service-binding", {
+    validateOfficialMaterialMapping("service-binding", {
       service: "$outputs.storeId",
       protocol: "kv",
       tokenRef: { secretRef: "$outputs.tokenSecretRef" },
@@ -486,7 +525,7 @@ Deno.test("type catalog accepts valid official material mapping samples", () => 
     [],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("object-store", {
+    validateOfficialMaterialMapping("object-store", {
       bucket: "$outputs.bucket",
       endpoint: "$outputs.endpoint",
       accessKeyIdRef: { secretRef: "$outputs.accessKeyIdRef" },
@@ -495,7 +534,7 @@ Deno.test("type catalog accepts valid official material mapping samples", () => 
     [],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("event-channel", {
+    validateOfficialMaterialMapping("event-channel", {
       channel: "$outputs.channel",
       protocol: "cloud-events",
       endpoint: "$outputs.endpoint",
@@ -505,18 +544,28 @@ Deno.test("type catalog accepts valid official material mapping samples", () => 
     [],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("identity.oidc@v1", {
+    validateOfficialMaterialMapping("identity.oidc@v1", {
       issuerUrl: "$outputs.issuerUrl",
       clientId: "$outputs.clientId",
       clientSecretRef: { secretRef: "$outputs.clientSecretRef" },
     }),
     [],
   );
+  assert.deepEqual(
+    validateOfficialMaterialMapping("mcp-server@v1", {
+      endpointUrl: "$outputs.endpointUrl",
+      transport: "streamable-http",
+      protocolVersion: "$outputs.protocolVersion",
+      serverName: "docs",
+      tokenRef: { secretRef: "$outputs.tokenSecretRef" },
+    }),
+    [],
+  );
 });
 
-Deno.test("type catalog checks output marker types in material mappings", () => {
+Deno.test("catalog checks output marker types in material mappings", () => {
   assert.deepEqual(
-    validateOfficialOutputMaterialMappingOutputTypes(
+    validateOfficialMaterialMappingOutputFields(
       "http-endpoint",
       {
         targets: [{
@@ -545,7 +594,7 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
   );
 
   assert.deepEqual(
-    validateOfficialOutputMaterialMappingOutputTypes(
+    validateOfficialMaterialMappingOutputFields(
       "http-endpoint",
       {
         targets: [{
@@ -566,7 +615,7 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
   );
 
   assert.deepEqual(
-    validateOfficialOutputMaterialMappingOutputTypes(
+    validateOfficialMaterialMappingOutputFields(
       "service-binding",
       {
         protocol: "postgresql",
@@ -602,7 +651,7 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
   );
 
   assert.deepEqual(
-    validateOfficialOutputMaterialMappingOutputTypes(
+    validateOfficialMaterialMappingOutputFields(
       "object-store",
       {
         bucket: "$outputs.bucket",
@@ -631,7 +680,7 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
   );
 
   assert.deepEqual(
-    validateOfficialOutputMaterialMappingOutputTypes(
+    validateOfficialMaterialMappingOutputFields(
       "billing.port@v1",
       {
         billingSubjectRef: "$outputs.subject",
@@ -650,7 +699,7 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
   );
 
   assert.deepEqual(
-    validateOfficialOutputMaterialMappingOutputTypes(
+    validateOfficialMaterialMappingOutputFields(
       "billing.port@v1",
       {
         billingSubjectRef: "$outputs.subject",
@@ -665,11 +714,28 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
     ),
     [],
   );
+
+  assert.deepEqual(
+    validateOfficialMaterialMappingOutputFields(
+      "mcp-server@v1",
+      {
+        endpointUrl: "$outputs.endpointUrl",
+        transport: "$outputs.transport",
+        tokenRef: { secretRef: "$outputs.tokenSecretRef" },
+      },
+      [
+        { name: "endpointUrl", type: "string", required: true },
+        { name: "transport", type: "string", required: true },
+        { name: "tokenSecretRef", type: "string", required: true },
+      ],
+    ),
+    [],
+  );
 });
 
-Deno.test("type catalog rejects drifted material mapping shapes", () => {
+Deno.test("catalog rejects drifted material mapping shapes", () => {
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("http-endpoint", {
+    validateOfficialMaterialMapping("http-endpoint", {
       urls: ["$outputs.url"],
     }),
     [
@@ -681,7 +747,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("service-binding", {
+    validateOfficialMaterialMapping("service-binding", {
       protocol: "postgresql",
       host: "$outputs.host",
       port: "$outputs.",
@@ -692,7 +758,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("service-binding", {
+    validateOfficialMaterialMapping("service-binding", {
       protocol: "kv",
     }),
     [{
@@ -702,7 +768,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMappingOutputTypes(
+    validateOfficialMaterialMappingOutputFields(
       "service-binding",
       {
         service: "$outputs.service",
@@ -719,7 +785,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("service-binding", {
+    validateOfficialMaterialMapping("service-binding", {
       protocol: "postgresql",
       host: "$outputs.host",
       port: 5432,
@@ -738,7 +804,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("object-store", {
+    validateOfficialMaterialMapping("object-store", {
       bucket: "$outputs.bucket",
       endpoint: "$outputs.endpoint",
       accessKeyRef: { secretRef: "$outputs.secret" },
@@ -746,7 +812,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     [{ path: "$.accessKeyRef", message: "unknown field" }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("object-store", {
+    validateOfficialMaterialMapping("object-store", {
       bucket: "$outputs.bucket",
       endpoint: "$outputs.endpoint",
       secretAccessKeyRef: { secretRef: "$outputs.secret" },
@@ -758,7 +824,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("service-binding", {
+    validateOfficialMaterialMapping("service-binding", {
       protocol: "postgresql",
       host: "$outputs.host",
       port: 5432,
@@ -770,7 +836,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("service-binding", {
+    validateOfficialMaterialMapping("service-binding", {
       protocol: "postgresql",
       host: "$outputs.host",
       port: "5432",
@@ -781,7 +847,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("service-binding", {
+    validateOfficialMaterialMapping("service-binding", {
       protocol: "postgresql",
       host: "$outputs.host",
       port: 70000,
@@ -799,7 +865,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("object-store", {
+    validateOfficialMaterialMapping("object-store", {
       bucket: "assets",
       endpoint: "assets",
       publicBaseUrl: "ftp://assets.example.test",
@@ -810,7 +876,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("identity.oidc@v1", {
+    validateOfficialMaterialMapping("identity.oidc@v1", {
       issuerUrl: "accounts.example.test",
       discoveryUrl: "ftp://accounts.example.test/.well-known/openid",
       clientId: "app",
@@ -826,14 +892,29 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("billing.port@v1", {
+    validateOfficialMaterialMapping("billing.port@v1", {
       billingSubjectRef: "acct_123",
       portalUrl: "ftp://billing.example.test/session/123",
     }),
     [{ path: "$.portalUrl", message: "must use http or https" }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("http-endpoint", {
+    validateOfficialMaterialMapping("mcp-server@v1", {
+      endpointUrl: "tools.example.test/mcp",
+      transport: "sse",
+      tokenRef: { secretRef: 42 },
+    }),
+    [
+      { path: "$.endpointUrl", message: "must be an absolute http(s) URL" },
+      { path: "$.transport", message: 'must be "streamable-http"' },
+      {
+        path: "$.tokenRef.secretRef",
+        message: "must be a string value or $outputs.<field> marker",
+      },
+    ],
+  );
+  assert.deepEqual(
+    validateOfficialMaterialMapping("http-endpoint", {
       targets: [{
         host: "$outputs.host",
       }],
@@ -875,7 +956,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     ],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("http-endpoint", {
+    validateOfficialMaterialMapping("http-endpoint", {
       targets: [{
         url: "$outputs.url",
         basePath: "/api",
@@ -887,7 +968,7 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     }],
   );
   assert.deepEqual(
-    validateOfficialOutputMaterialMapping("event-channel", {
+    validateOfficialMaterialMapping("event-channel", {
       channel: "$outputs.channel",
       protocol: "cloud-events",
       endpoint: "events/orders",

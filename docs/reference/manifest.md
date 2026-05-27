@@ -23,23 +23,30 @@ components:
 publish:
   api:
     output: web.http
+    kind: http-endpoint
     path: acme.notes.api
 ```
 
 `components` は同じ manifest 内の component graph です。component は `kind`
 で種類を選び、`spec` に kind ごとの入力を書きます。component
 同士の確定的な接続は `connect`、manifest 外の platform service は
-`listen`、Installation output として記録する service path declaration は root
+`listen`、Installation output として記録する publication declaration は root
 `publish` で表します。
+
+AppSpec の selector は `kind` に揃えます。component の `kind`
+は「何を作るか」、`publish.kind` / `listen.kind` は「どの kind
+の出力データを offer / consume するか」です。manifest field としての `type`
+は使いません。`type` という語は JSON Schema、JSON-LD `@type`、TypeScript
+の型名の文脈だけで使います。
 
 ## ルート項目
 
-| Field        | Required | 説明                                                                              |
-| ------------ | -------- | --------------------------------------------------------------------------------- |
-| `apiVersion` | yes      | current manifest version。値は `"v1"`。                                           |
-| `metadata`   | yes      | manifest 自体の id / name と optional metadata。                                  |
-| `components` | yes      | component 定義の map。                                                            |
-| `publish`    | no       | component output を Installation output service path declaration として記録する。 |
+| Field        | Required | 説明                                                                 |
+| ------------ | -------- | -------------------------------------------------------------------- |
+| `apiVersion` | yes      | current manifest version。値は `"v1"`。                              |
+| `metadata`   | yes      | manifest 自体の id / name と optional metadata。                     |
+| `components` | yes      | component 定義の map。                                               |
+| `publish`    | no       | component output を Installation output publication として記録する。 |
 
 ## `metadata`
 
@@ -86,7 +93,7 @@ components:
 | `kind`    | yes      | component の種類。省略名 (`worker`) や URI を使え、operator が解決する。   |
 | `spec`    | no       | kind-owned inputs。worker entrypoint や gateway listener/path rules など。 |
 | `connect` | no       | 同じ manifest 内の component output を、この component に接続する。        |
-| `listen`  | no       | Space-visible platform service path を、この component に接続する。        |
+| `listen`  | no       | Space-visible publication を、この component に接続する。                  |
 
 このページの `worker` / `postgres` / `gateway` などの短い値は、operator
 distribution が alias map を用意している前提の例です。解決後の kind URI が
@@ -158,9 +165,10 @@ required です。
 
 ## `listen`
 
-`listen` は Space に見える platform service path を component
-に接続します。account plane、operator distribution、product distribution
-などが出す service material を受け取るための入口です。
+`listen` は Space に見える publication を component に接続します。account
+plane、operator distribution、product distribution、他の Installation などが出す
+service material を受け取るための入口です。確定した対象は
+`path`、未確定の対象や複数候補は `kind` と `labels` で選びます。
 
 ```yaml
 components:
@@ -169,22 +177,40 @@ components:
     listen:
       identity:
         path: identity.primary.oidc
+        kind: identity.oidc@v1
         inject: secret-env
         prefix: IDENTITY
         required: true
+      tools:
+        kind: mcp-server@v1
+        labels:
+          capability: docs
+        many: true
+        inject: config-mount
 ```
 
-| Field      | Required | 説明                                                               |
-| ---------- | -------- | ------------------------------------------------------------------ |
-| `path`     | yes      | Space-visible platform service path。例: `identity.primary.oidc`。 |
-| `inject`   | yes      | consumer runtime への渡し方。                                      |
-| `prefix`   | no       | env / secret-env など prefix を持つ projection 用。                |
-| `mount`    | no       | config-mount など path を持つ projection 用。                      |
-| `required` | no       | path が解決できない場合に apply を失敗させる。                     |
+| Field      | Required | 説明                                                                                               |
+| ---------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `path`     | no       | exact Space-visible publication path。例: `identity.primary.oidc`。                                |
+| `kind`     | no       | material kind selector。`path` が無い場合は必須。`path` と併用すると互換性 assertion になる。      |
+| `labels`   | no       | `kind` discovery を絞り込む label selector。                                                       |
+| `many`     | no       | `true` の場合、一致した publication 全部を collection material として渡す。`path` とは併用しない。 |
+| `inject`   | yes      | consumer runtime への渡し方。                                                                      |
+| `prefix`   | no       | env / secret-env など prefix を持つ projection 用。                                                |
+| `mount`    | no       | config-mount など path を持つ projection 用。                                                      |
+| `required` | no       | 解決できない場合に apply を失敗させる。                                                            |
 
 `path` は 3 から 8 segment の dotted path です。2 segment の component output は
-`connect` で参照します。platform service の具体的な path と lifecycle は、それを
-提供する distribution の仕様に置きます。
+`connect` で参照します。platform service / publication の具体的な path と
+lifecycle は、それを 提供する distribution の仕様に置きます。`kind` は component
+`kind` と同じ語彙ルールを使う opaque alias / URI で、ここでは material kind
+を指します。
+
+`path` と `kind` は役割が違います。`path` は 1 つの対象を exact match
+する名前です。`kind` は discovery selector です。MCP server のように Space
+内に複数存在してよいものは path を必須にせず、`kind: mcp-server@v1` と
+`many: true` で受け取ります。`many` を省略した場合、selector
+はちょうど 1 件に解決されなければ apply error です。
 
 `required` を省略した platform service は optional です。absent の場合、その
 binding は作られません。kind-specific `spec` がその binding
@@ -192,32 +218,56 @@ binding は作られません。kind-specific `spec` がその binding
 
 ## Root `publish`
 
-root `publish` は component output を Installation output の service path
-declaration として記録します。同じ manifest 内の component 接続には使いません。
+root `publish` は component output を Installation output publication
+として記録します。同じ manifest 内の component 接続には使いません。`path` は
+optional です。stable な exact name が必要な publication だけ path を持ち、MCP
+server のように discovery される material は `kind` と `labels` で公開できます。
+`mcp-server@v1` は公式カタログの material kind で、path を持たない複数の MCP
+server publication を `listen.kind` でまとめて発見できます。
 
 ```yaml
 publish:
   api:
     output: web.http
+    kind: http-endpoint
     path: acme.notes.api
+  tools:
+    output: web.mcp
+    kind: mcp-server@v1
+    labels:
+      capability: docs
 ```
 
-| Field    | Required | 説明                                                                                                                                              |
-| -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `output` | yes      | expose する component output。形式は `component.outputSlot`。                                                                                     |
-| `path`   | yes      | Installation output として記録する service path。operator / product distribution はこれを Space-visible platform service inventory に投影できる。 |
+| Field    | Required | 説明                                                                                     |
+| -------- | -------- | ---------------------------------------------------------------------------------------- |
+| `output` | yes      | expose する component output。形式は `component.outputSlot`。                            |
+| `kind`   | no       | publication の material kind。output slot から一意に分かる場合は operator が導出できる。 |
+| `path`   | no       | exact name が必要な publication だけに付ける service path。                              |
+| `labels` | no       | discovery 用 label。`listen.kind` と組み合わせて絞り込む。                               |
 
 root `publish` は「HTTP に公開する」ためのショートカットではありません。HTTP
 listener、 host、TLS、route rule は gateway / ingress kind の `spec`
-で表します。root `publish` は materialized output を Deployment output に記録する Installation output declaration です。
-他の Installation や operator-facing workflow から解決できるかどうかは、operator / product distribution がその declaration
-を Space-visible platform service inventory に投影するかで決まります。
+で表します。root `publish` は materialized output を Deployment output
+に記録する Installation output publication です。 他の Installation や
+operator-facing workflow から解決できるかどうかは、operator / product
+distribution がその declaration を Space-visible publication inventory
+に投影するかで決まります。
 
-同じ AppSpec 内で同じ `publish.path` を 2 回宣言することはできません。Space-visible inventory に投影された後も、同じ
-Space の同じ path に active provider は 1 つだけです。別 Installation が同じ path を publish した場合、operator は既存
-provider を自動で off にせず conflict として扱います。切り替える場合は、既存 owner が `publish` を消す、Installation を
-disable/delete する、または operator/admin が明示的に transfer / disable します。詳細は
-[プラットフォームサービス](./platform-services.md#path-uniqueness-and-conflict) を参照してください。
+同じ AppSpec 内で同じ `publish.path` を 2 回宣言することはできません。`path`
+を持つ publication は Space-visible inventory に投影された後も、同じ Space
+の同じ path に active provider は 1 つだけです。別 Installation が同じ path を
+publish した場合、operator は既存 provider を自動で off にせず conflict
+として扱います。`path` を持たない publication は path conflict
+に参加せず、`kind` と `labels` の discovery
+対象になります。切り替える場合は、既存 owner が `publish` を消す、Installation
+を disable/delete する、または operator/admin が明示的に transfer / disable
+します。詳細は
+[プラットフォームサービス](./platform-services.md#path-uniqueness-and-conflict)
+を参照してください。
+
+つまり、`path` で名前を取る publication は競合し、`path`
+を持たない publication は競合しません。集合として見つけるものに無理に path
+を付ける必要はありません。
 
 ## Runtime HTTP 公開
 
@@ -345,12 +395,13 @@ components:
 publish:
   api:
     output: web.http
+    kind: http-endpoint
     path: acme.notes.api
 ```
 
 ## 次に読む
 
-- [Takosumi 公式型カタログ仕様](./type-catalog.md)
+- [Takosumi 公式カタログ仕様](./catalog.md)
 - [プラットフォームサービス](./platform-services.md)
 - [Installer API](./installer-api.md)
 - [HTTP 公開](./http-exposure.md)

@@ -5,6 +5,7 @@
   "exports": {
     ".": "./mod.ts",
     "./app-spec": "./src/app-spec.ts",
+    "./catalog": "./src/catalog.ts",
     "./installer-api": "./src/installer-api.ts",
     "./type-catalog": "./src/type-catalog.ts",
     "./reference/compat": "./src/reference-compat.ts",

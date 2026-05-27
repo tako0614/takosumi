@@ -69,7 +69,7 @@ Native package source lives under `takosumi-plugins/packages/kind-*`.
 | `@takos/takosumi-kind-gcp-cloud-dns-gateway`  | `gcp-cloud-dns-gateway`  |
 | `@takos/takosumi-kind-coredns-gateway`        | `coredns-gateway`        |
 
-Native gateway packages may provide implementation bindings that materialize HTTP reachability. The portable `gateway` route vocabulary is defined in the [Official Type Catalog](./type-catalog.md#gateway-portable-subset). `routes[].to` points at a local `connect` binding key. Native packages can add concrete DNS, listener, TLS, and route-support constraints.
+Native gateway packages may provide implementation bindings that materialize HTTP reachability. The portable `gateway` route vocabulary is defined in the [Official Catalog](./catalog.md#gateway-portable-subset). `routes[].to` points at a local `connect` binding key. Native packages can add concrete DNS, listener, TLS, and route-support constraints.
 
 ## Reference Adapter Exports
 
@@ -110,7 +110,7 @@ const { app } = await createPaaSApp({
 
 ## Ownership Rule
 
-- The descriptor source for a kind package is `spec/kind.jsonld`; JSON-LD is catalog/type metadata, not a runtime plugin requirement.
+- The descriptor source for a kind package is `spec/kind.jsonld`; JSON-LD is catalog metadata, not a runtime plugin requirement.
 - Portable descriptor source lives under `takosumi/packages/kind-*`; native descriptor source lives under `takosumi-plugins/packages/kind-*`.
 - The public package identity is `@takos/takosumi-kind-<alias>`.
 - The operator's `kindAliases` decides which aliases are active.
@@ -120,7 +120,7 @@ const { app } = await createPaaSApp({
 ## Related Pages
 
 - [Manifest](./manifest.md)
-- [Official Type Catalog](./type-catalog.md)
+- [Official Catalog](./catalog.md)
 - [Kind Binding Implementations](./kind-bindings.md)
 - [Reference Adapter Loading](./plugin-loading.md)
 - [Extending Takosumi](../extending.md)

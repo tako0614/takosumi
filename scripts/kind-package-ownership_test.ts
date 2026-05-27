@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import {
-  OFFICIAL_OUTPUT_TYPE_NAMES,
+  OFFICIAL_MATERIAL_KIND_NAMES,
   PROJECTION_FAMILY_NAMES,
-} from "takosumi-contract/type-catalog";
+} from "takosumi-contract/catalog";
 
 const ROOT = new URL("../", import.meta.url);
 const PACKAGE_ROOT = new URL("packages/", ROOT);
@@ -391,7 +391,7 @@ Deno.test("reference plugin docs show explicit operator lifecycle clients", asyn
     "packages/contract/README.md",
     "docs/rfc/0001-kernel-kind-agnostic.md",
     "docs/reference/plugin-loading.md",
-    "docs/reference/type-catalog.md",
+    "docs/reference/catalog.md",
     "docs/reference/kind-bindings.md",
     "docs/reference/kind-packages.md",
     "docs/operator/bootstrap.md",
@@ -605,13 +605,14 @@ function expectedListenContract(family: string): unknown {
     case "web-service":
       return {
         "*": {
-          accepts: [...OFFICIAL_OUTPUT_TYPE_NAMES],
+          accepts: [...OFFICIAL_MATERIAL_KIND_NAMES],
           projectionFamilies: [...PROJECTION_FAMILY_NAMES].sort(),
           projectionMatrix: {
             "billing.port@v1": ["config-mount", "secret-env"],
             "event-channel": ["config-mount", "secret-env"],
             "http-endpoint": ["config-mount", "env", "upstream"],
             "identity.oidc@v1": ["config-mount", "secret-env"],
+            "mcp-server@v1": ["config-mount", "secret-env"],
             "object-store": ["config-mount", "secret-env"],
             "service-binding": ["config-mount", "secret-env"],
           },

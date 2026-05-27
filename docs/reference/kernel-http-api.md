@@ -131,6 +131,6 @@ public installer のエラーレスポンスの正本は [Installer API](./insta
 - [Installer API](./installer-api.md) — Installer API の完全 spec
 - [manifest](./manifest.md) — `.takosumi.yml` 仕様
 - [Build service handoff](./build-spec.md) — build service と prepared source の handoff
-- [Takosumi 公式型カタログ仕様](./type-catalog.md) — official kind schema and output type vocabulary
+- [Takosumi 公式カタログ仕様](./catalog.md) — official kind schema and material kind vocabulary
 - [Reference Runtime-Agent Execution Surface](./runtime-agent-api.md)
 - [Enum and Value Index](./closed-enums.md)

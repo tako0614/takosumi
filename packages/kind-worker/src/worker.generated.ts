@@ -90,6 +90,7 @@ export const WORKER_LISTEN_SLOTS: readonly WorkerListenSlotDescriptor[] = [
       "event-channel",
       "identity.oidc@v1",
       "billing.port@v1",
+      "mcp-server@v1",
     ],
     projectionFamilies: [
       "env",
@@ -120,6 +121,10 @@ export const WORKER_LISTEN_SLOTS: readonly WorkerListenSlotDescriptor[] = [
         "config-mount",
       ],
       "billing.port@v1": [
+        "secret-env",
+        "config-mount",
+      ],
+      "mcp-server@v1": [
         "secret-env",
         "config-mount",
       ],

@@ -33,14 +33,15 @@ components:
 
 `listeners` と `routes` は gateway kind の `spec` schema です。`routes[].to` は `connect` binding key を指します。この例では key は `app`、injection mode は `upstream` です。
 
-root `publish` は、gateway が作った output を Deployment output の Installation output service path declaration として記録するための任意の宣言です。HTTP listener、host、TLS、route rule は gateway / ingress kind の `spec` が扱います。
+root `publish` は、gateway が作った output を Deployment output の Installation output publication として記録するための任意の宣言です。HTTP listener、host、TLS、route rule は gateway / ingress kind の `spec` が扱います。
 
-operator / product distribution が公開 endpoint を Space-visible platform service inventory に投影して discoverable にする場合だけ、root `publish` を追加します。
+operator / product distribution が公開 endpoint を Space-visible publication inventory に投影して discoverable にする場合だけ、root `publish` を追加します。stable exact name が必要な場合は `path` を付け、一覧 discovery だけでよい場合は `kind` / `labels` で十分です。
 
 ```yaml
 publish:
   public-endpoint:
     output: public.public
+    kind: http-endpoint
     path: acme.web.public
 ```
 
@@ -69,4 +70,4 @@ runtime traffic authority は `Installation.currentDeploymentId` が指す `succ
 ## 関連ページ
 
 - [manifest](./manifest.md)
-- [Takosumi 公式型カタログ仕様](./type-catalog.md)
+- [Takosumi 公式カタログ仕様](./catalog.md)

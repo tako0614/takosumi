@@ -119,6 +119,7 @@ export const WEB_SERVICE_LISTEN_SLOTS:
         "event-channel",
         "identity.oidc@v1",
         "billing.port@v1",
+        "mcp-server@v1",
       ],
       projectionFamilies: [
         "env",
@@ -149,6 +150,10 @@ export const WEB_SERVICE_LISTEN_SLOTS:
           "config-mount",
         ],
         "billing.port@v1": [
+          "secret-env",
+          "config-mount",
+        ],
+        "mcp-server@v1": [
           "secret-env",
           "config-mount",
         ],

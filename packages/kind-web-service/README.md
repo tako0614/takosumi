@@ -28,12 +28,13 @@ Long-running HTTP service backed by an OCI image.
 ## Listen Slots
 
 - `*`: accepts `http-endpoint`, `service-binding`, `object-store`,
-  `event-channel`, `identity.oidc@v1`, `billing.port@v1`; projection matrix
-  `billing.port@v1` -> `secret-env`, `config-mount`; `event-channel` ->
-  `secret-env`, `config-mount`; `http-endpoint` -> `env`, `config-mount`,
-  `upstream`; `identity.oidc@v1` -> `secret-env`, `config-mount`; `object-store`
-  -> `secret-env`, `config-mount`; `service-binding` -> `secret-env`,
-  `config-mount`
+  `event-channel`, `identity.oidc@v1`, `billing.port@v1`, `mcp-server@v1`;
+  projection matrix `billing.port@v1` -> `secret-env`, `config-mount`;
+  `event-channel` -> `secret-env`, `config-mount`; `http-endpoint` -> `env`,
+  `config-mount`, `upstream`; `identity.oidc@v1` -> `secret-env`,
+  `config-mount`; `mcp-server@v1` -> `secret-env`, `config-mount`;
+  `object-store` -> `secret-env`, `config-mount`; `service-binding` ->
+  `secret-env`, `config-mount`
 
 ## Outputs
 

@@ -69,7 +69,7 @@ Native package の source は `takosumi-plugins/packages/kind-*` です。
 | `@takos/takosumi-kind-gcp-cloud-dns-gateway`  | `gcp-cloud-dns-gateway`  |
 | `@takos/takosumi-kind-coredns-gateway`        | `coredns-gateway`        |
 
-Native gateway packages は HTTP reachability を作る implementation binding を提供できます。`gateway` portable kind の route vocabulary は [公式型カタログ](./type-catalog.md#gateway-portable-subset) にあります。`routes[].to` は local `connect` binding key を指します。native package は DNS / listener / TLS / route support の具体制約を持てます。
+Native gateway packages は HTTP reachability を作る implementation binding を提供できます。`gateway` portable kind の route vocabulary は [公式カタログ](./catalog.md#gateway-portable-subset) にあります。`routes[].to` は local `connect` binding key を指します。native package は DNS / listener / TLS / route support の具体制約を持てます。
 
 ## Reference adapter exports
 
@@ -110,7 +110,7 @@ const { app } = await createPaaSApp({
 
 ## Package ownership rule
 
-- kind の descriptor source は owning kind package の `spec/kind.jsonld`。JSON-LD は catalog / type metadata であり、runtime plugin requirement ではない。
+- kind の descriptor source は owning kind package の `spec/kind.jsonld`。JSON-LD は catalog / schema metadata であり、runtime plugin requirement ではない。
 - portable descriptor source は `takosumi/packages/kind-*`、native descriptor source は `takosumi-plugins/packages/kind-*`。
 - package の public identity は `@takos/takosumi-kind-<alias>`。
 - alias の有効化は operator の `kindAliases` が決めます。
@@ -120,6 +120,6 @@ const { app } = await createPaaSApp({
 ## Related pages
 
 - [Manifest](./manifest.md)
-- [公式型カタログ](./type-catalog.md)
+- [公式カタログ](./catalog.md)
 - [Kind Binding 実装](./kind-bindings.md)
 - [Reference Adapter Loading](./plugin-loading.md)

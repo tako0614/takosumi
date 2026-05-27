@@ -7,7 +7,7 @@ Takosumi has two extension surfaces.
 | Run an adopted kind on a different cloud or runtime | an implementation binding for that kind |
 | Define a new runtime or resource contract           | a kind definition + implementation      |
 
-The manifest records a component kind string (Takosumi does not interpret the value). The operator may resolve a short alias or a direct URI to a kind definition and an implementation binding. The shared specification surface is the kind URI, the kind's definition, output type, and projection behavior; each implementation chooses its own wiring mechanism.
+The manifest records a component kind string (Takosumi does not interpret the value). The operator may resolve a short alias or a direct URI to a kind definition and an implementation binding. The shared specification surface is the kind URI, the kind's definition, material kind, and projection behavior; each implementation chooses its own wiring mechanism.
 
 ## Add a Kind {#add-a-kind}
 
@@ -56,7 +56,7 @@ Kind definition metadata is vocabulary for validation, examples, documentation, 
 
 ## Add an Implementation Binding {#add-an-implementation-binding}
 
-An implementation binding connects a kind definition and output type to a concrete cloud runtime or resource creation/update. The public specification surface is the kind URI, the kind's definition, output type, projection behavior, and non-secret Deployment output.
+An implementation binding connects a kind definition and material kind to a concrete cloud runtime or resource creation/update. The public specification surface is the kind URI, the kind's definition, material kind, projection behavior, and non-secret Deployment output.
 
 Adapter loading, separate processes, backend API access, and credential injection belong to the implementation or the operator's configuration.
 
@@ -71,6 +71,6 @@ Implementation bindings should preserve the same public contract:
 ## Related Pages {#related-pages}
 
 - [Manifest](./reference/manifest.md)
-- [Official Type Catalog](./reference/type-catalog.md)
+- [Official Catalog](./reference/catalog.md)
 - [Platform Services](./reference/platform-services.md)
 - [Build Service Boundary](./reference/build-spec.md)
