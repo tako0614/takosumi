@@ -39,6 +39,18 @@ AppSpec uses `kind` as the selector word. Component `kind` says what is created.
 consumed. There is no manifest `type` selector. The word `type` is reserved for
 JSON Schema, JSON-LD `@type`, and TypeScript type names.
 
+Use these three rules:
+
+| Goal                                                 | Manifest shape                                   |
+| ---------------------------------------------------- | ------------------------------------------------ |
+| Connect to component output inside the same manifest | `connect.<binding>.output: component.outputSlot` |
+| Connect to one known publication in the Space        | `listen.<binding>.path: owner.area.name`         |
+| Discover every visible match, such as MCP servers    | `listen.<binding>.kind` + labels + `many: true`  |
+
+Use `path` only when a publication needs a stable exact name. In one Space, one
+`path` can have only one active provider. For collection discovery, publish
+pathless entries and select them by `kind` and `labels`.
+
 ## Root Fields {#root-fields}
 
 | Field        | Required | Meaning                                                           |

@@ -39,6 +39,18 @@ AppSpec の selector は `kind` に揃えます。component の `kind`
 は使いません。`type` という語は JSON Schema、JSON-LD `@type`、TypeScript
 の型名の文脈だけで使います。
 
+判断ルールは次の 3 つです。
+
+| やりたいこと                                       | 書き方                                           |
+| -------------------------------------------------- | ------------------------------------------------ |
+| 同じ manifest 内の component output に接続する     | `connect.<binding>.output: component.outputSlot` |
+| Space 内の確定した 1 つの publication に接続する   | `listen.<binding>.path: owner.area.name`         |
+| MCP server のような見えるもの全部を discovery する | `listen.<binding>.kind` + labels + `many: true`  |
+
+`path` は安定した exact name が必要なときだけ使います。同じ Space の同じ
+`path` は active provider を 1 つだけ持てます。集合として discovery したい
+publication は `path` を付けず、`kind` と `labels` で選びます。
+
 ## ルート項目
 
 | Field        | Required | 説明                                                                 |
