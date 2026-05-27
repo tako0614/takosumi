@@ -26,7 +26,7 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 
 外部 app の `.takosumi.yml` 由来 fixture を installer mock で使うことはあるが、それは Takosumi の install contract を検証するための入力 fixture です。該当 product を local-substrate の service として直起動する運用は扱わない。「Takosumi 経由で yurucommu / takos-app を install して deploy する」統合シナリオは別タスク (`@takos/local-miniflare-workers` connector 実装が前提、 TODO-SMOKE.md 筆頭参照)。
 
-## Current smoke coverage (29 checks)
+## Current smoke coverage (30 checks)
 
 `scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして deploy しても 99% 動く」を目標に、 honest pass のみを数える。各ファイル詳細は [TODO-SMOKE.md](TODO-SMOKE.md) と script header を参照。
 
@@ -52,6 +52,10 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 加えて vitest 4 case (COSE/JWK decode) + worker_test.ts 30 case (issuer policy + IPv6/CGNAT + fail-closed + R2 route-level signed export / malformed URL / data-bearing refusal) + Playwright 2 spec (install wizard happy path + TLS trust regression) を CI で並列実行する。公開面 / egress の companion gate として `scripts/prove-no-public-leak.sh` も用意している。
 
 CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml` を参照。 3 job (smoke / vitest / playwright) が submodule checkout 経由で takosumi + takosumi-cloud を揃え、 ca-install.sh の sudo run + Pebble root の NSS install を含めた full chain を毎 PR で再現する。
+
+Latest local CLI verification: 2026-05-27 fresh Docker volumes,
+`bash scripts/up.sh --profile postgres` followed by `bash scripts/smoke.sh`
+completed with `30 passed, 0 failed`.
 
 ## Quick start
 
@@ -80,6 +84,28 @@ curl https://hello.takosumi.test/
 curl https://accounts.takosumi.test/.well-known/openid-configuration
 curl https://kernel-worker.takosumi.test/healthz  # postgres profile mirror
 curl https://kernel.takosumi.test/healthz         # workers profile
+```
+
+Dashboard browser E2E uses the static dashboard artifact served by Caddy, so
+rebuild it through the compose builder that supplies local dev sign-in env and
+then recreate Caddy. The yurucommu CTA regression also expects the yurucommu
+Vite server on host port 5173:
+
+```bash
+# from the repository root
+(
+  cd takosumi/deploy/local-substrate
+  docker compose -f compose.substrate.yml --profile postgres run --rm takosumi-cloud-dashboard-build
+  docker compose -f compose.ingress.yml up -d --force-recreate caddy
+)
+
+# separate shell, from the repository root
+cd yurucommu
+deno task dev:web
+
+# from the repository root
+cd takosumi-cloud/packages/dashboard-ui
+PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 npm run e2e
 ```
 
 詳細は [docs/root-ca-install.md](docs/root-ca-install.md) と [docs/operator-runbook.md](docs/operator-runbook.md)。

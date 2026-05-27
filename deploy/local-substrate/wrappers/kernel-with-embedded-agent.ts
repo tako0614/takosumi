@@ -25,6 +25,7 @@ import { createPaaSApp } from "/workspace/packages/kernel/src/bootstrap.ts";
 import {
   dockerPostgresPlugin,
   KIND_URI as DOCKER_POSTGRES_KIND_URI,
+  type SecretWriter,
 } from "/plugins/packages/kind-docker-postgres/mod.ts";
 import {
   filesystemObjectStorePlugin,
@@ -120,9 +121,17 @@ function localSubstrateInstallerPlugins(input: {
   void input.agentUrl;
   void input.token;
   return [
-    dockerPostgresPlugin(),
-    filesystemObjectStorePlugin(),
-    dockerComposeWebServicePlugin(),
+    dockerPostgresPlugin({
+      secretStore: createMemorySecretStore(),
+      useInMemoryLifecycle: true,
+    }),
+    filesystemObjectStorePlugin({
+      rootDir: "/var/lib/takosumi/objects",
+      useInMemoryLifecycle: true,
+    }),
+    dockerComposeWebServicePlugin({
+      useInMemoryLifecycle: true,
+    }),
     coreDnsGatewayPlugin({
       defaultHost: input.defaultGatewayHost,
       ingressTarget: input.ingressTarget,
@@ -131,6 +140,21 @@ function localSubstrateInstallerPlugins(input: {
       ),
     }),
   ];
+}
+
+function createMemorySecretStore(): SecretWriter {
+  const values = new Map<string, string>();
+  return {
+    putSecret(input: Parameters<SecretWriter["putSecret"]>[0]) {
+      values.set(input.name, input.value);
+      return Promise.resolve({
+        name: input.name,
+        version: String(values.size),
+        createdAt: new Date().toISOString(),
+        metadata: input.metadata ?? {},
+      });
+    },
+  };
 }
 
 function createLocalSubstrateGatewayLifecycle(
