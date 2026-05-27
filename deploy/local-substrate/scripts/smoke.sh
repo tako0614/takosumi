@@ -225,6 +225,8 @@ check_json "prod-mirror.cloud.oidc-discovery" "cloud.takosumi.test" "/.well-know
 check "prod-mirror.cloud.dashboard-index" "cloud.takosumi.test" "/" "200"
 check "prod-mirror.cloud.dashboard-signin" "cloud.takosumi.test" "/sign-in" "200"
 check "prod-mirror.cloud.dashboard-deeplink" "cloud.takosumi.test" "/apps/abc" "200"
+check "prod-mirror.cloud.use-takos-entry" "cloud.takosumi.test" "/dashboard/use-takos?takos_url=https%3A%2F%2Ftakos.test" "200"
+check "prod-mirror.cloud.use-takos-start-validation" "cloud.takosumi.test" "/start?takos_url=https%3A%2F%2Ftakos.test" "400"
 
 echo
 echo "==> Install flow — managed-offering bypass + installer dry-run mock"
