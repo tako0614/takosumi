@@ -13,14 +13,14 @@ components:
     spec:
       entrypoint: dist/worker.mjs
       compatibilityDate: "2025-01-01"
-    listen:
+    connect:
       db:
-        from: db.connection
-        as: env
+        output: db.connection
+        inject: env
         prefix: DB
       assets:
-        from: assets.bucket
-        as: env
+        output: assets.bucket
+        inject: env
         prefix: ASSETS
 
   db:
@@ -28,17 +28,11 @@ components:
     spec:
       version: "16"
       size: small
-    publish:
-      connection:
-        as: service-binding
 
   assets:
     kind: object-store
     spec:
       name: my-app-assets
-    publish:
-      bucket:
-        as: object-store
 `,
   empty: `apiVersion: v1
 

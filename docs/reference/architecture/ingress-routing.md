@@ -1,8 +1,8 @@
 # イングレスルーティング {#exposure-activation-model}
 
-Exposure は runtime routing の内部 record です。public manifest では `gateway` のような component の `listen` と kind-specific `spec` として表現します。Exposure は public ingress intent と activation state を記録し、runtime request は backend-native data plane が処理します。
+Exposure は runtime routing の内部 record です。public manifest では `gateway` のような component の `connect` と kind-specific `spec` として表現します。Exposure は public ingress intent と activation state を記録し、runtime request は backend-native data plane が処理します。
 
-public ingress を持つ component は 1 つの Space の中に Exposure intent を作成する。public manifest では、`gateway` のような component が upstream publication を `listen` し、listener / route rule を `spec` に持つ形で表現します。Exposure は Link と別の runtime object です。
+public ingress を持つ component は 1 つの Space の中に Exposure intent を作成する。public manifest では、`gateway` のような component が upstream output を `connect` し、listener / route rule を `spec` に持つ形で表現します。Exposure は Link と別の runtime object です。
 
 ## Exposure
 
@@ -12,18 +12,12 @@ components:
     kind: worker
     spec:
       entrypoint: src/worker.ts
-    publish:
-      http:
-        as: http-endpoint
   public:
     kind: gateway
-    listen:
+    connect:
       app:
-        from: web.http
-        as: upstream
-    publish:
-      public:
-        as: http-endpoint
+        output: web.http
+        inject: upstream
     spec:
       listeners:
         public:
@@ -34,9 +28,13 @@ components:
         - listener: public
           path: /
           to: app
+publish:
+  public-endpoint:
+    output: public.public
+    path: acme.web.public
 ```
 
-resolver はこれを `web.http` を `app` binding として listen する `app.example.com` の Exposure record に変換する。`web.http` は upstream の出力データ、`public.public` は materialized public endpoint の publish の出力です。Exposure は外部 ingress を準備するが、それだけで deployment を current にはしない。selected execution binding は Exposure から Cloudflare route、Kubernetes Gateway / HTTPRoute、Caddy / Nginx config、load balancer rule、edge runtime binding などの data plane object を作ります。
+resolver はこれを `web.http` を `app` binding として connect する `app.example.com` の Exposure record に変換する。`web.http` は upstream の出力データです。root `publish` は `public.public` output を `acme.web.public` service path として discoverable にする任意の宣言で、browser ingress の reachability には不要です。Exposure は外部 ingress を準備するが、それだけで deployment を current にはしない。selected execution binding は Exposure から Cloudflare route、Kubernetes Gateway / HTTPRoute、Caddy / Nginx config、load balancer rule、edge runtime binding などの data plane object を作ります。
 
 `host` は gateway の kind の定義が持つ ingress input です。reservation、 custom-domain proof、DNS ownership proof、TLS provisioning は採用済みの kind の定義、operator policy、backend-specific flow が扱います。manifest はその proof protocol を埋め込まない。
 
@@ -52,7 +50,7 @@ public operation は Installer API の install / deploy / rollback です。refe
 
 ```text
 resolve:
-  read source, parse manifest, resolve publish/listen, choose implementations
+  read source, parse manifest, resolve connect/listen, choose implementations
 
 apply:
   prepare objects, links, generated authorization records, generated credentials, exposure material

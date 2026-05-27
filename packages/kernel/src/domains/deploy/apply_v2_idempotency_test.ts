@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import {
   type ApplyResult,
-  type JsonObject,
   type PlatformContext,
   type ProviderPlugin,
   registerProvider,
+  unregisterProvider,
+} from "takosumi-contract/internal/provider-plugin";
+import type { JsonObject } from "takosumi-contract/reference/types";
+import {
   registerShape,
   type Shape,
-  unregisterProvider,
   unregisterShape,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/shape";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 import {
   applyV2,

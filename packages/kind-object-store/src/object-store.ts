@@ -1,7 +1,10 @@
-import type { Shape } from "takosumi-contract/reference/shape";
+import type {
+  Shape,
+  ShapeValidationIssue,
+} from "takosumi-contract/reference/shape";
 import {
-  optionalBoolean,
   optionalNonEmptyString,
+  rejectUnknownFields,
   requireNonEmptyString,
   requireRoot,
 } from "./_validators.ts";
@@ -39,17 +42,63 @@ export const ObjectStoreKind: Shape<
   outputFields: OBJECT_STORE_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
+    rejectUnknownFields(value, "$", ["name"], issues);
     requireNonEmptyString(value.name, "$.name", issues);
-    optionalBoolean(value.public, "$.public", issues);
-    optionalBoolean(value.versioning, "$.versioning", issues);
-    optionalNonEmptyString(value.region, "$.region", issues);
   },
   validateOutputs(value, issues) {
     if (!requireRoot(value, issues)) return;
+    rejectUnknownFields(
+      value,
+      "$",
+      [
+        "bucket",
+        "endpoint",
+        "region",
+        "accessKeyIdRef",
+        "secretAccessKeyRef",
+      ],
+      issues,
+    );
     requireNonEmptyString(value.bucket, "$.bucket", issues);
-    requireNonEmptyString(value.endpoint, "$.endpoint", issues);
-    requireNonEmptyString(value.region, "$.region", issues);
-    requireNonEmptyString(value.accessKeyRef, "$.accessKeyRef", issues);
-    requireNonEmptyString(value.secretKeyRef, "$.secretKeyRef", issues);
+    requireHttpUrl(value.endpoint, "$.endpoint", issues);
+    optionalNonEmptyString(value.region, "$.region", issues);
+    optionalNonEmptyString(value.accessKeyIdRef, "$.accessKeyIdRef", issues);
+    optionalNonEmptyString(
+      value.secretAccessKeyRef,
+      "$.secretAccessKeyRef",
+      issues,
+    );
+
+    const hasAccessKeyId = typeof value.accessKeyIdRef === "string";
+    const hasSecretAccessKey = typeof value.secretAccessKeyRef === "string";
+    if (hasAccessKeyId !== hasSecretAccessKey) {
+      issues.push({
+        path: hasAccessKeyId ? "$.secretAccessKeyRef" : "$.accessKeyIdRef",
+        message:
+          "object-store credential refs require accessKeyIdRef and secretAccessKeyRef together",
+      });
+    }
   },
 };
+
+function requireHttpUrl(
+  value: unknown,
+  path: string,
+  issues: ShapeValidationIssue[],
+): void {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    issues.push({ path, message: "must be an absolute http(s) URL" });
+    return;
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      issues.push({ path, message: "must be an absolute http(s) URL" });
+    }
+    if (url.username || url.password) {
+      issues.push({ path, message: "must not contain embedded credentials" });
+    }
+  } catch {
+    issues.push({ path, message: "must be an absolute http(s) URL" });
+  }
+}

@@ -2,14 +2,14 @@
 
 The operator's configuration chooses how Takosumi core is exposed and implemented. It supplies Space context, which kinds are enabled, backend credentials, account management APIs, and read APIs.
 
-The [public contract](../getting-started/concepts.md) stays as-is regardless of operator choices.
+The [public contract](../getting-started/concepts.md) stays centered on AppSpec, Installation, and Deployment regardless of operator choices.
 
 ## Reading Order {#reading-order}
 
 1. [Concepts](../getting-started/concepts.md)
 2. [Specification Boundaries](../reference/spec-boundaries.md)
 3. [Installer API](../reference/installer-api.md)
-4. [Platform Services](../reference/external-publications.md)
+4. [Platform Services](../reference/platform-services.md)
 5. [Build Service Boundary](../reference/build-spec.md)
 6. [Build Service Example](./build-service-profile.md)
 7. [Takosumi Cloud Entry](../reference/takosumi-cloud.md)

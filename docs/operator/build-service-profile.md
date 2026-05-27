@@ -27,7 +27,7 @@ nodes:
 | `metadata`   | yes      | build-service input の metadata。        |
 | `nodes`      | yes      | profile が解釈する build graph の node。 |
 
-build node field は `kind`、`spec`、`dependsOn` です。この `kind` は build service 内の語彙であり、Manifest の component kind でも対応 kind 一覧の定義でもありません。
+build node field は `kind`、`spec`、`dependsOn` です。この `kind` は build service 内の語彙であり、Manifest の component kind でも公式型カタログの定義でもありません。
 
 ## Linux container node の例
 

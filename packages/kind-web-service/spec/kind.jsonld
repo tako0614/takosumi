@@ -4,13 +4,18 @@
   "@type": "ComponentKind",
   "name": "web-service",
   "version": "v1",
-  "referenceAliases": ["web-service"],
+  "referenceAliases": [
+    "web-service"
+  ],
   "description": "Long-running HTTP service backed by an OCI image.",
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "required": ["image", "port", "scale"],
-    "additionalProperties": true,
+    "required": [
+      "image",
+      "port"
+    ],
+    "additionalProperties": false,
     "properties": {
       "image": {
         "type": "string",
@@ -20,13 +25,17 @@
       "port": {
         "type": "integer",
         "minimum": 1,
+        "maximum": 65535,
         "description": "Container listen port exposed by the service."
       },
       "scale": {
         "type": "object",
-        "required": ["min", "max"],
+        "required": [
+          "min",
+          "max"
+        ],
         "additionalProperties": false,
-        "description": "Replica bounds. `min: 0` requests scale-to-zero. Operator policy and the selected implementation materialize or reject the request.",
+        "description": "Replica bounds. `min: 0` requests zero steady replicas. Operator policy and the selected implementation materialize or reject the request.",
         "properties": {
           "min": {
             "type": "integer",
@@ -42,7 +51,9 @@
       },
       "env": {
         "type": "object",
-        "additionalProperties": { "type": "string" },
+        "additionalProperties": {
+          "type": "string"
+        },
         "description": "Environment variables passed to the service."
       },
       "resources": {
@@ -64,7 +75,7 @@
       }
     }
   },
-  "publications": {
+  "outputSlots": {
     "http": {
       "contract": "http-endpoint",
       "exampleMaterialMapping": {
@@ -90,7 +101,39 @@
         "identity.oidc@v1",
         "billing.port@v1"
       ],
-      "projectionFamilies": ["env", "secret-env", "config-mount", "upstream"]
+      "projectionFamilies": [
+        "env",
+        "secret-env",
+        "config-mount",
+        "upstream"
+      ],
+      "projectionMatrix": {
+        "http-endpoint": [
+          "env",
+          "config-mount",
+          "upstream"
+        ],
+        "service-binding": [
+          "secret-env",
+          "config-mount"
+        ],
+        "object-store": [
+          "secret-env",
+          "config-mount"
+        ],
+        "event-channel": [
+          "secret-env",
+          "config-mount"
+        ],
+        "identity.oidc@v1": [
+          "secret-env",
+          "config-mount"
+        ],
+        "billing.port@v1": [
+          "secret-env",
+          "config-mount"
+        ]
+      }
     }
   },
   "outputs": [
@@ -98,29 +141,24 @@
       "name": "url",
       "type": "string",
       "required": true,
-      "meaning": "Provider-local upstream URL (scheme-bearing) used by gateway/listener components."
+      "meaning": "Implementation-local upstream URL (scheme-bearing) used by gateway/listener components."
     },
     {
       "name": "internalHost",
       "type": "string",
       "required": true,
-      "meaning": "Provider-local service host."
+      "meaning": "Implementation-local service host."
     },
     {
       "name": "internalPort",
       "type": "integer",
       "required": true,
-      "meaning": "Provider-local service port."
+      "meaning": "Implementation-local service port."
     }
   ],
   "capabilityTerms": [
-    "always-on",
-    "scale-to-zero",
-    "websocket",
-    "long-request",
-    "sticky-session",
-    "geo-routing",
-    "crons",
-    "private-networking"
+    "http-service",
+    "oci-image",
+    "replica-scaling"
   ]
 }

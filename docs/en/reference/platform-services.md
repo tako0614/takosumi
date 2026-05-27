@@ -1,6 +1,8 @@
 # Platform Services {#platform-services}
 
-Platform services are outputs offered by an operator or product distribution outside the manifest. Workloads consume them through the same `listen` mechanism used for same-manifest component outputs.
+Platform services are service material offered to a Space by an operator
+distribution, account plane, product distribution, or another external
+provider. Components consume them with `listen.path`.
 
 ```yaml
 components:
@@ -8,24 +10,18 @@ components:
     kind: worker
     listen:
       identity:
-        from: publisher.identity.primary
-        as: secret-env
+        path: identity.primary.oidc
+        inject: secret-env
         prefix: IDENTITY
         required: true
 ```
 
-Core defines the dotted path grammar and exact-match resolution behavior. Operator distribution specs define the concrete platform service paths and visibility policy. The output type comes from the Kind Catalog or another operator-adopted catalog.
+`connect` is for component output inside the same manifest. `listen` is for
+Space-visible service material outside the manifest.
 
-## Reference Grammar {#reference-grammar}
+## Path Grammar {#path-grammar}
 
-`listen.<binding>.from` uses one dotted reference grammar.
-
-| Shape                        | Meaning                                              |
-| ---------------------------- | ---------------------------------------------------- |
-| `component.publication`      | Published output in the same manifest. Two segments. |
-| `publisher.area.name[.more]` | Platform service path. Three or more segments.       |
-
-Platform service path grammar:
+`listen.<binding>.path` is a dotted path.
 
 ```text
 segment = [a-z][a-z0-9-]{0,62}
@@ -38,79 +34,113 @@ Rules:
 - maximum 8 segments
 - maximum 255 characters
 - no empty segments
-- the first segment is the publisher root
 
-## Publisher Root {#publisher-root}
+Paths such as `identity.primary.oidc` or `acme.database.reporting` are resolved by
+exact match. The field distinguishes platform service paths from component
+outputs: component outputs such as `db.connection` are written in
+`connect.output`; external services are written in `listen.path`.
 
-The first segment identifies the distribution or organization that offers the path. Root naming and path inventory belong to the distribution spec. The Installer resolves a valid path against the list of available services visible in the target Space.
+## Path Ownership {#path-ownership}
 
-Only one active visible entry may exist for a platform service path in a Space. Duplicate visible entries fail apply with 409 before resource creation.
+Path inventory, lifecycle, and ownership belong to the distribution or
+organization that offers the path. Takosumi core does not special-case path
+prefixes; it handles grammar and exact-match resolution.
 
-Common publisher roots are ordinary distribution choices:
+| Provider example                 | Example path              |
+| -------------------------------- | ------------------------- |
+| Account plane                    | `identity.primary.oidc`   |
+| Billing provider                 | `billing.primary.account` |
+| Organization or private operator | `acme.database.reporting` |
 
-| Publisher root | Provided by                      | Example path              |
-| -------------- | -------------------------------- | ------------------------- |
-| `operator`     | Operator configuration           | `operator.identity.main`  |
-| `takos`        | Product distribution catalog     | `takos.memory.default`    |
-| `acme`         | Organization or private operator | `acme.database.reporting` |
-
-Root enablement is operator configuration state. A Space has one active owner for a root. Operator configurations can add explicit delegation rules when shared ownership is intentional.
+Takosumi Cloud or another operator distribution can publish its concrete paths
+in its own distribution spec. Those paths are provider-owned Space-visible
+service material, not additional Takosumi core concepts.
 
 ## Resolution {#resolution}
 
 Resolution is Space-scoped:
 
 1. The operator gathers platform service entries visible to the target Space.
-2. Active visible entries are unique by `(Space, publicationPath)`.
-3. A three-or-more-segment `listen.from` value is resolved by exact path match.
-4. The selected service state is recorded in the Deployment record.
+2. Active visible entries are unique by `(Space, path)`.
+3. `listen.path` resolves by exact match.
+4. The selected service state and materialization evidence are recorded with the Deployment.
 5. If the path is absent and `required: true`, apply fails before resource creation.
-6. If the path is absent and `required` is omitted or false, the connection is absent.
+6. If the path is absent and `required` is omitted or false, the binding is not created.
 
-Output type, sensitivity level, and access metadata come from the Kind Catalog and operator policy. How values are delivered comes from the manifest `listen.as`.
+If a kind-specific `spec` treats an absent optional binding as required input,
+apply fails. Degraded behavior is valid when the adopted kind definition and
+operator record describe that behavior.
 
-If an optional connection is absent and a kind-specific `spec` field references that connection, the adopted kind definition must define the degraded behavior and the operator records that decision in the Deployment record.
+## Path Uniqueness And Conflict {#path-uniqueness-and-conflict}
 
-## Service Entries And Output Data {#declaration-and-material}
+For one platform service path in one Space, there is at most one active
+provider. `listen.path` resolves by exact match, so Takosumi does not choose
+between two active entries by priority.
 
-Core resolves dotted `listen.from` paths. Catalogs provide output type vocabulary and access metadata. Operator or product distribution specs define publisher roots and concrete platform service paths.
+The active entry owner is the distribution, Installation, or operator record
+currently offering that path. For entries projected from root `publish`, the
+owner includes at least `spaceId`, `installationId`, the `publish` name, and the
+source output. A new Deployment from the same owner Installation is an update to
+the same service.
 
-An operator implementation can store records like:
+| Situation                                        | Rule                                                                                              |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| One AppSpec repeats the same root `publish.path` | Reject during AppSpec validation.                                                                 |
+| Same Installation redeploys the same path        | Replace the current projection with the new Deployment output. The old snapshot becomes inactive. |
+| Same Installation removes root `publish`         | Turn off the active projection owned by that Installation. Keep Deployment history.               |
+| Same Installation changes the path               | Turn off the old path and activate the new path. If the new path is already active, fail.         |
+| Different Installation publishes the same path   | Treat as conflict. Do not turn off the existing owner automatically.                              |
+| Workload publishes an operator-reserved path     | Reject as a policy violation.                                                                     |
+| Rollback tries to reactivate an earlier path     | Activate if the path is free. If another owner is active, rollback/projection conflicts.          |
+| Installation is deleted or disabled              | Turn off active projections owned by that Installation.                                           |
+
+Conflict resolution is explicit: the existing owner removes root `publish`, the
+Installation is disabled/deleted, or an operator/admin performs a deliberate
+transfer or disable operation. An AppSpec cannot take over another owner's
+active entry by declaring the same path.
+
+When an operator projects root `publish` declarations into the Space-visible
+inventory, projection is a compare-and-set on `(Space, path)`. If two applies try
+to activate the same path concurrently, only one succeeds; the other fails or is
+marked blocked as a conflict. In every case, `listen.path` sees at most one
+active entry.
+
+## Service Material {#service-material}
+
+A platform service entry has material shape, sensitivity, and access metadata.
+Material vocabulary comes from the official type catalog or another
+operator-adopted catalog. Credentials, endpoints, and authorizations are
+materialized by the operator implementation.
+
+Example implementation records:
 
 ```yaml
 PlatformServiceDeclaration:
-  snapshotId: pubsnap_...
-  publicationPath: publisher.area.name
+  snapshotId: svcsnap_...
+  path: identity.primary.oidc
   spaceId: space_acme_prod
-  materialContract: some.material@v1
+  materialContract: identity.oidc@v1
   sensitivity: restricted
-  accessModes: [read, invoke-only]
-  safeDefaultAccess: null
 ```
 
 ```yaml
-PublicationMaterialization:
-  linkId: link_inst_abc_binding
-  publicationSnapshotId: pubsnap_...
-  publicationPath: publisher.area.name
+PlatformServiceMaterialization:
+  linkId: link_inst_abc_identity
+  declarationSnapshotId: svcsnap_...
+  path: identity.primary.oidc
   endpointRefs: []
   secretRefs: []
   authorizationRefs: []
 ```
 
-Public Deployment output exposes only the non-secret output fields defined by the [Installer API](./installer-api.md#deployment). Raw credentials stay behind operator-approved secret delivery.
-
-## Catalog And Operators {#catalog-and-operators}
-
-- The Kind Catalog defines reusable output type vocabulary such as `identity.oidc@v1`.
-- Operator configurations decide which concrete platform service paths are visible in a Space.
-- Product distributions can publish product-specific paths under their own root.
-- Takosumi Cloud defines its concrete platform service paths in its Cloud distribution spec.
+Public Deployment output returns only the non-secret fields defined by the
+[Installer API](./installer-api.md#deployment). Raw credentials stay in operator
+secret delivery.
 
 ## Related Pages {#related-pages}
 
 - [Core Specification](./core-spec.md)
 - [Manifest](./manifest.md)
 - [Access Modes](./access-modes.md)
-- [Kind Catalog](./type-catalog.md)
+- [Official Type Catalog](./type-catalog.md)
 - [Takosumi Cloud](./takosumi-cloud.md)

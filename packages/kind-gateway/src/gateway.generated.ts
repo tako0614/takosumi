@@ -8,25 +8,29 @@ export interface GatewayListener {
   readonly host?: string;
   /** TLS policy for this listener. */
   readonly tls?: "auto" | "manual" | "off";
-  readonly [extension: string]: unknown;
 }
 
 export interface GatewayRoute {
   /** Listener name from `listeners`. */
   readonly listener: string;
-  /** HTTP path prefix, such as `/` or `/api`. Duplicate route and segment-boundary checks are descriptor semantic validation. */
+  /** HTTP path prefix, such as `/` or `/api`. Duplicate route and dot-segment checks are descriptor semantic validation. */
   readonly path: string;
-  /** Local listen binding name that supplies the upstream endpoint. */
+  /** Local connect binding name that supplies the upstream endpoint. */
   readonly to: string;
-  readonly [extension: string]: unknown;
+}
+
+export interface GatewayRouteSummary {
+  /** Materialized path prefix. */
+  readonly pathPrefix: string;
+  /** Connect binding target name. */
+  readonly to: string;
 }
 
 export interface GatewaySpec {
   /** Named HTTP listeners. A listener may request an operator-managed host and TLS policy. */
   readonly listeners: Readonly<Record<string, GatewayListener>>;
-  /** Path routing rules. Each route sends requests from a listener to one listen binding name. */
+  /** Path routing rules. Each route sends requests from a listener to one connect binding name. */
   readonly routes: readonly GatewayRoute[];
-  readonly [extension: string]: unknown;
 }
 
 export interface GatewayOutputs {
@@ -38,28 +42,41 @@ export interface GatewayOutputs {
   readonly scheme: string;
   /** Listener name that produced the public endpoint. */
   readonly listener: string;
-  /** Portable route summary with pathPrefix and listen binding target. */
-  readonly routes: readonly Record<string, unknown>[];
+  /** Portable route summary with pathPrefix and connect binding target. */
+  readonly routes: readonly GatewayRouteSummary[];
 }
 
 export type GatewayCapabilityTerm =
   | "host-routing"
   | "path-routing"
   | "wildcard"
-  | "auto-tls"
-  | "sni"
-  | "alpn-acme"
-  | "http3"
-  | "redirects";
+  | "auto-tls";
 
-export type GatewayPublicationName = "public";
+export type GatewayOutputFieldName =
+  | "url"
+  | "host"
+  | "scheme"
+  | "listener"
+  | "routes";
 
-export type GatewayPublicationContract = "http-endpoint";
+export type GatewayOutputSlotName = "public";
 
-export interface GatewayPublicationDescriptor {
-  readonly name: GatewayPublicationName;
-  readonly contract: GatewayPublicationContract;
+export type GatewayOutputSlotContract = "http-endpoint";
+
+export interface GatewayOutputSlotDescriptor {
+  readonly name: GatewayOutputSlotName;
+  readonly contract: GatewayOutputSlotContract;
   readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
+}
+
+export interface GatewayListenSlotDescriptor {
+  readonly name: string;
+  readonly accepts?: readonly string[];
+  readonly projectionFamilies?: readonly string[];
+  readonly projectionMatrix?: Readonly<Record<string, readonly string[]>>;
+  readonly requiredWhenReferencedBy?: string;
+  readonly minimumAccess?: string;
+  readonly safeDefaultAccess?: string | null;
 }
 
 export const GATEWAY_CAPABILITY_TERMS: readonly GatewayCapabilityTerm[] = [
@@ -67,13 +84,9 @@ export const GATEWAY_CAPABILITY_TERMS: readonly GatewayCapabilityTerm[] = [
   "path-routing",
   "wildcard",
   "auto-tls",
-  "sni",
-  "alpn-acme",
-  "http3",
-  "redirects",
 ];
 
-export const GATEWAY_OUTPUT_FIELDS: readonly string[] = [
+export const GATEWAY_OUTPUT_FIELDS: readonly GatewayOutputFieldName[] = [
   "url",
   "host",
   "scheme",
@@ -81,17 +94,17 @@ export const GATEWAY_OUTPUT_FIELDS: readonly string[] = [
   "routes",
 ];
 
-// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.
+// referenceAliases are catalog suggestions only; operator distributions activate aliases explicitly.
 export const GATEWAY_ALIASES: readonly string[] = [
   "gateway",
 ];
 
-export const GATEWAY_PUBLICATIONS: readonly GatewayPublicationName[] = [
+export const GATEWAY_OUTPUT_SLOTS: readonly GatewayOutputSlotName[] = [
   "public",
 ];
 
-export const GATEWAY_PUBLICATION_DESCRIPTORS:
-  readonly GatewayPublicationDescriptor[] = [
+export const GATEWAY_OUTPUT_SLOT_DESCRIPTORS:
+  readonly GatewayOutputSlotDescriptor[] = [
     {
       name: "public",
       contract: "http-endpoint",
@@ -110,6 +123,19 @@ export const GATEWAY_PUBLICATION_DESCRIPTORS:
       },
     },
   ];
+
+export const GATEWAY_LISTEN_SLOTS: readonly GatewayListenSlotDescriptor[] = [
+  {
+    name: "*",
+    accepts: [
+      "http-endpoint",
+    ],
+    projectionFamilies: [
+      "upstream",
+    ],
+    requiredWhenReferencedBy: "spec.routes[].to",
+  },
+];
 // Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
 export const GATEWAY_KIND_SHAPE_ID = "gateway";
 /** @deprecated Use GATEWAY_KIND_URI for AppSpec kind identity, or GATEWAY_KIND_SHAPE_ID for legacy Shape.id. */

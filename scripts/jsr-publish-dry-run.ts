@@ -45,6 +45,16 @@ export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
       directory: "packages/kind-gateway",
     },
     {
+      name: "@takos/takosumi-kind-kv-store",
+      version: "0.1.0",
+      directory: "packages/kind-kv-store",
+    },
+    {
+      name: "@takos/takosumi-kind-message-queue",
+      version: "0.1.0",
+      directory: "packages/kind-message-queue",
+    },
+    {
       name: "@takos/takosumi-kind-object-store",
       version: "0.1.0",
       directory: "packages/kind-object-store",
@@ -53,6 +63,16 @@ export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
       name: "@takos/takosumi-kind-postgres",
       version: "0.1.0",
       directory: "packages/kind-postgres",
+    },
+    {
+      name: "@takos/takosumi-kind-sqlite",
+      version: "0.1.0",
+      directory: "packages/kind-sqlite",
+    },
+    {
+      name: "@takos/takosumi-kind-vector-store",
+      version: "0.1.0",
+      directory: "packages/kind-vector-store",
     },
     {
       name: "@takos/takosumi-kind-web-service",

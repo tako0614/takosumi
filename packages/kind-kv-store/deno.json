@@ -1,0 +1,14 @@
+{
+  "name": "@takos/takosumi-kind-kv-store",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "imports": {
+    "takosumi-contract/reference/shape": "jsr:@takos/takosumi-contract@^2.6.0/reference/shape"
+  },
+  "tasks": {
+    "check": "deno check mod.ts src/**/*.ts"
+  }
+}

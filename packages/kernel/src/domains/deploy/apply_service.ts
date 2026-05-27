@@ -26,10 +26,9 @@ import type {
   GroupHead,
   IsoTimestamp,
   JsonObject,
-  PlatformContext,
 } from "takosumi-contract/reference/compat";
+import type { PlatformContext } from "takosumi-contract/internal/provider-plugin";
 import { objectAddress } from "takosumi-contract/reference/compat";
-import { NOOP_REF_RESOLVER } from "takosumi-contract/reference/kernel-plugin-adapter";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 import { applyV2, type ApplyV2Outcome } from "./apply_v2.ts";
 import {
@@ -358,11 +357,11 @@ function resolveManifestResources(
   throw new Error("ApplyService: shape-model manifest requires `resources[]`");
 }
 
-// Phase L iter 2 (Finding 3): `NOOP_REF_RESOLVER` previously lived in
-// this file as a local fallback. It is now imported from
-// `takosumi-contract/reference/kernel-plugin-adapter` as the single source of
-// truth. apply_v2 builds its own per-resource ref resolver, so this
-// stub is never invoked during a shape-model apply.
+const NOOP_REF_RESOLVER: PlatformContext["refResolver"] = {
+  resolve(_expression: string) {
+    return null;
+  },
+};
 
 function createPlatformContext(input: {
   readonly tenantId: string;

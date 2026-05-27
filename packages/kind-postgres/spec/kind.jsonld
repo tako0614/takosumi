@@ -4,13 +4,17 @@
   "@type": "ComponentKind",
   "name": "postgres",
   "version": "v1",
-  "referenceAliases": ["postgres"],
-  "description": "Managed PostgreSQL instance intended to be bindable across compatible providers through the standard wire protocol. Publishes connection material as a local publication.",
+  "referenceAliases": [
+    "postgres"
+  ],
+  "description": "Managed PostgreSQL instance intended to be bindable across compatible providers through the standard wire protocol. Publishes connection material as a local output slot.",
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "required": ["version", "size"],
-    "additionalProperties": true,
+    "required": [
+      "version"
+    ],
+    "additionalProperties": false,
     "properties": {
       "version": {
         "type": "string",
@@ -19,12 +23,19 @@
       },
       "size": {
         "type": "string",
-        "enum": ["small", "medium", "large", "xlarge"],
+        "enum": [
+          "small",
+          "medium",
+          "large",
+          "xlarge"
+        ],
         "description": "Instance size class."
       },
       "storage": {
         "type": "object",
-        "required": ["sizeGiB"],
+        "required": [
+          "sizeGiB"
+        ],
         "additionalProperties": false,
         "description": "Persistent volume sizing.",
         "properties": {
@@ -41,7 +52,7 @@
       }
     }
   },
-  "publications": {
+  "outputSlots": {
     "connection": {
       "contract": "service-binding",
       "exampleMaterialMapping": {
@@ -51,7 +62,9 @@
         "port": "$outputs.port",
         "database": "$outputs.database",
         "username": "$outputs.username",
-        "passwordRef": { "secretRef": "$outputs.passwordSecretRef" },
+        "passwordRef": {
+          "secretRef": "$outputs.passwordSecretRef"
+        },
         "connectionUrl": "$outputs.connectionString"
       }
     }
@@ -95,12 +108,9 @@
     }
   ],
   "capabilityTerms": [
-    "pitr",
-    "read-replicas",
+    "postgres-wire",
+    "managed-credentials",
     "high-availability",
-    "backups",
-    "ssl-required",
-    "ipv6",
-    "extensions"
+    "backups"
   ]
 }

@@ -8,7 +8,10 @@ import {
   isRecord,
   optionalNonEmptyString,
   optionalStringRecord,
+  rejectUnknownFields,
+  requireHttpUrl,
   requireNonEmptyString,
+  requirePort,
   requirePositiveInteger,
   requireRoot,
 } from "./_validators.ts";
@@ -49,20 +52,31 @@ export const WebServiceKind: Shape<
   outputFields: WEB_SERVICE_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
+    rejectUnknownFields(
+      value,
+      "$",
+      ["image", "port", "scale", "env", "resources"],
+      issues,
+    );
     requireNonEmptyString(value.image, "$.image", issues);
-    requirePositiveInteger(value.port, "$.port", issues);
-    validateScale(value.scale, issues);
+    requirePort(value.port, "$.port", issues);
+    if (value.scale !== undefined) validateScale(value.scale, issues);
     optionalStringRecord(value.env, "$.env", issues);
-    optionalStringRecord(value.bindings, "$.bindings", issues);
     if (value.resources !== undefined) {
       validateResources(value.resources, issues);
     }
   },
   validateOutputs(value, issues) {
     if (!requireRoot(value, issues)) return;
-    requireNonEmptyString(value.url, "$.url", issues);
+    rejectUnknownFields(
+      value,
+      "$",
+      ["url", "internalHost", "internalPort"],
+      issues,
+    );
+    requireHttpUrl(value.url, "$.url", issues);
     requireNonEmptyString(value.internalHost, "$.internalHost", issues);
-    requirePositiveInteger(value.internalPort, "$.internalPort", issues);
+    requirePort(value.internalPort, "$.internalPort", issues);
   },
 };
 
@@ -71,6 +85,7 @@ function validateScale(value: unknown, issues: ShapeValidationIssue[]): void {
     issues.push({ path: "$.scale", message: "must be an object" });
     return;
   }
+  rejectUnknownFields(value, "$.scale", ["min", "max"], issues);
   if (!isNonNegativeInteger(value.min)) {
     issues.push({
       path: "$.scale.min",
@@ -97,6 +112,7 @@ function validateResources(
     issues.push({ path: "$.resources", message: "must be an object" });
     return;
   }
+  rejectUnknownFields(value, "$.resources", ["cpu", "memory"], issues);
   optionalNonEmptyString(value.cpu, "$.resources.cpu", issues);
   optionalNonEmptyString(value.memory, "$.resources.memory", issues);
 }

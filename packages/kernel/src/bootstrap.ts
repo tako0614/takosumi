@@ -36,9 +36,9 @@ import {
 } from "./domains/deploy/takosumi_deployment_record_store.ts";
 import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store_sql.ts";
 import {
-  type ExternalPublicationResolver,
-  httpExternalPublicationResolver,
+  httpPlatformServiceResolver,
   InstallerPipeline,
+  type PlatformServiceResolver,
 } from "./domains/installer/mod.ts";
 import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 
@@ -131,11 +131,11 @@ export interface CreatePaaSAppOptions extends AppContextOptions {
   readonly takosumiOperationJournalStore?: OperationJournalStore;
   readonly takosumiRevokeDebtStore?: RevokeDebtStore;
   /**
-   * Operator-owned Space-visible publication resolver passed to the public
-   * InstallerPipeline. Used for ordinary external paths such as
-   * `operator.identity.oidc`.
+   * Operator-owned resolver for Space-visible platform service paths. The
+   * kernel treats these paths as ordinary `listen.path` sources and does not
+   * attach identity, billing, or account semantics to the path string.
    */
-  readonly externalPublications?: ExternalPublicationResolver;
+  readonly platformServices?: PlatformServiceResolver;
 }
 
 export interface CreatedPaaSApp {
@@ -163,10 +163,10 @@ export async function createPaaSApp(
   const installerToken = runtimeEnv.TAKOSUMI_INSTALLER_TOKEN;
   const fetchToken = runtimeEnv.TAKOSUMI_ARTIFACT_FETCH_TOKEN;
   const metricsScrapeToken = runtimeEnv.TAKOSUMI_METRICS_SCRAPE_TOKEN;
-  const externalPublicationResolverUrl =
-    runtimeEnv.TAKOSUMI_EXTERNAL_PUBLICATION_RESOLVER_URL;
-  const externalPublicationResolverToken =
-    runtimeEnv.TAKOSUMI_EXTERNAL_PUBLICATION_RESOLVER_TOKEN;
+  const platformServiceResolverUrl =
+    runtimeEnv.TAKOSUMI_PLATFORM_SERVICE_RESOLVER_URL;
+  const platformServiceResolverToken =
+    runtimeEnv.TAKOSUMI_PLATFORM_SERVICE_RESOLVER_TOKEN;
   const artifactMaxBytes = parsePositiveIntegerEnv(
     runtimeEnv.TAKOSUMI_ARTIFACT_MAX_BYTES,
   );
@@ -198,10 +198,10 @@ export async function createPaaSApp(
       onTick: workerDaemonState.onTick,
     }).start()
     : undefined;
-  const externalPublications = resolveExternalPublications({
-    configured: options.externalPublications,
-    url: externalPublicationResolverUrl,
-    token: externalPublicationResolverToken,
+  const platformServices = resolvePlatformServices({
+    configured: options.platformServices,
+    url: platformServiceResolverUrl,
+    token: platformServiceResolverToken,
   });
   const app = await createApiApp({
     role,
@@ -236,7 +236,7 @@ export async function createPaaSApp(
       pipeline: new InstallerPipeline({
         ...(options.plugins ? { plugins: options.plugins } : {}),
         ...(options.kindAliases ? { kindAliases: options.kindAliases } : {}),
-        ...(externalPublications ? { externalPublications } : {}),
+        ...(platformServices ? { platformServices } : {}),
       }),
       ...(installerToken ? { getInstallerToken: () => installerToken } : {}),
     },
@@ -296,14 +296,14 @@ function parsePositiveIntegerEnv(
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function resolveExternalPublications(input: {
-  readonly configured?: ExternalPublicationResolver;
+function resolvePlatformServices(input: {
+  readonly configured?: PlatformServiceResolver;
   readonly url?: string;
   readonly token?: string;
-}): ExternalPublicationResolver | undefined {
+}): PlatformServiceResolver | undefined {
   if (input.configured) return input.configured;
   if (!input.url) return undefined;
-  return httpExternalPublicationResolver({
+  return httpPlatformServiceResolver({
     url: input.url,
     ...(input.token ? { token: input.token } : {}),
   });

@@ -6,6 +6,7 @@ import {
   isAccessMode,
   isOfficialOutputTypeName,
   isOfficialSensitivityClass,
+  isOutputFieldTypeName,
   isProjectionAllowedForOutputType,
   isProjectionFamilyName,
   isSafeDefaultAccessMode,
@@ -19,6 +20,8 @@ import {
 Deno.test("type catalog guards pin official names", () => {
   assert.equal(isOfficialOutputTypeName("http-endpoint"), true);
   assert.equal(isOfficialOutputTypeName("sql-connection"), false);
+  assert.equal(isOutputFieldTypeName("string[]"), true);
+  assert.equal(isOutputFieldTypeName("object"), false);
   assert.equal(isProjectionFamilyName("secret-env"), true);
   assert.equal(isProjectionFamilyName("plain-env"), false);
   assert.equal(isAccessMode("read-write"), true);
@@ -79,6 +82,22 @@ Deno.test("type catalog accepts valid official material samples", () => {
   };
   assert.deepEqual(
     validateOfficialOutputMaterial("service-binding", service),
+    [],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("service-binding", {
+      service: "kv-sessions",
+      protocol: "kv",
+      tokenRef: { secretRef: "secret://kv/token" },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("service-binding", {
+      protocol: "sqlite",
+      connectionUrl: "libsql://sqlite.example.test/app",
+      tokenRef: { secretRef: "secret://sqlite/token" },
+    }),
     [],
   );
 
@@ -144,12 +163,101 @@ Deno.test("type catalog rejects ambiguous official material", () => {
     }],
   );
   assert.deepEqual(
+    validateOfficialOutputMaterial("service-binding", {
+      protocol: "postgresql",
+      host: "db.internal",
+      port: 5432,
+      passwordRef: {
+        secretRef: "secret://postgres/password",
+        name: "password",
+      },
+    }),
+    [{ path: "$.passwordRef.name", message: "unknown field" }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("service-binding", {
+      protocol: "kv",
+    }),
+    [{
+      path: "$",
+      message:
+        "service-binding requires service, connectionUrl, or host + port",
+    }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("service-binding", {
+      protocol: "postgresql",
+      host: "db.internal",
+    }),
+    [{
+      path: "$",
+      message: "service-binding host and port must appear together",
+    }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("object-store", {
+      bucket: "assets",
+      endpoint: "https://s3.example.test",
+      accessKeyIdRef: { secretRef: "secret://bucket/access-key" },
+    }),
+    [{
+      path: "$",
+      message:
+        "object-store credential refs require accessKeyIdRef and secretAccessKeyRef together",
+    }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("object-store", {
+      bucket: "assets",
+      endpoint: "https://s3.example.test",
+      sessionTokenRef: { secretRef: "secret://bucket/session-token" },
+    }),
+    [
+      {
+        path: "$.sessionTokenRef",
+        message:
+          "sessionTokenRef requires accessKeyIdRef and secretAccessKeyRef",
+      },
+    ],
+  );
+  assert.deepEqual(
     validateOfficialOutputMaterial("object-store", {
       bucket: "assets",
       endpoint: "https://s3.example.test",
       accessKeyRef: { secretRef: "secret://bucket/access-key" },
     }),
     [{ path: "$.accessKeyRef", message: "unknown field" }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("service-binding", {
+      protocol: "postgresql",
+      host: "db.internal",
+      port: 5432,
+      connectionUrl: "not a uri",
+      tokenRefs: {
+        "read/write": { secretRef: "secret://db/read-write-token" },
+      },
+    }),
+    [
+      { path: "$.connectionUrl", message: "must be an absolute URI" },
+      {
+        path: "$.tokenRefs.read/write",
+        message:
+          "must start with an ASCII letter or digit and contain only ASCII letters, digits, _, ., or -",
+      },
+    ],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("service-binding", {
+      protocol: "postgresql",
+      host: "db.internal",
+      port: 5432,
+      connectionUrl: "postgresql://app:secret@db.internal:5432/app",
+    }),
+    [{
+      path: "$.connectionUrl",
+      message: "must not include an embedded password",
+    }],
   );
 });
 
@@ -190,6 +298,81 @@ Deno.test("type catalog rejects invalid official material URL values", () => {
   );
 });
 
+Deno.test("type catalog rejects embedded credentials in public URL fields", () => {
+  assert.deepEqual(
+    validateOfficialOutputMaterial("object-store", {
+      bucket: "assets",
+      endpoint: "https://user:pass@s3.example.test",
+    }),
+    [{ path: "$.endpoint", message: "must not contain embedded credentials" }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("identity.oidc@v1", {
+      issuerUrl: "https://user:pass@accounts.example.test",
+      clientId: "app",
+    }),
+    [{ path: "$.issuerUrl", message: "must not contain embedded credentials" }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("billing.port@v1", {
+      billingSubjectRef: "acct_123",
+      portalUrl: "https://user:pass@billing.example.test/session/123",
+    }),
+    [{ path: "$.portalUrl", message: "must not contain embedded credentials" }],
+  );
+});
+
+Deno.test("type catalog rejects incoherent http endpoint material", () => {
+  assert.deepEqual(
+    validateOfficialOutputMaterial("http-endpoint", {
+      endpoints: [{
+        url: "https://app.example.test",
+        scheme: "http",
+        host: "other.example.test",
+      }],
+    }),
+    [
+      {
+        path: "$.endpoints[0].scheme",
+        message: "must match the scheme in url",
+      },
+      {
+        path: "$.endpoints[0].host",
+        message: "must match the host in url",
+      },
+    ],
+  );
+});
+
+Deno.test("type catalog rejects embedded credentials in literal material mappings", () => {
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("object-store", {
+      bucket: "$outputs.bucket",
+      endpoint: "https://user:pass@s3.example.test",
+    }),
+    [{ path: "$.endpoint", message: "must not contain embedded credentials" }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("http-endpoint", {
+      endpoints: [{
+        url: "https://app.example.test",
+        scheme: "http",
+        host: "other.example.test",
+      }],
+    }),
+    [
+      {
+        path: "$.endpoints[0].scheme",
+        message: "must match the scheme in url",
+      },
+      {
+        path: "$.endpoints[0].host",
+        message: "must match the host in url",
+      },
+    ],
+  );
+});
+
 Deno.test("type catalog rejects invalid http endpoint material values", () => {
   assert.deepEqual(
     validateOfficialOutputMaterial("http-endpoint", {
@@ -215,10 +398,18 @@ Deno.test("type catalog rejects invalid http endpoint material values", () => {
         path: "$.targets[0].visibility",
         message: 'must be "private", "space", "public", or "internal"',
       },
+      {
+        path: "$.targets[0]",
+        message: "target host and port must appear together",
+      },
       { path: "$.endpoints[0].scheme", message: 'must be "http" or "https"' },
       {
         path: "$.endpoints[0].visibility",
         message: 'must be "private", "space", "public", or "internal"',
+      },
+      {
+        path: "$.endpoints[0].scheme",
+        message: "must match the scheme in url",
       },
       {
         path: "$.endpoints[0].routes[0].pathPrefix",
@@ -230,6 +421,26 @@ Deno.test("type catalog rejects invalid http endpoint material values", () => {
           "must start with an ASCII letter or digit and contain only ASCII letters, digits, _, ., or -",
       },
     ],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("http-endpoint", {
+      targets: [{
+        url: "https://web.internal",
+        basePath: "/api",
+      }],
+    }),
+    [{
+      path: "$.targets[0]",
+      message: "target protocol/basePath requires host + port",
+    }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterial("event-channel", {
+      channel: "orders",
+      protocol: "cloud-events",
+      endpoint: "events/orders",
+    }),
+    [{ path: "$.endpoint", message: "must be an absolute URI" }],
   );
 });
 
@@ -267,11 +478,19 @@ Deno.test("type catalog accepts valid official material mapping samples", () => 
     [],
   );
   assert.deepEqual(
+    validateOfficialOutputMaterialMapping("service-binding", {
+      service: "$outputs.storeId",
+      protocol: "kv",
+      tokenRef: { secretRef: "$outputs.tokenSecretRef" },
+    }),
+    [],
+  );
+  assert.deepEqual(
     validateOfficialOutputMaterialMapping("object-store", {
       bucket: "$outputs.bucket",
       endpoint: "$outputs.endpoint",
-      accessKeyIdRef: { secretRef: "$outputs.accessKeyRef" },
-      secretAccessKeyRef: { secretRef: "$outputs.secretKeyRef" },
+      accessKeyIdRef: { secretRef: "$outputs.accessKeyIdRef" },
+      secretAccessKeyRef: { secretRef: "$outputs.secretAccessKeyRef" },
     }),
     [],
   );
@@ -301,7 +520,7 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
       "http-endpoint",
       {
         targets: [{
-          url: "$outputs.url",
+          url: "$outputs.optionalUrl",
           port: "$outputs.port",
         }],
         endpoints: [{
@@ -311,14 +530,39 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
         }],
       },
       [
-        { name: "url", type: "string", required: true },
+        { name: "optionalUrl", type: "string", required: false },
         { name: "port", type: "integer", required: true },
         { name: "publicUrl", type: "string", required: true },
         { name: "primary", type: "boolean", required: true },
         { name: "routes", type: "object[]", required: true },
       ],
     ),
-    [],
+    [{
+      path: "$.targets[0].url",
+      message:
+        "$outputs.optionalUrl must reference a required output when target has no required host + port fallback",
+    }],
+  );
+
+  assert.deepEqual(
+    validateOfficialOutputMaterialMappingOutputTypes(
+      "http-endpoint",
+      {
+        targets: [{
+          host: "$outputs.host",
+          port: "$outputs.port",
+        }],
+      },
+      [
+        { name: "host", type: "string", required: false },
+        { name: "port", type: "integer", required: true },
+      ],
+    ),
+    [{
+      path: "$.targets[0].host",
+      message:
+        "$outputs.host must reference a required output when used as target host",
+    }],
   );
 
   assert.deepEqual(
@@ -336,14 +580,6 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
     ),
     [
       {
-        path: "$.host",
-        message: "$outputs.host must reference a required output",
-      },
-      {
-        path: "$.port",
-        message: "$outputs.host must reference a required output",
-      },
-      {
         path: "$.port",
         message:
           "$outputs.host has output type string, expected number or integer",
@@ -351,6 +587,16 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
       {
         path: "$.passwordRef.secretRef",
         message: "$outputs.missingSecretRef is not declared in outputs[]",
+      },
+      {
+        path: "$.host",
+        message:
+          "$outputs.host must reference a required output when service-binding mapping has no required service or connectionUrl fallback",
+      },
+      {
+        path: "$.port",
+        message:
+          "$outputs.host must reference a required output when service-binding mapping has no required service or connectionUrl fallback",
       },
     ],
   );
@@ -375,21 +621,49 @@ Deno.test("type catalog checks output marker types in material mappings", () => 
       },
       {
         path: "$.pathStyle",
-        message: "$outputs.bucket must reference a required output",
-      },
-      {
-        path: "$.pathStyle",
         message: "$outputs.bucket has output type string, expected boolean",
-      },
-      {
-        path: "$.policyRefs",
-        message: "$outputs.policy must reference a required output",
       },
       {
         path: "$.policyRefs",
         message: "$outputs.policy has output type string, expected string[]",
       },
     ],
+  );
+
+  assert.deepEqual(
+    validateOfficialOutputMaterialMappingOutputTypes(
+      "billing.port@v1",
+      {
+        billingSubjectRef: "$outputs.subject",
+        portalUrl: "$outputs.portalUrl",
+      },
+      [
+        { name: "subject", type: "string", required: true },
+        { name: "portalUrl", type: "string", required: false },
+      ],
+    ),
+    [{
+      path: "$.portalUrl",
+      message:
+        "$outputs.portalUrl must reference a required output when billing mapping has no required usageReportEndpoint fallback",
+    }],
+  );
+
+  assert.deepEqual(
+    validateOfficialOutputMaterialMappingOutputTypes(
+      "billing.port@v1",
+      {
+        billingSubjectRef: "$outputs.subject",
+        portalUrl: "$outputs.portalUrl",
+        usageReportEndpoint: "$outputs.usageReportEndpoint",
+      },
+      [
+        { name: "subject", type: "string", required: true },
+        { name: "portalUrl", type: "string", required: false },
+        { name: "usageReportEndpoint", type: "string", required: true },
+      ],
+    ),
+    [],
   );
 });
 
@@ -418,12 +692,82 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
     }],
   );
   assert.deepEqual(
+    validateOfficialOutputMaterialMapping("service-binding", {
+      protocol: "kv",
+    }),
+    [{
+      path: "$",
+      message:
+        "service-binding mapping requires service, connectionUrl, or host + port",
+    }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMappingOutputTypes(
+      "service-binding",
+      {
+        service: "$outputs.service",
+        protocol: "kv",
+      },
+      [
+        { name: "service", type: "string", required: false },
+      ],
+    ),
+    [{
+      path: "$.service",
+      message:
+        "$outputs.service must reference a required output when service-binding mapping has no required connectionUrl or host + port fallback",
+    }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("service-binding", {
+      protocol: "postgresql",
+      host: "$outputs.host",
+      port: 5432,
+      connectionUrl: "not a uri",
+      tokenRefs: {
+        "read/write": { secretRef: "$outputs.token" },
+      },
+    }),
+    [
+      { path: "$.connectionUrl", message: "must be an absolute URI" },
+      {
+        path: "$.tokenRefs.read/write",
+        message:
+          "must start with an ASCII letter or digit and contain only ASCII letters, digits, _, ., or -",
+      },
+    ],
+  );
+  assert.deepEqual(
     validateOfficialOutputMaterialMapping("object-store", {
       bucket: "$outputs.bucket",
       endpoint: "$outputs.endpoint",
       accessKeyRef: { secretRef: "$outputs.secret" },
     }),
     [{ path: "$.accessKeyRef", message: "unknown field" }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("object-store", {
+      bucket: "$outputs.bucket",
+      endpoint: "$outputs.endpoint",
+      secretAccessKeyRef: { secretRef: "$outputs.secret" },
+    }),
+    [{
+      path: "$",
+      message:
+        "object-store credential refs require accessKeyIdRef and secretAccessKeyRef together",
+    }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("service-binding", {
+      protocol: "postgresql",
+      host: "$outputs.host",
+      port: 5432,
+      connectionUrl: "postgresql://app:secret@db.internal:5432/app",
+    }),
+    [{
+      path: "$.connectionUrl",
+      message: "must not include an embedded password",
+    }],
   );
   assert.deepEqual(
     validateOfficialOutputMaterialMapping("service-binding", {
@@ -490,6 +834,9 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
   );
   assert.deepEqual(
     validateOfficialOutputMaterialMapping("http-endpoint", {
+      targets: [{
+        host: "$outputs.host",
+      }],
       endpoints: [{
         url: "https://app.example.test",
         scheme: "ftp",
@@ -499,6 +846,10 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
       }],
     }),
     [
+      {
+        path: "$.targets[0]",
+        message: "target must map url or host + port",
+      },
       { path: "$.endpoints[0].scheme", message: 'must be "http" or "https"' },
       {
         path: "$.endpoints[0].visibility",
@@ -517,6 +868,30 @@ Deno.test("type catalog rejects drifted material mapping shapes", () => {
         message:
           "must start with an ASCII letter or digit and contain only ASCII letters, digits, _, ., or -",
       },
+      {
+        path: "$.endpoints[0].scheme",
+        message: "must match the scheme in url",
+      },
     ],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("http-endpoint", {
+      targets: [{
+        url: "$outputs.url",
+        basePath: "/api",
+      }],
+    }),
+    [{
+      path: "$.targets[0]",
+      message: "target protocol/basePath mapping requires host + port",
+    }],
+  );
+  assert.deepEqual(
+    validateOfficialOutputMaterialMapping("event-channel", {
+      channel: "$outputs.channel",
+      protocol: "cloud-events",
+      endpoint: "events/orders",
+    }),
+    [{ path: "$.endpoint", message: "must be an absolute URI" }],
   );
 });

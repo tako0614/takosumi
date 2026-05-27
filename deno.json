@@ -7,6 +7,10 @@
     "./packages/kind-postgres",
     "./packages/kind-object-store",
     "./packages/kind-gateway",
+    "./packages/kind-sqlite",
+    "./packages/kind-kv-store",
+    "./packages/kind-message-queue",
+    "./packages/kind-vector-store",
     "./packages/installer",
     "./packages/kernel",
     "./packages/cli",
@@ -18,11 +22,10 @@
     "takosumi-contract/reference/compat": "./packages/contract/src/reference-compat.ts",
     "takosumi-contract/reference/error-category": "./packages/contract/src/error-category.ts",
     "takosumi-contract/internal/api": "./packages/contract/src/internal-api.ts",
+    "takosumi-contract/internal/provider-plugin": "./packages/contract/src/provider-plugin.ts",
     "takosumi-contract/internal/rpc": "./packages/contract/src/internal-rpc.ts",
     "takosumi-contract/reference/plugin": "./packages/contract/src/plugin.ts",
     "takosumi-contract/reference/plugin-sdk": "./packages/contract/src/plugin-sdk.ts",
-    "takosumi-contract/reference/provider-plugin": "./packages/contract/src/provider-plugin.ts",
-    "takosumi-contract/reference/kernel-plugin-adapter": "./packages/contract/src/kernel-plugin-adapter.ts",
     "takosumi-contract/reference/runtime-agent": "./packages/contract/src/runtime-agent.ts",
     "takosumi-contract/reference/runtime-agent-lifecycle": "./packages/contract/src/runtime-agent-lifecycle.ts",
     "takosumi-contract/reference/shape": "./packages/contract/src/shape.ts",
@@ -41,7 +44,11 @@
     "@takos/takosumi-kind-web-service": "./packages/kind-web-service/mod.ts",
     "@takos/takosumi-kind-postgres": "./packages/kind-postgres/mod.ts",
     "@takos/takosumi-kind-object-store": "./packages/kind-object-store/mod.ts",
-    "@takos/takosumi-kind-gateway": "./packages/kind-gateway/mod.ts"
+    "@takos/takosumi-kind-gateway": "./packages/kind-gateway/mod.ts",
+    "@takos/takosumi-kind-sqlite": "./packages/kind-sqlite/mod.ts",
+    "@takos/takosumi-kind-kv-store": "./packages/kind-kv-store/mod.ts",
+    "@takos/takosumi-kind-message-queue": "./packages/kind-message-queue/mod.ts",
+    "@takos/takosumi-kind-vector-store": "./packages/kind-vector-store/mod.ts"
   },
   "compilerOptions": {
     "strict": true,
@@ -63,12 +70,13 @@
       "exclude": [
         "no-import-prefix",
         "no-process-global",
+        "no-slow-types",
         "no-unversioned-import"
       ]
     }
   },
   "tasks": {
-    "check": "deno check packages/contract/mod.ts packages/contract/src/*_test.ts packages/kind-worker/mod.ts packages/kind-web-service/mod.ts packages/kind-postgres/mod.ts packages/kind-object-store/mod.ts packages/kind-gateway/mod.ts packages/kernel/src/index.ts scripts/live-provisioning-smoke.ts scripts/jsr-publish-dry-run.ts scripts/public-spec-source-map_test.ts scripts/kind-descriptor-material-mapping_test.ts scripts/kind-package-ownership_test.ts scripts/spec-generate-ts.ts scripts/spec-check-drift.ts scripts/spec-check-drift_test.ts",
+    "check": "deno check packages/contract/mod.ts packages/contract/src/*_test.ts packages/runtime-agent/src/server.ts packages/runtime-agent/src/embed.ts packages/runtime-agent/src/connectors/mod.ts packages/runtime-agent/src/prepared_source_reader.ts packages/kind-worker/mod.ts packages/kind-web-service/mod.ts packages/kind-postgres/mod.ts packages/kind-object-store/mod.ts packages/kind-gateway/mod.ts packages/kind-sqlite/mod.ts packages/kind-kv-store/mod.ts packages/kind-message-queue/mod.ts packages/kind-vector-store/mod.ts packages/kernel/src/index.ts scripts/live-provisioning-smoke.ts scripts/jsr-publish-dry-run.ts scripts/public-spec-source-map_test.ts scripts/kind-descriptor-material-mapping_test.ts scripts/kind-package-ownership_test.ts scripts/portable-kind-validation_test.ts scripts/portable-package-readme.ts scripts/spec-generate-ts.ts scripts/spec-check-drift.ts scripts/spec-check-drift_test.ts",
     "check:cloudflare": "deno check --config deploy/cloudflare/deno.json deploy/cloudflare/src/worker.ts deploy/cloudflare/src/worker_test.ts deploy/cloudflare/src/scaffold_test.ts",
     "test": "deno test --allow-all",
     "publish:dry-run": "deno run --allow-run --allow-read scripts/jsr-publish-dry-run.ts",
@@ -79,6 +87,8 @@
     "fmt:check": "deno fmt --check",
     "lint": "deno lint",
     "lint:json-ld": "deno run --allow-read scripts/lint-json-ld.ts",
+    "readme:generate": "deno run --allow-read --allow-write --allow-run scripts/portable-package-readme.ts",
+    "readme:check": "deno run --allow-read --allow-write --allow-run scripts/portable-package-readme.ts --check",
     "spec:generate-ts": "deno run --allow-read --allow-write --allow-run scripts/spec-generate-ts.ts",
     "spec:check-drift": "deno run --allow-read --allow-write --allow-run scripts/spec-check-drift.ts",
     "spec:build": "bash -c 'mkdir -p website/.output/public/contexts && cp -R spec/contexts/. website/.output/public/contexts/ && echo \"[takosumi/spec] published spec/contexts → website/.output/public/contexts/\"'",

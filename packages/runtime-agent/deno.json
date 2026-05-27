@@ -18,8 +18,6 @@
     "takosumi-contract/installer-api": "jsr:@takos/takosumi-contract@^2.6.0/installer-api",
     "takosumi-contract/reference/plugin": "jsr:@takos/takosumi-contract@^2.6.0/reference/plugin",
     "takosumi-contract/reference/plugin-sdk": "jsr:@takos/takosumi-contract@^2.6.0/reference/plugin-sdk",
-    "takosumi-contract/reference/provider-plugin": "jsr:@takos/takosumi-contract@^2.6.0/reference/provider-plugin",
-    "takosumi-contract/reference/kernel-plugin-adapter": "jsr:@takos/takosumi-contract@^2.6.0/reference/kernel-plugin-adapter",
     "takosumi-contract/reference/runtime-agent": "jsr:@takos/takosumi-contract@^2.6.0/reference/runtime-agent",
     "takosumi-contract/reference/runtime-agent-lifecycle": "jsr:@takos/takosumi-contract@^2.6.0/reference/runtime-agent-lifecycle",
     "takosumi-contract/internal/api": "jsr:@takos/takosumi-contract@^2.6.0/internal/api",

@@ -25,27 +25,40 @@ import {
   KIND_URI as STORE_KIND,
 } from "@takos/takosumi-kind-filesystem-object-store";
 
+const webLifecycle = createDockerComposeLifecycleClient({
+  hostBinding: "127.0.0.1",
+});
+const databaseLifecycle = createDockerPostgresLifecycleClient();
+const objectStoreLifecycle = createFilesystemObjectStoreLifecycleClient({
+  rootDir: "/var/lib/takos/object-store",
+});
+
 const { app } = await createPaaSApp({
   kindAliases: {
-    "web-service": WEB_KIND,
-    postgres: DB_KIND,
-    "object-store": STORE_KIND,
+    "docker-compose-web-service": WEB_KIND,
+    "docker-postgres": DB_KIND,
+    "filesystem-object-store": STORE_KIND,
   },
   plugins: [
-    dockerComposeWebServicePlugin({ hostBinding: "127.0.0.1" }),
-    dockerPostgresPlugin(),
-    filesystemObjectStorePlugin(),
+    dockerComposeWebServicePlugin({
+      hostBinding: "127.0.0.1",
+      lifecycle: webLifecycle,
+    }),
+    dockerPostgresPlugin({ lifecycle: databaseLifecycle }),
+    filesystemObjectStorePlugin({ lifecycle: objectStoreLifecycle }),
   ],
 });
 
 Deno.serve({ port: 8788 }, app.fetch);
 ```
 
-`takosumi server` is the stock dev entrypoint. Operator distributions that need real cloud or local substrate bindings should own a small TypeScript bootstrap like the example above.
+この bootstrap は native kind alias を有効にする例です。manifest が `docker-compose-web-service`、`docker-postgres`、`filesystem-object-store` を使う場合、それぞれの native schema が `spec` を所有します。manifest が portable `web-service`、`postgres`、`object-store` を使う場合は、それらの portable URI を `kindAliases` に入れ、その portable URI を提供する adapter で backend へ bind します。
 
-## Kind package entrypoints
+`takosumi server` は標準の dev 用 entrypoint です。実際の cloud や local substrate binding が必要な operator distribution は、上記のような小さな TypeScript bootstrap を自前で用意してください。
 
-Reference adapter factories live in native kind packages in `takosumi-plugins`. Install only the packages your operator distribution enables.
+## Kind package の entrypoint
+
+Reference adapter factory は `takosumi-plugins` 内の native kind package に実装されています。operator distribution が有効にする package だけを install してください。
 
 - `@takos/takosumi-kind-cloudflare-worker`
 - `@takos/takosumi-kind-deno-deploy-worker`
@@ -69,9 +82,9 @@ Reference adapter factories live in native kind packages in `takosumi-plugins`. 
 
 ## Runtime-agent
 
-Credential and cloud SDK access stay in the runtime-agent or operator host. A kind package may expose an in-memory lifecycle for tests and a lifecycle-client option for production wiring. Operator distributions decide which connector credentials are present.
+Credential や cloud SDK のアクセスは runtime-agent または operator host に留めます。kind package はテスト用の in-memory lifecycle と本番配線用の lifecycle-client option を公開できます。どの connector credential を配置するかは operator distribution が決定します。
 
-## Related pages
+## 関連ページ
 
 - [Kind Packages](../reference/kind-packages.md)
 - [Kind Binding Implementations](../reference/kind-bindings.md)

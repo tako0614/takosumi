@@ -20,16 +20,12 @@
  */
 
 import type { JsonValue } from "takosumi-contract";
-import {
-  isOfficialOutputTypeName,
-  validateOfficialOutputMaterial,
-} from "takosumi-contract/type-catalog";
 import type { KernelPlugin } from "takosumi-contract/reference/compat";
 import type {
   AppSpec,
   Component,
-  ListenSourceRef,
-  PublicationName,
+  ComponentOutputRef,
+  OutputSlotName,
   PublishOptions,
 } from "takosumi-contract/app-spec";
 import type {
@@ -51,7 +47,7 @@ import type {
   SourcePin,
   SourceSummary,
 } from "takosumi-contract/installer-api";
-import type { NamespaceMaterial } from "takosumi-contract/reference/plugin";
+import type { OutputMaterial } from "takosumi-contract/reference/plugin";
 import {
   fetchGitSource,
   fetchPreparedSource,
@@ -79,9 +75,9 @@ import {
  * one of these from each `Component` and forwards it to the plugin
  * resolved via `provides[]`.
  *
- * The local publication registry is materialized at apply time;
- * `listenedMaterials` carries the resolved upstream material payload for
- * each binding the component listens to.
+ * The local material registry is populated at apply time;
+ * `inputMaterials` carries the resolved upstream material payload for each
+ * connect/listen binding the component consumes.
  */
 export interface ProviderApplyContext {
   readonly installationId: string;
@@ -90,19 +86,25 @@ export interface ProviderApplyContext {
   readonly source: SourceSummary;
   readonly sourceDirectory: string;
   /**
-   * Materials this component listens to, keyed by the local binding name as
-   * declared in `Component.listen`. Pre-resolved by the installer from
-   * local publications or external publication paths; the listener's
-   * `applyListen` (or the kernel
+   * Materials this component consumes, keyed by the local binding name as
+   * declared in `Component.connect` or `Component.listen`. Pre-resolved by
+   * the installer from local component outputs or platform service paths; the
+   * consumer's `applyBinding` (or the kernel
    * default) has already emitted env / mount / target descriptors before
    * the plugin's `apply` is called.
    */
-  readonly listenedMaterials: Readonly<
-    Record<string, NamespaceMaterial>
+  readonly inputMaterials?: Readonly<
+    Record<string, OutputMaterial>
   >;
   /**
-   * Env / mount / target descriptors produced by `applyListen` for each
-   * listen edge. Plugins may inspect these to apply runtime injection;
+   * @deprecated Use `inputMaterials`.
+   */
+  readonly listenedMaterials: Readonly<
+    Record<string, OutputMaterial>
+  >;
+  /**
+   * Env / mount / target descriptors produced by input binding resolution for
+   * each edge. Plugins may inspect these to apply runtime injection;
    * the descriptors are also persisted on the Deployment outputs.
    */
   readonly resolvedBindings: readonly ResolvedBinding[];
@@ -111,8 +113,8 @@ export interface ProviderApplyContext {
 export interface ProviderApplyResult {
   readonly resource: ProviderResourceEvidence;
   /**
-   * Outputs the plugin emits. Declared publications are projected into
-   * namespace material by the component kind's materializer.
+   * Outputs the plugin emits. Needed output slots are projected into material
+   * by the component kind's materializer.
    */
   readonly outputs: Readonly<Record<string, JsonValue>>;
 }
@@ -134,7 +136,7 @@ export interface InstallerProviderRegistry {
   apply(context: ProviderApplyContext): Promise<ProviderApplyResult>;
 }
 
-export interface ExternalPublicationResolveContext {
+export interface PlatformServiceResolveContext {
   readonly installationId: string;
   readonly spaceId: string;
   readonly appId: string;
@@ -144,21 +146,21 @@ export interface ExternalPublicationResolveContext {
   readonly sourceRef: string;
 }
 
-export interface ExternalPublicationResolver {
+export interface PlatformServiceResolver {
   resolve(
-    context: ExternalPublicationResolveContext,
-  ): Promise<NamespaceMaterial | undefined> | NamespaceMaterial | undefined;
+    context: PlatformServiceResolveContext,
+  ): Promise<OutputMaterial | undefined> | OutputMaterial | undefined;
 }
 
-export interface HttpExternalPublicationResolverOptions {
+export interface HttpPlatformServiceResolverOptions {
   readonly url: string;
   readonly token?: string;
   readonly fetch?: typeof fetch;
 }
 
-export function httpExternalPublicationResolver(
-  options: HttpExternalPublicationResolverOptions,
-): ExternalPublicationResolver {
+export function httpPlatformServiceResolver(
+  options: HttpPlatformServiceResolverOptions,
+): PlatformServiceResolver {
   return {
     async resolve(context) {
       const requestFetch = options.fetch ?? fetch;
@@ -188,17 +190,16 @@ export function httpExternalPublicationResolver(
       if (response.status < 200 || response.status >= 300) {
         throw new InstallerPipelineError(
           "failed_precondition",
-          `external publication resolver returned HTTP ${response.status}`,
+          `platform service resolver returned HTTP ${response.status}`,
         );
       }
-      const material =
-        isRecord(payload) && isNamespaceMaterial(payload.material)
-          ? payload.material
-          : payload;
-      if (!isNamespaceMaterial(material)) {
+      const material = isRecord(payload) && isOutputMaterial(payload.material)
+        ? payload.material
+        : payload;
+      if (!isOutputMaterial(material)) {
         throw new InstallerPipelineError(
           "failed_precondition",
-          "external publication resolver response must be a material object",
+          "platform service resolver response must be a material object",
         );
       }
       return material;
@@ -231,12 +232,12 @@ export interface InstallerPipelineDependencies {
    */
   readonly kindAliases?: KindAliasMap;
   /**
-   * Operator-owned resolver for Space-visible external publication paths such
-   * as `operator.identity.oidc`. The kernel treats the returned material like
+   * Operator-owned resolver for Space-visible platform service paths such
+   * as `identity.primary.oidc`. The kernel treats the returned material like
    * any other listened material; it does not assign special meaning to the
    * path.
    */
-  readonly externalPublications?: ExternalPublicationResolver;
+  readonly platformServices?: PlatformServiceResolver;
   /** Defaults to `crypto.randomUUID()`-based id generation. */
   readonly newId?: (prefix: string) => string;
   /** Defaults to `Date.now()`. */
@@ -254,7 +255,7 @@ export class InstallerPipeline {
   readonly #providers: InstallerProviderRegistry;
   readonly #plugins: readonly KernelPlugin[];
   readonly #pluginRegistry: KernelPluginRegistry;
-  readonly #externalPublications?: ExternalPublicationResolver;
+  readonly #platformServices?: PlatformServiceResolver;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #localSourceRoot?: string;
@@ -271,7 +272,7 @@ export class InstallerPipeline {
       (dependencies.plugins && dependencies.plugins.length > 0
         ? installerProviderRegistryFromPluginRegistry(this.#pluginRegistry)
         : new NoopProviderRegistry());
-    this.#externalPublications = dependencies.externalPublications;
+    this.#platformServices = dependencies.platformServices;
     this.#newId = dependencies.newId ??
       ((prefix: string) =>
         `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`);
@@ -280,42 +281,41 @@ export class InstallerPipeline {
   }
 
   /**
-   * Compute the {@link NamespaceMaterial} for a single local publication.
-   * Delegates to the plugin's `publishMaterial` hook when present; the
+   * Compute the {@link OutputMaterial} for a single component output slot.
+   * Delegates to the plugin's `materializeOutput` hook when present; the
    * fallback is intentionally narrow and never selects arbitrary output paths.
    */
-  async #publishMaterial(ctx: {
+  async #materializeOutput(ctx: {
     readonly installationId: string;
     readonly componentName: string;
     readonly component: Component;
-    readonly publicationName: PublicationName;
-    readonly options: PublishOptions;
+    readonly outputName: OutputSlotName;
+    readonly options?: PublishOptions;
     readonly outputs: Readonly<Record<string, JsonValue>>;
-  }): Promise<NamespaceMaterial> {
+  }): Promise<OutputMaterial> {
     const plugin = findPluginForKind(this.#pluginRegistry, ctx.component.kind);
-    let material: NamespaceMaterial;
-    if (plugin && typeof plugin.publishMaterial === "function") {
-      material = await plugin.publishMaterial({
+    let material: OutputMaterial;
+    const materializeOutput = plugin?.materializeOutput ??
+      plugin?.publishMaterial;
+    if (materializeOutput) {
+      material = await materializeOutput({
         installationId: ctx.installationId,
         componentName: ctx.componentName,
         component: ctx.component,
-        publicationName: ctx.publicationName,
+        outputName: ctx.outputName,
         options: ctx.options,
         outputs: ctx.outputs,
       });
     } else {
-      material = defaultPublishedMaterial(
-        ctx.publicationName,
+      material = defaultOutputMaterial(
+        ctx.outputName,
         ctx.outputs,
       );
     }
-    validateDeclaredPublicationMaterial({
+    validateOutputMaterial({
       componentName: ctx.componentName,
-      publicationName: ctx.publicationName,
-      contract: ctx.options.as,
+      outputName: ctx.outputName,
       material,
-      skipEmptyNoopMaterial: plugin === undefined &&
-        Object.keys(material).length === 0,
     });
     return material;
   }
@@ -528,9 +528,9 @@ export class InstallerPipeline {
       Record<string, Readonly<Record<string, JsonValue>>>
     > = {};
 
-    // Material registry — single Installation-scoped store used for local
-    // publications (`component.publication`) and external publication refs
-    // (`publisher.area.name`). Built incrementally as each component applies in
+    // Material registry — single Installation-scoped store used for component
+    // output refs (`component.output`) and platform service paths
+    // (`identity.primary.oidc`). Built incrementally as each component applies in
     // topological order.
     const registry = new MaterialRegistry();
     const resolver = new BindingResolver({
@@ -560,21 +560,48 @@ export class InstallerPipeline {
 
     try {
       const order = topologicalOrder(input.appSpec);
+      const neededOutputs = collectNeededOutputSlots(input.appSpec);
+      const servicePathExposures: Record<string, JsonValue> = {};
       for (const componentName of order) {
         const component = input.appSpec.components[componentName];
-        // Resolve listen bindings against the current registry. External
-        // publication refs with no registered material are skipped unless the
-        // AppSpec marks that binding as required; local refs are parser-
-        // validated and must be present by topology.
-        const listenedMaterials: Record<string, NamespaceMaterial> = {};
+        // Resolve deterministic same-AppSpec `connect` bindings first, then
+        // operator-resolved platform-service `listen` bindings.
+        const listenedMaterials: Record<string, OutputMaterial> = {};
         const resolvedBindings: ResolvedBinding[] = [];
+        if (component.connect) {
+          for (
+            const [bindingName, options] of Object.entries(component.connect)
+          ) {
+            const sourceRef = options.output;
+            const material = registry.get(sourceRef);
+            if (!material) {
+              throw new InstallerPipelineError(
+                "invalid_argument",
+                `${componentName}.connect.${bindingName}.output refers to ` +
+                  `unresolved component output ${JSON.stringify(sourceRef)}`,
+              );
+            }
+            const binding = await resolver.resolveEdge({
+              installationId: input.installation.id,
+              listenerComponent: componentName,
+              listenerKind: component.kind,
+              listenerComponentRef: component,
+              bindingName,
+              sourceRef,
+              options,
+              material,
+            });
+            listenedMaterials[bindingName] = material;
+            resolvedBindings.push(binding);
+          }
+        }
         if (component.listen) {
           for (
             const [bindingName, options] of Object.entries(component.listen)
           ) {
-            const sourceRef = options.from;
+            const sourceRef = options.path;
             const material = registry.get(sourceRef) ??
-              await this.#resolveExternalPublication({
+              await this.#resolvePlatformService({
                 installation: input.installation,
                 componentName,
                 component,
@@ -583,17 +610,13 @@ export class InstallerPipeline {
                 registry,
               });
             if (!material) {
-              if (
-                isExternalPublicationRef(sourceRef) && options.required !== true
-              ) {
+              if (options.required !== true) {
                 continue;
               }
               throw new InstallerPipelineError(
-                isExternalPublicationRef(sourceRef)
-                  ? "failed_precondition"
-                  : "invalid_argument",
-                `${componentName}.listen.${bindingName}.from refers to ` +
-                  `unresolved publication ${JSON.stringify(sourceRef)}`,
+                "failed_precondition",
+                `${componentName}.listen.${bindingName}.path refers to ` +
+                  `unresolved platform service ${JSON.stringify(sourceRef)}`,
               );
             }
             const binding = await resolver.resolveEdge({
@@ -617,38 +640,56 @@ export class InstallerPipeline {
           component,
           source: input.sourceSummary,
           sourceDirectory: input.workingDirectory,
+          inputMaterials: listenedMaterials,
           listenedMaterials,
           resolvedBindings,
         });
-        // Publish flow: register material only for declared local
-        // publications. There is no automatic external publication.
-        for (
-          const [publicationName, publishOptions] of Object.entries(
-            component.publish ?? {},
-          )
-        ) {
-          const publicationRef = localPublicationRef(
-            componentName,
-            publicationName,
-          );
-          const material = await this.#publishMaterial({
+        const neededComponentOutputs = neededOutputs.get(componentName) ??
+          new Set<OutputSlotName>();
+        for (const outputName of neededComponentOutputs) {
+          const outputRef = localOutputRef(componentName, outputName);
+          const material = await this.#materializeOutput({
             installationId: input.installation.id,
             componentName,
             component,
-            publicationName,
-            options: publishOptions,
+            outputName,
             outputs: applied.outputs,
           });
-          registry.publish(publicationRef, componentName, material);
+          registry.publish(outputRef, componentName, material);
           componentOutputs[componentName] ??= {};
-          componentOutputs[componentName][publicationName] =
+          componentOutputs[componentName][outputName] =
             materialToDeploymentOutput(material);
         }
+        if (Object.keys(applied.outputs).length > 0) {
+          componentOutputs[componentName] ??= {};
+          componentOutputs[componentName].outputs =
+            providerOutputsToDeploymentOutput(applied.outputs);
+        }
+      }
+      for (
+        const [name, options] of Object.entries(input.appSpec.publish ?? {})
+      ) {
+        const material = registry.get(options.output);
+        if (!material) {
+          throw new InstallerPipelineError(
+            "failed_precondition",
+            `publish.${name}.output refers to unresolved component output ` +
+              JSON.stringify(options.output),
+          );
+        }
+        servicePathExposures[name] = {
+          path: options.path,
+          output: options.output,
+          material: materialToDeploymentOutput(material),
+        };
       }
       const outputs: DeploymentOutputs = {
         components: Object.keys(componentOutputs).length === 0
           ? undefined
           : componentOutputs,
+        extensions: Object.keys(servicePathExposures).length === 0
+          ? undefined
+          : { servicePathExposures },
       };
       const deployment: Deployment = {
         id: deploymentId,
@@ -685,19 +726,18 @@ export class InstallerPipeline {
     }
   }
 
-  async #resolveExternalPublication(input: {
+  async #resolvePlatformService(input: {
     readonly installation: Installation;
     readonly componentName: string;
     readonly component: Component;
     readonly bindingName: string;
     readonly sourceRef: string;
     readonly registry: MaterialRegistry;
-  }): Promise<NamespaceMaterial | undefined> {
-    if (!isExternalPublicationRef(input.sourceRef)) return undefined;
-    if (!this.#externalPublications) return undefined;
-    let material: NamespaceMaterial | undefined;
+  }): Promise<OutputMaterial | undefined> {
+    if (!this.#platformServices) return undefined;
+    let material: OutputMaterial | undefined;
     try {
-      material = await this.#externalPublications.resolve({
+      material = await this.#platformServices.resolve({
         installationId: input.installation.id,
         spaceId: input.installation.spaceId,
         appId: input.installation.appId,
@@ -710,20 +750,20 @@ export class InstallerPipeline {
       const cause = error instanceof Error ? error.message : String(error);
       throw new InstallerPipelineError(
         "failed_precondition",
-        `failed to resolve external publication ${
+        `failed to resolve platform service ${
           JSON.stringify(input.sourceRef)
         }: ${cause}`,
       );
     }
     if (material === undefined) return undefined;
-    if (!isNamespaceMaterial(material)) {
+    if (!isOutputMaterial(material)) {
       throw new InstallerPipelineError(
         "failed_precondition",
-        `external publication ${JSON.stringify(input.sourceRef)} returned ` +
+        `platform service ${JSON.stringify(input.sourceRef)} returned ` +
           "invalid material",
       );
     }
-    input.registry.publishExternal(input.sourceRef, material);
+    input.registry.publishPlatformService(input.sourceRef, material);
     return material;
   }
 
@@ -947,6 +987,7 @@ function installerProviderRegistryFromPluginRegistry(
         component: context.component,
         source: context.source,
         sourceDirectory: context.sourceDirectory,
+        inputMaterials: context.inputMaterials ?? context.listenedMaterials,
         listenedMaterials: context.listenedMaterials,
         resolvedBindings: context.resolvedBindings,
       });
@@ -965,25 +1006,25 @@ function installerProviderRegistryFromPluginRegistry(
 
 /**
  * In-memory material registry — owns the (source ref → publisher / material)
- * map for one Deployment apply. Local publications use
- * `component.publication`; external publication refs use `publisher.area.name`
- * when an operator pre-populates them.
+ * map for one Deployment apply. Component outputs use `component.output`;
+ * platform service refs use `identity.primary.oidc`-style paths when an operator
+ * pre-populates them.
  */
 class MaterialRegistry {
-  readonly #materials = new Map<string, NamespaceMaterial>();
+  readonly #materials = new Map<string, OutputMaterial>();
   readonly #publishers = new Map<string, string>();
 
   publish(
     sourceRef: string,
     publisher: string,
-    material: NamespaceMaterial,
+    material: OutputMaterial,
   ): void {
     const existing = this.#publishers.get(sourceRef);
     if (existing !== undefined && existing !== publisher) {
       throw new InstallerPipelineError(
         "failed_precondition",
-        `publication ${JSON.stringify(sourceRef)} is already ` +
-          `published by ${JSON.stringify(existing)}; cannot republish from ` +
+        `material ${JSON.stringify(sourceRef)} is already ` +
+          `published by ${JSON.stringify(existing)}; cannot publish from ` +
           JSON.stringify(publisher),
       );
     }
@@ -991,67 +1032,60 @@ class MaterialRegistry {
     this.#materials.set(sourceRef, material);
   }
 
-  publishExternal(
+  publishPlatformService(
     sourceRef: string,
-    material: NamespaceMaterial,
+    material: OutputMaterial,
   ): void {
     this.#materials.set(sourceRef, material);
   }
 
-  get(sourceRef: string): NamespaceMaterial | undefined {
+  get(sourceRef: string): OutputMaterial | undefined {
     return this.#materials.get(sourceRef);
   }
 
-  snapshot(): Readonly<Record<string, NamespaceMaterial>> {
+  snapshot(): Readonly<Record<string, OutputMaterial>> {
     return Object.fromEntries(this.#materials.entries());
   }
 }
 
-function localPublicationRef(
+function localOutputRef(
   componentName: string,
-  publicationName: string,
+  outputName: string,
 ): string {
-  return `${componentName}.${publicationName}`;
+  return `${componentName}.${outputName}`;
 }
 
-function defaultPublishedMaterial(
-  publicationName: PublicationName,
+function defaultOutputMaterial(
+  outputName: OutputSlotName,
   outputs: Readonly<Record<string, JsonValue>>,
-): NamespaceMaterial {
+): OutputMaterial {
   if (Object.keys(outputs).length === 0) return {};
-  const selected = outputs[publicationName];
+  const selected = outputs[outputName];
   if (selected !== undefined) {
-    return { [publicationName]: selected };
+    return { [outputName]: selected };
   }
   throw new InstallerPipelineError(
     "failed_precondition",
-    `publish.${publicationName} requires the component materializer to ` +
-      `project provider outputs into namespace material`,
+    `output ${outputName} requires the component materializer to ` +
+      `project provider outputs into output material`,
   );
 }
 
-function validateDeclaredPublicationMaterial(input: {
+function validateOutputMaterial(input: {
   readonly componentName: string;
-  readonly publicationName: PublicationName;
-  readonly contract: string;
-  readonly material: NamespaceMaterial;
-  readonly skipEmptyNoopMaterial?: boolean;
+  readonly outputName: OutputSlotName;
+  readonly material: OutputMaterial;
 }): void {
-  if (input.skipEmptyNoopMaterial) return;
-  if (!isOfficialOutputTypeName(input.contract)) return;
-  const issues = validateOfficialOutputMaterial(input.contract, input.material);
-  if (issues.length === 0) return;
-  throw new InstallerPipelineError(
-    "failed_precondition",
-    `${input.componentName}.publish.${input.publicationName} produced ` +
-      `invalid ${input.contract} material: ${
-        issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
-      }`,
-  );
+  if (!isOutputMaterial(input.material)) {
+    throw new InstallerPipelineError(
+      "failed_precondition",
+      `${input.componentName}.${input.outputName} produced invalid material`,
+    );
+  }
 }
 
 function materialToDeploymentOutput(
-  material: NamespaceMaterial,
+  material: OutputMaterial,
 ): Readonly<Record<string, JsonValue>> {
   const output: Record<string, JsonValue> = {};
   for (const [key, value] of Object.entries(material)) {
@@ -1062,33 +1096,26 @@ function materialToDeploymentOutput(
   return output;
 }
 
+function providerOutputsToDeploymentOutput(
+  outputs: Readonly<Record<string, JsonValue>>,
+): Readonly<Record<string, JsonValue>> {
+  return { ...outputs };
+}
+
 function isSecretRefMaterial(
-  value: NamespaceMaterial[string],
+  value: OutputMaterial[string],
 ): value is { readonly secretRef: string } {
   return value !== null && typeof value === "object" && !Array.isArray(value) &&
     typeof value.secretRef === "string";
 }
 
-function isNamespaceMaterial(value: unknown): value is NamespaceMaterial {
+function isOutputMaterial(value: unknown): value is OutputMaterial {
   return value !== null && typeof value === "object" &&
     !Array.isArray(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isExternalPublicationRef(value: ListenSourceRef): boolean {
-  const segments = value.split(".");
-  if (segments.length < 3 || segments.length > 8) return false;
-  return segments.every((segment, index) =>
-    isValidPublicationSegment(segment) &&
-    (segment !== "default" || index === segments.length - 1)
-  );
-}
-
-function isValidPublicationSegment(value: string): boolean {
-  return /^[a-z][a-z0-9-]{0,62}$/.test(value);
 }
 
 export type InstallerPipelineErrorCode =
@@ -1217,22 +1244,32 @@ function computeFreshInstallChangeSet(
   return entries;
 }
 
+function collectNeededOutputSlots(
+  appSpec: AppSpec,
+): Map<string, Set<OutputSlotName>> {
+  const needed = new Map<string, Set<OutputSlotName>>();
+  const add = (ref: ComponentOutputRef) => {
+    const [componentName, outputName] = ref.split(".");
+    if (!componentName || !outputName) return;
+    const slots = needed.get(componentName) ?? new Set<OutputSlotName>();
+    slots.add(outputName);
+    needed.set(componentName, slots);
+  };
+  for (const component of Object.values(appSpec.components)) {
+    for (const options of Object.values(component.connect ?? {})) {
+      add(options.output);
+    }
+  }
+  for (const options of Object.values(appSpec.publish ?? {})) {
+    add(options.output);
+  }
+  return needed;
+}
+
 function topologicalOrder(appSpec: AppSpec): readonly string[] {
   const order: string[] = [];
   const visited = new Set<string>();
   const visiting = new Set<string>();
-
-  // Build a publisher index. The yaml-parser has already rejected cycles
-  // and unknown local refs; the installer re-checks at runtime so a
-  // pre-parsed AppSpec from a non-canonical source still surfaces a precise
-  // diagnostic.
-  const publisherByRef = new Map<string, string>();
-  for (const [name, component] of Object.entries(appSpec.components)) {
-    if (!component.publish) continue;
-    for (const publicationName of Object.keys(component.publish)) {
-      publisherByRef.set(localPublicationRef(name, publicationName), name);
-    }
-  }
 
   const visit = (node: string, stack: string[]) => {
     if (visited.has(node)) return;
@@ -1240,31 +1277,31 @@ function topologicalOrder(appSpec: AppSpec): readonly string[] {
       const cycleStart = stack.indexOf(node);
       throw new InstallerPipelineError(
         "failed_precondition",
-        `publish/listen cycle detected: ${
+        `connect cycle detected: ${
           stack.slice(cycleStart).join(" → ")
         } → ${node}`,
       );
     }
     visiting.add(node);
     stack.push(node);
-    const listen = appSpec.components[node]?.listen;
-    if (listen) {
-      for (const [bindingName, options] of Object.entries(listen)) {
-        const from = options.from;
-        if (isExternalPublicationRef(from)) continue;
-        const publisher = publisherByRef.get(from);
-        if (publisher === undefined) {
+    const connect = appSpec.components[node]?.connect;
+    if (connect) {
+      for (const [bindingName, options] of Object.entries(connect)) {
+        const [publisher] = options.output.split(".");
+        if (publisher === undefined || !(publisher in appSpec.components)) {
           throw new InstallerPipelineError(
             "failed_precondition",
-            `${node}.listen.${bindingName}.from refers to unknown ` +
-              `publication ${JSON.stringify(from)}`,
+            `${node}.connect.${bindingName}.output refers to unknown ` +
+              `component output ${JSON.stringify(options.output)}`,
           );
         }
         if (publisher === node) {
           throw new InstallerPipelineError(
             "failed_precondition",
-            `${node} listens to its own publication ` +
-              `(${JSON.stringify(from)}); self-loops are not permitted`,
+            `${node} connects to its own output ` +
+              `(${
+                JSON.stringify(options.output)
+              }); self-loops are not permitted`,
           );
         }
         visit(publisher, stack);

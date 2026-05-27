@@ -1,6 +1,6 @@
 # Takosumi
 
-Takosumi is an operator-portable PaaS contract for installing source into a Space and recording each apply as a Deployment. App authors write `.takosumi.yml`; operators decide which kind catalog and implementation bindings materialize each component.
+Takosumi is an operator-portable PaaS contract for installing source into a Space and recording each apply as a Deployment. App authors write `.takosumi.yml`; operators decide which official type catalog and implementation bindings materialize each component.
 
 Docs: <https://takosumi.com/docs/>
 
@@ -42,21 +42,18 @@ components:
     spec:
       version: "16"
       size: small
-    publish:
-      connection:
-        as: service-binding
   web:
     kind: worker
     spec:
       entrypoint: src/worker.ts
-    listen:
+    connect:
       db:
-        from: db.connection
-        as: secret-env
+        output: db.connection
+        inject: secret-env
         prefix: DB
 ```
 
-`db` offers the published output `db.connection`; `web` listens to it and receives runtime values such as `DB_HOST`, `DB_PORT`, and secretRef-mediated connection strings. Component connections are expressed with `publish` and `listen`. Operator platform services use the same mechanism, for example `from: operator.identity.oidc`.
+`web` connects to the `db.connection` output and receives runtime values such as `DB_HOST`, `DB_PORT`, and secretRef-mediated connection strings. Same-manifest component connections use `connect`. Operator platform services use `listen.path`, for example `path: identity.primary.oidc`. Root `publish` records an Installation output service path declaration for a component output.
 
 ## Core Concepts
 
@@ -74,7 +71,7 @@ Takosumi's public lifecycle is centered on these three entities. Ownership, bill
 
 Takosumi kind packages are split by repository:
 
-- This repository ships portable kind packages that define author-facing shapes such as `worker`, `web-service`, `postgres`, `object-store`, and `gateway`.
+- This repository ships portable kind packages that define author-facing shapes such as `worker`, `web-service`, `postgres`, `sqlite`, `object-store`, `kv-store`, `message-queue`, `vector-store`, and `gateway`.
 - The sibling `takosumi-plugins` repository ships native kind packages that bind a concrete backend into the reference kernel, such as `cloudflare-worker`, `aws-s3-object-store`, `docker-compose-web-service`, or `coredns-gateway`.
 
 The reference implementation wires native kind packages through `KernelPlugin` factories passed to `createPaaSApp({ kindAliases, plugins })`. Compatible implementations may bind the same kind URIs with another controller, registry, workflow engine, or SaaS adapter.
@@ -111,7 +108,7 @@ Core/runtime/tooling packages:
 | Package                                                                             | Purpose                                                      |
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | umbrella package for core exports and portable kind packages |
-| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | manifest and Installer API wire types                         |
+| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | manifest and Installer API wire types                        |
 | [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | reference kernel and Installer API server                    |
 | [`jsr:@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | `.takosumi.yml` parser, source fetch, deploy client          |
 | [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` command                                           |

@@ -37,7 +37,7 @@ website/.output/public/
 │   ├── reference/, getting-started/, operator/, ...
 │   └── ...
 ├── contexts/                  # JSON-LD context
-└── kinds/v1/                  # Kind Catalog descriptors
+└── kinds/v1/                  # Official Type Catalog descriptors
     ├── <name>
     └── <name>.jsonld
 ```
@@ -168,7 +168,7 @@ After cleanup, the only Takosumi-public Cloudflare resources are `takosumi-websi
 When `cloud.takosumi.com` is live, downstream products that consume Takosumi Accounts need to point at it:
 
 - `takos-private/apps/control/cloudflare/wrangler.toml` — `OIDC_ISSUER_URL = "https://cloud.takosumi.com"` (already set by this deploy plan in both production and staging blocks).
-- Any other operator profile that maintains its own OIDC client registration with Takosumi Accounts must update its issuer URL.
+- Any other operator distribution that maintains its own OIDC client registration with Takosumi Accounts must update its issuer URL.
 
 The OIDC client `takos-private-production` is registered with the Worker via the `TAKOSUMI_ACCOUNTS_CLIENT_ID` / `TAKOSUMI_ACCOUNTS_REDIRECT_URIS` vars in `takosumi-cloud/deploy/cloudflare/wrangler.toml`. Update there if the takos.jp callback URI changes.
 

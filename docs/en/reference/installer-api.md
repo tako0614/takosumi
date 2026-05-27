@@ -1,6 +1,6 @@
 # Installer API (5 endpoints) {#installer-api}
 
-The public Takosumi Installer API has five Installation-centered endpoints. The objects are manifest, Installation, and Deployment, and the endpoints follow that lifecycle.
+The public Takosumi Installer API has five Installation-centered endpoints. The objects are AppSpec, Installation, and Deployment, and the endpoints follow that lifecycle.
 
 ```text
 POST /v1/installations/dry-run
@@ -14,7 +14,7 @@ Dry-run results are returned in the response. Apply results are recorded as Depl
 
 These five routes are the Takosumi public Installer API. If an operator distribution exposes account management APIs or facades on the same host or URL prefix, those APIs are versioned as operator-provided contracts.
 
-## Write API And Read APIs {#write-api-and-read-surfaces}
+## Write API and Read APIs {#write-api-and-read-surfaces}
 
 The Installer API is the portable write lifecycle. It handles preview, Installation creation, deploy, and rollback, and returns `Installation` and `Deployment` objects as write results. List, get, and poll routes are not part of the five-endpoint core contract.
 
@@ -85,7 +85,7 @@ Prepared source examples in this API reference show only the Installer API reque
 
 ### Response
 
-The `outputs`-related examples in this page use catalog-shaped output data an operator might create after adopting official gateway and service-binding kind definitions. Core records non-secret output data; kind definition semantics are defined by the catalog and operator.
+The `outputs`-related examples in this page use catalog-shaped output data an operator might create after adopting official gateway and service-binding kind definitions. Core records non-secret data for component output slots and service paths exposed through root `publish`; kind definition semantics are defined by the catalog and operator.
 
 ```json
 {
@@ -105,10 +105,7 @@ The `outputs`-related examples in this page use catalog-shaped output data an op
     "components": {
       "web": {
         "kind": "worker",
-        "spec": { "entrypoint": "src/worker.ts" },
-        "publish": {
-          "http": { "as": "http-endpoint" }
-        }
+        "spec": { "entrypoint": "src/worker.ts" }
       },
       "db": {
         "kind": "postgres",
@@ -116,11 +113,8 @@ The `outputs`-related examples in this page use catalog-shaped output data an op
       },
       "public": {
         "kind": "gateway",
-        "listen": {
-          "app": { "from": "web.http", "as": "upstream" }
-        },
-        "publish": {
-          "public": { "as": "http-endpoint" }
+        "connect": {
+          "app": { "output": "web.http", "inject": "upstream" }
         },
         "spec": {
           "listeners": {
@@ -134,6 +128,16 @@ The `outputs`-related examples in this page use catalog-shaped output data an op
             { "listener": "public", "path": "/", "to": "app" }
           ]
         }
+      }
+    },
+    "publish": {
+      "api": {
+        "output": "public.endpoint",
+        "path": "acme.notes.api"
+      },
+      "database": {
+        "output": "db.connection",
+        "path": "acme.database.reporting"
       }
     }
   },
@@ -190,7 +194,7 @@ Local source dry-run returns only `expected.manifestDigest`. That guards the `.t
 
 ## `POST /v1/installations` {#post-v1-installations}
 
-Runs the first apply for an Installation and records the first Deployment. In operator configurations with account management, account/Space/ownership ledger creation belongs to the operator facade; this route handles manifest/source verification and Deployment apply.
+Runs the first apply for an Installation and records the first Deployment. In operator distributions with account management, account/Space/ownership ledger creation belongs to the operator facade; this route handles manifest/source verification and Deployment apply.
 
 ### Request
 
@@ -258,7 +262,7 @@ Prepared source apply requires request `source.digest`. Dry-run `expected.source
     "outputs": {
       "components": {
         "public": {
-          "public": {
+          "endpoint": {
             "contract": "http-endpoint",
             "endpoints": [
               {
@@ -280,6 +284,37 @@ Prepared source apply requires request `source.digest`. Dry-run `expected.source
             "secretRefs": ["secret://runtime/db/password"]
           }
         }
+      },
+      "extensions": {
+        "servicePathExposures": {
+          "api": {
+            "path": "acme.notes.api",
+            "output": "public.endpoint",
+            "material": {
+              "contract": "http-endpoint",
+              "endpoints": [
+                {
+                  "url": "https://notes.example.com",
+                  "scheme": "https",
+                  "host": "notes.example.com",
+                  "listener": "public",
+                  "visibility": "public",
+                  "primary": true,
+                  "routes": [{ "pathPrefix": "/", "to": "app" }]
+                }
+              ]
+            }
+          },
+          "database": {
+            "path": "acme.database.reporting",
+            "output": "db.connection",
+            "material": {
+              "contract": "service-binding",
+              "configRef": "config://deployment/db/connection",
+              "secretRefs": ["secret://runtime/db/password"]
+            }
+          }
+        }
       }
     },
     "createdAt": 1716000000000
@@ -287,7 +322,7 @@ Prepared source apply requires request `source.digest`. Dry-run `expected.source
 }
 ```
 
-`outputs.components[componentName][publicationName]` is the public/non-secret output data for a manifest `publish` entry in that Deployment. Public Installer responses return catalog-defined published output as JSON objects. Output field meaning belongs to the selected catalog/operator configuration, and operator-facing ledgers may store separate apply records.
+`outputs.components[componentName][outputSlot]` is public/non-secret output data for a materialized component output slot in that Deployment. Installation output service path declarations made through root `publish` can be recorded in `outputs.extensions.servicePathExposures` with their path and source output. The example above uses official type catalog `http-endpoint` and `service-binding` output data. Output field meaning belongs to the selected catalog/operator distribution, and operator-facing ledgers may store separate apply records.
 
 Public `outputs` contain only non-secret runtime/public projections. Raw credentials, tokens, private keys, passwords, cookies, provider secrets, and payment-backend credentials are not placed in Deployment outputs or export bundles. Required sensitive values are represented as `configRef`, `secretRef`, or operator-provided configuration. Exporter-specific rejection and redaction behavior belongs to operator/exporter docs.
 
@@ -516,7 +551,7 @@ interface Deployment {
 }
 ```
 
-Public Deployment wire guarantees source identity, `manifestDigest`, status, and public/non-secret `outputs`. Portable summaries can be exposed through documented extension fields. Implementations and operator configurations record resolution details in Deployment records.
+Public Deployment wire guarantees source identity, `manifestDigest`, status, and public/non-secret `outputs`. Portable summaries can be exposed through documented extension fields. Implementations and operator distributions record resolution details in Deployment records.
 
 ## Apply Result Semantics {#apply-result-semantics}
 
@@ -570,10 +605,10 @@ Common `invalid_argument` causes:
 
 - Manifest schema violation
 - Malformed source
-- Malformed `listen.from` grammar
-- Invalid local `listen` reference
+- Malformed `listen.path` grammar
+- Invalid `connect.output` reference
 - Unsupported field shape
-- Cyclic `publish` to `listen`
+- Cyclic `connect` graph
 
 Common `failed_precondition` causes:
 

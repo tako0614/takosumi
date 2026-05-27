@@ -12,7 +12,7 @@
  * services with no artifact at all) can ignore the fetcher entirely.
  */
 
-import type { JsonObject } from "takosumi-contract/reference/compat";
+import type { JsonObject } from "takosumi-contract/reference/types";
 
 export interface FetchedArtifact {
   readonly bytes: Uint8Array;

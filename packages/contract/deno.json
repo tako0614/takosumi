@@ -11,13 +11,12 @@
     "./reference/error-category": "./src/error-category.ts",
     "./reference/plugin": "./src/plugin.ts",
     "./reference/plugin-sdk": "./src/plugin-sdk.ts",
-    "./reference/provider-plugin": "./src/provider-plugin.ts",
-    "./reference/kernel-plugin-adapter": "./src/kernel-plugin-adapter.ts",
     "./reference/runtime-agent": "./src/runtime-agent.ts",
     "./reference/runtime-agent-lifecycle": "./src/runtime-agent-lifecycle.ts",
     "./reference/shape": "./src/shape.ts",
     "./reference/types": "./src/types.ts",
     "./internal/api": "./src/internal-api.ts",
+    "./internal/provider-plugin": "./src/provider-plugin.ts",
     "./internal/rpc": "./src/internal-rpc.ts"
   },
   "tasks": {

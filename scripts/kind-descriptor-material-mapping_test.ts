@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import {
   isOfficialOutputTypeName,
+  isOutputFieldTypeName,
+  OUTPUT_FIELD_TYPE_NAMES,
+  type OutputFieldTypeDefinition,
   validateOfficialOutputMaterialMapping,
   validateOfficialOutputMaterialMappingOutputTypes,
 } from "takosumi-contract/type-catalog";
@@ -11,6 +14,10 @@ const PORTABLE_KIND_PACKAGES = [
   "kind-postgres",
   "kind-object-store",
   "kind-gateway",
+  "kind-sqlite",
+  "kind-kv-store",
+  "kind-message-queue",
+  "kind-vector-store",
 ] as const;
 
 Deno.test("portable kind descriptors publish official material mappings", async () => {
@@ -21,29 +28,30 @@ Deno.test("portable kind descriptors publish official material mappings", async 
     );
     const descriptor = JSON.parse(await Deno.readTextFile(path)) as {
       readonly name?: string;
-      readonly publications?: Record<string, unknown>;
+      readonly outputSlots?: Record<string, unknown>;
       readonly outputs?: readonly unknown[];
     };
     const label = descriptor.name ?? pkg;
     const outputs = declaredOutputs(descriptor.outputs, label);
-    const publications = descriptor.publications;
+    assertDescriptorOutputs(outputs, label);
+    const outputSlots = descriptor.outputSlots;
 
     assert.ok(
-      publications && typeof publications === "object" &&
-        !Array.isArray(publications),
-      `${label}: publications must be an object`,
+      outputSlots && typeof outputSlots === "object" &&
+        !Array.isArray(outputSlots),
+      `${label}: outputSlots must be an object`,
     );
 
-    for (const [name, raw] of Object.entries(publications)) {
+    for (const [name, raw] of Object.entries(outputSlots)) {
       assert.ok(
         raw && typeof raw === "object" && !Array.isArray(raw),
-        `${label}.${name}: publication must be an object`,
+        `${label}.${name}: output slot must be an object`,
       );
-      const publication = raw as {
+      const outputSlot = raw as {
         readonly contract?: unknown;
         readonly exampleMaterialMapping?: unknown;
       };
-      const contract = publication.contract;
+      const contract = outputSlot.contract;
       if (typeof contract !== "string") {
         assert.fail(`${label}.${name}: contract must be a string`);
       }
@@ -52,16 +60,16 @@ Deno.test("portable kind descriptors publish official material mappings", async 
         `${label}.${name}: contract must be an official output type`,
       );
       assert.ok(
-        publication.exampleMaterialMapping &&
-          typeof publication.exampleMaterialMapping === "object" &&
-          !Array.isArray(publication.exampleMaterialMapping),
+        outputSlot.exampleMaterialMapping &&
+          typeof outputSlot.exampleMaterialMapping === "object" &&
+          !Array.isArray(outputSlot.exampleMaterialMapping),
         `${label}.${name}: exampleMaterialMapping must be an object`,
       );
 
       assert.deepEqual(
         validateOfficialOutputMaterialMapping(
           contract,
-          publication.exampleMaterialMapping,
+          outputSlot.exampleMaterialMapping,
         ),
         [],
         `${label}.${name}: exampleMaterialMapping must match official material shape`,
@@ -70,7 +78,7 @@ Deno.test("portable kind descriptors publish official material mappings", async 
       assert.deepEqual(
         validateOfficialOutputMaterialMappingOutputTypes(
           contract,
-          publication.exampleMaterialMapping,
+          outputSlot.exampleMaterialMapping,
           outputs,
         ),
         [],
@@ -85,11 +93,7 @@ function declaredOutputs(
   label: string,
 ) {
   assert.ok(Array.isArray(outputs), `${label}: outputs must be an array`);
-  const fields: {
-    readonly name: string;
-    readonly type: string;
-    readonly required?: boolean;
-  }[] = [];
+  const fields: OutputFieldTypeDefinition[] = [];
   for (const [index, raw] of outputs.entries()) {
     assert.ok(
       raw && typeof raw === "object" && !Array.isArray(raw),
@@ -103,6 +107,9 @@ function declaredOutputs(
     if (typeof type !== "string") {
       assert.fail(`${label}.outputs[${index}].type must be a string`);
     }
+    if (!isOutputFieldTypeName(type)) {
+      assert.fail(`${label}.outputs[${index}].type is unsupported: ${type}`);
+    }
     const required = (raw as { readonly required?: unknown }).required;
     if (typeof required !== "boolean") {
       assert.fail(`${label}.outputs[${index}].required must be a boolean`);
@@ -110,4 +117,32 @@ function declaredOutputs(
     fields.push({ name, type, required });
   }
   return fields;
+}
+
+function assertDescriptorOutputs(
+  outputs: readonly {
+    readonly name: string;
+    readonly type: string;
+    readonly required?: boolean;
+  }[],
+  label: string,
+): void {
+  const names = new Set<string>();
+  for (const output of outputs) {
+    assert.match(
+      output.name,
+      /^[A-Za-z][A-Za-z0-9]*$/,
+      `${label}.outputs[].name must be a stable camelCase identifier`,
+    );
+    assert.equal(
+      names.has(output.name),
+      false,
+      `${label}.outputs[] has duplicate name ${output.name}`,
+    );
+    names.add(output.name);
+    assert.ok(
+      (OUTPUT_FIELD_TYPE_NAMES as readonly string[]).includes(output.type),
+      `${label}.outputs.${output.name}: unsupported output type ${output.type}`,
+    );
+  }
 }

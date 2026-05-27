@@ -1,13 +1,6 @@
 // AUTO-GENERATED FROM package-owned kind descriptor spec/kind.jsonld — DO NOT EDIT.
 // Run `deno task spec:generate-ts` to refresh.
 
-export interface WebServiceScale {
-  /** Maximum requested replica count. */
-  readonly max: number;
-  /** Minimum requested replica count. */
-  readonly min: number;
-}
-
 export interface WebServiceResources {
   /** Requested CPU size or provider-specific CPU class. */
   readonly cpu?: string;
@@ -15,78 +8,89 @@ export interface WebServiceResources {
   readonly memory?: string;
 }
 
+export interface WebServiceScale {
+  /** Maximum requested replica count. */
+  readonly max: number;
+  /** Minimum requested replica count. */
+  readonly min: number;
+}
+
 export interface WebServiceSpec {
   /** OCI image reference. */
   readonly image: string;
   /** Container listen port exposed by the service. */
   readonly port: number;
-  /** Replica bounds. `min: 0` requests scale-to-zero. Operator policy and the selected implementation materialize or reject the request. */
-  readonly scale: WebServiceScale;
   /** Environment variables passed to the service. */
   readonly env?: Readonly<Record<string, string>>;
   /** CPU / memory hints consumed by compatible provider bindings. */
   readonly resources?: WebServiceResources;
-  readonly [extension: string]: unknown;
+  /** Replica bounds. `min: 0` requests zero steady replicas. Operator policy and the selected implementation materialize or reject the request. */
+  readonly scale?: WebServiceScale;
 }
 
 export interface WebServiceOutputs {
-  /** Provider-local upstream URL (scheme-bearing) used by gateway/listener components. */
+  /** Implementation-local upstream URL (scheme-bearing) used by gateway/listener components. */
   readonly url: string;
-  /** Provider-local service host. */
+  /** Implementation-local service host. */
   readonly internalHost: string;
-  /** Provider-local service port. */
+  /** Implementation-local service port. */
   readonly internalPort: number;
 }
 
 export type WebServiceCapabilityTerm =
-  | "always-on"
-  | "scale-to-zero"
-  | "websocket"
-  | "long-request"
-  | "sticky-session"
-  | "geo-routing"
-  | "crons"
-  | "private-networking";
+  | "http-service"
+  | "oci-image"
+  | "replica-scaling";
 
-export type WebServicePublicationName = "http";
+export type WebServiceOutputFieldName =
+  | "url"
+  | "internalHost"
+  | "internalPort";
 
-export type WebServicePublicationContract = "http-endpoint";
+export type WebServiceOutputSlotName = "http";
 
-export interface WebServicePublicationDescriptor {
-  readonly name: WebServicePublicationName;
-  readonly contract: WebServicePublicationContract;
+export type WebServiceOutputSlotContract = "http-endpoint";
+
+export interface WebServiceOutputSlotDescriptor {
+  readonly name: WebServiceOutputSlotName;
+  readonly contract: WebServiceOutputSlotContract;
   readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
+}
+
+export interface WebServiceListenSlotDescriptor {
+  readonly name: string;
+  readonly accepts?: readonly string[];
+  readonly projectionFamilies?: readonly string[];
+  readonly projectionMatrix?: Readonly<Record<string, readonly string[]>>;
+  readonly requiredWhenReferencedBy?: string;
+  readonly minimumAccess?: string;
+  readonly safeDefaultAccess?: string | null;
 }
 
 export const WEB_SERVICE_CAPABILITY_TERMS: readonly WebServiceCapabilityTerm[] =
   [
-    "always-on",
-    "scale-to-zero",
-    "websocket",
-    "long-request",
-    "sticky-session",
-    "geo-routing",
-    "crons",
-    "private-networking",
+    "http-service",
+    "oci-image",
+    "replica-scaling",
   ];
 
-export const WEB_SERVICE_OUTPUT_FIELDS: readonly string[] = [
+export const WEB_SERVICE_OUTPUT_FIELDS: readonly WebServiceOutputFieldName[] = [
   "url",
   "internalHost",
   "internalPort",
 ];
 
-// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.
+// referenceAliases are catalog suggestions only; operator distributions activate aliases explicitly.
 export const WEB_SERVICE_ALIASES: readonly string[] = [
   "web-service",
 ];
 
-export const WEB_SERVICE_PUBLICATIONS: readonly WebServicePublicationName[] = [
+export const WEB_SERVICE_OUTPUT_SLOTS: readonly WebServiceOutputSlotName[] = [
   "http",
 ];
 
-export const WEB_SERVICE_PUBLICATION_DESCRIPTORS:
-  readonly WebServicePublicationDescriptor[] = [
+export const WEB_SERVICE_OUTPUT_SLOT_DESCRIPTORS:
+  readonly WebServiceOutputSlotDescriptor[] = [
     {
       name: "http",
       contract: "http-endpoint",
@@ -99,6 +103,54 @@ export const WEB_SERVICE_PUBLICATION_DESCRIPTORS:
             "port": "$outputs.internalPort",
             "visibility": "private",
           },
+        ],
+      },
+    },
+  ];
+
+export const WEB_SERVICE_LISTEN_SLOTS:
+  readonly WebServiceListenSlotDescriptor[] = [
+    {
+      name: "*",
+      accepts: [
+        "http-endpoint",
+        "service-binding",
+        "object-store",
+        "event-channel",
+        "identity.oidc@v1",
+        "billing.port@v1",
+      ],
+      projectionFamilies: [
+        "env",
+        "secret-env",
+        "config-mount",
+        "upstream",
+      ],
+      projectionMatrix: {
+        "http-endpoint": [
+          "env",
+          "config-mount",
+          "upstream",
+        ],
+        "service-binding": [
+          "secret-env",
+          "config-mount",
+        ],
+        "object-store": [
+          "secret-env",
+          "config-mount",
+        ],
+        "event-channel": [
+          "secret-env",
+          "config-mount",
+        ],
+        "identity.oidc@v1": [
+          "secret-env",
+          "config-mount",
+        ],
+        "billing.port@v1": [
+          "secret-env",
+          "config-mount",
         ],
       },
     },

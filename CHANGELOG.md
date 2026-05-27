@@ -16,11 +16,11 @@ Takosumi's public contract remains AppSpec / Installation / Deployment. Componen
 
 ## Unreleased — Current AppSpec Contract
 
-- AppSpec root is `{ apiVersion, metadata, components }`.
-- Component is `{ kind, spec, publish, listen }`.
+- AppSpec root is `apiVersion: "v1"`, `metadata.id`, `metadata.name`, `components`, and optional root `publish`.
+- Component is `{ kind, spec, connect, listen }`.
 - `apiVersion` is bare `"v1"`.
 - `Component.kind` is an opaque operator-resolved alias or URI.
-- `publish` and `listen` are the connection model for same-AppSpec component publications and operator external publications.
+- `connect` is the same-AppSpec component connection model, `listen.path` consumes platform services, and root `publish` declares Installation output service path exposures.
 - `component.build`, root `kind: App`, `use:` edges, placeholder interpolation, `routes`, `interfaces`, and `permissions` are not part of the contract.
 - Build/prepare is owned by CI, workflow automation, or an operator build service. Prepared output is submitted to the Installer API as prepared source.
 - The public Installer API remains the five `/v1/installations*` endpoints.

@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import type {
   provider,
   RuntimeDesiredState,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/plugin-sdk";
 import {
   assertProviderProofFixture,
   operationDescriptor,
@@ -829,9 +829,9 @@ type RuntimeDesiredStateBase = Pick<
 
 function bindingEnv(resource: Record<string, unknown>): Record<string, string> {
   const spec = isRecord(resource.spec) ? resource.spec : {};
-  const bindings = isRecord(spec.bindings) ? spec.bindings : {};
+  const env = isRecord(spec.env) ? spec.env : {};
   return Object.fromEntries(
-    Object.entries(bindings).filter((entry): entry is [string, string] =>
+    Object.entries(env).filter((entry): entry is [string, string] =>
       typeof entry[1] === "string"
     ),
   );

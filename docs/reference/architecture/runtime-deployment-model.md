@@ -1,7 +1,7 @@
 # Runtime Deployment モデル {#runtime-deployment-model}
 
 ::: info
-内部設計メモ public contract は [Installer API](../installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
 :::
 
 ## Operation Plan と Write-Ahead Journal {#operation-plan--write-ahead-journal}
@@ -87,7 +87,7 @@ idempotencyKey = (spaceId, operationPlanDigest, journalEntryId)
 
 ### Pre/post-commit の verification {#prepost-commit-verification}
 
-kind alias と binding は operator が与える resolution 入力である。 Takosumi は `ResolvedPlan` に記録した selection を pre-commit と post-commit で再検証する。selected binding が宣言する実行可能 hook package を実行する主体は operator binding です。kind の定義は kind identity / input schema / publish-listen / outputs などの semantic metadata に閉じます。Verification lifecycle:
+kind alias と binding は operator が与える resolution 入力である。 Takosumi は `ResolvedPlan` に記録した selection を pre-commit と post-commit で再検証する。selected binding が宣言する実行可能 hook package を実行する主体は operator binding です。kind の定義は kind identity / input schema / connect-listen / output slot などの semantic metadata に閉じます。Verification lifecycle:
 
 ```text
 1. discovery        — Space-visible kind aliases and implementations
@@ -123,7 +123,7 @@ JournalEntry:
 生成 object の id は外部呼び出しの前に計算されるべきである。
 
 ```text
-authorization id = hash(spaceId, deploymentId, linkId, publicationSnapshotId, accessMode)
+authorization id = hash(spaceId, deploymentId, linkId, platformServiceSnapshotId, accessMode)
 secret projection id = hash(spaceId, deploymentId, linkId, projectionName)
 ingress reservation id = hash(spaceId, groupId, exposureId, host, path)
 ```
@@ -207,7 +207,7 @@ imported:
 
 **7. Write-ahead journal invariant** --- side-effect を持つ operation は side effect の前に intent を記録する。生成 object identity は外部呼び出しの前に計画する。観測された handle は外部呼び出しの後に append する。
 
-**8. Idempotency invariant** --- retry は同じ intent である。生成 object identity は、deployment id、link id、 publication snapshot id、access mode、exposure id、desired generation のような安定した入力から決定的に決まるべきである。
+**8. Idempotency invariant** --- retry は同じ intent である。生成 object identity は、deployment id、link id、service snapshot id、access mode、exposure id、desired generation のような安定した入力から決定的に決まるべきである。
 
 #### Activation / Observation
 
@@ -223,14 +223,14 @@ imported:
 - ingress 予約
 - 生成 credential / authorization 変更
 - platform service registry 書込み
-- Space publication 共有
+- future cross-Space service sharing policy
 - kind alias / descriptor / binding set 更新
 
 #### Space 境界
 
-**13. Space containment invariant** --- すべての Deployment、ResolvedPlan、TargetState、OperationJournal、 ObservationState、CleanupBacklog、TrafficSnapshot、approval、RoutingPointer は厳密に 1 つの Space に属する。deployment は自身の Space の外で resolve、 materialize、activate、observe、destroy してはならない。Space publication 共有や operator 承認の escape hatch によってのみ例外が許される。
+**13. Space containment invariant** --- すべての Deployment、ResolvedPlan、TargetState、OperationJournal、 ObservationState、CleanupBacklog、TrafficSnapshot、approval、RoutingPointer は厳密に 1 つの Space に属する。deployment は自身の Space の外で resolve、 materialize、activate、observe、destroy してはならない。current v1 には Space 越えの service input はなく、将来 RFC が定義する明示的な sharing model なしに例外は許されない。
 
-**14. Platform service isolation invariant** --- platform service path は Space scope である。外部 source は、Space に可視化された platform service declaration の exact match でのみ解決できる。2 つの Space の同じ path は、共有された PlatformServiceDeclaration snapshot に解決された場合だけ同一 material として扱う。
+**14. Platform service isolation invariant** --- platform service path は Space scope である。外部 source は、Space に可視化された platform service declaration の exact match でのみ解決できる。2 つの Space の同じ path は current v1 では同一 material として扱わない。
 
 **15. Space data-boundary invariant** --- secret、operator asset extension record、operation journal、observation、 approval、audit event は Space scope である。Space を跨ぐ共有には明示的な operator policy が必要で、ResolvedPlan に記録する。
 
@@ -244,7 +244,7 @@ ResolvedPlan
 TargetState
 Object
 PlatformServiceDeclaration
-PublicationMaterialization
+PlatformServiceMaterialization
 Link
 ProjectionSelection
 Exposure

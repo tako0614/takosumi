@@ -4,9 +4,9 @@ operator は Takosumi を起動し、どの implementation binding、storage、s
 
 ## 前提知識
 
-- Manifest / Installation / Deployment のライフサイクル
+- AppSpec / Installation / Deployment のライフサイクル
 - source の受け渡し (`git` / `prepared` / `local`) と dry-run 時のハッシュ照合
-- 対応 kind 一覧の採用、kind の実行環境への接続、secret store、参照 API の分担
+- 公式型カタログの採用、kind の実行環境への接続、secret store、参照 API の分担
 - public ingress を扱う場合の DNS / TLS の基礎
 
 single-host reference distribution や Takosumi Cloud 構成が要求する runtime、database、object storage は、それぞれの distribution docs に置きます。
@@ -16,7 +16,7 @@ single-host reference distribution や Takosumi Cloud 構成が要求する runt
 1. [コンセプト](../getting-started/concepts.md)
 2. [仕様境界](../reference/spec-boundaries.md)
 3. [Installer API](../reference/installer-api.md)
-4. [外部サービス](../reference/external-publications.md)
+4. [プラットフォームサービス](../reference/platform-services.md)
 5. [ビルドサービス境界](../reference/build-spec.md)
 6. [ビルドサービス例](./build-service-profile.md)
 7. [Takosumi Cloud 入口](../reference/takosumi-cloud.md)
@@ -26,7 +26,7 @@ single-host reference distribution や Takosumi Cloud 構成が要求する runt
 | 領域                 | 例                                                                    |
 | -------------------- | --------------------------------------------------------------------- |
 | source intake        | git source、ビルド済みアーカイブ、dev / operator-local source         |
-| Space / actor policy | token claim、Space visibility、外部サービスへのアクセス               |
+| Space / actor policy | token claim、Space visibility、プラットフォームサービスへのアクセス   |
 | kind resolution      | alias map、kind の定義、implementation binding の公開範囲             |
 | state / secret store | Postgres、secret encryption key、backup / restore                     |
 | runtime execution    | embedded execution role、別 host execution role、cloud API credential |

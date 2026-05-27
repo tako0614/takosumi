@@ -1,26 +1,26 @@
 /**
- * E2E smoke for the v1 installer pipeline under the Phase C namespace
- * pub/sub model.
+ * E2E smoke for the v1 installer pipeline under the Phase C component-output
+ * connection model.
  *
  * Drives the public 5-endpoint surface with a real `InstallerPipeline`
  * configured via `new InstallerPipeline({ plugins: [...] })`. The
- * publication/listen AppSpec used here exercises:
- *   - explicit local publications such as `db.connection`
- *   - sibling `listen:` bindings resolving from the registry into
- *     `listenedMaterials` on the listener plugin's apply context
+ * connect/listen AppSpec used here exercises:
+ *   - explicit component output refs such as `db.connection`
+ *   - sibling `connect:` bindings resolving from the registry into
+ *     `inputMaterials` on the consumer plugin's apply context
  *   - HTTP 201 on apply + status flip to 409 for the
- *     `failed_precondition` path (mismatched expected pin, pub/sub cycle)
+ *     `failed_precondition` path (mismatched expected pin, connect cycle)
  */
 
 import { assert, assertEquals } from "jsr:@std/assert@^1.0.5";
 import { Hono } from "hono";
 import type { Component } from "takosumi-contract/app-spec";
 import type {
-  ApplyListenContext,
+  ApplyInputBindingContext,
   EnvInjection,
   KernelPlugin,
-  NamespaceMaterial,
-  PublishMaterialContext,
+  OutputMaterial,
+  OutputMaterialContext,
 } from "takosumi-contract/reference/plugin";
 import type {
   Deployment,
@@ -34,8 +34,8 @@ import { InstallerPipeline } from "../domains/installer/mod.ts";
 import { InMemoryDeploymentStore } from "../domains/installer/store.ts";
 import { mountInstallerPublicRoutes } from "./installer_public_routes.ts";
 
-// Canonical AppSpec: `db` publishes `db.connection`; `web` listens with
-// `as: env, prefix: DB` so the kernel default expansion produces DB_HOST /
+// Canonical AppSpec: `db` produces `db.connection`; `web` connects with
+// `inject: env, prefix: DB` so the kernel default expansion produces DB_HOST /
 // DB_PORT / ... env injections on the worker.
 const SAMPLE_APP_SPEC_YAML = `apiVersion: v1
 metadata:
@@ -45,15 +45,12 @@ metadata:
 components:
   db:
     kind: postgres
-    publish:
-      connection:
-        as: service-binding
   web:
     kind: worker
-    listen:
+    connect:
       db:
-        from: db.connection
-        as: env
+        output: db.connection
+        inject: env
         prefix: DB
 `;
 
@@ -82,13 +79,13 @@ async function withTempSource<T>(
 
 interface ApplyRecord {
   readonly componentName: string;
-  readonly listenedMaterials: Readonly<Record<string, NamespaceMaterial>>;
+  readonly inputMaterials: Readonly<Record<string, OutputMaterial>>;
   readonly installationId: string;
 }
 
 /**
- * Build a recording test plugin under the publication/listen model.
- * Captures `listenedMaterials` so the test can assert local publication
+ * Build a recording test plugin under the connect/listen model.
+ * Captures `inputMaterials` so the test can assert local output
  * resolution and lifecycle hook invocations so we can assert ordering.
  */
 function buildRecordingPlugin(opts: {
@@ -97,11 +94,11 @@ function buildRecordingPlugin(opts: {
   readonly events: string[];
   readonly applies: ApplyRecord[];
   readonly outputs?: Readonly<Record<string, string>>;
-  readonly publishMaterial?: (
-    ctx: PublishMaterialContext,
-  ) => Promise<NamespaceMaterial>;
-  readonly applyListen?: (
-    ctx: ApplyListenContext,
+  readonly materializeOutput?: (
+    ctx: OutputMaterialContext,
+  ) => Promise<OutputMaterial>;
+  readonly applyBinding?: (
+    ctx: ApplyInputBindingContext,
   ) => Promise<EnvInjection>;
 }): KernelPlugin {
   return {
@@ -111,7 +108,7 @@ function buildRecordingPlugin(opts: {
     apply: (ctx) => {
       opts.applies.push({
         componentName: ctx.componentName,
-        listenedMaterials: ctx.listenedMaterials,
+        inputMaterials: ctx.inputMaterials ?? ctx.listenedMaterials,
         installationId: ctx.installationId,
       });
       opts.events.push(`apply:${opts.name}:${ctx.componentName}`);
@@ -121,9 +118,9 @@ function buildRecordingPlugin(opts: {
         outputs: opts.outputs ?? {},
       });
     },
-    publishMaterial: opts.publishMaterial ??
+    materializeOutput: opts.materializeOutput ??
       ((ctx) => Promise.resolve(defaultE2ePublishMaterial(ctx))),
-    applyListen: opts.applyListen,
+    applyBinding: opts.applyBinding,
     destroy: (_ctx) => Promise.resolve(),
     onInstallStart: () => {
       opts.events.push(`onInstallStart:${opts.name}`);
@@ -153,7 +150,7 @@ function buildApp(pipeline: InstallerPipeline) {
   return app;
 }
 
-Deno.test("installer e2e — plain-array plugins drive dry-run + apply with local publications", async () => {
+Deno.test("installer e2e — plain-array plugins drive dry-run + apply with local outputs", async () => {
   await withTempSource(async (workingDirectory) => {
     const events: string[] = [];
     const applies: ApplyRecord[] = [];
@@ -168,12 +165,11 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
         database: "notes",
         username: "notes",
         passwordSecretRef: "secret://db-password",
-        connectionString: "postgres://notes:***@db.local:5432/notes",
+        connectionString: "postgres://notes@db.local:5432/notes",
       },
-      // Use the official service-binding material shape. Provider-local
-      // output names such as passwordSecretRef / connectionString are
-      // projected before publication.
-      publishMaterial: (ctx: PublishMaterialContext) =>
+      // The kind implementation decides how its `connection` output is
+      // projected from implementation-local provider outputs.
+      materializeOutput: (ctx: OutputMaterialContext) =>
         Promise.resolve({
           protocol: "postgresql",
           host: requireStringOutput(ctx, "host"),
@@ -243,15 +239,15 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
         database: "notes",
         username: "notes",
         passwordRef: { secretRef: "secret://db-password" },
-        connectionUrl: "postgres://notes:***@db.local:5432/notes",
+        connectionUrl: "postgres://notes@db.local:5432/notes",
       },
     );
 
-    // Topology: db (publisher) -> web (listener via db.connection).
+    // Topology: db (producer) -> web (consumer via db.connection).
     assertEquals(applies.length, 2);
     assertEquals(applies[0].componentName, "db");
     assertEquals(applies[1].componentName, "web");
-    const dbMaterial = applies[1].listenedMaterials.db;
+    const dbMaterial = applies[1].inputMaterials.db;
     assert(dbMaterial, "worker should see db material on the db binding");
     assertEquals(dbMaterial.host, "db.local");
     assertEquals(dbMaterial.port, 5432);
@@ -274,11 +270,11 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
   });
 });
 
-Deno.test("installer e2e — listener applyListen receives material with prefixed env", async () => {
+Deno.test("installer e2e — applyBinding receives material with prefixed env", async () => {
   await withTempSource(async (workingDirectory) => {
     const events: string[] = [];
     const applies: ApplyRecord[] = [];
-    const captured: ApplyListenContext[] = [];
+    const captured: ApplyInputBindingContext[] = [];
     const dbPlugin = buildRecordingPlugin({
       name: "@test/postgres",
       kindUri: "https://takosumi.com/kinds/v1/postgres",
@@ -291,7 +287,7 @@ Deno.test("installer e2e — listener applyListen receives material with prefixe
       kindUri: "https://takosumi.com/kinds/v1/worker",
       events,
       applies,
-      applyListen: (ctx) => {
+      applyBinding: (ctx) => {
         captured.push(ctx);
         return Promise.resolve({
           env: {
@@ -326,12 +322,12 @@ Deno.test("installer e2e — listener applyListen receives material with prefixe
       }),
     });
     assertEquals(applyRes.status, 201);
-    // The listener plugin's applyListen hook saw exactly one binding with
-    // the AppSpec listen options.
+    // The consumer plugin's applyBinding hook saw exactly one binding with
+    // the AppSpec connect options.
     assertEquals(captured.length, 1);
     assertEquals(captured[0].bindingName, "db");
     assertEquals(captured[0].sourceRef, "db.connection");
-    assertEquals(captured[0].options.as, "env");
+    assertEquals(captured[0].options.inject, "env");
     assertEquals(captured[0].options.prefix, "DB");
     assertEquals(captured[0].material.host, "h");
   });
@@ -461,10 +457,10 @@ Deno.test("installer e2e — apply with mismatched expected returns 409 (Phase A
   });
 });
 
-Deno.test("installer e2e — publish/listen cycle aborts apply with non-2xx error envelope", async () => {
-  // a publishes a.out, b listens a.out and publishes b.out, a listens b.out.
+Deno.test("installer e2e — connect cycle aborts apply with non-2xx error envelope", async () => {
+  // a connects to b.out and b connects to a.out.
   // The yaml-parser rejects this at parse time with validationPhase
-  // = publish-listen.
+  // = connection-resolution.
   const cyclicSpec = `apiVersion: v1
 metadata:
   id: cyclic-app
@@ -472,23 +468,17 @@ metadata:
 components:
   a:
     kind: worker
-    publish:
-      out:
-        as: http-endpoint
-    listen:
+    connect:
       peer:
-        from: b.out
-        as: env
+        output: b.out
+        inject: env
         prefix: P2
   b:
     kind: worker
-    publish:
-      out:
-        as: http-endpoint
-    listen:
+    connect:
       peer:
-        from: a.out
-        as: env
+        output: a.out
+        inject: env
         prefix: P1
 `;
   await withTempSource(async (workingDirectory) => {
@@ -528,8 +518,8 @@ components:
   }, cyclicSpec);
 });
 
-Deno.test("installer e2e — declared local publication name resolves", async () => {
-  // db publishes a local `db.primary` material; worker listens through a
+Deno.test("installer e2e — declared component output name resolves", async () => {
+  // db produces a local `db.primary` material; worker connects through a
   // local binding named `database`.
   const spec = `apiVersion: v1
 metadata:
@@ -538,15 +528,12 @@ metadata:
 components:
   db:
     kind: postgres
-    publish:
-      primary:
-        as: service-binding
   web:
     kind: worker
-    listen:
+    connect:
       database:
-        from: db.primary
-        as: env
+        output: db.primary
+        inject: env
         prefix: DB
 `;
   await withTempSource(async (workingDirectory) => {
@@ -593,7 +580,7 @@ components:
     const apply = await applyRes.json() as InstallationApplyResponse;
     assertEquals(apply.deployment.status, "succeeded");
     // Worker saw the db material via the declared local binding.
-    const dbMaterial = applies[1].listenedMaterials.database;
+    const dbMaterial = applies[1].inputMaterials.database;
     assert(
       dbMaterial,
       "worker should see db material on the database binding",
@@ -603,10 +590,10 @@ components:
 });
 
 function defaultE2ePublishMaterial(
-  ctx: PublishMaterialContext,
-): NamespaceMaterial {
-  if (ctx.options.as === "service-binding") {
-    const material: Record<string, NamespaceMaterial[string]> = {
+  ctx: OutputMaterialContext,
+): OutputMaterial {
+  if (ctx.outputName === "connection" || ctx.outputName === "primary") {
+    const material: Record<string, OutputMaterial[string]> = {
       protocol: "postgresql",
       host: String(ctx.outputs.host ?? "db.local"),
       port: Number(ctx.outputs.port ?? 5432),
@@ -636,7 +623,7 @@ function defaultE2ePublishMaterial(
 }
 
 function requireStringOutput(
-  ctx: PublishMaterialContext,
+  ctx: OutputMaterialContext,
   key: string,
 ): string {
   const value = ctx.outputs[key];

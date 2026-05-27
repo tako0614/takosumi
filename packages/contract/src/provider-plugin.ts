@@ -1,5 +1,15 @@
 import type { JsonObject, JsonValue } from "./types.ts";
-import type { PreparedSourceLocator } from "./runtime-agent-lifecycle.ts";
+import type {
+  PlatformOperationContext,
+  PreparedSourceLocator,
+} from "./runtime-agent-lifecycle.ts";
+export {
+  formatPlatformOperationIdempotencyKey,
+  type PlatformOperationIdempotencyKey,
+  type PlatformOperationRecoveryMode,
+  type PlatformOperationRequest,
+  type PlatformOperationWalStage,
+} from "./runtime-agent-lifecycle.ts";
 import type {
   kms,
   objectStorage,
@@ -65,64 +75,6 @@ export interface RefResolver {
   resolve(expression: string): JsonValue;
 }
 
-export interface PlatformOperationIdempotencyKey {
-  readonly spaceId: string;
-  readonly operationPlanDigest: `sha256:${string}`;
-  readonly journalEntryId: string;
-}
-
-export type PlatformOperationRecoveryMode =
-  | "normal"
-  | "continue"
-  | "compensate"
-  | "inspect";
-
-export type PlatformOperationWalStage =
-  | "prepare"
-  | "pre-commit"
-  | "commit"
-  | "post-commit"
-  | "observe"
-  | "finalize"
-  | "abort"
-  | "skip";
-
-export interface PlatformOperationRequest {
-  readonly spaceId: string;
-  readonly operationId: string;
-  readonly operationAttempt: number;
-  readonly journalCursor: string;
-  readonly idempotencyKey: string;
-  readonly desiredGeneration?: number;
-  readonly desiredSnapshotId: string;
-  readonly resolutionSnapshotId?: string;
-  readonly operationKind: string;
-  readonly inputRefs: readonly string[];
-  readonly preRecordedGeneratedObjectIds: readonly string[];
-  readonly expectedExternalIdempotencyKeys: readonly string[];
-  readonly approvedEffects: readonly JsonObject[];
-  readonly recoveryMode: PlatformOperationRecoveryMode;
-  readonly walStage: PlatformOperationWalStage;
-  readonly deadline?: string;
-}
-
-export interface PlatformOperationContext {
-  readonly phase: "apply" | "destroy" | "compensate";
-  readonly walStage: PlatformOperationWalStage;
-  readonly operationId: string;
-  readonly operationAttempt?: number;
-  readonly resourceName: string;
-  readonly providerId: string;
-  readonly op: "create" | "delete";
-  readonly desiredDigest: `sha256:${string}`;
-  readonly operationPlanDigest: `sha256:${string}`;
-  readonly idempotencyKey: PlatformOperationIdempotencyKey;
-  readonly idempotencyKeyString: string;
-  readonly recoveryMode?: PlatformOperationRecoveryMode;
-  readonly approvedEffects?: readonly JsonObject[];
-  readonly deadline?: string;
-}
-
 export interface PlatformTraceContext {
   readonly traceId: string;
   readonly parentSpanId?: string;
@@ -159,12 +111,6 @@ export interface PlatformContext {
   readonly trace?: PlatformTraceContext;
 }
 
-export function formatPlatformOperationIdempotencyKey(
-  key: PlatformOperationIdempotencyKey,
-): string {
-  return `${key.spaceId}:${key.operationPlanDigest}:${key.journalEntryId}`;
-}
-
 /**
  * A legacy backend adapter implements one shape (`implements`) with a chosen
  * cloud / runtime backend. Operators register adapters via
@@ -181,8 +127,8 @@ export function formatPlatformOperationIdempotencyKey(
  * `Materializer = KernelPlugin | InlineMaterializer` union) from
  * `packages/contract/src/plugin.ts`. `ProviderPlugin` remains as a transitional
  * adapter wrapped by `kernelPluginFromProviderPlugin()`; new code should
- * implement `KernelPlugin` directly. Native kind packages may still wrap older
- * `ProviderPlugin` implementations through `kernelPluginFromProviderPlugin()`.
+ * implement `KernelPlugin` directly. First-party native kind packages use
+ * `kernelPluginFromNativeKindOperations()` instead of this bridge.
  */
 export interface ProviderPlugin<
   Spec = JsonObject,

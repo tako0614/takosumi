@@ -45,16 +45,16 @@
       "@id": "takosumi:referenceAliases",
       "@container": "@set"
     },
-    "publications": {
-      "@id": "takosumi:publications",
+    "outputSlots": {
+      "@id": "takosumi:outputSlots",
       "@type": "@json"
     },
     "listens": {
       "@id": "takosumi:listens",
       "@type": "@json"
     },
-    "publicationPath": {
-      "@id": "takosumi:publicationPath",
+    "servicePath": {
+      "@id": "takosumi:servicePath",
       "@type": "xsd:string"
     },
     "contract": {
@@ -103,6 +103,10 @@
     "meaning": {
       "@id": "takosumi:meaning",
       "@type": "xsd:string"
+    },
+    "items": {
+      "@id": "takosumi:items",
+      "@type": "@json"
     },
     "enum": {
       "@id": "takosumi:enum",

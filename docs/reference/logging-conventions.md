@@ -57,7 +57,7 @@ canonical bytes が redaction substring に一致する行は emit 時に reject
 level enum は closed。隣接 level 間の意味境界は normative。level を誤適用することは Takosumi 実装バグである。
 
 - **debug** — operator の詳細トラブルシューティング専用。本番ではデフォルト off。例: `commit` 内の per-stage trace、per-row storage query、per-message poll loop tick。
-- **info** — 安定した本番で operator が見ることを期待する lifecycle event。例: `apply started`、`apply completed`、`operator publication refreshed`、 `lock acquired`、`compaction started`。installation は安定した低レートの `info` 行ストリームを生成する。
+- **info** — 安定した本番で operator が見ることを期待する lifecycle event。例: `apply started`、`apply completed`、`platform service refreshed`、 `lock acquired`、`compaction started`。installation は安定した低レートの `info` 行ストリームを生成する。
 - **warn** — 進行を阻害しないが、早期の operator 注意を要する異常。例: drift 検出、approval 期限切れ間近、quota 上限間近、tolerance 内の clock skew、 transition warning の使用。
 - **error** — 単一の operation を阻害するが Takosumi を阻害しない operation 失敗。例: operation 失敗、外部システムの reject、CleanupBacklog 作成、単一 operation に対する runtime-agent 到達不能。
 - **fatal** — Takosumi が続行不能。例: storage 到達不能、audit-store integrity 失敗、signature verification 失敗、lock leak 検出、secret partition 回復不能。 `fatal` 行の後に orderly な process exit が続く。

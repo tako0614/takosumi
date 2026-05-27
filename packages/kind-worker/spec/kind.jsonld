@@ -10,7 +10,7 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "required": ["entrypoint"],
-    "additionalProperties": true,
+    "additionalProperties": false,
     "properties": {
       "entrypoint": {
         "type": "string",
@@ -24,7 +24,7 @@
       }
     }
   },
-  "publications": {
+  "outputSlots": {
     "http": {
       "contract": "http-endpoint",
       "exampleMaterialMapping": {
@@ -48,7 +48,15 @@
         "identity.oidc@v1",
         "billing.port@v1"
       ],
-      "projectionFamilies": ["env", "secret-env", "config-mount", "upstream"]
+      "projectionFamilies": ["env", "secret-env", "config-mount", "upstream"],
+      "projectionMatrix": {
+        "http-endpoint": ["env", "config-mount", "upstream"],
+        "service-binding": ["secret-env", "config-mount"],
+        "object-store": ["secret-env", "config-mount"],
+        "event-channel": ["secret-env", "config-mount"],
+        "identity.oidc@v1": ["secret-env", "config-mount"],
+        "billing.port@v1": ["secret-env", "config-mount"]
+      }
     }
   },
   "outputs": [
@@ -56,13 +64,13 @@
       "name": "url",
       "type": "string",
       "required": true,
-      "meaning": "Provider-local upstream URL (scheme-bearing) used by gateway/listener components."
+      "meaning": "Implementation-local upstream URL (scheme-bearing) used by gateway/listener components."
     },
     {
       "name": "id",
       "type": "string",
       "required": true,
-      "meaning": "Provider-scope worker identifier."
+      "meaning": "Implementation-scoped worker identifier."
     },
     {
       "name": "version",
@@ -72,8 +80,6 @@
     }
   ],
   "capabilityTerms": [
-    "scale-to-zero",
-    "long-request",
-    "geo-routing"
+    "serverless-http"
   ]
 }

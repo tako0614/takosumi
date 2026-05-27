@@ -6,7 +6,7 @@
 CleanupBacklog:
   id: cleanup-backlog:01HZ... # ULID-based ID
   generatedObjectId: generated:... # 対象 generated material / external object
-  sourcePublicationSnapshotId: pubsnap_...
+  platformServiceSnapshotId: svcsnap_...
   externalParticipantId: external-participant:...
   reason: <enum: 4 値> # 後述
     status: <enum: 3 値> # 後述
@@ -23,7 +23,7 @@ CleanupBacklog:
       clearedAt: optional # cleared 遷移時刻
 ```
 
-`generatedObjectId` は generated lifecycle class の object、external object、または link projection の対象を指す。`sourcePublicationSnapshotId` は debt 発生時の publish の出力 snapshot を指す。
+`generatedObjectId` は generated lifecycle class の object、external object、または link projection の対象を指す。`platformServiceSnapshotId` は debt 発生時に binding が参照していた platform service snapshot を指す。既存実装や古い audit record に `sourcePublicationSnapshotId` が残る場合は互換読み取り名として扱い、新しい prose / schema 例では conceptual surface にしない。
 
 `retryPolicy` は kernel 定数ではなく policy-controlled で、 Space の policy pack から派生する。 kernel が直接解釈する portable subset は次のみ:
 

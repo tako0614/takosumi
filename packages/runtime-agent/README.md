@@ -9,16 +9,27 @@ Cloud / OS credentials stay outside the kernel. In the takosumi.com reference to
 ```typescript
 // Standalone
 import { startEmbeddedAgent } from "@takos/takosumi-runtime-agent/embed";
+import { buildConnectorRegistry } from "@takos/takosumi-runtime-agent-connectors";
+
+const registry = buildConnectorRegistry({
+  cloudflare: {
+    accountId: Deno.env.get("CLOUDFLARE_ACCOUNT_ID")!,
+    apiToken: Deno.env.get("CLOUDFLARE_API_TOKEN")!,
+    zoneId: Deno.env.get("CLOUDFLARE_ZONE_ID"),
+  },
+});
 
 const handle = startEmbeddedAgent({
   port: 8789,
-  // env: Deno.env.toObject(),  // default; agent reads cloud creds from env
+  registry,
 });
 console.log(`agent listening at ${handle.url}`);
 ```
 
 ```bash
-# Or via the Takosumi CLI
+# The CLI starts the generic runtime-agent host. Operator distributions that
+# need concrete connectors should provide their own boot wrapper and pass a
+# ConnectorRegistry to startEmbeddedAgent(...) or serveRuntimeAgent(...).
 takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 ```
 
@@ -76,6 +87,8 @@ interface Connector {
 ```
 
 The `shape` and `provider` fields are connector-local wire selectors. The operator adapter derives them from its kind-to-execution binding before sending a lifecycle request.
+
+`LifecycleApplyRequest.spec` is connector-local lifecycle input. It is normally the public kind spec after descriptor validation plus adapter-projected runtime data such as binding-derived env or gateway targets. Connectors should validate a closed field set before calling backend APIs.
 
 Source-backed connectors, such as `worker@v1`, read files from `LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset/artifact handling is an optional operator extension: connectors may use `ctx.fetcher` when their implementation-specific selector expects uploaded or external asset metadata, but DataAsset metadata values are connector-owned metadata rather than Takosumi AppSpec concepts. The compatibility wire may call that value `kind`.
 

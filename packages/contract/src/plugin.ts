@@ -1,12 +1,13 @@
 /**
  * KernelPlugin — the reference Takosumi kernel's Vite-style plain-array
- * materializer API for the local publication / listen material model.
+ * materializer API for the component output / connect / platform-listen
+ * material model.
  *
  * A `KernelPlugin` advertises one or more component kind URIs in `provides`,
  * may expose short-name `aliases` for operator tooling,
- * materializes those components via `apply()`, publishes the resulting
- * material to the publication registry via `publishMaterial()`, and surfaces
- * listened materials into the component runtime via `applyListen()`.
+ * materializes those components via `apply()`, projects component output slots
+ * into output material via `materializeOutput()`, and surfaces input materials
+ * into the component runtime via `applyBinding()`.
  *
  * The reference implementation wires plugins as a plain array to
  * `createPaaSApp({ kindAliases, plugins })`, matching the Vite plugin
@@ -24,10 +25,10 @@
  */
 import type {
   BindingName,
+  BindingOptions,
   Component,
-  ListenOptions,
   ListenSourceRef,
-  PublicationName,
+  OutputSlotName,
   PublishOptions,
 } from "./app-spec.ts";
 import type {
@@ -35,7 +36,11 @@ import type {
   Installation,
   SourceSummary,
 } from "./installer-api.ts";
-import type { JsonValue } from "./types.ts";
+import {
+  isOfficialOutputTypeName,
+  validateOfficialOutputMaterial,
+} from "./type-catalog.ts";
+import type { JsonObject, JsonValue } from "./types.ts";
 
 export interface KernelPlugin {
   /** Plugin id, e.g. `"@takos/takosumi-kind-cloudflare-worker"`. */
@@ -50,7 +55,7 @@ export interface KernelPlugin {
    *
    * Examples:
    *   - `["https://takosumi.com/kinds/v1/worker"]` (takosumi.com reference descriptor)
-   *   - `["https://operator.example.com/kinds/lambda"]` (operator-defined)
+   *   - `["https://example.com/kinds/lambda"]` (operator-defined)
    */
   readonly provides: readonly string[];
 
@@ -70,9 +75,9 @@ export interface KernelPlugin {
 
   /**
    * Materialize a component into a concrete resource on the target
-   * runtime. Called by `InstallerPipeline` during `apply` in publish /
-   * listen topological order. Listened materials are made available via
-   * `listenedMaterials`.
+   * runtime. Called by `InstallerPipeline` during `apply` in connect
+   * topological order. Resolved input materials are made available via
+   * `inputMaterials` (`listenedMaterials` is kept as a compatibility alias).
    */
   apply(ctx: KernelPluginApplyContext): Promise<KernelPluginApplyResult>;
 
@@ -84,28 +89,48 @@ export interface KernelPlugin {
   destroy?(ctx: KernelPluginDestroyContext): Promise<void>;
 
   /**
-   * Compute the {@link NamespaceMaterial} this component publishes through a
-   * declared local publication. Invoked once per entry in `Component.publish`
-   * after `apply()` succeeds; the returned material is registered under
-   * `<componentName>.<publicationName>`.
-   *
-   * Optional — kinds that do not publish any material (e.g. pure
-   * consumers) may omit this hook.
+   * Observe a previously-materialized component. Optional — plugins that can
+   * cheaply read backend state return a normalized status for operator
+   * dashboards and repair loops.
    */
-  publishMaterial?(
-    ctx: PublishMaterialContext,
-  ): Promise<NamespaceMaterial>;
+  status?(ctx: KernelPluginStatusContext): Promise<KernelPluginResourceStatus>;
 
   /**
-   * Surface a listened {@link NamespaceMaterial} into the component
-   * runtime as an env injection / mount / target descriptor. Invoked
-   * once per entry in `Component.listen` before `apply()` is called for
-   * the listening component.
+   * Compute the {@link OutputMaterial} for a component output slot.
+   * Invoked after `apply()` succeeds when another component connects to that
+   * output, when root `publish` declares it as an Installation output service
+   * path exposure, or when the kernel records implementation-visible outputs
+   * as Deployment evidence.
    *
-   * Optional — kinds that do not consume listened material may omit
+   * Optional — kinds that do not expose output material (e.g. pure
+   * consumers) may omit this hook.
+   */
+  materializeOutput?(
+    ctx: OutputMaterialContext,
+  ): Promise<OutputMaterial>;
+
+  /**
+   * @deprecated Use `materializeOutput`.
+   */
+  publishMaterial?(
+    ctx: OutputMaterialContext,
+  ): Promise<OutputMaterial>;
+
+  /**
+   * Surface a connected or listened {@link OutputMaterial} into the
+   * component runtime as an env injection / mount / target descriptor. Invoked
+   * once per entry in `Component.connect` or `Component.listen` before
+   * `apply()` is called for the consuming component.
+   *
+   * Optional — kinds that do not consume input material may omit
    * this hook (the installer treats absent hooks as no-op).
    */
-  applyListen?(ctx: ApplyListenContext): Promise<EnvInjection>;
+  applyBinding?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
+
+  /**
+   * @deprecated Use `applyBinding`.
+   */
+  applyListen?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 
   // ---------------------------------------------------------------------
   // Lifecycle hooks — Vite-style optional callbacks. All are awaited
@@ -124,7 +149,7 @@ export interface KernelPlugin {
 
 /**
  * Materializer = arbitrary code that materializes a kind URI and
- * participates in the publication/listen material registry. {@link KernelPlugin} is
+ * participates in the component output / input material registry. {@link KernelPlugin} is
  * the conventional packaging — `name` / `version` / lifecycle hooks — but
  * inline functions and operator-defined raw code can attach to the same
  * kernel surface via {@link InlineMaterializer}.
@@ -143,30 +168,44 @@ export interface InlineMaterializer {
   /** Optional short-name aliases supplied by operator tooling / alias maps. */
   readonly aliases?: readonly string[];
   apply(ctx: KernelPluginApplyContext): Promise<KernelPluginApplyResult>;
+  status?(ctx: KernelPluginStatusContext): Promise<KernelPluginResourceStatus>;
+  materializeOutput?(
+    ctx: OutputMaterialContext,
+  ): Promise<OutputMaterial>;
+  /**
+   * @deprecated Use `materializeOutput`.
+   */
   publishMaterial?(
-    ctx: PublishMaterialContext,
-  ): Promise<NamespaceMaterial>;
-  applyListen?(ctx: ApplyListenContext): Promise<EnvInjection>;
+    ctx: OutputMaterialContext,
+  ): Promise<OutputMaterial>;
+  applyBinding?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
+  /**
+   * @deprecated Use `applyBinding`.
+   */
+  applyListen?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 }
 
 /**
- * Payload published through a local publication. Keys are material field names
+ * Payload projected from a component output slot or platform service. Keys are material field names
  * (e.g. `targets`, `endpoints`, `host`) and values are non-secret JSON
  * material values or `{ secretRef }` references to entries in the operator
  * secret store.
  *
- * Treated as opaque by the kernel; consumers (= listening plugins'
- * `applyListen`) interpret the payload through the source material contract,
+ * Treated as opaque by the kernel; consumers (= input-binding handlers)
+ * interpret the payload through the source material contract,
  * operator descriptor metadata, and implementation binding. JSON-LD is the
  * takosumi.com reference metadata form when an operator chooses to use it.
  */
-export type NamespaceMaterial = Readonly<
+export type OutputMaterial = Readonly<
   Record<string, JsonValue | { readonly secretRef: string }>
 >;
 
+/** @deprecated Use OutputMaterial. */
+export type PublicationMaterial = OutputMaterial;
+
 /**
- * Result of `applyListen()`: the env / mount / target descriptor the
- * installer should attach to the listening component runtime.
+ * Result of `applyBinding()`: the env / mount / target descriptor the
+ * installer should attach to the consuming component runtime.
  *
  *   - `env`    — env-var injections (literal strings or secretRefs).
  *   - `mounts` — filesystem-mount descriptors keyed by mount path.
@@ -179,29 +218,38 @@ export type NamespaceMaterial = Readonly<
  */
 export interface EnvInjection {
   readonly env?: Readonly<
-    Record<string, string | { readonly secretRef: string }>
+    Record<string, EnvValue>
   >;
   readonly mounts?: Readonly<
     Record<string, string | { readonly secretRef: string }>
   >;
-  readonly target?: NamespaceMaterial;
+  readonly target?: OutputMaterial;
 }
 
-export interface ResolvedListenBinding {
+export type SecretEnvRef = Readonly<{ secretRef: string }>;
+
+export type EnvValue = string | SecretEnvRef;
+
+export type ResolvedEnv = Readonly<Record<string, EnvValue>>;
+
+export interface ResolvedInputBinding {
   readonly listenerComponent: string;
   readonly bindingName: BindingName;
   readonly sourceRef: ListenSourceRef;
-  readonly options: ListenOptions;
+  readonly options: BindingOptions;
   readonly envInjections: Readonly<
-    Record<string, string | { readonly secretRef: string }>
+    Record<string, EnvValue>
   >;
   readonly mounts?: Readonly<
     Record<string, string | { readonly secretRef: string }>
   >;
-  readonly target?: NamespaceMaterial;
+  readonly target?: OutputMaterial;
   /** The raw material payload resolved from the source reference. */
-  readonly material: NamespaceMaterial;
+  readonly material: OutputMaterial;
 }
+
+/** @deprecated Use ResolvedInputBinding. */
+export type ResolvedListenBinding = ResolvedInputBinding;
 
 export interface KernelPluginApplyContext {
   readonly installationId: string;
@@ -212,25 +260,32 @@ export interface KernelPluginApplyContext {
   /** Local directory containing the already-prepared source snapshot. */
   readonly sourceDirectory: string;
   /**
-   * Materials this component listens to, keyed by the local binding name as
-   * declared in `Component.listen`. Pre-resolved by the installer from
-   * local publications or Space-visible external publications; the listening plugin's
-   * `applyListen` has
+   * Materials this component consumes, keyed by the local binding name as
+   * declared in `Component.connect` or `Component.listen`. Pre-resolved by the
+   * installer from same-AppSpec component outputs or Space-visible platform
+   * services; the consuming component's
+   * `applyBinding` has
    * already been invoked and the resulting env / mount / target
    * descriptors are merged into the runtime environment.
    *
    * This map is for plugins that need access to the raw material payload
-   * (e.g. to inspect specific fields beyond what `applyListen` emitted).
+   * (e.g. to inspect specific fields beyond what `applyBinding` emitted).
    */
-  readonly listenedMaterials: Readonly<
-    Record<BindingName, NamespaceMaterial>
+  readonly inputMaterials?: Readonly<
+    Record<BindingName, OutputMaterial>
   >;
   /**
-   * Env / mount / target descriptors produced by `applyListen` for each
-   * listen edge. Native KernelPlugin implementations should use this field
+   * @deprecated Use `inputMaterials`.
+   */
+  readonly listenedMaterials: Readonly<
+    Record<BindingName, OutputMaterial>
+  >;
+  /**
+   * Env / mount / target descriptors produced by `applyBinding` for each input
+   * edge. Native KernelPlugin implementations should use this field
    * when they need the actual runtime injection plan instead of raw materials.
    */
-  readonly resolvedBindings: readonly ResolvedListenBinding[];
+  readonly resolvedBindings: readonly ResolvedInputBinding[];
 }
 
 export interface KernelPluginApplyResult {
@@ -241,44 +296,70 @@ export interface KernelPluginApplyResult {
   readonly resourceHandle: string;
   /**
    * Outputs persisted on Deployment evidence and surfaced to the material
-   * registry via subsequent `publishMaterial()` calls. Plugins may return any
+   * registry via subsequent `materializeOutput()` calls. Plugins may return any
    * JSON-valued map; the keys typically match the kind descriptor's
    * `outputs[].name`.
    */
   readonly outputs: Readonly<Record<string, JsonValue>>;
 }
 
-export interface PublishMaterialContext {
+export interface OutputMaterialContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly component: Component;
-  /** Local publication this material is being published through. */
-  readonly publicationName: PublicationName;
-  /** Per-publication options as declared in AppSpec. */
-  readonly options: PublishOptions;
+  /** Component output slot this material is projected from. */
+  readonly outputName: OutputSlotName;
+  /** Root publish options when this material serves an Installation output declaration. */
+  readonly options?: PublishOptions;
   /** Outputs from the preceding `apply()` call for this component. */
   readonly outputs: Readonly<Record<string, JsonValue>>;
 }
 
-export interface ApplyListenContext {
+/** @deprecated Use OutputMaterialContext. */
+export type PublishMaterialContext = OutputMaterialContext;
+
+export interface ApplyInputBindingContext {
   readonly installationId: string;
-  /** Name of the listening component (= the consumer). */
+  /** Name of the consuming component. */
   readonly componentName: string;
   readonly component: Component;
   /** Local binding name being resolved. */
   readonly bindingName: BindingName;
-  /** Source publication or external publication path being listened to. */
+  /** Source component output ref or platform service path being consumed. */
   readonly sourceRef: ListenSourceRef;
-  /** Per-listen options as declared in AppSpec. */
-  readonly options: ListenOptions;
+  /** Per-connect or per-listen options as declared in AppSpec. */
+  readonly options: BindingOptions;
   /** Material payload resolved from the source reference. */
-  readonly material: NamespaceMaterial;
+  readonly material: OutputMaterial;
 }
+
+/** @deprecated Use ApplyInputBindingContext. */
+export type ApplyListenContext = ApplyInputBindingContext;
 
 export interface KernelPluginDestroyContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly resourceHandle: string;
+}
+
+export interface KernelPluginStatusContext {
+  readonly installationId: string;
+  readonly componentName: string;
+  readonly resourceHandle: string;
+}
+
+export type KernelPluginResourceStatusKind =
+  | "pending"
+  | "ready"
+  | "degraded"
+  | "failed"
+  | "deleted";
+
+export interface KernelPluginResourceStatus {
+  readonly kind: KernelPluginResourceStatusKind;
+  readonly outputs?: Readonly<Record<string, JsonValue>>;
+  readonly reason?: string;
+  readonly observedAt: string;
 }
 
 export interface KernelPluginInstallationContext {
@@ -289,4 +370,473 @@ export interface KernelPluginInstallationContext {
 export interface KernelPluginDeploymentContext {
   readonly installation: Installation;
   readonly deployment: Deployment;
+}
+
+export type NativeResourceHandle = string;
+
+export interface NativeKindApplyDiagnostic {
+  readonly level: "info" | "warn" | "error";
+  readonly message: string;
+  readonly metadata?: JsonObject;
+}
+
+export interface NativeKindApplyResult<Outputs = JsonObject> {
+  readonly handle: NativeResourceHandle;
+  readonly outputs: Outputs;
+  readonly diagnostics?: readonly NativeKindApplyDiagnostic[];
+}
+
+export type NativeKindResourceStatusKind = KernelPluginResourceStatusKind;
+
+export interface NativeKindSpecValidationIssue {
+  readonly path: string;
+  readonly message: string;
+}
+
+export interface NativeKindResourceStatus<Outputs = JsonObject> {
+  readonly kind: NativeKindResourceStatusKind;
+  readonly outputs?: Outputs;
+  readonly reason?: string;
+  readonly observedAt: string;
+}
+
+export type NativeKindOutputMaterialContext<Outputs = JsonObject> =
+  & Omit<
+    OutputMaterialContext,
+    "outputs"
+  >
+  & {
+    readonly outputs: Outputs;
+  };
+
+/** @deprecated Use NativeKindOutputMaterialContext. */
+export type NativeKindPublishMaterialContext<Outputs = JsonObject> =
+  NativeKindOutputMaterialContext<Outputs>;
+
+/**
+ * Operations for a native kind package that wants the reference plugin shape
+ * without using the retired shape/provider compatibility API.
+ */
+export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
+  readonly id: string;
+  readonly version: string;
+  readonly capabilities?: readonly string[];
+  validateSpec?(
+    value: unknown,
+  ): readonly NativeKindSpecValidationIssue[];
+  /**
+   * Receives the author-provided component spec unchanged. Runtime inputs
+   * derived from `connect` / `listen` live on `ctx.resolvedBindings`; implementations that
+   * need env-style injection can opt in with {@link mergeResolvedEnv}.
+   */
+  apply(
+    spec: Spec,
+    ctx: KernelPluginApplyContext,
+  ): Promise<NativeKindApplyResult<Outputs>>;
+  destroy?(
+    handle: NativeResourceHandle,
+    ctx: KernelPluginDestroyContext,
+  ): Promise<void>;
+  status?(
+    handle: NativeResourceHandle,
+    ctx: KernelPluginStatusContext,
+  ): Promise<NativeKindResourceStatus<Outputs>>;
+  materializeOutput?(
+    ctx: NativeKindOutputMaterialContext<Outputs>,
+  ): Promise<OutputMaterial> | OutputMaterial;
+  /** @deprecated Use `materializeOutput`. */
+  publishMaterial?(
+    ctx: NativeKindOutputMaterialContext<Outputs>,
+  ): Promise<OutputMaterial> | OutputMaterial;
+}
+
+/**
+ * Build a reference `KernelPlugin` from native kind operations. This is the
+ * current helper for native kind packages in `takosumi-plugins`: the package
+ * owns backend-specific operations, while the reference kernel still receives a
+ * Vite-style plain-array `KernelPlugin`.
+ */
+export function kernelPluginFromNativeKindOperations<Spec, Outputs>(
+  opts: {
+    readonly operations: NativeKindOperations<Spec, Outputs>;
+    readonly kindUri: string;
+    readonly name?: string;
+    readonly version?: string;
+    readonly capabilities?: readonly string[];
+  },
+): KernelPlugin {
+  const operations = opts.operations;
+  const capabilities = opts.capabilities ?? operations.capabilities;
+  const materializeOutput = async (
+    ctx: OutputMaterialContext,
+  ): Promise<OutputMaterial> => {
+    const operation = operations.materializeOutput ??
+      operations.publishMaterial;
+    if (operation) {
+      return validatePublishedOutputMaterial(
+        undefined,
+        await operation({
+          ...ctx,
+          outputs: ctx.outputs as Outputs,
+        }),
+      );
+    }
+    return outputsToOutputMaterial(ctx.outputs);
+  };
+  return {
+    name: opts.name ?? operations.id,
+    version: opts.version ?? operations.version,
+    provides: [opts.kindUri],
+    ...(capabilities ? { capabilities } : {}),
+    async apply(ctx) {
+      const spec = (ctx.component.spec ?? {}) as Spec;
+      const issues = operations.validateSpec?.(spec) ?? [];
+      if (issues.length > 0) {
+        throw new Error(
+          `component ${ctx.componentName} spec invalid for ${opts.kindUri}: ${
+            issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
+          }`,
+        );
+      }
+      const result = await operations.apply(spec, ctx);
+      return {
+        resourceHandle: result.handle,
+        outputs: (result.outputs ?? {}) as Readonly<Record<string, JsonValue>>,
+      };
+    },
+    materializeOutput,
+    publishMaterial: materializeOutput,
+    async destroy(ctx) {
+      await operations.destroy?.(ctx.resourceHandle, ctx);
+    },
+    ...(operations.status
+      ? {
+        async status(ctx) {
+          const result = await operations.status!(ctx.resourceHandle, ctx);
+          return {
+            kind: result.kind,
+            ...(result.outputs
+              ? {
+                outputs: result.outputs as Readonly<Record<string, JsonValue>>,
+              }
+              : {}),
+            ...(result.reason ? { reason: result.reason } : {}),
+            observedAt: result.observedAt,
+          };
+        },
+      }
+      : {}),
+  };
+}
+
+function validatePublishedOutputMaterial(
+  contract: string | undefined,
+  material: OutputMaterial,
+): OutputMaterial {
+  if (contract === undefined || !isOfficialOutputTypeName(contract)) {
+    return material;
+  }
+  const issues = validateOfficialOutputMaterial(contract, material);
+  if (issues.length > 0) {
+    throw new Error(
+      `plugin produced invalid ${contract} output material: ${
+        issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
+      }`,
+    );
+  }
+  return material;
+}
+
+export function outputsToOutputMaterial(
+  outputs: Readonly<Record<string, JsonValue>>,
+  contract?: string,
+): OutputMaterial {
+  const generic = rawOutputsToOutputMaterial(outputs);
+  if (contract === undefined || !isOfficialOutputTypeName(contract)) {
+    return generic;
+  }
+  const material = projectOfficialMaterial(contract, generic);
+  const issues = validateOfficialOutputMaterial(contract, material);
+  if (issues.length > 0) {
+    throw new Error(
+      `plugin outputs cannot be projected to ${contract} material: ${
+        issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
+      }`,
+    );
+  }
+  return material;
+}
+
+/** @deprecated Use outputsToOutputMaterial. */
+export function outputsToPublicationMaterial(
+  outputs: Readonly<Record<string, JsonValue>>,
+  contract?: string,
+): OutputMaterial {
+  return outputsToOutputMaterial(outputs, contract);
+}
+
+function rawOutputsToOutputMaterial(
+  outputs: Readonly<Record<string, JsonValue>>,
+): OutputMaterial {
+  const material: Record<string, JsonValue | { secretRef: string }> = {};
+  for (const [key, value] of Object.entries(outputs)) {
+    material[key] = secretRefMaterial(key, value) ?? value;
+  }
+  return material;
+}
+
+function projectOfficialMaterial(
+  contract: string,
+  material: OutputMaterial,
+): OutputMaterial {
+  switch (contract) {
+    case "http-endpoint":
+      return projectHttpEndpointMaterial(material);
+    case "service-binding":
+      return projectServiceBindingMaterial(material);
+    case "object-store":
+      return projectObjectStoreMaterial(material);
+    default:
+      return material;
+  }
+}
+
+function projectHttpEndpointMaterial(
+  material: OutputMaterial,
+): OutputMaterial {
+  if (Array.isArray(material.targets) || Array.isArray(material.endpoints)) {
+    return material;
+  }
+  const url = readString(material.url);
+  const host = readString(material.host) ?? readString(material.internalHost);
+  const port = readNumber(material.port) ?? readNumber(material.internalPort);
+  const listener = readString(material.listener);
+  const scheme = readString(material.scheme);
+  const routes = readRouteSummaries(material.routes);
+  if (listener || scheme || routes) {
+    if (!url) return material;
+    const endpoint: Record<string, JsonValue> = {
+      url,
+      visibility: "public",
+      primary: true,
+    };
+    if (scheme) endpoint.scheme = scheme;
+    if (host) endpoint.host = host;
+    if (listener) endpoint.listener = listener;
+    if (routes) endpoint.routes = routes;
+    return { endpoints: [endpoint] };
+  }
+  if (!url && !(host && port !== undefined)) return material;
+  const target: Record<string, JsonValue> = {
+    name: "default",
+    visibility: "private",
+  };
+  if (url) target.url = url;
+  if (host) target.host = host;
+  if (port !== undefined) target.port = port;
+  const protocol = readString(material.protocol);
+  if (protocol) target.protocol = protocol;
+  const basePath = readString(material.basePath);
+  if (basePath) target.basePath = basePath;
+  return { targets: [target] };
+}
+
+function projectServiceBindingMaterial(
+  material: OutputMaterial,
+): OutputMaterial {
+  if (
+    readString(material.protocol) &&
+    readString(material.host) &&
+    readNumber(material.port) !== undefined &&
+    material.passwordSecretRef === undefined &&
+    material.connectionString === undefined
+  ) {
+    return material;
+  }
+  const host = readString(material.host);
+  const port = readNumber(material.port);
+  if (!host || port === undefined) return material;
+  const out: Record<string, JsonValue | { secretRef: string }> = {
+    protocol: readString(material.protocol) ?? inferServiceProtocol(material),
+    host,
+    port,
+  };
+  const service = readString(material.service) ?? host;
+  if (service) out.service = service;
+  const database = readString(material.database);
+  if (database) out.database = database;
+  const username = readString(material.username);
+  if (username) out.username = username;
+  const connectionUrl = readString(material.connectionUrl) ??
+    readString(material.connectionString);
+  if (connectionUrl) out.connectionUrl = connectionUrl;
+  const caCertRef = readString(material.caCertRef);
+  if (caCertRef) out.caCertRef = caCertRef;
+  const passwordRef = readSecretReference(material.passwordRef) ??
+    readSecretReference(material.passwordSecretRef);
+  if (passwordRef) out.passwordRef = passwordRef;
+  const tokenRef = readSecretReference(material.tokenRef);
+  if (tokenRef) out.tokenRef = tokenRef;
+  if (isRecord(material.tokenRefs)) out.tokenRefs = material.tokenRefs;
+  return out;
+}
+
+function projectObjectStoreMaterial(
+  material: OutputMaterial,
+): OutputMaterial {
+  const bucket = readString(material.bucket);
+  const endpoint = readString(material.endpoint);
+  if (!bucket || !endpoint) return material;
+  if (
+    material.accessKeyRef !== undefined || material.secretKeyRef !== undefined
+  ) {
+    return material;
+  }
+  const out: Record<string, JsonValue | { secretRef: string }> = {
+    bucket,
+    endpoint,
+  };
+  const region = readString(material.region);
+  if (region) out.region = region;
+  if (typeof material.pathStyle === "boolean") {
+    out.pathStyle = material.pathStyle;
+  }
+  const publicBaseUrl = readString(material.publicBaseUrl);
+  if (publicBaseUrl) out.publicBaseUrl = publicBaseUrl;
+  if (Array.isArray(material.policyRefs)) out.policyRefs = material.policyRefs;
+  const accessKeyIdRef = readSecretReference(material.accessKeyIdRef);
+  if (accessKeyIdRef) out.accessKeyIdRef = accessKeyIdRef;
+  const secretAccessKeyRef = readSecretReference(material.secretAccessKeyRef);
+  if (secretAccessKeyRef) out.secretAccessKeyRef = secretAccessKeyRef;
+  const sessionTokenRef = readSecretReference(material.sessionTokenRef);
+  if (sessionTokenRef) out.sessionTokenRef = sessionTokenRef;
+  return out;
+}
+
+function inferServiceProtocol(material: OutputMaterial): string {
+  const connection = readString(material.connectionString) ??
+    readString(material.connectionUrl);
+  if (connection?.startsWith("postgres://")) return "postgresql";
+  if (connection?.startsWith("postgresql://")) return "postgresql";
+  if (
+    material.database !== undefined || material.passwordSecretRef !== undefined
+  ) {
+    return "postgresql";
+  }
+  return "tcp";
+}
+
+function readRouteSummaries(
+  value: OutputMaterial[string],
+): JsonValue | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((entry) => {
+    if (!isRecord(entry)) return {};
+    const pathPrefix = readString(entry.pathPrefix);
+    const to = readString(entry.to);
+    return {
+      ...(pathPrefix ? { pathPrefix } : {}),
+      ...(to ? { to } : {}),
+    };
+  });
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function readSecretReference(
+  value: unknown,
+): { readonly secretRef: string } | undefined {
+  if (isRecord(value) && readString(value.secretRef)) {
+    return { secretRef: value.secretRef as string };
+  }
+  if (typeof value === "string" && value.startsWith("secret://")) {
+    return { secretRef: value };
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, JsonValue> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function secretRefMaterial(
+  key: string,
+  value: JsonValue,
+): { secretRef: string } | undefined {
+  if (
+    typeof value === "string" &&
+    key.endsWith("Ref") &&
+    value.startsWith("secret://")
+  ) {
+    return { secretRef: value };
+  }
+  return undefined;
+}
+
+/**
+ * Merge explicit `spec.env` values with env descriptors produced by input
+ * binding resolution. Native implementations call this intentionally when
+ * their runtime accepts env variables; the generic KernelPlugin wrapper does
+ * not mutate `component.spec`.
+ */
+export function mergeResolvedEnv(
+  explicitEnv: Readonly<Record<string, string>> | undefined,
+  bindings: readonly ResolvedInputBinding[],
+): ResolvedEnv | undefined {
+  const env = collectEnvBindings(bindings);
+  if (Object.keys(env).length === 0) {
+    return explicitEnv;
+  }
+  return mergeWithoutConflict(explicitEnv ?? {}, env, "$.env");
+}
+
+function collectEnvBindings(
+  bindings: readonly ResolvedInputBinding[],
+): Record<string, EnvValue> {
+  const out: Record<string, EnvValue> = {};
+  for (const binding of bindings) {
+    for (const [key, value] of Object.entries(binding.envInjections)) {
+      if (out[key] !== undefined && !sameEnvValue(out[key], value)) {
+        throw new Error(
+          `binding-derived env ${key} is defined more than once`,
+        );
+      }
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function mergeWithoutConflict(
+  explicit: Record<string, string>,
+  injected: Record<string, EnvValue>,
+  path: string,
+): Record<string, EnvValue> {
+  const out: Record<string, EnvValue> = { ...explicit };
+  for (const [key, value] of Object.entries(injected)) {
+    const existing = out[key];
+    if (existing !== undefined && !sameEnvValue(existing, value)) {
+      throw new Error(
+        `binding-derived ${path}.${key} conflicts with explicit spec`,
+      );
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+function sameEnvValue(a: EnvValue, b: EnvValue): boolean {
+  if (typeof a === "string" || typeof b === "string") return a === b;
+  return a.secretRef === b.secretRef;
 }

@@ -51,15 +51,12 @@ components:
     spec:
       version: "16"
       size: small
-    publish:
-      connection:
-        as: service-binding
   api:
     kind: web-service
-    listen:
+    connect:
       db:
-        from: db.connection
-        as: secret-env
+        output: db.connection
+        inject: secret-env
         prefix: DATABASE
     spec:
       image: ghcr.io/example/api:sha-...
@@ -67,6 +64,10 @@ components:
       scale:
         min: 1
         max: 2
+publish:
+  api-database:
+    output: db.connection
+    path: acme.database.reporting
 ```
 
 storage path を固定する:
@@ -120,7 +121,7 @@ takosumi install --space space:personal --source . \
 
 → [runtime-agent 分離](./runtime-agent.md)
 
-## Optional asset extension {#artifact-limits}
+## Optional asset extension {#asset-limits}
 
 asset upload / discovery extension を有効化する operator の設定では、 upload を memory に載せすぎないように size guard と storage を固定します。
 

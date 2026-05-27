@@ -1,68 +1,82 @@
-# Kind Catalog {#type-catalog}
+# Takosumi Official Type Catalog {#type-catalog}
 
-Takosumi publishes reusable kind definitions and output type vocabulary from `takosumi.com`. The Kind Catalog is a specification chapter next to the core specification. Operator configurations, including Takosumi Cloud, adopt catalog vocabulary from their own docs.
+Takosumi core is kind-agnostic. Reusable kind definitions and output type vocabulary are supplied by catalogs and operator distributions. `takosumi.com` hosts the official type catalog as a specification chapter next to the core specification. Operator distributions, including Takosumi Cloud, adopt catalog vocabulary from their own docs.
 
 This page defines Takosumi type vocabulary: kind definition identities, output type names, injection mode names, access metadata, and the JSON-LD format for the official catalog. Code that targets the official vocabulary can import TypeScript helpers from `@takos/takosumi-contract/type-catalog`.
 
 ## Normative Scope
 
-The Kind Catalog defines:
+The official type catalog defines:
 
 - kind definition identities under `https://takosumi.com/kinds/v1/*`
-- kind definition metadata fields for `spec`, publish slots, output vocabulary, and expected output formats
-- output type names such as `http-endpoint`, `service-binding`, `object-store`, `identity.oidc@v1`, and `billing.port@v1`
+- kind definition metadata fields for `spec`, output slots, output vocabulary, and expected output formats
+- output type names such as `http-endpoint`, `service-binding`, `object-store`, `event-channel`, `identity.oidc@v1`, and `billing.port@v1`
 - injection mode names such as `env`, `secret-env`, `upstream`, and `config-mount`
 - access metadata vocabulary such as access mode enum, sensitivity levels, and safe default access
-- JSON-LD kind definition documents under `https://takosumi.com/kinds/v1/*` and the context document at `https://takosumi.com/contexts/v1.jsonld`
+- package-owned `packages/kind-*/spec/kind.jsonld` sources, JSON-LD kind definition documents under `https://takosumi.com/kinds/v1/*`, and the context document at `https://takosumi.com/contexts/v1.jsonld`
 
-The catalog defines reusable output formats. Operator configuration specs define concrete platform service paths, OIDC issuer operation, billing behavior, account management records, backend provisioning, and dashboard APIs.
+The catalog defines reusable output formats. Operator distribution specs define concrete platform service paths, OIDC issuer operation, billing behavior, account management records, backend provisioning, and dashboard APIs.
 
-Operators decide which catalog entries are enabled. They choose which catalog entries are visible in a Space, which aliases are active, which backend or local runtime implements each kind, and which platform service paths they offer.
+Operator distributions decide which catalog entries are enabled. They choose which catalog entries are visible in a Space, which aliases are active, which backend or local runtime implements each kind, and which platform service paths they offer.
 
 ## Catalog Roles
 
-| Role                 | Example                                         | Meaning                                             |
-| -------------------- | ----------------------------------------------- | --------------------------------------------------- |
-| Kind definition      | `https://takosumi.com/kinds/v1/worker`          | Component `kind` definition and output vocabulary.  |
-| Output type          | `http-endpoint`                                 | Type of output offered by `publish.<name>.as`.      |
-| Injection mode       | `env`, `secret-env`, `upstream`, `config-mount` | How listened output is delivered to a consumer.     |
-| External output type | `identity.oidc@v1`                              | Reusable output type for platform services.         |
-| Access metadata      | `invoke-only`, `restricted`                     | Access and projection metadata for external output. |
+| Role                 | Example                                         | Meaning                                                       |
+| -------------------- | ----------------------------------------------- | ------------------------------------------------------------- |
+| Kind definition      | `https://takosumi.com/kinds/v1/worker`          | Component `kind` definition and output vocabulary.            |
+| Output type          | `http-endpoint`                                 | Type of material offered by an output slot.                   |
+| Injection mode       | `env`, `secret-env`, `upstream`, `config-mount` | How resolved output material is delivered to a consumer.      |
+| Platform output type | `identity.oidc@v1`                              | Reusable output type for platform services.                   |
+| Access metadata      | `invoke-only`, `restricted`                     | Access and projection metadata for platform service material. |
 
-The manifest records catalog references as strings such as `kind`, `publish.<name>.as`, and `listen.<binding>.as`. Operator resolution attaches kind definition semantics, chooses which catalog entries are visible in a Space, and selects the implementation binding that creates/updates the resources. Native kind packages are listed in [Kind Packages](/en/reference/kind-packages).
+The manifest records catalog references as strings such as `kind` and `connect` / `listen` `inject` values. Operator resolution attaches kind definition semantics, chooses which catalog entries are visible in a Space, and selects the implementation binding that creates/updates the resources. Native kind packages are listed in [Kind Packages](/en/reference/kind-packages).
 
 ## Official Kind Definitions
 
-These are the current `takosumi.com` v1 catalog kind definitions. They are not a closed built-in kind set; operators can adopt other kind definition URIs.
+These are the current portable `takosumi.com` v1 catalog kind definitions. They are not a closed built-in kind set; operators can adopt other kind definition URIs.
 
-| Suggested alias | Kind URI                                     | Typical published output          |
-| --------------- | -------------------------------------------- | --------------------------------- |
-| `worker`        | `https://takosumi.com/kinds/v1/worker`       | `http` as `http-endpoint`         |
-| `web-service`   | `https://takosumi.com/kinds/v1/web-service`  | `http` as `http-endpoint`         |
-| `postgres`      | `https://takosumi.com/kinds/v1/postgres`     | `connection` as `service-binding` |
-| `object-store`  | `https://takosumi.com/kinds/v1/object-store` | `bucket` as `object-store`        |
-| `gateway`       | `https://takosumi.com/kinds/v1/gateway`      | `public` as `http-endpoint`       |
+| Suggested alias | Kind URI                                      | Typical output slot                        |
+| --------------- | --------------------------------------------- | ------------------------------------------ |
+| `worker`        | `https://takosumi.com/kinds/v1/worker`        | `http` as `http-endpoint`                  |
+| `web-service`   | `https://takosumi.com/kinds/v1/web-service`   | `http` as `http-endpoint`                  |
+| `postgres`      | `https://takosumi.com/kinds/v1/postgres`      | `connection` as `service-binding`          |
+| `sqlite`        | `https://takosumi.com/kinds/v1/sqlite`        | `connection` as `service-binding`          |
+| `object-store`  | `https://takosumi.com/kinds/v1/object-store`  | `bucket` as `object-store`                 |
+| `kv-store`      | `https://takosumi.com/kinds/v1/kv-store`      | `store` as `service-binding`               |
+| `message-queue` | `https://takosumi.com/kinds/v1/message-queue` | `producer` / `consumer` as `event-channel` |
+| `vector-store`  | `https://takosumi.com/kinds/v1/vector-store`  | `index` as `service-binding`               |
+| `gateway`       | `https://takosumi.com/kinds/v1/gateway`       | `public` as `http-endpoint`                |
 
-Short aliases are operator-selected conveniences. The URI is the kind definition identity. Kind definition documents may publish `referenceAliases` as suggestions; operator configurations activate aliases explicitly.
+Short aliases are operator-selected conveniences. The URI is the kind definition identity. Kind definition documents may publish `referenceAliases` as suggestions; operator distributions activate aliases explicitly.
+
+Official native kind definitions use the same `https://takosumi.com/kinds/v1/*` catalog URI space. Native definitions can carry backend-specific `spec` and output vocabulary, so their package sources live in the sibling `takosumi-plugins/packages/kind-*` repository. Those packages contain both the descriptor and a reference plugin binding; the plugin is reference implementation wiring, not part of the AppSpec core contract. Native kind packages are listed in [Kind Packages](/en/reference/kind-packages).
+
+Official descriptor `spec` JSON Schemas are closed shapes. Official portable and native kinds spell supported fields instead of accepting undeclared fields with `additionalProperties: true`. Reference packages use the same field set for runtime validation, so descriptor metadata, TypeScript helpers, and pre-apply plugin validation stay aligned. If a backend needs another field, update that native kind descriptor or define another kind URI. AppSpec core stays kind-agnostic, but the official catalog favors precise types that catch typos and unsupported inputs.
+
+Portable data kind `spec` shapes only include fields whose meaning is stable across providers. `kv-store` has `name`; `message-queue` has `name` and optional `deliveryDelay`; `vector-store` requires `name`, `dimensions`, and `metric`. Default TTLs, retry counts, dead-letter queues, retention, and index defaults differ by backend and creation API, so they belong in native kind descriptors rather than portable fields.
 
 ## Output Types
 
-Output types define the portable format of output data offered by `publish.<name>.as` or by a platform service entry. Publisher paths, backend resources, dashboard routes, and account management lifecycle belong to the operator or product distribution spec that offers the output.
+Output types define the portable format of output data offered by a component output slot or by a platform service entry. Service paths, backend resources, dashboard routes, and account management lifecycle belong to the operator or product distribution spec that offers the output.
 
-Official output material is a closed shape. Operator-specific fields should be modeled as another output type or catalog extension. Provider-local outputs are not publication material until the kind definition or implementation binding projects them into the official material shape.
+Official output material is a closed shape. Operator-specific fields should be modeled as another output type or catalog extension. Implementation-local outputs are not output material until the kind definition or implementation binding projects them into the official material shape.
 
-| Contract           | Public / non-secret fields                                                                           | Secret refs                                               | Typical projections               |
-| ------------------ | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------- |
-| `http-endpoint`    | `targets[]` for callable upstreams and optional public `endpoints[]`.                                | none                                                      | `upstream`, `env`, `config-mount` |
-| `service-binding`  | `service`, `protocol`, `host`, `port`, `database`, optional `username`, `connectionUrl`, `caCertRef` | `passwordRef`, token refs                                 | `secret-env`, `config-mount`      |
-| `object-store`     | `bucket`, `endpoint`, `region`, `pathStyle`, optional `publicBaseUrl`, policy refs                   | `accessKeyIdRef`, `secretAccessKeyRef`, `sessionTokenRef` | `secret-env`, `config-mount`      |
-| `event-channel`    | `channel`, `protocol`, endpoint/topic/queue/stream identity, delivery policy refs                    | producer/consumer credential refs                         | `secret-env`, `config-mount`      |
-| `identity.oidc@v1` | issuer URL, discovery URL, client id, redirect/callback origin, optional JWKS/discovery refs         | `clientSecretRef`                                         | `secret-env`, `config-mount`      |
-| `billing.port@v1`  | billing portal URL, usage report endpoint, billing subject ref                                       | `meteringCredentialRef`                                   | `secret-env`, `config-mount`      |
+| Contract           | Public / non-secret fields                                                                                                                                                     | Secret refs                                               | Typical projections               |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | --------------------------------- |
+| `http-endpoint`    | `targets[]` for callable upstreams and optional public `endpoints[]`. A target can carry `url`, `host` + `port`, or both. `protocol` / `basePath` refine the host + port form. | none                                                      | `upstream`, `env`, `config-mount` |
+| `service-binding`  | `protocol` plus one of `service`, `connectionUrl`, or `host` + `port`. May also include `database`, optional `username`, and `caCertRef`.                                      | `passwordRef`, token refs                                 | `secret-env`, `config-mount`      |
+| `object-store`     | `bucket`, `endpoint`, `region`, `pathStyle`, optional `publicBaseUrl`, policy refs                                                                                             | `accessKeyIdRef`, `secretAccessKeyRef`, `sessionTokenRef` | `secret-env`, `config-mount`      |
+| `event-channel`    | `channel`, `protocol`, endpoint/topic/queue/stream identity, delivery policy refs                                                                                              | producer/consumer credential refs                         | `secret-env`, `config-mount`      |
+| `identity.oidc@v1` | issuer URL, discovery URL, client id, redirect/callback origin, optional JWKS/discovery refs                                                                                   | `clientSecretRef`                                         | `secret-env`, `config-mount`      |
+| `billing.port@v1`  | billing portal URL, usage report endpoint, billing subject ref                                                                                                                 | `meteringCredentialRef`                                   | `secret-env`, `config-mount`      |
 
-`http-endpoint` describes callable HTTP output data. Workload published outputs usually emit `targets[]`; gateway or ingress published outputs usually emit `endpoints[]`. One output must contain at least one of `targets[]` or `endpoints[]`. Public reachability is a property of the publisher and the resulting output.
+`http-endpoint` describes callable HTTP output data. Workload component outputs usually emit `targets[]`; gateway or ingress outputs usually emit `endpoints[]`. One output material must contain at least one of `targets[]` or `endpoints[]`. Public reachability is a property of the gateway/ingress kind and the resulting output; root `publish` only records an Installation output declaration.
 
-HTTP output values are closed. `url` is an absolute `http` / `https` URL, `scheme` / `protocol` is `http` or `https`, `port` is an integer from 1 to 65535, and `visibility` is one of `private`, `space`, `public`, or `internal`. `basePath` and `routes[].pathPrefix` start with `/` and do not contain `?` or `#`. `name`, `listener`, and `routes[].to` are ASCII identifiers (`A-Za-z0-9_.-`).
+Official output values are closed shapes. A secret reference is an object with only `{ secretRef: string }`.
+
+For HTTP output, `url` is an absolute `http` / `https` URL, `scheme` / `protocol` is `http` or `https`, `port` is an integer from 1 to 65535, and `visibility` is one of `private`, `space`, `public`, or `internal`. Target `host` and `port` appear together. `protocol` and `basePath` refine the host/port form, so they require `host` + `port`. `basePath` and `routes[].pathPrefix` start with `/` and do not contain `?` or `#`. `name`, `listener`, `routes[].to`, and `tokenRefs` keys are ASCII identifiers (`A-Za-z0-9_.-`).
+
+`service-binding` describes non-HTTP service connectivity. It is not limited to TCP. Material identifies the target with `protocol` plus one of `service`, `connectionUrl`, or `host` + `port`. Credentials travel through `passwordRef`, `tokenRef`, or named `tokenRefs`; `connectionUrl` does not embed a password.
 
 Compact schema:
 
@@ -81,17 +95,21 @@ http-endpoint:
 
 service-binding:
   publicFields: { service, protocol, host, port, database, username, connectionUrl, caCertRef }
-  secretRefs: [passwordRef, tokenRef]
+  secretRefs: [passwordRef, tokenRef, tokenRefs]
+  requires: protocol plus one of service, connectionUrl, or host + port
+  rule: host and port appear together; connectionUrl is an absolute URI and must not contain an embedded password; tokenRefs keys are identifiers
   allowedProjections: [secret-env, config-mount]
 
 object-store:
   publicFields: { bucket, endpoint, region, pathStyle, publicBaseUrl, policyRefs }
   secretRefs: [accessKeyIdRef, secretAccessKeyRef, sessionTokenRef]
+  rule: accessKeyIdRef and secretAccessKeyRef appear together; sessionTokenRef requires both
   allowedProjections: [secret-env, config-mount]
 
 event-channel:
-  publicFields: { channel, protocol, endpoint, deliveryPolicyRefs }
+  publicFields: { channel, protocol, endpoint, topic, queue, stream, deliveryPolicyRefs }
   secretRefs: [producerCredentialRef, consumerCredentialRef]
+  rule: endpoint is an absolute URI when present
   allowedProjections: [secret-env, config-mount]
 
 identity.oidc@v1:
@@ -113,7 +131,7 @@ Public Deployment outputs and operator read APIs expose only non-secret fields p
 
 ## Injection Modes
 
-Injection modes (how values are delivered: `env`, `secret-env`, etc.) define how a listened output type is presented to the consumer component.
+Injection modes (how values are delivered: `env`, `secret-env`, etc.) define how resolved output material is presented to the consumer component.
 
 | Injection mode | Meaning                                                                                              | Safety rule                                                |
 | -------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -121,6 +139,12 @@ Injection modes (how values are delivered: `env`, `secret-env`, etc.) define how
 | `secret-env`   | Project public config plus secret refs into runtime environment through the operator secret backend. | Raw secret values are injected only at workload runtime.   |
 | `upstream`     | Connect HTTP endpoint output to an ingress/router/upstream connection.                               | Valid for upstream-capable `http-endpoint` consumer slots. |
 | `config-mount` | Project public config and refs into a mounted config file, volume, or SDK config object.             | Mount path and file format are defined by the kind.        |
+
+After `env` or `secret-env` expands material into an environment record, public
+config values are strings and secret values remain `{ secretRef: "..." }`
+objects. `secret-env` is not flattened into a `secret://...` string. The
+implementation binding or runtime connector either maps that `{ secretRef }`
+to the backend's secret mechanism or fails closed before creating resources.
 
 Projection compatibility:
 
@@ -137,27 +161,30 @@ Consumer slot metadata and operator policy can make a syntactically valid combin
 
 ## Consumer Slot Metadata
 
-Kind definitions can describe what a `listen` slot accepts without adding more manifest fields. This metadata is catalog vocabulary for validation and docs. Generated helpers currently focus on spec/output aliases; consumer slot metadata remains authoritative in the catalog document.
+Kind definitions can describe what a consumer binding slot accepts without adding more manifest fields. This metadata is catalog vocabulary for validation and docs. Generated helpers export listen slot descriptors in addition to spec, output, and output slot metadata. `spec/kind.jsonld` remains the source of truth; the generated helper is a typed mirror for package authors and operator wiring.
 
-The official `worker` and `web-service` descriptors allow `http-endpoint` on the wildcard listen slot. Internal workload-to-workload HTTP is modeled by having a publisher expose `publish.<name>.as: http-endpoint` and a consumer reference it with `listen.<binding>.from`. Use `as: env` when the consumer needs endpoint config such as a base URL, and `as: upstream` when the consumer slot is acting as a router or proxy upstream. Secret-bearing output types still follow the compatibility table above, so `service-binding`, `object-store`, `identity.oidc@v1`, and `billing.port@v1` are not valid plain `env` inputs.
+The official `worker` and `web-service` descriptors allow `http-endpoint` on the wildcard listen slot. Same-manifest dependencies are modeled by having a consumer reference the producer's `web.http` output slot with `connect.<binding>.output`. Platform services and external services outside the manifest are referenced with `listen.<binding>.path` to an operator-defined service path. Use `inject: env` when the consumer needs endpoint config such as a base URL, and `inject: upstream` when the consumer slot is acting as a router or proxy upstream. Secret-bearing output types still follow the compatibility table above, so `service-binding`, `object-store`, `identity.oidc@v1`, and `billing.port@v1` are not valid plain `env` inputs.
 
 | Kind definition metadata                  | Meaning                                                               |
 | ----------------------------------------- | --------------------------------------------------------------------- |
 | `listens.<slot>.accepts`                  | Output types accepted by the slot.                                    |
 | `listens.<slot>.projectionFamilies`       | Injection modes accepted by the slot.                                 |
+| `listens.<slot>.projectionMatrix`         | Machine-readable valid injection-mode intersection per output type.   |
 | `listens.<slot>.minimumAccess`            | Minimum access mode needed for the output.                            |
 | `listens.<slot>.safeDefaultAccess`        | Default access before operator policy selects a stronger access mode. |
 | `listens.<slot>.requiredWhenReferencedBy` | `spec` field reference that makes the connection required.            |
 
-The manifest does not carry an access-mode field. It selects `listen.from` and `listen.as`; kind definition metadata, platform service entries, and operator policy resolve access and compatibility.
+The manifest does not carry an access-mode field. It selects `connect.output` / `listen.path` and `inject`; kind definition metadata, platform service entries, and operator policy resolve access and compatibility.
+
+Native worker and web-service kinds must carry the same `projectionMatrix` as their portable base. Backend-specific fields and outputs can be added by a native descriptor, but the type-safety rule does not change: secret-bearing output types such as `service-binding` and `object-store` are not projected as plain `env`. If a backend adds another injection mode, it must be explicit in that backend's native kind descriptor and operator policy.
 
 ## Gateway Portable Subset
 
-When an operator adopts the official `gateway` kind definition, that definition provides portable HTTP ingress vocabulary. Its `spec.listeners` map declares named HTTP/HTTPS listeners. Its `spec.routes` array connects a listener to a local `listen` name.
+When an operator adopts the official `gateway` kind definition, that definition provides portable HTTP ingress vocabulary. Its `spec.listeners` map declares named HTTP/HTTPS listeners. Its `spec.routes` array connects a listener to a local `connect` binding key.
 
 Portable v1 route semantics:
 
-- `routes[].to` is a local `listen` key, not an output type or URL.
+- `routes[].to` is a local `connect` binding key, not an output type, `listen.path`, or URL.
 - `routes[].path` is an HTTP path prefix. It is `/` or starts with `/`.
 - Matching uses only the URL path. Query strings and fragments are excluded.
 - Matching is case-sensitive and compares the URL path string before percent-decoding or path normalization.
@@ -165,16 +192,16 @@ Portable v1 route semantics:
 - `/` matches every path. `/api` matches `/api` and `/api/...`, but not `/apiary`.
 - `routes[].path` is a configuration path string, not a full URL. `?`, `#`, NUL, empty strings, and segment escapes that change the path are invalid.
 - Route matching is longest-prefix within the same listener.
-- Duplicate routes with the same listener and path are invalid. Operator profiles may replace this with a stricter conflict rule.
-- Rewrite, strip-prefix, header matching, method matching, and CORS policy are kind-specific extension fields when an operator configuration offers them.
+- Duplicate routes with the same listener and path are invalid. Operator distributions may replace this with a stricter conflict rule.
+- Rewrite, strip-prefix, header matching, method matching, and CORS policy belong to native gateway kind descriptors that explicitly define those fields.
 
-JSON Schema captures local syntax for `routes[].path` (starts with `/`, no `?` or `#`) and identifier syntax for `routes[].listener` and `routes[].to`. Duplicate routes, segment-boundary conflicts, and unsupported extension fields are kind definition semantic validation and operator conformance checks.
+JSON Schema captures local syntax for `routes[].path` (starts with `/`, no `?`, `#`, or NUL) and identifier syntax for `routes[].listener` and `routes[].to`. Duplicate routes, dot-segment rejection, segment-boundary matching behavior, and backend rejection of unsupported fields are kind definition semantic validation and operator conformance checks. Official v1 descriptors do not accept undeclared fields.
 
-The gateway `public` published output uses the `http-endpoint` output type. A produced public output includes non-secret `endpoints[]`. If multiple endpoints are present, exactly one endpoint has `primary: true`.
+The gateway `public` output slot uses the `http-endpoint` output type. A produced gateway output includes non-secret `endpoints[]`. If multiple endpoints are present, exactly one endpoint has `primary: true`.
 
 ## External Output Types
 
-Platform services use the same output types as same-manifest component published outputs. `identity.oidc@v1` and `billing.port@v1` are official output type contracts in this catalog. An operator or product distribution spec defines the concrete platform service path that offers them in a Space.
+Platform services use the same output types as same-manifest component outputs. `identity.oidc@v1` and `billing.port@v1` are official output type contracts in this catalog. An operator or product distribution spec defines the concrete platform service path that offers them in a Space.
 
 ## Access Metadata
 
@@ -188,9 +215,9 @@ Platform services use the same output types as same-manifest component published
 
 JSON-LD is the format for kind definitions, vocabulary terms, and catalog metadata. Runtime behavior belongs to the operator-selected implementation binding.
 
-`publications.<name>.contract` names the output type used by `publish.<name>.as`. Kind definition documents can include `exampleMaterialMapping` metadata for generated helper types, examples, and documentation checks. `exampleMaterialMapping` uses the same field layout as the official material shape; secret refs use `{ "secretRef": "$outputs.name" }`. Markers such as `$outputs.*` are non-executable example metadata; operator-selected implementation bindings collect and record backend output in Deployment records.
+`outputSlots.<name>.contract` names the output type used by a component output slot. Kind definition documents can include `exampleMaterialMapping` metadata for generated helper types, examples, and documentation checks. `exampleMaterialMapping` uses the same field layout as the official material shape; secret refs use `{ "secretRef": "$outputs.name" }`. Markers such as `$outputs.*` are non-executable example metadata. A marker that satisfies a required field or required alternative references a required output. For example, `billing.port@v1` needs either `portalUrl` or `usageReportEndpoint` to be a required output or a literal value. Operator-selected implementation bindings collect and record backend output in Deployment records.
 
-`listens.<slot>.projectionFamilies` lists injection modes accepted through a component-local `listen` slot.
+`listens.<slot>.projectionFamilies` lists injection modes accepted through a component-local consumer slot. In the manifest, same-manifest outputs attach to that slot through `connect`; platform and external service paths attach through `listen.path`.
 
 ```json
 {
@@ -204,7 +231,7 @@ JSON-LD is the format for kind definitions, vocabulary terms, and catalog metada
     },
     "required": ["entrypoint"]
   },
-  "publications": {
+  "outputSlots": {
     "http": {
       "contract": "http-endpoint"
     }
@@ -214,6 +241,6 @@ JSON-LD is the format for kind definitions, vocabulary terms, and catalog metada
 
 ## Source Of Truth
 
-The public catalog surface is the published `https://takosumi.com/kinds/v1/*`, `https://takosumi.com/kinds/v1/*.jsonld`, and `https://takosumi.com/contexts/v1.jsonld` documents, this page, and the `@takos/takosumi-contract/type-catalog` TypeScript helpers.
+The public catalog surface is the package-owned `packages/kind-*/spec/kind.jsonld` sources, sibling `takosumi-plugins/packages/kind-*/spec/kind.jsonld` native sources, published `https://takosumi.com/kinds/v1/*`, `https://takosumi.com/kinds/v1/*.jsonld`, and `https://takosumi.com/contexts/v1.jsonld` documents, this page, and the `@takos/takosumi-contract/type-catalog` TypeScript helpers.
 
-Conforming implementations may compile, mirror, or vendor the catalog. Runtime execution uses the operator-selected implementation binding to choose the backend implementation.
+Catalog compatibility is based on kind definition URI identity, output type names, projection-family names, access vocabulary, and documented output material fields. Conforming implementations may compile, mirror, or vendor the catalog. Runtime execution uses the operator-selected implementation binding to choose the backend implementation; JSON-LD is catalog/type metadata, not a runtime plugin-loading requirement.

@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import {
   formatPlatformOperationIdempotencyKey,
-  type JsonObject,
-  type PlatformContext,
   type PlatformOperationContext,
   type PlatformOperationRecoveryMode,
-  type ResourceHandle,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
+import type {
+  PlatformContext,
+  ResourceHandle,
+} from "takosumi-contract/internal/provider-plugin";
+import type { JsonObject } from "takosumi-contract/reference/types";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 import {
   type ResolvedResourceV2,

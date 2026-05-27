@@ -9,8 +9,12 @@
     "@takos/takosumi-runtime-agent": "jsr:@takos/takosumi-runtime-agent@^0.8.0",
     "@takos/takosumi-cli": "jsr:@takos/takosumi-cli@^0.15.0",
     "@takos/takosumi-kind-gateway": "jsr:@takos/takosumi-kind-gateway@^0.1.0",
+    "@takos/takosumi-kind-kv-store": "jsr:@takos/takosumi-kind-kv-store@^0.1.0",
+    "@takos/takosumi-kind-message-queue": "jsr:@takos/takosumi-kind-message-queue@^0.1.0",
     "@takos/takosumi-kind-object-store": "jsr:@takos/takosumi-kind-object-store@^0.1.0",
     "@takos/takosumi-kind-postgres": "jsr:@takos/takosumi-kind-postgres@^0.1.0",
+    "@takos/takosumi-kind-sqlite": "jsr:@takos/takosumi-kind-sqlite@^0.1.0",
+    "@takos/takosumi-kind-vector-store": "jsr:@takos/takosumi-kind-vector-store@^0.1.0",
     "@takos/takosumi-kind-web-service": "jsr:@takos/takosumi-kind-web-service@^0.1.0",
     "@takos/takosumi-kind-worker": "jsr:@takos/takosumi-kind-worker@^0.1.0"
   },
@@ -24,8 +28,12 @@
     "./server": "./server.ts",
     "./runtime-agent": "./runtime-agent.ts",
     "./kind/gateway": "./kind-gateway.ts",
+    "./kind/kv-store": "./kind-kv-store.ts",
+    "./kind/message-queue": "./kind-message-queue.ts",
     "./kind/object-store": "./kind-object-store.ts",
     "./kind/postgres": "./kind-postgres.ts",
+    "./kind/sqlite": "./kind-sqlite.ts",
+    "./kind/vector-store": "./kind-vector-store.ts",
     "./kind/web-service": "./kind-web-service.ts",
     "./kind/worker": "./kind-worker.ts"
   }

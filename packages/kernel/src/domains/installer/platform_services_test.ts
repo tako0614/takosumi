@@ -1,13 +1,11 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@^1.0.0";
-import {
-  httpExternalPublicationResolver,
-  InstallerPipelineError,
-} from "./mod.ts";
+import { httpPlatformServiceResolver, InstallerPipelineError } from "./mod.ts";
 
-Deno.test("httpExternalPublicationResolver posts context and returns material", async () => {
+Deno.test("httpPlatformServiceResolver posts context and returns material", async () => {
   const requests: Request[] = [];
-  const resolver = httpExternalPublicationResolver({
-    url: "https://cloud.example.test/internal/workload-publications/resolve",
+  const resolver = httpPlatformServiceResolver({
+    url:
+      "https://cloud.example.test/internal/workload-platform-services/resolve",
     token: "resolver-token",
     fetch: (request, init) => {
       requests.push(new Request(request, init));
@@ -28,13 +26,13 @@ Deno.test("httpExternalPublicationResolver posts context and returns material", 
     componentName: "web",
     component: { kind: "worker" },
     bindingName: "oidc",
-    sourceRef: "operator.identity.oidc",
+    sourceRef: "identity.primary.oidc",
   });
 
   assertEquals(requests.length, 1);
   assertEquals(
     requests[0].url,
-    "https://cloud.example.test/internal/workload-publications/resolve",
+    "https://cloud.example.test/internal/workload-platform-services/resolve",
   );
   assertEquals(
     requests[0].headers.get("authorization"),
@@ -47,7 +45,7 @@ Deno.test("httpExternalPublicationResolver posts context and returns material", 
     componentName: "web",
     component: { kind: "worker" },
     bindingName: "oidc",
-    sourceRef: "operator.identity.oidc",
+    sourceRef: "identity.primary.oidc",
   });
   assertEquals(material, {
     materialContract: "identity.oidc@v1",
@@ -56,9 +54,10 @@ Deno.test("httpExternalPublicationResolver posts context and returns material", 
   });
 });
 
-Deno.test("httpExternalPublicationResolver treats 404 as absent publication", async () => {
-  const resolver = httpExternalPublicationResolver({
-    url: "https://cloud.example.test/internal/workload-publications/resolve",
+Deno.test("httpPlatformServiceResolver treats 404 as absent platform service", async () => {
+  const resolver = httpPlatformServiceResolver({
+    url:
+      "https://cloud.example.test/internal/workload-platform-services/resolve",
     fetch: () =>
       Promise.resolve(Response.json({ error: "not_found" }, {
         status: 404,
@@ -73,15 +72,16 @@ Deno.test("httpExternalPublicationResolver treats 404 as absent publication", as
       componentName: "web",
       component: { kind: "worker" },
       bindingName: "oidc",
-      sourceRef: "operator.missing.service",
+      sourceRef: "identity.missing.service",
     }),
     undefined,
   );
 });
 
-Deno.test("httpExternalPublicationResolver rejects non-material responses", async () => {
-  const resolver = httpExternalPublicationResolver({
-    url: "https://cloud.example.test/internal/workload-publications/resolve",
+Deno.test("httpPlatformServiceResolver rejects non-material responses", async () => {
+  const resolver = httpPlatformServiceResolver({
+    url:
+      "https://cloud.example.test/internal/workload-platform-services/resolve",
     fetch: () => Promise.resolve(Response.json(["not-material"])),
   });
 
@@ -94,10 +94,10 @@ Deno.test("httpExternalPublicationResolver rejects non-material responses", asyn
         componentName: "web",
         component: { kind: "worker" },
         bindingName: "oidc",
-        sourceRef: "operator.identity.oidc",
+        sourceRef: "identity.primary.oidc",
       });
     },
     InstallerPipelineError,
-    "external publication resolver response must be a material object",
+    "platform service resolver response must be a material object",
   );
 });

@@ -5,11 +5,12 @@
  * `AppSpecParseError` with `validationPhase` / `validationPath` on
  * syntax / schema violations.
  *
- * Components declare local publications (`publish.<name>`) and local
- * bindings (`listen.<name>`). A binding's `from` field points at either a
- * same-AppSpec publication (`component.publication`) or an operator-owned
- * external publication path (`publisher.area.name`). The prior `use:` edge model is
- * removed; encountering `use:` is rejected with `AppSpecParseError`.
+ * Components declare deterministic same-AppSpec wiring with `connect.<name>`
+ * and platform-service wiring with `listen.<name>.path`. Root `publish`
+ * declares a selected component output as an Installation output service path
+ * exposure.
+ * The prior `use:` and component-local `publish:` edge models are removed;
+ * encountering them is rejected with `AppSpecParseError`.
  */
 
 import { parse as parseYaml } from "jsr:@std/yaml@^1.0.5";
@@ -19,9 +20,13 @@ import {
   type BindingName,
   type Component,
   type ComponentKindRef,
+  type ComponentOutputRef,
+  type ConnectOptions,
+  type ExternalServiceName,
+  isAppSpecLocalNameSegment,
+  isComponentOutputRef,
+  isPlatformServicePath,
   type ListenOptions,
-  type ListenSourceRef,
-  type PublicationName,
   type PublishOptions,
 } from "@takos/takosumi-contract/app-spec";
 
@@ -29,6 +34,7 @@ const ROOT_KEYS = new Set([
   "apiVersion",
   "metadata",
   "components",
+  "publish",
 ]);
 
 const METADATA_KEYS = new Set([
@@ -41,22 +47,28 @@ const METADATA_KEYS = new Set([
 
 const COMPONENT_KEYS = new Set([
   "kind",
-  "publish",
+  "connect",
   "listen",
   "spec",
 ]);
 
-const PUBLISH_OPTIONS_KEYS = new Set(["as"]);
+const CONNECT_OPTIONS_KEYS = new Set([
+  "output",
+  "inject",
+  "prefix",
+  "mount",
+]);
+const ROOT_PUBLISH_OPTIONS_KEYS = new Set(["output", "path"]);
 const LISTEN_OPTIONS_KEYS = new Set([
-  "from",
-  "as",
+  "path",
+  "inject",
   "prefix",
   "mount",
   "required",
 ]);
 
 /**
- * Built-in {@link ListenOptions} `as` values the parser knows about. The
+ * Built-in {@link ListenOptions} `inject` values the parser knows about. The
  * parser still accepts arbitrary non-empty strings so operator-defined
  * material shapes are forward-compatible — this set is documentary.
  */
@@ -70,7 +82,7 @@ const KNOWN_LISTEN_SHAPES: ReadonlySet<string> = new Set([
 export type ValidationPhase =
   | "syntax"
   | "schema"
-  | "publish-listen"
+  | "connection-resolution"
   | "kind-catalog"
   | "legacy-use";
 
@@ -147,12 +159,16 @@ function validateAppSpec(raw: unknown): AppSpec {
 
   const metadata = validateMetadata(root.metadata);
   const components = validateComponents(root.components);
-  validatePublishListenGraph(components);
+  const publish = root.publish === undefined
+    ? undefined
+    : validateRootPublish(root.publish, "$.publish", components);
+  validateConnectGraph(components);
 
   return {
     apiVersion: APP_SPEC_API_VERSION,
     metadata,
     components,
+    ...(publish ? { publish } : {}),
   };
 }
 
@@ -222,19 +238,27 @@ function validateComponent(name: string, raw: unknown): Component {
   if ("use" in c) {
     throw new AppSpecParseError(
       `${path}.use is no longer supported — the AppSpec model now uses ` +
-        `\`publish:\` and \`listen:\` for publication/listen bindings. See ` +
+        `\`connect:\` for same-AppSpec wiring and \`listen:\` for platform services. See ` +
         `https://takosumi.com/docs/reference/app-spec.`,
       "legacy-use",
       `${path}.use`,
+    );
+  }
+  if ("publish" in c) {
+    throw new AppSpecParseError(
+      `${path}.publish is no longer component-local; use ` +
+        `connect.<binding>.output for same-AppSpec wiring or root publish for an Installation output declaration`,
+      "schema",
+      `${path}.publish`,
     );
   }
   rejectUnknownKeys(c, COMPONENT_KEYS, path);
   const kind = validateComponentKind(c.kind, `${path}.kind`);
   const component: Component = {
     kind,
-    publish: c.publish === undefined
+    connect: c.connect === undefined
       ? undefined
-      : validatePublish(c.publish, `${path}.publish`),
+      : validateConnect(c.connect, `${path}.connect`),
     listen: c.listen === undefined
       ? undefined
       : validateListen(c.listen, `${path}.listen`),
@@ -262,47 +286,69 @@ function validateComponentKind(value: unknown, path: string): ComponentKindRef {
   return value;
 }
 
-function validatePublish(
+function validateConnect(
   raw: unknown,
   path: string,
-): Readonly<Record<PublicationName, PublishOptions>> {
-  if (Array.isArray(raw)) {
+): Readonly<Record<BindingName, ConnectOptions>> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new AppSpecParseError(
-      `${path} must be a mapping of publication name → options object; ` +
-        `namespace path arrays are no longer accepted`,
+      `${path} must be a mapping of binding name → options object`,
       "schema",
       path,
     );
   }
-  if (raw === null || typeof raw !== "object") {
-    throw new AppSpecParseError(
-      `${path} must be a mapping of publication name → options object`,
-      "schema",
-      path,
-    );
-  }
-  const result: Record<string, PublishOptions> = {};
-  for (const [publicationName, value] of Object.entries(raw)) {
-    const entryPath = `${path}.${JSON.stringify(publicationName)}`;
-    validateLocalName(publicationName, entryPath);
+  const result: Record<string, ConnectOptions> = {};
+  for (const [bindingName, value] of Object.entries(raw)) {
+    const entryPath = `${path}.${JSON.stringify(bindingName)}`;
+    validateLocalName(bindingName, entryPath);
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
       throw new AppSpecParseError(
-        `${entryPath} must be an options object { as }`,
+        `${entryPath} must be an options object { output, inject, prefix?, mount? }`,
         "schema",
         entryPath,
       );
     }
     const opts = value as Record<string, unknown>;
-    rejectUnknownKeys(opts, PUBLISH_OPTIONS_KEYS, entryPath);
-    if (typeof opts.as !== "string" || opts.as.length === 0) {
+    rejectUnknownKeys(opts, CONNECT_OPTIONS_KEYS, entryPath);
+    if (typeof opts.output !== "string" || opts.output.length === 0) {
       throw new AppSpecParseError(
-        `${entryPath}.as must be a non-empty material contract alias or URI`,
-        "publish-listen",
-        `${entryPath}.as`,
+        `${entryPath}.output must be a non-empty component output ref ` +
+          `(<component>.<outputSlot>)`,
+        "connection-resolution",
+        `${entryPath}.output`,
       );
     }
-    result[publicationName] = {
-      as: opts.as,
+    const output = validateComponentOutputRef(
+      opts.output,
+      `${entryPath}.output`,
+    );
+    if (typeof opts.inject !== "string" || opts.inject.length === 0) {
+      throw new AppSpecParseError(
+        `${entryPath}.inject must be a non-empty string ` +
+          `(e.g. "env", "secret-env", "config-mount", "upstream", or an operator-defined shape)`,
+        "connection-resolution",
+        `${entryPath}.inject`,
+      );
+    }
+    if (opts.prefix !== undefined && typeof opts.prefix !== "string") {
+      throw new AppSpecParseError(
+        `${entryPath}.prefix must be a string when present`,
+        "connection-resolution",
+        `${entryPath}.prefix`,
+      );
+    }
+    if (opts.mount !== undefined && typeof opts.mount !== "string") {
+      throw new AppSpecParseError(
+        `${entryPath}.mount must be a string when present`,
+        "connection-resolution",
+        `${entryPath}.mount`,
+      );
+    }
+    result[bindingName] = {
+      output,
+      inject: opts.inject,
+      prefix: opts.prefix as string | undefined,
+      mount: opts.mount as string | undefined,
     };
   }
   return result;
@@ -325,64 +371,138 @@ function validateListen(
     validateLocalName(bindingName, entryPath);
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
       throw new AppSpecParseError(
-        `${entryPath} must be an options object { from, as, prefix?, mount? }`,
+        `${entryPath} must be an options object { path, inject, prefix?, mount?, required? }`,
         "schema",
         entryPath,
       );
     }
     const opts = value as Record<string, unknown>;
     rejectUnknownKeys(opts, LISTEN_OPTIONS_KEYS, entryPath);
-    if (typeof opts.from !== "string" || opts.from.length === 0) {
+    if (typeof opts.path !== "string" || opts.path.length === 0) {
       throw new AppSpecParseError(
-        `${entryPath}.from must be a non-empty source ref ` +
-          `(<component>.<publication> or publisher.area.name)`,
-        "publish-listen",
-        `${entryPath}.from`,
+        `${entryPath}.path must be a non-empty platform service path ` +
+          `(e.g. identity.primary.oidc)`,
+        "connection-resolution",
+        `${entryPath}.path`,
       );
     }
-    const from = validateListenSourceRef(opts.from, `${entryPath}.from`);
-    if (typeof opts.as !== "string" || opts.as.length === 0) {
+    const servicePath = validatePlatformServicePath(
+      opts.path,
+      `${entryPath}.path`,
+    );
+    if (typeof opts.inject !== "string" || opts.inject.length === 0) {
       throw new AppSpecParseError(
-        `${entryPath}.as must be a non-empty string ` +
+        `${entryPath}.inject must be a non-empty string ` +
           `(e.g. "env", "secret-env", "config-mount", "upstream", or an operator-defined shape)`,
-        "publish-listen",
-        `${entryPath}.as`,
+        "connection-resolution",
+        `${entryPath}.inject`,
       );
     }
     if (opts.prefix !== undefined && typeof opts.prefix !== "string") {
       throw new AppSpecParseError(
         `${entryPath}.prefix must be a string when present`,
-        "publish-listen",
+        "connection-resolution",
         `${entryPath}.prefix`,
       );
     }
     if (opts.mount !== undefined && typeof opts.mount !== "string") {
       throw new AppSpecParseError(
         `${entryPath}.mount must be a string when present`,
-        "publish-listen",
+        "connection-resolution",
         `${entryPath}.mount`,
       );
     }
     if (opts.required !== undefined && typeof opts.required !== "boolean") {
       throw new AppSpecParseError(
         `${entryPath}.required must be a boolean when present`,
-        "publish-listen",
-        `${entryPath}.required`,
-      );
-    }
-    if (opts.required !== undefined && !isExternalPublicationRef(from)) {
-      throw new AppSpecParseError(
-        `${entryPath}.required is only valid for external publication refs`,
-        "publish-listen",
+        "connection-resolution",
         `${entryPath}.required`,
       );
     }
     result[bindingName] = {
-      from,
-      as: opts.as,
+      path: servicePath,
+      inject: opts.inject,
       prefix: opts.prefix as string | undefined,
       mount: opts.mount as string | undefined,
       required: opts.required as boolean | undefined,
+    };
+  }
+  return result;
+}
+
+function validateRootPublish(
+  raw: unknown,
+  path: string,
+  components: Readonly<Record<string, Component>>,
+): Readonly<Record<ExternalServiceName, PublishOptions>> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new AppSpecParseError(
+      `${path} must be a mapping of publish name → options object`,
+      "schema",
+      path,
+    );
+  }
+  const result: Record<string, PublishOptions> = {};
+  const paths = new Map<string, string>();
+  for (const [publishName, value] of Object.entries(raw)) {
+    const entryPath = `${path}.${JSON.stringify(publishName)}`;
+    validateLocalName(publishName, entryPath);
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new AppSpecParseError(
+        `${entryPath} must be an options object { output, path }`,
+        "schema",
+        entryPath,
+      );
+    }
+    const opts = value as Record<string, unknown>;
+    rejectUnknownKeys(opts, ROOT_PUBLISH_OPTIONS_KEYS, entryPath);
+    if (typeof opts.output !== "string" || opts.output.length === 0) {
+      throw new AppSpecParseError(
+        `${entryPath}.output must be a non-empty component output ref ` +
+          `(<component>.<outputSlot>)`,
+        "connection-resolution",
+        `${entryPath}.output`,
+      );
+    }
+    const output = validateComponentOutputRef(
+      opts.output,
+      `${entryPath}.output`,
+    );
+    const componentName = output.split(".")[0]!;
+    if (!(componentName in components)) {
+      throw new AppSpecParseError(
+        `${entryPath}.output refers to unknown component ${
+          JSON.stringify(componentName)
+        }`,
+        "connection-resolution",
+        `${entryPath}.output`,
+      );
+    }
+    if (typeof opts.path !== "string" || opts.path.length === 0) {
+      throw new AppSpecParseError(
+        `${entryPath}.path must be a non-empty platform service path`,
+        "connection-resolution",
+        `${entryPath}.path`,
+      );
+    }
+    const servicePath = validatePlatformServicePath(
+      opts.path,
+      `${entryPath}.path`,
+    );
+    const existing = paths.get(servicePath);
+    if (existing !== undefined) {
+      throw new AppSpecParseError(
+        `${entryPath}.path duplicates $.publish.${
+          JSON.stringify(existing)
+        }.path`,
+        "connection-resolution",
+        `${entryPath}.path`,
+      );
+    }
+    paths.set(servicePath, publishName);
+    result[publishName] = {
+      output,
+      path: servicePath,
     };
   }
   return result;
@@ -403,47 +523,36 @@ function validateSpecObject(
 }
 
 /**
- * Validate local publish / listen edges and detect cycles.
+ * Validate deterministic connect edges and detect cycles.
  *
- * Same-AppSpec refs use `<component>.<publication>` and must resolve inside
- * this AppSpec. External publication refs use a dotted path with three or more
- * segments and do not create AppSpec-internal graph edges.
+ * Same-AppSpec refs use `<component>.<output>` and must resolve inside this
+ * AppSpec. Platform service refs are handled by `listen.path` and do not create
+ * AppSpec-internal graph edges.
  */
-function validatePublishListenGraph(
+function validateConnectGraph(
   components: Readonly<Record<string, Component>>,
 ): void {
-  // Build publisher index: component.publication → publisher component name.
-  const publisherByRef = new Map<string, string>();
-  for (const [name, component] of Object.entries(components)) {
-    if (!component.publish) continue;
-    for (const publicationName of Object.keys(component.publish)) {
-      publisherByRef.set(`${name}.${publicationName}`, name);
-    }
-  }
-
   // Build adjacency: edges go from listener → publisher (= "depends on").
   const adjacency = new Map<string, string[]>();
   for (const name of Object.keys(components)) adjacency.set(name, []);
   for (const [name, component] of Object.entries(components)) {
-    if (!component.listen) continue;
-    for (const [bindingName, options] of Object.entries(component.listen)) {
-      const from = options.from;
-      if (isExternalPublicationRef(from)) continue;
-      const publisher = publisherByRef.get(from);
-      if (publisher === undefined) {
+    if (!component.connect) continue;
+    for (const [bindingName, options] of Object.entries(component.connect)) {
+      const [publisher] = options.output.split(".");
+      if (publisher === undefined || !(publisher in components)) {
         throw new AppSpecParseError(
-          `${name}.listen.${bindingName}.from refers to unknown publication ` +
-            JSON.stringify(from),
-          "publish-listen",
-          `$.components.${name}.listen.${bindingName}.from`,
+          `${name}.connect.${bindingName}.output refers to unknown component ` +
+            JSON.stringify(publisher),
+          "connection-resolution",
+          `$.components.${name}.connect.${bindingName}.output`,
         );
       }
       if (publisher === name) {
         throw new AppSpecParseError(
-          `${name} listens to its own publication ` +
-            `(${JSON.stringify(from)}); self-loops are not permitted`,
-          "publish-listen",
-          `$.components.${name}.listen.${bindingName}.from`,
+          `${name} connects to its own output ` +
+            `(${JSON.stringify(options.output)}); self-loops are not permitted`,
+          "connection-resolution",
+          `$.components.${name}.connect.${bindingName}.output`,
         );
       }
       adjacency.get(name)!.push(publisher);
@@ -468,10 +577,8 @@ function detectCycles(adjacency: Map<string, string[]>): void {
       if (color.get(dep) === GRAY) {
         const cycleStart = stack.indexOf(dep);
         throw new AppSpecParseError(
-          `publish/listen cycle: ${
-            stack.slice(cycleStart).join(" → ")
-          } → ${dep}`,
-          "publish-listen",
+          `connect cycle: ${stack.slice(cycleStart).join(" → ")} → ${dep}`,
+          "connection-resolution",
           `$.components.${dep}`,
         );
       }
@@ -518,53 +625,42 @@ function validateLocalName(value: string, path: string): void {
   }
 }
 
-function validateListenSourceRef(
+function validateComponentOutputRef(
   value: string,
   path: string,
-): ListenSourceRef {
+): ComponentOutputRef {
   const parts = value.split(".");
-  if (parts.length === 2 && parts.every((part) => isValidLocalName(part))) {
-    return value as ListenSourceRef;
-  }
-  if (parts.length >= 3 && isValidExternalPublicationPath(value)) {
-    return value as ListenSourceRef;
+  if (isComponentOutputRef(value)) {
+    return value as ComponentOutputRef;
   }
   if (parts.length === 2) {
     throw new AppSpecParseError(
-      `${path} must use valid component/publication names`,
-      "publish-listen",
+      `${path} must use valid component/output names`,
+      "connection-resolution",
       path,
     );
   }
   throw new AppSpecParseError(
-    `${path} must be <component>.<publication> or publisher.area.name`,
-    "publish-listen",
+    `${path} must be <component>.<outputSlot>`,
+    "connection-resolution",
     path,
   );
 }
 
-function isExternalPublicationRef(value: string): boolean {
-  return value.split(".").length >= 3 && isValidExternalPublicationPath(value);
+function validatePlatformServicePath(
+  value: string,
+  path: string,
+): string {
+  if (isPlatformServicePath(value)) return value;
+  throw new AppSpecParseError(
+    `${path} must be a platform service path with 3 to 8 dot-separated local-name segments`,
+    "connection-resolution",
+    path,
+  );
 }
 
 function isValidLocalName(value: string): boolean {
-  return /^[a-z][a-z0-9-]{0,62}$/.test(value);
-}
-
-/**
- * External publication paths are dot-separated sequences of local-name
- * segments. `default` is an ordinary segment; Takosumi v1 does not perform
- * hidden default-path expansion.
- */
-function isValidExternalPublicationPath(value: string): boolean {
-  if (typeof value !== "string" || value.length === 0) return false;
-  if (value.length > 255) return false;
-  const segments = value.split(".");
-  if (segments.length === 0 || segments.length > 8) return false;
-  for (const segment of segments) {
-    if (!isValidLocalName(segment)) return false;
-  }
-  return true;
+  return isAppSpecLocalNameSegment(value);
 }
 
 // Used by `KNOWN_LISTEN_SHAPES` introspection in tests / docs.

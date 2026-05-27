@@ -1,0 +1,36 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/kv-store",
+  "@type": "ComponentKind",
+  "name": "kv-store",
+  "version": "v1",
+  "referenceAliases": ["kv-store", "kv"],
+  "description": "Key-value store for small keyed values.",
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["name"],
+    "additionalProperties": false,
+    "properties": {
+      "name": { "type": "string", "minLength": 1, "description": "Store name." }
+    }
+  },
+  "outputSlots": {
+    "store": {
+      "contract": "service-binding",
+      "exampleMaterialMapping": {
+        "service": "$outputs.storeId",
+        "protocol": "kv",
+        "connectionUrl": "$outputs.url",
+        "tokenRef": { "secretRef": "$outputs.tokenSecretRef" }
+      }
+    }
+  },
+  "outputs": [
+    { "name": "storeId", "type": "string", "required": true, "meaning": "Implementation-scoped store identifier." },
+    { "name": "name", "type": "string", "required": true, "meaning": "Store name." },
+    { "name": "url", "type": "string", "required": false, "meaning": "Connection URL if the implementation exposes one." },
+    { "name": "tokenSecretRef", "type": "string", "required": false, "meaning": "Secret reference for clients that need token-based access." }
+  ],
+  "capabilityTerms": ["kv-read-write", "kv-list"]
+}

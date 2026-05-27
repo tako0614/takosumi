@@ -2,20 +2,21 @@
  * BindingResolver unit tests.
  *
  * Covers:
- *   - kernel default env expansion (`as: env` + `prefix: DB` →
+ *   - kernel default env expansion (`inject: env` + `prefix: DB` →
  *     `DB_HOST` / `DB_PORT` style env keys)
- *   - operator-defined applyListen hook override
- *   - `as: upstream` / `as: config-mount` shape handling
+ *   - operator-defined applyBinding / applyListen hook overrides
+ *   - `inject: upstream` / `inject: config-mount` shape handling
  *   - end-to-end `resolveAppSpec` against a multi-component AppSpec
  */
 
 import assert from "node:assert/strict";
 import { APP_SPEC_API_VERSION, type AppSpec } from "takosumi-contract/app-spec";
 import type {
+  ApplyInputBindingContext,
   ApplyListenContext,
   EnvInjection,
   KernelPlugin,
-  NamespaceMaterial,
+  OutputMaterial,
 } from "takosumi-contract/reference/plugin";
 import { PROJECTION_FAMILY_NAMES } from "takosumi-contract/type-catalog";
 import { BindingResolver, defaultEnvInjection } from "./mod.ts";
@@ -28,13 +29,14 @@ Deno.test("defaultEnvInjection implements exactly the official projection famili
     "upstream",
   ]);
 
-  const material: NamespaceMaterial = {
+  const material: OutputMaterial = {
     url: "https://service.internal",
     clientSecretRef: { secretRef: "secret://client-secret" },
   };
 
   assert.deepEqual(
-    defaultEnvInjection({ from: "service.http", as: "env" }, material).env,
+    defaultEnvInjection({ output: "service.http", inject: "env" }, material)
+      .env,
     {
       URL: "https://service.internal",
       CLIENT_SECRET_REF: { secretRef: "secret://client-secret" },
@@ -42,7 +44,7 @@ Deno.test("defaultEnvInjection implements exactly the official projection famili
   );
   assert.deepEqual(
     defaultEnvInjection(
-      { from: "service.http", as: "secret-env" },
+      { output: "service.http", inject: "secret-env" },
       material,
     ).env,
     {
@@ -51,15 +53,18 @@ Deno.test("defaultEnvInjection implements exactly the official projection famili
     },
   );
   assert.deepEqual(
-    defaultEnvInjection({ from: "service.http", as: "upstream" }, material)
+    defaultEnvInjection(
+      { output: "service.http", inject: "upstream" },
+      material,
+    )
       .target,
     material,
   );
   assert.deepEqual(
     Object.keys(
       defaultEnvInjection({
-        from: "service.http",
-        as: "config-mount",
+        output: "service.http",
+        inject: "config-mount",
         mount: "/bindings/service",
       }, material).mounts ?? {},
     ),
@@ -68,11 +73,11 @@ Deno.test("defaultEnvInjection implements exactly the official projection famili
 });
 
 Deno.test("defaultEnvInjection treats non-official projection names as env expansion", () => {
-  const material: NamespaceMaterial = {
+  const material: OutputMaterial = {
     url: "https://service.internal",
   };
   const injection = defaultEnvInjection(
-    { from: "service.http", as: "target", prefix: "UPSTREAM" },
+    { output: "service.http", inject: "target", prefix: "UPSTREAM" },
     material,
   );
   assert.deepEqual(injection, {
@@ -81,13 +86,13 @@ Deno.test("defaultEnvInjection treats non-official projection names as env expan
 });
 
 Deno.test("defaultEnvInjection expands env-shape material with a prefix", () => {
-  const material: NamespaceMaterial = {
+  const material: OutputMaterial = {
     host: "db.local",
     port: "5432",
     passwordSecretRef: { secretRef: "secret://db-password" },
   };
   const injection = defaultEnvInjection(
-    { from: "db.connection", as: "env", prefix: "DB" },
+    { output: "db.connection", inject: "env", prefix: "DB" },
     material,
   );
   assert.deepEqual(injection.env, {
@@ -97,14 +102,18 @@ Deno.test("defaultEnvInjection expands env-shape material with a prefix", () => 
   });
 });
 
-Deno.test("defaultEnvInjection as: secret-env strips secret Ref suffix from env names", () => {
-  const material: NamespaceMaterial = {
+Deno.test("defaultEnvInjection inject: secret-env strips secret Ref suffix from env names", () => {
+  const material: OutputMaterial = {
     issuerUrl: "https://accounts.example.test",
     clientId: "client_test",
     clientSecretRef: { secretRef: "secret://oidc/client-secret" },
   };
   const injection = defaultEnvInjection(
-    { from: "operator.identity.oidc", as: "secret-env", prefix: "OIDC" },
+    {
+      output: "identity.primary.oidc",
+      inject: "secret-env",
+      prefix: "OIDC",
+    },
     material,
   );
   assert.deepEqual(injection.env, {
@@ -115,20 +124,20 @@ Deno.test("defaultEnvInjection as: secret-env strips secret Ref suffix from env 
 });
 
 Deno.test("defaultEnvInjection without prefix emits bare upper-snake keys", () => {
-  const material: NamespaceMaterial = { url: "https://w.example/" };
+  const material: OutputMaterial = { url: "https://w.example/" };
   const injection = defaultEnvInjection(
-    { from: "web.http", as: "env" },
+    { output: "web.http", inject: "env" },
     material,
   );
   assert.deepEqual(injection.env, { URL: "https://w.example/" });
 });
 
 Deno.test("defaultEnvInjection serializes non-secret JSON material for env", () => {
-  const material: NamespaceMaterial = {
+  const material: OutputMaterial = {
     routes: [{ pathPrefix: "/", to: "app" }],
   };
   const injection = defaultEnvInjection(
-    { from: "public.public", as: "env", prefix: "HTTP" },
+    { output: "public.public", inject: "env", prefix: "HTTP" },
     material,
   );
   assert.deepEqual(injection.env, {
@@ -136,24 +145,24 @@ Deno.test("defaultEnvInjection serializes non-secret JSON material for env", () 
   });
 });
 
-Deno.test("defaultEnvInjection as: upstream surfaces material verbatim", () => {
-  const material: NamespaceMaterial = {
+Deno.test("defaultEnvInjection inject: upstream surfaces material verbatim", () => {
+  const material: OutputMaterial = {
     targets: [{ name: "default", url: "https://w.example/" }],
   };
   const injection = defaultEnvInjection(
-    { from: "web.http", as: "upstream" },
+    { output: "web.http", inject: "upstream" },
     material,
   );
   assert.deepEqual(injection.target, material);
 });
 
-Deno.test("defaultEnvInjection as: config-mount writes deterministic mount descriptor", () => {
-  const material: NamespaceMaterial = {
+Deno.test("defaultEnvInjection inject: config-mount writes deterministic mount descriptor", () => {
+  const material: OutputMaterial = {
     fqdn: "notes.example.com",
     certificateId: "cert_123",
   };
   const injection = defaultEnvInjection(
-    { from: "domain.tls", as: "config-mount", mount: "/srv" },
+    { output: "domain.tls", inject: "config-mount", mount: "/srv" },
     material,
   );
   assert.deepEqual(Object.keys(injection.mounts ?? {}), ["/srv"]);
@@ -168,7 +177,7 @@ Deno.test("BindingResolver falls back to kernel default when no materializer fou
     listenerComponentRef: { kind: "worker" },
     bindingName: "db",
     sourceRef: "database.connection",
-    options: { from: "database.connection", as: "env", prefix: "DB" },
+    options: { output: "database.connection", inject: "env", prefix: "DB" },
     material: { host: "db.local", port: "5432" },
   });
   assert.equal(binding.bindingName, "db");
@@ -204,7 +213,7 @@ Deno.test("BindingResolver invokes plugin.applyListen when present", async () =>
     listenerComponentRef: { kind: "worker" },
     bindingName: "db",
     sourceRef: "database.connection",
-    options: { from: "database.connection", as: "env", prefix: "DB" },
+    options: { output: "database.connection", inject: "env", prefix: "DB" },
     material: { host: "db.local", port: "5432" },
   });
   assert.equal(captured.length, 1);
@@ -213,7 +222,38 @@ Deno.test("BindingResolver invokes plugin.applyListen when present", async () =>
   assert.deepEqual(binding.envInjections, { CUSTOM_HOST: "db.local" });
 });
 
-Deno.test("BindingResolver.resolveAppSpec emits one binding per listen edge", async () => {
+Deno.test("BindingResolver prefers plugin.applyBinding over legacy applyListen", async () => {
+  const captured: ApplyInputBindingContext[] = [];
+  const plugin: KernelPlugin = {
+    name: "@test/worker",
+    version: "1.0.0",
+    provides: ["https://takosumi.com/kinds/v1/worker"],
+    apply: () => Promise.resolve({ resourceHandle: "x", outputs: {} }),
+    applyBinding: (ctx): Promise<EnvInjection> => {
+      captured.push(ctx);
+      return Promise.resolve({ env: { FROM_BINDING: "yes" } });
+    },
+    applyListen: () => Promise.resolve({ env: { FROM_LISTEN: "no" } }),
+  };
+  const resolver = new BindingResolver({
+    findMaterializer: () => plugin,
+  });
+  const binding = await resolver.resolveEdge({
+    installationId: "ins_x",
+    listenerComponent: "web",
+    listenerKind: "worker",
+    listenerComponentRef: { kind: "worker" },
+    bindingName: "db",
+    sourceRef: "database.connection",
+    options: { output: "database.connection", inject: "env", prefix: "DB" },
+    material: { host: "db.local" },
+  });
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].bindingName, "db");
+  assert.deepEqual(binding.envInjections, { FROM_BINDING: "yes" });
+});
+
+Deno.test("BindingResolver.resolveAppSpec emits one binding per connect/listen edge", async () => {
   const resolver = new BindingResolver();
   const appSpec: AppSpec = {
     apiVersion: APP_SPEC_API_VERSION,
@@ -222,18 +262,17 @@ Deno.test("BindingResolver.resolveAppSpec emits one binding per listen edge", as
       db: { kind: "postgres" },
       web: {
         kind: "worker",
-        publish: { http: { as: "http-endpoint" } },
-        listen: {
-          db: { from: "db.connection", as: "env", prefix: "DB" },
+        connect: {
+          db: { output: "db.connection", inject: "env", prefix: "DB" },
         },
       },
       router: {
         kind: "gateway",
-        listen: { app: { from: "web.http", as: "upstream" } },
+        connect: { app: { output: "web.http", inject: "upstream" } },
       },
     },
   };
-  const materials: Record<string, NamespaceMaterial> = {
+  const materials: Record<string, OutputMaterial> = {
     "db.connection": { host: "db.local", port: "5432" },
     "web.http": {
       targets: [{ name: "default", url: "https://web.local/" }],
@@ -251,7 +290,7 @@ Deno.test("BindingResolver.resolveAppSpec emits one binding per listen edge", as
   });
 });
 
-Deno.test("BindingResolver.resolveAppSpec silently skips listens to unknown paths", async () => {
+Deno.test("BindingResolver.resolveAppSpec silently skips unresolved platform listens", async () => {
   const resolver = new BindingResolver();
   const appSpec: AppSpec = {
     apiVersion: APP_SPEC_API_VERSION,
@@ -260,7 +299,7 @@ Deno.test("BindingResolver.resolveAppSpec silently skips listens to unknown path
       web: {
         kind: "worker",
         listen: {
-          oidc: { from: "operator.identity.oidc", as: "env" },
+          oidc: { path: "identity.primary.oidc", inject: "env" },
         },
       },
     },

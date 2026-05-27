@@ -1,40 +1,41 @@
 # バージョン整合 {#version-alignment}
 
 ::: info
-Exact production upgrade commands belong in release-specific operator runbooks. This page records package alignment rules.
+本番環境のアップグレードコマンドはリリース固有の operator runbook に記載する。このページではパッケージ整合ルールを記録する。
 :::
 
-Takosumi packages are versioned per package. The public conformance surface is manifest / Installation / Deployment and the Installer API. Kind packages are separately installable because operators enable only the kinds they support.
+Takosumi の各パッケージは独立してバージョン管理される。公開適合面は manifest / Installation / Deployment と Installer API である。kind パッケージは operator がサポートする kind だけを有効にできるよう、個別にインストール可能になっている。
 
-## Publish order
+## パブリッシュ順序
 
 1. `@takos/takosumi-contract`
 2. `@takos/takosumi-installer`
 3. `@takos/takosumi-runtime-agent`
-4. portable `@takos/takosumi-kind-*` packages from `takosumi/`
-5. `@takos/takosumi-kernel`
-6. `@takos/takosumi-cli`
-7. `@takos/takosumi` umbrella
-8. native `@takos/takosumi-kind-*` packages from `takosumi-plugins/`
+4. `takosumi-plugins/` の `@takos/takosumi-runtime-agent-connectors`
+5. `takosumi/` の portable `@takos/takosumi-kind-*` パッケージ
+6. `@takos/takosumi-kernel`
+7. `@takos/takosumi-cli`
+8. `@takos/takosumi` umbrella
+9. `takosumi-plugins/` の native `@takos/takosumi-kind-*` パッケージ
 
-All packages are still pre-1.0. A minor bump can include breaking changes until the release notes say otherwise.
+すべてのパッケージは pre-1.0 である。リリースノートで明示されない限り、minor bump に破壊的変更が含まれる可能性がある。
 
-## Kind package alignment
+## Kind パッケージの整合
 
-Operator distributions should keep enabled kind packages, the kernel, and runtime-agent on the same tested release bundle. A distribution may pin fewer packages by enabling fewer kinds.
+operator distribution は、有効にしている kind パッケージ・kernel・runtime-agent を同一のテスト済みリリースバンドルに揃えるべきである。有効にする kind を減らせば pin するパッケージも減らせる。
 
-The core/portable package list is generated from `takosumi/scripts/jsr-publish-dry-run.ts`; native package checks live in `takosumi-plugins/`.
+core/portable パッケージ一覧は `takosumi/scripts/jsr-publish-dry-run.ts` から生成される。native パッケージのチェックは `takosumi-plugins/` にある。
 
-## Upgrade checks
+## アップグレード確認項目
 
-| check              | source                                                   |
-| ------------------ | -------------------------------------------------------- |
-| package versions   | `scripts/jsr-publish-dry-run.ts` and package `deno.json` |
-| public API smoke   | `takosumi install dry-run --source . --remote ...`       |
-| schema ledger      | release-specific operator evidence                       |
-| enabled kind smoke | operator-specific live provisioning evidence             |
+| 確認項目             | ソース                                                        |
+| -------------------- | ------------------------------------------------------------- |
+| パッケージバージョン | `scripts/jsr-publish-dry-run.ts` と各パッケージの `deno.json` |
+| public API スモーク  | `takosumi install dry-run --source . --remote ...`            |
+| スキーマ台帳         | リリース固有の operator evidence                              |
+| 有効 kind スモーク   | operator 固有のライブプロビジョニング evidence                |
 
-## Related pages
+## 関連ページ
 
 - [Operator Bootstrap](./bootstrap.md)
 - [Kind Packages](../reference/kind-packages.md)

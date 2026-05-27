@@ -27,14 +27,14 @@ boolean は `1 / true / yes / on / enabled` を真、 `0 / false / no / off / di
 | `TAKOSUMI_AGENT_URL`           | URL     | unset   | remote agent topology          | runtime-agent base URL。unset 時は embedded execution role を使える。 |
 | `TAKOSUMI_AGENT_TOKEN`         | secret  | unset   | remote agent topology          | runtime-agent call bearer。                                           |
 
-## External publication resolver
+## Platform service resolver
 
-Reference kernel が 3 segment 以上の `listen.from` を operator account-plane に問い合わせるための設定です。これは implementation wiring であり、manifest の grammar や Cloud 固有 path を kernel contract に追加するものではありません。
+Reference kernel が 3 segment 以上の `listen.path` を operator account-plane に問い合わせるための設定です。これは implementation wiring であり、manifest の grammar や Cloud 固有 path を kernel contract に追加するものではありません。
 
-| Variable                                       | Type   | Default | Required                            | 説明                                                                |
-| ---------------------------------------------- | ------ | ------- | ----------------------------------- | ------------------------------------------------------------------- |
-| `TAKOSUMI_EXTERNAL_PUBLICATION_RESOLVER_URL`   | URL    | unset   | external publication を解決する場合 | operator account-plane の resolver endpoint。POST JSON で呼び出す。 |
-| `TAKOSUMI_EXTERNAL_PUBLICATION_RESOLVER_TOKEN` | secret | unset   | resolver が bearer を要求する場合   | resolver endpoint に送る bearer token。                             |
+| Variable                                   | Type   | Default | Required                          | 説明                                                                |
+| ------------------------------------------ | ------ | ------- | --------------------------------- | ------------------------------------------------------------------- |
+| `TAKOSUMI_PLATFORM_SERVICE_RESOLVER_URL`   | URL    | unset   | platform service を解決する場合   | operator account-plane の resolver endpoint。POST JSON で呼び出す。 |
+| `TAKOSUMI_PLATFORM_SERVICE_RESOLVER_TOKEN` | secret | unset   | resolver が bearer を要求する場合 | resolver endpoint に送る bearer token。                             |
 
 ## Storage and locks
 
@@ -131,7 +131,7 @@ runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `
 
 ## Binding Config
 
-An operator using the reference kernel passes the kind alias map and reference adapter array (`plugins` option) to `createPaaSApp({ kindAliases, plugins })`. adapter が必要とする credential / config は factory option か runtime-agent host env から読みます。kind package の取得方法は operator profile の責務です。
+An operator using the reference kernel passes the kind alias map and reference adapter array (`plugins` option) to `createPaaSApp({ kindAliases, plugins })`. adapter が必要とする credential / config は factory option か runtime-agent host env から読みます。kind package の取得方法は operator distribution の責務です。
 
 ## 関連ページ
 

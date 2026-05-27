@@ -1,6 +1,6 @@
 # Build Service Example {#operator-build-service-profile}
 
-This page is a non-normative operator configuration example. It shows one way for an operator build service to produce the prepared source handoff described in the [Build Service Boundary](../reference/build-spec.md).
+This page is a non-normative operator distribution example. It shows one way for an operator build service to produce the prepared source handoff described in the [Build Service Boundary](../reference/build-spec.md).
 
 Takosumi core receives only the prepared source URL and digest produced by the build service. Build recipe shape, command execution, cache metadata, provenance, and payload construction belong to the build service.
 
@@ -27,7 +27,7 @@ nodes:
 | `metadata`   | yes      | Metadata for this build-service input.       |
 | `nodes`      | yes      | Build graph nodes understood by the profile. |
 
-Build node fields are `kind`, `spec`, and `dependsOn`. This `kind` is local to the build-service profile. It is not a manifest component kind and not an official Takosumi Kind Catalog entry.
+Build node fields are `kind`, `spec`, and `dependsOn`. This `kind` is local to the build-service profile. It is not an AppSpec component kind and not an official Takosumi type catalog entry.
 
 ## Linux Container Node {#linux-container-node}
 

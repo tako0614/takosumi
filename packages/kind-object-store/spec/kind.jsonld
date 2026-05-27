@@ -5,42 +5,29 @@
   "name": "object-store",
   "version": "v1",
   "referenceAliases": ["object-store"],
-  "description": "Bucket-style object storage intended to be bindable across compatible S3-class providers. Publishes endpoint + credential refs as a local publication.",
+  "description": "Bucket-style object storage intended to be bindable across compatible S3-class providers. Backend-specific placement, versioning, and public access controls belong to native object-store kinds.",
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "required": ["name"],
-    "additionalProperties": true,
+    "additionalProperties": false,
     "properties": {
       "name": {
         "type": "string",
         "minLength": 1,
-        "description": "Logical bucket name (provider applies its own scoping rules)."
-      },
-      "public": {
-        "type": "boolean",
-        "description": "Request anonymous-read policy when true. Operator policy and the selected implementation materialize or reject the request."
-      },
-      "versioning": {
-        "type": "boolean",
-        "description": "Request object versioning. Operator policy and the selected implementation materialize or reject the request."
-      },
-      "region": {
-        "type": "string",
-        "minLength": 1,
-        "description": "Provider region (when applicable)."
+        "description": "Logical bucket name (operator applies implementation scoping rules)."
       }
     }
   },
-  "publications": {
+  "outputSlots": {
     "bucket": {
       "contract": "object-store",
       "exampleMaterialMapping": {
         "bucket": "$outputs.bucket",
         "endpoint": "$outputs.endpoint",
         "region": "$outputs.region",
-        "accessKeyIdRef": { "secretRef": "$outputs.accessKeyRef" },
-        "secretAccessKeyRef": { "secretRef": "$outputs.secretKeyRef" }
+        "accessKeyIdRef": { "secretRef": "$outputs.accessKeyIdRef" },
+        "secretAccessKeyRef": { "secretRef": "$outputs.secretAccessKeyRef" }
       }
     }
   },
@@ -49,7 +36,7 @@
       "name": "bucket",
       "type": "string",
       "required": true,
-      "meaning": "Provider-scope bucket name."
+      "meaning": "Implementation-scoped bucket name."
     },
     {
       "name": "endpoint",
@@ -60,29 +47,23 @@
     {
       "name": "region",
       "type": "string",
-      "required": true,
+      "required": false,
       "meaning": "Bucket region."
     },
     {
-      "name": "accessKeyRef",
+      "name": "accessKeyIdRef",
       "type": "string",
-      "required": true,
-      "meaning": "Reference to secret store entry holding access key id."
+      "required": false,
+      "meaning": "Reference to secret store entry holding the access key id."
     },
     {
-      "name": "secretKeyRef",
+      "name": "secretAccessKeyRef",
       "type": "string",
-      "required": true,
-      "meaning": "Reference to secret store entry holding secret access key."
+      "required": false,
+      "meaning": "Reference to secret store entry holding the secret access key."
     }
   ],
   "capabilityTerms": [
-    "versioning",
-    "presigned-urls",
-    "server-side-encryption",
-    "public-access",
-    "event-notifications",
-    "lifecycle-rules",
-    "multipart-upload"
+    "s3-compatible"
   ]
 }

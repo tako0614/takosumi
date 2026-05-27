@@ -41,7 +41,7 @@ interface LifecycleApplyRequest {
   readonly shape: string; // connector-local selector, e.g. "object-store@v1"
   readonly provider: string; // 例: "aws-s3"
   readonly resourceName: string; // component / internal resource name
-  readonly spec: JsonValue; // component kind spec (selected implementation convention)
+  readonly spec: JsonValue; // connector-local lifecycle input projected by the selected adapter
   readonly spaceId: string;
   readonly idempotencyKey?: string; // internal WAL-derived provider request token
   readonly operationRequest?: PlatformOperationRequest;
@@ -49,7 +49,7 @@ interface LifecycleApplyRequest {
   readonly artifactStore?: {
     // Optional asset fetch endpoint (`/v1/artifacts`) when the operator
     // enables the asset extension.
-    readonly baseUrl: string; // 例: "https://artifacts.operator.example.com/v1/artifacts"
+    readonly baseUrl: string; // 例: "https://artifacts.example.com/v1/artifacts"
     readonly token: string; // TAKOSUMI_ARTIFACT_FETCH_TOKEN
   };
   readonly preparedSource?: {
@@ -70,6 +70,8 @@ interface LifecycleApplyResponse {
 ```
 
 `handle` は Takosumi reference 実装の deploy record state に Deployment と紐づけて persist され、以降の `destroy` / `describe` の key になります。
+
+`spec` は public AppSpec field ではなく、runtime-agent connector に渡す closed input です。通常は operator-selected adapter が public kind descriptor で component `spec` を検証し、listen 由来の env / target など実行時 injection を足してから作ります。connector はこの input を shape ごとの閉じた field set として検証し、未定義 field や typo を受け入れません。たとえば DNS gateway connector の `target` は AppSpec の gateway spec field ではなく、gateway adapter が listen 解決結果から作る connector-local target です。
 
 `spaceId` は caller Installation の Space を表します。runtime-agent connector はこの値を cloud tag、namespace、resource name prefix、audit metadata などの Space isolation boundary として扱います。別 Space の request で同じ handle を再利用してはいけません。
 
@@ -165,15 +167,12 @@ connector の `verify` operation を smoke test します。Request:
 
 ```ts
 interface LifecycleVerifyRequest {
-  readonly targets?: readonly {
-    readonly shape: string;
-    readonly provider: string;
-  }[];
-  readonly options?: JsonObject; // connector ごとに解釈
+  readonly shape?: string;
+  readonly provider?: string;
 }
 ```
 
-`targets` を省略した場合は登録済 connector 全てを対象にします。Response:
+`shape` / `provider` を省略した場合は登録済 connector 全てを対象にします。Response:
 
 ```ts
 interface LifecycleVerifyResponse {
@@ -184,11 +183,8 @@ interface LifecycleVerifyResult {
   readonly shape: string; // verify 対象の connector-local selector
   readonly provider: string; // verify 対象の provider id
   readonly ok: boolean; // smoke test 結果 (true = 健全)
-  readonly code?: string; // ok=false 時に設定される LifecycleErrorCode
+  readonly code?: string; // ok=false 時に設定される connector-local code
   readonly note?: string; // 詳細メッセージ (operator が読む)
-  readonly details?: JsonObject; // connector が返す追加情報 (latency, scope 等)
-  readonly latencyMs?: number; // smoke test 所要時間
-  readonly checkedAt: string; // ISO 8601 timestamp
 }
 ```
 

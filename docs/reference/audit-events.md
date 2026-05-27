@@ -1,7 +1,7 @@
 # 監査イベント {#audit-events}
 
 ::: info
-内部設計メモ public contract は [Installer API](./installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](./installer-api.md) を参照。
 :::
 
 Takosumi core audit events cover install / deploy / rollback lifecycle の Deployment の記録。Reference/operator extension event families can add リソースの作成・更新、connector、and asset の記録。

@@ -1,41 +1,38 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert@^1.0.5";
 import { AppSpecParseError, parseAppSpec } from "./yaml-parser.ts";
 
-Deno.test("parseAppSpec accepts canonical worker + db + gateway example", () => {
-  const yaml = `
+Deno.test("parseAppSpec accepts canonical connect + platform listen + root publish example", () => {
+  const spec = parseAppSpec(`
 apiVersion: v1
-
 metadata:
   id: com.example.notes
   name: Example Notes
-  publisher: example
-
 components:
   db:
     kind: postgres
-    publish:
-      connection:
-        as: service-binding
-
+    spec:
+      version: "16"
   web:
     kind: worker
+    connect:
+      db:
+        output: db.connection
+        inject: secret-env
+        prefix: DB
+    listen:
+      identity:
+        path: identity.primary.oidc
+        inject: secret-env
+        prefix: IDENTITY
+        required: true
     spec:
       entrypoint: dist/worker.mjs
-    listen:
-      db:
-        from: db.connection
-        as: env
-        prefix: DB
-    publish:
-      http:
-        as: http-endpoint
-
   public:
     kind: gateway
-    listen:
+    connect:
       app:
-        from: web.http
-        as: upstream
+        output: web.http
+        inject: upstream
     spec:
       listeners:
         public:
@@ -46,152 +43,25 @@ components:
         - listener: public
           path: /
           to: app
-`;
-  const spec = parseAppSpec(yaml);
-  assertEquals(spec.apiVersion, "v1");
-  assertEquals(spec.metadata.id, "com.example.notes");
-  assertEquals(Object.keys(spec.components).sort(), ["db", "public", "web"]);
-  assertEquals(spec.components.db.publish?.connection?.as, "service-binding");
-  assertEquals(spec.components.web.listen?.db?.from, "db.connection");
-  assertEquals(spec.components.web.publish?.http?.as, "http-endpoint");
-  assertEquals(spec.components.public.listen?.app?.as, "upstream");
-});
-
-Deno.test("parseAppSpec rejects top-level Component `routes:` (= routes live in kind spec)", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    routes: ["/"]
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, "$.components.web.routes");
-});
-
-Deno.test("parseAppSpec rejects Component `build:` (= build lives outside AppSpec)", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    build: { command: x, output: y }
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, "$.components.web.build");
-});
-
-Deno.test("parseAppSpec rejects removed root fields", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-interfaces:
-  launch: { target: web, path: / }
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, "$.interfaces");
-});
-
-Deno.test("parseAppSpec rejects unknown top-level field", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components: { web: { kind: worker } }
-extraField: nope
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "schema");
-});
-
-Deno.test("parseAppSpec rejects invalid UTF-8 bytes", () => {
-  const err = assertThrows(
-    () => parseAppSpec(new Uint8Array([0xff, 0xfe, 0xfd])),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "syntax");
-  assertEquals(err.validationPath, "$");
-});
-
-Deno.test("parseAppSpec rejects duplicate YAML mapping keys", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components: {}
-components: {}
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "syntax");
-  assertEquals(err.validationPath, "$");
-});
-
-Deno.test("parseAppSpec rejects invalid apiVersion", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: "1.0"
-metadata: { id: x, name: y }
-components: { web: { kind: worker } }
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPath, "$.apiVersion");
-});
-
-Deno.test("parseAppSpec accepts arbitrary bare component kind alias", () => {
-  const spec = parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: not-a-kind
+publish:
+  api:
+    output: web.http
+    path: acme.notes.api
 `);
-  assertEquals(spec.components.web.kind, "not-a-kind");
-});
 
-Deno.test("parseAppSpec rejects legacy `use:` field with legacy-use phase", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    use:
-      db: { env: DATABASE_URL }
-  db:
-    kind: postgres
-`),
-    AppSpecParseError,
+  assertEquals(spec.apiVersion, "v1");
+  assertEquals(spec.components.web.connect?.db?.output, "db.connection");
+  assertEquals(spec.components.web.connect?.db?.inject, "secret-env");
+  assertEquals(
+    spec.components.web.listen?.identity?.path,
+    "identity.primary.oidc",
   );
-  assertEquals(err.validationPhase, "legacy-use");
-  assertEquals(err.validationPath, "$.components.web.use");
+  assertEquals(spec.components.public.connect?.app?.inject, "upstream");
+  assertEquals(spec.publish?.api?.output, "web.http");
+  assertEquals(spec.publish?.api?.path, "acme.notes.api");
 });
 
-Deno.test("parseAppSpec detects publish/listen cycle", () => {
+Deno.test("parseAppSpec rejects component-local publish", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -203,60 +73,6 @@ components:
     publish:
       http:
         as: http-endpoint
-    listen:
-      db:
-        from: db.connection
-        as: env
-        prefix: DB
-  db:
-    kind: postgres
-    publish:
-      connection:
-        as: service-binding
-    listen:
-      web:
-        from: web.http
-        as: env
-        prefix: WEB
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "publish-listen");
-});
-
-Deno.test("parseAppSpec rejects self-loop in publish/listen", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    publish:
-      http:
-        as: http-endpoint
-    listen:
-      self:
-        from: web.http
-        as: env
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "publish-listen");
-});
-
-Deno.test("parseAppSpec rejects old string-list publish", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    publish:
-      - com.example.shared
 `),
     AppSpecParseError,
   );
@@ -264,7 +80,7 @@ components:
   assertEquals(err.validationPath, "$.components.web.publish");
 });
 
-Deno.test("parseAppSpec rejects malformed publication name", () => {
+Deno.test("parseAppSpec rejects legacy local listen.from", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -273,249 +89,74 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    publish:
-      "bad.name":
-        as: http-endpoint
+    listen:
+      db:
+        from: db.connection
+        as: secret-env
 `),
     AppSpecParseError,
   );
   assertEquals(err.validationPhase, "schema");
+  assertEquals(err.validationPath, '$.components.web.listen."db".from');
 });
 
-Deno.test("parseAppSpec rejects invalid local names", () => {
-  const cases = [
-    {
-      name: "uppercase component",
-      yaml: `
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  Web:
-    kind: worker
-`,
-      path: '$.components."Web"',
-    },
-    {
-      name: "underscore publication",
-      yaml: `
+Deno.test("parseAppSpec rejects connect output that is not a local component output ref", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    publish:
-      http_endpoint:
-        as: http-endpoint
-`,
-      path: '$.components.web.publish."http_endpoint"',
-    },
-    {
-      name: "digit-first listen binding",
-      yaml: `
+    connect:
+      identity:
+        output: identity.primary.oidc
+        inject: secret-env
+`),
+    AppSpecParseError,
+  );
+  assertEquals(err.validationPhase, "connection-resolution");
+  assertEquals(
+    err.validationPath,
+    '$.components.web.connect."identity".output',
+  );
+});
+
+Deno.test("parseAppSpec accepts platform listen path boundaries", () => {
+  const maxSegment = "a".repeat(63);
+  const exactly255Chars = [maxSegment, maxSegment, maxSegment, maxSegment].join(
+    ".",
+  );
+  assertEquals(exactly255Chars.length, 255);
+
+  for (const path of ["a.b.c.d.e.f.g.h", exactly255Chars]) {
+    const spec = parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
 components:
-  db:
-    kind: postgres
-    publish:
-      connection:
-        as: service-binding
   web:
     kind: worker
     listen:
-      1db:
-        from: db.connection
-        as: env
-`,
-      path: '$.components.web.listen."1db"',
-    },
-    {
-      name: "overlength component",
-      yaml: `
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  ${"a".repeat(64)}:
-    kind: worker
-`,
-      path: `$.components."${"a".repeat(64)}"`,
-    },
-  ];
-
-  for (const testCase of cases) {
-    const err = assertThrows(
-      () => parseAppSpec(testCase.yaml),
-      AppSpecParseError,
-      undefined,
-      testCase.name,
-    );
-    assertEquals(err.validationPhase, "schema", testCase.name);
-    assertEquals(err.validationPath, testCase.path, testCase.name);
+      ext:
+        path: ${path}
+        inject: env
+`);
+    assertEquals(spec.components.web.listen?.ext?.path, path);
   }
 });
 
-Deno.test("parseAppSpec rejects publish output selectors", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    publish:
-      http:
-        as: http-endpoint
-        from: url
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, '$.components.web.publish."http".from');
-});
-
-Deno.test("parseAppSpec rejects listen entry without `from` field", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    listen:
-      db:
-        as: env
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "publish-listen");
-});
-
-Deno.test("parseAppSpec rejects listen entry without `as` field", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    listen:
-      db:
-        from: database.connection
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "publish-listen");
-});
-
-Deno.test("parseAppSpec rejects listen entry with unknown option key", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    listen:
-      db:
-        from: database.connection
-        as: env
-        unexpected: true
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "schema");
-});
-
-Deno.test("parseAppSpec rejects unknown local listen source", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    listen:
-      db:
-        from: db.connection
-        as: env
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "publish-listen");
-});
-
-Deno.test("parseAppSpec accepts optional external publication source", () => {
-  const spec = parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    listen:
-      oidc:
-        from: operator.identity.oidc
-        as: env
-        prefix: OIDC
-`);
-  assertEquals(
-    spec.components.web.listen?.oidc?.from,
-    "operator.identity.oidc",
-  );
-  assertEquals(spec.components.web.listen?.oidc?.required, undefined);
-});
-
-Deno.test("parseAppSpec accepts required external publication source", () => {
-  const spec = parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    listen:
-      oidc:
-        from: operator.identity.oidc
-        as: env
-        prefix: OIDC
-        required: true
-`);
-  assertEquals(spec.components.web.listen?.oidc?.required, true);
-});
-
-Deno.test("parseAppSpec treats default as an ordinary external publication segment", () => {
-  const spec = parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    listen:
-      oidc:
-        from: operator.default.oidc
-        as: env
-`);
-  assertEquals(
-    spec.components.web.listen?.oidc?.from,
-    "operator.default.oidc",
-  );
-});
-
-Deno.test("parseAppSpec rejects malformed external publication paths", () => {
+Deno.test("parseAppSpec rejects malformed platform service paths", () => {
   const cases = [
-    ["uppercase segment", "operator.Identity.oidc"],
-    ["underscore segment", "operator.identity_oidc.primary"],
-    ["digit-first segment", "operator.1identity.oidc"],
-    ["empty segment", "operator..identity"],
+    ["uppercase segment", "identity.Primary.oidc"],
+    ["underscore segment", "identity.primary_oidc.service"],
+    ["digit-first segment", "identity.1primary.oidc"],
+    ["empty segment", "identity..oidc"],
     ["too many segments", "a.b.c.d.e.f.g.h.i"],
-    ["whitespace", "operator.identity.oidc client"],
-    ["overlength", `${"a.".repeat(127)}a`],
+    ["two-segment local-looking path", "db.connection"],
   ] as const;
 
-  for (const [name, source] of cases) {
+  for (const [name, path] of cases) {
     const err = assertThrows(
       () =>
         parseAppSpec(`
@@ -525,53 +166,25 @@ components:
   web:
     kind: worker
     listen:
-      oidc:
-        from: ${JSON.stringify(source)}
-        as: env
+      service:
+        path: ${JSON.stringify(path)}
+        inject: env
 `),
       AppSpecParseError,
       undefined,
       name,
     );
-    assertEquals(err.validationPhase, "publish-listen", name);
+    assertEquals(err.validationPhase, "connection-resolution", name);
     assertEquals(
       err.validationPath,
-      '$.components.web.listen."oidc".from',
+      '$.components.web.listen."service".path',
       name,
     );
   }
 });
 
-Deno.test("parseAppSpec accepts external publication path boundaries", () => {
-  const maxSegment = "a".repeat(63);
-  const exactly255Chars = [maxSegment, maxSegment, maxSegment, maxSegment].join(
-    ".",
-  );
-  assertEquals(exactly255Chars.length, 255);
-
-  for (const source of ["a.b.c.d.e.f.g.h", exactly255Chars]) {
-    const spec = parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    listen:
-      ext:
-        from: ${source}
-        as: env
-`);
-    assertEquals(spec.components.web.listen?.ext?.from, source);
-  }
-});
-
-Deno.test("parseAppSpec rejects external publication over length with valid segment count", () => {
-  const maxSegment = "a".repeat(63);
-  const overLength = [maxSegment, maxSegment, maxSegment, maxSegment, "a"].join(
-    ".",
-  );
-  assertEquals(overLength.length > 255, true);
-  const err = assertThrows(
+Deno.test("parseAppSpec rejects connect cycles and self loops", () => {
+  const cycle = assertThrows(
     () =>
       parseAppSpec(`
 apiVersion: v1
@@ -579,166 +192,112 @@ metadata: { id: x, name: y }
 components:
   web:
     kind: worker
-    listen:
-      ext:
-        from: ${overLength}
-        as: env
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "publish-listen");
-  assertEquals(err.validationPath, '$.components.web.listen."ext".from');
-});
-
-Deno.test("parseAppSpec rejects non-boolean listen required", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  web:
-    kind: worker
-    listen:
-      oidc:
-        from: operator.identity.oidc
-        as: env
-        required: "yes"
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "publish-listen");
-  assertEquals(err.validationPath, '$.components.web.listen."oidc".required');
-});
-
-Deno.test("parseAppSpec rejects listen required on local publication refs", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
+    connect:
+      db:
+        output: db.connection
+        inject: env
   db:
     kind: postgres
-    publish:
-      connection:
-        as: service-binding
-  web:
-    kind: worker
-    listen:
-      db:
-        from: db.connection
-        as: env
-        required: true
+    connect:
+      web:
+        output: web.http
+        inject: env
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "publish-listen");
-  assertEquals(err.validationPath, '$.components.web.listen."db".required');
-});
+  assertEquals(cycle.validationPhase, "connection-resolution");
 
-Deno.test("parseAppSpec accepts operator-defined listen shapes", () => {
-  const spec = parseAppSpec(`
+  const self = assertThrows(
+    () =>
+      parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
 components:
-  svc:
-    kind: service
-    publish:
-      grpc:
-        as: grpc-service
   web:
     kind: worker
-    listen:
-      api:
-        from: svc.grpc
-        as: grpc-client
-`);
-  assertEquals(spec.components.web.listen?.api?.as, "grpc-client");
+    connect:
+      self:
+        output: web.http
+        inject: env
+`),
+    AppSpecParseError,
+  );
+  assertEquals(self.validationPhase, "connection-resolution");
+  assertEquals(self.validationPath, "$.components.web.connect.self.output");
 });
 
-Deno.test("parseAppSpec accepts reference kind URI as opaque string", () => {
-  const spec = parseAppSpec(`
+Deno.test("parseAppSpec rejects root publish duplicate paths and unknown components", () => {
+  const duplicate = assertThrows(
+    () =>
+      parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
-    kind: https://takosumi.com/kinds/v1/worker
-`);
-  assertEquals(
-    spec.components.web.kind,
-    "https://takosumi.com/kinds/v1/worker",
+    kind: worker
+publish:
+  api:
+    output: web.http
+    path: acme.notes.api
+  api-copy:
+    output: web.http
+    path: acme.notes.api
+`),
+    AppSpecParseError,
   );
+  assertEquals(duplicate.validationPhase, "connection-resolution");
+  assertEquals(duplicate.validationPath, '$.publish."api-copy".path');
+
+  const unknown = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+publish:
+  api:
+    output: api.http
+    path: acme.notes.api
+`),
+    AppSpecParseError,
+  );
+  assertEquals(unknown.validationPhase, "connection-resolution");
+  assertEquals(unknown.validationPath, '$.publish."api".output');
 });
 
-Deno.test("parseAppSpec accepts operator-defined kind URI", () => {
+Deno.test("parseAppSpec keeps kind opaque and rejects removed root/legacy fields", () => {
   const spec = parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
 components:
   fn:
-    kind: https://operator.example.com/kinds/lambda
+    kind: https://example.com/kinds/lambda
     spec:
       handler: index.handler
 `);
   assertEquals(
     spec.components.fn.kind,
-    "https://operator.example.com/kinds/lambda",
+    "https://example.com/kinds/lambda",
   );
-});
 
-Deno.test("parseAppSpec rejects scalar component spec", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  fn:
-    kind: https://operator.example.com/kinds/lambda
-    spec: index.handler
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, "$.components.fn.spec");
-});
-
-Deno.test("parseAppSpec rejects array component spec", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: v1
-metadata: { id: x, name: y }
-components:
-  fn:
-    kind: https://operator.example.com/kinds/lambda
-    spec:
-      - handler: index.handler
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, "$.components.fn.spec");
-});
-
-Deno.test("parseAppSpec rejects empty component kind", () => {
-  const err = assertThrows(
+  const legacyUse = assertThrows(
     () =>
       parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
 components:
   web:
-    kind: ""
+    kind: worker
+    use:
+      db: { env: DATABASE_URL }
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "kind-catalog");
-});
+  assertEquals(legacyUse.validationPhase, "legacy-use");
 
-Deno.test("parseAppSpec rejects root `kind:` field (= minimal envelope)", () => {
-  const err = assertThrows(
+  const rootKind = assertThrows(
     () =>
       parseAppSpec(`
 apiVersion: v1
@@ -748,20 +307,5 @@ components: { web: { kind: worker } }
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, "$.kind");
-});
-
-Deno.test("parseAppSpec rejects legacy `apiVersion: takosumi.dev/v1`", () => {
-  const err = assertThrows(
-    () =>
-      parseAppSpec(`
-apiVersion: takosumi.dev/v1
-metadata: { id: x, name: y }
-components: { web: { kind: worker } }
-`),
-    AppSpecParseError,
-  );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, "$.apiVersion");
+  assertEquals(rootKind.validationPath, "$.kind");
 });

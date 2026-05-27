@@ -4,8 +4,8 @@
  *
  * For TypeScript helper generation, each official catalog descriptor source
  * file supplies its `spec` shape (= JSON Schema 2020-12 form), `outputs` list,
- * `capabilityTerms` enum, publication envelope
- * (`referenceAliases` / `publications{}`), and optional consumer-slot
+ * `capabilityTerms` enum, output slot envelope
+ * (`referenceAliases` / `outputSlots{}`), and optional consumer-slot
  * compatibility metadata (`listens{}`). The generator emits a
  * sibling `packages/kind-<name>/src/<basename>.generated.ts`
  * containing:
@@ -13,13 +13,13 @@
  *   - `<Prefix>Spec` interface (derived from JSON Schema)
  *   - `<Prefix>Outputs` interface (derived from `outputs` array)
  *   - `<Prefix>CapabilityTerm` string union (derived from `capabilityTerms` array)
- *   - `<Prefix>PublicationName` string union (= local publication names)
- *   - `<Prefix>PublicationContract` string union (= publication contracts)
- *   - `<Prefix>PublicationDescriptor` interface and
- *     `<UPPER>_PUBLICATION_DESCRIPTORS` const array
+ *   - `<Prefix>OutputSlotName` string union (= local output slot names)
+ *   - `<Prefix>OutputSlotContract` string union (= output slot contracts)
+ *   - `<Prefix>OutputSlotDescriptor` interface and
+ *     `<UPPER>_OUTPUT_SLOT_DESCRIPTORS` const array
  *   - `<UPPER>_CAPABILITY_TERMS` / `<UPPER>_OUTPUT_FIELDS` /
  *     `<UPPER>_ALIASES` (referenceAlias suggestions only) /
- *     `<UPPER>_PUBLICATIONS` const arrays
+ *     `<UPPER>_OUTPUT_SLOTS` const arrays
  *   - `<UPPER>_KIND_SHAPE_ID` / `<UPPER>_KIND_ID` (deprecated alias) /
  *     `<UPPER>_KIND_NAME` /
  *     `<UPPER>_KIND_URI` / `<UPPER>_KIND_VERSION` /
@@ -35,6 +35,7 @@
 import { fromFileUrl } from "jsr:@std/path@^1.0.6";
 
 interface JsonSchema {
+  readonly title?: string;
   readonly type?: string;
   readonly properties?: Record<string, JsonSchema>;
   readonly required?: readonly string[];
@@ -42,6 +43,7 @@ interface JsonSchema {
   readonly enum?: readonly unknown[];
   readonly const?: unknown;
   readonly additionalProperties?: JsonSchema | boolean;
+  readonly propertyNames?: JsonSchema;
   readonly description?: string;
   readonly minLength?: number;
   readonly minimum?: number;
@@ -51,11 +53,20 @@ interface JsonSchema {
   readonly $schema?: string;
 }
 
-interface PublicationDescriptor {
+interface OutputSlotDescriptor {
   readonly contract: string;
   readonly exampleMaterialMapping?: Record<string, unknown>;
   readonly material?: Record<string, unknown>;
   readonly from?: unknown;
+}
+
+interface ListenSlotDescriptor {
+  readonly accepts?: readonly string[];
+  readonly projectionFamilies?: readonly string[];
+  readonly projectionMatrix?: Record<string, readonly string[]>;
+  readonly requiredWhenReferencedBy?: string;
+  readonly minimumAccess?: string;
+  readonly safeDefaultAccess?: string | null;
 }
 
 interface KindDoc {
@@ -66,8 +77,8 @@ interface KindDoc {
   readonly version: string;
   readonly description?: string;
   readonly referenceAliases?: readonly string[];
-  readonly publications?: Record<string, PublicationDescriptor>;
-  readonly listens?: Record<string, unknown>;
+  readonly outputSlots?: Record<string, OutputSlotDescriptor>;
+  readonly listens?: Record<string, ListenSlotDescriptor>;
   readonly spec: JsonSchema;
   readonly outputs: readonly OutputField[];
   readonly capabilityTerms: readonly string[];
@@ -78,6 +89,7 @@ interface OutputField {
   readonly type: string;
   readonly required: boolean;
   readonly meaning?: string;
+  readonly items?: JsonSchema;
 }
 
 interface NestedType {
@@ -123,6 +135,26 @@ const KIND_SOURCE_TARGETS: readonly KindSourceTarget[] = [
     sourceBasename: "gateway",
     outputDir: "../packages/kind-gateway/src",
   },
+  {
+    source: "../packages/kind-sqlite/spec/kind.jsonld",
+    sourceBasename: "sqlite",
+    outputDir: "../packages/kind-sqlite/src",
+  },
+  {
+    source: "../packages/kind-kv-store/spec/kind.jsonld",
+    sourceBasename: "kv-store",
+    outputDir: "../packages/kind-kv-store/src",
+  },
+  {
+    source: "../packages/kind-message-queue/spec/kind.jsonld",
+    sourceBasename: "message-queue",
+    outputDir: "../packages/kind-message-queue/src",
+  },
+  {
+    source: "../packages/kind-vector-store/spec/kind.jsonld",
+    sourceBasename: "vector-store",
+    outputDir: "../packages/kind-vector-store/src",
+  },
 ];
 
 function sourcePath(target: KindSourceTarget): string {
@@ -139,8 +171,15 @@ const TS_GENERATION_OVERRIDES: Readonly<
   Record<string, { readonly fileBasename: string; readonly prefix: string }>
 > = {
   gateway: { fileBasename: "gateway", prefix: "Gateway" },
+  "kv-store": { fileBasename: "kv-store", prefix: "KvStore" },
+  "message-queue": {
+    fileBasename: "message-queue",
+    prefix: "MessageQueue",
+  },
   "object-store": { fileBasename: "object-store", prefix: "ObjectStore" },
   postgres: { fileBasename: "database-postgres", prefix: "DatabasePostgres" },
+  sqlite: { fileBasename: "sqlite", prefix: "Sqlite" },
+  "vector-store": { fileBasename: "vector-store", prefix: "VectorStore" },
   "web-service": { fileBasename: "web-service", prefix: "WebService" },
   worker: { fileBasename: "worker", prefix: "Worker" },
 };
@@ -271,51 +310,57 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   const specInterfaceName = `${target.prefix}Spec`;
   const outputsInterfaceName = `${target.prefix}Outputs`;
   const capabilityTermTypeName = `${target.prefix}CapabilityTerm`;
-  const publicationsTypeName = `${target.prefix}PublicationName`;
+  const outputFieldTypeName = `${target.prefix}OutputFieldName`;
+  const outputSlotsTypeName = `${target.prefix}OutputSlotName`;
 
   // First pass: collect nested types from spec schema (also generates
   // their inline forms so we know what to emit at top level).
   const specBody = renderObject(doc.spec, ctx, specInterfaceName);
   // After processing spec, ctx.nested contains all nested interfaces.
 
-  const outputsBody = renderOutputs(doc.outputs);
+  const outputsBody = renderOutputs(doc.outputs, ctx);
 
   const capabilityUnion = doc.capabilityTerms.length === 0
     ? "never"
     : doc.capabilityTerms.map((c) => JSON.stringify(c)).join("\n  | ");
-  const capabilityArrayLiteral = doc.capabilityTerms
-    .map((c) => JSON.stringify(c))
-    .join(",\n  ");
-  const outputFieldsArrayLiteral = doc.outputs
-    .map((o) => JSON.stringify(o.name))
-    .join(",\n  ");
+  const capabilityArrayLiteral = arrayLiteral(doc.capabilityTerms);
+  const outputFieldsArrayLiteral = arrayLiteral(doc.outputs.map((o) => o.name));
+  const outputFieldUnion = doc.outputs.length === 0
+    ? "never"
+    : doc.outputs.map((o) => JSON.stringify(o.name)).join("\n  | ");
 
   const referenceAliases = doc.referenceAliases ?? [];
   const aliasesArrayLiteral = referenceAliases.length === 0
     ? ""
     : referenceAliases.map((a) => JSON.stringify(a)).join(",\n  ");
 
-  const publicationNames = Object.keys(doc.publications ?? {});
-  const publicationsUnion = publicationNames.length === 0
+  const outputSlotNames = Object.keys(doc.outputSlots ?? {});
+  const outputSlotsUnion = outputSlotNames.length === 0
     ? "never"
-    : publicationNames.map((p) => JSON.stringify(p)).join("\n  | ");
-  const publicationsArrayLiteral = publicationNames.length === 0
+    : outputSlotNames.map((p) => JSON.stringify(p)).join("\n  | ");
+  const outputSlotsArrayLiteral = outputSlotNames.length === 0
     ? ""
-    : publicationNames.map((p) => JSON.stringify(p)).join(",\n  ");
-  const publicationContracts = [
+    : outputSlotNames.map((p) => JSON.stringify(p)).join(",\n  ");
+  const outputSlotContracts = [
     ...new Set(
-      publicationNames
-        .map((p) => doc.publications?.[p]?.contract)
+      outputSlotNames
+        .map((p) => doc.outputSlots?.[p]?.contract)
         .filter((contract): contract is string => typeof contract === "string"),
     ),
   ];
-  const publicationContractsUnion = publicationContracts.length === 0
+  const outputSlotContractsUnion = outputSlotContracts.length === 0
     ? "never"
-    : publicationContracts.map((p) => JSON.stringify(p)).join("\n  | ");
-  const publicationDescriptorsArrayLiteral = publicationNames.length === 0
+    : outputSlotContracts.map((p) => JSON.stringify(p)).join("\n  | ");
+  const outputSlotDescriptorsArrayLiteral = outputSlotNames.length === 0
     ? ""
-    : publicationNames
-      .map((p) => renderPublicationDescriptor(p, doc.publications?.[p]))
+    : outputSlotNames
+      .map((p) => renderOutputSlotDescriptor(p, doc.outputSlots?.[p]))
+      .join(",\n  ");
+  const listenSlotNames = Object.keys(doc.listens ?? {});
+  const listenSlotsArrayLiteral = listenSlotNames.length === 0
+    ? ""
+    : listenSlotNames
+      .map((name) => renderListenSlotDescriptor(name, doc.listens?.[name]))
       .join(",\n  ");
 
   const importLines = renderImports(ctx.imports);
@@ -343,31 +388,47 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   );
   parts.push("");
   parts.push(
-    `export type ${publicationsTypeName} =\n  | ${publicationsUnion};`,
+    `export type ${outputFieldTypeName} =\n  | ${outputFieldUnion};`,
   );
   parts.push("");
   parts.push(
-    `export type ${target.prefix}PublicationContract =\n  | ${publicationContractsUnion};`,
+    `export type ${outputSlotsTypeName} =\n  | ${outputSlotsUnion};`,
   );
   parts.push("");
   parts.push(
-    `export interface ${target.prefix}PublicationDescriptor {
-  readonly name: ${publicationsTypeName};
-  readonly contract: ${target.prefix}PublicationContract;
+    `export type ${target.prefix}OutputSlotContract =\n  | ${outputSlotContractsUnion};`,
+  );
+  parts.push("");
+  parts.push(
+    `export interface ${target.prefix}OutputSlotDescriptor {
+  readonly name: ${outputSlotsTypeName};
+  readonly contract: ${target.prefix}OutputSlotContract;
   readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
 }`,
   );
   parts.push("");
   parts.push(
-    `export const ${upper}_CAPABILITY_TERMS: readonly ${capabilityTermTypeName}[] = [\n  ${capabilityArrayLiteral},\n];`,
+    `export interface ${target.prefix}ListenSlotDescriptor {
+  readonly name: string;
+  readonly accepts?: readonly string[];
+  readonly projectionFamilies?: readonly string[];
+  readonly projectionMatrix?: Readonly<Record<string, readonly string[]>>;
+  readonly requiredWhenReferencedBy?: string;
+  readonly minimumAccess?: string;
+  readonly safeDefaultAccess?: string | null;
+}`,
   );
   parts.push("");
   parts.push(
-    `export const ${upper}_OUTPUT_FIELDS: readonly string[] = [\n  ${outputFieldsArrayLiteral},\n];`,
+    `export const ${upper}_CAPABILITY_TERMS: readonly ${capabilityTermTypeName}[] = ${capabilityArrayLiteral};`,
   );
   parts.push("");
   parts.push(
-    "// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.",
+    `export const ${upper}_OUTPUT_FIELDS: readonly ${outputFieldTypeName}[] = ${outputFieldsArrayLiteral};`,
+  );
+  parts.push("");
+  parts.push(
+    "// referenceAliases are catalog suggestions only; operator distributions activate aliases explicitly.",
   );
   if (referenceAliases.length === 0) {
     parts.push(`export const ${upper}_ALIASES: readonly string[] = [];`);
@@ -377,23 +438,33 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
     );
   }
   parts.push("");
-  if (publicationNames.length === 0) {
+  if (outputSlotNames.length === 0) {
     parts.push(
-      `export const ${upper}_PUBLICATIONS: readonly ${publicationsTypeName}[] = [];`,
+      `export const ${upper}_OUTPUT_SLOTS: readonly ${outputSlotsTypeName}[] = [];`,
     );
   } else {
     parts.push(
-      `export const ${upper}_PUBLICATIONS: readonly ${publicationsTypeName}[] = [\n  ${publicationsArrayLiteral},\n];`,
+      `export const ${upper}_OUTPUT_SLOTS: readonly ${outputSlotsTypeName}[] = [\n  ${outputSlotsArrayLiteral},\n];`,
     );
   }
   parts.push("");
-  if (publicationNames.length === 0) {
+  if (outputSlotNames.length === 0) {
     parts.push(
-      `export const ${upper}_PUBLICATION_DESCRIPTORS: readonly ${target.prefix}PublicationDescriptor[] = [];`,
+      `export const ${upper}_OUTPUT_SLOT_DESCRIPTORS: readonly ${target.prefix}OutputSlotDescriptor[] = [];`,
     );
   } else {
     parts.push(
-      `export const ${upper}_PUBLICATION_DESCRIPTORS: readonly ${target.prefix}PublicationDescriptor[] = [\n  ${publicationDescriptorsArrayLiteral},\n];`,
+      `export const ${upper}_OUTPUT_SLOT_DESCRIPTORS: readonly ${target.prefix}OutputSlotDescriptor[] = [\n  ${outputSlotDescriptorsArrayLiteral},\n];`,
+    );
+  }
+  parts.push("");
+  if (listenSlotNames.length === 0) {
+    parts.push(
+      `export const ${upper}_LISTEN_SLOTS: readonly ${target.prefix}ListenSlotDescriptor[] = [];`,
+    );
+  } else {
+    parts.push(
+      `export const ${upper}_LISTEN_SLOTS: readonly ${target.prefix}ListenSlotDescriptor[] = [\n  ${listenSlotsArrayLiteral},\n];`,
     );
   }
   parts.push(
@@ -431,12 +502,12 @@ export function generateTs(doc: KindDoc, sourceBasename?: string): string {
   return parts.join("\n");
 }
 
-function renderPublicationDescriptor(
+function renderOutputSlotDescriptor(
   name: string,
-  descriptor: PublicationDescriptor | undefined,
+  descriptor: OutputSlotDescriptor | undefined,
 ): string {
   if (!descriptor) {
-    throw new Error(`publication ${name} is missing descriptor metadata`);
+    throw new Error(`output slot ${name} is missing descriptor metadata`);
   }
   const fields = [
     `name: ${JSON.stringify(name)}`,
@@ -447,6 +518,45 @@ function renderPublicationDescriptor(
       `exampleMaterialMapping: ${
         renderJsonLiteral(descriptor.exampleMaterialMapping)
       }`,
+    );
+  }
+  return `{\n    ${fields.join(",\n    ")},\n  }`;
+}
+
+function renderListenSlotDescriptor(
+  name: string,
+  descriptor: ListenSlotDescriptor | undefined,
+): string {
+  if (!descriptor) {
+    throw new Error(`listen slot ${name} is missing descriptor metadata`);
+  }
+  const fields = [`name: ${JSON.stringify(name)}`];
+  if (descriptor.accepts !== undefined) {
+    fields.push(`accepts: ${renderJsonLiteral(descriptor.accepts)}`);
+  }
+  if (descriptor.projectionFamilies !== undefined) {
+    fields.push(
+      `projectionFamilies: ${renderJsonLiteral(descriptor.projectionFamilies)}`,
+    );
+  }
+  if (descriptor.projectionMatrix !== undefined) {
+    fields.push(
+      `projectionMatrix: ${renderJsonLiteral(descriptor.projectionMatrix)}`,
+    );
+  }
+  if (descriptor.requiredWhenReferencedBy !== undefined) {
+    fields.push(
+      `requiredWhenReferencedBy: ${
+        JSON.stringify(descriptor.requiredWhenReferencedBy)
+      }`,
+    );
+  }
+  if (descriptor.minimumAccess !== undefined) {
+    fields.push(`minimumAccess: ${JSON.stringify(descriptor.minimumAccess)}`);
+  }
+  if (descriptor.safeDefaultAccess !== undefined) {
+    fields.push(
+      `safeDefaultAccess: ${JSON.stringify(descriptor.safeDefaultAccess)}`,
     );
   }
   return `{\n    ${fields.join(",\n    ")},\n  }`;
@@ -469,16 +579,16 @@ function validateKindDoc(path: string, doc: KindDoc): void {
     );
     Deno.exit(1);
   }
-  for (const [name, publication] of Object.entries(doc.publications ?? {})) {
-    if ("from" in publication) {
+  for (const [name, outputSlot] of Object.entries(doc.outputSlots ?? {})) {
+    if ("from" in outputSlot) {
       console.error(
-        `[spec:generate-ts] ${path}: publications.${name}.from is obsolete; use publications.${name}.exampleMaterialMapping`,
+        `[spec:generate-ts] ${path}: outputSlots.${name}.from is obsolete; use outputSlots.${name}.exampleMaterialMapping`,
       );
       Deno.exit(1);
     }
-    if ("material" in publication) {
+    if ("material" in outputSlot) {
       console.error(
-        `[spec:generate-ts] ${path}: publications.${name}.material is ambiguous; use publications.${name}.exampleMaterialMapping`,
+        `[spec:generate-ts] ${path}: outputSlots.${name}.material is ambiguous; use outputSlots.${name}.exampleMaterialMapping`,
       );
       Deno.exit(1);
     }
@@ -549,10 +659,20 @@ function renderImports(imports: Map<string, Set<string>>): string {
   }).join("\n");
 }
 
-function renderOutputs(outputs: readonly OutputField[]): string {
+function arrayLiteral(values: readonly string[]): string {
+  if (values.length === 0) return "[]";
+  return `[\n  ${
+    values.map((value) => JSON.stringify(value)).join(",\n  ")
+  },\n]`;
+}
+
+function renderOutputs(
+  outputs: readonly OutputField[],
+  ctx: GeneratorContext,
+): string {
   const lines: string[] = [];
   for (const out of outputs) {
-    const tsType = outputTypeToTs(out.type);
+    const tsType = outputTypeToTs(out, ctx);
     const optional = out.required ? "" : "?";
     if (out.meaning) {
       lines.push(`  /** ${out.meaning} */`);
@@ -562,8 +682,8 @@ function renderOutputs(outputs: readonly OutputField[]): string {
   return `{\n${lines.join("\n")}\n}`;
 }
 
-function outputTypeToTs(t: string): string {
-  switch (t) {
+function outputTypeToTs(out: OutputField, ctx: GeneratorContext): string {
+  switch (out.type) {
     case "string":
       return "string";
     case "integer":
@@ -574,9 +694,13 @@ function outputTypeToTs(t: string): string {
     case "string[]":
       return "readonly string[]";
     case "object[]":
+      if (out.items) {
+        const inner = renderTsType(out.items, ctx, pickSingularName(out.name));
+        return `readonly ${inner}[]`;
+      }
       return "readonly Record<string, unknown>[]";
     default:
-      throw new Error(`unsupported output field type: ${t}`);
+      throw new Error(`unsupported output field type: ${out.type}`);
   }
 }
 
@@ -676,7 +800,7 @@ function renderTsType(
         return `Readonly<Record<string, ${valueType}>>`;
       }
       // Otherwise hoist to a named nested interface.
-      const nestedName = pickNestedName(propName, ctx.prefix);
+      const nestedName = schema.title ?? pickNestedName(propName, ctx.prefix);
       registerNested(ctx, nestedName, schema);
       return nestedName;
     }

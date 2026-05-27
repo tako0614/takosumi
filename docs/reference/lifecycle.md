@@ -8,7 +8,7 @@ observe` の 6 phase。 phase ごとの snapshot 対応や `LifecycleStatus` 遷
 ## クロスプロセスロック {#cross-process-lock}
 
 ::: warning
-Production では SQL-backed `OperationPlanLockStore` 必須 in-memory store は dev / unit test 専用。複数 Takosumi pod 配置で lock 保証ができません。
+Production では SQL-backed `OperationPlanLockStore` 必須です。in-memory store は dev / unit test 専用。複数 Takosumi pod 配置で lock 保証ができません。
 :::
 
 - 同一 OperationPlan の `apply / activate / destroy / rollback` は `(spaceId, operationPlanDigest)` を key に直列化されます。
@@ -29,7 +29,7 @@ Fail-closed のバリデーション: 最新の unfinished mutation WAL entry (`
 - `continue`: manifest / mode から再現した OperationPlan digest が一致する場合のみ backend fencing token 付きで replay。不一致は fail-closed
 - `compensate`: `commit` 未到達の WAL は backend を呼ばず terminal `abort` に進める。`commit` 以降に到達した WAL は `activation-rollback` CleanupBacklog を enqueue し、cleanup worker が connector-native `compensate` または handle-keyed `destroy` fallback を呼ぶ
 
-`apply` / `destroy` は lock 取得→実行→ release を `try { ... } finally` で囲みます。 lock contention 時は client timeout で諦めるか、 operator が single-writer apply tier (control-plane mutation requests を 1 pod に固定する topology) を取ります。
+`apply` / `destroy` は lock 取得→実行→ release を `try { ... } finally` で囲みます。 lock contention 時は client timeout で諦めるか、 operator が single-writer apply tier (control-plane mutation requests を 1 pod に固定する topology) を採用します。
 
 ## Lifecycle フェーズ {#lifecycle-phases}
 

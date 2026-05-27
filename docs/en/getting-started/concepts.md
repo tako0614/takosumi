@@ -10,6 +10,7 @@ Takosumi is a PaaS that reads a manifest (a declaration file called `.takosumi.y
 # .takosumi.yml
 apiVersion: v1
 metadata:
+  id: com.example.my-app
   name: my-app
 components:
   web:
@@ -22,15 +23,15 @@ components:
       version: "16"
 ```
 
-| Key         | Meaning                                                                              |
-| ----------- | ------------------------------------------------------------------------------------ |
-| `component` | An individual piece of your app. The example above has two: `web` and `db`           |
-| `kind`      | The type of piece. `worker` is a code runtime, `postgres` is a database              |
-| `spec`      | Settings specific to the kind. A worker needs `entrypoint`, postgres needs `version` |
+| Key          | Meaning                                                                              |
+| ------------ | ------------------------------------------------------------------------------------ |
+| `components` | Individual pieces of your app. The example above has two: `web` and `db`             |
+| `kind`       | The type of piece. `worker` is a compute runtime, `postgres` is a database           |
+| `spec`       | Settings specific to the kind. A worker needs `entrypoint`, postgres needs `version` |
 
-## Connecting with publish / listen {#publish-listen}
+## Connecting Components With `connect` {#connect-components}
 
-Components connect to each other through publish (offer) and listen (consume).
+Components connect to each other with `connect`.
 
 ```yaml
 components:
@@ -38,20 +39,19 @@ components:
     kind: postgres
     spec:
       version: "16"
-    publish:
-      connection: {}
 
   web:
     kind: worker
     spec:
       entrypoint: src/worker.ts
-    listen:
+    connect:
       db:
-        from: db.connection
+        output: db.connection
+        inject: env
         prefix: DB
 ```
 
-`db` publishes `connection`, and `web` listens to it.
+`web` consumes the `db.connection` output.
 
 What actually happens: the `web` worker receives these environment variables.
 
@@ -64,6 +64,16 @@ DB_PASSWORD=...
 
 The `prefix: DB` becomes the prefix of each variable name. Your code reads them as ordinary environment variables.
 
+Use `listen.path` for operator-provided services outside the manifest.
+
+```yaml
+listen:
+  identity:
+    path: identity.primary.oidc
+    inject: secret-env
+    prefix: IDENTITY
+```
+
 ## Installation and Deployment {#installation-deployment}
 
 When you deploy a manifest, two kinds of records are created.
@@ -73,7 +83,7 @@ When you deploy a manifest, two kinds of records are created.
 | Installation (install record) | A management record tied to a Space (a deployment group). One per manifest |
 | Deployment (deploy history)   | A history entry created each time you apply changes                        |
 
-One Installation can have many Deployments, and each Deployment is kept as history. A rollback is simply pointing back to an earlier successful Deployment.
+One Installation can have many Deployments, and each Deployment is kept as history. A rollback simply points back to an earlier successful Deployment.
 
 ```text
 manifest

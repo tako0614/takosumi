@@ -2,19 +2,18 @@
  * InstallerPipeline lifecycle hook + KernelPlugin integration tests.
  *
  * Phase C rewrite: the legacy `use:` edges and `upstreamOutputs` placeholder
- * have been replaced by local publications and listen bindings. Each
- * component publishes declared `publish.<name>` materials and listens via
- * `listen.<binding>.from`. The installer pipeline drives the
- * `KernelPlugin.publishMaterial` / `applyListen` hooks and exposes the
- * resolved materials to plugin.apply via `listenedMaterials`.
+ * have been replaced by deterministic `connect` bindings and
+ * platform-service `listen` bindings. The installer pipeline drives the
+ * `KernelPlugin.materializeOutput` / `applyBinding` hooks and exposes the
+ * resolved materials to plugin.apply via `inputMaterials`.
  */
 import assert from "node:assert/strict";
 import type { KernelPlugin } from "takosumi-contract/reference/compat";
 import type {
-  ApplyListenContext,
+  ApplyInputBindingContext,
   EnvInjection,
-  NamespaceMaterial,
-  PublishMaterialContext,
+  OutputMaterial,
+  OutputMaterialContext,
 } from "takosumi-contract/reference/plugin";
 import {
   InstallerPipeline,
@@ -25,8 +24,8 @@ import {
 } from "./mod.ts";
 import { InMemoryDeploymentStore } from "./store.ts";
 
-// Canonical AppSpec: a `postgres` component publishes `db.connection`; a
-// `worker` component listens to it with `as: env` + `prefix: DB` so the
+// Canonical AppSpec: a `postgres` component produces `db.connection`; a
+// `worker` component connects to it with `inject: env` + `prefix: DB` so the
 // kernel resolves env injections like `DB_HOST`, `DB_PORT`, ...
 const SAMPLE_YAML = `apiVersion: v1
 metadata:
@@ -35,15 +34,12 @@ metadata:
 components:
   db:
     kind: postgres
-    publish:
-      connection:
-        as: service-binding
   web:
     kind: worker
-    listen:
+    connect:
       db:
-        from: db.connection
-        as: env
+        output: db.connection
+        inject: env
         prefix: DB
 `;
 
@@ -74,13 +70,13 @@ function buildRecordingPlugin(opts: {
   readonly outputs?: Readonly<Record<string, string>>;
   readonly captureApply?: (ctx: {
     readonly componentName: string;
-    readonly listenedMaterials: Readonly<Record<string, NamespaceMaterial>>;
+    readonly inputMaterials: Readonly<Record<string, OutputMaterial>>;
   }) => void;
-  readonly publishMaterial?: (
-    ctx: PublishMaterialContext,
-  ) => Promise<NamespaceMaterial>;
-  readonly applyListen?: (
-    ctx: ApplyListenContext,
+  readonly materializeOutput?: (
+    ctx: OutputMaterialContext,
+  ) => Promise<OutputMaterial>;
+  readonly applyBinding?: (
+    ctx: ApplyInputBindingContext,
   ) => Promise<EnvInjection>;
 }): KernelPlugin {
   return {
@@ -91,7 +87,7 @@ function buildRecordingPlugin(opts: {
       opts.recorder.push(`apply:${opts.name}:${ctx.componentName}`);
       opts.captureApply?.({
         componentName: ctx.componentName,
-        listenedMaterials: ctx.listenedMaterials,
+        inputMaterials: ctx.inputMaterials ?? ctx.listenedMaterials,
       });
       return Promise.resolve({
         resourceHandle:
@@ -99,9 +95,9 @@ function buildRecordingPlugin(opts: {
         outputs: opts.outputs ?? {},
       });
     },
-    publishMaterial: opts.publishMaterial ??
-      ((ctx) => Promise.resolve(defaultTestPublishMaterial(ctx))),
-    applyListen: opts.applyListen,
+    materializeOutput: opts.materializeOutput ??
+      ((ctx) => Promise.resolve(defaultTestOutputMaterial(ctx))),
+    applyBinding: opts.applyBinding,
     onInstallStart: () => {
       opts.recorder.push(`onInstallStart:${opts.name}`);
       return Promise.resolve();
@@ -121,10 +117,10 @@ function buildRecordingPlugin(opts: {
   };
 }
 
-function defaultTestPublishMaterial(
-  ctx: PublishMaterialContext,
-): NamespaceMaterial {
-  if (ctx.options.as === "service-binding") {
+function defaultTestOutputMaterial(
+  ctx: OutputMaterialContext,
+): OutputMaterial {
+  if (ctx.outputName === "connection") {
     return {
       protocol: "postgresql",
       host: String(ctx.outputs.host ?? "db.local"),
@@ -137,7 +133,7 @@ function defaultTestPublishMaterial(
         : {}),
     };
   }
-  return ctx.outputs as NamespaceMaterial;
+  return ctx.outputs as OutputMaterial;
 }
 
 Deno.test("installer lifecycle hooks fire onInstallStart -> onDeploymentStart -> apply -> onDeploymentComplete -> onInstallComplete", async () => {
@@ -173,7 +169,7 @@ Deno.test("installer lifecycle hooks fire onInstallStart -> onDeploymentStart ->
     assert.equal(installation.currentDeploymentId, deployment.id);
     // First-install ordering: install hooks bracket deployment hooks,
     // which bracket the per-component apply calls. Topological order
-    // (publisher before listener) is db → web.
+    // (publisher before consumer) is db -> web.
     assert.deepEqual(events, [
       "onInstallStart:@example/postgres",
       "onInstallStart:@example/worker",
@@ -229,39 +225,39 @@ Deno.test("installer lifecycle hooks fire on subsequent deployments without re-r
   });
 });
 
-Deno.test("InstallerPipeline resolves required external publications through operator resolver", async () => {
+Deno.test("InstallerPipeline resolves required platform services through operator resolver", async () => {
   const spec = `apiVersion: v1
 metadata:
-  id: external-listen-test
-  name: External Listen Test
+  id: platform-listen-test
+  name: Platform Service Listen Test
 components:
   web:
     kind: worker
     listen:
       oidc:
-        from: operator.identity.oidc
-        as: secret-env
+        path: identity.primary.oidc
+        inject: secret-env
         prefix: OIDC
         required: true
 `;
   await withTempSource(async (dir) => {
-    const seen: Array<Readonly<Record<string, NamespaceMaterial>>> = [];
+    const seen: Array<Readonly<Record<string, OutputMaterial>>> = [];
     const resolverCalls: string[] = [];
     const workerPlugin = buildRecordingPlugin({
       name: "@example/worker",
       provides: ["https://takosumi.com/kinds/v1/worker"],
       recorder: [],
-      captureApply: (ctx) => seen.push(ctx.listenedMaterials),
+      captureApply: (ctx) => seen.push(ctx.inputMaterials),
     });
     const pipeline = new InstallerPipeline({
       kindAliases: TEST_KIND_ALIASES,
       plugins: [workerPlugin],
-      externalPublications: {
+      platformServices: {
         resolve: (ctx) => {
           resolverCalls.push(
             `${ctx.spaceId}:${ctx.appId}:${ctx.componentName}:${ctx.bindingName}:${ctx.sourceRef}`,
           );
-          if (ctx.sourceRef !== "operator.identity.oidc") return undefined;
+          if (ctx.sourceRef !== "identity.primary.oidc") return undefined;
           return {
             issuerUrl: "https://accounts.example.test",
             clientId: "client_test",
@@ -278,7 +274,7 @@ components:
 
     assert.equal(deployment.status, "succeeded");
     assert.deepEqual(resolverCalls, [
-      "space_test:external-listen-test:web:oidc:operator.identity.oidc",
+      "space_test:platform-listen-test:web:oidc:identity.primary.oidc",
     ]);
     assert.deepEqual(seen, [{
       oidc: {
@@ -290,18 +286,18 @@ components:
   }, spec);
 });
 
-Deno.test("InstallerPipeline rejects missing required external publication", async () => {
+Deno.test("InstallerPipeline rejects missing required platform service", async () => {
   const spec = `apiVersion: v1
 metadata:
-  id: missing-external-listen-test
-  name: Missing External Listen Test
+  id: missing-platform-listen-test
+  name: Missing Platform Service Listen Test
 components:
   web:
     kind: worker
     listen:
       oidc:
-        from: operator.identity.oidc
-        as: secret-env
+        path: identity.primary.oidc
+        inject: secret-env
         required: true
 `;
   await withTempSource(async (dir) => {
@@ -314,7 +310,7 @@ components:
           recorder: [],
         }),
       ],
-      externalPublications: { resolve: () => undefined },
+      platformServices: { resolve: () => undefined },
     });
 
     await assert.rejects(
@@ -322,8 +318,62 @@ components:
         spaceId: "space_test",
         source: { kind: "local", url: dir },
       }),
-      /unresolved publication "operator.identity.oidc"/,
+      /unresolved platform service "identity.primary.oidc"/,
     );
+  }, spec);
+});
+
+Deno.test("InstallerPipeline records root publish as service path declaration", async () => {
+  const spec = `apiVersion: v1
+metadata:
+  id: service-path-declaration-test
+  name: Service Path Declaration Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    path: database.primary.connection
+`;
+  await withTempSource(async (dir) => {
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+          outputs: {
+            host: "db.local",
+            port: "5432",
+            database: "app",
+            username: "app",
+          },
+        }),
+      ],
+    });
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    assert.deepEqual(deployment.outputs.extensions, {
+      servicePathExposures: {
+        database: {
+          path: "database.primary.connection",
+          output: "db.connection",
+          material: {
+            protocol: "postgresql",
+            host: "db.local",
+            port: 5432,
+            database: "app",
+            username: "app",
+          },
+        },
+      },
+    });
   }, spec);
 });
 
@@ -474,7 +524,7 @@ Deno.test("installer onDeploymentComplete error is swallowed (post-apply hook is
           resourceHandle: "postgres://x",
           outputs: { host: "db.local", port: "5432" },
         }),
-      publishMaterial: (ctx) =>
+      materializeOutput: (ctx) =>
         Promise.resolve({
           protocol: "postgresql",
           host: String(ctx.outputs.host),
@@ -537,7 +587,7 @@ Deno.test("installerProviderRegistryFromPlugins resolves operator alias via kind
 Deno.test("installerProviderRegistryFromPlugins accepts operator-defined kind URI", async () => {
   const plugin = buildRecordingPlugin({
     name: "@operator/lambda",
-    provides: ["https://operator.example.com/kinds/lambda"],
+    provides: ["https://example.com/kinds/lambda"],
     recorder: [],
   });
   const registry = installerProviderRegistryFromPlugins([plugin]);
@@ -545,7 +595,7 @@ Deno.test("installerProviderRegistryFromPlugins accepts operator-defined kind UR
   const result = await registry.apply({
     installationId: "ins_1",
     componentName: "fn",
-    component: { kind: "https://operator.example.com/kinds/lambda" },
+    component: { kind: "https://example.com/kinds/lambda" },
     source: { kind: "local", url: "/tmp/src" },
     sourceDirectory: "/tmp/src",
     listenedMaterials: {},
@@ -614,27 +664,27 @@ Deno.test("InstallerPipeline lets test code override providers directly without 
   });
 });
 
-Deno.test("InstallerPipeline skips missing external publication refs by default", async () => {
+Deno.test("InstallerPipeline skips missing platform service refs by default", async () => {
   const yaml = `apiVersion: v1
 metadata:
-  id: optional-publication-test
-  name: Optional Publication Test
+  id: optional-platform-service-test
+  name: Optional Platform Service Test
 components:
   web:
     kind: worker
     listen:
       oidc:
-        from: operator.identity.oidc
-        as: env
+        path: identity.primary.oidc
+        inject: env
         prefix: OIDC
 `;
   await withTempSource(async (dir) => {
-    const captures: Array<Readonly<Record<string, NamespaceMaterial>>> = [];
+    const captures: Array<Readonly<Record<string, OutputMaterial>>> = [];
     const workerPlugin = buildRecordingPlugin({
       name: "@example/worker",
       provides: ["https://takosumi.com/kinds/v1/worker"],
       recorder: [],
-      captureApply: (ctx) => captures.push(ctx.listenedMaterials),
+      captureApply: (ctx) => captures.push(ctx.inputMaterials),
     });
     const pipeline = new InstallerPipeline({
       kindAliases: TEST_KIND_ALIASES,
@@ -651,18 +701,18 @@ components:
   }, yaml);
 });
 
-Deno.test("InstallerPipeline fails required missing external publication refs", async () => {
+Deno.test("InstallerPipeline fails required missing platform service refs", async () => {
   const yaml = `apiVersion: v1
 metadata:
-  id: required-publication-test
-  name: Required Publication Test
+  id: required-platform-service-test
+  name: Required Platform Service Test
 components:
   web:
     kind: worker
     listen:
       oidc:
-        from: operator.identity.oidc
-        as: env
+        path: identity.primary.oidc
+        inject: env
         prefix: OIDC
         required: true
 `;
@@ -682,12 +732,12 @@ components:
         spaceId: "space_test",
         source: { kind: "local", url: dir },
       }),
-      /web\.listen\.oidc\.from refers to unresolved publication "operator\.identity\.oidc"/,
+      /web\.listen\.oidc\.path refers to unresolved platform service "identity\.primary\.oidc"/,
     );
   }, yaml);
 });
 
-Deno.test("InstallerPipeline rejects unmapped provider outputs for declared publish", async () => {
+Deno.test("InstallerPipeline rejects unmapped provider outputs for connected output", async () => {
   await withTempSource(async (dir) => {
     const dbPlugin: KernelPlugin = {
       name: "@example/postgres",
@@ -714,7 +764,7 @@ Deno.test("InstallerPipeline rejects unmapped provider outputs for declared publ
         spaceId: "space_test",
         source: { kind: "local", url: dir },
       }),
-      /publish\.connection requires the component materializer/,
+      /output connection requires the component materializer/,
     );
   });
 });

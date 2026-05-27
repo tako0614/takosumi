@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import {
   type ApplyResult,
-  type JsonObject,
   type PlatformContext,
-  type PlatformOperationContext,
   type ProviderPlugin,
   registerProvider,
   type ResourceHandle,
   unregisterProvider,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/internal/provider-plugin";
+import type {
+  PlatformOperationContext,
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
+import type { JsonObject } from "takosumi-contract/reference/types";
 import {
   InMemoryRevokeDebtStore,
   type RevokeDebtRecord,

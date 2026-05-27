@@ -13,7 +13,11 @@
  * results are returned in the response and never persisted as entities.
  */
 
-import type { AppSpec } from "./app-spec.ts";
+import type {
+  AppSpec,
+  ComponentOutputRef,
+  PlatformServicePath,
+} from "./app-spec.ts";
 import type { JsonValue } from "./types.ts";
 
 export const INSTALLATIONS_PATH = "/v1/installations" as const;
@@ -217,12 +221,18 @@ export interface Deployment {
 
 export interface DeploymentOutputs {
   readonly components?: Readonly<
-    Record<string, Readonly<Record<string, DeploymentPublicationOutput>>>
+    Record<string, Readonly<Record<string, DeploymentComponentOutput>>>
   >;
   readonly extensions?: Readonly<Record<string, JsonValue>>;
 }
 
-export type DeploymentPublicationOutput = Readonly<Record<string, JsonValue>>;
+export type DeploymentComponentOutput = Readonly<Record<string, JsonValue>>;
+
+export type DeploymentServicePathExposure = Readonly<{
+  readonly path: PlatformServicePath;
+  readonly output: ComponentOutputRef;
+  readonly material: DeploymentComponentOutput;
+}>;
 
 // ──────────────────────────────────────────────
 // Error envelope

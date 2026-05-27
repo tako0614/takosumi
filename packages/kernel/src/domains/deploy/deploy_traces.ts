@@ -1,8 +1,10 @@
 import type {
   PlatformContext,
-  PlatformOperationContext,
   PlatformTraceContext,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/internal/provider-plugin";
+import type {
+  PlatformOperationContext,
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
 import type {
   TraceSpanEvent,
   TraceSpanKind,

@@ -1,35 +1,36 @@
 /**
- * Binding domain — resolves AppSpec listen bindings into runtime
+ * Binding domain — resolves AppSpec connect / listen inputs into runtime
  * injection.
  *
- * For each `Component.listen[<bindingName>]`,
- * the resolver fetches the published material from the registry, asks the
- * listener plugin's optional `applyListen` hook for an `EnvInjection`
+ * For each `Component.connect[<bindingName>]` or
+ * `Component.listen[<bindingName>]`,
+ * the resolver fetches the material from the registry, asks the
+ * consumer materializer's optional `applyBinding` hook for an `EnvInjection`
  * descriptor, and otherwise falls back to a kernel default that expands
  * material fields into prefixed env vars (mirroring the
- * `as: env` / `prefix: FOO` listen shape).
+ * `inject: env` / `prefix: FOO` binding shape).
  *
  * The resolver is intentionally side-effect-free: it returns a list of
  * {@link ResolvedBinding} descriptors that the {@link InstallerPipeline}
- * then attaches to the listener's runtime via plugin.apply()'s
- * `listenedMaterials` context.
+ * then attaches to the consumer's runtime via plugin.apply()'s
+ * `inputMaterials` / `listenedMaterials` context.
  */
 
-import type { AppSpec, ListenOptions } from "takosumi-contract/app-spec";
+import type { AppSpec, BindingOptions } from "takosumi-contract/app-spec";
 import type {
   EnvInjection,
   InlineMaterializer,
   KernelPlugin,
-  NamespaceMaterial,
-  ResolvedListenBinding,
+  OutputMaterial,
+  ResolvedInputBinding,
 } from "takosumi-contract/reference/plugin";
 
-export type ResolvedBinding = ResolvedListenBinding;
+export type ResolvedBinding = ResolvedInputBinding;
 
 /**
  * Look up the materializer (KernelPlugin or InlineMaterializer) responsible
- * for a given `Component.kind`. The resolver delegates the listener-side
- * mapping to that materializer's `applyListen` hook when present.
+ * for a given `Component.kind`. The resolver delegates the consumer-side
+ * mapping to that materializer's `applyBinding` hook when present.
  */
 export type MaterializerLookup = (
   componentKind: string,
@@ -48,23 +49,30 @@ export class BindingResolver {
   }
 
   /**
-   * Resolve every listen binding in `appSpec` against the supplied material
-   * registry. Returns one {@link ResolvedBinding} per listener / binding
+   * Resolve every connect/listen input in `appSpec` against the supplied
+   * material registry. Returns one {@link ResolvedBinding} per consumer /
+   * binding
    * pair. Entries whose source ref is missing from `materials` are silently
    * skipped; callers decide whether a missing local source is fatal.
    */
   async resolveAppSpec(
     appSpec: AppSpec,
-    materials: Readonly<Record<string, NamespaceMaterial>>,
+    materials: Readonly<Record<string, OutputMaterial>>,
   ): Promise<readonly ResolvedBinding[]> {
     const out: ResolvedBinding[] = [];
     for (
       const [componentName, component] of Object.entries(appSpec.components)
     ) {
-      const listen = component.listen;
-      if (!listen) continue;
-      for (const [bindingName, options] of Object.entries(listen)) {
-        const material = materials[options.from];
+      const entries = [
+        ...Object.entries(component.connect ?? {}).map((
+          [bindingName, options],
+        ) => [bindingName, options.output, options] as const),
+        ...Object.entries(component.listen ?? {}).map((
+          [bindingName, options],
+        ) => [bindingName, options.path, options] as const),
+      ];
+      for (const [bindingName, sourceRef, options] of entries) {
+        const material = materials[sourceRef];
         if (!material) continue;
         const binding = await this.resolveEdge({
           installationId: "",
@@ -72,7 +80,7 @@ export class BindingResolver {
           listenerKind: component.kind,
           listenerComponentRef: component,
           bindingName,
-          sourceRef: options.from,
+          sourceRef,
           options,
           material,
         });
@@ -83,8 +91,9 @@ export class BindingResolver {
   }
 
   /**
-   * Resolve a single listen edge — invoke the listener materializer's
-   * `applyListen` hook when present, otherwise apply the kernel default
+   * Resolve a single input edge — invoke the consumer materializer's
+   * `applyBinding` hook when present, otherwise apply the legacy
+   * `applyListen` hook or the kernel default
    * (env-prefix expansion).
    */
   async resolveEdge(input: {
@@ -94,12 +103,22 @@ export class BindingResolver {
     readonly listenerComponentRef: AppSpec["components"][string];
     readonly bindingName: string;
     readonly sourceRef: string;
-    readonly options: ListenOptions;
-    readonly material: NamespaceMaterial;
+    readonly options: BindingOptions;
+    readonly material: OutputMaterial;
   }): Promise<ResolvedBinding> {
     const materializer = this.#findMaterializer?.(input.listenerKind);
     let injection: EnvInjection;
-    if (materializer && typeof materializer.applyListen === "function") {
+    if (materializer && typeof materializer.applyBinding === "function") {
+      injection = await materializer.applyBinding({
+        installationId: input.installationId,
+        componentName: input.listenerComponent,
+        component: input.listenerComponentRef,
+        bindingName: input.bindingName,
+        sourceRef: input.sourceRef,
+        options: input.options,
+        material: input.material,
+      });
+    } else if (materializer && typeof materializer.applyListen === "function") {
       injection = await materializer.applyListen({
         installationId: input.installationId,
         componentName: input.listenerComponent,
@@ -126,28 +145,28 @@ export class BindingResolver {
 }
 
 /**
- * Reference fallback {@link EnvInjection} for a listen binding. Operator
+ * Reference fallback {@link EnvInjection} for an input binding. Operator
  * descriptor metadata or implementation bindings may override this projection;
  * JSON-LD is only one metadata format a distribution can use.
  *
- *   - `as: env`    → expand every material field into `${PREFIX}_${FIELD}` when
+ *   - `inject: env`    → expand every material field into `${PREFIX}_${FIELD}` when
  *                    `prefix` is set, or bare `${FIELD}` when it is omitted.
  *                    FIELD is upper-snake of the material key.
- *   - `as: secret-env` → use the same rule while preserving secretRef values in
+ *   - `inject: secret-env` → use the same rule while preserving secretRef values in
  *                    the resolved binding record. Secret ref material fields
  *                    such as `clientSecretRef` drop the trailing `Ref` in the
  *                    env key (`CLIENT_SECRET`).
- *   - `as: config-mount` → return the material as a mount descriptor under
+ *   - `inject: config-mount` → return the material as a mount descriptor under
  *                    `options.mount` (or `/` when absent).
- *   - `as: upstream` → return the material as an upstream
+ *   - `inject: upstream` → return the material as an upstream
  *                    target descriptor.
  *   - operator-defined shape → fall back to env expansion.
  */
 export function defaultEnvInjection(
-  options: ListenOptions,
-  material: NamespaceMaterial,
+  options: BindingOptions,
+  material: OutputMaterial,
 ): EnvInjection {
-  switch (options.as) {
+  switch (options.inject) {
     case "config-mount": {
       const mountPath = options.mount ?? "/";
       return {
@@ -169,7 +188,7 @@ export function defaultEnvInjection(
 }
 
 function expandMaterialAsEnv(
-  material: NamespaceMaterial,
+  material: OutputMaterial,
   prefix: string | undefined,
   options: { readonly stripSecretRefSuffix?: boolean } = {},
 ): Readonly<Record<string, string | { readonly secretRef: string }>> {
@@ -186,7 +205,7 @@ function expandMaterialAsEnv(
 }
 
 function materialValueToEnv(
-  value: NamespaceMaterial[string],
+  value: OutputMaterial[string],
 ): string | { readonly secretRef: string } {
   if (isSecretRefMaterial(value)) return { secretRef: value.secretRef };
   if (typeof value === "string") return value;
@@ -215,7 +234,7 @@ function stripSecretRefSuffix(value: string): string {
 }
 
 function serializeMaterialForMount(
-  material: NamespaceMaterial,
+  material: OutputMaterial,
 ): string {
   // The kernel doesn't write file contents — the mount string is opaque
   // to the kernel and surfaced as-is in the runtime injection record.
@@ -234,7 +253,7 @@ function serializeMaterialForMount(
 }
 
 function isSecretRefMaterial(
-  value: NamespaceMaterial[string],
+  value: OutputMaterial[string],
 ): value is { readonly secretRef: string } {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;

@@ -1,20 +1,316 @@
 import assert from "node:assert/strict";
-import type {
-  ApplyListenContext,
-  EnvInjection,
-  InlineMaterializer,
-  KernelPlugin,
-  KernelPluginApplyContext,
-  KernelPluginApplyResult,
-  KernelPluginDeploymentContext,
-  KernelPluginDestroyContext,
-  KernelPluginInstallationContext,
-  Materializer,
-  NamespaceMaterial,
-  PublishMaterialContext,
+import {
+  type ApplyListenContext,
+  type EnvInjection,
+  type InlineMaterializer,
+  type KernelPlugin,
+  type KernelPluginApplyContext,
+  type KernelPluginApplyResult,
+  type KernelPluginDeploymentContext,
+  type KernelPluginDestroyContext,
+  kernelPluginFromNativeKindOperations,
+  type KernelPluginInstallationContext,
+  type Materializer,
+  mergeResolvedEnv,
+  type OutputMaterial,
+  type OutputMaterialContext,
+  outputsToOutputMaterial,
 } from "./plugin.ts";
 import type { Component } from "./app-spec.ts";
 import type { Deployment, Installation } from "./installer-api.ts";
+
+Deno.test("kernelPluginFromNativeKindOperations wraps native operations without provider bridge", async () => {
+  const seenSpecs: unknown[] = [];
+  const plugin = kernelPluginFromNativeKindOperations({
+    kindUri: "https://takosumi.com/kinds/v1/worker",
+    operations: {
+      id: "@example/native-worker",
+      version: "1.0.0",
+      capabilities: ["scale-to-zero"],
+      apply(spec) {
+        seenSpecs.push(spec);
+        return Promise.resolve({
+          handle: "worker://web",
+          outputs: {
+            url: "https://web.example.test",
+            id: "web",
+          },
+        });
+      },
+      destroy(handle) {
+        assert.equal(handle, "worker://web");
+        return Promise.resolve();
+      },
+      status(handle) {
+        assert.equal(handle, "worker://web");
+        return Promise.resolve({
+          kind: "ready",
+          outputs: {
+            url: "https://web.example.test",
+            id: "web",
+          },
+          observedAt: "2026-05-26T00:00:00.000Z",
+        });
+      },
+    },
+  });
+
+  const result = await plugin.apply({
+    installationId: "ins_1",
+    componentName: "web",
+    component: {
+      kind: "worker",
+      spec: {
+        entrypoint: "src/main.ts",
+        env: { EXPLICIT: "yes" },
+      },
+      connect: { db: { output: "database.connection", inject: "env" } },
+    },
+    source: { kind: "prepared", url: "file:///src.tar", digest: "sha256:abc" },
+    sourceDirectory: "/tmp/prepared-source",
+    listenedMaterials: {},
+    resolvedBindings: [{
+      listenerComponent: "web",
+      bindingName: "db",
+      sourceRef: "database.connection",
+      options: { output: "database.connection", inject: "env" },
+      envInjections: {
+        DB_HOST: "db.internal",
+        DB_PASSWORD: { secretRef: "secret://db/password" },
+      },
+      material: {},
+    }],
+  });
+
+  assert.equal(plugin.name, "@example/native-worker");
+  assert.equal(plugin.version, "1.0.0");
+  assert.deepEqual(plugin.provides, ["https://takosumi.com/kinds/v1/worker"]);
+  assert.deepEqual(plugin.capabilities, ["scale-to-zero"]);
+  assert.equal(result.resourceHandle, "worker://web");
+  assert.deepEqual(seenSpecs, [{
+    entrypoint: "src/main.ts",
+    env: { EXPLICIT: "yes" },
+  }]);
+
+  const material = await plugin.materializeOutput!({
+    installationId: "ins_1",
+    componentName: "web",
+    component: { kind: "worker" },
+    outputName: "http",
+    outputs: result.outputs,
+  });
+  assert.deepEqual(material, {
+    url: "https://web.example.test",
+    id: "web",
+  });
+
+  await plugin.destroy?.({
+    installationId: "ins_1",
+    componentName: "web",
+    resourceHandle: "worker://web",
+  });
+
+  const status = await plugin.status?.({
+    installationId: "ins_1",
+    componentName: "web",
+    resourceHandle: "worker://web",
+  });
+  assert.deepEqual(status, {
+    kind: "ready",
+    outputs: {
+      url: "https://web.example.test",
+      id: "web",
+    },
+    observedAt: "2026-05-26T00:00:00.000Z",
+  });
+});
+
+Deno.test("kernelPluginFromNativeKindOperations validates author spec before apply", async () => {
+  let applied = false;
+  const plugin = kernelPluginFromNativeKindOperations({
+    kindUri: "https://takosumi.com/kinds/v1/worker",
+    operations: {
+      id: "@example/native-worker",
+      version: "1.0.0",
+      validateSpec(value) {
+        if (
+          typeof value === "object" && value !== null &&
+          "unsupported" in value
+        ) {
+          return [{ path: "$.unsupported", message: "unknown field" }];
+        }
+        return [];
+      },
+      apply() {
+        applied = true;
+        return Promise.resolve({ handle: "worker://web", outputs: {} });
+      },
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      plugin.apply({
+        installationId: "ins_1",
+        componentName: "web",
+        component: {
+          kind: "worker",
+          spec: { entrypoint: "src/main.ts", unsupported: true },
+        },
+        source: { kind: "local", commit: "" },
+        sourceDirectory: "/tmp/prepared-source",
+        listenedMaterials: {},
+        resolvedBindings: [],
+      }),
+    /component web spec invalid for https:\/\/takosumi\.com\/kinds\/v1\/worker: \$\.unsupported unknown field/,
+  );
+  assert.equal(applied, false);
+});
+
+Deno.test("kernelPluginFromNativeKindOperations keeps listen env out of spec validation", async () => {
+  let applied = false;
+  let seenSpec: unknown;
+  const plugin = kernelPluginFromNativeKindOperations({
+    kindUri: "https://takosumi.com/kinds/v1/postgres",
+    operations: {
+      id: "@example/native-postgres",
+      version: "1.0.0",
+      validateSpec(value) {
+        if (
+          typeof value === "object" && value !== null &&
+          "env" in value
+        ) {
+          return [{ path: "$.env", message: "unknown field" }];
+        }
+        return [];
+      },
+      apply(spec) {
+        applied = true;
+        seenSpec = spec;
+        return Promise.resolve({ handle: "postgres://db", outputs: {} });
+      },
+    },
+  });
+
+  await plugin.apply({
+    installationId: "ins_1",
+    componentName: "db",
+    component: {
+      kind: "postgres",
+      spec: { version: "16", size: "small" },
+    },
+    source: { kind: "local", commit: "" },
+    sourceDirectory: "/tmp/prepared-source",
+    listenedMaterials: {},
+    resolvedBindings: [{
+      listenerComponent: "db",
+      bindingName: "upstream",
+      sourceRef: "gateway.public",
+      options: { output: "gateway.public", inject: "env" },
+      envInjections: { UPSTREAM_URL: "https://app.example.test" },
+      material: {},
+    }],
+  });
+  assert.equal(applied, true);
+  assert.deepEqual(seenSpec, { version: "16", size: "small" });
+});
+
+Deno.test("mergeResolvedEnv explicitly merges runtime env for native providers", () => {
+  const env = mergeResolvedEnv({ EXPLICIT: "yes" }, [{
+    listenerComponent: "web",
+    bindingName: "db",
+    sourceRef: "database.connection",
+    options: { output: "database.connection", inject: "secret-env" },
+    envInjections: {
+      DB_HOST: "db.internal",
+      DB_PASSWORD: { secretRef: "secret://db/password" },
+    },
+    material: {},
+  }]);
+
+  assert.deepEqual(env, {
+    EXPLICIT: "yes",
+    DB_HOST: "db.internal",
+    DB_PASSWORD: { secretRef: "secret://db/password" },
+  });
+
+  assert.throws(
+    () =>
+      mergeResolvedEnv({ DB_HOST: "explicit" }, [{
+        listenerComponent: "web",
+        bindingName: "db",
+        sourceRef: "database.connection",
+        options: { output: "database.connection", inject: "env" },
+        envInjections: { DB_HOST: "db.internal" },
+        material: {},
+      }]),
+    /binding-derived \$\.env\.DB_HOST conflicts with explicit spec/,
+  );
+});
+
+Deno.test("outputsToOutputMaterial projects official materials and secret refs", () => {
+  const service = outputsToOutputMaterial({
+    host: "db.internal",
+    port: 5432,
+    database: "app",
+    username: "app",
+    passwordSecretRef: "secret://db/password",
+  }, "service-binding");
+  assert.deepEqual(service, {
+    protocol: "postgresql",
+    host: "db.internal",
+    port: 5432,
+    service: "db.internal",
+    database: "app",
+    username: "app",
+    passwordRef: { secretRef: "secret://db/password" },
+  });
+
+  const objectStore = outputsToOutputMaterial({
+    bucket: "assets",
+    endpoint: "https://s3.example.test",
+    accessKeyIdRef: "secret://bucket/access-key-id",
+    secretAccessKeyRef: "secret://bucket/secret-access-key",
+  }, "object-store");
+  assert.deepEqual(objectStore, {
+    bucket: "assets",
+    endpoint: "https://s3.example.test",
+    accessKeyIdRef: { secretRef: "secret://bucket/access-key-id" },
+    secretAccessKeyRef: {
+      secretRef: "secret://bucket/secret-access-key",
+    },
+  });
+});
+
+Deno.test("outputsToOutputMaterial rejects retired object-store credential aliases", () => {
+  assert.throws(
+    () =>
+      outputsToOutputMaterial({
+        bucket: "assets",
+        endpoint: "https://s3.example.test",
+        accessKeyRef: "secret://bucket/access-key",
+        secretKeyRef: "secret://bucket/secret-key",
+      }, "object-store"),
+    /plugin outputs cannot be projected to object-store material: \$\.accessKeyRef unknown field; \$\.secretKeyRef unknown field/,
+  );
+});
+
+Deno.test("mergeResolvedEnv rejects listen env collisions", () => {
+  assert.throws(
+    () =>
+      mergeResolvedEnv({ DB_HOST: "explicit.example" }, [
+        {
+          listenerComponent: "web",
+          bindingName: "db",
+          sourceRef: "database.connection",
+          options: { output: "database.connection", inject: "env" },
+          envInjections: { DB_HOST: "db.internal" },
+          material: {},
+        },
+      ]),
+    /binding-derived \$\.env\.DB_HOST conflicts with explicit spec/,
+  );
+});
 
 Deno.test("KernelPlugin is a plain-array shape: name + provides + apply suffice", () => {
   const plugin: KernelPlugin = {
@@ -34,7 +330,7 @@ Deno.test("KernelPlugin is a plain-array shape: name + provides + apply suffice"
   ]);
   assert.equal(plugin.destroy, undefined);
   assert.equal(plugin.onInstallStart, undefined);
-  assert.equal(plugin.publishMaterial, undefined);
+  assert.equal(plugin.materializeOutput, undefined);
   assert.equal(plugin.applyListen, undefined);
 });
 
@@ -104,12 +400,11 @@ Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployme
   ]);
 });
 
-Deno.test("KernelPlugin.apply receives Component + source + listenedMaterials", async () => {
+Deno.test("KernelPlugin.apply receives Component + source + input materials", async () => {
   const component: Component = {
     kind: "worker",
-    publish: { http: { as: "http-endpoint" } },
-    listen: {
-      db: { from: "database.connection", as: "env", prefix: "DB" },
+    connect: {
+      db: { output: "database.connection", inject: "env", prefix: "DB" },
     },
   };
   const seen: KernelPluginApplyContext[] = [];
@@ -126,7 +421,7 @@ Deno.test("KernelPlugin.apply receives Component + source + listenedMaterials", 
     },
   };
 
-  const dbMaterial: NamespaceMaterial = {
+  const dbMaterial: OutputMaterial = {
     host: "db.internal",
     port: "5432",
     passwordSecretRef: "secret://db/password",
@@ -138,18 +433,20 @@ Deno.test("KernelPlugin.apply receives Component + source + listenedMaterials", 
     component,
     source: { kind: "prepared", url: "file:///src.tar", digest: "sha256:abc" },
     sourceDirectory: "/tmp/prepared-source",
+    inputMaterials: { db: dbMaterial },
     listenedMaterials: { db: dbMaterial },
     resolvedBindings: [{
       listenerComponent: "web",
       bindingName: "db",
       sourceRef: "database.connection",
-      options: { from: "database.connection", as: "env", prefix: "DB" },
+      options: { output: "database.connection", inject: "env", prefix: "DB" },
       envInjections: { DB_HOST: "db.internal" },
       material: dbMaterial,
     }],
   });
 
   assert.equal(result.resourceHandle, "rec://web");
+  assert.deepEqual(seen[0].inputMaterials?.db, dbMaterial);
   assert.deepEqual(seen[0].listenedMaterials.db, dbMaterial);
   assert.equal(
     seen[0].resolvedBindings[0]?.envInjections.DB_HOST,
@@ -159,10 +456,9 @@ Deno.test("KernelPlugin.apply receives Component + source + listenedMaterials", 
   assert.equal(seen[0].sourceDirectory, "/tmp/prepared-source");
 });
 
-Deno.test("KernelPlugin.publishMaterial emits a NamespaceMaterial", async () => {
+Deno.test("KernelPlugin.materializeOutput emits output material", async () => {
   const component: Component = {
     kind: "worker",
-    publish: { http: { as: "http-endpoint" } },
   };
   const plugin: KernelPlugin = {
     name: "@example/worker",
@@ -173,19 +469,18 @@ Deno.test("KernelPlugin.publishMaterial emits a NamespaceMaterial", async () => 
         resourceHandle: "worker://web",
         outputs: { url: "https://web.example.test", id: "w_1" },
       }),
-    publishMaterial: (ctx: PublishMaterialContext) =>
+    materializeOutput: (ctx: OutputMaterialContext) =>
       Promise.resolve({
         url: String(ctx.outputs.url),
         id: String(ctx.outputs.id),
       }),
   };
 
-  const material = await plugin.publishMaterial!({
+  const material = await plugin.materializeOutput!({
     installationId: "ins_1",
     componentName: "web",
     component,
-    publicationName: "http",
-    options: { as: "http-endpoint" },
+    outputName: "http",
     outputs: { url: "https://web.example.test", id: "w_1" },
   });
 
@@ -196,8 +491,8 @@ Deno.test("KernelPlugin.publishMaterial emits a NamespaceMaterial", async () => 
 Deno.test("KernelPlugin.applyListen returns an EnvInjection", async () => {
   const component: Component = {
     kind: "worker",
-    listen: {
-      db: { from: "database.connection", as: "env", prefix: "DB" },
+    connect: {
+      db: { output: "database.connection", inject: "env", prefix: "DB" },
     },
   };
   const plugin: KernelPlugin = {
@@ -232,7 +527,7 @@ Deno.test("KernelPlugin.applyListen returns an EnvInjection", async () => {
     component,
     bindingName: "db",
     sourceRef: "database.connection",
-    options: { from: "database.connection", as: "env", prefix: "DB" },
+    options: { output: "database.connection", inject: "env", prefix: "DB" },
     material: {
       host: "db.internal",
       port: "5432",
@@ -250,7 +545,7 @@ Deno.test("InlineMaterializer is the minimal Materializer packaging", () => {
   // the same installer surface; this test exercises the inline form to
   // pin the type contract.
   const inline: InlineMaterializer = {
-    provides: ["https://operator.example.com/kinds/lambda"],
+    provides: ["https://example.com/kinds/lambda"],
     aliases: ["lambda"],
     apply: (ctx) =>
       Promise.resolve({
@@ -261,7 +556,7 @@ Deno.test("InlineMaterializer is the minimal Materializer packaging", () => {
 
   const materializer: Materializer = inline;
   assert.deepEqual([...materializer.provides], [
-    "https://operator.example.com/kinds/lambda",
+    "https://example.com/kinds/lambda",
   ]);
   assert.deepEqual([...(materializer.aliases ?? [])], ["lambda"]);
 });

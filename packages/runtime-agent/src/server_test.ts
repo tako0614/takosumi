@@ -7,7 +7,7 @@ import {
   type LifecycleApplyRequest,
   type LifecycleCompensateRequest,
   type LifecycleDestroyRequest,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { ConnectorRegistry } from "./connectors/mod.ts";
 import { createRuntimeAgentApp } from "./server.ts";
 

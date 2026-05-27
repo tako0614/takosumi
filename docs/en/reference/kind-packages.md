@@ -1,6 +1,6 @@
 # Reference Kind Packages {#kind-packages}
 
-Takosumi manifests choose a component with `kind`. Each kind's descriptor, TypeScript helpers, and validator live in a **kind package**. Backend-specific native kind packages may also export a `KernelPlugin` factory for the reference kernel. Package names use `@takos/takosumi-kind-<alias>`.
+Takosumi core is kind-agnostic. Manifests choose a component with `kind`, and operator distributions supply the catalog, aliases, and implementation bindings. Each kind's descriptor, TypeScript helpers, and validator live in a **kind package**. Backend-specific native kind packages may also export a `KernelPlugin` factory for the reference kernel. That is reference implementation wiring, not a required AppSpec mechanism. Package names use `@takos/takosumi-kind-<alias>`.
 
 Repository ownership is split. Portable kind packages stay in `takosumi/`; backend-specific native kind packages live in `takosumi-plugins/`. Both keep the `@takos/takosumi-kind-*` package naming convention.
 
@@ -8,15 +8,19 @@ Portable kinds define the shared author-facing contract. Native kinds define con
 
 ## Portable Kind Packages
 
-| Package                             | kind alias     |
-| ----------------------------------- | -------------- |
-| `@takos/takosumi-kind-worker`       | `worker`       |
-| `@takos/takosumi-kind-web-service`  | `web-service`  |
-| `@takos/takosumi-kind-postgres`     | `postgres`     |
-| `@takos/takosumi-kind-object-store` | `object-store` |
-| `@takos/takosumi-kind-gateway`      | `gateway`      |
+| Package                              | kind alias      |
+| ------------------------------------ | --------------- |
+| `@takos/takosumi-kind-worker`        | `worker`        |
+| `@takos/takosumi-kind-web-service`   | `web-service`   |
+| `@takos/takosumi-kind-postgres`      | `postgres`      |
+| `@takos/takosumi-kind-sqlite`        | `sqlite`        |
+| `@takos/takosumi-kind-object-store`  | `object-store`  |
+| `@takos/takosumi-kind-kv-store`      | `kv-store`      |
+| `@takos/takosumi-kind-message-queue` | `message-queue` |
+| `@takos/takosumi-kind-vector-store`  | `vector-store`  |
+| `@takos/takosumi-kind-gateway`       | `gateway`       |
 
-Portable descriptor packages live under `takosumi/packages/kind-*`. Operators may map a portable alias to a native kind, or directly implement the portable kind URI.
+Portable descriptor packages live under `takosumi/packages/kind-*`. Their descriptors define portable `spec` vocabulary, output slots, and connection compatibility. An alias is only a shortcut to a URI. The resolved kind URI owns the `spec` schema, output slots, and connection compatibility. When a portable alias resolves to a portable URI, the operator attaches a binding that provides that portable URI. An alias that resolves to a native kind URI selects that native schema.
 
 ## Native Worker Packages
 
@@ -41,19 +45,20 @@ Native package source lives under `takosumi-plugins/packages/kind-*`.
 
 ## Native Data Packages
 
-| Package                                       | kind alias               |
-| --------------------------------------------- | ------------------------ |
-| `@takos/takosumi-kind-aws-rds-postgres`       | `aws-rds-postgres`       |
-| `@takos/takosumi-kind-gcp-cloud-sql-postgres` | `gcp-cloud-sql-postgres` |
-| `@takos/takosumi-kind-docker-postgres`        | `docker-postgres`        |
-
-| Package                                           | kind alias                   |
-| ------------------------------------------------- | ---------------------------- |
-| `@takos/takosumi-kind-cloudflare-r2-object-store` | `cloudflare-r2-object-store` |
-| `@takos/takosumi-kind-aws-s3-object-store`        | `aws-s3-object-store`        |
-| `@takos/takosumi-kind-gcp-gcs-object-store`       | `gcp-gcs-object-store`       |
-| `@takos/takosumi-kind-minio-object-store`         | `minio-object-store`         |
-| `@takos/takosumi-kind-filesystem-object-store`    | `filesystem-object-store`    |
+| Package                                                  | kind alias                          | family          |
+| -------------------------------------------------------- | ----------------------------------- | --------------- |
+| `@takos/takosumi-kind-aws-rds-postgres`                  | `aws-rds-postgres`                  | `postgres`      |
+| `@takos/takosumi-kind-gcp-cloud-sql-postgres`            | `gcp-cloud-sql-postgres`            | `postgres`      |
+| `@takos/takosumi-kind-docker-postgres`                   | `docker-postgres`                   | `postgres`      |
+| `@takos/takosumi-kind-cloudflare-d1-sqlite`              | `cloudflare-d1-sqlite`              | `sqlite`        |
+| `@takos/takosumi-kind-cloudflare-r2-object-store`        | `cloudflare-r2-object-store`        | `object-store`  |
+| `@takos/takosumi-kind-aws-s3-object-store`               | `aws-s3-object-store`               | `object-store`  |
+| `@takos/takosumi-kind-gcp-gcs-object-store`              | `gcp-gcs-object-store`              | `object-store`  |
+| `@takos/takosumi-kind-minio-object-store`                | `minio-object-store`                | `object-store`  |
+| `@takos/takosumi-kind-filesystem-object-store`           | `filesystem-object-store`           | `object-store`  |
+| `@takos/takosumi-kind-cloudflare-kv-store`               | `cloudflare-kv-store`               | `kv-store`      |
+| `@takos/takosumi-kind-cloudflare-queue-message-queue`    | `cloudflare-queue-message-queue`    | `message-queue` |
+| `@takos/takosumi-kind-cloudflare-vectorize-vector-store` | `cloudflare-vectorize-vector-store` | `vector-store`  |
 
 ## Native Gateway Packages
 
@@ -63,6 +68,8 @@ Native package source lives under `takosumi-plugins/packages/kind-*`.
 | `@takos/takosumi-kind-aws-route53-gateway`    | `aws-route53-gateway`    |
 | `@takos/takosumi-kind-gcp-cloud-dns-gateway`  | `gcp-cloud-dns-gateway`  |
 | `@takos/takosumi-kind-coredns-gateway`        | `coredns-gateway`        |
+
+Native gateway packages may provide implementation bindings that materialize HTTP reachability. The portable `gateway` route vocabulary is defined in the [Official Type Catalog](./type-catalog.md#gateway-portable-subset). `routes[].to` points at a local `connect` binding key. Native packages can add concrete DNS, listener, TLS, and route-support constraints.
 
 ## Reference Adapter Exports
 
@@ -79,14 +86,22 @@ import {
   KIND_URI as DB_KIND,
 } from "@takos/takosumi-kind-aws-rds-postgres";
 
+const workerLifecycle = createCloudflareWorkersLifecycleClient({ accountId });
+const databaseLifecycle = createAwsRdsLifecycleClient({
+  region: "us-east-1",
+});
+
 const { app } = await createPaaSApp({
   kindAliases: {
-    worker: WORKER_KIND,
-    postgres: DB_KIND,
+    "cloudflare-worker": WORKER_KIND,
+    "aws-rds-postgres": DB_KIND,
   },
   plugins: [
-    cloudflareWorkerPlugin({ accountId }),
-    awsRdsPostgresPlugin({ region: "us-east-1" }),
+    cloudflareWorkerPlugin({ accountId, lifecycle: workerLifecycle }),
+    awsRdsPostgresPlugin({
+      region: "us-east-1",
+      lifecycle: databaseLifecycle,
+    }),
   ],
 });
 ```
@@ -95,14 +110,17 @@ const { app } = await createPaaSApp({
 
 ## Ownership Rule
 
-- The descriptor source for a kind package is `spec/kind.jsonld`.
+- The descriptor source for a kind package is `spec/kind.jsonld`; JSON-LD is catalog/type metadata, not a runtime plugin requirement.
 - Portable descriptor source lives under `takosumi/packages/kind-*`; native descriptor source lives under `takosumi-plugins/packages/kind-*`.
 - The public package identity is `@takos/takosumi-kind-<alias>`.
 - The operator's `kindAliases` decides which aliases are active.
+- The resolved kind URI owns the `spec` schema, output slots, and connection compatibility.
 - A backend-specific `spec` or material output should be a native kind package.
 
 ## Related Pages
 
 - [Manifest](./manifest.md)
-- [Kind Catalog](./type-catalog.md)
+- [Official Type Catalog](./type-catalog.md)
+- [Kind Binding Implementations](./kind-bindings.md)
+- [Reference Adapter Loading](./plugin-loading.md)
 - [Extending Takosumi](../extending.md)

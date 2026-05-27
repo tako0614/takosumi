@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
 import {
   type ApplyResult,
-  formatPlatformOperationIdempotencyKey,
-  type JsonObject,
   type PlatformContext,
-  type PlatformOperationContext,
   type ProviderPlugin,
   registerProvider,
+  unregisterProvider,
+} from "takosumi-contract/internal/provider-plugin";
+import {
+  formatPlatformOperationIdempotencyKey,
+  type PlatformOperationContext,
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
+import type { JsonObject } from "takosumi-contract/reference/types";
+import {
   registerShape,
   type Shape,
-  unregisterProvider,
   unregisterShape,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/shape";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 import { applyV2 } from "./apply_v2.ts";
 import { InMemoryObservabilitySink } from "../../services/observability/mod.ts";

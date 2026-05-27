@@ -62,8 +62,8 @@ See [Concepts](./getting-started/concepts.md) for details on the three public co
 | --------------------------------------------------------------- | ---------------------------------------------------------- |
 | Read the whole core contract                                    | [Core Specification](./reference/core-spec.md)             |
 | Write `.takosumi.yml`                                           | [Manifest](./reference/manifest.md)                        |
-| Look up available component types                               | [Kind Catalog](./reference/type-catalog.md)                |
-| Use services provided by the operator                           | [Platform Services](./reference/external-publications.md)  |
+| Look up available component types                               | [Official Type Catalog](./reference/type-catalog.md)       |
+| Use services provided by the operator                           | [Platform Services](./reference/platform-services.md)      |
 | Read Takosumi Cloud account management APIs and facade behavior | [Takosumi Cloud](./reference/takosumi-cloud.md)            |
 | Check the core / catalog / Cloud boundary                       | [Specification Boundaries](./reference/spec-boundaries.md) |
 | Call install / deploy / rollback automation                     | [Installer API](./reference/installer-api.md)              |

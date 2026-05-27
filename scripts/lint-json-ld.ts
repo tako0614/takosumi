@@ -9,7 +9,7 @@
  * 2. **Reference kind document** (= e.g.
  *    `packages/kind-worker/spec/kind.jsonld`).
  *    Must include a stable takosumi.com kind URI, a supported kind document
- *    type, `version`, `description`, suggested aliases, publications, and
+ *    type, `version`, `description`, suggested aliases, outputSlots, and
  *    capability terms. Portable kind documents own `spec` and `outputs`;
  *    native kind documents name their `family` and `portableBase`.
  *
@@ -22,16 +22,18 @@ import { fromFileUrl } from "jsr:@std/path@^1.0.6";
 import {
   ACCESS_MODES as OFFICIAL_ACCESS_MODES,
   allowedProjectionFamiliesForOutputType,
+  isOutputFieldTypeName,
   OFFICIAL_OUTPUT_TYPE_NAMES,
   type OfficialOutputTypeName,
   type OutputFieldTypeDefinition,
   PROJECTION_FAMILY_NAMES,
+  type ProjectionFamilyName,
   SAFE_DEFAULT_ACCESS_MODES as OFFICIAL_SAFE_DEFAULT_ACCESS_MODES,
   validateOfficialOutputMaterialMapping,
   validateOfficialOutputMaterialMappingOutputTypes,
 } from "takosumi-contract/type-catalog";
 
-interface LintIssue {
+export interface LintIssue {
   readonly path: string;
   readonly message: string;
 }
@@ -44,22 +46,18 @@ const ROOTS = [
     "kind-postgres",
     "kind-object-store",
     "kind-gateway",
+    "kind-sqlite",
+    "kind-kv-store",
+    "kind-message-queue",
+    "kind-vector-store",
   ].map((name) =>
     fromFileUrl(new URL(`../packages/${name}/spec`, import.meta.url))
   ),
 ] as const;
 
 const KIND_ID_PREFIX = "https://takosumi.com/kinds/v1/";
-const KIND_TYPES = new Set(["ComponentKind", "takosumi:Kind"]);
+const KIND_TYPES = new Set(["ComponentKind"]);
 const OUTPUT_CONTRACTS = new Set<string>(OFFICIAL_OUTPUT_TYPE_NAMES);
-const OUTPUT_FIELD_TYPES = new Set([
-  "boolean",
-  "integer",
-  "number",
-  "object",
-  "object[]",
-  "string",
-]);
 const PROJECTION_FAMILIES = new Set<string>(PROJECTION_FAMILY_NAMES);
 const ACCESS_MODES = new Set<string>(OFFICIAL_ACCESS_MODES);
 const SCHEMA_TYPES = new Set([
@@ -127,8 +125,8 @@ async function main(): Promise<void> {
         issues,
       );
       checkReferenceAliases(obj["referenceAliases"], entry.path, issues);
-      checkPublications(
-        obj["publications"],
+      checkOutputSlots(
+        obj["outputSlots"],
         obj["outputs"],
         entry.path,
         issues,
@@ -187,7 +185,7 @@ function checkKindIdentity(
   if (typeof obj["@type"] === "string" && !KIND_TYPES.has(obj["@type"])) {
     issues.push({
       path,
-      message: "@type must be ComponentKind or takosumi:Kind",
+      message: "@type must be ComponentKind",
     });
   }
   if (typeof obj["@id"] === "string" && typeof obj["name"] === "string") {
@@ -231,7 +229,7 @@ function checkReferenceAliases(
   }
 }
 
-function checkPublications(
+function checkOutputSlots(
   value: unknown,
   outputsValue: unknown,
   path: string,
@@ -241,7 +239,7 @@ function checkPublications(
     issues.push({
       path,
       message:
-        "missing `publications` (declare local publications this kind can emit)",
+        "missing `outputSlots` (declare local outputSlots this kind can emit)",
     });
     return;
   }
@@ -249,14 +247,14 @@ function checkPublications(
     issues.push({
       path,
       message:
-        "`publications` must be an object keyed by local publication name",
+        "`outputSlots` must be an object keyed by local output slot name",
     });
     return;
   }
   if (Object.keys(value).length === 0) {
     issues.push({
       path,
-      message: "`publications` must declare at least one local publication",
+      message: "`outputSlots` must declare at least one local output slot",
     });
     return;
   }
@@ -265,14 +263,14 @@ function checkPublications(
     if (!isLocalName(key)) {
       issues.push({
         path,
-        message: "publication keys must be local names",
+        message: "output slot keys must be local names",
       });
       continue;
     }
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       issues.push({
         path,
-        message: `publications[${key}] must be an object`,
+        message: `outputSlots[${key}] must be an object`,
       });
       continue;
     }
@@ -280,35 +278,33 @@ function checkPublications(
     if (typeof e["contract"] !== "string" || e["contract"] === "") {
       issues.push({
         path,
-        message: `publications[${key}].contract must be a non-empty string`,
+        message: `outputSlots[${key}].contract must be a non-empty string`,
       });
     } else if (!OUTPUT_CONTRACTS.has(e["contract"])) {
       issues.push({
         path,
-        message:
-          `publications[${key}].contract must be an official output type`,
+        message: `outputSlots[${key}].contract must be an official output type`,
       });
     }
     if ("from" in e) {
       issues.push({
         path,
         message:
-          `publications[${key}].from is obsolete; use exampleMaterialMapping metadata`,
+          `outputSlots[${key}].from is obsolete; use exampleMaterialMapping metadata`,
       });
     }
     if ("material" in e) {
       issues.push({
         path,
         message:
-          `publications[${key}].material is ambiguous; use exampleMaterialMapping`,
+          `outputSlots[${key}].material is ambiguous; use exampleMaterialMapping`,
       });
     }
     const mapping = e["exampleMaterialMapping"];
     if (!isRecord(mapping)) {
       issues.push({
         path,
-        message:
-          `publications[${key}].exampleMaterialMapping must be an object`,
+        message: `outputSlots[${key}].exampleMaterialMapping must be an object`,
       });
       continue;
     }
@@ -325,7 +321,7 @@ function checkPublications(
         issues.push({
           path,
           message: formatMaterialMappingIssue(
-            `publications[${key}].exampleMaterialMapping`,
+            `outputSlots[${key}].exampleMaterialMapping`,
             issue.path,
             issue.message,
           ),
@@ -342,7 +338,7 @@ function checkPublications(
           issues.push({
             path,
             message: formatMaterialMappingIssue(
-              `publications[${key}].exampleMaterialMapping`,
+              `outputSlots[${key}].exampleMaterialMapping`,
               issue.path,
               issue.message,
             ),
@@ -370,21 +366,21 @@ function checkSpecAndInheritance(
   const type = obj["@type"];
   const spec = obj["spec"];
   const portableBase = obj["portableBase"];
-  if (type === "ComponentKind") {
-    if (portableBase !== undefined) {
-      issues.push({
-        path,
-        message: "portable ComponentKind must not declare portableBase",
-      });
-    }
-    checkSpecSchema(spec, path, issues, { required: true });
+  if (type !== "ComponentKind") {
     return;
   }
-  if (type === "takosumi:Kind") {
+  if (portableBase === undefined) {
+    if (obj["family"] !== undefined) {
+      issues.push({
+        path,
+        message: "portable ComponentKind must not declare family",
+      });
+    }
+  } else {
     requireNonEmptyString(obj["family"], "family", path, issues);
     requireKindUri(portableBase, "portableBase", path, issues);
-    checkSpecSchema(spec, path, issues, { required: false });
   }
+  checkSpecSchema(spec, path, issues, { required: true });
 }
 
 function checkSpecSchema(
@@ -417,6 +413,14 @@ function checkSpecSchema(
   checkJsonSchemaNode(value, "spec", path, issues);
 }
 
+export function checkSpecSchemaForTesting(
+  value: unknown,
+): readonly LintIssue[] {
+  const issues: LintIssue[] = [];
+  checkSpecSchema(value, "test.jsonld", issues, { required: true });
+  return issues;
+}
+
 function checkJsonSchemaNode(
   schema: Record<string, unknown>,
   fieldName: string,
@@ -434,8 +438,88 @@ function checkJsonSchemaNode(
     });
   }
 
-  if (schema["enum"] !== undefined && !Array.isArray(schema["enum"])) {
-    issues.push({ path, message: `${fieldName}.enum must be an array` });
+  if (schema["required"] !== undefined) {
+    checkStringArray(schema["required"], `${fieldName}.required`, path, issues);
+  }
+
+  if (schema["enum"] !== undefined) {
+    if (!Array.isArray(schema["enum"])) {
+      issues.push({ path, message: `${fieldName}.enum must be an array` });
+    } else if (schema["enum"].length === 0) {
+      issues.push({
+        path,
+        message: `${fieldName}.enum must contain at least one value`,
+      });
+    } else {
+      for (const [index, entry] of schema["enum"].entries()) {
+        if (!isJsonScalar(entry)) {
+          issues.push({
+            path,
+            message: `${fieldName}.enum[${index}] must be a JSON scalar`,
+          });
+        }
+      }
+    }
+  }
+
+  checkStringKeyword(schema["pattern"], `${fieldName}.pattern`, path, issues);
+  checkStringKeyword(schema["title"], `${fieldName}.title`, path, issues);
+  if (typeof schema["pattern"] === "string") {
+    try {
+      new RegExp(schema["pattern"]);
+    } catch {
+      issues.push({
+        path,
+        message: `${fieldName}.pattern must be a valid regular expression`,
+      });
+    }
+  }
+  checkFiniteNumberKeyword(
+    schema["minimum"],
+    `${fieldName}.minimum`,
+    path,
+    issues,
+  );
+  checkFiniteNumberKeyword(
+    schema["maximum"],
+    `${fieldName}.maximum`,
+    path,
+    issues,
+  );
+  checkNonNegativeIntegerKeyword(
+    schema["minLength"],
+    `${fieldName}.minLength`,
+    path,
+    issues,
+  );
+  checkNonNegativeIntegerKeyword(
+    schema["maxLength"],
+    `${fieldName}.maxLength`,
+    path,
+    issues,
+  );
+  checkNonNegativeIntegerKeyword(
+    schema["minItems"],
+    `${fieldName}.minItems`,
+    path,
+    issues,
+  );
+
+  const propertyNames = schema["propertyNames"];
+  if (propertyNames !== undefined) {
+    if (!isRecord(propertyNames)) {
+      issues.push({
+        path,
+        message: `${fieldName}.propertyNames must be an object`,
+      });
+    } else {
+      checkJsonSchemaNode(
+        propertyNames,
+        `${fieldName}.propertyNames`,
+        path,
+        issues,
+      );
+    }
   }
 
   const properties = schema["properties"];
@@ -477,6 +561,20 @@ function checkJsonSchemaNode(
     }
   }
 
+  const additionalProperties = schema["additionalProperties"];
+  if (
+    schemaType === "object" &&
+    isRecord(properties) &&
+    Object.keys(properties).length > 0 &&
+    additionalProperties !== false
+  ) {
+    issues.push({
+      path,
+      message:
+        `${fieldName}.additionalProperties must be false for object schemas with fixed properties`,
+    });
+  }
+
   if (Array.isArray(schema["required"]) && isRecord(properties)) {
     for (const name of schema["required"]) {
       if (typeof name === "string" && properties[name] === undefined) {
@@ -500,7 +598,6 @@ function checkJsonSchemaNode(
     }
   }
 
-  const additionalProperties = schema["additionalProperties"];
   if (
     additionalProperties !== undefined &&
     typeof additionalProperties !== "boolean"
@@ -556,7 +653,7 @@ function checkOutputs(
     }
     if (
       typeof output["type"] !== "string" ||
-      !OUTPUT_FIELD_TYPES.has(output["type"])
+      !isOutputFieldTypeName(output["type"])
     ) {
       issues.push({
         path,
@@ -575,6 +672,21 @@ function checkOutputs(
       path,
       issues,
     );
+    if (output["type"] === "object[]" && output["items"] !== undefined) {
+      if (!isRecord(output["items"])) {
+        issues.push({
+          path,
+          message: `outputs[${index}].items must be an object`,
+        });
+      } else {
+        checkJsonSchemaNode(
+          output["items"],
+          `outputs[${index}].items`,
+          path,
+          issues,
+        );
+      }
+    }
   }
 }
 
@@ -617,7 +729,8 @@ function outputDefinitionsForMapping(
     if (
       !isRecord(output) ||
       typeof output["name"] !== "string" ||
-      typeof output["type"] !== "string"
+      typeof output["type"] !== "string" ||
+      !isOutputFieldTypeName(output["type"])
     ) {
       return undefined;
     }
@@ -684,6 +797,7 @@ function checkListens(
     checkListenProjectionCompatibility(
       slot["accepts"],
       slot["projectionFamilies"],
+      slot["projectionMatrix"],
       `listens[${key}]`,
       path,
       issues,
@@ -754,6 +868,55 @@ function checkStringArray(
   }
 }
 
+function checkStringKeyword(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (value !== undefined && typeof value !== "string") {
+    issues.push({ path, message: `${fieldName} must be a string` });
+  }
+}
+
+function checkFiniteNumberKeyword(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (
+    value !== undefined &&
+    (typeof value !== "number" || !Number.isFinite(value))
+  ) {
+    issues.push({ path, message: `${fieldName} must be a finite number` });
+  }
+}
+
+function checkNonNegativeIntegerKeyword(
+  value: unknown,
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): void {
+  if (
+    value !== undefined &&
+    (typeof value !== "number" || !Number.isInteger(value) || value < 0)
+  ) {
+    issues.push({
+      path,
+      message: `${fieldName} must be a non-negative integer`,
+    });
+  }
+}
+
+function isJsonScalar(value: unknown): boolean {
+  return value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean";
+}
+
 function checkOutputContractArray(
   value: unknown,
   fieldName: string,
@@ -797,6 +960,7 @@ function checkProjectionFamilyArray(
 function checkListenProjectionCompatibility(
   acceptsValue: unknown,
   projectionsValue: unknown,
+  projectionMatrixValue: unknown,
   fieldName: string,
   path: string,
   issues: LintIssue[],
@@ -807,13 +971,22 @@ function checkListenProjectionCompatibility(
     PROJECTION_FAMILIES,
   );
   if (!accepts || !projections) return;
+  const matrix = checkProjectionMatrix(
+    projectionMatrixValue,
+    accepts,
+    projections,
+    fieldName,
+    path,
+    issues,
+  );
   for (const contract of accepts) {
     const allowed = allowedProjectionFamiliesForOutputType(
       contract as OfficialOutputTypeName,
     );
+    const advertised = matrix?.[contract] ?? projections;
     if (
-      !projections.some((projection) =>
-        allowed.some((allowedProjection) => allowedProjection === projection)
+      !advertised.some((projection) =>
+        allowed.includes(projection as ProjectionFamilyName)
       )
     ) {
       issues.push({
@@ -823,6 +996,68 @@ function checkListenProjectionCompatibility(
       });
     }
   }
+}
+
+function checkProjectionMatrix(
+  value: unknown,
+  accepts: readonly string[],
+  projections: readonly string[],
+  fieldName: string,
+  path: string,
+  issues: LintIssue[],
+): Record<string, string[]> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    issues.push({
+      path,
+      message: `${fieldName}.projectionMatrix must be an object`,
+    });
+    return undefined;
+  }
+  const out: Record<string, string[]> = {};
+  const acceptedSet = new Set(accepts);
+  const projectionSet = new Set(projections);
+  for (const [contract, entry] of Object.entries(value)) {
+    if (!OUTPUT_CONTRACTS.has(contract) || !acceptedSet.has(contract)) {
+      issues.push({
+        path,
+        message:
+          `${fieldName}.projectionMatrix.${contract} must name an accepted output type`,
+      });
+      continue;
+    }
+    const projectionList = officialStringArray(entry, PROJECTION_FAMILIES);
+    if (!projectionList) {
+      issues.push({
+        path,
+        message:
+          `${fieldName}.projectionMatrix.${contract} must be a non-empty projection family array`,
+      });
+      continue;
+    }
+    for (const projection of projectionList) {
+      if (!projectionSet.has(projection)) {
+        issues.push({
+          path,
+          message:
+            `${fieldName}.projectionMatrix.${contract} includes projection not listed in projectionFamilies`,
+        });
+      }
+      if (
+        !allowedProjectionFamiliesForOutputType(
+          contract as OfficialOutputTypeName,
+        ).includes(projection as ProjectionFamilyName)
+      ) {
+        issues.push({
+          path,
+          message:
+            `${fieldName}.projectionMatrix.${contract} includes incompatible projection ${projection}`,
+        });
+      }
+    }
+    out[contract] = projectionList;
+  }
+  return out;
 }
 
 function officialStringArray(

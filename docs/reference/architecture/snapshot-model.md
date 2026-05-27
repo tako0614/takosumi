@@ -1,7 +1,7 @@
 # Snapshot モデル {#snapshot-model}
 
 ::: info
-内部設計メモ public contract は [Installer API](../installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
 :::
 
 snapshot は Space scope の immutable な internal evidence record である。
@@ -15,8 +15,8 @@ IntentGraph は parse 済みの authoring intent と deploy context です。dep
 ```text
 declared component intents (= manifest components[*].kind)
 Space-visible kind alias / descriptor provenance
-manifest publish/listen edge dependency provenance
-link intents derived from component kind publish/listen bindings
+manifest connect/listen edge dependency provenance
+link intents derived from component kind connect/listen bindings
 exposure intents derived from kind-specific specs
 optional operator asset extension requirements / refs resolved by operator policy, kind schema, implementation binding, or connector binding
 space id from deploy context
@@ -33,14 +33,14 @@ ResolvedPlan:
   id: res_...
   spaceId: space:...
   resolutionEvidenceDigest: sha256:...
-  externalPublicationSnapshotDigest: sha256:...
-  publicationScopeDigest: sha256:...
+  platformServiceSnapshotDigest: sha256:...
+  serviceScopeDigest: sha256:...
   selectedCatalogEntries: []
-  selectedPublications: []
+  selectedServiceEntries: []
   selectedProjections: []
   selectedImplementations: []
   operatorResolutionEvidence: []
-  spacePublicationShares: []
+  spaceServiceShares: []
   policyDecisions: []
   approvals: []
   dataAssetExtensionRequirements: []
@@ -56,7 +56,7 @@ TargetState:
   spaceId: space:...
   resolutionSnapshotId: res_...
   objects: []
-  publications: []
+  outputMaterials: []
   links: []
   exposures: []
   runtimePolicies: []

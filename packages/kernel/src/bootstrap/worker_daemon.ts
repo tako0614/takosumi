@@ -18,10 +18,10 @@ import {
 } from "../workers/daemon.ts";
 import { log } from "../shared/log.ts";
 import type {
-  JsonObject,
   PlatformContext,
   RefResolver,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/internal/provider-plugin";
+import type { JsonObject } from "takosumi-contract/reference/types";
 
 export interface RoleWorkerDaemonOptions {
   readonly role: PaaSProcessRole;

@@ -5,10 +5,10 @@
 ## Space 隔離 {#space-isolation}
 
 - すべての Deployment、snapshot、journal、observation、approval、debt、activation、 RoutingPointer は Space id を持つ。
-- Space は deploy context / auth / API / operator profile から決まる。
+- Space は deploy context / auth / API / operator distribution から決まる。
 - platform service path は Space scope である。
 - secret、optional asset、journal、approval、observation、audit event は Space scope である。
-- publisher root は operator または product distribution が定義し、具体的な platform service path は operator policy によって Space 内に可視化される。
+- service root は operator または product distribution が定義し、具体的な platform service path は operator policy によって Space 内に可視化される。
 - RoutingPointer の identity は `spaceId + groupId` である。
 
 ## Root 不変条件 {#root-invariants}
@@ -24,12 +24,13 @@
 - apply と activation は分離される。
 - observation は事実を追記する。desired state の変更は新しい snapshot を通じて行う。
 - Deployment destroy は lifecycle policy に従って Takosumi が管理する object を処理する。
-- 本番は critical mutation、Space の publish の出力の sharing、kind alias / kind の定義 / binding set 更新を直列化する。
+- 本番は critical mutation、future cross-Space service sharing policy、kind alias / kind の定義 / binding set 更新を直列化する。
 
 ## Component kind resolution {#component-kind-resolution}
 
-- manifest root は `apiVersion`、`metadata`、`components` のみ。
-- Component の public field は `kind`、`spec`、`publish`、`listen` のみ。
+- manifest root は `apiVersion`、`metadata.id`、`metadata.name`、`components`、optional root `publish` に閉じる。
+- Component の public field は `kind`、`spec`、`connect`、`listen` のみ。
+- root `publish` は選ばれた component output を Installation output service path declaration として記録する。
 - short kind alias は operator が注入し、未解決の場合は fail-closed する。
 - catalog entry、kind 固有の input schema、binding は runtime 使用前に解決・記録される。
 
@@ -42,9 +43,9 @@ Reference / operator production の設定:
 
 - platform service path の grammar は各 Space 内で強制される。
 - shadowing は policy で gate され、本番では meaningful な Space / operator / external shadowing をデフォルトで拒否する。
-- デフォルトの publication は admin access を暗示しない。
-- credential や authorization の出力データを生成する publish の出力は、safe default が宣言されない限り明示的な access を要求する。
-- PlatformServiceDeclaration と PublicationMaterialization は分離される。
+- デフォルトの platform service entry は admin access を暗示しない。
+- credential や authorization の出力データを生成する output slot は、safe default が宣言されない限り明示的な access を要求する。
+- PlatformServiceDeclaration と PlatformServiceMaterialization は分離される。
 
 ## Journal と回復 {#journal-and-recovery}
 
@@ -63,7 +64,7 @@ Reference / operator production の設定:
 
 ## シークレット {#secrets}
 
-- secret を含む publication は plain env に project できない。
+- secret を含む output slot / platform service materialization は plain env に project できない。
 - literal env secret scanning または policy が有効である。
 - runtime secret はデフォルトで transform に渡されない。
 

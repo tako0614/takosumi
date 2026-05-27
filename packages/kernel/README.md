@@ -54,9 +54,9 @@ import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
 const { app, context, role } = await createPaaSApp({
   runtimeEnv: Deno.env.toObject(),
   // optional: takosumiDeploymentRecordStore, sqlClient, plugins, kindAliases
-  externalPublications: {
+  platformServices: {
     resolve(ctx) {
-      if (ctx.sourceRef !== "operator.identity.oidc") return undefined;
+      if (ctx.sourceRef !== "identity.primary.oidc") return undefined;
       return {
         issuerUrl: "https://accounts.example.test",
         clientId: "client_123",
@@ -74,7 +74,7 @@ Deno.serve({ port: 8788 }, app.fetch);
 1. Loads runtime config from env
 2. Registers optional DataAsset metadata used by DataAsset extension routes. Component kind descriptors and implementation bindings are operator-supplied. Backend-specific reference `KernelPlugin` factories are imported from `takosumi-plugins` native kind packages such as `@takos/takosumi-kind-cloudflare-worker` or `@takos/takosumi-kind-aws-rds-postgres`, then attached via `plugins: [...]` plus an operator `kindAliases` map when short aliases are desired.
 3. Builds `AppContext` with adapter ports (auth / kms / secrets / queue / storage / observability / objectStorage / runtimeAgentRegistry / etc)
-4. Passes `externalPublications` to the Installer pipeline so ordinary external `listen.from` paths such as `operator.identity.oidc` resolve to operator-owned material.
+4. Passes `platformServices` to the Installer pipeline so ordinary platform service `listen.path` values such as `identity.primary.oidc` resolve to operator-owned material.
 5. Mounts the route modules that match the configured process role:
    - `takosumi-api` → internal + installer + readiness + openapi; DataAsset routes are mounted only when the operator enables that extension
    - `takosumi-worker` → readiness + worker daemon

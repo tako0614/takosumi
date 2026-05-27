@@ -1,7 +1,7 @@
 # Runtime-Agent 境界 {#implementation-and-runtime-agent-boundary}
 
 ::: info
-内部設計メモ public contract は [Installer API](../installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
 :::
 
 本ドキュメントは Takosumi reference implementation における operator-internal な Takosumi / runtime-agent 境界と、両者が交換する operation envelope を記録する。 runtime-agent は operator execution surface です。wire-level の field 表は [Reference Runtime-Agent Execution Surface](../runtime-agent-api.md) と [Lifecycle Protocol](../lifecycle.md) にある。本ページはアーキテクチャ意図を記録する—各側が何を担当し、trust chain がどこで切れ、どの invariant が分割を強制するか。
@@ -121,7 +121,7 @@ runtime-agent → Takosumi 方向は別の auth path である: enrollment token
 
 ## Space 隔離
 
-`spaceId` はすべての envelope とすべての lifecycle request に届く。 implementation と connector は、operation 入力が explicit cross-Space publication share でない限り、別 Space の object、secret、asset、authorization material、platform service を読み書きしてはならない。current v1 にはそのような cross-Space publication input はない。Space 越えのアクセスは contract 違反であり、`actual-effects-overflow` risk に closed される。
+`spaceId` はすべての envelope とすべての lifecycle request に届く。 implementation と connector は、別 Space の object、secret、asset、authorization material、platform service を読み書きしてはならない。current v1 には cross-Space service input はない。将来 RFC が明示的な cross-Space service sharing を導入するまで、Space 越えのアクセスは contract 違反であり、`actual-effects-overflow` risk に closed される。
 
 ## Failure mode
 

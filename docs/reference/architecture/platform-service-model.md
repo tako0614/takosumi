@@ -1,12 +1,20 @@
 # Platform Service モデル {#platform-service-model}
 
-Operator platform service compatibility model: [Platform Services](../external-publications.md).
+Operator platform service compatibility model:
+[Platform Services](../platform-services.md).
 
-Platform service は publication path で参照できる usable surface です。 publication path は Space の中で解決されます。publisher は declaration を offer し、link materialization は runtime に渡す出力データを生成します。
+Platform service は platform service path で参照できる usable surface です。
+platform service path は Space の中で解決されます。operator distribution または
+product distribution は service entry を offer し、link materialization は
+runtime に渡す binding data を生成します。
 
-Public manifest v1 が定義するのは `listen.<binding>.from` の reference grammar です。2 segment の `component.publication` は同じ manifest 内の publication、 3 segment 以上の path は Space-visible platform service として解決します。この architecture note は、reference implementation が内部で使う snapshot / link / exposure record も説明します。
+Public manifest v1 が定義するのは `connect.output` と `listen.path` の reference grammar
+です。2 segment の `component.output` は同じ manifest 内の component output、3
+segment 以上の path は Space-visible platform service として解決します。この
+architecture note は、reference implementation が内部で使う snapshot / link /
+exposure record も説明します。
 
-## Platform service path 文法 {#publication-path-grammar}
+## Platform service path 文法 {#platform-service-path-grammar}
 
 ```text
 segment = [a-z][a-z0-9-]{0,62}
@@ -20,19 +28,22 @@ Rules:
 - max path length: 255
 - path segment は上記 grammar の single segment
 - empty segments are invalid
-- first segment is the publisher root
-- publisher roots are defined by the operator profile or product distribution that offers the publication path. Takosumi Cloud defines its account layer publisher root in its distribution specification; start from [Takosumi Cloud](../takosumi-cloud.md).
+- first segment is the service root
+- service roots are defined by the operator distribution or product
+  distribution that offers the platform service path. Takosumi Cloud defines its
+  account layer service roots in its distribution specification; start from
+  [Takosumi Cloud](../takosumi-cloud.md).
 
 ## Declaration と materialization {#declaration-vs-materialization}
 
-### PlatformServiceDeclaration {#externalpublicationdeclaration}
+### PlatformServiceDeclaration {#platform-service-declaration}
 
 declaration は何が使えるかを宣言する。
 
 ```yaml
 PlatformServiceDeclaration:
-  snapshotId: pubsnap_...
-  publicationPath: publisher.database.primary
+  snapshotId: svcsnap_...
+  platformServicePath: database.primary.connection
   spaceId: space_acme_prod
   owner:
     kind: operator
@@ -50,17 +61,19 @@ PlatformServiceDeclaration:
     observedAt: ...
 ```
 
-`sensitivity` class は [Access Modes](../access-modes.md) と type catalog metadata の `public-config` / `internal` / `restricted` / `secret-bearing` を使います。この architecture note では enum を再定義しません。
+`sensitivity` class は [Access Modes](../access-modes.md) と type catalog
+metadata の `public-config` / `internal` / `restricted` / `secret-bearing`
+を使います。この architecture note では enum を再定義しません。
 
-### PublicationMaterialization {#publicationmaterialization}
+### PlatformServiceMaterialization {#platform-service-materialization}
 
 出力データは link materialization によって生成される。
 
 ```yaml
-PublicationMaterialization:
+PlatformServiceMaterialization:
   linkId: link_api_DATABASE_URL
-  publicationSnapshotId: pubsnap_...
-  publicationPath: publisher.database.primary
+  platformServiceSnapshotId: svcsnap_...
+  platformServicePath: database.primary.connection
   secretRefs: [secret://operator/databases/acme-prod/api]
   endpointRefs: []
   authorizationRefs: []
@@ -68,38 +81,55 @@ PublicationMaterialization:
   sdkConfigRefs: []
 ```
 
-Resolution は declaration を保存する。OperationJournal と observation が出力データを追跡する。
+Resolution は declaration を保存する。OperationJournal と observation
+が出力データを追跡する。
 
 ## Explicit paths {#explicit-paths}
 
-Public manifest grammar には hidden path 展開はありません。manifest author は `publisher.observability.default` のように leaf まで明示します。`default` は通常の segment で、bare path を暗黙に別 path へ展開する規則は v1 には置きません。
+Public manifest grammar には hidden path 展開はありません。manifest author は
+`observability.primary.logs` のように leaf まで明示します。`default`
+は通常の segment で、bare path を暗黙に別 path へ展開する規則は v1
+には置きません。
 
 ## Space-scope resolution {#space-scoped-resolution}
 
-platform service resolution は常に Space の中で行われる。別 Space の同じ path は別の subject である。current v1 の依存は Space に許可された external publication に限られる。
+platform service resolution は常に Space の中で行われる。別 Space の同じ path
+は別の subject である。current v1 の manifest 外依存は Space に許可された
+platform service に限られる。
 
 ```text
 1. Space-visible platform service declarations
 2. absent optional binding, or required-binding failure
 ```
 
-deployment-local object scope、generated scope、group / environment scope、 cross-space import は internal/future vocabulary です。導入する場合も public platform service path の exact-match model を変えず、別 RFC で manifest から見える surface を定義します。
+deployment-local object scope、generated scope、group / environment scope、
+cross-space service sharing は future RFC vocabulary です。導入する場合も public
+platform service path の exact-match model を変えず、別 RFC で manifest から
+見える surface を定義します。
+
+## Active path uniqueness {#active-path-uniqueness}
+
+同じ Space の同じ platform service path は、active provider を 1 つだけ持てます。これは `listen.path` の exact-match
+resolution を曖昧にしないための invariant です。
+
+root `publish` declaration を inventory に投影する operator は、`(spaceId, path)` を active-entry key として扱います。owner
+Installation が同じなら redeploy は replacement です。owner が違うなら conflict です。conflict は新しい AppSpec が既存
+entry を奪う形では解決しません。既存 owner の publish removal、Installation disable/delete、または operator/admin の明示的な
+transfer / disable operation で片方を inactive にしてから activate します。
+
+rollback も同じ rule に従います。rollback target が持つ path が空いていれば再 activate できます。別 owner が active
+なら rollback projection は conflict で止まります。Deployment history は残りますが、`listen.path` から見える active
+entry は常に 1 つです。
 
 ## Cross-Space sharing {#cross-space-sharing}
 
-current v1 の platform service resolution は Space-local です。Space を跨ぐ publication 使用は reserved sharing model として扱います。
+current v1 の platform service resolution は Space-local です。Space を跨ぐ
+service sharing は future RFC scope であり、current manifest v1 には
+cross-Space service input はありません。
 
-```yaml
-fromSpaceId: space_platform
-toSpaceId: space_acme_prod
-publicationPath: publisher.identity.primary
-publicationSnapshotId: pubsnap_...
-allowedAccess:
-  - read
-  - invoke-only
-```
-
-share と plan 出力は Space を跨ぐ使用を risk として明示しなければならない。
+将来 RFC が導入する場合は、source Space、destination Space、service path、
+service snapshot、allowed access、TTL、revocation、audit、cleanup をまとめて
+定義し、plan 出力は Space を跨ぐ使用を risk として明示しなければならない。
 
 ## Freshness {#freshness}
 
@@ -119,7 +149,9 @@ unknown:
 
 ## Adjacent Boundaries {#adjacent-boundaries}
 
-Platform service は manifest 外の material を `listen` に参加させる仕組みです。source handoff、asset、connector、public ingress activation は別の boundary です。
+Platform service は manifest 外の material を `listen`
+に参加させる仕組みです。source handoff、asset、connector、public ingress
+activation は別の boundary です。
 
 | Boundary                          | Reference                                                                          |
 | --------------------------------- | ---------------------------------------------------------------------------------- |

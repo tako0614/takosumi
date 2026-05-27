@@ -17,7 +17,6 @@
  */
 
 import type { JsonObject, JsonValue } from "./types.ts";
-import type { PlatformOperationRequest } from "./provider-plugin.ts";
 
 /**
  * DataAsset descriptor carried over the compatibility `artifact` wire
@@ -81,6 +80,70 @@ export interface PreparedSourceLocator {
   readonly workingDirectory?: string;
 }
 
+export interface PlatformOperationIdempotencyKey {
+  readonly spaceId: string;
+  readonly operationPlanDigest: `sha256:${string}`;
+  readonly journalEntryId: string;
+}
+
+export type PlatformOperationRecoveryMode =
+  | "normal"
+  | "continue"
+  | "compensate"
+  | "inspect";
+
+export type PlatformOperationWalStage =
+  | "prepare"
+  | "pre-commit"
+  | "commit"
+  | "post-commit"
+  | "observe"
+  | "finalize"
+  | "abort"
+  | "skip";
+
+export interface PlatformOperationRequest {
+  readonly spaceId: string;
+  readonly operationId: string;
+  readonly operationAttempt: number;
+  readonly journalCursor: string;
+  readonly idempotencyKey: string;
+  readonly desiredGeneration?: number;
+  readonly desiredSnapshotId: string;
+  readonly resolutionSnapshotId?: string;
+  readonly operationKind: string;
+  readonly inputRefs: readonly string[];
+  readonly preRecordedGeneratedObjectIds: readonly string[];
+  readonly expectedExternalIdempotencyKeys: readonly string[];
+  readonly approvedEffects: readonly JsonObject[];
+  readonly recoveryMode: PlatformOperationRecoveryMode;
+  readonly walStage: PlatformOperationWalStage;
+  readonly deadline?: string;
+}
+
+export interface PlatformOperationContext {
+  readonly phase: "apply" | "destroy" | "compensate";
+  readonly walStage: PlatformOperationWalStage;
+  readonly operationId: string;
+  readonly operationAttempt?: number;
+  readonly resourceName: string;
+  readonly providerId: string;
+  readonly op: "create" | "delete";
+  readonly desiredDigest: `sha256:${string}`;
+  readonly operationPlanDigest: `sha256:${string}`;
+  readonly idempotencyKey: PlatformOperationIdempotencyKey;
+  readonly idempotencyKeyString: string;
+  readonly recoveryMode?: PlatformOperationRecoveryMode;
+  readonly approvedEffects?: readonly JsonObject[];
+  readonly deadline?: string;
+}
+
+export function formatPlatformOperationIdempotencyKey(
+  key: PlatformOperationIdempotencyKey,
+): string {
+  return `${key.spaceId}:${key.operationPlanDigest}:${key.journalEntryId}`;
+}
+
 export interface LifecycleApplyRequest {
   /**
    * Legacy connector-local shape selector (e.g. `object-store@v1`), derived by
@@ -93,6 +156,12 @@ export interface LifecycleApplyRequest {
    */
   readonly provider: string;
   readonly resourceName: string;
+  /**
+   * Connector-local lifecycle input projected by the operator-selected
+   * implementation adapter. It may be the public kind spec unchanged, or the
+   * validated kind spec plus binding-derived runtime fields such as env or
+   * gateway targets. It is not an open AppSpec extension point.
+   */
   readonly spec: JsonValue;
   readonly spaceId: string;
   readonly tenantId?: string;
@@ -119,7 +188,7 @@ export interface LifecycleApplyRequest {
 export interface LifecycleApplyResponse {
   /** Stable handle (e.g. AWS ARN, Docker container id). Used for destroy/describe. */
   readonly handle: string;
-  /** Outputs recorded as Deployment evidence for publication/material projection. */
+  /** Outputs recorded as Deployment evidence for material projection. */
   readonly outputs: JsonObject;
 }
 

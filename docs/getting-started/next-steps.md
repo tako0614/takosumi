@@ -17,16 +17,13 @@ components:
     spec:
       version: "16"
       size: small
-    publish:
-      connection:
-        as: service-binding
 
   web:
     kind: worker
-    listen:
+    connect:
       db:
-        from: db.connection
-        as: secret-env
+        output: db.connection
+        inject: secret-env
         prefix: DB
     spec:
       entrypoint: src/worker.ts
@@ -53,10 +50,10 @@ takosumi deploy inst_... --source "$APP_ROOT"
 
 Takosumi では、外部からの HTTP アクセスを受け付ける component を gateway と呼びます。
 
-web component が HTTP endpoint を publish し、gateway がそれを listen して public URL として公開します。
+web component の HTTP output を gateway が `connect` して public URL として公開します。
 
 ```
-web (publish http) --> gateway (listen) --> https://your-app.example.com
+web (http output) --> gateway (connect) --> https://your-app.example.com
 ```
 
 operator が `gateway` を提供している環境で、manifest に以下を追加します。 HTTP 公開の詳しい仕様は [HTTP 公開](../reference/http-exposure.md) を参照してください。
@@ -67,19 +64,13 @@ components:
     kind: worker
     spec:
       entrypoint: src/worker.ts
-    publish:
-      http:
-        as: http-endpoint
 
   public:
     kind: gateway
-    listen:
+    connect:
       app:
-        from: web.http
-        as: upstream
-    publish:
-      public:
-        as: http-endpoint
+        output: web.http
+        inject: upstream
     spec:
       listeners:
         public:
@@ -91,7 +82,7 @@ components:
           to: app
 ```
 
-gateway の `spec.listeners` に `host` を指定しなければ、operator が自動でホスト名を割り当てます。ローカル開発環境では `host: hello.takosumi.test` のように明示することもできます。
+gateway の `spec.listeners` に `host` を指定しなければ、operator が自動でホスト名を割り当てます。ローカル開発環境では `host: hello.takosumi.test` のように明示することもできます。browser から到達させるだけなら root `publish` は不要です。
 
 保存したら同じ Installation に apply します:
 

@@ -7,7 +7,7 @@
  * snapshot that is verified and extracted per apply request.
  */
 
-import type { PreparedSourceLocator } from "takosumi-contract/reference/compat";
+import type { PreparedSourceLocator } from "takosumi-contract/reference/runtime-agent-lifecycle";
 
 export interface PreparedSourceReader {
   readFile(path: string): Promise<Uint8Array>;

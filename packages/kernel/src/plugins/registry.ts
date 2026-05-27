@@ -3,7 +3,7 @@
  * `KernelPlugin` instances and resolves component kind URIs to the plugin
  * that materializes them.
  */
-import type { KernelPlugin } from "takosumi-contract/reference/compat";
+import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 import { isKindUri } from "takosumi-contract/app-spec";
 import type { KernelPluginRegistry, KindAliasMap } from "./types.ts";
 

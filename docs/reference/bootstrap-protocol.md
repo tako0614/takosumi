@@ -71,17 +71,17 @@ Bootstrap 完了後に operator が kernel を操作するための初期 creden
 - Token hash のみが storage に永続化される
 - 既に bootstrap operator credential が存在する場合は stage 4 を skip し、 token 平文は再出力しない (re-init 防止)
 
-将来 operator bootstrap CLI を追加する場合は、token を CLI 側にも copy して scrolloff 後に取り戻せるようにしてよい。現在の public `takosumi` CLI は manifest deploy engine であり、operator bootstrap は operator profile の init flow として扱う。
+将来 operator bootstrap CLI を追加する場合は、token を CLI 側にも copy して scrolloff 後に取り戻せるようにしてよい。現在の public `takosumi` CLI は manifest deploy engine であり、operator bootstrap は operator distribution の init flow として扱う。
 
 ## Stage 5 — operator-implementation-load
 
-operator profile が kernel 起動時に渡した `kindAliases`、implementation binding、runtime-agent connector inventory を検証する。
+operator distribution が kernel 起動時に渡した `kindAliases`、implementation binding、runtime-agent connector inventory を検証する。
 
 - production / staging では selected implementation が 1 つ以上必要
 - short alias は operator-provided `kindAliases` にあるものだけ解決される
-- 同じ kind URI を複数 reference adapter が提供し、operator profile / Space policy でも一意に選べない場合は stage abort
+- 同じ kind URI を複数 reference adapter が提供し、operator distribution / Space policy でも一意に選べない場合は stage abort
 
-operator profile が通常の TypeScript module として kind package を import し、reference kernel では reference adapter array (`plugins` option) に渡す。詳細は [Reference Adapter Loading](./plugin-loading.md)。
+operator distribution が通常の TypeScript module として kind package を import し、reference kernel では reference adapter array (`plugins` option) に渡す。詳細は [Reference Adapter Loading](./plugin-loading.md)。
 
 ## Stage 6 — audit-genesis
 
@@ -103,7 +103,7 @@ kernel-bootstrap-completed
 
 ## Stage 7 — listener-open
 
-Installer API / internal control / runtime-agent control / discovery ports を operator profile の role 設定に従って open する。Bootstrap 完了前は `/readyz` は 503 を返し続ける。
+Installer API / internal control / runtime-agent control / discovery ports を operator distribution の role 設定に従って open する。Bootstrap 完了前は `/readyz` は 503 を返し続ける。
 
 `/livez` は stage 1 完了から 200 を返す (process alive)。
 

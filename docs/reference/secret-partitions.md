@@ -1,10 +1,10 @@
 # Secret Partitions
 
 ::: info
-内部設計メモ public contract は [Installer API](./installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](./installer-api.md) を参照。
 :::
 
-The operator manages secret storage, partitioning, rotation, and runtime delivery.
+operator が secret storage、partitioning、rotation、runtime delivery を管理する。
 
 ## Partition model
 

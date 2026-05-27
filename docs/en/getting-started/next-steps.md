@@ -17,16 +17,13 @@ components:
     spec:
       version: "16"
       size: small
-    publish:
-      connection:
-        as: service-binding
 
   web:
     kind: worker
-    listen:
+    connect:
       db:
-        from: db.connection
-        as: secret-env
+        output: db.connection
+        inject: secret-env
         prefix: DB
     spec:
       entrypoint: src/worker.ts
@@ -51,10 +48,10 @@ takosumi deploy inst_... --source "$APP_ROOT"
 
 ## Add HTTP Exposure {#add-http-exposure}
 
-The web component publishes an HTTP endpoint, and the gateway listens to it and exposes a public URL:
+The gateway connects to the web component's HTTP output and exposes a public URL:
 
 ```
-web (publish http) --> gateway (listen) --> https://your-app.example.com
+web (http output) --> gateway (connect) --> https://your-app.example.com
 ```
 
 In an operator environment that provides a `gateway`, add the following to your manifest. See [HTTP Exposure](../reference/http-exposure.md) for the full specification.
@@ -65,19 +62,13 @@ components:
     kind: worker
     spec:
       entrypoint: src/worker.ts
-    publish:
-      http:
-        as: http-endpoint
 
   public:
     kind: gateway
-    listen:
+    connect:
       app:
-        from: web.http
-        as: upstream
-    publish:
-      public:
-        as: http-endpoint
+        output: web.http
+        inject: upstream
     spec:
       listeners:
         public:
@@ -89,7 +80,7 @@ components:
           to: app
 ```
 
-Omitting `host` lets the operator assign a public hostname automatically. In local development you can set it explicitly, e.g. `host: hello.takosumi.test`.
+Omitting `host` lets the operator assign a public hostname automatically. In local development you can set it explicitly, e.g. `host: hello.takosumi.test`. Root `publish` is not needed for browser reachability.
 
 ## Update And Roll Back {#update-and-roll-back}
 
@@ -99,7 +90,7 @@ Change the manifest or runtime source, then apply another Deployment:
 takosumi deploy inst_... --source "$APP_ROOT"
 ```
 
-Rollback moves the current pointer to a previous succeeded Deployment:
+A rollback moves the current pointer to a previous successful Deployment:
 
 ```bash
 takosumi rollback inst_... dep_...

@@ -14,7 +14,7 @@
 ### `ObservationState`
 
 - **保持件数**: 各 Space で **最新 1 entry** のみ。新 ObservationState は既存 entry を supersede する (in-place replace 相当)。
-- **更新タイミング**: observe phase が runtime-agent describe を取り終え、 PlatformServiceDeclaration freshness を annotate した時点。
+- **更新タイミング**: observe phase が runtime-agent describe を取り終え、platform service snapshot freshness を annotate した時点。
 - **TTL**: 次の ObservationState が書かれるまで保持する。明示的 expiry は operator policy で扱う。
 - **読者**: resolution / planning / approval invalidation の input。
 - **operator 制御**: disable できない。kernel が動く以上、observe loop は ObservationState を更新し続ける。
@@ -61,7 +61,7 @@ history entry の drop は operator policy。kernel は default で history を 
 
 ## Freshness の伝播 {#freshness-propagation}
 
-operator が管理する PlatformServiceDeclaration の freshness は Takosumi が観測し、ObservationState entry として記録する。
+operator が管理する platform service snapshot の freshness は Takosumi が観測し、ObservationState entry として記録する。
 
 ### 4 状態の freshness {#_4-state-freshness}
 
@@ -79,8 +79,8 @@ freshness state は ObservationState annotation 上で `refresh-required` と `s
 ### Risk への接続 {#risk-への-connection}
 
 - `refresh-required` 検出は warning 相当の Risk を emit する (resolution は blocking しない)。
-- `stale` 検出は plan で error 相当の `stale-publication` Risk を発火する ([Risk Taxonomy](./risk-taxonomy.md))。
-- `revoked` 検出は `revoked-publication` Risk を発火する。
+- `stale` 検出は plan で error 相当の `stale-publication` Risk を発火する。risk name は historical stable id で、current prose では stale platform service snapshot を指す ([Risk Taxonomy](./risk-taxonomy.md))。
+- `revoked` 検出は `revoked-publication` Risk を発火する。risk name は historical stable id で、current prose では revoked platform service snapshot を指す。
 - 観測未完了 (`unknown` marker) は plan を blocking しないが、observe loop が 4-state のいずれかに収束するのを待つ。
 
 ### Approval invalidation との関係 {#approval-invalidation-relationship}
@@ -88,7 +88,7 @@ freshness state は ObservationState annotation 上で `refresh-required` と `s
 freshness state の遷移は approval invalidation trigger の **external freshness change** (trigger 4) の発火源だが、`refresh-required` と `stale` は別 bucket として扱われる。
 
 - `fresh → refresh-required`: warning レベル。ObservationState には記録されるが trigger 4 は発火させない。consumer 側 plan は warning Risk と共に依然 consume 可能で、approval は `approved` のまま保持される。
-- `fresh → stale` または `* → revoked`: trigger 4 の発火条件。 ObservationState が遷移を記録した瞬間、当該 publication を消費する binding subset の approval が `invalidated` に落ちる ([Approval Invalidation Triggers — external freshness change](./approval-invalidation.md#4-external-freshness-change))。
+- `fresh → stale` または `* → revoked`: trigger 4 の発火条件。 ObservationState が遷移を記録した瞬間、当該 platform service path / snapshot を消費する binding subset の approval が `invalidated` に落ちる ([Approval Invalidation Triggers — external freshness change](./approval-invalidation.md#4-external-freshness-change))。
 
 history の enable / disable によらずこの trigger 経路は同じ。trigger は ObservationState (latest) の遷移で発火する。
 
@@ -118,7 +118,7 @@ DriftIndex は ObservationState を base に compute され、 `CleanupBacklog` 
 - **status endpoint**: Deployment と ObservationState のサマリーは、public CLI フラグが実装されるまで operator 内部の control plane に属する。
 - **history toggle**: observation history の有効化・無効化は operator 専用操作であり、public installer CLI には公開されない。
 - **history dump**: enable された Space のみ history を operator tooling で取り出せる。default disable 時は empty を返す。
-- **freshness probe**: PlatformServiceDeclaration の freshness は operator internal control-plane query で per-publication に確認できる。
+- **freshness probe**: platform service snapshot の freshness は operator internal control-plane query で service path ごとに確認できる。
 
 operator が history を disable した状態で運用する場合でも、 ObservationState・OperationJournal・AuditLog は Takosumi が維持するので、 recovery / compliance / approval invalidation の保証は崩れない。
 

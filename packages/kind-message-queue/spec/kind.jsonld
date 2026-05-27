@@ -1,0 +1,89 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/message-queue",
+  "@type": "ComponentKind",
+  "name": "message-queue",
+  "version": "v1",
+  "referenceAliases": ["message-queue", "queue"],
+  "description": "Message queue for asynchronous producer and consumer workloads.",
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["name"],
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Queue name."
+      },
+      "deliveryDelay": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Default delivery delay in seconds."
+      }
+    }
+  },
+  "outputSlots": {
+    "producer": {
+      "contract": "event-channel",
+      "exampleMaterialMapping": {
+        "channel": "$outputs.queueId",
+        "protocol": "queue",
+        "queue": "$outputs.name",
+        "endpoint": "$outputs.url",
+        "producerCredentialRef": {
+          "secretRef": "$outputs.producerTokenSecretRef"
+        }
+      }
+    },
+    "consumer": {
+      "contract": "event-channel",
+      "exampleMaterialMapping": {
+        "channel": "$outputs.queueId",
+        "protocol": "queue",
+        "queue": "$outputs.name",
+        "endpoint": "$outputs.url",
+        "consumerCredentialRef": {
+          "secretRef": "$outputs.consumerTokenSecretRef"
+        }
+      }
+    }
+  },
+  "outputs": [
+    {
+      "name": "queueId",
+      "type": "string",
+      "required": true,
+      "meaning": "Implementation-scoped queue identifier."
+    },
+    {
+      "name": "name",
+      "type": "string",
+      "required": true,
+      "meaning": "Queue name."
+    },
+    {
+      "name": "url",
+      "type": "string",
+      "required": false,
+      "meaning": "Queue endpoint URL if available."
+    },
+    {
+      "name": "producerTokenSecretRef",
+      "type": "string",
+      "required": false,
+      "meaning": "Secret reference for producer credentials."
+    },
+    {
+      "name": "consumerTokenSecretRef",
+      "type": "string",
+      "required": false,
+      "meaning": "Secret reference for consumer credentials."
+    }
+  ],
+  "capabilityTerms": [
+    "queue-produce",
+    "queue-consume"
+  ]
+}

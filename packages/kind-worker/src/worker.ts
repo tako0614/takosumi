@@ -6,6 +6,8 @@ import {
   isNonEmptyString,
   optionalNonEmptyString,
   optionalStringRecord,
+  rejectUnknownFields,
+  requireHttpUrl,
   requireNonEmptyString,
   requireRoot,
 } from "./_validators.ts";
@@ -42,22 +44,14 @@ export const WorkerKind: Shape<
   outputFields: WORKER_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
+    rejectUnknownFields(value, "$", ["entrypoint", "env"], issues);
     validateEntrypoint(value.entrypoint, issues);
-    optionalNonEmptyString(
-      value.compatibilityDate,
-      "$.compatibilityDate",
-      issues,
-    );
-    validateStringArray(
-      value.compatibilityFlags,
-      "$.compatibilityFlags",
-      issues,
-    );
     optionalStringRecord(value.env, "$.env", issues);
   },
   validateOutputs(value, issues) {
     if (!requireRoot(value, issues)) return;
-    requireNonEmptyString(value.url, "$.url", issues);
+    rejectUnknownFields(value, "$", ["url", "id", "version"], issues);
+    requireHttpUrl(value.url, "$.url", issues);
     requireNonEmptyString(value.id, "$.id", issues);
     optionalNonEmptyString(value.version, "$.version", issues);
   },
@@ -74,25 +68,18 @@ function validateEntrypoint(
     });
     return;
   }
-  if (value.startsWith("/") || value.split("/").includes("..")) {
+  const segments = value.split("/");
+  if (
+    value.startsWith("/") ||
+    value.includes("\0") ||
+    segments.some((segment) =>
+      segment.length === 0 || segment === "." || segment === ".."
+    )
+  ) {
     issues.push({
       path: "$.entrypoint",
-      message: "must not be absolute or escape the source root",
+      message:
+        "must be a POSIX relative path without NUL, empty, ., or .. segments",
     });
-  }
-}
-
-function validateStringArray(
-  value: unknown,
-  path: string,
-  issues: ShapeValidationIssue[],
-): void {
-  if (value === undefined) return;
-  if (!Array.isArray(value)) {
-    issues.push({ path, message: "must be an array" });
-    return;
-  }
-  if (!value.every(isNonEmptyString)) {
-    issues.push({ path, message: "must contain only non-empty strings" });
   }
 }

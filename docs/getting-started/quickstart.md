@@ -4,9 +4,9 @@
 
 - [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.x 以上
 
-この手順は local dev サーバーに Manifest を渡し、Installation と最初の Deployment の記録を作るところまでを確認します。
+この手順では、ローカル開発サーバーに manifest を渡して Installation と最初の Deployment の記録が作られるところまでを確認します。アプリを公開 URL で提供するには、gateway を備えた operator 環境が必要です。
 
-## 1. CLI を入れる
+## 1. CLI をインストールする
 
 ```bash
 deno install -gA -n takosumi jsr:@takos/takosumi-cli
@@ -46,18 +46,18 @@ components:
 
 ## 3. ローカル開発サーバーを起動する
 
-Takosumi はサーバーと CLI (クライアント) が分かれています。開発時はサーバーをバックグラウンドで起動し、別の shell で CLI を使います。
+Takosumi はサーバーと CLI (クライアント) が分かれています。まずサーバーを 1 つの shell で起動し、CLI の操作は別の shell で行います。
 
-別 shell でサーバーを起動する:
+サーバー用の shell で以下を実行します:
 
 ```bash
 export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
 TAKOSUMI_DEV_MODE=1 takosumi server --port 8788
 ```
 
-`TAKOSUMI_INSTALLER_TOKEN` は API の認証トークンです。開発用の固定値 `dev-installer-token` を使います。
+`TAKOSUMI_INSTALLER_TOKEN` は API の認証トークンです。ローカル開発ではこの固定値を使います。
 
-元の shell に戻って環境変数を設定:
+元の shell に戻り、環境変数を設定します:
 
 ```bash
 cd /path/to/hello-takosumi
@@ -72,7 +72,7 @@ export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
 takosumi install dry-run --space space_personal --source "$APP_ROOT"
 ```
 
-成功すると `changes[]` (予定差分) と `expected.manifestDigest` (dry-run 時のハッシュ照合値) が返ります。
+成功すると、`changes[]` (予定差分) と `expected.manifestDigest` (ソースの識別子) が返されます。
 
 ```json
 {
@@ -82,7 +82,7 @@ takosumi install dry-run --space space_personal --source "$APP_ROOT"
 }
 ```
 
-`changes` は作成される component のリスト、`manifestDigest` はソースの識別子です。 apply 時にこの digest を照合して、dry-run 後にソースが変わっていないことを確認します。
+`changes` は作成される component のリストです。apply 時に `manifestDigest` を照合し、dry-run 後にソースが変わっていないことを確認します。
 
 ## 5. Installation を作る
 
@@ -90,7 +90,7 @@ takosumi install dry-run --space space_personal --source "$APP_ROOT"
 takosumi install --space space_personal --source "$APP_ROOT"
 ```
 
-dry-run の digest に固定して apply する場合:
+dry-run で得た digest を指定して apply するには:
 
 ```bash
 takosumi install --space space_personal --source "$APP_ROOT" \
@@ -106,7 +106,7 @@ takosumi install --space space_personal --source "$APP_ROOT" \
 }
 ```
 
-ここまでが local ledger quickstart の runnable path です。public app endpoint は gateway / ingress provider がある operator 環境でだけ作られます。
+ここまでがローカル環境でのクイックスタートの範囲です。
 
 次のステップ: [component 接続と HTTP 公開](./next-steps.md)
 

@@ -11,6 +11,17 @@ export const OFFICIAL_OUTPUT_TYPE_NAMES = [
 
 export type OfficialOutputTypeName = typeof OFFICIAL_OUTPUT_TYPE_NAMES[number];
 
+export const OUTPUT_FIELD_TYPE_NAMES = [
+  "boolean",
+  "integer",
+  "number",
+  "object[]",
+  "string",
+  "string[]",
+] as const;
+
+export type OutputFieldTypeName = typeof OUTPUT_FIELD_TYPE_NAMES[number];
+
 export const PROJECTION_FAMILY_NAMES = [
   "env",
   "secret-env",
@@ -92,8 +103,8 @@ export interface HttpEndpointMaterial {
 export interface ServiceBindingMaterial {
   readonly service?: string;
   readonly protocol: string;
-  readonly host: string;
-  readonly port: number;
+  readonly host?: string;
+  readonly port?: number;
   readonly database?: string;
   readonly username?: string;
   readonly connectionUrl?: string;
@@ -162,11 +173,12 @@ export interface CatalogValidationIssue {
 
 export interface OutputFieldTypeDefinition {
   readonly name: string;
-  readonly type: string;
+  readonly type: OutputFieldTypeName;
   readonly required?: boolean;
 }
 
 const OUTPUT_TYPE_SET = new Set<string>(OFFICIAL_OUTPUT_TYPE_NAMES);
+const OUTPUT_FIELD_TYPE_SET = new Set<string>(OUTPUT_FIELD_TYPE_NAMES);
 const PROJECTION_FAMILY_SET = new Set<string>(PROJECTION_FAMILY_NAMES);
 const ACCESS_MODE_SET = new Set<string>(ACCESS_MODES);
 const OFFICIAL_SENSITIVITY_CLASS_SET = new Set<string>(
@@ -177,6 +189,12 @@ export function isOfficialOutputTypeName(
   value: string,
 ): value is OfficialOutputTypeName {
   return OUTPUT_TYPE_SET.has(value);
+}
+
+export function isOutputFieldTypeName(
+  value: string,
+): value is OutputFieldTypeName {
+  return OUTPUT_FIELD_TYPE_SET.has(value);
 }
 
 export function isProjectionFamilyName(
@@ -204,6 +222,7 @@ export function isSafeDefaultAccessMode(
 
 export function isSecretReference(value: unknown): value is SecretReference {
   return isRecord(value) &&
+    Object.keys(value).length === 1 &&
     typeof (value as { readonly secretRef?: unknown }).secretRef === "string" &&
     (value as { readonly secretRef: string }).secretRef.length > 0;
 }
@@ -255,13 +274,22 @@ export function validateOfficialOutputMaterial(
       ]);
       requireString(value.service, "$.service", issues, { optional: true });
       requireString(value.protocol, "$.protocol", issues);
-      requireString(value.host, "$.host", issues);
-      requirePortNumber(value.port, "$.port", issues);
+      requireString(value.host, "$.host", issues, { optional: true });
+      requirePortNumber(value.port, "$.port", issues, { optional: true });
       requireString(value.database, "$.database", issues, { optional: true });
       requireString(value.username, "$.username", issues, { optional: true });
       requireString(value.connectionUrl, "$.connectionUrl", issues, {
         optional: true,
       });
+      requireAbsoluteUri(value.connectionUrl, "$.connectionUrl", issues, {
+        optional: true,
+      });
+      requireCredentialFreeConnectionUrl(
+        value.connectionUrl,
+        "$.connectionUrl",
+        issues,
+        { optional: true },
+      );
       requireString(value.caCertRef, "$.caCertRef", issues, {
         optional: true,
       });
@@ -272,6 +300,7 @@ export function validateOfficialOutputMaterial(
         optional: true,
       });
       checkSecretReferenceRecord(value.tokenRefs, "$.tokenRefs", issues);
+      checkServiceBindingAddress(value, issues);
       break;
     case "object-store":
       checkNoUnknownKeys(value, "$", issues, [
@@ -288,6 +317,7 @@ export function validateOfficialOutputMaterial(
       requireString(value.bucket, "$.bucket", issues);
       requireString(value.endpoint, "$.endpoint", issues);
       requireAbsoluteUri(value.endpoint, "$.endpoint", issues);
+      requireCredentialFreeUri(value.endpoint, "$.endpoint", issues);
       requireString(value.region, "$.region", issues, { optional: true });
       requireBoolean(value.pathStyle, "$.pathStyle", issues, {
         optional: true,
@@ -317,6 +347,7 @@ export function validateOfficialOutputMaterial(
         issues,
         { optional: true },
       );
+      checkObjectStoreCredentialRefs(value, "$", issues);
       break;
     case "event-channel":
       checkNoUnknownKeys(value, "$", issues, [
@@ -333,6 +364,12 @@ export function validateOfficialOutputMaterial(
       requireString(value.channel, "$.channel", issues);
       requireString(value.protocol, "$.protocol", issues);
       requireString(value.endpoint, "$.endpoint", issues, { optional: true });
+      requireAbsoluteUri(value.endpoint, "$.endpoint", issues, {
+        optional: true,
+      });
+      requireCredentialFreeUri(value.endpoint, "$.endpoint", issues, {
+        optional: true,
+      });
       requireString(value.topic, "$.topic", issues, { optional: true });
       requireString(value.queue, "$.queue", issues, { optional: true });
       requireString(value.stream, "$.stream", issues, { optional: true });
@@ -460,12 +497,22 @@ export function validateOfficialOutputMaterialMapping(
         "tokenRefs",
       ]);
       requireStringMappingValue(value.protocol, "$.protocol", issues);
-      requireStringMappingValue(value.host, "$.host", issues);
-      requirePortNumberMappingValue(value.port, "$.port", issues);
       checkOptionalStringMappingValue(value.service, "$.service", issues);
+      checkOptionalStringMappingValue(value.host, "$.host", issues);
+      checkOptionalPortNumberMappingValue(value.port, "$.port", issues);
       checkOptionalStringMappingValue(value.database, "$.database", issues);
       checkOptionalStringMappingValue(value.username, "$.username", issues);
       checkOptionalStringMappingValue(
+        value.connectionUrl,
+        "$.connectionUrl",
+        issues,
+      );
+      checkOptionalAbsoluteUriMappingValue(
+        value.connectionUrl,
+        "$.connectionUrl",
+        issues,
+      );
+      checkOptionalCredentialFreeConnectionUrlMappingValue(
         value.connectionUrl,
         "$.connectionUrl",
         issues,
@@ -478,6 +525,7 @@ export function validateOfficialOutputMaterialMapping(
       );
       checkOptionalSecretReferenceMapping(value.tokenRef, "$.tokenRef", issues);
       checkSecretReferenceRecordMapping(value.tokenRefs, "$.tokenRefs", issues);
+      checkServiceBindingMappingAddress(value, issues);
       break;
     case "object-store":
       checkNoUnknownKeys(value, "$", issues, [
@@ -493,6 +541,11 @@ export function validateOfficialOutputMaterialMapping(
       ]);
       requireStringMappingValue(value.bucket, "$.bucket", issues);
       requireAbsoluteUriMappingValue(value.endpoint, "$.endpoint", issues);
+      requireCredentialFreeUriMappingValue(
+        value.endpoint,
+        "$.endpoint",
+        issues,
+      );
       checkOptionalStringMappingValue(value.region, "$.region", issues);
       checkOptionalBooleanMappingValue(
         value.pathStyle,
@@ -524,6 +577,7 @@ export function validateOfficialOutputMaterialMapping(
         "$.sessionTokenRef",
         issues,
       );
+      checkObjectStoreCredentialRefMapping(value, "$", issues);
       break;
     case "event-channel":
       checkNoUnknownKeys(value, "$", issues, [
@@ -539,7 +593,16 @@ export function validateOfficialOutputMaterialMapping(
       ]);
       requireStringMappingValue(value.channel, "$.channel", issues);
       requireStringMappingValue(value.protocol, "$.protocol", issues);
-      checkOptionalStringMappingValue(value.endpoint, "$.endpoint", issues);
+      checkOptionalAbsoluteUriMappingValue(
+        value.endpoint,
+        "$.endpoint",
+        issues,
+      );
+      checkOptionalCredentialFreeUriMappingValue(
+        value.endpoint,
+        "$.endpoint",
+        issues,
+      );
       checkOptionalStringMappingValue(value.topic, "$.topic", issues);
       checkOptionalStringMappingValue(value.queue, "$.queue", issues);
       checkOptionalStringMappingValue(value.stream, "$.stream", issues);
@@ -636,6 +699,25 @@ export function validateOfficialOutputMaterialMappingOutputTypes(
   ]));
 
   collectOutputMappingMarkerUses(type, value, "$", outputDefinitions, issues);
+  if (type === "http-endpoint") {
+    checkHttpEndpointMappingRequiredAlternatives(
+      value,
+      outputDefinitions,
+      issues,
+    );
+  } else if (type === "billing.port@v1") {
+    checkBillingPortMappingRequiredAlternatives(
+      value,
+      outputDefinitions,
+      issues,
+    );
+  } else if (type === "service-binding") {
+    checkServiceBindingMappingRequiredAlternatives(
+      value,
+      outputDefinitions,
+      issues,
+    );
+  }
   return issues;
 }
 
@@ -688,7 +770,10 @@ function collectOutputMappingMarkerUses(
       });
       return;
     }
-    if (definition.required !== true) {
+    if (
+      definition.required !== true &&
+      isRequiredOutputMarkerPath(outputType, path)
+    ) {
       issues.push({
         path,
         message: `${value} must reference a required output`,
@@ -748,6 +833,30 @@ function expectedOutputMarkerType(
       return expectedIdentityOidcMarkerType(path);
     case "billing.port@v1":
       return expectedBillingPortMarkerType(path);
+  }
+}
+
+function isRequiredOutputMarkerPath(
+  outputType: OfficialOutputTypeName,
+  path: string,
+): boolean {
+  switch (outputType) {
+    case "http-endpoint":
+      return path === "$.targets" ||
+        path === "$.endpoints" ||
+        path === "$.endpoints[].url" ||
+        path === "$.endpoints[].routes[].pathPrefix" ||
+        path === "$.endpoints[].routes[].to";
+    case "service-binding":
+      return path === "$.protocol";
+    case "object-store":
+      return path === "$.bucket" || path === "$.endpoint";
+    case "event-channel":
+      return path === "$.channel" || path === "$.protocol";
+    case "identity.oidc@v1":
+      return path === "$.issuerUrl" || path === "$.clientId";
+    case "billing.port@v1":
+      return path === "$.billingSubjectRef";
   }
 }
 
@@ -1005,8 +1114,37 @@ function checkOptionalTargetArrayMapping(
       `${itemPath}.visibility`,
       issues,
     );
-    if (entry.url === undefined && entry.host === undefined) {
-      issues.push({ path: itemPath, message: "target must map url or host" });
+    if (
+      entry.url === undefined ||
+      (entry.host !== undefined || entry.port !== undefined)
+    ) {
+      const hasUrl = entry.url !== undefined;
+      const hasHostPort = entry.host !== undefined && entry.port !== undefined;
+      if (!hasUrl && !hasHostPort) {
+        issues.push({
+          path: itemPath,
+          message: "target must map url or host + port",
+        });
+      } else if (entry.host !== undefined && entry.port === undefined) {
+        issues.push({
+          path: itemPath,
+          message: "target host mapping also requires port",
+        });
+      } else if (entry.host === undefined && entry.port !== undefined) {
+        issues.push({
+          path: itemPath,
+          message: "target port mapping also requires host",
+        });
+      }
+    }
+    if (
+      (entry.protocol !== undefined || entry.basePath !== undefined) &&
+      !(entry.host !== undefined && entry.port !== undefined)
+    ) {
+      issues.push({
+        path: itemPath,
+        message: "target protocol/basePath mapping requires host + port",
+      });
     }
   }
 }
@@ -1063,6 +1201,7 @@ function checkOptionalEndpointArrayMapping(
       issues,
     );
     checkOptionalRouteArrayMapping(entry.routes, `${itemPath}.routes`, issues);
+    crossCheckHttpEndpointMappingUrl(entry, itemPath, issues);
   }
 }
 
@@ -1180,6 +1319,45 @@ function checkOptionalHttpUrlMappingValue(
   requireHttpUrlMappingValue(value, path, issues);
 }
 
+function checkOptionalCredentialFreeConnectionUrlMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  if (isLiteralStringMappingValue(value)) {
+    requireCredentialFreeConnectionUrl(value, path, issues);
+  }
+}
+
+function requireCredentialFreeUriMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (isLiteralStringMappingValue(value)) {
+    requireCredentialFreeUri(value, path, issues);
+  }
+}
+
+function checkOptionalCredentialFreeUriMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  requireCredentialFreeUriMappingValue(value, path, issues);
+}
+
+function checkOptionalAbsoluteUriMappingValue(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (value === undefined) return;
+  requireAbsoluteUriMappingValue(value, path, issues);
+}
+
 function requireAbsoluteUriMappingValue(
   value: unknown,
   path: string,
@@ -1200,6 +1378,37 @@ function checkOptionalHttpSchemeMappingValue(
   checkOptionalStringMappingValue(value, path, issues);
   if (isLiteralStringMappingValue(value)) {
     requireHttpScheme(value, path, issues);
+  }
+}
+
+function crossCheckHttpEndpointMappingUrl(
+  value: Record<string, unknown>,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (!isLiteralStringMappingValue(value.url)) return;
+  let url: URL;
+  try {
+    url = new URL(value.url);
+  } catch {
+    return;
+  }
+  if (isLiteralStringMappingValue(value.scheme)) {
+    const scheme = url.protocol.replace(/:$/, "");
+    if (value.scheme !== scheme) {
+      issues.push({
+        path: `${path}.scheme`,
+        message: "must match the scheme in url",
+      });
+    }
+  }
+  if (isLiteralStringMappingValue(value.host) && value.host.length > 0) {
+    if (value.host !== url.hostname) {
+      issues.push({
+        path: `${path}.host`,
+        message: "must match the host in url",
+      });
+    }
   }
 }
 
@@ -1296,7 +1505,245 @@ function checkSecretReferenceRecordMapping(
     return;
   }
   for (const [key, entry] of Object.entries(value)) {
+    requireIdentifier(key, `${path}.${key}`, issues);
     checkOptionalSecretReferenceMapping(entry, `${path}.${key}`, issues);
+  }
+}
+
+function checkObjectStoreCredentialRefMapping(
+  value: Record<string, unknown>,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  const hasAccessKey = value.accessKeyIdRef !== undefined;
+  const hasSecretKey = value.secretAccessKeyRef !== undefined;
+  const hasSessionToken = value.sessionTokenRef !== undefined;
+  if (hasAccessKey !== hasSecretKey) {
+    issues.push({
+      path,
+      message:
+        "object-store credential refs require accessKeyIdRef and secretAccessKeyRef together",
+    });
+  }
+  if (hasSessionToken && !(hasAccessKey && hasSecretKey)) {
+    issues.push({
+      path: `${path}.sessionTokenRef`,
+      message: "sessionTokenRef requires accessKeyIdRef and secretAccessKeyRef",
+    });
+  }
+}
+
+function checkServiceBindingMappingAddress(
+  value: Record<string, unknown>,
+  issues: CatalogValidationIssue[],
+): void {
+  const hasService = value.service !== undefined;
+  const hasConnectionUrl = value.connectionUrl !== undefined;
+  const hasHost = value.host !== undefined;
+  const hasPort = value.port !== undefined;
+
+  if (hasHost !== hasPort) {
+    issues.push({
+      path: "$",
+      message: "service-binding host and port mappings must appear together",
+    });
+  }
+  if (!hasService && !hasConnectionUrl && !hasHost && !hasPort) {
+    issues.push({
+      path: "$",
+      message:
+        "service-binding mapping requires service, connectionUrl, or host + port",
+    });
+  }
+}
+
+function checkHttpEndpointMappingRequiredAlternatives(
+  value: unknown,
+  outputDefinitions: ReadonlyMap<string, OutputFieldTypeDefinition>,
+  issues: CatalogValidationIssue[],
+): void {
+  if (!isRecord(value)) return;
+  const targets = value.targets;
+  if (targets === undefined || isOutputMappingMarker(targets)) return;
+  if (!Array.isArray(targets)) return;
+  for (const [index, target] of targets.entries()) {
+    if (!isRecord(target)) continue;
+    const itemPath = `$.targets[${index}]`;
+    const urlAlwaysPresent = mappingValueAlwaysPresent(
+      target.url,
+      outputDefinitions,
+    );
+    const hostAlwaysPresent = mappingValueAlwaysPresent(
+      target.host,
+      outputDefinitions,
+    );
+    const portAlwaysPresent = mappingValueAlwaysPresent(
+      target.port,
+      outputDefinitions,
+    );
+    if (urlAlwaysPresent || (hostAlwaysPresent && portAlwaysPresent)) {
+      continue;
+    }
+    if (target.url !== undefined && isOutputMappingMarker(target.url)) {
+      issues.push({
+        path: `${itemPath}.url`,
+        message:
+          `${target.url} must reference a required output when target has no required host + port fallback`,
+      });
+    }
+    if (
+      target.url === undefined || target.host !== undefined ||
+      target.port !== undefined
+    ) {
+      if (target.host !== undefined && isOutputMappingMarker(target.host)) {
+        if (!hostAlwaysPresent) {
+          issues.push({
+            path: `${itemPath}.host`,
+            message:
+              `${target.host} must reference a required output when used as target host`,
+          });
+        }
+      }
+      if (target.port !== undefined && isOutputMappingMarker(target.port)) {
+        if (!portAlwaysPresent) {
+          issues.push({
+            path: `${itemPath}.port`,
+            message:
+              `${target.port} must reference a required output when used as target port`,
+          });
+        }
+      }
+    }
+  }
+}
+
+function checkServiceBindingMappingRequiredAlternatives(
+  value: unknown,
+  outputDefinitions: ReadonlyMap<string, OutputFieldTypeDefinition>,
+  issues: CatalogValidationIssue[],
+): void {
+  if (!isRecord(value)) return;
+  const serviceAlwaysPresent = mappingValueAlwaysPresent(
+    value.service,
+    outputDefinitions,
+  );
+  const connectionUrlAlwaysPresent = mappingValueAlwaysPresent(
+    value.connectionUrl,
+    outputDefinitions,
+  );
+  const hostAlwaysPresent = mappingValueAlwaysPresent(
+    value.host,
+    outputDefinitions,
+  );
+  const portAlwaysPresent = mappingValueAlwaysPresent(
+    value.port,
+    outputDefinitions,
+  );
+  if (
+    serviceAlwaysPresent || connectionUrlAlwaysPresent ||
+    (hostAlwaysPresent && portAlwaysPresent)
+  ) {
+    return;
+  }
+  if (value.service !== undefined && isOutputMappingMarker(value.service)) {
+    issues.push({
+      path: "$.service",
+      message:
+        `${value.service} must reference a required output when service-binding mapping has no required connectionUrl or host + port fallback`,
+    });
+  }
+  if (
+    value.connectionUrl !== undefined &&
+    isOutputMappingMarker(value.connectionUrl)
+  ) {
+    issues.push({
+      path: "$.connectionUrl",
+      message:
+        `${value.connectionUrl} must reference a required output when service-binding mapping has no required service or host + port fallback`,
+    });
+  }
+  if (value.host !== undefined && isOutputMappingMarker(value.host)) {
+    issues.push({
+      path: "$.host",
+      message:
+        `${value.host} must reference a required output when service-binding mapping has no required service or connectionUrl fallback`,
+    });
+  }
+  if (value.port !== undefined && isOutputMappingMarker(value.port)) {
+    issues.push({
+      path: "$.port",
+      message:
+        `${value.port} must reference a required output when service-binding mapping has no required service or connectionUrl fallback`,
+    });
+  }
+}
+
+function checkBillingPortMappingRequiredAlternatives(
+  value: unknown,
+  outputDefinitions: ReadonlyMap<string, OutputFieldTypeDefinition>,
+  issues: CatalogValidationIssue[],
+): void {
+  if (!isRecord(value)) return;
+  const portalAlwaysPresent = mappingValueAlwaysPresent(
+    value.portalUrl,
+    outputDefinitions,
+  );
+  const usageAlwaysPresent = mappingValueAlwaysPresent(
+    value.usageReportEndpoint,
+    outputDefinitions,
+  );
+  if (portalAlwaysPresent || usageAlwaysPresent) return;
+  if (value.portalUrl !== undefined && isOutputMappingMarker(value.portalUrl)) {
+    issues.push({
+      path: "$.portalUrl",
+      message:
+        `${value.portalUrl} must reference a required output when billing mapping has no required usageReportEndpoint fallback`,
+    });
+  }
+  if (
+    value.usageReportEndpoint !== undefined &&
+    isOutputMappingMarker(value.usageReportEndpoint)
+  ) {
+    issues.push({
+      path: "$.usageReportEndpoint",
+      message:
+        `${value.usageReportEndpoint} must reference a required output when billing mapping has no required portalUrl fallback`,
+    });
+  }
+}
+
+function mappingValueAlwaysPresent(
+  value: unknown,
+  outputDefinitions: ReadonlyMap<string, OutputFieldTypeDefinition>,
+): boolean {
+  if (isOutputMappingMarker(value)) {
+    const name = value.slice("$outputs.".length);
+    return outputDefinitions.get(name)?.required === true;
+  }
+  return isOutputMaterialMappingValue(value);
+}
+
+function checkServiceBindingAddress(
+  value: Record<string, unknown>,
+  issues: CatalogValidationIssue[],
+): void {
+  const hasService = value.service !== undefined;
+  const hasConnectionUrl = value.connectionUrl !== undefined;
+  const hasHost = value.host !== undefined;
+  const hasPort = value.port !== undefined;
+
+  if (hasHost !== hasPort) {
+    issues.push({
+      path: "$",
+      message: "service-binding host and port must appear together",
+    });
+  }
+  if (!hasService && !hasConnectionUrl && !hasHost && !hasPort) {
+    issues.push({
+      path: "$",
+      message:
+        "service-binding requires service, connectionUrl, or host + port",
+    });
   }
 }
 
@@ -1391,12 +1838,29 @@ function checkHttpEndpointTarget(
     { optional: true },
   );
   const hasUrl = typeof value.url === "string" && value.url.length > 0;
+  const hasHostField = value.host !== undefined;
+  const hasPortField = value.port !== undefined;
   const hasHostPort = typeof value.host === "string" &&
     value.host.length > 0 && typeof value.port === "number";
   if (!hasUrl && !hasHostPort) {
     issues.push({
       path,
       message: "target requires url or host + port",
+    });
+  }
+  if (hasUrl && hasHostField !== hasPortField) {
+    issues.push({
+      path,
+      message: "target host and port must appear together",
+    });
+  }
+  if (
+    (value.protocol !== undefined || value.basePath !== undefined) &&
+    !hasHostPort
+  ) {
+    issues.push({
+      path,
+      message: "target protocol/basePath requires host + port",
     });
   }
 }
@@ -1442,6 +1906,7 @@ function checkHttpEndpoint(
     { optional: true },
   );
   requireBoolean(value.primary, `${path}.primary`, issues, { optional: true });
+  crossCheckHttpEndpointUrl(value, path, issues);
   if (value.routes !== undefined) {
     if (!Array.isArray(value.routes)) {
       issues.push({ path: `${path}.routes`, message: "must be an array" });
@@ -1530,9 +1995,12 @@ function requireSecretReference(
   opts: { readonly optional?: boolean } = {},
 ): void {
   if (value === undefined && opts.optional) return;
-  if (!isSecretReference(value)) {
+  if (!isRecord(value)) {
     issues.push({ path, message: "must be a secretRef object" });
+    return;
   }
+  checkNoUnknownKeys(value, path, issues, ["secretRef"]);
+  requireString(value.secretRef, `${path}.secretRef`, issues);
 }
 
 function requireHttpUrl(
@@ -1552,6 +2020,57 @@ function requireHttpUrl(
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     issues.push({ path, message: "must use http or https" });
+  }
+  requireNoUrlUserinfo(url, path, issues);
+}
+
+function requireCredentialFreeUri(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+  opts: { readonly optional?: boolean } = {},
+): void {
+  if (value === undefined && opts.optional) return;
+  if (typeof value !== "string") return;
+  try {
+    requireNoUrlUserinfo(new URL(value), path, issues);
+  } catch {
+    return;
+  }
+}
+
+function requireCredentialFreeConnectionUrl(
+  value: unknown,
+  path: string,
+  issues: CatalogValidationIssue[],
+  opts: { readonly optional?: boolean } = {},
+): void {
+  if (value === undefined && opts.optional) return;
+  if (typeof value !== "string") return;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return;
+  }
+  if (url.password.length > 0) {
+    issues.push({
+      path,
+      message: "must not include an embedded password",
+    });
+  }
+}
+
+function requireNoUrlUserinfo(
+  url: URL,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (url.username.length > 0 || url.password.length > 0) {
+    issues.push({
+      path,
+      message: "must not contain embedded credentials",
+    });
   }
 }
 
@@ -1580,6 +2099,37 @@ function requireHttpScheme(
   if (typeof value !== "string") return;
   if (value !== "http" && value !== "https") {
     issues.push({ path, message: 'must be "http" or "https"' });
+  }
+}
+
+function crossCheckHttpEndpointUrl(
+  value: Record<string, unknown>,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  if (typeof value.url !== "string") return;
+  let url: URL;
+  try {
+    url = new URL(value.url);
+  } catch {
+    return;
+  }
+  if (typeof value.scheme === "string") {
+    const scheme = url.protocol.replace(/:$/, "");
+    if (value.scheme !== scheme) {
+      issues.push({
+        path: `${path}.scheme`,
+        message: "must match the scheme in url",
+      });
+    }
+  }
+  if (typeof value.host === "string" && value.host.length > 0) {
+    if (value.host !== url.hostname) {
+      issues.push({
+        path: `${path}.host`,
+        message: "must match the host in url",
+      });
+    }
   }
 }
 
@@ -1661,7 +2211,31 @@ function checkSecretReferenceRecord(
     return;
   }
   for (const [key, entry] of Object.entries(value)) {
+    requireIdentifier(key, `${path}.${key}`, issues);
     requireSecretReference(entry, `${path}.${key}`, issues);
+  }
+}
+
+function checkObjectStoreCredentialRefs(
+  value: Record<string, unknown>,
+  path: string,
+  issues: CatalogValidationIssue[],
+): void {
+  const hasAccessKey = value.accessKeyIdRef !== undefined;
+  const hasSecretKey = value.secretAccessKeyRef !== undefined;
+  const hasSessionToken = value.sessionTokenRef !== undefined;
+  if (hasAccessKey !== hasSecretKey) {
+    issues.push({
+      path,
+      message:
+        "object-store credential refs require accessKeyIdRef and secretAccessKeyRef together",
+    });
+  }
+  if (hasSessionToken && !(hasAccessKey && hasSecretKey)) {
+    issues.push({
+      path: `${path}.sessionTokenRef`,
+      message: "sessionTokenRef requires accessKeyIdRef and secretAccessKeyRef",
+    });
   }
 }
 

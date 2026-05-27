@@ -1,11 +1,12 @@
 /**
  * AppSpec — the canonical Takosumi manifest (`.takosumi.yml`).
  *
- * v1 contract per the publication/listen model. Components declare local
- * publications (`publish.<name>`) and local bindings (`listen.<name>`). A
- * binding refers to a same-AppSpec publication with `component.publication`
- * or to a Space-visible external publication path such as
- * `publisher.area.name`. Public concepts remain limited to:
+ * v1 contract per the connect / platform-listen model. Components use
+ * `connect.<name>` for same-AppSpec component output wiring and
+ * `listen.<name>` only for Space-visible platform service paths such as
+ * `identity.primary.oidc`. Root `publish` records Installation output service
+ * path declarations for selected component outputs. Public concepts remain limited
+ * to:
  *   1. AppSpec       (= `.takosumi.yml`)
  *   2. Installation  (= a Space-scoped App)
  *   3. Deployment    (= one apply result)
@@ -34,6 +35,7 @@ export interface AppSpec {
   readonly apiVersion: typeof APP_SPEC_API_VERSION;
   readonly metadata: AppSpecMetadata;
   readonly components: Readonly<Record<string, Component>>;
+  readonly publish?: Readonly<Record<ExternalServiceName, PublishOptions>>;
 }
 
 export interface AppSpecMetadata {
@@ -47,46 +49,75 @@ export interface AppSpecMetadata {
 /**
  * Reference to a component kind. The AppSpec contract treats the value as an
  * opaque non-empty string. Operators may define short aliases (`worker`) or
- * use full URIs (`https://operator.example.com/kinds/lambda`), but alias
+ * use full URIs (`https://example.com/kinds/lambda`), but alias
  * resolution is outside this package.
  */
 export type ComponentKindRef = string;
 
 /**
- * Dotted path used by Space-visible external publications. A path has three
- * or more dot-separated segments, e.g. `publisher.identity.primary`.
+ * Dotted path used by Space-visible platform services. A path has three
+ * or more dot-separated segments, e.g. `identity.primary.oidc`.
  */
-export type ExternalPublicationPath = string;
+export type PlatformServicePath = string;
 
 /**
  * Local names used inside one AppSpec. The parser keeps the runtime type as a
- * string but validates names as single path segments, so
- * `component.publication` references are unambiguous.
+ * string but validates names as single path segments, so `component.output`
+ * references are unambiguous.
  */
-export type PublicationName = string;
+export type OutputSlotName = string;
+export type ExternalServiceName = string;
 export type BindingName = string;
 
 /**
- * Material contract alias or URI selected by `publish.<name>.as`.
- * Examples include `http-endpoint` and `service-binding`. Operators may use
- * full descriptor URIs.
+ * Same-AppSpec component output reference, formatted as `<component>.<output>`.
  */
-export type MaterialContractRef = string;
+export type ComponentOutputRef = string;
 
 /**
- * Same-AppSpec source reference, formatted as `<component>.<publication>`.
- */
-export type ComponentPublicationRef = string;
-
-/**
- * Space-visible external publication path, formatted as a dotted path with
+ * Space-visible platform service path, formatted as a dotted path with
  * three or more segments.
  */
-export type ExternalPublicationRef = ExternalPublicationPath;
-export type ListenSourceRef = ComponentPublicationRef | ExternalPublicationRef;
+export type PlatformServiceRef = PlatformServicePath;
+export type ListenSourceRef = ComponentOutputRef | PlatformServiceRef;
+
+const LOCAL_NAME_SEGMENT_RE = /^[a-z][a-z0-9-]{0,62}$/;
+
+export function isAppSpecLocalNameSegment(value: string): boolean {
+  return LOCAL_NAME_SEGMENT_RE.test(value);
+}
+
+export function isComponentOutputRef(
+  value: string,
+): value is ComponentOutputRef {
+  const segments = value.split(".");
+  return segments.length === 2 && segments.every(isAppSpecLocalNameSegment);
+}
 
 /**
- * Consumer-side projection family selected by `listen.<binding>.as`.
+ * `true` iff `value` is a Space-visible platform service path. `default`
+ * is an ordinary segment; Takosumi v1 performs no hidden default-path
+ * expansion.
+ */
+export function isPlatformServicePath(
+  value: string,
+): value is PlatformServicePath {
+  if (typeof value !== "string" || value.length === 0) return false;
+  if (value.length > 255) return false;
+  const segments = value.split(".");
+  if (segments.length < 3 || segments.length > 8) return false;
+  return segments.every(isAppSpecLocalNameSegment);
+}
+
+export function isPlatformServiceRef(
+  value: ListenSourceRef | string,
+): value is PlatformServiceRef {
+  return isPlatformServicePath(value);
+}
+
+/**
+ * Consumer-side projection family selected by `connect.<binding>.inject` or
+ * `listen.<binding>.inject`.
  * Common projection families are:
  *
  *   - `"env"`  — expand the material into env vars prefixed by `prefix`
@@ -111,57 +142,75 @@ export type MaterialShape =
   | "upstream"
   | (string & Record<never, never>);
 
+export type InjectionModeRef = MaterialShape;
+
 /**
- * Per-publish options declared on `Component.publish[<publicationName>]`.
+ * Per-connect options declared on `Component.connect[<bindingName>]`.
  *
- *   - `as` — material contract alias or URI for this publication.
- *
- * Output-to-material projection is defined by the component kind descriptor
- * and materializer. AppSpec authors name the publication and its contract;
- * they do not select backend output paths here.
+ *   - `output` — same-AppSpec component output (`component.outputSlot`).
+ *   - `inject` — the shape the material should take in this component's
+ *                runtime (env / secret-env / config-mount / upstream /
+ *                operator-defined).
+ *   - `prefix` — for env-like projections, the prefix used to derive env var
+ *                names.
+ *   - `mount`  — for path-based projections such as config-mount.
  */
-export interface PublishOptions {
-  readonly as: MaterialContractRef;
+export interface ConnectOptions {
+  readonly output: ComponentOutputRef;
+  readonly inject: InjectionModeRef;
+  readonly prefix?: string;
+  readonly mount?: string;
 }
 
 /**
  * Per-listen options declared on `Component.listen[<bindingName>]`.
  *
- *   - `from`   — source publication (`component.publication`) or
- *                Space-visible external publication path
- *                (`publisher.area.name`).
- *   - `as`     — the shape the material should take in this component's
+ *   - `path`   — Space-visible platform service path
+ *                (`identity.primary.oidc`). Same-AppSpec component outputs use
+ *                `connect`, not `listen`.
+ *   - `inject` — the shape the material should take in this component's
  *                runtime (env / secret-env / config-mount / upstream /
  *                operator-defined).
- *   - `prefix` — for `as: env`, the prefix used to derive env var names
- *                (e.g. `prefix: DB` + `{ url }` → `DB_URL`).
- *   - `mount`  — for path-based projections such as `as: config-mount`, the
+ *   - `prefix` — for env-like projections, the prefix used to derive env var
+ *                names.
+ *   - `mount`  — for path-based projections such as `inject: config-mount`, the
  *                filesystem path inside the component runtime where the material
  *                is mounted.
- *   - `required` — for external publication refs, fail apply when the
- *                  publication path is absent. Same-AppSpec refs are always
- *                  required by parser/topology validation.
+ *   - `required` — fail apply when the platform service path is absent.
  */
 export interface ListenOptions {
-  readonly from: ListenSourceRef;
-  readonly as: MaterialShape;
+  readonly path: PlatformServiceRef;
+  readonly inject: InjectionModeRef;
   readonly prefix?: string;
   readonly mount?: string;
   readonly required?: boolean;
 }
 
+export type BindingOptions = ConnectOptions | ListenOptions;
+
+/**
+ * Root-level Installation output service path declaration. This does not create
+ * a component-local connection. It records an already materialized component
+ * output in Deployment outputs; operator / product distributions can project
+ * that declaration into a Space-visible platform service inventory.
+ */
+export interface PublishOptions {
+  readonly output: ComponentOutputRef;
+  readonly path: PlatformServicePath;
+}
+
 export interface Component {
   readonly kind: ComponentKindRef;
   /**
-   * Local publications this component offers to other components in the same
-   * AppSpec. Each publication is referenced as
-   * `<componentName>.<publicationName>`.
+   * Deterministic same-AppSpec component output connections. Each entry names a
+   * source output (`component.outputSlot`) and how the material is injected into
+   * this component.
    */
-  readonly publish?: Readonly<Record<PublicationName, PublishOptions>>;
+  readonly connect?: Readonly<Record<BindingName, ConnectOptions>>;
   /**
-   * Local bindings this component consumes. Each binding names its source
-   * with `from` and controls how the material is surfaced to this component's
-   * runtime (env / secret-env / config-mount / upstream / operator-defined).
+   * Platform service bindings. These are resolved by the operator / Space
+   * context and are intentionally separate from deterministic same-AppSpec
+   * `connect` wiring.
    */
   readonly listen?: Readonly<Record<BindingName, ListenOptions>>;
   readonly spec?: JsonObject;

@@ -1,19 +1,19 @@
 # Quickstart {#quickstart}
 
-This local path checks manifest validation and the Deployment ledger. Public application endpoints need an operator environment with a gateway or ingress implementation.
+This local walkthrough covers manifest validation and the Deployment ledger. Public application endpoints need an operator environment with a gateway or ingress implementation.
 
-## Prerequisite
+## Prerequisites
 
 - [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.x or later
 
-## 1. Install The CLI
+## 1. Install the CLI
 
 ```bash
 deno install -gA -n takosumi jsr:@takos/takosumi-cli
 takosumi version
 ```
 
-## 2. Create A Source Root
+## 2. Create a Source Root
 
 ```bash
 mkdir hello-takosumi && cd hello-takosumi
@@ -44,7 +44,7 @@ components:
       entrypoint: src/worker.ts
 ```
 
-## 3. Start The Local Dev Server
+## 3. Start the Local Dev Server
 
 Takosumi has a server and a CLI that run separately. During development, start the server in the background and use the CLI from another shell.
 
@@ -97,7 +97,7 @@ takosumi install --space space_personal --source "$APP_ROOT" \
   --expected-manifest-digest sha256:<from-dry-run>
 ```
 
-Successful apply returns an Installation id and a Deployment id.
+A successful apply returns an Installation ID and a Deployment id.
 
 ```json
 {

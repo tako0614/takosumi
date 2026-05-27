@@ -7,15 +7,14 @@ export interface DatabasePostgresStorage {
 }
 
 export interface DatabasePostgresSpec {
-  /** Instance size class. */
-  readonly size: "small" | "medium" | "large" | "xlarge";
   /** PostgreSQL major version string (e.g. `15`, `16`). */
   readonly version: string;
   /** Request provider-managed HA when supported. Operator policy and the selected implementation materialize or reject the request. */
   readonly highAvailability?: boolean;
+  /** Instance size class. */
+  readonly size?: "small" | "medium" | "large" | "xlarge";
   /** Persistent volume sizing. */
   readonly storage?: DatabasePostgresStorage;
-  readonly [extension: string]: unknown;
 }
 
 export interface DatabasePostgresOutputs {
@@ -34,56 +33,69 @@ export interface DatabasePostgresOutputs {
 }
 
 export type DatabasePostgresCapabilityTerm =
-  | "pitr"
-  | "read-replicas"
+  | "postgres-wire"
+  | "managed-credentials"
   | "high-availability"
-  | "backups"
-  | "ssl-required"
-  | "ipv6"
-  | "extensions";
+  | "backups";
 
-export type DatabasePostgresPublicationName = "connection";
+export type DatabasePostgresOutputFieldName =
+  | "host"
+  | "port"
+  | "database"
+  | "username"
+  | "passwordSecretRef"
+  | "connectionString";
 
-export type DatabasePostgresPublicationContract = "service-binding";
+export type DatabasePostgresOutputSlotName = "connection";
 
-export interface DatabasePostgresPublicationDescriptor {
-  readonly name: DatabasePostgresPublicationName;
-  readonly contract: DatabasePostgresPublicationContract;
+export type DatabasePostgresOutputSlotContract = "service-binding";
+
+export interface DatabasePostgresOutputSlotDescriptor {
+  readonly name: DatabasePostgresOutputSlotName;
+  readonly contract: DatabasePostgresOutputSlotContract;
   readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
+}
+
+export interface DatabasePostgresListenSlotDescriptor {
+  readonly name: string;
+  readonly accepts?: readonly string[];
+  readonly projectionFamilies?: readonly string[];
+  readonly projectionMatrix?: Readonly<Record<string, readonly string[]>>;
+  readonly requiredWhenReferencedBy?: string;
+  readonly minimumAccess?: string;
+  readonly safeDefaultAccess?: string | null;
 }
 
 export const DATABASE_POSTGRES_CAPABILITY_TERMS:
   readonly DatabasePostgresCapabilityTerm[] = [
-    "pitr",
-    "read-replicas",
+    "postgres-wire",
+    "managed-credentials",
     "high-availability",
     "backups",
-    "ssl-required",
-    "ipv6",
-    "extensions",
   ];
 
-export const DATABASE_POSTGRES_OUTPUT_FIELDS: readonly string[] = [
-  "host",
-  "port",
-  "database",
-  "username",
-  "passwordSecretRef",
-  "connectionString",
-];
+export const DATABASE_POSTGRES_OUTPUT_FIELDS:
+  readonly DatabasePostgresOutputFieldName[] = [
+    "host",
+    "port",
+    "database",
+    "username",
+    "passwordSecretRef",
+    "connectionString",
+  ];
 
-// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.
+// referenceAliases are catalog suggestions only; operator distributions activate aliases explicitly.
 export const DATABASE_POSTGRES_ALIASES: readonly string[] = [
   "postgres",
 ];
 
-export const DATABASE_POSTGRES_PUBLICATIONS:
-  readonly DatabasePostgresPublicationName[] = [
+export const DATABASE_POSTGRES_OUTPUT_SLOTS:
+  readonly DatabasePostgresOutputSlotName[] = [
     "connection",
   ];
 
-export const DATABASE_POSTGRES_PUBLICATION_DESCRIPTORS:
-  readonly DatabasePostgresPublicationDescriptor[] = [
+export const DATABASE_POSTGRES_OUTPUT_SLOT_DESCRIPTORS:
+  readonly DatabasePostgresOutputSlotDescriptor[] = [
     {
       name: "connection",
       contract: "service-binding",
@@ -101,6 +113,9 @@ export const DATABASE_POSTGRES_PUBLICATION_DESCRIPTORS:
       },
     },
   ];
+
+export const DATABASE_POSTGRES_LISTEN_SLOTS:
+  readonly DatabasePostgresListenSlotDescriptor[] = [];
 // Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
 export const DATABASE_POSTGRES_KIND_SHAPE_ID = "postgres";
 /** @deprecated Use DATABASE_POSTGRES_KIND_URI for AppSpec kind identity, or DATABASE_POSTGRES_KIND_SHAPE_ID for legacy Shape.id. */
@@ -111,4 +126,4 @@ export const DATABASE_POSTGRES_KIND_URI =
   "https://takosumi.com/kinds/v1/postgres";
 export const DATABASE_POSTGRES_KIND_VERSION = "v1";
 export const DATABASE_POSTGRES_DESCRIPTION =
-  "Managed PostgreSQL instance intended to be bindable across compatible providers through the standard wire protocol. Publishes connection material as a local publication.";
+  "Managed PostgreSQL instance intended to be bindable across compatible providers through the standard wire protocol. Publishes connection material as a local output slot.";

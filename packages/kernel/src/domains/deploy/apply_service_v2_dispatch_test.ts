@@ -10,17 +10,21 @@
 import assert from "node:assert/strict";
 import {
   type ApplyResult,
+  type ProviderPlugin,
+  registerProvider,
+  unregisterProvider,
+} from "takosumi-contract/internal/provider-plugin";
+import {
   InMemoryObservabilitySink,
   kms,
   objectStorage,
-  type ProviderPlugin,
-  registerProvider,
-  registerShape,
   secretStore,
+} from "takosumi-contract/reference/plugin-sdk";
+import {
+  registerShape,
   type Shape,
-  unregisterProvider,
   unregisterShape,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/shape";
 import { ApplyService } from "./apply_service.ts";
 import { InMemoryDeploymentStore } from "./deployment_service.ts";
 import type { PublicDeployManifest } from "./types.ts";

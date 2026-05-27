@@ -1,6 +1,6 @@
 # バインディングモデル {#link-and-projection-model}
 
-Component kind が定義する resource 配線は Link intent を作る。current manifest では `components.<name>.listen` edge から発生する。manifest author は `listen.from` で source を選び、`listen.as` で injection mode を選ぶ。 resolved access mode は operator policy、publish の出力の declaration、consumer slot metadata から resolution 中に決まる。Link は 1 つの Space の中で consumer slot を producer output または PlatformServiceDeclaration snapshot に接続する。
+Component kind が定義する resource 配線は Link intent を作る。current manifest では `components.<name>.connect` と `components.<name>.listen` edge から発生する。manifest author は `connect.output` または `listen.path` で source を選び、`inject` で injection mode を選ぶ。resolved access mode は operator policy、output slot declaration、consumer slot metadata から resolution 中に決まる。Link は 1 つの Space の中で consumer slot を producer output または PlatformServiceDeclaration snapshot に接続する。
 
 ## Link レコード {#link-record}
 
@@ -10,7 +10,7 @@ Link:
   id: link_api_DATABASE_URL
   consumer: obj_api
   slot: DATABASE_URL
-  sourcePublicationSnapshotId: pubsnap_publisher.database.primary@...
+  sourceServiceSnapshotId: svcsnap_database.primary.connection@...
   sourceSpaceId: space_acme_prod
   access: read-write
   selectedProjection:
@@ -29,7 +29,7 @@ ProjectionSelection は Link field として扱う internal selection record で
 
 ## Space ルール {#space-rule}
 
-current public manifest の Link は、consumer Object を same-manifest component publication または同じ Space に見える operator PlatformServiceDeclaration に接続する。 Space を跨ぐ Link は operator-internal / future sharing model であり、manifest v1 から直接作る construct ではない。
+current public manifest の Link は、consumer Object を same-manifest component output または同じ Space に見える operator PlatformServiceDeclaration に接続する。 Space を跨ぐ Link は operator-internal / future sharing model であり、manifest v1 から直接作る construct ではない。
 
 ## Projection ファミリ {#projection-families}
 
@@ -40,24 +40,24 @@ upstream
 config-mount
 ```
 
-Secret の publish の出力はプレーンな `env` に projection してはならない。 `upstream` は gateway / ingress kind が `listen` した HTTP 出力データを kind-specific route rule から参照する injection mode です。`routes[].to` は `listen` binding name を指し、別の route graph や public URL assignment を作る field ではありません。 `http-endpoint` は injection mode ではなく output type です。 Operator distribution は独自の injection mode を追加できます。その family を portable official catalog term として扱う場合は、type catalog に意味と出力データの compatibility を追加します。`file-secret`、`runtime-capability`, `volume-mount` のような implementation-specific families は operator extension です。portable official catalog term として使うには type catalog で定義します。
+Secret-bearing output はプレーンな `env` に projection してはならない。 `upstream` は gateway / ingress kind が `connect` した HTTP 出力データを kind-specific route rule から参照する injection mode です。`routes[].to` は `connect` binding name を指し、別の route graph や public URL assignment を作る field ではありません。 `http-endpoint` は injection mode ではなく output type です。 Operator distribution は独自の injection mode を追加できます。その family を portable official catalog term として扱う場合は、type catalog に意味と出力データの compatibility を追加します。`file-secret`、`runtime-capability`, `volume-mount` のような implementation-specific families は operator extension です。portable official catalog term として使うには type catalog で定義します。
 
 ## Compatibility check {#compatibility-check}
 
 Link resolution は resource side effect の前に次を検証します。
 
-1. `listen.from` が same-manifest の publish の出力か Space-visible PlatformServiceDeclaration に exact match する。
-2. source の output type alias / URI が解決済みで、出力データの metadata、 publish の出力の declaration、operator policy、または採用済み kind の定義から version / sensitivity 相当の判断材料が取得できる。
-3. `listen.as` injection mode が source output type で許可される。
-4. PlatformServiceDeclaration 由来の場合、resolved access mode が publish の出力の `accessModes` と operator policy で許可される。
-5. publisher role、materialization evidence、operator policy、採用済み kind の定義が requested projection を許可する。特に `http-endpoint` を `listen.as: upstream` で受ける場合は、source が upstream として再利用可能かを backend / operator policy / kind の定義で確認する。
+1. `connect.output` が same-manifest output に解決するか、`listen.path` が Space-visible PlatformServiceDeclaration に exact match する。
+2. source の output type alias / URI が解決済みで、出力データの metadata、output slot declaration、operator policy、または採用済み kind の定義から version / sensitivity 相当の判断材料が取得できる。
+3. `inject` が source output type で許可される。
+4. PlatformServiceDeclaration 由来の場合、resolved access mode が service declaration の `accessModes` と operator policy で許可される。
+5. service owner role、materialization evidence、operator policy、採用済み kind の定義が requested projection を許可する。特に `http-endpoint` を `inject: upstream` で受ける場合は、source が upstream として再利用可能かを backend / operator policy / kind の定義で確認する。
 6. secret / restricted 出力データを plain env や public URL へ落とす unsafe projection は fail-closed で拒否する。
 
-成功した selection は Deployment に紐づく deploy evidence に、publish の出力 / そのスナップショット、output type、projection family、access mode として記録されます。
+成功した selection は Deployment に紐づく deploy evidence に、output material / そのスナップショット、output type、projection family、access mode として記録されます。
 
 ## Access の既定値 {#access-defaults}
 
-credential や authorization の出力データを生み出す publish の出力は、その publish が `safeDefaultAccess` を宣言していない限り operator policy による明示的な access mode 選択を必要とする。closed な v1 access mode 語彙は [Kind Resolution Model — Access mode enum](./kind-resolution-model.md) にある。
+credential や authorization の出力データを生み出す output slot は、その slot が `safeDefaultAccess` を宣言していない限り operator policy による明示的な access mode 選択を必要とする。closed な v1 access mode 語彙は [Kind Resolution Model — Access mode enum](./kind-resolution-model.md) にある。
 
 ```yaml
 components:
@@ -66,18 +66,15 @@ components:
     spec:
       version: "16"
       size: small
-    publish:
-      connection:
-        as: service-binding
 
   api:
     kind: worker
     spec:
       entrypoint: src/worker.ts
-    listen:
+    connect:
       database:
-        from: db.connection
-        as: secret-env
+        output: db.connection
+        inject: secret-env
         prefix: DATABASE
 ```
 
@@ -96,7 +93,7 @@ reauthorize:
   access mode or authorization details change
 
 rewire:
-  source publication changes
+  source component output or platform service path changes
 
 revoke:
   link removed; generated material revoked

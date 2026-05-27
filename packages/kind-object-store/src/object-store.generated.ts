@@ -2,80 +2,77 @@
 // Run `deno task spec:generate-ts` to refresh.
 
 export interface ObjectStoreSpec {
-  /** Logical bucket name (provider applies its own scoping rules). */
+  /** Logical bucket name (operator applies implementation scoping rules). */
   readonly name: string;
-  /** Request anonymous-read policy when true. Operator policy and the selected implementation materialize or reject the request. */
-  readonly public?: boolean;
-  /** Provider region (when applicable). */
-  readonly region?: string;
-  /** Request object versioning. Operator policy and the selected implementation materialize or reject the request. */
-  readonly versioning?: boolean;
-  readonly [extension: string]: unknown;
 }
 
 export interface ObjectStoreOutputs {
-  /** Provider-scope bucket name. */
+  /** Implementation-scoped bucket name. */
   readonly bucket: string;
   /** S3-class endpoint URL. */
   readonly endpoint: string;
   /** Bucket region. */
-  readonly region: string;
-  /** Reference to secret store entry holding access key id. */
-  readonly accessKeyRef: string;
-  /** Reference to secret store entry holding secret access key. */
-  readonly secretKeyRef: string;
+  readonly region?: string;
+  /** Reference to secret store entry holding the access key id. */
+  readonly accessKeyIdRef?: string;
+  /** Reference to secret store entry holding the secret access key. */
+  readonly secretAccessKeyRef?: string;
 }
 
-export type ObjectStoreCapabilityTerm =
-  | "versioning"
-  | "presigned-urls"
-  | "server-side-encryption"
-  | "public-access"
-  | "event-notifications"
-  | "lifecycle-rules"
-  | "multipart-upload";
+export type ObjectStoreCapabilityTerm = "s3-compatible";
 
-export type ObjectStorePublicationName = "bucket";
+export type ObjectStoreOutputFieldName =
+  | "bucket"
+  | "endpoint"
+  | "region"
+  | "accessKeyIdRef"
+  | "secretAccessKeyRef";
 
-export type ObjectStorePublicationContract = "object-store";
+export type ObjectStoreOutputSlotName = "bucket";
 
-export interface ObjectStorePublicationDescriptor {
-  readonly name: ObjectStorePublicationName;
-  readonly contract: ObjectStorePublicationContract;
+export type ObjectStoreOutputSlotContract = "object-store";
+
+export interface ObjectStoreOutputSlotDescriptor {
+  readonly name: ObjectStoreOutputSlotName;
+  readonly contract: ObjectStoreOutputSlotContract;
   readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
+}
+
+export interface ObjectStoreListenSlotDescriptor {
+  readonly name: string;
+  readonly accepts?: readonly string[];
+  readonly projectionFamilies?: readonly string[];
+  readonly projectionMatrix?: Readonly<Record<string, readonly string[]>>;
+  readonly requiredWhenReferencedBy?: string;
+  readonly minimumAccess?: string;
+  readonly safeDefaultAccess?: string | null;
 }
 
 export const OBJECT_STORE_CAPABILITY_TERMS:
   readonly ObjectStoreCapabilityTerm[] = [
-    "versioning",
-    "presigned-urls",
-    "server-side-encryption",
-    "public-access",
-    "event-notifications",
-    "lifecycle-rules",
-    "multipart-upload",
+    "s3-compatible",
   ];
 
-export const OBJECT_STORE_OUTPUT_FIELDS: readonly string[] = [
-  "bucket",
-  "endpoint",
-  "region",
-  "accessKeyRef",
-  "secretKeyRef",
-];
+export const OBJECT_STORE_OUTPUT_FIELDS: readonly ObjectStoreOutputFieldName[] =
+  [
+    "bucket",
+    "endpoint",
+    "region",
+    "accessKeyIdRef",
+    "secretAccessKeyRef",
+  ];
 
-// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.
+// referenceAliases are catalog suggestions only; operator distributions activate aliases explicitly.
 export const OBJECT_STORE_ALIASES: readonly string[] = [
   "object-store",
 ];
 
-export const OBJECT_STORE_PUBLICATIONS: readonly ObjectStorePublicationName[] =
-  [
-    "bucket",
-  ];
+export const OBJECT_STORE_OUTPUT_SLOTS: readonly ObjectStoreOutputSlotName[] = [
+  "bucket",
+];
 
-export const OBJECT_STORE_PUBLICATION_DESCRIPTORS:
-  readonly ObjectStorePublicationDescriptor[] = [
+export const OBJECT_STORE_OUTPUT_SLOT_DESCRIPTORS:
+  readonly ObjectStoreOutputSlotDescriptor[] = [
     {
       name: "bucket",
       contract: "object-store",
@@ -84,14 +81,17 @@ export const OBJECT_STORE_PUBLICATION_DESCRIPTORS:
         "endpoint": "$outputs.endpoint",
         "region": "$outputs.region",
         "accessKeyIdRef": {
-          "secretRef": "$outputs.accessKeyRef",
+          "secretRef": "$outputs.accessKeyIdRef",
         },
         "secretAccessKeyRef": {
-          "secretRef": "$outputs.secretKeyRef",
+          "secretRef": "$outputs.secretAccessKeyRef",
         },
       },
     },
   ];
+
+export const OBJECT_STORE_LISTEN_SLOTS:
+  readonly ObjectStoreListenSlotDescriptor[] = [];
 // Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
 export const OBJECT_STORE_KIND_SHAPE_ID = "object-store";
 /** @deprecated Use OBJECT_STORE_KIND_URI for AppSpec kind identity, or OBJECT_STORE_KIND_SHAPE_ID for legacy Shape.id. */
@@ -102,4 +102,4 @@ export const OBJECT_STORE_KIND_URI =
   "https://takosumi.com/kinds/v1/object-store";
 export const OBJECT_STORE_KIND_VERSION = "v1";
 export const OBJECT_STORE_DESCRIPTION =
-  "Bucket-style object storage intended to be bindable across compatible S3-class providers. Publishes endpoint + credential refs as a local publication.";
+  "Bucket-style object storage intended to be bindable across compatible S3-class providers. Backend-specific placement, versioning, and public access controls belong to native object-store kinds.";

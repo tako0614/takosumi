@@ -1,12 +1,14 @@
 import {
   capabilitySubsetIssues,
   getProvider,
-  getShapeByRef,
   listProvidersForShape,
-  parseShapeRef,
   type ProviderPlugin,
+} from "takosumi-contract/internal/provider-plugin";
+import {
+  getShapeByRef,
+  parseShapeRef,
   type Shape,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/shape";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 
 export interface ResolvedResourceV2 {

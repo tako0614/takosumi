@@ -1,8 +1,9 @@
 # HTTP Exposure {#http-exposure}
 
-Public app endpoints are modeled as normal component connections. A workload publishes callable HTTP output, and an ingress component such as `gateway` listens to that output and connects it to the gateway kind's listener and route configuration.
-
-`listeners` and `routes` are part of the adopted gateway kind definition's `spec` schema. They are not manifest root fields. Operator and provider capability decide which listener, TLS, host, and route features are supported. Unsupported features are rejected before resource creation.
+HTTP exposure is a component graph. A workload has an HTTP output, and a
+gateway or ingress component connects to that output and exposes it through
+listener and route configuration. Browser reachability is defined by the
+gateway kind's `spec`; root `publish` is not required for reachability.
 
 ```yaml
 apiVersion: v1
@@ -14,19 +15,13 @@ components:
     kind: worker
     spec:
       entrypoint: src/worker.ts
-    publish:
-      http:
-        as: http-endpoint
 
   public:
     kind: gateway
-    listen:
+    connect:
       app:
-        from: web.http
-        as: upstream
-    publish:
-      public:
-        as: http-endpoint
+        output: web.http
+        inject: upstream
     spec:
       listeners:
         public:
@@ -39,13 +34,24 @@ components:
           to: app
 ```
 
-`web.http` is workload upstream output and usually contains `targets[]`. `public.public` is gateway or ingress public endpoint output and usually contains `endpoints[]`. Both use the `http-endpoint` contract, but the publisher role is different. `routes[].to` points to a `listen` key; in this example the key is `app`.
+`listeners` and `routes` are part of the gateway kind's `spec` schema.
+`routes[].to` points to a `connect` binding key. In this example the key is
+`app` and the injection mode is `upstream`.
 
-## Portable Route Semantics {#portable-route-semantics}
+Root `publish` is an optional declaration for recording the gateway output as
+an Installation output service path declaration in Deployment outputs.
+HTTP listeners, hosts, TLS, and route rules are handled by the gateway or
+ingress kind's `spec`.
 
-The normative portable route semantics live in the [Kind Catalog](./type-catalog.md#gateway-portable-subset). Gateway deployment output is non-secret `http-endpoint` output data with `endpoints[]`. Each endpoint records `url`, `scheme`, `host`, `listener`, `visibility`, `primary`, and optional `routes[]`.
+Add root `publish` only when an operator or product distribution should be able
+to project the public endpoint into a Space-visible platform service inventory:
 
-When multiple public endpoints are produced, exactly one endpoint is primary. Unsupported listener, TLS policy, host, or path prefix settings are rejected before resource creation.
+```yaml
+publish:
+  public-endpoint:
+    output: public.public
+    path: acme.web.public
+```
 
 ## Request Path {#request-path}
 
@@ -54,24 +60,32 @@ Install and deploy are separate from runtime request handling.
 ```text
 install / deploy:
   manifest -> Installer API -> Deployment record / outputs
-          -> selected backend/operator configuration
+          -> selected backend/operator binding
 
 runtime request:
   client -> backend-native listener/route -> active workload
          <- same backend data plane <- response
 ```
 
-Takosumi records manifest validation, publish/listen resolution, Deployment outputs, and Deployment record. The selected backend or operator configuration uses that record to create backend-native ingress. Runtime HTTP requests do not pass through the Installer API.
+Takosumi records manifest validation, connection resolution, Deployment outputs,
+and Deployment record during deploy. The selected backend or operator binding
+creates backend-native ingress config. Runtime HTTP requests are delivered by
+the backend-native listener or route to the active workload.
 
-Runtime traffic authority is the `succeeded` Deployment pointed to by `Installation.currentDeploymentId` plus the ingress Deployment record linked to that Deployment. `running` and `failed` Deployments are history, not HTTP traffic authority. Rollback moves the pointer back to a previous succeeded Deployment and reuses that Deployment's public/non-secret outputs and reactivation record.
+Runtime traffic authority is the `succeeded` Deployment pointed to by
+`Installation.currentDeploymentId`. `running` and `failed` Deployments are
+history. Rollback moves the current pointer back to a previous succeeded
+Deployment.
 
 ## Domain Policy {#domain-policy}
 
-`spec.listeners.<name>.host` is gateway-specific ingress input defined by that kind. If `host` is omitted, the adopted kind definition and operator policy define the meaning. An operator-assigned default public host can appear in the produced public endpoint output.
-
-Domain reservation, custom-domain proof, DNS ownership proof, and TLS provisioning belong to the adopted kind definition, operator policy, and backend-specific flow. The manifest does not carry backend object ids, DNS verification records, TLS certificate handles, or generated object references.
+`spec.listeners.<name>.host` is gateway-specific ingress input. Default host
+assignment, custom-domain proof, DNS ownership proof, and TLS provisioning are
+handled by the adopted gateway kind, operator policy, and backend-specific
+flow. The manifest does not carry backend object ids, DNS verification records,
+TLS certificate handles, or generated object references.
 
 ## Related Pages {#related-pages}
 
 - [Manifest](./manifest.md)
-- [Kind Catalog](./type-catalog.md)
+- [Official Type Catalog](./type-catalog.md)

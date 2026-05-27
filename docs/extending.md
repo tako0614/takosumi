@@ -11,12 +11,12 @@ Manifest には component の kind 名と `spec` を書きます。Takosumi は 
 
 ## 新しい kind を追加する
 
-再利用可能な kind は安定した kind URI と kind の定義で意味を公開します。 operator はその URI に実行環境への接続を別途追加して実行可能にします。対応 kind 一覧の定義は JSON-LD を公開形式として使います。
+再利用可能な kind は安定した kind URI と kind の定義で意味を公開します。 operator はその URI に実行環境への接続を別途追加して実行可能にします。公式型カタログの定義は JSON-LD を公開形式として使います。
 
 ```json
 {
   "@context": "https://takosumi.com/contexts/v1.jsonld",
-  "@id": "https://operator.example.com/kinds/cache",
+  "@id": "https://example.com/kinds/cache",
   "name": "cache",
   "spec": {
     "type": "object",
@@ -26,7 +26,7 @@ Manifest には component の kind 名と `spec` を書きます。Takosumi は 
     },
     "required": ["engine"]
   },
-  "publications": {
+  "outputSlots": {
     "endpoint": {
       "contract": "http-endpoint",
       "exampleMaterialMapping": {
@@ -53,20 +53,24 @@ Manifest 側では operator が解決できる `kind` を使います。
 ```yaml
 components:
   cache:
-    kind: https://operator.example.com/kinds/cache
+    kind: https://example.com/kinds/cache
     spec:
       engine: valkey
       size: small
-    publish:
-      endpoint:
-        as: http-endpoint
+  api:
+    kind: https://example.com/kinds/worker
+    connect:
+      cache:
+        output: cache.endpoint
+        inject: env
+        prefix: CACHE
 ```
 
 ## 実行環境への接続を追加する
 
 接続設定は、kind の定義と出力の型 (`service-binding` 等) を具体的な backend runtime やリソースの作成・更新に結びつけます。公開仕様として共有されるのは、kind URI、kind の定義、出力の型、出力データの生成方法、Deployment に出す non-secret な出力データです。
 
-接続設定の読み込み方法、別プロセス化、backend API への接続、credential 注入方法は実装や operator の設定が選びます。Manifest author が覚える語彙は `kind` / `spec` / `publish` / `listen` に閉じます。
+接続設定の読み込み方法、別プロセス化、backend API への接続、credential 注入方法は実装や operator の設定が選びます。Manifest author が覚える component 語彙は `kind` / `spec` / `connect` / `listen` に閉じます。selected component output を Installation output service path declaration として記録する場合だけ root `publish` を使います。
 
 ## 確認項目
 
@@ -79,6 +83,6 @@ components:
 ## 関連ページ
 
 - [Manifest](./reference/manifest.md)
-- [対応 kind 一覧](./reference/type-catalog.md)
-- [外部サービス](./reference/external-publications.md)
+- [公式型カタログ](./reference/type-catalog.md)
+- [プラットフォームサービス](./reference/platform-services.md)
 - [ビルドサービス境界](./reference/build-spec.md)

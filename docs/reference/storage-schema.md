@@ -1,7 +1,7 @@
 # ストレージスキーマ {#storage-schema}
 
 ::: info
-内部設計メモ public contract は [Installer API](./installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](./installer-api.md) を参照。
 :::
 
 このページは Takosumi core records と reference/operator extension records の索引です。実際の storage backend は Postgres / SQLite / D1 / in-memory など operator が選べます。

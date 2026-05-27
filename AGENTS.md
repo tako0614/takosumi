@@ -1,6 +1,6 @@
 # AGENTS.md — Takosumi
 
-This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the contract package, reference kernel, installer, CLI, generic runtime-agent host, portable official kind catalog packages, and the umbrella package published to JSR. Backend-specific native kind plugin packages and concrete runtime-agent connectors live in the sibling `takosumi-plugins` repository.
+This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the contract package, reference kernel, installer, CLI, generic runtime-agent host, portable official type catalog packages, and the umbrella package published to JSR. Backend-specific native kind plugin packages and concrete runtime-agent connectors live in the sibling `takosumi-plugins` repository.
 
 Canonical contract: [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (`packages/contract/`).
 
@@ -8,8 +8,10 @@ Canonical contract: [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-
 
 Takosumi AppSpec is kind-agnostic and intentionally small:
 
-- AppSpec root: `{ apiVersion, metadata, components }`
-- Component: `{ kind, spec, publish, listen }`
+- AppSpec root: `apiVersion: "v1"`, `metadata.id`, `metadata.name`,
+  `components`, and optional root `publish`
+- Component: `{ kind, spec, connect, listen }`
+- Root `publish` records Installation output service path declarations.
 - `apiVersion` is bare `"v1"`.
 - Root `kind: App`, component `build`, `use:` edges, placeholder interpolation, `routes`, `interfaces`, and `permissions` are not part of the contract.
 
@@ -36,7 +38,7 @@ takosumi/
 
 Kind packages are split by ownership:
 
-- Portable kind packages define author-facing shapes: `kind-worker`, `kind-web-service`, `kind-postgres`, `kind-object-store`, `kind-gateway`.
+- Portable kind packages define author-facing shapes: `kind-worker`, `kind-web-service`, `kind-postgres`, `kind-sqlite`, `kind-object-store`, `kind-kv-store`, `kind-message-queue`, `kind-vector-store`, `kind-gateway`.
 - Native kind plugin packages and concrete runtime-agent connectors bind concrete backends into the reference kernel and live in `../takosumi-plugins`: Cloudflare Workers/R2/DNS, Deno Deploy, AWS Fargate/RDS/S3/Route53, GCP Cloud Run/Cloud SQL/GCS/Cloud DNS, Kubernetes, Docker Compose, systemd, MinIO, filesystem, Docker Postgres, CoreDNS, Cloudflare Containers, and Azure Container Apps.
 
 ## Public Concepts
@@ -49,14 +51,19 @@ Kind packages are split by ownership:
 
 Specification language should stay centered on these concepts. Ownership, billing, permissions, account dashboards, and deploy facades belong to operator distributions such as Takosumi Cloud.
 
-## Publish / Listen
+## Connect / Listen / Publish
 
-Component connections use only `publish` and `listen`.
+Component connections use `connect` for deterministic same-AppSpec wiring and
+`listen` for Space-visible platform services.
 
-- `publish: { <name>: { as } }` offers component material as `component.publication`.
-- `listen: { <binding>: { from, as, prefix?, mount?, required? } }` resolves a same-AppSpec `component.publication` or an operator-owned external publication path.
+- `connect: { <binding>: { output, inject, prefix?, mount? } }` consumes a
+  same-AppSpec component output such as `db.connection`.
+- `listen: { <binding>: { path, inject, prefix?, mount?, required? } }`
+  consumes a platform service path such as `identity.primary.oidc`.
+- root `publish: { <name>: { output, path } }` records an Installation
+  output service path declaration for a materialized component output.
 
-OIDC is an external publication from an operator account plane, for example `operator.identity.oidc`. It is not a special Takosumi core component kind.
+OIDC is platform service output from an operator account plane, for example a distribution-defined path such as `identity.primary.oidc`. It is not a special Takosumi core component kind. Takosumi Cloud defines its concrete paths in the Cloud docs.
 
 ## Source And Build
 
@@ -72,8 +79,8 @@ The reference implementation uses `KernelPlugin` factories, passed as a plain ar
 createPaaSApp({
   kindAliases,
   plugins: [
-    cloudflareWorkerPlugin(),
-    cloudflareR2ObjectStorePlugin(),
+    cloudflareWorkerPlugin({ lifecycle: cloudflareWorkerLifecycle }),
+    cloudflareR2ObjectStorePlugin({ lifecycle: cloudflareR2Lifecycle }),
   ],
 });
 ```
@@ -96,7 +103,7 @@ The public Installer API surface is five endpoints:
 - `POST /v1/installations/{id}/deployments`
 - `POST /v1/installations/{id}/rollback`
 
-Use `409 failed_precondition` for lifecycle guard failures such as source pin mismatch, prepared digest mismatch, expected guard mismatch, missing required external publication, or non-portable local source omission. Use `413 resource_exhausted` for request, manifest, or source size limits. The v1 surface does not use a caller-supplied Idempotency-Key header.
+Use `409 failed_precondition` for lifecycle guard failures such as source pin mismatch, prepared digest mismatch, expected guard mismatch, missing required platform service, or non-portable local source omission. Use `413 resource_exhausted` for request, manifest, or source size limits. The v1 surface does not use a caller-supplied Idempotency-Key header.
 
 ## JSR Publish Layout
 
@@ -116,7 +123,11 @@ Portable kind descriptor packages in this repository:
 - `@takos/takosumi-kind-worker`
 - `@takos/takosumi-kind-web-service`
 - `@takos/takosumi-kind-postgres`
+- `@takos/takosumi-kind-sqlite`
 - `@takos/takosumi-kind-object-store`
+- `@takos/takosumi-kind-kv-store`
+- `@takos/takosumi-kind-message-queue`
+- `@takos/takosumi-kind-vector-store`
 - `@takos/takosumi-kind-gateway`
 
 Native plugin packages in `../takosumi-plugins` keep their published

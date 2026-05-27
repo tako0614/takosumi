@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { kernelPluginFromProviderPlugin } from "./kernel-plugin-adapter.ts";
 import type { ProviderPlugin } from "./provider-plugin.ts";
 
-Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into legacy spec", async () => {
+Deno.test("kernelPluginFromProviderPlugin injects resolved env into legacy spec", async () => {
   let seenSpec: unknown;
   const provider: ProviderPlugin = {
     id: "@test/gateway",
@@ -54,7 +54,7 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into l
         listenerComponent: "domain",
         bindingName: "db",
         sourceRef: "database.connection",
-        options: { from: "database.connection", as: "env", prefix: "DB" },
+        options: { output: "database.connection", inject: "env", prefix: "DB" },
         envInjections: { DB_HOST: "db.internal" },
         material: { host: "db.internal" },
       },
@@ -62,7 +62,7 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into l
         listenerComponent: "domain",
         bindingName: "app",
         sourceRef: "web.http",
-        options: { from: "web.http", as: "upstream" },
+        options: { output: "web.http", inject: "upstream" },
         envInjections: {},
         target: {
           targets: [{
@@ -85,11 +85,10 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env and target into l
   assert.deepEqual(seenSpec, {
     name: "api.example.com",
     env: { EXISTING: "1", DB_HOST: "db.internal" },
-    target: "https://web.example.com",
   });
 });
 
-Deno.test("kernelPluginFromProviderPlugin publishes provider outputs as namespace material", async () => {
+Deno.test("kernelPluginFromProviderPlugin projects provider outputs as output material", async () => {
   const provider: ProviderPlugin = {
     id: "@test/postgres",
     version: "1.0.0",
@@ -117,15 +116,11 @@ Deno.test("kernelPluginFromProviderPlugin publishes provider outputs as namespac
     kindUri: "https://takosumi.com/kinds/v1/postgres",
   });
 
-  const material = await plugin.publishMaterial!({
+  const material = await plugin.materializeOutput!({
     installationId: "ins_1",
     componentName: "db",
-    component: {
-      kind: "postgres",
-      publish: { connection: { as: "service-binding" } },
-    },
-    publicationName: "connection",
-    options: { as: "service-binding" },
+    component: { kind: "postgres" },
+    outputName: "connection",
     outputs: {
       host: "db.internal",
       port: 5432,
@@ -135,11 +130,10 @@ Deno.test("kernelPluginFromProviderPlugin publishes provider outputs as namespac
   });
 
   assert.deepEqual(material, {
-    service: "db.internal",
     host: "db.internal",
     port: 5432,
-    protocol: "postgresql",
-    passwordRef: { secretRef: "secret://postgres/password" },
+    passwordSecretRef: { secretRef: "secret://postgres/password" },
+    configRef: "config://postgres",
   });
 });
 
@@ -156,8 +150,8 @@ Deno.test("kernelPluginFromProviderPlugin projects object-store outputs to offic
           bucket: "assets",
           endpoint: "https://s3.example.test",
           region: "auto",
-          accessKeyRef: "secret://bucket/access-key",
-          secretKeyRef: "secret://bucket/secret-key",
+          accessKeyIdRef: "secret://bucket/access-key-id",
+          secretAccessKeyRef: "secret://bucket/secret-access-key",
         },
       }),
     destroy: () => Promise.resolve(),
@@ -172,21 +166,17 @@ Deno.test("kernelPluginFromProviderPlugin projects object-store outputs to offic
     kindUri: "https://takosumi.com/kinds/v1/object-store",
   });
 
-  const material = await plugin.publishMaterial!({
+  const material = await plugin.materializeOutput!({
     installationId: "ins_1",
     componentName: "bucket",
-    component: {
-      kind: "object-store",
-      publish: { bucket: { as: "object-store" } },
-    },
-    publicationName: "bucket",
-    options: { as: "object-store" },
+    component: { kind: "object-store" },
+    outputName: "bucket",
     outputs: {
       bucket: "assets",
       endpoint: "https://s3.example.test",
       region: "auto",
-      accessKeyRef: "secret://bucket/access-key",
-      secretKeyRef: "secret://bucket/secret-key",
+      accessKeyIdRef: "secret://bucket/access-key-id",
+      secretAccessKeyRef: "secret://bucket/secret-access-key",
     },
   });
 
@@ -194,8 +184,27 @@ Deno.test("kernelPluginFromProviderPlugin projects object-store outputs to offic
     bucket: "assets",
     endpoint: "https://s3.example.test",
     region: "auto",
-    accessKeyIdRef: { secretRef: "secret://bucket/access-key" },
-    secretAccessKeyRef: { secretRef: "secret://bucket/secret-key" },
+    accessKeyIdRef: { secretRef: "secret://bucket/access-key-id" },
+    secretAccessKeyRef: { secretRef: "secret://bucket/secret-access-key" },
+  });
+
+  const legacyAliasMaterial = await plugin.materializeOutput!({
+    installationId: "ins_1",
+    componentName: "bucket",
+    component: { kind: "object-store" },
+    outputName: "bucket",
+    outputs: {
+      bucket: "assets",
+      endpoint: "https://s3.example.test",
+      accessKeyRef: "secret://bucket/access-key",
+      secretKeyRef: "secret://bucket/secret-key",
+    },
+  });
+  assert.deepEqual(legacyAliasMaterial, {
+    bucket: "assets",
+    endpoint: "https://s3.example.test",
+    accessKeyRef: { secretRef: "secret://bucket/access-key" },
+    secretKeyRef: { secretRef: "secret://bucket/secret-key" },
   });
 });
 
@@ -222,24 +231,17 @@ Deno.test("kernelPluginFromProviderPlugin projects HTTP outputs to endpoint mate
     kindUri: "https://takosumi.com/kinds/v1/worker",
   });
 
-  const material = await plugin.publishMaterial!({
+  const material = await plugin.materializeOutput!({
     installationId: "ins_1",
     componentName: "web",
-    component: {
-      kind: "worker",
-      publish: { http: { as: "http-endpoint" } },
-    },
-    publicationName: "http",
-    options: { as: "http-endpoint" },
+    component: { kind: "worker" },
+    outputName: "http",
     outputs: { url: "https://web.internal", id: "web" },
   });
 
   assert.deepEqual(material, {
-    targets: [{
-      name: "default",
-      url: "https://web.internal",
-      visibility: "private",
-    }],
+    url: "https://web.internal",
+    id: "web",
   });
 });
 
@@ -282,7 +284,11 @@ Deno.test("kernelPluginFromProviderPlugin rejects explicit env collision", async
           listenerComponent: "web",
           bindingName: "db",
           sourceRef: "database.connection",
-          options: { from: "database.connection", as: "env", prefix: "DB" },
+          options: {
+            output: "database.connection",
+            inject: "env",
+            prefix: "DB",
+          },
           envInjections: { DB_HOST: "db.internal" },
           material: { host: "db.internal" },
         }],

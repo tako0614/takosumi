@@ -1,8 +1,5 @@
-import type {
-  JsonObject,
-  JsonValue,
-  ResourceHandle,
-} from "takosumi-contract/reference/compat";
+import type { JsonObject, JsonValue } from "takosumi-contract/reference/compat";
+import type { ResourceHandle } from "takosumi-contract/internal/provider-plugin";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 
 /**

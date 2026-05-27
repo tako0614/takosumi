@@ -1,7 +1,7 @@
 # Object モデル {#object-model}
 
 ::: info
-内部設計メモ public contract は [Installer API](../installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
 :::
 
 Object は reference Takosumi graph の internal entity である。すべての Object は厳密に 1 つの Space に属する。public な manifest `components` entry は Object intent となり、その後 resolved な Object になる。
@@ -37,7 +37,7 @@ external:
   Takosumi must not create or delete it.
 
 operator:
-  Owned by operator platform. User deployment may link to approved publications.
+  Owned by operator platform. User deployment may link to approved platform services.
   User deployment must not delete it.
 
 imported:

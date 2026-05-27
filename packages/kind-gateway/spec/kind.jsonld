@@ -10,15 +10,20 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "required": ["listeners", "routes"],
-    "additionalProperties": true,
+    "additionalProperties": false,
     "properties": {
       "listeners": {
         "type": "object",
+        "minProperties": 1,
         "description": "Named HTTP listeners. A listener may request an operator-managed host and TLS policy.",
+        "propertyNames": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
         "additionalProperties": {
           "type": "object",
           "required": ["protocol"],
-          "additionalProperties": true,
+          "additionalProperties": false,
           "properties": {
             "protocol": {
               "type": "string",
@@ -41,11 +46,11 @@
       "routes": {
         "type": "array",
         "minItems": 1,
-        "description": "Path routing rules. Each route sends requests from a listener to one listen binding name.",
+        "description": "Path routing rules. Each route sends requests from a listener to one connect binding name.",
         "items": {
           "type": "object",
           "required": ["listener", "path", "to"],
-          "additionalProperties": true,
+          "additionalProperties": false,
           "properties": {
             "listener": {
               "type": "string",
@@ -54,20 +59,20 @@
             },
             "path": {
               "type": "string",
-              "pattern": "^/[^?#]*$",
-              "description": "HTTP path prefix, such as `/` or `/api`. Duplicate route and segment-boundary checks are descriptor semantic validation."
+              "pattern": "^/[^?#\\u0000]*$",
+              "description": "HTTP path prefix, such as `/` or `/api`. Duplicate route and dot-segment checks are descriptor semantic validation."
             },
             "to": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9-]{0,62}$",
-              "description": "Local listen binding name that supplies the upstream endpoint."
+              "description": "Local connect binding name that supplies the upstream endpoint."
             }
           }
         }
       }
     }
   },
-  "publications": {
+  "outputSlots": {
     "public": {
       "contract": "http-endpoint",
       "exampleMaterialMapping": {
@@ -121,17 +126,31 @@
       "name": "routes",
       "type": "object[]",
       "required": true,
-      "meaning": "Portable route summary with pathPrefix and listen binding target."
+      "meaning": "Portable route summary with pathPrefix and connect binding target.",
+      "items": {
+        "title": "GatewayRouteSummary",
+        "type": "object",
+        "required": ["pathPrefix", "to"],
+        "additionalProperties": false,
+        "properties": {
+          "pathPrefix": {
+            "type": "string",
+            "pattern": "^/[^?#\\u0000]*$",
+            "description": "Materialized path prefix."
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            "description": "Connect binding target name."
+          }
+        }
+      }
     }
   ],
   "capabilityTerms": [
     "host-routing",
     "path-routing",
     "wildcard",
-    "auto-tls",
-    "sni",
-    "alpn-acme",
-    "http3",
-    "redirects"
+    "auto-tls"
   ]
 }

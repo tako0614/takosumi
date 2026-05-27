@@ -1,13 +1,15 @@
 import {
   type CompensateResult,
-  formatPlatformOperationIdempotencyKey,
   getProvider,
-  type JsonObject,
   type PlatformContext,
-  type PlatformOperationContext,
   type ProviderPlugin,
   type ResourceHandle,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/internal/provider-plugin";
+import {
+  formatPlatformOperationIdempotencyKey,
+  type PlatformOperationContext,
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
+import type { JsonObject } from "takosumi-contract/reference/types";
 import type { RevokeDebtRecord, RevokeDebtStore } from "./revoke_debt_store.ts";
 import type {
   TakosumiDeploymentRecordStore,

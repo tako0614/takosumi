@@ -11,7 +11,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "役割別",
+      text: "案内",
       items: [
         {
           text: "Manifest を書く",
@@ -47,16 +47,21 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "Installer API", link: "/reference/installer-api" },
         {
           text: "プラットフォームサービス",
-          link: "/reference/external-publications",
+          link: "/reference/platform-services",
         },
         { text: "HTTP 公開", link: "/reference/http-exposure" },
       ],
     },
     {
-      text: "Kind カタログ",
+      text: "公式型カタログ",
       items: [
-        { text: "Kind カタログ仕様", link: "/reference/type-catalog" },
+        { text: "公式型カタログ仕様", link: "/reference/type-catalog" },
         { text: "Kind Packages", link: "/reference/kind-packages" },
+        { text: "Kind Binding 実装", link: "/reference/kind-bindings" },
+        {
+          text: "Reference Adapter Loading",
+          link: "/reference/plugin-loading",
+        },
         { text: "アクセスモード", link: "/reference/access-modes" },
       ],
     },
@@ -117,7 +122,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "By Role",
+      text: "Guide",
       items: [
         {
           text: "Writing Manifests",
@@ -136,7 +141,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           link: "/en/getting-started/reading-paths#provider-extension-authors",
         },
         {
-          text: "Working On The Spec",
+          text: "Working on the Spec",
           link: "/en/getting-started/reading-paths#core-contributors",
         },
       ],
@@ -153,16 +158,24 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         { text: "Installer API", link: "/en/reference/installer-api" },
         {
           text: "Platform Services",
-          link: "/en/reference/external-publications",
+          link: "/en/reference/platform-services",
         },
         { text: "HTTP Exposure", link: "/en/reference/http-exposure" },
       ],
     },
     {
-      text: "Kind Catalog",
+      text: "Official Type Catalog",
       items: [
-        { text: "Kind Catalog", link: "/en/reference/type-catalog" },
+        { text: "Official Type Catalog", link: "/en/reference/type-catalog" },
         { text: "Kind Packages", link: "/en/reference/kind-packages" },
+        {
+          text: "Kind Binding Implementations",
+          link: "/en/reference/kind-bindings",
+        },
+        {
+          text: "Reference Adapter Loading",
+          link: "/en/reference/plugin-loading",
+        },
         { text: "Access Modes", link: "/en/reference/access-modes" },
       ],
     },
@@ -261,7 +274,7 @@ export default defineConfig({
   srcExclude: [
     "operator/{bootstrap,runtime-agent,operator-managed,upgrade}.md",
     "reference/architecture/**",
-    "reference/{approval-invalidation,audit-events,backup-restore,bootstrap-protocol,closed-enums,connector-contract,cross-process-locks,data-asset-gc,data-asset-policy,drift-detection,env-vars,group-head-rollout,journal-compaction,kernel-http-api,kind-bindings,kind-registry,lifecycle,lifecycle-phases,logging-conventions,migration-upgrade,observability-stack,observation-retention,plan-output,plugin-loading,public-spec-source-map,readiness-probes,resource-ids,revoke-debt,risk-taxonomy,runtime-agent-api,secret-partitions,status-output,storage-schema,supply-chain-trust,telemetry-metrics,time-clock-model,wal-stages,workers-backend}.md",
+    "reference/{approval-invalidation,audit-events,backup-restore,bootstrap-protocol,closed-enums,connector-contract,cross-process-locks,data-asset-gc,data-asset-policy,drift-detection,env-vars,group-head-rollout,journal-compaction,kernel-http-api,kind-registry,lifecycle,lifecycle-phases,logging-conventions,migration-upgrade,observability-stack,observation-retention,plan-output,public-spec-source-map,readiness-probes,resource-ids,revoke-debt,risk-taxonomy,runtime-agent-api,secret-partitions,status-output,storage-schema,supply-chain-trust,telemetry-metrics,time-clock-model,wal-stages,workers-backend}.md",
     "rfc/**",
   ],
   locales: {

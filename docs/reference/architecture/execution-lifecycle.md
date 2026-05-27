@@ -1,7 +1,7 @@
 # 実行ライフサイクル {#execution-lifecycle}
 
 ::: info
-内部設計メモ public contract は [Installer API](../installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
 :::
 
 OperationPlan、dry materialization、Approval record、snapshot、journal は internal / operator の実行概念です。
@@ -32,7 +32,7 @@ prepare      load immutable ResolvedPlan and TargetState;
              derive OperationPlan from current ObservationState
 	pre-commit   revalidate operator-issued scoped installer context / policy snapshot,
 	             kind schema / binding availability,
-	             publication freshness, approvals (including the predicted effect
+	             platform service freshness, approvals (including the predicted effect
              digest), optional asset extension availability; raise Risks;
              fail closed on any invalidation
 commit       record operation intent and execute operations through
@@ -130,6 +130,6 @@ ingress reservation
 generated credential mutation
 generated authorization mutation
 platform service registry writes
-Space publication sharing
+future cross-Space service sharing policy
 kind alias / descriptor / binding set updates
 ```

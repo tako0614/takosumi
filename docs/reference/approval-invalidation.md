@@ -1,10 +1,10 @@
 # Reference Approval Invalidation Profile
 
 ::: info
-内部設計メモ public contract は [Installer API](./installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](./installer-api.md) を参照。
 :::
 
-Operator profiles may carry approval prompts, approval records, and account layer policy state outside the core Installer API.
+Operator distributions may carry approval prompts, approval records, and account layer policy state outside the core Installer API.
 
 ## Trigger 6 値
 
@@ -13,7 +13,7 @@ Operator profiles may carry approval prompts, approval records, and account laye
 1. **digest change** — TargetState digest または OperationPlan digest の変更。
 2. **effect-detail change** — `approvedEffects` / `effectDetailsDigest` / generated authorization access / network egress shape の変更。
 3. **implementation change** —選択された implementation binding / connector binding の変更。
-4. **external freshness change** — operator-owned PlatformServiceDeclaration の freshness
+4. **external freshness change** — operator-owned platform service snapshot の freshness
 5. **operator implementation config change** — Space に visible な kind alias / implementation binding / connector visibility の変更。
 6. **Space-context change** — Space membership / policy pack の変更。
 
@@ -37,9 +37,9 @@ Operator profiles may carry approval prompts, approval records, and account laye
 
 ### 4. external freshness change
 
-- **発火条件**: operator-owned PlatformServiceDeclaration の freshness state が `fresh` から `stale` または `revoked` に遷移。`fresh → refresh-required` は warning 相当 (Risk emit のみ) で trigger 4 を **発火させない** — approval は `approved` のまま保持される ([Observation Retention — Approval invalidation との関係](./observation-retention.md#approval-invalidation-relationship))。
+- **発火条件**: operator-owned platform service snapshot の freshness state が `fresh` から `stale` または `revoked` に遷移。`fresh → refresh-required` は warning 相当 (Risk emit のみ) で trigger 4 を **発火させない** — approval は `approved` のまま保持される ([Observation Retention — Approval invalidation との関係](./observation-retention.md#approval-invalidation-relationship))。
 - **検出 timing**: external freshness は kernel observe loop が継続的に監視し、`stale` / `revoked` への遷移を検出した瞬間に対応 approval を再評価する。`prepare` stage 起動時の最初の確認も含む。
-- **再評価範囲**: 当該 publication を消費する binding subset に絞って propagate。監視しない。
+- **再評価範囲**: 当該 platform service path / snapshot を消費する binding subset に絞って propagate。監視しない。
 
 ### 5. operator implementation config change
 

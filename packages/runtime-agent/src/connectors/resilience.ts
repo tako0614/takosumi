@@ -7,7 +7,7 @@ import type {
   LifecycleDescribeResponse,
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
 import type {
   Connector,
   ConnectorContext,

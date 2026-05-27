@@ -1,7 +1,7 @@
-# Kind カタログモデル {#external-descriptor-registry-model}
+# 公式型カタログモデル {#external-descriptor-registry-model}
 
 ::: info
-内部設計メモ public contract は [Installer API](../installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
 :::
 
 Component kind の semantics は operator の設定が kind の定義と alias として取り込み、 runtime behavior は operator-selected execution binding として接続する。

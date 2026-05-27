@@ -12,8 +12,8 @@ export type {
   KernelPluginDeploymentContext,
   KernelPluginDestroyContext,
   KernelPluginInstallationContext,
-} from "takosumi-contract/reference/compat";
-import type { KernelPlugin } from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/plugin";
+import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 
 export type KindAliasMap = Readonly<Record<string, string>>;
 

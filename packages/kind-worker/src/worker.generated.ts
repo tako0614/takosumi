@@ -6,56 +6,65 @@ export interface WorkerSpec {
   readonly entrypoint: string;
   /** Optional env vars / bindings. */
   readonly env?: Readonly<Record<string, string>>;
-  readonly [extension: string]: unknown;
 }
 
 export interface WorkerOutputs {
-  /** Provider-local upstream URL (scheme-bearing) used by gateway/listener components. */
+  /** Implementation-local upstream URL (scheme-bearing) used by gateway/listener components. */
   readonly url: string;
-  /** Provider-scope worker identifier. */
+  /** Implementation-scoped worker identifier. */
   readonly id: string;
   /** Current deployed worker version. */
   readonly version?: string;
 }
 
-export type WorkerCapabilityTerm =
-  | "scale-to-zero"
-  | "long-request"
-  | "geo-routing";
+export type WorkerCapabilityTerm = "serverless-http";
 
-export type WorkerPublicationName = "http";
+export type WorkerOutputFieldName =
+  | "url"
+  | "id"
+  | "version";
 
-export type WorkerPublicationContract = "http-endpoint";
+export type WorkerOutputSlotName = "http";
 
-export interface WorkerPublicationDescriptor {
-  readonly name: WorkerPublicationName;
-  readonly contract: WorkerPublicationContract;
+export type WorkerOutputSlotContract = "http-endpoint";
+
+export interface WorkerOutputSlotDescriptor {
+  readonly name: WorkerOutputSlotName;
+  readonly contract: WorkerOutputSlotContract;
   readonly exampleMaterialMapping?: Readonly<Record<string, unknown>>;
 }
 
+export interface WorkerListenSlotDescriptor {
+  readonly name: string;
+  readonly accepts?: readonly string[];
+  readonly projectionFamilies?: readonly string[];
+  readonly projectionMatrix?: Readonly<Record<string, readonly string[]>>;
+  readonly requiredWhenReferencedBy?: string;
+  readonly minimumAccess?: string;
+  readonly safeDefaultAccess?: string | null;
+}
+
 export const WORKER_CAPABILITY_TERMS: readonly WorkerCapabilityTerm[] = [
-  "scale-to-zero",
-  "long-request",
-  "geo-routing",
+  "serverless-http",
 ];
 
-export const WORKER_OUTPUT_FIELDS: readonly string[] = [
+export const WORKER_OUTPUT_FIELDS: readonly WorkerOutputFieldName[] = [
   "url",
   "id",
   "version",
 ];
 
-// referenceAliases are catalog suggestions only; operator profiles activate aliases explicitly.
+// referenceAliases are catalog suggestions only; operator distributions activate aliases explicitly.
 export const WORKER_ALIASES: readonly string[] = [
   "worker",
 ];
 
-export const WORKER_PUBLICATIONS: readonly WorkerPublicationName[] = [
+export const WORKER_OUTPUT_SLOTS: readonly WorkerOutputSlotName[] = [
   "http",
 ];
 
-export const WORKER_PUBLICATION_DESCRIPTORS:
-  readonly WorkerPublicationDescriptor[] = [
+export const WORKER_OUTPUT_SLOT_DESCRIPTORS:
+  readonly WorkerOutputSlotDescriptor[] = [
     {
       name: "http",
       contract: "http-endpoint",
@@ -70,6 +79,53 @@ export const WORKER_PUBLICATION_DESCRIPTORS:
       },
     },
   ];
+
+export const WORKER_LISTEN_SLOTS: readonly WorkerListenSlotDescriptor[] = [
+  {
+    name: "*",
+    accepts: [
+      "http-endpoint",
+      "service-binding",
+      "object-store",
+      "event-channel",
+      "identity.oidc@v1",
+      "billing.port@v1",
+    ],
+    projectionFamilies: [
+      "env",
+      "secret-env",
+      "config-mount",
+      "upstream",
+    ],
+    projectionMatrix: {
+      "http-endpoint": [
+        "env",
+        "config-mount",
+        "upstream",
+      ],
+      "service-binding": [
+        "secret-env",
+        "config-mount",
+      ],
+      "object-store": [
+        "secret-env",
+        "config-mount",
+      ],
+      "event-channel": [
+        "secret-env",
+        "config-mount",
+      ],
+      "identity.oidc@v1": [
+        "secret-env",
+        "config-mount",
+      ],
+      "billing.port@v1": [
+        "secret-env",
+        "config-mount",
+      ],
+    },
+  },
+];
 // Legacy connector-local Shape.id. AppSpec kind identity is the KIND_URI.
 export const WORKER_KIND_SHAPE_ID = "worker";
 /** @deprecated Use WORKER_KIND_URI for AppSpec kind identity, or WORKER_KIND_SHAPE_ID for legacy Shape.id. */

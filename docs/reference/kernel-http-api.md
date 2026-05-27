@@ -114,7 +114,7 @@ public installer のエラーレスポンスの正本は [Installer API](./insta
 
 | `code`                   | HTTP | 主な発生要因                                                                                         |
 | ------------------------ | ---- | ---------------------------------------------------------------------------------------------------- |
-| `invalid_argument`       | 400  | manifest schema / form input / malformed local reference / publish-listen cycle                      |
+| `invalid_argument`       | 400  | manifest schema / form input / malformed local reference / connection-resolution cycle               |
 | `unauthenticated`        | 401  | bearer 不足、 internal HMAC 検証失敗                                                                 |
 | `permission_denied`      | 403  | space 越境、token claim 不足、operator policy による拒否                                             |
 | `not_found`              | 404  | endpoint disabled (token unset)、 Installation / Deployment 不在                                     |
@@ -131,6 +131,6 @@ public installer のエラーレスポンスの正本は [Installer API](./insta
 - [Installer API](./installer-api.md) — Installer API の完全 spec
 - [manifest](./manifest.md) — `.takosumi.yml` 仕様
 - [Build service handoff](./build-spec.md) — build service と prepared source の handoff
-- [Takosumi Kind Catalog Specification](./type-catalog.md) — official kind schema and output type vocabulary
+- [Takosumi 公式型カタログ仕様](./type-catalog.md) — official kind schema and output type vocabulary
 - [Reference Runtime-Agent Execution Surface](./runtime-agent-api.md)
 - [Enum and Value Index](./closed-enums.md)

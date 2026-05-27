@@ -1,6 +1,6 @@
 # Kind Resolution モデル {#kind-resolution-model}
 
-public manifest は `components.<name>.kind` と kind-specific な open `spec` から runtime intent を表す。component kind の意味と input schema は operator が選ぶ kind の定義 / catalog metadata が表し、implementation binding と Space policy は operator の設定が定義する。Takosumi Kind Catalog の kind の定義は JSON-LD で公開される official catalog documents です。
+public manifest は `components.<name>.kind` と kind-specific な open `spec` から runtime intent を表す。component kind の意味と input schema は operator が選ぶ kind の定義 / catalog metadata が表し、implementation binding と Space policy は operator の設定が定義する。Takosumi 公式型カタログの kind の定義は JSON-LD で公開される official catalog documents です。
 
 ## Public な component kind {#public-component-kind}
 
@@ -20,7 +20,7 @@ external kind schema は operator / registry が必要に応じて採用する s
 
 ```text
 input schema
-publication contracts
+output slot contracts
 projection vocabulary
 operation vocabulary
 mutation constraints
@@ -87,17 +87,17 @@ Mutation 制約は kind の定義のメタデータである。operator-selected
 
 ## Access mode enum {#access-mode-enum}
 
-resolved link access は official catalog の [Access modes](../access-modes.md) で定義された closed v1 モードのいずれかである。manifest v1 の `listen` には `access` property は無く、operator policy、publish の出力の declaration の `safeDefaultAccess`、selected component kind の slot policy から resolution 中に決まる。このページは access mode が resolution に参加する位置を説明する。 [バインディングモデル](./binding-model.md) と [Platform Service Model](./platform-service-model.md) は access mode vocabulary を再定義せずに [Access modes](../access-modes.md) を参照する。
+resolved link access は official catalog の [Access modes](../access-modes.md) で定義された closed v1 モードのいずれかである。manifest v1 の `listen` には `access` property は無く、operator policy、source output slot の `safeDefaultAccess`、selected component kind の slot policy から resolution 中に決まる。このページは access mode が resolution に参加する位置を説明する。 [バインディングモデル](./binding-model.md) と [Platform Service Model](./platform-service-model.md) は access mode vocabulary を再定義せずに [Access modes](../access-modes.md) を参照する。
 
 ```text
 read         observation only; no authorization material is generated
-read-write   read plus mutation rights on the publication's resource
-admin        full management of the publication's resource
+read-write   read plus mutation rights on the source resource
+admin        full management of the source resource
 invoke-only  may call the resource but cannot read or mutate underlying state
 observe-only may only receive notifications / metrics; no resource access
 ```
 
-operator policy が明示的に access mode を選ぶ場合は、この閉じた集合から選ぶ。 publish の出力の declaration の `safeDefaultAccess` はそのうち `null | read | invoke-only | observe-only` だけを default にできる。 `read-write` と `admin` は default にできず、operator policy / approval が resolution 時に明示選択する。新規の access mode は RFC (CONVENTIONS.md §6) を要する。safe default の詳細は [Access Modes](../access-modes.md#safedefaultaccess) を参照。
+operator policy が明示的に access mode を選ぶ場合は、この閉じた集合から選ぶ。 source output slot の `safeDefaultAccess` はそのうち `null | read | invoke-only | observe-only` だけを default にできる。 `read-write` と `admin` は default にできず、operator policy / approval が resolution 時に明示選択する。新規の access mode は RFC (CONVENTIONS.md §6) を要する。safe default の詳細は [Access Modes](../access-modes.md#safedefaultaccess) を参照。
 
 ## Space 固有の availability {#space-specific-availability}
 

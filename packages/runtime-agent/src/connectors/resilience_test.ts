@@ -4,7 +4,7 @@ import type {
   LifecycleApplyResponse,
   LifecycleDescribeResponse,
   LifecycleDestroyResponse,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/runtime-agent-lifecycle";
 import type { Connector } from "./connector.ts";
 import { withConnectorResilience } from "./resilience.ts";
 

@@ -12,6 +12,10 @@ export function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
+export function isPort(value: unknown): value is number {
+  return isPositiveInteger(value) && value <= 65535;
+}
+
 export function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
@@ -51,6 +55,38 @@ export function requirePositiveInteger(
 ): void {
   if (!isPositiveInteger(value)) {
     issues.push({ path, message: "must be a positive integer" });
+  }
+}
+
+export function requirePort(
+  value: unknown,
+  path: string,
+  issues: ShapeValidationIssue[],
+): void {
+  if (!isPort(value)) {
+    issues.push({ path, message: "must be an integer from 1 to 65535" });
+  }
+}
+
+export function requireHttpUrl(
+  value: unknown,
+  path: string,
+  issues: ShapeValidationIssue[],
+): void {
+  if (!isNonEmptyString(value)) {
+    issues.push({ path, message: "must be an absolute http(s) URL" });
+    return;
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      issues.push({ path, message: "must be an absolute http(s) URL" });
+    }
+    if (url.username || url.password) {
+      issues.push({ path, message: "must not contain embedded credentials" });
+    }
+  } catch {
+    issues.push({ path, message: "must be an absolute http(s) URL" });
   }
 }
 
@@ -107,4 +143,21 @@ export function requireRoot(
     return false;
   }
   return true;
+}
+
+export function rejectUnknownFields(
+  value: Record<string, unknown>,
+  path: string,
+  allowedFields: readonly string[],
+  issues: ShapeValidationIssue[],
+): void {
+  const allowed = new Set(allowedFields);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      issues.push({
+        path: path === "$" ? `$.${key}` : `${path}.${key}`,
+        message: "unknown field",
+      });
+    }
+  }
 }

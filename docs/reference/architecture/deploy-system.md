@@ -1,7 +1,7 @@
 # Deploy システム {#deploy-system}
 
 ::: info
-内部設計メモ public contract は [Installer API](../installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
 :::
 
 ## ライフサイクル {#lifecycle}

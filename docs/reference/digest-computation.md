@@ -57,7 +57,7 @@ well-shaped guard が resolved source と一致しない場合、apply は 409 `
 
 ## Operator の Deployment の記録用 digest {#operator-evidence-digests}
 
-operator profile は、replay、approval、audit、rollout、リソースの作成・更新の recovery のために追加の structured digest を保存できます。名前、canonicalization rule、input field は、その Deployment の記録を定義する operator ledger に属します。public Installer API field ではありません。
+operator distribution は、replay、approval、audit、rollout、リソースの作成・更新の recovery のために追加の structured digest を保存できます。名前、canonicalization rule、input field は、その Deployment の記録を定義する operator ledger に属します。public Installer API field ではありません。
 
 ## Algorithm migration {#algorithm-migration}
 

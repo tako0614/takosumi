@@ -61,4 +61,4 @@ build-service distribution は `.takosumi.build.yml`、別の filename、hosted 
 - [manifest](./manifest.md)
 - [Installer API](./installer-api.md)
 - [Operator build-service profile example](../operator/build-service-profile.md)
-- [Takosumi Kind カタログ仕様](./type-catalog.md)
+- [Takosumi 公式型カタログ仕様](./type-catalog.md)

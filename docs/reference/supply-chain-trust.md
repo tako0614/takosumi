@@ -1,23 +1,23 @@
 # サプライチェーン信頼 {#supply-chain-trust}
 
 ::: info
-内部設計メモ public contract は [Installer API](./installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](./installer-api.md) を参照。
 :::
 
 ## 信頼境界 {#trust-boundaries}
 
-| Boundary                | Evidence                                              | 取得機構                   | Owner                                              |
-| ----------------------- | ----------------------------------------------------- | -------------------------- | -------------------------------------------------- |
-| source identity         | git URL / immutable ref / commit SHA                  | git / HTTPS                | installer                                          |
-| manifest                | `.takosumi.yml` sha256                                | installer parse            | installer                                          |
-| publisher identity      | publisher id / homepage / optional verified status    | HTTPS + policy             | operator account layer / install-source policy     |
-| prepared source handoff | workflow run id / installer-computed archive digest   | build service + installer  | build service / installer                          |
-| operator inventory      | kind alias table / execution binding config           | operator bootstrap         | operator profile                                   |
-| execution resolution    | resolved kind / execution / connector decision        | operator-recorded evidence | operator profile; Takosumi links Deployment の記録 |
-| installation ownership  | owner / Space / binding / permission records          | append-only account ledger | operator account layer                             |
-| Deployment record       | manifestDigest / source identity / non-secret outputs | kernel Deployment record   | kernel                                             |
-| runtime bootstrap       | operator-distribution bootstrap 出力データ            | HTTPS + ledger             | operator profile + app                             |
-| runtime session         | operator-distribution identity 出力データ             | distribution-defined       | operator profile                                   |
+| Boundary                | Evidence                                              | 取得機構                   | Owner                                                   |
+| ----------------------- | ----------------------------------------------------- | -------------------------- | ------------------------------------------------------- |
+| source identity         | git URL / immutable ref / commit SHA                  | git / HTTPS                | installer                                               |
+| manifest                | `.takosumi.yml` sha256                                | installer parse            | installer                                               |
+| publisher identity      | publisher id / homepage / optional verified status    | HTTPS + policy             | operator account layer / install-source policy          |
+| prepared source handoff | workflow run id / installer-computed archive digest   | build service + installer  | build service / installer                               |
+| operator inventory      | kind alias table / execution binding config           | operator bootstrap         | operator distribution                                   |
+| execution resolution    | resolved kind / execution / connector decision        | operator-recorded evidence | operator distribution; Takosumi links Deployment の記録 |
+| installation ownership  | owner / Space / binding / permission records          | append-only account ledger | operator account layer                                  |
+| Deployment record       | manifestDigest / source identity / non-secret outputs | kernel Deployment record   | kernel                                                  |
+| runtime bootstrap       | operator-distribution bootstrap 出力データ            | HTTPS + ledger             | operator distribution + app                             |
+| runtime session         | operator-distribution identity 出力データ             | distribution-defined       | operator distribution                                   |
 
 ## チェーン・オブ・カストディ {#chain-of-custody}
 
@@ -33,7 +33,7 @@ The chain records immutable source identity and operator execution decisions bef
 
 ## Runtime Identity / HTTPS {#runtime-identity-https}
 
-runtime identity の出力データは operator profile が定義します。Takosumi Cloud では OIDC と launch token を使いますが、それは Cloud distribution の仕様です。 operator execution code の取得・検証・lockfile・vendoring は operator policy で扱う。Takosumi v1 の public trust chain は HTTPS と recorded digest を基本にする。production / public surface と LAN dev hostname surface は HTTPS を使い、 `http://localhost` / `http://127.0.0.1` は single-host loopback dev だけで許容する。
+runtime identity の出力データは operator distribution が定義します。Takosumi Cloud では OIDC と launch token を使いますが、それは Cloud distribution の仕様です。 operator execution code の取得・検証・lockfile・vendoring は operator policy で扱う。Takosumi v1 の public trust chain は HTTPS と recorded digest を基本にする。production / public surface と LAN dev hostname surface は HTTPS を使い、 `http://localhost` / `http://127.0.0.1` は single-host loopback dev だけで許容する。
 
 ## Runtime Bootstrap {#runtime-bootstrap}
 
@@ -53,7 +53,7 @@ rollback は mutable tag を再解決しない。retained Deployment の source 
 
 ## Operator implementation loading {#operator-implementation-loading}
 
-component kind と binding は operator profile が接続します。 Operator / reference implementation は、operator inventory を使って kind alias / kind の定義 / binding を解決し、deploy 時に解決結果を Deployment の記録として紐づけます。その記録は source pin、manifest digest、resolved kind URI、selected implementation binding、operator policy decision、materialized outputs を後から説明するための operator record です。
+component kind と binding は operator distribution が接続します。 Operator / reference implementation は、operator inventory を使って kind alias / kind の定義 / binding を解決し、deploy 時に解決結果を Deployment の記録として紐づけます。その記録は source pin、manifest digest、resolved kind URI、selected implementation binding、operator policy decision、materialized outputs を後から説明するための operator record です。
 
 Reference kernel example:
 

@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import {
   type ProviderPlugin,
   registerProvider,
+  unregisterProvider,
+} from "takosumi-contract/internal/provider-plugin";
+import {
   registerShape,
   type Shape,
   type ShapeValidationIssue,
-  unregisterProvider,
   unregisterShape,
-} from "takosumi-contract/reference/compat";
+} from "takosumi-contract/reference/shape";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 import { resolveResourcesV2 } from "./resource_resolver_v2.ts";
 

@@ -6,8 +6,9 @@ import {
   isPositiveInteger,
   isRecord,
   optionalBoolean,
+  rejectUnknownFields,
   requireNonEmptyString,
-  requirePositiveInteger,
+  requirePort,
   requireRoot,
 } from "./_validators.ts";
 import {
@@ -29,8 +30,13 @@ export type {
   DatabasePostgresStorage,
 };
 
+export type PostgresCapabilityTerm = DatabasePostgresCapabilityTerm;
+export type PostgresOutputs = DatabasePostgresOutputs;
+export type PostgresSpec = DatabasePostgresSpec;
+export type PostgresStorage = DatabasePostgresStorage;
+
 /** Size class union derived from the generated spec interface. */
-export type DatabasePostgresSize = DatabasePostgresSpec["size"];
+export type DatabasePostgresSize = NonNullable<DatabasePostgresSpec["size"]>;
 
 const SIZES: ReadonlySet<string> = new Set(
   [
@@ -66,8 +72,17 @@ export const DatabasePostgresKind: Shape<
   outputFields: DATABASE_POSTGRES_OUTPUT_FIELDS,
   validateSpec(value, issues) {
     if (!requireRoot(value, issues)) return;
+    rejectUnknownFields(
+      value,
+      "$",
+      ["version", "size", "storage", "highAvailability"],
+      issues,
+    );
     requireNonEmptyString(value.version, "$.version", issues);
-    if (typeof value.size !== "string" || !SIZES.has(value.size)) {
+    if (
+      value.size !== undefined &&
+      (typeof value.size !== "string" || !SIZES.has(value.size))
+    ) {
       issues.push({
         path: "$.size",
         message: `must be one of: ${Array.from(SIZES).join(", ")}`,
@@ -78,8 +93,21 @@ export const DatabasePostgresKind: Shape<
   },
   validateOutputs(value, issues) {
     if (!requireRoot(value, issues)) return;
+    rejectUnknownFields(
+      value,
+      "$",
+      [
+        "host",
+        "port",
+        "database",
+        "username",
+        "passwordSecretRef",
+        "connectionString",
+      ],
+      issues,
+    );
     requireNonEmptyString(value.host, "$.host", issues);
-    requirePositiveInteger(value.port, "$.port", issues);
+    requirePort(value.port, "$.port", issues);
     requireNonEmptyString(value.database, "$.database", issues);
     requireNonEmptyString(value.username, "$.username", issues);
     requireNonEmptyString(
@@ -92,18 +120,42 @@ export const DatabasePostgresKind: Shape<
       "$.connectionString",
       issues,
     );
+    requirePasswordlessUri(
+      value.connectionString,
+      "$.connectionString",
+      issues,
+    );
   },
 };
+
+export const PostgresKind = DatabasePostgresKind;
 
 function validateStorage(value: unknown, issues: ShapeValidationIssue[]): void {
   if (!isRecord(value)) {
     issues.push({ path: "$.storage", message: "must be an object" });
     return;
   }
+  rejectUnknownFields(value, "$.storage", ["sizeGiB"], issues);
   if (!isPositiveInteger(value.sizeGiB)) {
     issues.push({
       path: "$.storage.sizeGiB",
       message: "must be a positive integer",
     });
+  }
+}
+
+function requirePasswordlessUri(
+  value: unknown,
+  path: string,
+  issues: ShapeValidationIssue[],
+): void {
+  if (typeof value !== "string" || value.trim().length === 0) return;
+  try {
+    const url = new URL(value);
+    if (url.password) {
+      issues.push({ path, message: "must not contain an embedded password" });
+    }
+  } catch {
+    issues.push({ path, message: "must be an absolute connection URI" });
   }
 }

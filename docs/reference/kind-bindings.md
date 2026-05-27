@@ -1,14 +1,14 @@
-# Kind Binding Implementations {#kind-binding-implementations}
+# Kind Binding 実装 {#kind-binding-implementations}
 
 ::: info
-Public contract は [Installer API](./installer-api.md) と [Manifest](./manifest.md) です。このページは reference kernel が kind を実体化する方法を説明します。
+Public contract は [Installer API](./installer-api.md) と [manifest](./manifest.md) です。このページは reference kernel が選択済み kind をどう実体化するかを説明します。
 :::
 
-Takosumi の component は `kind`、`spec`、`publish`、`listen` だけを持ちます。operator は `kindAliases` で alias を kind URI に解決し、その kind URI を実体化する implementation binding を選びます。
+Takosumi component は `kind`、`spec`、`connect`、`listen` を持ちます。operator は `kindAliases` または absolute URI で `kind` を kind URI に解決し、その kind URI を実体化できる implementation binding を選びます。same-manifest dependency は `connect.<binding>.output`、platform service / external service は `listen.<binding>.path` で解決します。
 
-Reference kernel では、その binding を `KernelPlugin` として `createPaaSApp({ kindAliases, plugins })` に渡します。`plugins` は reference implementation の plain-array adapter 方式です。仕様上は、同じ kind URI を native controller、static registry、workflow engine、SaaS adapter などに bind しても構いません。
+Reference kernel では、その binding を `KernelPlugin` として `createPaaSApp({ kindAliases, plugins })` に渡します。`plugins` array は reference implementation の adapter loading 方式です。互換 implementation は同じ kind URI を native controller、static registry、workflow engine、SaaS adapter などへ bind できます。
 
-Portable descriptor package は `takosumi/`、backend-specific native plugin package は `takosumi-plugins/` が所有します。どちらも public package 名は `@takos/takosumi-kind-*` です。
+Portable descriptor package は `takosumi/`、backend-specific native kind package は `takosumi-plugins/` が所有します。どちらも public package 名は `@takos/takosumi-kind-*` です。
 
 ## Portable kind と native kind
 
@@ -26,11 +26,11 @@ components:
       size: small
 ```
 
-`worker` は portable kind alias の例です。operator が `worker` を `cloudflare-worker` に map すれば Cloudflare Workers で動き、`deno-deploy-worker` に map すれば Deno Deploy で動きます。native 機能や backend 固有 field が必要な component は、最初から `cloudflare-worker` や `aws-rds-postgres` のような native kind を書きます。
+`worker` は portable alias の例です。解決後の kind URI が `spec` schema、output slot、connection compatibility を所有します。`worker` を `https://takosumi.com/kinds/v1/worker` に解決する場合、operator はその portable URI を提供する binding を attach します。alias を `https://takosumi.com/kinds/v1/cloudflare-worker` のような native URI に解決する場合、その component は native schema を使います。
 
-manifest に `provider` field はありません。backend の違いは `kind` と operator binding で表します。
+Backend 固有 field が必要な manifest は `cloudflare-worker` や `aws-rds-postgres` のような native kind を使います。manifest を portable に保つ場合は、native URI に alias するのではなく、portable URI を提供する binding を内部で選びます。manifest に `provider` selector はありません。
 
-## Reference kernel attach
+## Reference kernel への attach
 
 ```ts
 import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
@@ -43,41 +43,49 @@ import {
   KIND_URI as STORE_KIND,
 } from "@takos/takosumi-kind-aws-s3-object-store";
 
+const workerLifecycle = createCloudflareWorkersLifecycleClient({ accountId });
+const objectStoreLifecycle = createAwsS3LifecycleClient({
+  region: "us-east-1",
+});
+
 const { app } = await createPaaSApp({
   kindAliases: {
-    worker: WORKER_KIND,
-    "object-store": STORE_KIND,
+    "cloudflare-worker": WORKER_KIND,
+    "aws-s3-object-store": STORE_KIND,
   },
   plugins: [
-    cloudflareWorkerPlugin({ accountId }),
-    awsS3ObjectStorePlugin({ region: "us-east-1" }),
+    cloudflareWorkerPlugin({ accountId, lifecycle: workerLifecycle }),
+    awsS3ObjectStorePlugin({
+      region: "us-east-1",
+      lifecycle: objectStoreLifecycle,
+    }),
   ],
 });
 ```
 
-Each factory returns a `KernelPlugin`. The plugin advertises concrete kind URIs through `provides[]`. If no plugin provides the resolved kind URI, dry-run/apply fails before resource side effects. If two plugins provide the same URI, bootstrap fails unless the operator distribution adds a higher-level selection rule outside the core reference array.
+各 factory は `KernelPlugin` を返します。`workerLifecycle` や `objectStoreLifecycle` は operator distribution が用意する backend lifecycle client です。plugin は対応する kind URI を `provides[]` で宣言します。解決済み kind URI を提供する plugin がなければ、dry-run/apply は resource side effect の前に失敗します。同じ URI を複数 plugin が提供する場合、operator distribution が core reference array の外で selection rule を追加しない限り bootstrap で失敗します。
 
 ## Selection flow
 
-1. Resolve `Component.kind` through `kindAliases`; absolute URIs are already resolved.
-2. Load the descriptor metadata for that kind if the operator uses descriptor validation.
-3. Validate kind-owned `spec`, `publish`, and `listen` compatibility before side effects.
-4. Pick exactly one implementation binding for the resolved kind URI.
-5. Run the selected binding and record non-secret outputs in Deployment evidence.
+1. `Component.kind` を `kindAliases` で解決する。absolute URI は解決済みとして扱う。
+2. operator が descriptor validation を使う場合、その kind の descriptor metadata を読む。
+3. side effect の前に、kind-owned `spec`、output slot、`connect` output ref / `listen.path` compatibility を検証する。
+4. 解決済み kind URI に対して implementation binding を 1 つ選ぶ。
+5. 選択した binding を実行し、non-secret output を Deployment evidence に記録する。
 
-Capability names are open strings used by operator tooling and dashboards. Concrete quotas, credentials, lifecycle limits, and native feature support belong to the kind package docs or the operator profile that enables the package.
+Capability name は operator tooling / dashboard のための open string です。quota、credential、lifecycle limit、native feature support は kind package docs またはその package を有効にする operator distribution が説明します。
 
 ## Source roots
 
-- `packages/contract/src/plugin.ts` — `KernelPlugin` / materializer interface.
-- `takosumi/packages/kind-*/spec/kind.jsonld` — portable package-owned kind descriptors.
-- `takosumi-plugins/packages/kind-*/spec/kind.jsonld` — native package-owned kind descriptors.
-- `takosumi-plugins/packages/kind-*/mod.ts` — native descriptor constants and reference adapter factories.
-- `takosumi/packages/runtime-agent/src/connectors/` — generic `Connector` interface, registry, and resilience wrapper.
-- `takosumi-plugins/packages/runtime-agent-connectors/` — reference concrete connector implementations used by operator distributions.
+- `packages/contract/src/plugin.ts` — `KernelPlugin` / materializer interface。
+- `takosumi/packages/kind-*/spec/kind.jsonld` — portable package-owned kind descriptor。
+- `takosumi-plugins/packages/kind-*/spec/kind.jsonld` — native package-owned kind descriptor。JSON-LD は catalog / type metadata で、runtime plugin requirement ではない。
+- `takosumi-plugins/packages/kind-*/mod.ts` — native descriptor constant と reference adapter factory。
+- `takosumi/packages/runtime-agent/src/connectors/` — generic connector interface、registry、resilience wrapper。
+- `takosumi-plugins/packages/runtime-agent-connectors/` — operator distribution が使える concrete connector implementation。
 
-## Related pages
+## 関連ページ
 
 - [Kind Packages](./kind-packages.md)
 - [Reference Adapter Loading](./plugin-loading.md)
-- [Connector Guide](./connector-contract.md)
+- [Takosumi 公式型カタログ仕様](./type-catalog.md)

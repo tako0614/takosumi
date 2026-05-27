@@ -50,7 +50,7 @@ WAL stage の意味は [WAL Stages](./wal-stages.md) 参照。
 read | read-write | admin | invoke-only | observe-only
 ```
 
-Access mode は official catalog vocabulary です。core は resolved value を Deployment の記録に残し、operator profile が policy を enforce します。manifest の dependency expression は `publish` / `listen` とプラットフォームサービス path 参照で表します。詳細は [Access Modes](./access-modes.md) 参照。
+Access mode は official catalog vocabulary です。core は resolved value を Deployment の記録に残し、operator distribution が policy を enforce します。manifest の dependency expression は `publish` / `listen` とプラットフォームサービス path 参照で表します。詳細は [Access Modes](./access-modes.md) 参照。
 
 ## Approval lifecycle
 

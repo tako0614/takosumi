@@ -1,7 +1,7 @@
 # Kernel {#kernel}
 
 ::: info
-内部設計メモ public contract は [Installer API](../installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
 :::
 
 ## Takosumi の責務 {#responsibility}
@@ -39,16 +39,16 @@ Space ID は request token / installer context から解決されます。Takosu
 
 ## Component と Resource {#component-and-resource}
 
-manifest の `components` は名前付き Component map です。Component は `kind` を持ち、kind ごとの `spec`、`publish`、`listen` を宣言します。
+manifest の `components` は名前付き Component map です。Component は `kind` を持ち、kind ごとの `spec`、同一 manifest 接続の `connect`、platform service 接続の `listen` を宣言します。
 
 | manifest 内の公開構造 | 説明                                               |
 | --------------------- | -------------------------------------------------- |
-| Component             | manifest が宣言する kind / spec / publish / listen |
+| Component             | manifest が宣言する kind / spec / connect / listen |
 
 | 内部概念 | 説明                                                           |
 | -------- | -------------------------------------------------------------- |
 | Resource | operator-selected execution が apply した runtime state record |
-| Material | publish / listen で解決される出力データ registry               |
+| Material | connect / listen で解決される出力データ registry               |
 | Secret   | listen やリソースの作成・更新に使う secret reference           |
 | Event    | append-only audit event                                        |
 
@@ -59,12 +59,12 @@ Resource は backend-specific です。manifest author は Resource を直接作
 ```text
 1. caller or build service posts source to POST /v1/installations/dry-run
 2. Takosumi fetches source and parses resolved .takosumi.yml
-3. Takosumi validates syntax / schema / publish-listen graph / Space context
+3. Takosumi validates syntax / schema / connection graph / Space context
 4. Takosumi computes changes[] and expected.{commit, manifestDigest, sourceDigest?}
    plus currentDeploymentId for deploy dry-run
 5. caller posts apply with the same source and expected values
 6. Takosumi resolves the submitted source and verifies expected values
-7. Takosumi resolves publish/listen DAG
+7. Takosumi resolves connect / platform listen edges
 8. Takosumi creates the Deployment attempt / retained operation evidence before
    resource side effects
 9. reference Takosumi dispatches the operator-selected binding for
