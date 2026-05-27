@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   checkJsrTargetPublication,
   JSR_PUBLISH_PACKAGES,
+  jsrCreatePackageUrl,
   parseDenoPublishWarnings,
   parseDenoWarningCodes,
   parseMode,
@@ -135,7 +136,7 @@ Deno.test("checkJsrTargetPublication skips already published target versions", a
   });
 });
 
-Deno.test("checkJsrTargetPublication publishes missing packages and missing target versions", async () => {
+Deno.test("checkJsrTargetPublication separates package records from missing versions", async () => {
   const fetchImpl = fakeFetch({
     "https://jsr.test/@takos/example-old/meta.json": {
       versions: {
@@ -153,19 +154,34 @@ Deno.test("checkJsrTargetPublication publishes missing packages and missing targ
       },
       { registryBaseUrl: "https://jsr.test", fetch: fetchImpl },
     )).status,
-    "publish-needed",
+    "version-missing",
   );
-  assert.equal(
-    (await checkJsrTargetPublication(
+  assert.deepEqual(
+    await checkJsrTargetPublication(
       {
         name: "@takos/example-missing",
         version: "0.1.0",
         directory: "packages/example-missing",
       },
       { registryBaseUrl: "https://jsr.test", fetch: fetchImpl },
-    )).status,
-    "publish-needed",
+    ),
+    {
+      name: "@takos/example-missing",
+      targetVersion: "0.1.0",
+      status: "package-missing",
+      message: "JSR package record does not exist",
+      createUrl:
+        "https://jsr.test/new?scope=takos&package=example-missing&from=cli",
+    },
   );
+});
+
+Deno.test("jsrCreatePackageUrl renders scoped package creation URLs", () => {
+  assert.equal(
+    jsrCreatePackageUrl("@takos/takosumi-kind-worker"),
+    "https://jsr.io/new?scope=takos&package=takosumi-kind-worker&from=cli",
+  );
+  assert.equal(jsrCreatePackageUrl("not-scoped"), undefined);
 });
 
 Deno.test("parseMode accepts explicit modes and rejects unknown args", () => {

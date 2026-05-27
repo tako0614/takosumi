@@ -24,7 +24,8 @@ export interface DryRunDiagnostics {
 
 export type JsrTargetPublicationStatus =
   | "published"
-  | "publish-needed"
+  | "version-missing"
+  | "package-missing"
   | "registry-error";
 
 export interface JsrTargetPublicationCheck {
@@ -32,6 +33,7 @@ export interface JsrTargetPublicationCheck {
   readonly targetVersion: string;
   readonly status: JsrTargetPublicationStatus;
   readonly message?: string;
+  readonly createUrl?: string;
 }
 
 export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
@@ -218,6 +220,16 @@ async function runSinglePackagePublish(input: {
       console.log(`skip ${label} (already published)`);
       return true;
     }
+    if (publication.status === "package-missing") {
+      console.error(`failed ${label}`);
+      console.error(
+        `  ${publication.message ?? "JSR package record does not exist"}`,
+      );
+      if (publication.createUrl) {
+        console.error(`  create package first: ${publication.createUrl}`);
+      }
+      return false;
+    }
     if (publication.status === "registry-error") {
       console.error(`failed ${label}`);
       console.error(
@@ -308,7 +320,9 @@ export async function checkJsrTargetPublication(
     return {
       name: packageInfo.name,
       targetVersion: packageInfo.version,
-      status: "publish-needed",
+      status: "package-missing",
+      message: "JSR package record does not exist",
+      createUrl: jsrCreatePackageUrl(packageInfo.name, registryBaseUrl),
     };
   }
   if (!response.ok) {
@@ -338,8 +352,20 @@ export async function checkJsrTargetPublication(
   return {
     name: packageInfo.name,
     targetVersion: packageInfo.version,
-    status: published ? "published" : "publish-needed",
+    status: published ? "published" : "version-missing",
   };
+}
+
+export function jsrCreatePackageUrl(
+  packageName: string,
+  registryBaseUrl = "https://jsr.io",
+): string | undefined {
+  const match = packageName.match(/^@([^/]+)\/(.+)$/);
+  if (!match) return undefined;
+  const base = registryBaseUrl.replace(/\/+$/, "");
+  return `${base}/new?scope=${encodeURIComponent(match[1])}&package=${
+    encodeURIComponent(match[2])
+  }&from=cli`;
 }
 
 function acceptedWarning(
