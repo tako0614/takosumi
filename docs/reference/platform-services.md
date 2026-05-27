@@ -27,6 +27,19 @@ components:
 `connect` は同じ manifest 内の component output 用です。`listen` は manifest
 外の Space-visible publication 用です。
 
+## 使い分け
+
+| やりたいこと                              | 書き方                       | 競合ルール                                   |
+| ----------------------------------------- | ---------------------------- | -------------------------------------------- |
+| 確定した 1 つの service を名指しする      | `listen.path`                | 同じ Space の同じ path は active 1 件だけ    |
+| MCP server など同じ kind のものを全部使う | `listen.kind` + `many: true` | path を持たない publication は複数存在できる |
+| 1 件だけ discovery したい                 | `listen.kind` + labels       | 0 件または 2 件以上なら apply error          |
+| component output を同じ manifest で使う   | `connect.output`             | Space-visible path には参加しない            |
+
+AppSpec の selector field は `kind` だけです。component を選ぶときも、公開 /
+参照する material を選ぶときも `kind` を使います。`type` は JSON Schema、JSON-LD
+`@type`、TypeScript 型名の文脈に限ります。
+
 ## Path Grammar
 
 `listen.<binding>.path` は exact match 用の dotted path です。

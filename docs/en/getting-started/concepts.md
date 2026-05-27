@@ -26,7 +26,7 @@ components:
 | Key          | Meaning                                                                              |
 | ------------ | ------------------------------------------------------------------------------------ |
 | `components` | Individual pieces of your app. The example above has two: `web` and `db`             |
-| `kind`       | The type of piece. `worker` is a compute runtime, `postgres` is a database           |
+| `kind`       | The definition used by the component. `worker` runs code, `postgres` stores data     |
 | `spec`       | Settings specific to the kind. A worker needs `entrypoint`, postgres needs `version` |
 
 ## Connecting Components With `connect` {#connect-components}
@@ -84,6 +84,10 @@ listen:
     many: true
     inject: config-mount
 ```
+
+`path` names one exact target. In one Space, one path can have only one active
+provider. `kind` is the selector field for both components and publications;
+there is no separate manifest `type` selector.
 
 ## Installation and Deployment {#installation-deployment}
 

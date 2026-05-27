@@ -37,7 +37,9 @@ AppSpec の selector は `kind` に揃えます。component の `kind`
 は「何を作るか」、`publish.kind` / `listen.kind` は「どの kind
 の出力データを offer / consume するか」です。manifest field としての `type`
 は使いません。`type` という語は JSON Schema、JSON-LD `@type`、TypeScript
-の型名の文脈だけで使います。
+の型名の文脈だけで使います。文書上は読みやすさのために component kind と
+material kind を呼び分けますが、manifest に現れる selector field はどちらも
+`kind` です。
 
 判断ルールは次の 3 つです。
 
@@ -50,6 +52,8 @@ AppSpec の selector は `kind` に揃えます。component の `kind`
 `path` は安定した exact name が必要なときだけ使います。同じ Space の同じ
 `path` は active provider を 1 つだけ持てます。集合として discovery したい
 publication は `path` を付けず、`kind` と `labels` で選びます。
+つまり、`path` は 1 つの対象を名指しする field であり、「同じ kind のものを全部」
+という意味は持ちません。
 
 ## ルート項目
 
@@ -223,6 +227,8 @@ lifecycle は、それを 提供する distribution の仕様に置きます。`
 内に複数存在してよいものは path を必須にせず、`kind: mcp-server@v1` と
 `many: true` で受け取ります。`many` を省略した場合、selector
 はちょうど 1 件に解決されなければ apply error です。
+`path` と `many: true` は併用しません。exact name は単一対象、`many: true`
+は kind / labels selector の集合対象だけに使います。
 
 `required` を省略した platform service は optional です。absent の場合、その
 binding は作られません。kind-specific `spec` がその binding

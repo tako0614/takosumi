@@ -27,6 +27,19 @@ components:
 `connect` is for component output inside the same manifest. `listen` is for
 Space-visible publications outside the manifest.
 
+## Choosing The Shape {#choosing-the-shape}
+
+| Goal                                           | Manifest shape               | Conflict rule                               |
+| ---------------------------------------------- | ---------------------------- | ------------------------------------------- |
+| Name one known service exactly                 | `listen.path`                | One active provider per Space and path      |
+| Use every visible MCP server or similar target | `listen.kind` + `many: true` | Pathless publications can have many matches |
+| Discover exactly one publication               | `listen.kind` + labels       | Zero or multiple matches fail apply         |
+| Use a component output in the same manifest    | `connect.output`             | Does not participate in Space-visible paths |
+
+The AppSpec selector field is always `kind`. Components use `kind` to choose
+what is created; publications and listeners use `kind` to choose material. The
+word `type` stays in JSON Schema, JSON-LD `@type`, and TypeScript type names.
+
 ## Path Grammar {#path-grammar}
 
 `listen.<binding>.path` is a dotted path for exact matches.

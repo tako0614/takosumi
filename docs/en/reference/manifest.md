@@ -37,7 +37,9 @@ use root `publish`.
 AppSpec uses `kind` as the selector word. Component `kind` says what is created.
 `publish.kind` and `listen.kind` say which kind of output material is offered or
 consumed. There is no manifest `type` selector. The word `type` is reserved for
-JSON Schema, JSON-LD `@type`, and TypeScript type names.
+JSON Schema, JSON-LD `@type`, and TypeScript type names. The prose may say
+component kind or material kind for readability, but the manifest selector field
+is always `kind`.
 
 Use these three rules:
 
@@ -49,7 +51,8 @@ Use these three rules:
 
 Use `path` only when a publication needs a stable exact name. In one Space, one
 `path` can have only one active provider. For collection discovery, publish
-pathless entries and select them by `kind` and `labels`.
+pathless entries and select them by `kind` and `labels`. In other words, `path`
+names one exact target; it never means "all publications of this kind."
 
 ## Root Fields {#root-fields}
 
@@ -223,6 +226,8 @@ kind being consumed.
 such as MCP servers, do not need paths: consume them with
 `kind: mcp-server@v1` and `many: true`. Without `many`, the selector must resolve
 to exactly one publication or apply fails.
+Do not combine `path` with `many: true`: exact paths select one target, while
+`many: true` only applies to kind / label discovery.
 
 A platform service is optional unless `required: true` is set. When an optional
 path is absent, the binding is not created. If kind-specific `spec` treats that

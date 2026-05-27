@@ -7,8 +7,10 @@
  * one exact `path` such as `identity.primary.oidc`, or discover visible
  * publications by material `kind` plus optional labels (for example every
  * `mcp-server@v1` publication visible in the Space). Root `publish` records
- * Installation output declarations for selected component outputs. Public concepts remain limited
- * to:
+ * Installation output declarations for selected component outputs. AppSpec
+ * deliberately uses `kind` as its only selector field; JSON Schema `type`,
+ * JSON-LD `@type`, and TypeScript type names are separate vocabulary. Public
+ * concepts remain limited to:
  *   1. AppSpec       (= `.takosumi.yml`)
  *   2. Installation  (= a Space-scoped App)
  *   3. Deployment    (= one apply result)

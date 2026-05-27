@@ -28,7 +28,7 @@ components:
 | キー         | 意味                                                                      |
 | ------------ | ------------------------------------------------------------------------- |
 | `components` | アプリを構成する個々のパーツ。上の例では `web` と `db` の 2 つ            |
-| `kind`       | パーツの種類。`worker` はプログラムの実行環境、`postgres` はデータベース  |
+| `kind`       | component が使う定義。`worker` は実行環境、`postgres` はデータベース      |
 | `spec`       | その kind に固有の設定。worker なら `entrypoint`、postgres なら `version` |
 
 ## connect で component を接続する {#connect-components}
@@ -87,6 +87,10 @@ listen:
     many: true
     inject: config-mount
 ```
+
+`path` は 1 つの対象を名指しします。同じ Space の同じ path は active provider
+を 1 つだけ持てます。`kind` は selector で、component でも publication でも同じ
+field 名を使います。manifest には別の `type` selector はありません。
 
 ## Installation と Deployment {#installation-deployment}
 
