@@ -196,6 +196,60 @@ publish:
   assertEquals(spec.publish?.tools?.labels?.capability, "docs");
 });
 
+Deno.test("parseAppSpec rejects type as a component or material selector", () => {
+  const component = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    type: worker
+`),
+    AppSpecParseError,
+  );
+  assertEquals(component.validationPhase, "schema");
+  assertEquals(component.validationPath, "$.components.web.type");
+
+  const listen = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+    listen:
+      tools:
+        type: mcp-server@v1
+        many: true
+        inject: config-mount
+`),
+    AppSpecParseError,
+  );
+  assertEquals(listen.validationPhase, "schema");
+  assertEquals(listen.validationPath, '$.components.web.listen."tools".type');
+
+  const publish = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  web:
+    kind: worker
+publish:
+  tools:
+    output: web.mcp
+    type: mcp-server@v1
+`),
+    AppSpecParseError,
+  );
+  assertEquals(publish.validationPhase, "schema");
+  assertEquals(publish.validationPath, '$.publish."tools".type');
+});
+
 Deno.test("parseAppSpec rejects malformed platform service paths", () => {
   const cases = [
     ["uppercase segment", "identity.Primary.oidc"],

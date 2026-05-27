@@ -49,10 +49,11 @@ Use these three rules:
 | Connect to one known publication in the Space        | `listen.<binding>.path: owner.area.name`         |
 | Discover every visible match, such as MCP servers    | `listen.<binding>.kind` + labels + `many: true`  |
 
-Use `path` only when a publication needs a stable exact name. In one Space, one
-`path` can have only one active provider. For collection discovery, publish
-pathless entries and select them by `kind` and `labels`. In other words, `path`
-names one exact target; it never means "all publications of this kind."
+`path` is not a URL path. It is a stable name for one publication inside a
+Space. In one Space, one `path` can have only one active provider. For
+collection discovery, publish pathless entries and select them by `kind` and
+`labels`. In other words, `path` names one exact target; it never means "all
+publications of this kind."
 
 ## Root Fields {#root-fields}
 
@@ -229,9 +230,16 @@ to exactly one publication or apply fails.
 Do not combine `path` with `many: true`: exact paths select one target, while
 `many: true` only applies to kind / label discovery.
 
-A platform service is optional unless `required: true` is set. When an optional
-path is absent, the binding is not created. If kind-specific `spec` treats that
-binding as required input, apply fails.
+`many: true` binds every visible matching publication as one collection
+material. Zero matches fail when `required: true`; zero matches on an optional
+collection resolve to an empty collection. Operators must not silently truncate
+matches. If a selector is too broad for policy or size limits, apply fails
+before resources are created. Successful resolution records a deterministic
+order and the selected publication identities with the Deployment.
+
+An exact `listen.path` is optional unless `required: true` is set. When an
+optional path is absent, the binding is not created. If kind-specific `spec`
+treats that binding as required input, apply fails.
 
 ## Root `publish` {#root-publish}
 

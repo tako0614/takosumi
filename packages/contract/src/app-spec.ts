@@ -6,7 +6,8 @@
  * `listen.<name>` for Space-visible platform services. A listener can select
  * one exact `path` such as `identity.primary.oidc`, or discover visible
  * publications by material `kind` plus optional labels (for example every
- * `mcp-server@v1` publication visible in the Space). Root `publish` records
+ * `mcp-server@v1` publication visible in the Space with `many: true`). `path`
+ * is a Space-scoped publication name, not a URL path. Root `publish` records
  * Installation output declarations for selected component outputs. AppSpec
  * deliberately uses `kind` as its only selector field; JSON Schema `type`,
  * JSON-LD `@type`, and TypeScript type names are separate vocabulary. Public
@@ -178,8 +179,9 @@ export interface ConnectOptions {
  *                omitted. With `path`, it acts as a compatibility assertion.
  *   - `labels` — Optional label selector for discovery by kind.
  *   - `many`   — When true, bind every visible matching publication as one
- *                collection material. When false/omitted, resolution must
- *                produce exactly one active material.
+ *                collection material. Zero matches fail only when `required`
+ *                is true. When false/omitted, resolution must produce exactly
+ *                one active material.
  *   - `inject` — the shape the material should take in this component's
  *                runtime (env / secret-env / config-mount / upstream /
  *                operator-defined).

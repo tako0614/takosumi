@@ -85,9 +85,11 @@ listen:
     inject: config-mount
 ```
 
-`path` names one exact target. In one Space, one path can have only one active
-provider. `kind` is the selector field for both components and publications;
-there is no separate manifest `type` selector.
+`path` is not a URL path. It names one exact target inside a Space. In one
+Space, one path can have only one active provider. For "all MCP servers" and
+similar cases, use `kind` + `many: true` instead of a path. `kind` is the
+selector field for both components and publications; there is no separate
+manifest `type` selector.
 
 ## Installation and Deployment {#installation-deployment}
 

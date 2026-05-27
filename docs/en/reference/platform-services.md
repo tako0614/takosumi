@@ -42,7 +42,8 @@ word `type` stays in JSON Schema, JSON-LD `@type`, and TypeScript type names.
 
 ## Path Grammar {#path-grammar}
 
-`listen.<binding>.path` is a dotted path for exact matches.
+`listen.<binding>.path` is a dotted path for exact matches. It is not a URL
+path; it is a publication name inside a Space.
 
 ```text
 segment = [a-z][a-z0-9-]{0,62}
@@ -80,7 +81,9 @@ components:
 
 This example binds every visible `mcp-server@v1` publication in the Space as one
 collection material. `labels` narrows the selector. Without `many`, resolution
-must produce exactly one match or apply fails.
+must produce exactly one match or apply fails. With `required: true`, zero
+matches fail apply; with optional `many: true`, zero matches resolve to an empty
+collection.
 
 `mcp-server@v1` is an official catalog discoverable material kind. Takosumi
 core does not special-case MCP; it treats it like any other material kind. When
@@ -93,7 +96,9 @@ tool endpoints, helper services, and similar "give me all visible matches"
 cases, publish pathless entries and let consumers select by `kind` plus optional
 `labels`. A `many: true` collection preserves the individual publication
 entries, the operator must order the collection deterministically, and the
-Deployment record keeps the selected set.
+Deployment record keeps the selected set. Operators must not silently truncate
+matches. If a selector is too broad for policy or size limits, narrow it with
+labels or fail apply before resources are created.
 
 ## Path Ownership {#path-ownership}
 
@@ -122,10 +127,12 @@ Resolution is Space-scoped:
 4. `listen.kind` selects visible publications by kind and labels.
 5. The selected service state and materialization evidence are recorded with the
    Deployment.
-6. If the target is absent and `required: true`, apply fails before resource
-   creation.
-7. If the target is absent and `required` is omitted or false, the binding is
+6. If an exact path or discovery target is absent and `required: true`, apply
+   fails before resource creation.
+7. If an exact path is absent and `required` is omitted or false, the binding is
    not created.
+8. If `many: true` discovery has zero matches and `required` is omitted or
+   false, it resolves to an empty collection material.
 
 If a kind-specific `spec` treats an absent optional binding as required input,
 apply fails. Degraded behavior is valid when the adopted kind definition and

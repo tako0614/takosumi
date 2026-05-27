@@ -84,7 +84,7 @@ interface ListenOptions {
 
 ## Catalog Helpers
 
-The `catalog` subpath mirrors the Takosumi official catalog vocabulary in TypeScript. It exports the closed official material kind names (`http-endpoint`, `service-binding`, `object-store`, `event-channel`, `identity.oidc@v1`, `billing.port@v1`, `mcp-server@v1`), injection mode names (`env`, `secret-env`, `upstream`, `config-mount`), access modes, sensitivity classes, material interfaces, and small validation helpers for catalog-shaped material. Use `OfficialMaterialKindName` / `isOfficialMaterialKindName` for material vocabulary. Legacy output-type names and the legacy compatibility import path remain aliases for older callers; new code should use material kind terminology.
+The `catalog` subpath mirrors the Takosumi official catalog vocabulary in TypeScript. It exports the closed official material kind names (`http-endpoint`, `service-binding`, `object-store`, `event-channel`, `identity.oidc@v1`, `billing.port@v1`, `mcp-server@v1`), injection mode names (`env`, `secret-env`, `upstream`, `config-mount`), access modes, sensitivity classes, material interfaces, and small validation helpers for catalog-shaped material. AppSpec uses `kind` as the selector word for components and material publications; `OfficialMaterialKindName` / `isOfficialMaterialKindName` are the public helper names for that vocabulary.
 
 AppSpec stores `connect.<binding>.inject` and `listen.<binding>.inject` as strings so operator distributions can adopt other projection vocabularies. The helper types are for code that intentionally targets the official `takosumi.com` catalog.
 

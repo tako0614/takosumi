@@ -88,9 +88,11 @@ listen:
     inject: config-mount
 ```
 
-`path` は 1 つの対象を名指しします。同じ Space の同じ path は active provider
-を 1 つだけ持てます。`kind` は selector で、component でも publication でも同じ
-field 名を使います。manifest には別の `type` selector はありません。
+`path` は URL path ではなく、Space 内の 1 つの対象を名指しする名前です。同じ
+Space の同じ path は active provider を 1 つだけ持てます。MCP server
+のように全部欲しい対象は `path` ではなく `kind` + `many: true`
+で集合として受け取ります。`kind` は selector で、component でも publication
+でも同じ field 名を使います。manifest には別の `type` selector はありません。
 
 ## Installation と Deployment {#installation-deployment}
 
