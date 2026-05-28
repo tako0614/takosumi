@@ -37,18 +37,18 @@ import type {
 } from "../types.ts";
 import { stableHash } from "./hash.ts";
 
-export function buildDeploymentArtifacts(input: {
+export async function buildDeploymentArtifacts(input: {
   readonly manifest: PublicDeployManifest;
   readonly createdAt: IsoTimestamp;
   readonly env?: string;
   readonly envName?: string;
   readonly input: DeploymentInput;
-}): {
+}): Promise<{
   readonly groupId: string;
   readonly resolution: DeploymentResolution;
   readonly desired: DeploymentDesired;
   readonly policyDecisions: readonly DeploymentPolicyDecision[];
-} {
+}> {
   const appSpec = compileManifestToAppSpec(input.manifest, {
     env: input.env,
     envName: input.envName,
@@ -63,14 +63,18 @@ export function buildDeploymentArtifacts(input: {
   // (and their JSON-LD context dependencies) is pinned by the descriptor
   // closure builder. Apply consumes this closure verbatim and does not
   // re-read descriptor documents during provider effects.
-  const descriptorClosure = buildDescriptorClosure({
+  //
+  // Note (round-2 Workers fix): `buildDescriptorClosure` and
+  // `buildResolvedGraph` became async after the kernel switched from
+  // `node:crypto` to Web Crypto for SHA-256; we await both here.
+  const descriptorClosure = await buildDescriptorClosure({
     appSpec,
     resolvedAt: input.createdAt,
   });
   // Phase 10B — ResolvedGraph projections (six canonical families) are emitted
   // here so controllers consume the projection records instead of re-deriving
   // them from raw descriptors (Core spec § 8).
-  const resolvedGraph = buildResolvedGraph({
+  const resolvedGraph = await buildResolvedGraph({
     appSpec,
     descriptorClosure,
     manifestSnapshot: input.input.manifest_snapshot,

@@ -33,7 +33,7 @@ const DEFAULT_MIGRATION_STEPS: readonly ControlPlaneMigrationStepDto[] = Object
   .freeze([
     {
       id: "capture-control-plane-state",
-      component: "paas",
+      component: "takosumi-core",
       description:
         "Capture current tenant, space, routing, entitlement, and internal API state before upgrade.",
       required: true,
@@ -43,7 +43,7 @@ const DEFAULT_MIGRATION_STEPS: readonly ControlPlaneMigrationStepDto[] = Object
     },
     {
       id: "apply-control-plane-migrations",
-      component: "paas",
+      component: "takosumi-core",
       description:
         "Apply control-plane schema and data migrations in documented order.",
       required: true,

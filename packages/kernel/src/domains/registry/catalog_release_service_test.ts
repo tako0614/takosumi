@@ -46,7 +46,7 @@ Deno.test("CatalogReleaseService adopts a signed release and records audit", asy
   assert.equal(result.adoption.catalogReleaseId, descriptor.releaseId);
   assert.equal(
     result.adoption.descriptorDigest,
-    catalogReleaseDescriptorDigest(descriptor),
+    await catalogReleaseDescriptorDigest(descriptor),
   );
   assert.deepEqual(
     await stores.adoptions.currentForSpace("space:acme-prod"),

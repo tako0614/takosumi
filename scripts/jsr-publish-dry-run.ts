@@ -90,12 +90,12 @@ export const JSR_PUBLISH_PACKAGES: readonly JsrPublishPackage[] = Object.freeze(
     },
     {
       name: "@takos/takosumi-kind-web-service",
-      version: "0.1.0",
+      version: "0.2.0",
       directory: "packages/kind-web-service",
     },
     {
       name: "@takos/takosumi-kind-worker",
-      version: "0.1.0",
+      version: "0.2.0",
       directory: "packages/kind-worker",
     },
     {

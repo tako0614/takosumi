@@ -207,7 +207,7 @@ Deno.test("destroyV2 threads WAL idempotency context to provider.destroy", async
     const resources: ManifestResource[] = [
       { shape: `${SHAPE}@v1`, name: "db", provider: PROV_OK, spec: {} },
     ];
-    const operationPlanPreview = buildOperationPlanPreview({
+    const operationPlanPreview = await buildOperationPlanPreview({
       resources,
       planned: [{
         name: "db",
@@ -254,7 +254,7 @@ Deno.test("destroyV2 records provider destroy trace spans", async () => {
     const resources: ManifestResource[] = [
       { shape: `${SHAPE}@v1`, name: "db", provider: PROV_OK, spec: {} },
     ];
-    const operationPlanPreview = buildOperationPlanPreview({
+    const operationPlanPreview = await buildOperationPlanPreview({
       resources,
       planned: [{
         name: "db",

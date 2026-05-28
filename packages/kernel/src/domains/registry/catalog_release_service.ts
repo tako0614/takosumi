@@ -1,4 +1,8 @@
-import { createHash } from "node:crypto";
+// Round-2 fix: removed `createHash` from `node:crypto`. Descriptor digest
+// derivation now runs through Web Crypto via `sha256HexOfStringAsync`.
+// `catalogReleaseDescriptorDigest` becomes async; the verifier and
+// release-adoption paths were already async, so the propagation is local.
+import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import type {
   ActorContext,
   Digest,
@@ -152,7 +156,7 @@ export class CatalogReleaseService {
     descriptor: CatalogReleaseDescriptor,
     verifiedAt: IsoTimestamp = this.#clock().toISOString(),
   ): Promise<CatalogReleaseVerificationResult> {
-    const descriptorDigest = catalogReleaseDescriptorDigest(descriptor);
+    const descriptorDigest = await catalogReleaseDescriptorDigest(descriptor);
     if (
       descriptor.signature.algorithm !== CATALOG_RELEASE_SIGNATURE_ALGORITHM
     ) {
@@ -355,7 +359,7 @@ export class CatalogReleaseService {
 
 export function catalogReleaseDescriptorDigest(
   descriptor: CatalogReleaseDescriptor,
-): Digest {
+): Promise<Digest> {
   return digestOf(catalogReleaseSigningPayload(descriptor));
 }
 
@@ -424,10 +428,9 @@ async function verifyEd25519Signature(input: {
   }
 }
 
-function digestOf(value: unknown): Digest {
-  return `sha256:${
-    createHash("sha256").update(stableStringify(value)).digest("hex")
-  }`;
+async function digestOf(value: unknown): Promise<Digest> {
+  const hex = await sha256HexOfStringAsync(stableStringify(value));
+  return `sha256:${hex}`;
 }
 
 function stableStringify(value: unknown): string {

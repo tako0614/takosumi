@@ -1,17 +1,34 @@
-// Takosumi deploy-core compatibility projection.
-//
-// This file is not the current AppSpec / Installer API contract. It is kept as
-// an internal deploy-domain DTO set for older core-planning code and historical
-// docs. New code should import AppSpec / Installer API DTOs from their explicit
-// subpaths and implement materializers through KernelPlugin.
-//
-// Historical spec: /docs/core/01-core-contract-v1.0.md.
-// Core is organized around three records:
-//   - Deployment            (input + resolution + desired state + status)
-//   - ProviderObservation   (observed provider state, never authoritative)
-//   - GroupHead             (space/group-scoped pointer to the current Deployment)
-// Every other deploy meta-record is collapsed onto a field of `Deployment`,
-// or onto one of the other two records.
+/**
+ * Takosumi deploy-core compatibility projection.
+ *
+ * This module is NOT the current AppSpec / Installer API contract. It is kept
+ * as an internal deploy-domain DTO set for older core-planning code and
+ * historical docs. New code should import AppSpec / Installer API DTOs from
+ * their explicit subpaths (`@takos/takosumi-contract/app-spec` and
+ * `@takos/takosumi-contract/installer-api`) and implement materializers
+ * through `KernelPlugin`.
+ *
+ * Historical spec: /docs/core/01-core-contract-v1.0.md.
+ * Core is organized around three records:
+ *   - Deployment            (input + resolution + desired state + status)
+ *   - ProviderObservation   (observed provider state, never authoritative)
+ *   - GroupHead             (space/group-scoped pointer to the current
+ *                            Deployment)
+ *
+ * Every other deploy meta-record is collapsed onto a field of `Deployment`,
+ * or onto one of the other two records.
+ *
+ * Migration path: read each consumer's import list against the AppSpec
+ * envelope owned by `@takos/takosumi-contract/app-spec`, replace `CoreAppSpec`
+ * / `CoreEnvSpec` / `CorePolicySpec` references with the v1 `AppSpec`
+ * surface, and lift kernel-only deployment lifecycle DTOs into
+ * `packages/kernel/src/domains/deploy/`. The compat surface itself is
+ * scheduled to be removed in `@takos/takosumi-contract` 4.0.0.
+ *
+ * @deprecated Removed in `@takos/takosumi-contract` 4.0.0. Import the
+ *             specific DTO surface (`app-spec`, `installer-api`,
+ *             `reference/plugin`) instead of the deploy-core projection.
+ */
 
 import type { Digest, IsoTimestamp, JsonObject } from "./types.ts";
 

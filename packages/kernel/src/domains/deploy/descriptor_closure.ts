@@ -52,7 +52,11 @@
 //     dependencies so two manifests that resolve to the same descriptors
 //     produce the same digest.
 
-import { createHash } from "node:crypto";
+// Round-2 fix: removed `createHash` from `node:crypto` so this module can
+// compile on Workers. Digest helpers now hit Web Crypto via
+// `sha256HexOfStringAsync`; `buildDescriptorClosure` and
+// `verifyDescriptorClosureCompatibility` propagate the resulting Promise.
+import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import type {
   CoreDescriptorDependency,
   CoreDescriptorResolution,
@@ -195,10 +199,12 @@ function canonicalUriFor(ref: string): { id: string; alias: string } {
  * The closure is deterministic: identical AppSpecs (with identical authoring
  * expansion outcomes) produce byte-identical closures, byte-identical digests,
  * and byte-identical resolutions. Apply consumes the closure verbatim.
+ *
+ * Async because raw / expanded digests now go through Web Crypto.
  */
-export function buildDescriptorClosure(
+export async function buildDescriptorClosure(
   input: BuildDescriptorClosureInput,
-): DeploymentDescriptorClosure {
+): Promise<DeploymentDescriptorClosure> {
   const seeds = collectSeeds(input.appSpec, input.extraDescriptorRefs ?? []);
   const resolutions: CoreDescriptorResolution[] = [];
   const dependencies: CoreDescriptorDependency[] = [];
@@ -208,12 +214,14 @@ export function buildDescriptorClosure(
     const { id, alias } = canonicalUriFor(seed.ref);
     if (seenUris.has(id)) continue;
     seenUris.add(id);
-    resolutions.push(buildResolution({
-      id,
-      alias,
-      ref: seed.ref,
-      resolvedAt: input.resolvedAt,
-    }));
+    resolutions.push(
+      await buildResolution({
+        id,
+        alias,
+        ref: seed.ref,
+        resolvedAt: input.resolvedAt,
+      }),
+    );
   }
 
   // Add the shared JSON-LD context as a transitive dependency from every
@@ -222,12 +230,14 @@ export function buildDescriptorClosure(
   const contextEntry = resolveRef(TAKOSUMI_CONTEXT_ID);
   if (contextEntry && !seenUris.has(contextEntry.id)) {
     seenUris.add(contextEntry.id);
-    resolutions.push(buildResolution({
-      id: contextEntry.id,
-      alias: contextEntry.alias,
-      ref: contextEntry.alias,
-      resolvedAt: input.resolvedAt,
-    }));
+    resolutions.push(
+      await buildResolution({
+        id: contextEntry.id,
+        alias: contextEntry.alias,
+        ref: contextEntry.alias,
+        resolvedAt: input.resolvedAt,
+      }),
+    );
   }
   for (const resolution of resolutions) {
     if (resolution.id === TAKOSUMI_CONTEXT_ID) continue;
@@ -275,7 +285,7 @@ export function buildDescriptorClosure(
   // is identical. The map is built deterministically by the compiler so the
   // resulting digest is stable.
   const effectiveCapabilities = effectiveRuntimeCapabilitiesOf(input.appSpec);
-  const closureDigest = digestOf({
+  const closureDigest = await digestOf({
     resolutions,
     dependencies,
     effectiveRuntimeCapabilities: effectiveCapabilities,
@@ -289,16 +299,17 @@ export function buildDescriptorClosure(
   };
 }
 
-function buildResolution(input: {
+async function buildResolution(input: {
   readonly id: string;
   readonly alias: string;
   readonly ref: string;
   readonly resolvedAt: IsoTimestamp;
-}): CoreDescriptorResolution {
+}): Promise<CoreDescriptorResolution> {
   const entry = REGISTRY_BY_URI.get(input.id) ??
     REGISTRY_BY_ALIAS.get(input.ref);
-  const rawDigest = entry?.rawDigest ?? syntheticDigest(input.id, input.alias);
-  const expandedDigest = digestOf({
+  const rawDigest = entry?.rawDigest ??
+    await syntheticDigest(input.id, input.alias);
+  const expandedDigest = await digestOf({
     id: input.id,
     alias: input.alias,
     rawDigest,
@@ -405,13 +416,12 @@ function routeInterfaceRef(route: AppSpecRoute): string {
   return "interface.http@v1";
 }
 
-function digestOf(value: unknown): string {
-  return `sha256:${
-    createHash("sha256").update(stableStringify(value)).digest("hex")
-  }`;
+async function digestOf(value: unknown): Promise<string> {
+  const hex = await sha256HexOfStringAsync(stableStringify(value));
+  return `sha256:${hex}`;
 }
 
-function syntheticDigest(id: string, alias: string): string {
+function syntheticDigest(id: string, alias: string): Promise<string> {
   return digestOf({ id, alias, synthetic: true });
 }
 

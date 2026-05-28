@@ -13,28 +13,44 @@ let cached: RuntimeAdapter | undefined;
 /**
  * Auto-detect the current runtime and return its adapter.
  *
- * Order matters: Deno first (it exposes `Deno.*`), then Node (which has
- * `process.versions.node`), then Workers (V8 isolate with no Deno / Node).
+ * Detection priority (Workers first to avoid leaking Node-compat probes into
+ * V8 isolates):
+ *
+ *   1. Cloudflare Workers (`navigator.userAgent === "Cloudflare-Workers"` or
+ *      `globalThis.WebSocketPair` fallback). Returning early here keeps the
+ *      module safe to import inside an isolate where touching `Deno.*` or
+ *      `process.versions.node` could throw or spawn Node-compat shims.
+ *   2. Bun (`typeof Bun !== "undefined"`). Bun is mostly Node-compatible but
+ *      surfaces its own marker; we still treat the adapter as `node`-shaped
+ *      because Bun supports the same `node:fs` / `node:http` modules.
+ *   3. Deno (`typeof Deno !== "undefined"`).
+ *   4. Node.js (`process.versions.node`).
+ *
+ * On Workers, callers MUST use `createWorkersRuntime(env)` per request
+ * because env bindings arrive on the fetch invocation, not at module load.
+ * This function only returns a useful adapter on long-running server runtimes.
+ *
  * Tests that need a specific runtime can override the cache by calling
  * `setRuntimeForTesting(adapter)`.
- *
- * On Workers, the caller MUST use `createWorkersRuntime(env)` per-request
- * because env bindings arrive on the fetch invocation, not at module
- * load. This function only returns a useful adapter on long-running
- * server runtimes.
  */
 export function currentRuntime(): RuntimeAdapter {
   if (cached) return cached;
+  if (isWorkers()) {
+    cached = unknownWorkersRuntime();
+    return cached;
+  }
+  if (isBun()) {
+    // Bun's `node:*` modules cover the FS / HTTP / signal surfaces the
+    // kernel needs, so reuse the Node adapter.
+    cached = nodeRuntime;
+    return cached;
+  }
   if (isDeno()) {
     cached = denoRuntime;
     return cached;
   }
   if (isNode()) {
     cached = nodeRuntime;
-    return cached;
-  }
-  if (isWorkers()) {
-    cached = unknownWorkersRuntime();
     return cached;
   }
   cached = unknownRuntime();
@@ -47,6 +63,12 @@ export function setRuntimeForTesting(adapter: RuntimeAdapter): void {
 
 export function resetRuntimeForTesting(): void {
   cached = undefined;
+}
+
+/** Detect Bun via its global marker. Kept inline so callers do not have to
+ *  import a Bun-specific helper. */
+function isBun(): boolean {
+  return typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
 }
 
 function unknownRuntime(): RuntimeAdapter {

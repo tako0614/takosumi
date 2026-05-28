@@ -901,11 +901,37 @@ async function makePreparedSource(): Promise<{
   if (code !== 0) {
     throw new Error(new TextDecoder().decode(stderr));
   }
-  const digest = await sha256Hex(await Deno.readFile(archive));
+  const bytes = await Deno.readFile(archive);
+  const digest = await sha256Hex(bytes);
+  const tarBuffer = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  );
+  const originalFetch = globalThis.fetch;
+  const url = `https://example.test/prepared/${
+    digest.slice("sha256:".length)
+  }.tar`;
+  globalThis.fetch = (input, init) => {
+    const target = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : input.url;
+    if (target === url) {
+      return Promise.resolve(
+        new Response(tarBuffer, {
+          status: 200,
+          headers: { "content-type": "application/x-tar" },
+        }),
+      );
+    }
+    return originalFetch(input as Request | URL | string, init);
+  };
   return {
-    archive,
+    archive: url,
     digest,
     cleanup: async () => {
+      globalThis.fetch = originalFetch;
       await Deno.remove(sourceDir, { recursive: true });
       await Deno.remove(archive);
     },

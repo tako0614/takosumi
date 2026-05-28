@@ -363,7 +363,10 @@ export class DeploymentService {
       env: input.env,
       group: input.manifest.name,
     };
-    const artifacts = buildDeploymentArtifacts({
+    // `buildDeploymentArtifacts` became async after the Workers / Web Crypto
+    // switch (descriptor closure and resolved-graph builders now await the
+    // SHA-256 helper). The surrounding method was already async.
+    const artifacts = await buildDeploymentArtifacts({
       manifest: input.manifest,
       createdAt,
       env: input.env,

@@ -20,7 +20,7 @@ import { conflict, invalidArgument, notFound } from "../../shared/errors.ts";
  * accepting the request.
  *
  * The token is minted with HMAC-SHA256, deliberately matching the existing
- * `paas-contract` internal-API signature primitive so the kernel does not
+ * `takosumi-contract` internal-API signature primitive so the kernel does not
  * need to ship a separate KMS-backed signer for Phase 18.2. Rotation is
  * implemented by overlapping issue windows: the service stores both the
  * current and previous active token per tenant so verifies during the cutover

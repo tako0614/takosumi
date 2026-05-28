@@ -28,9 +28,15 @@ import type {
   JsonObject,
 } from "takosumi-contract/reference/compat";
 import type { PlatformContext } from "takosumi-contract/internal/provider-plugin";
+import type { PlatformOperationRecoveryMode } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { objectAddress } from "takosumi-contract/reference/compat";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
-import { applyV2, type ApplyV2Outcome } from "./apply_v2.ts";
+import {
+  applyV2,
+  type ApplyV2Outcome,
+  type OperationPlanPreview,
+  type PriorAppliedSnapshot,
+} from "./apply_v2.ts";
 import {
   type DeploymentFilter,
   DeploymentService,
@@ -51,6 +57,18 @@ export interface ApplyDeployManifestInput {
   actor?: ActorContext;
   approval?: DeploymentApproval;
   blockers?: readonly DeployBlocker[];
+  /**
+   * Optional shape-model dispatch (`apply_v2`) hand-off fields. The
+   * deploy facade resolves these from prior Deployment state and the
+   * caller's recovery context before invoking `applyManifest`. Plumbing
+   * them all the way down to `applyV2` is what enables idempotent
+   * replace, recovery-mode escalation, and WAL-tied operation context
+   * for the shape-model dispatch path.
+   */
+  operationPlanPreview?: OperationPlanPreview;
+  recoveryMode?: PlatformOperationRecoveryMode;
+  priorApplied?: ReadonlyMap<string, PriorAppliedSnapshot>;
+  deploymentName?: string;
 }
 
 export interface ApplyDeploymentInput {
@@ -301,7 +319,29 @@ export class ApplyService {
       spaceId: input.spaceId,
       adapters: this.#platformAdapters,
     });
-    const outcome = await applyV2({ resources, context });
+    // Forward the optional shape-model dispatch fields when the caller
+    // supplied them. Until a stable persistence layer for prior apply
+    // snapshots exists on `DeploymentStore`, the deploy facade is the only
+    // way idempotency dedupe / replace-on-mismatch / WAL-bound operation
+    // context reach `applyV2` from this entry point. If `priorApplied` is
+    // not threaded through by the caller, `applyV2` runs with idempotency
+    // dedupe disabled for this dispatch (each apply re-invokes
+    // `provider.apply`). See `apply_v2.ts:ApplyV2Options.priorApplied`.
+    const outcome = await applyV2({
+      resources,
+      context,
+      ...(input.operationPlanPreview
+        ? { operationPlanPreview: input.operationPlanPreview }
+        : {}),
+      ...(input.recoveryMode ? { recoveryMode: input.recoveryMode } : {}),
+      ...(input.priorApplied ? { priorApplied: input.priorApplied } : {}),
+      ...(input.deploymentName
+        ? { deploymentName: input.deploymentName }
+        : (typeof input.manifest.name === "string" &&
+            input.manifest.name.length > 0
+          ? { deploymentName: input.manifest.name }
+          : {})),
+    });
     if (outcome.status !== "succeeded") {
       throw new ApplyV2Error(outcome);
     }
@@ -399,7 +439,16 @@ function synthesizeAppliedDeploymentFromV2(input: {
     manifest_snapshot: manifestSnapshot,
     source_kind: "inline",
   };
-  const emptyDigest = "sha256:empty" as const;
+  // Synthetic v2 deployments do not derive a real digest from a closure /
+  // graph / network policy / activation envelope. Earlier code used the
+  // sentinel string "sha256:empty", which broke any downstream consumer
+  // that validated the digest with a hex regex
+  // (`sha256:[0-9a-f]{64}`). We instead emit a zero-padded 64-char marker
+  // that satisfies the regex while still being recognizable as "no
+  // closure was computed". This is preferable to hashing an empty buffer
+  // because the marker is self-documenting in evidence logs.
+  const emptyDigest =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000" as const;
   return Object.freeze({
     id: input.id,
     group_id: groupId,

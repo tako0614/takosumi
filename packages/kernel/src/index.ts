@@ -3,12 +3,14 @@ import type { Hono as HonoApp } from "hono";
 import type { PaaSProcessRole } from "./process/mod.ts";
 import {
   loadRuntimeConfigFromEnv,
+  type RuntimeConfig,
   RuntimeConfigError,
   warnIfDevMode,
 } from "./config/mod.ts";
 import { log } from "./shared/log.ts";
 import {
   currentRuntime,
+  type RuntimeAdapter,
   type ServeHttpHandle,
 } from "./shared/runtime/index.ts";
 import { StorageMigrationRunner } from "./adapters/storage/migration-runner/mod.ts";
@@ -37,38 +39,92 @@ import type {
 } from "./adapters/storage/sql.ts";
 import { wrapPgResult } from "./adapters/storage/pg_result.ts";
 
-const runtime = currentRuntime();
-const runtimeEnv: Record<string, string> = runtime.env.toObject();
-warnIfDevMode(runtimeEnv);
-const runtimeConfig = await loadRuntimeConfigFromEnv({ env: runtimeEnv })
-  .catch((error) => fatalStartupError(error));
-assertSecretEncryptionConfigured(runtimeEnv);
-assertDatabaseEncryptionConfigured(runtimeEnv);
-const auditReplicationSink = assertAuditReplicationConfigured(runtimeEnv);
-await maybeApplyDatabaseMigrations(runtimeEnv);
-await maybeApplyAuditRetention(runtimeEnv);
-await maybeApplyObservationRetention(runtimeEnv);
-await maybeVerifyAuditReplicationChain(runtimeEnv, auditReplicationSink);
-const sharedSqlClientHandle = await createSharedSqlClient(runtimeEnv);
-logDeploymentRecordStoreBackend(sharedSqlClientHandle !== undefined);
-const created = await createPaaSApp({
-  runtimeEnv,
-  runtimeConfig,
-  ...(sharedSqlClientHandle ? { sqlClient: sharedSqlClientHandle.client } : {}),
-}).catch((error) => {
-  fatalStartupError(error);
-});
-const app: HonoApp = created.app;
-const role: PaaSProcessRole = created.role;
-startHeartbeatIfConfigured();
-
-if (import.meta.main) {
-  const port = Number(runtime.env.get("PORT") ?? "8788");
-  const server = runtime.serveHttp(app.fetch, { port });
-  registerKernelShutdownHandlers(server);
+/**
+ * Materialised boot output exposed to callers that want to embed the kernel
+ * into a custom host (e.g. tests, CLI `takosumi server`, the bundled Deno
+ * entry point below). The HTTP listener is *not* started here; callers wire
+ * it up themselves via `runtime.serveHttp(app.fetch, ...)`.
+ */
+export interface StartedKernel {
+  readonly app: HonoApp;
+  readonly role: PaaSProcessRole;
+  readonly runtime: RuntimeAdapter;
+  readonly runtimeConfig: RuntimeConfig;
+  readonly sharedSqlClient?: { client: SqlClient; close: () => Promise<void> };
 }
 
-export default app;
+/**
+ * Boot the kernel synchronously inside an async function. This used to be a
+ * sequence of top-level `await` statements which made the module unsafe to
+ * import on Cloudflare Workers (Workers `export default { fetch: ... }`
+ * touches the module, which would otherwise eagerly run config-load /
+ * migration code on a bare V8 isolate without env bindings). Wrapping the
+ * boot inside `startKernel()` and gating the long-running entrypoint on
+ * `import.meta.main` keeps the module import side-effect-free.
+ */
+export async function startKernel(): Promise<StartedKernel> {
+  const runtime = currentRuntime();
+  const runtimeEnv: Record<string, string> = runtime.env.toObject();
+  warnIfDevMode(runtimeEnv);
+  const runtimeConfig = await loadRuntimeConfigFromEnv({ env: runtimeEnv })
+    .catch((error) => fatalStartupError(runtime, error));
+  assertSecretEncryptionConfigured(runtime, runtimeEnv);
+  assertDatabaseEncryptionConfigured(runtime, runtimeEnv);
+  const auditReplicationSink = assertAuditReplicationConfigured(
+    runtime,
+    runtimeEnv,
+  );
+  await maybeApplyDatabaseMigrations(runtimeEnv);
+  await maybeApplyAuditRetention(runtimeEnv);
+  await maybeApplyObservationRetention(runtimeEnv);
+  await maybeVerifyAuditReplicationChain(
+    runtime,
+    runtimeEnv,
+    auditReplicationSink,
+  );
+  const sharedSqlClientHandle = await createSharedSqlClient(runtimeEnv);
+  logDeploymentRecordStoreBackend(sharedSqlClientHandle !== undefined);
+  const created = await createPaaSApp({
+    runtimeEnv,
+    runtimeConfig,
+    ...(sharedSqlClientHandle
+      ? { sqlClient: sharedSqlClientHandle.client }
+      : {}),
+  }).catch((error) => {
+    fatalStartupError(runtime, error);
+  });
+  if (!created) {
+    // fatalStartupError already exited; this is unreachable but keeps the
+    // type checker honest.
+    throw new Error("kernel.boot.create_paas_app_did_not_return");
+  }
+  const app: HonoApp = created.app;
+  const role: PaaSProcessRole = created.role;
+  startHeartbeatIfConfigured(runtime, role);
+  return {
+    app,
+    role,
+    runtime,
+    runtimeConfig,
+    ...(sharedSqlClientHandle
+      ? { sharedSqlClient: sharedSqlClientHandle }
+      : {}),
+  };
+}
+
+// The kernel module used to run boot at the top level and `export default
+// app`. Workers `export default { fetch: ... }` consumers therefore had to
+// import this module, which forced `await loadRuntimeConfigFromEnv(...)`
+// to fire inside the isolate. The kernel now exposes `startKernel()` and
+// only runs it when the module is executed as the program entrypoint (e.g.
+// `deno run packages/kernel/src/index.ts` on long-running servers).
+
+if (import.meta.main) {
+  const started = await startKernel();
+  const port = Number(started.runtime.env.get("PORT") ?? "8788");
+  const server = started.runtime.serveHttp(started.app.fetch, { port });
+  registerKernelShutdownHandlers(started.runtime, server);
+}
 
 /**
  * Capture SIGINT / SIGTERM and drain in-flight requests via the
@@ -82,7 +138,10 @@ export default app;
  * completion and the runtime exit hook is called from this handler once
  * the server has finished draining.
  */
-function registerKernelShutdownHandlers(server: ServeHttpHandle): void {
+function registerKernelShutdownHandlers(
+  runtime: RuntimeAdapter,
+  server: ServeHttpHandle,
+): void {
   let shuttingDown = false;
   const handler = (signal: "SIGINT" | "SIGTERM") => {
     if (shuttingDown) return;
@@ -99,7 +158,7 @@ function registerKernelShutdownHandlers(server: ServeHttpHandle): void {
   runtime.onSignal("SIGTERM", () => handler("SIGTERM"));
 }
 
-function fatalStartupError(error: unknown): never {
+function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
   if (error instanceof RuntimeConfigError) {
     log.error("kernel.boot.runtime_config_invalid", {
       message: error.message,
@@ -372,8 +431,26 @@ async function createSharedSqlClient(
 async function tryCreatePostgresClient(
   databaseUrl: string,
 ): Promise<{ client: SqlClient; close: () => Promise<void> } | undefined> {
+  // `npm:pg` ships a binary protocol client that requires `node:net` and
+  // `node:tls`; loading it on a Cloudflare Worker / V8 isolate produces a
+  // hard error at module-resolve time. Gate the dynamic import behind the
+  // runtime check so the kernel module stays importable on Workers and
+  // operators receive a clean warning when the driver is unavailable.
+  const runtime = currentRuntime();
+  if (runtime.kind !== "deno" && runtime.kind !== "node") {
+    log.warn("kernel.boot.postgres_driver_unavailable", {
+      message:
+        `npm:pg cannot run on the ${runtime.kind} runtime; use an HTTP-mode ` +
+        "Postgres adapter (Hyperdrive, Neon, etc.) instead.",
+    });
+    return undefined;
+  }
   try {
-    const pgModule = await import("npm:pg@^8.11.0");
+    // Dynamic specifier prevents bundlers (and Workers' build pipeline) from
+    // statically discovering `npm:pg` when the module is imported but never
+    // called. The exact pin stays the same.
+    const pgSpecifier = "npm:pg@^8.11.0";
+    const pgModule = await import(pgSpecifier);
     const Pool = pgModule.default?.Pool;
     if (!Pool) throw new Error("npm:pg Pool export missing");
     const pool = new Pool({ connectionString: databaseUrl });
@@ -438,7 +515,10 @@ function renderNamedParams(
   return { sql: rendered, values: order.map((name) => record[name]) };
 }
 
-function startHeartbeatIfConfigured(): void {
+function startHeartbeatIfConfigured(
+  runtime: RuntimeAdapter,
+  role: PaaSProcessRole,
+): void {
   const heartbeatFile = runtime.env.get("TAKOSUMI_PAAS_WORKER_HEARTBEAT_FILE");
   if (!heartbeatFile) return;
   if (!runtime.fs.available) {
@@ -484,6 +564,7 @@ function dirname(path: string): string {
  * encryption configuration before serving.
  */
 function assertSecretEncryptionConfigured(
+  runtime: RuntimeAdapter,
   env: Record<string, string | undefined>,
 ): void {
   try {
@@ -509,6 +590,7 @@ function assertSecretEncryptionConfigured(
  * `TAKOSUMI_DEV_MODE=1`.
  */
 function assertDatabaseEncryptionConfigured(
+  runtime: RuntimeAdapter,
   env: Record<string, string | undefined>,
 ): void {
   try {
@@ -541,6 +623,7 @@ function assertDatabaseEncryptionConfigured(
  * `undefined` when no sink is configured.
  */
 function assertAuditReplicationConfigured(
+  runtime: RuntimeAdapter,
   env: Record<string, string | undefined>,
 ): AuditExternalReplicationSink | undefined {
   try {
@@ -580,6 +663,7 @@ function assertAuditReplicationConfigured(
  * to investigate before the kernel resumes serving.
  */
 async function maybeVerifyAuditReplicationChain(
+  runtime: RuntimeAdapter,
   env: Record<string, string | undefined>,
   sink: AuditExternalReplicationSink | undefined,
 ): Promise<void> {

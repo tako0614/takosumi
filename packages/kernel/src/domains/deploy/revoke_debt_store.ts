@@ -1,4 +1,8 @@
-import { createHash } from "node:crypto";
+// Round-2 fix: dropped `createHash` from `node:crypto` for the Web Crypto
+// `sha256HexOfStringAsync` helper so this module compiles on Workers.
+// `revokeDebtSourceKey` and the store methods that use it are now async;
+// callers (SQL and in-memory store, F1 tests) propagate the await.
+import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import type { JsonObject } from "takosumi-contract/reference/compat";
 
 export type RevokeDebtReason =
@@ -136,10 +140,10 @@ export class InMemoryRevokeDebtStore implements RevokeDebtStore {
       (() => `revoke-debt:${crypto.randomUUID()}`);
   }
 
-  enqueue(input: RevokeDebtEnqueueInput): Promise<RevokeDebtRecord> {
-    const sourceKey = revokeDebtSourceKey(input);
+  async enqueue(input: RevokeDebtEnqueueInput): Promise<RevokeDebtRecord> {
+    const sourceKey = await revokeDebtSourceKey(input);
     const existing = this.#rows.get(sourceKey);
-    if (existing) return Promise.resolve(existing);
+    if (existing) return existing;
     const record = freezeClone(
       {
         id: this.#idFactory(),
@@ -176,7 +180,7 @@ export class InMemoryRevokeDebtStore implements RevokeDebtStore {
       } satisfies RevokeDebtRecord,
     );
     this.#rows.set(sourceKey, record);
-    return Promise.resolve(record);
+    return record;
   }
 
   listByOwnerSpace(
@@ -309,7 +313,7 @@ export interface RevokeDebtSummary {
 
 export function revokeDebtSourceKey(
   input: RevokeDebtEnqueueInput,
-): `sha256:${string}` {
+): Promise<`sha256:${string}`> {
   return digest({
     ownerSpaceId: input.ownerSpaceId,
     reason: input.reason,
@@ -436,10 +440,9 @@ export function compareRevokeDebtRecords(
     left.id.localeCompare(right.id);
 }
 
-function digest(value: unknown): `sha256:${string}` {
-  const hash = createHash("sha256");
-  hash.update(JSON.stringify(canonicalize(value)));
-  return `sha256:${hash.digest("hex")}`;
+async function digest(value: unknown): Promise<`sha256:${string}`> {
+  const hex = await sha256HexOfStringAsync(JSON.stringify(canonicalize(value)));
+  return `sha256:${hex}`;
 }
 
 function retryAttemptsExhausted(

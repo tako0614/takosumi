@@ -1,12 +1,18 @@
-import { createHash } from "node:crypto";
+// Round-2 fix: swapped `createHash` from `node:crypto` for the Web Crypto
+// backed `sha256HexOfStringAsync` so this module can compile on Cloudflare
+// Workers. `computeSpecFingerprint` is now async; callers were already
+// inside `async` flows (`applyV2`) so the propagation is local.
+import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
   formatPlatformOperationIdempotencyKey,
   type PlatformOperationContext,
   type PlatformOperationRecoveryMode,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
-import type {
-  PlatformContext,
-  ResourceHandle,
+import {
+  getProvider,
+  type PlatformContext,
+  type ProviderPlugin,
+  type ResourceHandle,
 } from "takosumi-contract/internal/provider-plugin";
 import type { JsonObject } from "takosumi-contract/reference/types";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
@@ -145,9 +151,15 @@ export interface ApplyV2Options {
    * + outputs (which still flow through the per-resource ref resolver so
    * downstream resources see correct values).
    *
-   * v0 policy: a fingerprint *mismatch* still goes through `provider.apply`
-   * (the prior handle is left in place rather than auto-destroyed). Future
-   * "delta replace" work will tear down stale handles before re-creating.
+   * Replace-on-mismatch: a fingerprint *mismatch* (spec drift) OR a
+   * providerId mismatch (resource moved to a different backend) now first
+   * issues `provider.destroy(priorApplied[name].handle)` on the previous
+   * provider before invoking `provider.apply` on the current one. Destroy
+   * is best-effort wrapped in try/catch: a failure does not block the
+   * subsequent apply, but a structured warning is appended to the
+   * observability trace so operators can detect leaked resources from the
+   * prior handle. When the prior providerId is no longer in the registry,
+   * destroy is recorded as `provider_not_found` and skipped.
    */
   readonly priorApplied?: ReadonlyMap<string, PriorAppliedSnapshot>;
 }
@@ -245,7 +257,8 @@ export async function applyV2(
       issues: [],
       status: "succeeded",
       planned,
-      operationPlanPreview: buildOperationPlanPreview({
+      // `buildOperationPlanPreview` became async after the Web Crypto switch.
+      operationPlanPreview: await buildOperationPlanPreview({
         resources,
         planned,
         edges: dag.edges,
@@ -271,7 +284,9 @@ export async function applyV2(
     const resolvedSpec = resolveSpecRefs(item.resource.spec, {
       outputs: outputsByName,
     }) as JsonObject;
-    const fingerprint = computeSpecFingerprint(
+    // `computeSpecFingerprint` became async to use Web Crypto; we await
+    // here since the surrounding loop is already async.
+    const fingerprint = await computeSpecFingerprint(
       item.resource,
       item.provider.id,
       resolvedSpec,
@@ -297,6 +312,25 @@ export async function applyV2(
       });
       reused += 1;
       continue;
+    }
+
+    // Replace-on-mismatch: the snapshot exists but its fingerprint or
+    // providerId differs from the freshly computed one. The prior handle
+    // would otherwise leak (the new `provider.apply` creates a fresh
+    // resource), so tear it down before re-creating. Destroy is
+    // best-effort: if the prior provider is unavailable or its destroy
+    // throws, we keep applying and emit a structured warning so operators
+    // can chase the leak.
+    if (snapshot) {
+      await destroyPriorSnapshot({
+        resourceName: name,
+        snapshot,
+        currentProviderId: item.provider.id,
+        currentProvider: item.provider,
+        currentFingerprint: fingerprint,
+        context,
+        deploymentName,
+      });
     }
 
     const operation = operationContextByResourceName.get(name);
@@ -374,20 +408,22 @@ function planSpaceId(context: PlatformContext): string {
  * Stable SHA-256 hash of the canonical `(shape, providerId, name, spec)`
  * tuple. Object keys are sorted recursively so logically identical specs do
  * not re-apply just because their JSON property insertion order changed.
+ *
+ * Now async because the underlying digest call uses Web Crypto
+ * (`crypto.subtle`) — required for the kernel module to compile on Workers.
  */
-export function computeSpecFingerprint(
+export async function computeSpecFingerprint(
   resource: ManifestResource,
   providerId: string,
   resolvedSpec: JsonObject,
-): string {
-  return `sha256:${
-    createHash("sha256").update(canonicalJsonStringify({
-      shape: resource.shape,
-      providerId,
-      name: resource.name,
-      spec: resolvedSpec,
-    })).digest("hex")
-  }`;
+): Promise<string> {
+  const hex = await sha256HexOfStringAsync(canonicalJsonStringify({
+    shape: resource.shape,
+    providerId,
+    name: resource.name,
+    spec: resolvedSpec,
+  }));
+  return `sha256:${hex}`;
 }
 
 function canonicalJsonStringify(value: unknown): string {
@@ -597,4 +633,155 @@ function withOperationContext(
   operation: PlatformOperationContext | undefined,
 ): PlatformContext {
   return operation ? { ...context, operation } : context;
+}
+
+/**
+ * Tear down the resource recorded by `snapshot` before the upcoming
+ * `provider.apply` replaces it. The prior provider is looked up by
+ * `snapshot.providerId` in the provider registry. When the registry no
+ * longer carries that id (e.g. a deployment moved across distributions
+ * and the legacy plugin was uninstalled), we fall back to the current
+ * provider only when it is the same id; otherwise we record a
+ * `prior_provider_not_found` warning and skip destroy so the apply can
+ * still proceed.
+ *
+ * All failures are emitted as structured trace warnings rather than
+ * thrown, mirroring `rollback()`'s best-effort policy. The apply continues
+ * regardless so a stuck handle does not block recovery.
+ */
+async function destroyPriorSnapshot(args: {
+  readonly resourceName: string;
+  readonly snapshot: PriorAppliedSnapshot;
+  readonly currentProviderId: string;
+  readonly currentProvider: ProviderPlugin;
+  readonly currentFingerprint: string;
+  readonly context: PlatformContext;
+  readonly deploymentName?: string;
+}): Promise<void> {
+  const {
+    resourceName,
+    snapshot,
+    currentProviderId,
+    currentProvider,
+    currentFingerprint,
+    context,
+    deploymentName,
+  } = args;
+
+  const reason = snapshot.providerId !== currentProviderId
+    ? "provider_id_mismatch"
+    : "fingerprint_mismatch";
+
+  // Prefer the prior provider so the destroy targets the same backend that
+  // created the resource; fall back to the current provider when ids match.
+  let priorProvider: ProviderPlugin | undefined = getProvider(
+    snapshot.providerId,
+  );
+  if (!priorProvider && snapshot.providerId === currentProviderId) {
+    priorProvider = currentProvider;
+  }
+
+  if (!priorProvider) {
+    await emitDestroyWarning(context, {
+      resourceName,
+      reason,
+      outcome: "prior_provider_not_found",
+      priorProviderId: snapshot.providerId,
+      currentProviderId,
+      handle: snapshot.handle,
+      currentFingerprint,
+      priorFingerprint: snapshot.specFingerprint,
+      deploymentName,
+      message: `prior provider ${snapshot.providerId} no longer registered; ` +
+        `handle ${String(snapshot.handle)} may leak`,
+    });
+    return;
+  }
+
+  try {
+    await withDeployTraceSpan(
+      { observability: context.observability },
+      {
+        name: "takosumi.provider.destroy.replace",
+        trace: context.trace,
+        spaceId: context.spaceId,
+        groupId: deploymentName,
+        operationKind: "destroy",
+        attributes: {
+          "takosumi.resource_name": resourceName,
+          "takosumi.provider_id": snapshot.providerId,
+          "takosumi.replace_reason": reason,
+          "takosumi.provider_handle": String(snapshot.handle),
+        },
+      },
+      () => priorProvider!.destroy(snapshot.handle, context),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await emitDestroyWarning(context, {
+      resourceName,
+      reason,
+      outcome: "destroy_failed",
+      priorProviderId: snapshot.providerId,
+      currentProviderId,
+      handle: snapshot.handle,
+      currentFingerprint,
+      priorFingerprint: snapshot.specFingerprint,
+      deploymentName,
+      message: `prior provider destroy failed: ${message}`,
+    });
+  }
+}
+
+interface DestroyWarning {
+  readonly resourceName: string;
+  readonly reason: "provider_id_mismatch" | "fingerprint_mismatch";
+  readonly outcome: "destroy_failed" | "prior_provider_not_found";
+  readonly priorProviderId: string;
+  readonly currentProviderId: string;
+  readonly handle: ResourceHandle;
+  readonly currentFingerprint: string;
+  readonly priorFingerprint: string;
+  readonly deploymentName?: string;
+  readonly message: string;
+}
+
+/**
+ * Append a structured warning span recording a failed (or skipped) prior
+ * destroy. We reuse `withDeployTraceSpan` so the span flows through the
+ * same observability sink the rest of `applyV2` writes to. The wrapped
+ * promise rejects with the warning message, which `withDeployTraceSpan`
+ * captures as `statusMessage` on an error-status span. We swallow the
+ * rethrown error here so the apply pipeline keeps running.
+ */
+async function emitDestroyWarning(
+  context: PlatformContext,
+  warning: DestroyWarning,
+): Promise<void> {
+  try {
+    await withDeployTraceSpan<never>(
+      { observability: context.observability },
+      {
+        name: "takosumi.provider.destroy.replace.warning",
+        trace: context.trace,
+        spaceId: context.spaceId,
+        ...(warning.deploymentName ? { groupId: warning.deploymentName } : {}),
+        operationKind: "destroy",
+        attributes: {
+          "takosumi.resource_name": warning.resourceName,
+          "takosumi.replace_reason": warning.reason,
+          "takosumi.replace_outcome": warning.outcome,
+          "takosumi.prior_provider_id": warning.priorProviderId,
+          "takosumi.current_provider_id": warning.currentProviderId,
+          "takosumi.prior_handle": String(warning.handle),
+          "takosumi.prior_fingerprint": warning.priorFingerprint,
+          "takosumi.current_fingerprint": warning.currentFingerprint,
+        },
+      },
+      () => Promise.reject(new Error(warning.message)),
+    );
+  } catch {
+    // Warning is best-effort; rethrown error from the synthetic span is
+    // intentionally swallowed so the apply pipeline keeps running.
+  }
 }

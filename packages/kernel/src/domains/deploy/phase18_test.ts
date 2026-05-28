@@ -441,7 +441,7 @@ Deno.test("C1: stale GroupHead CAS rolls back successful provider operations", a
 
 // -- C2: descriptor closure determinism on profile switch -------------------
 
-Deno.test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a different descriptor_closure digest", () => {
+Deno.test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a different descriptor_closure digest", async () => {
   // Compile the same authoring manifest twice and then synthesise a
   // post-profile-merge AppSpec by stamping `effectiveRuntimeCapabilities`
   // onto the second spec. The descriptor seeds (components / resources /
@@ -466,11 +466,11 @@ Deno.test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a differ
   // Sanity: bare spec carries no merged capabilities.
   assert.deepEqual(baseSpec.effectiveRuntimeCapabilities ?? {}, {});
 
-  const baseClosure = buildDescriptorClosure({
+  const baseClosure = await buildDescriptorClosure({
     appSpec: baseSpec,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
-  const profiledClosure = buildDescriptorClosure({
+  const profiledClosure = await buildDescriptorClosure({
     appSpec: profiledSpec,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
@@ -481,7 +481,7 @@ Deno.test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a differ
   assert.notEqual(baseClosure.closureDigest, profiledClosure.closureDigest);
 });
 
-Deno.test("C2: identical effective capability maps yield identical closure digests", () => {
+Deno.test("C2: identical effective capability maps yield identical closure digests", async () => {
   const manifest: PublicDeployManifest = {
     name: "demo-app",
     version: "1.0.0",
@@ -501,11 +501,11 @@ Deno.test("C2: identical effective capability maps yield identical closure diges
     ...baseSpec,
     effectiveRuntimeCapabilities: { web: ["edge-cdn"] },
   };
-  const closureA = buildDescriptorClosure({
+  const closureA = await buildDescriptorClosure({
     appSpec: a,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
-  const closureB = buildDescriptorClosure({
+  const closureB = await buildDescriptorClosure({
     appSpec: b,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
@@ -513,7 +513,7 @@ Deno.test("C2: identical effective capability maps yield identical closure diges
   assert.equal(closureA.closureDigest, closureB.closureDigest);
 });
 
-Deno.test("C2: capability ordering does not change the closure digest (canonical sort)", () => {
+Deno.test("C2: capability ordering does not change the closure digest (canonical sort)", async () => {
   const manifest: PublicDeployManifest = {
     name: "demo-app",
     version: "1.0.0",
@@ -533,11 +533,11 @@ Deno.test("C2: capability ordering does not change the closure digest (canonical
     ...baseSpec,
     effectiveRuntimeCapabilities: { web: ["kv", "edge-cdn"] },
   };
-  const closureA = buildDescriptorClosure({
+  const closureA = await buildDescriptorClosure({
     appSpec: a,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
-  const closureB = buildDescriptorClosure({
+  const closureB = await buildDescriptorClosure({
     appSpec: b,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });

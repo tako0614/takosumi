@@ -33,6 +33,12 @@ on:
       - ".github/workflows/website-deploy.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -42,10 +48,12 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pinned: v6.0.2 (2026)
+        with:
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # pinned: v4.4.0 (2026)
         with:
           node-version: "20"
 
@@ -62,7 +70,7 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        uses: cloudflare/pages-action@v1
+        uses: cloudflare/pages-action@f0a1cd58cd66095dee69bfa18fa5efd1dde93bca # pinned: v1.5.0 (2026)
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

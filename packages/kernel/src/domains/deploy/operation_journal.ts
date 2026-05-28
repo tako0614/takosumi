@@ -1,4 +1,9 @@
-import { createHash } from "node:crypto";
+// Round-2 fix: removed `createHash` from `node:crypto`. Hashes now go through
+// the Web Crypto–backed helper so the kernel module can compile on Workers.
+// `digest` is async; `operationJournalEffectDigest` and the store `append`
+// method propagate that change. `InMemoryOperationJournalStore.append`
+// already returned `Promise<...>`, so the new `await` flows naturally.
+import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import type { JsonObject } from "takosumi-contract/reference/compat";
 import type { OperationPlanPreview } from "./operation_plan_preview.ts";
 
@@ -108,13 +113,15 @@ export class InMemoryOperationJournalStore implements OperationJournalStore {
     this.#idFactory = options.idFactory ?? (() => crypto.randomUUID());
   }
 
-  append(input: OperationJournalAppendInput): Promise<OperationJournalEntry> {
-    const effectDigest = digest(input.effect);
+  async append(
+    input: OperationJournalAppendInput,
+  ): Promise<OperationJournalEntry> {
+    const effectDigest = await digest(input.effect);
     const key = entryKey(input);
     const existing = this.#entries.get(key);
     if (existing) {
       assertReplayCompatible(existing, effectDigest);
-      return Promise.resolve(existing);
+      return existing;
     }
     const entry = freezeClone(
       {
@@ -138,7 +145,7 @@ export class InMemoryOperationJournalStore implements OperationJournalStore {
       } satisfies OperationJournalEntry,
     );
     this.#entries.set(key, entry);
-    return Promise.resolve(entry);
+    return entry;
   }
 
   listByPlan(
@@ -244,7 +251,7 @@ function publicOperationEffect(input: {
 
 export function operationJournalEffectDigest(
   effect: JsonObject,
-): `sha256:${string}` {
+): Promise<`sha256:${string}`> {
   return digest(effect);
 }
 
@@ -303,10 +310,9 @@ function stageRank(stage: OperationJournalStage): number {
   }
 }
 
-function digest(value: unknown): `sha256:${string}` {
-  const hash = createHash("sha256");
-  hash.update(JSON.stringify(canonicalize(value)));
-  return `sha256:${hash.digest("hex")}`;
+async function digest(value: unknown): Promise<`sha256:${string}`> {
+  const hex = await sha256HexOfStringAsync(JSON.stringify(canonicalize(value)));
+  return `sha256:${hex}`;
 }
 
 function canonicalize(value: unknown): unknown {

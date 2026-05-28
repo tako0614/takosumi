@@ -46,13 +46,26 @@ export function buildOutputResolution(
     ? [`output withdrawn at ${input.output.withdrawnAt}`]
     : [];
   const outputs: OutputProjectionOutput[] = [];
+  // Tracks at least one missing output whose consumer binding declared the
+  // injection as required. Required-consumer misses escalate the resolution
+  // from `degraded` to `invalidated` (mirrored as the public `status: failed`
+  // contract in the surrounding projection layer) so dependent runtimes are
+  // not asked to start with a half-populated environment.
+  let requiredMiss = false;
   if (!withdrawn) {
     for (const [alias, injection] of Object.entries(input.binding.outputs)) {
       const output = input.output.outputs.find((candidate) =>
         candidate.name === injection.outputName || candidate.name === alias
       );
       if (!output) {
-        diagnostics.push(`missing output output: ${injection.outputName}`);
+        diagnostics.push(`missing output: ${injection.outputName}`);
+        // The binding-level optional flag covers the whole consumer
+        // binding. When it is explicitly `true`, missing outputs degrade
+        // but should not fail. Otherwise (binding required or unset), a
+        // missing output that the consumer asked for is treated as fatal.
+        if (input.binding.optional !== true) {
+          requiredMiss = true;
+        }
         continue;
       }
       outputs.push({
@@ -63,6 +76,13 @@ export function buildOutputResolution(
       });
     }
   }
+  const status: CoreOutputResolution["status"] = withdrawn
+    ? "invalidated"
+    : requiredMiss
+    ? "invalidated"
+    : diagnostics.length > 0
+    ? "degraded"
+    : "ready";
   return {
     id: input.id,
     digest: input.digest,
@@ -77,11 +97,7 @@ export function buildOutputResolution(
     contract: input.output.contract,
     outputs,
     resolvedAt: input.resolvedAt,
-    status: withdrawn
-      ? "invalidated"
-      : diagnostics.length > 0
-      ? "degraded"
-      : "ready",
+    status,
     reason: withdrawn
       ? "OutputWithdrawn"
       : diagnostics.length > 0

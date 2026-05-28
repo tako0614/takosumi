@@ -38,21 +38,27 @@ export interface LintIssue {
   readonly message: string;
 }
 
+const VOCABULARY_ROOT_PATH = fromFileUrl(
+  new URL("../spec/contexts/v1.jsonld", import.meta.url),
+);
+
+const KIND_ROOTS = [
+  "kind-worker",
+  "kind-web-service",
+  "kind-postgres",
+  "kind-object-store",
+  "kind-gateway",
+  "kind-sqlite",
+  "kind-kv-store",
+  "kind-message-queue",
+  "kind-vector-store",
+].map((name) =>
+  fromFileUrl(new URL(`../packages/${name}/spec`, import.meta.url))
+);
+
 const ROOTS = [
   fromFileUrl(new URL("../spec/contexts", import.meta.url)),
-  ...[
-    "kind-worker",
-    "kind-web-service",
-    "kind-postgres",
-    "kind-object-store",
-    "kind-gateway",
-    "kind-sqlite",
-    "kind-kv-store",
-    "kind-message-queue",
-    "kind-vector-store",
-  ].map((name) =>
-    fromFileUrl(new URL(`../packages/${name}/spec`, import.meta.url))
-  ),
+  ...KIND_ROOTS,
 ] as const;
 
 const KIND_ID_PREFIX = "https://takosumi.com/kinds/v1/";
@@ -74,7 +80,12 @@ const SAFE_DEFAULT_ACCESS_MODES = new Set<string>(
 
 async function main(): Promise<void> {
   const issues: LintIssue[] = [];
+  const warnings: LintIssue[] = [];
   let fileCount = 0;
+  const contextSnapshot = await loadContextSnapshot();
+  if (contextSnapshot.failure !== undefined) {
+    issues.push(contextSnapshot.failure);
+  }
   for (const root of ROOTS) {
     try {
       const stat = await Deno.stat(root);
@@ -140,9 +151,19 @@ async function main(): Promise<void> {
         issues,
       );
       checkListens(obj["listens"], entry.path, issues);
+      crossCheckContextTerms(
+        obj,
+        entry.path,
+        contextSnapshot,
+        issues,
+        warnings,
+      );
     }
   }
 
+  for (const warning of warnings) {
+    console.warn(`[lint:json-ld] ${warning.path}: ${warning.message}`);
+  }
   if (issues.length > 0) {
     for (const issue of issues) {
       console.error(`[lint:json-ld] ${issue.path}: ${issue.message}`);
@@ -152,7 +173,149 @@ async function main(): Promise<void> {
     );
     Deno.exit(1);
   }
-  console.log(`[lint:json-ld] OK — ${fileCount} file(s) clean`);
+  if (warnings.length > 0) {
+    console.log(
+      `[lint:json-ld] OK — ${fileCount} file(s) clean, ${warnings.length} warning(s)`,
+    );
+  } else {
+    console.log(`[lint:json-ld] OK — ${fileCount} file(s) clean`);
+  }
+}
+
+interface ContextSnapshot {
+  readonly definedTerms: ReadonlySet<string>;
+  readonly hasVocab: boolean;
+  readonly failure?: LintIssue;
+}
+
+async function loadContextSnapshot(): Promise<ContextSnapshot> {
+  let text: string;
+  try {
+    text = await Deno.readTextFile(VOCABULARY_ROOT_PATH);
+  } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    return {
+      definedTerms: new Set<string>(),
+      hasVocab: false,
+      failure: {
+        path: VOCABULARY_ROOT_PATH,
+        message: `cannot read vocabulary root: ${cause}`,
+      },
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    return {
+      definedTerms: new Set<string>(),
+      hasVocab: false,
+      failure: {
+        path: VOCABULARY_ROOT_PATH,
+        message: `vocabulary root is not valid JSON: ${cause}`,
+      },
+    };
+  }
+  if (!isRecord(parsed)) {
+    return {
+      definedTerms: new Set<string>(),
+      hasVocab: false,
+      failure: {
+        path: VOCABULARY_ROOT_PATH,
+        message: "vocabulary root must be a JSON object",
+      },
+    };
+  }
+  const context = parsed["@context"];
+  if (!isRecord(context)) {
+    return {
+      definedTerms: new Set<string>(),
+      hasVocab: false,
+      failure: {
+        path: VOCABULARY_ROOT_PATH,
+        message: "vocabulary root must declare an @context object",
+      },
+    };
+  }
+  const defined = new Set<string>();
+  for (const key of Object.keys(context)) {
+    if (key.startsWith("@")) continue;
+    defined.add(key);
+  }
+  const hasVocab = typeof context["@vocab"] === "string" &&
+    (context["@vocab"] as string).length > 0;
+  return { definedTerms: defined, hasVocab };
+}
+
+const JSON_LD_KEYWORDS: ReadonlySet<string> = new Set([
+  "@context",
+  "@id",
+  "@type",
+  "@value",
+  "@language",
+  "@container",
+  "@list",
+  "@set",
+  "@reverse",
+  "@graph",
+  "@nest",
+  "@index",
+  "@version",
+  "@vocab",
+  "@base",
+  "@json",
+  "@protected",
+  "@included",
+  "@direction",
+  "@prefix",
+  "@import",
+  "@propagate",
+  "@none",
+  "@default",
+]);
+
+function crossCheckContextTerms(
+  doc: Record<string, unknown>,
+  path: string,
+  snapshot: ContextSnapshot,
+  issues: LintIssue[],
+  warnings: LintIssue[],
+): void {
+  const used = new Set<string>();
+  collectTerms(doc, used);
+  for (const term of used) {
+    if (snapshot.definedTerms.has(term)) continue;
+    if (snapshot.hasVocab) {
+      warnings.push({
+        path,
+        message:
+          `term \`${term}\` is not declared in spec/contexts/v1.jsonld; falls back to @vocab`,
+      });
+      continue;
+    }
+    issues.push({
+      path,
+      message:
+        `term \`${term}\` is not declared in spec/contexts/v1.jsonld and no @vocab fallback is present`,
+    });
+  }
+}
+
+function collectTerms(value: unknown, sink: Set<string>): void {
+  if (value === null) return;
+  if (Array.isArray(value)) {
+    for (const entry of value) collectTerms(entry, sink);
+    return;
+  }
+  if (typeof value !== "object") return;
+  const record = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(record)) {
+    if (!JSON_LD_KEYWORDS.has(key)) {
+      sink.add(key);
+    }
+    collectTerms(child, sink);
+  }
 }
 
 function requireNonEmptyString(

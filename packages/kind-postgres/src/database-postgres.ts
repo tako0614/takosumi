@@ -30,11 +30,6 @@ export type {
   DatabasePostgresStorage,
 };
 
-export type PostgresCapabilityTerm = DatabasePostgresCapabilityTerm;
-export type PostgresOutputs = DatabasePostgresOutputs;
-export type PostgresSpec = DatabasePostgresSpec;
-export type PostgresStorage = DatabasePostgresStorage;
-
 /** Size class union derived from the generated spec interface. */
 export type DatabasePostgresSize = NonNullable<DatabasePostgresSpec["size"]>;
 
@@ -127,8 +122,6 @@ export const DatabasePostgresKind: Shape<
     );
   },
 };
-
-export const PostgresKind = DatabasePostgresKind;
 
 function validateStorage(value: unknown, issues: ShapeValidationIssue[]): void {
   if (!isRecord(value)) {

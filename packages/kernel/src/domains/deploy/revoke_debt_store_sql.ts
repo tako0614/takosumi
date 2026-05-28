@@ -39,7 +39,8 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
   async enqueue(
     input: RevokeDebtEnqueueInput,
   ): Promise<RevokeDebtRecord> {
-    const sourceKey = revokeDebtSourceKey(input);
+    // `revokeDebtSourceKey` returns a Promise now (Web Crypto digest).
+    const sourceKey = await revokeDebtSourceKey(input);
     const retryPolicy = input.retryPolicy ?? defaultRetryPolicy();
     const inserted = await this.#query<RevokeDebtRow>(
       "insert into takosumi_revoke_debts " +

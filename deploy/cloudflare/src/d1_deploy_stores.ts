@@ -164,7 +164,8 @@ class D1OperationJournalStore implements OperationJournalStore {
   async append(
     input: OperationJournalAppendInput,
   ): Promise<OperationJournalEntry> {
-    const effectDigest = operationJournalEffectDigest(input.effect);
+    // `operationJournalEffectDigest` is async post Workers / Web Crypto fix.
+    const effectDigest = await operationJournalEffectDigest(input.effect);
     const key = [
       input.spaceId,
       input.operationPlanDigest,
@@ -248,7 +249,9 @@ class D1RevokeDebtStore implements RevokeDebtStore {
   constructor(private readonly records: D1RecordTable) {}
 
   async enqueue(input: RevokeDebtEnqueueInput): Promise<RevokeDebtRecord> {
-    const sourceKey = revokeDebtSourceKey(input);
+    // `revokeDebtSourceKey` became async after the kernel switched off
+    // `node:crypto` to Web Crypto (`crypto.subtle.digest`).
+    const sourceKey = await revokeDebtSourceKey(input);
     const existing = await this.records.get<RevokeDebtRecord>(
       REVOKE_DEBT_NAMESPACE,
       sourceKey,

@@ -42,7 +42,7 @@
  *    informational unless they include `level=error`)
  *
  * Migration note: pre-logger boot diagnostics used inline strings such
- * as `[paas-init] storage migrations up-to-date (3 applied)`. Each such
+ * as `[takosumi-init] storage migrations up-to-date (3 applied)`. Each such
  * call site now becomes
  * `log.info("kernel.boot.storage_migrations_up_to_date", { applied: 3 })`
  * — the prefix-style tag is encoded structurally instead of textually.

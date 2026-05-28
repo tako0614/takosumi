@@ -40,7 +40,7 @@ export interface ControlPlanePreflightCheckDto {
 export interface ControlPlaneMigrationStepDto {
   readonly id: string;
   readonly component:
-    | "paas"
+    | "takosumi-core"
     | "app"
     | "git"
     | "deploy"

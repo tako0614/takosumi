@@ -19,7 +19,7 @@ Deno.test("operation journal appends public plan stages idempotently", async () 
   const store = new InMemoryOperationJournalStore({
     idFactory: () => `journal-row-${++ids}`,
   });
-  const preview = buildOperationPlanPreview({
+  const preview = await buildOperationPlanPreview({
     resources: [RESOURCE],
     planned: [{
       name: RESOURCE.name,
@@ -85,7 +85,9 @@ Deno.test("operation journal rejects same tuple with different effect digest", a
   };
 
   await store.append({ ...base, effect: { expected: "first" } });
-  assert.throws(
+  // `append` became async after the Web Crypto digest switch; use
+  // `assert.rejects` so the replay-mismatch error is awaited correctly.
+  await assert.rejects(
     () => store.append({ ...base, effect: { expected: "second" } }),
     OperationJournalReplayMismatchError,
   );

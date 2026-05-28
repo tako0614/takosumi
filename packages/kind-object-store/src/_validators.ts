@@ -125,3 +125,25 @@ export function rejectUnknownFields(
     }
   }
 }
+
+export function requireHttpUrl(
+  value: unknown,
+  path: string,
+  issues: ShapeValidationIssue[],
+): void {
+  if (!isNonEmptyString(value)) {
+    issues.push({ path, message: "must be an absolute http(s) URL" });
+    return;
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      issues.push({ path, message: "must be an absolute http(s) URL" });
+    }
+    if (url.username || url.password) {
+      issues.push({ path, message: "must not contain embedded credentials" });
+    }
+  } catch {
+    issues.push({ path, message: "must be an absolute http(s) URL" });
+  }
+}

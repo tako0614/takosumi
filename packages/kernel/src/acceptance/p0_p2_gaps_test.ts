@@ -178,60 +178,11 @@ Deno.test("acceptance P1: revoked registry trust degrades group and blocks secur
   );
 });
 
-// Phase 17D — re-enabled. `Deployment.desired.routes` is the canonical
-// route projection keyed off the committed Deployment id. Verify the
-// projection chain (route id, exposure-target projection, route assignment
-// permille weight) is derived from the committed Deployment record.
-// Wave J: route projection removed from kernel; ignored.
-Deno.test.ignore(
-  "acceptance P1: route projection is derived from committed deployment",
-  async () => {
-    const { DeploymentService, InMemoryDeploymentStore } = await import(
-      "../domains/deploy/deployment_service.ts"
-    );
-    const store = new InMemoryDeploymentStore();
-    const service = new DeploymentService({
-      store,
-      idFactory: () => "deployment_p1_route_1",
-      clock: () => new Date("2026-04-27T00:00:00.000Z"),
-    });
-    const resolved = await service.resolveDeployment({
-      spaceId: "space_acceptance",
-      manifest: {
-        name: "route-app",
-        compute: {
-          web: {
-            type: "container",
-            image:
-              "registry.example.test/demo@sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            port: 8080,
-          },
-        },
-        routes: { web: { target: "web", path: "/" } },
-      },
-    });
-    const applied = await service.applyDeployment({
-      deploymentId: resolved.id,
-      appliedAt: "2026-04-27T00:01:00.000Z",
-    });
-    assert.equal(applied.status, "applied");
-
-    // Route projection keyed off the committed Deployment id.
-    assert.equal(applied.desired.routes.length, 1);
-    assert.equal(applied.desired.routes[0].id, "web");
-    // Activation envelope carries the matching route assignment.
-    const routeAssignment = applied.desired.activation_envelope
-      .route_assignments?.find((r) => r.routeId === "web");
-    assert.ok(routeAssignment);
-    assert.equal(routeAssignment.assignments.length, 1);
-    assert.equal(routeAssignment.assignments[0].weightPermille, 1000);
-    // The exposure-target projection lives on the resolved graph and is
-    // derived from the committed Deployment.
-    const exposureTargets = applied.resolution.resolved_graph.projections
-      .filter((p) => p.projectionType === "exposure-target");
-    assert.ok(exposureTargets.length >= 1);
-  },
-);
+// Wave J removed the kernel-side route projection, `desired.routes`,
+// `route_assignments`, and the `exposure-target` projection family. The
+// "route projection is derived from committed deployment" acceptance test
+// asserted on all of those at once. Deleted because the kernel no longer
+// emits any route-bearing projection.
 
 Deno.test("acceptance P2: app factory rejects unsigned internal routes", async () => {
   const app = await createApiApp({

@@ -48,6 +48,7 @@ import type {
   SourcePin,
   SourceSummary,
 } from "takosumi-contract/installer-api";
+
 import type { OutputMaterial } from "takosumi-contract/reference/plugin";
 import {
   fetchGitSource,
@@ -69,6 +70,18 @@ import {
   InMemoryInstallationStore,
   type InstallationStore,
 } from "./store.ts";
+
+/**
+ * Local widening of the contract `RollbackResponse` to attach the
+ * `rollbackKind: "pointer-only"` marker described on
+ * {@link InstallerPipeline.rollback}. The contract types are intentionally
+ * unchanged — clients that ignore unknown fields see the documented
+ * structure, and clients that care can observe the marker structurally on
+ * the response.
+ */
+type RollbackResponseWithKind = RollbackResponse & {
+  readonly rollbackKind: "pointer-only";
+};
 
 /**
  * Apply context passed to {@link InstallerProviderRegistry.apply}. The
@@ -279,6 +292,17 @@ export class InstallerPipeline {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #localSourceRoot?: string;
+  /**
+   * Per-Installation mutation queue. `deploymentApply` and `rollback` for the
+   * same `installationId` chain onto the previous promise so two concurrent
+   * mutations cannot interleave their reads/writes against the same
+   * Installation pointer. We await the previous in-flight mutation rather
+   * than failing fast — concurrent control-plane requests against the same
+   * Installation are uncommon and a transient queue is the least surprising
+   * behavior. Callers that want fail-fast behavior should still rely on the
+   * `expected.currentDeploymentId` guard.
+   */
+  readonly #mutationChains = new Map<string, Promise<unknown>>();
   constructor(dependencies: InstallerPipelineDependencies = {}) {
     this.#installations = dependencies.installations ??
       new InMemoryInstallationStore();
@@ -293,9 +317,15 @@ export class InstallerPipeline {
         ? installerProviderRegistryFromPluginRegistry(this.#pluginRegistry)
         : new NoopProviderRegistry());
     this.#platformServices = dependencies.platformServices;
+    // Full-entropy UUID with hyphens stripped. The previous implementation
+    // truncated to 16 hex chars, which dropped half the entropy and was
+    // observably collision-prone in long-running test fixtures. Hyphens are
+    // removed so the resulting `ins_*` / `dep_*` ids satisfy the
+    // `INSTALLATION_ID_PATTERN` regex (`[0-9a-zA-Z]{16,32}`) used by the
+    // public installer routes.
     this.#newId = dependencies.newId ??
       ((prefix: string) =>
-        `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`);
+        `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`);
     this.#now = dependencies.now ?? (() => Date.now());
     this.#localSourceRoot = dependencies.localSourceRoot;
   }
@@ -452,7 +482,17 @@ export class InstallerPipeline {
     };
   }
 
-  async deploymentApply(
+  deploymentApply(
+    installationId: string,
+    request: DeploymentApplyRequest,
+  ): Promise<DeploymentApplyResponse> {
+    return this.#runSerialized(
+      installationId,
+      () => this.#deploymentApplyImpl(installationId, request),
+    );
+  }
+
+  async #deploymentApplyImpl(
     installationId: string,
     request: DeploymentApplyRequest,
   ): Promise<DeploymentApplyResponse> {
@@ -485,7 +525,36 @@ export class InstallerPipeline {
     return { deployment };
   }
 
-  async rollback(
+  /**
+   * Pointer-only rollback. This call flips the Installation's
+   * `currentDeploymentId` back to a previously succeeded Deployment and
+   * appends a `RollbackEvent` to the deployment store's audit log; it does
+   * NOT re-apply the targeted source against any backend, and it does NOT
+   * destroy resources that were created or mutated by Deployments since the
+   * rollback target.
+   *
+   * If resource state must match the rolled-back Deployment, operators are
+   * expected to follow this call with a new `deploymentApply` against the
+   * rolled-back source (or a forward fix). The returned record carries
+   * `rollback.rolledBackFrom` / `rolledBackTo` so callers can audit the
+   * pointer flip, and the response itself reflects that the rollback was a
+   * pointer-only operation (no new Deployment is created).
+   *
+   * Serialized per-Installation: concurrent `deploymentApply` / `rollback`
+   * calls for the same `installationId` are awaited via the mutation chain
+   * so the pointer flip cannot race with an in-flight apply.
+   */
+  rollback(
+    installationId: string,
+    request: RollbackRequest,
+  ): Promise<RollbackResponse> {
+    return this.#runSerialized(
+      installationId,
+      () => this.#rollbackImpl(installationId, request),
+    );
+  }
+
+  async #rollbackImpl(
     installationId: string,
     request: RollbackRequest,
   ): Promise<RollbackResponse> {
@@ -505,6 +574,8 @@ export class InstallerPipeline {
       );
     }
     const rolledBackFrom = installation.currentDeploymentId;
+    // Pointer-only update: we flip currentDeploymentId, append a RollbackEvent
+    // to the audit log, and return. No re-apply, no resource destroy.
     const patched = await this.#installations.patch(installation.id, {
       currentDeploymentId: previous.id,
       status: "ready",
@@ -520,14 +591,53 @@ export class InstallerPipeline {
       currentDeploymentId: previous.id,
       status: "ready" as const,
     };
-    return {
+    // `rollbackKind: "pointer-only"` documents that this RollbackResponse
+    // reflects a pointer flip + audit log entry, not a backend re-apply.
+    // The contract `RollbackResponse` type does not declare `rollbackKind`,
+    // so the field is attached as an additional readonly property at the
+    // response top level (NOT inside `rollback`, which is contract-typed and
+    // kept exactly to spec for existing clients / deepEqual assertions).
+    // Clients that ignore unknown fields are unaffected; clients that care
+    // can observe the marker via structural typing.
+    const response: RollbackResponseWithKind = {
       installation: updatedInstallation,
       deployment: previous,
       rollback: {
         rolledBackFrom,
         rolledBackTo: previous.id,
       },
+      rollbackKind: "pointer-only",
     };
+    return response;
+  }
+
+  /**
+   * Per-Installation mutation queue. Chains every `deploymentApply` /
+   * `rollback` for the same `installationId` so two mutations cannot
+   * interleave. We await the previous in-flight mutation rather than failing
+   * fast — see `#mutationChains` for rationale.
+   */
+  async #runSerialized<T>(
+    installationId: string,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    requireNonEmptyString(installationId, "installationId");
+    const previous = this.#mutationChains.get(installationId) ??
+      Promise.resolve();
+    let resolveCurrent!: (value: unknown) => void;
+    const current = new Promise<unknown>((resolve) => {
+      resolveCurrent = resolve;
+    });
+    this.#mutationChains.set(installationId, current);
+    try {
+      await previous.catch(() => {});
+      return await work();
+    } finally {
+      resolveCurrent(undefined);
+      if (this.#mutationChains.get(installationId) === current) {
+        this.#mutationChains.delete(installationId);
+      }
+    }
   }
 
   listInstallations(spaceId?: string): Promise<readonly Installation[]> {
@@ -578,6 +688,12 @@ export class InstallerPipeline {
       deployment: provisionalDeployment,
     });
 
+    // Count of components that returned successfully from
+    // `providers.apply()` during this Deployment. Used to populate
+    // `partialApplyDetected` on the failed-Deployment record below — see
+    // the failure handler's JSDoc for why we keep this count instead of a
+    // compensating transaction.
+    let appliedComponentCount = 0;
     try {
       const order = topologicalOrder(input.appSpec);
       const neededOutputs = collectNeededOutputSlots(input.appSpec);
@@ -665,6 +781,7 @@ export class InstallerPipeline {
           listenedMaterials,
           resolvedBindings,
         });
+        appliedComponentCount += 1;
         const neededComponentOutputs = neededOutputs.get(componentName) ??
           new Set<OutputSlotName>();
         for (const outputName of neededComponentOutputs) {
@@ -687,9 +804,39 @@ export class InstallerPipeline {
             providerOutputsToDeploymentOutput(applied.outputs);
         }
       }
-      for (
-        const [name, options] of Object.entries(input.appSpec.publish ?? {})
-      ) {
+      const publishEntries = Object.entries(input.appSpec.publish ?? {});
+      // Pathful publication conflict guard: when this Deployment publishes
+      // any entry with a stable `path`, scan the active publications of
+      // sibling Installations in the same Space and reject if another
+      // active Installation already owns that path. Limitation: we reject
+      // the new apply outright (no owner-disable / transfer flow). To
+      // resolve a conflict, the operator must uninstall or re-publish the
+      // conflicting Installation under a different path before re-applying.
+      const pathfulPublishCount = publishEntries.reduce(
+        (count, [, options]) => (options.path ? count + 1 : count),
+        0,
+      );
+      if (pathfulPublishCount > 0) {
+        const existingPaths = await this.#collectActivePublishPaths({
+          spaceId: input.installation.spaceId,
+          excludeInstallationId: input.installation.id,
+        });
+        for (const [name, options] of publishEntries) {
+          if (!options.path) continue;
+          const owner = existingPaths.get(options.path);
+          if (owner !== undefined) {
+            throw new InstallerPipelineError(
+              "failed_precondition",
+              `publish.${name}.path ${
+                JSON.stringify(options.path)
+              } conflicts with an active publication owned by installation ${
+                JSON.stringify(owner)
+              } (publish_path_conflict)`,
+            );
+          }
+        }
+      }
+      for (const [name, options] of publishEntries) {
         const material = registry.get(options.output);
         if (!material) {
           throw new InstallerPipelineError(
@@ -731,6 +878,18 @@ export class InstallerPipeline {
       }, { swallowErrors: true });
       return persisted;
     } catch (err) {
+      // Partial apply, NO compensation. When `providers.apply()` rejects on
+      // component N, the components 0..N-1 that already succeeded keep
+      // whatever side effects their kernel plugin produced (created
+      // resources, written secrets, registered DNS records, etc). The
+      // installer does NOT call `plugin.destroy()` or re-apply a previous
+      // Deployment's source to compensate; that responsibility is left to
+      // the operator via a forward fix (`deploymentApply` again with a
+      // corrected source) or a manual cleanup.
+      //
+      // We persist `appliedComponentCount` on the failed Deployment as
+      // `partialApplyDetected` so operators / dashboards can see how far
+      // the apply got before failing and decide whether to investigate.
       const failed: Deployment = {
         id: deploymentId,
         installationId: input.installation.id,
@@ -741,12 +900,69 @@ export class InstallerPipeline {
           components: Object.keys(componentOutputs).length === 0
             ? undefined
             : componentOutputs,
+          extensions: appliedComponentCount > 0
+            ? { partialApplyDetected: appliedComponentCount }
+            : undefined,
         },
         createdAt: now,
       };
       await this.#deployments.put(failed);
       throw err;
     }
+  }
+
+  /**
+   * Collect the set of `publish.path` values already owned by active
+   * Installations in the given Space. The map is keyed by path and points
+   * at the owning Installation id so the pathful-publication conflict
+   * guard in {@link #runDeployment} can produce a useful diagnostic.
+   *
+   * Limitations:
+   * - We snapshot the active publications via each Installation's
+   *   `currentDeploymentId` projection. Concurrent applies against
+   *   different Installations in the same Space could still race; the
+   *   per-Installation mutation chain only serializes within an
+   *   Installation.
+   * - Suspended Installations are ignored. `failed` Installations are
+   *   ignored too — a failed apply does not own a publication.
+   */
+  async #collectActivePublishPaths(input: {
+    readonly spaceId: string;
+    readonly excludeInstallationId?: string;
+  }): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    const installations = await this.#installations.list(input.spaceId);
+    for (const installation of installations) {
+      if (
+        input.excludeInstallationId !== undefined &&
+        installation.id === input.excludeInstallationId
+      ) {
+        continue;
+      }
+      if (installation.status !== "ready") continue;
+      const deploymentId = installation.currentDeploymentId;
+      if (deploymentId === null) continue;
+      const deployment = await this.#deployments.get(deploymentId);
+      if (!deployment) continue;
+      const exposures =
+        (deployment.outputs.extensions?.servicePathExposures ?? undefined) as
+          | Readonly<Record<string, JsonValue>>
+          | undefined;
+      if (exposures === undefined) continue;
+      for (const value of Object.values(exposures)) {
+        if (
+          value === null || typeof value !== "object" || Array.isArray(value)
+        ) {
+          continue;
+        }
+        const path = (value as { readonly path?: unknown }).path;
+        if (typeof path !== "string" || path.length === 0) continue;
+        if (!result.has(path)) {
+          result.set(path, installation.id);
+        }
+      }
+    }
+    return result;
   }
 
   async #resolvePlatformService(input: {
@@ -894,15 +1110,25 @@ export class InstallerPipeline {
   async #fetchSource(source: Source): Promise<FetchedSource> {
     validateSourceDescriptor(source);
     if (source.kind === "local") {
-      const root = source.url ?? this.#localSourceRoot;
-      if (!root) {
+      const requested = source.url;
+      const jailRoot = this.#localSourceRoot;
+      if (jailRoot !== undefined) {
+        const workingDirectory = requested === undefined
+          ? resolvePosixPath(jailRoot)
+          : resolveLocalSourceUnderJail(jailRoot, requested);
+        return {
+          workingDirectory,
+          cleanup: () => Promise.resolve(),
+        };
+      }
+      if (!requested) {
         throw new InstallerPipelineError(
           "invalid_argument",
           "local source requires source.url or a configured localSourceRoot",
         );
       }
       return {
-        workingDirectory: root,
+        workingDirectory: requested,
         cleanup: () => Promise.resolve(),
       };
     }
@@ -1169,7 +1395,50 @@ function materialToDeploymentOutput(
 function providerOutputsToDeploymentOutput(
   outputs: Readonly<Record<string, JsonValue>>,
 ): Readonly<Record<string, JsonValue>> {
-  return { ...outputs };
+  return redactSensitiveOutputs(outputs);
+}
+
+/**
+ * Redacts values whose keys look sensitive (token, secret, key, password,
+ * credential, apikey, jwt — case-insensitive) before the provider outputs
+ * are persisted into the Deployment record. The key remains visible so
+ * Deployment outputs still describe shape, but the value is replaced with
+ * the literal string `[redacted]`. Recurses into nested JSON objects /
+ * arrays so structures like `{ db: { password: "..." } }` are scrubbed.
+ */
+function redactSensitiveOutputs(
+  outputs: Readonly<Record<string, JsonValue>>,
+): Readonly<Record<string, JsonValue>> {
+  const result: Record<string, JsonValue> = {};
+  for (const [key, value] of Object.entries(outputs)) {
+    result[key] = isSensitiveKey(key)
+      ? "[redacted]"
+      : redactSensitiveJsonValue(value);
+  }
+  return result;
+}
+
+const SENSITIVE_KEY_RE = /token|secret|key|password|credential|apikey|jwt/i;
+
+function isSensitiveKey(key: string): boolean {
+  return SENSITIVE_KEY_RE.test(key);
+}
+
+function redactSensitiveJsonValue(value: JsonValue): JsonValue {
+  if (value === null) return value;
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactSensitiveJsonValue(entry));
+  }
+  if (typeof value === "object") {
+    const result: Record<string, JsonValue> = {};
+    for (const [key, nested] of Object.entries(value)) {
+      result[key] = isSensitiveKey(key)
+        ? "[redacted]"
+        : redactSensitiveJsonValue(nested as JsonValue);
+    }
+    return result;
+  }
+  return value;
 }
 
 function isSecretRefMaterial(
@@ -1245,11 +1514,33 @@ function summarizeSource(
 ): SourceSummary {
   return {
     kind: source.kind,
-    url: source.url,
+    url: stripUrlCredentials(source.url),
     ref: source.ref,
     commit: fetched.commit,
     digest: fetched.sourceDigest ?? source.digest,
   };
+}
+
+/**
+ * Strip embedded credentials (`user:pass@host`) from a source URL before it is
+ * surfaced in a dry-run response or persisted on a Deployment record. Inputs
+ * that do not parse as URLs (for example absolute filesystem paths used by
+ * `source.kind: "local"`) are returned unchanged.
+ */
+function stripUrlCredentials(value: string | undefined): string | undefined {
+  if (value === undefined) return value;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return value;
+  }
+  if (parsed.username === "" && parsed.password === "") {
+    return value;
+  }
+  parsed.username = "";
+  parsed.password = "";
+  return parsed.toString();
 }
 
 function sourceFromSummary(summary: SourceSummary): Source {
@@ -1533,4 +1824,83 @@ function requireNonEmptyString(
       `${field} must be a non-empty string`,
     );
   }
+}
+
+/**
+ * Resolve a `source.url: <relative-or-absolute>` against the configured
+ * `localSourceRoot`. Rejects with a closed-envelope `invalid_argument` error
+ * when the resolved path escapes the jail root (e.g. `../etc/passwd`).
+ *
+ * The check is purely lexical (`..` collapsing + prefix comparison); we do
+ * not follow symlinks here. Operators that need stricter isolation should
+ * mount the jail root on a path without symlinks pointing outside it.
+ */
+function resolveLocalSourceUnderJail(
+  jailRoot: string,
+  requested: string,
+): string {
+  const normalizedRoot = resolvePosixPath(jailRoot);
+  const candidate = isAbsolutePosixPath(requested)
+    ? resolvePosixPath(requested)
+    : resolvePosixPath(joinPosixPath(normalizedRoot, requested));
+  const relative = posixPathRelative(normalizedRoot, candidate);
+  if (relative === ".." || relative.startsWith("../")) {
+    throw new InstallerPipelineError(
+      "invalid_argument",
+      `local source ${
+        JSON.stringify(requested)
+      } resolves outside the configured localSourceRoot`,
+    );
+  }
+  return candidate;
+}
+
+function isAbsolutePosixPath(value: string): boolean {
+  return value.startsWith("/");
+}
+
+function joinPosixPath(left: string, right: string): string {
+  if (right.length === 0) return left;
+  if (left.endsWith("/")) return left + right;
+  return `${left}/${right}`;
+}
+
+function resolvePosixPath(value: string): string {
+  const segments = value.split("/");
+  const stack: string[] = [];
+  const absolute = isAbsolutePosixPath(value);
+  for (const segment of segments) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (stack.length > 0 && stack[stack.length - 1] !== "..") {
+        stack.pop();
+      } else if (!absolute) {
+        stack.push("..");
+      }
+      continue;
+    }
+    stack.push(segment);
+  }
+  const joined = stack.join("/");
+  if (absolute) return `/${joined}`;
+  return joined.length === 0 ? "." : joined;
+}
+
+function posixPathRelative(from: string, to: string): string {
+  const fromAbs = resolvePosixPath(from);
+  const toAbs = resolvePosixPath(to);
+  if (fromAbs === toAbs) return "";
+  const fromSegments = fromAbs.split("/").filter((seg) => seg.length > 0);
+  const toSegments = toAbs.split("/").filter((seg) => seg.length > 0);
+  let i = 0;
+  while (
+    i < fromSegments.length && i < toSegments.length &&
+    fromSegments[i] === toSegments[i]
+  ) {
+    i += 1;
+  }
+  const up = fromSegments.slice(i).map(() => "..");
+  const down = toSegments.slice(i);
+  const parts = [...up, ...down];
+  return parts.length === 0 ? "" : parts.join("/");
 }

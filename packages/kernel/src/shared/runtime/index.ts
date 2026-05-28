@@ -22,3 +22,4 @@ export { denoRuntime, isDeno } from "./deno.ts";
 export { isNode, nodeRuntime } from "./node.ts";
 export { createWorkersRuntime, isWorkers } from "./workers.ts";
 export type { WorkersEnvBindings } from "./workers.ts";
+export { sha256HexAsync, sha256HexOfStringAsync } from "./hash.ts";

@@ -1,4 +1,7 @@
-import { createHash } from "node:crypto";
+// Round-2 fix: replaced `createHash` from `node:crypto` with the runtime-
+// neutral Web Crypto helper. `digestOutputResolution` returns a Promise and
+// the resolution builder propagates that change.
+import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
   buildOutputResolution,
   type CoreOutputResolution,
@@ -547,7 +550,7 @@ export class OutputDependencyPlanner {
     readonly output: Output;
     readonly resolvedAt: string;
   }): Promise<CoreOutputResolution> {
-    const digest = digestOutputResolution({
+    const digest = await digestOutputResolution({
       binding: resolutionBindingSnapshot(input.binding),
       output: resolutionOutputSnapshot(input.output),
     });
@@ -734,10 +737,9 @@ function resolutionOutputSnapshot(output: Output) {
   };
 }
 
-function digestOutputResolution(value: unknown): string {
-  return `sha256:${
-    createHash("sha256").update(stableStringify(value)).digest("hex")
-  }`;
+async function digestOutputResolution(value: unknown): Promise<string> {
+  const hex = await sha256HexOfStringAsync(stableStringify(value));
+  return `sha256:${hex}`;
 }
 
 function stableStringify(value: unknown): string {

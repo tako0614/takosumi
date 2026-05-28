@@ -23,7 +23,12 @@
 // reuses these projections without re-deriving them, so the digest is the
 // resolution-time witness consumed by Group head + read-set checks.
 
-import { createHash } from "node:crypto";
+// Round-2 fix: removed `createHash` from `node:crypto`. Web Crypto's
+// `crypto.subtle.digest` is async-only on every runtime the kernel targets,
+// so `buildResolvedGraph` and the per-projection builders are now async.
+// The caller (`resolution_pipeline.ts`) was already inside `async
+// resolveDeploymentWithMode`, so the propagation is local.
+import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import { objectAddress } from "takosumi-contract/reference/compat";
 import type {
   CoreComponent,
@@ -65,31 +70,41 @@ export interface BuildResolvedGraphInput {
  *  manifest snapshot + closure digest, so two resolutions with identical
  *  manifests + closures always produce identical graph digests.
  */
-export function buildResolvedGraph(
+export async function buildResolvedGraph(
   input: BuildResolvedGraphInput,
-): DeploymentResolvedGraph {
+): Promise<DeploymentResolvedGraph> {
   const closureIndex = indexClosure(input.descriptorClosure);
-  const components = input.appSpec.components.map((component) =>
-    buildCoreComponent(component, input.appSpec.routes, closureIndex)
+  const components = await Promise.all(
+    input.appSpec.components.map((component) =>
+      buildCoreComponent(component, input.appSpec.routes, closureIndex)
+    ),
   );
 
   const projections: CoreProjectionRecord[] = [];
   for (const component of input.appSpec.components) {
-    projections.push(buildRuntimeClaim(component, input.appSpec, closureIndex));
     projections.push(
-      ...buildExposureTargets(component, input.appSpec.routes, closureIndex),
+      await buildRuntimeClaim(component, input.appSpec, closureIndex),
     );
-    projections.push(...buildBindingRequests(component, closureIndex));
+    projections.push(
+      ...(await buildExposureTargets(
+        component,
+        input.appSpec.routes,
+        closureIndex,
+      )),
+    );
+    projections.push(...(await buildBindingRequests(component, closureIndex)));
   }
   for (const resource of input.appSpec.resources) {
-    projections.push(buildResourceClaim(resource, closureIndex));
+    projections.push(await buildResourceClaim(resource, closureIndex));
   }
   for (const output of input.appSpec.outputs) {
     projections.push(
-      buildOutputDeclaration(input.appSpec, output, closureIndex),
+      await buildOutputDeclaration(input.appSpec, output, closureIndex),
     );
   }
-  for (const access of buildAccessPathRequests(input.appSpec, closureIndex)) {
+  for (
+    const access of await buildAccessPathRequests(input.appSpec, closureIndex)
+  ) {
     projections.push(access);
   }
 
@@ -102,14 +117,14 @@ export function buildResolvedGraph(
       : left.objectAddress.localeCompare(right.objectAddress);
   });
 
-  const appSpecDigest = digestOf(input.appSpec);
-  const envSpecDigest = digestOf({
+  const appSpecDigest = await digestOf(input.appSpec);
+  const envSpecDigest = await digestOf({
     env: input.appSpec.env,
     runtimeNetworkPolicy: runtimeNetworkPolicyInput(input.appSpec),
   });
-  const policySpecDigest = digestOf(policyInput(input.appSpec));
+  const policySpecDigest = await digestOf(policyInput(input.appSpec));
 
-  const digest = digestOf({
+  const digest = await digestOf({
     manifestSnapshot: input.manifestSnapshot ?? null,
     closureDigest: input.descriptorClosure.closureDigest,
     components: components.map(componentFingerprint),
@@ -163,13 +178,13 @@ function descriptorIdFor(ref: string, closure: ClosureIndex): string {
 // CoreComponent construction
 // ---------------------------------------------------------------------------
 
-function buildCoreComponent(
+async function buildCoreComponent(
   component: AppSpecComponent,
   routes: readonly AppSpecRoute[],
   closure: ClosureIndex,
-): CoreComponent {
+): Promise<CoreComponent> {
   const componentAddr = componentAddress(component.name);
-  const runtime = contractInstanceFor({
+  const runtime = await contractInstanceFor({
     componentName: component.name,
     localName: "runtime",
     descriptorRef: component.type,
@@ -187,43 +202,49 @@ function buildCoreComponent(
   });
   const instances: CoreContractInstance[] = [runtime];
   if (usesSourceJsModule(component)) {
-    instances.push(contractInstanceFor({
-      componentName: component.name,
-      localName: "source",
-      descriptorRef: "source.js-module@v1",
-      closure,
-      config: sourceJsModuleConfigFor(component),
-      lifecycleDomain: "source",
-    }));
+    instances.push(
+      await contractInstanceFor({
+        componentName: component.name,
+        localName: "source",
+        descriptorRef: "source.js-module@v1",
+        closure,
+        config: sourceJsModuleConfigFor(component),
+        lifecycleDomain: "source",
+      }),
+    );
   }
   if (component.image) {
-    instances.push(contractInstanceFor({
-      componentName: component.name,
-      localName: "runtime-input",
-      descriptorRef: "runtime-input.oci-image@v1",
-      closure,
-      config: runtimeInputOciImageConfigFor(component.image),
-      lifecycleDomain: "runtime-input",
-    }));
+    instances.push(
+      await contractInstanceFor({
+        componentName: component.name,
+        localName: "runtime-input",
+        descriptorRef: "runtime-input.oci-image@v1",
+        closure,
+        config: runtimeInputOciImageConfigFor(component.image),
+        lifecycleDomain: "runtime-input",
+      }),
+    );
   }
   for (const route of routes.filter((route) => route.to === component.name)) {
     const localName = routeInterfaceLocalName(route);
-    instances.push(contractInstanceFor({
-      componentName: component.name,
-      localName,
-      descriptorRef: routeInterfaceRef(route),
-      closure,
-      config: {
-        route: route.name,
-        protocol: route.protocol,
-        host: route.host,
-        path: route.path,
-        port: route.port ?? null,
-        targetPort: route.targetPort ?? component.port ?? null,
-        source: route.source,
-      },
-      lifecycleDomain: "interface",
-    }));
+    instances.push(
+      await contractInstanceFor({
+        componentName: component.name,
+        localName,
+        descriptorRef: routeInterfaceRef(route),
+        closure,
+        config: {
+          route: route.name,
+          protocol: route.protocol,
+          host: route.host,
+          path: route.path,
+          port: route.port ?? null,
+          targetPort: route.targetPort ?? component.port ?? null,
+          source: route.source,
+        },
+        lifecycleDomain: "interface",
+      }),
+    );
   }
   return {
     address: componentAddr,
@@ -232,14 +253,14 @@ function buildCoreComponent(
   };
 }
 
-function contractInstanceFor(input: {
+async function contractInstanceFor(input: {
   readonly componentName: string;
   readonly localName: string;
   readonly descriptorRef: string;
   readonly closure: ClosureIndex;
   readonly config: unknown;
   readonly lifecycleDomain: string;
-}): CoreContractInstance {
+}): Promise<CoreContractInstance> {
   const descriptorId = descriptorIdFor(input.descriptorRef, input.closure);
   return {
     address: objectAddress(
@@ -248,8 +269,8 @@ function contractInstanceFor(input: {
     ),
     localName: input.localName,
     descriptorId,
-    descriptorDigest: digestOf({ descriptor: descriptorId }),
-    configDigest: digestOf(input.config),
+    descriptorDigest: await digestOf({ descriptor: descriptorId }),
+    configDigest: await digestOf(input.config),
     lifecycleDomain: input.lifecycleDomain,
   };
 }
@@ -298,11 +319,11 @@ function routeInterfaceRef(route: AppSpecRoute): string {
 // Projection 1: runtime claim
 // ---------------------------------------------------------------------------
 
-function buildRuntimeClaim(
+async function buildRuntimeClaim(
   component: AppSpecComponent,
   appSpec: AppSpec,
   closure: ClosureIndex,
-): CoreProjectionRecord {
+): Promise<CoreProjectionRecord> {
   const descriptorId = descriptorIdFor(component.type, closure);
   return {
     projectionType: "runtime-claim",
@@ -310,7 +331,7 @@ function buildRuntimeClaim(
     sourceComponentAddress: componentAddress(component.name),
     sourceContractInstance: "runtime",
     descriptorResolutionId: descriptorId,
-    digest: digestOf({
+    digest: await digestOf({
       kind: "runtime-claim",
       component: component.name,
       descriptor: descriptorId,
@@ -330,10 +351,10 @@ function buildRuntimeClaim(
 // Projection 2: resource claim
 // ---------------------------------------------------------------------------
 
-function buildResourceClaim(
+async function buildResourceClaim(
   resource: AppSpecResource,
   closure: ClosureIndex,
-): CoreProjectionRecord {
+): Promise<CoreProjectionRecord> {
   const descriptorId = descriptorIdFor(resource.type, closure);
   // Resource claims are component-agnostic but spec mandates a
   // `sourceComponentAddress`; we use the resource address itself so the field
@@ -347,7 +368,7 @@ function buildResourceClaim(
     sourceComponentAddress: sourceAddr,
     sourceContractInstance: "resource",
     descriptorResolutionId: descriptorId,
-    digest: digestOf({
+    digest: await digestOf({
       kind: "resource-claim",
       resource: resource.name,
       descriptor: descriptorId,
@@ -362,37 +383,39 @@ function buildResourceClaim(
 // Projection 3: exposure target
 // ---------------------------------------------------------------------------
 
-function buildExposureTargets(
+async function buildExposureTargets(
   component: AppSpecComponent,
   routes: readonly AppSpecRoute[],
   closure: ClosureIndex,
-): readonly CoreProjectionRecord[] {
-  return routes.filter((route) => route.to === component.name).map((route) => {
-    const descriptorRef = routeInterfaceRef(route);
-    const descriptorId = descriptorIdFor(descriptorRef, closure);
-    const localName = routeInterfaceLocalName(route);
-    const exposureName = exposureNameFor(component.name, route.name);
-    return {
-      projectionType: "exposure-target",
-      objectAddress: objectAddress("app.exposure", exposureName),
-      sourceComponentAddress: componentAddress(component.name),
-      sourceContractInstance: localName,
-      descriptorResolutionId: descriptorId,
-      digest: digestOf({
-        kind: "exposure-target",
-        component: component.name,
-        route: route.name,
-        protocol: route.protocol,
-        contractInstance: localName,
-        descriptor: descriptorId,
-        host: route.host ?? null,
-        path: route.path ?? null,
-        port: route.port ?? null,
-        targetPort: route.targetPort ?? component.port ?? null,
-        source: route.source ?? null,
-      }),
-    };
-  });
+): Promise<readonly CoreProjectionRecord[]> {
+  return await Promise.all(
+    routes.filter((route) => route.to === component.name).map(async (route) => {
+      const descriptorRef = routeInterfaceRef(route);
+      const descriptorId = descriptorIdFor(descriptorRef, closure);
+      const localName = routeInterfaceLocalName(route);
+      const exposureName = exposureNameFor(component.name, route.name);
+      return {
+        projectionType: "exposure-target",
+        objectAddress: objectAddress("app.exposure", exposureName),
+        sourceComponentAddress: componentAddress(component.name),
+        sourceContractInstance: localName,
+        descriptorResolutionId: descriptorId,
+        digest: await digestOf({
+          kind: "exposure-target",
+          component: component.name,
+          route: route.name,
+          protocol: route.protocol,
+          contractInstance: localName,
+          descriptor: descriptorId,
+          host: route.host ?? null,
+          path: route.path ?? null,
+          port: route.port ?? null,
+          targetPort: route.targetPort ?? component.port ?? null,
+          source: route.source ?? null,
+        }),
+      };
+    }),
+  );
 }
 
 function exposureNameFor(component: string, instance: string): string {
@@ -403,11 +426,11 @@ function exposureNameFor(component: string, instance: string): string {
 // Projection 4: output declaration
 // ---------------------------------------------------------------------------
 
-function buildOutputDeclaration(
+async function buildOutputDeclaration(
   appSpec: AppSpec,
   output: AppSpecOutput,
   closure: ClosureIndex,
-): CoreProjectionRecord {
+): Promise<CoreProjectionRecord> {
   const descriptorId = descriptorIdFor(output.type, closure);
   const owner = output.from ?? appSpec.components[0]?.name ?? "group";
   const outputName = outputFullName(appSpec.groupId, output.name);
@@ -417,7 +440,7 @@ function buildOutputDeclaration(
     sourceComponentAddress: componentAddress(owner),
     sourceContractInstance: "runtime",
     descriptorResolutionId: descriptorId,
-    digest: digestOf({
+    digest: await digestOf({
       kind: "output-declaration",
       group: appSpec.groupId,
       name: output.name,
@@ -437,10 +460,10 @@ function outputFullName(group: string, name: string): string {
 // Projection 5: binding request
 // ---------------------------------------------------------------------------
 
-function buildBindingRequests(
+async function buildBindingRequests(
   component: AppSpecComponent,
   closure: ClosureIndex,
-): readonly CoreProjectionRecord[] {
+): Promise<readonly CoreProjectionRecord[]> {
   const records: CoreProjectionRecord[] = [];
   for (const [bindingName, spec] of Object.entries(component.bindings)) {
     const sourceKind = bindingSourceFor(spec);
@@ -454,7 +477,7 @@ function buildBindingRequests(
       sourceComponentAddress: componentAddress(component.name),
       sourceContractInstance: "runtime",
       descriptorResolutionId: descriptorId,
-      digest: digestOf({
+      digest: await digestOf({
         kind: "binding-request",
         component: component.name,
         envBinding: bindingName,
@@ -553,10 +576,10 @@ function stringArray(value: unknown): readonly string[] {
 // Projection 6: access path request
 // ---------------------------------------------------------------------------
 
-function buildAccessPathRequests(
+async function buildAccessPathRequests(
   appSpec: AppSpec,
   closure: ClosureIndex,
-): readonly CoreProjectionRecord[] {
+): Promise<readonly CoreProjectionRecord[]> {
   const records: CoreProjectionRecord[] = [];
   for (const component of appSpec.components) {
     for (const [_bindingName, spec] of Object.entries(component.bindings)) {
@@ -580,7 +603,7 @@ function buildAccessPathRequests(
         sourceComponentAddress: componentAddress(component.name),
         sourceContractInstance: "runtime",
         descriptorResolutionId: descriptorId,
-        digest: digestOf({
+        digest: await digestOf({
           kind: "access-path-request",
           component: component.name,
           target,
@@ -636,10 +659,9 @@ function policyInput(appSpec: AppSpec): unknown {
   return {};
 }
 
-function digestOf(value: unknown): Digest {
-  return `sha256:${
-    createHash("sha256").update(stableStringify(value)).digest("hex")
-  }`;
+async function digestOf(value: unknown): Promise<Digest> {
+  const hex = await sha256HexOfStringAsync(stableStringify(value));
+  return `sha256:${hex}`;
 }
 
 function stableStringify(value: unknown): string {

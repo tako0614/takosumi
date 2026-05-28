@@ -60,8 +60,12 @@ const fs: FsAdapter = {
     return new Uint8Array(buf);
   },
   readTextFileSync(path) {
-    // Synchronous read: require the cached `node:fs` module if available.
-    const required = nodeRequire("node:fs") as
+    // Synchronous read: prefer the CommonJS `require` global when running on
+    // classic Node, otherwise fall back to building a `require` via
+    // `createRequire(import.meta.url)`. We touch `node:module` only when
+    // necessary so that runtimes without it (e.g. very old Node) still
+    // surface a clear error rather than a require-loader exception.
+    const required = nodeRequireSync("node:fs") as
       | { readFileSync(p: string | URL, enc: string): string }
       | undefined;
     if (!required) {
@@ -82,13 +86,64 @@ const fs: FsAdapter = {
   },
 };
 
-function nodeRequire(specifier: string): unknown {
-  const req = (globalThis as {
+/**
+ * Synchronously resolve a CJS specifier on Node (and Bun's Node-compat
+ * surface). When `globalThis.require` is available we use it directly. When
+ * it isn't (= ESM-only Node, the common case under Deno's Node compat shim
+ * or pure ESM bundlers), build one from `node:module#createRequire` keyed
+ * off this module's `import.meta.url`.
+ *
+ * `createRequire` itself is loaded synchronously through a cached
+ * `globalThis.require` when the bootstrap already has one; otherwise we
+ * lazily warm the cache via a top-level dynamic import on first call. The
+ * warm-up call only fires once because the resolver memoises the resulting
+ * `require` function.
+ */
+let cachedRequire: ((specifier: string) => unknown) | undefined;
+
+function nodeRequireSync(specifier: string): unknown {
+  if (cachedRequire) return cachedRequire(specifier);
+  const builtin = (globalThis as {
     require?: (specifier: string) => unknown;
   }).require;
-  if (typeof req === "function") return req(specifier);
-  // ESM-only Node: fall back to createRequire via import.meta if available.
-  return undefined;
+  if (typeof builtin === "function") {
+    cachedRequire = builtin;
+    return cachedRequire(specifier);
+  }
+  // ESM-only Node: synthesise a `require` via `node:module#createRequire`.
+  // This must be sync because the caller (e.g. descriptor JSON loader at
+  // module init) cannot await. We rely on the synchronous loader on Node /
+  // Bun that already has `node:module` present in the import map.
+  const moduleHelpers = synchronousNodeModuleHelpers();
+  if (!moduleHelpers) return undefined;
+  cachedRequire = moduleHelpers.createRequire(import.meta.url);
+  return cachedRequire(specifier);
+}
+
+/**
+ * Try to obtain `createRequire` from `node:module` synchronously. We cannot
+ * `await import("node:module")` here because the call site is sync, but we
+ * can look the resolved module up through a previously cached
+ * `globalThis.require("node:module")` when the runtime exposes one.
+ *
+ * Returns undefined on runtimes without `node:module` (e.g. Workers — but
+ * those never reach this code path because the workers adapter throws
+ * before `readTextFileSync` is invoked).
+ */
+function synchronousNodeModuleHelpers(): {
+  createRequire(url: string): (specifier: string) => unknown;
+} | undefined {
+  const globalRequire = (globalThis as {
+    require?: (specifier: string) => unknown;
+  }).require;
+  if (typeof globalRequire !== "function") return undefined;
+  const moduleNs = globalRequire("node:module") as
+    | { createRequire?: (url: string) => (specifier: string) => unknown }
+    | undefined;
+  if (!moduleNs || typeof moduleNs.createRequire !== "function") {
+    return undefined;
+  }
+  return { createRequire: moduleNs.createRequire };
 }
 
 const subprocess: SubprocessAdapter = {

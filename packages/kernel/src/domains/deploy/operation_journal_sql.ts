@@ -37,7 +37,9 @@ export class SqlOperationJournalStore implements OperationJournalStore {
   async append(
     input: OperationJournalAppendInput,
   ): Promise<OperationJournalEntry> {
-    const effectDigest = operationJournalEffectDigest(input.effect);
+    // `operationJournalEffectDigest` returns a Promise after the Workers
+    // runtime fix (Web Crypto is async-only).
+    const effectDigest = await operationJournalEffectDigest(input.effect);
     const effectJson = JSON.stringify(input.effect);
     const status = input.status ?? "recorded";
     const inserted = await this.#query<OperationJournalRow>(

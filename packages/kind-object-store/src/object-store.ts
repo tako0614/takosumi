@@ -1,10 +1,8 @@
-import type {
-  Shape,
-  ShapeValidationIssue,
-} from "takosumi-contract/reference/shape";
+import type { Shape } from "takosumi-contract/reference/shape";
 import {
   optionalNonEmptyString,
   rejectUnknownFields,
+  requireHttpUrl,
   requireNonEmptyString,
   requireRoot,
 } from "./_validators.ts";
@@ -80,25 +78,3 @@ export const ObjectStoreKind: Shape<
     }
   },
 };
-
-function requireHttpUrl(
-  value: unknown,
-  path: string,
-  issues: ShapeValidationIssue[],
-): void {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    issues.push({ path, message: "must be an absolute http(s) URL" });
-    return;
-  }
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      issues.push({ path, message: "must be an absolute http(s) URL" });
-    }
-    if (url.username || url.password) {
-      issues.push({ path, message: "must not contain embedded credentials" });
-    }
-  } catch {
-    issues.push({ path, message: "must be an absolute http(s) URL" });
-  }
-}

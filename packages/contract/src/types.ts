@@ -157,7 +157,18 @@ export interface GroupSummary {
   metadata?: JsonObject;
 }
 
-export interface AppSpec {
+/**
+ * Legacy reference deploy-core authoring shape. Retained for historical
+ * deploy-domain compatibility — this is NOT the current Takosumi AppSpec
+ * contract. The v1 `AppSpec` contract lives in
+ * `@takos/takosumi-contract/app-spec` (`packages/contract/src/app-spec.ts`)
+ * and matches the `.takosumi.yml` envelope (`apiVersion: "v1"`, `metadata`,
+ * `components`, optional `publish`). Do not introduce new consumers of this
+ * shape; migrate to the v1 `AppSpec` instead.
+ *
+ * @deprecated Use `AppSpec` from `@takos/takosumi-contract/app-spec`.
+ */
+export interface LegacyReferenceAppSpec {
   name: string;
   version?: string;
   source: SourceSnapshot;

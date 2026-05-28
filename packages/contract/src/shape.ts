@@ -1,5 +1,3 @@
-import type { JsonObject } from "./types.ts";
-
 /**
  * Legacy connector-local shape registry.
  *
@@ -7,7 +5,18 @@ import type { JsonObject } from "./types.ts";
  * resource planning. It is derived from the operator's kind/materializer
  * mapping; it is not the AppSpec component contract. New reference adapters
  * should key off `Component.kind` through `KernelPlugin.provides[]`.
+ *
+ * Migration path: replace `getShape(...)` / `Shape` lookups with kind-aware
+ * `KernelPlugin` resolution. `KernelPlugin.provides[]` records the bound kind
+ * URI(s); the operator's `createPaaSApp({ plugins: [...] })` plugin array is
+ * the canonical registry for reference implementations.
+ *
+ * @deprecated Removed in `@takos/takosumi-contract` 4.0.0. Use the
+ *             `KernelPlugin` resolution path from
+ *             `@takos/takosumi-contract/reference/plugin` instead.
  */
+import type { JsonObject } from "./types.ts";
+
 export interface ShapeValidationIssue {
   readonly path: string;
   readonly message: string;

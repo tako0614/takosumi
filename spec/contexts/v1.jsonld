@@ -114,6 +114,291 @@
     },
     "default": {
       "@id": "takosumi:default"
+    },
+    "projectionMatrix": {
+      "@id": "takosumi:projectionMatrix",
+      "@type": "@json"
+    },
+    "propertyNames": {
+      "@id": "takosumi:propertyNames",
+      "@type": "@json"
+    },
+    "properties": {
+      "@id": "takosumi:properties",
+      "@type": "@json"
+    },
+    "additionalProperties": {
+      "@id": "takosumi:additionalProperties",
+      "@type": "@json"
+    },
+    "$schema": {
+      "@id": "takosumi:jsonSchemaDialect",
+      "@type": "xsd:string"
+    },
+    "minLength": {
+      "@id": "takosumi:minLength"
+    },
+    "minimum": {
+      "@id": "takosumi:minimum"
+    },
+    "maximum": {
+      "@id": "takosumi:maximum"
+    },
+    "pattern": {
+      "@id": "takosumi:pattern",
+      "@type": "xsd:string"
+    },
+    "minProperties": {
+      "@id": "takosumi:minProperties"
+    },
+    "minItems": {
+      "@id": "takosumi:minItems"
+    },
+    "host": {
+      "@id": "takosumi:host",
+      "@type": "xsd:string"
+    },
+    "tls": {
+      "@id": "takosumi:tls",
+      "@type": "xsd:string"
+    },
+    "listeners": {
+      "@id": "takosumi:listeners",
+      "@type": "@json"
+    },
+    "routes": {
+      "@id": "takosumi:routes",
+      "@type": "@json"
+    },
+    "listener": {
+      "@id": "takosumi:listener",
+      "@type": "xsd:string"
+    },
+    "path": {
+      "@id": "takosumi:path",
+      "@type": "xsd:string"
+    },
+    "to": {
+      "@id": "takosumi:to",
+      "@type": "xsd:string"
+    },
+    "protocol": {
+      "@id": "takosumi:protocol",
+      "@type": "xsd:string"
+    },
+    "pathPrefix": {
+      "@id": "takosumi:pathPrefix",
+      "@type": "xsd:string"
+    },
+    "scheme": {
+      "@id": "takosumi:scheme",
+      "@type": "xsd:string"
+    },
+    "dimensions": {
+      "@id": "takosumi:dimensions"
+    },
+    "metric": {
+      "@id": "takosumi:metric",
+      "@type": "xsd:string"
+    },
+
+    "http-endpoint": "takosumi:http-endpoint",
+    "service-binding": "takosumi:service-binding",
+    "object-store": "takosumi:object-store",
+    "event-channel": "takosumi:event-channel",
+    "identity.oidc@v1": "takosumi:identity.oidc.v1",
+    "billing.port@v1": "takosumi:billing.port.v1",
+    "mcp-server@v1": "takosumi:mcp-server.v1",
+
+    "*": {
+      "@id": "takosumi:wildcardListenSlot",
+      "@type": "xsd:string"
+    },
+
+    "targets": {
+      "@id": "takosumi:targets",
+      "@container": "@set"
+    },
+    "endpoints": {
+      "@id": "takosumi:endpoints",
+      "@container": "@set"
+    },
+    "endpoint": {
+      "@id": "takosumi:endpoint",
+      "@type": "xsd:string"
+    },
+    "http": {
+      "@id": "takosumi:httpOutputSlot",
+      "@type": "@json"
+    },
+    "connection": {
+      "@id": "takosumi:connectionOutputSlot",
+      "@type": "@json"
+    },
+    "store": {
+      "@id": "takosumi:storeOutputSlot",
+      "@type": "@json"
+    },
+    "index": {
+      "@id": "takosumi:indexOutputSlot",
+      "@type": "@json"
+    },
+    "consumer": {
+      "@id": "takosumi:consumerOutputSlot",
+      "@type": "@json"
+    },
+    "producer": {
+      "@id": "takosumi:producerOutputSlot",
+      "@type": "@json"
+    },
+
+    "cpu": {
+      "@id": "takosumi:cpu",
+      "@type": "xsd:string"
+    },
+    "memory": {
+      "@id": "takosumi:memory",
+      "@type": "xsd:string"
+    },
+    "storage": {
+      "@id": "takosumi:storage",
+      "@type": "@json"
+    },
+    "resources": {
+      "@id": "takosumi:resources",
+      "@type": "@json"
+    },
+    "size": {
+      "@id": "takosumi:size",
+      "@type": "xsd:string"
+    },
+    "sizeGiB": {
+      "@id": "takosumi:sizeGiB"
+    },
+    "scale": {
+      "@id": "takosumi:scale",
+      "@type": "@json"
+    },
+    "min": {
+      "@id": "takosumi:min"
+    },
+    "max": {
+      "@id": "takosumi:max"
+    },
+    "highAvailability": {
+      "@id": "takosumi:highAvailability"
+    },
+    "deliveryDelay": {
+      "@id": "takosumi:deliveryDelay"
+    },
+
+    "entrypoint": {
+      "@id": "takosumi:entrypoint",
+      "@type": "xsd:string"
+    },
+    "image": {
+      "@id": "takosumi:image",
+      "@type": "xsd:string"
+    },
+    "env": {
+      "@id": "takosumi:env",
+      "@type": "@json"
+    },
+
+    "port": {
+      "@id": "takosumi:port"
+    },
+    "url": {
+      "@id": "takosumi:url",
+      "@type": "xsd:string"
+    },
+    "bucket": {
+      "@id": "takosumi:bucket",
+      "@type": "xsd:string"
+    },
+    "region": {
+      "@id": "takosumi:region",
+      "@type": "xsd:string"
+    },
+    "database": {
+      "@id": "takosumi:database",
+      "@type": "xsd:string"
+    },
+    "username": {
+      "@id": "takosumi:username",
+      "@type": "xsd:string"
+    },
+    "connectionUrl": {
+      "@id": "takosumi:connectionUrl",
+      "@type": "xsd:string"
+    },
+    "service": {
+      "@id": "takosumi:serviceBindingService",
+      "@type": "xsd:string"
+    },
+    "channel": {
+      "@id": "takosumi:channel",
+      "@type": "xsd:string"
+    },
+    "queue": {
+      "@id": "takosumi:queue",
+      "@type": "xsd:string"
+    },
+
+    "secretRef": {
+      "@id": "takosumi:secretRef",
+      "@type": "xsd:string"
+    },
+    "passwordRef": {
+      "@id": "takosumi:passwordRef",
+      "@type": "@json"
+    },
+    "tokenRef": {
+      "@id": "takosumi:tokenRef",
+      "@type": "@json"
+    },
+    "accessKeyIdRef": {
+      "@id": "takosumi:accessKeyIdRef",
+      "@type": "@json"
+    },
+    "secretAccessKeyRef": {
+      "@id": "takosumi:secretAccessKeyRef",
+      "@type": "@json"
+    },
+    "consumerCredentialRef": {
+      "@id": "takosumi:consumerCredentialRef",
+      "@type": "@json"
+    },
+    "producerCredentialRef": {
+      "@id": "takosumi:producerCredentialRef",
+      "@type": "@json"
+    },
+
+    "primary": {
+      "@id": "takosumi:primary"
+    },
+    "public": {
+      "@id": "takosumi:publicVisibility",
+      "@type": "xsd:string"
+    },
+    "visibility": {
+      "@id": "takosumi:visibility",
+      "@type": "xsd:string"
+    },
+    "title": {
+      "@id": "takosumi:title",
+      "@type": "xsd:string"
+    },
+    "family": {
+      "@id": "takosumi:family",
+      "@type": "xsd:string"
+    },
+    "portableBase": {
+      "@id": "takosumi:portableBase",
+      "@type": "@id"
+    },
+    "maxLength": {
+      "@id": "takosumi:maxLength"
     }
   }
 }

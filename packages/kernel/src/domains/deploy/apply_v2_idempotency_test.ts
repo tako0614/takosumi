@@ -256,7 +256,7 @@ Deno.test(
           spec: { region: "us-east-1" },
         },
       ];
-      const fingerprint = computeSpecFingerprint(
+      const fingerprint = await computeSpecFingerprint(
         resources[0],
         PROVIDER,
         resources[0].spec as JsonObject,
@@ -347,38 +347,38 @@ Deno.test(
 
 Deno.test(
   "computeSpecFingerprint is canonical, stable, and changes when tuple changes",
-  () => {
+  async () => {
     const resource: ManifestResource = {
       shape: "test-shape@v1",
       name: "logs",
       provider: "test",
       spec: { a: 1, b: 2 },
     };
-    const f1 = computeSpecFingerprint(resource, "test", {
+    const f1 = await computeSpecFingerprint(resource, "test", {
       nested: { z: true, a: ["one", "two"] },
       a: 1,
       b: 2,
     });
-    const f2 = computeSpecFingerprint(resource, "test", {
+    const f2 = await computeSpecFingerprint(resource, "test", {
       nested: { z: true, a: ["one", "two"] },
       a: 1,
       b: 2,
     });
     assert.match(f1, /^sha256:[0-9a-f]{64}$/);
     assert.equal(f1, f2);
-    const f3 = computeSpecFingerprint(resource, "test", {
+    const f3 = await computeSpecFingerprint(resource, "test", {
       b: 2,
       nested: { a: ["one", "two"], z: true },
       a: 1,
     });
     assert.equal(f1, f3);
-    const f4 = computeSpecFingerprint(resource, "test", {
+    const f4 = await computeSpecFingerprint(resource, "test", {
       nested: { z: true, a: ["one", "two"] },
       a: 1,
       b: 3,
     });
     assert.notEqual(f1, f4);
-    const f5 = computeSpecFingerprint(resource, "different", {
+    const f5 = await computeSpecFingerprint(resource, "different", {
       nested: { z: true, a: ["one", "two"] },
       a: 1,
       b: 2,
