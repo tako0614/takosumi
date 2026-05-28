@@ -59,7 +59,7 @@ token は operator が actor 単位に発行する scoped credential です。 S
 
 `git` と `prepared` が remote source kind です。remote operator / CLI / build service はこの 2 つのどちらかを渡します。`local` は dev / operator-local profile 用で、kernel process から `source.url` の path が直接見える場合だけ使います。
 
-remote `source.url` は HTTPS です。`http://localhost` / `http://127.0.0.1` は single-host loopback dev だけで使えます。digest は integrity evidence であり、 public network transport の HTTPS 要求を置き換えません。file path や `file://` locator は remote source ではなく、`source.kind: "local"` で表します。
+remote `source.url` は HTTPS です。SSRF guard は private / loopback / link-local range の IP literal (`127.0.0.0/8` / `::1` / RFC1918 / `169.254.0.0/16` 等) を常に hard-reject します。`http://localhost` は bare hostname であり kernel が name resolution しないため single-host loopback dev で使えますが、`http://127.0.0.1` のような IP literal は loopback dev でも block されます。digest は integrity evidence であり、 public network transport の HTTPS 要求を置き換えません。file path や `file://` locator は remote source ではなく、`source.kind: "local"` で表します。
 
 source input の構造は kind ごとに閉じています。
 

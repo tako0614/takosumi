@@ -31,6 +31,10 @@ import {
   type OperationPlanPreview,
 } from "./operation_plan_preview.ts";
 import {
+  appendOperationPlanJournalStages,
+  type OperationJournalStore,
+} from "./operation_journal.ts";
+import {
   withDeployTraceContext,
   withDeployTraceSpan,
 } from "./deploy_traces.ts";
@@ -137,6 +141,31 @@ export interface ApplyV2Options {
   readonly operationPlanPreview?: OperationPlanPreview;
   readonly recoveryMode?: PlatformOperationRecoveryMode;
   /**
+   * Durable operation journal (WAL). When supplied together with
+   * `operationPlanPreview`, `applyV2` writes a `prepare` stage record for
+   * every planned operation *before* invoking any `provider.apply`, and a
+   * `commit` stage record after the apply loop succeeds. Re-running the same
+   * apply with the same `operationPlanPreview` is idempotent at the store
+   * level (the append dedupes by `(spaceId, operationPlanDigest,
+   * journalEntryId, stage)` and hard-fails on an effect-digest mismatch),
+   * which makes the idempotency tuple durable across kernel restarts.
+   *
+   * Stage progression is guarded: `commit` is only appended once the matching
+   * `prepare` record exists. The store is the single source of truth, so a
+   * crash between `prepare` and the provider apply is recoverable — a replay
+   * re-derives the same `prepare` tuple and continues.
+   *
+   * Omitted in every current production path; the durable journal becomes
+   * active only when a caller threads a store through. See the kernel
+   * deploy-domain wiring notes and `ApplyService.operationJournalStore`.
+   */
+  readonly operationJournalStore?: OperationJournalStore;
+  /**
+   * Clock used to stamp journal records. Defaults to `Date`. Injectable so
+   * tests get deterministic `createdAt` values.
+   */
+  readonly operationJournalClock?: () => Date;
+  /**
    * When `true`, run validation + ref-DAG resolution but skip
    * `provider.apply` calls. The returned outcome's `planned` field lists the
    * resources that would be applied, in DAG order. Used by
@@ -216,6 +245,8 @@ export async function applyV2(
     deploymentName,
     operationPlanPreview,
     recoveryMode = "normal",
+    operationJournalStore,
+    operationJournalClock = () => new Date(),
   } = options;
   const context = withDeployTraceContext(inputContext);
 
@@ -277,6 +308,21 @@ export async function applyV2(
     recoveryMode,
   );
   let reused = 0;
+
+  // WAL prepare stage. Written before any provider.apply so a crash mid-apply
+  // is recoverable: a replay re-derives the same idempotency tuple from the
+  // same `operationPlanPreview` and the store dedupes it. Only active when the
+  // caller threaded both a preview and a durable journal store.
+  if (operationJournalStore && operationPlanPreview) {
+    await appendOperationPlanJournalStages({
+      store: operationJournalStore,
+      preview: operationPlanPreview,
+      phase: "apply",
+      stages: ["prepare"],
+      status: "recorded",
+      createdAt: operationJournalClock().toISOString(),
+    });
+  }
 
   for (const name of dag.order) {
     const item = resourceByName.get(name);
@@ -391,6 +437,21 @@ export async function applyV2(
     }
   }
 
+  // WAL commit stage. Only appended once every provider.apply succeeded, and
+  // only after asserting the matching `prepare` record already exists so a
+  // commit can never be journaled ahead of its prepare.
+  if (operationJournalStore && operationPlanPreview) {
+    await assertPrepareJournaled(operationJournalStore, operationPlanPreview);
+    await appendOperationPlanJournalStages({
+      store: operationJournalStore,
+      preview: operationPlanPreview,
+      phase: "apply",
+      stages: ["commit"],
+      status: "succeeded",
+      createdAt: operationJournalClock().toISOString(),
+    });
+  }
+
   return {
     applied,
     issues: [],
@@ -398,6 +459,68 @@ export async function applyV2(
     ...(operationPlanPreview ? { operationPlanPreview } : {}),
     ...(reused > 0 ? { reused } : {}),
   };
+}
+
+/**
+ * Stage-progression guard: a `commit` journal record must never be written
+ * before its `prepare`. Reads the journal for the plan and throws if any
+ * planned operation is missing its `prepare` stage. This protects against a
+ * caller (or a buggy replay) skipping straight to commit, which would leave
+ * the WAL unable to reconstruct the pre-apply intent.
+ */
+async function assertPrepareJournaled(
+  store: OperationJournalStore,
+  preview: OperationPlanPreview,
+): Promise<void> {
+  const entries = await store.listByPlan(
+    preview.spaceId,
+    preview.operationPlanDigest,
+  );
+  const prepared = new Set(
+    entries
+      .filter((entry) => entry.stage === "prepare")
+      .map((entry) => entry.journalEntryId),
+  );
+  for (const operation of preview.operations) {
+    if (!prepared.has(operation.idempotencyKey.journalEntryId)) {
+      throw new OperationJournalStageProgressionError({
+        spaceId: preview.spaceId,
+        operationPlanDigest: preview.operationPlanDigest,
+        journalEntryId: operation.idempotencyKey.journalEntryId,
+        attemptedStage: "commit",
+        missingStage: "prepare",
+      });
+    }
+  }
+}
+
+export class OperationJournalStageProgressionError extends Error {
+  readonly spaceId: string;
+  readonly operationPlanDigest: `sha256:${string}`;
+  readonly journalEntryId: string;
+  readonly attemptedStage: string;
+  readonly missingStage: string;
+
+  constructor(input: {
+    readonly spaceId: string;
+    readonly operationPlanDigest: `sha256:${string}`;
+    readonly journalEntryId: string;
+    readonly attemptedStage: string;
+    readonly missingStage: string;
+  }) {
+    super(
+      `operation journal stage progression violation for ` +
+        `${input.spaceId}/${input.operationPlanDigest}/` +
+        `${input.journalEntryId}: cannot append ${input.attemptedStage} ` +
+        `before ${input.missingStage}`,
+    );
+    this.name = "OperationJournalStageProgressionError";
+    this.spaceId = input.spaceId;
+    this.operationPlanDigest = input.operationPlanDigest;
+    this.journalEntryId = input.journalEntryId;
+    this.attemptedStage = input.attemptedStage;
+    this.missingStage = input.missingStage;
+  }
 }
 
 function planSpaceId(context: PlatformContext): string {

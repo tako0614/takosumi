@@ -55,6 +55,20 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
   readonly #maxLeaseTtlMs: number;
   readonly #ledger?: WorkLedger;
   readonly #terminalReporter?: RuntimeAgentTerminalWorkReporter;
+  /**
+   * In-process serialization gate for mutating operations whose critical
+   * section spans an `await` (candidate selection → in-memory mutate →
+   * ledger persist). `InMemoryRuntimeAgentRegistry` is documented as a
+   * single-instance/serialized-caller component: the in-memory `#work` /
+   * `#agents` maps are the source of truth and the reference
+   * {@link InMemoryWorkLedger} is last-write-wins, so a ledger-level CAS
+   * cannot protect the in-memory maps. We therefore serialize the
+   * vulnerable sections through a single Promise chain (mirroring the
+   * installer's `#mutationChains`). Concurrent `leaseWork` calls thus run
+   * one-at-a-time and cannot double-claim the same queued candidate;
+   * `detectStaleAgents` likewise runs to completion atomically.
+   */
+  #mutationChain: Promise<unknown> = Promise.resolve();
 
   constructor(options: InMemoryRuntimeAgentRegistryOptions = {}) {
     this.#clock = options.clock ?? (() => new Date());
@@ -301,10 +315,25 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
   leaseWork(
     input: LeaseRuntimeAgentWorkInput,
   ): Promise<RuntimeAgentWorkLease | undefined> {
+    // Serialize the whole candidate-select → claim → cache → persist
+    // critical section. Without this, two concurrent `leaseWork` calls can
+    // both observe the same top-priority `queued` candidate before either
+    // writes `leased`, then both persist different lease ids onto the same
+    // work item — a double-claim. The mutex makes the section atomic and
+    // guarantees claim-then-cache ordering: by the time the second caller
+    // re-reads `#work`, the first caller's `leased` write is already
+    // visible, so the candidate is no longer `queued`.
+    return this.#serialize(() => this.#leaseWorkLocked(input));
+  }
+
+  #leaseWorkLocked(
+    input: LeaseRuntimeAgentWorkInput,
+  ): Promise<RuntimeAgentWorkLease | undefined> {
     const agent = this.#requireAgent(input.agentId);
     if (agent.status !== "ready") return Promise.resolve(undefined);
     const now = input.now ?? this.#now();
     const nowMs = this.#parseTimestamp(now, "now");
+    const priorExpired = this.#snapshotWork(this.#expiredLeaseIds(now));
     const expiredRequeues = this.#requeueExpiredLeases(now);
     const cap = agent.capabilities.maxConcurrentLeases;
     if (cap !== undefined && cap > 0) {
@@ -316,6 +345,10 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
           return this.#persist({ works: expiredRequeues }).then(
             () =>
               undefined,
+            (error) => {
+              this.#restoreWork(priorExpired);
+              throw error;
+            },
           );
         }
         return Promise.resolve(undefined);
@@ -330,7 +363,13 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
       )[0];
     if (!candidate) {
       if (expiredRequeues.length > 0) {
-        return this.#persist({ works: expiredRequeues }).then(() => undefined);
+        return this.#persist({ works: expiredRequeues }).then(
+          () => undefined,
+          (error) => {
+            this.#restoreWork(priorExpired);
+            throw error;
+          },
+        );
       }
       return Promise.resolve(undefined);
     }
@@ -348,6 +387,12 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
       leaseExpiresAt: expiresAt,
       attempts: candidate.attempts + 1,
     });
+    // Claim-then-cache: the in-memory `set` happens before we await the
+    // ledger, but because the whole method runs under `#serialize`, no
+    // other serialized mutation can observe the intermediate state. If the
+    // ledger rejects, we roll the in-memory claim back to the prior
+    // `queued` item so the registry never strands the candidate in
+    // `leased` with an unpersisted lease.
     this.#work.set(leasedWork.id, leasedWork);
     // Persist both the newly-leased item and any expired-lease requeues
     // in the same mutation so the ledger never observes a half-applied
@@ -356,16 +401,22 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
       (work, index, all) =>
         all.findIndex((other) => other.id === work.id) === index,
     );
-    return this.#persist({ works: persistWorks }).then(() =>
-      freezeClone({
-        id: leaseId,
-        workId: leasedWork.id,
-        agentId: agent.id,
-        leasedAt: now,
-        expiresAt,
-        renewAfter,
-        work: leasedWork,
-      })
+    return this.#persist({ works: persistWorks }).then(
+      () =>
+        freezeClone({
+          id: leaseId,
+          workId: leasedWork.id,
+          agentId: agent.id,
+          leasedAt: now,
+          expiresAt,
+          renewAfter,
+          work: leasedWork,
+        }),
+      (error) => {
+        this.#work.set(candidate.id, candidate);
+        this.#restoreWork(priorExpired);
+        throw error;
+      },
     );
   }
 
@@ -445,16 +496,32 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
   detectStaleAgents(
     input: DetectStaleAgentsInput,
   ): Promise<StaleAgentDetection> {
+    // Argument validation throws synchronously, matching the established
+    // registry contract (mirrors `heartbeat` / `leaseWork` precondition
+    // throws and the existing `requires a positive ttl` test). The
+    // serialized critical section below never throws synchronously.
     if (!Number.isFinite(input.ttlMs) || input.ttlMs <= 0) {
       throw invalidArgument("ttlMs must be a positive integer", {
         ttlMs: input.ttlMs,
       });
     }
+    return this.#serialize(() => this.#detectStaleAgentsLocked(input));
+  }
+
+  async #detectStaleAgentsLocked(
+    input: DetectStaleAgentsInput,
+  ): Promise<StaleAgentDetection> {
     const now = input.now ?? this.#now();
     const cutoff = Date.parse(now) - input.ttlMs;
     const stale: RuntimeAgentRecord[] = [];
     const requeued: RuntimeAgentWorkItem[] = [];
-    const persistTasks: Promise<void>[] = [];
+    // Process each stale agent atomically: persist FIRST, then mutate the
+    // in-memory maps only after the ledger commit succeeds. This avoids the
+    // "mutate all in-memory, then Promise.all persist" pattern, which left
+    // the registry split-brained (all leases requeued in memory but only
+    // some ledger txns committed) if one persist rejected. A failure here
+    // aborts the remaining agents and propagates; already-committed agents
+    // stay consistent across in-memory + ledger.
     for (const agent of [...this.#agents.values()]) {
       if (agent.status === "revoked" || agent.status === "expired") continue;
       const beat = Date.parse(agent.lastHeartbeatAt);
@@ -464,8 +531,6 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
         status: "expired",
         expiredAt: now,
       });
-      this.#agents.set(agent.id, updated);
-      stale.push(updated);
       const agentRequeues: RuntimeAgentWorkItem[] = [];
       for (const work of this.#work.values()) {
         if (work.leasedByAgentId === agent.id && work.status === "leased") {
@@ -476,19 +541,21 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
             leaseId: undefined,
             leaseExpiresAt: undefined,
           });
-          this.#work.set(work.id, requeuedItem);
-          requeued.push(requeuedItem);
           agentRequeues.push(requeuedItem);
         }
       }
-      persistTasks.push(
-        this.#persist({ agent: updated, works: agentRequeues }),
-      );
+      // Persist before touching in-memory state. If this rejects, the
+      // in-memory maps are untouched for this agent and every later agent,
+      // so a partial-failure cannot corrupt state.
+      await this.#persist({ agent: updated, works: agentRequeues });
+      this.#agents.set(agent.id, updated);
+      for (const requeuedItem of agentRequeues) {
+        this.#work.set(requeuedItem.id, requeuedItem);
+      }
+      stale.push(updated);
+      requeued.push(...agentRequeues);
     }
-    return Promise.all(persistTasks).then(() => ({
-      stale,
-      requeuedWork: requeued,
-    }));
+    return { stale, requeuedWork: requeued };
   }
 
   getWork(
@@ -543,6 +610,36 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
     }
     return work;
   }
+  /** IDs of leases whose window has elapsed at `now`. */
+  #expiredLeaseIds(now: string): RuntimeAgentWorkId[] {
+    const ids: RuntimeAgentWorkId[] = [];
+    for (const work of this.#work.values()) {
+      if (
+        work.status === "leased" && work.leaseExpiresAt &&
+        work.leaseExpiresAt <= now
+      ) {
+        ids.push(work.id);
+      }
+    }
+    return ids;
+  }
+
+  /** Capture the current `#work` entries for the given ids (for rollback). */
+  #snapshotWork(ids: readonly RuntimeAgentWorkId[]): RuntimeAgentWorkItem[] {
+    const items: RuntimeAgentWorkItem[] = [];
+    for (const id of ids) {
+      const work = this.#work.get(id);
+      if (work) items.push(work);
+    }
+    return items;
+  }
+
+  /** Restore captured `#work` entries — undo an in-memory mutation whose
+   * ledger persist later rejected. */
+  #restoreWork(items: readonly RuntimeAgentWorkItem[]): void {
+    for (const work of items) this.#work.set(work.id, work);
+  }
+
   #requeueExpiredLeases(now: string): RuntimeAgentWorkItem[] {
     const requeued: RuntimeAgentWorkItem[] = [];
     for (const work of this.#work.values()) {
@@ -604,6 +701,23 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
   ): Promise<void> {
     if (!pre) return this.#persist(post);
     return this.#persist(pre).then(() => this.#persist(post));
+  }
+
+  /**
+   * Run `task` as the next link in the global mutation chain so its
+   * critical section (which spans an `await` on the ledger) cannot
+   * interleave with another serialized mutation. A rejected task does not
+   * poison the chain for subsequent callers.
+   */
+  #serialize<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.#mutationChain.then(task, task);
+    // Keep the chain alive regardless of whether `run` resolves or rejects,
+    // but never let a rejection propagate into the chain tail.
+    this.#mutationChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 }
 

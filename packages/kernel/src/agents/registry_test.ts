@@ -908,6 +908,215 @@ Deno.test("runtime agent idempotency keys dedupe only non-terminal work", async 
   assert.equal((await registry.listWork()).length, 2);
 });
 
+Deno.test(
+  "concurrent leaseWork calls never double-claim the same queued candidate (G9)",
+  async () => {
+    // A ledger whose `apply` yields to the microtask queue before
+    // committing, and that tracks whether two critical sections overlap.
+    // The `#serialize` mutex must keep `leaseWork` critical sections
+    // strictly non-overlapping so the candidate-select → claim window is
+    // never interleaved (which would let two leases claim the same item).
+    let inFlight = 0;
+    let maxOverlap = 0;
+    class SlowLedger extends InMemoryWorkLedger {
+      override async apply(
+        mutation: Parameters<InMemoryWorkLedger["apply"]>[0],
+      ) {
+        inFlight += 1;
+        maxOverlap = Math.max(maxOverlap, inFlight);
+        try {
+          await Promise.resolve();
+          await Promise.resolve();
+          await super.apply(mutation);
+        } finally {
+          inFlight -= 1;
+        }
+      }
+    }
+    const ledger = new SlowLedger();
+    let leaseSeq = 0;
+    const registry = new InMemoryRuntimeAgentRegistry({
+      clock: fixedClock("2026-04-30T00:00:00.000Z"),
+      idGenerator: () => `lease_${++leaseSeq}`,
+      defaultLeaseTtlMs: 600_000,
+      ledger,
+    });
+    await registry.register({
+      agentId: "agent_a",
+      provider: "aws",
+      // No maxConcurrentLeases cap so both leases can proceed.
+    });
+    await registry.enqueueWork({
+      workId: "work_1",
+      kind: "provider.aws.rds.create",
+      provider: "aws",
+      priority: 10,
+      payload: {},
+    });
+    await registry.enqueueWork({
+      workId: "work_2",
+      kind: "provider.aws.rds.create",
+      provider: "aws",
+      priority: 5,
+      payload: {},
+    });
+
+    // Fire two leaseWork calls without awaiting between them.
+    const [a, b] = await Promise.all([
+      registry.leaseWork({ agentId: "agent_a" }),
+      registry.leaseWork({ agentId: "agent_a" }),
+    ]);
+
+    // The mutex serialized the two critical sections — their ledger
+    // persists never overlapped.
+    assert.equal(maxOverlap, 1);
+
+    assert.ok(a);
+    assert.ok(b);
+    // Both leases must claim distinct work items — no double-claim.
+    assert.notEqual(a.workId, b.workId);
+    assert.notEqual(a.id, b.id);
+    assert.deepEqual(
+      [a.workId, b.workId].sort(),
+      ["work_1", "work_2"],
+    );
+
+    // Each work item must reflect exactly one lease id, and the in-memory
+    // map must agree with the ledger.
+    const work1 = await registry.getWork("work_1");
+    const work2 = await registry.getWork("work_2");
+    assert.equal(work1?.status, "leased");
+    assert.equal(work2?.status, "leased");
+    assert.equal(work1?.attempts, 1);
+    assert.equal(work2?.attempts, 1);
+    const snapshot = await ledger.snapshot();
+    const ledgerWork1 = snapshot.works.find((w) => w.id === "work_1");
+    const ledgerWork2 = snapshot.works.find((w) => w.id === "work_2");
+    assert.equal(ledgerWork1?.leaseId, work1?.leaseId);
+    assert.equal(ledgerWork2?.leaseId, work2?.leaseId);
+
+    // A third lease attempt finds nothing left to claim.
+    const c = await registry.leaseWork({ agentId: "agent_a" });
+    assert.equal(c, undefined);
+  },
+);
+
+Deno.test(
+  "detectStaleAgents partial persist failure does not corrupt registry state (G9)",
+  async () => {
+    // Ledger that commits the first stale-agent persist, then rejects the
+    // second. The persist-first ordering must keep the first agent fully
+    // consistent (in-memory + ledger) and leave the second agent + its
+    // leased work completely untouched.
+    class FailOnSecondLedger extends InMemoryWorkLedger {
+      expiredApplies = 0;
+      override async apply(
+        mutation: Parameters<InMemoryWorkLedger["apply"]>[0],
+      ) {
+        // Only the detectStaleAgents persists carry an `expired` agent.
+        // Commit the first, reject the second, leaving the third agent (if
+        // any) and agent_b untouched.
+        if (mutation.agent?.status === "expired") {
+          this.expiredApplies += 1;
+          if (this.expiredApplies === 2) {
+            throw new Error("ledger unavailable");
+          }
+        }
+        await super.apply(mutation);
+      }
+    }
+    const ledger = new FailOnSecondLedger();
+    const registry = new InMemoryRuntimeAgentRegistry({
+      clock: fixedClock("2026-04-30T00:10:00.000Z"),
+      idGenerator: sequenceIds(["w_a", "l_a", "w_b", "l_b"]),
+      defaultLeaseTtlMs: 600_000,
+      ledger,
+    });
+
+    // Two agents, each registered + leasing one work item at an old time.
+    await registry.register({
+      agentId: "agent_a",
+      provider: "aws",
+      heartbeatAt: "2026-04-30T00:00:00.000Z",
+    });
+    await registry.enqueueWork({
+      kind: "provider.aws.rds.create",
+      provider: "aws",
+      payload: {},
+      queuedAt: "2026-04-30T00:00:00.000Z",
+    });
+    const leaseA = await registry.leaseWork({
+      agentId: "agent_a",
+      now: "2026-04-30T00:00:01.000Z",
+    });
+    assert.ok(leaseA);
+
+    await registry.register({
+      agentId: "agent_b",
+      provider: "aws",
+      heartbeatAt: "2026-04-30T00:00:00.000Z",
+    });
+    await registry.enqueueWork({
+      kind: "provider.aws.rds.create",
+      provider: "aws",
+      payload: {},
+      queuedAt: "2026-04-30T00:00:00.000Z",
+    });
+    const leaseB = await registry.leaseWork({
+      agentId: "agent_b",
+      now: "2026-04-30T00:00:01.000Z",
+    });
+    assert.ok(leaseB);
+
+    // The second persist inside detectStaleAgents rejects.
+    await assert.rejects(
+      () =>
+        registry.detectStaleAgents({
+          ttlMs: 60_000,
+          now: "2026-04-30T00:10:00.000Z",
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /ledger unavailable/);
+        return true;
+      },
+    );
+
+    // First processed agent is fully expired and its work requeued, in both
+    // the in-memory map and the ledger. The second agent + its work are
+    // untouched (still ready/leased) — no split-brain.
+    const agents = await registry.listAgents();
+    const expired = agents.filter((a) => a.status === "expired");
+    const ready = agents.filter((a) => a.status === "ready");
+    assert.equal(expired.length, 1);
+    assert.equal(ready.length, 1);
+
+    const works = await registry.listWork();
+    const requeued = works.filter((w) => w.status === "queued");
+    const stillLeased = works.filter((w) => w.status === "leased");
+    assert.equal(requeued.length, 1);
+    assert.equal(stillLeased.length, 1);
+
+    // In-memory and ledger must agree for every work + agent.
+    const snapshot = await ledger.snapshot();
+    for (const work of works) {
+      const persisted = snapshot.works.find((w) => w.id === work.id);
+      assert.equal(persisted?.status, work.status);
+      assert.equal(persisted?.leaseId, work.leaseId);
+    }
+    for (const agent of agents) {
+      const persisted = snapshot.agents.find((a) => a.id === agent.id);
+      assert.equal(persisted?.status, agent.status);
+    }
+
+    // The still-leased agent_b lease remains valid and usable.
+    const stillLeasedAgentId = stillLeased[0]?.leasedByAgentId;
+    assert.ok(stillLeasedAgentId);
+    const heldByB = stillLeasedAgentId === "agent_b";
+    assert.ok(heldByB);
+  },
+);
+
 function fixedClock(iso: string): () => Date {
   return () => new Date(iso);
 }

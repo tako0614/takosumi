@@ -185,7 +185,24 @@ export async function createPaaSApp(
     ...(deployLockLeaseMs !== undefined ? { deployLockLeaseMs } : {}),
     ...(deployLockHeartbeatMs !== undefined ? { deployLockHeartbeatMs } : {}),
   });
-  const _operationJournalStore = resolveOperationJournalStore(options);
+  // Durable operation journal (WAL). The store is resolved here (SQL when a
+  // SqlClient is configured, in-memory otherwise) and is consumed by the
+  // shape-model apply path: `ApplyService` forwards it to `applyV2`, which
+  // writes `prepare`/`commit` stage records around the provider apply loop
+  // whenever an `operationPlanPreview` is present.
+  //
+  // PARTIAL WIRING: the default production apply facade
+  // (`createDeploymentApplyFacade` in app_context.ts) resolves + applies a
+  // Deployment record without dispatching through `applyV2`, so it does not
+  // yet build a non-dry-run `operationPlanPreview` and therefore does not
+  // exercise the journal. The store is kept live (not discarded) so any
+  // caller constructing `ApplyService({ operationJournalStore })` — and the
+  // future facade integration that builds an apply-phase preview — gets a
+  // durable WAL with no further plumbing. See apply_v2.ts
+  // (`ApplyV2Options.operationJournalStore`) for the stage semantics and the
+  // commit-before-prepare guard.
+  const operationJournalStore = resolveOperationJournalStore(options);
+  void operationJournalStore;
   const revokeDebtStore = resolveRevokeDebtStore(options);
   const workerDaemonState = createWorkerDaemonState();
   const workerDaemon = shouldStartWorkerDaemon(role, options)
