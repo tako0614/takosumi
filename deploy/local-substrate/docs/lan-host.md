@@ -119,11 +119,11 @@ bash scripts/down.sh && bash scripts/up.sh
 
 production hostname 構造を正確に mirror する dev hostname のみを Caddy が reverse_proxy する。 host.docker.internal 経由で host で起動した Vite dev server を覆う構成。
 
-| dev hostname (= production の mirror)          | upstream (host で起動)      | 起動コマンド (= 該当 product root で)    |
-| ---------------------------------------------- | --------------------------- | ---------------------------------------- |
-| `https://takos.test/` (= `takos.jp`)           | `host.docker.internal:4322` | `cd takos/website && npm run dev`        |
-| `https://road.takos.test/` (= `road.takos.jp`) | `host.docker.internal:1420` | `cd road-to-me/app && deno task dev`     |
-| `https://yurucommu.test/` (= `yurucommu.com`)  | `host.docker.internal:5173` | `cd yurucommu/web && deno task dev`      |
+| dev hostname (= production の mirror)          | upstream (host で起動)      | 起動コマンド (= 該当 product root で) |
+| ---------------------------------------------- | --------------------------- | ------------------------------------- |
+| `https://takos.test/` (= `takos.jp`)           | `host.docker.internal:4322` | `cd takos/website && npm run dev`     |
+| `https://road.takos.test/` (= `road.takos.jp`) | `host.docker.internal:1420` | `cd road-to-me/app && deno task dev`  |
+| `https://yurucommu.test/` (= `yurucommu.com`)  | `host.docker.internal:5173` | `cd yurucommu/web && deno task dev`   |
 
 bundled apps (= `takos-docs` / `takos-slide` / `takos-excel` / `takos-computer`) は **Takos space 内に install されて `*.app.takos.jp` tenant subdomain で serve される** model なので、専用 dev hostname を持たない。 dev では各 Vite dev server を localhost (= `:3001` / `:3002` / `:3003` / etc.) で直起動し、 Takos UI 内から iframe / launch する。
 

@@ -2,11 +2,11 @@
   "apiVersion": "takosumi.com/hosting/v1",
   "kind": "TakosDistribution",
   "metadata": {
-    "name": "takos-external-vm-live-smoke",
+    "name": "takos-selfhost-live-smoke",
     "spaceId": "space_live_smoke",
     "groupId": "group_live_smoke",
-    "activationId": "activation_external_vm_live_smoke",
-    "runId": "external-vm-live-provisioning-smoke",
+    "activationId": "activation_selfhost_live_smoke",
+    "runId": "selfhost-live-provisioning-smoke",
     "materializedAt": "2026-05-01T00:00:00.000Z"
   },
   "resources": [
@@ -49,7 +49,7 @@
         "listeners": {
           "public": {
             "protocol": "https",
-            "host": "external-vm-live-smoke.example.test",
+            "host": "selfhost-live-smoke.example.test",
             "tls": "auto"
           }
         },

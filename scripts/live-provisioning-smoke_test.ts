@@ -37,8 +37,45 @@ Deno.test("runBundledFixtureProof validates all credential-free provider fixture
     "gcp",
     "kubernetes",
     "cloudflare",
+    "selfhost",
     "external",
   ]);
+});
+
+Deno.test("selfhost fixture is first-class provider proof", async () => {
+  const fixture = await loadProofFixture(
+    "fixtures/live-provisioning/selfhosted.shape-v1.json",
+  );
+
+  assert.equal(fixture.provider, "selfhost");
+  assert.deepEqual(fixture.expectedDescriptors, [
+    "object-store@v1:filesystem:data",
+    "postgres@v1:local-docker:db",
+    "web-service@v1:systemd-unit:api",
+    "gateway@v1:coredns-local:primary",
+  ]);
+});
+
+Deno.test("manifestToProofFixture treats local DNS as a support provider", async () => {
+  const kubernetesManifest = JSON.parse(
+    await Deno.readTextFile(
+      "fixtures/live-provisioning/kubernetes.shape-v1.json",
+    ),
+  );
+  const selfhostManifest = JSON.parse(
+    await Deno.readTextFile(
+      "fixtures/live-provisioning/selfhosted.shape-v1.json",
+    ),
+  );
+
+  assert.equal(
+    manifestToProofFixture(kubernetesManifest, "smoke.json").provider,
+    "kubernetes",
+  );
+  assert.equal(
+    manifestToProofFixture(selfhostManifest, "smoke.json").provider,
+    "selfhost",
+  );
 });
 
 Deno.test("runFixtureProof materializes verifies and tears down expected descriptors", async () => {

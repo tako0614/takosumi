@@ -108,6 +108,47 @@ const { app } = await createPaaSApp({
 
 `plugins` is the reference kernel's implementation mechanism. Compatible implementations may bind the same kind URI with a native controller, static registry, workflow engine, or SaaS adapter.
 
+## Provider Live Proof
+
+Local validation for native kind packages runs in `takosumi-plugins/` through
+check, test, and publish dry-run tasks. Materialization proof against a real
+provider is external operator evidence because it uses operator-owned
+infrastructure and credentials. Takosumi provides the proof shape and a
+credential-free fixture gate.
+
+```sh
+cd takosumi
+deno task live-provisioning-smoke:fixture:all
+```
+
+The fixture gate validates AWS, GCP, Kubernetes, Cloudflare, self-host, and
+external provider shapes. Live proof sends the same fixture to the operator's
+provider gateway.
+
+```sh
+cd takosumi
+TAKOSUMI_PLUGIN_LIVE_PROOF_MODE=live \
+TAKOSUMI_PLUGIN_LIVE_PROVIDER=cloudflare \
+TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/cloudflare.shape-v1.json \
+TAKOSUMI_PLUGIN_GATEWAY_URL=https://<operator-provider-gateway> \
+TAKOSUMI_PLUGIN_GATEWAY_BEARER_TOKEN=<operator-token> \
+deno task live-provisioning-smoke
+```
+
+Canonical fixtures by provider:
+
+| Provider   | Fixture                                               |
+| ---------- | ----------------------------------------------------- |
+| Cloudflare | `fixtures/live-provisioning/cloudflare.shape-v1.json` |
+| self-host  | `fixtures/live-provisioning/selfhosted.shape-v1.json` |
+| AWS        | `fixtures/live-provisioning/aws.shape-v1.json`        |
+| GCP        | `fixtures/live-provisioning/gcp.shape-v1.json`        |
+| Kubernetes | `fixtures/live-provisioning/kubernetes.shape-v1.json` |
+
+Set `TAKOSUMI_PLUGIN_LIVE_CLEANUP_ONLY=1` to run teardown for the same desired
+state. Store live reports in the operator's private evidence store, not in
+public docs.
+
 ## Ownership Rule
 
 - The descriptor source for a kind package is `spec/kind.jsonld`; JSON-LD is catalog metadata, not a runtime plugin requirement.

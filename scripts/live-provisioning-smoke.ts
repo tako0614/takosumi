@@ -22,6 +22,7 @@ const DEFAULT_FIXTURE_FILES = [
   "gcp.shape-v1.json",
   "kubernetes.shape-v1.json",
   "cloudflare.shape-v1.json",
+  "selfhosted.shape-v1.json",
   "external.shape-v1.json",
 ] as const;
 
@@ -430,6 +431,9 @@ function envPrefixes(
   if (providerName === "kubernetes") {
     return ["TAKOSUMI_PLUGIN_KUBERNETES", "TAKOSUMI_PLUGIN_K8S"];
   }
+  if (providerName === "selfhost") {
+    return ["TAKOSUMI_PLUGIN_SELFHOST", "TAKOSUMI_PLUGIN_SELF_HOST"];
+  }
   return [`TAKOSUMI_PLUGIN_${upper}`];
 }
 
@@ -698,6 +702,13 @@ function providerFromManifest(
       )
     ),
   );
+  if (providerNames.size > 1 && providerNames.has("local-dns")) {
+    providerNames.delete("local-dns");
+  }
+  if (providerNames.size === 1 && providerNames.has("local-dns")) {
+    providerNames.delete("local-dns");
+    providerNames.add("selfhost");
+  }
   if (providerNames.size !== 1) {
     throw new Error(
       `${sourceName}: live provisioning fixture must target one provider family, got ${
@@ -719,6 +730,8 @@ function providerFromSourceName(
   if (sourceName.startsWith("gcp")) return "gcp";
   if (sourceName.startsWith("kubernetes")) return "kubernetes";
   if (sourceName.startsWith("cloudflare")) return "cloudflare";
+  if (sourceName.startsWith("selfhost")) return "selfhost";
+  if (sourceName.startsWith("self-host")) return "selfhost";
   if (sourceName.startsWith("external")) return "external";
   if (sourceName.startsWith("azure")) return "azure";
   return undefined;
@@ -735,18 +748,21 @@ function manifestProviderFamily(providerId: string): string {
   ) return "gcp";
   if (
     providerId.startsWith("k8s") || providerId.startsWith("kubernetes") ||
-    providerId === "k3s-deployment" || providerId === "coredns-local"
+    providerId === "k3s-deployment"
   ) return "kubernetes";
   if (providerId.startsWith("cloudflare")) return "cloudflare";
+  if (providerId === "coredns-local") return "local-dns";
   if (
-    providerId.startsWith("external") ||
     providerId === "filesystem" ||
     providerId === "local-docker" ||
     providerId === "docker-compose" ||
-    providerId === "coredns-local" ||
     providerId === "systemd-unit" ||
     providerId === "minio" ||
     providerId === "postgres"
+  ) return "selfhost";
+  if (
+    providerId.startsWith("external") ||
+    providerId === "external"
   ) return "external";
   if (providerId.startsWith("azure")) return "azure";
   return providerId;
@@ -874,7 +890,7 @@ function specString(
 function isProvider(value: string): value is ProviderProofProvider {
   return value === "aws" || value === "gcp" || value === "k8s" ||
     value === "kubernetes" || value === "cloudflare" ||
-    value === "external" || value === "azure";
+    value === "selfhost" || value === "external" || value === "azure";
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {

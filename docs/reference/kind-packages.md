@@ -108,6 +108,46 @@ const { app } = await createPaaSApp({
 
 `plugins` は reference kernel の実装手段です。互換 implementation は同じ kind URI を native controller、static registry、workflow engine、SaaS adapter などに bind できます。
 
+## Provider live proof
+
+native kind package のローカル検証は `takosumi-plugins/` の check / test /
+publish dry-run で行います。実 provider への materialization proof は operator-owned
+infrastructure と credential を使う外部証跡です。Takosumi は proof shape
+と credential-free fixture gate を提供します。
+
+```sh
+cd takosumi
+deno task live-provisioning-smoke:fixture:all
+```
+
+この fixture gate は AWS、GCP、Kubernetes、Cloudflare、self-host、external
+provider shape を検証します。live proof は operator の provider gateway
+に対して同じ fixture を流します。
+
+```sh
+cd takosumi
+TAKOSUMI_PLUGIN_LIVE_PROOF_MODE=live \
+TAKOSUMI_PLUGIN_LIVE_PROVIDER=cloudflare \
+TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/cloudflare.shape-v1.json \
+TAKOSUMI_PLUGIN_GATEWAY_URL=https://<operator-provider-gateway> \
+TAKOSUMI_PLUGIN_GATEWAY_BEARER_TOKEN=<operator-token> \
+deno task live-provisioning-smoke
+```
+
+provider ごとの canonical fixture:
+
+| Provider   | Fixture                                               |
+| ---------- | ----------------------------------------------------- |
+| Cloudflare | `fixtures/live-provisioning/cloudflare.shape-v1.json` |
+| self-host  | `fixtures/live-provisioning/selfhosted.shape-v1.json` |
+| AWS        | `fixtures/live-provisioning/aws.shape-v1.json`        |
+| GCP        | `fixtures/live-provisioning/gcp.shape-v1.json`        |
+| Kubernetes | `fixtures/live-provisioning/kubernetes.shape-v1.json` |
+
+`TAKOSUMI_PLUGIN_LIVE_CLEANUP_ONLY=1` を付けると同じ desired state の teardown
+だけを実行します。live report は public docs に貼らず、operator の private
+evidence store に保存します。
+
 ## Package ownership rule
 
 - kind の descriptor source は owning kind package の `spec/kind.jsonld`。JSON-LD は catalog / schema metadata であり、runtime plugin requirement ではない。
