@@ -63,6 +63,33 @@ export interface TakosumiInternalRpcVerificationInput {
   readonly expectedCaller?: string | readonly string[];
   readonly expectedAudience?: string;
   readonly requiredCapabilities?: readonly string[];
+  /**
+   * Optional single-use nonce recorder for replay protection within the
+   * clock-skew window.
+   *
+   * The signed envelope already binds a per-request `nonce` into the HMAC,
+   * but without a host-side store of seen nonces a captured-and-replayed
+   * request stays valid for as long as its timestamp is within
+   * `maxClockSkewMs` (default 5 minutes). When this callback is supplied it
+   * is invoked exactly once per verified request (after the signature, body
+   * digest, caller/audience/capability, and timestamp-skew checks all pass)
+   * with the request `nonce` and the absolute epoch-ms expiry after which the
+   * recorder may safely forget the nonce (timestamp + maxClockSkewMs). It
+   * must atomically record-and-check: return `true` if the nonce was not seen
+   * before (first use; accept) and `false` if it was already recorded
+   * (replay; reject). A `false` result causes verification to return
+   * `undefined`.
+   *
+   * Operators wiring a shared store (e.g. an expiring KV / Redis SET-NX or a
+   * unique-insert table keyed on the nonce) get strict single-use semantics.
+   * When omitted, verification behaves as before: the clock-skew window is
+   * the only replay-protection boundary, so operators should keep
+   * `maxClockSkewMs` as tight as their clock synchronization allows.
+   */
+  readonly recordNonce?: (
+    nonce: string,
+    expiresAtEpochMs: number,
+  ) => Promise<boolean>;
 }
 
 export interface VerifiedTakosumiInternalRpc {
@@ -499,6 +526,18 @@ export async function signTakosumiInternalRequest(
   };
 }
 
+/**
+ * Verifies a signed internal RPC request from its headers.
+ *
+ * Replay protection: the canonical envelope binds a per-request `nonce` and
+ * `timestamp` into the HMAC, but signature verification alone does not stop a
+ * captured request from being replayed while its timestamp is still within
+ * the clock-skew window (`maxClockSkewMs`, default 5 minutes). The skew window
+ * is therefore the replay-protection boundary unless an `input.recordNonce`
+ * store is supplied. Operators that need strict single-use semantics should
+ * wire `recordNonce` to an expiring shared store; operators without one should
+ * keep `maxClockSkewMs` as tight as their clock synchronization allows.
+ */
 export async function verifyTakosumiInternalRequestFromHeaders(
   input: TakosumiInternalRpcVerificationInput,
 ): Promise<VerifiedTakosumiInternalRpc | undefined> {
@@ -572,6 +611,22 @@ export async function verifyTakosumiInternalRequestFromHeaders(
     }),
   );
   if (!timingSafeEqualHex(expectedSignature, signature)) return undefined;
+  // Replay guard: only consult the nonce store once the request is fully
+  // authenticated, so an attacker cannot exhaust / poison the store with
+  // forged-signature requests. The store records the nonce until the request
+  // can no longer be within the skew window (timestamp + maxClockSkewMs); a
+  // `false` result means the nonce was already used (replay) and the request
+  // is rejected.
+  if (input.recordNonce) {
+    const maxClockSkewMs = input.maxClockSkewMs ??
+      TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS;
+    const parsedTimestamp = Date.parse(timestamp);
+    const expiresAtEpochMs = Number.isFinite(maxClockSkewMs)
+      ? parsedTimestamp + maxClockSkewMs
+      : parsedTimestamp + TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS;
+    const accepted = await input.recordNonce(nonce, expiresAtEpochMs);
+    if (!accepted) return undefined;
+  }
   return Object.freeze({
     actor: Object.freeze(structuredClone(actor)),
     caller,

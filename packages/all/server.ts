@@ -1,12 +1,13 @@
-import app from "@takos/takosumi-kernel";
+import { startKernel } from "@takos/takosumi-kernel";
+
+export { startKernel };
 
 if (import.meta.main) {
+  const { app } = await startKernel();
   const port = Number(Deno.env.get("PORT") ?? "8788");
   const server = Deno.serve({ port }, app.fetch);
   registerShutdownHandlers(server);
 }
-
-export default app;
 
 function registerShutdownHandlers(server: Deno.HttpServer): void {
   let shuttingDown = false;

@@ -157,6 +157,90 @@ Deno.test("verifyTakosumiInternalRequestFromHeaders rejects tamper and policy mi
   );
 });
 
+Deno.test("verifyTakosumiInternalRequestFromHeaders enforces single-use nonce when recordNonce is supplied", async () => {
+  const body = '{"repositoryId":"repo_1"}';
+  const signed = await signTakosumiInternalRequest({
+    method: "POST",
+    path: "/internal/source/resolve",
+    body,
+    timestamp: "2026-05-01T00:00:00.000Z",
+    nonce: "nonce-replay",
+    caller: "caller-app",
+    audience: "audience-git",
+    capabilities: ["repo.read"],
+    actor,
+    secret: "test-secret",
+  });
+
+  const seen = new Map<string, number>();
+  const recordNonce = (nonce: string, expiresAtEpochMs: number) => {
+    if (seen.has(nonce)) return Promise.resolve(false);
+    seen.set(nonce, expiresAtEpochMs);
+    return Promise.resolve(true);
+  };
+
+  // First presentation is accepted and records the nonce.
+  const first = await verifyTakosumiInternalRequestFromHeaders({
+    method: "POST",
+    path: "/internal/source/resolve",
+    body,
+    secret: "test-secret",
+    headers: new Headers(signed.headers),
+    now: () => new Date("2026-05-01T00:01:00.000Z"),
+    recordNonce,
+  });
+  assert.equal(first?.nonce, "nonce-replay");
+  // Expiry is timestamp + default 5-minute skew window.
+  assert.equal(
+    seen.get("nonce-replay"),
+    Date.parse("2026-05-01T00:05:00.000Z"),
+  );
+
+  // Replay within the skew window is rejected because the nonce was seen.
+  const replay = await verifyTakosumiInternalRequestFromHeaders({
+    method: "POST",
+    path: "/internal/source/resolve",
+    body,
+    secret: "test-secret",
+    headers: new Headers(signed.headers),
+    now: () => new Date("2026-05-01T00:02:00.000Z"),
+    recordNonce,
+  });
+  assert.equal(replay, undefined);
+});
+
+Deno.test("verifyTakosumiInternalRequestFromHeaders does not consult recordNonce for a forged signature", async () => {
+  const signed = await signTakosumiInternalRequest({
+    method: "POST",
+    path: "/internal/source/resolve",
+    body: "{}",
+    timestamp: "2026-05-01T00:00:00.000Z",
+    nonce: "nonce-forged",
+    caller: "caller-app",
+    audience: "audience-git",
+    actor,
+    secret: "test-secret",
+  });
+  const headers = new Headers(signed.headers);
+  headers.set(TAKOSUMI_INTERNAL_SIGNATURE_HEADER, "0".repeat(64));
+
+  let recorderCalls = 0;
+  const result = await verifyTakosumiInternalRequestFromHeaders({
+    method: "POST",
+    path: "/internal/source/resolve",
+    body: "{}",
+    secret: "test-secret",
+    headers,
+    now: () => new Date("2026-05-01T00:01:00.000Z"),
+    recordNonce: () => {
+      recorderCalls += 1;
+      return Promise.resolve(true);
+    },
+  });
+  assert.equal(result, undefined);
+  assert.equal(recorderCalls, 0);
+});
+
 Deno.test("internal RPC signing verifies binary request bodies", async () => {
   const body = new Uint8Array([0, 255, 1, 2, 128, 10]);
   const signed = await signTakosumiInternalRequest({
