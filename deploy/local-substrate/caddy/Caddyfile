@@ -107,9 +107,9 @@ kernel-worker.takosumi.test {
 # serve** されるため、 専用 dev hostname は持たない (= 各 Vite dev server を
 # localhost で直起動して Takos UI 内から iframe / launch する model)。
 
-# Takos product UI mirror (= production takos.jp と 1:1)
+# Takos public product entry mirror (= production takos.jp と 1:1)
 takos.test {
-	import proxy_site host.docker.internal:5173
+	import proxy_site host.docker.internal:4322
 }
 
 # road-to-me mirror (= production road.takos.jp と 1:1)

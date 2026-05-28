@@ -121,7 +121,7 @@ production hostname 構造を正確に mirror する dev hostname のみを Cadd
 
 | dev hostname (= production の mirror)          | upstream (host で起動)      | 起動コマンド (= 該当 product root で)    |
 | ---------------------------------------------- | --------------------------- | ---------------------------------------- |
-| `https://takos.test/` (= `takos.jp`)           | `host.docker.internal:5173` | `cd takos/app/apps/web && deno task dev` |
+| `https://takos.test/` (= `takos.jp`)           | `host.docker.internal:4322` | `cd takos/website && npm run dev`        |
 | `https://road.takos.test/` (= `road.takos.jp`) | `host.docker.internal:1420` | `cd road-to-me/app && deno task dev`     |
 | `https://yurucommu.test/` (= `yurucommu.com`)  | `host.docker.internal:5173` | `cd yurucommu/web && deno task dev`      |
 
