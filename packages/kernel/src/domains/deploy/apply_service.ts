@@ -37,6 +37,7 @@ import {
   type OperationPlanPreview,
   type PriorAppliedSnapshot,
 } from "./apply_v2.ts";
+import type { OperationJournalStore } from "./operation_journal.ts";
 import {
   type DeploymentFilter,
   DeploymentService,
@@ -127,6 +128,16 @@ export interface ApplyServiceOptions
   platformAdapters?: PlatformContextAdapters;
   /** Tenant id surfaced into `PlatformContext.tenantId` (defaults to spaceId). */
   tenantId?: string;
+  /**
+   * Durable operation journal (WAL). When supplied, the shape-model dispatch
+   * path threads it into `applyV2` so that `prepare`/`commit` stage records are
+   * written around the provider apply loop, making the idempotency tuple
+   * durable. The journal only records stages when the dispatch also has an
+   * `operationPlanPreview` to derive the tuple from. Bootstrap resolves the
+   * store (in-memory / SQL) and passes it here; omitting it preserves the
+   * previous journal-less behavior.
+   */
+  operationJournalStore?: OperationJournalStore;
 }
 
 export interface ApplyPhaseBlockerProviderInput {
@@ -179,6 +190,7 @@ export class ApplyService {
   readonly #idFactory: () => string;
   readonly #platformAdapters?: PlatformContextAdapters;
   readonly #tenantId?: string;
+  readonly #operationJournalStore?: OperationJournalStore;
 
   constructor(options: ApplyServiceOptions) {
     this.#store = options.store;
@@ -187,6 +199,7 @@ export class ApplyService {
     this.#applyBlockerProvider = options.applyBlockerProvider;
     this.#platformAdapters = options.platformAdapters;
     this.#tenantId = options.tenantId;
+    this.#operationJournalStore = options.operationJournalStore;
     this.#service = new DeploymentService({
       store: options.store,
       clock: this.#clock,
@@ -335,6 +348,12 @@ export class ApplyService {
         : {}),
       ...(input.recoveryMode ? { recoveryMode: input.recoveryMode } : {}),
       ...(input.priorApplied ? { priorApplied: input.priorApplied } : {}),
+      // Durable WAL: only threaded when bootstrap supplied a journal store.
+      // `applyV2` no-ops on the journal unless an `operationPlanPreview` is
+      // also present, so this is safe to always forward.
+      ...(this.#operationJournalStore
+        ? { operationJournalStore: this.#operationJournalStore }
+        : {}),
       ...(input.deploymentName
         ? { deploymentName: input.deploymentName }
         : (typeof input.manifest.name === "string" &&

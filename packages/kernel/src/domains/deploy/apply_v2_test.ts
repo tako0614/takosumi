@@ -17,7 +17,8 @@ import {
   unregisterShape,
 } from "takosumi-contract/reference/shape";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
-import { applyV2 } from "./apply_v2.ts";
+import { applyV2, OperationJournalStageProgressionError } from "./apply_v2.ts";
+import { InMemoryOperationJournalStore } from "./operation_journal.ts";
 import { InMemoryObservabilitySink } from "../../services/observability/mod.ts";
 
 const SHAPE = "test-apply-shape";
@@ -483,6 +484,148 @@ Deno.test("applyV2 records provider apply trace spans", async () => {
     assert.equal(span.attributes?.["takosumi.wal_stage"], "commit");
     assert.equal(span.attributes?.["takosumi.resource_name"], "db");
     assert.equal(span.attributes?.["takosumi.provider_id"], PROV_OK);
+  } finally {
+    tearDown();
+  }
+});
+
+Deno.test("applyV2 writes prepare + commit WAL stages when a journal store is wired", async () => {
+  setUp();
+  try {
+    const journal = new InMemoryOperationJournalStore();
+    let tick = 0;
+    const clock = () => new Date(1700000000000 + tick++ * 1000);
+    const resources: ManifestResource[] = [
+      { shape: `${SHAPE}@v1`, name: "db", provider: PROV_OK, spec: {} },
+      {
+        shape: `${SHAPE}@v1`,
+        name: "web",
+        provider: PROV_OK,
+        spec: { dbUrl: "${ref:db.url}" },
+      },
+    ];
+    const planned = await applyV2({
+      resources,
+      context: { ...ctx, spaceId: "space:wal" },
+      dryRun: true,
+      deploymentName: "wal-app",
+    });
+    assert.ok(planned.operationPlanPreview);
+
+    const result = await applyV2({
+      resources,
+      context: { ...ctx, spaceId: "space:wal" },
+      deploymentName: "wal-app",
+      operationPlanPreview: planned.operationPlanPreview,
+      operationJournalStore: journal,
+      operationJournalClock: clock,
+    });
+    assert.equal(result.status, "succeeded");
+
+    const entries = await journal.listByPlan(
+      "space:wal",
+      planned.operationPlanPreview.operationPlanDigest,
+    );
+    // 2 operations x (prepare + commit) = 4 durable WAL records.
+    assert.equal(entries.length, 4);
+    const prepare = entries.filter((e) => e.stage === "prepare");
+    const commit = entries.filter((e) => e.stage === "commit");
+    assert.equal(prepare.length, 2);
+    assert.equal(commit.length, 2);
+    for (const entry of prepare) assert.equal(entry.status, "recorded");
+    for (const entry of commit) assert.equal(entry.status, "succeeded");
+    // The idempotency tuple is durable: journalEntryIds match the plan.
+    const planEntryIds = new Set(
+      planned.operationPlanPreview.operations.map((op) =>
+        op.idempotencyKey.journalEntryId
+      ),
+    );
+    for (const entry of commit) {
+      assert.ok(planEntryIds.has(entry.journalEntryId));
+    }
+  } finally {
+    tearDown();
+  }
+});
+
+Deno.test("applyV2 re-apply with same plan is journal-idempotent", async () => {
+  setUp();
+  try {
+    const journal = new InMemoryOperationJournalStore();
+    const resources: ManifestResource[] = [
+      { shape: `${SHAPE}@v1`, name: "db", provider: PROV_OK, spec: {} },
+    ];
+    const planned = await applyV2({
+      resources,
+      context: { ...ctx, spaceId: "space:wal-idem" },
+      dryRun: true,
+      deploymentName: "wal-idem-app",
+    });
+    assert.ok(planned.operationPlanPreview);
+
+    for (let i = 0; i < 2; i++) {
+      const result = await applyV2({
+        resources,
+        context: { ...ctx, spaceId: "space:wal-idem" },
+        deploymentName: "wal-idem-app",
+        operationPlanPreview: planned.operationPlanPreview,
+        operationJournalStore: journal,
+      });
+      assert.equal(result.status, "succeeded");
+    }
+
+    // Two applies of the same plan dedupe to one prepare + one commit record.
+    const entries = await journal.listByPlan(
+      "space:wal-idem",
+      planned.operationPlanPreview.operationPlanDigest,
+    );
+    assert.equal(entries.length, 2);
+  } finally {
+    tearDown();
+  }
+});
+
+Deno.test("applyV2 commit stage guard rejects commit before prepare", async () => {
+  setUp();
+  try {
+    // A store that silently drops `prepare` appends (e.g. a partial write /
+    // corrupt WAL) but otherwise behaves normally. applyV2 will believe it
+    // wrote prepare, run the apply loop, then its commit-time
+    // stage-progression guard must reject because no prepare is durable.
+    const inner = new InMemoryOperationJournalStore();
+    const dropPrepareStore = {
+      append(input: Parameters<typeof inner.append>[0]) {
+        if (input.stage === "prepare") {
+          return inner.append({ ...input, stage: "skip" });
+        }
+        return inner.append(input);
+      },
+      listByPlan: inner.listByPlan.bind(inner),
+      listByDeployment: inner.listByDeployment.bind(inner),
+    };
+
+    const resources: ManifestResource[] = [
+      { shape: `${SHAPE}@v1`, name: "db", provider: PROV_OK, spec: {} },
+    ];
+    const planned = await applyV2({
+      resources,
+      context: { ...ctx, spaceId: "space:wal-guard" },
+      dryRun: true,
+      deploymentName: "wal-guard-app",
+    });
+    assert.ok(planned.operationPlanPreview);
+
+    await assert.rejects(
+      () =>
+        applyV2({
+          resources,
+          context: { ...ctx, spaceId: "space:wal-guard" },
+          deploymentName: "wal-guard-app",
+          operationPlanPreview: planned.operationPlanPreview,
+          operationJournalStore: dropPrepareStore,
+        }),
+      OperationJournalStageProgressionError,
+    );
   } finally {
     tearDown();
   }
