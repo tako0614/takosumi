@@ -5,7 +5,7 @@ import {
   requireHttpUrl,
   requireNonEmptyString,
   requireRoot,
-} from "./_validators.ts";
+} from "takosumi-contract/reference/shape-validators";
 import {
   OBJECT_STORE_CAPABILITY_TERMS,
   OBJECT_STORE_DESCRIPTION,

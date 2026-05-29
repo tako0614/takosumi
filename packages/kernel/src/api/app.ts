@@ -19,7 +19,6 @@ import {
 } from "./internal_routes.ts";
 import type {
   DeploymentEnvelope,
-  DeploymentMutationResponse,
   DeploymentRouteApproveInput,
   DeploymentRouteCreateInput,
   DeploymentRouteGetInput,
@@ -350,25 +349,6 @@ function createDefaultDeploymentService(
         actor: input.actor,
       });
       return envelopeOf(asApplyResult(result).deployment);
-    },
-    previewDeployment(
-      input: DeploymentRouteCreateInput,
-    ): DeploymentMutationResponse {
-      return {
-        deployment_id: `preview:${input.group ?? "default"}`,
-        status: "preview",
-        conditions: [],
-        expansion_summary: {
-          components:
-            isRecord(input.manifest) && isRecord(input.manifest.compute)
-              ? Object.keys(input.manifest.compute).length
-              : undefined,
-          resources:
-            isRecord(input.manifest) && isRecord(input.manifest.resources)
-              ? Object.keys(input.manifest.resources).length
-              : undefined,
-        },
-      };
     },
     async applyResolved(input: DeploymentRouteGetInput) {
       if (!services.applyService.applyDeployment) {

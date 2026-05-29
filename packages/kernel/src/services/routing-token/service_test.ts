@@ -209,6 +209,24 @@ Deno.test("RoutingTokenService: rotation rejects re-using the current secret", (
   );
 });
 
+Deno.test("RoutingTokenService: constructor rejects non-finite maxClockSkewMs (no fail-open expiry)", () => {
+  for (const skew of [Infinity, -Infinity, NaN, -1]) {
+    assert.throws(
+      () =>
+        new RoutingTokenService({
+          secret: "kernel-routing-secret-v1",
+          maxClockSkewMs: skew,
+        }),
+      (err: unknown) => {
+        assert.ok(err instanceof DomainError);
+        assert.equal(err.code, "invalid_argument");
+        return true;
+      },
+      `expected maxClockSkewMs=${skew} to be rejected`,
+    );
+  }
+});
+
 Deno.test("RoutingTokenService: issue rejects empty scope fields up-front", async () => {
   const { service } = buildService();
   await assert.rejects(

@@ -803,6 +803,180 @@ components:
   }, yaml);
 });
 
+Deno.test("InstallerPipeline enforces listen.kind compatibility at apply time", async () => {
+  // `listen.path` with an explicit `kind` is a compatibility assertion: the
+  // resolved material must advertise the same `kind`. The real deployment
+  // pipeline (not just the test-only resolveAppSpec) must reject a mismatch.
+  const yaml = `apiVersion: v1
+metadata:
+  id: listen-kind-mismatch-test
+  name: Listen Kind Mismatch Test
+components:
+  web:
+    kind: worker
+    listen:
+      oidc:
+        path: identity.primary.oidc
+        kind: oidc-issuer
+        inject: env
+        required: true
+`;
+  await withTempSource(async (dir) => {
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/worker",
+          provides: ["https://takosumi.com/kinds/v1/worker"],
+          recorder: [],
+        }),
+      ],
+      platformServices: {
+        // Operator returns a material advertising a different kind.
+        resolve: () => ({ kind: "object-store", url: "https://x.test" }),
+      },
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /expects kind "oidc-issuer" but material .* advertises kind "object-store"/,
+    );
+  }, yaml);
+});
+
+Deno.test("InstallerPipeline binds listen.kind when material kind matches", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: listen-kind-match-test
+  name: Listen Kind Match Test
+components:
+  web:
+    kind: worker
+    listen:
+      oidc:
+        path: identity.primary.oidc
+        kind: oidc-issuer
+        inject: env
+        required: true
+`;
+  await withTempSource(async (dir) => {
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/worker",
+          provides: ["https://takosumi.com/kinds/v1/worker"],
+          recorder: [],
+        }),
+      ],
+      platformServices: {
+        resolve: () => ({ kind: "oidc-issuer", issuerUrl: "https://i.test" }),
+      },
+    });
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+    assert.equal(deployment.status, "succeeded");
+  }, yaml);
+});
+
+Deno.test("InstallerPipeline rejects a second Installation publishing a path another already owns", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: publish-path-conflict-test
+  name: Publish Path Conflict Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    path: database.primary.connection
+`;
+  const makePipeline = () =>
+    new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+          outputs: { host: "db.local", port: "5432" },
+        }),
+      ],
+    });
+  await withTempSource(async (dir) => {
+    const pipeline = makePipeline();
+    const first = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+    assert.equal(first.installation.status, "ready");
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /publish_path_conflict/,
+    );
+  }, yaml);
+});
+
+Deno.test("InstallerPipeline serializes concurrent same-path fresh installs in one Space", async () => {
+  // Two fresh installs of the same pathful publish started concurrently must
+  // not both succeed: the per-Space mutation chain serializes them so the
+  // second observes the first's publication and is rejected.
+  const yaml = `apiVersion: v1
+metadata:
+  id: publish-path-race-test
+  name: Publish Path Race Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    path: database.primary.connection
+`;
+  await withTempSource(async (dir) => {
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+          outputs: { host: "db.local", port: "5432" },
+        }),
+      ],
+    });
+    const results = await Promise.allSettled([
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    assert.equal(
+      fulfilled.length,
+      1,
+      "exactly one install should own the path",
+    );
+    assert.equal(rejected.length, 1, "the racing install should be rejected");
+  }, yaml);
+});
+
 Deno.test("InstallerPipeline rejects unmapped provider outputs for connected output", async () => {
   await withTempSource(async (dir) => {
     const dbPlugin: KernelPlugin = {

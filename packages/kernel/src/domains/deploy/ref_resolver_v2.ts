@@ -23,6 +23,54 @@ export interface RefDagResult {
   readonly issues: readonly RefResolutionIssue[];
 }
 
+/**
+ * Binary min-heap over strings ordered by default (lexicographic) `<`
+ * comparison. Used as the ready frontier of the topological sort so the
+ * globally-smallest ready node is popped each step in O(log n), reproducing
+ * the deterministic order of a fully-sorted frontier without O(n) insertion.
+ */
+class StringMinHeap {
+  readonly #items: string[] = [];
+
+  get size(): number {
+    return this.#items.length;
+  }
+
+  push(value: string): void {
+    const items = this.#items;
+    items.push(value);
+    let i = items.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (items[parent] <= items[i]) break;
+      [items[parent], items[i]] = [items[i], items[parent]];
+      i = parent;
+    }
+  }
+
+  pop(): string | undefined {
+    const items = this.#items;
+    if (items.length === 0) return undefined;
+    const top = items[0];
+    const last = items.pop()!;
+    if (items.length === 0) return top;
+    items[0] = last;
+    let i = 0;
+    const n = items.length;
+    for (;;) {
+      const left = 2 * i + 1;
+      const right = 2 * i + 2;
+      let smallest = i;
+      if (left < n && items[left] < items[smallest]) smallest = left;
+      if (right < n && items[right] < items[smallest]) smallest = right;
+      if (smallest === i) break;
+      [items[smallest], items[i]] = [items[i], items[smallest]];
+      i = smallest;
+    }
+    return top;
+  }
+}
+
 export function buildRefDag(
   resources: readonly ManifestResource[],
 ): RefDagResult {
@@ -62,31 +110,34 @@ export function buildRefDag(
     }
   }
 
+  // Kahn topological sort using a lexicographic string min-heap as the ready
+  // frontier. This pops the globally-smallest ready node each step — the exact
+  // same deterministic order the previous sorted-array implementation produced
+  // — but at O(log n) per push/pop instead of the old O(n) findIndex+splice
+  // insertion (which was O(n²) across a wide DAG).
   const order: string[] = [];
-  const ready: string[] = [];
+  const ready = new StringMinHeap();
   for (const [name, sources] of incoming) {
     if (sources.size === 0) ready.push(name);
   }
-  ready.sort();
 
-  while (ready.length > 0) {
-    const name = ready.shift()!;
+  while (ready.size > 0) {
+    const name = ready.pop()!;
     order.push(name);
     for (const child of adjacency.get(name) ?? new Set()) {
       const childIncoming = incoming.get(child)!;
       childIncoming.delete(name);
-      if (childIncoming.size === 0) {
-        const insertAt = ready.findIndex((entry) => entry > child);
-        if (insertAt < 0) ready.push(child);
-        else ready.splice(insertAt, 0, child);
-      }
+      if (childIncoming.size === 0) ready.push(child);
     }
   }
 
   if (order.length < resources.length) {
+    // O(n): membership-test against a Set rather than `order.includes` inside
+    // a filter (which would be O(n²)).
+    const ordered = new Set(order);
     const remaining = resources
       .map((r) => r.name)
-      .filter((name) => !order.includes(name));
+      .filter((name) => !ordered.has(name));
     issues.push({
       path: "$.resources",
       message: `cycle detected involving: ${remaining.join(", ")}`,

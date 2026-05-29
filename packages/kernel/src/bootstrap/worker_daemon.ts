@@ -68,8 +68,11 @@ function createWorkerTasks(
   options: RoleWorkerDaemonOptions,
 ): readonly WorkerDaemonTask[] {
   if (options.role !== "takosumi-worker") return [];
+  // Product-neutral substrate default; the `takos.` namespace is a product ID
+  // that must not be baked into Takosumi kernel core (AGENTS.md). Operators
+  // override with TAKOSUMI_APPLY_QUEUE.
   const applyQueue = options.runtimeEnv.TAKOSUMI_APPLY_QUEUE ??
-    "takos.deploy.apply";
+    "takosumi.deploy.apply";
   const intervalMs = positiveInteger(
     options.runtimeEnv.TAKOSUMI_WORKER_POLL_INTERVAL_MS,
     1_000,

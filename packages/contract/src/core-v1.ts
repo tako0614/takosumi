@@ -1,33 +1,39 @@
 /**
- * Takosumi deploy-core compatibility projection.
+ * Takosumi deploy-domain core module.
  *
- * This module is NOT the current AppSpec / Installer API contract. It is kept
- * as an internal deploy-domain DTO set for older core-planning code and
- * historical docs. New code should import AppSpec / Installer API DTOs from
- * their explicit subpaths (`@takos/takosumi-contract/app-spec` and
- * `@takos/takosumi-contract/installer-api`) and implement materializers
- * through `KernelPlugin`.
+ * This module mixes two surfaces and is NOT, as a whole, deprecated:
  *
- * Historical spec: /docs/core/01-core-contract-v1.0.md.
- * Core is organized around three records:
+ *  1. Live deploy-domain primitives that have no other home and are imported
+ *     by kernel code today: the `ObjectAddress` value type plus its helpers
+ *     (`objectAddress` / `isObjectAddress` / `assertObjectAddress` /
+ *     `joinObjectAddressSegments`), the shared scalar enums, and the
+ *     `CORE_CONDITION_REASONS` catalog (`CoreConditionReason` /
+ *     `isCoreConditionReason`). These are current and not slated for removal.
+ *
+ *  2. The legacy deploy-core projection DTOs (`CoreAppSpec`, `Deployment`,
+ *     `ProviderObservation`, `GroupHead`, and the records collapsed onto them).
+ *     These are NOT the current AppSpec / Installer API contract; new code
+ *     should import those DTOs from `@takos/takosumi-contract/app-spec` and
+ *     `@takos/takosumi-contract/installer-api` and implement materializers
+ *     through `KernelPlugin`. They are deprecated as a group (see the removal
+ *     condition below); the `@deprecated` tag is scoped to this surface only,
+ *     not to the live primitives in surface 1.
+ *
+ * Historical spec: /docs/core/01-core-contract-v1.0.md. The legacy core was
+ * organized around three records:
  *   - Deployment            (input + resolution + desired state + status)
  *   - ProviderObservation   (observed provider state, never authoritative)
  *   - GroupHead             (space/group-scoped pointer to the current
  *                            Deployment)
  *
- * Every other deploy meta-record is collapsed onto a field of `Deployment`,
- * or onto one of the other two records.
- *
- * Migration path: read each consumer's import list against the AppSpec
- * envelope owned by `@takos/takosumi-contract/app-spec`, replace `CoreAppSpec`
- * / `CoreEnvSpec` / `CorePolicySpec` references with the v1 `AppSpec`
- * surface, and lift kernel-only deployment lifecycle DTOs into
- * `packages/kernel/src/domains/deploy/`. The compat surface itself is
- * scheduled to be removed in `@takos/takosumi-contract` 4.0.0.
- *
- * @deprecated Removed in `@takos/takosumi-contract` 4.0.0. Import the
- *             specific DTO surface (`app-spec`, `installer-api`,
- *             `reference/plugin`) instead of the deploy-core projection.
+ * Removal condition for the projection DTOs (surface 2): the legacy
+ * `Manifest` / `resources[]` deploy-core planning path is fully retired (the
+ * default reference apply facade dispatches through the v1 AppSpec resolver
+ * instead of the core-planning path) AND all kernel consumers have moved their
+ * deployment-lifecycle DTOs into `packages/kernel/src/domains/deploy/`. The
+ * live primitives in surface 1 must be relocated to a non-deprecated subpath
+ * before that removal, since they are re-exported via
+ * `@takos/takosumi-contract/reference/compat` today.
  */
 
 import type { Digest, IsoTimestamp, JsonObject } from "./types.ts";
@@ -177,9 +183,16 @@ export function isCoreConditionReason(
 }
 
 // ---------------------------------------------------------------------------
-// 4. AppSpec / EnvSpec / PolicySpec authoring shapes
+// 4. AppSpec / EnvSpec / PolicySpec authoring shapes (legacy deploy-core
+//    projection — surface 2; see module header for the removal condition).
 // ---------------------------------------------------------------------------
 
+/**
+ * @deprecated Legacy deploy-core authoring shape. Import the current AppSpec
+ *             from `@takos/takosumi-contract/app-spec` instead. Removed once
+ *             the legacy `Manifest` / `resources[]` planning path is retired
+ *             (see module header).
+ */
 export interface CoreAppSpec {
   apiVersion: "takosumi.com/v1";
   kind: "App";

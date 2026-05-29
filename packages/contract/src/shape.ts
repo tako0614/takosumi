@@ -1,19 +1,22 @@
 /**
- * Legacy connector-local shape registry.
+ * Author-facing kind descriptor type and connector-local shape registry.
  *
- * `Shape` is retained as a compatibility wire selector for older deploy-core
- * resource planning. It is derived from the operator's kind/materializer
- * mapping; it is not the AppSpec component contract. New reference adapters
- * should key off `Component.kind` through `KernelPlugin.provides[]`.
+ * `Shape<Spec, Outputs, CapabilityTerm>` is the current contract every official
+ * portable kind package uses to declare its kind descriptor: `kind-worker`,
+ * `kind-web-service`, `kind-postgres`, `kind-sqlite`, `kind-object-store`,
+ * `kind-kv-store`, `kind-message-queue`, `kind-vector-store`, and
+ * `kind-gateway` each export their `KIND_DESCRIPTOR` typed as a `Shape<...>`.
+ * It captures the kind's spec/outputs validation surface and catalog
+ * capability terms; it is not the AppSpec component envelope (a component's
+ * runtime meaning is resolved from `Component.kind` through the operator's
+ * `KernelPlugin.provides[]` bindings).
  *
- * Migration path: replace `getShape(...)` / `Shape` lookups with kind-aware
- * `KernelPlugin` resolution. `KernelPlugin.provides[]` records the bound kind
- * URI(s); the operator's `createPaaSApp({ plugins: [...] })` plugin array is
- * the canonical registry for reference implementations.
- *
- * @deprecated Removed in `@takos/takosumi-contract` 4.0.0. Use the
- *             `KernelPlugin` resolution path from
- *             `@takos/takosumi-contract/reference/plugin` instead.
+ * `SHAPE_REGISTRY` (`registerShape` / `getShape` / `getShapeByRef`) is a
+ * separate, optional connector-local lookup used by the legacy deploy-core
+ * `Manifest` / `resources[]` resolution path. The default reference apply
+ * facade resolves kinds through `KernelPlugin`, not this registry, so it is
+ * left empty in that path; only callers that opt into the legacy resolver
+ * populate it.
  */
 import type { JsonObject } from "./types.ts";
 

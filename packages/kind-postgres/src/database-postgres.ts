@@ -6,11 +6,13 @@ import {
   isPositiveInteger,
   isRecord,
   optionalBoolean,
+  optionalEnum,
+  optionalPasswordlessAbsoluteUri,
   rejectUnknownFields,
   requireNonEmptyString,
   requirePort,
   requireRoot,
-} from "./_validators.ts";
+} from "takosumi-contract/reference/shape-validators";
 import {
   DATABASE_POSTGRES_CAPABILITY_TERMS,
   DATABASE_POSTGRES_DESCRIPTION,
@@ -33,14 +35,12 @@ export type {
 /** Size class union derived from the generated spec interface. */
 export type DatabasePostgresSize = NonNullable<DatabasePostgresSpec["size"]>;
 
-const SIZES: ReadonlySet<string> = new Set(
-  [
-    "small",
-    "medium",
-    "large",
-    "xlarge",
-  ] satisfies DatabasePostgresSize[],
-);
+const SIZES: readonly DatabasePostgresSize[] = [
+  "small",
+  "medium",
+  "large",
+  "xlarge",
+];
 
 /**
  * `postgres@v1` component kind descriptor. Materialized by a provider
@@ -74,15 +74,7 @@ export const DatabasePostgresKind: Shape<
       issues,
     );
     requireNonEmptyString(value.version, "$.version", issues);
-    if (
-      value.size !== undefined &&
-      (typeof value.size !== "string" || !SIZES.has(value.size))
-    ) {
-      issues.push({
-        path: "$.size",
-        message: `must be one of: ${Array.from(SIZES).join(", ")}`,
-      });
-    }
+    optionalEnum(value.size, "$.size", SIZES, issues);
     if (value.storage !== undefined) validateStorage(value.storage, issues);
     optionalBoolean(value.highAvailability, "$.highAvailability", issues);
   },
@@ -115,7 +107,7 @@ export const DatabasePostgresKind: Shape<
       "$.connectionString",
       issues,
     );
-    requirePasswordlessUri(
+    optionalPasswordlessAbsoluteUri(
       value.connectionString,
       "$.connectionString",
       issues,
@@ -134,21 +126,5 @@ function validateStorage(value: unknown, issues: ShapeValidationIssue[]): void {
       path: "$.storage.sizeGiB",
       message: "must be a positive integer",
     });
-  }
-}
-
-function requirePasswordlessUri(
-  value: unknown,
-  path: string,
-  issues: ShapeValidationIssue[],
-): void {
-  if (typeof value !== "string" || value.trim().length === 0) return;
-  try {
-    const url = new URL(value);
-    if (url.password) {
-      issues.push({ path, message: "must not contain an embedded password" });
-    }
-  } catch {
-    issues.push({ path, message: "must be an absolute connection URI" });
   }
 }

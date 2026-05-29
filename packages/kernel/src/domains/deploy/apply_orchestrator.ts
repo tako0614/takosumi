@@ -397,10 +397,17 @@ function pascalCaseKind(kind: PlannedOperationKind): string {
 // Default no-op adapter (used when no provider is wired)
 // ---------------------------------------------------------------------------
 
-/** Default adapter — succeeds for every operation. Used when no provider
- *  plugin is wired (unit tests, in-memory bootstrap). Provides the synthetic
+/** Default adapter — succeeds for every operation. Used ONLY when no provider
+ *  plugin is wired in dev / test / in-memory bootstrap. Provides the synthetic
  *  apply path so a Deployment can transition resolved → applied without a
- *  real cloud round-trip. */
+ *  real cloud round-trip.
+ *
+ *  Fail-CLOSED contract: `DeploymentService` refuses to fall back to this
+ *  adapter when `options.environment` is `"production"` or `"staging"` (it
+ *  throws at construction). So a production / staging apply can never silently
+ *  succeed with zero provider work. Every outcome is stamped `reason:
+ *  "Synthetic"` so even in dev the Deployment record is explicit that no real
+ *  provider materialization happened. */
 export const SYNTHETIC_PROVIDER_ADAPTER: DeploymentProviderAdapter = {
   materialize(_deployment, _operation): OperationOutcome {
     return {

@@ -110,13 +110,69 @@ export class InstallerClient {
       body: JSON.stringify(body),
     });
     const text = await response.text();
-    const parsed = text.length === 0 ? null : JSON.parse(text);
+    let parsed: unknown = null;
+    let parseFailed = false;
+    if (text.length !== 0) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parseFailed = true;
+      }
+    }
     if (!response.ok) {
+      // On the failure paths we most need to handle (e.g. an upstream proxy
+      // returning a non-JSON 502 HTML page), surface the HTTP status rather
+      // than an opaque SyntaxError, and synthesize a closed error envelope
+      // when the body is missing or the wrong shape.
       throw new InstallerHttpError(
         response.status,
-        parsed as InstallerErrorEnvelope,
+        isErrorEnvelope(parsed)
+          ? parsed
+          : synthesizeErrorEnvelope(response, text, parseFailed),
+      );
+    }
+    if (parseFailed) {
+      throw new InstallerHttpError(
+        response.status,
+        synthesizeErrorEnvelope(response, text, true),
       );
     }
     return parsed as TResponse;
   }
+}
+
+function isErrorEnvelope(value: unknown): value is InstallerErrorEnvelope {
+  if (typeof value !== "object" || value === null) return false;
+  const error = (value as { error?: unknown }).error;
+  if (typeof error !== "object" || error === null) return false;
+  const { code, message, requestId } = error as {
+    code?: unknown;
+    message?: unknown;
+    requestId?: unknown;
+  };
+  return typeof code === "string" && typeof message === "string" &&
+    typeof requestId === "string";
+}
+
+function synthesizeErrorEnvelope(
+  response: Response,
+  body: string,
+  parseFailed: boolean,
+): InstallerErrorEnvelope {
+  const detail = parseFailed
+    ? "response body was not valid JSON"
+    : "response body did not match the installer error envelope";
+  const snippet = body.slice(0, 200);
+  return {
+    error: {
+      // `internal_error` is the closest closed-envelope code for a response
+      // the client could not interpret. `requestId` is empty because the
+      // upstream never produced a parseable one.
+      code: "internal_error",
+      message:
+        `installer responded with HTTP ${response.status} ${response.statusText}: ${detail}` +
+        (snippet.length > 0 ? ` (body: ${snippet})` : ""),
+      requestId: "",
+    },
+  };
 }

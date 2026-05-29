@@ -202,6 +202,149 @@ Deno.test("fetchPreparedSource rejects oversized prepared archive by actual byte
   }
 });
 
+Deno.test("fetchPreparedSource rejects loopback / metadata host literals before fetch", async () => {
+  // No fetch stub installed: if the host guard fails open, the real fetch
+  // would be attempted. The guard must reject first.
+  for (
+    const url of [
+      "https://127.0.0.1/x.tar",
+      "https://[::1]/x.tar",
+      "https://169.254.169.254/x.tar",
+      "https://[64:ff9b::a9fe:a9fe]/x.tar",
+    ]
+  ) {
+    await assert.rejects(
+      fetchPreparedSource({
+        url,
+        digest:
+          "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      }),
+      /unsupported_source_url/,
+    );
+  }
+});
+
+Deno.test("fetchPreparedSource rejects redirect responses (SSRF-via-redirect)", async () => {
+  const url = "https://example.test/redirecting.tar";
+  const original = globalThis.fetch;
+  let manualRedirectRequested = false;
+  globalThis.fetch = (
+    _input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    manualRedirectRequested = init?.redirect === "manual";
+    // Simulate a server that 302s toward an internal host.
+    return Promise.resolve(
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://169.254.169.254/" },
+      }),
+    );
+  };
+  try {
+    await assert.rejects(
+      fetchPreparedSource({
+        url,
+        digest:
+          "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      }),
+      /must not redirect/,
+    );
+    assert.ok(
+      manualRedirectRequested,
+      "fetch must be called with redirect: manual",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("fetchPreparedSource rejects a gzip bomb by decompressed size", async () => {
+  // Build a tar of a single large sparse-ish file, gzip it (high ratio), and
+  // lower the decompressed cap so the listing-sum guard trips before extract.
+  const sourceDir = await Deno.makeTempDir({
+    prefix: "takosumi-prepared-source-bomb-src-",
+  });
+  const archive = await Deno.makeTempFile({
+    prefix: "takosumi-prepared-source-bomb-",
+    suffix: ".tar.gz",
+  });
+  const previous = Deno.env.get("TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES");
+  Deno.env.set("TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES", "1024");
+  try {
+    await Deno.writeTextFile(`${sourceDir}/.takosumi.yml`, "apiVersion: v1\n");
+    // 1 MiB of highly compressible zeros -> tiny gzip, large decompressed.
+    await Deno.writeFile(`${sourceDir}/big`, new Uint8Array(1024 * 1024));
+    await tar([
+      "-c",
+      "-z",
+      "-f",
+      archive,
+      "-C",
+      sourceDir,
+      ".takosumi.yml",
+      "big",
+    ]);
+    const bytes = await Deno.readFile(archive);
+    const digest = await sha256Hex(bytes);
+    const url = "https://example.test/bomb.tar.gz";
+    await withFetchStub(url, bytes, async () => {
+      await assert.rejects(
+        fetchPreparedSource({ url, digest }),
+        /archive_too_large/,
+      );
+    });
+  } finally {
+    if (previous === undefined) {
+      Deno.env.delete("TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES");
+    } else {
+      Deno.env.set("TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES", previous);
+    }
+    await Deno.remove(sourceDir, { recursive: true });
+    await Deno.remove(archive);
+  }
+});
+
+Deno.test("fetchPreparedSource rejects symlink whose filename contains ' -> ' and escapes", async () => {
+  // Regression: a symlink named `a -> b` pointing at `../../../etc/evil`
+  // produces the tar -tv line `... a -> b -> ../../../etc/evil`. The old
+  // split(" -> ")[1] validated the fragment `b` (which passes) instead of the
+  // real escaping target, letting it through. The unified parser must cut at
+  // the FIRST separator and validate the real remainder.
+  const sourceDir = await Deno.makeTempDir({
+    prefix: "takosumi-prepared-source-symlink-src-",
+  });
+  const archive = await Deno.makeTempFile({
+    prefix: "takosumi-prepared-source-symlink-",
+    suffix: ".tar",
+  });
+  try {
+    await Deno.writeTextFile(`${sourceDir}/.takosumi.yml`, "apiVersion: v1\n");
+    await Deno.symlink("../../../etc/evil", `${sourceDir}/a -> b`);
+    await tar([
+      "-c",
+      "-f",
+      archive,
+      "-C",
+      sourceDir,
+      ".takosumi.yml",
+      "a -> b",
+    ]);
+    const bytes = await Deno.readFile(archive);
+    const digest = await sha256Hex(bytes);
+    const url = "https://example.test/symlink-trick.tar";
+    await withFetchStub(url, bytes, async () => {
+      await assert.rejects(
+        fetchPreparedSource({ url, digest }),
+        /link target escapes destination/,
+      );
+    });
+  } finally {
+    await Deno.remove(sourceDir, { recursive: true });
+    await Deno.remove(archive);
+  }
+});
+
 async function tar(args: readonly string[]): Promise<void> {
   const { code, stderr } = await new Deno.Command("tar", {
     args: [...args],

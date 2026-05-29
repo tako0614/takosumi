@@ -61,10 +61,13 @@ const fs: FsAdapter = {
   },
   readTextFileSync(path) {
     // Synchronous read: prefer the CommonJS `require` global when running on
-    // classic Node, otherwise fall back to building a `require` via
-    // `createRequire(import.meta.url)`. We touch `node:module` only when
-    // necessary so that runtimes without it (e.g. very old Node) still
-    // surface a clear error rather than a require-loader exception.
+    // classic Node, otherwise use the `require` synthesised from
+    // `node:module#createRequire(import.meta.url)` that we pre-warm
+    // asynchronously at module load (see `warmNodeRequire`). On pure-ESM Node
+    // and Deno's node-compat shim there is no `globalThis.require`, so the
+    // pre-warmed cache is the only path; the read happens lazily (descriptor
+    // JSON loading at deploy-plan time), long after the warm-up import has
+    // resolved.
     const required = nodeRequireSync("node:fs") as
       | { readFileSync(p: string | URL, enc: string): string }
       | undefined;
@@ -88,16 +91,20 @@ const fs: FsAdapter = {
 
 /**
  * Synchronously resolve a CJS specifier on Node (and Bun's Node-compat
- * surface). When `globalThis.require` is available we use it directly. When
- * it isn't (= ESM-only Node, the common case under Deno's Node compat shim
- * or pure ESM bundlers), build one from `node:module#createRequire` keyed
- * off this module's `import.meta.url`.
+ * surface).
  *
- * `createRequire` itself is loaded synchronously through a cached
- * `globalThis.require` when the bootstrap already has one; otherwise we
- * lazily warm the cache via a top-level dynamic import on first call. The
- * warm-up call only fires once because the resolver memoises the resulting
- * `require` function.
+ * Resolution order:
+ *   1. A `require` synthesised from `node:module#createRequire(import.meta.url)`
+ *      that {@link warmNodeRequire} pre-warms via an async import at module
+ *      load. This is the only path that works on pure-ESM Node and Deno's
+ *      node-compat shim, where `globalThis.require` is absent.
+ *   2. `globalThis.require` directly, when a CommonJS bootstrap exposes one.
+ *
+ * `createRequire` cannot be obtained synchronously without an existing
+ * `require` (we would have to `await import("node:module")`), so the async
+ * warm-up is started eagerly at module load. `readTextFileSync`'s only caller
+ * loads descriptor JSON lazily at deploy-plan time — long after the warm-up
+ * import resolves — so the cache is populated by the time the sync read runs.
  */
 let cachedRequire: ((specifier: string) => unknown) | undefined;
 
@@ -110,41 +117,47 @@ function nodeRequireSync(specifier: string): unknown {
     cachedRequire = builtin;
     return cachedRequire(specifier);
   }
-  // ESM-only Node: synthesise a `require` via `node:module#createRequire`.
-  // This must be sync because the caller (e.g. descriptor JSON loader at
-  // module init) cannot await. We rely on the synchronous loader on Node /
-  // Bun that already has `node:module` present in the import map.
-  const moduleHelpers = synchronousNodeModuleHelpers();
-  if (!moduleHelpers) return undefined;
-  cachedRequire = moduleHelpers.createRequire(import.meta.url);
-  return cachedRequire(specifier);
+  // No global require and the async warm-up has not resolved yet (or this is
+  // a runtime without `node:module`). Returning undefined lets the caller
+  // surface a clear "not available in this runtime" error.
+  return undefined;
 }
 
 /**
- * Try to obtain `createRequire` from `node:module` synchronously. We cannot
- * `await import("node:module")` here because the call site is sync, but we
- * can look the resolved module up through a previously cached
- * `globalThis.require("node:module")` when the runtime exposes one.
+ * Eagerly build a `require` via `node:module#createRequire(import.meta.url)`.
  *
- * Returns undefined on runtimes without `node:module` (e.g. Workers — but
- * those never reach this code path because the workers adapter throws
- * before `readTextFileSync` is invoked).
+ * Started once at module load and never awaited at the top level (so a runtime
+ * without `node:module`, e.g. Cloudflare Workers, never blocks or throws at
+ * import time — the dynamic import simply rejects and is swallowed). On Node /
+ * Bun / Deno node-compat the import resolves and populates {@link cachedRequire}
+ * for the synchronous read path.
  */
-function synchronousNodeModuleHelpers(): {
-  createRequire(url: string): (specifier: string) => unknown;
-} | undefined {
-  const globalRequire = (globalThis as {
-    require?: (specifier: string) => unknown;
-  }).require;
-  if (typeof globalRequire !== "function") return undefined;
-  const moduleNs = globalRequire("node:module") as
-    | { createRequire?: (url: string) => (specifier: string) => unknown }
-    | undefined;
-  if (!moduleNs || typeof moduleNs.createRequire !== "function") {
-    return undefined;
+function warmNodeRequire(): void {
+  if (cachedRequire) return;
+  if (
+    typeof (globalThis as { require?: unknown }).require === "function"
+  ) {
+    return;
   }
-  return { createRequire: moduleNs.createRequire };
+  try {
+    import("node:module").then((moduleNs) => {
+      const createRequire = (moduleNs as {
+        createRequire?: (url: string) => (specifier: string) => unknown;
+      }).createRequire;
+      if (cachedRequire || typeof createRequire !== "function") return;
+      cachedRequire = createRequire(import.meta.url);
+    }).catch(() => {
+      // Runtime without `node:module` (e.g. Workers). The sync read path falls
+      // back to throwing "node:fs synchronous read not available in this
+      // runtime", which is the documented behaviour for such runtimes.
+    });
+  } catch {
+    // Some runtimes reject `import("node:*")` synchronously rather than
+    // returning a rejected promise; swallow the same way.
+  }
 }
+
+warmNodeRequire();
 
 const subprocess: SubprocessAdapter = {
   available: true,
@@ -276,11 +289,13 @@ async function startNodeHttpServer(
           },
         })
         : null;
-      const request = new Request(url, {
+      const init: RequestInit & { duplex?: "half" } = {
         method: req.method ?? "GET",
         headers,
         body,
-      });
+      };
+      if (body) init.duplex = "half";
+      const request = new Request(url, init);
       const response = await handler(request);
       res.statusCode = response.status;
       response.headers.forEach((value, key) => res.setHeader(key, value));

@@ -10,7 +10,7 @@ import {
   requireHttpUrl,
   requireNonEmptyString,
   requireRoot,
-} from "./_validators.ts";
+} from "takosumi-contract/reference/shape-validators";
 import {
   GATEWAY_CAPABILITY_TERMS,
   GATEWAY_DESCRIPTION,
@@ -252,11 +252,39 @@ function validateDuplicateRoute(
 
 function hasPathChangingDotSegment(pathValue: string): boolean {
   for (const segment of pathValue.split("/")) {
-    const lowered = segment.toLowerCase();
-    const normalizedDots = lowered.replaceAll("%2e", ".");
-    if (normalizedDots === "." || normalizedDots === "..") return true;
+    const decoded = fullyDecodePercentDots(segment);
+    if (decoded === "." || decoded === "..") return true;
   }
   return false;
+}
+
+/**
+ * Resolve every layer of percent-encoding in one path segment.
+ *
+ * A downstream proxy may percent-decode more than once, so a single decode of
+ * `%2e` is not enough: `%252e` decodes to `%2e`, which decodes again to `.`.
+ * We fully `decodeURIComponent` the segment repeatedly until it stabilises so
+ * that arbitrarily nested encodings collapse to their resolved form before the
+ * dot-segment comparison. Malformed escapes (which `decodeURIComponent` throws
+ * on) leave the segment as-is for that pass; such a segment is not a bare `.`
+ * or `..` and is independently rejected by the route-path grammar regex.
+ */
+function fullyDecodePercentDots(segment: string): string {
+  let current = segment;
+  // Bound the loop by length: each successful pass replaces at least one
+  // `%XX` triple with a single char, so it cannot run longer than the input.
+  for (let i = 0; i <= segment.length; i++) {
+    if (!current.includes("%")) return current;
+    let next: string;
+    try {
+      next = decodeURIComponent(current);
+    } catch {
+      return current;
+    }
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
 }
 
 function crossCheckEndpointUrl(
@@ -279,7 +307,10 @@ function crossCheckEndpointUrl(
       message: "must match the scheme in url",
     });
   }
-  if (host !== url.hostname) {
+  // DNS hostnames are case-insensitive, and `url.hostname` is already
+  // lowercased by the WHATWG URL parser, so compare the host output the same
+  // way to avoid rejecting a coherent but differently-cased materialized host.
+  if (host.toLowerCase() !== url.hostname) {
     issues.push({
       path: `${path}.host`,
       message: "must match the host in url",

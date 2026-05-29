@@ -5,16 +5,26 @@ import type {
   SpaceCreateRequest,
   SpaceSummary,
 } from "./types.ts";
+import {
+  assertNoCanonicalDelimiter,
+  hmacSha256Hex,
+  readHeader,
+  TAKOSUMI_INTERNAL_ACTOR_HEADER,
+  TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
+  TAKOSUMI_INTERNAL_SIGNATURE_HEADER,
+  TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS,
+  TAKOSUMI_INTERNAL_TIMESTAMP_HEADER,
+  timestampWithinSkew,
+  timingSafeEqualHex,
+} from "./internal-crypto.ts";
 
-const textEncoder = new TextEncoder();
-
-export const TAKOSUMI_INTERNAL_SIGNATURE_HEADER =
-  "x-takosumi-internal-signature";
-export const TAKOSUMI_INTERNAL_TIMESTAMP_HEADER =
-  "x-takosumi-internal-timestamp";
-export const TAKOSUMI_INTERNAL_REQUEST_ID_HEADER = "x-takosumi-request-id";
-export const TAKOSUMI_INTERNAL_ACTOR_HEADER = "x-takosumi-actor-context";
-export const TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS = 5 * 60 * 1000;
+export {
+  TAKOSUMI_INTERNAL_ACTOR_HEADER,
+  TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
+  TAKOSUMI_INTERNAL_SIGNATURE_HEADER,
+  TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS,
+  TAKOSUMI_INTERNAL_TIMESTAMP_HEADER,
+};
 
 export type TakosumiActorContext = ActorContext;
 
@@ -83,15 +93,21 @@ export interface SignedInternalResponse {
 export function canonicalInternalResponse(
   input: SignedInternalResponseInput,
 ): string {
-  return [
-    "takosumi-internal-response-v1",
-    input.method.toUpperCase(),
-    input.path,
-    String(input.status),
-    input.timestamp,
-    input.requestId,
-    input.body,
-  ].join("\n");
+  // Only the structured prefix fields are guarded against newlines: a `\n` in
+  // any of them could shift field boundaries and make two distinct tuples
+  // canonicalize identically. The trailing `body` is exempt because it is the
+  // last field, so newlines in it cannot reassign earlier field bytes, and
+  // response bodies (e.g. pretty-printed JSON) legitimately contain newlines.
+  const prefix = {
+    version: "takosumi-internal-response-v1",
+    method: input.method.toUpperCase(),
+    path: input.path,
+    status: String(input.status),
+    timestamp: input.timestamp,
+    requestId: input.requestId,
+  };
+  assertNoCanonicalDelimiter(prefix);
+  return [...Object.values(prefix), input.body].join("\n");
 }
 
 export async function signInternalResponse(
@@ -121,6 +137,22 @@ export async function verifyInternalResponseSignature(
   return timingSafeEqualHex(expectedSignature, input.signature);
 }
 
+/**
+ * Verifies a signed internal *response* from its headers.
+ *
+ * Replay protection asymmetry (intentional): unlike the request path
+ * (`verifyTakosumiInternalRequestFromHeaders`), the response envelope binds
+ * only method/path/status/timestamp/requestId/body — there is no per-response
+ * nonce and no `recordNonce` single-use hook. A captured signed response stays
+ * valid for as long as its timestamp is within the clock-skew window
+ * (`maxClockSkewMs`, default 5 minutes). This is acceptable because a response
+ * is verified by the original caller against the specific request it just
+ * issued: the `requestId` in the response must match the in-flight request
+ * (`expectedRequestId`), so a response captured from one exchange cannot be
+ * usefully replayed into a different one. The skew window is therefore the
+ * deliberate replay-protection boundary for responses; callers who want it
+ * tighter should pass a smaller `maxClockSkewMs`.
+ */
 export function verifySignedInternalResponseFromHeaders(
   input: {
     method: string;
@@ -161,59 +193,4 @@ export function verifySignedInternalResponseFromHeaders(
     secret: input.secret,
     signature,
   });
-}
-
-function timestampWithinSkew(
-  timestamp: string,
-  input: {
-    readonly now?: () => Date;
-    readonly maxClockSkewMs?: number;
-  },
-): boolean {
-  const parsed = Date.parse(timestamp);
-  if (!Number.isFinite(parsed)) return false;
-  const maxClockSkewMs = input.maxClockSkewMs ??
-    TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS;
-  if (!Number.isFinite(maxClockSkewMs)) return true;
-  const now = (input.now?.() ?? new Date()).getTime();
-  return Math.abs(now - parsed) <= maxClockSkewMs;
-}
-
-async function hmacSha256Hex(secret: string, message: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    textEncoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    textEncoder.encode(message),
-  );
-  return toHex(signature);
-}
-
-function readHeader(
-  headers: Headers | Record<string, string>,
-  name: string,
-): string | null {
-  if (headers instanceof Headers) return headers.get(name);
-  return headers[name] ?? headers[name.toLowerCase()] ?? null;
-}
-
-function toHex(buffer: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buffer))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function timingSafeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
 }

@@ -19,7 +19,11 @@ import type {
   OutputMaterial,
 } from "takosumi-contract/reference/plugin";
 import { PROJECTION_FAMILY_NAMES } from "takosumi-contract/catalog";
-import { BindingResolver, defaultEnvInjection } from "./mod.ts";
+import {
+  BindingResolutionError,
+  BindingResolver,
+  defaultEnvInjection,
+} from "./mod.ts";
 
 Deno.test("defaultEnvInjection implements exactly the official projection families", () => {
   assert.deepEqual([...PROJECTION_FAMILY_NAMES].sort(), [
@@ -130,6 +134,38 @@ Deno.test("defaultEnvInjection without prefix emits bare upper-snake keys", () =
     material,
   );
   assert.deepEqual(injection.env, { URL: "https://w.example/" });
+});
+
+Deno.test("defaultEnvInjection rejects material fields that collide on the same env key", () => {
+  // `fooBar` and `foo_bar` both normalize to FOO_BAR. Silently last-write-wins
+  // would inject only one (arbitrary) value, so the resolver throws instead.
+  const material: OutputMaterial = { fooBar: "camel", foo_bar: "snake" };
+  assert.throws(
+    () => defaultEnvInjection({ output: "svc.out", inject: "env" }, material),
+    (error: unknown) =>
+      error instanceof BindingResolutionError &&
+      error.code === "binding_env_key_collision",
+  );
+});
+
+Deno.test("defaultEnvInjection secret-env rejects clientSecret / clientSecretRef collision", () => {
+  // Under stripSecretRefSuffix both `clientSecret` and `clientSecretRef` map
+  // to CLIENT_SECRET; surfacing the collision avoids injecting the wrong
+  // secret value into the consumer's env.
+  const material: OutputMaterial = {
+    clientSecret: "plaintext",
+    clientSecretRef: { secretRef: "secret://client-secret" },
+  };
+  assert.throws(
+    () =>
+      defaultEnvInjection(
+        { output: "svc.out", inject: "secret-env" },
+        material,
+      ),
+    (error: unknown) =>
+      error instanceof BindingResolutionError &&
+      error.code === "binding_env_key_collision",
+  );
 });
 
 Deno.test("defaultEnvInjection serializes non-secret JSON material for env", () => {

@@ -10,10 +10,11 @@
 //   1. Each `register` / `revoke` / `heartbeat` / `enqueueWork` /
 //      `leaseWork` / `completeWork` / `failWork` / `reportProgress`
 //      mutation is mirrored to the ledger transactionally.
-//   2. On boot, the kernel calls `WorkLedger.snapshot()` and feeds the
-//      result into `InMemoryRuntimeAgentRegistry.fromSnapshot()`. Stale
-//      leases (whose `leaseExpiresAt` has elapsed) are rewritten to
-//      `queued` so a fresh lease can pick them up on the next poll cycle.
+//   2. On boot, the kernel calls
+//      `InMemoryRuntimeAgentRegistry.fromLedger(ledger, { now })`, which reads
+//      `WorkLedger.snapshot()` and hydrates the registry. Stale leases (whose
+//      `leaseExpiresAt` has elapsed) are rewritten to `queued` so a fresh
+//      lease can pick them up on the next poll cycle.
 //
 // The reference implementation here (`InMemoryWorkLedger`) keeps state in
 // memory but is intentionally separable from the registry so a Postgres /

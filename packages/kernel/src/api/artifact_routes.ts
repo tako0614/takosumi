@@ -12,6 +12,7 @@ import type {
 import type { TakosumiDeploymentRecordStore } from "../domains/deploy/takosumi_deployment_record_store.ts";
 import { apiError } from "./errors.ts";
 import { log } from "../shared/log.ts";
+import { constantTimeEqualsString } from "../shared/constant_time.ts";
 
 /**
  * Artifact upload endpoints — the data plane for `takosumi artifact push`.
@@ -612,7 +613,7 @@ function checkAuth(
       ),
     };
   }
-  if (!constantTimeEquals(presented, expected)) {
+  if (!constantTimeEqualsString(presented, expected)) {
     return {
       kind: "fail",
       response: c.json(apiError("unauthenticated", "invalid token"), 401),
@@ -660,8 +661,8 @@ function checkReadAuth(
   }
   const fetchToken = getFetchToken();
   if (
-    constantTimeEquals(presented, deployToken) ||
-    (fetchToken && constantTimeEquals(presented, fetchToken))
+    constantTimeEqualsString(presented, deployToken) ||
+    (fetchToken && constantTimeEqualsString(presented, fetchToken))
   ) {
     return { kind: "ok" };
   }
@@ -675,11 +676,4 @@ function readBearer(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const m = /^bearer\s+(.+)$/i.exec(value);
   return m?.[1]?.trim() || undefined;
-}
-
-function constantTimeEquals(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
 }
