@@ -1,4 +1,10 @@
 import { Command } from "@cliffy/command";
+import {
+  exitProcess,
+  readEnv,
+  spawnMigrate,
+  statIsFile,
+} from "./migrate-runtime.ts";
 
 export type MigrateEnv = "local" | "staging" | "production" | string;
 
@@ -72,8 +78,7 @@ export function defaultResolveScript(): string | undefined {
     );
     if (candidate.protocol !== "file:") return candidate.toString();
     const path = candidate.pathname;
-    const stat = Deno.statSync(path);
-    if (!stat.isFile) return undefined;
+    if (!statIsFile(path)) return undefined;
     return path;
   } catch {
     return undefined;
@@ -139,16 +144,13 @@ function createMigrateCommand() {
       const result = await runMigrate({
         env: env as MigrateEnv,
         dryRun: dryRun === true,
-        readEnv: (key) => Deno.env.get(key),
+        readEnv: (key) => readEnv(key),
         resolveScript: defaultResolveScript,
-        spawn: async (cmd, args) => {
-          const out = await new Deno.Command(cmd, { args: [...args] }).output();
-          return { code: out.code };
-        },
+        spawn: (cmd, args) => spawnMigrate(cmd, args),
         write: (line) => console.log(line),
       });
       if (result.exitCode !== 0) {
-        Deno.exit(result.exitCode);
+        exitProcess(result.exitCode);
       }
     });
 }

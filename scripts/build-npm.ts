@@ -15,6 +15,32 @@ import { build, emptyDir } from "jsr:@deno/dnt@0.42.3";
 const HERE = new URL(".", import.meta.url);
 const ROOT = new URL("../", HERE);
 const fromRoot = (p: string) => new URL(p, ROOT).pathname;
+const fromRootUrl = (p: string) => new URL(p, ROOT).href;
+
+// dnt module mappings: swap each Deno-runtime subprocess/serve primitive for
+// its Node sibling in the npm output ONLY. The Deno source keeps using
+// Deno.Command / Deno.serve unchanged (verified by `deno task check` and the
+// package tests); these mappings make the emitted npm package both typeable
+// (no Deno.* on the type surface dnt checks) and runnable on Node via
+// node:child_process / node:http. The exported API of each pair is identical.
+const SUBPROCESS_MAPPINGS: Record<string, string> = {
+  [fromRootUrl("packages/installer/src/subprocess/git-runner.ts")]: fromRootUrl(
+    "packages/installer/src/subprocess/git-runner.node.ts",
+  ),
+  [fromRootUrl("packages/installer/src/subprocess/tar-runner.ts")]: fromRootUrl(
+    "packages/installer/src/subprocess/tar-runner.node.ts",
+  ),
+  [fromRootUrl("packages/runtime-agent/src/subprocess/tar-runner.ts")]:
+    fromRootUrl(
+      "packages/runtime-agent/src/subprocess/tar-runner.node.ts",
+    ),
+  [fromRootUrl("packages/runtime-agent/src/subprocess/serve.ts")]: fromRootUrl(
+    "packages/runtime-agent/src/subprocess/serve.node.ts",
+  ),
+  [fromRootUrl("packages/cli/src/commands/migrate-runtime.ts")]: fromRootUrl(
+    "packages/cli/src/commands/migrate-runtime.node.ts",
+  ),
+};
 
 // version comes from packages/all/deno.json (umbrella)
 const umbrella = JSON.parse(
@@ -83,6 +109,7 @@ await build({
   entryPoints,
   outDir,
   importMap: fromRoot("scripts/npm-import-map.json"),
+  mappings: SUBPROCESS_MAPPINGS,
   shims: { deno: true },
   test: false,
   typeCheck,
