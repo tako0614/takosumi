@@ -21,6 +21,16 @@
         "type": "integer",
         "minimum": 0,
         "description": "Default delivery delay in seconds."
+      },
+      "maxRetries": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Maximum delivery attempts before a message is routed to the dead-letter queue."
+      },
+      "deadLetterQueue": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Dead-letter queue name for messages that exceed maxRetries. An opaque queue name; same-AppSpec wiring to another message-queue component is expressed at the AppSpec level via connect/listen rather than inside this spec."
       }
     }
   },

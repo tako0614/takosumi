@@ -21,6 +21,22 @@
         "type": "object",
         "additionalProperties": { "type": "string" },
         "description": "Optional env vars / bindings."
+      },
+      "schedules": {
+        "type": "array",
+        "description": "Optional cron-triggered invocation schedules. Each entry names one cron expression; the resolving backend rejects unsupported cron dialects at apply.",
+        "items": {
+          "type": "object",
+          "required": ["cron"],
+          "additionalProperties": false,
+          "properties": {
+            "cron": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Cron expression (5- or 6-field) for one scheduled invocation. The dialect is backend-defined and validated at apply."
+            }
+          }
+        }
       }
     }
   },
@@ -82,6 +98,7 @@
     }
   ],
   "capabilityTerms": [
-    "serverless-http"
+    "serverless-http",
+    "scheduled"
   ]
 }

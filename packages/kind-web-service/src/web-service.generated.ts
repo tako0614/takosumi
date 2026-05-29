@@ -1,6 +1,19 @@
 // AUTO-GENERATED FROM package-owned kind descriptor spec/kind.jsonld — DO NOT EDIT.
 // Run `deno task spec:generate-ts` to refresh.
 
+export interface WebServiceHealthCheck {
+  /** Seconds between health probes. */
+  readonly interval?: number;
+  /** HTTP path probed for liveness, such as `/healthz`. */
+  readonly path?: string;
+  /** HTTP path probed for readiness before the instance receives traffic, such as `/readyz`. */
+  readonly readinessPath?: string;
+  /** Seconds to wait for a single probe response before it counts as a failure. */
+  readonly timeout?: number;
+  /** Consecutive failed probes before the instance is treated as unhealthy. */
+  readonly unhealthyThreshold?: number;
+}
+
 export interface WebServiceResources {
   /** Requested CPU size or provider-specific CPU class. */
   readonly cpu?: string;
@@ -15,6 +28,15 @@ export interface WebServiceScale {
   readonly min: number;
 }
 
+export interface WebServiceVolume {
+  /** Logical volume name or URI resolved by the operator / implementation binding (backend-neutral). */
+  readonly source: string;
+  /** Absolute container mount path, such as `/var/lib/data`. */
+  readonly target: string;
+  /** Whether the volume must survive instance restarts. Omitted means the implementation binding decides. */
+  readonly persistent?: boolean;
+}
+
 export interface WebServiceSpec {
   /** OCI image reference. */
   readonly image: string;
@@ -22,10 +44,14 @@ export interface WebServiceSpec {
   readonly port: number;
   /** Environment variables passed to the service. */
   readonly env?: Readonly<Record<string, string>>;
+  /** Optional container-subset health probe hint. Container backends use it to gate readiness and restart unhealthy instances; non-container backends (such as the divergent systemd binding) ignore or reject it at apply. */
+  readonly healthCheck?: WebServiceHealthCheck;
   /** CPU / memory hints consumed by compatible provider bindings. */
   readonly resources?: WebServiceResources;
   /** Replica bounds. `min: 0` requests zero steady replicas. Operator policy and the selected implementation materialize or reject the request. */
   readonly scale?: WebServiceScale;
+  /** Optional container-subset volume mounts. Container backends attach each logical volume at the given mount path; non-container backends (such as the divergent systemd binding) ignore or reject them at apply. */
+  readonly volumes?: readonly WebServiceVolume[];
 }
 
 export interface WebServiceOutputs {
@@ -40,7 +66,9 @@ export interface WebServiceOutputs {
 export type WebServiceCapabilityTerm =
   | "http-service"
   | "oci-image"
-  | "replica-scaling";
+  | "replica-scaling"
+  | "container-health-check"
+  | "persistent-volume";
 
 export type WebServiceOutputFieldName =
   | "url"
@@ -72,6 +100,8 @@ export const WEB_SERVICE_CAPABILITY_TERMS: readonly WebServiceCapabilityTerm[] =
     "http-service",
     "oci-image",
     "replica-scaling",
+    "container-health-check",
+    "persistent-volume",
   ];
 
 export const WEB_SERVICE_OUTPUT_FIELDS: readonly WebServiceOutputFieldName[] = [
@@ -169,4 +199,4 @@ export const WEB_SERVICE_KIND_NAME = "web-service";
 export const WEB_SERVICE_KIND_URI = "https://takosumi.com/kinds/v1/web-service";
 export const WEB_SERVICE_KIND_VERSION = "v1";
 export const WEB_SERVICE_DESCRIPTION =
-  "Long-running HTTP service backed by an OCI image.";
+  "Long-running HTTP service. `image` and `scale` are optional container-subset fields; the divergent systemd binding of this kind uses only `port` plus its own command and omits container-only fields. `healthCheck` and `volumes` are likewise OPTIONAL container-subset hints: backends that do not run containers (such as systemd) ignore or reject them at apply, exactly like the existing optional `image` and `scale`. `healthCheck.interval` and `healthCheck.timeout` are in SECONDS. `volumes[].source` is a logical, operator/binding-resolved volume name or URI (backend-neutral) and `volumes[].target` is an absolute container mount path.";
