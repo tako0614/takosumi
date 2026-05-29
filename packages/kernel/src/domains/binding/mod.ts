@@ -41,7 +41,8 @@ export type ResolvedBinding = ResolvedInputBinding;
 export type BindingResolutionErrorCode =
   | "binding_required_material_missing"
   | "binding_listen_missing_selector"
-  | "material_kind_mismatch";
+  | "material_kind_mismatch"
+  | "binding_env_key_collision";
 
 /**
  * Closed-envelope error thrown when {@link BindingResolver} cannot resolve a
@@ -313,8 +314,12 @@ function listenSourceRef(
  * special selector `"*"` opts into wildcard matching for callers that need
  * to listen to any material kind. When the material does not advertise a
  * `kind` field at all, we treat it as `unknown` and let the mismatch fire.
+ *
+ * Exported so the real deployment pipeline ({@link InstallerPipeline}) can
+ * enforce the same `listen.kind` compatibility assertion it walks listen
+ * edges inline, rather than the guard only running in `resolveAppSpec`.
  */
-function assertListenMaterialKind(input: {
+export function assertListenMaterialKind(input: {
   readonly component: string;
   readonly bindingName: string;
   readonly options: ListenOptions;
@@ -326,6 +331,34 @@ function assertListenMaterialKind(input: {
   if (declared === "*") return;
   const actual = readMaterialKind(input.material);
   if (actual === declared) return;
+  // `many: true` discovery binds every match as ONE collection material whose
+  // top-level kind is the wrapper "collection"; the declared kind constrains
+  // the items, not the wrapper. Validate each collected item's kind instead.
+  if (input.options.many === true && actual === "collection") {
+    const items = (input.material as Record<string, unknown>).items;
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        const itemKind = readMaterialKind(item as OutputMaterial);
+        if (itemKind !== undefined && itemKind !== declared) {
+          throw new BindingResolutionError(
+            "material_kind_mismatch",
+            `${input.component}.listen.${input.bindingName} expects every ` +
+              `collected item to advertise kind ${JSON.stringify(declared)} ` +
+              `but an item at ${JSON.stringify(input.sourceRef)} advertises ` +
+              `kind ${JSON.stringify(itemKind)}`,
+            {
+              component: input.component,
+              bindingName: input.bindingName,
+              sourceRef: input.sourceRef,
+              expectedKind: declared,
+              actualKind: itemKind,
+            },
+          );
+        }
+      }
+    }
+    return;
+  }
   throw new BindingResolutionError(
     "material_kind_mismatch",
     `${input.component}.listen.${input.bindingName} expects kind ` +
@@ -396,12 +429,36 @@ function expandMaterialAsEnv(
   options: { readonly stripSecretRefSuffix?: boolean } = {},
 ): Readonly<Record<string, string | { readonly secretRef: string }>> {
   const out: Record<string, string | { readonly secretRef: string }> = {};
+  // Track which source material field produced each derived env key so two
+  // distinct fields that normalize to the same UPPER_SNAKE key (e.g.
+  // `fooBar` / `foo_bar` / `foo-bar` / `foo.bar` -> `FOO_BAR`, or
+  // `clientSecret` / `clientSecretRef` -> `CLIENT_SECRET` under
+  // `stripSecretRefSuffix`) surface as an explicit closed-envelope error
+  // instead of silently last-write-wins clobbering each other.
+  const sourceFieldByEnvKey = new Map<string, string>();
   const normalizedPrefix = (prefix ?? "").trim();
   for (const [field, value] of Object.entries(material)) {
     const envField = options.stripSecretRefSuffix && isSecretRefMaterial(value)
       ? stripSecretRefSuffix(field)
       : field;
     const envKey = composeEnvKey(normalizedPrefix, envField);
+    const previousField = sourceFieldByEnvKey.get(envKey);
+    if (previousField !== undefined && previousField !== field) {
+      throw new BindingResolutionError(
+        "binding_env_key_collision",
+        `material fields ${JSON.stringify(previousField)} and ${
+          JSON.stringify(field)
+        } both map to env key ${
+          JSON.stringify(envKey)
+        }; rename one field so the injected environment is unambiguous`,
+        {
+          envKey,
+          fieldA: previousField,
+          fieldB: field,
+        },
+      );
+    }
+    sourceFieldByEnvKey.set(envKey, field);
     out[envKey] = materialValueToEnv(value);
   }
   return out;

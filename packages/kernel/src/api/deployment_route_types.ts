@@ -83,9 +83,6 @@ export interface DeploymentRouteService {
   applyDeployment(
     input: DeploymentRouteCreateInput,
   ): Promise<DeploymentEnvelope> | DeploymentEnvelope;
-  previewDeployment(
-    input: DeploymentRouteCreateInput,
-  ): Promise<DeploymentMutationResponse> | DeploymentMutationResponse;
   applyResolved(
     input: DeploymentRouteGetInput,
   ): Promise<DeploymentEnvelope> | DeploymentEnvelope;

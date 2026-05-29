@@ -6,6 +6,7 @@ import {
   resetRuntimeForTesting,
   setRuntimeForTesting,
 } from "./index.ts";
+import { nodeRuntime } from "./node.ts";
 
 Deno.test("currentRuntime detects Deno when running on Deno", () => {
   resetRuntimeForTesting();
@@ -38,6 +39,27 @@ Deno.test("setRuntimeForTesting overrides detection", () => {
     assertEquals(currentRuntime().kind, "node");
   } finally {
     resetRuntimeForTesting();
+  }
+});
+
+Deno.test("nodeRuntime fs.readTextFileSync works without a global require (createRequire warm-up)", async () => {
+  // Under Deno's node-compat shim (and pure-ESM Node) there is no
+  // `globalThis.require`. The sync read must still work via the `require`
+  // pre-warmed from `node:module#createRequire(import.meta.url)`. Yield to the
+  // microtask/event loop so the warm-up `import("node:module")` has resolved.
+  assertEquals(
+    typeof (globalThis as { require?: unknown }).require,
+    "undefined",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const file = await Deno.makeTempFile({ suffix: ".json" });
+  try {
+    await Deno.writeTextFile(file, '{"ok":true}');
+    const text = nodeRuntime.fs.readTextFileSync(file);
+    assertEquals(JSON.parse(text).ok, true);
+  } finally {
+    await Deno.remove(file);
   }
 });
 

@@ -90,7 +90,9 @@ export function createWorkersRuntime(
 }
 
 export function isWorkers(): boolean {
-  // Workers expose `navigator.userAgent` containing "Cloudflare-Workers".
+  // Primary signal: Workers expose `navigator.userAgent` containing
+  // "Cloudflare-Workers". This is the authoritative marker and is checked
+  // first.
   const nav = (globalThis as { navigator?: { userAgent?: string } }).navigator;
   if (
     nav?.userAgent && typeof nav.userAgent === "string" &&
@@ -98,7 +100,11 @@ export function isWorkers(): boolean {
   ) {
     return true;
   }
-  // Workers expose `WebSocketPair` but not Deno / Node process.
+  // Best-effort fallback for environments where `navigator.userAgent` is not
+  // populated (older `workerd` builds): Workers expose `WebSocketPair` but not
+  // Deno / Node `process`. This is a heuristic and could misclassify a
+  // non-Deno/non-Node host that exposes `WebSocketPair`; the userAgent signal
+  // above is preferred whenever available.
   const hasDeno =
     typeof (globalThis as { Deno?: unknown }).Deno !== "undefined";
   const hasNodeProcess = typeof (globalThis as {

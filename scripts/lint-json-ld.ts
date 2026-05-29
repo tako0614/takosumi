@@ -851,6 +851,24 @@ function checkOutputs(
         );
       }
     }
+    if (output["enum"] !== undefined) {
+      if (output["type"] !== "string") {
+        issues.push({
+          path,
+          message: `outputs[${index}].enum is only allowed on string outputs`,
+        });
+      } else if (
+        !Array.isArray(output["enum"]) ||
+        output["enum"].length === 0 ||
+        !output["enum"].every((entry) => typeof entry === "string")
+      ) {
+        issues.push({
+          path,
+          message:
+            `outputs[${index}].enum must be a non-empty array of strings`,
+        });
+      }
+    }
   }
 }
 

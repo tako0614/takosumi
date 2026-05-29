@@ -675,6 +675,11 @@ export function createServiceContainer(
     store: stores.deploy.deploys,
     clock: options.deploy?.clock ?? dateClock,
     idFactory: options.deploy?.idFactory ?? uuidFactory,
+    // Propagate the runtime environment so the deploy service fails CLOSED on
+    // production / staging when no real providerAdapter is wired, instead of
+    // silently advancing GroupHead via SYNTHETIC_PROVIDER_ADAPTER.
+    environment: options.deploy?.environment ??
+      options.runtimeConfig?.environment,
   });
   return {
     core: createCoreDomainServices(stores.core),
@@ -719,11 +724,21 @@ export function createServiceContainer(
   };
 }
 
+/**
+ * Build the billing port from operator-injected config only.
+ *
+ * Billing / account-plane is owned by operator distributions
+ * (takosumi-cloud), not Takosumi kernel core, so the kernel must NOT read a
+ * product-namespaced env key here. The operator/bootstrap layer resolves any
+ * env-driven billing config (neutral `TAKOSUMI_BILLING_*` keys; see
+ * `resolveBillingOptions` in bootstrap.ts) and injects it via
+ * `options.billing`. `HttpBillingPort` itself is a neutral port; the only
+ * thing removed is the hard-coded `TAKOS_APP_BILLING_*` fallback that coupled
+ * the substrate to one specific product.
+ */
 function createBillingPort(options: AppContextOptions) {
-  const baseUrl = options.billing?.baseUrl ??
-    options.runtimeEnv?.TAKOS_APP_BILLING_BASE_URL;
-  const secret = options.billing?.secret ??
-    options.runtimeEnv?.TAKOS_APP_BILLING_SECRET;
+  const baseUrl = options.billing?.baseUrl;
+  const secret = options.billing?.secret;
   if (!baseUrl || !secret) return undefined;
   return new HttpBillingPort({ baseUrl, secret });
 }

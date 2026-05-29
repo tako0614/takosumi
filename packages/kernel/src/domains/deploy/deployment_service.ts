@@ -8,6 +8,7 @@ import type {
   DeploymentStatus,
   GroupHead,
   IsoTimestamp,
+  JsonObject,
   ProviderObservation,
 } from "takosumi-contract/reference/compat";
 import {
@@ -33,7 +34,6 @@ import { executeApply } from "./internal/apply_phase.ts";
 import { deepFreeze, stableHash } from "./internal/hash.ts";
 import { buildDeploymentArtifacts } from "./internal/resolution_pipeline.ts";
 import {
-  type GroupHeadHistoryEntry,
   type GroupHeadHistoryStore,
   resolveRollbackTarget,
 } from "./group_head_history.ts";
@@ -237,11 +237,19 @@ export interface DeploymentStore {
 }
 
 /**
- * H2 — Default rollback validators used when neither the store nor the
- * caller supplies one. These are intentionally permissive (always-ok with a
- * stamped reason) so the rollback path never blocks on a missing validator,
- * but are still distinguishable from "validator did not run" via the reason
- * string. Stores with access to richer state SHOULD override.
+ * H2 — DEV / TEST default rollback validators used when neither the store nor
+ * the caller supplies one AND the runtime environment is not production /
+ * staging. These are intentionally permissive (always-ok with a stamped
+ * reason) so a dev / in-memory rollback is not blocked by the absence of a
+ * live provider snapshot — which the kernel core genuinely cannot probe. They
+ * are distinguishable from "validator did not run" via the `reason` string.
+ *
+ * IMPORTANT: these are fail-OPEN and MUST NOT be the production / staging
+ * default. On those environments `#rollbackGroup` selects
+ * {@link STRICT_ROLLBACK_VALIDATORS} (fail-CLOSED) instead, so a rollback
+ * cannot silently bypass drift / availability / digest verification. Stores
+ * with access to a live registry / provider snapshot SHOULD override
+ * `getDefaultRollbackValidators()` with real checks regardless of environment.
  */
 export const DEFAULT_ROLLBACK_VALIDATORS: RollbackValidators = {
   descriptorClosureValidator: () => ({
@@ -260,6 +268,44 @@ export const DEFAULT_ROLLBACK_VALIDATORS: RollbackValidators = {
     reason: "RollbackPreflightDefault",
     message:
       "default artifact-digest validator: no live registry probe configured",
+  }),
+};
+
+/**
+ * Fail-CLOSED rollback validators. Used as the production / staging default
+ * when neither the caller nor the store supplies real validators. Each slot
+ * returns `ok=false` so the rollback is REFUSED rather than silently promoting
+ * a target whose descriptor closure may have drifted or whose pinned artifact
+ * digests may have changed under the same identity — exactly the integrity
+ * conditions these validators exist to block.
+ *
+ * To rollback in production / staging the operator must wire a store that
+ * overrides `getDefaultRollbackValidators()` with checks against a live
+ * provider snapshot (or pass per-call validators on `RollbackGroupInput`).
+ * This is intentional: an unverified rollback on a strict environment is a
+ * refusal, not a silent pass.
+ */
+export const STRICT_ROLLBACK_VALIDATORS: RollbackValidators = {
+  descriptorClosureValidator: () => ({
+    ok: false,
+    reason: "RollbackPreflightUnverified",
+    message:
+      "descriptor-closure drift could not be verified (no live provider snapshot " +
+      "and no store/caller validator wired); refusing rollback on a strict runtime",
+  }),
+  artifactAvailabilityValidator: () => ({
+    ok: false,
+    reason: "RollbackPreflightUnverified",
+    message:
+      "artifact availability could not be verified (no live registry probe " +
+      "and no store/caller validator wired); refusing rollback on a strict runtime",
+  }),
+  artifactDigestValidator: () => ({
+    ok: false,
+    reason: "RollbackPreflightUnverified",
+    message:
+      "artifact digest pinning could not be verified (no live registry probe " +
+      "and no store/caller validator wired); refusing rollback on a strict runtime",
   }),
 };
 
@@ -301,8 +347,22 @@ export interface DeploymentServiceOptions {
    * provider operations. Optional — when omitted the synthetic adapter is
    * used so unit tests / in-memory bootstraps can transition resolved →
    * applied without a real cloud round-trip.
+   *
+   * Fail-closed: when `environment` is `"production"` or `"staging"` and no
+   * adapter is supplied, the constructor refuses to fall back to the synthetic
+   * adapter (see below) so a Deployment is never recorded as a genuine
+   * `ActivationCommitted` success with zero provider work.
    */
   readonly providerAdapter?: DeploymentProviderAdapter;
+  /**
+   * Deployment runtime environment (mirrors `runtimeConfig.environment`). On
+   * `"production"` / `"staging"` the synthetic provider adapter fallback is
+   * refused: an explicit `providerAdapter` is mandatory. On dev / test (or
+   * when omitted) the synthetic adapter is used but its outcomes are stamped
+   * with reason `"Synthetic"` so the Deployment record is honest about the
+   * fact that no real provider work happened.
+   */
+  readonly environment?: string;
   /** Optional metric sink for apply / rollback counters and latency histograms. */
   readonly observability?: DeployMetricSink;
 }
@@ -317,11 +377,29 @@ export class DeploymentService {
   readonly #clock: () => Date;
   readonly #providerAdapter: DeploymentProviderAdapter;
   readonly #observability?: DeployMetricSink;
+  readonly #environment?: string;
 
   constructor(options: DeploymentServiceOptions) {
     this.#store = options.store;
     this.#idFactory = options.idFactory ?? (() => crypto.randomUUID());
     this.#clock = options.clock ?? (() => new Date());
+    this.#environment = options.environment;
+    // Fail-CLOSED on production / staging: refuse to fall back to the
+    // synthetic adapter, which would advance GroupHead + record
+    // `ActivationCommitted` while performing zero provider work. An operator
+    // who boots a strict environment without wiring a real provider adapter
+    // must see a hard configuration error here, not a silently-faked apply.
+    if (
+      !options.providerAdapter &&
+      (options.environment === "production" ||
+        options.environment === "staging")
+    ) {
+      throw new Error(
+        `${options.environment} deploy runtime requires an explicit providerAdapter; ` +
+          "refusing SYNTHETIC_PROVIDER_ADAPTER fallback (it would record an " +
+          "ActivationCommitted success with no provider work)",
+      );
+    }
     this.#providerAdapter = options.providerAdapter ??
       SYNTHETIC_PROVIDER_ADAPTER;
     this.#observability = options.observability;
@@ -502,14 +580,41 @@ export class DeploymentService {
    */
   async rollbackGroup(input: RollbackGroupInput): Promise<GroupHead> {
     const timer = startDeployMetricTimer();
+    // Resolve the actual target Deployment id up front so the metric label is
+    // always a stable deployment id (not a step-count or empty string). When
+    // the target is pinned by `steps` we record the step count as a separate
+    // payload attribute rather than overloading the `deploymentName` label.
+    const history = this.#store.getGroupHeadHistory?.();
+    let resolvedTargetId: string | undefined;
     try {
-      const head = await this.#rollbackGroup(input);
+      resolvedTargetId = await this.#resolveRollbackTargetId(input, history);
+    } catch (error) {
+      // Could not resolve a target (e.g. neither targetDeploymentId nor steps,
+      // or steps without retained history). Record the failure without a
+      // deployment id and surface the original error to the caller.
+      await this.#recordDeployMetric({
+        operationKind: "rollback",
+        status: "failed",
+        spaceId: input.spaceId,
+        groupId: input.groupId,
+        ...(input.steps !== undefined
+          ? { payload: { steps: input.steps } }
+          : {}),
+        startedAtMs: timer.startedAtMs,
+      });
+      throw error;
+    }
+    try {
+      const head = await this.#rollbackGroup(input, resolvedTargetId);
       await this.#recordDeployMetric({
         operationKind: "rollback",
         status: "succeeded",
         spaceId: input.spaceId,
         groupId: input.groupId,
-        deploymentName: input.targetDeploymentId ?? String(input.steps ?? ""),
+        deploymentName: resolvedTargetId,
+        ...(input.steps !== undefined
+          ? { payload: { steps: input.steps } }
+          : {}),
         startedAtMs: timer.startedAtMs,
       });
       return head;
@@ -519,24 +624,23 @@ export class DeploymentService {
         status: "failed",
         spaceId: input.spaceId,
         groupId: input.groupId,
-        deploymentName: input.targetDeploymentId ?? String(input.steps ?? ""),
+        deploymentName: resolvedTargetId,
+        ...(input.steps !== undefined
+          ? { payload: { steps: input.steps } }
+          : {}),
         startedAtMs: timer.startedAtMs,
       });
       throw error;
     }
   }
 
-  async #rollbackGroup(input: RollbackGroupInput): Promise<GroupHead> {
-    // Phase 18.3 / M6 — resolve the rollback target. When a history store
-    // is available the target may come from `--steps=N` or be validated
-    // against the retained N-generation history; without one only
-    // `targetDeploymentId` is valid.
-    const history = this.#store.getGroupHeadHistory?.();
-    const targetDeploymentId = await this.#resolveRollbackTargetId(
-      input,
-      history,
-    );
-
+  async #rollbackGroup(
+    input: RollbackGroupInput,
+    targetDeploymentId: string,
+  ): Promise<GroupHead> {
+    // `targetDeploymentId` was resolved by the caller (`rollbackGroup`) via
+    // `#resolveRollbackTargetId`, honouring `targetDeploymentId` / `steps` and
+    // the retained GroupHead history when present.
     const target = await this.#store.getDeployment(targetDeploymentId);
     if (!target) {
       throw new Error(
@@ -564,13 +668,24 @@ export class DeploymentService {
     // target. A validator returning `ok=false` blocks the rollback with a
     // descriptive error so callers see the underlying reason.
     //
-    // H2 — Validators are now MANDATORY. Callers may inject custom
-    // implementations via `RollbackGroupInput`; otherwise the store's
-    // `getDefaultRollbackValidators()` (or the always-ok module-level
-    // `DEFAULT_ROLLBACK_VALIDATORS`) is used so the rollback path never
-    // silently skips a validator slot.
+    // H2 — Validators are MANDATORY. Resolution order:
+    //   1. per-call validator on `RollbackGroupInput` (highest priority)
+    //   2. store-supplied `getDefaultRollbackValidators()` (real checks
+    //      against a live snapshot, when the store can)
+    //   3. environment default:
+    //      - production / staging → STRICT_ROLLBACK_VALIDATORS (fail-CLOSED:
+    //        refuse the rollback because drift / availability / digest cannot
+    //        be verified without a live snapshot)
+    //      - dev / test / unset    → DEFAULT_ROLLBACK_VALIDATORS (fail-open
+    //        with a stamped reason, so local rollbacks are not blocked)
+    // This makes an unverified rollback on a strict runtime a refusal, never a
+    // silent pass. See STRICT_ROLLBACK_VALIDATORS for the rationale.
+    const isStrictEnvironment = this.#environment === "production" ||
+      this.#environment === "staging";
     const defaults = this.#store.getDefaultRollbackValidators?.() ??
-      DEFAULT_ROLLBACK_VALIDATORS;
+      (isStrictEnvironment
+        ? STRICT_ROLLBACK_VALIDATORS
+        : DEFAULT_ROLLBACK_VALIDATORS);
     await runPreflightValidator(
       "RollbackDescriptorClosureDrift",
       input.descriptorClosureValidator ?? defaults.descriptorClosureValidator,
@@ -641,8 +756,18 @@ export class DeploymentService {
     readonly spaceId?: string;
     readonly groupId?: string;
     readonly deploymentName?: string;
+    readonly payload?: JsonObject;
     readonly startedAtMs: number;
   }): Promise<void> {
+    const basePayload: JsonObject = {
+      ...(input.deployment || input.deploymentId
+        ? {
+          deploymentId: input.deployment?.id ?? input.deploymentId ??
+            "unknown",
+        }
+        : {}),
+      ...input.payload,
+    };
     await recordDeployOperationMetric({
       observability: this.#observability,
       now: () => this.#clock().toISOString(),
@@ -654,12 +779,7 @@ export class DeploymentService {
       deploymentName: input.deploymentName ?? input.deployment?.id ??
         input.deploymentId,
       startedAtMs: input.startedAtMs,
-      payload: input.deployment || input.deploymentId
-        ? {
-          deploymentId: input.deployment?.id ?? input.deploymentId ??
-            "unknown",
-        }
-        : undefined,
+      payload: Object.keys(basePayload).length > 0 ? basePayload : undefined,
     });
   }
 
@@ -734,7 +854,6 @@ export class DeploymentService {
       targetDeploymentId: input.targetDeploymentId,
       steps: input.steps,
     });
-    const _resolvedEntry: GroupHeadHistoryEntry = resolution.entry;
     return resolution.entry.deploymentId;
   }
 

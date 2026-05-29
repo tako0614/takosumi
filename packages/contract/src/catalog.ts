@@ -13,11 +13,6 @@ export const OFFICIAL_MATERIAL_KIND_NAMES = [
 export type OfficialMaterialKindName =
   typeof OFFICIAL_MATERIAL_KIND_NAMES[number];
 
-/** @deprecated Use `OFFICIAL_MATERIAL_KIND_NAMES`. */
-export const OFFICIAL_OUTPUT_TYPE_NAMES = OFFICIAL_MATERIAL_KIND_NAMES;
-/** @deprecated Use `OfficialMaterialKindName`. */
-export type OfficialOutputTypeName = OfficialMaterialKindName;
-
 export const OUTPUT_FIELD_TYPE_NAMES = [
   "boolean",
   "integer",
@@ -181,10 +176,6 @@ export interface OfficialMaterialByKind {
 }
 
 export type OfficialMaterial = OfficialMaterialByKind[OfficialMaterialKindName];
-/** @deprecated Use `OfficialMaterialByKind`. */
-export type OfficialOutputMaterialByType = OfficialMaterialByKind;
-/** @deprecated Use `OfficialMaterial`. */
-export type OfficialOutputMaterial = OfficialMaterial;
 
 export interface CatalogValidationIssue {
   readonly path: string;
@@ -204,12 +195,6 @@ const ACCESS_MODE_SET = new Set<string>(ACCESS_MODES);
 const OFFICIAL_SENSITIVITY_CLASS_SET = new Set<string>(
   OFFICIAL_SENSITIVITY_CLASSES,
 );
-
-export function isOfficialOutputTypeName(
-  value: string,
-): value is OfficialOutputTypeName {
-  return isOfficialMaterialKindName(value);
-}
 
 export function isOfficialMaterialKindName(
   value: string,
@@ -253,25 +238,12 @@ export function isSecretReference(value: unknown): value is SecretReference {
     (value as { readonly secretRef: string }).secretRef.length > 0;
 }
 
-export function allowedProjectionFamiliesForOutputType(
-  type: OfficialOutputTypeName,
-): readonly ProjectionFamilyName[] {
-  return allowedProjectionFamiliesForMaterialKind(type);
-}
-
 export function allowedProjectionFamiliesForMaterialKind(
   kind: OfficialMaterialKindName,
 ): readonly ProjectionFamilyName[] {
   return kind === "http-endpoint"
     ? ["upstream", "env", "config-mount"]
     : ["secret-env", "config-mount"];
-}
-
-export function isProjectionAllowedForOutputType(
-  type: OfficialOutputTypeName,
-  projection: ProjectionFamilyName,
-): boolean {
-  return isProjectionAllowedForMaterialKind(type, projection);
 }
 
 export function isProjectionAllowedForMaterialKind(
@@ -281,15 +253,15 @@ export function isProjectionAllowedForMaterialKind(
   return allowedProjectionFamiliesForMaterialKind(kind).includes(projection);
 }
 
-export function validateOfficialOutputMaterial(
-  type: OfficialOutputTypeName,
+export function validateOfficialMaterial(
+  kind: OfficialMaterialKindName,
   value: unknown,
 ): readonly CatalogValidationIssue[] {
   const issues: CatalogValidationIssue[] = [];
   if (!isRecord(value)) {
     return [{ path: "$", message: "material must be an object" }];
   }
-  switch (type) {
+  switch (kind) {
     case "http-endpoint":
       checkNoUnknownKeys(value, "$", issues, [
         "targets",
@@ -534,22 +506,15 @@ export function validateOfficialOutputMaterial(
   return issues;
 }
 
-export function validateOfficialMaterial(
+export function validateOfficialMaterialMapping(
   kind: OfficialMaterialKindName,
-  value: unknown,
-): readonly CatalogValidationIssue[] {
-  return validateOfficialOutputMaterial(kind, value);
-}
-
-export function validateOfficialOutputMaterialMapping(
-  type: OfficialOutputTypeName,
   value: unknown,
 ): readonly CatalogValidationIssue[] {
   const issues: CatalogValidationIssue[] = [];
   if (!isRecord(value)) {
     return [{ path: "$", message: "mapping must be an object" }];
   }
-  switch (type) {
+  switch (kind) {
     case "http-endpoint":
       checkNoUnknownKeys(value, "$", issues, ["targets", "endpoints"]);
       checkHttpEndpointMaterialMapping(value, issues);
@@ -786,15 +751,8 @@ export function validateOfficialOutputMaterialMapping(
   return issues;
 }
 
-export function validateOfficialMaterialMapping(
+export function validateOfficialMaterialMappingOutputFields(
   kind: OfficialMaterialKindName,
-  value: unknown,
-): readonly CatalogValidationIssue[] {
-  return validateOfficialOutputMaterialMapping(kind, value);
-}
-
-export function validateOfficialOutputMaterialMappingOutputTypes(
-  type: OfficialOutputTypeName,
   value: unknown,
   outputs: readonly OutputFieldTypeDefinition[],
 ): readonly CatalogValidationIssue[] {
@@ -804,20 +762,20 @@ export function validateOfficialOutputMaterialMappingOutputTypes(
     output,
   ]));
 
-  collectOutputMappingMarkerUses(type, value, "$", outputDefinitions, issues);
-  if (type === "http-endpoint") {
+  collectOutputMappingMarkerUses(kind, value, "$", outputDefinitions, issues);
+  if (kind === "http-endpoint") {
     checkHttpEndpointMappingRequiredAlternatives(
       value,
       outputDefinitions,
       issues,
     );
-  } else if (type === "billing.port@v1") {
+  } else if (kind === "billing.port@v1") {
     checkBillingPortMappingRequiredAlternatives(
       value,
       outputDefinitions,
       issues,
     );
-  } else if (type === "service-binding") {
+  } else if (kind === "service-binding") {
     checkServiceBindingMappingRequiredAlternatives(
       value,
       outputDefinitions,
@@ -825,14 +783,6 @@ export function validateOfficialOutputMaterialMappingOutputTypes(
     );
   }
   return issues;
-}
-
-export function validateOfficialMaterialMappingOutputFields(
-  kind: OfficialMaterialKindName,
-  value: unknown,
-  outputs: readonly OutputFieldTypeDefinition[],
-): readonly CatalogValidationIssue[] {
-  return validateOfficialOutputMaterialMappingOutputTypes(kind, value, outputs);
 }
 
 export function isOutputMappingMarker(value: unknown): value is string {
@@ -859,7 +809,7 @@ type ExpectedOutputMarkerType =
   | "object-array";
 
 function collectOutputMappingMarkerUses(
-  outputType: OfficialOutputTypeName,
+  outputType: OfficialMaterialKindName,
   value: unknown,
   path: string,
   outputDefinitions: ReadonlyMap<string, OutputFieldTypeDefinition>,
@@ -931,7 +881,7 @@ function collectOutputMappingMarkerUses(
 }
 
 function expectedOutputMarkerType(
-  outputType: OfficialOutputTypeName,
+  outputType: OfficialMaterialKindName,
   path: string,
 ): ExpectedOutputMarkerType | undefined {
   switch (outputType) {
@@ -953,7 +903,7 @@ function expectedOutputMarkerType(
 }
 
 function isRequiredOutputMarkerPath(
-  outputType: OfficialOutputTypeName,
+  outputType: OfficialMaterialKindName,
   path: string,
 ): boolean {
   switch (outputType) {

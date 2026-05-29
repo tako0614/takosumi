@@ -2,6 +2,7 @@ import type { Hono as HonoApp } from "hono";
 import type { ObservabilitySink } from "../services/observability/mod.ts";
 import type { MetricEvent } from "../services/observability/types.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
+import { constantTimeEqualsString } from "../shared/constant_time.ts";
 
 export const TAKOSUMI_METRICS_PATH = "/metrics" as const;
 export const PROMETHEUS_CONTENT_TYPE =
@@ -24,7 +25,7 @@ export function registerMetricsRoutes(
       return c.json(apiError("not_found", "metrics endpoint disabled"), 404);
     }
     const presented = readBearerToken(c.req.header("authorization"));
-    if (!presented || !constantTimeEquals(presented, expected)) {
+    if (!presented || !constantTimeEqualsString(presented, expected)) {
       return c.json(apiError("unauthenticated", "invalid scrape token"), 401);
     }
     const metrics = await options.observability.listMetrics();
@@ -185,15 +186,4 @@ function readBearerToken(header: string | undefined): string | undefined {
   const [scheme, token] = header.split(/\s+/, 2);
   if (!scheme || scheme.toLowerCase() !== "bearer") return undefined;
   return token;
-}
-
-function constantTimeEquals(left: string, right: string): boolean {
-  const leftBytes = new TextEncoder().encode(left);
-  const rightBytes = new TextEncoder().encode(right);
-  const length = Math.max(leftBytes.length, rightBytes.length);
-  let diff = leftBytes.length ^ rightBytes.length;
-  for (let index = 0; index < length; index += 1) {
-    diff |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
-  }
-  return diff === 0;
 }

@@ -4,10 +4,11 @@ import type {
 } from "takosumi-contract/reference/shape";
 import {
   optionalNonEmptyString,
+  optionalPasswordlessAbsoluteUri,
   rejectUnknownFields,
   requireNonEmptyString,
   requireRoot,
-} from "./_validators.ts";
+} from "takosumi-contract/reference/shape-validators";
 import {
   KV_STORE_CAPABILITY_TERMS,
   KV_STORE_DESCRIPTION,
@@ -54,27 +55,7 @@ export const KvStoreKind: Shape<
     );
     requireNonEmptyString(value.storeId, "$.storeId", issues);
     requireNonEmptyString(value.name, "$.name", issues);
-    optionalAbsoluteUriWithoutPassword(value.url, "$.url", issues);
+    optionalPasswordlessAbsoluteUri(value.url, "$.url", issues);
     optionalNonEmptyString(value.tokenSecretRef, "$.tokenSecretRef", issues);
   },
 };
-
-function optionalAbsoluteUriWithoutPassword(
-  value: unknown,
-  path: string,
-  issues: ShapeValidationIssue[],
-): void {
-  if (value === undefined) return;
-  if (typeof value !== "string" || value.trim().length === 0) {
-    issues.push({ path, message: "must be an absolute URI" });
-    return;
-  }
-  try {
-    const url = new URL(value);
-    if (url.password) {
-      issues.push({ path, message: "must not contain an embedded password" });
-    }
-  } catch {
-    issues.push({ path, message: "must be an absolute URI" });
-  }
-}

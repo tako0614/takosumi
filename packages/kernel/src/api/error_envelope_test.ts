@@ -3,7 +3,7 @@ import { DomainError } from "../shared/errors.ts";
 import {
   apiErrorCodeForError,
   apiHttpStatusForError,
-  createPublicApiErrorResponse,
+  createApiErrorResponse,
   httpStatusForDomainErrorCode,
   readRequestId,
   redactApiErrorDetails,
@@ -18,7 +18,7 @@ Deno.test("error envelope maps DomainError code, status, message, request id, an
     },
   });
 
-  const response = createPublicApiErrorResponse(error, {
+  const response = createApiErrorResponse(error, {
     requestId: "req_123",
   });
 
@@ -57,7 +57,7 @@ Deno.test("error envelope maps provider failure reasons to gateway/provider stat
   ] as const;
 
   for (const [reason, status] of cases) {
-    const response = createPublicApiErrorResponse({
+    const response = createApiErrorResponse({
       failureReason: reason,
       message: `provider failed: ${reason}`,
       failure: {
@@ -83,7 +83,7 @@ Deno.test("error envelope classifies named provider errors by message", () => {
   assert.equal(apiHttpStatusForError(error), 504);
   assert.equal(apiErrorCodeForError(error), "provider_timeout");
 
-  const response = createPublicApiErrorResponse(error);
+  const response = createApiErrorResponse(error);
   assert.equal(response.status, 504);
   assert.equal(response.body.error.code, "provider_timeout");
   assert.equal(
@@ -93,7 +93,7 @@ Deno.test("error envelope classifies named provider errors by message", () => {
 });
 
 Deno.test("error envelope keeps unknown errors generic", () => {
-  const response = createPublicApiErrorResponse(new Error("database password"));
+  const response = createApiErrorResponse(new Error("database password"));
 
   assert.equal(response.status, 500);
   assert.deepEqual(response.body, {

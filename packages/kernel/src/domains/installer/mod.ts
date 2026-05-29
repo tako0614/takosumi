@@ -23,6 +23,7 @@ import type { JsonValue } from "takosumi-contract";
 import type { KernelPlugin } from "takosumi-contract/reference/compat";
 import type {
   AppSpec,
+  BindingOptions,
   Component,
   ComponentOutputRef,
   ListenOptions,
@@ -51,6 +52,7 @@ import type {
 
 import type { OutputMaterial } from "takosumi-contract/reference/plugin";
 import {
+  AppSpecParseError,
   fetchGitSource,
   fetchPreparedSource,
   parseAppSpec,
@@ -63,11 +65,17 @@ import {
 } from "../../plugins/mod.ts";
 import { log } from "../../shared/log.ts";
 import { currentRuntime } from "../../shared/runtime/index.ts";
-import { BindingResolver, type ResolvedBinding } from "../binding/mod.ts";
+import {
+  assertListenMaterialKind,
+  BindingResolutionError,
+  BindingResolver,
+  type ResolvedBinding,
+} from "../binding/mod.ts";
 import {
   type DeploymentStore,
   InMemoryDeploymentStore,
   InMemoryInstallationStore,
+  InstallationPatchGuardConflict,
   type InstallationStore,
 } from "./store.ts";
 
@@ -303,6 +311,31 @@ export class InstallerPipeline {
    * `expected.currentDeploymentId` guard.
    */
   readonly #mutationChains = new Map<string, Promise<unknown>>();
+  /**
+   * Per-Space mutation queue. Any apply (`installationApply` /
+   * `deploymentApply`) whose AppSpec declares one or more pathful
+   * `publish` entries chains onto the previous in-flight apply for the same
+   * `spaceId` so the pathful-publication conflict guard's read-then-write
+   * (#collectActivePublishPaths followed by writing the publication) cannot
+   * interleave with a sibling Installation's apply in the same Space.
+   *
+   * The per-Installation `#mutationChains` only serializes within a single
+   * Installation, which does not cover two *different* fresh installs racing
+   * for the same Space path. This Space-level chain closes that in-process
+   * race.
+   *
+   * RESIDUAL CAVEAT (honest): this is an in-process lock only. On the
+   * documented multi-isolate (Cloudflare Workers) / multi-replica
+   * (node-postgres) profiles, two replicas hold independent maps and
+   * independent in-memory stores, so the lock cannot serialize across
+   * replicas. Durable cross-replica path uniqueness needs a store-level
+   * guard (a UNIQUE constraint over active publications, or an atomic
+   * compare-and-set claim) which the current in-memory store layer does not
+   * provide. Until a durable store backs publications, single-replica
+   * deployments are protected and multi-replica deployments retain a
+   * narrow race window on identical fresh pathful publishes.
+   */
+  readonly #spaceMutationChains = new Map<string, Promise<unknown>>();
   constructor(dependencies: InstallerPipelineDependencies = {}) {
     this.#installations = dependencies.installations ??
       new InMemoryInstallationStore();
@@ -399,7 +432,7 @@ export class InstallerPipeline {
     requireNonEmptyString(request.spaceId, "spaceId");
     const fetched = await this.#fetchSource(request.source);
     let installation: Installation;
-    let deployment: Deployment;
+    let deployment!: Deployment;
     try {
       const { appSpec, manifestDigest } = await readAppSpec(
         fetched.workingDirectory,
@@ -419,43 +452,55 @@ export class InstallerPipeline {
       };
       await this.#installations.put(installation);
 
-      try {
-        // Vite-style `onInstallStart` runs before the very first Deployment
-        // of this Installation. Errors here are fatal — Installation goes
-        // to `failed` status and the apply rejects.
-        await this.#fireInstallationHook("onInstallStart", { installation });
+      // Serialize the apply + status patch per Space when the AppSpec
+      // declares pathful publications so the conflict guard's read-then-write
+      // cannot interleave with a sibling Installation's apply in the same
+      // Space. See `#spaceMutationChains` for the in-process scope + the
+      // residual multi-replica caveat.
+      const applyAndPatch = async (): Promise<void> => {
+        try {
+          // Vite-style `onInstallStart` runs before the very first Deployment
+          // of this Installation. Errors here are fatal — Installation goes
+          // to `failed` status and the apply rejects.
+          await this.#fireInstallationHook("onInstallStart", { installation });
 
-        deployment = await this.#runDeployment({
-          installation,
-          appSpec,
-          manifestDigest,
-          sourceSummary,
-          workingDirectory: fetched.workingDirectory,
-        });
-
-        const patched = await this.#installations.patch(installation.id, {
-          currentDeploymentId: deployment.id,
-          status: deployment.status === "succeeded" ? "ready" : "failed",
-        });
-        installation = patched ?? installation;
-
-        // After-the-fact installer-complete hook. Errors here are logged
-        // but do NOT roll the Installation back; the Deployment already
-        // succeeded so post-install cleanup failures should not destroy
-        // the user's app.
-        if (deployment.status === "succeeded") {
-          await this.#fireInstallationHook("onInstallComplete", {
+          deployment = await this.#runDeployment({
             installation,
-            deployment,
-          }, { swallowErrors: true });
+            appSpec,
+            manifestDigest,
+            sourceSummary,
+            workingDirectory: fetched.workingDirectory,
+          });
+
+          const patched = await this.#installations.patch(installation.id, {
+            currentDeploymentId: deployment.id,
+            status: deployment.status === "succeeded" ? "ready" : "failed",
+          });
+          installation = patched ?? installation;
+
+          // After-the-fact installer-complete hook. Errors here are logged
+          // but do NOT roll the Installation back; the Deployment already
+          // succeeded so post-install cleanup failures should not destroy
+          // the user's app.
+          if (deployment.status === "succeeded") {
+            await this.#fireInstallationHook("onInstallComplete", {
+              installation,
+              deployment,
+            }, { swallowErrors: true });
+          }
+        } catch (error) {
+          const patched = await this.#installations.patch(installation.id, {
+            status: "failed",
+          });
+          installation = patched ?? installation;
+          throw error;
         }
-      } catch (error) {
-        const patched = await this.#installations.patch(installation.id, {
-          status: "failed",
-        });
-        installation = patched ?? installation;
-        throw error;
-      }
+      };
+      await this.#runMaybeSpaceSerialized(
+        request.spaceId,
+        appSpec,
+        applyAndPatch,
+      );
     } finally {
       await fetched.cleanup();
     }
@@ -501,24 +546,59 @@ export class InstallerPipeline {
     const source = request.source ??
       await this.#sourceFromInstallation(installation);
     const fetched = await this.#fetchSource(source);
-    let deployment: Deployment;
+    let deployment!: Deployment;
     try {
       const { appSpec, manifestDigest } = await readAppSpec(
         fetched.workingDirectory,
       );
       const sourceSummary = summarizeSource(source, fetched);
       checkExpectedPin(request.expected, sourceSummary, manifestDigest);
-      deployment = await this.#runDeployment({
-        installation,
+      // Serialize the apply + status patch per Space when the AppSpec
+      // declares pathful publications (alongside the already-applied
+      // per-Installation `#runSerialized`) so the conflict guard's
+      // read-then-write cannot interleave with a sibling Installation's
+      // apply in the same Space.
+      await this.#runMaybeSpaceSerialized(
+        installation.spaceId,
         appSpec,
-        manifestDigest,
-        sourceSummary,
-        workingDirectory: fetched.workingDirectory,
-      });
-      await this.#installations.patch(installation.id, {
-        currentDeploymentId: deployment.id,
-        status: deployment.status === "succeeded" ? "ready" : "failed",
-      });
+        async () => {
+          deployment = await this.#runDeployment({
+            installation,
+            appSpec,
+            manifestDigest,
+            sourceSummary,
+            workingDirectory: fetched.workingDirectory,
+          });
+          // When the caller supplied an `expected.currentDeploymentId` guard,
+          // fence the pointer write at the store with a compare-and-set on the
+          // value we pre-read and validated in `checkExpectedCurrentDeploymentId`.
+          // This turns the dry-run → apply TOCTOU guard into an atomic CAS on
+          // the durable SQL store so two replicas racing the same Installation
+          // cannot lose each other's pointer write. No-`expected` applies keep
+          // the unfenced patch (no value to fence against).
+          const guard = request.expected !== undefined
+            ? { currentDeploymentId: installation.currentDeploymentId }
+            : undefined;
+          try {
+            await this.#installations.patch(installation.id, {
+              currentDeploymentId: deployment.id,
+              status: deployment.status === "succeeded" ? "ready" : "failed",
+            }, guard);
+          } catch (error) {
+            if (error instanceof InstallationPatchGuardConflict) {
+              // A concurrent deploy advanced the pointer between our pre-read
+              // and this write. Surface the same fail-fast closed-envelope
+              // conflict the in-app `checkExpectedCurrentDeploymentId` guard
+              // raises (HTTP 409), rather than a generic 500.
+              throw new InstallerPipelineError(
+                "failed_precondition",
+                error.message,
+              );
+            }
+            throw error;
+          }
+        },
+      );
     } finally {
       await fetched.cleanup();
     }
@@ -617,25 +697,52 @@ export class InstallerPipeline {
    * interleave. We await the previous in-flight mutation rather than failing
    * fast — see `#mutationChains` for rationale.
    */
-  async #runSerialized<T>(
+  #runSerialized<T>(
     installationId: string,
     work: () => Promise<T>,
   ): Promise<T> {
     requireNonEmptyString(installationId, "installationId");
-    const previous = this.#mutationChains.get(installationId) ??
-      Promise.resolve();
+    return this.#runChained(this.#mutationChains, installationId, work);
+  }
+
+  /**
+   * Run `work` under the per-Space mutation chain when `appSpec` declares one
+   * or more pathful `publish` entries; otherwise run it directly. Engaging
+   * the lock only for pathful publishes avoids serializing unrelated applies
+   * in the same Space. See `#spaceMutationChains` for scope + caveats.
+   */
+  #runMaybeSpaceSerialized<T>(
+    spaceId: string,
+    appSpec: AppSpec,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    if (!hasPathfulPublish(appSpec)) return work();
+    return this.#runChained(this.#spaceMutationChains, spaceId, work);
+  }
+
+  /**
+   * Generic FIFO mutation queue keyed on `key` against the supplied chain
+   * map. Each call chains onto the previous in-flight promise for the same
+   * key and self-evicts the map entry when it was the tail.
+   */
+  async #runChained<T>(
+    chains: Map<string, Promise<unknown>>,
+    key: string,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const previous = chains.get(key) ?? Promise.resolve();
     let resolveCurrent!: (value: unknown) => void;
     const current = new Promise<unknown>((resolve) => {
       resolveCurrent = resolve;
     });
-    this.#mutationChains.set(installationId, current);
+    chains.set(key, current);
     try {
       await previous.catch(() => {});
       return await work();
     } finally {
       resolveCurrent(undefined);
-      if (this.#mutationChains.get(installationId) === current) {
-        this.#mutationChains.delete(installationId);
+      if (chains.get(key) === current) {
+        chains.delete(key);
       }
     }
   }
@@ -688,12 +795,13 @@ export class InstallerPipeline {
       deployment: provisionalDeployment,
     });
 
-    // Count of components that returned successfully from
-    // `providers.apply()` during this Deployment. Used to populate
-    // `partialApplyDetected` on the failed-Deployment record below — see
-    // the failure handler's JSDoc for why we keep this count instead of a
-    // compensating transaction.
+    // Count + concrete resource evidence of components that returned
+    // successfully from `providers.apply()` during this Deployment. Used to
+    // populate `partialApplyDetected` / `partiallyAppliedResources` on the
+    // failed-Deployment record below — see the failure handler's JSDoc for
+    // why we record evidence instead of running a compensating transaction.
     let appliedComponentCount = 0;
+    const appliedResources: ProviderResourceEvidence[] = [];
     try {
       const order = topologicalOrder(input.appSpec);
       const neededOutputs = collectNeededOutputSlots(input.appSpec);
@@ -717,7 +825,7 @@ export class InstallerPipeline {
                   `unresolved component output ${JSON.stringify(sourceRef)}`,
               );
             }
-            const binding = await resolver.resolveEdge({
+            const binding = await this.#resolveEdgeChecked(resolver, {
               installationId: input.installation.id,
               listenerComponent: componentName,
               listenerKind: component.kind,
@@ -736,6 +844,23 @@ export class InstallerPipeline {
             const [bindingName, options] of Object.entries(component.listen)
           ) {
             const sourceRef = listenSourceRef(options);
+            // A `listen.path` resolves an operator platform service. If that
+            // path string collides with an already-published `component.output`
+            // ref, registry.get would silently bind the LOCAL output and
+            // shadow the platform service. Reject the ambiguity rather than
+            // resolving the wrong material.
+            if (
+              typeof options.path === "string" &&
+              registry.isLocalOutput(sourceRef)
+            ) {
+              throw new InstallerPipelineError(
+                "failed_precondition",
+                `${componentName}.listen.${bindingName}.path ${
+                  JSON.stringify(sourceRef)
+                } collides with a component output of the same ref; rename ` +
+                  `the publish path or the component output`,
+              );
+            }
             const material = registry.get(sourceRef) ??
               await this.#resolvePlatformService({
                 installation: input.installation,
@@ -756,7 +881,13 @@ export class InstallerPipeline {
                   `unresolved platform service ${JSON.stringify(sourceRef)}`,
               );
             }
-            const binding = await resolver.resolveEdge({
+            // Enforce the documented `listen.kind` compatibility assertion at
+            // apply time. resolveAppSpec runs this in the test-only path; the
+            // production pipeline walks listen edges itself, so we run the
+            // shared guard here so a material whose advertised `kind` differs
+            // from the declared `listen.kind` selector is rejected instead of
+            // being silently bound.
+            const binding = await this.#resolveEdgeChecked(resolver, {
               installationId: input.installation.id,
               listenerComponent: componentName,
               listenerKind: component.kind,
@@ -765,6 +896,7 @@ export class InstallerPipeline {
               sourceRef,
               options,
               material,
+              assertListenKind: true,
             });
             listenedMaterials[bindingName] = material;
             resolvedBindings.push(binding);
@@ -782,6 +914,7 @@ export class InstallerPipeline {
           resolvedBindings,
         });
         appliedComponentCount += 1;
+        appliedResources.push(applied.resource);
         const neededComponentOutputs = neededOutputs.get(componentName) ??
           new Set<OutputSlotName>();
         for (const outputName of neededComponentOutputs) {
@@ -888,8 +1021,12 @@ export class InstallerPipeline {
       // corrected source) or a manual cleanup.
       //
       // We persist `appliedComponentCount` on the failed Deployment as
-      // `partialApplyDetected` so operators / dashboards can see how far
-      // the apply got before failing and decide whether to investigate.
+      // `partialApplyDetected`, and the concrete resource evidence
+      // (component / kind / provider / resourceHandle) of each already-applied
+      // component as `partiallyAppliedResources`, so operators / tooling can
+      // drive deterministic cleanup of the orphaned backend resources instead
+      // of only seeing a count. (The kernel still does NOT auto-compensate;
+      // see above.)
       const failed: Deployment = {
         id: deploymentId,
         installationId: input.installation.id,
@@ -901,7 +1038,15 @@ export class InstallerPipeline {
             ? undefined
             : componentOutputs,
           extensions: appliedComponentCount > 0
-            ? { partialApplyDetected: appliedComponentCount }
+            ? {
+              partialApplyDetected: appliedComponentCount,
+              partiallyAppliedResources: appliedResources.map((resource) => ({
+                component: resource.component,
+                kind: resource.kind,
+                provider: resource.provider,
+                resourceHandle: resource.resourceHandle,
+              })),
+            }
             : undefined,
         },
         createdAt: now,
@@ -912,17 +1057,77 @@ export class InstallerPipeline {
   }
 
   /**
+   * Resolve a single connect/listen edge, optionally running the
+   * `listen.kind` compatibility assertion first, and translating any
+   * {@link BindingResolutionError} (kind mismatch, env-key collision, ...)
+   * into a closed-envelope {@link InstallerPipelineError} so the public
+   * Installer API returns a documented `failed_precondition` (409) rather
+   * than a generic 500.
+   */
+  async #resolveEdgeChecked(
+    resolver: BindingResolver,
+    input: {
+      readonly installationId: string;
+      readonly listenerComponent: string;
+      readonly listenerKind: string;
+      readonly listenerComponentRef: Component;
+      readonly bindingName: string;
+      readonly sourceRef: string;
+      readonly options: BindingOptions;
+      readonly material: OutputMaterial;
+      readonly assertListenKind?: boolean;
+    },
+  ): Promise<ResolvedBinding> {
+    try {
+      if (input.assertListenKind) {
+        assertListenMaterialKind({
+          component: input.listenerComponent,
+          bindingName: input.bindingName,
+          options: input.options as ListenOptions,
+          sourceRef: input.sourceRef,
+          material: input.material,
+        });
+      }
+      return await resolver.resolveEdge({
+        installationId: input.installationId,
+        listenerComponent: input.listenerComponent,
+        listenerKind: input.listenerKind,
+        listenerComponentRef: input.listenerComponentRef,
+        bindingName: input.bindingName,
+        sourceRef: input.sourceRef,
+        options: input.options,
+        material: input.material,
+      });
+    } catch (error) {
+      if (error instanceof BindingResolutionError) {
+        throw new InstallerPipelineError(
+          "failed_precondition",
+          error.message,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Collect the set of `publish.path` values already owned by active
    * Installations in the given Space. The map is keyed by path and points
    * at the owning Installation id so the pathful-publication conflict
    * guard in {@link #runDeployment} can produce a useful diagnostic.
    *
+   * Siblings whose status is `ready` (settled owner) or `installing`
+   * (in-flight sibling that still projects a prior current Deployment, e.g.
+   * a redeploy in progress) are both counted so an in-flight sibling's
+   * publication is not transiently invisible to a concurrent apply.
+   *
    * Limitations:
    * - We snapshot the active publications via each Installation's
-   *   `currentDeploymentId` projection. Concurrent applies against
-   *   different Installations in the same Space could still race; the
-   *   per-Installation mutation chain only serializes within an
-   *   Installation.
+   *   `currentDeploymentId` projection. A *fresh* install in flight has no
+   *   current Deployment yet, so it contributes no path here; the
+   *   per-Space mutation chain (`#spaceMutationChains`) — not this scan — is
+   *   what serializes two fresh pathful installs in the same Space within a
+   *   process. That chain is in-process only; see its doc for the residual
+   *   multi-replica caveat.
    * - Suspended Installations are ignored. `failed` Installations are
    *   ignored too — a failed apply does not own a publication.
    */
@@ -939,7 +1144,12 @@ export class InstallerPipeline {
       ) {
         continue;
       }
-      if (installation.status !== "ready") continue;
+      if (
+        installation.status !== "ready" &&
+        installation.status !== "installing"
+      ) {
+        continue;
+      }
       const deploymentId = installation.currentDeploymentId;
       if (deploymentId === null) continue;
       const deployment = await this.#deployments.get(deploymentId);
@@ -1264,6 +1474,14 @@ function installerProviderRegistryFromPluginRegistry(
 }
 
 /**
+ * Sentinel publisher id recorded for operator-resolved platform-service
+ * materials. Distinct from any `component.output` publisher (a component
+ * name) so the registry can tell platform-service refs apart from local
+ * output refs and reject shadowing / conflicting writes.
+ */
+const PLATFORM_SERVICE_PUBLISHER = " platform-service";
+
+/**
  * In-memory material registry — owns the (source ref → publisher / material)
  * map for one Deployment apply. Component outputs use `component.output`;
  * platform service refs use `identity.primary.oidc`-style paths when an operator
@@ -1295,7 +1513,32 @@ class MaterialRegistry {
     sourceRef: string,
     material: OutputMaterial,
   ): void {
+    const existing = this.#publishers.get(sourceRef);
+    if (existing !== undefined && existing !== PLATFORM_SERVICE_PUBLISHER) {
+      // A local component output already owns this ref. A `listen.path`
+      // string that collides with a `component.output` ref would otherwise
+      // silently shadow the operator-resolved platform service (registry.get
+      // is consulted before platform resolution). Reject the ambiguity.
+      throw new InstallerPipelineError(
+        "failed_precondition",
+        `platform service path ${JSON.stringify(sourceRef)} collides with ` +
+          `component output published by ${JSON.stringify(existing)}; ` +
+          `rename the publish path or the component output so they do not ` +
+          `share a ref`,
+      );
+    }
+    this.#publishers.set(sourceRef, PLATFORM_SERVICE_PUBLISHER);
     this.#materials.set(sourceRef, material);
+  }
+
+  /**
+   * True when `sourceRef` is already bound to a local component output (as
+   * opposed to a platform-service resolution). Lets the listen path detect a
+   * `listen.path` that would shadow a component output before consuming it.
+   */
+  isLocalOutput(sourceRef: string): boolean {
+    const publisher = this.#publishers.get(sourceRef);
+    return publisher !== undefined && publisher !== PLATFORM_SERVICE_PUBLISHER;
   }
 
   get(sourceRef: string): OutputMaterial | undefined {
@@ -1385,9 +1628,21 @@ function materialToDeploymentOutput(
 ): Readonly<Record<string, JsonValue>> {
   const output: Record<string, JsonValue> = {};
   for (const [key, value] of Object.entries(material)) {
-    output[key] = isSecretRefMaterial(value)
-      ? { secretRef: value.secretRef }
-      : value;
+    if (isSecretRefMaterial(value)) {
+      // Already a secret reference envelope — keep the indirection; the
+      // raw secret never sits in the Deployment record.
+      output[key] = { secretRef: value.secretRef };
+      continue;
+    }
+    // Defense in depth: a materializer that violates the OutputMaterial
+    // contract by emitting a plaintext secret under a sensitive-looking key
+    // (instead of wrapping it in `{ secretRef }`) would otherwise persist
+    // that plaintext into the Deployment record. Apply the SAME key-based
+    // redaction the provider-output path uses so both persistence paths
+    // scrub sensitive plaintext consistently.
+    output[key] = isSensitiveKey(key)
+      ? "[redacted]"
+      : redactSensitiveJsonValue(value);
   }
   return output;
 }
@@ -1490,7 +1745,30 @@ async function readAppSpec(
       `failed to read .takosumi.yml at ${path}: ${cause}`,
     );
   }
-  const appSpec = parseAppSpec(bytes);
+  let appSpec: AppSpec;
+  try {
+    appSpec = parseAppSpec(bytes);
+  } catch (err) {
+    // `.takosumi.yml` content is client/source-controlled. The parser
+    // rejects malformed manifests with an {@link AppSpecParseError} carrying
+    // a `validationPhase`; surface it on the closed error envelope instead of
+    // letting it bubble out as a generic 500 internal_error. Size-guard
+    // phases (manifest / component-count limits) map to the documented
+    // `resource_exhausted` (413) code per AGENTS.md; every other syntax /
+    // schema / connection-resolution / metadata / forbidden-field /
+    // connect-cycle phase maps to `invalid_argument` (400). The
+    // AppSpecParseError message describes the operator's own source manifest
+    // (validationPhase / validationPath), not server internals.
+    if (err instanceof AppSpecParseError) {
+      const code: InstallerPipelineErrorCode =
+        err.validationPhase === "manifest-too-large" ||
+          err.validationPhase === "too-many-components"
+          ? "resource_exhausted"
+          : "invalid_argument";
+      throw new InstallerPipelineError(code, err.message);
+    }
+    throw err;
+  }
   const manifestDigest = await sha256Hex(bytes);
   return { appSpec, manifestDigest };
 }
@@ -1590,6 +1868,21 @@ function sourcePinFromSummary(
   return { manifestDigest };
 }
 
+/**
+ * True when the AppSpec declares one or more root `publish` entries that
+ * carry a stable `path`. Pathful publications participate in the Space-level
+ * uniqueness conflict guard, so applies that declare them are serialized per
+ * Space; pathless publications can coexist freely and need no serialization.
+ */
+function hasPathfulPublish(appSpec: AppSpec): boolean {
+  for (const options of Object.values(appSpec.publish ?? {})) {
+    if (typeof options.path === "string" && options.path.length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function computeFreshInstallChangeSet(
   appSpec: AppSpec,
 ): readonly ChangeEntry[] {
@@ -1627,6 +1920,20 @@ function collectNeededOutputSlots(
   return needed;
 }
 
+/**
+ * Order components so every `connect` producer applies before its consumer,
+ * rejecting `connect` cycles within a single AppSpec.
+ *
+ * SCOPE (honest limitation): this only covers same-AppSpec `connect` edges.
+ * Cross-Installation dependencies expressed via `listen` -> root `publish`
+ * across Installations in the same Space (Installation A publishes path X and
+ * listens path Y while Installation B publishes Y and listens X) form a
+ * dependency cycle this sort cannot see, because `listen` resolution is
+ * delegated asynchronously to the operator {@link PlatformServiceResolver}
+ * and the kernel keeps no Space-level dependency graph. Cross-Installation
+ * ordering / cycle safety is therefore an operator / account-plane
+ * responsibility; this function is NOT full dependency-cycle protection.
+ */
 function topologicalOrder(appSpec: AppSpec): readonly string[] {
   const order: string[] = [];
   const visited = new Set<string>();

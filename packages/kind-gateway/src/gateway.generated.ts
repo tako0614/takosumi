@@ -39,7 +39,7 @@ export interface GatewayOutputs {
   /** Resolved public hostname. */
   readonly host: string;
   /** Resolved public scheme (`http` or `https`). */
-  readonly scheme: string;
+  readonly scheme: "http" | "https";
   /** Listener name that produced the public endpoint. */
   readonly listener: string;
   /** Portable route summary with pathPrefix and connect binding target. */

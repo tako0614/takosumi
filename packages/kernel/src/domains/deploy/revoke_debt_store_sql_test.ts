@@ -36,6 +36,11 @@ interface FakeRow extends Record<string, unknown> {
 
 class FakeSqlClient implements SqlClient {
   readonly rows: FakeRow[] = [];
+  /**
+   * Fired once, just before the next UPDATE is applied, to simulate a
+   * concurrent cross-pod transition landing in the read-modify-write window.
+   */
+  onBeforeNextUpdate?: () => void;
 
   query<Row extends Record<string, unknown> = Record<string, unknown>>(
     sql: string,
@@ -67,6 +72,9 @@ class FakeSqlClient implements SqlClient {
       return Promise.resolve(cast(this.#getById(params)));
     }
     if (trimmed.startsWith("update takosumi_revoke_debts")) {
+      const hook = this.onBeforeNextUpdate;
+      this.onBeforeNextUpdate = undefined;
+      hook?.();
       return Promise.resolve(cast(this.#update(params)));
     }
     if (
@@ -76,6 +84,12 @@ class FakeSqlClient implements SqlClient {
       )
     ) {
       return Promise.resolve(cast(this.#listDeployment(params)));
+    }
+    if (
+      trimmed.includes("from takosumi_revoke_debts") &&
+      trimmed.includes("next_retry_at is not null")
+    ) {
+      return Promise.resolve(cast(this.#listDueOpen(params)));
     }
     if (
       trimmed.includes("from takosumi_revoke_debts") &&
@@ -189,6 +203,8 @@ class FakeSqlClient implements SqlClient {
       statusUpdatedAt,
       agedAt,
       clearedAt,
+      expectedStatus,
+      expectedRetryAttempts,
     ] = params as [
       string,
       string,
@@ -200,9 +216,15 @@ class FakeSqlClient implements SqlClient {
       string,
       string | null,
       string | null,
+      string,
+      number,
     ];
     const row = this.rows.find((entry) =>
-      entry.owner_space_id === ownerSpaceId && entry.id === id
+      entry.owner_space_id === ownerSpaceId && entry.id === id &&
+      // Optimistic-concurrency guard: the UPDATE only matches when the row's
+      // current (status, retry_attempts) still equal the pre-read values.
+      entry.status === expectedStatus &&
+      entry.retry_attempts === expectedRetryAttempts
     );
     if (!row) return { rows: [], rowCount: 0 };
     row.status = status;
@@ -214,6 +236,28 @@ class FakeSqlClient implements SqlClient {
     row.aged_at = agedAt;
     row.cleared_at = clearedAt;
     return { rows: [{ ...row }], rowCount: 1 };
+  }
+
+  #listDueOpen(params: readonly unknown[]): SqlQueryResult<FakeRow> {
+    const [ownerSpaceId, now, limit] = params as [
+      string,
+      string,
+      number | undefined,
+    ];
+    const nowMs = Date.parse(now);
+    const rows = this.rows
+      .filter((row) =>
+        row.owner_space_id === ownerSpaceId &&
+        row.status === "open" &&
+        row.next_retry_at !== null &&
+        Date.parse(row.next_retry_at) <= nowMs
+      )
+      .sort((left, right) =>
+        left.created_at.localeCompare(right.created_at) ||
+        left.id.localeCompare(right.id)
+      );
+    const capped = typeof limit === "number" ? rows.slice(0, limit) : rows;
+    return { rows: capped.map((row) => ({ ...row })), rowCount: capped.length };
   }
 
   #listDeployment(params: readonly unknown[]): SqlQueryResult<FakeRow> {
@@ -355,5 +399,51 @@ Deno.test("SqlRevokeDebtStore persists retry, aging, reopen, and clearance trans
   });
   assert.equal(cleared?.status, "cleared");
   assert.equal(cleared?.clearedAt, "2026-05-02T00:03:00.000Z");
+  assert.deepEqual(await store.listOpenOwnerSpaces(), []);
+});
+
+Deno.test("SqlRevokeDebtStore CAS guard does not clobber a concurrently cleared debt", async () => {
+  const client = new FakeSqlClient();
+  const store = new SqlRevokeDebtStore({
+    client,
+    idFactory: () => "revoke-debt:sql-cas",
+  });
+  const debt = await store.enqueue({
+    generatedObjectId: "generated:takosumi-public-deploy/sql-app/cas",
+    reason: "activation-rollback",
+    ownerSpaceId: "space:sql-cas",
+    deploymentName: "sql-app",
+    retryPolicy: { kind: "operator-managed", backoffSeconds: 5 },
+    now: "2026-05-02T00:00:00.000Z",
+  });
+
+  // Pod B clears the debt in the read-modify-write window of pod A's retry.
+  client.onBeforeNextUpdate = () => {
+    const row = client.rows.find((entry) => entry.id === debt.id);
+    if (row) {
+      row.status = "cleared";
+      row.retry_attempts = 1;
+      row.next_retry_at = null;
+      row.cleared_at = "2026-05-02T00:00:05.000Z";
+      row.status_updated_at = "2026-05-02T00:00:05.000Z";
+    }
+  };
+
+  // Pod A read status=open/retry_attempts=0 and tries to write a stale
+  // retryable-failure. The CAS guard must reject it and return the row pod B
+  // actually wrote (cleared), not pod A's stale retryable-failure.
+  const lost = await store.recordRetryAttempt({
+    id: debt.id,
+    ownerSpaceId: "space:sql-cas",
+    result: "retryable-failure",
+    error: { category: "stale_write" },
+    now: "2026-05-02T00:00:10.000Z",
+  });
+
+  assert.equal(lost?.status, "cleared");
+  assert.equal(lost?.retryAttempts, 1);
+  const [stored] = await store.listByOwnerSpace("space:sql-cas");
+  assert.equal(stored?.status, "cleared");
+  assert.equal(stored?.lastRetryError, undefined);
   assert.deepEqual(await store.listOpenOwnerSpaces(), []);
 });

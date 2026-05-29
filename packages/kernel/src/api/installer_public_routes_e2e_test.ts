@@ -505,14 +505,12 @@ components:
         source: { kind: "local", url: workingDirectory },
       }),
     });
-    // Parse-time cycle detection bubbles up via the route handler as a
-    // 4xx / 5xx error envelope with a typed error code.
-    assert(
-      res.status >= 400 && res.status < 600,
-      `expected error status, got ${res.status}`,
-    );
+    // Parse-time cycle detection (validationPhase=connection-resolution) is
+    // surfaced on the closed error envelope as `invalid_argument` / HTTP 400,
+    // not a generic 500 internal_error.
+    assertEquals(res.status, 400);
     const body = await res.json();
-    assert(typeof body.error.code === "string");
+    assertEquals(body.error.code, "invalid_argument");
     // No applies ran — the parse rejected before topology computation.
     assertEquals(applies.length, 0);
   }, cyclicSpec);

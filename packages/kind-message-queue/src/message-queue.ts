@@ -1,14 +1,12 @@
-import type {
-  Shape,
-  ShapeValidationIssue,
-} from "takosumi-contract/reference/shape";
+import type { Shape } from "takosumi-contract/reference/shape";
 import {
   optionalNonEmptyString,
   optionalNonNegativeInteger,
+  optionalPasswordlessAbsoluteUri,
   rejectUnknownFields,
   requireNonEmptyString,
   requireRoot,
-} from "./_validators.ts";
+} from "takosumi-contract/reference/shape-validators";
 import {
   MESSAGE_QUEUE_CAPABILITY_TERMS,
   MESSAGE_QUEUE_DESCRIPTION,
@@ -71,7 +69,7 @@ export const MessageQueueKind: Shape<
     );
     requireNonEmptyString(value.queueId, "$.queueId", issues);
     requireNonEmptyString(value.name, "$.name", issues);
-    optionalAbsoluteUriWithoutPassword(value.url, "$.url", issues);
+    optionalPasswordlessAbsoluteUri(value.url, "$.url", issues);
     optionalNonEmptyString(
       value.producerTokenSecretRef,
       "$.producerTokenSecretRef",
@@ -84,23 +82,3 @@ export const MessageQueueKind: Shape<
     );
   },
 };
-
-function optionalAbsoluteUriWithoutPassword(
-  value: unknown,
-  path: string,
-  issues: ShapeValidationIssue[],
-): void {
-  if (value === undefined) return;
-  if (typeof value !== "string" || value.trim().length === 0) {
-    issues.push({ path, message: "must be an absolute URI" });
-    return;
-  }
-  try {
-    const url = new URL(value);
-    if (url.password) {
-      issues.push({ path, message: "must not contain an embedded password" });
-    }
-  } catch {
-    issues.push({ path, message: "must be an absolute URI" });
-  }
-}

@@ -60,6 +60,76 @@ Deno.test("HttpArtifactFetcher.fetch throws on non-200", async () => {
   );
 });
 
+Deno.test("HttpArtifactFetcher.fetch rejects when content-length exceeds cap", async () => {
+  let cancelled = false;
+  const fetcher = new HttpArtifactFetcher({
+    baseUrl: "https://kernel.example.com/v1/artifacts",
+    token: "tk",
+    maxBytes: 16,
+    fetch: mockFetch(() => {
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled = true;
+        },
+        pull(controller) {
+          controller.enqueue(new Uint8Array(64));
+          controller.close();
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-length": "64" },
+      });
+    }),
+  });
+  await assert.rejects(
+    () => fetcher.fetch("sha256:big"),
+    /declares 64 bytes, cap is 16/,
+  );
+  assert.equal(cancelled, true);
+});
+
+Deno.test("HttpArtifactFetcher.fetch streams and aborts past cap when length absent", async () => {
+  const fetcher = new HttpArtifactFetcher({
+    baseUrl: "https://kernel.example.com/v1/artifacts",
+    token: "tk",
+    maxBytes: 8,
+    fetch: mockFetch(() => {
+      // Chunked/unknown length: no content-length header, body streams past cap.
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new Uint8Array(4));
+          controller.enqueue(new Uint8Array(4));
+          controller.enqueue(new Uint8Array(4));
+          controller.close();
+        },
+      });
+      return new Response(body, { status: 200 });
+    }),
+  });
+  await assert.rejects(
+    () => fetcher.fetch("sha256:stream"),
+    /exceeds 8 bytes/,
+  );
+});
+
+Deno.test("HttpArtifactFetcher.fetch accepts a body at the cap boundary", async () => {
+  const payload = new Uint8Array(8).fill(1);
+  const fetcher = new HttpArtifactFetcher({
+    baseUrl: "https://kernel.example.com/v1/artifacts",
+    token: "tk",
+    maxBytes: 8,
+    fetch: mockFetch(() =>
+      new Response(payload, {
+        status: 200,
+        headers: { "x-takosumi-artifact-kind": "raw" },
+      })
+    ),
+  });
+  const got = await fetcher.fetch("sha256:ok");
+  assert.equal(got.bytes.byteLength, 8);
+});
+
 Deno.test("HttpArtifactFetcher.head returns kind+size from headers", async () => {
   const fetcher = new HttpArtifactFetcher({
     baseUrl: "https://kernel.example.com/v1/artifacts/",

@@ -14,6 +14,7 @@
     "./reference/runtime-agent": "./src/runtime-agent.ts",
     "./reference/runtime-agent-lifecycle": "./src/runtime-agent-lifecycle.ts",
     "./reference/shape": "./src/shape.ts",
+    "./reference/shape-validators": "./src/shape-validators.ts",
     "./reference/types": "./src/types.ts",
     "./internal/api": "./src/internal-api.ts",
     "./internal/provider-plugin": "./src/provider-plugin.ts",

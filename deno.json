@@ -29,6 +29,7 @@
     "takosumi-contract/reference/runtime-agent": "./packages/contract/src/runtime-agent.ts",
     "takosumi-contract/reference/runtime-agent-lifecycle": "./packages/contract/src/runtime-agent-lifecycle.ts",
     "takosumi-contract/reference/shape": "./packages/contract/src/shape.ts",
+    "takosumi-contract/reference/shape-validators": "./packages/contract/src/shape-validators.ts",
     "takosumi-contract/reference/types": "./packages/contract/src/types.ts",
     "takosumi-contract/app-spec": "./packages/contract/src/app-spec.ts",
     "takosumi-contract/catalog": "./packages/contract/src/catalog.ts",

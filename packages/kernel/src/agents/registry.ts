@@ -49,6 +49,17 @@ export interface InMemoryRuntimeAgentRegistryOptions {
 export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
   readonly #agents = new Map<RuntimeAgentId, RuntimeAgentRecord>();
   readonly #work = new Map<RuntimeAgentWorkId, RuntimeAgentWorkItem>();
+  /**
+   * Secondary indexes over `#work` so the hot lease / complete / fail /
+   * progress / enqueue-idempotency paths avoid an O(n) full-table scan. Both
+   * are maintained exclusively through {@link #setWork}; `#work` stays the
+   * source of truth and these are pure derived caches:
+   *   - `#leaseIndex`: leaseId → workId, only for items currently `leased`.
+   *   - `#idempotencyIndex`: idempotencyKey → workId, only for active
+   *     (`queued` / `leased`) items.
+   */
+  readonly #leaseIndex = new Map<string, RuntimeAgentWorkId>();
+  readonly #idempotencyIndex = new Map<string, RuntimeAgentWorkId>();
   readonly #clock: () => Date;
   readonly #idGenerator: () => string;
   readonly #defaultLeaseTtlMs: number;
@@ -122,10 +133,24 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
       });
     }
     for (const agent of snapshot.agents) this.#agents.set(agent.id, agent);
-    for (const work of snapshot.works) this.#work.set(work.id, work);
+    for (const work of snapshot.works) this.#setWork(work);
   }
 
   register(input: RegisterRuntimeAgentInput): Promise<RuntimeAgentRecord> {
+    // Serialize the whole detect-mismatch → revoke/requeue → re-enroll →
+    // persist critical section. register()'s host-key-rotation branch does the
+    // same shape of work as leaseWork / detectStaleAgents (read-then-write over
+    // #work + #agents, then an `await` on the ledger), so it must run under the
+    // same mutation gate. Without this, a concurrent leaseWork could observe
+    // the registry mid-revoke (e.g. work requeued in memory but the lease still
+    // outstanding) and double-claim or strand work, defeating the invariant the
+    // mutex protects.
+    return this.#serialize(() => this.#registerLocked(input));
+  }
+
+  #registerLocked(
+    input: RegisterRuntimeAgentInput,
+  ): Promise<RuntimeAgentRecord> {
     const now = input.heartbeatAt ?? this.#now();
     const id = input.agentId ?? `agent_${this.#idGenerator()}`;
     const existing = this.#agents.get(id);
@@ -164,7 +189,9 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
       }
       // Rotation path falls through — emit a fresh `ready` record below.
     } else if (existing?.status === "revoked" && !input.allowHostKeyRotation) {
-      throw conflict("runtime agent has been revoked", { agentId: id });
+      return Promise.reject(
+        conflict("runtime agent has been revoked", { agentId: id }),
+      );
     }
 
     const priorForCarry = digestMismatch ? undefined : existing;
@@ -254,11 +281,14 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
     input: EnqueueRuntimeAgentWorkInput,
   ): Promise<RuntimeAgentWorkItem> {
     if (input.idempotencyKey) {
-      const dup = [...this.#work.values()].find((existing) =>
-        existing.idempotencyKey === input.idempotencyKey &&
-        (existing.status === "queued" || existing.status === "leased")
-      );
-      if (dup) return Promise.resolve(dup);
+      const dupId = this.#idempotencyIndex.get(input.idempotencyKey);
+      const dup = dupId ? this.#work.get(dupId) : undefined;
+      if (
+        dup && dup.idempotencyKey === input.idempotencyKey &&
+        (dup.status === "queued" || dup.status === "leased")
+      ) {
+        return Promise.resolve(dup);
+      }
     }
     const id = input.workId ?? `work_${this.#idGenerator()}`;
     if (this.#work.has(id)) {
@@ -285,7 +315,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
       lastProgressAt: undefined,
       result: undefined,
     });
-    this.#work.set(id, item);
+    this.#setWork(item);
     return this.#persist({ works: [item] }).then(() => item);
   }
 
@@ -393,7 +423,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
     // ledger rejects, we roll the in-memory claim back to the prior
     // `queued` item so the registry never strands the candidate in
     // `leased` with an unpersisted lease.
-    this.#work.set(leasedWork.id, leasedWork);
+    this.#setWork(leasedWork);
     // Persist both the newly-leased item and any expired-lease requeues
     // in the same mutation so the ledger never observes a half-applied
     // state across a kernel restart.
@@ -413,7 +443,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
           work: leasedWork,
         }),
       (error) => {
-        this.#work.set(candidate.id, candidate);
+        this.#setWork(candidate);
         this.#restoreWork(priorExpired);
         throw error;
       },
@@ -430,7 +460,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
       completedAt: input.completedAt ?? this.#now(),
       result: input.result ?? work.result,
     });
-    this.#work.set(work.id, completed);
+    this.#setWork(completed);
     return this.#persist({ works: [completed] })
       .then(() => this.#terminalReporter?.complete(completed))
       .then(() => completed);
@@ -448,7 +478,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
       failureReason: input.reason,
       result: input.result ?? work.result,
     });
-    this.#work.set(work.id, failed);
+    this.#setWork(failed);
     return this.#persist({ works: [failed] })
       .then(() => this.#terminalReporter?.fail(failed))
       .then(() => failed);
@@ -489,7 +519,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
         : work.lastProgress,
       lastProgressAt: reportedAt,
     });
-    this.#work.set(work.id, updated);
+    this.#setWork(updated);
     return this.#persist({ works: [updated] }).then(() => updated);
   }
 
@@ -550,7 +580,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
       await this.#persist({ agent: updated, works: agentRequeues });
       this.#agents.set(agent.id, updated);
       for (const requeuedItem of agentRequeues) {
-        this.#work.set(requeuedItem.id, requeuedItem);
+        this.#setWork(requeuedItem);
       }
       stale.push(updated);
       requeued.push(...agentRequeues);
@@ -592,14 +622,46 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
     if (!agent) throw notFound("runtime agent not found", { agentId });
     return agent;
   }
+  /**
+   * Single write path for `#work`. Keeps the `#leaseIndex` /
+   * `#idempotencyIndex` derived caches in sync by diffing the prior entry's
+   * lease id / idempotency key against the new item's. All in-memory work
+   * mutations (and rollbacks) go through here so the indexes never drift.
+   */
+  #setWork(item: RuntimeAgentWorkItem): void {
+    const prior = this.#work.get(item.id);
+    if (prior?.leaseId && prior.leaseId !== item.leaseId) {
+      if (this.#leaseIndex.get(prior.leaseId) === item.id) {
+        this.#leaseIndex.delete(prior.leaseId);
+      }
+    }
+    if (item.status === "leased" && item.leaseId) {
+      this.#leaseIndex.set(item.leaseId, item.id);
+    } else if (item.leaseId && this.#leaseIndex.get(item.leaseId) === item.id) {
+      // Item left `leased` but still carries the old lease id (shouldn't
+      // normally happen — terminal/requeue clears it — but stay defensive).
+      this.#leaseIndex.delete(item.leaseId);
+    }
+    if (item.idempotencyKey) {
+      const active = item.status === "queued" || item.status === "leased";
+      if (active) {
+        this.#idempotencyIndex.set(item.idempotencyKey, item.id);
+      } else if (this.#idempotencyIndex.get(item.idempotencyKey) === item.id) {
+        this.#idempotencyIndex.delete(item.idempotencyKey);
+      }
+    }
+    this.#work.set(item.id, item);
+  }
+
   #requireLease(
     agentId: RuntimeAgentId,
     leaseId: string,
   ): RuntimeAgentWorkItem {
-    const work = [...this.#work.values()].find((candidate) =>
-      candidate.leaseId === leaseId && candidate.leasedByAgentId === agentId
-    );
-    if (!work) {
+    const workId = this.#leaseIndex.get(leaseId);
+    const work = workId ? this.#work.get(workId) : undefined;
+    if (
+      !work || work.leaseId !== leaseId || work.leasedByAgentId !== agentId
+    ) {
       throw notFound("runtime agent work lease not found", {
         agentId,
         leaseId,
@@ -637,7 +699,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
   /** Restore captured `#work` entries — undo an in-memory mutation whose
    * ledger persist later rejected. */
   #restoreWork(items: readonly RuntimeAgentWorkItem[]): void {
-    for (const work of items) this.#work.set(work.id, work);
+    for (const work of items) this.#setWork(work);
   }
 
   #requeueExpiredLeases(now: string): RuntimeAgentWorkItem[] {
@@ -654,7 +716,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
           leaseId: undefined,
           leaseExpiresAt: undefined,
         });
-        this.#work.set(work.id, next);
+        this.#setWork(next);
         requeued.push(next);
       }
     }
@@ -677,7 +739,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
           leaseId: undefined,
           leaseExpiresAt: undefined,
         });
-        this.#work.set(work.id, next);
+        this.#setWork(next);
         requeued.push(next);
       }
     }

@@ -1219,3 +1219,231 @@ Deno.test("rollback is blocked when retained artifact digest changed", async () 
     secondDeployment.id,
   );
 });
+
+// --- Fail-closed: synthetic provider adapter on strict environments ---------
+
+Deno.test("deploy: production env refuses synthetic provider adapter fallback", () => {
+  const store = new InMemoryDeploymentStore();
+  assert.throws(
+    () =>
+      new DeploymentService({
+        store,
+        environment: "production",
+      }),
+    /production deploy runtime requires an explicit providerAdapter/,
+  );
+});
+
+Deno.test("deploy: staging env refuses synthetic provider adapter fallback", () => {
+  const store = new InMemoryDeploymentStore();
+  assert.throws(
+    () =>
+      new DeploymentService({
+        store,
+        environment: "staging",
+      }),
+    /staging deploy runtime requires an explicit providerAdapter/,
+  );
+});
+
+Deno.test("deploy: production env with explicit providerAdapter is accepted", () => {
+  const store = new InMemoryDeploymentStore();
+  const adapter: DeploymentProviderAdapter = {
+    materialize: (): OperationOutcome => ({
+      success: true,
+      reason: "OperationApplied",
+    }),
+    rollback: (): OperationOutcome => ({
+      success: true,
+      reason: "OperationReverted",
+    }),
+  };
+  // Should NOT throw — an explicit adapter satisfies the strict guard.
+  new DeploymentService({
+    store,
+    environment: "production",
+    providerAdapter: adapter,
+  });
+});
+
+Deno.test("deploy: dev env keeps synthetic adapter (no throw)", () => {
+  const store = new InMemoryDeploymentStore();
+  // Omitting environment (dev/test) keeps the synthetic fallback so local
+  // bootstraps Just Work.
+  new DeploymentService({ store });
+  new DeploymentService({ store, environment: "development" });
+});
+
+// --- Fail-closed: strict rollback validators on production ------------------
+
+Deno.test("deploy: production rollback is refused without a real validator (fail-closed)", async () => {
+  // A store that does NOT supply default rollback validators — mirrors the
+  // storage-backed production store, which opts out of
+  // `getDefaultRollbackValidators` (it is in the storage proxy's
+  // missingOptionalMethods, so the property reads as `undefined`). With no
+  // store/caller validator wired, the production strict default must engage.
+  // (The in-memory store deliberately overrides with fail-open dev defaults,
+  // so we null out that override here to model a store without it.)
+  const store = new InMemoryDeploymentStore();
+  (store as { getDefaultRollbackValidators?: unknown })
+    .getDefaultRollbackValidators = undefined;
+  let counter = 0;
+  const adapter: DeploymentProviderAdapter = {
+    materialize: (): OperationOutcome => ({
+      success: true,
+      reason: "OperationApplied",
+    }),
+    rollback: (): OperationOutcome => ({
+      success: true,
+      reason: "OperationReverted",
+    }),
+  };
+  const service = new DeploymentService({
+    store,
+    environment: "production",
+    providerAdapter: adapter,
+    idFactory: () => `deployment_strict_rb_${++counter}`,
+    clock: fixedClock("2026-04-27T00:00:00.000Z"),
+  });
+
+  const v1 = await service.resolveDeployment({
+    spaceId: "space_deploy",
+    manifest: sampleManifest(),
+  });
+  await service.applyDeployment({
+    deploymentId: v1.id,
+    appliedAt: "2026-04-27T00:01:00.000Z",
+  });
+  const v2 = await service.resolveDeployment({
+    spaceId: "space_deploy",
+    manifest: { ...sampleManifest(), version: "2.0.0" },
+  });
+  await service.applyDeployment({
+    deploymentId: v2.id,
+    appliedAt: "2026-04-27T00:02:00.000Z",
+  });
+
+  // No store/caller validator wired + strict environment → STRICT defaults
+  // refuse the rollback instead of silently promoting an unverified target.
+  await assert.rejects(
+    () =>
+      service.rollbackGroup({
+        spaceId: "space_deploy",
+        groupId: "demo-app",
+        targetDeploymentId: v1.id,
+        advancedAt: "2026-04-27T00:03:00.000Z",
+      }),
+    /RollbackPreflightUnverified/,
+  );
+
+  // GroupHead untouched — v2 is still current.
+  assert.equal(
+    (await store.getGroupHead("demo-app"))?.current_deployment_id,
+    v2.id,
+  );
+});
+
+Deno.test("deploy: production rollback proceeds when caller supplies passing validators", async () => {
+  const store = new InMemoryDeploymentStore();
+  let counter = 0;
+  const adapter: DeploymentProviderAdapter = {
+    materialize: (): OperationOutcome => ({
+      success: true,
+      reason: "OperationApplied",
+    }),
+    rollback: (): OperationOutcome => ({
+      success: true,
+      reason: "OperationReverted",
+    }),
+  };
+  const service = new DeploymentService({
+    store,
+    environment: "production",
+    providerAdapter: adapter,
+    idFactory: () => `deployment_strict_ok_${++counter}`,
+    clock: fixedClock("2026-04-27T00:00:00.000Z"),
+  });
+
+  const v1 = await service.resolveDeployment({
+    spaceId: "space_deploy",
+    manifest: sampleManifest(),
+  });
+  await service.applyDeployment({
+    deploymentId: v1.id,
+    appliedAt: "2026-04-27T00:01:00.000Z",
+  });
+  const v2 = await service.resolveDeployment({
+    spaceId: "space_deploy",
+    manifest: { ...sampleManifest(), version: "2.0.0" },
+  });
+  await service.applyDeployment({
+    deploymentId: v2.id,
+    appliedAt: "2026-04-27T00:02:00.000Z",
+  });
+
+  const verified = () => ({ ok: true as const });
+  await service.rollbackGroup({
+    spaceId: "space_deploy",
+    groupId: "demo-app",
+    targetDeploymentId: v1.id,
+    advancedAt: "2026-04-27T00:03:00.000Z",
+    descriptorClosureValidator: verified,
+    artifactAvailabilityValidator: verified,
+    artifactDigestValidator: verified,
+  });
+
+  assert.equal(
+    (await store.getGroupHead("demo-app"))?.current_deployment_id,
+    v1.id,
+  );
+});
+
+// --- Rollback metric label: resolved target id, steps in payload ------------
+
+Deno.test("deploy: rollback metric records resolved target id and steps payload", async () => {
+  const store = new InMemoryDeploymentStore();
+  const observability = new InMemoryObservabilitySink();
+  let counter = 0;
+  const service = new DeploymentService({
+    store,
+    observability,
+    idFactory: () => `deployment_rb_label_${++counter}`,
+    clock: fixedClock("2026-04-27T00:00:00.000Z"),
+  });
+
+  const v1 = await service.resolveDeployment({
+    spaceId: "space_deploy",
+    manifest: sampleManifest(),
+  });
+  await service.applyDeployment({
+    deploymentId: v1.id,
+    appliedAt: "2026-04-27T00:01:00.000Z",
+  });
+  const v2 = await service.resolveDeployment({
+    spaceId: "space_deploy",
+    manifest: { ...sampleManifest(), version: "2.0.0" },
+  });
+  await service.applyDeployment({
+    deploymentId: v2.id,
+    appliedAt: "2026-04-27T00:02:00.000Z",
+  });
+
+  // Roll back by step count (1 generation back == v1).
+  await service.rollbackGroup({
+    spaceId: "space_deploy",
+    groupId: "demo-app",
+    steps: 1,
+    advancedAt: "2026-04-27T00:03:00.000Z",
+  });
+
+  const metrics = await observability.listMetrics();
+  const counterMetric = metrics.find((metric) =>
+    metric.name === TAKOSUMI_DEPLOY_OPERATION_COUNT &&
+    metric.tags?.operationKind === "rollback"
+  );
+  assert.ok(counterMetric);
+  // deploymentName label is the RESOLVED target id (v1.id), not "1".
+  assert.equal(counterMetric.payload?.deploymentName, v1.id);
+  // step count lives in its own payload attribute, not the deploymentName label.
+  assert.equal(counterMetric.payload?.steps, 1);
+});

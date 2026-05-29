@@ -79,6 +79,41 @@ Deno.test("fetchGitSource rejects IPv4 metadata service (SSH shorthand)", async 
   );
 });
 
+Deno.test("fetchGitSource rejects fully-expanded IPv6 loopback via SSH shorthand", async () => {
+  // 0:0:0:0:0:0:0:1 == ::1. The SSH shorthand path bypasses `new URL()`
+  // normalization, so the textual-shape blocklist used to let this through;
+  // the real parser must classify it as loopback.
+  await assert.rejects(
+    fetchGitSource({ url: "git@[0:0:0:0:0:0:0:1]:owner/repo.git" }),
+    /git source host is not allowed/,
+  );
+});
+
+Deno.test("fetchGitSource rejects zero-padded IPv6 loopback via SSH shorthand", async () => {
+  await assert.rejects(
+    fetchGitSource({
+      url: "git@[0000:0000:0000:0000:0000:0000:0000:0001]:owner/repo.git",
+    }),
+    /git source host is not allowed/,
+  );
+});
+
+Deno.test("fetchGitSource rejects NAT64 well-known prefix wrapping metadata", async () => {
+  // 64:ff9b::169.254.169.254 — NAT64 of the cloud metadata service.
+  await assert.rejects(
+    fetchGitSource({ url: "https://[64:ff9b::a9fe:a9fe]/owner/repo.git" }),
+    /git source host is not allowed/,
+  );
+});
+
+Deno.test("fetchGitSource rejects 6to4 wrapping a private IPv4", async () => {
+  // 2002:0a00:0001:: embeds 10.0.0.1 (RFC1918) in the 6to4 prefix.
+  await assert.rejects(
+    fetchGitSource({ url: "https://[2002:0a00:0001::1]/owner/repo.git" }),
+    /git source host is not allowed/,
+  );
+});
+
 Deno.test("fetchGitSource rejects file:// scheme", async () => {
   await assert.rejects(
     fetchGitSource({ url: "file:///etc/passwd" }),

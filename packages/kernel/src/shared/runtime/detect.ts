@@ -41,7 +41,13 @@ export function currentRuntime(): RuntimeAdapter {
   }
   if (isBun()) {
     // Bun's `node:*` modules cover the FS / HTTP / signal surfaces the
-    // kernel needs, so reuse the Node adapter.
+    // kernel needs, so reuse the Node adapter. The Node adapter's synchronous
+    // FS path (`readTextFileSync`) no longer depends on a `globalThis.require`
+    // bootstrap: it uses the `require` pre-warmed from
+    // `node:module#createRequire` (see node.ts), which Bun exposes. This path
+    // is still not exercised by a verified Bun deployment profile per
+    // AGENTS.md, so treat Bun support as best-effort until a Bun smoke test
+    // covers descriptor JSON loading.
     cached = nodeRuntime;
     return cached;
   }
