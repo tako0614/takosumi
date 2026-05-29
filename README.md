@@ -9,7 +9,7 @@ Docs: <https://takosumi.com/docs/>
 Run this from a source root that contains `.takosumi.yml` and the files referenced by its kind-specific `spec`.
 
 ```bash
-deno install -gA -n takosumi jsr:@takos/takosumi-cli
+npm install -g @takosjp/takosumi
 export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
 TAKOSUMI_DEV_MODE=1 takosumi server --port 8788 &
 takosumi install dry-run \
@@ -101,40 +101,42 @@ takosumi install --source git:https://github.com/example/notes#v1.2.3 \
 
 Configuration precedence is **flag > env > `~/.takosumi/config.yml`**.
 
-## JSR Packages
+## npm Package
 
-Core/runtime/tooling packages:
+Everything in this repository ships as one npm package, [`@takosjp/takosumi`](https://www.npmjs.com/package/@takosjp/takosumi), reached through subpath exports:
 
-| Package                                                                             | Purpose                                                      |
-| ----------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [`jsr:@takos/takosumi`](https://jsr.io/@takos/takosumi)                             | umbrella package for core exports and portable kind packages |
-| [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract)           | manifest and Installer API wire types                        |
-| [`jsr:@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)               | reference kernel and Installer API server                    |
-| [`jsr:@takos/takosumi-installer`](https://jsr.io/@takos/takosumi-installer)         | `.takosumi.yml` parser, source fetch, deploy client          |
-| [`jsr:@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli)                     | `takosumi` command                                           |
-| [`jsr:@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent) | lifecycle execution host for backend adapters                |
+| Subpath                           | Purpose                                       |
+| --------------------------------- | --------------------------------------------- |
+| `@takosjp/takosumi`               | umbrella entry for core exports and kinds     |
+| `@takosjp/takosumi/contract`      | manifest and Installer API wire types         |
+| `@takosjp/takosumi/kernel`        | reference kernel and Installer API server     |
+| `@takosjp/takosumi/installer`     | `.takosumi.yml` parser, source fetch, client  |
+| `@takosjp/takosumi/cli`           | `takosumi` command                            |
+| `@takosjp/takosumi/runtime-agent` | lifecycle execution host for backend adapters |
+| `@takosjp/takosumi/server`        | Installer API server entry                    |
+| `@takosjp/takosumi/kinds`         | portable kind descriptors barrel              |
 
-Kind packages use the pattern `jsr:@takos/takosumi-kind-<name>`. Portable package source lives here; native package source lives in `takosumi-plugins`. Current package names are listed in [`docs/reference/kind-packages.md`](./docs/reference/kind-packages.md). Operators import only the kind packages they need.
+Portable kinds are reached through the pattern `@takosjp/takosumi/kind/<name>`. Native kinds and runtime-agent connectors ship as subpaths of the sibling [`@takosjp/takosumi-plugins`](https://www.npmjs.com/package/@takosjp/takosumi-plugins) package (`/kind/<backend-name>`, `/connectors`), which depends on `@takosjp/takosumi` as a peer. Current subpath names are listed in [`docs/reference/kind-packages.md`](./docs/reference/kind-packages.md). Operators import only the subpaths they need.
 
 ## Workspace Layout
 
 ```text
 takosumi/
 ├── packages/
-│   ├── contract/                @takos/takosumi-contract
-│   ├── kernel/                  @takos/takosumi-kernel
-│   ├── installer/               @takos/takosumi-installer
-│   ├── cli/                     @takos/takosumi-cli
-│   ├── runtime-agent/           @takos/takosumi-runtime-agent
-│   ├── kind-*/                  portable @takos/takosumi-kind-*
-│   └── all/                     @takos/takosumi
+│   ├── contract/                @takosjp/takosumi/contract
+│   ├── kernel/                  @takosjp/takosumi/kernel
+│   ├── installer/               @takosjp/takosumi/installer
+│   ├── cli/                     @takosjp/takosumi/cli
+│   ├── runtime-agent/           @takosjp/takosumi/runtime-agent
+│   ├── kind-*/                  portable kinds → @takosjp/takosumi/kind/*
+│   └── all/                     @takosjp/takosumi (umbrella + subpath exports)
 ├── docs/                        VitePress docs site
 ├── website/                     takosumi.com landing + merged publish artifact
 ├── deploy/, fixtures/, scripts/
 └── AGENTS.md, CONVENTIONS.md, CHANGELOG.md
 ```
 
-Canonical contract source is `packages/contract/`; the public package is [`jsr:@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract).
+Canonical contract source is `packages/contract/`; the public export is [`@takosjp/takosumi/contract`](https://www.npmjs.com/package/@takosjp/takosumi).
 
 ## Development
 
@@ -145,8 +147,7 @@ deno task fmt:check
 deno task lint
 deno task lint:json-ld
 deno task spec:check-drift
-deno task publish:dry-run
-deno task publish:check-jsr-records
+deno run -A scripts/build-npm.ts
 ```
 
 Per-package examples:
@@ -158,13 +159,12 @@ cd packages/kernel && deno task db:migrate:dry-run
 
 ## Release
 
-Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace, runs tests, performs a JSR dry-run, publishes the Takosumi JSR packages with GitHub OIDC, and builds/pushes the `takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish` input is set. `publish:check-jsr-records` checks the public JSR registry after publishing and fails until every package/version in `scripts/jsr-publish-dry-run.ts` is visible.
+Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace, runs tests, builds the npm package with dnt via `scripts/build-npm.ts`, publishes `@takosjp/takosumi` to npm, and builds/pushes the `takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish` input is set. `@takosjp/takosumi` carries its own single version stream; the sibling `@takosjp/takosumi-plugins` is released from its own repository with its own version stream, so there is no ecosystem-wide lockstep GA.
 
-Manual `deno task publish:jsr` requires `JSR_TOKEN`, skips target versions that
-are already visible in the registry, and leaves the normal `deno publish` clean
-tree check enabled. A package record must exist before the first version is
-published; the release tooling checks the JSR management API so an empty package
-record is treated as publishable rather than missing.
+The dnt build produces the npm output under the build target directory and runs
+`npm publish` against the `@takosjp/takosumi` package from that output. A few
+Deno subprocess and `serve` modules are dnt-mapped to Node implementations in the
+npm output, so runtime behavior on Deno is unchanged.
 
 ## Docs Site
 

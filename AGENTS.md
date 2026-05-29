@@ -1,8 +1,8 @@
 # AGENTS.md — Takosumi
 
-This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the contract package, reference kernel, installer, CLI, generic runtime-agent host, portable official catalog packages, and the umbrella package published to JSR. Backend-specific native kind plugin packages and concrete runtime-agent connectors live in the sibling `takosumi-plugins` repository.
+This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the contract, reference kernel, installer, CLI, generic runtime-agent host, portable official catalog descriptors, and the server entry, all shipped as one npm package (`@takosjp/takosumi`) via subpath exports. Backend-specific native kind plugin packages and concrete runtime-agent connectors ship as the sibling `@takosjp/takosumi-plugins` npm package, sourced from the `takosumi-plugins` repository.
 
-Canonical contract: [`@takos/takosumi-contract`](https://jsr.io/@takos/takosumi-contract) (`packages/contract/`).
+Canonical contract: [`@takosjp/takosumi/contract`](https://www.npmjs.com/package/@takosjp/takosumi) (`packages/contract/`).
 
 ## Spec Status
 
@@ -25,21 +25,21 @@ Official descriptors are package-owned under `packages/kind-*/spec/kind.jsonld` 
 takosumi/
 ├── deno.json
 ├── packages/
-│   ├── contract/                @takos/takosumi-contract
-│   ├── kernel/                  @takos/takosumi-kernel
-│   ├── installer/               @takos/takosumi-installer
-│   ├── cli/                     @takos/takosumi-cli
-│   ├── runtime-agent/           @takos/takosumi-runtime-agent
-│   ├── kind-*/                  portable @takos/takosumi-kind-* descriptors
-│   └── all/                     @takos/takosumi
+│   ├── contract/                @takosjp/takosumi/contract
+│   ├── kernel/                  @takosjp/takosumi/kernel
+│   ├── installer/               @takosjp/takosumi/installer
+│   ├── cli/                     @takosjp/takosumi/cli
+│   ├── runtime-agent/           @takosjp/takosumi/runtime-agent
+│   ├── kind-*/                  portable kind descriptors → @takosjp/takosumi/kind/*
+│   └── all/                     @takosjp/takosumi (umbrella + subpath exports)
 ├── docs/, website/, deploy/, fixtures/, scripts/
 └── README.md, CONVENTIONS.md, CHANGELOG.md
 ```
 
-Kind packages are split by ownership:
+Kind sources are split by ownership; both ship as subpaths of the two published npm packages:
 
-- Portable kind packages define author-facing shapes: `kind-worker`, `kind-web-service`, `kind-postgres`, `kind-sqlite`, `kind-object-store`, `kind-kv-store`, `kind-message-queue`, `kind-vector-store`, `kind-gateway`.
-- Native kind plugin packages and concrete runtime-agent connectors bind concrete backends into the reference kernel and live in `../takosumi-plugins`: Cloudflare Workers/R2/DNS, Deno Deploy, AWS Fargate/RDS/S3/Route53, GCP Cloud Run/Cloud SQL/GCS/Cloud DNS, Kubernetes, Docker Compose, systemd, MinIO, filesystem, Docker Postgres, CoreDNS, Cloudflare Containers, and Azure Container Apps.
+- Portable kinds define author-facing shapes and are exported as `@takosjp/takosumi/kind/<name>` subpaths: `worker`, `web-service`, `postgres`, `sqlite`, `object-store`, `kv-store`, `message-queue`, `vector-store`, `gateway`.
+- Native kind plugins and concrete runtime-agent connectors bind concrete backends into the reference kernel, source-located in `../takosumi-plugins`, and exported as `@takosjp/takosumi-plugins/kind/<backend-name>` (plus `@takosjp/takosumi-plugins/connectors`): Cloudflare Workers/R2/DNS, Deno Deploy, AWS Fargate/RDS/S3/Route53, GCP Cloud Run/Cloud SQL/GCS/Cloud DNS, Kubernetes, Docker Compose, systemd, MinIO, filesystem, Docker Postgres, CoreDNS, Cloudflare Containers, and Azure Container Apps.
 
 ## Public Concepts
 
@@ -113,34 +113,50 @@ The public Installer API surface is five endpoints:
 
 Use `409 failed_precondition` for lifecycle guard failures such as source pin mismatch, prepared digest mismatch, expected guard mismatch, missing required platform service, or non-portable local source omission. Use `413 resource_exhausted` for request, manifest, or source size limits. The v1 surface does not use a caller-supplied Idempotency-Key header.
 
-## JSR Publish Layout
+## npm Publish Layout
 
-Packages publish independently. There is no ecosystem-wide GA version.
+This repository publishes exactly one npm package, `@takosjp/takosumi`, with its
+own single version stream. The sibling `takosumi-plugins` repository publishes the
+only other ecosystem package, `@takosjp/takosumi-plugins`, with its own single
+version stream. There is no ecosystem-wide lockstep GA version; the ecosystem has
+two published packages instead of one stream each.
 
-Core/runtime/tooling:
+Core/runtime/tooling are reached as subpath exports of `@takosjp/takosumi`:
 
-- `@takos/takosumi-contract`
-- `@takos/takosumi-kernel`
-- `@takos/takosumi-installer`
-- `@takos/takosumi-cli`
-- `@takos/takosumi-runtime-agent`
-- `@takos/takosumi`
+- `@takosjp/takosumi/contract`
+- `@takosjp/takosumi/kernel`
+- `@takosjp/takosumi/installer`
+- `@takosjp/takosumi/cli`
+- `@takosjp/takosumi/runtime-agent`
+- `@takosjp/takosumi/server`
+- `@takosjp/takosumi/kinds`
+- `@takosjp/takosumi` (umbrella entry)
 
-Portable kind descriptor packages in this repository:
+Portable kinds in this repository are subpath exports of the same package:
 
-- `@takos/takosumi-kind-worker`
-- `@takos/takosumi-kind-web-service`
-- `@takos/takosumi-kind-postgres`
-- `@takos/takosumi-kind-sqlite`
-- `@takos/takosumi-kind-object-store`
-- `@takos/takosumi-kind-kv-store`
-- `@takos/takosumi-kind-message-queue`
-- `@takos/takosumi-kind-vector-store`
-- `@takos/takosumi-kind-gateway`
+- `@takosjp/takosumi/kind/worker`
+- `@takosjp/takosumi/kind/web-service`
+- `@takosjp/takosumi/kind/postgres`
+- `@takosjp/takosumi/kind/sqlite`
+- `@takosjp/takosumi/kind/object-store`
+- `@takosjp/takosumi/kind/kv-store`
+- `@takosjp/takosumi/kind/message-queue`
+- `@takosjp/takosumi/kind/vector-store`
+- `@takosjp/takosumi/kind/gateway`
 
-Native plugin packages in `../takosumi-plugins` keep their published
-`@takos/takosumi-kind-*` package names, but they are no longer part of this
-repository's umbrella package or publish dry-run.
+Native kinds and connectors in `../takosumi-plugins` are subpath exports of
+`@takosjp/takosumi-plugins` (`/kind/<backend-name>` and `/connectors`). That
+package depends on `@takosjp/takosumi` as a peer and is published from its own
+repository, not from this one.
+
+## Build And Publish Toolchain
+
+Source is Deno-first and published to npm via dnt (Deno→Node Transform). The
+build entry in this repository is `scripts/build-npm.ts`; the plugins package
+builds via `takosumi-plugins/scripts/dnt-build.ts`. A few Deno subprocess and
+`serve` modules are dnt-mapped to Node implementations in the npm output, so
+runtime behavior on Deno is unchanged while the published npm package runs on
+Node.
 
 ## Commands
 
@@ -151,8 +167,7 @@ deno task fmt:check
 deno task lint
 deno task lint:json-ld
 deno task spec:check-drift
-deno task publish:dry-run
-deno task publish:check-jsr-records
+deno run -A scripts/build-npm.ts
 ```
 
 Per-package work should run from the package or product root:
