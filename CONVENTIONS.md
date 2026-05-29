@@ -11,8 +11,8 @@ manifest and publication selectors use `kind`.
 
 ## Kind ownership
 
-- Portable kind packages use `@takos/takosumi-kind-<alias>` and own `spec/kind.jsonld`, helper types, and validators.
-- Native kind packages live in the sibling `takosumi-plugins` repository, use the same naming rule, and own substrate-specific kind definition metadata and adapter factories.
+- Portable kinds are subpath exports `@takosjp/takosumi/kind/<alias>` and own `spec/kind.jsonld`, helper types, and validators in `packages/kind-<alias>/`.
+- Native kinds are sourced in the sibling `takosumi-plugins` repository, exported as `@takosjp/takosumi-plugins/kind/<alias>` subpaths, and own substrate-specific kind definition metadata and adapter factories.
 - Kind families such as worker, postgres, object-store, gateway, and web-service are documentation groups, not an manifest field.
 - Backend-specific `spec` fields belong to native kinds. Do not hide them behind a portable kind.
 
@@ -30,7 +30,7 @@ same kind are valid. Consumers that intentionally want all visible matches use
 2. Create `packages/kind-<alias>/deno.json`, `mod.ts`, and `spec/kind.jsonld` in `takosumi/` for portable descriptors or `takosumi-plugins/` for native backend bindings.
 3. Export `KIND_NAME`, `KIND_URI`, and `KIND_ALIASES`.
 4. Add a `KernelPlugin` factory only when the reference implementation has an adapter.
-5. Add the package to the owning repository's `deno.json` workspace and publish/check scripts.
+5. Add the package to the owning repository's `deno.json` workspace and wire its subpath into that repository's npm build (`scripts/build-npm.ts` for portable kinds, `takosumi-plugins/scripts/dnt-build.ts` for native kinds).
 6. Update [Kind Packages](docs/reference/kind-packages.md) and examples.
 
 ## Reference implementation binding
