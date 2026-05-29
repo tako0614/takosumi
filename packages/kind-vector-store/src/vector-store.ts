@@ -1,15 +1,13 @@
-import type {
-  Shape,
-  ShapeValidationIssue,
-} from "takosumi-contract/reference/shape";
+import type { Shape } from "takosumi-contract/reference/shape";
 import {
   optionalNonEmptyString,
+  optionalPasswordlessAbsoluteUri,
   rejectUnknownFields,
   requireEnum,
   requireNonEmptyString,
   requirePositiveInteger,
   requireRoot,
-} from "./_validators.ts";
+} from "takosumi-contract/reference/shape-validators";
 import {
   VECTOR_STORE_CAPABILITY_TERMS,
   VECTOR_STORE_DESCRIPTION,
@@ -60,27 +58,7 @@ export const VectorStoreKind: Shape<
     );
     requireNonEmptyString(value.indexId, "$.indexId", issues);
     requireNonEmptyString(value.name, "$.name", issues);
-    optionalAbsoluteUriWithoutPassword(value.url, "$.url", issues);
+    optionalPasswordlessAbsoluteUri(value.url, "$.url", issues);
     optionalNonEmptyString(value.tokenSecretRef, "$.tokenSecretRef", issues);
   },
 };
-
-function optionalAbsoluteUriWithoutPassword(
-  value: unknown,
-  path: string,
-  issues: ShapeValidationIssue[],
-): void {
-  if (value === undefined) return;
-  if (typeof value !== "string" || value.trim().length === 0) {
-    issues.push({ path, message: "must be an absolute URI" });
-    return;
-  }
-  try {
-    const url = new URL(value);
-    if (url.password) {
-      issues.push({ path, message: "must not contain an embedded password" });
-    }
-  } catch {
-    issues.push({ path, message: "must be an absolute URI" });
-  }
-}

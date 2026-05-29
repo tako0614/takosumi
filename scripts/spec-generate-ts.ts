@@ -90,6 +90,12 @@ interface OutputField {
   readonly required: boolean;
   readonly meaning?: string;
   readonly items?: JsonSchema;
+  /**
+   * Closed value set for `string` outputs. When present the generated type is
+   * the union of these literals instead of bare `string`, matching the
+   * runtime validator (mirrors the `enum` handling in {@link renderTsType}).
+   */
+  readonly enum?: readonly string[];
 }
 
 interface NestedType {
@@ -683,6 +689,9 @@ function renderOutputs(
 }
 
 function outputTypeToTs(out: OutputField, ctx: GeneratorContext): string {
+  if (out.enum && out.enum.length > 0) {
+    return out.enum.map((v) => JSON.stringify(v)).join(" | ");
+  }
   switch (out.type) {
     case "string":
       return "string";

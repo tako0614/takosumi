@@ -870,6 +870,33 @@ components:
   assertEquals(warnings.length, 0);
 });
 
+Deno.test("parseAppSpec does not warn on open-vocabulary listen.kind", () => {
+  // Regression: listen.kind is a discovered material KIND, not an inject
+  // SHAPE. It must not be compared against KNOWN_LISTEN_SHAPES (which would
+  // warn for essentially every legitimate kind such as `mcp-server@v1`).
+  const warnings: Array<{ message: string; path: string }> = [];
+  const logger: AppSpecParseLogger = {
+    warn(message: string, path: string) {
+      warnings.push({ message, path });
+    },
+  };
+  parseAppSpec(
+    `
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  agent:
+    kind: worker
+    listen:
+      tools:
+        kind: mcp-server@v1
+        inject: config-mount
+`,
+    { logger },
+  );
+  assertEquals(warnings.length, 0);
+});
+
 Deno.test("parseAppSpec rejects inject values that conflict with KNOWN_LISTEN_SHAPES typing", () => {
   for (const bad of ["bad shape", "with\ttab", "with\u0000nul"]) {
     const err = assertThrows(

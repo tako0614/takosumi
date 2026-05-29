@@ -1,21 +1,35 @@
 import type { ActorContext } from "./types.ts";
+import {
+  assertNoCanonicalDelimiter,
+  hmacSha256Hex,
+  readHeader,
+  TAKOSUMI_INTERNAL_ACTOR_HEADER,
+  TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
+  TAKOSUMI_INTERNAL_SIGNATURE_HEADER,
+  TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS,
+  TAKOSUMI_INTERNAL_TIMESTAMP_HEADER,
+  timestampWithinSkew,
+  timingSafeEqualHex,
+  toHex,
+} from "./internal-crypto.ts";
+
+export {
+  TAKOSUMI_INTERNAL_ACTOR_HEADER,
+  TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
+  TAKOSUMI_INTERNAL_SIGNATURE_HEADER,
+  TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS,
+  TAKOSUMI_INTERNAL_TIMESTAMP_HEADER,
+};
 
 const textEncoder = new TextEncoder();
 
 export const TAKOSUMI_INTERNAL_RPC_VERSION = "takosumi-internal";
 export const TAKOSUMI_INTERNAL_PROTOCOL_HEADER = "x-takosumi-internal-protocol";
-export const TAKOSUMI_INTERNAL_SIGNATURE_HEADER =
-  "x-takosumi-internal-signature";
-export const TAKOSUMI_INTERNAL_TIMESTAMP_HEADER =
-  "x-takosumi-internal-timestamp";
-export const TAKOSUMI_INTERNAL_REQUEST_ID_HEADER = "x-takosumi-request-id";
-export const TAKOSUMI_INTERNAL_ACTOR_HEADER = "x-takosumi-actor-context";
 export const TAKOSUMI_INTERNAL_BODY_DIGEST_HEADER = "x-takosumi-body-digest";
 export const TAKOSUMI_INTERNAL_NONCE_HEADER = "x-takosumi-nonce";
 export const TAKOSUMI_INTERNAL_CALLER_HEADER = "x-takosumi-caller";
 export const TAKOSUMI_INTERNAL_AUDIENCE_HEADER = "x-takosumi-audience";
 export const TAKOSUMI_INTERNAL_CAPABILITIES_HEADER = "x-takosumi-capabilities";
-export const TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS = 5 * 60 * 1000;
 export const TAKOSUMI_TRACEPARENT_HEADER = "traceparent";
 export const TAKOSUMI_REQUEST_ID_HEADER = "x-request-id";
 export const TAKOSUMI_CORRELATION_ID_HEADER = "x-correlation-id";
@@ -113,17 +127,23 @@ export interface TakosumiServiceDirectory {
 }
 
 /**
- * Resolves service endpoints from environment variables. The env-var key for a
- * given service id is `${envPrefix}_${SERVICE_ID}_INTERNAL_URL` where
+ * Resolves service endpoints from a supplied environment map. The env-var key
+ * for a given service id is `${envPrefix}_${SERVICE_ID}_INTERNAL_URL` where
  * `SERVICE_ID` is upper-cased and any `-` is replaced with `_`. Operators may
  * pass a custom `envPrefix` (default `TAKOSUMI`) to namespace their deployment.
+ *
+ * The `env` map is required and has no runtime default: this contract package
+ * is published to JSR for cross-runtime consumption, so it does not read
+ * `Deno.env` / `process.env` itself. The caller (operator distribution /
+ * runtime adapter) is responsible for snapshotting the environment for its
+ * runtime and passing it in.
  */
 export class EnvTakosumiServiceDirectory implements TakosumiServiceDirectory {
   readonly #env: Record<string, string | undefined>;
   readonly #envPrefix: string;
 
   constructor(
-    env: Record<string, string | undefined> = Deno.env.toObject(),
+    env: Record<string, string | undefined>,
     envPrefix: string = "TAKOSUMI",
   ) {
     this.#env = env;
@@ -457,19 +477,21 @@ function randomHex(byteLength: number): string {
 export function canonicalTakosumiInternalRequest(
   input: TakosumiInternalRpcCanonicalInput,
 ): string {
-  return [
-    TAKOSUMI_INTERNAL_RPC_VERSION,
-    input.method.toUpperCase(),
-    pathWithQuery(input.path, input.query),
-    input.timestamp,
-    input.requestId,
-    input.nonce,
-    input.caller,
-    input.audience,
-    normalizeCapabilities(input.capabilities).join(","),
-    input.bodyDigest,
-    input.actorContextHeader,
-  ].join("\n");
+  const fields = {
+    version: TAKOSUMI_INTERNAL_RPC_VERSION,
+    method: input.method.toUpperCase(),
+    pathWithQuery: pathWithQuery(input.path, input.query),
+    timestamp: input.timestamp,
+    requestId: input.requestId,
+    nonce: input.nonce,
+    caller: input.caller,
+    audience: input.audience,
+    capabilities: normalizeCapabilities(input.capabilities).join(","),
+    bodyDigest: input.bodyDigest,
+    actorContextHeader: input.actorContextHeader,
+  };
+  assertNoCanonicalDelimiter(fields);
+  return Object.values(fields).join("\n");
 }
 
 export function encodeActorContext(actor: TakosumiActorContext): string {
@@ -671,38 +693,6 @@ function pathWithQuery(path: string, query?: string): string {
   return `${path}${normalized.replace(/^\?/, "&")}`;
 }
 
-function timestampWithinSkew(
-  timestamp: string,
-  input: {
-    readonly now?: () => Date;
-    readonly maxClockSkewMs?: number;
-  },
-): boolean {
-  const parsed = Date.parse(timestamp);
-  if (!Number.isFinite(parsed)) return false;
-  const maxClockSkewMs = input.maxClockSkewMs ??
-    TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS;
-  if (!Number.isFinite(maxClockSkewMs)) return true;
-  const now = (input.now?.() ?? new Date()).getTime();
-  return Math.abs(now - parsed) <= maxClockSkewMs;
-}
-
-async function hmacSha256Hex(secret: string, message: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    textEncoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    textEncoder.encode(message),
-  );
-  return toHex(signature);
-}
-
 async function sha256Hex(value: string | Uint8Array): Promise<string> {
   const bytes = typeof value === "string" ? textEncoder.encode(value) : value;
   return toHex(
@@ -715,27 +705,4 @@ function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     bytes.byteOffset,
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
-}
-
-function readHeader(
-  headers: Headers | Record<string, string>,
-  name: string,
-): string | null {
-  if (headers instanceof Headers) return headers.get(name);
-  return headers[name] ?? headers[name.toLowerCase()] ?? null;
-}
-
-function toHex(buffer: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buffer))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function timingSafeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
 }

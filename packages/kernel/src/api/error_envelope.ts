@@ -19,8 +19,6 @@ export interface ApiErrorEnvelopeOptions {
   readonly details?: unknown;
 }
 
-export type ApiAudience = "public" | "internal";
-
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | {
   readonly [key: string]: JsonValue;
@@ -38,26 +36,17 @@ const SENSITIVE_DETAIL_KEY =
 
 const REDACTED = "[redacted]";
 
-export function createPublicApiErrorResponse(
-  error: unknown,
-  options: ApiErrorEnvelopeOptions = {},
-): ApiErrorResponse {
-  return createApiErrorResponse(error, "public", options);
-}
-
-export function createInternalApiErrorResponse(
-  error: unknown,
-  options: ApiErrorEnvelopeOptions = {},
-): ApiErrorResponse {
-  return createApiErrorResponse(error, "internal", options);
-}
-
+// There is a single error envelope: this module surfaces the same code /
+// message / redacted-details shape to every caller. It does NOT differentiate
+// a public vs internal audience (that would require generalizing messages and
+// dropping free-form details for untrusted callers, which is not implemented
+// here). The fail-closed public Installer API boundary lives in
+// `installer_public_routes.ts`.
 export function createApiErrorResponse(
   error: unknown,
-  audience: ApiAudience,
   options: ApiErrorEnvelopeOptions = {},
 ): ApiErrorResponse {
-  const normalized = normalizeApiError(error, audience, options);
+  const normalized = normalizeApiError(error, options);
   return {
     status: normalized.status,
     body: {
@@ -75,10 +64,9 @@ export function createApiErrorResponse(
 
 export function createApiErrorEnvelope(
   error: unknown,
-  audience: ApiAudience,
   options: ApiErrorEnvelopeOptions = {},
 ): ApiErrorEnvelope {
-  return createApiErrorResponse(error, audience, options).body;
+  return createApiErrorResponse(error, options).body;
 }
 
 export function apiHttpStatusForError(error: unknown): number {
@@ -140,7 +128,6 @@ export function redactApiErrorDetails(details: unknown): JsonValue {
 
 function normalizeApiError(
   error: unknown,
-  _audience: ApiAudience,
   options: ApiErrorEnvelopeOptions,
 ): {
   readonly status: number;

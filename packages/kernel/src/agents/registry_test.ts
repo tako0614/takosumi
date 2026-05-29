@@ -1002,6 +1002,87 @@ Deno.test(
 );
 
 Deno.test(
+  "register host-key revoke/requeue is serialized against concurrent leaseWork",
+  async () => {
+    // register()'s host-key-rotation branch requeues every leased work item
+    // the prior agent held (read-then-write over #work) and then awaits the
+    // ledger before re-enrolling. It must run under the same `#serialize` gate
+    // as leaseWork so the two critical sections never overlap; otherwise a
+    // concurrent leaseWork could observe a half-revoked state and double-claim
+    // or strand work.
+    let inFlight = 0;
+    let maxOverlap = 0;
+    class SlowLedger extends InMemoryWorkLedger {
+      override async apply(
+        mutation: Parameters<InMemoryWorkLedger["apply"]>[0],
+      ) {
+        inFlight += 1;
+        maxOverlap = Math.max(maxOverlap, inFlight);
+        try {
+          await Promise.resolve();
+          await Promise.resolve();
+          await super.apply(mutation);
+        } finally {
+          inFlight -= 1;
+        }
+      }
+    }
+    const ledger = new SlowLedger();
+    let leaseSeq = 0;
+    const registry = new InMemoryRuntimeAgentRegistry({
+      clock: fixedClock("2026-04-30T00:00:00.000Z"),
+      idGenerator: () => `lease_${++leaseSeq}`,
+      defaultLeaseTtlMs: 600_000,
+      ledger,
+    });
+    await registry.register({
+      agentId: "agent_a",
+      provider: "aws",
+      hostKeyDigest: "digest-1",
+    });
+    await registry.enqueueWork({
+      workId: "work_1",
+      kind: "provider.aws.rds.create",
+      provider: "aws",
+      payload: {},
+    });
+
+    // Fire a host-key-rotation register (which revokes + requeues) concurrently
+    // with a leaseWork. The mutex must keep their ledger persists from
+    // overlapping.
+    const [rotated, lease] = await Promise.all([
+      registry.register({
+        agentId: "agent_a",
+        provider: "aws",
+        hostKeyDigest: "digest-2",
+        allowHostKeyRotation: true,
+      }),
+      registry.leaseWork({ agentId: "agent_a" }),
+    ]);
+
+    assert.equal(maxOverlap, 1);
+    assert.equal(rotated.status, "ready");
+    assert.equal(rotated.hostKeyDigest, "digest-2");
+
+    // Whichever order the serialized sections ran, the registry must end in a
+    // consistent state: the work item is never stranded in `leased` by a
+    // revoked/expired agent, and in-memory state agrees with the ledger.
+    const work = await registry.getWork("work_1");
+    assert.ok(work);
+    const snapshot = await ledger.snapshot();
+    const ledgerWork = snapshot.works.find((w) => w.id === "work_1");
+    assert.equal(ledgerWork?.status, work.status);
+    assert.equal(ledgerWork?.leaseId, work.leaseId);
+    assert.equal(ledgerWork?.leasedByAgentId, work.leasedByAgentId);
+    if (work.status === "leased") {
+      assert.ok(lease);
+      assert.equal(lease.workId, "work_1");
+      assert.equal(work.leaseId, lease.id);
+    }
+  },
+);
+
+Deno.test(
   "detectStaleAgents partial persist failure does not corrupt registry state (G9)",
   async () => {
     // Ledger that commits the first stale-agent persist, then rejects the

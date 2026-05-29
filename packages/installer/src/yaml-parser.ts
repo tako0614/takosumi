@@ -623,18 +623,12 @@ function validateListen(
       );
     }
     validateInjectShape(opts.inject, `${entryPath}.inject`, logger);
-    if (kind !== undefined && !KNOWN_LISTEN_SHAPES.has(kind)) {
-      // `kind` is the discovered material kind; it is an open vocabulary
-      // (operators publish their own kinds), so this is documentary
-      // only — surfaced via the parser logger so operators can audit
-      // unfamiliar entries without rejecting the manifest.
-      logger.warn(
-        `listen.kind ${
-          JSON.stringify(kind)
-        } is not a Takosumi known shape; treating as open-vocabulary kind`,
-        `${entryPath}.kind`,
-      );
-    }
+    // `listen.kind` is the discovered material KIND (e.g. `mcp-server@v1`),
+    // not an `inject` material SHAPE. It is intentionally open vocabulary —
+    // operators publish their own kinds — and there is no known-kinds set to
+    // compare against here, so we do not warn. (Previously this was compared
+    // against KNOWN_LISTEN_SHAPES, an unrelated inject-shape set, which fired
+    // a misleading warning for essentially every legitimate kind.)
     if (opts.prefix !== undefined && typeof opts.prefix !== "string") {
       throw new AppSpecParseError(
         `${entryPath}.prefix must be a string when present`,

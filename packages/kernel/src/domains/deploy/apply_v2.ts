@@ -1,3 +1,31 @@
+// apply_v2 — shape-model (`resources[]`) apply with provider compensate /
+// destroy rollback, fingerprint idempotency, replace-on-mismatch, and the
+// durable operation journal (WAL).
+//
+// CANONICAL PRODUCTION PATH — READ BEFORE EXTENDING. `applyV2` is NOT the
+// production apply surface today. There are three apply paths in the kernel:
+//   1. InstallerPipeline (domains/installer/mod.ts) — the public Installer API
+//      surface. Pointer-only rollback; partial apply on failure has no
+//      provider compensation. This is what `POST /v1/installations[...]`
+//      drives.
+//   2. createDeploymentApplyFacade (app_context.ts) — the default
+//      DeploymentService apply facade. Routes through the
+//      graph-projection / GroupHead-pointer path (apply_phase /
+//      apply_orchestrator), NOT through `applyV2`.
+//   3. `applyV2` (this module), reached only via `ApplyService.applyManifest`
+//      for a `resources[]` manifest.
+//
+// Consequently the richer guarantees implemented here — provider
+// compensate/destroy rollback, fingerprint idempotency skip,
+// replace-on-mismatch leak prevention, and the WAL prepare/commit journal —
+// are NOT yet exercised by any production caller (idempotency additionally
+// needs a `priorApplied` snapshot that nothing persists, and the WAL needs an
+// `operationJournalStore` that bootstrap resolves but does not thread through;
+// see bootstrap.ts and docs/reference/known-gaps.md). This module is kept
+// (not deleted) because it is the intended convergence target and is fully
+// unit-tested at the `applyV2` layer. Do not assume code here runs in
+// production until the facade is converged onto it.
+//
 // Round-2 fix: swapped `createHash` from `node:crypto` for the Web Crypto
 // backed `sha256HexOfStringAsync` so this module can compile on Cloudflare
 // Workers. `computeSpecFingerprint` is now async; callers were already
@@ -117,10 +145,20 @@ export interface PriorAppliedSnapshot {
 }
 
 /**
- * A resource operation in the public plan surface. `applyV2` dry-runs emit
- * `"create"` for now (the apply pipeline does not yet do diffs vs. observed
- * state); the public route also uses this type for destroy WAL previews, where
- * operations are emitted as `"delete"` in reverse DAG order.
+ * A resource operation in the public plan surface.
+ *
+ * HONEST LIMITATION: `applyV2` dry-runs emit `"create"` for EVERY resource in
+ * DAG order. The plan does NOT compute a diff against observed/prior state, so
+ * it does not (and must not be read as if it does) distinguish create vs.
+ * update vs. no-op on a re-apply — a dry-run of an unchanged Installation
+ * still reports every resource as a `"create"`. There is intentionally no
+ * `"update"` / `"no-op"` member here: classifying those requires an
+ * observed-state probe that the apply pipeline does not yet have, and adding
+ * the members without wiring the probe would let the WAL apply-context filter
+ * (which keys on `op === "create"`) silently drop resources. The public route
+ * also uses this type for destroy WAL previews, where operations are emitted
+ * as `"delete"` in reverse DAG order. See docs/reference/plan-output.md and
+ * docs/reference/known-gaps.md for the create-only plan limitation.
  */
 export interface PlannedResource {
   readonly name: string;
@@ -272,6 +310,10 @@ export async function applyV2(
   for (const r of resolution.resolved) resourceByName.set(r.resource.name, r);
 
   if (dryRun) {
+    // Create-only plan: every resource is reported as `"create"`. This is NOT
+    // a diff against observed/prior state — see the `PlannedResource` docstring
+    // and docs/reference/plan-output.md. A re-apply dry-run still lists every
+    // resource as a create even if it is unchanged.
     const planned: PlannedResource[] = [];
     for (const name of dag.order) {
       const item = resourceByName.get(name);
@@ -440,6 +482,19 @@ export async function applyV2(
   // WAL commit stage. Only appended once every provider.apply succeeded, and
   // only after asserting the matching `prepare` record already exists so a
   // commit can never be journaled ahead of its prepare.
+  //
+  // GRANULARITY CAVEAT (honest): `commit` is written ONCE for the whole apply
+  // loop, after all provider.apply calls succeed — not per-operation, and the
+  // finer `pre-commit` / `post-commit` / `observe` / `finalize` stages
+  // advertised by `OperationPlanPreview.walStages` and docs/reference/
+  // wal-stages.md are not written by this path. So a crash AFTER some
+  // provider.apply calls but BEFORE this bulk commit append leaves the WAL
+  // showing only `prepare` for resources that were in fact materialized;
+  // replay cannot distinguish "applied" from "not applied" at per-resource
+  // granularity. Writing commit (and pre/post-commit) per operation around
+  // each provider.apply is tracked in docs/reference/known-gaps.md; it is not
+  // done here because this whole journal path is not yet on a production
+  // caller (see the module header and bootstrap.ts).
   if (operationJournalStore && operationPlanPreview) {
     await assertPrepareJournaled(operationJournalStore, operationPlanPreview);
     await appendOperationPlanJournalStages({

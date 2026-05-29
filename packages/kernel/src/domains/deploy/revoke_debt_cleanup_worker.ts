@@ -85,23 +85,23 @@ export class RevokeDebtCleanupWorker {
       now,
       limit: input.limit,
     });
-    const records = await this.#revokeDebtStore.listByOwnerSpace(
-      input.ownerSpaceId,
-    );
+    // Only fetch debts that are actually due for a retry. Not-due debts are
+    // never scanned or counted against the per-tick limit, so a due debt can
+    // never be starved behind a backlog of leading not-due ones.
+    const due = await this.#revokeDebtStore.listDueOpenDebts({
+      ownerSpaceId: input.ownerSpaceId,
+      now,
+      ...(input.limit !== undefined ? { limit: input.limit } : {}),
+    });
     const attempts: RevokeDebtCleanupAttempt[] = [];
-    for (const debt of records) {
+    for (const debt of due) {
       if (input.limit !== undefined && attempts.length >= input.limit) break;
-      if (debt.status !== "open") continue;
-      if (!isRetryDue(debt, now)) {
-        attempts.push({ debtId: debt.id, status: "skipped" });
-        continue;
-      }
       attempts.push(await this.#processDebt(debt, now));
     }
 
     return {
       ownerSpaceId: input.ownerSpaceId,
-      scanned: records.length,
+      scanned: due.length,
       aged: aged.length,
       attempted: attempts.filter((attempt) => attempt.status !== "skipped")
         .length,
@@ -274,11 +274,6 @@ export class RevokeDebtCleanupWorker {
       ? this.#context(ownerSpaceId)
       : this.#context;
   }
-}
-
-function isRetryDue(record: RevokeDebtRecord, now: string): boolean {
-  if (!record.nextRetryAt) return false;
-  return Date.parse(record.nextRetryAt) <= Date.parse(now);
 }
 
 function withRevokeDebtOperationContext(

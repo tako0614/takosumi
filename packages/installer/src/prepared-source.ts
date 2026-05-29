@@ -6,6 +6,8 @@
  * digest before reading `.takosumi.yml` and invoking materializers.
  */
 
+import { assertHostNotBlocked, BlockedHostError } from "./host-blocklist.ts";
+
 export interface PreparedSourceFetchOptions {
   readonly url: string;
   readonly digest: string;
@@ -40,13 +42,38 @@ const ARCHIVE_TOO_LARGE = "archive_too_large";
 const DEFAULT_PREPARED_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;
 
 function preparedArchiveMaxBytes(): number {
-  const raw = Deno.env.get("TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES");
+  return readPositiveByteEnv(
+    "TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES",
+    DEFAULT_PREPARED_ARCHIVE_MAX_BYTES,
+  );
+}
+
+/**
+ * Default cap on the DECOMPRESSED size of a prepared-source archive. The wire
+ * cap above only bounds the compressed download; without this a small gzip
+ * could inflate to many GiB during extraction (gzip bomb), exhausting the
+ * operator's disk / inodes. Operators may override via
+ * `TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES`. Defaults to 10x the wire cap so
+ * legitimate well-compressed sources are not rejected.
+ */
+const DEFAULT_PREPARED_DECOMPRESSED_MAX_BYTES = 10 *
+  DEFAULT_PREPARED_ARCHIVE_MAX_BYTES;
+
+function preparedDecompressedMaxBytes(): number {
+  return readPositiveByteEnv(
+    "TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES",
+    DEFAULT_PREPARED_DECOMPRESSED_MAX_BYTES,
+  );
+}
+
+function readPositiveByteEnv(name: string, fallback: number): number {
+  const raw = Deno.env.get(name);
   if (raw === undefined || raw.length === 0) {
-    return DEFAULT_PREPARED_ARCHIVE_MAX_BYTES;
+    return fallback;
   }
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_PREPARED_ARCHIVE_MAX_BYTES;
+    return fallback;
   }
   return parsed;
 }
@@ -62,6 +89,11 @@ export async function fetchPreparedSource(
       `${UNSUPPORTED_SOURCE_URL}: prepared source url must use https:// (got ${options.url})`,
     );
   }
+  // SSRF guard, symmetric with git-fetch: reject loopback / private /
+  // link-local / cloud-metadata IP literals before reaching out. The digest
+  // pin does NOT mitigate SSRF — the request itself reaches the internal
+  // host, and the caller supplies the matching digest in the same request.
+  assertPreparedHostNotBlocked(options.url);
   if (!isSha256Digest(options.digest)) {
     throw new Error("prepared source digest must use sha256:<hex>");
   }
@@ -78,7 +110,13 @@ export async function fetchPreparedSource(
     (await Deno.makeTempDir({ prefix: "takosumi-prepared-source-" }));
   const ownsDestination = options.destination === undefined;
   try {
-    const compressed = isGzipBytes(bytes) || isGzipUrlSuffix(options.url);
+    // The gzip magic bytes are authoritative; the URL suffix is consulted
+    // only when the body is too short to carry the 2-byte magic (e.g. an
+    // empty/zero-byte head) so a misleading `.tgz` URL cannot override a body
+    // that the byte check positively identified as not gzip.
+    const compressed = bytes.length >= 2
+      ? isGzipBytes(bytes)
+      : isGzipUrlSuffix(options.url);
     await assertSafeTarEntries(bytes, compressed);
     // Extraction safety:
     // - `--no-same-owner` ignores tar uid/gid so a malicious archive cannot
@@ -115,7 +153,21 @@ export async function fetchPreparedSource(
 }
 
 async function readPreparedArchive(url: string): Promise<Uint8Array> {
-  const response = await fetch(url);
+  // `redirect: "manual"` closes the SSRF-via-redirect bypass: a host that
+  // passes the blocklist could otherwise 3xx-redirect to an internal target
+  // that the initial-URL check never sees. We reject any redirect outright
+  // rather than re-validating each hop.
+  const response = await fetch(url, { redirect: "manual" });
+  if (response.type === "opaqueredirect" || isRedirectStatus(response.status)) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // ignore
+    }
+    throw new Error(
+      `${UNSUPPORTED_SOURCE_URL}: prepared source url must not redirect (got ${response.status} from ${url})`,
+    );
+  }
   if (!response.ok) {
     throw new Error(
       `failed to fetch prepared source ${url}: ${response.status} ${response.statusText}`,
@@ -123,8 +175,9 @@ async function readPreparedArchive(url: string): Promise<Uint8Array> {
   }
   const cap = preparedArchiveMaxBytes();
   // Trust `Content-Length` to short-circuit oversized downloads before we
-  // buffer the body. A missing or non-numeric header just falls through to
-  // the post-read length check below.
+  // buffer the body. A missing, lying, or chunked (header-absent) response
+  // still cannot exceed the cap because the streaming read below aborts once
+  // the running byte count crosses it.
   const contentLengthHeader = response.headers.get("content-length");
   if (contentLengthHeader !== null) {
     const declared = Number.parseInt(contentLengthHeader, 10);
@@ -139,13 +192,75 @@ async function readPreparedArchive(url: string): Promise<Uint8Array> {
       );
     }
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > cap) {
+  return await readBodyWithCap(response, cap, "prepared source archive");
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 ||
+    status === 307 || status === 308;
+}
+
+/**
+ * Read a response body into memory, aborting as soon as the accumulated byte
+ * count exceeds `cap`. This bounds memory even when the server omits / lies
+ * about `Content-Length` or uses chunked transfer-encoding, which a plain
+ * `arrayBuffer()` would buffer in full before any size check.
+ */
+async function readBodyWithCap(
+  response: Response,
+  cap: number,
+  label: string,
+): Promise<Uint8Array> {
+  const body = response.body;
+  if (body === null) {
+    return new Uint8Array(0);
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === undefined) continue;
+      total += value.byteLength;
+      if (total > cap) {
+        await reader.cancel().catch(() => {});
+        throw new Error(
+          `${ARCHIVE_TOO_LARGE}: ${label} exceeds ${cap} bytes`,
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+function assertPreparedHostNotBlocked(url: string): void {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
     throw new Error(
-      `${ARCHIVE_TOO_LARGE}: prepared source archive is ${bytes.byteLength} bytes, cap is ${cap}`,
+      `${UNSUPPORTED_SOURCE_URL}: prepared source url is not a valid URL: ${url}`,
     );
   }
-  return bytes;
+  try {
+    assertHostNotBlocked(host, "prepared source host");
+  } catch (err) {
+    if (err instanceof BlockedHostError) {
+      throw new Error(`${UNSUPPORTED_SOURCE_URL}: ${err.message}`);
+    }
+    throw err;
+  }
 }
 
 function isAllowedHttpsUrl(value: string): boolean {
@@ -171,8 +286,9 @@ function isGzipBytes(bytes: Uint8Array): boolean {
 }
 
 /**
- * Fallback URL-suffix sniff used only if the byte check is inconclusive
- * (e.g. zero-byte head). Kept for parity with documentation conventions.
+ * Fallback URL-suffix sniff. The caller only consults this when the body is
+ * too short to read the gzip magic ({@link isGzipBytes} inconclusive), so the
+ * authoritative byte check always wins when bytes are present.
  */
 function isGzipUrlSuffix(url: string): boolean {
   const lower = url.toLowerCase();
@@ -194,38 +310,73 @@ async function assertSafeTarEntries(
     bytes,
   );
   const seen = new Set<string>();
+  let decompressedTotal = 0;
+  const decompressedCap = preparedDecompressedMaxBytes();
   for (const line of verbose.split(/\r?\n/)) {
     if (line.length === 0) continue;
-    const entryPath = extractTarEntryPath(line);
-    if (entryPath === null) continue;
+    const parsed = parseTarVerboseLine(line);
+    if (parsed === null) continue;
+    // Reject gzip bombs: the wire cap only bounds the compressed download, so
+    // sum the per-entry sizes the `-tv` listing already reports and stop if
+    // the inflated total would exceed the decompressed cap before extraction.
+    decompressedTotal += parsed.size;
+    if (decompressedTotal > decompressedCap) {
+      throw new Error(
+        `${ARCHIVE_TOO_LARGE}: prepared source archive decompresses to more than ${decompressedCap} bytes`,
+      );
+    }
     const normalized = normalizeTarEntryPath(
-      entryPath,
+      parsed.path,
       "prepared source tar entry",
     );
     if (seen.has(normalized)) {
       throw new Error(
-        `prepared source tar entry duplicates normalized path: ${entryPath}`,
+        `prepared source tar entry duplicates normalized path: ${parsed.path}`,
       );
     }
     seen.add(normalized);
-    assertSafeTarLinkTarget(line, "prepared source tar entry");
+    assertSafeTarLinkTarget(parsed, "prepared source tar entry");
   }
 }
 
+interface TarVerboseEntry {
+  /** First mode char: `-` file, `d` dir, `l` symlink, `h` hardlink. */
+  readonly type: string;
+  /** Declared entry size in bytes (0 for non-regular entries). */
+  readonly size: number;
+  /** The entry path with any ` -> ` / ` link to ` link suffix stripped. */
+  readonly path: string;
+  /**
+   * The link target (everything AFTER the first link separator), or null when
+   * the entry is not a symlink / hardlink or carries no separator.
+   */
+  readonly linkTarget: string | null;
+}
+
 /**
- * Extract the entry path from a `tar -tv` line. We strip the file mode,
- * owner, size, and date columns and only treat ` -> ` / ` link to ` as a
- * separator when the entry type is a symlink (`l`) or hardlink (`h`). For
- * regular files (`-`) and directories (`d`), the filename is used verbatim
- * so a regular file literally named `evil -> target` cannot smuggle a
- * separator that breaks duplicate / traversal detection.
+ * Parse one `tar -tv` line into its type, declared size, path, and link
+ * target. This is the single column-aware parse shared by the duplicate /
+ * traversal check and the link-target safety check, so both agree on where
+ * the path ends and the link target begins.
+ *
+ * tar -tv columns: `mode owner size date time path[ -> target]`. We strip the
+ * 5 leading metadata columns, then for symlink (`l`) / hardlink (`h`) entries
+ * cut at the FIRST ` -> ` / ` link to ` separator: the path is everything
+ * before it, the link target everything after (including any further ` -> `
+ * inside the target). For regular files / directories the entire remainder is
+ * the path verbatim, so a file literally named `evil -> target` cannot smuggle
+ * a separator that breaks duplicate / traversal detection.
  */
-function extractTarEntryPath(line: string): string | null {
-  // tar -tv uses whitespace-separated columns: mode owner size date time path
-  // We split on runs of whitespace up to 5 times to keep paths with spaces intact.
+function parseTarVerboseLine(line: string): TarVerboseEntry | null {
   const columns = line.split(/\s+/);
   if (columns.length < 6) return null;
-  // Reconstruct the remainder after the 5 metadata columns.
+  // tar reports size in column index 2 (mode owner size ...). For device
+  // nodes it is "major,minor"; Number.parseInt yields the major number, which
+  // is fine for a coarse decompressed-size guard.
+  const rawSize = Number.parseInt(columns[2], 10);
+  const size = Number.isFinite(rawSize) && rawSize > 0 ? rawSize : 0;
+  // Walk past the 5 metadata columns to find the path remainder while keeping
+  // paths that contain spaces intact.
   let cursor = 0;
   let column = 0;
   while (column < 5 && cursor < line.length) {
@@ -240,13 +391,25 @@ function extractTarEntryPath(line: string): string | null {
   if (type !== "l" && type !== "h") {
     // Regular file / directory: the entire remainder is the path. A
     // filename that contains ` -> ` as literal text is left intact.
-    return remainder;
+    return { type, size, path: remainder, linkTarget: null };
   }
   const arrowIndex = remainder.indexOf(" -> ");
   const linkToIndex = remainder.indexOf(" link to ");
-  const cutPoints = [arrowIndex, linkToIndex].filter((idx) => idx >= 0);
-  if (cutPoints.length === 0) return remainder;
-  return remainder.slice(0, Math.min(...cutPoints));
+  const candidates: Array<{ idx: number; sepLen: number }> = [];
+  if (arrowIndex >= 0) candidates.push({ idx: arrowIndex, sepLen: 4 });
+  if (linkToIndex >= 0) candidates.push({ idx: linkToIndex, sepLen: 9 });
+  if (candidates.length === 0) {
+    return { type, size, path: remainder, linkTarget: null };
+  }
+  // Cut at the FIRST separator so the path matches the regular-file extractor
+  // and the link target is the real remainder, not a filename fragment.
+  const first = candidates.reduce((a, b) => (b.idx < a.idx ? b : a));
+  return {
+    type,
+    size,
+    path: remainder.slice(0, first.idx),
+    linkTarget: remainder.slice(first.idx + first.sepLen),
+  };
 }
 
 function normalizeTarEntryPath(entry: string, label: string): string {
@@ -272,13 +435,12 @@ function normalizeTarEntryPath(entry: string, label: string): string {
   return segments.join("/");
 }
 
-function assertSafeTarLinkTarget(line: string, label: string): void {
-  const type = line[0];
-  if (type !== "l" && type !== "h") return;
-  const target = type === "l"
-    ? line.split(" -> ")[1]
-    : line.split(" link to ")[1];
-  if (!target) return;
+function assertSafeTarLinkTarget(entry: TarVerboseEntry, label: string): void {
+  const target = entry.linkTarget;
+  // Use the link target the shared parser already cut at the FIRST separator,
+  // so a symlink whose own filename contains ` -> ` cannot make us validate a
+  // filename fragment instead of the real (escaping) target.
+  if (target === null || target.length === 0) return;
   if (target.startsWith("/") || target.includes("\0")) {
     throw new Error(`${label} link target is unsafe: ${target}`);
   }

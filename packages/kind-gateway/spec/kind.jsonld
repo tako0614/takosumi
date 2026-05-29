@@ -114,6 +114,7 @@
       "name": "scheme",
       "type": "string",
       "required": true,
+      "enum": ["http", "https"],
       "meaning": "Resolved public scheme (`http` or `https`)."
     },
     {

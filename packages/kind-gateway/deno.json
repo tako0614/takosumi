@@ -6,7 +6,8 @@
     ".": "./mod.ts"
   },
   "imports": {
-    "takosumi-contract/reference/shape": "jsr:@takos/takosumi-contract@^2.6.0/reference/shape"
+    "takosumi-contract/reference/shape": "jsr:@takos/takosumi-contract@^2.6.0/reference/shape",
+    "takosumi-contract/reference/shape-validators": "jsr:@takos/takosumi-contract@^2.6.0/reference/shape-validators"
   },
   "tasks": {
     "check": "deno check mod.ts src/**/*.ts"

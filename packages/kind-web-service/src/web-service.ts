@@ -14,7 +14,7 @@ import {
   requirePort,
   requirePositiveInteger,
   requireRoot,
-} from "./_validators.ts";
+} from "takosumi-contract/reference/shape-validators";
 import {
   WEB_SERVICE_CAPABILITY_TERMS,
   WEB_SERVICE_DESCRIPTION,

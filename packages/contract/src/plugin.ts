@@ -110,7 +110,10 @@ export interface KernelPlugin {
   ): Promise<OutputMaterial>;
 
   /**
-   * @deprecated Use `materializeOutput`.
+   * @deprecated Renamed to `materializeOutput`. The installer reads
+   * `materializeOutput ?? publishMaterial`, so this alias only exists to accept
+   * pre-rename plugins. Remove once no plugin in `takosumi-plugins` defines
+   * `publishMaterial` (track via `grep -rl 'publishMaterial' takosumi-plugins`).
    */
   publishMaterial?(
     ctx: OutputMaterialContext,
@@ -128,7 +131,9 @@ export interface KernelPlugin {
   applyBinding?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 
   /**
-   * @deprecated Use `applyBinding`.
+   * @deprecated Renamed to `applyBinding`. The installer reads
+   * `applyBinding ?? applyListen`. Remove once no plugin in `takosumi-plugins`
+   * and no kernel binding handler defines `applyListen`.
    */
   applyListen?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 
@@ -173,14 +178,16 @@ export interface InlineMaterializer {
     ctx: OutputMaterialContext,
   ): Promise<OutputMaterial>;
   /**
-   * @deprecated Use `materializeOutput`.
+   * @deprecated Renamed to `materializeOutput`; kept for pre-rename inline
+   * materializers. Remove together with `KernelPlugin.publishMaterial`.
    */
   publishMaterial?(
     ctx: OutputMaterialContext,
   ): Promise<OutputMaterial>;
   applyBinding?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
   /**
-   * @deprecated Use `applyBinding`.
+   * @deprecated Renamed to `applyBinding`; kept for pre-rename inline
+   * materializers. Remove together with `KernelPlugin.applyListen`.
    */
   applyListen?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 }
@@ -200,7 +207,10 @@ export type OutputMaterial = Readonly<
   Record<string, JsonValue | { readonly secretRef: string }>
 >;
 
-/** @deprecated Use OutputMaterial. */
+/**
+ * @deprecated Renamed to {@link OutputMaterial}. Remove once no consumer in
+ * `takosumi-plugins` imports `PublicationMaterial`.
+ */
 export type PublicationMaterial = OutputMaterial;
 
 /**
@@ -248,7 +258,10 @@ export interface ResolvedInputBinding {
   readonly material: OutputMaterial;
 }
 
-/** @deprecated Use ResolvedInputBinding. */
+/**
+ * @deprecated Renamed to {@link ResolvedInputBinding}. Remove once no consumer
+ * in `takosumi-plugins` imports `ResolvedListenBinding`.
+ */
 export type ResolvedListenBinding = ResolvedInputBinding;
 
 export interface KernelPluginApplyContext {
@@ -275,7 +288,10 @@ export interface KernelPluginApplyContext {
     Record<BindingName, OutputMaterial>
   >;
   /**
-   * @deprecated Use `inputMaterials`.
+   * @deprecated Renamed to `inputMaterials`. The installer still populates this
+   * field with the same map, so it is required for now. Make it optional and
+   * then remove once no kernel binding code or `takosumi-plugins` package reads
+   * `ctx.listenedMaterials`.
    */
   readonly listenedMaterials: Readonly<
     Record<BindingName, OutputMaterial>
@@ -315,9 +331,6 @@ export interface OutputMaterialContext {
   readonly outputs: Readonly<Record<string, JsonValue>>;
 }
 
-/** @deprecated Use OutputMaterialContext. */
-export type PublishMaterialContext = OutputMaterialContext;
-
 export interface ApplyInputBindingContext {
   readonly installationId: string;
   /** Name of the consuming component. */
@@ -333,7 +346,10 @@ export interface ApplyInputBindingContext {
   readonly material: OutputMaterial;
 }
 
-/** @deprecated Use ApplyInputBindingContext. */
+/**
+ * @deprecated Renamed to {@link ApplyInputBindingContext}. Remove once no
+ * consumer imports `ApplyListenContext`.
+ */
 export type ApplyListenContext = ApplyInputBindingContext;
 
 export interface KernelPluginDestroyContext {
@@ -409,10 +425,6 @@ export type NativeKindOutputMaterialContext<Outputs = JsonObject> =
     readonly outputs: Outputs;
   };
 
-/** @deprecated Use NativeKindOutputMaterialContext. */
-export type NativeKindPublishMaterialContext<Outputs = JsonObject> =
-  NativeKindOutputMaterialContext<Outputs>;
-
 /**
  * Operations for a native kind package that wants the reference plugin shape
  * without using the retired shape/provider compatibility API.
@@ -444,7 +456,13 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
   materializeOutput?(
     ctx: NativeKindOutputMaterialContext<Outputs>,
   ): Promise<OutputMaterial> | OutputMaterial;
-  /** @deprecated Use `materializeOutput`. */
+  /**
+   * @deprecated Renamed to `materializeOutput`;
+   * `kernelPluginFromNativeKindOperations` reads
+   * `materializeOutput ?? publishMaterial`. Remove once the cloudflare D1 /
+   * KV / queue / vectorize providers in `takosumi-plugins` define
+   * `materializeOutput` instead of `publishMaterial`.
+   */
   publishMaterial?(
     ctx: NativeKindOutputMaterialContext<Outputs>,
   ): Promise<OutputMaterial> | OutputMaterial;
@@ -506,7 +524,6 @@ export function kernelPluginFromNativeKindOperations<Spec, Outputs>(
       };
     },
     materializeOutput,
-    publishMaterial: materializeOutput,
     async destroy(ctx) {
       await operations.destroy?.(ctx.resourceHandle, ctx);
     },
@@ -566,14 +583,6 @@ export function outputsToOutputMaterial(
     );
   }
   return material;
-}
-
-/** @deprecated Use outputsToOutputMaterial. */
-export function outputsToPublicationMaterial(
-  outputs: Readonly<Record<string, JsonValue>>,
-  contract?: string,
-): OutputMaterial {
-  return outputsToOutputMaterial(outputs, contract);
 }
 
 function rawOutputsToOutputMaterial(

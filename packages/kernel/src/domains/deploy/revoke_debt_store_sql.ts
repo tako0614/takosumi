@@ -13,6 +13,7 @@ import {
   recordRevokeDebtRetryAttempt,
   reopenRevokeDebt,
   type RevokeDebtAgeOpenInput,
+  type RevokeDebtDueOpenInput,
   type RevokeDebtEnqueueInput,
   type RevokeDebtReason,
   type RevokeDebtRecord,
@@ -112,6 +113,27 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     return result.rows.map((row) => row.owner_space_id).sort();
   }
 
+  async listDueOpenDebts(
+    input: RevokeDebtDueOpenInput,
+  ): Promise<readonly RevokeDebtRecord[]> {
+    // Push the due-filter into SQL so not-due rows are never scanned past the
+    // index (the `(owner_space_id, status, next_retry_at)` index covers this
+    // predicate). `limit` bounds the per-tick scan. Ordering matches
+    // `compareRevokeDebtRecords` (created_at asc, id asc).
+    const params: SqlParameters = input.limit !== undefined
+      ? [input.ownerSpaceId, input.now, input.limit]
+      : [input.ownerSpaceId, input.now];
+    const result = await this.#query<RevokeDebtRow>(
+      SELECT_COLUMNS +
+        " from takosumi_revoke_debts where owner_space_id = $1 and status = 'open' " +
+        "and next_retry_at is not null and next_retry_at <= $2::timestamptz " +
+        "order by created_at asc, id asc" +
+        (input.limit !== undefined ? " limit $3" : ""),
+      params,
+    );
+    return result.rows.map(rowToRecord).sort(compareRevokeDebtRecords);
+  }
+
   async recordRetryAttempt(
     input: RevokeDebtRetryAttemptInput,
   ): Promise<RevokeDebtRecord | undefined> {
@@ -119,7 +141,7 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     if (!existing) return undefined;
     const next = recordRevokeDebtRetryAttempt(existing, input);
     if (next === existing) return existing;
-    return await this.#updateMutable(next);
+    return (await this.#updateMutable(next, expectedGuard(existing))).record;
   }
 
   async ageOpenDebts(
@@ -137,7 +159,10 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
       const record = rowToRecord(row);
       const next = ageRevokeDebtIfDue(record, input.now);
       if (!next) continue;
-      aged.push(await this.#updateMutable(next));
+      const outcome = await this.#updateMutable(next, expectedGuard(record));
+      // Only report rows this pod actually aged. On a lost CAS race another
+      // pod already transitioned the row, so it must not be counted here.
+      if (outcome.won && outcome.record) aged.push(outcome.record);
     }
     return aged.sort(compareRevokeDebtRecords);
   }
@@ -149,7 +174,7 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     if (!existing) return undefined;
     const next = markRevokeDebtOperatorActionRequired(existing, input.now);
     if (next === existing) return existing;
-    return await this.#updateMutable(next);
+    return (await this.#updateMutable(next, expectedGuard(existing))).record;
   }
 
   async reopen(
@@ -159,7 +184,7 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     if (!existing) return undefined;
     const next = reopenRevokeDebt(existing, input.now);
     if (next === existing) return existing;
-    return await this.#updateMutable(next);
+    return (await this.#updateMutable(next, expectedGuard(existing))).record;
   }
 
   async clear(
@@ -169,7 +194,7 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     if (!existing) return undefined;
     const next = clearRevokeDebt(existing, input.now);
     if (next === existing) return existing;
-    return await this.#updateMutable(next);
+    return (await this.#updateMutable(next, expectedGuard(existing))).record;
   }
 
   async #getBySourceKey(
@@ -196,13 +221,33 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     return row ? rowToRecord(row) : undefined;
   }
 
+  /**
+   * Apply a state transition with an optimistic-concurrency (compare-and-set)
+   * guard. `expected` carries the pre-read `(status, retryAttempts)` captured
+   * from the row this transition was computed against; the UPDATE only matches
+   * the row when those columns are still unchanged. This fences cross-pod
+   * cleanup so a stale read cannot clobber another pod's retry/clear/aging
+   * transition (re-opening a cleared debt and double-revoking).
+   *
+   * On a lost race (0 rows updated) we do NOT throw — we re-read the row and
+   * return its now-current value (or `undefined` if it truly vanished) with
+   * `won: false`. The public methods already return
+   * `RevokeDebtRecord | undefined` and the cleanup worker tolerates an
+   * undefined/current row, so a lost race degrades to a no-op on this pod
+   * instead of a worker-tick failure. `won` lets callers (e.g. `ageOpenDebts`)
+   * count only transitions this pod actually performed.
+   */
   async #updateMutable(
     record: RevokeDebtRecord,
-  ): Promise<RevokeDebtRecord> {
+    expected: {
+      readonly status: RevokeDebtStatus;
+      readonly retryAttempts: number;
+    },
+  ): Promise<UpdateOutcome> {
     const result = await this.#query<RevokeDebtRow>(
       "update takosumi_revoke_debts set " +
         "status = $3, retry_attempts = $4, last_retry_at = $5::timestamptz, next_retry_at = $6::timestamptz, last_retry_error_json = $7::jsonb, status_updated_at = $8::timestamptz, aged_at = $9::timestamptz, cleared_at = $10::timestamptz " +
-        "where owner_space_id = $1 and id = $2 " +
+        "where owner_space_id = $1 and id = $2 and status = $11 and retry_attempts = $12 " +
         RETURNING_COLUMNS,
       [
         record.ownerSpaceId,
@@ -215,15 +260,17 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
         record.statusUpdatedAt,
         record.agedAt ?? null,
         record.clearedAt ?? null,
+        expected.status,
+        expected.retryAttempts,
       ],
     );
     const row = result.rows[0];
-    if (!row) {
-      throw new Error(
-        `revoke debt row disappeared during update: ${record.id}`,
-      );
-    }
-    return rowToRecord(row);
+    if (row) return { won: true, record: rowToRecord(row) };
+    // Lost the CAS race (or the row was concurrently deleted): re-read and
+    // return the current row so callers observe the winning transition rather
+    // than overwriting it.
+    const current = await this.#getById(record.ownerSpaceId, record.id);
+    return { won: false, ...(current ? { record: current } : {}) };
   }
 
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(
@@ -232,6 +279,29 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
   ): Promise<SqlQueryResult<Row>> {
     return this.#client.query<Row>(sql, parameters);
   }
+}
+
+/**
+ * Result of a compare-and-set `#updateMutable`. `won` is true when this pod's
+ * UPDATE matched the guard (it performed the transition); false when another
+ * pod transitioned the row first. `record` is the post-transition row on a
+ * win, or the re-read current row on a lost race (undefined if it vanished).
+ */
+interface UpdateOutcome {
+  readonly won: boolean;
+  readonly record?: RevokeDebtRecord;
+}
+
+/**
+ * Capture the optimistic-concurrency guard columns from a pre-read row. The
+ * `(status, retryAttempts)` pair changes on every meaningful transition, so a
+ * UPDATE guarded on these only matches when the row is unchanged since it was
+ * read.
+ */
+function expectedGuard(
+  record: RevokeDebtRecord,
+): { readonly status: RevokeDebtStatus; readonly retryAttempts: number } {
+  return { status: record.status, retryAttempts: record.retryAttempts };
 }
 
 const SELECT_COLUMNS =

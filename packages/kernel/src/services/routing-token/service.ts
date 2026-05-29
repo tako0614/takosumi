@@ -1,4 +1,5 @@
 import { conflict, invalidArgument, notFound } from "../../shared/errors.ts";
+import { constantTimeEqualsBytes } from "../../shared/constant_time.ts";
 
 /**
  * Phase 18.2 (H8) — Takos signed routing token service.
@@ -130,6 +131,17 @@ export class RoutingTokenService {
     }
     this.#maxClockSkewMs = options.maxClockSkewMs ??
       DEFAULT_ROUTING_TOKEN_CLOCK_SKEW_MS;
+    // Validate the skew the same way as `rotationPeriodMs` so a non-finite
+    // value (e.g. `Infinity` / `NaN`) is rejected as a misconfiguration rather
+    // than silently disabling the `exp` check below and verifying expired
+    // tokens forever. `exp` is a fail-closed security boundary here.
+    if (
+      !Number.isFinite(this.#maxClockSkewMs) || this.#maxClockSkewMs < 0
+    ) {
+      throw invalidArgument(
+        "maxClockSkewMs must be a non-negative finite number",
+      );
+    }
     this.#issuer = options.issuer ?? "takosumi-routing";
     this.#current = {
       secret: options.secret,
@@ -218,12 +230,12 @@ export class RoutingTokenService {
     const { payload, fromPrevious } = decoded;
     const nowMs = this.#clock().getTime();
     const expMs = payload.exp * 1000;
-    if (Number.isFinite(this.#maxClockSkewMs)) {
-      if (nowMs > expMs + this.#maxClockSkewMs) {
-        throw conflict("routing token expired", {
-          expiresAt: new Date(expMs).toISOString(),
-        });
-      }
+    // `#maxClockSkewMs` is validated finite & non-negative in the constructor,
+    // so the expiry check always runs (never fail-open).
+    if (nowMs > expMs + this.#maxClockSkewMs) {
+      throw conflict("routing token expired", {
+        expiresAt: new Date(expMs).toISOString(),
+      });
     }
     const expected = input.expectedScope;
     if (expected) {
@@ -360,7 +372,9 @@ async function tryVerifyToken(
   } catch {
     return null;
   }
-  if (!timingSafeEqual(new Uint8Array(expected), presented)) return null;
+  if (!constantTimeEqualsBytes(new Uint8Array(expected), presented)) {
+    return null;
+  }
   let payload: TokenPayload;
   try {
     payload = JSON.parse(textDecoder.decode(base64UrlDecode(bodySegment)));
@@ -415,13 +429,4 @@ function base64UrlDecode(value: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
-}
-
-function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    diff |= a[i] ^ b[i];
-  }
-  return diff === 0;
 }

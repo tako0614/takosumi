@@ -40,6 +40,15 @@ import {
   InstallerPipeline,
   type PlatformServiceResolver,
 } from "./domains/installer/mod.ts";
+import type {
+  DeploymentStore as InstallerDeploymentStore,
+  InstallationStore as InstallerInstallationStore,
+} from "./domains/installer/store.ts";
+import {
+  SqlDeploymentStore as SqlInstallerDeploymentStore,
+  SqlInstallationStore as SqlInstallerInstallationStore,
+} from "./domains/installer/store_sql.ts";
+import { log } from "./shared/log.ts";
 import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 
 function resolveTakosumiDeploymentRecordStore(input: {
@@ -91,6 +100,96 @@ function resolveRevokeDebtStore(input: {
   return new InMemoryRevokeDebtStore();
 }
 
+interface ResolvedInstallerStores {
+  readonly installations?: InstallerInstallationStore;
+  readonly deployments?: InstallerDeploymentStore;
+  /**
+   * True when both the Installation and Deployment ledger are durable
+   * (operator-injected or SQL-backed). The durability gate reads this to
+   * decide whether a production/staging Installer API surface is safe to
+   * boot; when false the pipeline falls back to the in-memory stores in
+   * `domains/installer/store.ts` (see `InstallerPipeline` constructor).
+   */
+  readonly durable: boolean;
+}
+
+/**
+ * Resolve durable Installation + Deployment stores for the public Installer
+ * API. An explicit override always wins; otherwise a configured `sqlClient`
+ * backs both ledgers with the SQL stores. When neither is present the result
+ * carries `undefined` stores and `durable: false`, leaving the pipeline to
+ * construct its in-memory fallback (fine for dev / test, gated for
+ * production/staging by {@link assertDurableInstallerStoreOrWarn}).
+ */
+function resolveInstallerStores(input: {
+  readonly installerInstallationStore?: InstallerInstallationStore;
+  readonly installerDeploymentStore?: InstallerDeploymentStore;
+  readonly sqlClient?: SqlClient;
+}): ResolvedInstallerStores {
+  const installations = input.installerInstallationStore ??
+    (input.sqlClient
+      ? new SqlInstallerInstallationStore({ client: input.sqlClient })
+      : undefined);
+  const deployments = input.installerDeploymentStore ??
+    (input.sqlClient
+      ? new SqlInstallerDeploymentStore({ client: input.sqlClient })
+      : undefined);
+  return {
+    ...(installations ? { installations } : {}),
+    ...(deployments ? { deployments } : {}),
+    durable: installations !== undefined && deployments !== undefined,
+  };
+}
+
+/**
+ * Durability gate for the public Installer API ledger. The Installer API is
+ * the canonical install entry point and Installation / Deployment are the two
+ * core durable public concepts (AGENTS.md), so an in-memory ledger on a
+ * production/staging deployment silently loses every Installation /
+ * Deployment on restart or isolate recycle.
+ *
+ * Mirrors the existing fail-closed conventions
+ * (`assertNoStrictRuntimeAdapterFallbacks`, the synthetic-provider hard-fail):
+ * when the installer routes are exposed (`installerToken` present) AND the
+ * environment is production/staging AND no durable store is injected, this
+ * throws so the process refuses to boot a data-losing Installer API. It is
+ * gated on `installerToken` so hosts that never expose the Installer API are
+ * unaffected. `allowUnsafeProductionDefaults` provides a documented escape
+ * hatch for operators who deliberately run an ephemeral ledger.
+ */
+function assertDurableInstallerStoreOrWarn(input: {
+  readonly environment?: string;
+  readonly installerTokenPresent: boolean;
+  readonly durable: boolean;
+  readonly allowUnsafeProductionDefaults?: boolean;
+}): void {
+  if (input.durable) return;
+  const strict = input.environment === "production" ||
+    input.environment === "staging";
+  if (!input.installerTokenPresent) {
+    // Routes are not exposed; an in-memory ledger cannot lose anything the
+    // operator is serving. Stay quiet.
+    return;
+  }
+  if (strict && !input.allowUnsafeProductionDefaults) {
+    throw new Error(
+      `${input.environment} runtime exposes the Installer API but no durable ` +
+        `Installation/Deployment store is configured; the canonical install ` +
+        `ledger would be lost on restart or isolate recycle. Inject ` +
+        `installerInstallationStore + installerDeploymentStore (or a sqlClient) ` +
+        `— or set allowUnsafeProductionDefaults to deliberately run ephemeral.`,
+    );
+  }
+  // Non-strict, or strict-but-allowlisted: warn loudly so an operator who is
+  // unknowingly running an ephemeral ledger notices.
+  log.warn("kernel.installer.in_memory_ledger", {
+    environment: input.environment ?? "unknown",
+    hint: "Installation/Deployment records will NOT persist across restart " +
+      "or isolate recycle. Inject installerInstallationStore + " +
+      "installerDeploymentStore (or a sqlClient) for production/staging.",
+  });
+}
+
 export { registerDefaultArtifactKinds };
 
 /**
@@ -131,6 +230,14 @@ export interface CreatePaaSAppOptions extends AppContextOptions {
   readonly takosumiOperationJournalStore?: OperationJournalStore;
   readonly takosumiRevokeDebtStore?: RevokeDebtStore;
   /**
+   * Pre-built durable stores for the public Installer API ledger. When
+   * omitted, a configured `sqlClient` backs both with SQL stores; when
+   * neither is present the installer pipeline falls back to its in-memory
+   * stores (gated for production/staging when the Installer API is exposed).
+   */
+  readonly installerInstallationStore?: InstallerInstallationStore;
+  readonly installerDeploymentStore?: InstallerDeploymentStore;
+  /**
    * Operator-owned resolver for Space-visible platform service paths. The
    * kernel treats these paths as ordinary `listen.path` sources and does not
    * attach identity, billing, or account semantics to the path string.
@@ -153,11 +260,21 @@ export async function createPaaSApp(
     await loadRuntimeConfigFromEnv({ env: runtimeEnv });
   const role = options.role ?? processRoleFromRuntimeConfig(runtimeConfig);
   registerDefaultArtifactKinds();
+  // Billing is an operator-distribution / account-plane concern, not a kernel
+  // core one. The operator-config layer (here) resolves any env-driven billing
+  // wiring from product-neutral `TAKOSUMI_BILLING_*` keys and injects it via
+  // `options.billing`; kernel core (`createBillingPort` in app_context.ts) only
+  // reads `options.billing` and no longer hard-reads a product-namespaced key.
+  const billing = resolveBillingOptions({
+    configured: options.billing,
+    env: runtimeEnv,
+  });
   const context = options.context ?? await createAppContext({
     ...options,
     runtimeEnv,
     runtimeConfig,
     plugins: options.plugins ?? [],
+    ...(billing ? { billing } : {}),
   });
   const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
   const installerToken = runtimeEnv.TAKOSUMI_INSTALLER_TOKEN;
@@ -186,22 +303,28 @@ export async function createPaaSApp(
     ...(deployLockHeartbeatMs !== undefined ? { deployLockHeartbeatMs } : {}),
   });
   // Durable operation journal (WAL). The store is resolved here (SQL when a
-  // SqlClient is configured, in-memory otherwise) and is consumed by the
-  // shape-model apply path: `ApplyService` forwards it to `applyV2`, which
-  // writes `prepare`/`commit` stage records around the provider apply loop
-  // whenever an `operationPlanPreview` is present.
+  // SqlClient is configured, in-memory otherwise). When consumed, the
+  // shape-model apply path uses it: `ApplyService` forwards it to `applyV2`,
+  // which writes `prepare`/`commit` stage records around the provider apply
+  // loop whenever an `operationPlanPreview` is present.
   //
-  // PARTIAL WIRING: the default production apply facade
-  // (`createDeploymentApplyFacade` in app_context.ts) resolves + applies a
-  // Deployment record without dispatching through `applyV2`, so it does not
-  // yet build a non-dry-run `operationPlanPreview` and therefore does not
-  // exercise the journal. The store is kept live (not discarded) so any
-  // caller constructing `ApplyService({ operationJournalStore })` — and the
-  // future facade integration that builds an apply-phase preview — gets a
-  // durable WAL with no further plumbing. See apply_v2.ts
+  // HONEST STATUS — currently UNUSED in production. The default production
+  // apply facade (`createDeploymentApplyFacade` in app_context.ts) resolves +
+  // applies a Deployment via the graph-projection path and never dispatches
+  // through `applyV2`, and bootstrap does not construct an `ApplyService` with
+  // this store, so the resolved store is NOT wired into any production apply
+  // path. We still resolve it (a) to fail fast if the SQL store cannot be
+  // constructed for a SqlClient-backed deployment and (b) so the wiring point
+  // is obvious once the facade builds a non-dry-run `operationPlanPreview`.
+  // It is deliberately not threaded further: doing so requires routing the
+  // facade through `applyV2` (a larger apply-pipeline change). Tracked as a
+  // known gap in docs/reference/known-gaps.md ("Operation journal (WAL) not
+  // wired into the production apply facade"). See apply_v2.ts
   // (`ApplyV2Options.operationJournalStore`) for the stage semantics and the
   // commit-before-prepare guard.
   const operationJournalStore = resolveOperationJournalStore(options);
+  // Intentionally not consumed yet (see HONEST STATUS above). The `void`
+  // suppresses the unused-binding lint without implying the store is wired.
   void operationJournalStore;
   const revokeDebtStore = resolveRevokeDebtStore(options);
   const workerDaemonState = createWorkerDaemonState();
@@ -219,6 +342,26 @@ export async function createPaaSApp(
     configured: options.platformServices,
     url: platformServiceResolverUrl,
     token: platformServiceResolverToken,
+  });
+  // Durable Installation + Deployment ledger for the public Installer API.
+  // SQL-backed when a SqlClient is configured (and not explicitly overridden);
+  // the in-memory fallback is only safe for dev / test and is gated below for
+  // production/staging hosts that actually expose the Installer API.
+  const installerStores = resolveInstallerStores({
+    ...(options.installerInstallationStore
+      ? { installerInstallationStore: options.installerInstallationStore }
+      : {}),
+    ...(options.installerDeploymentStore
+      ? { installerDeploymentStore: options.installerDeploymentStore }
+      : {}),
+    ...(options.sqlClient ? { sqlClient: options.sqlClient } : {}),
+  });
+  assertDurableInstallerStoreOrWarn({
+    environment: runtimeConfig.environment,
+    installerTokenPresent: Boolean(installerToken),
+    durable: installerStores.durable,
+    allowUnsafeProductionDefaults:
+      runtimeConfig.allowUnsafeProductionDefaults ?? false,
   });
   const app = await createApiApp({
     role,
@@ -254,6 +397,12 @@ export async function createPaaSApp(
         ...(options.plugins ? { plugins: options.plugins } : {}),
         ...(options.kindAliases ? { kindAliases: options.kindAliases } : {}),
         ...(platformServices ? { platformServices } : {}),
+        ...(installerStores.installations
+          ? { installations: installerStores.installations }
+          : {}),
+        ...(installerStores.deployments
+          ? { deployments: installerStores.deployments }
+          : {}),
       }),
       ...(installerToken ? { getInstallerToken: () => installerToken } : {}),
     },
@@ -324,4 +473,26 @@ function resolvePlatformServices(input: {
     url: input.url,
     ...(input.token ? { token: input.token } : {}),
   });
+}
+
+/**
+ * Resolve billing port config for the operator-config layer. An explicit
+ * `options.billing` always wins; otherwise read the product-neutral
+ * `TAKOSUMI_BILLING_BASE_URL` / `TAKOSUMI_BILLING_SECRET` env pair. Billing is
+ * an operator-distribution concern, so the kernel deliberately does NOT read a
+ * product-namespaced key (the old `TAKOS_APP_BILLING_*` fallback that lived in
+ * kernel core has been removed — see `createBillingPort` in app_context.ts).
+ */
+function resolveBillingOptions(input: {
+  readonly configured?: { readonly baseUrl?: string; readonly secret?: string };
+  readonly env: Record<string, string | undefined>;
+}): { readonly baseUrl?: string; readonly secret?: string } | undefined {
+  const baseUrl = input.configured?.baseUrl ??
+    input.env.TAKOSUMI_BILLING_BASE_URL;
+  const secret = input.configured?.secret ?? input.env.TAKOSUMI_BILLING_SECRET;
+  if (baseUrl === undefined && secret === undefined) return undefined;
+  return {
+    ...(baseUrl !== undefined ? { baseUrl } : {}),
+    ...(secret !== undefined ? { secret } : {}),
+  };
 }

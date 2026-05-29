@@ -45,6 +45,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type {
   DeploymentApplyRequest,
   DeploymentDryRunRequest,
@@ -60,6 +61,7 @@ import {
   type InstallerPipelineErrorCode,
 } from "../domains/installer/mod.ts";
 import { log } from "../shared/log.ts";
+import { constantTimeEqualsString } from "../shared/constant_time.ts";
 
 export const INSTALLER_INSTALLATIONS_PATH = "/v1/installations" as const;
 export const INSTALLER_INSTALLATIONS_DRY_RUN_PATH =
@@ -187,22 +189,46 @@ export function mountInstallerPublicRoutes(
     return;
   }
 
-  app.post(INSTALLER_INSTALLATIONS_DRY_RUN_PATH, async (c) => {
-    const unauthorized = authorizeInstaller(c, dependencies);
-    if (unauthorized) return unauthorized;
-    const bodyLimit = enforceBodyLimit(c, INSTALLER_JSON_BODY_LIMIT_BYTES);
-    if (bodyLimit) return bodyLimit;
-    return await runHandler(c, async () => {
-      const body = await readJsonBody<InstallationDryRunRequest>(
-        c,
-        "installationDryRun",
-      );
-      const response = await pipeline.installationDryRun(body);
-      return c.json(response, 200);
-    });
+  // Streaming backstop for the body-size cap: `enforceBodyLimit` only sees the
+  // `Content-Length` header, so a chunked / headerless request would otherwise
+  // buffer unbounded before the JSON parse. Hono's `bodyLimit` reads the body
+  // stream chunk-by-chunk and rejects once the accumulated bytes exceed the cap,
+  // covering the headerless/chunked case. `onError` must return the closed
+  // installer error envelope (code `resource_exhausted`, requestId) so the
+  // documented closed-error-envelope contract is preserved.
+  const installerBodyLimit = bodyLimit({
+    maxSize: INSTALLER_JSON_BODY_LIMIT_BYTES,
+    onError: (c) =>
+      c.json(
+        errorEnvelope(
+          c,
+          "resource_exhausted",
+          `request body exceeds ${INSTALLER_JSON_BODY_LIMIT_BYTES} byte limit`,
+        ),
+        413,
+      ),
   });
 
-  app.post(INSTALLER_INSTALLATIONS_PATH, async (c) => {
+  app.post(
+    INSTALLER_INSTALLATIONS_DRY_RUN_PATH,
+    installerBodyLimit,
+    async (c) => {
+      const unauthorized = authorizeInstaller(c, dependencies);
+      if (unauthorized) return unauthorized;
+      const bodyLimit = enforceBodyLimit(c, INSTALLER_JSON_BODY_LIMIT_BYTES);
+      if (bodyLimit) return bodyLimit;
+      return await runHandler(c, async () => {
+        const body = await readJsonBody<InstallationDryRunRequest>(
+          c,
+          "installationDryRun",
+        );
+        const response = await pipeline.installationDryRun(body);
+        return c.json(response, 200);
+      });
+    },
+  );
+
+  app.post(INSTALLER_INSTALLATIONS_PATH, installerBodyLimit, async (c) => {
     const unauthorized = authorizeInstaller(c, dependencies);
     if (unauthorized) return unauthorized;
     const bodyLimit = enforceBodyLimit(c, INSTALLER_JSON_BODY_LIMIT_BYTES);
@@ -217,53 +243,65 @@ export function mountInstallerPublicRoutes(
     });
   });
 
-  app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH, async (c) => {
-    const unauthorized = authorizeInstaller(c, dependencies);
-    if (unauthorized) return unauthorized;
-    const idCheck = ensureValidInstallationId(c);
-    if (idCheck.kind === "invalid") return idCheck.response;
-    const bodyLimit = enforceBodyLimit(c, INSTALLER_JSON_BODY_LIMIT_BYTES);
-    if (bodyLimit) return bodyLimit;
-    return await runHandler(c, async () => {
-      const body = await readJsonBody<DeploymentDryRunRequest>(
-        c,
-        "deploymentDryRun",
-      );
-      const response = await pipeline.deploymentDryRun(idCheck.value, body);
-      return c.json(response, 200);
-    });
-  });
+  app.post(
+    INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
+    installerBodyLimit,
+    async (c) => {
+      const unauthorized = authorizeInstaller(c, dependencies);
+      if (unauthorized) return unauthorized;
+      const idCheck = ensureValidInstallationId(c);
+      if (idCheck.kind === "invalid") return idCheck.response;
+      const bodyLimit = enforceBodyLimit(c, INSTALLER_JSON_BODY_LIMIT_BYTES);
+      if (bodyLimit) return bodyLimit;
+      return await runHandler(c, async () => {
+        const body = await readJsonBody<DeploymentDryRunRequest>(
+          c,
+          "deploymentDryRun",
+        );
+        const response = await pipeline.deploymentDryRun(idCheck.value, body);
+        return c.json(response, 200);
+      });
+    },
+  );
 
-  app.post(INSTALLER_INSTALLATION_DEPLOYMENTS_PATH, async (c) => {
-    const unauthorized = authorizeInstaller(c, dependencies);
-    if (unauthorized) return unauthorized;
-    const idCheck = ensureValidInstallationId(c);
-    if (idCheck.kind === "invalid") return idCheck.response;
-    const bodyLimit = enforceBodyLimit(c, INSTALLER_JSON_BODY_LIMIT_BYTES);
-    if (bodyLimit) return bodyLimit;
-    return await runHandler(c, async () => {
-      const body = await readJsonBody<DeploymentApplyRequest>(
-        c,
-        "deploymentApply",
-      );
-      const response = await pipeline.deploymentApply(idCheck.value, body);
-      return c.json(response, 201);
-    });
-  });
+  app.post(
+    INSTALLER_INSTALLATION_DEPLOYMENTS_PATH,
+    installerBodyLimit,
+    async (c) => {
+      const unauthorized = authorizeInstaller(c, dependencies);
+      if (unauthorized) return unauthorized;
+      const idCheck = ensureValidInstallationId(c);
+      if (idCheck.kind === "invalid") return idCheck.response;
+      const bodyLimit = enforceBodyLimit(c, INSTALLER_JSON_BODY_LIMIT_BYTES);
+      if (bodyLimit) return bodyLimit;
+      return await runHandler(c, async () => {
+        const body = await readJsonBody<DeploymentApplyRequest>(
+          c,
+          "deploymentApply",
+        );
+        const response = await pipeline.deploymentApply(idCheck.value, body);
+        return c.json(response, 201);
+      });
+    },
+  );
 
-  app.post(INSTALLER_INSTALLATION_ROLLBACK_PATH, async (c) => {
-    const unauthorized = authorizeInstaller(c, dependencies);
-    if (unauthorized) return unauthorized;
-    const idCheck = ensureValidInstallationId(c);
-    if (idCheck.kind === "invalid") return idCheck.response;
-    const bodyLimit = enforceBodyLimit(c, INSTALLER_JSON_BODY_LIMIT_BYTES);
-    if (bodyLimit) return bodyLimit;
-    return await runHandler(c, async () => {
-      const body = await readJsonBody<RollbackRequest>(c, "rollback");
-      const response = await pipeline.rollback(idCheck.value, body);
-      return c.json(response, 200);
-    });
-  });
+  app.post(
+    INSTALLER_INSTALLATION_ROLLBACK_PATH,
+    installerBodyLimit,
+    async (c) => {
+      const unauthorized = authorizeInstaller(c, dependencies);
+      if (unauthorized) return unauthorized;
+      const idCheck = ensureValidInstallationId(c);
+      if (idCheck.kind === "invalid") return idCheck.response;
+      const bodyLimit = enforceBodyLimit(c, INSTALLER_JSON_BODY_LIMIT_BYTES);
+      if (bodyLimit) return bodyLimit;
+      return await runHandler(c, async () => {
+        const body = await readJsonBody<RollbackRequest>(c, "rollback");
+        const response = await pipeline.rollback(idCheck.value, body);
+        return c.json(response, 200);
+      });
+    },
+  );
 }
 
 function authorizeInstaller(
@@ -278,7 +316,7 @@ function authorizeInstaller(
     );
   }
   const header = c.req.header("authorization") ?? "";
-  if (!constantTimeEquals(header, `Bearer ${token}`)) {
+  if (!constantTimeEqualsString(header, `Bearer ${token}`)) {
     return c.json(
       errorEnvelope(c, "unauthenticated", "invalid installer bearer"),
       401,
@@ -475,21 +513,4 @@ function resolveRequestId(c: Context): string {
 function isValidRequestIdShape(value: string): boolean {
   if (value.length === 0 || value.length > 64) return false;
   return UUID_PATTERN.test(value) || ULID_PATTERN.test(value);
-}
-
-/**
- * Length-padded XOR comparison so attackers cannot recover the installer
- * bearer one byte at a time via response-timing variance. Both operands
- * are encoded as UTF-8 bytes so multi-byte characters in operator tokens
- * are compared end-to-end.
- */
-function constantTimeEquals(left: string, right: string): boolean {
-  const leftBytes = new TextEncoder().encode(left);
-  const rightBytes = new TextEncoder().encode(right);
-  const length = Math.max(leftBytes.length, rightBytes.length);
-  let diff = leftBytes.length ^ rightBytes.length;
-  for (let index = 0; index < length; index += 1) {
-    diff |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
-  }
-  return diff === 0;
 }

@@ -75,6 +75,12 @@ export interface RevokeDebtAgeOpenInput {
   readonly limit?: number;
 }
 
+export interface RevokeDebtDueOpenInput {
+  readonly ownerSpaceId: string;
+  readonly now: string;
+  readonly limit?: number;
+}
+
 export type RevokeDebtRetryAttemptResult =
   | "cleared"
   | "retryable-failure"
@@ -104,6 +110,18 @@ export interface RevokeDebtStore {
    * schedulers use this to avoid relying on a static Space list.
    */
   listOpenOwnerSpaces(): Promise<readonly string[]>;
+  /**
+   * Return open debts that are due for a retry at or before `now`
+   * (status = 'open' AND nextRetryAt present AND nextRetryAt <= now),
+   * ordered createdAt asc, id asc, capped by `limit` when provided.
+   *
+   * The cleanup worker iterates only these rows so that not-due debts are
+   * never scanned or counted against the per-tick limit — a due debt cannot
+   * be starved behind a backlog of not-due ones.
+   */
+  listDueOpenDebts(
+    input: RevokeDebtDueOpenInput,
+  ): Promise<readonly RevokeDebtRecord[]>;
   /**
    * Record one cleanup retry attempt. Retryable failures keep the debt open
    * until retryPolicy.maxAttempts is exhausted; cleared and blocked outcomes
@@ -216,6 +234,20 @@ export class InMemoryRevokeDebtStore implements RevokeDebtStore {
             .map((record) => record.ownerSpaceId),
         ),
       ).sort(),
+    );
+  }
+
+  listDueOpenDebts(
+    input: RevokeDebtDueOpenInput,
+  ): Promise<readonly RevokeDebtRecord[]> {
+    const due = [...this.#rows.values()]
+      .filter((row) =>
+        row.ownerSpaceId === input.ownerSpaceId &&
+        isRevokeDebtRetryDue(row, input.now)
+      )
+      .sort(compareRevokeDebtRecords);
+    return Promise.resolve(
+      input.limit !== undefined ? due.slice(0, input.limit) : due,
     );
   }
 
@@ -438,6 +470,22 @@ export function compareRevokeDebtRecords(
 ): number {
   return left.createdAt.localeCompare(right.createdAt) ||
     left.id.localeCompare(right.id);
+}
+
+/**
+ * A debt is "due" for a cleanup retry when it is still open, carries a
+ * `nextRetryAt`, and that instant is at or before `now`. Shared by the
+ * in-memory store, the SQL store (post-fetch filter mirroring the SQL
+ * predicate), and the cleanup worker so due-ordering semantics cannot
+ * diverge across implementations.
+ */
+export function isRevokeDebtRetryDue(
+  record: RevokeDebtRecord,
+  now: string,
+): boolean {
+  if (record.status !== "open") return false;
+  if (!record.nextRetryAt) return false;
+  return Date.parse(record.nextRetryAt) <= Date.parse(now);
 }
 
 async function digest(value: unknown): Promise<`sha256:${string}`> {

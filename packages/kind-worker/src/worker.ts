@@ -10,7 +10,7 @@ import {
   requireHttpUrl,
   requireNonEmptyString,
   requireRoot,
-} from "./_validators.ts";
+} from "takosumi-contract/reference/shape-validators";
 import {
   WORKER_CAPABILITY_TERMS,
   WORKER_DESCRIPTION,

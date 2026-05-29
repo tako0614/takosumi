@@ -1,35 +1,61 @@
 /**
  * In-memory persistence for Installation + Deployment records.
  *
- * Wave 5 implementation — keeps things in process memory. A SQL-backed
- * variant is a follow-up wave concern.
+ * A durable, injectable SQL-backed variant now exists in `./store_sql.ts`
+ * (`SqlInstallationStore` / `SqlDeploymentStore`). Bootstrap resolves it
+ * automatically when a `sqlClient` is configured and falls back to these
+ * in-memory stores only for dev / test. See `resolveInstallerStores` and the
+ * fail-closed `assertDurableInstallerStoreOrWarn` durability gate in
+ * `bootstrap.ts`, which refuses to boot a production/staging host that exposes
+ * the Installer API on this in-memory ledger.
  *
- * The in-memory stores intentionally do not persist across process
- * restarts. When this module detects that the host process is running in
- * a production-shaped environment (`DENO_DEPLOYMENT_ID`, `PRODUCTION`,
- * `NODE_ENV=production`, etc.), the first construction of either store
- * emits a warning so operators do not silently lose Installations on
- * restart.
+ * The in-memory stores intentionally do not persist across process restarts
+ * or isolate recycles. Because the Installation / Deployment ledger is the
+ * core durable state of the Installer API, every construction of either
+ * store emits a warning unless the host is provably a non-durable-safe
+ * *development* shape:
+ *
+ *   - When process env is readable (Deno / Node) and does NOT look like a
+ *     production deployment (`DENO_DEPLOYMENT_ID` / `PRODUCTION` /
+ *     `NODE_ENV=production`), we stay quiet — local dev / test.
+ *   - When env says production, OR env is unreadable (Cloudflare Workers /
+ *     unknown runtime, where durability also cannot be confirmed and an
+ *     isolate recycle silently drops the ledger), we warn.
+ *
+ * The previous implementation only warned when env *positively* matched a
+ * production marker, so the warning was structurally dead on Workers (a
+ * documented production target) where env is unreadable. The warning is no
+ * longer a once-per-process latch either: each store construction warns so
+ * repeated/late construction is not silently swallowed.
+ *
+ * This per-construction warning is a backstop; the authoritative fail-closed
+ * gate lives at bootstrap (`assertDurableInstallerStoreOrWarn`), which throws
+ * when a production/staging host exposes the Installer API with no durable
+ * store injected. A durable store is injected by the operator distribution
+ * (or auto-resolved from a configured `sqlClient`); the kernel cannot force a
+ * 503 from inside the store layer itself.
  */
 import type { Deployment, Installation } from "takosumi-contract/installer-api";
 
-let warnedProductionInMemoryStore = false;
-
 /**
- * Detect process env markers that look like a production deployment of
- * either Deno (Deno Deploy injects `DENO_DEPLOYMENT_ID`) or Node-style
- * services (`PRODUCTION`, `NODE_ENV=production`). The lookup goes through
- * the runtime adapter equivalent on both Deno and Node without
- * hard-importing either, so the function compiles on Workers as well.
+ * Decide whether an in-memory store construction should warn about
+ * non-persistence. Returns `true` unless the host is a readable,
+ * clearly-non-production env (local dev / test).
  */
-function isProductionShapedEnv(): boolean {
+function shouldWarnInMemoryStore(): boolean {
   const env = readEnvMap();
+  if (env === undefined) {
+    // Workers / unknown runtime — durability cannot be confirmed and an
+    // isolate recycle silently drops the ledger, so warn.
+    return true;
+  }
   if (env.get("DENO_DEPLOYMENT_ID")) return true;
   if (env.get("PRODUCTION")) return true;
   const nodeEnv = env.get("NODE_ENV");
   if (typeof nodeEnv === "string" && nodeEnv.toLowerCase() === "production") {
     return true;
   }
+  // Readable env that does not look like production — local dev / test.
   return false;
 }
 
@@ -41,7 +67,13 @@ interface DenoLike {
   readonly env?: { get(name: string): string | undefined };
 }
 
-function readEnvMap(): { get(name: string): string | undefined } {
+/**
+ * Return a reader over process env on Deno / Node, or `undefined` when no
+ * env surface is available (Workers / unknown runtime). The distinction
+ * matters: an unreadable env is treated as "cannot confirm durability"
+ * rather than "definitely not production".
+ */
+function readEnvMap(): { get(name: string): string | undefined } | undefined {
   // Deno path: `Deno.env.get` is read-only metadata.
   const deno = (globalThis as { Deno?: DenoLike }).Deno;
   if (deno?.env && typeof deno.env.get === "function") {
@@ -53,15 +85,15 @@ function readEnvMap(): { get(name: string): string | undefined } {
     return { get: (name: string) => proc.env?.[name] };
   }
   // Workers / unknown runtime — no env access.
-  return { get: () => undefined };
+  return undefined;
 }
 
-function maybeWarnProductionInMemoryStore(storeName: string): void {
-  if (warnedProductionInMemoryStore) return;
-  if (!isProductionShapedEnv()) return;
-  warnedProductionInMemoryStore = true;
+function maybeWarnInMemoryStore(storeName: string): void {
+  if (!shouldWarnInMemoryStore()) return;
   console.warn(
-    `[takosumi-kernel] WARNING: ${storeName} used in production-shaped env; data will not persist`,
+    `[takosumi-kernel] WARNING: ${storeName} is in-memory; Installation/Deployment ` +
+      `records will NOT persist across restart or isolate recycle. Inject a ` +
+      `durable store for production/staging.`,
   );
 }
 
@@ -72,13 +104,68 @@ export interface RollbackEvent {
   readonly createdAt: number;
 }
 
+/**
+ * Optional optimistic-concurrency guard for {@link InstallationStore.patch}.
+ *
+ * When supplied, the patch only matches the row when its
+ * `current_deployment_id` still equals `currentDeploymentId` (the value the
+ * caller pre-read and validated via `checkExpectedCurrentDeploymentId`). On a
+ * durable SQL store this turns the dry-run → apply `expected.currentDeploymentId`
+ * TOCTOU guard into an atomic compare-and-set so two replicas racing the same
+ * Installation pointer cannot lose each other's write. When omitted, the patch
+ * behaves exactly as before (unconditional update of an existing row).
+ */
+export interface InstallationPatchGuard {
+  readonly currentDeploymentId: string | null;
+}
+
+/**
+ * Thrown by a guarded {@link InstallationStore.patch} when the row still exists
+ * but its `current_deployment_id` no longer matches the supplied guard — i.e.
+ * a concurrent deploy advanced the pointer between the caller's pre-read and
+ * this write. Distinct from a `patch` returning `undefined`, which means the
+ * row vanished. The installer domain maps this to a closed-envelope
+ * `failed_precondition` (HTTP 409), matching the fail-fast intent of the
+ * in-app guard.
+ */
+export class InstallationPatchGuardConflict extends Error {
+  readonly expectedCurrentDeploymentId: string | null;
+  readonly actualCurrentDeploymentId: string | null;
+  constructor(input: {
+    readonly id: string;
+    readonly expectedCurrentDeploymentId: string | null;
+    readonly actualCurrentDeploymentId: string | null;
+  }) {
+    super(
+      `installation ${input.id} currentDeploymentId guard lost the race: ` +
+        `expected ${input.expectedCurrentDeploymentId ?? "<none>"} but row ` +
+        `is now ${input.actualCurrentDeploymentId ?? "<none>"}`,
+    );
+    this.name = "InstallationPatchGuardConflict";
+    this.expectedCurrentDeploymentId = input.expectedCurrentDeploymentId;
+    this.actualCurrentDeploymentId = input.actualCurrentDeploymentId;
+  }
+}
+
 export interface InstallationStore {
   put(installation: Installation): Promise<Installation>;
   get(id: string): Promise<Installation | undefined>;
   list(spaceId?: string): Promise<readonly Installation[]>;
+  /**
+   * Update an existing Installation's mutable columns. Returns the updated row,
+   * or `undefined` when the row does not exist (mirrors the in-memory contract).
+   *
+   * When `guard` is supplied the update is fenced: it only applies if the row's
+   * `current_deployment_id` still equals `guard.currentDeploymentId`. A row that
+   * exists but no longer matches the guard throws
+   * {@link InstallationPatchGuardConflict}; a row that vanished returns
+   * `undefined`. Stores with no durable backend (in-memory) implement the same
+   * observable behavior in-process.
+   */
   patch(
     id: string,
     patch: Partial<Pick<Installation, "currentDeploymentId" | "status">>,
+    guard?: InstallationPatchGuard,
   ): Promise<Installation | undefined>;
 }
 
@@ -96,7 +183,7 @@ export class InMemoryInstallationStore implements InstallationStore {
   readonly #rows = new Map<string, Installation>();
 
   constructor() {
-    maybeWarnProductionInMemoryStore("InMemoryInstallationStore");
+    maybeWarnInMemoryStore("InMemoryInstallationStore");
   }
 
   put(installation: Installation): Promise<Installation> {
@@ -117,9 +204,24 @@ export class InMemoryInstallationStore implements InstallationStore {
   patch(
     id: string,
     patch: Partial<Pick<Installation, "currentDeploymentId" | "status">>,
+    guard?: InstallationPatchGuard,
   ): Promise<Installation | undefined> {
     const existing = this.#rows.get(id);
     if (!existing) return Promise.resolve(undefined);
+    // Mirror the SQL store's compare-and-set semantics in-process so the
+    // guard's observable contract is identical across stores.
+    if (
+      guard !== undefined &&
+      existing.currentDeploymentId !== guard.currentDeploymentId
+    ) {
+      return Promise.reject(
+        new InstallationPatchGuardConflict({
+          id,
+          expectedCurrentDeploymentId: guard.currentDeploymentId,
+          actualCurrentDeploymentId: existing.currentDeploymentId,
+        }),
+      );
+    }
     const updated: Installation = { ...existing, ...patch };
     this.#rows.set(id, updated);
     return Promise.resolve(updated);
@@ -131,7 +233,7 @@ export class InMemoryDeploymentStore implements DeploymentStore {
   readonly #rollbackEvents: RollbackEvent[] = [];
 
   constructor() {
-    maybeWarnProductionInMemoryStore("InMemoryDeploymentStore");
+    maybeWarnInMemoryStore("InMemoryDeploymentStore");
   }
 
   put(deployment: Deployment): Promise<Deployment> {

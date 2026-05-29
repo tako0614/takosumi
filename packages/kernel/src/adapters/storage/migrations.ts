@@ -676,6 +676,48 @@ export const postgresStorageTableDefinitions:
         ["created_at"],
       ],
     },
+    {
+      name: "takosumi_installer_installations",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "app_id",
+        "current_deployment_id",
+        "status",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["space_id"], ["created_at"]],
+    },
+    {
+      name: "takosumi_installer_deployments",
+      domain: "deploy",
+      columns: [
+        "id",
+        "installation_id",
+        "source_json",
+        "manifest_digest",
+        "status",
+        "outputs_json",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["installation_id"], ["created_at"]],
+    },
+    {
+      name: "takosumi_installer_rollback_events",
+      domain: "deploy",
+      columns: [
+        "id",
+        "installation_id",
+        "rolled_back_from",
+        "rolled_back_to",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["installation_id"], ["created_at"]],
+    },
   ]);
 
 export const postgresStorageMigrationStatements:
@@ -1473,5 +1515,60 @@ create index if not exists takosumi_deploy_idempotency_locks_locked_until_idx
       down:
         `drop index if exists takosumi_deploy_idempotency_locks_locked_until_idx;
 drop table if exists takosumi_deploy_idempotency_locks;`,
+    },
+    {
+      id: "deploy.installer_ledger.create",
+      version: 27,
+      domain: "deploy",
+      description:
+        "Persist the public Installer API Installation + Deployment ledger so the canonical install entry survives kernel restarts / isolate recycles.",
+      sql: `create table if not exists takosumi_installer_installations (
+  id                    text   primary key,
+  space_id              text   not null,
+  app_id                text   not null,
+  current_deployment_id text,
+  status                text   not null
+    check (status in ('installing','ready','failed','suspended')),
+  created_at            bigint not null
+);
+create index if not exists takosumi_installer_installations_space_idx
+  on takosumi_installer_installations (space_id);
+create index if not exists takosumi_installer_installations_created_at_idx
+  on takosumi_installer_installations (created_at);
+create table if not exists takosumi_installer_deployments (
+  id              text   primary key,
+  installation_id text   not null,
+  source_json     jsonb  not null,
+  manifest_digest text   not null,
+  status          text   not null
+    check (status in ('running','succeeded','failed')),
+  outputs_json    jsonb  not null,
+  created_at      bigint not null
+);
+create index if not exists takosumi_installer_deployments_installation_idx
+  on takosumi_installer_deployments (installation_id);
+create index if not exists takosumi_installer_deployments_created_at_idx
+  on takosumi_installer_deployments (created_at);
+create table if not exists takosumi_installer_rollback_events (
+  id               text   primary key,
+  installation_id  text   not null,
+  rolled_back_from text,
+  rolled_back_to   text   not null,
+  created_at       bigint not null
+);
+create index if not exists takosumi_installer_rollback_events_installation_idx
+  on takosumi_installer_rollback_events (installation_id);
+create index if not exists takosumi_installer_rollback_events_created_at_idx
+  on takosumi_installer_rollback_events (created_at);`,
+      down:
+        `drop index if exists takosumi_installer_rollback_events_created_at_idx;
+drop index if exists takosumi_installer_rollback_events_installation_idx;
+drop table if exists takosumi_installer_rollback_events;
+drop index if exists takosumi_installer_deployments_created_at_idx;
+drop index if exists takosumi_installer_deployments_installation_idx;
+drop table if exists takosumi_installer_deployments;
+drop index if exists takosumi_installer_installations_created_at_idx;
+drop index if exists takosumi_installer_installations_space_idx;
+drop table if exists takosumi_installer_installations;`,
     },
   ]);

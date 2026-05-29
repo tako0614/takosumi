@@ -243,6 +243,92 @@ Deno.test("RevokeDebtCleanupWorker records retryable compensation failure", asyn
   }
 });
 
+Deno.test("RevokeDebtCleanupWorker does not let not-due debts starve a due debt against the per-tick limit", async () => {
+  const revokeDebtStore = new InMemoryRevokeDebtStore();
+  const deploymentStore = new InMemoryTakosumiDeploymentRecordStore();
+  registerProvider(
+    provider({
+      id: PROVIDER_COMPENSATE,
+      compensate() {
+        return Promise.resolve({ ok: true });
+      },
+    }),
+    { allowOverride: true },
+  );
+  try {
+    // Seed three leading debts created BEFORE the due one (so they sort
+    // ahead by createdAt) whose nextRetryAt is far in the future = not due.
+    const notDueIds: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const debt = await revokeDebtStore.enqueue({
+        generatedObjectId: `generated:takosumi-public-deploy/app/not-due-${i}`,
+        reason: "activation-rollback",
+        ownerSpaceId: "space:cleanup",
+        deploymentName: "app",
+        journalEntryId: `operation:not-due-${i}`,
+        operationId: `operation:not-due-${i}`,
+        resourceName: "cache",
+        providerId: PROVIDER_COMPENSATE,
+        retryPolicy: { kind: "operator-managed", backoffSeconds: 3600 },
+        now: "2026-05-02T00:00:00.000Z",
+      });
+      // Push nextRetryAt one hour into the future so it is not due at tick.
+      await revokeDebtStore.recordRetryAttempt({
+        id: debt.id,
+        ownerSpaceId: "space:cleanup",
+        result: "retryable-failure",
+        now: "2026-05-02T00:00:00.000Z",
+      });
+      notDueIds.push(debt.id);
+    }
+
+    // One due debt created LATER (sorts after the not-due ones) so the old
+    // implementation would spend the per-tick limit on the leading skips.
+    const dueDebt = await revokeDebtStore.enqueue({
+      generatedObjectId: "generated:takosumi-public-deploy/app/due",
+      reason: "activation-rollback",
+      ownerSpaceId: "space:cleanup",
+      deploymentName: "app",
+      journalEntryId: "operation:due",
+      operationId: "operation:due",
+      resourceName: "cache",
+      providerId: PROVIDER_COMPENSATE,
+      now: "2026-05-02T00:01:00.000Z",
+    });
+    await seedDeployment(deploymentStore, PROVIDER_COMPENSATE);
+
+    const worker = new RevokeDebtCleanupWorker({
+      revokeDebtStore,
+      deploymentRecordStore: deploymentStore,
+      context,
+      clock: () => new Date("2026-05-02T00:02:00.000Z"),
+    });
+
+    // limit:1 — the only due debt must be processed, never starved behind
+    // the 3 leading not-due debts.
+    const result = await worker.processOwnerSpace({
+      ownerSpaceId: "space:cleanup",
+      limit: 1,
+    });
+
+    assert.equal(result.attempted, 1);
+    assert.equal(result.cleared, 1);
+    assert.equal(result.skipped, 0);
+    const [cleared] = result.attempts;
+    assert.equal(cleared?.debtId, dueDebt.id);
+    const stored = await revokeDebtStore.listByOwnerSpace("space:cleanup");
+    const dueStored = stored.find((row) => row.id === dueDebt.id);
+    assert.equal(dueStored?.status, "cleared");
+    // The not-due debts are untouched (still open).
+    for (const id of notDueIds) {
+      const row = stored.find((entry) => entry.id === id);
+      assert.equal(row?.status, "open");
+    }
+  } finally {
+    unregisterProvider(PROVIDER_COMPENSATE);
+  }
+});
+
 Deno.test("RevokeDebtCleanupWorker blocks debt when cleanup handle is unresolved", async () => {
   const revokeDebtStore = new InMemoryRevokeDebtStore({
     idFactory: () => "revoke-debt:cleanup-missing",
