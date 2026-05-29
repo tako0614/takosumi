@@ -1,11 +1,18 @@
 // AUTO-GENERATED FROM package-owned kind descriptor spec/kind.jsonld — DO NOT EDIT.
 // Run `deno task spec:generate-ts` to refresh.
 
+export interface WorkerSchedule {
+  /** Cron expression (5- or 6-field) for one scheduled invocation. The dialect is backend-defined and validated at apply. */
+  readonly cron: string;
+}
+
 export interface WorkerSpec {
   /** Source-root-relative worker module path inside the resolved source view. */
   readonly entrypoint: string;
   /** Optional env vars / bindings. */
   readonly env?: Readonly<Record<string, string>>;
+  /** Optional cron-triggered invocation schedules. Each entry names one cron expression; the resolving backend rejects unsupported cron dialects at apply. */
+  readonly schedules?: readonly WorkerSchedule[];
 }
 
 export interface WorkerOutputs {
@@ -17,7 +24,9 @@ export interface WorkerOutputs {
   readonly version?: string;
 }
 
-export type WorkerCapabilityTerm = "serverless-http";
+export type WorkerCapabilityTerm =
+  | "serverless-http"
+  | "scheduled";
 
 export type WorkerOutputFieldName =
   | "url"
@@ -46,6 +55,7 @@ export interface WorkerListenSlotDescriptor {
 
 export const WORKER_CAPABILITY_TERMS: readonly WorkerCapabilityTerm[] = [
   "serverless-http",
+  "scheduled",
 ];
 
 export const WORKER_OUTPUT_FIELDS: readonly WorkerOutputFieldName[] = [

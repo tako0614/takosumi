@@ -47,11 +47,17 @@ export const MessageQueueKind: Shape<
     rejectUnknownFields(
       value,
       "$",
-      ["name", "deliveryDelay"],
+      ["name", "deliveryDelay", "maxRetries", "deadLetterQueue"],
       issues,
     );
     requireNonEmptyString(value.name, "$.name", issues);
     optionalNonNegativeInteger(value.deliveryDelay, "$.deliveryDelay", issues);
+    optionalNonNegativeInteger(value.maxRetries, "$.maxRetries", issues);
+    optionalNonEmptyString(
+      value.deadLetterQueue,
+      "$.deadLetterQueue",
+      issues,
+    );
   },
   validateOutputs(value, issues) {
     if (!requireRoot(value, issues)) return;

@@ -15,6 +15,9 @@ Serverless JS function whose entrypoint is read from the resolved source view.
 - `entrypoint` (required): `string` - Source-root-relative worker module path
   inside the resolved source view.
 - `env`: `object` - Optional env vars / bindings.
+- `schedules`: `array` - Optional cron-triggered invocation schedules. Each
+  entry names one cron expression; the resolving backend rejects unsupported
+  cron dialects at apply.
 
 ## Output Slot Contract
 
@@ -40,6 +43,7 @@ Serverless JS function whose entrypoint is read from the resolved source view.
 
 ## Capability Terms
 
+- `scheduled`
 - `serverless-http`
 
 ## Boundary

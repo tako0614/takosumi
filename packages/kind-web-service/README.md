@@ -1,6 +1,14 @@
 # @takos/takosumi-kind-web-service
 
-Long-running HTTP service backed by an OCI image.
+Long-running HTTP service. `image` and `scale` are optional container-subset
+fields; the divergent systemd binding of this kind uses only `port` plus its own
+command and omits container-only fields. `healthCheck` and `volumes` are
+likewise OPTIONAL container-subset hints: backends that do not run containers
+(such as systemd) ignore or reject them at apply, exactly like the existing
+optional `image` and `scale`. `healthCheck.interval` and `healthCheck.timeout`
+are in SECONDS. `volumes[].source` is a logical, operator/binding-resolved
+volume name or URI (backend-neutral) and `volumes[].target` is an absolute
+container mount path.
 
 ## Kind Identity
 
@@ -13,6 +21,10 @@ Long-running HTTP service backed by an OCI image.
 ## Spec Fields
 
 - `env`: `object` - Environment variables passed to the service.
+- `healthCheck`: `object` - Optional container-subset health probe hint.
+  Container backends use it to gate readiness and restart unhealthy instances;
+  non-container backends (such as the divergent systemd binding) ignore or
+  reject it at apply.
 - `image` (required): `string` - OCI image reference.
 - `port` (required): `integer` - Container listen port exposed by the service.
 - `resources`: `object` - CPU / memory hints consumed by compatible provider
@@ -20,6 +32,10 @@ Long-running HTTP service backed by an OCI image.
 - `scale`: `object` - Replica bounds. `min: 0` requests zero steady replicas.
   Operator policy and the selected implementation materialize or reject the
   request.
+- `volumes`: `array` - Optional container-subset volume mounts. Container
+  backends attach each logical volume at the given mount path; non-container
+  backends (such as the divergent systemd binding) ignore or reject them at
+  apply.
 
 ## Output Slot Contract
 
@@ -45,8 +61,10 @@ Long-running HTTP service backed by an OCI image.
 
 ## Capability Terms
 
+- `container-health-check`
 - `http-service`
 - `oci-image`
+- `persistent-volume`
 - `replica-scaling`
 
 ## Boundary

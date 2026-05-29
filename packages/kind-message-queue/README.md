@@ -12,7 +12,13 @@ Message queue for asynchronous producer and consumer workloads.
 
 ## Spec Fields
 
+- `deadLetterQueue`: `string` - Dead-letter queue name for messages that exceed
+  maxRetries. An opaque queue name; same-AppSpec wiring to another message-queue
+  component is expressed at the AppSpec level via connect/listen rather than
+  inside this spec.
 - `deliveryDelay`: `integer` - Default delivery delay in seconds.
+- `maxRetries`: `integer` - Maximum delivery attempts before a message is routed
+  to the dead-letter queue.
 - `name` (required): `string` - Queue name.
 
 ## Output Slot Contract

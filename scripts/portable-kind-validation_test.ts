@@ -307,6 +307,59 @@ Deno.test("portable worker entrypoint uses source-root-relative path grammar", (
   }
 });
 
+Deno.test("portable worker schedules are an optional cron-trigger array", () => {
+  // Absent schedules stay valid (additive, optional field).
+  assertEquals(
+    validateSpec(WorkerKind, { entrypoint: "src/main.ts" }),
+    [],
+  );
+  // A well-formed schedules array validates. The cron dialect is not
+  // over-validated here: any non-empty string is accepted (5- or 6-field,
+  // Cloudflare cron or Deno.cron), and unsupported dialects are rejected by
+  // the resolving backend at apply.
+  assertEquals(
+    validateSpec(WorkerKind, {
+      entrypoint: "src/main.ts",
+      schedules: [{ cron: "*/5 * * * *" }, { cron: "0 0 1 1 *" }],
+    }),
+    [],
+  );
+});
+
+Deno.test("portable worker schedules reject malformed entries", () => {
+  assertEquals(
+    validateSpec(WorkerKind, {
+      entrypoint: "src/main.ts",
+      schedules: "*/5 * * * *",
+    }),
+    [{ path: "$.schedules", message: "must be an array" }],
+  );
+  assertEquals(
+    validateSpec(WorkerKind, {
+      entrypoint: "src/main.ts",
+      schedules: [{ cron: "" }, { cron: 5 }, "not-an-object"],
+    }),
+    [
+      {
+        path: "$.schedules[0].cron",
+        message: "must be a non-empty cron expression",
+      },
+      {
+        path: "$.schedules[1].cron",
+        message: "must be a non-empty cron expression",
+      },
+      { path: "$.schedules[2]", message: "must be an object" },
+    ],
+  );
+  assertEquals(
+    validateSpec(WorkerKind, {
+      entrypoint: "src/main.ts",
+      schedules: [{ cron: "*/5 * * * *", timezone: "UTC" }],
+    }),
+    [{ path: "$.schedules[0].timezone", message: "unknown field" }],
+  );
+});
+
 Deno.test("portable gateway outputs keep url, scheme, host, and listener coherent", () => {
   assertEquals(
     validateOutputs(GatewayKind, {

@@ -4,8 +4,12 @@
 export interface MessageQueueSpec {
   /** Queue name. */
   readonly name: string;
+  /** Dead-letter queue name for messages that exceed maxRetries. An opaque queue name; same-AppSpec wiring to another message-queue component is expressed at the AppSpec level via connect/listen rather than inside this spec. */
+  readonly deadLetterQueue?: string;
   /** Default delivery delay in seconds. */
   readonly deliveryDelay?: number;
+  /** Maximum delivery attempts before a message is routed to the dead-letter queue. */
+  readonly maxRetries?: number;
 }
 
 export interface MessageQueueOutputs {

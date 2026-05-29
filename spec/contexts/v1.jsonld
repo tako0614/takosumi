@@ -291,6 +291,44 @@
     "deliveryDelay": {
       "@id": "takosumi:deliveryDelay"
     },
+    "maxRetries": {
+      "@id": "takosumi:maxRetries"
+    },
+    "deadLetterQueue": {
+      "@id": "takosumi:deadLetterQueue"
+    },
+    "healthCheck": {
+      "@id": "takosumi:healthCheck",
+      "@type": "@json"
+    },
+    "interval": {
+      "@id": "takosumi:interval"
+    },
+    "timeout": {
+      "@id": "takosumi:timeout"
+    },
+    "unhealthyThreshold": {
+      "@id": "takosumi:unhealthyThreshold"
+    },
+    "readinessPath": {
+      "@id": "takosumi:readinessPath",
+      "@type": "xsd:string"
+    },
+    "volumes": {
+      "@id": "takosumi:volumes",
+      "@type": "@json"
+    },
+    "source": {
+      "@id": "takosumi:source",
+      "@type": "xsd:string"
+    },
+    "target": {
+      "@id": "takosumi:target",
+      "@type": "xsd:string"
+    },
+    "persistent": {
+      "@id": "takosumi:persistent"
+    },
 
     "entrypoint": {
       "@id": "takosumi:entrypoint",
@@ -303,6 +341,14 @@
     "env": {
       "@id": "takosumi:env",
       "@type": "@json"
+    },
+    "schedules": {
+      "@id": "takosumi:schedules",
+      "@type": "@json"
+    },
+    "cron": {
+      "@id": "takosumi:cron",
+      "@type": "xsd:string"
     },
 
     "port": {
