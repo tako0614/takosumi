@@ -22,6 +22,7 @@ import {
   type LifecycleErrorBody,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { HttpArtifactFetcher } from "./artifact_fetcher.ts";
+import { serveHttp } from "./subprocess/serve.ts";
 import type { ConnectorContext } from "./connectors/connector.ts";
 import type { ConnectorRegistry } from "./connectors/mod.ts";
 import {
@@ -320,16 +321,12 @@ export function serveRuntimeAgent(options: ServeOptions): ServeHandle {
   });
   const requestedPort = options.port ?? 8789;
   const hostname = options.hostname ?? "127.0.0.1";
-  const server = Deno.serve(
-    { port: requestedPort, hostname, onListen: () => {} },
-    app.fetch,
-  );
-  const addr = server.addr as Deno.NetAddr;
-  const boundPort = addr.port;
+  const binding = serveHttp(app.fetch, { port: requestedPort, hostname });
+  const boundPort = binding.port;
   return {
     url: `http://${hostname}:${boundPort}`,
     port: boundPort,
-    shutdown: () => server.shutdown(),
+    shutdown: () => binding.shutdown(),
   };
 }
 

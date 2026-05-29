@@ -10,6 +10,10 @@
  */
 
 import { assertHostNotBlocked, BlockedHostError } from "./host-blocklist.ts";
+import {
+  type GitInvocationResult,
+  runGitCommand,
+} from "./subprocess/git-runner.ts";
 
 export interface GitFetchOptions {
   readonly url: string;
@@ -232,12 +236,6 @@ function extractSshShorthandHost(url: string): string {
   return url.slice(at + 1, colon).toLowerCase();
 }
 
-interface GitInvocationResult {
-  readonly ok: boolean;
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
 async function runGit(args: readonly string[], cwd?: string): Promise<string> {
   const result = await tryRunGit(args, cwd);
   if (!result.ok) {
@@ -246,21 +244,9 @@ async function runGit(args: readonly string[], cwd?: string): Promise<string> {
   return result.stdout;
 }
 
-async function tryRunGit(
+function tryRunGit(
   args: readonly string[],
   cwd?: string,
 ): Promise<GitInvocationResult> {
-  const command = new Deno.Command("git", {
-    args: [...args],
-    cwd,
-    stdout: "piped",
-    stderr: "piped",
-  });
-  const { code, stdout, stderr } = await command.output();
-  const decoder = new TextDecoder();
-  return {
-    ok: code === 0,
-    stdout: decoder.decode(stdout),
-    stderr: decoder.decode(stderr),
-  };
+  return runGitCommand(args, cwd);
 }

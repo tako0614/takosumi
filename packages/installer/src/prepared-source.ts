@@ -7,6 +7,7 @@
  */
 
 import { assertHostNotBlocked, BlockedHostError } from "./host-blocklist.ts";
+import { runTarCommand } from "./subprocess/tar-runner.ts";
 
 export interface PreparedSourceFetchOptions {
   readonly url: string;
@@ -453,33 +454,11 @@ function assertSafeTarLinkTarget(entry: TarVerboseEntry, label: string): void {
   }
 }
 
-async function runTar(
+function runTar(
   args: readonly string[],
   stdin: Uint8Array,
 ): Promise<string> {
-  // Force a deterministic C locale so the `tar -tv` column format (mode,
-  // owner, size, date, time, path) does not shift with the operator's
-  // LANG / LC_TIME settings. Without this, locale-specific date / time
-  // columns can introduce extra whitespace runs that confuse the column
-  // parser.
-  const child = new Deno.Command("tar", {
-    args: [...args],
-    stdin: "piped",
-    stdout: "piped",
-    stderr: "piped",
-    env: {
-      LC_ALL: "C",
-      LANG: "C",
-    },
-  }).spawn();
-  const writer = child.stdin.getWriter();
-  await writer.write(stdin);
-  await writer.close();
-  const { code, stdout, stderr } = await child.output();
-  if (code !== 0) {
-    throw new Error(`tar ${args.join(" ")} failed: ${decode(stderr)}`);
-  }
-  return decode(stdout);
+  return runTarCommand(args, stdin);
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -491,8 +470,4 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("")
   }`;
-}
-
-function decode(bytes: Uint8Array): string {
-  return new TextDecoder().decode(bytes);
 }
