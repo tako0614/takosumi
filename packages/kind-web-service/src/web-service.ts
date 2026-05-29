@@ -6,6 +6,7 @@ import {
   isNonNegativeInteger,
   isPositiveInteger,
   isRecord,
+  optionalBoolean,
   optionalNonEmptyString,
   optionalStringRecord,
   rejectUnknownFields,
@@ -22,18 +23,22 @@ import {
   WEB_SERVICE_KIND_VERSION,
   WEB_SERVICE_OUTPUT_FIELDS,
   type WebServiceCapabilityTerm,
+  type WebServiceHealthCheck,
   type WebServiceOutputs,
   type WebServiceResources,
   type WebServiceScale,
   type WebServiceSpec,
+  type WebServiceVolume,
 } from "./web-service.generated.ts";
 
 export type {
   WebServiceCapabilityTerm,
+  WebServiceHealthCheck,
   WebServiceOutputs,
   WebServiceResources,
   WebServiceScale,
   WebServiceSpec,
+  WebServiceVolume,
 };
 
 /**
@@ -55,7 +60,15 @@ export const WebServiceKind: Shape<
     rejectUnknownFields(
       value,
       "$",
-      ["image", "port", "scale", "env", "resources"],
+      [
+        "image",
+        "port",
+        "scale",
+        "env",
+        "resources",
+        "healthCheck",
+        "volumes",
+      ],
       issues,
     );
     requireNonEmptyString(value.image, "$.image", issues);
@@ -64,6 +77,12 @@ export const WebServiceKind: Shape<
     optionalStringRecord(value.env, "$.env", issues);
     if (value.resources !== undefined) {
       validateResources(value.resources, issues);
+    }
+    if (value.healthCheck !== undefined) {
+      validateHealthCheck(value.healthCheck, issues);
+    }
+    if (value.volumes !== undefined) {
+      validateVolumes(value.volumes, issues);
     }
   },
   validateOutputs(value, issues) {
@@ -115,4 +134,73 @@ function validateResources(
   rejectUnknownFields(value, "$.resources", ["cpu", "memory"], issues);
   optionalNonEmptyString(value.cpu, "$.resources.cpu", issues);
   optionalNonEmptyString(value.memory, "$.resources.memory", issues);
+}
+
+function optionalPositiveSeconds(
+  value: unknown,
+  path: string,
+  issues: ShapeValidationIssue[],
+): void {
+  if (value === undefined) return;
+  if (!isPositiveInteger(value)) {
+    issues.push({ path, message: "must be a positive integer" });
+  }
+}
+
+function validateHealthCheck(
+  value: unknown,
+  issues: ShapeValidationIssue[],
+): void {
+  if (!isRecord(value)) {
+    issues.push({ path: "$.healthCheck", message: "must be an object" });
+    return;
+  }
+  rejectUnknownFields(
+    value,
+    "$.healthCheck",
+    ["path", "interval", "timeout", "unhealthyThreshold", "readinessPath"],
+    issues,
+  );
+  optionalNonEmptyString(value.path, "$.healthCheck.path", issues);
+  // interval / timeout are in SECONDS (mirrors takos HealthCheck).
+  optionalPositiveSeconds(value.interval, "$.healthCheck.interval", issues);
+  optionalPositiveSeconds(value.timeout, "$.healthCheck.timeout", issues);
+  optionalPositiveSeconds(
+    value.unhealthyThreshold,
+    "$.healthCheck.unhealthyThreshold",
+    issues,
+  );
+  optionalNonEmptyString(
+    value.readinessPath,
+    "$.healthCheck.readinessPath",
+    issues,
+  );
+}
+
+function validateVolumes(
+  value: unknown,
+  issues: ShapeValidationIssue[],
+): void {
+  if (!Array.isArray(value)) {
+    issues.push({ path: "$.volumes", message: "must be an array" });
+    return;
+  }
+  value.forEach((entry, index) => {
+    validateVolume(entry, `$.volumes[${index}]`, issues);
+  });
+}
+
+function validateVolume(
+  value: unknown,
+  path: string,
+  issues: ShapeValidationIssue[],
+): void {
+  if (!isRecord(value)) {
+    issues.push({ path, message: "must be an object" });
+    return;
+  }
+  rejectUnknownFields(value, path, ["source", "target", "persistent"], issues);
+  requireNonEmptyString(value.source, `${path}.source`, issues);
+  requireNonEmptyString(value.target, `${path}.target`, issues);
+  optionalBoolean(value.persistent, `${path}.persistent`, issues);
 }

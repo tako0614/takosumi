@@ -7,7 +7,7 @@
   "referenceAliases": [
     "web-service"
   ],
-  "description": "Long-running HTTP service backed by an OCI image.",
+  "description": "Long-running HTTP service. `image` and `scale` are optional container-subset fields; the divergent systemd binding of this kind uses only `port` plus its own command and omits container-only fields. `healthCheck` and `volumes` are likewise OPTIONAL container-subset hints: backends that do not run containers (such as systemd) ignore or reject them at apply, exactly like the existing optional `image` and `scale`. `healthCheck.interval` and `healthCheck.timeout` are in SECONDS. `volumes[].source` is a logical, operator/binding-resolved volume name or URI (backend-neutral) and `volumes[].target` is an absolute container mount path.",
   "spec": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -70,6 +70,67 @@
             "type": "string",
             "minLength": 1,
             "description": "Requested memory size or provider-specific memory class."
+          }
+        }
+      },
+      "healthCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Optional container-subset health probe hint. Container backends use it to gate readiness and restart unhealthy instances; non-container backends (such as the divergent systemd binding) ignore or reject it at apply.",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "HTTP path probed for liveness, such as `/healthz`."
+          },
+          "interval": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Seconds between health probes."
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Seconds to wait for a single probe response before it counts as a failure."
+          },
+          "unhealthyThreshold": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Consecutive failed probes before the instance is treated as unhealthy."
+          },
+          "readinessPath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "HTTP path probed for readiness before the instance receives traffic, such as `/readyz`."
+          }
+        }
+      },
+      "volumes": {
+        "type": "array",
+        "description": "Optional container-subset volume mounts. Container backends attach each logical volume at the given mount path; non-container backends (such as the divergent systemd binding) ignore or reject them at apply.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "target"
+          ],
+          "description": "A single logical volume mount.",
+          "properties": {
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Logical volume name or URI resolved by the operator / implementation binding (backend-neutral)."
+            },
+            "target": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Absolute container mount path, such as `/var/lib/data`."
+            },
+            "persistent": {
+              "type": "boolean",
+              "description": "Whether the volume must survive instance restarts. Omitted means the implementation binding decides."
+            }
           }
         }
       }
@@ -164,6 +225,8 @@
   "capabilityTerms": [
     "http-service",
     "oci-image",
-    "replica-scaling"
+    "replica-scaling",
+    "container-health-check",
+    "persistent-volume"
   ]
 }
