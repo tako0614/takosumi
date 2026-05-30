@@ -9,8 +9,9 @@
  * implementations, so the Deno runtime behavior is byte-for-byte identical to
  * the historical `Deno.Command`-based `runGitCommand` / `runTarCommand` while
  * the same code path now also runs on Node WITHOUT calling `Deno.Command`
- * directly. This is the seam that lets the installer's `.node.ts` dnt mappings
- * be deleted later.
+ * directly. This is the seam the reference kernel injects so callers never
+ * reach the installer / runtime-agent fallback subprocess primitives in
+ * production.
  *
  * Behavior parity contract (do not change without re-checking the installer's
  * tar column parser and git-fetch call sites):
