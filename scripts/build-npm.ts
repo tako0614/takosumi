@@ -22,30 +22,30 @@ const fromRoot = (p: string) => new URL(p, ROOT).pathname;
 // `Deno.Command` / `Deno.serve` on Deno and `node:child_process` / `node:http`
 // on Node. The npm build therefore needs no module mappings.
 
-// version comes from packages/all/deno.json (umbrella)
+// version comes from the single-package root deno.json
 const umbrella = JSON.parse(
-  await Deno.readTextFile(fromRoot("packages/all/deno.json")),
+  await Deno.readTextFile(fromRoot("deno.json")),
 ) as { version: string };
 
-// npm export name -> umbrella source file (packages/all/*.ts)
+// npm export name -> umbrella source file (src/all/*.ts)
 const ENTRY_TABLE: Record<string, string> = {
-  ".": "packages/all/mod.ts",
-  "./contract": "packages/all/contract.ts",
-  "./installer": "packages/all/installer.ts",
-  "./kernel": "packages/all/kernel.ts",
-  "./cli": "packages/all/cli.ts",
-  "./runtime-agent": "packages/all/runtime-agent.ts",
-  "./kinds": "packages/all/kinds.ts",
-  "./server": "packages/all/server.ts",
-  "./kind/gateway": "packages/all/kind-gateway.ts",
-  "./kind/kv-store": "packages/all/kind-kv-store.ts",
-  "./kind/message-queue": "packages/all/kind-message-queue.ts",
-  "./kind/object-store": "packages/all/kind-object-store.ts",
-  "./kind/postgres": "packages/all/kind-postgres.ts",
-  "./kind/sqlite": "packages/all/kind-sqlite.ts",
-  "./kind/vector-store": "packages/all/kind-vector-store.ts",
-  "./kind/web-service": "packages/all/kind-web-service.ts",
-  "./kind/worker": "packages/all/kind-worker.ts",
+  ".": "src/all/mod.ts",
+  "./contract": "src/all/contract.ts",
+  "./installer": "src/all/installer.ts",
+  "./kernel": "src/all/kernel.ts",
+  "./cli": "src/all/cli.ts",
+  "./runtime-agent": "src/all/runtime-agent.ts",
+  "./kinds": "src/all/kinds.ts",
+  "./server": "src/all/server.ts",
+  "./kind/gateway": "src/all/kind-gateway.ts",
+  "./kind/kv-store": "src/all/kind-kv-store.ts",
+  "./kind/message-queue": "src/all/kind-message-queue.ts",
+  "./kind/object-store": "src/all/kind-object-store.ts",
+  "./kind/postgres": "src/all/kind-postgres.ts",
+  "./kind/sqlite": "src/all/kind-sqlite.ts",
+  "./kind/vector-store": "src/all/kind-vector-store.ts",
+  "./kind/web-service": "src/all/kind-web-service.ts",
+  "./kind/worker": "src/all/kind-worker.ts",
 };
 
 function parseArgs() {

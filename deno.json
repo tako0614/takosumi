@@ -1,4 +1,7 @@
 {
+  "name": "@takos/takosumi",
+  "version": "0.17.0",
+  "license": "MIT",
   "workspace": [
     "./deploy/cloudflare"
   ],
