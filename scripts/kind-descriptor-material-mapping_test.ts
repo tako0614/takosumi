@@ -9,21 +9,21 @@ import {
 } from "takosumi-contract/catalog";
 
 const PORTABLE_KIND_PACKAGES = [
-  "kind-worker",
-  "kind-web-service",
-  "kind-postgres",
-  "kind-object-store",
-  "kind-gateway",
-  "kind-sqlite",
-  "kind-kv-store",
-  "kind-message-queue",
-  "kind-vector-store",
+  "worker",
+  "web-service",
+  "postgres",
+  "object-store",
+  "gateway",
+  "sqlite",
+  "kv-store",
+  "message-queue",
+  "vector-store",
 ] as const;
 
 Deno.test("portable kind descriptors publish official material mappings", async () => {
   for (const pkg of PORTABLE_KIND_PACKAGES) {
     const path = new URL(
-      `../packages/${pkg}/spec/kind.jsonld`,
+      `../src/kinds/${pkg}/spec/kind.jsonld`,
       import.meta.url,
     );
     const descriptor = JSON.parse(await Deno.readTextFile(path)) as {

@@ -34,19 +34,19 @@ const TAKOSUMI_OWNED_PATHS = [
   "packages/kernel/src/api/runtime_agent_routes.ts",
   "packages/kernel/src/api/readiness_routes.ts",
   "packages/kernel/src/api/openapi.ts",
-  "packages/kind-worker/spec/kind.jsonld",
-  "packages/kind-web-service/spec/kind.jsonld",
-  "packages/kind-postgres/spec/kind.jsonld",
-  "packages/kind-sqlite/spec/kind.jsonld",
-  "packages/kind-object-store/spec/kind.jsonld",
-  "packages/kind-kv-store/spec/kind.jsonld",
-  "packages/kind-message-queue/spec/kind.jsonld",
-  "packages/kind-vector-store/spec/kind.jsonld",
-  "packages/kind-gateway/spec/kind.jsonld",
+  "src/kinds/worker/spec/kind.jsonld",
+  "src/kinds/web-service/spec/kind.jsonld",
+  "src/kinds/postgres/spec/kind.jsonld",
+  "src/kinds/sqlite/spec/kind.jsonld",
+  "src/kinds/object-store/spec/kind.jsonld",
+  "src/kinds/kv-store/spec/kind.jsonld",
+  "src/kinds/message-queue/spec/kind.jsonld",
+  "src/kinds/vector-store/spec/kind.jsonld",
+  "src/kinds/gateway/spec/kind.jsonld",
   "../takosumi-plugins/packages/kind-cloudflare-worker/spec/kind.jsonld",
   "packages/contract/deno.json",
   "packages/runtime-agent/deno.json",
-  "packages/kind-worker/deno.json",
+  "src/kinds/worker/deno.json",
   "packages/kernel/deno.json",
   "packages/cli/deno.json",
   "packages/all/deno.json",
@@ -77,7 +77,7 @@ Deno.test("public spec source map covers required public surfaces", async () => 
   assert.equal(source.includes(`takosumi-${"git"}-artifact-uri-v1`), false);
   assert.ok(source.includes("packages/contract/src/app-spec.ts"));
   assert.ok(source.includes("packages/contract/src/catalog.ts"));
-  assert.ok(source.includes("packages/kind-*/spec/kind.jsonld"));
+  assert.ok(source.includes("src/kinds/*/spec/kind.jsonld"));
   assert.ok(
     source.includes("../takosumi-plugins/packages/kind-*/spec/kind.jsonld"),
   );
