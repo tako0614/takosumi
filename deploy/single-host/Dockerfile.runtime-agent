@@ -12,9 +12,9 @@ COPY ../../packages/contract /app/packages/contract
 COPY ../../packages/runtime-agent /app/packages/runtime-agent
 COPY ../../deno.json /app/deno.json
 
-RUN deno cache --node-modules-dir=auto /app/packages/runtime-agent/src/server.ts
+RUN deno cache --node-modules-dir=auto /app/src/runtime-agent/server.ts
 
 ENV TAKOSUMI_AGENT_PORT=8789
 EXPOSE 8789
 
-CMD ["deno", "run", "--allow-env", "--allow-net", "--allow-read", "--allow-write", "--allow-run", "--allow-sys", "/app/packages/runtime-agent/src/server.ts"]
+CMD ["deno", "run", "--allow-env", "--allow-net", "--allow-read", "--allow-write", "--allow-run", "--allow-sys", "/app/src/runtime-agent/server.ts"]
