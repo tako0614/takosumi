@@ -31,7 +31,7 @@
  * resolves; the kind-plugin specifier scopes are supplied by that config.
  */
 import { buildComposedServer } from "/workspace/deploy/node-postgres/src/server.ts";
-import type { KernelPlugin } from "/takosumi/packages/contract/src/plugin.ts";
+import type { KernelPlugin } from "/takosumi/src/contract/plugin.ts";
 import {
   dockerPostgresPlugin,
   KIND_URI as DOCKER_POSTGRES_KIND_URI,

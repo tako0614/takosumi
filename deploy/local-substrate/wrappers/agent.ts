@@ -21,9 +21,9 @@
  * mounts the proven kernel wrapper used, so /plugins specifier resolution is
  * unchanged.
  */
-import { serveRuntimeAgent } from "/workspace/packages/runtime-agent/src/server.ts";
-import { LIFECYCLE_AGENT_TOKEN_ENV } from "/workspace/packages/contract/src/runtime-agent-lifecycle.ts";
-import { currentRuntime } from "/workspace/packages/kernel/src/shared/runtime/index.ts";
+import { serveRuntimeAgent } from "/workspace/src/runtime-agent/server.ts";
+import { LIFECYCLE_AGENT_TOKEN_ENV } from "/workspace/src/contract/runtime-agent-lifecycle.ts";
+import { currentRuntime } from "/workspace/src/kernel/shared/runtime/index.ts";
 import { buildLocalSubstrateRegistry } from "/local-substrate-factories/local-substrate-factories.ts";
 
 const agentPort = Number(Deno.env.get("TAKOSUMI_AGENT_PORT") ?? "8789");
