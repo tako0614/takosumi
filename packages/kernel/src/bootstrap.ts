@@ -15,7 +15,6 @@ import { loadRuntimeConfigFromEnv } from "./config/mod.ts";
 import { isPaaSProcessRole, type PaaSProcessRole } from "./process/mod.ts";
 import type { WorkerDaemonHandle } from "./workers/daemon.ts";
 import type { SqlClient } from "./adapters/storage/sql.ts";
-import type { OperationJournalStore } from "./domains/deploy/operation_journal.ts";
 import type { RevokeDebtStore } from "./domains/deploy/revoke_debt_store.ts";
 import type { TakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store.ts";
 import { registerDefaultArtifactKinds } from "./bootstrap/registry_setup.ts";
@@ -26,10 +25,6 @@ import {
   shouldStartWorkerDaemon,
 } from "./bootstrap/worker_daemon.ts";
 import { createRoleReadinessProbes } from "./bootstrap/readiness.ts";
-import {
-  InMemoryOperationJournalStore,
-} from "./domains/deploy/operation_journal.ts";
-import { SqlOperationJournalStore } from "./domains/deploy/operation_journal_sql.ts";
 import { InMemoryRevokeDebtStore } from "./domains/deploy/revoke_debt_store.ts";
 import { SqlRevokeDebtStore } from "./domains/deploy/revoke_debt_store_sql.ts";
 import {
@@ -94,19 +89,6 @@ function resolveTakosumiDeploymentRecordStore(input: {
     });
   }
   return new InMemoryTakosumiDeploymentRecordStore();
-}
-
-function resolveOperationJournalStore(input: {
-  readonly takosumiOperationJournalStore?: OperationJournalStore;
-  readonly sqlClient?: SqlClient;
-}): OperationJournalStore {
-  if (input.takosumiOperationJournalStore) {
-    return input.takosumiOperationJournalStore;
-  }
-  if (input.sqlClient) {
-    return new SqlOperationJournalStore({ client: input.sqlClient });
-  }
-  return new InMemoryOperationJournalStore();
 }
 
 function resolveRevokeDebtStore(input: {
@@ -249,7 +231,6 @@ export interface CreatePaaSAppOptions extends AppContextOptions {
    * inject a hand-rolled fake without standing up a SqlClient.
    */
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
-  readonly takosumiOperationJournalStore?: OperationJournalStore;
   readonly takosumiRevokeDebtStore?: RevokeDebtStore;
   /**
    * Pre-built durable stores for the public Installer API ledger. When
@@ -387,30 +368,12 @@ export async function createPaaSApp(
     ...(deployLockLeaseMs !== undefined ? { deployLockLeaseMs } : {}),
     ...(deployLockHeartbeatMs !== undefined ? { deployLockHeartbeatMs } : {}),
   });
-  // Durable operation journal (WAL). The store is resolved here (SQL when a
-  // SqlClient is configured, in-memory otherwise). When consumed, the
-  // shape-model apply path uses it: `ApplyService` forwards it to `applyV2`,
-  // which writes `prepare`/`commit` stage records around the provider apply
-  // loop whenever an `operationPlanPreview` is present.
-  //
-  // HONEST STATUS — currently UNUSED in production. The default production
-  // apply facade (`createDeploymentApplyFacade` in app_context.ts) resolves +
-  // applies a Deployment via the graph-projection path and never dispatches
-  // through `applyV2`, and bootstrap does not construct an `ApplyService` with
-  // this store, so the resolved store is NOT wired into any production apply
-  // path. We still resolve it (a) to fail fast if the SQL store cannot be
-  // constructed for a SqlClient-backed deployment and (b) so the wiring point
-  // is obvious once the facade builds a non-dry-run `operationPlanPreview`.
-  // It is deliberately not threaded further: doing so requires routing the
-  // facade through `applyV2` (a larger apply-pipeline change). Tracked as a
-  // known gap in docs/reference/known-gaps.md ("Operation journal (WAL) not
-  // wired into the production apply facade"). See apply_v2.ts
-  // (`ApplyV2Options.operationJournalStore`) for the stage semantics and the
-  // commit-before-prepare guard.
-  const operationJournalStore = resolveOperationJournalStore(options);
-  // Intentionally not consumed yet (see HONEST STATUS above). The `void`
-  // suppresses the unused-binding lint without implying the store is wired.
-  void operationJournalStore;
+  // Operation journal (WAL): the impl exists (domains/deploy/operation_journal*,
+  // apply_v2.ts `ApplyV2Options.operationJournalStore`) but is not wired into the
+  // production apply facade. Bootstrap deliberately does NOT resolve/thread it —
+  // doing so requires routing the facade through `applyV2`. Tracked in
+  // docs/reference/known-gaps.md; re-add the resolver here when the WAL apply
+  // path is wired.
   const revokeDebtStore = resolveRevokeDebtStore(options);
   const workerDaemonState = createWorkerDaemonState();
   const workerDaemon = shouldStartWorkerDaemon(role, options)
