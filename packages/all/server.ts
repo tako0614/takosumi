@@ -1,4 +1,4 @@
-import { startKernel } from "@takos/takosumi-kernel";
+import { startKernel } from "@takos/takosumi-kernel/server";
 
 export { startKernel };
 

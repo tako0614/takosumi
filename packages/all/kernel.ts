@@ -1,8 +1,9 @@
-export * from "@takos/takosumi-kernel";
-// `createPaaSApp` (the embeddable Hono app factory + operate facade) lives in
-// the kernel bootstrap module, which is reached through the kernel package's
-// `./bootstrap` subpath export rather than its `.` (`src/index.ts`) entry.
-// Re-export it here so framework consumers reach it via `@takosjp/takosumi/kernel`.
+// `@takosjp/takosumi/kernel` surfaces the FRAMEWORK: `createPaaSApp` (the
+// embeddable Hono app factory + operate facade). It lives in the kernel
+// bootstrap module, which is now the kernel package's `.` entry (flipped from
+// the old self-serving `src/index.ts`). The self-serving server runner
+// (`startKernel` + the `import.meta.main` boot) lives behind the explicit
+// `@takosjp/takosumi/server` entry — never reached on a framework import.
 export {
   createPaaSApp,
   defaultBundledPlugins,
