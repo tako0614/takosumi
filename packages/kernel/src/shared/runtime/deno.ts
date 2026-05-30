@@ -12,8 +12,10 @@ import type {
 declare const Deno: {
   env: {
     get(name: string): string | undefined;
+    set(name: string, value: string): void;
     toObject(): Record<string, string>;
   };
+  execPath(): string;
   exit(code: number): never;
   addSignalListener(signal: Signal, handler: () => void): void;
   build: { os: string };
@@ -24,6 +26,11 @@ declare const Deno: {
   readTextFileSync(path: any): string;
   writeTextFile(path: string, data: string): Promise<void>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  makeTempDir(options?: { prefix?: string }): Promise<string>;
+  remove(
+    path: string | URL,
+    options?: { recursive?: boolean },
+  ): Promise<void>;
   Command: new (
     command: string,
     options?: {
@@ -63,6 +70,9 @@ const env: EnvReader = {
       return undefined;
     }
   },
+  set(name, value) {
+    Deno.env.set(name, value);
+  },
   toObject() {
     try {
       return Deno.env.toObject();
@@ -88,6 +98,12 @@ const fs: FsAdapter = {
   },
   mkdir(path, options) {
     return Deno.mkdir(path, options);
+  },
+  makeTempDir(prefix) {
+    return Deno.makeTempDir(prefix !== undefined ? { prefix } : undefined);
+  },
+  remove(path, options) {
+    return Deno.remove(path, options);
   },
   isNotFoundError(error) {
     return error instanceof Deno.errors.NotFound;
@@ -122,6 +138,9 @@ export const denoRuntime: RuntimeAdapter = {
   env,
   fs,
   subprocess,
+  execPath() {
+    return Deno.execPath();
+  },
   exit(code) {
     Deno.exit(code);
   },

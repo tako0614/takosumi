@@ -412,6 +412,11 @@ Deno.test("installer e2e — rollback is pointer-only and does not re-apply prov
     assertEquals(rollback.rollback, {
       rolledBackFrom: deploy.deployment.id,
       rolledBackTo: install.deployment.id,
+      scope: {
+        pointer: "reverted",
+        resourceMaterialization: "not-reapplied",
+        workloadState: "not-reverted",
+      },
     });
     assert(!events.some((event) => event.includes("rollback")));
   });

@@ -9,17 +9,34 @@
  * This module replaces the prior external git-source helper.
  */
 
+import type {
+  GitInvocationResult,
+  GitRunner,
+  InstallerFs,
+} from "@takos/takosumi-contract/reference/runtime-capability";
 import { assertHostNotBlocked, BlockedHostError } from "./host-blocklist.ts";
-import {
-  type GitInvocationResult,
-  runGitCommand,
-} from "./subprocess/git-runner.ts";
+import { defaultInstallerFs } from "./default-fs.ts";
+import { defaultGitRunner } from "./subprocess/git-runner.ts";
 
 export interface GitFetchOptions {
   readonly url: string;
   readonly ref?: string;
   readonly destination?: string;
   readonly depth?: number;
+  /**
+   * Injected `git` capability. Defaults to a runner built over the installer's
+   * Deno-runtime `git` primitive so standalone Deno behavior is unchanged; the
+   * reference kernel injects a runner routed through
+   * `currentRuntime().subprocess` so the same path runs on Node / Workers
+   * without this module referencing `Deno.Command`.
+   */
+  readonly gitRunner?: GitRunner;
+  /**
+   * Injected temp-dir filesystem capability. Defaults to a Deno-backed FS so
+   * standalone Deno behavior is unchanged; the reference kernel injects
+   * `currentRuntime().fs`.
+   */
+  readonly fs?: InstallerFs;
 }
 
 export interface GitFetchResult {
@@ -35,7 +52,8 @@ export interface GitFetchResult {
  * `expected.commit` in the installer API.
  *
  * Implementation note: this is a thin wrapper over `git clone` /
- * `git rev-parse HEAD` invoked through the Deno `Command` API. It
+ * `git rev-parse HEAD` invoked through the injected {@link GitRunner}
+ * (defaulting to the installer's Deno-runtime `git` primitive). It
  * intentionally does not depend on third-party git libraries —
  * `git` must be on the operator's PATH.
  *
@@ -62,16 +80,18 @@ export async function fetchGitSource(
   }
   const ref = requestedRef;
   const depth = options.depth ?? 1;
+  const gitRunner = options.gitRunner ?? defaultGitRunner;
+  const fs = options.fs ?? defaultInstallerFs;
 
   const ownsDestination = options.destination === undefined;
   const destination = options.destination ??
-    (await Deno.makeTempDir({ prefix: "takosumi-installer-" }));
+    (await fs.makeTempDir("takosumi-installer-"));
 
   let consumed = false;
-  const cleanupOnce = createOnceCleanup(destination);
+  const cleanupOnce = createOnceCleanup(fs, destination);
   try {
     if (ref === "HEAD") {
-      await runGit([
+      await runGit(gitRunner, [
         "clone",
         "--depth",
         String(depth),
@@ -84,7 +104,7 @@ export async function fetchGitSource(
       // cannot use `--depth` here. To avoid pulling unbounded history we
       // try a partial-clone filter first; if the server / client does not
       // support it we fall back to a shallow `--depth 50` window.
-      const filteredClone = await tryRunGit([
+      const filteredClone = await tryRunGit(gitRunner, [
         "clone",
         "--filter=blob:limit=100m",
         "--no-checkout",
@@ -93,9 +113,9 @@ export async function fetchGitSource(
         destination,
       ]);
       if (!filteredClone.ok) {
-        await Deno.remove(destination, { recursive: true }).catch(() => {});
-        await Deno.mkdir(destination, { recursive: true });
-        await runGit([
+        await fs.remove(destination, { recursive: true }).catch(() => {});
+        await fs.mkdir(destination, { recursive: true });
+        await runGit(gitRunner, [
           "clone",
           "--depth",
           "50",
@@ -105,13 +125,13 @@ export async function fetchGitSource(
           destination,
         ]);
       }
-      await runGit([
+      await runGit(gitRunner, [
         "checkout",
         "--detach",
         ref,
       ], destination);
     } else {
-      await runGit([
+      await runGit(gitRunner, [
         "clone",
         "--depth",
         String(depth),
@@ -123,7 +143,8 @@ export async function fetchGitSource(
       ]);
     }
 
-    const commit = (await runGit(["rev-parse", "HEAD"], destination)).trim();
+    const commit = (await runGit(gitRunner, ["rev-parse", "HEAD"], destination))
+      .trim();
 
     const result: GitFetchResult = {
       workingDirectory: destination,
@@ -143,12 +164,15 @@ export async function fetchGitSource(
   }
 }
 
-function createOnceCleanup(destination: string): () => Promise<void> {
+function createOnceCleanup(
+  fs: InstallerFs,
+  destination: string,
+): () => Promise<void> {
   let done = false;
   return async () => {
     if (done) return;
     done = true;
-    await Deno.remove(destination, { recursive: true }).catch(() => {});
+    await fs.remove(destination, { recursive: true }).catch(() => {});
   };
 }
 
@@ -236,8 +260,12 @@ function extractSshShorthandHost(url: string): string {
   return url.slice(at + 1, colon).toLowerCase();
 }
 
-async function runGit(args: readonly string[], cwd?: string): Promise<string> {
-  const result = await tryRunGit(args, cwd);
+async function runGit(
+  gitRunner: GitRunner,
+  args: readonly string[],
+  cwd?: string,
+): Promise<string> {
+  const result = await tryRunGit(gitRunner, args, cwd);
   if (!result.ok) {
     throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
   }
@@ -245,8 +273,9 @@ async function runGit(args: readonly string[], cwd?: string): Promise<string> {
 }
 
 function tryRunGit(
+  gitRunner: GitRunner,
   args: readonly string[],
   cwd?: string,
 ): Promise<GitInvocationResult> {
-  return runGitCommand(args, cwd);
+  return gitRunner.run(args, cwd);
 }

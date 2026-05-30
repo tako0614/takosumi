@@ -20,6 +20,7 @@
     "takosumi-contract/reference/plugin-sdk": "jsr:@takos/takosumi-contract@^2.6.0/reference/plugin-sdk",
     "takosumi-contract/reference/runtime-agent": "jsr:@takos/takosumi-contract@^2.6.0/reference/runtime-agent",
     "takosumi-contract/reference/runtime-agent-lifecycle": "jsr:@takos/takosumi-contract@^2.6.0/reference/runtime-agent-lifecycle",
+    "takosumi-contract/reference/runtime-capability": "jsr:@takos/takosumi-contract@^2.6.0/reference/runtime-capability",
     "takosumi-contract/internal/api": "jsr:@takos/takosumi-contract@^2.6.0/internal/api",
     "takosumi-contract/internal/rpc": "jsr:@takos/takosumi-contract@^2.6.0/internal/rpc",
     "takosumi-contract/reference/error-category": "jsr:@takos/takosumi-contract@^2.6.0/reference/error-category",

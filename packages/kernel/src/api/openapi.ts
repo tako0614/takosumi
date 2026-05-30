@@ -1178,10 +1178,29 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     },
     InstallerRollbackMetadata: {
       type: "object",
-      required: ["rolledBackFrom", "rolledBackTo"],
+      required: ["rolledBackFrom", "rolledBackTo", "scope"],
       properties: {
         rolledBackFrom: { type: "string", nullable: true },
         rolledBackTo: { type: "string" },
+        scope: ref("InstallerRollbackScope"),
+      },
+      additionalProperties: false,
+    },
+    InstallerRollbackScope: {
+      type: "object",
+      description:
+        "What a rollback reverts. A Takosumi rollback re-points the current " +
+        "Deployment only; it does NOT re-materialize provider resources and " +
+        "NEVER reverts workload data/schema (recover those via backup/restore " +
+        "and expand-contract migrations).",
+      required: ["pointer", "resourceMaterialization", "workloadState"],
+      properties: {
+        pointer: { type: "string", enum: ["reverted"] },
+        resourceMaterialization: {
+          type: "string",
+          enum: ["not-reapplied"],
+        },
+        workloadState: { type: "string", enum: ["not-reverted"] },
       },
       additionalProperties: false,
     },

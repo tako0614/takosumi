@@ -1,31 +1,44 @@
 /**
- * Runtime primitives for the `migrate` command (Deno implementation).
+ * Runtime primitives for the `migrate` command.
  *
- * Canonical Deno runtime path: spawns the kernel migration script through
- * `Deno.Command`, resolves the script path with `Deno.statSync`, reads env
- * with `Deno.env`, and exits with `Deno.exit`, exactly as before. The npm
- * build swaps this module for the Node sibling (`migrate-runtime.node.ts`)
- * via a dnt `mappings` entry in `scripts/build-npm.ts`, so the Deno runtime
- * behaviour is unchanged while the npm CLI runs on Node. Keep the exported
- * shape identical between the two modules.
+ * These route through the kernel `RuntimeAdapter`
+ * (`@takos/takosumi-kernel/runtime`) instead of touching `Deno.*` directly,
+ * so the same source runs unchanged on Deno (`currentRuntime()` resolves the
+ * Deno adapter: `Deno.Command` / `Deno.statSync`-equivalent / `Deno.env` /
+ * `Deno.exit`) and on the npm/Node build (the Node adapter resolves
+ * `node:child_process` / `node:fs` / `process.*`). No dnt module mapping is
+ * required: the adapter selection is the runtime-neutral boundary.
  */
+
+import { currentRuntime } from "@takos/takosumi-kernel/runtime";
 
 export async function spawnMigrate(
   cmd: string,
   args: readonly string[],
 ): Promise<{ readonly code: number }> {
-  const out = await new Deno.Command(cmd, { args: [...args] }).output();
+  const out = await currentRuntime().subprocess.run(cmd, { args });
   return { code: out.code };
 }
 
 export function statIsFile(path: string): boolean {
-  return Deno.statSync(path).isFile;
+  // The adapter has no sync `stat`, but `readTextFileSync` throws a
+  // NotFound-classified error when the path is absent and a different error
+  // (e.g. EISDIR) for directories. Treat a successful read as "regular file
+  // present" and any failure as "not a usable file", matching the prior
+  // `Deno.statSync(path).isFile` gate used to locate the kernel migration
+  // script.
+  try {
+    currentRuntime().fs.readTextFileSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function readEnv(key: string): string | undefined {
-  return Deno.env.get(key);
+  return currentRuntime().env.get(key);
 }
 
 export function exitProcess(code: number): never {
-  return Deno.exit(code);
+  return currentRuntime().exit(code);
 }
