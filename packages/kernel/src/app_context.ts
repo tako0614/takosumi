@@ -24,22 +24,20 @@ import type {
   ResourceBindingStore,
   ResourceInstanceStore,
 } from "./domains/resources/mod.ts";
-import {
-  type BundledRegistry,
-  type CatalogReleaseAdoptionStore,
-  type CatalogReleaseDescriptorStore,
-  type CatalogReleasePublisherKeyStore,
-  CatalogReleaseService,
-  type PackageDescriptorStore,
-  type PackageResolutionStore,
-  type TrustRecordStore,
+import type {
+  BundledRegistry,
+  CatalogReleaseAdoptionStore,
+  CatalogReleaseDescriptorStore,
+  CatalogReleasePublisherKeyStore,
+  PackageDescriptorStore,
+  PackageResolutionStore,
+  TrustRecordStore,
 } from "./domains/registry/mod.ts";
 import type { AuditStore } from "./domains/audit/mod.ts";
-import {
-  ServiceEndpointRegistry,
-  type ServiceEndpointStore,
-  type ServiceGrantStore,
-  type ServiceTrustRecordStore,
+import type {
+  ServiceEndpointStore,
+  ServiceGrantStore,
+  ServiceTrustRecordStore,
 } from "./domains/service-endpoints/mod.ts";
 import {
   type ActorAdapter,
@@ -111,11 +109,12 @@ import {
   type ObservabilitySink,
   wrapObservabilitySinkWithOtlpMetrics,
 } from "./services/observability/mod.ts";
-import { EntitlementPolicyService } from "./services/entitlements/mod.ts";
 import {
-  HttpBillingPort,
-  type UsageAggregateStore,
-  UsageProjectionService,
+  type EntitlementPolicyPort,
+  EntitlementPolicyService,
+} from "./services/entitlements/mod.ts";
+import type {
+  UsageAggregateStore,
 } from "./services/usage/mod.ts";
 import {
   createKernelPluginRegistry,
@@ -138,6 +137,18 @@ export interface AppContextOptions {
   readonly billing?: {
     readonly baseUrl?: string;
     readonly secret?: string;
+  };
+  /**
+   * Operator-injected managed-hosting service implementations. The kernel core
+   * ships none by default — a plain import constructs zero managed-hosting
+   * services. Operator distributions (takosumi-cloud) inject them here. Only
+   * `entitlements` has a kernel consumer (the internal-mutation boundary gate);
+   * usage / catalog-release / service-endpoint registries are owned and
+   * consumed by the operator distribution, not the kernel, so they no longer
+   * live on the kernel context at all.
+   */
+  readonly managedHosting?: {
+    readonly entitlements?: EntitlementPolicyPort;
   };
   readonly plugins?: readonly KernelPlugin[];
   readonly kindAliases?: KindAliasMap;
@@ -328,29 +339,14 @@ export interface RuntimeServices {
   readonly materializer: RuntimeMaterializer;
 }
 
-export interface UsageServices {
-  readonly projection: UsageProjectionService;
-}
-
-export interface ServiceEndpointServices {
-  readonly registry: ServiceEndpointRegistry;
-}
-
-export interface RegistryServices {
-  readonly catalogReleases: CatalogReleaseService;
-}
-
 export interface EntitlementServices {
-  readonly policy: EntitlementPolicyService;
+  readonly policy: EntitlementPolicyPort;
 }
 
 export interface ServiceContainer {
   readonly core: CoreDomainServices;
   readonly deploy: DeployServices;
   readonly runtime: RuntimeServices;
-  readonly usage: UsageServices;
-  readonly registry: RegistryServices;
-  readonly serviceEndpoints: ServiceEndpointServices;
   readonly entitlements: EntitlementServices;
 }
 
@@ -694,51 +690,12 @@ export function createServiceContainer(
     runtime: {
       materializer: new DefaultRuntimeMaterializer({ clock: dateClock }),
     },
-    usage: {
-      projection: new UsageProjectionService({
-        aggregates: stores.usage.aggregates,
-        billing: createBillingPort(options),
-        clock: dateClock,
-      }),
-    },
-    registry: {
-      catalogReleases: new CatalogReleaseService({
-        stores: {
-          releases: stores.registry.catalogReleases,
-          publisherKeys: stores.registry.catalogPublisherKeys,
-          adoptions: stores.registry.catalogReleaseAdoptions,
-          audit: stores.audit.events,
-        },
-        clock: dateClock,
-        idFactory: uuidFactory,
-      }),
-    },
-    serviceEndpoints: {
-      registry: new ServiceEndpointRegistry(stores.serviceEndpoints),
-    },
     entitlements: {
-      policy: new EntitlementPolicyService({
-        memberships: stores.core.memberships,
-      }),
+      policy: options.managedHosting?.entitlements ??
+        new EntitlementPolicyService({
+          memberships: stores.core.memberships,
+        }),
     },
   };
 }
 
-/**
- * Build the billing port from operator-injected config only.
- *
- * Billing / account-plane is owned by operator distributions
- * (takosumi-cloud), not Takosumi kernel core, so the kernel must NOT read a
- * product-namespaced env key here. The operator/bootstrap layer resolves any
- * env-driven billing config (neutral `TAKOSUMI_BILLING_*` keys; see
- * `resolveBillingOptions` in bootstrap.ts) and injects it via
- * `options.billing`. `HttpBillingPort` itself is a neutral port; the only
- * thing removed is the hard-coded `TAKOS_APP_BILLING_*` fallback that coupled
- * the substrate to one specific product.
- */
-function createBillingPort(options: AppContextOptions) {
-  const baseUrl = options.billing?.baseUrl;
-  const secret = options.billing?.secret;
-  if (!baseUrl || !secret) return undefined;
-  return new HttpBillingPort({ baseUrl, secret });
-}

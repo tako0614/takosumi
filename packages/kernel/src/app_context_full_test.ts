@@ -11,8 +11,6 @@ import {
   InMemoryObservabilitySink,
   OtlpObservabilitySink,
 } from "./services/observability/mod.ts";
-import { UsageProjectionService } from "./services/usage/mod.ts";
-import { ServiceEndpointRegistry } from "./domains/service-endpoints/mod.ts";
 import { EntitlementPolicyService } from "./services/entitlements/mod.ts";
 
 Deno.test("createInMemoryAppContext exposes full optional composition fields", async () => {
@@ -30,13 +28,6 @@ Deno.test("createInMemoryAppContext exposes full optional composition fields", a
   );
   assert.ok(context.adapters.queue instanceof MemoryQueueAdapter);
   assert.ok(context.adapters.objectStorage instanceof MemoryObjectStorage);
-  assert.ok(
-    context.services.usage.projection instanceof UsageProjectionService,
-  );
-  assert.ok(
-    context.services.serviceEndpoints.registry instanceof
-      ServiceEndpointRegistry,
-  );
   assert.ok(
     context.services.entitlements.policy instanceof EntitlementPolicyService,
   );
@@ -89,52 +80,6 @@ Deno.test("createInMemoryAppContext wraps observability with OTLP metrics export
   });
 
   assert.ok(context.adapters.observability instanceof OtlpObservabilitySink);
-});
-
-Deno.test("full AppContext composition remains backed by in-memory stores", async () => {
-  const context = createInMemoryAppContext({
-    dateClock: () => new Date("2026-04-27T00:00:00.000Z"),
-  });
-
-  const usage = await context.services.usage.projection.record({
-    kind: "agent",
-    id: "usage_1",
-    spaceId: "space_a",
-    groupId: "group_a",
-    occurredAt: "2026-04-27T00:00:00.000Z",
-    quantity: 2,
-    unit: "count",
-    metric: "agent.step",
-    agentRunId: "agent_run_a",
-  });
-  assert.equal(usage.aggregate.quantity, 2);
-  assert.deepEqual(
-    await context.stores.usage.aggregates.listBySpace("space_a"),
-    [
-      usage.aggregate,
-    ],
-  );
-
-  const endpoint = await context.services.serviceEndpoints.registry
-    .registerEndpoint({
-      id: "endpoint_a",
-      serviceId: "service_a",
-      spaceId: "space_a",
-      groupId: "group_a",
-      name: "api",
-      protocol: "https",
-      url: "https://api.example.test",
-      health: {
-        status: "unknown",
-        checkedAt: "2026-04-27T00:00:00.000Z",
-      },
-      createdAt: "2026-04-27T00:00:00.000Z",
-      updatedAt: "2026-04-27T00:00:00.000Z",
-    });
-  assert.deepEqual(
-    await context.services.serviceEndpoints.registry.getEndpoint("endpoint_a"),
-    endpoint,
-  );
 });
 
 Deno.test("full AppContext composition wires default adapters and services", () => {
