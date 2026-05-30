@@ -34,6 +34,9 @@ export function createWorkersRuntime(
       const value = bindings[name];
       return typeof value === "string" ? value : undefined;
     },
+    set() {
+      // No-op: Workers env bindings are immutable per request.
+    },
     toObject() {
       const out: Record<string, string> = {};
       for (const [key, value] of Object.entries(bindings)) {
@@ -60,6 +63,12 @@ export function createWorkersRuntime(
     mkdir() {
       throw new UnavailableInRuntimeError("fs.mkdir", "workers");
     },
+    makeTempDir() {
+      throw new UnavailableInRuntimeError("fs.makeTempDir", "workers");
+    },
+    remove() {
+      throw new UnavailableInRuntimeError("fs.remove", "workers");
+    },
     isNotFoundError() {
       return false;
     },
@@ -77,6 +86,9 @@ export function createWorkersRuntime(
     env,
     fs,
     subprocess,
+    execPath() {
+      throw new UnavailableInRuntimeError("execPath", "workers");
+    },
     exit() {
       throw new UnavailableInRuntimeError("exit", "workers");
     },

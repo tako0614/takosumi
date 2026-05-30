@@ -1,5 +1,6 @@
 import { Command } from "@cliffy/command";
 import { LIFECYCLE_AGENT_URL_ENV } from "takosumi-contract/reference/runtime-agent-lifecycle";
+import { currentRuntime } from "@takos/takosumi-kernel/runtime";
 
 function createServerCommand() {
   return new Command()
@@ -25,8 +26,9 @@ function createServerCommand() {
         printDaemonizationTemplate(port);
         return;
       }
+      const runtime = currentRuntime();
       const agentDisabled = agent === false;
-      const agentUrl = Deno.env.get(LIFECYCLE_AGENT_URL_ENV);
+      const agentUrl = runtime.env.get(LIFECYCLE_AGENT_URL_ENV);
       let agentShutdown: (() => Promise<void>) | undefined;
       if (!agentUrl && !agentDisabled) {
         const { startEmbeddedAgent } = await import(
@@ -44,23 +46,24 @@ function createServerCommand() {
       if (agentShutdown) {
         registerShutdownHandlers(agentShutdown);
       }
-      Deno.env.set("PORT", String(port));
+      runtime.env.set("PORT", String(port));
       await import("@takos/takosumi-kernel");
     });
 }
 
 function registerShutdownHandlers(shutdown: () => Promise<void>): void {
+  const runtime = currentRuntime();
   let shuttingDown = false;
-  const handler = (signal: Deno.Signal) => {
+  const handler = (signal: "SIGINT" | "SIGTERM") => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[takosumi-server] received ${signal}, draining...`);
     shutdown()
       .catch((err) => console.error("[takosumi-server] shutdown error:", err))
-      .finally(() => Deno.exit(0));
+      .finally(() => runtime.exit(0));
   };
-  Deno.addSignalListener("SIGINT", () => handler("SIGINT"));
-  Deno.addSignalListener("SIGTERM", () => handler("SIGTERM"));
+  runtime.onSignal("SIGINT", () => handler("SIGINT"));
+  runtime.onSignal("SIGTERM", () => handler("SIGTERM"));
 }
 
 /**
@@ -79,7 +82,7 @@ function registerShutdownHandlers(shutdown: () => Promise<void>): void {
  *   - nohup one-liner (for quick adhoc tests; not for production)
  */
 function printDaemonizationTemplate(port: number): void {
-  const exec = Deno.execPath();
+  const exec = currentRuntime().execPath();
   const lines = [
     "[takosumi] --detach is fire-and-forget: pick a supervisor template.",
     "",

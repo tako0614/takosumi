@@ -183,6 +183,37 @@ export interface RollbackResponse {
 export interface RollbackMetadata {
   readonly rolledBackFrom: string | null;
   readonly rolledBackTo: string;
+  /**
+   * Scope of what a rollback actually reverts. A Takosumi rollback re-points
+   * the Installation's current Deployment to a prior retained Deployment. It
+   * is a control-plane pointer operation, NOT a workload-state rollback.
+   * These fields are first-class so a caller can never mistake a Deployment
+   * rollback for a data/state rollback. See {@link RollbackScope}.
+   */
+  readonly scope: RollbackScope;
+}
+
+/**
+ * The three axes a rollback could in principle touch, and what Takosumi
+ * actually does to each. Encoded as fixed literals (not free strings) so the
+ * boundary is part of the wire contract and survives client codegen:
+ *
+ * - `pointer`: ALWAYS `"reverted"` — the Installation's `currentDeploymentId`
+ *   is flipped back to the rollback target.
+ * - `resourceMaterialization`: `"not-reapplied"` — provider resources are NOT
+ *   re-materialized by rollback. Backend state is whatever the most recent
+ *   apply left in place; to make resources match the target, follow the
+ *   rollback with a fresh `deploymentApply` against the target source.
+ * - `workloadState`: ALWAYS `"not-reverted"` — the deployed workload's data
+ *   and database schema are NEVER rolled back. There is no generic inverse of
+ *   forward migrations / data writes across heterogeneous providers. Data
+ *   recovery is the application's responsibility via backup/restore and
+ *   expand-contract migration discipline, never the kernel's.
+ */
+export interface RollbackScope {
+  readonly pointer: "reverted";
+  readonly resourceMaterialization: "not-reapplied";
+  readonly workloadState: "not-reverted";
 }
 
 // ──────────────────────────────────────────────

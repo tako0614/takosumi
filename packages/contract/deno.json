@@ -13,6 +13,7 @@
     "./reference/plugin-sdk": "./src/plugin-sdk.ts",
     "./reference/runtime-agent": "./src/runtime-agent.ts",
     "./reference/runtime-agent-lifecycle": "./src/runtime-agent-lifecycle.ts",
+    "./reference/runtime-capability": "./src/runtime-capability.ts",
     "./reference/shape": "./src/shape.ts",
     "./reference/shape-validators": "./src/shape-validators.ts",
     "./reference/types": "./src/types.ts",

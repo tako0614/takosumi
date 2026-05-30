@@ -1,5 +1,5 @@
 /**
- * `tar` subprocess primitive for the installer (Node implementation).
+ * Installer-local default `tar` capability (Node implementation).
  *
  * dnt swaps `tar-runner.ts` (Deno) for this module in the npm output via a
  * `mappings` entry in `scripts/build-npm.ts`. The Deno runtime never loads
@@ -7,8 +7,9 @@
  */
 
 import { spawn } from "node:child_process";
+import type { TarRunner } from "@takos/takosumi-contract/reference/runtime-capability";
 
-export function runTarCommand(
+function runTarCommand(
   args: readonly string[],
   stdin: Uint8Array,
 ): Promise<string> {
@@ -45,6 +46,17 @@ export function runTarCommand(
     }
   });
 }
+
+/**
+ * Default `TarRunner` over the installer's Node-runtime `tar` primitive. Wraps
+ * {@link runTarCommand} so the prepared-source fetcher consumes the injected
+ * {@link TarRunner} interface.
+ */
+export const defaultTarRunner: TarRunner = {
+  run(args, stdin) {
+    return runTarCommand(args, stdin);
+  },
+};
 
 function concatChunks(chunks: readonly Uint8Array[]): Uint8Array {
   let total = 0;

@@ -24,6 +24,14 @@ export type Signal = "SIGINT" | "SIGTERM";
 export interface EnvReader {
   get(name: string): string | undefined;
   toObject(): Record<string, string>;
+  /**
+   * Set a process environment variable. Available on Deno (`Deno.env.set`)
+   * and Node (`process.env[name] = value`); a no-op on Workers / unknown
+   * runtimes, where process env is not a mutable surface. Used by long-running
+   * server entry points (e.g. the CLI `server` command handing `PORT` to the
+   * kernel module).
+   */
+  set(name: string, value: string): void;
 }
 
 export interface FsAdapter {
@@ -42,6 +50,21 @@ export interface FsAdapter {
    * module init time. Available on Deno and Node; throws on Workers.
    */
   readTextFileSync(path: string | URL): string;
+  /**
+   * Create a uniquely-named temporary directory and return its absolute
+   * path. Used by the installer pipeline to stage git / prepared source
+   * checkouts before reading the AppSpec. Available on Deno and Node;
+   * throws on Workers (`makeTempDir` → `Deno.makeTempDir` /
+   * `node:fs/promises#mkdtemp`).
+   */
+  makeTempDir(prefix?: string): Promise<string>;
+  /**
+   * Remove a file or directory. With `{ recursive: true }` the entire tree
+   * is removed (used to clean up the temp checkout staged by
+   * {@link FsAdapter.makeTempDir}). Available on Deno and Node; throws on
+   * Workers (`remove` → `Deno.remove` / `node:fs/promises#rm`).
+   */
+  remove(path: string | URL, options?: { recursive?: boolean }): Promise<void>;
   isNotFoundError(error: unknown): boolean;
 }
 
@@ -84,6 +107,13 @@ export interface RuntimeAdapter {
   readonly env: EnvReader;
   readonly fs: FsAdapter;
   readonly subprocess: SubprocessAdapter;
+  /**
+   * Absolute path to the runtime executable that is running this process
+   * (`Deno.execPath()` / Node `process.execPath`). Used by CLI commands that
+   * render supervisor templates (e.g. `takosumi server --detach`). Throws
+   * {@link UnavailableInRuntimeError} on Workers / unknown runtimes.
+   */
+  execPath(): string;
   exit(code: number): never;
   onSignal(signal: Signal, handler: () => void): void;
   serveHttp(

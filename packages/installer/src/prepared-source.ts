@@ -6,13 +6,32 @@
  * digest before reading `.takosumi.yml` and invoking materializers.
  */
 
+import type {
+  InstallerFs,
+  TarRunner,
+} from "@takos/takosumi-contract/reference/runtime-capability";
 import { assertHostNotBlocked, BlockedHostError } from "./host-blocklist.ts";
-import { runTarCommand } from "./subprocess/tar-runner.ts";
+import { defaultInstallerFs } from "./default-fs.ts";
+import { defaultTarRunner } from "./subprocess/tar-runner.ts";
 
 export interface PreparedSourceFetchOptions {
   readonly url: string;
   readonly digest: string;
   readonly destination?: string;
+  /**
+   * Injected `tar` capability. Defaults to a runner built over the installer's
+   * Deno-runtime `tar` primitive so standalone Deno behavior is unchanged; the
+   * reference kernel injects a runner routed through
+   * `currentRuntime().subprocess` so the same path runs on Node / Workers
+   * without this module referencing `Deno.Command`.
+   */
+  readonly tarRunner?: TarRunner;
+  /**
+   * Injected temp-dir filesystem capability. Defaults to a Deno-backed FS so
+   * standalone Deno behavior is unchanged; the reference kernel injects
+   * `currentRuntime().fs`.
+   */
+  readonly fs?: InstallerFs;
 }
 
 export interface PreparedSourceFetchResult {
@@ -99,6 +118,9 @@ export async function fetchPreparedSource(
     throw new Error("prepared source digest must use sha256:<hex>");
   }
 
+  const tarRunner = options.tarRunner ?? defaultTarRunner;
+  const fs = options.fs ?? defaultInstallerFs;
+
   const bytes = await readPreparedArchive(options.url);
   const actualDigest = await sha256Hex(bytes);
   if (actualDigest !== options.digest) {
@@ -108,7 +130,7 @@ export async function fetchPreparedSource(
   }
 
   const destination = options.destination ??
-    (await Deno.makeTempDir({ prefix: "takosumi-prepared-source-" }));
+    (await fs.makeTempDir("takosumi-prepared-source-"));
   const ownsDestination = options.destination === undefined;
   try {
     // The gzip magic bytes are authoritative; the URL suffix is consulted
@@ -118,7 +140,7 @@ export async function fetchPreparedSource(
     const compressed = bytes.length >= 2
       ? isGzipBytes(bytes)
       : isGzipUrlSuffix(options.url);
-    await assertSafeTarEntries(bytes, compressed);
+    await assertSafeTarEntries(tarRunner, bytes, compressed);
     // Extraction safety:
     // - `--no-same-owner` ignores tar uid/gid so a malicious archive cannot
     //   chown extracted files to a privileged user.
@@ -134,6 +156,7 @@ export async function fetchPreparedSource(
       "--keep-old-files",
     ];
     await runTar(
+      tarRunner,
       compressed
         ? ["-x", "-z", "-f", "-", ...extractionFlags, "-C", destination]
         : ["-x", "-f", "-", ...extractionFlags, "-C", destination],
@@ -141,7 +164,7 @@ export async function fetchPreparedSource(
     );
   } catch (err) {
     if (ownsDestination) {
-      await Deno.remove(destination, { recursive: true }).catch(() => {});
+      await fs.remove(destination, { recursive: true }).catch(() => {});
     }
     throw err;
   }
@@ -149,7 +172,7 @@ export async function fetchPreparedSource(
   return {
     workingDirectory: destination,
     digest: actualDigest,
-    cleanup: () => Deno.remove(destination, { recursive: true }),
+    cleanup: () => fs.remove(destination, { recursive: true }),
   };
 }
 
@@ -297,6 +320,7 @@ function isGzipUrlSuffix(url: string): boolean {
 }
 
 async function assertSafeTarEntries(
+  tarRunner: TarRunner,
   bytes: Uint8Array,
   compressed: boolean,
 ): Promise<void> {
@@ -307,6 +331,7 @@ async function assertSafeTarEntries(
   //   lrwxrwxrwx user/group  size date time path -> target
   //   hrw-r--r-- user/group  size date time path link to target
   const verbose = await runTar(
+    tarRunner,
     compressed ? ["-t", "-v", "-z", "-f", "-"] : ["-t", "-v", "-f", "-"],
     bytes,
   );
@@ -455,10 +480,11 @@ function assertSafeTarLinkTarget(entry: TarVerboseEntry, label: string): void {
 }
 
 function runTar(
+  tarRunner: TarRunner,
   args: readonly string[],
   stdin: Uint8Array,
 ): Promise<string> {
-  return runTarCommand(args, stdin);
+  return tarRunner.run(args, stdin);
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {

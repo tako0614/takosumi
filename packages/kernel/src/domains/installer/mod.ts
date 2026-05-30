@@ -22,6 +22,10 @@
 import type { JsonValue } from "takosumi-contract";
 import type { KernelPlugin } from "takosumi-contract/reference/compat";
 import type {
+  GitRunner,
+  TarRunner,
+} from "takosumi-contract/reference/runtime-capability";
+import type {
   AppSpec,
   BindingOptions,
   Component,
@@ -78,18 +82,6 @@ import {
   InstallationPatchGuardConflict,
   type InstallationStore,
 } from "./store.ts";
-
-/**
- * Local widening of the contract `RollbackResponse` to attach the
- * `rollbackKind: "pointer-only"` marker described on
- * {@link InstallerPipeline.rollback}. The contract types are intentionally
- * unchanged — clients that ignore unknown fields see the documented
- * structure, and clients that care can observe the marker structurally on
- * the response.
- */
-type RollbackResponseWithKind = RollbackResponse & {
-  readonly rollbackKind: "pointer-only";
-};
 
 /**
  * Apply context passed to {@link InstallerProviderRegistry.apply}. The
@@ -248,6 +240,17 @@ export function httpPlatformServiceResolver(
   };
 }
 
+/**
+ * Read-only status projection returned by {@link InstallerPipeline.status}.
+ * The current Deployment is omitted when the Installation has never recorded a
+ * successful pointer (`currentDeploymentId === null`).
+ */
+export interface InstallationStatus {
+  readonly installation: Installation;
+  readonly currentDeployment?: Deployment;
+  readonly deployments: readonly Deployment[];
+}
+
 export interface InstallerPipelineDependencies {
   readonly installations?: InstallationStore;
   readonly deployments?: DeploymentStore;
@@ -288,6 +291,19 @@ export interface InstallerPipelineDependencies {
    * must supply `source.url` as an absolute path.
    */
   readonly localSourceRoot?: string;
+  /**
+   * Injected `git` capability used to fetch `source.kind: "git"` checkouts.
+   * When unset, the installer's source fetcher falls back to its own
+   * Deno-runtime default; the kernel bootstrap injects a runner routed through
+   * `currentRuntime().subprocess` (operator-overridable) so the same path runs
+   * on Node / Workers without the installer referencing `Deno.Command`.
+   */
+  readonly gitRunner?: GitRunner;
+  /**
+   * Injected `tar` capability used to verify / extract
+   * `source.kind: "prepared"` archives. Defaults like {@link gitRunner}.
+   */
+  readonly tarRunner?: TarRunner;
 }
 
 export class InstallerPipeline {
@@ -300,6 +316,8 @@ export class InstallerPipeline {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #localSourceRoot?: string;
+  readonly #gitRunner?: GitRunner;
+  readonly #tarRunner?: TarRunner;
   /**
    * Per-Installation mutation queue. `deploymentApply` and `rollback` for the
    * same `installationId` chain onto the previous promise so two concurrent
@@ -361,6 +379,8 @@ export class InstallerPipeline {
         `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`);
     this.#now = dependencies.now ?? (() => Date.now());
     this.#localSourceRoot = dependencies.localSourceRoot;
+    this.#gitRunner = dependencies.gitRunner;
+    this.#tarRunner = dependencies.tarRunner;
   }
 
   /**
@@ -634,6 +654,33 @@ export class InstallerPipeline {
     );
   }
 
+  /**
+   * Read-only status accessor: returns the Installation record plus its
+   * current Deployment (when the pointer is set) and the full Deployment
+   * history for the Installation. This is a thin read over the already-wired
+   * Installation / Deployment stores — it does not fetch source, materialize
+   * components, or mutate any record — so the in-process operate facade
+   * (`createPaaSApp(...).kernel.status`) can surface Installation lifecycle
+   * state without re-running the apply pipeline.
+   *
+   * Throws an `InstallerPipelineError("not_found")` when the Installation does
+   * not exist, mirroring the Installer API surface.
+   */
+  async status(installationId: string): Promise<InstallationStatus> {
+    const installation = await this.#requireInstallation(installationId);
+    const deployments = await this.#deployments.listForInstallation(
+      installationId,
+    );
+    const currentDeployment = installation.currentDeploymentId
+      ? deployments.find((d) => d.id === installation.currentDeploymentId)
+      : undefined;
+    return {
+      installation,
+      ...(currentDeployment ? { currentDeployment } : {}),
+      deployments,
+    };
+  }
+
   async #rollbackImpl(
     installationId: string,
     request: RollbackRequest,
@@ -671,22 +718,23 @@ export class InstallerPipeline {
       currentDeploymentId: previous.id,
       status: "ready" as const,
     };
-    // `rollbackKind: "pointer-only"` documents that this RollbackResponse
-    // reflects a pointer flip + audit log entry, not a backend re-apply.
-    // The contract `RollbackResponse` type does not declare `rollbackKind`,
-    // so the field is attached as an additional readonly property at the
-    // response top level (NOT inside `rollback`, which is contract-typed and
-    // kept exactly to spec for existing clients / deepEqual assertions).
-    // Clients that ignore unknown fields are unaffected; clients that care
-    // can observe the marker via structural typing.
-    const response: RollbackResponseWithKind = {
+    // `rollback.scope` is the first-class, contract-declared statement of what
+    // this operation reverts: the Deployment pointer is flipped, provider
+    // resources are NOT re-materialized, and workload data/schema are NEVER
+    // reverted. It replaces the previous out-of-contract `rollbackKind` marker
+    // so callers cannot mistake a pointer rollback for a state rollback.
+    const response: RollbackResponse = {
       installation: updatedInstallation,
       deployment: previous,
       rollback: {
         rolledBackFrom,
         rolledBackTo: previous.id,
+        scope: {
+          pointer: "reverted",
+          resourceMaterialization: "not-reapplied",
+          workloadState: "not-reverted",
+        },
       },
-      rollbackKind: "pointer-only",
     };
     return response;
   }
@@ -1352,6 +1400,12 @@ export class InstallerPipeline {
       const result = await fetchGitSource({
         url: source.url,
         ref: source.ref,
+        // Inject the kernel's runtime FS so the installer stages the checkout
+        // through the RuntimeAdapter instead of the installer-local Deno
+        // fallback. The git runner is injected only when the operator / bootstrap
+        // supplied one; otherwise the installer's own default applies.
+        fs: currentRuntime().fs,
+        ...(this.#gitRunner ? { gitRunner: this.#gitRunner } : {}),
       });
       return {
         workingDirectory: result.workingDirectory,
@@ -1376,6 +1430,10 @@ export class InstallerPipeline {
         const result = await fetchPreparedSource({
           url: source.url,
           digest: source.digest,
+          // Inject the kernel's runtime FS; the tar runner is injected only
+          // when the operator / bootstrap supplied one.
+          fs: currentRuntime().fs,
+          ...(this.#tarRunner ? { tarRunner: this.#tarRunner } : {}),
         });
         return {
           workingDirectory: result.workingDirectory,
