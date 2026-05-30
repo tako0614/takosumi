@@ -104,7 +104,26 @@ export const DEFAULT_LOCAL_ENTITLEMENT_POLICY = Object.freeze(
   } satisfies LocalEntitlementPolicyConfigDto,
 );
 
-export class EntitlementPolicyService {
+/**
+ * The entitlement-policy surface the kernel consumes (the internal-mutation
+ * boundary gate in `api/internal_routes.ts`). The local membership-RBAC
+ * `EntitlementPolicyService` is the kernel default; operator distributions
+ * (takosumi-cloud) may inject a tier/billing-aware implementation via
+ * `createPaaSApp({ managedHosting: { entitlements } })`.
+ */
+export interface EntitlementPolicyPort {
+  getEffectiveEntitlements(
+    query: EffectiveEntitlementsQuery,
+  ): Promise<EffectiveEntitlements | undefined>;
+  decideMutationBoundary(
+    input: MutationBoundaryCheckInput,
+  ): Promise<EntitlementDecision>;
+  requireMutationBoundary(
+    input: MutationBoundaryCheckInput,
+  ): Promise<EffectiveEntitlements>;
+}
+
+export class EntitlementPolicyService implements EntitlementPolicyPort {
   readonly #memberships: SpaceMembershipStore;
   readonly #policy: LocalEntitlementPolicyConfigDto;
 
