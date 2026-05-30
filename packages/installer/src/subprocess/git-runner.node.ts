@@ -1,5 +1,5 @@
 /**
- * `git` subprocess primitive for the installer (Node implementation).
+ * Installer-local default `git` capability (Node implementation).
  *
  * dnt swaps `git-runner.ts` (Deno) for this module in the npm output via a
  * `mappings` entry in `scripts/build-npm.ts`. The Deno runtime never loads
@@ -8,14 +8,14 @@
  */
 
 import { spawn } from "node:child_process";
+import type {
+  GitInvocationResult,
+  GitRunner,
+} from "@takos/takosumi-contract/reference/runtime-capability";
 
-export interface GitInvocationResult {
-  readonly ok: boolean;
-  readonly stdout: string;
-  readonly stderr: string;
-}
+export type { GitInvocationResult };
 
-export function runGitCommand(
+function runGitCommand(
   args: readonly string[],
   cwd?: string,
 ): Promise<GitInvocationResult> {
@@ -39,6 +39,17 @@ export function runGitCommand(
     });
   });
 }
+
+/**
+ * Default `GitRunner` over the installer's Node-runtime `git` primitive. Wraps
+ * {@link runGitCommand} so the source fetcher consumes the injected
+ * {@link GitRunner} interface.
+ */
+export const defaultGitRunner: GitRunner = {
+  run(args, cwd) {
+    return runGitCommand(args, cwd);
+  },
+};
 
 function concatChunks(chunks: readonly Uint8Array[]): Uint8Array {
   let total = 0;

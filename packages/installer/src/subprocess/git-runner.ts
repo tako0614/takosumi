@@ -1,22 +1,27 @@
 /**
- * `git` subprocess primitive for the installer (Deno implementation).
+ * Installer-local default `git` capability (Deno implementation).
  *
- * This is the canonical Deno runtime path: it invokes `git` through
+ * This is the fallback `GitRunner` used when no runner is injected — for
+ * example the installer's own standalone Deno tests. It invokes `git` through
  * `Deno.Command` exactly as before. The npm build swaps this module for the
  * Node sibling (`git-runner.node.ts`) via a dnt `mappings` entry in
  * `scripts/build-npm.ts`, so the Deno runtime behaviour is unchanged and the
  * npm package runs the same git invocations through `node:child_process`.
  *
- * Keep the exported shape identical between the Deno and Node modules.
+ * In production the reference kernel injects a `GitRunner` routed through
+ * `currentRuntime().subprocess`, so callers no longer reference `Deno.Command`
+ * directly. Keep the exported shape identical between the Deno and Node
+ * modules.
  */
 
-export interface GitInvocationResult {
-  readonly ok: boolean;
-  readonly stdout: string;
-  readonly stderr: string;
-}
+import type {
+  GitInvocationResult,
+  GitRunner,
+} from "@takos/takosumi-contract/reference/runtime-capability";
 
-export async function runGitCommand(
+export type { GitInvocationResult };
+
+async function runGitCommand(
   args: readonly string[],
   cwd?: string,
 ): Promise<GitInvocationResult> {
@@ -34,3 +39,14 @@ export async function runGitCommand(
     stderr: decoder.decode(stderr),
   };
 }
+
+/**
+ * Default `GitRunner` over the installer's Deno-runtime `git` primitive. Wraps
+ * {@link runGitCommand} so the source fetcher consumes the injected
+ * {@link GitRunner} interface without referencing `Deno.Command`.
+ */
+export const defaultGitRunner: GitRunner = {
+  run(args, cwd) {
+    return runGitCommand(args, cwd);
+  },
+};

@@ -1,16 +1,18 @@
-import type {
-  EnvReader,
-  FetchHandler,
-  FsAdapter,
-  RuntimeAdapter,
-  ServeHttpHandle,
-  ServeHttpOptions,
-  SubprocessAdapter,
-  SubprocessOutput,
+import {
+  type EnvReader,
+  type FetchHandler,
+  type FsAdapter,
+  type RuntimeAdapter,
+  type ServeHttpHandle,
+  type ServeHttpOptions,
+  type SubprocessAdapter,
+  type SubprocessOutput,
+  UnavailableInRuntimeError,
 } from "./runtime.ts";
 
 interface NodeProcess {
   env: Record<string, string | undefined>;
+  execPath: string;
   exit(code?: number): never;
   on(event: string, handler: () => void): void;
 }
@@ -31,6 +33,10 @@ const env: EnvReader = {
     const proc = getProcess();
     const value = proc?.env[name];
     return typeof value === "string" ? value : undefined;
+  },
+  set(name, value) {
+    const proc = getProcess();
+    if (proc) proc.env[name] = value;
   },
   toObject() {
     const proc = getProcess();
@@ -83,6 +89,27 @@ const fs: FsAdapter = {
   async mkdir(path, options) {
     const mod = await import("node:fs/promises");
     await mod.mkdir(path, { recursive: options?.recursive ?? false });
+  },
+  async makeTempDir(prefix) {
+    // Match `Deno.makeTempDir({ prefix })`: create a uniquely-named directory
+    // inside the OS temp dir whose basename starts with `prefix`. Node's
+    // `mkdtemp` takes a full path template and appends 6 random chars, so we
+    // join `os.tmpdir()` with the prefix to land the temp dir in the same
+    // location Deno uses.
+    const [fsMod, osMod, pathMod] = await Promise.all([
+      import("node:fs/promises"),
+      import("node:os"),
+      import("node:path"),
+    ]);
+    const template = pathMod.join(osMod.tmpdir(), prefix ?? "");
+    return await fsMod.mkdtemp(template);
+  },
+  async remove(path, options) {
+    const mod = await import("node:fs/promises");
+    await mod.rm(path as string | URL, {
+      recursive: options?.recursive ?? false,
+      force: false,
+    });
   },
   isNotFoundError(error) {
     return hasErrorCode(error, "ENOENT");
@@ -214,6 +241,11 @@ export const nodeRuntime: RuntimeAdapter = {
   env,
   fs,
   subprocess,
+  execPath() {
+    const proc = getProcess();
+    if (proc) return proc.execPath;
+    throw new UnavailableInRuntimeError("execPath", "node");
+  },
   exit(code) {
     const proc = getProcess();
     if (proc) proc.exit(code);

@@ -22,7 +22,8 @@
  */
 
 import type { PreparedSourceLocator } from "takosumi-contract/reference/runtime-agent-lifecycle";
-import { runTarCommand } from "./subprocess/tar-runner.ts";
+import type { TarRunner } from "takosumi-contract/reference/runtime-capability";
+import { defaultTarRunner } from "./capability_runners.ts";
 
 export interface PreparedSourceReader {
   readFile(path: string): Promise<Uint8Array>;
@@ -79,6 +80,10 @@ function readPositiveByteEnv(name: string, fallback: number): number {
 
 export async function sourceContextFromLocator(
   locator: PreparedSourceLocator | undefined,
+  // `tar` is an injected runtime capability rather than a direct subprocess
+  // call in the library surface; defaults to the runtime-agent's local
+  // subprocess-backed runner so the Deno runtime behavior is unchanged.
+  tarRunner: TarRunner = defaultTarRunner,
 ): Promise<PreparedSourceContext | undefined> {
   if (!locator) return undefined;
   if (locator.workingDirectory) {
@@ -123,7 +128,7 @@ export async function sourceContextFromLocator(
     const compressed = bytes.length >= 2
       ? isGzipBytes(bytes)
       : isGzipUrlSuffix(locator.url);
-    await assertSafeTarEntries(bytes, compressed);
+    await assertSafeTarEntries(bytes, compressed, tarRunner);
     // Extraction safety:
     // - `--no-same-owner` ignores tar uid/gid so a malicious archive cannot
     //   chown extracted files to a privileged user.
@@ -135,7 +140,7 @@ export async function sourceContextFromLocator(
       "--no-same-owner",
       "--keep-old-files",
     ];
-    await runTar(
+    await tarRunner.run(
       compressed
         ? ["-x", "-z", "-f", "-", ...extractionFlags, "-C", destination]
         : ["-x", "-f", "-", ...extractionFlags, "-C", destination],
@@ -492,6 +497,7 @@ function isSha256Digest(value: string): boolean {
 async function assertSafeTarEntries(
   bytes: Uint8Array,
   compressed: boolean,
+  tarRunner: TarRunner,
 ): Promise<void> {
   // Single verbose listing pass — we derive both the path table (for the
   // duplicate / traversal check), the per-entry decompressed-size sum, and the
@@ -499,7 +505,7 @@ async function assertSafeTarEntries(
   //   -rw-r--r-- user/group  size date time path
   //   lrwxrwxrwx user/group  size date time path -> target
   //   hrw-r--r-- user/group  size date time path link to target
-  const verbose = await runTar(
+  const verbose = await tarRunner.run(
     compressed ? ["-t", "-v", "-z", "-f", "-"] : ["-t", "-v", "-f", "-"],
     bytes,
   );
@@ -645,13 +651,6 @@ function assertSafeTarLinkTarget(entry: TarVerboseEntry, label: string): void {
   ) {
     throw new Error(`${label} link target escapes destination: ${target}`);
   }
-}
-
-function runTar(
-  args: readonly string[],
-  stdin: Uint8Array,
-): Promise<string> {
-  return runTarCommand(args, stdin);
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {

@@ -424,6 +424,11 @@ Deno.test("InstallerPipeline rollback moves current pointer without creating a n
     assert.deepEqual(rollback.rollback, {
       rolledBackFrom: second.deployment.id,
       rolledBackTo: first.deployment.id,
+      scope: {
+        pointer: "reverted",
+        resourceMaterialization: "not-reapplied",
+        workloadState: "not-reverted",
+      },
     });
 
     const [installation] = await pipeline.listInstallations("space_test");

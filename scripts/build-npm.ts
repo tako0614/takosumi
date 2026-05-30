@@ -37,9 +37,6 @@ const SUBPROCESS_MAPPINGS: Record<string, string> = {
   [fromRootUrl("packages/runtime-agent/src/subprocess/serve.ts")]: fromRootUrl(
     "packages/runtime-agent/src/subprocess/serve.node.ts",
   ),
-  [fromRootUrl("packages/cli/src/commands/migrate-runtime.ts")]: fromRootUrl(
-    "packages/cli/src/commands/migrate-runtime.node.ts",
-  ),
 };
 
 // version comes from packages/all/deno.json (umbrella)

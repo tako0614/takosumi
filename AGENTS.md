@@ -1,6 +1,6 @@
 # AGENTS.md — Takosumi
 
-This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. It contains the contract, reference kernel, installer, CLI, generic runtime-agent host, portable official catalog descriptors, and the server entry, all shipped as one npm package (`@takosjp/takosumi`) via subpath exports. Backend-specific native kind plugin packages and concrete runtime-agent connectors ship as the sibling `@takosjp/takosumi-plugins` npm package, sourced from the `takosumi-plugins` repository.
+This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel published as a **framework library you import** (`@takosjp/takosumi`). It provides (a) a programmatic **operate-the-kernel API** (install / deploy / rollback / status) and (b) an **embeddable, extendable Hono `app`** that already mounts the 5 installer endpoints and the kernel API. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. The framework **never self-serves**: `createPaaSApp` returns the `app` and an operate facade, and the implementation owns production serving, route extension, and runtime capability injection. It contains the contract, reference kernel, installer, CLI, generic runtime-agent host, portable official catalog descriptors, and an optional dev-runner server entry, all shipped as one npm package (`@takosjp/takosumi`) via subpath exports. Backend-specific native kind plugin packages and concrete runtime-agent connectors ship as the sibling `@takosjp/takosumi-plugins` npm package, sourced from the `takosumi-plugins` repository. The reference **composer** that embeds this app, extends it (dashboard / billing / install routes), and serves the one composed app from a single cloud URL is `takosumi-cloud`.
 
 Canonical contract: [`@takosjp/takosumi/contract`](https://www.npmjs.com/package/@takosjp/takosumi) (`packages/contract/`).
 
@@ -95,7 +95,9 @@ createPaaSApp({
 
 This is the official reference implementation strategy, similar in shape to Vite plugins. It is not a requirement for compatible implementations. A compatible implementation may bind the same kind URI through a native controller, static registry, workflow engine, or SaaS adapter.
 
-Kernel core must remain cloud-provider neutral. Cloud SDKs, host commands, and backend credentials stay in kind packages, runtime-agent connectors, or operator distribution code.
+Plugins extend **kinds + materialization + lifecycle** only: `provides[]` kind URIs, `apply` / `destroy` / `status` / `materializeOutput` / `applyBinding`, and install/deploy lifecycle hooks. Plugins do **not** add HTTP routes or middleware and do not transform the AppSpec — the 5-endpoint Installer API stays a closed contract. **Route extension is the implementation's job via the returned Hono `app`** (the composer does `app.route('/dashboard', …)`), not a plugin hook. This keeps the contract fixed while allowing unlimited composition around it.
+
+Kernel core must remain cloud-provider neutral. Cloud SDKs, host commands, and backend credentials stay in kind packages, runtime-agent connectors, or operator distribution code. Runtime capabilities the library needs (git / tar subprocess, temp-dir FS, HTTP serve) are **injected by the implementation** through the runtime adapter, never called directly on the imported library surface.
 
 ## Runtime Neutrality
 
@@ -153,10 +155,11 @@ repository, not from this one.
 
 Source is Deno-first and published to npm via dnt (Deno→Node Transform). The
 build entry in this repository is `scripts/build-npm.ts`; the plugins package
-builds via `takosumi-plugins/scripts/dnt-build.ts`. A few Deno subprocess and
-`serve` modules are dnt-mapped to Node implementations in the npm output, so
-runtime behavior on Deno is unchanged while the published npm package runs on
-Node.
+builds via `takosumi-plugins/scripts/dnt-build.ts`. Because the framework surface
+never calls `Deno.serve` / `Deno.Command` directly — serving and git / tar / temp-dir
+capabilities are injected by the implementation through the runtime adapter — the
+published `@takosjp/takosumi` graph builds with no subprocess module mappings, and
+Node behavior comes from the Node runtime adapter at runtime.
 
 ## Commands
 

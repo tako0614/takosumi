@@ -149,6 +149,32 @@ POST /v1/installations/{id}/rollback
 dashboard、CLI、rollback target selection、support workflow のための read / list
 / history / poll surface は operator-owned read model です。
 
+## Rollback Semantics
+
+`POST /v1/installations/{id}/rollback` は **control-plane の pointer 操作**です。
+Installation の `currentDeploymentId` を、保持済みの過去の成功 Deployment
+(rollback target) に差し戻し、audit log に rollback を記録します。新しい
+Deployment は作りません。
+
+rollback が「巻き戻す」範囲は `RollbackResponse.rollback.scope` で明示されます:
+
+| 軸                        | 値              | 意味                                                                                             |
+| ------------------------- | --------------- | ------------------------------------------------------------------------------------------------ |
+| `pointer`                 | `reverted`      | `currentDeploymentId` を rollback target に差し戻す。                                            |
+| `resourceMaterialization` | `not-reapplied` | provider のリソースは **再 materialize しない**。backend の実体は直近 apply が残した状態のまま。 |
+| `workloadState`           | `not-reverted`  | workload の **データ / DB スキーマは決して巻き戻さない**。                                       |
+
+これは欠陥ではなく境界です。forward migration(`DROP COLUMN`、型変更、backfill
+等)やデータ書き込み、複数 provider を跨ぐ副作用には汎用的な逆操作も分散
+トランザクションも存在しないため、Takosumi kernel は workload の状態を巻き戻し
+ません。
+
+- **リソースの実体を rollback target に一致させたい**場合は、rollback の後に
+  rollback target の source で改めて `deploymentApply`(または forward fix)を
+  実行します。
+- **データ / スキーマの復旧**は app の責務です。backup/restore と
+  expand-contract migration 規律で対応し、Deployment rollback には依存しません。
+
 ## Source Input
 
 | Kind       | 意味                                                                                    |

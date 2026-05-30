@@ -95,6 +95,12 @@ function unknownRuntime(): RuntimeAdapter {
     mkdir() {
       throw new UnavailableInRuntimeError("fs.mkdir", "unknown");
     },
+    makeTempDir() {
+      throw new UnavailableInRuntimeError("fs.makeTempDir", "unknown");
+    },
+    remove() {
+      throw new UnavailableInRuntimeError("fs.remove", "unknown");
+    },
     isNotFoundError() {
       return false;
     },
@@ -109,10 +115,14 @@ function unknownRuntime(): RuntimeAdapter {
     kind: "unknown",
     env: {
       get: () => undefined,
+      set: () => {},
       toObject: () => ({}),
     },
     fs,
     subprocess,
+    execPath() {
+      throw new UnavailableInRuntimeError("execPath", "unknown");
+    },
     exit() {
       throw new UnavailableInRuntimeError("exit", "unknown");
     },

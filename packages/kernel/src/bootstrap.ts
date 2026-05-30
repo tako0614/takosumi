@@ -9,6 +9,7 @@ import {
   type AppContextOptions,
   type AppRuntimeConfig,
   createAppContext,
+  type DeployServices,
 } from "./app_context.ts";
 import { loadRuntimeConfigFromEnv } from "./config/mod.ts";
 import { isPaaSProcessRole, type PaaSProcessRole } from "./process/mod.ts";
@@ -37,9 +38,30 @@ import {
 import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy/takosumi_deployment_record_store_sql.ts";
 import {
   httpPlatformServiceResolver,
+  type InstallationStatus,
   InstallerPipeline,
   type PlatformServiceResolver,
 } from "./domains/installer/mod.ts";
+import type {
+  DeploymentApplyRequest,
+  DeploymentApplyResponse,
+  DeploymentDryRunRequest,
+  DeploymentDryRunResponse,
+  InstallationApplyRequest,
+  InstallationApplyResponse,
+  InstallationDryRunRequest,
+  InstallationDryRunResponse,
+  RollbackRequest,
+  RollbackResponse,
+} from "takosumi-contract/installer-api";
+import {
+  defaultGitRunner,
+  defaultTarRunner,
+} from "./shared/runtime/capability-runners.ts";
+import type {
+  GitRunner,
+  TarRunner,
+} from "takosumi-contract/reference/runtime-capability";
 import type {
   DeploymentStore as InstallerDeploymentStore,
   InstallationStore as InstallerInstallationStore,
@@ -243,6 +265,63 @@ export interface CreatePaaSAppOptions extends AppContextOptions {
    * attach identity, billing, or account semantics to the path string.
    */
   readonly platformServices?: PlatformServiceResolver;
+  /**
+   * Injected runtime capabilities. Takosumi is consumed as a framework
+   * library: git / tar subprocess capabilities are injected here rather than
+   * reached through `Deno.*` / `node:*` in the library surface. Both fields are
+   * optional and default to runners built over the `RuntimeAdapter`
+   * `SubprocessAdapter` (`currentRuntime().subprocess`), so the default Deno
+   * runtime behavior is unchanged. Operators that fetch git source or read
+   * prepared tar archives through a custom transport inject their own runner.
+   */
+  readonly runtime?: {
+    readonly gitRunner?: GitRunner;
+    readonly tarRunner?: TarRunner;
+  };
+}
+
+/**
+ * Typed in-process operate facade exposed on {@link CreatedPaaSApp.kernel}.
+ *
+ * The facade delegates to the already-wired {@link InstallerPipeline} (the same
+ * instance backing the public Installer API routes) and the deploy services
+ * from {@link AppContext}. It does NOT duplicate pipeline logic — every method
+ * forwards to the existing pipeline / service surface. `install` / `deploy` /
+ * `rollback` / `status` map to the Installer API lifecycle; `pipeline` and
+ * `deployServices` expose the wired instances for callers that need the full
+ * surface (e.g. dry-run variants or deploy-service operations not projected as
+ * a named method here).
+ */
+export interface TakosumiKernelFacade {
+  /** The wired Installer API pipeline instance (Installation + Deployment lifecycle). */
+  readonly pipeline: InstallerPipeline;
+  /** The deploy domain services from the AppContext (`context.services.deploy`). */
+  readonly deployServices: DeployServices;
+  /** Dry-run a fresh Installation apply (`POST /v1/installations/dry-run`). */
+  installDryRun(
+    request: InstallationDryRunRequest,
+  ): Promise<InstallationDryRunResponse>;
+  /** Apply a fresh Installation (`POST /v1/installations`). */
+  install(
+    request: InstallationApplyRequest,
+  ): Promise<InstallationApplyResponse>;
+  /** Dry-run a new Deployment for an existing Installation. */
+  deployDryRun(
+    installationId: string,
+    request: DeploymentDryRunRequest,
+  ): Promise<DeploymentDryRunResponse>;
+  /** Apply a new Deployment for an existing Installation. */
+  deploy(
+    installationId: string,
+    request: DeploymentApplyRequest,
+  ): Promise<DeploymentApplyResponse>;
+  /** Pointer-only rollback to a previously succeeded Deployment. */
+  rollback(
+    installationId: string,
+    request: RollbackRequest,
+  ): Promise<RollbackResponse>;
+  /** Read Installation + current Deployment + Deployment history (no mutation). */
+  status(installationId: string): Promise<InstallationStatus>;
 }
 
 export interface CreatedPaaSApp {
@@ -250,6 +329,12 @@ export interface CreatedPaaSApp {
   readonly context: AppContext;
   readonly role: PaaSProcessRole;
   readonly workerDaemon?: WorkerDaemonHandle;
+  /**
+   * Typed in-process operate facade over the wired Installer pipeline and
+   * deploy services. Lets a host call install / deploy / rollback / status
+   * directly without going through the HTTP Installer API surface.
+   */
+  readonly kernel: TakosumiKernelFacade;
 }
 
 export async function createPaaSApp(
@@ -363,6 +448,30 @@ export async function createPaaSApp(
     allowUnsafeProductionDefaults:
       runtimeConfig.allowUnsafeProductionDefaults ?? false,
   });
+  // Injected runtime capabilities. Default to runners built over the
+  // RuntimeAdapter SubprocessAdapter (currentRuntime().subprocess), preserving
+  // the historical Deno.Command git / tar behavior. Resolved here so the
+  // capability seam is wired at bootstrap and can be threaded into the source
+  // fetch / prepared-archive path; an operator override replaces either runner.
+  const gitRunner: GitRunner = options.runtime?.gitRunner ?? defaultGitRunner;
+  const tarRunner: TarRunner = options.runtime?.tarRunner ?? defaultTarRunner;
+  // The single wired Installer pipeline instance. Reused for the public
+  // Installer API routes AND the in-process operate facade so both share one
+  // Installation / Deployment ledger and one plugin / alias / platform-service
+  // wiring.
+  const installerPipeline = new InstallerPipeline({
+    ...(options.plugins ? { plugins: options.plugins } : {}),
+    ...(options.kindAliases ? { kindAliases: options.kindAliases } : {}),
+    ...(platformServices ? { platformServices } : {}),
+    ...(installerStores.installations
+      ? { installations: installerStores.installations }
+      : {}),
+    ...(installerStores.deployments
+      ? { deployments: installerStores.deployments }
+      : {}),
+    gitRunner,
+    tarRunner,
+  });
   const app = await createApiApp({
     role,
     context,
@@ -393,17 +502,7 @@ export async function createPaaSApp(
       }
       : undefined,
     installerPublicRouteOptions: {
-      pipeline: new InstallerPipeline({
-        ...(options.plugins ? { plugins: options.plugins } : {}),
-        ...(options.kindAliases ? { kindAliases: options.kindAliases } : {}),
-        ...(platformServices ? { platformServices } : {}),
-        ...(installerStores.installations
-          ? { installations: installerStores.installations }
-          : {}),
-        ...(installerStores.deployments
-          ? { deployments: installerStores.deployments }
-          : {}),
-      }),
+      pipeline: installerPipeline,
       ...(installerToken ? { getInstallerToken: () => installerToken } : {}),
     },
     readinessRouteProbes: createRoleReadinessProbes({
@@ -428,7 +527,29 @@ export async function createPaaSApp(
       traceSink: context.adapters.observability,
     },
   });
-  return { app, context, role, workerDaemon };
+  // The resolved git / tar capabilities are now threaded into the
+  // InstallerPipeline (above), which forwards them to the installer source
+  // fetch / prepared-archive path. The installer no longer constructs
+  // `Deno.Command` in its `git-fetch.ts` / `prepared-source.ts` surface, so the
+  // capability seam is the single place runner behavior is chosen (default
+  // `currentRuntime().subprocess` routing, or an operator override).
+  //
+  // Typed in-process operate facade. Delegates to the wired pipeline + deploy
+  // services; does not duplicate any pipeline logic.
+  const kernel: TakosumiKernelFacade = {
+    pipeline: installerPipeline,
+    deployServices: context.services.deploy,
+    installDryRun: (request) => installerPipeline.installationDryRun(request),
+    install: (request) => installerPipeline.installationApply(request),
+    deployDryRun: (installationId, request) =>
+      installerPipeline.deploymentDryRun(installationId, request),
+    deploy: (installationId, request) =>
+      installerPipeline.deploymentApply(installationId, request),
+    rollback: (installationId, request) =>
+      installerPipeline.rollback(installationId, request),
+    status: (installationId) => installerPipeline.status(installationId),
+  };
+  return { app, context, role, workerDaemon, kernel };
 }
 
 function shouldEmitHttpRequestLogs(

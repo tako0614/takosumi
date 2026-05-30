@@ -1,13 +1,19 @@
 /**
- * `tar` subprocess primitive for the installer (Deno implementation).
+ * Installer-local default `tar` capability (Deno implementation).
  *
- * Canonical Deno runtime path: invokes `tar` through `Deno.Command` exactly as
- * before, piping the archive bytes to stdin. The npm build swaps this module
- * for the Node sibling (`tar-runner.node.ts`) via a dnt `mappings` entry in
- * `scripts/build-npm.ts`. Keep the exported shape identical between the two.
+ * This is the fallback `TarRunner` used when no runner is injected — for
+ * example the installer's own standalone Deno tests. It invokes `tar` through
+ * `Deno.Command` exactly as before, piping the archive bytes to stdin. The npm
+ * build swaps this module for the Node sibling (`tar-runner.node.ts`) via a dnt
+ * `mappings` entry in `scripts/build-npm.ts`. In production the reference
+ * kernel injects a `TarRunner` routed through `currentRuntime().subprocess`, so
+ * callers no longer reference `Deno.Command` directly. Keep the exported shape
+ * identical between the two modules.
  */
 
-export async function runTarCommand(
+import type { TarRunner } from "@takos/takosumi-contract/reference/runtime-capability";
+
+async function runTarCommand(
   args: readonly string[],
   stdin: Uint8Array,
 ): Promise<string> {
@@ -37,3 +43,14 @@ export async function runTarCommand(
   }
   return new TextDecoder().decode(stdout);
 }
+
+/**
+ * Default `TarRunner` over the installer's Deno-runtime `tar` primitive. Wraps
+ * {@link runTarCommand} so the prepared-source fetcher consumes the injected
+ * {@link TarRunner} interface without referencing `Deno.Command`.
+ */
+export const defaultTarRunner: TarRunner = {
+  run(args, stdin) {
+    return runTarCommand(args, stdin);
+  },
+};

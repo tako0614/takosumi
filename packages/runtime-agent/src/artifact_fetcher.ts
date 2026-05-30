@@ -159,7 +159,8 @@ export class HttpArtifactFetcher implements ArtifactFetcher {
     this.#baseUrl = opts.baseUrl.replace(/\/$/, "");
     this.#token = opts.token;
     this.#fetch = opts.fetch ?? fetch;
-    this.#timeoutMs = validPositiveInt(opts.timeoutMs) ?? artifactFetchTimeoutMs();
+    this.#timeoutMs = validPositiveInt(opts.timeoutMs) ??
+      artifactFetchTimeoutMs();
     this.#maxBytes = validPositiveInt(opts.maxBytes) ?? artifactMaxBytes();
   }
 

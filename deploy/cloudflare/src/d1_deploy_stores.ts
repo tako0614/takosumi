@@ -16,6 +16,7 @@ import {
   recordRevokeDebtRetryAttempt,
   reopenRevokeDebt,
   type RevokeDebtAgeOpenInput,
+  type RevokeDebtDueOpenInput,
   type RevokeDebtEnqueueInput,
   type RevokeDebtRecord,
   type RevokeDebtRetryAttemptInput,
@@ -313,6 +314,24 @@ class D1RevokeDebtStore implements RevokeDebtStore {
       ownerSpaceId,
       deploymentName,
     )).sort(compareRevokeDebtRecords);
+  }
+
+  async listDueOpenDebts(
+    input: RevokeDebtDueOpenInput,
+  ): Promise<readonly RevokeDebtRecord[]> {
+    // Mirror the SQL store: only `open` debts whose `nextRetryAt` is set and
+    // due (<= now) are returned, ordered by `compareRevokeDebtRecords`
+    // (createdAt asc, id asc, via listByOwnerSpace) and bounded by `limit`.
+    // ISO-8601 timestamps compare lexicographically, matching the SQL
+    // `next_retry_at <= now` predicate.
+    const due = (await this.listByOwnerSpace(input.ownerSpaceId)).filter(
+      (record) =>
+        record.status === "open" &&
+        record.nextRetryAt !== undefined &&
+        record.nextRetryAt !== null &&
+        record.nextRetryAt <= input.now,
+    );
+    return input.limit !== undefined ? due.slice(0, input.limit) : due;
   }
 
   async listOpenOwnerSpaces(): Promise<readonly string[]> {
