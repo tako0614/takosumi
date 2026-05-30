@@ -2,7 +2,7 @@
 
 Substrate-neutral counterpart to `deploy/cloudflare/`. Brings up the full Takosumi PaaS kernel + runtime-agent + Postgres + MinIO + Caddy on any Docker host (single VM, container host, k8s pod via kompose).
 
-The kernel here is the same `packages/kernel/src/index.ts` that ships to Cloudflare Workers. It uses the runtime-neutral `RuntimeAdapter` under `packages/kernel/src/shared/runtime/` and so runs identically on Deno (this distribution), Node 22+ (via Deno's Node compat), and Cloudflare Workers (via `deploy/cloudflare/`).
+The kernel here is the same `src/kernel/index.ts` that ships to Cloudflare Workers. It uses the runtime-neutral `RuntimeAdapter` under `src/kernel/shared/runtime/` and so runs identically on Deno (this distribution), Node 22+ (via Deno's Node compat), and Cloudflare Workers (via `deploy/cloudflare/`).
 
 ## Quick start
 
@@ -56,7 +56,7 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 ## Operator notes
 
 - The kernel exposes `/v1/installations*` as the canonical installer API. CLI / GitHub Actions / custom CI all use that 5 endpoint surface with an installer bearer token.
-- `runtime-agent` receives apply / destroy calls from the kernel and dispatches them through a connector registry. The generic runtime-agent host lives in `takosumi/packages/runtime-agent/`; concrete local and cloud connectors live in `takosumi-plugins/packages/runtime-agent-connectors/` and must be wired by the operator distribution.
+- `runtime-agent` receives apply / destroy calls from the kernel and dispatches them through a connector registry. The generic runtime-agent host lives in `takosumi/src/runtime-agent/`; concrete local and cloud connectors live in `takosumi-plugins/packages/runtime-agent-connectors/` and must be wired by the operator distribution.
 - The runtime-agent needs `/var/run/docker.sock` mounted to drive user-deployed containers via the Docker Compose web-service adapter. Lock this down with rootless Docker or Podman in production.
 - For multi-host deployments, replace the `runtime-agent` service with one runtime-agent process per host and configure the kernel with `TAKOSUMI_AGENT_REGISTRY` to fan out apply calls. See `docs/operator/operator-managed.md` for the multi-agent topology.
 
@@ -70,7 +70,7 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 | AWS (ECS / Fargate + RDS + S3)    | n/a                              | spec-compliant, operator-owned |
 | GCP (Cloud Run + Cloud SQL + GCS) | n/a                              | spec-compliant, operator-owned |
 
-Native kind packages for AWS / GCP / Kubernetes and runtime-agent connectors for AWS / GCP / Azure / Kubernetes are available for operator-attached distributions (see `takosumi-plugins/packages/kind-aws-*`, `takosumi-plugins/packages/kind-gcp-*`, `takosumi-plugins/packages/kind-kubernetes-web-service/`, and `takosumi-plugins/packages/runtime-agent-connectors/src/connectors/{aws,gcp,azure,kubernetes}/`), but no production-grade default reference deploy package for the kernel itself ships there. Operators bring their own Terraform / Helm / Pulumi to land the kernel image and runtime-agent image on those substrates.
+Native kind packages for AWS / GCP / Kubernetes and runtime-agent connectors for AWS / GCP / Azure / Kubernetes are available for operator-attached distributions (see `takosumi-plugins/packages/kind-aws-*`, `takosumi-plugins/packages/kind-gcp-*`, `takosumi-plugins/src/kinds/kubernetes-web-service/`, and `takosumi-plugins/packages/runtime-agent-connectors/src/connectors/{aws,gcp,azure,kubernetes}/`), but no production-grade default reference deploy package for the kernel itself ships there. Operators bring their own Terraform / Helm / Pulumi to land the kernel image and runtime-agent image on those substrates.
 
 ## Why two reference distributions
 

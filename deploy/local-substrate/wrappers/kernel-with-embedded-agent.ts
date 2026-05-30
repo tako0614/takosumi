@@ -14,14 +14,14 @@
  * module is imported, so LIFECYCLE_AGENT_URL_ENV is set when the kernel
  * reads its env at boot. Hence dynamic import of the kernel.
  */
-import { serveRuntimeAgent } from "/workspace/packages/runtime-agent/src/server.ts";
+import { serveRuntimeAgent } from "/workspace/src/runtime-agent/server.ts";
 import {
   LIFECYCLE_AGENT_TOKEN_ENV,
   LIFECYCLE_AGENT_URL_ENV,
-} from "/workspace/packages/contract/src/runtime-agent-lifecycle.ts";
-import type { KernelPlugin } from "/workspace/packages/contract/src/plugin.ts";
-import { currentRuntime } from "/workspace/packages/kernel/src/shared/runtime/index.ts";
-import { createPaaSApp } from "/workspace/packages/kernel/src/bootstrap.ts";
+} from "/workspace/src/contract/runtime-agent-lifecycle.ts";
+import type { KernelPlugin } from "/workspace/src/contract/plugin.ts";
+import { currentRuntime } from "/workspace/src/kernel/shared/runtime/index.ts";
+import { createPaaSApp } from "/workspace/src/kernel/bootstrap.ts";
 import {
   dockerPostgresPlugin,
   KIND_URI as DOCKER_POSTGRES_KIND_URI,
