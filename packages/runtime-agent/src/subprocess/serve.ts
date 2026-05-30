@@ -3,9 +3,17 @@
  *
  * Binds the Hono fetch handler through `Deno.serve` on Deno and through
  * `node:http` on Node, returning the bound port and a shutdown handle and
- * selecting the path at call time. No dnt module mapping is required: the
- * local `declare const Deno` type keeps the npm build typeable, and the
- * runtime check picks the Node path where `globalThis.Deno` is absent.
+ * selecting the path at call time. No dnt module mapping is required.
+ *
+ * Runtime detection: the npm build injects `@deno/shim-deno`, so on Node
+ * `globalThis.Deno` is ALWAYS a defined shim proxy. A naive
+ * `typeof globalThis.Deno !== "undefined"` probe therefore picks the Deno
+ * branch on Node and then calls the shim's missing `Deno.serve` →
+ * ReferenceError. {@link denoServe} returns the genuine `Deno.serve` function
+ * only when it is actually a function and Node is absent, so the Node path is
+ * selected on Node. The Deno API is reached through `globalThis.Deno` (not a
+ * bare `declare const Deno` identifier) so the emitted npm code contains no
+ * unbound `Deno.serve` reference.
  *
  * The runtime-agent package sits upstream of the kernel in the dependency
  * graph, so it cannot route through the kernel `RuntimeAdapter.serveHttp`
@@ -18,18 +26,16 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 
-declare const Deno: {
-  serve(
-    options: {
-      port?: number;
-      hostname?: string;
-      onListen?: () => void;
-    },
-    handler: ServeHttpHandler,
-  ): {
-    addr: { port: number };
-    shutdown(): Promise<void>;
-  };
+type DenoServe = (
+  options: {
+    port?: number;
+    hostname?: string;
+    onListen?: () => void;
+  },
+  handler: ServeHttpHandler,
+) => {
+  addr: { port: number };
+  shutdown(): Promise<void>;
 };
 
 export type ServeHttpHandler = (
@@ -41,24 +47,39 @@ export interface ServeHttpBinding {
   shutdown(): Promise<void>;
 }
 
-function hasDeno(): boolean {
-  return typeof (globalThis as { Deno?: unknown }).Deno !== "undefined";
+/**
+ * The genuine `Deno.serve` function, or `undefined` on Node / Workers / under
+ * the `@deno/shim-deno` proxy (which does not implement `serve`). Reached
+ * through `globalThis` so the npm build emits no unbound `Deno` identifier.
+ * Probing `Deno.serve === "function"` (a function only on real Deno) is the
+ * reliable discriminator: real Deno has it, the shim proxy does not. It does
+ * NOT also gate on Node being absent — Deno 2.x exposes a Node-compat
+ * `process.versions.node`, so such a clause would reject real Deno.
+ */
+function denoServe(): DenoServe | undefined {
+  const deno = (globalThis as { Deno?: { serve?: unknown } }).Deno;
+  if (typeof deno?.serve === "function") {
+    return deno.serve as DenoServe;
+  }
+  return undefined;
 }
 
 export function serveHttp(
   handler: ServeHttpHandler,
   options: { readonly port: number; readonly hostname: string },
 ): ServeHttpBinding {
-  return hasDeno()
-    ? serveHttpDeno(handler, options)
+  const serve = denoServe();
+  return serve
+    ? serveHttpDeno(serve, handler, options)
     : serveHttpNode(handler, options);
 }
 
 function serveHttpDeno(
+  serve: DenoServe,
   handler: ServeHttpHandler,
   options: { readonly port: number; readonly hostname: string },
 ): ServeHttpBinding {
-  const server = Deno.serve(
+  const server = serve(
     { port: options.port, hostname: options.hostname, onListen: () => {} },
     handler,
   );

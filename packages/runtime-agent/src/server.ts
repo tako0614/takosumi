@@ -328,8 +328,10 @@ export interface ServeHandle {
 
 /**
  * Bind a {@link createRuntimeAgentApp} instance to an HTTP port using the
- * runtime-agent's local `serve` capability primitive
- * (`./subprocess/serve.ts`, dnt-mapped to the Node sibling in the npm build).
+ * runtime-agent's local `serve` capability primitive (`./subprocess/serve.ts`),
+ * a single runtime-detecting module that binds through `Deno.serve` on Deno and
+ * `node:http` on Node (the npm build needs no dnt module mapping / Node
+ * sibling).
  *
  * The pure `createRuntimeAgentApp` factory above never touches the serve
  * primitive — it returns only the `Hono` app — so consumers that wire the app
