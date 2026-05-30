@@ -3,7 +3,7 @@
   "version": "0.14.0",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts",
+    ".": "./src/bootstrap.ts",
     "./adapters": "./src/adapters/mod.ts",
     "./agents": "./src/agents/mod.ts",
     "./api": "./src/api/mod.ts",
