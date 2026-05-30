@@ -75,22 +75,12 @@ cloud.takosumi.test {
 	}
 }
 
-# Cloudflare Worker composed-app mirror — verifies the Workers code path next to
-# the Deno+Postgres `cloud` service (parallel to kernel-worker.takosumi.test).
-cloud-worker.takosumi.test {
-	route {
-		@api path /v1/* /oauth/* /.well-known/* /healthz /start /__takosumi/exports/*
-		handle @api {
-			reverse_proxy takosumi-cloud-worker:8787
-		}
-		handle {
-			encode gzip
-			root * /srv/takosumi-cloud-dashboard
-			try_files {path} {path}/ /index.html
-			file_server
-		}
-	}
-}
+# NOTE: the Cloudflare Worker composed-app (takosumi-cloud-worker) is NOT given
+# a postgres-profile ingress host. On the postgres profile cloud.takosumi.test is
+# the Deno+Postgres `cloud` service; the Worker code path is exercised on the
+# `workers` profile (where the worker is primary) — consistent with the deferred
+# workers-profile collapse. Re-add a `cloud-worker.takosumi.test` block here only
+# alongside a matching CoreDNS record so its Pebble ACME challenge can resolve.
 
 # ===== Phase 1 substrate ===================================================
 # accounts.takosumi.test + kernel.takosumi.test are RETIRED: the postgres
