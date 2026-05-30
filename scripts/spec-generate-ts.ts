@@ -1,13 +1,13 @@
 /**
  * Generate TypeScript types from package-owned kind descriptors
- * (`packages/kind-<name>/spec/kind.jsonld`).
+ * (`src/kinds/<name>/spec/kind.jsonld`).
  *
  * For TypeScript helper generation, each official catalog descriptor source
  * file supplies its `spec` shape (= JSON Schema 2020-12 form), `outputs` list,
  * `capabilityTerms` enum, output slot envelope
  * (`referenceAliases` / `outputSlots{}`), and optional consumer-slot
  * compatibility metadata (`listens{}`). The generator emits a
- * sibling `packages/kind-<name>/src/<basename>.generated.ts`
+ * sibling `src/kinds/<name>/src/<basename>.generated.ts`
  * containing:
  *
  *   - `<Prefix>Spec` interface (derived from JSON Schema)
@@ -117,49 +117,49 @@ interface KindSourceTarget {
 
 const KIND_SOURCE_TARGETS: readonly KindSourceTarget[] = [
   {
-    source: "../packages/kind-worker/spec/kind.jsonld",
+    source: "../src/kinds/worker/spec/kind.jsonld",
     sourceBasename: "worker",
-    outputDir: "../packages/kind-worker/src",
+    outputDir: "../src/kinds/worker/src",
   },
   {
-    source: "../packages/kind-web-service/spec/kind.jsonld",
+    source: "../src/kinds/web-service/spec/kind.jsonld",
     sourceBasename: "web-service",
-    outputDir: "../packages/kind-web-service/src",
+    outputDir: "../src/kinds/web-service/src",
   },
   {
-    source: "../packages/kind-postgres/spec/kind.jsonld",
+    source: "../src/kinds/postgres/spec/kind.jsonld",
     sourceBasename: "postgres",
-    outputDir: "../packages/kind-postgres/src",
+    outputDir: "../src/kinds/postgres/src",
   },
   {
-    source: "../packages/kind-object-store/spec/kind.jsonld",
+    source: "../src/kinds/object-store/spec/kind.jsonld",
     sourceBasename: "object-store",
-    outputDir: "../packages/kind-object-store/src",
+    outputDir: "../src/kinds/object-store/src",
   },
   {
-    source: "../packages/kind-gateway/spec/kind.jsonld",
+    source: "../src/kinds/gateway/spec/kind.jsonld",
     sourceBasename: "gateway",
-    outputDir: "../packages/kind-gateway/src",
+    outputDir: "../src/kinds/gateway/src",
   },
   {
-    source: "../packages/kind-sqlite/spec/kind.jsonld",
+    source: "../src/kinds/sqlite/spec/kind.jsonld",
     sourceBasename: "sqlite",
-    outputDir: "../packages/kind-sqlite/src",
+    outputDir: "../src/kinds/sqlite/src",
   },
   {
-    source: "../packages/kind-kv-store/spec/kind.jsonld",
+    source: "../src/kinds/kv-store/spec/kind.jsonld",
     sourceBasename: "kv-store",
-    outputDir: "../packages/kind-kv-store/src",
+    outputDir: "../src/kinds/kv-store/src",
   },
   {
-    source: "../packages/kind-message-queue/spec/kind.jsonld",
+    source: "../src/kinds/message-queue/spec/kind.jsonld",
     sourceBasename: "message-queue",
-    outputDir: "../packages/kind-message-queue/src",
+    outputDir: "../src/kinds/message-queue/src",
   },
   {
-    source: "../packages/kind-vector-store/spec/kind.jsonld",
+    source: "../src/kinds/vector-store/spec/kind.jsonld",
     sourceBasename: "vector-store",
-    outputDir: "../packages/kind-vector-store/src",
+    outputDir: "../src/kinds/vector-store/src",
   },
 ];
 

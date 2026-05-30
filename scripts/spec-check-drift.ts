@@ -1,7 +1,7 @@
 /**
  * Detect drift between package-owned kind descriptors
- * (`packages/kind-<name>/spec/kind.jsonld`) and the committed
- * `packages/kind-<name>/src/<basename>.generated.ts` files.
+ * (`src/kinds/<name>/spec/kind.jsonld`) and the committed
+ * `src/kinds/<name>/src/<basename>.generated.ts` files.
  *
  * The check works by regenerating each `.generated.ts` from its source
  * `.jsonld` into a temp directory (formatted by `deno fmt`) and

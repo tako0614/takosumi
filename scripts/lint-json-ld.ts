@@ -7,7 +7,7 @@
  *    top-level key `@context` whose value is a JSON-LD context object.
  *    `@id` / `@type` / `name` are NOT required.
  * 2. **Reference kind document** (= e.g.
- *    `packages/kind-worker/spec/kind.jsonld`).
+ *    `src/kinds/worker/spec/kind.jsonld`).
  *    Must include a stable takosumi.com kind URI, a supported kind document
  *    type, `version`, `description`, suggested aliases, outputSlots, and
  *    capability terms. Portable kind documents own `spec` and `outputs`;
@@ -43,17 +43,17 @@ const VOCABULARY_ROOT_PATH = fromFileUrl(
 );
 
 const KIND_ROOTS = [
-  "kind-worker",
-  "kind-web-service",
-  "kind-postgres",
-  "kind-object-store",
-  "kind-gateway",
-  "kind-sqlite",
-  "kind-kv-store",
-  "kind-message-queue",
-  "kind-vector-store",
+  "worker",
+  "web-service",
+  "postgres",
+  "object-store",
+  "gateway",
+  "sqlite",
+  "kv-store",
+  "message-queue",
+  "vector-store",
 ].map((name) =>
-  fromFileUrl(new URL(`../packages/${name}/spec`, import.meta.url))
+  fromFileUrl(new URL(`../src/kinds/${name}/spec`, import.meta.url))
 );
 
 const ROOTS = [
