@@ -52,12 +52,32 @@ jaeger.takosumi.test {
 	import proxy_site jaeger:16686
 }
 
-# ===== cloud.takosumi.com mirror — SPA + worker split ======================
-# Wrap in `route { handle @api ... handle ... }` so Caddy evaluates the API
-# handler before the SPA fallback. Without explicit handle blocks, Caddy's
-# directive sorter puts the catch-all `handle` first and the worker never
-# sees /v1/* requests.
+# ===== cloud.takosumi.com mirror — the ONE composed control plane ==========
+# Postgres profile: cloud.takosumi.test is the single composed app (account
+# plane + embedded kernel) served by the `cloud` service, mirroring production's
+# one cloud.takosumi.com. Wrap in `route { handle @api ... handle ... }` so the
+# API handler is evaluated before the SPA fallback (Caddy's directive sorter
+# would otherwise put the catch-all `handle` first). The @api matcher (installer
+# / oauth / oidc / start / exports) goes to the composed app; the dashboard SPA
+# is served from static build output, exactly like the worker mirror below.
 cloud.takosumi.test {
+	route {
+		@api path /v1/* /oauth/* /.well-known/* /healthz /start /__takosumi/exports/*
+		handle @api {
+			reverse_proxy cloud:8787
+		}
+		handle {
+			encode gzip
+			root * /srv/takosumi-cloud-dashboard
+			try_files {path} {path}/ /index.html
+			file_server
+		}
+	}
+}
+
+# Cloudflare Worker composed-app mirror — verifies the Workers code path next to
+# the Deno+Postgres `cloud` service (parallel to kernel-worker.takosumi.test).
+cloud-worker.takosumi.test {
 	route {
 		@api path /v1/* /oauth/* /.well-known/* /healthz /start /__takosumi/exports/*
 		handle @api {
@@ -73,12 +93,10 @@ cloud.takosumi.test {
 }
 
 # ===== Phase 1 substrate ===================================================
-accounts.takosumi.test {
-	reverse_proxy accounts:8787
-}
-kernel.takosumi.test {
-	reverse_proxy kernel:8788
-}
+# accounts.takosumi.test + kernel.takosumi.test are RETIRED: the postgres
+# profile consolidated the account plane + kernel into the single
+# cloud.takosumi.test composed app above (mirrors production). The Cloudflare
+# kernel-worker mirror stays for the Workers code path.
 kernel-worker.takosumi.test {
 	reverse_proxy takosumi-kernel-worker:8788
 }

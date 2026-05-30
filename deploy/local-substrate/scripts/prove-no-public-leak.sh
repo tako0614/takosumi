@@ -28,13 +28,13 @@ assert_legacy_public_deploy_closed() {
 		local http_code
 		http_code=$(curl -sk \
 			--cacert caddy/runtime/pebble-issuance-root.pem \
-			--resolve kernel.takosumi.test:443:127.0.0.1 \
+			--resolve cloud.takosumi.test:443:127.0.0.1 \
 			-H "Authorization: Bearer ${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}" \
 			-H "Content-Type: application/json" \
 			-d '{"manifest":{"kind":"Manifest","metadata":{"name":"legacy-route-probe"}}}' \
 			-o /dev/null \
 			-w "%{http_code}" \
-			"https://kernel.takosumi.test${path}")
+			"https://cloud.takosumi.test${path}")
 		if [[ "$http_code" != "404" ]]; then
 			echo "    FAIL $path returned http=$http_code (expected 404)"
 			leaked=$((leaked + 1))

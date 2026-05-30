@@ -111,7 +111,7 @@ services:
 
   # ---- Takosumi Accounts (OIDC issuer) ----
 
-  accounts-migrate:
+  cloud-migrate:
     image: denoland/deno:2.7.10
     restart: "no"
     depends_on:
@@ -128,50 +128,20 @@ services:
             packages/cli/src/main.ts accounts migrate \
             --database-url "$$TAKOSUMI_ACCOUNTS_DATABASE_URL"
     env_file:
-      - env/accounts.env
+      - env/cloud.env
     volumes:
       - ../../../takosumi-cloud:/workspace
     networks:
       - takos-local-internal
 
-  accounts:
-    image: denoland/deno:2.7.10
-    restart: unless-stopped
-    depends_on:
-      accounts-migrate:
-        condition: service_completed_successfully
-    working_dir: /workspace/deploy/node-postgres
-    command:
-      - deno
-      - run
-      - -A
-      - src/server.ts
-    env_file:
-      - env/accounts.env
-    volumes:
-      - ../../../takosumi-cloud:/workspace
-    healthcheck:
-      test:
-        - CMD
-        - deno
-        - eval
-        - "const r = await fetch('http://127.0.0.1:8787/.well-known/openid-configuration'); if(!r.ok) Deno.exit(1)"
-      interval: 10s
-      timeout: 5s
-      retries: 15
-      start_period: 60s
-    networks:
-      takos-local-internal:
-        aliases:
-          - accounts
-
-  # ---- Takosumi kernel (postgres profile) ----
-
-  # kernel embeds runtime-agent in-process when TAKOSUMI_AGENT_URL is unset,
-  # so we don't run a separate runtime-agent service for the local-substrate.
-  # The image is a thin overlay on denoland/deno that adds docker CLI so
-  # the embedded Docker Compose connector can spawn `docker compose`.
-  kernel:
+  # ---- Takosumi runtime-agent (execution plane, postgres profile) ----
+  #
+  # The `cloud` control plane dispatches source / lifecycle / capability
+  # execution here over TAKOSUMI_AGENT_URL. This is the execution half split out
+  # of the old monolithic `kernel` service; it carries docker.sock + subprocess
+  # privilege so connectors can spawn `docker compose`. Image is a thin overlay
+  # on denoland/deno that adds the docker CLI.
+  agent:
     profiles: ["postgres"]
     build:
       context: .
@@ -183,17 +153,15 @@ services:
       substrate-minio-init:
         condition: service_completed_successfully
     working_dir: /workspace
-    # Use a wrapper that imports kernel + embedded agent from local source
-    # (instead of takosumi-cli server which pins JSR-published kernel).
     command:
       - deno
       - run
       - -A
       - --config
       - /workspace/deno.json
-      - /wrappers/kernel-with-embedded-agent.ts
+      - /wrappers/agent.ts
     env_file:
-      - env/kernel.env
+      - env/agent.env
     volumes:
       - ../../../takosumi:/workspace
       - ../../../takosumi-plugins:/plugins
@@ -207,7 +175,7 @@ services:
         - CMD
         - deno
         - eval
-        - "const r = await fetch('http://127.0.0.1:8788/health'); if(!r.ok) Deno.exit(1)"
+        - "const r = await fetch('http://127.0.0.1:8789/v1/health'); if(!r.ok) Deno.exit(1)"
       interval: 10s
       timeout: 5s
       retries: 15
@@ -215,7 +183,57 @@ services:
     networks:
       takos-local-internal:
         aliases:
-          - kernel
+          - agent
+
+  # ---- Takosumi cloud control plane (postgres profile) ----
+  #
+  # The ONE composed app this profile serves at cloud.takosumi.test: account
+  # plane (OIDC issuer, billing, dashboard, install UI) + the embedded Takosumi
+  # kernel (wrappers/cloud.ts -> buildComposedServer). Mirrors production's one
+  # cloud.takosumi.com; replaces the old separate accounts + kernel services.
+  # Holds NO docker.sock — execution is dispatched to `agent`. Imports straddle
+  # /workspace (takosumi-cloud), /takosumi (the dev-seam @takos/takosumi
+  # target), and /plugins (native kinds), run under the takosumi-cloud config.
+  cloud:
+    profiles: ["postgres"]
+    image: denoland/deno:2.7.10
+    restart: unless-stopped
+    depends_on:
+      cloud-migrate:
+        condition: service_completed_successfully
+      agent:
+        condition: service_healthy
+    working_dir: /workspace
+    command:
+      - deno
+      - run
+      - -A
+      - --config
+      - /workspace/deno.json
+      - /wrappers/cloud.ts
+    env_file:
+      - env/cloud.env
+    volumes:
+      - ../../../takosumi-cloud:/workspace
+      - ../../../takosumi:/takosumi:ro
+      - ../../../takosumi-plugins:/plugins:ro
+      - ./wrappers:/wrappers:ro
+      - ./factories:/local-substrate-factories:ro
+      - ./caddy/runtime:/local-substrate-runtime
+    healthcheck:
+      test:
+        - CMD
+        - deno
+        - eval
+        - "const r = await fetch('http://127.0.0.1:8787/.well-known/openid-configuration'); if(!r.ok) Deno.exit(1)"
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 90s
+    networks:
+      takos-local-internal:
+        aliases:
+          - cloud
 
   # ---- Takosumi kernel (Cloudflare Worker profile) ----
   # Builds and runs takosumi/deploy/cloudflare's Worker-first scaffold under
@@ -518,12 +536,12 @@ services:
     image: denoland/deno:2.7.10
     restart: unless-stopped
     depends_on:
-      kernel:
+      cloud:
         condition: service_healthy
     working_dir: /app
     command: ["deno", "task", "start"]
     environment:
-      KERNEL_URL: http://kernel:8788
+      KERNEL_URL: http://cloud:8787
       CADDY_ADMIN_URL: http://caddy:2019
       POLL_INTERVAL_MS: "5000"
       GATEWAY_ROUTE_PROJECTION_FILE: /local-substrate-runtime/gateway-routes.json
