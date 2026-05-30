@@ -1,8 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@^1.0.6";
-import type {
-  Shape,
-  ShapeValidationIssue,
-} from "../packages/contract/src/shape.ts";
+import type { Shape, ShapeValidationIssue } from "../src/contract/shape.ts";
 import { GatewayKind } from "../src/kinds/gateway/src/gateway.ts";
 import { KvStoreKind } from "../src/kinds/kv-store/src/kv-store.ts";
 import { MessageQueueKind } from "../src/kinds/message-queue/src/message-queue.ts";

@@ -18,7 +18,7 @@
  *     leak a stale `description` into the repo or race with other tests.
  *
  * Background: the previous self-test wrote a mutated payload back into
- * `packages/kind-worker/spec/kind.jsonld` and relied on `try/finally` to
+ * `src/kinds/worker/spec/kind.jsonld` and relied on `try/finally` to
  * restore it. A panic before the `finally` (out-of-memory, SIGKILL,
  * power loss) or a concurrent test reading the file mid-mutation could
  * corrupt the repo. The tmp-dir harness removes that risk because the
@@ -34,7 +34,7 @@ import {
 } from "./spec-generate-ts.ts";
 
 const WORKER_JSONLD = fromFileUrl(
-  new URL("../packages/kind-worker/spec/kind.jsonld", import.meta.url),
+  new URL("../src/kinds/worker/spec/kind.jsonld", import.meta.url),
 );
 
 Deno.test("spec-check-drift reports no drift on the committed source", async () => {

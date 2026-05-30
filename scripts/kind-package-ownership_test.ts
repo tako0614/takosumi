@@ -5,30 +5,30 @@ import {
 } from "takosumi-contract/catalog";
 
 const ROOT = new URL("../", import.meta.url);
-const PACKAGE_ROOT = new URL("packages/", ROOT);
+const PACKAGE_ROOT = new URL("src/kinds/", ROOT);
 
 const PORTABLE_KIND_PACKAGES = [
-  "kind-gateway",
-  "kind-kv-store",
-  "kind-message-queue",
-  "kind-object-store",
-  "kind-postgres",
-  "kind-sqlite",
-  "kind-vector-store",
-  "kind-web-service",
-  "kind-worker",
+  "gateway",
+  "kv-store",
+  "message-queue",
+  "object-store",
+  "postgres",
+  "sqlite",
+  "vector-store",
+  "web-service",
+  "worker",
 ] as const;
 
 const GENERATED_FILE_BY_PACKAGE: Readonly<Record<string, string>> = {
-  "kind-gateway": "gateway.generated.ts",
-  "kind-kv-store": "kv-store.generated.ts",
-  "kind-message-queue": "message-queue.generated.ts",
-  "kind-object-store": "object-store.generated.ts",
-  "kind-postgres": "database-postgres.generated.ts",
-  "kind-sqlite": "sqlite.generated.ts",
-  "kind-vector-store": "vector-store.generated.ts",
-  "kind-web-service": "web-service.generated.ts",
-  "kind-worker": "worker.generated.ts",
+  "gateway": "gateway.generated.ts",
+  "kv-store": "kv-store.generated.ts",
+  "message-queue": "message-queue.generated.ts",
+  "object-store": "object-store.generated.ts",
+  "postgres": "database-postgres.generated.ts",
+  "sqlite": "sqlite.generated.ts",
+  "vector-store": "vector-store.generated.ts",
+  "web-service": "web-service.generated.ts",
+  "worker": "worker.generated.ts",
 };
 
 const NATIVE_KIND_NAME_FRAGMENTS = [
@@ -91,15 +91,8 @@ Deno.test("takosumi repository owns only portable kind packages", async () => {
   }
 });
 
-Deno.test("takosumi workspace and import map expose only portable kind packages", async () => {
+Deno.test("takosumi import map exposes only portable kind packages", async () => {
   const manifest = await readJson<DenoManifest>(new URL("deno.json", ROOT));
-  const expectedWorkspaceEntries = PORTABLE_KIND_PACKAGES.map((dir) =>
-    `packages/${dir}`
-  );
-  const workspaceEntries = normalizeWorkspace(manifest.workspace ?? [])
-    .filter((entry) => entry.startsWith("packages/kind-"));
-
-  assert.deepEqual(workspaceEntries, expectedWorkspaceEntries);
 
   const kindImports = Object.entries(manifest.imports ?? {})
     .filter(([specifier]) => specifier.startsWith("@takos/takosumi-kind-"))
@@ -108,33 +101,24 @@ Deno.test("takosumi workspace and import map expose only portable kind packages"
   assert.deepEqual(
     kindImports,
     PORTABLE_KIND_PACKAGES.map((dir) => [
-      `@takos/takosumi-${dir}`,
-      `./packages/${dir}/mod.ts`,
+      `@takos/takosumi-kind-${dir}`,
+      `./src/kinds/${dir}/mod.ts`,
     ]),
   );
 });
 
 Deno.test("portable kind package aliases and READMEs mirror descriptors", async () => {
   for (const dir of PORTABLE_KIND_PACKAGES) {
-    const manifest = await readJson<DenoManifest>(
-      new URL(`${dir}/deno.json`, PACKAGE_ROOT),
-    );
+    const packageName = `@takos/takosumi-kind-${dir}`;
     const descriptor = await readJson<KindDescriptor>(
       new URL(`${dir}/spec/kind.jsonld`, PACKAGE_ROOT),
     );
     const mod = await import(
-      new URL(`../packages/${dir}/mod.ts`, import.meta.url).href
+      new URL(`../src/kinds/${dir}/mod.ts`, import.meta.url).href
     ) as KindModule;
     const kindUri = descriptor["@id"] ?? "";
     const expectedAliases = Object.fromEntries(
       (descriptor.referenceAliases ?? []).map((alias) => [alias, kindUri]),
-    );
-
-    assert.equal(manifest.exports?.["."], "./mod.ts", `${dir}: root export`);
-    assert.equal(
-      manifest.exports?.["./spec/kind.jsonld"],
-      undefined,
-      `${dir}: raw JSON-LD descriptors are catalog assets, not JSR module exports`,
     );
 
     assert.deepEqual(
@@ -146,7 +130,7 @@ Deno.test("portable kind package aliases and READMEs mirror descriptors", async 
     const readme = await Deno.readTextFile(
       new URL(`${dir}/README.md`, PACKAGE_ROOT),
     );
-    assert.ok(readme.includes(`# ${manifest.name}`), `${dir}: README title`);
+    assert.ok(readme.includes(`# ${packageName}`), `${dir}: README title`);
     assert.ok(
       readme.includes(`Kind URI: \`${kindUri}\``),
       `${dir}: README kind URI`,
@@ -165,7 +149,7 @@ Deno.test("portable kind package aliases and READMEs mirror descriptors", async 
 });
 
 Deno.test("runtime-agent package uses narrow contract subpaths", async () => {
-  const files = await listTsFiles(new URL("runtime-agent/src/", PACKAGE_ROOT));
+  const files = await listTsFiles(new URL("src/runtime-agent/", ROOT));
   for (const file of files) {
     const source = await Deno.readTextFile(file);
     assert.equal(
@@ -198,7 +182,7 @@ Deno.test("takosumi scripts use narrow contract subpaths", async () => {
 
 Deno.test("kernel plugin registry uses the plugin contract subpath", async () => {
   const broadCompatSubpath = "takosumi-contract/reference/" + "compat";
-  const files = await listTsFiles(new URL("kernel/src/plugins/", PACKAGE_ROOT));
+  const files = await listTsFiles(new URL("src/kernel/plugins/", ROOT));
   for (const file of files) {
     const source = await Deno.readTextFile(file);
     assert.equal(
@@ -213,7 +197,7 @@ Deno.test("kernel plugin registry uses the plugin contract subpath", async () =>
 
 Deno.test("reference compat does not expose legacy provider bridge", async () => {
   const compat = await Deno.readTextFile(
-    new URL("packages/contract/src/reference-compat.ts", ROOT),
+    new URL("src/contract/reference-compat.ts", ROOT),
   );
   assert.equal(
     compat.includes("./provider-plugin.ts"),
@@ -221,23 +205,16 @@ Deno.test("reference compat does not expose legacy provider bridge", async () =>
     "reference/compat must not re-export the legacy ProviderPlugin bridge",
   );
 
-  const manifest = await readJson<DenoManifest>(
-    new URL("packages/contract/deno.json", ROOT),
-  );
+  // The single-package collapse removed the contract's per-package deno.json
+  // (and its granular subpath exports). The legacy ProviderPlugin bridge stays a
+  // source module (src/contract/provider-plugin.ts) reached only via the
+  // internal import-map alias, not a public reference/* export — verified by the
+  // compat source check above + the import-map self-map in the root deno.json.
+  const manifest = await readJson<DenoManifest>(new URL("deno.json", ROOT));
   assert.equal(
-    manifest.exports?.["./reference/provider-plugin"],
-    undefined,
-    "ProviderPlugin must stay off the public reference subpath surface",
-  );
-  assert.equal(
-    manifest.exports?.["./reference/kernel-plugin-adapter"],
-    undefined,
-    "kernelPluginFromProviderPlugin must stay off the public reference subpath surface",
-  );
-  assert.equal(
-    manifest.exports?.["./internal/provider-plugin"],
-    "./src/provider-plugin.ts",
-    "legacy provider bridge should be available only as an internal compatibility subpath",
+    manifest.imports?.["@takos/takosumi-contract/internal/provider-plugin"],
+    "./src/contract/provider-plugin.ts",
+    "legacy provider bridge stays reachable only via the internal contract alias",
   );
 });
 
@@ -248,7 +225,7 @@ Deno.test("portable kind descriptors use implementation-neutral material wording
     );
     assertNoProviderLocalWording(
       descriptorSource,
-      `packages/${dir}/spec/kind.jsonld`,
+      `src/kinds/${dir}/spec/kind.jsonld`,
     );
     const generated = await Deno.readTextFile(
       new URL(
@@ -258,7 +235,7 @@ Deno.test("portable kind descriptors use implementation-neutral material wording
     );
     assertNoProviderLocalWording(
       generated,
-      `packages/${dir}/src/${GENERATED_FILE_BY_PACKAGE[dir]}`,
+      `src/kinds/${dir}/src/${GENERATED_FILE_BY_PACKAGE[dir]}`,
     );
   }
 });
@@ -270,7 +247,7 @@ Deno.test("portable kind descriptors use closed official spec schemas", async ()
     );
     assertNoOpenAdditionalProperties(
       descriptorSource,
-      `packages/${dir}/spec/kind.jsonld`,
+      `src/kinds/${dir}/spec/kind.jsonld`,
     );
   }
 });
@@ -282,7 +259,7 @@ Deno.test("portable kind descriptors match family listen contracts", async () =>
     );
     assert.deepEqual(
       normalizeListenContract(descriptor.listens),
-      expectedListenContract(dir.slice("kind-".length)),
+      expectedListenContract(dir),
       `${dir}: listens`,
     );
   }
@@ -290,10 +267,10 @@ Deno.test("portable kind descriptors match family listen contracts", async () =>
 
 Deno.test("portable kind descriptors do not advertise backend-specific capabilities", async () => {
   const forbiddenCapabilities: Readonly<Record<string, readonly string[]>> = {
-    "kind-gateway": ["sni", "alpn-acme", "http3", "redirects"],
-    "kind-kv-store": [],
-    "kind-message-queue": [],
-    "kind-object-store": [
+    "gateway": ["sni", "alpn-acme", "http3", "redirects"],
+    "kv-store": [],
+    "message-queue": [],
+    "object-store": [
       "versioning",
       "presigned-urls",
       "server-side-encryption",
@@ -302,10 +279,10 @@ Deno.test("portable kind descriptors do not advertise backend-specific capabilit
       "lifecycle-rules",
       "multipart-upload",
     ],
-    "kind-postgres": ["read-replicas", "ssl-required", "ipv6", "extensions"],
-    "kind-sqlite": [],
-    "kind-vector-store": [],
-    "kind-web-service": [
+    "postgres": ["read-replicas", "ssl-required", "ipv6", "extensions"],
+    "sqlite": [],
+    "vector-store": [],
+    "web-service": [
       "scale-to-zero",
       "long-request",
       "sticky-session",
@@ -313,7 +290,7 @@ Deno.test("portable kind descriptors do not advertise backend-specific capabilit
       "crons",
       "private-networking",
     ],
-    "kind-worker": ["scale-to-zero", "long-request", "geo-routing"],
+    "worker": ["scale-to-zero", "long-request", "geo-routing"],
   };
 
   for (const dir of PORTABLE_KIND_PACKAGES) {
@@ -333,7 +310,7 @@ Deno.test("portable kind descriptors do not advertise backend-specific capabilit
 
 Deno.test("portable object-store descriptor keeps backend controls out of spec", async () => {
   const descriptor = await readJson<KindDescriptor>(
-    new URL("kind-object-store/spec/kind.jsonld", PACKAGE_ROOT),
+    new URL("object-store/spec/kind.jsonld", PACKAGE_ROOT),
   );
   assert.deepEqual(
     Object.keys(descriptor.spec?.properties ?? {}).sort(),
@@ -388,7 +365,7 @@ Deno.test("kind alias docs state that the resolved URI owns the schema", async (
 Deno.test("reference plugin docs show explicit operator lifecycle clients", async () => {
   const docs = [
     "AGENTS.md",
-    "packages/contract/README.md",
+    "src/contract/README.md",
     "docs/rfc/0001-kernel-kind-agnostic.md",
     "docs/reference/plugin-loading.md",
     "docs/reference/catalog.md",
@@ -441,7 +418,7 @@ Deno.test("portable generated kind helpers expose typed output field names", asy
         PACKAGE_ROOT,
       ),
     );
-    const prefix = generatedPrefix(dir.slice("kind-".length));
+    const prefix = generatedPrefix(dir);
     assert.match(
       generated,
       new RegExp(`export type ${prefix}OutputFieldName =\\n  \\| "`),
@@ -470,7 +447,7 @@ Deno.test("portable generated kind helpers expose typed output slot descriptors"
         PACKAGE_ROOT,
       ),
     );
-    const prefix = generatedPrefix(dir.slice("kind-".length));
+    const prefix = generatedPrefix(dir);
     const upper = constantPrefix(prefix);
 
     assert.match(
@@ -516,7 +493,7 @@ Deno.test("portable generated kind helpers expose listen slot descriptors", asyn
         PACKAGE_ROOT,
       ),
     );
-    const prefix = generatedPrefix(dir.slice("kind-".length));
+    const prefix = generatedPrefix(dir);
     assert.match(
       generated,
       new RegExp(`export interface ${prefix}ListenSlotDescriptor`),
@@ -544,7 +521,7 @@ Deno.test("portable generated kind helpers expose listen slot descriptors", asyn
 async function listKindPackageDirs(): Promise<readonly string[]> {
   const dirs: string[] = [];
   for await (const entry of Deno.readDir(PACKAGE_ROOT)) {
-    if (entry.isDirectory && entry.name.startsWith("kind-")) {
+    if (entry.isDirectory && entry.name.startsWith("")) {
       dirs.push(entry.name);
     }
   }
@@ -671,11 +648,6 @@ function normalizeProjectionMatrix(
       ])
       .sort(([left], [right]) => left.localeCompare(right)),
   );
-}
-
-function normalizeWorkspace(workspace: readonly string[]): string[] {
-  return workspace.map((entry) => entry.replace(/^\.\//, "").replace(/\/$/, ""))
-    .sort();
 }
 
 function generatedPrefix(kind: string): string {

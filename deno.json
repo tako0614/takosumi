@@ -2,9 +2,25 @@
   "name": "@takos/takosumi",
   "version": "0.17.0",
   "license": "MIT",
-  "workspace": [
-    "./deploy/cloudflare"
-  ],
+  "exports": {
+    ".": "./src/all/mod.ts",
+    "./contract": "./src/all/contract.ts",
+    "./installer": "./src/all/installer.ts",
+    "./kernel": "./src/all/kernel.ts",
+    "./cli": "./src/all/cli.ts",
+    "./runtime-agent": "./src/all/runtime-agent.ts",
+    "./kinds": "./src/all/kinds.ts",
+    "./server": "./src/all/server.ts",
+    "./kind/gateway": "./src/all/kind-gateway.ts",
+    "./kind/kv-store": "./src/all/kind-kv-store.ts",
+    "./kind/message-queue": "./src/all/kind-message-queue.ts",
+    "./kind/object-store": "./src/all/kind-object-store.ts",
+    "./kind/postgres": "./src/all/kind-postgres.ts",
+    "./kind/sqlite": "./src/all/kind-sqlite.ts",
+    "./kind/vector-store": "./src/all/kind-vector-store.ts",
+    "./kind/web-service": "./src/all/kind-web-service.ts",
+    "./kind/worker": "./src/all/kind-worker.ts"
+  },
   "imports": {
     "takosumi-contract": "./src/contract/mod.ts",
     "takosumi-contract/app-spec": "./src/contract/app-spec.ts",
@@ -106,12 +122,9 @@
     }
   },
   "tasks": {
-    "check": "deno check packages/contract/mod.ts packages/contract/src/*_test.ts packages/runtime-agent/src/server.ts packages/runtime-agent/src/embed.ts packages/runtime-agent/src/connectors/mod.ts packages/runtime-agent/src/prepared_source_reader.ts src/kinds/worker/mod.ts src/kinds/web-service/mod.ts src/kinds/postgres/mod.ts src/kinds/object-store/mod.ts src/kinds/gateway/mod.ts src/kinds/sqlite/mod.ts src/kinds/kv-store/mod.ts src/kinds/message-queue/mod.ts src/kinds/vector-store/mod.ts packages/kernel/src/index.ts scripts/live-provisioning-smoke.ts scripts/jsr-publish-dry-run.ts scripts/jsr-package-readiness.ts scripts/jsr-package-readiness_test.ts scripts/public-spec-source-map_test.ts scripts/kind-descriptor-material-mapping_test.ts scripts/kind-package-ownership_test.ts scripts/portable-kind-validation_test.ts scripts/portable-package-readme.ts scripts/spec-generate-ts.ts scripts/spec-check-drift.ts scripts/spec-check-drift_test.ts",
+    "check": "deno check src/contract/mod.ts src/contract/*_test.ts src/runtime-agent/server.ts src/runtime-agent/embed.ts src/runtime-agent/connectors/mod.ts src/runtime-agent/prepared_source_reader.ts src/kinds/worker/mod.ts src/kinds/web-service/mod.ts src/kinds/postgres/mod.ts src/kinds/object-store/mod.ts src/kinds/gateway/mod.ts src/kinds/sqlite/mod.ts src/kinds/kv-store/mod.ts src/kinds/message-queue/mod.ts src/kinds/vector-store/mod.ts src/kernel/index.ts scripts/live-provisioning-smoke.ts scripts/public-spec-source-map_test.ts scripts/kind-descriptor-material-mapping_test.ts scripts/kind-package-ownership_test.ts scripts/portable-kind-validation_test.ts scripts/portable-package-readme.ts scripts/spec-generate-ts.ts scripts/spec-check-drift.ts scripts/spec-check-drift_test.ts",
     "check:cloudflare": "deno check --config deploy/cloudflare/deno.json deploy/cloudflare/src/worker.ts deploy/cloudflare/src/worker_test.ts deploy/cloudflare/src/scaffold_test.ts",
     "test": "deno test --allow-all",
-    "publish:dry-run": "deno run --allow-run --allow-read scripts/jsr-publish-dry-run.ts",
-    "publish:check-jsr-records": "deno run --allow-net=jsr.io,api.jsr.io scripts/jsr-package-readiness.ts",
-    "publish:jsr": "deno run --allow-run --allow-read --allow-env=JSR_TOKEN --allow-net=jsr.io,api.jsr.io scripts/jsr-publish-dry-run.ts --publish",
     "live-provisioning-smoke": "deno run --allow-read --allow-env --allow-net scripts/live-provisioning-smoke.ts",
     "live-provisioning-smoke:fixture:all": "deno run --allow-read --allow-env --allow-net scripts/live-provisioning-smoke.ts --fixture-all",
     "fmt": "deno fmt",

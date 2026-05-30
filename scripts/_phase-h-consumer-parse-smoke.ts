@@ -14,7 +14,7 @@
  */
 
 import { fromFileUrl, join } from "jsr:@std/path@^1.0.6";
-import { parseAppSpec } from "../packages/installer/src/yaml-parser.ts";
+import { parseAppSpec } from "../src/installer/yaml-parser.ts";
 
 // Ecosystem root は本 file (= takosumi/scripts/_phase-h-consumer-parse-smoke.ts)
 // から 2 階層上。 import.meta.url 起点なので developer 個人 path や clone 先
