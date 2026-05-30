@@ -8,7 +8,7 @@ import {
   resetRuntimeForTesting,
   setRuntimeForTesting,
 } from "./index.ts";
-import { nodeRuntime } from "./node.ts";
+import { isNode, nodeRuntime } from "./node.ts";
 import type { SubprocessAdapter, SubprocessOutput } from "./runtime.ts";
 
 Deno.test("currentRuntime detects Deno when running on Deno", () => {
@@ -16,6 +16,74 @@ Deno.test("currentRuntime detects Deno when running on Deno", () => {
   assert(isDeno());
   const runtime = currentRuntime();
   assertEquals(runtime.kind, "deno");
+});
+
+Deno.test("isDeno wins over isNode on the host (Deno also reports process.versions.node)", () => {
+  // Deno 2.x exposes a Node-compat `globalThis.process` with a faked
+  // `versions.node`, so `isNode()` is TRUE on Deno too. `isDeno()` (which
+  // probes a genuine `Deno.Command`) is therefore the authoritative
+  // discriminator and `currentRuntime()` checks it FIRST. Asserting this here
+  // locks in that `currentRuntime()` must never route a Deno host to the Node
+  // adapter just because `process.versions.node` is present.
+  resetRuntimeForTesting();
+  assert(isDeno(), "expected isDeno() true on the Deno test host");
+  assert(isNode(), "Deno exposes a Node-compat process.versions.node");
+  assertEquals(currentRuntime().kind, "deno");
+});
+
+Deno.test("isDeno discriminator probes Deno.Command, rejecting the @deno/shim-deno shape", () => {
+  // Mirror the exact `isDeno()` probe against synthetic globals to document the
+  // regression contract without touching the read-only host `Deno`. The dnt npm
+  // build injects `@deno/shim-deno`, so on Node `globalThis.Deno` is defined but
+  // lacks `Command`; the probe must return false for that shape. It must NOT
+  // also gate on Node being absent, since real Deno reports
+  // `process.versions.node`.
+  const probesDenoCommand = (g: { Deno?: { Command?: unknown } }): boolean =>
+    typeof g.Deno?.Command === "function";
+  // @deno/shim-deno on Node: Deno defined, no Command -> NOT Deno.
+  assert(
+    !probesDenoCommand({
+      Deno: { readTextFile: () => {} } as { Command?: unknown },
+    }),
+  );
+  // Real Deno: Command is a function -> Deno, even though process.versions.node
+  // would also be present on a Deno host.
+  assert(probesDenoCommand({ Deno: { Command: class {} } }));
+  // Pure-ESM Node with no Deno global -> NOT Deno.
+  assert(!probesDenoCommand({}));
+});
+
+Deno.test("nodeRuntime fs.makeTempDir nests inside the OS temp dir with no prefix", async () => {
+  // Regression: with no prefix, `path.join(os.tmpdir(), "")` drops the trailing
+  // separator, so `mkdtemp` would create a SIBLING of the temp root instead of
+  // a child. The adapter must nest the temp dir INSIDE `os.tmpdir()` to match
+  // `Deno.makeTempDir()` semantics.
+  const [osMod, pathMod] = await Promise.all([
+    import("node:os"),
+    import("node:path"),
+  ]);
+  const tmpRoot = osMod.tmpdir();
+  const dir = await nodeRuntime.fs.makeTempDir();
+  try {
+    assertEquals(
+      pathMod.dirname(dir),
+      tmpRoot,
+      `temp dir should be a direct child of ${tmpRoot}, got ${dir}`,
+    );
+  } finally {
+    await nodeRuntime.fs.remove(dir, { recursive: true });
+  }
+
+  const prefixed = await nodeRuntime.fs.makeTempDir("takosumi-node-temp-");
+  try {
+    assertEquals(pathMod.dirname(prefixed), tmpRoot);
+    assert(
+      pathMod.basename(prefixed).startsWith("takosumi-node-temp-"),
+      `prefixed temp dir base should start with prefix, got ${prefixed}`,
+    );
+  } finally {
+    await nodeRuntime.fs.remove(prefixed, { recursive: true });
+  }
 });
 
 Deno.test("denoRuntime env reader returns process env", () => {

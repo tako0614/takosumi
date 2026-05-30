@@ -4,41 +4,61 @@
  *
  * Runs `tar` through `Deno.Command` on Deno and through `node:child_process`
  * on Node, piping the archive bytes to stdin and selecting the path at call
- * time. No dnt module mapping is required: the local `declare const Deno` type
- * keeps the npm build typeable, and the runtime check picks the Node path
- * where `globalThis.Deno` is absent.
+ * time. No dnt module mapping is required.
+ *
+ * Runtime detection: the npm build injects `@deno/shim-deno`, so on Node
+ * `globalThis.Deno` is ALWAYS a defined shim proxy. A naive
+ * `typeof globalThis.Deno !== "undefined"` probe therefore picks the Deno
+ * branch on Node and then calls the shim's missing `Deno.Command` →
+ * ReferenceError. {@link denoCommand} returns the genuine `Deno.Command`
+ * constructor only when it is actually a function and Node is absent, so the
+ * Node path is selected on Node. The Deno API is reached through
+ * `globalThis.Deno` (not a bare `declare const Deno` identifier) so the emitted
+ * npm code contains no unbound `Deno.Command` reference.
  */
 
 import { spawn } from "node:child_process";
 import process from "node:process";
 
-declare const Deno: {
-  Command: new (
-    command: string,
-    options?: {
-      args?: readonly string[];
-      stdin?: "piped" | "inherit" | "null";
-      stdout?: "piped" | "inherit" | "null";
-      stderr?: "piped" | "inherit" | "null";
-      env?: Record<string, string>;
-    },
-  ) => {
-    spawn(): {
-      stdin: WritableStream<Uint8Array>;
-      output(): Promise<{
-        code: number;
-        stdout: Uint8Array;
-        stderr: Uint8Array;
-      }>;
-    };
+type DenoCommandCtor = new (
+  command: string,
+  options?: {
+    args?: readonly string[];
+    stdin?: "piped" | "inherit" | "null";
+    stdout?: "piped" | "inherit" | "null";
+    stderr?: "piped" | "inherit" | "null";
+    env?: Record<string, string>;
+  },
+) => {
+  spawn(): {
+    stdin: WritableStream<Uint8Array>;
+    output(): Promise<{
+      code: number;
+      stdout: Uint8Array;
+      stderr: Uint8Array;
+    }>;
   };
 };
 
-function hasDeno(): boolean {
-  return typeof (globalThis as { Deno?: unknown }).Deno !== "undefined";
+/**
+ * The genuine `Deno.Command` constructor, or `undefined` on Node / Workers /
+ * under the `@deno/shim-deno` proxy (which does not implement `Command`).
+ * Reached through `globalThis` so the npm build emits no unbound `Deno`
+ * identifier. Probing `Deno.Command === "function"` (a function only on real
+ * Deno) is the reliable discriminator: real Deno has it, the shim proxy does
+ * not. It does NOT also gate on Node being absent — Deno 2.x exposes a
+ * Node-compat `process.versions.node`, so such a clause would reject real Deno.
+ */
+function denoCommand(): DenoCommandCtor | undefined {
+  const deno = (globalThis as { Deno?: { Command?: unknown } }).Deno;
+  if (typeof deno?.Command === "function") {
+    return deno.Command as DenoCommandCtor;
+  }
+  return undefined;
 }
 
 async function runTarCommandDeno(
+  Command: DenoCommandCtor,
   args: readonly string[],
   stdin: Uint8Array,
 ): Promise<string> {
@@ -46,7 +66,7 @@ async function runTarCommandDeno(
   // size, date, time, path) does not shift with the operator's LANG / LC_TIME
   // settings. Without this, locale-specific date / time columns can introduce
   // extra whitespace runs that confuse the column parser.
-  const child = new Deno.Command("tar", {
+  const child = new Command("tar", {
     args: [...args],
     stdin: "piped",
     stdout: "piped",
@@ -110,8 +130,9 @@ export function runTarCommand(
   args: readonly string[],
   stdin: Uint8Array,
 ): Promise<string> {
-  return hasDeno()
-    ? runTarCommandDeno(args, stdin)
+  const Command = denoCommand();
+  return Command
+    ? runTarCommandDeno(Command, args, stdin)
     : runTarCommandNode(args, stdin);
 }
 
