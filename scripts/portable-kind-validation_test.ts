@@ -3,15 +3,15 @@ import type {
   Shape,
   ShapeValidationIssue,
 } from "../packages/contract/src/shape.ts";
-import { GatewayKind } from "../packages/kind-gateway/src/gateway.ts";
-import { KvStoreKind } from "../packages/kind-kv-store/src/kv-store.ts";
-import { MessageQueueKind } from "../packages/kind-message-queue/src/message-queue.ts";
-import { ObjectStoreKind } from "../packages/kind-object-store/src/object-store.ts";
-import { DatabasePostgresKind } from "../packages/kind-postgres/src/database-postgres.ts";
-import { SqliteKind } from "../packages/kind-sqlite/src/sqlite.ts";
-import { VectorStoreKind } from "../packages/kind-vector-store/src/vector-store.ts";
-import { WebServiceKind } from "../packages/kind-web-service/src/web-service.ts";
-import { WorkerKind } from "../packages/kind-worker/src/worker.ts";
+import { GatewayKind } from "../src/kinds/gateway/src/gateway.ts";
+import { KvStoreKind } from "../src/kinds/kv-store/src/kv-store.ts";
+import { MessageQueueKind } from "../src/kinds/message-queue/src/message-queue.ts";
+import { ObjectStoreKind } from "../src/kinds/object-store/src/object-store.ts";
+import { DatabasePostgresKind } from "../src/kinds/postgres/src/database-postgres.ts";
+import { SqliteKind } from "../src/kinds/sqlite/src/sqlite.ts";
+import { VectorStoreKind } from "../src/kinds/vector-store/src/vector-store.ts";
+import { WebServiceKind } from "../src/kinds/web-service/src/web-service.ts";
+import { WorkerKind } from "../src/kinds/worker/src/worker.ts";
 
 type Case = {
   readonly name: string;
