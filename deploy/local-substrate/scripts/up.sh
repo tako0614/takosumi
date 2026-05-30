@@ -142,8 +142,8 @@ if [[ -n "$PROFILE" ]]; then
 	for _ in $(seq 1 120); do
 		# Check OIDC discovery via Caddy as a proxy for full readiness.
 		if curl -sk --cacert caddy/runtime/pebble-issuance-root.pem \
-			--resolve accounts.takosumi.test:443:127.0.0.1 \
-			https://accounts.takosumi.test/.well-known/openid-configuration \
+			--resolve cloud.takosumi.test:443:127.0.0.1 \
+			https://cloud.takosumi.test/.well-known/openid-configuration \
 			>/dev/null 2>&1; then
 			break
 		fi
@@ -169,12 +169,13 @@ Verify (Phase 0):
    curl https://hello.takosumi.test/
 
 Verify (profile=postgres):
-   curl https://accounts.takosumi.test/.well-known/openid-configuration
-   curl https://kernel.takosumi.test/health
+   curl https://cloud.takosumi.test/.well-known/openid-configuration
+   curl https://cloud.takosumi.test/healthz
+   curl https://cloud-worker.takosumi.test/.well-known/openid-configuration
    curl https://kernel-worker.takosumi.test/healthz
 
 Verify (profile=workers):
-   curl https://accounts.takosumi.test/.well-known/openid-configuration
+   curl https://cloud.takosumi.test/.well-known/openid-configuration
    curl https://kernel.takosumi.test/healthz
    curl https://kernel.takosumi.test/storage/healthz
 EOF

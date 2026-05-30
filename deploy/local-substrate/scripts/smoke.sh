@@ -200,8 +200,8 @@ check "phase0.hello" "hello.takosumi.test" "/" "200"
 
 echo
 echo "==> Phase 1 — substrate"
-check "phase1.accounts.oidc-discovery" "accounts.takosumi.test" "/.well-known/openid-configuration" "200"
-check "phase1.kernel.health" "kernel.takosumi.test" "/health" "200"
+check "phase1.cloud.oidc-discovery" "cloud.takosumi.test" "/.well-known/openid-configuration" "200"
+check "phase1.cloud.health" "cloud.takosumi.test" "/healthz" "200"
 
 echo
 echo "==> Production mirror — takosumi.com / cloud.takosumi.com under .test"
