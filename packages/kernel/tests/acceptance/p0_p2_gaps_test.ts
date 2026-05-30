@@ -11,7 +11,7 @@ import {
   type TakosumiActorContext,
 } from "takosumi-contract/reference/compat";
 import { encodeActorContext } from "takosumi-contract/internal/rpc";
-import { createApiApp } from "../api/app.ts";
+import { createApiApp } from "../../src/api/app.ts";
 import {
   InMemoryPackageDescriptorStore,
   InMemoryPackageResolutionStore,
@@ -19,11 +19,11 @@ import {
   type PackageDescriptor,
   type PackageResolution,
   type TrustRecord,
-} from "../domains/registry/mod.ts";
+} from "../../src/domains/registry/mod.ts";
 import {
   DefaultGroupSummaryStatusProjector,
   type StatusConditionDto,
-} from "../services/status/mod.ts";
+} from "../../src/services/status/mod.ts";
 
 // Phase 17D — re-enabled now that ProviderObservation drift stream is
 // wired through the InMemoryDeploymentStore. A drifted provider records
@@ -31,7 +31,7 @@ import {
 // `applied` (provider observation is observed-side, never canonical).
 Deno.test("acceptance P0: provider failure does not mutate committed deployment", async () => {
   const { DeploymentService, InMemoryDeploymentStore } = await import(
-    "../domains/deploy/deployment_service.ts"
+    "../../src/domains/deploy/deployment_service.ts"
   );
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({

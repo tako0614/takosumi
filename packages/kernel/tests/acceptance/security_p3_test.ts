@@ -3,22 +3,22 @@ import {
   InMemoryRuntimeNetworkPolicyStore,
   InMemoryServiceGrantStore,
   InMemoryWorkloadIdentityStore,
-} from "../domains/network/mod.ts";
+} from "../../src/domains/network/mod.ts";
 import {
   InMemoryBindingSetRevisionStore,
   InMemoryMigrationLedgerStore,
   InMemoryResourceBindingStore,
   InMemoryResourceInstanceStore,
-} from "../domains/resources/mod.ts";
+} from "../../src/domains/resources/mod.ts";
 import {
   ResourceOperationService,
   type ResourceOperationStores,
-} from "../services/resources/mod.ts";
+} from "../../src/services/resources/mod.ts";
 import {
   WorkerAuthzService,
   type WorkerAuthzStores,
-} from "../services/security/mod.ts";
-import { DomainError } from "../shared/errors.ts";
+} from "../../src/services/security/mod.ts";
+import { DomainError } from "../../src/shared/errors.ts";
 
 Deno.test("acceptance P3: internal service call without WorkloadIdentity is rejected", async () => {
   const { security } = createRuntimeSecurityAcceptanceHarness();
