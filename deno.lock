@@ -152,26 +152,6 @@
       "jsr:@cliffy/command@^1.0.0-rc.7",
       "jsr:@std/yaml@1",
       "npm:hono@^4.12.4"
-    ],
-    "members": {
-      "packages/all": {
-        "dependencies": [
-          "jsr:@takos/takosumi-cli@0.15",
-          "jsr:@takos/takosumi-contract@^2.6.0",
-          "jsr:@takos/takosumi-installer@0.1",
-          "jsr:@takos/takosumi-kernel@0.14",
-          "jsr:@takos/takosumi-kind-gateway@0.1",
-          "jsr:@takos/takosumi-kind-kv-store@0.1",
-          "jsr:@takos/takosumi-kind-message-queue@0.1",
-          "jsr:@takos/takosumi-kind-object-store@0.1",
-          "jsr:@takos/takosumi-kind-postgres@0.1",
-          "jsr:@takos/takosumi-kind-sqlite@0.1",
-          "jsr:@takos/takosumi-kind-vector-store@0.1",
-          "jsr:@takos/takosumi-kind-web-service@0.1",
-          "jsr:@takos/takosumi-kind-worker@0.1",
-          "jsr:@takos/takosumi-runtime-agent@0.8"
-        ]
-      }
-    }
+    ]
   }
 }

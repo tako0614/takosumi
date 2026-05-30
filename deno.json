@@ -1,6 +1,5 @@
 {
   "workspace": [
-    "./packages/all",
     "./deploy/cloudflare"
   ],
   "imports": {
