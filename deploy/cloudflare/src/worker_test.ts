@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { CreatedPaaSApp } from "../../../packages/kernel/src/bootstrap.ts";
+import type { CreatedPaaSApp } from "../../../src/kernel/bootstrap.ts";
 import { type CloudflareWorkerEnv, createCloudflareWorker } from "./handler.ts";
 import type {
   D1Database,

@@ -113,9 +113,7 @@ import {
   type EntitlementPolicyPort,
   EntitlementPolicyService,
 } from "./services/entitlements/mod.ts";
-import type {
-  UsageAggregateStore,
-} from "./services/usage/mod.ts";
+import type { UsageAggregateStore } from "./services/usage/mod.ts";
 import {
   createKernelPluginRegistry,
   type KernelPluginRegistry,
@@ -698,4 +696,3 @@ export function createServiceContainer(
     },
   };
 }
-

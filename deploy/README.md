@@ -16,15 +16,15 @@ clone and adapt `takosumi-cloud/deploy/` rather than these examples.
 
 ## What lives here
 
-| Directory          | Role                                                                                |
-| ------------------ | ----------------------------------------------------------------------------------- |
+| Directory          | Role                                                                                                                                                                                                                   |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cloudflare/`      | Worker-first kernel scaffold example: builds the kernel in-process with `createPaaSApp`, D1 persistence, optional R2 object store. Referenced by the Takos distribution profile and the local-substrate worker runner. |
-| `single-host/`     | Substrate-neutral Docker compose example: kernel + runtime-agent + Postgres + MinIO + Caddy on one host. |
-| `aws/`             | Operator-owned AWS provider runbook (README only; native kinds + connectors live in `takosumi-plugins/`). |
-| `gcp/`             | Operator-owned GCP provider runbook (README only). |
-| `kubernetes/`      | Operator-owned Kubernetes provider runbook (README only). |
-| `local-substrate/` | Local Pebble + CoreDNS + Caddy dev substrate for production-equivalent hostname access. |
-| `observability/`   | Reference observability wiring. |
+| `single-host/`     | Substrate-neutral Docker compose example: kernel + runtime-agent + Postgres + MinIO + Caddy on one host.                                                                                                               |
+| `aws/`             | Operator-owned AWS provider runbook (README only; native kinds + connectors live in `takosumi-plugins/`).                                                                                                              |
+| `gcp/`             | Operator-owned GCP provider runbook (README only).                                                                                                                                                                     |
+| `kubernetes/`      | Operator-owned Kubernetes provider runbook (README only).                                                                                                                                                              |
+| `local-substrate/` | Local Pebble + CoreDNS + Caddy dev substrate for production-equivalent hostname access.                                                                                                                                |
+| `observability/`   | Reference observability wiring.                                                                                                                                                                                        |
 
 ## Why these stay here
 
