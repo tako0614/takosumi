@@ -6,7 +6,7 @@ import {
   operationJournalEffectDigest,
   type OperationJournalEntry,
   type OperationJournalStore,
-} from "../../../packages/kernel/src/domains/deploy/operation_journal.ts";
+} from "../../../src/kernel/domains/deploy/operation_journal.ts";
 import {
   ageRevokeDebtIfDue,
   clearRevokeDebt,
@@ -23,12 +23,12 @@ import {
   revokeDebtSourceKey,
   type RevokeDebtStore,
   type RevokeDebtTransitionInput,
-} from "../../../packages/kernel/src/domains/deploy/revoke_debt_store.ts";
+} from "../../../src/kernel/domains/deploy/revoke_debt_store.ts";
 import type {
   TakosumiDeploymentRecord,
   TakosumiDeploymentRecordStore,
   TakosumiDeploymentUpsertInput,
-} from "../../../packages/kernel/src/domains/deploy/takosumi_deployment_record_store.ts";
+} from "../../../src/kernel/domains/deploy/takosumi_deployment_record_store.ts";
 import type { D1Database } from "./bindings.ts";
 
 const DEPLOYMENT_NAMESPACE = "takosumi-deployment";

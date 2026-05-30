@@ -5,7 +5,7 @@ import {
   type StorageStatementCatalog,
   storageStatementCatalog,
   type StorageTransaction,
-} from "../../../packages/kernel/src/adapters/storage/mod.ts";
+} from "../../../src/kernel/adapters/storage/mod.ts";
 import type { D1Database } from "./bindings.ts";
 
 const SNAPSHOT_ID = "default";

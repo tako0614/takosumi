@@ -1,18 +1,18 @@
 import {
   type CreatedPaaSApp,
   createPaaSApp,
-} from "../../../packages/kernel/src/bootstrap.ts";
-import type { AppAdapters } from "../../../packages/kernel/src/app_context.ts";
+} from "../../../src/kernel/bootstrap.ts";
+import type { AppAdapters } from "../../../src/kernel/app_context.ts";
 import {
   InMemoryRuntimeAgentRegistry,
   StorageBackedWorkLedger,
-} from "../../../packages/kernel/src/agents/mod.ts";
-import { LocalActorAdapter } from "../../../packages/kernel/src/adapters/auth/mod.ts";
-import { MemoryCoordinationAdapter } from "../../../packages/kernel/src/adapters/coordination/mod.ts";
-import { NoopTestKms } from "../../../packages/kernel/src/adapters/kms/mod.ts";
-import { MemoryNotificationSink } from "../../../packages/kernel/src/adapters/notification/mod.ts";
-import { LocalOperatorConfig } from "../../../packages/kernel/src/adapters/operator-config/mod.ts";
-import { NoopProviderMaterializer } from "../../../packages/kernel/src/adapters/provider/mod.ts";
+} from "../../../src/kernel/agents/mod.ts";
+import { LocalActorAdapter } from "../../../src/kernel/adapters/auth/mod.ts";
+import { MemoryCoordinationAdapter } from "../../../src/kernel/adapters/coordination/mod.ts";
+import { NoopTestKms } from "../../../src/kernel/adapters/kms/mod.ts";
+import { MemoryNotificationSink } from "../../../src/kernel/adapters/notification/mod.ts";
+import { LocalOperatorConfig } from "../../../src/kernel/adapters/operator-config/mod.ts";
+import { NoopProviderMaterializer } from "../../../src/kernel/adapters/provider/mod.ts";
 import {
   type AckInput,
   type DeadLetterInput,
@@ -23,11 +23,11 @@ import {
   type QueueLease,
   type QueueMessage,
   type QueuePort,
-} from "../../../packages/kernel/src/adapters/queue/mod.ts";
-import { InMemoryRouterConfigAdapter } from "../../../packages/kernel/src/adapters/router/mod.ts";
-import { MemoryEncryptedSecretStore } from "../../../packages/kernel/src/adapters/secret-store/mod.ts";
-import { ImmutableManifestSourceAdapter } from "../../../packages/kernel/src/adapters/source/mod.ts";
-import { InMemoryObservabilitySink } from "../../../packages/kernel/src/services/observability/mod.ts";
+} from "../../../src/kernel/adapters/queue/mod.ts";
+import { InMemoryRouterConfigAdapter } from "../../../src/kernel/adapters/router/mod.ts";
+import { MemoryEncryptedSecretStore } from "../../../src/kernel/adapters/secret-store/mod.ts";
+import { ImmutableManifestSourceAdapter } from "../../../src/kernel/adapters/source/mod.ts";
+import { InMemoryObservabilitySink } from "../../../src/kernel/services/observability/mod.ts";
 import type { Queue } from "./bindings.ts";
 import type { CloudflareWorkerEnv } from "./bindings.ts";
 import { createCloudflareD1DeployStores } from "./d1_deploy_stores.ts";
@@ -121,7 +121,6 @@ async function createWorkerPaaSApp(
     adapters,
     startWorkerDaemon: false,
     takosumiDeploymentRecordStore: deployStores.deploymentRecordStore,
-    takosumiOperationJournalStore: deployStores.operationJournalStore,
     takosumiRevokeDebtStore: deployStores.revokeDebtStore,
   });
 }

@@ -5,8 +5,8 @@ import {
   INSTALLER_INSTALLATION_ROLLBACK_PATH,
   INSTALLER_INSTALLATIONS_DRY_RUN_PATH,
   INSTALLER_INSTALLATIONS_PATH,
-} from "../packages/kernel/src/api/installer_public_routes.ts";
-import { createPaaSOpenApiDocument } from "../packages/kernel/src/api/openapi.ts";
+} from "../src/kernel/api/installer_public_routes.ts";
+import { createPaaSOpenApiDocument } from "../src/kernel/api/openapi.ts";
 
 const root = new URL("../", import.meta.url);
 
@@ -24,16 +24,16 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/catalog.md",
   "../takosumi-cloud/docs/ja/spec.md",
   "../takosumi-cloud/docs/en/spec.md",
-  "packages/contract/src/catalog.ts",
-  "packages/kernel/src/domains/deploy/_internal_manifest_types.ts",
-  "packages/kernel/src/domains/deploy/manifest_v1.ts",
-  "packages/kernel/src/api/app.ts",
-  "packages/kernel/src/api/installer_public_routes.ts",
-  "packages/kernel/src/api/artifact_routes.ts",
-  "packages/kernel/src/api/internal_routes.ts",
-  "packages/kernel/src/api/runtime_agent_routes.ts",
-  "packages/kernel/src/api/readiness_routes.ts",
-  "packages/kernel/src/api/openapi.ts",
+  "src/contract/catalog.ts",
+  "src/kernel/domains/deploy/_internal_manifest_types.ts",
+  "src/kernel/domains/deploy/manifest_v1.ts",
+  "src/kernel/api/app.ts",
+  "src/kernel/api/installer_public_routes.ts",
+  "src/kernel/api/artifact_routes.ts",
+  "src/kernel/api/internal_routes.ts",
+  "src/kernel/api/runtime_agent_routes.ts",
+  "src/kernel/api/readiness_routes.ts",
+  "src/kernel/api/openapi.ts",
   "src/kinds/worker/spec/kind.jsonld",
   "src/kinds/web-service/spec/kind.jsonld",
   "src/kinds/postgres/spec/kind.jsonld",
@@ -44,12 +44,7 @@ const TAKOSUMI_OWNED_PATHS = [
   "src/kinds/vector-store/spec/kind.jsonld",
   "src/kinds/gateway/spec/kind.jsonld",
   "../takosumi-plugins/packages/kind-cloudflare-worker/spec/kind.jsonld",
-  "packages/contract/deno.json",
-  "packages/runtime-agent/deno.json",
-  "src/kinds/worker/deno.json",
-  "packages/kernel/deno.json",
-  "packages/cli/deno.json",
-  "packages/all/deno.json",
+  "deno.json",
 ];
 
 const REQUIRED_SPEC_KEYS = [
@@ -62,7 +57,7 @@ const REQUIRED_SPEC_KEYS = [
   "kernel-route-inventory",
   "runtime-agent-envelope",
   "reference-kind-binding-guide",
-  "takosumi-jsr-packages",
+  "takosumi-npm-package",
 ];
 
 Deno.test("public spec source map covers required public surfaces", async () => {
@@ -75,8 +70,8 @@ Deno.test("public spec source map covers required public surfaces", async () => 
   assert.equal(source.includes("deploy-public-api-v1"), false);
   assert.equal(source.includes(`takosumi-${"git"}-workflow-ref-v1`), false);
   assert.equal(source.includes(`takosumi-${"git"}-artifact-uri-v1`), false);
-  assert.ok(source.includes("packages/contract/src/app-spec.ts"));
-  assert.ok(source.includes("packages/contract/src/catalog.ts"));
+  assert.ok(source.includes("src/contract/app-spec.ts"));
+  assert.ok(source.includes("src/contract/catalog.ts"));
   assert.ok(source.includes("src/kinds/*/spec/kind.jsonld"));
   assert.ok(
     source.includes("../takosumi-plugins/packages/kind-*/spec/kind.jsonld"),
@@ -100,11 +95,11 @@ Deno.test("public spec source map covers installer route evidence", async () => 
   assert.match(source, /`kernel-route-inventory`/);
   assert.match(source, /`installer-api-v1`/);
   assert.ok(
-    source.includes("packages/kernel/src/api/installer_public_routes.ts"),
+    source.includes("src/kernel/api/installer_public_routes.ts"),
   );
   assert.ok(
     source.includes(
-      "packages/kernel/src/api/installer_public_routes_e2e_test.ts",
+      "src/kernel/api/installer_public_routes_e2e_test.ts",
     ),
   );
   assert.ok(openapi.paths[INSTALLER_INSTALLATIONS_DRY_RUN_PATH]?.post);
@@ -152,7 +147,7 @@ Deno.test("reference-kernel descriptors stay out of public catalog roots", async
   assert.match(docs, /reference\s+internal metadata/);
 
   const descriptorRoot = new URL(
-    "packages/kernel/src/domains/deploy/descriptors/",
+    "src/kernel/domains/deploy/descriptors/",
     root,
   );
   const forbidden = [
