@@ -92,16 +92,20 @@ const fs: FsAdapter = {
   },
   async makeTempDir(prefix) {
     // Match `Deno.makeTempDir({ prefix })`: create a uniquely-named directory
-    // inside the OS temp dir whose basename starts with `prefix`. Node's
-    // `mkdtemp` takes a full path template and appends 6 random chars, so we
-    // join `os.tmpdir()` with the prefix to land the temp dir in the same
-    // location Deno uses.
+    // INSIDE the OS temp dir whose basename starts with `prefix`. Node's
+    // `mkdtemp` takes a full path template and appends 6 random chars to it, so
+    // the template must end with a path separator (followed by the optional
+    // prefix) for the new dir to land *inside* `os.tmpdir()`. `path.join(tmpdir,
+    // "")` drops the trailing separator (`"/tmp"`), which would make `mkdtemp`
+    // create a *sibling* (`/tmpXXXXXX`) instead. Build the template as
+    // `tmpdir + sep + (prefix ?? "")` so the empty-prefix case still nests
+    // inside the temp root, matching Deno.
     const [fsMod, osMod, pathMod] = await Promise.all([
       import("node:fs/promises"),
       import("node:os"),
       import("node:path"),
     ]);
-    const template = pathMod.join(osMod.tmpdir(), prefix ?? "");
+    const template = osMod.tmpdir() + pathMod.sep + (prefix ?? "");
     return await fsMod.mkdtemp(template);
   },
   async remove(path, options) {
