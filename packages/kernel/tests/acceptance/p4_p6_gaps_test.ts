@@ -14,16 +14,16 @@ import {
   type PackageDescriptor,
   type PackageResolution,
   type TrustRecord,
-} from "../domains/registry/mod.ts";
+} from "../../src/domains/registry/mod.ts";
 import {
   InMemoryOutputConsumerBindingStore,
   InMemoryOutputProjectionStore,
   InMemoryOutputStore,
   type Output,
   type OutputConsumerBinding,
-} from "../domains/outputs/mod.ts";
-import { OutputDependencyPlanner } from "../services/output-planner/mod.ts";
-import { DomainError } from "../shared/errors.ts";
+} from "../../src/domains/outputs/mod.ts";
+import { OutputDependencyPlanner } from "../../src/services/output-planner/mod.ts";
+import { DomainError } from "../../src/shared/errors.ts";
 
 Deno.test("acceptance P4: registry resolution carries active trust for selected package digest", async () => {
   const descriptors = new InMemoryPackageDescriptorStore();

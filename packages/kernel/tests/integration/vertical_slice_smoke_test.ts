@@ -15,12 +15,12 @@ import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import {
   createCoreDomainServices,
   createInMemoryCoreDomainDependencies,
-} from "../domains/core/services.ts";
+} from "../../src/domains/core/services.ts";
 import {
   DeploymentService,
   InMemoryDeploymentStore,
-} from "../domains/deploy/deployment_service.ts";
-import type { PublicDeployManifest } from "../domains/deploy/types.ts";
+} from "../../src/domains/deploy/deployment_service.ts";
+import type { PublicDeployManifest } from "../../src/domains/deploy/types.ts";
 
 Deno.test("integration smoke: create space/group, resolve and apply Deployment, advance GroupHead", async () => {
   const actor = actorContext("acct_smoke_owner", "req_smoke");

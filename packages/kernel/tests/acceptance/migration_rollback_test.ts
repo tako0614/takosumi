@@ -3,19 +3,19 @@ import type {
   DeploymentProviderAdapter,
   OperationOutcome,
   PlannedOperation,
-} from "../domains/deploy/apply_orchestrator.ts";
+} from "../../src/domains/deploy/apply_orchestrator.ts";
 import {
   DeploymentService,
   InMemoryDeploymentStore,
-} from "../domains/deploy/deployment_service.ts";
-import type { PublicDeployManifest } from "../domains/deploy/types.ts";
+} from "../../src/domains/deploy/deployment_service.ts";
+import type { PublicDeployManifest } from "../../src/domains/deploy/types.ts";
 import {
   InMemoryBindingSetRevisionStore,
   InMemoryMigrationLedgerStore,
   InMemoryResourceBindingStore,
   InMemoryResourceInstanceStore,
-} from "../domains/resources/mod.ts";
-import { ResourceOperationService } from "../services/resources/mod.ts";
+} from "../../src/domains/resources/mod.ts";
+import { ResourceOperationService } from "../../src/services/resources/mod.ts";
 
 const DEMO_IMAGE =
   "registry.example.test/demo@sha256:1111111111111111111111111111111111111111111111111111111111111111";
