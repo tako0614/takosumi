@@ -9,10 +9,11 @@
  * historical `Deno.makeTempDir` / `Deno.remove` / `Deno.mkdir` behavior is
  * unchanged.
  *
- * Unlike the git / tar subprocess primitives (which are dnt-mapped to Node
- * implementations), these `Deno.*` FS calls are covered by dnt's `@deno/shim-deno`
- * (`shims: { deno: true }`), so the npm build runs them through the shim
- * without a `.node.ts` mapping. In production the reference kernel injects
+ * These `Deno.*` FS calls are covered by dnt's `@deno/shim-deno`
+ * (`shims: { deno: true }`), so the npm build runs them through the shim. (The
+ * git / tar / serve subprocess primitives instead use a runtime-detecting
+ * single module that branches on `globalThis.Deno`, so the npm build needs no
+ * module mappings at all.) In production the reference kernel injects
  * `currentRuntime().fs`, so this default is not on the hot path there.
  */
 
