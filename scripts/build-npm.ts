@@ -1,7 +1,8 @@
-// dnt build script: produce the @takosjp/takosumi npm package from the
-// Deno workspace umbrella (packages/all). Inlines the whole internal graph
-// (@takos/takosumi-* / bare takosumi-* specifiers) into ONE npm package via
-// scripts/npm-import-map.json.
+// dnt build script: produce the @takosjp/takosumi npm package from the Deno
+// source. deno.json is the single source of truth — its `exports` become the
+// dnt entry points and its `imports` map is fed straight to dnt (no duplicated
+// ENTRY_TABLE / npm-import-map.json). Inlines the internal bare-specifier graph
+// into ONE npm package.
 //
 // Usage: deno run -A scripts/build-npm.ts
 //   --typecheck=both|single|none   (default: single)
@@ -22,21 +23,19 @@ const fromRoot = (p: string) => new URL(p, ROOT).pathname;
 // `Deno.Command` / `Deno.serve` on Deno and `node:child_process` / `node:http`
 // on Node. The npm build therefore needs no module mappings.
 
-// version comes from the single-package root deno.json
+// deno.json is the single source of truth — version, the npm `exports` (which
+// become the dnt entry points), and the internal `imports` map (fed straight to
+// dnt). No duplicated ENTRY_TABLE / npm-import-map.json.
 const umbrella = JSON.parse(
   await Deno.readTextFile(fromRoot("deno.json")),
-) as { version: string };
+) as { version: string; exports: Record<string, string> };
 
-// npm export name -> umbrella source file (src/all/*.ts)
-const ENTRY_TABLE: Record<string, string> = {
-  ".": "src/all/mod.ts",
-  "./contract": "src/contract/mod.ts",
-  "./installer": "src/installer/mod.ts",
-  "./kernel": "src/all/kernel.ts",
-  "./cli": "src/all/cli.ts",
-  "./runtime-agent": "src/runtime-agent/server.ts",
-  "./server": "src/all/server.ts",
-};
+// npm export name -> source file, derived from deno.json `exports`.
+const ENTRY_TABLE: Record<string, string> = Object.fromEntries(
+  Object.entries(umbrella.exports).map(
+    ([name, rel]) => [name, rel.replace(/^\.\//, "")],
+  ),
+);
 
 function parseArgs() {
   let typeCheck: "both" | "single" | undefined = "single";
@@ -91,7 +90,7 @@ console.log(
 await build({
   entryPoints,
   outDir,
-  importMap: fromRoot("scripts/npm-import-map.json"),
+  importMap: fromRoot("deno.json"),
   shims: { deno: true },
   test: false,
   typeCheck,

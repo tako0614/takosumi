@@ -75,7 +75,9 @@
     "takosumi-runtime-agent/prepared-source-reader": "./src/runtime-agent/prepared_source_reader.ts",
     "hono": "npm:hono@^4.12.4",
     "@std/yaml": "jsr:@std/yaml@^1.0.0",
-    "@cliffy/command": "jsr:@cliffy/command@^1.0.0-rc.7"
+    "@std/assert": "jsr:@std/assert@^1.0.6",
+    "@cliffy/command": "jsr:@cliffy/command@^1.0.0-rc.7",
+    "@cliffy/command/completions": "jsr:@cliffy/command@^1.0.0-rc.7/completions"
   },
   "compilerOptions": {
     "strict": true,
