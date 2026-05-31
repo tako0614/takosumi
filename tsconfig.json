@@ -34,9 +34,6 @@
       "jsr:@std/fs@*": ["./shims/std/fs.ts"],
       "jsr:@std/fs@^1.0.5/walk": ["./shims/std/fs.ts"],
 
-      "@cliffy/command": ["./shims/cliffy-command.ts"],
-      "@cliffy/command/completions": ["./shims/cliffy-completions.ts"],
-
       "takosumi-contract": ["./src/contract/mod.ts"],
       "takosumi-contract/app-spec": ["./src/contract/app-spec.ts"],
       "takosumi-contract/catalog": ["./src/contract/catalog.ts"],

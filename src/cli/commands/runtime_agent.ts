@@ -1,60 +1,61 @@
-import { Command } from "@cliffy/command";
+import { Command } from "../command.ts";
 
-function createServeCmd() {
-  return new Command()
+function createServeCmd(): Command {
+  return new Command("serve")
     .description("Start the runtime-agent HTTP server")
-    .option("--port <port:number>", "Port to listen on", { default: 8789 })
+    .option("--port <port>", "Port to listen on", (v) => Number(v), 8789)
+    .option("--hostname <hostname>", "Hostname to bind", "127.0.0.1")
     .option(
-      "--hostname <hostname:string>",
-      "Hostname to bind",
-      { default: "127.0.0.1" },
-    )
-    .option(
-      "--token <token:string>",
+      "--token <token>",
       "Bearer token (defaults to TAKOSUMI_AGENT_TOKEN env or random)",
     )
     .option(
-      "--env-file <path:file>",
+      "--env-file <path>",
       "Load extra env vars before starting the generic agent",
     )
-    .action(async ({ port, hostname, token, envFile }) => {
-      if (envFile) {
-        await loadEnvFile(envFile);
-      }
-      const { startEmbeddedAgent } = await import(
-        "@takos/takosumi-runtime-agent/embed"
-      );
-      const explicitToken = token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
-      const handle = startEmbeddedAgent({
-        port,
-        hostname,
-        token: explicitToken,
-        exportToProcessEnv: false,
-      });
-      console.log(`takosumi runtime-agent listening at ${handle.url}`);
-      console.log(`  TAKOSUMI_AGENT_URL=${handle.url}`);
-      console.log(`  TAKOSUMI_AGENT_TOKEN=${handle.token}`);
-      console.log("Set the above env on the kernel host to wire it through.");
-      await waitForShutdown();
-      await handle.shutdown();
-    });
+    .action(
+      async (
+        opts: {
+          port: number;
+          hostname: string;
+          token?: string;
+          envFile?: string;
+        },
+      ) => {
+        if (opts.envFile) {
+          await loadEnvFile(opts.envFile);
+        }
+        const { startEmbeddedAgent } = await import(
+          "@takos/takosumi-runtime-agent/embed"
+        );
+        const explicitToken = opts.token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
+        const handle = startEmbeddedAgent({
+          port: opts.port,
+          hostname: opts.hostname,
+          token: explicitToken,
+          exportToProcessEnv: false,
+        });
+        console.log(`takosumi runtime-agent listening at ${handle.url}`);
+        console.log(`  TAKOSUMI_AGENT_URL=${handle.url}`);
+        console.log(`  TAKOSUMI_AGENT_TOKEN=${handle.token}`);
+        console.log("Set the above env on the kernel host to wire it through.");
+        await waitForShutdown();
+        await handle.shutdown();
+      },
+    ) as Command;
 }
-const serveCmd: ReturnType<typeof createServeCmd> = createServeCmd();
 
-function createListCmd() {
-  return new Command()
+function createListCmd(): Command {
+  return new Command("list")
     .description("List connectors registered on a runtime-agent")
+    .option("--url <url>", "Agent URL (defaults to TAKOSUMI_AGENT_URL env)")
     .option(
-      "--url <url:string>",
-      "Agent URL (defaults to TAKOSUMI_AGENT_URL env)",
-    )
-    .option(
-      "--token <token:string>",
+      "--token <token>",
       "Bearer token (defaults to TAKOSUMI_AGENT_TOKEN env)",
     )
-    .action(async ({ url, token }) => {
-      const agentUrl = url ?? Deno.env.get("TAKOSUMI_AGENT_URL");
-      const agentToken = token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
+    .action(async (opts: { url?: string; token?: string }) => {
+      const agentUrl = opts.url ?? Deno.env.get("TAKOSUMI_AGENT_URL");
+      const agentToken = opts.token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
       if (!agentUrl || !agentToken) {
         console.error(
           "Set --url + --token (or TAKOSUMI_AGENT_URL + TAKOSUMI_AGENT_TOKEN env)",
@@ -90,79 +91,77 @@ function createListCmd() {
           console.log(`  - ${provider}`);
         }
       }
-    });
+    }) as Command;
 }
-const listCmd: ReturnType<typeof createListCmd> = createListCmd();
 
-function createVerifyCmd() {
-  return new Command()
+function createVerifyCmd(): Command {
+  return new Command("verify")
     .description(
       "Smoke-test connector credentials & connectivity (read-only API call per connector)",
     )
+    .option("--url <url>", "Agent URL (defaults to TAKOSUMI_AGENT_URL env)")
     .option(
-      "--url <url:string>",
-      "Agent URL (defaults to TAKOSUMI_AGENT_URL env)",
-    )
-    .option(
-      "--token <token:string>",
+      "--token <token>",
       "Bearer token (defaults to TAKOSUMI_AGENT_TOKEN env)",
     )
-    .option(
-      "--shape <shape:string>",
-      "Restrict to connectors implementing this shape",
-    )
-    .option(
-      "--provider <provider:string>",
-      "Restrict to a single provider id",
-    )
-    .action(async ({ url, token, shape, provider }) => {
-      const agentUrl = url ?? Deno.env.get("TAKOSUMI_AGENT_URL");
-      const agentToken = token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
-      if (!agentUrl || !agentToken) {
-        console.error(
-          "Set --url + --token (or TAKOSUMI_AGENT_URL + TAKOSUMI_AGENT_TOKEN env)",
-        );
-        Deno.exit(1);
-      }
-      const filter: Record<string, string> = {};
-      if (shape) filter.shape = shape;
-      if (provider) filter.provider = provider;
-      const res = await fetch(`${agentUrl}/v1/lifecycle/verify`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${agentToken}`,
-          "content-type": "application/json",
+    .option("--shape <shape>", "Restrict to connectors implementing this shape")
+    .option("--provider <provider>", "Restrict to a single provider id")
+    .action(
+      async (
+        opts: {
+          url?: string;
+          token?: string;
+          shape?: string;
+          provider?: string;
         },
-        body: JSON.stringify(filter),
-      });
-      if (!res.ok) {
-        console.error(
-          `agent ${agentUrl}/v1/lifecycle/verify returned ${res.status}`,
-        );
-        console.error(await res.text());
-        Deno.exit(1);
-      }
-      const body = await res.json() as {
-        results: Array<{
-          shape: string;
-          provider: string;
-          ok: boolean;
-          note?: string;
-          code?: string;
-        }>;
-      };
-      if (body.results.length === 0) {
-        console.log(
-          "no connectors registered (operator must pass a registry in their distribution)",
-        );
-        return;
-      }
-      renderVerifyTable(body.results);
-      const anyFailed = body.results.some((r) => !r.ok);
-      if (anyFailed) Deno.exit(2);
-    });
+      ) => {
+        const agentUrl = opts.url ?? Deno.env.get("TAKOSUMI_AGENT_URL");
+        const agentToken = opts.token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
+        if (!agentUrl || !agentToken) {
+          console.error(
+            "Set --url + --token (or TAKOSUMI_AGENT_URL + TAKOSUMI_AGENT_TOKEN env)",
+          );
+          Deno.exit(1);
+        }
+        const filter: Record<string, string> = {};
+        if (opts.shape) filter.shape = opts.shape;
+        if (opts.provider) filter.provider = opts.provider;
+        const res = await fetch(`${agentUrl}/v1/lifecycle/verify`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${agentToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(filter),
+        });
+        if (!res.ok) {
+          console.error(
+            `agent ${agentUrl}/v1/lifecycle/verify returned ${res.status}`,
+          );
+          console.error(await res.text());
+          Deno.exit(1);
+        }
+        const body = await res.json() as {
+          results: Array<{
+            shape: string;
+            provider: string;
+            ok: boolean;
+            note?: string;
+            code?: string;
+          }>;
+        };
+        if (body.results.length === 0) {
+          console.log(
+            "no connectors registered (operator must pass a registry in their distribution)",
+          );
+          return;
+        }
+        renderVerifyTable(body.results);
+        const anyFailed = body.results.some((r) => !r.ok);
+        if (anyFailed) Deno.exit(2);
+      },
+    ) as Command;
 }
-const verifyCmd: ReturnType<typeof createVerifyCmd> = createVerifyCmd();
 
 function renderVerifyTable(
   results: ReadonlyArray<{
@@ -189,16 +188,20 @@ function renderVerifyTable(
   }
 }
 
-function createRuntimeAgentCommand() {
-  return new Command()
-    .description("Operate the Takosumi runtime-agent")
-    .command("serve", serveCmd)
-    .command("list", listCmd)
-    .command("verify", verifyCmd);
+// Build every subcommand fresh per call (see artifact.ts for the rationale):
+// the CLI tests re-import this module and expect an independent command tree, so
+// module-level subcommand singletons would be shared across parents and corrupt
+// commander's parse state.
+function createRuntimeAgentCommand(): Command {
+  const command = new Command("runtime-agent")
+    .description("Operate the Takosumi runtime-agent");
+  command.addCommand(createServeCmd());
+  command.addCommand(createListCmd());
+  command.addCommand(createVerifyCmd());
+  return command;
 }
 
-export const runtimeAgentCommand: ReturnType<typeof createRuntimeAgentCommand> =
-  createRuntimeAgentCommand();
+export const runtimeAgentCommand: Command = createRuntimeAgentCommand();
 
 async function loadEnvFile(path: string): Promise<void> {
   const text = await Deno.readTextFile(path);

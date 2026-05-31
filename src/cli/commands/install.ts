@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command";
+import { Command } from "../command.ts";
 import {
   callInstaller,
   expectedPinFromOptions,
@@ -9,80 +9,67 @@ import {
   resolveSourceArg,
 } from "../installer_client.ts";
 
-function createInstallCommand() {
-  const dryRun = new Command()
+interface InstallFlags {
+  source?: string;
+  space: string;
+  remote?: string;
+  token?: string;
+  expectedCommit?: string;
+  expectedManifestDigest?: string;
+  expectedSourceDigest?: string;
+  dryRun?: boolean;
+}
+
+function createInstallCommand(): Command {
+  const dryRun = new Command("dry-run")
     .description("Dry-run a new Installation from a source")
-    .arguments("[source:string]")
-    .option(
-      "--source <source:string>",
-      "git:, prepared:, or local path",
-    )
-    .option("--space <spaceId:string>", "Target Space id", { required: true })
-    .option("--remote <url:string>", "Remote kernel URL")
-    .option("--token <token:string>", "Installer bearer token")
-    .action(async ({ source: sourceFlag, space, remote, token }, sourceArg) => {
+    .argument("[source]", "git:, prepared:, or local path")
+    .option("--source <source>", "git:, prepared:, or local path")
+    .requiredOption("--space <spaceId>", "Target Space id")
+    .option("--remote <url>", "Remote kernel URL")
+    .option("--token <token>", "Installer bearer token")
+    .action(async (sourceArg: string | undefined, opts: InstallFlags) => {
       await runInstall({
-        sourceRef: resolveSourceArg({ argument: sourceArg, flag: sourceFlag }),
-        spaceId: space,
-        remote,
-        token,
+        sourceRef: resolveSourceArg({ argument: sourceArg, flag: opts.source }),
+        spaceId: opts.space,
+        remote: opts.remote,
+        token: opts.token,
         dryRun: true,
       });
     });
 
-  return new Command()
+  const command = new Command("install")
     .description("Create a new Installation from an AppSpec source")
-    .arguments("[source:string]")
+    .argument("[source]", "git:, prepared:, or local path")
+    .option("--source <source>", "git:, prepared:, or local path")
+    .requiredOption("--space <spaceId>", "Target Space id")
+    .option("--remote <url>", "Remote kernel URL")
+    .option("--token <token>", "Installer bearer token")
+    .option("--expected-commit <commit>", "Expected source commit pin")
     .option(
-      "--source <source:string>",
-      "git:, prepared:, or local path",
-    )
-    .option("--space <spaceId:string>", "Target Space id", { required: true })
-    .option("--remote <url:string>", "Remote kernel URL")
-    .option("--token <token:string>", "Installer bearer token")
-    .option(
-      "--expected-commit <commit:string>",
-      "Expected source commit pin",
-    )
-    .option(
-      "--expected-manifest-digest <digest:string>",
+      "--expected-manifest-digest <digest>",
       "Expected .takosumi.yml digest pin",
     )
     .option(
-      "--expected-source-digest <digest:string>",
+      "--expected-source-digest <digest>",
       "Expected prepared source digest pin",
     )
     .option("--dry-run", "Alias for `takosumi install dry-run`")
-    .action(
-      async (
-        {
-          source: sourceFlag,
-          space,
-          remote,
-          token,
-          expectedCommit,
-          expectedManifestDigest,
-          expectedSourceDigest,
-          dryRun: dryRunFlag,
-        },
-        sourceArg,
-      ) => {
-        await runInstall({
-          sourceRef: resolveSourceArg({
-            argument: sourceArg,
-            flag: sourceFlag,
-          }),
-          spaceId: space,
-          remote,
-          token,
-          expectedCommit,
-          expectedManifestDigest,
-          expectedSourceDigest,
-          dryRun: dryRunFlag === true,
-        });
-      },
-    )
-    .command("dry-run", dryRun);
+    .action(async (sourceArg: string | undefined, opts: InstallFlags) => {
+      await runInstall({
+        sourceRef: resolveSourceArg({ argument: sourceArg, flag: opts.source }),
+        spaceId: opts.space,
+        remote: opts.remote,
+        token: opts.token,
+        expectedCommit: opts.expectedCommit,
+        expectedManifestDigest: opts.expectedManifestDigest,
+        expectedSourceDigest: opts.expectedSourceDigest,
+        dryRun: opts.dryRun === true,
+      });
+    });
+
+  command.addCommand(dryRun);
+  return command;
 }
 
 async function runInstall(input: {
@@ -123,5 +110,4 @@ async function runInstall(input: {
   }
 }
 
-export const installCommand: ReturnType<typeof createInstallCommand> =
-  createInstallCommand();
+export const installCommand: Command = createInstallCommand();

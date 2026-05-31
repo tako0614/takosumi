@@ -1,35 +1,43 @@
-import { Command } from "@cliffy/command";
+import { Command } from "../command.ts";
 import {
   callInstaller,
   INSTALLATION_ROLLBACK_PATH,
   requireRemoteInstaller,
 } from "../installer_client.ts";
 
-function createRollbackCommand() {
-  return new Command()
+function createRollbackCommand(): Command {
+  return new Command("rollback")
     .description("Rollback an Installation to a prior Deployment")
-    .arguments("<installationId:string> <deploymentId:string>")
-    .option("--remote <url:string>", "Remote kernel URL")
-    .option("--token <token:string>", "Installer bearer token")
-    .action(async ({ remote, token }, installationId, deploymentId) => {
-      try {
-        const target = await requireRemoteInstaller(remote, token);
-        const { status, body } = await callInstaller(target, {
-          path: INSTALLATION_ROLLBACK_PATH(installationId),
-          body: { deploymentId },
-        });
-        if (status >= 400) {
-          console.error(`kernel returned ${status}:`, body);
+    .argument("<installationId>", "Installation id")
+    .argument("<deploymentId>", "Deployment id to roll back to")
+    .option("--remote <url>", "Remote kernel URL")
+    .option("--token <token>", "Installer bearer token")
+    .action(
+      async (
+        installationId: string,
+        deploymentId: string,
+        opts: { remote?: string; token?: string },
+      ) => {
+        try {
+          const target = await requireRemoteInstaller(opts.remote, opts.token);
+          const { status, body } = await callInstaller(target, {
+            path: INSTALLATION_ROLLBACK_PATH(installationId),
+            body: { deploymentId },
+          });
+          if (status >= 400) {
+            console.error(`kernel returned ${status}:`, body);
+            Deno.exit(1);
+          }
+          console.log(JSON.stringify(body, null, 2));
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+          console.error(`error: ${message}`);
           Deno.exit(1);
         }
-        console.log(JSON.stringify(body, null, 2));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`error: ${message}`);
-        Deno.exit(1);
-      }
-    });
+      },
+    ) as Command;
 }
 
-export const rollbackCommand: ReturnType<typeof createRollbackCommand> =
-  createRollbackCommand();
+export const rollbackCommand: Command = createRollbackCommand();

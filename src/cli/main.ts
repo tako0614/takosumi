@@ -1,5 +1,4 @@
-import { Command } from "@cliffy/command";
-import { CompletionsCommand } from "@cliffy/command/completions";
+import { Command } from "./command.ts";
 import { installCommand } from "./commands/install.ts";
 import { deployCommand } from "./commands/deploy.ts";
 import { rollbackCommand } from "./commands/rollback.ts";
@@ -10,34 +9,35 @@ import { initCommand } from "./commands/init.ts";
 import { versionCommand } from "./commands/version.ts";
 import { runtimeAgentCommand } from "./commands/runtime_agent.ts";
 import { artifactCommand } from "./commands/artifact.ts";
+import { createCompletionsCommand } from "./commands/completions.ts";
 import { TAKOSUMI_CLI_VERSION } from "./version.ts";
 
-// deno-lint-ignore no-explicit-any
-export type TakosumiCommand = Command<any>;
+export type TakosumiCommand = Command;
 
 function createTakosumi(): TakosumiCommand {
-  return new Command()
+  const program = new Command()
     .name("takosumi")
     .description("Takosumi: operator-portable PaaS toolkit")
-    .version(TAKOSUMI_CLI_VERSION)
-    .command("install", installCommand)
-    .command("deploy", deployCommand)
-    .command("rollback", rollbackCommand)
-    .command("plan", planCommand)
-    .command("server", serverCommand)
-    .command("migrate", migrateCommand)
-    .command("init", initCommand)
-    .command("artifact", artifactCommand)
-    .command("runtime-agent", runtimeAgentCommand)
-    .command("version", versionCommand)
-    // Cliffy ships shell completion generators for bash / zsh / fish; wiring
-    // the bundled subcommand here is the cleanest way to expose
-    // `takosumi completions <shell>` without re-implementing the generator.
-    .command("completions", new CompletionsCommand());
+    .version(TAKOSUMI_CLI_VERSION);
+  program.addCommand(installCommand);
+  program.addCommand(deployCommand);
+  program.addCommand(rollbackCommand);
+  program.addCommand(planCommand);
+  program.addCommand(serverCommand);
+  program.addCommand(migrateCommand);
+  program.addCommand(initCommand);
+  program.addCommand(artifactCommand);
+  program.addCommand(runtimeAgentCommand);
+  program.addCommand(versionCommand);
+  // commander has no bundled shell completion generator (unlike cliffy's
+  // CompletionsCommand), so we ship an explicit one that emits per-shell
+  // completion scripts for the top-level subcommands.
+  program.addCommand(createCompletionsCommand(program));
+  return program;
 }
 
 export const takosumi: TakosumiCommand = createTakosumi();
 
 if (import.meta.main) {
-  await takosumi.parse(Deno.args);
+  await takosumi.parseAsync(process.argv.slice(2), { from: "user" });
 }
