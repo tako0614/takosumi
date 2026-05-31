@@ -1,2 +1,15 @@
 .wrangler/
 npm/
+node_modules/
+/node_modules
+.bun_install.log
+.bun_test.log
+.migrate_probe.txt
+.migrate_result.txt
+.src_dump.txt
+.commit_out.txt
+.run_migrate.sh
+.fix_commit.sh
+.fix_result.txt
+.gitignore_addition.txt
+bun.lock
