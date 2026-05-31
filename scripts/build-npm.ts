@@ -59,13 +59,26 @@ function parseArgs() {
 const { typeCheck, entries } = parseArgs();
 
 const selected = entries ?? Object.keys(ENTRY_TABLE);
-const entryPoints = selected.map((name) => {
+const entryPoints: Array<
+  { name: string; path: string } | { kind: "bin"; name: string; path: string }
+> = selected.map((name) => {
   const rel = ENTRY_TABLE[name];
   if (!rel) throw new Error(`unknown npm export name: ${name}`);
   return name === "."
     ? { name: ".", path: fromRoot(rel) }
     : { name, path: fromRoot(rel) };
 });
+
+// Ship the runnable CLI as a npm bin (`npx @takosjp/takosumi`,
+// `deno run -A npm:@takosjp/takosumi/bin`). The `./cli` subpath stays the
+// library export; the bin wraps src/cli/main.ts (import.meta.main).
+if (!entries) {
+  entryPoints.push({
+    kind: "bin",
+    name: "takosumi",
+    path: fromRoot("src/cli/main.ts"),
+  });
+}
 
 const outDir = fromRoot("npm");
 await emptyDir(outDir);
@@ -117,6 +130,19 @@ await build({
       } catch {
         // ignore
       }
+    }
+    // dnt emits bin paths as "./esm/cli/main.js"; npm's bin validator rejects
+    // the leading "./" and drops the bin. Strip it so `npx @takosjp/takosumi`
+    // and `deno run -A npm:@takosjp/takosumi` resolve the CLI.
+    const pkgPath = `${outDir}/package.json`;
+    const pkg = JSON.parse(await Deno.readTextFile(pkgPath));
+    if (pkg.bin && typeof pkg.bin === "object") {
+      for (const [name, target] of Object.entries(pkg.bin)) {
+        if (typeof target === "string" && target.startsWith("./")) {
+          pkg.bin[name] = target.slice(2);
+        }
+      }
+      await Deno.writeTextFile(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
     }
   },
 });

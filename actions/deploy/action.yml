@@ -20,9 +20,9 @@ inputs:
     required: false
     default: apply
   cli-version:
-    description: JSR version of @takos/takosumi-cli to run.
+    description: npm version of @takosjp/takosumi to run (provides the takosumi CLI bin).
     required: false
-    default: 0.15.0
+    default: 0.17.0
   deno-version:
     description: Deno version passed to denoland/setup-deno.
     required: false
@@ -60,7 +60,7 @@ runs:
             ;;
         esac
 
-        deno run -A "jsr:@takos/takosumi-cli@$TAKOSUMI_ACTION_CLI_VERSION" \
+        deno run -A "npm:@takosjp/takosumi@$TAKOSUMI_ACTION_CLI_VERSION" \
           "${subcommand[@]}" \
           --space "$TAKOSUMI_ACTION_SPACE" \
           --remote "$TAKOSUMI_ACTION_REMOTE_URL" \
