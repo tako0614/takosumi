@@ -7,9 +7,12 @@ export function objectBodyBytes(
   body: Uint8Array | string,
 ): Uint8Array<ArrayBuffer> {
   if (typeof body === "string") {
-    return new TextEncoder().encode(body);
+    const encoded = new TextEncoder().encode(body);
+    const copy: Uint8Array<ArrayBuffer> = new Uint8Array(encoded.byteLength);
+    copy.set(encoded);
+    return copy;
   }
-  const copy = new Uint8Array(body.byteLength);
+  const copy: Uint8Array<ArrayBuffer> = new Uint8Array(body.byteLength);
   copy.set(body);
   return copy;
 }

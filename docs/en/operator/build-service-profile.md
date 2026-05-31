@@ -16,7 +16,7 @@ nodes:
     kind: linux-container
     spec:
       image: ghcr.io/example/build-node@sha256:...
-      command: npm ci && npm run build
+      command: bun install --frozen-lockfile && bun run build
       workingDir: .
     dependsOn: []
 ```
@@ -82,7 +82,7 @@ nodes:
     kind: linux-container
     spec:
       image: ghcr.io/example/build-node@sha256:...
-      command: npm ci && npm run build
+      command: bun install --frozen-lockfile && bun run build
     dependsOn: []
 ```
 

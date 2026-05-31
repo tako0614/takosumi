@@ -141,43 +141,43 @@ Canonical contract source is `packages/contract/`; the public export is [`@takos
 ## Development
 
 ```bash
-deno task check
-deno test --allow-all
-deno task fmt:check
-deno task lint
-deno task lint:json-ld
-deno task spec:check-drift
-deno run -A scripts/build-npm.ts
+bun install --frozen-lockfile
+bun run check
+bun test ./src/
+bun run test:scripts
+bun run lint:json-ld
+bun run build:npm
 ```
 
 Per-package examples:
 
 ```bash
-cd packages/cli && deno task test
-cd packages/kernel && deno task db:migrate:dry-run
+bun test ./src/cli/tests
+bun --preload ./shims/deno-compat.ts src/kernel/scripts/db-migrate.ts --dry-run --env=local
 ```
 
 ## Release
 
-Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace, runs tests, builds the npm package with dnt via `scripts/build-npm.ts`, publishes `@takosjp/takosumi` to npm, and builds/pushes the `takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish` input is set. `@takosjp/takosumi` carries its own single version stream; the sibling `@takosjp/takosumi-plugins` is released from its own repository with its own version stream, so there is no ecosystem-wide lockstep GA.
+Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace with Bun, builds the npm package through `bun run build:npm`, publishes `@takosjp/takosumi` to npm, and builds/pushes the `takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish` input is set. `@takosjp/takosumi` carries its own single version stream; the sibling `@takosjp/takosumi-plugins` is released from its own repository with its own version stream, so there is no ecosystem-wide lockstep GA.
 
-The dnt build produces the npm output under the build target directory and runs
-`npm publish` against the `@takosjp/takosumi` package from that output. A few
-Deno subprocess and `serve` modules are dnt-mapped to Node implementations in the
-npm output, so runtime behavior on Deno is unchanged.
+The npm build produces output under `npm/`, and release publishing runs
+`npm publish` from that output. dnt itself still runs on Deno under the
+`build:npm` wrapper because dnt is distributed through JSR, but the package
+source, checks, tests, and release entry points are Bun/npm-owned.
 
 ## Docs Site
 
 `takosumi/docs/` is the VitePress site (`base: "/docs/"`). `takosumi/website/` is the Solid Start landing. The Pages output merges landing, docs, JSON-LD contexts, and kind descriptors under the same `takosumi.com` project.
 
 ```bash
-deno task docs:install
-deno task docs:dev
-deno task docs:build
+npm --prefix docs install
+npm --prefix docs run dev
+npm --prefix docs run build
 
-deno task website:build
-deno task website:preview
-deno task website:deploy
+npm --prefix website install
+bash website/build.sh
+npm --prefix website run preview
+wrangler pages deploy website/.output/public --project-name=takosumi-website
 ```
 
 Pushing `master` deploys Cloudflare Pages project `takosumi-website` through `.github/workflows/website-deploy.yml`. See [`DEPLOY.md`](./DEPLOY.md) and [`website/README.md`](./website/README.md).

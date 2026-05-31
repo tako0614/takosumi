@@ -14,7 +14,7 @@
  * encountering them is rejected with `AppSpecParseError`.
  */
 
-import { parse as parseYaml } from "jsr:@std/yaml@^1.0.5";
+import { parse as parseYaml } from "yaml";
 import {
   APP_SPEC_API_VERSION,
   type AppSpec,

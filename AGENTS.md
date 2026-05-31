@@ -161,18 +161,14 @@ Node / Bun behavior comes from the runtime adapter at runtime.
 ```bash
 bun run check
 bun test
-bun run fmt
-bun run lint
+bun run test:scripts
 bun run lint:json-ld
-bun run spec:check-drift
-bun run scripts/build-npm.ts
 ```
 
 Focused work should run from the repository root:
 
 ```bash
 bunx tsc --noEmit src/cli/main.ts
-bun run db:migrate:dry-run
 ```
 
 ## Work Rules

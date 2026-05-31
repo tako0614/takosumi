@@ -20,12 +20,11 @@ permissions:
   contents: read
 
 env:
-  DENO_DIR: ${{ github.workspace }}/.deno-cache
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  jsr:
-    name: JSR packages
+  npm:
+    name: npm package
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -36,36 +35,38 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # pinned: v4.4.0 (2026)
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
       - uses: denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282 # pinned: v2.0.4 (2026)
         with:
           deno-version: v2.x
 
-      - name: Cache Deno deps
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # pinned: v5.0.5 (2026)
-        with:
-          path: ${{ env.DENO_DIR }}
-          key: ${{ runner.os }}-deno-takosumi-release-${{ hashFiles('deno.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-deno-takosumi-release-
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun test ./src/
+      - run: bun run test:scripts
+      - run: bun run lint:json-ld
+      - run: bun run build:npm -- --no-typecheck
+      - run: cd npm && npm pack --dry-run
 
-      - run: deno install
-      - run: deno task fmt:check
-      - run: deno task lint
-      - run: deno task lint:json-ld
-      - run: deno task spec:check-drift
-      - run: deno task check
-      - run: deno task test
-      - run: deno task publish:dry-run
-
-      - name: Publish JSR packages
+      - name: Publish npm package
         if: github.event_name == 'push' || inputs.publish == true
-        run: deno task publish:jsr
+        run: cd npm && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   oci:
     name: OCI image
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: jsr
+    needs: npm
     permissions:
       contents: read
       packages: write

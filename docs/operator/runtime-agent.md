@@ -49,7 +49,7 @@ Takosumi host は agent endpoint と token だけを知ります。
 export TAKOSUMI_AGENT_URL=https://agent.internal.example.com
 export TAKOSUMI_AGENT_TOKEN=...
 
-deno run -A ./server.ts
+bun --preload ./shims/deno-compat.ts ./server.ts
 ```
 
 `server.ts` は [operator bootstrap](./bootstrap.md) の reference adapter array (`plugins` option) 例を使い、kind package を Takosumi に attach します。実際の副作用は runtime-agent 側の connector が実行します。stock `takosumi server` は connectivity / dev smoke 用で、operator の kind package array を読み込まないため実 backend 操作の例には使いません。agent URL は private network 上の HTTPS endpoint にしてください。

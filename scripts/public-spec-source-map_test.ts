@@ -44,7 +44,8 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/kinds/v1/vector-store.jsonld",
   "docs/kinds/v1/gateway.jsonld",
   "docs/kinds/v1/cloudflare-worker.jsonld",
-  "deno.json",
+  "package.json",
+  "tsconfig.json",
 ];
 
 const REQUIRED_SPEC_KEYS = [
