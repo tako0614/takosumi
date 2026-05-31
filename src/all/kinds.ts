@@ -1,9 +1,0 @@
-export * as kind_gateway from "@takos/takosumi-kind-gateway";
-export * as kind_kv_store from "@takos/takosumi-kind-kv-store";
-export * as kind_message_queue from "@takos/takosumi-kind-message-queue";
-export * as kind_object_store from "@takos/takosumi-kind-object-store";
-export * as kind_postgres from "@takos/takosumi-kind-postgres";
-export * as kind_sqlite from "@takos/takosumi-kind-sqlite";
-export * as kind_vector_store from "@takos/takosumi-kind-vector-store";
-export * as kind_web_service from "@takos/takosumi-kind-web-service";
-export * as kind_worker from "@takos/takosumi-kind-worker";
